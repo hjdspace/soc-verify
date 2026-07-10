@@ -1,0 +1,29 @@
+appId: com.socverify.app
+productName: SoC Verify
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+extraResources:
+  - from: resources/binaries
+    to: binaries
+    filter: ["**/*", "!README.md"]
+asarUnpack:
+  - resources/binaries/**
+win:
+  target:
+    - nsis
+  artifactName: ${productName}-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+mac:
+  target:
+    - dmg
+  category: public.app-category.developer-tools
+linux:
+  target:
+    - AppImage
+  category: Development

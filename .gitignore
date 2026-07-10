@@ -1,0 +1,12 @@
+node_modules/
+out/
+dist/
+*.log
+.DS_Store
+.vite/
+coverage/
+.env
+.env.local
+*.tsbuildinfo
+resources/binaries/*
+!resources/binaries/README.md
