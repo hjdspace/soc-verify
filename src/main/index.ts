@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createIPCHandler } from 'electron-trpc/main';
 import { router } from './ipc/router';
-import { resolveOmpPath } from './omp/paths';
+import { resolveOmpRuntime } from './omp/paths';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -44,10 +44,9 @@ app.whenReady().then(async () => {
   const win = createWindow();
   createIPCHandler({ router, windows: [win] });
 
-  // M0 占位：启动时解析 omp 路径（打包内嵌 / 开发回退 PATH）
-  const ompPath = await resolveOmpPath();
-  if (ompPath) console.log('[omp] resolved:', ompPath);
-  else console.warn('[omp] not found (M0 placeholder, expected before M1)');
+  const ompRuntime = resolveOmpRuntime();
+  if (ompRuntime) console.log('[omp] resolved:', ompRuntime);
+  else console.warn('[omp] runtime not found (need bun + engine/oh-my-pi)');
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

@@ -10,6 +10,16 @@ extraResources:
   - from: resources/binaries
     to: binaries
     filter: ["**/*", "!README.md"]
+  - from: engine/oh-my-pi
+    to: engine/oh-my-pi
+    filter:
+      - "**/*"
+      - "!node_modules"
+      - "!**/node_modules"
+      - "!**/.git"
+      - "!**/dist"
+      - "!**/*.lock"
+      - "!**/target"
 asarUnpack:
   - resources/binaries/**
 win:
