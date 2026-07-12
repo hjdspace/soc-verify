@@ -9,6 +9,7 @@ import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } f
 import type { CaseStatus } from '../omp/discovery';
 import { simulationRegistry } from '../simulation/simulation-registry';
 import { detectEdaTools, loadEnvConfig, saveEnvConfig, getKnownEnvVarNames } from '../env/env-manager';
+import { CoverageManager } from '../coverage/coverage-manager';
 import { terminalManager } from '../terminal/terminal-manager';
 import { addSession, removeSession, loadSessions, saveSessions, type PersistedSession } from '../omp/session-persistence';
 import { dialog, ipcMain, BrowserWindow } from 'electron';
@@ -21,6 +22,8 @@ import type {
   SimulationHistoryEntry,
   EnvConfig,
   EdaToolInfo,
+  CoverageSummary,
+  CoverageBySubsys,
 } from '@shared/types';
 import type { PluginLoadResult, SimulationRunOptions } from '@shared/plugin-types';
 
@@ -916,6 +919,73 @@ export const router = t.router({
     getKnownEnvVars: t.procedure.query(() => {
       return getKnownEnvVarNames();
     }),
+  }),
+
+  // ─── 覆盖率分析 ───────────────────────────────────────────
+  coverage: t.router({
+    getOverview: t.procedure
+      .input((raw): { projectId: string; runId?: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId, runId: typeof r.runId === 'string' ? r.runId : undefined };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        const adapter = new PluginBackedCoverage(project.rootPath, registry);
+        const mgr = new CoverageManager({ projectRoot: project.rootPath, coverageAdapter: adapter });
+        return mgr.getOverview(input.runId);
+      }),
+
+    getBySubsys: t.procedure
+      .input((raw): { projectId: string; runId?: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId, runId: typeof r.runId === 'string' ? r.runId : undefined };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        const adapter = new PluginBackedCoverage(project.rootPath, registry);
+        const mgr = new CoverageManager({ projectRoot: project.rootPath, coverageAdapter: adapter });
+        return mgr.getBySubsys(input.runId);
+      }),
+
+    getDetail: t.procedure
+      .input((raw): { projectId: string; runId?: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId, runId: typeof r.runId === 'string' ? r.runId : undefined };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        const adapter = new PluginBackedCoverage(project.rootPath, registry);
+        const mgr = new CoverageManager({ projectRoot: project.rootPath, coverageAdapter: adapter });
+        return mgr.getDetail(input.runId);
+      }),
+
+    listCachedRuns: t.procedure
+      .input((raw): { projectId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        const adapter = new PluginBackedCoverage(project.rootPath, registry);
+        const mgr = new CoverageManager({ projectRoot: project.rootPath, coverageAdapter: adapter });
+        return mgr.listCachedRuns();
+      }),
   }),
 });
 
