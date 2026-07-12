@@ -4,6 +4,7 @@ import { HostToolsRegistry } from './host-tools';
 import { HostUriRouter } from './host-uris';
 import { NoopDiscovery } from './discovery';
 import type { SubsysDiscovery } from './discovery';
+import type { PluginBackedSimulation, PluginBackedCoverage } from './plugin-discovery';
 import { resolveOmpRuntime } from './paths';
 import type { OmpRpcClientOptions } from './types';
 
@@ -19,6 +20,8 @@ export interface CreateSessionOptions {
   resumePrefix?: string;
   extraArgs?: string[];
   discovery?: SubsysDiscovery;
+  simulationAdapter?: PluginBackedSimulation | null;
+  coverageAdapter?: PluginBackedCoverage | null;
 }
 
 export interface SessionEntry {
@@ -75,6 +78,8 @@ class SessionManagerImpl extends EventEmitter {
 
     const client = new OmpRpcClient(clientOptions);
     const hostTools = new HostToolsRegistry(options.discovery ?? new NoopDiscovery());
+    if (options.simulationAdapter) hostTools.setSimulationAdapter(options.simulationAdapter);
+    if (options.coverageAdapter) hostTools.setCoverageAdapter(options.coverageAdapter);
     const hostUris = new HostUriRouter();
 
     client.registerHostTool('*', (req) => hostTools.handleToolCall(req));

@@ -1,6 +1,7 @@
 import type { AgentToolResult, RpcHostToolCallRequest, RpcHostToolDefinition } from './types';
 import type { SubsysDiscovery, CaseStatus } from './discovery';
 import { NoopDiscovery } from './discovery';
+import type { PluginBackedSimulation, PluginBackedCoverage } from './plugin-discovery';
 
 type HostToolHandler = (args: Record<string, unknown>) => Promise<AgentToolResult | string>;
 
@@ -26,10 +27,20 @@ function defineTool(
 export class HostToolsRegistry {
   private tools = new Map<string, HostToolEntry>();
   private discovery: SubsysDiscovery;
+  private simulation: PluginBackedSimulation | null = null;
+  private coverage: PluginBackedCoverage | null = null;
 
   constructor(discovery?: SubsysDiscovery) {
     this.discovery = discovery ?? new NoopDiscovery();
     this.registerDefaults();
+  }
+
+  setSimulationAdapter(sim: PluginBackedSimulation | null): void {
+    this.simulation = sim;
+  }
+
+  setCoverageAdapter(cov: PluginBackedCoverage | null): void {
+    this.coverage = cov;
   }
 
   private registerDefaults(): void {
@@ -107,7 +118,22 @@ export class HostToolsRegistry {
           required: ['testcase'],
           additionalProperties: false,
         },
-        async (_args) => TEXT(JSON.stringify({ runId: '', status: 'pending' })),
+        async (args) => {
+          if (!this.simulation?.hasRunner()) {
+            return TEXT(JSON.stringify({ error: 'No simulation-runner plugin loaded. Cannot run simulations.' }));
+          }
+          try {
+            const handle = await this.simulation.run({
+              caseId: typeof args.testcase === 'string' ? args.testcase : '',
+              caseName: typeof args.testcase === 'string' ? args.testcase : undefined,
+              subsys: typeof args.subsys === 'string' ? args.subsys : '',
+              options: typeof args.options === 'object' && args.options !== null ? args.options as Record<string, unknown> : undefined,
+            });
+            return TEXT(JSON.stringify({ runId: handle.runId, status: 'pending' }));
+          } catch (err) {
+            return TEXT(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          }
+        },
       ),
     );
 
@@ -123,23 +149,49 @@ export class HostToolsRegistry {
           required: ['runId'],
           additionalProperties: false,
         },
-        async (_args) => TEXT(JSON.stringify({ runId: '', status: 'unknown' })),
+        async (args) => {
+          if (!this.simulation?.hasRunner()) {
+            return TEXT(JSON.stringify({ error: 'No simulation-runner plugin loaded' }));
+          }
+          try {
+            const runId = typeof args.runId === 'string' ? args.runId : '';
+            const status = await this.simulation.getStatus(runId);
+            return TEXT(JSON.stringify(status));
+          } catch (err) {
+            return TEXT(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          }
+        },
       ),
     );
 
     this.register(
       defineTool(
         'get_compile_errors',
-        'Retrieve compilation errors for a subsystem or testcase.',
+        'Retrieve compilation errors for a simulation run.',
         {
           type: 'object',
           properties: {
+            runId: { type: 'string', description: 'Run ID returned by run_simulation' },
             subsys: { type: 'string', description: 'Subsystem name' },
             testcase: { type: 'string', description: 'Testcase name' },
           },
           additionalProperties: false,
         },
-        async (_args) => TEXT('[]'),
+        async (args) => {
+          if (!this.simulation?.hasRunner()) {
+            return TEXT('[]');
+          }
+          try {
+            const runId = typeof args.runId === 'string' ? args.runId : '';
+            if (runId) {
+              const errors = await this.simulation.getCompileErrors(runId);
+              return TEXT(JSON.stringify(errors));
+            }
+            return TEXT('[]');
+          } catch (err) {
+            return TEXT(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          }
+        },
       ),
     );
 
@@ -156,10 +208,22 @@ export class HostToolsRegistry {
               enum: ['line', 'toggle', 'functional', 'assertion'],
               description: 'Coverage type',
             },
+            runId: { type: 'string', description: 'Run ID for specific coverage data' },
           },
           additionalProperties: false,
         },
-        async (_args) => TEXT('{}'),
+        async (args) => {
+          if (!this.coverage?.hasParser()) {
+            return TEXT(JSON.stringify({ error: 'No coverage-parser plugin loaded' }));
+          }
+          try {
+            const runId = typeof args.runId === 'string' ? args.runId : '';
+            const data = await this.coverage.parse(runId);
+            return TEXT(JSON.stringify(data));
+          } catch (err) {
+            return TEXT(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          }
+        },
       ),
     );
   }

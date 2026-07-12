@@ -11,6 +11,7 @@ export interface PluginManifest {
   name: string;
   version: string;
   kind: PluginKind;
+  description?: string;
 }
 
 export interface CaseInfo {
@@ -29,15 +30,45 @@ export interface SubsysInfo {
 export interface CoverageData {
   runId: string;
   overall: number;
+  line?: number;
+  toggle?: number;
+  functional?: number;
+  assertion?: number;
+  bySubsys?: Array<{
+    subsys: string;
+    line: number;
+    toggle: number;
+    functional: number;
+    assertion: number;
+    overall: number;
+  }>;
+}
+
+export interface CompileError {
+  file: string;
+  line: number;
+  column?: number;
+  severity: 'error' | 'warning';
+  message: string;
 }
 
 export interface SimulationRunOptions {
   caseId: string;
+  caseName?: string;
   subsys: string;
+  options?: Record<string, unknown>;
 }
 
 export interface SimulationRunHandle {
   runId: string;
+}
+
+export interface SimulationRunStatus {
+  runId: string;
+  status: 'pending' | 'running' | 'pass' | 'fail' | 'error' | 'aborted';
+  startTime?: number;
+  endTime?: number;
+  message?: string;
 }
 
 export interface SimOptionField {
@@ -46,6 +77,7 @@ export interface SimOptionField {
   type: 'string' | 'number' | 'boolean' | 'enum';
   default?: unknown;
   enumValues?: string[];
+  description?: string;
 }
 
 export interface SimOptionSchema {
@@ -70,6 +102,9 @@ export interface CoverageParserPlugin {
 export interface SimulationRunnerPlugin {
   manifest: PluginManifest & { kind: 'simulation-runner' };
   run(opts: SimulationRunOptions): Promise<SimulationRunHandle>;
+  getStatus(runId: string): Promise<SimulationRunStatus>;
+  getCompileErrors(runId: string): Promise<CompileError[]>;
+  abort(runId: string): Promise<void>;
 }
 
 export interface SimOptionSchemaProvider {
@@ -77,10 +112,27 @@ export interface SimOptionSchemaProvider {
   getSchema(subsys: string): Promise<SimOptionSchema>;
 }
 
+export type AnyPlugin =
+  | CaseParserPlugin
+  | SubsysDiscoveryPlugin
+  | CoverageParserPlugin
+  | SimulationRunnerPlugin
+  | SimOptionSchemaProvider;
+
 export interface PluginRegistry {
   caseParsers: CaseParserPlugin[];
   subsysDiscoverers: SubsysDiscoveryPlugin[];
   coverageParsers: CoverageParserPlugin[];
   simulationRunners: SimulationRunnerPlugin[];
   simOptionSchemaProviders: SimOptionSchemaProvider[];
+}
+
+// ─── 插件加载结果 ──────────────────────────────────────────────
+
+export interface PluginLoadResult {
+  manifest: PluginManifest;
+  plugin: AnyPlugin;
+  source: 'node_modules' | 'local';
+  path: string;
+  error?: string;
 }
