@@ -5,6 +5,7 @@ import { projectManager } from '../project/project-manager';
 import { pluginLoader } from '../plugins/loader';
 import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../omp/plugin-discovery';
 import type { CaseStatus } from '../omp/discovery';
+import { simulationRegistry } from '../simulation/simulation-registry';
 import { dialog, ipcMain, BrowserWindow } from 'electron';
 import type {
   ProjectInfo,
@@ -12,8 +13,9 @@ import type {
   FileTreeNode,
   PluginConfig,
   PluginConfigEntry,
+  SimulationHistoryEntry,
 } from '@shared/types';
-import type { PluginLoadResult } from '@shared/plugin-types';
+import type { PluginLoadResult, SimulationRunOptions } from '@shared/plugin-types';
 
 const t = initTRPC.create();
 
@@ -31,6 +33,13 @@ function requireProject(projectId: string): ProjectInfo {
     throw new TRPCError({ code: 'NOT_FOUND', message: `Project not found: ${projectId}` });
   }
   return project;
+}
+
+function getSimulationManager(projectId: string) {
+  const project = requireProject(projectId);
+  const registry = pluginLoader.getRegistry(project.rootPath);
+  const adapter = new PluginBackedSimulation(registry);
+  return simulationRegistry.getOrCreate(project.rootPath, projectId, adapter);
 }
 
 export const router = t.router({
@@ -494,6 +503,126 @@ export const router = t.router({
             yield { sessionId: input.sessionId, event: { type: 'subscription_started' } };
           },
         };
+      }),
+  }),
+
+  // ─── 仿真执行 ─────────────────────────────────────────
+
+  simulation: t.router({
+    run: t.procedure
+      .input((raw): { projectId: string; options: SimulationRunOptions } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        if (typeof r.options !== 'object' || r.options === null) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'options is required' });
+        }
+        return { projectId: r.projectId, options: r.options as SimulationRunOptions };
+      })
+      .mutation(async ({ input }) => {
+        const manager = getSimulationManager(input.projectId);
+        if (!manager.hasRunner()) {
+          throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'No simulation-runner plugin loaded' });
+        }
+        const handle = await manager.run(input.options);
+        return { runId: handle.runId };
+      }),
+
+    getStatus: t.procedure
+      .input((raw): { projectId: string; runId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.runId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and runId are required' });
+        }
+        return { projectId: r.projectId, runId: r.runId };
+      })
+      .query(async ({ input }) => {
+        const manager = getSimulationManager(input.projectId);
+        return manager.getStatus(input.runId);
+      }),
+
+    getCompileErrors: t.procedure
+      .input((raw): { projectId: string; runId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.runId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and runId are required' });
+        }
+        return { projectId: r.projectId, runId: r.runId };
+      })
+      .query(async ({ input }) => {
+        const manager = getSimulationManager(input.projectId);
+        return manager.getCompileErrors(input.runId);
+      }),
+
+    abort: t.procedure
+      .input((raw): { projectId: string; runId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.runId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and runId are required' });
+        }
+        return { projectId: r.projectId, runId: r.runId };
+      })
+      .mutation(async ({ input }) => {
+        const manager = getSimulationManager(input.projectId);
+        await manager.abort(input.runId);
+        return { ok: true };
+      }),
+
+    listActiveRuns: t.procedure
+      .input((raw): { projectId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId };
+      })
+      .query(async ({ input }) => {
+        const manager = getSimulationManager(input.projectId);
+        return manager.getActiveRuns();
+      }),
+
+    getHistory: t.procedure
+      .input((raw): { projectId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId };
+      })
+      .query(async ({ input }) => {
+        const manager = getSimulationManager(input.projectId);
+        return manager.getHistory();
+      }),
+
+    getRunDetail: t.procedure
+      .input((raw): { projectId: string; runId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.runId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and runId are required' });
+        }
+        return { projectId: r.projectId, runId: r.runId };
+      })
+      .query(async ({ input }) => {
+        const manager = getSimulationManager(input.projectId);
+        const detail = manager.getRunDetail(input.runId);
+        if (!detail) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: `Run not found: ${input.runId}` });
+        }
+        return detail;
+      }),
+
+    compareRuns: t.procedure
+      .input((raw): { projectId: string; runIdA: string; runIdB: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.runIdA !== 'string' || typeof r.runIdB !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, runIdA and runIdB are required' });
+        }
+        return { projectId: r.projectId, runIdA: r.runIdA, runIdB: r.runIdB };
+      })
+      .query(async ({ input }) => {
+        const manager = getSimulationManager(input.projectId);
+        return manager.compareRuns(input.runIdA, input.runIdB);
       }),
   }),
 });

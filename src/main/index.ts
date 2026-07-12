@@ -7,6 +7,7 @@ import { resolveOmpRuntime } from './omp/paths';
 import { projectManager } from './project/project-manager';
 import { sessionManager } from './omp/session-manager';
 import { pluginLoader } from './plugins/loader';
+import { simulationRegistry } from './simulation/simulation-registry';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -89,6 +90,28 @@ function registerEventForwarding(win: BrowserWindow) {
   sessionManager.on('sessionEvent', ({ sessionId, event }) => {
     if (!win.isDestroyed()) {
       win.webContents.send('session:event', { sessionId, event });
+    }
+  });
+
+  // Simulation events
+  simulationRegistry.on('run:started', (record) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('simulation:event', { type: 'started', record });
+    }
+  });
+  simulationRegistry.on('run:statusChanged', (record) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('simulation:event', { type: 'statusChanged', record });
+    }
+  });
+  simulationRegistry.on('run:completed', (record) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('simulation:event', { type: 'completed', record });
+    }
+  });
+  simulationRegistry.on('run:aborted', (record) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('simulation:event', { type: 'aborted', record });
     }
   });
 }

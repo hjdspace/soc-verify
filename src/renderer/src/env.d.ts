@@ -25,6 +25,7 @@ export interface EventBridgeAPI {
   }) => void) => () => void;
   onProjectClosed: (callback: (projectId: string) => void) => () => void;
   onSessionEvent: (callback: (data: { sessionId: string; event: unknown }) => void) => () => void;
+  onSimulationEvent: (callback: (data: { type: string; record: unknown }) => void) => () => void;
 }
 
 declare global {

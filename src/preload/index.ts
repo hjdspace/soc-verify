@@ -41,5 +41,10 @@ process.once('loaded', async () => {
       ipcRenderer.on('session:event', handler);
       return () => ipcRenderer.removeListener('session:event', handler);
     },
+    onSimulationEvent: (callback: (data: { type: string; record: unknown }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { type: string; record: unknown }) => callback(data);
+      ipcRenderer.on('simulation:event', handler);
+      return () => ipcRenderer.removeListener('simulation:event', handler);
+    },
   });
 });

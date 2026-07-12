@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react';
-import { FileText, Terminal as TerminalIcon, Sparkles, X } from 'lucide-react';
+import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot } from 'lucide-react';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
+import { useSimulationStore } from '@renderer/stores/simulation';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
+import type { SimulationHistoryEntry, CompileError } from '@shared/types';
 
 type CenterTab = {
   id: string;
-  type: 'file' | 'terminal' | 'ai-artifacts';
+  type: 'file' | 'terminal' | 'ai-artifacts' | 'sim-errors' | 'sim-history';
   title: string;
   closable: boolean;
 };
@@ -24,6 +26,10 @@ export function CenterArea() {
   const [loadingContent, setLoadingContent] = useState(false);
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
+  const activeRuns = useSimulationStore((s) => s.activeRuns);
+  const history = useSimulationStore((s) => s.history);
+  const loadHistory = useSimulationStore((s) => s.loadHistory);
+  const abortSimulation = useSimulationStore((s) => s.abortSimulation);
 
   // Sync tabs with active center tab
   useEffect(() => {
@@ -35,6 +41,17 @@ export function CenterArea() {
         setTabs((prev) => [...prev, { id: activeCenterTab, type: 'file', title: name, closable: true }]);
       }
       setCenterView('file');
+    } else if (activeCenterTab.startsWith('sim-errors:')) {
+      const runId = activeCenterTab.slice('sim-errors:'.length);
+      if (!tabs.find((t) => t.id === activeCenterTab)) {
+        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'sim-errors', title: `编译错误 ${runId.slice(-6)}`, closable: true }]);
+      }
+      setCenterView('sim-errors');
+    } else if (activeCenterTab === 'sim-history') {
+      if (!tabs.find((t) => t.id === activeCenterTab)) {
+        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'sim-history', title: '仿真历史', closable: true }]);
+      }
+      setCenterView('sim-history');
     }
   }, [activeCenterTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -59,6 +76,13 @@ export function CenterArea() {
     };
   }, [selectedFile, currentProjectId]);
 
+  // Load history when project changes
+  useEffect(() => {
+    if (currentProjectId) {
+      loadHistory(currentProjectId);
+    }
+  }, [currentProjectId, loadHistory]);
+
   const closeTab = (tabId: string) => {
     setTabs((prev) => {
       const filtered = prev.filter((t) => t.id !== tabId);
@@ -71,13 +95,28 @@ export function CenterArea() {
     });
   };
 
+  const openSimErrors = (runId: string) => {
+    setActiveCenterTab(`sim-errors:${runId}`);
+  };
+
+  const openSimHistory = () => {
+    setActiveCenterTab('sim-history');
+  };
+
+  // Get compile errors for the active sim-errors tab
+  const simErrorsRunId = activeCenterTab?.startsWith('sim-errors:')
+    ? activeCenterTab.slice('sim-errors:'.length)
+    : null;
+  const simErrorsRun = activeRuns.find((r) => r.runId === simErrorsRunId);
+  const simErrors = simErrorsRun?.compileErrors ?? [];
+
   return (
     <main className="flex flex-1 flex-col overflow-hidden">
       {/* ── Tab bar ────────────────────────────────── */}
       <div className="flex h-8 shrink-0 items-center border-b bg-secondary/30">
         {tabs.length === 0 ? (
-          <div className="px-3 text-[10px] text-muted-foreground">
-            多功能工作区 — 点击左栏文件或使用下方按钮
+          <div className="flex items-center gap-2 px-3 text-[10px] text-muted-foreground">
+            <span>多功能工作区 — 点击左栏文件或使用下方按钮</span>
           </div>
         ) : (
           <div className="flex h-full flex-1 overflow-x-auto">
@@ -98,6 +137,8 @@ export function CenterArea() {
                 {tab.type === 'file' && <FileText className="h-3 w-3 opacity-50" />}
                 {tab.type === 'terminal' && <TerminalIcon className="h-3 w-3 opacity-50" />}
                 {tab.type === 'ai-artifacts' && <Sparkles className="h-3 w-3 opacity-50" />}
+                {tab.type === 'sim-errors' && <AlertCircle className="h-3 w-3 text-red-500" />}
+                {tab.type === 'sim-history' && <History className="h-3 w-3 opacity-50" />}
                 <span className="max-w-32 truncate">{tab.title}</span>
                 {tab.closable && (
                   <button
@@ -114,6 +155,15 @@ export function CenterArea() {
             ))}
           </div>
         )}
+        <div className="flex items-center gap-1 px-2">
+          <button
+            onClick={openSimHistory}
+            title="仿真历史"
+            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <History className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* ── Content area ─────────────────────────────── */}
@@ -135,8 +185,49 @@ export function CenterArea() {
               )}
             </div>
           </div>
+        ) : centerView === 'sim-errors' ? (
+          <CompileErrorView errors={simErrors} runId={simErrorsRunId} />
+        ) : centerView === 'sim-history' ? (
+          <SimulationHistoryView
+            history={history}
+            onSelectRun={(runId) => openSimErrors(runId)}
+          />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
+            {/* Active simulations */}
+            {activeRuns.length > 0 && (
+              <div className="w-full max-w-md">
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  正在运行的仿真
+                </div>
+                {activeRuns.map((run) => (
+                  <div
+                    key={run.runId}
+                    className="flex items-center gap-2 rounded-md border border-border/50 bg-secondary/30 px-3 py-1.5"
+                  >
+                    <CircleDot className={cn('h-2.5 w-2.5 shrink-0', run.status === 'running' ? 'text-blue-500 animate-pulse' : run.status === 'pass' ? 'text-green-500' : run.status === 'fail' ? 'text-red-500' : 'text-muted-foreground')} />
+                    <span className="flex-1 truncate text-xs">{run.caseName ?? run.caseId}</span>
+                    <span className="text-[10px] text-muted-foreground">{run.status}</span>
+                    {run.status === 'running' || run.status === 'pending' ? (
+                      <button
+                        onClick={() => currentProjectId && abortSimulation(currentProjectId, run.runId)}
+                        className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive hover:bg-destructive/20"
+                      >
+                        中止
+                      </button>
+                    ) : run.compileErrors && run.compileErrors.length > 0 ? (
+                      <button
+                        onClick={() => openSimErrors(run.runId)}
+                        className="rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-500 hover:bg-red-500/20"
+                      >
+                        查看错误
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            )}
+
             <div className="flex gap-2">
               <button
                 onClick={() => setCenterView('terminal')}
@@ -160,5 +251,140 @@ export function CenterArea() {
         )}
       </div>
     </main>
+  );
+}
+
+// ── Compile error view ─────────────────────────────────
+
+function CompileErrorView({ errors, runId }: { errors: CompileError[]; runId: string | null }) {
+  if (!runId) {
+    return <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">无选中的运行</div>;
+  }
+
+  if (errors.length === 0) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
+        无编译错误
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-1 flex-col overflow-auto">
+      <div className="border-b bg-secondary/20 px-3 py-1.5">
+        <span className="text-xs font-semibold text-foreground">编译错误 — {runId.slice(-6)}</span>
+        <span className="ml-2 text-[10px] text-muted-foreground">{errors.length} 项</span>
+      </div>
+      <div className="flex-1 overflow-auto p-2">
+        {errors.map((err, i) => (
+          <div
+            key={i}
+            className={cn(
+              'mb-1 rounded-md border p-2 text-xs',
+              err.severity === 'error'
+                ? 'border-red-500/30 bg-red-500/5'
+                : 'border-yellow-500/30 bg-yellow-500/5',
+            )}
+          >
+            <div className="flex items-center gap-2">
+              <span
+                className={cn(
+                  'rounded px-1 py-0.5 text-[9px] font-semibold uppercase',
+                  err.severity === 'error'
+                    ? 'bg-red-500/20 text-red-500'
+                    : 'bg-yellow-500/20 text-yellow-600',
+                )}
+              >
+                {err.severity}
+              </span>
+              <span className="font-medium text-foreground">{err.file}:{err.line}</span>
+              {err.column && <span className="text-muted-foreground">:{err.column}</span>}
+            </div>
+            <div className="mt-1 text-muted-foreground">{err.message}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Simulation history view ────────────────────────────
+
+function SimulationHistoryView({
+  history,
+  onSelectRun,
+}: {
+  history: SimulationHistoryEntry[];
+  onSelectRun: (runId: string) => void;
+}) {
+  if (history.length === 0) {
+    return (
+      <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
+        无仿真历史记录
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-1 flex-col overflow-auto">
+      <div className="border-b bg-secondary/20 px-3 py-1.5">
+        <span className="text-xs font-semibold text-foreground">仿真历史</span>
+        <span className="ml-2 text-[10px] text-muted-foreground">{history.length} 条记录</span>
+      </div>
+      <div className="flex-1 overflow-auto p-2">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b text-left text-[10px] uppercase text-muted-foreground">
+              <th className="px-2 py-1">用例</th>
+              <th className="px-2 py-1">子系统</th>
+              <th className="px-2 py-1">状态</th>
+              <th className="px-2 py-1">耗时</th>
+              <th className="px-2 py-1">时间</th>
+              <th className="px-2 py-1">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {history.map((entry) => (
+              <tr key={entry.runId} className="border-b border-border/30 hover:bg-accent/30">
+                <td className="px-2 py-1 text-foreground">{entry.caseName}</td>
+                <td className="px-2 py-1 text-muted-foreground">{entry.subsys}</td>
+                <td className="px-2 py-1">
+                  <span
+                    className={cn(
+                      'rounded px-1 py-0.5 text-[10px]',
+                      entry.status === 'pass' && 'bg-green-500/15 text-green-500',
+                      entry.status === 'fail' && 'bg-red-500/15 text-red-500',
+                      entry.status === 'error' && 'bg-red-500/15 text-red-500',
+                      entry.status === 'aborted' && 'bg-orange-500/15 text-orange-500',
+                      (entry.status === 'pending' || entry.status === 'running') && 'bg-blue-500/15 text-blue-500',
+                    )}
+                  >
+                    {entry.status}
+                  </span>
+                </td>
+                <td className="px-2 py-1 text-muted-foreground">
+                  {entry.duration > 1000
+                    ? `${(entry.duration / 1000).toFixed(1)}s`
+                    : `${entry.duration}ms`}
+                </td>
+                <td className="px-2 py-1 text-muted-foreground">
+                  {new Date(entry.startTime).toLocaleString()}
+                </td>
+                <td className="px-2 py-1">
+                  {entry.compileErrors && entry.compileErrors.length > 0 && (
+                    <button
+                      onClick={() => onSelectRun(entry.runId)}
+                      className="rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-500 hover:bg-red-500/20"
+                    >
+                      查看错误
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }

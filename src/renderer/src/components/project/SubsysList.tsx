@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
-import { ChevronRight, ChevronDown, Cpu, CircleDot } from 'lucide-react';
+import { useEffect, useState, useRef } from 'react';
+import { ChevronRight, ChevronDown, Cpu, CircleDot, Play, X } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import { useProjectStore } from '@renderer/stores/project';
+import { useSimulationStore } from '@renderer/stores/simulation';
 
 interface SubsysData {
   name: string;
@@ -25,6 +26,8 @@ const STATUS_COLORS: Record<string, string> = {
   fail: 'text-red-500',
   running: 'text-blue-500 animate-pulse',
   pending: 'text-muted-foreground',
+  error: 'text-red-500',
+  aborted: 'text-orange-500',
 };
 
 const STATUS_FILTERS = [
@@ -35,17 +38,34 @@ const STATUS_FILTERS = [
   { value: 'pending', label: '待运行' },
 ];
 
+interface ContextMenuState {
+  visible: boolean;
+  x: number;
+  y: number;
+  caseData: CaseData | null;
+}
+
 export function SubsysList() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const selectedSubsys = useProjectStore((s) => s.selectedSubsys);
   const setSelectedSubsys = useProjectStore((s) => s.setSelectedSubsys);
   const caseStatusFilter = useProjectStore((s) => s.caseStatusFilter);
   const setCaseStatusFilter = useProjectStore((s) => s.setCaseStatusFilter);
+  const runSimulation = useSimulationStore((s) => s.runSimulation);
 
   const [subsystems, setSubsystems] = useState<SubsysData[]>([]);
   const [expandedSubsys, setExpandedSubsys] = useState<string | null>(null);
   const [cases, setCases] = useState<CaseData[]>([]);
   const [loadingCases, setLoadingCases] = useState(false);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>({
+    visible: false,
+    x: 0,
+    y: 0,
+    caseData: null,
+  });
+  const [selectedCases, setSelectedCases] = useState<Set<string>>(new Set());
+  const [batchMode, setBatchMode] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // Load subsystems
   useEffect(() => {
@@ -95,9 +115,48 @@ export function SubsysList() {
     };
   }, [currentProjectId, expandedSubsys, caseStatusFilter]);
 
+  // Close context menu on outside click
+  useEffect(() => {
+    if (!contextMenu.visible) return;
+    const handler = () => setContextMenu((s) => ({ ...s, visible: false }));
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [contextMenu.visible]);
+
   const toggleSubsys = (name: string) => {
     setExpandedSubsys(expandedSubsys === name ? null : name);
     setSelectedSubsys(expandedSubsys === name ? null : name);
+  };
+
+  const handleCaseContextMenu = (e: React.MouseEvent, caseData: CaseData) => {
+    e.preventDefault();
+    setContextMenu({ visible: true, x: e.clientX, y: e.clientY, caseData });
+  };
+
+  const handleRunCase = async (caseData: CaseData) => {
+    if (!currentProjectId) return;
+    await runSimulation(currentProjectId, caseData.name, caseData.name, caseData.subsys);
+  };
+
+  const handleBatchRun = async () => {
+    if (!currentProjectId || selectedCases.size === 0) return;
+    for (const casePath of selectedCases) {
+      const caseData = cases.find((c) => c.path === casePath);
+      if (caseData) {
+        await runSimulation(currentProjectId, caseData.name, caseData.name, caseData.subsys);
+      }
+    }
+    setSelectedCases(new Set());
+    setBatchMode(false);
+  };
+
+  const toggleCaseSelection = (path: string) => {
+    setSelectedCases((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
   };
 
   if (!currentProjectId) {
@@ -117,24 +176,59 @@ export function SubsysList() {
   }
 
   return (
-    <div className="flex flex-col gap-0.5">
-      {/* Status filter */}
-      <div className="mb-1 flex gap-0.5 px-1">
-        {STATUS_FILTERS.map((f) => (
-          <button
-            key={f.value}
-            onClick={() => setCaseStatusFilter(f.value)}
-            className={cn(
-              'rounded px-1.5 py-0.5 text-[10px] transition-colors',
-              caseStatusFilter === f.value
-                ? 'bg-primary/15 text-primary'
-                : 'text-muted-foreground hover:bg-accent',
-            )}
-          >
-            {f.label}
-          </button>
-        ))}
+    <div className="flex flex-col gap-0.5" ref={containerRef}>
+      {/* Status filter + batch mode toggle */}
+      <div className="mb-1 flex items-center justify-between gap-0.5 px-1">
+        <div className="flex gap-0.5">
+          {STATUS_FILTERS.map((f) => (
+            <button
+              key={f.value}
+              onClick={() => setCaseStatusFilter(f.value)}
+              className={cn(
+                'rounded px-1.5 py-0.5 text-[10px] transition-colors',
+                caseStatusFilter === f.value
+                  ? 'bg-primary/15 text-primary'
+                  : 'text-muted-foreground hover:bg-accent',
+              )}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => {
+            setBatchMode(!batchMode);
+            setSelectedCases(new Set());
+          }}
+          className={cn(
+            'rounded px-1.5 py-0.5 text-[10px] transition-colors',
+            batchMode ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-accent',
+          )}
+          title="批量选择模式"
+        >
+          批量
+        </button>
       </div>
+
+      {/* Batch action bar */}
+      {batchMode && selectedCases.size > 0 && (
+        <div className="mb-1 flex items-center gap-1 rounded border border-border/50 bg-secondary/30 px-2 py-1">
+          <span className="text-[10px] text-muted-foreground">已选 {selectedCases.size} 个</span>
+          <button
+            onClick={handleBatchRun}
+            className="flex items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary hover:bg-primary/20"
+          >
+            <Play className="h-2.5 w-2.5" />
+            运行
+          </button>
+          <button
+            onClick={() => setSelectedCases(new Set())}
+            className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-2.5 w-2.5" />
+          </button>
+        </div>
+      )}
 
       {/* Subsystem list */}
       {subsystems.map((subsys) => (
@@ -168,10 +262,35 @@ export function SubsysList() {
                 cases.map((c) => (
                   <div
                     key={c.path}
-                    className="flex items-center gap-1 px-4 py-0.5 text-xs text-muted-foreground hover:bg-accent/50 rounded"
+                    className={cn(
+                      'flex items-center gap-1 px-4 py-0.5 text-xs text-muted-foreground hover:bg-accent/50 rounded cursor-pointer',
+                      batchMode && selectedCases.has(c.path) && 'bg-primary/10',
+                    )}
+                    onClick={() => batchMode && toggleCaseSelection(c.path)}
+                    onContextMenu={(e) => !batchMode && handleCaseContextMenu(e, c)}
                   >
+                    {batchMode && (
+                      <input
+                        type="checkbox"
+                        checked={selectedCases.has(c.path)}
+                        onChange={() => toggleCaseSelection(c.path)}
+                        className="h-2.5 w-2.5"
+                      />
+                    )}
                     <CircleDot className={cn('h-2.5 w-2.5 shrink-0', STATUS_COLORS[c.status ?? 'pending'])} />
                     <span className="truncate">{c.name}</span>
+                    {!batchMode && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRunCase(c);
+                        }}
+                        className="ml-auto rounded p-0.5 opacity-0 transition-opacity hover:bg-foreground/10 group-hover:opacity-100"
+                        title="运行仿真"
+                      >
+                        <Play className="h-2.5 w-2.5 text-primary" />
+                      </button>
+                    )}
                   </div>
                 ))
               )}
@@ -179,6 +298,26 @@ export function SubsysList() {
           )}
         </div>
       ))}
+
+      {/* Context menu */}
+      {contextMenu.visible && contextMenu.caseData && (
+        <div
+          className="fixed z-50 min-w-40 overflow-hidden rounded-md border border-border bg-popover shadow-xl"
+          style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={() => {
+              handleRunCase(contextMenu.caseData!);
+              setContextMenu((s) => ({ ...s, visible: false }));
+            }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-accent"
+          >
+            <Play className="h-3 w-3 text-primary" />
+            运行仿真
+          </button>
+        </div>
+      )}
     </div>
   );
 }
