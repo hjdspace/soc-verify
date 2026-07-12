@@ -239,8 +239,8 @@ export class OmpRpcClient {
 
   // ─── 命令方法 ─────────────────────────────────────────
 
-  async prompt(message: string): Promise<void> {
-    await this.send({ type: 'prompt', message });
+  async prompt(message: string, images?: string[]): Promise<void> {
+    await this.send({ type: 'prompt', message, images });
   }
 
   async steer(message: string): Promise<void> {

@@ -18,6 +18,13 @@ export interface ChatMessage {
   isStreaming?: boolean;
 }
 
+export interface AvailableModel {
+  provider: string;
+  id: string;
+  name: string;
+  description?: string;
+}
+
 export interface SessionEntry {
   id: string;
   projectId: string;
@@ -34,14 +41,20 @@ interface SessionStoreState {
   isSending: boolean;
 
   createSession: (projectId: string, cwd: string) => Promise<string | null>;
-  destroySession: (sessionId: string) => Promise<void>;
+  destroySession: (sessionId: string, projectId?: string) => Promise<void>;
+  closeSession: (sessionId: string) => void;
   switchSession: (sessionId: string) => void;
-  sendMessage: (message: string) => Promise<void>;
+  sendMessage: (message: string, images?: string[]) => Promise<void>;
   abortSession: () => Promise<void>;
   setSessionName: (sessionId: string, name: string) => void;
+  renameSession: (sessionId: string, projectId: string, name: string) => Promise<void>;
   setInputMessage: (msg: string) => void;
   handleSessionEvent: (sessionId: string, event: unknown) => void;
   refreshSessions: () => Promise<void>;
+  restoreSessions: (projectId: string, cwd: string) => Promise<void>;
+  getAvailableModels: (sessionId: string) => Promise<AvailableModel[]>;
+  setModel: (sessionId: string, provider: string, modelId: string) => Promise<void>;
+  steerSession: (message: string) => Promise<void>;
 }
 
 let eventListenerRegistered = false;
@@ -66,7 +79,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       const session: SessionEntry = {
         id: result.sessionId,
         projectId,
-        name: `会话 ${get().sessions.length + 1}`,
+        name: (result as { name?: string }).name ?? `会话 ${get().sessions.length + 1}`,
         status: 'idle',
         messages: [],
         createdAt: Date.now(),
@@ -92,9 +105,9 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     }
   },
 
-  destroySession: async (sessionId) => {
+  destroySession: async (sessionId, projectId) => {
     try {
-      await trpc.session.destroy.mutate({ sessionId });
+      await trpc.session.destroy.mutate({ sessionId, projectId });
       set((s) => ({
         sessions: s.sessions.filter((sess) => sess.id !== sessionId),
         currentSessionId: s.currentSessionId === sessionId ? null : s.currentSessionId,
@@ -104,11 +117,19 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     }
   },
 
+  closeSession: (sessionId) => {
+    // Just remove from UI without destroying the backend session
+    set((s) => ({
+      sessions: s.sessions.filter((sess) => sess.id !== sessionId),
+      currentSessionId: s.currentSessionId === sessionId ? null : s.currentSessionId,
+    }));
+  },
+
   switchSession: (sessionId) => {
     set({ currentSessionId: sessionId });
   },
 
-  sendMessage: async (message) => {
+  sendMessage: async (message, images) => {
     const sessionId = get().currentSessionId;
     if (!sessionId || !message.trim()) return;
 
@@ -117,6 +138,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       role: 'user',
       content: message,
       timestamp: Date.now(),
+      images,
     };
 
     const assistantMsg: ChatMessage = {
@@ -138,7 +160,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     }));
 
     try {
-      await trpc.session.send.mutate({ sessionId, message });
+      await trpc.session.send.mutate({ sessionId, message, images });
     } catch (err) {
       const errMsg = tRPCError(err);
       set((s) => ({
@@ -183,6 +205,19 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         sess.id === sessionId ? { ...sess, name } : sess,
       ),
     }));
+  },
+
+  renameSession: async (sessionId, projectId, name) => {
+    try {
+      await trpc.session.rename.mutate({ sessionId, projectId, name });
+      set((s) => ({
+        sessions: s.sessions.map((sess) =>
+          sess.id === sessionId ? { ...sess, name } : sess,
+        ),
+      }));
+    } catch (err) {
+      useToastStore.getState().error('重命名会话失败', tRPCError(err));
+    }
   },
 
   setInputMessage: (msg) => set({ inputMessage: msg }),
@@ -303,6 +338,69 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       });
     } catch (err) {
       useToastStore.getState().error('刷新会话列表失败', tRPCError(err));
+    }
+  },
+
+  restoreSessions: async (projectId, cwd) => {
+    try {
+      const persisted = await trpc.session.getPersistedSessions.query({ projectId });
+      if (persisted.length === 0) return;
+
+      for (const p of persisted) {
+        try {
+          const result = await trpc.session.restore.mutate({
+            projectId,
+            cwd,
+            sessionId: p.sessionId,
+            name: p.name,
+          });
+          const session: SessionEntry = {
+            id: result.sessionId,
+            projectId,
+            name: result.name,
+            status: 'idle',
+            messages: [],
+            createdAt: p.createdAt,
+          };
+          set((s) => ({
+            sessions: [...s.sessions, session],
+            currentSessionId: s.currentSessionId ?? result.sessionId,
+          }));
+        } catch {
+          // Skip sessions that fail to restore
+        }
+      }
+    } catch {
+      // Best-effort restore
+    }
+  },
+
+  getAvailableModels: async (sessionId) => {
+    try {
+      const models = await trpc.session.getAvailableModels.query({ sessionId });
+      return (models as AvailableModel[]) || [];
+    } catch (err) {
+      useToastStore.getState().error('获取可用模型失败', tRPCError(err));
+      return [];
+    }
+  },
+
+  setModel: async (sessionId, provider, modelId) => {
+    try {
+      await trpc.session.setModel.mutate({ sessionId, provider, modelId });
+      useToastStore.getState().success('模型已切换');
+    } catch (err) {
+      useToastStore.getState().error('切换模型失败', tRPCError(err));
+    }
+  },
+
+  steerSession: async (message) => {
+    const sessionId = get().currentSessionId;
+    if (!sessionId || !message.trim()) return;
+    try {
+      await trpc.session.steer.mutate({ sessionId, message });
+    } catch (err) {
+      useToastStore.getState().error('引导会话失败', tRPCError(err));
     }
   },
 }));

@@ -9,6 +9,7 @@ import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } f
 import type { CaseStatus } from '../omp/discovery';
 import { simulationRegistry } from '../simulation/simulation-registry';
 import { terminalManager } from '../terminal/terminal-manager';
+import { addSession, removeSession, loadSessions, saveSessions, type PersistedSession } from '../omp/session-persistence';
 import { dialog, ipcMain, BrowserWindow } from 'electron';
 import type {
   ProjectInfo,
@@ -457,21 +458,36 @@ export const router = t.router({
           simulationAdapter: simulation,
           coverageAdapter: coverage,
         });
-        return { sessionId };
+
+        // Persist session metadata
+        const persisted: PersistedSession = {
+          sessionId,
+          name: `Session ${Date.now().toString(36)}`,
+          projectId: input.projectId,
+          createdAt: Date.now(),
+          lastActivityAt: Date.now(),
+        };
+        await addSession(project.rootPath, persisted);
+
+        return { sessionId, name: persisted.name };
       }),
 
     send: t.procedure
-      .input((raw): { sessionId: string; message: string } => {
+      .input((raw): { sessionId: string; message: string; images?: string[] } => {
         const r = raw as Record<string, unknown>;
         if (typeof r.sessionId !== 'string' || typeof r.message !== 'string') {
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'sessionId and message are required' });
         }
-        return { sessionId: r.sessionId, message: r.message };
+        return {
+          sessionId: r.sessionId,
+          message: r.message,
+          images: Array.isArray(r.images) ? r.images as string[] : undefined,
+        };
       })
       .mutation(async ({ input }) => {
         const client = requireSession(input.sessionId);
         sessionManager.touchActivity(input.sessionId);
-        await client.prompt(input.message);
+        await client.prompt(input.message, input.images);
         return { ok: true };
       }),
 
@@ -490,15 +506,22 @@ export const router = t.router({
       }),
 
     destroy: t.procedure
-      .input((raw): { sessionId: string } => {
+      .input((raw): { sessionId: string; projectId?: string } => {
         const r = raw as Record<string, unknown>;
         if (typeof r.sessionId !== 'string') {
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'sessionId is required' });
         }
-        return { sessionId: r.sessionId };
+        return { sessionId: r.sessionId, projectId: typeof r.projectId === 'string' ? r.projectId : undefined };
       })
       .mutation(async ({ input }) => {
         await sessionManager.destroySession(input.sessionId);
+        // Remove from persisted sessions if projectId is provided
+        if (input.projectId) {
+          const project = projectManager.getProject(input.projectId);
+          if (project) {
+            await removeSession(project.rootPath, input.sessionId);
+          }
+        }
         return { ok: true };
       }),
 
@@ -557,6 +580,21 @@ export const router = t.router({
         return sessionManager.getAvailableModels(input.sessionId);
       }),
 
+    steer: t.procedure
+      .input((raw): { sessionId: string; message: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.sessionId !== 'string' || typeof r.message !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'sessionId and message are required' });
+        }
+        return { sessionId: r.sessionId, message: r.message };
+      })
+      .mutation(async ({ input }) => {
+        const client = requireSession(input.sessionId);
+        sessionManager.touchActivity(input.sessionId);
+        await client.steer(input.message);
+        return { ok: true };
+      }),
+
     onEvent: t.procedure
       .input((raw): { sessionId: string } => {
         const r = raw as Record<string, unknown>;
@@ -574,6 +612,70 @@ export const router = t.router({
             yield { sessionId: input.sessionId, event: { type: 'subscription_started' } };
           },
         };
+      }),
+
+    getPersistedSessions: t.procedure
+      .input((raw): { projectId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        return loadSessions(project.rootPath);
+      }),
+
+    restore: t.procedure
+      .input((raw): { projectId: string; cwd: string; sessionId: string; name?: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.cwd !== 'string' || typeof r.sessionId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, cwd and sessionId are required' });
+        }
+        return {
+          projectId: r.projectId,
+          cwd: r.cwd,
+          sessionId: r.sessionId,
+          name: typeof r.name === 'string' ? r.name : undefined,
+        };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        const discovery = new PluginBackedDiscovery(project.rootPath, registry);
+        const simulation = new PluginBackedSimulation(registry);
+        const coverage = new PluginBackedCoverage(project.rootPath, registry);
+
+        const sessionId = await sessionManager.createSession({
+          projectId: input.projectId,
+          cwd: input.cwd,
+          discovery,
+          simulationAdapter: simulation,
+          coverageAdapter: coverage,
+          resumePrefix: input.sessionId,
+        });
+
+        return { sessionId, name: input.name ?? `Session ${input.sessionId.slice(-6)}` };
+      }),
+
+    rename: t.procedure
+      .input((raw): { projectId: string; sessionId: string; name: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string' || typeof r.name !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, sessionId and name are required' });
+        }
+        return { projectId: r.projectId, sessionId: r.sessionId, name: r.name };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const sessions = await loadSessions(project.rootPath);
+        const idx = sessions.findIndex((s) => s.sessionId === input.sessionId);
+        if (idx >= 0) {
+          sessions[idx] = { ...sessions[idx], name: input.name };
+          await saveSessions(project.rootPath, sessions);
+        }
+        return { ok: true };
       }),
   }),
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Plus, Send, Square, MessageSquare, Trash2, ChevronDown, Loader2, Clock } from 'lucide-react';
+import { Plus, Send, Square, MessageSquare, Trash2, ChevronDown, Loader2, Clock, Pencil, X, Check } from 'lucide-react';
 import { useSessionStore, type ChatMessage } from '@renderer/stores/session';
 import { useProjectStore } from '@renderer/stores/project';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
@@ -28,13 +28,30 @@ export function RightPanel({ width }: RightPanelProps) {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [showSessionList, setShowSessionList] = useState(false);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editingSessionName, setEditingSessionName] = useState('');
+  const [hasRestored, setHasRestored] = useState(false);
 
   const currentSession = sessions.find((s) => s.id === currentSessionId);
+  const restoreSessions = useSessionStore((s) => s.restoreSessions);
+  const renameSession = useSessionStore((s) => s.renameSession);
 
   // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [currentSession?.messages]);
+
+  // Auto-restore sessions when project is loaded
+  useEffect(() => {
+    if (currentProjectId && currentProject && !hasRestored) {
+      restoreSessions(currentProjectId, currentProject.rootPath);
+      setHasRestored(true);
+    }
+    // Reset restore flag when project changes
+    if (!currentProjectId) {
+      setHasRestored(false);
+    }
+  }, [currentProjectId, currentProject?.rootPath, hasRestored, restoreSessions]);
 
   const handleCreateSession = async () => {
     if (!currentProjectId || !currentProject) return;
@@ -51,6 +68,38 @@ export function RightPanel({ width }: RightPanelProps) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
+    }
+  };
+
+  const handleRenameStart = (e: React.MouseEvent, sessionId: string, currentName: string) => {
+    e.stopPropagation();
+    setEditingSessionId(sessionId);
+    setEditingSessionName(currentName);
+  };
+
+  const handleRenameSave = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!editingSessionId || !editingSessionName.trim() || !currentProjectId) {
+      setEditingSessionId(null);
+      setEditingSessionName('');
+      return;
+    }
+    await renameSession(editingSessionId, currentProjectId, editingSessionName.trim());
+    setEditingSessionId(null);
+    setEditingSessionName('');
+  };
+
+  const handleRenameCancel = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingSessionId(null);
+    setEditingSessionName('');
+  };
+
+  const handleRenameKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      handleRenameSave(e as unknown as React.MouseEvent);
+    } else if (e.key === 'Escape') {
+      handleRenameCancel(e as unknown as React.MouseEvent);
     }
   };
 
@@ -85,24 +134,74 @@ export function RightPanel({ width }: RightPanelProps) {
                       <div
                         key={sess.id}
                         className={cn(
-                          'flex items-center justify-between rounded px-3 py-1.5 text-xs transition-colors hover:bg-accent cursor-pointer',
+                          'flex items-center justify-between rounded px-3 py-1.5 text-xs transition-colors hover:bg-accent',
                           sess.id === currentSessionId && 'bg-accent/50',
                         )}
-                        onClick={() => {
-                          switchSession(sess.id);
-                          setShowSessionList(false);
-                        }}
                       >
-                        <span className="truncate">{sess.name}</span>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            destroySession(sess.id);
-                          }}
-                          className="ml-2 rounded p-0.5 opacity-50 hover:opacity-100"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </button>
+                        <div className="flex-1 min-w-0 flex items-center gap-1">
+                          {editingSessionId === sess.id ? (
+                            <input
+                              type="text"
+                              value={editingSessionName}
+                              onChange={(e) => setEditingSessionName(e.target.value)}
+                              onKeyDown={handleRenameKeyDown}
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex-1 min-w-0 bg-background border border-border rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                              autoFocus
+                            />
+                          ) : (
+                            <span
+                              className="truncate cursor-pointer"
+                              onClick={() => {
+                                switchSession(sess.id);
+                                setShowSessionList(false);
+                              }}
+                              onDoubleClick={(e) => handleRenameStart(e, sess.id, sess.name)}
+                            >
+                              {sess.name}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-0.5 ml-2">
+                          {editingSessionId === sess.id ? (
+                            <>
+                              <button
+                                onClick={handleRenameSave}
+                                className="rounded p-0.5 text-green-500 hover:bg-green-500/10"
+                                title="保存"
+                              >
+                                <Check className="h-3 w-3" />
+                              </button>
+                              <button
+                                onClick={handleRenameCancel}
+                                className="rounded p-0.5 text-muted-foreground hover:bg-accent"
+                                title="取消"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={(e) => handleRenameStart(e, sess.id, sess.name)}
+                                className="rounded p-0.5 text-muted-foreground opacity-50 hover:opacity-100 hover:bg-accent"
+                                title="重命名"
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  destroySession(sess.id, currentProjectId || undefined);
+                                }}
+                                className="rounded p-0.5 text-muted-foreground opacity-50 hover:opacity-100 hover:bg-destructive/10 hover:text-destructive"
+                                title="删除"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
