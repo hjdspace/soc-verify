@@ -25,6 +25,9 @@ interface SimulationStoreState {
   activeRuns: SimulationRunRecord[];
   history: SimulationHistoryEntry[];
   selectedRunId: string | null;
+  detailRunId: string | null;
+  detailRun: SimulationHistoryEntry | null;
+  loadingDetail: boolean;
   compareRunIdA: string | null;
   compareRunIdB: string | null;
   loadingHistory: boolean;
@@ -39,6 +42,8 @@ interface SimulationStoreState {
   compareRuns: (projectId: string, runIdA: string, runIdB: string) => Promise<void>;
   handleSimulationEvent: (type: string, record: unknown) => void;
   setSelectedRunId: (runId: string | null) => void;
+  loadRunDetail: (projectId: string, runId: string) => Promise<void>;
+  setDetailRunId: (runId: string | null) => void;
   setCompareRunIds: (a: string | null, b: string | null) => void;
   setSimOption: (key: string, value: unknown) => void;
   setSimOptions: (options: Record<string, unknown>) => void;
@@ -58,6 +63,9 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
   activeRuns: [],
   history: [],
   selectedRunId: null,
+  detailRunId: null,
+  detailRun: null,
+  loadingDetail: false,
   compareRunIdA: null,
   compareRunIdB: null,
   loadingHistory: false,
@@ -211,6 +219,17 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
   },
 
   setSelectedRunId: (runId) => set({ selectedRunId: runId }),
+  setDetailRunId: (runId) => set({ detailRunId: runId, detailRun: null }),
+  loadRunDetail: async (projectId, runId) => {
+    set({ loadingDetail: true, detailRunId: runId });
+    try {
+      const detail = await trpc.simulation.getRunDetail.query({ projectId, runId });
+      set({ detailRun: detail, loadingDetail: false });
+    } catch (err) {
+      set({ loadingDetail: false });
+      useToastStore.getState().error('加载运行详情失败', tRPCError(err));
+    }
+  },
   setCompareRunIds: (a, b) => set({ compareRunIdA: a, compareRunIdB: b }),
   setSimOption: (key, value) => set((s) => ({ simOptions: { ...s.simOptions, [key]: value } })),
   setSimOptions: (options) => set({ simOptions: options }),

@@ -12,6 +12,8 @@ export interface ChatMessage {
   toolName?: string;
   toolArgs?: unknown;
   toolResult?: unknown;
+  toolStartTime?: number;
+  toolEndTime?: number;
   images?: string[];
   isStreaming?: boolean;
 }
@@ -200,10 +202,19 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
           case 'message_update': {
             const delta = evt.delta as string | undefined;
             if (!delta) return sess;
+            // Find the last streaming assistant message (may not be the last message if tool messages were added)
+            let lastAssistantIdx = -1;
+            for (let i = sess.messages.length - 1; i >= 0; i--) {
+              if (sess.messages[i].role === 'assistant' && sess.messages[i].isStreaming) {
+                lastAssistantIdx = i;
+                break;
+              }
+            }
+            if (lastAssistantIdx === -1) return sess;
             return {
               ...sess,
               messages: sess.messages.map((m, i) =>
-                i === sess.messages.length - 1 && m.role === 'assistant'
+                i === lastAssistantIdx
                   ? { ...m, content: m.content + delta }
                   : m,
               ),
@@ -214,8 +225,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             return {
               ...sess,
               status: 'idle',
-              messages: sess.messages.map((m, i) =>
-                i === sess.messages.length - 1 && m.role === 'assistant'
+              messages: sess.messages.map((m) =>
+                m.role === 'assistant' && m.isStreaming
                   ? { ...m, isStreaming: false }
                   : m,
               ),
@@ -229,6 +240,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
               timestamp: Date.now(),
               toolName: evt.toolName as string,
               toolArgs: evt.args,
+              toolStartTime: Date.now(),
             };
             return {
               ...sess,
@@ -243,7 +255,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
               status: 'streaming',
               messages: sess.messages.map((m) =>
                 m.role === 'tool' && m.toolName === evt.toolName && !m.toolResult
-                  ? { ...m, toolResult: evt.result }
+                  ? { ...m, toolResult: evt.result, toolEndTime: Date.now() }
                   : m,
               ),
             };

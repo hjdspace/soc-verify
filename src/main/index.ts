@@ -165,4 +165,5 @@ app.on('before-quit', async () => {
   projectManager.destroy();
   pluginLoader.clearAll();
   await sessionManager.destroyAll();
+  terminalManager.destroyAll();
 });

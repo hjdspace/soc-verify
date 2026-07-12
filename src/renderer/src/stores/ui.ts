@@ -12,7 +12,7 @@ interface UiState {
   activeCenterTab: string | null;
   settingsOpen: boolean;
   selectedFile: SelectedFile | null;
-  centerView: 'terminal' | 'file' | 'ai-artifacts' | 'sim-errors' | 'sim-history' | 'empty';
+  centerView: 'terminal' | 'file' | 'ai-artifacts' | 'sim-errors' | 'sim-history' | 'sim-detail' | 'sim-compare' | 'empty';
   leftRailWidth: number;
   rightPanelWidth: number;
   toggleLeftRail: () => void;
@@ -21,7 +21,7 @@ interface UiState {
   setActiveCenterTab: (id: string | null) => void;
   setSettingsOpen: (open: boolean) => void;
   setSelectedFile: (path: string, name: string) => void;
-  setCenterView: (view: 'terminal' | 'file' | 'ai-artifacts' | 'sim-errors' | 'sim-history' | 'empty') => void;
+  setCenterView: (view: 'terminal' | 'file' | 'ai-artifacts' | 'sim-errors' | 'sim-history' | 'sim-detail' | 'sim-compare' | 'empty') => void;
   setLeftRailWidth: (width: number) => void;
   setRightPanelWidth: (width: number) => void;
 }

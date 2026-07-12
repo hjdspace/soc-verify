@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Plus, Send, Square, MessageSquare, Trash2, ChevronDown } from 'lucide-react';
+import { Plus, Send, Square, MessageSquare, Trash2, ChevronDown, Loader2, Clock } from 'lucide-react';
 import { useSessionStore, type ChatMessage } from '@renderer/stores/session';
 import { useProjectStore } from '@renderer/stores/project';
+import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
 import { cn } from '@renderer/lib/utils';
 
 interface RightPanelProps {
@@ -229,12 +230,25 @@ function MessageBubble({ message }: { message: ChatMessage }) {
             : 'bg-background text-foreground',
         )}
       >
-        <div className="whitespace-pre-wrap break-words">
-          {message.content || (message.isStreaming ? '...' : '')}
-          {message.isStreaming && (
-            <span className="ml-0.5 inline-block h-3 w-0.5 animate-pulse bg-foreground" />
-          )}
-        </div>
+        {isUser ? (
+          <div className="whitespace-pre-wrap break-words">{message.content}</div>
+        ) : (
+          <>
+            {message.content ? (
+              <MarkdownRenderer content={message.content} />
+            ) : (
+              message.isStreaming && (
+                <div className="flex items-center gap-1 text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <span className="text-[10px]">思考中...</span>
+                </div>
+              )
+            )}
+            {message.isStreaming && message.content && (
+              <span className="ml-0.5 inline-block h-3 w-0.5 animate-pulse bg-foreground" />
+            )}
+          </>
+        )}
       </div>
     </div>
   );
@@ -244,6 +258,12 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 
 function ToolCard({ message }: { message: ChatMessage }) {
   const [expanded, setExpanded] = useState(false);
+  const isExecuting = !message.toolResult;
+  const duration = message.toolStartTime && message.toolEndTime
+    ? message.toolEndTime - message.toolStartTime
+    : message.toolStartTime && !message.toolResult
+      ? Date.now() - message.toolStartTime
+      : null;
 
   return (
     <div className="rounded-md border border-border/60 bg-secondary/30 p-2">
@@ -251,14 +271,24 @@ function ToolCard({ message }: { message: ChatMessage }) {
         onClick={() => setExpanded(!expanded)}
         className="flex w-full items-center gap-1.5 text-left"
       >
-        <div className="flex h-5 w-5 items-center justify-center rounded bg-primary/10">
-          <Square className="h-2.5 w-2.5 text-primary" />
+        <div className={cn('flex h-5 w-5 items-center justify-center rounded', isExecuting ? 'bg-primary/10' : 'bg-green-500/10')}>
+          {isExecuting ? (
+            <Loader2 className="h-2.5 w-2.5 animate-spin text-primary" />
+          ) : (
+            <Square className="h-2.5 w-2.5 text-green-500" />
+          )}
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-[10px] font-semibold text-foreground">
             {message.toolName ?? 'tool'}
           </div>
         </div>
+        {duration != null && (
+          <span className="flex items-center gap-0.5 text-[9px] text-muted-foreground">
+            <Clock className="h-2.5 w-2.5" />
+            {duration > 1000 ? `${(duration / 1000).toFixed(1)}s` : `${duration}ms`}
+          </span>
+        )}
         <ChevronDown className={cn('h-3 w-3 text-muted-foreground transition-transform', expanded && 'rotate-180')} />
       </button>
 
@@ -275,15 +305,18 @@ function ToolCard({ message }: { message: ChatMessage }) {
           {message.toolResult != null && (
             <div>
               <div className="text-[9px] uppercase text-muted-foreground">结果</div>
-              <pre className="mt-0.5 overflow-x-auto rounded bg-background/50 p-1 text-[10px]">
+              <pre className="mt-0.5 max-h-48 overflow-auto rounded bg-background/50 p-1 text-[10px]">
                 {typeof message.toolResult === 'string'
                   ? message.toolResult
                   : JSON.stringify(message.toolResult, null, 2)}
               </pre>
             </div>
           )}
-          {!message.toolResult && (
-            <div className="text-[10px] text-muted-foreground">执行中...</div>
+          {isExecuting && (
+            <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+              <Loader2 className="h-2.5 w-2.5 animate-spin" />
+              执行中...
+            </div>
           )}
         </div>
       )}
