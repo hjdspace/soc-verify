@@ -5,17 +5,17 @@
   "main": "./out/main/index.cjs",
   "type": "module",
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
-    "preview": "electron-vite preview",
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs",
+    "preview": "node scripts/preview.mjs",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
-    "package": "electron-vite build && electron-builder",
-    "package:win": "electron-vite build && electron-builder --win"
+    "package": "node scripts/build.mjs && electron-builder",
+    "package:win": "node scripts/build.mjs && electron-builder --win"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.101.2",
