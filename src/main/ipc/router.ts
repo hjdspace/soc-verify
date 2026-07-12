@@ -8,6 +8,7 @@ import { pluginLoader } from '../plugins/loader';
 import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../omp/plugin-discovery';
 import type { CaseStatus } from '../omp/discovery';
 import { simulationRegistry } from '../simulation/simulation-registry';
+import { detectEdaTools, loadEnvConfig, saveEnvConfig, getKnownEnvVarNames } from '../env/env-manager';
 import { terminalManager } from '../terminal/terminal-manager';
 import { addSession, removeSession, loadSessions, saveSessions, type PersistedSession } from '../omp/session-persistence';
 import { dialog, ipcMain, BrowserWindow } from 'electron';
@@ -18,6 +19,8 @@ import type {
   PluginConfig,
   PluginConfigEntry,
   SimulationHistoryEntry,
+  EnvConfig,
+  EdaToolInfo,
 } from '@shared/types';
 import type { PluginLoadResult, SimulationRunOptions } from '@shared/plugin-types';
 
@@ -867,6 +870,51 @@ export const router = t.router({
 
     list: t.procedure.query(() => {
       return terminalManager.list();
+    }),
+  }),
+
+   // ─── 环境配置 ──────────────────────────────────────────────
+  env: t.router({
+    detectTools: t.procedure
+      .mutation(async () => {
+        const tools = await detectEdaTools();
+        return { tools };
+      }),
+
+    getConfig: t.procedure
+      .input((raw): { projectId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const config = await loadEnvConfig(project.rootPath);
+        return config ?? { tools: [], envVars: {} };
+      }),
+
+    saveConfig: t.procedure
+      .input((raw): { projectId: string; config: EnvConfig } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        const config = r.config as EnvConfig;
+        if (!config || !Array.isArray(config.tools) || typeof config.envVars !== 'object') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid config structure' });
+        }
+        return { projectId: r.projectId, config };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        await saveEnvConfig(project.rootPath, input.config);
+        return { ok: true };
+      }),
+
+    getKnownEnvVars: t.procedure.query(() => {
+      return getKnownEnvVarNames();
     }),
   }),
 });

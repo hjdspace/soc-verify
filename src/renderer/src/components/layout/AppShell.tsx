@@ -4,6 +4,7 @@ import { CenterArea } from './CenterArea';
 import { RightPanel } from './RightPanel';
 import { OptionDock } from './OptionDock';
 import { ResizeHandle } from './ResizeHandle';
+import { EnvWizard } from '@renderer/components/env/EnvWizard';
 import { useUiStore } from '@renderer/stores/ui';
 
 export function AppShell() {
@@ -46,6 +47,9 @@ export function AppShell() {
 
       {/* ── 底部仿真选项浮窗 ─────────────────────────────── */}
       <OptionDock />
+
+      {/* ── 环境搭建向导 ─────────────────────────────────── */}
+      <EnvWizard />
     </div>
   );
 }
