@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CoverageManager } from '../../src/main/coverage/coverage-manager';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { CoverageData } from '@shared/plugin-types';
@@ -135,6 +135,54 @@ describe('CoverageManager', () => {
       const detail = await mgr.getDetail('cached_run');
       expect(detail?.runId).toBe('cached_run');
       expect(adapter.parse).not.toHaveBeenCalled();
+
+      rmSync(tmpDir, { recursive: true });
+    });
+  });
+
+  describe('getTrend', () => {
+    it('returns trend data from cached runs', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'cov-trend-test-'));
+      const covDir = join(tmpDir, '.socverify', 'coverage');
+      mkdirSync(covDir, { recursive: true });
+      writeFileSync(join(covDir, 'run_001.json'), JSON.stringify(mockData));
+      const mockData2 = { ...mockData, runId: 'run_002', overall: 90 };
+      writeFileSync(join(covDir, 'run_002.json'), JSON.stringify(mockData2));
+
+      const mgr = new CoverageManager({ projectRoot: tmpDir, coverageAdapter: null });
+      const trend = await mgr.getTrend();
+      expect(trend).toHaveLength(2);
+
+      rmSync(tmpDir, { recursive: true });
+    });
+  });
+
+  describe('exportReport', () => {
+    it('exports JSON report', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'cov-export-test-'));
+      const adapter = createMockAdapter(mockData);
+      const mgr = new CoverageManager({ projectRoot: tmpDir, coverageAdapter: adapter as never });
+      const outputPath = join(tmpDir, 'report.json');
+
+      await mgr.exportReport('run_001', 'json', outputPath);
+      const content = readFileSync(outputPath, 'utf-8');
+      const parsed = JSON.parse(content);
+      expect(parsed.runId).toBe('run_001');
+
+      rmSync(tmpDir, { recursive: true });
+    });
+
+    it('exports HTML report', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'cov-export-html-test-'));
+      const adapter = createMockAdapter(mockData);
+      const mgr = new CoverageManager({ projectRoot: tmpDir, coverageAdapter: adapter as never });
+      const outputPath = join(tmpDir, 'report.html');
+
+      await mgr.exportReport('run_001', 'html', outputPath);
+      const content = readFileSync(outputPath, 'utf-8');
+      expect(content).toContain('<html');
+      expect(content).toContain('Coverage Report');
+      expect(content).toContain('cpu_core');
 
       rmSync(tmpDir, { recursive: true });
     });

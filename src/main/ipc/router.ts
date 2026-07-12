@@ -986,6 +986,54 @@ export const router = t.router({
         const mgr = new CoverageManager({ projectRoot: project.rootPath, coverageAdapter: adapter });
         return mgr.listCachedRuns();
       }),
+
+    getTrend: t.procedure
+      .input((raw): { projectId: string; limit?: number } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId, limit: typeof r.limit === 'number' ? r.limit : undefined };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        const adapter = new PluginBackedCoverage(project.rootPath, registry);
+        const mgr = new CoverageManager({ projectRoot: project.rootPath, coverageAdapter: adapter });
+        return mgr.getTrend(input.limit);
+      }),
+
+    getUncovered: t.procedure
+      .input((raw): { projectId: string; runId: string; type: 'line' | 'toggle' | 'functional' | 'assertion' } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.runId !== 'string' || typeof r.type !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, runId and type are required' });
+        }
+        return { projectId: r.projectId, runId: r.runId, type: r.type as 'line' | 'toggle' | 'functional' | 'assertion' };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        const adapter = new PluginBackedCoverage(project.rootPath, registry);
+        const mgr = new CoverageManager({ projectRoot: project.rootPath, coverageAdapter: adapter });
+        return mgr.getUncovered(input.runId, input.type);
+      }),
+
+    exportReport: t.procedure
+      .input((raw): { projectId: string; runId: string; format: 'html' | 'json'; outputPath: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.runId !== 'string' || typeof r.format !== 'string' || typeof r.outputPath !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, runId, format and outputPath are required' });
+        }
+        return { projectId: r.projectId, runId: r.runId, format: r.format as 'html' | 'json', outputPath: r.outputPath };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        const adapter = new PluginBackedCoverage(project.rootPath, registry);
+        const mgr = new CoverageManager({ projectRoot: project.rootPath, coverageAdapter: adapter });
+        return mgr.exportReport(input.runId, input.format, input.outputPath);
+      }),
   }),
 });
 
