@@ -132,6 +132,10 @@ function registerEventForwarding(win: BrowserWindow) {
 
 app.whenReady().then(async () => {
   await projectManager.ensureDataDir();
+  const restoredCount = await projectManager.restorePersistedProjects();
+  if (restoredCount > 0) {
+    console.log(`[project] restored ${restoredCount} project(s) from disk`);
+  }
 
   mainWindow = createWindow();
   createIPCHandler({ router, windows: [mainWindow] });
@@ -140,11 +144,15 @@ app.whenReady().then(async () => {
 
   const ompRuntime = resolveOmpRuntime();
   if (ompRuntime) {
-    console.log(`[omp] resolved: bun=${ompRuntime.bunVersion}, entry=${ompRuntime.ompEntryPath}`);
-    if (!ompRuntime.bunVersionOk) {
-      console.warn(`[omp] Bun version ${ompRuntime.bunVersion} is below required 1.3.14. Run: bun upgrade`);
+    if (ompRuntime.ompBinaryPath) {
+      console.log(`[omp] resolved: binary=${ompRuntime.ompBinaryPath}`);
+    } else {
+      console.log(`[omp] resolved: bun=${ompRuntime.bunVersion}, entry=${ompRuntime.ompEntryPath}`);
+      if (!ompRuntime.bunVersionOk) {
+        console.warn(`[omp] Bun version ${ompRuntime.bunVersion} is below required 1.3.14. Run: bun upgrade`);
+      }
     }
-  } else console.warn('[omp] runtime not found (need bun + engine/oh-my-pi)');
+  } else console.warn('[omp] runtime not found (need prebuilt omp binary or bun + engine/oh-my-pi)');
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

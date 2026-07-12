@@ -61,7 +61,10 @@ export function resolveBunPath(): string | null {
 
 /** 内嵌 omp 二进制路径（如果存在） */
 export function resolveOmpBinaryPath(): string | null {
-  return findInDir(packagedBinariesDir(), 'omp');
+  const packaged = findInDir(packagedBinariesDir(), 'omp');
+  if (packaged) return packaged;
+  const devCandidate = resolve(__dirname, '../../resources/binaries');
+  return findInDir(devCandidate, 'omp');
 }
 
 /** Check if installed Bun meets the minimum version requirement. */
@@ -82,14 +85,22 @@ export function checkBunVersion(bunPath: string): { ok: boolean; version: string
 }
 
 export interface OmpRuntime {
-  bunPath: string;
-  ompEntryPath: string;
+  /** 优先使用：预编译 omp 二进制路径（pi_natives 已内嵌） */
+  ompBinaryPath?: string;
+  /** 回退：bun 可执行文件路径 */
+  bunPath?: string;
+  /** 回退：omp 源码入口路径 */
+  ompEntryPath?: string;
   bunVersion: string;
   bunVersionOk: boolean;
 }
 
-/** 解析 omp 运行时配置：返回 Bun 路径 + omp 源码入口路径 + 版本信息 */
+/** 解析 omp 运行时配置：优先预编译二进制，回退到 bun + 源码入口 */
 export function resolveOmpRuntime(): OmpRuntime | null {
+  const ompBinaryPath = resolveOmpBinaryPath();
+  if (ompBinaryPath) {
+    return { ompBinaryPath, bunVersion: 'bundled', bunVersionOk: true };
+  }
   const ompEntryPath = resolveOmpEntryPath();
   if (!ompEntryPath) return null;
   const bunPath = resolveBunPath();

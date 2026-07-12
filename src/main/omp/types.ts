@@ -260,10 +260,12 @@ export interface RpcSessionState {
 // ─── RpcClient 配置 ─────────────────────────────────────────
 
 export interface OmpRpcClientOptions {
-  /** Bun 可执行文件路径 */
-  bunPath: string;
-  /** omp 源码入口文件路径（如 engine/oh-my-pi/packages/coding-agent/src/cli.ts） */
-  ompEntryPath: string;
+  /** 优先使用：预编译 omp 二进制路径（pi_natives 已内嵌，无需 bun） */
+  ompBinaryPath?: string;
+  /** 回退：Bun 可执行文件路径（源码模式必需） */
+  bunPath?: string;
+  /** 回退：omp 源码入口文件路径（如 engine/oh-my-pi/packages/coding-agent/src/cli.ts） */
+  ompEntryPath?: string;
   /** 工作目录（项目目录） */
   cwd: string;
   /** 环境变量 */

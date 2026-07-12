@@ -63,13 +63,29 @@ export class OmpRpcClient {
   async start(): Promise<void> {
     if (this.process) throw new Error('Client already started');
 
-    const args = [this.options.ompEntryPath, '--mode', 'rpc'];
-    if (this.options.provider) args.push('--provider', this.options.provider);
-    if (this.options.model) args.push('--model', this.options.model);
-    if (this.options.sessionDir) args.push('--session-dir', this.options.sessionDir);
-    if (this.options.extraArgs) args.push(...this.options.extraArgs);
+    const extraArgs = this.options.extraArgs ?? [];
+    let spawnCmd: string;
+    let spawnArgs: string[];
 
-    const child = spawn(this.options.bunPath, args, {
+    if (this.options.ompBinaryPath) {
+      spawnCmd = this.options.ompBinaryPath;
+      spawnArgs = ['--mode', 'rpc', ...extraArgs];
+      if (this.options.provider) spawnArgs.push('--provider', this.options.provider);
+      if (this.options.model) spawnArgs.push('--model', this.options.model);
+      if (this.options.sessionDir) spawnArgs.push('--session-dir', this.options.sessionDir);
+    } else {
+      if (!this.options.bunPath || !this.options.ompEntryPath) {
+        throw new Error('Either ompBinaryPath or (bunPath + ompEntryPath) must be provided');
+      }
+      spawnCmd = this.options.bunPath;
+      spawnArgs = [this.options.ompEntryPath, '--mode', 'rpc'];
+      if (this.options.provider) spawnArgs.push('--provider', this.options.provider);
+      if (this.options.model) spawnArgs.push('--model', this.options.model);
+      if (this.options.sessionDir) spawnArgs.push('--session-dir', this.options.sessionDir);
+      spawnArgs.push(...extraArgs);
+    }
+
+    const child = spawn(spawnCmd, spawnArgs, {
       cwd: this.options.cwd,
       env: { ...process.env, ...this.options.env },
       stdio: ['pipe', 'pipe', 'pipe'],

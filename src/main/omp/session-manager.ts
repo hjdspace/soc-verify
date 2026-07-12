@@ -57,9 +57,9 @@ class SessionManagerImpl extends EventEmitter {
 
     const runtime = resolveOmpRuntime();
     if (!runtime) {
-      throw new Error('omp runtime not found (need bun + engine/oh-my-pi)');
+      throw new Error('omp runtime not found (need prebuilt omp binary or bun + engine/oh-my-pi)');
     }
-    if (!runtime.bunVersionOk) {
+    if (!runtime.ompBinaryPath && !runtime.bunVersionOk) {
       throw new Error(
         `Bun runtime must be >= ${'1.3.14'} (found v${runtime.bunVersion}). ` +
         'Please upgrade: bun upgrade',
@@ -69,6 +69,7 @@ class SessionManagerImpl extends EventEmitter {
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
     const clientOptions: OmpRpcClientOptions = {
+      ompBinaryPath: runtime.ompBinaryPath,
       bunPath: runtime.bunPath,
       ompEntryPath: runtime.ompEntryPath,
       cwd: options.cwd,
