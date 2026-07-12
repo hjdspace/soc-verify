@@ -46,5 +46,15 @@ process.once('loaded', async () => {
       ipcRenderer.on('simulation:event', handler);
       return () => ipcRenderer.removeListener('simulation:event', handler);
     },
+    onTerminalData: (callback: (data: { id: string; data: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { id: string; data: string }) => callback(data);
+      ipcRenderer.on('terminal:data', handler);
+      return () => ipcRenderer.removeListener('terminal:data', handler);
+    },
+    onTerminalExit: (callback: (data: { id: string; exitCode: number }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { id: string; exitCode: number }) => callback(data);
+      ipcRenderer.on('terminal:exit', handler);
+      return () => ipcRenderer.removeListener('terminal:exit', handler);
+    },
   });
 });

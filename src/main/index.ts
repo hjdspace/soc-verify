@@ -8,6 +8,7 @@ import { projectManager } from './project/project-manager';
 import { sessionManager } from './omp/session-manager';
 import { pluginLoader } from './plugins/loader';
 import { simulationRegistry } from './simulation/simulation-registry';
+import { terminalManager } from './terminal/terminal-manager';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -112,6 +113,19 @@ function registerEventForwarding(win: BrowserWindow) {
   simulationRegistry.on('run:aborted', (record) => {
     if (!win.isDestroyed()) {
       win.webContents.send('simulation:event', { type: 'aborted', record });
+    }
+  });
+
+  // Terminal data events
+  terminalManager.on('data', ({ id, data }) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('terminal:data', { id, data });
+    }
+  });
+
+  terminalManager.on('exit', ({ id, exitCode }) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('terminal:exit', { id, exitCode });
     }
   });
 }

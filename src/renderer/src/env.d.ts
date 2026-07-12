@@ -26,6 +26,8 @@ export interface EventBridgeAPI {
   onProjectClosed: (callback: (projectId: string) => void) => () => void;
   onSessionEvent: (callback: (data: { sessionId: string; event: unknown }) => void) => () => void;
   onSimulationEvent: (callback: (data: { type: string; record: unknown }) => void) => () => void;
+  onTerminalData: (callback: (data: { id: string; data: string }) => void) => () => void;
+  onTerminalExit: (callback: (data: { id: string; exitCode: number }) => void) => () => void;
 }
 
 declare global {

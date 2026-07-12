@@ -3,6 +3,8 @@ import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, 
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
+import { useTerminalStore } from '@renderer/stores/terminal';
+import { TerminalView } from '@renderer/components/terminal/TerminalView';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import type { SimulationHistoryEntry, CompileError } from '@shared/types';
@@ -31,6 +33,12 @@ export function CenterArea() {
   const loadHistory = useSimulationStore((s) => s.loadHistory);
   const abortSimulation = useSimulationStore((s) => s.abortSimulation);
 
+  const terminalTabs = useTerminalStore((s) => s.tabs);
+  const activeTerminalTabId = useTerminalStore((s) => s.activeTabId);
+  const createTerminal = useTerminalStore((s) => s.createTerminal);
+  const closeTerminal = useTerminalStore((s) => s.closeTerminal);
+  const setActiveTerminalTab = useTerminalStore((s) => s.setActiveTab);
+
   // Sync tabs with active center tab
   useEffect(() => {
     if (!activeCenterTab) return;
@@ -54,6 +62,37 @@ export function CenterArea() {
       setCenterView('sim-history');
     }
   }, [activeCenterTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync terminal tabs with center tabs
+  useEffect(() => {
+    setTabs((prev) => {
+      // Remove old terminal tabs that no longer exist
+      const filtered = prev.filter((t) => t.type !== 'terminal' || terminalTabs.find((tt) => `term:${tt.id}` === t.id));
+      // Add new terminal tabs
+      for (const tt of terminalTabs) {
+        const tabId = `term:${tt.id}`;
+        if (!filtered.find((t) => t.id === tabId)) {
+          filtered.push({ id: tabId, type: 'terminal', title: tt.title, closable: true });
+        }
+      }
+      // Update titles
+      return filtered.map((t) => {
+        if (t.type === 'terminal') {
+          const tt = terminalTabs.find((tt) => `term:${tt.id}` === t.id);
+          if (tt) return { ...t, title: tt.title };
+        }
+        return t;
+      });
+    });
+  }, [terminalTabs]);
+
+  // Sync active terminal tab
+  useEffect(() => {
+    if (activeTerminalTabId) {
+      setActiveCenterTab(`term:${activeTerminalTabId}`);
+      setCenterView('terminal');
+    }
+  }, [activeTerminalTabId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load file content when selectedFile changes
   useEffect(() => {
@@ -84,6 +123,10 @@ export function CenterArea() {
   }, [currentProjectId, loadHistory]);
 
   const closeTab = (tabId: string) => {
+    if (tabId.startsWith('term:')) {
+      const termTabId = tabId.slice(5);
+      void closeTerminal(termTabId);
+    }
     setTabs((prev) => {
       const filtered = prev.filter((t) => t.id !== tabId);
       if (activeCenterTab === tabId) {
@@ -185,6 +228,19 @@ export function CenterArea() {
               )}
             </div>
           </div>
+        ) : centerView === 'terminal' && activeCenterTab?.startsWith('term:') ? (
+          (() => {
+            const termTabId = activeCenterTab.slice(5);
+            const termTab = terminalTabs.find((t) => t.id === termTabId);
+            if (!termTab || !termTab.terminalId) {
+              return (
+                <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
+                  正在创建终端...
+                </div>
+              );
+            }
+            return <TerminalView terminalId={termTab.terminalId} />;
+          })()
         ) : centerView === 'sim-errors' ? (
           <CompileErrorView errors={simErrors} runId={simErrorsRunId} />
         ) : centerView === 'sim-history' ? (
@@ -230,7 +286,7 @@ export function CenterArea() {
 
             <div className="flex gap-2">
               <button
-                onClick={() => setCenterView('terminal')}
+                onClick={() => createTerminal(currentProjectId ?? undefined)}
                 className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs transition-colors hover:bg-accent"
               >
                 <TerminalIcon className="h-3.5 w-3.5" />
