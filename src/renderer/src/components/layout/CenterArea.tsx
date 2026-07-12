@@ -1,17 +1,21 @@
 import { useEffect, useState } from 'react';
-import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare } from 'lucide-react';
+import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks } from 'lucide-react';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useTerminalStore } from '@renderer/stores/terminal';
 import { TerminalView } from '@renderer/components/terminal/TerminalView';
+import { CoveragePanel } from '@renderer/components/coverage/CoveragePanel';
+import { RegressionPanel } from '@renderer/components/regression/RegressionPanel';
+import { DashboardPanel } from '@renderer/components/dashboard/DashboardPanel';
+import { TOChecklistPanel } from '@renderer/components/to/TOChecklistPanel';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import type { SimulationHistoryEntry, CompileError } from '@shared/types';
 
 type CenterTab = {
   id: string;
-  type: 'file' | 'terminal' | 'ai-artifacts' | 'sim-errors' | 'sim-history' | 'sim-detail' | 'sim-compare';
+  type: 'file' | 'terminal' | 'ai-artifacts' | 'sim-errors' | 'sim-history' | 'sim-detail' | 'sim-compare' | 'coverage' | 'regression' | 'dashboard' | 'to-checklist';
   title: string;
   closable: boolean;
 };
@@ -77,6 +81,26 @@ export function CenterArea() {
         setTabs((prev) => [...prev, { id: activeCenterTab, type: 'sim-compare', title: '运行对比', closable: true }]);
       }
       setCenterView('sim-compare');
+    } else if (activeCenterTab === 'coverage') {
+      if (!tabs.find((t) => t.id === activeCenterTab)) {
+        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'coverage', title: '覆盖率分析', closable: true }]);
+      }
+      setCenterView('coverage');
+    } else if (activeCenterTab === 'regression') {
+      if (!tabs.find((t) => t.id === activeCenterTab)) {
+        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'regression', title: '回归套件', closable: true }]);
+      }
+      setCenterView('regression');
+    } else if (activeCenterTab === 'dashboard') {
+      if (!tabs.find((t) => t.id === activeCenterTab)) {
+        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'dashboard', title: '仪表盘', closable: true }]);
+      }
+      setCenterView('dashboard');
+    } else if (activeCenterTab === 'to-checklist') {
+      if (!tabs.find((t) => t.id === activeCenterTab)) {
+        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'to-checklist', title: 'TO 检查清单', closable: true }]);
+      }
+      setCenterView('to-checklist');
     }
   }, [activeCenterTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -212,6 +236,10 @@ export function CenterArea() {
                 {tab.type === 'sim-history' && <History className="h-3 w-3 opacity-50" />}
                 {tab.type === 'sim-detail' && <FileText className="h-3 w-3 opacity-50" />}
                 {tab.type === 'sim-compare' && <GitCompare className="h-3 w-3 opacity-50" />}
+                {tab.type === 'coverage' && <BarChart3 className="h-3 w-3 opacity-50" />}
+                {tab.type === 'regression' && <GitBranch className="h-3 w-3 opacity-50" />}
+                {tab.type === 'dashboard' && <LayoutDashboard className="h-3 w-3 opacity-50" />}
+                {tab.type === 'to-checklist' && <ListChecks className="h-3 w-3 opacity-50" />}
                 <span className="max-w-32 truncate">{tab.title}</span>
                 {tab.closable && (
                   <button
@@ -229,6 +257,34 @@ export function CenterArea() {
           </div>
         )}
         <div className="flex items-center gap-1 px-2">
+          <button
+            onClick={() => setActiveCenterTab('dashboard')}
+            title="仪表盘"
+            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <LayoutDashboard className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => setActiveCenterTab('coverage')}
+            title="覆盖率"
+            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => setActiveCenterTab('regression')}
+            title="回归套件"
+            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <GitBranch className="h-3.5 w-3.5" />
+          </button>
+          <button
+            onClick={() => setActiveCenterTab('to-checklist')}
+            title="TO 检查"
+            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <ListChecks className="h-3.5 w-3.5" />
+          </button>
           <button
             onClick={openSimHistory}
             title="仿真历史"
@@ -288,6 +344,14 @@ export function CenterArea() {
           />
         ) : centerView === 'sim-compare' ? (
           <ComparisonView result={compareResult} />
+        ) : centerView === 'coverage' ? (
+          <CoveragePanel />
+        ) : centerView === 'regression' ? (
+          <RegressionPanel />
+        ) : centerView === 'dashboard' ? (
+          <DashboardPanel />
+        ) : centerView === 'to-checklist' ? (
+          <TOChecklistPanel />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
             {/* Active simulations */}

@@ -4,7 +4,10 @@ import { CenterArea } from './CenterArea';
 import { RightPanel } from './RightPanel';
 import { OptionDock } from './OptionDock';
 import { ResizeHandle } from './ResizeHandle';
+import { TaskPanel } from './TaskPanel';
+import { CommandPalette } from './CommandPalette';
 import { EnvWizard } from '@renderer/components/env/EnvWizard';
+import { SettingsPanel } from '@renderer/components/settings/SettingsPanel';
 import { useUiStore } from '@renderer/stores/ui';
 
 export function AppShell() {
@@ -21,7 +24,7 @@ export function AppShell() {
       <TitleBar />
 
       {/* ── 三栏主工作区 ─────────────────────────────────── */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden">
         {!leftCollapsed && (
           <>
             <LeftRail width={leftRailWidth} />
@@ -43,6 +46,9 @@ export function AppShell() {
             <RightPanel width={rightPanelWidth} />
           </>
         )}
+
+        {/* ── 后台任务面板（浮动在右下角） ──────────────────── */}
+        <TaskPanel />
       </div>
 
       {/* ── 底部仿真选项浮窗 ─────────────────────────────── */}
@@ -50,6 +56,12 @@ export function AppShell() {
 
       {/* ── 环境搭建向导 ─────────────────────────────────── */}
       <EnvWizard />
+
+      {/* ── 设置面板 ─────────────────────────────────────── */}
+      <SettingsPanel />
+
+      {/* ── 命令面板（Ctrl+P 触发） ──────────────────────── */}
+      <CommandPalette />
     </div>
   );
 }

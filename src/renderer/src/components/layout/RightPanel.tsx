@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
-import { Plus, Send, Square, MessageSquare, Trash2, ChevronDown, Loader2, Clock, Pencil, X, Check } from 'lucide-react';
-import { useSessionStore, type ChatMessage } from '@renderer/stores/session';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { Plus, Send, Square, MessageSquare, Trash2, ChevronDown, Loader2, Clock, Pencil, X, Check, Paperclip, Cpu, Compass } from 'lucide-react';
+import { useSessionStore, type ChatMessage, type AvailableModel } from '@renderer/stores/session';
 import { useProjectStore } from '@renderer/stores/project';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
 import { cn } from '@renderer/lib/utils';
@@ -27,10 +27,20 @@ export function RightPanel({ width }: RightPanelProps) {
   );
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [showSessionList, setShowSessionList] = useState(false);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingSessionName, setEditingSessionName] = useState('');
   const [hasRestored, setHasRestored] = useState(false);
+  const [attachedImages, setAttachedImages] = useState<string[]>([]);
+  const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
+  const [steerText, setSteerText] = useState('');
+  const [showSteerInput, setShowSteerInput] = useState(false);
+
+  const steerSession = useSessionStore((s) => s.steerSession);
+  const getAvailableModels = useSessionStore((s) => s.getAvailableModels);
+  const setModel = useSessionStore((s) => s.setModel);
 
   const currentSession = sessions.find((s) => s.id === currentSessionId);
   const restoreSessions = useSessionStore((s) => s.restoreSessions);
@@ -61,7 +71,8 @@ export function RightPanel({ width }: RightPanelProps) {
 
   const handleSend = async () => {
     if (!inputMessage.trim()) return;
-    await sendMessage(inputMessage);
+    await sendMessage(inputMessage, attachedImages.length > 0 ? attachedImages : undefined);
+    setAttachedImages([]);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -100,6 +111,65 @@ export function RightPanel({ width }: RightPanelProps) {
       handleRenameSave(e as unknown as React.MouseEvent);
     } else if (e.key === 'Escape') {
       handleRenameCancel(e as unknown as React.MouseEvent);
+    }
+  };
+
+  const handleImageSelect = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+    const newImages: string[] = [];
+    for (const file of Array.from(files)) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result;
+        if (typeof result === 'string') {
+          const base64 = result.split(',')[1];
+          if (base64) newImages.push(base64);
+        }
+        if (newImages.length === files.length) {
+          setAttachedImages((prev) => [...prev, ...newImages]);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+    e.target.value = '';
+  };
+
+  const removeImage = (idx: number) => {
+    setAttachedImages((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleLoadModels = useCallback(async () => {
+    if (!currentSessionId) return;
+    const models = await getAvailableModels(currentSessionId);
+    setAvailableModels(models);
+    setShowModelDropdown(true);
+  }, [currentSessionId, getAvailableModels]);
+
+  const handleSetModel = async (provider: string, modelId: string) => {
+    if (!currentSessionId) return;
+    await setModel(currentSessionId, provider, modelId);
+    setShowModelDropdown(false);
+  };
+
+  const handleSteer = async () => {
+    if (!steerText.trim()) return;
+    await steerSession(steerText);
+    setSteerText('');
+    setShowSteerInput(false);
+  };
+
+  const handleSteerKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSteer();
+    } else if (e.key === 'Escape') {
+      setShowSteerInput(false);
+      setSteerText('');
     }
   };
 
@@ -264,8 +334,74 @@ export function RightPanel({ width }: RightPanelProps) {
         )}
       </div>
 
+      {/* ── Steer 输入 ────────────────────────────── */}
+      {isSending && showSteerInput && (
+        <div className="border-t px-2 py-1.5">
+          <div className="flex flex-col gap-1 rounded-md border border-primary/30 bg-primary/5 p-1.5">
+            <div className="flex items-center gap-1 text-[10px] text-primary">
+              <Compass className="h-3 w-3" />
+              <span className="font-semibold">引导 AI（不中断当前流）</span>
+            </div>
+            <textarea
+              value={steerText}
+              onChange={(e) => setSteerText(e.target.value)}
+              onKeyDown={handleSteerKeyDown}
+              placeholder="输入引导消息..."
+              rows={2}
+              autoFocus
+              className="resize-none bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+            />
+            <div className="flex justify-end gap-1">
+              <button
+                onClick={() => { setShowSteerInput(false); setSteerText(''); }}
+                className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-accent"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleSteer}
+                disabled={!steerText.trim()}
+                className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary hover:bg-primary/20 disabled:opacity-30"
+              >
+                发送
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── 输入框 ──────────────────────────────────── */}
       <div className="border-t p-2">
+        {/* 图片附件预览 */}
+        {attachedImages.length > 0 && (
+          <div className="mb-1.5 flex flex-wrap gap-1">
+            {attachedImages.map((img, idx) => (
+              <div key={idx} className="relative">
+                <img
+                  src={`data:image/png;base64,${img}`}
+                  alt={`attachment-${idx}`}
+                  className="h-12 w-12 rounded border border-border object-cover"
+                />
+                <button
+                  onClick={() => removeImage(idx)}
+                  className="absolute -right-1 -top-1 rounded-full bg-destructive p-0.5 text-destructive-foreground"
+                >
+                  <X className="h-2 w-2" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={handleImageChange}
+          className="hidden"
+        />
+
         <div className="flex flex-col gap-1.5 rounded-md border border-border bg-background p-2">
           <textarea
             value={inputMessage}
@@ -277,6 +413,58 @@ export function RightPanel({ width }: RightPanelProps) {
             className="resize-none bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50"
           />
           <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1">
+              {/* 图片附件按钮 */}
+              <button
+                onClick={handleImageSelect}
+                disabled={!currentSessionId}
+                title="附加图片"
+                className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
+              >
+                <Paperclip className="h-3 w-3" />
+              </button>
+              {/* 模型选择器 */}
+              <div className="relative">
+                <button
+                  onClick={handleLoadModels}
+                  disabled={!currentSessionId}
+                  title="切换模型"
+                  className="flex items-center gap-0.5 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
+                >
+                  <Cpu className="h-3 w-3" />
+                </button>
+                {showModelDropdown && availableModels.length > 0 && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowModelDropdown(false)} />
+                    <div className="absolute bottom-7 left-0 z-50 max-h-48 w-56 overflow-y-auto rounded-md border border-border bg-popover shadow-xl">
+                      {availableModels.map((m) => (
+                        <button
+                          key={`${m.provider}:${m.id}`}
+                          onClick={() => handleSetModel(m.provider, m.id)}
+                          className="flex w-full flex-col items-start gap-0.5 px-2 py-1.5 text-left text-xs hover:bg-accent"
+                        >
+                          <span className="font-medium text-foreground">{m.name}</span>
+                          <span className="text-[9px] text-muted-foreground">{m.provider} · {m.id}</span>
+                          {m.description && (
+                            <span className="text-[9px] text-muted-foreground/70">{m.description}</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+              {/* Steer 按钮 */}
+              {isSending && !showSteerInput && (
+                <button
+                  onClick={() => setShowSteerInput(true)}
+                  title="引导 AI"
+                  className="rounded p-1 text-primary transition-colors hover:bg-primary/10"
+                >
+                  <Compass className="h-3 w-3" />
+                </button>
+              )}
+            </div>
             <span className="text-[10px] text-muted-foreground">
               Enter 发送 · Shift+Enter 换行
             </span>

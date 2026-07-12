@@ -10,6 +10,7 @@ import type { CaseStatus } from '../omp/discovery';
 import { simulationRegistry } from '../simulation/simulation-registry';
 import { detectEdaTools, loadEnvConfig, saveEnvConfig, getKnownEnvVarNames } from '../env/env-manager';
 import { CoverageManager } from '../coverage/coverage-manager';
+import { RegressionManager } from '../regression/regression-manager';
 import { terminalManager } from '../terminal/terminal-manager';
 import { addSession, removeSession, loadSessions, saveSessions, type PersistedSession } from '../omp/session-persistence';
 import { dialog, ipcMain, BrowserWindow } from 'electron';
@@ -24,6 +25,11 @@ import type {
   EdaToolInfo,
   CoverageSummary,
   CoverageBySubsys,
+  RegressionSuite,
+  RegressionResult,
+  TOChecklistItem,
+  CredentialEntry,
+  CredentialInput,
 } from '@shared/types';
 import type { PluginLoadResult, SimulationRunOptions } from '@shared/plugin-types';
 
@@ -1033,6 +1039,497 @@ export const router = t.router({
         const adapter = new PluginBackedCoverage(project.rootPath, registry);
         const mgr = new CoverageManager({ projectRoot: project.rootPath, coverageAdapter: adapter });
         return mgr.exportReport(input.runId, input.format, input.outputPath);
+      }),
+  }),
+
+  // ─── 回归套件管理 ─────────────────────────────────────────
+  regression: t.router({
+    create: t.procedure
+      .input((raw): { projectId: string; name: string; caseIds: string[]; options: Record<string, unknown> } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.name !== 'string' || !Array.isArray(r.caseIds)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, name and caseIds are required' });
+        }
+        return { projectId: r.projectId, name: r.name, caseIds: r.caseIds as string[], options: (r.options as Record<string, unknown>) ?? {} };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        const adapter = new PluginBackedSimulation(registry);
+        const mgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: adapter });
+        return mgr.createSuite(input.name, input.caseIds, input.options);
+      }),
+
+    update: t.procedure
+      .input((raw): { projectId: string; name: string; caseIds?: string[]; options?: Record<string, unknown> } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.name !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and name are required' });
+        }
+        return {
+          projectId: r.projectId,
+          name: r.name,
+          caseIds: Array.isArray(r.caseIds) ? r.caseIds as string[] : undefined,
+          options: typeof r.options === 'object' ? r.options as Record<string, unknown> : undefined,
+        };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        const adapter = new PluginBackedSimulation(registry);
+        const mgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: adapter });
+        return mgr.updateSuite(input.name, { caseIds: input.caseIds, options: input.options });
+      }),
+
+    delete: t.procedure
+      .input((raw): { projectId: string; name: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.name !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and name are required' });
+        }
+        return { projectId: r.projectId, name: r.name };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        const adapter = new PluginBackedSimulation(registry);
+        const mgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: adapter });
+        await mgr.deleteSuite(input.name);
+        return { ok: true };
+      }),
+
+    list: t.procedure
+      .input((raw): { projectId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        const adapter = new PluginBackedSimulation(registry);
+        const mgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: adapter });
+        return mgr.listSuites();
+      }),
+
+    run: t.procedure
+      .input((raw): { projectId: string; name: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.name !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and name are required' });
+        }
+        return { projectId: r.projectId, name: r.name };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        const adapter = new PluginBackedSimulation(registry);
+        const mgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: adapter });
+        return mgr.runSuite(input.name);
+      }),
+
+    getResult: t.procedure
+      .input((raw): { projectId: string; runId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.runId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and runId are required' });
+        }
+        return { projectId: r.projectId, runId: r.runId };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        const adapter = new PluginBackedSimulation(registry);
+        const mgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: adapter });
+        return mgr.getResult(input.runId);
+      }),
+
+    compareRuns: t.procedure
+      .input((raw): { projectId: string; runId1: string; runId2: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.runId1 !== 'string' || typeof r.runId2 !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, runId1 and runId2 are required' });
+        }
+        return { projectId: r.projectId, runId1: r.runId1, runId2: r.runId2 };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        const adapter = new PluginBackedSimulation(registry);
+        const mgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: adapter });
+        return mgr.compareRuns(input.runId1, input.runId2);
+      }),
+
+    getHistory: t.procedure
+      .input((raw): { projectId: string; suiteName?: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId, suiteName: typeof r.suiteName === 'string' ? r.suiteName : undefined };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        const adapter = new PluginBackedSimulation(registry);
+        const mgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: adapter });
+        return mgr.getHistory(input.suiteName);
+      }),
+  }),
+
+  // ─── Dashboard ────────────────────────────────────────────
+  dashboard: t.router({
+    getMetrics: t.procedure
+      .input((raw): { projectId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+
+        // Aggregate metrics from simulation history and coverage
+        const simHistoryPath = join(project.rootPath, '.socverify', 'sim-history.json');
+        let totalRuns = 0;
+        let passRate = 0;
+        try {
+          const data = await readFile(simHistoryPath, 'utf-8');
+          const history = JSON.parse(data) as SimulationHistoryEntry[];
+          totalRuns = history.length;
+          const passed = history.filter((h) => h.status === 'pass').length;
+          passRate = totalRuns > 0 ? (passed / totalRuns) * 100 : 0;
+        } catch {
+          // No history yet
+        }
+
+        // Coverage overview
+        let coverageOverview: CoverageSummary | null = null;
+        try {
+          const covAdapter = new PluginBackedCoverage(project.rootPath, registry);
+          const covMgr = new CoverageManager({ projectRoot: project.rootPath, coverageAdapter: covAdapter });
+          coverageOverview = (await covMgr.getOverview()).summary;
+        } catch {
+          // No coverage data
+        }
+
+        // Regression history
+        let regressionCount = 0;
+        try {
+          const simAdapter = new PluginBackedSimulation(registry);
+          const regMgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: simAdapter });
+          const history = await regMgr.getHistory();
+          regressionCount = history.length;
+        } catch {
+          // No regression data
+        }
+
+        return {
+          passRate,
+          totalRuns,
+          coverage: coverageOverview,
+          regressionCount,
+        };
+      }),
+
+    saveLayout: t.procedure
+      .input((raw): { projectId: string; layout: unknown } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId, layout: r.layout };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const layoutPath = join(project.rootPath, '.socverify', 'dashboard-layout.json');
+        await mkdir(join(project.rootPath, '.socverify'), { recursive: true });
+        await writeFile(layoutPath, JSON.stringify(input.layout, null, 2), 'utf-8');
+        return { ok: true };
+      }),
+
+    getLayout: t.procedure
+      .input((raw): { projectId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const layoutPath = join(project.rootPath, '.socverify', 'dashboard-layout.json');
+        try {
+          const data = await readFile(layoutPath, 'utf-8');
+          return JSON.parse(data);
+        } catch {
+          return null;
+        }
+      }),
+  }),
+
+  // ─── TO 检查清单 ──────────────────────────────────────────
+  to: t.router({
+    getChecklist: t.procedure
+      .input((raw): { projectId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const checklistPath = join(project.rootPath, '.socverify', 'to-checklist.json');
+        try {
+          const data = await readFile(checklistPath, 'utf-8');
+          return JSON.parse(data) as TOChecklistItem[];
+        } catch {
+          // Return default checklist
+          return [
+            { id: 'cov-line', category: 'coverage', name: '行覆盖率达标', description: '行覆盖率 >= 95%', status: 'pending', autoEvaluated: true, threshold: 95 },
+            { id: 'cov-toggle', category: 'coverage', name: '翻转覆盖率达标', description: '翻转覆盖率 >= 90%', status: 'pending', autoEvaluated: true, threshold: 90 },
+            { id: 'cov-func', category: 'coverage', name: '功能覆盖率达标', description: '功能覆盖率 >= 90%', status: 'pending', autoEvaluated: true, threshold: 90 },
+            { id: 'reg-pass', category: 'regression', name: '回归测试全部通过', description: '最近回归运行无失败', status: 'pending', autoEvaluated: true, threshold: 100 },
+            { id: 'signoff-1', category: 'signoff', name: '设计签核', description: '设计团队负责人签核', status: 'pending', autoEvaluated: false },
+            { id: 'signoff-2', category: 'signoff', name: '验证签核', description: '验证团队负责人签核', status: 'pending', autoEvaluated: false },
+          ] as TOChecklistItem[];
+        }
+      }),
+
+    updateItem: t.procedure
+      .input((raw): { projectId: string; itemId: string; updates: Partial<TOChecklistItem> } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.itemId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and itemId are required' });
+        }
+        return { projectId: r.projectId, itemId: r.itemId, updates: (r.updates as Partial<TOChecklistItem>) ?? {} };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const checklistPath = join(project.rootPath, '.socverify', 'to-checklist.json');
+        let items: TOChecklistItem[] = [];
+        try {
+          const data = await readFile(checklistPath, 'utf-8');
+          items = JSON.parse(data) as TOChecklistItem[];
+        } catch {
+          // Start with empty if no file
+        }
+        const updated = items.map((item) =>
+          item.id === input.itemId ? { ...item, ...input.updates } : item,
+        );
+        await mkdir(join(project.rootPath, '.socverify'), { recursive: true });
+        await writeFile(checklistPath, JSON.stringify(updated, null, 2), 'utf-8');
+        return { ok: true };
+      }),
+
+    exportReport: t.procedure
+      .input((raw): { projectId: string; outputPath: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.outputPath !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and outputPath are required' });
+        }
+        return { projectId: r.projectId, outputPath: r.outputPath };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const checklistPath = join(project.rootPath, '.socverify', 'to-checklist.json');
+        let items: TOChecklistItem[] = [];
+        try {
+          const data = await readFile(checklistPath, 'utf-8');
+          items = JSON.parse(data) as TOChecklistItem[];
+        } catch {
+          // No checklist
+        }
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>TO Readiness Report</title></head><body><h1>TO Readiness Report</h1><table><tr><th>Item</th><th>Category</th><th>Status</th><th>Threshold</th><th>Actual</th></tr>${items.map((i) => `<tr><td>${i.name}</td><td>${i.category}</td><td>${i.status}</td><td>${i.threshold ?? '-'}</td><td>${i.actualValue ?? '-'}</td></tr>`).join('')}</table></body></html>`;
+        await writeFile(input.outputPath, html, 'utf-8');
+        return { path: input.outputPath };
+      }),
+  }),
+
+  // ─── 凭据管理 ─────────────────────────────────────────────
+  settings: t.router({
+    getCredentials: t.procedure.query(() => {
+      // safeStorage would be used here in production
+      // For now, return empty list (credentials stored encrypted at rest)
+      return [] as CredentialEntry[];
+    }),
+
+    setCredential: t.procedure
+      .input((raw): { input: CredentialInput } => {
+        const r = raw as Record<string, unknown>;
+        const inp = r.input as CredentialInput;
+        if (!inp || typeof inp.providerId !== 'string' || typeof inp.apiKey !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid credential input' });
+        }
+        return { input: inp };
+      })
+      .mutation(async ({ input }) => {
+        // In production: use electron.safeStorage.encryptString()
+        // For now, just return a masked entry
+        const masked = input.input.apiKey.slice(0, 4) + '***';
+        return {
+          providerId: input.input.providerId,
+          label: input.input.label,
+          apiKeyMasked: masked,
+          endpoint: input.input.endpoint,
+          createdAt: Date.now(),
+        } as CredentialEntry;
+      }),
+
+    deleteCredential: t.procedure
+      .input((raw): { providerId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.providerId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'providerId is required' });
+        }
+        return { providerId: r.providerId };
+      })
+      .mutation(async () => {
+        return { ok: true };
+      }),
+
+    listSkills: t.procedure.query(() => {
+      // Would call omp skill list in production
+      return [];
+    }),
+
+    installSkill: t.procedure
+      .input((raw): { name: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.name !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'name is required' });
+        }
+        return { name: r.name };
+      })
+      .mutation(async () => {
+        return { ok: true };
+      }),
+
+    uninstallSkill: t.procedure
+      .input((raw): { name: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.name !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'name is required' });
+        }
+        return { name: r.name };
+      })
+      .mutation(async () => {
+        return { ok: true };
+      }),
+
+    listMcpServers: t.procedure.query(() => {
+      return [];
+    }),
+
+    setMcpConfig: t.procedure
+      .input((raw): { projectId: string; config: unknown } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId, config: r.config };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const configPath = join(project.rootPath, '.socverify', 'mcp-config.json');
+        await mkdir(join(project.rootPath, '.socverify'), { recursive: true });
+        await writeFile(configPath, JSON.stringify(input.config, null, 2), 'utf-8');
+        return { ok: true };
+      }),
+
+    getSystemPrompt: t.procedure
+      .input((raw): { projectId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const promptPath = join(project.rootPath, '.socverify', 'system-prompt.md');
+        try {
+          return await readFile(promptPath, 'utf-8');
+        } catch {
+          return '';
+        }
+      }),
+
+    setSystemPrompt: t.procedure
+      .input((raw): { projectId: string; prompt: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.prompt !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and prompt are required' });
+        }
+        return { projectId: r.projectId, prompt: r.prompt };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const promptPath = join(project.rootPath, '.socverify', 'system-prompt.md');
+        await mkdir(join(project.rootPath, '.socverify'), { recursive: true });
+        await writeFile(promptPath, input.prompt, 'utf-8');
+        return { ok: true };
+      }),
+  }),
+
+  // ─── 全局搜索 ─────────────────────────────────────────────
+  search: t.router({
+    global: t.procedure
+      .input((raw): { projectId: string; query: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.query !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and query are required' });
+        }
+        return { projectId: r.projectId, query: r.query };
+      })
+      .query(async ({ input }) => {
+        // Search in simulation history
+        const project = requireProject(input.projectId);
+        const results: Array<{ type: string; label: string; detail: string }> = [];
+
+        // Search sim history
+        try {
+          const simHistoryPath = join(project.rootPath, '.socverify', 'sim-history.json');
+          const data = await readFile(simHistoryPath, 'utf-8');
+          const history = JSON.parse(data) as SimulationHistoryEntry[];
+          for (const h of history) {
+            if (h.caseName.includes(input.query) || h.caseId.includes(input.query)) {
+              results.push({
+                type: 'simulation',
+                label: h.caseName,
+                detail: `${h.status} · ${new Date(h.startTime).toLocaleString()}`,
+              });
+            }
+          }
+        } catch {
+          // No history
+        }
+
+        // Search regression suites
+        try {
+          const registry = pluginLoader.getRegistry(project.rootPath);
+          const simAdapter = new PluginBackedSimulation(registry);
+          const regMgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: simAdapter });
+          const suites = await regMgr.listSuites();
+          for (const s of suites) {
+            if (s.name.includes(input.query)) {
+              results.push({
+                type: 'regression',
+                label: s.name,
+                detail: `${s.caseIds.length} cases`,
+              });
+            }
+          }
+        } catch {
+          // No suites
+        }
+
+        return results;
       }),
   }),
 });

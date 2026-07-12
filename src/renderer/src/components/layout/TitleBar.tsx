@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Minus, Square, X, Copy, PanelLeft, PanelRight, Settings, Check } from 'lucide-react';
+import { Minus, Square, X, Copy, PanelLeft, PanelRight, Settings, Check, Search } from 'lucide-react';
 import { useUiStore } from '@renderer/stores/ui';
 import { useThemeStore } from '@renderer/stores/theme';
 import { cn } from '@renderer/lib/utils';
@@ -20,6 +20,8 @@ export function TitleBar() {
   const toggleRightPanel = useUiStore((s) => s.toggleRightPanel);
   const settingsOpen = useUiStore((s) => s.settingsOpen);
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
+
+  const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
 
   const [isMaximized, setIsMaximized] = useState(false);
   const [themeDropdownOpen, setThemeDropdownOpen] = useState(false);
@@ -92,6 +94,14 @@ export function TitleBar() {
           active={!rightCollapsed}
         >
           <PanelRight className="h-3.5 w-3.5" />
+        </TitleBarButton>
+
+        {/* 命令面板按钮 */}
+        <TitleBarButton
+          onClick={() => setCommandPaletteOpen(true)}
+          title="命令面板 (Ctrl+P)"
+        >
+          <Search className="h-3.5 w-3.5" />
         </TitleBarButton>
 
         <div className="h-4 w-px bg-titlebar-border mr-1" />

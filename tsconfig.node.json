@@ -23,7 +23,7 @@
     "src/main/**/*",
     "src/preload/**/*",
     "src/shared/**/*",
-    "src/renderer/src/env.d.ts",
+    "src/renderer/src/**/*",
     "electron.vite.config.ts",
     "vitest.config.ts",
     "eslint.config.js",
