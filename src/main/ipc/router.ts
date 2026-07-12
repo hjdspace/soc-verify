@@ -51,6 +51,8 @@ export const router = t.router({
         available: runtime !== null,
         bunPath: resolveBunPath(),
         ompEntryPath: resolveOmpEntryPath(),
+        bunVersion: runtime?.bunVersion ?? null,
+        bunVersionOk: runtime?.bunVersionOk ?? false,
       };
     }),
   }),

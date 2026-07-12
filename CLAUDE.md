@@ -50,13 +50,14 @@ soc-verify/
 │   │   │   │   ├── layout/        # 布局组件
 │   │   │   │   │   ├── AppShell.tsx    # 三栏 + TitleBar + OptionDock
 │   │   │   │   │   ├── TitleBar.tsx    # 自定义无边框标题栏
-│   │   │   │   │   ├── LeftRail.tsx    # 左栏：项目/用例树
+│   │   │   │   │   ├── LeftRail.tsx    # 左栏：项目/用例树（可调节宽度）
 │   │   │   │   │   ├── CenterArea.tsx  # 中栏：终端/AI产物/文件
-│   │   │   │   │   ├── RightPanel.tsx  # 右栏：AI Agent 会话
+│   │   │   │   │   ├── RightPanel.tsx  # 右栏：AI Agent 会话（可调节宽度）
+│   │   │   │   │   ├── ResizeHandle.tsx # 面板宽度调节拖拽条
 │   │   │   │   │   └── OptionDock.tsx  # 底部：仿真选项浮窗
 │   │   │   │   └── ui/            # shadcn/ui 组件
 │   │   │   ├── stores/
-│   │   │   │   ├── ui.ts          # UI 状态（面板折叠、设置面板）
+│   │   │   │   ├── ui.ts          # UI 状态（面板折叠、宽度调节、设置面板）
 │   │   │   │   └── theme.ts       # 主题状态（多套主题切换）
 │   │   │   ├── lib/
 │   │   │   │   ├── trpc.ts        # tRPC 客户端代理
@@ -156,6 +157,20 @@ Electron 应用分三个进程，由 `electron.vite.config.ts` 分别构建：
 | `sim-option-schema` | `SimOptionSchemaProvider` | 提供仿真选项 schema |
 
 插件以 npm 包形式分发，通过 `PluginLoader` 从 `node_modules` 或本地路径加载。
+
+## 修改后验证检查
+
+**每次修改代码后，必须依次执行以下三条命令，全部通过才算完成：**
+
+```sh
+npm run build        # 1. 确认编译成功（main + preload + renderer 三进程构建）
+npm run typecheck    # 2. 确认类型检查通过（tsconfig.node.json + tsconfig.web.json）
+npm run test         # 3. 确认测试通过（Vitest 全部测试用例）
+```
+
+- 如果任一命令失败，必须修复后重新执行全部三条命令
+- 不得跳过或忽略任何一条检查
+- 修复 linter 报错后也需重新执行上述检查
 
 ## 编码规范
 

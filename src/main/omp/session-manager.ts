@@ -59,6 +59,12 @@ class SessionManagerImpl extends EventEmitter {
     if (!runtime) {
       throw new Error('omp runtime not found (need bun + engine/oh-my-pi)');
     }
+    if (!runtime.bunVersionOk) {
+      throw new Error(
+        `Bun runtime must be >= ${'1.3.14'} (found v${runtime.bunVersion}). ` +
+        'Please upgrade: bun upgrade',
+      );
+    }
 
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 

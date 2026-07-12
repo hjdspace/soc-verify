@@ -4,7 +4,11 @@ import { useSessionStore, type ChatMessage } from '@renderer/stores/session';
 import { useProjectStore } from '@renderer/stores/project';
 import { cn } from '@renderer/lib/utils';
 
-export function RightPanel() {
+interface RightPanelProps {
+  width: number;
+}
+
+export function RightPanel({ width }: RightPanelProps) {
   const sessions = useSessionStore((s) => s.sessions);
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
   const createSession = useSessionStore((s) => s.createSession);
@@ -34,6 +38,7 @@ export function RightPanel() {
   const handleCreateSession = async () => {
     if (!currentProjectId || !currentProject) return;
     await createSession(currentProjectId, currentProject.rootPath);
+    setShowSessionList(false);
   };
 
   const handleSend = async () => {
@@ -49,7 +54,10 @@ export function RightPanel() {
   };
 
   return (
-    <aside className="flex w-96 shrink-0 flex-col border-l bg-sidebar">
+    <aside
+      className="flex shrink-0 flex-col border-l bg-sidebar"
+      style={{ width: `${width}px` }}
+    >
       {/* ── 会话管理栏 ──────────────────────────────── */}
       <div className="flex items-center justify-between border-b px-2 py-1.5">
         <div className="relative">
@@ -69,30 +77,54 @@ export function RightPanel() {
                 onClick={() => setShowSessionList(false)}
               />
               <div className="absolute left-0 top-8 z-50 w-64 overflow-hidden rounded-md border border-border bg-popover shadow-xl">
-                {sessions.map((sess) => (
-                  <div
-                    key={sess.id}
-                    className={cn(
-                      'flex items-center justify-between px-3 py-1.5 text-xs transition-colors hover:bg-accent',
-                      sess.id === currentSessionId && 'bg-accent/50',
-                    )}
-                    onClick={() => {
-                      switchSession(sess.id);
-                      setShowSessionList(false);
-                    }}
-                  >
-                    <span className="truncate">{sess.name}</span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        destroySession(sess.id);
-                      }}
-                      className="ml-2 rounded p-0.5 opacity-50 hover:opacity-100"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
+                {/* 会话列表 */}
+                {sessions.length > 0 && (
+                  <div className="max-h-64 overflow-y-auto p-1">
+                    {sessions.map((sess) => (
+                      <div
+                        key={sess.id}
+                        className={cn(
+                          'flex items-center justify-between rounded px-3 py-1.5 text-xs transition-colors hover:bg-accent cursor-pointer',
+                          sess.id === currentSessionId && 'bg-accent/50',
+                        )}
+                        onClick={() => {
+                          switchSession(sess.id);
+                          setShowSessionList(false);
+                        }}
+                      >
+                        <span className="truncate">{sess.name}</span>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            destroySession(sess.id);
+                          }}
+                          className="ml-2 rounded p-0.5 opacity-50 hover:opacity-100"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
+
+                {/* 空状态提示 */}
+                {sessions.length === 0 && (
+                  <div className="px-3 py-3 text-center text-xs text-muted-foreground">
+                    暂无 AI 会话
+                  </div>
+                )}
+
+                {/* 新建会话按钮 */}
+                <div className="border-t border-border/50 p-1">
+                  <button
+                    onClick={handleCreateSession}
+                    disabled={!currentProjectId}
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs text-primary transition-colors hover:bg-accent disabled:opacity-30"
+                  >
+                    <Plus className="h-3 w-3" />
+                    新建会话
+                  </button>
+                </div>
               </div>
             </>
           )}

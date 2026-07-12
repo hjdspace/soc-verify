@@ -1,7 +1,7 @@
 import { app, BrowserWindow, shell, ipcMain } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { createIPCHandler } from 'electron-trpc/main';
+import { createIPCHandler } from './ipc/electron-trpc-bridge';
 import { router } from './ipc/router';
 import { resolveOmpRuntime } from './omp/paths';
 import { projectManager } from './project/project-manager';
@@ -102,13 +102,16 @@ app.whenReady().then(async () => {
   registerEventForwarding(mainWindow);
 
   const ompRuntime = resolveOmpRuntime();
-  if (ompRuntime) console.log('[omp] resolved:', ompRuntime);
-  else console.warn('[omp] runtime not found (need bun + engine/oh-my-pi)');
+  if (ompRuntime) {
+    console.log(`[omp] resolved: bun=${ompRuntime.bunVersion}, entry=${ompRuntime.ompEntryPath}`);
+    if (!ompRuntime.bunVersionOk) {
+      console.warn(`[omp] Bun version ${ompRuntime.bunVersion} is below required 1.3.14. Run: bun upgrade`);
+    }
+  } else console.warn('[omp] runtime not found (need bun + engine/oh-my-pi)');
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createWindow();
-      createIPCHandler({ router, windows: [mainWindow] });
       registerWindowControls(mainWindow);
       registerEventForwarding(mainWindow);
     }

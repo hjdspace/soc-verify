@@ -167,25 +167,30 @@ class ProjectManagerImpl extends EventEmitter {
         return a.name.localeCompare(b.name);
       });
 
-      for (const entry of sorted) {
-        if (DEFAULT_IGNORE_PATTERNS.some((pattern) => {
+      const filtered = sorted.filter((entry) =>
+        !DEFAULT_IGNORE_PATTERNS.some((pattern) => {
           if (pattern.startsWith('*')) {
             return entry.name.endsWith(pattern.slice(1));
           }
           return entry.name === pattern;
-        })) continue;
+        }),
+      );
 
-        const childPath = join(dirPath, entry.name);
-        if (entry.isDirectory()) {
-          node.children!.push(await this.buildFileTree(childPath, depth + 1));
-        } else {
-          node.children!.push({
+      // Build children in parallel for better performance
+      const children = await Promise.all(
+        filtered.map(async (entry) => {
+          const childPath = join(dirPath, entry.name);
+          if (entry.isDirectory()) {
+            return this.buildFileTree(childPath, depth + 1);
+          }
+          return {
             name: entry.name,
             path: childPath,
-            type: 'file',
-          });
-        }
-      }
+            type: 'file' as const,
+          };
+        }),
+      );
+      node.children = children;
     } catch {
       // Permission errors etc — return empty children
     }

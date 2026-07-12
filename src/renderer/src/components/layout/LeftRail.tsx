@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { FolderOpen, RefreshCw, Cpu, FileText, LayoutDashboard } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { FolderOpen, RefreshCw, Cpu, FileText, LayoutDashboard, ChevronDown, Plus, Folder } from 'lucide-react';
 import { useProjectStore } from '@renderer/stores/project';
 import { useUiStore } from '@renderer/stores/ui';
 import { trpc } from '@renderer/lib/trpc';
@@ -9,8 +9,13 @@ import { cn } from '@renderer/lib/utils';
 
 type Tab = 'files' | 'subsystems' | 'overview';
 
-export function LeftRail() {
+interface LeftRailProps {
+  width: number;
+}
+
+export function LeftRail({ width }: LeftRailProps) {
   const [tab, setTab] = useState<Tab>('files');
+  const [showProjectList, setShowProjectList] = useState(false);
 
   const projects = useProjectStore((s) => s.projects);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
@@ -34,8 +39,11 @@ export function LeftRail() {
     return unlisten;
   }, [refreshFileTree]);
 
-  // Restore projects on mount
+  // Restore projects on mount (guarded against StrictMode double-execution)
+  const restoreDone = useRef(false);
   useEffect(() => {
+    if (restoreDone.current) return;
+    restoreDone.current = true;
     const restore = async () => {
       await useProjectStore.getState().restoreState();
     };
@@ -47,6 +55,12 @@ export function LeftRail() {
     setActiveCenterTab(`file:${name}`);
   };
 
+  const handleSelectProject = (projectId: string) => {
+    useProjectStore.setState({ currentProjectId: projectId });
+    loadFileTree(projectId);
+    setShowProjectList(false);
+  };
+
   const tabs: Array<{ id: Tab; label: string; icon: typeof FileText }> = [
     { id: 'files', label: '文件', icon: FileText },
     { id: 'subsystems', label: '子系统', icon: Cpu },
@@ -54,26 +68,68 @@ export function LeftRail() {
   ];
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r bg-sidebar">
+    <aside
+      className="flex shrink-0 flex-col border-r bg-sidebar"
+      style={{ width: `${width}px` }}
+    >
       {/* ── 项目切换栏 ──────────────────────────────── */}
       <div className="flex items-center justify-between border-b border-border/50 px-2 py-1.5">
-        <select
-          value={currentProjectId ?? ''}
-          onChange={(e) => {
-            if (e.target.value) {
-              useProjectStore.setState({ currentProjectId: e.target.value });
-              loadFileTree(e.target.value);
-            }
-          }}
-          className="flex-1 rounded bg-transparent px-1 py-0.5 text-xs text-sidebar-foreground outline-none"
-        >
-          {projects.length === 0 && <option value="">未打开项目</option>}
-          {projects.map((p) => (
-            <option key={p.id} value={p.id} className="bg-background text-foreground">
-              {p.name}
-            </option>
-          ))}
-        </select>
+        {/* 自定义项目下拉 */}
+        <div className="relative flex-1">
+          <button
+            onClick={() => setShowProjectList(!showProjectList)}
+            className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-xs text-sidebar-foreground transition-colors hover:bg-accent"
+          >
+            <Folder className="h-3.5 w-3.5 shrink-0 opacity-60" />
+            <span className="flex-1 truncate text-left">
+              {currentProject?.name ?? '未打开项目'}
+            </span>
+            <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
+          </button>
+
+          {showProjectList && (
+            <>
+              <div
+                className="fixed inset-0 z-40"
+                onClick={() => setShowProjectList(false)}
+              />
+              <div className="absolute left-0 top-7 z-50 w-full min-w-48 overflow-hidden rounded-md border border-border bg-popover shadow-xl">
+                {projects.length === 0 ? (
+                  <div className="px-3 py-2 text-xs text-muted-foreground">
+                    暂无已打开的项目
+                  </div>
+                ) : (
+                  projects.map((p) => (
+                    <div
+                      key={p.id}
+                      onClick={() => handleSelectProject(p.id)}
+                      className={cn(
+                        'flex items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-accent cursor-pointer',
+                        p.id === currentProjectId && 'bg-accent/50',
+                      )}
+                    >
+                      <Folder className="h-3 w-3 shrink-0 opacity-60" />
+                      <span className="flex-1 truncate">{p.name}</span>
+                    </div>
+                  ))
+                )}
+                <div className="border-t border-border/50 p-1">
+                  <button
+                    onClick={() => {
+                      setShowProjectList(false);
+                      openProjectDialog();
+                    }}
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs text-primary transition-colors hover:bg-accent"
+                  >
+                    <Plus className="h-3 w-3" />
+                    打开项目目录
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
         <button
           onClick={openProjectDialog}
           title="打开项目"

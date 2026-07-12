@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
+import { useToastStore } from './toast';
 
 export type SessionStatus = 'idle' | 'streaming' | 'tool_executing' | 'error';
 
@@ -30,7 +31,7 @@ interface SessionStoreState {
   inputMessage: string;
   isSending: boolean;
 
-  createSession: (projectId: string, cwd: string) => Promise<string>;
+  createSession: (projectId: string, cwd: string) => Promise<string | null>;
   destroySession: (sessionId: string) => Promise<void>;
   switchSession: (sessionId: string) => void;
   sendMessage: (message: string) => Promise<void>;
@@ -43,6 +44,14 @@ interface SessionStoreState {
 
 let eventListenerRegistered = false;
 
+function tRPCError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'object' && err !== null && 'message' in err) {
+    return String((err as Record<string, unknown>).message);
+  }
+  return String(err);
+}
+
 export const useSessionStore = create<SessionStoreState>((set, get) => ({
   sessions: [],
   currentSessionId: null,
@@ -50,37 +59,47 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   isSending: false,
 
   createSession: async (projectId, cwd) => {
-    const result = await trpc.session.create.mutate({ projectId, cwd });
-    const session: SessionEntry = {
-      id: result.sessionId,
-      projectId,
-      name: `会话 ${get().sessions.length + 1}`,
-      status: 'idle',
-      messages: [],
-      createdAt: Date.now(),
-    };
-    set((s) => ({
-      sessions: [...s.sessions, session],
-      currentSessionId: result.sessionId,
-    }));
+    try {
+      const result = await trpc.session.create.mutate({ projectId, cwd });
+      const session: SessionEntry = {
+        id: result.sessionId,
+        projectId,
+        name: `会话 ${get().sessions.length + 1}`,
+        status: 'idle',
+        messages: [],
+        createdAt: Date.now(),
+      };
+      set((s) => ({
+        sessions: [...s.sessions, session],
+        currentSessionId: result.sessionId,
+      }));
 
-    // Register IPC event listener once
-    if (!eventListenerRegistered && window.eventBridge) {
-      eventListenerRegistered = true;
-      window.eventBridge.onSessionEvent(({ sessionId, event }) => {
-        get().handleSessionEvent(sessionId, event);
-      });
+      // Register IPC event listener once
+      if (!eventListenerRegistered && window.eventBridge) {
+        eventListenerRegistered = true;
+        window.eventBridge.onSessionEvent(({ sessionId, event }) => {
+          get().handleSessionEvent(sessionId, event);
+        });
+      }
+
+      useToastStore.getState().success('AI 会话已创建');
+      return result.sessionId;
+    } catch (err) {
+      useToastStore.getState().error('创建会话失败', tRPCError(err));
+      return null;
     }
-
-    return result.sessionId;
   },
 
   destroySession: async (sessionId) => {
-    await trpc.session.destroy.mutate({ sessionId });
-    set((s) => ({
-      sessions: s.sessions.filter((sess) => sess.id !== sessionId),
-      currentSessionId: s.currentSessionId === sessionId ? null : s.currentSessionId,
-    }));
+    try {
+      await trpc.session.destroy.mutate({ sessionId });
+      set((s) => ({
+        sessions: s.sessions.filter((sess) => sess.id !== sessionId),
+        currentSessionId: s.currentSessionId === sessionId ? null : s.currentSessionId,
+      }));
+    } catch (err) {
+      useToastStore.getState().error('销毁会话失败', tRPCError(err));
+    }
   },
 
   switchSession: (sessionId) => {
@@ -119,6 +138,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     try {
       await trpc.session.send.mutate({ sessionId, message });
     } catch (err) {
+      const errMsg = tRPCError(err);
       set((s) => ({
         isSending: false,
         sessions: s.sessions.map((sess) =>
@@ -128,26 +148,31 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
                 status: 'error',
                 messages: sess.messages.map((m) =>
                   m.id === assistantMsg.id
-                    ? { ...m, content: `错误: ${err instanceof Error ? err.message : String(err)}`, isStreaming: false }
+                    ? { ...m, content: `错误: ${errMsg}`, isStreaming: false }
                     : m,
                 ),
               }
             : sess,
         ),
       }));
+      useToastStore.getState().error('发送消息失败', errMsg);
     }
   },
 
   abortSession: async () => {
     const sessionId = get().currentSessionId;
     if (!sessionId) return;
-    await trpc.session.abort.mutate({ sessionId });
-    set((s) => ({
-      isSending: false,
-      sessions: s.sessions.map((sess) =>
-        sess.id === sessionId ? { ...sess, status: 'idle' } : sess,
-      ),
-    }));
+    try {
+      await trpc.session.abort.mutate({ sessionId });
+      set((s) => ({
+        isSending: false,
+        sessions: s.sessions.map((sess) =>
+          sess.id === sessionId ? { ...sess, status: 'idle' } : sess,
+        ),
+      }));
+    } catch (err) {
+      useToastStore.getState().error('中止会话失败', tRPCError(err));
+    }
   },
 
   setSessionName: (sessionId, name) => {
@@ -250,18 +275,22 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   },
 
   refreshSessions: async () => {
-    const sessions = await trpc.session.list.query();
-    // The list from tRPC only returns basic info, not messages
-    // Full session restore would need omp --resume
-    set({
-      sessions: sessions.map((s) => ({
-        id: s.id,
-        projectId: s.projectId,
-        name: `会话 ${s.id.slice(-6)}`,
-        status: 'idle' as SessionStatus,
-        messages: [],
-        createdAt: s.createdAt,
-      })),
-    });
+    try {
+      const sessions = await trpc.session.list.query();
+      // The list from tRPC only returns basic info, not messages
+      // Full session restore would need omp --resume
+      set({
+        sessions: sessions.map((s) => ({
+          id: s.id,
+          projectId: s.projectId,
+          name: `会话 ${s.id.slice(-6)}`,
+          status: 'idle' as SessionStatus,
+          messages: [],
+          createdAt: s.createdAt,
+        })),
+      });
+    } catch (err) {
+      useToastStore.getState().error('刷新会话列表失败', tRPCError(err));
+    }
   },
 }));

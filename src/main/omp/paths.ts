@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const OMP_ENTRY_REL = 'engine/oh-my-pi/packages/coding-agent/src/cli.ts';
+const MIN_BUN_VERSION = [1, 3, 14];
 
 function packagedResourcesDir(): string {
   return (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath ?? '';
@@ -63,16 +64,41 @@ export function resolveOmpBinaryPath(): string | null {
   return findInDir(packagedBinariesDir(), 'omp');
 }
 
+/** Check if installed Bun meets the minimum version requirement. */
+export function checkBunVersion(bunPath: string): { ok: boolean; version: string; required: string } {
+  try {
+    const output = execFileSync(bunPath, ['--version'], { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
+    const parts = output.split('.').map(Number);
+    for (let i = 0; i < MIN_BUN_VERSION.length; i++) {
+      const installed = parts[i] ?? 0;
+      const required = MIN_BUN_VERSION[i];
+      if (installed > required) return { ok: true, version: output, required: MIN_BUN_VERSION.join('.') };
+      if (installed < required) return { ok: false, version: output, required: MIN_BUN_VERSION.join('.') };
+    }
+    return { ok: true, version: output, required: MIN_BUN_VERSION.join('.') };
+  } catch {
+    return { ok: false, version: 'unknown', required: MIN_BUN_VERSION.join('.') };
+  }
+}
+
 export interface OmpRuntime {
   bunPath: string;
   ompEntryPath: string;
+  bunVersion: string;
+  bunVersionOk: boolean;
 }
 
-/** 解析 omp 运行时配置：返回 Bun 路径 + omp 源码入口路径 */
+/** 解析 omp 运行时配置：返回 Bun 路径 + omp 源码入口路径 + 版本信息 */
 export function resolveOmpRuntime(): OmpRuntime | null {
   const ompEntryPath = resolveOmpEntryPath();
   if (!ompEntryPath) return null;
   const bunPath = resolveBunPath();
   if (!bunPath) return null;
-  return { bunPath, ompEntryPath };
+  const versionCheck = checkBunVersion(bunPath);
+  return {
+    bunPath,
+    ompEntryPath,
+    bunVersion: versionCheck.version,
+    bunVersionOk: versionCheck.ok,
+  };
 }
