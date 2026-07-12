@@ -1,4 +1,6 @@
 import { initTRPC, TRPCError } from '@trpc/server';
+import { join } from 'node:path';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { sessionManager } from '../omp/session-manager';
 import { resolveOmpRuntime, resolveBunPath, resolveOmpEntryPath } from '../omp/paths';
 import { projectManager } from '../project/project-manager';
@@ -351,6 +353,74 @@ export const router = t.router({
           caseCount: totalCases,
           passRate: totalCases > 0 ? (passCount / totalCases) * 100 : 0,
         };
+      }),
+
+    getSimOptionsSchema: t.procedure
+      .input((raw): { projectId: string; subsys?: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return {
+          projectId: r.projectId,
+          subsys: typeof r.subsys === 'string' ? r.subsys : undefined,
+        };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const registry = pluginLoader.getRegistry(project.rootPath);
+        if (registry.simOptionSchemaProviders.length === 0) {
+          return { fields: [] };
+        }
+        const plugin = registry.simOptionSchemaProviders[0];
+        return plugin.getSchema(input.subsys ?? '');
+      }),
+
+    saveSimOptionPreset: t.procedure
+      .input((raw): { projectId: string; name: string; options: Record<string, unknown> } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.name !== 'string' || typeof r.options !== 'object') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, name and options are required' });
+        }
+        return {
+          projectId: r.projectId,
+          name: r.name,
+          options: r.options as Record<string, unknown>,
+        };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const presetPath = join(project.rootPath, '.socverify', 'sim-presets.json');
+        let presets: Record<string, Record<string, unknown>> = {};
+        try {
+          const content = await readFile(presetPath, 'utf-8');
+          presets = JSON.parse(content);
+        } catch {
+          // file doesn't exist yet
+        }
+        presets[input.name] = input.options;
+        await mkdir(join(project.rootPath, '.socverify'), { recursive: true });
+        await writeFile(presetPath, JSON.stringify(presets, null, 2), 'utf-8');
+        return { ok: true };
+      }),
+
+    getSimOptionPresets: t.procedure
+      .input((raw): { projectId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const presetPath = join(project.rootPath, '.socverify', 'sim-presets.json');
+        try {
+          const content = await readFile(presetPath, 'utf-8');
+          return JSON.parse(content) as Record<string, Record<string, unknown>>;
+        } catch {
+          return {};
+        }
       }),
   }),
 

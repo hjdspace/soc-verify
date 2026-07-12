@@ -52,6 +52,7 @@ export function SubsysList() {
   const caseStatusFilter = useProjectStore((s) => s.caseStatusFilter);
   const setCaseStatusFilter = useProjectStore((s) => s.setCaseStatusFilter);
   const runSimulation = useSimulationStore((s) => s.runSimulation);
+  const simOptions = useSimulationStore((s) => s.simOptions);
 
   const [subsystems, setSubsystems] = useState<SubsysData[]>([]);
   const [expandedSubsys, setExpandedSubsys] = useState<string | null>(null);
@@ -135,7 +136,7 @@ export function SubsysList() {
 
   const handleRunCase = async (caseData: CaseData) => {
     if (!currentProjectId) return;
-    await runSimulation(currentProjectId, caseData.name, caseData.name, caseData.subsys);
+    await runSimulation(currentProjectId, caseData.name, caseData.name, caseData.subsys, simOptions);
   };
 
   const handleBatchRun = async () => {
@@ -143,7 +144,7 @@ export function SubsysList() {
     for (const casePath of selectedCases) {
       const caseData = cases.find((c) => c.path === casePath);
       if (caseData) {
-        await runSimulation(currentProjectId, caseData.name, caseData.name, caseData.subsys);
+        await runSimulation(currentProjectId, caseData.name, caseData.name, caseData.subsys, simOptions);
       }
     }
     setSelectedCases(new Set());

@@ -28,6 +28,7 @@ interface SimulationStoreState {
   compareRunIdA: string | null;
   compareRunIdB: string | null;
   loadingHistory: boolean;
+  simOptions: Record<string, unknown>;
 
   runSimulation: (projectId: string, caseId: string, caseName: string, subsys: string, options?: Record<string, unknown>) => Promise<string | null>;
   abortSimulation: (projectId: string, runId: string) => Promise<void>;
@@ -39,6 +40,8 @@ interface SimulationStoreState {
   handleSimulationEvent: (type: string, record: unknown) => void;
   setSelectedRunId: (runId: string | null) => void;
   setCompareRunIds: (a: string | null, b: string | null) => void;
+  setSimOption: (key: string, value: unknown) => void;
+  setSimOptions: (options: Record<string, unknown>) => void;
 }
 
 function tRPCError(err: unknown): string {
@@ -59,6 +62,7 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
   compareRunIdB: null,
   loadingHistory: false,
   compareResult: null,
+  simOptions: {},
 
   runSimulation: async (projectId, caseId, caseName, subsys, options) => {
     try {
@@ -208,4 +212,6 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
 
   setSelectedRunId: (runId) => set({ selectedRunId: runId }),
   setCompareRunIds: (a, b) => set({ compareRunIdA: a, compareRunIdB: b }),
+  setSimOption: (key, value) => set((s) => ({ simOptions: { ...s.simOptions, [key]: value } })),
+  setSimOptions: (options) => set({ simOptions: options }),
 }));
