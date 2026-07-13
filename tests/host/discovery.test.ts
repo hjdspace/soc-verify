@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { NoopDiscovery } from '../../src/main/omp/discovery';
+import { NoopDiscovery } from '../../src/main/host/discovery';
 
 describe('NoopDiscovery', () => {
   it('listSubsys returns empty array', async () => {

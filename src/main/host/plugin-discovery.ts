@@ -58,7 +58,7 @@ export class PluginBackedDiscovery implements SubsysDiscovery {
     if (!targetSubsys) return [];
 
     // Check cache
- let cached = this.caseCache.get(targetSubsys);
+  let cached = this.caseCache.get(targetSubsys);
     if (!cached) {
       const plugin = this.registry.caseParsers[0];
       cached = await plugin.parse(this.projectRoot, targetSubsys);

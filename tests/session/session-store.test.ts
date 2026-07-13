@@ -83,6 +83,25 @@ describe('SessionStore — event handling and state machine', () => {
     expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
   });
 
+  it('does not render echoed user message events as assistant content', async () => {
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    await useSessionStore.getState().sendMessage('What model are you?');
+
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_start',
+      message: { role: 'user', content: [{ type: 'text', text: 'What model are you?' }] },
+    });
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_end',
+      message: { role: 'user', content: [{ type: 'text', text: 'What model are you?' }] },
+    });
+
+    const session = useSessionStore.getState().sessions[0];
+    expect(session.messages).toHaveLength(2);
+    expect(session.messages[0]).toMatchObject({ role: 'user', content: 'What model are you?' });
+    expect(session.messages[1]).toMatchObject({ role: 'assistant', content: '', isStreaming: true });
+  });
+
   it('handles message_update event by extracting text from message content', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
     await useSessionStore.getState().sendMessage('Hello');

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   isRecord,
-  isOmpReadyFrame,
+  isAgentReadyFrame,
   isRpcResponse,
   isRpcHostToolCallRequest,
   isRpcHostToolCancelRequest,
@@ -17,7 +17,7 @@ import {
   isAgentSessionEvent,
   AGENT_EVENT_TYPES,
   SESSION_EVENT_TYPES,
-} from '../../src/main/omp/types';
+} from '../../src/main/host/types';
 
 describe('Type guards', () => {
   describe('isRecord', () => {
@@ -40,15 +40,15 @@ describe('Type guards', () => {
     });
   });
 
-  describe('isOmpReadyFrame', () => {
+  describe('isAgentReadyFrame', () => {
     it('returns true for { type: "ready" }', () => {
-      expect(isOmpReadyFrame({ type: 'ready' })).toBe(true);
+      expect(isAgentReadyFrame({ type: 'ready' })).toBe(true);
     });
 
     it('returns false for other types', () => {
-      expect(isOmpReadyFrame({ type: 'response' })).toBe(false);
-      expect(isOmpReadyFrame({ type: 'prompt' })).toBe(false);
-      expect(isOmpReadyFrame(null)).toBe(false);
+      expect(isAgentReadyFrame({ type: 'response' })).toBe(false);
+      expect(isAgentReadyFrame({ type: 'prompt' })).toBe(false);
+      expect(isAgentReadyFrame(null)).toBe(false);
     });
   });
 

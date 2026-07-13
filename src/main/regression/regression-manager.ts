@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RegressionSuite, RegressionResult } from '@shared/types';
 import type { SimulationRunOptions } from '@shared/plugin-types';
-import type { PluginBackedSimulation } from '../omp/plugin-discovery';
+import type { PluginBackedSimulation } from '../host/plugin-discovery';
 
 const SOCVERIFY_DIR = '.socverify';
 const REGRESSION_DIR = 'regressions';

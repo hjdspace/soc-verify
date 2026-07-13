@@ -67,9 +67,9 @@ interface SessionStoreState {
 let eventListenerRegistered = false;
 
 /**
- * Extract text from an omp message object.
+ * Extract text from an agent message object.
  *
- * omp message events (message_start, message_update, message_end) carry a
+ * agent message events (message_start, message_update, message_end) carry a
  * `message` field which is an AssistantMessage with a `content` array of
  * content blocks. TextContent blocks have `{ type: "text", text: "..." }`.
  * ThinkingContent blocks have `{ type: "thinking", thinking: "..." }`.
@@ -301,8 +301,10 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
 
         switch (type) {
           case 'message_start': {
+            const message = evt.message as Record<string, unknown> | undefined;
+            if (message?.role && message.role !== 'assistant') return sess;
             // Extract initial text from message.content if available
-            const text = extractTextFromMessage(evt.message);
+            const text = extractTextFromMessage(message);
             // Check if there's already a streaming assistant message
             const hasStreaming = sess.messages.some((m) => m.role === 'assistant' && m.isStreaming);
             if (hasStreaming) {
@@ -333,10 +335,12 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
           }
 
           case 'message_update': {
-            // omp message_update events contain a full message snapshot, not a delta string.
+            const message = evt.message as Record<string, unknown> | undefined;
+            if (message?.role && message.role !== 'assistant') return sess;
+            // agent message_update events contain a full message snapshot, not a delta string.
             // The message.content array has TextContent blocks with accumulated text.
             // We replace (not append) the assistant message content with the latest snapshot.
-            const text = extractTextFromMessage(evt.message);
+            const text = extractTextFromMessage(message);
             if (!text) return sess;
             // Find the last streaming assistant message
             let lastAssistantIdx = -1;
@@ -362,6 +366,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             // source for the assistant's response, especially when there are no
             // message_update events (non-streaming or empty streaming responses).
             const msg = evt.message as Record<string, unknown> | undefined;
+            if (msg?.role && msg.role !== 'assistant') return sess;
             const text = extractTextFromMessage(msg);
             const errMsg = msg ? extractErrorFromMessage(msg) : null;
             // Do NOT set status to 'idle' here — the agent may still be working
@@ -423,7 +428,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             };
 
           case 'notice': {
-            // Show omp notices (errors, warnings) in the assistant message
+            // Show agent notices (errors, warnings) in the assistant message
             const noticeText = (evt.message as string) || (evt.text as string) || JSON.stringify(evt);
             return {
               ...sess,
@@ -480,7 +485,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     try {
       const sessions = await trpc.session.list.query();
       // The list from tRPC only returns basic info, not messages
-      // Full session restore would need omp --resume
+      // Full session restore would need agent --resume
       set({
         sessions: sessions.map((s) => ({
           id: s.id,

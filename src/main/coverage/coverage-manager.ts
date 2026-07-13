@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CoverageData } from '@shared/plugin-types';
 import type { CoverageSummary, CoverageBySubsys } from '@shared/types';
-import type { PluginBackedCoverage } from '../omp/plugin-discovery';
+import type { PluginBackedCoverage } from '../host/plugin-discovery';
 
 const SOCVERIFY_DIR = '.socverify';
 const COVERAGE_DIR = 'coverage';

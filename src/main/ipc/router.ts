@@ -1,19 +1,20 @@
 import { initTRPC, TRPCError } from '@trpc/server';
 import { join } from 'node:path';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { sessionManager } from '../omp/session-manager';
-import { resolveOmpRuntime, resolveBunPath, resolveOmpEntryPath } from '../omp/paths';
+import { sessionManager } from '../agent/session-manager';
+import { resolveAgentRuntime, resolveBunPath, resolveRunnerPath } from '../agent/paths';
+import { fetchOpenAICompatibleModels } from '../agent/openai-compatible';
 import { projectManager } from '../project/project-manager';
 import { pluginLoader } from '../plugins/loader';
-import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../omp/plugin-discovery';
-import type { CaseStatus } from '../omp/discovery';
+import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../host/plugin-discovery';
+import type { CaseStatus } from '../host/discovery';
 import { simulationRegistry } from '../simulation/simulation-registry';
 import { detectEdaTools, loadEnvConfig, saveEnvConfig, getKnownEnvVarNames } from '../env/env-manager';
 import { CoverageManager } from '../coverage/coverage-manager';
 import { RegressionManager } from '../regression/regression-manager';
 import { terminalManager } from '../terminal/terminal-manager';
 import { credentialManager } from '../credentials/credential-manager';
-import { addSession, removeSession, loadSessions, saveSessions, type PersistedSession } from '../omp/session-persistence';
+import { addSession, removeSession, loadSessions, saveSessions, type PersistedSession } from '../agent/session-persistence';
 import { dialog, ipcMain, BrowserWindow } from 'electron';
 import type {
   ProjectInfo,
@@ -84,12 +85,12 @@ export const router = t.router({
   // ─── 系统 ─────────────────────────────────────────────
 
   system: t.router({
-    resolveOmp: t.procedure.query(() => {
-      const runtime = resolveOmpRuntime();
+    resolveAgent: t.procedure.query(() => {
+      const runtime = resolveAgentRuntime();
       return {
         available: runtime !== null,
         bunPath: resolveBunPath(),
-        ompEntryPath: resolveOmpEntryPath(),
+        runnerPath: resolveRunnerPath(),
         bunVersion: runtime?.bunVersion ?? null,
         bunVersionOk: runtime?.bunVersionOk ?? false,
       };
@@ -498,23 +499,19 @@ export const router = t.router({
         const simulation = new PluginBackedSimulation(registry);
         const coverage = new PluginBackedCoverage(project.rootPath, registry);
 
-        // Load stored credentials and build env vars for omp process
-        const credEnv = await credentialManager.buildEnvForOmp();
+        // Load stored credentials and build env vars for agent process
+        const credEnv = await credentialManager.buildEnvForAgent();
         const defaultCred = await credentialManager.getDefaultCredential();
 
-        // Determine provider and apiKey to pass to omp:
+        // Determine provider, apiKey, and baseUrl to pass to the agent SDK:
         // 1. Use input.provider/model if explicitly provided (from UI)
         // 2. Fall back to stored credentials' provider
-        // This ensures omp starts with the correct provider matching the API key,
-        // preventing 403 errors from provider/credential mismatch.
-        //
-        // NOTE: omp requires --api-key to be accompanied by --model.
-        // When no model is specified, we rely on env vars (set by buildEnvForOmp)
-        // to provide the API key, and only pass --provider to guide model selection.
-        const provider = input.provider ?? (defaultCred ? credentialManager.mapProviderForOmp(defaultCred.providerId) : undefined);
-        const apiKey = (input.model && defaultCred) ? defaultCred.apiKey : undefined;
+        // This ensures the agent starts with the correct provider matching the API key.
+        const provider = input.provider ?? (defaultCred ? credentialManager.mapProviderForAgent(defaultCred.providerId) : undefined);
+        const apiKey = defaultCred?.apiKey;
+        const baseUrl = defaultCred?.baseUrl;
 
-        console.log(`[router:session.create] provider=${provider ?? '(default)'}, model=${input.model ?? '(default)'}, hasApiKey=${!!apiKey}`);
+        console.log(`[router:session.create] provider=${provider ?? '(default)'}, model=${input.model ?? '(default)'}, hasApiKey=${!!apiKey}, hasBaseUrl=${!!baseUrl}`);
 
         const sessionId = await sessionManager.createSession({
           projectId: input.projectId,
@@ -522,6 +519,7 @@ export const router = t.router({
           provider,
           model: input.model,
           apiKey,
+          baseUrl,
           discovery,
           simulationAdapter: simulation,
           coverageAdapter: coverage,
@@ -558,7 +556,7 @@ export const router = t.router({
         sessionManager.touchActivity(input.sessionId);
         console.log(`[router:session.send] sessionId=${input.sessionId}, message=${input.message.slice(0, 80)}${input.message.length > 80 ? '...' : ''}`);
         await client.prompt(input.message, input.images);
-        console.log(`[router:session.send] prompt acknowledged by omp`);
+        console.log(`[router:session.send] prompt acknowledged by agent`);
         return { ok: true };
       }),
 
@@ -725,7 +723,7 @@ export const router = t.router({
           discovery,
           simulationAdapter: simulation,
           coverageAdapter: coverage,
-          resumePrefix: input.sessionId,
+          resumeSessionId: input.sessionId,
         });
 
         return { sessionId, name: input.name ?? `Session ${input.sessionId.slice(-6)}` };
@@ -1478,53 +1476,23 @@ export const router = t.router({
           throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'No API key configured. Please set credentials in Settings.' });
         }
 
-        // Build the models endpoint URL
-        const base = baseUrl?.replace(/\/$/, '') ?? 'https://api.openai.com';
-        const modelsUrl = base.endsWith('/v1') ? `${base}/models` : `${base}/v1/models`;
-
         try {
-          const resp = await fetch(modelsUrl, {
-            headers: {
-              'Authorization': `Bearer ${apiKey}`,
-              'Content-Type': 'application/json',
-            },
+          const models = await fetchOpenAICompatibleModels({
+            baseUrl: baseUrl ?? 'https://api.openai.com',
+            apiKey,
           });
-
-          if (!resp.ok) {
-            const text = await resp.text();
-            throw new TRPCError({ code: 'BAD_REQUEST', message: `API returned ${resp.status}: ${text.slice(0, 200)}` });
-          }
-
-          const data = await resp.json() as Record<string, unknown>;
-          const rawData = data.data;
-          const modelList: Array<{ id: string; owned_by?: string }> = [];
-
-          if (Array.isArray(rawData)) {
-            for (const item of rawData) {
-              if (typeof item === 'object' && item !== null && 'id' in item) {
-                const m = item as { id: string; owned_by?: string };
-                modelList.push({ id: m.id, owned_by: m.owned_by });
-              }
-            }
-          } else if (typeof rawData === 'object' && rawData !== null && 'id' in rawData) {
-            const m = rawData as { id: string; owned_by?: string };
-            modelList.push({ id: m.id, owned_by: m.owned_by });
-          }
-
-          return modelList.map((m) => ({
+          return models.map((m) => ({
             id: m.id,
-            name: m.id,
+            name: m.name,
             provider: input.providerId ?? 'openai',
-            description: m.owned_by,
           }));
         } catch (err) {
-          if (err instanceof TRPCError) throw err;
           throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `Failed to fetch models: ${err instanceof Error ? err.message : String(err)}` });
         }
       }),
 
     listSkills: t.procedure.query(() => {
-      // Would call omp skill list in production
+      // Would call agent skill list in production
       return [];
     }),
 

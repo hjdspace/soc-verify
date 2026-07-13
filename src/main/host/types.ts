@@ -1,18 +1,18 @@
 /**
- * omp RPC 协议类型定义
+ * Agent 通信协议类型定义
  *
- * 基于 oh-my-pi packages/coding-agent/src/modes/rpc/rpc-types.ts 的真实协议。
- * host → omp：JSONL on stdin（RpcCommand + side-channel 帧）
- * omp → host：JSONL on stdout（ready 信号 + RpcResponse + 事件帧 + Host Tool/URI 请求）
+ * 基于 pi-coding-agent SDK 的 RPC 协议。
+ * host → agent：JSONL on stdin（RpcCommand + side-channel 帧）
+ * agent → host：JSONL on stdout（ready 信号 + RpcResponse + 事件帧 + Host Tool/URI 请求）
  */
 
 // ─── 就绪信号 ───────────────────────────────────────────────
 
-export interface OmpReadyFrame {
+export interface AgentReadyFrame {
   type: 'ready';
 }
 
-// ─── RPC 命令（host → omp stdin）────────────────────────────
+// ─── RPC 命令（host → agent stdin）────────────────────────────
 
 export type RpcCommand =
   | { id?: string; type: 'prompt'; message: string; images?: unknown[]; streamingBehavior?: 'steer' | 'followUp' }
@@ -56,7 +56,7 @@ export type RpcCommand =
 type DistributiveOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
 export type RpcCommandBody = DistributiveOmit<RpcCommand, 'id'>;
 
-// ─── RPC 响应（omp → host stdout）───────────────────────────
+// ─── RPC 响应（agent → host stdout）───────────────────────────
 
 export interface RpcResponseBase {
   id?: string;
@@ -77,7 +77,7 @@ export interface RpcErrorResponse extends RpcResponseBase {
 
 export type RpcResponse = RpcSuccessResponse | RpcErrorResponse;
 
-// ─── 事件帧（omp → host stdout）─────────────────────────────
+// ─── 事件帧（agent → host stdout）─────────────────────────────
 
 /** prompt 命令完成后的结果帧 */
 export interface RpcPromptResultFrame {
@@ -156,7 +156,7 @@ export interface RpcHostToolDefinition {
   hidden?: boolean;
 }
 
-/** omp 请求宿主执行 Host Tool（omp → host stdout） */
+/** agent 请求宿主执行 Host Tool（agent → host stdout） */
 export interface RpcHostToolCallRequest {
   type: 'host_tool_call';
   id: string;
@@ -165,7 +165,7 @@ export interface RpcHostToolCallRequest {
   arguments: Record<string, unknown>;
 }
 
-/** omp 取消 Host Tool 执行（omp → host stdout） */
+/** agent 取消 Host Tool 执行（agent → host stdout） */
 export interface RpcHostToolCancelRequest {
   type: 'host_tool_cancel';
   id: string;
@@ -178,14 +178,14 @@ export interface AgentToolResult<TDetails = unknown> {
   details?: TDetails;
 }
 
-/** 宿主返回 Host Tool 进度更新（host → omp stdin） */
+/** 宿主返回 Host Tool 进度更新（host → agent stdin） */
 export interface RpcHostToolUpdate {
   type: 'host_tool_update';
   id: string;
   partialResult: AgentToolResult;
 }
 
-/** 宿主返回 Host Tool 执行结果（host → omp stdin） */
+/** 宿主返回 Host Tool 执行结果（host → agent stdin） */
 export interface RpcHostToolResult {
   type: 'host_tool_result';
   id: string;
@@ -202,7 +202,7 @@ export interface RpcHostUriSchemeDefinition {
   immutable?: boolean;
 }
 
-/** omp 请求宿主处理 URI（omp → host stdout） */
+/** agent 请求宿主处理 URI（agent → host stdout） */
 export interface RpcHostUriRequest {
   type: 'host_uri_request';
   id: string;
@@ -211,14 +211,14 @@ export interface RpcHostUriRequest {
   content?: string;
 }
 
-/** omp 取消 URI 请求（omp → host stdout） */
+/** agent 取消 URI 请求（agent → host stdout） */
 export interface RpcHostUriCancelRequest {
   type: 'host_uri_cancel';
   id: string;
   targetId: string;
 }
 
-/** 宿主返回 URI 处理结果（host → omp stdin） */
+/** 宿主返回 URI 处理结果（host → agent stdin） */
 export interface RpcHostUriResult {
   type: 'host_uri_result';
   id: string;
@@ -230,7 +230,7 @@ export interface RpcHostUriResult {
   error?: string;
 }
 
-// ─── 扩展 UI 响应（host → omp stdin）────────────────────────
+// ─── 扩展 UI 响应（host → agent stdin）────────────────────────
 
 export type RpcExtensionUiResponse =
   | { type: 'extension_ui_response'; id: string; value: string }
@@ -257,15 +257,13 @@ export interface RpcSessionState {
   contextUsage?: unknown;
 }
 
-// ─── RpcClient 配置 ─────────────────────────────────────────
+// ─── AgentClient 配置 ─────────────────────────────────────────
 
-export interface OmpRpcClientOptions {
-  /** 优先使用：预编译 omp 二进制路径（pi_natives 已内嵌，无需 bun） */
-  ompBinaryPath?: string;
-  /** 回退：Bun 可执行文件路径（源码模式必需） */
+export interface AgentClientOptions {
+  /** Bun 可执行文件路径 */
   bunPath?: string;
-  /** 回退：omp 源码入口文件路径（如 engine/oh-my-pi/packages/coding-agent/src/cli.ts） */
-  ompEntryPath?: string;
+  /** runner 脚本路径（如 engine/oh-my-pi/packages/coding-agent/src/socverify-runner.ts） */
+  runnerPath?: string;
   /** 工作目录（项目目录） */
   cwd: string;
   /** 环境变量 */
@@ -274,7 +272,7 @@ export interface OmpRpcClientOptions {
   provider?: string;
   /** LLM model ID */
   model?: string;
-  /** API key for the LLM provider (passed as --api-key to omp) */
+  /** API key for the LLM provider */
   apiKey?: string;
   /** 会话存储目录 */
   sessionDir?: string;
@@ -286,20 +284,20 @@ export interface OmpRpcClientOptions {
 
 // ─── 事件回调 ───────────────────────────────────────────────
 
-export type OmpEventListener = (event: unknown) => void;
-export type OmpSessionEventListener = (event: unknown) => void;
-export type OmpSubagentLifecycleListener = (payload: unknown) => void;
-export type OmpSubagentProgressListener = (payload: unknown) => void;
-export type OmpSubagentEventListener = (payload: unknown) => void;
-export type OmpHostToolCallHandler = (request: RpcHostToolCallRequest) => Promise<AgentToolResult | string>;
-export type OmpHostUriHandler = (request: RpcHostUriRequest) => Promise<RpcHostUriResult>;
+export type AgentEventListener = (event: unknown) => void;
+export type AgentSessionEventListener = (event: unknown) => void;
+export type AgentSubagentLifecycleListener = (payload: unknown) => void;
+export type AgentSubagentProgressListener = (payload: unknown) => void;
+export type AgentSubagentEventListener = (payload: unknown) => void;
+export type AgentHostToolCallHandler = (request: RpcHostToolCallRequest) => Promise<AgentToolResult | string>;
+export type AgentHostUriHandler = (request: RpcHostUriRequest) => Promise<RpcHostUriResult>;
 
-export interface OmpEventHandlers {
-  onEvent?: OmpEventListener;
-  onSessionEvent?: OmpSessionEventListener;
-  onSubagentLifecycle?: OmpSubagentLifecycleListener;
-  onSubagentProgress?: OmpSubagentProgressListener;
-  onSubagentEvent?: OmpSubagentEventListener;
+export interface AgentEventHandlers {
+  onEvent?: AgentEventListener;
+  onSessionEvent?: AgentSessionEventListener;
+  onSubagentLifecycle?: AgentSubagentLifecycleListener;
+  onSubagentProgress?: AgentSubagentProgressListener;
+  onSubagentEvent?: AgentSubagentEventListener;
   onError?: (error: Error) => void;
   onExit?: (code: number | null, signal: NodeJS.Signals | null) => void;
 }
@@ -310,7 +308,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-export function isOmpReadyFrame(value: unknown): value is OmpReadyFrame {
+export function isAgentReadyFrame(value: unknown): value is AgentReadyFrame {
   return isRecord(value) && value.type === 'ready';
 }
 

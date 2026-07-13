@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { HostToolsRegistry } from '../../src/main/omp/host-tools';
-import { PluginBackedDiscovery } from '../../src/main/omp/plugin-discovery';
+import { HostToolsRegistry } from '../../src/main/host/host-tools';
+import { PluginBackedDiscovery } from '../../src/main/host/plugin-discovery';
 import type { PluginRegistry, SimOptionSchemaProvider } from '@shared/plugin-types';
 
 function makeRegistryWithSchemaProvider(

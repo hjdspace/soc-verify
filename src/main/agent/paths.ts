@@ -5,7 +5,7 @@ import { execFileSync } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const OMP_ENTRY_REL = 'engine/oh-my-pi/packages/coding-agent/src/cli.ts';
+const RUNNER_REL = 'engine/oh-my-pi/packages/coding-agent/src/socverify-runner.ts';
 const MIN_BUN_VERSION = [1, 3, 14];
 
 function packagedResourcesDir(): string {
@@ -40,11 +40,11 @@ function findInPath(executable: string): string | null {
   }
 }
 
-/** omp 源码入口路径（engine/oh-my-pi/packages/coding-agent/src/cli.ts） */
-export function resolveOmpEntryPath(): string | null {
+/** runner 脚本路径（engine/oh-my-pi/packages/coding-agent/src/socverify-runner.ts） */
+export function resolveRunnerPath(): string | null {
   const candidates = [
-    join(packagedResourcesDir(), OMP_ENTRY_REL),
-    resolve(__dirname, '../../', OMP_ENTRY_REL),
+    join(packagedResourcesDir(), RUNNER_REL),
+    resolve(__dirname, '../../', RUNNER_REL),
   ];
   for (const p of candidates) {
     if (existsSync(p)) return p;
@@ -57,14 +57,6 @@ export function resolveBunPath(): string | null {
   const packaged = findInDir(packagedBinariesDir(), 'bun');
   if (packaged) return packaged;
   return findInPath('bun');
-}
-
-/** 内嵌 omp 二进制路径（如果存在） */
-export function resolveOmpBinaryPath(): string | null {
-  const packaged = findInDir(packagedBinariesDir(), 'omp');
-  if (packaged) return packaged;
-  const devCandidate = resolve(__dirname, '../../resources/binaries');
-  return findInDir(devCandidate, 'omp');
 }
 
 /** Check if installed Bun meets the minimum version requirement. */
@@ -84,31 +76,25 @@ export function checkBunVersion(bunPath: string): { ok: boolean; version: string
   }
 }
 
-export interface OmpRuntime {
-  /** 优先使用：预编译 omp 二进制路径（pi_natives 已内嵌） */
-  ompBinaryPath?: string;
-  /** 回退：bun 可执行文件路径 */
-  bunPath?: string;
-  /** 回退：omp 源码入口路径 */
-  ompEntryPath?: string;
+export interface AgentRuntime {
+  bunPath: string;
+  runnerPath: string;
   bunVersion: string;
   bunVersionOk: boolean;
 }
 
-/** 解析 omp 运行时配置：优先预编译二进制，回退到 bun + 源码入口 */
-export function resolveOmpRuntime(): OmpRuntime | null {
-  const ompBinaryPath = resolveOmpBinaryPath();
-  if (ompBinaryPath) {
-    return { ompBinaryPath, bunVersion: 'bundled', bunVersionOk: true };
-  }
-  const ompEntryPath = resolveOmpEntryPath();
-  if (!ompEntryPath) return null;
+/** 解析 agent 运行时配置：Bun 路径 + runner 脚本路径 */
+export function resolveAgentRuntime(): AgentRuntime | null {
+  const runnerPath = resolveRunnerPath();
+  if (!runnerPath) return null;
+
   const bunPath = resolveBunPath();
   if (!bunPath) return null;
+
   const versionCheck = checkBunVersion(bunPath);
   return {
     bunPath,
-    ompEntryPath,
+    runnerPath,
     bunVersion: versionCheck.version,
     bunVersionOk: versionCheck.ok,
   };

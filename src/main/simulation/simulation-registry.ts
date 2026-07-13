@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { SimulationManager, type SimulationRunRecord } from './simulation-manager';
-import type { PluginBackedSimulation } from '../omp/plugin-discovery';
+import type { PluginBackedSimulation } from '../host/plugin-discovery';
 import type { SimulationRunOptions } from '@shared/plugin-types';
 
 /**

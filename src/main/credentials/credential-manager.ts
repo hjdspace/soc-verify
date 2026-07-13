@@ -84,14 +84,14 @@ class CredentialManagerImpl {
     }));
   }
 
-  /** Return raw credentials for internal use (passing to omp etc.) */
+  /** Return raw credentials for internal use (passing to agent runner etc.) */
   async listRaw(): Promise<StoredCredential[]> {
     return this.loadAll();
   }
 
   /**
    * Return the first stored credential (raw) for internal use.
-   * Used to determine which provider to pass to omp at session creation.
+   * Used to determine which provider to pass to the agent at session creation.
    */
   async getDefaultCredential(): Promise<StoredCredential | null> {
     const all = await this.loadAll();
@@ -99,11 +99,11 @@ class CredentialManagerImpl {
   }
 
   /**
-   * Map a credential providerId to an omp-compatible provider name.
-   * omp supports: openai, anthropic, google, ollama, cursor, devin, bedrock, etc.
-   * "openai-compatible" maps to "openai" since omp uses the same OpenAI client.
+   * Map a credential providerId to an agent-compatible provider name.
+   * The agent supports: openai, anthropic, google, ollama, cursor, devin, bedrock, etc.
+   * "openai-compatible" maps to "openai" since the agent uses the same OpenAI client.
    */
-  mapProviderForOmp(providerId: string): string {
+  mapProviderForAgent(providerId: string): string {
     const lower = providerId.toLowerCase();
     if (lower === 'openai' || lower === 'openai-compatible') return 'openai';
     if (lower === 'anthropic' || lower === 'claude') return 'anthropic';
@@ -111,8 +111,8 @@ class CredentialManagerImpl {
     return lower;
   }
 
-  /** Build environment variables for omp process from stored credentials */
-  async buildEnvForOmp(): Promise<Record<string, string>> {
+  /** Build environment variables for agent process from stored credentials */
+  async buildEnvForAgent(): Promise<Record<string, string>> {
     const all = await this.loadAll();
     const env: Record<string, string> = {};
 
@@ -125,7 +125,7 @@ class CredentialManagerImpl {
         if (cred.baseUrl && !env.OPENAI_BASE_URL) env.OPENAI_BASE_URL = cred.baseUrl;
       }
 
-      // Generic env vars that omp might use
+      // Generic env vars that the agent might use
       const apiKeyVar = `${provider.toUpperCase().replace(/-/g, '_')}_API_KEY`;
       const baseUrlVar = `${provider.toUpperCase().replace(/-/g, '_')}_BASE_URL`;
       if (!env[apiKeyVar]) env[apiKeyVar] = cred.apiKey;

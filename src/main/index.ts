@@ -3,9 +3,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { createIPCHandler } from './ipc/electron-trpc-bridge';
 import { router } from './ipc/router';
-import { resolveOmpRuntime } from './omp/paths';
+import { resolveAgentRuntime } from './agent/paths';
 import { projectManager } from './project/project-manager';
-import { sessionManager } from './omp/session-manager';
+import { sessionManager } from './agent/session-manager';
 import { pluginLoader } from './plugins/loader';
 import { simulationRegistry } from './simulation/simulation-registry';
 import { terminalManager } from './terminal/terminal-manager';
@@ -87,7 +87,7 @@ function registerEventForwarding(win: BrowserWindow) {
     }
   });
 
-  // Session events from omp
+  // Session events from agent
   sessionManager.on('sessionEvent', ({ sessionId, event }) => {
     if (!win.isDestroyed()) {
       win.webContents.send('session:event', { sessionId, event });
@@ -142,17 +142,13 @@ app.whenReady().then(async () => {
   registerWindowControls(mainWindow);
   registerEventForwarding(mainWindow);
 
-  const ompRuntime = resolveOmpRuntime();
-  if (ompRuntime) {
-    if (ompRuntime.ompBinaryPath) {
-      console.log(`[omp] resolved: binary=${ompRuntime.ompBinaryPath}`);
-    } else {
-      console.log(`[omp] resolved: bun=${ompRuntime.bunVersion}, entry=${ompRuntime.ompEntryPath}`);
-      if (!ompRuntime.bunVersionOk) {
-        console.warn(`[omp] Bun version ${ompRuntime.bunVersion} is below required 1.3.14. Run: bun upgrade`);
-      }
+  const agentRuntime = resolveAgentRuntime();
+  if (agentRuntime) {
+    console.log(`[agent] resolved: bun=${agentRuntime.bunVersion}, runner=${agentRuntime.runnerPath}`);
+    if (!agentRuntime.bunVersionOk) {
+      console.warn(`[agent] Bun version ${agentRuntime.bunVersion} is below required 1.3.14. Run: bun upgrade`);
     }
-  } else console.warn('[omp] runtime not found (need prebuilt omp binary or bun + engine/oh-my-pi)');
+  } else console.warn('[agent] runtime not found (need bun + engine/oh-my-pi runner script)');
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

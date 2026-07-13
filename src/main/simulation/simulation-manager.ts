@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SimulationRunOptions, SimulationRunHandle, SimulationRunStatus, CompileError } from '@shared/plugin-types';
 import type { SimulationHistoryEntry, SimulationStatus } from '@shared/types';
-import type { PluginBackedSimulation } from '../omp/plugin-discovery';
+import type { PluginBackedSimulation } from '../host/plugin-discovery';
 
 const SOCVERIFY_DIR = '.socverify';
 const SIM_HISTORY_FILE = 'sim-history.json';

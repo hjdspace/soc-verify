@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { HostToolsRegistry } from '../../src/main/omp/host-tools';
-import { NoopDiscovery } from '../../src/main/omp/discovery';
-import type { SubsysDiscovery, SubsysInfo, CaseInfo, SimOptionsSchema } from '../../src/main/omp/discovery';
+import { HostToolsRegistry } from '../../src/main/host/host-tools';
+import { NoopDiscovery } from '../../src/main/host/discovery';
+import type { SubsysDiscovery, SubsysInfo, CaseInfo, SimOptionsSchema } from '../../src/main/host/discovery';
 
 class MockDiscovery implements SubsysDiscovery {
   constructor(

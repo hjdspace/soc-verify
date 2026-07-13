@@ -30,7 +30,7 @@ export interface SimOptionsSchema {
 /**
  * 子系统/用例发现接口
  *
- * 宿主通过此接口向 omp Agent 提供项目结构信息。
+ * 宿主通过此接口向 agent 提供项目结构信息。
  * 实现可以是文件系统扫描、数据库查询、远程 API 调用等。
  */
 export interface SubsysDiscovery {
