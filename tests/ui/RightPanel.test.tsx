@@ -11,6 +11,7 @@ vi.mock('@renderer/lib/trpc', () => ({
       abort: { mutate: vi.fn().mockResolvedValue(undefined) },
       destroy: { mutate: vi.fn().mockResolvedValue(undefined) },
       list: { query: vi.fn().mockResolvedValue([]) },
+      saveStoredMessages: { mutate: vi.fn().mockResolvedValue(undefined) },
     },
   },
 }));

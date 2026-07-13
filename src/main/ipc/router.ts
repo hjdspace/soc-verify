@@ -1,6 +1,6 @@
 import { initTRPC, TRPCError } from '@trpc/server';
 import { join, relative, basename } from 'node:path';
-import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { sessionManager } from '../agent/session-manager';
 import { resolveAgentRuntime, resolveBunPath, resolveRunnerPath } from '../agent/paths';
@@ -72,6 +72,40 @@ async function ensurePluginsLoaded(rootPath: string): Promise<void> {
     console.log(`[router] lazy-loading plugins for ${rootPath}`);
     await pluginLoader.loadPlugins(rootPath);
   }
+}
+
+function storedMessagesPath(projectRoot: string, sessionId: string): string {
+  return join(projectRoot, '.socverify', 'chat-messages', `${encodeURIComponent(sessionId)}.json`);
+}
+
+async function loadStoredMessages(projectRoot: string, sessionId: string): Promise<unknown[]> {
+  try {
+    const data = await readFile(storedMessagesPath(projectRoot, sessionId), 'utf-8');
+    const parsed = JSON.parse(data);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function isPlaceholderSessionName(name: string): boolean {
+  return name === '新会话' || /^Session [A-Za-z0-9_-]+$/.test(name);
+}
+
+async function filterEmptyPlaceholderSessions(
+  projectRoot: string,
+  sessions: PersistedSession[],
+): Promise<PersistedSession[]> {
+  const visible: PersistedSession[] = [];
+  for (const session of sessions) {
+    if (!isPlaceholderSessionName(session.name)) {
+      visible.push(session);
+      continue;
+    }
+    const messages = await loadStoredMessages(projectRoot, session.sessionId);
+    if (messages.length > 0) visible.push(session);
+  }
+  return visible;
 }
 
 export const router = t.router({
@@ -681,6 +715,7 @@ export const router = t.router({
           const project = projectManager.getProject(input.projectId);
           if (project) {
             await removeSession(project.rootPath, input.sessionId);
+            await rm(storedMessagesPath(project.rootPath, input.sessionId), { force: true });
           }
         }
         return { ok: true };
@@ -714,6 +749,35 @@ export const router = t.router({
       .query(async ({ input }) => {
         const client = requireSession(input.sessionId);
         return client.getMessages();
+      }),
+
+    getStoredMessages: t.procedure
+      .input((raw): { projectId: string; sessionId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and sessionId are required' });
+        }
+        return { projectId: r.projectId, sessionId: r.sessionId };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        return loadStoredMessages(project.rootPath, input.sessionId);
+      }),
+
+    saveStoredMessages: t.procedure
+      .input((raw): { projectId: string; sessionId: string; messages: unknown[] } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string' || !Array.isArray(r.messages)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, sessionId and messages are required' });
+        }
+        return { projectId: r.projectId, sessionId: r.sessionId, messages: r.messages };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const dir = join(project.rootPath, '.socverify', 'chat-messages');
+        await mkdir(dir, { recursive: true });
+        await writeFile(storedMessagesPath(project.rootPath, input.sessionId), JSON.stringify(input.messages, null, 2), 'utf-8');
+        return { ok: true };
       }),
 
     setModel: t.procedure
@@ -797,7 +861,7 @@ export const router = t.router({
       })
       .query(async ({ input }) => {
         const project = requireProject(input.projectId);
-        return loadSessions(project.rootPath);
+        return filterEmptyPlaceholderSessions(project.rootPath, await loadSessions(project.rootPath));
       }),
 
     restore: t.procedure
@@ -844,6 +908,7 @@ export const router = t.router({
           coverageAdapter: coverage,
           // Use the omp sessionId for resume — this is what the runner matches against
           resumeSessionId: persisted?.ompSessionId ?? input.sessionId,
+          persistedSessionId: input.sessionId,
           env: credEnv,
         });
 
@@ -882,8 +947,12 @@ export const router = t.router({
       })
       .query(async ({ input }) => {
         const project = requireProject(input.projectId);
-        const persisted = await loadSessions(project.rootPath);
-        const activeSessionIds = new Set(sessionManager.listSessions().map((s) => s.id));
+        const persisted = await filterEmptyPlaceholderSessions(project.rootPath, await loadSessions(project.rootPath));
+        const activeSessionIds = new Set<string>();
+        for (const session of sessionManager.listSessions()) {
+          activeSessionIds.add(session.id);
+          if (session.persistedSessionId) activeSessionIds.add(session.persistedSessionId);
+        }
         // Sort by lastActivityAt descending (newest first)
         return persisted
           .map((s) => ({ ...s, isActive: activeSessionIds.has(s.sessionId) }))
@@ -901,10 +970,15 @@ export const router = t.router({
       .mutation(async ({ input }) => {
         const project = requireProject(input.projectId);
         // If the session is currently active, destroy it first
-        if (sessionManager.getClient(input.sessionId)) {
-          await sessionManager.destroySession(input.sessionId);
+        const activeSessionIds = sessionManager
+          .listSessions()
+          .filter((s) => s.id === input.sessionId || s.persistedSessionId === input.sessionId)
+          .map((s) => s.id);
+        for (const activeSessionId of activeSessionIds) {
+          await sessionManager.destroySession(activeSessionId);
         }
         await removeSession(project.rootPath, input.sessionId);
+        await rm(storedMessagesPath(project.rootPath, input.sessionId), { force: true });
         return { ok: true };
       }),
 

@@ -28,6 +28,7 @@ export interface CreateSessionOptions {
   baseUrl?: string;
   sessionDir?: string;
   resumeSessionId?: string;
+  persistedSessionId?: string;
   env?: Record<string, string>;
   enableMCP?: boolean;
   systemPrompt?: string;
@@ -38,6 +39,8 @@ export interface CreateSessionOptions {
 
 export interface SessionEntry {
   id: string;
+  /** The SoC Verify session ID stored in .socverify/sessions.json, if this is a restored runtime session. */
+  persistedSessionId?: string;
   /** The omp engine's session ID — needed to resume conversations */
   ompSessionId?: string;
   projectId: string;
@@ -201,6 +204,7 @@ class SessionManagerImpl extends EventEmitter {
 
     const entry: SessionEntry = {
       id: sessionId,
+      persistedSessionId: options.persistedSessionId,
       ompSessionId,
       projectId: options.projectId,
       client,
@@ -237,9 +241,10 @@ class SessionManagerImpl extends EventEmitter {
     return this.sessions.get(sessionId)?.client ?? null;
   }
 
-  listSessions(): Array<{ id: string; projectId: string; createdAt: number; lastActivityAt: number }> {
+  listSessions(): Array<{ id: string; persistedSessionId?: string; projectId: string; createdAt: number; lastActivityAt: number }> {
     return Array.from(this.sessions.values()).map((e) => ({
       id: e.id,
+      persistedSessionId: e.persistedSessionId,
       projectId: e.projectId,
       createdAt: e.createdAt,
       lastActivityAt: e.lastActivityAt,

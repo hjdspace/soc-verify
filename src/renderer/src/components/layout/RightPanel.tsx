@@ -16,7 +16,7 @@ export function RightPanel({ width }: RightPanelProps) {
   const sessions = useSessionStore((s) => s.sessions);
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
   const createSession = useSessionStore((s) => s.createSession);
-  const destroySession = useSessionStore((s) => s.destroySession);
+  const closeSession = useSessionStore((s) => s.closeSession);
   const switchSession = useSessionStore((s) => s.switchSession);
   const inputMessage = useSessionStore((s) => s.inputMessage);
   const setInputMessage = useSessionStore((s) => s.setInputMessage);
@@ -70,12 +70,14 @@ export function RightPanel({ width }: RightPanelProps) {
   const fetchModelsFromApi = useSettingsStore((s) => s.fetchModels);
 
   const currentSession = sessions.find((s) => s.id === currentSessionId);
+  const isCurrentSessionCreating = currentSession?.status === 'creating';
   const renameSession = useSessionStore((s) => s.renameSession);
   const historySessions = useSessionStore((s) => s.historySessions);
   const historyLoading = useSessionStore((s) => s.historyLoading);
   const fetchHistorySessions = useSessionStore((s) => s.fetchHistorySessions);
   const loadHistorySession = useSessionStore((s) => s.loadHistorySession);
   const deleteHistorySession = useSessionStore((s) => s.deleteHistorySession);
+  const currentHistorySessionId = currentSession?.persistedSessionId ?? currentSessionId;
 
   // Load history sessions when history view is opened
   useEffect(() => {
@@ -94,8 +96,8 @@ export function RightPanel({ width }: RightPanelProps) {
 
   const handleLoadHistorySession = async (historySession: HistorySession) => {
     if (!currentProjectId || !currentProject) return;
-    await loadHistorySession(historySession, currentProjectId, currentProject.rootPath);
     setShowHistory(false);
+    await loadHistorySession(historySession, currentProjectId, currentProject.rootPath);
   };
 
   const handleDeleteHistorySession = async (e: React.MouseEvent, sessionId: string) => {
@@ -125,7 +127,7 @@ export function RightPanel({ width }: RightPanelProps) {
 
   const handleCreateSession = async () => {
     if (!currentProjectId || !currentProject) return;
-    await createSession(currentProjectId, currentProject.rootPath);
+    void createSession(currentProjectId, currentProject.rootPath);
   };
 
   const handleSend = async () => {
@@ -476,7 +478,7 @@ export function RightPanel({ width }: RightPanelProps) {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        destroySession(sess.id, currentProjectId || undefined);
+                        closeSession(sess.id);
                       }}
                       className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-60"
                       title="关闭会话"
@@ -518,7 +520,7 @@ export function RightPanel({ width }: RightPanelProps) {
             sessions={historySessions}
             loading={historyLoading}
             activeSessionIds={new Set(sessions.map((s) => s.persistedSessionId ?? s.id))}
-            currentSessionId={currentSessionId}
+            currentSessionId={currentHistorySessionId}
             onLoadSession={handleLoadHistorySession}
             onDeleteSession={handleDeleteHistorySession}
             onClose={handleCloseHistory}
@@ -532,7 +534,7 @@ export function RightPanel({ width }: RightPanelProps) {
         ) : currentSession.messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
             <p className="text-xs text-muted-foreground">
-              开始与 AI Agent 对话，让它辅助你的验证工作
+              {isCurrentSessionCreating ? '正在创建 AI 会话...' : '开始与 AI Agent 对话，让它辅助你的验证工作'}
             </p>
           </div>
         ) : (
@@ -759,7 +761,7 @@ export function RightPanel({ width }: RightPanelProps) {
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             placeholder={currentSessionId ? '输入消息... (\"/" 加载技能, "@" 添加上下文)' : '请先创建会话'}
-            disabled={!currentSessionId}
+            disabled={!currentSessionId || isCurrentSessionCreating}
             rows={3}
             className="resize-none bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50"
           />
@@ -768,7 +770,7 @@ export function RightPanel({ width }: RightPanelProps) {
               {/* 图片附件按钮 */}
               <button
                 onClick={handleImageSelect}
-                disabled={!currentSessionId}
+                disabled={!currentSessionId || isCurrentSessionCreating}
                 title="附加图片"
                 className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
               >
@@ -840,7 +842,7 @@ export function RightPanel({ width }: RightPanelProps) {
             ) : (
               <button
                 onClick={handleSend}
-                disabled={!inputMessage.trim() || !currentSessionId}
+                disabled={!inputMessage.trim() || !currentSessionId || isCurrentSessionCreating}
                 className="flex items-center gap-1 rounded bg-primary/10 px-2 py-1 text-[10px] text-primary transition-colors hover:bg-primary/20 disabled:opacity-30"
               >
                 <Send className="h-3 w-3" />

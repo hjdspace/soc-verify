@@ -44,22 +44,13 @@ function tRPCError(err: unknown): string {
   return String(err);
 }
 
-/**
- * Restore persisted AI sessions for a project, or create a new one if none exist.
- * This replaces the old autoCreateDefaultSession — instead of always creating
- * a new session, it first tries to restore previously open sessions from disk.
- */
+/** Restore the most recent persisted AI session for a project, if one exists. */
 async function restoreOrCreateSession(projectId: string, cwd: string): Promise<void> {
   const sessionStore = useSessionStore.getState();
   // If sessions already exist for this project (e.g. user switched back), do nothing
   const existing = sessionStore.sessions.some((s) => s.projectId === projectId);
   if (existing) return;
-  // Try to restore persisted sessions first
-  const restored = await sessionStore.restoreSessions(projectId, cwd);
-  // If no sessions were restored, create a new default one
-  if (!restored) {
-    await sessionStore.createSession(projectId, cwd);
-  }
+  await sessionStore.restoreSessions(projectId, cwd);
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({

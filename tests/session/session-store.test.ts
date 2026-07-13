@@ -2,12 +2,36 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Use vi.hoisted to make mock functions available in vi.mock factory
-const { mockSend, mockAbort, mockCreate, mockDestroy, mockList } = vi.hoisted(() => ({
+const {
+  mockSend,
+  mockAbort,
+  mockCreate,
+  mockDestroy,
+  mockList,
+  mockRestore,
+  mockGetMessages,
+  mockGetPersistedSessions,
+  mockGetStoredMessages,
+  mockSaveStoredMessages,
+  mockListHistory,
+  mockDeleteHistorySession,
+  mockRename,
+  mockToastSuccess,
+} = vi.hoisted(() => ({
   mockSend: vi.fn().mockResolvedValue(undefined),
   mockAbort: vi.fn().mockResolvedValue(undefined),
   mockCreate: vi.fn().mockResolvedValue({ sessionId: 'session_test_1' }),
   mockDestroy: vi.fn().mockResolvedValue(undefined),
   mockList: vi.fn().mockResolvedValue([]),
+  mockRestore: vi.fn().mockResolvedValue({ sessionId: 'session_runtime_1', name: 'Restored session' }),
+  mockGetMessages: vi.fn().mockResolvedValue([]),
+  mockGetPersistedSessions: vi.fn().mockResolvedValue([]),
+  mockGetStoredMessages: vi.fn().mockResolvedValue([]),
+  mockSaveStoredMessages: vi.fn().mockResolvedValue(undefined),
+  mockListHistory: vi.fn().mockResolvedValue([]),
+  mockDeleteHistorySession: vi.fn().mockResolvedValue(undefined),
+  mockRename: vi.fn().mockResolvedValue(undefined),
+  mockToastSuccess: vi.fn(),
 }));
 
 vi.mock('@renderer/lib/trpc', () => ({
@@ -18,6 +42,14 @@ vi.mock('@renderer/lib/trpc', () => ({
       abort: { mutate: mockAbort },
       destroy: { mutate: mockDestroy },
       list: { query: mockList },
+      restore: { mutate: mockRestore },
+      getMessages: { query: mockGetMessages },
+      getPersistedSessions: { query: mockGetPersistedSessions },
+      getStoredMessages: { query: mockGetStoredMessages },
+      saveStoredMessages: { mutate: mockSaveStoredMessages },
+      listHistory: { query: mockListHistory },
+      deleteHistorySession: { mutate: mockDeleteHistorySession },
+      rename: { mutate: mockRename },
     },
   },
 }));
@@ -26,7 +58,7 @@ vi.mock('@renderer/lib/trpc', () => ({
 vi.mock('@renderer/stores/toast', () => ({
   useToastStore: {
     getState: () => ({
-      success: vi.fn(),
+      success: mockToastSuccess,
       error: vi.fn(),
       info: vi.fn(),
     }),
@@ -43,7 +75,16 @@ describe('SessionStore — event handling and state machine', () => {
       currentSessionId: null,
       inputMessage: '',
       isSending: false,
+      historySessions: [],
+      historyLoading: false,
     });
+    mockCreate.mockResolvedValue({ sessionId: 'session_test_1' });
+    mockRestore.mockResolvedValue({ sessionId: 'session_runtime_1', name: 'Restored session' });
+    mockGetMessages.mockResolvedValue([]);
+    mockGetPersistedSessions.mockResolvedValue([]);
+    mockGetStoredMessages.mockResolvedValue([]);
+    mockSaveStoredMessages.mockResolvedValue(undefined);
+    mockListHistory.mockResolvedValue([]);
   });
 
   it('creates a session and sets it as current', async () => {
@@ -53,6 +94,38 @@ describe('SessionStore — event handling and state machine', () => {
     expect(state.sessions).toHaveLength(1);
     expect(state.currentSessionId).toBe('session_test_1');
     expect(state.sessions[0].status).toBe('idle');
+    expect(mockToastSuccess).not.toHaveBeenCalledWith('AI 会话已创建');
+  });
+
+  it('shows a pending tab immediately while creating a session', async () => {
+    let resolveCreate!: (value: { sessionId: string }) => void;
+    mockCreate.mockReturnValueOnce(new Promise((resolve) => {
+      resolveCreate = resolve;
+    }));
+
+    const promise = useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    let state = useSessionStore.getState();
+
+    expect(state.sessions).toHaveLength(1);
+    expect(state.currentSessionId).toBe(state.sessions[0].id);
+    expect(state.sessions[0]).toMatchObject({
+      projectId: 'proj_1',
+      name: '新会话',
+      status: 'creating',
+      messages: [],
+    });
+
+    resolveCreate({ sessionId: 'session_test_1' });
+    await promise;
+    state = useSessionStore.getState();
+
+    expect(state.sessions).toHaveLength(1);
+    expect(state.currentSessionId).toBe('session_test_1');
+    expect(state.sessions[0]).toMatchObject({
+      id: 'session_test_1',
+      persistedSessionId: 'session_test_1',
+      status: 'idle',
+    });
   });
 
   it('sends a message and transitions to streaming state', async () => {
@@ -335,5 +408,132 @@ describe('SessionStore — event handling and state machine', () => {
 
     useSessionStore.getState().switchSession('session_1');
     expect(useSessionStore.getState().currentSessionId).toBe('session_1');
+  });
+
+  it('loads a history session once under concurrent clicks and hydrates messages', async () => {
+    mockRestore.mockResolvedValue({
+      sessionId: 'session_runtime_1',
+      name: 'Debug reset failure',
+      model: { provider: 'openai', id: 'gpt-4o', name: 'gpt-4o' },
+    });
+    mockGetMessages.mockResolvedValue([
+      { role: 'user', content: 'Why did reset fail?' },
+      { role: 'assistant', content: [{ type: 'text', text: 'Reset was deasserted too early.' }] },
+    ]);
+
+    const historySession = {
+      sessionId: 'session_persisted_1',
+      name: 'Debug reset failure',
+      projectId: 'proj_1',
+      createdAt: 100,
+      lastActivityAt: 200,
+      isActive: false,
+    };
+
+    await Promise.all([
+      useSessionStore.getState().loadHistorySession(historySession, 'proj_1', '/tmp/proj'),
+      useSessionStore.getState().loadHistorySession(historySession, 'proj_1', '/tmp/proj'),
+    ]);
+
+    expect(mockRestore).toHaveBeenCalledTimes(1);
+    expect(mockRestore).toHaveBeenCalledWith({
+      projectId: 'proj_1',
+      cwd: '/tmp/proj',
+      sessionId: 'session_persisted_1',
+      name: 'Debug reset failure',
+    });
+    expect(mockGetMessages).toHaveBeenCalledWith({ sessionId: 'session_runtime_1' });
+
+    const state = useSessionStore.getState();
+    expect(state.sessions).toHaveLength(1);
+    expect(state.currentSessionId).toBe('session_runtime_1');
+    expect(state.sessions[0]).toMatchObject({
+      id: 'session_runtime_1',
+      persistedSessionId: 'session_persisted_1',
+      name: 'Debug reset failure',
+    });
+    expect(state.sessions[0].messages.map((m) => [m.role, m.content])).toEqual([
+      ['user', 'Why did reset fail?'],
+      ['assistant', 'Reset was deasserted too early.'],
+    ]);
+  });
+
+  it('restores only the latest persisted session on startup', async () => {
+    mockGetPersistedSessions.mockResolvedValue([
+      {
+        sessionId: 'session_old',
+        name: 'Old session',
+        projectId: 'proj_1',
+        createdAt: 10,
+        lastActivityAt: 100,
+      },
+      {
+        sessionId: 'session_latest',
+        name: 'Latest session',
+        projectId: 'proj_1',
+        createdAt: 20,
+        lastActivityAt: 200,
+      },
+    ]);
+    mockRestore.mockResolvedValue({
+      sessionId: 'session_runtime_latest',
+      name: 'Latest session',
+    });
+
+    const restored = await useSessionStore.getState().restoreSessions('proj_1', '/tmp/proj');
+
+    expect(restored).toBe(true);
+    expect(mockRestore).toHaveBeenCalledTimes(1);
+    expect(mockRestore).toHaveBeenCalledWith({
+      projectId: 'proj_1',
+      cwd: '/tmp/proj',
+      sessionId: 'session_latest',
+      name: 'Latest session',
+    });
+    expect(useSessionStore.getState().sessions).toHaveLength(1);
+    expect(useSessionStore.getState().sessions[0]).toMatchObject({
+      id: 'session_runtime_latest',
+      persistedSessionId: 'session_latest',
+    });
+  });
+
+  it('hydrates history sessions from stored UI messages before asking the agent', async () => {
+    mockRestore.mockResolvedValue({
+      sessionId: 'session_runtime_1',
+      name: 'Stored transcript',
+    });
+    mockGetStoredMessages.mockResolvedValue([
+      {
+        id: 'stored_1',
+        role: 'user',
+        content: 'Stored question',
+        timestamp: 100,
+      },
+      {
+        id: 'stored_2',
+        role: 'assistant',
+        content: 'Stored answer',
+        timestamp: 200,
+      },
+    ]);
+
+    await useSessionStore.getState().loadHistorySession({
+      sessionId: 'session_persisted_1',
+      name: 'Stored transcript',
+      projectId: 'proj_1',
+      createdAt: 100,
+      lastActivityAt: 200,
+      isActive: false,
+    }, 'proj_1', '/tmp/proj');
+
+    expect(mockGetStoredMessages).toHaveBeenCalledWith({
+      projectId: 'proj_1',
+      sessionId: 'session_persisted_1',
+    });
+    expect(mockGetMessages).not.toHaveBeenCalled();
+    expect(useSessionStore.getState().sessions[0].messages.map((m) => [m.role, m.content])).toEqual([
+      ['user', 'Stored question'],
+      ['assistant', 'Stored answer'],
+    ]);
   });
 });

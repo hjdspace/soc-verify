@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
 
-export type SessionStatus = 'idle' | 'streaming' | 'tool_executing' | 'error';
+export type SessionStatus = 'creating' | 'idle' | 'streaming' | 'tool_executing' | 'error';
 
 export interface ChatMessage {
   id: string;
@@ -105,6 +105,7 @@ interface SessionStoreState {
 }
 
 let eventListenerRegistered = false;
+const historySessionLoads = new Map<string, Promise<void>>();
 
 /**
  * Extract text from an agent message object.
@@ -185,10 +186,27 @@ function tRPCError(err: unknown): string {
 }
 
 /**
- * Load messages from the agent for a restored/resumed session.
+ * Load messages for a restored/resumed session.
  * Shared between restoreSessions and loadHistorySession.
  */
-async function loadSessionMessages(sessionId: string): Promise<ChatMessage[]> {
+async function loadSessionMessages(
+  sessionId: string,
+  projectId?: string,
+  persistedSessionId?: string,
+): Promise<ChatMessage[]> {
+  if (projectId && persistedSessionId) {
+    try {
+      const stored = await trpc.session.getStoredMessages.query({
+        projectId,
+        sessionId: persistedSessionId,
+      });
+      const storedMessages = normalizeStoredMessages(stored);
+      if (storedMessages.length > 0) return storedMessages;
+    } catch {
+      // Fall back to the live agent below.
+    }
+  }
+
   try {
     const messages = await trpc.session.getMessages.query({ sessionId });
     const ompMessages = messages as unknown[];
@@ -260,6 +278,32 @@ async function loadSessionMessages(sessionId: string): Promise<ChatMessage[]> {
   }
 }
 
+function normalizeStoredMessages(messages: unknown): ChatMessage[] {
+  if (!Array.isArray(messages)) return [];
+  return messages.filter((msg): msg is ChatMessage => {
+    if (typeof msg !== 'object' || msg === null) return false;
+    const m = msg as Record<string, unknown>;
+    return (
+      typeof m.id === 'string' &&
+      (m.role === 'user' || m.role === 'assistant' || m.role === 'tool') &&
+      typeof m.content === 'string' &&
+      typeof m.timestamp === 'number'
+    );
+  });
+}
+
+function persistSessionMessages(session: SessionEntry | undefined): void {
+  if (!session || session.status === 'creating') return;
+  const persistedSessionId = session.persistedSessionId ?? session.id;
+  void trpc.session.saveStoredMessages.mutate({
+    projectId: session.projectId,
+    sessionId: persistedSessionId,
+    messages: session.messages,
+  }).catch(() => {
+    // Message persistence is best-effort; live chat state remains authoritative.
+  });
+}
+
 export const useSessionStore = create<SessionStoreState>((set, get) => ({
   sessions: [],
   currentSessionId: null,
@@ -271,6 +315,20 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   historyLoading: false,
 
   createSession: async (projectId, cwd) => {
+    const pendingId = `pending_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const pendingSession: SessionEntry = {
+      id: pendingId,
+      projectId,
+      name: '新会话',
+      status: 'creating',
+      messages: [],
+      createdAt: Date.now(),
+    };
+    set((s) => ({
+      sessions: [...s.sessions, pendingSession],
+      currentSessionId: pendingId,
+    }));
+
     try {
       const result = await trpc.session.create.mutate({ projectId, cwd });
       const session: SessionEntry = {
@@ -280,10 +338,10 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         name: (result as { name?: string }).name ?? '新会话',
         status: 'idle',
         messages: [],
-        createdAt: Date.now(),
+        createdAt: pendingSession.createdAt,
       };
       set((s) => ({
-        sessions: [...s.sessions, session],
+        sessions: s.sessions.map((sess) => sess.id === pendingId ? session : sess),
         currentSessionId: result.sessionId,
       }));
 
@@ -295,9 +353,15 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         });
       }
 
-      useToastStore.getState().success('AI 会话已创建');
       return result.sessionId;
     } catch (err) {
+      set((s) => {
+        const remaining = s.sessions.filter((sess) => sess.id !== pendingId);
+        return {
+          sessions: remaining,
+          currentSessionId: s.currentSessionId === pendingId ? (remaining[0]?.id ?? null) : s.currentSessionId,
+        };
+      });
       useToastStore.getState().error('创建会话失败', tRPCError(err));
       return null;
     }
@@ -319,7 +383,9 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     // Just remove from UI without destroying the backend session
     set((s) => ({
       sessions: s.sessions.filter((sess) => sess.id !== sessionId),
-      currentSessionId: s.currentSessionId === sessionId ? null : s.currentSessionId,
+      currentSessionId: s.currentSessionId === sessionId
+        ? (s.sessions.find((sess) => sess.id !== sessionId)?.id ?? null)
+        : s.currentSessionId,
     }));
   },
 
@@ -384,6 +450,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
           : sess,
       ),
     }));
+    persistSessionMessages(get().sessions.find((sess) => sess.id === sessionId));
 
     try {
       await trpc.session.send.mutate({ sessionId, message: fullMessage, images });
@@ -441,7 +508,12 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
 
   renameSession: async (sessionId, projectId, name) => {
     try {
-      await trpc.session.rename.mutate({ sessionId, projectId, name });
+      const session = get().sessions.find((sess) => sess.id === sessionId);
+      await trpc.session.rename.mutate({
+        sessionId: session?.persistedSessionId ?? sessionId,
+        projectId,
+        name,
+      });
       set((s) => ({
         sessions: s.sessions.map((sess) =>
           sess.id === sessionId ? { ...sess, name } : sess,
@@ -656,6 +728,18 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     if (type === 'agent_end') {
       set({ isSending: false });
     }
+    if (
+      type === 'message_start' ||
+      type === 'message_update' ||
+      type === 'message_end' ||
+      type === 'tool_execution_start' ||
+      type === 'tool_execution_end' ||
+      type === 'agent_end' ||
+      type === 'notice' ||
+      type === 'irc_message'
+    ) {
+      persistSessionMessages(get().sessions.find((sess) => sess.id === sessionId));
+    }
   },
 
   refreshSessions: async () => {
@@ -682,6 +766,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     try {
       const persisted = await trpc.session.getPersistedSessions.query({ projectId });
       if (persisted.length === 0) return false;
+      const latest = [...persisted].sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0];
 
       // Register IPC event listener once (needed before any restored session can receive events)
       if (!eventListenerRegistered && window.eventBridge) {
@@ -691,43 +776,40 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         });
       }
 
-      for (const p of persisted) {
-        try {
-          const result = await trpc.session.restore.mutate({
-            projectId,
-            cwd,
-            sessionId: p.sessionId,
-            name: p.name,
-          });
-          const session: SessionEntry = {
-            id: result.sessionId,
-            persistedSessionId: p.sessionId,
-            projectId,
-            name: result.name,
-            status: 'idle',
-            messages: [],
-            createdAt: p.createdAt,
-            model: result.model ?? p.model,
-          };
-          set((s) => ({
-            sessions: [...s.sessions, session],
-            currentSessionId: s.currentSessionId ?? result.sessionId,
-          }));
+      try {
+        const result = await trpc.session.restore.mutate({
+          projectId,
+          cwd,
+          sessionId: latest.sessionId,
+          name: latest.name,
+        });
+        const session: SessionEntry = {
+          id: result.sessionId,
+          persistedSessionId: latest.sessionId,
+          projectId,
+          name: result.name,
+          status: 'idle',
+          messages: [],
+          createdAt: latest.createdAt,
+          model: result.model ?? latest.model,
+        };
+        set((s) => ({
+          sessions: [...s.sessions, session],
+          currentSessionId: result.sessionId,
+        }));
 
-          // Load historical messages for the restored session
-          const chatMessages = await loadSessionMessages(result.sessionId);
-          if (chatMessages.length > 0) {
-            set((s) => ({
-              sessions: s.sessions.map((sess) =>
-                sess.id === result.sessionId
-                  ? { ...sess, messages: chatMessages }
-                  : sess,
-              ),
-            }));
-          }
-        } catch {
-          // Skip sessions that fail to restore
+        const chatMessages = await loadSessionMessages(result.sessionId, projectId, latest.sessionId);
+        if (chatMessages.length > 0) {
+          set((s) => ({
+            sessions: s.sessions.map((sess) =>
+              sess.id === result.sessionId
+                ? { ...sess, messages: chatMessages }
+                : sess,
+            ),
+          }));
         }
+      } catch {
+        return false;
       }
       return true;
     } catch {
@@ -815,53 +897,69 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       return;
     }
 
-    // Restore the session from persistence
-    try {
-      const result = await trpc.session.restore.mutate({
-        projectId,
-        cwd,
-        sessionId: historySession.sessionId,
-        name: historySession.name,
-      });
+    const pending = historySessionLoads.get(historySession.sessionId);
+    if (pending) {
+      await pending;
+      const loaded = get().sessions.find(
+        (s) => s.persistedSessionId === historySession.sessionId || s.id === historySession.sessionId,
+      );
+      if (loaded) set({ currentSessionId: loaded.id });
+      return;
+    }
 
-      const session: SessionEntry = {
-        id: result.sessionId,
-        persistedSessionId: historySession.sessionId,
-        projectId,
-        name: result.name,
-        status: 'idle',
-        messages: [],
-        createdAt: historySession.createdAt,
-        model: result.model ?? historySession.model,
-      };
-      set((s) => ({
-        sessions: [...s.sessions, session],
-        currentSessionId: result.sessionId,
-      }));
-
-      // Register IPC event listener once
-      if (!eventListenerRegistered && window.eventBridge) {
-        eventListenerRegistered = true;
-        window.eventBridge.onSessionEvent(({ sessionId, event }) => {
-          get().handleSessionEvent(sessionId, event);
+    const load = (async () => {
+      // Restore the session from persistence
+      try {
+        const result = await trpc.session.restore.mutate({
+          projectId,
+          cwd,
+          sessionId: historySession.sessionId,
+          name: historySession.name,
         });
-      }
 
-      // Load historical messages from the agent
-      const chatMessages = await loadSessionMessages(result.sessionId);
-      if (chatMessages.length > 0) {
+        const session: SessionEntry = {
+          id: result.sessionId,
+          persistedSessionId: historySession.sessionId,
+          projectId,
+          name: result.name,
+          status: 'idle',
+          messages: [],
+          createdAt: historySession.createdAt,
+          model: result.model ?? historySession.model,
+        };
         set((s) => ({
-          sessions: s.sessions.map((sess) =>
-            sess.id === result.sessionId
-              ? { ...sess, messages: chatMessages }
-              : sess,
-          ),
+          sessions: [...s.sessions, session],
+          currentSessionId: result.sessionId,
         }));
-      }
 
-      useToastStore.getState().success(`已加载会话: ${historySession.name}`);
-    } catch (err) {
-      useToastStore.getState().error('加载历史会话失败', tRPCError(err));
+        // Register IPC event listener once
+        if (!eventListenerRegistered && window.eventBridge) {
+          eventListenerRegistered = true;
+          window.eventBridge.onSessionEvent(({ sessionId, event }) => {
+            get().handleSessionEvent(sessionId, event);
+          });
+        }
+
+        const chatMessages = await loadSessionMessages(result.sessionId, projectId, historySession.sessionId);
+        if (chatMessages.length > 0) {
+          set((s) => ({
+            sessions: s.sessions.map((sess) =>
+              sess.id === result.sessionId
+                ? { ...sess, messages: chatMessages }
+                : sess,
+            ),
+          }));
+        }
+      } catch (err) {
+        useToastStore.getState().error('加载历史会话失败', tRPCError(err));
+      }
+    })();
+
+    historySessionLoads.set(historySession.sessionId, load);
+    try {
+      await load;
+    } finally {
+      historySessionLoads.delete(historySession.sessionId);
     }
   },
 
