@@ -1,7 +1,8 @@
-import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join, resolve, dirname, isAbsolute } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import type {
   PluginManifest,
   PluginRegistry,
@@ -65,16 +66,76 @@ function classifyPlugin(plugin: unknown, manifest: PluginManifest): AnyPlugin | 
   return null;
 }
 
+/** Resolve the app's built-in plugins directory (plugins/ at app root). */
+function getBuiltinPluginsDir(): string | null {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  // Dev: src/main/plugins/loader.ts → ../../plugins
+  const devPath = resolve(__dirname, '../../', 'plugins');
+  if (existsSync(devPath)) return devPath;
+  // Packaged: resourcesPath/plugins
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  if (resourcesPath) {
+    const packagedPath = join(resourcesPath, 'plugins');
+    if (existsSync(packagedPath)) return packagedPath;
+  }
+  return null;
+}
+
+/** Discover built-in plugins from the app's plugins/ directory. */
+function discoverBuiltinPlugins(): PluginConfigEntry[] {
+  const pluginsDir = getBuiltinPluginsDir();
+  if (!pluginsDir) return [];
+
+  const entries: PluginConfigEntry[] = [];
+  let dirs: string[];
+  try {
+    dirs = readdirSync(pluginsDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch {
+    return [];
+  }
+
+  for (const dir of dirs) {
+    const pkgPath = join(pluginsDir, dir, 'package.json');
+    if (!existsSync(pkgPath)) continue;
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as Record<string, unknown>;
+      const sv = pkg.socverify as Record<string, unknown> | undefined;
+      if (!sv || typeof sv.kind !== 'string' || typeof sv.id !== 'string') continue;
+
+      const mainFile = (typeof pkg.main === 'string' ? pkg.main : 'index.js');
+      const pluginPath = join(pluginsDir, dir, mainFile);
+
+      entries.push({
+        id: sv.id,
+        name: (typeof pkg.name === 'string' ? pkg.name : sv.id),
+        version: (typeof pkg.version === 'string' ? pkg.version : '0.0.0'),
+        kind: sv.kind as PluginConfigEntry['kind'],
+        source: 'local',
+        path: pluginPath,
+        enabled: true,
+      });
+    } catch {
+      // Skip invalid package.json
+    }
+  }
+
+  return entries;
+}
+
 async function loadPluginModule(
   source: 'node_modules' | 'local',
   pluginPath: string,
 ): Promise<{ plugin: unknown; manifest: PluginManifest } | { error: string }> {
   try {
-    const fileUrl = pathToFileURL(pluginPath).href;
-    const mod = await import(fileUrl);
+    // Use createRequire for CJS plugins — import() of file:// URLs is unreliable
+    // in electron-vite's bundled CJS output.
+    const require = createRequire(import.meta.url);
+    const mod = require(pluginPath);
 
     // The plugin module should export a default or named `plugin` / `default` object
-    const exported = mod.default ?? mod.plugin ?? mod;
+    const exported = mod?.default ?? mod?.plugin ?? mod;
     const manifest: unknown = exported?.manifest;
 
     if (!validateManifest(manifest)) {
@@ -96,10 +157,26 @@ class PluginLoaderImpl {
     const results: PluginLoadResult[] = [];
     const registry = emptyRegistry();
 
-    for (const entry of config.plugins) {
+    // Merge built-in plugins with project-level config.
+    // Project-level config entries with the same id override built-in entries.
+    const builtinEntries = discoverBuiltinPlugins();
+    console.log(`[plugin-loader] built-in plugins discovered: ${builtinEntries.length}`);
+    for (const b of builtinEntries) {
+      console.log(`[plugin-loader]   - ${b.id} (${b.kind}) → ${b.path}`);
+    }
+    const projectIds = new Set(config.plugins.map((p) => p.id));
+    const mergedEntries = [
+      ...builtinEntries.filter((b) => !projectIds.has(b.id)),
+      ...config.plugins,
+    ];
+    console.log(`[plugin-loader] total entries to load: ${mergedEntries.length} (project: ${config.plugins.length})`);
+
+    for (const entry of mergedEntries) {
       if (!entry.enabled) continue;
 
-      const pluginPath = entry.source === 'local'
+      // For local plugins, resolve relative to projectRoot only if path is relative.
+      // Built-in plugins already have absolute paths.
+      const pluginPath = entry.source === 'local' && !isAbsolute(entry.path)
         ? resolve(projectRoot, entry.path)
         : entry.path;
 
@@ -139,6 +216,7 @@ class PluginLoaderImpl {
       const { plugin, manifest } = loadResult;
       const classified = classifyPlugin(plugin, manifest);
       if (!classified) {
+        console.log(`[plugin-loader] FAILED to classify ${manifest.id} (kind: ${manifest.kind})`);
         results.push({
           manifest,
           plugin: null as never,
@@ -150,6 +228,7 @@ class PluginLoaderImpl {
       }
 
       // Add to registry
+      console.log(`[plugin-loader] loaded OK: ${manifest.id} (kind: ${manifest.kind})`);
       switch (manifest.kind) {
         case 'case-parser':
           registry.caseParsers.push(classified as CaseParserPlugin);

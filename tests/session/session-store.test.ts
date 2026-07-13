@@ -83,11 +83,14 @@ describe('SessionStore — event handling and state machine', () => {
     expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
   });
 
-  it('handles message_update event by appending delta to assistant message', async () => {
+  it('handles message_update event by extracting text from message content', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
     await useSessionStore.getState().sendMessage('Hello');
 
-    useSessionStore.getState().handleSessionEvent('session_test_1', { type: 'message_update', delta: 'World' });
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_update',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'World' }] },
+    });
 
     const session = useSessionStore.getState().sessions[0];
     const assistantMsg = session.messages[1];
@@ -98,26 +101,116 @@ describe('SessionStore — event handling and state machine', () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
     await useSessionStore.getState().sendMessage('Hello');
 
-    useSessionStore.getState().handleSessionEvent('session_test_1', { type: 'message_update', delta: 'Hello ' });
-    useSessionStore.getState().handleSessionEvent('session_test_1', { type: 'message_update', delta: 'world' });
-    useSessionStore.getState().handleSessionEvent('session_test_1', { type: 'message_update', delta: '!' });
+    // Each message_update contains a full snapshot (not a delta), so later ones replace earlier ones
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_update',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Hello ' }] },
+    });
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_update',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Hello world' }] },
+    });
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_update',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Hello world!' }] },
+    });
 
     const assistantMsg = useSessionStore.getState().sessions[0].messages[1];
     expect(assistantMsg.content).toBe('Hello world!');
   });
 
-  it('handles message_end event by stopping streaming', async () => {
+  it('handles message_end event by extracting final content and stopping streaming', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
     await useSessionStore.getState().sendMessage('Hello');
 
-    useSessionStore.getState().handleSessionEvent('session_test_1', { type: 'message_update', delta: 'Response' });
-    useSessionStore.getState().handleSessionEvent('session_test_1', { type: 'message_end' });
+    // message_update with partial content
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_update',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Partial' }] },
+    });
+    // message_end with final content
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Final Response' }], stopReason: 'stop' },
+    });
 
     const session = useSessionStore.getState().sessions[0];
-    expect(session.status).toBe('idle');
+    // message_end no longer sets status to 'idle' — only agent_end does.
+    // This allows multiple messages within a single agent turn.
+    expect(session.status).toBe('streaming');
     const assistantMsg = session.messages[1];
     expect(assistantMsg.isStreaming).toBe(false);
-    expect(assistantMsg.content).toBe('Response');
+    expect(assistantMsg.content).toBe('Final Response');
+  });
+
+  it('handles multiple message_start/message_end pairs within one agent turn', async () => {
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    await useSessionStore.getState().sendMessage('Hello');
+
+    // First message
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_start',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'First' }] },
+    });
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'First response' }], stopReason: 'stop' },
+    });
+
+    // Second message (no streaming assistant exists — should create a new one)
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_start',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Second' }] },
+    });
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Second response' }], stopReason: 'stop' },
+    });
+
+    // Agent ends
+    useSessionStore.getState().handleSessionEvent('session_test_1', { type: 'agent_end' });
+
+    const session = useSessionStore.getState().sessions[0];
+    // Messages: user + first assistant + second assistant
+    expect(session.messages.length).toBe(3);
+    expect(session.messages[0].role).toBe('user');
+    expect(session.messages[1].role).toBe('assistant');
+    expect(session.messages[1].content).toBe('First response');
+    expect(session.messages[1].isStreaming).toBe(false);
+    expect(session.messages[2].role).toBe('assistant');
+    expect(session.messages[2].content).toBe('Second response');
+    expect(session.messages[2].isStreaming).toBe(false);
+    expect(session.status).toBe('idle');
+  });
+
+  it('handles message_end with no prior message_update by extracting content from message_end', async () => {
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    await useSessionStore.getState().sendMessage('Hello');
+
+    // No message_update events — content comes directly from message_end
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Direct response' }], stopReason: 'stop' },
+    });
+
+    const session = useSessionStore.getState().sessions[0];
+    const assistantMsg = session.messages[1];
+    expect(assistantMsg.isStreaming).toBe(false);
+    expect(assistantMsg.content).toBe('Direct response');
+  });
+
+  it('handles message_end with error stopReason', async () => {
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    await useSessionStore.getState().sendMessage('Hello');
+
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_end',
+      message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'API key invalid' },
+    });
+
+    const assistantMsg = useSessionStore.getState().sessions[0].messages[1];
+    expect(assistantMsg.isStreaming).toBe(false);
+    expect(assistantMsg.content).toContain('API key invalid');
   });
 
   it('handles tool_execution_start by adding a tool message', async () => {

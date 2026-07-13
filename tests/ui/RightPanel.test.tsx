@@ -243,7 +243,10 @@ describe('SessionStore state machine transitions', () => {
 
     // 2. AI starts responding
     useSessionStore.getState().handleSessionEvent('s1', { type: 'message_start' });
-    useSessionStore.getState().handleSessionEvent('s1', { type: 'message_update', delta: 'I will run' });
+    useSessionStore.getState().handleSessionEvent('s1', {
+      type: 'message_update',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'I will run' }] },
+    });
 
     // 3. Tool execution
     useSessionStore.getState().handleSessionEvent('s1', {
@@ -261,8 +264,14 @@ describe('SessionStore state machine transitions', () => {
     expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
 
     // 4. AI continues
-    useSessionStore.getState().handleSessionEvent('s1', { type: 'message_update', delta: ' the simulation.' });
-    useSessionStore.getState().handleSessionEvent('s1', { type: 'message_end' });
+    useSessionStore.getState().handleSessionEvent('s1', {
+      type: 'message_update',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'I will run the simulation.' }] },
+    });
+    useSessionStore.getState().handleSessionEvent('s1', {
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'I will run the simulation.' }], stopReason: 'stop' },
+    });
 
     // 5. Agent ends
     useSessionStore.getState().handleSessionEvent('s1', { type: 'agent_end' });

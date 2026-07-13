@@ -3,12 +3,21 @@ import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
 import type { CredentialEntry, CredentialInput } from '@shared/types';
 
+export interface ApiModel {
+  id: string;
+  name: string;
+  provider: string;
+  description?: string;
+}
+
 interface SettingsStoreState {
   credentials: CredentialEntry[];
   skills: string[];
   mcpServers: string[];
   systemPrompt: string;
   loading: boolean;
+  models: ApiModel[];
+  modelsLoading: boolean;
 
   loadCredentials: () => Promise<void>;
   setCredential: (input: CredentialInput) => Promise<void>;
@@ -20,6 +29,7 @@ interface SettingsStoreState {
   setMcpConfig: (projectId: string, config: unknown) => Promise<void>;
   loadSystemPrompt: (projectId: string) => Promise<void>;
   setSystemPrompt: (projectId: string, prompt: string) => Promise<void>;
+  fetchModels: (providerId?: string, apiKey?: string, baseUrl?: string) => Promise<ApiModel[]>;
 }
 
 export const useSettingsStore = create<SettingsStoreState>((set) => ({
@@ -28,6 +38,8 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
   mcpServers: [],
   systemPrompt: '',
   loading: false,
+  models: [],
+  modelsLoading: false,
 
   loadCredentials: async () => {
     try {
@@ -126,6 +138,23 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
       useToastStore.getState().success('系统提示词已保存');
     } catch (err) {
       useToastStore.getState().error('保存提示词失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  fetchModels: async (providerId, apiKey, baseUrl) => {
+    set({ modelsLoading: true });
+    try {
+      const models = await trpc.settings.fetchModels.query({
+        providerId,
+        apiKey,
+        baseUrl,
+      });
+      set({ models: models as ApiModel[], modelsLoading: false });
+      return models as ApiModel[];
+    } catch (err) {
+      set({ modelsLoading: false });
+      useToastStore.getState().error('获取模型列表失败', err instanceof Error ? err.message : String(err));
+      return [];
     }
   },
 }));

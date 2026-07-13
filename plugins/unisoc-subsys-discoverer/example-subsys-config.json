@@ -1,0 +1,19 @@
+{
+  "subsystems": [
+    {
+      "name": "cpu_sub_sys",
+      "path": "rtl/cpu_sub_sys",
+      "kind": "subsys"
+    },
+    {
+      "name": "ddr_sub_sys",
+      "path": "rtl/ddr_sub_sys",
+      "kind": "subsys"
+    },
+    {
+      "name": "top",
+      "path": "rtl/top",
+      "kind": "top"
+    }
+  ]
+}

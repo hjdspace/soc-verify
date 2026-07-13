@@ -174,7 +174,7 @@ export interface CredentialEntry {
   providerId: string;
   label: string;
   apiKeyMasked: string;
-  endpoint?: string;
+  baseUrl?: string;
   createdAt: number;
 }
 
@@ -182,5 +182,5 @@ export interface CredentialInput {
   providerId: string;
   label: string;
   apiKey: string;
-  endpoint?: string;
+  baseUrl?: string;
 }

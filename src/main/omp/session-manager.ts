@@ -16,9 +16,11 @@ export interface CreateSessionOptions {
   cwd: string;
   provider?: string;
   model?: string;
+  apiKey?: string;
   sessionDir?: string;
   resumePrefix?: string;
   extraArgs?: string[];
+  env?: Record<string, string>;
   discovery?: SubsysDiscovery;
   simulationAdapter?: PluginBackedSimulation | null;
   coverageAdapter?: PluginBackedCoverage | null;
@@ -75,8 +77,10 @@ class SessionManagerImpl extends EventEmitter {
       cwd: options.cwd,
       provider: options.provider,
       model: options.model,
+      apiKey: options.apiKey,
       sessionDir: options.sessionDir,
       extraArgs: options.extraArgs,
+      env: options.env,
     };
 
     if (options.resumePrefix) {
@@ -93,10 +97,43 @@ class SessionManagerImpl extends EventEmitter {
     client.registerHostUriHandler('*', (req) => hostUris.handleUriRequest(req));
 
     client.onSessionEvent((event) => {
+      const evtType = (event as Record<string, unknown>)?.type;
+      console.log(`[omp:session:${sessionId}] event type="${evtType}"`);
       this.emit('sessionEvent', { sessionId, event } satisfies SessionEventData);
     });
 
+    // Forward prompt_result as a session event so the UI knows when the
+    // agent was/wasn't invoked (agentInvoked=false means the message was
+    // handled as a slash command or the agent couldn't start).
+    client.onPromptResult((frame) => {
+      console.log(`[omp:session:${sessionId}] prompt_result agentInvoked=${frame.agentInvoked}`);
+      if (!frame.agentInvoked) {
+        this.emit('sessionEvent', {
+          sessionId,
+          event: { type: 'notice', message: 'Agent was not invoked for this prompt. Check API key and model configuration.' },
+        } satisfies SessionEventData);
+        // Also emit agent_end to stop the streaming indicator
+        this.emit('sessionEvent', {
+          sessionId,
+          event: { type: 'agent_end' },
+        } satisfies SessionEventData);
+      }
+    });
+
+    // Log env vars being passed (mask API keys)
+    if (options.env) {
+      const maskedEnv: Record<string, string> = {};
+      for (const [k, v] of Object.entries(options.env)) {
+        maskedEnv[k] = k.includes('KEY') || k.includes('SECRET') ? `${v.slice(0, 4)}***` : v;
+      }
+      console.log(`[omp:session:${sessionId}] env vars:`, maskedEnv);
+    } else {
+      console.log(`[omp:session:${sessionId}] WARNING: no env vars passed to omp`);
+    }
+    console.log(`[omp:session:${sessionId}] provider=${options.provider ?? '(default)'}, model=${options.model ?? '(default)'}`);
+
     await client.start();
+    console.log(`[omp:session:${sessionId}] omp process started successfully`);
 
     await client.setHostTools(hostTools.getDefinitions());
     await client.setHostUriSchemes(hostUris.getSchemeDefinitions());

@@ -1,0 +1,10 @@
+{
+  "name": "unisoc-subsys-discoverer",
+  "version": "1.0.0",
+  "description": "Unisoc 子系统发现插件：解析 $PROJ_RTL 目录下以 _sys 结尾的文件夹和 top 文件夹。无 $PROJ_RTL 时支持手动配置。",
+  "main": "index.js",
+  "socverify": {
+    "kind": "subsys-discoverer",
+    "id": "unisoc-subsys-discoverer"
+  }
+}

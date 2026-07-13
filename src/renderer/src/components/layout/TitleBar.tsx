@@ -1,14 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Minus, Square, X, Copy, PanelLeft, PanelRight, Settings, Check, Search } from 'lucide-react';
+import { Minus, Square, X, Copy, PanelLeft, PanelRight, Settings, Search } from 'lucide-react';
 import { useUiStore } from '@renderer/stores/ui';
-import { useThemeStore } from '@renderer/stores/theme';
 import { cn } from '@renderer/lib/utils';
 
 /**
  * 自定义无边框窗口 TitleBar。
  *
  * 布局：
- *  [Logo] [左栏折叠] | SoC Verify | [右栏折叠] [主题] [最小化] [最大化] [关闭]
+ *  [Logo] [左栏折叠] | SoC Verify | [右栏折叠] [设置] [最小化] [最大化] [关闭]
  *
  * 整个 TitleBar 可拖拽（-webkit-app-region: drag），
  * 按钮区域设置 no-drag 以保证可点击。
@@ -24,7 +23,6 @@ export function TitleBar() {
   const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
 
   const [isMaximized, setIsMaximized] = useState(false);
-  const [themeDropdownOpen, setThemeDropdownOpen] = useState(false);
 
   // ── 监听窗口最大化状态 ──────────────────────────────────────
   useEffect(() => {
@@ -106,15 +104,14 @@ export function TitleBar() {
 
         <div className="h-4 w-px bg-titlebar-border mr-1" />
 
-        {/* 主题切换 */}
-        <ThemeDropdown
-          open={themeDropdownOpen}
-          onOpenChange={setThemeDropdownOpen}
-          onSettingsClick={() => {
-            setThemeDropdownOpen(false);
-            setSettingsOpen(!settingsOpen);
-          }}
-        />
+        {/* 设置按钮 — 点击直接打开设置弹窗 */}
+        <TitleBarButton
+          onClick={() => setSettingsOpen(!settingsOpen)}
+          title="设置"
+          active={settingsOpen}
+        >
+          <Settings className="h-3.5 w-3.5" />
+        </TitleBarButton>
 
         <div className="h-4 w-px bg-titlebar-border mr-1" />
 
@@ -166,86 +163,4 @@ function TitleBarButton({ children, onClick, title, active, variant = 'default' 
   );
 }
 
-// ── 主题切换下拉菜单 ───────────────────────────────────────────
 
-interface ThemeDropdownProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSettingsClick: () => void;
-}
-
-function ThemeDropdown({ open, onOpenChange, onSettingsClick }: ThemeDropdownProps) {
-  const currentTheme = useThemeStore((s) => s.currentTheme);
-  const themes = useThemeStore((s) => s.themes);
-  const setTheme = useThemeStore((s) => s.setTheme);
-
-  return (
-    <div className="relative titlebar-no-drag">
-      <TitleBarButton
-        onClick={() => onOpenChange(!open)}
-        title="切换主题"
-        active={open}
-      >
-        <Settings className="h-3.5 w-3.5" />
-      </TitleBarButton>
-
-      {open && (
-        <>
-          {/* 点击外部关闭 */}
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => onOpenChange(false)}
-          />
-          <div className="absolute right-0 top-9 z-50 w-64 overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-xl ring-1 ring-black/5">
-            {/* 主题列表 */}
-            <div className="p-1.5">
-              <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                主题
-              </div>
-              {themes.map((theme) => (
-                <button
-                  key={theme.id}
-                  onClick={() => {
-                    setTheme(theme.id);
-                    onOpenChange(false);
-                  }}
-                  className={cn(
-                    'flex w-full items-center gap-3 rounded px-2 py-1.5 text-left text-xs transition-colors',
-                    'hover:bg-accent',
-                    currentTheme === theme.id && 'bg-accent/50',
-                  )}
-                >
-                  {/* 色板预览 */}
-                  <span
-                    className="h-5 w-5 shrink-0 rounded border border-border"
-                    style={{ backgroundColor: theme.swatch }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium text-foreground">{theme.name}</div>
-                    <div className="truncate text-[10px] text-muted-foreground">
-                      {theme.description}
-                    </div>
-                  </div>
-                  {currentTheme === theme.id && (
-                    <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
-                  )}
-                </button>
-              ))}
-            </div>
-
-            {/* 分隔线 + 设置入口 */}
-            <div className="border-t border-border p-1.5">
-              <button
-                onClick={onSettingsClick}
-                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent"
-              >
-                <Settings className="h-3.5 w-3.5 text-muted-foreground" />
-                <span>更多设置</span>
-              </button>
-            </div>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}

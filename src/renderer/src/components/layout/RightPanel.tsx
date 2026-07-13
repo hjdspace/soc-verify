@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Plus, Send, Square, MessageSquare, Trash2, ChevronDown, Loader2, Clock, Pencil, X, Check, Paperclip, Cpu, Compass } from 'lucide-react';
 import { useSessionStore, type ChatMessage, type AvailableModel } from '@renderer/stores/session';
+import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
 import { cn } from '@renderer/lib/utils';
@@ -35,12 +36,13 @@ export function RightPanel({ width }: RightPanelProps) {
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [steerText, setSteerText] = useState('');
   const [showSteerInput, setShowSteerInput] = useState(false);
 
   const steerSession = useSessionStore((s) => s.steerSession);
-  const getAvailableModels = useSessionStore((s) => s.getAvailableModels);
   const setModel = useSessionStore((s) => s.setModel);
+  const fetchModelsFromApi = useSettingsStore((s) => s.fetchModels);
 
   const currentSession = sessions.find((s) => s.id === currentSessionId);
   const restoreSessions = useSessionStore((s) => s.restoreSessions);
@@ -144,15 +146,24 @@ export function RightPanel({ width }: RightPanelProps) {
   };
 
   const handleLoadModels = useCallback(async () => {
-    if (!currentSessionId) return;
-    const models = await getAvailableModels(currentSessionId);
-    setAvailableModels(models);
-    setShowModelDropdown(true);
-  }, [currentSessionId, getAvailableModels]);
+    setModelsLoading(true);
+    try {
+      const models = await fetchModelsFromApi();
+      setAvailableModels(models.map((m) => ({
+        provider: m.provider,
+        id: m.id,
+        name: m.name,
+        description: m.description,
+      })));
+      setShowModelDropdown(true);
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [fetchModelsFromApi]);
 
-  const handleSetModel = async (provider: string, modelId: string) => {
+  const handleSetModel = async (provider: string, modelId: string, modelName?: string) => {
     if (!currentSessionId) return;
-    await setModel(currentSessionId, provider, modelId);
+    await setModel(currentSessionId, provider, modelId, modelName);
     setShowModelDropdown(false);
   };
 
@@ -427,11 +438,18 @@ export function RightPanel({ width }: RightPanelProps) {
               <div className="relative">
                 <button
                   onClick={handleLoadModels}
-                  disabled={!currentSessionId}
                   title="切换模型"
-                  className="flex items-center gap-0.5 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
+                  className="flex items-center gap-0.5 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 >
-                  <Cpu className="h-3 w-3" />
+                  {modelsLoading ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : currentSession?.model ? (
+                    <span className="max-w-[100px] truncate text-[10px] font-medium text-foreground/80">
+                      {currentSession.model.name}
+                    </span>
+                  ) : (
+                    <Cpu className="h-3 w-3" />
+                  )}
                 </button>
                 {showModelDropdown && availableModels.length > 0 && (
                   <>
@@ -440,8 +458,11 @@ export function RightPanel({ width }: RightPanelProps) {
                       {availableModels.map((m) => (
                         <button
                           key={`${m.provider}:${m.id}`}
-                          onClick={() => handleSetModel(m.provider, m.id)}
-                          className="flex w-full flex-col items-start gap-0.5 px-2 py-1.5 text-left text-xs hover:bg-accent"
+                          onClick={() => handleSetModel(m.provider, m.id, m.name)}
+                          className={cn(
+                            'flex w-full flex-col items-start gap-0.5 px-2 py-1.5 text-left text-xs hover:bg-accent',
+                            currentSession?.model?.id === m.id && currentSession?.model?.provider === m.provider && 'bg-accent/50',
+                          )}
                         >
                           <span className="font-medium text-foreground">{m.name}</span>
                           <span className="text-[9px] text-muted-foreground">{m.provider} · {m.id}</span>

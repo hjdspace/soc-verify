@@ -72,6 +72,7 @@ export class OmpRpcClient {
       spawnArgs = ['--mode', 'rpc', ...extraArgs];
       if (this.options.provider) spawnArgs.push('--provider', this.options.provider);
       if (this.options.model) spawnArgs.push('--model', this.options.model);
+      if (this.options.apiKey) spawnArgs.push('--api-key', this.options.apiKey);
       if (this.options.sessionDir) spawnArgs.push('--session-dir', this.options.sessionDir);
     } else {
       if (!this.options.bunPath || !this.options.ompEntryPath) {
@@ -81,6 +82,7 @@ export class OmpRpcClient {
       spawnArgs = [this.options.ompEntryPath, '--mode', 'rpc'];
       if (this.options.provider) spawnArgs.push('--provider', this.options.provider);
       if (this.options.model) spawnArgs.push('--model', this.options.model);
+      if (this.options.apiKey) spawnArgs.push('--api-key', this.options.apiKey);
       if (this.options.sessionDir) spawnArgs.push('--session-dir', this.options.sessionDir);
       spawnArgs.push(...extraArgs);
     }
@@ -116,9 +118,15 @@ export class OmpRpcClient {
     });
 
     child.stderr?.on('data', (chunk: Buffer) => {
-      this.stderrBuffer += chunk.toString();
+      const text = chunk.toString();
+      this.stderrBuffer += text;
       if (this.stderrBuffer.length > 10000) {
         this.stderrBuffer = this.stderrBuffer.slice(-10000);
+      }
+      // Log stderr in real-time for debugging
+      const trimmed = text.trim();
+      if (trimmed) {
+        console.error(`[omp:stderr] ${trimmed}`);
       }
     });
 
@@ -465,6 +473,12 @@ export class OmpRpcClient {
       }
       return;
     }
+
+    // Catch-all: forward unknown events as session events so the UI can
+    // display errors / notices from omp that would otherwise be silently dropped.
+    const dataType = (data as Record<string, unknown>)?.type;
+    console.log(`[omp:rpc] unhandled event type="${dataType}" — forwarding as session event`);
+    for (const listener of this.sessionEventListeners) listener(data);
   }
 
   private async handleHostToolCall(request: RpcHostToolCallRequest): Promise<void> {

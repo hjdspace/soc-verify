@@ -12,6 +12,7 @@ import { detectEdaTools, loadEnvConfig, saveEnvConfig, getKnownEnvVarNames } fro
 import { CoverageManager } from '../coverage/coverage-manager';
 import { RegressionManager } from '../regression/regression-manager';
 import { terminalManager } from '../terminal/terminal-manager';
+import { credentialManager } from '../credentials/credential-manager';
 import { addSession, removeSession, loadSessions, saveSessions, type PersistedSession } from '../omp/session-persistence';
 import { dialog, ipcMain, BrowserWindow } from 'electron';
 import type {
@@ -56,6 +57,19 @@ function getSimulationManager(projectId: string) {
   const registry = pluginLoader.getRegistry(project.rootPath);
   const adapter = new PluginBackedSimulation(registry);
   return simulationRegistry.getOrCreate(project.rootPath, projectId, adapter);
+}
+
+/**
+ * Ensure plugins are loaded for a project root path.
+ * When a project is restored from persisted state (not opened via project.open),
+ * loadPlugins() may never have been called. This lazy-loads plugins on demand.
+ */
+async function ensurePluginsLoaded(rootPath: string): Promise<void> {
+  const loadResults = pluginLoader.getLoadResults(rootPath);
+  if (loadResults.length === 0) {
+    console.log(`[router] lazy-loading plugins for ${rootPath}`);
+    await pluginLoader.loadPlugins(rootPath);
+  }
 }
 
 export const router = t.router({
@@ -202,11 +216,19 @@ export const router = t.router({
       })
       .query(async ({ input }) => {
         const project = requireProject(input.projectId);
+        await ensurePluginsLoaded(project.rootPath);
         const registry = pluginLoader.getRegistry(project.rootPath);
-        if (registry.subsysDiscoverers.length === 0) return [];
+        console.log(`[router:getSubsystems] project=${input.projectId}, subsysDiscoverers=${registry.subsysDiscoverers.length}`);
+        if (registry.subsysDiscoverers.length === 0) {
+          const loadResults = pluginLoader.getLoadResults(project.rootPath);
+          console.log(`[router:getSubsystems] loadResults count=${loadResults.length}`, loadResults.map(r => ({ id: r.manifest.id, kind: r.manifest.kind, error: r.error })));
+          return [];
+        }
 
         const discovery = new PluginBackedDiscovery(project.rootPath, registry);
-        return discovery.listSubsys(input.filter);
+        const result = await discovery.listSubsys(input.filter);
+        console.log(`[router:getSubsystems] discovered ${result.length} subsystems`);
+        return result;
       }),
 
     getCases: t.procedure
@@ -223,6 +245,7 @@ export const router = t.router({
       })
       .query(async ({ input }) => {
         const project = requireProject(input.projectId);
+        await ensurePluginsLoaded(project.rootPath);
         const registry = pluginLoader.getRegistry(project.rootPath);
         if (registry.caseParsers.length === 0) return [];
 
@@ -241,6 +264,7 @@ export const router = t.router({
       })
       .query(async ({ input }) => {
         const project = requireProject(input.projectId);
+        await ensurePluginsLoaded(project.rootPath);
         const loadResults = pluginLoader.getLoadResults(project.rootPath);
         const config = await projectManager.getPluginConfig(project.rootPath);
 
@@ -349,6 +373,7 @@ export const router = t.router({
       })
       .query(async ({ input }) => {
         const project = requireProject(input.projectId);
+        await ensurePluginsLoaded(project.rootPath);
         const registry = pluginLoader.getRegistry(project.rootPath);
         const discovery = new PluginBackedDiscovery(project.rootPath, registry);
 
@@ -382,6 +407,7 @@ export const router = t.router({
       })
       .query(async ({ input }) => {
         const project = requireProject(input.projectId);
+        await ensurePluginsLoaded(project.rootPath);
         const registry = pluginLoader.getRegistry(project.rootPath);
         if (registry.simOptionSchemaProviders.length === 0) {
           return { fields: [] };
@@ -456,19 +482,50 @@ export const router = t.router({
       })
       .mutation(async ({ input }) => {
         const project = requireProject(input.projectId);
+        await ensurePluginsLoaded(project.rootPath);
         const registry = pluginLoader.getRegistry(project.rootPath);
         const discovery = new PluginBackedDiscovery(project.rootPath, registry);
+        const subsysCount = registry.subsysDiscoverers.length;
+        console.log(`[router:session.create] project=${input.projectId}, subsysDiscoverers=${subsysCount}`);
+        if (subsysCount === 0) {
+          const loadResults = pluginLoader.getLoadResults(project.rootPath);
+          if (loadResults.length > 0) {
+            console.log(`[router:session.create] plugin load results:`, loadResults.map(r => ({ id: r.manifest.id, kind: r.manifest.kind, error: r.error })));
+          } else {
+            console.log(`[router:session.create] no plugins loaded for project`);
+          }
+        }
         const simulation = new PluginBackedSimulation(registry);
         const coverage = new PluginBackedCoverage(project.rootPath, registry);
+
+        // Load stored credentials and build env vars for omp process
+        const credEnv = await credentialManager.buildEnvForOmp();
+        const defaultCred = await credentialManager.getDefaultCredential();
+
+        // Determine provider and apiKey to pass to omp:
+        // 1. Use input.provider/model if explicitly provided (from UI)
+        // 2. Fall back to stored credentials' provider
+        // This ensures omp starts with the correct provider matching the API key,
+        // preventing 403 errors from provider/credential mismatch.
+        //
+        // NOTE: omp requires --api-key to be accompanied by --model.
+        // When no model is specified, we rely on env vars (set by buildEnvForOmp)
+        // to provide the API key, and only pass --provider to guide model selection.
+        const provider = input.provider ?? (defaultCred ? credentialManager.mapProviderForOmp(defaultCred.providerId) : undefined);
+        const apiKey = (input.model && defaultCred) ? defaultCred.apiKey : undefined;
+
+        console.log(`[router:session.create] provider=${provider ?? '(default)'}, model=${input.model ?? '(default)'}, hasApiKey=${!!apiKey}`);
 
         const sessionId = await sessionManager.createSession({
           projectId: input.projectId,
           cwd: input.cwd,
-          provider: input.provider,
+          provider,
           model: input.model,
+          apiKey,
           discovery,
           simulationAdapter: simulation,
           coverageAdapter: coverage,
+          env: credEnv,
         });
 
         // Persist session metadata
@@ -499,7 +556,9 @@ export const router = t.router({
       .mutation(async ({ input }) => {
         const client = requireSession(input.sessionId);
         sessionManager.touchActivity(input.sessionId);
+        console.log(`[router:session.send] sessionId=${input.sessionId}, message=${input.message.slice(0, 80)}${input.message.length > 80 ? '...' : ''}`);
         await client.prompt(input.message, input.images);
+        console.log(`[router:session.send] prompt acknowledged by omp`);
         return { ok: true };
       }),
 
@@ -654,6 +713,7 @@ export const router = t.router({
       })
       .mutation(async ({ input }) => {
         const project = requireProject(input.projectId);
+        await ensurePluginsLoaded(project.rootPath);
         const registry = pluginLoader.getRegistry(project.rootPath);
         const discovery = new PluginBackedDiscovery(project.rootPath, registry);
         const simulation = new PluginBackedSimulation(registry);
@@ -1354,9 +1414,7 @@ export const router = t.router({
   // ─── 凭据管理 ─────────────────────────────────────────────
   settings: t.router({
     getCredentials: t.procedure.query(() => {
-      // safeStorage would be used here in production
-      // For now, return empty list (credentials stored encrypted at rest)
-      return [] as CredentialEntry[];
+      return credentialManager.listMasked();
     }),
 
     setCredential: t.procedure
@@ -1369,16 +1427,7 @@ export const router = t.router({
         return { input: inp };
       })
       .mutation(async ({ input }) => {
-        // In production: use electron.safeStorage.encryptString()
-        // For now, just return a masked entry
-        const masked = input.input.apiKey.slice(0, 4) + '***';
-        return {
-          providerId: input.input.providerId,
-          label: input.input.label,
-          apiKeyMasked: masked,
-          endpoint: input.input.endpoint,
-          createdAt: Date.now(),
-        } as CredentialEntry;
+        return credentialManager.save(input.input);
       }),
 
     deleteCredential: t.procedure
@@ -1389,8 +1438,89 @@ export const router = t.router({
         }
         return { providerId: r.providerId };
       })
-      .mutation(async () => {
+      .mutation(async ({ input }) => {
+        await credentialManager.delete(input.providerId);
         return { ok: true };
+      }),
+
+    fetchModels: t.procedure
+      .input((raw): { providerId?: string; apiKey?: string; baseUrl?: string } => {
+        const r = raw as Record<string, unknown>;
+        return {
+          providerId: typeof r.providerId === 'string' ? r.providerId : undefined,
+          apiKey: typeof r.apiKey === 'string' ? r.apiKey : undefined,
+          baseUrl: typeof r.baseUrl === 'string' ? r.baseUrl : undefined,
+        };
+      })
+      .query(async ({ input }) => {
+        // Determine which credentials to use: explicit input or stored
+        let apiKey: string | undefined = input.apiKey;
+        let baseUrl: string | undefined = input.baseUrl;
+
+        if ((!apiKey || !baseUrl) && input.providerId) {
+          const stored = await credentialManager.get(input.providerId);
+          if (stored) {
+            if (!apiKey) apiKey = stored.apiKey;
+            if (!baseUrl) baseUrl = stored.baseUrl;
+          }
+        }
+
+        // If still no explicit providerId, try the first stored credential
+        if (!apiKey) {
+          const all = await credentialManager.listRaw();
+          if (all.length > 0) {
+            apiKey = all[0].apiKey;
+            baseUrl = baseUrl ?? all[0].baseUrl;
+          }
+        }
+
+        if (!apiKey) {
+          throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'No API key configured. Please set credentials in Settings.' });
+        }
+
+        // Build the models endpoint URL
+        const base = baseUrl?.replace(/\/$/, '') ?? 'https://api.openai.com';
+        const modelsUrl = base.endsWith('/v1') ? `${base}/models` : `${base}/v1/models`;
+
+        try {
+          const resp = await fetch(modelsUrl, {
+            headers: {
+              'Authorization': `Bearer ${apiKey}`,
+              'Content-Type': 'application/json',
+            },
+          });
+
+          if (!resp.ok) {
+            const text = await resp.text();
+            throw new TRPCError({ code: 'BAD_REQUEST', message: `API returned ${resp.status}: ${text.slice(0, 200)}` });
+          }
+
+          const data = await resp.json() as Record<string, unknown>;
+          const rawData = data.data;
+          const modelList: Array<{ id: string; owned_by?: string }> = [];
+
+          if (Array.isArray(rawData)) {
+            for (const item of rawData) {
+              if (typeof item === 'object' && item !== null && 'id' in item) {
+                const m = item as { id: string; owned_by?: string };
+                modelList.push({ id: m.id, owned_by: m.owned_by });
+              }
+            }
+          } else if (typeof rawData === 'object' && rawData !== null && 'id' in rawData) {
+            const m = rawData as { id: string; owned_by?: string };
+            modelList.push({ id: m.id, owned_by: m.owned_by });
+          }
+
+          return modelList.map((m) => ({
+            id: m.id,
+            name: m.id,
+            provider: input.providerId ?? 'openai',
+            description: m.owned_by,
+          }));
+        } catch (err) {
+          if (err instanceof TRPCError) throw err;
+          throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `Failed to fetch models: ${err instanceof Error ? err.message : String(err)}` });
+        }
       }),
 
     listSkills: t.procedure.query(() => {

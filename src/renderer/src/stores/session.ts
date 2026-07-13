@@ -25,6 +25,12 @@ export interface AvailableModel {
   description?: string;
 }
 
+export interface SessionModel {
+  provider: string;
+  id: string;
+  name: string;
+}
+
 export interface SessionEntry {
   id: string;
   projectId: string;
@@ -32,6 +38,7 @@ export interface SessionEntry {
   status: SessionStatus;
   messages: ChatMessage[];
   createdAt: number;
+  model?: SessionModel;
 }
 
 interface SessionStoreState {
@@ -53,11 +60,70 @@ interface SessionStoreState {
   refreshSessions: () => Promise<void>;
   restoreSessions: (projectId: string, cwd: string) => Promise<void>;
   getAvailableModels: (sessionId: string) => Promise<AvailableModel[]>;
-  setModel: (sessionId: string, provider: string, modelId: string) => Promise<void>;
+  setModel: (sessionId: string, provider: string, modelId: string, modelName?: string) => Promise<void>;
   steerSession: (message: string) => Promise<void>;
 }
 
 let eventListenerRegistered = false;
+
+/**
+ * Extract text from an omp message object.
+ *
+ * omp message events (message_start, message_update, message_end) carry a
+ * `message` field which is an AssistantMessage with a `content` array of
+ * content blocks. TextContent blocks have `{ type: "text", text: "..." }`.
+ * ThinkingContent blocks have `{ type: "thinking", thinking: "..." }`.
+ *
+ * This function concatenates all text and thinking blocks into a single string.
+ */
+function extractTextFromMessage(message: unknown): string {
+  if (typeof message !== 'object' || message === null) return '';
+  const msg = message as Record<string, unknown>;
+  const content = msg.content;
+  if (!Array.isArray(content)) return '';
+
+  const parts: string[] = [];
+  for (const block of content) {
+    if (typeof block !== 'object' || block === null) continue;
+    const b = block as Record<string, unknown>;
+    if (b.type === 'text' && typeof b.text === 'string') {
+      parts.push(b.text);
+    } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
+      // Optionally include thinking content — prefixed for clarity
+      parts.push(`[思考] ${b.thinking}`);
+    }
+  }
+  return parts.join('\n');
+}
+
+/**
+ * Check if a message object represents an error response.
+ * Returns the error message if found, null otherwise.
+ * Provides user-friendly messages for common API errors.
+ */
+function extractErrorFromMessage(message: Record<string, unknown>): string | null {
+  if (typeof message.errorMessage === 'string' && message.errorMessage) {
+    const errMsg = message.errorMessage;
+    // Parse common API errors and provide actionable guidance
+    if (errMsg.includes('403') || /forbidden/i.test(errMsg)) {
+      return `API 返回 403 Forbidden：${errMsg}\n\n可能原因：\n1. API Key 无权限访问该模型\n2. 当前模型不支持工具调用（Agent 功能需要支持 function calling 的模型，如 GPT-4o、Claude 3.5 Sonnet）\n3. API 端点（Base URL）不支持工具调用请求\n4. API 代理/网关限制了请求类型\n\n请检查设置中的凭据和模型配置。`;
+    }
+    if (errMsg.includes('401') || /unauthorized/i.test(errMsg)) {
+      return `API 认证失败（401）：请检查 API Key 是否正确\n\n错误详情：${errMsg}`;
+    }
+    if (errMsg.includes('429') || /rate.limit/i.test(errMsg)) {
+      return `API 请求频率超限（429）：请稍后重试\n\n错误详情：${errMsg}`;
+    }
+    if (/model.not.found|does.not.exist/i.test(errMsg)) {
+      return `模型不存在：请检查模型 ID 是否正确\n\n错误详情：${errMsg}`;
+    }
+    return errMsg;
+  }
+  if (message.stopReason === 'error') {
+    return 'LLM 返回错误（请检查 API Key、Base URL 和模型配置）';
+  }
+  return null;
+}
 
 function tRPCError(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -226,18 +292,53 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     const evt = event as Record<string, unknown>;
     const type = evt.type as string;
 
+    // Log event type for debugging (avoid dumping full event object — it can be very large)
+    console.log(`[session:event] sessionId=${sessionId}, type="${type}"`);
+
     set((s) => ({
       sessions: s.sessions.map((sess) => {
         if (sess.id !== sessionId) return sess;
 
         switch (type) {
-          case 'message_start':
-            return { ...sess, status: 'streaming' };
+          case 'message_start': {
+            // Extract initial text from message.content if available
+            const text = extractTextFromMessage(evt.message);
+            // Check if there's already a streaming assistant message
+            const hasStreaming = sess.messages.some((m) => m.role === 'assistant' && m.isStreaming);
+            if (hasStreaming) {
+              return {
+                ...sess,
+                status: 'streaming',
+                messages: sess.messages.map((m) =>
+                  m.role === 'assistant' && m.isStreaming && text
+                    ? { ...m, content: text }
+                    : m,
+                ),
+              };
+            }
+            // No streaming assistant message — create a new one
+            // (this happens when the agent sends multiple messages in one turn)
+            const newMsg: ChatMessage = {
+              id: `msg_${Date.now()}`,
+              role: 'assistant',
+              content: text,
+              timestamp: Date.now(),
+              isStreaming: true,
+            };
+            return {
+              ...sess,
+              status: 'streaming',
+              messages: [...sess.messages, newMsg],
+            };
+          }
 
           case 'message_update': {
-            const delta = evt.delta as string | undefined;
-            if (!delta) return sess;
-            // Find the last streaming assistant message (may not be the last message if tool messages were added)
+            // omp message_update events contain a full message snapshot, not a delta string.
+            // The message.content array has TextContent blocks with accumulated text.
+            // We replace (not append) the assistant message content with the latest snapshot.
+            const text = extractTextFromMessage(evt.message);
+            if (!text) return sess;
+            // Find the last streaming assistant message
             let lastAssistantIdx = -1;
             for (let i = sess.messages.length - 1; i >= 0; i--) {
               if (sess.messages[i].role === 'assistant' && sess.messages[i].isStreaming) {
@@ -250,22 +351,34 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
               ...sess,
               messages: sess.messages.map((m, i) =>
                 i === lastAssistantIdx
-                  ? { ...m, content: m.content + delta }
+                  ? { ...m, content: text }
                   : m,
               ),
             };
           }
 
-          case 'message_end':
+          case 'message_end': {
+            // Extract final text from message.content — this is the authoritative
+            // source for the assistant's response, especially when there are no
+            // message_update events (non-streaming or empty streaming responses).
+            const msg = evt.message as Record<string, unknown> | undefined;
+            const text = extractTextFromMessage(msg);
+            const errMsg = msg ? extractErrorFromMessage(msg) : null;
+            // Do NOT set status to 'idle' here — the agent may still be working
+            // (e.g. multiple messages, tool calls). Only 'agent_end' sets idle.
             return {
               ...sess,
-              status: 'idle',
-              messages: sess.messages.map((m) =>
-                m.role === 'assistant' && m.isStreaming
-                  ? { ...m, isStreaming: false }
-                  : m,
-              ),
+              status: 'streaming',
+              messages: sess.messages.map((m) => {
+                if (m.role !== 'assistant' || !m.isStreaming) return m;
+                return {
+                  ...m,
+                  isStreaming: false,
+                  content: errMsg ? `[错误] ${errMsg}` : (text || m.content),
+                };
+              }),
             };
+          }
 
           case 'tool_execution_start': {
             const toolMsg: ChatMessage = {
@@ -309,8 +422,50 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
               ),
             };
 
-          default:
+          case 'notice': {
+            // Show omp notices (errors, warnings) in the assistant message
+            const noticeText = (evt.message as string) || (evt.text as string) || JSON.stringify(evt);
+            return {
+              ...sess,
+              messages: sess.messages.map((m) =>
+                m.role === 'assistant' && m.isStreaming
+                  ? { ...m, content: m.content + `\n\n[${type}] ${noticeText}` }
+                  : m,
+              ),
+            };
+          }
+
+          case 'irc_message': {
+            const ircText = (evt.message as string) || (evt.text as string) || '';
+            if (!ircText) return sess;
+            return {
+              ...sess,
+              messages: sess.messages.map((m) =>
+                m.role === 'assistant' && m.isStreaming
+                  ? { ...m, content: m.content + ircText }
+                  : m,
+              ),
+            };
+          }
+
+          default: {
+            // For unknown event types, check if it looks like an error
+            const isErr = type === 'error' || type?.includes('error') || evt.error;
+            if (isErr) {
+              const errText = (evt.error as string) || (evt.message as string) || JSON.stringify(evt);
+              return {
+                ...sess,
+                status: 'error' as SessionStatus,
+                isSending: false,
+                messages: sess.messages.map((m) =>
+                  m.role === 'assistant' && m.isStreaming
+                    ? { ...m, content: `[错误] ${errText}`, isStreaming: false }
+                    : m,
+                ),
+              };
+            }
             return sess;
+          }
         }
       }),
     }));
@@ -385,9 +540,16 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     }
   },
 
-  setModel: async (sessionId, provider, modelId) => {
+  setModel: async (sessionId, provider, modelId, modelName) => {
     try {
       await trpc.session.setModel.mutate({ sessionId, provider, modelId });
+      set((s) => ({
+        sessions: s.sessions.map((sess) =>
+          sess.id === sessionId
+            ? { ...sess, model: { provider, id: modelId, name: modelName ?? modelId } }
+            : sess,
+        ),
+      }));
       useToastStore.getState().success('模型已切换');
     } catch (err) {
       useToastStore.getState().error('切换模型失败', tRPCError(err));

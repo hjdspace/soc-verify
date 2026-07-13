@@ -274,6 +274,8 @@ export interface OmpRpcClientOptions {
   provider?: string;
   /** LLM model ID */
   model?: string;
+  /** API key for the LLM provider (passed as --api-key to omp) */
+  apiKey?: string;
   /** 会话存储目录 */
   sessionDir?: string;
   /** 额外 CLI 参数 */

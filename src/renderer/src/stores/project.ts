@@ -194,15 +194,26 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       await get().refreshProjects();
       const projects = get().projects;
       if (projects.length > 0) {
-        // Restore the most recently opened project
+        // Restore the most recently opened project by re-opening it on the backend.
+        // This ensures plugins are loaded and file watchers are started.
         const latest = projects.sort((a, b) => b.lastOpenedAt - a.lastOpenedAt)[0];
-        set({ currentProjectId: latest.id });
-        // Load file tree and auto-create default AI session in parallel
-        await Promise.all([
-          get().loadFileTree(latest.id),
-          get().loadPlugins(latest.id),
-          autoCreateDefaultSession(latest.id, latest.rootPath),
-        ]);
+        try {
+          const result = await trpc.project.open.mutate({ rootPath: latest.rootPath, name: latest.name });
+          set((s) => ({
+            projects: [...s.projects.filter((p) => p.id !== result.project.id), result.project],
+            currentProjectId: result.project.id,
+            plugins: result.plugins as PluginConfigEntry[],
+            fileTree: null,
+          }));
+          // Load file tree and auto-create default AI session in parallel
+          await Promise.all([
+            get().loadFileTree(result.project.id),
+            autoCreateDefaultSession(result.project.id, result.project.rootPath),
+          ]);
+        } catch {
+          // Fallback: if re-open fails (e.g. directory deleted), just set the ID
+          set({ currentProjectId: latest.id });
+        }
       }
     } catch (err) {
       getToast().error('恢复项目状态失败', tRPCError(err));
