@@ -38,6 +38,8 @@ export interface CreateSessionOptions {
 
 export interface SessionEntry {
   id: string;
+  /** The omp engine's session ID — needed to resume conversations */
+  ompSessionId?: string;
   projectId: string;
   client: AgentClient;
   hostTools: HostToolsRegistry;
@@ -180,10 +182,14 @@ class SessionManagerImpl extends EventEmitter {
     }
     console.log(`[agent:session:${sessionId}] provider=${provider ?? '(default)'}, model=${model ?? '(default)'}`);
 
+    let ompSessionId: string | undefined;
+
     try {
       await client.start();
       console.log(`[agent:session:${sessionId}] agent process started successfully`);
-      await client.init(initConfig);
+      const initResult = await client.init(initConfig);
+      ompSessionId = initResult.sessionId;
+      console.log(`[agent:session:${sessionId}] omp sessionId=${ompSessionId}`);
     } catch (err) {
       client.stop();
       if (runtimeDir) {
@@ -195,6 +201,7 @@ class SessionManagerImpl extends EventEmitter {
 
     const entry: SessionEntry = {
       id: sessionId,
+      ompSessionId,
       projectId: options.projectId,
       client,
       hostTools,
@@ -219,6 +226,11 @@ class SessionManagerImpl extends EventEmitter {
 
   getSession(sessionId: string): SessionEntry | null {
     return this.sessions.get(sessionId) ?? null;
+  }
+
+  /** Get the omp engine's session ID for a given SoC Verify session. */
+  getOmpSessionId(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.ompSessionId;
   }
 
   getClient(sessionId: string): AgentClient | null {

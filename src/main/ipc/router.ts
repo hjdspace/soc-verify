@@ -14,7 +14,7 @@ import { CoverageManager } from '../coverage/coverage-manager';
 import { RegressionManager } from '../regression/regression-manager';
 import { terminalManager } from '../terminal/terminal-manager';
 import { credentialManager } from '../credentials/credential-manager';
-import { addSession, removeSession, loadSessions, saveSessions, updateSessionModel, type PersistedSession } from '../agent/session-persistence';
+import { addSession, removeSession, loadSessions, saveSessions, updateSessionModel, updateSessionActivity, type PersistedSession } from '../agent/session-persistence';
 import { discoverSkills, readSkillContent } from '../agent/skill-discovery';
 import { dialog, ipcMain, BrowserWindow } from 'electron';
 import type {
@@ -608,8 +608,10 @@ export const router = t.router({
         });
 
         // Persist session metadata
+        const ompSessionId = sessionManager.getOmpSessionId(sessionId);
         const persisted: PersistedSession = {
           sessionId,
+          ompSessionId,
           name: '新会话',
           projectId: input.projectId,
           createdAt: Date.now(),
@@ -637,6 +639,14 @@ export const router = t.router({
         const client = requireSession(input.sessionId);
         sessionManager.touchActivity(input.sessionId);
         console.log(`[router:session.send] sessionId=${input.sessionId}, message=${input.message.slice(0, 80)}${input.message.length > 80 ? '...' : ''}`);
+        // Update persisted lastActivityAt
+        const sendSessionEntry = sessionManager.getSession(input.sessionId);
+        if (sendSessionEntry) {
+          const sendProject = projectManager.getProject(sendSessionEntry.projectId);
+          if (sendProject) {
+            void updateSessionActivity(sendProject.rootPath, input.sessionId);
+          }
+        }
         await client.prompt(input.message, input.images);
         console.log(`[router:session.send] prompt acknowledged by agent`);
         return { ok: true };
@@ -811,7 +821,7 @@ export const router = t.router({
         const simulation = new PluginBackedSimulation(registry);
         const coverage = new PluginBackedCoverage(project.rootPath, registry);
 
-        // Load persisted session to restore model info
+        // Load persisted session to restore model info and omp sessionId
         const persistedSessions = await loadSessions(project.rootPath);
         const persisted = persistedSessions.find((s) => s.sessionId === input.sessionId);
 
@@ -832,9 +842,13 @@ export const router = t.router({
           discovery,
           simulationAdapter: simulation,
           coverageAdapter: coverage,
-          resumeSessionId: input.sessionId,
+          // Use the omp sessionId for resume — this is what the runner matches against
+          resumeSessionId: persisted?.ompSessionId ?? input.sessionId,
           env: credEnv,
         });
+
+        // Update lastActivityAt on the persisted session
+        await updateSessionActivity(project.rootPath, input.sessionId);
 
         return { sessionId, name: input.name ?? `Session ${input.sessionId.slice(-6)}`, model: persisted?.model };
       }),
@@ -855,6 +869,42 @@ export const router = t.router({
           sessions[idx] = { ...sessions[idx], name: input.name };
           await saveSessions(project.rootPath, sessions);
         }
+        return { ok: true };
+      }),
+
+    listHistory: t.procedure
+      .input((raw): { projectId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const persisted = await loadSessions(project.rootPath);
+        const activeSessionIds = new Set(sessionManager.listSessions().map((s) => s.id));
+        // Sort by lastActivityAt descending (newest first)
+        return persisted
+          .map((s) => ({ ...s, isActive: activeSessionIds.has(s.sessionId) }))
+          .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+      }),
+
+    deleteHistorySession: t.procedure
+      .input((raw): { projectId: string; sessionId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and sessionId are required' });
+        }
+        return { projectId: r.projectId, sessionId: r.sessionId };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        // If the session is currently active, destroy it first
+        if (sessionManager.getClient(input.sessionId)) {
+          await sessionManager.destroySession(input.sessionId);
+        }
+        await removeSession(project.rootPath, input.sessionId);
         return { ok: true };
       }),
 

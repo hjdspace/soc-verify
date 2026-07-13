@@ -7,6 +7,8 @@ const SESSIONS_FILE = 'sessions.json';
 
 export interface PersistedSession {
   sessionId: string;
+  /** The omp engine's session ID — used for resuming conversations via the runner */
+  ompSessionId?: string;
   name: string;
   projectId: string;
   createdAt: number;
@@ -82,6 +84,22 @@ export async function updateSessionModel(
   const idx = sessions.findIndex((s) => s.sessionId === sessionId);
   if (idx >= 0) {
     sessions[idx] = { ...sessions[idx], model };
+    await saveSessions(projectRoot, sessions);
+  }
+}
+
+/**
+ * Update the lastActivityAt timestamp on a persisted session.
+ * Called when the user sends a message so the history list stays sorted by recency.
+ */
+export async function updateSessionActivity(
+  projectRoot: string,
+  sessionId: string,
+): Promise<void> {
+  const sessions = await loadSessions(projectRoot);
+  const idx = sessions.findIndex((s) => s.sessionId === sessionId);
+  if (idx >= 0) {
+    sessions[idx] = { ...sessions[idx], lastActivityAt: Date.now() };
     await saveSessions(projectRoot, sessions);
   }
 }
