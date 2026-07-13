@@ -24,3 +24,5 @@
 - Retrying package-structure verification with the one-off `npmRebuild=false` flag; production configuration remains unchanged.
 - First override syntax (`-c.npmRebuild=false`) was parsed as a config filename and failed with ENOENT; switching to `--config.npmRebuild=false`.
 - Correct override skipped native rebuild and entered packaging, then Electron download failed certificate verification; retrying with Node's system CA as suggested by the tool.
+- System-CA packaging retry timed out after four minutes with no artifact; no builder process or partial `dist` output remains. Package layout could not be fully inspected in this environment.
+- Started the mandatory build, typecheck, test sequence.

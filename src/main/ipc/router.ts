@@ -1,6 +1,7 @@
 import { initTRPC, TRPCError } from '@trpc/server';
-import { join } from 'node:path';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { join, relative, basename } from 'node:path';
+import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { sessionManager } from '../agent/session-manager';
 import { resolveAgentRuntime, resolveBunPath, resolveRunnerPath } from '../agent/paths';
 import { projectManager } from '../project/project-manager';
@@ -13,7 +14,8 @@ import { CoverageManager } from '../coverage/coverage-manager';
 import { RegressionManager } from '../regression/regression-manager';
 import { terminalManager } from '../terminal/terminal-manager';
 import { credentialManager } from '../credentials/credential-manager';
-import { addSession, removeSession, loadSessions, saveSessions, type PersistedSession } from '../agent/session-persistence';
+import { addSession, removeSession, loadSessions, saveSessions, updateSessionModel, type PersistedSession } from '../agent/session-persistence';
+import { discoverSkills, readSkillContent } from '../agent/skill-discovery';
 import { dialog, ipcMain, BrowserWindow } from 'electron';
 import type {
   ProjectInfo,
@@ -475,6 +477,73 @@ export const router = t.router({
           return {};
         }
       }),
+
+    searchFiles: t.procedure
+      .input((raw): { projectId: string; query: string; limit?: number } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.query !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and query are required' });
+        }
+        return {
+          projectId: r.projectId,
+          query: r.query,
+          limit: typeof r.limit === 'number' ? r.limit : 50,
+        };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const rootPath = project.rootPath;
+        const query = input.query.toLowerCase();
+        const limit = input.limit ?? 50;
+        const results: Array<{ name: string; path: string; type: 'file' | 'directory' }> = [];
+
+        // Ignore patterns matching the file tree builder
+        const ignorePatterns = [
+          'node_modules', '.git', '.socverify', 'out', 'dist', 'build',
+          '__pycache__', '.next', 'coverage', 'work', 'sim_build',
+        ];
+        const ignoreExts = ['.pyc', '.log', '.tmp', '.o', '.a', '.so', '.dll', '.exe'];
+
+        function shouldIgnore(name: string): boolean {
+          if (ignorePatterns.includes(name)) return true;
+          if (ignoreExts.some((ext) => name.endsWith(ext))) return true;
+          return false;
+        }
+
+        async function walkDir(dirPath: string, depth: number): Promise<void> {
+          if (results.length >= limit) return;
+          if (depth > 5) return;
+
+          try {
+            const entries = await readdir(dirPath, { withFileTypes: true });
+            for (const entry of entries) {
+              if (results.length >= limit) return;
+              if (shouldIgnore(entry.name)) continue;
+
+              const fullPath = join(dirPath, entry.name);
+              const relPath = relative(rootPath, fullPath);
+              const matches = entry.name.toLowerCase().includes(query) || relPath.toLowerCase().includes(query);
+
+              if (matches) {
+                results.push({
+                  name: entry.name,
+                  path: fullPath,
+                  type: entry.isDirectory() ? 'directory' : 'file',
+                });
+              }
+
+              if (entry.isDirectory() && depth < 5) {
+                await walkDir(fullPath, depth + 1);
+              }
+            }
+          } catch {
+            // Permission errors — skip
+          }
+        }
+
+        await walkDir(rootPath, 0);
+        return results;
+      }),
   }),
 
   // ─── 会话管理 ─────────────────────────────────────────
@@ -541,10 +610,11 @@ export const router = t.router({
         // Persist session metadata
         const persisted: PersistedSession = {
           sessionId,
-          name: `Session ${Date.now().toString(36)}`,
+          name: '新会话',
           projectId: input.projectId,
           createdAt: Date.now(),
           lastActivityAt: Date.now(),
+          model: provider && input.model ? { provider, id: input.model, name: input.model } : undefined,
         };
         await addSession(project.rootPath, persisted);
 
@@ -637,15 +707,27 @@ export const router = t.router({
       }),
 
     setModel: t.procedure
-      .input((raw): { sessionId: string; provider: string; modelId: string } => {
+      .input((raw): { sessionId: string; provider: string; modelId: string; modelName?: string } => {
         const r = raw as Record<string, unknown>;
         if (typeof r.sessionId !== 'string' || typeof r.provider !== 'string' || typeof r.modelId !== 'string') {
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'sessionId, provider and modelId are required' });
         }
-        return { sessionId: r.sessionId, provider: r.provider, modelId: r.modelId };
+        return { sessionId: r.sessionId, provider: r.provider, modelId: r.modelId, modelName: typeof r.modelName === 'string' ? r.modelName : undefined };
       })
       .mutation(async ({ input }) => {
         await sessionManager.setModel(input.sessionId, input.provider, input.modelId);
+        // Persist model info so it survives app restarts
+        const sessionEntry = sessionManager.getSession(input.sessionId);
+        if (sessionEntry) {
+          const project = projectManager.getProject(sessionEntry.projectId);
+          if (project) {
+            await updateSessionModel(project.rootPath, input.sessionId, {
+              provider: input.provider,
+              id: input.modelId,
+              name: input.modelName ?? input.modelId,
+            });
+          }
+        }
         return { ok: true };
       }),
 
@@ -729,16 +811,32 @@ export const router = t.router({
         const simulation = new PluginBackedSimulation(registry);
         const coverage = new PluginBackedCoverage(project.rootPath, registry);
 
+        // Load persisted session to restore model info
+        const persistedSessions = await loadSessions(project.rootPath);
+        const persisted = persistedSessions.find((s) => s.sessionId === input.sessionId);
+
+        // Load stored credentials for env vars
+        const credEnv = await credentialManager.buildEnvForAgent();
+        const defaultCred = await credentialManager.getDefaultCredential();
+        const provider = persisted?.model?.provider ?? (defaultCred ? credentialManager.mapProviderForAgent(defaultCred.providerId) : undefined);
+        const apiKey = defaultCred?.apiKey;
+        const baseUrl = defaultCred?.baseUrl;
+
         const sessionId = await sessionManager.createSession({
           projectId: input.projectId,
           cwd: input.cwd,
+          provider,
+          model: persisted?.model?.id,
+          apiKey,
+          baseUrl,
           discovery,
           simulationAdapter: simulation,
           coverageAdapter: coverage,
           resumeSessionId: input.sessionId,
+          env: credEnv,
         });
 
-        return { sessionId, name: input.name ?? `Session ${input.sessionId.slice(-6)}` };
+        return { sessionId, name: input.name ?? `Session ${input.sessionId.slice(-6)}`, model: persisted?.model };
       }),
 
     rename: t.procedure
@@ -758,6 +856,31 @@ export const router = t.router({
           await saveSessions(project.rootPath, sessions);
         }
         return { ok: true };
+      }),
+
+    listSkills: t.procedure
+      .input((raw): { projectId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        return discoverSkills(project.rootPath);
+      }),
+
+    readSkill: t.procedure
+      .input((raw): { filePath: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.filePath !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'filePath is required' });
+        }
+        return { filePath: r.filePath };
+      })
+      .query(async ({ input }) => {
+        return readSkillContent(input.filePath);
       }),
   }),
 

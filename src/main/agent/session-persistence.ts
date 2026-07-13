@@ -11,6 +11,8 @@ export interface PersistedSession {
   projectId: string;
   createdAt: number;
   lastActivityAt: number;
+  /** Persisted model info so the model survives app restart */
+  model?: { provider: string; id: string; name: string };
 }
 
 /**
@@ -65,4 +67,21 @@ export async function removeSession(
   const sessions = await loadSessions(projectRoot);
   const filtered = sessions.filter((s) => s.sessionId !== sessionId);
   await saveSessions(projectRoot, filtered);
+}
+
+/**
+ * Update the model info on a persisted session.
+ * Called when the user switches model so the choice survives restarts.
+ */
+export async function updateSessionModel(
+  projectRoot: string,
+  sessionId: string,
+  model: { provider: string; id: string; name: string },
+): Promise<void> {
+  const sessions = await loadSessions(projectRoot);
+  const idx = sessions.findIndex((s) => s.sessionId === sessionId);
+  if (idx >= 0) {
+    sessions[idx] = { ...sessions[idx], model };
+    await saveSessions(projectRoot, sessions);
+  }
 }

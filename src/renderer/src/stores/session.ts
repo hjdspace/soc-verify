@@ -31,6 +31,19 @@ export interface SessionModel {
   name: string;
 }
 
+export interface SelectedSkill {
+  name: string;
+  description: string;
+  filePath: string;
+  source: 'project' | 'user';
+}
+
+export interface ContextFile {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+}
+
 export interface SessionEntry {
   id: string;
   projectId: string;
@@ -46,6 +59,8 @@ interface SessionStoreState {
   currentSessionId: string | null;
   inputMessage: string;
   isSending: boolean;
+  selectedSkills: SelectedSkill[];
+  contextFiles: ContextFile[];
 
   createSession: (projectId: string, cwd: string) => Promise<string | null>;
   destroySession: (sessionId: string, projectId?: string) => Promise<void>;
@@ -62,6 +77,12 @@ interface SessionStoreState {
   getAvailableModels: (sessionId: string) => Promise<AvailableModel[]>;
   setModel: (sessionId: string, provider: string, modelId: string, modelName?: string) => Promise<void>;
   steerSession: (message: string) => Promise<void>;
+  addSkill: (skill: SelectedSkill) => void;
+  removeSkill: (name: string) => void;
+  clearSkills: () => void;
+  addContextFile: (file: ContextFile) => void;
+  removeContextFile: (path: string) => void;
+  clearContextFiles: () => void;
 }
 
 let eventListenerRegistered = false;
@@ -125,6 +146,17 @@ function extractErrorFromMessage(message: Record<string, unknown>): string | nul
   return null;
 }
 
+/**
+ * Generate a meaningful session name from the user's first message.
+ * Takes the first non-empty line, truncated to 40 characters.
+ */
+function generateSessionName(message: string): string {
+  const firstLine = message.trim().split('\n')[0].trim();
+  if (!firstLine) return '新会话';
+  if (firstLine.length <= 40) return firstLine;
+  return firstLine.slice(0, 40) + '...';
+}
+
 function tRPCError(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === 'object' && err !== null && 'message' in err) {
@@ -138,6 +170,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   currentSessionId: null,
   inputMessage: '',
   isSending: false,
+  selectedSkills: [],
+  contextFiles: [],
 
   createSession: async (projectId, cwd) => {
     try {
@@ -145,7 +179,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       const session: SessionEntry = {
         id: result.sessionId,
         projectId,
-        name: (result as { name?: string }).name ?? `会话 ${get().sessions.length + 1}`,
+        name: (result as { name?: string }).name ?? '新会话',
         status: 'idle',
         messages: [],
         createdAt: Date.now(),
@@ -199,6 +233,32 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     const sessionId = get().currentSessionId;
     if (!sessionId || !message.trim()) return;
 
+    // Check if this is the first message (for auto-naming)
+    const sessionBeforeSend = get().sessions.find((s) => s.id === sessionId);
+    const isFirstMessage = sessionBeforeSend && sessionBeforeSend.messages.length === 0;
+
+    // Build the full message with skill and context prefixes
+    const skills = get().selectedSkills;
+    const contextFiles = get().contextFiles;
+    let fullMessage = message;
+
+    // Prepend skill invocations
+    if (skills.length > 0) {
+      const skillPrefix = skills.map((s) => `skill://${s.name}`).join('\n');
+      fullMessage = `${skillPrefix}\n\n${fullMessage}`;
+    }
+
+    // Prepend file context
+    if (contextFiles.length > 0) {
+      const contextPrefix = contextFiles.map((f) => {
+        if (f.type === 'directory') {
+          return `Context directory: ${f.path}`;
+        }
+          return `Context file: ${f.path}`;
+      }).join('\n');
+      fullMessage = `${contextPrefix}\n\n${fullMessage}`;
+    }
+
     const userMsg: ChatMessage = {
       id: `msg_${Date.now()}`,
       role: 'user',
@@ -218,6 +278,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     set((s) => ({
       inputMessage: '',
       isSending: true,
+      selectedSkills: [],
+      contextFiles: [],
       sessions: s.sessions.map((sess) =>
         sess.id === sessionId
           ? { ...sess, status: 'streaming', messages: [...sess.messages, userMsg, assistantMsg] }
@@ -226,7 +288,13 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     }));
 
     try {
-      await trpc.session.send.mutate({ sessionId, message, images });
+      await trpc.session.send.mutate({ sessionId, message: fullMessage, images });
+
+      // Auto-rename session based on the first user message
+      if (isFirstMessage && sessionBeforeSend) {
+        const autoName = generateSessionName(message);
+        void get().renameSession(sessionId, sessionBeforeSend.projectId, autoName);
+      }
     } catch (err) {
       const errMsg = tRPCError(err);
       set((s) => ({
@@ -490,7 +558,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         sessions: sessions.map((s) => ({
           id: s.id,
           projectId: s.projectId,
-          name: `会话 ${s.id.slice(-6)}`,
+          name: '新会话',
           status: 'idle' as SessionStatus,
           messages: [],
           createdAt: s.createdAt,
@@ -521,6 +589,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             status: 'idle',
             messages: [],
             createdAt: p.createdAt,
+            model: result.model ?? p.model,
           };
           set((s) => ({
             sessions: [...s.sessions, session],
@@ -547,7 +616,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
 
   setModel: async (sessionId, provider, modelId, modelName) => {
     try {
-      await trpc.session.setModel.mutate({ sessionId, provider, modelId });
+      await trpc.session.setModel.mutate({ sessionId, provider, modelId, modelName });
       set((s) => ({
         sessions: s.sessions.map((sess) =>
           sess.id === sessionId
@@ -560,6 +629,28 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       useToastStore.getState().error('切换模型失败', tRPCError(err));
     }
   },
+
+  addSkill: (skill) => set((s) => {
+    if (s.selectedSkills.some((sk) => sk.name === skill.name)) return s;
+    return { selectedSkills: [...s.selectedSkills, skill] };
+  }),
+
+  removeSkill: (name) => set((s) => ({
+    selectedSkills: s.selectedSkills.filter((sk) => sk.name !== name),
+  })),
+
+  clearSkills: () => set({ selectedSkills: [] }),
+
+  addContextFile: (file) => set((s) => {
+    if (s.contextFiles.some((f) => f.path === file.path)) return s;
+    return { contextFiles: [...s.contextFiles, file] };
+  }),
+
+  removeContextFile: (path) => set((s) => ({
+    contextFiles: s.contextFiles.filter((f) => f.path !== path),
+  })),
+
+  clearContextFiles: () => set({ contextFiles: [] }),
 
   steerSession: async (message) => {
     const sessionId = get().currentSessionId;
