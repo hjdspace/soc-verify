@@ -73,9 +73,17 @@ describe('PluginLoader', () => {
   });
 
   describe('loadPlugins', () => {
-    it('returns empty array when no plugins configured', async () => {
+    it('loads bundled plugins when no project plugins are configured', async () => {
       const results = await pluginLoader.loadPlugins(tempDir);
-      expect(results).toEqual([]);
+
+      expect(results.some((result) => result.manifest.id === 'unisoc-subsys-discoverer')).toBe(true);
+      expect(
+        pluginLoader
+          .getRegistry(tempDir)
+          .subsysDiscoverers.some(
+            (plugin) => plugin.manifest.id === 'unisoc-subsys-discoverer',
+          ),
+      ).toBe(true);
     });
 
     it('returns error result for non-existent plugin path', async () => {
@@ -100,9 +108,9 @@ describe('PluginLoader', () => {
       );
 
       const results = await pluginLoader.loadPlugins(tempDir);
-      expect(results).toHaveLength(1);
-      expect(results[0].error).toBeDefined();
-      expect(results[0].error).toContain('not found');
+      const missingPlugin = results.find((result) => result.manifest.id === 'missing-plugin');
+      expect(missingPlugin?.error).toBeDefined();
+      expect(missingPlugin?.error).toContain('not found');
     });
 
     it('loads a valid subsys-discoverer plugin', async () => {
@@ -148,13 +156,17 @@ describe('PluginLoader', () => {
       );
 
       const results = await pluginLoader.loadPlugins(tempDir);
-      expect(results).toHaveLength(1);
-      expect(results[0].error).toBeUndefined();
-      expect(results[0].manifest.kind).toBe('subsys-discoverer');
+      const mockPlugin = results.find((result) => result.manifest.id === 'mock-discoverer');
+      expect(mockPlugin?.error).toBeUndefined();
+      expect(mockPlugin?.manifest.kind).toBe('subsys-discoverer');
 
       // Verify it's in the registry
       const registry = pluginLoader.getRegistry(tempDir);
-      expect(registry.subsysDiscoverers).toHaveLength(1);
+      expect(
+        registry.subsysDiscoverers.some(
+          (plugin) => plugin.manifest.id === 'mock-discoverer',
+        ),
+      ).toBe(true);
     });
 
     it('skips disabled plugins', async () => {
@@ -179,7 +191,7 @@ describe('PluginLoader', () => {
       );
 
       const results = await pluginLoader.loadPlugins(tempDir);
-      expect(results).toHaveLength(0);
+      expect(results.some((result) => result.manifest.id === 'disabled-plugin')).toBe(false);
     });
   });
 

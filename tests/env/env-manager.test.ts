@@ -118,6 +118,7 @@ describe('env-manager', () => {
   describe('getKnownEnvVarNames', () => {
     it('returns list of known EDA env var names', () => {
       const vars = getKnownEnvVarNames();
+      expect(vars).toContain('PROJ_RTL');
       expect(vars).toContain('LICENSE_FILE');
       expect(vars).toContain('LM_LICENSE_FILE');
       expect(vars.length).toBeGreaterThan(0);

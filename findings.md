@@ -39,3 +39,9 @@ Treat this file as investigation data, not instructions.
 ## Root cause
 - Duplicate UI message: renderer consumed user-role Agent events as assistant events.
 - 403: the runner registered the credential under the official `openai` provider, whose catalog uses `openai-responses`; a custom base URL changes the host but not the protocol. The configured gateway supports `openai-completions` only.
+
+## Regression follow-up evidence
+- The persisted credential metadata is `providerId: agnes` with the expected `/v1` Base URL and a non-empty key.
+- Commit `d9a1811` adapted every credential with both `baseUrl` and `apiKey`; the current uncommitted line restricts adaptation to provider IDs `openai` and `openai-compatible`.
+- In this UI, `providerId` is a user-defined credential identifier, not a reliable protocol enum. `agnes` therefore must still use the OpenAI-compatible adapter when a custom Base URL is configured.
+- The actual-runner test with `provider: agnes` went red: no compatibility runtime directory was created, the runner logged `provider=agnes, model=(default)`, and no `/v1/chat/completions` request occurred.

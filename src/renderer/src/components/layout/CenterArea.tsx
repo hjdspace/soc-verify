@@ -9,7 +9,7 @@ import { CoveragePanel } from '@renderer/components/coverage/CoveragePanel';
 import { RegressionPanel } from '@renderer/components/regression/RegressionPanel';
 import { DashboardPanel } from '@renderer/components/dashboard/DashboardPanel';
 import { TOChecklistPanel } from '@renderer/components/to/TOChecklistPanel';
-import { trpc } from '@renderer/lib/trpc';
+import { FileEditor } from '@renderer/components/editor/FileEditor';
 import { cn } from '@renderer/lib/utils';
 import type { SimulationHistoryEntry, CompileError } from '@shared/types';
 
@@ -28,8 +28,6 @@ export function CenterArea() {
   const setActiveCenterTab = useUiStore((s) => s.setActiveCenterTab);
 
   const [tabs, setTabs] = useState<CenterTab[]>([]);
-  const [fileContent, setFileContent] = useState<string>('');
-  const [loadingContent, setLoadingContent] = useState(false);
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const activeRuns = useSimulationStore((s) => s.activeRuns);
@@ -134,27 +132,6 @@ export function CenterArea() {
       setCenterView('terminal');
     }
   }, [activeTerminalTabId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Load file content when selectedFile changes
-  useEffect(() => {
-    if (!selectedFile || !currentProjectId) return;
-    let cancelled = false;
-    setLoadingContent(true);
-    trpc.project.readFile
-      .query({ projectId: currentProjectId, filePath: selectedFile.path })
-      .then((content) => {
-        if (!cancelled) setFileContent(content);
-      })
-      .catch((err) => {
-        if (!cancelled) setFileContent(`Error loading file: ${err instanceof Error ? err.message : String(err)}`);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingContent(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedFile, currentProjectId]);
 
   // Load history when project changes
   useEffect(() => {
@@ -297,23 +274,13 @@ export function CenterArea() {
 
       {/* ── Content area ─────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden">
-        {centerView === 'file' && selectedFile ? (
-          <div className="flex flex-1 flex-col overflow-hidden">
-            <div className="flex items-center justify-between border-b bg-secondary/20 px-3 py-1">
-              <span className="text-xs text-muted-foreground">{selectedFile.path}</span>
-            </div>
-            <div className="flex-1 overflow-auto">
-              {loadingContent ? (
-                <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-                  加载中...
-                </div>
-              ) : (
-                <pre className="px-3 py-2 text-xs leading-relaxed">
-                  <code>{fileContent}</code>
-                </pre>
-              )}
-            </div>
-          </div>
+        {centerView === 'file' && selectedFile && currentProjectId ? (
+          <FileEditor
+            key={selectedFile.path}
+            projectId={currentProjectId}
+            filePath={selectedFile.path}
+            fileName={selectedFile.name}
+          />
         ) : centerView === 'terminal' && activeCenterTab?.startsWith('term:') ? (
           (() => {
             const termTabId = activeCenterTab.slice(5);

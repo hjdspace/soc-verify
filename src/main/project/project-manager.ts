@@ -366,7 +366,7 @@ class ProjectManagerImpl extends EventEmitter {
     await writeFile(this.projectsDbPath, JSON.stringify(projects, null, 2), 'utf-8');
   }
 
-  // ─── 文件读取 ─────────────────────────────────────────
+  // ─── 文件读写 ─────────────────────────────────────────
 
   async readFile(projectId: string, filePath: string): Promise<string> {
     const project = this.getProject(projectId);
@@ -377,6 +377,17 @@ class ProjectManagerImpl extends EventEmitter {
     if (rel.startsWith('..')) throw new Error('File path is outside project root');
 
     return readFile(filePath, 'utf-8');
+  }
+
+  async writeFile(projectId: string, filePath: string, content: string): Promise<void> {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+
+    // Ensure file is within project root
+    const rel = relative(project.rootPath, filePath);
+    if (rel.startsWith('..')) throw new Error('File path is outside project root');
+
+    await writeFile(filePath, content, 'utf-8');
   }
 
   // ─── 新建项目 ─────────────────────────────────────────

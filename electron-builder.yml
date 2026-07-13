@@ -7,6 +7,9 @@ files:
   - out/**/*
   - package.json
 extraResources:
+  - from: plugins
+    to: plugins
+    filter: ["**/*"]
   - from: resources/binaries
     to: binaries
     filter: ["**/*", "!README.md"]

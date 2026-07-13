@@ -172,11 +172,20 @@ export class AgentClient {
   }
 
   async prompt(message: string, images?: string[]): Promise<void> {
-    await this.send({ type: 'prompt', message, images });
+    // Fire-and-forget: the response frame for `prompt` only arrives when the
+    // agent finishes processing (which can take many minutes, especially with
+    // subagents).  Real-time updates are delivered via event frames and the
+    // `agent_end` event signals completion — we must NOT block on the response
+    // frame with a short timeout, otherwise a false "Timeout waiting for
+    // response to prompt" error is thrown while the LLM is still working.
+    this.sendFireAndForget({ type: 'prompt', message, images });
   }
 
   async steer(message: string): Promise<void> {
-    await this.send({ type: 'steer', message });
+    // Same rationale as prompt(): steer may also take a long time when the
+    // agent is actively processing.  Use fire-and-forget to avoid spurious
+    // timeout errors.
+    this.sendFireAndForget({ type: 'steer', message });
   }
 
   async abort(): Promise<void> {
@@ -206,6 +215,24 @@ export class AgentClient {
   }
 
   // ─── 内部方法 ─────────────────────────────────────────
+
+  /**
+   * Send a command without waiting for its response frame.
+   *
+   * Used for long-running commands (`prompt`, `steer`) whose response frame
+   * only arrives after the agent finishes processing — which can take many
+   * minutes.  Real-time updates are delivered via event frames, so the caller
+   * does not need to await the response.
+   *
+   * When the response frame eventually arrives, `handleLine` will not find a
+   * matching pending request and will silently ignore it.
+   */
+  private sendFireAndForget<T extends Omit<Command, 'id'>>(command: T): void {
+    if (!this.process?.stdin) throw new Error('Client not started');
+    const id = `req_${++this.requestId}`;
+    const fullCommand = { ...command, id } as Command;
+    this.writeFrame(fullCommand);
+  }
 
   private send<T extends Omit<Command, 'id'>>(command: T, timeoutMs = 120000): Promise<ResponseFrame> {
     if (!this.process?.stdin) throw new Error('Client not started');

@@ -69,14 +69,17 @@ function classifyPlugin(plugin: unknown, manifest: PluginManifest): AnyPlugin | 
 /** Resolve the app's built-in plugins directory (plugins/ at app root). */
 function getBuiltinPluginsDir(): string | null {
   const __dirname = dirname(fileURLToPath(import.meta.url));
-  // Dev: src/main/plugins/loader.ts → ../../plugins
-  const devPath = resolve(__dirname, '../../', 'plugins');
-  if (existsSync(devPath)) return devPath;
-  // Packaged: resourcesPath/plugins
   const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  if (resourcesPath) {
-    const packagedPath = join(resourcesPath, 'plugins');
-    if (existsSync(packagedPath)) return packagedPath;
+  const candidates = [
+    resourcesPath ? join(resourcesPath, 'plugins') : null,
+    // Source: src/main/plugins/loader.ts -> repository plugins/
+    resolve(__dirname, '../../../plugins'),
+    // electron-vite output: out/main/index.cjs -> repository plugins/
+    resolve(__dirname, '../../plugins'),
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate && existsSync(candidate)) return candidate;
   }
   return null;
 }

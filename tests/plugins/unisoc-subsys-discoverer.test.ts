@@ -120,6 +120,27 @@ describe('unisoc-subsys-discoverer', () => {
     expect(result[1].kind).toBe('top');
   });
 
+  it('should discover subsystems from the project environment config', async () => {
+    delete process.env.PROJ_RTL;
+    mkdirSync(join(projRtlDir, 'display_sub_sys'));
+
+    const socverifyDir = join(tempDir, '.socverify');
+    mkdirSync(socverifyDir, { recursive: true });
+    writeFileSync(
+      join(socverifyDir, 'env.json'),
+      JSON.stringify({
+        tools: [],
+        envVars: { PROJ_RTL: projRtlDir },
+      }),
+    );
+
+    const result = await plugin.discover(tempDir);
+
+    expect(result.map((subsys: { name: string }) => subsys.name)).toEqual([
+      'display_sub_sys',
+    ]);
+  });
+
   it('should return empty array when no $PROJ_RTL and no manual config', async () => {
     delete process.env.PROJ_RTL;
 

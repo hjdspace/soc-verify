@@ -79,7 +79,7 @@ describe('OpenAI-compatible Agent session', () => {
     sessionId = await sessionManager.createSession({
       projectId: 'project_test',
       cwd: process.cwd(),
-      provider: 'openai',
+      provider: 'agnes',
       apiKey: 'test-key',
       baseUrl: `http://127.0.0.1:${address.port}/v1`,
       enableMCP: false,
@@ -88,7 +88,15 @@ describe('OpenAI-compatible Agent session', () => {
 
     const client = sessionManager.getClient(sessionId);
     if (!client) throw new Error('Agent client was not created');
+
+    // prompt() is fire-and-forget — it returns immediately while the agent
+    // processes the message asynchronously.  Poll until the agent makes the
+    // expected HTTP request.
     await client.prompt('What model are you?');
+    const deadline = Date.now() + 20_000;
+    while (!requestPaths.includes('/v1/chat/completions') && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
 
     expect(requestPaths).toContain('/v1/chat/completions');
     expect(requestPaths).not.toContain('/v1/responses');

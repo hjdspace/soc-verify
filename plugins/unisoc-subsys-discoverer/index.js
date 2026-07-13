@@ -24,6 +24,7 @@ const MANIFEST = {
 };
 
 const MANUAL_CONFIG_FILE = 'subsys-config.json';
+const ENV_CONFIG_FILE = 'env.json';
 const SOCVERIFY_DIR = '.socverify';
 
 /**
@@ -130,8 +131,20 @@ const plugin = {
    * @returns {Promise<Array<{id: string, name: string, path: string, kind: 'subsys'|'top'}>>}
    */
   async discover(projectRoot) {
-    // 优先使用 $PROJ_RTL 环境变量
-    const projRtl = process.env.PROJ_RTL;
+    // 启动进程环境优先，其次使用项目环境配置。
+    let projRtl = process.env.PROJ_RTL;
+    if (!projRtl) {
+      const envConfigPath = join(projectRoot, SOCVERIFY_DIR, ENV_CONFIG_FILE);
+      try {
+        const envConfig = JSON.parse(readFileSync(envConfigPath, 'utf-8'));
+        const configuredProjRtl = envConfig?.envVars?.PROJ_RTL;
+        if (typeof configuredProjRtl === 'string' && configuredProjRtl.trim()) {
+          projRtl = configuredProjRtl;
+        }
+      } catch {
+        // Missing or invalid project environment config falls through to manual config.
+      }
+    }
 
     if (projRtl) {
       const results = discoverFromProjRtl(projRtl);

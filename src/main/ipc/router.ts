@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { sessionManager } from '../agent/session-manager';
 import { resolveAgentRuntime, resolveBunPath, resolveRunnerPath } from '../agent/paths';
-import { fetchOpenAICompatibleModels } from '../agent/openai-compatible';
 import { projectManager } from '../project/project-manager';
 import { pluginLoader } from '../plugins/loader';
 import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../host/plugin-discovery';
@@ -202,6 +201,19 @@ export const router = t.router({
       })
       .query(async ({ input }) => {
         return projectManager.readFile(input.projectId, input.filePath);
+      }),
+
+    writeFile: t.procedure
+      .input((raw): { projectId: string; filePath: string; content: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.filePath !== 'string' || typeof r.content !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, filePath and content are required' });
+        }
+        return { projectId: r.projectId, filePath: r.filePath, content: r.content };
+      })
+      .mutation(async ({ input }) => {
+        await projectManager.writeFile(input.projectId, input.filePath, input.content);
+        return { ok: true };
       }),
 
     getSubsystems: t.procedure
@@ -1477,16 +1489,45 @@ export const router = t.router({
         }
 
         try {
-          const models = await fetchOpenAICompatibleModels({
-            baseUrl: baseUrl ?? 'https://api.openai.com',
-            apiKey,
+          // Build the models endpoint URL
+          const base = baseUrl?.replace(/\/$/, '') ?? 'https://api.openai.com';
+          const modelsUrl = base.endsWith('/v1') ? `${base}/models` : `${base}/v1/models`;
+          const resp = await fetch(modelsUrl, {
+            headers: {
+              'Authorization': `Bearer ${apiKey}`,
+              'Content-Type': 'application/json',
+            },
           });
-          return models.map((m) => ({
+
+          if (!resp.ok) {
+            const text = await resp.text();
+            throw new TRPCError({ code: 'BAD_REQUEST', message: `API returned ${resp.status}: ${text.slice(0, 200)}` });
+          }
+
+          const data = await resp.json() as Record<string, unknown>;
+          const rawData = data.data;
+          const modelList: Array<{ id: string; owned_by?: string }> = [];
+
+          if (Array.isArray(rawData)) {
+            for (const item of rawData) {
+              if (typeof item === 'object' && item !== null && 'id' in item) {
+                const m = item as { id: string; owned_by?: string };
+                modelList.push({ id: m.id, owned_by: m.owned_by });
+              }
+            }
+          } else if (typeof rawData === 'object' && rawData !== null && 'id' in rawData) {
+            const m = rawData as { id: string; owned_by?: string };
+            modelList.push({ id: m.id, owned_by: m.owned_by });
+          }
+
+          return modelList.map((m) => ({
             id: m.id,
-            name: m.name,
+            name: m.id,
             provider: input.providerId ?? 'openai',
+            description: m.owned_by,
           }));
         } catch (err) {
+          if (err instanceof TRPCError) throw err;
           throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `Failed to fetch models: ${err instanceof Error ? err.message : String(err)}` });
         }
       }),

@@ -23,6 +23,7 @@ const EDA_TOOLS: Array<{ command: string; name: string; versionArgs: string[] }>
 
 /** Default env vars that EDA tools commonly need */
 const KNOWN_ENV_VARS = [
+  'PROJ_RTL',
   'LICENSE_FILE',
   'LM_LICENSE_FILE',
   'SNPSLMD_LICENSE_FILE',

@@ -1,9 +1,10 @@
 import { useEffect, useState, useRef } from 'react';
-import { ChevronRight, ChevronDown, Cpu, CircleDot, Play, X } from 'lucide-react';
+import { ChevronRight, ChevronDown, Cpu, CircleDot, Play, X, RefreshCw, Settings } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
+import { useEnvStore } from '@renderer/stores/env';
 
 interface SubsysData {
   name: string;
@@ -51,10 +52,18 @@ export function SubsysList() {
   const setSelectedSubsys = useProjectStore((s) => s.setSelectedSubsys);
   const caseStatusFilter = useProjectStore((s) => s.caseStatusFilter);
   const setCaseStatusFilter = useProjectStore((s) => s.setCaseStatusFilter);
+  const plugins = useProjectStore((s) => s.plugins);
   const runSimulation = useSimulationStore((s) => s.runSimulation);
   const simOptions = useSimulationStore((s) => s.simOptions);
+  const configuredProjRtl = useEnvStore((s) => s.config?.envVars.PROJ_RTL);
+  const loadEnvConfig = useEnvStore((s) => s.loadConfig);
+  const setWizardOpen = useEnvStore((s) => s.setWizardOpen);
+  const setWizardStep = useEnvStore((s) => s.setWizardStep);
 
   const [subsystems, setSubsystems] = useState<SubsysData[]>([]);
+  const [loadingSubsystems, setLoadingSubsystems] = useState(false);
+  const [subsystemError, setSubsystemError] = useState<string | null>(null);
+  const [scanVersion, setScanVersion] = useState(0);
   const [expandedSubsys, setExpandedSubsys] = useState<string | null>(null);
   const [cases, setCases] = useState<CaseData[]>([]);
   const [loadingCases, setLoadingCases] = useState(false);
@@ -72,21 +81,31 @@ export function SubsysList() {
   useEffect(() => {
     if (!currentProjectId) {
       setSubsystems([]);
+      setLoadingSubsystems(false);
+      setSubsystemError(null);
       return;
     }
     let cancelled = false;
+    setLoadingSubsystems(true);
+    setSubsystemError(null);
     trpc.project.getSubsystems
       .query({ projectId: currentProjectId })
       .then((data) => {
         if (!cancelled) setSubsystems(data as SubsysData[]);
       })
-      .catch(() => {
-        if (!cancelled) setSubsystems([]);
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setSubsystems([]);
+          setSubsystemError(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSubsystems(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [currentProjectId]);
+  }, [currentProjectId, configuredProjRtl, scanVersion]);
 
   // Load cases when subsys is expanded
   useEffect(() => {
@@ -160,6 +179,17 @@ export function SubsysList() {
     });
   };
 
+  const subsystemPlugins = plugins.filter((plugin) => plugin.kind === 'subsys-discoverer');
+  const pluginError = subsystemPlugins.find((plugin) => plugin.error)?.error;
+  const hasDiscoverer = subsystemPlugins.some((plugin) => plugin.enabled && !plugin.error);
+
+  const handleConfigureProjRtl = async () => {
+    if (!currentProjectId) return;
+    await loadEnvConfig(currentProjectId);
+    setWizardOpen(true);
+    setWizardStep('envvars');
+  };
+
   if (!currentProjectId) {
     return (
       <div className="px-2 py-1 text-xs text-muted-foreground">
@@ -168,10 +198,71 @@ export function SubsysList() {
     );
   }
 
+  if (loadingSubsystems) {
+    return (
+      <div className="flex items-center gap-1.5 px-2 py-2 text-xs text-muted-foreground">
+        <RefreshCw className="h-3 w-3 animate-spin" />
+        正在扫描子系统...
+      </div>
+    );
+  }
+
+  if (subsystemError) {
+    return (
+      <div className="px-2 py-2 text-xs">
+        <div className="font-medium text-destructive">子系统查询失败</div>
+        <div className="mt-0.5 break-words text-[10px] text-muted-foreground">{subsystemError}</div>
+        <button
+          onClick={() => setScanVersion((version) => version + 1)}
+          className="mt-2 flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-primary transition-colors hover:bg-accent"
+        >
+          <RefreshCw className="h-3 w-3" />
+          重新扫描
+        </button>
+      </div>
+    );
+  }
+
+  if (subsystems.length === 0 && pluginError) {
+    return (
+      <div className="px-2 py-2 text-xs">
+        <div className="font-medium text-destructive">子系统插件加载失败</div>
+        <div className="mt-0.5 break-words text-[10px] text-muted-foreground">{pluginError}</div>
+      </div>
+    );
+  }
+
+  if (subsystems.length === 0 && !hasDiscoverer) {
+    return (
+      <div className="px-2 py-2 text-xs text-muted-foreground">
+        未加载子系统发现插件
+      </div>
+    );
+  }
+
   if (subsystems.length === 0) {
     return (
-      <div className="px-2 py-1 text-xs text-muted-foreground">
-        未发现子系统（需 subsys-discoverer 插件）
+      <div className="px-2 py-2 text-xs">
+        <div className="font-medium text-foreground">未发现子系统</div>
+        <div className="mt-0.5 text-[10px] leading-4 text-muted-foreground">
+          检查 PROJ_RTL 后重新扫描
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1">
+          <button
+            onClick={() => setScanVersion((version) => version + 1)}
+            className="flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-primary transition-colors hover:bg-accent"
+          >
+            <RefreshCw className="h-3 w-3" />
+            重新扫描
+          </button>
+          <button
+            onClick={handleConfigureProjRtl}
+            className="flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <Settings className="h-3 w-3" />
+            配置 PROJ_RTL
+          </button>
+        </div>
       </div>
     );
   }
