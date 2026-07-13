@@ -8,7 +8,7 @@ interface SelectedFile {
 export type CenterViewType =
   | 'terminal' | 'file' | 'ai-artifacts' | 'sim-errors' | 'sim-history'
   | 'sim-detail' | 'sim-compare' | 'coverage' | 'regression' | 'regression-result'
-  | 'dashboard' | 'to-checklist' | 'settings' | 'empty';
+  | 'dashboard' | 'to-checklist' | 'source-control' | 'settings' | 'empty';
 
 interface UiState {
   leftRailCollapsed: boolean;

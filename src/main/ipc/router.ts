@@ -14,6 +14,7 @@ import { CoverageManager } from '../coverage/coverage-manager';
 import { RegressionManager } from '../regression/regression-manager';
 import { terminalManager } from '../terminal/terminal-manager';
 import { credentialManager } from '../credentials/credential-manager';
+import { sourceControlService } from '../scm/source-control';
 import { addSession, removeSession, loadSessions, saveSessions, updateSessionModel, updateSessionActivity, type PersistedSession } from '../agent/session-persistence';
 import { discoverSkills, readSkillContent } from '../agent/skill-discovery';
 import { dialog, ipcMain, BrowserWindow } from 'electron';
@@ -130,6 +131,74 @@ export const router = t.router({
         bunVersionOk: runtime?.bunVersionOk ?? false,
       };
     }),
+  }),
+
+  // ─── 源代码管理 ───────────────────────────────────────
+
+  scm: t.router({
+    status: t.procedure
+      .input((raw): { projectId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return { projectId: r.projectId };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        return sourceControlService.getStatus(project.rootPath);
+      }),
+
+    generateCommitMessage: t.procedure
+      .input((raw): { projectId: string; modelId?: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+        }
+        return {
+          projectId: r.projectId,
+          modelId: typeof r.modelId === 'string' ? r.modelId : undefined,
+        };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const credential = await credentialManager.getDefaultCredential();
+        if (!credential) {
+          throw new TRPCError({
+            code: 'PRECONDITION_FAILED',
+            message: 'No AI credential configured. Add one in Settings first.',
+          });
+        }
+        try {
+          const message = await sourceControlService.generateCommitMessage(project.rootPath, credential, input.modelId);
+          return { message };
+        } catch (err) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }),
+
+    commitAll: t.procedure
+      .input((raw): { projectId: string; message: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.message !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and message are required' });
+        }
+        return { projectId: r.projectId, message: r.message };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        try {
+          return await sourceControlService.commitAll(project.rootPath, input.message);
+        } catch (err) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }),
   }),
 
   // ─── 项目管理 ─────────────────────────────────────────
