@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Plus, Send, Square, Trash2, Loader2, Clock, X, Check, Paperclip, Cpu, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft } from 'lucide-react';
+import { Plus, Send, Square, Trash2, Loader2, Clock, X, Check, Paperclip, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft } from 'lucide-react';
 import { useSessionStore, type ChatMessage, type AvailableModel, type SelectedSkill, type ContextFile, type HistorySession } from '@renderer/stores/session';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
@@ -787,12 +787,10 @@ export function RightPanel({ width }: RightPanelProps) {
                 >
                   {modelsLoading ? (
                     <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : currentSession?.model ? (
-                    <span className="max-w-[100px] truncate text-[10px] font-medium text-foreground/80">
-                      {currentSession.model.name}
-                    </span>
                   ) : (
-                    <Cpu className="h-3 w-3" />
+                    <span className="max-w-[100px] truncate text-[10px] font-medium text-foreground/80">
+                      {currentSession?.model?.name ?? '选择模型'}
+                    </span>
                   )}
                 </button>
                 {showModelDropdown && availableModels.length > 0 && (

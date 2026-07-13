@@ -32,6 +32,8 @@ export interface SessionModel {
   name: string;
 }
 
+const MODEL_STORAGE_KEY = 'socverify:lastModel';
+
 export interface SelectedSkill {
   name: string;
   description: string;
@@ -81,6 +83,10 @@ interface SessionStoreState {
   contextFiles: ContextFile[];
   historySessions: HistorySession[];
   historyLoading: boolean;
+  /** Last user-selected model, persisted to localStorage so new sessions reuse it. */
+  lastModel: SessionModel | null;
+
+  initLastModel: () => void;
 
   createSession: (projectId: string, cwd: string) => Promise<string | null>;
   destroySession: (sessionId: string, projectId?: string) => Promise<void>;
@@ -323,9 +329,25 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   contextFiles: [],
   historySessions: [],
   historyLoading: false,
+  lastModel: null,
+
+  initLastModel: () => {
+    try {
+      const saved = localStorage.getItem(MODEL_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as SessionModel;
+        if (parsed && typeof parsed.provider === 'string' && typeof parsed.id === 'string' && typeof parsed.name === 'string') {
+          set({ lastModel: parsed });
+        }
+      }
+    } catch {
+      // Corrupted localStorage — ignore silently
+    }
+  },
 
   createSession: async (projectId, cwd) => {
     const sessionId = `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const lastModel = get().lastModel;
     const session: SessionEntry = {
       id: sessionId,
       projectId,
@@ -334,6 +356,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       status: 'idle',
       messages: [],
       createdAt: Date.now(),
+      model: lastModel ?? undefined,
     };
     set((s) => ({
       sessions: [...s.sessions, session],
@@ -814,10 +837,14 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     try {
       const runtimeSessionId = await ensureRuntimeSession(sessionId, set, get);
       await trpc.session.setModel.mutate({ sessionId: runtimeSessionId, provider, modelId, modelName });
+      const model: SessionModel = { provider, id: modelId, name: modelName ?? modelId };
+      // Persist to localStorage so new sessions and app restarts reuse this model
+      localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(model));
       set((s) => ({
+        lastModel: model,
         sessions: s.sessions.map((sess) =>
           sessionMatchesId(sess, sessionId)
-            ? { ...sess, model: { provider, id: modelId, name: modelName ?? modelId } }
+            ? { ...sess, model }
             : sess,
         ),
       }));
