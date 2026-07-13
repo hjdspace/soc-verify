@@ -45,14 +45,21 @@ function tRPCError(err: unknown): string {
 }
 
 /**
- * Auto-create a default AI session for a project if none exists.
+ * Restore persisted AI sessions for a project, or create a new one if none exist.
+ * This replaces the old autoCreateDefaultSession — instead of always creating
+ * a new session, it first tries to restore previously open sessions from disk.
  */
-async function autoCreateDefaultSession(projectId: string, cwd: string): Promise<void> {
+async function restoreOrCreateSession(projectId: string, cwd: string): Promise<void> {
   const sessionStore = useSessionStore.getState();
-  // Only create if no session exists for this project
+  // If sessions already exist for this project (e.g. user switched back), do nothing
   const existing = sessionStore.sessions.some((s) => s.projectId === projectId);
   if (existing) return;
-  await sessionStore.createSession(projectId, cwd);
+  // Try to restore persisted sessions first
+  const restored = await sessionStore.restoreSessions(projectId, cwd);
+  // If no sessions were restored, create a new default one
+  if (!restored) {
+    await sessionStore.createSession(projectId, cwd);
+  }
 }
 
 export const useProjectStore = create<ProjectState>((set, get) => ({
@@ -73,11 +80,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         plugins: result.plugins as PluginConfigEntry[],
         fileTree: null,
       }));
-      // Load file tree and auto-create default AI session in parallel
-      await Promise.all([
-        get().loadFileTree(result.project.id),
-        autoCreateDefaultSession(result.project.id, result.project.rootPath),
-      ]);
+      // Load file tree, then restore or create AI sessions
+      await get().loadFileTree(result.project.id);
+      await restoreOrCreateSession(result.project.id, result.project.rootPath);
       getToast().success(`已打开项目: ${result.project.name}`);
     } catch (err) {
       getToast().error('打开项目失败', tRPCError(err));
@@ -95,11 +100,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         plugins: result.plugins as PluginConfigEntry[],
         fileTree: null,
       }));
-      // Load file tree and auto-create default AI session in parallel
-      await Promise.all([
-        get().loadFileTree(result.project.id),
-        autoCreateDefaultSession(result.project.id, result.project.rootPath),
-      ]);
+      // Load file tree, then restore or create AI sessions
+      await get().loadFileTree(result.project.id);
+      await restoreOrCreateSession(result.project.id, result.project.rootPath);
       getToast().success(`已打开项目: ${result.project.name}`);
     } catch (err) {
       getToast().error('打开项目对话框失败', tRPCError(err));
@@ -205,11 +208,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             plugins: result.plugins as PluginConfigEntry[],
             fileTree: null,
           }));
-          // Load file tree and auto-create default AI session in parallel
-          await Promise.all([
-            get().loadFileTree(result.project.id),
-            autoCreateDefaultSession(result.project.id, result.project.rootPath),
-          ]);
+          // Load file tree, then restore or create AI sessions
+          await get().loadFileTree(result.project.id);
+          await restoreOrCreateSession(result.project.id, result.project.rootPath);
         } catch {
           // Fallback: if re-open fails (e.g. directory deleted), just set the ID
           set({ currentProjectId: latest.id });

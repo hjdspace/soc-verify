@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { Plus, Send, Square, MessageSquare, Trash2, ChevronDown, Loader2, Clock, Pencil, X, Check, Paperclip, Cpu, Compass, Search, FileText, Folder, Sparkles, FolderOpen, History, ArrowLeft } from 'lucide-react';
+import { Plus, Send, Square, Trash2, Loader2, Clock, X, Check, Paperclip, Cpu, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft } from 'lucide-react';
 import { useSessionStore, type ChatMessage, type AvailableModel, type SelectedSkill, type ContextFile, type HistorySession } from '@renderer/stores/session';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
@@ -33,11 +33,9 @@ export function RightPanel({ width }: RightPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const skillListRef = useRef<HTMLDivElement>(null);
   const fileListRef = useRef<HTMLDivElement>(null);
-  const [showSessionList, setShowSessionList] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingSessionName, setEditingSessionName] = useState('');
-  const [hasRestored, setHasRestored] = useState(false);
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
@@ -72,7 +70,6 @@ export function RightPanel({ width }: RightPanelProps) {
   const fetchModelsFromApi = useSettingsStore((s) => s.fetchModels);
 
   const currentSession = sessions.find((s) => s.id === currentSessionId);
-  const restoreSessions = useSessionStore((s) => s.restoreSessions);
   const renameSession = useSessionStore((s) => s.renameSession);
   const historySessions = useSessionStore((s) => s.historySessions);
   const historyLoading = useSessionStore((s) => s.historyLoading);
@@ -89,7 +86,6 @@ export function RightPanel({ width }: RightPanelProps) {
 
   const handleOpenHistory = () => {
     setShowHistory(true);
-    setShowSessionList(false);
   };
 
   const handleCloseHistory = () => {
@@ -127,22 +123,9 @@ export function RightPanel({ width }: RightPanelProps) {
     item?.scrollIntoView({ block: 'nearest' });
   }, [fileHighlightIdx, showFileDropdown]);
 
-  // Auto-restore sessions when project is loaded
-  useEffect(() => {
-    if (currentProjectId && currentProject && !hasRestored) {
-      restoreSessions(currentProjectId, currentProject.rootPath);
-      setHasRestored(true);
-    }
-    // Reset restore flag when project changes
-    if (!currentProjectId) {
-      setHasRestored(false);
-    }
-  }, [currentProjectId, currentProject?.rootPath, hasRestored, restoreSessions]);
-
   const handleCreateSession = async () => {
     if (!currentProjectId || !currentProject) return;
     await createSession(currentProjectId, currentProject.rootPath);
-    setShowSessionList(false);
   };
 
   const handleSend = async () => {
@@ -212,8 +195,7 @@ export function RightPanel({ width }: RightPanelProps) {
     setEditingSessionName(currentName);
   };
 
-  const handleRenameSave = async (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleRenameSave = async () => {
     if (!editingSessionId || !editingSessionName.trim() || !currentProjectId) {
       setEditingSessionId(null);
       setEditingSessionName('');
@@ -224,17 +206,18 @@ export function RightPanel({ width }: RightPanelProps) {
     setEditingSessionName('');
   };
 
-  const handleRenameCancel = (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleRenameCancel = () => {
     setEditingSessionId(null);
     setEditingSessionName('');
   };
 
   const handleRenameKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
-      handleRenameSave(e as unknown as React.MouseEvent);
+      e.preventDefault();
+      void handleRenameSave();
     } else if (e.key === 'Escape') {
-      handleRenameCancel(e as unknown as React.MouseEvent);
+      e.preventDefault();
+      handleRenameCancel();
     }
   };
 
@@ -430,129 +413,85 @@ export function RightPanel({ width }: RightPanelProps) {
       className="flex shrink-0 flex-col border-l bg-sidebar"
       style={{ width: `${width}px` }}
     >
-      {/* ── 会话管理栏 ──────────────────────────────── */}
-      <div className="flex items-center justify-between border-b px-2 py-1.5">
-        <div className="relative">
-          <button
-            onClick={() => setShowSessionList(!showSessionList)}
-            className="flex items-center gap-1.5 rounded px-2 py-0.5 text-xs font-semibold transition-colors hover:bg-accent"
-          >
-            <MessageSquare className="h-3.5 w-3.5" />
-            {currentSession?.name ?? 'AI Agent'}
-            <ChevronDown className="h-3 w-3 opacity-50" />
-          </button>
-
-          {showSessionList && (
-            <>
+      {/* ── 会话标签栏 ──────────────────────────────── */}
+      <div className="flex items-center border-b">
+        {/* Tabs — horizontally scrollable */}
+        <div
+          className="flex items-center gap-0.5 flex-1 overflow-x-auto px-1 py-1"
+          style={{ scrollbarWidth: 'thin' }}
+        >
+          {sessions.map((sess) => {
+            const isActive = sess.id === currentSessionId;
+            const isEditing = editingSessionId === sess.id;
+            return (
               <div
-                className="fixed inset-0 z-40"
-                onClick={() => setShowSessionList(false)}
-              />
-              <div className="absolute left-0 top-8 z-50 w-64 overflow-hidden rounded-md border border-border bg-popover shadow-xl">
-                {/* 会话列表 */}
-                {sessions.length > 0 && (
-                  <div className="max-h-64 overflow-y-auto p-1">
-                    {sessions.map((sess) => (
-                      <div
-                        key={sess.id}
-                        className={cn(
-                          'flex items-center justify-between rounded px-3 py-1.5 text-xs transition-colors hover:bg-accent',
-                          sess.id === currentSessionId && 'bg-accent/50',
-                        )}
-                      >
-                        <div className="flex-1 min-w-0 flex items-center gap-1">
-                          {editingSessionId === sess.id ? (
-                            <input
-                              type="text"
-                              value={editingSessionName}
-                              onChange={(e) => setEditingSessionName(e.target.value)}
-                              onKeyDown={handleRenameKeyDown}
-                              onClick={(e) => e.stopPropagation()}
-                              className="flex-1 min-w-0 bg-background border border-border rounded px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-                              autoFocus
-                            />
-                          ) : (
-                            <span
-                              className="truncate cursor-pointer"
-                              onClick={() => {
-                                switchSession(sess.id);
-                                setShowSessionList(false);
-                              }}
-                              onDoubleClick={(e) => handleRenameStart(e, sess.id, sess.name)}
-                            >
-                              {sess.name}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-0.5 ml-2">
-                          {editingSessionId === sess.id ? (
-                            <>
-                              <button
-                                onClick={handleRenameSave}
-                                className="rounded p-0.5 text-green-500 hover:bg-green-500/10"
-                                title="保存"
-                              >
-                                <Check className="h-3 w-3" />
-                              </button>
-                              <button
-                                onClick={handleRenameCancel}
-                                className="rounded p-0.5 text-muted-foreground hover:bg-accent"
-                                title="取消"
-                              >
-                                <X className="h-3 w-3" />
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <button
-                                onClick={(e) => handleRenameStart(e, sess.id, sess.name)}
-                                className="rounded p-0.5 text-muted-foreground opacity-50 hover:opacity-100 hover:bg-accent"
-                                title="重命名"
-                              >
-                                <Pencil className="h-3 w-3" />
-                              </button>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  destroySession(sess.id, currentProjectId || undefined);
-                                }}
-                                className="rounded p-0.5 text-muted-foreground opacity-50 hover:opacity-100 hover:bg-destructive/10 hover:text-destructive"
-                                title="删除"
-                              >
-                                <Trash2 className="h-3 w-3" />
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                key={sess.id}
+                onClick={() => !isEditing && switchSession(sess.id)}
+                className={cn(
+                  'group flex items-center gap-1 rounded-md px-2 py-1 text-xs cursor-pointer transition-colors max-w-[160px] shrink-0',
+                  isActive
+                    ? 'bg-background text-foreground ring-1 ring-border'
+                    : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
                 )}
-
-                {/* 空状态提示 */}
-                {sessions.length === 0 && (
-                  <div className="px-3 py-3 text-center text-xs text-muted-foreground">
-                    暂无 AI 会话
-                  </div>
+              >
+                {isEditing ? (
+                  <>
+                    <input
+                      type="text"
+                      value={editingSessionName}
+                      onChange={(e) => setEditingSessionName(e.target.value)}
+                      onKeyDown={handleRenameKeyDown}
+                      onClick={(e) => e.stopPropagation()}
+                      className="min-w-0 flex-1 bg-background border border-border rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                      style={{ width: '80px' }}
+                      autoFocus
+                    />
+                    <button
+                      onClick={(e) => { e.stopPropagation(); void handleRenameSave(); }}
+                      className="shrink-0 rounded p-0.5 text-green-500 hover:bg-green-500/10"
+                      title="保存"
+                    >
+                      <Check className="h-2.5 w-2.5" />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleRenameCancel(); }}
+                      className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent"
+                      title="取消"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {isSending && isActive && (
+                      <Loader2 className="h-2.5 w-2.5 shrink-0 animate-spin" />
+                    )}
+                    <span
+                      className="truncate"
+                      onDoubleClick={(e) => handleRenameStart(e, sess.id, sess.name)}
+                      title={sess.name}
+                    >
+                      {sess.name}
+                    </span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        destroySession(sess.id, currentProjectId || undefined);
+                      }}
+                      className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-60"
+                      title="关闭会话"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </>
                 )}
-
-                {/* 新建会话按钮 */}
-                <div className="border-t border-border/50 p-1">
-                  <button
-                    onClick={handleCreateSession}
-                    disabled={!currentProjectId}
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs text-primary transition-colors hover:bg-accent disabled:opacity-30"
-                  >
-                    <Plus className="h-3 w-3" />
-                    新建会话
-                  </button>
-                </div>
               </div>
-            </>
-          )}
+            );
+          })}
         </div>
 
-        <div className="flex items-center gap-0.5">
+        {/* Action buttons */}
+        <div className="flex items-center gap-0.5 shrink-0 border-l border-border/50 px-1">
           <button
             onClick={handleCreateSession}
             disabled={!currentProjectId}
@@ -915,7 +854,7 @@ export function RightPanel({ width }: RightPanelProps) {
   );
 }
 
-// ── 消息气泡组件 ───────────────────────────────────────
+// ── 消息渲染组件 ───────────────────────────────────────
 
 function MessageBubble({ message }: { message: ChatMessage }) {
   if (message.role === 'tool') {
@@ -924,41 +863,33 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 
   const isUser = message.role === 'user';
 
-  return (
-    <div
-      className={cn(
-        'flex flex-col gap-0.5',
-        isUser ? 'items-end' : 'items-start',
-      )}
-    >
-      <div
-        className={cn(
-          'max-w-[85%] rounded-lg px-2.5 py-1.5 text-xs',
-          isUser
-            ? 'bg-primary/15 text-foreground'
-            : 'bg-background text-foreground',
-        )}
-      >
-        {isUser ? (
+  // User messages: right-aligned bubble
+  if (isUser) {
+    return (
+      <div className="flex flex-col items-end gap-0.5">
+        <div className="max-w-[85%] rounded-lg bg-primary/15 px-2.5 py-1.5 text-xs">
           <div className="whitespace-pre-wrap break-words">{message.content}</div>
-        ) : (
-          <>
-            {message.content ? (
-              <MarkdownRenderer content={message.content} />
-            ) : (
-              message.isStreaming && (
-                <div className="flex items-center gap-1 text-muted-foreground">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  <span className="text-[10px]">思考中...</span>
-                </div>
-              )
-            )}
-            {message.isStreaming && message.content && (
-              <span className="ml-0.5 inline-block h-3 w-0.5 animate-pulse bg-foreground" />
-            )}
-          </>
-        )}
+        </div>
       </div>
+    );
+  }
+
+  // Assistant messages: render directly without bubble wrapper
+  return (
+    <div className="flex flex-col gap-0.5">
+      {message.content ? (
+        <MarkdownRenderer content={message.content} />
+      ) : (
+        message.isStreaming && (
+          <div className="flex items-center gap-1 text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            <span className="text-[10px]">思考中...</span>
+          </div>
+        )
+      )}
+      {message.isStreaming && message.content && (
+        <span className="ml-0.5 inline-block h-3 w-0.5 animate-pulse bg-foreground" />
+      )}
     </div>
   );
 }

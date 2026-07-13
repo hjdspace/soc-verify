@@ -89,7 +89,7 @@ interface SessionStoreState {
   setInputMessage: (msg: string) => void;
   handleSessionEvent: (sessionId: string, event: unknown) => void;
   refreshSessions: () => Promise<void>;
-  restoreSessions: (projectId: string, cwd: string) => Promise<void>;
+  restoreSessions: (projectId: string, cwd: string) => Promise<boolean>;
   getAvailableModels: (sessionId: string) => Promise<AvailableModel[]>;
   setModel: (sessionId: string, provider: string, modelId: string, modelName?: string) => Promise<void>;
   steerSession: (message: string) => Promise<void>;
@@ -182,6 +182,82 @@ function tRPCError(err: unknown): string {
     return String((err as Record<string, unknown>).message);
   }
   return String(err);
+}
+
+/**
+ * Load messages from the agent for a restored/resumed session.
+ * Shared between restoreSessions and loadHistorySession.
+ */
+async function loadSessionMessages(sessionId: string): Promise<ChatMessage[]> {
+  try {
+    const messages = await trpc.session.getMessages.query({ sessionId });
+    const ompMessages = messages as unknown[];
+    if (!Array.isArray(ompMessages) || ompMessages.length === 0) return [];
+
+    const chatMessages: ChatMessage[] = [];
+    for (const msg of ompMessages) {
+      const m = msg as Record<string, unknown>;
+      const role = m.role as string;
+      const content = m.content;
+
+      if (role === 'user') {
+        const text = typeof content === 'string'
+          ? content
+          : Array.isArray(content)
+            ? (content as Array<Record<string, unknown>>)
+                .filter((b) => b.type === 'text')
+                .map((b) => b.text as string)
+                .join('\n')
+            : '';
+        if (text) {
+          chatMessages.push({
+            id: `hist_msg_${Date.now()}_${chatMessages.length}`,
+            role: 'user',
+            content: text,
+            timestamp: Date.now(),
+          });
+        }
+      } else if (role === 'assistant') {
+        const text = typeof content === 'string'
+          ? content
+          : Array.isArray(content)
+            ? (content as Array<Record<string, unknown>>)
+                .filter((b) => b.type === 'text' || b.type === 'thinking')
+                .map((b) => b.type === 'thinking' ? `[思考] ${b.thinking}` : b.text as string)
+                .join('\n')
+            : '';
+        if (text) {
+          chatMessages.push({
+            id: `hist_msg_${Date.now()}_${chatMessages.length}`,
+            role: 'assistant',
+            content: text,
+            timestamp: Date.now(),
+          });
+        }
+      } else if (role === 'toolResult') {
+        const toolCalls = Array.isArray(content)
+          ? (content as Array<Record<string, unknown>>).filter((b) => b.type === 'toolCall')
+          : [];
+        for (const tc of toolCalls) {
+          chatMessages.push({
+            id: `hist_tool_${Date.now()}_${chatMessages.length}`,
+            role: 'tool',
+            content: '',
+            timestamp: Date.now(),
+            toolName: tc.name as string,
+            toolCallId: (tc.id as string) ?? undefined,
+            toolArgs: tc.input,
+            toolResult: tc.output,
+            toolStartTime: Date.now(),
+            toolEndTime: Date.now(),
+          });
+        }
+      }
+    }
+    return chatMessages;
+  } catch {
+    return [];
+  }
 }
 
 export const useSessionStore = create<SessionStoreState>((set, get) => ({
@@ -605,7 +681,15 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   restoreSessions: async (projectId, cwd) => {
     try {
       const persisted = await trpc.session.getPersistedSessions.query({ projectId });
-      if (persisted.length === 0) return;
+      if (persisted.length === 0) return false;
+
+      // Register IPC event listener once (needed before any restored session can receive events)
+      if (!eventListenerRegistered && window.eventBridge) {
+        eventListenerRegistered = true;
+        window.eventBridge.onSessionEvent(({ sessionId, event }) => {
+          get().handleSessionEvent(sessionId, event);
+        });
+      }
 
       for (const p of persisted) {
         try {
@@ -629,12 +713,25 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             sessions: [...s.sessions, session],
             currentSessionId: s.currentSessionId ?? result.sessionId,
           }));
+
+          // Load historical messages for the restored session
+          const chatMessages = await loadSessionMessages(result.sessionId);
+          if (chatMessages.length > 0) {
+            set((s) => ({
+              sessions: s.sessions.map((sess) =>
+                sess.id === result.sessionId
+                  ? { ...sess, messages: chatMessages }
+                  : sess,
+              ),
+            }));
+          }
         } catch {
           // Skip sessions that fail to restore
         }
       }
+      return true;
     } catch {
-      // Best-effort restore
+      return false;
     }
   },
 
@@ -750,83 +847,16 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         });
       }
 
-      // Try to load existing messages from the agent
-      try {
-        const messages = await trpc.session.getMessages.query({ sessionId: result.sessionId });
-        const ompMessages = messages as unknown[];
-        if (Array.isArray(ompMessages) && ompMessages.length > 0) {
-          const chatMessages: ChatMessage[] = [];
-          for (const msg of ompMessages) {
-            const m = msg as Record<string, unknown>;
-            const role = m.role as string;
-            const content = m.content;
-
-            if (role === 'user') {
-              const text = typeof content === 'string'
-                ? content
-                : Array.isArray(content)
-                  ? (content as Array<Record<string, unknown>>)
-                      .filter((b) => b.type === 'text')
-                      .map((b) => b.text as string)
-                      .join('\n')
-                  : '';
-              if (text) {
-                chatMessages.push({
-                  id: `hist_msg_${Date.now()}_${chatMessages.length}`,
-                  role: 'user',
-                  content: text,
-                  timestamp: Date.now(),
-                });
-              }
-            } else if (role === 'assistant') {
-              const text = typeof content === 'string'
-                ? content
-                : Array.isArray(content)
-                  ? (content as Array<Record<string, unknown>>)
-                      .filter((b) => b.type === 'text' || b.type === 'thinking')
-                      .map((b) => b.type === 'thinking' ? `[思考] ${b.thinking}` : b.text as string)
-                      .join('\n')
-                  : '';
-              if (text) {
-                chatMessages.push({
-                  id: `hist_msg_${Date.now()}_${chatMessages.length}`,
-                  role: 'assistant',
-                  content: text,
-                  timestamp: Date.now(),
-                });
-              }
-            } else if (role === 'toolResult') {
-              const toolCalls = Array.isArray(content)
-                ? (content as Array<Record<string, unknown>>).filter((b) => b.type === 'toolCall')
-                : [];
-              for (const tc of toolCalls) {
-                chatMessages.push({
-                  id: `hist_tool_${Date.now()}_${chatMessages.length}`,
-                  role: 'tool',
-                  content: '',
-                  timestamp: Date.now(),
-                  toolName: tc.name as string,
-                  toolCallId: (tc.id as string) ?? undefined,
-                  toolArgs: tc.input,
-                  toolResult: tc.output,
-                  toolStartTime: Date.now(),
-                  toolEndTime: Date.now(),
-                });
-              }
-            }
-          }
-          if (chatMessages.length > 0) {
-            set((s) => ({
-              sessions: s.sessions.map((sess) =>
-                sess.id === result.sessionId
-                  ? { ...sess, messages: chatMessages }
-                  : sess,
-              ),
-            }));
-          }
-        }
-      } catch {
-        // Best-effort: message loading is optional
+      // Load historical messages from the agent
+      const chatMessages = await loadSessionMessages(result.sessionId);
+      if (chatMessages.length > 0) {
+        set((s) => ({
+          sessions: s.sessions.map((sess) =>
+            sess.id === result.sessionId
+              ? { ...sess, messages: chatMessages }
+              : sess,
+          ),
+        }));
       }
 
       useToastStore.getState().success(`已加载会话: ${historySession.name}`);
