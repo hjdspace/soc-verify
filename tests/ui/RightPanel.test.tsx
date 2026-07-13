@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 
 // Mock tRPC
 vi.mock('@renderer/lib/trpc', () => ({
@@ -12,6 +12,10 @@ vi.mock('@renderer/lib/trpc', () => ({
       destroy: { mutate: vi.fn().mockResolvedValue(undefined) },
       list: { query: vi.fn().mockResolvedValue([]) },
       saveStoredMessages: { mutate: vi.fn().mockResolvedValue(undefined) },
+      listSkills: { query: vi.fn().mockResolvedValue([]) },
+    },
+    project: {
+      searchFiles: { query: vi.fn().mockResolvedValue([]) },
     },
   },
 }));
@@ -28,6 +32,8 @@ vi.mock('@renderer/stores/toast', () => ({
 }));
 
 import { useSessionStore, type ChatMessage } from '@renderer/stores/session';
+import { useProjectStore } from '@renderer/stores/project';
+import { RightPanel } from '@renderer/components/layout/RightPanel';
 
 // Create a test component that renders MessageBubble directly
 function TestMessageBubble({ message }: { message: ChatMessage }) {
@@ -177,6 +183,62 @@ describe('RightPanel input interaction', () => {
     await sessionStore.abortSession();
     expect(useSessionStore.getState().isSending).toBe(false);
     expect(useSessionStore.getState().sessions[0].status).toBe('idle');
+  });
+});
+
+describe('RightPanel session tabs', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useProjectStore.setState({
+      projects: [{
+        id: 'p1',
+        name: 'Project',
+        rootPath: '/tmp/project',
+        createdAt: Date.now(),
+        lastOpenedAt: Date.now(),
+      }],
+      currentProjectId: 'p1',
+      fileTree: null,
+      fileTreeLoading: false,
+      plugins: [],
+      selectedSubsys: null,
+      caseStatusFilter: 'all',
+    });
+    useSessionStore.setState({
+      sessions: [
+        {
+          id: 'running',
+          projectId: 'p1',
+          name: 'Running Session',
+          status: 'streaming',
+          messages: [],
+          createdAt: 1,
+        },
+        {
+          id: 'done',
+          projectId: 'p1',
+          name: 'Done Session',
+          status: 'idle',
+          messages: [],
+          createdAt: 2,
+        },
+      ],
+      currentSessionId: 'done',
+      inputMessage: '',
+      isSending: true,
+    });
+  });
+
+  it('keeps the running indicator on the running session tab after switching tabs', () => {
+    render(<RightPanel width={320} />);
+
+    const runningTab = screen.getByTitle('Running Session').closest('[data-session-tab]');
+    const doneTab = screen.getByTitle('Done Session').closest('[data-session-tab]');
+
+    expect(runningTab).not.toBeNull();
+    expect(doneTab).not.toBeNull();
+    expect(within(runningTab as HTMLElement).getByLabelText('会话运行中')).toBeInTheDocument();
+    expect(within(doneTab as HTMLElement).queryByLabelText('会话运行中')).not.toBeInTheDocument();
   });
 });
 

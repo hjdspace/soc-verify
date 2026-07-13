@@ -425,9 +425,11 @@ export function RightPanel({ width }: RightPanelProps) {
           {sessions.map((sess) => {
             const isActive = sess.id === currentSessionId;
             const isEditing = editingSessionId === sess.id;
+            const isSessionRunning = sess.status === 'streaming' || sess.status === 'tool_executing';
             return (
               <div
                 key={sess.id}
+                data-session-tab
                 onClick={() => !isEditing && switchSession(sess.id)}
                 className={cn(
                   'group flex items-center gap-1 rounded-md px-2 py-1 text-xs cursor-pointer transition-colors max-w-[160px] shrink-0',
@@ -465,8 +467,8 @@ export function RightPanel({ width }: RightPanelProps) {
                   </>
                 ) : (
                   <>
-                    {isSending && isActive && (
-                      <Loader2 className="h-2.5 w-2.5 shrink-0 animate-spin" />
+                    {isSessionRunning && (
+                      <Loader2 aria-label="会话运行中" className="h-2.5 w-2.5 shrink-0 animate-spin" />
                     )}
                     <span
                       className="truncate"
