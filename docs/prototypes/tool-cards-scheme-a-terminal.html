@@ -1,0 +1,1071 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SoC Verify · Tool Cards · Scheme A: Terminal Native</title>
+<style>
+  :root {
+    /* Base dark theme - OKLCH */
+    --bg: oklch(0.14 0.006 250);
+    --bg-surface: oklch(0.17 0.006 250);
+    --bg-elevated: oklch(0.20 0.007 250);
+    --fg: oklch(0.94 0.004 250);
+    --fg-dim: oklch(0.62 0.008 250);
+    --fg-faint: oklch(0.42 0.006 250);
+    --border: oklch(0.24 0.007 250);
+    --border-bright: oklch(0.32 0.008 250);
+
+    /* Tool type accents */
+    --c-read: oklch(0.68 0.14 250);
+    --c-write: oklch(0.72 0.16 145);
+    --c-edit: oklch(0.75 0.14 65);
+    --c-bash: oklch(0.68 0.15 295);
+    --c-grep: oklch(0.68 0.13 185);
+    --c-glob: oklch(0.66 0.11 210);
+    --c-task: oklch(0.72 0.15 35);
+    --c-job: oklch(0.68 0.13 165);
+    --c-todo: oklch(0.68 0.14 285);
+    --c-eval: oklch(0.66 0.13 230);
+    --c-web: oklch(0.68 0.14 10);
+    --c-host: oklch(0.68 0.13 175);
+    --c-ask: oklch(0.75 0.14 90);
+
+    /* Status */
+    --c-ok: oklch(0.72 0.16 145);
+    --c-err: oklch(0.65 0.18 25);
+    --c-warn: oklch(0.75 0.15 75);
+    --c-run: oklch(0.68 0.14 250);
+
+    /* Diff */
+    --diff-add-bg: oklch(0.22 0.04 145);
+    --diff-add-fg: oklch(0.82 0.08 145);
+    --diff-del-bg: oklch(0.22 0.04 25);
+    --diff-del-fg: oklch(0.78 0.08 25);
+    --diff-hunk: oklch(0.20 0.01 250);
+
+    --mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 24px;
+  }
+
+  h1 {
+    font-family: var(--sans);
+    font-size: 20px;
+    font-weight: 700;
+    margin-bottom: 4px;
+    color: var(--fg);
+  }
+  .subtitle {
+    font-family: var(--sans);
+    font-size: 13px;
+    color: var(--fg-dim);
+    margin-bottom: 32px;
+  }
+  .section-label {
+    font-family: var(--sans);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--fg-faint);
+    margin: 28px 0 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ── Tool Card Base ────────────────────────────── */
+  .tool-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 6px;
+    overflow: hidden;
+    font-size: 12px;
+  }
+
+  .tool-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+  }
+  .tool-header:hover { background: var(--bg-elevated); }
+
+  .tool-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .tool-dot.running {
+    background: var(--c-run);
+    animation: pulse 1.2s infinite;
+  }
+  .tool-dot.ok { background: var(--c-ok); }
+  .tool-dot.err { background: var(--c-err); }
+  .tool-dot.warn { background: var(--c-warn); }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+
+  .tool-name {
+    font-weight: 600;
+    color: var(--fg);
+    font-size: 12px;
+    min-width: 48px;
+  }
+  .tool-name.read { color: var(--c-read); }
+  .tool-name.write { color: var(--c-write); }
+  .tool-name.edit { color: var(--c-edit); }
+  .tool-name.bash { color: var(--c-bash); }
+  .tool-name.grep { color: var(--c-grep); }
+  .tool-name.glob { color: var(--c-glob); }
+  .tool-name.task { color: var(--c-task); }
+  .tool-name.job { color: var(--c-job); }
+  .tool-name.todo { color: var(--c-todo); }
+  .tool-name.eval { color: var(--c-eval); }
+  .tool-name.web_search { color: var(--c-web); }
+  .tool-name.host { color: var(--c-host); }
+  .tool-name.ask { color: var(--c-ask); }
+
+  .tool-summary {
+    color: var(--fg-dim);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11.5px;
+  }
+  .tool-summary .path { color: var(--fg); }
+  .tool-summary .val { color: var(--c-read); }
+
+  .tool-duration {
+    color: var(--fg-faint);
+    font-size: 10.5px;
+    flex-shrink: 0;
+  }
+
+  .tool-chevron {
+    color: var(--fg-faint);
+    font-size: 10px;
+    transition: transform 0.2s;
+  }
+  .tool-card.expanded .tool-chevron { transform: rotate(90deg); }
+
+  /* ── Tool Body ─────────────────────────────────── */
+  .tool-body {
+    border-top: 1px solid var(--border);
+    padding: 0;
+    max-height: 400px;
+    overflow: auto;
+  }
+
+  /* ── Code Block (read) ─────────────────────────── */
+  .code-block {
+    display: flex;
+    font-size: 11.5px;
+    line-height: 1.55;
+  }
+  .code-gutter {
+    text-align: right;
+    padding: 8px 8px 8px 10px;
+    color: var(--fg-faint);
+    user-select: none;
+    border-right: 1px solid var(--border);
+    background: var(--bg);
+    min-width: 38px;
+  }
+  .code-content {
+    padding: 8px 10px;
+    overflow-x: auto;
+    flex: 1;
+  }
+  .code-content .kw { color: oklch(0.72 0.12 290); }
+  .code-content .str { color: oklch(0.75 0.10 145); }
+  .code-content .num { color: oklch(0.75 0.12 40); }
+  .code-content .com { color: var(--fg-faint); font-style: italic; }
+  .code-content .fn { color: oklch(0.72 0.12 220); }
+  .code-content .type { color: oklch(0.72 0.12 180); }
+
+  /* ── Write Block (all green) ───────────────────── */
+  .write-block {
+    font-size: 11.5px;
+    line-height: 1.55;
+    background: var(--diff-add-bg);
+  }
+  .write-line {
+    display: flex;
+    padding: 0;
+  }
+  .write-line .prefix {
+    color: var(--c-write);
+    padding: 8px 4px 8px 10px;
+    user-select: none;
+    width: 20px;
+    flex-shrink: 0;
+  }
+  .write-line .content {
+    padding: 8px 10px 8px 0;
+    flex: 1;
+    overflow-x: auto;
+    color: var(--diff-add-fg);
+  }
+  .write-line .gutter {
+    color: oklch(0.45 0.04 145);
+    text-align: right;
+    padding: 8px 8px;
+    user-select: none;
+    min-width: 30px;
+    border-right: 1px solid oklch(0.28 0.04 145);
+  }
+
+  /* ── Diff Block (edit) ─────────────────────────── */
+  .diff-block {
+    font-size: 11.5px;
+    line-height: 1.55;
+  }
+  .diff-hunk-header {
+    background: var(--diff-hunk);
+    color: var(--fg-faint);
+    padding: 4px 10px;
+    font-size: 11px;
+    border-bottom: 1px solid var(--border);
+  }
+  .diff-line {
+    display: flex;
+  }
+  .diff-line .gutter {
+    width: 36px;
+    text-align: right;
+    padding: 2px 6px;
+    color: var(--fg-faint);
+    user-select: none;
+    font-size: 10.5px;
+    flex-shrink: 0;
+  }
+  .diff-line.add {
+    background: var(--diff-add-bg);
+  }
+  .diff-line.add .gutter { color: var(--c-ok); }
+  .diff-line.add .prefix { color: var(--c-ok); width: 16px; text-align: center; flex-shrink: 0; }
+  .diff-line.add .content { color: var(--diff-add-fg); padding: 2px 8px; flex: 1; overflow-x: auto; }
+  .diff-line.del {
+    background: var(--diff-del-bg);
+  }
+  .diff-line.del .gutter { color: var(--c-err); }
+  .diff-line.del .prefix { color: var(--c-err); width: 16px; text-align: center; flex-shrink: 0; }
+  .diff-line.del .content { color: var(--diff-del-fg); padding: 2px 8px; flex: 1; overflow-x: auto; text-decoration: line-through; opacity: 0.75; }
+  .diff-line.ctx .prefix { width: 16px; text-align: center; flex-shrink: 0; color: var(--fg-faint); }
+  .diff-line.ctx .content { color: var(--fg-dim); padding: 2px 8px; flex: 1; overflow-x: auto; }
+
+  /* ── Bash Block ────────────────────────────────── */
+  .bash-block { font-size: 11.5px; }
+  .bash-cmd {
+    padding: 6px 10px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    color: var(--c-bash);
+  }
+  .bash-cmd::before { content: '$ '; color: var(--fg-faint); }
+  .bash-output {
+    padding: 6px 10px;
+    color: var(--fg-dim);
+    white-space: pre-wrap;
+    line-height: 1.5;
+  }
+  .bash-output .err { color: var(--c-err); }
+  .bash-output .warn { color: var(--c-warn); }
+
+  /* ── Grep Results ──────────────────────────────── */
+  .grep-results { font-size: 11.5px; }
+  .grep-file {
+    padding: 5px 10px;
+    color: var(--c-grep);
+    font-weight: 600;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .grep-match {
+    display: flex;
+    padding: 2px 10px;
+    gap: 8px;
+  }
+  .grep-match .lineno {
+    color: var(--fg-faint);
+    min-width: 32px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+  .grep-match .text {
+    color: var(--fg-dim);
+    overflow-x: auto;
+  }
+  .grep-match .text .hl {
+    background: oklch(0.30 0.08 185);
+    color: var(--c-grep);
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+
+  /* ── Glob Results ──────────────────────────────── */
+  .glob-results {
+    padding: 6px 10px;
+    font-size: 11.5px;
+  }
+  .glob-item {
+    padding: 2px 0;
+    color: var(--fg-dim);
+  }
+  .glob-item::before { content: '◦ '; color: var(--c-glob); }
+  .glob-item .dir { color: var(--fg-faint); }
+
+  /* ── Task Items ────────────────────────────────── */
+  .task-block { font-size: 11.5px; }
+  .task-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .task-item:last-child { border-bottom: none; }
+  .task-icon {
+    width: 16px; height: 16px;
+    border-radius: 3px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .task-icon.done { background: oklch(0.22 0.04 145); color: var(--c-ok); }
+  .task-icon.running { background: oklch(0.22 0.04 250); color: var(--c-run); }
+  .task-icon.pending { background: var(--bg-elevated); color: var(--fg-faint); }
+  .task-icon.error { background: oklch(0.22 0.04 25); color: var(--c-err); }
+  .task-content { flex: 1; min-width: 0; }
+  .task-title { color: var(--fg); font-weight: 500; }
+  .task-meta { color: var(--fg-faint); font-size: 10.5px; margin-top: 1px; }
+  .task-item.done .task-title { color: var(--fg-dim); text-decoration: line-through; }
+
+  /* ── Job Block ─────────────────────────────────── */
+  .job-block { font-size: 11.5px; }
+  .job-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .job-row:last-child { border-bottom: none; }
+  .job-id {
+    color: var(--c-job);
+    font-weight: 600;
+    min-width: 48px;
+  }
+  .job-desc { color: var(--fg-dim); flex: 1; }
+  .job-status {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .job-status.running { background: oklch(0.22 0.04 250); color: var(--c-run); }
+  .job-status.done { background: oklch(0.22 0.04 145); color: var(--c-ok); }
+  .job-status.failed { background: oklch(0.22 0.04 25); color: var(--c-err); }
+  .job-progress {
+    width: 60px; height: 4px;
+    background: var(--bg-elevated);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .job-progress-fill {
+    height: 100%;
+    background: var(--c-job);
+    border-radius: 2px;
+  }
+
+  /* ── Todo Block ────────────────────────────────── */
+  .todo-block { font-size: 11.5px; padding: 4px 0; }
+  .todo-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 10px;
+  }
+  .todo-check {
+    width: 14px; height: 14px;
+    border: 1.5px solid var(--border-bright);
+    border-radius: 3px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  .todo-check.checked {
+    background: var(--c-todo);
+    border-color: var(--c-todo);
+    color: var(--bg);
+    font-size: 9px;
+  }
+  .todo-text { color: var(--fg-dim); }
+  .todo-item.checked .todo-text { color: var(--fg-faint); text-decoration: line-through; }
+
+  /* ── Eval Block ────────────────────────────────── */
+  .eval-block { font-size: 11.5px; }
+  .eval-code {
+    padding: 6px 10px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    color: var(--c-eval);
+  }
+  .eval-code::before { content: '› '; color: var(--fg-faint); }
+  .eval-output {
+    padding: 6px 10px;
+    color: var(--fg-dim);
+    white-space: pre-wrap;
+  }
+  .eval-output::before { content: '← '; color: var(--c-ok); }
+
+  /* ── Web Search ────────────────────────────────── */
+  .web-results { font-size: 11.5px; }
+  .web-result {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .web-result:last-child { border-bottom: none; }
+  .web-title { color: var(--c-web); font-weight: 500; }
+  .web-url { color: var(--fg-faint); font-size: 10.5px; }
+  .web-snippet { color: var(--fg-dim); font-size: 11px; margin-top: 2px; }
+
+  /* ── Host Tools: Subsystem List ────────────────── */
+  .host-table {
+    width: 100%;
+    font-size: 11.5px;
+    border-collapse: collapse;
+  }
+  .host-table th {
+    text-align: left;
+    padding: 5px 10px;
+    color: var(--fg-faint);
+    font-weight: 600;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .host-table td {
+    padding: 4px 10px;
+    color: var(--fg-dim);
+    border-bottom: 1px solid var(--border);
+  }
+  .host-table tr:last-child td { border-bottom: none; }
+  .host-table .badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .badge.pass { background: oklch(0.22 0.04 145); color: var(--c-ok); }
+  .badge.fail { background: oklch(0.22 0.04 25); color: var(--c-err); }
+  .badge.running { background: oklch(0.22 0.04 250); color: var(--c-run); }
+  .badge.pending { background: var(--bg-elevated); color: var(--fg-faint); }
+
+  /* ── Coverage Metrics ──────────────────────────── */
+  .coverage-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--border);
+  }
+  .cov-cell {
+    background: var(--bg-surface);
+    padding: 8px 10px;
+    text-align: center;
+  }
+  .cov-label {
+    font-size: 10px;
+    color: var(--fg-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .cov-value {
+    font-size: 18px;
+    font-weight: 700;
+    margin-top: 2px;
+  }
+  .cov-value.good { color: var(--c-ok); }
+  .cov-value.mid { color: var(--c-warn); }
+  .cov-value.low { color: var(--c-err); }
+
+  /* ── Compile Errors ────────────────────────────── */
+  .error-list { font-size: 11.5px; }
+  .error-item {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .error-item:last-child { border-bottom: none; }
+  .error-sev {
+    display: inline-block;
+    padding: 0 5px;
+    border-radius: 2px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    margin-right: 6px;
+  }
+  .error-sev.error { background: oklch(0.25 0.06 25); color: var(--c-err); }
+  .error-sev.warn { background: oklch(0.25 0.06 75); color: var(--c-warn); }
+  .error-loc { color: var(--c-read); font-size: 10.5px; margin-top: 2px; }
+  .error-msg { color: var(--fg-dim); }
+
+  /* ── Simulation Run ────────────────────────────── */
+  .sim-block { font-size: 11.5px; padding: 8px 10px; }
+  .sim-header {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 6px;
+  }
+  .sim-name { color: var(--fg); font-weight: 600; }
+  .sim-status {
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .sim-status.pass { background: oklch(0.22 0.04 145); color: var(--c-ok); }
+  .sim-status.fail { background: oklch(0.22 0.04 25); color: var(--c-err); }
+  .sim-status.running { background: oklch(0.22 0.04 250); color: var(--c-run); }
+  .sim-bar {
+    height: 4px;
+    background: var(--bg-elevated);
+    border-radius: 2px;
+    overflow: hidden;
+    margin: 4px 0;
+  }
+  .sim-bar-fill {
+    height: 100%;
+    background: var(--c-host);
+    border-radius: 2px;
+    transition: width 0.3s;
+  }
+  .sim-meta {
+    display: flex; gap: 12px;
+    color: var(--fg-faint);
+    font-size: 10.5px;
+  }
+
+  /* ── Ask Block ─────────────────────────────────── */
+  .ask-block {
+    padding: 8px 10px;
+    font-size: 11.5px;
+  }
+  .ask-question {
+    color: var(--c-ask);
+    font-weight: 500;
+    margin-bottom: 6px;
+  }
+  .ask-question::before { content: '❓ '; }
+  .ask-options {
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .ask-option {
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--fg-dim);
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .ask-option:hover { border-color: var(--c-ask); color: var(--c-ask); }
+
+  /* ── Collapsed preview ─────────────────────────── */
+  .collapsed .tool-body { display: none; }
+
+  /* ── Layout ────────────────────────────────────── */
+  .container { max-width: 520px; margin: 0 auto; }
+  .scheme-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--bg-elevated);
+    color: var(--c-read);
+    font-size: 11px;
+    font-weight: 600;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Tool Cards <span class="scheme-tag">Scheme A · Terminal Native</span></h1>
+  <p class="subtitle">Monospace-forward design. Terminal-style output blocks. Dense, scannable, engineer-native.</p>
+
+  <div class="section-label">File Operations</div>
+
+  <!-- READ (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name read">read</span>
+      <span class="tool-summary"><span class="path">src/main/host/host-tools.ts</span> · 42 lines</span>
+      <span class="tool-duration">12ms</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="code-block">
+        <div class="code-gutter">1<br>2<br>3<br>4<br>5<br>6<br>7<br>8<br>9<br>10<br>11<br>12</div>
+        <div class="code-content"><span class="kw">import</span> { defineTool } <span class="kw">from</span> <span class="str">'./types'</span>;<br><span class="kw">import</span> { TEXT } <span class="kw">from</span> <span class="str">'./utils'</span>;<br><span class="kw">import</span> <span class="kw">type</span> { <span class="type">SubsysInfo</span>, <span class="type">CaseInfo</span> } <span class="kw">from</span> <span class="str">'@shared/types'</span>;<br><br><span class="com">// Host tool definitions for SoC verification</span><br><span class="kw">export function</span> <span class="fn">registerHostTools</span>(reg: <span class="type">HostToolsRegistry</span>) {<br>&nbsp;&nbsp;reg.<span class="fn">registerDefaults</span>();<br>}<br><br><span class="kw">export class</span> <span class="type">HostToolsRegistry</span> {<br>&nbsp;&nbsp;<span class="kw">private</span> tools = <span class="kw">new</span> <span class="type">Map</span>();<br>&nbsp;&nbsp;<span class="kw">private</span> discovery: <span class="type">SubsysDiscovery</span>;</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- READ (collapsed) -->
+  <div class="tool-card collapsed">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name read">read</span>
+      <span class="tool-summary"><span class="path">src/renderer/src/App.tsx</span> · 28 lines</span>
+      <span class="tool-duration">8ms</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+  </div>
+
+  <!-- WRITE (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name write">write</span>
+      <span class="tool-summary"><span class="path">src/main/coverage/coverage-manager.ts</span> · new file</span>
+      <span class="tool-duration">5ms</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="write-block">
+        <div class="write-line"><span class="gutter">1</span><span class="prefix">+</span><span class="content"><span class="kw">import</span> { create } <span class="kw">from</span> <span class="str">'zustand'</span>;</span></div>
+        <div class="write-line"><span class="gutter">2</span><span class="prefix">+</span><span class="content"><span class="kw">import</span> { trpc } <span class="kw">from</span> <span class="str">'@renderer/lib/trpc'</span>;</span></div>
+        <div class="write-line"><span class="gutter">3</span><span class="prefix">+</span><span class="content"></span></div>
+        <div class="write-line"><span class="gutter">4</span><span class="prefix">+</span><span class="content"><span class="kw">export interface</span> <span class="type">CoverageData</span> {</span></div>
+        <div class="write-line"><span class="gutter">5</span><span class="prefix">+</span><span class="content">&nbsp;&nbsp;line: <span class="kw">number</span>;</span></div>
+        <div class="write-line"><span class="gutter">6</span><span class="prefix">+</span><span class="content">&nbsp;&nbsp;toggle: <span class="kw">number</span>;</span></div>
+        <div class="write-line"><span class="gutter">7</span><span class="prefix">+</span><span class="content">&nbsp;&nbsp;functional: <span class="kw">number</span>;</span></div>
+        <div class="write-line"><span class="gutter">8</span><span class="prefix">+</span><span class="content">&nbsp;&nbsp;assertion: <span class="kw">number</span>;</span></div>
+        <div class="write-line"><span class="gutter">9</span><span class="prefix">+</span><span class="content">}</span></div>
+        <div class="write-line"><span class="gutter">10</span><span class="prefix">+</span><span class="content"></span></div>
+        <div class="write-line"><span class="gutter">11</span><span class="prefix">+</span><span class="content"><span class="kw">export class</span> <span class="type">CoverageManager</span> {</span></div>
+        <div class="write-line"><span class="gutter">12</span><span class="prefix">+</span><span class="content">&nbsp;&nbsp;<span class="kw">async</span> <span class="fn">parse</span>(runId: <span class="kw">string</span>) {</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WRITE (collapsed) -->
+  <div class="tool-card collapsed">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name write">write</span>
+      <span class="tool-summary"><span class="path">tests/coverage/coverage-manager.test.ts</span> · new file</span>
+      <span class="tool-duration">3ms</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+  </div>
+
+  <!-- EDIT (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name edit">edit</span>
+      <span class="tool-summary"><span class="path">src/main/ipc/router.ts</span> · 2 changes</span>
+      <span class="tool-duration">15ms</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="diff-block">
+        <div class="diff-hunk-header">@@ -128,7 +128,9 @@ export const router = router({</div>
+        <div class="diff-line ctx"><span class="gutter">128</span><span class="prefix"> </span><span class="content">&nbsp;&nbsp;simulation: publicProcedure</span></div>
+        <div class="diff-line ctx"><span class="gutter">129</span><span class="prefix"> </span><span class="content">&nbsp;&nbsp;&nbsp;&nbsp;.input(v.object({ runId: v.string() }))</span></div>
+        <div class="diff-line del"><span class="gutter">130</span><span class="prefix">-</span><span class="content">&nbsp;&nbsp;&nbsp;&nbsp;.query(async ({ input }) => {</span></div>
+        <div class="diff-line del"><span class="gutter">131</span><span class="prefix">-</span><span class="content">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return simManager.getStatus(input.runId);</span></div>
+        <div class="diff-line add"><span class="gutter">130</span><span class="prefix">+</span><span class="content">&nbsp;&nbsp;&nbsp;&nbsp;.query(async ({ input }) => {</span></div>
+        <div class="diff-line add"><span class="gutter">131</span><span class="prefix">+</span><span class="content">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;const status = await simManager.getStatus(input.runId);</span></div>
+        <div class="diff-line add"><span class="gutter">132</span><span class="prefix">+</span><span class="content">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return { ...status, timestamp: Date.now() };</span></div>
+        <div class="diff-line ctx"><span class="gutter">133</span><span class="prefix"> </span><span class="content">&nbsp;&nbsp;&nbsp;&nbsp;}),</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EDIT (collapsed) -->
+  <div class="tool-card collapsed">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name edit">edit</span>
+      <span class="tool-summary"><span class="path">src/renderer/src/stores/session.ts</span> · 1 change</span>
+      <span class="tool-duration">9ms</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+  </div>
+
+  <div class="section-label">Search & Discovery</div>
+
+  <!-- GREP (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name grep">grep</span>
+      <span class="tool-summary">/<span class="val">HostToolsRegistry</span>/ in src/ · 4 matches</span>
+      <span class="tool-duration">23ms</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="grep-results">
+        <div class="grep-file">src/main/host/host-tools.ts</div>
+        <div class="grep-match"><span class="lineno">12</span><span class="text"><span class="hl">HostToolsRegistry</span> {</span></div>
+        <div class="grep-match"><span class="lineno">46</span><span class="text">&nbsp;&nbsp;registerDefaults(): void {</span></div>
+        <div class="grep-file">tests/host/host-tools.test.ts</div>
+        <div class="grep-match"><span class="lineno">27</span><span class="text">&nbsp;&nbsp;const registry = new <span class="hl">HostToolsRegistry</span>();</span></div>
+        <div class="grep-match"><span class="lineno">53</span><span class="text">&nbsp;&nbsp;const registry = new <span class="hl">HostToolsRegistry</span>();</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GLOB (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name glob">glob</span>
+      <span class="tool-summary"><span class="val">**/*.test.ts</span> · 12 files</span>
+      <span class="tool-duration">6ms</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="glob-results">
+        <div class="glob-item">tests/host/host-tools.test.ts</div>
+        <div class="glob-item">tests/host/host-tools-plugin.test.ts</div>
+        <div class="glob-item">tests/session/session-store.test.ts</div>
+        <div class="glob-item">tests/coverage/coverage-manager.test.ts</div>
+        <div class="glob-item">tests/ui/RightPanel.test.tsx</div>
+        <div class="glob-item">tests/router/router.test.ts</div>
+        <div class="glob-item" style="color:var(--fg-faint)">... 6 more</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Execution</div>
+
+  <!-- BASH (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name bash">bash</span>
+      <span class="tool-summary">npm run typecheck</span>
+      <span class="tool-duration">3.2s</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="bash-block">
+        <div class="bash-cmd">npm run typecheck</div>
+        <div class="bash-output">> soc-verify@0.1.0 typecheck
+> tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json
+
+✓ Type check passed (main + renderer)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BASH (collapsed, running) -->
+  <div class="tool-card collapsed">
+    <div class="tool-header">
+      <div class="tool-dot running"></div>
+      <span class="tool-name bash">bash</span>
+      <span class="tool-summary">npm run build</span>
+      <span class="tool-duration">running...</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+  </div>
+
+  <!-- EVAL (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name eval">eval</span>
+      <span class="tool-summary">JavaScript · 1+1</span>
+      <span class="tool-duration">4ms</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="eval-block">
+        <div class="eval-code">const subsys = ['cpu', 'gpu', 'dma']; subsys.filter(s => s.startsWith('c'))</div>
+        <div class="eval-output">['cpu']</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Agent Orchestration</div>
+
+  <!-- TASK (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name task">task</span>
+      <span class="tool-summary">3 sub-agents · 2 done, 1 running</span>
+      <span class="tool-duration">8.4s</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="task-block">
+        <div class="task-item">
+          <div class="task-icon done">✓</div>
+          <div class="task-content">
+            <div class="task-title">Analyze coverage gaps in CPU subsystem</div>
+            <div class="task-meta">agent: analyst · 3.2s · 1,240 tokens</div>
+          </div>
+        </div>
+        <div class="task-item">
+          <div class="task-icon done">✓</div>
+          <div class="task-content">
+            <div class="task-title">Review testbench structure for DMA</div>
+            <div class="task-meta">agent: reviewer · 2.8s · 980 tokens</div>
+          </div>
+        </div>
+        <div class="task-item">
+          <div class="task-icon running">⟳</div>
+          <div class="task-content">
+            <div class="task-title">Generate assertions for GPU interface</div>
+            <div class="task-meta">agent: coder · running · 2,100 tokens</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- JOB (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name job">job</span>
+      <span class="tool-summary">2 background jobs</span>
+      <span class="tool-duration">--</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="job-block">
+        <div class="job-row">
+          <span class="job-id">#1</span>
+          <span class="job-desc">Compile CPU testbench</span>
+          <div class="job-progress"><div class="job-progress-fill" style="width:100%"></div></div>
+          <span class="job-status done">done</span>
+        </div>
+        <div class="job-row">
+          <span class="job-id">#2</span>
+          <span class="job-desc">Run regression suite A</span>
+          <div class="job-progress"><div class="job-progress-fill" style="width:62%"></div></div>
+          <span class="job-status running">running</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TODO (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name todo">todo</span>
+      <span class="tool-summary">4 items · 2 completed</span>
+      <span class="tool-duration">1ms</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="todo-block">
+        <div class="todo-item checked"><div class="todo-check checked">✓</div><span class="todo-text">Parse subsystem list from project config</span></div>
+        <div class="todo-item checked"><div class="todo-check checked">✓</div><span class="todo-text">Register host tools with omp session</span></div>
+        <div class="todo-item"><div class="todo-check"></div><span class="todo-text">Add coverage parser plugin interface</span></div>
+        <div class="todo-item"><div class="todo-check"></div><span class="todo-text">Write integration tests for simulation flow</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">SoC Verification Host Tools</div>
+
+  <!-- LIST_SUBSYS (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name host">list_subsys</span>
+      <span class="tool-summary">4 subsystems found</span>
+      <span class="tool-duration">18ms</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <table class="host-table">
+        <thead><tr><th>Subsystem</th><th>Path</th><th>Cases</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>cpu</td><td style="color:var(--fg-faint)">/subsystems/cpu</td><td>42</td><td><span class="badge pass">pass</span></td></tr>
+          <tr><td>gpu</td><td style="color:var(--fg-faint)">/subsystems/gpu</td><td>28</td><td><span class="badge running">running</span></td></tr>
+          <tr><td>dma</td><td style="color:var(--fg-faint)">/subsystems/dma</td><td>15</td><td><span class="badge fail">fail</span></td></tr>
+          <tr><td>interconnect</td><td style="color:var(--fg-faint)">/subsystems/ic</td><td>8</td><td><span class="badge pending">pending</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- LIST_CASES (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name host">list_cases</span>
+      <span class="tool-summary">subsys=cpu · 42 cases</span>
+      <span class="tool-duration">12ms</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <table class="host-table">
+        <thead><tr><th>Case</th><th>Subsystem</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>test_cpu_basic_read</td><td>cpu</td><td><span class="badge pass">pass</span></td></tr>
+          <tr><td>test_cpu_pipeline_stall</td><td>cpu</td><td><span class="badge pass">pass</span></td></tr>
+          <tr><td>test_cpu_cache_coherency</td><td>cpu</td><td><span class="badge fail">fail</span></td></tr>
+          <tr><td>test_cpu_irq_priority</td><td>cpu</td><td><span class="badge running">running</span></td></tr>
+          <tr><td>test_cpu_mmu_translate</td><td>cpu</td><td><span class="badge pending">pending</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- RUN_SIMULATION (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name host">run_simulation</span>
+      <span class="tool-summary">cpu/test_cpu_cache_coherency</span>
+      <span class="tool-duration">12.3s</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="sim-block">
+        <div class="sim-header">
+          <span class="sim-name">test_cpu_cache_coherency</span>
+          <span class="sim-status pass">PASS</span>
+        </div>
+        <div class="sim-bar"><div class="sim-bar-fill" style="width:100%"></div></div>
+        <div class="sim-meta">
+          <span>run_id: run_20260713_001</span>
+          <span>seed: 42</span>
+          <span>sim_time: 1.2ms</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GET_COVERAGE (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name host">get_coverage</span>
+      <span class="tool-summary">subsys=cpu · run_20260713_001</span>
+      <span class="tool-duration">31ms</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="coverage-grid">
+        <div class="cov-cell"><div class="cov-label">Line</div><div class="cov-value good">87.3%</div></div>
+        <div class="cov-cell"><div class="cov-label">Toggle</div><div class="cov-value mid">72.1%</div></div>
+        <div class="cov-cell"><div class="cov-label">FSM</div><div class="cov-value good">91.5%</div></div>
+        <div class="cov-cell"><div class="cov-label">Assert</div><div class="cov-value low">58.4%</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GET_COMPILE_ERRORS (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot warn"></div>
+      <span class="tool-name host">get_compile_errors</span>
+      <span class="tool-summary">3 errors, 2 warnings</span>
+      <span class="tool-duration">8ms</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="error-list">
+        <div class="error-item">
+          <span class="error-sev error">ERROR</span>
+          <span class="error-msg">Undefined signal 'irq_pending' in module 'cpu_core'</span>
+          <div class="error-loc">src/rtl/cpu/cpu_core.v:142:8</div>
+        </div>
+        <div class="error-item">
+          <span class="error-sev error">ERROR</span>
+          <span class="error-msg">Syntax error near 'always'</span>
+          <div class="error-loc">src/rtl/cpu/decoder.v:67:1</div>
+        </div>
+        <div class="error-item">
+          <span class="error-sev warn">WARN</span>
+          <span class="error-msg">Unused signal 'debug_bus_enable'</span>
+          <div class="error-loc">src/rtl/cpu/cpu_top.v:203:3</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Interactive</div>
+
+  <!-- ASK (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name ask">ask</span>
+      <span class="tool-summary">Waiting for user response</span>
+      <span class="tool-duration">--</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="ask-block">
+        <div class="ask-question">Which simulation seed strategy should I use for the regression suite?</div>
+        <div class="ask-options">
+          <div class="ask-option">A: Random seeds (1000 iterations)</div>
+          <div class="ask-option">B: Fixed seed set (regression baseline)</div>
+          <div class="ask-option">C: Directed + random mix</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WEB_SEARCH (expanded) -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-dot ok"></div>
+      <span class="tool-name web_search">web_search</span>
+      <span class="tool-summary">"SystemVerilog assertion coverage best practices"</span>
+      <span class="tool-duration">1.1s</span>
+      <span class="tool-chevron">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="web-results">
+        <div class="web-result">
+          <div class="web-title">Assertion Coverage Guidelines</div>
+          <div class="web-url">dvcon.org → best-practices</div>
+          <div class="web-snippet">Recommendations for writing effective concurrent assertions with cover properties...</div>
+        </div>
+        <div class="web-result">
+          <div class="web-title">Verification Academy: Coverage Cookbook</div>
+          <div class="web-url">verificationacademy.com</div>
+          <div class="web-snippet">A comprehensive guide to functional coverage, including assertion-based verification...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

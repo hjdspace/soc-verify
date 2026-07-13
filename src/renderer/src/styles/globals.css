@@ -480,3 +480,59 @@ body {
   max-width: 100%;
   border-radius: 6px;
 }
+
+/* ── highlight.js syntax highlighting for tool cards ─────── */
+/* Minimal theme that adapts to light/dark via CSS variables */
+.hljs {
+  color: hsl(var(--foreground) / 0.9);
+  background: transparent;
+}
+.hljs-comment, .hljs-quote {
+  color: hsl(var(--muted-foreground));
+  font-style: italic;
+}
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-section, .hljs-link {
+  color: #c678dd;
+}
+.hljs-string, .hljs-attr, .hljs-symbol, .hljs-bullet, .hljs-addition {
+  color: #98c379;
+}
+.hljs-title, .hljs-name, .hljs-type, .hljs-attribute, .hljs-number, .hljs-meta, .hljs-variable, .hljs-template-variable {
+  color: #61afef;
+}
+.hljs-built_in, .hljs-builtin-name, .hljs-class .hljs-title, .hljs-title.class_ {
+  color: #e5c07b;
+}
+.hljs-function .hljs-title, .hljs-title.function_ {
+  color: #61afef;
+}
+.hljs-params {
+  color: hsl(var(--foreground) / 0.8);
+}
+.hljs-deletion {
+  color: #e06c75;
+}
+.hljs-regexp, .hljs-template-tag {
+  color: #56b6c2;
+}
+.hljs-tag {
+  color: hsl(var(--muted-foreground));
+}
+.hljs-tag .hljs-name {
+  color: #e06c75;
+}
+.hljs-tag .hljs-attr {
+  color: #d19a66;
+}
+.hljs-tag .hljs-string {
+  color: #98c379;
+}
+.hljs-meta {
+  color: hsl(var(--muted-foreground));
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: bold;
+}

@@ -10,6 +10,7 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   toolName?: string;
+  toolCallId?: string;
   toolArgs?: unknown;
   toolResult?: unknown;
   toolStartTime?: number;
@@ -475,12 +476,14 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
           }
 
           case 'tool_execution_start': {
+            const toolCallId = (evt.toolCallId as string) ?? `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
             const toolMsg: ChatMessage = {
-              id: `tool_${Date.now()}`,
+              id: `tool_${toolCallId}`,
               role: 'tool',
               content: '',
               timestamp: Date.now(),
               toolName: evt.toolName as string,
+              toolCallId,
               toolArgs: evt.args,
               toolStartTime: Date.now(),
             };
@@ -492,14 +495,23 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
           }
 
           case 'tool_execution_end': {
+            const endToolCallId = evt.toolCallId as string | undefined;
             return {
               ...sess,
               status: 'streaming',
-              messages: sess.messages.map((m) =>
-                m.role === 'tool' && m.toolName === evt.toolName && !m.toolResult
+              messages: sess.messages.map((m) => {
+                // Match by toolCallId if available (precise), otherwise by toolName + pending (fallback)
+                if (m.role !== 'tool' || m.toolResult) return m;
+                if (endToolCallId && m.toolCallId) {
+                  return m.toolCallId === endToolCallId
+                    ? { ...m, toolResult: evt.result, toolEndTime: Date.now() }
+                    : m;
+                }
+                // Fallback: match by toolName (legacy behavior)
+                return m.toolName === evt.toolName && !m.toolResult
                   ? { ...m, toolResult: evt.result, toolEndTime: Date.now() }
-                  : m,
-              ),
+                  : m;
+              }),
             };
           }
 
@@ -794,6 +806,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
                   content: '',
                   timestamp: Date.now(),
                   toolName: tc.name as string,
+                  toolCallId: (tc.id as string) ?? undefined,
                   toolArgs: tc.input,
                   toolResult: tc.output,
                   toolStartTime: Date.now(),

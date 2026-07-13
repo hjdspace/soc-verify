@@ -221,21 +221,6 @@ npm run test         # 3. 确认测试通过（Vitest 全部测试用例）
 5. **electron-trpc 0.7.1 CJS 输出**：绕过 ESM 不兼容问题
 6. **CSP 策略**：`index.html` 中设置了严格 CSP（`default-src 'self'`）
 
-## 里程碑
-
-| 里程碑 | 状态 | 内容 |
-|--------|------|------|
-| M0 | ✅ 完成 | 项目脚手架 |
-| M1 | ✅ 完成 | omp RPC 核心（JSONL 客户端、会话管理、Host Tools/URI 骨架） |
-| M2 | 📋 计划 | 项目管理 / 存储 / 发现 / 插件系统 |
-| M3 | 📋 计划 | 仿真执行 / 终端集成 |
-| M4 | 📋 计划 | AI 辅助验证核心流 |
-| M5 | 📋 计划 | 环境搭建 / 覆盖率分析 |
-| M6 | 📋 计划 | 回归 / Dashboard / TO 检查 |
-| M7 | 📋 计划 | MCP/Skill 管理 / 凭据 / 打磨 |
-
-详见 `docs/prd-m2-m7.md` 和 `docs/issues-m2-m7.md`。
-
 ## 常见任务
 
 ### 添加新的 tRPC API
@@ -263,3 +248,6 @@ npx shadcn@latest add <component-name>
 1. 在 `src/renderer/src/components/layout/` 创建组件文件
 2. 在 `AppShell.tsx` 中集成
 3. 面板折叠状态通过 `useUiStore` 管理
+
+# Rules
+ - 原型HTML UI在docs/prototypes目录生成

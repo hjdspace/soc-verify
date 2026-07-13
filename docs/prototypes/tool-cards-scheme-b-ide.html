@@ -1,0 +1,1255 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SoC Verify · Tool Cards · Scheme B: IDE Panels</title>
+<style>
+  :root {
+    --bg: oklch(0.15 0.006 250);
+    --bg-surface: oklch(0.18 0.006 250);
+    --bg-elevated: oklch(0.21 0.007 250);
+    --bg-hover: oklch(0.23 0.007 250);
+    --fg: oklch(0.94 0.004 250);
+    --fg-dim: oklch(0.65 0.008 250);
+    --fg-faint: oklch(0.45 0.006 250);
+    --border: oklch(0.25 0.007 250);
+    --border-bright: oklch(0.33 0.008 250);
+
+    --c-read: oklch(0.68 0.14 250);
+    --c-write: oklch(0.72 0.16 145);
+    --c-edit: oklch(0.75 0.14 65);
+    --c-bash: oklch(0.68 0.15 295);
+    --c-grep: oklch(0.68 0.13 185);
+    --c-glob: oklch(0.66 0.11 210);
+    --c-task: oklch(0.72 0.15 35);
+    --c-job: oklch(0.68 0.13 165);
+    --c-todo: oklch(0.68 0.14 285);
+    --c-eval: oklch(0.66 0.13 230);
+    --c-web: oklch(0.68 0.14 10);
+    --c-host: oklch(0.68 0.13 175);
+    --c-ask: oklch(0.75 0.14 90);
+
+    --c-ok: oklch(0.72 0.16 145);
+    --c-err: oklch(0.65 0.18 25);
+    --c-warn: oklch(0.75 0.15 75);
+    --c-run: oklch(0.68 0.14 250);
+
+    --diff-add-bg: oklch(0.22 0.04 145);
+    --diff-add-fg: oklch(0.82 0.08 145);
+    --diff-del-bg: oklch(0.22 0.04 25);
+    --diff-del-fg: oklch(0.78 0.08 25);
+
+    --mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 24px;
+  }
+
+  h1 {
+    font-size: 20px; font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .subtitle {
+    font-size: 13px; color: var(--fg-dim);
+    margin-bottom: 32px;
+  }
+  .section-label {
+    font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--fg-faint);
+    margin: 28px 0 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .scheme-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--bg-elevated);
+    color: var(--c-read);
+    font-size: 11px; font-weight: 600;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+
+  /* ── Tool Card ─────────────────────────────────── */
+  .tool-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    overflow: hidden;
+    transition: border-color 0.15s;
+  }
+  .tool-card:hover { border-color: var(--border-bright); }
+
+  .tool-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .tool-badge {
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+    flex-shrink: 0;
+    font-weight: 600;
+  }
+  .tool-badge.read { background: oklch(0.24 0.04 250); color: var(--c-read); }
+  .tool-badge.write { background: oklch(0.24 0.04 145); color: var(--c-write); }
+  .tool-badge.edit { background: oklch(0.24 0.04 65); color: var(--c-edit); }
+  .tool-badge.bash { background: oklch(0.24 0.04 295); color: var(--c-bash); }
+  .tool-badge.grep { background: oklch(0.24 0.04 185); color: var(--c-grep); }
+  .tool-badge.glob { background: oklch(0.24 0.04 210); color: var(--c-glob); }
+  .tool-badge.task { background: oklch(0.24 0.04 35); color: var(--c-task); }
+  .tool-badge.job { background: oklch(0.24 0.04 165); color: var(--c-job); }
+  .tool-badge.todo { background: oklch(0.24 0.04 285); color: var(--c-todo); }
+  .tool-badge.eval { background: oklch(0.24 0.04 230); color: var(--c-eval); }
+  .tool-badge.web_search { background: oklch(0.24 0.04 10); color: var(--c-web); }
+  .tool-badge.host { background: oklch(0.24 0.04 175); color: var(--c-host); }
+  .tool-badge.ask { background: oklch(0.24 0.04 90); color: var(--c-ask); }
+
+  .tool-info { flex: 1; min-width: 0; }
+  .tool-title-row {
+    display: flex; align-items: center; gap: 6px;
+  }
+  .tool-label {
+    font-size: 12px; font-weight: 600;
+    color: var(--fg);
+  }
+  .tool-status-pill {
+    font-size: 9.5px; font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .tool-status-pill.ok { background: oklch(0.22 0.05 145); color: var(--c-ok); }
+  .tool-status-pill.err { background: oklch(0.22 0.05 25); color: var(--c-err); }
+  .tool-status-pill.running { background: oklch(0.22 0.05 250); color: var(--c-run); }
+  .tool-status-pill.warn { background: oklch(0.22 0.05 75); color: var(--c-warn); }
+
+  .tool-desc {
+    font-size: 11px;
+    color: var(--fg-dim);
+    margin-top: 1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tool-desc .mono { font-family: var(--mono); color: var(--fg); }
+
+  .tool-meta {
+    display: flex; align-items: center; gap: 8px;
+    flex-shrink: 0;
+  }
+  .tool-duration {
+    font-size: 10.5px;
+    color: var(--fg-faint);
+    font-family: var(--mono);
+  }
+  .tool-chevron {
+    color: var(--fg-faint);
+    transition: transform 0.2s;
+    font-size: 12px;
+  }
+  .tool-card.expanded .tool-chevron { transform: rotate(180deg); }
+
+  /* ── Tool Body ─────────────────────────────────── */
+  .tool-body {
+    border-top: 1px solid var(--border);
+    max-height: 420px;
+    overflow: auto;
+  }
+
+  .body-section {
+    padding: 8px 12px;
+  }
+  .body-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg-faint);
+    margin-bottom: 4px;
+  }
+
+  /* ── Code viewer (read) ────────────────────────── */
+  .code-viewer {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.55;
+    background: var(--bg);
+    display: flex;
+  }
+  .code-viewer .gutter {
+    text-align: right;
+    padding: 8px 8px 8px 12px;
+    color: var(--fg-faint);
+    user-select: none;
+    border-right: 1px solid var(--border);
+    min-width: 42px;
+  }
+  .code-viewer .code {
+    padding: 8px 12px;
+    overflow-x: auto;
+    flex: 1;
+  }
+  .code .kw { color: oklch(0.72 0.12 290); }
+  .code .str { color: oklch(0.75 0.10 145); }
+  .code .num { color: oklch(0.75 0.12 40); }
+  .code .com { color: var(--fg-faint); font-style: italic; }
+  .code .fn { color: oklch(0.72 0.12 220); }
+  .code .type { color: oklch(0.72 0.12 180); }
+
+  /* ── Write viewer ──────────────────────────────── */
+  .write-viewer {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.55;
+    background: var(--diff-add-bg);
+  }
+  .write-viewer .wline {
+    display: flex;
+  }
+  .write-viewer .gutter {
+    text-align: right;
+    padding: 4px 8px 4px 12px;
+    color: oklch(0.50 0.04 145);
+    user-select: none;
+    min-width: 42px;
+    border-right: 1px solid oklch(0.28 0.04 145);
+  }
+  .write-viewer .plus {
+    color: var(--c-write);
+    padding: 4px 4px 4px 8px;
+    width: 20px;
+    flex-shrink: 0;
+    text-align: center;
+  }
+  .write-viewer .content {
+    padding: 4px 12px 4px 0;
+    color: var(--diff-add-fg);
+    flex: 1;
+    overflow-x: auto;
+  }
+
+  /* ── Diff viewer (edit) ────────────────────────── */
+  .diff-viewer {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.55;
+  }
+  .diff-viewer .hunk {
+    background: oklch(0.20 0.01 250);
+    color: var(--fg-faint);
+    padding: 4px 12px;
+    font-size: 11px;
+    border-bottom: 1px solid var(--border);
+  }
+  .diff-viewer .dline {
+    display: flex;
+  }
+  .diff-viewer .gutter {
+    width: 38px;
+    text-align: right;
+    padding: 2px 6px;
+    color: var(--fg-faint);
+    user-select: none;
+    font-size: 10.5px;
+    flex-shrink: 0;
+  }
+  .diff-viewer .sign {
+    width: 16px;
+    text-align: center;
+    flex-shrink: 0;
+    padding: 2px 0;
+  }
+  .diff-viewer .content {
+    padding: 2px 8px;
+    flex: 1;
+    overflow-x: auto;
+  }
+  .diff-viewer .dline.add { background: var(--diff-add-bg); }
+  .diff-viewer .dline.add .gutter { color: var(--c-ok); }
+  .diff-viewer .dline.add .sign { color: var(--c-ok); }
+  .diff-viewer .dline.add .content { color: var(--diff-add-fg); }
+  .diff-viewer .dline.del { background: var(--diff-del-bg); }
+  .diff-viewer .dline.del .gutter { color: var(--c-err); }
+  .diff-viewer .dline.del .sign { color: var(--c-err); }
+  .diff-viewer .dline.del .content { color: var(--diff-del-fg); opacity: 0.8; }
+  .diff-viewer .dline.ctx .sign { color: var(--fg-faint); }
+  .diff-viewer .dline.ctx .content { color: var(--fg-dim); }
+
+  /* ── Bash viewer ───────────────────────────────── */
+  .bash-viewer {
+    font-family: var(--mono);
+    font-size: 11.5px;
+  }
+  .bash-cmd-line {
+    padding: 6px 12px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    color: var(--c-bash);
+    display: flex; gap: 6px;
+  }
+  .bash-cmd-line .prompt { color: var(--fg-faint); }
+  .bash-output-area {
+    padding: 6px 12px;
+    color: var(--fg-dim);
+    white-space: pre-wrap;
+    line-height: 1.5;
+  }
+
+  /* ── Grep viewer ───────────────────────────────── */
+  .grep-viewer {
+    font-family: var(--mono);
+    font-size: 11.5px;
+  }
+  .grep-file-header {
+    padding: 4px 12px;
+    color: var(--c-grep);
+    font-weight: 600;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 4px;
+  }
+  .grep-file-header::before { content: '📄'; font-size: 10px; opacity: 0.7; }
+  .grep-line {
+    display: flex;
+    padding: 1px 12px;
+    gap: 10px;
+  }
+  .grep-line .ln { color: var(--fg-faint); min-width: 32px; text-align: right; }
+  .grep-line .txt { color: var(--fg-dim); overflow-x: auto; }
+  .grep-line .txt .hl {
+    background: oklch(0.30 0.08 185);
+    color: var(--c-grep);
+    border-radius: 2px;
+    padding: 0 2px;
+  }
+
+  /* ── Glob viewer ───────────────────────────────── */
+  .glob-viewer {
+    padding: 6px 12px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+  }
+  .glob-entry {
+    padding: 3px 0;
+    color: var(--fg-dim);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .glob-entry .icon { color: var(--c-glob); font-size: 11px; }
+  .glob-entry .dim { color: var(--fg-faint); }
+
+  /* ── Task viewer ───────────────────────────────── */
+  .task-viewer { padding: 4px 0; }
+  .task-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .task-row:last-child { border-bottom: none; }
+  .task-status-icon {
+    width: 20px; height: 20px;
+    border-radius: 5px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .task-status-icon.done { background: oklch(0.24 0.05 145); color: var(--c-ok); }
+  .task-status-icon.running { background: oklch(0.24 0.05 250); color: var(--c-run); }
+  .task-status-icon.pending { background: var(--bg-elevated); color: var(--fg-faint); }
+  .task-status-icon.error { background: oklch(0.24 0.05 25); color: var(--c-err); }
+  .task-body { flex: 1; min-width: 0; }
+  .task-name { font-size: 12px; color: var(--fg); font-weight: 500; }
+  .task-row.done .task-name { color: var(--fg-dim); }
+  .task-sub { font-size: 10.5px; color: var(--fg-faint); margin-top: 1px; }
+
+  /* ── Job viewer ────────────────────────────────── */
+  .job-viewer { padding: 4px 0; }
+  .job-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .job-row:last-child { border-bottom: none; }
+  .job-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--c-job);
+    font-weight: 600;
+    min-width: 28px;
+  }
+  .job-text { flex: 1; font-size: 12px; color: var(--fg-dim); }
+  .job-bar {
+    width: 80px; height: 5px;
+    background: var(--bg-elevated);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .job-bar-fill { height: 100%; border-radius: 3px; }
+  .job-bar-fill.done { background: var(--c-ok); width: 100%; }
+  .job-bar-fill.running { background: var(--c-job); }
+  .job-tag {
+    font-size: 9.5px; font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .job-tag.done { background: oklch(0.22 0.05 145); color: var(--c-ok); }
+  .job-tag.running { background: oklch(0.22 0.05 250); color: var(--c-run); }
+  .job-tag.failed { background: oklch(0.22 0.05 25); color: var(--c-err); }
+
+  /* ── Todo viewer ───────────────────────────────── */
+  .todo-viewer { padding: 6px 12px; }
+  .todo-entry {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 0;
+    font-size: 12px;
+  }
+  .todo-box {
+    width: 16px; height: 16px;
+    border: 1.5px solid var(--border-bright);
+    border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    font-size: 10px;
+  }
+  .todo-box.checked {
+    background: var(--c-todo);
+    border-color: var(--c-todo);
+    color: var(--bg);
+  }
+  .todo-entry.checked .todo-text {
+    color: var(--fg-faint);
+    text-decoration: line-through;
+  }
+  .todo-text { color: var(--fg-dim); }
+
+  /* ── Eval viewer ───────────────────────────────── */
+  .eval-viewer {
+    font-family: var(--mono);
+    font-size: 11.5px;
+  }
+  .eval-input-area {
+    padding: 6px 12px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    color: var(--c-eval);
+  }
+  .eval-input-area .arrow { color: var(--fg-faint); margin-right: 4px; }
+  .eval-output-area {
+    padding: 6px 12px;
+    color: var(--fg-dim);
+    white-space: pre-wrap;
+  }
+  .eval-output-area .arrow { color: var(--c-ok); margin-right: 4px; }
+
+  /* ── Web search viewer ─────────────────────────── */
+  .web-viewer { padding: 4px 0; }
+  .web-entry {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .web-entry:last-child { border-bottom: none; }
+  .web-entry-title { font-size: 12px; color: var(--c-web); font-weight: 500; }
+  .web-entry-url { font-size: 10.5px; color: var(--fg-faint); font-family: var(--mono); }
+  .web-entry-snippet { font-size: 11px; color: var(--fg-dim); margin-top: 2px; }
+
+  /* ── Host table ────────────────────────────────── */
+  .host-viewer {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  .host-viewer th {
+    text-align: left;
+    padding: 6px 12px;
+    color: var(--fg-faint);
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .host-viewer td {
+    padding: 5px 12px;
+    color: var(--fg-dim);
+    border-bottom: 1px solid var(--border);
+  }
+  .host-viewer tr:last-child td { border-bottom: none; }
+  .host-viewer td.mono { font-family: var(--mono); font-size: 11px; color: var(--fg); }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .pill.pass { background: oklch(0.22 0.05 145); color: var(--c-ok); }
+  .pill.fail { background: oklch(0.22 0.05 25); color: var(--c-err); }
+  .pill.running { background: oklch(0.22 0.05 250); color: var(--c-run); }
+  .pill.pending { background: var(--bg-elevated); color: var(--fg-faint); }
+  .pill::before {
+    content: ''; width: 5px; height: 5px; border-radius: 50%;
+  }
+  .pill.pass::before { background: var(--c-ok); }
+  .pill.fail::before { background: var(--c-err); }
+  .pill.running::before { background: var(--c-run); animation: pulse 1.2s infinite; }
+  .pill.pending::before { background: var(--fg-faint); }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
+
+  /* ── Coverage viewer ───────────────────────────── */
+  .cov-viewer {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1px;
+    background: var(--border);
+  }
+  .cov-tile {
+    background: var(--bg-surface);
+    padding: 10px 12px;
+  }
+  .cov-tile-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--fg-faint);
+  }
+  .cov-tile-value {
+    font-size: 22px;
+    font-weight: 700;
+    margin-top: 2px;
+    font-family: var(--mono);
+  }
+  .cov-tile-value.good { color: var(--c-ok); }
+  .cov-tile-value.mid { color: var(--c-warn); }
+  .cov-tile-value.low { color: var(--c-err); }
+  .cov-tile-bar {
+    height: 3px;
+    border-radius: 2px;
+    margin-top: 4px;
+    background: var(--bg-elevated);
+    overflow: hidden;
+  }
+  .cov-tile-bar-fill { height: 100%; border-radius: 2px; }
+  .cov-tile-bar-fill.good { background: var(--c-ok); }
+  .cov-tile-bar-fill.mid { background: var(--c-warn); }
+  .cov-tile-bar-fill.low { background: var(--c-err); }
+
+  /* ── Error viewer ──────────────────────────────── */
+  .error-viewer { padding: 4px 0; }
+  .error-entry {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .error-entry:last-child { border-bottom: none; }
+  .error-entry-head {
+    display: flex; align-items: center; gap: 6px;
+  }
+  .sev-badge {
+    font-size: 9px; font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 3px;
+    text-transform: uppercase;
+  }
+  .sev-badge.error { background: oklch(0.25 0.06 25); color: var(--c-err); }
+  .sev-badge.warn { background: oklch(0.25 0.06 75); color: var(--c-warn); }
+  .error-msg-text { font-size: 12px; color: var(--fg); }
+  .error-loc-text {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--c-read);
+    margin-top: 2px;
+  }
+
+  /* ── Sim viewer ────────────────────────────────── */
+  .sim-viewer { padding: 10px 12px; }
+  .sim-viewer-head {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 8px;
+  }
+  .sim-viewer-name { font-size: 13px; font-weight: 600; color: var(--fg); }
+  .sim-viewer-bar {
+    height: 6px;
+    background: var(--bg-elevated);
+    border-radius: 3px;
+    overflow: hidden;
+    margin: 6px 0;
+  }
+  .sim-viewer-bar-fill {
+    height: 100%; border-radius: 3px;
+    background: var(--c-host);
+  }
+  .sim-viewer-meta {
+    display: flex; gap: 14px;
+    font-size: 10.5px;
+    color: var(--fg-faint);
+    font-family: var(--mono);
+  }
+
+  /* ── Ask viewer ────────────────────────────────── */
+  .ask-viewer { padding: 10px 12px; }
+  .ask-q {
+    font-size: 13px;
+    color: var(--c-ask);
+    font-weight: 500;
+    margin-bottom: 8px;
+  }
+  .ask-opts { display: flex; flex-direction: column; gap: 4px; }
+  .ask-opt {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--fg-dim);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .ask-opt:hover {
+    border-color: var(--c-ask);
+    color: var(--c-ask);
+    background: oklch(0.22 0.03 90);
+  }
+
+  .collapsed .tool-body { display: none; }
+  .container { max-width: 540px; margin: 0 auto; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Tool Cards <span class="scheme-tag">Scheme B · IDE Panels</span></h1>
+  <p class="subtitle">Structured cards with icon badges, distinct accent colors per tool type, labeled sections.</p>
+
+  <div class="section-label">File Operations</div>
+
+  <!-- READ expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge read">📖</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Read</span>
+          <span class="tool-status-pill ok">done</span>
+        </div>
+        <div class="tool-desc"><span class="mono">src/main/host/host-tools.ts</span> · 42 lines read</div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">12ms</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="code-viewer">
+        <div class="gutter">1<br>2<br>3<br>4<br>5<br>6<br>7<br>8<br>9<br>10<br>11<br>12</div>
+        <div class="code"><span class="kw">import</span> { defineTool } <span class="kw">from</span> <span class="str">'./types'</span>;<br><span class="kw">import</span> { TEXT } <span class="kw">from</span> <span class="str">'./utils'</span>;<br><span class="kw">import</span> <span class="kw">type</span> { <span class="type">SubsysInfo</span>, <span class="type">CaseInfo</span> } <span class="kw">from</span> <span class="str">'@shared/types'</span>;<br><br><span class="com">// Host tool definitions for SoC verification</span><br><span class="kw">export function</span> <span class="fn">registerHostTools</span>(reg: <span class="type">HostToolsRegistry</span>) {<br>&nbsp;&nbsp;reg.<span class="fn">registerDefaults</span>();<br>}<br><br><span class="kw">export class</span> <span class="type">HostToolsRegistry</span> {<br>&nbsp;&nbsp;<span class="kw">private</span> tools = <span class="kw">new</span> <span class="type">Map</span>();<br>&nbsp;&nbsp;<span class="kw">private</span> discovery: <span class="type">SubsysDiscovery</span>;</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- READ collapsed -->
+  <div class="tool-card collapsed">
+    <div class="tool-header">
+      <div class="tool-badge read">📖</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Read</span>
+          <span class="tool-status-pill ok">done</span>
+        </div>
+        <div class="tool-desc"><span class="mono">src/renderer/src/App.tsx</span> · 28 lines</div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">8ms</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- WRITE expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge write">✎</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Write</span>
+          <span class="tool-status-pill ok">created</span>
+        </div>
+        <div class="tool-desc"><span class="mono">src/main/coverage/coverage-manager.ts</span> · new file, 48 lines</div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">5ms</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="write-viewer">
+        <div class="wline"><span class="gutter">1</span><span class="plus">+</span><span class="content"><span class="kw">import</span> { create } <span class="kw">from</span> <span class="str">'zustand'</span>;</span></div>
+        <div class="wline"><span class="gutter">2</span><span class="plus">+</span><span class="content"><span class="kw">import</span> { trpc } <span class="kw">from</span> <span class="str">'@renderer/lib/trpc'</span>;</span></div>
+        <div class="wline"><span class="gutter">3</span><span class="plus">+</span><span class="content"></span></div>
+        <div class="wline"><span class="gutter">4</span><span class="plus">+</span><span class="content"><span class="kw">export interface</span> <span class="type">CoverageData</span> {</span></div>
+        <div class="wline"><span class="gutter">5</span><span class="plus">+</span><span class="content">&nbsp;&nbsp;line: <span class="kw">number</span>;</span></div>
+        <div class="wline"><span class="gutter">6</span><span class="plus">+</span><span class="content">&nbsp;&nbsp;toggle: <span class="kw">number</span>;</span></div>
+        <div class="wline"><span class="gutter">7</span><span class="plus">+</span><span class="content">&nbsp;&nbsp;functional: <span class="kw">number</span>;</span></div>
+        <div class="wline"><span class="gutter">8</span><span class="plus">+</span><span class="content">&nbsp;&nbsp;assertion: <span class="kw">number</span>;</span></div>
+        <div class="wline"><span class="gutter">9</span><span class="plus">+</span><span class="content">}</span></div>
+        <div class="wline"><span class="gutter">10</span><span class="plus">+</span><span class="content"></span></div>
+        <div class="wline"><span class="gutter">11</span><span class="plus">+</span><span class="content"><span class="kw">export class</span> <span class="type">CoverageManager</span> {</span></div>
+        <div class="wline"><span class="gutter">12</span><span class="plus">+</span><span class="content">&nbsp;&nbsp;<span class="kw">async</span> <span class="fn">parse</span>(runId: <span class="kw">string</span>) {</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EDIT expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge edit">✏</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Edit</span>
+          <span class="tool-status-pill ok">done</span>
+        </div>
+        <div class="tool-desc"><span class="mono">src/main/ipc/router.ts</span> · 2 lines changed</div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">15ms</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="diff-viewer">
+        <div class="hunk">@@ -128,7 +128,9 @@ export const router = router({</div>
+        <div class="dline ctx"><span class="gutter">128</span><span class="sign"> </span><span class="content">&nbsp;&nbsp;simulation: publicProcedure</span></div>
+        <div class="dline ctx"><span class="gutter">129</span><span class="sign"> </span><span class="content">&nbsp;&nbsp;&nbsp;&nbsp;.input(v.object({ runId: v.string() }))</span></div>
+        <div class="dline del"><span class="gutter">130</span><span class="sign">-</span><span class="content">&nbsp;&nbsp;&nbsp;&nbsp;.query(async ({ input }) => {</span></div>
+        <div class="dline del"><span class="gutter">131</span><span class="sign">-</span><span class="content">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return simManager.getStatus(input.runId);</span></div>
+        <div class="dline add"><span class="gutter">130</span><span class="sign">+</span><span class="content">&nbsp;&nbsp;&nbsp;&nbsp;.query(async ({ input }) => {</span></div>
+        <div class="dline add"><span class="gutter">131</span><span class="sign">+</span><span class="content">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;const status = await simManager.getStatus(input.runId);</span></div>
+        <div class="dline add"><span class="gutter">132</span><span class="sign">+</span><span class="content">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return { ...status, timestamp: Date.now() };</span></div>
+        <div class="dline ctx"><span class="gutter">133</span><span class="sign"> </span><span class="content">&nbsp;&nbsp;&nbsp;&nbsp;}),</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EDIT collapsed -->
+  <div class="tool-card collapsed">
+    <div class="tool-header">
+      <div class="tool-badge edit">✏</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Edit</span>
+          <span class="tool-status-pill ok">done</span>
+        </div>
+        <div class="tool-desc"><span class="mono">src/renderer/src/stores/session.ts</span> · 1 line changed</div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">9ms</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Search & Discovery</div>
+
+  <!-- GREP expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge grep">🔍</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Grep</span>
+          <span class="tool-status-pill ok">4 matches</span>
+        </div>
+        <div class="tool-desc">Pattern <span class="mono">HostToolsRegistry</span> in <span class="mono">src/</span></div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">23ms</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="grep-viewer">
+        <div class="grep-file-header">src/main/host/host-tools.ts</div>
+        <div class="grep-line"><span class="ln">12</span><span class="txt"><span class="hl">HostToolsRegistry</span> {</span></div>
+        <div class="grep-line"><span class="ln">46</span><span class="txt">&nbsp;&nbsp;registerDefaults(): void {</span></div>
+        <div class="grep-file-header">tests/host/host-tools.test.ts</div>
+        <div class="grep-line"><span class="ln">27</span><span class="txt">&nbsp;&nbsp;const registry = new <span class="hl">HostToolsRegistry</span>();</span></div>
+        <div class="grep-line"><span class="ln">53</span><span class="txt">&nbsp;&nbsp;const registry = new <span class="hl">HostToolsRegistry</span>();</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GLOB expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge glob">📂</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Glob</span>
+          <span class="tool-status-pill ok">12 files</span>
+        </div>
+        <div class="tool-desc">Pattern <span class="mono">**/*.test.ts</span></div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">6ms</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="glob-viewer">
+        <div class="glob-entry"><span class="icon">📄</span>tests/host/host-tools.test.ts</div>
+        <div class="glob-entry"><span class="icon">📄</span>tests/host/host-tools-plugin.test.ts</div>
+        <div class="glob-entry"><span class="icon">📄</span>tests/session/session-store.test.ts</div>
+        <div class="glob-entry"><span class="icon">📄</span>tests/coverage/coverage-manager.test.ts</div>
+        <div class="glob-entry"><span class="icon">📄</span>tests/ui/RightPanel.test.tsx</div>
+        <div class="glob-entry"><span class="icon">📄</span>tests/router/router.test.ts</div>
+        <div class="glob-entry"><span class="dim">... 6 more files</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Execution</div>
+
+  <!-- BASH expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge bash">⬚</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Bash</span>
+          <span class="tool-status-pill ok">exit 0</span>
+        </div>
+        <div class="tool-desc"><span class="mono">npm run typecheck</span></div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">3.2s</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="bash-viewer">
+        <div class="bash-cmd-line"><span class="prompt">$</span><span>npm run typecheck</span></div>
+        <div class="bash-output-area">> soc-verify@0.1.0 typecheck
+> tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json
+
+✓ Type check passed (main + renderer)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BASH collapsed running -->
+  <div class="tool-card collapsed">
+    <div class="tool-header">
+      <div class="tool-badge bash">⬚</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Bash</span>
+          <span class="tool-status-pill running">running</span>
+        </div>
+        <div class="tool-desc"><span class="mono">npm run build</span></div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">running</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- EVAL expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge eval">▶</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Eval</span>
+          <span class="tool-status-pill ok">JavaScript</span>
+        </div>
+        <div class="tool-desc">Filter subsystems by prefix</div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">4ms</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="eval-viewer">
+        <div class="eval-input-area"><span class="arrow">›</span>const subsys = ['cpu', 'gpu', 'dma']; subsys.filter(s => s.startsWith('c'))</div>
+        <div class="eval-output-area"><span class="arrow">←</span>['cpu']</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Agent Orchestration</div>
+
+  <!-- TASK expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge task">⚡</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Task</span>
+          <span class="tool-status-pill running">2/3 done</span>
+        </div>
+        <div class="tool-desc">3 sub-agents dispatched</div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">8.4s</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="task-viewer">
+        <div class="task-row">
+          <div class="task-status-icon done">✓</div>
+          <div class="task-body">
+            <div class="task-name">Analyze coverage gaps in CPU subsystem</div>
+            <div class="task-sub">Agent: analyst · 3.2s · 1,240 tokens</div>
+          </div>
+        </div>
+        <div class="task-row">
+          <div class="task-status-icon done">✓</div>
+          <div class="task-body">
+            <div class="task-name">Review testbench structure for DMA</div>
+            <div class="task-sub">Agent: reviewer · 2.8s · 980 tokens</div>
+          </div>
+        </div>
+        <div class="task-row">
+          <div class="task-status-icon running">⟳</div>
+          <div class="task-body">
+            <div class="task-name">Generate assertions for GPU interface</div>
+            <div class="task-sub">Agent: coder · running · 2,100 tokens</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- JOB expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge job">⚙</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Job</span>
+          <span class="tool-status-pill running">1 running</span>
+        </div>
+        <div class="tool-desc">2 background jobs</div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">--</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="job-viewer">
+        <div class="job-row">
+          <span class="job-num">#1</span>
+          <span class="job-text">Compile CPU testbench</span>
+          <div class="job-bar"><div class="job-bar-fill done"></div></div>
+          <span class="job-tag done">done</span>
+        </div>
+        <div class="job-row">
+          <span class="job-num">#2</span>
+          <span class="job-text">Run regression suite A</span>
+          <div class="job-bar"><div class="job-bar-fill running" style="width:62%"></div></div>
+          <span class="job-tag running">running</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TODO expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge todo">☑</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Todo</span>
+          <span class="tool-status-pill ok">2/4 done</span>
+        </div>
+        <div class="tool-desc">Implementation checklist</div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">1ms</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="todo-viewer">
+        <div class="todo-entry checked"><div class="todo-box checked">✓</div><span class="todo-text">Parse subsystem list from project config</span></div>
+        <div class="todo-entry checked"><div class="todo-box checked">✓</div><span class="todo-text">Register host tools with omp session</span></div>
+        <div class="todo-entry"><div class="todo-box"></div><span class="todo-text">Add coverage parser plugin interface</span></div>
+        <div class="todo-entry"><div class="todo-box"></div><span class="todo-text">Write integration tests for simulation flow</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">SoC Verification Host Tools</div>
+
+  <!-- LIST_SUBSYS expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge host">⚙</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">List Subsystems</span>
+          <span class="tool-status-pill ok">4 found</span>
+        </div>
+        <div class="tool-desc">All subsystems in current project</div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">18ms</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <table class="host-viewer">
+        <thead><tr><th>Subsystem</th><th>Path</th><th>Cases</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">cpu</td><td>/subsystems/cpu</td><td>42</td><td><span class="pill pass">pass</span></td></tr>
+          <tr><td class="mono">gpu</td><td>/subsystems/gpu</td><td>28</td><td><span class="pill running">running</span></td></tr>
+          <tr><td class="mono">dma</td><td>/subsystems/dma</td><td>15</td><td><span class="pill fail">fail</span></td></tr>
+          <tr><td class="mono">interconnect</td><td>/subsystems/ic</td><td>8</td><td><span class="pill pending">pending</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- LIST_CASES expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge host">⚙</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">List Cases</span>
+          <span class="tool-status-pill ok">42 cases</span>
+        </div>
+        <div class="tool-desc">Filtered by <span class="mono">subsys=cpu</span></div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">12ms</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <table class="host-viewer">
+        <thead><tr><th>Case</th><th>Subsystem</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">test_cpu_basic_read</td><td>cpu</td><td><span class="pill pass">pass</span></td></tr>
+          <tr><td class="mono">test_cpu_pipeline_stall</td><td>cpu</td><td><span class="pill pass">pass</span></td></tr>
+          <tr><td class="mono">test_cpu_cache_coherency</td><td>cpu</td><td><span class="pill fail">fail</span></td></tr>
+          <tr><td class="mono">test_cpu_irq_priority</td><td>cpu</td><td><span class="pill running">running</span></td></tr>
+          <tr><td class="mono">test_cpu_mmu_translate</td><td>cpu</td><td><span class="pill pending">pending</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- RUN_SIMULATION expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge host">▶</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Run Simulation</span>
+          <span class="tool-status-pill ok">pass</span>
+        </div>
+        <div class="tool-desc"><span class="mono">cpu/test_cpu_cache_coherency</span></div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">12.3s</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="sim-viewer">
+        <div class="sim-viewer-head">
+          <span class="sim-viewer-name">test_cpu_cache_coherency</span>
+          <span class="pill pass">pass</span>
+        </div>
+        <div class="sim-viewer-bar"><div class="sim-viewer-bar-fill" style="width:100%"></div></div>
+        <div class="sim-viewer-meta">
+          <span>run_id: run_20260713_001</span>
+          <span>seed: 42</span>
+          <span>sim_time: 1.2ms</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GET_COVERAGE expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge host">⊞</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Get Coverage</span>
+          <span class="tool-status-pill warn">1 low</span>
+        </div>
+        <div class="tool-desc"><span class="mono">cpu</span> · <span class="mono">run_20260713_001</span></div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">31ms</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="cov-viewer">
+        <div class="cov-tile">
+          <div class="cov-tile-label">Line Coverage</div>
+          <div class="cov-tile-value good">87.3%</div>
+          <div class="cov-tile-bar"><div class="cov-tile-bar-fill good" style="width:87%"></div></div>
+        </div>
+        <div class="cov-tile">
+          <div class="cov-tile-label">Toggle Coverage</div>
+          <div class="cov-tile-value mid">72.1%</div>
+          <div class="cov-tile-bar"><div class="cov-tile-bar-fill mid" style="width:72%"></div></div>
+        </div>
+        <div class="cov-tile">
+          <div class="cov-tile-label">FSM Coverage</div>
+          <div class="cov-tile-value good">91.5%</div>
+          <div class="cov-tile-bar"><div class="cov-tile-bar-fill good" style="width:91%"></div></div>
+        </div>
+        <div class="cov-tile">
+          <div class="cov-tile-label">Assertion Coverage</div>
+          <div class="cov-tile-value low">58.4%</div>
+          <div class="cov-tile-bar"><div class="cov-tile-bar-fill low" style="width:58%"></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GET_COMPILE_ERRORS expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge host">⚠</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Compile Errors</span>
+          <span class="tool-status-pill err">3 errors</span>
+        </div>
+        <div class="tool-desc">3 errors, 2 warnings</div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">8ms</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="error-viewer">
+        <div class="error-entry">
+          <div class="error-entry-head">
+            <span class="sev-badge error">error</span>
+            <span class="error-msg-text">Undefined signal 'irq_pending' in module 'cpu_core'</span>
+          </div>
+          <div class="error-loc-text">src/rtl/cpu/cpu_core.v:142:8</div>
+        </div>
+        <div class="error-entry">
+          <div class="error-entry-head">
+            <span class="sev-badge error">error</span>
+            <span class="error-msg-text">Syntax error near 'always'</span>
+          </div>
+          <div class="error-loc-text">src/rtl/cpu/decoder.v:67:1</div>
+        </div>
+        <div class="error-entry">
+          <div class="error-entry-head">
+            <span class="sev-badge warn">warn</span>
+            <span class="error-msg-text">Unused signal 'debug_bus_enable'</span>
+          </div>
+          <div class="error-loc-text">src/rtl/cpu/cpu_top.v:203:3</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Interactive</div>
+
+  <!-- ASK expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge ask">?</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Ask</span>
+          <span class="tool-status-pill running">waiting</span>
+        </div>
+        <div class="tool-desc">Waiting for user response</div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">--</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="ask-viewer">
+        <div class="ask-q">Which simulation seed strategy should I use for the regression suite?</div>
+        <div class="ask-opts">
+          <div class="ask-opt">A: Random seeds (1000 iterations)</div>
+          <div class="ask-opt">B: Fixed seed set (regression baseline)</div>
+          <div class="ask-opt">C: Directed + random mix</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WEB_SEARCH expanded -->
+  <div class="tool-card expanded">
+    <div class="tool-header">
+      <div class="tool-badge web_search">🌐</div>
+      <div class="tool-info">
+        <div class="tool-title-row">
+          <span class="tool-label">Web Search</span>
+          <span class="tool-status-pill ok">2 results</span>
+        </div>
+        <div class="tool-desc">"SystemVerilog assertion coverage best practices"</div>
+      </div>
+      <div class="tool-meta">
+        <span class="tool-duration">1.1s</span>
+        <span class="tool-chevron">▼</span>
+      </div>
+    </div>
+    <div class="tool-body">
+      <div class="web-viewer">
+        <div class="web-entry">
+          <div class="web-entry-title">Assertion Coverage Guidelines</div>
+          <div class="web-entry-url">dvcon.org → best-practices</div>
+          <div class="web-entry-snippet">Recommendations for writing effective concurrent assertions with cover properties...</div>
+        </div>
+        <div class="web-entry">
+          <div class="web-entry-title">Verification Academy: Coverage Cookbook</div>
+          <div class="web-entry-url">verificationacademy.com</div>
+          <div class="web-entry-snippet">A comprehensive guide to functional coverage, including assertion-based verification...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

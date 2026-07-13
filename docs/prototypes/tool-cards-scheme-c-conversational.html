@@ -1,0 +1,1037 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SoC Verify · Tool Cards · Scheme C: Conversational Flow</title>
+<style>
+  :root {
+    --bg: oklch(0.15 0.006 250);
+    --bg-surface: oklch(0.17 0.006 250);
+    --bg-elevated: oklch(0.20 0.007 250);
+    --fg: oklch(0.94 0.004 250);
+    --fg-dim: oklch(0.62 0.008 250);
+    --fg-faint: oklch(0.42 0.006 250);
+    --border: oklch(0.23 0.006 250);
+
+    --c-read: oklch(0.68 0.14 250);
+    --c-write: oklch(0.72 0.16 145);
+    --c-edit: oklch(0.75 0.14 65);
+    --c-bash: oklch(0.68 0.15 295);
+    --c-grep: oklch(0.68 0.13 185);
+    --c-glob: oklch(0.66 0.11 210);
+    --c-task: oklch(0.72 0.15 35);
+    --c-job: oklch(0.68 0.13 165);
+    --c-todo: oklch(0.68 0.14 285);
+    --c-eval: oklch(0.66 0.13 230);
+    --c-web: oklch(0.68 0.14 10);
+    --c-host: oklch(0.68 0.13 175);
+    --c-ask: oklch(0.75 0.14 90);
+
+    --c-ok: oklch(0.72 0.16 145);
+    --c-err: oklch(0.65 0.18 25);
+    --c-warn: oklch(0.75 0.15 75);
+    --c-run: oklch(0.68 0.14 250);
+
+    --diff-add-bg: oklch(0.20 0.03 145);
+    --diff-add-fg: oklch(0.82 0.08 145);
+    --diff-del-bg: oklch(0.20 0.03 25);
+    --diff-del-fg: oklch(0.78 0.08 25);
+
+    --mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 24px;
+  }
+
+  h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { font-size: 13px; color: var(--fg-dim); margin-bottom: 32px; }
+  .scheme-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--bg-elevated);
+    color: var(--c-read);
+    font-size: 11px; font-weight: 600;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+  .section-label {
+    font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--fg-faint);
+    margin: 28px 0 10px;
+  }
+
+  .container { max-width: 520px; margin: 0 auto; }
+
+  /* ── Tool inline block ─────────────────────────── */
+  .tool {
+    margin: 4px 0;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  /* Collapsed state: subtle pill */
+  .tool-collapsed {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+    font-size: 12px;
+  }
+  .tool-collapsed:hover { background: var(--bg-elevated); }
+
+  .tool-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .tool-dot.ok { background: var(--c-ok); }
+  .tool-dot.err { background: var(--c-err); }
+  .tool-dot.running { background: var(--c-run); animation: pulse 1.2s infinite; }
+  .tool-dot.warn { background: var(--c-warn); }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+  .tool-type {
+    font-weight: 600;
+    font-size: 11.5px;
+    flex-shrink: 0;
+  }
+  .tool-type.read { color: var(--c-read); }
+  .tool-type.write { color: var(--c-write); }
+  .tool-type.edit { color: var(--c-edit); }
+  .tool-type.bash { color: var(--c-bash); }
+  .tool-type.grep { color: var(--c-grep); }
+  .tool-type.glob { color: var(--c-glob); }
+  .tool-type.task { color: var(--c-task); }
+  .tool-type.job { color: var(--c-job); }
+  .tool-type.todo { color: var(--c-todo); }
+  .tool-type.eval { color: var(--c-eval); }
+  .tool-type.web_search { color: var(--c-web); }
+  .tool-type.host { color: var(--c-host); }
+  .tool-type.ask { color: var(--c-ask); }
+
+  .tool-one-liner {
+    color: var(--fg-dim);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11.5px;
+  }
+  .tool-one-liner .mono { font-family: var(--mono); color: var(--fg); font-size: 11px; }
+  .tool-one-liner .accent { color: var(--fg); }
+
+  .tool-time {
+    color: var(--fg-faint);
+    font-size: 10px;
+    font-family: var(--mono);
+    flex-shrink: 0;
+  }
+
+  .tool-arrow {
+    color: var(--fg-faint);
+    font-size: 9px;
+    transition: transform 0.2s;
+  }
+  .tool.expanded .tool-arrow { transform: rotate(90deg); }
+
+  /* ── Expanded body ─────────────────────────────── */
+  .tool-body {
+    margin-top: 2px;
+    border-radius: 6px;
+    overflow: hidden;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+
+  /* ── Read: code with subtle tint ───────────────── */
+  .body-read {
+    background: oklch(0.17 0.008 250);
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.55;
+    display: flex;
+  }
+  .body-read .gutter {
+    text-align: right;
+    padding: 8px 6px 8px 10px;
+    color: var(--fg-faint);
+    user-select: none;
+    min-width: 36px;
+  }
+  .body-read .code {
+    padding: 8px 10px;
+    overflow-x: auto;
+    flex: 1;
+  }
+  .code .kw { color: oklch(0.72 0.12 290); }
+  .code .str { color: oklch(0.75 0.10 145); }
+  .code .com { color: var(--fg-faint); font-style: italic; }
+  .code .fn { color: oklch(0.72 0.12 220); }
+  .code .type { color: oklch(0.72 0.12 180); }
+
+  /* ── Write: green-tinted full block ────────────── */
+  .body-write {
+    background: oklch(0.19 0.03 145);
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.55;
+  }
+  .body-write .wline {
+    display: flex;
+  }
+  .body-write .ln {
+    text-align: right;
+    padding: 4px 6px 4px 10px;
+    color: oklch(0.48 0.03 145);
+    user-select: none;
+    min-width: 36px;
+  }
+  .body-write .plus {
+    color: var(--c-write);
+    padding: 4px 2px 4px 6px;
+    width: 18px;
+    flex-shrink: 0;
+    text-align: center;
+  }
+  .body-write .txt {
+    padding: 4px 10px 4px 0;
+    color: var(--diff-add-fg);
+    flex: 1;
+    overflow-x: auto;
+  }
+
+  /* ── Edit: inline diff ─────────────────────────── */
+  .body-edit {
+    border-radius: 6px;
+    overflow: hidden;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.55;
+  }
+  .body-edit .hunk {
+    background: oklch(0.18 0.005 250);
+    color: var(--fg-faint);
+    padding: 3px 10px;
+    font-size: 10.5px;
+  }
+  .body-edit .dline {
+    display: flex;
+  }
+  .body-edit .ln {
+    width: 34px;
+    text-align: right;
+    padding: 2px 5px;
+    color: var(--fg-faint);
+    user-select: none;
+    font-size: 10px;
+    flex-shrink: 0;
+  }
+  .body-edit .sign {
+    width: 14px;
+    text-align: center;
+    flex-shrink: 0;
+    padding: 2px 0;
+  }
+  .body-edit .txt {
+    padding: 2px 8px;
+    flex: 1;
+    overflow-x: auto;
+  }
+  .body-edit .dline.add { background: var(--diff-add-bg); }
+  .body-edit .dline.add .ln { color: var(--c-ok); }
+  .body-edit .dline.add .sign { color: var(--c-ok); }
+  .body-edit .dline.add .txt { color: var(--diff-add-fg); }
+  .body-edit .dline.del { background: var(--diff-del-bg); }
+  .body-edit .dline.del .ln { color: var(--c-err); }
+  .body-edit .dline.del .sign { color: var(--c-err); }
+  .body-edit .dline.del .txt { color: var(--diff-del-fg); opacity: 0.8; }
+  .body-edit .dline.ctx .sign { color: var(--fg-faint); }
+  .body-edit .dline.ctx .txt { color: var(--fg-dim); }
+
+  /* ── Bash: command + output ────────────────────── */
+  .body-bash {
+    background: oklch(0.17 0.008 250);
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    overflow: hidden;
+  }
+  .body-bash .cmd {
+    padding: 6px 10px;
+    color: var(--c-bash);
+    border-bottom: 1px solid var(--border);
+  }
+  .body-bash .cmd::before { content: '$ '; color: var(--fg-faint); }
+  .body-bash .out {
+    padding: 6px 10px;
+    color: var(--fg-dim);
+    white-space: pre-wrap;
+  }
+
+  /* ── Grep: inline results ──────────────────────── */
+  .body-grep {
+    font-family: var(--mono);
+    font-size: 11.5px;
+  }
+  .body-grep .file {
+    padding: 3px 10px;
+    color: var(--c-grep);
+    font-weight: 600;
+    background: oklch(0.17 0.005 250);
+  }
+  .body-grep .match {
+    display: flex;
+    padding: 1px 10px;
+    gap: 8px;
+  }
+  .body-grep .match .ln { color: var(--fg-faint); min-width: 28px; text-align: right; }
+  .body-grep .match .txt { color: var(--fg-dim); overflow-x: auto; }
+  .body-grep .match .txt .hl {
+    background: oklch(0.28 0.07 185);
+    color: var(--c-grep);
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+
+  /* ── Glob: file list ───────────────────────────── */
+  .body-glob {
+    padding: 6px 10px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+  }
+  .body-glob .item {
+    padding: 2px 0;
+    color: var(--fg-dim);
+  }
+  .body-glob .item::before { content: '· '; color: var(--c-glob); }
+
+  /* ── Task: agent list ──────────────────────────── */
+  .body-task {
+    font-size: 12px;
+  }
+  .body-task .item {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 5px 10px;
+  }
+  .body-task .icon {
+    width: 16px; height: 16px;
+    border-radius: 4px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .body-task .icon.done { background: oklch(0.22 0.04 145); color: var(--c-ok); }
+  .body-task .icon.running { background: oklch(0.22 0.04 250); color: var(--c-run); }
+  .body-task .icon.pending { background: var(--bg-elevated); color: var(--fg-faint); }
+  .body-task .content { flex: 1; }
+  .body-task .title { color: var(--fg); font-size: 12px; }
+  .body-task .meta { color: var(--fg-faint); font-size: 10px; margin-top: 1px; }
+  .body-task .item.done .title { color: var(--fg-dim); }
+
+  /* ── Job: progress rows ────────────────────────── */
+  .body-job {
+    font-size: 12px;
+  }
+  .body-job .item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+  }
+  .body-job .id {
+    font-family: var(--mono);
+    color: var(--c-job);
+    font-weight: 600;
+    font-size: 11px;
+    min-width: 24px;
+  }
+  .body-job .desc { color: var(--fg-dim); flex: 1; font-size: 11.5px; }
+  .body-job .bar {
+    width: 50px; height: 3px;
+    background: var(--bg-elevated);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .body-job .bar-fill { height: 100%; border-radius: 2px; }
+  .body-job .bar-fill.done { background: var(--c-ok); width: 100%; }
+  .body-job .bar-fill.running { background: var(--c-job); }
+  .body-job .tag {
+    font-size: 9px; font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .body-job .tag.done { color: var(--c-ok); }
+  .body-job .tag.running { color: var(--c-run); }
+
+  /* ── Todo: checklist ───────────────────────────── */
+  .body-todo {
+    padding: 4px 10px;
+    font-size: 12px;
+  }
+  .body-todo .item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+  }
+  .body-todo .check {
+    width: 14px; height: 14px;
+    border: 1.5px solid var(--border);
+    border-radius: 3px;
+    flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px;
+  }
+  .body-todo .check.on {
+    background: var(--c-todo);
+    border-color: var(--c-todo);
+    color: var(--bg);
+  }
+  .body-todo .text { color: var(--fg-dim); font-size: 11.5px; }
+  .body-todo .item.on .text { color: var(--fg-faint); text-decoration: line-through; }
+
+  /* ── Eval: code + result ───────────────────────── */
+  .body-eval {
+    background: oklch(0.17 0.008 250);
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    overflow: hidden;
+  }
+  .body-eval .code {
+    padding: 6px 10px;
+    color: var(--c-eval);
+    border-bottom: 1px solid var(--border);
+  }
+  .body-eval .code::before { content: '› '; color: var(--fg-faint); }
+  .body-eval .result {
+    padding: 6px 10px;
+    color: var(--fg-dim);
+  }
+  .body-eval .result::before { content: '← '; color: var(--c-ok); }
+
+  /* ── Web search ────────────────────────────────── */
+  .body-web { font-size: 12px; }
+  .body-web .item {
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .body-web .item:last-child { border-bottom: none; }
+  .body-web .title { color: var(--c-web); font-size: 12px; }
+  .body-web .url { color: var(--fg-faint); font-size: 10px; font-family: var(--mono); }
+  .body-web .snippet { color: var(--fg-dim); font-size: 11px; margin-top: 1px; }
+
+  /* ── Host: table ───────────────────────────────── */
+  .body-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 11.5px;
+  }
+  .body-table th {
+    text-align: left;
+    padding: 4px 10px;
+    color: var(--fg-faint);
+    font-weight: 600;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--border);
+  }
+  .body-table td {
+    padding: 3px 10px;
+    color: var(--fg-dim);
+    border-bottom: 1px solid var(--border);
+  }
+  .body-table tr:last-child td { border-bottom: none; }
+  .body-table .mono { font-family: var(--mono); color: var(--fg); font-size: 11px; }
+  .tag {
+    display: inline-block;
+    padding: 0 5px;
+    border-radius: 3px;
+    font-size: 9.5px;
+    font-weight: 600;
+  }
+  .tag.pass { background: oklch(0.20 0.03 145); color: var(--c-ok); }
+  .tag.fail { background: oklch(0.20 0.03 25); color: var(--c-err); }
+  .tag.running { background: oklch(0.20 0.03 250); color: var(--c-run); }
+  .tag.pending { background: var(--bg-elevated); color: var(--fg-faint); }
+
+  /* ── Coverage: inline metrics ──────────────────── */
+  .body-cov {
+    display: flex;
+    gap: 1px;
+    background: var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .body-cov .cell {
+    flex: 1;
+    background: var(--bg-surface);
+    padding: 8px 6px;
+    text-align: center;
+  }
+  .body-cov .label {
+    font-size: 9px;
+    color: var(--fg-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .body-cov .val {
+    font-size: 16px;
+    font-weight: 700;
+    font-family: var(--mono);
+    margin-top: 2px;
+  }
+  .body-cov .val.good { color: var(--c-ok); }
+  .body-cov .val.mid { color: var(--c-warn); }
+  .body-cov .val.low { color: var(--c-err); }
+
+  /* ── Errors ────────────────────────────────────── */
+  .body-errors { font-size: 11.5px; }
+  .body-errors .item {
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .body-errors .item:last-child { border-bottom: none; }
+  .body-errors .head { display: flex; align-items: center; gap: 5px; }
+  .body-errors .sev {
+    font-size: 9px; font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 2px;
+    text-transform: uppercase;
+  }
+  .body-errors .sev.error { background: oklch(0.22 0.05 25); color: var(--c-err); }
+  .body-errors .sev.warn { background: oklch(0.22 0.05 75); color: var(--c-warn); }
+  .body-errors .msg { color: var(--fg); font-size: 11.5px; }
+  .body-errors .loc { color: var(--c-read); font-size: 10px; font-family: var(--mono); margin-top: 1px; }
+
+  /* ── Sim result ────────────────────────────────── */
+  .body-sim {
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+  .body-sim .head {
+    display: flex; align-items: center; gap: 6px;
+    margin-bottom: 4px;
+  }
+  .body-sim .name { color: var(--fg); font-weight: 600; }
+  .body-sim .bar {
+    height: 3px;
+    background: var(--bg-elevated);
+    border-radius: 2px;
+    overflow: hidden;
+    margin: 4px 0;
+  }
+  .body-sim .bar-fill { height: 100%; border-radius: 2px; background: var(--c-host); }
+  .body-sim .meta {
+    display: flex; gap: 10px;
+    font-size: 10px;
+    color: var(--fg-faint);
+    font-family: var(--mono);
+  }
+
+  /* ── Ask ───────────────────────────────────────── */
+  .body-ask {
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+  .body-ask .q {
+    color: var(--c-ask);
+    margin-bottom: 6px;
+    font-size: 12.5px;
+  }
+  .body-ask .opts { display: flex; flex-direction: column; gap: 3px; }
+  .body-ask .opt {
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--fg-dim);
+    font-size: 11.5px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .body-ask .opt:hover {
+    border-color: var(--c-ask);
+    color: var(--c-ask);
+  }
+
+  .collapsed .tool-body { display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Tool Cards <span class="scheme-tag">Scheme C · Conversational Flow</span></h1>
+  <p class="subtitle">Minimal chrome. Tools blend into conversation flow with subtle category tints. Progressive disclosure.</p>
+
+  <div class="section-label">File Operations</div>
+
+  <!-- READ expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type read">read</span>
+      <span class="tool-one-liner"><span class="mono">src/main/host/host-tools.ts</span> · 42 lines</span>
+      <span class="tool-time">12ms</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="body-read">
+        <div class="gutter">1<br>2<br>3<br>4<br>5<br>6<br>7<br>8<br>9<br>10<br>11<br>12</div>
+        <div class="code"><span class="kw">import</span> { defineTool } <span class="kw">from</span> <span class="str">'./types'</span>;<br><span class="kw">import</span> { TEXT } <span class="kw">from</span> <span class="str">'./utils'</span>;<br><span class="kw">import</span> <span class="kw">type</span> { <span class="type">SubsysInfo</span>, <span class="type">CaseInfo</span> } <span class="kw">from</span> <span class="str">'@shared/types'</span>;<br><br><span class="com">// Host tool definitions for SoC verification</span><br><span class="kw">export function</span> <span class="fn">registerHostTools</span>(reg: <span class="type">HostToolsRegistry</span>) {<br>&nbsp;&nbsp;reg.<span class="fn">registerDefaults</span>();<br>}<br><br><span class="kw">export class</span> <span class="type">HostToolsRegistry</span> {<br>&nbsp;&nbsp;<span class="kw">private</span> tools = <span class="kw">new</span> <span class="type">Map</span>();<br>&nbsp;&nbsp;<span class="kw">private</span> discovery: <span class="type">SubsysDiscovery</span>;</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- READ collapsed -->
+  <div class="tool collapsed">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type read">read</span>
+      <span class="tool-one-liner"><span class="mono">src/renderer/src/App.tsx</span> · 28 lines</span>
+      <span class="tool-time">8ms</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+  </div>
+
+  <!-- WRITE expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type write">write</span>
+      <span class="tool-one-liner"><span class="mono">src/main/coverage/coverage-manager.ts</span> · new file</span>
+      <span class="tool-time">5ms</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="body-write">
+        <div class="wline"><span class="ln">1</span><span class="plus">+</span><span class="txt"><span class="kw">import</span> { create } <span class="kw">from</span> <span class="str">'zustand'</span>;</span></div>
+        <div class="wline"><span class="ln">2</span><span class="plus">+</span><span class="txt"><span class="kw">import</span> { trpc } <span class="kw">from</span> <span class="str">'@renderer/lib/trpc'</span>;</span></div>
+        <div class="wline"><span class="ln">3</span><span class="plus">+</span><span class="txt"></span></div>
+        <div class="wline"><span class="ln">4</span><span class="plus">+</span><span class="txt"><span class="kw">export interface</span> <span class="type">CoverageData</span> {</span></div>
+        <div class="wline"><span class="ln">5</span><span class="plus">+</span><span class="txt">&nbsp;&nbsp;line: <span class="kw">number</span>;</span></div>
+        <div class="wline"><span class="ln">6</span><span class="plus">+</span><span class="txt">&nbsp;&nbsp;toggle: <span class="kw">number</span>;</span></div>
+        <div class="wline"><span class="ln">7</span><span class="plus">+</span><span class="txt">&nbsp;&nbsp;functional: <span class="kw">number</span>;</span></div>
+        <div class="wline"><span class="ln">8</span><span class="plus">+</span><span class="txt">&nbsp;&nbsp;assertion: <span class="kw">number</span>;</span></div>
+        <div class="wline"><span class="ln">9</span><span class="plus">+</span><span class="txt">}</span></div>
+        <div class="wline"><span class="ln">10</span><span class="plus">+</span><span class="txt"></span></div>
+        <div class="wline"><span class="ln">11</span><span class="plus">+</span><span class="txt"><span class="kw">export class</span> <span class="type">CoverageManager</span> {</span></div>
+        <div class="wline"><span class="ln">12</span><span class="plus">+</span><span class="txt">&nbsp;&nbsp;<span class="kw">async</span> <span class="fn">parse</span>(runId: <span class="kw">string</span>) {</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WRITE collapsed -->
+  <div class="tool collapsed">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type write">write</span>
+      <span class="tool-one-liner"><span class="mono">tests/coverage/coverage-manager.test.ts</span> · new file</span>
+      <span class="tool-time">3ms</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+  </div>
+
+  <!-- EDIT expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type edit">edit</span>
+      <span class="tool-one-liner"><span class="mono">src/main/ipc/router.ts</span> · <span class="accent">+3 −2</span></span>
+      <span class="tool-time">15ms</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="body-edit">
+        <div class="hunk">@@ -128,7 +128,9 @@</div>
+        <div class="dline ctx"><span class="ln">128</span><span class="sign"> </span><span class="txt">&nbsp;&nbsp;simulation: publicProcedure</span></div>
+        <div class="dline ctx"><span class="ln">129</span><span class="sign"> </span><span class="txt">&nbsp;&nbsp;&nbsp;&nbsp;.input(v.object({ runId: v.string() }))</span></div>
+        <div class="dline del"><span class="ln">130</span><span class="sign">-</span><span class="txt">&nbsp;&nbsp;&nbsp;&nbsp;.query(async ({ input }) => {</span></div>
+        <div class="dline del"><span class="ln">131</span><span class="sign">-</span><span class="txt">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return simManager.getStatus(input.runId);</span></div>
+        <div class="dline add"><span class="ln">130</span><span class="sign">+</span><span class="txt">&nbsp;&nbsp;&nbsp;&nbsp;.query(async ({ input }) => {</span></div>
+        <div class="dline add"><span class="ln">131</span><span class="sign">+</span><span class="txt">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;const status = await simManager.getStatus(input.runId);</span></div>
+        <div class="dline add"><span class="ln">132</span><span class="sign">+</span><span class="txt">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return { ...status, timestamp: Date.now() };</span></div>
+        <div class="dline ctx"><span class="ln">133</span><span class="sign"> </span><span class="txt">&nbsp;&nbsp;&nbsp;&nbsp;}),</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- EDIT collapsed -->
+  <div class="tool collapsed">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type edit">edit</span>
+      <span class="tool-one-liner"><span class="mono">src/renderer/src/stores/session.ts</span> · <span class="accent">+1 −1</span></span>
+      <span class="tool-time">9ms</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+  </div>
+
+  <div class="section-label">Search & Discovery</div>
+
+  <!-- GREP expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type grep">grep</span>
+      <span class="tool-one-liner"><span class="accent">/HostToolsRegistry/</span> in <span class="mono">src/</span> · 4 matches</span>
+      <span class="tool-time">23ms</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="body-grep">
+        <div class="file">src/main/host/host-tools.ts</div>
+        <div class="match"><span class="ln">12</span><span class="txt"><span class="hl">HostToolsRegistry</span> {</span></div>
+        <div class="match"><span class="ln">46</span><span class="txt">&nbsp;&nbsp;registerDefaults(): void {</span></div>
+        <div class="file">tests/host/host-tools.test.ts</div>
+        <div class="match"><span class="ln">27</span><span class="txt">&nbsp;&nbsp;const registry = new <span class="hl">HostToolsRegistry</span>();</span></div>
+        <div class="match"><span class="ln">53</span><span class="txt">&nbsp;&nbsp;const registry = new <span class="hl">HostToolsRegistry</span>();</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GLOB expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type glob">glob</span>
+      <span class="tool-one-liner"><span class="accent">**/*.test.ts</span> · 12 files</span>
+      <span class="tool-time">6ms</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="body-glob">
+        <div class="item">tests/host/host-tools.test.ts</div>
+        <div class="item">tests/host/host-tools-plugin.test.ts</div>
+        <div class="item">tests/session/session-store.test.ts</div>
+        <div class="item">tests/coverage/coverage-manager.test.ts</div>
+        <div class="item">tests/ui/RightPanel.test.tsx</div>
+        <div class="item">tests/router/router.test.ts</div>
+        <div class="item" style="color:var(--fg-faint)">... 6 more</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Execution</div>
+
+  <!-- BASH expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type bash">bash</span>
+      <span class="tool-one-liner"><span class="mono">npm run typecheck</span></span>
+      <span class="tool-time">3.2s</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="body-bash">
+        <div class="cmd">npm run typecheck</div>
+        <div class="out">> soc-verify@0.1.0 typecheck
+> tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json
+
+✓ Type check passed (main + renderer)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BASH collapsed running -->
+  <div class="tool collapsed">
+    <div class="tool-collapsed">
+      <div class="tool-dot running"></div>
+      <span class="tool-type bash">bash</span>
+      <span class="tool-one-liner"><span class="mono">npm run build</span></span>
+      <span class="tool-time">running</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+  </div>
+
+  <!-- EVAL expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type eval">eval</span>
+      <span class="tool-one-liner">JavaScript · filter subsystems</span>
+      <span class="tool-time">4ms</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="body-eval">
+        <div class="code">const subsys = ['cpu', 'gpu', 'dma']; subsys.filter(s => s.startsWith('c'))</div>
+        <div class="result">['cpu']</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Agent Orchestration</div>
+
+  <!-- TASK expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type task">task</span>
+      <span class="tool-one-liner">3 sub-agents · <span class="accent">2 done, 1 running</span></span>
+      <span class="tool-time">8.4s</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="body-task">
+        <div class="item">
+          <div class="icon done">✓</div>
+          <div class="content">
+            <div class="title">Analyze coverage gaps in CPU subsystem</div>
+            <div class="meta">analyst · 3.2s · 1,240 tokens</div>
+          </div>
+        </div>
+        <div class="item">
+          <div class="icon done">✓</div>
+          <div class="content">
+            <div class="title">Review testbench structure for DMA</div>
+            <div class="meta">reviewer · 2.8s · 980 tokens</div>
+          </div>
+        </div>
+        <div class="item">
+          <div class="icon running">⟳</div>
+          <div class="content">
+            <div class="title">Generate assertions for GPU interface</div>
+            <div class="meta">coder · running · 2,100 tokens</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- JOB expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type job">job</span>
+      <span class="tool-one-liner">2 background jobs · <span class="accent">1 running</span></span>
+      <span class="tool-time">--</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="body-job">
+        <div class="item">
+          <span class="id">#1</span>
+          <span class="desc">Compile CPU testbench</span>
+          <div class="bar"><div class="bar-fill done"></div></div>
+          <span class="tag done">done</span>
+        </div>
+        <div class="item">
+          <span class="id">#2</span>
+          <span class="desc">Run regression suite A</span>
+          <div class="bar"><div class="bar-fill running" style="width:62%"></div></div>
+          <span class="tag running">running</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TODO expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type todo">todo</span>
+      <span class="tool-one-liner">4 items · <span class="accent">2 completed</span></span>
+      <span class="tool-time">1ms</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="body-todo">
+        <div class="item on"><div class="check on">✓</div><span class="text">Parse subsystem list from project config</span></div>
+        <div class="item on"><div class="check on">✓</div><span class="text">Register host tools with omp session</span></div>
+        <div class="item"><div class="check"></div><span class="text">Add coverage parser plugin interface</span></div>
+        <div class="item"><div class="check"></div><span class="text">Write integration tests for simulation flow</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">SoC Verification Host Tools</div>
+
+  <!-- LIST_SUBSYS expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type host">list_subsys</span>
+      <span class="tool-one-liner">4 subsystems found</span>
+      <span class="tool-time">18ms</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <table class="body-table">
+        <thead><tr><th>Subsystem</th><th>Path</th><th>Cases</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">cpu</td><td>/subsystems/cpu</td><td>42</td><td><span class="tag pass">pass</span></td></tr>
+          <tr><td class="mono">gpu</td><td>/subsystems/gpu</td><td>28</td><td><span class="tag running">running</span></td></tr>
+          <tr><td class="mono">dma</td><td>/subsystems/dma</td><td>15</td><td><span class="tag fail">fail</span></td></tr>
+          <tr><td class="mono">interconnect</td><td>/subsystems/ic</td><td>8</td><td><span class="tag pending">pending</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- LIST_CASES expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type host">list_cases</span>
+      <span class="tool-one-liner">subsys=cpu · 42 cases</span>
+      <span class="tool-time">12ms</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <table class="body-table">
+        <thead><tr><th>Case</th><th>Subsystem</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">test_cpu_basic_read</td><td>cpu</td><td><span class="tag pass">pass</span></td></tr>
+          <tr><td class="mono">test_cpu_pipeline_stall</td><td>cpu</td><td><span class="tag pass">pass</span></td></tr>
+          <tr><td class="mono">test_cpu_cache_coherency</td><td>cpu</td><td><span class="tag fail">fail</span></td></tr>
+          <tr><td class="mono">test_cpu_irq_priority</td><td>cpu</td><td><span class="tag running">running</span></td></tr>
+          <tr><td class="mono">test_cpu_mmu_translate</td><td>cpu</td><td><span class="tag pending">pending</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- RUN_SIMULATION expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type host">run_simulation</span>
+      <span class="tool-one-liner"><span class="mono">cpu/test_cpu_cache_coherency</span></span>
+      <span class="tool-time">12.3s</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="body-sim">
+        <div class="head">
+          <span class="name">test_cpu_cache_coherency</span>
+          <span class="tag pass">pass</span>
+        </div>
+        <div class="bar"><div class="bar-fill" style="width:100%"></div></div>
+        <div class="meta">
+          <span>run_20260713_001</span>
+          <span>seed: 42</span>
+          <span>sim: 1.2ms</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GET_COVERAGE expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot warn"></div>
+      <span class="tool-type host">get_coverage</span>
+      <span class="tool-one-liner">cpu · run_20260713_001 · <span class="accent">1 low</span></span>
+      <span class="tool-time">31ms</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="body-cov">
+        <div class="cell"><div class="label">Line</div><div class="val good">87.3%</div></div>
+        <div class="cell"><div class="label">Toggle</div><div class="val mid">72.1%</div></div>
+        <div class="cell"><div class="label">FSM</div><div class="val good">91.5%</div></div>
+        <div class="cell"><div class="label">Assert</div><div class="val low">58.4%</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- GET_COMPILE_ERRORS expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot warn"></div>
+      <span class="tool-type host">get_compile_errors</span>
+      <span class="tool-one-liner"><span class="accent">3 errors</span>, 2 warnings</span>
+      <span class="tool-time">8ms</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="body-errors">
+        <div class="item">
+          <div class="head"><span class="sev error">error</span><span class="msg">Undefined signal 'irq_pending' in module 'cpu_core'</span></div>
+          <div class="loc">src/rtl/cpu/cpu_core.v:142:8</div>
+        </div>
+        <div class="item">
+          <div class="head"><span class="sev error">error</span><span class="msg">Syntax error near 'always'</span></div>
+          <div class="loc">src/rtl/cpu/decoder.v:67:1</div>
+        </div>
+        <div class="item">
+          <div class="head"><span class="sev warn">warn</span><span class="msg">Unused signal 'debug_bus_enable'</span></div>
+          <div class="loc">src/rtl/cpu/cpu_top.v:203:3</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Interactive</div>
+
+  <!-- ASK expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot running"></div>
+      <span class="tool-type ask">ask</span>
+      <span class="tool-one-liner">Waiting for user response</span>
+      <span class="tool-time">--</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="body-ask">
+        <div class="q">Which simulation seed strategy should I use for the regression suite?</div>
+        <div class="opts">
+          <div class="opt">A: Random seeds (1000 iterations)</div>
+          <div class="opt">B: Fixed seed set (regression baseline)</div>
+          <div class="opt">C: Directed + random mix</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WEB_SEARCH expanded -->
+  <div class="tool expanded">
+    <div class="tool-collapsed">
+      <div class="tool-dot ok"></div>
+      <span class="tool-type web_search">web_search</span>
+      <span class="tool-one-liner">"SystemVerilog assertion coverage" · 2 results</span>
+      <span class="tool-time">1.1s</span>
+      <span class="tool-arrow">▶</span>
+    </div>
+    <div class="tool-body">
+      <div class="body-web">
+        <div class="item">
+          <div class="title">Assertion Coverage Guidelines</div>
+          <div class="url">dvcon.org → best-practices</div>
+          <div class="snippet">Recommendations for writing effective concurrent assertions...</div>
+        </div>
+        <div class="item">
+          <div class="title">Verification Academy: Coverage Cookbook</div>
+          <div class="url">verificationacademy.com</div>
+          <div class="snippet">A comprehensive guide to functional coverage...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

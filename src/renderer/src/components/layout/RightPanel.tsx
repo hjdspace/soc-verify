@@ -4,6 +4,7 @@ import { useSessionStore, type ChatMessage, type AvailableModel, type SelectedSk
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
+import { ToolCard } from '@renderer/components/chat/ToolCard';
 import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
 
@@ -962,75 +963,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   );
 }
 
-// ── 工具调用卡片 ───────────────────────────────────────
-
-function ToolCard({ message }: { message: ChatMessage }) {
-  const [expanded, setExpanded] = useState(false);
-  const isExecuting = !message.toolResult;
-  const duration = message.toolStartTime && message.toolEndTime
-    ? message.toolEndTime - message.toolStartTime
-    : message.toolStartTime && !message.toolResult
-      ? Date.now() - message.toolStartTime
-      : null;
-
-  return (
-    <div className="rounded-md border border-border/60 bg-secondary/30 p-2">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-1.5 text-left"
-      >
-        <div className={cn('flex h-5 w-5 items-center justify-center rounded', isExecuting ? 'bg-primary/10' : 'bg-green-500/10')}>
-          {isExecuting ? (
-            <Loader2 className="h-2.5 w-2.5 animate-spin text-primary" />
-          ) : (
-            <Square className="h-2.5 w-2.5 text-green-500" />
-          )}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="text-[10px] font-semibold text-foreground">
-            {message.toolName ?? 'tool'}
-          </div>
-        </div>
-        {duration != null && (
-          <span className="flex items-center gap-0.5 text-[9px] text-muted-foreground">
-            <Clock className="h-2.5 w-2.5" />
-            {duration > 1000 ? `${(duration / 1000).toFixed(1)}s` : `${duration}ms`}
-          </span>
-        )}
-        <ChevronDown className={cn('h-3 w-3 text-muted-foreground transition-transform', expanded && 'rotate-180')} />
-      </button>
-
-      {expanded && (
-        <div className="mt-1.5 space-y-1 border-t border-border/40 pt-1.5">
-          {message.toolArgs != null && (
-            <div>
-              <div className="text-[9px] uppercase text-muted-foreground">参数</div>
-              <pre className="mt-0.5 overflow-x-auto rounded bg-background/50 p-1 text-[10px]">
-                {JSON.stringify(message.toolArgs, null, 2)}
-              </pre>
-            </div>
-          )}
-          {message.toolResult != null && (
-            <div>
-              <div className="text-[9px] uppercase text-muted-foreground">结果</div>
-              <pre className="mt-0.5 max-h-48 overflow-auto rounded bg-background/50 p-1 text-[10px]">
-                {typeof message.toolResult === 'string'
-                  ? message.toolResult
-                  : JSON.stringify(message.toolResult, null, 2)}
-              </pre>
-            </div>
-          )}
-          {isExecuting && (
-            <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
-              <Loader2 className="h-2.5 w-2.5 animate-spin" />
-              执行中...
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+// ToolCard is now imported from '@renderer/components/chat/ToolCard'
 
 // ── 历史会话页面 ───────────────────────────────────────
 
