@@ -6,6 +6,24 @@
 
 ---
 
+## [0.1.1](https://github.com/hjdspace/soc-verify/compare/v0.1.0...v0.1.1) (2026-07-13)
+
+### Features
+
+* **session:** 新增会话历史管理功能，支持恢复和删除历史会话
+* 新增工具卡片功能与highlight.js语法高亮支持
+* **session:** add persisted last selected model feature
+* add source control workflow
+
+### Refactor
+
+* **ai-session:** 重构会话管理，支持恢复历史会话并优化UI
+* **session:** 重构会话恢复与存储逻辑，优化体验
+* **ipc,store:** 重构会话ID匹配与持久化逻辑，实现懒加载运行时会话
+* **RightPanel:** 优化会话标签页加载指示器逻辑
+
+---
+
 ## [0.1.0] - 2026-07-13
 
 首个正式版本，覆盖 M0-M7 全部里程碑，实现 SoC 验证全流程管理。
