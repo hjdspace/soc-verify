@@ -678,7 +678,7 @@ export const router = t.router({
         if (sendSessionEntry) {
           const sendProject = projectManager.getProject(sendSessionEntry.projectId);
           if (sendProject) {
-            void updateSessionActivity(sendProject.rootPath, input.sessionId);
+            void updateSessionActivity(sendProject.rootPath, sendSessionEntry.persistedSessionId ?? input.sessionId);
           }
         }
         await client.prompt(input.message, input.images);
@@ -709,13 +709,15 @@ export const router = t.router({
         return { sessionId: r.sessionId, projectId: typeof r.projectId === 'string' ? r.projectId : undefined };
       })
       .mutation(async ({ input }) => {
+        const entry = sessionManager.getSession(input.sessionId);
         await sessionManager.destroySession(input.sessionId);
         // Remove from persisted sessions if projectId is provided
         if (input.projectId) {
           const project = projectManager.getProject(input.projectId);
           if (project) {
-            await removeSession(project.rootPath, input.sessionId);
-            await rm(storedMessagesPath(project.rootPath, input.sessionId), { force: true });
+            const persistedSessionId = entry?.persistedSessionId ?? input.sessionId;
+            await removeSession(project.rootPath, persistedSessionId);
+            await rm(storedMessagesPath(project.rootPath, persistedSessionId), { force: true });
           }
         }
         return { ok: true };
@@ -795,7 +797,7 @@ export const router = t.router({
         if (sessionEntry) {
           const project = projectManager.getProject(sessionEntry.projectId);
           if (project) {
-            await updateSessionModel(project.rootPath, input.sessionId, {
+            await updateSessionModel(project.rootPath, sessionEntry.persistedSessionId ?? input.sessionId, {
               provider: input.provider,
               id: input.modelId,
               name: input.modelName ?? input.modelId,
@@ -912,8 +914,20 @@ export const router = t.router({
           env: credEnv,
         });
 
-        // Update lastActivityAt on the persisted session
-        await updateSessionActivity(project.rootPath, input.sessionId);
+        // Persist the latest runtime resume handle and activity timestamp.
+        const ompSessionId = sessionManager.getOmpSessionId(sessionId);
+        const sessions = await loadSessions(project.rootPath);
+        const idx = sessions.findIndex((s) => s.sessionId === input.sessionId);
+        if (idx >= 0) {
+          sessions[idx] = {
+            ...sessions[idx],
+            ompSessionId,
+            lastActivityAt: Date.now(),
+          };
+          await saveSessions(project.rootPath, sessions);
+        } else {
+          await updateSessionActivity(project.rootPath, input.sessionId);
+        }
 
         return { sessionId, name: input.name ?? `Session ${input.sessionId.slice(-6)}`, model: persisted?.model };
       }),

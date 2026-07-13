@@ -89,43 +89,29 @@ describe('SessionStore — event handling and state machine', () => {
 
   it('creates a session and sets it as current', async () => {
     const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    expect(id).toBe('session_test_1');
+    expect(id).toMatch(/^local_/);
     const state = useSessionStore.getState();
     expect(state.sessions).toHaveLength(1);
-    expect(state.currentSessionId).toBe('session_test_1');
+    expect(state.currentSessionId).toBe(id);
     expect(state.sessions[0].status).toBe('idle');
+    expect(state.sessions[0].cwd).toBe('/tmp/proj');
+    expect(mockCreate).not.toHaveBeenCalled();
     expect(mockToastSuccess).not.toHaveBeenCalledWith('AI 会话已创建');
   });
 
-  it('shows a pending tab immediately while creating a session', async () => {
-    let resolveCreate!: (value: { sessionId: string }) => void;
-    mockCreate.mockReturnValueOnce(new Promise((resolve) => {
-      resolveCreate = resolve;
-    }));
-
-    const promise = useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    let state = useSessionStore.getState();
-
+  it('opens a usable local tab without waiting for backend session creation', async () => {
+    const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    const state = useSessionStore.getState();
     expect(state.sessions).toHaveLength(1);
-    expect(state.currentSessionId).toBe(state.sessions[0].id);
+    expect(state.currentSessionId).toBe(id);
     expect(state.sessions[0]).toMatchObject({
+      id,
       projectId: 'proj_1',
       name: '新会话',
-      status: 'creating',
+      status: 'idle',
       messages: [],
     });
-
-    resolveCreate({ sessionId: 'session_test_1' });
-    await promise;
-    state = useSessionStore.getState();
-
-    expect(state.sessions).toHaveLength(1);
-    expect(state.currentSessionId).toBe('session_test_1');
-    expect(state.sessions[0]).toMatchObject({
-      id: 'session_test_1',
-      persistedSessionId: 'session_test_1',
-      status: 'idle',
-    });
+    expect(mockCreate).not.toHaveBeenCalled();
   });
 
   it('sends a message and transitions to streaming state', async () => {
@@ -134,10 +120,18 @@ describe('SessionStore — event handling and state machine', () => {
     await useSessionStore.getState().sendMessage('Hello AI');
 
     const state = useSessionStore.getState();
+    expect(mockCreate).toHaveBeenCalledWith({
+      projectId: 'proj_1',
+      cwd: '/tmp/proj',
+      provider: undefined,
+      model: undefined,
+    });
     expect(mockSend).toHaveBeenCalledWith({ sessionId: 'session_test_1', message: 'Hello AI' });
     expect(state.isSending).toBe(true);
 
     const session = state.sessions[0];
+    expect(session.runtimeSessionId).toBe('session_test_1');
+    expect(session.persistedSessionId).toBe('session_test_1');
     expect(session.status).toBe('streaming');
     expect(session.messages).toHaveLength(2);
 
@@ -151,8 +145,8 @@ describe('SessionStore — event handling and state machine', () => {
   });
 
   it('handles message_start event by setting status to streaming', async () => {
-    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    useSessionStore.getState().handleSessionEvent('session_test_1', { type: 'message_start' });
+    const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    useSessionStore.getState().handleSessionEvent(id!, { type: 'message_start' });
     expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
   });
 
@@ -306,9 +300,9 @@ describe('SessionStore — event handling and state machine', () => {
   });
 
   it('handles tool_execution_start by adding a tool message', async () => {
-    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
 
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionStore.getState().handleSessionEvent(id!, {
       type: 'tool_execution_start',
       toolName: 'list_subsys',
       args: { filter: '' },
@@ -325,15 +319,15 @@ describe('SessionStore — event handling and state machine', () => {
   });
 
   it('handles tool_execution_end by updating the tool message with result', async () => {
-    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
 
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionStore.getState().handleSessionEvent(id!, {
       type: 'tool_execution_start',
       toolName: 'list_subsys',
       args: {},
     });
 
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionStore.getState().handleSessionEvent(id!, {
       type: 'tool_execution_end',
       toolName: 'list_subsys',
       result: [{ name: 'subsys_a' }],
@@ -347,8 +341,8 @@ describe('SessionStore — event handling and state machine', () => {
   });
 
   it('handles agent_start by setting status to streaming', async () => {
-    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    useSessionStore.getState().handleSessionEvent('session_test_1', { type: 'agent_start' });
+    const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    useSessionStore.getState().handleSessionEvent(id!, { type: 'agent_start' });
     expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
   });
 
@@ -387,12 +381,12 @@ describe('SessionStore — event handling and state machine', () => {
   });
 
   it('destroys a session and removes it from the list', async () => {
-    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
     expect(useSessionStore.getState().sessions).toHaveLength(1);
 
-    await useSessionStore.getState().destroySession('session_test_1');
+    await useSessionStore.getState().destroySession(id!);
 
-    expect(mockDestroy).toHaveBeenCalledWith({ sessionId: 'session_test_1' });
+    expect(mockDestroy).toHaveBeenCalledWith({ sessionId: id });
     expect(useSessionStore.getState().sessions).toHaveLength(0);
     expect(useSessionStore.getState().currentSessionId).toBeNull();
   });
@@ -400,25 +394,30 @@ describe('SessionStore — event handling and state machine', () => {
   it('switches between sessions', async () => {
     // Create two sessions
     mockCreate.mockResolvedValueOnce({ sessionId: 'session_1' });
-    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    const id1 = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
     mockCreate.mockResolvedValueOnce({ sessionId: 'session_2' });
-    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    const id2 = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
 
-    expect(useSessionStore.getState().currentSessionId).toBe('session_2');
+    expect(useSessionStore.getState().currentSessionId).toBe(id2);
 
-    useSessionStore.getState().switchSession('session_1');
-    expect(useSessionStore.getState().currentSessionId).toBe('session_1');
+    useSessionStore.getState().switchSession(id1!);
+    expect(useSessionStore.getState().currentSessionId).toBe(id1);
   });
 
-  it('loads a history session once under concurrent clicks and hydrates messages', async () => {
-    mockRestore.mockResolvedValue({
-      sessionId: 'session_runtime_1',
-      name: 'Debug reset failure',
-      model: { provider: 'openai', id: 'gpt-4o', name: 'gpt-4o' },
-    });
-    mockGetMessages.mockResolvedValue([
-      { role: 'user', content: 'Why did reset fail?' },
-      { role: 'assistant', content: [{ type: 'text', text: 'Reset was deasserted too early.' }] },
+  it('loads a history session once under concurrent clicks without restoring the agent', async () => {
+    mockGetStoredMessages.mockResolvedValue([
+      {
+        id: 'stored_1',
+        role: 'user',
+        content: 'Why did reset fail?',
+        timestamp: 100,
+      },
+      {
+        id: 'stored_2',
+        role: 'assistant',
+        content: 'Reset was deasserted too early.',
+        timestamp: 200,
+      },
     ]);
 
     const historySession = {
@@ -435,20 +434,19 @@ describe('SessionStore — event handling and state machine', () => {
       useSessionStore.getState().loadHistorySession(historySession, 'proj_1', '/tmp/proj'),
     ]);
 
-    expect(mockRestore).toHaveBeenCalledTimes(1);
-    expect(mockRestore).toHaveBeenCalledWith({
+    expect(mockRestore).not.toHaveBeenCalled();
+    expect(mockGetStoredMessages).toHaveBeenCalledTimes(1);
+    expect(mockGetStoredMessages).toHaveBeenCalledWith({
       projectId: 'proj_1',
-      cwd: '/tmp/proj',
       sessionId: 'session_persisted_1',
-      name: 'Debug reset failure',
     });
-    expect(mockGetMessages).toHaveBeenCalledWith({ sessionId: 'session_runtime_1' });
+    expect(mockGetMessages).not.toHaveBeenCalled();
 
     const state = useSessionStore.getState();
     expect(state.sessions).toHaveLength(1);
-    expect(state.currentSessionId).toBe('session_runtime_1');
+    expect(state.currentSessionId).toBe('session_persisted_1');
     expect(state.sessions[0]).toMatchObject({
-      id: 'session_runtime_1',
+      id: 'session_persisted_1',
       persistedSessionId: 'session_persisted_1',
       name: 'Debug reset failure',
     });
@@ -456,6 +454,38 @@ describe('SessionStore — event handling and state machine', () => {
       ['user', 'Why did reset fail?'],
       ['assistant', 'Reset was deasserted too early.'],
     ]);
+  });
+
+  it('restores a history session runtime only when sending a message', async () => {
+    await useSessionStore.getState().loadHistorySession({
+      sessionId: 'session_persisted_1',
+      name: 'Debug reset failure',
+      projectId: 'proj_1',
+      createdAt: 100,
+      lastActivityAt: 200,
+      isActive: false,
+    }, 'proj_1', '/tmp/proj');
+
+    expect(mockRestore).not.toHaveBeenCalled();
+
+    await useSessionStore.getState().sendMessage('Continue debugging');
+
+    expect(mockRestore).toHaveBeenCalledWith({
+      projectId: 'proj_1',
+      cwd: '/tmp/proj',
+      sessionId: 'session_persisted_1',
+      name: 'Debug reset failure',
+    });
+    expect(mockSend).toHaveBeenCalledWith({
+      sessionId: 'session_runtime_1',
+      message: 'Continue debugging',
+      images: undefined,
+    });
+    expect(useSessionStore.getState().sessions[0]).toMatchObject({
+      id: 'session_persisted_1',
+      runtimeSessionId: 'session_runtime_1',
+      persistedSessionId: 'session_persisted_1',
+    });
   });
 
   it('restores only the latest persisted session on startup', async () => {
@@ -483,16 +513,10 @@ describe('SessionStore — event handling and state machine', () => {
     const restored = await useSessionStore.getState().restoreSessions('proj_1', '/tmp/proj');
 
     expect(restored).toBe(true);
-    expect(mockRestore).toHaveBeenCalledTimes(1);
-    expect(mockRestore).toHaveBeenCalledWith({
-      projectId: 'proj_1',
-      cwd: '/tmp/proj',
-      sessionId: 'session_latest',
-      name: 'Latest session',
-    });
+    expect(mockRestore).not.toHaveBeenCalled();
     expect(useSessionStore.getState().sessions).toHaveLength(1);
     expect(useSessionStore.getState().sessions[0]).toMatchObject({
-      id: 'session_runtime_latest',
+      id: 'session_latest',
       persistedSessionId: 'session_latest',
     });
   });
