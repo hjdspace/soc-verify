@@ -10,3 +10,5 @@ coverage/
 *.tsbuildinfo
 resources/binaries/*
 !resources/binaries/README.md
+
+.socverify/
