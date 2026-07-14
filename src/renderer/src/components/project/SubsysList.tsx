@@ -4,6 +4,8 @@ import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
+import { useTerminalStore } from '@renderer/stores/terminal';
+import { useUiStore } from '@renderer/stores/ui';
 import { useEnvStore } from '@renderer/stores/env';
 
 interface SubsysData {
@@ -343,6 +345,7 @@ export function SubsysList() {
   const setCaseStatusFilter = useProjectStore((s) => s.setCaseStatusFilter);
   const plugins = useProjectStore((s) => s.plugins);
   const runSimulation = useSimulationStore((s) => s.runSimulation);
+  const runSimulationInTerminal = useSimulationStore((s) => s.runSimulationInTerminal);
   const simOptions = useSimulationStore((s) => s.simOptions);
   const setSimOption = useSimulationStore((s) => s.setSimOption);
   const configuredProjRtl = useEnvStore((s) => s.config?.envVars.PROJ_RTL);
@@ -532,11 +535,23 @@ export function SubsysList() {
     if (caseData.base) runOpts.base = caseData.base;
     if (caseData.block) runOpts.block = caseData.block;
     if (caseData.name) runOpts.case = caseData.name;
-    await runSimulation(currentProjectId, caseData.name, caseData.name, caseData.subsys, runOpts);
+
+    // Use terminal-based simulation: creates a PTY terminal, writes the runsim command,
+    // and switches to the terminal tab so the user can see real-time output.
+    const result = await runSimulationInTerminal(currentProjectId, caseData.name, caseData.name, caseData.subsys, runOpts);
+    if (result) {
+      // Create a terminal tab for the simulation session and switch to it
+      const createTabForSession = useTerminalStore.getState().createTabForSession;
+      const setActiveCenterTab = useUiStore.getState().setActiveCenterTab;
+      createTabForSession(result.terminalId, `sim: ${caseData.name}`, result.cwd);
+      // Also open the running cases panel alongside
+      setActiveCenterTab('sim-running');
+    }
   };
 
   const handleBatchRun = async () => {
     if (!currentProjectId || selectedCases.size === 0) return;
+    const setActiveCenterTab = useUiStore.getState().setActiveCenterTab;
     for (const casePath of selectedCases) {
       const caseData = cases.find((c) => c.path === casePath);
       if (caseData) {
@@ -545,9 +560,16 @@ export function SubsysList() {
         if (caseData.base) runOpts.base = caseData.base;
         if (caseData.block) runOpts.block = caseData.block;
         if (caseData.name) runOpts.case = caseData.name;
-        await runSimulation(currentProjectId, caseData.name, caseData.name, caseData.subsys, runOpts);
+        // Use terminal-based simulation for batch runs too
+        const result = await runSimulationInTerminal(currentProjectId, caseData.name, caseData.name, caseData.subsys, runOpts);
+        if (result) {
+          const createTabForSession = useTerminalStore.getState().createTabForSession;
+          createTabForSession(result.terminalId, `sim: ${caseData.name}`, result.cwd);
+        }
       }
     }
+    // Open the running cases panel to show all parallel simulations
+    setActiveCenterTab('sim-running');
     // Update simOptions with the last case's base/block for UI display
     const lastCase = cases.find((c) => c.path === Array.from(selectedCases).pop());
     if (lastCase) {
