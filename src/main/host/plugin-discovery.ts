@@ -66,10 +66,15 @@ export class PluginBackedDiscovery implements SubsysDiscovery {
     }
 
     let cases = cached.map((c: PluginCaseInfo) => ({
+      id: c.id,
       name: c.name,
       subsys: targetSubsys,
       path: c.path,
       status: 'pending' as CaseStatus,
+      baseCase: c.baseCase,
+      filePath: c.filePath,
+      base: c.base,
+      block: c.block,
     }));
 
     if (status && status !== 'all') {
