@@ -172,7 +172,9 @@ interface CaseTreeItemProps {
   toggleCase: (id: string) => void;
   batchMode: boolean;
   selectedCases: Set<string>;
+  selectedCaseId: string | null;
   toggleCaseSelection: (path: string) => void;
+  onCaseSelect: (caseData: CaseData) => void;
   onContextMenu: (e: React.MouseEvent, caseData: CaseData) => void;
   onRunCase: (caseData: CaseData) => void;
 }
@@ -186,7 +188,9 @@ function CaseTreeItem({
   toggleCase,
   batchMode,
   selectedCases,
+  selectedCaseId,
   toggleCaseSelection,
+  onCaseSelect,
   onContextMenu,
   onRunCase,
 }: CaseTreeItemProps) {
@@ -222,7 +226,9 @@ function CaseTreeItem({
               toggleCase={toggleCase}
               batchMode={batchMode}
               selectedCases={selectedCases}
+              selectedCaseId={selectedCaseId}
               toggleCaseSelection={toggleCaseSelection}
+              onCaseSelect={onCaseSelect}
               onContextMenu={onContextMenu}
               onRunCase={onRunCase}
             />
@@ -236,6 +242,7 @@ function CaseTreeItem({
   const hasChildren = node.children.length > 0;
   const isExpanded = expandedCases.has(caseId);
   const isSelected = batchMode && selectedCases.has(caseId);
+  const isActiveCase = !batchMode && selectedCaseId === caseId;
 
   return (
     <div>
@@ -243,10 +250,18 @@ function CaseTreeItem({
         className={cn(
           'flex items-center gap-1 rounded py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent/50',
           batchMode && 'cursor-pointer',
+          !batchMode && node.caseData && 'cursor-pointer',
           isSelected && 'bg-primary/10',
+          isActiveCase && 'bg-primary/5',
         )}
         style={{ paddingLeft: `${paddingLeft}px` }}
-        onClick={() => batchMode && node.caseData && toggleCaseSelection(caseId)}
+        onClick={() => {
+          if (batchMode) {
+            if (node.caseData) toggleCaseSelection(caseId);
+          } else if (node.caseData) {
+            onCaseSelect(node.caseData);
+          }
+        }}
         onContextMenu={(e) => !batchMode && node.caseData && onContextMenu(e, node.caseData)}
       >
         {hasChildren ? (
@@ -307,8 +322,10 @@ function CaseTreeItem({
             toggleCase={toggleCase}
             batchMode={batchMode}
             selectedCases={selectedCases}
+            selectedCaseId={selectedCaseId}
             toggleCaseSelection={toggleCaseSelection}
-              onContextMenu={onContextMenu}
+            onCaseSelect={onCaseSelect}
+            onContextMenu={onContextMenu}
             onRunCase={onRunCase}
           />
         ))}
@@ -327,6 +344,7 @@ export function SubsysList() {
   const plugins = useProjectStore((s) => s.plugins);
   const runSimulation = useSimulationStore((s) => s.runSimulation);
   const simOptions = useSimulationStore((s) => s.simOptions);
+  const setSimOption = useSimulationStore((s) => s.setSimOption);
   const configuredProjRtl = useEnvStore((s) => s.config?.envVars.PROJ_RTL);
   const loadEnvConfig = useEnvStore((s) => s.loadConfig);
   const setWizardOpen = useEnvStore((s) => s.setWizardOpen);
@@ -349,6 +367,7 @@ export function SubsysList() {
   const [batchMode, setBatchMode] = useState(false);
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const [expandedCases, setExpandedCases] = useState<Set<string>>(new Set());
+  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Load subsystems
@@ -459,9 +478,61 @@ export function SubsysList() {
     setContextMenu({ visible: true, x: e.clientX, y: e.clientY, caseData });
   };
 
+  /**
+   * Handle case selection (clicking on a case in the tree, not the run button).
+   *
+   * Auto-fills base/block/case into the simulation options (OptionDock),
+   * matching the behavior of Python runsim_r3p0's `on_case_selected`:
+   *   1. Set case name
+   *   2. Fill base/block from case data (parsed by case-parser plugin)
+   *   3. Clear case-specific options (rundir, seed, etc.) but preserve base/block
+   */
+  const handleCaseSelect = (caseData: CaseData) => {
+    const caseId = caseData.path ?? caseData.name;
+    setSelectedCaseId(caseId);
+
+    // Auto-fill base/block/case from case data
+    if (caseData.base) setSimOption('base', caseData.base);
+    if (caseData.block) setSimOption('block', caseData.block);
+    if (caseData.name) setSimOption('case', caseData.name);
+
+    // Clear case-specific options (preserve base/block/case and persistent options like post)
+    const preserveKeys = new Set(['base', 'block', 'case', 'post', 'bq']);
+    const cleared: Record<string, unknown> = {};
+    for (const key of Object.keys(simOptions)) {
+      if (!preserveKeys.has(key)) {
+        // Reset to empty/false based on type
+        const val = simOptions[key];
+        if (typeof val === 'boolean') {
+          cleared[key] = false;
+        } else {
+          cleared[key] = '';
+        }
+      }
+    }
+    // Merge: cleared values + preserved base/block/case
+    const merged = { ...cleared };
+    if (caseData.base) merged.base = caseData.base;
+    if (caseData.block) merged.block = caseData.block;
+    if (caseData.name) merged.case = caseData.name;
+    // Preserve post and bq from existing simOptions
+    if (simOptions.post !== undefined) merged.post = simOptions.post;
+    if (simOptions.bq !== undefined) merged.bq = simOptions.bq;
+    useSimulationStore.getState().setSimOptions(merged);
+  };
+
   const handleRunCase = async (caseData: CaseData) => {
     if (!currentProjectId) return;
-    await runSimulation(currentProjectId, caseData.name, caseData.name, caseData.subsys, simOptions);
+    // Auto-fill base/block/case from case data (same behavior as Python runsim_r3p0)
+    if (caseData.base) setSimOption('base', caseData.base);
+    if (caseData.block) setSimOption('block', caseData.block);
+    if (caseData.name) setSimOption('case', caseData.name);
+    // Build options with auto-filled base/block/case
+    const runOpts = { ...simOptions };
+    if (caseData.base) runOpts.base = caseData.base;
+    if (caseData.block) runOpts.block = caseData.block;
+    if (caseData.name) runOpts.case = caseData.name;
+    await runSimulation(currentProjectId, caseData.name, caseData.name, caseData.subsys, runOpts);
   };
 
   const handleBatchRun = async () => {
@@ -469,8 +540,20 @@ export function SubsysList() {
     for (const casePath of selectedCases) {
       const caseData = cases.find((c) => c.path === casePath);
       if (caseData) {
-        await runSimulation(currentProjectId, caseData.name, caseData.name, caseData.subsys, simOptions);
+        // Auto-fill base/block/case from case data
+        const runOpts = { ...simOptions };
+        if (caseData.base) runOpts.base = caseData.base;
+        if (caseData.block) runOpts.block = caseData.block;
+        if (caseData.name) runOpts.case = caseData.name;
+        await runSimulation(currentProjectId, caseData.name, caseData.name, caseData.subsys, runOpts);
       }
+    }
+    // Update simOptions with the last case's base/block for UI display
+    const lastCase = cases.find((c) => c.path === Array.from(selectedCases).pop());
+    if (lastCase) {
+      if (lastCase.base) setSimOption('base', lastCase.base);
+      if (lastCase.block) setSimOption('block', lastCase.block);
+      if (lastCase.name) setSimOption('case', lastCase.name);
     }
     setSelectedCases(new Set());
     setBatchMode(false);
@@ -672,7 +755,9 @@ export function SubsysList() {
                       toggleCase={toggleCase}
                       batchMode={batchMode}
                       selectedCases={selectedCases}
+                      selectedCaseId={selectedCaseId}
                       toggleCaseSelection={toggleCaseSelection}
+                      onCaseSelect={handleCaseSelect}
                       onContextMenu={handleCaseContextMenu}
                       onRunCase={handleRunCase}
                     />
