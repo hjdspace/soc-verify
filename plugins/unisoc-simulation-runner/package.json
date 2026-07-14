@@ -1,0 +1,10 @@
+{
+  "name": "unisoc-simulation-runner",
+  "version": "1.0.0",
+  "description": "Unisoc 仿真执行插件：生成 runsim 命令并通过子进程执行仿真，追踪状态和编译错误。",
+  "main": "index.js",
+  "socverify": {
+    "kind": "simulation-runner",
+    "id": "unisoc-simulation-runner"
+  }
+}
