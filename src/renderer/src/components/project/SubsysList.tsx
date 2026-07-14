@@ -1,5 +1,5 @@
-import { useEffect, useState, useRef } from 'react';
-import { ChevronRight, ChevronDown, Cpu, CircleDot, Play, X, RefreshCw, Settings } from 'lucide-react';
+import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
+import { ChevronRight, ChevronDown, Cpu, CircleDot, Play, X, RefreshCw, Settings, FileText } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import { useProjectStore } from '@renderer/stores/project';
@@ -14,12 +14,17 @@ interface SubsysData {
 }
 
 interface CaseData {
+  id?: string;
   name: string;
   subsys: string;
   path: string;
   status?: string;
   duration?: number;
   description?: string;
+  baseCase?: string;
+  filePath?: string;
+  base?: string;
+  block?: string;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -45,6 +50,273 @@ interface ContextMenuState {
   y: number;
   caseData: CaseData | null;
 }
+
+// ─── Case Tree Types ─────────────────────────────────────
+
+interface CaseTreeNode {
+  type: 'file' | 'case';
+  name: string;
+  path: string;
+  caseData?: CaseData;
+  children: CaseTreeNode[];
+}
+
+/**
+ * 从扁平用例列表构建用例树。
+ *
+ * 树结构：
+ *   文件节点（按 filePath 分组）
+ *     ├─ 根用例（无 baseCase）
+ *     │   ├─ 子用例（baseCase 指向根用例）
+ *     │   └─ ...
+ *     └─ ...
+ *
+ * 如果用例没有 filePath 信息，回退为扁平结构（每个用例直接作为根节点）。
+ */
+function buildCaseTree(cases: CaseData[]): CaseTreeNode[] {
+  // 检查是否有树结构信息
+  const hasTreeInfo = cases.some((c) => c.filePath);
+
+  if (!hasTreeInfo) {
+    // 无树信息，回退为扁平列表
+    return cases.map((c) => ({
+      type: 'case' as const,
+      name: c.name,
+      path: c.path,
+      caseData: c,
+      children: [],
+    }));
+  }
+
+  // 按 filePath 分组
+  const fileGroups = new Map<string, CaseData[]>();
+  for (const c of cases) {
+    const fp = c.filePath ?? c.path;
+    if (!fileGroups.has(fp)) {
+      fileGroups.set(fp, []);
+    }
+    fileGroups.get(fp)!.push(c);
+  }
+
+  const tree: CaseTreeNode[] = [];
+
+  for (const [filePath, fileCases] of fileGroups) {
+    const fileName = filePath.split(/[/\\]/).pop() ?? filePath;
+    const fileNode: CaseTreeNode = {
+      type: 'file',
+      name: fileName,
+      path: filePath,
+      children: [],
+    };
+
+    // 用例名 → 树节点映射（用于查找父节点）
+    const caseMap = new Map<string, CaseTreeNode>();
+
+    // 第一遍：创建根用例（无 baseCase）
+    for (const c of fileCases) {
+      if (!c.baseCase) {
+        const node: CaseTreeNode = {
+          type: 'case',
+          name: c.name,
+          path: c.path,
+          caseData: c,
+          children: [],
+        };
+        caseMap.set(c.name, node);
+        fileNode.children.push(node);
+      }
+    }
+
+    // 第二遍：添加子用例
+    for (const c of fileCases) {
+      if (c.baseCase) {
+        let parentNode = caseMap.get(c.baseCase);
+        if (!parentNode) {
+          // 父用例不存在，创建占位节点
+          parentNode = {
+            type: 'case',
+            name: c.baseCase,
+            path: '',
+            caseData: { ...c, name: c.baseCase, baseCase: undefined },
+            children: [],
+          };
+          caseMap.set(c.baseCase, parentNode);
+          fileNode.children.push(parentNode);
+        }
+        const childNode: CaseTreeNode = {
+          type: 'case',
+          name: c.name,
+          path: c.path,
+          caseData: c,
+          children: [],
+        };
+        caseMap.set(c.name, childNode);
+        parentNode.children.push(childNode);
+      }
+    }
+
+    tree.push(fileNode);
+  }
+
+  return tree;
+}
+
+// ─── Recursive Case Tree Item ────────────────────────────
+
+interface CaseTreeItemProps {
+  node: CaseTreeNode;
+  level: number;
+  expandedFiles: Set<string>;
+  expandedCases: Set<string>;
+  toggleFile: (path: string) => void;
+  toggleCase: (id: string) => void;
+  batchMode: boolean;
+  selectedCases: Set<string>;
+  toggleCaseSelection: (path: string) => void;
+  onContextMenu: (e: React.MouseEvent, caseData: CaseData) => void;
+  onRunCase: (caseData: CaseData) => void;
+}
+
+function CaseTreeItem({
+  node,
+  level,
+  expandedFiles,
+  expandedCases,
+  toggleFile,
+  toggleCase,
+  batchMode,
+  selectedCases,
+  toggleCaseSelection,
+  onContextMenu,
+  onRunCase,
+}: CaseTreeItemProps) {
+  const paddingLeft = level * 12 + 8;
+
+  if (node.type === 'file') {
+    const isExpanded = expandedFiles.has(node.path);
+    return (
+      <div>
+        <button
+          onClick={() => toggleFile(node.path)}
+          className="flex w-full items-center gap-1 rounded py-0.5 text-left text-[11px] text-muted-foreground transition-colors hover:bg-accent/50"
+          style={{ paddingLeft: `${paddingLeft}px` }}
+        >
+          {isExpanded ? (
+            <ChevronDown className="h-2.5 w-2.5 shrink-0 opacity-50" />
+          ) : (
+            <ChevronRight className="h-2.5 w-2.5 shrink-0 opacity-50" />
+          )}
+          <FileText className="h-2.5 w-2.5 shrink-0 opacity-40" />
+          <span className="truncate">{node.name}</span>
+          <span className="ml-auto shrink-0 text-[9px] opacity-50">{node.children.length}</span>
+        </button>
+        {isExpanded &&
+          node.children.map((child) => (
+            <CaseTreeItem
+              key={child.caseData?.id || child.path || child.name}
+              node={child}
+              level={level + 1}
+              expandedFiles={expandedFiles}
+              expandedCases={expandedCases}
+              toggleFile={toggleFile}
+              toggleCase={toggleCase}
+              batchMode={batchMode}
+              selectedCases={selectedCases}
+              toggleCaseSelection={toggleCaseSelection}
+              onContextMenu={onContextMenu}
+              onRunCase={onRunCase}
+            />
+          ))}
+      </div>
+    );
+  }
+
+  // Case node
+  const caseId = node.caseData?.path ?? node.name;
+  const hasChildren = node.children.length > 0;
+  const isExpanded = expandedCases.has(caseId);
+  const isSelected = batchMode && selectedCases.has(caseId);
+
+  return (
+    <div>
+      <div
+        className={cn(
+          'flex items-center gap-1 rounded py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent/50',
+          batchMode && 'cursor-pointer',
+          isSelected && 'bg-primary/10',
+        )}
+        style={{ paddingLeft: `${paddingLeft}px` }}
+        onClick={() => batchMode && node.caseData && toggleCaseSelection(caseId)}
+        onContextMenu={(e) => !batchMode && node.caseData && onContextMenu(e, node.caseData)}
+      >
+        {hasChildren ? (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleCase(caseId);
+            }}
+            className="shrink-0"
+          >
+            {isExpanded ? (
+              <ChevronDown className="h-2.5 w-2.5 opacity-50" />
+            ) : (
+              <ChevronRight className="h-2.5 w-2.5 opacity-50" />
+            )}
+          </button>
+        ) : (
+          <span className="w-2.5 shrink-0" />
+        )}
+        {batchMode && (
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onChange={() => toggleCaseSelection(caseId)}
+            className="h-2.5 w-2.5 shrink-0"
+          />
+        )}
+        <CircleDot
+          className={cn('h-2.5 w-2.5 shrink-0', STATUS_COLORS[node.caseData?.status ?? 'pending'])}
+        />
+        <span className="truncate">{node.name}</span>
+        {node.caseData?.baseCase && (
+          <span className="shrink-0 text-[9px] opacity-40">:{node.caseData.baseCase}</span>
+        )}
+        {!batchMode && node.caseData && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onRunCase(node.caseData!);
+            }}
+            className="ml-auto shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-foreground/10 group-hover:opacity-100"
+            title="运行仿真"
+          >
+            <Play className="h-2.5 w-2.5 text-primary" />
+          </button>
+        )}
+      </div>
+      {hasChildren &&
+        isExpanded &&
+        node.children.map((child) => (
+          <CaseTreeItem
+            key={child.caseData?.id || child.path || child.name}
+            node={child}
+            level={level + 1}
+            expandedFiles={expandedFiles}
+            expandedCases={expandedCases}
+            toggleFile={toggleFile}
+            toggleCase={toggleCase}
+            batchMode={batchMode}
+            selectedCases={selectedCases}
+            toggleCaseSelection={toggleCaseSelection}
+              onContextMenu={onContextMenu}
+            onRunCase={onRunCase}
+          />
+        ))}
+    </div>
+  );
+}
+
+// ─── Main Component ──────────────────────────────────────
 
 export function SubsysList() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
@@ -75,6 +347,8 @@ export function SubsysList() {
   });
   const [selectedCases, setSelectedCases] = useState<Set<string>>(new Set());
   const [batchMode, setBatchMode] = useState(false);
+  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
+  const [expandedCases, setExpandedCases] = useState<Set<string>>(new Set());
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Load subsystems
@@ -122,7 +396,17 @@ export function SubsysList() {
         status: caseStatusFilter === 'all' ? undefined : caseStatusFilter,
       })
       .then((data) => {
-        if (!cancelled) setCases(data as CaseData[]);
+        if (!cancelled) {
+          setCases(data as CaseData[]);
+          // Auto-expand all file nodes when cases are loaded
+          const filePaths = new Set<string>();
+          for (const c of data as CaseData[]) {
+            if (c.filePath) filePaths.add(c.filePath);
+          }
+          if (filePaths.size > 0) {
+            setExpandedFiles(filePaths);
+          }
+        }
       })
       .catch(() => {
         if (!cancelled) setCases([]);
@@ -144,9 +428,31 @@ export function SubsysList() {
   }, [contextMenu.visible]);
 
   const toggleSubsys = (name: string) => {
-    setExpandedSubsys(expandedSubsys === name ? null : name);
-    setSelectedSubsys(expandedSubsys === name ? null : name);
+    const newExpanded = expandedSubsys === name ? null : name;
+    setExpandedSubsys(newExpanded);
+    setSelectedSubsys(newExpanded);
+    // Reset expanded states when switching subsystems
+    setExpandedFiles(new Set());
+    setExpandedCases(new Set());
   };
+
+  const toggleFile = useCallback((path: string) => {
+    setExpandedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+
+  const toggleCase = useCallback((id: string) => {
+    setExpandedCases((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   const handleCaseContextMenu = (e: React.MouseEvent, caseData: CaseData) => {
     e.preventDefault();
@@ -178,6 +484,9 @@ export function SubsysList() {
       return next;
     });
   };
+
+  // Build case tree from flat list
+  const caseTree = useMemo(() => buildCaseTree(cases), [cases]);
 
   const subsystemPlugins = plugins.filter((plugin) => plugin.kind === 'subsys-discoverer');
   const pluginError = subsystemPlugins.find((plugin) => plugin.error)?.error;
@@ -343,48 +652,32 @@ export function SubsysList() {
             )}
           </button>
 
-          {/* Cases under subsystem */}
+          {/* Cases under subsystem — tree view */}
           {expandedSubsys === subsys.name && (
             <div className="pb-1">
               {loadingCases ? (
                 <div className="px-4 py-1 text-[10px] text-muted-foreground">加载中...</div>
-              ) : cases.length === 0 ? (
+              ) : caseTree.length === 0 ? (
                 <div className="px-4 py-1 text-[10px] text-muted-foreground">无用例</div>
               ) : (
-                cases.map((c) => (
-                  <div
-                    key={c.path}
-                    className={cn(
-                      'flex items-center gap-1 px-4 py-0.5 text-xs text-muted-foreground hover:bg-accent/50 rounded cursor-pointer',
-                      batchMode && selectedCases.has(c.path) && 'bg-primary/10',
-                    )}
-                    onClick={() => batchMode && toggleCaseSelection(c.path)}
-                    onContextMenu={(e) => !batchMode && handleCaseContextMenu(e, c)}
-                  >
-                    {batchMode && (
-                      <input
-                        type="checkbox"
-                        checked={selectedCases.has(c.path)}
-                        onChange={() => toggleCaseSelection(c.path)}
-                        className="h-2.5 w-2.5"
-                      />
-                    )}
-                    <CircleDot className={cn('h-2.5 w-2.5 shrink-0', STATUS_COLORS[c.status ?? 'pending'])} />
-                    <span className="truncate">{c.name}</span>
-                    {!batchMode && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleRunCase(c);
-                        }}
-                        className="ml-auto rounded p-0.5 opacity-0 transition-opacity hover:bg-foreground/10 group-hover:opacity-100"
-                        title="运行仿真"
-                      >
-                        <Play className="h-2.5 w-2.5 text-primary" />
-                      </button>
-                    )}
-                  </div>
-                ))
+                <div className="group">
+                  {caseTree.map((node) => (
+                    <CaseTreeItem
+                      key={node.path || node.name}
+                      node={node}
+                      level={0}
+                      expandedFiles={expandedFiles}
+                      expandedCases={expandedCases}
+                      toggleFile={toggleFile}
+                      toggleCase={toggleCase}
+                      batchMode={batchMode}
+                      selectedCases={selectedCases}
+                      toggleCaseSelection={toggleCaseSelection}
+                      onContextMenu={handleCaseContextMenu}
+                      onRunCase={handleRunCase}
+                    />
+                  ))}
+                </div>
               )}
             </div>
           )}
