@@ -1,11 +1,15 @@
-import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronUp, Save, FolderOpen } from 'lucide-react';
+import { useEffect, useState, useMemo } from 'react';
+import { ChevronDown, ChevronUp, Save, FolderOpen, Settings2 } from 'lucide-react';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import type { SimOptionField } from '@shared/plugin-types';
+
+// ─── 分组顺序定义 ──────────────────────────────────────────────
+const GROUP_ORDER = ['基础参数', '波形配置', '仿真参数', '执行模式', '回归测试'];
+const DEFAULT_GROUP = '其他';
 
 export function OptionDock() {
   const expanded = useUiStore((s) => s.optionDockExpanded);
@@ -34,14 +38,15 @@ export function OptionDock() {
       .then((data) => {
         if (!cancelled) {
           setSchema(data.fields ?? []);
-          // Initialize values with defaults
+          // Initialize values with defaults — preserve existing values for keys already set
           const defaults: Record<string, unknown> = {};
           for (const field of data.fields ?? []) {
             if (field.default !== undefined) {
               defaults[field.key] = field.default;
             }
           }
-          setSimOptions(defaults);
+          // Merge: existing simOptions take priority over defaults
+          setSimOptions({ ...defaults, ...simOptions });
         }
       })
       .catch(() => {
@@ -50,6 +55,7 @@ export function OptionDock() {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProjectId, selectedSubsys]);
 
   // Load presets
@@ -68,6 +74,23 @@ export function OptionDock() {
       cancelled = true;
     };
   }, [currentProjectId]);
+
+  // Group fields by their `group` property
+  const groupedFields = useMemo(() => {
+    const groups = new Map<string, SimOptionField[]>();
+    for (const field of schema) {
+      const g = field.group ?? DEFAULT_GROUP;
+      if (!groups.has(g)) groups.set(g, []);
+      groups.get(g)!.push(field);
+    }
+    // Sort groups by predefined order
+    const sortedGroups = Array.from(groups.entries()).sort((a, b) => {
+      const ia = GROUP_ORDER.indexOf(a[0]);
+      const ib = GROUP_ORDER.indexOf(b[0]);
+      return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+    });
+    return sortedGroups;
+  }, [schema]);
 
   const handleSavePreset = async () => {
     if (!currentProjectId || !presetName.trim()) return;
@@ -96,13 +119,15 @@ export function OptionDock() {
   };
 
   return (
-    <div className="border-t bg-secondary/40">
+    <div className="border-t bg-secondary/30">
+      {/* ── Header bar ─────────────────────────────────────── */}
       <div className="flex items-center justify-between px-3 py-1.5">
         <button
           onClick={toggle}
           className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
         >
           {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronUp className="h-3 w-3" />}
+          <Settings2 className="h-3 w-3" />
           仿真 Option
           {schema.length > 0 && (
             <span className="rounded bg-primary/10 px-1 py-0.5 text-[9px] text-primary">
@@ -161,8 +186,9 @@ export function OptionDock() {
         </div>
       </div>
 
+      {/* ── Options panel ──────────────────────────────────── */}
       {expanded && (
-        <div className="px-3 pb-3">
+        <div className="max-h-72 overflow-y-auto px-3 pb-3">
           {schema.length === 0 ? (
             <div className="py-2 text-xs text-muted-foreground">
               {currentProjectId
@@ -170,13 +196,14 @@ export function OptionDock() {
                 : '请先打开项目'}
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4">
-              {schema.map((field) => (
-                <OptionField
-                  key={field.key}
-                  field={field}
-                  value={simOptions[field.key]}
-                  onChange={(v) => setSimOption(field.key, v)}
+            <div className="space-y-3">
+              {groupedFields.map(([groupName, fields]) => (
+                <OptionGroup
+                  key={groupName}
+                  name={groupName}
+                  fields={fields}
+                  values={simOptions}
+                  onChange={(key, val) => setSimOption(key, val)}
                 />
               ))}
             </div>
@@ -187,7 +214,44 @@ export function OptionDock() {
   );
 }
 
-// ── Option field renderer ──────────────────────────────
+// ─── Option Group ──────────────────────────────────────────
+
+function OptionGroup({
+  name,
+  fields,
+  values,
+  onChange,
+}: {
+  name: string;
+  fields: SimOptionField[];
+  values: Record<string, unknown>;
+  onChange: (key: string, value: unknown) => void;
+}) {
+  return (
+    <div>
+      {/* Group header */}
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+          {name}
+        </span>
+        <div className="h-px flex-1 bg-border/50" />
+      </div>
+      {/* Fields grid */}
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 md:grid-cols-3 lg:grid-cols-4">
+        {fields.map((field) => (
+          <OptionField
+            key={field.key}
+            field={field}
+            value={values[field.key]}
+            onChange={(v) => onChange(field.key, v)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Option field renderer ──────────────────────────────────
 
 function OptionField({
   field,
@@ -202,7 +266,10 @@ function OptionField({
     <label className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
       {field.label}
       {field.description && (
-        <span className="text-[9px] text-muted-foreground/60" title={field.description}>
+        <span
+          className="cursor-help text-[9px] text-muted-foreground/40 underline decoration-dotted"
+          title={field.description}
+        >
           (?)
         </span>
       )}
@@ -219,7 +286,7 @@ function OptionField({
             value={typeof value === 'string' ? value : ''}
             onChange={(e) => onChange(e.target.value)}
             placeholder={field.default ? String(field.default) : ''}
-            className="rounded border border-border bg-background px-1.5 py-0.5 text-xs outline-none focus:border-primary"
+            className="rounded border border-border bg-background px-1.5 py-0.5 text-xs outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary/20"
           />
         </div>
       );
@@ -233,26 +300,27 @@ function OptionField({
             value={typeof value === 'number' ? value : ''}
             onChange={(e) => onChange(e.target.value === '' ? undefined : Number(e.target.value))}
             placeholder={field.default !== undefined ? String(field.default) : ''}
-            className="rounded border border-border bg-background px-1.5 py-0.5 text-xs outline-none focus:border-primary"
+            className="rounded border border-border bg-background px-1.5 py-0.5 text-xs outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary/20"
           />
         </div>
       );
 
     case 'boolean':
       return (
-        <div className="flex flex-col gap-0.5">
+        <div className="flex items-center justify-between gap-1 py-0.5">
           {label}
           <button
             onClick={() => onChange(!value)}
             className={cn(
-              'flex h-5 w-9 items-center rounded-full px-0.5 transition-colors',
-              value ? 'bg-primary' : 'bg-muted',
+              'relative h-4 w-7 shrink-0 rounded-full transition-colors',
+              value ? 'bg-primary' : 'bg-muted-foreground/30',
             )}
+            title={field.description}
           >
             <div
               className={cn(
-                'h-3.5 w-3.5 rounded-full bg-background transition-transform',
-                value ? 'translate-x-4' : 'translate-x-0',
+                'absolute top-0.5 h-3 w-3 rounded-full bg-background shadow-sm transition-transform',
+                value ? 'translate-x-3.5' : 'translate-x-0.5',
               )}
             />
           </button>
@@ -266,12 +334,12 @@ function OptionField({
           <select
             value={typeof value === 'string' ? value : ''}
             onChange={(e) => onChange(e.target.value)}
-            className="rounded border border-border bg-background px-1.5 py-0.5 text-xs outline-none focus:border-primary"
+            className="rounded border border-border bg-background px-1.5 py-0.5 text-xs outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary/20"
           >
             <option value="">--</option>
             {field.enumValues?.map((v) => (
               <option key={v} value={v}>
-                {v}
+                {v || '--'}
               </option>
             ))}
           </select>
