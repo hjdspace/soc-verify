@@ -18,6 +18,14 @@ export interface CaseInfo {
   id: string;
   name: string;
   path: string;
+  /** Base case name — set when this case inherits from another case (child case) */
+  baseCase?: string;
+  /** Config file path where this case was defined */
+  filePath?: string;
+  /** Simulation -base parameter parsed from config file path */
+  base?: string;
+  /** Simulation -block parameter parsed from config file path */
+  block?: string;
 }
 
 export interface SubsysInfo {
