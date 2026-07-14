@@ -11,12 +11,13 @@ import { DashboardPanel } from '@renderer/components/dashboard/DashboardPanel';
 import { TOChecklistPanel } from '@renderer/components/to/TOChecklistPanel';
 import { SourceControlPanel } from '@renderer/components/scm/SourceControlPanel';
 import { FileEditor } from '@renderer/components/editor/FileEditor';
+import { RunningCasesPanel } from '@renderer/components/simulation/RunningCasesPanel';
 import { cn } from '@renderer/lib/utils';
 import type { SimulationHistoryEntry, CompileError } from '@shared/types';
 
 type CenterTab = {
   id: string;
-  type: 'file' | 'terminal' | 'ai-artifacts' | 'sim-errors' | 'sim-history' | 'sim-detail' | 'sim-compare' | 'coverage' | 'regression' | 'dashboard' | 'to-checklist' | 'source-control';
+  type: 'file' | 'terminal' | 'ai-artifacts' | 'sim-errors' | 'sim-history' | 'sim-detail' | 'sim-compare' | 'sim-running' | 'coverage' | 'regression' | 'dashboard' | 'to-checklist' | 'source-control';
   title: string;
   closable: boolean;
 };
@@ -80,6 +81,11 @@ export function CenterArea() {
         setTabs((prev) => [...prev, { id: activeCenterTab, type: 'sim-compare', title: '运行对比', closable: true }]);
       }
       setCenterView('sim-compare');
+    } else if (activeCenterTab === 'sim-running') {
+      if (!tabs.find((t) => t.id === activeCenterTab)) {
+        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'sim-running', title: '运行概览', closable: true }]);
+      }
+      setCenterView('sim-running');
     } else if (activeCenterTab === 'coverage') {
       if (!tabs.find((t) => t.id === activeCenterTab)) {
         setTabs((prev) => [...prev, { id: activeCenterTab, type: 'coverage', title: '覆盖率分析', closable: true }]);
@@ -219,6 +225,7 @@ export function CenterArea() {
                 {tab.type === 'sim-history' && <History className="h-3 w-3 opacity-50" />}
                 {tab.type === 'sim-detail' && <FileText className="h-3 w-3 opacity-50" />}
                 {tab.type === 'sim-compare' && <GitCompare className="h-3 w-3 opacity-50" />}
+                {tab.type === 'sim-running' && <CircleDot className="h-3 w-3 opacity-50" />}
                 {tab.type === 'coverage' && <BarChart3 className="h-3 w-3 opacity-50" />}
                 {tab.type === 'regression' && <GitBranch className="h-3 w-3 opacity-50" />}
                 {tab.type === 'dashboard' && <LayoutDashboard className="h-3 w-3 opacity-50" />}
@@ -277,6 +284,23 @@ export function CenterArea() {
             <ListChecks className="h-3.5 w-3.5" />
           </button>
           <button
+            onClick={() => setActiveCenterTab('sim-running')}
+            title="运行概览"
+            className={cn(
+              'relative rounded p-1 transition-colors hover:bg-accent hover:text-foreground',
+              activeRuns.length > 0 && activeRuns.some((r) => r.status === 'running' || r.status === 'pending')
+                ? 'text-blue-500'
+                : 'text-muted-foreground',
+            )}
+          >
+            <CircleDot className="h-3.5 w-3.5" />
+            {activeRuns.filter((r) => r.status === 'running' || r.status === 'pending').length > 0 && (
+              <span className="absolute -right-1 -top-1 flex h-3 min-w-3 items-center justify-center rounded-full bg-blue-500 px-0.5 text-[8px] font-bold text-white">
+                {activeRuns.filter((r) => r.status === 'running' || r.status === 'pending').length}
+              </span>
+            )}
+          </button>
+          <button
             onClick={openSimHistory}
             title="仿真历史"
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
@@ -325,6 +349,8 @@ export function CenterArea() {
           />
         ) : centerView === 'sim-compare' ? (
           <ComparisonView result={compareResult} />
+        ) : centerView === 'sim-running' ? (
+          <RunningCasesPanel />
         ) : centerView === 'coverage' ? (
           <CoveragePanel />
         ) : centerView === 'regression' ? (
