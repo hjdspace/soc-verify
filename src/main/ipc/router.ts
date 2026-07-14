@@ -1106,11 +1106,12 @@ export const router = t.router({
         return { projectId: r.projectId, options: r.options as SimulationRunOptions };
       })
       .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
         const manager = getSimulationManager(input.projectId);
         if (!manager.hasRunner()) {
           throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'No simulation-runner plugin loaded' });
         }
-        const handle = await manager.run(input.options);
+        const handle = await manager.run({ ...input.options, projectRoot: project.rootPath });
         return { runId: handle.runId };
       }),
 
