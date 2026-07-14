@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
 import type { SimulationHistoryEntry, SimulationStatus } from '@shared/types';
+import type { SimulationRunStatus as PluginRunStatus } from '@shared/plugin-types';
 
 export interface SimulationRunRecord {
   runId: string;
@@ -170,22 +171,53 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
   },
 
   handleSimulationEvent: (type, recordRaw) => {
-    const record = recordRaw as SimulationRunRecord;
-    if (!record) return;
+    // The IPC record from the main process has `status` as a SimulationRunStatus
+    // object ({runId, status, startTime, endTime, message}), not a plain string.
+    // We must extract the string to avoid rendering objects as React children.
+    const ipcRecord = recordRaw as {
+      runId: string;
+      projectId: string;
+      caseId?: string;
+      caseName?: string;
+      subsys?: string;
+      options?: { caseId?: string; caseName?: string; subsys?: string };
+      status: PluginRunStatus;
+      startTime: number;
+      endTime?: number;
+      compileErrors?: SimulationRunRecord['compileErrors'];
+    };
+    if (!ipcRecord || !ipcRecord.runId) return;
+
+    // Helper: extract status string from SimulationRunStatus object
+    const statusStr: SimulationStatus =
+      typeof ipcRecord.status === 'object' && ipcRecord.status !== null
+        ? (ipcRecord.status.status as SimulationStatus)
+        : (ipcRecord.status as SimulationStatus);
 
     switch (type) {
       case 'started':
         set((s) => {
-          if (s.activeRuns.find((r) => r.runId === record.runId)) return s;
-          return { activeRuns: [...s.activeRuns, record] };
+          if (s.activeRuns.find((r) => r.runId === ipcRecord.runId)) return s;
+          const newRecord: SimulationRunRecord = {
+            runId: ipcRecord.runId,
+            projectId: ipcRecord.projectId,
+            caseId: ipcRecord.caseId ?? ipcRecord.options?.caseId ?? '',
+            caseName: ipcRecord.caseName ?? ipcRecord.options?.caseName,
+            subsys: ipcRecord.subsys ?? ipcRecord.options?.subsys ?? '',
+            status: statusStr,
+            startTime: ipcRecord.startTime,
+            endTime: ipcRecord.endTime,
+            compileErrors: ipcRecord.compileErrors,
+          };
+          return { activeRuns: [...s.activeRuns, newRecord] };
         });
         break;
 
       case 'statusChanged':
         set((s) => ({
           activeRuns: s.activeRuns.map((r) =>
-            r.runId === record.runId
-              ? { ...r, status: record.status, endTime: record.endTime }
+            r.runId === ipcRecord.runId
+              ? { ...r, status: statusStr, endTime: ipcRecord.endTime }
               : r,
           ),
         }));
@@ -194,23 +226,23 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
       case 'completed':
         set((s) => ({
           activeRuns: s.activeRuns.map((r) =>
-            r.runId === record.runId
-              ? { ...r, status: record.status, endTime: record.endTime, compileErrors: record.compileErrors }
+            r.runId === ipcRecord.runId
+              ? { ...r, status: statusStr, endTime: ipcRecord.endTime, compileErrors: ipcRecord.compileErrors }
               : r,
           ),
         }));
         // Auto-refresh history
         {
-          const projectId = record.projectId;
-          void get().loadHistory(projectId);
+          const projectId = ipcRecord.projectId;
+          if (projectId) void get().loadHistory(projectId);
         }
         break;
 
       case 'aborted':
         set((s) => ({
           activeRuns: s.activeRuns.map((r) =>
-            r.runId === record.runId
-              ? { ...r, status: 'aborted', endTime: record.endTime }
+            r.runId === ipcRecord.runId
+              ? { ...r, status: 'aborted' as SimulationStatus, endTime: ipcRecord.endTime }
               : r,
           ),
         }));
