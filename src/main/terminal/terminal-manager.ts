@@ -37,18 +37,45 @@ async function loadNodePty(): Promise<typeof NodePty | null> {
   }
 }
 
+// ── Data batching constants ─────────────────────────────────
+/**
+ * Max batch size in bytes before flushing (64KB).
+ * Prevents unbounded buffer growth during massive output bursts.
+ */
+const BATCH_MAX_BYTES = 64 * 1024;
+/**
+ * Flush interval in ms (~60fps). Batches high-frequency PTY data
+ * into fewer IPC messages to avoid overwhelming the renderer.
+ */
+const BATCH_FLUSH_MS = 16;
+/**
+ * Max number of output buffer chunks retained for session restore.
+ */
+const OUTPUT_BUFFER_MAX = 5000;
+
+interface SessionEntry {
+  pty: NodePty.IPty | ChildProcess | null;
+  session: TerminalSession;
+  outputBuffer: string[];
+  /** Pending data chunks waiting to be flushed via IPC */
+  pendingChunks: string[];
+  /** Combined size of pending chunks (bytes) */
+  pendingSize: number;
+  /** Flush timer handle */
+  flushTimer: NodeJS.Timeout | null;
+}
+
 /**
  * Manages PTY sessions for terminal integration.
  *
  * Uses node-pty when available for a real PTY experience.
  * Falls back to child_process.spawn when node-pty is not compiled.
+ *
+ * Performance: data events are batched (every 16ms or 64KB) to reduce
+ * IPC message count during high-volume simulation output (百万行日志).
  */
 export class TerminalManager extends EventEmitter {
-  private sessions = new Map<string, {
-    pty: NodePty.IPty | ChildProcess | null;
-    session: TerminalSession;
-    outputBuffer: string[];
-  }>();
+  private sessions = new Map<string, SessionEntry>();
   private idCounter = 0;
 
   /**
@@ -71,7 +98,38 @@ export class TerminalManager extends EventEmitter {
     };
 
     const outputBuffer: string[] = [];
+    const entry: SessionEntry = {
+      pty: null,
+      session,
+      outputBuffer,
+      pendingChunks: [],
+      pendingSize: 0,
+      flushTimer: null,
+    };
+
     const ptyModule = await loadNodePty();
+
+    // Helper: enqueue data for batched flush
+    const enqueueData = (data: string): void => {
+      // Store in output buffer for session restore
+      outputBuffer.push(data);
+      if (outputBuffer.length > OUTPUT_BUFFER_MAX) outputBuffer.shift();
+
+      // Enqueue for batched IPC flush
+      entry.pendingChunks.push(data);
+      entry.pendingSize += data.length;
+
+      // Flush immediately if batch exceeds size limit
+      if (entry.pendingSize >= BATCH_MAX_BYTES) {
+        this.flushPending(id);
+      } else if (entry.flushTimer === null) {
+        // Schedule a flush on next tick
+        entry.flushTimer = setTimeout(() => {
+          this.flushPending(id);
+        }, BATCH_FLUSH_MS);
+        entry.flushTimer.unref();
+      }
+    };
 
     if (ptyModule) {
       // Use real node-pty
@@ -85,19 +143,19 @@ export class TerminalManager extends EventEmitter {
       });
 
       session.pid = pty.pid;
+      entry.pty = pty;
 
       pty.onData((data: string) => {
-        outputBuffer.push(data);
-        if (outputBuffer.length > 1000) outputBuffer.shift();
-        this.emit('data', { id, data });
+        enqueueData(data);
       });
 
       pty.onExit(({ exitCode }: { exitCode: number }) => {
+        this.flushPending(id);
         this.emit('exit', { id, exitCode });
         this.sessions.delete(id);
       });
 
-      this.sessions.set(id, { pty, session, outputBuffer });
+      this.sessions.set(id, entry);
     } else {
       // Fallback: use child_process.spawn
       const shell = process.platform === 'win32' ? 'powershell.exe' : 'bash';
@@ -108,30 +166,50 @@ export class TerminalManager extends EventEmitter {
       });
 
       session.pid = child.pid ?? 0;
+      entry.pty = child;
 
       child.stdout?.on('data', (data: Buffer) => {
-        const str = data.toString();
-        outputBuffer.push(str);
-        if (outputBuffer.length > 1000) outputBuffer.shift();
-        this.emit('data', { id, data: str });
+        enqueueData(data.toString());
       });
 
       child.stderr?.on('data', (data: Buffer) => {
-        const str = data.toString();
-        outputBuffer.push(str);
-        if (outputBuffer.length > 1000) outputBuffer.shift();
-        this.emit('data', { id, data: str });
+        enqueueData(data.toString());
       });
 
       child.on('exit', (exitCode: number | null) => {
+        this.flushPending(id);
         this.emit('exit', { id, exitCode: exitCode ?? 0 });
         this.sessions.delete(id);
       });
 
-      this.sessions.set(id, { pty: child, session, outputBuffer });
+      this.sessions.set(id, entry);
     }
 
     return session;
+  }
+
+  /**
+   * Flush pending data chunks for a terminal session.
+   * Combines all pending chunks into a single 'data' event.
+   */
+  private flushPending(id: string): void {
+    const entry = this.sessions.get(id);
+    if (!entry || entry.pendingChunks.length === 0) return;
+
+    // Cancel pending timer
+    if (entry.flushTimer !== null) {
+      clearTimeout(entry.flushTimer);
+      entry.flushTimer = null;
+    }
+
+    // Combine chunks and emit
+    const combined = entry.pendingChunks.join('');
+    entry.pendingChunks = [];
+    entry.pendingSize = 0;
+
+    if (combined.length > 0) {
+      this.emit('data', { id, data: combined });
+    }
   }
 
   /**
@@ -174,6 +252,9 @@ export class TerminalManager extends EventEmitter {
   destroy(id: string): void {
     const entry = this.sessions.get(id);
     if (!entry) return;
+
+    // Flush any remaining data
+    this.flushPending(id);
 
     if (entry.pty) {
       // node-pty IPty has kill(), child_process also has kill()
