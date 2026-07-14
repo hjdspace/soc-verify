@@ -15,12 +15,21 @@ export interface SubsysInfo {
 }
 
 export interface CaseInfo {
+  id?: string;
   name: string;
   subsys: string;
   path: string;
   status?: CaseStatus;
   duration?: number;
   description?: string;
+  /** Base case name — set when this case inherits from another case (child case) */
+  baseCase?: string;
+  /** Config file path where this case was defined */
+  filePath?: string;
+  /** Simulation -base parameter parsed from config file path */
+  base?: string;
+  /** Simulation -block parameter parsed from config file path */
+  block?: string;
 }
 
 export interface SimOptionsSchema {
