@@ -20,6 +20,12 @@ export interface SimulationRunRecord {
     severity: 'error' | 'warning';
     message: string;
   }>;
+  /** Terminal session ID (for terminal-based simulation runs) */
+  terminalId?: string;
+  /** The runsim command that was executed (for preview display) */
+  command?: string;
+  /** Working directory where the command was executed */
+  cwd?: string;
 }
 
 interface SimulationStoreState {
@@ -35,7 +41,9 @@ interface SimulationStoreState {
   simOptions: Record<string, unknown>;
 
   runSimulation: (projectId: string, caseId: string, caseName: string, subsys: string, options?: Record<string, unknown>) => Promise<string | null>;
+  runSimulationInTerminal: (projectId: string, caseId: string, caseName: string, subsys: string, options?: Record<string, unknown>) => Promise<{ runId: string; terminalId: string; command: string; cwd: string } | null>;
   abortSimulation: (projectId: string, runId: string) => Promise<void>;
+  abortTerminalRun: (terminalId: string) => Promise<void>;
   loadHistory: (projectId: string) => Promise<void>;
   loadActiveRuns: (projectId: string) => Promise<void>;
   getRunDetail: (projectId: string, runId: string) => Promise<SimulationHistoryEntry | null>;
@@ -48,6 +56,7 @@ interface SimulationStoreState {
   setCompareRunIds: (a: string | null, b: string | null) => void;
   setSimOption: (key: string, value: unknown) => void;
   setSimOptions: (options: Record<string, unknown>) => void;
+  removeCompletedRuns: () => void;
 }
 
 function tRPCError(err: unknown): string {
@@ -103,6 +112,73 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
     } catch (err) {
       useToastStore.getState().error('启动仿真失败', tRPCError(err));
       return null;
+    }
+  },
+
+  runSimulationInTerminal: async (projectId, caseId, caseName, subsys, options) => {
+    try {
+      const result = await trpc.simulation.runInTerminal.mutate({
+        projectId,
+        options: { caseId, caseName, subsys, options },
+      });
+      const record: SimulationRunRecord = {
+        runId: result.runId,
+        projectId,
+        caseId,
+        caseName,
+        subsys,
+        status: 'running',
+        startTime: Date.now(),
+        terminalId: result.terminalId,
+        command: result.command,
+        cwd: result.cwd,
+      };
+      // The IPC 'started' event might arrive before this mutate returns,
+      // creating a record without terminalId/command/cwd. If so, update it;
+      // otherwise add the new record.
+      set((s) => {
+        const existing = s.activeRuns.find((r) => r.runId === result.runId);
+        if (existing) {
+          return {
+            activeRuns: s.activeRuns.map((r) =>
+              r.runId === result.runId
+                ? { ...r, terminalId: result.terminalId, command: result.command, cwd: result.cwd, status: 'running' as SimulationStatus }
+                : r,
+            ),
+          };
+        }
+        return { activeRuns: [...s.activeRuns, record] };
+      });
+
+      // Register IPC event listener once
+      if (!eventListenerRegistered && window.eventBridge) {
+        eventListenerRegistered = true;
+        window.eventBridge.onSimulationEvent(({ type, record }) => {
+          get().handleSimulationEvent(type, record);
+        });
+      }
+
+      useToastStore.getState().info(`仿真已启动 (终端): ${caseName}`);
+      return result;
+    } catch (err) {
+      useToastStore.getState().error('启动终端仿真失败', tRPCError(err));
+      return null;
+    }
+  },
+
+  abortTerminalRun: async (terminalId) => {
+    try {
+      await trpc.simulation.abortTerminalRun.mutate({ terminalId });
+      set((s) => ({
+        activeRuns: s.activeRuns.map((r) =>
+          r.terminalId === terminalId
+            ? { ...r, status: 'aborted' as SimulationStatus, endTime: Date.now() }
+            : r,
+        ),
+      }));
+      useToastStore.getState().info('仿真已中止');
+    } catch (err) {
+      useToastStore.getState().error('中止仿真失败', tRPCError(err));
     }
   },
 
@@ -171,9 +247,9 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
   },
 
   handleSimulationEvent: (type, recordRaw) => {
-    // The IPC record from the main process has `status` as a SimulationRunStatus
-    // object ({runId, status, startTime, endTime, message}), not a plain string.
-    // We must extract the string to avoid rendering objects as React children.
+    // The IPC record may come from two sources:
+    // 1. SimulationManager: `status` is a SimulationRunStatus object {runId, status, startTime, ...}
+    // 2. simTerminalLinker: `status` is a plain string, plus terminalId/command/cwd fields
     const ipcRecord = recordRaw as {
       runId: string;
       projectId: string;
@@ -181,14 +257,17 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
       caseName?: string;
       subsys?: string;
       options?: { caseId?: string; caseName?: string; subsys?: string };
-      status: PluginRunStatus;
+      status: PluginRunStatus | string;
       startTime: number;
       endTime?: number;
       compileErrors?: SimulationRunRecord['compileErrors'];
+      terminalId?: string;
+      command?: string;
+      cwd?: string;
     };
     if (!ipcRecord || !ipcRecord.runId) return;
 
-    // Helper: extract status string from SimulationRunStatus object
+    // Helper: extract status string from SimulationRunStatus object or plain string
     const statusStr: SimulationStatus =
       typeof ipcRecord.status === 'object' && ipcRecord.status !== null
         ? (ipcRecord.status.status as SimulationStatus)
@@ -197,7 +276,22 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
     switch (type) {
       case 'started':
         set((s) => {
-          if (s.activeRuns.find((r) => r.runId === ipcRecord.runId)) return s;
+          const existing = s.activeRuns.find((r) => r.runId === ipcRecord.runId);
+          if (existing) {
+            // Update with terminal fields from IPC event if missing
+            return {
+              activeRuns: s.activeRuns.map((r) =>
+                r.runId === ipcRecord.runId
+                  ? {
+                      ...r,
+                      terminalId: r.terminalId ?? ipcRecord.terminalId,
+                      command: r.command ?? ipcRecord.command,
+                      cwd: r.cwd ?? ipcRecord.cwd,
+                    }
+                  : r,
+              ),
+            };
+          }
           const newRecord: SimulationRunRecord = {
             runId: ipcRecord.runId,
             projectId: ipcRecord.projectId,
@@ -208,6 +302,9 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
             startTime: ipcRecord.startTime,
             endTime: ipcRecord.endTime,
             compileErrors: ipcRecord.compileErrors,
+            terminalId: ipcRecord.terminalId,
+            command: ipcRecord.command,
+            cwd: ipcRecord.cwd,
           };
           return { activeRuns: [...s.activeRuns, newRecord] };
         });
@@ -217,7 +314,7 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
         set((s) => ({
           activeRuns: s.activeRuns.map((r) =>
             r.runId === ipcRecord.runId
-              ? { ...r, status: statusStr, endTime: ipcRecord.endTime }
+              ? { ...r, status: statusStr, endTime: ipcRecord.endTime, terminalId: r.terminalId ?? ipcRecord.terminalId, command: r.command ?? ipcRecord.command, cwd: r.cwd ?? ipcRecord.cwd }
               : r,
           ),
         }));
@@ -265,4 +362,7 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
   setCompareRunIds: (a, b) => set({ compareRunIdA: a, compareRunIdB: b }),
   setSimOption: (key, value) => set((s) => ({ simOptions: { ...s.simOptions, [key]: value } })),
   setSimOptions: (options) => set({ simOptions: options }),
+  removeCompletedRuns: () => set((s) => ({
+    activeRuns: s.activeRuns.filter((r) => r.status === 'running' || r.status === 'pending'),
+  })),
 }));
