@@ -120,6 +120,7 @@ export class RegressionManager {
           caseId,
           subsys: '',
           options: suite.options,
+          projectRoot: this.projectRoot,
         };
         const handle = await this.simulation.run(opts);
         const status = await this.simulation.getStatus(handle.runId);
