@@ -22,6 +22,8 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
       cursorBlink: true,
       fontSize: 13,
       fontFamily: 'Consolas, "Courier New", monospace',
+      scrollback: 100000,
+      allowProposedApi: true,
       theme: {
         background: '#1e1e2e',
         foreground: '#cdd6f4',
