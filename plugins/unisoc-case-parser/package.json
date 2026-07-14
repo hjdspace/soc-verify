@@ -1,0 +1,10 @@
+{
+  "name": "unisoc-case-parser",
+  "version": "1.0.0",
+  "description": "Unisoc 仿真用例解析插件：解析 $PROJ_ENV 下的 .cfg 配置文件，生成用例树。",
+  "main": "index.js",
+  "socverify": {
+    "kind": "case-parser",
+    "id": "unisoc-case-parser"
+  }
+}
