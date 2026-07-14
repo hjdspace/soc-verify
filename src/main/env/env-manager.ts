@@ -25,6 +25,7 @@ const EDA_TOOLS: Array<{ command: string; name: string; versionArgs: string[] }>
 const KNOWN_ENV_VARS = [
   'PROJ_RTL',
   'PROJ_ENV',
+  'PROJ_WORK',
   'LICENSE_FILE',
   'LM_LICENSE_FILE',
   'SNPSLMD_LICENSE_FILE',
