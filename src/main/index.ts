@@ -8,6 +8,7 @@ import { projectManager } from './project/project-manager';
 import { sessionManager } from './agent/session-manager';
 import { pluginLoader } from './plugins/loader';
 import { simulationRegistry } from './simulation/simulation-registry';
+import { simTerminalLinker } from './simulation/sim-terminal-linker';
 import { terminalManager } from './terminal/terminal-manager';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -113,6 +114,25 @@ function registerEventForwarding(win: BrowserWindow) {
   simulationRegistry.on('run:aborted', (record) => {
     if (!win.isDestroyed()) {
       win.webContents.send('simulation:event', { type: 'aborted', record });
+    }
+  });
+
+  // Terminal-based simulation events (from simTerminalLinker)
+  simTerminalLinker.on('run:started', (run) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('simulation:event', { type: 'started', record: run });
+    }
+  });
+
+  simTerminalLinker.on('run:completed', (run) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('simulation:event', { type: 'completed', record: run });
+    }
+  });
+
+  simTerminalLinker.on('run:aborted', (run) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('simulation:event', { type: 'aborted', record: run });
     }
   });
 
