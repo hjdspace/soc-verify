@@ -65,6 +65,8 @@ export interface SimulationRunOptions {
   caseName?: string;
   subsys: string;
   options?: Record<string, unknown>;
+  /** 项目根路径，由后端注入，供插件确定工作目录和环境 */
+  projectRoot?: string;
 }
 
 export interface SimulationRunHandle {
@@ -86,6 +88,8 @@ export interface SimOptionField {
   default?: unknown;
   enumValues?: string[];
   description?: string;
+  /** UI 分组标签，用于前端将字段按类别组织显示 */
+  group?: string;
 }
 
 export interface SimOptionSchema {
