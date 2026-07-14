@@ -16,12 +16,16 @@ interface TerminalStoreState {
   activeTabId: string | null;
 
   createTerminal: (projectId?: string, cwd?: string) => Promise<string>;
+  /** Create a tab for an already-existing terminal session (e.g. from simulation.runInTerminal) */
+  createTabForSession: (terminalId: string, title: string, cwd?: string) => string;
   closeTerminal: (tabId: string) => Promise<void>;
   setActiveTab: (tabId: string) => void;
   writeToTerminal: (terminalId: string, data: string) => Promise<void>;
   resizeTerminal: (terminalId: string, cols: number, rows: number) => Promise<void>;
   handleTerminalData: (id: string, data: string) => void;
   handleTerminalExit: (id: string, exitCode: number) => void;
+  /** Find the tab ID associated with a terminal session ID */
+  getTabIdByTerminalId: (terminalId: string) => string | null;
 }
 
 let eventListenerRegistered = false;
@@ -104,6 +108,39 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
 
   setActiveTab: (tabId) => set({ activeTabId: tabId }),
 
+  createTabForSession: (terminalId, title, cwd) => {
+    const tabId = `term_tab_${++tabIdCounter}`;
+    set((s) => ({
+      tabs: [...s.tabs, {
+        id: tabId,
+        terminalId,
+        title,
+        cwd: cwd ?? '',
+        active: true,
+        creating: false,
+      }],
+      activeTabId: tabId,
+    }));
+
+    // Register IPC event listener once
+    if (!eventListenerRegistered && window.eventBridge) {
+      eventListenerRegistered = true;
+      window.eventBridge.onTerminalData(({ id, data }) => {
+        get().handleTerminalData(id, data);
+      });
+      window.eventBridge.onTerminalExit(({ id, exitCode }) => {
+        get().handleTerminalExit(id, exitCode);
+      });
+    }
+
+    return tabId;
+  },
+
+  getTabIdByTerminalId: (terminalId) => {
+    const tab = get().tabs.find((t) => t.terminalId === terminalId);
+    return tab?.id ?? null;
+  },
+
   writeToTerminal: async (terminalId, data) => {
     try {
       await trpc.terminal.write.mutate({ terminalId, data });
@@ -126,13 +163,16 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
   },
 
   handleTerminalExit: (id, _exitCode) => {
-    // Mark the tab as exited
+    // Mark the tab as exited, with a status indicator for simulation terminals
     set((s) => ({
-      tabs: s.tabs.map((t) =>
-        t.terminalId === id
-          ? { ...t, title: `${t.title} (exited)` }
-          : t,
-      ),
+      tabs: s.tabs.map((t) => {
+        if (t.terminalId !== id) return t;
+        // For simulation terminals (title starts with "sim:"), show pass/fail
+        if (t.title.startsWith('sim:')) {
+          return { ...t, title: `${t.title} ✓` };
+        }
+        return { ...t, title: `${t.title} (exited)` };
+      }),
     }));
   },
 }));
