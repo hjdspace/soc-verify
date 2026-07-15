@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { isAbsolute, resolve } from 'node:path';
 import type { AgentToolResult, RpcHostToolCallRequest, RpcHostToolDefinition } from './types';
 import type { SubsysDiscovery, CaseStatus } from './discovery';
 import { NoopDiscovery } from './discovery';
@@ -29,9 +31,12 @@ export class HostToolsRegistry {
   private discovery: SubsysDiscovery;
   private simulation: PluginBackedSimulation | null = null;
   private coverage: PluginBackedCoverage | null = null;
+  /** Working directory for resolving relative file paths in tools */
+  cwd: string;
 
-  constructor(discovery?: SubsysDiscovery) {
+  constructor(discovery?: SubsysDiscovery, cwd?: string) {
     this.discovery = discovery ?? new NoopDiscovery();
+    this.cwd = cwd ?? process.cwd();
     this.registerDefaults();
   }
 
@@ -222,6 +227,40 @@ export class HostToolsRegistry {
             return TEXT(JSON.stringify(data));
           } catch (err) {
             return TEXT(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+          }
+        },
+      ),
+    );
+
+    this.register(
+      defineTool(
+        'read_file',
+        'Read the content of a file. The path is resolved relative to the project root.',
+        {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'File path (absolute or relative to project root)' },
+            maxLines: { type: 'number', description: 'Maximum number of lines to read (default 500)' },
+          },
+          required: ['path'],
+          additionalProperties: false,
+        },
+        async (args) => {
+          try {
+            const inputPath = typeof args.path === 'string' ? args.path : '';
+            if (!inputPath) return TEXT('Error: path is required');
+
+            const maxLines = typeof args.maxLines === 'number' ? args.maxLines : 500;
+            const resolvedPath = isAbsolute(inputPath) ? inputPath : resolve(this.cwd, inputPath);
+
+            const content = await readFile(resolvedPath, 'utf-8');
+            const lines = content.split('\n');
+            const truncated = lines.length > maxLines ? lines.slice(0, maxLines) : lines;
+            const result = truncated.join('\n');
+            const suffix = lines.length > maxLines ? `\n... (${lines.length - maxLines} more lines)` : '';
+            return TEXT(result + suffix);
+          } catch (err) {
+            return TEXT(`Error reading file: ${err instanceof Error ? err.message : String(err)}`);
           }
         },
       ),
