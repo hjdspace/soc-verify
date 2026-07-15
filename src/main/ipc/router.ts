@@ -21,6 +21,7 @@ import { addSession, removeSession, loadSessions, saveSessions, updateSessionMod
 import { discoverSkills, readSkillContent } from '../agent/skill-discovery';
 import { errorAnalysisCoordinator } from '../simulation/error-analysis-coordinator';
 import { logAnalyzer } from '../simulation/log-analyzer';
+import { getFileDiff, applyRejections } from '../diff/diff-engine';
 import { dialog, ipcMain, BrowserWindow } from 'electron';
 import type {
   ProjectInfo,
@@ -40,6 +41,8 @@ import type {
   CredentialInput,
   ErrorType,
   ErrorAnalysisSession,
+  DiffToolCall,
+  DiffRejection,
 } from '@shared/types';
 import type { PluginLoadResult, SimulationRunOptions } from '@shared/plugin-types';
 
@@ -652,6 +655,50 @@ export const router = t.router({
 
         await walkDir(rootPath, 0);
         return results;
+      }),
+
+    // ─── Diff Review ──────────────────────────────────
+
+    getFileDiff: t.procedure
+      .input((raw): { projectId: string; filePath: string; toolCalls: DiffToolCall[] } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.filePath !== 'string' || !Array.isArray(r.toolCalls)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, filePath and toolCalls are required' });
+        }
+        return {
+          projectId: r.projectId,
+          filePath: r.filePath,
+          toolCalls: r.toolCalls as DiffToolCall[],
+        };
+      })
+      .query(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const rel = relative(project.rootPath, input.filePath);
+        if (rel.startsWith('..')) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'File path is outside project root' });
+        }
+        return getFileDiff(input.filePath, input.toolCalls);
+      }),
+
+    applyDiffRejections: t.procedure
+      .input((raw): { projectId: string; filePath: string; rejections: DiffRejection[] } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.filePath !== 'string' || !Array.isArray(r.rejections)) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, filePath and rejections are required' });
+        }
+        return {
+          projectId: r.projectId,
+          filePath: r.filePath,
+          rejections: r.rejections as DiffRejection[],
+        };
+      })
+      .mutation(async ({ input }) => {
+        const project = requireProject(input.projectId);
+        const rel = relative(project.rootPath, input.filePath);
+        if (rel.startsWith('..')) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'File path is outside project root' });
+        }
+        return applyRejections(input.filePath, input.rejections);
       }),
   }),
 
