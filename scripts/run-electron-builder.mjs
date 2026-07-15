@@ -37,6 +37,11 @@ const env = { ...process.env };
 env.ELECTRON_CACHE ??= join(ROOT, '.cache', 'electron');
 env.ELECTRON_BUILDER_CACHE ??= join(ROOT, '.cache', 'electron-builder');
 
+// 国内镜像加速 electron 二进制下载（打包阶段）
+// 仅在未显式设置时启用 npmmirror 镜像，CI 环境可通过设置空值绕过
+env.ELECTRON_MIRROR ??= 'https://npmmirror.com/mirrors/electron/';
+env.ELECTRON_BUILDER_BINARIES_MIRROR ??= 'https://npmmirror.com/mirrors/electron-builder-binaries/';
+
 // Add --use-system-ca to NODE_OPTIONS if not already present
 // This makes Node.js use the operating system's CA certificate store,
 // which includes any custom root CAs installed by corporate proxies.
@@ -49,6 +54,8 @@ console.log('[electron-builder] Using system CA certificates (--use-system-ca)')
 console.log('[electron-builder] NODE_OPTIONS:', env.NODE_OPTIONS);
 console.log('[electron-builder] ELECTRON_CACHE:', env.ELECTRON_CACHE);
 console.log('[electron-builder] ELECTRON_BUILDER_CACHE:', env.ELECTRON_BUILDER_CACHE);
+console.log('[electron-builder] ELECTRON_MIRROR:', env.ELECTRON_MIRROR);
+console.log('[electron-builder] ELECTRON_BUILDER_BINARIES_MIRROR:', env.ELECTRON_BUILDER_BINARIES_MIRROR);
 console.log('[electron-builder] Args:', args.join(' '));
 
 // Spawn electron-builder with the modified environment
