@@ -68,6 +68,7 @@ function tRPCError(err: unknown): string {
 }
 
 let eventListenerRegistered = false;
+let errorAnalysisListenerRegistered = false;
 
 export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
   activeRuns: [],
@@ -332,6 +333,40 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
         {
           const projectId = ipcRecord.projectId;
           if (projectId) void get().loadHistory(projectId);
+        }
+        // Trigger automatic error analysis on FAIL
+        if (statusStr === 'fail' || statusStr === 'error') {
+          const caseName = ipcRecord.caseName ?? ipcRecord.options?.caseName ?? ipcRecord.caseId ?? ipcRecord.options?.caseId ?? '';
+          const projectId = ipcRecord.projectId;
+          if (caseName && projectId) {
+            // Notify user that auto-analysis is starting
+            useToastStore.getState().info(`检测到 ${caseName} 仿真失败，正在启动 AI 自动分析...`);
+            // The ErrorAnalysisCoordinator in the main process will handle this automatically.
+            // Register the error analysis event listener once.
+            if (!errorAnalysisListenerRegistered && window.eventBridge?.onErrorAnalysisEvent) {
+              errorAnalysisListenerRegistered = true;
+              window.eventBridge.onErrorAnalysisEvent((event: { type: string; [key: string]: unknown }) => {
+                if (event.type === 'started') {
+                  useToastStore.getState().info(
+                    `AI 分析已启动: ${String(event.caseName ?? '')} (${String(event.errorType ?? '')})`,
+                  );
+                } else if (event.type === 'retrying') {
+                  useToastStore.getState().info(
+                    `AI 正在重新仿真: ${String(event.caseName ?? '')} (重试 ${String(event.retryCount ?? 0)}/${String(event.maxRetries ?? 3)})`,
+                  );
+                } else if (event.type === 'stopped') {
+                  useToastStore.getState().info(
+                    `AI 分析已停止: ${String(event.caseName ?? '')} (达到最大重试次数)`,
+                  );
+                } else if (event.type === 'failed') {
+                  useToastStore.getState().error(
+                    `AI 分析失败: ${String(event.caseName ?? '')}`,
+                    String(event.error ?? ''),
+                  );
+                }
+              });
+            }
+          }
         }
         break;
 
