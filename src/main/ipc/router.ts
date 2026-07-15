@@ -19,6 +19,8 @@ import { credentialManager } from '../credentials/credential-manager';
 import { sourceControlService } from '../scm/source-control';
 import { addSession, removeSession, loadSessions, saveSessions, updateSessionModel, updateSessionActivity, type PersistedSession } from '../agent/session-persistence';
 import { discoverSkills, readSkillContent } from '../agent/skill-discovery';
+import { errorAnalysisCoordinator } from '../simulation/error-analysis-coordinator';
+import { logAnalyzer } from '../simulation/log-analyzer';
 import { dialog, ipcMain, BrowserWindow } from 'electron';
 import type {
   ProjectInfo,
@@ -36,6 +38,8 @@ import type {
   TOChecklistItem,
   CredentialEntry,
   CredentialInput,
+  ErrorType,
+  ErrorAnalysisSession,
 } from '@shared/types';
 import type { PluginLoadResult, SimulationRunOptions } from '@shared/plugin-types';
 
@@ -1091,6 +1095,73 @@ export const router = t.router({
       .query(async ({ input }) => {
         return readSkillContent(input.filePath);
       }),
+
+    // ── 错误分析会话创建 ──────────────────────────────────
+
+    /**
+     * 为仿真失败用例创建独立的 AI Agent 会话。
+     *
+     * 内部流程：
+     * 1. 复用 sessionManager.createSession() 创建 omp 进程
+     * 2. 注入错误类型相关的 system prompt
+     * 3. 自动发送错误上下文作为首条消息
+     * 4. 持久化会话元数据
+     */
+    createForErrorAnalysis: t.procedure
+      .input((raw): {
+        projectId: string;
+        caseName: string;
+        errorType: ErrorType;
+        errorContext: string;
+        command?: string;
+        cwd?: string;
+        sourceRunId?: string;
+      } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.projectId !== 'string' || typeof r.caseName !== 'string' || typeof r.errorType !== 'string' || typeof r.errorContext !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, caseName, errorType and errorContext are required' });
+        }
+        return {
+          projectId: r.projectId,
+          caseName: r.caseName,
+          errorType: r.errorType as ErrorType,
+          errorContext: r.errorContext,
+          command: typeof r.command === 'string' ? r.command : undefined,
+          cwd: typeof r.cwd === 'string' ? r.cwd : undefined,
+          sourceRunId: typeof r.sourceRunId === 'string' ? r.sourceRunId : undefined,
+        };
+      })
+      .mutation(async ({ input }) => {
+        const sessionId = await errorAnalysisCoordinator.triggerAnalysis({
+          projectId: input.projectId,
+          caseName: input.caseName,
+          cwd: input.cwd,
+          command: input.command,
+          sourceRunId: input.sourceRunId,
+        });
+
+        if (!sessionId) {
+          throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'Failed to create error analysis session' });
+        }
+
+        // Persist session metadata
+        const project = requireProject(input.projectId);
+        const ompSessionId = sessionManager.getOmpSessionId(sessionId);
+        const sessionName = input.errorType === 'compile_error'
+          ? `[编译修复] ${input.caseName}`
+          : `[仿真分析] ${input.caseName}`;
+        const persisted: PersistedSession = {
+          sessionId,
+          ompSessionId,
+          name: sessionName,
+          projectId: input.projectId,
+          createdAt: Date.now(),
+          lastActivityAt: Date.now(),
+        };
+        await addSession(project.rootPath, persisted);
+
+        return { sessionId, name: sessionName };
+      }),
   }),
 
   // ─── 仿真执行 ─────────────────────────────────────────
@@ -2093,6 +2164,97 @@ export const router = t.router({
         await mkdir(join(project.rootPath, '.socverify'), { recursive: true });
         await writeFile(promptPath, input.prompt, 'utf-8');
         return { ok: true };
+      }),
+  }),
+
+  // ─── 错误分析 ─────────────────────────────────────────────
+
+  errorAnalysis: t.router({
+    /**
+     * 获取所有活跃的错误分析会话
+     */
+    listActive: t.procedure
+      .input((raw): { projectId?: string } => {
+        const r = raw as Record<string, unknown>;
+        return { projectId: typeof r.projectId === 'string' ? r.projectId : undefined };
+      })
+      .query(({ input }) => {
+        const sessions = errorAnalysisCoordinator.getActiveSessions();
+        return input.projectId
+          ? sessions.filter((s: ErrorAnalysisSession) => s.projectId === input.projectId)
+          : sessions;
+      }),
+
+    /**
+     * 获取特定错误分析会话状态
+     */
+    getStatus: t.procedure
+      .input((raw): { sessionId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.sessionId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'sessionId is required' });
+        }
+        return { sessionId: r.sessionId };
+      })
+      .query(({ input }) => {
+        const session = errorAnalysisCoordinator.getSession(input.sessionId);
+        if (!session) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: `Error analysis session not found: ${input.sessionId}` });
+        }
+        return session;
+      }),
+
+    /**
+     * 分析指定用例的错误类型和上下文（不创建 AI 会话）
+     */
+    analyzeErrors: t.procedure
+      .input((raw): { caseName: string; cwd?: string; projectId?: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.caseName !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'caseName is required' });
+        }
+        return {
+          caseName: r.caseName,
+          cwd: typeof r.cwd === 'string' ? r.cwd : undefined,
+          projectId: typeof r.projectId === 'string' ? r.projectId : undefined,
+        };
+      })
+      .query(({ input }) => {
+        // Resolve cwd from projectId if not provided
+        let cwd = input.cwd;
+        if (!cwd && input.projectId) {
+          const project = projectManager.getProject(input.projectId);
+          cwd = project?.rootPath;
+        }
+        const result = logAnalyzer.analyzeErrors(input.caseName, cwd);
+        return result;
+      }),
+
+    /**
+     * 获取编译/仿真日志路径
+     */
+    getLogPaths: t.procedure
+      .input((raw): { caseName: string; cwd?: string; projectId?: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.caseName !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'caseName is required' });
+        }
+        return {
+          caseName: r.caseName,
+          cwd: typeof r.cwd === 'string' ? r.cwd : undefined,
+          projectId: typeof r.projectId === 'string' ? r.projectId : undefined,
+        };
+      })
+      .query(({ input }) => {
+        let cwd = input.cwd;
+        if (!cwd && input.projectId) {
+          const project = projectManager.getProject(input.projectId);
+          cwd = project?.rootPath;
+        }
+        return {
+          compileLogPath: logAnalyzer.getCompileLogPath(input.caseName, cwd),
+          simLogPath: logAnalyzer.getSimulationLogPath(input.caseName, cwd),
+        };
       }),
   }),
 
