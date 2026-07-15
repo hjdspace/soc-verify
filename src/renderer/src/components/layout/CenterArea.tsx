@@ -11,13 +11,15 @@ import { DashboardPanel } from '@renderer/components/dashboard/DashboardPanel';
 import { TOChecklistPanel } from '@renderer/components/to/TOChecklistPanel';
 import { SourceControlPanel } from '@renderer/components/scm/SourceControlPanel';
 import { FileEditor } from '@renderer/components/editor/FileEditor';
+import { DiffReviewView } from '@renderer/components/editor/DiffReviewView';
+import { useDiffReviewStore } from '@renderer/stores/diff-review';
 import { RunningCasesPanel } from '@renderer/components/simulation/RunningCasesPanel';
 import { cn } from '@renderer/lib/utils';
 import type { SimulationHistoryEntry, CompileError } from '@shared/types';
 
 type CenterTab = {
   id: string;
-  type: 'file' | 'terminal' | 'ai-artifacts' | 'sim-errors' | 'sim-history' | 'sim-detail' | 'sim-compare' | 'sim-running' | 'coverage' | 'regression' | 'dashboard' | 'to-checklist' | 'source-control';
+  type: 'file' | 'terminal' | 'ai-artifacts' | 'sim-errors' | 'sim-history' | 'sim-detail' | 'sim-compare' | 'sim-running' | 'coverage' | 'regression' | 'dashboard' | 'to-checklist' | 'source-control' | 'diff-review';
   title: string;
   closable: boolean;
 };
@@ -111,6 +113,12 @@ export function CenterArea() {
         setTabs((prev) => [...prev, { id: activeCenterTab, type: 'source-control', title: '源代码管理', closable: true }]);
       }
       setCenterView('source-control');
+    } else if (activeCenterTab?.startsWith('diff-review:')) {
+      const fileName = activeCenterTab.slice('diff-review:'.length);
+      if (!tabs.find((t) => t.id === activeCenterTab)) {
+        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'diff-review' as CenterTab['type'], title: `Diff: ${fileName}`, closable: true }]);
+      }
+      setCenterView('diff-review');
     }
   }, [activeCenterTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -361,6 +369,22 @@ export function CenterArea() {
           <TOChecklistPanel />
         ) : centerView === 'source-control' ? (
           <SourceControlPanel />
+        ) : centerView === 'diff-review' && activeCenterTab?.startsWith('diff-review:') ? (
+          (() => {
+            const queue = useDiffReviewStore.getState().queue;
+            const currentPath = useDiffReviewStore.getState().currentFilePath;
+            const target = currentPath
+              ? queue.find((e) => e.filePath === currentPath)
+              : undefined;
+            if (!target) {
+              return (
+                <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
+                  无审阅中的文件
+                </div>
+              );
+            }
+            return <DiffReviewView key={target.filePath} entry={target} />;
+          })()
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
             {/* Active simulations */}
