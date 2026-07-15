@@ -5,7 +5,12 @@ import { execFileSync } from 'node:child_process';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const RUNNER_REL = 'engine/oh-my-pi/packages/coding-agent/src/socverify-runner.ts';
+/** Runner 脚本相对路径（主仓库源码，dev 模式用 Bun 运行） */
+const RUNNER_SCRIPT_REL = 'runner/index.ts';
+/** 旧版 runner 路径（engine submodule 内，兼容回退） */
+const RUNNER_LEGACY_REL = 'engine/oh-my-pi/packages/coding-agent/src/socverify-runner.ts';
+/** 预编译 runner 二进制名称 */
+const RUNNER_BINARY_NAME = 'socverify-runner';
 const MIN_BUN_VERSION = [1, 3, 14];
 
 function packagedResourcesDir(): string {
@@ -14,6 +19,21 @@ function packagedResourcesDir(): string {
 
 function packagedBinariesDir(): string {
   return join(packagedResourcesDir(), 'binaries');
+}
+
+/** 开发模式下 resources/binaries 目录 */
+function devBinariesDir(): string {
+  return resolve(__dirname, '../../resources/binaries');
+}
+
+/** 开发模式下 runner 脚本路径 */
+function devRunnerScriptPath(): string {
+  return resolve(__dirname, '../../', RUNNER_SCRIPT_REL);
+}
+
+/** 旧版 runner 脚本路径（engine submodule 内） */
+function legacyRunnerPath(): string {
+  return resolve(__dirname, '../../', RUNNER_LEGACY_REL);
 }
 
 function candidateNames(base: string): string[] {
@@ -40,16 +60,48 @@ function findInPath(executable: string): string | null {
   }
 }
 
-/** runner 脚本路径（engine/oh-my-pi/packages/coding-agent/src/socverify-runner.ts） */
-export function resolveRunnerPath(): string | null {
-  const candidates = [
-    join(packagedResourcesDir(), RUNNER_REL),
-    resolve(__dirname, '../../', RUNNER_REL),
-  ];
-  for (const p of candidates) {
-    if (existsSync(p)) return p;
-  }
+/**
+ * 解析预编译 runner 二进制路径。
+ * 优先级：packaged binaries → dev resources/binaries
+ */
+export function resolveRunnerBinary(): string | null {
+  // 生产模式：packaged binaries 目录
+  const packaged = findInDir(packagedBinariesDir(), RUNNER_BINARY_NAME);
+  if (packaged) return packaged;
+
+  // 开发模式：resources/binaries 目录（postinstall 下载）
+  const dev = findInDir(devBinariesDir(), RUNNER_BINARY_NAME);
+  if (dev) return dev;
+
   return null;
+}
+
+/**
+ * 解析 runner 脚本路径（dev 模式，需要 Bun + engine submodule）。
+ * 优先级：主仓库 runner/index.ts → engine 内旧版 runner
+ */
+export function resolveRunnerScript(): string | null {
+  // 主仓库 runner 脚本
+  const devPath = devRunnerScriptPath();
+  if (existsSync(devPath)) {
+    // 检查 engine 是否存在（runner 依赖 engine 的 SDK）
+    const engineSdk = resolve(__dirname, '../../engine/oh-my-pi/packages/coding-agent/src/sdk.ts');
+    if (existsSync(engineSdk)) return devPath;
+  }
+
+  // 兼容回退：engine 内旧版 runner
+  const legacyPath = legacyRunnerPath();
+  if (existsSync(legacyPath)) return legacyPath;
+
+  return null;
+}
+
+/**
+ * @deprecated 使用 resolveRunnerBinary() 或 resolveRunnerScript() 代替。
+ * 返回 runner 脚本路径（兼容旧调用方）。
+ */
+export function resolveRunnerPath(): string | null {
+  return resolveRunnerScript();
 }
 
 /** Bun 可执行文件路径：packaged 优先 → PATH 查找 */
@@ -76,25 +128,51 @@ export function checkBunVersion(bunPath: string): { ok: boolean; version: string
   }
 }
 
+/** Agent 运行时模式 */
+export type AgentRuntimeMode = 'binary' | 'script';
+
 export interface AgentRuntime {
-  bunPath: string;
+  /** 运行时模式：binary（预编译二进制）或 script（Bun + 源码） */
+  mode: AgentRuntimeMode;
+  /** 二进制路径（binary 模式）或脚本路径（script 模式） */
   runnerPath: string;
-  bunVersion: string;
-  bunVersionOk: boolean;
+  /** Bun 可执行文件路径（仅 script 模式） */
+  bunPath?: string;
+  /** Bun 版本（仅 script 模式） */
+  bunVersion?: string;
+  /** Bun 版本是否满足要求（仅 script 模式） */
+  bunVersionOk?: boolean;
 }
 
-/** 解析 agent 运行时配置：Bun 路径 + runner 脚本路径 */
+/**
+ * 解析 agent 运行时配置。
+ *
+ * 优先级：
+ * 1. 预编译 runner 二进制（binary 模式）—— 不需要 Bun 或 engine
+ * 2. runner 脚本 + Bun（script 模式）—— 需要 engine submodule 和 Bun
+ */
 export function resolveAgentRuntime(): AgentRuntime | null {
-  const runnerPath = resolveRunnerPath();
-  if (!runnerPath) return null;
+  // 优先：预编译二进制
+  const binaryPath = resolveRunnerBinary();
+  if (binaryPath) {
+    return {
+      mode: 'binary',
+      runnerPath: binaryPath,
+    };
+  }
+
+  // 回退：脚本模式（需要 Bun + engine）
+  const scriptPath = resolveRunnerScript();
+  if (!scriptPath) return null;
 
   const bunPath = resolveBunPath();
   if (!bunPath) return null;
 
   const versionCheck = checkBunVersion(bunPath);
   return {
+    mode: 'script',
+    runnerPath: scriptPath,
     bunPath,
-    runnerPath,
     bunVersion: versionCheck.version,
     bunVersionOk: versionCheck.ok,
   };

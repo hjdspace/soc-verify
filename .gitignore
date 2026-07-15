@@ -12,3 +12,4 @@ resources/binaries/*
 !resources/binaries/README.md
 
 .socverify/
+.cache/

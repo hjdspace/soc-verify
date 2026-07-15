@@ -75,9 +75,13 @@ class SessionManagerImpl extends EventEmitter {
 
     const runtime = resolveAgentRuntime();
     if (!runtime) {
-      throw new Error('Agent runtime not found (need bun + engine/oh-my-pi runner script)');
+      throw new Error(
+        'Agent runtime not found. Please run `npm run setup:agent` to download the agent binary, ' +
+        'or ensure Bun and the engine submodule are available.',
+      );
     }
-    if (!runtime.bunVersionOk) {
+    // Version check only applies to script mode (binary mode has Bun embedded)
+    if (runtime.mode === 'script' && !runtime.bunVersionOk) {
       throw new Error(
         `Bun runtime must be >= 1.3.14 (found v${runtime.bunVersion}). ` +
         'Please upgrade: bun upgrade',
@@ -157,12 +161,20 @@ class SessionManagerImpl extends EventEmitter {
       customToolDefinitions,
     };
 
-    const client = new AgentClient({
-      bunPath: runtime.bunPath,
-      runnerPath: runtime.runnerPath,
-      cwd: options.cwd,
-      env,
-    });
+    const client = new AgentClient(
+      runtime.mode === 'binary'
+        ? {
+            runnerBinaryPath: runtime.runnerPath,
+            cwd: options.cwd,
+            env,
+          }
+        : {
+            bunPath: runtime.bunPath,
+            runnerPath: runtime.runnerPath,
+            cwd: options.cwd,
+            env,
+          },
+    );
 
     client.setToolCallHandler(toolCallHandler);
 

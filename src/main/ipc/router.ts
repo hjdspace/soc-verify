@@ -4,7 +4,7 @@ import { readFile, writeFile, mkdir, readdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { sessionManager } from '../agent/session-manager';
-import { resolveAgentRuntime, resolveBunPath, resolveRunnerPath } from '../agent/paths';
+import { resolveAgentRuntime, resolveRunnerBinary, resolveRunnerScript, resolveBunPath } from '../agent/paths';
 import { projectManager } from '../project/project-manager';
 import { pluginLoader } from '../plugins/loader';
 import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../host/plugin-discovery';
@@ -134,8 +134,11 @@ export const router = t.router({
       const runtime = resolveAgentRuntime();
       return {
         available: runtime !== null,
+        mode: runtime?.mode ?? null,
+        runnerBinaryPath: resolveRunnerBinary(),
+        runnerScriptPath: resolveRunnerScript(),
         bunPath: resolveBunPath(),
-        runnerPath: resolveRunnerPath(),
+        runnerPath: runtime?.runnerPath ?? null,
         bunVersion: runtime?.bunVersion ?? null,
         bunVersionOk: runtime?.bunVersionOk ?? false,
       };

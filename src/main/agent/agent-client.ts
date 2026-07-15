@@ -41,7 +41,25 @@ export class AgentClient {
   async start(): Promise<void> {
     if (this.process) throw new Error('Client already started');
 
-    const child = spawn(this.options.bunPath, ['run', this.options.runnerPath], {
+    // Determine spawn mode: binary (direct execution) or script (bun run)
+    let spawnCmd: string;
+    let spawnArgs: string[];
+
+    if (this.options.runnerBinaryPath) {
+      // Binary mode: directly execute the pre-compiled runner
+      spawnCmd = this.options.runnerBinaryPath;
+      spawnArgs = [];
+    } else if (this.options.bunPath && this.options.runnerPath) {
+      // Script mode: use Bun to run the runner script
+      spawnCmd = this.options.bunPath;
+      spawnArgs = ['run', this.options.runnerPath];
+    } else {
+      throw new Error(
+        'Agent client requires either runnerBinaryPath (binary mode) or bunPath + runnerPath (script mode)',
+      );
+    }
+
+    const child = spawn(spawnCmd, spawnArgs, {
       cwd: this.options.cwd,
       env: { ...process.env, ...this.options.env },
       stdio: ['pipe', 'pipe', 'pipe'],

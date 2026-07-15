@@ -1,0 +1,93 @@
+name: Release Desktop
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            package_script: package:win
+            runner_output: resources/binaries/socverify-runner.exe
+            runner_asset: socverify-runner-windows-x64.exe
+          - name: Linux
+            os: ubuntu-latest
+            package_script: package:linux
+            runner_output: resources/binaries/socverify-runner
+            runner_asset: socverify-runner-linux-x64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install app dependencies
+        run: npm ci
+
+      - name: Install engine dependencies
+        run: bun install --frozen-lockfile
+        working-directory: engine/oh-my-pi
+
+      - name: Build agent runner
+        run: npm run build:runner
+
+      - name: Package desktop app
+        run: npm run ${{ matrix.package_script }}
+
+      - name: Collect release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          cp "${{ matrix.runner_output }}" "release-assets/${{ matrix.runner_asset }}"
+          shopt -s nullglob
+          cp dist/*.exe release-assets/ 2>/dev/null || true
+          cp dist/*.AppImage release-assets/ 2>/dev/null || true
+          cp dist/*.blockmap release-assets/ 2>/dev/null || true
+          cp dist/*.yml release-assets/ 2>/dev/null || true
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*

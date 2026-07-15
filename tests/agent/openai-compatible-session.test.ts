@@ -4,6 +4,10 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sessionManager } from '../../src/main/agent/session-manager';
+import { resolveAgentRuntime } from '../../src/main/agent/paths';
+
+const runtime = resolveAgentRuntime();
+const itWithRuntime = runtime ? it : it.skip;
 
 describe('OpenAI-compatible Agent session', () => {
   let server: Server | undefined;
@@ -19,7 +23,7 @@ describe('OpenAI-compatible Agent session', () => {
     homeDir = undefined;
   });
 
-  it('uses chat/completions instead of the Responses API', async () => {
+  itWithRuntime('uses chat/completions instead of the Responses API', async () => {
     const requestPaths: string[] = [];
     const requestBodies: Array<Record<string, unknown>> = [];
 

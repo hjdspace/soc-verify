@@ -199,11 +199,17 @@ app.whenReady().then(async () => {
 
   const agentRuntime = resolveAgentRuntime();
   if (agentRuntime) {
-    console.log(`[agent] resolved: bun=${agentRuntime.bunVersion}, runner=${agentRuntime.runnerPath}`);
-    if (!agentRuntime.bunVersionOk) {
-      console.warn(`[agent] Bun version ${agentRuntime.bunVersion} is below required 1.3.14. Run: bun upgrade`);
+    if (agentRuntime.mode === 'binary') {
+      console.log(`[agent] resolved: binary mode, runner=${agentRuntime.runnerPath}`);
+    } else {
+      console.log(`[agent] resolved: script mode, bun=${agentRuntime.bunVersion}, runner=${agentRuntime.runnerPath}`);
+      if (!agentRuntime.bunVersionOk) {
+        console.warn(`[agent] Bun version ${agentRuntime.bunVersion} is below required 1.3.14. Run: bun upgrade`);
+      }
     }
-  } else console.warn('[agent] runtime not found (need bun + engine/oh-my-pi runner script)');
+  } else {
+    console.warn('[agent] runtime not found. Run `npm run setup:agent` to download the agent binary.');
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

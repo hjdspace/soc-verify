@@ -12,7 +12,7 @@
 
 ## 概述
 
-**SoC Verify** 是一款 Electron 桌面应用，面向 SoC 验证工程师，覆盖从项目启动到流片的完整验证周期。核心 AI 能力由内嵌的 [oh-my-pi (omp)](./engine/oh-my-pi/) 引擎提供，通过 JSONL RPC 协议驱动 AI Agent 辅助验证流程。
+**SoC Verify** 是一款 Electron 桌面应用，面向 SoC 验证工程师，覆盖从项目启动到流片的完整验证周期。核心 AI 能力由 [oh-my-pi (omp)](./engine/oh-my-pi/) 引擎提供，普通开发运行优先使用 GitHub Release 中的预编译 runner，只有重编 runner 时才需要初始化 engine submodule。
 
 平台采用插件化架构，EDA 工具集成（仿真器、覆盖率工具等）全部通过插件实现，平台本身提供插件接口和运行框架，不绑定特定 EDA 厂商。
 
@@ -47,7 +47,7 @@
 | 终端 | node-pty + xterm.js | 1.1 / 6.0 |
 | 代码编辑器 | CodeMirror | 4.25 |
 | Markdown | react-markdown + remark-gfm | 10.1 / 4.0 |
-| AI 引擎 | oh-my-pi (omp) | git submodule |
+| AI 引擎 | oh-my-pi (omp) | 预编译 runner + git submodule 开发回退 |
 | 测试 | Vitest | 4 |
 | 图标 | lucide-react | 1.24 |
 
@@ -101,7 +101,7 @@ soc-verify/
 │   └── shared/                        # 主↔渲染共享类型
 │       ├── types.ts                   # 通用类型定义
 │       └── plugin-types.ts            # 插件接口契约（5 种 PluginKind）
-├── engine/oh-my-pi/                   # omp 引擎 (git submodule)
+├── engine/oh-my-pi/                   # omp 引擎 (git submodule，仅重编 runner 需要)
 ├── plugins/                           # 内置插件
 │   └── unisoc-subsys-discoverer/      # Unisoc 子系统发现插件
 ├── tests/                             # Vitest 测试
@@ -162,9 +162,9 @@ soc-verify/
 
 ### omp 集成
 
-- omp 以 `--mode rpc` 启动，通过 JSONL 协议通信
+- AI Agent 通过 `socverify-runner` JSONL 子进程通信
 - `SessionManager` 管理多个 omp 会话（并发上限 10）
-- 支持 omp 预编译二进制和 Bun 开发模式两种启动方式
+- 支持预编译 runner 和 Bun + engine submodule 两种启动方式
 - `HostToolsRegistry` 注册 7 个 Host Tools（list_subsys / list_cases / run_simulation / get_run_status / get_compile_errors / get_coverage / read_file）
 - `HostUriRegistry` 处理 3 种 URI scheme（`case:///` / `log:///` / `cov:///`）
 - 支持 OpenAI 兼容代理，可对接第三方 LLM 服务
@@ -197,11 +197,17 @@ soc-verify/
 # 安装依赖
 npm install
 
-# 初始化 omp submodule
-git submodule update --init --recursive
-
 # 启动开发模式
 npm run dev
+```
+
+`npm install` 会自动尝试从 GitHub Release 下载当前平台的 `socverify-runner` 到 `resources/binaries/`。只有需要本地重编 runner 时，才执行：
+
+```sh
+git submodule update --init --recursive
+cd engine/oh-my-pi && bun install
+cd ../..
+npm run build:runner
 ```
 
 ### 开发命令
@@ -228,13 +234,14 @@ npm run test         # 测试通过
 
 ## 打包
 
-需先将 omp + bun 预编译二进制放入 `resources/binaries/`（参见该目录 README），然后：
+打包脚本会强制检查 `resources/binaries/` 中存在预编译 runner，避免生成没有 AI Agent 的安装包：
 
 ```sh
 npm run package:win    # Windows NSIS 安装包
+npm run package:linux  # Linux AppImage
 ```
 
-打包配置见 `electron-builder.yml`，支持 Windows (NSIS)、macOS (DMG)、Linux (AppImage) 三平台。
+打包配置见 `electron-builder.yml`。Windows 打包使用 `compression: store` 优先减少本地打包时间，代价是安装包体积会更大。
 
 ## 布局
 
