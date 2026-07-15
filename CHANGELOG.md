@@ -6,6 +6,37 @@
 
 ---
 
+## [0.1.2](https://github.com/hjdspace/soc-verify/compare/v0.1.1...v0.1.2) (2026-07-16)
+
+### Features
+
+* **diff-review:** 新增代码 Diff Review 系统（Diff Engine、DiffReviewView、队列管理、diff-review procedures）
+* **error-analysis:** 新增仿真失败自动错误分析（LogAnalyzer、ErrorAnalysisCoordinator、read_file tool、runsim_retry）
+* **terminal:** 新增终端仿真执行与运行中案例面板（TerminalView、SimTerminalLinker、session tab 管理）
+* **plugins:** 新增 Unisoc 插件集（case-parser、simulation-runner、sim-option-schema）
+* **agent:** 重构 agent 运行时，支持预编译二进制 runner 模式
+
+### Refactor
+
+* **terminal:** 重构 TerminalManager 数据批处理与 session 管理
+* **simulation:** 重构仿真事件处理、case ID 唯一性处理
+* **ui:** 重构 ToolCard、SubsysList、OptionDock 等组件
+
+### Documentation
+
+* 新增 CONTEXT.md 与 diff review、error analysis、hybrid log path 策略 ADR
+
+### Tests
+
+* 新增 log analyzer 与 unisoc-case-parser 单元测试
+
+### Build
+
+* 新增 Rollup、LightningCSS 依赖
+* 更新 .gitignore 忽略 .socverify/
+
+---
+
 ## [0.1.1](https://github.com/hjdspace/soc-verify/compare/v0.1.0...v0.1.1) (2026-07-13)
 
 ### Features
