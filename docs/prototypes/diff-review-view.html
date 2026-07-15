@@ -1,0 +1,1392 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SoC Verify · Diff Review View 交互原型</title>
+<style>
+  :root {
+    --bg: oklch(0.14 0.006 250);
+    --bg-surface: oklch(0.17 0.006 250);
+    --bg-elevated: oklch(0.20 0.007 250);
+    --fg: oklch(0.94 0.004 250);
+    --fg-dim: oklch(0.62 0.008 250);
+    --fg-faint: oklch(0.42 0.006 250);
+    --border: oklch(0.24 0.007 250);
+    --border-bright: oklch(0.32 0.008 250);
+
+    --c-read: oklch(0.68 0.14 250);
+    --c-write: oklch(0.72 0.16 145);
+    --c-edit: oklch(0.75 0.14 65);
+    --c-bash: oklch(0.68 0.15 295);
+
+    --c-ok: oklch(0.72 0.16 145);
+    --c-err: oklch(0.65 0.18 25);
+    --c-warn: oklch(0.75 0.15 75);
+    --c-run: oklch(0.68 0.14 250);
+    --c-primary: oklch(0.68 0.14 250);
+
+    --diff-add-bg: oklch(0.22 0.04 145);
+    --diff-add-bg-hover: oklch(0.25 0.05 145);
+    --diff-add-fg: oklch(0.82 0.08 145);
+    --diff-del-bg: oklch(0.22 0.04 25);
+    --diff-del-bg-hover: oklch(0.25 0.05 25);
+    --diff-del-fg: oklch(0.78 0.08 25);
+    --diff-hunk: oklch(0.20 0.01 250);
+    --diff-ctx-bg: transparent;
+
+    --hunk-accepted-bg: oklch(0.20 0.02 145);
+    --hunk-accepted-border: oklch(0.35 0.06 145);
+    --hunk-rejected-bg: oklch(0.20 0.02 25);
+    --hunk-rejected-border: oklch(0.35 0.06 25);
+    --hunk-overwritten-bg: oklch(0.20 0.02 75);
+    --hunk-overwritten-border: oklch(0.35 0.06 75);
+
+    --mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.5;
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Prototype Header ── */
+  .proto-header {
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    padding: 6px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    font-family: var(--sans);
+  }
+  .proto-header h1 {
+    font-size: 14px;
+    font-weight: 700;
+  }
+  .proto-header .tag {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--bg-elevated);
+    color: var(--c-primary);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .proto-header .desc {
+    color: var(--fg-dim);
+    font-size: 11px;
+    margin-left: auto;
+  }
+
+  /* ── Main Layout: right panel + center area ── */
+  .main-layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Right Panel (ToolCards) ── */
+  .right-panel {
+    width: 420px;
+    flex-shrink: 0;
+    border-left: 1px solid var(--border);
+    background: var(--bg-surface);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .right-panel-header {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .right-panel-header .session-name {
+    color: var(--fg);
+  }
+  .right-panel-header .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--c-ok);
+  }
+  .right-panel-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  /* ── Tool Card (Modified) ── */
+  .tool-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    font-size: 12px;
+  }
+  .tool-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    user-select: none;
+  }
+  .tool-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .tool-dot.ok { background: var(--c-ok); }
+  .tool-dot.err { background: var(--c-err); }
+  .tool-name {
+    font-weight: 600;
+    font-size: 11px;
+    flex-shrink: 0;
+    min-width: 36px;
+  }
+  .tool-name.write { color: var(--c-write); }
+  .tool-name.edit { color: var(--c-edit); }
+
+  /* File path link (NEW: clickable) */
+  .file-path-link {
+    color: oklch(0.62 0.14 250);
+    cursor: pointer;
+    font-size: 11.5px;
+    text-decoration: none;
+    border-bottom: 1px dotted transparent;
+    transition: all 0.15s;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .file-path-link:hover {
+    color: oklch(0.72 0.14 250);
+    border-bottom-color: oklch(0.72 0.14 250);
+  }
+  .file-path-link .separator {
+    color: var(--fg-faint);
+    margin: 0 4px;
+  }
+  .file-path-link .meta {
+    color: var(--fg-faint);
+    font-size: 10.5px;
+  }
+
+  .tool-duration {
+    color: var(--fg-faint);
+    font-size: 10px;
+    flex-shrink: 0;
+  }
+
+  /* Chevron button (NEW: separate button) */
+  .chevron-btn {
+    width: 20px; height: 20px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 4px;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s;
+    border: none;
+    background: transparent;
+    color: var(--fg-faint);
+  }
+  .chevron-btn:hover {
+    background: var(--bg-elevated);
+    color: var(--fg-dim);
+  }
+  .chevron-btn svg {
+    width: 12px; height: 12px;
+    transition: transform 0.2s;
+  }
+  .tool-card.expanded .chevron-btn svg {
+    transform: rotate(180deg);
+  }
+
+  /* Tool body (inline diff) */
+  .tool-body {
+    border-top: 1px solid var(--border);
+    max-height: 300px;
+    overflow: auto;
+    display: none;
+  }
+  .tool-card.expanded .tool-body {
+    display: block;
+  }
+
+  /* Inline diff lines */
+  .inline-diff {
+    font-size: 11px;
+    line-height: 1.5;
+  }
+  .inline-diff .line {
+    display: flex;
+    font-family: var(--mono);
+  }
+  .inline-diff .line .ln {
+    width: 30px;
+    text-align: right;
+    padding: 1px 6px;
+    color: var(--fg-faint);
+    font-size: 10px;
+    flex-shrink: 0;
+    user-select: none;
+  }
+  .inline-diff .line .sign {
+    width: 16px;
+    text-align: center;
+    flex-shrink: 0;
+    user-select: none;
+    font-size: 10px;
+  }
+  .inline-diff .line .code {
+    padding: 1px 8px;
+    flex: 1;
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .inline-diff .line.add { background: var(--diff-add-bg); }
+  .inline-diff .line.add .sign { color: var(--c-ok); }
+  .inline-diff .line.add .code { color: var(--diff-add-fg); }
+  .inline-diff .line.del { background: var(--diff-del-bg); }
+  .inline-diff .line.del .sign { color: var(--c-err); }
+  .inline-diff .line.del .code { color: var(--diff-del-fg); text-decoration: line-through; opacity: 0.7; }
+  .inline-diff .line.ctx .sign { color: var(--fg-faint); }
+  .inline-diff .line.ctx .code { color: var(--fg-dim); }
+
+  /* "Open in Diff Review" hint */
+  .open-hint {
+    padding: 4px 10px;
+    background: var(--bg-elevated);
+    border-top: 1px solid var(--border);
+    font-family: var(--sans);
+    font-size: 10px;
+    color: var(--fg-faint);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .open-hint .link {
+    color: oklch(0.62 0.14 250);
+    cursor: pointer;
+    text-decoration: underline;
+  }
+  .open-hint .link:hover {
+    color: oklch(0.72 0.14 250);
+  }
+
+  /* ── Center Area (DiffReviewView) ── */
+  .center-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  /* Tab bar */
+  .tab-bar {
+    display: flex;
+    height: 32px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-surface);
+    flex-shrink: 0;
+    overflow-x: auto;
+  }
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 12px;
+    height: 100%;
+    border-right: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--fg-dim);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+  }
+  .tab:hover { background: var(--bg-elevated); }
+  .tab.active {
+    background: var(--bg);
+    color: var(--fg);
+  }
+  .tab .close-btn {
+    width: 16px; height: 16px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 3px;
+    opacity: 0.4;
+    transition: opacity 0.15s;
+  }
+  .tab .close-btn:hover { opacity: 1; background: var(--bg-elevated); }
+  .tab .badge {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 600;
+    background: oklch(0.22 0.04 250);
+    color: var(--c-primary);
+  }
+
+  /* DiffReviewView header */
+  .diff-review-header {
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-surface);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+    font-family: var(--sans);
+  }
+  .diff-review-header .file-path {
+    font-size: 12px;
+    color: var(--fg-dim);
+    font-family: var(--mono);
+  }
+  .diff-review-header .stats {
+    display: flex;
+    gap: 8px;
+    font-size: 11px;
+  }
+  .diff-review-header .stats .add-count { color: var(--c-ok); }
+  .diff-review-header .stats .del-count { color: var(--c-err); }
+  .diff-review-header .stats .hunk-count { color: var(--fg-faint); }
+  .diff-review-header .nav-arrows {
+    margin-left: auto;
+    display: flex;
+    gap: 2px;
+  }
+  .nav-btn {
+    width: 24px; height: 24px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    color: var(--fg-dim);
+    transition: all 0.15s;
+  }
+  .nav-btn:hover {
+    background: var(--bg-elevated);
+    color: var(--fg);
+    border-color: var(--border-bright);
+  }
+  .nav-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+  .nav-btn svg { width: 14px; height: 14px; }
+  .nav-btn .counter {
+    font-size: 10px;
+    color: var(--fg-faint);
+    margin-left: 4px;
+  }
+
+  /* Diff code area */
+  .diff-code-area {
+    flex: 1;
+    overflow: auto;
+    font-size: 12px;
+    line-height: 1.55;
+    font-family: var(--mono);
+    position: relative;
+  }
+
+  /* Full file view with inline diff */
+  .file-view {
+    display: flex;
+  }
+  .file-gutter {
+    text-align: right;
+    padding: 4px 8px 4px 12px;
+    color: var(--fg-faint);
+    user-select: none;
+    border-right: 1px solid var(--border);
+    background: var(--bg-surface);
+    min-width: 44px;
+    font-size: 11px;
+    line-height: 1.55;
+    position: sticky;
+    left: 0;
+    z-index: 1;
+  }
+  .file-gutter .ln {
+    display: block;
+    min-height: 1.55em;
+  }
+  .file-content {
+    padding: 4px 0;
+    flex: 1;
+    overflow-x: auto;
+  }
+
+  /* Diff lines in full file view */
+  .fv-line {
+    display: flex;
+    min-height: 1.55em;
+    padding-right: 12px;
+    position: relative;
+  }
+  .fv-line .sign {
+    width: 20px;
+    text-align: center;
+    flex-shrink: 0;
+    user-select: none;
+    font-size: 11px;
+    opacity: 0.7;
+  }
+  .fv-line .code {
+    padding: 0 8px;
+    white-space: pre;
+    overflow-x: auto;
+    flex: 1;
+  }
+  .fv-line.ctx {
+    color: var(--fg-dim);
+  }
+  .fv-line.ctx .sign { color: transparent; }
+  .fv-line.add {
+    background: var(--diff-add-bg);
+  }
+  .fv-line.add .sign { color: var(--c-ok); }
+  .fv-line.add .code { color: var(--diff-add-fg); }
+  .fv-line.del {
+    background: var(--diff-del-bg);
+  }
+  .fv-line.del .sign { color: var(--c-err); }
+  .fv-line.del .code { color: var(--diff-del-fg); text-decoration: line-through; opacity: 0.7; }
+
+  /* Hunk wrapper */
+  .hunk {
+    border-left: 2px solid transparent;
+    transition: border-color 0.2s, background 0.2s;
+    position: relative;
+  }
+  .hunk.pending {
+    border-left-color: var(--border-bright);
+  }
+  .hunk.accepted {
+    border-left-color: var(--c-ok);
+    background: oklch(0.18 0.01 145);
+  }
+  .hunk.accepted .fv-line.add {
+    background: var(--hunk-accepted-bg);
+  }
+  .hunk.accepted .fv-line.del {
+    background: var(--hunk-accepted-bg);
+    opacity: 0.3;
+  }
+  .hunk.rejected {
+    border-left-color: var(--c-err);
+    background: oklch(0.18 0.01 25);
+  }
+  .hunk.rejected .fv-line.add {
+    background: var(--hunk-rejected-bg);
+    opacity: 0.3;
+    text-decoration: line-through;
+  }
+  .hunk.rejected .fv-line.del {
+    background: var(--hunk-rejected-bg);
+  }
+  .hunk.overwritten {
+    border-left-color: var(--c-warn);
+    background: oklch(0.18 0.01 75);
+  }
+  .hunk.overwritten .fv-line.add {
+    background: var(--hunk-overwritten-bg);
+    opacity: 0.5;
+  }
+  .hunk.overwritten .fv-line.del {
+    background: var(--hunk-overwritten-bg);
+    opacity: 0.3;
+  }
+
+  /* Hunk action bar (floating on right side of hunk) */
+  .hunk-actions {
+    position: absolute;
+    right: 8px;
+    top: 2px;
+    display: flex;
+    gap: 4px;
+    z-index: 2;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .hunk:hover .hunk-actions {
+    opacity: 1;
+  }
+  .hunk.has-decision .hunk-actions {
+    opacity: 1;
+  }
+  .hunk-btn {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-family: var(--sans);
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--fg-dim);
+    transition: all 0.15s;
+    user-select: none;
+  }
+  .hunk-btn:hover {
+    border-color: var(--border-bright);
+    color: var(--fg);
+  }
+  .hunk-btn.accept-btn.active {
+    background: oklch(0.25 0.06 145);
+    border-color: var(--c-ok);
+    color: var(--c-ok);
+  }
+  .hunk-btn.reject-btn.active {
+    background: oklch(0.25 0.06 25);
+    border-color: var(--c-err);
+    color: var(--c-err);
+  }
+  .hunk-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+  .hunk-btn svg { width: 10px; height: 10px; }
+
+  /* Hunk status indicator */
+  .hunk-status {
+    position: absolute;
+    left: -2px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+  }
+
+  /* Hunk label */
+  .hunk-label {
+    position: absolute;
+    left: 6px;
+    top: 0;
+    font-size: 9px;
+    font-family: var(--sans);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 1px 6px;
+    border-radius: 3px;
+    z-index: 3;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  .hunk:hover .hunk-label,
+  .hunk.has-decision .hunk-label {
+    opacity: 1;
+  }
+  .hunk.accepted .hunk-label {
+    background: oklch(0.25 0.06 145);
+    color: var(--c-ok);
+  }
+  .hunk.rejected .hunk-label {
+    background: oklch(0.25 0.06 25);
+    color: var(--c-err);
+  }
+  .hunk.overwritten .hunk-label {
+    background: oklch(0.25 0.06 75);
+    color: var(--c-warn);
+  }
+
+  /* ── Bottom Toolbar ── */
+  .bottom-toolbar {
+    border-top: 1px solid var(--border);
+    background: var(--bg-surface);
+    padding: 8px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+    font-family: var(--sans);
+  }
+
+  .btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 12px;
+    border-radius: 5px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    color: var(--fg-dim);
+    transition: all 0.15s;
+    user-select: none;
+  }
+  .btn:hover {
+    background: var(--bg-elevated);
+    color: var(--fg);
+    border-color: var(--border-bright);
+  }
+  .btn svg { width: 13px; height: 13px; }
+
+  .btn-primary {
+    background: oklch(0.25 0.06 250);
+    border-color: oklch(0.40 0.08 250);
+    color: oklch(0.82 0.08 250);
+  }
+  .btn-primary:hover {
+    background: oklch(0.30 0.08 250);
+    border-color: oklch(0.50 0.10 250);
+    color: oklch(0.92 0.08 250);
+  }
+
+  .btn-accept-all {
+    background: oklch(0.22 0.05 145);
+    border-color: oklch(0.35 0.08 145);
+    color: var(--c-ok);
+  }
+  .btn-accept-all:hover {
+    background: oklch(0.27 0.06 145);
+    color: oklch(0.92 0.10 145);
+  }
+
+  .btn-apply {
+    background: oklch(0.25 0.06 250);
+    border-color: oklch(0.40 0.08 250);
+    color: oklch(0.82 0.08 250);
+  }
+  .btn-apply:hover {
+    background: oklch(0.30 0.08 250);
+    color: oklch(0.92 0.08 250);
+  }
+  .btn-apply.has-rejections {
+    animation: glow 1.5s infinite;
+  }
+  @keyframes glow {
+    0%, 100% { box-shadow: 0 0 0 0 oklch(0.40 0.10 250 / 0); }
+    50% { box-shadow: 0 0 0 3px oklch(0.40 0.10 250 / 0.3); }
+  }
+
+  .btn-next-file {
+    margin-left: auto;
+    background: oklch(0.22 0.05 250);
+    border-color: oklch(0.35 0.08 250);
+    color: oklch(0.82 0.08 250);
+  }
+  .btn-next-file:hover {
+    background: oklch(0.27 0.06 250);
+  }
+  .btn-next-file .next-file-name {
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Review queue indicator */
+  .queue-indicator {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--fg-faint);
+  }
+  .queue-indicator .current {
+    color: var(--fg);
+    font-weight: 600;
+  }
+  .queue-indicator .total {
+    color: var(--fg-faint);
+  }
+
+  /* Separator */
+  .toolbar-sep {
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+  }
+
+  /* ── WRITE file view (all green) ── */
+  .write-file-view .fv-line {
+    background: var(--diff-add-bg);
+  }
+  .write-file-view .fv-line .sign {
+    color: var(--c-ok);
+  }
+
+  /* ── Overlay message ── */
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: oklch(0.14 0.006 250 / 0.8);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+  }
+  .overlay.show {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .overlay-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-bright);
+    border-radius: 8px;
+    padding: 24px 32px;
+    text-align: center;
+    font-family: var(--sans);
+    max-width: 400px;
+  }
+  .overlay-card h2 {
+    font-size: 16px;
+    margin-bottom: 8px;
+  }
+  .overlay-card p {
+    font-size: 12px;
+    color: var(--fg-dim);
+    margin-bottom: 16px;
+  }
+  .overlay-card .icon {
+    width: 48px; height: 48px;
+    margin: 0 auto 12px;
+    border-radius: 50%;
+    background: oklch(0.22 0.05 145);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--c-ok);
+  }
+  .overlay-card .icon svg { width: 24px; height: 24px; }
+
+  /* Syntax highlighting */
+  .kw { color: oklch(0.72 0.12 290); }
+  .str { color: oklch(0.75 0.10 145); }
+  .num { color: oklch(0.75 0.12 40); }
+  .com { color: var(--fg-faint); font-style: italic; }
+  .fn { color: oklch(0.72 0.12 220); }
+  .type { color: oklch(0.72 0.12 180); }
+  .punct { color: var(--fg-faint); }
+
+  /* Scrollbar styling */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-bright); }
+</style>
+</head>
+<body>
+
+<!-- ── Prototype Header ── -->
+<div class="proto-header">
+  <h1>Diff Review View</h1>
+  <span class="tag">交互原型</span>
+  <span class="desc">点击右侧 ToolCard 文件路径 → 中栏打开 Diff Review · 逐 hunk 接受/拒绝 · 底部导航</span>
+</div>
+
+<!-- ── Main Layout ── -->
+<div class="main-layout">
+
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <!-- Center Area: DiffReviewView                                    -->
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <div class="center-area" id="centerArea">
+    <!-- Tab bar -->
+    <div class="tab-bar">
+      <div class="tab active" id="diffTab">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M2 12h20" opacity="0.5"/><path d="M7 7l5-5 5 5M7 17l5 5 5-5"/></svg>
+        <span>Diff Review</span>
+        <span class="badge">3 hunks</span>
+        <div class="close-btn">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Diff Review Header -->
+    <div class="diff-review-header">
+      <span class="file-path">src/main/ipc/router.ts</span>
+      <div class="stats">
+        <span class="add-count">+12</span>
+        <span class="del-count">−5</span>
+        <span class="hunk-count">3 hunks</span>
+      </div>
+      <div class="nav-arrows">
+        <button class="nav-btn" id="prevHunkBtn" title="上一个改动 (Shift+↑)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 15l-6-6-6 6"/></svg>
+        </button>
+        <button class="nav-btn" id="nextHunkBtn" title="下一个改动 (Shift+↓)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Diff Code Area -->
+    <div class="diff-code-area" id="diffCodeArea">
+      <div class="file-view">
+        <!-- Line numbers gutter -->
+        <div class="file-gutter" id="fileGutter"></div>
+        <!-- File content with diff -->
+        <div class="file-content" id="fileContent"></div>
+      </div>
+    </div>
+
+    <!-- Bottom Toolbar -->
+    <div class="bottom-toolbar">
+      <!-- Review queue indicator -->
+      <div class="queue-indicator">
+        <span class="current">2</span>
+        <span>/</span>
+        <span class="total">5 文件</span>
+      </div>
+
+      <div class="toolbar-sep"></div>
+
+      <button class="btn btn-accept-all" id="acceptAllBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+        全部接受
+      </button>
+
+      <button class="btn btn-apply" id="applyBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12l5 5L20 7"/></svg>
+        应用
+      </button>
+
+      <div class="toolbar-sep"></div>
+
+      <button class="btn" id="rejectAllBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        全部拒绝
+      </button>
+
+      <!-- Next file -->
+      <button class="btn btn-next-file" id="nextFileBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 5l7 7-7 7M5 12h15"/></svg>
+        下个文件:
+        <span class="next-file-name">src/renderer/src/stores/session.ts</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <!-- Right Panel: AI Agent Chat with ToolCards                      -->
+  <!-- ════════════════════════════════════════════════════════════ -->
+  <div class="right-panel">
+    <div class="right-panel-header">
+      <div class="dot"></div>
+      <span class="session-name">修复 CPU 缓存一致性 bug</span>
+    </div>
+    <div class="right-panel-messages">
+      <!-- Assistant message text -->
+      <div style="font-size: 12px; color: var(--fg-dim); padding: 2px 4px; font-family: var(--sans);">
+        我来分析编译错误并修复 `router.ts` 中的问题。首先修改 simulation query 的返回值...
+      </div>
+
+      <!-- ToolCard: EDIT (with clickable file path) -->
+      <div class="tool-card expanded" data-card="edit1">
+        <div class="tool-header">
+          <div class="tool-dot ok"></div>
+          <span class="tool-name edit">edit</span>
+          <!-- File path link (NEW: clickable) -->
+          <span class="file-path-link" onclick="openInDiffReview('router.ts')">
+            <span>.../ipc/router.ts</span>
+            <span class="separator">·</span>
+            <span class="meta">2 changes</span>
+          </span>
+          <span class="tool-duration">15ms</span>
+          <!-- Chevron button (NEW: separate) -->
+          <button class="chevron-btn" onclick="toggleCard('edit1')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+        </div>
+        <div class="tool-body">
+          <div class="inline-diff">
+            <div class="line ctx"><span class="ln">128</span><span class="sign"> </span><span class="code">  simulation: publicProcedure</span></div>
+            <div class="line del"><span class="ln">129</span><span class="sign">-</span><span class="code">    .query(async ({ input }) => {</span></div>
+            <div class="line del"><span class="ln">130</span><span class="sign">-</span><span class="code">      return simManager.getStatus(input.runId);</span></div>
+            <div class="line add"><span class="ln">129</span><span class="sign">+</span><span class="code">    .query(async ({ input }) => {</span></div>
+            <div class="line add"><span class="ln">130</span><span class="sign">+</span><span class="code">      const status = await simManager.getStatus(input.runId);</span></div>
+            <div class="line add"><span class="ln">131</span><span class="sign">+</span><span class="code">      return { ...status, timestamp: Date.now() };</span></div>
+          </div>
+          <div class="open-hint">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3h7v7M21 3l-9 9M10 14H3v7M3 14l9-9" opacity="0.5"/><path d="M14 14h7v7M21 21l-9-9"/></svg>
+            <span class="link" onclick="openInDiffReview('router.ts')">在中栏打开 Diff Review</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Assistant message -->
+      <div style="font-size: 12px; color: var(--fg-dim); padding: 2px 4px; font-family: var(--sans); margin-top: 4px;">
+        接下来修改 coverage 计算逻辑，添加 assertion 覆盖率支持...
+      </div>
+
+      <!-- ToolCard: EDIT 2 (collapsed, clickable path) -->
+      <div class="tool-card collapsed" data-card="edit2">
+        <div class="tool-header">
+          <div class="tool-dot ok"></div>
+          <span class="tool-name edit">edit</span>
+          <span class="file-path-link" onclick="openInDiffReview('router.ts')">
+            <span>.../ipc/router.ts</span>
+            <span class="separator">·</span>
+            <span class="meta">1 change</span>
+          </span>
+          <span class="tool-duration">9ms</span>
+          <button class="chevron-btn" onclick="toggleCard('edit2')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+        </div>
+        <div class="tool-body">
+          <div class="inline-diff">
+            <div class="line ctx"><span class="ln">85</span><span class="sign"> </span><span class="code">  coverage: publicProcedure</span></div>
+            <div class="line del"><span class="ln">86</span><span class="sign">-</span><span class="code">    .query(({ input }) => {</span></div>
+            <div class="line add"><span class="ln">86</span><span class="sign">+</span><span class="code">    .query(async ({ input }) => {</span></div>
+          </div>
+          <div class="open-hint">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3h7v7M21 3l-9 9M10 14H3v7M3 14l9-9" opacity="0.5"/><path d="M14 14h7v7M21 21l-9-9"/></svg>
+            <span class="link" onclick="openInDiffReview('router.ts')">在中栏打开 Diff Review</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ToolCard: WRITE (collapsed, clickable path) -->
+      <div class="tool-card collapsed" data-card="write1">
+        <div class="tool-header">
+          <div class="tool-dot ok"></div>
+          <span class="tool-name write">write</span>
+          <span class="file-path-link" onclick="openInDiffReview('coverage.ts')">
+            <span>.../coverage/coverage-manager.ts</span>
+            <span class="separator">·</span>
+            <span class="meta">new file, 28 lines</span>
+          </span>
+          <span class="tool-duration">5ms</span>
+          <button class="chevron-btn" onclick="toggleCard('write1')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+        </div>
+        <div class="tool-body">
+          <div class="inline-diff">
+            <div class="line add"><span class="ln">1</span><span class="sign">+</span><span class="code"><span class="kw">import</span> { create } <span class="kw">from</span> <span class="str">'zustand'</span>;</span></div>
+            <div class="line add"><span class="ln">2</span><span class="sign">+</span><span class="code"><span class="kw">import</span> { trpc } <span class="kw">from</span> <span class="str">'@renderer/lib/trpc'</span>;</span></div>
+          </div>
+          <div class="open-hint">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3h7v7M21 3l-9 9M10 14H3v7M3 14l9-9" opacity="0.5"/><path d="M14 14h7v7M21 21l-9-9"/></svg>
+            <span class="link" onclick="openInDiffReview('coverage.ts')">在中栏打开 Diff Review</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Assistant summary -->
+      <div style="font-size: 12px; color: var(--fg-dim); padding: 2px 4px; font-family: var(--sans); margin-top: 4px;">
+        已完成 3 处修改。你可以在中栏的 Diff Review 中逐个审阅和接受/拒绝这些改动。
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Overlay (applied success) ── -->
+<div class="overlay" id="overlay">
+  <div class="overlay-card">
+    <div class="icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6L9 17l-5-5"/></svg>
+    </div>
+    <h2 id="overlayTitle">改动已应用</h2>
+    <p id="overlayDesc">2 个 hunk 已接受，1 个 hunk 已拒绝</p>
+    <button class="btn btn-primary" onclick="closeOverlay()">确定</button>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// Diff data model
+// ═══════════════════════════════════════════════════════════
+
+// Full file content with diff annotations
+// Each line: { type: 'ctx'|'add'|'del', code: '...', lineNum: '...' }
+const fileLines = [
+  // ── Context before hunk 1 ──
+  { type: 'ctx', code: '<span class="kw">import</span> { initTRPC } <span class="kw">from</span> <span class="str">\'@trpc/server\'</span>;', oldLn: 1, newLn: 1 },
+  { type: 'ctx', code: '<span class="kw">import</span> { z } <span class="kw">from</span> <span class="str">\'zod\'</span>;', oldLn: 2, newLn: 2 },
+  { type: 'ctx', code: '<span class="kw">import</span> { simManager } <span class="kw">from</span> <span class="str">\'../simulation/manager\'</span>;', oldLn: 3, newLn: 3 },
+  { type: 'ctx', code: '<span class="kw">import</span> { coverageManager } <span class="kw">from</span> <span class="str">\'../coverage/manager\'</span>;', oldLn: 4, newLn: 4 },
+  { type: 'ctx', code: '<span class="kw">import</span> { ErrorAnalysisCoordinator } <span class="kw">from</span> <span class="str">\'../agent/error-coordinator\'</span>;', oldLn: 5, newLn: 5 },
+  { type: 'ctx', code: '', oldLn: 6, newLn: 6 },
+  { type: 'ctx', code: '<span class="kw">const</span> t = initTRPC.<span class="fn">create</span>();', oldLn: 7, newLn: 7 },
+  { type: 'ctx', code: '', oldLn: 8, newLn: 8 },
+  { type: 'ctx', code: '<span class="kw">export const</span> router = t.router({', oldLn: 9, newLn: 9 },
+  { type: 'ctx', code: '  ping: t.procedure.<span class="fn">query</span>(() => <span class="str">\'pong\'</span>),', oldLn: 10, newLn: 10 },
+  { type: 'ctx', code: '', oldLn: 11, newLn: 11 },
+  { type: 'ctx', code: '  <span class="com">// ── Project ───────────────────────────</span>', oldLn: 12, newLn: 12 },
+  { type: 'ctx', code: '  project: t.router({', oldLn: 13, newLn: 13 },
+  { type: 'ctx', code: '    open: t.procedure', oldLn: 14, newLn: 14 },
+  { type: 'ctx', code: '      .input(z.object({ rootPath: z.string() }))', oldLn: 15, newLn: 15 },
+  { type: 'ctx', code: '      .mutation(async ({ input }) => {', oldLn: 16, newLn: 16 },
+  { type: 'ctx', code: '        <span class="kw">return</span> projectManager.open(input.rootPath);', oldLn: 17, newLn: 17 },
+  { type: 'ctx', code: '      }),', oldLn: 18, newLn: 18 },
+  { type: 'ctx', code: '  }),', oldLn: 19, newLn: 19 },
+  { type: 'ctx', code: '', oldLn: 20, newLn: 20 },
+  { type: 'ctx', code: '  <span class="com">// ── Simulation ────────────────────────</span>', oldLn: 21, newLn: 21 },
+  { type: 'ctx', code: '  simulation: t.router({', oldLn: 22, newLn: 22 },
+  { type: 'ctx', code: '    run: t.procedure', oldLn: 23, newLn: 23 },
+  { type: 'ctx', code: '      .input(z.object({', oldLn: 24, newLn: 24 },
+  { type: 'ctx', code: '        caseId: z.string(),', oldLn: 25, newLn: 25 },
+  { type: 'ctx', code: '        subsys: z.string().optional(),', oldLn: 26, newLn: 26 },
+  { type: 'ctx', code: '        options: z.record(z.string()).optional(),', oldLn: 27, newLn: 27 },
+  { type: 'ctx', code: '      }))', oldLn: 28, newLn: 28 },
+  { type: 'ctx', code: '      .mutation(async ({ input }) => {', oldLn: 29, newLn: 29 },
+
+  // ── HUNK 1: lines 30-33 ──
+  { type: 'ctx', code: '        <span class="kw">const</span> runId = <span class="kw">await</span> simManager.<span class="fn">start</span>(input);', oldLn: 30, newLn: 30, hunkStart: 1 },
+  { type: 'del', code: '        <span class="kw">return</span> { runId, status: <span class="str">\'pending\'</span> };', oldLn: 31, newLn: null, hunk: 1 },
+  { type: 'add', code: '        <span class="kw">const</span> status = <span class="kw">await</span> simManager.<span class="fn">getStatus</span>(runId);', oldLn: null, newLn: 31, hunk: 1 },
+  { type: 'add', code: '        <span class="kw">return</span> { runId, status, timestamp: Date.<span class="fn">now</span>() };', oldLn: null, newLn: 32, hunk: 1 },
+  { type: 'add', code: '      })<span class="punct">,</span>', oldLn: null, newLn: 33, hunk: 1, hunkEnd: true },
+
+  // ── Context between hunk 1 and 2 ──
+  { type: 'ctx', code: '', oldLn: 33, newLn: 34 },
+  { type: 'ctx', code: '    abort: t.procedure', oldLn: 34, newLn: 35 },
+  { type: 'ctx', code: '      .input(z.object({ runId: z.string() }))', oldLn: 35, newLn: 36 },
+  { type: 'ctx', code: '      .mutation(async ({ input }) => {', oldLn: 36, newLn: 37 },
+  { type: 'ctx', code: '        <span class="kw">await</span> simManager.<span class="fn">abort</span>(input.runId);', oldLn: 37, newLn: 38 },
+  { type: 'ctx', code: '      })<span class="punct">,</span>', oldLn: 38, newLn: 39 },
+  { type: 'ctx', code: '  })<span class="punct">,</span>', oldLn: 39, newLn: 40 },
+  { type: 'ctx', code: '', oldLn: 40, newLn: 41 },
+  { type: 'ctx', code: '  <span class="com">// ── Coverage ──────────────────────────</span>', oldLn: 41, newLn: 42 },
+  { type: 'ctx', code: '  coverage: t.router({', oldLn: 42, newLn: 43 },
+  { type: 'ctx', code: '    get: t.procedure', oldLn: 43, newLn: 44 },
+  { type: 'ctx', code: '      .input(z.object({ runId: z.string() }))', oldLn: 44, newLn: 45 },
+
+  // ── HUNK 2: lines 45-49 ──
+  { type: 'del', code: '      .query(({ input }) => {', oldLn: 45, newLn: null, hunkStart: 2 },
+  { type: 'del', code: '        <span class="kw">return</span> coverageManager.<span class="fn">get</span>(input.runId);', oldLn: 46, newLn: null, hunk: 2 },
+  { type: 'add', code: '      .query(<span class="kw">async</span> ({ input }) => {', oldLn: null, newLn: 46, hunk: 2 },
+  { type: 'add', code: '        <span class="kw">const</span> result = <span class="kw">await</span> coverageManager.<span class="fn">get</span>(input.runId);', oldLn: null, newLn: 47, hunk: 2 },
+  { type: 'add', code: '        <span class="kw">return</span> { ...result, fetchedAt: Date.<span class="fn">now</span>() };', oldLn: null, newLn: 48, hunk: 2, hunkEnd: true },
+
+  // ── Context between hunk 2 and 3 ──
+  { type: 'ctx', code: '      })<span class="punct">,</span>', oldLn: 47, newLn: 49 },
+  { type: 'ctx', code: '', oldLn: 48, newLn: 50 },
+  { type: 'ctx', code: '    parse: t.procedure', oldLn: 49, newLn: 51 },
+  { type: 'ctx', code: '      .input(z.object({ logPath: z.string() }))', oldLn: 50, newLn: 52 },
+  { type: 'ctx', code: '      .query(({ input }) => {', oldLn: 51, newLn: 53 },
+  { type: 'ctx', code: '        <span class="kw">return</span> coverageManager.<span class="fn">parse</span>(input.logPath);', oldLn: 52, newLn: 54 },
+  { type: 'ctx', code: '      })<span class="punct">,</span>', oldLn: 53, newLn: 55 },
+  { type: 'ctx', code: '  })<span class="punct">,</span>', oldLn: 54, newLn: 56 },
+  { type: 'ctx', code: '', oldLn: 55, newLn: 57 },
+  { type: 'ctx', code: '  <span class="com">// ── Session ────────────────────────────</span>', oldLn: 56, newLn: 58 },
+  { type: 'ctx', code: '  session: t.router({', oldLn: 57, newLn: 59 },
+  { type: 'ctx', code: '    create: t.procedure', oldLn: 58, newLn: 60 },
+  { type: 'ctx', code: '      .input(z.object({', oldLn: 59, newLn: 61 },
+  { type: 'ctx', code: '        projectId: z.string(),', oldLn: 60, newLn: 62 },
+  { type: 'ctx', code: '        cwd: z.string(),', oldLn: 61, newLn: 63 },
+  { type: 'ctx', code: '        provider: z.string().optional(),', oldLn: 62, newLn: 64 },
+  { type: 'ctx', code: '        model: z.string().optional(),', oldLn: 63, newLn: 65 },
+  { type: 'ctx', code: '      }))', oldLn: 64, newLn: 66 },
+  { type: 'ctx', code: '      .mutation(async ({ input }) => {', oldLn: 65, newLn: 67 },
+  { type: 'ctx', code: '        <span class="kw">const</span> session = <span class="kw">await</span> sessionManager.<span class="fn">create</span>(input);', oldLn: 66, newLn: 68 },
+  { type: 'ctx', code: '        <span class="kw">return</span> { sessionId: session.id, name: session.name };', oldLn: 67, newLn: 69 },
+
+  // ── HUNK 3: lines 68-72 (overwritten example) ──
+  { type: 'del', code: '      })<span class="punct">,</span>', oldLn: 68, newLn: null, hunkStart: 3 },
+  { type: 'add', code: '      })<span class="punct">,</span>', oldLn: null, newLn: 70, hunk: 3, overwritten: true },
+  { type: 'add', code: '', oldLn: null, newLn: 71, hunk: 3, overwritten: true },
+  { type: 'add', code: '      <span class="com">// Session list with model info</span>', oldLn: null, newLn: 72, hunk: 3, overwritten: true, hunkEnd: true },
+
+  // ── Context after hunk 3 ──
+  { type: 'ctx', code: '      list: t.procedure', oldLn: 69, newLn: 73 },
+  { type: 'ctx', code: '        .query(() => {', oldLn: 70, newLn: 74 },
+  { type: 'ctx', code: '          <span class="kw">return</span> sessionManager.<span class="fn">list</span>();', oldLn: 71, newLn: 75 },
+  { type: 'ctx', code: '        })<span class="punct">,</span>', oldLn: 72, newLn: 76 },
+  { type: 'ctx', code: '  })<span class="punct">,</span>', oldLn: 73, newLn: 77 },
+  { type: 'ctx', code: '});', oldLn: 74, newLn: 78 },
+];
+
+// Hunk state: 'pending' | 'accepted' | 'rejected' | 'overwritten'
+const hunkStates = {};
+let currentHunkIndex = 0;
+const hunkIds = [1, 2, 3];
+
+// ═══════════════════════════════════════════════════════════
+// Render the diff view
+// ═══════════════════════════════════════════════════════════
+
+function renderDiff() {
+  const gutter = document.getElementById('fileGutter');
+  const content = document.getElementById('fileContent');
+  gutter.innerHTML = '';
+  content.innerHTML = '';
+
+  let currentHunk = null;
+  let hunkContainer = null;
+
+  for (const line of fileLines) {
+    // Detect hunk boundary
+    if (line.hunkStart) {
+      currentHunk = line.hunkStart;
+      hunkStates[currentHunk] = hunkStates[currentHunk] || (line.overwritten ? 'overwritten' : 'pending');
+      hunkContainer = document.createElement('div');
+      hunkContainer.className = 'hunk ' + hunkStates[currentHunk];
+      hunkContainer.dataset.hunkId = currentHunk;
+      hunkContainer.id = 'hunk-' + currentHunk;
+
+      // Hunk label
+      const label = document.createElement('div');
+      label.className = 'hunk-label';
+      const stateText = hunkStates[currentHunk];
+      label.textContent = stateText === 'pending' ? 'Hunk ' + currentHunk : stateText;
+      hunkContainer.appendChild(label);
+
+      // Hunk actions (accept/reject buttons)
+      if (hunkStates[currentHunk] !== 'overwritten') {
+        const actions = document.createElement('div');
+        actions.className = 'hunk-actions';
+
+        const acceptBtn = document.createElement('button');
+        acceptBtn.className = 'hunk-btn accept-btn' + (hunkStates[currentHunk] === 'accepted' ? ' active' : '');
+        acceptBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg>接受';
+        acceptBtn.onclick = (e) => { e.stopPropagation(); setHunkState(currentHunk, 'accepted'); };
+
+        const rejectBtn = document.createElement('button');
+        rejectBtn.className = 'hunk-btn reject-btn' + (hunkStates[currentHunk] === 'rejected' ? ' active' : '');
+        rejectBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M18 6L6 18M6 6l12 12"/></svg>拒绝';
+        rejectBtn.onclick = (e) => { e.stopPropagation(); setHunkState(currentHunk, 'rejected'); };
+
+        actions.appendChild(acceptBtn);
+        actions.appendChild(rejectBtn);
+        hunkContainer.appendChild(actions);
+      } else {
+        // Overwritten hunk: show label but no accept/reject
+        const actions = document.createElement('div');
+        actions.className = 'hunk-actions';
+        const info = document.createElement('span');
+        info.className = 'hunk-btn';
+        info.style.cursor = 'default';
+        info.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>已被覆盖';
+        actions.appendChild(info);
+        hunkContainer.appendChild(actions);
+      }
+
+      content.appendChild(hunkContainer);
+    }
+
+    // Render the line
+    const lineDiv = document.createElement('div');
+    lineDiv.className = 'fv-line ' + line.type;
+    const sign = line.type === 'add' ? '+' : line.type === 'del' ? '−' : ' ';
+    lineDiv.innerHTML = '<span class="sign">' + sign + '</span><span class="code">' + (line.code || '&nbsp;') + '</span>';
+
+    if (hunkContainer && line.hunk) {
+      hunkContainer.appendChild(lineDiv);
+    } else {
+      content.appendChild(lineDiv);
+    }
+
+    // Gutter
+    const ln = document.createElement('span');
+    ln.className = 'ln';
+    if (line.type === 'add') {
+      ln.textContent = line.newLn || '';
+    } else if (line.type === 'del') {
+      ln.textContent = line.oldLn || '';
+    } else {
+      ln.textContent = line.newLn || '';
+    }
+    gutter.appendChild(ln);
+  }
+
+  updateHunkCounter();
+  updateApplyButton();
+}
+
+function setHunkState(hunkId, state) {
+  hunkStates[hunkId] = state;
+  renderDiff();
+  // Scroll back to the hunk
+  setTimeout(() => {
+    const el = document.getElementById('hunk-' + hunkId);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, 50);
+}
+
+function updateHunkCounter() {
+  const pending = hunkIds.filter(id => hunkStates[id] === 'pending').length;
+  const accepted = hunkIds.filter(id => hunkStates[id] === 'accepted').length;
+  const rejected = hunkIds.filter(id => hunkStates[id] === 'rejected').length;
+  const counter = document.querySelector('.hunk-count');
+  if (counter) {
+    const parts = [];
+    if (accepted > 0) parts.push(`<span style="color:var(--c-ok)">${accepted} accepted</span>`);
+    if (rejected > 0) parts.push(`<span style="color:var(--c-err)">${rejected} rejected</span>`);
+    if (pending > 0) parts.push(`<span style="color:var(--fg-faint)">${pending} pending</span>`);
+    counter.innerHTML = parts.join(' · ') || 'all reviewed';
+  }
+}
+
+function updateApplyButton() {
+  const hasRejections = hunkIds.some(id => hunkStates[id] === 'rejected');
+  const applyBtn = document.getElementById('applyBtn');
+  if (hasRejections) {
+    applyBtn.classList.add('has-rejections');
+  } else {
+    applyBtn.classList.remove('has-rejections');
+  }
+
+  // Update hunk has-decision class
+  document.querySelectorAll('.hunk').forEach(el => {
+    const id = parseInt(el.dataset.hunkId);
+    if (hunkStates[id] && hunkStates[id] !== 'pending' && hunkStates[id] !== 'overwritten') {
+      el.classList.add('has-decision');
+    } else {
+      el.classList.remove('has-decision');
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+// Hunk navigation
+// ═══════════════════════════════════════════════════════════
+
+function navigateHunk(direction) {
+  const pendingHunks = hunkIds.filter(id => hunkStates[id] === 'pending');
+  if (pendingHunks.length === 0) {
+    // All reviewed, navigate to any hunk
+    if (direction > 0 && currentHunkIndex < hunkIds.length - 1) currentHunkIndex++;
+    else if (direction < 0 && currentHunkIndex > 0) currentHunkIndex--;
+  } else {
+    // Find next/prev pending hunk
+    const currentPos = hunkIds.indexOf(currentHunkIndex + 1) >= 0 ? hunkIds.indexOf(currentHunkIndex + 1) : 0;
+    // Simple: just go to next/prev hunk
+    if (direction > 0) currentHunkIndex = Math.min(currentHunkIndex + 1, hunkIds.length - 1);
+    else currentHunkIndex = Math.max(currentHunkIndex - 1, 0);
+  }
+
+  const hunkEl = document.getElementById('hunk-' + hunkIds[currentHunkIndex]);
+  if (hunkEl) {
+    hunkEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // Flash highlight
+    hunkEl.style.transition = 'box-shadow 0.3s';
+    hunkEl.style.boxShadow = '0 0 0 2px var(--border-bright)';
+    setTimeout(() => { hunkEl.style.boxShadow = ''; }, 600);
+  }
+}
+
+document.getElementById('nextHunkBtn').addEventListener('click', () => navigateHunk(1));
+document.getElementById('prevHunkBtn').addEventListener('click', () => navigateHunk(-1));
+
+// Keyboard navigation
+document.addEventListener('keydown', (e) => {
+  if (e.shiftKey && e.key === 'ArrowDown') {
+    e.preventDefault();
+    navigateHunk(1);
+  } else if (e.shiftKey && e.key === 'ArrowUp') {
+    e.preventDefault();
+    navigateHunk(-1);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════
+// Toolbar actions
+// ═══════════════════════════════════════════════════════════
+
+document.getElementById('acceptAllBtn').addEventListener('click', () => {
+  hunkIds.forEach(id => {
+    if (hunkStates[id] !== 'overwritten') hunkStates[id] = 'accepted';
+  });
+  renderDiff();
+});
+
+document.getElementById('rejectAllBtn').addEventListener('click', () => {
+  hunkIds.forEach(id => {
+    if (hunkStates[id] !== 'overwritten') hunkStates[id] = 'rejected';
+  });
+  renderDiff();
+});
+
+document.getElementById('applyBtn').addEventListener('click', () => {
+  const accepted = hunkIds.filter(id => hunkStates[id] === 'accepted').length;
+  const rejected = hunkIds.filter(id => hunkStates[id] === 'rejected').length;
+  const overwritten = hunkIds.filter(id => hunkStates[id] === 'overwritten').length;
+  const pending = hunkIds.filter(id => hunkStates[id] === 'pending').length;
+
+  const overlay = document.getElementById('overlay');
+  const title = document.getElementById('overlayTitle');
+  const desc = document.getElementById('overlayDesc');
+
+  if (pending > 0) {
+    title.textContent = '尚有未审阅的 hunk';
+    desc.textContent = `还有 ${pending} 个 hunk 待审阅，请先决定接受或拒绝`;
+  } else {
+    title.textContent = '改动已应用';
+    const parts = [];
+    if (accepted > 0) parts.push(`${accepted} 个 hunk 已接受`);
+    if (rejected > 0) parts.push(`${rejected} 个 hunk 已拒绝`);
+    if (overwritten > 0) parts.push(`${overwritten} 个 hunk 已被覆盖（自动接受）`);
+    desc.textContent = parts.join('，');
+  }
+  overlay.classList.add('show');
+});
+
+document.getElementById('nextFileBtn').addEventListener('click', () => {
+  const overlay = document.getElementById('overlay');
+  const title = document.getElementById('overlayTitle');
+  const desc = document.getElementById('overlayDesc');
+  title.textContent = '切换到下一个文件';
+  desc.textContent = '即将打开: src/renderer/src/stores/session.ts (2 hunks)';
+  overlay.classList.add('show');
+});
+
+function closeOverlay() {
+  document.getElementById('overlay').classList.remove('show');
+}
+
+// ═══════════════════════════════════════════════════════════
+// ToolCard interactions
+// ═══════════════════════════════════════════════════════════
+
+function toggleCard(cardId) {
+  const card = document.querySelector(`[data-card="${cardId}"]`);
+  if (card) card.classList.toggle('expanded');
+}
+
+function openInDiffReview(fileName) {
+  // In real app, this would call setSelectedFile + setActiveCenterTab
+  const overlay = document.getElementById('overlay');
+  const title = document.getElementById('overlayTitle');
+  const desc = document.getElementById('overlayDesc');
+  title.textContent = '在中栏打开 Diff Review';
+  desc.textContent = `文件: ${fileName}\n(原型演示 — 实际实现中将在中栏展示完整文件 diff)`;
+  overlay.classList.add('show');
+}
+
+// ═══════════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════════
+
+renderDiff();
+</script>
+
+</body>
+</html>
