@@ -4,7 +4,6 @@ compression: store
 npmRebuild: false
 nodeGypRebuild: false
 buildDependenciesFromSource: false
-electronDist: node_modules/electron/dist
 directories:
   output: dist
   buildResources: build
