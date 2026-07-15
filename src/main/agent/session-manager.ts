@@ -87,7 +87,7 @@ class SessionManagerImpl extends EventEmitter {
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
     // Set up SoC verification tools
-    const hostTools = new HostToolsRegistry(options.discovery);
+    const hostTools = new HostToolsRegistry(options.discovery, options.cwd);
     if (options.simulationAdapter) hostTools.setSimulationAdapter(options.simulationAdapter);
     if (options.coverageAdapter) hostTools.setCoverageAdapter(options.coverageAdapter);
 
