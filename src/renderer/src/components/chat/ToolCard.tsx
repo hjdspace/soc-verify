@@ -18,8 +18,9 @@
  * - host tools: specialized views for SoC verification
  * - fallback: generic JSON display
  */
-import { useState, useEffect, useMemo, type ReactNode } from 'react';
+import { useState, useEffect, useMemo, useCallback, type ReactNode } from 'react';
 import { Loader2, ChevronDown } from 'lucide-react';
+import { useDiffReviewStore } from '@renderer/stores/diff-review';
 import hljs from 'highlight.js';
 import { cn } from '@renderer/lib/utils';
 import type { ChatMessage } from '@renderer/stores/session';
@@ -85,10 +86,23 @@ function CodeHighlight({ code, language, className }: { code: string; language: 
 
 // ── Main ToolCard ───────────────────────────────────────
 
+const FILE_EDITING_TOOLS = new Set(['write', 'edit', 'apply_patch', 'ast_edit']);
+
 export function ToolCard({ message }: { message: ChatMessage }) {
   const [expanded, setExpanded] = useState(false);
   const isExecuting = !message.toolResult;
   const meta = getToolMeta(message.toolName);
+  const isFileTool = !isExecuting && FILE_EDITING_TOOLS.has(message.toolName ?? '');
+  const filePath = isFileTool
+    ? (argStr(message.toolArgs, 'path', 'file_path') ?? '')
+    : '';
+
+  const handleOpenDiffReview = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!filePath) return;
+    useDiffReviewStore.getState().refreshQueue();
+    useDiffReviewStore.getState().openFile(filePath);
+  }, [filePath]);
 
   const [, tick] = useState(0);
   useEffect(() => {
@@ -116,8 +130,7 @@ export function ToolCard({ message }: { message: ChatMessage }) {
         expanded && 'border-border',
       )}
     >
-      <button
-        onClick={() => setExpanded((e) => !e)}
+      <div
         className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left transition-colors hover:bg-secondary/40"
       >
         {isExecuting ? (
@@ -128,21 +141,37 @@ export function ToolCard({ message }: { message: ChatMessage }) {
         <span className={cn('shrink-0 text-[11px] font-semibold', meta.color)}>
           {meta.label}
         </span>
-        <span className="flex-1 min-w-0 truncate text-[11px] text-muted-foreground">
-          {summary}
-        </span>
+        {isFileTool && filePath ? (
+          <span
+            onClick={handleOpenDiffReview}
+            className="flex-1 min-w-0 truncate text-[11px] cursor-pointer text-blue-500 hover:text-blue-400 hover:underline"
+            title={`点击在 Diff Review 中打开: ${filePath}`}
+          >
+            {summary}
+          </span>
+        ) : (
+          <span className="flex-1 min-w-0 truncate text-[11px] text-muted-foreground">
+            {summary}
+          </span>
+        )}
         {duration != null && (
           <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70">
             {duration > 1000 ? `${(duration / 1000).toFixed(1)}s` : `${duration}ms`}
           </span>
         )}
-        <ChevronDown
-          className={cn(
-            'h-3 w-3 shrink-0 text-muted-foreground/60 transition-transform',
-            expanded && 'rotate-180',
-          )}
-        />
-      </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
+          className="flex shrink-0 items-center justify-center rounded p-0.5 transition-colors hover:bg-secondary/60"
+          title={expanded ? '折叠' : '展开'}
+        >
+          <ChevronDown
+            className={cn(
+              'h-3 w-3 text-muted-foreground/60 transition-transform',
+              expanded && 'rotate-180',
+            )}
+          />
+        </button>
+      </div>
 
       {expanded && (
         <div className="border-t border-border/40">
