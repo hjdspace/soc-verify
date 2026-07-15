@@ -67,13 +67,18 @@ function RunCard({ run }: { run: SimulationRunRecord }) {
   const handleViewTerminal = useCallback(() => {
     if (!run.terminalId) return;
     const existingTabId = getTabIdByTerminalId(run.terminalId);
+    let tabId: string;
     if (existingTabId) {
-      setActiveTab(existingTabId);
+      tabId = existingTabId;
     } else {
-      createTabForSession(run.terminalId, `sim: ${run.caseName ?? run.caseId}`, run.cwd);
+      tabId = createTabForSession(run.terminalId, `sim: ${run.caseName ?? run.caseId}`, run.cwd);
     }
-    // The CenterArea's useEffect on activeTerminalTabId will switch the view
-  }, [run.terminalId, run.caseName, run.caseId, run.cwd, getTabIdByTerminalId, setActiveTab, createTabForSession]);
+    // Directly set center view and active tab — don't rely on the useEffect
+    // in CenterArea (which won't fire if activeTabId hasn't changed).
+    setActiveTab(tabId);
+    setActiveCenterTab(`term:${tabId}`);
+    setCenterView('terminal');
+  }, [run.terminalId, run.caseName, run.caseId, run.cwd, getTabIdByTerminalId, setActiveTab, createTabForSession, setActiveCenterTab, setCenterView]);
 
   const handleAbort = useCallback(() => {
     if (run.terminalId) {
