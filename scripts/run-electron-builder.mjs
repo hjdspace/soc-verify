@@ -24,8 +24,13 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
-// Pass through all CLI arguments to electron-builder
-const args = process.argv.slice(2);
+// Pass through all CLI arguments to electron-builder.
+// In CI, default to --publish always so electron-builder uploads installer
+// assets to the GitHub Release using GH_TOKEN. Local runs remain publish-free.
+const userArgs = process.argv.slice(2);
+const args = (process.env.CI && !userArgs.some((a) => a.startsWith('--publish')))
+  ? ['--publish', 'always', ...userArgs]
+  : userArgs;
 
 // Build the env with system CA support
 const env = { ...process.env };

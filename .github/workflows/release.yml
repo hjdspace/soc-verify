@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*.*.*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -56,38 +57,77 @@ jobs:
 
       - name: Package desktop app
         run: npm run ${{ matrix.package_script }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Collect release assets
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p release-assets
-          cp "${{ matrix.runner_output }}" "release-assets/${{ matrix.runner_asset }}"
-          shopt -s nullglob
-          cp dist/*.exe release-assets/ 2>/dev/null || true
-          cp dist/*.AppImage release-assets/ 2>/dev/null || true
-          cp dist/*.blockmap release-assets/ 2>/dev/null || true
-          cp dist/*.yml release-assets/ 2>/dev/null || true
-
-      - name: Upload release assets
+      - name: Upload runner binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-${{ matrix.os }}
-          path: release-assets/*
-          if-no-files-found: error
+          name: runner-${{ matrix.os }}
+          path: ${{ matrix.runner_output }}
 
-  publish:
-    name: Publish GitHub Release
+  upload-runner-assets:
+    name: Upload runner binaries
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Download release assets
+      - name: Download runner artifacts
         uses: actions/download-artifact@v4
         with:
-          path: release-assets
+          path: runner-artifacts
           merge-multiple: true
 
+      - name: Upload runner binaries to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for f in runner-artifacts/*; do
+            [ -e "$f" ] || continue
+            gh release upload "${GITHUB_REF_NAME}" "$f" --clobber
+          done
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [build, upload-runner-assets]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Load release notes
+        id: release_notes
+        shell: bash
+        run: |
+          NOTES_FILE="release-notes/v${{ steps.version.outputs.value }}.md"
+          if [ ! -f "$NOTES_FILE" ]; then
+            echo "::warning::Missing release notes file: $NOTES_FILE, using empty notes"
+            echo "body=_" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo 'body<<__RELEASE_NOTES__'
+              cat "$NOTES_FILE"
+              echo
+              echo '__RELEASE_NOTES__'
+            } >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: release-assets/*
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release edit "${GITHUB_REF_NAME}" --draft=false --notes "${{ steps.release_notes.outputs.body }}"
+          echo "Release published with release notes."
