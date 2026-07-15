@@ -9,6 +9,7 @@ import { sessionManager } from './agent/session-manager';
 import { pluginLoader } from './plugins/loader';
 import { simulationRegistry } from './simulation/simulation-registry';
 import { simTerminalLinker } from './simulation/sim-terminal-linker';
+import { errorAnalysisCoordinator } from './simulation/error-analysis-coordinator';
 import { terminalManager } from './terminal/terminal-manager';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -148,6 +149,37 @@ function registerEventForwarding(win: BrowserWindow) {
       win.webContents.send('terminal:exit', { id, exitCode });
     }
   });
+
+  // Error analysis events (from ErrorAnalysisCoordinator)
+  errorAnalysisCoordinator.on('errorAnalysis:started', (data) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('errorAnalysis:event', { type: 'started', ...data });
+    }
+  });
+
+  errorAnalysisCoordinator.on('errorAnalysis:retrying', (data) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('errorAnalysis:event', { type: 'retrying', ...data });
+    }
+  });
+
+  errorAnalysisCoordinator.on('errorAnalysis:stopped', (data) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('errorAnalysis:event', { type: 'stopped', ...data });
+    }
+  });
+
+  errorAnalysisCoordinator.on('errorAnalysis:failed', (data) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('errorAnalysis:event', { type: 'failed', ...data });
+    }
+  });
+
+  errorAnalysisCoordinator.on('errorAnalysis:statusChanged', (data) => {
+    if (!win.isDestroyed()) {
+      win.webContents.send('errorAnalysis:event', { type: 'statusChanged', ...data });
+    }
+  });
 }
 
 app.whenReady().then(async () => {
@@ -161,6 +193,9 @@ app.whenReady().then(async () => {
   createIPCHandler({ router, windows: [mainWindow] });
   registerWindowControls(mainWindow);
   registerEventForwarding(mainWindow);
+
+  // Register error analysis coordinator to listen for simulation completions
+  errorAnalysisCoordinator.registerListeners();
 
   const agentRuntime = resolveAgentRuntime();
   if (agentRuntime) {
