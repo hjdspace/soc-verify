@@ -53,6 +53,18 @@ interface ContextMenuState {
   caseData: CaseData | null;
 }
 
+// ─── Case ID helpers ────────────────────────────────────
+
+/**
+ * 生成用例的唯一标识符。
+ *
+ * `path` 在同一 file group 下可能不唯一（多个 case 共享同一文件路径），
+ * 因此用 `path + name` 组合确保唯一性；如果 `id` 存在则优先使用。
+ */
+function getCaseId(caseData: CaseData): string {
+  return caseData.id ?? `${caseData.path}::${caseData.name}`;
+}
+
 // ─── Case Tree Types ─────────────────────────────────────
 
 interface CaseTreeNode {
@@ -240,7 +252,7 @@ function CaseTreeItem({
   }
 
   // Case node
-  const caseId = node.caseData?.path ?? node.name;
+  const caseId = node.caseData ? getCaseId(node.caseData) : node.name;
   const hasChildren = node.children.length > 0;
   const isExpanded = expandedCases.has(caseId);
   const isSelected = batchMode && selectedCases.has(caseId);
@@ -250,11 +262,13 @@ function CaseTreeItem({
     <div>
       <div
         className={cn(
-          'flex items-center gap-1 rounded py-0.5 text-xs text-muted-foreground transition-colors hover:bg-accent/50',
-          batchMode && 'cursor-pointer',
-          !batchMode && node.caseData && 'cursor-pointer',
-          isSelected && 'bg-primary/10',
-          isActiveCase && 'bg-primary/5',
+          'group relative flex items-center gap-1 rounded py-0.5 text-xs transition-colors',
+          isActiveCase
+            ? 'bg-primary/15 text-primary'
+            : isSelected
+              ? 'bg-primary/20 text-foreground'
+              : 'text-foreground/70 hover:bg-foreground/10',
+          (batchMode || (!batchMode && node.caseData)) && 'cursor-pointer',
         )}
         style={{ paddingLeft: `${paddingLeft}px` }}
         onClick={() => {
@@ -296,7 +310,14 @@ function CaseTreeItem({
         />
         <span className="truncate">{node.name}</span>
         {node.caseData?.baseCase && (
-          <span className="shrink-0 text-[9px] opacity-40">:{node.caseData.baseCase}</span>
+          <span
+            className={cn(
+              'shrink-0 text-[9px]',
+              isActiveCase ? 'opacity-60' : 'opacity-40',
+            )}
+          >
+            :{node.caseData.baseCase}
+          </span>
         )}
         {!batchMode && node.caseData && (
           <button
@@ -309,6 +330,9 @@ function CaseTreeItem({
           >
             <Play className="h-2.5 w-2.5 text-primary" />
           </button>
+        )}
+        {isActiveCase && (
+          <span className="absolute left-0 top-0 bottom-0 w-0.5 rounded-l bg-primary" />
         )}
       </div>
       {hasChildren &&
@@ -491,7 +515,7 @@ export function SubsysList() {
    *   3. Clear case-specific options (rundir, seed, etc.) but preserve base/block
    */
   const handleCaseSelect = (caseData: CaseData) => {
-    const caseId = caseData.path ?? caseData.name;
+    const caseId = getCaseId(caseData);
     setSelectedCaseId(caseId);
 
     // Auto-fill base/block/case from case data
@@ -553,7 +577,7 @@ export function SubsysList() {
     if (!currentProjectId || selectedCases.size === 0) return;
     const setActiveCenterTab = useUiStore.getState().setActiveCenterTab;
     for (const casePath of selectedCases) {
-      const caseData = cases.find((c) => c.path === casePath);
+      const caseData = cases.find((c) => getCaseId(c) === casePath);
       if (caseData) {
         // Auto-fill base/block/case from case data
         const runOpts = { ...simOptions };
@@ -571,7 +595,7 @@ export function SubsysList() {
     // Open the running cases panel to show all parallel simulations
     setActiveCenterTab('sim-running');
     // Update simOptions with the last case's base/block for UI display
-    const lastCase = cases.find((c) => c.path === Array.from(selectedCases).pop());
+    const lastCase = cases.find((c) => getCaseId(c) === Array.from(selectedCases).pop());
     if (lastCase) {
       if (lastCase.base) setSimOption('base', lastCase.base);
       if (lastCase.block) setSimOption('block', lastCase.block);
@@ -765,7 +789,7 @@ export function SubsysList() {
               ) : caseTree.length === 0 ? (
                 <div className="px-4 py-1 text-[10px] text-muted-foreground">无用例</div>
               ) : (
-                <div className="group">
+                <div>
                   {caseTree.map((node) => (
                     <CaseTreeItem
                       key={node.path || node.name}
