@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SoC Verify · 图标设计对比</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    background: #0A0A0A;
+    color: #E5E5E5;
+    padding: 40px 24px;
+    min-height: 100vh;
+  }
+  h1 {
+    font-size: 26px;
+    font-weight: 700;
+    margin-bottom: 6px;
+    color: #FFFFFF;
+  }
+  .subtitle { color: #737373; font-size: 14px; margin-bottom: 36px; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 20px;
+    max-width: 960px;
+  }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    background: #171717;
+    border: 1px solid #262626;
+    border-radius: 14px;
+    padding: 22px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .card h2 { font-size: 16px; font-weight: 600; margin-bottom: 4px; color: #FAFAFA; }
+  .card .desc { font-size: 12px; color: #737373; text-align: center; margin-bottom: 18px; line-height: 1.5; }
+
+  .icon-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 16px;
+    margin-bottom: 18px;
+  }
+  .icon-cell { text-align: center; }
+  .icon-cell svg { display: block; }
+  .icon-cell .size { font-size: 10px; color: #525252; margin-top: 5px; }
+
+  .icon-128 { width: 128px; height: 128px; border-radius: 28px; overflow: hidden; }
+  .icon-64  { width: 64px;  height: 64px;  border-radius: 14px; overflow: hidden; }
+  .icon-32  { width: 32px;  height: 32px;  border-radius: 7px;  overflow: hidden; }
+  .icon-16  { width: 16px;  height: 16px;  border-radius: 4px;  overflow: hidden; image-rendering: pixelated; }
+
+  .tags { display: flex; gap: 5px; flex-wrap: wrap; justify-content: center; }
+  .tag {
+    font-size: 10px;
+    padding: 3px 9px;
+    border-radius: 10px;
+    background: #262626;
+    color: #A3A3A3;
+  }
+  .tag.recommend { background: #052E16; color: #4ADE80; }
+  .tag.tray { background: #1E1B4B; color: #A5B4FC; }
+</style>
+</head>
+<body>
+  <h1>SoC Verify 图标方案</h1>
+  <p class="subtitle">极简风格 · 黑底白线 · 芯片/SoC 主题 · 3 个方案</p>
+
+  <div class="grid">
+    <!-- Variant 1: Chip Top View -->
+    <div class="card">
+      <h2>方案 A · 芯片俯视</h2>
+      <p class="desc">die 轮廓 + 四周引脚 + 十字总线 + 中心节点，最经典的芯片图标语言</p>
+      <div class="icon-row">
+        <div class="icon-cell">
+          <div class="icon-128">
+            <img src="../../build/icons/variant-1-chip-top.svg" width="128" height="128" style="width:128px;height:128px"/>
+          </div>
+          <div class="size">128</div>
+        </div>
+        <div class="icon-cell">
+          <div class="icon-64">
+            <img src="../../build/icons/variant-1-chip-top.svg" width="64" height="64" style="width:64px;height:64px"/>
+          </div>
+          <div class="size">64</div>
+        </div>
+        <div class="icon-cell">
+          <div class="icon-32">
+            <img src="../../build/icons/variant-1-chip-top.svg" width="32" height="32" style="width:32px;height:32px"/>
+          </div>
+          <div class="size">32</div>
+        </div>
+        <div class="icon-cell">
+          <div class="icon-16">
+            <img src="../../build/icons/variant-1-chip-top.svg" width="16" height="16" style="width:16px;height:16px"/>
+          </div>
+          <div class="size">16</div>
+        </div>
+      </div>
+      <div class="tags">
+        <span class="tag recommend">推荐主图标</span>
+        <span class="tag">桌面/安装</span>
+      </div>
+    </div>
+
+    <!-- Variant 2: IP Matrix -->
+    <div class="card">
+      <h2>方案 B · IP 矩阵</h2>
+      <p class="desc">2×2 IP 核分区 + 中心总线节点，每象限用不同几何符号区分 IP 类型</p>
+      <div class="icon-row">
+        <div class="icon-cell">
+          <div class="icon-128">
+            <img src="../../build/icons/variant-2-ip-matrix.svg" width="128" height="128" style="width:128px;height:128px"/>
+          </div>
+          <div class="size">128</div>
+        </div>
+        <div class="icon-cell">
+          <div class="icon-64">
+            <img src="../../build/icons/variant-2-ip-matrix.svg" width="64" height="64" style="width:64px;height:64px"/>
+          </div>
+          <div class="size">64</div>
+        </div>
+        <div class="icon-cell">
+          <div class="icon-32">
+            <img src="../../build/icons/variant-2-ip-matrix.svg" width="32" height="32" style="width:32px;height:32px"/>
+          </div>
+          <div class="size">32</div>
+        </div>
+        <div class="icon-cell">
+          <div class="icon-16">
+            <img src="../../build/icons/variant-2-ip-matrix.svg" width="16" height="16" style="width:16px;height:16px"/>
+          </div>
+          <div class="size">16</div>
+        </div>
+      </div>
+      <div class="tags">
+        <span class="tag recommend">推荐主图标</span>
+        <span class="tag">SoC 语义强</span>
+      </div>
+    </div>
+
+    <!-- Variant 3: Die + Text -->
+    <div class="card">
+      <h2>方案 C · 芯片 + SoC</h2>
+      <p class="desc">die 轮廓 + 引脚 + 内部 "SoC" 文字标识，品牌识别度最高</p>
+      <div class="icon-row">
+        <div class="icon-cell">
+          <div class="icon-128">
+            <img src="../../build/icons/variant-3-die-text.svg" width="128" height="128" style="width:128px;height:128px"/>
+          </div>
+          <div class="size">128</div>
+        </div>
+        <div class="icon-cell">
+          <div class="icon-64">
+            <img src="../../build/icons/variant-3-die-text.svg" width="64" height="64" style="width:64px;height:64px"/>
+          </div>
+          <div class="size">64</div>
+        </div>
+        <div class="icon-cell">
+          <div class="icon-32">
+            <img src="../../build/icons/variant-3-die-text.svg" width="32" height="32" style="width:32px;height:32px"/>
+          </div>
+          <div class="size">32</div>
+        </div>
+        <div class="icon-cell">
+          <div class="icon-16">
+            <img src="../../build/icons/variant-3-die-text.svg" width="16" height="16" style="width:16px;height:16px"/>
+          </div>
+          <div class="size">16</div>
+        </div>
+      </div>
+      <div class="tags">
+        <span class="tag">品牌识别</span>
+        <span class="tag tray">大尺寸佳</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

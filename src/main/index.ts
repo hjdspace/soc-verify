@@ -1,6 +1,7 @@
-import { app, BrowserWindow, shell, ipcMain } from 'electron';
+import { app, BrowserWindow, shell, ipcMain, Tray, Menu, nativeImage } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { createIPCHandler } from './ipc/electron-trpc-bridge';
 import { router } from './ipc/router';
 import { resolveAgentRuntime } from './agent/paths';
@@ -15,6 +16,62 @@ import { terminalManager } from './terminal/terminal-manager';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let mainWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
+let isQuitting = false;
+
+/** Resolve tray icon path: prefers build/icons PNG, falls back to icon.ico */
+function resolveTrayIcon(): string {
+  const png32 = join(__dirname, '../../build/icons/32x32.png');
+  const png16 = join(__dirname, '../../build/icons/16x16.png');
+  const ico = join(__dirname, '../../build/icon.ico');
+  if (existsSync(png32)) return png32;
+  if (existsSync(png16)) return png16;
+  return ico;
+}
+
+/** Create system tray with context menu */
+function createTray(win: BrowserWindow): Tray {
+  const iconPath = resolveTrayIcon();
+  const image = nativeImage.createFromPath(iconPath);
+  const t = new Tray(image);
+  t.setToolTip('SoC Verify');
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: '显示窗口',
+      click: () => {
+        win.show();
+        win.focus();
+      }
+    },
+    {
+      label: '隐藏窗口',
+      click: () => win.hide()
+    },
+    { type: 'separator' },
+    {
+      label: '退出',
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      }
+    }
+  ]);
+
+  t.setContextMenu(contextMenu);
+
+  // Click toggles window visibility
+  t.on('click', () => {
+    if (win.isVisible() && win.isFocused()) {
+      win.hide();
+    } else {
+      win.show();
+      win.focus();
+    }
+  });
+
+  return t;
+}
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -35,6 +92,14 @@ function createWindow(): BrowserWindow {
   });
 
   win.on('ready-to-show', () => win.show());
+
+  // Minimize to tray instead of quitting (unless explicit quit)
+  win.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault();
+      win.hide();
+    }
+  });
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
@@ -194,6 +259,9 @@ app.whenReady().then(async () => {
   registerWindowControls(mainWindow);
   registerEventForwarding(mainWindow);
 
+  // Create system tray
+  tray = createTray(mainWindow);
+
   // Register error analysis coordinator to listen for simulation completions
   errorAnalysisCoordinator.registerListeners();
 
@@ -210,21 +278,28 @@ app.whenReady().then(async () => {
   } else {
     console.warn('[agent] runtime not found. Run `npm run setup:agent` to download the agent binary.');
   }
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      mainWindow = createWindow();
-      registerWindowControls(mainWindow);
-      registerEventForwarding(mainWindow);
-    }
-  });
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  // With tray: keep app running (window is hidden, not closed)
+  // On macOS this is the default behavior
+});
+
+app.on('activate', () => {
+  if (BrowserWindow.getAllWindows().length === 0) {
+    mainWindow = createWindow();
+    registerWindowControls(mainWindow);
+    registerEventForwarding(mainWindow);
+  } else {
+    mainWindow?.show();
+    mainWindow?.focus();
+  }
 });
 
 app.on('before-quit', async () => {
+  // Destroy tray before quitting
+  tray?.destroy();
+  tray = null;
   // Save project state before quitting
   await projectManager.saveProjectsDb();
   projectManager.destroy();

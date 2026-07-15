@@ -10,6 +10,7 @@ directories:
 files:
   - out/**/*
   - package.json
+  - build/icons/**/*
 extraResources:
   - from: plugins
     to: plugins
@@ -26,6 +27,7 @@ win:
   target:
     - nsis
   artifactName: ${productName}-${version}-${arch}.${ext}
+  icon: build/icon.ico
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
@@ -33,7 +35,9 @@ mac:
   target:
     - dmg
   category: public.app-category.developer-tools
+  icon: build/icon.icns
 linux:
   target:
     - AppImage
   category: Development
+  icon: build/icons/
