@@ -1286,12 +1286,13 @@ export const router = t.router({
         // 写入仿真命令到终端：
         //   - 若 $PROJ_WORK 环境变量已定义，先执行 cd "$PROJ_WORK" 切换到项目工作目录
         //   - 若未定义，终端已在 resolveCwd 返回的 cwd 中，直接执行 runsim 命令
-        //   - 追加 '; exit' 使 shell 在 runsim 结束后退出，触发终端 exit 事件以判定 pass/fail
+        //   - 追加 '; echo "__SIM_DONE__$?__"' 作为完成标记（不执行 exit，shell 保持存活）
+        //     simTerminalLinker 监听终端输出，检测到标记后判定 pass/fail
         //   - 使用 \r（回车）而非 \n 作为 PTY 的 Enter 键
         const projWork = process.env.PROJ_WORK;
         const cdPrefix = projWork ? `cd "${projWork}" && ` : '';
         const displayCommand = `${cdPrefix}${command}`;
-        const execCommand = `${displayCommand}; exit`;
+        const execCommand = `${displayCommand}; echo "__SIM_DONE__$?__"`;
         terminalManager.write(session.id, `${execCommand}\r`);
 
         // 注册仿真-终端关联（监听终端退出 → 判定 pass/fail）
@@ -1412,6 +1413,23 @@ export const router = t.router({
     list: t.procedure.query(() => {
       return terminalManager.list();
     }),
+
+    /**
+     * Get the buffered output for a terminal session.
+     * Used by TerminalView to restore output when the component is remounted
+     * (e.g., switching tabs and switching back).
+     */
+    getOutputBuffer: t.procedure
+      .input((raw): { terminalId: string } => {
+        const r = raw as Record<string, unknown>;
+        if (typeof r.terminalId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'terminalId is required' });
+        }
+        return { terminalId: r.terminalId };
+      })
+      .query(({ input }) => {
+        return terminalManager.getOutputBuffer(input.terminalId);
+      }),
   }),
 
    // ─── 环境配置 ──────────────────────────────────────────────
