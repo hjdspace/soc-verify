@@ -83,3 +83,29 @@ _Avoid_: attempt count, iteration count
 **Error Analysis Prompt**:
 发送给 AI Agent 的初始消息，包含错误上下文、用例信息、修复指令。编译错误版本要求 AI 修复代码并调用 runsim_retry；仿真错误版本要求 AI 给出建议但不修改文件。
 _Avoid_: fix prompt, debug message
+
+### Diff Review 域
+
+**Diff Review**:
+用户审阅 AI Agent 通过 WRITE/EDIT 工具产生的代码改动的流程。用户可接受（保留改动）或拒绝（撤销改动）每个改动块。审阅在中栏 `DiffReviewView` 中进行，展示完整文件内容并高亮修改部分。
+_Avoid_: code review, change review
+
+**Hunk**:
+Diff 中连续的 add/del 行块，是接受/拒绝的最小单元。一个 EDIT 工具调用（oldText→newText）可能产生多个 hunk。WRITE 工具创建的新文件整体为一个 hunk。
+_Avoid_: diff block, change block
+
+**Before Reconstruction**:
+通过逆序撤销所有 tool call 的 newText→oldText 来重建文件修改前状态的过程。用于在 `DiffReviewView` 中计算完整文件 diff。如果某个 newText 已被后续编辑覆盖，该 hunk 标记为不可拒绝。
+_Avoid_: reverse patch, undo reconstruction
+
+**Review Queue**:
+全局的待审阅文件改动队列，跨所有会话汇总。按文件路径聚合——同一文件的多次 EDIT/WRITE 调用合并为一个 review 条目。
+_Avoid_: change list, pending changes
+
+**Delayed Batch Apply**:
+用户在 DiffReviewView 中逐个勾选 hunk 的接受/拒绝状态，点击「应用」或跳转下个文件时，后端一次性应用所有拒绝（将拒绝的 hunk 的 new 部分替换回 old 部分）。
+_Avoid_: instant apply, live apply
+
+**Overwritten Hunk**:
+因后续编辑覆盖而无法在当前文件中定位到 newText 的 hunk。标记为不可拒绝，但仍可接受。
+_Avoid_: stale hunk, conflicted hunk
