@@ -24,10 +24,10 @@ class MockDiscovery implements SubsysDiscovery {
 }
 
 describe('HostToolsRegistry', () => {
-  it('registers 7 default tools', () => {
+  it('registers 8 default tools', () => {
     const registry = new HostToolsRegistry();
     const names = registry.getToolNames();
-    expect(names).toHaveLength(7);
+    expect(names).toHaveLength(8);
     expect(names).toContain('list_subsys');
     expect(names).toContain('list_cases');
     expect(names).toContain('get_sim_options_schema');
@@ -35,12 +35,13 @@ describe('HostToolsRegistry', () => {
     expect(names).toContain('get_run_status');
     expect(names).toContain('get_compile_errors');
     expect(names).toContain('get_coverage');
+    expect(names).toContain('read_file');
   });
 
   it('getDefinitions returns all tool definitions', () => {
     const registry = new HostToolsRegistry();
     const defs = registry.getDefinitions();
-    expect(defs).toHaveLength(7);
+    expect(defs).toHaveLength(8);
     for (const def of defs) {
       expect(def.name).toBeDefined();
       expect(def.description).toBeDefined();
@@ -58,14 +59,14 @@ describe('HostToolsRegistry', () => {
     const registry = new HostToolsRegistry();
     registry.registerCustom('custom_tool', 'A custom tool', { type: 'object' }, async () => 'ok');
     expect(registry.hasTool('custom_tool')).toBe(true);
-    expect(registry.getToolNames()).toHaveLength(8);
+    expect(registry.getToolNames()).toHaveLength(9);
   });
 
   it('unregister removes a tool', () => {
     const registry = new HostToolsRegistry();
     expect(registry.unregister('list_subsys')).toBe(true);
     expect(registry.hasTool('list_subsys')).toBe(false);
-    expect(registry.getToolNames()).toHaveLength(6);
+    expect(registry.getToolNames()).toHaveLength(7);
   });
 
   it('unregister returns false for nonexistent tool', () => {
