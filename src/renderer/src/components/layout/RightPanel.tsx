@@ -5,6 +5,7 @@ import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
 import { ToolCard } from '@renderer/components/chat/ToolCard';
+import { ThinkingBlock } from '@renderer/components/chat/ThinkingBlock';
 import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
 
@@ -876,13 +877,20 @@ function MessageBubble({ message }: { message: ChatMessage }) {
     );
   }
 
-  // Assistant messages: render directly without bubble wrapper
+  // Assistant messages: render thinking block + content
   return (
     <div className="flex flex-col gap-0.5">
+      {message.thinking && (
+        <ThinkingBlock
+          thinking={message.thinking}
+          isStreaming={!!message.isStreaming}
+          hasContent={!!message.content}
+        />
+      )}
       {message.content ? (
         <MarkdownRenderer content={message.content} />
       ) : (
-        message.isStreaming && (
+        message.isStreaming && !message.thinking && (
           <div className="flex items-center gap-1 text-muted-foreground">
             <Loader2 className="h-3 w-3 animate-spin" />
             <span className="text-[10px]">思考中...</span>
