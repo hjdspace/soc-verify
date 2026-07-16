@@ -85,3 +85,36 @@ export function buildOpenAICompatibleModelsConfig({
     },
   } as const;
 }
+
+type ModelInputOverrideOptions = {
+  provider: string;
+  modelId: string;
+};
+
+/**
+ * Build a models.json that patches the `input` field of a catalog model via
+ * `modelOverrides`, leaving all other catalog properties (api, baseUrl, cost,
+ * contextWindow, ...) intact.
+ *
+ * Used for built-in providers (e.g. "openai", "anthropic", "google") where
+ * the user supplies only an API key (no baseUrl). Without this override,
+ * omp's vision-guard silently replaces images with a placeholder text when
+ * the catalog marks the model as text-only — even when the model actually
+ * supports vision.
+ */
+export function buildModelInputOverrideConfig({
+  provider,
+  modelId,
+}: ModelInputOverrideOptions) {
+  return {
+    providers: {
+      [provider]: {
+        modelOverrides: {
+          [modelId]: {
+            input: ['text', 'image'],
+          },
+        },
+      },
+    },
+  } as const;
+}
