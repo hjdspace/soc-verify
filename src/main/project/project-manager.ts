@@ -1,8 +1,12 @@
 import { EventEmitter } from 'node:events';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { readdir, stat, mkdir, readFile, writeFile, access } from 'node:fs/promises';
 import { existsSync, watch as fsWatch, type FSWatcher as NodeFSWatcher } from 'node:fs';
 import { join, basename, relative, extname } from 'node:path';
 import { app } from 'electron';
+
+const execFileAsync = promisify(execFile);
 import type {
   ProjectInfo,
   ProjectState,
@@ -151,8 +155,57 @@ class ProjectManagerImpl extends EventEmitter {
     if (cached) return cached;
 
     const tree = await this.buildFileTree(entry.info.rootPath, 0);
+
+    // Mark git-ignored files/directories so the UI can dim them (VS Code style).
+    const ignoredPaths = await this.getGitIgnoredPaths(entry.info.rootPath);
+    if (ignoredPaths.size > 0) {
+      this.markGitIgnored(tree, ignoredPaths, false);
+    }
+
     this.fileTreeCache.set(projectId, tree);
     return tree;
+  }
+
+  /**
+   * Run `git ls-files --ignored` once to get the set of ignored paths.
+   * Returns an empty set when the project is not a git repo or git is unavailable.
+   * Paths are normalised to absolute, OS-native form (matching FileTreeNode.path).
+   */
+  private async getGitIgnoredPaths(rootPath: string): Promise<Set<string>> {
+    try {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['-C', rootPath, 'ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'],
+        { cwd: rootPath, maxBuffer: 10 * 1024 * 1024 },
+      );
+
+      const ignored = new Set<string>();
+      for (const raw of stdout.split('\0')) {
+        if (!raw) continue;
+        // `--directory` emits trailing '/' for directories; strip it so join() works.
+        const clean = raw.replace(/\/$/, '');
+        if (clean) ignored.add(join(rootPath, clean));
+      }
+      return ignored;
+    } catch {
+      // Not a git repo or git not installed — no git-ignore info available.
+      return new Set();
+    }
+  }
+
+  /**
+   * Walk the file tree and set `gitIgnored` on every node.
+   * If a parent directory is ignored, all descendants inherit the flag.
+   */
+  private markGitIgnored(node: FileTreeNode, ignoredPaths: Set<string>, parentIgnored: boolean): void {
+    if (parentIgnored || ignoredPaths.has(node.path)) {
+      node.gitIgnored = true;
+    }
+    if (node.children) {
+      for (const child of node.children) {
+        this.markGitIgnored(child, ignoredPaths, node.gitIgnored ?? false);
+      }
+    }
   }
 
   private async buildFileTree(dirPath: string, depth: number): Promise<FileTreeNode> {
