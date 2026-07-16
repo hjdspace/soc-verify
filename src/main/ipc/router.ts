@@ -797,7 +797,7 @@ export const router = t.router({
       .mutation(async ({ input }) => {
         const client = requireSession(input.sessionId);
         sessionManager.touchActivity(input.sessionId);
-        console.log(`[router:session.send] sessionId=${input.sessionId}, message=${input.message.slice(0, 80)}${input.message.length > 80 ? '...' : ''}`);
+        console.log(`[router:session.send] sessionId=${input.sessionId}, message=${input.message.slice(0, 80)}${input.message.length > 80 ? '...' : ''}${input.images ? `, images=${input.images.length}` : ''}`);
         // Update persisted lastActivityAt
         const sendSessionEntry = sessionManager.getSession(input.sessionId);
         if (sendSessionEntry) {
