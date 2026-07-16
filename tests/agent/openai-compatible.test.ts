@@ -41,4 +41,15 @@ describe('OpenAI-compatible Agent configuration', () => {
     });
     expect(JSON.stringify(config)).not.toContain('test-secret');
   });
+
+  it('configures the model with text+image input so screenshots are not silently dropped', () => {
+    const config = buildOpenAICompatibleModelsConfig({
+      baseUrl: 'https://gateway.example/v1',
+      modelId: 'vision-model',
+      apiKeyEnvVar: 'SOCVERIFY_AGENT_API_KEY',
+    });
+
+    const model = config.providers['socverify-openai-compatible'].models[0];
+    expect(model.input).toEqual(['text', 'image']);
+  });
 });
