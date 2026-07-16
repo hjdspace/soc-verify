@@ -74,6 +74,12 @@ export function buildOpenAICompatibleModelsConfig({
           supportsTools: true,
           contextWindow: 128000,
           maxTokens: 8192,
+          // Default to text+image so screenshots and pasted images are sent
+          // to the LLM as multimodal content. Without "image" in the input
+          // list, omp silently replaces images with a placeholder text
+          // ("[image omitted: model does not support vision]"), causing the
+          // LLM to respond as if no image was attached.
+          input: ['text', 'image'],
         }],
       },
     },
