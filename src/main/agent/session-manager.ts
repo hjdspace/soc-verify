@@ -7,6 +7,7 @@ import { AgentClient, type ToolCallHandler } from './agent-client';
 import { resolveAgentRuntime, resolveRunnerBinary } from './paths';
 import type { CustomToolDefinition, InitConfig } from './types';
 import {
+  buildModelInputOverrideConfig,
   buildOpenAICompatibleModelsConfig,
   fetchOpenAICompatibleModels,
   OPENAI_COMPATIBLE_API_KEY_ENV,
@@ -145,6 +146,17 @@ class SessionManagerImpl extends EventEmitter {
       env.XDG_STATE_HOME = join(runtimeDir, 'state');
       env[OPENAI_COMPATIBLE_API_KEY_ENV] = options.apiKey;
       provider = OPENAI_COMPATIBLE_PROVIDER;
+    } else if (provider && model) {
+      // Built-in provider path (e.g. user supplied only an API key, no baseUrl).
+      // Write a models.json with modelOverrides so omp's vision-guard does not
+      // silently drop images when the internal catalog marks the model as
+      // text-only.  Only the `input` field is patched; all other catalog
+      // properties (api, cost, contextWindow, ...) remain intact.
+      runtimeDir = await mkdtemp(join(tmpdir(), 'socverify-agent-'));
+      const modelsConfig = buildModelInputOverrideConfig({ provider, modelId: model });
+      await writeFile(join(runtimeDir, 'models.json'), JSON.stringify(modelsConfig), 'utf-8');
+      env.PI_CODING_AGENT_DIR = runtimeDir;
+      env.XDG_STATE_HOME = join(runtimeDir, 'state');
     }
 
     // Ensure ~/.omp/natives/ exists so the omp engine's native-addon search
