@@ -33,18 +33,32 @@ interface FileTreeItemProps {
 }
 
 const FileTreeItem = memo(function FileTreeItem({ node, depth, onSelectFile, selected }: FileTreeItemProps) {
+  const handleDragStart = useCallback((e: React.DragEvent) => {
+    e.dataTransfer.setData('application/json', JSON.stringify({
+      path: node.path,
+      name: node.name,
+      type: 'file' as const,
+    }));
+    e.dataTransfer.effectAllowed = 'copy';
+  }, [node.path, node.name]);
+
   return (
     <button
+      draggable
+      onDragStart={handleDragStart}
       onClick={() => onSelectFile(node.path, node.name)}
       className={cn(
         'flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-xs transition-colors',
         'hover:bg-accent',
-        selected && 'bg-accent/60 text-accent-foreground',
-        !selected && 'text-muted-foreground',
+        selected
+          ? 'bg-accent/60 text-accent-foreground'
+          : node.gitIgnored
+            ? 'text-muted-foreground'
+            : 'text-foreground',
       )}
       style={{ paddingLeft: `${depth * 12 + 4}px` }}
     >
-      <File className="h-3 w-3 shrink-0 opacity-50" />
+      <File className={cn('h-3 w-3 shrink-0', node.gitIgnored ? 'opacity-50' : 'opacity-70')} />
       <span className="truncate">{node.name}</span>
     </button>
   );
@@ -67,11 +81,25 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
 
   const toggle = useCallback(() => setExpanded((e) => !e), []);
 
+  const handleDragStart = useCallback((e: React.DragEvent) => {
+    e.dataTransfer.setData('application/json', JSON.stringify({
+      path: node.path,
+      name: node.name,
+      type: 'directory' as const,
+    }));
+    e.dataTransfer.effectAllowed = 'copy';
+  }, [node.path, node.name]);
+
   return (
     <div>
       <button
+        draggable
+        onDragStart={handleDragStart}
         onClick={toggle}
-        className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-xs transition-colors hover:bg-accent"
+        className={cn(
+          'flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-xs transition-colors hover:bg-accent',
+          node.gitIgnored && 'text-muted-foreground',
+        )}
         style={{ paddingLeft: `${depth * 12 + 4}px` }}
       >
         {expanded ? (
