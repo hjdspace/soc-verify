@@ -17,6 +17,8 @@ export interface ChatMessage {
   toolEndTime?: number;
   images?: string[];
   isStreaming?: boolean;
+  /** LLM thinking/reasoning content, separated from the main response text. */
+  thinking?: string;
 }
 
 export interface AvailableModel {
@@ -135,33 +137,36 @@ function sessionMatchesId(session: SessionEntry, sessionId: string): boolean {
 }
 
 /**
- * Extract text from an agent message object.
+ * Extract text and thinking content separately from an agent message object.
  *
  * agent message events (message_start, message_update, message_end) carry a
  * `message` field which is an AssistantMessage with a `content` array of
  * content blocks. TextContent blocks have `{ type: "text", text: "..." }`.
  * ThinkingContent blocks have `{ type: "thinking", thinking: "..." }`.
  *
- * This function concatenates all text and thinking blocks into a single string.
+ * Returns text and thinking as separate strings so the UI can render them
+ * in distinct sections (collapsible thinking block + main response).
  */
-function extractTextFromMessage(message: unknown): string {
-  if (typeof message !== 'object' || message === null) return '';
+type ExtractedContent = { text: string; thinking: string };
+
+function extractTextFromMessage(message: unknown): ExtractedContent {
+  if (typeof message !== 'object' || message === null) return { text: '', thinking: '' };
   const msg = message as Record<string, unknown>;
   const content = msg.content;
-  if (!Array.isArray(content)) return '';
+  if (!Array.isArray(content)) return { text: '', thinking: '' };
 
-  const parts: string[] = [];
+  const textParts: string[] = [];
+  const thinkingParts: string[] = [];
   for (const block of content) {
     if (typeof block !== 'object' || block === null) continue;
     const b = block as Record<string, unknown>;
     if (b.type === 'text' && typeof b.text === 'string') {
-      parts.push(b.text);
+      textParts.push(b.text);
     } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
-      // Optionally include thinking content — prefixed for clarity
-      parts.push(`[思考] ${b.thinking}`);
+      thinkingParts.push(b.thinking);
     }
   }
-  return parts.join('\n');
+  return { text: textParts.join('\n'), thinking: thinkingParts.join('\n') };
 }
 
 /**
@@ -558,8 +563,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
           case 'message_start': {
             const message = evt.message as Record<string, unknown> | undefined;
             if (message?.role && message.role !== 'assistant') return sess;
-            // Extract initial text from message.content if available
-            const text = extractTextFromMessage(message);
+            // Extract text and thinking separately from message.content
+            const { text: startText, thinking: startThinking } = extractTextFromMessage(message);
             // Check if there's already a streaming assistant message
             const hasStreaming = sess.messages.some((m) => m.role === 'assistant' && m.isStreaming);
             if (hasStreaming) {
@@ -567,8 +572,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
                 ...sess,
                 status: 'streaming',
                 messages: sess.messages.map((m) =>
-                  m.role === 'assistant' && m.isStreaming && text
-                    ? { ...m, content: text }
+                  m.role === 'assistant' && m.isStreaming && (startText || startThinking)
+                    ? { ...m, content: startText, thinking: startThinking || m.thinking }
                     : m,
                 ),
               };
@@ -578,7 +583,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             const newMsg: ChatMessage = {
               id: `msg_${Date.now()}`,
               role: 'assistant',
-              content: text,
+              content: startText,
+              thinking: startThinking || undefined,
               timestamp: Date.now(),
               isStreaming: true,
             };
@@ -593,10 +599,11 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             const message = evt.message as Record<string, unknown> | undefined;
             if (message?.role && message.role !== 'assistant') return sess;
             // agent message_update events contain a full message snapshot, not a delta string.
-            // The message.content array has TextContent blocks with accumulated text.
+            // The message.content array has TextContent blocks with accumulated text
+            // and ThinkingContent blocks with accumulated thinking.
             // We replace (not append) the assistant message content with the latest snapshot.
-            const text = extractTextFromMessage(message);
-            if (!text) return sess;
+            const { text: updateText, thinking: updateThinking } = extractTextFromMessage(message);
+            if (!updateText && !updateThinking) return sess;
             // Find the last streaming assistant message
             let lastAssistantIdx = -1;
             for (let i = sess.messages.length - 1; i >= 0; i--) {
@@ -610,19 +617,19 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
               ...sess,
               messages: sess.messages.map((m, i) =>
                 i === lastAssistantIdx
-                  ? { ...m, content: text }
+                  ? { ...m, content: updateText, thinking: updateThinking || m.thinking }
                   : m,
               ),
             };
           }
 
           case 'message_end': {
-            // Extract final text from message.content — this is the authoritative
-            // source for the assistant's response, especially when there are no
-            // message_update events (non-streaming or empty streaming responses).
+            // Extract final text and thinking from message.content — this is the
+            // authoritative source for the assistant's response, especially when
+            // there are no message_update events (non-streaming or empty streaming).
             const msg = evt.message as Record<string, unknown> | undefined;
             if (msg?.role && msg.role !== 'assistant') return sess;
-            const text = extractTextFromMessage(msg);
+            const { text: endText, thinking: endThinking } = extractTextFromMessage(msg);
             const errMsg = msg ? extractErrorFromMessage(msg) : null;
             // Do NOT set status to 'idle' here — the agent may still be working
             // (e.g. multiple messages, tool calls). Only 'agent_end' sets idle.
@@ -634,7 +641,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
                 return {
                   ...m,
                   isStreaming: false,
-                  content: errMsg ? `[错误] ${errMsg}` : (text || m.content),
+                  content: errMsg ? `[错误] ${errMsg}` : (endText || m.content),
+                  thinking: endThinking || m.thinking,
                 };
               }),
             };
@@ -834,24 +842,30 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   },
 
   setModel: async (sessionId, provider, modelId, modelName) => {
-    try {
-      const runtimeSessionId = await ensureRuntimeSession(sessionId, set, get);
-      await trpc.session.setModel.mutate({ sessionId: runtimeSessionId, provider, modelId, modelName });
-      const model: SessionModel = { provider, id: modelId, name: modelName ?? modelId };
-      // Persist to localStorage so new sessions and app restarts reuse this model
-      localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(model));
-      set((s) => ({
-        lastModel: model,
-        sessions: s.sessions.map((sess) =>
-          sessionMatchesId(sess, sessionId)
-            ? { ...sess, model }
-            : sess,
-        ),
-      }));
-      useToastStore.getState().success('模型已切换');
-    } catch (err) {
-      useToastStore.getState().error('切换模型失败', tRPCError(err));
-    }
+    const model: SessionModel = { provider, id: modelId, name: modelName ?? modelId };
+
+    // 1. Optimistically update UI immediately — store + localStorage are synchronous
+    localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(model));
+    set((s) => ({
+      lastModel: model,
+      sessions: s.sessions.map((sess) =>
+        sessionMatchesId(sess, sessionId)
+          ? { ...sess, model }
+          : sess,
+      ),
+    }));
+
+    // 2. Fire backend model switch in the background (non-blocking).
+    //    If the runtime session doesn't exist yet, the model will be applied
+    //    when the session is created (ensureRuntimeSession passes model info).
+    void (async () => {
+      try {
+        const runtimeSessionId = await ensureRuntimeSession(sessionId, set, get);
+        await trpc.session.setModel.mutate({ sessionId: runtimeSessionId, provider, modelId, modelName });
+      } catch (err) {
+        useToastStore.getState().error('切换模型失败', tRPCError(err));
+      }
+    })();
   },
 
   addSkill: (skill) => set((s) => {
