@@ -1,9 +1,10 @@
 import { EventEmitter } from 'node:events';
+import { existsSync, mkdirSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { AgentClient, type ToolCallHandler } from './agent-client';
-import { resolveAgentRuntime } from './paths';
+import { resolveAgentRuntime, resolveRunnerBinary } from './paths';
 import type { CustomToolDefinition, InitConfig } from './types';
 import {
   buildOpenAICompatibleModelsConfig,
@@ -144,6 +145,24 @@ class SessionManagerImpl extends EventEmitter {
       env.XDG_STATE_HOME = join(runtimeDir, 'state');
       env[OPENAI_COMPATIBLE_API_KEY_ENV] = options.apiKey;
       provider = OPENAI_COMPATIBLE_PROVIDER;
+    }
+
+    // Ensure ~/.omp/natives/ exists so the omp engine's native-addon search
+    // doesn't fail with "open dir error: No such file or directory" on first run.
+    try {
+      const ompNativesDir = join(homedir(), '.omp', 'natives');
+      if (!existsSync(ompNativesDir)) {
+        mkdirSync(ompNativesDir, { recursive: true });
+      }
+    } catch {
+      // Best-effort: the runner also searches the binaries directory.
+    }
+
+    // Tell the runner where to find pi_natives.*.node so it doesn't have to
+    // search ~/.omp/natives/<version>/ (which may not exist).
+    const runnerBinary = resolveRunnerBinary();
+    if (runnerBinary) {
+      env.OMP_NATIVES_DIR = dirname(runnerBinary);
     }
 
     // Build init config
