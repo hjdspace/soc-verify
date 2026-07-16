@@ -31,6 +31,13 @@
 
 import { createInterface } from "node:readline";
 
+// Declare Bun global for TypeScript (only env property is used in this file)
+declare global {
+	const Bun: {
+		readonly env: Record<string, string | undefined>;
+	} | undefined;
+}
+
 // ─── Types ──────────────────────────────────────────────
 
 interface InitConfig {
@@ -276,7 +283,27 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 
 async function handlePrompt(cmd: Command & { type: "prompt" }): Promise<void> {
 	if (!session) throw new Error("Session not initialized");
-	await session.prompt(cmd.message);
+
+	// Convert image strings to ImageContent objects expected by the SDK.
+	// Images arrive as full data URLs (data:image/png;base64,...) so we can
+	// recover the MIME type.  Raw base64 strings fall back to image/png.
+	let images: Array<{ type: "image"; data: string; mimeType: string }> | undefined;
+	if (cmd.images?.length) {
+		console.error(`[socverify-runner] Processing ${cmd.images.length} image(s)`);
+		images = cmd.images.map((img, idx) => {
+			const match = img.match(/^data:([^;]+);base64,(.+)$/);
+			if (match) {
+				const imageObj = { type: "image" as const, data: match[2], mimeType: match[1] };
+				console.error(`[socverify-runner] Image ${idx + 1}: mimeType=${imageObj.mimeType}, dataLength=${imageObj.data.length}`);
+				return imageObj;
+			}
+			console.error(`[socverify-runner] Image ${idx + 1}: Invalid data URL format, using fallback`);
+			return { type: "image" as const, data: img, mimeType: "image/png" };
+		});
+	}
+
+	console.error(`[socverify-runner] Calling session.prompt with ${images?.length ?? 0} image(s)`);
+	await session.prompt(cmd.message, images ? { images } : undefined);
 	sendResponse(cmd.id, true, { ok: true });
 }
 
