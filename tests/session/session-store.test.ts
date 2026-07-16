@@ -299,6 +299,85 @@ describe('SessionStore — event handling and state machine', () => {
     expect(assistantMsg.content).toContain('API key invalid');
   });
 
+  it('separates thinking content from text content in message events', async () => {
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    await useSessionStore.getState().sendMessage('What model are you?');
+
+    // message_start with thinking content only
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_start',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'thinking', thinking: 'The user is asking what model I am.' }],
+      },
+    });
+
+    let session = useSessionStore.getState().sessions[0];
+    let assistantMsg = session.messages[1];
+    expect(assistantMsg.content).toBe('');
+    expect(assistantMsg.thinking).toBe('The user is asking what model I am.');
+    expect(assistantMsg.isStreaming).toBe(true);
+
+    // message_update with both thinking and text
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_update',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'The user is asking what model I am. I should respond briefly.' },
+          { type: 'text', text: 'I am' },
+        ],
+      },
+    });
+
+    session = useSessionStore.getState().sessions[0];
+    assistantMsg = session.messages[1];
+    expect(assistantMsg.thinking).toBe('The user is asking what model I am. I should respond briefly.');
+    expect(assistantMsg.content).toBe('I am');
+
+    // message_end with final content
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'The user is asking what model I am. I should respond briefly.' },
+          { type: 'text', text: 'I am Agnes-2.0-Flash, by Sapiens AI.' },
+        ],
+        stopReason: 'stop',
+      },
+    });
+
+    session = useSessionStore.getState().sessions[0];
+    assistantMsg = session.messages[1];
+    expect(assistantMsg.isStreaming).toBe(false);
+    expect(assistantMsg.thinking).toBe('The user is asking what model I am. I should respond briefly.');
+    expect(assistantMsg.content).toBe('I am Agnes-2.0-Flash, by Sapiens AI.');
+  });
+
+  it('does not include [思考] prefix in content when thinking blocks are present', async () => {
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    await useSessionStore.getState().sendMessage('Hello');
+
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'Internal reasoning here' },
+          { type: 'text', text: 'Visible response' },
+        ],
+        stopReason: 'stop',
+      },
+    });
+
+    const assistantMsg = useSessionStore.getState().sessions[0].messages[1];
+    // Content should NOT contain the [思考] prefix — thinking is stored separately
+    expect(assistantMsg.content).not.toContain('[思考]');
+    expect(assistantMsg.content).toBe('Visible response');
+    expect(assistantMsg.thinking).toBe('Internal reasoning here');
+  });
+
   it('handles tool_execution_start by adding a tool message', async () => {
     const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
 
