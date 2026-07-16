@@ -43,6 +43,7 @@ export function RightPanel({ width }: RightPanelProps) {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [steerText, setSteerText] = useState('');
   const [showSteerInput, setShowSteerInput] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
 
   // Skill & context state
   const [availableSkills, setAvailableSkills] = useState<SelectedSkill[]>([]);
@@ -133,8 +134,11 @@ export function RightPanel({ width }: RightPanelProps) {
 
   const handleSend = async () => {
     if (!inputMessage.trim()) return;
-    await sendMessage(inputMessage, attachedImages.length > 0 ? attachedImages : undefined);
+    // Capture and clear images immediately so the preview disappears without
+    // waiting for the async sendMessage to resolve.
+    const images = attachedImages.length > 0 ? attachedImages : undefined;
     setAttachedImages([]);
+    await sendMessage(inputMessage, images);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -237,8 +241,9 @@ export function RightPanel({ width }: RightPanelProps) {
       reader.onload = () => {
         const result = reader.result;
         if (typeof result === 'string') {
-          const base64 = result.split(',')[1];
-          if (base64) newImages.push(base64);
+          // Store the full data URL (data:image/png;base64,...) so the
+          // correct MIME type is preserved for rendering.
+          newImages.push(result);
         }
         if (newImages.length === files.length) {
           setAttachedImages((prev) => [...prev, ...newImages]);
@@ -251,6 +256,63 @@ export function RightPanel({ width }: RightPanelProps) {
 
   const removeImage = (idx: number) => {
     setAttachedImages((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  // ── Drag-and-drop: accept files/folders dragged from the file tree ──
+  const handleDragOver = (e: React.DragEvent) => {
+    // Only accept drags that carry our JSON payload (from the file tree)
+    if (!e.dataTransfer.types.includes('application/json')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    const related = e.relatedTarget as Node | null;
+    if (!related || !e.currentTarget.contains(related)) {
+      setIsDragOver(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    const data = e.dataTransfer.getData('application/json');
+    if (!data) return;
+    e.preventDefault();
+    setIsDragOver(false);
+    try {
+      const file = JSON.parse(data) as ContextFile;
+      addContextFile(file);
+    } catch {
+      // Invalid drag payload — ignore silently
+    }
+  };
+
+  // ── Paste images via Ctrl-V ───────────────────────────────────
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    const imageItems = Array.from(items).filter(
+      (item) => item.type.startsWith('image/'),
+    );
+
+    if (imageItems.length === 0) return; // Let normal text paste proceed
+
+    e.preventDefault();
+
+    for (const item of imageItems) {
+      const file = item.getAsFile();
+      if (!file) continue;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result;
+        if (typeof result === 'string') {
+          // Store the full data URL (data:image/png;base64,...)
+          setAttachedImages((prev) => [...prev, result]);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const handleLoadModels = useCallback(async () => {
@@ -594,7 +656,7 @@ export function RightPanel({ width }: RightPanelProps) {
             {attachedImages.map((img, idx) => (
               <div key={idx} className="relative">
                 <img
-                  src={`data:image/png;base64,${img}`}
+                  src={img}
                   alt={`attachment-${idx}`}
                   className="h-12 w-12 rounded border border-border object-cover"
                 />
@@ -618,7 +680,15 @@ export function RightPanel({ width }: RightPanelProps) {
           className="hidden"
         />
 
-        <div className="flex flex-col gap-1.5 rounded-md border border-border bg-background p-2 relative">
+        <div
+          className={cn(
+            'flex flex-col gap-1.5 rounded-md border border-border bg-background p-2 relative transition-colors',
+            isDragOver && 'border-primary/50 ring-2 ring-primary/30',
+          )}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
           {/* ── Chips: Skills & Context Files ─────────────── */}
           {(selectedSkills.length > 0 || contextFiles.length > 0) && (
             <div className="flex flex-wrap gap-1 pb-1">
@@ -763,6 +833,7 @@ export function RightPanel({ width }: RightPanelProps) {
             value={inputMessage}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             placeholder={currentSessionId ? '输入消息... (\"/" 加载技能, "@" 添加上下文)' : '请先创建会话'}
             disabled={!currentSessionId || isCurrentSessionCreating}
             rows={3}
@@ -860,20 +931,54 @@ export function RightPanel({ width }: RightPanelProps) {
 // ── 消息渲染组件 ───────────────────────────────────────
 
 function MessageBubble({ message }: { message: ChatMessage }) {
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+
   if (message.role === 'tool') {
     return <ToolCard message={message} />;
   }
 
   const isUser = message.role === 'user';
 
-  // User messages: right-aligned bubble
+  // Helper: normalise image src — handle both full data URLs (new) and
+  // raw base64 strings (legacy persisted messages).
+  const imgSrc = (img: string): string =>
+    img.startsWith('data:') ? img : `data:image/png;base64,${img}`;
+
+  // User messages: right-aligned bubble with optional images
   if (isUser) {
     return (
-      <div className="flex flex-col items-end gap-0.5">
-        <div className="max-w-[85%] rounded-lg bg-primary/15 px-2.5 py-1.5 text-xs">
-          <div className="whitespace-pre-wrap break-words">{message.content}</div>
+      <>
+        <div className="flex flex-col items-end gap-0.5">
+          <div className="max-w-[85%] rounded-lg bg-primary/15 px-2.5 py-1.5 text-xs">
+            {message.images && message.images.length > 0 && (
+              <div className="mb-1.5 flex flex-wrap gap-1">
+                {message.images.map((img, idx) => (
+                  <img
+                    key={idx}
+                    src={imgSrc(img)}
+                    alt={`image-${idx}`}
+                    className="max-h-32 max-w-[200px] cursor-pointer rounded border border-border/50 object-cover transition-opacity hover:opacity-80"
+                    onClick={() => setLightboxSrc(imgSrc(img))}
+                  />
+                ))}
+              </div>
+            )}
+            <div className="whitespace-pre-wrap break-words">{message.content}</div>
+          </div>
         </div>
-      </div>
+        {lightboxSrc && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+            onClick={() => setLightboxSrc(null)}
+          >
+            <img
+              src={lightboxSrc}
+              alt="full-size"
+              className="max-h-full max-w-full rounded-lg object-contain"
+            />
+          </div>
+        )}
+      </>
     );
   }
 
