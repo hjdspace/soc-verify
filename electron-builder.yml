@@ -22,6 +22,7 @@ extraResources:
   # This eliminates the need to bundle the entire engine source + node_modules.
 asarUnpack:
   - resources/binaries/**
+  - node_modules/node-pty/**
 win:
   target:
     - nsis
