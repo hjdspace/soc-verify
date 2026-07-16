@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  buildModelInputOverrideConfig,
   buildOpenAICompatibleModelsConfig,
   fetchOpenAICompatibleModels,
 } from '../../src/main/agent/openai-compatible';
@@ -51,5 +52,50 @@ describe('OpenAI-compatible Agent configuration', () => {
 
     const model = config.providers['socverify-openai-compatible'].models[0];
     expect(model.input).toEqual(['text', 'image']);
+  });
+});
+
+describe('buildModelInputOverrideConfig', () => {
+  it('patches only the input field via modelOverrides for a built-in provider', () => {
+    const config = buildModelInputOverrideConfig({
+      provider: 'anthropic',
+      modelId: 'claude-sonnet-4-5',
+    });
+
+    expect(config).toEqual({
+      providers: {
+        anthropic: {
+          modelOverrides: {
+            'claude-sonnet-4-5': {
+              input: ['text', 'image'],
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it('does not redefine the provider (no baseUrl/api/models keys)', () => {
+    const config = buildModelInputOverrideConfig({
+      provider: 'openai',
+      modelId: 'gpt-4o',
+    });
+
+    const providerEntry = config.providers.openai;
+    expect(providerEntry).toHaveProperty('modelOverrides');
+    expect(providerEntry).not.toHaveProperty('models');
+    expect(providerEntry).not.toHaveProperty('baseUrl');
+    expect(providerEntry).not.toHaveProperty('api');
+    expect(providerEntry).not.toHaveProperty('apiKey');
+  });
+
+  it('forces input to include image so vision-guard keeps images', () => {
+    const config = buildModelInputOverrideConfig({
+      provider: 'google',
+      modelId: 'gemini-2.0-flash',
+    });
+
+    const override = config.providers.google.modelOverrides['gemini-2.0-flash'];
+    expect(override.input).toEqual(['text', 'image']);
   });
 });
