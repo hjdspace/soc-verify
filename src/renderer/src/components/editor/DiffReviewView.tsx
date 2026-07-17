@@ -5,7 +5,7 @@
  * 底部有「全部接受」「应用」「全部拒绝」「下个文件」导航。
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Check, X, ChevronDown, ChevronUp, ArrowRight, Loader2, GitCompare } from 'lucide-react';
 import { useDiffReviewStore, type ReviewEntry } from '@renderer/stores/diff-review';
 import { useProjectStore } from '@renderer/stores/project';
@@ -14,6 +14,63 @@ import hljs from 'highlight.js';
 import { detectLanguage } from '@renderer/components/chat/tool-helpers';
 import { cn } from '@renderer/lib/utils';
 import type { DiffLine, DiffHunkInfo } from '@shared/types';
+
+// ─── Visible-line computation ──────────────────────────────
+
+/**
+ * 一行在 UI 上的渲染形态。
+ * - `type` 是数据层的原始类型（来自 diff 引擎）。
+ * - `displayType` 是 UI 层的展示类型，受 hunk 接受/拒绝状态影响：
+ *   - accepted hunk 的 add 行 → 显示为普通 ctx 行（绿底消失）
+ *   - rejected hunk 的 del 行 → 显示为普通 ctx 行（红底消失）
+ *   - accepted hunk 的 del 行 → 隐藏（displayType='hidden'）
+ *   - rejected hunk 的 add 行 → 隐藏（displayType='hidden'）
+ */
+interface VisibleLine extends DiffLine {
+  displayType: 'ctx' | 'add' | 'del' | 'hidden';
+}
+
+/**
+ * 根据 hunk 接受/拒绝状态计算每一行的可见性和展示类型。
+ * 调用方需根据 displayType==='hidden' 过滤掉对应行后再渲染，
+ * 这样 gutter 和 content 共享同一份行列表，行号始终对齐。
+ */
+function computeVisibleLines(
+  lines: DiffLine[],
+  hunks: DiffHunkInfo[],
+  filePath: string,
+  hunkStates: Record<string, string>,
+): VisibleLine[] {
+  // 预建 hunk id → hunk 的索引，避免每行都 find
+  const hunkMap = new Map<number, DiffHunkInfo>();
+  for (const h of hunks) hunkMap.set(h.id, h);
+
+  return lines.map((line) => {
+    // 不在任何 hunk 中的行（上下文行）原样展示
+    if (line.hunkId == null) {
+      return { ...line, displayType: line.type };
+    }
+    const hunk = hunkMap.get(line.hunkId);
+    // 没有 hunk 信息或被覆盖的 hunk 原样展示
+    if (!hunk || hunk.overwritten) {
+      return { ...line, displayType: line.type };
+    }
+    const state = hunkStates[`${filePath}:${hunk.id}`] ?? 'pending';
+    if (state === 'accepted') {
+      // 接受 = 保留改动：隐藏删除行，新增行作为普通代码展示
+      if (line.type === 'del') return { ...line, displayType: 'hidden' };
+      if (line.type === 'add') return { ...line, displayType: 'ctx' };
+      return { ...line, displayType: 'ctx' };
+    }
+    if (state === 'rejected') {
+      // 拒绝 = 撤销改动：隐藏新增行，删除行作为普通代码展示
+      if (line.type === 'add') return { ...line, displayType: 'hidden' };
+      if (line.type === 'del') return { ...line, displayType: 'ctx' };
+      return { ...line, displayType: 'ctx' };
+    }
+    return { ...line, displayType: line.type };
+  });
+}
 
 // ─── Syntax highlighting ────────────────────────────────────
 
@@ -85,6 +142,20 @@ export function DiffReviewView({ entry }: DiffReviewViewProps) {
     ? diffData.hunks.some((h) => hunkStates[`${entry.filePath}:${h.id}`] === 'rejected')
     : false;
 
+  // 根据 hunkStates 计算可见行：accepted hunk 隐藏 del 行（保留改动），
+  // rejected hunk 隐藏 add 行（撤销改动）。gutter 与 content 共享同一份
+  // visibleLines，行号始终对齐。
+  //
+  // 注意：useMemo 必须在所有 early return 之前无条件调用，否则违反
+  // React Hooks 规则会导致白屏。diffData 为 null 时返回空数组。
+  const visibleLines = useMemo(
+    () =>
+      diffData
+        ? computeVisibleLines(diffData.lines, diffData.hunks, entry.filePath, hunkStates)
+        : [],
+    [diffData, entry.filePath, hunkStates],
+  );
+
   // Hunk navigation
   const navigateHunk = useCallback((direction: number) => {
     if (!diffData) return;
@@ -144,7 +215,6 @@ export function DiffReviewView({ entry }: DiffReviewViewProps) {
 
   // Group diff lines by hunk for rendering
   const hunks = diffData.hunks;
-  const lines = diffData.lines;
 
   return (
     <div className="flex h-full flex-1 flex-col overflow-hidden">
@@ -182,17 +252,18 @@ export function DiffReviewView({ entry }: DiffReviewViewProps) {
       <div ref={containerRef} className="flex min-h-0 flex-1 overflow-auto font-mono text-[12px] leading-[1.55]">
         {/* Line number gutter */}
         <div className="sticky left-0 z-10 shrink-0 select-none border-r border-border/40 bg-secondary/20 text-right">
-          {lines.map((line, i) => (
+          {visibleLines.map((line, i) => (
             <div
               key={i}
               className={cn(
                 'px-2 py-0 text-[11px] tabular-nums',
-                line.type === 'add' && 'bg-green-500/5 text-green-600/60 dark:text-green-500/40',
-                line.type === 'del' && 'bg-red-500/5 text-red-600/60 dark:text-red-500/40',
-                line.type === 'ctx' && 'text-muted-foreground/30',
+                line.displayType === 'add' && 'bg-green-500/5 text-green-600/60 dark:text-green-500/40',
+                line.displayType === 'del' && 'bg-red-500/5 text-red-600/60 dark:text-red-500/40',
+                line.displayType === 'ctx' && 'text-muted-foreground/30',
               )}
               style={{ minHeight: '1.55em', minWidth: '44px' }}
             >
+              {/* 用原始 type 决定显示哪个行号，这样接受/拒绝后行号仍然准确 */}
               {line.type === 'add' ? (line.newLine ?? '') : line.type === 'del' ? (line.oldLine ?? '') : (line.oldLine ?? '')}
             </div>
           ))}
@@ -200,7 +271,7 @@ export function DiffReviewView({ entry }: DiffReviewViewProps) {
 
         {/* File content with diff */}
         <div className="flex-1 overflow-x-auto py-0">
-          {renderLines(lines, hunks, entry, hunkStates, setHunkState, language, hunkRefs)}
+          {renderLines(visibleLines, hunks, entry, hunkStates, setHunkState, language, hunkRefs)}
         </div>
       </div>
 
@@ -269,7 +340,7 @@ export function DiffReviewView({ entry }: DiffReviewViewProps) {
 // ─── Line rendering ─────────────────────────────────────────
 
 function renderLines(
-  lines: DiffLine[],
+  lines: VisibleLine[],
   hunks: DiffHunkInfo[],
   entry: ReviewEntry,
   hunkStates: Record<string, string>,
@@ -280,11 +351,15 @@ function renderLines(
   const result: React.ReactNode[] = [];
   let currentHunkId: number | undefined;
   let hunkLines: React.ReactNode[] = [];
+  // 跟踪当前 hunk 是否还有可见行；如果整段都被隐藏（极端情况），
+  // 我们仍然要渲染 hunk 容器，但里面不塞内容，避免出现空 action 按钮。
+  let hunkHasVisible = false;
 
   function flushHunk() {
     if (currentHunkId == null || hunkLines.length === 0) {
       result.push(...hunkLines);
       hunkLines = [];
+      hunkHasVisible = false;
       return;
     }
 
@@ -292,6 +367,7 @@ function renderLines(
     if (!hunk) {
       result.push(...hunkLines);
       hunkLines = [];
+      hunkHasVisible = false;
       return;
     }
 
@@ -315,7 +391,7 @@ function renderLines(
         )}
       >
         {/* Hunk action buttons */}
-        {!isOverwritten && (
+        {!isOverwritten && hunkHasVisible && (
           <div
             className={cn(
               'absolute right-2 top-0.5 z-10 flex gap-1 transition-opacity',
@@ -360,6 +436,7 @@ function renderLines(
     );
 
     hunkLines = [];
+    hunkHasVisible = false;
   }
 
   for (let i = 0; i < lines.length; i++) {
@@ -371,7 +448,13 @@ function renderLines(
       currentHunkId = line.hunkId;
     }
 
-    const sign = line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' ';
+    // 跳过隐藏行：accepted hunk 的 del 行、rejected hunk 的 add 行
+    if (line.displayType === 'hidden') continue;
+    hunkHasVisible = true;
+
+    // 用 displayType 决定视觉样式：原 add/del 行在 accept/reject 后渲染为普通 ctx
+    const displayType = line.displayType;
+    const sign = displayType === 'add' ? '+' : displayType === 'del' ? '-' : ' ';
     const html = highlightCode(line.content || '\u00A0', language);
 
     const lineEl = (
@@ -379,16 +462,16 @@ function renderLines(
         key={i}
         className={cn(
           'flex',
-          line.type === 'add' && 'bg-green-500/10',
-          line.type === 'del' && 'bg-red-500/10',
+          displayType === 'add' && 'bg-green-500/10',
+          displayType === 'del' && 'bg-red-500/10',
         )}
       >
         <span
           className={cn(
             'w-5 shrink-0 select-none text-center',
-            line.type === 'add' && 'text-green-500',
-            line.type === 'del' && 'text-red-500',
-            line.type === 'ctx' && 'text-transparent',
+            displayType === 'add' && 'text-green-500',
+            displayType === 'del' && 'text-red-500',
+            displayType === 'ctx' && 'text-transparent',
           )}
         >
           {sign}
@@ -396,9 +479,9 @@ function renderLines(
         <span
           className={cn(
             'flex-1 overflow-x-auto px-2 py-0',
-            line.type === 'add' && 'text-green-700 dark:text-green-300/90',
-            line.type === 'del' && 'text-red-700/80 dark:text-red-300/70',
-            line.type === 'ctx' && 'text-muted-foreground',
+            displayType === 'add' && 'text-green-700 dark:text-green-300/90',
+            displayType === 'del' && 'text-red-700/80 dark:text-red-300/70',
+            displayType === 'ctx' && 'text-muted-foreground',
           )}
           dangerouslySetInnerHTML={{ __html: html }}
         />
