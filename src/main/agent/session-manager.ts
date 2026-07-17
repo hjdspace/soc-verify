@@ -21,6 +21,83 @@ import { HostUriRouter } from '../host/host-uris';
 const MAX_CONCURRENT_SESSIONS = 10;
 const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
+// High-frequency streaming events excluded from the terminal log to avoid
+// flooding the console — content is still emitted via the 'sessionEvent' stream.
+const SILENT_EVENT_TYPES = new Set(['message_update', 'message_chunk', 'message_delta']);
+
+// Maximum length of content snippets printed to the terminal log. Full content
+// remains available via the 'sessionEvent' stream consumed by the renderer.
+const LOG_SNIPPET_LEN = 200;
+
+/**
+ * Build a single-line debug summary for an agent event, extracting the most
+ * useful payload (LLM text, tool args/result, errors). Returns an empty string
+ * for events with no useful payload — callers should skip logging in that case.
+ */
+function summarizeEvent(event: unknown): string {
+  if (typeof event !== 'object' || event === null) return '';
+  const evt = event as Record<string, unknown>;
+  const type = typeof evt.type === 'string' ? evt.type : 'unknown';
+  const snippet = (s: string, n = LOG_SNIPPET_LEN): string =>
+    s.length > n ? `${s.slice(0, n)}…(+${s.length - n} chars)` : s;
+
+  switch (type) {
+    case 'message_start':
+    case 'message_end': {
+      const msg = evt.message as Record<string, unknown> | undefined;
+      if (!msg) return '';
+      const role = typeof msg.role === 'string' ? msg.role : '?';
+      // content may be a string or an array of content blocks
+      let text = '';
+      const content = msg.content;
+      if (typeof content === 'string') {
+        text = content;
+      } else if (Array.isArray(content)) {
+        const parts: string[] = [];
+        for (const block of content) {
+          if (typeof block !== 'object' || block === null) continue;
+          const b = block as Record<string, unknown>;
+          if (b.type === 'text' && typeof b.text === 'string') parts.push(b.text);
+          else if (b.type === 'thinking' && typeof b.thinking === 'string') {
+            parts.push(`[thinking] ${b.thinking}`);
+          }
+        }
+        text = parts.join('\n');
+      }
+      const errMsg = typeof msg.errorMessage === 'string' ? msg.errorMessage : '';
+      if (errMsg) return `role=${role} ERROR=${snippet(errMsg)}`;
+      if (text) return `role=${role} text=${snippet(text)}`;
+      return `role=${role}`;
+    }
+    case 'tool_execution_start': {
+      const toolName = typeof evt.toolName === 'string' ? evt.toolName : '?';
+      let argsStr = '';
+      try {
+        argsStr = evt.args === undefined ? '' : JSON.stringify(evt.args);
+      } catch {
+        argsStr = String(evt.args);
+      }
+      return `tool=${toolName} args=${snippet(argsStr)}`;
+    }
+    case 'tool_execution_end': {
+      const toolName = typeof evt.toolName === 'string' ? evt.toolName : '?';
+      let resultStr = '';
+      try {
+        resultStr = evt.result === undefined ? '' : JSON.stringify(evt.result);
+      } catch {
+        resultStr = String(evt.result);
+      }
+      return `tool=${toolName} result=${snippet(resultStr)}`;
+    }
+    case 'notice': {
+      const text = typeof evt.text === 'string' ? evt.text : (typeof evt.message === 'string' ? evt.message : '');
+      return text ? snippet(text) : '';
+    }
+    default:
+      return '';
+  }
+}
+
 export interface CreateSessionOptions {
   projectId: string;
   cwd: string;
@@ -141,7 +218,14 @@ class SessionManagerImpl extends EventEmitter {
         modelId: model,
         apiKeyEnvVar: OPENAI_COMPATIBLE_API_KEY_ENV,
       });
-      await writeFile(join(runtimeDir, 'models.json'), JSON.stringify(modelsConfig), 'utf-8');
+      const modelsJson = JSON.stringify(modelsConfig);
+      // Write both models.json (legacy) and models.yml (preferred by ConfigFile).
+      // JSON is valid YAML (YAML is a superset of JSON), so the ConfigFile's
+      // YAML parser will read it correctly without any migration step.
+      await writeFile(join(runtimeDir, 'models.json'), modelsJson, 'utf-8');
+      await writeFile(join(runtimeDir, 'models.yml'), modelsJson, 'utf-8');
+      console.log(`[agent:session:${sessionId}] models config: ${modelsJson.slice(0, 500)}`);
+      console.log(`[agent:session:${sessionId}] runtimeDir: ${runtimeDir}`);
       env.PI_CODING_AGENT_DIR = runtimeDir;
       env.XDG_STATE_HOME = join(runtimeDir, 'state');
       env[OPENAI_COMPATIBLE_API_KEY_ENV] = options.apiKey;
@@ -154,7 +238,10 @@ class SessionManagerImpl extends EventEmitter {
       // properties (api, cost, contextWindow, ...) remain intact.
       runtimeDir = await mkdtemp(join(tmpdir(), 'socverify-agent-'));
       const modelsConfig = buildModelInputOverrideConfig({ provider, modelId: model });
-      await writeFile(join(runtimeDir, 'models.json'), JSON.stringify(modelsConfig), 'utf-8');
+      const modelsJson = JSON.stringify(modelsConfig);
+      await writeFile(join(runtimeDir, 'models.json'), modelsJson, 'utf-8');
+      await writeFile(join(runtimeDir, 'models.yml'), modelsJson, 'utf-8');
+      console.log(`[agent:session:${sessionId}] models.yml (override): ${modelsJson.slice(0, 500)}`);
       env.PI_CODING_AGENT_DIR = runtimeDir;
       env.XDG_STATE_HOME = join(runtimeDir, 'state');
     }
@@ -210,9 +297,17 @@ class SessionManagerImpl extends EventEmitter {
     client.setToolCallHandler(toolCallHandler);
 
     // Forward events
+    // High-frequency streaming events (message_update/chunk/delta) are excluded
+    // from the terminal log to avoid flooding; other events print a one-line
+    // summary with the most useful payload (LLM text, tool args/result, errors).
     client.onEvent((event) => {
-      const evtType = (event as Record<string, unknown>)?.type;
-      console.log(`[agent:session:${sessionId}] event type="${evtType}"`);
+      const evtType = (event as Record<string, unknown>)?.type as string | undefined;
+      if (!SILENT_EVENT_TYPES.has(evtType ?? '')) {
+        const summary = summarizeEvent(event);
+        console.log(
+          `[agent:session:${sessionId}] event type="${evtType}"${summary ? ` ${summary}` : ''}`,
+        );
+      }
       this.emit('sessionEvent', { sessionId, event } satisfies SessionEventData);
     });
 
