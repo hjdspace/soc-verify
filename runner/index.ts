@@ -294,20 +294,15 @@ async function handlePrompt(cmd: Command & { type: "prompt" }): Promise<void> {
 	// recover the MIME type.  Raw base64 strings fall back to image/png.
 	let images: Array<{ type: "image"; data: string; mimeType: string }> | undefined;
 	if (cmd.images?.length) {
-		console.error(`[socverify-runner] Processing ${cmd.images.length} image(s)`);
-		images = cmd.images.map((img, idx) => {
+		images = cmd.images.map((img) => {
 			const match = img.match(/^data:([^;]+);base64,(.+)$/);
 			if (match) {
-				const imageObj = { type: "image" as const, data: match[2], mimeType: match[1] };
-				console.error(`[socverify-runner] Image ${idx + 1}: mimeType=${imageObj.mimeType}, dataLength=${imageObj.data.length}`);
-				return imageObj;
+				return { type: "image" as const, data: match[2], mimeType: match[1] };
 			}
-			console.error(`[socverify-runner] Image ${idx + 1}: Invalid data URL format, using fallback`);
 			return { type: "image" as const, data: img, mimeType: "image/png" };
 		});
 	}
 
-	console.error(`[socverify-runner] Calling session.prompt with ${images?.length ?? 0} image(s)`);
 	await session.prompt(cmd.message, images ? { images } : undefined);
 	sendResponse(cmd.id, true, { ok: true });
 }
