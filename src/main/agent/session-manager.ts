@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { AgentClient, type ToolCallHandler } from './agent-client';
-import { resolveAgentRuntime, resolveRunnerBinary } from './paths';
+import { resolveAgentRuntime, resolveBuiltInExtensionDir, resolveRunnerBinary } from './paths';
 import type { CustomToolDefinition, InitConfig } from './types';
 import {
   buildModelInputOverrideConfig,
@@ -265,6 +265,15 @@ class SessionManagerImpl extends EventEmitter {
     }
 
     // Build init config
+    const additionalExtensionPaths: string[] = [];
+    const builtInExtDir = resolveBuiltInExtensionDir();
+    if (builtInExtDir) {
+      additionalExtensionPaths.push(builtInExtDir);
+      console.log(`[agent:session:${sessionId}] built-in extension dir: ${builtInExtDir}`);
+    } else {
+      console.warn(`[agent:session:${sessionId}] built-in extension dir not found — built-in skills/agents will not be loaded`);
+    }
+
     const initConfig: InitConfig = {
       cwd: options.cwd,
       apiKey: options.apiKey,
@@ -277,6 +286,7 @@ class SessionManagerImpl extends EventEmitter {
       resumeSessionId: options.resumeSessionId,
       systemPrompt: options.systemPrompt,
       customToolDefinitions,
+      additionalExtensionPaths,
     };
 
     const client = new AgentClient(
