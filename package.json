@@ -22,10 +22,11 @@
     "postinstall": "node scripts/setup-agent.mjs && node scripts/patch-native-modules.mjs",
     "setup:agent": "node scripts/setup-agent.mjs",
     "patch:native": "node scripts/patch-native-modules.mjs",
-    "build:runner": "node scripts/build-runner.mjs",
-    "package": "node scripts/setup-agent.mjs --require-binary && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/run-electron-builder.mjs",
-    "package:win": "node scripts/setup-agent.mjs --require-binary && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/run-electron-builder.mjs --win",
-    "package:linux": "node scripts/setup-agent.mjs --require-binary && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/run-electron-builder.mjs --linux"
+    "build:runner": "node scripts/build-runner.mjs && node scripts/download-natives.mjs",
+    "download:natives": "node scripts/download-natives.mjs",
+    "package": "node scripts/setup-agent.mjs --require-binary && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/download-natives.mjs && node scripts/run-electron-builder.mjs",
+    "package:win": "node scripts/setup-agent.mjs --require-binary && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/download-natives.mjs && node scripts/run-electron-builder.mjs --win",
+    "package:linux": "node scripts/setup-agent.mjs --require-binary && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/download-natives.mjs && node scripts/run-electron-builder.mjs --linux"
   },
   "dependencies": {
     "electron-trpc": "^0.7.1",

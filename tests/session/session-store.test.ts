@@ -178,6 +178,10 @@ describe('SessionStore — event handling and state machine', () => {
       message: { role: 'assistant', content: [{ type: 'text', text: 'World' }] },
     });
 
+    // message_update is throttled in production to coalesce rapid stream updates;
+    // wait for the throttle window to elapse so the snapshot is applied.
+    await new Promise((r) => setTimeout(r, 60));
+
     const session = useSessionStore.getState().sessions[0];
     const assistantMsg = session.messages[1];
     expect(assistantMsg.content).toBe('World');
@@ -200,6 +204,9 @@ describe('SessionStore — event handling and state machine', () => {
       type: 'message_update',
       message: { role: 'assistant', content: [{ type: 'text', text: 'Hello world!' }] },
     });
+
+    // Coalesced updates flush after the throttle window.
+    await new Promise((r) => setTimeout(r, 60));
 
     const assistantMsg = useSessionStore.getState().sessions[0].messages[1];
     expect(assistantMsg.content).toBe('Hello world!');
@@ -297,6 +304,88 @@ describe('SessionStore — event handling and state machine', () => {
     const assistantMsg = useSessionStore.getState().sessions[0].messages[1];
     expect(assistantMsg.isStreaming).toBe(false);
     expect(assistantMsg.content).toContain('API key invalid');
+  });
+
+  it('separates thinking content from text content in message events', async () => {
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    await useSessionStore.getState().sendMessage('What model are you?');
+
+    // message_start with thinking content only
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_start',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'thinking', thinking: 'The user is asking what model I am.' }],
+      },
+    });
+
+    let session = useSessionStore.getState().sessions[0];
+    let assistantMsg = session.messages[1];
+    expect(assistantMsg.content).toBe('');
+    expect(assistantMsg.thinking).toBe('The user is asking what model I am.');
+    expect(assistantMsg.isStreaming).toBe(true);
+
+    // message_update with both thinking and text
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_update',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'The user is asking what model I am. I should respond briefly.' },
+          { type: 'text', text: 'I am' },
+        ],
+      },
+    });
+
+    // message_update is throttled in production; wait for the flush.
+    await new Promise((r) => setTimeout(r, 60));
+
+    session = useSessionStore.getState().sessions[0];
+    assistantMsg = session.messages[1];
+    expect(assistantMsg.thinking).toBe('The user is asking what model I am. I should respond briefly.');
+    expect(assistantMsg.content).toBe('I am');
+
+    // message_end with final content
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'The user is asking what model I am. I should respond briefly.' },
+          { type: 'text', text: 'I am Agnes-2.0-Flash, by Sapiens AI.' },
+        ],
+        stopReason: 'stop',
+      },
+    });
+
+    session = useSessionStore.getState().sessions[0];
+    assistantMsg = session.messages[1];
+    expect(assistantMsg.isStreaming).toBe(false);
+    expect(assistantMsg.thinking).toBe('The user is asking what model I am. I should respond briefly.');
+    expect(assistantMsg.content).toBe('I am Agnes-2.0-Flash, by Sapiens AI.');
+  });
+
+  it('does not include [思考] prefix in content when thinking blocks are present', async () => {
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    await useSessionStore.getState().sendMessage('Hello');
+
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'Internal reasoning here' },
+          { type: 'text', text: 'Visible response' },
+        ],
+        stopReason: 'stop',
+      },
+    });
+
+    const assistantMsg = useSessionStore.getState().sessions[0].messages[1];
+    // Content should NOT contain the [思考] prefix — thinking is stored separately
+    expect(assistantMsg.content).not.toContain('[思考]');
+    expect(assistantMsg.content).toBe('Visible response');
+    expect(assistantMsg.thinking).toBe('Internal reasoning here');
   });
 
   it('handles tool_execution_start by adding a tool message', async () => {
@@ -488,7 +577,7 @@ describe('SessionStore — event handling and state machine', () => {
     });
   });
 
-  it('restores only the latest persisted session on startup', async () => {
+  it('restores all persisted sessions on startup and selects the most recent one', async () => {
     mockGetPersistedSessions.mockResolvedValue([
       {
         sessionId: 'session_old',
@@ -513,12 +602,76 @@ describe('SessionStore — event handling and state machine', () => {
     const restored = await useSessionStore.getState().restoreSessions('proj_1', '/tmp/proj');
 
     expect(restored).toBe(true);
+    // Lazy restore: agent runtime is NOT started until the user sends a message.
     expect(mockRestore).not.toHaveBeenCalled();
-    expect(useSessionStore.getState().sessions).toHaveLength(1);
-    expect(useSessionStore.getState().sessions[0]).toMatchObject({
+    const state = useSessionStore.getState();
+    // Both persisted sessions should be restored as open tabs.
+    expect(state.sessions).toHaveLength(2);
+    expect(state.sessions.map((s) => s.id).sort()).toEqual(
+      ['session_old', 'session_latest'].sort(),
+    );
+    // The most recently active session becomes the current tab.
+    expect(state.currentSessionId).toBe('session_latest');
+    const latest = state.sessions.find((s) => s.id === 'session_latest');
+    const old = state.sessions.find((s) => s.id === 'session_old');
+    expect(latest).toMatchObject({
       id: 'session_latest',
       persistedSessionId: 'session_latest',
+      name: 'Latest session',
     });
+    expect(old).toMatchObject({
+      id: 'session_old',
+      persistedSessionId: 'session_old',
+      name: 'Old session',
+    });
+  });
+
+  it('skips already-open sessions when restoring and keeps the latest as current', async () => {
+    // Pre-populate the store as if one session is already open (e.g. user switched projects and back).
+    useSessionStore.setState({
+      sessions: [
+        {
+          id: 'session_old',
+          persistedSessionId: 'session_old',
+          projectId: 'proj_1',
+          cwd: '/tmp/proj',
+          name: 'Old session',
+          status: 'idle' as const,
+          messages: [],
+          createdAt: 10,
+        },
+      ],
+      currentSessionId: 'session_old',
+    });
+
+    mockGetPersistedSessions.mockResolvedValue([
+      {
+        sessionId: 'session_old',
+        name: 'Old session',
+        projectId: 'proj_1',
+        createdAt: 10,
+        lastActivityAt: 100,
+      },
+      {
+        sessionId: 'session_latest',
+        name: 'Latest session',
+        projectId: 'proj_1',
+        createdAt: 20,
+        lastActivityAt: 200,
+      },
+    ]);
+
+    const restored = await useSessionStore.getState().restoreSessions('proj_1', '/tmp/proj');
+
+    expect(restored).toBe(true);
+    const state = useSessionStore.getState();
+    // The already-open session should not be duplicated.
+    expect(state.sessions).toHaveLength(2);
+    expect(state.sessions.map((s) => s.id).sort()).toEqual(
+      ['session_old', 'session_latest'].sort(),
+    );
+    // The most recently active persisted session becomes the current tab.
+    expect(state.currentSessionId).toBe('session_latest');
   });
 
   it('hydrates history sessions from stored UI messages before asking the agent', async () => {

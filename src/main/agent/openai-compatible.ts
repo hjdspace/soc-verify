@@ -74,7 +74,46 @@ export function buildOpenAICompatibleModelsConfig({
           supportsTools: true,
           contextWindow: 128000,
           maxTokens: 8192,
+          // Default to text+image so screenshots and pasted images are sent
+          // to the LLM as multimodal content. Without "image" in the input
+          // list, omp silently replaces images with a placeholder text
+          // ("[image omitted: model does not support vision]"), causing the
+          // LLM to respond as if no image was attached.
+          input: ['text', 'image'],
         }],
+      },
+    },
+  } as const;
+}
+
+type ModelInputOverrideOptions = {
+  provider: string;
+  modelId: string;
+};
+
+/**
+ * Build a models.json that patches the `input` field of a catalog model via
+ * `modelOverrides`, leaving all other catalog properties (api, baseUrl, cost,
+ * contextWindow, ...) intact.
+ *
+ * Used for built-in providers (e.g. "openai", "anthropic", "google") where
+ * the user supplies only an API key (no baseUrl). Without this override,
+ * omp's vision-guard silently replaces images with a placeholder text when
+ * the catalog marks the model as text-only — even when the model actually
+ * supports vision.
+ */
+export function buildModelInputOverrideConfig({
+  provider,
+  modelId,
+}: ModelInputOverrideOptions) {
+  return {
+    providers: {
+      [provider]: {
+        modelOverrides: {
+          [modelId]: {
+            input: ['text', 'image'],
+          },
+        },
       },
     },
   } as const;

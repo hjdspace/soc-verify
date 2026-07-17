@@ -29,6 +29,8 @@ export interface FileTreeNode {
   path: string;
   type: 'file' | 'directory';
   children?: FileTreeNode[];
+  /** True when this file/directory is ignored by .gitignore (dimmed in the tree). */
+  gitIgnored?: boolean;
 }
 
 export interface FileTreeUpdate {

@@ -17,6 +17,8 @@ export interface ChatMessage {
   toolEndTime?: number;
   images?: string[];
   isStreaming?: boolean;
+  /** LLM thinking/reasoning content, separated from the main response text. */
+  thinking?: string;
 }
 
 export interface AvailableModel {
@@ -38,7 +40,7 @@ export interface SelectedSkill {
   name: string;
   description: string;
   filePath: string;
-  source: 'project' | 'user';
+  source: 'project' | 'user' | 'builtin';
 }
 
 export interface ContextFile {
@@ -118,6 +120,36 @@ let eventListenerRegistered = false;
 const historySessionLoads = new Map<string, Promise<void>>();
 const runtimeSessionStarts = new Map<string, Promise<string>>();
 
+// ─── 流式 message_update 节流 ────────────────────────────
+//
+// 问题：LLM 流式输出期间 message_update 事件可能每数十毫秒就触发一次，
+// 每次都会通过 Zustand set() 触发 React 重渲染。当窗口被最小化到后台时，
+// 浏览器会把 RAF/setTimeout 严重降频，导致状态更新被批量缓存；窗口恢复时
+// 所有累积的重渲染一次性 flush，表现为「卡一下然后突然刷出全部输出」。
+//
+// 解决：把 message_update 事件本身节流——只保留最新一份 snapshot，
+// 用 setTimeout 调度应用。可见时 50ms 节流（人眼几乎无感），后台时
+// 500ms 节流（大幅减少累积更新）。其它事件（message_start/end、tool_*、
+// agent_end）依然立即应用。当窗口重新可见时立即 flush 挂起的更新。
+let pendingMessageUpdate: { sessionId: string; message: unknown } | null = null;
+let messageUpdateTimer: ReturnType<typeof setTimeout> | null = null;
+let lastMessageUpdateFlush = 0;
+let visibilityListenerRegistered = false;
+// 持有最新的 flush 函数引用，供模块级 visibilitychange 监听器调用
+let flushPendingMessageUpdateRef: (() => void) | null = null;
+
+const MESSAGE_UPDATE_THROTTLE_VISIBLE_MS = 50;
+const MESSAGE_UPDATE_THROTTLE_HIDDEN_MS = 500;
+
+// ─── 持久化节流 ──────────────────────────────────────────
+// 原 handleSessionEvent 在每个事件后都调用 persistSessionMessages（一次
+// tRPC mutate），流式期间频率过高。改为 1s 节流，agent_end 等关键事件
+// 仍会立即触发一次（通过 flushPersist 强制刷新）。
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let lastPersistAt = 0;
+let flushPersistRef: (() => void) | null = null;
+const PERSIST_THROTTLE_MS = 1000;
+
 function registerSessionEventListener(get: () => SessionStoreState): void {
   if (eventListenerRegistered || !window.eventBridge) return;
   eventListenerRegistered = true;
@@ -135,33 +167,36 @@ function sessionMatchesId(session: SessionEntry, sessionId: string): boolean {
 }
 
 /**
- * Extract text from an agent message object.
+ * Extract text and thinking content separately from an agent message object.
  *
  * agent message events (message_start, message_update, message_end) carry a
  * `message` field which is an AssistantMessage with a `content` array of
  * content blocks. TextContent blocks have `{ type: "text", text: "..." }`.
  * ThinkingContent blocks have `{ type: "thinking", thinking: "..." }`.
  *
- * This function concatenates all text and thinking blocks into a single string.
+ * Returns text and thinking as separate strings so the UI can render them
+ * in distinct sections (collapsible thinking block + main response).
  */
-function extractTextFromMessage(message: unknown): string {
-  if (typeof message !== 'object' || message === null) return '';
+type ExtractedContent = { text: string; thinking: string };
+
+function extractTextFromMessage(message: unknown): ExtractedContent {
+  if (typeof message !== 'object' || message === null) return { text: '', thinking: '' };
   const msg = message as Record<string, unknown>;
   const content = msg.content;
-  if (!Array.isArray(content)) return '';
+  if (!Array.isArray(content)) return { text: '', thinking: '' };
 
-  const parts: string[] = [];
+  const textParts: string[] = [];
+  const thinkingParts: string[] = [];
   for (const block of content) {
     if (typeof block !== 'object' || block === null) continue;
     const b = block as Record<string, unknown>;
     if (b.type === 'text' && typeof b.text === 'string') {
-      parts.push(b.text);
+      textParts.push(b.text);
     } else if (b.type === 'thinking' && typeof b.thinking === 'string') {
-      // Optionally include thinking content — prefixed for clarity
-      parts.push(`[思考] ${b.thinking}`);
+      thinkingParts.push(b.thinking);
     }
   }
-  return parts.join('\n');
+  return { text: textParts.join('\n'), thinking: thinkingParts.join('\n') };
 }
 
 /**
@@ -254,6 +289,113 @@ function persistSessionMessages(session: SessionEntry | undefined): void {
 type SessionStoreSet = (
   partial: Partial<SessionStoreState> | ((state: SessionStoreState) => Partial<SessionStoreState>),
 ) => void;
+
+// ─── 流式 message_update 节流辅助 ────────────────────────
+// 上述模块级状态变量配合以下函数实现：
+//  - applyMessageUpdateSnapshot: 把单次 snapshot 写入 store
+//  - flushPendingMessageUpdate: 立刻应用挂起的最新 snapshot
+//  - scheduleMessageUpdateFlush: 节流调度（可见 50ms / 后台 500ms）
+//  - registerVisibilityListener: 窗口重新可见时立即 flush
+//
+// 注意：handleSessionEvent 每次被调用时都会把 `set`/`get` 闭包赋给
+// `flushPendingMessageUpdateRef` / `flushPersistRef`，因为同一个 store
+// 的 set/get 是稳定引用，所以即使多次赋值也指向同一个闭包。
+let pendingPersistSessionId: string | null = null;
+
+function applyMessageUpdateSnapshot(
+  set: SessionStoreSet,
+  sessionId: string,
+  message: unknown,
+): void {
+  const msg = message as Record<string, unknown> | undefined;
+  if (msg?.role && msg.role !== 'assistant') return;
+  const { text: updateText, thinking: updateThinking } = extractTextFromMessage(msg);
+  if (!updateText && !updateThinking) return;
+  set((s) => ({
+    sessions: s.sessions.map((sess) => {
+      if (!sessionMatchesId(sess, sessionId)) return sess;
+      // Find the last streaming assistant message
+      let lastAssistantIdx = -1;
+      for (let i = sess.messages.length - 1; i >= 0; i--) {
+        if (sess.messages[i].role === 'assistant' && sess.messages[i].isStreaming) {
+          lastAssistantIdx = i;
+          break;
+        }
+      }
+      if (lastAssistantIdx === -1) return sess;
+      return {
+        ...sess,
+        messages: sess.messages.map((m, i) =>
+          i === lastAssistantIdx
+            ? { ...m, content: updateText, thinking: updateThinking || m.thinking }
+            : m,
+        ),
+      };
+    }),
+  }));
+}
+
+function flushPendingMessageUpdate(set: SessionStoreSet): void {
+  if (messageUpdateTimer) {
+    clearTimeout(messageUpdateTimer);
+    messageUpdateTimer = null;
+  }
+  if (!pendingMessageUpdate) return;
+  const { sessionId, message } = pendingMessageUpdate;
+  pendingMessageUpdate = null;
+  lastMessageUpdateFlush = Date.now();
+  applyMessageUpdateSnapshot(set, sessionId, message);
+}
+
+function scheduleMessageUpdateFlush(set: SessionStoreSet): void {
+  // 已有挂起 timer 时无需新建——pendingMessageUpdate 始终持有最新 snapshot
+  if (messageUpdateTimer) return;
+  const delay = document.hidden
+    ? MESSAGE_UPDATE_THROTTLE_HIDDEN_MS
+    : MESSAGE_UPDATE_THROTTLE_VISIBLE_MS;
+  const elapsed = Date.now() - lastMessageUpdateFlush;
+  const wait = Math.max(0, delay - elapsed);
+  messageUpdateTimer = setTimeout(() => {
+    messageUpdateTimer = null;
+    flushPendingMessageUpdate(set);
+  }, wait);
+}
+
+function flushPersist(get: () => SessionStoreState): void {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  if (!pendingPersistSessionId) return;
+  const sid = pendingPersistSessionId;
+  pendingPersistSessionId = null;
+  lastPersistAt = Date.now();
+  const session = get().sessions.find((sess) => sessionMatchesId(sess, sid));
+  persistSessionMessages(session);
+}
+
+function schedulePersist(get: () => SessionStoreState, sessionId: string): void {
+  pendingPersistSessionId = sessionId; // 始终记下最新需要持久化的 session
+  if (persistTimer) return;
+  const elapsed = Date.now() - lastPersistAt;
+  const wait = Math.max(0, PERSIST_THROTTLE_MS - elapsed);
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    flushPersist(get);
+  }, wait);
+}
+
+function registerVisibilityListener(): void {
+  if (visibilityListenerRegistered) return;
+  if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+  visibilityListenerRegistered = true;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) return;
+    // 窗口重新可见——立刻应用挂起的状态，避免恢复时大量积压一次性 flush
+    flushPendingMessageUpdateRef?.();
+    flushPersistRef?.();
+  });
+}
 
 async function ensureRuntimeSession(
   sessionId: string,
@@ -459,6 +601,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     try {
       const runtimeSessionId = await ensureRuntimeSession(sessionId, set, get);
       persistSessionMessages(get().sessions.find((sess) => sess.id === sessionId));
+      // Images are passed as full data URLs (data:image/png;base64,...).
+      // The runner parses these to extract MIME type + base64 data for the SDK.
       await trpc.session.send.mutate({ sessionId: runtimeSessionId, message: fullMessage, images });
 
       // Auto-rename session based on the first user message
@@ -550,6 +694,30 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     // Log event type for debugging (avoid dumping full event object — it can be very large)
     console.log(`[session:event] sessionId=${sessionId}, type="${type}"`);
 
+    // 注册 visibilitychange 监听器（幂等）；同步刷新函数引用，供后台→前台时调用
+    registerVisibilityListener();
+    flushPendingMessageUpdateRef = () => flushPendingMessageUpdate(set);
+    flushPersistRef = () => flushPersist(get);
+
+    // ── message_update 走节流路径 ───────────────────────────
+    // 流式期间 message_update 可能每数十毫秒触发一次，直接 set() 会让
+    // React 高频重渲染，并在窗口隐藏时大量积压。这里只保留最新 snapshot，
+    // 由 setTimeout 按可见 50ms / 后台 500ms 节流应用。
+    if (type === 'message_update') {
+      pendingMessageUpdate = { sessionId, message: evt.message };
+      scheduleMessageUpdateFlush(set);
+      // 持久化也走节流，避免每次 message_update 都触发一次 tRPC mutate
+      schedulePersist(get, sessionId);
+      return;
+    }
+
+    // ── 其它事件：先强制 flush 挂起的 message_update ─────────
+    // 例如 message_end 到来时，必须先把最新的流式文本写进 store，
+    // 否则最终消息可能丢失最后一段流式内容。
+    if (pendingMessageUpdate) {
+      flushPendingMessageUpdate(set);
+    }
+
     set((s) => ({
       sessions: s.sessions.map((sess) => {
         if (!sessionMatchesId(sess, sessionId)) return sess;
@@ -558,8 +726,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
           case 'message_start': {
             const message = evt.message as Record<string, unknown> | undefined;
             if (message?.role && message.role !== 'assistant') return sess;
-            // Extract initial text from message.content if available
-            const text = extractTextFromMessage(message);
+            // Extract text and thinking separately from message.content
+            const { text: startText, thinking: startThinking } = extractTextFromMessage(message);
             // Check if there's already a streaming assistant message
             const hasStreaming = sess.messages.some((m) => m.role === 'assistant' && m.isStreaming);
             if (hasStreaming) {
@@ -567,8 +735,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
                 ...sess,
                 status: 'streaming',
                 messages: sess.messages.map((m) =>
-                  m.role === 'assistant' && m.isStreaming && text
-                    ? { ...m, content: text }
+                  m.role === 'assistant' && m.isStreaming && (startText || startThinking)
+                    ? { ...m, content: startText, thinking: startThinking || m.thinking }
                     : m,
                 ),
               };
@@ -578,7 +746,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             const newMsg: ChatMessage = {
               id: `msg_${Date.now()}`,
               role: 'assistant',
-              content: text,
+              content: startText,
+              thinking: startThinking || undefined,
               timestamp: Date.now(),
               isStreaming: true,
             };
@@ -589,40 +758,13 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             };
           }
 
-          case 'message_update': {
-            const message = evt.message as Record<string, unknown> | undefined;
-            if (message?.role && message.role !== 'assistant') return sess;
-            // agent message_update events contain a full message snapshot, not a delta string.
-            // The message.content array has TextContent blocks with accumulated text.
-            // We replace (not append) the assistant message content with the latest snapshot.
-            const text = extractTextFromMessage(message);
-            if (!text) return sess;
-            // Find the last streaming assistant message
-            let lastAssistantIdx = -1;
-            for (let i = sess.messages.length - 1; i >= 0; i--) {
-              if (sess.messages[i].role === 'assistant' && sess.messages[i].isStreaming) {
-                lastAssistantIdx = i;
-                break;
-              }
-            }
-            if (lastAssistantIdx === -1) return sess;
-            return {
-              ...sess,
-              messages: sess.messages.map((m, i) =>
-                i === lastAssistantIdx
-                  ? { ...m, content: text }
-                  : m,
-              ),
-            };
-          }
-
           case 'message_end': {
-            // Extract final text from message.content — this is the authoritative
-            // source for the assistant's response, especially when there are no
-            // message_update events (non-streaming or empty streaming responses).
+            // Extract final text and thinking from message.content — this is the
+            // authoritative source for the assistant's response, especially when
+            // there are no message_update events (non-streaming or empty streaming).
             const msg = evt.message as Record<string, unknown> | undefined;
             if (msg?.role && msg.role !== 'assistant') return sess;
-            const text = extractTextFromMessage(msg);
+            const { text: endText, thinking: endThinking } = extractTextFromMessage(msg);
             const errMsg = msg ? extractErrorFromMessage(msg) : null;
             // Do NOT set status to 'idle' here — the agent may still be working
             // (e.g. multiple messages, tool calls). Only 'agent_end' sets idle.
@@ -634,7 +776,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
                 return {
                   ...m,
                   isStreaming: false,
-                  content: errMsg ? `[错误] ${errMsg}` : (text || m.content),
+                  content: errMsg ? `[错误] ${errMsg}` : (endText || m.content),
+                  thinking: endThinking || m.thinking,
                 };
               }),
             };
@@ -745,9 +888,13 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     if (type === 'agent_end') {
       set({ isSending: false });
     }
+
+    // ── 持久化策略 ────────────────────────────────────────
+    // 流式过程中的事件走节流（避免每次都触发一次 tRPC mutate）；
+    // 但终止性事件（message_end / tool_execution_end / agent_end）需要
+    // 立刻 flush 持久化挂起的内容，保证最终状态被写入。
     if (
       type === 'message_start' ||
-      type === 'message_update' ||
       type === 'message_end' ||
       type === 'tool_execution_start' ||
       type === 'tool_execution_end' ||
@@ -755,7 +902,10 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       type === 'notice' ||
       type === 'irc_message'
     ) {
-      persistSessionMessages(get().sessions.find((sess) => sessionMatchesId(sess, sessionId)));
+      schedulePersist(get, sessionId);
+    }
+    if (type === 'message_end' || type === 'tool_execution_end' || type === 'agent_end') {
+      flushPersist(get);
     }
   },
 
@@ -783,40 +933,69 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     try {
       const persisted = await trpc.session.getPersistedSessions.query({ projectId });
       if (persisted.length === 0) return false;
-      const latest = [...persisted].sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0];
 
-      const existing = get().sessions.find((s) => sessionMatchesId(s, latest.sessionId));
-      if (existing) {
-        set({ currentSessionId: existing.id });
+      // Sort by lastActivityAt desc so the most recently active session becomes current.
+      const sorted = [...persisted].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+
+      // Skip sessions that are already open in the store (e.g. user switched back to the project).
+      const existingIds = new Set(
+        get().sessions
+          .map((s) => s.persistedSessionId ?? s.id)
+          .filter((id): id is string => Boolean(id)),
+      );
+      const toRestore = sorted.filter((p) => !existingIds.has(p.sessionId));
+      if (toRestore.length === 0) {
+        // All persisted sessions are already open — just switch to the most recent one.
+        const latestExisting = get().sessions.find(
+          (s) => sessionMatchesId(s, sorted[0].sessionId),
+        );
+        if (latestExisting) set({ currentSessionId: latestExisting.id });
         return true;
       }
 
-      const session: SessionEntry = {
-        id: latest.sessionId,
-        persistedSessionId: latest.sessionId,
+      const newEntries: SessionEntry[] = toRestore.map((p) => ({
+        id: p.sessionId,
+        persistedSessionId: p.sessionId,
         projectId,
         cwd,
-        name: latest.name,
+        name: p.name,
         status: 'idle',
         messages: [],
-        createdAt: latest.createdAt,
-        model: latest.model,
-      };
-      set((s) => ({
-        sessions: [...s.sessions, session],
-        currentSessionId: latest.sessionId,
+        createdAt: p.createdAt,
+        model: p.model,
       }));
 
-      const chatMessages = await loadStoredSessionMessages(projectId, latest.sessionId);
-      if (chatMessages.length > 0) {
-        set((s) => ({
-          sessions: s.sessions.map((sess) =>
-            sess.id === latest.sessionId
-              ? { ...sess, messages: chatMessages }
-              : sess,
-          ),
-        }));
-      }
+      // The most recently active session among ALL persisted (not just newly added)
+      // becomes the current tab. If that one is already open, fall back to the most
+      // recent newly-restored one.
+      const latestPersistedId = sorted[0].sessionId;
+      const latestAlreadyOpen = get().sessions.find(
+        (s) => sessionMatchesId(s, latestPersistedId),
+      );
+      const nextCurrentId = latestAlreadyOpen
+        ? latestAlreadyOpen.id
+        : newEntries[0].id;
+
+      set((s) => ({
+        sessions: [...s.sessions, ...newEntries],
+        currentSessionId: nextCurrentId,
+      }));
+
+      // Load stored messages for each newly restored session in parallel.
+      // Messages are best-effort — failures leave the session empty without blocking restore.
+      await Promise.all(
+        newEntries.map(async (entry) => {
+          const chatMessages = await loadStoredSessionMessages(projectId, entry.id);
+          if (chatMessages.length === 0) return;
+          set((s) => ({
+            sessions: s.sessions.map((sess) =>
+              sess.id === entry.id
+                ? { ...sess, messages: chatMessages }
+                : sess,
+            ),
+          }));
+        }),
+      );
       return true;
     } catch {
       return false;
@@ -834,24 +1013,30 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   },
 
   setModel: async (sessionId, provider, modelId, modelName) => {
-    try {
-      const runtimeSessionId = await ensureRuntimeSession(sessionId, set, get);
-      await trpc.session.setModel.mutate({ sessionId: runtimeSessionId, provider, modelId, modelName });
-      const model: SessionModel = { provider, id: modelId, name: modelName ?? modelId };
-      // Persist to localStorage so new sessions and app restarts reuse this model
-      localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(model));
-      set((s) => ({
-        lastModel: model,
-        sessions: s.sessions.map((sess) =>
-          sessionMatchesId(sess, sessionId)
-            ? { ...sess, model }
-            : sess,
-        ),
-      }));
-      useToastStore.getState().success('模型已切换');
-    } catch (err) {
-      useToastStore.getState().error('切换模型失败', tRPCError(err));
-    }
+    const model: SessionModel = { provider, id: modelId, name: modelName ?? modelId };
+
+    // 1. Optimistically update UI immediately — store + localStorage are synchronous
+    localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(model));
+    set((s) => ({
+      lastModel: model,
+      sessions: s.sessions.map((sess) =>
+        sessionMatchesId(sess, sessionId)
+          ? { ...sess, model }
+          : sess,
+      ),
+    }));
+
+    // 2. Fire backend model switch in the background (non-blocking).
+    //    If the runtime session doesn't exist yet, the model will be applied
+    //    when the session is created (ensureRuntimeSession passes model info).
+    void (async () => {
+      try {
+        const runtimeSessionId = await ensureRuntimeSession(sessionId, set, get);
+        await trpc.session.setModel.mutate({ sessionId: runtimeSessionId, provider, modelId, modelName });
+      } catch (err) {
+        useToastStore.getState().error('切换模型失败', tRPCError(err));
+      }
+    })();
   },
 
   addSkill: (skill) => set((s) => {

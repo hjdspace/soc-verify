@@ -287,6 +287,24 @@ body {
   }
 }
 
+/* ── 流式输出光标 ─────────────────────────────────────────────── */
+/* 硬开关式闪烁（1s 周期，前半亮、后半灭），比 animate-pulse 的渐变更像真实光标 */
+@keyframes cursor-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+.cursor-blink {
+  animation: cursor-blink 1s steps(1, end) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor-blink {
+    animation: none;
+    opacity: 1;
+  }
+}
+
 /* ── CodeMirror 编辑器样式 ─────────────────────────────────────── */
 
 .cm-theme,

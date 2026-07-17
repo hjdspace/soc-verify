@@ -31,6 +31,13 @@
 
 import { createInterface } from "node:readline";
 
+// Declare Bun global for TypeScript (only env property is used in this file)
+declare global {
+	const Bun: {
+		readonly env: Record<string, string | undefined>;
+	} | undefined;
+}
+
 // ─── Types ──────────────────────────────────────────────
 
 interface InitConfig {
@@ -51,6 +58,8 @@ interface InitConfig {
 		parameters: Record<string, unknown>;
 		approval?: string;
 	}>;
+	/** 额外的 extension 包路径（每个包的 skills/ 和 agents/ 子目录会被 omp 扫描） */
+	additionalExtensionPaths?: string[];
 }
 
 type Command =
@@ -250,6 +259,9 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 		enableMCP: config.enableMCP ?? true,
 		autoApprove: true,
 		hasUI: false,
+		// Inject built-in extension packages (skills/ and agents/ subdirectories
+		// are auto-discovered by the omp-plugins provider).
+		additionalExtensionPaths: config.additionalExtensionPaths ?? [],
 	};
 
 	// Set model pattern if provided
@@ -276,7 +288,22 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 
 async function handlePrompt(cmd: Command & { type: "prompt" }): Promise<void> {
 	if (!session) throw new Error("Session not initialized");
-	await session.prompt(cmd.message);
+
+	// Convert image strings to ImageContent objects expected by the SDK.
+	// Images arrive as full data URLs (data:image/png;base64,...) so we can
+	// recover the MIME type.  Raw base64 strings fall back to image/png.
+	let images: Array<{ type: "image"; data: string; mimeType: string }> | undefined;
+	if (cmd.images?.length) {
+		images = cmd.images.map((img) => {
+			const match = img.match(/^data:([^;]+);base64,(.+)$/);
+			if (match) {
+				return { type: "image" as const, data: match[2], mimeType: match[1] };
+			}
+			return { type: "image" as const, data: img, mimeType: "image/png" };
+		});
+	}
+
+	await session.prompt(cmd.message, images ? { images } : undefined);
 	sendResponse(cmd.id, true, { ok: true });
 }
 
