@@ -14,7 +14,7 @@ export interface PersistedSession {
   createdAt: number;
   lastActivityAt: number;
   /** Persisted model info so the model survives app restart */
-  model?: { provider: string; id: string; name: string };
+  model?: { provider: string; id: string; name: string; providerId?: string };
 }
 
 /**
@@ -78,7 +78,7 @@ export async function removeSession(
 export async function updateSessionModel(
   projectRoot: string,
   sessionId: string,
-  model: { provider: string; id: string; name: string },
+  model: { provider: string; id: string; name: string; providerId?: string },
 ): Promise<void> {
   const sessions = await loadSessions(projectRoot);
   const idx = sessions.findIndex((s) => s.sessionId === sessionId);

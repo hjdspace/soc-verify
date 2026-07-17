@@ -14,7 +14,12 @@ type FetchModelsOptions = {
 
 type ModelsConfigOptions = {
   baseUrl: string;
+  /** The default/active model ID (used as fallback when no `models` list is provided). */
   modelId: string;
+  /** Optional full model list. When provided, ALL models are written to
+   *  models.json so the omp engine's `set_model` RPC can switch to any of
+   *  them at runtime (instead of being locked to a single model). */
+  models?: OpenAICompatibleModel[];
   apiKeyEnvVar: string;
 };
 
@@ -58,8 +63,16 @@ export async function fetchOpenAICompatibleModels({
 export function buildOpenAICompatibleModelsConfig({
   baseUrl,
   modelId,
+  models,
   apiKeyEnvVar,
 }: ModelsConfigOptions) {
+  // Use the full model list when provided; otherwise fall back to a single-model
+  // config. Writing all models is essential for runtime model switching via the
+  // omp engine's `set_model` RPC — if a model isn't in models.json, `set_model`
+  // silently fails and messages are still sent with the old model.
+  const allModels = models && models.length > 0
+    ? models
+    : [{ id: modelId, name: modelId }];
   return {
     providers: {
       [OPENAI_COMPATIBLE_PROVIDER]: {
@@ -68,9 +81,9 @@ export function buildOpenAICompatibleModelsConfig({
         apiKey: apiKeyEnvVar,
         authHeader: true,
         disableStrictTools: true,
-        models: [{
-          id: modelId,
-          name: modelId,
+        models: allModels.map((m) => ({
+          id: m.id,
+          name: m.name,
           supportsTools: true,
           contextWindow: 128000,
           maxTokens: 8192,
@@ -80,7 +93,7 @@ export function buildOpenAICompatibleModelsConfig({
           // ("[image omitted: model does not support vision]"), causing the
           // LLM to respond as if no image was attached.
           input: ['text', 'image'],
-        }],
+        })),
       },
     },
   } as const;

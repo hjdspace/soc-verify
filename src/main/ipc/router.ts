@@ -709,7 +709,7 @@ export const router = t.router({
 
   session: t.router({
     create: t.procedure
-      .input((raw): { projectId: string; cwd: string; provider?: string; model?: string } => {
+      .input((raw): { projectId: string; cwd: string; provider?: string; model?: string; providerId?: string } => {
         const r = raw as Record<string, unknown>;
         if (typeof r.projectId !== 'string' || typeof r.cwd !== 'string') {
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and cwd are required' });
@@ -719,6 +719,7 @@ export const router = t.router({
           cwd: r.cwd,
           provider: typeof r.provider === 'string' ? r.provider : undefined,
           model: typeof r.model === 'string' ? r.model : undefined,
+          providerId: typeof r.providerId === 'string' ? r.providerId : undefined,
         };
       })
       .mutation(async ({ input }) => {
@@ -741,15 +742,18 @@ export const router = t.router({
 
         // Load stored credentials and build env vars for agent process
         const credEnv = await credentialManager.buildEnvForAgent();
-        const defaultCred = await credentialManager.getDefaultCredential();
+        // Use the credential specified by providerId if provided, else fall back to default
+        const cred = input.providerId
+          ? await credentialManager.get(input.providerId)
+          : await credentialManager.getDefaultCredential();
 
         // Determine provider, apiKey, and baseUrl to pass to the agent SDK:
         // 1. Use input.provider/model if explicitly provided (from UI)
         // 2. Fall back to stored credentials' provider
         // This ensures the agent starts with the correct provider matching the API key.
-        const provider = input.provider ?? (defaultCred ? credentialManager.mapProviderForAgent(defaultCred.providerId) : undefined);
-        const apiKey = defaultCred?.apiKey;
-        const baseUrl = defaultCred?.baseUrl;
+        const provider = input.provider ?? (cred ? credentialManager.mapProviderForAgent(cred.providerId) : undefined);
+        const apiKey = cred?.apiKey;
+        const baseUrl = cred?.baseUrl;
 
         console.log(`[router:session.create] provider=${provider ?? '(default)'}, model=${input.model ?? '(default)'}, hasApiKey=${!!apiKey}, hasBaseUrl=${!!baseUrl}`);
 
@@ -775,11 +779,29 @@ export const router = t.router({
           projectId: input.projectId,
           createdAt: Date.now(),
           lastActivityAt: Date.now(),
-          model: provider && input.model ? { provider, id: input.model, name: input.model } : undefined,
+          model: provider && input.model
+            ? { provider, id: input.model, name: input.model, providerId: cred?.providerId }
+            : undefined,
         };
         await addSession(project.rootPath, persisted);
 
-        return { sessionId, name: persisted.name };
+        // Return the full model info so the frontend can store providerId on
+        // the session — this is critical for runtime model switching: when
+        // providerId is present, the backend can destroy+recreate the session
+        // with the correct credential's config (apiKey/baseUrl).
+        const resolvedModelId = sessionManager.getModel(sessionId) ?? input.model;
+        return {
+          sessionId,
+          name: persisted.name,
+          model: provider && resolvedModelId
+            ? {
+                provider,
+                id: resolvedModelId,
+                name: input.model ?? resolvedModelId,
+                providerId: cred?.providerId,
+              }
+            : undefined,
+        };
       }),
 
     send: t.procedure
@@ -908,16 +930,140 @@ export const router = t.router({
       }),
 
     setModel: t.procedure
-      .input((raw): { sessionId: string; provider: string; modelId: string; modelName?: string } => {
+      .input((raw): { sessionId: string; provider?: string; modelId?: string; modelName?: string; providerId?: string } => {
         const r = raw as Record<string, unknown>;
-        if (typeof r.sessionId !== 'string' || typeof r.provider !== 'string' || typeof r.modelId !== 'string') {
-          throw new TRPCError({ code: 'BAD_REQUEST', message: 'sessionId, provider and modelId are required' });
+        if (typeof r.sessionId !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'sessionId is required' });
         }
-        return { sessionId: r.sessionId, provider: r.provider, modelId: r.modelId, modelName: typeof r.modelName === 'string' ? r.modelName : undefined };
+        const providerId = typeof r.providerId === 'string' ? r.providerId : undefined;
+        // When switching by providerId (holistic config switch), modelId is
+        // optional — the backend will auto-pick the first model from the
+        // credential's API. When providerId is absent (legacy same-provider
+        // model swap via omp RPC), provider + modelId are required.
+        if (!providerId) {
+          if (typeof r.provider !== 'string' || typeof r.modelId !== 'string') {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: 'provider and modelId are required when providerId is not supplied' });
+          }
+        }
+        return {
+          sessionId: r.sessionId,
+          provider: typeof r.provider === 'string' ? r.provider : undefined,
+          modelId: typeof r.modelId === 'string' && r.modelId ? r.modelId : undefined,
+          modelName: typeof r.modelName === 'string' ? r.modelName : undefined,
+          providerId,
+        };
       })
       .mutation(async ({ input }) => {
+        // If providerId is supplied, the user wants a holistic config switch:
+        // the entire model config (provider + apiKey + baseUrl + model) must change.
+        // Since the omp engine's set_model RPC only switches the model ID (it
+        // cannot update apiKey/baseUrl at runtime), we destroy the current runtime
+        // session and recreate it with the new credential's config, resuming the
+        // conversation via the omp session ID so messages are preserved.
+        if (input.providerId) {
+          console.log(`[router:session.setModel] holistic swap: sessionId=${input.sessionId}, providerId=${input.providerId}, modelId=${input.modelId ?? '(auto)'}`);
+          const cred = await credentialManager.get(input.providerId);
+          if (!cred) {
+            console.error(`[router:session.setModel] credential not found: ${input.providerId}`);
+            throw new TRPCError({ code: 'NOT_FOUND', message: `Credential not found: ${input.providerId}` });
+          }
+
+          const existing = sessionManager.getSession(input.sessionId);
+          if (!existing) {
+            // The frontend always calls ensureRuntimeSession before setModel,
+            // so the runtime session should exist. If it doesn't (e.g. idle
+            // timeout), the model choice is already persisted in the frontend
+            // state and will be applied when the session is next restored.
+            console.error(`[router:session.setModel] runtime session not found: ${input.sessionId}`);
+            throw new TRPCError({
+              code: 'NOT_FOUND',
+              message: `Runtime session not found: ${input.sessionId}. The session may have been retired — please send a message first to restart it.`,
+            });
+          }
+
+          const project = projectManager.getProject(existing.projectId);
+          if (!project) {
+            console.error(`[router:session.setModel] project not found: ${existing.projectId}`);
+            throw new TRPCError({ code: 'NOT_FOUND', message: `Project not found: ${existing.projectId}` });
+          }
+
+          await ensurePluginsLoaded(project.rootPath);
+          const registry = pluginLoader.getRegistry(project.rootPath);
+          const discovery = new PluginBackedDiscovery(project.rootPath, registry);
+          const simulation = new PluginBackedSimulation(registry);
+          const coverage = new PluginBackedCoverage(project.rootPath, registry);
+
+          // Capture the omp session ID for resume, then destroy the runtime session
+          const ompSessionId = sessionManager.getOmpSessionId(input.sessionId);
+          const persistedSessionId = existing.persistedSessionId ?? input.sessionId;
+
+          console.log(`[router:session.setModel] destroying session ${input.sessionId} (ompSessionId=${ompSessionId ?? 'none'})`);
+          await sessionManager.destroySession(input.sessionId);
+
+          // Recreate with the new credential's config, resuming the conversation.
+          // If modelId is not supplied, createSession will auto-fetch the
+          // credential's model list and pick the first one.
+          const credEnv = await credentialManager.buildEnvForAgent();
+          const newProvider = credentialManager.mapProviderForAgent(cred.providerId);
+
+          console.log(`[router:session.setModel] recreating session with provider=${newProvider}, model=${input.modelId ?? '(auto)'}, baseUrl=${cred.baseUrl ?? 'none'}`);
+          const newSessionId = await sessionManager.createSession({
+            projectId: existing.projectId,
+            cwd: project.rootPath,
+            provider: newProvider,
+            model: input.modelId,
+            apiKey: cred.apiKey,
+            baseUrl: cred.baseUrl,
+            discovery,
+            simulationAdapter: simulation,
+            coverageAdapter: coverage,
+            resumeSessionId: ompSessionId,
+            persistedSessionId,
+            env: credEnv,
+          });
+
+          // Read back the actual model that createSession resolved to (it may
+          // have auto-fetched the first model when input.modelId was empty).
+          const resolvedModelId = sessionManager.getModel(newSessionId) ?? input.modelId;
+
+          // Persist model info (with providerId) + updated ompSessionId
+          const newOmpSessionId = sessionManager.getOmpSessionId(newSessionId);
+          const sessions = await loadSessions(project.rootPath);
+          const idx = sessions.findIndex((s) => s.sessionId === persistedSessionId);
+          if (idx >= 0) {
+            sessions[idx] = {
+              ...sessions[idx],
+              ompSessionId: newOmpSessionId,
+              lastActivityAt: Date.now(),
+              model: {
+                provider: newProvider,
+                id: resolvedModelId ?? input.modelId ?? '',
+                name: input.modelName ?? input.modelId ?? resolvedModelId ?? '',
+                providerId: input.providerId,
+              },
+            };
+            await saveSessions(project.rootPath, sessions);
+          }
+
+          return {
+            ok: true,
+            sessionId: newSessionId,
+            swapped: true,
+            model: {
+              provider: newProvider,
+              id: resolvedModelId ?? input.modelId,
+              name: input.modelName ?? input.modelId ?? resolvedModelId,
+              providerId: input.providerId,
+            },
+          };
+        }
+
+        // No providerId — legacy path: just switch the model ID via the engine RPC.
+        // This only works for built-in providers whose models are in the engine's catalog.
+        if (!input.provider || !input.modelId) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'provider and modelId are required when providerId is not supplied' });
+        }
         await sessionManager.setModel(input.sessionId, input.provider, input.modelId);
-        // Persist model info so it survives app restarts
         const sessionEntry = sessionManager.getSession(input.sessionId);
         if (sessionEntry) {
           const project = projectManager.getProject(sessionEntry.projectId);
@@ -929,7 +1075,17 @@ export const router = t.router({
             });
           }
         }
-        return { ok: true };
+        return {
+          ok: true,
+          sessionId: input.sessionId,
+          swapped: false,
+          model: {
+            provider: input.provider,
+            id: input.modelId,
+            name: input.modelName ?? input.modelId,
+            providerId: undefined as string | undefined,
+          },
+        };
       }),
 
     getAvailableModels: t.procedure
@@ -992,7 +1148,7 @@ export const router = t.router({
       }),
 
     restore: t.procedure
-      .input((raw): { projectId: string; cwd: string; sessionId: string; name?: string } => {
+      .input((raw): { projectId: string; cwd: string; sessionId: string; name?: string; providerId?: string } => {
         const r = raw as Record<string, unknown>;
         if (typeof r.projectId !== 'string' || typeof r.cwd !== 'string' || typeof r.sessionId !== 'string') {
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, cwd and sessionId are required' });
@@ -1002,6 +1158,7 @@ export const router = t.router({
           cwd: r.cwd,
           sessionId: r.sessionId,
           name: typeof r.name === 'string' ? r.name : undefined,
+          providerId: typeof r.providerId === 'string' ? r.providerId : undefined,
         };
       })
       .mutation(async ({ input }) => {
@@ -1016,12 +1173,17 @@ export const router = t.router({
         const persistedSessions = await loadSessions(project.rootPath);
         const persisted = persistedSessions.find((s) => s.sessionId === input.sessionId);
 
-        // Load stored credentials for env vars
+        // Load stored credentials for env vars.
+        // Prefer the credential specified by providerId, then the persisted session's
+        // providerId, and finally fall back to the default credential.
         const credEnv = await credentialManager.buildEnvForAgent();
-        const defaultCred = await credentialManager.getDefaultCredential();
-        const provider = persisted?.model?.provider ?? (defaultCred ? credentialManager.mapProviderForAgent(defaultCred.providerId) : undefined);
-        const apiKey = defaultCred?.apiKey;
-        const baseUrl = defaultCred?.baseUrl;
+        const resolvedProviderId = input.providerId ?? persisted?.model?.providerId;
+        const cred = resolvedProviderId
+          ? await credentialManager.get(resolvedProviderId)
+          : await credentialManager.getDefaultCredential();
+        const provider = persisted?.model?.provider ?? (cred ? credentialManager.mapProviderForAgent(cred.providerId) : undefined);
+        const apiKey = cred?.apiKey;
+        const baseUrl = cred?.baseUrl;
 
         const sessionId = await sessionManager.createSession({
           projectId: input.projectId,
@@ -1041,6 +1203,17 @@ export const router = t.router({
 
         // Persist the latest runtime resume handle and activity timestamp.
         const ompSessionId = sessionManager.getOmpSessionId(sessionId);
+        // Read back the actual model that createSession resolved to (it may
+        // have auto-fetched the first model when persisted.model.id was empty).
+        const resolvedModelId = sessionManager.getModel(sessionId) ?? persisted?.model?.id;
+        const resolvedModel = provider && resolvedModelId
+          ? {
+              provider,
+              id: resolvedModelId,
+              name: persisted?.model?.name ?? resolvedModelId,
+              providerId: resolvedProviderId,
+            }
+          : persisted?.model;
         const sessions = await loadSessions(project.rootPath);
         const idx = sessions.findIndex((s) => s.sessionId === input.sessionId);
         if (idx >= 0) {
@@ -1048,13 +1221,18 @@ export const router = t.router({
             ...sessions[idx],
             ompSessionId,
             lastActivityAt: Date.now(),
+            model: resolvedModel,
           };
           await saveSessions(project.rootPath, sessions);
         } else {
           await updateSessionActivity(project.rootPath, input.sessionId);
         }
 
-        return { sessionId, name: input.name ?? `Session ${input.sessionId.slice(-6)}`, model: persisted?.model };
+        return {
+          sessionId,
+          name: input.name ?? `Session ${input.sessionId.slice(-6)}`,
+          model: resolvedModel,
+        };
       }),
 
     rename: t.procedure

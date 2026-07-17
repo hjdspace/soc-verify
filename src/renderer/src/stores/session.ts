@@ -32,6 +32,9 @@ export interface SessionModel {
   provider: string;
   id: string;
   name: string;
+  /** The credential ID used to look up apiKey/baseUrl for this model.
+   *  When set, switching to this model also switches the full provider config. */
+  providerId?: string;
 }
 
 const MODEL_STORAGE_KEY = 'socverify:lastModel';
@@ -103,7 +106,11 @@ interface SessionStoreState {
   setInputMessage: (msg: string) => void;
   handleSessionEvent: (sessionId: string, event: unknown) => void;
   restoreSessions: (projectId: string, cwd: string) => Promise<boolean>;
-  setModel: (sessionId: string, provider: string, modelId: string, modelName?: string) => Promise<void>;
+  setModel: (sessionId: string, provider: string, modelId: string, modelName?: string, providerId?: string) => Promise<void>;
+  /** Holistically switch the entire model config (provider + apiKey + baseUrl + model)
+   *  to the given credential. The backend destroys + recreates the runtime session
+   *  with the new credential's config, auto-picking the first model if needed. */
+  applyCredential: (sessionId: string, providerId: string) => Promise<void>;
   steerSession: (message: string) => Promise<void>;
   addSkill: (skill: SelectedSkill) => void;
   removeSkill: (name: string) => void;
@@ -433,12 +440,14 @@ async function ensureRuntimeSession(
           cwd: latest.cwd ?? cwd,
           sessionId: latest.persistedSessionId,
           name: latest.name,
+          providerId: latest.model?.providerId,
         })
       : await trpc.session.create.mutate({
           projectId: latest.projectId,
           cwd: latest.cwd ?? cwd,
           provider: latest.model?.provider,
           model: latest.model?.id,
+          providerId: latest.model?.providerId,
         });
 
     const runtimeSessionId = result.sessionId;
@@ -974,8 +983,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     }
   },
 
-  setModel: async (sessionId, provider, modelId, modelName) => {
-    const model: SessionModel = { provider, id: modelId, name: modelName ?? modelId };
+  setModel: async (sessionId, provider, modelId, modelName, providerId) => {
+    const model: SessionModel = { provider, id: modelId, name: modelName ?? modelId, providerId };
 
     // 1. Optimistically update UI immediately — store + localStorage are synchronous
     localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(model));
@@ -989,16 +998,96 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     }));
 
     // 2. Fire backend model switch in the background (non-blocking).
+    //    If providerId is provided, the backend destroys + recreates the runtime
+    //    session with the new credential's full config (apiKey/baseUrl/model).
     //    If the runtime session doesn't exist yet, the model will be applied
     //    when the session is created (ensureRuntimeSession passes model info).
     void (async () => {
       try {
         const runtimeSessionId = await ensureRuntimeSession(sessionId, set, get);
-        await trpc.session.setModel.mutate({ sessionId: runtimeSessionId, provider, modelId, modelName });
+        const result = await trpc.session.setModel.mutate({
+          sessionId: runtimeSessionId,
+          provider,
+          modelId,
+          modelName,
+          providerId,
+        });
+        // If the backend swapped the runtime session (destroy + recreate),
+        // update the stored runtimeSessionId so future calls target the new session.
+        if (result.sessionId && result.sessionId !== runtimeSessionId) {
+          set((s) => ({
+            sessions: s.sessions.map((sess) =>
+              sessionMatchesId(sess, sessionId)
+                ? { ...sess, runtimeSessionId: result.sessionId }
+                : sess,
+            ),
+          }));
+        }
+        // If the backend resolved a different model (e.g. auto-picked the first
+        // model from the API), update the store so the UI shows the real model.
+        if (result.model) {
+          const resolved: SessionModel = {
+            provider: result.model.provider,
+            id: result.model.id ?? '',
+            name: result.model.name ?? result.model.id ?? '',
+            providerId: result.model.providerId,
+          };
+          localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(resolved));
+          set((s) => ({
+            lastModel: resolved,
+            sessions: s.sessions.map((sess) =>
+              sessionMatchesId(sess, sessionId)
+                ? { ...sess, model: resolved }
+                : sess,
+            ),
+          }));
+        }
       } catch (err) {
         useToastStore.getState().error('切换模型失败', tRPCError(err));
       }
     })();
+  },
+
+  applyCredential: async (sessionId, providerId) => {
+    // Holistic config switch: the backend will destroy + recreate the runtime
+    // session with the new credential's full config (provider + apiKey +
+    // baseUrl + model). We don't know the model id ahead of time — the backend
+    // auto-picks the first model from the credential's API and returns it.
+    try {
+      const runtimeSessionId = await ensureRuntimeSession(sessionId, set, get);
+      const result = await trpc.session.setModel.mutate({
+        sessionId: runtimeSessionId,
+        providerId,
+      });
+      if (result.sessionId && result.sessionId !== runtimeSessionId) {
+        set((s) => ({
+          sessions: s.sessions.map((sess) =>
+            sessionMatchesId(sess, sessionId)
+              ? { ...sess, runtimeSessionId: result.sessionId }
+              : sess,
+          ),
+        }));
+      }
+      if (result.model) {
+        const resolved: SessionModel = {
+          provider: result.model.provider,
+          id: result.model.id ?? '',
+          name: result.model.name ?? result.model.id ?? '',
+          providerId: result.model.providerId,
+        };
+        localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(resolved));
+        set((s) => ({
+          lastModel: resolved,
+          sessions: s.sessions.map((sess) =>
+            sessionMatchesId(sess, sessionId)
+              ? { ...sess, model: resolved }
+              : sess,
+          ),
+        }));
+      }
+    } catch (err) {
+      useToastStore.getState().error('切换供应商配置失败', tRPCError(err));
+    }
   },
 
   addSkill: (skill) => set((state) => ({

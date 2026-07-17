@@ -12,6 +12,7 @@ import {
   fetchOpenAICompatibleModels,
   OPENAI_COMPATIBLE_API_KEY_ENV,
   OPENAI_COMPATIBLE_PROVIDER,
+  type OpenAICompatibleModel,
 } from './openai-compatible';
 import type { SubsysDiscovery } from '../host/discovery';
 import type { PluginBackedSimulation, PluginBackedCoverage } from '../host/plugin-discovery';
@@ -130,6 +131,10 @@ export interface SessionEntry {
   lastActivityAt: number;
   idleTimer: NodeJS.Timeout | null;
   runtimeDir?: string;
+  /** The model ID that the runtime session was actually initialized with
+   *  (may differ from the requested model when createSession auto-fetched
+   *  the first model from the API). */
+  model?: string;
 }
 
 export interface SessionEventData {
@@ -201,12 +206,22 @@ class SessionManagerImpl extends EventEmitter {
     const env = { ...options.env };
 
     if (options.baseUrl && options.apiKey) {
-      if (!model) {
-        const models = await fetchOpenAICompatibleModels({
+      // Fetch ALL models from the API so we can write the complete list to
+      // models.json. This is essential for runtime model switching via the
+      // omp engine's `set_model` RPC — if a model isn't in models.json,
+      // `set_model` silently fails and messages are still sent with the old
+      // model (causing 503 errors when the user switches models in RightPanel).
+      let allModels: OpenAICompatibleModel[] = [];
+      try {
+        allModels = await fetchOpenAICompatibleModels({
           baseUrl: options.baseUrl,
           apiKey: options.apiKey,
         });
-        model = models[0]?.id;
+      } catch (err) {
+        console.warn(`[agent:session:${sessionId}] failed to fetch model list: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (!model) {
+        model = allModels[0]?.id;
       }
       if (!model) {
         throw new Error('The OpenAI-compatible endpoint returned no models');
@@ -216,6 +231,7 @@ class SessionManagerImpl extends EventEmitter {
       const modelsConfig = buildOpenAICompatibleModelsConfig({
         baseUrl: options.baseUrl,
         modelId: model,
+        models: allModels,
         apiKeyEnvVar: OPENAI_COMPATIBLE_API_KEY_ENV,
       });
       const modelsJson = JSON.stringify(modelsConfig);
@@ -362,6 +378,7 @@ class SessionManagerImpl extends EventEmitter {
       lastActivityAt: Date.now(),
       idleTimer: null,
       runtimeDir,
+      model,
     };
 
     this.sessions.set(sessionId, entry);
@@ -383,6 +400,11 @@ class SessionManagerImpl extends EventEmitter {
   /** Get the omp engine's session ID for a given SoC Verify session. */
   getOmpSessionId(sessionId: string): string | undefined {
     return this.sessions.get(sessionId)?.ompSessionId;
+  }
+
+  /** Get the model ID that the runtime session was actually initialized with. */
+  getModel(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.model;
   }
 
   getClient(sessionId: string): AgentClient | null {

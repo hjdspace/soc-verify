@@ -18,6 +18,10 @@ interface SettingsStoreState {
   loading: boolean;
   models: ApiModel[];
   modelsLoading: boolean;
+  /** Cached models per providerId — powers the inline model switcher in SettingsPanel. */
+  modelsByProvider: Record<string, ApiModel[]>;
+  /** Per-provider loading flag for the inline model switcher. */
+  modelsLoadingByProvider: Record<string, boolean>;
 
   loadCredentials: () => Promise<void>;
   setCredential: (input: CredentialInput) => Promise<void>;
@@ -30,6 +34,8 @@ interface SettingsStoreState {
   loadSystemPrompt: (projectId: string) => Promise<void>;
   setSystemPrompt: (projectId: string, prompt: string) => Promise<void>;
   fetchModels: (providerId?: string, apiKey?: string, baseUrl?: string) => Promise<ApiModel[]>;
+  /** Fetch models for a specific stored credential and cache the result. */
+  fetchModelsForProvider: (providerId: string) => Promise<ApiModel[]>;
 }
 
 export const useSettingsStore = create<SettingsStoreState>((set) => ({
@@ -40,6 +46,8 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
   loading: false,
   models: [],
   modelsLoading: false,
+  modelsByProvider: {},
+  modelsLoadingByProvider: {},
 
   loadCredentials: async () => {
     try {
@@ -69,7 +77,15 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
   deleteCredential: async (providerId) => {
     try {
       await trpc.settings.deleteCredential.mutate({ providerId });
-      set((s) => ({ credentials: s.credentials.filter((c) => c.providerId !== providerId) }));
+      set((s) => {
+        const { [providerId]: _removedModels, ...restModels } = s.modelsByProvider;
+        const { [providerId]: _removedLoading, ...restLoading } = s.modelsLoadingByProvider;
+        return {
+          credentials: s.credentials.filter((c) => c.providerId !== providerId),
+          modelsByProvider: restModels,
+          modelsLoadingByProvider: restLoading,
+        };
+      });
       useToastStore.getState().success('凭据已删除');
     } catch (err) {
       useToastStore.getState().error('删除凭据失败', err instanceof Error ? err.message : String(err));
@@ -153,6 +169,26 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
       return models as ApiModel[];
     } catch (err) {
       set({ modelsLoading: false });
+      useToastStore.getState().error('获取模型列表失败', err instanceof Error ? err.message : String(err));
+      return [];
+    }
+  },
+
+  fetchModelsForProvider: async (providerId) => {
+    set((s) => ({
+      modelsLoadingByProvider: { ...s.modelsLoadingByProvider, [providerId]: true },
+    }));
+    try {
+      const models = await trpc.settings.fetchModels.query({ providerId });
+      set((s) => ({
+        modelsByProvider: { ...s.modelsByProvider, [providerId]: models as ApiModel[] },
+        modelsLoadingByProvider: { ...s.modelsLoadingByProvider, [providerId]: false },
+      }));
+      return models as ApiModel[];
+    } catch (err) {
+      set((s) => ({
+        modelsLoadingByProvider: { ...s.modelsLoadingByProvider, [providerId]: false },
+      }));
       useToastStore.getState().error('获取模型列表失败', err instanceof Error ? err.message : String(err));
       return [];
     }
