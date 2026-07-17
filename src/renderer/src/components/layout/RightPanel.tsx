@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
 import { Plus, Send, Square, Trash2, Loader2, Clock, X, Check, Paperclip, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft } from 'lucide-react';
 import { useSessionStore, type ChatMessage, type AvailableModel, type SelectedSkill, type ContextFile, type HistorySession } from '@renderer/stores/session';
 import { useSettingsStore } from '@renderer/stores/settings';
@@ -930,6 +930,22 @@ export function RightPanel({ width }: RightPanelProps) {
 
 // ── 消息渲染组件 ───────────────────────────────────────
 
+/**
+ * 流式输出光标。
+ * 单独抽出并 memo 化：父组件 MessageBubble 在流式期间每次 content 更新都会重渲染，
+ * 但 StreamingCursor 的 DOM 节点和 CSS 动画不应被重建——否则频繁重渲染会让
+ * `animate-pulse` 不断从 0% 重启，看起来像「不闪烁」。memo + 稳定 className
+ * 让 React 复用同一个 DOM 节点，动画持续运行而不被打断。
+ */
+const StreamingCursor = memo(function StreamingCursor() {
+  return (
+    <span
+      aria-hidden
+      className="ml-0.5 inline-block h-3 w-0.5 cursor-blink bg-foreground align-middle"
+    />
+  );
+});
+
 function MessageBubble({ message }: { message: ChatMessage }) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
@@ -1002,9 +1018,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
           </div>
         )
       )}
-      {message.isStreaming && message.content && (
-        <span className="ml-0.5 inline-block h-3 w-0.5 animate-pulse bg-foreground" />
-      )}
+      {message.isStreaming && message.content && <StreamingCursor />}
     </div>
   );
 }
