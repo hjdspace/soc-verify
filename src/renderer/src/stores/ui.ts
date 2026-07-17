@@ -1,34 +1,18 @@
 import { create } from 'zustand';
 
-interface SelectedFile {
-  path: string;
-  name: string;
-}
-
-export type CenterViewType =
-  | 'terminal' | 'file' | 'ai-artifacts' | 'sim-errors' | 'sim-history'
-  | 'sim-detail' | 'sim-compare' | 'sim-running' | 'coverage' | 'regression' | 'regression-result'
-  | 'dashboard' | 'to-checklist' | 'source-control' | 'settings' | 'diff-review' | 'empty';
-
 interface UiState {
   leftRailCollapsed: boolean;
   rightPanelCollapsed: boolean;
   optionDockExpanded: boolean;
-  activeCenterTab: string | null;
   settingsOpen: boolean;
   commandPaletteOpen: boolean;
-  selectedFile: SelectedFile | null;
-  centerView: CenterViewType;
   leftRailWidth: number;
   rightPanelWidth: number;
   toggleLeftRail: () => void;
   toggleRightPanel: () => void;
   toggleOptionDock: () => void;
-  setActiveCenterTab: (id: string | null) => void;
   setSettingsOpen: (open: boolean) => void;
   setCommandPaletteOpen: (open: boolean) => void;
-  setSelectedFile: (path: string, name: string) => void;
-  setCenterView: (view: CenterViewType) => void;
   setLeftRailWidth: (width: number) => void;
   setRightPanelWidth: (width: number) => void;
 }
@@ -42,21 +26,15 @@ export const useUiStore = create<UiState>((set) => ({
   leftRailCollapsed: false,
   rightPanelCollapsed: false,
   optionDockExpanded: false,
-  activeCenterTab: null,
   settingsOpen: false,
   commandPaletteOpen: false,
-  selectedFile: null,
-  centerView: 'empty',
   leftRailWidth: 256,
   rightPanelWidth: 384,
   toggleLeftRail: () => set((s) => ({ leftRailCollapsed: !s.leftRailCollapsed })),
   toggleRightPanel: () => set((s) => ({ rightPanelCollapsed: !s.rightPanelCollapsed })),
   toggleOptionDock: () => set((s) => ({ optionDockExpanded: !s.optionDockExpanded })),
-  setActiveCenterTab: (id) => set({ activeCenterTab: id }),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
-  setSelectedFile: (path, name) => set({ selectedFile: { path, name }, centerView: 'file' }),
-  setCenterView: (view) => set({ centerView: view }),
   setLeftRailWidth: (width) => set({ leftRailWidth: Math.max(LEFT_MIN, Math.min(LEFT_MAX, width)) }),
   setRightPanelWidth: (width) => set({ rightPanelWidth: Math.max(RIGHT_MIN, Math.min(RIGHT_MAX, width)) }),
 }));

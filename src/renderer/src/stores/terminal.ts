@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
+import { useWorkbenchStore } from './workbench';
 
 export interface TerminalTab {
   id: string;
@@ -50,6 +51,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       }],
       activeTabId: tabId,
     }));
+    useWorkbenchStore.getState().open({ type: 'terminal', terminalTabId: tabId, title: 'Terminal' });
 
     try {
       const session = await trpc.terminal.create.mutate({
@@ -64,6 +66,11 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
             : t,
         ),
       }));
+      useWorkbenchStore.getState().open({
+        type: 'terminal',
+        terminalTabId: tabId,
+        title: `Terminal ${tabIdCounter}`,
+      });
 
       // Register IPC event listener once
       if (!eventListenerRegistered && window.eventBridge) {
@@ -84,6 +91,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         tabs: s.tabs.filter((t) => t.id !== tabId),
         activeTabId: s.tabs.find((t) => t.id !== tabId)?.id ?? null,
       }));
+      useWorkbenchStore.getState().close(`terminal:${tabId}`);
       return tabId;
     }
   },
@@ -104,9 +112,15 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         : s.activeTabId;
       return { tabs: filtered, activeTabId: nextActive };
     });
+    useWorkbenchStore.getState().close(`terminal:${tabId}`);
   },
 
-  setActiveTab: (tabId) => set({ activeTabId: tabId }),
+  setActiveTab: (tabId) => {
+    const tab = get().tabs.find((candidate) => candidate.id === tabId);
+    if (!tab) return;
+    set({ activeTabId: tabId });
+    useWorkbenchStore.getState().open({ type: 'terminal', terminalTabId: tab.id, title: tab.title });
+  },
 
   createTabForSession: (terminalId, title, cwd) => {
     const tabId = `term_tab_${++tabIdCounter}`;
@@ -121,6 +135,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       }],
       activeTabId: tabId,
     }));
+    useWorkbenchStore.getState().open({ type: 'terminal', terminalTabId: tabId, title });
 
     // Register IPC event listener once
     if (!eventListenerRegistered && window.eventBridge) {
@@ -174,5 +189,9 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         return { ...t, title: `${t.title} (exited)` };
       }),
     }));
+    const tab = get().tabs.find((candidate) => candidate.terminalId === id);
+    if (tab) {
+      useWorkbenchStore.getState().open({ type: 'terminal', terminalTabId: tab.id, title: tab.title });
+    }
   },
 }));

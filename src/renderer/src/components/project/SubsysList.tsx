@@ -4,8 +4,6 @@ import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
-import { useTerminalStore } from '@renderer/stores/terminal';
-import { useUiStore } from '@renderer/stores/ui';
 import { useEnvStore } from '@renderer/stores/env';
 
 interface SubsysData {
@@ -368,10 +366,9 @@ export function SubsysList() {
   const caseStatusFilter = useProjectStore((s) => s.caseStatusFilter);
   const setCaseStatusFilter = useProjectStore((s) => s.setCaseStatusFilter);
   const plugins = useProjectStore((s) => s.plugins);
-  const runSimulation = useSimulationStore((s) => s.runSimulation);
-  const runSimulationInTerminal = useSimulationStore((s) => s.runSimulationInTerminal);
-  const simOptions = useSimulationStore((s) => s.simOptions);
-  const setSimOption = useSimulationStore((s) => s.setSimOption);
+  const startCaseRun = useSimulationStore((s) => s.startCaseRun);
+  const startCaseRuns = useSimulationStore((s) => s.startCaseRuns);
+  const selectCase = useSimulationStore((s) => s.selectCase);
   const configuredProjRtl = useEnvStore((s) => s.config?.envVars.PROJ_RTL);
   const loadEnvConfig = useEnvStore((s) => s.loadConfig);
   const setWizardOpen = useEnvStore((s) => s.setWizardOpen);
@@ -517,90 +514,20 @@ export function SubsysList() {
   const handleCaseSelect = (caseData: CaseData) => {
     const caseId = getCaseId(caseData);
     setSelectedCaseId(caseId);
-
-    // Auto-fill base/block/case from case data
-    if (caseData.base) setSimOption('base', caseData.base);
-    if (caseData.block) setSimOption('block', caseData.block);
-    if (caseData.name) setSimOption('case', caseData.name);
-
-    // Clear case-specific options (preserve base/block/case and persistent options like post)
-    const preserveKeys = new Set(['base', 'block', 'case', 'post', 'bq']);
-    const cleared: Record<string, unknown> = {};
-    for (const key of Object.keys(simOptions)) {
-      if (!preserveKeys.has(key)) {
-        // Reset to empty/false based on type
-        const val = simOptions[key];
-        if (typeof val === 'boolean') {
-          cleared[key] = false;
-        } else {
-          cleared[key] = '';
-        }
-      }
-    }
-    // Merge: cleared values + preserved base/block/case
-    const merged = { ...cleared };
-    if (caseData.base) merged.base = caseData.base;
-    if (caseData.block) merged.block = caseData.block;
-    if (caseData.name) merged.case = caseData.name;
-    // Preserve post and bq from existing simOptions
-    if (simOptions.post !== undefined) merged.post = simOptions.post;
-    if (simOptions.bq !== undefined) merged.bq = simOptions.bq;
-    useSimulationStore.getState().setSimOptions(merged);
+    selectCase(caseData);
   };
 
   const handleRunCase = async (caseData: CaseData) => {
     if (!currentProjectId) return;
-    // Auto-fill base/block/case from case data (same behavior as Python runsim_r3p0)
-    if (caseData.base) setSimOption('base', caseData.base);
-    if (caseData.block) setSimOption('block', caseData.block);
-    if (caseData.name) setSimOption('case', caseData.name);
-    // Build options with auto-filled base/block/case
-    const runOpts = { ...simOptions };
-    if (caseData.base) runOpts.base = caseData.base;
-    if (caseData.block) runOpts.block = caseData.block;
-    if (caseData.name) runOpts.case = caseData.name;
-
-    // Use terminal-based simulation: creates a PTY terminal, writes the runsim command,
-    // and switches to the terminal tab so the user can see real-time output.
-    const result = await runSimulationInTerminal(currentProjectId, caseData.name, caseData.name, caseData.subsys, runOpts);
-    if (result) {
-      // Create a terminal tab for the simulation session and switch to it
-      const createTabForSession = useTerminalStore.getState().createTabForSession;
-      const setActiveCenterTab = useUiStore.getState().setActiveCenterTab;
-      createTabForSession(result.terminalId, `sim: ${caseData.name}`, result.cwd);
-      // Also open the running cases panel alongside
-      setActiveCenterTab('sim-running');
-    }
+    await startCaseRun(currentProjectId, caseData);
   };
 
   const handleBatchRun = async () => {
     if (!currentProjectId || selectedCases.size === 0) return;
-    const setActiveCenterTab = useUiStore.getState().setActiveCenterTab;
-    for (const casePath of selectedCases) {
-      const caseData = cases.find((c) => getCaseId(c) === casePath);
-      if (caseData) {
-        // Auto-fill base/block/case from case data
-        const runOpts = { ...simOptions };
-        if (caseData.base) runOpts.base = caseData.base;
-        if (caseData.block) runOpts.block = caseData.block;
-        if (caseData.name) runOpts.case = caseData.name;
-        // Use terminal-based simulation for batch runs too
-        const result = await runSimulationInTerminal(currentProjectId, caseData.name, caseData.name, caseData.subsys, runOpts);
-        if (result) {
-          const createTabForSession = useTerminalStore.getState().createTabForSession;
-          createTabForSession(result.terminalId, `sim: ${caseData.name}`, result.cwd);
-        }
-      }
-    }
-    // Open the running cases panel to show all parallel simulations
-    setActiveCenterTab('sim-running');
-    // Update simOptions with the last case's base/block for UI display
-    const lastCase = cases.find((c) => getCaseId(c) === Array.from(selectedCases).pop());
-    if (lastCase) {
-      if (lastCase.base) setSimOption('base', lastCase.base);
-      if (lastCase.block) setSimOption('block', lastCase.block);
-      if (lastCase.name) setSimOption('case', lastCase.name);
-    }
+    const selected = Array.from(selectedCases)
+      .map((casePath) => cases.find((candidate) => getCaseId(candidate) === casePath))
+      .filter((candidate): candidate is CaseData => !!candidate);
+    await startCaseRuns(currentProjectId, selected);
     setSelectedCases(new Set());
     setBatchMode(false);
   };

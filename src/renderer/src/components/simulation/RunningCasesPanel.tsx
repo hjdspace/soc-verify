@@ -13,7 +13,6 @@ import {
 } from 'lucide-react';
 import { useSimulationStore, type SimulationRunRecord } from '@renderer/stores/simulation';
 import { useTerminalStore } from '@renderer/stores/terminal';
-import { useUiStore } from '@renderer/stores/ui';
 import { cn } from '@renderer/lib/utils';
 
 const STATUS_CONFIG: Record<string, { color: string; bg: string; label: string; icon: typeof CircleDot }> = {
@@ -47,8 +46,6 @@ function RunCard({ run }: { run: SimulationRunRecord }) {
   const createTabForSession = useTerminalStore((s) => s.createTabForSession);
   const getTabIdByTerminalId = useTerminalStore((s) => s.getTabIdByTerminalId);
   const setActiveTab = useTerminalStore((s) => s.setActiveTab);
-  const setCenterView = useUiStore((s) => s.setCenterView);
-  const setActiveCenterTab = useUiStore((s) => s.setActiveCenterTab);
 
   // Live-update elapsed time for running simulations
   useEffect(() => {
@@ -73,12 +70,8 @@ function RunCard({ run }: { run: SimulationRunRecord }) {
     } else {
       tabId = createTabForSession(run.terminalId, `sim: ${run.caseName ?? run.caseId}`, run.cwd);
     }
-    // Directly set center view and active tab — don't rely on the useEffect
-    // in CenterArea (which won't fire if activeTabId hasn't changed).
     setActiveTab(tabId);
-    setActiveCenterTab(`term:${tabId}`);
-    setCenterView('terminal');
-  }, [run.terminalId, run.caseName, run.caseId, run.cwd, getTabIdByTerminalId, setActiveTab, createTabForSession, setActiveCenterTab, setCenterView]);
+  }, [run.terminalId, run.caseName, run.caseId, run.cwd, getTabIdByTerminalId, setActiveTab, createTabForSession]);
 
   const handleAbort = useCallback(() => {
     if (run.terminalId) {

@@ -73,8 +73,6 @@ describe('SessionStore — event handling and state machine', () => {
     useSessionStore.setState({
       sessions: [],
       currentSessionId: null,
-      inputMessage: '',
-      isSending: false,
       historySessions: [],
       historyLoading: false,
     });
@@ -97,6 +95,38 @@ describe('SessionStore — event handling and state machine', () => {
     expect(state.sessions[0].cwd).toBe('/tmp/proj');
     expect(mockCreate).not.toHaveBeenCalled();
     expect(mockToastSuccess).not.toHaveBeenCalledWith('AI 会话已创建');
+  });
+
+  it('keeps composer drafts, skills, and context files isolated per Agent Conversation', async () => {
+    const firstId = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    useSessionStore.getState().setInputMessage('draft for first');
+    useSessionStore.getState().addSkill({
+      name: 'debug',
+      description: 'Debug failures',
+      filePath: '/skills/debug/SKILL.md',
+      source: 'project',
+    });
+    useSessionStore.getState().addContextFile({
+      name: 'core.sv',
+      path: '/tmp/proj/rtl/core.sv',
+      type: 'file',
+    });
+
+    const secondId = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    const second = useSessionStore.getState().sessions.find((session) => session.id === secondId);
+    expect(second?.composer).toEqual({ inputMessage: '', selectedSkills: [], contextFiles: [] });
+
+    useSessionStore.getState().setInputMessage('draft for second');
+    useSessionStore.getState().switchSession(firstId!);
+
+    const first = useSessionStore.getState().sessions.find((session) => session.id === firstId);
+    expect(first?.composer).toEqual({
+      inputMessage: 'draft for first',
+      selectedSkills: [expect.objectContaining({ name: 'debug' })],
+      contextFiles: [expect.objectContaining({ path: '/tmp/proj/rtl/core.sv' })],
+    });
+    expect(useSessionStore.getState().sessions.find((session) => session.id === secondId)?.composer.inputMessage)
+      .toBe('draft for second');
   });
 
   it('opens a usable local tab without waiting for backend session creation', async () => {
@@ -127,8 +157,6 @@ describe('SessionStore — event handling and state machine', () => {
       model: undefined,
     });
     expect(mockSend).toHaveBeenCalledWith({ sessionId: 'session_test_1', message: 'Hello AI' });
-    expect(state.isSending).toBe(true);
-
     const session = state.sessions[0];
     expect(session.runtimeSessionId).toBe('session_test_1');
     expect(session.persistedSessionId).toBe('session_test_1');
@@ -435,14 +463,13 @@ describe('SessionStore — event handling and state machine', () => {
     expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
   });
 
-  it('handles agent_end by setting status to idle and clearing isSending', async () => {
+  it('handles agent_end by setting the matching Agent Conversation to idle', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
     await useSessionStore.getState().sendMessage('Hello');
 
     useSessionStore.getState().handleSessionEvent('session_test_1', { type: 'agent_end' });
 
     const state = useSessionStore.getState();
-    expect(state.isSending).toBe(false);
     expect(state.sessions[0].status).toBe('idle');
     // All streaming messages should have isStreaming=false
     const streaming = state.sessions[0].messages.filter((m) => m.isStreaming);
@@ -456,7 +483,7 @@ describe('SessionStore — event handling and state machine', () => {
     await useSessionStore.getState().abortSession();
 
     expect(mockAbort).toHaveBeenCalledWith({ sessionId: 'session_test_1' });
-    expect(useSessionStore.getState().isSending).toBe(false);
+    expect(useSessionStore.getState().sessions[0].status).toBe('idle');
     expect(useSessionStore.getState().sessions[0].status).toBe('idle');
   });
 
@@ -638,6 +665,7 @@ describe('SessionStore — event handling and state machine', () => {
           name: 'Old session',
           status: 'idle' as const,
           messages: [],
+          composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
           createdAt: 10,
         },
       ],

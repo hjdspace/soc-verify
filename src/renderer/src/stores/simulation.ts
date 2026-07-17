@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
+import { useTerminalStore } from './terminal';
+import { useWorkbenchStore } from './workbench';
 import type { SimulationHistoryEntry, SimulationStatus } from '@shared/types';
 import type { SimulationRunStatus as PluginRunStatus } from '@shared/plugin-types';
 
@@ -28,6 +30,13 @@ export interface SimulationRunRecord {
   cwd?: string;
 }
 
+export type SimulationCase = {
+  name: string;
+  subsys: string;
+  base?: string;
+  block?: string;
+};
+
 interface SimulationStoreState {
   activeRuns: SimulationRunRecord[];
   history: SimulationHistoryEntry[];
@@ -40,8 +49,8 @@ interface SimulationStoreState {
   loadingHistory: boolean;
   simOptions: Record<string, unknown>;
 
-  runSimulation: (projectId: string, caseId: string, caseName: string, subsys: string, options?: Record<string, unknown>) => Promise<string | null>;
-  runSimulationInTerminal: (projectId: string, caseId: string, caseName: string, subsys: string, options?: Record<string, unknown>) => Promise<{ runId: string; terminalId: string; command: string; cwd: string } | null>;
+  startCaseRun: (projectId: string, simulationCase: SimulationCase) => Promise<string | null>;
+  startCaseRuns: (projectId: string, simulationCases: SimulationCase[]) => Promise<string[]>;
   abortSimulation: (projectId: string, runId: string) => Promise<void>;
   abortTerminalRun: (terminalId: string) => Promise<void>;
   loadHistory: (projectId: string) => Promise<void>;
@@ -54,6 +63,7 @@ interface SimulationStoreState {
   loadRunDetail: (projectId: string, runId: string) => Promise<void>;
   setDetailRunId: (runId: string | null) => void;
   setCompareRunIds: (a: string | null, b: string | null) => void;
+  selectCase: (simulationCase: SimulationCase) => void;
   setSimOption: (key: string, value: unknown) => void;
   setSimOptions: (options: Record<string, unknown>) => void;
   removeCompletedRuns: () => void;
@@ -83,51 +93,29 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
   compareResult: null,
   simOptions: {},
 
-  runSimulation: async (projectId, caseId, caseName, subsys, options) => {
-    try {
-      const result = await trpc.simulation.run.mutate({
-        projectId,
-        options: { caseId, caseName, subsys, options },
-      });
-      const record: SimulationRunRecord = {
-        runId: result.runId,
-        projectId,
-        caseId,
-        caseName,
-        subsys,
-        status: 'pending',
-        startTime: Date.now(),
-      };
-      set((s) => ({ activeRuns: [...s.activeRuns, record] }));
+  startCaseRun: async (projectId, simulationCase) => {
+    const options = { ...get().simOptions };
+    if (simulationCase.base) options.base = simulationCase.base;
+    if (simulationCase.block) options.block = simulationCase.block;
+    options.case = simulationCase.name;
+    set({ simOptions: options });
 
-      // Register IPC event listener once
-      if (!eventListenerRegistered && window.eventBridge) {
-        eventListenerRegistered = true;
-        window.eventBridge.onSimulationEvent(({ type, record }) => {
-          get().handleSimulationEvent(type, record);
-        });
-      }
-
-      useToastStore.getState().info(`仿真已启动: ${caseName}`);
-      return result.runId;
-    } catch (err) {
-      useToastStore.getState().error('启动仿真失败', tRPCError(err));
-      return null;
-    }
-  },
-
-  runSimulationInTerminal: async (projectId, caseId, caseName, subsys, options) => {
     try {
       const result = await trpc.simulation.runInTerminal.mutate({
         projectId,
-        options: { caseId, caseName, subsys, options },
+        options: {
+          caseId: simulationCase.name,
+          caseName: simulationCase.name,
+          subsys: simulationCase.subsys,
+          options,
+        },
       });
       const record: SimulationRunRecord = {
         runId: result.runId,
         projectId,
-        caseId,
-        caseName,
-        subsys,
+        caseId: simulationCase.name,
+        caseName: simulationCase.name,
+        subsys: simulationCase.subsys,
         status: 'running',
         startTime: Date.now(),
         terminalId: result.terminalId,
@@ -151,6 +139,13 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
         return { activeRuns: [...s.activeRuns, record] };
       });
 
+      useTerminalStore.getState().createTabForSession(
+        result.terminalId,
+        `sim: ${simulationCase.name}`,
+        result.cwd,
+      );
+      useWorkbenchStore.getState().open({ type: 'running-simulations' });
+
       // Register IPC event listener once
       if (!eventListenerRegistered && window.eventBridge) {
         eventListenerRegistered = true;
@@ -159,12 +154,21 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
         });
       }
 
-      useToastStore.getState().info(`仿真已启动 (终端): ${caseName}`);
-      return result;
+      useToastStore.getState().info(`仿真已启动 (终端): ${simulationCase.name}`);
+      return result.runId;
     } catch (err) {
       useToastStore.getState().error('启动终端仿真失败', tRPCError(err));
       return null;
     }
+  },
+
+  startCaseRuns: async (projectId, simulationCases) => {
+    const runIds: string[] = [];
+    for (const simulationCase of simulationCases) {
+      const runId = await get().startCaseRun(projectId, simulationCase);
+      if (runId) runIds.push(runId);
+    }
+    return runIds;
   },
 
   abortTerminalRun: async (terminalId) => {
@@ -395,6 +399,20 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
     }
   },
   setCompareRunIds: (a, b) => set({ compareRunIdA: a, compareRunIdB: b }),
+  selectCase: (simulationCase) => set((state) => {
+    const options: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(state.simOptions)) {
+      if (key === 'post' || key === 'bq') {
+        options[key] = value;
+      } else if (key !== 'base' && key !== 'block' && key !== 'case') {
+        options[key] = typeof value === 'boolean' ? false : '';
+      }
+    }
+    if (simulationCase.base) options.base = simulationCase.base;
+    if (simulationCase.block) options.block = simulationCase.block;
+    options.case = simulationCase.name;
+    return { simOptions: options };
+  }),
   setSimOption: (key, value) => set((s) => ({ simOptions: { ...s.simOptions, [key]: value } })),
   setSimOptions: (options) => set({ simOptions: options }),
   removeCompletedRuns: () => set((s) => ({

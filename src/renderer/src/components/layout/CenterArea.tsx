@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal } from 'lucide-react';
-import { useUiStore } from '@renderer/stores/ui';
+import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useTerminalStore } from '@renderer/stores/terminal';
@@ -17,21 +17,14 @@ import { RunningCasesPanel } from '@renderer/components/simulation/RunningCasesP
 import { cn } from '@renderer/lib/utils';
 import type { SimulationHistoryEntry, CompileError } from '@shared/types';
 
-type CenterTab = {
-  id: string;
-  type: 'file' | 'terminal' | 'ai-artifacts' | 'sim-errors' | 'sim-history' | 'sim-detail' | 'sim-compare' | 'sim-running' | 'coverage' | 'regression' | 'dashboard' | 'to-checklist' | 'source-control' | 'diff-review';
-  title: string;
-  closable: boolean;
-};
-
 export function CenterArea() {
-  const centerView = useUiStore((s) => s.centerView);
-  const selectedFile = useUiStore((s) => s.selectedFile);
-  const setCenterView = useUiStore((s) => s.setCenterView);
-  const activeCenterTab = useUiStore((s) => s.activeCenterTab);
-  const setActiveCenterTab = useUiStore((s) => s.setActiveCenterTab);
-
-  const [tabs, setTabs] = useState<CenterTab[]>([]);
+  const tabs = useWorkbenchStore((s) => s.tabs);
+  const activeTabId = useWorkbenchStore((s) => s.activeTabId);
+  const openDestination = useWorkbenchStore((s) => s.open);
+  const activateTab = useWorkbenchStore((s) => s.activate);
+  const closeWorkbenchTab = useWorkbenchStore((s) => s.close);
+  const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
+  const destination = activeTab?.destination ?? null;
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const activeRuns = useSimulationStore((s) => s.activeRuns);
@@ -45,113 +38,15 @@ export function CenterArea() {
   const compareRuns = useSimulationStore((s) => s.compareRuns);
 
   const terminalTabs = useTerminalStore((s) => s.tabs);
-  const activeTerminalTabId = useTerminalStore((s) => s.activeTabId);
   const createTerminal = useTerminalStore((s) => s.createTerminal);
   const closeTerminal = useTerminalStore((s) => s.closeTerminal);
   const setActiveTerminalTab = useTerminalStore((s) => s.setActiveTab);
 
-  // Sync tabs with active center tab
   useEffect(() => {
-    if (!activeCenterTab) return;
-
-    if (activeCenterTab.startsWith('file:')) {
-      const name = activeCenterTab.slice(5);
-      if (!tabs.find((t) => t.id === activeCenterTab)) {
-        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'file', title: name, closable: true }]);
-      }
-      setCenterView('file');
-    } else if (activeCenterTab.startsWith('sim-errors:')) {
-      const runId = activeCenterTab.slice('sim-errors:'.length);
-      if (!tabs.find((t) => t.id === activeCenterTab)) {
-        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'sim-errors', title: `编译错误 ${runId.slice(-6)}`, closable: true }]);
-      }
-      setCenterView('sim-errors');
-    } else if (activeCenterTab === 'sim-history') {
-      if (!tabs.find((t) => t.id === activeCenterTab)) {
-        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'sim-history', title: '仿真历史', closable: true }]);
-      }
-      setCenterView('sim-history');
-    } else if (activeCenterTab.startsWith('sim-detail:')) {
-      const runId = activeCenterTab.slice('sim-detail:'.length);
-      if (!tabs.find((t) => t.id === activeCenterTab)) {
-        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'sim-detail', title: `运行详情 ${runId.slice(-6)}`, closable: true }]);
-      }
-      setCenterView('sim-detail');
-      if (currentProjectId) loadRunDetail(currentProjectId, runId);
-    } else if (activeCenterTab === 'sim-compare') {
-      if (!tabs.find((t) => t.id === activeCenterTab)) {
-        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'sim-compare', title: '运行对比', closable: true }]);
-      }
-      setCenterView('sim-compare');
-    } else if (activeCenterTab === 'sim-running') {
-      if (!tabs.find((t) => t.id === activeCenterTab)) {
-        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'sim-running', title: '运行概览', closable: true }]);
-      }
-      setCenterView('sim-running');
-    } else if (activeCenterTab === 'coverage') {
-      if (!tabs.find((t) => t.id === activeCenterTab)) {
-        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'coverage', title: '覆盖率分析', closable: true }]);
-      }
-      setCenterView('coverage');
-    } else if (activeCenterTab === 'regression') {
-      if (!tabs.find((t) => t.id === activeCenterTab)) {
-        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'regression', title: '回归套件', closable: true }]);
-      }
-      setCenterView('regression');
-    } else if (activeCenterTab === 'dashboard') {
-      if (!tabs.find((t) => t.id === activeCenterTab)) {
-        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'dashboard', title: '仪表盘', closable: true }]);
-      }
-      setCenterView('dashboard');
-    } else if (activeCenterTab === 'to-checklist') {
-      if (!tabs.find((t) => t.id === activeCenterTab)) {
-        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'to-checklist', title: 'TO 检查清单', closable: true }]);
-      }
-      setCenterView('to-checklist');
-    } else if (activeCenterTab === 'source-control') {
-      if (!tabs.find((t) => t.id === activeCenterTab)) {
-        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'source-control', title: '源代码管理', closable: true }]);
-      }
-      setCenterView('source-control');
-    } else if (activeCenterTab?.startsWith('diff-review:')) {
-      const fileName = activeCenterTab.slice('diff-review:'.length);
-      if (!tabs.find((t) => t.id === activeCenterTab)) {
-        setTabs((prev) => [...prev, { id: activeCenterTab, type: 'diff-review' as CenterTab['type'], title: `Diff: ${fileName}`, closable: true }]);
-      }
-      setCenterView('diff-review');
+    if (destination?.type === 'simulation-detail' && currentProjectId) {
+      void loadRunDetail(currentProjectId, destination.runId);
     }
-  }, [activeCenterTab]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Sync terminal tabs with center tabs
-  useEffect(() => {
-    setTabs((prev) => {
-      // Remove old terminal tabs that no longer exist
-      const filtered = prev.filter((t) => t.type !== 'terminal' || terminalTabs.find((tt) => `term:${tt.id}` === t.id));
-      // Add new terminal tabs
-      for (const tt of terminalTabs) {
-        const tabId = `term:${tt.id}`;
-        if (!filtered.find((t) => t.id === tabId)) {
-          filtered.push({ id: tabId, type: 'terminal', title: tt.title, closable: true });
-        }
-      }
-      // Update titles
-      return filtered.map((t) => {
-        if (t.type === 'terminal') {
-          const tt = terminalTabs.find((tt) => `term:${tt.id}` === t.id);
-          if (tt) return { ...t, title: tt.title };
-        }
-        return t;
-      });
-    });
-  }, [terminalTabs]);
-
-  // Sync active terminal tab
-  useEffect(() => {
-    if (activeTerminalTabId) {
-      setActiveCenterTab(`term:${activeTerminalTabId}`);
-      setCenterView('terminal');
-    }
-  }, [activeTerminalTabId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentProjectId, destination, loadRunDetail]);
 
   // Load history when project changes
   useEffect(() => {
@@ -161,44 +56,34 @@ export function CenterArea() {
   }, [currentProjectId, loadHistory]);
 
   const closeTab = (tabId: string) => {
-    if (tabId.startsWith('term:')) {
-      const termTabId = tabId.slice(5);
-      void closeTerminal(termTabId);
+    const tab = tabs.find((candidate) => candidate.id === tabId);
+    if (tab?.destination.type === 'terminal') {
+      void closeTerminal(tab.destination.terminalTabId);
+      return;
     }
-    setTabs((prev) => {
-      const filtered = prev.filter((t) => t.id !== tabId);
-      if (activeCenterTab === tabId) {
-        const next = filtered[filtered.length - 1];
-        setActiveCenterTab(next?.id ?? null);
-        setCenterView(next ? next.type : 'empty');
-      }
-      return filtered;
-    });
+    closeWorkbenchTab(tabId);
   };
 
   const openSimErrors = (runId: string) => {
-    setActiveCenterTab(`sim-errors:${runId}`);
+    openDestination({ type: 'simulation-errors', runId });
   };
 
   const openSimHistory = () => {
-    setActiveCenterTab('sim-history');
+    openDestination({ type: 'simulation-history' });
   };
 
   const openRunDetail = (runId: string) => {
-    setActiveCenterTab(`sim-detail:${runId}`);
+    openDestination({ type: 'simulation-detail', runId });
   };
 
   const openCompare = async (runIdA: string, runIdB: string) => {
     if (currentProjectId) {
       await compareRuns(currentProjectId, runIdA, runIdB);
     }
-    setActiveCenterTab('sim-compare');
+    openDestination({ type: 'simulation-comparison' });
   };
 
-  // Get compile errors for the active sim-errors tab
-  const simErrorsRunId = activeCenterTab?.startsWith('sim-errors:')
-    ? activeCenterTab.slice('sim-errors:'.length)
-    : null;
+  const simErrorsRunId = destination?.type === 'simulation-errors' ? destination.runId : null;
   const simErrorsRun = activeRuns.find((r) => r.runId === simErrorsRunId);
   const simErrors = simErrorsRun?.compileErrors ?? [];
 
@@ -217,28 +102,31 @@ export function CenterArea() {
                 key={tab.id}
                 className={cn(
                   'flex h-full shrink-0 items-center gap-1.5 border-r px-3 text-xs transition-colors',
-                  activeCenterTab === tab.id
+                  activeTabId === tab.id
                     ? 'bg-background text-foreground'
                     : 'text-muted-foreground hover:bg-background/50',
                 )}
                 onClick={() => {
-                  setActiveCenterTab(tab.id);
-                  setCenterView(tab.type);
+                  if (tab.destination.type === 'terminal') {
+                    setActiveTerminalTab(tab.destination.terminalTabId);
+                  } else {
+                    activateTab(tab.id);
+                  }
                 }}
               >
-                {tab.type === 'file' && <FileText className="h-3 w-3 opacity-50" />}
-                {tab.type === 'terminal' && <TerminalIcon className="h-3 w-3 opacity-50" />}
-                {tab.type === 'ai-artifacts' && <Sparkles className="h-3 w-3 opacity-50" />}
-                {tab.type === 'sim-errors' && <AlertCircle className="h-3 w-3 text-red-500" />}
-                {tab.type === 'sim-history' && <History className="h-3 w-3 opacity-50" />}
-                {tab.type === 'sim-detail' && <FileText className="h-3 w-3 opacity-50" />}
-                {tab.type === 'sim-compare' && <GitCompare className="h-3 w-3 opacity-50" />}
-                {tab.type === 'sim-running' && <CircleDot className="h-3 w-3 opacity-50" />}
-                {tab.type === 'coverage' && <BarChart3 className="h-3 w-3 opacity-50" />}
-                {tab.type === 'regression' && <GitBranch className="h-3 w-3 opacity-50" />}
-                {tab.type === 'dashboard' && <LayoutDashboard className="h-3 w-3 opacity-50" />}
-                {tab.type === 'to-checklist' && <ListChecks className="h-3 w-3 opacity-50" />}
-                {tab.type === 'source-control' && <GitCommitHorizontal className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'file' && <FileText className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'terminal' && <TerminalIcon className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'ai-artifacts' && <Sparkles className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'simulation-errors' && <AlertCircle className="h-3 w-3 text-red-500" />}
+                {tab.destination.type === 'simulation-history' && <History className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'simulation-detail' && <FileText className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'simulation-comparison' && <GitCompare className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'running-simulations' && <CircleDot className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'coverage' && <BarChart3 className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'regression' && <GitBranch className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'dashboard' && <LayoutDashboard className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'to-checklist' && <ListChecks className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'source-control' && <GitCommitHorizontal className="h-3 w-3 opacity-50" />}
                 <span className="max-w-32 truncate">{tab.title}</span>
                 {tab.closable && (
                   <button
@@ -257,42 +145,42 @@ export function CenterArea() {
         )}
         <div className="flex items-center gap-1 px-2">
           <button
-            onClick={() => setActiveCenterTab('dashboard')}
+            onClick={() => openDestination({ type: 'dashboard' })}
             title="仪表盘"
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <LayoutDashboard className="h-3.5 w-3.5" />
           </button>
           <button
-            onClick={() => setActiveCenterTab('coverage')}
+            onClick={() => openDestination({ type: 'coverage' })}
             title="覆盖率"
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <BarChart3 className="h-3.5 w-3.5" />
           </button>
           <button
-            onClick={() => setActiveCenterTab('regression')}
+            onClick={() => openDestination({ type: 'regression' })}
             title="回归套件"
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <GitBranch className="h-3.5 w-3.5" />
           </button>
           <button
-            onClick={() => setActiveCenterTab('source-control')}
+            onClick={() => openDestination({ type: 'source-control' })}
             title="源代码管理"
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <GitCommitHorizontal className="h-3.5 w-3.5" />
           </button>
           <button
-            onClick={() => setActiveCenterTab('to-checklist')}
+            onClick={() => openDestination({ type: 'to-checklist' })}
             title="TO 检查"
             className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             <ListChecks className="h-3.5 w-3.5" />
           </button>
           <button
-            onClick={() => setActiveCenterTab('sim-running')}
+            onClick={() => openDestination({ type: 'running-simulations' })}
             title="运行概览"
             className={cn(
               'relative rounded p-1 transition-colors hover:bg-accent hover:text-foreground',
@@ -320,17 +208,16 @@ export function CenterArea() {
 
       {/* ── Content area ─────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden">
-        {centerView === 'file' && selectedFile && currentProjectId ? (
+        {destination?.type === 'file' && currentProjectId ? (
           <FileEditor
-            key={selectedFile.path}
+            key={destination.path}
             projectId={currentProjectId}
-            filePath={selectedFile.path}
-            fileName={selectedFile.name}
+            filePath={destination.path}
+            fileName={destination.name}
           />
-        ) : centerView === 'terminal' && activeCenterTab?.startsWith('term:') ? (
+        ) : destination?.type === 'terminal' ? (
           (() => {
-            const termTabId = activeCenterTab.slice(5);
-            const termTab = terminalTabs.find((t) => t.id === termTabId);
+            const termTab = terminalTabs.find((t) => t.id === destination.terminalTabId);
             if (!termTab || !termTab.terminalId) {
               return (
                 <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
@@ -340,42 +227,39 @@ export function CenterArea() {
             }
             return <TerminalView terminalId={termTab.terminalId} />;
           })()
-        ) : centerView === 'sim-errors' ? (
+        ) : destination?.type === 'simulation-errors' ? (
           <CompileErrorView errors={simErrors} runId={simErrorsRunId} />
-        ) : centerView === 'sim-history' ? (
+        ) : destination?.type === 'simulation-history' ? (
           <SimulationHistoryView
             history={history}
             onSelectRun={(runId) => openSimErrors(runId)}
             onViewDetail={(runId) => openRunDetail(runId)}
             onCompare={(runIdA, runIdB) => openCompare(runIdA, runIdB)}
           />
-        ) : centerView === 'sim-detail' ? (
+        ) : destination?.type === 'simulation-detail' ? (
           <RunDetailView
             detailRun={detailRun}
             loading={loadingDetail}
             onViewErrors={(runId) => openSimErrors(runId)}
           />
-        ) : centerView === 'sim-compare' ? (
+        ) : destination?.type === 'simulation-comparison' ? (
           <ComparisonView result={compareResult} />
-        ) : centerView === 'sim-running' ? (
+        ) : destination?.type === 'running-simulations' ? (
           <RunningCasesPanel />
-        ) : centerView === 'coverage' ? (
+        ) : destination?.type === 'coverage' ? (
           <CoveragePanel />
-        ) : centerView === 'regression' ? (
+        ) : destination?.type === 'regression' ? (
           <RegressionPanel />
-        ) : centerView === 'dashboard' ? (
+        ) : destination?.type === 'dashboard' ? (
           <DashboardPanel />
-        ) : centerView === 'to-checklist' ? (
+        ) : destination?.type === 'to-checklist' ? (
           <TOChecklistPanel />
-        ) : centerView === 'source-control' ? (
+        ) : destination?.type === 'source-control' ? (
           <SourceControlPanel />
-        ) : centerView === 'diff-review' && activeCenterTab?.startsWith('diff-review:') ? (
+        ) : destination?.type === 'diff-review' ? (
           (() => {
             const queue = useDiffReviewStore.getState().queue;
-            const currentPath = useDiffReviewStore.getState().currentFilePath;
-            const target = currentPath
-              ? queue.find((e) => e.filePath === currentPath)
-              : undefined;
+            const target = queue.find((entry) => entry.filePath === destination.filePath);
             if (!target) {
               return (
                 <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
@@ -430,7 +314,7 @@ export function CenterArea() {
                 终端
               </button>
               <button
-                onClick={() => setCenterView('ai-artifacts')}
+                onClick={() => openDestination({ type: 'ai-artifacts' })}
                 className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs transition-colors hover:bg-accent"
               >
                 <Sparkles className="h-3.5 w-3.5" />
@@ -438,7 +322,7 @@ export function CenterArea() {
               </button>
             </div>
             <p className="text-[10px]">
-              {activeCenterTab ? `活动页签：${activeCenterTab}` : '从左栏选择文件或在右栏与 AI 对话'}
+              {activeTab ? `活动页签：${activeTab.title}` : '从左栏选择文件或在右栏与 AI 对话'}
             </p>
           </div>
         )}

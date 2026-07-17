@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Search, Terminal as TerminalIcon, LayoutDashboard, BarChart3, ListChecks, GitBranch, Settings, FileText } from 'lucide-react';
 import { useUiStore } from '@renderer/stores/ui';
+import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useProjectStore } from '@renderer/stores/project';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
@@ -22,8 +23,7 @@ interface CommandItem {
 export function CommandPalette() {
   const commandPaletteOpen = useUiStore((s) => s.commandPaletteOpen);
   const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
-  const setCenterView = useUiStore((s) => s.setCenterView);
-  const setActiveCenterTab = useUiStore((s) => s.setActiveCenterTab);
+  const openDestination = useWorkbenchStore((s) => s.open);
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
 
@@ -84,23 +84,19 @@ export function CommandPalette() {
       setCommandPaletteOpen(false);
     }},
     { id: 'cmd-dashboard', label: '打开仪表盘', icon: LayoutDashboard, action: () => {
-      setCenterView('dashboard');
-      setActiveCenterTab('dashboard');
+      openDestination({ type: 'dashboard' });
       setCommandPaletteOpen(false);
     }},
     { id: 'cmd-coverage', label: '覆盖率分析', icon: BarChart3, action: () => {
-      setCenterView('coverage');
-      setActiveCenterTab('coverage');
+      openDestination({ type: 'coverage' });
       setCommandPaletteOpen(false);
     }},
     { id: 'cmd-regression', label: '回归套件管理', icon: GitBranch, action: () => {
-      setCenterView('regression');
-      setActiveCenterTab('regression');
+      openDestination({ type: 'regression' });
       setCommandPaletteOpen(false);
     }},
     { id: 'cmd-to', label: 'TO 检查清单', icon: ListChecks, action: () => {
-      setCenterView('to-checklist');
-      setActiveCenterTab('to-checklist');
+      openDestination({ type: 'to-checklist' });
       setCommandPaletteOpen(false);
     }},
     { id: 'cmd-settings', label: '打开设置', icon: Settings, action: () => {
@@ -122,11 +118,9 @@ export function CommandPalette() {
       icon: FileText,
       action: () => {
         if (r.type === 'simulation') {
-          setCenterView('sim-history');
-          setActiveCenterTab('sim-history');
+          openDestination({ type: 'simulation-history' });
         } else if (r.type === 'regression') {
-          setCenterView('regression');
-          setActiveCenterTab('regression');
+          openDestination({ type: 'regression' });
         }
         setCommandPaletteOpen(false);
       },

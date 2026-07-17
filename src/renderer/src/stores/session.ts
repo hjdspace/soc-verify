@@ -49,6 +49,12 @@ export interface ContextFile {
   type: 'file' | 'directory';
 }
 
+export type SessionComposer = {
+  inputMessage: string;
+  selectedSkills: SelectedSkill[];
+  contextFiles: ContextFile[];
+};
+
 export interface SessionEntry {
   id: string;
   /** Live backend agent session ID. Empty until the agent process is started. */
@@ -61,6 +67,7 @@ export interface SessionEntry {
   name: string;
   status: SessionStatus;
   messages: ChatMessage[];
+  composer: SessionComposer;
   createdAt: number;
   model?: SessionModel;
 }
@@ -79,10 +86,6 @@ export interface HistorySession {
 interface SessionStoreState {
   sessions: SessionEntry[];
   currentSessionId: string | null;
-  inputMessage: string;
-  isSending: boolean;
-  selectedSkills: SelectedSkill[];
-  contextFiles: ContextFile[];
   historySessions: HistorySession[];
   historyLoading: boolean;
   /** Last user-selected model, persisted to localStorage so new sessions reuse it. */
@@ -96,21 +99,16 @@ interface SessionStoreState {
   switchSession: (sessionId: string) => void;
   sendMessage: (message: string, images?: string[]) => Promise<void>;
   abortSession: () => Promise<void>;
-  setSessionName: (sessionId: string, name: string) => void;
   renameSession: (sessionId: string, projectId: string, name: string) => Promise<void>;
   setInputMessage: (msg: string) => void;
   handleSessionEvent: (sessionId: string, event: unknown) => void;
-  refreshSessions: () => Promise<void>;
   restoreSessions: (projectId: string, cwd: string) => Promise<boolean>;
-  getAvailableModels: (sessionId: string) => Promise<AvailableModel[]>;
   setModel: (sessionId: string, provider: string, modelId: string, modelName?: string) => Promise<void>;
   steerSession: (message: string) => Promise<void>;
   addSkill: (skill: SelectedSkill) => void;
   removeSkill: (name: string) => void;
-  clearSkills: () => void;
   addContextFile: (file: ContextFile) => void;
   removeContextFile: (path: string) => void;
-  clearContextFiles: () => void;
   fetchHistorySessions: (projectId: string) => Promise<void>;
   loadHistorySession: (historySession: HistorySession, projectId: string, cwd: string) => Promise<void>;
   deleteHistorySession: (sessionId: string, projectId: string) => Promise<void>;
@@ -164,6 +162,14 @@ function sessionMatchesId(session: SessionEntry, sessionId: string): boolean {
     session.runtimeSessionId === sessionId ||
     session.persistedSessionId === sessionId
   );
+}
+
+function emptyComposer(): SessionComposer {
+  return { inputMessage: '', selectedSkills: [], contextFiles: [] };
+}
+
+function sessionComposer(session: SessionEntry | undefined): SessionComposer {
+  return session?.composer ?? emptyComposer();
 }
 
 /**
@@ -465,10 +471,6 @@ async function ensureRuntimeSession(
 export const useSessionStore = create<SessionStoreState>((set, get) => ({
   sessions: [],
   currentSessionId: null,
-  inputMessage: '',
-  isSending: false,
-  selectedSkills: [],
-  contextFiles: [],
   historySessions: [],
   historyLoading: false,
   lastModel: null,
@@ -497,6 +499,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       name: '新会话',
       status: 'idle',
       messages: [],
+      composer: emptyComposer(),
       createdAt: Date.now(),
       model: lastModel ?? undefined,
     };
@@ -548,8 +551,9 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     const isFirstMessage = sessionBeforeSend && sessionBeforeSend.messages.length === 0;
 
     // Build the full message with skill and context prefixes
-    const skills = get().selectedSkills;
-    const contextFiles = get().contextFiles;
+    const composer = sessionComposer(sessionBeforeSend);
+    const skills = composer.selectedSkills;
+    const contextFiles = composer.contextFiles;
     let fullMessage = message;
 
     // Prepend skill invocations
@@ -586,13 +590,14 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     };
 
     set((s) => ({
-      inputMessage: '',
-      isSending: true,
-      selectedSkills: [],
-      contextFiles: [],
       sessions: s.sessions.map((sess) =>
         sess.id === sessionId
-          ? { ...sess, status: 'streaming', messages: [...sess.messages, userMsg, assistantMsg] }
+          ? {
+              ...sess,
+              status: 'streaming',
+              messages: [...sess.messages, userMsg, assistantMsg],
+              composer: emptyComposer(),
+            }
           : sess,
       ),
     }));
@@ -613,7 +618,6 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     } catch (err) {
       const errMsg = tRPCError(err);
       set((s) => ({
-        isSending: false,
         sessions: s.sessions.map((sess) =>
           sess.id === sessionId
             ? {
@@ -639,7 +643,6 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     const runtimeSessionId = session?.runtimeSessionId ?? (!session?.cwd ? sessionId : null);
     if (!runtimeSessionId) {
       set((s) => ({
-        isSending: false,
         sessions: s.sessions.map((sess) =>
           sessionMatchesId(sess, sessionId) ? { ...sess, status: 'idle' } : sess,
         ),
@@ -649,7 +652,6 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     try {
       await trpc.session.abort.mutate({ sessionId: runtimeSessionId });
       set((s) => ({
-        isSending: false,
         sessions: s.sessions.map((sess) =>
           sessionMatchesId(sess, sessionId) ? { ...sess, status: 'idle' } : sess,
         ),
@@ -657,14 +659,6 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     } catch (err) {
       useToastStore.getState().error('中止会话失败', tRPCError(err));
     }
-  },
-
-  setSessionName: (sessionId, name) => {
-    set((s) => ({
-      sessions: s.sessions.map((sess) =>
-        sess.id === sessionId ? { ...sess, name } : sess,
-      ),
-    }));
   },
 
   renameSession: async (sessionId, projectId, name) => {
@@ -685,7 +679,11 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     }
   },
 
-  setInputMessage: (msg) => set({ inputMessage: msg }),
+  setInputMessage: (msg) => set((state) => ({
+    sessions: state.sessions.map((session) => session.id === state.currentSessionId
+      ? { ...session, composer: { ...sessionComposer(session), inputMessage: msg } }
+      : session),
+  })),
 
   handleSessionEvent: (sessionId, event) => {
     const evt = event as Record<string, unknown>;
@@ -830,7 +828,6 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             return {
               ...sess,
               status: 'idle',
-              isSending: false,
               messages: sess.messages.map((m) =>
                 m.isStreaming ? { ...m, isStreaming: false } : m,
               ),
@@ -870,7 +867,6 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
               return {
                 ...sess,
                 status: 'error' as SessionStatus,
-                isSending: false,
                 messages: sess.messages.map((m) =>
                   m.role === 'assistant' && m.isStreaming
                     ? { ...m, content: `[错误] ${errText}`, isStreaming: false }
@@ -883,11 +879,6 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         }
       }),
     }));
-
-    // Update isSending when agent ends
-    if (type === 'agent_end') {
-      set({ isSending: false });
-    }
 
     // ── 持久化策略 ────────────────────────────────────────
     // 流式过程中的事件走节流（避免每次都触发一次 tRPC mutate）；
@@ -906,26 +897,6 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     }
     if (type === 'message_end' || type === 'tool_execution_end' || type === 'agent_end') {
       flushPersist(get);
-    }
-  },
-
-  refreshSessions: async () => {
-    try {
-      const sessions = await trpc.session.list.query();
-      // The list from tRPC only returns basic info, not messages
-      // Full session restore would need agent --resume
-      set({
-        sessions: sessions.map((s) => ({
-          id: s.id,
-          projectId: s.projectId,
-          name: '新会话',
-          status: 'idle' as SessionStatus,
-          messages: [],
-          createdAt: s.createdAt,
-        })),
-      });
-    } catch (err) {
-      useToastStore.getState().error('刷新会话列表失败', tRPCError(err));
     }
   },
 
@@ -961,6 +932,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         name: p.name,
         status: 'idle',
         messages: [],
+        composer: emptyComposer(),
         createdAt: p.createdAt,
         model: p.model,
       }));
@@ -1002,16 +974,6 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     }
   },
 
-  getAvailableModels: async (sessionId) => {
-    try {
-      const models = await trpc.session.getAvailableModels.query({ sessionId });
-      return (models as AvailableModel[]) || [];
-    } catch (err) {
-      useToastStore.getState().error('获取可用模型失败', tRPCError(err));
-      return [];
-    }
-  },
-
   setModel: async (sessionId, provider, modelId, modelName) => {
     const model: SessionModel = { provider, id: modelId, name: modelName ?? modelId };
 
@@ -1039,27 +1001,39 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     })();
   },
 
-  addSkill: (skill) => set((s) => {
-    if (s.selectedSkills.some((sk) => sk.name === skill.name)) return s;
-    return { selectedSkills: [...s.selectedSkills, skill] };
-  }),
-
-  removeSkill: (name) => set((s) => ({
-    selectedSkills: s.selectedSkills.filter((sk) => sk.name !== name),
+  addSkill: (skill) => set((state) => ({
+    sessions: state.sessions.map((session) => {
+      if (session.id !== state.currentSessionId) return session;
+      const composer = sessionComposer(session);
+      if (composer.selectedSkills.some((selected) => selected.name === skill.name)) return session;
+      return { ...session, composer: { ...composer, selectedSkills: [...composer.selectedSkills, skill] } };
+    }),
   })),
 
-  clearSkills: () => set({ selectedSkills: [] }),
-
-  addContextFile: (file) => set((s) => {
-    if (s.contextFiles.some((f) => f.path === file.path)) return s;
-    return { contextFiles: [...s.contextFiles, file] };
-  }),
-
-  removeContextFile: (path) => set((s) => ({
-    contextFiles: s.contextFiles.filter((f) => f.path !== path),
+  removeSkill: (name) => set((state) => ({
+    sessions: state.sessions.map((session) => {
+      if (session.id !== state.currentSessionId) return session;
+      const composer = sessionComposer(session);
+      return { ...session, composer: { ...composer, selectedSkills: composer.selectedSkills.filter((skill) => skill.name !== name) } };
+    }),
   })),
 
-  clearContextFiles: () => set({ contextFiles: [] }),
+  addContextFile: (file) => set((state) => ({
+    sessions: state.sessions.map((session) => {
+      if (session.id !== state.currentSessionId) return session;
+      const composer = sessionComposer(session);
+      if (composer.contextFiles.some((contextFile) => contextFile.path === file.path)) return session;
+      return { ...session, composer: { ...composer, contextFiles: [...composer.contextFiles, file] } };
+    }),
+  })),
+
+  removeContextFile: (path) => set((state) => ({
+    sessions: state.sessions.map((session) => {
+      if (session.id !== state.currentSessionId) return session;
+      const composer = sessionComposer(session);
+      return { ...session, composer: { ...composer, contextFiles: composer.contextFiles.filter((file) => file.path !== path) } };
+    }),
+  })),
 
   steerSession: async (message) => {
     const sessionId = get().currentSessionId;
@@ -1114,6 +1088,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
           name: historySession.name,
           status: 'idle',
           messages: [],
+          composer: emptyComposer(),
           createdAt: historySession.createdAt,
           model: historySession.model,
         };

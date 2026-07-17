@@ -86,21 +86,19 @@ function CodeHighlight({ code, language, className }: { code: string; language: 
 
 // ── Main ToolCard ───────────────────────────────────────
 
-const FILE_EDITING_TOOLS = new Set(['write', 'edit', 'apply_patch', 'ast_edit']);
-
 export function ToolCard({ message }: { message: ChatMessage }) {
   const [expanded, setExpanded] = useState(false);
   const isExecuting = !message.toolResult;
   const meta = getToolMeta(message.toolName);
-  const isFileTool = !isExecuting && FILE_EDITING_TOOLS.has(message.toolName ?? '');
-  const filePath = isFileTool
-    ? (argStr(message.toolArgs, 'path', 'file_path') ?? '')
-    : '';
+  const reviewEntry = useDiffReviewStore((state) =>
+    state.queue.find((entry) => entry.toolCalls.some((toolCall) => toolCall.id === message.id)),
+  );
+  const isFileTool = !isExecuting && !!reviewEntry;
+  const filePath = reviewEntry?.filePath ?? '';
 
   const handleOpenDiffReview = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     if (!filePath) return;
-    useDiffReviewStore.getState().refreshQueue();
     useDiffReviewStore.getState().openFile(filePath);
   }, [filePath]);
 

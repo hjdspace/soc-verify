@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, RefreshCw, Cpu, FileText, LayoutDashboard, ChevronDown, Plus, Folder } from 'lucide-react';
 import { useProjectStore } from '@renderer/stores/project';
-import { useUiStore } from '@renderer/stores/ui';
+import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { trpc } from '@renderer/lib/trpc';
 import { FileTree } from '../project/FileTree';
 import { SubsysList } from '../project/SubsysList';
@@ -25,8 +25,7 @@ export function LeftRail({ width }: LeftRailProps) {
   const loadFileTree = useProjectStore((s) => s.loadFileTree);
   const closeProject = useProjectStore((s) => s.closeProject);
   const refreshFileTree = useProjectStore((s) => s.refreshFileTree);
-  const setSelectedFile = useUiStore((s) => s.setSelectedFile);
-  const setActiveCenterTab = useUiStore((s) => s.setActiveCenterTab);
+  const openDestination = useWorkbenchStore((s) => s.open);
 
   const currentProject = projects.find((p) => p.id === currentProjectId);
 
@@ -51,8 +50,7 @@ export function LeftRail({ width }: LeftRailProps) {
   }, []);
 
   const handleSelectFile = (path: string, name: string) => {
-    setSelectedFile(path, name);
-    setActiveCenterTab(`file:${name}`);
+    openDestination({ type: 'file', path, name });
   };
 
   const handleSelectProject = (projectId: string) => {

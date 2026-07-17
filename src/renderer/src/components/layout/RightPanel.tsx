@@ -16,14 +16,17 @@ interface RightPanelProps {
 export function RightPanel({ width }: RightPanelProps) {
   const sessions = useSessionStore((s) => s.sessions);
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
+  const currentSession = sessions.find((session) => session.id === currentSessionId);
+  const inputMessage = currentSession?.composer?.inputMessage ?? '';
+  const selectedSkills = currentSession?.composer?.selectedSkills ?? [];
+  const contextFiles = currentSession?.composer?.contextFiles ?? [];
+  const isSending = currentSession?.status === 'streaming' || currentSession?.status === 'tool_executing';
   const createSession = useSessionStore((s) => s.createSession);
   const closeSession = useSessionStore((s) => s.closeSession);
   const switchSession = useSessionStore((s) => s.switchSession);
-  const inputMessage = useSessionStore((s) => s.inputMessage);
   const setInputMessage = useSessionStore((s) => s.setInputMessage);
   const sendMessage = useSessionStore((s) => s.sendMessage);
   const abortSession = useSessionStore((s) => s.abortSession);
-  const isSending = useSessionStore((s) => s.isSending);
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const currentProject = useProjectStore((s) =>
@@ -58,8 +61,6 @@ export function RightPanel({ width }: RightPanelProps) {
   const [showFileDropdown, setShowFileDropdown] = useState(false);
   const [fileHighlightIdx, setFileHighlightIdx] = useState(0);
 
-  const selectedSkills = useSessionStore((s) => s.selectedSkills);
-  const contextFiles = useSessionStore((s) => s.contextFiles);
   const addSkill = useSessionStore((s) => s.addSkill);
   const removeSkill = useSessionStore((s) => s.removeSkill);
   const addContextFile = useSessionStore((s) => s.addContextFile);
@@ -71,7 +72,6 @@ export function RightPanel({ width }: RightPanelProps) {
   const setModel = useSessionStore((s) => s.setModel);
   const fetchModelsFromApi = useSettingsStore((s) => s.fetchModels);
 
-  const currentSession = sessions.find((s) => s.id === currentSessionId);
   const isCurrentSessionCreating = currentSession?.status === 'creating';
   const renameSession = useSessionStore((s) => s.renameSession);
   const historySessions = useSessionStore((s) => s.historySessions);

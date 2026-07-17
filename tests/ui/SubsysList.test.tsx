@@ -16,7 +16,6 @@ const mocks = vi.hoisted(() => ({
   },
   setSelectedSubsys: vi.fn(),
   setCaseStatusFilter: vi.fn(),
-  runSimulation: vi.fn(),
   loadConfig: vi.fn().mockResolvedValue(undefined),
   setWizardOpen: vi.fn(),
   setWizardStep: vi.fn(),
@@ -44,7 +43,9 @@ vi.mock('@renderer/stores/project', () => ({
 vi.mock('@renderer/stores/simulation', () => ({
   useSimulationStore: vi.fn((selector: (state: unknown) => unknown) =>
     selector({
-      runSimulation: mocks.runSimulation,
+      startCaseRun: vi.fn(),
+      startCaseRuns: vi.fn(),
+      selectCase: vi.fn(),
       simOptions: {},
     }),
   ),

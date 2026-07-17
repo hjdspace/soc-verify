@@ -59,8 +59,6 @@ describe('RightPanel message rendering', () => {
     useSessionStore.setState({
       sessions: [],
       currentSessionId: null,
-      inputMessage: '',
-      isSending: false,
     });
   });
 
@@ -143,18 +141,17 @@ describe('RightPanel input interaction', () => {
         name: 'Test Session',
         status: 'idle',
         messages: [],
+        composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
         createdAt: Date.now(),
       }],
       currentSessionId: 's1',
-      inputMessage: '',
-      isSending: false,
     });
   });
 
   it('updates input message in store when typing', async () => {
     const { useSessionStore: store } = await import('@renderer/stores/session');
     store.getState().setInputMessage('test message');
-    expect(store.getState().inputMessage).toBe('test message');
+    expect(store.getState().sessions[0].composer.inputMessage).toBe('test message');
   });
 
   it('sends message and clears input', async () => {
@@ -163,9 +160,8 @@ describe('RightPanel input interaction', () => {
     await sessionStore.sendMessage('Hello AI');
 
     // Input should be cleared
-    expect(useSessionStore.getState().inputMessage).toBe('');
-    // isSending should be true
-    expect(useSessionStore.getState().isSending).toBe(true);
+    expect(useSessionStore.getState().sessions[0].composer.inputMessage).toBe('');
+    expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
     // Messages should have user + assistant (streaming)
     const messages = useSessionStore.getState().sessions[0].messages;
     expect(messages).toHaveLength(2);
@@ -175,13 +171,12 @@ describe('RightPanel input interaction', () => {
     expect(messages[1].isStreaming).toBe(true);
   });
 
-  it('aborts session and resets isSending', async () => {
+  it('aborts the current Agent Conversation', async () => {
     const sessionStore = useSessionStore.getState();
     await sessionStore.sendMessage('Hello');
-    expect(useSessionStore.getState().isSending).toBe(true);
+    expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
 
     await sessionStore.abortSession();
-    expect(useSessionStore.getState().isSending).toBe(false);
     expect(useSessionStore.getState().sessions[0].status).toBe('idle');
   });
 });
@@ -212,6 +207,7 @@ describe('RightPanel session tabs', () => {
           name: 'Running Session',
           status: 'streaming',
           messages: [],
+          composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
           createdAt: 1,
         },
         {
@@ -220,12 +216,11 @@ describe('RightPanel session tabs', () => {
           name: 'Done Session',
           status: 'idle',
           messages: [],
+          composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
           createdAt: 2,
         },
       ],
       currentSessionId: 'done',
-      inputMessage: '',
-      isSending: true,
     });
   });
 
@@ -252,11 +247,10 @@ describe('SessionStore state machine transitions', () => {
         name: 'Test',
         status: 'idle',
         messages: [],
+        composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
         createdAt: Date.now(),
       }],
       currentSessionId: 's1',
-      inputMessage: '',
-      isSending: false,
     });
   });
 
@@ -296,7 +290,6 @@ describe('SessionStore state machine transitions', () => {
 
     useSessionStore.getState().handleSessionEvent('s1', { type: 'agent_end' });
     expect(useSessionStore.getState().sessions[0].status).toBe('idle');
-    expect(useSessionStore.getState().isSending).toBe(false);
   });
 
   it('full lifecycle: send → stream → tool → stream → end', async () => {
@@ -341,7 +334,6 @@ describe('SessionStore state machine transitions', () => {
 
     const session = useSessionStore.getState().sessions[0];
     expect(session.status).toBe('idle');
-    expect(useSessionStore.getState().isSending).toBe(false);
 
     // Check messages: user + assistant + tool
     expect(session.messages.length).toBe(3);

@@ -109,3 +109,13 @@ _Avoid_: instant apply, live apply
 **Overwritten Hunk**:
 因后续编辑覆盖而无法在当前文件中定位到 newText 的 hunk。标记为不可拒绝，但仍可接受。
 _Avoid_: stale hunk, conflicted hunk
+
+### 工作区域
+
+**Workbench**:
+应用中栏承载文件、终端、仿真记录、Diff Review 等工作内容的统一空间，同一时刻有一个活动 destination。
+_Avoid_: center area, main panel
+
+**Workbench Destination**:
+用户在 Workbench 中打开的一个类型化目标，包含展示该目标所需的身份和上下文。
+_Avoid_: center tab ID, view string

@@ -5,11 +5,9 @@
  * 底部有「全部接受」「应用」「全部拒绝」「下个文件」导航。
  */
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useEffect, useRef, useCallback, useMemo } from 'react';
 import { Check, X, ChevronDown, ChevronUp, ArrowRight, Loader2, GitCompare } from 'lucide-react';
-import { useDiffReviewStore, type ReviewEntry } from '@renderer/stores/diff-review';
-import { useProjectStore } from '@renderer/stores/project';
-import { trpc } from '@renderer/lib/trpc';
+import { useDiffReviewStore, type HunkStates, type ReviewEntry } from '@renderer/stores/diff-review';
 import hljs from 'highlight.js';
 import { detectLanguage } from '@renderer/components/chat/tool-helpers';
 import { cn } from '@renderer/lib/utils';
@@ -39,7 +37,7 @@ function computeVisibleLines(
   lines: DiffLine[],
   hunks: DiffHunkInfo[],
   filePath: string,
-  hunkStates: Record<string, string>,
+  hunkStates: HunkStates,
 ): VisibleLine[] {
   // 预建 hunk id → hunk 的索引，避免每行都 find
   const hunkMap = new Map<number, DiffHunkInfo>();
@@ -55,7 +53,7 @@ function computeVisibleLines(
     if (!hunk || hunk.overwritten) {
       return { ...line, displayType: line.type };
     }
-    const state = hunkStates[`${filePath}:${hunk.id}`] ?? 'pending';
+    const state = hunkStates[filePath]?.[hunk.id] ?? 'pending';
     if (state === 'accepted') {
       // 接受 = 保留改动：隐藏删除行，新增行作为普通代码展示
       if (line.type === 'del') return { ...line, displayType: 'hidden' };
@@ -92,11 +90,9 @@ interface DiffReviewViewProps {
 }
 
 export function DiffReviewView({ entry }: DiffReviewViewProps) {
-  const projectId = useProjectStore((s) => s.currentProjectId);
   const currentDiff = useDiffReviewStore((s) => s.currentDiff);
   const loading = useDiffReviewStore((s) => s.loading);
   const hunkStates = useDiffReviewStore((s) => s.hunkStates);
-  const openFile = useDiffReviewStore((s) => s.openFile);
   const setHunkState = useDiffReviewStore((s) => s.setHunkState);
   const acceptAll = useDiffReviewStore((s) => s.acceptAll);
   const rejectAll = useDiffReviewStore((s) => s.rejectAll);
@@ -105,41 +101,15 @@ export function DiffReviewView({ entry }: DiffReviewViewProps) {
   const getQueuePosition = useDiffReviewStore((s) => s.getQueuePosition);
   const getNextFileName = useDiffReviewStore((s) => s.getNextFileName);
 
-  const [diffData, setDiffData] = useState(currentDiff);
+  const diffData = currentDiff;
   const containerRef = useRef<HTMLDivElement>(null);
   const hunkRefs = useRef<Map<number, HTMLDivElement>>(new Map());
-
-  // Load diff data from backend
-  useEffect(() => {
-    if (!projectId) return;
-    let cancelled = false;
-    setDiffData(null);
-
-    trpc.project.getFileDiff.query({
-      projectId,
-      filePath: entry.filePath,
-      toolCalls: entry.toolCalls,
-    })
-      .then((data) => {
-        if (!cancelled) setDiffData(data);
-      })
-      .catch(() => {
-        if (!cancelled) setDiffData(null);
-      });
-
-    return () => { cancelled = true; };
-  }, [projectId, entry.filePath, entry.toolCalls]);
-
-  // Sync with store's currentDiff
-  useEffect(() => {
-    setDiffData(currentDiff);
-  }, [currentDiff]);
 
   const language = detectLanguage(entry.filePath);
   const { current, total } = getQueuePosition();
   const nextFileName = getNextFileName();
   const hasRejections = diffData
-    ? diffData.hunks.some((h) => hunkStates[`${entry.filePath}:${h.id}`] === 'rejected')
+    ? diffData.hunks.some((h) => hunkStates[entry.filePath]?.[h.id] === 'rejected')
     : false;
 
   // 根据 hunkStates 计算可见行：accepted hunk 隐藏 del 行（保留改动），
@@ -196,8 +166,6 @@ export function DiffReviewView({ entry }: DiffReviewViewProps) {
 
   const handleApply = async () => {
     await applyRejections(entry.filePath);
-    // Refresh after apply
-    openFile(entry.filePath);
   };
 
   // ── Loading state ──
@@ -343,7 +311,7 @@ function renderLines(
   lines: VisibleLine[],
   hunks: DiffHunkInfo[],
   entry: ReviewEntry,
-  hunkStates: Record<string, string>,
+  hunkStates: HunkStates,
   setHunkState: (filePath: string, hunkId: number, state: 'pending' | 'accepted' | 'rejected') => void,
   language: string,
   hunkRefs: React.MutableRefObject<Map<number, HTMLDivElement>>,
@@ -371,8 +339,7 @@ function renderLines(
       return;
     }
 
-    const key = `${entry.filePath}:${hunk.id}`;
-    const state = hunkStates[key] ?? 'pending';
+    const state = hunkStates[entry.filePath]?.[hunk.id] ?? 'pending';
     const isOverwritten = hunk.overwritten;
 
     result.push(

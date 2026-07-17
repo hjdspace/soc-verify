@@ -8,13 +8,14 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useSessionStore, type ChatMessage } from './session';
-import { useUiStore } from './ui';
+import { useWorkbenchStore } from './workbench';
 import { useProjectStore } from './project';
 import type { DiffToolCall, DiffRejection, FileDiffResult } from '@shared/types';
 
 // ─── Types ──────────────────────────────────────────────────
 
 type HunkState = 'pending' | 'accepted' | 'rejected';
+export type HunkStates = Record<string, Record<number, HunkState>>;
 
 export interface ReviewEntry {
   /** 唯一标识（文件路径） */
@@ -35,7 +36,7 @@ interface DiffReviewStoreState {
   /** 当前文件的 diff 结果 */
   currentDiff: FileDiffResult | null;
   /** hunk 状态：key = `${filePath}:${hunkId}` */
-  hunkStates: Record<string, HunkState>;
+  hunkStates: HunkStates;
   /** 是否正在加载 diff */
   loading: boolean;
 
@@ -154,12 +155,9 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
     set((s) => {
       // 保留已有 hunkStates 中仍在队列里的条目
       const validPaths = new Set(newQueue.map((e) => e.filePath));
-      const cleanedHunkStates: Record<string, HunkState> = {};
-      for (const [key, state] of Object.entries(s.hunkStates)) {
-        const filePath = key.split(':')[0];
-        if (validPaths.has(filePath)) {
-          cleanedHunkStates[key] = state;
-        }
+      const cleanedHunkStates: HunkStates = {};
+      for (const [filePath, states] of Object.entries(s.hunkStates)) {
+        if (validPaths.has(filePath)) cleanedHunkStates[filePath] = states;
       }
       // 如果当前审阅的文件已不在队列中，清空
       const currentFilePath = s.currentFilePath && validPaths.has(s.currentFilePath)
@@ -183,9 +181,11 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
 
     set({ currentFilePath: filePath, loading: true });
 
-    // 在中栏打开 diff-review 视图
-    useUiStore.getState().setActiveCenterTab(`diff-review:${entry.fileName}`);
-    useUiStore.getState().setCenterView('diff-review' as never);
+    useWorkbenchStore.getState().open({
+      type: 'diff-review',
+      filePath: entry.filePath,
+      fileName: entry.fileName,
+    });
 
     trpc.project.getFileDiff.query({
       projectId,
@@ -195,13 +195,14 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
       .then((diff) => {
         set({ currentDiff: diff, loading: false });
         // 初始化 hunkStates：overwritten hunks 默认 accepted，其余 pending
-        const states: Record<string, HunkState> = { ...get().hunkStates };
+        const states: HunkStates = { ...get().hunkStates };
+        const fileStates = { ...states[filePath] };
         for (const hunk of diff.hunks) {
-          const key = `${filePath}:${hunk.id}`;
-          if (!(key in states)) {
-            states[key] = hunk.overwritten ? 'accepted' : 'pending';
+          if (!(hunk.id in fileStates)) {
+            fileStates[hunk.id] = hunk.overwritten ? 'accepted' : 'pending';
           }
         }
+        states[filePath] = fileStates;
         set({ hunkStates: states });
       })
       .catch(() => {
@@ -210,9 +211,11 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
   },
 
   setHunkState: (filePath, hunkId, state) => {
-    const key = `${filePath}:${hunkId}`;
     set((s) => ({
-      hunkStates: { ...s.hunkStates, [key]: state },
+      hunkStates: {
+        ...s.hunkStates,
+        [filePath]: { ...s.hunkStates[filePath], [hunkId]: state },
+      },
     }));
   },
 
@@ -221,11 +224,13 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
     if (!diff) return;
     set((s) => {
       const states = { ...s.hunkStates };
+      const fileStates = { ...states[filePath] };
       for (const hunk of diff.hunks) {
         if (!hunk.overwritten) {
-          states[`${filePath}:${hunk.id}`] = 'accepted';
+          fileStates[hunk.id] = 'accepted';
         }
       }
+      states[filePath] = fileStates;
       return { hunkStates: states };
     });
   },
@@ -235,11 +240,13 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
     if (!diff) return;
     set((s) => {
       const states = { ...s.hunkStates };
+      const fileStates = { ...states[filePath] };
       for (const hunk of diff.hunks) {
         if (!hunk.overwritten) {
-          states[`${filePath}:${hunk.id}`] = 'rejected';
+          fileStates[hunk.id] = 'rejected';
         }
       }
+      states[filePath] = fileStates;
       return { hunkStates: states };
     });
   },
@@ -254,8 +261,7 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
     // 收集所有 rejected hunks
     const rejections: DiffRejection[] = [];
     for (const hunk of currentDiff.hunks) {
-      const key = `${filePath}:${hunk.id}`;
-      const state = hunkStates[key];
+      const state = hunkStates[filePath]?.[hunk.id];
       if (state === 'rejected') {
         // 找到对应的 tool call
         const entry = get().queue.find((e) => e.filePath === filePath);
@@ -315,3 +321,10 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
     return null;
   },
 }));
+
+let projectedSessions = useSessionStore.getState().sessions;
+useSessionStore.subscribe((state) => {
+  if (state.sessions === projectedSessions) return;
+  projectedSessions = state.sessions;
+  useDiffReviewStore.getState().refreshQueue();
+});
