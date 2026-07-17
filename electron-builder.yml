@@ -17,6 +17,9 @@ extraResources:
   - from: resources/binaries
     to: binaries
     filter: ["**/*", "!README.md"]
+  - from: resources/built-in-extension
+    to: built-in-extension
+    filter: ["**/*"]
   # engine/oh-my-pi is no longer packaged as extraResources.
   # The runner is pre-compiled into a standalone binary in resources/binaries/.
   # This eliminates the need to bundle the entire engine source + node_modules.
