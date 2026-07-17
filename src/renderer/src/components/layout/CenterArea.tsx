@@ -31,7 +31,7 @@ function StatusBadge({ status }: { status: SimulationStatus }) {
   const style = STATUS_BADGE_STYLES[status] ?? STATUS_BADGE_STYLES.pending;
   return (
     <span className="inline-flex items-center gap-1.5 text-[11px]">
-      <span className={cn('h-1.5 w-1.5 rounded-full', style.dot)} />
+      <span className={cn('size-[7px] rounded-full', style.dot)} />
       <span className={style.text}>{status}</span>
     </span>
   );
@@ -176,7 +176,7 @@ export function CenterArea() {
         )}
 
         {/* ── 主操作（带文字）+ 溢出菜单 ──────────────────── */}
-        <div className="flex items-center gap-1 px-2">
+        <div className="ml-auto flex items-center gap-1 px-2">
           {/* 仪表盘 */}
           <TabActionButton
             onClick={() => openDestination({ type: 'dashboard' })}
@@ -317,7 +317,7 @@ export function CenterArea() {
                     className="flex items-center gap-2 rounded-md border border-border/50 bg-secondary/30 px-3 py-1.5"
                   >
                     <span className={cn(
-                      'h-1.5 w-1.5 shrink-0 rounded-full',
+                      'size-[7px] shrink-0 rounded-full',
                       STATUS_BADGE_STYLES[run.status]?.dot ?? 'bg-muted-foreground',
                     )} />
                     <span className="flex-1 truncate text-xs">{run.caseName ?? run.caseId}</span>
@@ -388,7 +388,7 @@ function TabActionButton({
       {icon}
       <span>{label}</span>
       {badge !== undefined && (
-        <span className="ml-0.5 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-status-running px-1 text-[9px] font-bold text-status-running-foreground">
+        <span className="ml-0.5 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-status-running px-1 text-[9px] font-bold text-background">
           {badge}
         </span>
       )}

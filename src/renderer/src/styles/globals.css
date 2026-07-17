@@ -61,7 +61,7 @@
    ════════════════════════════════════════════════════════════ */
 [data-theme="drafting"] {
   --background: oklch(0.97 0.006 75);
-  --foreground: oklch(0.32 0.012 75);
+  --foreground: oklch(0.22 0.012 75);
   --card: oklch(0.99 0.004 75);
   --card-foreground: oklch(0.32 0.012 75);
   --popover: oklch(0.99 0.005 75);
@@ -86,16 +86,16 @@
   --sidebar-foreground: oklch(0.45 0.012 75);
   --radius: 0.5rem;
 
-  --status-pass: oklch(0.65 0.16 145);
-  --status-pass-foreground: oklch(0.30 0.05 145);
-  --status-fail: oklch(0.60 0.20 25);
-  --status-fail-foreground: oklch(0.30 0.06 25);
-  --status-running: oklch(0.55 0.14 250);
-  --status-running-foreground: oklch(0.28 0.05 250);
-  --status-aborted: oklch(0.55 0.13 295);
-  --status-aborted-foreground: oklch(0.28 0.05 295);
-  --status-pending: oklch(0.55 0.11 75);
-  --status-pending-foreground: oklch(0.28 0.05 75);
+  --status-pass: oklch(0.50 0.13 145);
+  --status-pass-foreground: oklch(0.50 0.13 145);
+  --status-fail: oklch(0.50 0.16 28);
+  --status-fail-foreground: oklch(0.50 0.16 28);
+  --status-running: oklch(0.50 0.11 230);
+  --status-running-foreground: oklch(0.50 0.11 230);
+  --status-aborted: oklch(0.50 0.13 65);
+  --status-aborted-foreground: oklch(0.50 0.13 65);
+  --status-pending: oklch(0.50 0.05 75);
+  --status-pending-foreground: oklch(0.50 0.05 75);
 
   --diff-add: oklch(0.90 0.04 145);
   --diff-add-foreground: oklch(0.32 0.10 145);
@@ -147,16 +147,16 @@
   --sidebar-foreground: oklch(0.60 0.008 60);
   --radius: 0.5rem;
 
-  --status-pass: oklch(0.30 0.06 145);
-  --status-pass-foreground: oklch(0.82 0.13 145);
-  --status-fail: oklch(0.32 0.08 25);
-  --status-fail-foreground: oklch(0.78 0.15 25);
-  --status-running: oklch(0.32 0.07 250);
-  --status-running-foreground: oklch(0.78 0.13 250);
-  --status-aborted: oklch(0.32 0.06 295);
-  --status-aborted-foreground: oklch(0.78 0.13 295);
-  --status-pending: oklch(0.32 0.05 75);
-  --status-pending-foreground: oklch(0.80 0.12 75);
+  --status-pass: oklch(0.78 0.15 145);
+  --status-pass-foreground: oklch(0.78 0.15 145);
+  --status-fail: oklch(0.65 0.18 25);
+  --status-fail-foreground: oklch(0.65 0.18 25);
+  --status-running: oklch(0.72 0.13 195);
+  --status-running-foreground: oklch(0.72 0.13 195);
+  --status-aborted: oklch(0.72 0.14 65);
+  --status-aborted-foreground: oklch(0.72 0.14 65);
+  --status-pending: oklch(0.62 0.06 60);
+  --status-pending-foreground: oklch(0.62 0.06 60);
 
   --diff-add: oklch(0.26 0.05 145);
   --diff-add-foreground: oklch(0.82 0.10 145);
@@ -183,7 +183,7 @@
    ════════════════════════════════════════════════════════════ */
 [data-theme="slate"] {
   --background: oklch(0.20 0.006 220);
-  --foreground: oklch(0.92 0.004 220);
+  --foreground: oklch(0.93 0.004 220);
   --card: oklch(0.23 0.006 220);
   --card-foreground: oklch(0.92 0.004 220);
   --popover: oklch(0.25 0.006 220);
@@ -208,16 +208,16 @@
   --sidebar-foreground: oklch(0.60 0.006 220);
   --radius: 0.5rem;
 
-  --status-pass: oklch(0.30 0.06 145);
-  --status-pass-foreground: oklch(0.78 0.14 145);
-  --status-fail: oklch(0.32 0.08 25);
-  --status-fail-foreground: oklch(0.76 0.15 25);
-  --status-running: oklch(0.32 0.07 250);
-  --status-running-foreground: oklch(0.76 0.13 250);
-  --status-aborted: oklch(0.32 0.06 295);
-  --status-aborted-foreground: oklch(0.76 0.13 295);
-  --status-pending: oklch(0.32 0.05 75);
-  --status-pending-foreground: oklch(0.78 0.12 75);
+  --status-pass: oklch(0.70 0.14 145);
+  --status-pass-foreground: oklch(0.70 0.14 145);
+  --status-fail: oklch(0.65 0.16 25);
+  --status-fail-foreground: oklch(0.65 0.16 25);
+  --status-running: oklch(0.70 0.13 55);
+  --status-running-foreground: oklch(0.70 0.13 55);
+  --status-aborted: oklch(0.65 0.12 285);
+  --status-aborted-foreground: oklch(0.65 0.12 285);
+  --status-pending: oklch(0.62 0.05 220);
+  --status-pending-foreground: oklch(0.62 0.05 220);
 
   --diff-add: oklch(0.26 0.05 145);
   --diff-add-foreground: oklch(0.78 0.10 145);

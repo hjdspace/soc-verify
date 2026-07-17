@@ -29,8 +29,10 @@ export function TitleBar() {
   const projects = useProjectStore((s) => s.projects);
   const selectedSubsys = useProjectStore((s) => s.selectedSubsys);
   const activeRuns = useSimulationStore((s) => s.activeRuns);
+  const simOptions = useSimulationStore((s) => s.simOptions);
 
   const projectName = projects.find((p) => p.id === currentProjectId)?.name;
+  const selectedCase = typeof simOptions.case === 'string' ? simOptions.case : null;
   const runningCount = activeRuns.filter((r) => r.status === 'running' || r.status === 'pending').length;
 
   const [isMaximized, setIsMaximized] = useState(false);
@@ -57,7 +59,7 @@ export function TitleBar() {
         'flex h-9 shrink-0 items-center justify-between border-b border-titlebar-border bg-titlebar text-titlebar-foreground select-none',
       )}
     >
-      {/* ── 左侧：Logo + 左栏折叠 + 面包屑 ────────────────────── */}
+      {/* ── 左侧：Logo + 左栏折叠 ─────────────────────────────── */}
       <div className="flex items-center gap-3 pl-3">
         {/* Logo */}
         <div className="flex items-center gap-2">
@@ -88,31 +90,37 @@ export function TitleBar() {
           <PanelLeft className="h-3.5 w-3.5" />
         </TitleBarButton>
 
-        {/* 面包屑：项目 › 子系统 */}
+      </div>
+
+      {/* ── 中间：项目 › 子系统 › 用例 ───────────────────────── */}
+      <nav className="flex min-w-0 flex-1 items-center gap-1 px-4 text-xs text-muted-foreground">
         {projectName && (
-          <nav className="flex items-center gap-1 text-xs text-muted-foreground">
+          <>
             <span className="max-w-[160px] truncate text-titlebar-foreground/80">{projectName}</span>
             {selectedSubsys && (
               <>
-                <ChevronRight className="h-3 w-3 opacity-50" />
+                <ChevronRight className="h-3 w-3 shrink-0 opacity-50" />
                 <span className="max-w-[160px] truncate text-titlebar-foreground/80">{selectedSubsys}</span>
               </>
             )}
-          </nav>
+            {selectedCase && (
+              <>
+                <ChevronRight className="h-3 w-3 shrink-0 opacity-50" />
+                <span className="max-w-[200px] truncate text-titlebar-foreground">{selectedCase}</span>
+              </>
+            )}
+          </>
         )}
-      </div>
-
-      {/* ── 中间：可拖拽空白区域 ─────────────────────────────── */}
-      <div className="flex-1" />
+      </nav>
 
       {/* ── 右侧：运行徽章 + 右栏折叠 + 命令面板 + 设置 + 窗口控制 ── */}
       <div className="flex items-center gap-3 pr-1">
         {/* 运行中徽章 */}
         {runningCount > 0 && (
-          <div className="titlebar-no-drag flex items-center gap-1.5 rounded-full bg-status-running px-2 py-0.5 text-[11px] font-medium text-status-running-foreground">
+          <div className="titlebar-no-drag flex items-center gap-1.5 rounded-full bg-status-running px-2 py-0.5 text-[11px] font-medium text-background">
             <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-status-running-foreground opacity-60" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-status-running-foreground" />
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-background opacity-60" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-background" />
             </span>
             <span>REG · {runningCount} RUNNING</span>
           </div>

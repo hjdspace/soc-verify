@@ -93,13 +93,13 @@ export function DashboardPanel() {
           {metrics.totalRuns > 0 ? (
             <div className="flex h-8 overflow-hidden rounded-full">
               <div
-                className="flex items-center justify-center bg-status-pass text-[10px] font-semibold text-status-pass-foreground"
+                className="flex items-center justify-center bg-status-pass text-[10px] font-semibold text-background"
                 style={{ width: `${passRate}%` }}
               >
                 {passRate > 10 ? `${passRate.toFixed(0)}%` : ''}
               </div>
               <div
-                className="flex items-center justify-center bg-status-fail text-[10px] font-semibold text-status-fail-foreground"
+                className="flex items-center justify-center bg-status-fail text-[10px] font-semibold text-background"
                 style={{ width: `${failRate}%` }}
               >
                 {failRate > 10 ? `${failRate.toFixed(0)}%` : ''}
