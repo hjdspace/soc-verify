@@ -26,6 +26,16 @@ function devBinariesDir(): string {
   return resolve(__dirname, '../../resources/binaries');
 }
 
+/** 开发模式下内置扩展包目录（含 skills/ 和 agents/ 子目录） */
+function devBuiltInExtensionDir(): string {
+  return resolve(__dirname, '../../resources/built-in-extension');
+}
+
+/** 打包模式下内置扩展包目录 */
+function packagedBuiltInExtensionDir(): string {
+  return join(packagedResourcesDir(), 'built-in-extension');
+}
+
 /** 开发模式下 runner 脚本路径 */
 function devRunnerScriptPath(): string {
   return resolve(__dirname, '../../', RUNNER_SCRIPT_REL);
@@ -102,6 +112,24 @@ export function resolveRunnerScript(): string | null {
  */
 export function resolveRunnerPath(): string | null {
   return resolveRunnerScript();
+}
+
+/**
+ * 解析内置扩展包目录路径（包含 skills/ 和 agents/ 子目录）。
+ *
+ * 用于注入 SoC Verify 自带的 skill 和 agent，随应用打包分发。
+ * 优先级：打包目录 → 开发目录
+ */
+export function resolveBuiltInExtensionDir(): string | null {
+  // 生产模式：packaged resources/built-in-extension
+  const packaged = packagedBuiltInExtensionDir();
+  if (existsSync(join(packaged, 'skills'))) return packaged;
+
+  // 开发模式：项目内 resources/built-in-extension
+  const dev = devBuiltInExtensionDir();
+  if (existsSync(join(dev, 'skills'))) return dev;
+
+  return null;
 }
 
 /** Bun 可执行文件路径：packaged 优先 → PATH 查找 */
