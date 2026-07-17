@@ -25,6 +25,8 @@ export interface InitConfig {
   resumeSessionId?: string;
   systemPrompt?: string;
   customToolDefinitions: CustomToolDefinition[];
+  /** 额外的 extension 包路径（每个包的 skills/ 和 agents/ 子目录会被 omp 扫描） */
+  additionalExtensionPaths?: string[];
 }
 
 export interface CustomToolDefinition {
