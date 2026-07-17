@@ -2,6 +2,7 @@
  * Skill discovery: scans for SKILL.md files in known directories.
  *
  * Skill directories (mirroring the omp engine's discovery):
+ *   Built-in:       <app>/resources/built-in-extension/skills  (随应用打包)
  *   Project-level:  <root>/.omp/skills, <root>/.claude/skills, <root>/.agents/skills, <root>/.github/skills
  *   User-level:     ~/.omp/skills, ~/.claude/skills, ~/.agents/skills
  *
@@ -15,14 +16,17 @@
 
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, basename } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
+import { resolveBuiltInExtensionDir } from './paths';
+
+export type SkillSource = 'project' | 'user' | 'builtin';
 
 export interface DiscoveredSkill {
   name: string;
   description: string;
   filePath: string;
-  source: 'project' | 'user';
+  source: SkillSource;
   /** Directory containing the SKILL.md */
   baseDir: string;
 }
@@ -45,9 +49,14 @@ const USER_SKILL_DIRS = [
 /**
  * Parse YAML-like frontmatter from SKILL.md content.
  * Extracts `name` and `description` fields.
+ *
+ * 支持任意换行符（LF / CRLF）：先统一规范化为 LF 再解析，避免 CRLF 文件
+ * 因行尾 `\r` 导致 `^name:...$` 正则匹配失败。
  */
 function parseFrontmatter(content: string): { name?: string; description?: string } {
-  const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
+  // 统一换行符：CRLF / CR → LF
+  const normalized = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const fmMatch = normalized.match(/^---\s*\n([\s\S]*?)\n---/);
   if (!fmMatch) return {};
 
   const fm = fmMatch[1];
@@ -78,7 +87,7 @@ function parseFrontmatter(content: string): { name?: string; description?: strin
  */
 async function scanSkillDir(
   dir: string,
-  source: 'project' | 'user',
+  source: SkillSource,
 ): Promise<DiscoveredSkill[]> {
   if (!existsSync(dir)) return [];
 
@@ -112,13 +121,15 @@ async function scanSkillDir(
 /** Read and parse a SKILL.md file */
 async function tryParseSkill(
   filePath: string,
-  source: 'project' | 'user',
+  source: SkillSource,
 ): Promise<DiscoveredSkill | null> {
   try {
     const content = await readFile(filePath, 'utf-8');
     const fm = parseFrontmatter(content);
-    // Use frontmatter name, or fall back to directory name
-    const name = fm.name || basename(basename(filePath, 'SKILL.md'));
+    // Use frontmatter name, or fall back to the skill's directory name.
+    // Note: Node's basename(path, ext) only strips ext if it starts with '.',
+    // so we cannot pass 'SKILL.md' as ext — use dirname + basename instead.
+    const name = fm.name || basename(dirname(filePath));
     if (!name) return null;
 
     return {
@@ -126,7 +137,7 @@ async function tryParseSkill(
       description: fm.description || '',
       filePath,
       source,
-      baseDir: filePath.replace(/[\\/]SKILL\.md$/, ''),
+      baseDir: dirname(filePath),
     };
   } catch {
     return null;
@@ -135,12 +146,20 @@ async function tryParseSkill(
 
 /**
  * Discover all available skills for a given project root.
- * Scans both project-level and user-level skill directories.
- * Deduplicates by skill name (project-level takes priority).
+ * Scans built-in, project-level, and user-level skill directories.
+ * Deduplicates by skill name with priority: project > builtin > user.
  */
 export async function discoverSkills(projectRoot: string): Promise<DiscoveredSkill[]> {
   const home = homedir();
   const allSkills: DiscoveredSkill[] = [];
+
+  // Scan built-in extension skills (shipped with the app)
+  const builtInExtDir = resolveBuiltInExtensionDir();
+  if (builtInExtDir) {
+    const builtInSkillsDir = join(builtInExtDir, 'skills');
+    const found = await scanSkillDir(builtInSkillsDir, 'builtin');
+    allSkills.push(...found);
+  }
 
   // Scan project-level skill directories
   for (const relDir of PROJECT_SKILL_DIRS) {
@@ -156,15 +175,11 @@ export async function discoverSkills(projectRoot: string): Promise<DiscoveredSki
     allSkills.push(...found);
   }
 
-  // Deduplicate by name — project-level skills take priority
+  // Deduplicate by name — priority: project > builtin > user
+  const sourcePriority: Record<SkillSource, number> = { project: 0, builtin: 1, user: 2 };
   const seen = new Set<string>();
   const deduped: DiscoveredSkill[] = [];
-  // Sort so project skills come first
-  allSkills.sort((a, b) => {
-    if (a.source === 'project' && b.source === 'user') return -1;
-    if (a.source === 'user' && b.source === 'project') return 1;
-    return 0;
-  });
+  allSkills.sort((a, b) => sourcePriority[a.source] - sourcePriority[b.source]);
   for (const skill of allSkills) {
     if (seen.has(skill.name)) continue;
     seen.add(skill.name);
