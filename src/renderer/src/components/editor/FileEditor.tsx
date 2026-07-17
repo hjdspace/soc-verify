@@ -161,10 +161,10 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
         </span>
         <div className="flex items-center gap-2">
           {isDirty && (
-            <span className="text-[10px] text-orange-500">● 已修改</span>
+            <span className="text-[10px] text-status-aborted-foreground">● 已修改</span>
           )}
           {saveError && (
-            <span className="flex items-center gap-0.5 text-[10px] text-red-500" title={saveError}>
+            <span className="flex items-center gap-0.5 text-[10px] text-status-fail-foreground" title={saveError}>
               <AlertCircle className="h-2.5 w-2.5" />
               保存失败
             </span>

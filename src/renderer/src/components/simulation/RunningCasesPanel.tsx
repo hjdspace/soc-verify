@@ -16,12 +16,12 @@ import { useTerminalStore } from '@renderer/stores/terminal';
 import { cn } from '@renderer/lib/utils';
 
 const STATUS_CONFIG: Record<string, { color: string; bg: string; label: string; icon: typeof CircleDot }> = {
-  running: { color: 'text-blue-500', bg: 'bg-blue-500/15', label: '运行中', icon: CircleDot },
-  pending: { color: 'text-muted-foreground', bg: 'bg-muted/20', label: '等待', icon: CircleDot },
-  pass: { color: 'text-green-500', bg: 'bg-green-500/15', label: '通过', icon: CheckCircle2 },
-  fail: { color: 'text-red-500', bg: 'bg-red-500/15', label: '失败', icon: XCircle },
-  error: { color: 'text-red-500', bg: 'bg-red-500/15', label: '错误', icon: XCircle },
-  aborted: { color: 'text-orange-500', bg: 'bg-orange-500/15', label: '中止', icon: Square },
+  running: { color: 'text-status-running-foreground', bg: 'bg-status-running/15', label: '运行中', icon: CircleDot },
+  pending: { color: 'text-status-pending-foreground', bg: 'bg-status-pending/15', label: '等待', icon: CircleDot },
+  pass: { color: 'text-status-pass-foreground', bg: 'bg-status-pass/15', label: '通过', icon: CheckCircle2 },
+  fail: { color: 'text-status-fail-foreground', bg: 'bg-status-fail/15', label: '失败', icon: XCircle },
+  error: { color: 'text-status-fail-foreground', bg: 'bg-status-fail/15', label: '错误', icon: XCircle },
+  aborted: { color: 'text-status-aborted-foreground', bg: 'bg-status-aborted/15', label: '中止', icon: Square },
 };
 
 function formatDuration(ms: number): string {
@@ -93,9 +93,9 @@ function RunCard({ run }: { run: SimulationRunRecord }) {
     <div
       className={cn(
         'rounded-lg border transition-colors',
-        run.status === 'running' ? 'border-blue-500/30 bg-blue-500/5' :
-        run.status === 'pass' ? 'border-green-500/20 bg-green-500/5' :
-        run.status === 'fail' || run.status === 'error' ? 'border-red-500/20 bg-red-500/5' :
+        run.status === 'running' ? 'border-status-running/30 bg-status-running/5' :
+        run.status === 'pass' ? 'border-status-pass/20 bg-status-pass/5' :
+        run.status === 'fail' || run.status === 'error' ? 'border-status-fail/20 bg-status-fail/5' :
         'border-border/50 bg-secondary/20',
       )}
     >
@@ -158,7 +158,7 @@ function RunCard({ run }: { run: SimulationRunRecord }) {
               onClick={handleCopyCommand}
               className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             >
-              {copied ? <CheckCircle2 className="h-2.5 w-2.5 text-green-500" /> : <Copy className="h-2.5 w-2.5" />}
+              {copied ? <CheckCircle2 className="h-2.5 w-2.5 text-status-pass-foreground" /> : <Copy className="h-2.5 w-2.5" />}
               {copied ? '已复制' : '复制'}
             </button>
           </div>
@@ -190,7 +190,7 @@ export function RunningCasesPanel() {
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold text-foreground">运行用例概览</span>
           {runningCount > 0 && (
-            <span className="flex items-center gap-1 rounded bg-blue-500/15 px-1.5 py-0.5 text-[9px] text-blue-500">
+            <span className="flex items-center gap-1 rounded bg-status-running/15 px-1.5 py-0.5 text-[9px] text-status-running-foreground">
               <CircleDot className="h-2 w-2 animate-pulse" />
               {runningCount} 个运行中
             </span>

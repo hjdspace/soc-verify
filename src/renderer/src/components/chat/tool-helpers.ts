@@ -12,32 +12,32 @@ export type ToolMeta = {
 };
 
 export const TOOL_META: Record<string, ToolMeta> = {
-  read:         { label: 'read',         category: 'file',        color: 'text-blue-400' },
-  write:        { label: 'write',        category: 'file',        color: 'text-green-400' },
-  edit:         { label: 'edit',         category: 'file',        color: 'text-yellow-400' },
-  apply_patch:  { label: 'edit',         category: 'file',        color: 'text-yellow-400' },
-  ast_edit:     { label: 'ast_edit',     category: 'file',        color: 'text-yellow-400' },
-  bash:         { label: 'bash',         category: 'exec',        color: 'text-purple-400' },
-  eval:         { label: 'eval',         category: 'exec',        color: 'text-indigo-400' },
-  js:           { label: 'eval',         category: 'exec',        color: 'text-indigo-400' },
-  python:       { label: 'eval',         category: 'exec',        color: 'text-indigo-400' },
-  grep:         { label: 'grep',         category: 'search',      color: 'text-cyan-400' },
-  search:       { label: 'grep',         category: 'search',      color: 'text-cyan-400' },
-  glob:         { label: 'glob',         category: 'search',      color: 'text-sky-400' },
-  find:         { label: 'glob',         category: 'search',      color: 'text-sky-400' },
-  ast_grep:     { label: 'ast_grep',     category: 'search',      color: 'text-cyan-400' },
-  web_search:   { label: 'web_search',   category: 'search',      color: 'text-red-400' },
-  task:         { label: 'task',         category: 'agent',       color: 'text-orange-400' },
-  job:          { label: 'job',          category: 'agent',       color: 'text-teal-400' },
-  todo:         { label: 'todo',         category: 'agent',       color: 'text-violet-400' },
-  ask:          { label: 'ask',          category: 'interactive', color: 'text-lime-400' },
-  list_subsys:            { label: 'list_subsys',            category: 'host', color: 'text-emerald-400' },
-  list_cases:             { label: 'list_cases',             category: 'host', color: 'text-emerald-400' },
-  run_simulation:         { label: 'run_simulation',         category: 'host', color: 'text-emerald-400' },
-  get_run_status:         { label: 'get_run_status',         category: 'host', color: 'text-emerald-400' },
-  get_compile_errors:     { label: 'get_compile_errors',     category: 'host', color: 'text-emerald-400' },
-  get_coverage:           { label: 'get_coverage',           category: 'host', color: 'text-emerald-400' },
-  get_sim_options_schema: { label: 'get_sim_options_schema', category: 'host', color: 'text-emerald-400' },
+  read:         { label: 'read',         category: 'file',        color: 'text-status-running-foreground' },
+  write:        { label: 'write',        category: 'file',        color: 'text-status-pass-foreground' },
+  edit:         { label: 'edit',         category: 'file',        color: 'text-warning-foreground' },
+  apply_patch:  { label: 'edit',         category: 'file',        color: 'text-warning-foreground' },
+  ast_edit:     { label: 'ast_edit',     category: 'file',        color: 'text-warning-foreground' },
+  bash:         { label: 'bash',         category: 'exec',        color: 'text-violet-foreground' },
+  eval:         { label: 'eval',         category: 'exec',        color: 'text-violet-foreground' },
+  js:           { label: 'eval',         category: 'exec',        color: 'text-violet-foreground' },
+  python:       { label: 'eval',         category: 'exec',        color: 'text-violet-foreground' },
+  grep:         { label: 'grep',         category: 'search',      color: 'text-chart-1' },
+  search:       { label: 'grep',         category: 'search',      color: 'text-chart-1' },
+  glob:         { label: 'glob',         category: 'search',      color: 'text-chart-1' },
+  find:         { label: 'glob',         category: 'search',      color: 'text-chart-1' },
+  ast_grep:     { label: 'ast_grep',     category: 'search',      color: 'text-chart-1' },
+  web_search:   { label: 'web_search',   category: 'search',      color: 'text-status-fail-foreground' },
+  task:         { label: 'task',         category: 'agent',       color: 'text-chart-4' },
+  job:          { label: 'job',          category: 'agent',       color: 'text-chart-2' },
+  todo:         { label: 'todo',         category: 'agent',       color: 'text-violet-foreground' },
+  ask:          { label: 'ask',          category: 'interactive', color: 'text-chart-2' },
+  list_subsys:            { label: 'list_subsys',            category: 'host', color: 'text-status-pass-foreground' },
+  list_cases:             { label: 'list_cases',             category: 'host', color: 'text-status-pass-foreground' },
+  run_simulation:         { label: 'run_simulation',         category: 'host', color: 'text-status-pass-foreground' },
+  get_run_status:         { label: 'get_run_status',         category: 'host', color: 'text-status-pass-foreground' },
+  get_compile_errors:     { label: 'get_compile_errors',     category: 'host', color: 'text-status-pass-foreground' },
+  get_coverage:           { label: 'get_coverage',           category: 'host', color: 'text-status-pass-foreground' },
+  get_sim_options_schema: { label: 'get_sim_options_schema', category: 'host', color: 'text-status-pass-foreground' },
 };
 
 /** Check if a tool name is an MCP tool (mcp__<server>_<tool>) */
@@ -62,7 +62,7 @@ export function getToolMeta(name: string | undefined): ToolMeta {
   if (isMCPTool(name)) {
     const parsed = parseMCPToolName(name);
     const label = parsed ? `${parsed.serverName}/${parsed.toolName}` : name;
-    return { label, category: 'mcp', color: 'text-amber-400' };
+    return { label, category: 'mcp', color: 'text-warning-foreground' };
   }
   return TOOL_META[name] ?? { label: name, category: 'other', color: 'text-muted-foreground' };
 }

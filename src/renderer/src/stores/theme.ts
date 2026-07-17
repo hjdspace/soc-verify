@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 
 // ── 主题定义 ──────────────────────────────────────────────────
-// 每个主题对应 globals.css 中 [data-theme="<id>"] 的 CSS 变量集
+// 每个主题对应 globals.css 中 [data-theme="<id>"] 的 CSS 变量集。
+// 三套主题各自拒绝一种 EDA / 工程师工具的常见反射，详见各主题注释。
 
 export type ThemeMode = 'light' | 'dark';
 
@@ -9,57 +10,47 @@ export interface ThemeDefinition {
   id: string;
   name: string;
   mode: ThemeMode;
-  /** 用于色板预览的主色 */
+  /** 用于色板预览的主色（hex 仅用于 swatch UI 显示） */
   swatch: string;
   description: string;
 }
 
 export const THEMES: ThemeDefinition[] = [
   {
-    id: 'light',
-    name: '浅色',
+    id: 'drafting',
+    name: 'Drafting',
     mode: 'light',
-    swatch: '#ffffff',
-    description: '干净明亮的浅色主题，适合白天工作环境',
+    swatch: '#7c3a9e',
+    description: '暖纸白底 + 深紫梅强调。荧光灯实验室、白板、纸质文档场景。',
   },
   {
-    id: 'dark',
-    name: '深色',
+    id: 'bench',
+    name: 'Bench',
     mode: 'dark',
-    swatch: '#0f0f14',
-    description: '经典深色主题，高对比度，适合夜间工作',
+    swatch: '#3ddc84',
+    description: '暖深底 + 磷光绿强调。长时间跑 8 小时回归，暖色降低视疲劳。',
   },
   {
-    id: 'midnight',
-    name: '午夜蓝',
+    id: 'slate',
+    name: 'Slate',
     mode: 'dark',
-    swatch: '#1a1b2e',
-    description: '深蓝色调暗色主题，长时间使用不伤眼',
-  },
-  {
-    id: 'carbon',
-    name: '碳灰',
-    mode: 'dark',
-    swatch: '#1c1c1c',
-    description: '工业风碳灰色暗色主题，冷色调',
-  },
-  {
-    id: 'nord',
-    name: '极地',
-    mode: 'dark',
-    swatch: '#2e3440',
-    description: 'Nord 极地配色，蓝灰冷色调，护眼舒适',
-  },
-  {
-    id: 'solarized-light',
-    name: 'Solarized 浅',
-    mode: 'light',
-    swatch: '#fdf6e3',
-    description: '暖色调浅色主题，Solarized 配色方案',
+    swatch: '#d08a4e',
+    description: '冷石板底 + 铜色强调。三显示器扫表找失败行，冷底色压低反差噪声。',
   },
 ];
 
 const STORAGE_KEY = 'socverify:theme';
+const DEFAULT_THEME = 'bench';
+
+// 旧 6 主题 ID → 新 3 主题 ID 映射（迁移已保存的偏好）
+const LEGACY_THEME_MIGRATION: Record<string, string> = {
+  light: 'drafting',
+  'solarized-light': 'drafting',
+  dark: 'bench',
+  midnight: 'bench',
+  carbon: 'slate',
+  nord: 'slate',
+};
 
 // ── 主题 Store ─────────────────────────────────────────────────
 
@@ -78,8 +69,20 @@ function applyTheme(id: string) {
   root.style.colorScheme = theme?.mode ?? 'dark';
 }
 
-export const useThemeStore = create<ThemeState>((set, get) => ({
-  currentTheme: 'dark',
+function resolveThemeId(saved: string | null): string {
+  if (!saved) return DEFAULT_THEME;
+  if (THEMES.some((t) => t.id === saved)) return saved;
+  // 旧主题迁移
+  if (LEGACY_THEME_MIGRATION[saved]) {
+    const migrated = LEGACY_THEME_MIGRATION[saved];
+    localStorage.setItem(STORAGE_KEY, migrated);
+    return migrated;
+  }
+  return DEFAULT_THEME;
+}
+
+export const useThemeStore = create<ThemeState>((set) => ({
+  currentTheme: DEFAULT_THEME,
   themes: THEMES,
 
   setTheme: (id: string) => {
@@ -90,7 +93,7 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
 
   initTheme: () => {
     const saved = localStorage.getItem(STORAGE_KEY);
-    const id = saved && THEMES.some((t) => t.id === saved) ? saved : 'dark';
+    const id = resolveThemeId(saved);
     applyTheme(id);
     set({ currentTheme: id });
   },

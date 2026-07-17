@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal } from 'lucide-react';
+import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal } from 'lucide-react';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
@@ -15,7 +15,27 @@ import { DiffReviewView } from '@renderer/components/editor/DiffReviewView';
 import { useDiffReviewStore } from '@renderer/stores/diff-review';
 import { RunningCasesPanel } from '@renderer/components/simulation/RunningCasesPanel';
 import { cn } from '@renderer/lib/utils';
-import type { SimulationHistoryEntry, CompileError } from '@shared/types';
+import type { SimulationHistoryEntry, CompileError, SimulationStatus } from '@shared/types';
+
+// ── 状态徽章：主题感知的点 + 文字 ────────────────────────────────
+const STATUS_BADGE_STYLES: Record<SimulationStatus, { dot: string; text: string }> = {
+  pass: { dot: 'bg-status-pass-foreground', text: 'text-status-pass-foreground' },
+  fail: { dot: 'bg-status-fail-foreground', text: 'text-status-fail-foreground' },
+  error: { dot: 'bg-status-fail-foreground', text: 'text-status-fail-foreground' },
+  aborted: { dot: 'bg-status-aborted-foreground', text: 'text-status-aborted-foreground' },
+  running: { dot: 'bg-status-running-foreground animate-pulse', text: 'text-status-running-foreground' },
+  pending: { dot: 'bg-status-pending-foreground', text: 'text-status-pending-foreground' },
+};
+
+function StatusBadge({ status }: { status: SimulationStatus }) {
+  const style = STATUS_BADGE_STYLES[status] ?? STATUS_BADGE_STYLES.pending;
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[11px]">
+      <span className={cn('h-1.5 w-1.5 rounded-full', style.dot)} />
+      <span className={style.text}>{status}</span>
+    </span>
+  );
+}
 
 export function CenterArea() {
   const tabs = useWorkbenchStore((s) => s.tabs);
@@ -41,6 +61,9 @@ export function CenterArea() {
   const createTerminal = useTerminalStore((s) => s.createTerminal);
   const closeTerminal = useTerminalStore((s) => s.closeTerminal);
   const setActiveTerminalTab = useTerminalStore((s) => s.setActiveTab);
+
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const runningCount = activeRuns.filter((r) => r.status === 'running' || r.status === 'pending').length;
 
   useEffect(() => {
     if (destination?.type === 'simulation-detail' && currentProjectId) {
@@ -87,12 +110,20 @@ export function CenterArea() {
   const simErrorsRun = activeRuns.find((r) => r.runId === simErrorsRunId);
   const simErrors = simErrorsRun?.compileErrors ?? [];
 
+  // 更多菜单项
+  const moreItems = [
+    { type: 'regression' as const, label: '回归套件', icon: GitBranch },
+    { type: 'source-control' as const, label: '源代码管理', icon: GitCommitHorizontal },
+    { type: 'to-checklist' as const, label: 'TO 检查', icon: ListChecks },
+    { type: 'simulation-history' as const, label: '仿真历史', icon: History },
+  ];
+
   return (
     <main className="flex flex-1 flex-col overflow-hidden">
       {/* ── Tab bar ────────────────────────────────── */}
       <div className="flex h-8 shrink-0 items-center border-b bg-secondary/30">
         {tabs.length === 0 ? (
-          <div className="flex items-center gap-2 px-3 text-[10px] text-muted-foreground">
+          <div className="flex items-center gap-2 px-3 text-[11px] text-muted-foreground">
             <span>多功能工作区 — 点击左栏文件或使用下方按钮</span>
           </div>
         ) : (
@@ -117,7 +148,7 @@ export function CenterArea() {
                 {tab.destination.type === 'file' && <FileText className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'terminal' && <TerminalIcon className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'ai-artifacts' && <Sparkles className="h-3 w-3 opacity-50" />}
-                {tab.destination.type === 'simulation-errors' && <AlertCircle className="h-3 w-3 text-red-500" />}
+                {tab.destination.type === 'simulation-errors' && <AlertCircle className="h-3 w-3 text-status-fail-foreground" />}
                 {tab.destination.type === 'simulation-history' && <History className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'simulation-detail' && <FileText className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'simulation-comparison' && <GitCompare className="h-3 w-3 opacity-50" />}
@@ -143,66 +174,69 @@ export function CenterArea() {
             ))}
           </div>
         )}
+
+        {/* ── 主操作（带文字）+ 溢出菜单 ──────────────────── */}
         <div className="flex items-center gap-1 px-2">
-          <button
+          {/* 仪表盘 */}
+          <TabActionButton
             onClick={() => openDestination({ type: 'dashboard' })}
-            title="仪表盘"
-            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <LayoutDashboard className="h-3.5 w-3.5" />
-          </button>
-          <button
+            icon={<LayoutDashboard className="h-3.5 w-3.5" />}
+            label="仪表盘"
+          />
+          {/* 覆盖率 */}
+          <TabActionButton
             onClick={() => openDestination({ type: 'coverage' })}
-            title="覆盖率"
-            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <BarChart3 className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={() => openDestination({ type: 'regression' })}
-            title="回归套件"
-            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <GitBranch className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={() => openDestination({ type: 'source-control' })}
-            title="源代码管理"
-            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <GitCommitHorizontal className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={() => openDestination({ type: 'to-checklist' })}
-            title="TO 检查"
-            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <ListChecks className="h-3.5 w-3.5" />
-          </button>
-          <button
+            icon={<BarChart3 className="h-3.5 w-3.5" />}
+            label="覆盖率"
+          />
+          {/* 运行中（带徽章） */}
+          <TabActionButton
             onClick={() => openDestination({ type: 'running-simulations' })}
-            title="运行概览"
-            className={cn(
-              'relative rounded p-1 transition-colors hover:bg-accent hover:text-foreground',
-              activeRuns.length > 0 && activeRuns.some((r) => r.status === 'running' || r.status === 'pending')
-                ? 'text-blue-500'
-                : 'text-muted-foreground',
+            icon={<CircleDot className="h-3.5 w-3.5" />}
+            label="运行中"
+            badge={runningCount > 0 ? runningCount : undefined}
+          />
+          {/* 更多：溢出菜单 */}
+          <div className="relative">
+            <button
+              onClick={() => setMoreMenuOpen(!moreMenuOpen)}
+              title="更多"
+              className={cn(
+                'flex items-center gap-1 rounded px-2 py-1 text-[11px] transition-colors hover:bg-accent hover:text-foreground',
+                moreMenuOpen ? 'bg-accent text-foreground' : 'text-muted-foreground',
+              )}
+            >
+              <MoreHorizontal className="h-3.5 w-3.5" />
+              <span>更多</span>
+            </button>
+            {moreMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setMoreMenuOpen(false)} />
+                <div className="absolute right-0 top-7 z-50 min-w-44 overflow-hidden rounded-md border border-border bg-popover shadow-xl">
+                  {moreItems.map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <button
+                        key={item.type}
+                        onClick={() => {
+                          if (item.type === 'simulation-history') {
+                            openSimHistory();
+                          } else {
+                            openDestination({ type: item.type });
+                          }
+                          setMoreMenuOpen(false);
+                        }}
+                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent"
+                      >
+                        <Icon className="h-3.5 w-3.5 opacity-70" />
+                        <span>{item.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
             )}
-          >
-            <CircleDot className="h-3.5 w-3.5" />
-            {activeRuns.filter((r) => r.status === 'running' || r.status === 'pending').length > 0 && (
-              <span className="absolute -right-1 -top-1 flex h-3 min-w-3 items-center justify-center rounded-full bg-blue-500 px-0.5 text-[8px] font-bold text-white">
-                {activeRuns.filter((r) => r.status === 'running' || r.status === 'pending').length}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={openSimHistory}
-            title="仿真历史"
-            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <History className="h-3.5 w-3.5" />
-          </button>
+          </div>
         </div>
       </div>
 
@@ -274,7 +308,7 @@ export function CenterArea() {
             {/* Active simulations */}
             {activeRuns.length > 0 && (
               <div className="w-full max-w-md">
-                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                   正在运行的仿真
                 </div>
                 {activeRuns.map((run) => (
@@ -282,20 +316,23 @@ export function CenterArea() {
                     key={run.runId}
                     className="flex items-center gap-2 rounded-md border border-border/50 bg-secondary/30 px-3 py-1.5"
                   >
-                    <CircleDot className={cn('h-2.5 w-2.5 shrink-0', run.status === 'running' ? 'text-blue-500 animate-pulse' : run.status === 'pass' ? 'text-green-500' : run.status === 'fail' ? 'text-red-500' : 'text-muted-foreground')} />
+                    <span className={cn(
+                      'h-1.5 w-1.5 shrink-0 rounded-full',
+                      STATUS_BADGE_STYLES[run.status]?.dot ?? 'bg-muted-foreground',
+                    )} />
                     <span className="flex-1 truncate text-xs">{run.caseName ?? run.caseId}</span>
                     <span className="text-[10px] text-muted-foreground">{run.status}</span>
                     {run.status === 'running' || run.status === 'pending' ? (
                       <button
                         onClick={() => currentProjectId && abortSimulation(currentProjectId, run.runId)}
-                        className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] text-destructive hover:bg-destructive/20"
+                        className="rounded bg-status-fail/10 px-1.5 py-0.5 text-[10px] text-status-fail-foreground hover:bg-status-fail/20"
                       >
                         中止
                       </button>
                     ) : run.compileErrors && run.compileErrors.length > 0 ? (
                       <button
                         onClick={() => openSimErrors(run.runId)}
-                        className="rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-500 hover:bg-red-500/20"
+                        className="rounded bg-status-fail/10 px-1.5 py-0.5 text-[10px] text-status-fail-foreground hover:bg-status-fail/20"
                       >
                         查看错误
                       </button>
@@ -321,13 +358,41 @@ export function CenterArea() {
                 AI 产物
               </button>
             </div>
-            <p className="text-[10px]">
+            <p className="text-[11px]">
               {activeTab ? `活动页签：${activeTab.title}` : '从左栏选择文件或在右栏与 AI 对话'}
             </p>
           </div>
         )}
       </div>
     </main>
+  );
+}
+
+// ── Tab bar 主操作按钮（icon + 文字） ─────────────────────────────
+function TabActionButton({
+  onClick,
+  icon,
+  label,
+  badge,
+}: {
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  badge?: number;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+    >
+      {icon}
+      <span>{label}</span>
+      {badge !== undefined && (
+        <span className="ml-0.5 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-status-running px-1 text-[9px] font-bold text-status-running-foreground">
+          {badge}
+        </span>
+      )}
+    </button>
   );
 }
 
@@ -350,7 +415,7 @@ function CompileErrorView({ errors, runId }: { errors: CompileError[]; runId: st
     <div className="flex flex-1 flex-col overflow-auto">
       <div className="border-b bg-secondary/20 px-3 py-1.5">
         <span className="text-xs font-semibold text-foreground">编译错误 — {runId.slice(-6)}</span>
-        <span className="ml-2 text-[10px] text-muted-foreground">{errors.length} 项</span>
+        <span className="ml-2 text-[11px] text-muted-foreground">{errors.length} 项</span>
       </div>
       <div className="flex-1 overflow-auto p-2">
         {errors.map((err, i) => (
@@ -359,17 +424,17 @@ function CompileErrorView({ errors, runId }: { errors: CompileError[]; runId: st
             className={cn(
               'mb-1 rounded-md border p-2 text-xs',
               err.severity === 'error'
-                ? 'border-red-500/30 bg-red-500/5'
-                : 'border-yellow-500/30 bg-yellow-500/5',
+                ? 'border-status-fail/30 bg-status-fail/5'
+                : 'border-status-pending/30 bg-status-pending/5',
             )}
           >
             <div className="flex items-center gap-2">
               <span
                 className={cn(
-                  'rounded px-1 py-0.5 text-[9px] font-semibold uppercase',
+                  'rounded px-1 py-0.5 text-[10px] font-semibold uppercase',
                   err.severity === 'error'
-                    ? 'bg-red-500/20 text-red-500'
-                    : 'bg-yellow-500/20 text-yellow-600',
+                    ? 'bg-status-fail/20 text-status-fail-foreground'
+                    : 'bg-status-pending/20 text-status-pending-foreground',
                 )}
               >
                 {err.severity}
@@ -450,12 +515,12 @@ function SimulationHistoryView({
       <div className="flex items-center justify-between border-b bg-secondary/20 px-3 py-1.5">
         <div>
           <span className="text-xs font-semibold text-foreground">仿真历史</span>
-          <span className="ml-2 text-[10px] text-muted-foreground">{history.length} 条记录</span>
+          <span className="ml-2 text-[11px] text-muted-foreground">{history.length} 条记录</span>
         </div>
         {compareSelect.length === 2 && (
           <button
             onClick={() => onCompare(compareSelect[0], compareSelect[1])}
-            className="flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-[10px] text-primary hover:bg-primary/20"
+            className="flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-[11px] text-primary hover:bg-primary/20"
           >
             <GitCompare className="h-3 w-3" />
             对比选中
@@ -465,7 +530,7 @@ function SimulationHistoryView({
       <div className="flex-1 overflow-auto p-2">
         <table className="w-full text-xs">
           <thead>
-            <tr className="border-b text-left text-[10px] uppercase text-muted-foreground">
+            <tr className="border-b text-left text-[11px] uppercase text-muted-foreground">
               <th className="px-2 py-1 w-6">
                 <input
                   type="checkbox"
@@ -512,18 +577,7 @@ function SimulationHistoryView({
                 <td className="px-2 py-1 text-foreground">{entry.caseName}</td>
                 <td className="px-2 py-1 text-muted-foreground">{entry.subsys}</td>
                 <td className="px-2 py-1">
-                  <span
-                    className={cn(
-                      'rounded px-1 py-0.5 text-[10px]',
-                      entry.status === 'pass' && 'bg-green-500/15 text-green-500',
-                      entry.status === 'fail' && 'bg-red-500/15 text-red-500',
-                      entry.status === 'error' && 'bg-red-500/15 text-red-500',
-                      entry.status === 'aborted' && 'bg-orange-500/15 text-orange-500',
-                      (entry.status === 'pending' || entry.status === 'running') && 'bg-blue-500/15 text-blue-500',
-                    )}
-                  >
-                    {entry.status}
-                  </span>
+                  <StatusBadge status={entry.status} />
                 </td>
                 <td className="px-2 py-1 text-muted-foreground">
                   {entry.duration > 1000
@@ -537,7 +591,7 @@ function SimulationHistoryView({
                   {entry.compileErrors && entry.compileErrors.length > 0 && (
                     <button
                       onClick={() => onSelectRun(entry.runId)}
-                      className="rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-500 hover:bg-red-500/20"
+                      className="rounded bg-status-fail/10 px-1.5 py-0.5 text-[11px] text-status-fail-foreground hover:bg-status-fail/20"
                     >
                       查看错误
                     </button>
@@ -588,31 +642,21 @@ function RunDetailView({
         {/* Basic info */}
         <div className="mb-4 grid grid-cols-2 gap-2 text-xs">
           <div className="rounded border border-border/50 bg-secondary/20 px-3 py-2">
-            <span className="text-[10px] uppercase text-muted-foreground">用例</span>
+            <span className="text-[11px] uppercase text-muted-foreground">用例</span>
             <div className="mt-0.5 font-medium text-foreground">{detailRun.caseName}</div>
           </div>
           <div className="rounded border border-border/50 bg-secondary/20 px-3 py-2">
-            <span className="text-[10px] uppercase text-muted-foreground">子系统</span>
+            <span className="text-[11px] uppercase text-muted-foreground">子系统</span>
             <div className="mt-0.5 font-medium text-foreground">{detailRun.subsys}</div>
           </div>
           <div className="rounded border border-border/50 bg-secondary/20 px-3 py-2">
-            <span className="text-[10px] uppercase text-muted-foreground">状态</span>
+            <span className="text-[11px] uppercase text-muted-foreground">状态</span>
             <div className="mt-0.5">
-              <span
-                className={cn(
-                  'rounded px-1 py-0.5 text-[10px]',
-                  detailRun.status === 'pass' && 'bg-green-500/15 text-green-500',
-                  detailRun.status === 'fail' && 'bg-red-500/15 text-red-500',
-                  detailRun.status === 'error' && 'bg-red-500/15 text-red-500',
-                  detailRun.status === 'aborted' && 'bg-orange-500/15 text-orange-500',
-                )}
-              >
-                {detailRun.status}
-              </span>
+              <StatusBadge status={detailRun.status} />
             </div>
           </div>
           <div className="rounded border border-border/50 bg-secondary/20 px-3 py-2">
-            <span className="text-[10px] uppercase text-muted-foreground">耗时</span>
+            <span className="text-[11px] uppercase text-muted-foreground">耗时</span>
             <div className="mt-0.5 font-medium text-foreground">
               {detailRun.duration > 1000
                 ? `${(detailRun.duration / 1000).toFixed(1)}s`
@@ -620,21 +664,21 @@ function RunDetailView({
             </div>
           </div>
           <div className="rounded border border-border/50 bg-secondary/20 px-3 py-2">
-            <span className="text-[10px] uppercase text-muted-foreground">开始时间</span>
+            <span className="text-[11px] uppercase text-muted-foreground">开始时间</span>
             <div className="mt-0.5 text-foreground">{new Date(detailRun.startTime).toLocaleString()}</div>
           </div>
           <div className="rounded border border-border/50 bg-secondary/20 px-3 py-2">
-            <span className="text-[10px] uppercase text-muted-foreground">结束时间</span>
+            <span className="text-[11px] uppercase text-muted-foreground">结束时间</span>
             <div className="mt-0.5 text-foreground">{new Date(detailRun.endTime).toLocaleString()}</div>
           </div>
         </div>
 
         {/* Options */}
         <div className="mb-4">
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">仿真选项</div>
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">仿真选项</div>
           <div className="rounded border border-border/50 bg-secondary/20 p-2">
             {Object.keys(detailRun.options).length === 0 ? (
-              <span className="text-[10px] text-muted-foreground">无选项</span>
+              <span className="text-[11px] text-muted-foreground">无选项</span>
             ) : (
               <div className="grid grid-cols-2 gap-1 text-xs">
                 {Object.entries(detailRun.options).map(([key, value]) => (
@@ -652,12 +696,12 @@ function RunDetailView({
         {detailRun.compileErrors && detailRun.compileErrors.length > 0 && (
           <div className="mb-4">
             <div className="mb-1 flex items-center justify-between">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                 编译错误 ({detailRun.compileErrors.length})
               </span>
               <button
                 onClick={() => onViewErrors(detailRun.runId)}
-                className="rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-500 hover:bg-red-500/20"
+                className="rounded bg-status-fail/10 px-1.5 py-0.5 text-[11px] text-status-fail-foreground hover:bg-status-fail/20"
               >
                 查看全部
               </button>
@@ -669,8 +713,8 @@ function RunDetailView({
                   className={cn(
                     'rounded border p-2 text-xs',
                     err.severity === 'error'
-                      ? 'border-red-500/30 bg-red-500/5'
-                      : 'border-yellow-500/30 bg-yellow-500/5',
+                      ? 'border-status-fail/30 bg-status-fail/5'
+                      : 'border-status-pending/30 bg-status-pending/5',
                   )}
                 >
                   <span className="font-medium text-foreground">{err.file}:{err.line}</span>
@@ -710,24 +754,20 @@ function ComparisonView({
     <div className="flex flex-1 flex-col overflow-auto">
       <div className="border-b bg-secondary/20 px-3 py-1.5">
         <span className="text-xs font-semibold text-foreground">运行对比</span>
-        <span className="ml-2 text-[10px] text-muted-foreground">{differences.length} 项差异</span>
+        <span className="ml-2 text-[11px] text-muted-foreground">{differences.length} 项差异</span>
       </div>
       <div className="flex-1 overflow-auto p-3">
         {/* Run summaries side by side */}
         <div className="mb-4 grid grid-cols-2 gap-3">
           {runA && (
             <div className="rounded border border-border/50 bg-secondary/20 p-3">
-              <div className="mb-2 text-[10px] font-semibold uppercase text-muted-foreground">运行 A</div>
+              <div className="mb-2 text-[11px] font-semibold uppercase text-muted-foreground">运行 A</div>
               <div className="space-y-1 text-xs">
                 <div><span className="text-muted-foreground">用例:</span> <span className="text-foreground">{runA.caseName}</span></div>
                 <div><span className="text-muted-foreground">子系统:</span> <span className="text-foreground">{runA.subsys}</span></div>
-                <div>
+                <div className="flex items-center gap-1">
                   <span className="text-muted-foreground">状态:</span>{' '}
-                  <span className={cn(
-                    'rounded px-1 py-0.5 text-[10px]',
-                    runA.status === 'pass' && 'bg-green-500/15 text-green-500',
-                    runA.status === 'fail' && 'bg-red-500/15 text-red-500',
-                  )}>{runA.status}</span>
+                  <StatusBadge status={runA.status} />
                 </div>
                 <div><span className="text-muted-foreground">耗时:</span> <span className="text-foreground">{runA.duration > 1000 ? `${(runA.duration / 1000).toFixed(1)}s` : `${runA.duration}ms`}</span></div>
                 <div><span className="text-muted-foreground">时间:</span> <span className="text-foreground">{new Date(runA.startTime).toLocaleString()}</span></div>
@@ -736,17 +776,13 @@ function ComparisonView({
           )}
           {runB && (
             <div className="rounded border border-border/50 bg-secondary/20 p-3">
-              <div className="mb-2 text-[10px] font-semibold uppercase text-muted-foreground">运行 B</div>
+              <div className="mb-2 text-[11px] font-semibold uppercase text-muted-foreground">运行 B</div>
               <div className="space-y-1 text-xs">
                 <div><span className="text-muted-foreground">用例:</span> <span className="text-foreground">{runB.caseName}</span></div>
                 <div><span className="text-muted-foreground">子系统:</span> <span className="text-foreground">{runB.subsys}</span></div>
-                <div>
+                <div className="flex items-center gap-1">
                   <span className="text-muted-foreground">状态:</span>{' '}
-                  <span className={cn(
-                    'rounded px-1 py-0.5 text-[10px]',
-                    runB.status === 'pass' && 'bg-green-500/15 text-green-500',
-                    runB.status === 'fail' && 'bg-red-500/15 text-red-500',
-                  )}>{runB.status}</span>
+                  <StatusBadge status={runB.status} />
                 </div>
                 <div><span className="text-muted-foreground">耗时:</span> <span className="text-foreground">{runB.duration > 1000 ? `${(runB.duration / 1000).toFixed(1)}s` : `${runB.duration}ms`}</span></div>
                 <div><span className="text-muted-foreground">时间:</span> <span className="text-foreground">{new Date(runB.startTime).toLocaleString()}</span></div>
@@ -758,10 +794,10 @@ function ComparisonView({
         {/* Differences table */}
         {differences.length > 0 && (
           <div>
-            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">差异</div>
+            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">差异</div>
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b text-left text-[10px] uppercase text-muted-foreground">
+                <tr className="border-b text-left text-[11px] uppercase text-muted-foreground">
                   <th className="px-2 py-1">字段</th>
                   <th className="px-2 py-1">运行 A</th>
                   <th className="px-2 py-1">运行 B</th>

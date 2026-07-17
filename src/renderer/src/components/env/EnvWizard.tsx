@@ -68,7 +68,7 @@ function WizardDialog() {
                   i === stepIndex
                     ? 'bg-primary/15 text-primary'
                     : i < stepIndex
-                      ? 'bg-green-500/10 text-green-500'
+                      ? 'bg-status-pass/10 text-status-pass-foreground'
                       : 'bg-muted text-muted-foreground',
                 )}
               >
@@ -147,8 +147,8 @@ function DetectStep() {
       {detected.length > 0 && (
         <div className="space-y-1.5">
           {detected.map((tool) => (
-            <div key={tool.name} className="flex items-center gap-2 rounded border border-green-500/30 bg-green-500/5 px-3 py-2">
-              <Check className="h-3.5 w-3.5 text-green-500" />
+            <div key={tool.name} className="flex items-center gap-2 rounded border border-status-pass/30 bg-status-pass/5 px-3 py-2">
+              <Check className="h-3.5 w-3.5 text-status-pass-foreground" />
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-medium">{tool.name}</div>
                 <div className="truncate text-[10px] text-muted-foreground">{tool.path}</div>
@@ -210,7 +210,7 @@ function ConfirmStep() {
             className="flex-1 rounded border border-border bg-background px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
           />
           {tool.detected ? (
-            <Check className="h-3.5 w-3.5 text-green-500" />
+            <Check className="h-3.5 w-3.5 text-status-pass-foreground" />
           ) : (
             <X className="h-3.5 w-3.5 text-muted-foreground" />
           )}
@@ -312,8 +312,8 @@ function DoneStep() {
 
   return (
     <div className="flex flex-col items-center justify-center gap-4 py-8">
-      <div className="flex h-16 w-16 items-center justify-center rounded-full bg-green-500/10">
-        <Check className="h-8 w-8 text-green-500" />
+      <div className="flex h-16 w-16 items-center justify-center rounded-full bg-status-pass/10">
+        <Check className="h-8 w-8 text-status-pass-foreground" />
       </div>
       <div className="text-center">
         <div className="text-sm font-semibold">环境配置完成</div>

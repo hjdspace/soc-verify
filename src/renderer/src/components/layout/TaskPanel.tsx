@@ -59,9 +59,9 @@ export function TaskPanel() {
 
 function TaskRow({ task, onCancel }: { task: Task; onCancel: (id: string) => void }) {
   const statusIcon = {
-    running: <Loader2 className="h-3 w-3 animate-spin text-blue-500" />,
-    done: <CheckCircle2 className="h-3 w-3 text-green-500" />,
-    failed: <XCircle className="h-3 w-3 text-red-500" />,
+    running: <Loader2 className="h-3 w-3 animate-spin text-status-running-foreground" />,
+    done: <CheckCircle2 className="h-3 w-3 text-status-pass-foreground" />,
+    failed: <XCircle className="h-3 w-3 text-status-fail-foreground" />,
     cancelled: <X className="h-3 w-3 text-muted-foreground" />,
   };
 
@@ -75,10 +75,10 @@ function TaskRow({ task, onCancel }: { task: Task; onCancel: (id: string) => voi
             <div
               className={cn(
                 'h-full rounded-full transition-all',
-                task.type === 'simulation' && 'bg-blue-500',
-                task.type === 'ai' && 'bg-purple-500',
-                task.type === 'regression' && 'bg-green-500',
-                task.type === 'coverage' && 'bg-orange-500',
+                task.type === 'simulation' && 'bg-status-running-foreground',
+                task.type === 'ai' && 'bg-violet-foreground',
+                task.type === 'regression' && 'bg-status-pass-foreground',
+                task.type === 'coverage' && 'bg-chart-4',
               )}
               style={{ width: `${task.progress}%` }}
             />

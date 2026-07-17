@@ -3,10 +3,23 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { useTerminalStore } from '@renderer/stores/terminal';
+import { useThemeStore } from '@renderer/stores/theme';
 import { trpc } from '@renderer/lib/trpc';
 
 interface TerminalViewProps {
   terminalId: string;
+}
+
+/** 从当前主题 CSS 变量读取 xterm.js 主题对象，让终端配色随主题切换。 */
+function readTerminalThemeFromCss(): Record<string, string> {
+  const root = getComputedStyle(document.documentElement);
+  const get = (name: string) => root.getPropertyValue(name).trim();
+  return {
+    background: get('--background') || '#1e1e2e',
+    foreground: get('--foreground') || '#cdd6f4',
+    cursor: get('--primary') || '#f5e0dc',
+    selectionBackground: get('--accent') || '#585b70',
+  };
 }
 
 export function TerminalView({ terminalId }: TerminalViewProps) {
@@ -15,6 +28,7 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
   const fitRef = useRef<FitAddon | null>(null);
   const writeToTerminal = useTerminalStore((s) => s.writeToTerminal);
   const resizeTerminal = useTerminalStore((s) => s.resizeTerminal);
+  const currentTheme = useThemeStore((s) => s.currentTheme);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -25,12 +39,7 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
       fontFamily: 'Consolas, "Courier New", monospace',
       scrollback: 100000,
       allowProposedApi: true,
-      theme: {
-        background: '#1e1e2e',
-        foreground: '#cdd6f4',
-        cursor: '#f5e0dc',
-        selectionBackground: '#585b70',
-      },
+      theme: readTerminalThemeFromCss(),
     });
 
     const fitAddon = new FitAddon();
@@ -124,10 +133,17 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
     };
   }, [terminalId, writeToTerminal, resizeTerminal]);
 
+  // 主题切换时同步终端配色
+  useEffect(() => {
+    if (termRef.current) {
+      termRef.current.options.theme = readTerminalThemeFromCss();
+    }
+  }, [currentTheme]);
+
   return (
     <div
       ref={containerRef}
-      className="h-full w-full overflow-hidden bg-[#1e1e2e]"
+      className="h-full w-full overflow-hidden bg-background"
     />
   );
 }

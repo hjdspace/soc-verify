@@ -16,10 +16,10 @@ function statusLabel(file: SourceControlFileStatus): string {
 }
 
 function statusTone(file: SourceControlFileStatus): string {
-  if (file.indexStatus === '?' && file.workTreeStatus === '?') return 'bg-blue-500/10 text-blue-500';
-  if (file.indexStatus === 'D' || file.workTreeStatus === 'D') return 'bg-red-500/10 text-red-500';
-  if (file.indexStatus === 'R' || file.workTreeStatus === 'R') return 'bg-purple-500/10 text-purple-500';
-  return 'bg-amber-500/10 text-amber-600';
+  if (file.indexStatus === '?' && file.workTreeStatus === '?') return 'bg-info/10 text-info-foreground';
+  if (file.indexStatus === 'D' || file.workTreeStatus === 'D') return 'bg-status-fail/10 text-status-fail-foreground';
+  if (file.indexStatus === 'R' || file.workTreeStatus === 'R') return 'bg-violet/10 text-violet-foreground';
+  return 'bg-warning/10 text-warning-foreground';
 }
 
 export function SourceControlPanel() {
@@ -132,7 +132,7 @@ export function SourceControlPanel() {
             </div>
           ) : (
             <div className="flex flex-1 items-center justify-center gap-2 text-xs text-muted-foreground">
-              <Check className="h-4 w-4 text-green-500" />
+              <Check className="h-4 w-4 text-status-pass-foreground" />
               工作区干净
             </div>
           )}

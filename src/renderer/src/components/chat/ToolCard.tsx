@@ -134,7 +134,7 @@ export function ToolCard({ message }: { message: ChatMessage }) {
         {isExecuting ? (
           <Loader2 className="h-2.5 w-2.5 shrink-0 animate-spin text-primary" />
         ) : (
-          <span className={cn('h-2 w-2 shrink-0 rounded-full', isError ? 'bg-red-500' : 'bg-green-500')} />
+          <span className={cn('h-2 w-2 shrink-0 rounded-full', isError ? 'bg-status-fail-foreground' : 'bg-status-pass-foreground')} />
         )}
         <span className={cn('shrink-0 text-[11px] font-semibold', meta.color)}>
           {meta.label}
@@ -142,7 +142,7 @@ export function ToolCard({ message }: { message: ChatMessage }) {
         {isFileTool && filePath ? (
           <span
             onClick={handleOpenDiffReview}
-            className="flex-1 min-w-0 truncate text-[11px] cursor-pointer text-blue-500 hover:text-blue-400 hover:underline"
+            className="flex-1 min-w-0 truncate text-[11px] cursor-pointer text-status-running-foreground hover:underline"
             title={`点击在 Diff Review 中打开: ${filePath}`}
           >
             {summary}
@@ -397,7 +397,7 @@ function McpBody({ serverName, toolName, args, resultText }: {
 
   return (
     <div className="text-[11px] leading-relaxed">
-      <div className="border-b border-border/40 bg-background/50 px-2.5 py-1 text-[10px] text-amber-400/80">
+      <div className="border-b border-border/40 bg-background/50 px-2.5 py-1 text-[10px] text-warning-foreground/80">
         <span className="text-muted-foreground/50">mcp:</span>{serverName ?? 'unknown'}{' / '}{toolName ?? 'tool'}
       </div>
       {hasArgs && (
@@ -450,12 +450,12 @@ function WriteBody({ args, resultText }: { args: unknown; resultText: string }) 
   const lines = content.split('\n');
 
   return (
-    <div className="max-h-80 overflow-auto bg-green-500/10 text-[11px] leading-relaxed">
+    <div className="max-h-80 overflow-auto bg-diff-add/10 text-[11px] leading-relaxed">
       {lines.map((line, i) => (
         <div key={i} className="flex">
-          <span className="w-5 shrink-0 select-none text-center text-green-500">+</span>
-          <span className="w-8 shrink-0 select-none border-r border-green-500/20 pr-1 text-right text-green-700/60 dark:text-green-500/40">{i + 1}</span>
-          <span className="flex-1 overflow-x-auto px-2 text-green-700 dark:text-green-300/90">
+          <span className="w-5 shrink-0 select-none text-center text-status-pass-foreground">+</span>
+          <span className="w-8 shrink-0 select-none border-r border-status-pass-foreground/20 pr-1 text-right text-status-pass-foreground/60">{i + 1}</span>
+          <span className="flex-1 overflow-x-auto px-2 text-diff-add-foreground">
             <CodeHighlight code={line || '\u00A0'} language={language} />
           </span>
         </div>
@@ -507,25 +507,25 @@ function EditBody({ args, resultText }: { args: unknown; resultText: string }) {
 function DiffLineView({ line, language }: { line: DiffLineData; language: string }) {
   const sign = line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' ';
   return (
-    <div className={cn('flex', line.type === 'add' && 'bg-green-500/10', line.type === 'del' && 'bg-red-500/10')}>
+    <div className={cn('flex', line.type === 'add' && 'bg-diff-add/10', line.type === 'del' && 'bg-diff-del/10')}>
       <span className={cn(
         'w-8 shrink-0 select-none pr-1 text-right text-[10px]',
-        line.type === 'add' && 'text-green-600/60 dark:text-green-500/40',
-        line.type === 'del' && 'text-red-600/60 dark:text-red-500/40',
+        line.type === 'add' && 'text-status-pass-foreground/60',
+        line.type === 'del' && 'text-status-fail-foreground/60',
         line.type === 'ctx' && 'text-muted-foreground/40',
       )}>
-        {line.type === 'add' ? line.newLine ?? '' : line.oldLine ?? ''}
+        {line.oldLine != null ? line.oldLine : ' '}
       </span>
       <span className={cn(
         'w-4 shrink-0 select-none text-center',
-        line.type === 'add' && 'text-green-500',
-        line.type === 'del' && 'text-red-500',
+        line.type === 'add' && 'text-status-pass-foreground',
+        line.type === 'del' && 'text-status-fail-foreground',
         line.type === 'ctx' && 'text-muted-foreground/50',
       )}>{sign}</span>
       <span className={cn(
         'flex-1 overflow-x-auto px-1.5',
-        line.type === 'add' && 'text-green-700 dark:text-green-300/90',
-        line.type === 'del' && 'text-red-700/80 line-through dark:text-red-300/70',
+        line.type === 'add' && 'text-diff-add-foreground',
+        line.type === 'del' && 'text-diff-del-foreground line-through',
         line.type === 'ctx' && 'text-muted-foreground',
       )}>
         <CodeHighlight code={line.content || '\u00A0'} language={language} />
@@ -540,7 +540,7 @@ function BashBody({ args, resultText }: { args: unknown; resultText: string }) {
   const cmd = argStr(args, 'command') ?? '';
   return (
     <div className="text-[11px] leading-relaxed">
-      <div className="border-b border-border/40 bg-background/50 px-2.5 py-1 text-purple-400">
+      <div className="border-b border-border/40 bg-background/50 px-2.5 py-1 text-violet-foreground">
         <span className="text-muted-foreground/50">$ </span>{cmd}
       </div>
       <pre className="max-h-72 overflow-auto px-2.5 py-1.5 text-muted-foreground">{resultText || '\u00A0'}</pre>
@@ -554,11 +554,11 @@ function EvalBody({ args, resultText }: { args: unknown; resultText: string }) {
   const code = argStr(args, 'code') ?? '';
   return (
     <div className="text-[11px] leading-relaxed">
-      <div className="border-b border-border/40 bg-background/50 px-2.5 py-1 text-indigo-400">
+      <div className="border-b border-border/40 bg-background/50 px-2.5 py-1 text-violet-foreground">
         <span className="text-muted-foreground/50">{'\u203a'} </span>{code}
       </div>
       <pre className="max-h-72 overflow-auto px-2.5 py-1.5 text-muted-foreground">
-        <span className="text-green-500">{'\u2190'} </span>{resultText || '\u00A0'}
+        <span className="text-status-pass-foreground">{'\u2190'} </span>{resultText || '\u00A0'}
       </pre>
     </div>
   );
@@ -597,7 +597,7 @@ function GrepBody({ args, resultText }: { args: unknown; resultText: string }) {
     <div className="max-h-80 overflow-auto text-[11px] leading-relaxed">
       {files.map((f, fi) => (
         <div key={fi}>
-          <div className="border-b border-border/30 bg-background/50 px-2.5 py-0.5 font-semibold text-cyan-400">{f.file}</div>
+          <div className="border-b border-border/30 bg-background/50 px-2.5 py-0.5 font-semibold text-chart-1">{f.file}</div>
           {f.matches.map((m, mi) => (
             <div key={mi} className="flex gap-2 px-2.5 py-0.5">
               <span className="shrink-0 text-right text-muted-foreground/50" style={{ minWidth: '28px' }}>{m.ln}</span>
@@ -618,7 +618,7 @@ function highlightMatches(text: string, regex: RegExp): ReactNode {
   parts.forEach((part, i) => {
     result.push(part);
     if (i < matches.length) {
-      result.push(<span key={i} className="rounded bg-cyan-500/20 px-0.5 text-cyan-400">{matches[i]}</span>);
+      result.push(<span key={i} className="rounded bg-chart-1/20 px-0.5 text-chart-1">{matches[i]}</span>);
     }
   });
   return result;
@@ -634,7 +634,7 @@ function GlobBody({ args, resultText }: { args: unknown; resultText: string }) {
       {pattern && <div className="mb-1 text-[10px] text-muted-foreground/60">pattern: {pattern}</div>}
       {files.map((file, i) => (
         <div key={i} className="py-0.5 text-muted-foreground">
-          <span className="text-sky-400">{'\u00b0'} </span>{file}
+          <span className="text-chart-1">{'\u00b0'} </span>{file}
         </div>
       ))}
       {files.length === 0 && <div className="text-muted-foreground/50">no files found</div>}
@@ -655,10 +655,10 @@ function TaskBody({ resultText }: { resultText: string }) {
         <div key={i} className="flex items-start gap-2 border-b border-border/30 px-2.5 py-1.5 last:border-b-0">
           <span className={cn(
             'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded text-[9px]',
-            item.status === 'done' && 'bg-green-500/15 text-green-500',
+            item.status === 'done' && 'bg-status-pass/15 text-status-pass-foreground',
             item.status === 'running' && 'bg-primary/15 text-primary',
             item.status === 'pending' && 'bg-secondary text-muted-foreground',
-            item.status === 'error' && 'bg-red-500/15 text-red-500',
+            item.status === 'error' && 'bg-status-fail/15 text-status-fail-foreground',
           )}>
             {item.status === 'done' ? '\u2713' : item.status === 'running' ? '\u27f3' : item.status === 'error' ? '\u2717' : '\u00b7'}
           </span>
@@ -685,18 +685,18 @@ function JobBody({ resultText }: { resultText: string }) {
     <div className="text-[11px] leading-relaxed">
       {items.map((item, i) => (
         <div key={i} className="flex items-center gap-2 border-b border-border/30 px-2.5 py-1.5 last:border-b-0">
-          <span className="shrink-0 font-semibold text-teal-400">{item.id}</span>
+          <span className="shrink-0 font-semibold text-chart-2">{item.id}</span>
           <span className="flex-1 min-w-0 truncate text-muted-foreground">{item.desc}</span>
           {item.progress != null && (
             <div className="h-1 w-12 shrink-0 overflow-hidden rounded-full bg-secondary">
-              <div className="h-full rounded-full bg-teal-400" style={{ width: `${item.progress}%` }} />
+              <div className="h-full rounded-full bg-chart-2" style={{ width: `${item.progress}%` }} />
             </div>
           )}
           <span className={cn(
             'shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide',
-            item.status === 'done' && 'bg-green-500/15 text-green-500',
+            item.status === 'done' && 'bg-status-pass/15 text-status-pass-foreground',
             item.status === 'running' && 'bg-primary/15 text-primary',
-            item.status === 'failed' && 'bg-red-500/15 text-red-500',
+            item.status === 'failed' && 'bg-status-fail/15 text-status-fail-foreground',
           )}>{item.status}</span>
         </div>
       ))}
@@ -715,7 +715,7 @@ function TodoBody({ args, resultText }: { args: unknown; resultText: string }) {
         <div key={i} className="flex items-center gap-2 py-0.5">
           <span className={cn(
             'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[8px]',
-            item.done ? 'border-violet-400 bg-violet-400 text-background' : 'border-border bg-transparent text-transparent',
+            item.done ? 'border-violet-foreground bg-violet-foreground text-background' : 'border-border bg-transparent text-transparent',
           )}>{item.done ? '\u2713' : ''}</span>
           <span className={cn(item.done ? 'text-muted-foreground/50 line-through' : 'text-muted-foreground')}>{item.text}</span>
         </div>
@@ -748,7 +748,7 @@ function WebSearchBody({ args, resultText }: { args: unknown; resultText: string
       {query && <div className="border-b border-border/40 bg-background/50 px-2.5 py-1 text-[10px] text-muted-foreground/60">query: "{query}"</div>}
       {results.length > 0 ? results.map((r, i) => (
         <div key={i} className="border-b border-border/30 px-2.5 py-1.5 last:border-b-0">
-          <div className="font-medium text-red-400">{r.title}</div>
+          <div className="font-medium text-status-fail-foreground">{r.title}</div>
           {r.url && <div className="text-[10px] text-muted-foreground/50">{r.url}</div>}
           {r.snippet && <div className="mt-0.5 text-muted-foreground">{r.snippet}</div>}
         </div>
@@ -768,11 +768,11 @@ function AskBody({ args }: { args: unknown }) {
 
   return (
     <div className="px-2.5 py-2 text-[11px] leading-relaxed">
-      <div className="mb-1.5 font-medium text-lime-400"><span className="mr-1">?</span>{question}</div>
+      <div className="mb-1.5 font-medium text-chart-2"><span className="mr-1">?</span>{question}</div>
       {options.length > 0 && (
         <div className="flex flex-col gap-1">
           {options.map((opt, i) => (
-            <div key={i} className="cursor-pointer rounded border border-border px-2 py-1 text-muted-foreground transition-colors hover:border-lime-400/50 hover:text-lime-400">{opt}</div>
+            <div key={i} className="cursor-pointer rounded border border-border px-2 py-1 text-muted-foreground transition-colors hover:border-chart-2/50 hover:text-chart-2">{opt}</div>
           ))}
         </div>
       )}
@@ -820,9 +820,9 @@ function HostTableBody({ resultText, columns }: { resultText: string; columns: T
 function StatusBadge({ status }: { status: string }) {
   const s = status.toLowerCase();
   const cls = s === 'pass' || s === 'passed' || s === 'done' || s === 'success'
-    ? 'bg-green-500/15 text-green-500'
+    ? 'bg-status-pass/15 text-status-pass-foreground'
     : s === 'fail' || s === 'failed' || s === 'error'
-      ? 'bg-red-500/15 text-red-500'
+      ? 'bg-status-fail/15 text-status-fail-foreground'
       : s === 'running' || s === 'active'
         ? 'bg-primary/15 text-primary'
         : 'bg-secondary text-muted-foreground';
@@ -877,7 +877,7 @@ function CoverageBody({ resultText }: { resultText: string }) {
     <div className="grid grid-cols-4 gap-px bg-border/40 text-[11px] leading-relaxed">
       {metrics.map((m) => {
         const pct = m.value != null ? (m.value > 1 ? m.value : m.value * 100) : null;
-        const cls = pct == null ? 'text-muted-foreground' : pct >= 85 ? 'text-green-500' : pct >= 70 ? 'text-yellow-500' : 'text-red-500';
+        const cls = pct == null ? 'text-muted-foreground' : pct >= 85 ? 'text-status-pass-foreground' : pct >= 70 ? 'text-warning-foreground' : 'text-status-fail-foreground';
         return (
           <div key={m.label} className="bg-secondary/20 px-2 py-2 text-center">
             <div className="text-[9px] uppercase tracking-wide text-muted-foreground/60">{m.label}</div>
@@ -911,7 +911,7 @@ function CompileErrorsBody({ resultText }: { resultText: string }) {
   }
 
   if (errors.length === 0) {
-    return <div className="px-2.5 py-2 text-[11px] text-green-500">No compilation errors found.</div>;
+    return <div className="px-2.5 py-2 text-[11px] text-status-pass-foreground">No compilation errors found.</div>;
   }
 
   return (
@@ -923,12 +923,12 @@ function CompileErrorsBody({ resultText }: { resultText: string }) {
             <div className="flex items-center gap-1.5">
               <span className={cn(
                 'rounded px-1 py-0.5 text-[9px] font-bold uppercase',
-                isError ? 'bg-red-500/15 text-red-500' : 'bg-yellow-500/15 text-yellow-500',
+                isError ? 'bg-status-fail/15 text-status-fail-foreground' : 'bg-warning/15 text-warning-foreground',
               )}>{err.severity}</span>
               <span className="text-foreground">{err.message}</span>
             </div>
             {err.file && (
-              <div className="mt-0.5 font-mono text-[10px] text-blue-400">
+              <div className="mt-0.5 font-mono text-[10px] text-status-running-foreground">
                 {err.file}{err.line ? `:${err.line}` : ''}
               </div>
             )}

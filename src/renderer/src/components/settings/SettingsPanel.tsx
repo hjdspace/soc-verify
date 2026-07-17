@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Key, Package, Server, FileText, Plus, Trash2, Save, Download, Upload, Palette, Check, Cpu, RefreshCw } from 'lucide-react';
+import { X, Key, Package, Server, FileText, Plus, Trash2, Save, Download, Upload, Palette, Check, Cpu, RefreshCw, Zap } from 'lucide-react';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { useUiStore } from '@renderer/stores/ui';
@@ -8,21 +8,21 @@ import { useSessionStore } from '@renderer/stores/session';
 import { cn } from '@renderer/lib/utils';
 import type { CredentialEntry } from '@shared/types';
 
-type SettingsTab = 'appearance' | 'credentials' | 'skills' | 'mcp' | 'prompt';
+type SettingsTab = 'credentials' | 'skills' | 'mcp' | 'prompt' | 'appearance';
 
 export function SettingsPanel() {
   const settingsOpen = useUiStore((s) => s.settingsOpen);
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
-  const [tab, setTab] = useState<SettingsTab>('appearance');
+  const [tab, setTab] = useState<SettingsTab>('credentials');
 
   if (!settingsOpen) return null;
 
   const tabs: Array<{ id: SettingsTab; label: string; icon: typeof Key }> = [
-    { id: 'appearance', label: '外观', icon: Palette },
     { id: 'credentials', label: '模型配置', icon: Cpu },
     { id: 'skills', label: 'Skill 管理', icon: Package },
     { id: 'mcp', label: 'MCP 配置', icon: Server },
     { id: 'prompt', label: '系统提示词', icon: FileText },
+    { id: 'appearance', label: '外观', icon: Palette },
   ];
 
   return (
@@ -114,36 +114,29 @@ function AppearanceTab() {
   );
 }
 
-// ── Credentials Tab (with model fetching) ───────────────
+// ── Credentials Tab (with inline model switcher) ───────
 
 function CredentialsTab() {
   const credentials = useSettingsStore((s) => s.credentials);
   const loadCredentials = useSettingsStore((s) => s.loadCredentials);
   const setCredential = useSettingsStore((s) => s.setCredential);
   const deleteCredential = useSettingsStore((s) => s.deleteCredential);
-  const fetchModels = useSettingsStore((s) => s.fetchModels);
-  const models = useSettingsStore((s) => s.models);
-  const modelsLoading = useSettingsStore((s) => s.modelsLoading);
+
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
-  const setModel = useSessionStore((s) => s.setModel);
+  const currentSession = useSessionStore((s) =>
+    s.sessions.find((sess) => sess.id === s.currentSessionId),
+  );
+  const applyCredential = useSessionStore((s) => s.applyCredential);
+  const [applyingProviderId, setApplyingProviderId] = useState<string | null>(null);
 
   const [providerId, setProviderId] = useState('');
   const [label, setLabel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
-  const [selectedProvider, setSelectedProvider] = useState<string>('');
-  const [selectedModel, setSelectedModel] = useState<string>('');
 
   useEffect(() => {
     loadCredentials();
   }, [loadCredentials]);
-
-  // Auto-select first provider when credentials load
-  useEffect(() => {
-    if (credentials.length > 0 && !selectedProvider) {
-      setSelectedProvider(credentials[0].providerId);
-    }
-  }, [credentials, selectedProvider]);
 
   const canSave = providerId.trim().length > 0 && apiKey.trim().length > 0;
 
@@ -161,43 +154,107 @@ function CredentialsTab() {
     setBaseUrl('');
   };
 
-  const handleFetchModels = async () => {
-    await fetchModels(selectedProvider || undefined);
+  const handleApplyCredential = async (providerIdToApply: string) => {
+    if (!currentSessionId) {
+      console.warn('[SettingsPanel] handleApplyCredential: no currentSessionId — button should have been disabled');
+      return;
+    }
+    if (applyingProviderId) {
+      console.warn(`[SettingsPanel] handleApplyCredential: already applying "${applyingProviderId}", ignoring click`);
+      return;
+    }
+    console.log(`[SettingsPanel] applyCredential: sessionId=${currentSessionId}, providerId=${providerIdToApply}`);
+    setApplyingProviderId(providerIdToApply);
+    try {
+      await applyCredential(currentSessionId, providerIdToApply);
+      console.log(`[SettingsPanel] applyCredential succeeded: providerId=${providerIdToApply}`);
+    } catch (err) {
+      console.error(`[SettingsPanel] applyCredential failed:`, err);
+    } finally {
+      setApplyingProviderId(null);
+    }
   };
 
-  const handleApplyModel = async () => {
-    if (!currentSessionId || !selectedModel) return;
-    const model = models.find((m) => m.id === selectedModel);
-    if (!model) return;
-    await setModel(currentSessionId, model.provider, model.id, model.name);
+  const handleDelete = (providerIdToDelete: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    void deleteCredential(providerIdToDelete);
   };
 
   return (
     <div className="space-y-3">
-      {/* Existing credentials */}
+      {/* Existing credentials — click a card to apply the whole config */}
       <div>
         <div className="mb-1.5 text-[10px] font-semibold uppercase text-muted-foreground">已存储凭据</div>
         {credentials.length === 0 ? (
           <p className="text-xs text-muted-foreground">暂无凭据，请先配置 API Key</p>
         ) : (
           <div className="space-y-1">
-            {credentials.map((c: CredentialEntry) => (
-              <div key={c.providerId} className="flex items-center gap-2 rounded border border-border/50 bg-secondary/20 px-2 py-1.5">
-                <Key className="h-3 w-3 text-muted-foreground" />
-                <div className="flex-1">
-                  <span className="text-xs font-medium">{c.label}</span>
-                  <span className="ml-2 text-[10px] text-muted-foreground font-mono">{c.apiKeyMasked}</span>
-                  {c.baseUrl && <span className="ml-2 text-[10px] text-muted-foreground/70">{c.baseUrl}</span>}
-                </div>
-                <button
-                  onClick={() => deleteCredential(c.providerId)}
-                  className="rounded p-0.5 text-destructive hover:bg-destructive/10"
+            {credentials.map((c: CredentialEntry) => {
+              const isCurrent = currentSession?.model?.providerId === c.providerId;
+              const isApplying = applyingProviderId === c.providerId;
+              const disabled = !currentSessionId || !!applyingProviderId;
+              return (
+                <div
+                  key={c.providerId}
+                  className={cn(
+                    'flex items-center gap-2 rounded border bg-secondary/20 px-2 py-1.5 transition-colors',
+                    isCurrent ? 'border-primary/40 bg-primary/5' : 'border-border/50',
+                    !disabled && !isCurrent && 'hover:bg-accent/30',
+                  )}
                 >
-                  <Trash2 className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
+                  <Key className="h-3 w-3 shrink-0 text-muted-foreground" />
+                  <div className="flex-1 min-w-0">
+                    <span className="text-xs font-medium">{c.label}</span>
+                    <span className="ml-2 text-[10px] text-muted-foreground font-mono">{c.apiKeyMasked}</span>
+                    {c.baseUrl && (
+                      <span className="ml-2 text-[10px] text-muted-foreground/70 truncate">{c.baseUrl}</span>
+                    )}
+                  </div>
+                  {isCurrent ? (
+                    <span className="flex shrink-0 items-center gap-0.5 rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-medium text-primary">
+                      <Check className="h-2.5 w-2.5" />
+                      当前
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => handleApplyCredential(c.providerId)}
+                      disabled={disabled}
+                      title={disabled ? (currentSessionId ? '正在切换...' : '请先创建 AI 会话') : '整体应用到当前会话'}
+                      className={cn(
+                        'flex shrink-0 items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors',
+                        disabled
+                          ? 'cursor-not-allowed bg-muted text-muted-foreground'
+                          : 'bg-primary/10 text-primary hover:bg-primary/20',
+                      )}
+                    >
+                      {isApplying ? <RefreshCw className="h-2.5 w-2.5 animate-spin" /> : <Zap className="h-2.5 w-2.5" />}
+                      {isApplying ? '切换中' : '应用'}
+                    </button>
+                  )}
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => handleDelete(c.providerId, e)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        handleDelete(c.providerId, e as unknown as React.MouseEvent);
+                      }
+                    }}
+                    title="删除凭据"
+                    className="shrink-0 rounded p-0.5 text-destructive hover:bg-destructive/10"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </span>
+                </div>
+              );
+            })}
           </div>
+        )}
+        {!currentSessionId && credentials.length > 0 && (
+          <p className="mt-1 text-[9px] text-muted-foreground/70">
+            请先创建 AI 会话后再应用凭据
+          </p>
         )}
       </div>
 
@@ -249,93 +306,6 @@ function CredentialsTab() {
             保存
           </button>
         </div>
-      </div>
-
-      {/* Divider */}
-      <div className="border-t border-border/50" />
-
-      {/* Model fetching */}
-      <div>
-        <div className="mb-1.5 text-[10px] font-semibold uppercase text-muted-foreground">从 API 获取可用模型</div>
-
-        {credentials.length === 0 ? (
-          <p className="text-xs text-muted-foreground">
-            请先配置上方 API Key 和 Base URL
-          </p>
-        ) : (
-          <>
-            {/* Provider selector */}
-            <div className="mb-1.5 space-y-1">
-              <label className="text-[10px] text-muted-foreground">选择凭据</label>
-              <select
-                value={selectedProvider}
-                onChange={(e) => setSelectedProvider(e.target.value)}
-                className="w-full rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
-              >
-                {credentials.map((c) => (
-                  <option key={c.providerId} value={c.providerId}>
-                    {c.label} ({c.providerId}){c.baseUrl ? ` - ${c.baseUrl}` : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Fetch button */}
-            <button
-              onClick={handleFetchModels}
-              disabled={modelsLoading}
-              className={cn(
-                'flex items-center gap-1.5 rounded px-2.5 py-1.5 text-[10px] font-medium transition-colors',
-                modelsLoading
-                  ? 'cursor-wait bg-muted text-muted-foreground'
-                  : 'bg-primary text-primary-foreground hover:bg-primary/90',
-              )}
-            >
-              <RefreshCw className={cn('h-3 w-3', modelsLoading && 'animate-spin')} />
-              {modelsLoading ? '获取中...' : '获取模型列表'}
-            </button>
-
-            {/* Model list */}
-            {models.length > 0 && (
-              <div className="mt-1.5 space-y-1">
-                <label className="text-[10px] text-muted-foreground">选择模型</label>
-                <select
-                  value={selectedModel}
-                  onChange={(e) => setSelectedModel(e.target.value)}
-                  className="w-full rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
-                >
-                  <option value="">— 请选择模型 —</option>
-                  {models.map((m) => (
-                    <option key={`${m.provider}:${m.id}`} value={m.id}>
-                      {m.name}{m.description ? ` (${m.description})` : ''}
-                    </option>
-                  ))}
-                </select>
-
-                {selectedModel && currentSessionId && (
-                  <button
-                    onClick={handleApplyModel}
-                    className="flex items-center gap-1.5 rounded bg-primary/10 px-2.5 py-1.5 text-[10px] font-medium text-primary transition-colors hover:bg-primary/20"
-                  >
-                    <Check className="h-3 w-3" />
-                    应用到当前会话
-                  </button>
-                )}
-                {selectedModel && !currentSessionId && (
-                  <p className="text-[10px] text-muted-foreground">
-                    请先创建 AI 会话后再应用模型
-                  </p>
-                )}
-              </div>
-            )}
-
-            {models.length === 0 && !modelsLoading && (
-              <p className="text-[10px] text-muted-foreground">
-                点击「获取模型列表」从 API 加载可用模型
-              </p>
-            )}
-          </>
-        )}
       </div>
     </div>
   );

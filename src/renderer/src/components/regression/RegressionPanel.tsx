@@ -162,13 +162,13 @@ export function RegressionPanel() {
                       </td>
                       <td className="px-2 py-1 text-foreground">{h.suiteName}</td>
                       <td className="px-2 py-1">
-                        <span className="text-green-500">{h.passed}</span>
+                        <span className="text-status-pass-foreground">{h.passed}</span>
                         <span className="text-muted-foreground"> / </span>
-                        <span className="text-red-500">{h.failed}</span>
+                        <span className="text-status-fail-foreground">{h.failed}</span>
                         <span className="text-muted-foreground"> / {h.totalCases}</span>
                       </td>
                       <td className="px-2 py-1">
-                        <span className={cn('font-mono', rate >= 80 ? 'text-green-500' : rate >= 50 ? 'text-yellow-500' : 'text-red-500')}>
+                        <span className={cn('font-mono', rate >= 80 ? 'text-status-pass-foreground' : rate >= 50 ? 'text-warning-foreground' : 'text-status-fail-foreground')}>
                           {rate.toFixed(1)}%
                         </span>
                       </td>
@@ -188,20 +188,20 @@ export function RegressionPanel() {
           <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">对比结果</div>
           {compareResult.newFailures.length > 0 && (
             <div className="mb-2">
-              <div className="text-[10px] text-red-500">新增失败 ({compareResult.newFailures.length})</div>
+              <div className="text-[10px] text-status-fail-foreground">新增失败 ({compareResult.newFailures.length})</div>
               <div className="flex flex-wrap gap-1">
                 {compareResult.newFailures.map((f) => (
-                  <span key={f.caseId} className="rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-500">{f.caseName}</span>
+                  <span key={f.caseId} className="rounded bg-status-fail/10 px-1.5 py-0.5 text-[10px] text-status-fail-foreground">{f.caseName}</span>
                 ))}
               </div>
             </div>
           )}
           {compareResult.fixed.length > 0 && (
             <div className="mb-2">
-              <div className="text-[10px] text-green-500">已修复 ({compareResult.fixed.length})</div>
+              <div className="text-[10px] text-status-pass-foreground">已修复 ({compareResult.fixed.length})</div>
               <div className="flex flex-wrap gap-1">
                 {compareResult.fixed.map((f) => (
-                  <span key={f.caseId} className="rounded bg-green-500/10 px-1.5 py-0.5 text-[10px] text-green-500">{f.caseName}</span>
+                  <span key={f.caseId} className="rounded bg-status-pass/10 px-1.5 py-0.5 text-[10px] text-status-pass-foreground">{f.caseName}</span>
                 ))}
               </div>
             </div>

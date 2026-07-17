@@ -84,13 +84,13 @@ export function TOChecklistPanel() {
       <div className="mb-4">
         <div className="mb-1 flex justify-between text-[10px] text-muted-foreground">
           <span>TO 就绪度</span>
-          <span className={cn('font-mono font-semibold', readiness >= 80 ? 'text-green-500' : readiness >= 50 ? 'text-yellow-500' : 'text-red-500')}>
+          <span className={cn('font-mono font-semibold', readiness >= 80 ? 'text-status-pass-foreground' : readiness >= 50 ? 'text-warning-foreground' : 'text-status-fail-foreground')}>
             {readiness.toFixed(0)}%
           </span>
         </div>
         <div className="h-3 overflow-hidden rounded-full bg-muted">
           <div
-            className={cn('h-full rounded-full transition-all', readiness >= 80 ? 'bg-green-500' : readiness >= 50 ? 'bg-yellow-500' : 'bg-red-500')}
+            className={cn('h-full rounded-full transition-all', readiness >= 80 ? 'bg-status-pass-foreground' : readiness >= 50 ? 'bg-warning-foreground' : 'bg-status-fail-foreground')}
             style={{ width: `${readiness}%` }}
           />
         </div>
@@ -139,9 +139,9 @@ export function TOChecklistPanel() {
 
 function ChecklistRow({ item, onToggle }: { item: TOChecklistItem; onToggle: () => void }) {
   const statusIcon = {
-    pass: <CheckCircle2 className="h-4 w-4 text-green-500" />,
-    pending: <Clock className="h-4 w-4 text-yellow-500" />,
-    blocked: <XCircle className="h-4 w-4 text-red-500" />,
+    pass: <CheckCircle2 className="h-4 w-4 text-status-pass-foreground" />,
+    pending: <Clock className="h-4 w-4 text-warning-foreground" />,
+    blocked: <XCircle className="h-4 w-4 text-status-fail-foreground" />,
   };
 
   return (
@@ -156,7 +156,7 @@ function ChecklistRow({ item, onToggle }: { item: TOChecklistItem; onToggle: () 
           <div className="mt-0.5 flex items-center gap-2 text-[9px] text-muted-foreground">
             <span>阈值: {item.threshold}%</span>
             {item.actualValue != null && (
-              <span className={cn('font-mono', item.actualValue >= item.threshold ? 'text-green-500' : 'text-red-500')}>
+              <span className={cn('font-mono', item.actualValue >= item.threshold ? 'text-status-pass-foreground' : 'text-status-fail-foreground')}>
                 实际: {item.actualValue.toFixed(1)}%
               </span>
             )}

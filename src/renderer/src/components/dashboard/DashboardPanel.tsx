@@ -51,38 +51,38 @@ export function DashboardPanel() {
       <div className="grid grid-cols-4 gap-3">
         {/* Pass rate */}
         <MetricCard
-          icon={<CheckCircle2 className="h-5 w-5 text-green-500" />}
+          icon={<CheckCircle2 className="h-5 w-5 text-status-pass-foreground" />}
           label="通过率"
           value={`${passRate.toFixed(1)}%`}
           sub={`${metrics.totalRuns} 次仿真`}
-          color="green"
+          color="pass"
         />
 
         {/* Fail rate */}
         <MetricCard
-          icon={<XCircle className="h-5 w-5 text-red-500" />}
+          icon={<XCircle className="h-5 w-5 text-status-fail-foreground" />}
           label="失败率"
           value={`${failRate.toFixed(1)}%`}
           sub={`${metrics.totalRuns > 0 ? Math.round(metrics.totalRuns * failRate / 100) : 0} 次失败`}
-          color="red"
+          color="fail"
         />
 
         {/* Coverage */}
         <MetricCard
-          icon={<BarChart3 className="h-5 w-5 text-blue-500" />}
+          icon={<BarChart3 className="h-5 w-5 text-status-running-foreground" />}
           label="总体覆盖率"
           value={metrics.coverage ? `${metrics.coverage.overall.toFixed(1)}%` : '-'}
           sub={metrics.coverage ? `行: ${metrics.coverage.line.toFixed(0)}%` : '无数据'}
-          color="blue"
+          color="info"
         />
 
         {/* Regression count */}
         <MetricCard
-          icon={<Activity className="h-5 w-5 text-purple-500" />}
+          icon={<Activity className="h-5 w-5 text-violet-foreground" />}
           label="回归次数"
           value={String(metrics.regressionCount)}
           sub="历史运行"
-          color="purple"
+          color="violet"
         />
       </div>
 
@@ -93,13 +93,13 @@ export function DashboardPanel() {
           {metrics.totalRuns > 0 ? (
             <div className="flex h-8 overflow-hidden rounded-full">
               <div
-                className="flex items-center justify-center bg-green-500/80 text-[10px] font-semibold text-white"
+                className="flex items-center justify-center bg-status-pass text-[10px] font-semibold text-status-pass-foreground"
                 style={{ width: `${passRate}%` }}
               >
                 {passRate > 10 ? `${passRate.toFixed(0)}%` : ''}
               </div>
               <div
-                className="flex items-center justify-center bg-red-500/80 text-[10px] font-semibold text-white"
+                className="flex items-center justify-center bg-status-fail text-[10px] font-semibold text-status-fail-foreground"
                 style={{ width: `${failRate}%` }}
               >
                 {failRate > 10 ? `${failRate.toFixed(0)}%` : ''}
@@ -116,10 +116,10 @@ export function DashboardPanel() {
             <h3 className="mb-2 text-xs font-semibold text-muted-foreground">覆盖率分解</h3>
             <div className="space-y-1.5">
               {([
-                { label: '行覆盖率', value: metrics.coverage.line, color: 'bg-blue-500' },
-                { label: '翻转覆盖率', value: metrics.coverage.toggle, color: 'bg-green-500' },
-                { label: '功能覆盖率', value: metrics.coverage.functional, color: 'bg-purple-500' },
-                { label: '断言覆盖率', value: metrics.coverage.assertion, color: 'bg-orange-500' },
+                { label: '行覆盖率', value: metrics.coverage.line, color: 'bg-chart-1' },
+                { label: '翻转覆盖率', value: metrics.coverage.toggle, color: 'bg-chart-2' },
+                { label: '功能覆盖率', value: metrics.coverage.functional, color: 'bg-chart-3' },
+                { label: '断言覆盖率', value: metrics.coverage.assertion, color: 'bg-chart-4' },
               ]).map((item) => (
                 <div key={item.label}>
                   <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -150,13 +150,13 @@ function MetricCard({
   label: string;
   value: string;
   sub: string;
-  color: 'green' | 'red' | 'blue' | 'purple';
+  color: 'pass' | 'fail' | 'info' | 'violet';
 }) {
   const colorClasses = {
-    green: 'border-green-500/20 bg-green-500/5',
-    red: 'border-red-500/20 bg-red-500/5',
-    blue: 'border-blue-500/20 bg-blue-500/5',
-    purple: 'border-purple-500/20 bg-purple-500/5',
+    pass: 'border-status-pass/30 bg-status-pass/10',
+    fail: 'border-status-fail/30 bg-status-fail/10',
+    info: 'border-info/30 bg-info/10',
+    violet: 'border-violet/30 bg-violet/10',
   };
 
   return (

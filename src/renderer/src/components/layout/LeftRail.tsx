@@ -221,6 +221,7 @@ export function LeftRail({ width }: LeftRailProps) {
 }
 
 // ── 项目概览组件 ───────────────────────────────────────
+// 内联统计行，避免相同卡片网格（hero-metric 模板）
 
 function ProjectOverview({ projectId }: { projectId: string }) {
   const [overview, setOverview] = useState<{
@@ -246,26 +247,29 @@ function ProjectOverview({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="flex flex-col gap-2 px-1">
-      <div className="rounded-md border border-border/50 bg-background/50 p-2">
-        <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-          子系统
-        </div>
-        <div className="text-lg font-bold text-foreground">{overview.subsystemCount}</div>
+    <div className="px-1.5 py-1">
+      {/* 标题 */}
+      <div className="mb-1.5 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        项目概览
       </div>
-      <div className="rounded-md border border-border/50 bg-background/50 p-2">
-        <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-          用例总数
+
+      {/* 内联统计行：单行展示，数字与单位分明 */}
+      <div className="rounded-md border border-border/50 bg-background/40 px-2.5 py-2">
+        <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-1 text-xs">
+          <span className="font-semibold text-foreground">{overview.subsystemCount}</span>
+          <span className="text-muted-foreground">子系统</span>
+          <span className="text-muted-foreground/40">·</span>
+          <span className="font-semibold text-foreground">{overview.caseCount}</span>
+          <span className="text-muted-foreground">用例</span>
+          <span className="text-muted-foreground/40">·</span>
+          <span className="font-semibold text-foreground">{overview.passRate.toFixed(1)}%</span>
+          <span className="text-muted-foreground">通过率</span>
         </div>
-        <div className="text-lg font-bold text-foreground">{overview.caseCount}</div>
       </div>
-      <div className="rounded-md border border-border/50 bg-background/50 p-2">
-        <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-          通过率
-        </div>
-        <div className="text-lg font-bold text-foreground">
-          {overview.passRate.toFixed(1)}%
-        </div>
+
+      {/* 子系统列表入口提示 */}
+      <div className="mt-2 px-1 text-[11px] text-muted-foreground">
+        切换到「子系统」标签查看用例列表
       </div>
     </div>
   );

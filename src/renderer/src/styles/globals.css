@@ -1,225 +1,240 @@
 @import "tailwindcss";
 
 @theme {
-  --color-border: hsl(var(--border));
-  --color-input: hsl(var(--input));
-  --color-ring: hsl(var(--ring));
-  --color-background: hsl(var(--background));
-  --color-foreground: hsl(var(--foreground));
-  --color-primary: hsl(var(--primary));
-  --color-primary-foreground: hsl(var(--primary-foreground));
-  --color-secondary: hsl(var(--secondary));
-  --color-secondary-foreground: hsl(var(--secondary-foreground));
-  --color-muted: hsl(var(--muted));
-  --color-muted-foreground: hsl(var(--muted-foreground));
-  --color-accent: hsl(var(--accent));
-  --color-accent-foreground: hsl(var(--accent-foreground));
-  --color-destructive: hsl(var(--destructive));
-  --color-destructive-foreground: hsl(var(--destructive-foreground));
-  --color-card: hsl(var(--card));
-  --color-card-foreground: hsl(var(--card-foreground));
-  --color-popover: hsl(var(--popover));
-  --color-popover-foreground: hsl(var(--popover-foreground));
-  --color-titlebar: hsl(var(--titlebar));
-  --color-titlebar-foreground: hsl(var(--titlebar-foreground));
-  --color-titlebar-border: hsl(var(--titlebar-border));
-  --color-sidebar: hsl(var(--sidebar));
-  --color-sidebar-foreground: hsl(var(--sidebar-foreground));
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-titlebar: var(--titlebar);
+  --color-titlebar-foreground: var(--titlebar-foreground);
+  --color-titlebar-border: var(--titlebar-border);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-status-pass: var(--status-pass);
+  --color-status-pass-foreground: var(--status-pass-foreground);
+  --color-status-fail: var(--status-fail);
+  --color-status-fail-foreground: var(--status-fail-foreground);
+  --color-status-running: var(--status-running);
+  --color-status-running-foreground: var(--status-running-foreground);
+  --color-status-aborted: var(--status-aborted);
+  --color-status-aborted-foreground: var(--status-aborted-foreground);
+  --color-status-pending: var(--status-pending);
+  --color-status-pending-foreground: var(--status-pending-foreground);
+  --color-diff-add: var(--diff-add);
+  --color-diff-add-foreground: var(--diff-add-foreground);
+  --color-diff-del: var(--diff-del);
+  --color-diff-del-foreground: var(--diff-del-foreground);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-violet: var(--violet);
+  --color-violet-foreground: var(--violet-foreground);
   --radius-md: var(--radius);
   --radius-sm: calc(var(--radius) - 2px);
   --radius-lg: calc(var(--radius) + 2px);
 }
 
 /* ════════════════════════════════════════════════════════════
-   主题：浅色 (Light)
-   干净明亮的浅色主题，适合白天工作环境
+   主题：Drafting（浅·紫梅）
+   暖纸白底 + 深紫梅强调。荧光灯实验室、白板、纸质文档场景。
+   拒绝 EDA=深蓝 第一反射，拒绝浅色=无强调 第二反射。
    ════════════════════════════════════════════════════════════ */
-[data-theme="light"] {
-  --background: 0 0% 100%;
-  --foreground: 240 10% 3.9%;
-  --card: 0 0% 100%;
-  --card-foreground: 240 10% 3.9%;
-  --popover: 0 0% 100%;
-  --popover-foreground: 240 10% 3.9%;
-  --primary: 240 5.9% 10%;
-  --primary-foreground: 0 0% 98%;
-  --secondary: 240 4.8% 95.9%;
-  --secondary-foreground: 240 5.9% 10%;
-  --muted: 240 4.8% 95.9%;
-  --muted-foreground: 240 3.8% 46.1%;
-  --accent: 240 4.8% 95.9%;
-  --accent-foreground: 240 5.9% 10%;
-  --destructive: 0 84.2% 60.2%;
-  --destructive-foreground: 0 0% 98%;
-  --border: 240 5.9% 90%;
-  --input: 240 5.9% 90%;
-  --ring: 240 5.9% 10%;
-  --titlebar: 240 5% 94%;
-  --titlebar-foreground: 240 4% 15%;
-  --titlebar-border: 240 6% 83%;
-  --sidebar: 240 5% 96%;
-  --sidebar-foreground: 240 4% 40%;
+[data-theme="drafting"] {
+  --background: oklch(0.97 0.006 75);
+  --foreground: oklch(0.32 0.012 75);
+  --card: oklch(0.99 0.004 75);
+  --card-foreground: oklch(0.32 0.012 75);
+  --popover: oklch(0.99 0.005 75);
+  --popover-foreground: oklch(0.32 0.012 75);
+  --primary: oklch(0.42 0.13 285);
+  --primary-foreground: oklch(0.98 0.005 75);
+  --secondary: oklch(0.93 0.008 75);
+  --secondary-foreground: oklch(0.32 0.012 75);
+  --muted: oklch(0.93 0.008 75);
+  --muted-foreground: oklch(0.50 0.012 75);
+  --accent: oklch(0.91 0.014 285);
+  --accent-foreground: oklch(0.32 0.012 75);
+  --destructive: oklch(0.55 0.20 25);
+  --destructive-foreground: oklch(0.98 0.005 75);
+  --border: oklch(0.88 0.008 75);
+  --input: oklch(0.88 0.008 75);
+  --ring: oklch(0.42 0.13 285);
+  --titlebar: oklch(0.94 0.008 75);
+  --titlebar-foreground: oklch(0.40 0.012 75);
+  --titlebar-border: oklch(0.86 0.008 75);
+  --sidebar: oklch(0.95 0.008 75);
+  --sidebar-foreground: oklch(0.45 0.012 75);
   --radius: 0.5rem;
+
+  --status-pass: oklch(0.65 0.16 145);
+  --status-pass-foreground: oklch(0.30 0.05 145);
+  --status-fail: oklch(0.60 0.20 25);
+  --status-fail-foreground: oklch(0.30 0.06 25);
+  --status-running: oklch(0.55 0.14 250);
+  --status-running-foreground: oklch(0.28 0.05 250);
+  --status-aborted: oklch(0.55 0.13 295);
+  --status-aborted-foreground: oklch(0.28 0.05 295);
+  --status-pending: oklch(0.55 0.11 75);
+  --status-pending-foreground: oklch(0.28 0.05 75);
+
+  --diff-add: oklch(0.90 0.04 145);
+  --diff-add-foreground: oklch(0.32 0.10 145);
+  --diff-del: oklch(0.90 0.05 25);
+  --diff-del-foreground: oklch(0.34 0.12 25);
+
+  --chart-1: oklch(0.55 0.14 250);
+  --chart-2: oklch(0.60 0.16 145);
+  --chart-3: oklch(0.55 0.16 285);
+  --chart-4: oklch(0.65 0.15 55);
+
+  --info: oklch(0.88 0.04 250);
+  --info-foreground: oklch(0.32 0.10 250);
+  --warning: oklch(0.88 0.06 75);
+  --warning-foreground: oklch(0.32 0.08 75);
+  --violet: oklch(0.88 0.05 295);
+  --violet-foreground: oklch(0.32 0.10 295);
 }
 
 /* ════════════════════════════════════════════════════════════
-   主题：深色 (Dark)
-   经典深色主题，高对比度，适合夜间工作
+   主题：Bench（深·暖·磷光绿）
+   暖深底 + 磷光绿强调。长时间跑 8 小时回归，暖色降低视疲劳。
+   拒绝 VS Code=深蓝 第二反射；示波器磷光屏的视觉记忆。
    ════════════════════════════════════════════════════════════ */
-[data-theme="dark"] {
-  --background: 240 10% 3.9%;
-  --foreground: 0 0% 98%;
-  --card: 240 10% 5%;
-  --card-foreground: 0 0% 98%;
-  --popover: 240 10% 7%;
-  --popover-foreground: 0 0% 98%;
-  --primary: 0 0% 98%;
-  --primary-foreground: 240 5.9% 10%;
-  --secondary: 240 3.7% 15.9%;
-  --secondary-foreground: 0 0% 98%;
-  --muted: 240 3.7% 15.9%;
-  --muted-foreground: 240 5% 64.9%;
-  --accent: 240 3.7% 15.9%;
-  --accent-foreground: 0 0% 98%;
-  --destructive: 0 62.8% 30.6%;
-  --destructive-foreground: 0 0% 98%;
-  --border: 240 3.7% 15.9%;
-  --input: 240 3.7% 15.9%;
-  --ring: 240 4.9% 83.9%;
-  --titlebar: 240 10% 2.5%;
-  --titlebar-foreground: 0 0% 85%;
-  --titlebar-border: 240 8% 12%;
-  --sidebar: 240 10% 5%;
-  --sidebar-foreground: 240 5% 60%;
+[data-theme="bench"] {
+  --background: oklch(0.18 0.008 60);
+  --foreground: oklch(0.92 0.006 60);
+  --card: oklch(0.21 0.008 60);
+  --card-foreground: oklch(0.92 0.006 60);
+  --popover: oklch(0.23 0.008 60);
+  --popover-foreground: oklch(0.92 0.006 60);
+  --primary: oklch(0.78 0.15 145);
+  --primary-foreground: oklch(0.16 0.008 60);
+  --secondary: oklch(0.25 0.008 60);
+  --secondary-foreground: oklch(0.92 0.006 60);
+  --muted: oklch(0.25 0.008 60);
+  --muted-foreground: oklch(0.62 0.008 60);
+  --accent: oklch(0.28 0.010 60);
+  --accent-foreground: oklch(0.92 0.006 60);
+  --destructive: oklch(0.65 0.20 25);
+  --destructive-foreground: oklch(0.96 0.005 60);
+  --border: oklch(0.28 0.008 60);
+  --input: oklch(0.28 0.008 60);
+  --ring: oklch(0.78 0.15 145);
+  --titlebar: oklch(0.15 0.008 60);
+  --titlebar-foreground: oklch(0.72 0.008 60);
+  --titlebar-border: oklch(0.26 0.008 60);
+  --sidebar: oklch(0.16 0.008 60);
+  --sidebar-foreground: oklch(0.60 0.008 60);
   --radius: 0.5rem;
+
+  --status-pass: oklch(0.30 0.06 145);
+  --status-pass-foreground: oklch(0.82 0.13 145);
+  --status-fail: oklch(0.32 0.08 25);
+  --status-fail-foreground: oklch(0.78 0.15 25);
+  --status-running: oklch(0.32 0.07 250);
+  --status-running-foreground: oklch(0.78 0.13 250);
+  --status-aborted: oklch(0.32 0.06 295);
+  --status-aborted-foreground: oklch(0.78 0.13 295);
+  --status-pending: oklch(0.32 0.05 75);
+  --status-pending-foreground: oklch(0.80 0.12 75);
+
+  --diff-add: oklch(0.26 0.05 145);
+  --diff-add-foreground: oklch(0.82 0.10 145);
+  --diff-del: oklch(0.28 0.06 25);
+  --diff-del-foreground: oklch(0.78 0.12 25);
+
+  --chart-1: oklch(0.72 0.13 250);
+  --chart-2: oklch(0.78 0.15 145);
+  --chart-3: oklch(0.72 0.15 285);
+  --chart-4: oklch(0.78 0.13 55);
+
+  --info: oklch(0.28 0.05 250);
+  --info-foreground: oklch(0.78 0.13 250);
+  --warning: oklch(0.30 0.05 75);
+  --warning-foreground: oklch(0.80 0.12 75);
+  --violet: oklch(0.28 0.05 295);
+  --violet-foreground: oklch(0.78 0.13 295);
 }
 
 /* ════════════════════════════════════════════════════════════
-   主题：午夜蓝 (Midnight)
-   深蓝色调暗色主题，长时间使用不伤眼
+   主题：Slate（深·冷·铜）
+   冷石板底 + 铜色强调。三显示器扫表找失败行，冷底色压低反差噪声。
+   拒绝 深色=蓝色强调 第二反射；铜色对应铜箔/PCB 物理记忆。
    ════════════════════════════════════════════════════════════ */
-[data-theme="midnight"] {
-  --background: 232 25% 8%;
-  --foreground: 220 20% 92%;
-  --card: 232 22% 10%;
-  --card-foreground: 220 20% 92%;
-  --popover: 232 22% 12%;
-  --popover-foreground: 220 20% 92%;
-  --primary: 217 91% 60%;
-  --primary-foreground: 0 0% 100%;
-  --secondary: 232 20% 14%;
-  --secondary-foreground: 220 20% 92%;
-  --muted: 232 20% 14%;
-  --muted-foreground: 220 12% 55%;
-  --accent: 232 20% 16%;
-  --accent-foreground: 220 20% 92%;
-  --destructive: 0 72% 51%;
-  --destructive-foreground: 0 0% 98%;
-  --border: 232 20% 18%;
-  --input: 232 20% 18%;
-  --ring: 217 91% 60%;
-  --titlebar: 232 28% 5%;
-  --titlebar-foreground: 220 20% 75%;
-  --titlebar-border: 232 20% 14%;
-  --sidebar: 232 25% 7%;
-  --sidebar-foreground: 220 12% 55%;
+[data-theme="slate"] {
+  --background: oklch(0.20 0.006 220);
+  --foreground: oklch(0.92 0.004 220);
+  --card: oklch(0.23 0.006 220);
+  --card-foreground: oklch(0.92 0.004 220);
+  --popover: oklch(0.25 0.006 220);
+  --popover-foreground: oklch(0.92 0.004 220);
+  --primary: oklch(0.70 0.13 55);
+  --primary-foreground: oklch(0.18 0.006 220);
+  --secondary: oklch(0.27 0.006 220);
+  --secondary-foreground: oklch(0.92 0.004 220);
+  --muted: oklch(0.27 0.006 220);
+  --muted-foreground: oklch(0.62 0.006 220);
+  --accent: oklch(0.30 0.008 220);
+  --accent-foreground: oklch(0.92 0.004 220);
+  --destructive: oklch(0.65 0.20 25);
+  --destructive-foreground: oklch(0.96 0.005 220);
+  --border: oklch(0.30 0.006 220);
+  --input: oklch(0.30 0.006 220);
+  --ring: oklch(0.70 0.13 55);
+  --titlebar: oklch(0.17 0.006 220);
+  --titlebar-foreground: oklch(0.72 0.006 220);
+  --titlebar-border: oklch(0.28 0.006 220);
+  --sidebar: oklch(0.18 0.006 220);
+  --sidebar-foreground: oklch(0.60 0.006 220);
   --radius: 0.5rem;
-}
 
-/* ════════════════════════════════════════════════════════════
-   主题：碳灰 (Carbon)
-   工业风碳灰色暗色主题，冷色调
-   ════════════════════════════════════════════════════════════ */
-[data-theme="carbon"] {
-  --background: 0 0% 10%;
-  --foreground: 0 0% 93%;
-  --card: 0 0% 12%;
-  --card-foreground: 0 0% 93%;
-  --popover: 0 0% 14%;
-  --popover-foreground: 0 0% 93%;
-  --primary: 0 0% 93%;
-  --primary-foreground: 0 0% 10%;
-  --secondary: 0 0% 17%;
-  --secondary-foreground: 0 0% 93%;
-  --muted: 0 0% 17%;
-  --muted-foreground: 0 0% 55%;
-  --accent: 0 0% 20%;
-  --accent-foreground: 0 0% 93%;
-  --destructive: 0 72% 51%;
-  --destructive-foreground: 0 0% 98%;
-  --border: 0 0% 20%;
-  --input: 0 0% 20%;
-  --ring: 0 0% 40%;
-  --titlebar: 0 0% 6%;
-  --titlebar-foreground: 0 0% 70%;
-  --titlebar-border: 0 0% 15%;
-  --sidebar: 0 0% 8%;
-  --sidebar-foreground: 0 0% 50%;
-  --radius: 0.375rem;
-}
+  --status-pass: oklch(0.30 0.06 145);
+  --status-pass-foreground: oklch(0.78 0.14 145);
+  --status-fail: oklch(0.32 0.08 25);
+  --status-fail-foreground: oklch(0.76 0.15 25);
+  --status-running: oklch(0.32 0.07 250);
+  --status-running-foreground: oklch(0.76 0.13 250);
+  --status-aborted: oklch(0.32 0.06 295);
+  --status-aborted-foreground: oklch(0.76 0.13 295);
+  --status-pending: oklch(0.32 0.05 75);
+  --status-pending-foreground: oklch(0.78 0.12 75);
 
-/* ════════════════════════════════════════════════════════════
-   主题：极地 (Nord)
-   Nord 极地配色，蓝灰冷色调，护眼舒适
-   ════════════════════════════════════════════════════════════ */
-[data-theme="nord"] {
-  --background: 220 16% 22%;
-  --foreground: 218 27% 94%;
-  --card: 220 17% 24%;
-  --card-foreground: 218 27% 94%;
-  --popover: 220 17% 26%;
-  --popover-foreground: 218 27% 94%;
-  --primary: 210 34% 63%;
-  --primary-foreground: 220 16% 22%;
-  --secondary: 220 17% 27%;
-  --secondary-foreground: 218 27% 94%;
-  --muted: 220 17% 27%;
-  --muted-foreground: 218 17% 65%;
-  --accent: 220 17% 30%;
-  --accent-foreground: 218 27% 94%;
-  --destructive: 354 42% 56%;
-  --destructive-foreground: 220 16% 22%;
-  --border: 220 17% 30%;
-  --input: 220 17% 30%;
-  --ring: 210 34% 63%;
-  --titlebar: 220 18% 16%;
-  --titlebar-foreground: 218 17% 70%;
-  --titlebar-border: 220 17% 26%;
-  --sidebar: 220 17% 19%;
-  --sidebar-foreground: 218 17% 60%;
-  --radius: 0.375rem;
-}
+  --diff-add: oklch(0.26 0.05 145);
+  --diff-add-foreground: oklch(0.78 0.10 145);
+  --diff-del: oklch(0.28 0.06 25);
+  --diff-del-foreground: oklch(0.76 0.12 25);
 
-/* ════════════════════════════════════════════════════════════
-   主题：Solarized 浅 (Solarized Light)
-   暖色调浅色主题，Solarized 配色方案
-   ════════════════════════════════════════════════════════════ */
-[data-theme="solarized-light"] {
-  --background: 44 87% 94%;
-  --foreground: 194 14% 30%;
-  --card: 44 87% 96%;
-  --card-foreground: 194 14% 30%;
-  --popover: 44 87% 98%;
-  --popover-foreground: 194 14% 30%;
-  --primary: 205 82% 37%;
-  --primary-foreground: 44 87% 96%;
-  --secondary: 46 42% 88%;
-  --secondary-foreground: 194 14% 30%;
-  --muted: 46 42% 88%;
-  --muted-foreground: 194 10% 50%;
-  --accent: 46 42% 86%;
-  --accent-foreground: 194 14% 30%;
-  --destructive: 1 71% 52%;
-  --destructive-foreground: 44 87% 96%;
-  --border: 46 30% 80%;
-  --input: 46 30% 80%;
-  --ring: 205 82% 37%;
-  --titlebar: 44 60% 90%;
-  --titlebar-foreground: 194 14% 40%;
-  --titlebar-border: 46 30% 78%;
-  --sidebar: 44 50% 92%;
-  --sidebar-foreground: 194 10% 45%;
-  --radius: 0.375rem;
+  --chart-1: oklch(0.72 0.13 250);
+  --chart-2: oklch(0.78 0.14 145);
+  --chart-3: oklch(0.72 0.15 285);
+  --chart-4: oklch(0.78 0.13 55);
+
+  --info: oklch(0.28 0.05 250);
+  --info-foreground: oklch(0.76 0.13 250);
+  --warning: oklch(0.30 0.05 75);
+  --warning-foreground: oklch(0.78 0.12 75);
+  --violet: oklch(0.28 0.05 295);
+  --violet-foreground: oklch(0.76 0.13 295);
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -227,7 +242,7 @@
    ════════════════════════════════════════════════════════════ */
 
 * {
-  border-color: hsl(var(--border));
+  border-color: var(--border);
 }
 
 html,
@@ -239,8 +254,8 @@ body,
 }
 
 body {
-  background-color: hsl(var(--background));
-  color: hsl(var(--foreground));
+  background-color: var(--background);
+  color: var(--foreground);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
 }
@@ -265,12 +280,12 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--muted-foreground) / 0.3);
+  background: color-mix(in oklch, var(--muted-foreground) 30%, transparent);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.5);
+  background: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
 }
 
 /* ── 主题切换过渡动画 ─────────────────────────────────────────── */
@@ -316,29 +331,29 @@ body {
 
 .cm-editor {
   height: 100%;
-  background-color: hsl(var(--background));
-  color: hsl(var(--foreground));
+  background-color: var(--background);
+  color: var(--foreground);
   font-size: 12px;
   font-family: ui-monospace, "SF Mono", "Cascadia Code", "Fira Code",
     Consolas, "Courier New", monospace;
 }
 
 .cm-editor .cm-content {
-  caret-color: hsl(var(--primary));
+  caret-color: var(--primary);
 }
 
 .cm-editor .cm-gutters {
-  background-color: hsl(var(--secondary) / 0.3);
-  color: hsl(var(--muted-foreground));
-  border-right: 1px solid hsl(var(--border));
+  background-color: color-mix(in oklch, var(--secondary) 30%, transparent);
+  color: var(--muted-foreground);
+  border-right: 1px solid var(--border);
 }
 
 .cm-editor .cm-activeLine {
-  background-color: hsl(var(--accent) / 0.3);
+  background-color: color-mix(in oklch, var(--accent) 30%, transparent);
 }
 
 .cm-editor .cm-activeLineGutter {
-  background-color: hsl(var(--accent) / 0.3);
+  background-color: color-mix(in oklch, var(--accent) 30%, transparent);
 }
 
 .cm-editor.cm-focused {
@@ -346,40 +361,40 @@ body {
 }
 
 .cm-editor .cm-selectionBackground {
-  background-color: hsl(var(--primary) / 0.2);
+  background-color: color-mix(in oklch, var(--primary) 20%, transparent);
 }
 
 .cm-editor .cm-cursor {
-  border-left-color: hsl(var(--primary));
+  border-left-color: var(--primary);
 }
 
 .cm-editor .cm-foldPlaceholder {
-  background-color: hsl(var(--secondary));
+  background-color: var(--secondary);
   border: none;
-  color: hsl(var(--muted-foreground));
+  color: var(--muted-foreground);
 }
 
 .cm-editor .cm-matchingBracket {
-  background-color: hsl(var(--accent) / 0.5);
-  outline: 1px solid hsl(var(--border));
+  background-color: color-mix(in oklch, var(--accent) 50%, transparent);
+  outline: 1px solid var(--border);
 }
 
 .cm-editor .cm-tooltip {
-  background-color: hsl(var(--popover));
-  border: 1px solid hsl(var(--border));
-  color: hsl(var(--foreground));
+  background-color: var(--popover);
+  border: 1px solid var(--border);
+  color: var(--foreground);
 }
 
 .cm-editor .cm-tooltip-autocomplete ul li[aria-selected] {
-  background-color: hsl(var(--accent));
-  color: hsl(var(--accent-foreground));
+  background-color: var(--accent);
+  color: var(--accent-foreground);
 }
 
 /* ── Markdown 文件预览样式 ─────────────────────────────────────── */
 
 .markdown-preview {
-  background-color: hsl(var(--background));
-  color: hsl(var(--foreground));
+  background-color: var(--background);
+  color: var(--foreground);
 }
 
 .markdown-preview h1 {
@@ -387,7 +402,7 @@ body {
   font-weight: 700;
   margin: 1.2rem 0 0.8rem;
   padding-bottom: 0.3rem;
-  border-bottom: 1px solid hsl(var(--border));
+  border-bottom: 1px solid var(--border);
 }
 
 .markdown-preview h2 {
@@ -395,7 +410,7 @@ body {
   font-weight: 700;
   margin: 1rem 0 0.6rem;
   padding-bottom: 0.2rem;
-  border-bottom: 1px solid hsl(var(--border) / 0.5);
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 50%, transparent);
 }
 
 .markdown-preview h3 {
@@ -433,20 +448,20 @@ body {
 }
 
 .markdown-preview a {
-  color: hsl(var(--primary));
+  color: var(--primary);
   text-decoration: underline;
 }
 
 .markdown-preview blockquote {
-  border-left: 3px solid hsl(var(--border));
+  border-left: 1px solid var(--border);
   padding-left: 1rem;
   margin: 0.8rem 0;
-  color: hsl(var(--muted-foreground));
+  color: var(--muted-foreground);
   font-style: italic;
 }
 
 .markdown-preview code {
-  background-color: hsl(var(--secondary));
+  background-color: var(--secondary);
   padding: 0.15rem 0.35rem;
   border-radius: 3px;
   font-size: 0.85em;
@@ -454,8 +469,8 @@ body {
 }
 
 .markdown-preview pre {
-  background-color: hsl(var(--secondary) / 0.5);
-  border: 1px solid hsl(var(--border) / 0.5);
+  background-color: color-mix(in oklch, var(--secondary) 50%, transparent);
+  border: 1px solid color-mix(in oklch, var(--border) 50%, transparent);
   border-radius: 6px;
   padding: 0.8rem;
   overflow-x: auto;
@@ -476,21 +491,21 @@ body {
 }
 
 .markdown-preview th {
-  border: 1px solid hsl(var(--border));
-  background-color: hsl(var(--secondary) / 0.5);
+  border: 1px solid var(--border);
+  background-color: color-mix(in oklch, var(--secondary) 50%, transparent);
   padding: 0.4rem 0.6rem;
   text-align: left;
   font-weight: 600;
 }
 
 .markdown-preview td {
-  border: 1px solid hsl(var(--border) / 0.5);
+  border: 1px solid color-mix(in oklch, var(--border) 50%, transparent);
   padding: 0.4rem 0.6rem;
 }
 
 .markdown-preview hr {
   border: none;
-  border-top: 1px solid hsl(var(--border));
+  border-top: 1px solid var(--border);
   margin: 1.2rem 0;
 }
 
@@ -502,51 +517,51 @@ body {
 /* ── highlight.js syntax highlighting for tool cards ─────── */
 /* Minimal theme that adapts to light/dark via CSS variables */
 .hljs {
-  color: hsl(var(--foreground) / 0.9);
+  color: color-mix(in oklch, var(--foreground) 90%, transparent);
   background: transparent;
 }
 .hljs-comment, .hljs-quote {
-  color: hsl(var(--muted-foreground));
+  color: var(--muted-foreground);
   font-style: italic;
 }
 .hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-section, .hljs-link {
-  color: #c678dd;
+  color: oklch(0.70 0.15 295);
 }
 .hljs-string, .hljs-attr, .hljs-symbol, .hljs-bullet, .hljs-addition {
-  color: #98c379;
+  color: var(--status-pass-foreground);
 }
 .hljs-title, .hljs-name, .hljs-type, .hljs-attribute, .hljs-number, .hljs-meta, .hljs-variable, .hljs-template-variable {
-  color: #61afef;
+  color: var(--status-running-foreground);
 }
 .hljs-built_in, .hljs-builtin-name, .hljs-class .hljs-title, .hljs-title.class_ {
-  color: #e5c07b;
+  color: var(--chart-4);
 }
 .hljs-function .hljs-title, .hljs-title.function_ {
-  color: #61afef;
+  color: var(--status-running-foreground);
 }
 .hljs-params {
-  color: hsl(var(--foreground) / 0.8);
+  color: color-mix(in oklch, var(--foreground) 80%, transparent);
 }
 .hljs-deletion {
-  color: #e06c75;
+  color: var(--status-fail-foreground);
 }
 .hljs-regexp, .hljs-template-tag {
-  color: #56b6c2;
+  color: oklch(0.72 0.13 185);
 }
 .hljs-tag {
-  color: hsl(var(--muted-foreground));
+  color: var(--muted-foreground);
 }
 .hljs-tag .hljs-name {
-  color: #e06c75;
+  color: var(--status-fail-foreground);
 }
 .hljs-tag .hljs-attr {
-  color: #d19a66;
+  color: var(--chart-4);
 }
 .hljs-tag .hljs-string {
-  color: #98c379;
+  color: var(--status-pass-foreground);
 }
 .hljs-meta {
-  color: hsl(var(--muted-foreground));
+  color: var(--muted-foreground);
 }
 .hljs-emphasis {
   font-style: italic;

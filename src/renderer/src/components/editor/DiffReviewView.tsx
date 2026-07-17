@@ -193,8 +193,8 @@ export function DiffReviewView({ entry }: DiffReviewViewProps) {
           {entry.filePath}
         </span>
         <div className="flex gap-2 text-[11px]">
-          <span className="text-green-500">+{totalAdd}</span>
-          <span className="text-red-500">-{totalDel}</span>
+          <span className="text-status-pass-foreground">+{totalAdd}</span>
+          <span className="text-status-fail-foreground">-{totalDel}</span>
           <span className="text-muted-foreground">{hunks.length} hunks</span>
         </div>
         {/* Hunk navigation */}
@@ -225,8 +225,8 @@ export function DiffReviewView({ entry }: DiffReviewViewProps) {
               key={i}
               className={cn(
                 'px-2 py-0 text-[11px] tabular-nums',
-                line.displayType === 'add' && 'bg-green-500/5 text-green-600/60 dark:text-green-500/40',
-                line.displayType === 'del' && 'bg-red-500/5 text-red-600/60 dark:text-red-500/40',
+                line.displayType === 'add' && 'bg-diff-add/10 text-diff-add-foreground/60',
+                line.displayType === 'del' && 'bg-diff-del/10 text-diff-del-foreground/60',
                 line.displayType === 'ctx' && 'text-muted-foreground/30',
               )}
               style={{ minHeight: '1.55em', minWidth: '44px' }}
@@ -257,7 +257,7 @@ export function DiffReviewView({ entry }: DiffReviewViewProps) {
         {/* Accept all */}
         <button
           onClick={() => acceptAll(entry.filePath)}
-          className="flex items-center gap-1 rounded border border-green-500/30 bg-green-500/10 px-2.5 py-1 text-[11px] text-green-500 transition-colors hover:bg-green-500/20"
+          className="flex items-center gap-1 rounded border border-status-pass/30 bg-status-pass/10 px-2.5 py-1 text-[11px] text-status-pass-foreground transition-colors hover:bg-status-pass/20"
         >
           <Check className="h-3 w-3" />
           全部接受
@@ -352,9 +352,9 @@ function renderLines(
         className={cn(
           'relative border-l-2 transition-colors',
           state === 'pending' && 'border-border-bright',
-          state === 'accepted' && 'border-green-500 bg-green-500/5',
-          state === 'rejected' && 'border-red-500 bg-red-500/5',
-          isOverwritten && 'border-yellow-500/50 bg-yellow-500/5',
+          state === 'accepted' && 'border-status-pass-foreground bg-status-pass/5',
+          state === 'rejected' && 'border-status-fail-foreground bg-status-fail/5',
+          isOverwritten && 'border-warning-foreground/50 bg-warning/5',
         )}
       >
         {/* Hunk action buttons */}
@@ -370,7 +370,7 @@ function renderLines(
               className={cn(
                 'flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-medium transition-colors',
                 state === 'accepted'
-                  ? 'border-green-500/50 bg-green-500/20 text-green-500'
+                  ? 'border-status-pass-foreground/50 bg-status-pass/20 text-status-pass-foreground'
                   : 'border-border bg-secondary/80 text-muted-foreground hover:text-foreground',
               )}
             >
@@ -382,7 +382,7 @@ function renderLines(
               className={cn(
                 'flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-medium transition-colors',
                 state === 'rejected'
-                  ? 'border-red-500/50 bg-red-500/20 text-red-500'
+                  ? 'border-status-fail-foreground/50 bg-status-fail/20 text-status-fail-foreground'
                   : 'border-border bg-secondary/80 text-muted-foreground hover:text-foreground',
               )}
             >
@@ -393,7 +393,7 @@ function renderLines(
         )}
         {isOverwritten && (
           <div className="absolute right-2 top-0.5 z-10">
-            <span className="flex items-center gap-1 rounded border border-yellow-500/30 bg-yellow-500/10 px-1.5 py-0.5 text-[9px] font-medium text-yellow-500">
+            <span className="flex items-center gap-1 rounded border border-warning-foreground/30 bg-warning/10 px-1.5 py-0.5 text-[9px] font-medium text-warning-foreground">
               已被覆盖
             </span>
           </div>
@@ -429,15 +429,15 @@ function renderLines(
         key={i}
         className={cn(
           'flex',
-          displayType === 'add' && 'bg-green-500/10',
-          displayType === 'del' && 'bg-red-500/10',
+          displayType === 'add' && 'bg-diff-add/10',
+          displayType === 'del' && 'bg-diff-del/10',
         )}
       >
         <span
           className={cn(
             'w-5 shrink-0 select-none text-center',
-            displayType === 'add' && 'text-green-500',
-            displayType === 'del' && 'text-red-500',
+            displayType === 'add' && 'text-status-pass-foreground',
+            displayType === 'del' && 'text-status-fail-foreground',
             displayType === 'ctx' && 'text-transparent',
           )}
         >
@@ -446,8 +446,8 @@ function renderLines(
         <span
           className={cn(
             'flex-1 overflow-x-auto px-2 py-0',
-            displayType === 'add' && 'text-green-700 dark:text-green-300/90',
-            displayType === 'del' && 'text-red-700/80 dark:text-red-300/70',
+            displayType === 'add' && 'text-diff-add-foreground',
+            displayType === 'del' && 'text-diff-del-foreground',
             displayType === 'ctx' && 'text-muted-foreground',
           )}
           dangerouslySetInnerHTML={{ __html: html }}

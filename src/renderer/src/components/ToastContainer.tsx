@@ -34,7 +34,7 @@ function ToastCard({
         'animate-in slide-in-from-bottom-2',
         toast.type === 'error' && 'border-destructive/50 bg-destructive/10 text-foreground',
         toast.type === 'info' && 'border-border bg-popover text-foreground',
-        toast.type === 'success' && 'border-green-500/50 bg-green-500/10 text-foreground',
+        toast.type === 'success' && 'border-status-pass/50 bg-status-pass/10 text-foreground',
       )}
     >
       <Icon
@@ -42,7 +42,7 @@ function ToastCard({
           'mt-0.5 h-4 w-4 shrink-0',
           toast.type === 'error' && 'text-destructive',
           toast.type === 'info' && 'text-muted-foreground',
-          toast.type === 'success' && 'text-green-500',
+          toast.type === 'success' && 'text-status-pass-foreground',
         )}
       />
       <div className="flex-1 min-w-0">

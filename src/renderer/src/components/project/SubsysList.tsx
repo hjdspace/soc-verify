@@ -28,12 +28,12 @@ interface CaseData {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  pass: 'text-green-500',
-  fail: 'text-red-500',
-  running: 'text-blue-500 animate-pulse',
-  pending: 'text-muted-foreground',
-  error: 'text-red-500',
-  aborted: 'text-orange-500',
+  pass: 'text-status-pass-foreground',
+  fail: 'text-status-fail-foreground',
+  running: 'text-status-running-foreground animate-pulse',
+  pending: 'text-status-pending-foreground',
+  error: 'text-status-fail-foreground',
+  aborted: 'text-status-aborted-foreground',
 };
 
 const STATUS_FILTERS = [

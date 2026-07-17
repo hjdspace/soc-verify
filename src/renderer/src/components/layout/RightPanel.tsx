@@ -318,7 +318,11 @@ export function RightPanel({ width }: RightPanelProps) {
   const handleLoadModels = useCallback(async () => {
     setModelsLoading(true);
     try {
-      const models = await fetchModelsFromApi();
+      // Fetch models for the current session's credential (providerId) so the
+      // list reflects the credential the session is actually using. Fall back
+      // to the default (no providerId) when the session has no credential bound.
+      const providerId = currentSession?.model?.providerId;
+      const models = await fetchModelsFromApi(providerId);
       setAvailableModels(models.map((m) => ({
         provider: m.provider,
         id: m.id,
@@ -329,11 +333,15 @@ export function RightPanel({ width }: RightPanelProps) {
     } finally {
       setModelsLoading(false);
     }
-  }, [fetchModelsFromApi]);
+  }, [fetchModelsFromApi, currentSession?.model?.providerId]);
 
   const handleSetModel = async (provider: string, modelId: string, modelName?: string) => {
     if (!currentSessionId) return;
-    await setModel(currentSessionId, provider, modelId, modelName);
+    // Switching model within the same provider — pass providerId so the backend
+    // keeps using the same credential (apiKey/baseUrl) and only swaps the model id
+    // via the omp engine's set_model RPC (no session destroy/recreate needed).
+    const providerId = currentSession?.model?.providerId;
+    await setModel(currentSessionId, provider, modelId, modelName, providerId);
     setShowModelDropdown(false);
   };
 
@@ -515,7 +523,7 @@ export function RightPanel({ width }: RightPanelProps) {
                     />
                     <button
                       onClick={(e) => { e.stopPropagation(); void handleRenameSave(); }}
-                      className="shrink-0 rounded p-0.5 text-green-500 hover:bg-green-500/10"
+                      className="shrink-0 rounded p-0.5 text-status-pass-foreground hover:bg-status-pass/10"
                       title="保存"
                     >
                       <Check className="h-2.5 w-2.5" />
@@ -1140,7 +1148,7 @@ function HistoryView({
                           {session.name}
                         </span>
                         {isActive && (
-                          <span className="shrink-0 rounded-full bg-green-500/15 px-1.5 py-0.5 text-[9px] font-medium text-green-600 dark:text-green-400">
+                          <span className="shrink-0 rounded-full bg-status-pass/15 px-1.5 py-0.5 text-[9px] font-medium text-status-pass-foreground">
                             活跃
                           </span>
                         )}

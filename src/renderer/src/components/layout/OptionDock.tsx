@@ -130,7 +130,7 @@ export function OptionDock() {
           <Settings2 className="h-3 w-3" />
           仿真 Option
           {schema.length > 0 && (
-            <span className="rounded bg-primary/10 px-1 py-0.5 text-[9px] text-primary">
+            <span className="rounded bg-primary/10 px-1 py-0.5 text-[11px] text-primary">
               {schema.length}
             </span>
           )}
@@ -142,10 +142,10 @@ export function OptionDock() {
             <button
               onClick={() => setShowPresetMenu(!showPresetMenu)}
               disabled={Object.keys(presets).length === 0}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
+              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
               title="加载预设"
             >
-              <FolderOpen className="h-2.5 w-2.5" />
+              <FolderOpen className="h-3 w-3" />
               预设
             </button>
             {showPresetMenu && (
@@ -172,15 +172,15 @@ export function OptionDock() {
               value={presetName}
               onChange={(e) => setPresetName(e.target.value)}
               placeholder="预设名称"
-              className="w-20 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] outline-none focus:border-primary"
+              className="w-20 rounded border border-border bg-background px-1.5 py-0.5 text-[11px] outline-none focus:border-primary"
             />
             <button
               onClick={handleSavePreset}
               disabled={!presetName.trim() || savingPreset}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
+              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
               title="保存预设"
             >
-              <Save className="h-2.5 w-2.5" />
+              <Save className="h-3 w-3" />
             </button>
           </div>
         </div>
@@ -231,7 +231,7 @@ function OptionGroup({
     <div>
       {/* Group header */}
       <div className="mb-1.5 flex items-center gap-2">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
           {name}
         </span>
         <div className="h-px flex-1 bg-border/50" />
@@ -263,11 +263,11 @@ function OptionField({
   onChange: (value: unknown) => void;
 }) {
   const label = (
-    <label className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
+    <label className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground">
       {field.label}
       {field.description && (
         <span
-          className="cursor-help text-[9px] text-muted-foreground/40 underline decoration-dotted"
+          className="cursor-help text-[11px] text-muted-foreground/40 underline decoration-dotted"
           title={field.description}
         >
           (?)

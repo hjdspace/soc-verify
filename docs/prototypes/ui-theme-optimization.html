@@ -1,0 +1,1853 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="bench">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SoC Verify · UI 与主题优化原型</title>
+<style>
+/* ════════════════════════════════════════════════════════════
+   三套主题：Drafting（浅）/ Bench（深·暖）/ Slate（深·冷）
+   全部 OKLCH；纯白/纯黑已替换为带色调极值；状态色独立语义变量
+   ════════════════════════════════════════════════════════════ */
+
+:root {
+  --mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', Consolas, ui-monospace, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+
+  /* 共享字号阶梯（≥1.25 比例，避免扁平 scale） */
+  --fs-xs:   11px;
+  --fs-sm:   12px;
+  --fs-base: 13px;
+  --fs-md:   15px;
+  --fs-lg:   18px;
+  --fs-xl:   22px;
+
+  /* 共享状态语义色（每套主题覆盖） */
+  --status-pass:    oklch(0.72 0.16 145);
+  --status-fail:    oklch(0.65 0.18 25);
+  --status-running: oklch(0.70 0.13 230);
+  --status-aborted: oklch(0.72 0.14 65);
+  --status-pending: oklch(0.62 0.08 250);
+}
+
+/* ─── 主题 1：Drafting · 技术蓝图（浅色，暖纸 + 紫梅墨） ─── */
+[data-theme="drafting"] {
+  --bg:           oklch(0.97 0.006 75);   /* 暖纸白 */
+  --bg-surface:   oklch(0.94 0.005 75);   /* 稍深暖纸 */
+  --bg-elevated:  oklch(0.99 0.004 75);   /* 抬升层 */
+  --bg-inset:     oklch(0.92 0.005 75);   /* 凹陷层 */
+  --fg:           oklch(0.22 0.012 75);   /* 暖墨黑（非纯黑） */
+  --fg-dim:       oklch(0.45 0.010 75);
+  --fg-faint:     oklch(0.62 0.008 75);
+  --border:       oklch(0.86 0.006 75);
+  --border-strong:oklch(0.72 0.008 75);
+  --accent:       oklch(0.42 0.13 285);   /* 深紫梅 */
+  --accent-fg:    oklch(0.97 0.006 75);
+  --accent-soft:  oklch(0.92 0.04 285);
+
+  --status-pass:    oklch(0.50 0.13 145);
+  --status-fail:    oklch(0.50 0.16 28);
+  --status-running: oklch(0.50 0.11 230);
+  --status-aborted: oklch(0.50 0.13 65);
+  --status-pending: oklch(0.50 0.05 75);
+}
+
+/* ─── 主题 2：Bench · 实验台仪器（深色，暖深 + 磷光绿） ─── */
+[data-theme="bench"] {
+  --bg:           oklch(0.18 0.008 60);   /* 暖深（微琥珀） */
+  --bg-surface:   oklch(0.21 0.008 60);
+  --bg-elevated:  oklch(0.24 0.009 60);
+  --bg-inset:     oklch(0.15 0.008 60);
+  --fg:           oklch(0.92 0.006 60);
+  --fg-dim:       oklch(0.65 0.010 60);
+  --fg-faint:     oklch(0.45 0.008 60);
+  --border:       oklch(0.27 0.008 60);
+  --border-strong:oklch(0.36 0.010 60);
+  --accent:       oklch(0.78 0.15 145);   /* 磷光绿 */
+  --accent-fg:    oklch(0.18 0.008 60);
+  --accent-soft:  oklch(0.30 0.05 145);
+
+  --status-pass:    oklch(0.78 0.15 145);
+  --status-fail:    oklch(0.65 0.18 25);
+  --status-running: oklch(0.72 0.13 195);
+  --status-aborted: oklch(0.72 0.14 65);
+  --status-pending: oklch(0.62 0.06 60);
+}
+
+/* ─── 主题 3：Slate · 精炼现状（深色，冷石板 + 铜） ─── */
+[data-theme="slate"] {
+  --bg:           oklch(0.20 0.006 220);  /* 冷石板 */
+  --bg-surface:   oklch(0.23 0.006 220);
+  --bg-elevated:  oklch(0.26 0.007 220);
+  --bg-inset:     oklch(0.17 0.006 220);
+  --fg:           oklch(0.93 0.004 220);
+  --fg-dim:       oklch(0.66 0.008 220);
+  --fg-faint:     oklch(0.46 0.007 220);
+  --border:       oklch(0.28 0.007 220);
+  --border-strong:oklch(0.38 0.008 220);
+  --accent:       oklch(0.70 0.13 55);    /* 铜色 */
+  --accent-fg:    oklch(0.20 0.006 220);
+  --accent-soft:  oklch(0.30 0.05 55);
+
+  --status-pass:    oklch(0.70 0.14 145);  /* 鼠尾草绿 */
+  --status-fail:    oklch(0.65 0.16 25);   /* 锈红 */
+  --status-running: oklch(0.70 0.13 55);   /* 铜色（与 accent 同） */
+  --status-aborted: oklch(0.65 0.12 285);  /* 薰衣草 */
+  --status-pending: oklch(0.62 0.05 220);
+}
+
+/* ════════════════════════════════════════════════════════════
+   全局重置
+   ════════════════════════════════════════════════════════════ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 240ms cubic-bezier(0.16, 1, 0.3, 1),
+              color 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+input, select, textarea { font-family: inherit; color: inherit; }
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--fg-faint); }
+
+/* ════════════════════════════════════════════════════════════
+   原型导航条（不属于真实 AppShell，仅用于切换主题/查看模式）
+   ════════════════════════════════════════════════════════════ */
+.proto-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: var(--bg-inset);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-sm);
+}
+.proto-title {
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  letter-spacing: 0.02em;
+}
+.proto-title strong { color: var(--fg); font-weight: 600; }
+.proto-controls { display: flex; align-items: center; gap: 4px; }
+.proto-controls .label {
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+  margin-right: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.theme-pill {
+  padding: 5px 11px;
+  font-size: var(--fs-xs);
+  border-radius: 4px;
+  color: var(--fg-dim);
+  border: 1px solid transparent;
+  transition: all 160ms ease-out;
+}
+.theme-pill:hover { color: var(--fg); background: var(--bg-surface); }
+.theme-pill.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.proto-controls .sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 8px;
+}
+.view-toggle {
+  padding: 5px 11px;
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  border-radius: 4px;
+}
+.view-toggle:hover { color: var(--fg); background: var(--bg-surface); }
+.view-toggle.active { color: var(--accent); background: var(--accent-soft); }
+
+/* ════════════════════════════════════════════════════════════
+   AppShell 真实结构
+   ════════════════════════════════════════════════════════════ */
+.appshell {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 41px);
+}
+
+/* ─── TitleBar（移除 4 条分隔条，间距分组；中央放面包屑） ─── */
+.titlebar {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 8px;
+  background: var(--bg-inset);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  flex-shrink: 0;
+}
+.titlebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px 0 4px;
+}
+.titlebar-logo svg { width: 14px; height: 14px; color: var(--accent); opacity: 0.85; }
+.titlebar-logo .name {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* 中央面包屑（项目 / 子系统 / 用例） */
+.titlebar-breadcrumb {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  font-family: var(--mono);
+}
+.titlebar-breadcrumb .crumb {
+  padding: 3px 7px;
+  border-radius: 3px;
+  transition: background 120ms;
+}
+.titlebar-breadcrumb .crumbover { color: var(--fg-faint); cursor: not-allowed; }
+.titlebar-breadcrumb .crumb.clickable { color: var(--fg-dim); cursor: pointer; }
+.titlebar-breadcrumb .crumb.clickable:hover { background: var(--bg-surface); color: var(--fg); }
+.titlebar-breadcrumb .crumb.current { color: var(--fg); }
+.titlebar-breadcrumb .sep {
+  color: var(--fg-faint);
+  font-family: var(--sans);
+  font-size: 10px;
+}
+.titlebar-breadcrumb .reg-badge {
+  margin-left: 10px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--sans);
+  letter-spacing: 0.04em;
+}
+
+/* TitleBar 按钮组（用间距分组，不用分隔条） */
+.titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.titlebar-actions .group { display: flex; gap: 2px; padding: 0 6px; }
+.titlebar-actions .group:last-child { padding-right: 2px; }
+.tb-btn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--fg-dim);
+  transition: all 120ms;
+}
+.tb-btn:hover { background: var(--bg-surface); color: var(--fg); }
+.tb-btn.active { color: var(--accent); background: var(--accent-soft); }
+.tb-btn.close:hover { background: var(--status-fail); color: var(--bg); }
+.tb-btn svg { width: 14px; height: 14px; }
+
+/* ─── 主工作区三栏 ─── */
+.workspace {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ─── LeftRail ─── */
+.leftrail {
+  width: 248px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+}
+
+.rail-header {
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.project-switcher {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 4px;
+  color: var(--fg);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  transition: background 120ms;
+}
+.project-switcher:hover { background: var(--bg-elevated); }
+.project-switcher svg { width: 13px; height: 13px; color: var(--fg-faint); margin-right: 7px; }
+.project-switcher .name { flex: 1; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-switcher .chev { width: 12px; height: 12px; color: var(--fg-faint); }
+
+/* LeftRail tabs：背景填充而非下划线 */
+.rail-tabs {
+  display: flex;
+  padding: 4px 6px 0;
+  gap: 2px;
+  border-bottom: 1px solid var(--border);
+}
+.rail-tab {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  border-radius: 4px 4px 0 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  transition: all 120ms;
+}
+.rail-tab svg { width: 12px; height: 12px; }
+.rail-tab:hover { color: var(--fg); background: var(--bg-elevated); }
+.rail-tab.active {
+  color: var(--accent);
+  background: var(--bg);
+  font-weight: 600;
+  position: relative;
+}
+
+.rail-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 6px;
+}
+
+.section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-faint);
+  padding: 4px 6px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.section-label .count {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-faint);
+  letter-spacing: 0;
+}
+
+/* 文件树 */
+.file-tree { display: flex; flex-direction: column; gap: 1px; }
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  font-size: var(--fs-xs);
+  font-family: var(--mono);
+  color: var(--fg-dim);
+  cursor: pointer;
+  transition: background 100ms;
+}
+.file-row:hover { background: var(--bg-elevated); color: var(--fg); }
+.file-row.active { background: var(--accent-soft); color: var(--accent); }
+.file-row .indent { width: 12px; flex-shrink: 0; }
+.file-row svg { width: 12px; height: 12px; opacity: 0.7; flex-shrink: 0; }
+.file-row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-row .badge {
+  font-size: 9px;
+  font-family: var(--mono);
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: var(--bg-inset);
+  color: var(--fg-faint);
+}
+
+/* ─── CenterArea ─── */
+.centerarea {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  min-width: 0;
+}
+
+/* Tab bar：左侧页签 + 右侧 3 主要动作 + 更多溢出菜单 */
+.tabbar {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.tabbar-tabs {
+  flex: 1;
+  display: flex;
+  overflow-x: auto;
+  height: 100%;
+  scrollbar-width: none;
+}
+.tabbar-tabs::-webkit-scrollbar { display: none; }
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  height: 100%;
+  border-right: 1px solid var(--border);
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  white-space: nowrap;
+  transition: background 120ms;
+}
+.tab:hover { background: var(--bg-elevated); color: var(--fg); }
+.tab.active {
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.tab svg { width: 12px; height: 12px; opacity: 0.7; }
+.tab .close {
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  opacity: 0;
+  margin-left: 2px;
+}
+.tab:hover .close { opacity: 0.6; }
+.tab .close:hover { background: var(--bg-inset); opacity: 1; }
+.tab .close svg { width: 10px; height: 10px; }
+
+.tabbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border-left: 1px solid var(--border);
+}
+.tab-action {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  height: 24px;
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  border-radius: 4px;
+  transition: all 120ms;
+}
+.tab-action:hover { background: var(--bg-elevated); color: var(--fg); }
+.tab-action.active { color: var(--accent); background: var(--accent-soft); }
+.tab-action svg { width: 13px; height: 13px; }
+.tab-action .badge {
+  font-size: 10px;
+  font-family: var(--mono);
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--status-running);
+  color: var(--bg);
+  font-weight: 600;
+  min-width: 14px;
+  text-align: center;
+  height: 14px;
+  line-height: 14px;
+}
+.tab-action .badge.warn { background: var(--status-fail); }
+
+/* 内容区 */
+.center-content {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+/* 仪表盘内联统计行（替换 3 张同质卡片） */
+.stat-row {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+}
+.stat-row .stat {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+.stat-row .stat .num {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.stat-row .stat .num.accent { color: var(--accent); }
+.stat-row .stat .num.pass { color: var(--status-pass); }
+.stat-row .stat .label {
+  font-size: var(--fs-xs);
+  color: var(--fg-faint);
+  font-family: var(--sans);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.stat-row .stat .sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
+  align-self: center;
+}
+
+/* 仿真历史表格（高密度） */
+.history-table {
+  width: 100%;
+  font-size: var(--fs-xs);
+  font-family: var(--mono);
+  border-collapse: collapse;
+}
+.history-table thead th {
+  text-align: left;
+  padding: 7px 12px;
+  font-size: 10px;
+  font-family: var(--sans);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-faint);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-surface);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.history-table thead th.sortable { cursor: pointer; }
+.history-table thead th.sortable:hover { color: var(--fg); }
+.history-table thead th .sort-arrow { color: var(--accent); margin-left: 3px; }
+.history-table tbody td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+}
+.history-table tbody tr:hover td { background: var(--bg-surface); }
+.history-table tbody tr.selected td { background: var(--accent-soft); }
+.history-table .case { color: var(--fg); font-weight: 500; }
+.history-table .subsys { color: var(--fg-dim); }
+.history-table .duration { color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+.history-table .time { color: var(--fg-faint); }
+
+/* 状态徽章：圆点 + 文字（非色块胶囊） */
+.status-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+}
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-dot.pass { background: var(--status-pass); }
+.status-dot.fail { background: var(--status-fail); }
+.status-dot.running {
+  background: var(--status-running);
+  animation: pulse-dot 1.4s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+.status-dot.aborted { background: var(--status-aborted); }
+.status-dot.pending { background: var(--status-pending); }
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.75); }
+}
+.status-text { color: var(--fg-dim); }
+.status-text.pass { color: var(--status-pass); }
+.status-text.fail { color: var(--status-fail); }
+.status-text.running { color: var(--status-running); }
+.status-text.aborted { color: var(--status-aborted); }
+
+.row-action {
+  font-size: var(--fs-xs);
+  color: var(--status-fail);
+  padding: 2px 7px;
+  border-radius: 3px;
+  background: color-mix(in oklch, var(--status-fail) 12%, transparent);
+}
+.row-action:hover { background: color-mix(in oklch, var(--status-fail) 22%, transparent); }
+
+/* ─── RightPanel ─── */
+.rightpanel {
+  width: 360px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
+}
+.session-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.session-tabs .scroll { flex: 1; display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.session-tabs .scroll::-webkit-scrollbar { display: none; }
+.session-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  max-width: 150px;
+  flex-shrink: 0;
+  transition: all 120ms;
+}
+.session-tab:hover { background: var(--bg-elevated); color: var(--fg); }
+.session-tab.active {
+  background: var(--bg);
+  color: var(--fg);
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+.session-tab .spinner {
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--accent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.session-tab .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-tab .close {
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  opacity: 0;
+}
+.session-tab:hover .close { opacity: 0.6; }
+.session-tab .close:hover { background: var(--bg-inset); opacity: 1; }
+.session-tabs .actions { display: flex; gap: 2px; padding-left: 4px; border-left: 1px solid var(--border); }
+.session-tabs .actions .tb-btn { width: 24px; height: 24px; }
+.session-tabs .actions .tb-btn svg { width: 13px; height: 13px; }
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.msg-user {
+  align-self: flex-end;
+  max-width: 85%;
+  padding: 8px 11px;
+  background: var(--accent-soft);
+  color: var(--fg);
+  border-radius: 10px 10px 2px 10px;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+.msg-assistant {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+.msg-assistant .role {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.msg-assistant .body { color: var(--fg); }
+.msg-assistant .body code {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-inset);
+}
+.msg-assistant .cursor {
+  display: inline-block;
+  width: 2px;
+  height: 13px;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  animation: blink 1s steps(1, end) infinite;
+}
+@keyframes blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+/* 工具调用卡片（精炼版） */
+.tool-card {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: var(--fs-xs);
+  font-family: var(--mono);
+  overflow: hidden;
+}
+.tool-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background 120ms;
+}
+.tool-card-header:hover { background: var(--bg-surface); }
+.tool-card-header .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--status-pass);
+}
+.tool-card-header .dot.running { background: var(--status-running); animation: pulse-dot 1.4s infinite; }
+.tool-card-header .name { color: var(--fg); font-weight: 500; }
+.tool-card-header .args { color: var(--fg-faint); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-card-header .duration { color: var(--fg-faint); font-size: 10px; }
+.tool-card-body {
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: 11px;
+  white-space: pre-wrap;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+/* 输入框 */
+.composer {
+  border-top: 1px solid var(--border);
+  padding: 8px 10px 10px;
+  background: var(--bg-surface);
+}
+.composer-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-size: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+.chip.file { background: var(--bg-inset); color: var(--fg-dim); }
+.chip svg { width: 10px; height: 10px; }
+.chip .x { cursor: pointer; opacity: 0.6; }
+.chip .x:hover { opacity: 1; }
+
+.composer-input {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  padding: 8px 10px;
+  transition: border-color 140ms;
+}
+.composer-input:focus-within { border-color: var(--accent); }
+.composer-input textarea {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  resize: none;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  min-height: 38px;
+  max-height: 120px;
+  color: var(--fg);
+}
+.composer-input textarea::placeholder { color: var(--fg-faint); }
+.composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+.composer-tools { display: flex; align-items: center; gap: 4px; }
+.tool-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--fg-dim);
+}
+.tool-btn:hover { background: var(--bg-elevated); color: var(--fg); }
+.tool-btn svg { width: 13px; height: 13px; }
+.model-label {
+  font-size: 10px;
+  color: var(--fg-dim);
+  padding: 3px 7px;
+  border-radius: 3px;
+  font-family: var(--mono);
+}
+.model-label:hover { background: var(--bg-elevated); color: var(--fg); }
+.composer-hint {
+  font-size: 10px;
+  color: var(--fg-faint);
+  margin: 0 6px;
+}
+.send-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.send-btn:hover { filter: brightness(1.1); }
+.send-btn svg { width: 11px; height: 11px; }
+
+/* ─── OptionDock ─── */
+.optiondock {
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+  flex-shrink: 0;
+}
+.od-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 14px;
+}
+.od-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.od-title svg { width: 13px; height: 13px; }
+.od-title .count {
+  background: var(--accent-soft);
+  color: var(--accent);
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-family: var(--mono);
+}
+.od-actions { display: flex; align-items: center; gap: 6px; }
+.od-actions .preset-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  padding: 3px 8px;
+  border-radius: 3px;
+}
+.od-actions .preset-btn:hover { background: var(--bg-elevated); color: var(--fg); }
+.od-actions .preset-btn svg { width: 11px; height: 11px; }
+.od-actions .preset-input {
+  font-size: var(--fs-xs);
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 3px;
+  width: 90px;
+  outline: none;
+}
+.od-actions .preset-input:focus { border-color: var(--accent); }
+.od-actions .save-btn {
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  padding: 3px 7px;
+  border-radius: 3px;
+}
+.od-actions .save-btn:hover { background: var(--bg-elevated); color: var(--fg); }
+
+.od-body {
+  padding: 0 14px 12px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px 14px;
+}
+.od-group-label {
+  grid-column: 1 / -1;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-top: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.od-field { display: flex; flex-direction: column; gap: 3px; }
+.od-field label {
+  font-size: 10px;
+  color: var(--fg-dim);
+  font-weight: 500;
+}
+.od-field input[type="text"],
+.od-field input[type="number"],
+.od-field select {
+  font-size: var(--fs-xs);
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 3px;
+  outline: none;
+  font-family: var(--mono);
+}
+.od-field input:focus, .od-field select:focus { border-color: var(--accent); }
+.od-field.toggle { flex-direction: row; align-items: center; justify-content: space-between; padding-top: 2px; }
+.toggle-sw {
+  width: 28px;
+  height: 16px;
+  border-radius: 9px;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  position: relative;
+  transition: background 160ms;
+}
+.toggle-sw::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--fg-faint);
+  transition: all 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.toggle-sw.on { background: var(--accent); border-color: var(--accent); }
+.toggle-sw.on::after { left: 13px; background: var(--accent-fg); }
+
+/* ════════════════════════════════════════════════════════════
+   对比模式：Before/After 卡片
+   ════════════════════════════════════════════════════════════ */
+.compare-view { display: none; flex-direction: column; gap: 28px; padding: 28px 32px; overflow-y: auto; height: calc(100vh - 41px); }
+.compare-view.active { display: flex; }
+.compare-section { display: flex; flex-direction: column; gap: 14px; }
+.compare-section h2 {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--fg);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+.compare-section .desc { font-size: var(--fs-sm); color: var(--fg-dim); line-height: 1.6; }
+.compare-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.compare-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+.compare-card .label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-faint);
+  padding: 7px 12px;
+  background: var(--bg-inset);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.compare-card .label.before { color: var(--status-fail); }
+.compare-card .label.after { color: var(--status-pass); }
+.compare-card .body { padding: 16px; }
+
+/* Before: 同质卡片网格 */
+.before-overview { display: flex; flex-direction: column; gap: 8px; }
+.before-stat-card {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 4px;
+  padding: 10px 12px;
+}
+.before-stat-card .l { font-size: 10px; text-transform: uppercase; color: var(--fg-faint); }
+.before-stat-card .n { font-size: 20px; font-weight: 700; color: var(--fg); font-family: var(--mono); }
+
+/* After: 内联统计行 */
+.after-stat-row {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  font-family: var(--mono);
+  padding: 4px 0;
+}
+.after-stat-row .stat { display: flex; align-items: baseline; gap: 6px; }
+.after-stat-row .num { font-size: var(--fs-md); font-weight: 600; color: var(--fg); }
+.after-stat-row .num.accent { color: var(--accent); }
+.after-stat-row .num.pass { color: var(--status-pass); }
+.after-stat-row .label { font-size: 10px; color: var(--fg-faint); font-family: var(--sans); text-transform: uppercase; letter-spacing: 0.06em; }
+.after-stat-row .vsep { width: 1px; height: 14px; background: var(--border); align-self: center; }
+
+/* Before: 状态胶囊 */
+.before-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.before-badge {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-family: var(--mono);
+}
+.before-badge.pass { background: rgba(34, 197, 94, 0.15); color: rgb(34, 197, 94); }
+.before-badge.fail { background: rgba(239, 68, 68, 0.15); color: rgb(239, 68, 68); }
+.before-badge.running { background: rgba(59, 130, 246, 0.15); color: rgb(59, 130, 246); }
+.before-badge.aborted { background: rgba(249, 115, 22, 0.15); color: rgb(249, 115, 22); }
+
+/* After: 圆点 + 文字 */
+.after-badges { display: flex; flex-wrap: wrap; gap: 12px; }
+.after-badge { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); font-family: var(--mono); }
+.after-badge .dot { width: 7px; height: 7px; border-radius: 50%; }
+.after-badge .dot.pass { background: var(--status-pass); }
+.after-badge .dot.fail { background: var(--status-fail); }
+.after-badge .dot.running { background: var(--status-running); animation: pulse-dot 1.4s infinite; }
+.after-badge .dot.aborted { background: var(--status-aborted); }
+.after-badge .text { color: var(--fg); }
+.after-badge .text.pass { color: var(--status-pass); }
+.after-badge .text.fail { color: var(--status-fail); }
+.after-badge .text.running { color: var(--status-running); }
+.after-badge .text.aborted { color: var(--status-aborted); }
+
+/* Before: 图标汤 */
+.before-iconsoup { display: flex; gap: 2px; flex-wrap: wrap; }
+.before-iconsoup .icon-btn {
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 4px;
+  color: var(--fg-dim);
+}
+.before-iconsoup .icon-btn:hover { background: var(--bg-elevated); color: var(--fg); }
+.before-iconsoup .icon-btn svg { width: 13px; height: 13px; }
+.before-iconsoup .icon-btn .badge {
+  position: absolute;
+  font-size: 9px;
+  background: rgb(59, 130, 246);
+  color: white;
+  border-radius: 8px;
+  padding: 0 4px;
+  margin-left: 14px;
+  margin-top: -10px;
+  font-weight: 600;
+}
+
+/* After: 文字按钮 + 溢出菜单 */
+.after-tabactions { display: flex; gap: 4px; flex-wrap: wrap; }
+.after-tabactions .ta {
+  display: flex; align-items: center; gap: 5px;
+  padding: 0 9px; height: 24px;
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+  border-radius: 4px;
+}
+.after-tabactions .ta:hover { background: var(--bg-elevated); color: var(--fg); }
+.after-tabactions .ta.active { color: var(--accent); background: var(--accent-soft); }
+.after-tabactions .ta svg { width: 13px; height: 13px; }
+.after-tabactions .ta .badge {
+  font-size: 10px; padding: 0 5px; border-radius: 8px;
+  background: var(--status-running); color: var(--bg); font-weight: 600;
+  min-width: 14px; text-align: center; height: 14px; line-height: 14px;
+}
+
+/* Before: titlebar 分隔条 */
+.before-titlebar {
+  display: flex; align-items: center; height: 36px; padding: 0 8px;
+  background: var(--bg-inset); border-bottom: 1px solid var(--border);
+}
+.before-titlebar .logo { font-size: 12px; font-weight: 600; padding: 0 8px; }
+.before-titlebar .sep { width: 1px; height: 16px; background: var(--border-strong); margin: 0 6px; }
+.before-titlebar .tb-btn-b { width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; border-radius: 4px; color: var(--fg-dim); }
+.before-titlebar .tb-btn-b:hover { background: var(--bg-surface); }
+.before-titlebar .tb-btn-b svg { width: 14px; height: 14px; }
+.before-titlebar .spacer { flex: 1; }
+
+/* After: titlebar 间距分组 */
+.after-titlebar {
+  display: flex; align-items: center; height: 36px; padding: 0 8px;
+  background: var(--bg-inset); border-bottom: 1px solid var(--border);
+}
+.after-titlebar .logo { display: flex; align-items: center; gap: 7px; padding: 0 8px 0 4px; }
+.after-titlebar .logo svg { width: 14px; height: 14px; color: var(--accent); }
+.after-titlebar .logo .name { font-size: 12px; font-weight: 600; }
+.after-titlebar .breadcrumb { flex: 1; padding: 0 12px; font-size: 11px; color: var(--fg-dim); font-family: var(--mono); display: flex; gap: 6px; align-items: center; }
+.after-titlebar .breadcrumb .crumb { padding: 3px 7px; border-radius: 3px; }
+.after-titlebar .breadcrumb .crumb.current { color: var(--fg); }
+.after-titlebar .breadcrumb .sep { color: var(--fg-faint); }
+.after-titlebar .group { display: flex; gap: 2px; padding: 0 6px; }
+.after-titlebar .tb-btn-a { width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; border-radius: 4px; color: var(--fg-dim); }
+.after-titlebar .tb-btn-a:hover { background: var(--bg-surface); color: var(--fg); }
+.after-titlebar .tb-btn-a svg { width: 14px; height: 14px; }
+
+.appshell.hidden { display: none; }
+
+/* SVG 图标（lucide 风格内联） */
+svg { display: block; }
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════════════════════
+     原型控制条
+     ════════════════════════════════════════════════════════════ -->
+<div class="proto-bar">
+  <div class="proto-title">原型 · <strong>SoC Verify UI/Theme Optimization</strong> · 三套主题 × UI 结构精炼</div>
+  <div class="proto-controls">
+    <span class="label">主题</span>
+    <button class="theme-pill" data-theme-target="drafting">Drafting · 浅</button>
+    <button class="theme-pill active" data-theme-target="bench">Bench · 深·暖</button>
+    <button class="theme-pill" data-theme-target="slate">Slate · 深·冷</button>
+    <span class="sep"></span>
+    <button class="view-toggle active" data-view="app">完整 AppShell</button>
+    <button class="view-toggle" data-view="compare">Before / After 对比</button>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════
+     完整 AppShell 视图
+     ════════════════════════════════════════════════════════════ -->
+<div class="appshell" id="appshell">
+
+  <!-- TitleBar：去除 4 条分隔条，间距分组，中央面包屑 -->
+  <header class="titlebar">
+    <div class="titlebar-logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="4" y="4" width="16" height="16" rx="2"/>
+        <rect x="9" y="9" width="6" height="6"/>
+        <path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/>
+      </svg>
+      <span class="name">SoC Verify</span>
+    </div>
+
+    <!-- 中央面包屑：项目 / 子系统 / 用例 + 回归徽章 -->
+    <div class="titlebar-breadcrumb">
+      <span class="crumb clickable">chipnorth</span>
+      <span class="sep">›</span>
+      <span class="crumb clickable">alu_core</span>
+      <span class="sep">›</span>
+      <span class="crumb current">alu_add_test</span>
+      <span class="reg-badge">REG · 12 RUNNING</span>
+    </div>
+
+    <!-- 右侧动作组：间距分组，无分隔条 -->
+    <div class="titlebar-actions">
+      <div class="group">
+        <button class="tb-btn" title="收起左栏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg></button>
+        <button class="tb-btn" title="收起右栏"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></button>
+        <button class="tb-btn" title="命令面板"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></button>
+      </div>
+      <div class="group">
+        <button class="tb-btn" title="设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+      </div>
+      <div class="group">
+        <button class="tb-btn" title="最小化"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></button>
+        <button class="tb-btn" title="最大化"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/></svg></button>
+        <button class="tb-btn close" title="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 三栏主工作区 -->
+  <div class="workspace">
+
+    <!-- LeftRail -->
+    <aside class="leftrail">
+      <div class="rail-header">
+        <button class="project-switcher">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+          <span class="name">chipnorth</span>
+          <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+      </div>
+
+      <div class="rail-tabs">
+        <button class="rail-tab active">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg>
+          文件
+        </button>
+        <button class="rail-tab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/></svg>
+          子系统
+        </button>
+        <button class="rail-tab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+          概览
+        </button>
+      </div>
+
+      <div class="rail-content">
+        <div class="section-label">
+          文件树
+          <span class="count">42</span>
+        </div>
+        <div class="file-tree">
+          <div class="file-row"><span class="indent"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg><span class="name">rtl</span></div>
+          <div class="file-row"><span class="indent" style="width:24px"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg><span class="name">alu_core</span></div>
+          <div class="file-row active"><span class="indent" style="width:36px"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg><span class="name">alu_reg.sv</span><span class="badge">1.2k</span></div>
+          <div class="file-row"><span class="indent" style="width:36px"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg><span class="name">alu_adder.sv</span></div>
+          <div class="file-row"><span class="indent" style="width:36px"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg><span class="name">alu_decoder.sv</span></div>
+          <div class="file-row"><span class="indent" style="width:24px"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg><span class="name">tb</span></div>
+          <div class="file-row"><span class="indent" style="width:36px"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg><span class="name">alu_tb.sv</span></div>
+          <div class="file-row"><span class="indent"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg><span class="name">sim</span></div>
+          <div class="file-row"><span class="indent" style="width:24px"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg><span class="name">Makefile</span></div>
+          <div class="file-row"><span class="indent" style="width:24px"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg><span class="name">filelist.f</span></div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- CenterArea -->
+    <main class="centerarea">
+      <!-- Tab bar：左侧页签 + 右侧 3 主要动作（带文字） -->
+      <div class="tabbar">
+        <div class="tabbar-tabs">
+          <div class="tab active">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg>
+            alu_reg.sv
+            <span class="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+          </div>
+          <div class="tab">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            term · bash
+            <span class="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+          </div>
+          <div class="tab">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></svg>
+            仿真历史
+            <span class="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+          </div>
+        </div>
+        <div class="tabbar-actions">
+          <button class="tab-action" title="仪表盘">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+            仪表盘
+          </button>
+          <button class="tab-action" title="覆盖率">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="13" width="3" height="5"/><rect x="12" y="9" width="3" height="9"/><rect x="17" y="5" width="3" height="13"/></svg>
+            覆盖率
+          </button>
+          <button class="tab-action active" title="运行中">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+            运行中
+            <span class="badge">12</span>
+          </button>
+          <button class="tab-action" title="更多">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="center-content">
+        <!-- 仪表盘：内联统计行（替换 3 张同质卡片） -->
+        <div class="stat-row">
+          <div class="stat"><span class="num accent">12</span><span class="label">子系统</span></div>
+          <div class="sep"></div>
+          <div class="stat"><span class="num">342</span><span class="label">用例</span></div>
+          <div class="sep"></div>
+          <div class="stat"><span class="num pass">87.3%</span><span class="label">通过率</span></div>
+          <div class="sep"></div>
+          <div class="stat"><span class="num">94.1%</span><span class="label">覆盖率</span></div>
+        </div>
+
+        <!-- 仿真历史表（高密度，状态用圆点+文字） -->
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>用例 <span class="sort-arrow">▼</span></th>
+              <th>子系统</th>
+              <th>状态</th>
+              <th class="sortable">耗时</th>
+              <th class="sortable">开始时间 <span class="sort-arrow">▼</span></th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="selected">
+              <td class="case">alu_add_test</td>
+              <td class="subsys">alu_core</td>
+              <td><span class="status-cell"><span class="status-dot running"></span><span class="status-text running">running</span></span></td>
+              <td class="duration">12.4s</td>
+              <td class="time">14:32:08</td>
+              <td></td>
+            </tr>
+            <tr>
+              <td class="case">alu_sub_test</td>
+              <td class="subsys">alu_core</td>
+              <td><span class="status-cell"><span class="status-dot pass"></span><span class="status-text pass">pass</span></span></td>
+              <td class="duration">8.1s</td>
+              <td class="time">14:32:01</td>
+              <td></td>
+            </tr>
+            <tr>
+              <td class="case">alu_and_test</td>
+              <td class="subsys">alu_core</td>
+              <td><span class="status-cell"><span class="status-dot fail"></span><span class="status-text fail">fail</span></span></td>
+              <td class="duration">15.7s</td>
+              <td class="time">14:31:44</td>
+              <td><button class="row-action">查看错误</button></td>
+            </tr>
+            <tr>
+              <td class="case">alu_or_test</td>
+              <td class="subsys">alu_core</td>
+              <td><span class="status-cell"><span class="status-dot pass"></span><span class="status-text pass">pass</span></span></td>
+              <td class="duration">7.9s</td>
+              <td class="time">14:31:22</td>
+              <td></td>
+            </tr>
+            <tr>
+              <td class="case">alu_xor_test</td>
+              <td class="subsys">alu_core</td>
+              <td><span class="status-cell"><span class="status-dot aborted"></span><span class="status-text aborted">aborted</span></span></td>
+              <td class="duration">3.2s</td>
+              <td class="time">14:30:55</td>
+              <td></td>
+            </tr>
+            <tr>
+              <td class="case">alu_shift_left_test</td>
+              <td class="subsys">alu_core</td>
+              <td><span class="status-cell"><span class="status-dot pass"></span><span class="status-text pass">pass</span></span></td>
+              <td class="duration">9.4s</td>
+              <td class="time">14:30:31</td>
+              <td></td>
+            </tr>
+            <tr>
+              <td class="case">alu_shift_right_test</td>
+              <td class="subsys">alu_core</td>
+              <td><span class="status-cell"><span class="status-dot pass"></span><span class="status-text pass">pass</span></span></td>
+              <td class="duration">9.1s</td>
+              <td class="time">14:30:12</td>
+              <td></td>
+            </tr>
+            <tr>
+              <td class="case">mul_basic_test</td>
+              <td class="subsys">mul_unit</td>
+              <td><span class="status-cell"><span class="status-dot pending"></span><span class="status-text">pending</span></span></td>
+              <td class="duration">—</td>
+              <td class="time">14:29:50</td>
+              <td></td>
+            </tr>
+            <tr>
+              <td class="case">mul_signed_test</td>
+              <td class="subsys">mul_unit</td>
+              <td><span class="status-cell"><span class="status-dot fail"></span><span class="status-text fail">fail</span></span></td>
+              <td class="duration">22.8s</td>
+              <td class="time">14:29:33</td>
+              <td><button class="row-action">查看错误</button></td>
+            </tr>
+            <tr>
+              <td class="case">mul_overflow_test</td>
+              <td class="subsys">mul_unit</td>
+              <td><span class="status-cell"><span class="status-dot pass"></span><span class="status-text pass">pass</span></span></td>
+              <td class="duration">18.2s</td>
+              <td class="time">14:28:58</td>
+              <td></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+
+    <!-- RightPanel -->
+    <aside class="rightpanel">
+      <!-- 会话标签 -->
+      <div class="session-tabs">
+        <div class="scroll">
+          <div class="session-tab active">
+            <span class="name">ALU 验证规划</span>
+            <span class="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+          </div>
+          <div class="session-tab">
+            <div class="spinner"></div>
+            <span class="name">覆盖率空洞分析</span>
+            <span class="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+          </div>
+          <div class="session-tab">
+            <span class="name">回归策略</span>
+            <span class="close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="tb-btn" title="新建会话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg></button>
+          <button class="tb-btn" title="历史会话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/></svg></button>
+        </div>
+      </div>
+
+      <!-- 消息列表 -->
+      <div class="messages">
+        <div class="msg-user">分析 alu_core 子系统的覆盖率报告，找出未覆盖的分支和缺失的 directed test。</div>
+
+        <div class="msg-assistant">
+          <div class="role">assistant</div>
+          <div class="body">
+            我已读取 <code>coverage.xml</code> 和 <code>alu_reg.sv</code>。当前 alu_core 子系统分支覆盖率 87.3%，主要空洞集中在三处：
+            <br><br>
+            1. <code>alu_decoder.sv:42</code> 的 overflow 路径仅 1 次命中<br>
+            2. <code>alu_adder.sv:18</code> 的 carry_chain 在 signed 模式下未触发<br>
+            3. <code>alu_reg.sv:67</code> 的 reset 与 write 同时到达的边界条件未覆盖
+            <br><br>
+            建议补 3 条 directed test，我先起草测试计划<span class="cursor"></span>
+          </div>
+        </div>
+
+        <!-- 工具调用卡片 -->
+        <div class="tool-card">
+          <div class="tool-card-header">
+            <span class="dot running"></span>
+            <span class="name">run_simulation</span>
+            <span class="args">--case alu_overflow_edge_test --waves</span>
+            <span class="duration">4.2s</span>
+          </div>
+        </div>
+
+        <div class="tool-card">
+          <div class="tool-card-header">
+            <span class="dot"></span>
+            <span class="name">get_coverage</span>
+            <span class="args">--subsys alu_core --type branch</span>
+            <span class="duration">0.8s</span>
+          </div>
+          <div class="tool-card-body">branch: 87.3% (412/472)
+toggle: 91.2% (298/326)
+fsm: 100.0% (24/24)</div>
+        </div>
+      </div>
+
+      <!-- 输入框 -->
+      <div class="composer">
+        <div class="composer-chips">
+          <span class="chip">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .962 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.962 0z"/></svg>
+            coverage-analyzer
+            <span class="x"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+          </span>
+          <span class="chip file">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v5h5"/></svg>
+            coverage.xml
+            <span class="x"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+          </span>
+        </div>
+        <div class="composer-input">
+          <textarea placeholder="输入消息…  (/ 加载技能, @ 添加上下文)"></textarea>
+        </div>
+        <div class="composer-footer">
+          <div class="composer-tools">
+            <button class="tool-btn" title="附加图片"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+            <button class="model-label">GLM-4.6 ▾</button>
+          </div>
+          <span class="composer-hint">Enter 发送 · Shift+Enter 换行</span>
+          <button class="send-btn">
+            发送
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>
+          </button>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- OptionDock -->
+  <div class="optiondock">
+    <div class="od-header">
+      <button class="od-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5v14"/></svg>
+        仿真 Option
+        <span class="count">12</span>
+      </button>
+      <div class="od-actions">
+        <button class="preset-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg>
+          预设
+        </button>
+        <input class="preset-input" placeholder="预设名称">
+        <button class="save-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4h7"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="od-body">
+      <div class="od-group-label">基础参数</div>
+      <div class="od-field">
+        <label>top_module</label>
+        <input type="text" value="alu_top">
+      </div>
+      <div class="od-field">
+        <label>timescale</label>
+        <input type="text" value="1ns/1ps">
+      </div>
+      <div class="od-field toggle">
+        <label>dump_waves</label>
+        <div class="toggle-sw on"></div>
+      </div>
+      <div class="od-field toggle">
+        <label>debug_mode</label>
+        <div class="toggle-sw"></div>
+      </div>
+
+      <div class="od-group-label">仿真参数</div>
+      <div class="od-field">
+        <label>seed</label>
+        <input type="number" value="42">
+      </div>
+      <div class="od-field">
+        <label>timeout_ms</label>
+        <input type="number" value="10000">
+      </div>
+      <div class="od-field">
+        <label>simulator</label>
+        <select>
+          <option>vcs</option>
+          <option>xrun</option>
+          <option>verilator</option>
+        </select>
+      </div>
+      <div class="od-field">
+        <label>opt_level</label>
+        <select>
+          <option>-O2</option>
+          <option>-O0</option>
+          <option>-O3</option>
+        </select>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════
+     Before / After 对比视图
+     ════════════════════════════════════════════════════════════ -->
+<div class="compare-view" id="compareView">
+
+  <!-- 项目概览：3 同质卡片 → 内联统计行 -->
+  <div class="compare-section">
+    <h2>项目概览：3 同质卡片 → 内联统计行</h2>
+    <div class="desc">原 LeftRail 概览页用 3 张完全相同的卡片（子系统数 / 用例数 / 通过率），每张都是"大数字 + 小标签"的 hero-metric 模板。改为一行内联统计，靠分隔线和字号对比建立层级，节省 60% 垂直空间。</div>
+    <div class="compare-grid">
+      <div class="compare-card">
+        <div class="label before">Before · 同质卡片网格</div>
+        <div class="body">
+          <div class="before-overview">
+            <div class="before-stat-card"><div class="l">子系统</div><div class="n">12</div></div>
+            <div class="before-stat-card"><div class="l">用例总数</div><div class="n">342</div></div>
+            <div class="before-stat-card"><div class="l">通过率</div><div class="n">87.3%</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="compare-card">
+        <div class="label after">After · 内联统计行</div>
+        <div class="body">
+          <div class="after-stat-row">
+            <div class="stat"><span class="num accent">12</span><span class="label">子系统</span></div>
+            <div class="vsep"></div>
+            <div class="stat"><span class="num">342</span><span class="label">用例</span></div>
+            <div class="vsep"></div>
+            <div class="stat"><span class="num pass">87.3%</span><span class="label">通过率</span></div>
+            <div class="vsep"></div>
+            <div class="stat"><span class="num">94.1%</span><span class="label">覆盖率</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 状态徽章：色块胶囊 → 圆点 + 文字 -->
+  <div class="compare-section">
+    <h2>状态徽章：硬编码色块胶囊 → 主题感知圆点 + 文字</h2>
+    <div class="desc">原状态徽章 6 处硬编码 Tailwind 默认值 <code>bg-green-500/15 text-green-500</code>，主题切换不跟随，且是典型 AI slop 配色。改为 <code>--status-*</code> 语义变量，主题切换自动跟随；视觉上用 7px 圆点 + 状态色文字，比色块胶囊更安静。</div>
+    <div class="compare-grid">
+      <div class="compare-card">
+        <div class="label before">Before · 硬编码色块</div>
+        <div class="body">
+          <div class="before-badges">
+            <span class="before-badge pass">pass</span>
+            <span class="before-badge fail">fail</span>
+            <span class="before-badge running">running</span>
+            <span class="before-badge aborted">aborted</span>
+          </div>
+        </div>
+      </div>
+      <div class="compare-card">
+        <div class="label after">After · 圆点 + 语义文字</div>
+        <div class="body">
+          <div class="after-badges">
+            <span class="after-badge"><span class="dot pass"></span><span class="text pass">pass</span></span>
+            <span class="after-badge"><span class="dot fail"></span><span class="text fail">fail</span></span>
+            <span class="after-badge"><span class="dot running"></span><span class="text running">running</span></span>
+            <span class="after-badge"><span class="dot aborted"></span><span class="text aborted">aborted</span></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab bar 右侧：12 图标 → 3 文字动作 + 溢出 -->
+  <div class="compare-section">
+    <h2>Tab bar 右侧：12 图标汤 → 3 文字动作 + 更多</h2>
+    <div class="desc">原 CenterArea 右侧堆 12 个图标按钮（仪表盘/覆盖率/回归/SCM/TO/运行/历史…），无文字标签，超出 7±2 记忆容量。改为 3 个主要动作（带文字）+ 一个"更多"溢出菜单承载低频项。</div>
+    <div class="compare-grid">
+      <div class="compare-card">
+        <div class="label before">Before · 12 图标汤</div>
+        <div class="body">
+          <div class="before-iconsoup">
+            <div class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg></div>
+            <div class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="13" width="3" height="5"/></svg></div>
+            <div class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></div>
+            <div class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></div>
+            <div class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+            <div class="icon-btn" style="position:relative"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg><span class="badge">12</span></div>
+            <div class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v5h5"/><path d="M3.05 13A9 9 0 1 0 6 5.3L3 8"/><path d="M12 7v5l4 2"/></svg></div>
+          </div>
+        </div>
+      </div>
+      <div class="compare-card">
+        <div class="label after">After · 3 主要动作 + 更多</div>
+        <div class="body">
+          <div class="after-tabactions">
+            <button class="ta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>仪表盘</button>
+            <button class="ta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><rect x="7" y="13" width="3" height="5"/><rect x="12" y="9" width="3" height="9"/><rect x="17" y="5" width="3" height="13"/></svg>覆盖率</button>
+            <button class="ta active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>运行中<span class="badge">12</span></button>
+            <button class="ta"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TitleBar：4 分隔条 → 间距分组 + 面包屑 -->
+  <div class="compare-section">
+    <h2>TitleBar：4 条分隔条 → 间距分组 + 中央面包屑</h2>
+    <div class="desc">原 TitleBar 用 4 条 <code>h-4 w-px</code> 分隔条把 Logo / 左栏 / 右栏 / 设置 / 窗控 等按钮分组，视觉噪音。改为纯间距分组，中央放项目面包屑（chipnorth › alu_core › alu_add_test）+ 回归徽章，让用户始终知道自己在看什么。</div>
+    <div class="compare-grid">
+      <div class="compare-card">
+        <div class="label before">Before · 4 条分隔条</div>
+        <div class="body" style="padding:0">
+          <div class="before-titlebar">
+            <span class="logo">SoC Verify</span>
+            <span class="sep"></span>
+            <span class="tb-btn-b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg></span>
+            <span class="tb-btn-b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></span>
+            <span class="spacer"></span>
+            <span class="tb-btn-b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></span>
+            <span class="sep"></span>
+            <span class="tb-btn-b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></span>
+            <span class="sep"></span>
+            <span class="tb-btn-b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+            <span class="sep"></span>
+            <span class="tb-btn-b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></span>
+            <span class="tb-btn-b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/></svg></span>
+            <span class="tb-btn-b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+          </div>
+        </div>
+      </div>
+      <div class="compare-card">
+        <div class="label after">After · 间距分组 + 面包屑</div>
+        <div class="body" style="padding:0">
+          <div class="after-titlebar">
+            <div class="logo">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg>
+              <span class="name">SoC Verify</span>
+            </div>
+            <div class="breadcrumb">
+              <span class="crumb">chipnorth</span>
+              <span class="sep">›</span>
+              <span class="crumb">alu_core</span>
+              <span class="sep">›</span>
+              <span class="crumb current">alu_add_test</span>
+            </div>
+            <div class="group">
+              <span class="tb-btn-a"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg></span>
+              <span class="tb-btn-a"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg></span>
+            </div>
+            <div class="group">
+              <span class="tb-btn-a"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></span>
+            </div>
+            <div class="group">
+              <span class="tb-btn-a"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"/></svg></span>
+              <span class="tb-btn-a"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/></svg></span>
+              <span class="tb-btn-a"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 主题对比 -->
+  <div class="compare-section">
+    <h2>三套主题色卡</h2>
+    <div class="desc">三套主题各解决一个反射弧：Drafting 反"EDA = 深蓝"反射，浅纸 + 紫梅墨；Bench 反"工程师工具 = VS Code 深蓝"反射，暖深 + 磷光绿；Slate 反"深色 = 蓝强调"反射，冷石板 + 铜色。所有色值 OKLCH，无纯白纯黑。点击上方主题按钮切换查看。</div>
+    <div class="compare-grid" style="grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div class="compare-card">
+        <div class="label" style="color:var(--accent)">Drafting · 浅</div>
+        <div class="body" style="display:flex;flex-direction:column;gap:8px;font-family:var(--mono);font-size:11px">
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:3px;background:oklch(0.97 0.006 75);border:1px solid var(--border)"></span>bg · 暖纸白</div>
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:3px;background:oklch(0.22 0.012 75)"></span>fg · 暖墨黑</div>
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:3px;background:oklch(0.42 0.13 285)"></span>accent · 深紫梅</div>
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:3px;background:oklch(0.50 0.13 145)"></span>pass · 森林绿</div>
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:3px;background:oklch(0.50 0.16 28)"></span>fail · 砖红</div>
+        </div>
+      </div>
+      <div class="compare-card">
+        <div class="label" style="color:var(--accent)">Bench · 深·暖</div>
+        <div class="body" style="display:flex;flex-direction:column;gap:8px;font-family:var(--mono);font-size:11px">
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:3px;background:oklch(0.18 0.008 60);border:1px solid var(--border)"></span>bg · 暖深</div>
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:3px;background:oklch(0.92 0.006 60)"></span>fg · 暖白</div>
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:3px;background:oklch(0.78 0.15 145)"></span>accent · 磷光绿</div>
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:3px;background:oklch(0.65 0.18 25)"></span>fail · 红</div>
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:3px;background:oklch(0.72 0.13 195)"></span>run · 青</div>
+        </div>
+      </div>
+      <div class="compare-card">
+        <div class="label" style="color:var(--accent)">Slate · 深·冷</div>
+        <div class="body" style="display:flex;flex-direction:column;gap:8px;font-family:var(--mono);font-size:11px">
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:3px;background:oklch(0.20 0.006 220);border:1px solid var(--border)"></span>bg · 冷石板</div>
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:3px;background:oklch(0.93 0.004 220)"></span>fg · 冷白</div>
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:3px;background:oklch(0.70 0.13 55)"></span>accent · 铜</div>
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:3px;background:oklch(0.70 0.14 145)"></span>pass · 鼠尾草</div>
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:14px;height:14px;border-radius:3px;background:oklch(0.65 0.12 285)"></span>abort · 薰衣草</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// 主题切换
+document.querySelectorAll('.theme-pill').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const target = btn.dataset.themeTarget;
+    document.documentElement.dataset.theme = target;
+    document.querySelectorAll('.theme-pill').forEach(b => b.classList.toggle('active', b === btn));
+  });
+});
+
+// 视图切换
+document.querySelectorAll('.view-toggle').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const view = btn.dataset.view;
+    document.querySelectorAll('.view-toggle').forEach(b => b.classList.toggle('active', b === btn));
+    document.getElementById('appshell').classList.toggle('hidden', view !== 'app');
+    document.getElementById('compareView').classList.toggle('active', view === 'compare');
+  });
+});
+
+// 模拟历史行点击选中
+document.querySelectorAll('.history-table tbody tr').forEach(tr => {
+  tr.addEventListener('click', () => {
+    document.querySelectorAll('.history-table tbody tr').forEach(t => t.classList.remove('selected'));
+    tr.classList.add('selected');
+  });
+});
+
+// 文件行点击
+document.querySelectorAll('.file-row').forEach(row => {
+  row.addEventListener('click', () => {
+    document.querySelectorAll('.file-row').forEach(r => r.classList.remove('active'));
+    row.classList.add('active');
+  });
+});
+
+// LeftRail tabs
+document.querySelectorAll('.rail-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.rail-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+  });
+});
+
+// Top tabs
+document.querySelectorAll('.tabbar-tabs .tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tabbar-tabs .tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+  });
+});
+
+// Tab actions
+document.querySelectorAll('.tab-action').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-action').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  });
+});
+
+// Session tabs
+document.querySelectorAll('.session-tab').forEach(tab => {
+  tab.addEventListener('click', (e) => {
+    if (e.target.closest('.close')) return;
+    document.querySelectorAll('.session-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+  });
+});
+
+// Toggle switches
+document.querySelectorAll('.toggle-sw').forEach(sw => {
+  sw.addEventListener('click', () => sw.classList.toggle('on'));
+});
+
+// Tool card collapse
+document.querySelectorAll('.tool-card-header').forEach(h => {
+  h.addEventListener('click', () => {
+    const body = h.nextElementSibling;
+    if (body && body.classList.contains('tool-card-body')) {
+      body.style.display = body.style.display === 'none' ? 'block' : 'none';
+    }
+  });
+});
+</script>
+
+</body>
+</html>
