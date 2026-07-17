@@ -40,7 +40,7 @@ export interface SelectedSkill {
   name: string;
   description: string;
   filePath: string;
-  source: 'project' | 'user';
+  source: 'project' | 'user' | 'builtin';
 }
 
 export interface ContextFile {
