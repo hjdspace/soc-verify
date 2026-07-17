@@ -6,6 +6,53 @@
 
 ---
 
+## [0.1.3](https://github.com/hjdspace/soc-verify/compare/v0.1.2...v0.1.3) (2026-07-17)
+
+### Features
+
+* **skills:** 新增内置技能/扩展系统，支持内置技能目录发现与加载（built-in extension directory、additionalExtensionPaths、SelectedSkill builtin source、electron-builder 内置扩展打包）
+* **multimodal:** 新增多模态图片处理，支持 FileTree 图片拖拽与 LLM 图片输入（handlePrompt 图片处理、CSP 图片源放行）
+* **agent:** 新增思考过程展示（ThinkingBlock 组件、assistant 消息 reasoning 内容分离提取）
+* **agent:** 新增模型输入覆盖配置（buildModelInputOverrideConfig）
+* **ui:** 新增流式光标组件与动画（memoized StreamingCursor、cursor blink animation）
+* **perf:** 实现消息更新与持久化节流，优化大流量会话性能
+* **project:** 新增 Git 忽略文件处理，FileTree 标记 gitIgnored 文件
+* **session:** 增强会话事件日志与摘要能力
+* **skills:** 新增 SOC 验证环境生成技能（SKILL.md、run_extract_mod_io.sh、env.json.template）
+* **app:** 新增应用图标与系统托盘支持
+
+### Bug Fixes
+
+* **build:** 修复 Windows EPERM 重命名错误，增加重试机制
+* **build:** 禁用 electron-builder 自动发布
+* **build:** 移除硬编码 electronDist，补充 author 字段
+* **security:** 调整 CSP 策略以支持图片源
+* **project:** 从忽略模式中移除 `.socverify`
+
+### Refactor
+
+* **runner:** 重构 runner 图片处理逻辑
+* **diff-review:** 重构 DiffReviewView 使用 displayType 区分行类型
+* **agent:** 优化 handlePrompt 图片处理流程
+
+### Documentation
+
+* 新增 CSV 格式、RTL 规范、技能错误码参考、配置解析、SOC 命令模板等文档
+* 更新 README，补充新功能与 native addon 提取说明
+
+### Tests
+
+* 新增图片透传、模型输入覆盖配置、OpenAI 兼容模型、会话消息事件处理等测试
+
+### Build
+
+* 新增 native addon 下载与解压脚本，打包前自动获取依赖
+* 新增 omp 版本读取与缓存步骤
+* node-pty 加入 asarUnpack
+* 配置国内镜像加速 Electron 下载
+
+---
+
 ## [0.1.2](https://github.com/hjdspace/soc-verify/compare/v0.1.1...v0.1.2) (2026-07-16)
 
 ### Features
