@@ -58,6 +58,8 @@ interface InitConfig {
 		parameters: Record<string, unknown>;
 		approval?: string;
 	}>;
+	/** 额外的 extension 包路径（每个包的 skills/ 和 agents/ 子目录会被 omp 扫描） */
+	additionalExtensionPaths?: string[];
 }
 
 type Command =
@@ -257,6 +259,9 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 		enableMCP: config.enableMCP ?? true,
 		autoApprove: true,
 		hasUI: false,
+		// Inject built-in extension packages (skills/ and agents/ subdirectories
+		// are auto-discovered by the omp-plugins provider).
+		additionalExtensionPaths: config.additionalExtensionPaths ?? [],
 	};
 
 	// Set model pattern if provided
