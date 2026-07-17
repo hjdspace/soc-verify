@@ -24,7 +24,6 @@ const PLUGIN_CONFIG_FILE = 'plugins.json';
 const DEFAULT_IGNORE_PATTERNS = [
   'node_modules',
   '.git',
-  '.socverify',
   'out',
   'dist',
   'build',
