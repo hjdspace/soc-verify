@@ -6,6 +6,25 @@
 
 ---
 
+## [0.1.4](https://github.com/hjdspace/soc-verify/compare/v0.1.3...v0.1.4) (2026-07-19)
+
+### Features
+
+* **context:** 添加文件/文件夹上下文选择功能
+* **option-dock:** 优化预设管理功能，添加提示与预览效果
+* **app:** 新增关闭行为持久化与托盘菜单重置选项
+* **ipc, simulation:** 新增全套 IPC RPC 路由与仿真管理重构
+* **session, message:** 用户消息新增技能 chip 展示
+* **agent, credentials:** 新增运行时模型切换与多 provider 凭据支持
+
+### Refactor
+
+* **ui:** 优化 UI 样式与标题栏功能，新增测试用例
+* **theme:** 统一替换硬编码颜色为主题变量，重构主题系统
+* **renderer:** 深化前端工作流模块
+
+---
+
 ## [0.1.3](https://github.com/hjdspace/soc-verify/compare/v0.1.2...v0.1.3) (2026-07-17)
 
 ### Features

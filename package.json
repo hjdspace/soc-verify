@@ -1,6 +1,6 @@
 {
   "name": "soc-verify",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "AI Agent 驱动的 SoC 验证一站式管理平台",
   "author": "hjdspace",
   "main": "./out/main/index.cjs",
