@@ -11,6 +11,27 @@ const SIM_HISTORY_FILE = 'sim-history.json';
 const MAX_HISTORY_ENTRIES = 200;
 const POLL_INTERVAL_MS = 2000;
 
+/**
+ * Opaque handle returned by a PollerFactory. The only operation is `stop()`,
+ * which cancels the recurring callback. This abstraction lets tests drive
+ * polling synchronously instead of waiting for real `setInterval` ticks.
+ */
+export type PollerHandle = { stop: () => void };
+
+/**
+ * Factory that schedules `callback` to run every `intervalMs` milliseconds.
+ *
+ * The default implementation wraps `setInterval`; tests can inject a fake
+ * that fires callbacks on demand.
+ */
+export type PollerFactory = (callback: () => void, intervalMs: number) => PollerHandle;
+
+const defaultPollerFactory: PollerFactory = (callback, intervalMs) => {
+  const timer = setInterval(callback, intervalMs);
+  timer.unref();
+  return { stop: () => clearInterval(timer) };
+};
+
 export interface SimulationRunRecord {
   runId: string;
   projectId: string;
@@ -25,6 +46,8 @@ export interface SimulationManagerOptions {
   projectRoot: string;
   projectId: string;
   simulationAdapter: PluginBackedSimulation;
+  /** Optional override for the polling mechanism (defaults to setInterval). */
+  pollerFactory?: PollerFactory;
 }
 
 /**
@@ -36,14 +59,16 @@ export class SimulationManager extends EventEmitter {
   private projectId: string;
   private adapter: PluginBackedSimulation;
   private activeRuns = new Map<string, SimulationRunRecord>();
-  private pollTimers = new Map<string, NodeJS.Timeout>();
+  private pollTimers = new Map<string, PollerHandle>();
   private history: SimulationHistoryEntry[] = [];
+  private readonly pollerFactory: PollerFactory;
 
   constructor(opts: SimulationManagerOptions) {
     super();
     this.projectRoot = opts.projectRoot;
     this.projectId = opts.projectId;
     this.adapter = opts.simulationAdapter;
+    this.pollerFactory = opts.pollerFactory ?? defaultPollerFactory;
   }
 
   async run(opts: SimulationRunOptions): Promise<SimulationRunHandle> {
@@ -110,11 +135,10 @@ export class SimulationManager extends EventEmitter {
   // ─── Status polling ──────────────────────────────────
 
   private startPolling(runId: string): void {
-    const timer = setInterval(() => {
+    const handle = this.pollerFactory(() => {
       void this.pollStatus(runId);
     }, POLL_INTERVAL_MS);
-    timer.unref();
-    this.pollTimers.set(runId, timer);
+    this.pollTimers.set(runId, handle);
   }
 
   private async pollStatus(runId: string): Promise<void> {
@@ -153,9 +177,9 @@ export class SimulationManager extends EventEmitter {
   }
 
   private finalizeRun(runId: string): void {
-    const timer = this.pollTimers.get(runId);
-    if (timer) {
-      clearInterval(timer);
+    const handle = this.pollTimers.get(runId);
+    if (handle) {
+      handle.stop();
       this.pollTimers.delete(runId);
     }
 
@@ -244,8 +268,8 @@ export class SimulationManager extends EventEmitter {
   }
 
   destroy(): void {
-    for (const [, timer] of this.pollTimers) {
-      clearInterval(timer);
+    for (const [, handle] of this.pollTimers) {
+      handle.stop();
     }
     this.pollTimers.clear();
     this.activeRuns.clear();

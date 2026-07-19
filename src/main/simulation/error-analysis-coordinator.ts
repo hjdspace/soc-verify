@@ -28,6 +28,22 @@ import { PluginBackedSimulation } from '../host/plugin-discovery';
 import { PluginBackedCoverage } from '../host/plugin-discovery';
 import { HostToolsRegistry } from '../host/host-tools';
 import { runsimRetryToolDefinition, executeRunsimRetry } from './runsim-retry-tool';
+
+/**
+ * Dependencies required by the coordinator.
+ *
+ * All six are module-level singletons in production, but accepting them as
+ * constructor parameters makes the coordinator unit-testable without spinning
+ * up the entire application.
+ */
+type CoordinatorDeps = {
+  logAnalyzer: typeof logAnalyzer;
+  simulationRegistry: typeof simulationRegistry;
+  simTerminalLinker: typeof simTerminalLinker;
+  sessionManager: typeof sessionManager;
+  pluginLoader: typeof pluginLoader;
+  credentialManager: typeof credentialManager;
+};
 import type {
   ErrorType,
   ErrorAnalysisSession,
@@ -88,9 +104,18 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
   /** caseName → retryCount, tracks retry attempts per case */
   private retryTracker = new Map<string, number>();
   private listenersRegistered = false;
+  private readonly deps: CoordinatorDeps;
 
-  constructor() {
+  constructor(deps?: Partial<CoordinatorDeps>) {
     super();
+    this.deps = {
+      logAnalyzer: deps?.logAnalyzer ?? logAnalyzer,
+      simulationRegistry: deps?.simulationRegistry ?? simulationRegistry,
+      simTerminalLinker: deps?.simTerminalLinker ?? simTerminalLinker,
+      sessionManager: deps?.sessionManager ?? sessionManager,
+      pluginLoader: deps?.pluginLoader ?? pluginLoader,
+      credentialManager: deps?.credentialManager ?? credentialManager,
+    };
   }
 
   /**
@@ -102,7 +127,7 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
     this.listenersRegistered = true;
 
     // Listen to background simulation completions
-    simulationRegistry.on('run:completed', (record: SimulationRunRecord) => {
+    this.deps.simulationRegistry.on('run:completed', (record: SimulationRunRecord) => {
       void this.handleRunCompletion({
         runId: record.runId,
         projectId: record.projectId,
@@ -117,7 +142,7 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
     });
 
     // Listen to terminal simulation completions
-    simTerminalLinker.on('run:completed', (run: TerminalSimRun) => {
+    this.deps.simTerminalLinker.on('run:completed', (run: TerminalSimRun) => {
       void this.handleRunCompletion({
         runId: run.runId,
         projectId: run.projectId,
@@ -174,14 +199,14 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
     }
 
     // Ensure plugins are loaded
-    const loadResults = pluginLoader.getLoadResults(projectRoot);
+    const loadResults = this.deps.pluginLoader.getLoadResults(projectRoot);
     if (loadResults.length === 0) {
-      await pluginLoader.loadPlugins(projectRoot);
+      await this.deps.pluginLoader.loadPlugins(projectRoot);
     }
 
     // Step 1: Determine error type
     const { errorType, errorContext, compileLogPath, simLogPath } =
-      logAnalyzer.analyzeErrors(caseName, projectRoot);
+      this.deps.logAnalyzer.analyzeErrors(caseName, projectRoot);
 
     console.log(`[error-analysis] errorType=${errorType}, compileLog=${compileLogPath}, simLog=${simLogPath}`);
 
@@ -255,22 +280,22 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
         : SIM_ERROR_SYSTEM_PROMPT;
 
     // Set up discovery and simulation adapters
-    const registry = pluginLoader.getRegistry(cwd);
+    const registry = this.deps.pluginLoader.getRegistry(cwd);
     const discovery = new PluginBackedDiscovery(cwd, registry);
     const simulation = new PluginBackedSimulation(registry);
     const coverage = new PluginBackedCoverage(cwd, registry);
 
     // Load credentials
-    const credEnv = await credentialManager.buildEnvForAgent();
-    const defaultCred = await credentialManager.getDefaultCredential();
+    const credEnv = await this.deps.credentialManager.buildEnvForAgent();
+    const defaultCred = await this.deps.credentialManager.getDefaultCredential();
     const provider = defaultCred
-      ? credentialManager.mapProviderForAgent(defaultCred.providerId)
+      ? this.deps.credentialManager.mapProviderForAgent(defaultCred.providerId)
       : undefined;
     const apiKey = defaultCred?.apiKey;
     const baseUrl = defaultCred?.baseUrl;
 
     // Create the session
-    const sessionId = await sessionManager.createSession({
+    const sessionId = await this.deps.sessionManager.createSession({
       projectId,
       cwd,
       provider,
@@ -285,7 +310,7 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
     });
 
     // Register runsim_retry tool for compile error sessions
-    const sessionEntry = sessionManager.getSession(sessionId);
+    const sessionEntry = this.deps.sessionManager.getSession(sessionId);
     if (sessionEntry && errorType === 'compile_error') {
       sessionEntry.hostTools.registerCustom(
         runsimRetryToolDefinition.name,
@@ -322,7 +347,7 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
     });
 
     // Send the error context as the first message
-    const client = sessionManager.getClient(sessionId);
+    const client = this.deps.sessionManager.getClient(sessionId);
     if (client) {
       await client.prompt(promptMessage);
     }
@@ -461,7 +486,7 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
     const projectRoot = params.cwd ?? this.resolveProjectRoot(params.projectId);
     if (!projectRoot) return null;
 
-    const { errorType, errorContext } = logAnalyzer.analyzeErrors(
+    const { errorType, errorContext } = this.deps.logAnalyzer.analyzeErrors(
       params.caseName,
       projectRoot,
     );
