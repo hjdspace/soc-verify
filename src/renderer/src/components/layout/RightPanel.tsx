@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
-import { Plus, Send, Square, Trash2, Loader2, Clock, X, Check, Paperclip, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft } from 'lucide-react';
+import { Plus, Send, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon } from 'lucide-react';
 import { useSessionStore, type ChatMessage, type AvailableModel, type SelectedSkill, type ContextFile, type HistorySession } from '@renderer/stores/session';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
@@ -47,6 +47,7 @@ export function RightPanel({ width }: RightPanelProps) {
   const [steerText, setSteerText] = useState('');
   const [showSteerInput, setShowSteerInput] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [showAttachDropdown, setShowAttachDropdown] = useState(false);
 
   // Skill & context state
   const [availableSkills, setAvailableSkills] = useState<SelectedSkill[]>([]);
@@ -229,6 +230,7 @@ export function RightPanel({ width }: RightPanelProps) {
   };
 
   const handleImageSelect = useCallback(() => {
+    setShowAttachDropdown(false);
     fileInputRef.current?.click();
   }, []);
 
@@ -256,6 +258,43 @@ export function RightPanel({ width }: RightPanelProps) {
 
   const removeImage = (idx: number) => {
     setAttachedImages((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  // ── File / folder attachment via native dialog ────────
+  const handleFileAttach = async () => {
+    setShowAttachDropdown(false);
+    if (!currentProjectId) {
+      console.error('[handleFileAttach] No current project');
+      return;
+    }
+    try {
+      console.log('[handleFileAttach] Calling pickFiles with projectId:', currentProjectId);
+      const result = await trpc.project.pickFiles.mutate({ projectId: currentProjectId });
+      console.log('[handleFileAttach] Result:', result);
+      if (result.canceled) return;
+      for (const file of result.files) {
+        addContextFile(file);
+      }
+    } catch (err) {
+      console.error('[handleFileAttach] Error:', err);
+    }
+  };
+
+  const handleFolderAttach = async () => {
+    setShowAttachDropdown(false);
+    if (!currentProjectId) {
+      console.error('[handleFolderAttach] No current project');
+      return;
+    }
+    try {
+      console.log('[handleFolderAttach] Calling pickFolder with projectId:', currentProjectId);
+      const result = await trpc.project.pickFolder.mutate({ projectId: currentProjectId });
+      console.log('[handleFolderAttach] Result:', result);
+      if (result.canceled) return;
+      addContextFile(result.folder);
+    } catch (err) {
+      console.error('[handleFolderAttach] Error:', err);
+    }
   };
 
   // ── Drag-and-drop: accept files/folders dragged from the file tree ──
@@ -849,15 +888,45 @@ export function RightPanel({ width }: RightPanelProps) {
           />
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1">
-              {/* 图片附件按钮 */}
-              <button
-                onClick={handleImageSelect}
-                disabled={!currentSessionId || isCurrentSessionCreating}
-                title="附加图片"
-                className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
-              >
-                <Paperclip className="h-3 w-3" />
-              </button>
+              {/* 附件按钮（下拉菜单） */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowAttachDropdown((v) => !v)}
+                  disabled={!currentSessionId || isCurrentSessionCreating}
+                  title="添加附件"
+                  className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
+                >
+                  <Plus className="h-3 w-3" />
+                </button>
+                {showAttachDropdown && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowAttachDropdown(false)} />
+                    <div className="absolute bottom-7 left-0 z-50 w-44 rounded-md border border-border bg-popover shadow-xl">
+                      <button
+                        onClick={handleImageSelect}
+                        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground hover:bg-accent"
+                      >
+                        <ImageIcon className="h-3 w-3 text-muted-foreground" />
+                        <span>添加图片</span>
+                      </button>
+                      <button
+                        onClick={handleFileAttach}
+                        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground hover:bg-accent"
+                      >
+                        <FileText className="h-3 w-3 text-muted-foreground" />
+                        <span>附加文件</span>
+                      </button>
+                      <button
+                        onClick={handleFolderAttach}
+                        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground hover:bg-accent"
+                      >
+                        <Folder className="h-3 w-3 text-muted-foreground" />
+                        <span>添加文件夹到上下文</span>
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
               {/* 模型选择器 */}
               <div className="relative">
                 <button

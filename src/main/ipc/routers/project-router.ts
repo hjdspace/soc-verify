@@ -464,6 +464,65 @@ export const projectRouter = t.router({
       return results;
     }),
 
+  // ─── File / Folder picker (for AI context) ────────
+
+  pickFiles: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .mutation(async ({ input }) => {
+      console.log('[pickFiles] Called with projectId:', input.projectId);
+      const project = requireProject(input.projectId);
+      console.log('[pickFiles] Project root path:', project.rootPath);
+      const result = await dialog.showOpenDialog({
+        properties: ['openFile', 'multiSelections'],
+        title: '选择文件添加到上下文',
+        defaultPath: project.rootPath,
+      });
+      console.log('[pickFiles] Dialog result:', result);
+      if (result.canceled || result.filePaths.length === 0) {
+        return { canceled: true as const };
+      }
+      const files = result.filePaths.map((fp) => {
+        const parts = fp.split(/[/\\]/);
+        return { name: parts[parts.length - 1] || fp, path: fp, type: 'file' as const };
+      });
+      return { canceled: false as const, files };
+    }),
+
+  pickFolder: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .mutation(async ({ input }) => {
+      console.log('[pickFolder] Called with projectId:', input.projectId);
+      const project = requireProject(input.projectId);
+      console.log('[pickFolder] Project root path:', project.rootPath);
+      const result = await dialog.showOpenDialog({
+        properties: ['openDirectory'],
+        title: '选择文件夹添加到上下文',
+        defaultPath: project.rootPath,
+      });
+      console.log('[pickFolder] Dialog result:', result);
+      if (result.canceled || result.filePaths.length === 0) {
+        return { canceled: true as const };
+      }
+      const fp = result.filePaths[0];
+      const parts = fp.split(/[/\\]/);
+      return {
+        canceled: false as const,
+        folder: { name: parts[parts.length - 1] || fp, path: fp, type: 'directory' as const },
+      };
+    }),
+
   // ─── Diff Review ──────────────────────────────────
 
   getFileDiff: t.procedure
