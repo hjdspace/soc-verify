@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Save, FolderOpen, Settings2 } from 'lucide-reac
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
+import { useToastStore } from '@renderer/stores/toast';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import type { SimOptionField } from '@shared/plugin-types';
@@ -93,7 +94,11 @@ export function OptionDock() {
   }, [schema]);
 
   const handleSavePreset = async () => {
-    if (!currentProjectId || !presetName.trim()) return;
+    if (!currentProjectId) {
+      useToastStore.getState().error('保存预设失败', '请先打开项目');
+      return;
+    }
+    if (!presetName.trim()) return;
     setSavingPreset(true);
     try {
       await trpc.project.saveSimOptionPreset.mutate({
@@ -105,8 +110,10 @@ export function OptionDock() {
       setPresets(updated);
       setPresetName('');
       setSavingPreset(false);
-    } catch {
+    } catch (err) {
       setSavingPreset(false);
+      const msg = err instanceof Error ? err.message : String(err);
+      useToastStore.getState().error('保存预设失败', msg);
     }
   };
 
@@ -116,6 +123,25 @@ export function OptionDock() {
       setSimOptions(preset);
     }
     setShowPresetMenu(false);
+  };
+
+  // Build a lookup map from option key → label (using schema)
+  const labelMap = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const f of schema) {
+      m.set(f.key, f.label);
+    }
+    return m;
+  }, [schema]);
+
+  // Format a preset's options into preview entries (skip empty values)
+  const formatPresetPreview = (options: Record<string, unknown>): Array<{ label: string; value: string }> => {
+    const entries: Array<{ label: string; value: string }> = [];
+    for (const [key, val] of Object.entries(options)) {
+      if (val === undefined || val === null || val === '' || val === false) continue;
+      entries.push({ label: labelMap.get(key) ?? key, value: String(val) });
+    }
+    return entries;
   };
 
   return (
@@ -141,9 +167,8 @@ export function OptionDock() {
           <div className="relative">
             <button
               onClick={() => setShowPresetMenu(!showPresetMenu)}
-              disabled={Object.keys(presets).length === 0}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
-              title="加载预设"
+              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              title="加载已保存的仿真选项预设"
             >
               <FolderOpen className="h-3 w-3" />
               预设
@@ -151,16 +176,41 @@ export function OptionDock() {
             {showPresetMenu && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowPresetMenu(false)} />
-                <div className="absolute right-0 top-6 z-50 min-w-40 overflow-hidden rounded-md border border-border bg-popover shadow-xl">
-                  {Object.keys(presets).map((name) => (
-                    <button
-                      key={name}
-                      onClick={() => loadPreset(name)}
-                      className="block w-full px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent"
-                    >
-                      {name}
-                    </button>
-                  ))}
+                <div className="absolute bottom-full right-0 z-50 mb-1 max-h-80 min-w-64 max-w-80 overflow-y-auto rounded-md border border-border bg-popover shadow-xl">
+                  {Object.keys(presets).length === 0 ? (
+                    <div className="px-3 py-2 text-xs text-muted-foreground">暂无已保存的预设</div>
+                  ) : (
+                    Object.entries(presets).map(([name, options]) => {
+                      const preview = formatPresetPreview(options);
+                      return (
+                        <button
+                          key={name}
+                          onClick={() => loadPreset(name)}
+                          className="block w-full border-b border-border/50 px-3 py-2 text-left transition-colors last:border-b-0 hover:bg-accent"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-semibold text-foreground">{name}</span>
+                            <span className="text-[10px] text-muted-foreground">{preview.length} 项</span>
+                          </div>
+                          {preview.length > 0 && (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {preview.slice(0, 5).map(({ label, value }) => (
+                                <span
+                                  key={label}
+                                  className="rounded bg-secondary px-1 py-0.5 text-[10px] text-muted-foreground"
+                                >
+                                  {label}: {value}
+                                </span>
+                              ))}
+                              {preview.length > 5 && (
+                                <span className="text-[10px] text-muted-foreground">+{preview.length - 5}</span>
+                              )}
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })
+                  )}
                 </div>
               </>
             )}
@@ -171,14 +221,15 @@ export function OptionDock() {
             <input
               value={presetName}
               onChange={(e) => setPresetName(e.target.value)}
-              placeholder="预设名称"
+              placeholder={currentProjectId ? '预设名称' : '请先打开项目'}
+              title="输入名称，将当前仿真选项保存为可复用预设"
               className="w-20 rounded border border-border bg-background px-1.5 py-0.5 text-[11px] outline-none focus:border-primary"
             />
             <button
               onClick={handleSavePreset}
-              disabled={!presetName.trim() || savingPreset}
+              disabled={!presetName.trim() || savingPreset || !currentProjectId}
               className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
-              title="保存预设"
+              title="保存当前仿真选项为预设"
             >
               <Save className="h-3 w-3" />
             </button>
