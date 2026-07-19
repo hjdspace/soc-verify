@@ -1,7 +1,7 @@
-import { app, BrowserWindow, shell, ipcMain, Tray, Menu, nativeImage } from 'electron';
+import { app, BrowserWindow, shell, ipcMain, Tray, Menu, nativeImage, dialog } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { createIPCHandler } from './ipc/electron-trpc-bridge';
 import { router } from './ipc/router';
 import { resolveAgentRuntime } from './agent/paths';
@@ -29,6 +29,54 @@ function resolveTrayIcon(): string {
   return ico;
 }
 
+/** Resolve window icon path: prefers icon.ico (native Windows multi-resolution), falls back to large PNG */
+function resolveWindowIcon(): string {
+  const ico = join(__dirname, '../../build/icon.ico');
+  const png256 = join(__dirname, '../../build/icons/256x256.png');
+  const png128 = join(__dirname, '../../build/icons/128x128.png');
+  if (existsSync(ico)) return ico;
+  if (existsSync(png256)) return png256;
+  if (existsSync(png128)) return png128;
+  return resolveTrayIcon();
+}
+
+// ── 关闭方式偏好持久化 ───────────────────────────────────────────
+// 用户可选择「完全关闭」或「最小化到托盘」，并记住选择以免每次询问。
+
+type CloseAction = 'close' | 'tray';
+
+function getClosePrefPath(): string {
+  return join(app.getPath('userData'), 'close-pref.json');
+}
+
+function loadClosePref(): CloseAction | null {
+  try {
+    const data = readFileSync(getClosePrefPath(), 'utf-8');
+    const parsed = JSON.parse(data) as { action?: string };
+    if (parsed.action === 'close' || parsed.action === 'tray') return parsed.action;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function saveClosePref(action: CloseAction): void {
+  try {
+    writeFileSync(getClosePrefPath(), JSON.stringify({ action }, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('[close-pref] failed to save:', e);
+  }
+}
+
+function clearClosePref(): void {
+  try {
+    const prefPath = getClosePrefPath();
+    if (existsSync(prefPath)) unlinkSync(prefPath);
+  } catch {
+    // ignore errors
+  }
+}
+
 /** Create system tray with context menu */
 function createTray(win: BrowserWindow): Tray {
   const iconPath = resolveTrayIcon();
@@ -47,6 +95,13 @@ function createTray(win: BrowserWindow): Tray {
     {
       label: '隐藏窗口',
       click: () => win.hide()
+    },
+    { type: 'separator' },
+    {
+      label: '重置关闭偏好',
+      click: () => {
+        clearClosePref();
+      }
     },
     { type: 'separator' },
     {
@@ -82,6 +137,7 @@ function createWindow(): BrowserWindow {
     show: false,
     frame: false,
     title: 'SoC Verify',
+    icon: resolveWindowIcon(),
     backgroundColor: '#1e1e2e',
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
@@ -93,12 +149,51 @@ function createWindow(): BrowserWindow {
 
   win.on('ready-to-show', () => win.show());
 
-  // Minimize to tray instead of quitting (unless explicit quit)
-  win.on('close', (e) => {
-    if (!isQuitting) {
-      e.preventDefault();
+  // Close behavior: ask user to fully close or minimize to tray.
+  // If a saved preference exists (via "不再询问" checkbox), use it directly.
+  win.on('close', async (e) => {
+    if (isQuitting) return; // allow close (tray "退出" or explicit app.quit)
+
+    e.preventDefault();
+
+    // If user previously saved a preference, use it directly
+    const savedPref = loadClosePref();
+    if (savedPref === 'close') {
+      isQuitting = true;
+      app.quit();
+      return;
+    }
+    if (savedPref === 'tray') {
+      win.hide();
+      return;
+    }
+
+    // No saved preference — show confirmation dialog
+    const result = await dialog.showMessageBox(win, {
+      type: 'question',
+      title: '关闭窗口',
+      message: '您希望完全关闭 SoC Verify，还是最小化到系统托盘？',
+      detail: '最小化到托盘后，应用将继续在后台运行，可随时从托盘图标恢复。',
+      buttons: ['完全关闭', '最小化到托盘', '取消'],
+      defaultId: 1,
+      cancelId: 2,
+      checkboxLabel: '不再询问，记住我的选择',
+      checkboxChecked: false,
+      icon: nativeImage.createFromPath(resolveTrayIcon()),
+      noLink: true
+    });
+
+    if (result.response === 0) {
+      // Fully close
+      if (result.checkboxChecked) saveClosePref('close');
+      isQuitting = true;
+      app.quit();
+    } else if (result.response === 1) {
+      // Minimize to tray
+      if (result.checkboxChecked) saveClosePref('tray');
       win.hide();
     }
+    // response === 2 (取消): do nothing, window stays visible
   });
 
   win.webContents.setWindowOpenHandler(({ url }) => {
