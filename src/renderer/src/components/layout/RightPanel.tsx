@@ -974,6 +974,19 @@ function MessageBubble({ message }: { message: ChatMessage }) {
       <>
         <div className="flex flex-col items-end gap-0.5">
           <div className="max-w-[85%] rounded-lg bg-primary/15 px-2.5 py-1.5 text-xs">
+            {message.skills && message.skills.length > 0 && (
+              <div className="mb-1.5 flex flex-wrap justify-end gap-1">
+                {message.skills.map((skill) => (
+                  <span
+                    key={`skill-${skill.name}`}
+                    className="inline-flex items-center gap-1 rounded bg-primary/25 px-1.5 py-0.5 text-[10px] text-primary"
+                  >
+                    <Sparkles className="h-2.5 w-2.5" />
+                    <span className="max-w-[120px] truncate font-medium">{skill.name}</span>
+                  </span>
+                ))}
+              </div>
+            )}
             {message.images && message.images.length > 0 && (
               <div className="mb-1.5 flex flex-wrap gap-1">
                 {message.images.map((img, idx) => (

@@ -19,6 +19,8 @@ export interface ChatMessage {
   isStreaming?: boolean;
   /** LLM thinking/reasoning content, separated from the main response text. */
   thinking?: string;
+  /** Skills attached to a user message — used to render skill chips in the message bubble. */
+  skills?: SelectedSkill[];
 }
 
 export interface AvailableModel {
@@ -588,6 +590,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       content: message,
       timestamp: Date.now(),
       images,
+      skills: skills.length > 0 ? skills : undefined,
     };
 
     const assistantMsg: ChatMessage = {
