@@ -75,6 +75,15 @@ export const terminalRouter = t.router({
   }),
 
   /**
+   * Get the current PTY backend status.
+   * Returns whether node-pty loaded successfully and if not, the error message.
+   * Useful for showing a warning indicator in the UI before creating a terminal.
+   */
+  getBackendStatus: t.procedure.query(() => {
+    return terminalManager.getBackendStatus();
+  }),
+
+  /**
    * Get the buffered output for a terminal session.
    * Used by TerminalView to restore output when the component is remounted
    * (e.g., switching tabs and switching back).
