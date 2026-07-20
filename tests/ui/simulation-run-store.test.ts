@@ -15,7 +15,7 @@ vi.mock('@renderer/lib/trpc', () => ({
 
 vi.mock('@renderer/stores/toast', () => ({
   useToastStore: {
-    getState: () => ({ info: vi.fn(), error: vi.fn() }),
+    getState: () => ({ info: vi.fn(), error: vi.fn(), warning: vi.fn() }),
   },
 }));
 
