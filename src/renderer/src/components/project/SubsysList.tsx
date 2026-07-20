@@ -1,10 +1,11 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { ChevronRight, ChevronDown, Cpu, CircleDot, Play, X, RefreshCw, Settings, FileText } from 'lucide-react';
+import { ChevronRight, ChevronDown, Cpu, CircleDot, Play, X, RefreshCw, Settings, FileText, Copy, ChevronsDownUp, ChevronsUpDown, FolderOpen } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useEnvStore } from '@renderer/stores/env';
+import { useToastStore } from '@renderer/stores/toast';
 
 interface SubsysData {
   name: string;
@@ -49,6 +50,7 @@ interface ContextMenuState {
   x: number;
   y: number;
   caseData: CaseData | null;
+  fileNode: CaseTreeNode | null;
 }
 
 // ─── Case ID helpers ────────────────────────────────────
@@ -188,6 +190,7 @@ interface CaseTreeItemProps {
   toggleCaseSelection: (path: string) => void;
   onCaseSelect: (caseData: CaseData) => void;
   onContextMenu: (e: React.MouseEvent, caseData: CaseData) => void;
+  onFileContextMenu: (e: React.MouseEvent, fileNode: CaseTreeNode) => void;
   onRunCase: (caseData: CaseData) => void;
 }
 
@@ -204,6 +207,7 @@ function CaseTreeItem({
   toggleCaseSelection,
   onCaseSelect,
   onContextMenu,
+  onFileContextMenu,
   onRunCase,
 }: CaseTreeItemProps) {
   const paddingLeft = level * 12 + 8;
@@ -214,6 +218,7 @@ function CaseTreeItem({
       <div>
         <button
           onClick={() => toggleFile(node.path)}
+          onContextMenu={(e) => onFileContextMenu(e, node)}
           className="flex w-full items-center gap-1 rounded py-0.5 text-left text-[11px] text-muted-foreground transition-colors hover:bg-accent/50"
           style={{ paddingLeft: `${paddingLeft}px` }}
         >
@@ -242,6 +247,7 @@ function CaseTreeItem({
               toggleCaseSelection={toggleCaseSelection}
               onCaseSelect={onCaseSelect}
               onContextMenu={onContextMenu}
+              onFileContextMenu={onFileContextMenu}
               onRunCase={onRunCase}
             />
           ))}
@@ -350,6 +356,7 @@ function CaseTreeItem({
             toggleCaseSelection={toggleCaseSelection}
             onCaseSelect={onCaseSelect}
             onContextMenu={onContextMenu}
+            onFileContextMenu={onFileContextMenu}
             onRunCase={onRunCase}
           />
         ))}
@@ -386,6 +393,7 @@ export function SubsysList() {
     x: 0,
     y: 0,
     caseData: null,
+    fileNode: null,
   });
   const [selectedCases, setSelectedCases] = useState<Set<string>>(new Set());
   const [batchMode, setBatchMode] = useState(false);
@@ -499,7 +507,36 @@ export function SubsysList() {
 
   const handleCaseContextMenu = (e: React.MouseEvent, caseData: CaseData) => {
     e.preventDefault();
-    setContextMenu({ visible: true, x: e.clientX, y: e.clientY, caseData });
+    setContextMenu({ visible: true, x: e.clientX, y: e.clientY, caseData, fileNode: null });
+  };
+
+  const handleFileContextMenu = (e: React.MouseEvent, fileNode: CaseTreeNode) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ visible: true, x: e.clientX, y: e.clientY, caseData: null, fileNode });
+  };
+
+  const handleOpenCaseFile = async () => {
+    const fileNode = contextMenu.fileNode;
+    if (!fileNode) return;
+    try {
+      await trpc.project.openInSystem.mutate({ path: fileNode.path, type: 'file' });
+    } catch (err) {
+      useToastStore.getState().error('打开文件失败', err instanceof Error ? err.message : String(err));
+    }
+    setContextMenu((s) => ({ ...s, visible: false }));
+  };
+
+  const handleCopyCaseFilePath = async () => {
+    const fileNode = contextMenu.fileNode;
+    if (!fileNode) return;
+    try {
+      await navigator.clipboard.writeText(fileNode.path);
+      useToastStore.getState().success('已复制路径');
+    } catch {
+      useToastStore.getState().error('复制失败', '无法访问剪贴板');
+    }
+    setContextMenu((s) => ({ ...s, visible: false }));
   };
 
   /**
@@ -543,6 +580,18 @@ export function SubsysList() {
 
   // Build case tree from flat list
   const caseTree = useMemo(() => buildCaseTree(cases), [cases]);
+
+  const expandAllFiles = useCallback(() => {
+    const allPaths = new Set<string>();
+    caseTree.forEach((node) => {
+      if (node.type === 'file') allPaths.add(node.path);
+    });
+    setExpandedFiles(allPaths);
+  }, [caseTree]);
+
+  const collapseAllFiles = useCallback(() => {
+    setExpandedFiles(new Set());
+  }, []);
 
   const subsystemPlugins = plugins.filter((plugin) => plugin.kind === 'subsys-discoverer');
   const pluginError = subsystemPlugins.find((plugin) => plugin.error)?.error;
@@ -652,19 +701,39 @@ export function SubsysList() {
             </button>
           ))}
         </div>
-        <button
-          onClick={() => {
-            setBatchMode(!batchMode);
-            setSelectedCases(new Set());
-          }}
-          className={cn(
-            'rounded px-1.5 py-0.5 text-[10px] transition-colors',
-            batchMode ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-accent',
+        <div className="flex items-center gap-0.5">
+          {caseTree.length > 0 && (
+            <>
+              <button
+                onClick={expandAllFiles}
+                title="展开全部"
+                className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <ChevronsUpDown className="h-3 w-3" />
+              </button>
+              <button
+                onClick={collapseAllFiles}
+                title="折叠全部"
+                className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <ChevronsDownUp className="h-3 w-3" />
+              </button>
+            </>
           )}
-          title="批量选择模式"
-        >
-          批量
-        </button>
+          <button
+            onClick={() => {
+              setBatchMode(!batchMode);
+              setSelectedCases(new Set());
+            }}
+            className={cn(
+              'rounded px-1.5 py-0.5 text-[10px] transition-colors',
+              batchMode ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-accent',
+            )}
+            title="批量选择模式"
+          >
+            批量
+          </button>
+        </div>
       </div>
 
       {/* Batch action bar */}
@@ -732,6 +801,7 @@ export function SubsysList() {
                       toggleCaseSelection={toggleCaseSelection}
                       onCaseSelect={handleCaseSelect}
                       onContextMenu={handleCaseContextMenu}
+                      onFileContextMenu={handleFileContextMenu}
                       onRunCase={handleRunCase}
                     />
                   ))}
@@ -742,7 +812,7 @@ export function SubsysList() {
         </div>
       ))}
 
-      {/* Context menu */}
+      {/* Context menu — case node */}
       {contextMenu.visible && contextMenu.caseData && (
         <div
           className="fixed z-50 min-w-40 overflow-hidden rounded-md border border-border bg-popover shadow-xl"
@@ -758,6 +828,71 @@ export function SubsysList() {
           >
             <Play className="h-3 w-3 text-primary" />
             运行仿真
+          </button>
+        </div>
+      )}
+
+      {/* Context menu — file node (case cfg) */}
+      {contextMenu.visible && contextMenu.fileNode && (
+        <div
+          className="fixed z-50 min-w-44 overflow-hidden rounded-md border border-border bg-popover shadow-xl"
+          style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={handleOpenCaseFile}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent"
+          >
+            <FolderOpen className="h-3 w-3 text-muted-foreground" />
+            <span>打开用例文件</span>
+          </button>
+          <button
+            onClick={handleCopyCaseFilePath}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent"
+          >
+            <Copy className="h-3 w-3 text-muted-foreground" />
+            <span>复制路径</span>
+          </button>
+          <div className="border-t border-border/50" />
+          <button
+            onClick={() => {
+              const fp = contextMenu.fileNode!.path;
+              setExpandedFiles((prev) => {
+                const next = new Set(prev);
+                if (next.has(fp)) next.delete(fp);
+                else next.add(fp);
+                return next;
+              });
+              setContextMenu((s) => ({ ...s, visible: false }));
+            }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent"
+          >
+            {contextMenu.fileNode && expandedFiles.has(contextMenu.fileNode.path) ? (
+              <ChevronRight className="h-3 w-3 text-muted-foreground" />
+            ) : (
+              <ChevronDown className="h-3 w-3 text-muted-foreground" />
+            )}
+            <span>{contextMenu.fileNode && expandedFiles.has(contextMenu.fileNode.path) ? '折叠' : '展开'}</span>
+          </button>
+          <button
+            onClick={() => {
+              expandAllFiles();
+              setContextMenu((s) => ({ ...s, visible: false }));
+            }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent"
+          >
+            <ChevronsUpDown className="h-3 w-3 text-muted-foreground" />
+            <span>展开全部</span>
+          </button>
+          <button
+            onClick={() => {
+              collapseAllFiles();
+              setContextMenu((s) => ({ ...s, visible: false }));
+            }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent"
+          >
+            <ChevronsDownUp className="h-3 w-3 text-muted-foreground" />
+            <span>折叠全部</span>
           </button>
         </div>
       )}
