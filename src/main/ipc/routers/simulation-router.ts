@@ -192,23 +192,41 @@ export const simulationRouter = t.router({
         });
       }
 
-      // 创建终端 PTY 会话（初始工作目录为 resolveCwd 的结果）
-      const session = await terminalManager.create({ cwd });
-
-      // 等待 shell 初始化完成（PTY 启动后 shell 需要短暂时间初始化并显示提示符）
-      await new Promise(resolve => setTimeout(resolve, 500));
-
-      // 写入仿真命令到终端：
-      //   - 若 $PROJ_WORK 环境变量已定义，先执行 cd "$PROJ_WORK" 切换到项目工作目录
-      //   - 若未定义，终端已在 resolveCwd 返回的 cwd 中，直接执行 runsim 命令
-      //   - 追加 '; echo "__SIM_DONE__$?__"' 作为完成标记（不执行 exit，shell 保持存活）
-      //     simTerminalLinker 监听终端输出，检测到标记后判定 pass/fail
-      //   - 使用 \r（回车）而非 \n 作为 PTY 的 Enter 键
+      // 构建 displayCommand：若 $PROJ_WORK 已定义，先 cd 到项目工作目录
       const projWork = process.env.PROJ_WORK;
       const cdPrefix = projWork ? `cd "${projWork}" && ` : '';
       const displayCommand = `${cdPrefix}${command}`;
-      const execCommand = `${displayCommand}; echo "__SIM_DONE__$?__"`;
-      terminalManager.write(session.id, `${execCommand}\r`);
+
+      // ── 检查 node-pty 是否可用 ──────────────────────────────
+      //
+      // 当 node-pty 不可用时（如 AppImage 中 native 模块未 rebuild），
+      // 使用 log-mode 直接通过 `shell -c "command"` 执行仿真命令，
+      // 而非创建交互式 shell 并写入命令。这避免了 `spawn bash ENOENT`
+      // 错误，并将仿真输出以只读日志形式展示在终端视图中。
+      //
+      // 与 PTY 模式的区别：
+      //   - 不追加 `__SIM_DONE__` 标记（不需要，直接用 exit 事件判定）
+      //   - 不等待 shell 初始化（直接执行命令）
+      //   - 终端为只读（无交互输入）
+      let session;
+      if (terminalManager.isPtyAvailable()) {
+        // PTY 模式：创建交互式终端会话
+        session = await terminalManager.create({ cwd });
+
+        // 等待 shell 初始化完成
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // 写入仿真命令 + 完成标记
+        const execCommand = `${displayCommand}; echo "__SIM_DONE__$?__"`;
+        terminalManager.write(session.id, `${execCommand}\r`);
+      } else {
+        // Log 模式：直接执行命令，stdout/stderr 流式输出到终端视图
+        console.log('[simulation] node-pty unavailable — using log-mode execution.');
+        session = await terminalManager.runCommand({
+          command: displayCommand,
+          cwd,
+        });
+      }
 
       // 注册仿真-终端关联（监听终端退出 → 判定 pass/fail）
       const run = simTerminalLinker.register(
@@ -224,6 +242,8 @@ export const simulationRouter = t.router({
         terminalId: session.id,
         command: displayCommand,
         cwd,
+        backend: session.backend,
+        warning: session.warning,
       };
     }),
 
