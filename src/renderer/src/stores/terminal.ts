@@ -10,6 +10,10 @@ export interface TerminalTab {
   cwd: string;
   active: boolean;
   creating: boolean;
+  /** Whether this terminal is running in fallback mode (no node-pty). */
+  fallback: boolean;
+  /** User-facing warning message when in fallback mode. */
+  warning: string | null;
 }
 
 interface TerminalStoreState {
@@ -18,7 +22,7 @@ interface TerminalStoreState {
 
   createTerminal: (projectId?: string, cwd?: string) => Promise<string>;
   /** Create a tab for an already-existing terminal session (e.g. from simulation.runInTerminal) */
-  createTabForSession: (terminalId: string, title: string, cwd?: string) => string;
+  createTabForSession: (terminalId: string, title: string, cwd?: string, fallback?: boolean, warning?: string | null) => string;
   closeTerminal: (tabId: string) => Promise<void>;
   setActiveTab: (tabId: string) => void;
   writeToTerminal: (terminalId: string, data: string) => Promise<void>;
@@ -48,6 +52,8 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         cwd: cwd ?? '',
         active: true,
         creating: true,
+        fallback: false,
+        warning: null,
       }],
       activeTabId: tabId,
     }));
@@ -62,10 +68,18 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       set((s) => ({
         tabs: s.tabs.map((t) =>
           t.id === tabId
-            ? { ...t, terminalId: session.id, title: `Terminal ${tabIdCounter}`, cwd: session.cwd, creating: false }
+            ? { ...t, terminalId: session.id, title: `Terminal ${tabIdCounter}`, cwd: session.cwd, creating: false, fallback: session.backend === 'fallback', warning: session.warning }
             : t,
         ),
       }));
+
+      // Show a toast warning if the terminal is running in fallback mode
+      if (session.backend === 'fallback' && session.warning) {
+        useToastStore.getState().warning(
+          '终端运行在降级模式',
+          'node-pty 无法加载，终端已回退到 child_process。交互功能（调整大小、TUI 应用）可能不可用。请查看主进程控制台获取详细诊断信息。',
+        );
+      }
       useWorkbenchStore.getState().open({
         type: 'terminal',
         terminalTabId: tabId,
@@ -122,7 +136,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
     useWorkbenchStore.getState().open({ type: 'terminal', terminalTabId: tab.id, title: tab.title });
   },
 
-  createTabForSession: (terminalId, title, cwd) => {
+  createTabForSession: (terminalId, title, cwd, fallback = false, warning = null) => {
     const tabId = `term_tab_${++tabIdCounter}`;
     set((s) => ({
       tabs: [...s.tabs, {
@@ -132,6 +146,8 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         cwd: cwd ?? '',
         active: true,
         creating: false,
+        fallback,
+        warning,
       }],
       activeTabId: tabId,
     }));
