@@ -31,12 +31,10 @@
 
 import { createInterface } from "node:readline";
 
-// Declare Bun global for TypeScript (only env property is used in this file)
-declare global {
-	const Bun: {
-		readonly env: Record<string, string | undefined>;
-	} | undefined;
-}
+// The `Bun` global is provided by the bun-types package (installed in
+// engine/oh-my-pi/node_modules) at compile time, and by the Bun runtime
+// at execution time. No manual `declare global` is needed — adding one
+// conflicts with bun-types' own declaration (TS2451).
 
 // ─── Types ──────────────────────────────────────────────
 
@@ -167,6 +165,20 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 		"../engine/oh-my-pi/packages/coding-agent/src/session/session-manager"
 	);
 
+	// Enable console logging for the omp engine so errors are visible on
+	// stderr (captured by the Electron main process as [agent:stderr]).
+	// By default the omp engine only writes to a rotating file inside the
+	// temp runtime dir, which is deleted when the session ends — making
+	// debugging impossible, especially in packaged AppImage/NSIS builds.
+	try {
+		const { setTransports } = await import(
+			"../engine/oh-my-pi/packages/utils/src/logger"
+		);
+		setTransports({ console: true, file: true });
+	} catch {
+		// Best-effort: if the logger module path changes, don't block init.
+	}
+
 	// Set up auth storage
 	const authStorage = await discoverAuthStorage();
 
@@ -175,8 +187,16 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 		const provider = config.provider.toLowerCase();
 		authStorage.setRuntimeApiKey(provider, config.apiKey);
 
-		// Also set env vars for providers that read them
-		if (provider === "openai" || provider === "openai-compatible") {
+		// Also set env vars for providers that read them.
+		// Include "socverify-openai-compatible" (the custom provider used by
+		// this app) so that OPENAI_API_KEY / OPENAI_BASE_URL are propagated
+		// for all OpenAI-compatible provider variants.
+		const isOpenAiCompat =
+			provider === "openai" ||
+			provider === "openai-compatible" ||
+			provider.startsWith("socverify-openai") ||
+			provider.includes("openai-compat");
+		if (isOpenAiCompat) {
 			process.env.OPENAI_API_KEY = config.apiKey;
 			if (typeof Bun !== "undefined") {
 				(Bun.env as { OPENAI_API_KEY?: string }).OPENAI_API_KEY = config.apiKey;
