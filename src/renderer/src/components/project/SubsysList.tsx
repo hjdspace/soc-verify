@@ -323,10 +323,10 @@ function CaseTreeItem({
               e.stopPropagation();
               onRunCase(node.caseData!);
             }}
-            className="ml-auto shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-foreground/10 group-hover:opacity-100"
+            className="ml-auto shrink-0 rounded p-0.5 opacity-40 transition-opacity hover:bg-foreground/10 hover:opacity-100"
             title="运行仿真"
           >
-            <Play className="h-2.5 w-2.5 text-primary" />
+            <Play className="h-3 w-3 text-primary" />
           </button>
         )}
         {isActiveCase && (
