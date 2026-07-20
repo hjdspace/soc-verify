@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
+import { tRPCError } from '@renderer/lib/trpc-utils';
 
 export type SessionStatus = 'creating' | 'idle' | 'streaming' | 'tool_executing' | 'error';
 
@@ -252,14 +253,6 @@ function generateSessionName(message: string): string {
   if (!firstLine) return '新会话';
   if (firstLine.length <= 40) return firstLine;
   return firstLine.slice(0, 40) + '...';
-}
-
-function tRPCError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === 'object' && err !== null && 'message' in err) {
-    return String((err as Record<string, unknown>).message);
-  }
-  return String(err);
 }
 
 async function loadStoredSessionMessages(projectId: string, persistedSessionId: string): Promise<ChatMessage[]> {

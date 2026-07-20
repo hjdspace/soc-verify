@@ -3,6 +3,7 @@ import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
 import { useTerminalStore } from './terminal';
 import { useWorkbenchStore } from './workbench';
+import { tRPCError } from '@renderer/lib/trpc-utils';
 import type { SimulationHistoryEntry, SimulationStatus } from '@shared/types';
 import type { SimulationRunStatus as PluginRunStatus } from '@shared/plugin-types';
 
@@ -71,14 +72,6 @@ interface SimulationStoreState {
   setSimOption: (key: string, value: unknown) => void;
   setSimOptions: (options: Record<string, unknown>) => void;
   removeCompletedRuns: () => void;
-}
-
-function tRPCError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === 'object' && err !== null && 'message' in err) {
-    return String((err as Record<string, unknown>).message);
-  }
-  return String(err);
 }
 
 let eventListenerRegistered = false;

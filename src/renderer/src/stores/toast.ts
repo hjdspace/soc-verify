@@ -10,7 +10,7 @@ export interface ToastItem {
   timestamp: number;
 }
 
-interface ToastState {
+export interface ToastState {
   toasts: ToastItem[];
   addToast: (type: ToastType, message: string, detail?: string) => void;
   removeToast: (id: string) => void;

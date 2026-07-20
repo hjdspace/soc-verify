@@ -5,8 +5,8 @@ import type {
   PluginConfigEntry,
 } from '@shared/types';
 import { trpc } from '@renderer/lib/trpc';
-import { useToastStore } from './toast';
 import { useSessionStore } from './session';
+import { tRPCError, getToast } from '@renderer/lib/trpc-utils';
 
 interface ProjectState {
   // ── 状态 ──────────────────────────────────────────────
@@ -30,18 +30,6 @@ interface ProjectState {
   setCaseStatusFilter: (filter: string) => void;
   saveState: () => Promise<void>;
   restoreState: () => Promise<void>;
-}
-
-function getToast() {
-  return useToastStore.getState();
-}
-
-function tRPCError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === 'object' && err !== null && 'message' in err) {
-    return String((err as Record<string, unknown>).message);
-  }
-  return String(err);
 }
 
 /** Restore the most recent persisted AI session for a project, if one exists. */
