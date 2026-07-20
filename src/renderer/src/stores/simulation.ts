@@ -28,6 +28,10 @@ export interface SimulationRunRecord {
   command?: string;
   /** Working directory where the command was executed */
   cwd?: string;
+  /** Terminal backend type — 'node-pty' (interactive) or 'log-mode' (read-only fallback) */
+  backend?: string;
+  /** User-facing warning when running in fallback/log-mode */
+  warning?: string | null;
 }
 
 export type SimulationCase = {
@@ -121,6 +125,8 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
         terminalId: result.terminalId,
         command: result.command,
         cwd: result.cwd,
+        backend: (result as { backend?: string }).backend,
+        warning: (result as { warning?: string | null }).warning,
       };
       // The IPC 'started' event might arrive before this mutate returns,
       // creating a record without terminalId/command/cwd. If so, update it;
@@ -131,7 +137,7 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
           return {
             activeRuns: s.activeRuns.map((r) =>
               r.runId === result.runId
-                ? { ...r, terminalId: result.terminalId, command: result.command, cwd: result.cwd, status: 'running' as SimulationStatus }
+                ? { ...r, terminalId: result.terminalId, command: result.command, cwd: result.cwd, status: 'running' as SimulationStatus, backend: (result as { backend?: string }).backend, warning: (result as { warning?: string | null }).warning }
                 : r,
             ),
           };
@@ -143,8 +149,18 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
         result.terminalId,
         `sim: ${simulationCase.name}`,
         result.cwd,
+        (result as { backend?: string }).backend === 'log-mode',
+        (result as { warning?: string | null }).warning ?? null,
       );
       useWorkbenchStore.getState().open({ type: 'running-simulations' });
+
+      // Show a toast warning if running in log-mode (node-pty unavailable)
+      if ((result as { backend?: string }).backend === 'log-mode') {
+        useToastStore.getState().warning(
+          '终端运行在日志模式',
+          'node-pty 不可用（可能由于 AppImage 环境缺少 native 模块）。仿真将以只读日志模式运行，输出可正常查看但无法交互输入。',
+        );
+      }
 
       // Register IPC event listener once
       if (!eventListenerRegistered && window.eventBridge) {
