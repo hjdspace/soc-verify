@@ -4,7 +4,8 @@
 
 import { join, relative } from 'node:path';
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
-import { dialog } from 'electron';
+import { exec } from 'node:child_process';
+import { dialog, shell } from 'electron';
 import { t, TRPCError, requireProject, ensurePluginsLoaded } from '../router-context';
 import { projectManager } from '../../project/project-manager';
 import { pluginLoader } from '../../plugins/loader';
@@ -521,6 +522,37 @@ export const projectRouter = t.router({
         canceled: false as const,
         folder: { name: parts[parts.length - 1] || fp, path: fp, type: 'directory' as const },
       };
+    }),
+
+  // ─── Open file / directory in system ───────────────────
+
+  openInSystem: t.procedure
+    .input((raw): { path: string; type: 'file' | 'directory' } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.path !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'path is required' });
+      }
+      if (r.type !== 'file' && r.type !== 'directory') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'type must be "file" or "directory"' });
+      }
+      return { path: r.path, type: r.type as 'file' | 'directory' };
+    })
+    .mutation(async ({ input }) => {
+      if (input.type === 'directory') {
+        const errorMessage = await shell.openPath(input.path);
+        if (errorMessage) {
+          throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: errorMessage });
+        }
+      } else {
+        // Open file with text editor: notepad on Windows, gvim on Linux
+        const editor = process.platform === 'win32' ? 'notepad' : 'gvim';
+        exec(`"${editor}" "${input.path}"`, (error) => {
+          if (error) {
+            console.error(`[openInSystem] Failed to open file with ${editor}:`, error);
+          }
+        });
+      }
+      return { ok: true };
     }),
 
   // ─── Diff Review ──────────────────────────────────
