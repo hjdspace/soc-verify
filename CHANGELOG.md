@@ -6,6 +6,25 @@
 
 ---
 
+## [0.1.5](https://github.com/hjdspace/soc-verify/compare/v0.1.4...v0.1.5) (2026-07-20)
+
+### Features
+
+* **skills:** 实现完整技能管理功能
+* **project:** 新增用例搜索功能，支持模糊匹配
+* **file-tree:** 新增 FileTree 组件右键上下文菜单，支持在系统文件管理器中打开
+* **ipc:** 新增 openInSystem procedure，支持文件/目录在系统中打开
+* **terminal:** 终端管理器增强错误处理，新增 fallback 模式与 backend 状态查询
+* **simulation:** 仿真命令执行处理增强，新增 backend 与 warning 状态属性
+* **toast:** Toast 系统新增 warning 类型
+
+### Refactor
+
+* **types:** 拆分单体类型文件并重构代码结构
+* **ipc:** 重构 Bun 全局声明并增强日志
+
+---
+
 ## [0.1.4](https://github.com/hjdspace/soc-verify/compare/v0.1.3...v0.1.4) (2026-07-19)
 
 ### Features
