@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, AlertCircle, Info, CheckCircle2 } from 'lucide-react';
+import { X, AlertCircle, Info, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useToastStore } from '@renderer/stores/toast';
 import { cn } from '@renderer/lib/utils';
 
@@ -20,12 +20,12 @@ function ToastCard({
   toast,
   onClose,
 }: {
-  toast: { id: string; type: 'error' | 'info' | 'success'; message: string; detail?: string };
+  toast: { id: string; type: 'error' | 'info' | 'success' | 'warning'; message: string; detail?: string };
   onClose: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
 
-  const Icon = toast.type === 'error' ? AlertCircle : toast.type === 'success' ? CheckCircle2 : Info;
+  const Icon = toast.type === 'error' ? AlertCircle : toast.type === 'success' ? CheckCircle2 : toast.type === 'warning' ? AlertTriangle : Info;
 
   return (
     <div
@@ -35,6 +35,7 @@ function ToastCard({
         toast.type === 'error' && 'border-destructive/50 bg-destructive/10 text-foreground',
         toast.type === 'info' && 'border-border bg-popover text-foreground',
         toast.type === 'success' && 'border-status-pass/50 bg-status-pass/10 text-foreground',
+        toast.type === 'warning' && 'border-warning/50 bg-warning/10 text-foreground',
       )}
     >
       <Icon
@@ -43,6 +44,7 @@ function ToastCard({
           toast.type === 'error' && 'text-destructive',
           toast.type === 'info' && 'text-muted-foreground',
           toast.type === 'success' && 'text-status-pass-foreground',
+          toast.type === 'warning' && 'text-warning-foreground',
         )}
       />
       <div className="flex-1 min-w-0">
