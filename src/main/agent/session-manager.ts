@@ -245,6 +245,13 @@ class SessionManagerImpl extends EventEmitter {
       env.PI_CODING_AGENT_DIR = runtimeDir;
       env.XDG_STATE_HOME = join(runtimeDir, 'state');
       env[OPENAI_COMPATIBLE_API_KEY_ENV] = options.apiKey;
+      // Also set OPENAI_API_KEY / OPENAI_BASE_URL so the omp engine's
+      // openai-completions provider can resolve the key via $env fallback
+      // (resolveOpenAIRequestSetup checks options.apiKey, then $env.OPENAI_API_KEY).
+      // This is critical for packaged builds where the env var might not be
+      // propagated through other paths.
+      if (!env.OPENAI_API_KEY) env.OPENAI_API_KEY = options.apiKey;
+      if (options.baseUrl && !env.OPENAI_BASE_URL) env.OPENAI_BASE_URL = options.baseUrl;
       provider = OPENAI_COMPATIBLE_PROVIDER;
     } else if (provider && model) {
       // Built-in provider path (e.g. user supplied only an API key, no baseUrl).
@@ -278,6 +285,28 @@ class SessionManagerImpl extends EventEmitter {
     const runnerBinary = resolveRunnerBinary();
     if (runnerBinary) {
       env.OMP_NATIVES_DIR = dirname(runnerBinary);
+    }
+
+    // On Linux, detect the system CA certificate bundle path and set
+    // NODE_EXTRA_CA_CERTS so Bun's fetch can verify TLS connections.
+    // Bun's compiled binary may not always find the system's CA store,
+    // especially in packaged environments like AppImage. The omp engine's
+    // `withExtraCaFetch` wrapper reads this env var and merges the CA
+    // bundle into Bun's TLS config.
+    if (process.platform === 'linux' && !env.NODE_EXTRA_CA_CERTS && !process.env.NODE_EXTRA_CA_CERTS) {
+      const caCandidates = [
+        '/etc/ssl/certs/ca-certificates.crt',   // Debian/Ubuntu
+        '/etc/pki/tls/certs/ca-bundle.crt',       // RHEL/CentOS/Fedora
+        '/etc/ssl/cert.pem',                       // OpenSUSE/Arch
+        '/etc/ca-certificates/ca-certificates.crt', // Alpine
+      ];
+      for (const caPath of caCandidates) {
+        if (existsSync(caPath)) {
+          env.NODE_EXTRA_CA_CERTS = caPath;
+          console.log(`[agent:session:${sessionId}] detected system CA bundle: ${caPath}`);
+          break;
+        }
+      }
     }
 
     // Build init config
@@ -326,13 +355,36 @@ class SessionManagerImpl extends EventEmitter {
     // High-frequency streaming events (message_update/chunk/delta) are excluded
     // from the terminal log to avoid flooding; other events print a one-line
     // summary with the most useful payload (LLM text, tool args/result, errors).
+    //
+    // When SOCVERIFY_DEBUG_EVENTS is set, ALL events (including streaming)
+    // are logged — this is invaluable for diagnosing empty-response issues
+    // in packaged builds where the omp engine's own file logs are ephemeral.
+    const debugAllEvents = !!process.env.SOCVERIFY_DEBUG_EVENTS;
     client.onEvent((event) => {
       const evtType = (event as Record<string, unknown>)?.type as string | undefined;
-      if (!SILENT_EVENT_TYPES.has(evtType ?? '')) {
+      if (debugAllEvents || !SILENT_EVENT_TYPES.has(evtType ?? '')) {
         const summary = summarizeEvent(event);
         console.log(
           `[agent:session:${sessionId}] event type="${evtType}"${summary ? ` ${summary}` : ''}`,
         );
+      }
+      // Detect empty assistant responses for diagnostic logging.
+      // An assistant message_end with no text and no error is the signature
+      // of an empty LLM completion — typically caused by TLS failures, network
+      // issues, or API key problems in packaged environments.
+      if (evtType === 'message_end') {
+        const msg = (event as Record<string, unknown>)?.message as Record<string, unknown> | undefined;
+        if (msg?.role === 'assistant') {
+          const hasText = Array.isArray(msg.content) &&
+            (msg.content as unknown[]).some((b) =>
+              typeof b === 'object' && b !== null &&
+              (b as Record<string, unknown>).type === 'text' &&
+              typeof (b as Record<string, unknown>).text === 'string' &&
+              ((b as Record<string, unknown>).text as string).length > 0);
+          if (!hasText && !msg.errorMessage) {
+            console.warn(`[agent:session:${sessionId}] WARNING: empty assistant response (no text, no error). Possible causes: TLS/SSL certificate issues, network errors, or API key problems. Check [agent:stderr] lines above for omp engine errors.`);
+          }
+        }
       }
       this.emit('sessionEvent', { sessionId, event } satisfies SessionEventData);
     });
