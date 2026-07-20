@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { ChevronRight, ChevronDown, Cpu, CircleDot, Play, X, RefreshCw, Settings, FileText, Copy, ChevronsDownUp, ChevronsUpDown, FolderOpen } from 'lucide-react';
+import { ChevronRight, ChevronDown, Cpu, CircleDot, Play, X, RefreshCw, Settings, FileText, Copy, ChevronsDownUp, ChevronsUpDown, FolderOpen, Search, Loader2 } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import { useProjectStore } from '@renderer/stores/project';
@@ -402,6 +402,12 @@ export function SubsysList() {
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // ── Search state ────────────────────────────────────
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<CaseData[]>([]);
+  const [searching, setSearching] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
   // Load subsystems
   useEffect(() => {
     if (!currentProjectId) {
@@ -469,6 +475,56 @@ export function SubsysList() {
       cancelled = true;
     };
   }, [currentProjectId, expandedSubsys, caseStatusFilter]);
+
+  // ── Search: debounced query ──────────────────────
+  useEffect(() => {
+    const trimmed = searchQuery.trim();
+    if (!trimmed) {
+      setSearchResults([]);
+      setSearching(false);
+      return;
+    }
+    if (!currentProjectId) return;
+
+    setSearching(true);
+    const timer = setTimeout(() => {
+      trpc.project.searchCases
+        .query({ projectId: currentProjectId, query: trimmed, limit: 200 })
+        .then((data) => {
+          setSearchResults(data as CaseData[]);
+        })
+        .catch(() => {
+          setSearchResults([]);
+        })
+        .finally(() => {
+          setSearching(false);
+        });
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, currentProjectId]);
+
+  // Keyboard shortcut: Ctrl+F focuses search
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f' && containerRef.current) {
+        // Only intercept if the subsystem tab area is visible
+        const rect = containerRef.current.getBoundingClientRect();
+        if (rect.width > 0 && rect.height > 0) {
+          e.preventDefault();
+          searchInputRef.current?.focus();
+          searchInputRef.current?.select();
+        }
+      }
+      // Escape clears search
+      if (e.key === 'Escape' && document.activeElement === searchInputRef.current) {
+        setSearchQuery('');
+        searchInputRef.current?.blur();
+      }
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, []);
 
   // Close context menu on outside click
   useEffect(() => {
@@ -555,6 +611,21 @@ export function SubsysList() {
   };
 
   const handleRunCase = async (caseData: CaseData) => {
+    if (!currentProjectId) return;
+    await startCaseRun(currentProjectId, caseData);
+  };
+
+  /**
+   * When clicking a search result, select the case and optionally expand
+   * the corresponding subsystem so the user can see context.
+   */
+  const handleSearchResultClick = (caseData: CaseData) => {
+    const caseId = getCaseId(caseData);
+    setSelectedCaseId(caseId);
+    selectCase(caseData);
+  };
+
+  const handleSearchResultRun = async (caseData: CaseData) => {
     if (!currentProjectId) return;
     await startCaseRun(currentProjectId, caseData);
   };
@@ -681,8 +752,96 @@ export function SubsysList() {
     );
   }
 
+  const isSearching = searchQuery.trim().length > 0;
+
   return (
     <div className="flex flex-col gap-0.5" ref={containerRef}>
+      {/* ── Search input ─────────────────────────────── */}
+      <div className="relative mb-1">
+        <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+        <input
+          ref={searchInputRef}
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="搜索用例... (Ctrl+F)"
+          className="w-full rounded border border-border/50 bg-background/60 py-1 pl-7 pr-7 text-[11px] text-foreground placeholder:text-muted-foreground focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/30"
+        />
+        {searching && (
+          <Loader2 className="absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 animate-spin text-muted-foreground" />
+        )}
+        {!searching && searchQuery && (
+          <button
+            onClick={() => setSearchQuery('')}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            title="清除搜索"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        )}
+      </div>
+
+      {/* ── Search results mode ──────────────────────── */}
+      {isSearching ? (
+        <div className="flex flex-col gap-0.5">
+          {searchResults.length === 0 && !searching && (
+            <div className="px-2 py-3 text-center text-[11px] text-muted-foreground">
+              未找到匹配的用例
+            </div>
+          )}
+          {searchResults.length === 0 && searching && (
+            <div className="px-2 py-3 text-center text-[11px] text-muted-foreground">
+              搜索中...
+            </div>
+          )}
+          {searchResults.length > 0 && (
+            <>
+              <div className="mb-0.5 px-1 text-[10px] text-muted-foreground">
+                找到 {searchResults.length} 个用例
+              </div>
+              {searchResults.map((caseData) => {
+                const caseId = getCaseId(caseData);
+                const isActive = selectedCaseId === caseId;
+                return (
+                  <div
+                    key={caseId}
+                    className={cn(
+                      'group flex cursor-pointer items-center gap-1 rounded py-0.5 text-xs transition-colors',
+                      isActive
+                        ? 'bg-primary/15 text-primary'
+                        : 'text-foreground/70 hover:bg-foreground/10',
+                    )}
+                    style={{ paddingLeft: '8px' }}
+                    onClick={() => handleSearchResultClick(caseData)}
+                  >
+                    <CircleDot
+                      className={cn(
+                        'h-2.5 w-2.5 shrink-0',
+                        STATUS_COLORS[caseData.status ?? 'pending'],
+                      )}
+                    />
+                    <span className="truncate">{caseData.name}</span>
+                    <span className="shrink-0 text-[9px] text-muted-foreground/60">
+                      {caseData.subsys}
+                    </span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleSearchResultRun(caseData);
+                      }}
+                      className="ml-auto shrink-0 rounded p-0.5 opacity-40 transition-opacity hover:bg-foreground/10 hover:opacity-100"
+                      title="运行仿真"
+                    >
+                      <Play className="h-3 w-3 text-primary" />
+                    </button>
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </div>
+      ) : (
+        <>
       {/* Status filter + batch mode toggle */}
       <div className="mb-1 flex items-center justify-between gap-0.5 px-1">
         <div className="flex gap-0.5">
@@ -811,6 +970,8 @@ export function SubsysList() {
           )}
         </div>
       ))}
+        </>
+      )}
 
       {/* Context menu — case node */}
       {contextMenu.visible && contextMenu.caseData && (
