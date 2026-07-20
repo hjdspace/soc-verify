@@ -6,7 +6,13 @@ import { join } from 'node:path';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { t, TRPCError, requireProject } from '../router-context';
 import { credentialManager } from '../../credentials/credential-manager';
-import type { CredentialInput } from '@shared/types';
+import {
+  discoverAllSkills,
+  createUserSkill,
+  deleteUserSkill,
+  getSkillInstallInfo,
+} from '../../agent/skill-discovery';
+import type { CredentialInput, CreateSkillInput } from '@shared/types';
 
 export const settingsRouter = t.router({
   getCredentials: t.procedure.query(() => {
@@ -118,21 +124,52 @@ export const settingsRouter = t.router({
       }
     }),
 
-  listSkills: t.procedure.query(() => {
-    // Would call agent skill list in production
-    return [];
+  listSkills: t.procedure.query(async () => {
+    return discoverAllSkills();
   }),
 
-  installSkill: t.procedure
-    .input((raw): { name: string } => {
+  getSkillInstallInfo: t.procedure.query(async () => {
+    return getSkillInstallInfo();
+  }),
+
+  createSkill: t.procedure
+    .input((raw): { input: CreateSkillInput } => {
       const r = raw as Record<string, unknown>;
-      if (typeof r.name !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'name is required' });
+      const inp = r.input as Partial<CreateSkillInput>;
+      if (!inp || typeof inp.name !== 'string' || typeof inp.description !== 'string' || typeof inp.body !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'name, description, and body are required' });
       }
-      return { name: r.name };
+      return { input: inp as CreateSkillInput };
     })
-    .mutation(async () => {
-      return { ok: true };
+    .mutation(async ({ input }) => {
+      try {
+        return await createUserSkill(input.input);
+      } catch (err) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }),
+
+  installSkill: t.procedure
+    .input((raw): { input: CreateSkillInput } => {
+      const r = raw as Record<string, unknown>;
+      const inp = r.input as Partial<CreateSkillInput>;
+      if (!inp || typeof inp.name !== 'string' || typeof inp.description !== 'string' || typeof inp.body !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'name, description, and body are required' });
+      }
+      return { input: inp as CreateSkillInput };
+    })
+    .mutation(async ({ input }) => {
+      try {
+        return await createUserSkill(input.input);
+      } catch (err) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
     }),
 
   uninstallSkill: t.procedure
@@ -143,8 +180,16 @@ export const settingsRouter = t.router({
       }
       return { name: r.name };
     })
-    .mutation(async () => {
-      return { ok: true };
+    .mutation(async ({ input }) => {
+      try {
+        await deleteUserSkill(input.name);
+        return { ok: true };
+      } catch (err) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
     }),
 
   listMcpServers: t.procedure.query(() => {

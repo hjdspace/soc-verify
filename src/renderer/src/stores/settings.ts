@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
-import type { CredentialEntry, CredentialInput } from '@shared/types';
+import type { CredentialEntry, CredentialInput, SkillInfo, SkillInstallInfo, CreateSkillInput } from '@shared/types';
 
 export interface ApiModel {
   id: string;
@@ -12,7 +12,8 @@ export interface ApiModel {
 
 interface SettingsStoreState {
   credentials: CredentialEntry[];
-  skills: string[];
+  skills: SkillInfo[];
+  skillInstallInfo: SkillInstallInfo | null;
   mcpServers: string[];
   systemPrompt: string;
   loading: boolean;
@@ -27,7 +28,8 @@ interface SettingsStoreState {
   setCredential: (input: CredentialInput) => Promise<void>;
   deleteCredential: (providerId: string) => Promise<void>;
   loadSkills: () => Promise<void>;
-  installSkill: (name: string) => Promise<void>;
+  loadSkillInstallInfo: () => Promise<void>;
+  createSkill: (input: CreateSkillInput) => Promise<void>;
   uninstallSkill: (name: string) => Promise<void>;
   loadMcpServers: () => Promise<void>;
   setMcpConfig: (projectId: string, config: unknown) => Promise<void>;
@@ -41,6 +43,7 @@ interface SettingsStoreState {
 export const useSettingsStore = create<SettingsStoreState>((set) => ({
   credentials: [],
   skills: [],
+  skillInstallInfo: null,
   mcpServers: [],
   systemPrompt: '',
   loading: false,
@@ -101,13 +104,22 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
     }
   },
 
-  installSkill: async (name) => {
+  loadSkillInstallInfo: async () => {
     try {
-      await trpc.settings.installSkill.mutate({ name });
+      const info = await trpc.settings.getSkillInstallInfo.query();
+      set({ skillInstallInfo: info });
+    } catch {
+      // Best-effort
+    }
+  },
+
+  createSkill: async (input) => {
+    try {
+      await trpc.settings.createSkill.mutate({ input });
       await useSettingsStore.getState().loadSkills();
-      useToastStore.getState().success(`Skill "${name}" 已安装`);
+      useToastStore.getState().success(`技能 "${input.name}" 已创建`);
     } catch (err) {
-      useToastStore.getState().error('安装 Skill 失败', err instanceof Error ? err.message : String(err));
+      useToastStore.getState().error('创建技能失败', err instanceof Error ? err.message : String(err));
     }
   },
 
@@ -115,9 +127,9 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
     try {
       await trpc.settings.uninstallSkill.mutate({ name });
       await useSettingsStore.getState().loadSkills();
-      useToastStore.getState().success(`Skill "${name}" 已卸载`);
+      useToastStore.getState().success(`技能 "${name}" 已卸载`);
     } catch (err) {
-      useToastStore.getState().error('卸载 Skill 失败', err instanceof Error ? err.message : String(err));
+      useToastStore.getState().error('卸载技能失败', err instanceof Error ? err.message : String(err));
     }
   },
 

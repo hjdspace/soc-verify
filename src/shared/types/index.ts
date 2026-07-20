@@ -18,3 +18,4 @@ export * from './env';
 export * from './credential';
 export * from './error-analysis';
 export * from './diff-review';
+export * from './skill';
