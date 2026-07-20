@@ -186,6 +186,7 @@ export function LeftRail({ width }: LeftRailProps) {
               <FileTree
                 node={fileTree}
                 onSelectFile={handleSelectFile}
+                projectRootPath={currentProject?.rootPath}
               />
             ) : (
               <div className="px-2 py-1 text-xs text-muted-foreground">
