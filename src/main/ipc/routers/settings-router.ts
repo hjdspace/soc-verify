@@ -12,6 +12,7 @@ import {
   deleteUserSkill,
   getSkillInstallInfo,
 } from '../../agent/skill-discovery';
+import { fetchOpenAICompatibleModels } from '../../agent/openai-compatible';
 import type { CredentialInput, CreateSkillInput } from '@shared/types';
 
 export const settingsRouter = t.router({
@@ -81,46 +82,27 @@ export const settingsRouter = t.router({
       }
 
       try {
-        // Build the models endpoint URL
-        const base = baseUrl?.replace(/\/$/, '') ?? 'https://api.openai.com';
-        const modelsUrl = base.endsWith('/v1') ? `${base}/models` : `${base}/v1/models`;
-        const resp = await fetch(modelsUrl, {
-          headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-          },
+        // Reuse the same fetch logic as session creation to ensure consistent
+        // behavior (URL normalization, header format, error handling).
+        // Previously this procedure had its own inline implementation that added
+        // a `Content-Type: application/json` header to the GET request — some
+        // custom API gateways (e.g. one-api / new-api) reject that on GET
+        // requests, returning 401 "无效的令牌" even when the API key is valid.
+        const models = await fetchOpenAICompatibleModels({
+          baseUrl: baseUrl ?? 'https://api.openai.com',
+          apiKey,
         });
 
-        if (!resp.ok) {
-          const text = await resp.text();
-          throw new TRPCError({ code: 'BAD_REQUEST', message: `API returned ${resp.status}: ${text.slice(0, 200)}` });
-        }
-
-        const data = await resp.json() as Record<string, unknown>;
-        const rawData = data.data;
-        const modelList: Array<{ id: string; owned_by?: string }> = [];
-
-        if (Array.isArray(rawData)) {
-          for (const item of rawData) {
-            if (typeof item === 'object' && item !== null && 'id' in item) {
-              const m = item as { id: string; owned_by?: string };
-              modelList.push({ id: m.id, owned_by: m.owned_by });
-            }
-          }
-        } else if (typeof rawData === 'object' && rawData !== null && 'id' in rawData) {
-          const m = rawData as { id: string; owned_by?: string };
-          modelList.push({ id: m.id, owned_by: m.owned_by });
-        }
-
-        return modelList.map((m) => ({
+        return models.map((m) => ({
           id: m.id,
-          name: m.id,
+          name: m.name,
           provider: input.providerId ?? 'openai',
-          description: m.owned_by,
+          description: undefined,
         }));
       } catch (err) {
         if (err instanceof TRPCError) throw err;
-        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `Failed to fetch models: ${err instanceof Error ? err.message : String(err)}` });
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `API error: ${msg}` });
       }
     }),
 
