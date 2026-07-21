@@ -77,24 +77,57 @@ function findShell(): string {
  * Attempt to find the node-pty native binary on disk so we can give a more
  * specific error message ("binary exists but failed to load — likely ABI
  * mismatch" vs "binary not found at all").
+ *
+ * Checks both the directory existence AND the actual pty.node file, because
+ * node-pty 1.1.0 ships prebuilds for darwin/win32 but NOT for Linux — the
+ * prebuilds/linux-x64/ directory may not exist at all.
  */
-function findNodePtyBinaryPaths(): string[] {
-  const candidates: string[] = [];
-  // node-pty ships prebuilt binaries under build/Release/ or build/Debug/
+interface BinarySearchResult {
+  /** Directories that exist (may or may not contain pty.node). */
+  dirs: string[];
+  /** Paths where pty.node actually exists on disk. */
+  files: string[];
+}
+
+function findNodePtyBinaryPaths(): BinarySearchResult {
+  const dirs: string[] = [];
+  const files: string[] = [];
+
+  // node-pty's loadNativeModule() checks these locations (relative to lib/):
+  //   ../build/Release/pty.node, ../build/Debug/pty.node,
+  //   ../prebuilds/<platform>-<arch>/pty.node
+  const platformTag = `${process.platform}-${process.arch}`;
+  const subDirs = [
+    'build/Release',
+    'build/Debug',
+    `prebuilds/${platformTag}`,
+  ];
+
+  // Check relative to process.cwd() (dev mode)
   const ptyRoot = join(process.cwd(), 'node_modules', 'node-pty');
-  for (const sub of ['build/Release', 'build/Debug', 'prebuilt']) {
+  for (const sub of subDirs) {
     const dir = join(ptyRoot, sub);
-    if (existsSync(dir)) candidates.push(dir);
+    if (existsSync(dir)) {
+      dirs.push(dir);
+      const ptyFile = join(dir, 'pty.node');
+      if (existsSync(ptyFile)) files.push(ptyFile);
+    }
   }
+
   // Also check the app's resource path (AppImage / packaged app)
   if (process.resourcesPath) {
     const unpacked = join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', 'node-pty');
-    for (const sub of ['build/Release', 'build/Debug']) {
+    for (const sub of subDirs) {
       const dir = join(unpacked, sub);
-      if (existsSync(dir)) candidates.push(dir);
+      if (existsSync(dir)) {
+        dirs.push(dir);
+        const ptyFile = join(dir, 'pty.node');
+        if (existsSync(ptyFile)) files.push(ptyFile);
+      }
     }
   }
-  return candidates;
+
+  return { dirs, files };
 }
 
 /**
@@ -110,8 +143,9 @@ function buildDiagnosticMessage(err: unknown): string {
   // process.versions.modules is the NODE_MODULE_VERSION (ABI) number
   const abi = process.versions.modules ?? 'unknown';
 
-  const binaryPaths = findNodePtyBinaryPaths();
-  const binaryFound = binaryPaths.length > 0;
+  const { dirs: binaryDirs, files: binaryFiles } = findNodePtyBinaryPaths();
+  const binaryFound = binaryFiles.length > 0;
+  const dirsExist = binaryDirs.length > 0;
 
   // Classify the error
   let category: string;
@@ -120,17 +154,26 @@ function buildDiagnosticMessage(err: unknown): string {
   if (errStr.includes('Module did not self-register') || errStr.includes('NODE_MODULE_VERSION')) {
     category = 'ABI mismatch (native module compiled for a different Node/Electron version)';
     hint = 'The node-pty binary was compiled against a different ABI than the current Electron runtime. ' +
-      'Run `npx electron-rebuild -f -w node-pty` or set `npmRebuild: true` in electron-builder.yml to recompile for Electron.';
+      'Run `npx @electron/rebuild -f -w node-pty` to recompile for Electron.';
   } else if (errStr.includes('Cannot find module') || errStr.includes('MODULE_NOT_FOUND')) {
     if (binaryFound) {
       category = 'Native binary exists but cannot be loaded (missing system dependencies)';
       hint = 'The node-pty binary is present but fails to load, usually because a shared library is missing on this system. ' +
         'On Linux, install: `sudo apt install libutil1` (or the equivalent for your distro). ' +
         'On older Linux kernels (< 3.8), openpty() may be unavailable.';
+    } else if (dirsExist && process.platform === 'linux') {
+      // Directory exists but pty.node is missing — typical for Linux where node-pty
+      // doesn't ship prebuilds. This is the most common packaging issue.
+      category = 'Native binary not found for this platform (node-pty has no Linux prebuilds)';
+      hint = 'node-pty 1.1.0 does not ship Linux prebuilds. The build/Release or prebuilds/linux-x64/ ' +
+        'directory exists but pty.node is missing.\n' +
+        'To fix: run `npm run build:linux-pty` before packaging, which compiles node-pty for Linux ' +
+        'using Docker (or directly on Linux).\n' +
+        'Alternatively, build the AppImage on a Linux machine with build-essential installed.';
     } else {
       category = 'Native binary not found (node-pty was not installed/rebuilt for this platform)';
-      hint = 'node-pty was not found in node_modules. Run `npm install` and `npx electron-rebuild -f -w node-pty`. ' +
-        'If packaging, ensure `npmRebuild` is not disabled in electron-builder.yml.';
+      hint = 'node-pty was not found in node_modules. Run `npm install` and `npx @electron/rebuild -f -w node-pty`. ' +
+        'If packaging for Linux, run `npm run build:linux-pty` to compile the Linux binary.';
     }
   } else if (errStr.includes('libutil.so') || errStr.includes('libuv.so') || errStr.includes('cannot open shared object file')) {
     category = 'Missing shared library on this system';
@@ -140,15 +183,15 @@ function buildDiagnosticMessage(err: unknown): string {
   } else {
     category = 'Unknown error';
     hint = 'See the full error message above for details. ' +
-      'Try `npx electron-rebuild -f -w node-pty` to recompile the native module.';
+      'Try `npx @electron/rebuild -f -w node-pty` to recompile the native module.';
   }
 
   const lines = [
     `[terminal] ── node-pty load failure ──`,
-    `  Platform:     ${platform}`,
-    `  Electron:     ${electronVersion}`,
-    `  Node ABI:     ${abi} (Node ${nodeVersion})`,
-    `  Binary found: ${binaryFound ? `yes (${binaryPaths.join(', ')})` : 'no'}`,
+    `  Platform:      ${platform}`,
+    `  Electron:      ${electronVersion}`,
+    `  Node ABI:      ${abi} (Node ${nodeVersion})`,
+    `  Binary found:  ${binaryFound ? `yes (${binaryFiles.join(', ')})` : dirsExist ? `no (dirs exist but pty.node missing: ${binaryDirs.join(', ')})` : 'no'}`,
     `  Error:        ${errStr}`,
     `  Category:     ${category}`,
     `  Hint:         ${hint}`,
