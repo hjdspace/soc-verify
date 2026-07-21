@@ -2,6 +2,7 @@ import { app, BrowserWindow, shell, ipcMain, Tray, Menu, nativeImage, dialog } f
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { createIPCHandler } from './ipc/electron-trpc-bridge';
 import { router } from './ipc/router';
 import { resolveAgentRuntime } from './agent/paths';
@@ -14,6 +15,56 @@ import { errorAnalysisCoordinator } from './simulation/error-analysis-coordinato
 import { terminalManager } from './terminal/terminal-manager';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ── Linux D-Bus 会话总线处理 ───────────────────────────────────────
+// 在 HPC 服务器 / SSH + X11 转发 / 最小化窗口管理器等环境中，D-Bus
+// 会话总线可能未启动，导致 Chromium 打印大量 dbus/bus.cc ERROR 日志。
+// 这些错误不影响应用核心功能（Chromium 会优雅降级），但会造成日志噪音。
+//
+// 策略：
+//   1. 若 DBUS_SESSION_BUS_ADDRESS 已设置且有效 → 正常使用
+//   2. 若未设置 → 尝试通过 `dbus-launch` 启动一个会话总线
+//   3. 若 dbus-launch 不可用 → 提升 Chromium 日志级别至 FATAL，抑制 ERROR 级噪音
+function setupLinuxDbus(): void {
+  if (process.platform !== 'linux') return;
+
+  const currentAddr = process.env['DBUS_SESSION_BUS_ADDRESS'];
+  if (currentAddr && currentAddr.startsWith('unix:')) {
+    // D-Bus session bus already configured — nothing to do
+    return;
+  }
+
+  // Try to start a D-Bus session bus via dbus-launch
+  try {
+    const output = execSync('dbus-launch --sh-syntax', {
+      encoding: 'utf-8',
+      timeout: 5000,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    // Parse lines like: DBUS_SESSION_BUS_ADDRESS=unix:abstract=/tmp/dbus-XXX,guid=...
+    //                  DBUS_SESSION_BUS_PID=12345
+    //                  DBUS_SESSION_BUS_WINDOWID=1
+    for (const line of output.split('\n')) {
+      const match = line.match(/^(DBUS_SESSION_BUS_\w+)=(.+?);?\s*$/);
+      if (match) {
+        process.env[match[1]] = match[2].replace(/;$/, '');
+      }
+    }
+    console.log('[dbus] started session bus via dbus-launch');
+    return;
+  } catch {
+    // dbus-launch not available or failed — fall through to log suppression
+  }
+
+  // No D-Bus available: suppress Chromium's non-fatal D-Bus error logs.
+  // --log-level=3 means only FATAL messages are printed (0=INFO,1=WARN,2=ERROR,3=FATAL).
+  // This silences the harmless "Failed to connect to the bus" noise while
+  // preserving genuine crash-level messages.
+  app.commandLine.appendSwitch('log-level', '3');
+  console.log('[dbus] no session bus available; suppressing Chromium D-Bus error logs');
+}
+
+setupLinuxDbus();
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
