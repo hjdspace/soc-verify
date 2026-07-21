@@ -9,6 +9,7 @@ import type { CustomToolDefinition, InitConfig } from './types';
 import {
   buildModelInputOverrideConfig,
   buildOpenAICompatibleModelsConfig,
+  ensureV1Prefix,
   fetchOpenAICompatibleModels,
   OPENAI_COMPATIBLE_API_KEY_ENV,
   OPENAI_COMPATIBLE_PROVIDER,
@@ -251,7 +252,7 @@ class SessionManagerImpl extends EventEmitter {
       // This is critical for packaged builds where the env var might not be
       // propagated through other paths.
       if (!env.OPENAI_API_KEY) env.OPENAI_API_KEY = options.apiKey;
-      if (options.baseUrl && !env.OPENAI_BASE_URL) env.OPENAI_BASE_URL = options.baseUrl;
+      if (options.baseUrl && !env.OPENAI_BASE_URL) env.OPENAI_BASE_URL = ensureV1Prefix(options.baseUrl);
       provider = OPENAI_COMPATIBLE_PROVIDER;
     } else if (provider && model) {
       // Built-in provider path (e.g. user supplied only an API key, no baseUrl).
@@ -322,7 +323,7 @@ class SessionManagerImpl extends EventEmitter {
     const initConfig: InitConfig = {
       cwd: options.cwd,
       apiKey: options.apiKey,
-      baseUrl: options.baseUrl,
+      baseUrl: options.baseUrl ? ensureV1Prefix(options.baseUrl) : undefined,
       provider,
       model,
       sessionDir: options.sessionDir,
