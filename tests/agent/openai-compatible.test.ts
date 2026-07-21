@@ -43,6 +43,45 @@ describe('OpenAI-compatible Agent configuration', () => {
     expect(JSON.stringify(config)).not.toContain('test-secret');
   });
 
+  it('appends /v1 to baseUrl when missing so omp constructs the correct chat/completions URL', () => {
+    // Without /v1, the omp engine's openai-completions provider would construct
+    // `http://host:8557/chat/completions` instead of the correct
+    // `http://host:8557/v1/chat/completions`, resulting in an empty LLM response.
+    const config = buildOpenAICompatibleModelsConfig({
+      baseUrl: 'http://ai-u.unisoc.com:8557',
+      modelId: 'unisoc-code-max',
+      apiKeyEnvVar: 'SOCVERIFY_AGENT_API_KEY',
+    });
+
+    expect(config.providers['socverify-openai-compatible'].baseUrl).toBe(
+      'http://ai-u.unisoc.com:8557/v1',
+    );
+  });
+
+  it('preserves a custom path prefix before /v1', () => {
+    const config = buildOpenAICompatibleModelsConfig({
+      baseUrl: 'https://gateway.example/api/v1/',
+      modelId: 'chat-model',
+      apiKeyEnvVar: 'SOCVERIFY_AGENT_API_KEY',
+    });
+
+    expect(config.providers['socverify-openai-compatible'].baseUrl).toBe(
+      'https://gateway.example/api/v1',
+    );
+  });
+
+  it('appends /v1 after a custom path prefix when missing', () => {
+    const config = buildOpenAICompatibleModelsConfig({
+      baseUrl: 'https://gateway.example/api/',
+      modelId: 'chat-model',
+      apiKeyEnvVar: 'SOCVERIFY_AGENT_API_KEY',
+    });
+
+    expect(config.providers['socverify-openai-compatible'].baseUrl).toBe(
+      'https://gateway.example/api/v1',
+    );
+  });
+
   it('configures the model with text+image input so screenshots are not silently dropped', () => {
     const config = buildOpenAICompatibleModelsConfig({
       baseUrl: 'https://gateway.example/v1',
