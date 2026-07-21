@@ -6,6 +6,35 @@
 
 ---
 
+## [0.1.6](https://github.com/hjdspace/soc-verify/compare/v0.1.5...v0.1.6) (2026-07-21)
+
+### Features
+
+* **credentials:** 新增凭据更新功能，支持部分字段更新（apiKey 可选保留原值）
+* **platform:** 新增 Linux D-Bus 会话总线设置，抑制错误日志
+* **agent:** 新增 ensureV1Prefix 函数，确保 baseUrl 正确包含 /v1 前缀
+
+### Bug Fixes
+
+* **session:** 修复会话管理器中 baseUrl 缺少 v1 前缀导致 OpenAI 兼容代理请求失败
+* **agent:** 实现 stdout 守卫，防止非 JSONL 输出破坏 RPC 协议通信
+
+### Refactor
+
+* **terminal:** 重构 node-pty 二进制路径查找逻辑，返回结构化数据
+* **agent:** 重构 OpenAI 模型获取逻辑，统一使用 fetchOpenAICompatibleModels 函数
+
+### Build
+
+* 新增 node-pty Linux 原生二进制构建脚本，支持 Docker 交叉编译
+* package:linux 脚本集成 build-linux-pty 步骤
+
+### Tests
+
+* 新增 OpenAI 兼容代理 baseUrl 处理测试
+
+---
+
 ## [0.1.5](https://github.com/hjdspace/soc-verify/compare/v0.1.4...v0.1.5) (2026-07-20)
 
 ### Features
