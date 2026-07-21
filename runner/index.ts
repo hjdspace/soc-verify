@@ -36,6 +36,38 @@ import { createInterface } from "node:readline";
 // at execution time. No manual `declare global` is needed — adding one
 // conflicts with bun-types' own declaration (TS2451).
 
+// ─── stdout JSONL guard ─────────────────────────────────
+// The omp engine's winston Console transport (enabled via setTransports
+// below) writes structured JSON log entries to **stdout** by default.
+// This corrupts the JSONL protocol between the runner and the Electron
+// host: the host's readline handler tries to parse each log line as a
+// JSONL frame, and lines without a `type` field surface as
+// `[agent:rpc] unhandled frame type="undefined"`.
+//
+// Fix: intercept process.stdout.write. Lines that parse as JSON and
+// contain a `type` field (the JSONL frame discriminator) pass through
+// to stdout unchanged. Everything else (winston logs, console.log
+// output from dependencies, etc.) is redirected to stderr, where the
+// host captures it as [agent:stderr].
+const _origStdoutWrite = process.stdout.write.bind(process.stdout);
+process.stdout.write = ((data: unknown, ...args: unknown[]) => {
+	const str = typeof data === "string" ? data : String(data);
+	const line = str.trim();
+	if (line) {
+		try {
+			const parsed = JSON.parse(line);
+			if (typeof parsed === "object" && parsed !== null && "type" in parsed) {
+				// Valid JSONL frame — pass through to stdout
+				return _origStdoutWrite(data as string, ...(args as never[]));
+			}
+		} catch {
+			// Not valid JSON — redirect to stderr
+		}
+	}
+	// Non-JSONL output — redirect to stderr so it doesn't corrupt the protocol
+	return process.stderr.write(str, ...(args as never[]));
+}) as typeof process.stdout.write;
+
 // ─── Types ──────────────────────────────────────────────
 
 interface InitConfig {
