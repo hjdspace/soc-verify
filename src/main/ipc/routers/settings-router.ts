@@ -13,7 +13,7 @@ import {
   getSkillInstallInfo,
 } from '../../agent/skill-discovery';
 import { fetchOpenAICompatibleModels } from '../../agent/openai-compatible';
-import type { CredentialInput, CreateSkillInput } from '@shared/types';
+import type { CredentialInput, CredentialUpdateInput, CreateSkillInput } from '@shared/types';
 
 export const settingsRouter = t.router({
   getCredentials: t.procedure.query(() => {
@@ -31,6 +31,32 @@ export const settingsRouter = t.router({
     })
     .mutation(async ({ input }) => {
       return credentialManager.save(input.input);
+    }),
+
+  updateCredential: t.procedure
+    .input((raw): { input: CredentialUpdateInput } => {
+      const r = raw as Record<string, unknown>;
+      const inp = r.input as Partial<CredentialUpdateInput>;
+      if (!inp || typeof inp.providerId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'providerId is required' });
+      }
+      const result: CredentialUpdateInput = {
+        providerId: inp.providerId,
+        label: typeof inp.label === 'string' ? inp.label : undefined,
+        apiKey: typeof inp.apiKey === 'string' && inp.apiKey !== '' ? inp.apiKey : undefined,
+        baseUrl: typeof inp.baseUrl === 'string' ? inp.baseUrl : undefined,
+      };
+      return { input: result };
+    })
+    .mutation(async ({ input }) => {
+      try {
+        return await credentialManager.update(input.input);
+      } catch (err) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
     }),
 
   deleteCredential: t.procedure

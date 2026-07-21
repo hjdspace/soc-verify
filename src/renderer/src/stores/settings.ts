@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
-import type { CredentialEntry, CredentialInput, SkillInfo, SkillInstallInfo, CreateSkillInput } from '@shared/types';
+import type { CredentialEntry, CredentialInput, CredentialUpdateInput, SkillInfo, SkillInstallInfo, CreateSkillInput } from '@shared/types';
 
 export interface ApiModel {
   id: string;
@@ -26,6 +26,7 @@ interface SettingsStoreState {
 
   loadCredentials: () => Promise<void>;
   setCredential: (input: CredentialInput) => Promise<void>;
+  updateCredential: (input: CredentialUpdateInput) => Promise<void>;
   deleteCredential: (providerId: string) => Promise<void>;
   loadSkills: () => Promise<void>;
   loadSkillInstallInfo: () => Promise<void>;
@@ -74,6 +75,29 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
       useToastStore.getState().success('凭据已保存');
     } catch (err) {
       useToastStore.getState().error('保存凭据失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  updateCredential: async (input) => {
+    try {
+      const entry = await trpc.settings.updateCredential.mutate({ input });
+      set((s) => {
+        const existing = s.credentials.findIndex((c) => c.providerId === entry.providerId);
+        const creds = [...s.credentials];
+        if (existing >= 0) creds[existing] = entry;
+        else creds.push(entry);
+        // Invalidate cached models for this provider since credentials changed
+        const { [entry.providerId]: _removedModels, ...restModels } = s.modelsByProvider;
+        const { [entry.providerId]: _removedLoading, ...restLoading } = s.modelsLoadingByProvider;
+        return {
+          credentials: creds,
+          modelsByProvider: restModels,
+          modelsLoadingByProvider: restLoading,
+        };
+      });
+      useToastStore.getState().success('凭据已更新');
+    } catch (err) {
+      useToastStore.getState().error('更新凭据失败', err instanceof Error ? err.message : String(err));
     }
   },
 

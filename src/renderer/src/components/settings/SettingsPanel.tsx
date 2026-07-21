@@ -120,6 +120,7 @@ function CredentialsTab() {
   const credentials = useSettingsStore((s) => s.credentials);
   const loadCredentials = useSettingsStore((s) => s.loadCredentials);
   const setCredential = useSettingsStore((s) => s.setCredential);
+  const updateCredential = useSettingsStore((s) => s.updateCredential);
   const deleteCredential = useSettingsStore((s) => s.deleteCredential);
 
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
@@ -133,25 +134,57 @@ function CredentialsTab() {
   const [label, setLabel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
+  const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
 
   useEffect(() => {
     loadCredentials();
   }, [loadCredentials]);
 
-  const canSave = providerId.trim().length > 0 && apiKey.trim().length > 0;
+  const isEditing = editingProviderId !== null;
+  // In add mode: providerId + apiKey are required.
+  // In edit mode: only providerId is required (apiKey optional — empty keeps existing).
+  const canSave = isEditing
+    ? providerId.trim().length > 0
+    : providerId.trim().length > 0 && apiKey.trim().length > 0;
 
-  const handleSave = async () => {
-    if (!canSave) return;
-    await setCredential({
-      providerId: providerId.trim(),
-      label: label.trim() || providerId.trim(),
-      apiKey: apiKey.trim(),
-      baseUrl: baseUrl.trim() || undefined,
-    });
+  const resetForm = () => {
     setProviderId('');
     setLabel('');
     setApiKey('');
     setBaseUrl('');
+    setEditingProviderId(null);
+  };
+
+  const handleSave = async () => {
+    if (!canSave) return;
+    if (isEditing) {
+      await updateCredential({
+        providerId: providerId.trim(),
+        label: label.trim(),
+        apiKey: apiKey.trim() || undefined,
+        baseUrl: baseUrl.trim() || undefined,
+      });
+    } else {
+      await setCredential({
+        providerId: providerId.trim(),
+        label: label.trim() || providerId.trim(),
+        apiKey: apiKey.trim(),
+        baseUrl: baseUrl.trim() || undefined,
+      });
+    }
+    resetForm();
+  };
+
+  const handleEdit = (c: CredentialEntry) => {
+    setEditingProviderId(c.providerId);
+    setProviderId(c.providerId);
+    setLabel(c.label);
+    setApiKey('');
+    setBaseUrl(c.baseUrl ?? '');
+  };
+
+  const handleCancelEdit = () => {
+    resetForm();
   };
 
   const handleApplyCredential = async (providerIdToApply: string) => {
@@ -234,6 +267,25 @@ function CredentialsTab() {
                   <span
                     role="button"
                     tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleEdit(c);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleEdit(c);
+                      }
+                    }}
+                    title="编辑凭据"
+                    className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </span>
+                  <span
+                    role="button"
+                    tabIndex={0}
                     onClick={(e) => handleDelete(c.providerId, e)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
@@ -258,16 +310,33 @@ function CredentialsTab() {
         )}
       </div>
 
-      {/* Add new credential */}
+      {/* Add / Edit credential */}
       <div className="rounded-md border border-border/50 bg-secondary/20 p-2">
-        <div className="mb-1.5 text-[10px] font-semibold uppercase text-muted-foreground">添加凭据</div>
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-[10px] font-semibold uppercase text-muted-foreground">
+            {isEditing ? '编辑凭据' : '添加凭据'}
+          </span>
+          {isEditing && (
+            <button
+              onClick={handleCancelEdit}
+              className="text-muted-foreground hover:text-foreground"
+              title="取消编辑"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
         <div className="grid grid-cols-2 gap-1.5">
           <input
             type="text"
             value={providerId}
             onChange={(e) => setProviderId(e.target.value)}
             placeholder="Provider ID (如 openai)"
-            className="rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
+            disabled={isEditing}
+            className={cn(
+              'rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary',
+              isEditing && 'cursor-not-allowed opacity-60',
+            )}
           />
           <input
             type="text"
@@ -280,7 +349,7 @@ function CredentialsTab() {
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder="API Key"
+            placeholder={isEditing ? 'API Key（留空保持不变）' : 'API Key'}
             className="rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
           />
           <input
@@ -291,7 +360,15 @@ function CredentialsTab() {
             className="rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
           />
         </div>
-        <div className="mt-1.5 flex justify-end">
+        <div className="mt-1.5 flex justify-end gap-1">
+          {isEditing && (
+            <button
+              onClick={handleCancelEdit}
+              className="rounded px-2.5 py-1 text-[10px] text-muted-foreground hover:bg-secondary/50"
+            >
+              取消
+            </button>
+          )}
           <button
             onClick={handleSave}
             disabled={!canSave}
@@ -303,7 +380,7 @@ function CredentialsTab() {
             )}
           >
             <Save className="h-3 w-3" />
-            保存
+            {isEditing ? '更新' : '保存'}
           </button>
         </div>
       </div>

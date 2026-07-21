@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { app } from 'electron';
-import type { CredentialEntry, CredentialInput } from '@shared/types';
+import type { CredentialEntry, CredentialInput, CredentialUpdateInput } from '@shared/types';
 
 const CREDENTIALS_FILE = 'credentials.json';
 
@@ -63,6 +63,39 @@ class CredentialManagerImpl {
       apiKeyMasked: stored.apiKey.slice(0, 4) + '***',
       baseUrl: stored.baseUrl,
       createdAt: stored.createdAt,
+    };
+  }
+
+  /**
+   * Partially update an existing credential.
+   * Only the provided fields are changed; omitted fields keep their current value.
+   * `apiKey` is optional — when omitted, the existing key is preserved.
+   * Throws if the credential does not exist.
+   */
+  async update(input: CredentialUpdateInput): Promise<CredentialEntry> {
+    const all = await this.loadAll();
+    const idx = all.findIndex((c) => c.providerId === input.providerId);
+    if (idx < 0) {
+      throw new Error(`Credential not found: ${input.providerId}`);
+    }
+
+    const existing = all[idx];
+    const updated: StoredCredential = {
+      providerId: existing.providerId,
+      label: input.label !== undefined ? (input.label || existing.providerId) : existing.label,
+      apiKey: input.apiKey !== undefined && input.apiKey !== '' ? input.apiKey : existing.apiKey,
+      baseUrl: input.baseUrl !== undefined ? (input.baseUrl || undefined) : existing.baseUrl,
+      createdAt: existing.createdAt,
+    };
+    all[idx] = updated;
+    await this.persist(all);
+
+    return {
+      providerId: updated.providerId,
+      label: updated.label,
+      apiKeyMasked: updated.apiKey.slice(0, 4) + '***',
+      baseUrl: updated.baseUrl,
+      createdAt: updated.createdAt,
     };
   }
 
