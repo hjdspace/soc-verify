@@ -27,6 +27,29 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '');
 }
 
+/**
+ * Ensure the baseUrl ends with `/v1` — the standard OpenAI-compatible API
+ * version prefix.  The omp engine's `openai-completions` provider appends
+ * `/chat/completions` directly to `baseUrl`, so if the URL is missing `/v1`
+ * the request goes to e.g. `http://host:8557/chat/completions` instead of
+ * `http://host:8557/v1/chat/completions`, resulting in an empty response.
+ */
+export function ensureV1Prefix(baseUrl: string): string {
+  const normalized = normalizeBaseUrl(baseUrl);
+  try {
+    const parsed = new URL(normalized);
+    const trimmedPath = parsed.pathname.replace(/\/+$/, '');
+    if (trimmedPath.endsWith('/v1')) {
+      return normalized;
+    }
+    parsed.pathname = trimmedPath ? `${trimmedPath}/v1` : '/v1';
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch {
+    // Not a valid URL — fall back to simple string check
+    return normalized.endsWith('/v1') ? normalized : `${normalized}/v1`;
+  }
+}
+
 export async function fetchOpenAICompatibleModels({
   baseUrl,
   apiKey,
@@ -76,7 +99,7 @@ export function buildOpenAICompatibleModelsConfig({
   return {
     providers: {
       [OPENAI_COMPATIBLE_PROVIDER]: {
-        baseUrl: normalizeBaseUrl(baseUrl),
+        baseUrl: ensureV1Prefix(baseUrl),
         api: 'openai-completions',
         apiKey: apiKeyEnvVar,
         authHeader: true,
