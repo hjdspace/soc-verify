@@ -119,3 +119,57 @@ _Avoid_: center area, main panel
 **Workbench Destination**:
 用户在 Workbench 中打开的一个类型化目标，包含展示该目标所需的身份和上下文。
 _Avoid_: center tab ID, view string
+
+### 覆盖率域
+
+**Coverage Merge Session**:
+一次覆盖率数据导入单元，对应一个 merged coverage database（如 `cov_merge/`）。由 session ID 唯一标识，不与单个 Simulation Run 绑定。用户手动指定 cov_merge 目录后由平台生成报告。
+_Avoid_: coverage run, coverage report instance
+
+**Coverage Report**:
+EDA 工具从覆盖率数据库生成的文本报告。三种类型：Summary（层级树摘要）、Detail（每个实例/bin 的覆盖详情）、Metrics（覆盖率密度/复杂度等额外维度）。
+_Avoid_: coverage output, coverage file
+
+**Coverage Tree**:
+覆盖率数据的层级模块树，反映设计层次结构。每个节点代表一个设计模块（如 `tb_top → chip_top → dut → u_analog_bb`），节点间有 parent/children 关系。
+_Avoid_: module hierarchy, design tree
+
+**Coverage Metric**:
+覆盖率测量类型，共 8 种：line、branch、toggle、condition、fsm_state、fsm_transition、functional、assertion。每种指标在树的每个节点上都有一个 Coverage Triplet。
+_Avoid_: coverage type, coverage kind
+
+**Coverage Triplet**:
+某个节点上某个 metric 的三部分值：`{ percentage, covered, total }`。`covered` 和 `total` 是整数计数；`percentage` = covered/total × 100。当 metric 不适用时，三个值均为 null。
+_Avoid_: coverage value, metric value
+
+**Coverage Target**:
+某个 metric 的阈值百分比，高于该值认为覆盖率达标。平台内置行业默认值（line 95%、branch 90%、toggle 85%、fsm_state 100%、fsm_transition 90%、condition 85%、functional 100%），用户可在项目设置中覆盖。assertion 无行业默认目标。
+_Avoid_: coverage goal, coverage threshold
+
+**Coverage Gap**:
+某个模块上某个 metric 的覆盖率低于 Target 的情况。Deficit = Target − Actual。是 Coverage Closure 的输入。
+_Avoid_: coverage hole, coverage miss
+
+**Coverage Delta**:
+两次 Merge Session 之间某个 metric 覆盖率的变化量，用于跟踪迭代改进效果。Delta > 0 表示有效，Delta = 0 表示 stimulus 未命中 gap。
+_Avoid_: coverage change, coverage improvement
+
+**Coverage Triage**:
+对 Coverage Gap 的根因分类和置信度评估。根因类型：missing_scenario、wrong_config、dead_code、sampling_issue、encoding_mismatch。置信度：high、medium、low。
+_Avoid_: gap analysis, coverage diagnosis
+
+**Coverage Closure**:
+迭代流程：识别 Gap → 生成定向测试 → 运行仿真 → 检查 Delta → 重复。每个 Gap 最多 5 轮，连续 2 轮 Delta < 1% 触发升级。Dead code 确认和 exclusion 审批需要人工介入。
+_Avoid_: coverage convergence, coverage completion
+
+**Coverage Exclusion**:
+建议排除的覆盖率项（如 dead code、unreachable ifdef 路径）。必须经人工审批后才能排除，不可自动排除。
+_Avoid_: coverage waiver, coverage filter
+
+**Coverage Preprocessing**:
+覆盖率数据从 EDA 原始格式到结构化数据的两步流水线：第一步平台根据 EDA Tool Configuration 运行命令生成文本报告；第二步 CoverageParserPlugin 解析文本报告为 Coverage Tree。两步分离使 EDA 工具命令执行和文本解析可独立演化。
+_Avoid_: coverage conversion, coverage extraction
+
+**EDA Tool Configuration**:
+项目级配置，指定 EDA 工具类型（Cadence IMC / Synopsys VCS urg / Mentor Questa vcover）、cov_merge 默认路径、命令模板。用于 Coverage Preprocessing 第一步。
+_Avoid_: coverage settings, EDA config
