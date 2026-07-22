@@ -18,6 +18,8 @@ import { sessionManager } from '../../agent/session-manager';
 import { projectManager } from '../../project/project-manager';
 import { pluginLoader } from '../../plugins/loader';
 import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../../host/plugin-discovery';
+import { CoverageManager } from '../../coverage/coverage-manager';
+import { CoverageReportGenerator } from '../../coverage/coverage-report-generator';
 import { credentialManager } from '../../credentials/credential-manager';
 import {
   addSession,
@@ -64,6 +66,12 @@ export const sessionRouter = t.router({
       }
       const simulation = new PluginBackedSimulation(registry);
       const coverage = new PluginBackedCoverage(project.rootPath, registry);
+      // 构建 CoverageManager 供 Host Tools / Host URIs 使用（ADR 0009 摘要优先策略）
+      const coverageManager = new CoverageManager({
+        projectRoot: project.rootPath,
+        coverageAdapter: coverage,
+        reportGenerator: new CoverageReportGenerator({ projectRoot: project.rootPath }),
+      });
 
       // Load stored credentials and build env vars for agent process
       const credEnv = await credentialManager.buildEnvForAgent();
@@ -92,6 +100,7 @@ export const sessionRouter = t.router({
         discovery,
         simulationAdapter: simulation,
         coverageAdapter: coverage,
+        coverageManager,
         env: credEnv,
       });
 
@@ -317,6 +326,11 @@ export const sessionRouter = t.router({
         const discovery = new PluginBackedDiscovery(project.rootPath, registry);
         const simulation = new PluginBackedSimulation(registry);
         const coverage = new PluginBackedCoverage(project.rootPath, registry);
+        const coverageManager = new CoverageManager({
+          projectRoot: project.rootPath,
+          coverageAdapter: coverage,
+          reportGenerator: new CoverageReportGenerator({ projectRoot: project.rootPath }),
+        });
 
         // Capture the omp session ID for resume, then destroy the runtime session
         const ompSessionId = sessionManager.getOmpSessionId(input.sessionId);
@@ -342,6 +356,7 @@ export const sessionRouter = t.router({
           discovery,
           simulationAdapter: simulation,
           coverageAdapter: coverage,
+          coverageManager,
           resumeSessionId: ompSessionId,
           persistedSessionId,
           env: credEnv,
@@ -493,6 +508,11 @@ export const sessionRouter = t.router({
       const discovery = new PluginBackedDiscovery(project.rootPath, registry);
       const simulation = new PluginBackedSimulation(registry);
       const coverage = new PluginBackedCoverage(project.rootPath, registry);
+      const coverageManager = new CoverageManager({
+        projectRoot: project.rootPath,
+        coverageAdapter: coverage,
+        reportGenerator: new CoverageReportGenerator({ projectRoot: project.rootPath }),
+      });
 
       // Load persisted session to restore model info and omp sessionId
       const persistedSessions = await loadSessions(project.rootPath);
@@ -520,6 +540,7 @@ export const sessionRouter = t.router({
         discovery,
         simulationAdapter: simulation,
         coverageAdapter: coverage,
+        coverageManager,
         // Use the omp sessionId for resume — this is what the runner matches against
         resumeSessionId: persisted?.ompSessionId ?? input.sessionId,
         persistedSessionId: input.sessionId,

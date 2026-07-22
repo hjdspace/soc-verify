@@ -1,28 +1,25 @@
 /**
- * CoveragePanel — Slice 2 完整覆盖率数据模型与会话生命周期 UI。
+ * CoveragePanel — 覆盖率分析主面板。
  *
- * 5 个 Tab：
- *   1. 概览 — 8 metric Coverage Triplet（percentage + covered/total）+ 模块层级表（8 metric）
- *   2. 目标 — 7 metric 行业默认目标 + 项目级覆盖；assertion 无默认目标
- *   3. 缺口 — 自动检测 Gap + 手动 Triage 标注（5 根因 × 3 置信度）
- *   4. 排除 — Exclusion 工作流（请求 / 审批 / 驳回，不可自动排除）
- *   5. 对比 — 两个 Session 之间逐 metric Delta
+ * Slice 3：树表格视图（CoverageTreeTable）取代原 overview tab，支持树表格 / 仪表盘视图切换。
+ * 4 个 Tab：目标 / 缺口 / 排除 / 对比。
  *
- * 完整树表格 / 仪表盘 UI 在 Slice 3 / Slice 4 实现。
+ * 完整仪表盘 UI 在 Slice 4 实现。
  */
 import { useEffect, useState } from 'react';
 import {
-  Loader2, BarChart3, Upload, ChevronDown, ChevronRight,
+  Loader2, BarChart3, Upload, ChevronRight,
   Target as TargetIcon, AlertTriangle, ShieldBan, GitCompare, Trash2, Plus,
 } from 'lucide-react';
 import { useCoverageStore } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
 import { cn } from '@renderer/lib/utils';
 import type {
-  CoverageNode, EdaTool, CoverageMetric, CoverageGap, CoverageTriplet,
+  EdaTool, CoverageMetric, CoverageGap,
   TriageCause, TriageConfidence,
 } from '@shared/types';
 import { COVERAGE_METRICS, DEFAULT_COVERAGE_TARGETS } from '@shared/types';
+import { CoverageTreeTable } from './CoverageTreeTable';
 
 const EDA_TOOL_OPTIONS: Array<{ value: EdaTool; label: string }> = [
   { value: 'imc', label: 'Cadence IMC' },
@@ -56,50 +53,36 @@ const TRIAGE_CONFIDENCES: Array<{ value: TriageConfidence; label: string }> = [
   { value: 'low', label: '低' },
 ];
 
-type Tab = 'overview' | 'targets' | 'gaps' | 'exclusions' | 'delta';
+type Tab = 'targets' | 'gaps' | 'exclusions' | 'delta';
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
-  { id: 'overview', label: '概览', icon: BarChart3 },
   { id: 'targets', label: '目标', icon: TargetIcon },
   { id: 'gaps', label: '缺口', icon: AlertTriangle },
   { id: 'exclusions', label: '排除', icon: ShieldBan },
   { id: 'delta', label: '对比', icon: GitCompare },
 ];
 
-function pct(n: number | null): string {
-  return n === null ? 'N/A' : `${n.toFixed(1)}%`;
-}
-
-function tripletStr(t: CoverageTriplet): string {
-  if (t.percentage === null) return 'N/A';
-  return `${t.covered ?? '?'}/${t.total ?? '?'}`;
-}
-
-/** 收集树中所有节点为扁平列表 */
-function flattenTree(node: CoverageNode, out: CoverageNode[] = []): CoverageNode[] {
-  out.push(node);
-  for (const child of node.children) flattenTree(child, out);
-  return out;
-}
-
 export function CoveragePanel() {
   const sessions = useCoverageStore((s) => s.sessions);
   const currentSessionId = useCoverageStore((s) => s.currentSessionId);
   const tree = useCoverageStore((s) => s.tree);
-  const overview = useCoverageStore((s) => s.overview);
   const loading = useCoverageStore((s) => s.loading);
   const importing = useCoverageStore((s) => s.importing);
   const edaConfig = useCoverageStore((s) => s.edaConfig);
+  const targets = useCoverageStore((s) => s.targets);
+  const view = useCoverageStore((s) => s.view);
   const loadSessions = useCoverageStore((s) => s.loadSessions);
   const loadTree = useCoverageStore((s) => s.loadTree);
   const loadEdaConfig = useCoverageStore((s) => s.loadEdaConfig);
+  const loadTargets = useCoverageStore((s) => s.loadTargets);
   const importCoverage = useCoverageStore((s) => s.importCoverage);
   const setSessionId = useCoverageStore((s) => s.setSessionId);
   const deleteSession = useCoverageStore((s) => s.deleteSession);
+  const setView = useCoverageStore((s) => s.setView);
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
 
-  const [tab, setTab] = useState<Tab>('overview');
+  const [tab, setTab] = useState<Tab | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [covMergeDir, setCovMergeDir] = useState('');
   const [edaTool, setEdaTool] = useState<EdaTool>('imc');
@@ -115,10 +98,11 @@ export function CoveragePanel() {
   useEffect(() => {
     if (currentProjectId && currentSessionId) {
       loadTree(currentProjectId, currentSessionId);
+      loadTargets(currentProjectId, currentSessionId);
     } else if (currentProjectId && sessions.length > 0 && !currentSessionId) {
       loadTree(currentProjectId);
     }
-  }, [currentProjectId, currentSessionId, loadTree, sessions.length]);
+  }, [currentProjectId, currentSessionId, loadTree, loadTargets, sessions.length]);
 
   const handleImport = async () => {
     if (!currentProjectId || !covMergeDir.trim()) return;
@@ -262,123 +246,74 @@ export function CoveragePanel() {
         </div>
       )}
 
-      {/* Tab 导航 */}
+      {/* 视图切换 + Tab 导航 */}
       {tree && (
         <>
-          <div className="mb-3 flex gap-1 border-b border-border">
-            {TABS.map((t) => {
-              const Icon = t.icon;
-              return (
-                <button
-                  key={t.id}
-                  onClick={() => setTab(t.id)}
-                  className={cn(
-                    'flex items-center gap-1 border-b-2 px-3 py-1.5 text-xs transition-colors',
-                    tab === t.id
-                      ? 'border-primary text-primary'
-                      : 'border-transparent text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  <Icon className="h-3 w-3" />
-                  {t.label}
-                </button>
-              );
-            })}
+          {/* 视图切换按钮组 */}
+          <div className="mb-3 flex gap-1">
+            <button
+              onClick={() => setView('tree-table')}
+              className={cn(
+                'rounded px-3 py-1 text-xs',
+                view === 'tree-table'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'border border-border bg-card hover:bg-secondary',
+              )}
+            >
+              树表格
+            </button>
+            <button
+              onClick={() => setView('dashboard')}
+              className={cn(
+                'rounded px-3 py-1 text-xs',
+                view === 'dashboard'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'border border-border bg-card hover:bg-secondary',
+              )}
+            >
+              仪表盘
+            </button>
           </div>
 
-          {tab === 'overview' && <OverviewSection overview={overview} tree={tree} />}
-          {tab === 'targets' && <TargetsSection currentProjectId={currentProjectId} currentSessionId={currentSessionId} />}
-          {tab === 'gaps' && <GapsSection currentProjectId={currentProjectId} currentSessionId={currentSessionId} />}
-          {tab === 'exclusions' && <ExclusionsSection currentProjectId={currentProjectId} currentSessionId={currentSessionId} />}
-          {tab === 'delta' && <DeltaSection currentProjectId={currentProjectId} sessions={sessions} />}
+          {view === 'dashboard' ? (
+            <div className="flex items-center justify-center py-12 text-xs text-muted-foreground">
+              仪表盘视图 — Slice 4 实现
+            </div>
+          ) : (
+            <>
+              {/* 树表格主视图 */}
+              <CoverageTreeTable data={tree} targets={targets} />
+
+              {/* 4 个详情 Tab */}
+              <div className="mt-4 flex gap-1 border-b border-border">
+                {TABS.map((t) => {
+                  const Icon = t.icon;
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => setTab(tab === t.id ? null : t.id)}
+                      className={cn(
+                        'flex items-center gap-1 border-b-2 px-3 py-1.5 text-xs transition-colors',
+                        tab === t.id
+                          ? 'border-primary text-primary'
+                          : 'border-transparent text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      <Icon className="h-3 w-3" />
+                      {t.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {tab === 'targets' && <TargetsSection currentProjectId={currentProjectId} currentSessionId={currentSessionId} />}
+              {tab === 'gaps' && <GapsSection currentProjectId={currentProjectId} currentSessionId={currentSessionId} />}
+              {tab === 'exclusions' && <ExclusionsSection currentProjectId={currentProjectId} currentSessionId={currentSessionId} />}
+              {tab === 'delta' && <DeltaSection currentProjectId={currentProjectId} sessions={sessions} />}
+            </>
+          )}
         </>
       )}
-    </div>
-  );
-}
-
-// ─── 概览 Tab：8 metric Triplet 卡片 + 模块层级表 ───────────────
-
-function OverviewSection({
-  overview,
-  tree,
-}: {
-  overview: ReturnType<typeof useCoverageStore.getState>['overview'];
-  tree: NonNullable<ReturnType<typeof useCoverageStore.getState>['tree']>;
-}) {
-  const [expanded, setExpanded] = useState<Set<string>>(new Set([tree.root.path]));
-
-  const toggle = (path: string) => {
-    const next = new Set(expanded);
-    if (next.has(path)) next.delete(path);
-    else next.add(path);
-    setExpanded(next);
-  };
-
-  return (
-    <div className="space-y-3">
-      {/* 8 metric Triplet 卡片 */}
-      {overview && (
-        <div className="grid grid-cols-4 gap-2">
-          {COVERAGE_METRICS.map((m) => {
-            const v = overview[m];
-            const nodeMetric = tree.root.metrics[m];
-            return (
-              <div key={m} className="rounded border border-border bg-card p-2">
-                <div className="text-[10px] text-muted-foreground">{METRIC_LABELS[m]}</div>
-                <div className="font-mono text-sm font-bold">{pct(v)}</div>
-                <div className="font-mono text-[10px] text-muted-foreground">{tripletStr(nodeMetric)}</div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* 模块层级表（8 metric） */}
-      <div className="rounded border border-border">
-        <table className="w-full text-xs">
-          <thead className="bg-secondary text-[10px] uppercase text-muted-foreground">
-            <tr>
-              <th className="px-2 py-1 text-left">模块</th>
-              {COVERAGE_METRICS.map((m) => (
-                <th key={m} className="px-2 py-1 text-right">{METRIC_LABELS[m]}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {flattenTree(tree.root).map((node, idx) => {
-              const isRoot = node.depth === 0;
-              const hasChildren = node.children.length > 0;
-              const isExpanded = expanded.has(node.path);
-              return (
-                <tr
-                  key={`${node.path}-${idx}`}
-                  className={cn('border-t border-border', isRoot && 'bg-card font-medium')}
-                >
-                  <td className="px-2 py-1" style={{ paddingLeft: `${8 + node.depth * 14}px` }}>
-                    {hasChildren ? (
-                      <button
-                        onClick={() => toggle(node.path)}
-                        className="flex items-center gap-1"
-                      >
-                        {isExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                        {node.name}
-                      </button>
-                    ) : (
-                      <span className="pl-4">{node.name}</span>
-                    )}
-                  </td>
-                  {COVERAGE_METRICS.map((m) => (
-                    <td key={m} className="px-2 py-1 text-right font-mono">
-                      {pct(node.metrics[m].percentage)}
-                    </td>
-                  ))}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 }

@@ -19,6 +19,7 @@ import type { SubsysDiscovery } from '../host/discovery';
 import type { PluginBackedSimulation, PluginBackedCoverage } from '../host/plugin-discovery';
 import { HostToolsRegistry } from '../host/host-tools';
 import { HostUriRouter } from '../host/host-uris';
+import type { CoverageManager } from '../coverage/coverage-manager';
 
 const MAX_CONCURRENT_SESSIONS = 10;
 const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -116,6 +117,7 @@ export interface CreateSessionOptions {
   discovery?: SubsysDiscovery;
   simulationAdapter?: PluginBackedSimulation | null;
   coverageAdapter?: PluginBackedCoverage | null;
+  coverageManager?: CoverageManager | null;
 }
 
 export interface SessionEntry {
@@ -179,6 +181,7 @@ class SessionManagerImpl extends EventEmitter {
     const hostTools = new HostToolsRegistry(options.discovery, options.cwd);
     if (options.simulationAdapter) hostTools.setSimulationAdapter(options.simulationAdapter);
     if (options.coverageAdapter) hostTools.setCoverageAdapter(options.coverageAdapter);
+    if (options.coverageManager) hostTools.setCoverageManager(options.coverageManager);
 
     // Build custom tool definitions for the runner
     const customToolDefinitions: CustomToolDefinition[] = hostTools.getDefinitions().map((def) => ({
@@ -419,6 +422,9 @@ class SessionManagerImpl extends EventEmitter {
     }
     console.log(`[agent:session:${sessionId}] agent session initialized`);
 
+    const hostUris = new HostUriRouter();
+    if (options.coverageManager) hostUris.setCoverageManager(options.coverageManager);
+
     const entry: SessionEntry = {
       id: sessionId,
       persistedSessionId: options.persistedSessionId,
@@ -426,7 +432,7 @@ class SessionManagerImpl extends EventEmitter {
       projectId: options.projectId,
       client,
       hostTools,
-      hostUris: new HostUriRouter(),
+      hostUris,
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
       idleTimer: null,

@@ -4,6 +4,7 @@ import type { AgentToolResult, RpcHostToolCallRequest, RpcHostToolDefinition } f
 import type { SubsysDiscovery, CaseStatus } from './discovery';
 import { NoopDiscovery } from './discovery';
 import type { PluginBackedSimulation, PluginBackedCoverage } from './plugin-discovery';
+import type { CoverageManager } from '../coverage/coverage-manager';
 
 type HostToolHandler = (args: Record<string, unknown>) => Promise<AgentToolResult | string>;
 
@@ -31,6 +32,7 @@ export class HostToolsRegistry {
   private discovery: SubsysDiscovery;
   private simulation: PluginBackedSimulation | null = null;
   private coverage: PluginBackedCoverage | null = null;
+  private coverageManager: CoverageManager | null = null;
   /** Working directory for resolving relative file paths in tools */
   cwd: string;
 
@@ -46,6 +48,20 @@ export class HostToolsRegistry {
 
   setCoverageAdapter(cov: PluginBackedCoverage | null): void {
     this.coverage = cov;
+  }
+
+  /**
+   * 注入 CoverageManager（ADR 0009 摘要优先策略）。
+   * 设置后 get_coverage 返回摘要而非整个树，并注册 get_coverage_detail 工具。
+   * 传 null 回退到旧的 coverage.parse() 行为并注销 get_coverage_detail。
+   */
+  setCoverageManager(mgr: CoverageManager | null): void {
+    this.coverageManager = mgr;
+    if (mgr) {
+      this.registerGetCoverageDetail();
+    } else {
+      this.unregister('get_coverage_detail');
+    }
   }
 
   private registerDefaults(): void {
@@ -203,7 +219,7 @@ export class HostToolsRegistry {
     this.register(
       defineTool(
         'get_coverage',
-        'Get coverage data for a coverage merge session. Returns the hierarchical coverage tree.',
+        'Get coverage summary for a coverage merge session. Returns top-level summary plus the worst-coverage modules (ADR 0009 summary-first strategy). Use get_coverage_detail to drill down into a specific module.',
         {
           type: 'object',
           properties: {
@@ -211,14 +227,26 @@ export class HostToolsRegistry {
               type: 'string',
               description: 'Coverage Merge Session ID. If omitted, the most recent session is used.',
             },
-            reportDir: {
-              type: 'string',
-              description: 'Directory of pre-generated EDA text reports. If omitted, parsed from cached data when available.',
+            worstN: {
+              type: 'number',
+              description: 'Number of worst-coverage modules to return (default 5)',
             },
           },
           additionalProperties: false,
         },
         async (args) => {
+          // 优先使用 CoverageManager 摘要策略（ADR 0009）
+          if (this.coverageManager) {
+            try {
+              const sessionId = typeof args.sessionId === 'string' ? args.sessionId : undefined;
+              const worstN = typeof args.worstN === 'number' ? args.worstN : 5;
+              const result = await this.coverageManager.getCoverageSummary(sessionId, worstN);
+              return TEXT(JSON.stringify(result));
+            } catch (err) {
+              return TEXT(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+            }
+          }
+          // 回退：旧行为（直接调用插件 parse，返回完整树）
           if (!this.coverage?.hasParser()) {
             return TEXT(JSON.stringify({ error: 'No coverage-parser plugin loaded' }));
           }
@@ -263,6 +291,45 @@ export class HostToolsRegistry {
             return TEXT(result + suffix);
           } catch (err) {
             return TEXT(`Error reading file: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        },
+      ),
+    );
+  }
+
+  /**
+   * 注册 get_coverage_detail 工具（ADR 0009 按需下钻）。
+   * 仅在 CoverageManager 可用时注册。
+   */
+  private registerGetCoverageDetail(): void {
+    if (this.hasTool('get_coverage_detail')) return;
+    this.register(
+      defineTool(
+        'get_coverage_detail',
+        'Get detailed coverage for a specific module and its direct children (ADR 0009 drill-down). Use after get_coverage to inspect a specific low-coverage module.',
+        {
+          type: 'object',
+          properties: {
+            module: { type: 'string', description: 'Module path (e.g. "top/cpu_core")' },
+            sessionId: {
+              type: 'string',
+              description: 'Coverage Merge Session ID. If omitted, the most recent session is used.',
+            },
+          },
+          required: ['module'],
+          additionalProperties: false,
+        },
+        async (args) => {
+          if (!this.coverageManager) {
+            return TEXT(JSON.stringify({ error: 'Coverage manager not available' }));
+          }
+          try {
+            const modulePath = typeof args.module === 'string' ? args.module : '';
+            const sessionId = typeof args.sessionId === 'string' ? args.sessionId : undefined;
+            const result = await this.coverageManager.getCoverageDetail(modulePath, sessionId);
+            return TEXT(JSON.stringify(result));
+          } catch (err) {
+            return TEXT(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
           }
         },
       ),

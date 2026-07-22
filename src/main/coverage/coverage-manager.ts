@@ -19,6 +19,7 @@ import type {
   CoverageData,
   CoverageMergeSession,
   CoverageSummary,
+  CoverageNode,
   EdaToolConfig,
   CoverageMetric,
   CoverageGap,
@@ -157,6 +158,94 @@ export class CoverageManager {
    */
   async getTree(sessionId?: string): Promise<CoverageData> {
     return this.resolveSession(sessionId);
+  }
+
+  // ─── AI Host Tools 支持（ADR 0009 摘要优先策略） ───────────────
+
+  /**
+   * 返回覆盖率摘要 + 最差 N 个模块（ADR 0009 摘要优先策略）。
+   * 供 AI Host Tool get_coverage 消费，避免返回整个树超出 context window。
+   */
+  async getCoverageSummary(
+    sessionId?: string,
+    worstN = 5,
+  ): Promise<{
+    sessionId: string;
+    summary: CoverageSummary;
+    worstModules: Array<{
+      name: string;
+      path: string;
+      metrics: CoverageNode['metrics'];
+      deficit: number; // 最差 metric 的 deficit (target - actual)，无目标用 0
+    }>;
+    targets: Partial<Record<CoverageMetric, number>>;
+  }> {
+    const data = await this.resolveSession(sessionId);
+    const targets = await this.getTargets(data.sessionId);
+    const summary = summarizeCoverage(data.root);
+
+    // 遍历所有节点，计算每个节点最差 metric 的 deficit
+    const allNodes: CoverageNode[] = [];
+    const walk = (node: CoverageNode): void => {
+      allNodes.push(node);
+      for (const child of node.children) walk(child);
+    };
+    walk(data.root);
+
+    const worstModules = allNodes
+      .map((node) => {
+        let maxDeficit = 0;
+        for (const metric of COVERAGE_METRICS) {
+          const target = targets[metric];
+          const pct = node.metrics[metric].percentage;
+          if (target === undefined || pct === null) continue;
+          const deficit = target - pct;
+          if (deficit > maxDeficit) maxDeficit = deficit;
+        }
+        return {
+          name: node.name,
+          path: node.path,
+          metrics: node.metrics,
+          deficit: maxDeficit,
+        };
+      })
+      .sort((a, b) => b.deficit - a.deficit)
+      .slice(0, worstN);
+
+    return { sessionId: data.sessionId, summary, worstModules, targets };
+  }
+
+  /**
+   * 返回指定模块及其直接子模块的覆盖率（ADR 0009 按需下钻）。
+   * 供 AI Host Tool get_coverage_detail 消费。
+   * modulePath 格式如 "top/cpu_core" 或 "top/cpu_core/u_reg"。
+   */
+  async getCoverageDetail(
+    modulePath: string,
+    sessionId?: string,
+  ): Promise<{
+    sessionId: string;
+    module: CoverageNode | null;
+    children: CoverageNode[];
+    targets: Partial<Record<CoverageMetric, number>>;
+  }> {
+    const data = await this.resolveSession(sessionId);
+    const targets = await this.getTargets(data.sessionId);
+
+    // 递归查找 modulePath 对应的节点
+    const findNode = (node: CoverageNode, path: string): CoverageNode | null => {
+      if (node.path === path) return node;
+      for (const child of node.children) {
+        const found = findNode(child, path);
+        if (found) return found;
+      }
+      return null;
+    };
+
+    const module = findNode(data.root, modulePath);
+    const children = module ? module.children : [];
+
+    return { sessionId: data.sessionId, module, children, targets };
   }
 
   async deleteSession(sessionId: string): Promise<void> {

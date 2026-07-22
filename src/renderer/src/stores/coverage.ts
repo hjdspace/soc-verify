@@ -40,6 +40,10 @@ interface CoverageStoreState {
   loading: boolean;
   importing: boolean;
 
+  /** 当前 UI 视图：树表格 / 仪表盘 */
+  view: 'tree-table' | 'dashboard';
+  setView: (view: 'tree-table' | 'dashboard') => void;
+
   loadSessions: (projectId: string) => Promise<void>;
   loadTree: (projectId: string, sessionId?: string) => Promise<void>;
   loadEdaConfig: (projectId: string) => Promise<void>;
@@ -117,6 +121,9 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
   delta: null,
   loading: false,
   importing: false,
+  view: 'tree-table',
+
+  setView: (view) => set({ view }),
 
   loadSessions: async (projectId) => {
     try {
