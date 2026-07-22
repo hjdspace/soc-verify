@@ -213,3 +213,129 @@ export function summarizeCoverage(node: CoverageNode): CoverageSummary {
     assertion: pct('assertion'),
   };
 }
+
+// ─── Coverage Gap（ADR 0007 决策 5 + PRD US-12） ────────────────
+
+/**
+ * 覆盖率缺口：某模块某 metric 低于 Target。
+ * deficit = Target − Actual（正值表示未达标）。
+ */
+export type CoverageGap = {
+  nodePath: string;
+  nodeName: string;
+  metric: CoverageMetric;
+  target: number;
+  actual: number;
+  deficit: number;
+};
+
+/**
+ * 遍历 CoverageNode 树，收集所有低于 Target 的 Gap。
+ * N/A metric（percentage=null）跳过。
+ */
+export function detectGaps(
+  node: CoverageNode,
+  targets: Partial<Record<CoverageMetric, number>>,
+): CoverageGap[] {
+  const gaps: CoverageGap[] = [];
+  const walk = (n: CoverageNode): void => {
+    for (const metric of COVERAGE_METRICS) {
+      const target = targets[metric];
+      const tripletVal = n.metrics[metric];
+      if (target === undefined || tripletVal.percentage === null) continue;
+      if (tripletVal.percentage < target) {
+        gaps.push({
+          nodePath: n.path,
+          nodeName: n.name,
+          metric,
+          target,
+          actual: tripletVal.percentage,
+          deficit: target - tripletVal.percentage,
+        });
+      }
+    }
+    for (const child of n.children) walk(child);
+  };
+  walk(node);
+  return gaps;
+}
+
+// ─── Coverage Delta（PRD US-15） ────────────────────────────────
+
+/**
+ * 两个 Merge Session 之间某 metric 的覆盖率变化量。
+ * delta = after − before；delta > 0 有效提升，delta = 0 stimulus 未命中。
+ */
+export type CoverageDelta = {
+  metric: CoverageMetric;
+  before: number;
+  after: number;
+  delta: number;
+};
+
+/**
+ * 计算两个 CoverageSummary 之间的 Delta（逐 metric）。
+ */
+export function calculateDelta(
+  before: CoverageSummary,
+  after: CoverageSummary,
+): CoverageDelta[] {
+  return COVERAGE_METRICS.map((metric) => {
+    const b = before[metric];
+    const a = after[metric];
+    return { metric, before: b, after: a, delta: a - b };
+  });
+}
+
+// ─── Coverage Triage（PRD US-16, US-17） ────────────────────────
+
+/** Triage 根因分类（5 种）。 */
+export type TriageCause =
+  | 'missing_scenario'
+  | 'wrong_config'
+  | 'dead_code'
+  | 'sampling_issue'
+  | 'encoding_mismatch';
+
+/** Triage 置信度（3 级）。 */
+export type TriageConfidence = 'high' | 'medium' | 'low';
+
+/**
+ * 覆盖率 Triage 条目。对 Gap 进行根因分类 + 置信度评估。
+ * 本切片只提供数据结构和手动标注；AI 自动分类在 Slice 6b。
+ */
+export type CoverageTriage = {
+  id: string;
+  sessionId: string;
+  nodePath: string;
+  metric: CoverageMetric;
+  gap: CoverageGap;
+  cause?: TriageCause;
+  confidence?: TriageConfidence;
+  note?: string;
+  triagedAt?: number;
+  triagedBy?: string;
+};
+
+// ─── Coverage Exclusion（PRD US-18, US-19） ─────────────────────
+
+/** Exclusion 审批状态。 */
+export type ExclusionStatus = 'pending' | 'approved' | 'rejected';
+
+/**
+ * 覆盖率排除项。建议排除的覆盖率项（如 dead code），
+ * 必须人工审批后才能排除，不可自动排除。
+ */
+export type CoverageExclusion = {
+  id: string;
+  sessionId: string;
+  nodePath: string;
+  metric: CoverageMetric;
+  reason: string;
+  status: ExclusionStatus;
+  requestedBy: string;
+  approvedBy?: string;
+  requestedAt: number;
+  approvedAt?: number;
+  rejectionReason?: string;
+};

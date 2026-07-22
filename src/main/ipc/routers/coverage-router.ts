@@ -11,8 +11,15 @@ import { CoverageReportGenerator } from '../../coverage/coverage-report-generato
 import { pluginLoader } from '../../plugins/loader';
 import { PluginBackedCoverage } from '../../host/plugin-discovery';
 import { loadEdaConfig, saveEdaConfig, normalizeConfig } from '../../coverage/eda-config';
-import type { EdaToolConfig, CoverageMetric } from '@shared/types';
-import { DEFAULT_COVERAGE_TARGETS } from '@shared/types';
+import type {
+  EdaToolConfig,
+  CoverageMetric,
+  CoverageGap,
+  TriageCause,
+  TriageConfidence,
+  ExclusionStatus,
+} from '@shared/types';
+import { DEFAULT_COVERAGE_TARGETS, COVERAGE_METRICS } from '@shared/types';
 
 function buildManager(projectRoot: string): CoverageManager {
   const registry = pluginLoader.getRegistry(projectRoot);
@@ -202,4 +209,215 @@ export const coverageRouter = t.router({
       const mgr = buildManager(project.rootPath);
       return mgr.exportReport(input.sessionId, input.format, input.outputPath);
     }),
+
+  // ─── Slice 2: Target / Gap / Delta / Triage / Exclusion ──────
+
+  getTarget: t.procedure
+    .input((raw): { projectId: string; sessionId?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId, sessionId: typeof r.sessionId === 'string' ? r.sessionId : undefined };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      return mgr.getTargets(input.sessionId);
+    }),
+
+  setTarget: t.procedure
+    .input((raw): { projectId: string; sessionId: string; targets: Partial<Record<CoverageMetric, number>> } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and sessionId are required' });
+      }
+      const targets = parseTargets(r.targets);
+      return { projectId: r.projectId, sessionId: r.sessionId, targets };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      return mgr.setTargets(input.sessionId, input.targets);
+    }),
+
+  listGaps: t.procedure
+    .input((raw): { projectId: string; sessionId?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId, sessionId: typeof r.sessionId === 'string' ? r.sessionId : undefined };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      return mgr.listGaps(input.sessionId);
+    }),
+
+  getDelta: t.procedure
+    .input((raw): { projectId: string; sessionIdBefore: string; sessionIdAfter: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.sessionIdBefore !== 'string' || typeof r.sessionIdAfter !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, sessionIdBefore and sessionIdAfter are required' });
+      }
+      return { projectId: r.projectId, sessionIdBefore: r.sessionIdBefore, sessionIdAfter: r.sessionIdAfter };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      return mgr.getDelta(input.sessionIdBefore, input.sessionIdAfter);
+    }),
+
+  addTriage: t.procedure
+    .input((raw): { projectId: string; sessionId: string; nodePath: string; metric: CoverageMetric; gap: CoverageGap; cause?: TriageCause; confidence?: TriageConfidence; note?: string; triagedBy?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string' || typeof r.nodePath !== 'string' || typeof r.metric !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, sessionId, nodePath and metric are required' });
+      }
+      if (!COVERAGE_METRICS.includes(r.metric as CoverageMetric)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Invalid metric: ${String(r.metric)}` });
+      }
+      const gap = r.gap as Record<string, unknown> | undefined;
+      if (!gap || typeof gap.nodePath !== 'string' || typeof gap.metric !== 'string' || typeof gap.target !== 'number' || typeof gap.actual !== 'number' || typeof gap.deficit !== 'number') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'gap with nodePath, metric, target, actual, deficit is required' });
+      }
+      return {
+        projectId: r.projectId,
+        sessionId: r.sessionId,
+        nodePath: r.nodePath,
+        metric: r.metric as CoverageMetric,
+        gap: gap as unknown as CoverageGap,
+        cause: typeof r.cause === 'string' ? (r.cause as TriageCause) : undefined,
+        confidence: typeof r.confidence === 'string' ? (r.confidence as TriageConfidence) : undefined,
+        note: typeof r.note === 'string' ? r.note : undefined,
+        triagedBy: typeof r.triagedBy === 'string' ? r.triagedBy : undefined,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      return mgr.addTriage(input);
+    }),
+
+  listTriage: t.procedure
+    .input((raw): { projectId: string; sessionId?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId, sessionId: typeof r.sessionId === 'string' ? r.sessionId : undefined };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      return mgr.listTriage(input.sessionId);
+    }),
+
+  deleteTriage: t.procedure
+    .input((raw): { projectId: string; id: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.id !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and id are required' });
+      }
+      return { projectId: r.projectId, id: r.id };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      await mgr.deleteTriage(input.id);
+      return { ok: true };
+    }),
+
+  requestExclusion: t.procedure
+    .input((raw): { projectId: string; sessionId: string; nodePath: string; metric: CoverageMetric; reason: string; requestedBy: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string' || typeof r.nodePath !== 'string' || typeof r.metric !== 'string' || typeof r.reason !== 'string' || typeof r.requestedBy !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, sessionId, nodePath, metric, reason and requestedBy are required' });
+      }
+      if (!COVERAGE_METRICS.includes(r.metric as CoverageMetric)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Invalid metric: ${String(r.metric)}` });
+      }
+      return {
+        projectId: r.projectId,
+        sessionId: r.sessionId,
+        nodePath: r.nodePath,
+        metric: r.metric as CoverageMetric,
+        reason: r.reason,
+        requestedBy: r.requestedBy,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      return mgr.requestExclusion(input);
+    }),
+
+  approveExclusion: t.procedure
+    .input((raw): { projectId: string; id: string; approver: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.id !== 'string' || typeof r.approver !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, id and approver are required' });
+      }
+      return { projectId: r.projectId, id: r.id, approver: r.approver };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      return mgr.approveExclusion(input.id, input.approver);
+    }),
+
+  rejectExclusion: t.procedure
+    .input((raw): { projectId: string; id: string; approver: string; reason: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.id !== 'string' || typeof r.approver !== 'string' || typeof r.reason !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, id, approver and reason are required' });
+      }
+      return { projectId: r.projectId, id: r.id, approver: r.approver, reason: r.reason };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      return mgr.rejectExclusion(input.id, input.approver, input.reason);
+    }),
+
+  listExclusions: t.procedure
+    .input((raw): { projectId: string; sessionId?: string; status?: ExclusionStatus } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      const status = typeof r.status === 'string' ? (r.status as ExclusionStatus) : undefined;
+      if (status && !['pending', 'approved', 'rejected'].includes(status)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Invalid status: ${status}` });
+      }
+      return {
+        projectId: r.projectId,
+        sessionId: typeof r.sessionId === 'string' ? r.sessionId : undefined,
+        status,
+      };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      return mgr.listExclusions(input.sessionId, input.status);
+    }),
 });
+
+/**
+ * 将 unknown 解析为 Partial<Record<CoverageMetric, number>>。
+ * 只保留键为合法 CoverageMetric、值为有限数字的项；其余丢弃。
+ */
+function parseTargets(raw: unknown): Partial<Record<CoverageMetric, number>> {
+  if (!raw || typeof raw !== 'object') {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'targets must be an object' });
+  }
+  const obj = raw as Record<string, unknown>;
+  const out: Partial<Record<CoverageMetric, number>> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (!COVERAGE_METRICS.includes(key as CoverageMetric)) continue;
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+    out[key as CoverageMetric] = value;
+  }
+  return out;
+}

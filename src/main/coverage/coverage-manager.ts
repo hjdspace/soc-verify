@@ -13,15 +13,29 @@
  *   └── <sessionId>/reports/       # EDA 文本报告
  */
 
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type {
   CoverageData,
   CoverageMergeSession,
   CoverageSummary,
   EdaToolConfig,
+  CoverageMetric,
+  CoverageGap,
+  CoverageDelta,
+  CoverageTriage,
+  CoverageExclusion,
+  TriageCause,
+  TriageConfidence,
+  ExclusionStatus,
 } from '@shared/types';
-import { summarizeCoverage, DEFAULT_COVERAGE_TARGETS } from '@shared/types';
+import {
+  summarizeCoverage,
+  detectGaps,
+  calculateDelta,
+  DEFAULT_COVERAGE_TARGETS,
+  COVERAGE_METRICS,
+} from '@shared/types';
 import type { PluginBackedCoverage } from '../host/plugin-discovery';
 import { CoverageReportGenerator } from './coverage-report-generator';
 
@@ -149,7 +163,199 @@ export class CoverageManager {
     const sessions = await this.listSessions();
     const next = sessions.filter((s) => s.sessionId !== sessionId);
     await this.writeSessions(next);
-    // 缓存文件保留（可手动清理），不阻塞删除
+    // 清理缓存文件与 triage/exclusion 元数据（best-effort，不阻塞删除）
+    await this.safeDelete(this.cachePath(sessionId));
+    await this.safeDelete(this.triagePath(sessionId));
+    await this.safeDelete(this.exclusionPath(sessionId));
+  }
+
+  // ─── Target 管理（PRD US-11） ─────────────────────────────────
+
+  /**
+   * 返回指定 session 的有效目标（session 自定义覆盖默认值）。
+   * sessionId 缺省时仅返回 DEFAULT_COVERAGE_TARGETS。
+   * assertion 始终无默认目标（行业惯例）。
+   */
+  async getTargets(sessionId?: string): Promise<Partial<Record<CoverageMetric, number>>> {
+    if (!sessionId) return { ...DEFAULT_COVERAGE_TARGETS };
+    const data = await this.loadCached(sessionId);
+    if (!data) return { ...DEFAULT_COVERAGE_TARGETS };
+    return { ...DEFAULT_COVERAGE_TARGETS, ...data.targets };
+  }
+
+  /**
+   * 设置指定 session 的覆盖率目标（覆盖式）。
+   * 持久化到缓存文件 CoverageData.targets。
+   */
+  async setTargets(
+    sessionId: string,
+    targets: Partial<Record<CoverageMetric, number>>,
+  ): Promise<Partial<Record<CoverageMetric, number>>> {
+    const data = await this.resolveSession(sessionId);
+    const merged = { ...DEFAULT_COVERAGE_TARGETS, ...data.targets, ...targets };
+    const updated: CoverageData = { ...data, targets: merged };
+    await this.cache(updated);
+    return merged;
+  }
+
+  // ─── Gap 检测（ADR 0007 决策 5 + PRD US-12） ─────────────────
+
+  /**
+   * 列出指定 session 中所有低于 Target 的 Gap。
+   * sessionId 缺省时使用最近一个 session。
+   */
+  async listGaps(sessionId?: string): Promise<{ sessionId: string; gaps: CoverageGap[] }> {
+    const data = await this.resolveSession(sessionId);
+    const targets = await this.getTargets(data.sessionId);
+    return { sessionId: data.sessionId, gaps: detectGaps(data.root, targets) };
+  }
+
+  // ─── Delta 计算（PRD US-15） ─────────────────────────────────
+
+  /**
+   * 计算两个 session 之间的覆盖率变化（逐 metric）。
+   * delta = after − before；正值表示提升，负值表示退化。
+   */
+  async getDelta(
+    sessionIdBefore: string,
+    sessionIdAfter: string,
+  ): Promise<{ before: CoverageSummary; after: CoverageSummary; deltas: CoverageDelta[] }> {
+    const before = await this.resolveSession(sessionIdBefore);
+    const after = await this.resolveSession(sessionIdAfter);
+    const beforeSummary = summarizeCoverage(before.root);
+    const afterSummary = summarizeCoverage(after.root);
+    return {
+      before: beforeSummary,
+      after: afterSummary,
+      deltas: calculateDelta(beforeSummary, afterSummary),
+    };
+  }
+
+  // ─── Triage CRUD（PRD US-16, US-17；本切片仅手动标注） ────────
+
+  /**
+   * 添加一条 Triage 标注。返回带 id/triagedAt 的新条目。
+   */
+  async addTriage(input: {
+    sessionId: string;
+    nodePath: string;
+    metric: CoverageMetric;
+    gap: CoverageGap;
+    cause?: TriageCause;
+    confidence?: TriageConfidence;
+    note?: string;
+    triagedBy?: string;
+  }): Promise<CoverageTriage> {
+    const entry: CoverageTriage = {
+      id: this.generateId('triage'),
+      sessionId: input.sessionId,
+      nodePath: input.nodePath,
+      metric: input.metric,
+      gap: input.gap,
+      cause: input.cause,
+      confidence: input.confidence,
+      note: input.note,
+      triagedAt: Date.now(),
+      triagedBy: input.triagedBy,
+    };
+    const list = await this.loadTriage(input.sessionId);
+    list.push(entry);
+    await this.saveTriage(input.sessionId, list);
+    return entry;
+  }
+
+  /**
+   * 列出指定 session（缺省=所有 session）的 Triage 条目。
+   */
+  async listTriage(sessionId?: string): Promise<CoverageTriage[]> {
+    if (sessionId) return this.loadTriage(sessionId);
+    // 遍历所有 session 聚合
+    const sessions = await this.listSessions();
+    const all: CoverageTriage[] = [];
+    for (const s of sessions) {
+      const list = await this.loadTriage(s.sessionId);
+      all.push(...list);
+    }
+    return all.sort((a, b) => (b.triagedAt ?? 0) - (a.triagedAt ?? 0));
+  }
+
+  async deleteTriage(id: string): Promise<void> {
+    const all = await this.listTriage();
+    const target = all.find((t) => t.id === id);
+    if (!target) return;
+    const remaining = (await this.loadTriage(target.sessionId)).filter((t) => t.id !== id);
+    await this.saveTriage(target.sessionId, remaining);
+  }
+
+  // ─── Exclusion 工作流（PRD US-18, US-19；需人工审批） ─────────
+
+  /**
+   * 发起排除请求（status=pending）。不可自动排除，必须经过 approve。
+   */
+  async requestExclusion(input: {
+    sessionId: string;
+    nodePath: string;
+    metric: CoverageMetric;
+    reason: string;
+    requestedBy: string;
+  }): Promise<CoverageExclusion> {
+    const entry: CoverageExclusion = {
+      id: this.generateId('excl'),
+      sessionId: input.sessionId,
+      nodePath: input.nodePath,
+      metric: input.metric,
+      reason: input.reason,
+      status: 'pending',
+      requestedBy: input.requestedBy,
+      requestedAt: Date.now(),
+    };
+    const list = await this.loadExclusions(input.sessionId);
+    list.push(entry);
+    await this.saveExclusions(input.sessionId, list);
+    return entry;
+  }
+
+  /** 审批通过：将 pending → approved。 */
+  async approveExclusion(id: string, approver: string): Promise<CoverageExclusion> {
+    return this.updateExclusion(id, (e) => ({
+      ...e,
+      status: 'approved' as ExclusionStatus,
+      approvedBy: approver,
+      approvedAt: Date.now(),
+    }));
+  }
+
+  /** 驳回：将 pending → rejected，并记录原因。 */
+  async rejectExclusion(id: string, approver: string, reason: string): Promise<CoverageExclusion> {
+    return this.updateExclusion(id, (e) => ({
+      ...e,
+      status: 'rejected' as ExclusionStatus,
+      approvedBy: approver,
+      approvedAt: Date.now(),
+      rejectionReason: reason,
+    }));
+  }
+
+  /**
+   * 列出指定 session（缺省=所有 session）的 Exclusion 条目。
+   * status 缺省返回全部状态。
+   */
+  async listExclusions(
+    sessionId?: string,
+    status?: ExclusionStatus,
+  ): Promise<CoverageExclusion[]> {
+    let list: CoverageExclusion[];
+    if (sessionId) {
+      list = await this.loadExclusions(sessionId);
+    } else {
+      const sessions = await this.listSessions();
+      list = [];
+      for (const s of sessions) {
+        list.push(...(await this.loadExclusions(s.sessionId)));
+      }
+    }
+    const filtered = status ? list.filter((e) => e.status === status) : list;
+    return filtered.sort((a, b) => b.requestedAt - a.requestedAt);
   }
 
   // ─── 趋势（基于 session 序列，ADR 0008） ──────────────────────
@@ -301,6 +507,91 @@ ${rows}
     await mkdir(dir, { recursive: true });
     const filePath = join(dir, `${data.sessionId}.json`);
     await writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
+  }
+
+  // ─── Triage / Exclusion 持久化 ──────────────────────────────
+
+  private cachePath(sessionId: string): string {
+    return join(this.projectRoot, SOCVERIFY_DIR, COVERAGE_DIR, `${sessionId}.json`);
+  }
+
+  private triagePath(sessionId: string): string {
+    return join(this.projectRoot, SOCVERIFY_DIR, COVERAGE_DIR, `${sessionId}-triage.json`);
+  }
+
+  private exclusionPath(sessionId: string): string {
+    return join(this.projectRoot, SOCVERIFY_DIR, COVERAGE_DIR, `${sessionId}-exclusions.json`);
+  }
+
+  private async loadTriage(sessionId: string): Promise<CoverageTriage[]> {
+    try {
+      const raw = await readFile(this.triagePath(sessionId), 'utf-8');
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as CoverageTriage[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async saveTriage(sessionId: string, list: CoverageTriage[]): Promise<void> {
+    const dir = join(this.projectRoot, SOCVERIFY_DIR, COVERAGE_DIR);
+    await mkdir(dir, { recursive: true });
+    await writeFile(this.triagePath(sessionId), JSON.stringify(list, null, 2), 'utf-8');
+  }
+
+  private async loadExclusions(sessionId: string): Promise<CoverageExclusion[]> {
+    try {
+      const raw = await readFile(this.exclusionPath(sessionId), 'utf-8');
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as CoverageExclusion[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async saveExclusions(sessionId: string, list: CoverageExclusion[]): Promise<void> {
+    const dir = join(this.projectRoot, SOCVERIFY_DIR, COVERAGE_DIR);
+    await mkdir(dir, { recursive: true });
+    await writeFile(this.exclusionPath(sessionId), JSON.stringify(list, null, 2), 'utf-8');
+  }
+
+  /**
+   * 按 id 查找并就地更新 Exclusion 条目。
+   * 仅允许从 pending 流转；已 approved/rejected 的条目不可再改状态。
+   */
+  private async updateExclusion(
+    id: string,
+    mutator: (e: CoverageExclusion) => CoverageExclusion,
+  ): Promise<CoverageExclusion> {
+    const sessions = await this.listSessions();
+    for (const s of sessions) {
+      const list = await this.loadExclusions(s.sessionId);
+      const idx = list.findIndex((e) => e.id === id);
+      if (idx === -1) continue;
+      const current = list[idx];
+      if (current.status !== 'pending') {
+        throw new Error(`Exclusion ${id} is already ${current.status}; cannot change`);
+      }
+      const updated = mutator(current);
+      list[idx] = updated;
+      await this.saveExclusions(s.sessionId, list);
+      return updated;
+    }
+    throw new Error(`Exclusion ${id} not found`);
+  }
+
+  private generateId(prefix: string): string {
+    const ts = Date.now().toString(36);
+    const rand = Math.random().toString(36).slice(2, 8);
+    return `${prefix}_${ts}_${rand}`;
+  }
+
+  private async safeDelete(filePath: string): Promise<void> {
+    try {
+      await unlink(filePath);
+    } catch {
+      // best-effort：文件不存在或被占用均忽略
+    }
   }
 }
 
