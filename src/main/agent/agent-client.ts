@@ -69,6 +69,33 @@ export class AgentClient {
     const { promise: readyPromise, resolve: readyResolve, reject: readyReject } = Promise.withResolvers<void>();
     let readySettled = false;
 
+    // Handle spawn errors (e.g. binary not found, missing shared library,
+    // wrong ELF format).  Without this listener, Node.js treats the 'error'
+    // event as an uncaught exception and crashes the Electron main process
+    // with a "A JavaScript error occurred in the main process" dialog.
+    //
+    // On Linux AppImage, this is the primary failure mode when the
+    // socverify-runner binary can't execute (missing system libs, wrong
+    // architecture, or the binary simply wasn't packaged for this platform).
+    child.on('error', (err: Error) => {
+      const enriched = new Error(
+        `Failed to spawn agent process '${spawnCmd}': ${err.message}. ` +
+        `This usually means the runner binary is missing, not executable, ` +
+        `or has missing shared libraries on this system.`,
+      );
+      if (!readySettled) {
+        readySettled = true;
+        readyReject(enriched);
+      } else {
+        // Process started but later failed (e.g. killed signal)
+        for (const [, pending] of this.pendingRequests) {
+          clearTimeout(pending.timeoutId);
+          pending.reject(enriched);
+        }
+        this.pendingRequests.clear();
+      }
+    });
+
     const rl = createInterface({ input: child.stdout!, crlfDelay: Infinity });
 
     rl.on('line', (line: string) => {
