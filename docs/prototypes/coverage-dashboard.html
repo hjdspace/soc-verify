@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SoC Verify · 覆盖率仪表盘原型</title>
+<style>
+  :root {
+    --bg: oklch(0.14 0.006 250);
+    --bg-surface: oklch(0.18 0.006 250);
+    --bg-elevated: oklch(0.21 0.007 250);
+    --bg-hover: oklch(0.23 0.008 250);
+    --fg: oklch(0.94 0.004 250);
+    --fg-dim: oklch(0.62 0.008 250);
+    --fg-faint: oklch(0.42 0.006 250);
+    --border: oklch(0.25 0.007 250);
+    --c-pass: oklch(0.62 0.14 145);
+    --c-warn: oklch(0.70 0.13 85);
+    --c-fail: oklch(0.58 0.15 25);
+    --c-na: oklch(0.35 0.005 250);
+    --c-accent: oklch(0.68 0.14 250);
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--fg); font-family: var(--sans); padding: 24px; font-size: 13px; }
+  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+  .header h1 { font-size: 18px; font-weight: 700; }
+  .header .badge { font-size: 10px; font-weight: 600; padding: 3px 10px; border-radius: 12px; background: var(--bg-elevated); color: var(--fg-dim); text-transform: uppercase; }
+  .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .toolbar select, .toolbar input { background: var(--bg-surface); border: 1px solid var(--border); color: var(--fg); font-size: 12px; padding: 5px 10px; border-radius: 6px; }
+  .toolbar .btn { background: var(--bg-surface); border: 1px solid var(--border); color: var(--fg-dim); font-size: 11px; padding: 5px 12px; border-radius: 6px; cursor: pointer; }
+  .toolbar .btn:hover { color: var(--fg); }
+
+  /* Section headers */
+  .section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-faint); margin-bottom: 10px; }
+
+  /* Overview cards */
+  .overview-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px; }
+  .ov-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .ov-card .ov-label { font-size: 10px; color: var(--fg-faint); text-transform: uppercase; margin-bottom: 6px; }
+  .ov-card .ov-value { font-family: var(--mono); font-size: 22px; font-weight: 700; }
+  .ov-card .ov-count { font-size: 10px; color: var(--fg-faint); margin-top: 2px; }
+  .ov-card .ov-bar { margin-top: 8px; height: 4px; border-radius: 2px; background: var(--bg-elevated); overflow: hidden; }
+  .ov-card .ov-bar-fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
+  .ov-card .ov-status { font-size: 9px; font-weight: 600; text-transform: uppercase; margin-top: 6px; }
+
+  /* Trend chart */
+  .trend-section { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 20px; }
+  .trend-section .ts-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .trend-section .ts-title { font-size: 12px; font-weight: 600; }
+  .trend-svg { width: 100%; height: 80px; }
+
+  /* Tree table (compact) */
+  .tree-section { margin-bottom: 20px; }
+  .tree-table { width: 100%; border-collapse: collapse; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .tree-table thead th { background: var(--bg-elevated); color: var(--fg-faint); font-size: 10px; font-weight: 600; text-transform: uppercase; padding: 7px 6px; text-align: right; border-bottom: 1px solid var(--border); }
+  .tree-table thead th:first-child { text-align: left; padding-left: 12px; }
+  .tree-table tbody td { padding: 4px 6px; text-align: right; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 10px; color: var(--fg-dim); }
+  .tree-table tbody td:first-child { text-align: left; padding-left: 12px; font-family: var(--sans); color: var(--fg); font-size: 11px; }
+  .tree-table tbody tr:hover { background: var(--bg-hover); }
+  .tree-table tbody tr.coll-child { display: none; }
+  .tree-toggle { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
+  .tree-toggle .chevron { width: 10px; height: 10px; transition: transform 0.15s; color: var(--fg-faint); flex-shrink: 0; }
+  .tree-toggle .chevron.open { transform: rotate(90deg); }
+  .tree-toggle .chevron.empty { visibility: hidden; }
+  .cov-cell { display: inline-flex; flex-direction: column; align-items: flex-end; line-height: 1.2; }
+  .cov-cell .pct { font-weight: 600; }
+  .cov-cell .count { font-size: 8px; color: var(--fg-faint); }
+  .cov-cell.pass .pct { color: var(--c-pass); }
+  .cov-cell.warn .pct { color: var(--c-warn); }
+  .cov-cell.fail .pct { color: var(--c-fail); }
+  .cov-cell.na .pct { color: var(--c-na); }
+  .cov-cell.na .count { display: none; }
+
+  /* Uncovered detail */
+  .uncovered-section { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .uncovered-section .us-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .uncovered-section .us-title { font-size: 12px; font-weight: 600; }
+  .uncovered-section .us-tabs { display: flex; gap: 4px; }
+  .uncovered-tab { font-size: 10px; padding: 3px 8px; border-radius: 4px; cursor: pointer; background: var(--bg-elevated); color: var(--fg-dim); }
+  .uncovered-tab.active { color: var(--c-accent); background: oklch(0.21 0.03 250); }
+  .uncovered-list { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
+  .uncovered-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: var(--bg-elevated); font-size: 10px; }
+  .uncovered-item .ui-module { color: var(--c-accent); font-family: var(--mono); min-width: 120px; }
+  .uncovered-item .ui-file { color: var(--fg-dim); font-family: var(--mono); }
+  .uncovered-item .ui-desc { color: var(--fg-dim); margin-left: auto; }
+  .uncovered-item .ui-badge { font-size: 9px; padding: 1px 6px; border-radius: 8px; background: var(--c-fail); color: white; }
+
+  /* AI panel */
+  .ai-panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-top: 16px; }
+  .ai-panel .ai-title { font-size: 12px; font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+  .ai-panel .ai-title .ai-icon { width: 14px; height: 14px; border-radius: 50%; background: var(--c-accent); display: flex; align-items: center; justify-content: center; font-size: 9px; color: white; }
+  .ai-panel .ai-msg { font-size: 11px; color: var(--fg-dim); line-height: 1.6; }
+  .ai-panel .ai-action { margin-top: 8px; display: flex; gap: 8px; }
+  .ai-panel .ai-btn { font-size: 10px; padding: 4px 10px; border-radius: 4px; cursor: pointer; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--fg-dim); }
+  .ai-panel .ai-btn.primary { background: var(--c-accent); color: white; border: none; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>覆盖率分析 · 仪表盘 + 下钻布局</h1>
+  <span class="badge">方案 C</span>
+</div>
+
+<div class="toolbar">
+  <select>
+    <option>Session: 2024-01-15_merge_001 (cov_merge/)</option>
+    <option>Session: 2024-01-10_merge_002 (cov_merge_old/)</option>
+  </select>
+  <input type="text" placeholder="过滤模块..." style="width: 140px;">
+  <button class="btn">导入新 Session</button>
+  <button class="btn">导出报告</button>
+  <button class="btn">AI 分析</button>
+</div>
+
+<!-- 1. Overview cards -->
+<div class="overview-grid" id="overviewGrid"></div>
+
+<!-- 2. Trend chart -->
+<div class="trend-section">
+  <div class="ts-header">
+    <span class="ts-title">覆盖率趋势</span>
+    <span style="font-size: 10px; color: var(--fg-faint);">最近 5 个 merge session</span>
+  </div>
+  <svg class="trend-svg" id="trendSvg" viewBox="0 0 600 80" preserveAspectRatio="none"></svg>
+</div>
+
+<!-- 3. Tree table -->
+<div class="tree-section">
+  <div class="section-title">模块层级覆盖率</div>
+  <table class="tree-table" id="treeTable">
+    <thead><tr>
+      <th>模块</th>
+      <th>Line</th><th>Branch</th><th>Toggle</th><th>Cond</th>
+      <th>FSM St</th><th>FSM Tr</th><th>Func</th><th>Assert</th>
+    </tr></thead>
+    <tbody id="treeBody"></tbody>
+  </table>
+</div>
+
+<!-- 4. Uncovered items -->
+<div class="uncovered-section">
+  <div class="us-header">
+    <span class="us-title">未覆盖项</span>
+    <div class="us-tabs" id="uncovTabs"></div>
+  </div>
+  <div class="uncovered-list" id="uncovList"></div>
+</div>
+
+<!-- 5. AI panel -->
+<div class="ai-panel">
+  <div class="ai-title"><span class="ai-icon">AI</span> 覆盖率分析建议</div>
+  <div class="ai-msg">
+    检测到 <strong style="color:var(--c-fail)">3 个模块</strong>的 line coverage 低于 95% 目标：
+    <br>· <code>u_analog_mipi_mphy_2t2r</code> (58.42%) — 缺少 MIPI MPHY 协议状态遍历测试
+    <br>· <code>u_g3_side_glue_wrap</code> (57.38%) — G3 侧 glue 逻辑未覆盖，可能缺少配置初始化序列
+    <br>· <code>u_block_wrap_0</code> (60.04%) — 整体覆盖率低，建议优先处理子模块
+    <br><br>建议：生成 MIPI MPHY 状态遍历定向测试，预计可提升 line coverage 约 15-20%。
+  </div>
+  <div class="ai-action">
+    <button class="ai-btn primary">开始 Coverage Closure</button>
+    <button class="ai-btn">查看详细分析</button>
+  </div>
+</div>
+
+<script>
+const TARGETS = { line: 95, branch: 90, toggle: 85, condition: 85, fsm_state: 100, fsm_transition: 90, functional: 100, assertion: null };
+const METRICS = ['line', 'branch', 'toggle', 'condition', 'fsm_state', 'fsm_transition', 'functional', 'assertion'];
+const METRIC_LABELS = { line: 'Line', branch: 'Branch', toggle: 'Toggle', condition: 'Cond', fsm_state: 'FSM St', fsm_transition: 'FSM Tr', functional: 'Func', assertion: 'Assert' };
+
+const tree = {
+  name: 'tb_top', depth: 0, children: [
+    { name: 'chip_top', depth: 1, children: [
+      { name: 'dut', depth: 2, children: [
+        { name: 'u_analog_bb_line_usb', depth: 3, m: { line: { p: 87.5, c: 13, t: 15 }, branch: { p: 80, c: 8, t: 10 }, toggle: { p: 75, c: 30, t: 40 }, condition: { p: 70, c: 7, t: 10 } } } },
+        { name: 'u_block_wrap_0', depth: 3, children: [
+          { name: 'u_analog_mipi_mphy_2t2r', depth: 4, m: { line: { p: 58.42, c: 482, t: 825 }, branch: { p: 52.1, c: 350, t: 672 }, toggle: { p: 45.3, c: 1200, t: 2650 }, condition: { p: 48, c: 96, t: 200 }, fsm_state: { p: 66.7, c: 4, t: 6 }, fsm_transition: { p: 40, c: 6, t: 15 }, assertion: { p: 50, c: 3, t: 6 } } } },
+          { name: 'u_g3_side_glue_wrap', depth: 4, m: { line: { p: 57.38, c: 1007, t: 1755 }, branch: { p: 50.2, c: 700, t: 1393 }, toggle: { p: 42.1, c: 2500, t: 5940 }, condition: { p: 45, c: 180, t: 400 } } } },
+          { name: 'analog_mipi_mphy_2t2r_glue', depth: 4, m: { line: { p: 96.88, c: 225, t: 239 }, branch: { p: 92, c: 161, t: 175 }, toggle: { p: 88.5, c: 450, t: 508 }, condition: { p: 90, c: 45, t: 50 } } } },
+          { name: 'u_anlg_phy_g3_rf', depth: 4, m: { line: { p: 79.97, c: 1540, t: 1974 }, branch: { p: 72.3, c: 1100, t: 1521 }, toggle: { p: 68.5, c: 3200, t: 4672 }, condition: { p: 70, c: 280, t: 400 }, fsm_state: { p: 80, c: 8, t: 10 }, fsm_transition: { p: 65, c: 13, t: 20 } } } },
+          { name: 'u_reg_dec', depth: 4, m: { line: { p: 98.76, c: 159, t: 161 }, branch: { p: 96, c: 96, t: 100 }, toggle: { p: 92, c: 230, t: 250 }, condition: { p: 95, c: 38, t: 40 } } } },
+        ], m: { line: { p: 60.04, c: 323, t: 538 }, branch: { p: 52, c: 260, t: 500 }, toggle: { p: 48, c: 800, t: 1667 }, condition: { p: 50, c: 100, t: 200 }, fsm_state: { p: 66.7, c: 4, t: 6 }, fsm_transition: { p: 40, c: 6, t: 15 }, assertion: { p: 50, c: 3, t: 6 } } } },
+      ], m: { line: { p: 93.07, c: 349, t: 375 }, branch: { p: 88, c: 440, t: 500 }, toggle: { p: 82, c: 1230, t: 1500 }, condition: { p: 85, c: 170, t: 200 }, fsm_state: { p: 80, c: 8, t: 10 }, fsm_transition: { p: 65, c: 13, t: 20 }, assertion: { p: 50, c: 3, t: 6 } } } },
+    ], m: null },
+  ], m: null
+};
+
+function classifyMetric(metric, val) {
+  if (!val) return 'na';
+  const target = TARGETS[metric];
+  if (target === null) return val.p >= 90 ? 'pass' : val.p >= 80 ? 'warn' : 'fail';
+  if (val.p >= target) return 'pass';
+  if (val.p >= target - 5) return 'warn';
+  return 'fail';
+}
+function getColor(cls) { return { pass: 'var(--c-pass)', warn: 'var(--c-warn)', fail: 'var(--c-fail)', na: 'var(--c-na)' }[cls]; }
+
+// Overview cards
+function calcSummary(node) {
+  if (!node.m) {
+    if (!node.children || node.children.length === 0) return null;
+    const childSums = node.children.map(c => calcSummary(c)).filter(s => s);
+    if (childSums.length === 0) return null;
+    const sum = {};
+    for (const m of METRICS) {
+      const vals = childSums.map(s => s[m]).filter(v => v);
+      if (vals.length === 0) { sum[m] = null; continue; }
+      const tC = vals.reduce((a, v) => a + v.c, 0);
+      const tT = vals.reduce((a, v) => a + v.t, 0);
+      sum[m] = { p: tT > 0 ? (tC / tT * 100) : 0, c: tC, t: tT };
+    }
+    return sum;
+  }
+  return node.m;
+}
+
+const summary = calcSummary(tree);
+let ovHtml = '';
+for (const m of METRICS) {
+  const val = summary ? summary[m] : null;
+  if (!val) {
+    ovHtml += `<div class="ov-card"><div class="ov-label">${METRIC_LABELS[m]}</div><div class="ov-value" style="color:var(--c-na)">n/a</div><div class="ov-bar"><div class="ov-bar-fill" style="width:0%;background:var(--c-na)"></div></div></div>`;
+    continue;
+  }
+  const cls = classifyMetric(m, val);
+  const color = getColor(cls);
+  const target = TARGETS[m];
+  const statusText = cls === 'pass' ? '✓ 达标' : cls === 'warn' ? '⚠ 接近' : cls === 'fail' ? '✗ 未达标' : '';
+  ovHtml += `<div class="ov-card"><div class="ov-label">${METRIC_LABELS[m]}</div><div class="ov-value" style="color:${color}">${val.p.toFixed(1)}%</div><div class="ov-count">${val.c}/${val.t}${target ? ' · 目标'+target+'%' : ''}</div><div class="ov-bar"><div class="ov-bar-fill" style="width:${val.p}%;background:${color}"></div></div><div class="ov-status" style="color:${color}">${statusText}</div></div>`;
+}
+document.getElementById('overviewGrid').innerHTML = ovHtml;
+
+// Trend chart
+function renderTrend() {
+  const svg = document.getElementById('trendSvg');
+  const sessions = [
+    { label: 'S1', line: 75.2, branch: 68.1, toggle: 62.0 },
+    { label: 'S2', line: 78.5, branch: 72.3, toggle: 65.1 },
+    { label: 'S3', line: 82.1, branch: 76.8, toggle: 70.2 },
+    { label: 'S4', line: 88.3, branch: 82.5, toggle: 76.0 },
+    { label: 'S5', line: 93.07, branch: 88.0, toggle: 82.0 },
+  ];
+  const w = 600, h = 80, pad = 20;
+  const metrics = ['line', 'branch', 'toggle'];
+  const colors = ['var(--c-accent)', 'var(--c-warn)', 'var(--c-pass)'];
+  let html = '';
+  // grid
+  for (let i = 0; i <= 4; i++) {
+    const y = pad + (h - pad * 2) * i / 4;
+    html += `<line x1="${pad}" y1="${y}" x2="${w-pad}" y2="${y}" stroke="var(--border)" stroke-width="0.5"/>`;
+    const pct = 100 - i * 25;
+    html += `<text x="${pad-4}" y="${y+3}" font-size="8" fill="var(--fg-faint)" text-anchor="end" font-family="var(--mono)">${pct}%</text>`;
+  }
+  // lines
+  metrics.forEach((m, mi) => {
+    const points = sessions.map((s, i) => {
+      const x = pad + (w - pad * 2) * i / (sessions.length - 1);
+      const y = pad + (h - pad * 2) * (1 - s[m] / 100);
+      return `${x},${y}`;
+    });
+    html += `<polyline points="${points.join(' ')}" fill="none" stroke="${colors[mi]}" stroke-width="1.5" opacity="0.8"/>`;
+    sessions.forEach((s, i) => {
+      const x = pad + (w - pad * 2) * i / (sessions.length - 1);
+      const y = pad + (h - pad * 2) * (1 - s[m] / 100);
+      html += `<circle cx="${x}" cy="${y}" r="2" fill="${colors[mi]}" opacity="0.8"/>`;
+    });
+  });
+  // labels
+  sessions.forEach((s, i) => {
+    const x = pad + (w - pad * 2) * i / (sessions.length - 1);
+    html += `<text x="${x}" y="${h-4}" font-size="8" fill="var(--fg-faint)" text-anchor="middle" font-family="var(--mono)">${s.label}</text>`;
+  });
+  svg.innerHTML = html;
+}
+renderTrend();
+
+// Tree table (compact, only showing top 3 levels)
+function renderCell(metric, val) {
+  if (!val) return `<td><span class="cov-cell na"><span class="pct">n/a</span></span></td>`;
+  const cls = classifyMetric(metric, val);
+  return `<td><span class="cov-cell ${cls}"><span class="pct">${val.p.toFixed(1)}%</span><span class="count">${val.c}/${val.t}</span></span></td>`;
+}
+function renderNode(node) {
+  const hasChildren = node.children && node.children.length > 0;
+  const rowId = `r-${node.name}-${node.depth}`;
+  let html = `<tr id="${rowId}" class="${node.depth > 0 ? 'coll-child' : ''}" data-depth="${node.depth}" data-name="${node.name}">`;
+  html += `<td>`;
+  html += `<span class="tree-toggle" onclick="toggleNode('${rowId}')">`;
+  html += `<svg class="chevron ${hasChildren ? 'open' : 'empty'}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>`;
+  html += `</span>`;
+  html += `<span style="margin-left:${node.depth*14}px">${node.name}</span>`;
+  html += `</td>`;
+  for (const m of METRICS) html += renderCell(m, node.m ? node.m[m] : null);
+  html += `</tr>`;
+  if (hasChildren) for (const c of node.children) html += renderNode(c);
+  return html;
+}
+document.getElementById('treeBody').innerHTML = renderNode(tree);
+document.querySelectorAll('.tree-table tbody tr').forEach((r, i) => { if (i > 0) r.classList.remove('coll-child'); });
+
+function toggleNode(rowId) {
+  const row = document.getElementById(rowId);
+  if (!row) return;
+  const chevron = row.querySelector('.chevron');
+  const isExpanded = chevron.classList.contains('open');
+  chevron.classList.toggle('open');
+  const depth = parseInt(row.dataset.depth);
+  let next = row.nextElementSibling;
+  while (next) {
+    const nd = parseInt(next.dataset.depth);
+    if (nd <= depth) break;
+    if (isExpanded) { next.classList.add('coll-child'); } else { next.classList.remove('coll-child'); }
+    next = next.nextElementSibling;
+  }
+}
+
+// Uncovered items
+const uncovData = {
+  line: [
+    { mod: 'u_analog_mipi_mphy_2t2r', file: 'mphy_2t2r.sv:45', desc: 'if 分支未覆盖' },
+    { mod: 'u_analog_mipi_mphy_2t2r', file: 'mphy_2t2r.sv:128', desc: 'always 块未执行' },
+    { mod: 'u_g3_side_glue_wrap', file: 'g3_glue.sv:203', desc: 'case 默认分支' },
+    { mod: 'u_g3_side_glue_wrap', file: 'g3_glue.sv:350', desc: 'assign 未触发' },
+    { mod: 'u_anlg_phy_g3_rf', file: 'phy_g3_rf.sv:89', desc: 'if-else 未覆盖' },
+  ],
+  branch: [
+    { mod: 'u_analog_mipi_mphy_2t2r', file: 'mphy_2t2r.sv:67', desc: '条件分支未覆盖' },
+  ],
+  toggle: [
+    { mod: 'u_analog_mipi_mphy_2t2r', file: 'mphy_2t2r.sv:12', desc: '信号 u_mipi_clk 未翻转' },
+    { mod: 'u_g3_side_glue_wrap', file: 'g3_glue.sv:45', desc: '信号 data_valid 低有效' },
+  ],
+};
+let uncovMetric = 'line';
+function renderUncovTabs() {
+  const tabsEl = document.getElementById('uncovTabs');
+  tabsEl.innerHTML = METRICS.map(m => `<div class="uncovered-tab ${m===uncovMetric?'active':''}" onclick="setUncovMetric('${m}')">${METRIC_LABELS[m]}</div>`).join('');
+}
+function setUncovMetric(m) { uncovMetric = m; renderUncovTabs(); renderUncovList(); }
+function renderUncovList() {
+  const list = uncovData[uncovMetric] || [];
+  const el = document.getElementById('uncovList');
+  if (list.length === 0) { el.innerHTML = '<div style="font-size:11px;color:var(--fg-faint);text-align:center;padding:12px;">全部覆盖！</div>'; return; }
+  el.innerHTML = list.map(i => `<div class="uncovered-item"><span class="ui-module">${i.mod}</span><span class="ui-file">${i.file}</span><span class="ui-desc">${i.desc}</span><span class="ui-badge">GAP</span></div>`).join('');
+}
+renderUncovTabs();
+renderUncovList();
+</script>
+
+</body>
+</html>
