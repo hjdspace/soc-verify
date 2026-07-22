@@ -1,16 +1,25 @@
 /**
- * Coverage analysis router（ADR 0006 + 0007 + 0008）。
+ * Coverage analysis router（ADR 0006 + 0007 + 0008 + 0009）。
  *
  * 过程以 Coverage Merge Session 为生命周期单位（sessionId）。
  * 导入流程两步分离：平台运行 EDA 命令 → 插件解析文本报告。
+ *
+ * Slice 6b：集成 ClosureOrchestrator 驱动 AI Coverage Closure 闭环。
+ * startClosure 触发 orchestrator 异步运行，通过 closure:event IPC 通道
+ * 向渲染进程推送实时进度。abortClosure 同时中止 orchestrator。
  */
 
+import { BrowserWindow } from 'electron';
 import { t, TRPCError, requireProject } from '../router-context';
 import { CoverageManager } from '../../coverage/coverage-manager';
 import { ClosureManager } from '../../coverage/closure-manager';
+import { ClosureOrchestrator, type ClosureEvent } from '../../coverage/closure-orchestrator';
 import { CoverageReportGenerator } from '../../coverage/coverage-report-generator';
+import { sessionManager } from '../../agent/session-manager';
+import { credentialManager } from '../../credentials/credential-manager';
 import { pluginLoader } from '../../plugins/loader';
 import { PluginBackedCoverage } from '../../host/plugin-discovery';
+import { PluginBackedDiscovery, PluginBackedSimulation } from '../../host/plugin-discovery';
 import { loadEdaConfig, saveEdaConfig, normalizeConfig } from '../../coverage/eda-config';
 import type {
   EdaToolConfig,
@@ -23,6 +32,24 @@ import type {
   ExclusionStatus,
 } from '@shared/types';
 import { DEFAULT_COVERAGE_TARGETS, COVERAGE_METRICS } from '@shared/types';
+
+/**
+ * 每个项目的 ClosureOrchestrator 实例缓存（projectId → orchestrator）。
+ * 同一项目同时只允许一个活跃的 Closure 闭环。
+ */
+const orchestrators = new Map<string, ClosureOrchestrator>();
+
+/**
+ * 向所有 BrowserWindow 转发 Closure 事件（单用户桌面应用只有一个主窗口）。
+ * 供 orchestrator 的 emit 回调使用。
+ */
+function emitClosureEvent(event: ClosureEvent): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('closure:event', event);
+    }
+  }
+}
 
 function buildManager(projectRoot: string): CoverageManager {
   const registry = pluginLoader.getRegistry(projectRoot);
@@ -428,12 +455,70 @@ export const coverageRouter = t.router({
     })
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
-      const mgr = buildClosureManager(project.rootPath);
-      return mgr.startClosure({
+
+      // 若已有 orchestrator 在运行，拒绝重复启动
+      const existing = orchestrators.get(input.projectId);
+      if (existing) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: '该项目已有一个活跃的 Closure 闭环，请先中止后再启动新的闭环',
+        });
+      }
+
+      const coverageManager = buildManager(project.rootPath);
+      const closureManager = new ClosureManager({
+        projectRoot: project.rootPath,
+        coverageManager,
+      });
+
+      // 1. 创建 ClosureSession（持久化 gap 列表 + workspace 目录）
+      const session = await closureManager.startClosure({
         sessionId: input.sessionId,
         gaps: input.gaps,
         maxRounds: input.maxRounds,
       });
+
+      // 2. 构建 orchestrator 依赖
+      const registry = pluginLoader.getRegistry(project.rootPath);
+      const discovery = new PluginBackedDiscovery(project.rootPath, registry);
+      const simulationAdapter = new PluginBackedSimulation(registry);
+      const coverageAdapter = new PluginBackedCoverage(project.rootPath, registry);
+
+      // 3. 加载凭据
+      const agentEnv = await credentialManager.buildEnvForAgent();
+      const defaultCred = await credentialManager.getDefaultCredential();
+      const provider = defaultCred
+        ? credentialManager.mapProviderForAgent(defaultCred.providerId)
+        : undefined;
+      const apiKey = defaultCred?.apiKey;
+      const baseUrl = defaultCred?.baseUrl;
+
+      // 4. 创建 orchestrator 并启动（fire-and-forget，通过事件流推送状态）
+      const orchestrator = new ClosureOrchestrator({
+        sessionManager,
+        coverageManager,
+        closureManager,
+        projectId: input.projectId,
+        discovery,
+        simulationAdapter,
+        coverageAdapter,
+        agentEnv,
+        provider,
+        apiKey,
+        baseUrl,
+        emit: emitClosureEvent,
+      });
+      orchestrators.set(input.projectId, orchestrator);
+
+      // 启动闭环（异步，不阻塞 response）
+      void orchestrator.startClosure(session).catch((err) => {
+        console.error(`[closure] orchestrator failed: ${err instanceof Error ? err.message : String(err)}`);
+      }).finally(() => {
+        // 闭环结束后清理 orchestrator 缓存
+        orchestrators.delete(input.projectId);
+      });
+
+      return session;
     }),
 
   getClosure: t.procedure
@@ -475,6 +560,15 @@ export const coverageRouter = t.router({
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
       const mgr = buildClosureManager(project.rootPath);
+
+      // 先中止 orchestrator（触发 AbortController，等待 Gap 循环退出）
+      const orchestrator = orchestrators.get(input.projectId);
+      if (orchestrator) {
+        await orchestrator.abort(input.closureId);
+        orchestrators.delete(input.projectId);
+      }
+
+      // 再调用 closureManager 标记状态
       await mgr.abortClosure(input.closureId);
       return { ok: true };
     }),

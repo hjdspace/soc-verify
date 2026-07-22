@@ -51,6 +51,11 @@ process.once('loaded', async () => {
       ipcRenderer.on('errorAnalysis:event', handler);
       return () => ipcRenderer.removeListener('errorAnalysis:event', handler);
     },
+    onClosureEvent: (callback: (data: { type: string; [key: string]: unknown }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { type: string; [key: string]: unknown }) => callback(data);
+      ipcRenderer.on('closure:event', handler);
+      return () => ipcRenderer.removeListener('closure:event', handler);
+    },
     onTerminalData: (callback: (data: { id: string; data: string }) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, data: { id: string; data: string }) => callback(data);
       ipcRenderer.on('terminal:data', handler);

@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import {
   Loader2, BarChart3, Upload, ChevronRight,
   Target as TargetIcon, AlertTriangle, ShieldBan, GitCompare, Trash2, Plus,
+  Activity, Square,
 } from 'lucide-react';
 import { useCoverageStore } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
@@ -84,6 +85,13 @@ export function CoveragePanel() {
   const deleteSession = useCoverageStore((s) => s.deleteSession);
   const setView = useCoverageStore((s) => s.setView);
 
+  // ─── Closure 相关（Slice 6b） ──────────────────────────────
+  const currentClosure = useCoverageStore((s) => s.currentClosure);
+  const closureLive = useCoverageStore((s) => s.closureLive);
+  const registerClosureEventListener = useCoverageStore((s) => s.registerClosureEventListener);
+  const loadClosures = useCoverageStore((s) => s.loadClosures);
+  const abortClosure = useCoverageStore((s) => s.abortClosure);
+
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
 
   const [tab, setTab] = useState<Tab | null>(null);
@@ -96,8 +104,14 @@ export function CoveragePanel() {
     if (currentProjectId) {
       loadSessions(currentProjectId);
       loadEdaConfig(currentProjectId);
+      loadClosures(currentProjectId);
     }
-  }, [currentProjectId, loadSessions, loadEdaConfig]);
+  }, [currentProjectId, loadSessions, loadEdaConfig, loadClosures]);
+
+  // 注册 closure:event IPC 监听器（幂等，全局一次）
+  useEffect(() => {
+    registerClosureEventListener();
+  }, [registerClosureEventListener]);
 
   useEffect(() => {
     if (currentProjectId && currentSessionId) {
@@ -175,11 +189,46 @@ export function CoveragePanel() {
             删除
           </button>
         )}
-        {edaConfig && (
-          <span className="ml-auto text-[10px] text-muted-foreground">
-            EDA: {edaConfig.tool} · cov_merge: {edaConfig.covMergeDir}
-          </span>
-        )}
+        {/* 右对齐组：Closure 状态 pill + EDA 配置 */}
+        <div className="ml-auto flex items-center gap-2">
+          {closureLive.running && currentClosure && (() => {
+            const total = currentClosure.gaps.length;
+            const done = currentClosure.gaps.filter((g) =>
+              ['closed', 'escalated', 'failed'].includes(g.status),
+            ).length;
+            return (
+              <button
+                onClick={() => setView('dashboard')}
+                className="flex items-center gap-1.5 rounded border border-primary/40 bg-primary/10 px-2 py-1 text-[10px] text-primary hover:bg-primary/20"
+                title="查看 AI Closure 详情"
+                data-testid="closure-status-pill"
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+                </span>
+                <Activity className="h-3 w-3" />
+                Closure 运行中 · Gap {done}/{total}
+                {closureLive.activeRound !== undefined && ` · Round ${closureLive.activeRound}`}
+              </button>
+            );
+          })()}
+          {closureLive.running && currentClosure && currentProjectId && (
+            <button
+              onClick={() => abortClosure(currentProjectId, currentClosure.id)}
+              className="flex items-center gap-1 rounded border border-destructive/40 bg-destructive/10 px-1.5 py-1 text-[10px] text-destructive hover:bg-destructive/20"
+              title="中止 AI Closure"
+              data-testid="closure-pill-abort"
+            >
+              <Square className="h-2.5 w-2.5" />
+            </button>
+          )}
+          {edaConfig && (
+            <span className="text-[10px] text-muted-foreground">
+              EDA: {edaConfig.tool} · cov_merge: {edaConfig.covMergeDir}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* 导入对话框 */}

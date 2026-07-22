@@ -13,8 +13,11 @@
 import { useMemo, useState } from 'react';
 import {
   ChevronRight, ChevronDown, Check, AlertTriangle, X, Minus, Sparkles,
+  Loader2, Square, RefreshCw,
 } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
+import { useCoverageStore } from '@renderer/stores/coverage';
+import { useProjectStore } from '@renderer/stores/project';
 import type {
   CoverageData, CoverageMetric, CoverageNode, CoverageSummary,
   CoverageTriplet, UncoveredItem,
@@ -184,8 +187,8 @@ export function CoverageDashboard({
       {/* 4. 未覆盖项列表 */}
       <UncoveredList data={data} />
 
-      {/* 5. AI 分析建议面板（占位） */}
-      <AiClosurePlaceholder overview={overview} />
+      {/* 5. AI 覆盖收敛面板（Slice 6b） */}
+      <AiClosurePanel overview={overview} />
     </div>
   );
 }
@@ -633,35 +636,253 @@ function UncoveredItemRow({ item }: { item: UncoveredItem }) {
   );
 }
 
-// ─── AI 分析建议面板（占位） ─────────────────────────────────────
+// ─── AI 覆盖收敛面板（Slice 6b） ─────────────────────────────────
 
-function AiClosurePlaceholder({ overview }: { overview: CoverageSummary | null }) {
+/** Gap 状态对应的显示文本与颜色 */
+const GAP_STATUS_LABEL: Record<string, string> = {
+  pending: '待处理',
+  in_progress: '进行中',
+  closed: '已关闭',
+  escalated: '已升级',
+  failed: '失败',
+};
+
+const GAP_STATUS_COLOR: Record<string, string> = {
+  pending: 'text-muted-foreground',
+  in_progress: 'text-primary',
+  closed: 'text-emerald-500',
+  escalated: 'text-destructive',
+  failed: 'text-destructive',
+};
+
+const GAP_STATUS_DOT: Record<string, string> = {
+  pending: 'bg-muted-foreground',
+  in_progress: 'bg-primary',
+  closed: 'bg-emerald-500',
+  escalated: 'bg-destructive',
+  failed: 'bg-destructive',
+};
+
+/** Closure 状态文本 */
+const CLOSURE_STATUS_LABEL: Record<string, string> = {
+  pending: '待处理',
+  running: '运行中',
+  completed: '已完成',
+  failed: '失败',
+  aborted: '已中止',
+};
+
+function AiClosurePanel({ overview }: { overview: CoverageSummary | null }) {
+  const currentClosure = useCoverageStore((s) => s.currentClosure);
+  const closureLive = useCoverageStore((s) => s.closureLive);
+  const startClosure = useCoverageStore((s) => s.startClosure);
+  const abortClosure = useCoverageStore((s) => s.abortClosure);
+  const currentProjectId = useProjectStore((s) => s.currentProjectId);
+  const currentSessionId = useCoverageStore((s) => s.currentSessionId);
+
+  const canStart = !!currentProjectId && !!currentSessionId;
+  const isActive = closureLive.running;
+  const isTerminal = currentClosure
+    ? ['completed', 'aborted', 'failed'].includes(currentClosure.status)
+    : false;
+
+  const handleStart = (): void => {
+    if (!canStart || !currentProjectId || !currentSessionId) return;
+    void startClosure(currentProjectId, currentSessionId);
+  };
+
+  const handleAbort = (): void => {
+    if (!currentProjectId || !currentClosure) return;
+    void abortClosure(currentProjectId, currentClosure.id);
+  };
+
+  // 无 closure 记录 → 显示启动按钮
+  if (!currentClosure) {
+    return (
+      <div className="rounded border border-primary/30 bg-primary/5 p-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-primary" />
+            <div>
+              <div className="text-xs font-semibold">AI 覆盖收敛分析</div>
+              <div className="text-[10px] text-muted-foreground">
+                {overview
+                  ? `当前总体覆盖率 ${overview.overall.toFixed(1)}%`
+                  : '导入覆盖率数据后可启动 AI Closure'}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleStart}
+            disabled={!canStart}
+            className="flex items-center gap-1 rounded bg-primary px-3 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            title={canStart ? '启动 AI Coverage Closure 闭环' : '需要先选择项目与覆盖率 Session'}
+            data-testid="closure-start-btn"
+          >
+            <Sparkles className="h-3 w-3" />
+            启动 AI Closure
+          </button>
+        </div>
+        <div className="mt-2 text-[11px] text-muted-foreground">
+          AI 将自动识别覆盖率缺口，生成定向测试并迭代验证，直至达标或触发升级转人工审查。
+        </div>
+      </div>
+    );
+  }
+
+  // 有 closure 记录（运行中或已完成）
+  const gaps = currentClosure.gaps;
+  const completedGaps = gaps.filter((g) => g.status === 'closed').length;
+  const escalatedGaps = gaps.filter((g) => g.status === 'escalated').length;
+  const failedGaps = gaps.filter((g) => g.status === 'failed').length;
+
+  // 计算总 delta（最后一个迭代的 deltaBefore → deltaAfter）
+  let totalDeltaOverall = 0;
+  for (const gap of gaps) {
+    const lastIter = gap.iterations[gap.iterations.length - 1];
+    if (lastIter?.deltaBefore && lastIter?.deltaAfter) {
+      totalDeltaOverall += lastIter.deltaAfter.overall - lastIter.deltaBefore.overall;
+    }
+  }
+
   return (
-    <div className="rounded border border-primary/30 bg-primary/5 p-3">
+    <div className="rounded border border-border bg-card p-3">
+      {/* 头部：标题 + 状态 + 操作按钮 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-primary" />
+          {isActive ? (
+            <span className="relative flex h-3 w-3">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+              <span className="relative inline-flex h-3 w-3 rounded-full bg-primary" />
+            </span>
+          ) : (
+            <Sparkles className="h-4 w-4 text-primary" />
+          )}
           <div>
-            <div className="text-xs font-semibold">AI 覆盖收敛分析</div>
+            <div className="text-xs font-semibold">
+              AI 覆盖收敛分析
+              <span className="ml-2 rounded bg-secondary px-1.5 py-0.5 text-[9px] font-normal text-muted-foreground">
+                {CLOSURE_STATUS_LABEL[currentClosure.status] ?? currentClosure.status}
+              </span>
+            </div>
             <div className="text-[10px] text-muted-foreground">
               {overview
                 ? `当前总体覆盖率 ${overview.overall.toFixed(1)}%`
-                : 'AI 分析将在 Slice 6b 实现'}
+                : `${gaps.length} 个 Gap`}
             </div>
           </div>
         </div>
-        <button
-          disabled
-          className="flex items-center gap-1 rounded bg-primary/50 px-3 py-1 text-xs text-primary-foreground opacity-50"
-          title="Slice 6b 实现后启用"
-        >
-          <Sparkles className="h-3 w-3" />
-          启动 AI Closure
-        </button>
+        {isActive ? (
+          <button
+            onClick={handleAbort}
+            className="flex items-center gap-1 rounded border border-destructive/50 bg-destructive/10 px-3 py-1 text-xs text-destructive hover:bg-destructive/20"
+            data-testid="closure-abort-btn"
+          >
+            <Square className="h-3 w-3" />
+            中止
+          </button>
+        ) : isTerminal ? (
+          <button
+            onClick={handleStart}
+            disabled={!canStart}
+            className="flex items-center gap-1 rounded bg-primary px-3 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            data-testid="closure-restart-btn"
+          >
+            <RefreshCw className="h-3 w-3" />
+            重新启动
+          </button>
+        ) : null}
       </div>
-      <div className="mt-2 text-[11px] text-muted-foreground">
-        AI 覆盖收敛分析将在 Slice 6b 实现
+
+      {/* 运行中实时进度 */}
+      {isActive && closureLive.activeGapId && (
+        <div className="mt-2 rounded bg-secondary/40 p-2">
+          <div className="flex items-center gap-2 text-[11px]">
+            <Loader2 className="h-3 w-3 animate-spin text-primary" />
+            <span className="text-foreground">
+              Gap 迭代中 · Round {closureLive.activeRound ?? '?'}
+              {closureLive.agentPhase === 'prompting' && ' · AI 生成测试中'}
+              {closureLive.agentPhase === 'ended' && ' · AI 完成，计算 Delta'}
+            </span>
+          </div>
+          {typeof closureLive.lastDeltaOverall === 'number' && (
+            <div className="mt-1 font-mono text-[10px] text-muted-foreground">
+              最近 Delta: <span className="text-primary">+{closureLive.lastDeltaOverall.toFixed(2)}%</span>
+            </div>
+          )}
+          {closureLive.lastError && (
+            <div className="mt-1 text-[10px] text-destructive">{closureLive.lastError}</div>
+          )}
+        </div>
+      )}
+
+      {/* Gap 队列 */}
+      <div className="mt-2">
+        <div className="mb-1 text-[10px] font-medium text-muted-foreground">
+          Gap 队列（{gaps.length}）· 已关闭 {completedGaps} · 升级 {escalatedGaps} · 失败 {failedGaps}
+        </div>
+        <div className="flex max-h-[180px] flex-col gap-1 overflow-y-auto">
+          {gaps.map((gap) => {
+            const lastIter = gap.iterations[gap.iterations.length - 1];
+            const iterDelta = lastIter?.deltaBefore && lastIter?.deltaAfter
+              ? lastIter.deltaAfter.overall - lastIter.deltaBefore.overall
+              : undefined;
+            const isLiveGap = isActive && closureLive.activeGapId === gap.id;
+            return (
+              <div
+                key={gap.id}
+                className={cn(
+                  'flex items-center gap-2 rounded px-2 py-1.5 text-[11px]',
+                  isLiveGap ? 'bg-primary/10' : 'bg-secondary/50',
+                )}
+              >
+                <span className={cn('h-2 w-2 flex-shrink-0 rounded-full', GAP_STATUS_DOT[gap.status] ?? 'bg-muted-foreground')} />
+                <span className="min-w-[100px] font-mono font-medium text-foreground">
+                  {gap.gap.nodeName}
+                </span>
+                <span className="text-muted-foreground">{METRIC_LABELS[gap.gap.metric] ?? gap.gap.metric}</span>
+                <span className="font-mono text-destructive">−{gap.gap.deficit.toFixed(1)}</span>
+                <span className={cn('ml-auto', GAP_STATUS_COLOR[gap.status] ?? 'text-muted-foreground')}>
+                  {GAP_STATUS_LABEL[gap.status] ?? gap.status}
+                </span>
+                {gap.iterations.length > 0 && (
+                  <span className="font-mono text-[10px] text-muted-foreground">
+                    R{gap.iterations.length}
+                    {typeof iterDelta === 'number' && (
+                      <span className={iterDelta >= 1 ? 'text-primary' : 'text-yellow-500'}>
+                        {' '}({iterDelta >= 0 ? '+' : ''}{iterDelta.toFixed(1)}%)
+                      </span>
+                    )}
+                  </span>
+                )}
+                {isLiveGap && (
+                  <Loader2 className="h-3 w-3 animate-spin text-primary" />
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
+
+      {/* 完成后摘要 */}
+      {isTerminal && (
+        <div className="mt-2 rounded border border-border bg-secondary/30 p-2 text-[11px]">
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Closure 结果摘要</span>
+            <span className="font-mono text-primary">
+              总 Delta: +{totalDeltaOverall.toFixed(1)}%
+            </span>
+          </div>
+          {currentClosure.status === 'aborted' && (
+            <div className="mt-1 text-destructive">闭环已被用户中止</div>
+          )}
+          {escalatedGaps > 0 && (
+            <div className="mt-1 text-destructive">
+              {escalatedGaps} 个 Gap 已升级至人工审查（Dead code 确认 / Exclusion 审批需人工介入）
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

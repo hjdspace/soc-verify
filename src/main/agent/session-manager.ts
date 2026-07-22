@@ -145,7 +145,7 @@ export interface SessionEventData {
   event: unknown;
 }
 
-class SessionManagerImpl extends EventEmitter {
+export class SessionManagerImpl extends EventEmitter {
   private sessions = new Map<string, SessionEntry>();
   private projectSessions = new Map<string, Set<string>>();
   private idleTimeoutMs: number;

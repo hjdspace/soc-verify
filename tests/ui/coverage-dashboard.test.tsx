@@ -1,6 +1,27 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+
+// Mock stores：AiClosurePanel（CoverageDashboard 内部组件）依赖 useCoverageStore / useProjectStore。
+// 不 mock 会导致真实 store 导入 trpc.ts，而 trpc.ts 需要 electronTRPC 全局变量（测试环境不存在）。
+vi.mock('@renderer/stores/coverage', () => ({
+  useCoverageStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
+    selector({
+      currentClosure: null,
+      closureLive: { running: false },
+      startClosure: vi.fn(),
+      abortClosure: vi.fn(),
+      currentSessionId: null,
+    }),
+  ),
+}));
+
+vi.mock('@renderer/stores/project', () => ({
+  useProjectStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
+    selector({ currentProjectId: null }),
+  ),
+}));
+
 import { CoverageDashboard } from '@renderer/components/coverage/CoverageDashboard';
 import type {
   CoverageData, CoverageMetric, CoverageSummary, CoverageTriplet,
@@ -340,14 +361,14 @@ describe('CoverageDashboard', () => {
     expect(screen.getByText('全部覆盖')).toBeInTheDocument();
   });
 
-  it('AI 分析建议面板占位（含 disabled 按钮和提示文本）', () => {
+  it('AI 覆盖收敛面板显示启动按钮（无 session 时 disabled）', () => {
     render(<CoverageDashboard {...defaultProps} />);
 
-    // 占位标题
+    // 标题
     expect(screen.getByText('AI 覆盖收敛分析')).toBeInTheDocument();
-    // Slice 6b 提示
-    expect(screen.getByText('AI 覆盖收敛分析将在 Slice 6b 实现')).toBeInTheDocument();
-    // 启动按钮（disabled）
+    // Slice 6b 描述文本
+    expect(screen.getByText('AI 将自动识别覆盖率缺口，生成定向测试并迭代验证，直至达标或触发升级转人工审查。')).toBeInTheDocument();
+    // 启动按钮（无 session/project 时 disabled）
     const launchBtn = screen.getByText('启动 AI Closure').closest('button');
     expect(launchBtn).toBeInTheDocument();
     expect(launchBtn).toBeDisabled();
@@ -420,7 +441,7 @@ describe('CoverageDashboard', () => {
     );
 
     expect(screen.queryByText('总体覆盖率（8 项均值）')).not.toBeInTheDocument();
-    // AI 面板显示通用提示
-    expect(screen.getByText('AI 分析将在 Slice 6b 实现')).toBeInTheDocument();
+    // AI 面板在无 overview 时显示导入提示
+    expect(screen.getByText('导入覆盖率数据后可启动 AI Closure')).toBeInTheDocument();
   });
 });

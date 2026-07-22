@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
+import { useProjectStore } from './project';
 import type {
   CoverageData,
   CoverageMergeSession,
@@ -15,6 +16,61 @@ import type {
   TriageConfidence,
   ExclusionStatus,
 } from '@shared/types';
+
+// ─── Closure 相关类型（从主进程闭包包导入的等价类型） ────────────
+// 这些类型与 src/main/coverage/closure-manager.ts 中的定义保持一致，
+// 但因渲染进程无法直接导入主进程模块，这里重新声明（结构兼容）。
+
+type ClosureStatus = 'pending' | 'running' | 'completed' | 'failed' | 'aborted';
+type GapIterationStatus = 'pending' | 'running' | 'completed' | 'failed';
+type ClosureGapStatus = 'pending' | 'in_progress' | 'closed' | 'escalated' | 'failed';
+
+type GapIteration = {
+  round: number;
+  generatedTests: string[];
+  deltaBefore?: CoverageSummary;
+  deltaAfter?: CoverageSummary;
+  deltas?: CoverageDelta[];
+  status: GapIterationStatus;
+  error?: string;
+};
+
+type ClosureGap = {
+  id: string;
+  gap: CoverageGap;
+  iterations: GapIteration[];
+  status: ClosureGapStatus;
+  escalationReason?: string;
+};
+
+type ClosureSession = {
+  id: string;
+  sessionId: string;
+  createdAt: number;
+  status: ClosureStatus;
+  gaps: ClosureGap[];
+  maxRounds: number;
+  escalationThreshold: number;
+  workspaceDir: string;
+};
+
+// ─── 实时事件进度（由 closure:event IPC 推送） ────────────────────
+type ClosureLiveProgress = {
+  /** 当前是否正在运行 */
+  running: boolean;
+  /** 当前正在处理的 gapId 和 round（如有） */
+  activeGapId?: string;
+  activeRound?: number;
+  /** 最近一次 agent 状态 */
+  agentSessionId?: string;
+  agentPhase?: 'prompting' | 'ended';
+  /** 最近一轮 delta */
+  lastDeltaOverall?: number;
+  /** 最近一次错误（gap_failed / closure:error） */
+  lastError?: string;
+  /** 最近一轮扫描到的测试文件 */
+  lastGeneratedTests?: string[];
+};
 
 interface CoverageStoreState {
   /** 所有 Coverage Merge Session（按创建时间倒序） */
@@ -46,6 +102,18 @@ interface CoverageStoreState {
   view: 'tree-table' | 'dashboard';
   setView: (view: 'tree-table' | 'dashboard') => void;
 
+  // ─── Closure 相关状态（Slice 6b） ────────────────────────────
+  /** 所有 Closure Session 列表 */
+  closures: ClosureSession[];
+  /** 当前选中的 closureId */
+  currentClosureId: string | null;
+  /** 当前选中的 ClosureSession 完整数据 */
+  currentClosure: ClosureSession | null;
+  /** 实时进度（由 closure:event 事件流更新） */
+  closureLive: ClosureLiveProgress;
+  /** closure 事件监听器是否已注册 */
+  closureListenerRegistered: boolean;
+
   loadSessions: (projectId: string) => Promise<void>;
   loadTree: (projectId: string, sessionId?: string) => Promise<void>;
   loadEdaConfig: (projectId: string) => Promise<void>;
@@ -56,6 +124,22 @@ interface CoverageStoreState {
     edaConfig?: EdaToolConfig,
   ) => Promise<string | null>;
   setSessionId: (sessionId: string | null) => void;
+
+  // ─── Closure 操作（Slice 6b） ────────────────────────────────
+  startClosure: (
+    projectId: string,
+    sessionId: string,
+    gaps?: CoverageGap[],
+    maxRounds?: number,
+  ) => Promise<string | null>;
+  abortClosure: (projectId: string, closureId: string) => Promise<void>;
+  loadClosures: (projectId: string) => Promise<void>;
+  loadClosure: (projectId: string, closureId: string) => Promise<void>;
+  setCurrentClosure: (closureId: string | null) => void;
+  /** 注册 closure:event IPC 监听器（幂等，全局只需注册一次） */
+  registerClosureEventListener: () => void;
+  /** 处理 closure:event 事件（内部使用） */
+  handleClosureEvent: (event: { type: string; [key: string]: unknown }) => void;
 
   // ─── Slice 2 新增 ──────────────────────────────────────────
   loadTargets: (projectId: string, sessionId?: string) => Promise<void>;
@@ -126,6 +210,11 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
   loading: false,
   importing: false,
   view: 'tree-table',
+  closures: [],
+  currentClosureId: null,
+  currentClosure: null,
+  closureLive: { running: false },
+  closureListenerRegistered: false,
 
   setView: (view) => set({ view }),
 
@@ -200,6 +289,159 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
   },
 
   setSessionId: (sessionId) => set({ currentSessionId: sessionId }),
+
+  // ─── Closure 实现（Slice 6b） ─────────────────────────────
+
+  startClosure: async (projectId, sessionId, gaps, maxRounds) => {
+    try {
+      const session = await trpc.coverage.startClosure.mutate({
+        projectId,
+        sessionId,
+        gaps,
+        maxRounds,
+      });
+      set({
+        currentClosureId: session.id,
+        currentClosure: session,
+        closureLive: { running: true },
+        closures: [...get().closures, session],
+      });
+      useToastStore.getState().success('AI Closure 已启动', `${session.gaps.length} 个 Gap`);
+      return session.id;
+    } catch (err) {
+      useToastStore.getState().error('启动 AI Closure 失败', err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  },
+
+  abortClosure: async (projectId, closureId) => {
+    try {
+      await trpc.coverage.abortClosure.mutate({ projectId, closureId });
+      set({ closureLive: { running: false } });
+      // 刷新当前 closure 状态（应变为 aborted）
+      await get().loadClosure(projectId, closureId);
+      useToastStore.getState().info('AI Closure 已中止');
+    } catch (err) {
+      useToastStore.getState().error('中止 AI Closure 失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  loadClosures: async (projectId) => {
+    try {
+      const closures = await trpc.coverage.listClosures.query({ projectId });
+      set({ closures });
+    } catch (err) {
+      useToastStore.getState().error('加载 Closure 列表失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  loadClosure: async (projectId, closureId) => {
+    try {
+      const closure = await trpc.coverage.getClosure.query({ projectId, closureId });
+      set({
+        currentClosureId: closureId,
+        currentClosure: closure,
+        // 若 closure 已进入终态，同步关闭 live 运行标志
+        closureLive: closure && ['completed', 'aborted', 'failed'].includes(closure.status)
+          ? { running: false }
+          : get().closureLive,
+      });
+    } catch (err) {
+      useToastStore.getState().error('加载 Closure 详情失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  setCurrentClosure: (closureId) => {
+    if (closureId === null) {
+      set({ currentClosureId: null, currentClosure: null });
+      return;
+    }
+    const found = get().closures.find((c) => c.id === closureId) ?? null;
+    set({ currentClosureId: closureId, currentClosure: found });
+  },
+
+  registerClosureEventListener: () => {
+    if (get().closureListenerRegistered) return;
+    if (!window.eventBridge) return;
+    set({ closureListenerRegistered: true });
+    window.eventBridge.onClosureEvent((event) => {
+      get().handleClosureEvent(event);
+    });
+  },
+
+  handleClosureEvent: (event) => {
+    const type = event.type;
+    const closureId = typeof event.closureId === 'string' ? event.closureId : undefined;
+    if (!closureId) return;
+
+    const current = get().currentClosureId;
+    const isCurrent = current === closureId;
+
+    // 根据事件类型更新 closureLive（仅当事件属于当前关注的 closure）
+    if (isCurrent) {
+      const live = { ...get().closureLive };
+      live.running = true;
+
+      switch (type) {
+        case 'closure:started':
+          live.running = true;
+          break;
+        case 'closure:gap_started':
+          live.activeGapId = typeof event.gapId === 'string' ? event.gapId : live.activeGapId;
+          live.activeRound = typeof event.round === 'number' ? event.round : live.activeRound;
+          live.agentPhase = undefined;
+          break;
+        case 'closure:agent_prompting':
+          live.agentSessionId = typeof event.sessionId === 'string' ? event.sessionId : live.agentSessionId;
+          live.agentPhase = 'prompting';
+          break;
+        case 'closure:agent_ended':
+          live.agentPhase = 'ended';
+          break;
+        case 'closure:tests_scanned':
+          live.lastGeneratedTests = Array.isArray(event.files) ? (event.files as string[]) : live.lastGeneratedTests;
+          break;
+        case 'closure:iteration_done':
+          live.lastDeltaOverall = typeof event.deltaOverall === 'number' ? event.deltaOverall : live.lastDeltaOverall;
+          live.agentPhase = undefined;
+          break;
+        case 'closure:gap_closed':
+        case 'closure:gap_escalated':
+          live.activeGapId = undefined;
+          live.activeRound = undefined;
+          live.agentPhase = undefined;
+          break;
+        case 'closure:gap_failed':
+          live.lastError = typeof event.error === 'string' ? event.error : 'Gap 失败';
+          live.activeGapId = undefined;
+          live.activeRound = undefined;
+          live.agentPhase = undefined;
+          break;
+        case 'closure:completed':
+        case 'closure:aborted':
+          live.running = false;
+          live.activeGapId = undefined;
+          live.activeRound = undefined;
+          live.agentPhase = undefined;
+          break;
+        case 'closure:error':
+          live.running = false;
+          live.lastError = typeof event.error === 'string' ? event.error : 'Closure 错误';
+          break;
+        default:
+          break;
+      }
+      set({ closureLive: live });
+    }
+
+    // 异步刷新当前 closure 完整数据（兜底 IPC 推送，确保状态一致）
+    if (isCurrent) {
+      const projectId = useProjectStore.getState().currentProjectId;
+      if (projectId) {
+        void get().loadClosure(projectId, closureId);
+      }
+    }
+  },
 
   // ─── Slice 2 实现 ──────────────────────────────────────────
 

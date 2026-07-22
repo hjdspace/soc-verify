@@ -224,6 +224,20 @@ export class ClosureManager {
     await this.persist(session);
   }
 
+  /**
+   * 标记 Gap 为失败（不可恢复的错误，如会话创建失败、prompt 失败、agent 执行失败）。
+   * 将 gap 置于 failed 终态，并尝试自动完成 Closure（当所有 gap 均进入终态时）。
+   * 复用 escalationReason 字段记录失败原因。
+   */
+  async failGap(closureId: string, gapId: string, reason: string): Promise<void> {
+    const session = await this.requireClosure(closureId);
+    const gap = this.requireGap(session, gapId);
+    gap.status = 'failed';
+    gap.escalationReason = reason;
+    this.maybeCompleteClosure(session);
+    await this.persist(session);
+  }
+
   /** 检查是否应该升级（连续 N 轮 delta < 阈值） */
   shouldEscalate(gap: ClosureGap): boolean {
     const threshold = DEFAULT_ESCALATION_THRESHOLD;

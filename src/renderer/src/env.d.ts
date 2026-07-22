@@ -27,6 +27,7 @@ export interface EventBridgeAPI {
   onSessionEvent: (callback: (data: { sessionId: string; event: unknown }) => void) => () => void;
   onSimulationEvent: (callback: (data: { type: string; record: unknown }) => void) => () => void;
   onErrorAnalysisEvent: (callback: (data: { type: string; [key: string]: unknown }) => void) => () => void;
+  onClosureEvent: (callback: (data: { type: string; [key: string]: unknown }) => void) => () => void;
   onTerminalData: (callback: (data: { id: string; data: string }) => void) => () => void;
   onTerminalExit: (callback: (data: { id: string; exitCode: number }) => void) => () => void;
 }
