@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react';
 import {
   Loader2, BarChart3, Upload, ChevronRight,
   Target as TargetIcon, AlertTriangle, ShieldBan, GitCompare, Trash2, Plus,
-  Activity, Square,
+  Activity, Square, Download,
 } from 'lucide-react';
 import { useCoverageStore } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
@@ -22,6 +22,7 @@ import type {
 import { COVERAGE_METRICS, DEFAULT_COVERAGE_TARGETS } from '@shared/types';
 import { CoverageTreeTable } from './CoverageTreeTable';
 import { CoverageDashboard } from './CoverageDashboard';
+import { ExportDialog } from './ExportDialog';
 
 const EDA_TOOL_OPTIONS: Array<{ value: EdaTool; label: string }> = [
   { value: 'imc', label: 'Cadence IMC' },
@@ -84,6 +85,7 @@ export function CoveragePanel() {
   const setSessionId = useCoverageStore((s) => s.setSessionId);
   const deleteSession = useCoverageStore((s) => s.deleteSession);
   const setView = useCoverageStore((s) => s.setView);
+  const openExportDialog = useCoverageStore((s) => s.openExportDialog);
 
   // ─── Closure 相关（Slice 6b） ──────────────────────────────
   const currentClosure = useCoverageStore((s) => s.currentClosure);
@@ -187,6 +189,17 @@ export function CoveragePanel() {
           >
             <Trash2 className="h-3 w-3" />
             删除
+          </button>
+        )}
+        {currentSessionId && tree && (
+          <button
+            onClick={openExportDialog}
+            className="flex items-center gap-1 rounded border border-border bg-card px-2 py-1 text-xs hover:bg-secondary"
+            data-testid="coverage-export-button"
+            title="导出覆盖率报告（HTML / JSON）"
+          >
+            <Download className="h-3 w-3" />
+            导出
           </button>
         )}
         {/* 右对齐组：Closure 状态 pill + EDA 配置 */}
@@ -378,6 +391,9 @@ export function CoveragePanel() {
           )}
         </>
       )}
+
+      {/* 报告导出对话框（Slice 7） */}
+      <ExportDialog />
     </div>
   );
 }

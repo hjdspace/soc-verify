@@ -9,12 +9,22 @@
  * 向渲染进程推送实时进度。abortClosure 同时中止 orchestrator。
  */
 
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, dialog } from 'electron';
+import { writeFile } from 'node:fs/promises';
 import { t, TRPCError, requireProject } from '../router-context';
 import { CoverageManager } from '../../coverage/coverage-manager';
 import { ClosureManager } from '../../coverage/closure-manager';
 import { ClosureOrchestrator, type ClosureEvent } from '../../coverage/closure-orchestrator';
 import { CoverageReportGenerator } from '../../coverage/coverage-report-generator';
+import {
+  generateHtmlReport,
+  generateJsonExport,
+  generateDeltaHtmlReport,
+  generateCompareJsonExport,
+  resolveExportScope,
+  type ExportScope,
+  type ExportFormat,
+} from '../../coverage/coverage-exporter';
 import { sessionManager } from '../../agent/session-manager';
 import { credentialManager } from '../../credentials/credential-manager';
 import { pluginLoader } from '../../plugins/loader';
@@ -27,11 +37,17 @@ import type {
   CoverageGap,
   CoverageSummary,
   CoverageDelta,
+  CoverageData,
   TriageCause,
   TriageConfidence,
   ExclusionStatus,
 } from '@shared/types';
-import { DEFAULT_COVERAGE_TARGETS, COVERAGE_METRICS } from '@shared/types';
+import {
+  DEFAULT_COVERAGE_TARGETS,
+  COVERAGE_METRICS,
+  summarizeCoverage,
+  calculateDelta,
+} from '@shared/types';
 
 /**
  * 每个项目的 ClosureOrchestrator 实例缓存（projectId → orchestrator）。
@@ -234,18 +250,107 @@ export const coverageRouter = t.router({
       return mgr.getTrend(input.limit);
     }),
 
+  // ─── 报告导出（Slice 7 / Issue #9） ──────────────────────────
+  //
+  // 支持两种范围：
+  //   - scope='current'：导出单个 session 的完整报告
+  //   - scope='compare'：导出两个 session 之间的对比报告
+  // 支持两种格式：
+  //   - format='html'：独立 HTML 文件（内联 CSS，浏览器可直接打开）
+  //   - format='json'：结构化 JSON（完整 Coverage Tree + 8 metric × Triplet + Target + Gap + Delta）
+  // 异步执行：exporter 生成内容字符串 → fs/promises writeFile 写盘 → 返回 outputPath
   exportReport: t.procedure
-    .input((raw): { projectId: string; sessionId: string; format: 'html' | 'json'; outputPath: string } => {
+    .input((raw): {
+      projectId: string;
+      scope: ExportScope;
+      sessionId?: string;
+      compareSessionId?: string;
+      format: ExportFormat;
+      outputPath: string;
+    } => {
       const r = raw as Record<string, unknown>;
-      if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string' || typeof r.format !== 'string' || typeof r.outputPath !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, sessionId, format and outputPath are required' });
+      if (typeof r.projectId !== 'string' || typeof r.format !== 'string' || typeof r.outputPath !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, format and outputPath are required' });
       }
-      return { projectId: r.projectId, sessionId: r.sessionId, format: r.format as 'html' | 'json', outputPath: r.outputPath };
+      if (r.format !== 'html' && r.format !== 'json') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `Invalid format: ${String(r.format)} (expected html|json)` });
+      }
+      const scope = r.scope === 'compare' ? 'compare' : 'current';
+      const sessionId = typeof r.sessionId === 'string' ? r.sessionId : undefined;
+      const compareSessionId = typeof r.compareSessionId === 'string' ? r.compareSessionId : undefined;
+      // 范围选择校验（compare 必须有两个不同的 sessionId）
+      try {
+        resolveExportScope({ scope, sessionId, compareSessionId });
+      } catch (err) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: err instanceof Error ? err.message : 'Invalid export scope',
+        });
+      }
+      return {
+        projectId: r.projectId,
+        scope,
+        sessionId,
+        compareSessionId,
+        format: r.format as ExportFormat,
+        outputPath: r.outputPath,
+      };
     })
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
       const mgr = buildManager(project.rootPath);
-      return mgr.exportReport(input.sessionId, input.format, input.outputPath);
+
+      if (input.scope === 'compare') {
+        // 对比范围：获取两个 session 的完整 CoverageData，计算 delta 后生成对比报告
+        const before = await mgr.getTree(input.sessionId);
+        const after = await mgr.getTree(input.compareSessionId);
+        const beforeSummary = summarizeCoverage(before.root);
+        const afterSummary = summarizeCoverage(after.root);
+        const deltas = calculateDelta(beforeSummary, afterSummary);
+        const content = input.format === 'html'
+          ? generateDeltaHtmlReport(before, after, deltas)
+          : generateCompareJsonExport(before, after, deltas);
+        await writeFile(input.outputPath, content, 'utf-8');
+        return { outputPath: input.outputPath, scope: 'compare' as const, format: input.format };
+      }
+
+      // 当前范围：导出单个 session 的报告
+      const data: CoverageData = await mgr.getTree(input.sessionId);
+      const content = input.format === 'html'
+        ? generateHtmlReport(data)
+        : generateJsonExport(data);
+      await writeFile(input.outputPath, content, 'utf-8');
+      return { outputPath: input.outputPath, scope: 'current' as const, format: input.format, sessionId: data.sessionId };
+    }),
+
+  /**
+   * 弹出原生保存对话框，让用户选择导出文件路径。
+   * 根据 format 预设文件扩展名过滤器（.html / .json）。
+   * 用户取消时返回 null（渲染端据此不执行导出）。
+   */
+  pickExportPath: t.procedure
+    .input((raw): { format: ExportFormat; defaultName?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.format !== 'string' || (r.format !== 'html' && r.format !== 'json')) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'format is required (html|json)' });
+      }
+      return {
+        format: r.format as ExportFormat,
+        defaultName: typeof r.defaultName === 'string' ? r.defaultName : undefined,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const ext = input.format === 'html' ? 'html' : 'json';
+      const result = await dialog.showSaveDialog({
+        title: input.format === 'html' ? '导出 HTML 报告' : '导出 JSON 报告',
+        defaultPath: input.defaultName ?? `coverage-report.${ext}`,
+        filters: [
+          { name: input.format === 'html' ? 'HTML 报告' : 'JSON 数据', extensions: [ext] },
+          { name: '所有文件', extensions: ['*'] },
+        ],
+      });
+      if (result.canceled || !result.filePath) return { outputPath: null };
+      return { outputPath: result.filePath };
     }),
 
   // ─── Slice 2: Target / Gap / Delta / Triage / Exclusion ──────
