@@ -29,8 +29,28 @@ function makeRegistryWithPlugins(): PluginRegistry {
 
   const covParser: CoverageParserPlugin = {
     manifest: { id: 'cov', name: 'Cov', version: '1.0.0', kind: 'coverage-parser' },
-    async parse(_root: string, runId: string) {
-      return { runId, overall: 90.0, line: 95.0, toggle: 85.0, functional: 90.0, assertion: 92.0 };
+    async parse(_root: string, sessionId: string, _reportDir: string) {
+      return {
+        sessionId,
+        source: { covMergeDir: '/mock', edaTool: 'imc' as const, reportGeneratedAt: 0 },
+        root: {
+          name: 'top',
+          path: 'top',
+          depth: 0,
+          metrics: {
+            line: { percentage: 95.0, covered: 950, total: 1000 },
+            branch: { percentage: 88.0, covered: 880, total: 1000 },
+            toggle: { percentage: 85.0, covered: 850, total: 1000 },
+            condition: { percentage: 80.0, covered: 800, total: 1000 },
+            fsm_state: { percentage: 100, covered: 50, total: 50 },
+            fsm_transition: { percentage: 90, covered: 90, total: 100 },
+            functional: { percentage: 90.0, covered: 900, total: 1000 },
+            assertion: { percentage: 92.0, covered: 920, total: 1000 },
+          },
+          children: [],
+        },
+        targets: { line: 95, branch: 90 },
+      };
     },
   };
 
@@ -155,13 +175,14 @@ describe('HostToolsRegistry with plugin adapters', () => {
       id: '1',
       toolCallId: 'tc1',
       toolName: 'get_coverage',
-      arguments: { runId: 'run_123' },
+      arguments: { sessionId: 'session_1', reportDir: '/reports' },
     });
 
     const text = (result as { content: Array<{ text: string }> }).content[0].text;
     const parsed = JSON.parse(text);
-    expect(parsed.overall).toBe(90.0);
-    expect(parsed.line).toBe(95.0);
+    expect(parsed.sessionId).toBe('session_1');
+    expect(parsed.root.name).toBe('top');
+    expect(parsed.root.metrics.line.percentage).toBe(95.0);
   });
 
   it('get_coverage returns error when no adapter', async () => {

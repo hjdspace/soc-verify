@@ -203,17 +203,18 @@ export class HostToolsRegistry {
     this.register(
       defineTool(
         'get_coverage',
-        'Get coverage data for a subsystem or the entire project.',
+        'Get coverage data for a coverage merge session. Returns the hierarchical coverage tree.',
         {
           type: 'object',
           properties: {
-            subsys: { type: 'string', description: 'Subsystem name' },
-            type: {
+            sessionId: {
               type: 'string',
-              enum: ['line', 'toggle', 'functional', 'assertion'],
-              description: 'Coverage type',
+              description: 'Coverage Merge Session ID. If omitted, the most recent session is used.',
             },
-            runId: { type: 'string', description: 'Run ID for specific coverage data' },
+            reportDir: {
+              type: 'string',
+              description: 'Directory of pre-generated EDA text reports. If omitted, parsed from cached data when available.',
+            },
           },
           additionalProperties: false,
         },
@@ -222,8 +223,9 @@ export class HostToolsRegistry {
             return TEXT(JSON.stringify({ error: 'No coverage-parser plugin loaded' }));
           }
           try {
-            const runId = typeof args.runId === 'string' ? args.runId : '';
-            const data = await this.coverage.parse(runId);
+            const sessionId = typeof args.sessionId === 'string' ? args.sessionId : 'latest';
+            const reportDir = typeof args.reportDir === 'string' ? args.reportDir : '';
+            const data = await this.coverage.parse(sessionId, reportDir);
             return TEXT(JSON.stringify(data));
           } catch (err) {
             return TEXT(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));

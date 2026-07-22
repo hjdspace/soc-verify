@@ -6,347 +6,392 @@
 <title>SoC Verify · 覆盖率仪表盘原型</title>
 <style>
   :root {
-    --bg: oklch(0.14 0.006 250);
-    --bg-surface: oklch(0.18 0.006 250);
-    --bg-elevated: oklch(0.21 0.007 250);
-    --bg-hover: oklch(0.23 0.008 250);
-    --fg: oklch(0.94 0.004 250);
-    --fg-dim: oklch(0.62 0.008 250);
-    --fg-faint: oklch(0.42 0.006 250);
-    --border: oklch(0.25 0.007 250);
-    --c-pass: oklch(0.62 0.14 145);
-    --c-warn: oklch(0.70 0.13 85);
-    --c-fail: oklch(0.58 0.15 25);
-    --c-na: oklch(0.35 0.005 250);
+    --bg: oklch(0.15 0.008 250);
+    --bg-surface: oklch(0.19 0.008 250);
+    --bg-elevated: oklch(0.22 0.009 250);
+    --bg-hover: oklch(0.24 0.010 250);
+    --fg: oklch(0.95 0.004 250);
+    --fg-dim: oklch(0.66 0.010 250);
+    --fg-faint: oklch(0.46 0.008 250);
+    --border: oklch(0.27 0.008 250);
+    --border-strong: oklch(0.33 0.010 250);
+    --c-pass: oklch(0.72 0.15 145);
+    --c-warn: oklch(0.78 0.14 75);
+    --c-fail: oklch(0.65 0.18 25);
+    --c-na: oklch(0.50 0.012 250);
     --c-accent: oklch(0.68 0.14 250);
+    --c-accent-soft: oklch(0.22 0.04 250);
+    --shadow: 0 1px 3px oklch(0.05 0 0 / 0.3);
     --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     --mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: var(--bg); color: var(--fg); font-family: var(--sans); padding: 24px; font-size: 13px; }
-  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
-  .header h1 { font-size: 18px; font-weight: 700; }
-  .header .badge { font-size: 10px; font-weight: 600; padding: 3px 10px; border-radius: 12px; background: var(--bg-elevated); color: var(--fg-dim); text-transform: uppercase; }
-  .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-  .toolbar select, .toolbar input { background: var(--bg-surface); border: 1px solid var(--border); color: var(--fg); font-size: 12px; padding: 5px 10px; border-radius: 6px; }
-  .toolbar .btn { background: var(--bg-surface); border: 1px solid var(--border); color: var(--fg-dim); font-size: 11px; padding: 5px 12px; border-radius: 6px; cursor: pointer; }
-  .toolbar .btn:hover { color: var(--fg); }
+  body { background: var(--bg); color: var(--fg); font-family: var(--sans); padding: 28px 32px; font-size: 13px; line-height: 1.5; }
 
-  /* Section headers */
-  .section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-faint); margin-bottom: 10px; }
+  /* Header */
+  .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
+  .header-left { display: flex; align-items: center; gap: 12px; }
+  .header h1 { font-size: 20px; font-weight: 700; letter-spacing: -0.01em; }
+  .badge { font-size: 10px; font-weight: 700; padding: 4px 11px; border-radius: 20px; background: var(--c-accent-soft); color: var(--c-accent); text-transform: uppercase; letter-spacing: 0.06em; border: 1px solid oklch(0.30 0.05 250); }
+  .toolbar { display: flex; align-items: center; gap: 10px; }
+  .toolbar select, .toolbar input { background: var(--bg-surface); border: 1px solid var(--border); color: var(--fg); font-family: var(--sans); font-size: 12px; padding: 6px 11px; border-radius: 7px; outline: none; transition: border-color 0.15s; }
+  .toolbar select:focus, .toolbar input:focus { border-color: var(--c-accent); }
+  .btn { background: var(--bg-surface); border: 1px solid var(--border); color: var(--fg-dim); font-size: 11px; font-weight: 500; padding: 6px 13px; border-radius: 7px; cursor: pointer; transition: all 0.15s; font-family: var(--sans); }
+  .btn:hover { color: var(--fg); border-color: var(--border-strong); background: var(--bg-elevated); }
+  .btn.primary { background: var(--c-accent); color: oklch(0.15 0.01 250); border-color: var(--c-accent); font-weight: 600; }
+  .btn.primary:hover { background: oklch(0.74 0.15 250); }
+  .btn.danger { color: var(--c-fail); border-color: oklch(0.35 0.06 25); }
+  .btn.danger:hover { background: oklch(0.28 0.05 25); }
+
+  /* Section title */
+  .section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--fg-faint); margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
+  .section-title .st-meta { font-size: 10px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--fg-faint); }
+
+  /* Card base */
+  .card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
 
   /* Overview cards */
-  .overview-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 20px; }
-  .ov-card { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
-  .ov-card .ov-label { font-size: 10px; color: var(--fg-faint); text-transform: uppercase; margin-bottom: 6px; }
-  .ov-card .ov-value { font-family: var(--mono); font-size: 22px; font-weight: 700; }
-  .ov-card .ov-count { font-size: 10px; color: var(--fg-faint); margin-top: 2px; }
-  .ov-card .ov-bar { margin-top: 8px; height: 4px; border-radius: 2px; background: var(--bg-elevated); overflow: hidden; }
-  .ov-card .ov-bar-fill { height: 100%; border-radius: 2px; transition: width 0.3s; }
-  .ov-card .ov-status { font-size: 9px; font-weight: 600; text-transform: uppercase; margin-top: 6px; }
+  .ov-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+  .ov-card { padding: 16px 18px; transition: border-color 0.15s; }
+  .ov-card:hover { border-color: var(--border-strong); }
+  .ov-card .ov-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .ov-card .ov-label { font-size: 11px; font-weight: 600; color: var(--fg-dim); }
+  .ov-card .ov-icon { font-size: 13px; font-weight: 700; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
+  .ov-card .ov-icon.pass { color: var(--c-pass); background: oklch(0.25 0.04 145); }
+  .ov-card .ov-icon.warn { color: var(--c-warn); background: oklch(0.27 0.04 75); }
+  .ov-card .ov-icon.fail { color: var(--c-fail); background: oklch(0.27 0.05 25); }
+  .ov-card .ov-icon.na { color: var(--c-na); background: var(--bg-elevated); }
+  .ov-card .ov-value { font-family: var(--mono); font-size: 24px; font-weight: 700; line-height: 1.1; }
+  .ov-card .ov-count { font-size: 10px; color: var(--fg-faint); font-family: var(--mono); margin-top: 3px; }
+  .ov-card .ov-bar { margin-top: 10px; height: 4px; border-radius: 2px; background: var(--bg-elevated); overflow: hidden; }
+  .ov-card .ov-bar-fill { height: 100%; border-radius: 2px; transition: width 0.4s ease; }
+  .ov-card .ov-target { font-size: 9px; color: var(--fg-faint); margin-top: 6px; }
 
-  /* Trend chart */
-  .trend-section { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 20px; }
-  .trend-section .ts-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-  .trend-section .ts-title { font-size: 12px; font-weight: 600; }
-  .trend-svg { width: 100%; height: 80px; }
+  /* Trend */
+  .trend-card { padding: 18px; margin-bottom: 20px; }
+  .trend-card .tc-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .trend-card .tc-title { font-size: 12px; font-weight: 600; }
+  .trend-card .tc-legend { display: flex; gap: 12px; font-size: 10px; color: var(--fg-dim); }
+  .trend-card .tc-legend span { display: flex; align-items: center; gap: 4px; }
+  .trend-card .tc-legend i { width: 10px; height: 2px; border-radius: 1px; display: inline-block; }
+  .trend-svg { width: 100%; height: 90px; display: block; }
 
-  /* Tree table (compact) */
-  .tree-section { margin-bottom: 20px; }
-  .tree-table { width: 100%; border-collapse: collapse; background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  .tree-table thead th { background: var(--bg-elevated); color: var(--fg-faint); font-size: 10px; font-weight: 600; text-transform: uppercase; padding: 7px 6px; text-align: right; border-bottom: 1px solid var(--border); }
-  .tree-table thead th:first-child { text-align: left; padding-left: 12px; }
-  .tree-table tbody td { padding: 4px 6px; text-align: right; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 10px; color: var(--fg-dim); }
-  .tree-table tbody td:first-child { text-align: left; padding-left: 12px; font-family: var(--sans); color: var(--fg); font-size: 11px; }
+  /* Tree table */
+  .tree-card { padding: 0; overflow: hidden; margin-bottom: 20px; }
+  .tree-card .tc-header { padding: 14px 18px 10px; }
+  .tree-table { width: 100%; border-collapse: collapse; }
+  .tree-table thead th { background: var(--bg-elevated); color: var(--fg-faint); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; padding: 8px 8px; text-align: right; border-bottom: 1px solid var(--border); position: sticky; top: 0; }
+  .tree-table thead th:first-child { text-align: left; padding-left: 18px; }
+  .tree-table thead th .th-target { display: block; font-size: 9px; color: var(--fg-faint); font-weight: 400; margin-top: 2px; text-transform: none; letter-spacing: 0; }
+  .tree-table tbody td { padding: 5px 8px; text-align: right; border-bottom: 1px solid oklch(0.22 0.008 250); font-family: var(--mono); font-size: 11px; color: var(--fg-dim); }
+  .tree-table tbody td:first-child { text-align: left; padding-left: 18px; font-family: var(--sans); color: var(--fg); font-size: 12px; }
   .tree-table tbody tr:hover { background: var(--bg-hover); }
   .tree-table tbody tr.coll-child { display: none; }
-  .tree-toggle { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; user-select: none; }
-  .tree-toggle .chevron { width: 10px; height: 10px; transition: transform 0.15s; color: var(--fg-faint); flex-shrink: 0; }
-  .tree-toggle .chevron.open { transform: rotate(90deg); }
-  .tree-toggle .chevron.empty { visibility: hidden; }
-  .cov-cell { display: inline-flex; flex-direction: column; align-items: flex-end; line-height: 1.2; }
+  .tree-toggle { display: inline-flex; align-items: center; cursor: pointer; user-select: none; }
+  .chev { width: 11px; height: 11px; transition: transform 0.15s; color: var(--fg-faint); flex-shrink: 0; }
+  .chev.open { transform: rotate(90deg); }
+  .chev.empty { visibility: hidden; }
+  .cov-cell { display: inline-flex; flex-direction: column; align-items: flex-end; line-height: 1.25; }
   .cov-cell .pct { font-weight: 600; }
-  .cov-cell .count { font-size: 8px; color: var(--fg-faint); }
+  .cov-cell .cnt { font-size: 9px; color: var(--fg-faint); }
   .cov-cell.pass .pct { color: var(--c-pass); }
   .cov-cell.warn .pct { color: var(--c-warn); }
   .cov-cell.fail .pct { color: var(--c-fail); }
   .cov-cell.na .pct { color: var(--c-na); }
-  .cov-cell.na .count { display: none; }
+  .cov-cell.na .cnt { display: none; }
 
-  /* Uncovered detail */
-  .uncovered-section { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
-  .uncovered-section .us-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
-  .uncovered-section .us-title { font-size: 12px; font-weight: 600; }
-  .uncovered-section .us-tabs { display: flex; gap: 4px; }
-  .uncovered-tab { font-size: 10px; padding: 3px 8px; border-radius: 4px; cursor: pointer; background: var(--bg-elevated); color: var(--fg-dim); }
-  .uncovered-tab.active { color: var(--c-accent); background: oklch(0.21 0.03 250); }
-  .uncovered-list { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
-  .uncovered-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: var(--bg-elevated); font-size: 10px; }
-  .uncovered-item .ui-module { color: var(--c-accent); font-family: var(--mono); min-width: 120px; }
-  .uncovered-item .ui-file { color: var(--fg-dim); font-family: var(--mono); }
-  .uncovered-item .ui-desc { color: var(--fg-dim); margin-left: auto; }
-  .uncovered-item .ui-badge { font-size: 9px; padding: 1px 6px; border-radius: 8px; background: var(--c-fail); color: white; }
+  /* Uncovered */
+  .uncov-card { padding: 18px; margin-bottom: 20px; }
+  .uncov-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .uncov-title { font-size: 12px; font-weight: 600; }
+  .uncov-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+  .uc-tab { font-size: 10px; padding: 4px 10px; border-radius: 6px; cursor: pointer; background: var(--bg-elevated); color: var(--fg-dim); transition: all 0.15s; font-weight: 500; }
+  .uc-tab:hover { color: var(--fg); }
+  .uc-tab.active { color: var(--c-accent); background: var(--c-accent-soft); }
+  .uncov-list { display: flex; flex-direction: column; gap: 5px; max-height: 220px; overflow-y: auto; }
+  .uc-item { display: flex; align-items: center; gap: 10px; padding: 8px 11px; border-radius: 7px; background: var(--bg-elevated); font-size: 11px; transition: background 0.15s; }
+  .uc-item:hover { background: var(--bg-hover); }
+  .uc-item .uc-mod { color: var(--c-accent); font-family: var(--mono); min-width: 170px; font-weight: 500; }
+  .uc-item .uc-file { color: var(--fg-dim); font-family: var(--mono); }
+  .uc-item .uc-desc { color: var(--fg-dim); margin-left: auto; }
+  .uc-item .uc-tag { font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 10px; background: oklch(0.28 0.06 25); color: var(--c-fail); text-transform: uppercase; letter-spacing: 0.04em; }
+  .uc-empty { text-align: center; padding: 18px; color: var(--fg-faint); font-size: 11px; }
 
-  /* AI panel */
-  .ai-panel { background: var(--bg-surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-top: 16px; }
-  .ai-panel .ai-title { font-size: 12px; font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
-  .ai-panel .ai-title .ai-icon { width: 14px; height: 14px; border-radius: 50%; background: var(--c-accent); display: flex; align-items: center; justify-content: center; font-size: 9px; color: white; }
-  .ai-panel .ai-msg { font-size: 11px; color: var(--fg-dim); line-height: 1.6; }
-  .ai-panel .ai-action { margin-top: 8px; display: flex; gap: 8px; }
-  .ai-panel .ai-btn { font-size: 10px; padding: 4px 10px; border-radius: 4px; cursor: pointer; border: 1px solid var(--border); background: var(--bg-elevated); color: var(--fg-dim); }
-  .ai-panel .ai-btn.primary { background: var(--c-accent); color: white; border: none; }
+  /* AI Closure panel — full */
+  .closure-card { padding: 0; overflow: hidden; border-color: oklch(0.30 0.04 250); }
+  .closure-head { padding: 16px 18px; background: linear-gradient(135deg, var(--c-accent-soft), var(--bg-surface)); border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .closure-head .ch-left { display: flex; align-items: center; gap: 10px; }
+  .closure-head .ch-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--c-accent); box-shadow: 0 0 0 0 oklch(0.68 0.14 250 / 0.5); animation: pulse 1.8s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 oklch(0.68 0.14 250 / 0.5); } 70% { box-shadow: 0 0 0 8px oklch(0.68 0.14 250 / 0); } 100% { box-shadow: 0 0 0 0 oklch(0.68 0.14 250 / 0); } }
+  .closure-head .ch-title { font-size: 13px; font-weight: 700; }
+  .closure-head .ch-sub { font-size: 10px; color: var(--fg-dim); margin-top: 1px; }
+  .closure-head .ch-overall { display: flex; align-items: center; gap: 10px; }
+  .closure-head .ch-overall-text { font-size: 11px; color: var(--fg-dim); font-family: var(--mono); }
+  .closure-head .ch-overall-bar { width: 100px; height: 5px; border-radius: 3px; background: var(--bg-elevated); overflow: hidden; }
+  .closure-head .ch-overall-fill { height: 100%; background: var(--c-accent); border-radius: 3px; transition: width 0.4s; }
+
+  .closure-body { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+  .closure-queue { padding: 16px 18px; border-right: 1px solid var(--border); }
+  .closure-current { padding: 16px 18px; }
+  .cq-label, .cc-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-faint); margin-bottom: 10px; }
+
+  .cq-item { display: flex; align-items: center; gap: 10px; padding: 8px 11px; border-radius: 7px; margin-bottom: 5px; font-size: 11px; transition: background 0.15s; }
+  .cq-item:hover { background: var(--bg-hover); }
+  .cq-item.running { background: var(--c-accent-soft); border: 1px solid oklch(0.30 0.05 250); }
+  .cq-item.completed { opacity: 0.65; }
+  .cq-item.escalated { background: oklch(0.25 0.04 25); border: 1px solid oklch(0.32 0.05 25); }
+  .cq-item .cq-mod { font-family: var(--mono); font-weight: 500; color: var(--fg); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cq-item .cq-metric { font-size: 9px; color: var(--fg-dim); font-family: var(--mono); }
+  .cq-item .cq-deficit { font-family: var(--mono); font-size: 10px; color: var(--c-fail); font-weight: 600; min-width: 50px; text-align: right; }
+  .cq-item .cq-status { font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 10px; text-transform: uppercase; letter-spacing: 0.04em; min-width: 52px; text-align: center; }
+  .cq-status.running { background: var(--c-accent); color: oklch(0.13 0.01 250); }
+  .cq-status.completed { background: oklch(0.25 0.04 145); color: var(--c-pass); }
+  .cq-status.pending { background: var(--bg-elevated); color: var(--fg-faint); }
+  .cq-status.escalated { background: oklch(0.28 0.06 25); color: var(--c-fail); }
+
+  .cc-active { display: flex; flex-direction: column; gap: 14px; }
+  .cc-mod-row { display: flex; align-items: center; justify-content: space-between; }
+  .cc-mod-name { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--c-accent); }
+  .cc-round { font-family: var(--mono); font-size: 11px; color: var(--fg-dim); }
+  .cc-round .cc-round-cur { color: var(--c-accent); font-weight: 700; }
+  .cc-deltas { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .cc-delta-box { background: var(--bg-elevated); border-radius: 8px; padding: 11px 13px; }
+  .cc-delta-box .db-label { font-size: 9px; color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+  .cc-delta-box .db-val { font-family: var(--mono); font-size: 18px; font-weight: 700; }
+  .cc-delta-box .db-val.up { color: var(--c-pass); }
+  .cc-delta-box .db-val.flat { color: var(--fg-faint); }
+  .cc-progress-label { display: flex; justify-content: space-between; font-size: 10px; color: var(--fg-dim); margin-bottom: 5px; }
+  .cc-progress-bar { height: 6px; border-radius: 3px; background: var(--bg-elevated); overflow: hidden; }
+  .cc-progress-fill { height: 100%; background: linear-gradient(90deg, var(--c-accent), oklch(0.78 0.15 250)); border-radius: 3px; transition: width 0.4s; }
+  .cc-actions { display: flex; gap: 8px; margin-top: 4px; }
+
+  /* Legend */
+  .legend { display: flex; gap: 18px; margin-top: 18px; font-size: 10px; color: var(--fg-dim); padding: 12px 0; }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-dot { width: 9px; height: 9px; border-radius: 50%; }
+  .legend-dot.pass { background: var(--c-pass); }
+  .legend-dot.warn { background: var(--c-warn); }
+  .legend-dot.fail { background: var(--c-fail); }
+  .legend-dot.na { background: var(--c-na); }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>覆盖率分析 · 仪表盘 + 下钻布局</h1>
-  <span class="badge">方案 C</span>
-</div>
-
-<div class="toolbar">
-  <select>
-    <option>Session: 2024-01-15_merge_001 (cov_merge/)</option>
-    <option>Session: 2024-01-10_merge_002 (cov_merge_old/)</option>
-  </select>
-  <input type="text" placeholder="过滤模块..." style="width: 140px;">
-  <button class="btn">导入新 Session</button>
-  <button class="btn">导出报告</button>
-  <button class="btn">AI 分析</button>
-</div>
-
-<!-- 1. Overview cards -->
-<div class="overview-grid" id="overviewGrid"></div>
-
-<!-- 2. Trend chart -->
-<div class="trend-section">
-  <div class="ts-header">
-    <span class="ts-title">覆盖率趋势</span>
-    <span style="font-size: 10px; color: var(--fg-faint);">最近 5 个 merge session</span>
+  <div class="header-left">
+    <h1>覆盖率分析</h1>
+    <span class="badge">方案 C · 仪表盘</span>
   </div>
-  <svg class="trend-svg" id="trendSvg" viewBox="0 0 600 80" preserveAspectRatio="none"></svg>
+  <div class="toolbar">
+    <select>
+      <option>Session: 2024-01-15_merge_001</option>
+      <option>Session: 2024-01-10_merge_002</option>
+    </select>
+    <input type="text" placeholder="过滤模块..." style="width: 130px;">
+    <button class="btn">导入 Session</button>
+    <button class="btn">导出报告</button>
+    <button class="btn primary">AI 覆盖收敛</button>
+  </div>
 </div>
 
-<!-- 3. Tree table -->
-<div class="tree-section">
-  <div class="section-title">模块层级覆盖率</div>
-  <table class="tree-table" id="treeTable">
+<!-- 1. 概览卡片 -->
+<div class="section-title">覆盖率总览 <span class="st-meta">8 项指标 · 对照行业目标</span></div>
+<div class="ov-grid" id="ovGrid"></div>
+
+<!-- 2. 趋势图 -->
+<div class="card trend-card">
+  <div class="tc-head">
+    <span class="tc-title">覆盖率趋势</span>
+    <div class="tc-legend">
+      <span><i style="background:var(--c-accent)"></i>Line</span>
+      <span><i style="background:var(--c-warn)"></i>Branch</span>
+      <span><i style="background:var(--c-pass)"></i>Toggle</span>
+    </div>
+  </div>
+  <svg class="trend-svg" id="trendSvg" viewBox="0 0 600 90" preserveAspectRatio="none"></svg>
+</div>
+
+<!-- 3. 紧凑树表格 -->
+<div class="card tree-card">
+  <div class="tc-header">
+    <div class="section-title" style="margin-bottom:0;">模块层级覆盖率 <span class="st-meta">点击展开/折叠</span></div>
+  </div>
+  <table class="tree-table">
     <thead><tr>
       <th>模块</th>
-      <th>Line</th><th>Branch</th><th>Toggle</th><th>Cond</th>
-      <th>FSM St</th><th>FSM Tr</th><th>Func</th><th>Assert</th>
+      <th>Line<span class="th-target">≥95%</span></th>
+      <th>Branch<span class="th-target">≥90%</span></th>
+      <th>Toggle<span class="th-target">≥85%</span></th>
+      <th>Cond<span class="th-target">≥85%</span></th>
+      <th>FSM St<span class="th-target">=100%</span></th>
+      <th>FSM Tr<span class="th-target">≥90%</span></th>
+      <th>Func<span class="th-target">=100%</span></th>
+      <th>Assert</th>
     </tr></thead>
     <tbody id="treeBody"></tbody>
   </table>
 </div>
 
-<!-- 4. Uncovered items -->
-<div class="uncovered-section">
-  <div class="us-header">
-    <span class="us-title">未覆盖项</span>
-    <div class="us-tabs" id="uncovTabs"></div>
+<!-- 4. 未覆盖项 -->
+<div class="card uncov-card">
+  <div class="uncov-head">
+    <span class="uncov-title">未覆盖项</span>
+    <div class="uncov-tabs" id="ucTabs"></div>
   </div>
-  <div class="uncovered-list" id="uncovList"></div>
+  <div class="uncov-list" id="ucList"></div>
 </div>
 
-<!-- 5. AI panel -->
-<div class="ai-panel">
-  <div class="ai-title"><span class="ai-icon">AI</span> 覆盖率分析建议</div>
-  <div class="ai-msg">
-    检测到 <strong style="color:var(--c-fail)">3 个模块</strong>的 line coverage 低于 95% 目标：
-    <br>· <code>u_analog_mipi_mphy_2t2r</code> (58.42%) — 缺少 MIPI MPHY 协议状态遍历测试
-    <br>· <code>u_g3_side_glue_wrap</code> (57.38%) — G3 侧 glue 逻辑未覆盖，可能缺少配置初始化序列
-    <br>· <code>u_block_wrap_0</code> (60.04%) — 整体覆盖率低，建议优先处理子模块
-    <br><br>建议：生成 MIPI MPHY 状态遍历定向测试，预计可提升 line coverage 约 15-20%。
+<!-- 5. AI 覆盖收敛面板（完整）-->
+<div class="card closure-card">
+  <div class="closure-head">
+    <div class="ch-left">
+      <div class="ch-pulse"></div>
+      <div>
+        <div class="ch-title">AI Coverage Closure 进行中</div>
+        <div class="ch-sub">5 个 Gap 并行处理 · 已完成 2 · 升级 0</div>
+      </div>
+    </div>
+    <div class="ch-overall">
+      <span class="ch-overall-text">40%</span>
+      <div class="ch-overall-bar"><div class="ch-overall-fill" style="width:40%"></div></div>
+    </div>
   </div>
-  <div class="ai-action">
-    <button class="ai-btn primary">开始 Coverage Closure</button>
-    <button class="ai-btn">查看详细分析</button>
+  <div class="closure-body">
+    <!-- 左：Gap 队列 -->
+    <div class="closure-queue">
+      <div class="cq-label">Gap 队列（并行调度）</div>
+      <div id="cqList"></div>
+    </div>
+    <!-- 右：当前进度 -->
+    <div class="closure-current">
+      <div class="cc-label">当前活跃 Gap 进度</div>
+      <div class="cc-active" id="ccActive"></div>
+    </div>
   </div>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><span class="legend-dot pass"></span>达标</div>
+  <div class="legend-item"><span class="legend-dot warn"></span>接近目标 (&lt;5%)</div>
+  <div class="legend-item"><span class="legend-dot fail"></span>未达标</div>
+  <div class="legend-item"><span class="legend-dot na"></span>N/A</div>
 </div>
 
 <script>
-const TARGETS = { line: 95, branch: 90, toggle: 85, condition: 85, fsm_state: 100, fsm_transition: 90, functional: 100, assertion: null };
-const METRICS = ['line', 'branch', 'toggle', 'condition', 'fsm_state', 'fsm_transition', 'functional', 'assertion'];
-const METRIC_LABELS = { line: 'Line', branch: 'Branch', toggle: 'Toggle', condition: 'Cond', fsm_state: 'FSM St', fsm_transition: 'FSM Tr', functional: 'Func', assertion: 'Assert' };
+const TARGETS = { line:95, branch:90, toggle:85, condition:85, fsm_state:100, fsm_transition:90, functional:100, assertion:null };
+const METRICS = ['line','branch','toggle','condition','fsm_state','fsm_transition','functional','assertion'];
+const ML = { line:'Line', branch:'Branch', toggle:'Toggle', condition:'Cond', fsm_state:'FSM St', fsm_transition:'FSM Tr', functional:'Func', assertion:'Assert' };
 
 const tree = {
-  name: 'tb_top', depth: 0, children: [
-    { name: 'chip_top', depth: 1, children: [
-      { name: 'dut', depth: 2, children: [
-        { name: 'u_analog_bb_line_usb', depth: 3, m: { line: { p: 87.5, c: 13, t: 15 }, branch: { p: 80, c: 8, t: 10 }, toggle: { p: 75, c: 30, t: 40 }, condition: { p: 70, c: 7, t: 10 } } } },
-        { name: 'u_block_wrap_0', depth: 3, children: [
-          { name: 'u_analog_mipi_mphy_2t2r', depth: 4, m: { line: { p: 58.42, c: 482, t: 825 }, branch: { p: 52.1, c: 350, t: 672 }, toggle: { p: 45.3, c: 1200, t: 2650 }, condition: { p: 48, c: 96, t: 200 }, fsm_state: { p: 66.7, c: 4, t: 6 }, fsm_transition: { p: 40, c: 6, t: 15 }, assertion: { p: 50, c: 3, t: 6 } } } },
-          { name: 'u_g3_side_glue_wrap', depth: 4, m: { line: { p: 57.38, c: 1007, t: 1755 }, branch: { p: 50.2, c: 700, t: 1393 }, toggle: { p: 42.1, c: 2500, t: 5940 }, condition: { p: 45, c: 180, t: 400 } } } },
-          { name: 'analog_mipi_mphy_2t2r_glue', depth: 4, m: { line: { p: 96.88, c: 225, t: 239 }, branch: { p: 92, c: 161, t: 175 }, toggle: { p: 88.5, c: 450, t: 508 }, condition: { p: 90, c: 45, t: 50 } } } },
-          { name: 'u_anlg_phy_g3_rf', depth: 4, m: { line: { p: 79.97, c: 1540, t: 1974 }, branch: { p: 72.3, c: 1100, t: 1521 }, toggle: { p: 68.5, c: 3200, t: 4672 }, condition: { p: 70, c: 280, t: 400 }, fsm_state: { p: 80, c: 8, t: 10 }, fsm_transition: { p: 65, c: 13, t: 20 } } } },
-          { name: 'u_reg_dec', depth: 4, m: { line: { p: 98.76, c: 159, t: 161 }, branch: { p: 96, c: 96, t: 100 }, toggle: { p: 92, c: 230, t: 250 }, condition: { p: 95, c: 38, t: 40 } } } },
-        ], m: { line: { p: 60.04, c: 323, t: 538 }, branch: { p: 52, c: 260, t: 500 }, toggle: { p: 48, c: 800, t: 1667 }, condition: { p: 50, c: 100, t: 200 }, fsm_state: { p: 66.7, c: 4, t: 6 }, fsm_transition: { p: 40, c: 6, t: 15 }, assertion: { p: 50, c: 3, t: 6 } } } },
-      ], m: { line: { p: 93.07, c: 349, t: 375 }, branch: { p: 88, c: 440, t: 500 }, toggle: { p: 82, c: 1230, t: 1500 }, condition: { p: 85, c: 170, t: 200 }, fsm_state: { p: 80, c: 8, t: 10 }, fsm_transition: { p: 65, c: 13, t: 20 }, assertion: { p: 50, c: 3, t: 6 } } } },
-    ], m: null },
-  ], m: null
+  name:'tb_top', depth:0, children:[
+    { name:'chip_top', depth:1, children:[
+      { name:'dut', depth:2, children:[
+        { name:'u_analog_bb_line_usb', depth:3, m:{ line:{p:87.5,c:13,t:15}, branch:{p:80,c:8,t:10}, toggle:{p:75,c:30,t:40}, condition:{p:70,c:7,t:10} } },
+        { name:'u_block_wrap_0', depth:3, children:[
+          { name:'u_analog_mipi_mphy_2t2r', depth:4, m:{ line:{p:58.42,c:482,t:825}, branch:{p:52.1,c:350,t:672}, toggle:{p:45.3,c:1200,t:2650}, condition:{p:48,c:96,t:200}, fsm_state:{p:66.7,c:4,t:6}, fsm_transition:{p:40,c:6,t:15}, assertion:{p:50,c:3,t:6} } },
+          { name:'u_g3_side_glue_wrap', depth:4, m:{ line:{p:57.38,c:1007,t:1755}, branch:{p:50.2,c:700,t:1393}, toggle:{p:42.1,c:2500,t:5940}, condition:{p:45,c:180,t:400} } },
+          { name:'analog_mipi_mphy_2t2r_glue', depth:4, m:{ line:{p:96.88,c:225,t:239}, branch:{p:92,c:161,t:175}, toggle:{p:88.5,c:450,t:508}, condition:{p:90,c:45,t:50} } },
+          { name:'u_anlg_phy_g3_rf', depth:4, m:{ line:{p:79.97,c:1540,t:1974}, branch:{p:72.3,c:1100,t:1521}, toggle:{p:68.5,c:3200,t:4672}, condition:{p:70,c:280,t:400}, fsm_state:{p:80,c:8,t:10}, fsm_transition:{p:65,c:13,t:20} } },
+          { name:'u_reg_dec', depth:4, m:{ line:{p:98.76,c:159,t:161}, branch:{p:96,c:96,t:100}, toggle:{p:92,c:230,t:250}, condition:{p:95,c:38,t:40} } },
+        ], m:{ line:{p:60.04,c:323,t:538}, branch:{p:52,c:260,t:500}, toggle:{p:48,c:800,t:1667}, condition:{p:50,c:100,t:200}, fsm_state:{p:66.7,c:4,t:6}, fsm_transition:{p:40,c:6,t:15}, assertion:{p:50,c:3,t:6} } },
+      ], m:{ line:{p:93.07,c:349,t:375}, branch:{p:88,c:440,t:500}, toggle:{p:82,c:1230,t:1500}, condition:{p:85,c:170,t:200}, fsm_state:{p:80,c:8,t:10}, fsm_transition:{p:65,c:13,t:20}, assertion:{p:50,c:3,t:6} } },
+    ], m:null },
+  ], m:null
 };
 
-function classifyMetric(metric, val) {
-  if (!val) return 'na';
-  const target = TARGETS[metric];
-  if (target === null) return val.p >= 90 ? 'pass' : val.p >= 80 ? 'warn' : 'fail';
-  if (val.p >= target) return 'pass';
-  if (val.p >= target - 5) return 'warn';
-  return 'fail';
-}
-function getColor(cls) { return { pass: 'var(--c-pass)', warn: 'var(--c-warn)', fail: 'var(--c-fail)', na: 'var(--c-na)' }[cls]; }
+function classify(m,v){ if(!v) return 'na'; const t=TARGETS[m]; if(t===null) return v.p>=90?'pass':v.p>=80?'warn':'fail'; if(v.p>=t) return 'pass'; if(v.p>=t-5) return 'warn'; return 'fail'; }
+function color(c){ return {pass:'var(--c-pass)',warn:'var(--c-warn)',fail:'var(--c-fail)',na:'var(--c-na)'}[c]; }
+function icon(c){ return {pass:'✓',warn:'⚠',fail:'✗',na:'—'}[c]; }
 
-// Overview cards
-function calcSummary(node) {
-  if (!node.m) {
-    if (!node.children || node.children.length === 0) return null;
-    const childSums = node.children.map(c => calcSummary(c)).filter(s => s);
-    if (childSums.length === 0) return null;
-    const sum = {};
-    for (const m of METRICS) {
-      const vals = childSums.map(s => s[m]).filter(v => v);
-      if (vals.length === 0) { sum[m] = null; continue; }
-      const tC = vals.reduce((a, v) => a + v.c, 0);
-      const tT = vals.reduce((a, v) => a + v.t, 0);
-      sum[m] = { p: tT > 0 ? (tC / tT * 100) : 0, c: tC, t: tT };
-    }
-    return sum;
-  }
-  return node.m;
+// 概览
+function calcSummary(n){
+  if(!n.m){ if(!n.children||!n.children.length) return null; const cs=n.children.map(c=>calcSummary(c)).filter(s=>s); if(!cs.length) return null; const s={}; for(const m of METRICS){ const vs=cs.map(x=>x[m]).filter(v=>v); if(!vs.length){s[m]=null;continue;} const tC=vs.reduce((a,v)=>a+v.c,0), tT=vs.reduce((a,v)=>a+v.t,0); s[m]={p:tT>0?tC/tT*100:0,c:tC,t:tT}; } return s; }
+  return n.m;
 }
-
 const summary = calcSummary(tree);
-let ovHtml = '';
-for (const m of METRICS) {
-  const val = summary ? summary[m] : null;
-  if (!val) {
-    ovHtml += `<div class="ov-card"><div class="ov-label">${METRIC_LABELS[m]}</div><div class="ov-value" style="color:var(--c-na)">n/a</div><div class="ov-bar"><div class="ov-bar-fill" style="width:0%;background:var(--c-na)"></div></div></div>`;
-    continue;
-  }
-  const cls = classifyMetric(m, val);
-  const color = getColor(cls);
-  const target = TARGETS[m];
-  const statusText = cls === 'pass' ? '✓ 达标' : cls === 'warn' ? '⚠ 接近' : cls === 'fail' ? '✗ 未达标' : '';
-  ovHtml += `<div class="ov-card"><div class="ov-label">${METRIC_LABELS[m]}</div><div class="ov-value" style="color:${color}">${val.p.toFixed(1)}%</div><div class="ov-count">${val.c}/${val.t}${target ? ' · 目标'+target+'%' : ''}</div><div class="ov-bar"><div class="ov-bar-fill" style="width:${val.p}%;background:${color}"></div></div><div class="ov-status" style="color:${color}">${statusText}</div></div>`;
+let ovHtml='';
+for(const m of METRICS){
+  const v = summary?summary[m]:null;
+  if(!v){ ovHtml+=`<div class="card ov-card"><div class="ov-top"><span class="ov-label">${ML[m]}</span><span class="ov-icon na">${icon('na')}</span></div><div class="ov-value" style="color:var(--c-na)">n/a</div><div class="ov-bar"><div class="ov-bar-fill" style="width:0;background:var(--c-na)"></div></div></div>`; continue; }
+  const cls=classify(m,v); const t=TARGETS[m];
+  const stTxt = cls==='pass'?'达标':cls==='warn'?'接近':cls==='fail'?'未达标':'无目标';
+  ovHtml+=`<div class="card ov-card"><div class="ov-top"><span class="ov-label">${ML[m]}</span><span class="ov-icon ${cls}">${icon(cls)}</span></div><div class="ov-value" style="color:${color(cls)}">${v.p.toFixed(1)}%</div><div class="ov-count">${v.c}/${v.t}</div><div class="ov-bar"><div class="ov-bar-fill" style="width:${v.p}%;background:${color(cls)}"></div></div><div class="ov-target">${t?'目标 '+t+'% · '+stTxt:stTxt}</div></div>`;
 }
-document.getElementById('overviewGrid').innerHTML = ovHtml;
+document.getElementById('ovGrid').innerHTML=ovHtml;
 
-// Trend chart
-function renderTrend() {
-  const svg = document.getElementById('trendSvg');
-  const sessions = [
-    { label: 'S1', line: 75.2, branch: 68.1, toggle: 62.0 },
-    { label: 'S2', line: 78.5, branch: 72.3, toggle: 65.1 },
-    { label: 'S3', line: 82.1, branch: 76.8, toggle: 70.2 },
-    { label: 'S4', line: 88.3, branch: 82.5, toggle: 76.0 },
-    { label: 'S5', line: 93.07, branch: 88.0, toggle: 82.0 },
-  ];
-  const w = 600, h = 80, pad = 20;
-  const metrics = ['line', 'branch', 'toggle'];
-  const colors = ['var(--c-accent)', 'var(--c-warn)', 'var(--c-pass)'];
-  let html = '';
-  // grid
-  for (let i = 0; i <= 4; i++) {
-    const y = pad + (h - pad * 2) * i / 4;
-    html += `<line x1="${pad}" y1="${y}" x2="${w-pad}" y2="${y}" stroke="var(--border)" stroke-width="0.5"/>`;
-    const pct = 100 - i * 25;
-    html += `<text x="${pad-4}" y="${y+3}" font-size="8" fill="var(--fg-faint)" text-anchor="end" font-family="var(--mono)">${pct}%</text>`;
-  }
-  // lines
-  metrics.forEach((m, mi) => {
-    const points = sessions.map((s, i) => {
-      const x = pad + (w - pad * 2) * i / (sessions.length - 1);
-      const y = pad + (h - pad * 2) * (1 - s[m] / 100);
-      return `${x},${y}`;
-    });
-    html += `<polyline points="${points.join(' ')}" fill="none" stroke="${colors[mi]}" stroke-width="1.5" opacity="0.8"/>`;
-    sessions.forEach((s, i) => {
-      const x = pad + (w - pad * 2) * i / (sessions.length - 1);
-      const y = pad + (h - pad * 2) * (1 - s[m] / 100);
-      html += `<circle cx="${x}" cy="${y}" r="2" fill="${colors[mi]}" opacity="0.8"/>`;
-    });
-  });
-  // labels
-  sessions.forEach((s, i) => {
-    const x = pad + (w - pad * 2) * i / (sessions.length - 1);
-    html += `<text x="${x}" y="${h-4}" font-size="8" fill="var(--fg-faint)" text-anchor="middle" font-family="var(--mono)">${s.label}</text>`;
-  });
-  svg.innerHTML = html;
-}
-renderTrend();
+// 趋势图
+(function(){
+  const svg=document.getElementById('trendSvg');
+  const sessions=[{l:'S1',line:75.2,branch:68.1,toggle:62},{l:'S2',line:78.5,branch:72.3,toggle:65.1},{l:'S3',line:82.1,branch:76.8,toggle:70.2},{l:'S4',line:88.3,branch:82.5,toggle:76},{l:'S5',line:93.07,branch:88,toggle:82}];
+  const w=600,h=90,pad=24; const ms=['line','branch','toggle']; const cs=['var(--c-accent)','var(--c-warn)','var(--c-pass)'];
+  let html='';
+  for(let i=0;i<=4;i++){ const y=pad+(h-pad*2)*i/4; html+=`<line x1="${pad}" y1="${y}" x2="${w-pad}" y2="${y}" stroke="var(--border)" stroke-width="0.5"/>`; html+=`<text x="${pad-5}" y="${y+3}" font-size="8" fill="var(--fg-faint)" text-anchor="end" font-family="var(--mono)">${100-i*25}%</text>`; }
+  ms.forEach((m,mi)=>{ const pts=sessions.map((s,i)=>`${pad+(w-pad*2)*i/(sessions.length-1)},${pad+(h-pad*2)*(1-s[m]/100)}`).join(' '); html+=`<polyline points="${pts}" fill="none" stroke="${cs[mi]}" stroke-width="1.8" opacity="0.85"/>`; sessions.forEach((s,i)=>{ const x=pad+(w-pad*2)*i/(sessions.length-1), y=pad+(h-pad*2)*(1-s[m]/100); html+=`<circle cx="${x}" cy="${y}" r="2.5" fill="${cs[mi]}"/>`; }); });
+  sessions.forEach((s,i)=>{ const x=pad+(w-pad*2)*i/(sessions.length-1); html+=`<text x="${x}" y="${h-3}" font-size="8" fill="var(--fg-faint)" text-anchor="middle" font-family="var(--mono)">${s.l}</text>`; });
+  svg.innerHTML=html;
+})();
 
-// Tree table (compact, only showing top 3 levels)
-function renderCell(metric, val) {
-  if (!val) return `<td><span class="cov-cell na"><span class="pct">n/a</span></span></td>`;
-  const cls = classifyMetric(metric, val);
-  return `<td><span class="cov-cell ${cls}"><span class="pct">${val.p.toFixed(1)}%</span><span class="count">${val.c}/${val.t}</span></span></td>`;
+// 树表格
+function renderCell(m,v){ if(!v) return `<td><span class="cov-cell na"><span class="pct">n/a</span></span></td>`; const c=classify(m,v); return `<td><span class="cov-cell ${c}"><span class="pct">${v.p.toFixed(1)}%</span><span class="cnt">${v.c}/${v.t}</span></span></td>`; }
+function renderNode(n){
+  const hc=n.children&&n.children.length>0; const rid=`r-${n.name}-${n.depth}`;
+  let h=`<tr id="${rid}" class="${n.depth>0?'coll-child':''}" data-depth="${n.depth}"><td><span class="tree-toggle" onclick="toggleNode('${rid}')"><svg class="chev ${hc?'open':'empty'}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg></span><span style="margin-left:${n.depth*15}px">${n.name}</span></td>`;
+  for(const m of METRICS) h+=renderCell(m,n.m?n.m[m]:null);
+  h+=`</tr>`; if(hc) for(const c of n.children) h+=renderNode(c); return h;
 }
-function renderNode(node) {
-  const hasChildren = node.children && node.children.length > 0;
-  const rowId = `r-${node.name}-${node.depth}`;
-  let html = `<tr id="${rowId}" class="${node.depth > 0 ? 'coll-child' : ''}" data-depth="${node.depth}" data-name="${node.name}">`;
-  html += `<td>`;
-  html += `<span class="tree-toggle" onclick="toggleNode('${rowId}')">`;
-  html += `<svg class="chevron ${hasChildren ? 'open' : 'empty'}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>`;
-  html += `</span>`;
-  html += `<span style="margin-left:${node.depth*14}px">${node.name}</span>`;
-  html += `</td>`;
-  for (const m of METRICS) html += renderCell(m, node.m ? node.m[m] : null);
-  html += `</tr>`;
-  if (hasChildren) for (const c of node.children) html += renderNode(c);
-  return html;
-}
-document.getElementById('treeBody').innerHTML = renderNode(tree);
-document.querySelectorAll('.tree-table tbody tr').forEach((r, i) => { if (i > 0) r.classList.remove('coll-child'); });
+document.getElementById('treeBody').innerHTML=renderNode(tree);
+document.querySelectorAll('.tree-table tbody tr').forEach((r,i)=>{ if(i>0) r.classList.remove('coll-child'); });
+function toggleNode(rid){ const r=document.getElementById(rid); if(!r) return; const ch=r.querySelector('.chev'); const exp=ch.classList.contains('open'); ch.classList.toggle('open'); const d=parseInt(r.dataset.depth); let n=r.nextElementSibling; while(n){ const nd=parseInt(n.dataset.depth); if(nd<=d) break; if(exp) n.classList.add('coll-child'); else n.classList.remove('coll-child'); n=n.nextElementSibling; } }
 
-function toggleNode(rowId) {
-  const row = document.getElementById(rowId);
-  if (!row) return;
-  const chevron = row.querySelector('.chevron');
-  const isExpanded = chevron.classList.contains('open');
-  chevron.classList.toggle('open');
-  const depth = parseInt(row.dataset.depth);
-  let next = row.nextElementSibling;
-  while (next) {
-    const nd = parseInt(next.dataset.depth);
-    if (nd <= depth) break;
-    if (isExpanded) { next.classList.add('coll-child'); } else { next.classList.remove('coll-child'); }
-    next = next.nextElementSibling;
-  }
-}
-
-// Uncovered items
-const uncovData = {
-  line: [
-    { mod: 'u_analog_mipi_mphy_2t2r', file: 'mphy_2t2r.sv:45', desc: 'if 分支未覆盖' },
-    { mod: 'u_analog_mipi_mphy_2t2r', file: 'mphy_2t2r.sv:128', desc: 'always 块未执行' },
-    { mod: 'u_g3_side_glue_wrap', file: 'g3_glue.sv:203', desc: 'case 默认分支' },
-    { mod: 'u_g3_side_glue_wrap', file: 'g3_glue.sv:350', desc: 'assign 未触发' },
-    { mod: 'u_anlg_phy_g3_rf', file: 'phy_g3_rf.sv:89', desc: 'if-else 未覆盖' },
-  ],
-  branch: [
-    { mod: 'u_analog_mipi_mphy_2t2r', file: 'mphy_2t2r.sv:67', desc: '条件分支未覆盖' },
-  ],
-  toggle: [
-    { mod: 'u_analog_mipi_mphy_2t2r', file: 'mphy_2t2r.sv:12', desc: '信号 u_mipi_clk 未翻转' },
-    { mod: 'u_g3_side_glue_wrap', file: 'g3_glue.sv:45', desc: '信号 data_valid 低有效' },
-  ],
+// 未覆盖项
+const ucData={
+  line:[{m:'u_analog_mipi_mphy_2t2r',f:'mphy_2t2r.sv:45',d:'if 分支未覆盖'},{m:'u_analog_mipi_mphy_2t2r',f:'mphy_2t2r.sv:128',d:'always 块未执行'},{m:'u_g3_side_glue_wrap',f:'g3_glue.sv:203',d:'case 默认分支'},{m:'u_g3_side_glue_wrap',f:'g3_glue.sv:350',d:'assign 未触发'},{m:'u_anlg_phy_g3_rf',f:'phy_g3_rf.sv:89',d:'if-else 未覆盖'}],
+  branch:[{m:'u_analog_mipi_mphy_2t2r',f:'mphy_2t2r.sv:67',d:'条件分支未覆盖'}],
+  toggle:[{m:'u_analog_mipi_mphy_2t2r',f:'mphy_2t2r.sv:12',d:'信号 u_mipi_clk 未翻转'},{m:'u_g3_side_glue_wrap',f:'g3_glue.sv:45',d:'信号 data_valid 低有效'}],
 };
-let uncovMetric = 'line';
-function renderUncovTabs() {
-  const tabsEl = document.getElementById('uncovTabs');
-  tabsEl.innerHTML = METRICS.map(m => `<div class="uncovered-tab ${m===uncovMetric?'active':''}" onclick="setUncovMetric('${m}')">${METRIC_LABELS[m]}</div>`).join('');
+let ucMetric='line';
+function renderUcTabs(){ document.getElementById('ucTabs').innerHTML=METRICS.map(m=>`<div class="uc-tab ${m===ucMetric?'active':''}" onclick="setUc('${m}')">${ML[m]}</div>`).join(''); }
+function setUc(m){ ucMetric=m; renderUcTabs(); renderUcList(); }
+function renderUcList(){ const l=ucData[ucMetric]||[]; const el=document.getElementById('ucList'); if(!l.length){ el.innerHTML='<div class="uc-empty">全部覆盖</div>'; return; } el.innerHTML=l.map(i=>`<div class="uc-item"><span class="uc-mod">${i.m}</span><span class="uc-file">${i.f}</span><span class="uc-desc">${i.d}</span><span class="uc-tag">GAP</span></div>`).join(''); }
+renderUcTabs(); renderUcList();
+
+// AI 覆盖收敛面板
+const gaps=[
+  { mod:'u_analog_mipi_mphy_2t2r', metric:'line', deficit:36.58, status:'running', round:2, maxRound:5, deltaThis:3.2, deltaTotal:8.5 },
+  { mod:'u_g3_side_glue_wrap', metric:'line', deficit:37.62, status:'running', round:1, maxRound:5, deltaThis:0, deltaTotal:0 },
+  { mod:'u_block_wrap_0', metric:'line', deficit:34.96, status:'pending' },
+  { mod:'u_anlg_phy_g3_rf', metric:'line', deficit:15.03, status:'completed', deltaTotal:12.3 },
+  { mod:'u_analog_mipi_mphy_2t2r', metric:'fsm_state', deficit:33.3, status:'completed', deltaTotal:20.1 },
+];
+const statusLabel={running:'处理中',completed:'已完成',pending:'待处理',escalated:'已升级'};
+document.getElementById('cqList').innerHTML=gaps.map(g=>`<div class="cq-item ${g.status}"><span class="cq-mod">${g.mod}</span><span class="cq-metric">${ML[g.metric]}</span><span class="cq-deficit">−${g.deficit}%</span><span class="cq-status ${g.status}">${statusLabel[g.status]}</span></div>`).join('');
+
+const active = gaps.find(g=>g.status==='running');
+const ccEl = document.getElementById('ccActive');
+if(active){
+  const prog = (active.round/active.maxRound)*100;
+  const dThisCls = active.deltaThis>0?'up':'flat';
+  const dTotCls = active.deltaTotal>0?'up':'flat';
+  ccEl.innerHTML = `
+    <div class="cc-mod-row">
+      <span class="cc-mod-name">${active.mod}</span>
+      <span class="cc-round">轮次 <span class="cc-round-cur">${active.round}</span> / ${active.maxRound}</span>
+    </div>
+    <div class="cc-deltas">
+      <div class="cc-delta-box"><div class="db-label">本轮 Delta</div><div class="db-val ${dThisCls}">${active.deltaThis>0?'+':''}${active.deltaThis.toFixed(1)}%</div></div>
+      <div class="cc-delta-box"><div class="db-label">累计 Delta</div><div class="db-val ${dTotCls}">${active.deltaTotal>0?'+':''}${active.deltaTotal.toFixed(1)}%</div></div>
+    </div>
+    <div>
+      <div class="cc-progress-label"><span>迭代进度</span><span>${active.round}/${active.maxRound} 轮</span></div>
+      <div class="cc-progress-bar"><div class="cc-progress-fill" style="width:${prog}%"></div></div>
+    </div>
+    <div class="cc-actions">
+      <button class="btn danger">中止此 Gap</button>
+      <button class="btn">查看测试代码</button>
+    </div>`;
+} else {
+  ccEl.innerHTML='<div class="uc-empty">暂无活跃 Gap</div>';
 }
-function setUncovMetric(m) { uncovMetric = m; renderUncovTabs(); renderUncovList(); }
-function renderUncovList() {
-  const list = uncovData[uncovMetric] || [];
-  const el = document.getElementById('uncovList');
-  if (list.length === 0) { el.innerHTML = '<div style="font-size:11px;color:var(--fg-faint);text-align:center;padding:12px;">全部覆盖！</div>'; return; }
-  el.innerHTML = list.map(i => `<div class="uncovered-item"><span class="ui-module">${i.mod}</span><span class="ui-file">${i.file}</span><span class="ui-desc">${i.desc}</span><span class="ui-badge">GAP</span></div>`).join('');
-}
-renderUncovTabs();
-renderUncovList();
 </script>
 
 </body>

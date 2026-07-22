@@ -12,6 +12,12 @@
 
 4. **Coverage Target 内置**：平台内置行业默认目标（line 95%、branch 90% 等），用户可在项目设置中覆盖。Target 与 Triplet 中的 percentage 比较来识别 Coverage Gap。
 
+5. **数据粒度边界——模块级 + 文件/行号级，不需要 bin/实例级**：Coverage Tree 的节点粒度是**模块级**（每个 CoverageNode 代表一个设计模块，如 `u_analog_mipi`），`uncovered` 字段的粒度是**文件/行号级**（`{ module, file?, line?, signal?, description }`）。不建模 bin/实例级结构化数据（如"某个 covergroup 的某个 bin 在哪些实例下未覆盖"）。原因：
+   - 模块级 + 文件/行号级已满足 Coverage Closure 的核心需求——AI 识别 gap、定位到文件/行号、生成定向测试。bin/实例级下钻是 EDA 工具原生 GUI（如 IMC）的职责，平台不重复造轮子。
+   - bin/实例级数据量大（一个 covergroup 可能有数百个 bin × 多个实例），纳入 CoverageData 会膨胀，且超出 AI context window 的摘要优先策略（ADR 0009）。
+   - 这个边界决定了**不引入 UCDB**（Accellera/IEEE 1800 统一覆盖率数据库）——UCDB 的优势是 bin/实例级结构化数据，但平台不需要该粒度。ADR 0006 的"文本报告统一层"在模块级 + 文件/行号级粒度上已足够。若未来某项目需要 bin/实例级，可在 `CoverageParserPlugin.parse()` 内自行扩展，平台数据模型不强加。
+   - `uncovered` 字段中 `signal?` 可选字段保留了信号级定位能力（toggle/condition gap 常需信号名），但不展开为完整信号结构。
+
 ## 被拒绝的方案
 
 - **扁平 + 增加计数**（方案 B）：保持 bySubsys 扁平数组但增加 covered/total。不建模层级关系，用户无法看到模块间的父子层次，也无法按层级折叠/展开。AI 也无法理解"u_analog_mipi 是 u_block_wrap 的子模块"这种结构信息。

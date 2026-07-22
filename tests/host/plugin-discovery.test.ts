@@ -74,14 +74,27 @@ function makeMockSimulationRunner(): SimulationRunnerPlugin {
 function makeMockCoverageParser(): CoverageParserPlugin {
   return {
     manifest: { id: 'mock-cov', name: 'Mock Cov', version: '1.0.0', kind: 'coverage-parser' },
-    async parse(_root: string, runId: string) {
+    async parse(_root: string, sessionId: string, _reportDir: string) {
       return {
-        runId,
-        overall: 85.5,
-        line: 90.0,
-        toggle: 80.0,
-        functional: 85.0,
-        assertion: 87.0,
+        sessionId,
+        source: { covMergeDir: '/mock', edaTool: 'imc' as const, reportGeneratedAt: 0 },
+        root: {
+          name: 'top',
+          path: 'top',
+          depth: 0,
+          metrics: {
+            line: { percentage: 90.0, covered: 900, total: 1000 },
+            branch: { percentage: 85.0, covered: 850, total: 1000 },
+            toggle: { percentage: 80.0, covered: 800, total: 1000 },
+            condition: { percentage: 75.0, covered: 750, total: 1000 },
+            fsm_state: { percentage: 100, covered: 50, total: 50 },
+            fsm_transition: { percentage: 85, covered: 85, total: 100 },
+            functional: { percentage: 85.0, covered: 850, total: 1000 },
+            assertion: { percentage: 87.0, covered: 870, total: 1000 },
+          },
+          children: [],
+        },
+        targets: { line: 95 },
       };
     },
   };
@@ -341,10 +354,10 @@ describe('PluginBackedCoverage', () => {
       simOptionSchemaProviders: [],
     };
     const cov = new PluginBackedCoverage('/proj', registry);
-    const data = await cov.parse('run_123');
-    expect(data.runId).toBe('run_123');
-    expect(data.overall).toBe(85.5);
-    expect(data.line).toBe(90.0);
+    const data = await cov.parse('session_1', '/report/dir');
+    expect(data.sessionId).toBe('session_1');
+    expect(data.root.name).toBe('top');
+    expect(data.root.metrics.line.percentage).toBe(90.0);
   });
 
   it('throws when no coverage plugin', async () => {
@@ -356,6 +369,8 @@ describe('PluginBackedCoverage', () => {
       simOptionSchemaProviders: [],
     };
     const cov = new PluginBackedCoverage('/proj', registry);
-    await expect(cov.parse('run_123')).rejects.toThrow('No coverage-parser plugin loaded');
+    await expect(cov.parse('session_1', '/report/dir')).rejects.toThrow(
+      'No coverage-parser plugin loaded',
+    );
   });
 });

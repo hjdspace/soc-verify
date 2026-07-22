@@ -1,4 +1,4 @@
-# PRD: 覆盖率分析 — 层级树 + 三视图 + AI 全流程覆盖收敛
+# PRD: 覆盖率分析 — 层级树 + 两视图 + AI 全流程覆盖收敛
 
 ## Problem Statement
 
@@ -18,7 +18,7 @@ SoC 验证工程师在覆盖率分析阶段面临三个核心痛点：
 
 **层级树数据模型**：CoverageData 从扁平结构扩展为层级模块树，每个节点有 8 种 Coverage Metric 的 Coverage Triplet（`{ percentage, covered, total }`）。内置行业默认 Coverage Target，可配置。
 
-**三种 UI 视图**：覆盖率页面提供三种布局——树表格（详细分析）、旭日图（概览演示）、仪表盘+下钻（日常使用）。用户可在视图间切换。
+**两种 UI 视图**：覆盖率页面提供两种布局——树表格（详细分析）、仪表盘+下钻（日常使用）。用户可在视图间切换。
 
 **AI 全流程覆盖收敛**：`get_coverage` Host Tool 返回摘要+最差模块（摘要优先），新增 `get_coverage_detail` Host Tool 支持按需下钻。`cov://` URI 实现分层 URI scheme。coverage-closure 技能通过 Host Tools 获取结构化数据，执行完整覆盖收敛工作流。
 
@@ -58,57 +58,49 @@ SoC 验证工程师在覆盖率分析阶段面临三个核心痛点：
 22. 作为 SoC 验证工程师，I want "仅看未达标"过滤，so that 只关注有覆盖 gap 的模块
 23. 作为 SoC 验证工程师，I want 树表格顶部显示 8 个概览卡片（总体覆盖率 + 达标状态），so that 先看全局再看细节
 
-### UI 视图 — 旭日图
-
-24. 作为 SoC 验证工程师，I want 在旭日图视图中看到同心环表示模块层级深度，so that 直观理解设计层次
-25. 作为 SoC 验证工程师，I want 旭日图弧段颜色表示覆盖率达标状态，so that 视觉化识别覆盖盲区
-26. 作为 SoC 验证工程师，I want 在旭日图中切换 8 种指标查看，so that 分别分析不同覆盖率类型
-27. 作为 SoC 验证工程师，I want 点击旭日图中的模块弧段后右侧显示详情面板，so that 查看该模块的完整覆盖率和未覆盖项
-28. 作为 SoC 验证工程师，I want 旭日图中心显示当前选中指标的总体覆盖率，so that 概览全局
-
 ### UI 视图 — 仪表盘 + 下钻
 
-29. 作为 SoC 验证工程师，I want 在仪表盘视图中看到 8 个概览卡片（含达标状态徽章），so that 一览所有覆盖率类型的达标情况
-30. 作为 SoC 验证工程师，I want 在仪表盘中看到覆盖率趋势折线图（最近 N 个 merge session），so that 跟踪覆盖率进展
-31. 作为 SoC 验证工程师，I want 仪表盘中包含紧凑树表格，so that 在同一页面看全局和模块详情
-32. 作为 SoC 验证工程师，I want 仪表盘底部展示未覆盖项列表（按指标切换 tab），so that 精确定位未覆盖的文件/行号/信号
-33. 作为 SoC 验证工程师，I want 仪表盘中有 AI 分析建议面板，so that 看到 AI 对覆盖 gap 的分析和建议
-34. 作为 SoC 验证工程师，I want 在三个视图间自由切换（树表格/旭日图/仪表盘），so that 不同场景用不同视图
+24. 作为 SoC 验证工程师，I want 在仪表盘视图中看到 8 个概览卡片（含达标状态徽章），so that 一览所有覆盖率类型的达标情况
+25. 作为 SoC 验证工程师，I want 在仪表盘中看到覆盖率趋势折线图（最近 N 个 merge session），so that 跟踪覆盖率进展
+26. 作为 SoC 验证工程师，I want 仪表盘中包含紧凑树表格，so that 在同一页面看全局和模块详情
+27. 作为 SoC 验证工程师，I want 仪表盘底部展示未覆盖项列表（按指标切换 tab），so that 精确定位未覆盖的文件/行号/信号
+28. 作为 SoC 验证工程师，I want 仪表盘中有 AI 分析建议面板，so that 看到 AI 对覆盖 gap 的分析和建议
+29. 作为 SoC 验证工程师，I want 在两个视图间自由切换（树表格/仪表盘），so that 不同场景用不同视图
 
 ### AI 辅助覆盖率分析
 
-35. 作为 SoC 验证工程师，I want AI Agent 调用 `get_coverage` 获取覆盖率摘要（总体 + 最差 N 个模块），so that AI 快速了解覆盖全局
-36. 作为 SoC 验证工程师，I want AI Agent 调用 `get_coverage_detail(module)` 下钻到特定模块的详细覆盖率，so that AI 深入分析某个模块的覆盖 gap
-37. 作为 SoC 验证工程师，I want AI Agent 通过 `cov://<session_id>` URI 读取覆盖率摘要树，so that AI 通过 URI scheme 也能获取覆盖率
-38. 作为 SoC 验证工程师，I want AI Agent 通过 `cov://<session_id>/<module>` URI 读取模块详情，so that AI 能下钻到任意模块
-39. 作为 SoC 验证工程师，I want AI Agent 通过 `cov://<session_id>/<module>/uncovered` URI 读取未覆盖项，so that AI 精确定位需要补测试的代码
-40. 作为 SoC 验证工程师，I want AI Agent 识别覆盖 gap（哪些模块的哪些指标低于目标），so that AI 知道哪些地方需要补测试
-41. 作为 SoC 验证工程师，I want AI Agent 对覆盖 gap 进行根因分类（missing_scenario/wrong_config/dead_code/sampling_issue/encoding_mismatch），so that AI 能给出针对性的修复建议
-42. 作为 SoC 验证工程师，I want AI Agent 生成定向测试代码（SystemVerilog test + virtual sequence），so that AI 帮我补覆盖率
-43. 作为 SoC 验证工程师，I want AI Agent 调用 `run_simulation` Host Tool 运行新生成的测试，so that AI 能验证测试是否有效
-44. 作为 SoC 验证工程师，I want AI Agent 检查覆盖率 delta（运行前后对比），so that AI 知道测试是否真的提升了覆盖率
-45. 作为 SoC 验证工程师，I want AI Agent 迭代覆盖收敛（每个 gap 最多 5 轮），so that 自动化地关闭覆盖 gap
-46. 作为 SoC 验证工程师，I want AI Agent 在连续 2 轮 delta < 1% 时触发升级（转人工审查），so that 不在无法关闭的 gap 上浪费时间
-47. 作为 SoC 验证工程师，I want AI Agent 识别 dead code 并标记为需要人工确认的 Coverage Exclusion，so that 不可达代码不会被错误地计入覆盖 gap
-48. 作为 SoC 验证工程师，I want Coverage Exclusion 必须经过人工审批后才能排除，so that 不会错误地排除有效代码
-49. 作为 SoC 验证工程师，I want 在 UI 中看到 AI 覆盖收敛的进度（当前处理哪个 gap、第几轮、delta 值），so that 了解 AI 的工作进展
-50. 作为 SoC 验证工程师，I want 中止 AI 覆盖收敛过程，so that 打断无效的 AI 迭代
+30. 作为 SoC 验证工程师，I want AI Agent 调用 `get_coverage` 获取覆盖率摘要（总体 + 最差 N 个模块），so that AI 快速了解覆盖全局
+31. 作为 SoC 验证工程师，I want AI Agent 调用 `get_coverage_detail(module)` 下钻到特定模块的详细覆盖率，so that AI 深入分析某个模块的覆盖 gap
+32. 作为 SoC 验证工程师，I want AI Agent 通过 `cov://<session_id>` URI 读取覆盖率摘要树，so that AI 通过 URI scheme 也能获取覆盖率
+33. 作为 SoC 验证工程师，I want AI Agent 通过 `cov://<session_id>/<module>` URI 读取模块详情，so that AI 能下钻到任意模块
+34. 作为 SoC 验证工程师，I want AI Agent 通过 `cov://<session_id>/<module>/uncovered` URI 读取未覆盖项，so that AI 精确定位需要补测试的代码
+35. 作为 SoC 验证工程师，I want AI Agent 识别覆盖 gap（哪些模块的哪些指标低于目标），so that AI 知道哪些地方需要补测试
+36. 作为 SoC 验证工程师，I want AI Agent 对覆盖 gap 进行根因分类（missing_scenario/wrong_config/dead_code/sampling_issue/encoding_mismatch），so that AI 能给出针对性的修复建议
+37. 作为 SoC 验证工程师，I want AI Agent 生成定向测试代码（SystemVerilog test + virtual sequence），so that AI 帮我补覆盖率
+38. 作为 SoC 验证工程师，I want AI Agent 调用 `run_simulation` Host Tool 运行新生成的测试，so that AI 能验证测试是否有效
+39. 作为 SoC 验证工程师，I want AI Agent 检查覆盖率 delta（运行前后对比），so that AI 知道测试是否真的提升了覆盖率
+40. 作为 SoC 验证工程师，I want AI Agent 迭代覆盖收敛（每个 gap 最多 5 轮），so that 自动化地关闭覆盖 gap
+41. 作为 SoC 验证工程师，I want AI Agent 在连续 2 轮 delta < 1% 时触发升级（转人工审查），so that 不在无法关闭的 gap 上浪费时间
+42. 作为 SoC 验证工程师，I want AI Agent 识别 dead code 并标记为需要人工确认的 Coverage Exclusion，so that 不可达代码不会被错误地计入覆盖 gap
+43. 作为 SoC 验证工程师，I want Coverage Exclusion 必须经过人工审批后才能排除，so that 不会错误地排除有效代码
+44. 作为 SoC 验证工程师，I want 在 UI 中看到 AI 覆盖收敛的进度（当前处理哪个 gap、第几轮、delta 值），so that 了解 AI 的工作进展
+45. 作为 SoC 验证工程师，I want 中止 AI 覆盖收敛过程，so that 打断无效的 AI 迭代
 
 ### 报告导出
 
-51. 作为 SoC 验证工程师，I want 导出覆盖率报告为 HTML 格式（含树表格 + 图表），so that 与团队共享
-52. 作为 SoC 验证工程师，I want 导出覆盖率报告为 JSON 格式（含原始结构化数据），so that 供其他工具消费
-53. 作为 SoC 验证工程师，I want 选择导出路径，so that 报告保存到我需要的位置
-54. 作为 SoC 验证工程师，I want 导出的报告包含覆盖率目标对比（达标/未达标标记），so that 团队能看到哪些指标不达标
+46. 作为 SoC 验证工程师，I want 导出覆盖率报告为 HTML 格式（含树表格 + 图表），so that 与团队共享
+47. 作为 SoC 验证工程师，I want 导出覆盖率报告为 JSON 格式（含原始结构化数据），so that 供其他工具消费
+48. 作为 SoC 验证工程师，I want 选择导出路径，so that 报告保存到我需要的位置
+49. 作为 SoC 验证工程师，I want 导出的报告包含覆盖率目标对比（达标/未达标标记），so that 团队能看到哪些指标不达标
 
 ### Coverage Closure 集成
 
-55. 作为 SoC 验证工程师，I want coverage-closure 技能通过平台 Host Tools 获取覆盖率数据（而非自己运行 parse_coverage.py），so that 数据来源统一
-56. 作为 SoC 验证工程师，I want coverage-closure 技能的 Sub-stage B（覆盖率结果分析）使用 `get_coverage` + `get_coverage_detail` 获取数据，so that AI 能识别 gap 并分类根因
-57. 作为 SoC 验证工程师，I want coverage-closure 技能的 Sub-stage C（覆盖驱动测试生成）调用 `run_simulation` 执行测试并检查 delta，so that 全流程自动化
-58. 作为 SoC 验证工程师，I want 在 AI 会话中触发 coverage-closure 工作流，so that 让 AI 帮我做覆盖收敛
-59. 作为 SoC 验证工程师，I want coverage-closure 的输出（coverage_triage.json）保存到项目目录，so that 覆盖分析结果可追溯
-60. 作为 SoC 验证工程师，I want 查看 coverage-closure 的迭代历史（每轮生成的测试、delta 值），so that 评估 AI 的覆盖收敛效果
+50. 作为 SoC 验证工程师，I want coverage-closure 技能通过平台 Host Tools 获取覆盖率数据（而非自己运行 parse_coverage.py），so that 数据来源统一
+51. 作为 SoC 验证工程师，I want coverage-closure 技能的 Sub-stage B（覆盖率结果分析）使用 `get_coverage` + `get_coverage_detail` 获取数据，so that AI 能识别 gap 并分类根因
+52. 作为 SoC 验证工程师，I want coverage-closure 技能的 Sub-stage C（覆盖驱动测试生成）调用 `run_simulation` 执行测试并检查 delta，so that 全流程自动化
+53. 作为 SoC 验证工程师，I want 在 AI 会话中触发 coverage-closure 工作流，so that 让 AI 帮我做覆盖收敛
+54. 作为 SoC 验证工程师，I want coverage-closure 的输出（coverage_triage.json）保存到项目目录，so that 覆盖分析结果可追溯
+55. 作为 SoC 验证工程师，I want 查看 coverage-closure 的迭代历史（每轮生成的测试、delta 值），so that 评估 AI 的覆盖收敛效果
 
 ## Implementation Decisions
 
@@ -213,9 +205,8 @@ coverageRouter 重构：
 
 ### UI 组件
 
-现有 `CoveragePanel` 重构为三视图可切换布局：
+现有 `CoveragePanel` 重构为两视图可切换布局：
 - 新增 `CoverageTreeTable` 组件 — 可展开/折叠的模块树 + 8 列 Coverage Triplet + 颜色编码
-- 新增 `CoverageSunburst` 组件 — SVG 旭日图 + 指标切换 tab + 详情面板
 - 新增 `CoverageDashboard` 组件 — 概览卡片 + 趋势图 + 紧凑树表格 + 未覆盖项 + AI 建议面板
 - 新增 `CoverageImportDialog` 组件 — 选择 cov_merge 目录 + EDA 工具 + 导入进度
 - 新增 `CoverageSessionSelector` 组件 — session 下拉列表
@@ -230,7 +221,7 @@ coverage store 从扁平状态重构：
 - `subsysCoverage: CoverageBySubsys[]` → `tree: CoverageNode`
 - `currentRunId` → `currentSessionId`
 - `cachedRuns` → `sessions: CoverageSessionInfo[]`
-- 新增 `view: 'tree-table' | 'sunburst' | 'dashboard'`
+- 新增 `view: 'tree-table' | 'dashboard'`
 - 新增 `targets: Partial<Record<CoverageMetric, number>>`
 - 新增 `importSession`、`deleteSession`、`setView`、`loadTargets`、`saveTargets`
 
@@ -277,7 +268,7 @@ coverage-closure 技能不再自己运行 `parse_coverage.py`，改为通过 Hos
 
 **缝 3：UI 组件缝**
 - React 组件测试，mock tRPC proxy
-- 测试范围：树表格展开/折叠、旭日图点击交互、仪表盘视图切换、导入对话框交互、目标配置表单
+- 测试范围：树表格展开/折叠、仪表盘视图切换、导入对话框交互、目标配置表单
 - 先例：`tests/ui/simulation-run-store.test.ts` 的 mock store 模式
 
 ### 测试质量标准
@@ -312,10 +303,9 @@ coverage-closure 技能不再自己运行 `parse_coverage.py`，改为通过 Hos
 
 ### HTML 原型
 
-三视图 UI 原型见 `docs/prototypes/`：
-- `coverage-index.html` — 索引页，三方案对比
+两视图 UI 原型见 `docs/prototypes/`：
+- `coverage-index.html` — 索引页，两方案对比
 - `coverage-tree-table.html` — 方案 A：树表格
-- `coverage-sunburst.html` — 方案 B：旭日图 + 详情
 - `coverage-dashboard.html` — 方案 C：仪表盘 + 下钻
 
 ### 与现有 PRD 的关系
@@ -326,6 +316,6 @@ coverage-closure 技能不再自己运行 `parse_coverage.py`，改为通过 Hos
 
 1. **Phase 1：数据模型 + 预处理** — CoverageData 重构、CoverageReportGenerator、CoverageManager 重构、CoverageParserPlugin 接口变更
 2. **Phase 2：tRPC Router + Store** — coverage router 重构、coverage store 重构、EDA Tool Configuration API
-3. **Phase 3：UI 视图** — 三视图组件、导入对话框、session 选择器、目标配置
+3. **Phase 3：UI 视图** — 两视图组件、导入对话框、session 选择器、目标配置
 4. **Phase 4：AI 集成** — Host Tools 重构、cov:// URI 实现、coverage-closure 技能适配
 5. **Phase 5：报告导出 + 打磨** — HTML/JSON 导出、趋势图、AI 建议面板

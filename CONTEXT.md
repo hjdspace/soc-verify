@@ -162,6 +162,22 @@ _Avoid_: gap analysis, coverage diagnosis
 迭代流程：识别 Gap → 生成定向测试 → 运行仿真 → 检查 Delta → 重复。每个 Gap 最多 5 轮，连续 2 轮 Delta < 1% 触发升级。Dead code 确认和 exclusion 审批需要人工介入。
 _Avoid_: coverage convergence, coverage completion
 
+**Closure Workspace**:
+AI Coverage Closure 闭环的临时工作区，路径 `.socverify/coverage/closure/<closureId>/`。AI 生成的测试代码写到此处，run_simulation 从此处执行，不污染正式项目目录。闭环结束后通过 Test Promotion 决定哪些测试提升到正式目录。
+_Avoid_: closure sandbox, temp test dir
+
+**Test Promotion**:
+Coverage Closure 结束后，用户通过 Diff Review 审阅 Closure Workspace 中的测试代码，决定哪些测试"提升"到正式项目目录的过程。接受的测试从临时目录复制到正式目录，拒绝的丢弃。
+_Avoid_: test merge, test adoption
+
+**Gap Scheduler**:
+Coverage Closure 中多 Gap 的并行调度策略。所有 Gap 同时开始处理，受 SessionManager 并发上限（10）限制。每个 Gap 独立跑仿真 + merge + report，精确计算单个 Gap 的 Delta。
+_Avoid_: gap queue, closure coordinator
+
+**Delta Validation**:
+对 Coverage Delta 的可信度验证策略，分阶段引入。Phase 1 不检测（依赖闭环后 Diff Review）；Phase 2 多指标联动检查（如 line gap 修复要求 line + branch 同步上升）；Phase 3 assertion 同步上升检查。防止 AI 生成测试引入假覆盖。
+_Avoid_: delta check, coverage verification
+
 **Coverage Exclusion**:
 建议排除的覆盖率项（如 dead code、unreachable ifdef 路径）。必须经人工审批后才能排除，不可自动排除。
 _Avoid_: coverage waiver, coverage filter

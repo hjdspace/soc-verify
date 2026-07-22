@@ -1,4 +1,6 @@
 // 插件系统类型定义（M0 占位骨架，M2+ 细化）
+import type { CoverageData } from './types/coverage';
+
 export type PluginKind =
   | 'case-parser'
   | 'subsys-discoverer'
@@ -35,22 +37,11 @@ export interface SubsysInfo {
   kind: 'subsys' | 'top';
 }
 
-export interface CoverageData {
-  runId: string;
-  overall: number;
-  line?: number;
-  toggle?: number;
-  functional?: number;
-  assertion?: number;
-  bySubsys?: Array<{
-    subsys: string;
-    line: number;
-    toggle: number;
-    functional: number;
-    assertion: number;
-    overall: number;
-  }>;
-}
+/**
+ * 覆盖率数据结构定义在 @shared/types/coverage（域类型），此处 re-export
+ * 以保持 `import { CoverageData } from '@shared/plugin-types'` 的向后兼容。
+ */
+export type { CoverageData } from './types/coverage';
 
 export interface CompileError {
   file: string;
@@ -106,9 +97,16 @@ export interface SubsysDiscoveryPlugin {
   discover(projectRoot: string): Promise<SubsysInfo[]>;
 }
 
+/**
+ * 覆盖率解析插件接口（ADR 0006 + ADR 0007 + ADR 0008）。
+ *
+ * 插件只负责解析文本报告为层级 Coverage Tree（预处理第二步）。
+ * 平台负责运行 EDA 命令生成文本报告（预处理第一步），报告位于 reportDir。
+ * 生命周期以 Coverage Merge Session 为单位（sessionId），不绑定 Simulation Run。
+ */
 export interface CoverageParserPlugin {
   manifest: PluginManifest & { kind: 'coverage-parser' };
-  parse(projectRoot: string, runId: string): Promise<CoverageData>;
+  parse(projectRoot: string, sessionId: string, reportDir: string): Promise<CoverageData>;
 }
 
 export interface SimulationRunnerPlugin {
