@@ -37,6 +37,8 @@ interface CoverageStoreState {
   exclusions: CoverageExclusion[];
   /** 两个 session 之间的 Delta（手动计算后填充） */
   delta: { before: CoverageSummary; after: CoverageSummary; deltas: CoverageDelta[] } | null;
+  /** 覆盖率趋势数据（按 session 时间序列） */
+  trend: Array<{ sessionId: string; createdAt: number; summary: CoverageSummary }>;
   loading: boolean;
   importing: boolean;
 
@@ -68,6 +70,7 @@ interface CoverageStoreState {
     sessionIdBefore: string,
     sessionIdAfter: string,
   ) => Promise<void>;
+  loadTrend: (projectId: string, limit?: number) => Promise<void>;
   loadTriages: (projectId: string, sessionId?: string) => Promise<void>;
   addTriage: (
     projectId: string,
@@ -119,6 +122,7 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
   triages: [],
   exclusions: [],
   delta: null,
+  trend: [],
   loading: false,
   importing: false,
   view: 'tree-table',
@@ -241,6 +245,15 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
       set({ delta });
     } catch (err) {
       useToastStore.getState().error('计算覆盖率变化失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  loadTrend: async (projectId, limit) => {
+    try {
+      const result = await trpc.coverage.getTrend.query({ projectId, limit: limit ?? 20 });
+      set({ trend: result });
+    } catch (err) {
+      useToastStore.getState().error('加载覆盖率趋势失败', err instanceof Error ? err.message : String(err));
     }
   },
 

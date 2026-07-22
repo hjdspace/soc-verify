@@ -20,6 +20,7 @@ import type {
 } from '@shared/types';
 import { COVERAGE_METRICS, DEFAULT_COVERAGE_TARGETS } from '@shared/types';
 import { CoverageTreeTable } from './CoverageTreeTable';
+import { CoverageDashboard } from './CoverageDashboard';
 
 const EDA_TOOL_OPTIONS: Array<{ value: EdaTool; label: string }> = [
   { value: 'imc', label: 'Cadence IMC' },
@@ -66,15 +67,18 @@ export function CoveragePanel() {
   const sessions = useCoverageStore((s) => s.sessions);
   const currentSessionId = useCoverageStore((s) => s.currentSessionId);
   const tree = useCoverageStore((s) => s.tree);
+  const overview = useCoverageStore((s) => s.overview);
   const loading = useCoverageStore((s) => s.loading);
   const importing = useCoverageStore((s) => s.importing);
   const edaConfig = useCoverageStore((s) => s.edaConfig);
   const targets = useCoverageStore((s) => s.targets);
+  const trend = useCoverageStore((s) => s.trend);
   const view = useCoverageStore((s) => s.view);
   const loadSessions = useCoverageStore((s) => s.loadSessions);
   const loadTree = useCoverageStore((s) => s.loadTree);
   const loadEdaConfig = useCoverageStore((s) => s.loadEdaConfig);
   const loadTargets = useCoverageStore((s) => s.loadTargets);
+  const loadTrend = useCoverageStore((s) => s.loadTrend);
   const importCoverage = useCoverageStore((s) => s.importCoverage);
   const setSessionId = useCoverageStore((s) => s.setSessionId);
   const deleteSession = useCoverageStore((s) => s.deleteSession);
@@ -103,6 +107,13 @@ export function CoveragePanel() {
       loadTree(currentProjectId);
     }
   }, [currentProjectId, currentSessionId, loadTree, loadTargets, sessions.length]);
+
+  // 仪表盘视图需要 trend 数据
+  useEffect(() => {
+    if (currentProjectId && view === 'dashboard') {
+      loadTrend(currentProjectId);
+    }
+  }, [currentProjectId, view, loadTrend]);
 
   const handleImport = async () => {
     if (!currentProjectId || !covMergeDir.trim()) return;
@@ -276,9 +287,13 @@ export function CoveragePanel() {
           </div>
 
           {view === 'dashboard' ? (
-            <div className="flex items-center justify-center py-12 text-xs text-muted-foreground">
-              仪表盘视图 — Slice 4 实现
-            </div>
+            <CoverageDashboard
+              data={tree}
+              overview={overview}
+              targets={targets}
+              sessions={sessions}
+              trend={trend}
+            />
           ) : (
             <>
               {/* 树表格主视图 */}

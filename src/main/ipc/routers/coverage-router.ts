@@ -7,6 +7,7 @@
 
 import { t, TRPCError, requireProject } from '../router-context';
 import { CoverageManager } from '../../coverage/coverage-manager';
+import { ClosureManager } from '../../coverage/closure-manager';
 import { CoverageReportGenerator } from '../../coverage/coverage-report-generator';
 import { pluginLoader } from '../../plugins/loader';
 import { PluginBackedCoverage } from '../../host/plugin-discovery';
@@ -15,6 +16,8 @@ import type {
   EdaToolConfig,
   CoverageMetric,
   CoverageGap,
+  CoverageSummary,
+  CoverageDelta,
   TriageCause,
   TriageConfidence,
   ExclusionStatus,
@@ -29,6 +32,14 @@ function buildManager(projectRoot: string): CoverageManager {
     projectRoot,
     coverageAdapter: adapter,
     reportGenerator,
+  });
+}
+
+/** 构建 ClosureManager 实例（复用 buildManager 的 CoverageManager）。 */
+function buildClosureManager(projectRoot: string): ClosureManager {
+  return new ClosureManager({
+    projectRoot,
+    coverageManager: buildManager(projectRoot),
   });
 }
 
@@ -401,6 +412,116 @@ export const coverageRouter = t.router({
       const project = requireProject(input.projectId);
       const mgr = buildManager(project.rootPath);
       return mgr.listExclusions(input.sessionId, input.status);
+    }),
+
+  // ─── Coverage Closure（ADR 0009 Slice 6a） ───────────────────
+
+  startClosure: t.procedure
+    .input((raw): { projectId: string; sessionId: string; gaps?: CoverageGap[]; maxRounds?: number } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and sessionId are required' });
+      }
+      const gaps = Array.isArray(r.gaps) ? (r.gaps as CoverageGap[]) : undefined;
+      const maxRounds = typeof r.maxRounds === 'number' ? r.maxRounds : undefined;
+      return { projectId: r.projectId, sessionId: r.sessionId, gaps, maxRounds };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildClosureManager(project.rootPath);
+      return mgr.startClosure({
+        sessionId: input.sessionId,
+        gaps: input.gaps,
+        maxRounds: input.maxRounds,
+      });
+    }),
+
+  getClosure: t.procedure
+    .input((raw): { projectId: string; closureId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.closureId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and closureId are required' });
+      }
+      return { projectId: r.projectId, closureId: r.closureId };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildClosureManager(project.rootPath);
+      return mgr.getClosure(input.closureId);
+    }),
+
+  listClosures: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildClosureManager(project.rootPath);
+      return mgr.listClosures();
+    }),
+
+  abortClosure: t.procedure
+    .input((raw): { projectId: string; closureId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.closureId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and closureId are required' });
+      }
+      return { projectId: r.projectId, closureId: r.closureId };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildClosureManager(project.rootPath);
+      await mgr.abortClosure(input.closureId);
+      return { ok: true };
+    }),
+
+  completeIteration: t.procedure
+    .input((raw): {
+      projectId: string;
+      closureId: string;
+      gapId: string;
+      generatedTests: string[];
+      deltaBefore: CoverageSummary;
+      deltaAfter: CoverageSummary;
+      deltas: CoverageDelta[];
+    } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.closureId !== 'string' || typeof r.gapId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, closureId and gapId are required' });
+      }
+      const generatedTests = Array.isArray(r.generatedTests) ? (r.generatedTests as string[]) : [];
+      const deltaBefore = r.deltaBefore as CoverageSummary;
+      const deltaAfter = r.deltaAfter as CoverageSummary;
+      const deltas = Array.isArray(r.deltas) ? (r.deltas as CoverageDelta[]) : [];
+      if (!deltaBefore || typeof deltaBefore.overall !== 'number') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'deltaBefore with overall is required' });
+      }
+      if (!deltaAfter || typeof deltaAfter.overall !== 'number') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'deltaAfter with overall is required' });
+      }
+      return {
+        projectId: r.projectId,
+        closureId: r.closureId,
+        gapId: r.gapId,
+        generatedTests,
+        deltaBefore,
+        deltaAfter,
+        deltas,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildClosureManager(project.rootPath);
+      return mgr.completeIteration(input.closureId, input.gapId, {
+        generatedTests: input.generatedTests,
+        deltaBefore: input.deltaBefore,
+        deltaAfter: input.deltaAfter,
+        deltas: input.deltas,
+      });
     }),
 });
 

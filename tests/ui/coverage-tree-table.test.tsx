@@ -102,15 +102,15 @@ describe('CoverageTreeTable', () => {
   it('渲染 8 个概览卡片', () => {
     render(<CoverageTreeTable data={mockData} targets={{}} />);
 
-    // 8 个 metric 标签都应出现
-    expect(screen.getByText('Line')).toBeInTheDocument();
-    expect(screen.getByText('Branch')).toBeInTheDocument();
-    expect(screen.getByText('Toggle')).toBeInTheDocument();
-    expect(screen.getByText('Cond')).toBeInTheDocument();
-    expect(screen.getByText('FSM St')).toBeInTheDocument();
-    expect(screen.getByText('FSM Tr')).toBeInTheDocument();
-    expect(screen.getByText('Func')).toBeInTheDocument();
-    expect(screen.getByText('Assert')).toBeInTheDocument();
+    // 8 个 metric 标签都应出现（概览卡片 + 表头各出现一次，用 getAllByText）
+    expect(screen.getAllByText('Line').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Branch').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Toggle').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Cond').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('FSM St').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('FSM Tr').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Func').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Assert').length).toBeGreaterThan(0);
   });
 
   it('渲染树表格行（模块名 + 指标列）', () => {
