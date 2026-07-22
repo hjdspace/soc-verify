@@ -421,8 +421,14 @@ export class TerminalManager extends EventEmitter {
       });
 
       child.on('exit', (exitCode: number | null) => {
+        // Skip if already handled by 'error' event (spawn failure case)
+        if (!this.sessions.has(id)) return;
         this.flushPending(id);
-        this.emit('exit', { id, exitCode: exitCode ?? 0 });
+        // When a process is killed by a signal, exitCode is null.
+        // Treat this as a failure (non-zero) so simulation pass/fail
+        // detection works correctly.
+        const effectiveExitCode = exitCode ?? 1;
+        this.emit('exit', { id, exitCode: effectiveExitCode });
         this.sessions.delete(id);
       });
 
@@ -685,8 +691,16 @@ export class TerminalManager extends EventEmitter {
     });
 
     child.on('exit', (exitCode: number | null) => {
+      // Skip if already handled by 'error' event (spawn failure case).
+      // When spawn fails, Node.js fires both 'error' and 'exit' — the
+      // 'error' handler already emitted the exit event and cleaned up.
+      if (!this.sessions.has(id)) return;
       this.flushPending(id);
-      this.emit('exit', { id, exitCode: exitCode ?? 0 });
+      // When a process is killed by a signal, exitCode is null.
+      // Treat this as a failure (non-zero) so simulation pass/fail
+      // detection works correctly in log-mode.
+      const effectiveExitCode = exitCode ?? 1;
+      this.emit('exit', { id, exitCode: effectiveExitCode });
       this.sessions.delete(id);
     });
 
