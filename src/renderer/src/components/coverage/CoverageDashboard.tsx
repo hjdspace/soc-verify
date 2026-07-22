@@ -13,11 +13,12 @@
 import { useMemo, useState } from 'react';
 import {
   ChevronRight, ChevronDown, Check, AlertTriangle, X, Minus, Sparkles,
-  Loader2, Square, RefreshCw,
+  Loader2, Square, RefreshCw, ArrowUpCircle,
 } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 import { useCoverageStore } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
+import { TestPromotionPanel } from './TestPromotionPanel';
 import type {
   CoverageData, CoverageMetric, CoverageNode, CoverageSummary,
   CoverageTriplet, UncoveredItem,
@@ -679,6 +680,8 @@ function AiClosurePanel({ overview }: { overview: CoverageSummary | null }) {
   const abortClosure = useCoverageStore((s) => s.abortClosure);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const currentSessionId = useCoverageStore((s) => s.currentSessionId);
+  // Slice 8：终态后切换「闭环进度」与「Test Promotion」视图
+  const [showPromotion, setShowPromotion] = useState(false);
 
   const canStart = !!currentProjectId && !!currentSessionId;
   const isActive = closureLive.running;
@@ -688,6 +691,7 @@ function AiClosurePanel({ overview }: { overview: CoverageSummary | null }) {
 
   const handleStart = (): void => {
     if (!canStart || !currentProjectId || !currentSessionId) return;
+    setShowPromotion(false);
     void startClosure(currentProjectId, currentSessionId);
   };
 
@@ -782,15 +786,30 @@ function AiClosurePanel({ overview }: { overview: CoverageSummary | null }) {
             中止
           </button>
         ) : isTerminal ? (
-          <button
-            onClick={handleStart}
-            disabled={!canStart}
-            className="flex items-center gap-1 rounded bg-primary px-3 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-            data-testid="closure-restart-btn"
-          >
-            <RefreshCw className="h-3 w-3" />
-            重新启动
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowPromotion((v) => !v)}
+              className={cn(
+                'flex items-center gap-1 rounded border px-3 py-1 text-xs transition-colors',
+                showPromotion
+                  ? 'border-primary/40 bg-primary/15 text-primary'
+                  : 'border-border text-muted-foreground hover:bg-secondary hover:text-foreground',
+              )}
+              data-testid="closure-promotion-toggle"
+            >
+              <ArrowUpCircle className="h-3 w-3" />
+              {showPromotion ? '返回闭环进度' : '查看 Test Promotion'}
+            </button>
+            <button
+              onClick={handleStart}
+              disabled={!canStart}
+              className="flex items-center gap-1 rounded bg-primary px-3 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              data-testid="closure-restart-btn"
+            >
+              <RefreshCw className="h-3 w-3" />
+              重新启动
+            </button>
+          </div>
         ) : null}
       </div>
 
@@ -816,72 +835,81 @@ function AiClosurePanel({ overview }: { overview: CoverageSummary | null }) {
         </div>
       )}
 
-      {/* Gap 队列 */}
-      <div className="mt-2">
-        <div className="mb-1 text-[10px] font-medium text-muted-foreground">
-          Gap 队列（{gaps.length}）· 已关闭 {completedGaps} · 升级 {escalatedGaps} · 失败 {failedGaps}
+      {/* Test Promotion 视图（终态后切换显示） */}
+      {isTerminal && showPromotion ? (
+        <div className="mt-2">
+          <TestPromotionPanel closureId={currentClosure.id} />
         </div>
-        <div className="flex max-h-[180px] flex-col gap-1 overflow-y-auto">
-          {gaps.map((gap) => {
-            const lastIter = gap.iterations[gap.iterations.length - 1];
-            const iterDelta = lastIter?.deltaBefore && lastIter?.deltaAfter
-              ? lastIter.deltaAfter.overall - lastIter.deltaBefore.overall
-              : undefined;
-            const isLiveGap = isActive && closureLive.activeGapId === gap.id;
-            return (
-              <div
-                key={gap.id}
-                className={cn(
-                  'flex items-center gap-2 rounded px-2 py-1.5 text-[11px]',
-                  isLiveGap ? 'bg-primary/10' : 'bg-secondary/50',
-                )}
-              >
-                <span className={cn('h-2 w-2 flex-shrink-0 rounded-full', GAP_STATUS_DOT[gap.status] ?? 'bg-muted-foreground')} />
-                <span className="min-w-[100px] font-mono font-medium text-foreground">
-                  {gap.gap.nodeName}
-                </span>
-                <span className="text-muted-foreground">{METRIC_LABELS[gap.gap.metric] ?? gap.gap.metric}</span>
-                <span className="font-mono text-destructive">−{gap.gap.deficit.toFixed(1)}</span>
-                <span className={cn('ml-auto', GAP_STATUS_COLOR[gap.status] ?? 'text-muted-foreground')}>
-                  {GAP_STATUS_LABEL[gap.status] ?? gap.status}
-                </span>
-                {gap.iterations.length > 0 && (
-                  <span className="font-mono text-[10px] text-muted-foreground">
-                    R{gap.iterations.length}
-                    {typeof iterDelta === 'number' && (
-                      <span className={iterDelta >= 1 ? 'text-primary' : 'text-yellow-500'}>
-                        {' '}({iterDelta >= 0 ? '+' : ''}{iterDelta.toFixed(1)}%)
+      ) : (
+        <>
+          {/* Gap 队列 */}
+          <div className="mt-2">
+            <div className="mb-1 text-[10px] font-medium text-muted-foreground">
+              Gap 队列（{gaps.length}）· 已关闭 {completedGaps} · 升级 {escalatedGaps} · 失败 {failedGaps}
+            </div>
+            <div className="flex max-h-[180px] flex-col gap-1 overflow-y-auto">
+              {gaps.map((gap) => {
+                const lastIter = gap.iterations[gap.iterations.length - 1];
+                const iterDelta = lastIter?.deltaBefore && lastIter?.deltaAfter
+                  ? lastIter.deltaAfter.overall - lastIter.deltaBefore.overall
+                  : undefined;
+                const isLiveGap = isActive && closureLive.activeGapId === gap.id;
+                return (
+                  <div
+                    key={gap.id}
+                    className={cn(
+                      'flex items-center gap-2 rounded px-2 py-1.5 text-[11px]',
+                      isLiveGap ? 'bg-primary/10' : 'bg-secondary/50',
+                    )}
+                  >
+                    <span className={cn('h-2 w-2 flex-shrink-0 rounded-full', GAP_STATUS_DOT[gap.status] ?? 'bg-muted-foreground')} />
+                    <span className="min-w-[100px] font-mono font-medium text-foreground">
+                      {gap.gap.nodeName}
+                    </span>
+                    <span className="text-muted-foreground">{METRIC_LABELS[gap.gap.metric] ?? gap.gap.metric}</span>
+                    <span className="font-mono text-destructive">−{gap.gap.deficit.toFixed(1)}</span>
+                    <span className={cn('ml-auto', GAP_STATUS_COLOR[gap.status] ?? 'text-muted-foreground')}>
+                      {GAP_STATUS_LABEL[gap.status] ?? gap.status}
+                    </span>
+                    {gap.iterations.length > 0 && (
+                      <span className="font-mono text-[10px] text-muted-foreground">
+                        R{gap.iterations.length}
+                        {typeof iterDelta === 'number' && (
+                          <span className={iterDelta >= 1 ? 'text-primary' : 'text-yellow-500'}>
+                            {' '}({iterDelta >= 0 ? '+' : ''}{iterDelta.toFixed(1)}%)
+                          </span>
+                        )}
                       </span>
                     )}
-                  </span>
-                )}
-                {isLiveGap && (
-                  <Loader2 className="h-3 w-3 animate-spin text-primary" />
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 完成后摘要 */}
-      {isTerminal && (
-        <div className="mt-2 rounded border border-border bg-secondary/30 p-2 text-[11px]">
-          <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">Closure 结果摘要</span>
-            <span className="font-mono text-primary">
-              总 Delta: +{totalDeltaOverall.toFixed(1)}%
-            </span>
+                    {isLiveGap && (
+                      <Loader2 className="h-3 w-3 animate-spin text-primary" />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
-          {currentClosure.status === 'aborted' && (
-            <div className="mt-1 text-destructive">闭环已被用户中止</div>
-          )}
-          {escalatedGaps > 0 && (
-            <div className="mt-1 text-destructive">
-              {escalatedGaps} 个 Gap 已升级至人工审查（Dead code 确认 / Exclusion 审批需人工介入）
+
+          {/* 完成后摘要 */}
+          {isTerminal && (
+            <div className="mt-2 rounded border border-border bg-secondary/30 p-2 text-[11px]">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Closure 结果摘要</span>
+                <span className="font-mono text-primary">
+                  总 Delta: +{totalDeltaOverall.toFixed(1)}%
+                </span>
+              </div>
+              {currentClosure.status === 'aborted' && (
+                <div className="mt-1 text-destructive">闭环已被用户中止</div>
+              )}
+              {escalatedGaps > 0 && (
+                <div className="mt-1 text-destructive">
+                  {escalatedGaps} 个 Gap 已升级至人工审查（Dead code 确认 / Exclusion 审批需人工介入）
+                </div>
+              )}
             </div>
           )}
-        </div>
+        </>
       )}
     </div>
   );

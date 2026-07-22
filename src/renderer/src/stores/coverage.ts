@@ -15,6 +15,8 @@ import type {
   TriageCause,
   TriageConfidence,
   ExclusionStatus,
+  PromotionQueueItem,
+  ClosureSummary,
 } from '@shared/types';
 
 // ─── Closure 相关类型（从主进程闭包包导入的等价类型） ────────────
@@ -134,6 +136,14 @@ interface CoverageStoreState {
   /** 是否正在执行导出（异步，非阻塞 UI） */
   exporting: boolean;
 
+  // ─── Test Promotion 状态（Slice 8） ────────────────────────
+  /** Test Promotion 审阅队列 */
+  promotionQueue: PromotionQueueItem[];
+  /** Closure 闭环结果摘要 */
+  closureSummary: ClosureSummary | null;
+  /** 是否正在执行 Test Promotion 提升 */
+  promoting: boolean;
+
   loadSessions: (projectId: string) => Promise<void>;
   loadTree: (projectId: string, sessionId?: string) => Promise<void>;
   loadEdaConfig: (projectId: string) => Promise<void>;
@@ -231,6 +241,21 @@ interface CoverageStoreState {
   pickExportPath: () => Promise<void>;
   /** 执行导出（异步，非阻塞 UI，完成发 toast 通知） */
   runExport: (projectId: string) => Promise<boolean>;
+
+  // ─── Test Promotion 动作（Slice 8） ────────────────────────
+  /** 加载 Test Promotion 审阅队列 */
+  loadPromotionQueue: (projectId: string, closureId: string) => Promise<void>;
+  /** 执行 Test Promotion：接受的复制到正式目录，拒绝的丢弃 */
+  promoteTests: (
+    projectId: string,
+    closureId: string,
+    accepted: string[],
+    rejected: string[],
+  ) => Promise<void>;
+  /** 加载 Closure 闭环结果摘要 */
+  loadClosureSummary: (projectId: string, closureId: string) => Promise<void>;
+  /** 清理 Closure Workspace 临时目录 */
+  cleanupClosure: (projectId: string, closureId: string) => Promise<void>;
 }
 
 export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
@@ -261,6 +286,11 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
   exportCompareSessionId: null,
   exportOutputPath: '',
   exporting: false,
+
+  // ─── Test Promotion 初始状态（Slice 8） ────────────────────
+  promotionQueue: [],
+  closureSummary: null,
+  promoting: false,
 
   setView: (view) => set({ view }),
 
@@ -736,6 +766,60 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
       set({ exporting: false });
       useToastStore.getState().error('导出覆盖率报告失败', err instanceof Error ? err.message : String(err));
       return false;
+    }
+  },
+
+  // ─── Test Promotion 实现（Slice 8） ────────────────────────
+
+  loadPromotionQueue: async (projectId, closureId) => {
+    try {
+      const queue = await trpc.coverage.getPromotionQueue.query({ projectId, closureId });
+      set({ promotionQueue: queue });
+    } catch (err) {
+      useToastStore.getState().error('加载 Test Promotion 队列失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  promoteTests: async (projectId, closureId, accepted, rejected) => {
+    set({ promoting: true });
+    try {
+      const result = await trpc.coverage.promoteTests.mutate({
+        projectId,
+        closureId,
+        accepted,
+        rejected,
+      });
+      set({ promoting: false });
+      // 刷新队列状态和摘要
+      await get().loadPromotionQueue(projectId, closureId);
+      await get().loadClosureSummary(projectId, closureId);
+      useToastStore.getState().success(
+        'Test Promotion 完成',
+        `已提升 ${result.promoted} 个测试，拒绝 ${result.rejected} 个`,
+      );
+    } catch (err) {
+      set({ promoting: false });
+      useToastStore.getState().error('Test Promotion 失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  loadClosureSummary: async (projectId, closureId) => {
+    try {
+      const summary = await trpc.coverage.getClosureSummary.query({ projectId, closureId });
+      set({ closureSummary: summary });
+    } catch (err) {
+      useToastStore.getState().error('加载 Closure 摘要失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  cleanupClosure: async (projectId, closureId) => {
+    try {
+      await trpc.coverage.cleanupClosure.mutate({ projectId, closureId });
+      // 清理后清空本地队列与摘要
+      set({ promotionQueue: [], closureSummary: null });
+      useToastStore.getState().success('Closure Workspace 已清理');
+    } catch (err) {
+      useToastStore.getState().error('清理 Closure Workspace 失败', err instanceof Error ? err.message : String(err));
     }
   },
 }));

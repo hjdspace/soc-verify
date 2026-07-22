@@ -15,6 +15,7 @@ import { t, TRPCError, requireProject } from '../router-context';
 import { CoverageManager } from '../../coverage/coverage-manager';
 import { ClosureManager } from '../../coverage/closure-manager';
 import { ClosureOrchestrator, type ClosureEvent } from '../../coverage/closure-orchestrator';
+import { TestPromoter } from '../../coverage/test-promoter';
 import { CoverageReportGenerator } from '../../coverage/coverage-report-generator';
 import {
   generateHtmlReport,
@@ -83,6 +84,14 @@ function buildClosureManager(projectRoot: string): ClosureManager {
   return new ClosureManager({
     projectRoot,
     coverageManager: buildManager(projectRoot),
+  });
+}
+
+/** 构建 TestPromoter 实例（复用 buildClosureManager 的 ClosureManager）。 */
+function buildTestPromoter(projectRoot: string): TestPromoter {
+  return new TestPromoter({
+    projectRoot,
+    closureManager: buildClosureManager(projectRoot),
   });
 }
 
@@ -721,6 +730,86 @@ export const coverageRouter = t.router({
         deltaAfter: input.deltaAfter,
         deltas: input.deltas,
       });
+    }),
+
+  // ─── Test Promotion（ADR 0009 决策 10 / Slice 8） ───────────
+  //
+  // Closure 结束后，Closure Workspace 中的测试改动进入审阅队列。
+  // 用户通过 Diff Review 审阅每个测试改动，决定接受（提升到正式目录）或拒绝（丢弃）。
+  // promoteTests 执行复制，getClosureSummary 展示结果摘要，cleanupClosure 清理临时目录。
+
+  /** 扫描 Closure Workspace，返回 Test Promotion 审阅队列 */
+  getPromotionQueue: t.procedure
+    .input((raw): { projectId: string; closureId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.closureId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and closureId are required' });
+      }
+      return { projectId: r.projectId, closureId: r.closureId };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const promoter = buildTestPromoter(project.rootPath);
+      return promoter.getPromotionQueue(input.closureId);
+    }),
+
+  /** 执行 Test Promotion：接受的复制到正式目录，拒绝的丢弃 */
+  promoteTests: t.procedure
+    .input((raw): {
+      projectId: string;
+      closureId: string;
+      accepted: string[];
+      rejected: string[];
+      targetDir?: string;
+    } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.closureId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and closureId are required' });
+      }
+      const accepted = Array.isArray(r.accepted) ? (r.accepted as string[]).filter((s) => typeof s === 'string') : [];
+      const rejected = Array.isArray(r.rejected) ? (r.rejected as string[]).filter((s) => typeof s === 'string') : [];
+      const targetDir = typeof r.targetDir === 'string' ? r.targetDir : undefined;
+      return { projectId: r.projectId, closureId: r.closureId, accepted, rejected, targetDir };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const promoter = buildTestPromoter(project.rootPath);
+      return promoter.promoteTests(
+        input.closureId,
+        input.accepted,
+        input.rejected,
+        input.targetDir,
+      );
+    }),
+
+  /** 获取 Closure 闭环结果摘要（Gap 状态 / Delta 总量 / 提升计数） */
+  getClosureSummary: t.procedure
+    .input((raw): { projectId: string; closureId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.closureId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and closureId are required' });
+      }
+      return { projectId: r.projectId, closureId: r.closureId };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const promoter = buildTestPromoter(project.rootPath);
+      return promoter.getClosureSummary(input.closureId);
+    }),
+
+  /** 清理 Closure Workspace 临时目录 */
+  cleanupClosure: t.procedure
+    .input((raw): { projectId: string; closureId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.closureId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and closureId are required' });
+      }
+      return { projectId: r.projectId, closureId: r.closureId };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const promoter = buildTestPromoter(project.rootPath);
+      return promoter.cleanupClosure(input.closureId);
     }),
 });
 

@@ -339,3 +339,69 @@ export type CoverageExclusion = {
   approvedAt?: number;
   rejectionReason?: string;
 };
+
+// ─── Test Promotion（ADR 0009 决策 10 / Issue #10 Slice 8） ──────
+
+/**
+ * Closure Workspace 中单个测试改动的审阅队列项。
+ * 每项对应一个 AI 生成的测试文件，用户可接受（提升到正式目录）或拒绝（丢弃）。
+ */
+export type PromotionQueueItem = {
+  /** 唯一标识（基于 gapId/round/fileName 生成） */
+  id: string;
+  /** 所属 Closure Session ID */
+  closureId: string;
+  /** 所属 Gap ID */
+  gapId: string;
+  /** 生成该测试的迭代轮次 */
+  round: number;
+  /** Closure Workspace 中的绝对路径 */
+  sourcePath: string;
+  /** 相对 Closure Workspace 的路径（即文件名） */
+  relativePath: string;
+  /** 提升后的目标路径（正式 testbench 目录下） */
+  targetPath: string;
+  /** 文件名 */
+  fileName: string;
+  /** 审阅状态 */
+  status: 'pending' | 'accepted' | 'rejected';
+};
+
+/** Closure 结果摘要中单个 Gap 的状态 */
+export type ClosureSummaryGap = {
+  gapId: string;
+  moduleName: string;
+  metric: CoverageMetric;
+  /** gap 终态：closed / escalated / failed / in_progress / pending */
+  status: string;
+  /** 已完成的迭代轮数 */
+  rounds: number;
+  /** 最后一轮 overall delta（百分点），无数据时为 null */
+  finalDelta: number | null;
+  /** 升级原因（escalated/failed 时有值） */
+  escalationReason?: string;
+};
+
+/** Closure 闭环结束后的结果摘要 */
+export type ClosureSummary = {
+  closureId: string;
+  /** closure 终态：completed / aborted / failed / running / pending */
+  status: string;
+  gaps: ClosureSummaryGap[];
+  /** 所有 gap 最后一轮 overall delta 之和 */
+  totalDelta: number | null;
+  /** 已提升到正式目录的测试数量 */
+  promotedCount: number;
+  /** 仍待审阅的测试数量 */
+  pendingCount: number;
+  /** 已拒绝的测试数量 */
+  rejectedCount: number;
+};
+
+/** promoteTests 返回值 */
+export type PromotionResult = {
+  /** 成功复制的测试文件数 */
+  promoted: number;
+  /** 拒绝（未复制）的测试文件数 */
+  rejected: number;
+};
