@@ -39,6 +39,7 @@ const ROOT = resolve(__dirname, '..');
 const PTY_DIR = join(ROOT, 'node_modules', 'node-pty');
 const PREBUILD_DIR = join(PTY_DIR, 'prebuilds', 'linux-x64');
 const PREBUILD_FILE = join(PREBUILD_DIR, 'pty.node');
+const PREBUILD_HELPER = join(PREBUILD_DIR, 'spawn-helper');
 const CACHE_DIR = join(ROOT, '.cache', 'linux-pty');
 const VERSION_STAMP = join(CACHE_DIR, '.version');
 
@@ -139,6 +140,16 @@ function buildOnLinux(electronVersion, ptyVersion) {
   mkdirSync(PREBUILD_DIR, { recursive: true });
   copyFileSync(builtFile, PREBUILD_FILE);
   console.log(`[build-linux-pty] Copied to ${PREBUILD_FILE}`);
+
+  // Copy spawn-helper (required by UnixTerminal to fork the child process)
+  const builtHelper = join(PTY_DIR, 'build', 'Release', 'spawn-helper');
+  if (existsSync(builtHelper)) {
+    copyFileSync(builtHelper, PREBUILD_HELPER);
+    console.log(`[build-linux-pty] Copied spawn-helper to ${PREBUILD_HELPER}`);
+  } else {
+    console.warn(`[build-linux-pty] WARNING: spawn-helper not found at ${builtHelper}`);
+    console.warn('[build-linux-pty] Terminal functionality may be impaired.');
+  }
 }
 
 // ─── Build via Docker (cross-compile) ───────────────────
@@ -163,9 +174,10 @@ function buildViaDocker(electronVersion, ptyVersion) {
     `npm install node-pty@${ptyVersion} --registry ${registry} 2>&1 | tail -5`,
     `echo "[docker] Rebuilding node-pty for Electron ${electronVersion}..."`,
     `npx @electron/rebuild -v ${electronVersion} -f -w node-pty --arch x64 2>&1 | tail -10`,
-    'echo "[docker] Extracting pty.node..."',
+    'echo "[docker] Extracting pty.node and spawn-helper..."',
     'mkdir -p /output',
     'cp node_modules/node-pty/build/Release/pty.node /output/pty.node',
+    'cp node_modules/node-pty/build/Release/spawn-helper /output/spawn-helper',
     'echo "[docker] Build complete!"',
   ].join(' && ');
 
@@ -206,6 +218,16 @@ function buildViaDocker(electronVersion, ptyVersion) {
   mkdirSync(PREBUILD_DIR, { recursive: true });
   copyFileSync(cachedFile, PREBUILD_FILE);
   console.log(`[build-linux-pty] Copied to ${PREBUILD_FILE}`);
+
+  // Copy spawn-helper from cache
+  const cachedHelper = join(CACHE_DIR, 'spawn-helper');
+  if (existsSync(cachedHelper)) {
+    copyFileSync(cachedHelper, PREBUILD_HELPER);
+    console.log(`[build-linux-pty] Copied spawn-helper to ${PREBUILD_HELPER}`);
+  } else {
+    console.warn(`[build-linux-pty] WARNING: spawn-helper not found at ${cachedHelper}`);
+    console.warn('[build-linux-pty] Terminal functionality may be impaired.');
+  }
 }
 
 // ─── Main ───────────────────────────────────────────────
@@ -269,6 +291,8 @@ async function main() {
         console.error('[build-linux-pty]   npx @electron/rebuild -v ' + electronVersion + ' -f -w node-pty');
         console.error('[build-linux-pty]   cp node_modules/node-pty/build/Release/pty.node \\');
         console.error('[build-linux-pty]      node_modules/node-pty/prebuilds/linux-x64/pty.node');
+        console.error('[build-linux-pty]   cp node_modules/node-pty/build/Release/spawn-helper \\');
+        console.error('[build-linux-pty]      node_modules/node-pty/prebuilds/linux-x64/spawn-helper');
         process.exit(1);
       }
       buildViaDocker(electronVersion, ptyVersion);
