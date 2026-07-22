@@ -29,6 +29,7 @@ interface TerminalStoreState {
   resizeTerminal: (terminalId: string, cols: number, rows: number) => Promise<void>;
   handleTerminalData: (id: string, data: string) => void;
   handleTerminalExit: (id: string, exitCode: number) => void;
+  // Note: exitCode is used to show pass (✓) / fail (✗) on simulation terminal tabs
   /** Find the tab ID associated with a terminal session ID */
   getTabIdByTerminalId: (terminalId: string) => string | null;
 }
@@ -193,14 +194,19 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
     // This is a no-op in the store; the actual rendering happens in the xterm.js instance
   },
 
-  handleTerminalExit: (id, _exitCode) => {
+  handleTerminalExit: (id, exitCode) => {
     // Mark the tab as exited, with a status indicator for simulation terminals
     set((s) => ({
       tabs: s.tabs.map((t) => {
         if (t.terminalId !== id) return t;
+        // Skip if already marked as exited/pass/fail (prevents duplicate exit events)
+        if (t.title.endsWith('✓') || t.title.endsWith('✗') || t.title.endsWith('(exited)')) {
+          return t;
+        }
         // For simulation terminals (title starts with "sim:"), show pass/fail
+        // based on the exit code (0 = pass ✓, non-zero = fail ✗)
         if (t.title.startsWith('sim:')) {
-          return { ...t, title: `${t.title} ✓` };
+          return { ...t, title: `${t.title} ${exitCode === 0 ? '✓' : '✗'}` };
         }
         return { ...t, title: `${t.title} (exited)` };
       }),
