@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SoC Verify · 覆盖率树表格原型</title>
+<style>
+  :root {
+    --bg: oklch(0.14 0.006 250);
+    --bg-surface: oklch(0.18 0.006 250);
+    --bg-elevated: oklch(0.21 0.007 250);
+    --bg-hover: oklch(0.23 0.008 250);
+    --fg: oklch(0.94 0.004 250);
+    --fg-dim: oklch(0.62 0.008 250);
+    --fg-faint: oklch(0.42 0.006 250);
+    --border: oklch(0.25 0.007 250);
+    --border-light: oklch(0.30 0.008 250);
+    --c-pass: oklch(0.72 0.12 145);
+    --c-warn: oklch(0.75 0.13 85);
+    --c-fail: oklch(0.65 0.14 25);
+    --c-na: oklch(0.45 0.005 250);
+    --c-accent: oklch(0.68 0.14 250);
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    padding: 24px;
+    font-size: 13px;
+  }
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 20px;
+  }
+  .header h1 { font-size: 18px; font-weight: 700; }
+  .header .badge {
+    font-size: 10px; font-weight: 600;
+    padding: 3px 10px; border-radius: 12px;
+    background: var(--bg-elevated); color: var(--fg-dim);
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .toolbar {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 16px; flex-wrap: wrap;
+  }
+  .toolbar select, .toolbar input {
+    background: var(--bg-surface); border: 1px solid var(--border);
+    color: var(--fg); font-family: var(--sans); font-size: 12px;
+    padding: 5px 10px; border-radius: 6px; outline: none;
+  }
+  .toolbar select:focus, .toolbar input:focus { border-color: var(--c-accent); }
+  .toolbar .btn {
+    background: var(--bg-surface); border: 1px solid var(--border);
+    color: var(--fg-dim); font-size: 11px;
+    padding: 5px 12px; border-radius: 6px; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .toolbar .btn:hover { color: var(--fg); border-color: var(--border-light); }
+  .toolbar .btn.active { color: var(--c-accent); border-color: var(--c-accent); }
+
+  /* Summary row */
+  .summary-row {
+    display: flex; gap: 10px; margin-bottom: 16px;
+  }
+  .summary-card {
+    flex: 1; background: var(--bg-surface);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .summary-card .label {
+    font-size: 10px; color: var(--fg-faint);
+    text-transform: uppercase; letter-spacing: 0.05em;
+    margin-bottom: 6px;
+  }
+  .summary-card .value {
+    font-family: var(--mono); font-size: 20px; font-weight: 700;
+    display: flex; align-items: baseline; gap: 4px;
+  }
+  .summary-card .value .pct { color: var(--fg); }
+  .summary-card .value .count { font-size: 11px; color: var(--fg-dim); font-weight: 400; }
+  .summary-card .bar {
+    margin-top: 8px; height: 3px; border-radius: 2px;
+    background: var(--bg-elevated); overflow: hidden;
+  }
+  .summary-card .bar-fill { height: 100%; border-radius: 2px; }
+
+  /* Tree table */
+  .tree-table {
+    width: 100%; border-collapse: collapse;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .tree-table thead th {
+    background: var(--bg-elevated);
+    color: var(--fg-faint);
+    font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.05em;
+    padding: 8px 8px; text-align: right;
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 1;
+  }
+  .tree-table thead th:first-child { text-align: left; padding-left: 12px; }
+  .tree-table thead th .target {
+    display: block; font-size: 9px; color: var(--fg-faint);
+    font-weight: 400; margin-top: 2px;
+  }
+  .tree-table tbody td {
+    padding: 5px 8px; text-align: right;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--mono); font-size: 11px;
+    color: var(--fg-dim);
+  }
+  .tree-table tbody td:first-child {
+    text-align: left; padding-left: 12px;
+    font-family: var(--sans); color: var(--fg);
+  }
+  .tree-table tbody tr:hover { background: var(--bg-hover); }
+  .tree-table tbody tr.expanded > td { border-bottom-color: var(--border-light); }
+
+  /* Tree indentation */
+  .tree-toggle {
+    display: inline-flex; align-items: center; gap: 4px;
+    cursor: pointer; user-select: none;
+  }
+  .tree-toggle .chevron {
+    width: 12px; height: 12px;
+    transition: transform 0.15s;
+    color: var(--fg-faint);
+    flex-shrink: 0;
+  }
+  .tree-toggle .chevron.open { transform: rotate(90deg); }
+  .tree-toggle .chevron.empty { visibility: hidden; }
+  .tree-indent { display: inline-block; }
+  .tree-name { font-weight: 500; }
+  .tree-name.has-children { font-weight: 600; }
+
+  /* Coverage cell */
+  .cov-cell {
+    display: flex; flex-direction: column; align-items: flex-end; gap: 1px;
+    line-height: 1.3;
+  }
+  .cov-cell .pct { font-weight: 600; }
+  .cov-cell .count { font-size: 9px; color: var(--fg-faint); }
+  .cov-cell.pass .pct { color: var(--c-pass); }
+  .cov-cell.warn .pct { color: var(--c-warn); }
+  .cov-cell.fail .pct { color: var(--c-fail); }
+  .cov-cell.na .pct { color: var(--c-na); }
+  .cov-cell.na .count { display: none; }
+
+  /* Collapse children */
+  .tree-table tbody tr.coll-child { display: none; }
+
+  /* Legend */
+  .legend {
+    display: flex; gap: 16px; margin-top: 12px;
+    font-size: 10px; color: var(--fg-dim);
+  }
+  .legend-item { display: flex; align-items: center; gap: 4px; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .legend-dot.pass { background: var(--c-pass); }
+  .legend-dot.warn { background: var(--c-warn); }
+  .legend-dot.fail { background: var(--c-fail); }
+  .legend-dot.na { background: var(--c-na); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>覆盖率分析 · 树表格布局</h1>
+  <span class="badge">方案 A</span>
+</div>
+
+<div class="toolbar">
+  <select>
+    <option>Session: 2024-01-15_merge_001</option>
+    <option>Session: 2024-01-10_merge_002</option>
+  </select>
+  <input type="text" placeholder="过滤模块名..." style="width: 160px;">
+  <button class="btn active">全部展开</button>
+  <button class="btn">全部折叠</button>
+  <button class="btn">仅看未达标</button>
+  <button class="btn">导出报告</button>
+</div>
+
+<div class="summary-row" id="summaryRow"></div>
+
+<table class="tree-table" id="treeTable">
+  <thead>
+    <tr>
+      <th>模块</th>
+      <th>Line<span class="target">≥95%</span></th>
+      <th>Branch<span class="target">≥90%</span></th>
+      <th>Toggle<span class="target">≥85%</span></th>
+      <th>Cond<span class="target">≥85%</span></th>
+      <th>FSM St<span class="target">=100%</span></th>
+      <th>FSM Tr<span class="target">≥90%</span></th>
+      <th>Func<span class="target">=100%</span></th>
+      <th>Assert</th>
+    </tr>
+  </thead>
+  <tbody id="treeBody"></tbody>
+</table>
+
+<div class="legend">
+  <div class="legend-item"><span class="legend-dot pass"></span>达标</div>
+  <div class="legend-item"><span class="legend-dot warn"></span>接近目标 (&lt;5%)</div>
+  <div class="legend-item"><span class="legend-dot fail"></span>未达标</div>
+  <div class="legend-item"><span class="legend-dot na"></span>N/A</div>
+</div>
+
+<script>
+const TARGETS = { line: 95, branch: 90, toggle: 85, condition: 85, fsm_state: 100, fsm_transition: 90, functional: 100, assertion: null };
+const METRICS = ['line', 'branch', 'toggle', 'condition', 'fsm_state', 'fsm_transition', 'functional', 'assertion'];
+const METRIC_LABELS = { line: 'Line', branch: 'Branch', toggle: 'Toggle', condition: 'Cond', fsm_state: 'FSM St', fsm_transition: 'FSM Tr', functional: 'Func', assertion: 'Assert' };
+
+// Sample data based on user's IMC report, expanded to 8 metrics
+const tree = {
+  name: 'tb_top', depth: 0, children: [
+    { name: 'chip_top', depth: 1, children: [
+      { name: 'dut', depth: 2, children: [
+        { name: 'u_analog_bb_line_usb', depth: 3, children: [], m: { line: { p: 87.5, c: 13, t: 15 }, branch: { p: 80.0, c: 8, t: 10 }, toggle: { p: 75.0, c: 30, t: 40 }, condition: { p: 70.0, c: 7, t: 10 }, fsm_state: null, fsm_transition: null, functional: null, assertion: null } },
+        { name: 'u_analog_bb_line_pciepl', depth: 3, children: [], m: { line: { p: 87.5, c: 13, t: 15 }, branch: { p: 80.0, c: 8, t: 10 }, toggle: { p: 75.0, c: 30, t: 40 }, condition: { p: 70.0, c: 7, t: 10 }, fsm_state: null, fsm_transition: null, functional: null, assertion: null } },
+        { name: 'u_block_wrap_0', depth: 3, children: [
+          { name: 'u_analog_mipi_mphy_2t2r', depth: 4, children: [], m: { line: { p: 58.42, c: 482, t: 825 }, branch: { p: 52.1, c: 350, t: 672 }, toggle: { p: 45.3, c: 1200, t: 2650 }, condition: { p: 48.0, c: 96, t: 200 }, fsm_state: { p: 66.7, c: 4, t: 6 }, fsm_transition: { p: 40.0, c: 6, t: 15 }, functional: null, assertion: { p: 50.0, c: 3, t: 6 } } },
+          { name: 'u_g3_side_glue_wrap', depth: 4, children: [], m: { line: { p: 57.38, c: 1007, t: 1755 }, branch: { p: 50.2, c: 700, t: 1393 }, toggle: { p: 42.1, c: 2500, t: 5940 }, condition: { p: 45.0, c: 180, t: 400 }, fsm_state: null, fsm_transition: null, functional: null, assertion: null } },
+          { name: 'analog_mipi_mphy_2t2r_glue', depth: 4, children: [], m: { line: { p: 96.88, c: 225, t: 239 }, branch: { p: 92.0, c: 161, t: 175 }, toggle: { p: 88.5, c: 450, t: 508 }, condition: { p: 90.0, c: 45, t: 50 }, fsm_state: null, fsm_transition: null, functional: null, assertion: null } },
+          { name: 'analog_mipi_mphy_2t2r_0_collar', depth: 4, children: [], m: { line: { p: 84.23, c: 963, t: 1640 }, branch: { p: 78.5, c: 630, t: 802 }, toggle: { p: 72.0, c: 1800, t: 2500 }, condition: { p: 75.0, c: 150, t: 200 }, fsm_state: null, fsm_transition: null, functional: null, assertion: null } },
+          { name: 'u_anlg_phy_g3_rf', depth: 4, children: [], m: { line: { p: 79.97, c: 1540, t: 1974 }, branch: { p: 72.3, c: 1100, t: 1521 }, toggle: { p: 68.5, c: 3200, t: 4672 }, condition: { p: 70.0, c: 280, t: 400 }, fsm_state: { p: 80.0, c: 8, t: 10 }, fsm_transition: { p: 65.0, c: 13, t: 20 }, functional: null, assertion: null } },
+          { name: 'u_reg_dec', depth: 4, children: [], m: { line: { p: 98.76, c: 159, t: 161 }, branch: { p: 96.0, c: 96, t: 100 }, toggle: { p: 92.0, c: 230, t: 250 }, condition: { p: 95.0, c: 38, t: 40 }, fsm_state: null, fsm_transition: null, functional: null, assertion: null } },
+          { name: 'u_analog_mipi_mphy_2t2r_glue_logic', depth: 4, children: [], m: { line: { p: 86.75, c: 720, t: 905 }, branch: { p: 80.0, c: 560, t: 700 }, toggle: { p: 78.0, c: 1400, t: 1795 }, condition: { p: 82.0, c: 164, t: 200 }, fsm_state: null, fsm_transition: null, functional: null, assertion: null } },
+          { name: 'u_cgm_mux2x_mphy_cb_cfgclk', depth: 4, children: [], m: { line: { p: 80.0, c: 4, t: 5 }, branch: { p: 75.0, c: 3, t: 4 }, toggle: { p: 70.0, c: 14, t: 20 }, condition: null, fsm_state: null, fsm_transition: null, functional: null, assertion: null } },
+          { name: 'u_clk_gate_reg_read', depth: 4, children: [], m: { line: { p: 100.0, c: 4, t: 4 }, branch: { p: 100.0, c: 2, t: 2 }, toggle: { p: 100.0, c: 8, t: 8 }, condition: null, fsm_state: null, fsm_transition: null, functional: null, assertion: null } },
+        ], m: { line: { p: 60.04, c: 323, t: 538 }, branch: { p: 52.0, c: 260, t: 500 }, toggle: { p: 48.0, c: 800, t: 1667 }, condition: { p: 50.0, c: 100, t: 200 }, fsm_state: { p: 66.7, c: 4, t: 6 }, fsm_transition: { p: 40.0, c: 6, t: 15 }, functional: null, assertion: { p: 50.0, c: 3, t: 6 } } },
+      ], m: { line: { p: 93.07, c: 349, t: 375 }, branch: { p: 88.0, c: 440, t: 500 }, toggle: { p: 82.0, c: 1230, t: 1500 }, condition: { p: 85.0, c: 170, t: 200 }, fsm_state: { p: 80.0, c: 8, t: 10 }, fsm_transition: { p: 65.0, c: 13, t: 20 }, functional: null, assertion: { p: 50.0, c: 3, t: 6 } } },
+    ], m: null },
+  ], m: null
+};
+
+function classifyMetric(metric, val) {
+  if (!val) return 'na';
+  const target = TARGETS[metric];
+  if (target === null) return val.p >= 90 ? 'pass' : val.p >= 80 ? 'warn' : 'fail';
+  if (val.p >= target) return 'pass';
+  if (val.p >= target - 5) return 'warn';
+  return 'fail';
+}
+
+function renderCell(metric, val) {
+  if (!val) return '<td><span class="cov-cell na"><span class="pct">n/a</span></span></td>';
+  const cls = classifyMetric(metric, val);
+  return `<td><span class="cov-cell ${cls}"><span class="pct">${val.p.toFixed(2)}%</span><span class="count">(${val.c}/${val.t})</span></span></td>`;
+}
+
+function renderNode(node, isLast) {
+  const hasChildren = node.children && node.children.length > 0;
+  const indent = '  '.repeat(node.depth);
+  const prefix = node.depth === 0 ? '' : indent + (hasChildren ? '├─ ' : '├─ ');
+  const rowId = `row-${node.name}-${node.depth}`;
+  const childPrefix = node.depth > 0 ? '  '.repeat(node.depth) + '│  ' : '';
+
+  let html = `<tr id="${rowId}" class="${node.depth > 0 ? 'coll-child' : ''}" data-depth="${node.depth}" data-parent="${node.name}">`;
+  html += `<td>`;
+  if (hasChildren) {
+    html += `<span class="tree-toggle" onclick="toggleNode('${rowId}')">`;
+    html += `<svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>`;
+    html += `</span>`;
+  } else {
+    html += `<span class="tree-toggle"><svg class="chevron empty" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg></span>`;
+  }
+  html += `<span style="margin-left: ${node.depth * 16}px" class="tree-name ${hasChildren ? 'has-children' : ''}">${node.name}</span>`;
+  html += `</td>`;
+  for (const m of METRICS) {
+    html += renderCell(m, node.m ? node.m[m] : null);
+  }
+  html += `</tr>`;
+
+  if (hasChildren) {
+    for (const child of node.children) {
+      html += renderNode(child, false);
+    }
+  }
+  return html;
+}
+
+function toggleNode(rowId) {
+  const row = document.getElementById(rowId);
+  if (!row) return;
+  const chevron = row.querySelector('.chevron');
+  const isExpanded = chevron.classList.contains('open');
+  chevron.classList.toggle('open');
+
+  const depth = parseInt(row.dataset.depth);
+  const moduleName = row.dataset.parent;
+  let next = row.nextElementSibling;
+  while (next) {
+    const nextDepth = parseInt(next.dataset.depth);
+    if (nextDepth <= depth) break;
+    if (isExpanded) {
+      next.classList.add('coll-child');
+    } else {
+      next.classList.remove('coll-child');
+      // Also collapse children
+      const childChevron = next.querySelector('.chevron.open');
+      if (childChevron) childChevron.classList.remove('open');
+    }
+    next = next.nextElementSibling;
+  }
+}
+
+// Render tree
+document.getElementById('treeBody').innerHTML = renderNode(tree, true);
+
+// Render summary
+function calcSummary(node) {
+  if (!node.m) {
+    // aggregate from children
+    if (!node.children || node.children.length === 0) return null;
+    const childSums = node.children.map(c => calcSummary(c)).filter(s => s);
+    if (childSums.length === 0) return null;
+    const sum = {};
+    for (const m of METRICS) {
+      const vals = childSums.map(s => s[m]).filter(v => v);
+      if (vals.length === 0) { sum[m] = null; continue; }
+      const totalC = vals.reduce((a, v) => a + v.c, 0);
+      const totalT = vals.reduce((a, v) => a + v.t, 0);
+      sum[m] = { p: totalT > 0 ? (totalC / totalT * 100) : 0, c: totalC, t: totalT };
+    }
+    return sum;
+  }
+  return node.m;
+}
+
+const summary = calcSummary(tree);
+let summaryHtml = '';
+for (const m of METRICS) {
+  const val = summary ? summary[m] : null;
+  if (!val) {
+    summaryHtml += `<div class="summary-card"><div class="label">${METRIC_LABELS[m]}</div><div class="value"><span class="pct" style="color:var(--c-na)">n/a</span></div><div class="bar"><div class="bar-fill" style="width:0%;background:var(--c-na)"></div></div></div>`;
+    continue;
+  }
+  const cls = classifyMetric(m, val);
+  const color = cls === 'pass' ? 'var(--c-pass)' : cls === 'warn' ? 'var(--c-warn)' : cls === 'fail' ? 'var(--c-fail)' : 'var(--c-na)';
+  summaryHtml += `<div class="summary-card"><div class="label">${METRIC_LABELS[m]}</div><div class="value"><span class="pct" style="color:${color}">${val.p.toFixed(1)}%</span><span class="count">(${val.c}/${val.t})</span></div><div class="bar"><div class="bar-fill" style="width:${val.p}%;background:${color}"></div></div></div>`;
+}
+document.getElementById('summaryRow').innerHTML = summaryHtml;
+
+// Expand all by default
+document.querySelectorAll('.tree-table tbody tr').forEach((row, i) => {
+  if (i > 0) row.classList.remove('coll-child');
+});
+document.querySelectorAll('.tree-table .chevron').forEach(c => {
+  if (!c.classList.contains('empty')) c.classList.add('open');
+});
+</script>
+
+</body>
+</html>
