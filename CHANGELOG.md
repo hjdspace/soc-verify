@@ -6,6 +6,33 @@
 
 ---
 
+## [0.1.7](https://github.com/hjdspace/soc-verify/compare/v0.1.6...v0.1.7) (2026-07-23)
+
+### Features
+
+* **coverage:** 实现端到端覆盖率导入，构建层级树数据模型，支持会话级覆盖率状态合并
+* **coverage-ui:** 新增覆盖率树形表与 Dashboard 仪表盘，提供层级化可视化分析
+* **coverage-ai:** 新增 AI Host Tools 与 `cov://` URI Scheme，使 AI Agent 可访问覆盖率数据
+* **coverage-closure:** 实现 Coverage Closure 闭环循环，集成 AI 编排器驱动覆盖率收敛迭代与 UI 状态展示
+* **coverage-export:** 新增覆盖率导出能力，支持 HTML 报告与 JSON 结构化输出
+* **coverage-promotion:** 实现 Test Promotion 与闭环后整合，完成 AI 驱动验证全流程闭环
+* **terminal:** 命令执行新增项目工作目录支持
+
+### Bug Fixes
+
+* **terminal:** 修复子进程退出码处理，使 handleTerminalExit 正确反映退出状态
+* **agent:** 实现 agent 进程错误监听器，捕获子进程异常
+
+### Refactor
+
+* **terminal:** 重构 runsim 重试工具改用 TerminalManager，统一终端调度入口
+
+### Build
+
+* **native:** 增强原生模块 patch 脚本，spawn-helper 复制到 prebuild 目录
+
+---
+
 ## [0.1.6](https://github.com/hjdspace/soc-verify/compare/v0.1.5...v0.1.6) (2026-07-21)
 
 ### Features
