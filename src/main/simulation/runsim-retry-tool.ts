@@ -130,15 +130,30 @@ export async function executeRunsimRetry(
   }
 
   if (mode === 'terminal') {
-    // Create terminal PTY session
-    const session = await terminalManager.create({ cwd });
+    // Build displayCommand: if $PROJ_WORK is defined, cd to project work dir first
+    const projWork = process.env.PROJ_WORK;
+    const cdPrefix = projWork ? `cd "${projWork}" && ` : '';
+    const displayCommand = `${cdPrefix}${command}`;
 
-    // Wait for shell initialization
-    await new Promise((r) => setTimeout(r, 500));
+    let session;
+    if (terminalManager.isPtyAvailable()) {
+      // PTY mode: create interactive terminal session
+      session = await terminalManager.create({ cwd });
 
-    // Write runsim command with completion marker
-    const fullCommand = `${command}; echo "__SIM_DONE__$?__"`;
-    terminalManager.write(session.id, `${fullCommand}\n`);
+      // Wait for shell initialization
+      await new Promise((r) => setTimeout(r, 500));
+
+      // Write runsim command with completion marker
+      const fullCommand = `${displayCommand}; echo "__SIM_DONE__$?__"`;
+      terminalManager.write(session.id, `${fullCommand}\n`);
+    } else {
+      // Log mode: directly execute command, stdout/stderr streamed to terminal view
+      console.log('[runsim-retry] node-pty unavailable — using log-mode execution.');
+      session = await terminalManager.runCommand({
+        command: displayCommand,
+        cwd,
+      });
+    }
 
     // Register with simTerminalLinker for tracking
     const opts: SimulationRunOptions = {
@@ -150,7 +165,7 @@ export async function executeRunsimRetry(
     const run = simTerminalLinker.register(
       projectId ?? '',
       session.id,
-      command,
+      displayCommand,
       cwd,
       opts,
     );
@@ -158,7 +173,7 @@ export async function executeRunsimRetry(
     return {
       runId: run.runId,
       status: 'running',
-      message: `Simulation started in terminal. Case: ${caseName}, Command: ${command}`,
+      message: `Simulation started in terminal. Case: ${caseName}, Command: ${displayCommand}`,
     };
   }
 
