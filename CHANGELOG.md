@@ -6,6 +6,23 @@
 
 ---
 
+## [0.1.8](https://github.com/hjdspace/soc-verify/compare/v0.1.7...v0.1.8) (2026-07-23)
+
+### Features
+
+* **coverage:** 新增内置覆盖率解析器插件，支持解析 IMC、VCS urg、vcover 等多种 EDA 工具覆盖率报告
+* **coverage:** 新增覆盖率导入与合并的目录浏览功能，提升交互体验
+* **settings:** 新增 `readSkill` procedure 与 `readSkillContent` 方法，支持通过文件路径读取技能内容
+* **settings-ui:** SettingsPanel 新增内容加载与展开/折叠切换
+
+### Bug Fixes
+
+* **coverage:** 增强 CoverageManager 错误处理，报告生成失败时创建 meta.json 并优雅降级
+* **coverage:** 修复测试在无报告生成器场景下的处理，确保优雅降级
+* **ci:** 修复 GitHub Action Release 发布流程，上传资产前创建 draft release 解决 `release not found` 错误
+
+---
+
 ## [0.1.7](https://github.com/hjdspace/soc-verify/compare/v0.1.6...v0.1.7) (2026-07-23)
 
 ### Features
