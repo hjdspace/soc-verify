@@ -1,0 +1,10 @@
+{
+  "name": "builtin-coverage-parser",
+  "version": "1.0.0",
+  "description": "内置覆盖率解析插件：解析 IMC / VCS urg / vcover 文本报告，支持从 cov_merge 目录直接读取覆盖率数据。",
+  "main": "index.js",
+  "socverify": {
+    "kind": "coverage-parser",
+    "id": "builtin-coverage-parser"
+  }
+}
