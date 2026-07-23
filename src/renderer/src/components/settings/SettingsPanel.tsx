@@ -410,26 +410,70 @@ function SkillCard({ skill, onUninstall }: {
   onUninstall: (name: string) => void;
 }) {
   const canDelete = skill.source === 'user';
+  const [expanded, setExpanded] = useState(false);
+  const [content, setContent] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const readSkillContent = useSettingsStore((s) => s.readSkillContent);
+
+  const handleToggle = async () => {
+    if (!expanded && content === null) {
+      setLoading(true);
+      const text = await readSkillContent(skill.filePath);
+      setContent(text);
+      setLoading(false);
+    }
+    setExpanded(!expanded);
+  };
+
   return (
-    <div className="flex items-start gap-2 rounded border border-border/50 bg-secondary/20 px-2 py-1.5">
-      <Package className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span className="truncate text-xs font-mono font-medium">{skill.name}</span>
-          <SkillSourceBadge source={skill.source} />
+    <div className="rounded border border-border/50 bg-secondary/20">
+      <div
+        className="flex cursor-pointer items-start gap-2 px-2 py-1.5 hover:bg-secondary/30"
+        onClick={handleToggle}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleToggle();
+          }
+        }}
+      >
+        <Package className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-xs font-mono font-medium">{skill.name}</span>
+            <SkillSourceBadge source={skill.source} />
+          </div>
+          {skill.description && (
+            <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{skill.description}</p>
+          )}
         </div>
-        {skill.description && (
-          <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{skill.description}</p>
+        {loading && <RefreshCw className="mt-0.5 h-3 w-3 shrink-0 animate-spin text-muted-foreground" />}
+        {!loading && (
+          <ChevronRight className={cn('mt-0.5 h-3 w-3 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-90')} />
+        )}
+        {canDelete && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onUninstall(skill.name);
+            }}
+            className="shrink-0 rounded p-0.5 text-destructive hover:bg-destructive/10"
+            title="卸载技能"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
         )}
       </div>
-      {canDelete && (
-        <button
-          onClick={() => onUninstall(skill.name)}
-          className="shrink-0 rounded p-0.5 text-destructive hover:bg-destructive/10"
-          title="卸载技能"
-        >
-          <Trash2 className="h-3 w-3" />
-        </button>
+      {expanded && content !== null && (
+        <div className="border-t border-border/30 px-2 py-2">
+          <div className="mb-1 flex items-center gap-1 text-[9px] text-muted-foreground/70">
+            <FileText className="h-2.5 w-2.5" />
+            <span className="font-mono">{skill.filePath}</span>
+          </div>
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-[11px] leading-relaxed text-foreground/80">{content}</pre>
+        </div>
       )}
     </div>
   );
