@@ -154,7 +154,7 @@ describe('CoverageManager', () => {
       rmSync(tmpDir, { recursive: true });
     });
 
-    it('throws when no report generator configured', async () => {
+    it('succeeds without report generator (graceful degradation)', async () => {
       const tmpDir = mkdtempSync(join(tmpdir(), 'cov-nogen-'));
       const adapter = createMockAdapter(makeMockData('x'));
       const mgr = new CoverageManager({
@@ -162,9 +162,11 @@ describe('CoverageManager', () => {
         coverageAdapter: adapter as never,
       });
 
-      await expect(mgr.importCoverage('/mock', MOCK_EDA_CONFIG)).rejects.toThrow(
-        'No report generator configured',
-      );
+      // Without a report generator, import should still succeed —
+      // the EDA command step is skipped and the parser is called directly.
+      const result = await mgr.importCoverage('/mock', MOCK_EDA_CONFIG);
+      expect(result.sessionId).toBeDefined();
+      expect(result.data).toBeDefined();
       rmSync(tmpDir, { recursive: true });
     });
   });
