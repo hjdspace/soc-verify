@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react';
 import {
   Loader2, BarChart3, Upload, ChevronRight,
   Target as TargetIcon, AlertTriangle, ShieldBan, GitCompare, Trash2, Plus,
-  Activity, Square, Download,
+  Activity, Square, Download, FolderOpen,
 } from 'lucide-react';
 import { useCoverageStore } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
@@ -86,6 +86,7 @@ export function CoveragePanel() {
   const deleteSession = useCoverageStore((s) => s.deleteSession);
   const setView = useCoverageStore((s) => s.setView);
   const openExportDialog = useCoverageStore((s) => s.openExportDialog);
+  const browseDirectory = useCoverageStore((s) => s.browseDirectory);
 
   // ─── Closure 相关（Slice 6b） ──────────────────────────────
   const currentClosure = useCoverageStore((s) => s.currentClosure);
@@ -101,6 +102,7 @@ export function CoveragePanel() {
   const [covMergeDir, setCovMergeDir] = useState('');
   const [edaTool, setEdaTool] = useState<EdaTool>('imc');
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
 
   useEffect(() => {
     if (currentProjectId) {
@@ -141,6 +143,13 @@ export function CoveragePanel() {
       setShowImport(false);
       setCovMergeDir('');
     }
+  };
+
+  const handleBrowse = async () => {
+    setBrowsing(true);
+    const path = await browseDirectory(covMergeDir.trim() || undefined);
+    setBrowsing(false);
+    if (path) setCovMergeDir(path);
   };
 
   const handleDelete = async () => {
@@ -251,13 +260,24 @@ export function CoveragePanel() {
           <div className="flex flex-col gap-2">
             <label className="text-[10px] text-muted-foreground">
               cov_merge 目录路径
-              <input
-                type="text"
-                value={covMergeDir}
-                onChange={(e) => setCovMergeDir(e.target.value)}
-                placeholder="例如 cov_merge 或 /abs/path/to/covdb"
-                className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-xs"
-              />
+              <div className="mt-1 flex gap-1">
+                <input
+                  type="text"
+                  value={covMergeDir}
+                  onChange={(e) => setCovMergeDir(e.target.value)}
+                  placeholder="例如 cov_merge 或 /abs/path/to/covdb"
+                  className="flex-1 rounded border border-border bg-background px-2 py-1 text-xs"
+                />
+                <button
+                  onClick={handleBrowse}
+                  disabled={browsing}
+                  className="flex shrink-0 items-center gap-1 rounded border border-border bg-card px-2 py-1 text-xs hover:bg-secondary disabled:opacity-50"
+                  title="浏览选择目录"
+                >
+                  <FolderOpen className="h-3 w-3" />
+                  {browsing ? '...' : '浏览'}
+                </button>
+              </div>
             </label>
             <label className="text-[10px] text-muted-foreground">
               EDA 工具
