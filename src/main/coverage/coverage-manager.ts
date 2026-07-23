@@ -93,15 +93,33 @@ export class CoverageManager {
     if (!this.adapter?.hasParser()) {
       throw new Error('No coverage-parser plugin loaded');
     }
-    if (!this.reportGenerator) {
-      throw new Error('No report generator configured');
-    }
 
     const sessionId = this.generateSessionId();
     const reportDir = join(this.projectRoot, SOCVERIFY_DIR, COVERAGE_DIR, sessionId, 'reports');
 
+    // 写入 meta.json 供解析器读取 covMergeDir 和 edaTool（在 EDA 命令运行前写入）
+    await mkdir(reportDir, { recursive: true });
+    const metaPath = join(reportDir, 'meta.json');
+    await writeFile(
+      metaPath,
+      JSON.stringify({ covMergeDir, edaTool: edaConfig.tool, createdAt: Date.now() }, null, 2),
+      'utf-8',
+    );
+
     // Step 1: 平台运行 EDA 命令生成文本报告
-    await this.reportGenerator.generate(edaConfig, covMergeDir, sessionId);
+    // 容错处理：EDA 工具可能未安装或命令失败，此时报告目录为空，
+    // 解析器会通过 meta.json 中的 covMergeDir 尝试直接扫描覆盖率数据
+    if (this.reportGenerator) {
+      try {
+        await this.reportGenerator.generate(edaConfig, covMergeDir, sessionId);
+      } catch (err) {
+        console.warn(
+          `[coverage] EDA report generation failed (continuing with direct scan): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
 
     // Step 2: 插件解析文本报告为层级 Coverage Tree
     const data = await this.adapter.parse(sessionId, reportDir);
