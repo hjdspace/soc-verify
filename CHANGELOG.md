@@ -6,6 +6,23 @@
 
 ---
 
+## [0.1.9](https://github.com/hjdspace/soc-verify/compare/v0.1.8...v0.1.9) (2026-07-23)
+
+### Features
+
+* **scm:** 新增文件暂存、取消暂存、丢弃和提交功能，提供完整 Git 工作流操作
+* **mcp:** 新增 getMcpStatus 命令与 API，支持查询 MCP 服务器运行状态
+* **mcp:** 新增 MCP 配置读写模块，支持项目级与用户级 MCP 服务器配置
+* **coverage:** 新增覆盖率注册表，实现按项目缓存 CoverageManager 实例
+* **error-analysis:** 新增错误分析会话工厂与 prompt 模板，抽离错误分析逻辑
+
+### Refactor
+
+* **plugins:** 重构插件适配器导入路径，从 host/plugin-discovery 迁移到 plugin-adapters 目录，统一导入路径
+* **ipc:** 拆分 router-context 导出逻辑，将业务逻辑下沉到对应服务模块
+
+---
+
 ## [0.1.8](https://github.com/hjdspace/soc-verify/compare/v0.1.7...v0.1.8) (2026-07-23)
 
 ### Features
