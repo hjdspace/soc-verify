@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Minus, Square, X, Copy, PanelLeft, PanelRight, Settings, Search, ChevronRight } from 'lucide-react';
+import { Minus, Square, X, Copy, PanelLeft, PanelRight, Settings, Search, ChevronRight, GitCommitHorizontal } from 'lucide-react';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
@@ -24,6 +24,8 @@ export function TitleBar() {
   const settingsOpen = useUiStore((s) => s.settingsOpen);
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
   const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
+  const sourceControlOpen = useUiStore((s) => s.sourceControlOpen);
+  const setSourceControlOpen = useUiStore((s) => s.setSourceControlOpen);
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const projects = useProjectStore((s) => s.projects);
@@ -141,6 +143,15 @@ export function TitleBar() {
           title="命令面板 (Ctrl+P)"
         >
           <Search className="h-3.5 w-3.5" />
+        </TitleBarButton>
+
+        {/* 源代码管理按钮 */}
+        <TitleBarButton
+          onClick={() => setSourceControlOpen(!sourceControlOpen)}
+          title="源代码管理"
+          active={sourceControlOpen}
+        >
+          <GitCommitHorizontal className="h-3.5 w-3.5" />
         </TitleBarButton>
 
         {/* 设置按钮 */}

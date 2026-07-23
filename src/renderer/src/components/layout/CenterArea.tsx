@@ -113,7 +113,6 @@ export function CenterArea() {
   // 更多菜单项
   const moreItems = [
     { type: 'regression' as const, label: '回归套件', icon: GitBranch },
-    { type: 'source-control' as const, label: '源代码管理', icon: GitCommitHorizontal },
     { type: 'to-checklist' as const, label: 'TO 检查', icon: ListChecks },
     { type: 'simulation-history' as const, label: '仿真历史', icon: History },
   ];

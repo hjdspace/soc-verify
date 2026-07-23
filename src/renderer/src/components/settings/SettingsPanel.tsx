@@ -6,6 +6,7 @@ import { useUiStore } from '@renderer/stores/ui';
 import { useThemeStore } from '@renderer/stores/theme';
 import { useSessionStore } from '@renderer/stores/session';
 import { cn } from '@renderer/lib/utils';
+import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
 import type { CredentialEntry, SkillInfo, CreateSkillInput } from '@shared/types';
 
 type SettingsTab = 'credentials' | 'skills' | 'mcp' | 'prompt' | 'appearance';
@@ -472,7 +473,9 @@ function SkillCard({ skill, onUninstall }: {
             <FileText className="h-2.5 w-2.5" />
             <span className="font-mono">{skill.filePath}</span>
           </div>
-          <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-[11px] leading-relaxed text-foreground/80">{content}</pre>
+          <div className="markdown-body max-h-64 overflow-auto text-[11px] leading-relaxed text-foreground/80">
+            <MarkdownRenderer content={content} />
+          </div>
         </div>
       )}
     </div>

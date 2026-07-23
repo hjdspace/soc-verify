@@ -8,6 +8,7 @@ import { TaskPanel } from './TaskPanel';
 import { CommandPalette } from './CommandPalette';
 import { EnvWizard } from '@renderer/components/env/EnvWizard';
 import { SettingsPanel } from '@renderer/components/settings/SettingsPanel';
+import { SourceControlDialog } from '@renderer/components/scm/SourceControlDialog';
 import { useUiStore } from '@renderer/stores/ui';
 
 export function AppShell() {
@@ -59,6 +60,9 @@ export function AppShell() {
 
       {/* ── 设置面板 ─────────────────────────────────────── */}
       <SettingsPanel />
+
+      {/* ── 源代码管理弹窗 ───────────────────────────────── */}
+      <SourceControlDialog />
 
       {/* ── 命令面板（Ctrl+P 触发） ──────────────────────── */}
       <CommandPalette />

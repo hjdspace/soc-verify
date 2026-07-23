@@ -6,6 +6,7 @@ interface UiState {
   optionDockExpanded: boolean;
   settingsOpen: boolean;
   commandPaletteOpen: boolean;
+  sourceControlOpen: boolean;
   leftRailWidth: number;
   rightPanelWidth: number;
   toggleLeftRail: () => void;
@@ -13,6 +14,7 @@ interface UiState {
   toggleOptionDock: () => void;
   setSettingsOpen: (open: boolean) => void;
   setCommandPaletteOpen: (open: boolean) => void;
+  setSourceControlOpen: (open: boolean) => void;
   setLeftRailWidth: (width: number) => void;
   setRightPanelWidth: (width: number) => void;
 }
@@ -28,6 +30,7 @@ export const useUiStore = create<UiState>((set) => ({
   optionDockExpanded: false,
   settingsOpen: false,
   commandPaletteOpen: false,
+  sourceControlOpen: false,
   leftRailWidth: 256,
   rightPanelWidth: 384,
   toggleLeftRail: () => set((s) => ({ leftRailCollapsed: !s.leftRailCollapsed })),
@@ -35,6 +38,7 @@ export const useUiStore = create<UiState>((set) => ({
   toggleOptionDock: () => set((s) => ({ optionDockExpanded: !s.optionDockExpanded })),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
+  setSourceControlOpen: (open) => set({ sourceControlOpen: open }),
   setLeftRailWidth: (width) => set({ leftRailWidth: Math.max(LEFT_MIN, Math.min(LEFT_MAX, width)) }),
   setRightPanelWidth: (width) => set({ rightPanelWidth: Math.max(RIGHT_MIN, Math.min(RIGHT_MAX, width)) }),
 }));
