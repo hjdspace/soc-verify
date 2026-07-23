@@ -29,6 +29,7 @@ interface SettingsStoreState {
   updateCredential: (input: CredentialUpdateInput) => Promise<void>;
   deleteCredential: (providerId: string) => Promise<void>;
   loadSkills: () => Promise<void>;
+  readSkillContent: (filePath: string) => Promise<string>;
   loadSkillInstallInfo: () => Promise<void>;
   createSkill: (input: CreateSkillInput) => Promise<void>;
   uninstallSkill: (name: string) => Promise<void>;
@@ -125,6 +126,15 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
       set({ skills });
     } catch {
       // Best-effort
+    }
+  },
+
+  readSkillContent: async (filePath) => {
+    try {
+      return await trpc.settings.readSkill.query({ filePath });
+    } catch (err) {
+      useToastStore.getState().error('读取技能内容失败', err instanceof Error ? err.message : String(err));
+      return '';
     }
   },
 
