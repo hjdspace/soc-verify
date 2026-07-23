@@ -96,6 +96,27 @@ function buildTestPromoter(projectRoot: string): TestPromoter {
 }
 
 export const coverageRouter = t.router({
+  // ─── 目录浏览（导入覆盖率时选择 cov_merge 目录） ────────────────
+
+  browseDirectory: t.procedure
+    .input((raw): { defaultPath?: string } => {
+      const r = raw as Record<string, unknown>;
+      return {
+        defaultPath: typeof r.defaultPath === 'string' ? r.defaultPath : undefined,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const result = await dialog.showOpenDialog({
+        properties: ['openDirectory'],
+        title: '选择 cov_merge 目录',
+        defaultPath: input.defaultPath,
+      });
+      if (result.canceled || result.filePaths.length === 0) {
+        return { canceled: true as const, path: null };
+      }
+      return { canceled: false as const, path: result.filePaths[0] };
+    }),
+
   // ─── EDA Tool Configuration（ADR 0006） ──────────────────────
 
   getEdaConfig: t.procedure
