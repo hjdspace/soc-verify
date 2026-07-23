@@ -4,22 +4,19 @@
 
 import { join } from 'node:path';
 import { writeFile, mkdir, rm } from 'node:fs/promises';
+import { t, TRPCError } from '../router-context';
+import { requireProject, ensurePluginsLoaded } from '../../services/project-service';
 import {
-  t,
-  TRPCError,
-  requireProject,
   requireSession,
-  ensurePluginsLoaded,
   storedMessagesPath,
   loadStoredMessages,
   filterEmptyPlaceholderSessions,
-} from '../router-context';
+} from '../../services/session-service';
 import { sessionManager } from '../../agent/session-manager';
 import { projectManager } from '../../project/project-manager';
 import { pluginLoader } from '../../plugins/loader';
-import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../../host/plugin-discovery';
-import { CoverageManager } from '../../coverage/coverage-manager';
-import { CoverageReportGenerator } from '../../coverage/coverage-report-generator';
+import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../../plugin-adapters';
+import { coverageRegistry } from '../../coverage/coverage-registry';
 import { credentialManager } from '../../credentials/credential-manager';
 import {
   addSession,
@@ -66,12 +63,8 @@ export const sessionRouter = t.router({
       }
       const simulation = new PluginBackedSimulation(registry);
       const coverage = new PluginBackedCoverage(project.rootPath, registry);
-      // 构建 CoverageManager 供 Host Tools / Host URIs 使用（ADR 0009 摘要优先策略）
-      const coverageManager = new CoverageManager({
-        projectRoot: project.rootPath,
-        coverageAdapter: coverage,
-        reportGenerator: new CoverageReportGenerator({ projectRoot: project.rootPath }),
-      });
+      // 从 CoverageRegistry 获取 per-project 实例（ADR 0009 摘要优先策略）
+      const coverageManager = coverageRegistry.getOrCreate(project.rootPath, coverage);
 
       // Load stored credentials and build env vars for agent process
       const credEnv = await credentialManager.buildEnvForAgent();
@@ -326,11 +319,7 @@ export const sessionRouter = t.router({
         const discovery = new PluginBackedDiscovery(project.rootPath, registry);
         const simulation = new PluginBackedSimulation(registry);
         const coverage = new PluginBackedCoverage(project.rootPath, registry);
-        const coverageManager = new CoverageManager({
-          projectRoot: project.rootPath,
-          coverageAdapter: coverage,
-          reportGenerator: new CoverageReportGenerator({ projectRoot: project.rootPath }),
-        });
+        const coverageManager = coverageRegistry.getOrCreate(project.rootPath, coverage);
 
         // Capture the omp session ID for resume, then destroy the runtime session
         const ompSessionId = sessionManager.getOmpSessionId(input.sessionId);
@@ -508,11 +497,7 @@ export const sessionRouter = t.router({
       const discovery = new PluginBackedDiscovery(project.rootPath, registry);
       const simulation = new PluginBackedSimulation(registry);
       const coverage = new PluginBackedCoverage(project.rootPath, registry);
-      const coverageManager = new CoverageManager({
-        projectRoot: project.rootPath,
-        coverageAdapter: coverage,
-        reportGenerator: new CoverageReportGenerator({ projectRoot: project.rootPath }),
-      });
+      const coverageManager = coverageRegistry.getOrCreate(project.rootPath, coverage);
 
       // Load persisted session to restore model info and omp sessionId
       const persistedSessions = await loadSessions(project.rootPath);

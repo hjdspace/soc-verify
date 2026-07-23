@@ -2,7 +2,8 @@
  * Environment configuration router — EDA tool detection and env var management.
  */
 
-import { t, TRPCError, requireProject } from '../router-context';
+import { t, TRPCError } from '../router-context';
+import { requireProject } from '../../services/project-service';
 import { detectEdaTools, loadEnvConfig, saveEnvConfig, getKnownEnvVarNames } from '../../env/env-manager';
 import type { EnvConfig } from '@shared/types';
 

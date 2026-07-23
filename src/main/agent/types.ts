@@ -45,6 +45,7 @@ export type Command =
   | { id: string; type: 'setModel'; provider: string; modelId: string }
   | { id: string; type: 'getMessages' }
   | { id: string; type: 'getState' }
+  | { id: string; type: 'getMcpStatus' }
   | { id: string; type: 'destroy' };
 
 // ─── 响应（runner → host stdout）───────────────────────────

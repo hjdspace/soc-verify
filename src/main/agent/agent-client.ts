@@ -251,6 +251,18 @@ export class AgentClient {
     return this.getData<{ state: unknown }>(response).state;
   }
 
+  /**
+   * Query the omp engine's MCPManager for all known MCP servers and their
+   * runtime connection status. Returns a map of server name → { status, toolCount }.
+   *
+   * Returns an empty object if MCP is disabled or no servers are configured.
+   */
+  async getMcpStatus(): Promise<Record<string, { status: string; toolCount: number }>> {
+    const response = await this.send({ type: 'getMcpStatus' });
+    const data = this.getData<{ servers: Record<string, { status: string; toolCount: number }> }>(response);
+    return data.servers ?? {};
+  }
+
   async destroy(): Promise<void> {
     try {
       await this.send({ type: 'destroy' });

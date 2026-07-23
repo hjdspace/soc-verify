@@ -4,7 +4,9 @@
 
 import { resolve, isAbsolute } from 'node:path';
 import { createRequire } from 'node:module';
-import { t, TRPCError, requireProject, getSimulationManager, ensurePluginsLoaded } from '../router-context';
+import { t, TRPCError } from '../router-context';
+import { requireProject, ensurePluginsLoaded } from '../../services/project-service';
+import { getSimulationManager } from '../../services/simulation-service';
 import { pluginLoader } from '../../plugins/loader';
 import { terminalManager } from '../../terminal/terminal-manager';
 import { simTerminalLinker } from '../../simulation/sim-terminal-linker';

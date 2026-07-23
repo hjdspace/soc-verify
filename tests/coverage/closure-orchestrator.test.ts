@@ -30,7 +30,7 @@ import type {
   PluginBackedDiscovery,
   PluginBackedSimulation,
   PluginBackedCoverage,
-} from '../../src/main/host/plugin-discovery';
+} from '../../src/main/plugin-adapters';
 import type {
   CoverageGap,
   CoverageSummary,

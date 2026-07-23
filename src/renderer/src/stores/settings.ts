@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
-import type { CredentialEntry, CredentialInput, CredentialUpdateInput, SkillInfo, SkillInstallInfo, CreateSkillInput } from '@shared/types';
+import type { CredentialEntry, CredentialInput, CredentialUpdateInput, SkillInfo, SkillInstallInfo, CreateSkillInput, McpServerInfo, McpConfigFile } from '@shared/types';
 
 export interface ApiModel {
   id: string;
@@ -14,7 +14,8 @@ interface SettingsStoreState {
   credentials: CredentialEntry[];
   skills: SkillInfo[];
   skillInstallInfo: SkillInstallInfo | null;
-  mcpServers: string[];
+  mcpServers: McpServerInfo[];
+  mcpConfig: McpConfigFile | null;
   systemPrompt: string;
   loading: boolean;
   models: ApiModel[];
@@ -33,8 +34,9 @@ interface SettingsStoreState {
   loadSkillInstallInfo: () => Promise<void>;
   createSkill: (input: CreateSkillInput) => Promise<void>;
   uninstallSkill: (name: string) => Promise<void>;
-  loadMcpServers: () => Promise<void>;
-  setMcpConfig: (projectId: string, config: unknown) => Promise<void>;
+  loadMcpServers: (projectId: string) => Promise<void>;
+  loadMcpConfig: (projectId: string) => Promise<void>;
+  setMcpConfig: (projectId: string, config: McpConfigFile) => Promise<void>;
   loadSystemPrompt: (projectId: string) => Promise<void>;
   setSystemPrompt: (projectId: string, prompt: string) => Promise<void>;
   fetchModels: (providerId?: string, apiKey?: string, baseUrl?: string) => Promise<ApiModel[]>;
@@ -47,6 +49,7 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
   skills: [],
   skillInstallInfo: null,
   mcpServers: [],
+  mcpConfig: null,
   systemPrompt: '',
   loading: false,
   models: [],
@@ -167,10 +170,19 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
     }
   },
 
-  loadMcpServers: async () => {
+  loadMcpServers: async (projectId) => {
     try {
-      const servers = await trpc.settings.listMcpServers.query();
+      const servers = await trpc.settings.listMcpServers.query({ projectId });
       set({ mcpServers: servers });
+    } catch {
+      // Best-effort
+    }
+  },
+
+  loadMcpConfig: async (projectId) => {
+    try {
+      const config = await trpc.settings.getMcpConfig.query({ projectId });
+      set({ mcpConfig: config });
     } catch {
       // Best-effort
     }
@@ -179,6 +191,8 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
   setMcpConfig: async (projectId, config) => {
     try {
       await trpc.settings.setMcpConfig.mutate({ projectId, config });
+      // Refresh server list to reflect changes
+      await useSettingsStore.getState().loadMcpServers(projectId);
       useToastStore.getState().success('MCP 配置已保存');
     } catch (err) {
       useToastStore.getState().error('保存 MCP 配置失败', err instanceof Error ? err.message : String(err));

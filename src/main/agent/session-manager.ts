@@ -16,7 +16,7 @@ import {
   type OpenAICompatibleModel,
 } from './openai-compatible';
 import type { SubsysDiscovery } from '../host/discovery';
-import type { PluginBackedSimulation, PluginBackedCoverage } from '../host/plugin-discovery';
+import type { PluginBackedSimulation, PluginBackedCoverage } from '../plugin-adapters';
 import { HostToolsRegistry } from '../host/host-tools';
 import { HostUriRouter } from '../host/host-uris';
 import type { CoverageManager } from '../coverage/coverage-manager';
@@ -497,6 +497,21 @@ export class SessionManagerImpl extends EventEmitter {
     // Model selection is handled via the settings.fetchModels API
     // which queries the OpenAI-compatible endpoint directly.
     return [];
+  }
+
+  /**
+   * Query the omp engine's MCPManager for all known MCP servers and their
+   * runtime connection status. Returns a map of server name → { status, toolCount },
+   * or undefined if the session doesn't exist.
+   */
+  async getMcpStatus(sessionId: string): Promise<Record<string, { status: string; toolCount: number }> | undefined> {
+    const client = this.sessions.get(sessionId)?.client;
+    if (!client) return undefined;
+    try {
+      return await client.getMcpStatus();
+    } catch {
+      return undefined;
+    }
   }
 
   private requireClient(sessionId: string): AgentClient {

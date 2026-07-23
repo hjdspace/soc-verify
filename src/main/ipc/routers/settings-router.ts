@@ -4,7 +4,8 @@
 
 import { join } from 'node:path';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { t, TRPCError, requireProject } from '../router-context';
+import { t, TRPCError } from '../router-context';
+import { requireProject } from '../../services/project-service';
 import { credentialManager } from '../../credentials/credential-manager';
 import {
   discoverAllSkills,
@@ -14,7 +15,9 @@ import {
   readSkillContent,
 } from '../../agent/skill-discovery';
 import { fetchOpenAICompatibleModels } from '../../agent/openai-compatible';
-import type { CredentialInput, CredentialUpdateInput, CreateSkillInput } from '@shared/types';
+import { sessionManager } from '../../agent/session-manager';
+import { listMcpServers, getMcpConfig, setMcpConfig, type McpStatusMap } from '../../mcp/mcp-config';
+import type { CredentialInput, CredentialUpdateInput, CreateSkillInput, McpConfigFile } from '@shared/types';
 
 export const settingsRouter = t.router({
   getCredentials: t.procedure.query(() => {
@@ -220,23 +223,58 @@ export const settingsRouter = t.router({
       }
     }),
 
-  listMcpServers: t.procedure.query(() => {
-    return [];
-  }),
-
-  setMcpConfig: t.procedure
-    .input((raw): { projectId: string; config: unknown } => {
+  listMcpServers: t.procedure
+    .input((raw): { projectId: string } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
       }
-      return { projectId: r.projectId, config: r.config };
+      return { projectId: r.projectId };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+
+      // Query active sessions for MCP runtime status
+      let statusMap: McpStatusMap | undefined;
+      const sessionIds = sessionManager.listSessionsByProject(input.projectId);
+      for (const sid of sessionIds) {
+        try {
+          const status = await sessionManager.getMcpStatus(sid);
+          if (status && Object.keys(status).length > 0) {
+            statusMap = statusMap ? { ...statusMap, ...status } : status;
+          }
+        } catch {
+          // Session may have been retired; skip
+        }
+      }
+
+      return listMcpServers(project.rootPath, statusMap);
+    }),
+
+  getMcpConfig: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      return getMcpConfig(project.rootPath);
+    }),
+
+  setMcpConfig: t.procedure
+    .input((raw): { projectId: string; config: McpConfigFile } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId, config: r.config as McpConfigFile };
     })
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
-      const configPath = join(project.rootPath, '.socverify', 'mcp-config.json');
-      await mkdir(join(project.rootPath, '.socverify'), { recursive: true });
-      await writeFile(configPath, JSON.stringify(input.config, null, 2), 'utf-8');
+      await setMcpConfig(project.rootPath, input.config);
       return { ok: true };
     }),
 

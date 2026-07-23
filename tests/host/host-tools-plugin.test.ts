@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { HostToolsRegistry } from '../../src/main/host/host-tools';
-import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../../src/main/host/plugin-discovery';
+import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../../src/main/plugin-adapters';
 import type { PluginRegistry, SubsysDiscoveryPlugin, CaseParserPlugin, SimulationRunnerPlugin, CoverageParserPlugin } from '@shared/plugin-types';
 
 function makeRegistryWithPlugins(): PluginRegistry {

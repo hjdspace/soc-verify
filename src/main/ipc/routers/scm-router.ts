@@ -2,7 +2,8 @@
  * SCM (Source Control Management) router — git status, stage/unstage, discard, commit, AI commit message.
  */
 
-import { t, TRPCError, requireProject } from '../router-context';
+import { t, TRPCError } from '../router-context';
+import { requireProject } from '../../services/project-service';
 import { sourceControlService } from '../../scm/source-control';
 import { credentialManager } from '../../credentials/credential-manager';
 

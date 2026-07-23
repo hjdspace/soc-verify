@@ -11,8 +11,10 @@
 
 import { BrowserWindow, dialog } from 'electron';
 import { writeFile } from 'node:fs/promises';
-import { t, TRPCError, requireProject } from '../router-context';
+import { t, TRPCError } from '../router-context';
+import { requireProject } from '../../services/project-service';
 import { CoverageManager } from '../../coverage/coverage-manager';
+import { coverageRegistry } from '../../coverage/coverage-registry';
 import { ClosureManager } from '../../coverage/closure-manager';
 import { ClosureOrchestrator, type ClosureEvent } from '../../coverage/closure-orchestrator';
 import { TestPromoter } from '../../coverage/test-promoter';
@@ -29,8 +31,7 @@ import {
 import { sessionManager } from '../../agent/session-manager';
 import { credentialManager } from '../../credentials/credential-manager';
 import { pluginLoader } from '../../plugins/loader';
-import { PluginBackedCoverage } from '../../host/plugin-discovery';
-import { PluginBackedDiscovery, PluginBackedSimulation } from '../../host/plugin-discovery';
+import { PluginBackedCoverage, PluginBackedDiscovery, PluginBackedSimulation } from '../../plugin-adapters';
 import { loadEdaConfig, saveEdaConfig, normalizeConfig } from '../../coverage/eda-config';
 import type {
   EdaToolConfig,
@@ -71,12 +72,7 @@ function emitClosureEvent(event: ClosureEvent): void {
 function buildManager(projectRoot: string): CoverageManager {
   const registry = pluginLoader.getRegistry(projectRoot);
   const adapter = new PluginBackedCoverage(projectRoot, registry);
-  const reportGenerator = new CoverageReportGenerator({ projectRoot });
-  return new CoverageManager({
-    projectRoot,
-    coverageAdapter: adapter,
-    reportGenerator,
-  });
+  return coverageRegistry.getOrCreate(projectRoot, adapter);
 }
 
 /** 构建 ClosureManager 实例（复用 buildManager 的 CoverageManager）。 */

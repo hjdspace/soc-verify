@@ -100,6 +100,7 @@ type Command =
 	| { id: string; type: "setModel"; provider: string; modelId: string }
 	| { id: string; type: "getMessages" }
 	| { id: string; type: "getState" }
+	| { id: string; type: "getMcpStatus" }
 	| { id: string; type: "destroy" };
 
 interface ToolResultMessage {
@@ -391,6 +392,41 @@ async function handleGetState(cmd: Command & { type: "getState" }): Promise<void
 	sendResponse(cmd.id, true, { state });
 }
 
+async function handleGetMcpStatus(cmd: Command & { type: "getMcpStatus" }): Promise<void> {
+	if (!session) throw new Error("Session not initialized");
+
+	try {
+		// Access the MCPManager from the session. The SDK creates a singleton
+		// MCPManager.instance() that manages all MCP connections. We query it
+		// for all known servers and their connection status.
+		const { MCPManager } = await import(
+			"../engine/oh-my-pi/packages/coding-agent/src/mcp/manager"
+		);
+		const manager = MCPManager.instance();
+		const allNames = manager.getAllServerNames();
+
+		const statusMap: Record<string, { status: string; toolCount: number }> = {};
+		for (const name of allNames) {
+			const status = manager.getConnectionStatus(name);
+			let toolCount = 0;
+			if (status === "connected") {
+				try {
+					const conn = manager.getConnection(name);
+					toolCount = conn?.tools?.length ?? 0;
+				} catch {
+					// best-effort
+				}
+			}
+			statusMap[name] = { status, toolCount };
+		}
+
+		sendResponse(cmd.id, true, { servers: statusMap });
+	} catch (err) {
+		// If MCPManager is not available (e.g. enableMCP was false), return empty.
+		sendResponse(cmd.id, true, { servers: {} });
+	}
+}
+
 async function handleDestroy(cmd: Command & { type: "destroy" }): Promise<void> {
 	if (unsubscribe) {
 		unsubscribe();
@@ -429,6 +465,9 @@ async function handleCommand(cmd: Command): Promise<void> {
 				break;
 			case "getState":
 				await handleGetState(cmd);
+				break;
+			case "getMcpStatus":
+				await handleGetMcpStatus(cmd);
 				break;
 			case "destroy":
 				await handleDestroy(cmd);

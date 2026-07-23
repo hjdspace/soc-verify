@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../../src/main/host/plugin-discovery';
+import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../../src/main/plugin-adapters';
 import type { PluginRegistry, SubsysDiscoveryPlugin, CaseParserPlugin, SimOptionSchemaProvider, SimulationRunnerPlugin, CoverageParserPlugin } from '@shared/plugin-types';
 
 // ─── Mock Plugins ─────────────────────────────────────

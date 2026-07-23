@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SimulationManager } from '../../src/main/simulation/simulation-manager';
-import type { PluginBackedSimulation } from '../../src/main/host/plugin-discovery';
+import type { PluginBackedSimulation } from '../../src/main/plugin-adapters';
 import type { SimulationRunHandle, SimulationRunStatus, CompileError } from '../../src/shared/plugin-types';
 
 function createMockAdapter(overrides: Partial<PluginBackedSimulation> = {}): PluginBackedSimulation {

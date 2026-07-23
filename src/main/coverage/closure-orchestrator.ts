@@ -35,7 +35,7 @@ import type { ClosureManager } from './closure-manager';
 import type { ClosureGap, ClosureSession } from './closure-manager';
 import type { CoverageManager } from './coverage-manager';
 import type { SessionManagerImpl } from '../agent/session-manager';
-import type { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../host/plugin-discovery';
+import type { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../plugin-adapters';
 
 /** Closure 事件载荷：所有事件都带 type + closureId，具体字段按 type 不同 */
 export type ClosureEvent =

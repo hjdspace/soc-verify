@@ -4,9 +4,10 @@
 
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { t, TRPCError, requireProject } from '../router-context';
+import { t, TRPCError } from '../router-context';
+import { requireProject } from '../../services/project-service';
 import { pluginLoader } from '../../plugins/loader';
-import { PluginBackedSimulation } from '../../host/plugin-discovery';
+import { PluginBackedSimulation } from '../../plugin-adapters';
 import { RegressionManager } from '../../regression/regression-manager';
 import type { SimulationHistoryEntry } from '@shared/types';
 

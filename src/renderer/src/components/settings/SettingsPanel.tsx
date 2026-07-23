@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Key, Package, Server, FileText, Plus, Trash2, Save, Download, Upload, Palette, Check, Cpu, RefreshCw, Zap, Info, BookOpen, Folder, ChevronDown, ChevronRight, Pencil } from 'lucide-react';
+import { X, Key, Package, Server, FileText, Plus, Trash2, Save, Download, Upload, Palette, Check, Cpu, RefreshCw, Zap, Info, BookOpen, Folder, ChevronDown, ChevronRight, Pencil, Terminal, Globe, Power } from 'lucide-react';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { useUiStore } from '@renderer/stores/ui';
@@ -7,7 +7,7 @@ import { useThemeStore } from '@renderer/stores/theme';
 import { useSessionStore } from '@renderer/stores/session';
 import { cn } from '@renderer/lib/utils';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
-import type { CredentialEntry, SkillInfo, CreateSkillInput } from '@shared/types';
+import type { CredentialEntry, SkillInfo, CreateSkillInput, McpConfigFile, McpServerConfig, McpTransportType } from '@shared/types';
 
 type SettingsTab = 'credentials' | 'skills' | 'mcp' | 'prompt' | 'appearance';
 
@@ -729,70 +729,475 @@ function SkillsTab() {
 
 // ── MCP Tab ──────────────────────────────────────────────
 
+const STATUS_COLORS: Record<string, string> = {
+  connected: 'bg-green-500',
+  connecting: 'bg-yellow-500 animate-pulse',
+  disconnected: 'bg-red-500',
+  not_running: 'bg-muted-foreground/40',
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  connected: '已连接',
+  connecting: '连接中',
+  disconnected: '已断开',
+  not_running: '未运行',
+};
+
+/** Form state for editing a single MCP server. */
+type ServerFormState = {
+  name: string;
+  transport: McpTransportType;
+  command: string;
+  args: string;
+  url: string;
+  enabled: boolean;
+};
+
+function serverToForm(name: string, config: McpServerConfig): ServerFormState {
+  return {
+    name,
+    transport: config.type ?? (config.url ? 'http' : 'stdio'),
+    command: config.command ?? '',
+    args: (config.args ?? []).join(' '),
+    url: config.url ?? '',
+    enabled: config.enabled !== false,
+  };
+}
+
+function formToServerConfig(form: ServerFormState): McpServerConfig {
+  if (form.transport === 'stdio') {
+    return {
+      type: 'stdio',
+      command: form.command || undefined,
+      args: form.args.trim() ? form.args.trim().split(/\s+/) : undefined,
+      enabled: form.enabled,
+    };
+  }
+  return {
+    type: form.transport,
+    url: form.url || undefined,
+    enabled: form.enabled,
+  };
+}
+
 function McpTab() {
   const setMcpConfig = useSettingsStore((s) => s.setMcpConfig);
   const loadMcpServers = useSettingsStore((s) => s.loadMcpServers);
+  const loadMcpConfig = useSettingsStore((s) => s.loadMcpConfig);
   const mcpServers = useSettingsStore((s) => s.mcpServers);
+  const mcpConfig = useSettingsStore((s) => s.mcpConfig);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
 
-  const [configText, setConfigText] = useState('{\n  "servers": []\n}');
+  const [editing, setEditing] = useState(false);
+  const [servers, setServers] = useState<Record<string, McpServerConfig>>({});
+  const [newServer, setNewServer] = useState<ServerFormState | null>(null);
+  const [jsonMode, setJsonMode] = useState(false);
+  const [jsonText, setJsonText] = useState('');
 
   useEffect(() => {
-    loadMcpServers();
-  }, [loadMcpServers]);
+    if (currentProjectId) {
+      loadMcpServers(currentProjectId);
+      loadMcpConfig(currentProjectId);
+    }
+  }, [currentProjectId, loadMcpServers, loadMcpConfig]);
+
+  // Sync config into local editing state when not editing
+  useEffect(() => {
+    if (!editing && mcpConfig) {
+      setServers(mcpConfig.mcpServers ?? {});
+    }
+  }, [mcpConfig, editing]);
+
+  const handleAddServer = () => {
+    setNewServer({
+      name: '',
+      transport: 'stdio',
+      command: '',
+      args: '',
+      url: '',
+      enabled: true,
+    });
+  };
+
+  const handleConfirmAdd = () => {
+    if (!newServer || !newServer.name.trim()) return;
+    setServers((prev) => ({
+      ...prev,
+      [newServer.name.trim()]: formToServerConfig(newServer),
+    }));
+    setNewServer(null);
+    setEditing(true);
+  };
+
+  const handleRemoveServer = (name: string) => {
+    setServers((prev) => {
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
+    setEditing(true);
+  };
+
+  const handleToggleEnabled = (name: string) => {
+    setServers((prev) => ({
+      ...prev,
+      [name]: { ...prev[name], enabled: !prev[name]?.enabled },
+    }));
+    setEditing(true);
+  };
+
+  const handleUpdateServer = (name: string, config: McpServerConfig) => {
+    setServers((prev) => ({ ...prev, [name]: config }));
+    setEditing(true);
+  };
 
   const handleSave = async () => {
     if (!currentProjectId) return;
+    const config: McpConfigFile = { mcpServers: servers };
+    await setMcpConfig(currentProjectId, config);
+    setEditing(false);
+  };
+
+  const handleSaveJson = async () => {
+    if (!currentProjectId) return;
     try {
-      const config = JSON.parse(configText);
-      await setMcpConfig(currentProjectId, config);
+      const parsed = JSON.parse(jsonText) as McpConfigFile;
+      await setMcpConfig(currentProjectId, parsed);
+      setJsonMode(false);
     } catch {
-      // JSON parse error handled by toast
+      // JSON parse error
     }
+  };
+
+  const handleLoadJson = () => {
+    const config: McpConfigFile = { mcpServers: servers };
+    setJsonText(JSON.stringify(config, null, 2));
+    setJsonMode(true);
+  };
+
+  const handleRefresh = () => {
+    if (currentProjectId) loadMcpServers(currentProjectId);
   };
 
   return (
     <div className="space-y-3">
+      {/* Server List */}
       <div>
-        <div className="mb-1.5 text-[10px] font-semibold uppercase text-muted-foreground">已配置 MCP 服务器</div>
+        <div className="mb-1.5 flex items-center justify-between">
+          <div className="text-[10px] font-semibold uppercase text-muted-foreground">已配置 MCP 服务器</div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleRefresh}
+              className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+              title="刷新"
+            >
+              <RefreshCw className="h-3 w-3" />
+            </button>
+            <button
+              onClick={handleAddServer}
+              disabled={!currentProjectId}
+              className={cn(
+                'flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                currentProjectId
+                  ? 'text-primary hover:bg-primary/10'
+                  : 'cursor-not-allowed text-muted-foreground/50',
+              )}
+            >
+              <Plus className="h-3 w-3" />
+              添加
+            </button>
+          </div>
+        </div>
+
         {mcpServers.length === 0 ? (
-          <p className="text-xs text-muted-foreground">暂无 MCP 服务器</p>
+          <p className="text-xs text-muted-foreground">
+            暂无 MCP 服务器。点击「添加」按钮配置，或编辑 JSON 配置。
+          </p>
         ) : (
           <div className="space-y-1">
             {mcpServers.map((s) => (
-              <div key={s} className="flex items-center gap-2 rounded border border-border/50 bg-secondary/20 px-2 py-1.5">
-                <Server className="h-3 w-3 text-muted-foreground" />
-                <span className="text-xs font-mono">{s}</span>
+              <div
+                key={s.name}
+                className="flex items-center gap-2 rounded border border-border/50 bg-secondary/20 px-2 py-1.5"
+              >
+                {/* Status indicator */}
+                <div
+                  className={cn('h-2 w-2 shrink-0 rounded-full', STATUS_COLORS[s.status])}
+                  title={STATUS_LABELS[s.status]}
+                />
+
+                {/* Transport icon */}
+                {s.transport === 'stdio' ? (
+                  <Terminal className="h-3 w-3 shrink-0 text-muted-foreground" />
+                ) : (
+                  <Globe className="h-3 w-3 shrink-0 text-muted-foreground" />
+                )}
+
+                {/* Name + summary */}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate font-mono text-xs font-medium">{s.name}</span>
+                    {!s.enabled && (
+                      <span className="rounded bg-muted px-1 py-0.5 text-[9px] text-muted-foreground">已禁用</span>
+                    )}
+                    {s.toolCount > 0 && (
+                      <span className="text-[9px] text-muted-foreground">{s.toolCount} tools</span>
+                    )}
+                  </div>
+                  <div className="truncate text-[10px] text-muted-foreground">{s.summary}</div>
+                </div>
+
+                {/* Source badge */}
+                <span className={cn(
+                  'shrink-0 rounded px-1 py-0.5 text-[9px] font-medium',
+                  s.source === 'project' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
+                )}>
+                  {s.source === 'project' ? '项目' : '用户'}
+                </span>
+
+                {/* Toggle enabled */}
+                <button
+                  onClick={() => handleToggleEnabled(s.name)}
+                  className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  title={s.enabled ? '禁用' : '启用'}
+                >
+                  <Power className={cn('h-3 w-3', s.enabled ? 'text-green-500' : 'text-muted-foreground/40')} />
+                </button>
+
+                {/* Remove (only for project-level servers) */}
+                {s.source === 'project' && (
+                  <button
+                    onClick={() => handleRemoveServer(s.name)}
+                    className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    title="删除"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                )}
               </div>
             ))}
           </div>
         )}
       </div>
 
-      <div className="rounded-md border border-border/50 bg-secondary/20 p-2">
-        <div className="mb-1.5 text-[10px] font-semibold uppercase text-muted-foreground">MCP 配置 (JSON)</div>
-        <textarea
-          value={configText}
-          onChange={(e) => setConfigText(e.target.value)}
-          rows={8}
-          className="w-full rounded border border-border bg-background px-2 py-1 font-mono text-xs outline-none focus:ring-1 focus:ring-primary"
-        />
-        <div className="mt-1.5 flex justify-end">
-          <button
-            onClick={handleSave}
-            disabled={!currentProjectId}
-            className={cn(
-              'flex items-center gap-1 rounded px-2.5 py-1 text-[10px] font-medium transition-colors',
-              currentProjectId
-                ? 'bg-primary text-primary-foreground hover:bg-primary/90'
-                : 'cursor-not-allowed bg-muted text-muted-foreground',
-            )}
-          >
-            <Save className="h-3 w-3" />
-            保存配置
-          </button>
+      {/* Add new server form */}
+      {newServer && (
+        <div className="rounded-md border border-primary/30 bg-secondary/20 p-2.5 space-y-2">
+          <div className="text-[10px] font-semibold uppercase text-primary">添加 MCP 服务器</div>
+          <input
+            value={newServer.name}
+            onChange={(e) => setNewServer({ ...newServer, name: e.target.value })}
+            placeholder="服务器名称（如 filesystem）"
+            className="w-full rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
+          />
+          <div className="flex items-center gap-2">
+            <label className="text-[10px] text-muted-foreground">传输方式</label>
+            <select
+              value={newServer.transport}
+              onChange={(e) => setNewServer({ ...newServer, transport: e.target.value as McpTransportType })}
+              className="rounded border border-border bg-background px-1.5 py-0.5 text-xs outline-none focus:ring-1 focus:ring-primary"
+            >
+              <option value="stdio">stdio (本地命令)</option>
+              <option value="http">http (HTTP 服务器)</option>
+              <option value="sse">sse (SSE 服务器)</option>
+            </select>
+          </div>
+          {newServer.transport === 'stdio' ? (
+            <>
+              <input
+                value={newServer.command}
+                onChange={(e) => setNewServer({ ...newServer, command: e.target.value })}
+                placeholder="命令（如 npx）"
+                className="w-full rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
+              />
+              <input
+                value={newServer.args}
+                onChange={(e) => setNewServer({ ...newServer, args: e.target.value })}
+                placeholder="参数（空格分隔，如 -y @modelcontextprotocol/server-filesystem /tmp）"
+                className="w-full rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
+              />
+            </>
+          ) : (
+            <input
+              value={newServer.url}
+              onChange={(e) => setNewServer({ ...newServer, url: e.target.value })}
+              placeholder="URL（如 https://api.example.com/mcp）"
+              className="w-full rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
+            />
+          )}
+          <div className="flex justify-end gap-1.5">
+            <button
+              onClick={() => setNewServer(null)}
+              className="rounded px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-accent"
+            >
+              取消
+            </button>
+            <button
+              onClick={handleConfirmAdd}
+              disabled={!newServer.name.trim()}
+              className={cn(
+                'flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium transition-colors',
+                newServer.name.trim()
+                  ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                  : 'cursor-not-allowed bg-muted text-muted-foreground',
+              )}
+            >
+              <Check className="h-3 w-3" />
+              确认
+            </button>
+          </div>
         </div>
+      )}
+
+      {/* Inline editing of existing servers */}
+      {editing && Object.keys(servers).length > 0 && (
+        <div className="rounded-md border border-border/50 bg-secondary/20 p-2 space-y-1.5">
+          <div className="text-[10px] font-semibold uppercase text-muted-foreground">编辑服务器配置</div>
+          {Object.entries(servers).map(([name, config]) => (
+            <ServerEditRow
+              key={name}
+              name={name}
+              config={config}
+              onChange={(c) => handleUpdateServer(name, c)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* JSON mode editor / actions */}
+      <div className="rounded-md border border-border/50 bg-secondary/20 p-2">
+        <div className="mb-1.5 flex items-center justify-between">
+          <div className="text-[10px] font-semibold uppercase text-muted-foreground">
+            {jsonMode ? 'JSON 配置编辑' : '高级操作'}
+          </div>
+          {!jsonMode && (
+            <button
+              onClick={handleLoadJson}
+              disabled={!currentProjectId}
+              className={cn(
+                'flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                currentProjectId
+                  ? 'text-primary hover:bg-primary/10'
+                  : 'cursor-not-allowed text-muted-foreground/50',
+              )}
+            >
+              <FileText className="h-3 w-3" />
+              JSON 模式
+            </button>
+          )}
+        </div>
+
+        {jsonMode ? (
+          <>
+            <p className="mb-1.5 text-[10px] text-muted-foreground">
+              格式: <code className="font-mono">{'{ "mcpServers": { ... } }'}</code>
+            </p>
+            <textarea
+              value={jsonText}
+              onChange={(e) => setJsonText(e.target.value)}
+              rows={10}
+              spellCheck={false}
+              className="w-full rounded border border-border bg-background px-2 py-1 font-mono text-xs outline-none focus:ring-1 focus:ring-primary"
+            />
+            <div className="mt-1.5 flex justify-end gap-1.5">
+              <button
+                onClick={() => setJsonMode(false)}
+                className="rounded px-2 py-0.5 text-[10px] text-muted-foreground hover:bg-accent"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleSaveJson}
+                disabled={!currentProjectId}
+                className={cn(
+                  'flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium transition-colors',
+                  currentProjectId
+                    ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                    : 'cursor-not-allowed bg-muted text-muted-foreground',
+                )}
+              >
+                <Save className="h-3 w-3" />
+                保存 JSON
+              </button>
+            </div>
+          </>
+        ) : (
+          <div className="flex justify-end">
+            <button
+              onClick={handleSave}
+              disabled={!currentProjectId || !editing}
+              className={cn(
+                'flex items-center gap-1 rounded px-2.5 py-1 text-[10px] font-medium transition-colors',
+                currentProjectId && editing
+                  ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                  : 'cursor-not-allowed bg-muted text-muted-foreground',
+              )}
+            >
+              <Save className="h-3 w-3" />
+              保存配置
+            </button>
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+/** Inline editing row for a single MCP server. */
+function ServerEditRow({
+  name,
+  config,
+  onChange,
+}: {
+  name: string;
+  config: McpServerConfig;
+  onChange: (config: McpServerConfig) => void;
+}) {
+  const [form, setForm] = useState(() => serverToForm(name, config));
+
+  const update = (patch: Partial<ServerFormState>) => {
+    const next = { ...form, ...patch };
+    setForm(next);
+    onChange(formToServerConfig(next));
+  };
+
+  return (
+    <div className="rounded border border-border/30 bg-background/50 p-1.5 space-y-1">
+      <div className="flex items-center gap-2">
+        <span className="font-mono text-[10px] font-medium">{name}</span>
+        <select
+          value={form.transport}
+          onChange={(e) => update({ transport: e.target.value as McpTransportType })}
+          className="rounded border border-border bg-background px-1 py-0.5 text-[10px] outline-none focus:ring-1 focus:ring-primary"
+        >
+          <option value="stdio">stdio</option>
+          <option value="http">http</option>
+          <option value="sse">sse</option>
+        </select>
+      </div>
+      {form.transport === 'stdio' ? (
+        <>
+          <input
+            value={form.command}
+            onChange={(e) => update({ command: e.target.value })}
+            placeholder="command"
+            className="w-full rounded border border-border/50 bg-background px-1.5 py-0.5 font-mono text-[10px] outline-none focus:ring-1 focus:ring-primary"
+          />
+          <input
+            value={form.args}
+            onChange={(e) => update({ args: e.target.value })}
+            placeholder="args (space-separated)"
+            className="w-full rounded border border-border/50 bg-background px-1.5 py-0.5 font-mono text-[10px] outline-none focus:ring-1 focus:ring-primary"
+          />
+        </>
+      ) : (
+        <input
+          value={form.url}
+          onChange={(e) => update({ url: e.target.value })}
+          placeholder="url"
+          className="w-full rounded border border-border/50 bg-background px-1.5 py-0.5 font-mono text-[10px] outline-none focus:ring-1 focus:ring-primary"
+        />
+      )}
     </div>
   );
 }

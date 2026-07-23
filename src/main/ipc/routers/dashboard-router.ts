@@ -4,10 +4,11 @@
 
 import { join } from 'node:path';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { t, TRPCError, requireProject } from '../router-context';
+import { t, TRPCError } from '../router-context';
+import { requireProject } from '../../services/project-service';
 import { pluginLoader } from '../../plugins/loader';
-import { PluginBackedCoverage, PluginBackedSimulation } from '../../host/plugin-discovery';
-import { CoverageManager } from '../../coverage/coverage-manager';
+import { PluginBackedCoverage, PluginBackedSimulation } from '../../plugin-adapters';
+import { coverageRegistry } from '../../coverage/coverage-registry';
 import { RegressionManager } from '../../regression/regression-manager';
 import type { SimulationHistoryEntry, CoverageSummary } from '@shared/types';
 
@@ -42,7 +43,7 @@ export const dashboardRouter = t.router({
       let coverageOverview: CoverageSummary | null = null;
       try {
         const covAdapter = new PluginBackedCoverage(project.rootPath, registry);
-        const covMgr = new CoverageManager({ projectRoot: project.rootPath, coverageAdapter: covAdapter });
+        const covMgr = coverageRegistry.getOrCreate(project.rootPath, covAdapter);
         coverageOverview = (await covMgr.getOverview()).summary;
       } catch {
         // No coverage data

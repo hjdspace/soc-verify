@@ -2,18 +2,16 @@
  * ErrorAnalysisCoordinator — 仿真失败自动 AI 分析协调器
  *
  * 监听 simulationRegistry 和 simTerminalLinker 的 run:completed 事件，
- * 检测 FAIL 状态后自动触发错误分析流程：
+ * 检测 FAIL 状态后委托 ErrorAnalysisSessionFactory 创建分析会话。
  *
- * 1. 判定错误类型（编译错误 / 仿真错误）
- * 2. 提取错误上下文
- * 3. 创建独立的 AI Agent 会话
- * 4. 发送错误上下文作为首条消息
- * 5. 跟踪重试次数（最大 3 次）
+ * 职责：
+ * 1. 事件监听（background + terminal 双通道）
+ * 2. 错误类型判定（委托 logAnalyzer）
+ * 3. 重试次数追踪（最大 3 次）
+ * 4. 会话生命周期管理（创建/状态更新/移除）
  *
- * 编译错误 → AI 自动修复代码 + 调用 runsim_retry 重新仿真
- * 仿真错误 → AI 给出修复建议（不修改文件）
- *
- * 每个失败的 case 拥有独立的 AI Agent 会话，支持并行处理。
+ * 会话创建 + 工具注册 + prompt 发送 → ErrorAnalysisSessionFactory
+ * Prompt 模板 → error-analysis-prompts.ts
  */
 
 import { EventEmitter } from 'node:events';
@@ -23,11 +21,8 @@ import { simTerminalLinker } from './sim-terminal-linker';
 import { sessionManager } from '../agent/session-manager';
 import { pluginLoader } from '../plugins/loader';
 import { credentialManager } from '../credentials/credential-manager';
-import { PluginBackedDiscovery } from '../host/plugin-discovery';
-import { PluginBackedSimulation } from '../host/plugin-discovery';
-import { PluginBackedCoverage } from '../host/plugin-discovery';
-import { HostToolsRegistry } from '../host/host-tools';
-import { runsimRetryToolDefinition, executeRunsimRetry } from './runsim-retry-tool';
+import { ErrorAnalysisSessionFactory } from './error-analysis-session-factory';
+import { projectManager } from '../project/project-manager';
 
 /**
  * Dependencies required by the coordinator.
@@ -54,36 +49,6 @@ import type { TerminalSimRun } from './sim-terminal-linker';
 
 const MAX_RETRIES = 3;
 
-// ─── System Prompt 模板 ───────────────────────────────────────
-
-const COMPILE_ERROR_SYSTEM_PROMPT = `You are an EDA verification expert specializing in SystemVerilog and hardware verification.
-
-Your task:
-1. Analyze the compilation errors provided in the context
-2. Identify the root cause of each error
-3. Fix the source code files by editing them directly
-4. After fixing, call the runsim_retry tool to re-run the simulation and verify the fix
-
-Important guidelines:
-- Focus on fixing the actual compilation errors, not style issues
-- Preserve the original intent of the code
-- If multiple files need fixing, fix them all before re-running
-- Use the runsim_retry tool with the case name and working directory provided`;
-
-const SIM_ERROR_SYSTEM_PROMPT = `You are an EDA verification expert specializing in SystemVerilog and UVM methodology.
-
-Your task:
-1. Analyze the simulation errors provided in the context
-2. Identify the root cause of each error (UVM_ERROR, UVM_FATAL, assertion failures, etc.)
-3. Provide specific fix recommendations with code snippets
-
-Important guidelines:
-- Do NOT modify any files in this session — only provide analysis and recommendations
-- Explain WHY the error occurs, not just WHAT to change
-- Provide code snippets showing the recommended fix
-- If the error is a testbench issue, suggest specific changes
-- If the error is a DUT issue, describe what might be wrong in the design`;
-
 // ─── Coordinator ─────────────────────────────────────────────
 
 interface CoordinatorSessionEntry {
@@ -105,6 +70,7 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
   private retryTracker = new Map<string, number>();
   private listenersRegistered = false;
   private readonly deps: CoordinatorDeps;
+  private readonly sessionFactory: ErrorAnalysisSessionFactory;
 
   constructor(deps?: Partial<CoordinatorDeps>) {
     super();
@@ -116,6 +82,11 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
       pluginLoader: deps?.pluginLoader ?? pluginLoader,
       credentialManager: deps?.credentialManager ?? credentialManager,
     };
+    this.sessionFactory = new ErrorAnalysisSessionFactory({
+      sessionManager: this.deps.sessionManager,
+      pluginLoader: this.deps.pluginLoader,
+      credentialManager: this.deps.credentialManager,
+    });
   }
 
   /**
@@ -210,16 +181,26 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
 
     console.log(`[error-analysis] errorType=${errorType}, compileLog=${compileLogPath}, simLog=${simLogPath}`);
 
-    // Step 2: Create AI Agent session
+    // Step 2: Create AI Agent session via factory
     try {
-      const sessionId = await this.createErrorAnalysisSession({
+      const sessionId = await this.sessionFactory.createSession({
         projectId,
         caseName,
         errorType,
         cwd: projectRoot,
         errorContext,
         command,
-        sourceRunId: runId,
+        maxRetries: MAX_RETRIES,
+        onRetry: (name, sid) => {
+          const count = this.retryTracker.get(name) ?? 0;
+          this.retryTracker.set(name, count + 1);
+          this.emit('errorAnalysis:retrying', {
+            sessionId: sid,
+            caseName: name,
+            retryCount: count + 1,
+            maxRetries: MAX_RETRIES,
+          });
+        },
       });
 
       // Track the session
@@ -259,157 +240,9 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
   }
 
   /**
-   * Create an AI Agent session for error analysis.
-   * Reuses sessionManager.createSession() with error-type-specific system prompt.
-   */
-  private async createErrorAnalysisSession(params: {
-    projectId: string;
-    caseName: string;
-    errorType: ErrorType;
-    cwd: string;
-    errorContext: string;
-    command?: string;
-    sourceRunId?: string;
-  }): Promise<string> {
-    const { projectId, caseName, errorType, cwd, errorContext, command } = params;
-
-    // Build system prompt based on error type
-    const systemPrompt =
-      errorType === 'compile_error'
-        ? COMPILE_ERROR_SYSTEM_PROMPT
-        : SIM_ERROR_SYSTEM_PROMPT;
-
-    // Set up discovery and simulation adapters
-    const registry = this.deps.pluginLoader.getRegistry(cwd);
-    const discovery = new PluginBackedDiscovery(cwd, registry);
-    const simulation = new PluginBackedSimulation(registry);
-    const coverage = new PluginBackedCoverage(cwd, registry);
-
-    // Load credentials
-    const credEnv = await this.deps.credentialManager.buildEnvForAgent();
-    const defaultCred = await this.deps.credentialManager.getDefaultCredential();
-    const provider = defaultCred
-      ? this.deps.credentialManager.mapProviderForAgent(defaultCred.providerId)
-      : undefined;
-    const apiKey = defaultCred?.apiKey;
-    const baseUrl = defaultCred?.baseUrl;
-
-    // Create the session
-    const sessionId = await this.deps.sessionManager.createSession({
-      projectId,
-      cwd,
-      provider,
-      model: undefined,
-      apiKey,
-      baseUrl,
-      discovery,
-      simulationAdapter: simulation,
-      coverageAdapter: coverage,
-      env: credEnv,
-      systemPrompt,
-    });
-
-    // Register runsim_retry tool for compile error sessions
-    const sessionEntry = this.deps.sessionManager.getSession(sessionId);
-    if (sessionEntry && errorType === 'compile_error') {
-      sessionEntry.hostTools.registerCustom(
-        runsimRetryToolDefinition.name,
-        runsimRetryToolDefinition.description,
-        runsimRetryToolDefinition.parameters,
-        async (args: Record<string, unknown>) => {
-          const result = await executeRunsimRetry({
-            case: typeof args.case === 'string' ? args.case : caseName,
-            command: typeof args.command === 'string' ? args.command : command,
-            cwd: typeof args.cwd === 'string' ? args.cwd : cwd,
-            projectId,
-            mode: typeof args.mode === 'string' ? (args.mode as 'terminal' | 'background') : 'terminal',
-          });
-          // Track the retry
-          const currentCount = this.retryTracker.get(caseName) ?? 0;
-          this.retryTracker.set(caseName, currentCount + 1);
-          this.emit('errorAnalysis:retrying', {
-            sessionId,
-            caseName,
-            retryCount: currentCount + 1,
-            maxRetries: MAX_RETRIES,
-          });
-          return { content: [{ type: 'text', text: JSON.stringify(result) }] };
-        },
-      );
-    }
-
-    // Build the error analysis prompt message
-    const promptMessage = this.buildPromptMessage({
-      caseName,
-      errorType,
-      errorContext,
-      command,
-    });
-
-    // Send the error context as the first message
-    const client = this.deps.sessionManager.getClient(sessionId);
-    if (client) {
-      await client.prompt(promptMessage);
-    }
-
-    return sessionId;
-  }
-
-  /**
-   * Build the prompt message to send to the AI Agent.
-   */
-  private buildPromptMessage(params: {
-    caseName: string;
-    errorType: ErrorType;
-    errorContext: string;
-    command?: string;
-  }): string {
-    const { caseName, errorType, errorContext, command } = params;
-
-    const parts: string[] = [
-      `## 仿真失败错误分析请求`,
-      ``,
-      `**用例名称**: ${caseName}`,
-    ];
-
-    if (command) {
-      parts.push(`**执行命令**: \`${command}\``);
-    }
-
-    parts.push(
-      `**错误类型**: ${errorType === 'compile_error' ? '编译错误' : '仿真错误'}`,
-      ``,
-      `### 错误上下文`,
-      ``,
-      '```',
-      errorContext,
-      '```',
-      ``,
-    );
-
-    if (errorType === 'compile_error') {
-      parts.push(
-        `请分析上述编译错误，修复源代码文件，然后调用 runsim_retry 工具重新运行仿真验证修复效果。`,
-        `如果修复后仍有编译错误，继续修复直到编译通过。`,
-        `最多重试 ${MAX_RETRIES} 次。`,
-      );
-    } else {
-      parts.push(
-        `请分析上述仿真错误，给出详细的修复建议。`,
-        `包括：错误原因分析、推荐修复方案、相关代码片段。`,
-        `注意：本会话仅提供分析建议，不需要修改文件。`,
-      );
-    }
-
-    return parts.join('\n');
-  }
-
-  /**
    * Resolve project root from projectId.
    */
   private resolveProjectRoot(projectId: string): string | undefined {
-    // Lazy import to avoid circular dependency
-    const { projectManager } = require('../project/project-manager');
     const project = projectManager.getProject(projectId);
     return project?.rootPath;
   }
@@ -491,14 +324,24 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
       projectRoot,
     );
 
-    const sessionId = await this.createErrorAnalysisSession({
+    const sessionId = await this.sessionFactory.createSession({
       projectId: params.projectId,
       caseName: params.caseName,
       errorType,
       cwd: projectRoot,
       errorContext,
       command: params.command,
-      sourceRunId: params.sourceRunId,
+      maxRetries: MAX_RETRIES,
+      onRetry: (name, sid) => {
+        const count = this.retryTracker.get(name) ?? 0;
+        this.retryTracker.set(name, count + 1);
+        this.emit('errorAnalysis:retrying', {
+          sessionId: sid,
+          caseName: name,
+          retryCount: count + 1,
+          maxRetries: MAX_RETRIES,
+        });
+      },
     });
 
     const entry: CoordinatorSessionEntry = {

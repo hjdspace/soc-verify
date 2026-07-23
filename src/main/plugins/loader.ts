@@ -303,22 +303,3 @@ class PluginLoaderImpl {
 }
 
 export const pluginLoader = new PluginLoaderImpl();
-
-// Legacy exports for backward compatibility
-export const pluginRegistry: PluginRegistry = emptyRegistry();
-
-export async function loadPlugins(projectRoot: string): Promise<void> {
-  await pluginLoader.loadPlugins(projectRoot);
-}
-
-export function registerPlugin(_manifest: PluginManifest): void {
-  // Deprecated: use PluginLoader.loadPlugins() instead
-}
-
-export function clearPlugins(): void {
-  pluginRegistry.caseParsers.length = 0;
-  pluginRegistry.subsysDiscoverers.length = 0;
-  pluginRegistry.coverageParsers.length = 0;
-  pluginRegistry.simulationRunners.length = 0;
-  pluginRegistry.simOptionSchemaProviders.length = 0;
-}

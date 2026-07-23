@@ -4,7 +4,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import type { AgentToolResult, RpcHostToolCallRequest, RpcHostToolDefinition } from './types';
 import type { SubsysDiscovery, CaseStatus } from './discovery';
 import { NoopDiscovery } from './discovery';
-import type { PluginBackedSimulation, PluginBackedCoverage } from './plugin-discovery';
+import type { PluginBackedSimulation, PluginBackedCoverage } from '../plugin-adapters';
 import type { CoverageManager } from '../coverage/coverage-manager';
 
 type HostToolHandler = (args: Record<string, unknown>) => Promise<AgentToolResult | string>;

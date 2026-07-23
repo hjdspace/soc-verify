@@ -4,7 +4,8 @@
 
 import { join } from 'node:path';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { t, TRPCError, requireProject } from '../router-context';
+import { t, TRPCError } from '../router-context';
+import { requireProject } from '../../services/project-service';
 import type { TOChecklistItem } from '@shared/types';
 
 export const toRouter = t.router({

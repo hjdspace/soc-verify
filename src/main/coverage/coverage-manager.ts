@@ -37,7 +37,7 @@ import {
   DEFAULT_COVERAGE_TARGETS,
   COVERAGE_METRICS,
 } from '@shared/types';
-import type { PluginBackedCoverage } from '../host/plugin-discovery';
+import type { PluginBackedCoverage } from '../plugin-adapters';
 import { CoverageReportGenerator } from './coverage-report-generator';
 
 const SOCVERIFY_DIR = '.socverify';

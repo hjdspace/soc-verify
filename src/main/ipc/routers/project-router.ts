@@ -6,10 +6,11 @@ import { join, relative } from 'node:path';
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { exec } from 'node:child_process';
 import { dialog, shell } from 'electron';
-import { t, TRPCError, requireProject, ensurePluginsLoaded } from '../router-context';
+import { t, TRPCError } from '../router-context';
+import { requireProject, ensurePluginsLoaded } from '../../services/project-service';
 import { projectManager } from '../../project/project-manager';
 import { pluginLoader } from '../../plugins/loader';
-import { PluginBackedDiscovery } from '../../host/plugin-discovery';
+import { PluginBackedDiscovery } from '../../plugin-adapters';
 import type { CaseStatus } from '../../host/discovery';
 import { getFileDiff, applyRejections } from '../../diff/diff-engine';
 import type {
