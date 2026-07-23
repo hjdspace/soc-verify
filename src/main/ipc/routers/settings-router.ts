@@ -11,6 +11,7 @@ import {
   createUserSkill,
   deleteUserSkill,
   getSkillInstallInfo,
+  readSkillContent,
 } from '../../agent/skill-discovery';
 import { fetchOpenAICompatibleModels } from '../../agent/openai-compatible';
 import type { CredentialInput, CredentialUpdateInput, CreateSkillInput } from '@shared/types';
@@ -135,6 +136,25 @@ export const settingsRouter = t.router({
   listSkills: t.procedure.query(async () => {
     return discoverAllSkills();
   }),
+
+  readSkill: t.procedure
+    .input((raw): { filePath: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.filePath !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'filePath is required' });
+      }
+      return { filePath: r.filePath };
+    })
+    .query(async ({ input }) => {
+      try {
+        return await readSkillContent(input.filePath);
+      } catch (err) {
+        throw new TRPCError({
+          code: 'INTERNAL_SERVER_ERROR',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }),
 
   getSkillInstallInfo: t.procedure.query(async () => {
     return getSkillInstallInfo();
