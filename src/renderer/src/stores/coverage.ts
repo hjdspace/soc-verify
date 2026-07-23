@@ -153,6 +153,7 @@ interface CoverageStoreState {
     covMergeDir: string,
     edaConfig?: EdaToolConfig,
   ) => Promise<string | null>;
+  browseDirectory: (defaultPath?: string) => Promise<string | null>;
   setSessionId: (sessionId: string | null) => void;
 
   // ─── Closure 操作（Slice 6b） ────────────────────────────────
@@ -365,6 +366,17 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
   },
 
   setSessionId: (sessionId) => set({ currentSessionId: sessionId }),
+
+  browseDirectory: async (defaultPath) => {
+    try {
+      const result = await trpc.coverage.browseDirectory.mutate({ defaultPath });
+      if (result.canceled || !result.path) return null;
+      return result.path;
+    } catch (err) {
+      useToastStore.getState().error('选择目录失败', err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  },
 
   // ─── Closure 实现（Slice 6b） ─────────────────────────────
 
