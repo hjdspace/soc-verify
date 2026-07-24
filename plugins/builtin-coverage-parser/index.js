@@ -754,6 +754,208 @@ function scanCovMergeDir(covMergeDir, log) {
   }
 }
 
+// ─── 测试用例贡献度报告解析 ──────────────────────────────────
+
+/**
+ * 解析测试用例贡献度报告。
+ *
+ * 支持两种格式：
+ * 1. VCS urg -grade testfile 输出（gradedtests.txt）:
+ *    Test file: testname1
+ *    Score: 95.50
+ *    Rank: 1
+ *
+ * 2. Cadence IMC report -test 输出（grade.txt）:
+ *    Name             Line%   Branch%   Toggle%   ...
+ *    testname1        95.5    87.2      76.0      ...
+ */
+function parseGradeReport(text, log) {
+  if (!text || !text.trim()) return null;
+  var contributions = [];
+
+  // 尝试 urg 格式（Test file: + Score: + Rank:）
+  var urgPattern = /Test\s*file\s*:\s*(\S+)/gi;
+  var urgMatches = [];
+  var match;
+  while ((match = urgPattern.exec(text)) !== null) {
+    urgMatches.push(match[1]);
+  }
+
+  if (urgMatches.length > 0) {
+    // urg -grade testfile 格式
+    var scorePattern = /Score\s*:\s*([0-9.]+)/gi;
+    var rankPattern = /Rank\s*:\s*(\d+)/gi;
+    var scores = [];
+    var ranks = [];
+    while ((match = scorePattern.exec(text)) !== null) scores.push(parseFloat(match[1]));
+    while ((match = rankPattern.exec(text)) !== null) ranks.push(parseInt(match[1], 10));
+
+    for (var i = 0; i < urgMatches.length; i++) {
+      contributions.push({
+        testName: urgMatches[i],
+        score: i < scores.length ? scores[i] : undefined,
+        rank: i < ranks.length ? ranks[i] : undefined,
+      });
+    }
+    if (log) log('[parseGradeReport] urg format: ' + contributions.length + ' tests');
+    return contributions;
+  }
+
+  // 尝试 IMC report -test 格式（表格）
+  // 找到表头行（包含 % 或 test/name 等关键词）
+  var lines = text.split('\n');
+  var headerIdx = -1;
+  var metricColumns = []; // {colIdx, metric}
+
+  for (var li = 0; li < lines.length; li++) {
+    var lower = lines[li].toLowerCase();
+    if (lower.indexOf('test') >= 0 && lower.indexOf('%') >= 0 ||
+        (lower.indexOf('name') >= 0 && lower.indexOf('line') >= 0)) {
+      headerIdx = li;
+      var parts = lines[li].split(/\s+/);
+      for (var pi = 0; pi < parts.length; pi++) {
+        var pLower = parts[pi].toLowerCase().replace('%', '');
+        if (METRIC_NAME_MAP[pLower]) {
+          metricColumns.push({ colIdx: pi, metric: METRIC_NAME_MAP[pLower] });
+        }
+      }
+      break;
+    }
+  }
+
+  if (headerIdx >= 0) {
+    // 解析数据行
+    for (var di = headerIdx + 1; di < lines.length; di++) {
+      var cols = lines[di].trim().split(/\s+/);
+      if (cols.length < 2) continue;
+      // 第一列是测试名，后续列是百分比
+      var testName = cols[0];
+      if (!testName || /^[-=]+$/.test(testName)) continue;
+
+      var coverage = {};
+      for (var mc = 0; mc < metricColumns.length; mc++) {
+        var val = parseFloat(cols[metricColumns[mc].colIdx]);
+        if (!isNaN(val)) {
+          coverage[metricColumns[mc].metric] = val;
+        }
+      }
+
+      contributions.push({
+        testName: testName,
+        coverage: Object.keys(coverage).length > 0 ? coverage : undefined,
+      });
+    }
+    if (log) log('[parseGradeReport] IMC format: ' + contributions.length + ' tests');
+    return contributions;
+  }
+
+  if (log) log('[parseGradeReport] Unknown format, no contributions parsed');
+  return null;
+}
+
+// ─── Covergroup Bin 级报告解析 ─────────────────────────────────
+
+/**
+ * 解析 IMC report -bins 输出，提取未覆盖的 bin 列表。
+ *
+ * 输出格式示例：
+ *   Covergroup: my_cg
+ *     Bin: auto_bin[0]    [0/1]    UNCOVERED
+ *     Bin: auto_bin[1]    [1/1]    COVERED
+ *
+ * 返回 UncoveredItem[] 列表（仅 UNCOVERED 的 bin）。
+ */
+function parseBinsReport(text, log) {
+  if (!text || !text.trim()) return null;
+  var uncovered = [];
+  var currentCg = '';
+
+  var lines = text.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+
+    // 匹配 Covergroup 行
+    var cgMatch = line.match(/^(?:Covergroup|CG)\s*:\s*(.+)/i);
+    if (cgMatch) {
+      currentCg = cgMatch[1].trim();
+      continue;
+    }
+
+    // 匹配 Bin 行
+    var binMatch = line.match(/Bin\s*:\s*(\S+)\s*\[(\d+)\/(\d+)\]\s*(\w+)/i);
+    if (binMatch) {
+      var covered = parseInt(binMatch[2], 10);
+      var total = parseInt(binMatch[3], 10);
+      var status = binMatch[4].toUpperCase();
+
+      if (status === 'UNCOVERED' || (covered === 0 && total > 0)) {
+        uncovered.push({
+          module: currentCg || 'unknown',
+          signal: binMatch[1],
+          description: 'Bin ' + binMatch[1] + ' in ' + (currentCg || 'unknown') + ' is uncovered [' + covered + '/' + total + ']',
+        });
+      }
+      continue;
+    }
+
+    // 也匹配更简单的格式：仅列出未覆盖项
+    // 例如：  my_cg.auto_bin[0]    UNCOVERED
+    var simpleMatch = line.match(/^(\S+)\s+(UNCOVERED|NOT\s+COVERED|0\s*\/\s*\d+)/i);
+    if (simpleMatch) {
+      var fullName = simpleMatch[1];
+      var dotIdx = fullName.lastIndexOf('.');
+      var cgName = dotIdx > 0 ? fullName.substring(0, dotIdx) : '';
+      var binName = dotIdx > 0 ? fullName.substring(dotIdx + 1) : fullName;
+      uncovered.push({
+        module: cgName || 'unknown',
+        signal: binName,
+        description: 'Bin ' + binName + ' is uncovered',
+      });
+    }
+  }
+
+  if (log) log('[parseBinsReport] Parsed ' + uncovered.length + ' uncovered bins');
+  return uncovered.length > 0 ? uncovered : null;
+}
+
+// ─── CSV 数据读取 ─────────────────────────────────────────────
+
+/**
+ * 读取 CSV 目录下所有 .csv 文件并合并为单个字符串。
+ *
+ * urg -format csv 会在指定目录下生成多个 CSV 文件（如 hierarchy.csv, covergroup.csv 等），
+ * 我们将它们拼接成一个带文件名分隔的字符串，方便 AI 直接消费。
+ */
+function readCsvData(csvDir, log) {
+  if (!csvDir || !existsSync(csvDir)) {
+    if (log) log('[readCsvData] CSV directory not found: ' + csvDir);
+    return null;
+  }
+
+  try {
+    var files = readdirSync(csvDir).filter(function(f) { return f.endsWith('.csv'); });
+    if (files.length === 0) {
+      if (log) log('[readCsvData] No CSV files found in ' + csvDir);
+      return null;
+    }
+
+    var parts = [];
+    for (var i = 0; i < files.length; i++) {
+      var content = readFileSync(join(csvDir, files[i]), 'utf-8');
+      parts.push('=== ' + files[i] + ' ===');
+      parts.push(content.trim());
+      parts.push('');
+    }
+
+    var result = parts.join('\n');
+    if (log) log('[readCsvData] Read ' + files.length + ' CSV files, total ' + result.length + ' chars');
+    return result;
+  } catch (err) {
+    if (log) log('[readCsvData] Error: ' + (err && err.message ? err.message : String(err)));
+    return null;
+  }
+}
+
 // ─── 主解析入口 ───────────────────────────────────────────────
 
 async function parse(projectRoot, sessionId, reportDir) {
@@ -848,6 +1050,55 @@ async function parse(projectRoot, sessionId, reportDir) {
     log('[parse] No detail text to parse');
   }
 
+  // 3b. 读取并解析新增报告（grade / bins / csv）
+  var testContributions = null;
+  var uncoveredBins = null;
+  var csvData = null;
+
+  // grade 报告
+  var gradePath = join(reportDir, 'grade.txt');
+  if (existsSync(gradePath)) {
+    try {
+      var gradeText = readFileSync(gradePath, 'utf-8');
+      log('grade.txt: found, ' + gradeText.length + ' chars');
+      testContributions = parseGradeReport(gradeText, log);
+    } catch (e) {
+      log('grade.txt: read error: ' + (e && e.message ? e.message : String(e)));
+    }
+  } else {
+    // urg -grade testfile 生成的是 gradedtests.txt
+    var urgGradePath = join(reportDir, 'gradedtests.txt');
+    if (existsSync(urgGradePath)) {
+      try {
+        var urgGradeText = readFileSync(urgGradePath, 'utf-8');
+        log('gradedtests.txt: found, ' + urgGradeText.length + ' chars');
+        testContributions = parseGradeReport(urgGradeText, log);
+      } catch (e) {
+        log('gradedtests.txt: read error: ' + (e && e.message ? e.message : String(e)));
+      }
+    } else {
+      log('grade.txt / gradedtests.txt: NOT FOUND');
+    }
+  }
+
+  // bins 报告
+  var binsPath = join(reportDir, 'bins.txt');
+  if (existsSync(binsPath)) {
+    try {
+      var binsText = readFileSync(binsPath, 'utf-8');
+      log('bins.txt: found, ' + binsText.length + ' chars');
+      uncoveredBins = parseBinsReport(binsText, log);
+    } catch (e) {
+      log('bins.txt: read error: ' + (e && e.message ? e.message : String(e)));
+    }
+  } else {
+    log('bins.txt: NOT FOUND');
+  }
+
+  // CSV 数据
+  var csvDir = join(reportDir, 'csv');
+  csvData = readCsvData(csvDir, log);
+
   // 4. 如果文本报告解析失败，尝试从 cov_merge 目录直接扫描
   if (!summaryMetrics && covMergeDir) {
     log('[parse] Summary parsing failed, trying direct scan of cov_merge dir...');
@@ -898,6 +1149,13 @@ async function parse(projectRoot, sessionId, reportDir) {
   }
   log('Root metrics: ' + JSON.stringify(metricSummary));
 
+  // 6. 构建 uncovered 项
+  var uncovered = undefined;
+  if (uncoveredBins && uncoveredBins.length > 0) {
+    uncovered = { functional: uncoveredBins };
+    log('[parse] Added ' + uncoveredBins.length + ' uncovered bins from bins report');
+  }
+
   return {
     sessionId: sessionId,
     source: {
@@ -907,6 +1165,9 @@ async function parse(projectRoot, sessionId, reportDir) {
     },
     root: root,
     targets: {},
+    uncovered: uncovered,
+    testContributions: testContributions || undefined,
+    csvData: csvData || undefined,
   };
 }
 
