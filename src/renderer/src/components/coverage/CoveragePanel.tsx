@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react';
 import {
   Loader2, BarChart3, Upload, ChevronRight,
   Target as TargetIcon, AlertTriangle, ShieldBan, GitCompare, Trash2, Plus,
-  Activity, Square, Download, FolderOpen,
+  Activity, Square, Download, FolderOpen, Bug, X,
 } from 'lucide-react';
 import { useCoverageStore } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
@@ -87,6 +87,15 @@ export function CoveragePanel() {
   const setView = useCoverageStore((s) => s.setView);
   const openExportDialog = useCoverageStore((s) => s.openExportDialog);
   const browseDirectory = useCoverageStore((s) => s.browseDirectory);
+
+  // ─── Debug 信息 ────────────────────────────────────────────
+  const importWarnings = useCoverageStore((s) => s.importWarnings);
+  const importReportDir = useCoverageStore((s) => s.importReportDir);
+  const importLog = useCoverageStore((s) => s.importLog);
+  const showDebugPanel = useCoverageStore((s) => s.showDebugPanel);
+  const loadImportLog = useCoverageStore((s) => s.loadImportLog);
+  const toggleDebugPanel = useCoverageStore((s) => s.toggleDebugPanel);
+  const clearImportWarnings = useCoverageStore((s) => s.clearImportWarnings);
 
   // ─── Closure 相关（Slice 6b） ──────────────────────────────
   const currentClosure = useCoverageStore((s) => s.currentClosure);
@@ -169,6 +178,92 @@ export function CoveragePanel() {
 
   return (
     <div className="flex-1 overflow-auto p-3">
+      {/* 导入警告 banner */}
+      {importWarnings.length > 0 && (
+        <div className="mb-3 rounded border border-yellow-500/40 bg-yellow-500/10 p-2">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-yellow-500" />
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-medium text-yellow-600 dark:text-yellow-400">
+                覆盖率导入警告 ({importWarnings.length})
+              </div>
+              <ul className="mt-1 space-y-0.5">
+                {importWarnings.map((w, i) => (
+                  <li key={i} className="text-[10px] text-muted-foreground break-all">{w}</li>
+                ))}
+              </ul>
+              {importReportDir && (
+                <div className="mt-1 text-[10px] text-muted-foreground">
+                  报告目录：<code className="text-foreground/70">{importReportDir}</code>
+                </div>
+              )}
+              <div className="mt-1.5 flex gap-2">
+                {currentProjectId && currentSessionId && (
+                  <button
+                    onClick={() => loadImportLog(currentProjectId, currentSessionId)}
+                    className="flex items-center gap-1 rounded border border-border bg-card px-1.5 py-0.5 text-[10px] hover:bg-secondary"
+                  >
+                    <Bug className="h-2.5 w-2.5" />
+                    查看调试日志
+                  </button>
+                )}
+                <button
+                  onClick={clearImportWarnings}
+                  className="flex items-center gap-1 rounded border border-border bg-card px-1.5 py-0.5 text-[10px] hover:bg-secondary"
+                >
+                  <X className="h-2.5 w-2.5" />
+                  关闭
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Debug 日志面板 */}
+      {showDebugPanel && importLog && (
+        <div className="mb-3 rounded border border-border bg-card p-2">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="flex items-center gap-1 text-xs font-medium">
+              <Bug className="h-3 w-3" />
+              调试日志 — {importLog.reportDir}
+            </span>
+            <button
+              onClick={toggleDebugPanel}
+              className="rounded p-0.5 hover:bg-secondary"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+          {importLog.files.length > 0 && (
+            <div className="mb-1.5 text-[10px] text-muted-foreground">
+              报告文件：{importLog.files.map((f) => f.split(/[\\/]/).pop()).join(', ')}
+            </div>
+          )}
+          {importLog.edaLog && (
+            <details className="mb-1.5" open>
+              <summary className="cursor-pointer text-[10px] font-medium text-primary">EDA 命令日志</summary>
+              <pre className="mt-1 max-h-48 overflow-auto rounded bg-muted/50 p-2 text-[10px] leading-tight whitespace-pre-wrap break-all">
+                {importLog.edaLog}
+              </pre>
+            </details>
+          )}
+          {importLog.parserLog && (
+            <details className="mb-1.5" open>
+              <summary className="cursor-pointer text-[10px] font-medium text-primary">解析器调试日志</summary>
+              <pre className="mt-1 max-h-48 overflow-auto rounded bg-muted/50 p-2 text-[10px] leading-tight whitespace-pre-wrap break-all">
+                {importLog.parserLog}
+              </pre>
+            </details>
+          )}
+          {!importLog.edaLog && !importLog.parserLog && (
+            <div className="text-[10px] text-muted-foreground py-2 text-center">
+              没有可用的日志文件。这可能是因为 EDA 命令未执行或报告目录为空。
+            </div>
+          )}
+        </div>
+      )}
+
       {/* 工具栏：Session 选择 + 导入 + 删除 */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span className="text-[10px] text-muted-foreground">Session:</span>
