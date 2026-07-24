@@ -17,6 +17,8 @@ import type {
   ExclusionStatus,
   PromotionQueueItem,
   ClosureSummary,
+  TestContribution,
+  UncoveredItem,
 } from '@shared/types';
 
 // ─── Closure 相关类型（从主进程闭包包导入的等价类型） ────────────
@@ -154,6 +156,14 @@ interface CoverageStoreState {
   /** 是否显示 debug 面板 */
   showDebugPanel: boolean;
 
+  // ─── 覆盖率深度分析（urg -grade / imc report -bins / CSV） ──────
+  /** 测试用例贡献度排名 */
+  testContributions: TestContribution[];
+  /** 未覆盖项列表（按 metric 分组） */
+  uncoveredItems: Partial<Record<CoverageMetric, UncoveredItem[]>>;
+  /** CSV 原始覆盖率数据 */
+  csvData: string | null;
+
   loadSessions: (projectId: string) => Promise<void>;
   loadTree: (projectId: string, sessionId?: string) => Promise<void>;
   loadEdaConfig: (projectId: string) => Promise<void>;
@@ -275,6 +285,14 @@ interface CoverageStoreState {
   toggleDebugPanel: () => void;
   /** 清除导入警告 */
   clearImportWarnings: () => void;
+
+  // ─── 覆盖率深度分析动作 ────────────────────────────────────
+  /** 加载测试用例贡献度排名 */
+  loadTestContributions: (projectId: string, sessionId?: string) => Promise<void>;
+  /** 加载未覆盖项列表 */
+  loadUncovered: (projectId: string, sessionId?: string, metric?: CoverageMetric) => Promise<void>;
+  /** 加载 CSV 原始覆盖率数据 */
+  loadCsvData: (projectId: string, sessionId?: string) => Promise<void>;
 }
 
 export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
@@ -316,6 +334,11 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
   importReportDir: null,
   importLog: null,
   showDebugPanel: false,
+
+  // ─── 覆盖率深度分析初始状态 ────────────────────────────────
+  testContributions: [],
+  uncoveredItems: {},
+  csvData: null,
 
   setView: (view) => set({ view }),
 
@@ -888,4 +911,35 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
   toggleDebugPanel: () => set((s) => ({ showDebugPanel: !s.showDebugPanel })),
 
   clearImportWarnings: () => set({ importWarnings: [], importReportDir: null }),
+
+  // ─── 覆盖率深度分析动作实现 ────────────────────────────────
+  loadTestContributions: async (projectId, sessionId) => {
+    try {
+      const sid = sessionId ?? get().currentSessionId ?? undefined;
+      const result = await trpc.coverage.getTestContributions.query({ projectId, sessionId: sid });
+      set({ testContributions: result.contributions });
+    } catch (err) {
+      useToastStore.getState().error('加载测试用例贡献度失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  loadUncovered: async (projectId, sessionId, metric) => {
+    try {
+      const sid = sessionId ?? get().currentSessionId ?? undefined;
+      const result = await trpc.coverage.getUncovered.query({ projectId, sessionId: sid, metric });
+      set({ uncoveredItems: result.uncovered });
+    } catch (err) {
+      useToastStore.getState().error('加载未覆盖项失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  loadCsvData: async (projectId, sessionId) => {
+    try {
+      const sid = sessionId ?? get().currentSessionId ?? undefined;
+      const result = await trpc.coverage.getCsvData.query({ projectId, sessionId: sid });
+      set({ csvData: result.csvData });
+    } catch (err) {
+      useToastStore.getState().error('加载 CSV 数据失败', err instanceof Error ? err.message : String(err));
+    }
+  },
 }));
