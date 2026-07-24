@@ -13,6 +13,7 @@ import { pluginLoader } from '../../plugins/loader';
 import { PluginBackedDiscovery } from '../../plugin-adapters';
 import type { CaseStatus } from '../../host/discovery';
 import { getFileDiff, applyRejections } from '../../diff/diff-engine';
+import { caseIndexManager } from '../../search/case-index-manager';
 import type {
   PluginConfig,
   PluginConfigEntry,
@@ -191,7 +192,7 @@ export const projectRouter = t.router({
     }),
 
   searchCases: t.procedure
-    .input((raw): { projectId: string; query: string; limit?: number } => {
+    .input((raw): { projectId: string; query: string; subsys?: string; limit?: number } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string' || typeof r.query !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and query are required' });
@@ -199,6 +200,7 @@ export const projectRouter = t.router({
       return {
         projectId: r.projectId,
         query: r.query,
+        subsys: typeof r.subsys === 'string' && r.subsys.length > 0 ? r.subsys : undefined,
         limit: typeof r.limit === 'number' ? r.limit : 200,
       };
     })
@@ -208,65 +210,47 @@ export const projectRouter = t.router({
       const registry = pluginLoader.getRegistry(project.rootPath);
       if (registry.caseParsers.length === 0) return [];
 
-      const discovery = new PluginBackedDiscovery(project.rootPath, registry);
-      const subsystems = await discovery.listSubsys();
-      const query = input.query.toLowerCase();
-      const limit = input.limit ?? 200;
+      // 确保索引已构建（首次会加载所有用例，后续直接用缓存）
+      await caseIndexManager.ensureIndex(input.projectId, project.rootPath, registry);
 
-      type ScoredCase = {
-        id?: string;
-        name: string;
-        subsys: string;
-        path: string;
-        status?: string;
-        baseCase?: string;
-        filePath?: string;
-        base?: string;
-        block?: string;
-        _score: number;
-      };
+      // 直接查内存索引，不触碰文件系统
+      return caseIndexManager.search(
+        input.projectId,
+        input.query,
+        input.subsys,
+        input.limit,
+      );
+    }),
 
-      const results: ScoredCase[] = [];
-
-      for (const subsys of subsystems) {
-        const cases = await discovery.listCases(subsys.name);
-        for (const c of cases) {
-          const haystacks = [
-            { text: c.name, weight: 10 },
-            { text: subsys.name, weight: 5 },
-            { text: c.filePath ?? '', weight: 3 },
-            { text: c.path, weight: 2 },
-            { text: c.baseCase ?? '', weight: 1 },
-          ];
-
-          let bestScore = -1;
-          for (const { text, weight } of haystacks) {
-            if (!text) continue;
-            const score = fuzzyScore(query, text.toLowerCase());
-            if (score > 0 && score * weight > bestScore) {
-              bestScore = score * weight;
-            }
-          }
-
-          if (bestScore > 0) {
-            results.push({
-              id: c.id,
-              name: c.name,
-              subsys: subsys.name,
-              path: c.path,
-              status: c.status,
-              baseCase: c.baseCase,
-              filePath: c.filePath,
-              base: c.base,
-              block: c.block,
-              _score: bestScore,
-            });
-          }
-        }
+  /** 获取用例索引统计信息 */
+  getIndexStats: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
       }
+      return { projectId: r.projectId };
+    })
+    .query(({ input }) => {
+      return caseIndexManager.getStats(input.projectId);
+    }),
 
-      results.sort((a, b) => b._score - a._score);
-      return results.slice(0, limit).map(({ _score: _unused, ...rest }) => rest);
+  /** 手动重建用例索引 */
+  rebuildIndex: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      await ensurePluginsLoaded(project.rootPath);
+      const registry = pluginLoader.getRegistry(project.rootPath);
+      caseIndexManager.invalidate(input.projectId);
+      await caseIndexManager.ensureIndex(input.projectId, project.rootPath, registry);
+      return caseIndexManager.getStats(input.projectId);
     }),
 
   getPlugins: t.procedure
@@ -679,62 +663,3 @@ export const projectRouter = t.router({
       return applyRejections(input.filePath, input.rejections);
     }),
 });
-
-// ─── Fuzzy match scoring ──────────────────────────────────
-
-/**
- * Fuzzy match scoring: returns a positive score if `query` matches `target`,
- * 0 if no match. Higher scores indicate better matches.
- *
- * Matching strategy (best of):
- * 1. **Substring match** — query appears as a contiguous substring.
- *    Score = 100 + bonus for prefix/word-boundary match.
- * 2. **Subsequence match** — all query characters appear in order.
- *    Score = 50 - (gaps between matched characters), rewarding compact matches.
- */
-function fuzzyScore(query: string, target: string): number {
-  if (!query || !target) return 0;
-  if (query.length > target.length) return 0;
-
-  // 1. Substring match
-  const substrIdx = target.indexOf(query);
-  if (substrIdx !== -1) {
-    let score = 100;
-    // Prefix match bonus
-    if (substrIdx === 0) score += 50;
-    // Word boundary bonus (preceded by separator)
-    if (substrIdx > 0 && /[\s_\-./\\]/.test(target[substrIdx - 1]!)) score += 20;
-    // Exact match bonus
-    if (query.length === target.length) score += 30;
-    return score;
-  }
-
-  // 2. Subsequence (fuzzy) match
-  let qi = 0;
-  let prevMatchIdx = -1;
-  let totalGap = 0;
-  let firstMatchIdx = -1;
-
-  for (let ti = 0; ti < target.length && qi < query.length; ti++) {
-    if (target[ti] === query[qi]) {
-      if (firstMatchIdx === -1) firstMatchIdx = ti;
-      if (prevMatchIdx !== -1) {
-        totalGap += ti - prevMatchIdx - 1;
-      }
-      prevMatchIdx = ti;
-      qi++;
-    }
-  }
-
-  if (qi < query.length) return 0; // Not all query chars matched
-
-  let score = 50 - totalGap;
-  // First match at start of target bonus
-  if (firstMatchIdx === 0) score += 10;
-  // Compact match bonus (low gap ratio)
-  const matchLength = query.length;
-  const span = prevMatchIdx - firstMatchIdx + 1;
-  if (span === matchLength) score += 10; // Contiguous subsequence
-
-  return Math.max(score, 1);
-}
