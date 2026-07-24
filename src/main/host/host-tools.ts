@@ -6,6 +6,7 @@ import type { SubsysDiscovery, CaseStatus } from './discovery';
 import { NoopDiscovery } from './discovery';
 import type { PluginBackedSimulation, PluginBackedCoverage } from '../plugin-adapters';
 import type { CoverageManager } from '../coverage/coverage-manager';
+import type { CoverageMetric } from '@shared/types';
 
 type HostToolHandler = (args: Record<string, unknown>) => Promise<AgentToolResult | string>;
 
@@ -97,8 +98,12 @@ export class HostToolsRegistry {
     this.coverageManager = mgr;
     if (mgr) {
       this.registerGetCoverageDetail();
+      this.registerCoverageAnalysisTools();
     } else {
       this.unregister('get_coverage_detail');
+      this.unregister('get_coverage_uncovered');
+      this.unregister('get_coverage_grade');
+      this.unregister('get_coverage_csv');
     }
   }
 
@@ -372,6 +377,119 @@ export class HostToolsRegistry {
         },
       ),
     );
+  }
+
+  /**
+   * 注册覆盖率深度分析工具（urg -grade / imc report -bins / CSV）。
+   * 仅在 CoverageManager 可用时注册。
+   *
+   * 新增工具：
+   * - get_coverage_uncovered: 返回未覆盖项列表（来自 bins 报告或 detail 报告）
+   * - get_coverage_grade: 返回测试用例贡献度排名
+   * - get_coverage_csv: 返回 CSV 原始覆盖率数据（urg -format csv）
+   */
+  private registerCoverageAnalysisTools(): void {
+    // 未覆盖项查询
+    if (!this.hasTool('get_coverage_uncovered')) {
+      this.register(
+        defineTool(
+          'get_coverage_uncovered',
+          'Get uncovered coverage items (bins, lines, branches) for a coverage session. Returns a list of uncovered items with module/signal/file info. Useful for AI to identify what needs to be tested to close coverage gaps.',
+          {
+            type: 'object',
+            properties: {
+              metric: {
+                type: 'string',
+                enum: ['line', 'branch', 'toggle', 'condition', 'fsm_state', 'fsm_transition', 'functional', 'assertion'],
+                description: 'Filter by coverage metric type. If omitted, returns all uncovered items.',
+              },
+              sessionId: {
+                type: 'string',
+                description: 'Coverage Merge Session ID. If omitted, the most recent session is used.',
+              },
+            },
+            additionalProperties: false,
+          },
+          async (args) => {
+            if (!this.coverageManager) {
+              return TEXT(JSON.stringify({ error: 'Coverage manager not available' }));
+            }
+            try {
+              const metric = typeof args.metric === 'string' ? (args.metric as CoverageMetric) : undefined;
+              const sessionId = typeof args.sessionId === 'string' ? args.sessionId : undefined;
+              const result = await this.coverageManager.getCoverageUncovered(sessionId, metric);
+              return TEXT(JSON.stringify(result));
+            } catch (err) {
+              return TEXT(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+            }
+          },
+        ),
+      );
+    }
+
+    // 测试用例贡献度排名
+    if (!this.hasTool('get_coverage_grade')) {
+      this.register(
+        defineTool(
+          'get_coverage_grade',
+          'Get test case coverage contribution ranking. Returns a list of test cases with their coverage scores and ranks. Useful for AI to identify which tests contribute most to coverage and which tests are redundant. Data source: urg -grade testfile (VCS) or imc report -test (Cadence).',
+          {
+            type: 'object',
+            properties: {
+              sessionId: {
+                type: 'string',
+                description: 'Coverage Merge Session ID. If omitted, the most recent session is used.',
+              },
+            },
+            additionalProperties: false,
+          },
+          async (args) => {
+            if (!this.coverageManager) {
+              return TEXT(JSON.stringify({ error: 'Coverage manager not available' }));
+            }
+            try {
+              const sessionId = typeof args.sessionId === 'string' ? args.sessionId : undefined;
+              const result = await this.coverageManager.getTestContributions(sessionId);
+              return TEXT(JSON.stringify(result));
+            } catch (err) {
+              return TEXT(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+            }
+          },
+        ),
+      );
+    }
+
+    // CSV 原始覆盖率数据
+    if (!this.hasTool('get_coverage_csv')) {
+      this.register(
+        defineTool(
+          'get_coverage_csv',
+          'Get raw CSV coverage data (from urg -format csv). Returns structured CSV text that can be parsed for detailed analysis. Only available when VCS urg is used as the EDA tool. Returns null if no CSV data was generated.',
+          {
+            type: 'object',
+            properties: {
+              sessionId: {
+                type: 'string',
+                description: 'Coverage Merge Session ID. If omitted, the most recent session is used.',
+              },
+            },
+            additionalProperties: false,
+          },
+          async (args) => {
+            if (!this.coverageManager) {
+              return TEXT(JSON.stringify({ error: 'Coverage manager not available' }));
+            }
+            try {
+              const sessionId = typeof args.sessionId === 'string' ? args.sessionId : undefined;
+              const result = await this.coverageManager.getCsvData(sessionId);
+              return TEXT(JSON.stringify(result));
+            } catch (err) {
+              return TEXT(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+            }
+          },
+        ),
+      );
+    }
   }
 
   /**
