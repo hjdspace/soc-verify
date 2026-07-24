@@ -403,6 +403,10 @@ async function handleGetMcpStatus(cmd: Command & { type: "getMcpStatus" }): Prom
 			"../engine/oh-my-pi/packages/coding-agent/src/mcp/manager"
 		);
 		const manager = MCPManager.instance();
+		if (!manager) {
+			sendResponse(cmd.id, true, { servers: {} });
+			return;
+		}
 		const allNames = manager.getAllServerNames();
 
 		const statusMap: Record<string, { status: string; toolCount: number }> = {};
