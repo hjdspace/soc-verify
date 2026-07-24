@@ -68,6 +68,12 @@ export interface GeneratedReports {
   summaryPath: string;
   detailPath: string;
   metricsPath: string;
+  /** CSV 格式报告路径（urg -format csv 生成） */
+  csvPath?: string;
+  /** 测试用例贡献度报告路径（urg -grade testfile / imc report -test） */
+  gradePath?: string;
+  /** Covergroup bin 级报告路径（imc report -bins） */
+  binsPath?: string;
   /** EDA 命令执行日志（用于 debug） */
   commandLog: CommandLogEntry[];
   /** 所有命令是否全部失败 */
@@ -134,10 +140,17 @@ export class CoverageReportGenerator {
     const summaryCmd = substitute(config.summaryCommand);
     const detailCmd = substitute(config.detailCommand);
     const metricsCmd = substitute(config.metricsCommand);
+    const csvCmd = substitute(config.csvCommand);
+    const gradeCmd = substitute(config.gradeCommand);
+    const binsCmd = substitute(config.binsCommand);
 
     const summaryPath = join(reportDir, 'summary.txt');
     const detailPath = join(reportDir, 'detail.txt');
     const metricsPath = join(reportDir, 'metrics.txt');
+    // CSV 报告：urg 生成到 {reportDir}/csv/ 目录下
+    const csvPath = csvCmd ? join(reportDir, 'csv') : undefined;
+    const gradePath = gradeCmd ? join(reportDir, 'grade.txt') : undefined;
+    const binsPath = binsCmd ? join(reportDir, 'bins.txt') : undefined;
 
     // 顺序执行命令（IMC 可能不支持并发访问覆盖率数据库）
     const runAndLog = async (
@@ -178,18 +191,27 @@ export class CoverageReportGenerator {
       return result;
     };
 
-    // 顺序执行三个命令
+    // 顺序执行命令（IMC 可能不支持并发访问覆盖率数据库）
     await runAndLog('summary', summaryCmd);
     await runAndLog('detail', detailCmd);
     await runAndLog('metrics', metricsCmd);
+    // 新增：CSV 格式报告（urg -format csv）
+    await runAndLog('csv', csvCmd);
+    // 新增：测试用例贡献度分析（urg -grade testfile / imc report -test）
+    await runAndLog('grade', gradeCmd);
+    // 新增：Covergroup bin 级覆盖详情（imc report -bins）
+    await runAndLog('bins', binsCmd);
 
     // 检查哪些报告文件实际生成了
     const generatedFiles: string[] = [];
-    for (const [name, path] of [
+    const reportFiles: Array<readonly [string, string]> = [
       ['summary', summaryPath],
       ['detail', detailPath],
       ['metrics', metricsPath],
-    ] as const) {
+    ];
+    if (gradePath) reportFiles.push(['grade', gradePath] as const);
+    if (binsPath) reportFiles.push(['bins', binsPath] as const);
+    for (const [name, path] of reportFiles) {
       try {
         const info = await stat(path);
         if (info.size > 0) {
@@ -231,7 +253,25 @@ export class CoverageReportGenerator {
       );
     }
 
-    return { reportDir, summaryPath, detailPath, metricsPath, commandLog, allFailed, generatedFiles };
+    // 检查 CSV 目录是否生成了文件
+    if (csvPath) {
+      try {
+        const { readdirSync } = await import('node:fs');
+        const csvFiles = readdirSync(csvPath).filter((f) => f.endsWith('.csv'));
+        if (csvFiles.length > 0) {
+          for (const f of csvFiles) {
+            generatedFiles.push(join(csvPath, f));
+          }
+          await appendFile(logPath, `\n[csv] ${csvFiles.length} CSV files generated in ${csvPath}\n`, 'utf-8');
+        } else {
+          await appendFile(logPath, `\n[csv] No CSV files found in ${csvPath}\n`, 'utf-8');
+        }
+      } catch {
+        await appendFile(logPath, `\n[csv] CSV directory NOT generated: ${csvPath}\n`, 'utf-8');
+      }
+    }
+
+    return { reportDir, summaryPath, detailPath, metricsPath, csvPath, gradePath, binsPath, commandLog, allFailed, generatedFiles };
   }
 }
 
