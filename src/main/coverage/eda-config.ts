@@ -38,6 +38,9 @@ export async function loadEdaConfig(projectRoot: string): Promise<EdaToolConfig 
       summaryCommand: parsed.summaryCommand,
       detailCommand: parsed.detailCommand,
       metricsCommand: parsed.metricsCommand,
+      csvCommand: parsed.csvCommand,
+      gradeCommand: parsed.gradeCommand,
+      binsCommand: parsed.binsCommand,
     };
   } catch {
     return null;
@@ -72,5 +75,8 @@ export function normalizeConfig(config: EdaToolConfig): EdaToolConfig {
     summaryCommand: config.summaryCommand ?? defaults.summaryCommand,
     detailCommand: config.detailCommand ?? defaults.detailCommand,
     metricsCommand: config.metricsCommand ?? defaults.metricsCommand,
+    csvCommand: config.csvCommand ?? defaults.csvCommand,
+    gradeCommand: config.gradeCommand ?? defaults.gradeCommand,
+    binsCommand: config.binsCommand ?? defaults.binsCommand,
   };
 }
