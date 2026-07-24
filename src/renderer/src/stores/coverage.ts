@@ -144,6 +144,16 @@ interface CoverageStoreState {
   /** 是否正在执行 Test Promotion 提升 */
   promoting: boolean;
 
+  // ─── Debug 信息（导入日志） ────────────────────────────────
+  /** 最近一次导入的警告信息 */
+  importWarnings: string[];
+  /** 最近一次导入的报告目录路径 */
+  importReportDir: string | null;
+  /** 导入日志内容（EDA 命令日志 + 解析器日志） */
+  importLog: { edaLog: string | null; parserLog: string | null; reportDir: string; files: string[] } | null;
+  /** 是否显示 debug 面板 */
+  showDebugPanel: boolean;
+
   loadSessions: (projectId: string) => Promise<void>;
   loadTree: (projectId: string, sessionId?: string) => Promise<void>;
   loadEdaConfig: (projectId: string) => Promise<void>;
@@ -257,6 +267,14 @@ interface CoverageStoreState {
   loadClosureSummary: (projectId: string, closureId: string) => Promise<void>;
   /** 清理 Closure Workspace 临时目录 */
   cleanupClosure: (projectId: string, closureId: string) => Promise<void>;
+
+  // ─── Debug 操作 ────────────────────────────────────────────
+  /** 加载指定 session 的导入日志 */
+  loadImportLog: (projectId: string, sessionId: string) => Promise<void>;
+  /** 切换 debug 面板显示 */
+  toggleDebugPanel: () => void;
+  /** 清除导入警告 */
+  clearImportWarnings: () => void;
 }
 
 export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
@@ -292,6 +310,12 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
   promotionQueue: [],
   closureSummary: null,
   promoting: false,
+
+  // ─── Debug 信息初始状态 ────────────────────────────────────
+  importWarnings: [],
+  importReportDir: null,
+  importLog: null,
+  showDebugPanel: false,
 
   setView: (view) => set({ view }),
 
@@ -345,18 +369,33 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
   },
 
   importCoverage: async (projectId, covMergeDir, edaConfig) => {
-    set({ importing: true });
+    set({ importing: true, importWarnings: [], importReportDir: null });
     try {
       const result = await trpc.coverage.import.mutate({
         projectId,
         covMergeDir,
         edaConfig,
       });
-      set({ importing: false, currentSessionId: result.sessionId, overview: result.summary });
+      set({
+        importing: false,
+        currentSessionId: result.sessionId,
+        overview: result.summary,
+        importWarnings: result.warnings ?? [],
+        importReportDir: result.reportDir ?? null,
+      });
       // 导入后刷新 session 列表和树
       await get().loadSessions(projectId);
       await get().loadTree(projectId, result.sessionId);
-      useToastStore.getState().success('覆盖率导入成功', `Session: ${result.sessionId}`);
+
+      // 如果有警告，显示 warning toast
+      if (result.warnings && result.warnings.length > 0) {
+        useToastStore.getState().warning(
+          '覆盖率导入完成（但有警告）',
+          result.warnings.join('\n'),
+        );
+      } else {
+        useToastStore.getState().success('覆盖率导入成功', `Session: ${result.sessionId}`);
+      }
       return result.sessionId;
     } catch (err) {
       set({ importing: false });
@@ -834,4 +873,19 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
       useToastStore.getState().error('清理 Closure Workspace 失败', err instanceof Error ? err.message : String(err));
     }
   },
+
+  // ─── Debug 操作实现 ────────────────────────────────────────
+
+  loadImportLog: async (projectId, sessionId) => {
+    try {
+      const log = await trpc.coverage.getImportLog.query({ projectId, sessionId });
+      set({ importLog: log, showDebugPanel: true });
+    } catch (err) {
+      useToastStore.getState().error('加载导入日志失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  toggleDebugPanel: () => set((s) => ({ showDebugPanel: !s.showDebugPanel })),
+
+  clearImportWarnings: () => set({ importWarnings: [], importReportDir: null }),
 }));
