@@ -6,6 +6,32 @@
 
 ---
 
+## [0.1.10](https://github.com/hjdspace/soc-verify/compare/v0.1.9...v0.1.10) (2026-07-25)
+
+### Features
+
+* **mcp:** 新增多作用域 MCP 配置管理、工具查看与配置重载功能，优化连接错误提示
+* **prompt:** 添加默认系统提示词展示，终端降级兼容修复
+* **coverage:** 新增 CSV、grade、bins 等覆盖率报告解析与命令支持，增强覆盖率报告生成器
+* **coverage:** 新增覆盖率分析工具注册，新增 TestContribution 类型与 EDA 命令更新
+* **coverage:** 增强 coverage store 覆盖率分析能力，新增调试信息与导入日志处理
+* **coverage:** 增强 CoveragePanel，新增 grade 与 uncovered 标签页
+* **coverage:** 新增 getImportLog procedure，提供详细导入结果
+* **search:** 实现倒排索引高效文本搜索，新增 CaseIndexManager 优化用例索引
+* **search:** 搜索新增子系统过滤能力
+* **platform:** 实现 Linux 输入法与 D-Bus 会话总线设置，改进 D-Bus 检测与处理
+
+### Bug Fixes
+
+* **skills:** 修复 Windows 平台技能删除 bug
+* **mcp:** 添加 MCPManager 实例空值检查，避免崩溃
+
+### Refactor
+
+* **search:** 重构 searchCases 使用 caseIndexManager，文件树更新时失效索引
+
+---
+
 ## [0.1.9](https://github.com/hjdspace/soc-verify/compare/v0.1.8...v0.1.9) (2026-07-23)
 
 ### Features
