@@ -5,6 +5,7 @@ import { readdir, stat, mkdir, readFile, writeFile, access } from 'node:fs/promi
 import { existsSync, watch as fsWatch, type FSWatcher as NodeFSWatcher } from 'node:fs';
 import { join, basename, relative, extname } from 'node:path';
 import { app } from 'electron';
+import { caseIndexManager } from '../search/case-index-manager';
 
 const execFileAsync = promisify(execFile);
 import type {
@@ -301,6 +302,7 @@ class ProjectManagerImpl extends EventEmitter {
 
     entry.debounceTimer = setTimeout(() => {
       this.fileTreeCache.delete(projectId);
+      caseIndexManager.invalidate(projectId);
       const update: FileTreeUpdate = { projectId, type: 'change', path };
       this.emit('filetree:update', update);
       entry.debounceTimer = null;
