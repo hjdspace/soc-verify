@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
-import type { CredentialEntry, CredentialInput, CredentialUpdateInput, SkillInfo, SkillInstallInfo, CreateSkillInput, McpServerInfo, McpConfigFile } from '@shared/types';
+import type { CredentialEntry, CredentialInput, CredentialUpdateInput, SkillInfo, SkillInstallInfo, CreateSkillInput, McpServerInfo, McpToolInfo, McpConfigFile } from '@shared/types';
 
 export interface ApiModel {
   id: string;
@@ -16,6 +16,12 @@ interface SettingsStoreState {
   skillInstallInfo: SkillInstallInfo | null;
   mcpServers: McpServerInfo[];
   mcpConfig: McpConfigFile | null;
+  /** Tools per MCP server name — populated on demand when a server row is expanded. */
+  mcpToolsByServer: Record<string, McpToolInfo[]>;
+  /** Loading flag per server name (tool list fetch in progress). */
+  mcpToolsLoading: Record<string, boolean>;
+  /** Whether an MCP reload is in progress. */
+  mcpReloading: boolean;
   systemPrompt: string;
   loading: boolean;
   models: ApiModel[];
@@ -37,6 +43,10 @@ interface SettingsStoreState {
   loadMcpServers: (projectId: string) => Promise<void>;
   loadMcpConfig: (projectId: string) => Promise<void>;
   setMcpConfig: (projectId: string, config: McpConfigFile) => Promise<void>;
+  /** Fetch the tool list for a specific MCP server (on demand when expanded). */
+  getMcpServerTools: (projectId: string, serverName: string) => Promise<void>;
+  /** Reload MCP config in running sessions so new config takes effect immediately. */
+  reloadMcp: (projectId: string) => Promise<void>;
   loadSystemPrompt: (projectId: string) => Promise<void>;
   setSystemPrompt: (projectId: string, prompt: string) => Promise<void>;
   fetchModels: (providerId?: string, apiKey?: string, baseUrl?: string) => Promise<ApiModel[]>;
@@ -50,6 +60,9 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
   skillInstallInfo: null,
   mcpServers: [],
   mcpConfig: null,
+  mcpToolsByServer: {},
+  mcpToolsLoading: {},
+  mcpReloading: false,
   systemPrompt: '',
   loading: false,
   models: [],
@@ -174,8 +187,11 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
     try {
       const servers = await trpc.settings.listMcpServers.query({ projectId });
       set({ mcpServers: servers });
-    } catch {
-      // Best-effort
+    } catch (err) {
+      // Log the error so silent failures (e.g. RPC timeout) are visible in the
+      // dev console. Previously this was silently swallowed, which caused the
+      // MCP settings page to keep showing "暂无 MCP" with no clue as to why.
+      console.error('[settings] loadMcpServers failed:', err);
     }
   },
 
@@ -183,19 +199,59 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
     try {
       const config = await trpc.settings.getMcpConfig.query({ projectId });
       set({ mcpConfig: config });
-    } catch {
-      // Best-effort
+    } catch (err) {
+      console.error('[settings] loadMcpConfig failed:', err);
     }
   },
 
   setMcpConfig: async (projectId, config) => {
     try {
       await trpc.settings.setMcpConfig.mutate({ projectId, config });
-      // Refresh server list to reflect changes
+
+      // Optimistically update the stored config so the UI reflects the new
+      // config immediately, even before the server list refresh completes.
+      set({ mcpConfig: config, mcpToolsByServer: {} });
+
+      // Refresh server list to reflect changes (file re-read).
       await useSettingsStore.getState().loadMcpServers(projectId);
+
+      // Reload MCP in running sessions so the LLM picks up the new config
+      // without requiring the user to restart the session. This is best-effort
+      // and runs after the toast so the UI feels responsive.
       useToastStore.getState().success('MCP 配置已保存');
+      void useSettingsStore.getState().reloadMcp(projectId);
     } catch (err) {
       useToastStore.getState().error('保存 MCP 配置失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  getMcpServerTools: async (projectId, serverName) => {
+    set((s) => ({ mcpToolsLoading: { ...s.mcpToolsLoading, [serverName]: true } }));
+    try {
+      const tools = await trpc.settings.getMcpServerTools.query({ projectId, serverName });
+      set((s) => ({
+        mcpToolsByServer: { ...s.mcpToolsByServer, [serverName]: tools as McpToolInfo[] },
+        mcpToolsLoading: { ...s.mcpToolsLoading, [serverName]: false },
+      }));
+    } catch (err) {
+      set((s) => ({ mcpToolsLoading: { ...s.mcpToolsLoading, [serverName]: false } }));
+      console.error(`[settings] getMcpServerTools(${serverName}) failed:`, err);
+    }
+  },
+
+  reloadMcp: async (projectId) => {
+    set({ mcpReloading: true });
+    try {
+      await trpc.settings.reloadMcp.mutate({ projectId });
+      // Refresh the server list to pick up updated connection status.
+      // The backend cleared its probe cache, so this triggers a fresh
+      // direct probe of all configured MCP servers.
+      await useSettingsStore.getState().loadMcpServers(projectId);
+      // Clear cached tool lists since the reload may have changed them
+      set({ mcpToolsByServer: {}, mcpReloading: false });
+    } catch (err) {
+      set({ mcpReloading: false });
+      console.error('[settings] reloadMcp failed:', err);
     }
   },
 

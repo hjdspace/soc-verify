@@ -101,6 +101,8 @@ type Command =
 	| { id: string; type: "getMessages" }
 	| { id: string; type: "getState" }
 	| { id: string; type: "getMcpStatus" }
+	| { id: string; type: "getMcpServerTools"; serverName: string }
+	| { id: string; type: "reloadMcp" }
 	| { id: string; type: "destroy" };
 
 interface ToolResultMessage {
@@ -431,6 +433,99 @@ async function handleGetMcpStatus(cmd: Command & { type: "getMcpStatus" }): Prom
 	}
 }
 
+async function handleGetMcpServerTools(cmd: Command & { type: "getMcpServerTools"; serverName: string }): Promise<void> {
+	if (!session) throw new Error("Session not initialized");
+
+	try {
+		const { MCPManager } = await import(
+			"../engine/oh-my-pi/packages/coding-agent/src/mcp/manager"
+		);
+		const manager = MCPManager.instance();
+		if (!manager) {
+			sendResponse(cmd.id, true, { tools: [] });
+			return;
+		}
+
+		const connection = manager.getConnection(cmd.serverName);
+		if (!connection) {
+			sendResponse(cmd.id, true, { tools: [] });
+			return;
+		}
+
+		// Use cached tools if available; otherwise call listTools to fetch.
+		let tools = connection.tools;
+		if (!tools) {
+			const { listTools } = await import(
+				"../engine/oh-my-pi/packages/coding-agent/src/mcp/client"
+			);
+			tools = await listTools(connection);
+		}
+
+		const toolList = (tools ?? []).map((t) => ({
+			name: t.name,
+			description: t.description,
+			inputSchema: t.inputSchema,
+		}));
+
+		sendResponse(cmd.id, true, { tools: toolList });
+	} catch (err) {
+		// On any error, return empty tool list rather than failing the RPC.
+		const msg = err instanceof Error ? err.message : String(err);
+		console.error(`[socverify-runner] getMcpServerTools error: ${msg}`);
+		sendResponse(cmd.id, true, { tools: [] });
+	}
+}
+
+async function handleReloadMcp(cmd: Command & { type: "reloadMcp" }): Promise<void> {
+	if (!session) throw new Error("Session not initialized");
+
+	try {
+		const { MCPManager } = await import(
+			"../engine/oh-my-pi/packages/coding-agent/src/mcp/manager"
+		);
+		const manager = MCPManager.instance();
+		if (!manager) {
+			sendResponse(cmd.id, true, { ok: true, servers: {} });
+			return;
+		}
+
+		// Disconnect all existing connections, then re-discover and connect.
+		// This picks up changes made to .mcp.json since the session started.
+		manager.disconnectAll();
+		await manager.discoverAndConnect();
+
+		// Refresh the agent's tool list so newly connected MCP tools are
+		// immediately available to the LLM.
+		const mcpTools = manager.getTools();
+		if (typeof session.refreshMCPTools === "function") {
+			await session.refreshMCPTools(mcpTools, { activateAll: true });
+		}
+
+		// Build status map to return
+		const allNames = manager.getAllServerNames();
+		const statusMap: Record<string, { status: string; toolCount: number }> = {};
+		for (const name of allNames) {
+			const status = manager.getConnectionStatus(name);
+			let toolCount = 0;
+			if (status === "connected") {
+				try {
+					const conn = manager.getConnection(name);
+					toolCount = conn?.tools?.length ?? 0;
+				} catch {
+					// best-effort
+				}
+			}
+			statusMap[name] = { status, toolCount };
+		}
+
+		sendResponse(cmd.id, true, { ok: true, servers: statusMap });
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		console.error(`[socverify-runner] reloadMcp error: ${msg}`);
+		sendResponse(cmd.id, false, undefined, `Failed to reload MCP: ${msg}`);
+	}
+}
+
 async function handleDestroy(cmd: Command & { type: "destroy" }): Promise<void> {
 	if (unsubscribe) {
 		unsubscribe();
@@ -472,6 +567,12 @@ async function handleCommand(cmd: Command): Promise<void> {
 				break;
 			case "getMcpStatus":
 				await handleGetMcpStatus(cmd);
+				break;
+			case "getMcpServerTools":
+				await handleGetMcpServerTools(cmd);
+				break;
+			case "reloadMcp":
+				await handleReloadMcp(cmd);
 				break;
 			case "destroy":
 				await handleDestroy(cmd);

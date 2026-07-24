@@ -59,3 +59,16 @@ export type McpServerInfo = {
   /** Number of tools exposed by this server (0 if not connected). */
   toolCount: number;
 };
+
+/** A single tool exposed by an MCP server (mirrors omp's MCPToolDefinition). */
+export type McpToolInfo = {
+  name: string;
+  description?: string;
+  /** JSON Schema for the tool's parameters. */
+  inputSchema?: {
+    type: 'object';
+    properties?: Record<string, unknown>;
+    required?: string[];
+    [key: string]: unknown;
+  };
+};

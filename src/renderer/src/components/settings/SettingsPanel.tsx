@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Key, Package, Server, FileText, Plus, Trash2, Save, Download, Upload, Palette, Check, Cpu, RefreshCw, Zap, Info, BookOpen, Folder, ChevronDown, ChevronRight, Pencil, Terminal, Globe, Power } from 'lucide-react';
+import { X, Key, Package, Server, FileText, Plus, Trash2, Save, Download, Upload, Palette, Check, Cpu, RefreshCw, Zap, Info, BookOpen, Folder, ChevronDown, ChevronRight, Pencil, Terminal, Globe, Power, Loader2, Wrench } from 'lucide-react';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { useUiStore } from '@renderer/stores/ui';
@@ -7,7 +7,7 @@ import { useThemeStore } from '@renderer/stores/theme';
 import { useSessionStore } from '@renderer/stores/session';
 import { cn } from '@renderer/lib/utils';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
-import type { CredentialEntry, SkillInfo, CreateSkillInput, McpConfigFile, McpServerConfig, McpTransportType } from '@shared/types';
+import type { CredentialEntry, SkillInfo, CreateSkillInput, McpConfigFile, McpServerConfig, McpTransportType, McpServerInfo, McpToolInfo } from '@shared/types';
 
 type SettingsTab = 'credentials' | 'skills' | 'mcp' | 'prompt' | 'appearance';
 
@@ -784,6 +784,8 @@ function McpTab() {
   const setMcpConfig = useSettingsStore((s) => s.setMcpConfig);
   const loadMcpServers = useSettingsStore((s) => s.loadMcpServers);
   const loadMcpConfig = useSettingsStore((s) => s.loadMcpConfig);
+  const reloadMcp = useSettingsStore((s) => s.reloadMcp);
+  const mcpReloading = useSettingsStore((s) => s.mcpReloading);
   const mcpServers = useSettingsStore((s) => s.mcpServers);
   const mcpConfig = useSettingsStore((s) => s.mcpConfig);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
@@ -793,6 +795,7 @@ function McpTab() {
   const [newServer, setNewServer] = useState<ServerFormState | null>(null);
   const [jsonMode, setJsonMode] = useState(false);
   const [jsonText, setJsonText] = useState('');
+  const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (currentProjectId) {
@@ -861,8 +864,23 @@ function McpTab() {
   const handleSaveJson = async () => {
     if (!currentProjectId) return;
     try {
-      const parsed = JSON.parse(jsonText) as McpConfigFile;
-      await setMcpConfig(currentProjectId, parsed);
+      const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+      // Accept two input shapes:
+      //   1. { "mcpServers": { "name": {...} } }  ← canonical .mcp.json format
+      //   2. { "name": {...}, ... }               ← bare server map (user-friendly)
+      // If the top-level object has no `mcpServers` key but its values look
+      // like server configs (plain objects), wrap them automatically.
+      let config: McpConfigFile;
+      if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
+        config = parsed as unknown as McpConfigFile;
+      } else {
+        // Treat the whole object as a server map
+        const serverEntries = Object.entries(parsed).filter(
+          ([k, v]) => k !== '$schema' && typeof v === 'object' && v !== null,
+        );
+        config = { mcpServers: Object.fromEntries(serverEntries) as Record<string, McpServerConfig> };
+      }
+      await setMcpConfig(currentProjectId, config);
       setJsonMode(false);
     } catch {
       // JSON parse error
@@ -870,13 +888,28 @@ function McpTab() {
   };
 
   const handleLoadJson = () => {
-    const config: McpConfigFile = { mcpServers: servers };
-    setJsonText(JSON.stringify(config, null, 2));
+    // Load in the user-friendly bare server map format so users can edit
+    // servers directly without the `mcpServers` wrapper. handleSaveJson
+    // accepts both shapes.
+    setJsonText(JSON.stringify(servers, null, 2));
     setJsonMode(true);
   };
 
   const handleRefresh = () => {
     if (currentProjectId) loadMcpServers(currentProjectId);
+  };
+
+  const handleReloadMcp = () => {
+    if (currentProjectId) reloadMcp(currentProjectId);
+  };
+
+  const toggleExpand = (name: string) => {
+    setExpandedServers((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
   };
 
   return (
@@ -887,9 +920,23 @@ function McpTab() {
           <div className="text-[10px] font-semibold uppercase text-muted-foreground">已配置 MCP 服务器</div>
           <div className="flex items-center gap-1">
             <button
+              onClick={handleReloadMcp}
+              disabled={!currentProjectId || mcpReloading}
+              className={cn(
+                'flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                currentProjectId && !mcpReloading
+                  ? 'text-primary hover:bg-primary/10'
+                  : 'cursor-not-allowed text-muted-foreground/50',
+              )}
+              title="重载 MCP（让运行中的会话立即应用新配置）"
+            >
+              <RefreshCw className={cn('h-3 w-3', mcpReloading && 'animate-spin')} />
+              {mcpReloading ? '重载中…' : '重载'}
+            </button>
+            <button
               onClick={handleRefresh}
               className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-              title="刷新"
+              title="刷新列表"
             >
               <RefreshCw className="h-3 w-3" />
             </button>
@@ -916,65 +963,15 @@ function McpTab() {
         ) : (
           <div className="space-y-1">
             {mcpServers.map((s) => (
-              <div
+              <McpServerRow
                 key={s.name}
-                className="flex items-center gap-2 rounded border border-border/50 bg-secondary/20 px-2 py-1.5"
-              >
-                {/* Status indicator */}
-                <div
-                  className={cn('h-2 w-2 shrink-0 rounded-full', STATUS_COLORS[s.status])}
-                  title={STATUS_LABELS[s.status]}
-                />
-
-                {/* Transport icon */}
-                {s.transport === 'stdio' ? (
-                  <Terminal className="h-3 w-3 shrink-0 text-muted-foreground" />
-                ) : (
-                  <Globe className="h-3 w-3 shrink-0 text-muted-foreground" />
-                )}
-
-                {/* Name + summary */}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="truncate font-mono text-xs font-medium">{s.name}</span>
-                    {!s.enabled && (
-                      <span className="rounded bg-muted px-1 py-0.5 text-[9px] text-muted-foreground">已禁用</span>
-                    )}
-                    {s.toolCount > 0 && (
-                      <span className="text-[9px] text-muted-foreground">{s.toolCount} tools</span>
-                    )}
-                  </div>
-                  <div className="truncate text-[10px] text-muted-foreground">{s.summary}</div>
-                </div>
-
-                {/* Source badge */}
-                <span className={cn(
-                  'shrink-0 rounded px-1 py-0.5 text-[9px] font-medium',
-                  s.source === 'project' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
-                )}>
-                  {s.source === 'project' ? '项目' : '用户'}
-                </span>
-
-                {/* Toggle enabled */}
-                <button
-                  onClick={() => handleToggleEnabled(s.name)}
-                  className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                  title={s.enabled ? '禁用' : '启用'}
-                >
-                  <Power className={cn('h-3 w-3', s.enabled ? 'text-green-500' : 'text-muted-foreground/40')} />
-                </button>
-
-                {/* Remove (only for project-level servers) */}
-                {s.source === 'project' && (
-                  <button
-                    onClick={() => handleRemoveServer(s.name)}
-                    className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                    title="删除"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
+                server={s}
+                projectId={currentProjectId}
+                expanded={expandedServers.has(s.name)}
+                onToggleExpand={() => toggleExpand(s.name)}
+                onToggleEnabled={() => handleToggleEnabled(s.name)}
+                onRemove={() => handleRemoveServer(s.name)}
+              />
             ))}
           </div>
         )}
@@ -1139,6 +1136,162 @@ function McpTab() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** A single MCP server row with expandable tool list. */
+function McpServerRow({
+  server,
+  projectId,
+  expanded,
+  onToggleExpand,
+  onToggleEnabled,
+  onRemove,
+}: {
+  server: McpServerInfo;
+  projectId: string | null;
+  expanded: boolean;
+  onToggleExpand: () => void;
+  onToggleEnabled: () => void;
+  onRemove: () => void;
+}) {
+  const getMcpServerTools = useSettingsStore((s) => s.getMcpServerTools);
+  const tools = useSettingsStore((s) => s.mcpToolsByServer[server.name]);
+  const toolsLoading = useSettingsStore((s) => s.mcpToolsLoading[server.name] ?? false);
+
+  // Load tools on first expand (only if connected and we don't have them yet)
+  useEffect(() => {
+    if (expanded && projectId && server.status === 'connected' && tools === undefined && !toolsLoading) {
+      getMcpServerTools(projectId, server.name);
+    }
+  }, [expanded, projectId, server.name, server.status, tools, toolsLoading, getMcpServerTools]);
+
+  const canExpand = server.status === 'connected' && server.toolCount > 0;
+
+  return (
+    <div className="rounded border border-border/50 bg-secondary/20">
+      <div className="flex items-center gap-2 px-2 py-1.5">
+        {/* Expand toggle (only for connected servers with tools) */}
+        {canExpand ? (
+          <button
+            onClick={onToggleExpand}
+            className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+            title={expanded ? '折叠工具列表' : '展开工具列表'}
+          >
+            {expanded ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+          </button>
+        ) : (
+          <div className="w-4 shrink-0" />
+        )}
+
+        {/* Status indicator */}
+        <div
+          className={cn('h-2 w-2 shrink-0 rounded-full', STATUS_COLORS[server.status])}
+          title={STATUS_LABELS[server.status]}
+        />
+
+        {/* Transport icon */}
+        {server.transport === 'stdio' ? (
+          <Terminal className="h-3 w-3 shrink-0 text-muted-foreground" />
+        ) : (
+          <Globe className="h-3 w-3 shrink-0 text-muted-foreground" />
+        )}
+
+        {/* Name + summary */}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate font-mono text-xs font-medium">{server.name}</span>
+            {!server.enabled && (
+              <span className="rounded bg-muted px-1 py-0.5 text-[9px] text-muted-foreground">已禁用</span>
+            )}
+            <span className={cn(
+              'rounded px-1 py-0.5 text-[9px] font-medium',
+              server.status === 'connected'
+                ? 'bg-green-500/10 text-green-600 dark:text-green-400'
+                : server.status === 'connecting'
+                  ? 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400'
+                  : 'bg-muted text-muted-foreground',
+            )}>
+              {STATUS_LABELS[server.status]}
+            </span>
+            {server.toolCount > 0 && (
+              <span className="flex items-center gap-0.5 text-[9px] text-muted-foreground">
+                <Wrench className="h-2.5 w-2.5" />
+                {server.toolCount}
+              </span>
+            )}
+          </div>
+          <div className="truncate text-[10px] text-muted-foreground">{server.summary}</div>
+          {server.status === 'disconnected' && (
+            <div className="text-[9px] text-destructive/70">
+              连接失败
+            </div>
+          )}
+        </div>
+
+        {/* Source badge */}
+        <span className={cn(
+          'shrink-0 rounded px-1 py-0.5 text-[9px] font-medium',
+          server.source === 'project' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
+        )}>
+          {server.source === 'project' ? '项目' : '用户'}
+        </span>
+
+        {/* Toggle enabled */}
+        <button
+          onClick={onToggleEnabled}
+          className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+          title={server.enabled ? '禁用' : '启用'}
+        >
+          <Power className={cn('h-3 w-3', server.enabled ? 'text-green-500' : 'text-muted-foreground/40')} />
+        </button>
+
+        {/* Remove (only for project-level servers) */}
+        {server.source === 'project' && (
+          <button
+            onClick={onRemove}
+            className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+            title="删除"
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        )}
+      </div>
+
+      {/* Expanded tool list */}
+      {expanded && canExpand && (
+        <div className="border-t border-border/30 bg-background/30 px-2 py-1.5">
+          {toolsLoading ? (
+            <div className="flex items-center gap-1.5 py-1 text-[10px] text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              加载工具列表…
+            </div>
+          ) : tools && tools.length > 0 ? (
+            <div className="space-y-0.5">
+              {tools.map((tool) => (
+                <div key={tool.name} className="rounded px-1.5 py-1 hover:bg-accent/30">
+                  <div className="flex items-center gap-1.5">
+                    <Wrench className="h-2.5 w-2.5 shrink-0 text-muted-foreground" />
+                    <span className="font-mono text-[10px] font-medium text-foreground">{tool.name}</span>
+                  </div>
+                  {tool.description && (
+                    <p className="ml-4 mt-0.5 text-[9px] leading-tight text-muted-foreground line-clamp-2">
+                      {tool.description}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="py-1 text-[10px] text-muted-foreground">该服务器未暴露任何工具</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

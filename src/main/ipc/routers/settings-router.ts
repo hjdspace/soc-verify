@@ -16,8 +16,9 @@ import {
 } from '../../agent/skill-discovery';
 import { fetchOpenAICompatibleModels } from '../../agent/openai-compatible';
 import { sessionManager } from '../../agent/session-manager';
-import { listMcpServers, getMcpConfig, setMcpConfig, type McpStatusMap } from '../../mcp/mcp-config';
-import type { CredentialInput, CredentialUpdateInput, CreateSkillInput, McpConfigFile } from '@shared/types';
+import { listMcpServers, getMcpConfig, setMcpConfig } from '../../mcp/mcp-config';
+import { probeAllServers, probeMcpServer, clearProbeCache } from '../../mcp/mcp-probe';
+import type { CredentialInput, CredentialUpdateInput, CreateSkillInput, McpConfigFile, McpToolInfo } from '@shared/types';
 
 export const settingsRouter = t.router({
   getCredentials: t.procedure.query(() => {
@@ -234,21 +235,80 @@ export const settingsRouter = t.router({
     .query(async ({ input }) => {
       const project = requireProject(input.projectId);
 
-      // Query active sessions for MCP runtime status
-      let statusMap: McpStatusMap | undefined;
+      // Probe all configured MCP servers directly via the MCP protocol,
+      // independent of any AI agent session. This returns real connection
+      // status and tool counts by actually connecting to each server.
+      const config = await getMcpConfig(project.rootPath);
+      const servers = config.mcpServers ?? {};
+      const probeResults = await probeAllServers(servers, { timeoutMs: 8000 });
+
+      // Build status map from probe results
+      const statusMap: Record<string, { status: string; toolCount: number }> = {};
+      for (const [name, result] of Object.entries(probeResults)) {
+        statusMap[name] = {
+          status: result.status,
+          toolCount: result.toolCount,
+        };
+      }
+
+      return listMcpServers(project.rootPath, statusMap);
+    }),
+
+  getMcpServerTools: t.procedure
+    .input((raw): { projectId: string; serverName: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      if (typeof r.serverName !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'serverName is required' });
+      }
+      return { projectId: r.projectId, serverName: r.serverName };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+
+      // Probe the specific server to get its tool list. The probe cache
+      // (30s TTL) avoids re-connecting on every expand toggle.
+      const config = await getMcpConfig(project.rootPath);
+      const serverConfig = config.mcpServers?.[input.serverName];
+      if (!serverConfig) {
+        return [] as McpToolInfo[];
+      }
+
+      const result = await probeMcpServer(input.serverName, serverConfig, {
+        timeoutMs: 8000,
+      });
+      return result.tools;
+    }),
+
+  reloadMcp: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .mutation(async ({ input }) => {
+      requireProject(input.projectId);
+
+      // Clear the probe cache so the next list query re-probes all servers
+      // with the latest config.
+      clearProbeCache();
+
+      // Also reload MCP in running AI sessions (best-effort) so the LLM
+      // picks up new tools without restarting the session.
       const sessionIds = sessionManager.listSessionsByProject(input.projectId);
       for (const sid of sessionIds) {
         try {
-          const status = await sessionManager.getMcpStatus(sid);
-          if (status && Object.keys(status).length > 0) {
-            statusMap = statusMap ? { ...statusMap, ...status } : status;
-          }
+          await sessionManager.reloadMcp(sid);
         } catch {
           // Session may have been retired; skip
         }
       }
 
-      return listMcpServers(project.rootPath, statusMap);
+      return { ok: true };
     }),
 
   getMcpConfig: t.procedure
@@ -275,6 +335,8 @@ export const settingsRouter = t.router({
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
       await setMcpConfig(project.rootPath, input.config);
+      // Clear probe cache so the new config is re-probed on next list query
+      clearProbeCache();
       return { ok: true };
     }),
 

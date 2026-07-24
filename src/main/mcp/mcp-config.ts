@@ -39,13 +39,46 @@ function projectMcpConfigPaths(projectRoot: string): string[] {
 /**
  * Parse raw JSON content into an McpConfigFile, returning an empty config on
  * parse failure.
+ *
+ * Accepts two shapes:
+ *   1. Canonical: `{ "mcpServers": { "name": {...} } }`
+ *   2. Bare server map: `{ "name": {...} }` — auto-wrapped into `mcpServers`.
+ *      This tolerates hand-edited files or older front-end code that wrote
+ *      servers directly at the top level, which previously caused
+ *      `listMcpServers` to return an empty list (the "暂无 MCP" bug).
  */
 function parseConfig(content: string): McpConfigFile {
   try {
-    const parsed = JSON.parse(content) as McpConfigFile;
-    if (typeof parsed === 'object' && parsed !== null) {
-      return parsed;
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    if (typeof parsed !== 'object' || parsed === null) {
+      return { mcpServers: {} };
     }
+
+    // Canonical shape: has `mcpServers` object
+    if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
+      return parsed as unknown as McpConfigFile;
+    }
+
+    // Bare server map shape: top-level keys (except $schema / meta keys)
+    // map to server configs. Wrap them into `mcpServers`.
+    const serverEntries = Object.entries(parsed).filter(
+      ([k, v]) => k !== '$schema' && k !== 'disabledServers' && k !== 'enabledServers' && typeof v === 'object' && v !== null,
+    );
+    if (serverEntries.length > 0) {
+      const result: McpConfigFile = {
+        mcpServers: Object.fromEntries(serverEntries) as Record<string, McpServerConfig>,
+      };
+      // Preserve disabled/enabled lists if present
+      if (Array.isArray(parsed.disabledServers)) {
+        result.disabledServers = parsed.disabledServers as string[];
+      }
+      if (Array.isArray(parsed.enabledServers)) {
+        result.enabledServers = parsed.enabledServers as string[];
+      }
+      return result;
+    }
+
+    return parsed as unknown as McpConfigFile;
   } catch {
     // fall through to empty config
   }

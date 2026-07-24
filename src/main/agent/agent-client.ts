@@ -263,6 +263,30 @@ export class AgentClient {
     return data.servers ?? {};
   }
 
+  /**
+   * Query the omp engine for the list of tools exposed by a specific MCP server.
+   * Returns an empty array if the server is not connected or has no tools.
+   */
+  async getMcpServerTools(serverName: string): Promise<Array<{ name: string; description?: string; inputSchema?: unknown }>> {
+    const response = await this.send({ type: 'getMcpServerTools', serverName });
+    const data = this.getData<{ tools: Array<{ name: string; description?: string; inputSchema?: unknown }> }>(response);
+    return data.tools ?? [];
+  }
+
+  /**
+   * Reload MCP configuration in the running session.
+   *
+   * Triggers `MCPManager.disconnectAll()` + `discoverAndConnect()` +
+   * `session.refreshMCPTools()` so newly added/removed servers in `.mcp.json`
+   * are picked up without restarting the session. Returns the post-reload
+   * status map (same shape as `getMcpStatus`).
+   */
+  async reloadMcp(): Promise<Record<string, { status: string; toolCount: number }>> {
+    const response = await this.send({ type: 'reloadMcp' }, 60000);
+    const data = this.getData<{ ok: boolean; servers: Record<string, { status: string; toolCount: number }> }>(response);
+    return data.servers ?? {};
+  }
+
   async destroy(): Promise<void> {
     try {
       await this.send({ type: 'destroy' });

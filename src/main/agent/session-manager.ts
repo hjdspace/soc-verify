@@ -514,6 +514,39 @@ export class SessionManagerImpl extends EventEmitter {
     }
   }
 
+  /**
+   * Query the tools exposed by a specific MCP server in the given session.
+   * Returns undefined if the session doesn't exist; an empty array if the
+   * server is not connected or has no tools.
+   */
+  async getMcpServerTools(
+    sessionId: string,
+    serverName: string,
+  ): Promise<Array<{ name: string; description?: string; inputSchema?: unknown }> | undefined> {
+    const client = this.sessions.get(sessionId)?.client;
+    if (!client) return undefined;
+    try {
+      return await client.getMcpServerTools(serverName);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Reload MCP configuration in the running session so newly saved
+   * `.mcp.json` changes are picked up without restarting the session.
+   * Returns the post-reload status map, or undefined if the session doesn't exist.
+   */
+  async reloadMcp(sessionId: string): Promise<Record<string, { status: string; toolCount: number }> | undefined> {
+    const client = this.sessions.get(sessionId)?.client;
+    if (!client) return undefined;
+    try {
+      return await client.reloadMcp();
+    } catch {
+      return undefined;
+    }
+  }
+
   private requireClient(sessionId: string): AgentClient {
     const client = this.sessions.get(sessionId)?.client;
     if (!client) {

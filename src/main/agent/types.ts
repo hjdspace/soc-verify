@@ -46,6 +46,8 @@ export type Command =
   | { id: string; type: 'getMessages' }
   | { id: string; type: 'getState' }
   | { id: string; type: 'getMcpStatus' }
+  | { id: string; type: 'getMcpServerTools'; serverName: string }
+  | { id: string; type: 'reloadMcp' }
   | { id: string; type: 'destroy' };
 
 // ─── 响应（runner → host stdout）───────────────────────────
