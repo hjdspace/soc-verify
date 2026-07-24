@@ -407,6 +407,8 @@ export function SubsysList() {
   const [searchResults, setSearchResults] = useState<CaseData[]>([]);
   const [searching, setSearching] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const [searchSubsys, setSearchSubsys] = useState<string | null>(null);
+  const [showSubsysDropdown, setShowSubsysDropdown] = useState(false);
 
   // Load subsystems
   useEffect(() => {
@@ -489,7 +491,12 @@ export function SubsysList() {
     setSearching(true);
     const timer = setTimeout(() => {
       trpc.project.searchCases
-        .query({ projectId: currentProjectId, query: trimmed, limit: 200 })
+        .query({
+          projectId: currentProjectId,
+          query: trimmed,
+          subsys: searchSubsys ?? undefined,
+          limit: 200,
+        })
         .then((data) => {
           setSearchResults(data as CaseData[]);
         })
@@ -502,7 +509,7 @@ export function SubsysList() {
     }, 250);
 
     return () => clearTimeout(timer);
-  }, [searchQuery, currentProjectId]);
+  }, [searchQuery, currentProjectId, searchSubsys]);
 
   // Keyboard shortcut: Ctrl+F focuses search
   useEffect(() => {
@@ -765,8 +772,58 @@ export function SubsysList() {
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="搜索用例... (Ctrl+F)"
-          className="w-full rounded border border-border/50 bg-background/60 py-1 pl-7 pr-7 text-[11px] text-foreground placeholder:text-muted-foreground focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/30"
+          className="w-full rounded border border-border/50 bg-background/60 py-1 pl-7 pr-20 text-[11px] text-foreground placeholder:text-muted-foreground focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/30"
         />
+        {/* Subsys scope selector */}
+        <div className="absolute right-7 top-1/2 -translate-y-1/2">
+          <button
+            onClick={() => setShowSubsysDropdown(!showSubsysDropdown)}
+            className="flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            title="搜索范围"
+          >
+            <span className="max-w-16 truncate">
+              {searchSubsys ?? '全局'}
+            </span>
+            <ChevronDown className="h-2.5 w-2.5 shrink-0 opacity-50" />
+          </button>
+          {showSubsysDropdown && (
+            <>
+              <div
+                className="fixed inset-0 z-40"
+                onClick={() => setShowSubsysDropdown(false)}
+              />
+              <div className="absolute right-0 top-6 z-50 max-h-48 w-40 overflow-y-auto rounded-md border border-border bg-popover shadow-xl">
+                <button
+                  onClick={() => {
+                    setSearchSubsys(null);
+                    setShowSubsysDropdown(false);
+                  }}
+                  className={cn(
+                    'flex w-full items-center px-2 py-1 text-[11px] transition-colors hover:bg-accent',
+                    !searchSubsys && 'bg-accent/50 text-primary',
+                  )}
+                >
+                  全局
+                </button>
+                {subsystems.map((s) => (
+                  <button
+                    key={s.name}
+                    onClick={() => {
+                      setSearchSubsys(s.name);
+                      setShowSubsysDropdown(false);
+                    }}
+                    className={cn(
+                      'flex w-full items-center px-2 py-1 text-[11px] transition-colors hover:bg-accent',
+                      searchSubsys === s.name && 'bg-accent/50 text-primary',
+                    )}
+                  >
+                    <span className="truncate">{s.name}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
         {searching && (
           <Loader2 className="absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 animate-spin text-muted-foreground" />
         )}
