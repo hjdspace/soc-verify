@@ -95,6 +95,22 @@ export type UncoveredItem = {
   description: string;
 };
 
+/**
+ * 测试用例覆盖率贡献度。
+ * 来源于 urg -grade testfile（VCS）或 imc report -test（Cadence）。
+ * 用于 AI 分析哪些测试用例对覆盖率提升有效，辅助收敛决策。
+ */
+export type TestContribution = {
+  /** 测试用例名称 */
+  testName: string;
+  /** 综合评分（urg grade score，0-100，越高贡献越大） */
+  score?: number;
+  /** 排名（1 = 贡献最大） */
+  rank?: number;
+  /** 各 metric 的覆盖率百分比（IMC report -test 格式） */
+  coverage?: Partial<Record<CoverageMetric, number>>;
+};
+
 // ─── EDA 工具与配置 ─────────────────────────────────────────────
 
 export type EdaTool = 'imc' | 'vcs-urg' | 'vcover' | 'unknown';
@@ -110,9 +126,29 @@ export type EdaToolConfig = {
   summaryCommand?: string;
   detailCommand?: string;
   metricsCommand?: string;
+  /** CSV 格式覆盖率报告命令（urg -format csv），生成结构化数据供 AI 消费 */
+  csvCommand?: string;
+  /** 测试用例贡献度分析命令（urg -grade testfile / imc report -test） */
+  gradeCommand?: string;
+  /** Covergroup bin 级覆盖详情命令（imc report -bins / urg -detail） */
+  binsCommand?: string;
 };
 
-/** 各 EDA 工具的默认命令模板。 */
+/**
+ * 各 EDA 工具的默认命令模板。
+ *
+ * VCS urg 工具说明：
+ *   - urg 默认生成 HTML 报告，必须加 `-format text` 才能生成可解析的 ASCII 文本报告
+ *   - `-format csv` 生成 CSV 格式，适合 AI/pandas 直接消费
+ *   - `-grade testfile` 生成测试用例贡献度排名（gradedtests.txt）
+ *   - `-show tests` 在报告中标注每个覆盖点由哪个测试用例覆盖
+ *
+ * Cadence IMC 工具说明：
+ *   - IMC 通过 TCL `report` 子命令生成文本报告，用 `-execcmd` 直接执行单条命令
+ *   - `report -test` 生成按测试用例的覆盖率贡献分析（等效 urg -grade testfile）
+ *   - `report -bins` 生成 covergroup bin 级覆盖详情
+ *   - IMC 不支持 CSV 格式输出，csvCommand 为 undefined
+ */
 export const DEFAULT_EDA_COMMANDS: Readonly<Record<Exclude<EdaTool, 'unknown'>, EdaToolConfig>> = {
   imc: {
     tool: 'imc',
@@ -123,13 +159,25 @@ export const DEFAULT_EDA_COMMANDS: Readonly<Record<Exclude<EdaTool, 'unknown'>, 
       'imc -load {covMergeDir} -execcmd "report -detail -all -out {reportDir}/detail.txt"',
     metricsCommand:
       'imc -load {covMergeDir} -execcmd "report_metrics -out {reportDir}/metrics.txt"',
+    // IMC 不支持 CSV 格式，不设 csvCommand
+    gradeCommand:
+      'imc -load {covMergeDir} -execcmd "report -test -out {reportDir}/grade.txt"',
+    binsCommand:
+      'imc -load {covMergeDir} -execcmd "report -bins -out {reportDir}/bins.txt"',
   },
   'vcs-urg': {
     tool: 'vcs-urg',
     covMergeDir: 'urgReport',
-    summaryCommand: 'urg -dir {covMergeDir} -report {reportDir}',
-    detailCommand: 'urg -dir {covMergeDir} -detail -report {reportDir}',
-    metricsCommand: 'urg -dir {covMergeDir} -metrics -report {reportDir}',
+    // 修正：必须加 -format text 才能生成可解析的 ASCII 文本报告
+    summaryCommand: 'urg -dir {covMergeDir} -format text -report {reportDir}',
+    detailCommand: 'urg -dir {covMergeDir} -format text -detail -report {reportDir}',
+    metricsCommand: 'urg -dir {covMergeDir} -format text -metrics -report {reportDir}',
+    // CSV 格式：结构化数据，AI 可直接消费
+    csvCommand: 'urg -dir {covMergeDir} -format csv -report {reportDir}/csv',
+    // 测试用例贡献度排名
+    gradeCommand: 'urg -dir {covMergeDir} -grade testfile -report {reportDir}',
+    // urg 没有 report -bins 等效命令，用 -detail 获取 bin 级信息
+    binsCommand: undefined,
   },
   vcover: {
     tool: 'vcover',
@@ -159,6 +207,10 @@ export type CoverageData = {
   uncovered?: Partial<Record<CoverageMetric, UncoveredItem[]>>;
   /** metrics 报告解析出的额外维度（密度/复杂度等）。 */
   metrics?: Record<string, number>;
+  /** 测试用例覆盖率贡献度（urg -grade testfile / imc report -test）。 */
+  testContributions?: TestContribution[];
+  /** CSV 原始覆盖率数据（urg -format csv 生成的结构化数据）。 */
+  csvData?: string;
 };
 
 // ─── Coverage Merge Session（ADR 0008） ─────────────────────────
