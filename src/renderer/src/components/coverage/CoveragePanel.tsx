@@ -11,6 +11,7 @@ import {
   Loader2, BarChart3, Upload, ChevronRight,
   Target as TargetIcon, AlertTriangle, ShieldBan, GitCompare, Trash2, Plus,
   Activity, Square, Download, FolderOpen, Bug, X,
+  Trophy, EyeOff,
 } from 'lucide-react';
 import { useCoverageStore } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
@@ -18,6 +19,7 @@ import { cn } from '@renderer/lib/utils';
 import type {
   EdaTool, CoverageMetric, CoverageGap,
   TriageCause, TriageConfidence,
+  TestContribution, UncoveredItem,
 } from '@shared/types';
 import { COVERAGE_METRICS, DEFAULT_COVERAGE_TARGETS } from '@shared/types';
 import { CoverageTreeTable } from './CoverageTreeTable';
@@ -56,13 +58,15 @@ const TRIAGE_CONFIDENCES: Array<{ value: TriageConfidence; label: string }> = [
   { value: 'low', label: '低' },
 ];
 
-type Tab = 'targets' | 'gaps' | 'exclusions' | 'delta';
+type Tab = 'targets' | 'gaps' | 'exclusions' | 'delta' | 'grade' | 'uncovered';
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
   { id: 'targets', label: '目标', icon: TargetIcon },
   { id: 'gaps', label: '缺口', icon: AlertTriangle },
   { id: 'exclusions', label: '排除', icon: ShieldBan },
   { id: 'delta', label: '对比', icon: GitCompare },
+  { id: 'grade', label: '贡献度', icon: Trophy },
+  { id: 'uncovered', label: '未覆盖', icon: EyeOff },
 ];
 
 export function CoveragePanel() {
@@ -502,6 +506,8 @@ export function CoveragePanel() {
               {tab === 'gaps' && <GapsSection currentProjectId={currentProjectId} currentSessionId={currentSessionId} />}
               {tab === 'exclusions' && <ExclusionsSection currentProjectId={currentProjectId} currentSessionId={currentSessionId} />}
               {tab === 'delta' && <DeltaSection currentProjectId={currentProjectId} sessions={sessions} />}
+              {tab === 'grade' && <GradeSection currentProjectId={currentProjectId} currentSessionId={currentSessionId} />}
+              {tab === 'uncovered' && <UncoveredSection currentProjectId={currentProjectId} currentSessionId={currentSessionId} />}
             </>
           )}
         </>
@@ -1151,6 +1157,168 @@ function DeltaSection({
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── 贡献度 Tab：测试用例覆盖率贡献度排名 ─────────────────────
+
+function GradeSection({
+  currentProjectId,
+  currentSessionId,
+}: {
+  currentProjectId: string | null;
+  currentSessionId: string | null;
+}) {
+  const contributions = useCoverageStore((s) => s.testContributions);
+  const loadTestContributions = useCoverageStore((s) => s.loadTestContributions);
+
+  useEffect(() => {
+    if (currentProjectId) {
+      loadTestContributions(currentProjectId, currentSessionId ?? undefined);
+    }
+  }, [currentProjectId, currentSessionId, loadTestContributions]);
+
+  if (contributions.length === 0) {
+    return (
+      <div className="rounded border border-border bg-card p-4 text-center text-xs text-muted-foreground">
+        暂无测试用例贡献度数据。
+        <br />
+        需要使用 <code className="font-mono">urg -grade testfile</code>（VCS）或 <code className="font-mono">imc report -test</code>（Cadence）生成报告。
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="text-[10px] text-muted-foreground">
+        测试用例对覆盖率的贡献度排名。高排名测试用例贡献大，低排名可能是冗余测试。
+        {currentSessionId && <span className="ml-2">当前 session: <span className="font-mono">{currentSessionId}</span></span>}
+      </div>
+      <div className="rounded border border-border bg-card p-3">
+        <table className="w-full text-xs">
+          <thead className="text-[10px] uppercase text-muted-foreground">
+            <tr>
+              <th className="px-2 py-1 text-left">排名</th>
+              <th className="px-2 py-1 text-left">测试用例</th>
+              <th className="px-2 py-1 text-right">评分</th>
+              <th className="px-2 py-1 text-right">Line%</th>
+              <th className="px-2 py-1 text-right">Branch%</th>
+              <th className="px-2 py-1 text-right">Toggle%</th>
+            </tr>
+          </thead>
+          <tbody>
+            {contributions.map((c, i) => (
+              <tr key={i} className="border-t border-border/50 hover:bg-secondary/30">
+                <td className="px-2 py-1 font-mono text-muted-foreground">{c.rank ?? i + 1}</td>
+                <td className="px-2 py-1 font-mono">{c.testName}</td>
+                <td className="px-2 py-1 text-right font-mono">
+                  {c.score !== undefined ? c.score.toFixed(2) : '-'}
+                </td>
+                <td className="px-2 py-1 text-right font-mono">
+                  {c.coverage?.line !== undefined ? c.coverage.line.toFixed(1) + '%' : '-'}
+                </td>
+                <td className="px-2 py-1 text-right font-mono">
+                  {c.coverage?.branch !== undefined ? c.coverage.branch.toFixed(1) + '%' : '-'}
+                </td>
+                <td className="px-2 py-1 text-right font-mono">
+                  {c.coverage?.toggle !== undefined ? c.coverage.toggle.toFixed(1) + '%' : '-'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── 未覆盖 Tab：未覆盖项列表 ───────────────────────────────
+
+function UncoveredSection({
+  currentProjectId,
+  currentSessionId,
+}: {
+  currentProjectId: string | null;
+  currentSessionId: string | null;
+}) {
+  const uncoveredItems = useCoverageStore((s) => s.uncoveredItems);
+  const loadUncovered = useCoverageStore((s) => s.loadUncovered);
+  const [selectedMetric, setSelectedMetric] = useState<CoverageMetric | 'all'>('all');
+
+  useEffect(() => {
+    if (currentProjectId) {
+      loadUncovered(currentProjectId, currentSessionId ?? undefined);
+    }
+  }, [currentProjectId, currentSessionId, loadUncovered]);
+
+  const allItems: Array<UncoveredItem & { metric: CoverageMetric }> = [];
+  for (const [metric, items] of Object.entries(uncoveredItems)) {
+    if (selectedMetric === 'all' || selectedMetric === metric) {
+      for (const item of items ?? []) {
+        allItems.push({ ...item, metric: metric as CoverageMetric });
+      }
+    }
+  }
+
+  if (allItems.length === 0) {
+    return (
+      <div className="rounded border border-border bg-card p-4 text-center text-xs text-muted-foreground">
+        暂无未覆盖项数据。
+        <br />
+        需要使用 <code className="font-mono">imc report -bins</code>（Cadence）或 <code className="font-mono">urg -detail</code>（VCS）生成报告。
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] text-muted-foreground">Metric 筛选:</span>
+        <select
+          value={selectedMetric}
+          onChange={(e) => setSelectedMetric(e.target.value as CoverageMetric | 'all')}
+          className="rounded border border-border bg-card px-2 py-0.5 text-xs"
+        >
+          <option value="all">全部 ({Object.values(uncoveredItems).reduce((s, items) => s + (items?.length ?? 0), 0)})</option>
+          {COVERAGE_METRICS.map((m) => {
+            const count = uncoveredItems[m]?.length ?? 0;
+            if (count === 0) return null;
+            return <option key={m} value={m}>{m} ({count})</option>;
+          })}
+        </select>
+      </div>
+      <div className="rounded border border-border bg-card p-3">
+        <table className="w-full text-xs">
+          <thead className="text-[10px] uppercase text-muted-foreground">
+            <tr>
+              <th className="px-2 py-1 text-left">Metric</th>
+              <th className="px-2 py-1 text-left">模块/Covergroup</th>
+              <th className="px-2 py-1 text-left">信号/Bin</th>
+              <th className="px-2 py-1 text-left">文件</th>
+              <th className="px-2 py-1 text-right">行号</th>
+              <th className="px-2 py-1 text-left">描述</th>
+            </tr>
+          </thead>
+          <tbody>
+            {allItems.slice(0, 200).map((item, i) => (
+              <tr key={i} className="border-t border-border/50 hover:bg-secondary/30">
+                <td className="px-2 py-1 font-mono text-muted-foreground">{item.metric}</td>
+                <td className="px-2 py-1 font-mono">{item.module}</td>
+                <td className="px-2 py-1 font-mono">{item.signal ?? '-'}</td>
+                <td className="px-2 py-1 font-mono text-muted-foreground">{item.file ?? '-'}</td>
+                <td className="px-2 py-1 text-right font-mono">{item.line ?? '-'}</td>
+                <td className="px-2 py-1">{item.description}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {allItems.length > 200 && (
+          <div className="mt-2 text-center text-[10px] text-muted-foreground">
+            仅显示前 200 条，共 {allItems.length} 条未覆盖项
+          </div>
+        )}
+      </div>
     </div>
   );
 }
