@@ -186,7 +186,27 @@ export const coverageRouter = t.router({
       return {
         sessionId: result.sessionId,
         summary: (await mgr.getOverview(result.sessionId)).summary,
+        warnings: result.warnings,
+        reportDir: result.reportDir,
+        edaAllFailed: result.edaAllFailed,
+        generatedFiles: result.generatedFiles,
       };
+    }),
+
+  // ─── Debug 信息（导入日志查询） ──────────────────────────────
+
+  getImportLog: t.procedure
+    .input((raw): { projectId: string; sessionId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and sessionId are required' });
+      }
+      return { projectId: r.projectId, sessionId: r.sessionId };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      return mgr.getImportLog(input.sessionId);
     }),
 
   // ─── Session 生命周期（ADR 0008） ─────────────────────────────
