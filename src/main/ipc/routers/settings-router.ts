@@ -18,6 +18,7 @@ import { fetchOpenAICompatibleModels } from '../../agent/openai-compatible';
 import { sessionManager } from '../../agent/session-manager';
 import { listMcpServers, getMcpConfig, setMcpConfig } from '../../mcp/mcp-config';
 import { probeAllServers, probeMcpServer, clearProbeCache } from '../../mcp/mcp-probe';
+import { getCombinedDefaultSystemPrompt } from '../../agent/default-system-prompt';
 import type { CredentialInput, CredentialUpdateInput, CreateSkillInput, McpConfigFile, McpToolInfo } from '@shared/types';
 
 export const settingsRouter = t.router({
@@ -378,4 +379,18 @@ export const settingsRouter = t.router({
       await writeFile(promptPath, input.prompt, 'utf-8');
       return { ok: true };
     }),
+
+  /**
+   * 返回 AI Agent 的默认系统提示词模板内容（只读参考）。
+   *
+   * 模板内容在构建时通过 Vite `?raw` import 嵌入到代码中，
+   * 因此在开发模式和打包二进制模式下都可访问。
+   *
+   * 包含：
+   *   - system-prompt.md：主指令（角色、工程原则、工具策略、执行工作流、交付契约）
+   *   - personalities/default.md：默认个性（简洁、证据优先）
+   */
+  getDefaultSystemPrompt: t.procedure.query(() => {
+    return getCombinedDefaultSystemPrompt();
+  }),
 });

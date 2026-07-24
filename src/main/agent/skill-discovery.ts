@@ -18,6 +18,7 @@ import { readdir, readFile, writeFile, mkdir, rm, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';
+import { execSync } from 'node:child_process';
 import { resolveBuiltInExtensionDir } from './paths';
 import type { SkillInfo, SkillSource, SkillDirectoryInfo, CreateSkillInput, SkillInstallInfo } from '@shared/types';
 
@@ -359,6 +360,10 @@ export async function createUserSkill(input: CreateSkillInput): Promise<SkillInf
 /**
  * Delete a user-level skill by name.
  * Only allows deleting skills from user-level directories (not built-in or project-level).
+ *
+ * Node.js v22 `fs.rm({ recursive: true, force: true })` 在 Windows 上存在 bug：
+ * 报告成功但目录实际未被删除。因此删除后会验证目录确实不存在；
+ * 如果 `fs.rm` 失效，回退到 Windows 原生 `rmdir` 命令。
  */
 export async function deleteUserSkill(name: string): Promise<void> {
   const safeName = name.trim().toLowerCase();
@@ -377,5 +382,35 @@ export async function deleteUserSkill(name: string): Promise<void> {
     throw new Error(`目录 "${skillDir}" 不包含 SKILL.md，不是有效的技能目录`);
   }
 
-  await rm(skillDir, { recursive: true, force: true });
+  // Step 1: try fs.rm (works on Linux/macOS and older Node.js on Windows)
+  try {
+    await rm(skillDir, { recursive: true, force: true });
+  } catch {
+    // Ignore — will fall back to native command below
+  }
+
+  // Step 2: verify deletion. fs.rm may silently fail on Windows (Node.js v22 bug).
+  if (!existsSync(skillDir)) return;
+
+  // Step 3: fallback to native OS command (reliable on Windows where fs.rm is broken)
+  if (process.platform === 'win32') {
+    try {
+      execSync(`rmdir /s /q "${skillDir}"`, { shell: 'cmd.exe', stdio: 'ignore' });
+    } catch {
+      // Fall through to error below
+    }
+  } else {
+    try {
+      execSync(`rm -rf "${skillDir}"`, { stdio: 'ignore' });
+    } catch {
+      // Fall through to error below
+    }
+  }
+
+  // Step 4: final verification
+  if (existsSync(skillDir)) {
+    throw new Error(
+      `无法删除技能目录 "${skillDir}"（可能被其他进程锁定）。请关闭相关程序后重试。`,
+    );
+  }
 }

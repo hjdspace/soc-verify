@@ -25,6 +25,8 @@ interface SettingsStoreState {
   /** Whether an MCP reload is in progress. */
   mcpReloading: boolean;
   systemPrompt: string;
+  /** AI Agent 默认系统提示词模板（只读参考，构建时嵌入）。 */
+  defaultSystemPrompt: string;
   loading: boolean;
   models: ApiModel[];
   modelsLoading: boolean;
@@ -52,6 +54,8 @@ interface SettingsStoreState {
   reloadMcp: (projectId: string) => Promise<void>;
   loadSystemPrompt: (projectId: string) => Promise<void>;
   setSystemPrompt: (projectId: string, prompt: string) => Promise<void>;
+  /** 加载 AI Agent 默认系统提示词模板（只读参考）。 */
+  loadDefaultSystemPrompt: () => Promise<void>;
   fetchModels: (providerId?: string, apiKey?: string, baseUrl?: string) => Promise<ApiModel[]>;
   /** Fetch models for a specific stored credential and cache the result. */
   fetchModelsForProvider: (providerId: string) => Promise<ApiModel[]>;
@@ -68,6 +72,7 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
   mcpToolsLoading: {},
   mcpReloading: false,
   systemPrompt: '',
+  defaultSystemPrompt: '',
   loading: false,
   models: [],
   modelsLoading: false,
@@ -282,6 +287,15 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
       useToastStore.getState().success('系统提示词已保存');
     } catch (err) {
       useToastStore.getState().error('保存提示词失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  loadDefaultSystemPrompt: async () => {
+    try {
+      const prompt = await trpc.settings.getDefaultSystemPrompt.query();
+      set({ defaultSystemPrompt: prompt ?? '' });
+    } catch {
+      // Best-effort
     }
   },
 

@@ -323,17 +323,29 @@ export class TerminalManager extends EventEmitter {
       }
     };
 
+    // Try to spawn a real PTY; if spawn fails (e.g. "Cannot launch conpty"
+    // on Windows when no console is attached), fall through to the
+    // child_process fallback so the terminal still works in degraded mode.
+    let pty: NodePty.IPty | null = null;
+    let spawnError: Error | null = null;
     if (ptyModule) {
-      // Use real node-pty
-      const shell = findShell();
-      const pty = ptyModule.spawn(shell, [], {
-        name: 'xterm-color',
-        cols,
-        rows,
-        cwd,
-        env,
-      });
+      try {
+        const shell = findShell();
+        pty = ptyModule.spawn(shell, [], {
+          name: 'xterm-color',
+          cols,
+          rows,
+          cwd,
+          env,
+        });
+      } catch (err) {
+        pty = null;
+        spawnError = err instanceof Error ? err : new Error(String(err));
+      }
+    }
 
+    if (pty) {
+      // Use real node-pty
       session.pid = pty.pid;
       entry.pty = pty;
 
@@ -380,7 +392,7 @@ export class TerminalManager extends EventEmitter {
 
       // Mark session as fallback and attach a user-facing warning
       session.backend = 'fallback';
-      const errDetail = ptyResult.error?.message ?? 'unknown error';
+      const errDetail = spawnError?.message ?? ptyResult.error?.message ?? 'unknown error';
       session.warning =
         `Terminal is running in limited mode (child_process fallback). ` +
         `node-pty could not be loaded: ${errDetail}. ` +
