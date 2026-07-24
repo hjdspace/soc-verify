@@ -75,28 +75,26 @@ function setupLinuxIme(): void {
 
 // ── Linux D-Bus 会话总线处理 ───────────────────────────────────────
 // Chromium/IBus 都需要 D-Bus session bus 才能正常工作。
-// 在 systemd 系统上（RHEL/Rocky/Ubuntu 等），session bus 由 systemd 管理，
-// IBus 绑定在这个总线上的。但 AppImage 从桌面启动时，
-// DBUS_SESSION_BUS_ADDRESS 可能未设置，导致代码 fallback 到
-// `dbus-launch` 启动一个全新的总线——IBus 不在这个新总线上，
-// 所以中文输入法无法工作。
+// AppImage 从桌面启动时 DBUS_SESSION_BUS_ADDRESS 可能未设置，
+// 需要自动检测已有的 session bus 地址——必须连接到 IBus 所在的总线，
+// 而不是新建一个空总线（否则 IBus 输入法不工作）。
 //
 // 策略（优先级从高到低）：
 //   1. 若 DBUS_SESSION_BUS_ADDRESS 已设置且有效 → 正常使用
-//   2. 若未设置 → 尝试检测 systemd 管理的 session bus socket
-//   3. 若不存在 → 尝试通过 `dbus-launch` 启动一个会话总线
-//   4. 若 dbus-launch 不可用 → 提升 Chromium 日志级别至 FATAL，抑制 ERROR 级噪音
+//   2. 检测 systemd 管理的 session bus socket (/run/user/<uid>/bus)
+//   3. 检测传统 D-Bus socket (/run/user/<uid>/dbus/session_bus_socket)
+//   4. 从 X11 root window 属性获取（远程 X11 / Exceed / VNC+X11 环境）
+//   5. 通过 `dbus-launch` 启动新的会话总线（最后手段）
+//   6. 若以上都不可用 → 抑制 Chromium D-Bus 错误日志
 function setupLinuxDbus(): void {
   if (process.platform !== 'linux') return;
 
   const currentAddr = process.env['DBUS_SESSION_BUS_ADDRESS'];
   if (currentAddr && currentAddr.startsWith('unix:')) {
-    // D-Bus session bus already configured — nothing to do
     return;
   }
 
-  // 优先检测 systemd 管理的 D-Bus session bus
-  // 这是 IBus/Fcitx 所在的总线，必须连接到它而不是新建一个
+  // ── 2. 检测 systemd 管理的 session bus socket ──
   try {
     let uid: string | number;
     const getuid = process.getuid;
@@ -106,7 +104,6 @@ function setupLinuxDbus(): void {
       uid = execSync('id -u', { encoding: 'utf-8', timeout: 2000 }).trim();
     }
 
-    // systemd 管理的 D-Bus socket（现代 Linux 标准）
     const systemdBusPath = `/run/user/${uid}/bus`;
     if (existsSync(systemdBusPath)) {
       process.env['DBUS_SESSION_BUS_ADDRESS'] = `unix:path=${systemdBusPath}`;
@@ -114,7 +111,6 @@ function setupLinuxDbus(): void {
       return;
     }
 
-    // 传统 D-Bus session bus socket（旧版本或非 systemd 环境）
     const legacyBusPath = `/run/user/${uid}/dbus/session_bus_socket`;
     if (existsSync(legacyBusPath)) {
       process.env['DBUS_SESSION_BUS_ADDRESS'] = `unix:path=${legacyBusPath}`;
@@ -125,21 +121,39 @@ function setupLinuxDbus(): void {
     // uid 检测失败，继续尝试其他方法
   }
 
-  // 尝试通过 `dbus-launch` 启动新的会话总线
-  // 仅在没有 systemd session bus 的环境（HPC / SSH + X11 转发 / 最小化 WM）中使用
+  // ── 3. 从 X11 root window 属性获取 D-Bus 地址 ──
+  // 在远程 X11 环境（Exceed / XDMCP / VNC+X11 转发 / SSH -X）中，
+  // D-Bus session bus 地址通过 dbus-launch 存储在 X11 root window 属性中。
+  // VSCode 等应用能自动读取此属性，但 AppImage 不能——需要主动获取。
   try {
-    const output = execSync('dbus-launch --sh-syntax', {
+    const xpropOutput = execSync('xprop -root DBUS_SESSION_BUS_ADDRESS', {
+      encoding: 'utf-8',
+      timeout: 3000,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    // 输出格式: DBUS_SESSION_BUS_ADDRESS(STRING) = "unix:abstract=/tmp/dbus-XXX,guid=XXX"
+    const match = xpropOutput.match(/=\s*"(.+?)"/);
+    if (match && match[1].startsWith('unix:')) {
+      process.env['DBUS_SESSION_BUS_ADDRESS'] = match[1];
+      console.log(`[dbus] using session bus from X11 root window property`);
+      return;
+    }
+  } catch {
+    // xprop not available or property not set
+  }
+
+  // ── 4. 尝试通过 `dbus-launch --autolaunch` 获取或启动 session bus ──
+  // --autolaunch 会优先从 X11 属性查找已有总线，找到则返回其地址；
+  // 找不到才启动新总线。比 --sh-syntax 更安全。
+  try {
+    const output = execSync('dbus-launch --autolaunch --sh-syntax', {
       encoding: 'utf-8',
       timeout: 5000,
       stdio: ['pipe', 'pipe', 'pipe']
     });
-    // Parse lines like: DBUS_SESSION_BUS_ADDRESS=unix:abstract=/tmp/dbus-XXX,guid=...
-    //                  DBUS_SESSION_BUS_PID=12345
-    //                  DBUS_SESSION_BUS_WINDOWID=1
     for (const line of output.split('\n')) {
       const match = line.match(/^(DBUS_SESSION_BUS_\w+)=(.+?);?\s*$/);
       if (match) {
-        // 去除可能存在的引号包裹
         let value = match[2].replace(/;$/, '').trim();
         if ((value.startsWith("'") && value.endsWith("'")) ||
             (value.startsWith('"') && value.endsWith('"'))) {
@@ -148,16 +162,40 @@ function setupLinuxDbus(): void {
         process.env[match[1]] = value;
       }
     }
-    console.log('[dbus] started session bus via dbus-launch');
-    return;
+    if (process.env['DBUS_SESSION_BUS_ADDRESS']) {
+      console.log('[dbus] using session bus via dbus-launch --autolaunch');
+      return;
+    }
   } catch {
-    // dbus-launch not available or failed — fall through to log suppression
+    // dbus-launch --autolaunch not available or failed
   }
 
-  // No D-Bus available: suppress Chromium's non-fatal D-Bus error logs.
-  // --log-level=3 means only FATAL messages are printed (0=INFO,1=WARN,2=ERROR,3=FATAL).
-  // This silences the harmless "Failed to connect to the bus" noise while
-  // preserving genuine crash-level messages.
+  // ── 5. 最后手段：通过 `dbus-launch` 启动全新的会话总线 ──
+  // 仅在没有已有 session bus 的极端环境（无 X11 的纯 SSH）中使用
+  try {
+    const output = execSync('dbus-launch --sh-syntax', {
+      encoding: 'utf-8',
+      timeout: 5000,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    for (const line of output.split('\n')) {
+      const match = line.match(/^(DBUS_SESSION_BUS_\w+)=(.+?);?\s*$/);
+      if (match) {
+        let value = match[2].replace(/;$/, '').trim();
+        if ((value.startsWith("'") && value.endsWith("'")) ||
+            (value.startsWith('"') && value.endsWith('"'))) {
+          value = value.slice(1, -1);
+        }
+        process.env[match[1]] = value;
+      }
+    }
+    console.log('[dbus] started new session bus via dbus-launch');
+    return;
+  } catch {
+    // dbus-launch not available or failed
+  }
+
+  // ── 6. 完全无 D-Bus 可用 → 抑制错误日志 ──
   app.commandLine.appendSwitch('log-level', '3');
   console.log('[dbus] no session bus available; suppressing Chromium D-Bus error logs');
 }
