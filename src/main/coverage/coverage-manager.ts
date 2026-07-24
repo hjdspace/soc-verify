@@ -29,6 +29,8 @@ import type {
   TriageCause,
   TriageConfidence,
   ExclusionStatus,
+  UncoveredItem,
+  TestContribution,
 } from '@shared/types';
 import {
   summarizeCoverage,
@@ -316,6 +318,57 @@ export class CoverageManager {
     const children = module ? module.children : [];
 
     return { sessionId: data.sessionId, module, children, targets };
+  }
+
+  /**
+   * 返回未覆盖项列表（来自 bins 报告或 detail 报告解析）。
+ * 供 AI Host Tool get_coverage_uncovered 消费。
+ */
+  async getCoverageUncovered(
+    sessionId?: string,
+    metric?: CoverageMetric,
+  ): Promise<{
+    sessionId: string;
+    uncovered: Partial<Record<CoverageMetric, UncoveredItem[]>>;
+  }> {
+    const data = await this.resolveSession(sessionId);
+    const uncovered = data.uncovered ?? {};
+    // 如果指定了 metric，只返回该 metric 的未覆盖项
+    if (metric && uncovered[metric]) {
+      return { sessionId: data.sessionId, uncovered: { [metric]: uncovered[metric] } };
+    }
+    return { sessionId: data.sessionId, uncovered };
+  }
+
+  /**
+   * 返回测试用例覆盖率贡献度排名。
+ * 来源于 urg -grade testfile 或 imc report -test。
+ * 供 AI Host Tool get_coverage_grade 消费。
+ */
+  async getTestContributions(sessionId?: string): Promise<{
+    sessionId: string;
+    contributions: TestContribution[];
+  }> {
+    const data = await this.resolveSession(sessionId);
+    return {
+      sessionId: data.sessionId,
+      contributions: data.testContributions ?? [],
+    };
+  }
+
+  /**
+   * 返回 CSV 原始覆盖率数据（urg -format csv 生成）。
+ * 如果没有 CSV 数据，返回 null。
+ */
+  async getCsvData(sessionId?: string): Promise<{
+    sessionId: string;
+    csvData: string | null;
+  }> {
+    const data = await this.resolveSession(sessionId);
+    return {
+      sessionId: data.sessionId,
+      csvData: data.csvData ?? null,
+    };
   }
 
   async deleteSession(sessionId: string): Promise<void> {
