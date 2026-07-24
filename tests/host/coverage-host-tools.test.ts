@@ -388,10 +388,13 @@ describe('get_coverage Host Tool (ADR 0009 摘要优先)', () => {
       expect(hostTools.hasTool('get_coverage_detail')).toBe(false);
 
       hostTools.setCoverageManager(mgr);
-      // 注入后注册 get_coverage_detail
+      // 注入后注册 get_coverage_detail + get_coverage_uncovered + get_coverage_grade + get_coverage_csv
       expect(hostTools.hasTool('get_coverage_detail')).toBe(true);
-      // 共 9 个工具
-      expect(hostTools.getToolNames()).toHaveLength(9);
+      expect(hostTools.hasTool('get_coverage_uncovered')).toBe(true);
+      expect(hostTools.hasTool('get_coverage_grade')).toBe(true);
+      expect(hostTools.hasTool('get_coverage_csv')).toBe(true);
+      // 共 12 个工具（8 默认 + 4 覆盖率分析）
+      expect(hostTools.getToolNames()).toHaveLength(12);
     } finally {
       cleanup();
     }
