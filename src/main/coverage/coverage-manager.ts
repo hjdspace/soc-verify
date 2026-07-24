@@ -38,11 +38,25 @@ import {
   COVERAGE_METRICS,
 } from '@shared/types';
 import type { PluginBackedCoverage } from '../plugin-adapters';
-import { CoverageReportGenerator } from './coverage-report-generator';
+import { CoverageReportGenerator, type GeneratedReports } from './coverage-report-generator';
 
 const SOCVERIFY_DIR = '.socverify';
 const COVERAGE_DIR = 'coverage';
 const SESSIONS_FILE = 'sessions.json';
+
+/** 导入覆盖率数据的结果（包含 debug 信息）。 */
+export interface CoverageImportResult {
+  sessionId: string;
+  data: CoverageData;
+  /** 报告目录路径（.socverify/coverage/<sessionId>/reports/） */
+  reportDir: string;
+  /** 导入过程中的警告信息 */
+  warnings: string[];
+  /** EDA 命令是否全部失败 */
+  edaAllFailed: boolean;
+  /** 成功生成的报告文件列表 */
+  generatedFiles: string[];
+}
 
 export interface CoverageManagerOptions {
   projectRoot: string;
@@ -84,18 +98,21 @@ export class CoverageManager {
    * @param covMergeDir 用户指定的 cov_merge 目录
    * @param edaConfig EDA Tool Configuration（含命令模板）
    * @param targets 用户自定义目标（可选，缺省用 DEFAULT_COVERAGE_TARGETS）
+   * @returns 包含 sessionId、data、reportDir、warnings 的导入结果
    */
   async importCoverage(
     covMergeDir: string,
     edaConfig: EdaToolConfig,
     targets?: Partial<Record<string, number>>,
-  ): Promise<{ sessionId: string; data: CoverageData }> {
+  ): Promise<CoverageImportResult> {
     if (!this.adapter?.hasParser()) {
       throw new Error('No coverage-parser plugin loaded');
     }
 
+    const warnings: string[] = [];
     const sessionId = this.generateSessionId();
-    const reportDir = join(this.projectRoot, SOCVERIFY_DIR, COVERAGE_DIR, sessionId, 'reports');
+    const sessionDir = join(this.projectRoot, SOCVERIFY_DIR, COVERAGE_DIR, sessionId);
+    const reportDir = join(sessionDir, 'reports');
 
     // 写入 meta.json 供解析器读取 covMergeDir 和 edaTool（在 EDA 命令运行前写入）
     await mkdir(reportDir, { recursive: true });
@@ -109,16 +126,32 @@ export class CoverageManager {
     // Step 1: 平台运行 EDA 命令生成文本报告
     // 容错处理：EDA 工具可能未安装或命令失败，此时报告目录为空，
     // 解析器会通过 meta.json 中的 covMergeDir 尝试直接扫描覆盖率数据
+    let edaAllFailed = false;
+    let generatedFiles: string[] = [];
+
     if (this.reportGenerator) {
       try {
-        await this.reportGenerator.generate(edaConfig, covMergeDir, sessionId);
+        const reports: GeneratedReports = await this.reportGenerator.generate(edaConfig, covMergeDir, sessionId);
+        edaAllFailed = reports.allFailed;
+        generatedFiles = reports.generatedFiles;
+
+        if (edaAllFailed) {
+          warnings.push(
+            `所有 EDA 命令执行失败。可能原因：imc 不在 PATH 中、cov_merge 目录无效、或命令模板错误。` +
+            `请查看报告目录下的 eda-commands.log 了解详情：${reportDir}`,
+          );
+        } else if (generatedFiles.length === 0) {
+          warnings.push(
+            `EDA 命令已执行但未生成任何报告文件。请查看 eda-commands.log 了解详情：${reportDir}`,
+          );
+        }
       } catch (err) {
-        console.warn(
-          `[coverage] EDA report generation failed (continuing with direct scan): ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        );
+        const msg = err instanceof Error ? err.message : String(err);
+        warnings.push(`EDA 报告生成异常：${msg}。将尝试直接扫描 cov_merge 目录。`);
+        edaAllFailed = true;
       }
+    } else {
+      warnings.push('未配置 EDA 报告生成器，跳过 EDA 命令执行。');
     }
 
     // Step 2: 插件解析文本报告为层级 Coverage Tree
@@ -134,6 +167,25 @@ export class CoverageManager {
       targets: targets ?? { ...DEFAULT_COVERAGE_TARGETS },
     };
 
+    // 检查解析结果是否全为 NA
+    const allNa = COVERAGE_METRICS.every(
+      (m) => enriched.root.metrics[m].percentage === null,
+    );
+    if (allNa) {
+      warnings.push(
+        `覆盖率解析完成，但所有指标均为 N/A。可能原因：EDA 报告格式不匹配或报告内容为空。` +
+        `请查看报告目录下的 parser-debug.log 了解解析详情：${reportDir}`,
+      );
+    }
+
+    // 检查模块树是否为空
+    if (enriched.root.children.length === 0) {
+      warnings.push(
+        `覆盖率模块树为空（无子模块）。可能原因：detail 报告未生成或格式不匹配。` +
+        `请查看 parser-debug.log 了解详情：${reportDir}`,
+      );
+    }
+
     await this.cache(enriched);
     await this.appendSession({
       sessionId,
@@ -143,7 +195,7 @@ export class CoverageManager {
       reportDir,
     });
 
-    return { sessionId, data: enriched };
+    return { sessionId, data: enriched, reportDir, warnings, edaAllFailed, generatedFiles };
   }
 
   // ─── Session 生命周期（ADR 0008） ─────────────────────────────
@@ -554,6 +606,54 @@ ${rows}
       `<td>${pct(m.functional.percentage)}</td><td>${pct(m.assertion.percentage)}</td></tr>`;
     const childRows = node.children.map((c) => this.renderTreeRows(c)).join('\n');
     return `${row}\n${childRows}`;
+  }
+
+  // ─── Debug 信息 ───────────────────────────────────────────
+
+  /**
+   * 读取指定 session 的导入日志（EDA 命令日志 + 解析器 debug 日志）。
+   * 返回 { edaLog, parserLog, reportDir, files }。
+   */
+  async getImportLog(sessionId: string): Promise<{
+    reportDir: string;
+    edaLog: string | null;
+    parserLog: string | null;
+    files: string[];
+  }> {
+    const sessions = await this.listSessions();
+    const session = sessions.find((s) => s.sessionId === sessionId);
+    const reportDir = session?.reportDir ?? join(this.projectRoot, SOCVERIFY_DIR, COVERAGE_DIR, sessionId, 'reports');
+
+    let edaLog: string | null = null;
+    let parserLog: string | null = null;
+    const files: string[] = [];
+
+    const edaLogPath = join(reportDir, 'eda-commands.log');
+    const parserLogPath = join(reportDir, 'parser-debug.log');
+
+    try {
+      edaLog = await readFile(edaLogPath, 'utf-8');
+    } catch {
+      // 文件可能不存在
+    }
+    try {
+      parserLog = await readFile(parserLogPath, 'utf-8');
+    } catch {
+      // 文件可能不存在
+    }
+
+    // 列出报告目录下的所有文件
+    try {
+      const { readdirSync } = await import('node:fs');
+      const entries = readdirSync(reportDir);
+      for (const name of entries) {
+        files.push(join(reportDir, name));
+      }
+    } catch {
+      // 目录可能不存在
+    }
+
+    return { reportDir, edaLog, parserLog, files };
   }
 
   private async resolveSession(sessionId?: string): Promise<CoverageData> {
