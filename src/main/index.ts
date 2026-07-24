@@ -16,15 +16,76 @@ import { terminalManager } from './terminal/terminal-manager';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// ── Linux D-Bus 会话总线处理 ───────────────────────────────────────
-// 在 HPC 服务器 / SSH + X11 转发 / 最小化窗口管理器等环境中，D-Bus
-// 会话总线可能未启动，导致 Chromium 打印大量 dbus/bus.cc ERROR 日志。
-// 这些错误不影响应用核心功能（Chromium 会优雅降级），但会造成日志噪音。
+// ── Linux 中文输入法（IME）环境变量处理 ─────────────────────────────
+// Electron/Chromium 在 Linux 上通过 GTK/XIM 协议与输入法框架通信，
+// 依赖 GTK_IM_MODULE / QT_IM_MODULE / XMODIFIERS 环境变量。
+// AppImage 的环境变量继承链不完整（尤其从桌面图标启动时），
+// 导致中文输入法无法在渲染进程的输入框中工作。
 //
 // 策略：
+//   1. 若环境变量已正确设置 → 不干预
+//   2. 若未设置 → 自动检测 IBus/Fcitx 并设置对应变量
+//   3. 若检测不到 → 默认回退到 IBus（RHEL/Rocky 系默认）
+function setupLinuxIme(): void {
+  if (process.platform !== 'linux') return;
+
+  // 如果已经正确设置了，不要覆盖用户配置
+  const alreadyConfigured = process.env['GTK_IM_MODULE'] && process.env['XMODIFIERS'];
+  if (alreadyConfigured) return;
+
+  // 检测系统正在使用的输入法框架
+  let imModule = 'ibus'; // RHEL/Rocky 系默认
+  try {
+    const env = process.env;
+    // 优先检查环境变量中的线索
+    if (env['XMODIFIERS']?.includes('fcitx') || env['GTK_IM_MODULE'] === 'fcitx') {
+      imModule = 'fcitx';
+    } else if (env['XMODIFIERS']?.includes('ibus') || env['GTK_IM_MODULE'] === 'ibus') {
+      imModule = 'ibus';
+    } else {
+      // 通过检测运行中的进程来判断
+      const psOutput = execSync('ps -e -o comm=', {
+        encoding: 'utf-8',
+        timeout: 3000,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      if (psOutput.includes('fcitx')) {
+        imModule = 'fcitx';
+      } else if (psOutput.includes('ibus')) {
+        imModule = 'ibus';
+      }
+    }
+  } catch {
+    // 检测失败时使用默认值 ibus
+  }
+
+  // 仅在未设置时写入，避免覆盖用户已有配置
+  if (!process.env['GTK_IM_MODULE']) {
+    process.env['GTK_IM_MODULE'] = imModule;
+  }
+  if (!process.env['QT_IM_MODULE']) {
+    process.env['QT_IM_MODULE'] = imModule;
+  }
+  if (!process.env['XMODIFIERS']) {
+    process.env['XMODIFIERS'] = `@im=${imModule}`;
+  }
+
+  console.log(`[ime] set GTK_IM_MODULE=${process.env['GTK_IM_MODULE']}, QT_IM_MODULE=${process.env['QT_IM_MODULE']}, XMODIFIERS=${process.env['XMODIFIERS']}`);
+}
+
+// ── Linux D-Bus 会话总线处理 ───────────────────────────────────────
+// Chromium/IBus 都需要 D-Bus session bus 才能正常工作。
+// 在 systemd 系统上（RHEL/Rocky/Ubuntu 等），session bus 由 systemd 管理，
+// IBus 绑定在这个总线上的。但 AppImage 从桌面启动时，
+// DBUS_SESSION_BUS_ADDRESS 可能未设置，导致代码 fallback 到
+// `dbus-launch` 启动一个全新的总线——IBus 不在这个新总线上，
+// 所以中文输入法无法工作。
+//
+// 策略（优先级从高到低）：
 //   1. 若 DBUS_SESSION_BUS_ADDRESS 已设置且有效 → 正常使用
-//   2. 若未设置 → 尝试通过 `dbus-launch` 启动一个会话总线
-//   3. 若 dbus-launch 不可用 → 提升 Chromium 日志级别至 FATAL，抑制 ERROR 级噪音
+//   2. 若未设置 → 尝试检测 systemd 管理的 session bus socket
+//   3. 若不存在 → 尝试通过 `dbus-launch` 启动一个会话总线
+//   4. 若 dbus-launch 不可用 → 提升 Chromium 日志级别至 FATAL，抑制 ERROR 级噪音
 function setupLinuxDbus(): void {
   if (process.platform !== 'linux') return;
 
@@ -34,7 +95,38 @@ function setupLinuxDbus(): void {
     return;
   }
 
-  // Try to start a D-Bus session bus via dbus-launch
+  // 优先检测 systemd 管理的 D-Bus session bus
+  // 这是 IBus/Fcitx 所在的总线，必须连接到它而不是新建一个
+  try {
+    let uid: string | number;
+    const getuid = process.getuid;
+    if (typeof getuid === 'function') {
+      uid = getuid.call(process);
+    } else {
+      uid = execSync('id -u', { encoding: 'utf-8', timeout: 2000 }).trim();
+    }
+
+    // systemd 管理的 D-Bus socket（现代 Linux 标准）
+    const systemdBusPath = `/run/user/${uid}/bus`;
+    if (existsSync(systemdBusPath)) {
+      process.env['DBUS_SESSION_BUS_ADDRESS'] = `unix:path=${systemdBusPath}`;
+      console.log(`[dbus] using systemd session bus at ${systemdBusPath}`);
+      return;
+    }
+
+    // 传统 D-Bus session bus socket（旧版本或非 systemd 环境）
+    const legacyBusPath = `/run/user/${uid}/dbus/session_bus_socket`;
+    if (existsSync(legacyBusPath)) {
+      process.env['DBUS_SESSION_BUS_ADDRESS'] = `unix:path=${legacyBusPath}`;
+      console.log(`[dbus] using legacy session bus at ${legacyBusPath}`);
+      return;
+    }
+  } catch {
+    // uid 检测失败，继续尝试其他方法
+  }
+
+  // 尝试通过 `dbus-launch` 启动新的会话总线
+  // 仅在没有 systemd session bus 的环境（HPC / SSH + X11 转发 / 最小化 WM）中使用
   try {
     const output = execSync('dbus-launch --sh-syntax', {
       encoding: 'utf-8',
@@ -47,7 +139,13 @@ function setupLinuxDbus(): void {
     for (const line of output.split('\n')) {
       const match = line.match(/^(DBUS_SESSION_BUS_\w+)=(.+?);?\s*$/);
       if (match) {
-        process.env[match[1]] = match[2].replace(/;$/, '');
+        // 去除可能存在的引号包裹
+        let value = match[2].replace(/;$/, '').trim();
+        if ((value.startsWith("'") && value.endsWith("'")) ||
+            (value.startsWith('"') && value.endsWith('"'))) {
+          value = value.slice(1, -1);
+        }
+        process.env[match[1]] = value;
       }
     }
     console.log('[dbus] started session bus via dbus-launch');
@@ -64,6 +162,7 @@ function setupLinuxDbus(): void {
   console.log('[dbus] no session bus available; suppressing Chromium D-Bus error logs');
 }
 
+setupLinuxIme();
 setupLinuxDbus();
 
 let mainWindow: BrowserWindow | null = null;
