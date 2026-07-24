@@ -146,6 +146,9 @@ export const coverageRouter = t.router({
           summaryCommand: typeof cfg.summaryCommand === 'string' ? cfg.summaryCommand : undefined,
           detailCommand: typeof cfg.detailCommand === 'string' ? cfg.detailCommand : undefined,
           metricsCommand: typeof cfg.metricsCommand === 'string' ? cfg.metricsCommand : undefined,
+          csvCommand: typeof cfg.csvCommand === 'string' ? cfg.csvCommand : undefined,
+          gradeCommand: typeof cfg.gradeCommand === 'string' ? cfg.gradeCommand : undefined,
+          binsCommand: typeof cfg.binsCommand === 'string' ? cfg.binsCommand : undefined,
         },
       };
     })
@@ -265,6 +268,54 @@ export const coverageRouter = t.router({
       const project = requireProject(input.projectId);
       const mgr = buildManager(project.rootPath);
       return mgr.getTree(input.sessionId);
+    }),
+
+  // ─── 覆盖率深度分析（urg -grade / imc report -bins / CSV） ──────
+
+  getUncovered: t.procedure
+    .input((raw): { projectId: string; sessionId?: string; metric?: CoverageMetric } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return {
+        projectId: r.projectId,
+        sessionId: typeof r.sessionId === 'string' ? r.sessionId : undefined,
+        metric: typeof r.metric === 'string' ? (r.metric as CoverageMetric) : undefined,
+      };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      return mgr.getCoverageUncovered(input.sessionId, input.metric);
+    }),
+
+  getTestContributions: t.procedure
+    .input((raw): { projectId: string; sessionId?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId, sessionId: typeof r.sessionId === 'string' ? r.sessionId : undefined };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      return mgr.getTestContributions(input.sessionId);
+    }),
+
+  getCsvData: t.procedure
+    .input((raw): { projectId: string; sessionId?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId, sessionId: typeof r.sessionId === 'string' ? r.sessionId : undefined };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      return mgr.getCsvData(input.sessionId);
     }),
 
   deleteSession: t.procedure
