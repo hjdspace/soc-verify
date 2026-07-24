@@ -58,6 +58,8 @@ export type McpServerInfo = {
   status: McpConnectionStatus;
   /** Number of tools exposed by this server (0 if not connected). */
   toolCount: number;
+  /** Error message when connection fails (only when status is 'disconnected'). */
+  error?: string;
 };
 
 /** A single tool exposed by an MCP server (mirrors omp's MCPToolDefinition). */

@@ -126,6 +126,7 @@ function probeStdio(
 
     let resolved = false;
     let lineBuffer = '';
+    let stderrBuffer = '';
     const pending = new Map<number, (data: unknown) => void>();
 
     const finish = (result: McpProbeResult) => {
@@ -137,6 +138,11 @@ function probeStdio(
       } catch {
         // best-effort
       }
+      // Include stderr in error message for debugging
+      if (result.error && stderrBuffer.trim()) {
+        const stderrTail = stderrBuffer.trim().split('\n').slice(-5).join('\n');
+        result.error = `${result.error}\nstderr: ${stderrTail}`;
+      }
       setCached(name, result);
       resolve(result);
     };
@@ -147,7 +153,7 @@ function probeStdio(
           status: 'disconnected',
           toolCount: 0,
           tools: [],
-          error: 'Connection timeout',
+          error: `Connection timeout (${timeoutMs}ms)`,
           probedAt: Date.now(),
         });
       },
@@ -196,6 +202,15 @@ function probeStdio(
       lineBuffer = lines.pop() ?? '';
       for (const line of lines) {
         handleLine(line);
+      }
+    });
+
+    // Capture stderr for error diagnostics
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderrBuffer += chunk.toString();
+      // Prevent unbounded growth
+      if (stderrBuffer.length > 4096) {
+        stderrBuffer = stderrBuffer.slice(-4096);
       }
     });
 
@@ -406,7 +421,7 @@ export async function probeMcpServer(
   config: McpServerConfig,
   options?: { timeoutMs?: number; useCache?: boolean },
 ): Promise<McpProbeResult> {
-  const timeoutMs = options?.timeoutMs ?? 10_000;
+  const timeoutMs = options?.timeoutMs ?? 15_000;
   const useCache = options?.useCache ?? true;
 
   if (useCache) {

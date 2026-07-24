@@ -124,56 +124,79 @@ function buildSummary(config: McpServerConfig): string {
 /** Map of server name → connection status from the omp engine. */
 export type McpStatusMap = Record<
   string,
-  { status: string; toolCount: number }
+  { status: string; toolCount: number; error?: string }
 >;
 
 /**
- * Read all configured MCP servers for a project, merging project-level and
- * user-level configs. Project-level entries take precedence on name conflicts.
+ * Read configured MCP servers for a project.
  *
  * @param projectRoot  Absolute path to the project root directory.
- * @param statusMap    Optional runtime status from an active agent session.
- *                     When omitted, all servers are reported as 'not_running'.
+ * @param statusMap    Optional runtime status from probing or active sessions.
+ * @param scope        When set to 'user' or 'project', only return servers from
+ *                     that scope (no merging). When undefined, merges both
+ *                     scopes with project-level taking precedence.
  */
 export async function listMcpServers(
   projectRoot: string,
   statusMap?: McpStatusMap,
+  scope?: 'user' | 'project',
 ): Promise<McpServerInfo[]> {
-  // Read user-level config first (lower priority)
-  const userConfig = await readConfigFile(userMcpConfigPath());
-  // Read project-level configs (.mcp.json takes precedence over mcp.json)
-  const projectConfigs: Array<{ config: McpConfigFile; source: McpConfigSource }> = [];
-  for (const p of projectMcpConfigPaths(projectRoot)) {
-    const cfg = await readConfigFile(p);
-    if (cfg.mcpServers && Object.keys(cfg.mcpServers).length > 0) {
-      projectConfigs.push({ config: cfg, source: 'project' });
-      // Only use the first file that has servers
-      break;
-    }
-  }
-  if (projectConfigs.length === 0) {
-    // Fallback: also check .socverify/mcp-config.json for backward compat
-    const legacyPath = join(projectRoot, '.socverify', 'mcp-config.json');
-    const legacyConfig = await readConfigFile(legacyPath);
-    if (legacyConfig.mcpServers && Object.keys(legacyConfig.mcpServers).length > 0) {
-      projectConfigs.push({ config: legacyConfig, source: 'project' });
-    }
-  }
-
-  // Merge: user first, then project overrides
   const merged = new Map<string, { config: McpServerConfig; source: McpConfigSource }>();
+  let disabledSet = new Set<string>();
 
-  for (const [name, config] of Object.entries(userConfig.mcpServers ?? {})) {
-    merged.set(name, { config, source: 'user' });
-  }
-  for (const { config: cfg } of projectConfigs) {
-    for (const [name, config] of Object.entries(cfg.mcpServers ?? {})) {
+  if (scope === 'user') {
+    // Only user-level config
+    const userConfig = await readConfigFile(userMcpConfigPath());
+    disabledSet = new Set(userConfig.disabledServers ?? []);
+    for (const [name, config] of Object.entries(userConfig.mcpServers ?? {})) {
+      merged.set(name, { config, source: 'user' });
+    }
+  } else if (scope === 'project') {
+    // Only project-level config
+    let projectConfig: McpConfigFile | null = null;
+    for (const p of projectMcpConfigPaths(projectRoot)) {
+      const cfg = await readConfigFile(p);
+      if (cfg.mcpServers && Object.keys(cfg.mcpServers).length > 0) {
+        projectConfig = cfg;
+        break;
+      }
+    }
+    if (!projectConfig) {
+      const legacyPath = join(projectRoot, '.socverify', 'mcp-config.json');
+      projectConfig = await readConfigFile(legacyPath);
+    }
+    for (const [name, config] of Object.entries(projectConfig.mcpServers ?? {})) {
       merged.set(name, { config, source: 'project' });
     }
-  }
+  } else {
+    // Merge both scopes (original behavior)
+    const userConfig = await readConfigFile(userMcpConfigPath());
+    const projectConfigs: Array<{ config: McpConfigFile; source: McpConfigSource }> = [];
+    for (const p of projectMcpConfigPaths(projectRoot)) {
+      const cfg = await readConfigFile(p);
+      if (cfg.mcpServers && Object.keys(cfg.mcpServers).length > 0) {
+        projectConfigs.push({ config: cfg, source: 'project' });
+        break;
+      }
+    }
+    if (projectConfigs.length === 0) {
+      const legacyPath = join(projectRoot, '.socverify', 'mcp-config.json');
+      const legacyConfig = await readConfigFile(legacyPath);
+      if (legacyConfig.mcpServers && Object.keys(legacyConfig.mcpServers).length > 0) {
+        projectConfigs.push({ config: legacyConfig, source: 'project' });
+      }
+    }
 
-  // Check disabled servers list (from user config)
-  const disabledSet = new Set(userConfig.disabledServers ?? []);
+    for (const [name, config] of Object.entries(userConfig.mcpServers ?? {})) {
+      merged.set(name, { config, source: 'user' });
+    }
+    for (const { config: cfg } of projectConfigs) {
+      for (const [name, config] of Object.entries(cfg.mcpServers ?? {})) {
+        merged.set(name, { config, source: 'project' });
+      }
+    }
+    disabledSet = new Set(userConfig.disabledServers ?? []);
+  }
 
   const servers: McpServerInfo[] = [];
   for (const [name, { config, source }] of merged) {
@@ -187,6 +210,7 @@ export async function listMcpServers(
       source,
       status: (runtime?.status as McpConnectionStatus) ?? 'not_running',
       toolCount: runtime?.toolCount ?? 0,
+      error: runtime?.error,
     });
   }
 
@@ -200,37 +224,52 @@ export async function listMcpServers(
 }
 
 /**
- * Read the MCP config file for a project. Returns the project-level config if
- * it exists, otherwise the user-level config.
+ * Read the MCP config file for a project.
+ *
+ * @param scope  'user' → read ~/.omp/mcp.json (cross-project, personal)
+ *               'project' → read <root>/.mcp.json (team-shared, git-tracked)
+ *               Defaults to 'user'.
  */
-export async function getMcpConfig(projectRoot: string): Promise<McpConfigFile> {
-  // Try project-level first
+export async function getMcpConfig(
+  projectRoot: string,
+  scope: 'user' | 'project' = 'user',
+): Promise<McpConfigFile> {
+  if (scope === 'user') {
+    return readConfigFile(userMcpConfigPath());
+  }
+  // Project scope: try .mcp.json then mcp.json, then legacy path
   for (const p of projectMcpConfigPaths(projectRoot)) {
     const cfg = await readConfigFile(p);
     if (cfg.mcpServers && Object.keys(cfg.mcpServers).length > 0) {
       return cfg;
     }
   }
-  // Fallback to legacy path
   const legacyPath = join(projectRoot, '.socverify', 'mcp-config.json');
   const legacyConfig = await readConfigFile(legacyPath);
   if (legacyConfig.mcpServers && Object.keys(legacyConfig.mcpServers).length > 0) {
     return legacyConfig;
   }
-  // Return user-level config or empty
-  return readConfigFile(userMcpConfigPath());
+  return { mcpServers: {} };
 }
 
 /**
- * Write the MCP config to the project-level `.mcp.json` file.
- * This is the file the omp engine's mcp-json discovery provider reads.
+ * Write the MCP config to the appropriate file based on scope.
+ *
+ * @param scope  'user' → write ~/.omp/mcp.json (default; personal, not in git)
+ *               'project' → write <root>/.mcp.json (team-shared, git-tracked)
  */
-export async function setMcpConfig(projectRoot: string, config: McpConfigFile): Promise<void> {
-  const configPath = join(projectRoot, '.mcp.json');
+export async function setMcpConfig(
+  projectRoot: string,
+  config: McpConfigFile,
+  scope: 'user' | 'project' = 'user',
+): Promise<void> {
+  const configPath = scope === 'user' ? userMcpConfigPath() : join(projectRoot, '.mcp.json');
   const configWithSchema: McpConfigFile = {
     $schema: MCP_SCHEMA_URL,
     ...config,
   };
-  await mkdir(projectRoot, { recursive: true });
+  // Ensure the target directory exists (~/.omp for user scope)
+  const dir = join(configPath, '..');
+  await mkdir(dir, { recursive: true });
   await writeFile(configPath, JSON.stringify(configWithSchema, null, 2) + '\n', 'utf-8');
 }

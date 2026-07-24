@@ -16,6 +16,8 @@ interface SettingsStoreState {
   skillInstallInfo: SkillInstallInfo | null;
   mcpServers: McpServerInfo[];
   mcpConfig: McpConfigFile | null;
+  /** Which scope is being edited: 'user' (~/.omp/mcp.json) or 'project' (<root>/.mcp.json). */
+  mcpEditScope: 'user' | 'project';
   /** Tools per MCP server name — populated on demand when a server row is expanded. */
   mcpToolsByServer: Record<string, McpToolInfo[]>;
   /** Loading flag per server name (tool list fetch in progress). */
@@ -41,8 +43,9 @@ interface SettingsStoreState {
   createSkill: (input: CreateSkillInput) => Promise<void>;
   uninstallSkill: (name: string) => Promise<void>;
   loadMcpServers: (projectId: string) => Promise<void>;
-  loadMcpConfig: (projectId: string) => Promise<void>;
-  setMcpConfig: (projectId: string, config: McpConfigFile) => Promise<void>;
+  loadMcpConfig: (projectId: string, scope?: 'user' | 'project') => Promise<void>;
+  setMcpEditScope: (scope: 'user' | 'project') => void;
+  setMcpConfig: (projectId: string, config: McpConfigFile, scope?: 'user' | 'project') => Promise<void>;
   /** Fetch the tool list for a specific MCP server (on demand when expanded). */
   getMcpServerTools: (projectId: string, serverName: string) => Promise<void>;
   /** Reload MCP config in running sessions so new config takes effect immediately. */
@@ -60,6 +63,7 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
   skillInstallInfo: null,
   mcpServers: [],
   mcpConfig: null,
+  mcpEditScope: 'user',
   mcpToolsByServer: {},
   mcpToolsLoading: {},
   mcpReloading: false,
@@ -185,7 +189,8 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
 
   loadMcpServers: async (projectId) => {
     try {
-      const servers = await trpc.settings.listMcpServers.query({ projectId });
+      const scope = useSettingsStore.getState().mcpEditScope;
+      const servers = await trpc.settings.listMcpServers.query({ projectId, scope });
       set({ mcpServers: servers });
     } catch (err) {
       // Log the error so silent failures (e.g. RPC timeout) are visible in the
@@ -195,18 +200,24 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
     }
   },
 
-  loadMcpConfig: async (projectId) => {
+  loadMcpConfig: async (projectId, scope) => {
     try {
-      const config = await trpc.settings.getMcpConfig.query({ projectId });
+      const effectiveScope = scope ?? useSettingsStore.getState().mcpEditScope;
+      const config = await trpc.settings.getMcpConfig.query({ projectId, scope: effectiveScope });
       set({ mcpConfig: config });
     } catch (err) {
       console.error('[settings] loadMcpConfig failed:', err);
     }
   },
 
-  setMcpConfig: async (projectId, config) => {
+  setMcpEditScope: (scope) => {
+    set({ mcpEditScope: scope, mcpConfig: null });
+  },
+
+  setMcpConfig: async (projectId, config, scope) => {
     try {
-      await trpc.settings.setMcpConfig.mutate({ projectId, config });
+      const effectiveScope = scope ?? useSettingsStore.getState().mcpEditScope;
+      await trpc.settings.setMcpConfig.mutate({ projectId, config, scope: effectiveScope });
 
       // Optimistically update the stored config so the UI reflects the new
       // config immediately, even before the server list refresh completes.
@@ -228,7 +239,8 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
   getMcpServerTools: async (projectId, serverName) => {
     set((s) => ({ mcpToolsLoading: { ...s.mcpToolsLoading, [serverName]: true } }));
     try {
-      const tools = await trpc.settings.getMcpServerTools.query({ projectId, serverName });
+      const scope = useSettingsStore.getState().mcpEditScope;
+      const tools = await trpc.settings.getMcpServerTools.query({ projectId, serverName, scope });
       set((s) => ({
         mcpToolsByServer: { ...s.mcpToolsByServer, [serverName]: tools as McpToolInfo[] },
         mcpToolsLoading: { ...s.mcpToolsLoading, [serverName]: false },

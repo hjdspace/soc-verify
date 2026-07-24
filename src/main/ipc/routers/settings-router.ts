@@ -225,12 +225,13 @@ export const settingsRouter = t.router({
     }),
 
   listMcpServers: t.procedure
-    .input((raw): { projectId: string } => {
+    .input((raw): { projectId: string; scope?: 'user' | 'project' } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
       }
-      return { projectId: r.projectId };
+      const scope = r.scope === 'project' ? 'project' : r.scope === 'user' ? 'user' : undefined;
+      return { projectId: r.projectId, scope };
     })
     .query(async ({ input }) => {
       const project = requireProject(input.projectId);
@@ -238,24 +239,25 @@ export const settingsRouter = t.router({
       // Probe all configured MCP servers directly via the MCP protocol,
       // independent of any AI agent session. This returns real connection
       // status and tool counts by actually connecting to each server.
-      const config = await getMcpConfig(project.rootPath);
+      const config = await getMcpConfig(project.rootPath, input.scope ?? 'user');
       const servers = config.mcpServers ?? {};
-      const probeResults = await probeAllServers(servers, { timeoutMs: 8000 });
+      const probeResults = await probeAllServers(servers, { timeoutMs: 15_000 });
 
-      // Build status map from probe results
-      const statusMap: Record<string, { status: string; toolCount: number }> = {};
+      // Build status map from probe results (includes error info)
+      const statusMap: Record<string, { status: string; toolCount: number; error?: string }> = {};
       for (const [name, result] of Object.entries(probeResults)) {
         statusMap[name] = {
           status: result.status,
           toolCount: result.toolCount,
+          error: result.error,
         };
       }
 
-      return listMcpServers(project.rootPath, statusMap);
+      return listMcpServers(project.rootPath, statusMap, input.scope);
     }),
 
   getMcpServerTools: t.procedure
-    .input((raw): { projectId: string; serverName: string } => {
+    .input((raw): { projectId: string; serverName: string; scope?: 'user' | 'project' } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
@@ -263,21 +265,22 @@ export const settingsRouter = t.router({
       if (typeof r.serverName !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'serverName is required' });
       }
-      return { projectId: r.projectId, serverName: r.serverName };
+      const scope = r.scope === 'project' ? 'project' : 'user';
+      return { projectId: r.projectId, serverName: r.serverName, scope };
     })
     .query(async ({ input }) => {
       const project = requireProject(input.projectId);
 
       // Probe the specific server to get its tool list. The probe cache
       // (30s TTL) avoids re-connecting on every expand toggle.
-      const config = await getMcpConfig(project.rootPath);
+      const config = await getMcpConfig(project.rootPath, input.scope);
       const serverConfig = config.mcpServers?.[input.serverName];
       if (!serverConfig) {
         return [] as McpToolInfo[];
       }
 
       const result = await probeMcpServer(input.serverName, serverConfig, {
-        timeoutMs: 8000,
+        timeoutMs: 15_000,
       });
       return result.tools;
     }),
@@ -312,29 +315,31 @@ export const settingsRouter = t.router({
     }),
 
   getMcpConfig: t.procedure
-    .input((raw): { projectId: string } => {
+    .input((raw): { projectId: string; scope?: 'user' | 'project' } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
       }
-      return { projectId: r.projectId };
+      const scope = r.scope === 'project' ? 'project' : 'user';
+      return { projectId: r.projectId, scope };
     })
     .query(async ({ input }) => {
       const project = requireProject(input.projectId);
-      return getMcpConfig(project.rootPath);
+      return getMcpConfig(project.rootPath, input.scope);
     }),
 
   setMcpConfig: t.procedure
-    .input((raw): { projectId: string; config: McpConfigFile } => {
+    .input((raw): { projectId: string; config: McpConfigFile; scope?: 'user' | 'project' } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
       }
-      return { projectId: r.projectId, config: r.config as McpConfigFile };
+      const scope = r.scope === 'project' ? 'project' : 'user';
+      return { projectId: r.projectId, config: r.config as McpConfigFile, scope };
     })
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
-      await setMcpConfig(project.rootPath, input.config);
+      await setMcpConfig(project.rootPath, input.config, input.scope);
       // Clear probe cache so the new config is re-probed on next list query
       clearProbeCache();
       return { ok: true };

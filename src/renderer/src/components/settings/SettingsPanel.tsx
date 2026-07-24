@@ -784,6 +784,8 @@ function McpTab() {
   const setMcpConfig = useSettingsStore((s) => s.setMcpConfig);
   const loadMcpServers = useSettingsStore((s) => s.loadMcpServers);
   const loadMcpConfig = useSettingsStore((s) => s.loadMcpConfig);
+  const setMcpEditScope = useSettingsStore((s) => s.setMcpEditScope);
+  const mcpEditScope = useSettingsStore((s) => s.mcpEditScope);
   const reloadMcp = useSettingsStore((s) => s.reloadMcp);
   const mcpReloading = useSettingsStore((s) => s.mcpReloading);
   const mcpServers = useSettingsStore((s) => s.mcpServers);
@@ -803,6 +805,14 @@ function McpTab() {
       loadMcpConfig(currentProjectId);
     }
   }, [currentProjectId, loadMcpServers, loadMcpConfig]);
+
+  // When scope changes, reload both the config and server list for the new scope
+  useEffect(() => {
+    if (currentProjectId) {
+      loadMcpConfig(currentProjectId, mcpEditScope);
+      loadMcpServers(currentProjectId);
+    }
+  }, [currentProjectId, mcpEditScope, loadMcpConfig, loadMcpServers]);
 
   // Sync config into local editing state when not editing
   useEffect(() => {
@@ -914,10 +924,40 @@ function McpTab() {
 
   return (
     <div className="space-y-3">
+      {/* Scope selector — determines where configs are saved/loaded */}
+      <div className="flex items-center gap-1 rounded border border-border/50 bg-secondary/20 p-0.5">
+        <button
+          onClick={() => setMcpEditScope('user')}
+          className={cn(
+            'flex-1 rounded px-2 py-1 text-[10px] font-medium transition-colors',
+            mcpEditScope === 'user'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+          title="保存到 ~/.omp/mcp.json，跨项目可用，不进入 git"
+        >
+          用户级
+        </button>
+        <button
+          onClick={() => setMcpEditScope('project')}
+          className={cn(
+            'flex-1 rounded px-2 py-1 text-[10px] font-medium transition-colors',
+            mcpEditScope === 'project'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+          title="保存到 <项目>/.mcp.json，团队共享，会被 git 跟踪"
+        >
+          项目级
+        </button>
+      </div>
+
       {/* Server List */}
       <div>
         <div className="mb-1.5 flex items-center justify-between">
-          <div className="text-[10px] font-semibold uppercase text-muted-foreground">已配置 MCP 服务器</div>
+          <div className="text-[10px] font-semibold uppercase text-muted-foreground">
+            {mcpEditScope === 'user' ? '用户级 MCP（跨项目）' : '项目级 MCP（团队共享）'}
+          </div>
           <div className="flex items-center gap-1">
             <button
               onClick={handleReloadMcp}
@@ -1228,8 +1268,8 @@ function McpServerRow({
           </div>
           <div className="truncate text-[10px] text-muted-foreground">{server.summary}</div>
           {server.status === 'disconnected' && (
-            <div className="text-[9px] text-destructive/70">
-              连接失败
+            <div className="text-[9px] text-destructive/70" title={server.error}>
+              {server.error ? server.error.split('\n')[0] : '连接失败'}
             </div>
           )}
         </div>
