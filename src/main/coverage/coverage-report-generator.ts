@@ -6,10 +6,13 @@
  * 第二步（CoverageParserPlugin 解析）由 CoverageManager 调用插件完成。
  *
  * 命令执行通过 CommandRunner 抽象注入，便于测试 mock。
+ *
+ * Debug 日志：每次命令执行的 stdout/stderr/exitCode 都会写入
+ * `.socverify/coverage/<sessionId>/reports/eda-commands.log`，便于排查问题。
  */
 
-import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, writeFile, appendFile, stat } from 'node:fs/promises';
+import { join, resolve, isAbsolute } from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { EdaToolConfig } from '@shared/types';
@@ -31,15 +34,16 @@ const defaultRunner: CommandRunner = async (command, options) => {
   try {
     const { stdout, stderr } = await execAsync(command, {
       cwd: options.cwd,
-      maxBuffer: 10 * 1024 * 1024,
+      maxBuffer: 50 * 1024 * 1024,
+      env: { ...process.env },
     });
     return { exitCode: 0, stdout, stderr };
   } catch (err) {
-    const e = err as { code?: number; stdout?: string; stderr?: string };
+    const e = err as { code?: number; stdout?: string; stderr?: string; message?: string };
     return {
       exitCode: e.code ?? 1,
       stdout: e.stdout ?? '',
-      stderr: e.stderr ?? '',
+      stderr: e.stderr ?? e.message ?? String(err),
     };
   }
 };
@@ -49,11 +53,27 @@ export interface ReportGeneratorOptions {
   runner?: CommandRunner;
 }
 
+export interface CommandLogEntry {
+  name: string;
+  command: string;
+  cwd: string;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+}
+
 export interface GeneratedReports {
   reportDir: string;
   summaryPath: string;
   detailPath: string;
   metricsPath: string;
+  /** EDA 命令执行日志（用于 debug） */
+  commandLog: CommandLogEntry[];
+  /** 所有命令是否全部失败 */
+  allFailed: boolean;
+  /** 成功生成的报告文件路径列表 */
+  generatedFiles: string[];
 }
 
 export class CoverageReportGenerator {
@@ -69,6 +89,9 @@ export class CoverageReportGenerator {
    * 运行 EDA 命令生成文本报告。
    * 占位符 `{covMergeDir}` 和 `{reportDir}` 会被替换为实际路径。
    * 任一命令模板缺失则跳过该报告（返回空路径），不视为错误。
+   *
+   * 命令在 covMergeDir 目录下执行（IMC 需要从覆盖率数据库目录启动）。
+   * 所有命令的 stdout/stderr 会写入 `eda-commands.log` 文件。
    */
   async generate(
     config: EdaToolConfig,
@@ -78,11 +101,34 @@ export class CoverageReportGenerator {
     const reportDir = join(this.projectRoot, '.socverify', 'coverage', sessionId, 'reports');
     await mkdir(reportDir, { recursive: true });
 
+    // covMergeDir 解析为绝对路径（相对于 projectRoot）
+    const absCovMergeDir = isAbsolute(covMergeDir)
+      ? covMergeDir
+      : resolve(this.projectRoot, covMergeDir);
+    const absReportDir = resolve(reportDir);
+
+    const logPath = join(reportDir, 'eda-commands.log');
+    const commandLog: CommandLogEntry[] = [];
+
+    // 初始化日志文件
+    await writeFile(
+      logPath,
+      `=== EDA Report Generation Log ===\n` +
+        `Session: ${sessionId}\n` +
+        `EDA Tool: ${config.tool}\n` +
+        `covMergeDir: ${absCovMergeDir}\n` +
+        `reportDir: ${absReportDir}\n` +
+        `projectRoot: ${this.projectRoot}\n` +
+        `Timestamp: ${new Date().toISOString()}\n` +
+        `=================================\n\n`,
+      'utf-8',
+    );
+
     const substitute = (template: string | undefined): string | null => {
       if (!template) return null;
       return template
-        .replaceAll('{covMergeDir}', covMergeDir)
-        .replaceAll('{reportDir}', reportDir);
+        .replaceAll('{covMergeDir}', absCovMergeDir)
+        .replaceAll('{reportDir}', absReportDir);
     };
 
     const summaryCmd = substitute(config.summaryCommand);
@@ -93,25 +139,111 @@ export class CoverageReportGenerator {
     const detailPath = join(reportDir, 'detail.txt');
     const metricsPath = join(reportDir, 'metrics.txt');
 
-    const run = async (cmd: string | null): Promise<CommandResult> => {
-      if (!cmd) return { exitCode: 0, stdout: '', stderr: '' };
-      return this.runner(cmd, { cwd: this.projectRoot });
+    // 顺序执行命令（IMC 可能不支持并发访问覆盖率数据库）
+    const runAndLog = async (
+      name: string,
+      cmd: string | null,
+    ): Promise<CommandResult> => {
+      if (!cmd) {
+        const entry: CommandLogEntry = {
+          name,
+          command: '(skipped — no command template)',
+          cwd: absCovMergeDir,
+          exitCode: 0,
+          stdout: '',
+          stderr: '',
+          durationMs: 0,
+        };
+        commandLog.push(entry);
+        await appendLog(logPath, entry);
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+
+      const start = Date.now();
+      const result = await this.runner(cmd, { cwd: absCovMergeDir });
+      const durationMs = Date.now() - start;
+
+      const entry: CommandLogEntry = {
+        name,
+        command: cmd,
+        cwd: absCovMergeDir,
+        exitCode: result.exitCode,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        durationMs,
+      };
+      commandLog.push(entry);
+      await appendLog(logPath, entry);
+
+      return result;
     };
 
-    const [summaryRes, detailRes, metricsRes] = await Promise.all([
-      run(summaryCmd),
-      run(detailCmd),
-      run(metricsCmd),
-    ]);
+    // 顺序执行三个命令
+    await runAndLog('summary', summaryCmd);
+    await runAndLog('detail', detailCmd);
+    await runAndLog('metrics', metricsCmd);
 
-    const failed = [summaryRes, detailRes, metricsRes].filter((r) => r.exitCode !== 0);
-    if (failed.length === 3 && summaryCmd && detailCmd && metricsCmd) {
-      // 所有命令都失败且都有模板——抛错让上层处理
-      throw new Error(
-        `EDA report generation failed: ${failed.map((r) => r.stderr).join('; ')}`,
+    // 检查哪些报告文件实际生成了
+    const generatedFiles: string[] = [];
+    for (const [name, path] of [
+      ['summary', summaryPath],
+      ['detail', detailPath],
+      ['metrics', metricsPath],
+    ] as const) {
+      try {
+        const info = await stat(path);
+        if (info.size > 0) {
+          generatedFiles.push(path);
+          await appendFile(
+            logPath,
+            `\n[${name}] File generated: ${path} (${info.size} bytes)\n`,
+            'utf-8',
+          );
+        } else {
+          await appendFile(
+            logPath,
+            `\n[${name}] File exists but is EMPTY: ${path}\n`,
+            'utf-8',
+          );
+        }
+      } catch {
+        await appendFile(
+          logPath,
+          `\n[${name}] File NOT generated: ${path}\n`,
+          'utf-8',
+        );
+      }
+    }
+
+    const failedCount = commandLog.filter(
+      (e) => e.exitCode !== 0 && e.command !== '(skipped — no command template)',
+    ).length;
+    const totalCommands = commandLog.filter(
+      (e) => e.command !== '(skipped — no command template)',
+    ).length;
+    const allFailed = totalCommands > 0 && failedCount === totalCommands;
+
+    if (allFailed) {
+      await appendFile(
+        logPath,
+        `\n⚠ ALL EDA COMMANDS FAILED. Check stderr above for details.\n`,
+        'utf-8',
       );
     }
 
-    return { reportDir, summaryPath, detailPath, metricsPath };
+    return { reportDir, summaryPath, detailPath, metricsPath, commandLog, allFailed, generatedFiles };
   }
+}
+
+/** 将一条命令执行日志追加到日志文件 */
+async function appendLog(logPath: string, entry: CommandLogEntry): Promise<void> {
+  const text =
+    `\n--- ${entry.name} ---\n` +
+    `Command: ${entry.command}\n` +
+    `CWD: ${entry.cwd}\n` +
+    `Exit Code: ${entry.exitCode}\n` +
+    `Duration: ${entry.durationMs}ms\n` +
+    `--- stdout ---\n${entry.stdout || '(empty)'}\n` +
+    `--- stderr ---\n${entry.stderr || '(empty)'}\n`;
+  await appendFile(logPath, text, 'utf-8');
 }
