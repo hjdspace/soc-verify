@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+/* ── 字体管理 CSS 变量（由 useFontStore 动态设置） ─────────── */
+:root {
+  --app-font-family-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --app-font-family-code: ui-monospace, "SF Mono", "Cascadia Code", "Fira Code", Consolas, "Courier New", monospace;
+  --app-font-size-ui: 13px;
+  --app-font-size-code: 12px;
+}
+
 @theme {
   --color-border: var(--border);
   --color-input: var(--input);
@@ -238,6 +246,67 @@
 }
 
 /* ════════════════════════════════════════════════════════════
+   主题：Daylight（浅·冷·靛蓝）
+   极浅灰白底 + 靛蓝强调。参考 Cursor / Windsurf / GitHub Light
+   等流行 AI IDE 浅色主题。干净、高对比度、长时间阅读不疲劳。
+   ════════════════════════════════════════════════════════════ */
+[data-theme="daylight"] {
+  --background: oklch(0.99 0.002 240);
+  --foreground: oklch(0.21 0.01 240);
+  --card: oklch(1.00 0 0);
+  --card-foreground: oklch(0.21 0.01 240);
+  --popover: oklch(1.00 0 0);
+  --popover-foreground: oklch(0.21 0.01 240);
+  --primary: oklch(0.48 0.18 264);
+  --primary-foreground: oklch(0.99 0.002 240);
+  --secondary: oklch(0.96 0.003 240);
+  --secondary-foreground: oklch(0.28 0.01 240);
+  --muted: oklch(0.96 0.003 240);
+  --muted-foreground: oklch(0.52 0.008 240);
+  --accent: oklch(0.94 0.01 264);
+  --accent-foreground: oklch(0.28 0.01 240);
+  --destructive: oklch(0.54 0.20 25);
+  --destructive-foreground: oklch(0.99 0.002 240);
+  --border: oklch(0.90 0.004 240);
+  --input: oklch(0.90 0.004 240);
+  --ring: oklch(0.48 0.18 264);
+  --titlebar: oklch(0.97 0.003 240);
+  --titlebar-foreground: oklch(0.40 0.01 240);
+  --titlebar-border: oklch(0.88 0.004 240);
+  --sidebar: oklch(0.98 0.002 240);
+  --sidebar-foreground: oklch(0.45 0.008 240);
+  --radius: 0.5rem;
+
+  --status-pass: oklch(0.52 0.13 145);
+  --status-pass-foreground: oklch(0.52 0.13 145);
+  --status-fail: oklch(0.54 0.20 25);
+  --status-fail-foreground: oklch(0.54 0.20 25);
+  --status-running: oklch(0.50 0.15 264);
+  --status-running-foreground: oklch(0.50 0.15 264);
+  --status-aborted: oklch(0.55 0.13 65);
+  --status-aborted-foreground: oklch(0.55 0.13 65);
+  --status-pending: oklch(0.52 0.05 240);
+  --status-pending-foreground: oklch(0.52 0.05 240);
+
+  --diff-add: oklch(0.92 0.04 145);
+  --diff-add-foreground: oklch(0.30 0.10 145);
+  --diff-del: oklch(0.92 0.05 25);
+  --diff-del-foreground: oklch(0.34 0.12 25);
+
+  --chart-1: oklch(0.55 0.18 264);
+  --chart-2: oklch(0.60 0.16 145);
+  --chart-3: oklch(0.55 0.16 285);
+  --chart-4: oklch(0.65 0.15 55);
+
+  --info: oklch(0.92 0.03 264);
+  --info-foreground: oklch(0.32 0.10 264);
+  --warning: oklch(0.92 0.05 75);
+  --warning-foreground: oklch(0.32 0.08 75);
+  --violet: oklch(0.92 0.04 295);
+  --violet-foreground: oklch(0.32 0.10 295);
+}
+
+/* ════════════════════════════════════════════════════════════
    全局样式
    ════════════════════════════════════════════════════════════ */
 
@@ -256,8 +325,8 @@ body,
 body {
   background-color: var(--background);
   color: var(--foreground);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--app-font-family-ui);
+  font-size: var(--app-font-size-ui);
 }
 
 /* ── 自定义 TitleBar 拖拽区域 ──────────────────────────────────── */
@@ -333,9 +402,8 @@ body {
   height: 100%;
   background-color: var(--background);
   color: var(--foreground);
-  font-size: 12px;
-  font-family: ui-monospace, "SF Mono", "Cascadia Code", "Fira Code",
-    Consolas, "Courier New", monospace;
+  font-size: var(--app-font-size-code);
+  font-family: var(--app-font-family-code);
 }
 
 .cm-editor .cm-content {
@@ -496,7 +564,7 @@ body {
   padding: 0.15rem 0.35rem;
   border-radius: 3px;
   font-size: 0.85em;
-  font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  font-family: var(--app-font-family-code);
 }
 
 .markdown-preview pre {

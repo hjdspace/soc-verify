@@ -2,20 +2,23 @@ import { useEffect, useRef } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { ToastContainer } from './components/ToastContainer';
 import { useThemeStore } from './stores/theme';
+import { useFontStore } from './stores/font';
 import { useToastStore } from './stores/toast';
 import { useSessionStore } from './stores/session';
 import { trpc } from './lib/trpc';
 
 export default function App() {
   const initTheme = useThemeStore((s) => s.initTheme);
+  const initFont = useFontStore((s) => s.initFont);
   const initLastModel = useSessionStore((s) => s.initLastModel);
   const errorToast = useToastStore((s) => s.error);
   const healthCheckDone = useRef(false);
 
   useEffect(() => {
     initTheme();
+    initFont();
     initLastModel();
-  }, [initTheme, initLastModel]);
+  }, [initTheme, initFont, initLastModel]);
 
   // Startup health check: verify tRPC IPC bridge is working
   // Guarded against StrictMode double-execution

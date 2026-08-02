@@ -37,14 +37,21 @@ export const THEMES: ThemeDefinition[] = [
     swatch: '#d08a4e',
     description: '冷石板底 + 铜色强调。三显示器扫表找失败行，冷底色压低反差噪声。',
   },
+  {
+    id: 'daylight',
+    name: 'Daylight',
+    mode: 'light',
+    swatch: '#3b5bdb',
+    description: '极浅灰白底 + 靛蓝强调。参考 Cursor / Windsurf 等流行 AI IDE 浅色主题。',
+  },
 ];
 
 const STORAGE_KEY = 'socverify:theme';
 const DEFAULT_THEME = 'bench';
 
-// 旧 6 主题 ID → 新 3 主题 ID 映射（迁移已保存的偏好）
+// 旧 6 主题 ID → 新主题 ID 映射（迁移已保存的偏好）
 const LEGACY_THEME_MIGRATION: Record<string, string> = {
-  light: 'drafting',
+  light: 'daylight',
   'solarized-light': 'drafting',
   dark: 'bench',
   midnight: 'bench',

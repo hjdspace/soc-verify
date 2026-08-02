@@ -246,7 +246,7 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
             theme={themeMode === 'dark' ? 'dark' : 'light'}
             height="100%"
             width="100%"
-            className="h-full w-full overflow-hidden text-xs"
+            className="h-full w-full overflow-hidden"
             basicSetup={{
               lineNumbers: true,
               highlightActiveLine: true,

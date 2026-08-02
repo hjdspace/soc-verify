@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { X, Key, Package, Server, FileText, Plus, Trash2, Save, Download, Upload, Palette, Check, Cpu, RefreshCw, Zap, Info, BookOpen, Folder, ChevronDown, ChevronRight, Pencil, Terminal, Globe, Power, Loader2, Wrench } from 'lucide-react';
+import { X, Key, Package, Server, FileText, Plus, Trash2, Save, Download, Upload, Palette, Check, Cpu, RefreshCw, Zap, Info, BookOpen, Folder, ChevronDown, ChevronRight, Pencil, Terminal, Globe, Power, Loader2, Wrench, Type } from 'lucide-react';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { useUiStore } from '@renderer/stores/ui';
 import { useThemeStore } from '@renderer/stores/theme';
+import { useFontStore } from '@renderer/stores/font';
 import { useSessionStore } from '@renderer/stores/session';
 import { cn } from '@renderer/lib/utils';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
@@ -79,37 +80,142 @@ function AppearanceTab() {
   const themes = useThemeStore((s) => s.themes);
   const setTheme = useThemeStore((s) => s.setTheme);
 
+  const uiFontId = useFontStore((s) => s.uiFontId);
+  const codeFontId = useFontStore((s) => s.codeFontId);
+  const sizePreset = useFontStore((s) => s.sizePreset);
+  const uiFonts = useFontStore((s) => s.uiFonts);
+  const codeFonts = useFontStore((s) => s.codeFonts);
+  const fontSizes = useFontStore((s) => s.fontSizes);
+  const setUiFont = useFontStore((s) => s.setUiFont);
+  const setCodeFont = useFontStore((s) => s.setCodeFont);
+  const setSizePreset = useFontStore((s) => s.setSizePreset);
+
   return (
-    <div className="space-y-3">
-      <div className="text-[10px] font-semibold uppercase text-muted-foreground">主题</div>
-      <div className="grid grid-cols-2 gap-2">
-        {themes.map((theme) => (
-          <button
-            key={theme.id}
-            onClick={() => setTheme(theme.id)}
-            className={cn(
-              'flex items-center gap-3 rounded-md border p-2.5 text-left transition-colors',
-              currentTheme === theme.id
-                ? 'border-primary bg-primary/5'
-                : 'border-border hover:bg-accent',
-            )}
-          >
-            {/* 色板预览 */}
-            <span
-              className="h-8 w-8 shrink-0 rounded-md border border-border"
-              style={{ backgroundColor: theme.swatch }}
-            />
-            <div className="flex-1 min-w-0">
-              <div className="text-xs font-medium text-foreground">{theme.name}</div>
-              <div className="truncate text-[10px] text-muted-foreground">
-                {theme.description}
+    <div className="space-y-4">
+      {/* 主题选择 */}
+      <div>
+        <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase text-muted-foreground">
+          <Palette className="h-3 w-3" />
+          主题
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          {themes.map((theme) => (
+            <button
+              key={theme.id}
+              onClick={() => setTheme(theme.id)}
+              className={cn(
+                'flex items-center gap-3 rounded-md border p-2.5 text-left transition-colors',
+                currentTheme === theme.id
+                  ? 'border-primary bg-primary/5'
+                  : 'border-border hover:bg-accent',
+              )}
+            >
+              {/* 色板预览 */}
+              <span
+                className="h-8 w-8 shrink-0 rounded-md border border-border"
+                style={{ backgroundColor: theme.swatch }}
+              />
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-medium text-foreground">{theme.name}</div>
+                <div className="truncate text-[10px] text-muted-foreground">
+                  {theme.description}
+                </div>
               </div>
-            </div>
-            {currentTheme === theme.id && (
-              <Check className="h-4 w-4 shrink-0 text-primary" />
-            )}
-          </button>
-        ))}
+              {currentTheme === theme.id && (
+                <Check className="h-4 w-4 shrink-0 text-primary" />
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* 字体管理 */}
+      <div className="space-y-3 border-t border-border/50 pt-3">
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase text-muted-foreground">
+          <Type className="h-3 w-3" />
+          字体
+        </div>
+
+        {/* UI 字体 */}
+        <div>
+          <label className="mb-1 block text-[11px] text-muted-foreground">界面字体</label>
+          <select
+            value={uiFontId}
+            onChange={(e) => setUiFont(e.target.value)}
+            className="w-full rounded border border-border bg-background px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary"
+          >
+            {uiFonts.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* 代码字体 */}
+        <div>
+          <label className="mb-1 block text-[11px] text-muted-foreground">代码字体</label>
+          <select
+            value={codeFontId}
+            onChange={(e) => setCodeFont(e.target.value)}
+            className="w-full rounded border border-border bg-background px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary"
+          >
+            {codeFonts.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* 字号预设 */}
+        <div>
+          <label className="mb-1 block text-[11px] text-muted-foreground">字号大小</label>
+          <div className="grid grid-cols-4 gap-1.5">
+            {fontSizes.map((size) => (
+              <button
+                key={size.id}
+                onClick={() => setSizePreset(size.id)}
+                className={cn(
+                  'rounded border py-1.5 text-center text-[11px] font-medium transition-colors',
+                  sizePreset === size.id
+                    ? 'border-primary bg-primary/5 text-primary'
+                    : 'border-border text-muted-foreground hover:bg-accent hover:text-foreground',
+                )}
+              >
+                {size.name}
+                <span className="block text-[9px] text-muted-foreground/70">
+                  {size.code}px
+                </span>
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-[10px] text-muted-foreground/70">
+            界面 {fontSizes.find((s) => s.id === sizePreset)?.ui}px / 代码 {fontSizes.find((s) => s.id === sizePreset)?.code}px
+          </p>
+        </div>
+
+        {/* 预览 */}
+        <div className="rounded-md border border-border/50 bg-secondary/20 p-2.5">
+          <div className="mb-1 text-[9px] uppercase text-muted-foreground/70">预览</div>
+          <p className="text-xs" style={{ fontFamily: 'var(--app-font-family-ui)' }}>
+            SoC Verify — 界面字体预览 The quick brown fox
+          </p>
+          <pre
+            className="mt-1.5 text-[11px] leading-relaxed"
+            style={{
+              fontFamily: 'var(--app-font-family-code)',
+              fontSize: 'var(--app-font-size-code)',
+            }}
+          >
+{`module alu_add (
+  input  [31:0] a, b,
+  output [31:0] sum
+);
+  assign sum = a + b;
+endmodule`}
+          </pre>
+        </div>
       </div>
     </div>
   );
