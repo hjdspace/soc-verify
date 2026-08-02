@@ -619,6 +619,26 @@ export const projectRouter = t.router({
       return { ok: true };
     }),
 
+  // ─── Open HTML file in external browser ────────────────
+
+  openInExternalBrowser: t.procedure
+    .input((raw): { path: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.path !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'path is required' });
+      }
+      return { path: r.path };
+    })
+    .mutation(async ({ input }) => {
+      // shell.openPath opens a file with the system's default application.
+      // For .html / .htm files this is the default web browser on all platforms.
+      const errorMessage = await shell.openPath(input.path);
+      if (errorMessage) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: errorMessage });
+      }
+      return { ok: true };
+    }),
+
   // ─── Diff Review ──────────────────────────────────
 
   getFileDiff: t.procedure

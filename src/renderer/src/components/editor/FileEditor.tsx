@@ -15,10 +15,11 @@ import { tcl } from '@codemirror/legacy-modes/mode/tcl';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
-import { Save, Eye, Pencil, Loader2, AlertCircle } from 'lucide-react';
+import { Save, Eye, Pencil, Loader2, AlertCircle, ExternalLink } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { useThemeStore } from '@renderer/stores/theme';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
+import { useToastStore } from '@renderer/stores/toast';
 import { cn } from '@renderer/lib/utils';
 
 // ── 语言扩展映射 ──────────────────────────────────────────────
@@ -61,6 +62,11 @@ function getLanguageExtension(filename: string) {
 function isMarkdownFile(filename: string): boolean {
   const ext = filename.split('.').pop()?.toLowerCase() ?? '';
   return ext === 'md' || ext === 'markdown';
+}
+
+function isHtmlFile(filename: string): boolean {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  return ext === 'html' || ext === 'htm';
 }
 
 // ── Markdown 预览链接处理 ─────────────────────────────────────
@@ -126,6 +132,7 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
   const openDestination = useWorkbenchStore((s) => s.open);
 
   const isMd = isMarkdownFile(fileName);
+  const isHtml = isHtmlFile(fileName);
   const languageExtension = useMemo(() => {
     const ext = getLanguageExtension(fileName);
     return ext ? [ext] : [];
@@ -159,19 +166,38 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
 
   const isDirty = content !== originalContent;
 
-  const handleSave = useCallback(async () => {
-    if (!isDirty || saving) return;
+  const handleSave = useCallback(async (): Promise<boolean> => {
+    if (!isDirty || saving) return false;
     setSaving(true);
     setSaveError(null);
     try {
       await trpc.project.writeFile.mutate({ projectId, filePath, content });
       setOriginalContent(content);
+      return true;
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
+      return false;
     } finally {
       setSaving(false);
     }
   }, [projectId, filePath, content, isDirty, saving]);
+
+  // 在外部浏览器中打开 HTML 文件
+  const handleOpenInBrowser = useCallback(async () => {
+    // 如果有未保存的修改，先保存
+    if (isDirty) {
+      const saved = await handleSave();
+      if (!saved) return;
+    }
+    try {
+      await trpc.project.openInExternalBrowser.mutate({ path: filePath });
+    } catch (err) {
+      useToastStore.getState().error(
+        '无法在浏览器中打开',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }, [filePath, isDirty, handleSave]);
 
   // Ctrl+S 快捷键
   useEffect(() => {
@@ -213,7 +239,7 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
               保存失败
             </span>
           )}
-          {isMd && (
+          {(isMd || isHtml) && (
             <button
               onClick={() => setPreviewMode(!previewMode)}
               className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
@@ -221,6 +247,16 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
             >
               {previewMode ? <Pencil className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
               {previewMode ? '编辑' : '预览'}
+            </button>
+          )}
+          {isHtml && (
+            <button
+              onClick={() => void handleOpenInBrowser()}
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              title="在外部浏览器中打开"
+            >
+              <ExternalLink className="h-3 w-3" />
+              浏览器
             </button>
           )}
           <button
@@ -299,6 +335,13 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
               </ReactMarkdown>
             </div>
           </div>
+        ) : isHtml && previewMode ? (
+          <iframe
+            srcDoc={content}
+            className="h-full w-full border-0 bg-white"
+            title="HTML 预览"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+          />
         ) : (
           <CodeMirror
             value={content}
