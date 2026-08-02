@@ -6,6 +6,32 @@
 
 ---
 
+## [0.2.0](https://github.com/hjdspace/soc-verify/compare/v0.1.10...v0.2.0) (2026-08-03)
+
+### Features
+
+* **plugin:** 完成 VS Code 风格插件扩展宿主实现，支持命令和视图贡献
+* **plugin:** 扩展宿主视图容器与宿主 API，增强插件与宿主的集成能力
+* **plugin:** 完成插件生命周期 SDK 与迁移，提供完整插件开发与迁移支持
+* **editor:** 添加 HTML 文件预览和在外部浏览器中打开功能
+* **editor:** 支持 Markdown 预览中点击内部链接打开文件
+* **settings:** 实现字体管理功能，支持 UI 字体、代码字体和字号预设
+* **layout:** 添加可折叠的底部终端面板，支持拖拽调整大小和内容显示
+* **session:** 完成仿真终端与 AI 错误分析功能迭代
+* **tools:** 新增工具元数据、会话回调与 UI 展示优化
+* **markdown:** 添加 rehype-raw 支持 HTML 渲染
+
+### Documentation
+
+* **plugin:** 添加插件开发指南文档
+* **docs:** 添加插件审计与选项 UI 原型
+
+### Chore
+
+* **gitignore:** 添加 .tmp/ 目录到忽略列表
+
+---
+
 ## [0.1.10](https://github.com/hjdspace/soc-verify/compare/v0.1.9...v0.1.10) (2026-07-25)
 
 ### Features
