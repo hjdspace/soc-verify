@@ -5,6 +5,7 @@ import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
 import { TerminalView } from '@renderer/components/terminal/TerminalView';
 import { cn } from '@renderer/lib/utils';
+import { PluginViewHost } from '@renderer/components/plugins/PluginViewHost';
 
 /** MIME type used for terminal tab drag-and-drop. */
 export const TERMINAL_TAB_MIME = 'application/x-socverify-terminal-tab';
@@ -31,11 +32,13 @@ export function BottomPanel() {
   const moveTerminalLocation = useTerminalStore((s) => s.moveTerminalLocation);
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
+  const plugins = useProjectStore((s) => s.plugins);
 
   const [showNewMenu, setShowNewMenu] = useState(false);
   const [dropHover, setDropHover] = useState(false);
 
   const bottomTabs = tabs.filter((t) => t.location === 'bottom');
+  const hasBottomPluginViews = plugins.some((plugin) => plugin.contributes?.views?.some((view) => view.location === 'bottom'));
   const activeTab = bottomTabs.find((t) => t.id === bottomActiveTabId) ?? bottomTabs[0] ?? null;
 
   // Auto-collapse when there are no bottom terminals (but only if currently expanded)
@@ -115,7 +118,13 @@ export function BottomPanel() {
     setShowNewMenu(false);
   }, [createTerminal, currentProjectId]);
 
-  if (collapsed || bottomTabs.length === 0) return null;
+  if (collapsed || bottomTabs.length === 0) {
+    return hasBottomPluginViews ? (
+      <div className="flex max-h-72 min-h-8 shrink-0 flex-col border-t border-border bg-background">
+        <PluginViewHost location="bottom" />
+      </div>
+    ) : null;
+  }
 
   return (
     <div
@@ -128,6 +137,8 @@ export function BottomPanel() {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      <PluginViewHost location="bottom" />
+
       {/* ── Resize handle (top edge) ──────────────────────── */}
       <div
         onMouseDown={handleResizeStart}

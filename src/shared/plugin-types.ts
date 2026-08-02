@@ -32,6 +32,14 @@ export interface PluginContributions {
   views?: PluginViewContribution[];
 }
 
+export type PluginHostEvent = string;
+
+export interface PluginNotification {
+  level: 'info' | 'warning' | 'error';
+  message: string;
+  detail?: string;
+}
+
 export interface PluginManifest {
   id: string;
   name: string;
@@ -182,8 +190,15 @@ export interface PluginLoadResult {
 }
 
 export interface PluginActivationContext {
+  pluginId: string;
   projectRoot: string;
   registerCommand(command: string, handler: (...args: unknown[]) => unknown | Promise<unknown>): void;
+  on(event: PluginHostEvent, handler: (payload: unknown) => unknown | Promise<unknown>): () => void;
+  getState<T>(key: string): Promise<T | undefined>;
+  setState<T>(key: string, value: T): Promise<void>;
+  notify(notification: PluginNotification): void;
+  readFile(filePath: string): Promise<string>;
+  writeFile(filePath: string, content: string): Promise<void>;
 }
 
 export interface PluginLifecycle {

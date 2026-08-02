@@ -6,6 +6,7 @@ import type {
 } from '@shared/types';
 import { trpc } from '@renderer/lib/trpc';
 import { useSessionStore } from './session';
+import { useUiStore } from './ui';
 import { tRPCError, getToast } from '@renderer/lib/trpc-utils';
 
 interface ProjectState {
@@ -17,6 +18,7 @@ interface ProjectState {
   plugins: PluginConfigEntry[];
   selectedSubsys: string | null;
   caseStatusFilter: string;
+  uiStateReady: boolean;
   // ── 动作 ──────────────────────────────────────────────
   openProject: (rootPath: string, name?: string) => Promise<void>;
   openProjectDialog: () => Promise<void>;
@@ -41,6 +43,15 @@ async function restoreOrCreateSession(projectId: string, cwd: string): Promise<v
   await sessionStore.restoreSessions(projectId, cwd);
 }
 
+async function restoreProjectUiState(projectId: string): Promise<void> {
+  try {
+    const state = await trpc.project.getState.query({ projectId });
+    useUiStore.getState().hydrateLayout(state?.uiLayout);
+  } catch {
+    // A missing or unreadable layout should keep the default host layout.
+  }
+}
+
 export const useProjectStore = create<ProjectState>((set, get) => ({
   projects: [],
   currentProjectId: null,
@@ -49,6 +60,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   plugins: [],
   selectedSubsys: null,
   caseStatusFilter: 'all',
+  uiStateReady: false,
 
   openProject: async (rootPath, name) => {
     try {
@@ -58,9 +70,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         currentProjectId: result.project.id,
         plugins: result.plugins as PluginConfigEntry[],
         fileTree: null,
+        uiStateReady: false,
       }));
       // Load file tree, then restore or create AI sessions
       await get().loadFileTree(result.project.id);
+      await restoreProjectUiState(result.project.id);
+      set({ uiStateReady: true });
       await restoreOrCreateSession(result.project.id, result.project.rootPath);
       getToast().success(`已打开项目: ${result.project.name}`);
     } catch (err) {
@@ -78,9 +93,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         currentProjectId: result.project.id,
         plugins: result.plugins as PluginConfigEntry[],
         fileTree: null,
+        uiStateReady: false,
       }));
       // Load file tree, then restore or create AI sessions
       await get().loadFileTree(result.project.id);
+      await restoreProjectUiState(result.project.id);
+      set({ uiStateReady: true });
       await restoreOrCreateSession(result.project.id, result.project.rootPath);
       getToast().success(`已打开项目: ${result.project.name}`);
     } catch (err) {
@@ -95,6 +113,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         projects: s.projects.filter((p) => p.id !== projectId),
         currentProjectId: s.currentProjectId === projectId ? null : s.currentProjectId,
         fileTree: s.currentProjectId === projectId ? null : s.fileTree,
+        uiStateReady: s.currentProjectId === projectId ? false : s.uiStateReady,
       }));
     } catch (err) {
       getToast().error('关闭项目失败', tRPCError(err));
@@ -159,9 +178,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         state: {
           projectId: currentProjectId,
           uiLayout: {
-            leftRailCollapsed: false,
-            rightPanelCollapsed: false,
-            optionDockExpanded: false,
+            leftRailCollapsed: useUiStore.getState().leftRailCollapsed,
+            rightPanelCollapsed: useUiStore.getState().rightPanelCollapsed,
+            optionDockExpanded: useUiStore.getState().optionDockExpanded,
+            pluginViews: useUiStore.getState().pluginViewLayouts,
           },
           lastSessionIds: [],
         },
@@ -186,9 +206,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             currentProjectId: result.project.id,
             plugins: result.plugins as PluginConfigEntry[],
             fileTree: null,
+            uiStateReady: false,
           }));
           // Load file tree, then restore or create AI sessions
           await get().loadFileTree(result.project.id);
+          await restoreProjectUiState(result.project.id);
+          set({ uiStateReady: true });
           await restoreOrCreateSession(result.project.id, result.project.rootPath);
         } catch {
           // Fallback: if re-open fails (e.g. directory deleted), just set the ID

@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join, resolve, dirname, isAbsolute } from 'node:path';
+import { join, resolve, dirname, isAbsolute, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import type {
   PluginManifest,
@@ -16,11 +16,17 @@ import type {
   UiPlugin,
   PluginContributions,
   PluginLifecycle,
+  PluginHostEvent,
+  PluginNotification,
 } from '@shared/plugin-types';
 import type { PluginConfig, PluginConfigEntry } from '@shared/types';
 
 const SOCVERIFY_DIR = '.socverify';
 const PLUGIN_CONFIG_FILE = 'plugins.json';
+const PLUGIN_STATE_DIR = 'plugin-state';
+
+type PluginCommandHandler = (...args: unknown[]) => unknown | Promise<unknown>;
+type PluginEventHandler = (payload: unknown) => unknown | Promise<unknown>;
 
 function emptyRegistry(): PluginRegistry {
   return {
@@ -199,13 +205,21 @@ async function loadPluginModule(
 class PluginLoaderImpl {
   private registries = new Map<string, PluginRegistry>();
   private loadResults = new Map<string, PluginLoadResult[]>();
-  private commandHandlers = new Map<string, Map<string, (...args: unknown[]) => unknown | Promise<unknown>>>();
+  private commandHandlers = new Map<string, Map<string, PluginCommandHandler>>();
+  private activePlugins = new Map<string, Map<string, PluginLifecycle>>();
+  private eventHandlers = new Map<string, Map<PluginHostEvent, Set<PluginEventHandler>>>();
+  private pluginStates = new Map<string, Map<string, Record<string, unknown>>>();
+  private notifications = new Map<string, PluginNotification[]>();
 
   async loadPlugins(projectRoot: string): Promise<PluginLoadResult[]> {
+    await this.deactivateProject(projectRoot);
     const config = await this.readPluginConfig(projectRoot);
     const results: PluginLoadResult[] = [];
     const registry = emptyRegistry();
-    const commandHandlers = new Map<string, (...args: unknown[]) => unknown | Promise<unknown>>();
+    const commandHandlers = new Map<string, PluginCommandHandler>();
+    const activePlugins = new Map<string, PluginLifecycle>();
+    const eventHandlers = new Map<PluginHostEvent, Set<PluginEventHandler>>();
+    this.eventHandlers.set(projectRoot, eventHandlers);
 
     // Merge built-in plugins with project-level config.
     // Project-level config entries with the same id override built-in entries.
@@ -278,14 +292,33 @@ class PluginLoaderImpl {
       const contributes = resolveContributions(manifest, pluginPath);
       try {
         const lifecycle = plugin as AnyPlugin & PluginLifecycle;
+        const state = await this.loadPluginState(projectRoot, manifest.id);
         await lifecycle.activate?.({
+          pluginId: manifest.id,
           projectRoot,
           registerCommand: (command, handler) => {
             if (typeof command === 'string' && typeof handler === 'function') {
               commandHandlers.set(command, handler);
             }
           },
+          on: (event, handler) => {
+            const handlers = eventHandlers.get(event) ?? new Set<PluginEventHandler>();
+            handlers.add(handler);
+            eventHandlers.set(event, handlers);
+            return () => handlers.delete(handler);
+          },
+          getState: async <T>(key: string) => state[key] as T | undefined,
+          setState: async <T>(key: string, value: T) => {
+            state[key] = value;
+            await this.savePluginState(projectRoot, manifest.id, state);
+          },
+          notify: (notification) => this.pushNotification(projectRoot, notification),
+          readFile: (filePath) => this.readProjectFile(projectRoot, filePath),
+          writeFile: (filePath, content) => this.writeProjectFile(projectRoot, filePath, content),
         });
+        if (lifecycle.activate || lifecycle.deactivate) {
+          activePlugins.set(manifest.id, lifecycle);
+        }
       } catch (err) {
         results.push({
           manifest,
@@ -333,6 +366,7 @@ class PluginLoaderImpl {
     this.registries.set(projectRoot, registry);
     this.loadResults.set(projectRoot, results);
     this.commandHandlers.set(projectRoot, commandHandlers);
+    this.activePlugins.set(projectRoot, activePlugins);
     return results;
   }
 
@@ -350,6 +384,107 @@ class PluginLoaderImpl {
     return handler(...args);
   }
 
+  async emitEvent(projectRoot: string, event: PluginHostEvent, payload: unknown = {}): Promise<void> {
+    const handlers = [...(this.eventHandlers.get(projectRoot)?.get(event) ?? [])];
+    for (const handler of handlers) {
+      try {
+        await handler(payload);
+      } catch (err) {
+        this.pushNotification(projectRoot, {
+          level: 'error',
+          message: `Plugin event handler failed: ${event}`,
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  getNotifications(projectRoot: string): PluginNotification[] {
+    return [...(this.notifications.get(projectRoot) ?? [])];
+  }
+
+  clearNotifications(projectRoot: string): void {
+    this.notifications.delete(projectRoot);
+  }
+
+  async deactivateProject(projectRoot: string): Promise<void> {
+    const activePlugins = this.activePlugins.get(projectRoot);
+    if (!activePlugins) return;
+    for (const [pluginId, lifecycle] of activePlugins) {
+      try {
+        await lifecycle.deactivate?.();
+      } catch (err) {
+        this.pushNotification(projectRoot, {
+          level: 'error',
+          message: `Failed to deactivate plugin ${pluginId}`,
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    this.activePlugins.delete(projectRoot);
+    this.eventHandlers.delete(projectRoot);
+    this.commandHandlers.delete(projectRoot);
+  }
+
+  async deactivateAll(): Promise<void> {
+    for (const projectRoot of this.activePlugins.keys()) {
+      await this.deactivateProject(projectRoot);
+    }
+  }
+
+  private async loadPluginState(projectRoot: string, pluginId: string): Promise<Record<string, unknown>> {
+    const projectStates = this.pluginStates.get(projectRoot) ?? new Map<string, Record<string, unknown>>();
+    const existing = projectStates.get(pluginId);
+    if (existing) return existing;
+
+    const statePath = join(projectRoot, SOCVERIFY_DIR, PLUGIN_STATE_DIR, `${encodeURIComponent(pluginId)}.json`);
+    let state: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(await readFile(statePath, 'utf-8'));
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        state = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Missing or invalid state starts from an empty object.
+    }
+    projectStates.set(pluginId, state);
+    this.pluginStates.set(projectRoot, projectStates);
+    return state;
+  }
+
+  private async savePluginState(projectRoot: string, pluginId: string, state: Record<string, unknown>): Promise<void> {
+    const stateDir = join(projectRoot, SOCVERIFY_DIR, PLUGIN_STATE_DIR);
+    await mkdir(stateDir, { recursive: true });
+    await writeFile(join(stateDir, `${encodeURIComponent(pluginId)}.json`), JSON.stringify(state, null, 2), 'utf-8');
+  }
+
+  private projectPath(projectRoot: string, filePath: string): string {
+    if (isAbsolute(filePath)) throw new Error('Plugin file access requires a project-relative path');
+    const target = resolve(projectRoot, filePath);
+    const rel = relative(projectRoot, target);
+    if (rel.startsWith('..') || isAbsolute(rel)) {
+      throw new Error('Plugin file access is limited to the project directory');
+    }
+    return target;
+  }
+
+  private readProjectFile(projectRoot: string, filePath: string): Promise<string> {
+    return readFile(this.projectPath(projectRoot, filePath), 'utf-8');
+  }
+
+  private async writeProjectFile(projectRoot: string, filePath: string, content: string): Promise<void> {
+    const target = this.projectPath(projectRoot, filePath);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, content, 'utf-8');
+  }
+
+  private pushNotification(projectRoot: string, notification: PluginNotification): void {
+    const notifications = this.notifications.get(projectRoot) ?? [];
+    notifications.push(notification);
+    if (notifications.length > 100) notifications.splice(0, notifications.length - 100);
+    this.notifications.set(projectRoot, notifications);
+  }
+
   async readPluginConfig(projectRoot: string): Promise<PluginConfig> {
     const configPath = join(projectRoot, SOCVERIFY_DIR, PLUGIN_CONFIG_FILE);
     try {
@@ -361,7 +496,6 @@ class PluginLoaderImpl {
   }
 
   async savePluginConfig(projectRoot: string, config: PluginConfig): Promise<void> {
-    const { writeFile, mkdir } = await import('node:fs/promises');
     const configDir = join(projectRoot, SOCVERIFY_DIR);
     if (!existsSync(configDir)) {
       await mkdir(configDir, { recursive: true });
@@ -371,15 +505,22 @@ class PluginLoaderImpl {
   }
 
   clearProject(projectRoot: string): void {
+    void this.deactivateProject(projectRoot);
     this.registries.delete(projectRoot);
     this.loadResults.delete(projectRoot);
     this.commandHandlers.delete(projectRoot);
+    this.pluginStates.delete(projectRoot);
+    this.notifications.delete(projectRoot);
   }
 
   clearAll(): void {
     this.registries.clear();
     this.loadResults.clear();
     this.commandHandlers.clear();
+    this.activePlugins.clear();
+    this.eventHandlers.clear();
+    this.pluginStates.clear();
+    this.notifications.clear();
   }
 }
 

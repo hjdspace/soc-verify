@@ -280,6 +280,52 @@ describe('PluginLoader', () => {
       expect(plugin?.contributes?.views?.[0].html).toContain('Plugin UI');
       await expect(pluginLoader.executeCommand(tempDir, 'ui-plugin.hello', ['world'])).resolves.toBe('hello world');
     });
+
+    it('exposes state, events, notifications, and guarded project file access to plugins', async () => {
+      const pluginDir = join(tempDir, 'plugins');
+      await mkdir(pluginDir, { recursive: true });
+      await writeFile(join(tempDir, 'input.txt'), 'from project', 'utf-8');
+      const pluginPath = join(pluginDir, 'host-api-plugin.cjs');
+      await writeFile(
+        pluginPath,
+        `module.exports = {
+  manifest: { id: 'host-api-plugin', name: 'Host API Plugin', version: '1.0.0', kind: 'ui', contributes: {} },
+  async activate(context) {
+    context.on('test.event', async () => context.setState('event', 'seen'));
+    context.notify({ level: 'info', message: 'activated' });
+    context.registerCommand('host-api.read', () => context.readFile('input.txt'));
+    context.registerCommand('host-api.read-path', (path) => context.readFile(String(path)));
+    context.registerCommand('host-api.state', () => context.getState('event'));
+  }
+};`,
+        'utf-8',
+      );
+
+      const socverifyDir = join(tempDir, '.socverify');
+      await mkdir(socverifyDir, { recursive: true });
+      await writeFile(
+        join(socverifyDir, 'plugins.json'),
+        JSON.stringify({
+          plugins: [{
+            id: 'host-api-plugin',
+            name: 'Host API Plugin',
+            version: '1.0.0',
+            kind: 'ui',
+            source: 'local',
+            path: pluginPath,
+            enabled: true,
+          }],
+        }),
+        'utf-8',
+      );
+
+      await pluginLoader.loadPlugins(tempDir);
+      await expect(pluginLoader.executeCommand(tempDir, 'host-api.read')).resolves.toBe('from project');
+      await pluginLoader.emitEvent(tempDir, 'test.event');
+      await expect(pluginLoader.executeCommand(tempDir, 'host-api.state')).resolves.toBe('seen');
+      expect(pluginLoader.getNotifications(tempDir)).toEqual([{ level: 'info', message: 'activated' }]);
+      await expect(pluginLoader.executeCommand(tempDir, 'host-api.read-path', ['../package.json'])).rejects.toThrow('limited to the project directory');
+    });
   });
 
   describe('getRegistry', () => {

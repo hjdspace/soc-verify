@@ -1,7 +1,14 @@
+import type { PluginViewLocation } from '../plugin-types';
+
 export interface AppVersionInfo {
   app: string;
   version: string;
   stage: string;
+}
+
+export interface PluginViewLayoutState {
+  activeViewId?: string;
+  collapsed?: boolean;
 }
 
 export interface ProjectInfo {
@@ -18,6 +25,7 @@ export interface ProjectState {
     leftRailCollapsed: boolean;
     rightPanelCollapsed: boolean;
     optionDockExpanded: boolean;
+    pluginViews?: Partial<Record<PluginViewLocation, PluginViewLayoutState>>;
   };
   lastSessionIds: string[];
 }

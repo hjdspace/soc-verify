@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { TitleBar } from './TitleBar';
 import { LeftRail } from './LeftRail';
 import { CenterArea } from './CenterArea';
@@ -11,6 +12,7 @@ import { EnvWizard } from '@renderer/components/env/EnvWizard';
 import { SettingsPanel } from '@renderer/components/settings/SettingsPanel';
 import { SourceControlDialog } from '@renderer/components/scm/SourceControlDialog';
 import { useUiStore } from '@renderer/stores/ui';
+import { useProjectStore } from '@renderer/stores/project';
 
 export function AppShell() {
   const leftCollapsed = useUiStore((s) => s.leftRailCollapsed);
@@ -19,6 +21,19 @@ export function AppShell() {
   const rightPanelWidth = useUiStore((s) => s.rightPanelWidth);
   const setLeftRailWidth = useUiStore((s) => s.setLeftRailWidth);
   const setRightPanelWidth = useUiStore((s) => s.setRightPanelWidth);
+  const optionDockExpanded = useUiStore((s) => s.optionDockExpanded);
+  const pluginViewLayouts = useUiStore((s) => s.pluginViewLayouts);
+  const currentProjectId = useProjectStore((s) => s.currentProjectId);
+  const uiStateReady = useProjectStore((s) => s.uiStateReady);
+  const saveProjectState = useProjectStore((s) => s.saveState);
+
+  useEffect(() => {
+    if (!currentProjectId || !uiStateReady) return;
+    const timer = window.setTimeout(() => {
+      void saveProjectState();
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [currentProjectId, uiStateReady, leftCollapsed, rightCollapsed, optionDockExpanded, pluginViewLayouts, saveProjectState]);
 
   return (
     <div className="flex h-screen w-screen flex-col bg-background text-foreground">

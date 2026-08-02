@@ -39,6 +39,7 @@ export const projectRouter = t.router({
 
       // Load plugins for this project
       const loadResults = await pluginLoader.loadPlugins(info.rootPath);
+      await pluginLoader.emitEvent(info.rootPath, 'project.opened', info);
       const registry = pluginLoader.getRegistry(info.rootPath);
 
       // Return plugin load info alongside project info
@@ -71,6 +72,7 @@ export const projectRouter = t.router({
 
       // Load plugins
       const loadResults = await pluginLoader.loadPlugins(info.rootPath);
+      await pluginLoader.emitEvent(info.rootPath, 'project.opened', info);
       const plugins = loadResults.map((r) => ({
         id: r.manifest.id,
         name: r.manifest.name,
@@ -97,6 +99,8 @@ export const projectRouter = t.router({
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
       await projectManager.closeProject(input.projectId);
+      await pluginLoader.emitEvent(project.rootPath, 'project.closed', project);
+      await pluginLoader.deactivateProject(project.rootPath);
       pluginLoader.clearProject(project.rootPath);
       return { ok: true };
     }),
@@ -348,6 +352,33 @@ export const projectRouter = t.router({
           message: err instanceof Error ? err.message : String(err),
         });
       }
+    }),
+
+  getPluginNotifications: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .query(({ input }) => {
+      const project = requireProject(input.projectId);
+      return pluginLoader.getNotifications(project.rootPath);
+    }),
+
+  clearPluginNotifications: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .mutation(({ input }) => {
+      const project = requireProject(input.projectId);
+      pluginLoader.clearNotifications(project.rootPath);
+      return { ok: true };
     }),
 
   getState: t.procedure

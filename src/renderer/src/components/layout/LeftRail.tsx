@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { FolderOpen, RefreshCw, Cpu, FileText, LayoutDashboard, ChevronDown, Plus, Folder } from 'lucide-react';
+import { FolderOpen, RefreshCw, Cpu, FileText, LayoutDashboard, ChevronDown, Plus, Folder, Puzzle } from 'lucide-react';
 import { useProjectStore } from '@renderer/stores/project';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { trpc } from '@renderer/lib/trpc';
 import { FileTree } from '../project/FileTree';
 import { SubsysList } from '../project/SubsysList';
 import { cn } from '@renderer/lib/utils';
+import { PluginViewHost } from '@renderer/components/plugins/PluginViewHost';
 
-type Tab = 'files' | 'subsystems' | 'overview';
+type Tab = 'files' | 'subsystems' | 'overview' | 'plugins';
 
 interface LeftRailProps {
   width: number;
@@ -26,6 +27,7 @@ export function LeftRail({ width }: LeftRailProps) {
   const closeProject = useProjectStore((s) => s.closeProject);
   const refreshFileTree = useProjectStore((s) => s.refreshFileTree);
   const openDestination = useWorkbenchStore((s) => s.open);
+  const plugins = useProjectStore((s) => s.plugins);
 
   const currentProject = projects.find((p) => p.id === currentProjectId);
 
@@ -63,6 +65,9 @@ export function LeftRail({ width }: LeftRailProps) {
     { id: 'files', label: '文件', icon: FileText },
     { id: 'subsystems', label: '子系统', icon: Cpu },
     { id: 'overview', label: '概览', icon: LayoutDashboard },
+    ...(plugins.some((plugin) => plugin.contributes?.views?.some((view) => view.location === 'left'))
+      ? [{ id: 'plugins' as const, label: '插件', icon: Puzzle }]
+      : []),
   ];
 
   return (
@@ -201,6 +206,8 @@ export function LeftRail({ width }: LeftRailProps) {
             </span>
             <SubsysList />
           </div>
+        ) : tab === 'plugins' ? (
+          <PluginViewHost location="left" />
         ) : (
           <ProjectOverview projectId={currentProject.id} />
         )}

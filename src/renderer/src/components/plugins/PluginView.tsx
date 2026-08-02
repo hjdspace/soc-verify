@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import type { PluginViewContribution } from '@shared/plugin-types';
@@ -16,10 +16,39 @@ type PluginCommandMessage = {
   requestId?: string;
 };
 
+function addPluginBridge(html: string): string {
+  const bridge = `<script>
+(() => {
+  let sequence = 0;
+  const pending = new Map();
+  window.socVerify = {
+    invoke(command, args = []) {
+      const requestId = String(++sequence);
+      return new Promise((resolve, reject) => {
+        pending.set(requestId, { resolve, reject });
+        window.parent.postMessage({ type: 'socverify:command', command, args, requestId }, '*');
+      });
+    }
+  };
+  window.addEventListener('message', (event) => {
+    const message = event.data;
+    if (!message || message.type !== 'socverify:command-result') return;
+    const request = pending.get(message.requestId);
+    if (!request) return;
+    pending.delete(message.requestId);
+    if (message.error) request.reject(new Error(message.error));
+    else request.resolve(message.result);
+  });
+})();
+</script>`;
+  return html.includes('</head>') ? html.replace('</head>', `${bridge}</head>`) : `${bridge}${html}`;
+}
+
 export function PluginView({ projectId, pluginId, view }: PluginViewProps) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const bridgedHtml = useMemo(() => (view.html ? addPluginBridge(view.html) : ''), [view.html]);
 
   useEffect(() => {
     const handleMessage = async (event: MessageEvent<PluginCommandMessage>) => {
@@ -82,7 +111,7 @@ export function PluginView({ projectId, pluginId, view }: PluginViewProps) {
       <iframe
         ref={frameRef}
         title={view.name}
-        srcDoc={view.html}
+        srcDoc={bridgedHtml}
         sandbox="allow-scripts allow-forms"
         className="min-h-0 flex-1 border-0 bg-background"
       />

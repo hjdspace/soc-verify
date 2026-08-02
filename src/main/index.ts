@@ -602,6 +602,7 @@ app.on('before-quit', async () => {
   // Save project state before quitting
   await projectManager.saveProjectsDb();
   projectManager.destroy();
+  await pluginLoader.deactivateAll();
   pluginLoader.clearAll();
   await sessionManager.destroyAll();
   terminalManager.destroyAll();

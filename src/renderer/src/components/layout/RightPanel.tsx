@@ -8,6 +8,7 @@ import { ToolCard } from '@renderer/components/chat/ToolCard';
 import { ThinkingBlock } from '@renderer/components/chat/ThinkingBlock';
 import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
+import { PluginViewHost } from '@renderer/components/plugins/PluginViewHost';
 
 interface RightPanelProps {
   width: number;
@@ -624,6 +625,8 @@ export function RightPanel({ width }: RightPanelProps) {
           </button>
         </div>
       </div>
+
+      <PluginViewHost location="right" />
 
       {/* ── 消息列表 / 历史会话 ────────────────────── */}
       <div className="flex-1 overflow-y-auto px-2 py-2">
