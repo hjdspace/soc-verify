@@ -49,6 +49,7 @@ export const projectRouter = t.router({
         kind: r.manifest.kind,
         source: r.source,
         path: r.path,
+        contributes: r.contributes,
         enabled: !r.error,
         error: r.error,
       }));
@@ -77,6 +78,7 @@ export const projectRouter = t.router({
         kind: r.manifest.kind,
         source: r.source,
         path: r.path,
+        contributes: r.contributes,
         enabled: !r.error,
         error: r.error,
       }));
@@ -277,6 +279,7 @@ export const projectRouter = t.router({
           description: r.manifest.description,
           source: r.source,
           path: r.path,
+          contributes: r.contributes,
           enabled: configEntry?.enabled ?? !r.error,
           error: r.error,
         };
@@ -318,6 +321,33 @@ export const projectRouter = t.router({
       await pluginLoader.loadPlugins(project.rootPath);
 
       return { ok: true };
+    }),
+
+  invokePluginCommand: t.procedure
+    .input((raw): { projectId: string; command: string; args?: unknown[] } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.command !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and command are required' });
+      }
+      return {
+        projectId: r.projectId,
+        command: r.command,
+        args: Array.isArray(r.args) ? r.args : [],
+      };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      await ensurePluginsLoaded(project.rootPath);
+      try {
+        return {
+          result: await pluginLoader.executeCommand(project.rootPath, input.command, input.args),
+        };
+      } catch (err) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
     }),
 
   getState: t.procedure

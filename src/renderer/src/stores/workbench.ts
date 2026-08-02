@@ -14,6 +14,7 @@ export type WorkbenchDestination =
   | { type: 'to-checklist' }
   | { type: 'source-control' }
   | { type: 'ai-artifacts' }
+  | { type: 'plugin-view'; pluginId: string; viewId: string; title: string }
   | { type: 'diff-review'; filePath: string; fileName: string };
 
 export type WorkbenchTab = {
@@ -62,6 +63,8 @@ function describeDestination(destination: WorkbenchDestination): Omit<WorkbenchT
       return { id: destination.type, title: '源代码管理', closable: true };
     case 'ai-artifacts':
       return { id: destination.type, title: 'AI 产物', closable: true };
+    case 'plugin-view':
+      return { id: `plugin-view:${destination.pluginId}:${destination.viewId}`, title: destination.title, closable: true };
   }
 }
 

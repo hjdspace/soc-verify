@@ -6,7 +6,31 @@ export type PluginKind =
   | 'subsys-discoverer'
   | 'coverage-parser'
   | 'simulation-runner'
-  | 'sim-option-schema';
+  | 'sim-option-schema'
+  | 'ui';
+
+export type PluginViewLocation = 'center' | 'left' | 'right' | 'bottom';
+
+export interface PluginCommandContribution {
+  command: string;
+  title: string;
+  category?: string;
+}
+
+export interface PluginViewContribution {
+  id: string;
+  name: string;
+  location: PluginViewLocation;
+  /** Relative path inside the plugin package. The host resolves it to HTML. */
+  entry?: string;
+  /** Resolved by the main-process loader and sent to the isolated renderer. */
+  html?: string;
+}
+
+export interface PluginContributions {
+  commands?: PluginCommandContribution[];
+  views?: PluginViewContribution[];
+}
 
 export interface PluginManifest {
   id: string;
@@ -14,6 +38,8 @@ export interface PluginManifest {
   version: string;
   kind: PluginKind;
   description?: string;
+  activationEvents?: string[];
+  contributes?: PluginContributions;
 }
 
 export interface CaseInfo {
@@ -122,12 +148,17 @@ export interface SimOptionSchemaProvider {
   getSchema(subsys: string): Promise<SimOptionSchema>;
 }
 
+export interface UiPlugin {
+  manifest: PluginManifest & { kind: 'ui' };
+}
+
 export type AnyPlugin =
   | CaseParserPlugin
   | SubsysDiscoveryPlugin
   | CoverageParserPlugin
   | SimulationRunnerPlugin
-  | SimOptionSchemaProvider;
+  | SimOptionSchemaProvider
+  | UiPlugin;
 
 export interface PluginRegistry {
   caseParsers: CaseParserPlugin[];
@@ -135,6 +166,8 @@ export interface PluginRegistry {
   coverageParsers: CoverageParserPlugin[];
   simulationRunners: SimulationRunnerPlugin[];
   simOptionSchemaProviders: SimOptionSchemaProvider[];
+  /** Optional to keep existing adapters and tests source-compatible. */
+  uiPlugins?: UiPlugin[];
 }
 
 // ─── 插件加载结果 ──────────────────────────────────────────────
@@ -145,4 +178,15 @@ export interface PluginLoadResult {
   source: 'node_modules' | 'local';
   path: string;
   error?: string;
+  contributes?: PluginContributions;
+}
+
+export interface PluginActivationContext {
+  projectRoot: string;
+  registerCommand(command: string, handler: (...args: unknown[]) => unknown | Promise<unknown>): void;
+}
+
+export interface PluginLifecycle {
+  activate?(context: PluginActivationContext): void | Promise<void>;
+  deactivate?(): void | Promise<void>;
 }

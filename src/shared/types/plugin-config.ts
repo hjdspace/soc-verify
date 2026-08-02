@@ -1,4 +1,4 @@
-import type { PluginKind } from '../plugin-types';
+import type { PluginContributions, PluginKind } from '../plugin-types';
 
 export interface PluginConfigEntry {
   id: string;
@@ -9,6 +9,7 @@ export interface PluginConfigEntry {
   path: string;
   enabled: boolean;
   error?: string;
+  contributes?: PluginContributions;
 }
 
 export interface PluginConfig {

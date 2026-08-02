@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback } from 'react';
-import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine } from 'lucide-react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
+import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine, Puzzle } from 'lucide-react';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
@@ -19,6 +19,7 @@ import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from '@renderer/stores/toast';
 import { cn } from '@renderer/lib/utils';
 import type { SimulationHistoryEntry, CompileError, SimulationStatus } from '@shared/types';
+import { PluginView } from '@renderer/components/plugins/PluginView';
 
 // ── 状态徽章：主题感知的点 + 文字 ────────────────────────────────
 const STATUS_BADGE_STYLES: Record<SimulationStatus, { dot: string; text: string }> = {
@@ -50,6 +51,11 @@ export function CenterArea() {
   const destination = activeTab?.destination ?? null;
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
+  const plugins = useProjectStore((s) => s.plugins);
+  const pluginViews = useMemo(
+    () => plugins.flatMap((plugin) => (plugin.contributes?.views ?? []).map((view) => ({ plugin, view }))),
+    [plugins],
+  );
   const activeRuns = useSimulationStore((s) => s.activeRuns);
   const history = useSimulationStore((s) => s.history);
   const loadHistory = useSimulationStore((s) => s.loadHistory);
@@ -177,6 +183,7 @@ export function CenterArea() {
     { type: 'to-checklist' as const, label: 'TO 检查', icon: ListChecks },
     { type: 'simulation-history' as const, label: '仿真历史', icon: History },
   ];
+  const centerPluginViews = pluginViews.filter(({ view }) => view.location === 'center');
 
   return (
     <main className="flex flex-1 flex-col overflow-hidden">
@@ -226,6 +233,7 @@ export function CenterArea() {
                 {tab.destination.type === 'dashboard' && <LayoutDashboard className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'to-checklist' && <ListChecks className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'source-control' && <GitCommitHorizontal className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'plugin-view' && <Puzzle className="h-3 w-3 opacity-50" />}
                 <span className="max-w-32 truncate">{tab.title}</span>
                 {tab.closable && (
                   <button
@@ -354,6 +362,20 @@ export function CenterArea() {
                       </button>
                     );
                   })}
+                  {centerPluginViews.length > 0 && <div className="border-t border-border/50" />}
+                  {centerPluginViews.map(({ plugin, view }) => (
+                    <button
+                      key={`${plugin.id}:${view.id}`}
+                      onClick={() => {
+                        openDestination({ type: 'plugin-view', pluginId: plugin.id, viewId: view.id, title: view.name });
+                        setMoreMenuOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent"
+                    >
+                      <Puzzle className="h-3.5 w-3.5 opacity-70" />
+                      <span className="truncate">{view.name}</span>
+                    </button>
+                  ))}
                 </div>
               </>
             )}
@@ -423,6 +445,19 @@ export function CenterArea() {
           <TOChecklistPanel />
         ) : destination?.type === 'source-control' ? (
           <SourceControlPanel />
+        ) : destination?.type === 'plugin-view' ? (
+          (() => {
+            const entry = pluginViews.find(({ plugin, view }) => (
+              plugin.id === destination.pluginId && view.id === destination.viewId
+            ));
+            return entry && currentProjectId ? (
+              <PluginView projectId={currentProjectId} pluginId={entry.plugin.id} view={entry.view} />
+            ) : (
+              <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
+                插件视图不可用
+              </div>
+            );
+          })()
         ) : destination?.type === 'diff-review' ? (
           (() => {
             const queue = useDiffReviewStore.getState().queue;

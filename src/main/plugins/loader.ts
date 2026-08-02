@@ -13,6 +13,9 @@ import type {
   CoverageParserPlugin,
   SimulationRunnerPlugin,
   SimOptionSchemaProvider,
+  UiPlugin,
+  PluginContributions,
+  PluginLifecycle,
 } from '@shared/plugin-types';
 import type { PluginConfig, PluginConfigEntry } from '@shared/types';
 
@@ -26,6 +29,7 @@ function emptyRegistry(): PluginRegistry {
     coverageParsers: [],
     simulationRunners: [],
     simOptionSchemaProviders: [],
+    uiPlugins: [],
   };
 }
 
@@ -37,7 +41,7 @@ function validateManifest(manifest: unknown): manifest is PluginManifest {
     typeof m.name === 'string' &&
     typeof m.version === 'string' &&
     typeof m.kind === 'string' &&
-    ['case-parser', 'subsys-discoverer', 'coverage-parser', 'simulation-runner', 'sim-option-schema'].includes(m.kind)
+    ['case-parser', 'subsys-discoverer', 'coverage-parser', 'simulation-runner', 'sim-option-schema', 'ui'].includes(m.kind)
   );
 }
 
@@ -62,8 +66,49 @@ function classifyPlugin(plugin: unknown, manifest: PluginManifest): AnyPlugin | 
     case 'sim-option-schema':
       if (typeof p.getSchema === 'function') return plugin as SimOptionSchemaProvider;
       break;
+    case 'ui':
+      if (typeof p.activate === 'function' || manifest.contributes) return plugin as UiPlugin;
+      break;
   }
   return null;
+}
+
+function resolveContributions(manifest: PluginManifest, pluginPath: string): PluginContributions | undefined {
+  const contributions = manifest.contributes;
+  if (!contributions) return undefined;
+
+  const views = contributions.views?.flatMap((view) => {
+    if (!view || typeof view.id !== 'string' || typeof view.name !== 'string') return [];
+    const html = view.html ?? (view.entry
+      ? (() => {
+          try {
+            return readFileSync(resolve(dirname(pluginPath), view.entry), 'utf-8');
+          } catch {
+            return undefined;
+          }
+        })()
+      : undefined);
+    return [{ ...view, html }];
+  });
+
+  return {
+    commands: contributions.commands?.filter((command) => (
+      typeof command?.command === 'string' && typeof command.title === 'string'
+    )),
+    views,
+  };
+}
+
+function resolvePluginPath(source: 'node_modules' | 'local', pluginPath: string, projectRoot: string): string {
+  if (source === 'local') {
+    return isAbsolute(pluginPath) ? pluginPath : resolve(projectRoot, pluginPath);
+  }
+
+  try {
+    return createRequire(import.meta.url).resolve(pluginPath, { paths: [projectRoot] });
+  } catch {
+    return pluginPath;
+  }
 }
 
 /** Resolve the app's built-in plugins directory (plugins/ at app root). */
@@ -154,11 +199,13 @@ async function loadPluginModule(
 class PluginLoaderImpl {
   private registries = new Map<string, PluginRegistry>();
   private loadResults = new Map<string, PluginLoadResult[]>();
+  private commandHandlers = new Map<string, Map<string, (...args: unknown[]) => unknown | Promise<unknown>>>();
 
   async loadPlugins(projectRoot: string): Promise<PluginLoadResult[]> {
     const config = await this.readPluginConfig(projectRoot);
     const results: PluginLoadResult[] = [];
     const registry = emptyRegistry();
+    const commandHandlers = new Map<string, (...args: unknown[]) => unknown | Promise<unknown>>();
 
     // Merge built-in plugins with project-level config.
     // Project-level config entries with the same id override built-in entries.
@@ -179,9 +226,7 @@ class PluginLoaderImpl {
 
       // For local plugins, resolve relative to projectRoot only if path is relative.
       // Built-in plugins already have absolute paths.
-      const pluginPath = entry.source === 'local' && !isAbsolute(entry.path)
-        ? resolve(projectRoot, entry.path)
-        : entry.path;
+      const pluginPath = resolvePluginPath(entry.source, entry.path, projectRoot);
 
       if (!existsSync(pluginPath)) {
         results.push({
@@ -230,6 +275,29 @@ class PluginLoaderImpl {
         continue;
       }
 
+      const contributes = resolveContributions(manifest, pluginPath);
+      try {
+        const lifecycle = plugin as AnyPlugin & PluginLifecycle;
+        await lifecycle.activate?.({
+          projectRoot,
+          registerCommand: (command, handler) => {
+            if (typeof command === 'string' && typeof handler === 'function') {
+              commandHandlers.set(command, handler);
+            }
+          },
+        });
+      } catch (err) {
+        results.push({
+          manifest,
+          plugin: null as never,
+          source: entry.source,
+          path: entry.path,
+          contributes,
+          error: `Failed to activate plugin ${manifest.id}: ${err instanceof Error ? err.message : String(err)}`,
+        });
+        continue;
+      }
+
       // Add to registry
       console.log(`[plugin-loader] loaded OK: ${manifest.id} (kind: ${manifest.kind})`);
       switch (manifest.kind) {
@@ -248,6 +316,9 @@ class PluginLoaderImpl {
         case 'sim-option-schema':
           registry.simOptionSchemaProviders.push(classified as SimOptionSchemaProvider);
           break;
+        case 'ui':
+          registry.uiPlugins?.push(classified as UiPlugin);
+          break;
       }
 
       results.push({
@@ -255,11 +326,13 @@ class PluginLoaderImpl {
         plugin: classified,
         source: entry.source,
         path: entry.path,
+        contributes,
       });
     }
 
     this.registries.set(projectRoot, registry);
     this.loadResults.set(projectRoot, results);
+    this.commandHandlers.set(projectRoot, commandHandlers);
     return results;
   }
 
@@ -269,6 +342,12 @@ class PluginLoaderImpl {
 
   getLoadResults(projectRoot: string): PluginLoadResult[] {
     return this.loadResults.get(projectRoot) ?? [];
+  }
+
+  async executeCommand(projectRoot: string, command: string, args: unknown[] = []): Promise<unknown> {
+    const handler = this.commandHandlers.get(projectRoot)?.get(command);
+    if (!handler) throw new Error(`Plugin command not found: ${command}`);
+    return handler(...args);
   }
 
   async readPluginConfig(projectRoot: string): Promise<PluginConfig> {
@@ -294,11 +373,13 @@ class PluginLoaderImpl {
   clearProject(projectRoot: string): void {
     this.registries.delete(projectRoot);
     this.loadResults.delete(projectRoot);
+    this.commandHandlers.delete(projectRoot);
   }
 
   clearAll(): void {
     this.registries.clear();
     this.loadResults.clear();
+    this.commandHandlers.clear();
   }
 }
 
