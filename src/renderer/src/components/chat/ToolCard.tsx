@@ -200,20 +200,23 @@ function buildSummary(message: ChatMessage): ReactNode {
   }
 
   switch (name) {
-    case 'read': {
+    case 'read':
+    case 'read_file': {
       const path = argStr(args, 'path', 'file_path') ?? '';
       const lineCount = resultText ? resultText.split('\n').length : 0;
       return <><span className="text-foreground">{shortenPath(path)}</span> {' \u00b7 '} {isExecuting ? 'reading...' : `${lineCount} lines`}</>;
     }
-    case 'write': {
+    case 'write':
+    case 'write_file': {
       const path = argStr(args, 'path', 'file_path') ?? '';
       const lines = (argStr(args, 'content') ?? '').split('\n').length;
       return <><span className="text-foreground">{shortenPath(path)}</span> {' \u00b7 '} new file, {lines} lines</>;
     }
     case 'edit':
+    case 'edit_file':
     case 'apply_patch':
     case 'ast_edit': {
-      const path = argStr(args, 'path', 'file_path') ?? '';
+      const path = argStr(args, 'path', 'file_path') ?? extractPatchPath(args);
       return <><span className="text-foreground">{shortenPath(path)}</span> {' \u00b7 '} {isExecuting ? 'editing...' : 'edited'}</>;
     }
     case 'bash': {
@@ -328,9 +331,12 @@ function ToolBody({ message, isExecuting }: { message: ChatMessage; isExecuting:
 
   switch (name) {
     case 'read':
+    case 'read_file':
       return <ReadBody args={message.toolArgs} resultText={resultText} />;
     case 'write':
+    case 'write_file':
       return <WriteBody args={message.toolArgs} resultText={resultText} />;
+    case 'edit_file':
     case 'edit':
     case 'apply_patch':
     case 'ast_edit':
@@ -467,7 +473,7 @@ function WriteBody({ args, resultText }: { args: unknown; resultText: string }) 
 // ── Edit ────────────────────────────────────────────────
 
 function EditBody({ args, resultText }: { args: unknown; resultText: string }) {
-  const filePath = argStr(args, 'path', 'file_path') ?? '';
+  const filePath = argStr(args, 'path', 'file_path') ?? extractPatchPath(args);
   const language = detectLanguage(filePath);
   const oldText = argStr(args, 'oldText', 'old_string', 'find');
   const newText = argStr(args, 'newText', 'new_string', 'replace');
@@ -481,10 +487,11 @@ function EditBody({ args, resultText }: { args: unknown; resultText: string }) {
     );
   }
 
-  // Fallback: if resultText looks like diff
-  if (resultText.includes('@@') || /^[+-]/m.test(resultText)) {
-    const lines = resultText.split('\n').map((content) => {
-      if (content.startsWith('+++') || content.startsWith('---') || content.startsWith('@@')) return { type: 'hunk' as const, content };
+  // Fallback: apply_patch and some edit adapters carry the unified patch in args.
+  const patchText = argStr(args, 'input', 'patch', 'diff') ?? resultText;
+  if (patchText.includes('@@') || /^[+-]/m.test(patchText)) {
+    const lines = patchText.split('\n').map((content) => {
+      if (content.startsWith('*** ') || content.startsWith('+++') || content.startsWith('---') || content.startsWith('@@')) return { type: 'hunk' as const, content };
       if (content.startsWith('+')) return { type: 'add' as const, content: content.slice(1) };
       if (content.startsWith('-')) return { type: 'del' as const, content: content.slice(1) };
       return { type: 'ctx' as const, content: content.startsWith(' ') ? content.slice(1) : content };
@@ -502,6 +509,12 @@ function EditBody({ args, resultText }: { args: unknown; resultText: string }) {
   }
 
   return <GenericBody args={args} resultText={resultText} />;
+}
+
+function extractPatchPath(args: unknown): string {
+  const patch = argStr(args, 'input', 'patch', 'diff');
+  if (!patch) return '';
+  return patch.match(/^\*\*\*\s+(?:Update|Add|Delete) File:\s*(.+)$/m)?.[1]?.trim() ?? '';
 }
 
 function DiffLineView({ line, language }: { line: DiffLineData; language: string }) {

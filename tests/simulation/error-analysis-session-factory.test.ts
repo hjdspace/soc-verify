@@ -170,6 +170,22 @@ describe('ErrorAnalysisSessionFactory', () => {
     expect(promptText).toContain('Error details here');
   });
 
+  it('exposes the exact initial prompt to the coordinator before sending it', async () => {
+    let initialPrompt = '';
+    await factory.createSession({
+      projectId: 'proj1',
+      caseName: 'test_uart',
+      errorType: 'compile_error',
+      cwd: '/tmp/project',
+      errorContext: 'Error details here',
+      maxRetries: 3,
+      onPrompt: (message) => { initialPrompt = message; },
+    });
+
+    expect(initialPrompt).toContain('test_uart');
+    expect(initialPrompt).toContain('Error details here');
+  });
+
   it('loads credentials and passes them to session creation', async () => {
     await factory.createSession({
       projectId: 'proj1',

@@ -105,6 +105,7 @@ interface SessionStoreState {
     projectId: string;
     caseName?: string;
     errorType?: string;
+    initialMessage?: string;
   }) => void;
 
   createSession: (projectId: string, cwd: string) => Promise<string | null>;
@@ -186,6 +187,7 @@ function registerErrorAnalysisEventListener(get: () => SessionStoreState): void 
         projectId: event.projectId,
         caseName: typeof event.caseName === 'string' ? event.caseName : undefined,
         errorType: typeof event.errorType === 'string' ? event.errorType : undefined,
+        initialMessage: typeof event.initialMessage === 'string' ? event.initialMessage : undefined,
       });
       useToastStore.getState().info(
         `AI 分析已启动: ${String(event.caseName ?? '')} (${String(event.errorType ?? '')})`,
@@ -554,6 +556,12 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     const name = event.errorType === 'compile_error'
       ? `[编译修复] ${caseName}`
       : `[仿真分析] ${caseName}`;
+    const userMessage: ChatMessage = {
+      id: `msg_${event.sessionId}_initial`,
+      role: 'user',
+      content: event.initialMessage ?? `请分析 ${caseName} 的${event.errorType === 'compile_error' ? '编译' : '仿真'}错误。`,
+      timestamp: Date.now(),
+    };
     const session: SessionEntry = {
       id: event.sessionId,
       runtimeSessionId: event.sessionId,
@@ -561,7 +569,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       projectId: event.projectId,
       name,
       status: 'streaming',
-      messages: [],
+      messages: [userMessage],
       composer: emptyComposer(),
       createdAt: Date.now(),
       model: get().lastModel ?? undefined,

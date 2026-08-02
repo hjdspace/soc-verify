@@ -203,6 +203,7 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
     }
 
     try {
+      let initialMessage: string | undefined;
       const sessionId = await this.sessionFactory.createSession({
         projectId,
         caseName,
@@ -212,6 +213,7 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
         command,
         maxRetries: MAX_RETRIES,
         model: existingModel,
+        onPrompt: (message) => { initialMessage = message; },
         onRetry: (name, sid) => {
           const count = this.retryTracker.get(name) ?? 0;
           this.retryTracker.set(name, count + 1);
@@ -248,6 +250,7 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
         retryCount: currentRetries,
         maxRetries: MAX_RETRIES,
         sourceRunId: runId,
+        initialMessage,
       });
 
       console.log(`[error-analysis] session created: sessionId=${sessionId}, case=${caseName}`);
@@ -356,6 +359,7 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
       }
     }
 
+    let initialMessage: string | undefined;
     const sessionId = await this.sessionFactory.createSession({
       projectId: params.projectId,
       caseName: params.caseName,
@@ -365,6 +369,7 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
       command: params.command,
       maxRetries: MAX_RETRIES,
       model: existingModel,
+      onPrompt: (message) => { initialMessage = message; },
       onRetry: (name, sid) => {
         const count = this.retryTracker.get(name) ?? 0;
         this.retryTracker.set(name, count + 1);
@@ -399,6 +404,7 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
       retryCount: entry.retryCount,
       maxRetries: MAX_RETRIES,
       sourceRunId: params.sourceRunId,
+      initialMessage,
     });
 
     return sessionId;

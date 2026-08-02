@@ -13,8 +13,11 @@ export type ToolMeta = {
 
 export const TOOL_META: Record<string, ToolMeta> = {
   read:         { label: 'read',         category: 'file',        color: 'text-status-running-foreground' },
+  read_file:    { label: 'read_file',    category: 'file',        color: 'text-status-running-foreground' },
   write:        { label: 'write',        category: 'file',        color: 'text-status-pass-foreground' },
+  write_file:   { label: 'write_file',   category: 'file',        color: 'text-status-pass-foreground' },
   edit:         { label: 'edit',         category: 'file',        color: 'text-warning-foreground' },
+  edit_file:    { label: 'edit_file',    category: 'file',        color: 'text-warning-foreground' },
   apply_patch:  { label: 'edit',         category: 'file',        color: 'text-warning-foreground' },
   ast_edit:     { label: 'ast_edit',     category: 'file',        color: 'text-warning-foreground' },
   bash:         { label: 'bash',         category: 'exec',        color: 'text-violet-foreground' },

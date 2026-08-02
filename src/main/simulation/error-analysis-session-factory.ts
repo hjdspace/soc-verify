@@ -34,6 +34,8 @@ export type CreateSessionParams = {
    *  skips fetching the model list from the API, avoiding network errors
    *  when the endpoint is temporarily unreachable. */
   model?: string;
+  /** Called with the exact user message sent to the analysis Agent. */
+  onPrompt?: (message: string, sessionId: string) => void;
 };
 
 export class ErrorAnalysisSessionFactory {
@@ -48,7 +50,7 @@ export class ErrorAnalysisSessionFactory {
    * Returns the sessionId of the newly created session.
    */
   async createSession(params: CreateSessionParams): Promise<string> {
-    const { projectId, caseName, errorType, cwd, errorContext, command, maxRetries, model } = params;
+    const { projectId, caseName, errorType, cwd, errorContext, command, maxRetries, model, onPrompt } = params;
 
     const systemPrompt = getSystemPrompt(errorType);
 
@@ -129,6 +131,8 @@ export class ErrorAnalysisSessionFactory {
       command,
       maxRetries,
     });
+
+    onPrompt?.(promptMessage, sessionId);
 
     const client = this.deps.sessionManager.getClient(sessionId);
     if (client) {

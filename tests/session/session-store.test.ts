@@ -502,6 +502,7 @@ describe('SessionStore — event handling and state machine', () => {
       projectId: 'proj_1',
       caseName: 'core_smoke',
       errorType: 'compile_error',
+      initialMessage: '## 仿真失败错误分析请求\n\nError details here',
     });
 
     const state = useSessionStore.getState();
@@ -512,6 +513,10 @@ describe('SessionStore — event handling and state machine', () => {
       name: '[编译修复] core_smoke',
       status: 'streaming',
     }));
+    expect(state.sessions.find((session) => session.id === 'session_error_1')?.messages[0]).toMatchObject({
+      role: 'user',
+      content: expect.stringContaining('Error details here'),
+    });
   });
 
   it('replays agent events that arrive before the analysis session is announced', () => {
@@ -524,7 +529,9 @@ describe('SessionStore — event handling and state machine', () => {
     });
 
     const session = useSessionStore.getState().sessions.find((item) => item.id === 'session_error_2');
-    expect(session?.messages).toHaveLength(1);
+    expect(session?.messages).toHaveLength(2);
+    expect(session?.messages[0].role).toBe('user');
+    expect(session?.messages[1].role).toBe('assistant');
     expect(session?.status).toBe('streaming');
   });
 
