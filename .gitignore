@@ -13,3 +13,4 @@ resources/binaries/*
 
 .socverify/
 .cache/
+.tmp/
