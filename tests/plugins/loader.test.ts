@@ -77,6 +77,8 @@ describe('PluginLoader', () => {
       const results = await pluginLoader.loadPlugins(tempDir);
 
       expect(results.some((result) => result.manifest.id === 'unisoc-subsys-discoverer')).toBe(true);
+      expect(results.find((result) => result.manifest.id === 'unisoc-subsys-discoverer')?.manifest.apiVersion).toBe('1.0');
+      expect(results.every((result) => result.manifest.apiVersion === '1.0')).toBe(true);
       expect(
         pluginLoader
           .getRegistry(tempDir)
@@ -325,6 +327,64 @@ describe('PluginLoader', () => {
       await expect(pluginLoader.executeCommand(tempDir, 'host-api.state')).resolves.toBe('seen');
       expect(pluginLoader.getNotifications(tempDir)).toEqual([{ level: 'info', message: 'activated' }]);
       await expect(pluginLoader.executeCommand(tempDir, 'host-api.read-path', ['../package.json'])).rejects.toThrow('limited to the project directory');
+    });
+
+    it('activates lazy plugins on declared events and deactivates them during reload', async () => {
+      const pluginDir = join(tempDir, 'plugins');
+      await mkdir(pluginDir, { recursive: true });
+      const pluginPath = join(pluginDir, 'lazy-plugin.cjs');
+      await writeFile(
+        pluginPath,
+        `let activations = 0;
+module.exports = {
+  manifest: {
+    apiVersion: '1.0',
+    id: 'lazy-plugin',
+    name: 'Lazy Plugin',
+    version: '1.0.0',
+    kind: 'ui',
+    activationEvents: ['onView:overview'],
+    contributes: { views: [{ id: 'overview', name: 'Overview', location: 'center' }] }
+  },
+  activate(context) {
+    activations += 1;
+    context.registerCommand('lazy-plugin.status', () => activations);
+  },
+  deactivate() {}
+};`,
+        'utf-8',
+      );
+
+      const socverifyDir = join(tempDir, '.socverify');
+      await mkdir(socverifyDir, { recursive: true });
+      await writeFile(
+        join(socverifyDir, 'plugins.json'),
+        JSON.stringify({
+          plugins: [{
+            id: 'lazy-plugin',
+            name: 'Lazy Plugin',
+            version: '1.0.0',
+            kind: 'ui',
+            source: 'local',
+            path: pluginPath,
+            enabled: true,
+          }],
+        }),
+        'utf-8',
+      );
+
+      const firstLoad = await pluginLoader.loadPlugins(tempDir);
+      expect(firstLoad.find((result) => result.manifest.id === 'lazy-plugin')?.active).toBe(false);
+      await expect(pluginLoader.executeCommand(tempDir, 'lazy-plugin.status')).rejects.toThrow('not found');
+
+      await pluginLoader.activateForView(tempDir, 'lazy-plugin', 'overview');
+      expect(firstLoad.find((result) => result.manifest.id === 'lazy-plugin')?.active).toBe(true);
+      await expect(pluginLoader.executeCommand(tempDir, 'lazy-plugin.status')).resolves.toBe(1);
+
+      const secondLoad = await pluginLoader.loadPlugins(tempDir);
+      await pluginLoader.activateForView(tempDir, 'lazy-plugin', 'overview');
+      expect(secondLoad.find((result) => result.manifest.id === 'lazy-plugin')?.active).toBe(true);
+      await expect(pluginLoader.executeCommand(tempDir, 'lazy-plugin.status')).resolves.toBe(2);
     });
   });
 

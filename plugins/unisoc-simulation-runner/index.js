@@ -20,6 +20,7 @@ const { join, basename } = require('node:path');
 const { randomUUID } = require('node:crypto');
 
 const MANIFEST = {
+  apiVersion: '1.0',
   id: 'unisoc-simulation-runner',
   name: 'Unisoc Simulation Runner',
   version: '1.0.0',

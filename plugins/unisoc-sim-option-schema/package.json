@@ -4,6 +4,7 @@
   "description": "Unisoc 仿真选项 Schema 插件：提供 runsim 命令的所有仿真选项定义，供前端动态生成配置表单。",
   "main": "index.js",
   "socverify": {
+    "apiVersion": "1.0",
     "kind": "sim-option-schema",
     "id": "unisoc-sim-option-schema"
   }

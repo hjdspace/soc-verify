@@ -28,6 +28,17 @@ const PLUGIN_STATE_DIR = 'plugin-state';
 type PluginCommandHandler = (...args: unknown[]) => unknown | Promise<unknown>;
 type PluginEventHandler = (payload: unknown) => unknown | Promise<unknown>;
 
+type LoadedPluginRecord = {
+  plugin: AnyPlugin;
+  manifest: PluginManifest;
+  source: 'node_modules' | 'local';
+  path: string;
+  contributes?: PluginContributions;
+  result: PluginLoadResult;
+  active: boolean;
+  lifecycle: PluginLifecycle;
+};
+
 function emptyRegistry(): PluginRegistry {
   return {
     caseParsers: [],
@@ -47,6 +58,7 @@ function validateManifest(manifest: unknown): manifest is PluginManifest {
     typeof m.name === 'string' &&
     typeof m.version === 'string' &&
     typeof m.kind === 'string' &&
+    (m.apiVersion === undefined || m.apiVersion === '1.0') &&
     ['case-parser', 'subsys-discoverer', 'coverage-parser', 'simulation-runner', 'sim-option-schema', 'ui'].includes(m.kind)
   );
 }
@@ -163,6 +175,7 @@ function discoverBuiltinPlugins(): PluginConfigEntry[] {
 
       entries.push({
         id: sv.id,
+        apiVersion: typeof sv.apiVersion === 'string' ? sv.apiVersion : undefined,
         name: (typeof pkg.name === 'string' ? pkg.name : sv.id),
         version: (typeof pkg.version === 'string' ? pkg.version : '0.0.0'),
         kind: sv.kind as PluginConfigEntry['kind'],
@@ -205,6 +218,7 @@ async function loadPluginModule(
 class PluginLoaderImpl {
   private registries = new Map<string, PluginRegistry>();
   private loadResults = new Map<string, PluginLoadResult[]>();
+  private loadedPlugins = new Map<string, Map<string, LoadedPluginRecord>>();
   private commandHandlers = new Map<string, Map<string, PluginCommandHandler>>();
   private activePlugins = new Map<string, Map<string, PluginLifecycle>>();
   private eventHandlers = new Map<string, Map<PluginHostEvent, Set<PluginEventHandler>>>();
@@ -219,6 +233,7 @@ class PluginLoaderImpl {
     const commandHandlers = new Map<string, PluginCommandHandler>();
     const activePlugins = new Map<string, PluginLifecycle>();
     const eventHandlers = new Map<PluginHostEvent, Set<PluginEventHandler>>();
+    const loadedPlugins = new Map<string, LoadedPluginRecord>();
     this.eventHandlers.set(projectRoot, eventHandlers);
 
     // Merge built-in plugins with project-level config.
@@ -245,6 +260,7 @@ class PluginLoaderImpl {
       if (!existsSync(pluginPath)) {
         results.push({
           manifest: {
+            apiVersion: entry.apiVersion,
             id: entry.id,
             name: entry.name,
             version: entry.version,
@@ -262,6 +278,7 @@ class PluginLoaderImpl {
       if ('error' in loadResult) {
         results.push({
           manifest: {
+            apiVersion: entry.apiVersion,
             id: entry.id,
             name: entry.name,
             version: entry.version,
@@ -290,83 +307,34 @@ class PluginLoaderImpl {
       }
 
       const contributes = resolveContributions(manifest, pluginPath);
-      try {
-        const lifecycle = plugin as AnyPlugin & PluginLifecycle;
-        const state = await this.loadPluginState(projectRoot, manifest.id);
-        await lifecycle.activate?.({
-          pluginId: manifest.id,
-          projectRoot,
-          registerCommand: (command, handler) => {
-            if (typeof command === 'string' && typeof handler === 'function') {
-              commandHandlers.set(command, handler);
-            }
-          },
-          on: (event, handler) => {
-            const handlers = eventHandlers.get(event) ?? new Set<PluginEventHandler>();
-            handlers.add(handler);
-            eventHandlers.set(event, handlers);
-            return () => handlers.delete(handler);
-          },
-          getState: async <T>(key: string) => state[key] as T | undefined,
-          setState: async <T>(key: string, value: T) => {
-            state[key] = value;
-            await this.savePluginState(projectRoot, manifest.id, state);
-          },
-          notify: (notification) => this.pushNotification(projectRoot, notification),
-          readFile: (filePath) => this.readProjectFile(projectRoot, filePath),
-          writeFile: (filePath, content) => this.writeProjectFile(projectRoot, filePath, content),
-        });
-        if (lifecycle.activate || lifecycle.deactivate) {
-          activePlugins.set(manifest.id, lifecycle);
-        }
-      } catch (err) {
-        results.push({
-          manifest,
-          plugin: null as never,
-          source: entry.source,
-          path: entry.path,
-          contributes,
-          error: `Failed to activate plugin ${manifest.id}: ${err instanceof Error ? err.message : String(err)}`,
-        });
-        continue;
-      }
-
-      // Add to registry
-      console.log(`[plugin-loader] loaded OK: ${manifest.id} (kind: ${manifest.kind})`);
-      switch (manifest.kind) {
-        case 'case-parser':
-          registry.caseParsers.push(classified as CaseParserPlugin);
-          break;
-        case 'subsys-discoverer':
-          registry.subsysDiscoverers.push(classified as SubsysDiscoveryPlugin);
-          break;
-        case 'coverage-parser':
-          registry.coverageParsers.push(classified as CoverageParserPlugin);
-          break;
-        case 'simulation-runner':
-          registry.simulationRunners.push(classified as SimulationRunnerPlugin);
-          break;
-        case 'sim-option-schema':
-          registry.simOptionSchemaProviders.push(classified as SimOptionSchemaProvider);
-          break;
-        case 'ui':
-          registry.uiPlugins?.push(classified as UiPlugin);
-          break;
-      }
-
-      results.push({
+      const result: PluginLoadResult = {
         manifest,
         plugin: classified,
         source: entry.source,
         path: entry.path,
         contributes,
-      });
+        active: false,
+      };
+      const record: LoadedPluginRecord = {
+        plugin: classified,
+        manifest,
+        source: entry.source,
+        path: entry.path,
+        contributes,
+        result,
+        active: false,
+        lifecycle: plugin as AnyPlugin & PluginLifecycle,
+      };
+      results.push(result);
+      loadedPlugins.set(manifest.id, record);
     }
 
     this.registries.set(projectRoot, registry);
     this.loadResults.set(projectRoot, results);
     this.commandHandlers.set(projectRoot, commandHandlers);
     this.activePlugins.set(projectRoot, activePlugins);
+    this.loadedPlugins.set(projectRoot, loadedPlugins);
+    await this.activateForEvent(projectRoot, 'onStartupFinished');
     return results;
   }
 
@@ -378,10 +346,127 @@ class PluginLoaderImpl {
     return this.loadResults.get(projectRoot) ?? [];
   }
 
+  async activateForEvent(projectRoot: string, event: PluginHostEvent): Promise<void> {
+    const records = [...(this.loadedPlugins.get(projectRoot)?.values() ?? [])];
+    for (const record of records) {
+      if (this.activationMatches(record.manifest, event)) {
+        await this.activateRecord(projectRoot, record);
+      }
+    }
+  }
+
+  async activatePlugin(projectRoot: string, pluginId: string, event: PluginHostEvent): Promise<void> {
+    const record = this.loadedPlugins.get(projectRoot)?.get(pluginId);
+    if (record && this.activationMatches(record.manifest, event)) {
+      await this.activateRecord(projectRoot, record);
+    }
+  }
+
+  async activateForView(projectRoot: string, pluginId: string, viewId: string): Promise<void> {
+    await this.activatePlugin(projectRoot, pluginId, `onView:${viewId}`);
+  }
+
+  async activateForCommand(projectRoot: string, command: string): Promise<void> {
+    await this.activateForEvent(projectRoot, `onCommand:${command}`);
+  }
+
   async executeCommand(projectRoot: string, command: string, args: unknown[] = []): Promise<unknown> {
+    await this.activateForCommand(projectRoot, command);
     const handler = this.commandHandlers.get(projectRoot)?.get(command);
     if (!handler) throw new Error(`Plugin command not found: ${command}`);
     return handler(...args);
+  }
+
+  private activationMatches(manifest: PluginManifest, event: PluginHostEvent): boolean {
+    const activationEvents = manifest.activationEvents;
+    return !activationEvents || activationEvents.length === 0 || activationEvents.includes(event) || activationEvents.includes('*');
+  }
+
+  private async activateRecord(projectRoot: string, record: LoadedPluginRecord): Promise<void> {
+    if (record.active) return;
+
+    const commandHandlers = this.commandHandlers.get(projectRoot) ?? new Map<string, PluginCommandHandler>();
+    const eventHandlers = this.eventHandlers.get(projectRoot) ?? new Map<PluginHostEvent, Set<PluginEventHandler>>();
+    const state = await this.loadPluginState(projectRoot, record.manifest.id);
+    try {
+      await record.lifecycle.activate?.({
+        pluginId: record.manifest.id,
+        projectRoot,
+        registerCommand: (command, handler) => {
+          if (typeof command === 'string' && typeof handler === 'function') {
+            commandHandlers.set(command, handler);
+          }
+        },
+        on: (event, handler) => {
+          const handlers = eventHandlers.get(event) ?? new Set<PluginEventHandler>();
+          handlers.add(handler);
+          eventHandlers.set(event, handlers);
+          return () => handlers.delete(handler);
+        },
+        getState: async <T>(key: string) => state[key] as T | undefined,
+        setState: async <T>(key: string, value: T) => {
+          state[key] = value;
+          await this.savePluginState(projectRoot, record.manifest.id, state);
+        },
+        notify: (notification) => this.pushNotification(projectRoot, notification),
+        readFile: (filePath) => this.readProjectFile(projectRoot, filePath),
+        writeFile: (filePath, content) => this.writeProjectFile(projectRoot, filePath, content),
+      });
+      this.commandHandlers.set(projectRoot, commandHandlers);
+      this.eventHandlers.set(projectRoot, eventHandlers);
+      const activePlugins = this.activePlugins.get(projectRoot) ?? new Map<string, PluginLifecycle>();
+      if (record.lifecycle.activate || record.lifecycle.deactivate) {
+        activePlugins.set(record.manifest.id, record.lifecycle);
+      }
+      this.activePlugins.set(projectRoot, activePlugins);
+      this.registerPlugin(projectRoot, record);
+      record.active = true;
+      record.result.active = true;
+    } catch (err) {
+      record.result.error = `Failed to activate plugin ${record.manifest.id}: ${err instanceof Error ? err.message : String(err)}`;
+      record.result.active = false;
+      this.pushNotification(projectRoot, {
+        level: 'error',
+        message: record.result.error,
+      });
+    }
+  }
+
+  private registerPlugin(projectRoot: string, record: LoadedPluginRecord): void {
+    const registry = this.registries.get(projectRoot);
+    if (!registry) return;
+    switch (record.manifest.kind) {
+      case 'case-parser':
+        if (!registry.caseParsers.some((plugin) => plugin.manifest.id === record.manifest.id)) {
+          registry.caseParsers.push(record.plugin as CaseParserPlugin);
+        }
+        break;
+      case 'subsys-discoverer':
+        if (!registry.subsysDiscoverers.some((plugin) => plugin.manifest.id === record.manifest.id)) {
+          registry.subsysDiscoverers.push(record.plugin as SubsysDiscoveryPlugin);
+        }
+        break;
+      case 'coverage-parser':
+        if (!registry.coverageParsers.some((plugin) => plugin.manifest.id === record.manifest.id)) {
+          registry.coverageParsers.push(record.plugin as CoverageParserPlugin);
+        }
+        break;
+      case 'simulation-runner':
+        if (!registry.simulationRunners.some((plugin) => plugin.manifest.id === record.manifest.id)) {
+          registry.simulationRunners.push(record.plugin as SimulationRunnerPlugin);
+        }
+        break;
+      case 'sim-option-schema':
+        if (!registry.simOptionSchemaProviders.some((plugin) => plugin.manifest.id === record.manifest.id)) {
+          registry.simOptionSchemaProviders.push(record.plugin as SimOptionSchemaProvider);
+        }
+        break;
+      case 'ui':
+        if (!registry.uiPlugins?.some((plugin) => plugin.manifest.id === record.manifest.id)) {
+          registry.uiPlugins?.push(record.plugin as UiPlugin);
+        }
+        break;
+    }
   }
 
   async emitEvent(projectRoot: string, event: PluginHostEvent, payload: unknown = {}): Promise<void> {
@@ -427,7 +512,7 @@ class PluginLoaderImpl {
   }
 
   async deactivateAll(): Promise<void> {
-    for (const projectRoot of this.activePlugins.keys()) {
+    for (const projectRoot of [...this.activePlugins.keys()]) {
       await this.deactivateProject(projectRoot);
     }
   }
@@ -508,6 +593,7 @@ class PluginLoaderImpl {
     void this.deactivateProject(projectRoot);
     this.registries.delete(projectRoot);
     this.loadResults.delete(projectRoot);
+    this.loadedPlugins.delete(projectRoot);
     this.commandHandlers.delete(projectRoot);
     this.pluginStates.delete(projectRoot);
     this.notifications.delete(projectRoot);
@@ -516,6 +602,7 @@ class PluginLoaderImpl {
   clearAll(): void {
     this.registries.clear();
     this.loadResults.clear();
+    this.loadedPlugins.clear();
     this.commandHandlers.clear();
     this.activePlugins.clear();
     this.eventHandlers.clear();

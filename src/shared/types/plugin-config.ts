@@ -2,12 +2,14 @@ import type { PluginContributions, PluginKind } from '../plugin-types';
 
 export interface PluginConfigEntry {
   id: string;
+  apiVersion?: string;
   name: string;
   version: string;
   kind: PluginKind;
   source: 'node_modules' | 'local';
   path: string;
   enabled: boolean;
+  active?: boolean;
   error?: string;
   contributes?: PluginContributions;
 }

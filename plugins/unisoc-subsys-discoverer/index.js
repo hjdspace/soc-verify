@@ -15,6 +15,7 @@ const { join, resolve } = require('node:path');
  */
 
 const MANIFEST = {
+  apiVersion: '1.0',
   id: 'unisoc-subsys-discoverer',
   name: 'Unisoc Subsys Discoverer',
   version: '1.0.0',

@@ -51,6 +51,16 @@ export function PluginView({ projectId, pluginId, view }: PluginViewProps) {
   const bridgedHtml = useMemo(() => (view.html ? addPluginBridge(view.html) : ''), [view.html]);
 
   useEffect(() => {
+    let cancelled = false;
+    trpc.project.activatePluginView.mutate({ projectId, pluginId, viewId: view.id }).catch((err) => {
+      if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [pluginId, projectId, view.id]);
+
+  useEffect(() => {
     const handleMessage = async (event: MessageEvent<PluginCommandMessage>) => {
       if (event.source !== frameRef.current?.contentWindow) return;
       const message = event.data;

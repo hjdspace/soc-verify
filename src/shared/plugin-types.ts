@@ -41,6 +41,7 @@ export interface PluginNotification {
 }
 
 export interface PluginManifest {
+  apiVersion?: string;
   id: string;
   name: string;
   version: string;
@@ -187,6 +188,7 @@ export interface PluginLoadResult {
   path: string;
   error?: string;
   contributes?: PluginContributions;
+  active?: boolean;
 }
 
 export interface PluginActivationContext {

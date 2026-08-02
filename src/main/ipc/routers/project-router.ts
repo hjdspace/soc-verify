@@ -39,18 +39,21 @@ export const projectRouter = t.router({
 
       // Load plugins for this project
       const loadResults = await pluginLoader.loadPlugins(info.rootPath);
+      await pluginLoader.activateForEvent(info.rootPath, 'onProjectOpen');
       await pluginLoader.emitEvent(info.rootPath, 'project.opened', info);
       const registry = pluginLoader.getRegistry(info.rootPath);
 
       // Return plugin load info alongside project info
       const plugins = loadResults.map((r) => ({
         id: r.manifest.id,
+        apiVersion: r.manifest.apiVersion,
         name: r.manifest.name,
         version: r.manifest.version,
         kind: r.manifest.kind,
         source: r.source,
         path: r.path,
         contributes: r.contributes,
+        active: r.active ?? false,
         enabled: !r.error,
         error: r.error,
       }));
@@ -72,15 +75,18 @@ export const projectRouter = t.router({
 
       // Load plugins
       const loadResults = await pluginLoader.loadPlugins(info.rootPath);
+      await pluginLoader.activateForEvent(info.rootPath, 'onProjectOpen');
       await pluginLoader.emitEvent(info.rootPath, 'project.opened', info);
       const plugins = loadResults.map((r) => ({
         id: r.manifest.id,
+        apiVersion: r.manifest.apiVersion,
         name: r.manifest.name,
         version: r.manifest.version,
         kind: r.manifest.kind,
         source: r.source,
         path: r.path,
         contributes: r.contributes,
+        active: r.active ?? false,
         enabled: !r.error,
         error: r.error,
       }));
@@ -277,6 +283,7 @@ export const projectRouter = t.router({
         const configEntry = config.plugins.find((p) => p.id === r.manifest.id);
         return {
           id: r.manifest.id,
+          apiVersion: r.manifest.apiVersion,
           name: r.manifest.name,
           version: r.manifest.version,
           kind: r.manifest.kind,
@@ -284,6 +291,7 @@ export const projectRouter = t.router({
           source: r.source,
           path: r.path,
           contributes: r.contributes,
+          active: r.active ?? false,
           enabled: configEntry?.enabled ?? !r.error,
           error: r.error,
         };
@@ -304,6 +312,7 @@ export const projectRouter = t.router({
 
       // Reload plugins
       await pluginLoader.loadPlugins(project.rootPath);
+      await pluginLoader.activateForEvent(project.rootPath, 'onProjectOpen');
 
       return config.plugins.find((p) => p.id === input.pluginId);
     }),
@@ -323,6 +332,7 @@ export const projectRouter = t.router({
 
       // Reload plugins
       await pluginLoader.loadPlugins(project.rootPath);
+      await pluginLoader.activateForEvent(project.rootPath, 'onProjectOpen');
 
       return { ok: true };
     }),
@@ -379,6 +389,48 @@ export const projectRouter = t.router({
       const project = requireProject(input.projectId);
       pluginLoader.clearNotifications(project.rootPath);
       return { ok: true };
+    }),
+
+  activatePluginView: t.procedure
+    .input((raw): { projectId: string; pluginId: string; viewId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.pluginId !== 'string' || typeof r.viewId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, pluginId and viewId are required' });
+      }
+      return { projectId: r.projectId, pluginId: r.pluginId, viewId: r.viewId };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      await ensurePluginsLoaded(project.rootPath);
+      await pluginLoader.activateForView(project.rootPath, input.pluginId, input.viewId);
+      return { ok: true };
+    }),
+
+  reloadPlugins: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const results = await pluginLoader.loadPlugins(project.rootPath);
+      await pluginLoader.activateForEvent(project.rootPath, 'onProjectOpen');
+      return results.map((result) => ({
+        id: result.manifest.id,
+        apiVersion: result.manifest.apiVersion,
+        name: result.manifest.name,
+        version: result.manifest.version,
+        kind: result.manifest.kind,
+        source: result.source,
+        path: result.path,
+        contributes: result.contributes,
+        active: result.active ?? false,
+        enabled: !result.error,
+        error: result.error,
+      }));
     }),
 
   getState: t.procedure

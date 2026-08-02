@@ -1,0 +1,7 @@
+{
+  "name": "@socverify/plugin-sdk",
+  "version": "1.0.0",
+  "description": "SoC Verify plugin UI bridge and SDK types",
+  "main": "index.js",
+  "types": "index.d.ts"
+}

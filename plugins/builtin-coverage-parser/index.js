@@ -26,6 +26,7 @@ const { readFileSync, readdirSync, existsSync, statSync, writeFileSync, appendFi
 const { join, basename, dirname } = require('node:path');
 
 const MANIFEST = {
+  apiVersion: '1.0',
   id: 'builtin-coverage-parser',
   name: 'Built-in Coverage Parser',
   version: '1.1.0',

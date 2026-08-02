@@ -27,6 +27,7 @@ const { join, relative, basename, sep } = require('node:path');
  */
 
 const MANIFEST = {
+  apiVersion: '1.0',
   id: 'unisoc-case-parser',
   name: 'Unisoc Case Parser',
   version: '1.0.0',

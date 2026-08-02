@@ -15,6 +15,7 @@
  */
 
 const MANIFEST = {
+  apiVersion: '1.0',
   id: 'unisoc-sim-option-schema',
   name: 'Unisoc Sim Option Schema',
   version: '1.0.0',
