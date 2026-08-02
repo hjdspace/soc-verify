@@ -211,7 +211,7 @@ export const simulationRouter = t.router({
       //   - 不等待 shell 初始化（直接执行命令）
       //   - 终端为只读（无交互输入）
       let session;
-      if (terminalManager.isPtyAvailable()) {
+      if (await terminalManager.ensurePtyAvailable()) {
         // PTY 模式：创建交互式终端会话
         session = await terminalManager.create({ cwd });
 

@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>原型 5 · Minimalist Card · 仿真选项面板</title>
+<style>
+:root {
+  --bg: #0f0f0f;
+  --bg-card: #1a1a1a;
+  --bg-input: #141414;
+  --bg-hover: #222;
+  --fg: #e4e4e7;
+  --fg-dim: #71717a;
+  --fg-bright: #3b82f6;
+  --border: #27272a;
+  --border-bright: #3f3f46;
+  --primary: #3b82f6;
+  --accent: #8b5cf6;
+  --green: #22c55e;
+  --radius: 6px;
+  --mono: 'Cascadia Code', 'SF Mono', 'Fira Code', Consolas, monospace;
+  --sans: -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+  padding: 16px;
+  min-height: 100vh;
+}
+.dock {
+  max-width: 920px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ── Header ──────────────────────── */
+.header-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 4px;
+}
+.header-left {
+  display: flex; align-items: center; gap: 8px;
+}
+.header-left h2 {
+  font-size: 13px; font-weight: 600; color: var(--fg);
+}
+.header-left .count {
+  font-size: 11px; color: var(--fg-dim);
+}
+.header-actions { display: flex; align-items: center; gap: 6px; }
+.mini-btn {
+  padding: 4px 10px; font-size: 11px; color: var(--fg-dim);
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 4px; cursor: pointer; transition: all .15s;
+}
+.mini-btn:hover { background: var(--bg-hover); color: var(--fg); }
+.mini-input {
+  width: 80px; padding: 4px 8px; font-size: 11px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 4px; color: var(--fg); outline: none;
+}
+.mini-input:focus { border-color: var(--primary); }
+
+/* ── Cards ──────────────────────── */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 8px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 2px;
+}
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  transition: border-color .15s;
+}
+.card:hover { border-color: var(--border-bright); }
+.card-title {
+  font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .08em;
+  color: var(--fg-dim);
+  margin-bottom: 8px;
+  display: flex; align-items: center; gap: 6px;
+}
+.card-title .dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--primary);
+}
+.card-fields {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.card-field {
+  display: flex; align-items: center; gap: 6px;
+}
+.card-field-label {
+  font-size: 10px; color: var(--fg-dim);
+  width: 90px; flex-shrink: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.card-field-input, .card-field-select {
+  flex: 1; min-width: 0;
+  padding: 3px 6px; font-size: 11px;
+  background: var(--bg-input); border: 1px solid var(--border);
+  border-radius: 3px; color: var(--fg); outline: none;
+  font-family: var(--mono); transition: border-color .15s;
+}
+.card-field-input:focus, .card-field-select:focus {
+  border-color: var(--primary);
+}
+.card-toggle {
+  position: relative; width: 26px; height: 14px;
+  background: var(--border-bright); border-radius: 8px;
+  cursor: pointer; transition: background .2s; flex-shrink: 0;
+}
+.card-toggle.on { background: var(--primary); }
+.card-toggle::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 10px; height: 10px; border-radius: 50%; background: #fff;
+  transition: transform .2s;
+}
+.card-toggle.on::after { transform: translateX(12px); }
+
+/* ── Bottom command bar ──────────── */
+.cmd-bar {
+  display: flex; align-items: center; gap: 0;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.cmd-prefix {
+  padding: 8px 12px;
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
+  color: var(--green);
+  background: var(--bg-input);
+  border-right: 1px solid var(--border);
+}
+.cmd-body {
+  flex: 1; padding: 8px 12px;
+  font-family: var(--mono); font-size: 12px;
+  color: var(--fg); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.cmd-body .flag { color: var(--fg-bright); }
+.cmd-body .val { color: var(--accent); }
+.run-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 20px; font-size: 12px; font-weight: 700;
+  color: #fff; background: var(--green);
+  border: none; cursor: pointer; transition: filter .15s;
+}
+.run-btn:hover { filter: brightness(1.1); }
+.run-btn:active { filter: brightness(.9); }
+.run-btn svg { width: 14px; height: 14px; }
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="dock">
+  <!-- Header -->
+  <div class="header-row">
+    <div class="header-left">
+      <h2>仿真 Option</h2>
+      <span class="count">26 项</span>
+    </div>
+    <div class="header-actions">
+      <button class="mini-btn" onclick="alert('预设')">预设</button>
+      <input class="mini-input" placeholder="预设名称">
+      <button class="mini-btn" onclick="alert('保存')">保存</button>
+    </div>
+  </div>
+
+  <!-- Cards -->
+  <div class="cards" id="cards"></div>
+
+  <!-- Command bar -->
+  <div class="cmd-bar">
+    <span class="cmd-prefix">$</span>
+    <span class="cmd-body" id="cmdPreview">runsim</span>
+    <button class="run-btn" onclick="runSim()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      运行
+    </button>
+  </div>
+</div>
+
+<script>
+const GROUPS=[
+  {id:'basic',label:'基础参数',color:'#3b82f6',fields:[
+    {key:'base',label:'BASE',type:'string'},{key:'block',label:'BLOCK',type:'string'},
+    {key:'case',label:'CASE',type:'string'},{key:'rundir',label:'rundir',type:'string'},
+    {key:'bq',label:'bq',type:'string'},{key:'seed',label:'seed',type:'string'},
+    {key:'other_options',label:'other',type:'string'},
+  ]},
+  {id:'wave',label:'波形配置',color:'#8b5cf6',fields:[
+    {key:'fsdb',label:'fsdb',type:'boolean'},{key:'vwdb',label:'vwdb',type:'boolean'},
+    {key:'dump_level',label:'level',type:'string'},{key:'cl',label:'cl',type:'boolean'},
+    {key:'dump_sva',label:'sva',type:'boolean'},{key:'cov',label:'cov',type:'boolean'},
+    {key:'upf',label:'upf',type:'boolean'},{key:'dump_mem',label:'mem',type:'string'},
+    {key:'wdd',label:'wdd',type:'string'},
+  ]},
+  {id:'sim',label:'仿真参数',color:'#22c55e',fields:[
+    {key:'simarg',label:'simarg',type:'string'},{key:'cfg_def',label:'cfg_def',type:'string'},
+    {key:'post',label:'post',type:'enum',enumValues:['','sdf=fake','sdf=pg_fake','sdf=npg_f1_ssg','sdf=npg_f2_ssg','sdf=npg_f3_ssg','sdf=npg_f4_ssg','sdf=npg_f5_ssg','sdf=npg_f6_ssg','sdf=npg_f7_ssg','sdf=npg_f1_ffg','sdf=npg_f2_ffg','sdf=npg_f3_ffg','sdf=npg_f4_ffg','sdf=npg_f5_ffg','sdf=npg_f6_ffg','sdf=npg_f7_ffg','sdf=npg_f1_tt','sdf=npg_f2_tt']},
+  ]},
+  {id:'mode',label:'执行模式',color:'#f59e0b',fields:[
+    {key:'sim_only',label:'-R',type:'boolean'},{key:'compile_only',label:'-C',type:'boolean'},
+  ]},
+  {id:'regr',label:'回归测试',color:'#ef4444',fields:[
+    {key:'regr_file',label:'regr',type:'string'},{key:'fm',label:'fm',type:'boolean'},
+    {key:'regr_work',label:'work',type:'string'},{key:'tag',label:'tag',type:'string'},
+    {key:'nt',label:'nt',type:'string'},{key:'dashboard',label:'m',type:'string'},
+  ]},
+];
+const values={};
+for(const g of GROUPS)for(const f of g.fields)values[f.key]=f.type==='boolean'?false:'';
+values.base='top';values.block='usvp';values.case='basic_test_001';
+
+function renderCards(){
+  const c=document.getElementById('cards');c.innerHTML='';
+  for(const g of GROUPS){
+    const card=document.createElement('div');card.className='card';
+    const title=document.createElement('div');title.className='card-title';
+    title.innerHTML='<span class="dot" style="background:'+g.color+'"></span>'+g.label+' ('+g.fields.length+')';
+    card.appendChild(title);
+    const fields=document.createElement('div');fields.className='card-fields';
+    for(const f of g.fields){
+      const row=document.createElement('div');row.className='card-field';
+      const lbl=document.createElement('span');lbl.className='card-field-label';lbl.textContent=f.label;lbl.title=f.key;
+      if(f.type==='boolean'){
+        const tg=document.createElement('div');tg.className='card-toggle'+(values[f.key]?' on':'');
+        tg.onclick=()=>{values[f.key]=!values[f.key];tg.className='card-toggle'+(values[f.key]?' on':'');updateCmd();};
+        row.appendChild(lbl);row.appendChild(tg);
+      }else if(f.type==='enum'){
+        const sel=document.createElement('select');sel.className='card-field-select';
+        for(const v of f.enumValues){const o=document.createElement('option');o.value=v;o.textContent=v||'--';sel.appendChild(o);}
+        sel.value=values[f.key];sel.onchange=e=>{values[f.key]=e.target.value;updateCmd();};
+        row.appendChild(lbl);row.appendChild(sel);
+      }else{
+        const inp=document.createElement('input');inp.className='card-field-input';inp.type='text';inp.value=values[f.key]||'';
+        inp.oninput=e=>{values[f.key]=e.target.value;updateCmd();};
+        row.appendChild(lbl);row.appendChild(inp);
+      }
+      fields.appendChild(row);
+    }
+    card.appendChild(fields);c.appendChild(card);
+  }
+}
+
+const FLAG_MAP={base:'-base',block:'-block',case:'-case',rundir:'-rundir',bq:'-bq',seed:'-seed',other_options:'',fsdb:'-fsdb',vwdb:'-vwdb',dump_level:'',cl:'-cl',dump_sva:'-dump_sva',cov:'-cov',upf:'-upf',dump_mem:'-dump_mem',wdd:'-wdd',simarg:'-simarg',cfg_def:'-cfg_def',post:'-post',sim_only:'-R',compile_only:'-C',regr_file:'-regr',fm:'-fm',regr_work:'-regr_work',tag:'-tag',nt:'-nt',dashboard:'-m'};
+
+function updateCmd(){
+  let parts=['runsim'];
+  for(const[k,v]of Object.entries(values)){
+    if(!v)continue;const flag=FLAG_MAP[k];
+    if(flag===''){parts.push(v);continue;}
+    if(v===true){parts.push(flag);continue;}
+    parts.push(flag,String(v));
+  }
+  const html=parts.map(p=>{
+    if(p.startsWith('-')||p==='runsim')return'<span class="flag">'+p+'</span>';
+    return'<span class="val">'+p+'</span>';
+  }).join(' ');
+  document.getElementById('cmdPreview').innerHTML=html;
+}
+
+function runSim(){alert('运行仿真：\n'+document.getElementById('cmdPreview').textContent);}
+
+renderCards();updateCmd();
+</script>
+</body>
+</html>

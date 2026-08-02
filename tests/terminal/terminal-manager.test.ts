@@ -84,6 +84,26 @@ describe('TerminalManager', () => {
     expect(data).not.toBe('timeout');
   });
 
+  it('retains command output after the process exits for tab restoration', async () => {
+    manager = new TerminalManager();
+
+    const exitPromise = new Promise<void>((resolve) => {
+      manager.on('exit', () => resolve());
+    });
+
+    const session = await manager.runCommand({
+      command: 'echo retained-output',
+      cwd: process.cwd(),
+    });
+
+    await Promise.race([
+      exitPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout waiting for command exit')), 5000)),
+    ]);
+
+    expect(manager.getOutputBuffer(session.id).join('')).toContain('retained-output');
+  });
+
   it('destroys a terminal session', async () => {
     manager = new TerminalManager();
 

@@ -182,6 +182,26 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
     console.log(`[error-analysis] errorType=${errorType}, compileLog=${compileLogPath}, simLog=${simLogPath}`);
 
     // Step 2: Create AI Agent session via factory
+    //
+    // Reuse the model from an existing session for this project so that
+    // createSession() does NOT need to fetch the model list from the API.
+    // The fetch can fail with a network error ("fetch failed"), causing
+    // the entire error analysis to abort. By passing the model explicitly,
+    // we ensure the AI analysis reuses the same configuration the user
+    // has already set up for their regular chat sessions.
+    let existingModel: string | undefined;
+    const sessionIds = this.deps.sessionManager.listSessionsByProject(projectId);
+    for (const sid of sessionIds) {
+      const m = this.deps.sessionManager.getModel(sid);
+      if (m) {
+        existingModel = m;
+        break;
+      }
+    }
+    if (existingModel) {
+      console.log(`[error-analysis] reusing model "${existingModel}" from existing session`);
+    }
+
     try {
       const sessionId = await this.sessionFactory.createSession({
         projectId,
@@ -191,6 +211,7 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
         errorContext,
         command,
         maxRetries: MAX_RETRIES,
+        model: existingModel,
         onRetry: (name, sid) => {
           const count = this.retryTracker.get(name) ?? 0;
           this.retryTracker.set(name, count + 1);
@@ -324,6 +345,17 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
       projectRoot,
     );
 
+    // Reuse model from existing sessions (same logic as handleRunCompletion)
+    let existingModel: string | undefined;
+    const sessionIds = this.deps.sessionManager.listSessionsByProject(params.projectId);
+    for (const sid of sessionIds) {
+      const m = this.deps.sessionManager.getModel(sid);
+      if (m) {
+        existingModel = m;
+        break;
+      }
+    }
+
     const sessionId = await this.sessionFactory.createSession({
       projectId: params.projectId,
       caseName: params.caseName,
@@ -332,6 +364,7 @@ class ErrorAnalysisCoordinatorImpl extends EventEmitter {
       errorContext,
       command: params.command,
       maxRetries: MAX_RETRIES,
+      model: existingModel,
       onRetry: (name, sid) => {
         const count = this.retryTracker.get(name) ?? 0;
         this.retryTracker.set(name, count + 1);

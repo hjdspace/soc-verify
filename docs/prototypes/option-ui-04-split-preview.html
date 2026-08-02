@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>原型 4 · Split Panel Live Preview · 仿真选项面板</title>
+<style>
+:root {
+  --bg: #1a1b26;
+  --bg-elevated: #24283b;
+  --bg-panel-left: #1e2034;
+  --bg-panel-right: #16161e;
+  --bg-hover: #2e3248;
+  --fg: #c0caf5;
+  --fg-dim: #565f89;
+  --fg-bright: #7aa2f7;
+  --border: #2a2e42;
+  --border-bright: #3b4058;
+  --primary: #7aa2f7;
+  --accent: #bb9af7;
+  --green: #9ece6a;
+  --red: #f7768e;
+  --yellow: #e0af68;
+  --orange: #ff9e64;
+  --radius: 8px;
+  --mono: 'Cascadia Code', 'SF Mono', 'Fira Code', Consolas, monospace;
+  --sans: -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+  padding: 16px;
+  min-height: 100vh;
+}
+.dock {
+  max-width: 1000px;
+  margin: 0 auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: 0 4px 24px rgba(0,0,0,.3);
+}
+
+/* ── Header ──────────────────────── */
+.dock-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--bg-elevated), #1f2336);
+}
+.dock-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .06em;
+}
+.dock-title svg { color: var(--primary); }
+.dock-badge {
+  background: rgba(122,162,247,.12); color: var(--fg-bright);
+  font-size: 10px; padding: 1px 7px; border-radius: 10px;
+}
+.dock-actions { display: flex; align-items: center; gap: 6px; }
+.dock-actions button {
+  display: flex; align-items: center; gap: 4px;
+  padding: 3px 8px; font-size: 11px; color: var(--fg-dim);
+  background: transparent; border: 1px solid var(--border); border-radius: 4px;
+  cursor: pointer; transition: all .15s;
+}
+.dock-actions button:hover { background: var(--bg-hover); color: var(--fg); }
+.dock-actions input {
+  width: 80px; padding: 3px 6px; font-size: 11px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+  color: var(--fg); outline: none;
+}
+.dock-actions input:focus { border-color: var(--primary); }
+
+/* ── Split layout ───────────────── */
+.split {
+  display: flex;
+  min-height: 300px;
+  max-height: 400px;
+}
+.split-left {
+  flex: 1;
+  border-right: 2px solid var(--border);
+  overflow-y: auto;
+  padding: 12px 14px;
+}
+.split-right {
+  width: 360px;
+  background: var(--bg-panel-right);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Left: Form ──────────────────── */
+.group-section { margin-bottom: 14px; }
+.group-header {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 6px;
+}
+.group-header span {
+  font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .08em;
+  color: var(--fg-dim);
+}
+.group-header .line { flex: 1; height: 1px; background: var(--border); }
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 6px 12px;
+}
+.field { display: flex; flex-direction: column; gap: 2px; }
+.field-label {
+  font-size: 10px; font-weight: 500; color: var(--fg-dim);
+}
+.field-input, .field-select {
+  padding: 4px 7px; font-size: 11px;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 4px; color: var(--fg); outline: none;
+  font-family: var(--mono); transition: border-color .15s;
+}
+.field-input:focus, .field-select:focus {
+  border-color: var(--primary); box-shadow: 0 0 0 2px rgba(122,162,247,.1);
+}
+.toggle-row { display: flex; align-items: center; justify-content: space-between; height: 26px; }
+.toggle {
+  position: relative; width: 28px; height: 14px;
+  background: var(--border-bright); border-radius: 10px;
+  cursor: pointer; transition: background .2s;
+}
+.toggle.on { background: var(--primary); }
+.toggle::after {
+  content: ''; position: absolute; top: 2px; left: 2px;
+  width: 10px; height: 10px; border-radius: 50%; background: var(--fg);
+  transition: transform .2s;
+}
+.toggle.on::after { transform: translateX(14px); }
+
+/* ── Right: Live preview ────────── */
+.preview-header {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.preview-title {
+  font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .08em;
+  color: var(--fg-dim);
+}
+.preview-copy {
+  font-size: 10px; color: var(--fg-dim);
+  background: transparent; border: none; cursor: pointer;
+  transition: color .15s;
+}
+.preview-copy:hover { color: var(--fg-bright); }
+.preview-body {
+  flex: 1; overflow-y: auto; padding: 10px 14px;
+}
+.preview-body .cmd-line {
+  font-family: var(--mono); font-size: 12px;
+  line-height: 1.8; word-break: break-all;
+}
+.cmd-line .flag { color: var(--fg-bright); }
+.cmd-line .val { color: var(--accent); }
+.cmd-line .base { color: var(--green); }
+
+.preview-stats {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  display: flex; gap: 12px;
+}
+.stat-item {
+  display: flex; flex-direction: column; gap: 1px;
+}
+.stat-num {
+  font-size: 18px; font-weight: 700; color: var(--fg-bright);
+}
+.stat-label {
+  font-size: 9px; color: var(--fg-dim);
+  text-transform: uppercase; letter-spacing: .06em;
+}
+
+/* ── Bottom bar ──────────────────── */
+.bottom-bar {
+  display: flex; align-items: stretch;
+  border-top: 1px solid var(--border);
+  background: var(--bg-panel-right);
+}
+.cmd-mini {
+  flex: 1; padding: 8px 14px;
+  display: flex; flex-direction: column; gap: 1px;
+}
+.cmd-mini-label {
+  font-size: 9px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .1em; color: var(--fg-dim);
+}
+.cmd-mini-text {
+  font-family: var(--mono); font-size: 11px; color: var(--green);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.run-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 24px; font-size: 13px; font-weight: 700;
+  color: #1a1a2e;
+  background: linear-gradient(135deg, var(--green), #7dc970);
+  border: none; cursor: pointer; transition: filter .15s;
+}
+.run-btn:hover { filter: brightness(1.1); }
+.run-btn svg { width: 16px; height: 16px; }
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="dock">
+  <div class="dock-header">
+    <div class="dock-title">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/><path d="M3 9h6"/></svg>
+      仿真 Option
+      <span class="dock-badge">26</span>
+    </div>
+    <div class="dock-actions">
+      <button onclick="alert('预设')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        预设
+      </button>
+      <input placeholder="预设名称">
+      <button onclick="alert('保存')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="split">
+    <!-- Left: form -->
+    <div class="split-left" id="formPanel"></div>
+    <!-- Right: live preview -->
+    <div class="split-right">
+      <div class="preview-header">
+        <span class="preview-title">实时命令预览</span>
+        <button class="preview-copy" onclick="copyCmd()">复制</button>
+      </div>
+      <div class="preview-body">
+        <div class="cmd-line" id="cmdFull">runsim</div>
+      </div>
+      <div class="preview-stats">
+        <div class="stat-item"><span class="stat-num" id="statFlags">0</span><span class="stat-label">参数</span></div>
+        <div class="stat-item"><span class="stat-num" id="statActive">0</span><span class="stat-label">已启用</span></div>
+        <div class="stat-item"><span class="stat-num" id="statBool">0</span><span class="stat-label">开关</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom-bar">
+    <div class="cmd-mini">
+      <span class="cmd-mini-label">命令预览</span>
+      <span class="cmd-mini-text" id="cmdPreview">runsim</span>
+    </div>
+    <button class="run-btn" onclick="runSim()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      运行仿真
+    </button>
+  </div>
+</div>
+
+<script>
+const GROUPS=[
+  {id:'basic',label:'基础参数',fields:[
+    {key:'base',label:'BASE',type:'string'},{key:'block',label:'BLOCK',type:'string'},
+    {key:'case',label:'CASE',type:'string'},{key:'rundir',label:'工作目录',type:'string'},
+    {key:'bq',label:'提交服务器',type:'string'},{key:'seed',label:'种子号',type:'string'},
+    {key:'other_options',label:'其他选项',type:'string'},
+  ]},
+  {id:'wave',label:'波形配置',fields:[
+    {key:'fsdb',label:'FSDB',type:'boolean'},{key:'vwdb',label:'VWDB',type:'boolean'},
+    {key:'dump_level',label:'Dump层级',type:'string'},{key:'cl',label:'Clean',type:'boolean'},
+    {key:'dump_sva',label:'SVA',type:'boolean'},{key:'cov',label:'覆盖率',type:'boolean'},
+    {key:'upf',label:'UPF',type:'boolean'},{key:'dump_mem',label:'Memory',type:'string'},
+    {key:'wdd',label:'起始时间',type:'string'},
+  ]},
+  {id:'sim',label:'仿真参数',fields:[
+    {key:'simarg',label:'仿真参数',type:'string'},{key:'cfg_def',label:'配置定义',type:'string'},
+    {key:'post',label:'后仿',type:'enum',enumValues:['','sdf=fake','sdf=pg_fake','sdf=npg_f1_ssg','sdf=npg_f2_ssg','sdf=npg_f3_ssg','sdf=npg_f4_ssg','sdf=npg_f5_ssg','sdf=npg_f6_ssg','sdf=npg_f7_ssg','sdf=npg_f1_ffg','sdf=npg_f2_ffg','sdf=npg_f3_ffg','sdf=npg_f4_ffg','sdf=npg_f5_ffg','sdf=npg_f6_ffg','sdf=npg_f7_ffg','sdf=npg_f1_tt','sdf=npg_f2_tt']},
+  ]},
+  {id:'mode',label:'执行模式',fields:[
+    {key:'sim_only',label:'仅仿真(-R)',type:'boolean'},{key:'compile_only',label:'仅编译(-C)',type:'boolean'},
+  ]},
+  {id:'regr',label:'回归测试',fields:[
+    {key:'regr_file',label:'回归列表',type:'string'},{key:'fm',label:'FAIL',type:'boolean'},
+    {key:'regr_work',label:'回归路径',type:'string'},{key:'tag',label:'TAG',type:'string'},
+    {key:'nt',label:'不回归TAG',type:'string'},{key:'dashboard',label:'Dashboard',type:'string'},
+  ]},
+];
+const values={};
+for(const g of GROUPS)for(const f of g.fields)values[f.key]=f.type==='boolean'?false:'';
+values.base='top';values.block='usvp';values.case='basic_test_001';
+
+function renderForm(){
+  const c=document.getElementById('formPanel');
+  c.innerHTML='';
+  for(const g of GROUPS){
+    const sec=document.createElement('div');sec.className='group-section';
+    const hdr=document.createElement('div');hdr.className='group-header';
+    hdr.innerHTML='<span>'+g.label+'</span><div class="line"></div>';
+    sec.appendChild(hdr);
+    const grid=document.createElement('div');grid.className='field-grid';
+    for(const f of g.fields){
+      const div=document.createElement('div');div.className='field';
+      const lbl=document.createElement('div');lbl.className='field-label';lbl.textContent=f.label;
+      if(f.type==='boolean'){
+        const row=document.createElement('div');row.className='toggle-row';
+        const tg=document.createElement('div');tg.className='toggle'+(values[f.key]?' on':'');
+        tg.onclick=()=>{values[f.key]=!values[f.key];tg.className='toggle'+(values[f.key]?' on':'');updateCmd();};
+        row.appendChild(lbl);row.appendChild(tg);div.appendChild(row);
+      }else if(f.type==='enum'){
+        const sel=document.createElement('select');sel.className='field-select';
+        for(const v of f.enumValues){const o=document.createElement('option');o.value=v;o.textContent=v||'--';sel.appendChild(o);}
+        sel.value=values[f.key];sel.onchange=e=>{values[f.key]=e.target.value;updateCmd();};
+        div.appendChild(lbl);div.appendChild(sel);
+      }else{
+        const inp=document.createElement('input');inp.className='field-input';inp.type='text';inp.value=values[f.key]||'';
+        inp.oninput=e=>{values[f.key]=e.target.value;updateCmd();};
+        div.appendChild(lbl);div.appendChild(inp);
+      }
+      grid.appendChild(div);
+    }
+    sec.appendChild(grid);c.appendChild(sec);
+  }
+}
+
+const FLAG_MAP={base:'-base',block:'-block',case:'-case',rundir:'-rundir',bq:'-bq',seed:'-seed',other_options:'',fsdb:'-fsdb',vwdb:'-vwdb',dump_level:'',cl:'-cl',dump_sva:'-dump_sva',cov:'-cov',upf:'-upf',dump_mem:'-dump_mem',wdd:'-wdd',simarg:'-simarg',cfg_def:'-cfg_def',post:'-post',sim_only:'-R',compile_only:'-C',regr_file:'-regr',fm:'-fm',regr_work:'-regr_work',tag:'-tag',nt:'-nt',dashboard:'-m'};
+let totalFlags=0,boolCount=0;
+for(const g of GROUPS){for(const f of g.fields){totalFlags++;if(f.type==='boolean')boolCount++;}}
+
+function updateCmd(){
+  let parts=['runsim'];let active=0;
+  for(const[k,v]of Object.entries(values)){
+    if(!v)continue;active++;
+    const flag=FLAG_MAP[k];
+    if(flag===''){parts.push(v);continue;}
+    if(v===true){parts.push(flag);continue;}
+    parts.push(flag,String(v));
+  }
+  const html=parts.map((p,i)=>{
+    if(p==='runsim')return'<span class="base">'+p+'</span> ';
+    if(p.startsWith('-'))return'<span class="flag">'+p+'</span> ';
+    return'<span class="val">'+p+'</span> ';
+  }).join('').trim();
+  document.getElementById('cmdFull').innerHTML=html;
+  document.getElementById('cmdPreview').textContent=parts.join(' ');
+  document.getElementById('statFlags').textContent=totalFlags;
+  document.getElementById('statActive').textContent=active;
+  document.getElementById('statBool').textContent=boolCount;
+}
+
+function copyCmd(){navigator.clipboard?.writeText(document.getElementById('cmdPreview').textContent);alert('已复制到剪贴板');}
+function runSim(){alert('运行仿真：\n'+document.getElementById('cmdPreview').textContent);}
+
+renderForm();updateCmd();
+</script>
+</body>
+</html>

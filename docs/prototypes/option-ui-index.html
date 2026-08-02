@@ -1,33 +1,169 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Simulation Option UI Prototypes</title>
-  <style>
-    :root { color-scheme: dark; font-family: Inter, "Segoe UI", system-ui, sans-serif; background: oklch(18% .012 185); color: oklch(92% .012 185); }
-    body { margin: 0; min-height: 100vh; padding: 36px; box-sizing: border-box; }
-    main { max-width: 980px; margin: 0 auto; }
-    h1 { margin: 0 0 8px; font-size: 22px; letter-spacing: .01em; }
-    p { color: oklch(70% .018 185); margin: 0 0 26px; font-size: 13px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
-    a { display: block; padding: 16px; border: 1px solid oklch(31% .018 185); border-radius: 8px; color: inherit; text-decoration: none; background: oklch(21% .014 185); }
-    a:hover { border-color: oklch(66% .12 165); background: oklch(24% .018 185); }
-    strong { display: block; margin-bottom: 6px; font-size: 14px; }
-    span { display: block; color: oklch(67% .02 185); font-size: 12px; line-height: 1.5; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>仿真选项 UI 原型索引 · SoC Verify</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: #0f0f0f;
+  color: #e4e4e7;
+  font-size: 14px;
+  padding: 32px;
+  min-height: 100vh;
+}
+.container { max-width: 1000px; margin: 0 auto; }
+h1 {
+  font-size: 24px; font-weight: 700;
+  margin-bottom: 8px;
+}
+.subtitle {
+  font-size: 14px; color: #71717a;
+  margin-bottom: 32px;
+}
+.prototype-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+.prototype-card {
+  background: #1a1a1a;
+  border: 1px solid #27272a;
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color .2s, transform .2s;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+.prototype-card:hover {
+  border-color: #3b82f6;
+  transform: translateY(-2px);
+}
+.preview {
+  height: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 48px;
+  border-bottom: 1px solid #27272a;
+}
+.proto-info { padding: 16px; }
+.proto-name {
+  font-size: 15px; font-weight: 600;
+  margin-bottom: 4px;
+}
+.proto-desc {
+  font-size: 12px; color: #71717a;
+  line-height: 1.5;
+}
+.proto-features {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  margin-top: 10px;
+}
+.proto-tag {
+  font-size: 10px; padding: 2px 8px;
+  background: #27272a; color: #a1a1aa;
+  border-radius: 10px;
+}
+</style>
 </head>
 <body>
-  <main>
-    <h1>仿真 Option UI 原型</h1>
-    <p>五种不同容器结构，点击进入独立 HTML 原型。每个原型都包含真实 schema 的代表字段、预设入口和命令预览。</p>
-    <div class="grid">
-      <a href="option-ui-slim-drawer.html"><strong>A · 窄侧抽屉</strong><span>右下角窄宽高面板，适合快速改少量选项。</span></a>
-      <a href="option-ui-inspector.html"><strong>B · 高检视器</strong><span>右侧长面板，分组导航与持续上下文并存。</span></a>
-      <a href="option-ui-command-surface.html"><strong>C · 命令面</strong><span>居中紧凑表单，聚焦一次仿真配置和命令确认。</span></a>
-      <a href="option-ui-bottom-workbench.html"><strong>D · 底部工作台</strong><span>底部横向工作区，左侧分组、右侧字段，保留终端心智模型。</span></a>
-      <a href="option-ui-stepper.html"><strong>E · 分步配置单</strong><span>分步配置与最终检查，适合字段很多且依赖关系明显的场景。</span></a>
-    </div>
-  </main>
+<div class="container">
+  <h1>仿真选项 UI 原型索引</h1>
+  <p class="subtitle">5 种设计风格，底部均含命令预览 + 运行按钮。点击卡片查看原型详情。</p>
+
+  <div class="prototype-grid">
+    <a class="prototype-card" href="option-ui-01-tabbed-compact.html">
+      <div class="preview" style="background: linear-gradient(135deg, #1a1b26, #24283b);">
+        <span style="filter: drop-shadow(0 2px 8px rgba(122,162,247,.2));">🗂️</span>
+      </div>
+      <div class="proto-info">
+        <div class="proto-name">01 · Tabbed Compact</div>
+        <div class="proto-desc">标签页紧凑布局。顶部标签栏切换分组，底部命令预览栏 + 运行按钮。信息密度高，适合窄面板。</div>
+        <div class="proto-features">
+          <span class="proto-tag">标签页</span>
+          <span class="proto-tag">紧凑</span>
+          <span class="proto-tag">高密度</span>
+        </div>
+      </div>
+    </a>
+
+    <a class="prototype-card" href="option-ui-02-accordion-drawer.html">
+      <div class="preview" style="background: linear-gradient(135deg, #16161e, #1e1e2e);">
+        <span>📋</span>
+      </div>
+      <div class="proto-info">
+        <div class="proto-name">02 · Accordion Drawer</div>
+        <div class="proto-desc">手风琴折叠面板。每个分组可独立展开/折叠，带摘要预览。底部命令栏 + 运行按钮。灵活控制显示范围。</div>
+        <div class="proto-features">
+          <span class="proto-tag">折叠</span>
+          <span class="proto-tag">Catppuccin</span>
+          <span class="proto-tag">摘要</span>
+        </div>
+      </div>
+    </a>
+
+    <a class="prototype-card" href="option-ui-03-glassmorphism.html">
+      <div class="preview" style="background: linear-gradient(135deg, #0d0d1a, #1e1e32);">
+        <span style="filter: drop-shadow(0 0 12px rgba(96,165,250,.3));">✨</span>
+      </div>
+      <div class="proto-info">
+        <div class="proto-name">03 · Glassmorphism</div>
+        <div class="proto-desc">毛玻璃浮动面板。半透明背景 + 背景模糊 + 发光效果。Pill 式分组导航。视觉高级感，适合现代化设计。</div>
+        <div class="proto-features">
+          <span class="proto-tag">毛玻璃</span>
+          <span class="proto-tag">发光</span>
+          <span class="proto-tag">Pill导航</span>
+        </div>
+      </div>
+    </a>
+
+    <a class="prototype-card" href="option-ui-04-split-preview.html">
+      <div class="preview" style="background: linear-gradient(135deg, #1a1b26, #16161e);">
+        <span>⚡</span>
+      </div>
+      <div class="proto-info">
+        <div class="proto-name">04 · Split Live Preview</div>
+        <div class="proto-desc">分栏实时预览。左侧表单，右侧实时命令预览 + 统计数据。底部命令栏 + 运行按钮。信息双栏，所见即所得。</div>
+        <div class="proto-features">
+          <span class="proto-tag">分栏</span>
+          <span class="proto-tag">实时预览</span>
+          <span class="proto-tag">统计</span>
+        </div>
+      </div>
+    </a>
+
+    <a class="prototype-card" href="option-ui-05-minimalist-card.html">
+      <div class="preview" style="background: linear-gradient(135deg, #0f0f0f, #1a1a1a);">
+        <span style="opacity: .8;">🔻</span>
+      </div>
+      <div class="proto-info">
+        <div class="proto-name">05 · Minimalist Card</div>
+        <div class="proto-desc">极简卡片布局。每个分组一张卡片，行内字段排列。底部命令栏 + 运行按钮。简洁纯净，极致克制。</div>
+        <div class="proto-features">
+          <span class="proto-tag">极简</span>
+          <span class="proto-tag">卡片</span>
+          <span class="proto-tag">行内</span>
+        </div>
+      </div>
+    </a>
+  </div>
+
+  <div style="margin-top: 32px; padding: 16px; background: #1a1a1a; border: 1px solid #27272a; border-radius: 8px;">
+    <h3 style="font-size: 14px; margin-bottom: 10px;">共同特性</h3>
+    <ul style="font-size: 12px; color: #a1a1aa; line-height: 2; padding-left: 20px;">
+      <li>✅ 底部命令预览栏：实时显示生成的 <code style="background: #27272a; padding: 1px 6px; border-radius: 3px;">runsim</code> 命令</li>
+      <li>✅ 运行按钮：一键执行仿真</li>
+      <li>✅ 预设管理：保存/加载仿真选项预设</li>
+      <li>✅ 5 个分组：基础参数 / 波形配置 / 仿真参数 / 执行模式 / 回归测试</li>
+      <li>✅ 26 个仿真选项字段，支持 string / boolean / enum 类型</li>
+      <li>✅ 命令语法高亮：flag（蓝色）/ value（紫色）/ base（绿色）</li>
+    </ul>
+  </div>
+</div>
 </body>
 </html>

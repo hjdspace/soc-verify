@@ -8,7 +8,12 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: { index: resolve(import.meta.dirname, 'src/main/index.ts') },
-        output: { format: 'cjs', entryFileNames: '[name].cjs' }
+        output: { format: 'cjs', entryFileNames: '[name].cjs' },
+        // node-pty is a native module with .node binaries — must not be
+        // bundled by Rollup. Without this, the dynamic import('node-pty')
+        // gets inlined into the CJS output and fails at runtime because the
+        // native binary path resolution breaks.
+        external: ['node-pty'],
       }
     },
     resolve: {

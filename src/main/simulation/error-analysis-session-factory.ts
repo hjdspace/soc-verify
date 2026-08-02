@@ -6,6 +6,7 @@
  */
 
 import type { sessionManager } from '../agent/session-manager';
+import { loadSessions } from '../agent/session-persistence';
 import type { pluginLoader } from '../plugins/loader';
 import type { credentialManager } from '../credentials/credential-manager';
 import type { ErrorType } from '@shared/types';
@@ -29,6 +30,10 @@ export type CreateSessionParams = {
   maxRetries: number;
   /** Called when AI invokes runsim_retry — used by coordinator to track retries. */
   onRetry?: (caseName: string, sessionId: string) => void;
+  /** Model ID to use for the session. When provided, the session manager
+   *  skips fetching the model list from the API, avoiding network errors
+   *  when the endpoint is temporarily unreachable. */
+  model?: string;
 };
 
 export class ErrorAnalysisSessionFactory {
@@ -43,7 +48,7 @@ export class ErrorAnalysisSessionFactory {
    * Returns the sessionId of the newly created session.
    */
   async createSession(params: CreateSessionParams): Promise<string> {
-    const { projectId, caseName, errorType, cwd, errorContext, command, maxRetries } = params;
+    const { projectId, caseName, errorType, cwd, errorContext, command, maxRetries, model } = params;
 
     const systemPrompt = getSystemPrompt(errorType);
 
@@ -53,21 +58,37 @@ export class ErrorAnalysisSessionFactory {
     const simulation = new PluginBackedSimulation(registry);
     const coverage = new PluginBackedCoverage(cwd, registry);
 
+    // Reuse the model selected in the AI page. The renderer persists that
+    // selection alongside the session, so error analysis must use the same
+    // provider credential instead of always taking the first configured one.
+    const persistedSessions = await loadSessions(cwd);
+    const persistedModel = [...persistedSessions]
+      .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
+      .find((session) => session.model?.id)?.model;
+
     // Load credentials
     const credEnv = await this.deps.credentialManager.buildEnvForAgent();
-    const defaultCred = await this.deps.credentialManager.getDefaultCredential();
-    const provider = defaultCred
-      ? this.deps.credentialManager.mapProviderForAgent(defaultCred.providerId)
-      : undefined;
-    const apiKey = defaultCred?.apiKey;
-    const baseUrl = defaultCred?.baseUrl;
+    const selectedCred = persistedModel?.providerId
+      ? await this.deps.credentialManager.get(persistedModel.providerId)
+      : await this.deps.credentialManager.getDefaultCredential();
+    const provider = persistedModel?.provider
+      ?? (selectedCred
+        ? this.deps.credentialManager.mapProviderForAgent(selectedCred.providerId)
+        : undefined);
+    const apiKey = selectedCred?.apiKey;
+    const baseUrl = selectedCred?.baseUrl;
+    const selectedModel = model ?? persistedModel?.id;
 
-    // Create the session
+    // Create the session — pass the model (if available from an existing
+    // session) so that createSession does NOT need to fetch the model list
+    // from the API. This avoids "fetch failed" errors when the endpoint is
+    // temporarily unreachable, and ensures the AI analysis reuses the same
+    // model the user has already configured.
     const sessionId = await this.deps.sessionManager.createSession({
       projectId,
       cwd,
       provider,
-      model: undefined,
+      model: selectedModel,
       apiKey,
       baseUrl,
       discovery,

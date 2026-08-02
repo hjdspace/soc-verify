@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
+import { useUiStore } from './ui';
 import { tRPCError } from '@renderer/lib/trpc-utils';
 
 export type SessionStatus = 'creating' | 'idle' | 'streaming' | 'tool_executing' | 'error';
@@ -98,6 +99,13 @@ interface SessionStoreState {
   lastModel: SessionModel | null;
 
   initLastModel: () => void;
+  registerEventListeners: () => void;
+  addErrorAnalysisSession: (event: {
+    sessionId: string;
+    projectId: string;
+    caseName?: string;
+    errorType?: string;
+  }) => void;
 
   createSession: (projectId: string, cwd: string) => Promise<string | null>;
   destroySession: (sessionId: string, projectId?: string) => Promise<void>;
@@ -125,8 +133,10 @@ interface SessionStoreState {
 }
 
 let eventListenerRegistered = false;
+let errorAnalysisListenerRegistered = false;
 const historySessionLoads = new Map<string, Promise<void>>();
 const runtimeSessionStarts = new Map<string, Promise<string>>();
+const pendingSessionEvents = new Map<string, unknown[]>();
 
 // ─── 流式 message_update 节流 ────────────────────────────
 //
@@ -163,6 +173,41 @@ function registerSessionEventListener(get: () => SessionStoreState): void {
   eventListenerRegistered = true;
   window.eventBridge.onSessionEvent(({ sessionId, event }) => {
     get().handleSessionEvent(sessionId, event);
+  });
+}
+
+function registerErrorAnalysisEventListener(get: () => SessionStoreState): void {
+  if (errorAnalysisListenerRegistered || !window.eventBridge?.onErrorAnalysisEvent) return;
+  errorAnalysisListenerRegistered = true;
+  window.eventBridge.onErrorAnalysisEvent((event: { type: string; [key: string]: unknown }) => {
+    if (event.type === 'started' && typeof event.sessionId === 'string' && typeof event.projectId === 'string') {
+      get().addErrorAnalysisSession({
+        sessionId: event.sessionId,
+        projectId: event.projectId,
+        caseName: typeof event.caseName === 'string' ? event.caseName : undefined,
+        errorType: typeof event.errorType === 'string' ? event.errorType : undefined,
+      });
+      useToastStore.getState().info(
+        `AI 分析已启动: ${String(event.caseName ?? '')} (${String(event.errorType ?? '')})`,
+      );
+    } else if (event.type === 'retrying') {
+      useToastStore.getState().info(
+        `AI 正在重新仿真: ${String(event.caseName ?? '')} (重试 ${String(event.retryCount ?? 0)}/${String(event.maxRetries ?? 3)})`,
+      );
+    } else if (event.type === 'stopped') {
+      useToastStore.getState().info(
+        `AI 分析已停止: ${String(event.caseName ?? '')} (达到最大重试次数)`,
+      );
+    } else if (event.type === 'failed') {
+      const error = String(event.error ?? '');
+      const hint = error.includes('No models available') || error.includes('OpenAI') || error.includes('endpoint')
+        ? '请在设置中检查 API 凭据配置（Provider、API Key、Base URL），确保端点可用且有可用模型。'
+        : error;
+      useToastStore.getState().error(
+        `AI 分析失败: ${String(event.caseName ?? '')}`,
+        hint,
+      );
+    }
   });
 }
 
@@ -493,6 +538,53 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     }
   },
 
+  registerEventListeners: () => {
+    registerSessionEventListener(get);
+    registerErrorAnalysisEventListener(get);
+  },
+
+  addErrorAnalysisSession: (event) => {
+    const existing = get().sessions.find((session) => sessionMatchesId(session, event.sessionId));
+    if (existing) {
+      set({ currentSessionId: existing.id });
+      return;
+    }
+
+    const caseName = event.caseName?.trim() || '仿真用例';
+    const name = event.errorType === 'compile_error'
+      ? `[编译修复] ${caseName}`
+      : `[仿真分析] ${caseName}`;
+    const session: SessionEntry = {
+      id: event.sessionId,
+      runtimeSessionId: event.sessionId,
+      persistedSessionId: event.sessionId,
+      projectId: event.projectId,
+      name,
+      status: 'streaming',
+      messages: [],
+      composer: emptyComposer(),
+      createdAt: Date.now(),
+      model: get().lastModel ?? undefined,
+    };
+
+    set((state) => ({
+      sessions: [...state.sessions, session],
+      currentSessionId: event.sessionId,
+    }));
+
+    const pending = pendingSessionEvents.get(event.sessionId);
+    if (pending) {
+      pendingSessionEvents.delete(event.sessionId);
+      for (const pendingEvent of pending) {
+        get().handleSessionEvent(event.sessionId, pendingEvent);
+      }
+    }
+
+    if (useUiStore.getState().rightPanelCollapsed) {
+      useUiStore.getState().toggleRightPanel();
+    }
+  },
+
   createSession: async (projectId, cwd) => {
     const sessionId = `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const lastModel = get().lastModel;
@@ -693,6 +785,16 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   handleSessionEvent: (sessionId, event) => {
     const evt = event as Record<string, unknown>;
     const type = evt.type as string;
+
+    // Error-analysis sessions are created in the main process. Their first
+    // agent events can arrive before the separate `started` notification, so
+    // retain those events until the renderer creates the matching tab.
+    if (!get().sessions.some((session) => sessionMatchesId(session, sessionId)) && sessionId.startsWith('session_')) {
+      const pending = pendingSessionEvents.get(sessionId) ?? [];
+      if (pending.length < 100) pending.push(event);
+      pendingSessionEvents.set(sessionId, pending);
+      return;
+    }
 
     // Log event type for debugging (avoid dumping full event object — it can be very large)
     console.log(`[session:event] sessionId=${sessionId}, type="${type}"`);

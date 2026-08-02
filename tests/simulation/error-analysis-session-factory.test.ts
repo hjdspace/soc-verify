@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { ErrorAnalysisSessionFactory } from '../../src/main/simulation/error-analysis-session-factory';
 
 // ─── Mock factories ─────────────────────────────────────
@@ -39,6 +42,11 @@ function createMockCredentialManager() {
       apiKey: 'sk-test',
       baseUrl: 'https://api.openai.com',
     })),
+    get: vi.fn(async (providerId: string) => ({
+      providerId,
+      apiKey: 'sk-selected',
+      baseUrl: 'https://selected.example/v1',
+    })),
     mapProviderForAgent: vi.fn(() => 'openai'),
   };
 }
@@ -50,6 +58,7 @@ describe('ErrorAnalysisSessionFactory', () => {
   let mockSessionManager: ReturnType<typeof createMockSessionManager>;
   let mockPluginLoader: ReturnType<typeof createMockPluginLoader>;
   let mockCredentialManager: ReturnType<typeof createMockCredentialManager>;
+  let tempProject: string | undefined;
 
   beforeEach(() => {
     mockSessionManager = createMockSessionManager();
@@ -60,6 +69,11 @@ describe('ErrorAnalysisSessionFactory', () => {
       pluginLoader: mockPluginLoader as never,
       credentialManager: mockCredentialManager as never,
     });
+  });
+
+  afterEach(async () => {
+    if (tempProject) await rm(tempProject, { recursive: true, force: true });
+    tempProject = undefined;
   });
 
   it('creates a session and returns sessionId', async () => {
@@ -172,5 +186,40 @@ describe('ErrorAnalysisSessionFactory', () => {
     const callArgs = mockSessionManager.createSession.mock.calls[0][0] as unknown as Record<string, unknown>;
     expect(callArgs.provider).toBe('openai');
     expect(callArgs.apiKey).toBe('sk-test');
+  });
+
+  it('reuses the most recently selected persisted model and its credential', async () => {
+    tempProject = await mkdtemp(join(tmpdir(), 'socverify-error-analysis-'));
+    await mkdir(join(tempProject, '.socverify'));
+    await writeFile(join(tempProject, '.socverify', 'sessions.json'), JSON.stringify([
+      {
+        sessionId: 'session-1',
+        name: 'AI',
+        projectId: 'proj1',
+        createdAt: 1,
+        lastActivityAt: 2,
+        model: {
+          provider: 'openai',
+          id: 'selected-model',
+          name: 'selected-model',
+          providerId: 'selected-provider',
+        },
+      },
+    ]));
+
+    await factory.createSession({
+      projectId: 'proj1',
+      caseName: 'test_case',
+      errorType: 'sim_error',
+      cwd: tempProject,
+      errorContext: 'Error',
+      maxRetries: 3,
+    });
+
+    expect(mockCredentialManager.get).toHaveBeenCalledWith('selected-provider');
+    const callArgs = mockSessionManager.createSession.mock.calls[0][0] as unknown as Record<string, unknown>;
+    expect(callArgs.model).toBe('selected-model');
+    expect(callArgs.apiKey).toBe('sk-selected');
+    expect(callArgs.baseUrl).toBe('https://selected.example/v1');
   });
 });

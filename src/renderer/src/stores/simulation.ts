@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
 import { useTerminalStore } from './terminal';
-import { useWorkbenchStore } from './workbench';
 import { tRPCError } from '@renderer/lib/trpc-utils';
 import type { SimulationHistoryEntry, SimulationStatus } from '@shared/types';
 import type { SimulationRunStatus as PluginRunStatus } from '@shared/plugin-types';
@@ -75,7 +74,6 @@ interface SimulationStoreState {
 }
 
 let eventListenerRegistered = false;
-let errorAnalysisListenerRegistered = false;
 
 export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
   activeRuns: [],
@@ -145,13 +143,21 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
         (result as { backend?: string }).backend === 'log-mode',
         (result as { warning?: string | null }).warning ?? null,
       );
-      useWorkbenchStore.getState().open({ type: 'running-simulations' });
+      // Note: the terminal tab is already opened by createTabForSession
+      // above. Do NOT switch to 'running-simulations' here — that would
+      // immediately hide the terminal, preventing the user from seeing
+      // the simulation command and output (especially in log-mode where
+      // the command echo and stdout/stderr are the only visibility).
 
       // Show a toast warning if running in log-mode (node-pty unavailable)
       if ((result as { backend?: string }).backend === 'log-mode') {
+        const isLinux = navigator.userAgent.includes('Linux');
+        const reason = isLinux
+          ? '可能由于 AppImage 环境缺少 native 模块'
+          : 'node-pty 原生模块未能加载，请尝试重新安装依赖 (npm install) 或重新构建原生模块 (npx @electron/rebuild -f -w node-pty)';
         useToastStore.getState().warning(
           '终端运行在日志模式',
-          'node-pty 不可用（可能由于 AppImage 环境缺少 native 模块）。仿真将以只读日志模式运行，输出可正常查看但无法交互输入。',
+          `node-pty 不可用（${reason}）。仿真将以只读日志模式运行，输出可正常查看但无法交互输入。`,
         );
       }
 
@@ -354,31 +360,6 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
           if (caseName && projectId) {
             // Notify user that auto-analysis is starting
             useToastStore.getState().info(`检测到 ${caseName} 仿真失败，正在启动 AI 自动分析...`);
-            // The ErrorAnalysisCoordinator in the main process will handle this automatically.
-            // Register the error analysis event listener once.
-            if (!errorAnalysisListenerRegistered && window.eventBridge?.onErrorAnalysisEvent) {
-              errorAnalysisListenerRegistered = true;
-              window.eventBridge.onErrorAnalysisEvent((event: { type: string; [key: string]: unknown }) => {
-                if (event.type === 'started') {
-                  useToastStore.getState().info(
-                    `AI 分析已启动: ${String(event.caseName ?? '')} (${String(event.errorType ?? '')})`,
-                  );
-                } else if (event.type === 'retrying') {
-                  useToastStore.getState().info(
-                    `AI 正在重新仿真: ${String(event.caseName ?? '')} (重试 ${String(event.retryCount ?? 0)}/${String(event.maxRetries ?? 3)})`,
-                  );
-                } else if (event.type === 'stopped') {
-                  useToastStore.getState().info(
-                    `AI 分析已停止: ${String(event.caseName ?? '')} (达到最大重试次数)`,
-                  );
-                } else if (event.type === 'failed') {
-                  useToastStore.getState().error(
-                    `AI 分析失败: ${String(event.caseName ?? '')}`,
-                    String(event.error ?? ''),
-                  );
-                }
-              });
-            }
           }
         }
         break;

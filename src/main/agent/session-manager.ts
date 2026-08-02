@@ -228,7 +228,10 @@ export class SessionManagerImpl extends EventEmitter {
         model = allModels[0]?.id;
       }
       if (!model) {
-        throw new Error('The OpenAI-compatible endpoint returned no models');
+        const detail = allModels.length === 0
+          ? 'The endpoint did not return any models. Please check that the Base URL points to a valid OpenAI-compatible API (e.g. https://api.openai.com/v1) and the API key is correct.'
+          : 'The endpoint returned models but none could be used as default. Please specify a model in the session settings.';
+        throw new Error(`No models available from the configured endpoint. ${detail}`);
       }
 
       runtimeDir = await mkdtemp(join(tmpdir(), 'socverify-agent-'));

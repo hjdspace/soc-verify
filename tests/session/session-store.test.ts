@@ -496,6 +496,38 @@ describe('SessionStore — event handling and state machine', () => {
     expect(useSessionStore.getState().sessions[0].status).toBe('idle');
   });
 
+  it('creates and selects an error analysis session for the right panel', () => {
+    useSessionStore.getState().addErrorAnalysisSession({
+      sessionId: 'session_error_1',
+      projectId: 'proj_1',
+      caseName: 'core_smoke',
+      errorType: 'compile_error',
+    });
+
+    const state = useSessionStore.getState();
+    expect(state.currentSessionId).toBe('session_error_1');
+    expect(state.sessions).toContainEqual(expect.objectContaining({
+      id: 'session_error_1',
+      runtimeSessionId: 'session_error_1',
+      name: '[编译修复] core_smoke',
+      status: 'streaming',
+    }));
+  });
+
+  it('replays agent events that arrive before the analysis session is announced', () => {
+    useSessionStore.getState().handleSessionEvent('session_error_2', { type: 'message_start' });
+    useSessionStore.getState().addErrorAnalysisSession({
+      sessionId: 'session_error_2',
+      projectId: 'proj_1',
+      caseName: 'core_smoke',
+      errorType: 'sim_error',
+    });
+
+    const session = useSessionStore.getState().sessions.find((item) => item.id === 'session_error_2');
+    expect(session?.messages).toHaveLength(1);
+    expect(session?.status).toBe('streaming');
+  });
+
   it('destroys a session and removes it from the list', async () => {
     const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
     expect(useSessionStore.getState().sessions).toHaveLength(1);

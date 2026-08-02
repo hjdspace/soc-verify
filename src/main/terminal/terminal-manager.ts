@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { spawn, ChildProcess, execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { createRequire } from 'node:module';
 import type * as NodePty from 'node-pty';
 
 /** Which PTY backend a terminal session is using. */
@@ -208,11 +209,23 @@ function buildDiagnosticMessage(err: unknown): string {
  * On failure, captures the full error and logs a detailed diagnostic
  * message to help debug why node-pty is unavailable.
  */
+/**
+ * Dynamically load node-pty using CJS require().
+ *
+ * The main process source is ESM but compiled to CJS by electron-vite. Using
+ * ESM dynamic import() for a native CJS module like node-pty can fail in
+ * Electron's CJS context (the native .node binary is not properly
+ * initialized). Using createRequire(import.meta.url) gives us a real CJS
+ * require() that correctly loads native modules.
+ */
 async function loadNodePty(): Promise<PtyLoadResult> {
   if (ptyLoadAttempted) return ptyLoadResult;
   ptyLoadAttempted = true;
   try {
-    nodePtyModule = await import('node-pty');
+    // createRequire gives us a CJS require that works in the ESM source
+    // and is correctly transpiled by electron-vite to CJS output.
+    const require = createRequire(import.meta.url);
+    nodePtyModule = require('node-pty') as typeof NodePty;
     ptyLoadResult = { module: nodePtyModule, error: null };
     console.log('[terminal] node-pty loaded successfully — using real PTY backend.');
     return ptyLoadResult;
@@ -254,6 +267,11 @@ interface SessionEntry {
   flushTimer: NodeJS.Timeout | null;
 }
 
+interface CompletedSession {
+  session: TerminalSession;
+  outputBuffer: string[];
+}
+
 /**
  * Manages PTY sessions for terminal integration.
  *
@@ -265,7 +283,25 @@ interface SessionEntry {
  */
 export class TerminalManager extends EventEmitter {
   private sessions = new Map<string, SessionEntry>();
+  /** Completed sessions remain readable so remounted terminal tabs can restore their output. */
+  private completedSessions = new Map<string, CompletedSession>();
   private idCounter = 0;
+
+  private retainCompletedSession(id: string, entry: SessionEntry): void {
+    entry.pty = null;
+    this.completedSessions.set(id, {
+      session: entry.session,
+      outputBuffer: entry.outputBuffer,
+    });
+    this.sessions.delete(id);
+  }
+
+  private completeSession(id: string, exitCode: number): void {
+    this.flushPending(id);
+    const completed = this.sessions.get(id);
+    if (completed) this.retainCompletedSession(id, completed);
+    this.emit('exit', { id, exitCode });
+  }
 
   /**
    * Create a new terminal session.
@@ -354,9 +390,7 @@ export class TerminalManager extends EventEmitter {
       });
 
       pty.onExit(({ exitCode }: { exitCode: number }) => {
-        this.flushPending(id);
-        this.emit('exit', { id, exitCode });
-        this.sessions.delete(id);
+        this.completeSession(id, exitCode);
       });
 
       this.sessions.set(id, entry);
@@ -427,21 +461,17 @@ export class TerminalManager extends EventEmitter {
         const errMsg = `\r\n\x1b[31m[terminal] Failed to spawn shell '${shell}': ${err.message}\x1b[0m\r\n`;
         enqueueData(errMsg);
         // Also emit an exit event so the simTerminalLinker can handle it
-        this.flushPending(id);
-        this.emit('exit', { id, exitCode: 1 });
-        this.sessions.delete(id);
+        this.completeSession(id, 1);
       });
 
       child.on('exit', (exitCode: number | null) => {
         // Skip if already handled by 'error' event (spawn failure case)
         if (!this.sessions.has(id)) return;
-        this.flushPending(id);
         // When a process is killed by a signal, exitCode is null.
         // Treat this as a failure (non-zero) so simulation pass/fail
         // detection works correctly.
         const effectiveExitCode = exitCode ?? 1;
-        this.emit('exit', { id, exitCode: effectiveExitCode });
-        this.sessions.delete(id);
+        this.completeSession(id, effectiveExitCode);
       });
 
       this.sessions.set(id, entry);
@@ -516,7 +546,10 @@ export class TerminalManager extends EventEmitter {
    */
   destroy(id: string): void {
     const entry = this.sessions.get(id);
-    if (!entry) return;
+    if (!entry) {
+      if (this.completedSessions.delete(id)) this.emit('destroyed', { id });
+      return;
+    }
 
     // Flush any remaining data
     this.flushPending(id);
@@ -531,6 +564,7 @@ export class TerminalManager extends EventEmitter {
     }
 
     this.sessions.delete(id);
+    this.completedSessions.delete(id);
     this.emit('destroyed', { id });
   }
 
@@ -545,14 +579,14 @@ export class TerminalManager extends EventEmitter {
    * Get a specific terminal session.
    */
   get(id: string): TerminalSession | undefined {
-    return this.sessions.get(id)?.session;
+    return this.sessions.get(id)?.session ?? this.completedSessions.get(id)?.session;
   }
 
   /**
    * Get buffered output for a terminal (for session restore).
    */
   getOutputBuffer(id: string): string[] {
-    return this.sessions.get(id)?.outputBuffer ?? [];
+    return this.sessions.get(id)?.outputBuffer ?? this.completedSessions.get(id)?.outputBuffer ?? [];
   }
 
   /**
@@ -560,6 +594,9 @@ export class TerminalManager extends EventEmitter {
    */
   destroyAll(): void {
     for (const id of Array.from(this.sessions.keys())) {
+      this.destroy(id);
+    }
+    for (const id of Array.from(this.completedSessions.keys())) {
       this.destroy(id);
     }
   }
@@ -587,6 +624,12 @@ export class TerminalManager extends EventEmitter {
    */
   isPtyAvailable(): boolean {
     return ptyLoadResult.module !== null;
+  }
+
+  /** Load node-pty before a caller makes a backend decision. */
+  async ensurePtyAvailable(): Promise<boolean> {
+    const result = await loadNodePty();
+    return result.module !== null;
   }
 
   /**
@@ -657,6 +700,14 @@ export class TerminalManager extends EventEmitter {
     entry.pendingChunks.push(banner);
     entry.pendingSize += banner.length;
 
+    // Echo the command so the user can see what is being executed.
+    // In PTY mode the shell echoes typed commands; in log mode the command
+    // is passed directly to spawn() so we must echo it ourselves.
+    const cmdEcho = `\x1b[36m$ ${opts.command}\x1b[0m\r\n`;
+    outputBuffer.push(cmdEcho);
+    entry.pendingChunks.push(cmdEcho);
+    entry.pendingSize += cmdEcho.length;
+
     const shell = findShell();
     const isWin = process.platform === 'win32';
     // On Windows, use `powershell -Command "..."`; on Unix, `bash -c "..."`
@@ -676,9 +727,8 @@ export class TerminalManager extends EventEmitter {
       session.warning = `Failed to spawn shell: ${errMsg}`;
       entry.pty = null;
       this.sessions.set(id, entry);
-      this.flushPending(id);
       // Emit a synthetic exit so simTerminalLinker can handle it
-      this.emit('exit', { id, exitCode: 1 });
+      this.completeSession(id, 1);
       return session;
     }
 
@@ -697,9 +747,7 @@ export class TerminalManager extends EventEmitter {
     child.on('error', (err: Error) => {
       const errMsg = `\r\n\x1b[31m[terminal] Process error: ${err.message}\x1b[0m\r\n`;
       enqueueData(errMsg);
-      this.flushPending(id);
-      this.emit('exit', { id, exitCode: 1 });
-      this.sessions.delete(id);
+      this.completeSession(id, 1);
     });
 
     child.on('exit', (exitCode: number | null) => {
@@ -707,13 +755,11 @@ export class TerminalManager extends EventEmitter {
       // When spawn fails, Node.js fires both 'error' and 'exit' — the
       // 'error' handler already emitted the exit event and cleaned up.
       if (!this.sessions.has(id)) return;
-      this.flushPending(id);
       // When a process is killed by a signal, exitCode is null.
       // Treat this as a failure (non-zero) so simulation pass/fail
       // detection works correctly in log-mode.
       const effectiveExitCode = exitCode ?? 1;
-      this.emit('exit', { id, exitCode: effectiveExitCode });
-      this.sessions.delete(id);
+      this.completeSession(id, effectiveExitCode);
     });
 
     this.sessions.set(id, entry);

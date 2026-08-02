@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>原型 3 · Glassmorphism Floating · 仿真选项面板</title>
+<style>
+:root {
+  --bg-deep: #0d0d1a;
+  --bg-glass: rgba(30, 30, 50, 0.65);
+  --bg-glass-light: rgba(50, 50, 75, 0.4);
+  --fg: #e2e8f0;
+  --fg-dim: #64748b;
+  --fg-bright: #60a5fa;
+  --border-glass: rgba(255, 255, 255, 0.08);
+  --border-bright: rgba(255, 255, 255, 0.15);
+  --primary: #60a5fa;
+  --accent: #a78bfa;
+  --green: #34d399;
+  --red: #f87171;
+  --radius: 12px;
+  --mono: 'Cascadia Code', 'SF Mono', 'Fira Code', Consolas, monospace;
+  --sans: -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: var(--sans);
+  background: var(--bg-deep);
+  background-image:
+    radial-gradient(ellipse 600px 400px at 20% 30%, rgba(96, 165, 250, 0.08), transparent),
+    radial-gradient(ellipse 500px 300px at 80% 70%, rgba(167, 139, 250, 0.06), transparent);
+  color: var(--fg);
+  font-size: 13px;
+  padding: 20px;
+  min-height: 100vh;
+}
+.dock {
+  max-width: 960px;
+  margin: 0 auto;
+  background: var(--bg-glass);
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: 0 8px 40px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.05);
+}
+
+/* ── Header ────────────────────────── */
+.dock-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border-glass);
+  background: linear-gradient(180deg, rgba(255,255,255,.03), transparent);
+}
+.dock-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .08em;
+  color: var(--fg);
+}
+.dock-title svg { color: var(--primary); filter: drop-shadow(0 0 6px rgba(96,165,250,.3)); }
+.dock-badge {
+  background: rgba(96, 165, 250, .15); color: var(--fg-bright);
+  font-size: 10px; padding: 1px 7px; border-radius: 10px;
+  border: 1px solid rgba(96, 165, 250, .2);
+}
+.dock-actions { display: flex; align-items: center; gap: 6px; }
+.glass-btn {
+  display: flex; align-items: center; gap: 4px;
+  padding: 5px 12px; font-size: 11px;
+  color: var(--fg-dim); background: var(--bg-glass-light);
+  border: 1px solid var(--border-glass); border-radius: 6px;
+  cursor: pointer; transition: all .2s;
+  backdrop-filter: blur(10px);
+}
+.glass-btn:hover {
+  background: rgba(255,255,255,.06); color: var(--fg);
+  border-color: var(--border-bright);
+}
+.glass-input {
+  width: 90px; padding: 5px 10px; font-size: 11px;
+  background: var(--bg-glass-light);
+  border: 1px solid var(--border-glass); border-radius: 6px;
+  color: var(--fg); outline: none; backdrop-filter: blur(10px);
+}
+.glass-input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(96,165,250,.15); }
+
+/* ── Group navigator ───────────────── */
+.group-nav {
+  display: flex; gap: 4px; padding: 8px 14px;
+  border-bottom: 1px solid var(--border-glass);
+  overflow-x: auto;
+}
+.group-pill {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 12px; font-size: 11px; font-weight: 500;
+  color: var(--fg-dim); background: transparent;
+  border: 1px solid transparent; border-radius: 16px;
+  cursor: pointer; transition: all .2s; white-space: nowrap;
+}
+.group-pill:hover { background: rgba(255,255,255,.04); color: var(--fg); }
+.group-pill.active {
+  background: rgba(96, 165, 250, .12);
+  color: var(--fg-bright);
+  border-color: rgba(96, 165, 250, .25);
+}
+.group-pill .pill-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--fg-dim);
+}
+.group-pill.active .pill-dot { background: var(--primary); box-shadow: 0 0 6px rgba(96,165,250,.5); }
+
+/* ── Content ────────────────────────── */
+.content-area {
+  padding: 16px 18px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.field {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.field-label {
+  font-size: 10px; font-weight: 600;
+  color: var(--fg-dim);
+  display: flex; align-items: center; gap: 4px;
+}
+.field-label .hint {
+  width: 14px; height: 14px;
+  border-radius: 50%; border: 1px solid var(--border-glass);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 8px; cursor: help; opacity: .4;
+}
+.glass-input-field, .glass-select {
+  padding: 6px 10px; font-size: 12px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid var(--border-glass); border-radius: 6px;
+  color: var(--fg); outline: none;
+  font-family: var(--mono); transition: all .2s;
+}
+.glass-input-field:focus, .glass-select:focus {
+  background: rgba(255,255,255,.06);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(96,165,250,.1);
+}
+
+/* Toggle */
+.toggle-field {
+  display: flex; align-items: center; justify-content: space-between;
+  height: 32px;
+}
+.glass-toggle {
+  position: relative; width: 36px; height: 20px;
+  background: rgba(255,255,255,.08);
+  border: 1px solid var(--border-glass);
+  border-radius: 12px; cursor: pointer; transition: all .25s;
+}
+.glass-toggle.on {
+  background: rgba(96,165,250,.25);
+  border-color: rgba(96,165,250,.4);
+}
+.glass-toggle::after {
+  content: ''; position: absolute;
+  top: 2px; left: 2px; width: 14px; height: 14px;
+  border-radius: 50%; background: var(--fg-dim);
+  transition: all .25s;
+}
+.glass-toggle.on::after {
+  transform: translateX(16px);
+  background: var(--primary);
+  box-shadow: 0 0 8px rgba(96,165,250,.4);
+}
+
+/* ── Command bar ───────────────────── */
+.cmd-bar {
+  display: flex; align-items: stretch;
+  border-top: 1px solid var(--border-glass);
+  background: linear-gradient(180deg, transparent, rgba(0,0,0,.15));
+}
+.cmd-section {
+  flex: 1; padding: 10px 18px;
+  display: flex; flex-direction: column; gap: 3px;
+}
+.cmd-label {
+  font-size: 9px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .12em;
+  color: var(--fg-dim);
+}
+.cmd-text {
+  font-family: var(--mono); font-size: 12px;
+  color: var(--green); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+  line-height: 1.6;
+}
+.cmd-text .flag { color: var(--fg-bright); }
+.cmd-text .val { color: var(--accent); }
+.run-btn {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 28px; font-size: 13px; font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, var(--green), #10b981);
+  border: none; cursor: pointer; transition: all .2s;
+  box-shadow: 0 0 20px rgba(52, 211, 153, .15);
+}
+.run-btn:hover {
+  filter: brightness(1.15);
+  box-shadow: 0 0 30px rgba(52, 211, 153, .3);
+}
+.run-btn:active { filter: brightness(.9); }
+.run-btn svg { width: 16px; height: 16px; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="dock">
+  <div class="dock-header">
+    <div class="dock-title">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      仿真 Option
+      <span class="dock-badge">26</span>
+    </div>
+    <div class="dock-actions">
+      <button class="glass-btn" onclick="alert('预设')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        预设
+      </button>
+      <input class="glass-input" placeholder="预设名称" id="presetName">
+      <button class="glass-btn" onclick="alert('保存')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="group-nav" id="groupNav">
+    <button class="group-pill active" data-group="basic"><span class="pill-dot"></span>基础参数</button>
+    <button class="group-pill" data-group="wave"><span class="pill-dot"></span>波形配置</button>
+    <button class="group-pill" data-group="sim"><span class="pill-dot"></span>仿真参数</button>
+    <button class="group-pill" data-group="mode"><span class="pill-dot"></span>执行模式</button>
+    <button class="group-pill" data-group="regr"><span class="pill-dot"></span>回归测试</button>
+  </div>
+
+  <div class="content-area" id="contentArea"></div>
+
+  <div class="cmd-bar">
+    <div class="cmd-section">
+      <span class="cmd-label">命令预览</span>
+      <span class="cmd-text" id="cmdPreview">runsim</span>
+    </div>
+    <button class="run-btn" onclick="runSim()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      运行仿真
+    </button>
+  </div>
+</div>
+
+<script>
+const GROUPS = {
+  basic:{label:'基础参数',fields:[
+    {key:'base',label:'BASE',type:'string',desc:'-base'},
+    {key:'block',label:'BLOCK',type:'string',desc:'-block'},
+    {key:'case',label:'CASE',type:'string',desc:'-case'},
+    {key:'rundir',label:'工作目录 (-rundir)',type:'string',desc:'{case_name}'},
+    {key:'bq',label:'提交服务器 (-bq)',type:'string'},
+    {key:'seed',label:'种子号 (-seed)',type:'string'},
+    {key:'other_options',label:'其他选项',type:'string'},
+  ]},
+  wave:{label:'波形配置',fields:[
+    {key:'fsdb',label:'Dump FSDB (-fsdb)',type:'boolean'},
+    {key:'vwdb',label:'Dump VWDB (-vwdb)',type:'boolean'},
+    {key:'dump_level',label:'Dump 层级',type:'string'},
+    {key:'cl',label:'Clean INCA_libs (-cl)',type:'boolean'},
+    {key:'dump_sva',label:'Dump SVA (-dump_sva)',type:'boolean'},
+    {key:'cov',label:'覆盖率 (-cov)',type:'boolean'},
+    {key:'upf',label:'UPF (-upf)',type:'boolean'},
+    {key:'dump_mem',label:'Dump Memory (-dump_mem)',type:'string'},
+    {key:'wdd',label:'波形起始时间 (-wdd)',type:'string'},
+  ]},
+  sim:{label:'仿真参数',fields:[
+    {key:'simarg',label:'仿真参数 (-simarg)',type:'string'},
+    {key:'cfg_def',label:'配置定义 (-cfg_def)',type:'string'},
+    {key:'post',label:'后仿 (-post)',type:'enum',enumValues:['','sdf=fake','sdf=pg_fake','sdf=npg_f1_ssg','sdf=npg_f2_ssg','sdf=npg_f3_ssg','sdf=npg_f4_ssg','sdf=npg_f5_ssg','sdf=npg_f6_ssg','sdf=npg_f7_ssg','sdf=npg_f1_ffg','sdf=npg_f2_ffg','sdf=npg_f3_ffg','sdf=npg_f4_ffg','sdf=npg_f5_ffg','sdf=npg_f6_ffg','sdf=npg_f7_ffg','sdf=npg_f1_tt','sdf=npg_f2_tt']},
+  ]},
+  mode:{label:'执行模式',fields:[
+    {key:'sim_only',label:'仅仿真 (-R)',type:'boolean'},
+    {key:'compile_only',label:'仅编译 (-C)',type:'boolean'},
+  ]},
+  regr:{label:'回归测试',fields:[
+    {key:'regr_file',label:'回归列表 (-regr)',type:'string'},
+    {key:'fm',label:'回归 FAIL (-fm)',type:'boolean'},
+    {key:'regr_work',label:'回归路径 (-regr_work)',type:'string'},
+    {key:'tag',label:'回归 TAG (-tag)',type:'string'},
+    {key:'nt',label:'不回归 TAG (-nt)',type:'string'},
+    {key:'dashboard',label:'Dashboard (-m)',type:'string'},
+  ]},
+};
+
+const values={};
+for(const g of Object.values(GROUPS))for(const f of g.fields)values[f.key]=f.type==='boolean'?false:'';
+values.base='top';values.block='usvp';values.case='basic_test_001';
+
+let currentGroup='basic';
+
+function renderFields(){
+  const c=document.getElementById('contentArea');
+  const group=GROUPS[currentGroup];
+  const grid=document.createElement('div');
+  grid.className='field-grid';
+  for(const f of group.fields){
+    const div=document.createElement('div');
+    div.className='field';
+    const label=document.createElement('div');
+    label.className='field-label';
+    label.innerHTML=f.label+(f.desc?' <span class="hint" title="'+f.desc+'">?</span>':'');
+    if(f.type==='boolean'){
+      const row=document.createElement('div');row.className='toggle-field';
+      const tg=document.createElement('div');tg.className='glass-toggle'+(values[f.key]?' on':'');
+      tg.onclick=()=>{values[f.key]=!values[f.key];tg.className='glass-toggle'+(values[f.key]?' on':'');updateCmd();};
+      row.appendChild(label);row.appendChild(tg);div.appendChild(row);
+    }else if(f.type==='enum'){
+      const sel=document.createElement('select');sel.className='glass-select';
+      for(const v of f.enumValues){const o=document.createElement('option');o.value=v;o.textContent=v||'--';sel.appendChild(o);}
+      sel.value=values[f.key];sel.onchange=e=>{values[f.key]=e.target.value;updateCmd();};
+      div.appendChild(label);div.appendChild(sel);
+    }else{
+      const inp=document.createElement('input');inp.className='glass-input-field';inp.type='text';inp.value=values[f.key]||'';
+      inp.oninput=e=>{values[f.key]=e.target.value;updateCmd();};
+      div.appendChild(label);div.appendChild(inp);
+    }
+    grid.appendChild(div);
+  }
+  c.innerHTML='';c.appendChild(grid);
+}
+
+document.getElementById('groupNav').addEventListener('click',e=>{
+  const pill=e.target.closest('.group-pill');if(!pill)return;
+  document.querySelectorAll('.group-pill').forEach(p=>p.classList.remove('active'));
+  pill.classList.add('active');currentGroup=pill.dataset.group;renderFields();
+});
+
+const FLAG_MAP={base:'-base',block:'-block',case:'-case',rundir:'-rundir',bq:'-bq',seed:'-seed',other_options:'',fsdb:'-fsdb',vwdb:'-vwdb',dump_level:'',cl:'-cl',dump_sva:'-dump_sva',cov:'-cov',upf:'-upf',dump_mem:'-dump_mem',wdd:'-wdd',simarg:'-simarg',cfg_def:'-cfg_def',post:'-post',sim_only:'-R',compile_only:'-C',regr_file:'-regr',fm:'-fm',regr_work:'-regr_work',tag:'-tag',nt:'-nt',dashboard:'-m'};
+
+function updateCmd(){
+  let parts=['runsim'];
+  for(const[k,v]of Object.entries(values)){
+    if(!v)continue;const flag=FLAG_MAP[k];
+    if(flag===''){parts.push(v);continue;}
+    if(v===true){parts.push(flag);continue;}
+    parts.push(flag,String(v));
+  }
+  document.getElementById('cmdPreview').innerHTML=parts.map(p=>{
+    if(p.startsWith('-')||p==='runsim')return'<span class="flag">'+p+'</span>';
+    return'<span class="val">'+p+'</span>';
+  }).join(' ');
+}
+
+function runSim(){alert('运行仿真：\n'+document.getElementById('cmdPreview').textContent);}
+
+renderFields();updateCmd();
+</script>
+</body>
+</html>

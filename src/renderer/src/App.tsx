@@ -11,6 +11,7 @@ export default function App() {
   const initTheme = useThemeStore((s) => s.initTheme);
   const initFont = useFontStore((s) => s.initFont);
   const initLastModel = useSessionStore((s) => s.initLastModel);
+  const registerSessionEventListeners = useSessionStore((s) => s.registerEventListeners);
   const errorToast = useToastStore((s) => s.error);
   const healthCheckDone = useRef(false);
 
@@ -18,7 +19,8 @@ export default function App() {
     initTheme();
     initFont();
     initLastModel();
-  }, [initTheme, initFont, initLastModel]);
+    registerSessionEventListeners();
+  }, [initTheme, initFont, initLastModel, registerSessionEventListeners]);
 
   // Startup health check: verify tRPC IPC bridge is working
   // Guarded against StrictMode double-execution

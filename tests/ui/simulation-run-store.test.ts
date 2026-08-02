@@ -72,9 +72,11 @@ describe('Terminal Simulation Run launch', () => {
     ]);
     const workbench = useWorkbenchStore.getState();
     expect(workbench.tabs.find((tab) => tab.destination.type === 'terminal')).toBeDefined();
-    expect(workbench.tabs.find((tab) => tab.destination.type === 'running-simulations')).toBeDefined();
+    // After launching a simulation, the terminal tab should be the active
+    // view so the user can see the command and output (especially in
+    // log-mode where node-pty is unavailable).
     expect(workbench.tabs.find((tab) => tab.id === workbench.activeTabId)?.destination.type)
-      .toBe('running-simulations');
+      .toBe('terminal');
   });
 
   it('applies Case selection option policy inside the Simulation Run module', () => {
