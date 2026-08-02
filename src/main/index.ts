@@ -195,10 +195,26 @@ function setupLinuxDbus(): void {
     // dbus-launch not available or failed
   }
 
-  // ── 6. 完全无 D-Bus 可用 → 抑制错误日志 ──
-  app.commandLine.appendSwitch('log-level', '3');
-  console.log('[dbus] no session bus available; suppressing Chromium D-Bus error logs');
+  // ── 6. 完全无 D-Bus 可用 → 已由全局 log-level=3 抑制 ──
+  // （此处冗余但无害，保留作为文档说明：此场景下 Chromium 也会产生
+  //   D-Bus 相关的 ERROR 日志，已被文件顶部的全局设置抑制）
+  console.log('[dbus] no session bus available; Chromium error logs suppressed by global log-level=3');
 }
+
+// ── Chromium 日志级别抑制 ──────────────────────────────────────────
+// Chromium 在 Windows 上通过 NetworkChangeNotifierWin 使用
+// WSALookupServiceBegin (Winsock API) 轮询网络接口变化。
+// 当网络适配器变化、VPN 连接/断开、无线网络扫描等发生时，
+// WSA 查找操作会被取消（错误码 10108 = WSAECANCELLED），
+// Chromium 以 LOG(ERROR) 级别记录此日志，导致控制台持续刷屏。
+//
+// 这是良性日志——WSA 查找被取消是网络变化检测的正常行为，
+// 不影响应用功能。设置 Chromium 日志级别为 FATAL (3) 来抑制。
+//
+// 注意：此设置仅影响 Chromium 内部 LOG() 输出，
+//       不影响应用的 console.log / console.error / console.warn。
+// log-level: 0=INFO, 1=WARNING, 2=ERROR, 3=FATAL
+app.commandLine.appendSwitch('log-level', '3');
 
 setupLinuxIme();
 setupLinuxDbus();

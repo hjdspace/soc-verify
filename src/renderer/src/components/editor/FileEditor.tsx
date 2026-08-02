@@ -14,6 +14,7 @@ import { shell } from '@codemirror/legacy-modes/mode/shell';
 import { tcl } from '@codemirror/legacy-modes/mode/tcl';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
 import { Save, Eye, Pencil, Loader2, AlertCircle } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { useThemeStore } from '@renderer/stores/theme';
@@ -201,7 +202,40 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
         {isMd && previewMode ? (
           <div className="markdown-preview h-full overflow-auto">
             <div className="mx-auto max-w-4xl px-8 py-6">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                rehypePlugins={[rehypeRaw]}
+                components={{
+                  // 将 HTML align 属性转为 inline style，确保 React 渲染到 DOM
+                  // rehype-raw 解析的 align 属性不在 React 标准类型中，需类型断言
+                  p: ({ children, ...props }) => {
+                    const align = (props as Record<string, unknown>).align as string | undefined;
+                    return (
+                      <p style={align ? { textAlign: align as 'center' | 'left' | 'right' } : undefined}>
+                        {children}
+                      </p>
+                    );
+                  },
+                  div: ({ children, ...props }) => {
+                    const align = (props as Record<string, unknown>).align as string | undefined;
+                    return (
+                      <div style={align ? { textAlign: align as 'center' | 'left' | 'right' } : undefined}>
+                        {children}
+                      </div>
+                    );
+                  },
+                  a: ({ href, children }) => (
+                    <a href={href} target="_blank" rel="noopener noreferrer">
+                      {children}
+                    </a>
+                  ),
+                  img: ({ src, alt }) => (
+                    <img src={src} alt={alt} loading="lazy" />
+                  ),
+                }}
+              >
+                {content}
+              </ReactMarkdown>
             </div>
           </div>
         ) : (

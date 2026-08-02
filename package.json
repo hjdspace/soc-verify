@@ -31,7 +31,8 @@
   },
   "dependencies": {
     "electron-trpc": "^0.7.1",
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "rehype-raw": "^7.0.0"
   },
   "optionalDependencies": {
     "@rollup/rollup-win32-x64-msvc": "^4.62.2",
