@@ -2,6 +2,10 @@ import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
 import { useWorkbenchStore } from './workbench';
+import { useUiStore } from './ui';
+
+/** Where the terminal is displayed: in the center workbench area or the bottom panel. */
+export type TerminalLocation = 'center' | 'bottom';
 
 export interface TerminalTab {
   id: string;
@@ -14,17 +18,24 @@ export interface TerminalTab {
   fallback: boolean;
   /** User-facing warning message when in fallback mode. */
   warning: string | null;
+  /** Where this terminal is currently displayed. */
+  location: TerminalLocation;
 }
 
 interface TerminalStoreState {
   tabs: TerminalTab[];
   activeTabId: string | null;
+  /** Active terminal tab ID in the bottom panel. */
+  bottomActiveTabId: string | null;
 
-  createTerminal: (projectId?: string, cwd?: string) => Promise<string>;
+  createTerminal: (projectId?: string, cwd?: string, location?: TerminalLocation) => Promise<string>;
   /** Create a tab for an already-existing terminal session (e.g. from simulation.runInTerminal) */
   createTabForSession: (terminalId: string, title: string, cwd?: string, fallback?: boolean, warning?: string | null) => string;
   closeTerminal: (tabId: string) => Promise<void>;
   setActiveTab: (tabId: string) => void;
+  setBottomActiveTab: (tabId: string) => void;
+  /** Move a terminal between the center area and the bottom panel. */
+  moveTerminalLocation: (tabId: string, location: TerminalLocation) => void;
   writeToTerminal: (terminalId: string, data: string) => Promise<void>;
   resizeTerminal: (terminalId: string, cols: number, rows: number) => Promise<void>;
   handleTerminalData: (id: string, data: string) => void;
@@ -40,8 +51,9 @@ let tabIdCounter = 0;
 export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
   tabs: [],
   activeTabId: null,
+  bottomActiveTabId: null,
 
-  createTerminal: async (projectId, cwd) => {
+  createTerminal: async (projectId, cwd, location = 'center') => {
     const tabId = `term_tab_${++tabIdCounter}`;
 
     // Add a placeholder tab immediately
@@ -55,10 +67,17 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         creating: true,
         fallback: false,
         warning: null,
+        location,
       }],
-      activeTabId: tabId,
+      activeTabId: location === 'center' ? tabId : s.activeTabId,
+      bottomActiveTabId: location === 'bottom' ? tabId : s.bottomActiveTabId,
     }));
-    useWorkbenchStore.getState().open({ type: 'terminal', terminalTabId: tabId, title: 'Terminal' });
+    if (location === 'center') {
+      useWorkbenchStore.getState().open({ type: 'terminal', terminalTabId: tabId, title: 'Terminal' });
+    } else {
+      // Expand the bottom panel when creating a terminal in the bottom
+      useUiStore.getState().setBottomPanelCollapsed(false);
+    }
 
     try {
       const session = await trpc.terminal.create.mutate({
@@ -73,6 +92,14 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
             : t,
         ),
       }));
+      // Update workbench tab title if in center
+      if (location === 'center') {
+        useWorkbenchStore.getState().open({
+          type: 'terminal',
+          terminalTabId: tabId,
+          title: `Terminal ${tabIdCounter}`,
+        });
+      }
 
       // Show a toast warning if the terminal is running in fallback mode
       if (session.backend === 'fallback' && session.warning) {
@@ -81,12 +108,6 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
           'node-pty 无法加载，终端已回退到 child_process。交互功能（调整大小、TUI 应用）可能不可用。请查看主进程控制台获取详细诊断信息。',
         );
       }
-      useWorkbenchStore.getState().open({
-        type: 'terminal',
-        terminalTabId: tabId,
-        title: `Terminal ${tabIdCounter}`,
-      });
-
       // Register IPC event listener once
       if (!eventListenerRegistered && window.eventBridge) {
         eventListenerRegistered = true;
@@ -137,6 +158,37 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
     useWorkbenchStore.getState().open({ type: 'terminal', terminalTabId: tab.id, title: tab.title });
   },
 
+  setBottomActiveTab: (tabId) => {
+    const tab = get().tabs.find((candidate) => candidate.id === tabId);
+    if (!tab) return;
+    set({ bottomActiveTabId: tabId });
+  },
+
+  moveTerminalLocation: (tabId, location) => {
+    const tab = get().tabs.find((t) => t.id === tabId);
+    if (!tab || tab.location === location) return;
+
+    if (location === 'bottom') {
+      // Remove from workbench center tabs
+      useWorkbenchStore.getState().close(`terminal:${tabId}`);
+      set((s) => ({
+        tabs: s.tabs.map((t) => t.id === tabId ? { ...t, location: 'bottom' } : t),
+        bottomActiveTabId: tabId,
+        activeTabId: s.activeTabId === tabId ? null : s.activeTabId,
+      }));
+      // Expand the bottom panel
+      useUiStore.getState().setBottomPanelCollapsed(false);
+    } else {
+      // Add back to workbench center tabs
+      useWorkbenchStore.getState().open({ type: 'terminal', terminalTabId: tabId, title: tab.title });
+      set((s) => ({
+        tabs: s.tabs.map((t) => t.id === tabId ? { ...t, location: 'center' } : t),
+        bottomActiveTabId: s.bottomActiveTabId === tabId ? null : s.bottomActiveTabId,
+        activeTabId: tabId,
+      }));
+    }
+  },
+
   createTabForSession: (terminalId, title, cwd, fallback = false, warning = null) => {
     const tabId = `term_tab_${++tabIdCounter}`;
     set((s) => ({
@@ -149,6 +201,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         creating: false,
         fallback,
         warning,
+        location: 'center' as TerminalLocation,
       }],
       activeTabId: tabId,
     }));

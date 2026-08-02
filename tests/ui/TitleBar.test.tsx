@@ -7,11 +7,27 @@ vi.mock('@renderer/stores/ui', () => ({
     selector({
       leftRailCollapsed: false,
       rightPanelCollapsed: false,
+      bottomPanelCollapsed: true,
       toggleLeftRail: vi.fn(),
       toggleRightPanel: vi.fn(),
+      toggleBottomPanel: vi.fn(),
+      setBottomPanelCollapsed: vi.fn(),
+      setBottomPanelHeight: vi.fn(),
       settingsOpen: false,
       setSettingsOpen: vi.fn(),
       setCommandPaletteOpen: vi.fn(),
+      sourceControlOpen: false,
+      setSourceControlOpen: vi.fn(),
+    }),
+  ),
+}));
+
+vi.mock('@renderer/stores/terminal', () => ({
+  useTerminalStore: vi.fn((selector: (state: Record<string, unknown>) => unknown) =>
+    selector({
+      tabs: [],
+      bottomActiveTabId: null,
+      createTerminal: vi.fn(),
     }),
   ),
 }));

@@ -5,6 +5,7 @@ import { RightPanel } from './RightPanel';
 import { OptionDock } from './OptionDock';
 import { ResizeHandle } from './ResizeHandle';
 import { TaskPanel } from './TaskPanel';
+import { BottomPanel } from './BottomPanel';
 import { CommandPalette } from './CommandPalette';
 import { EnvWizard } from '@renderer/components/env/EnvWizard';
 import { SettingsPanel } from '@renderer/components/settings/SettingsPanel';
@@ -36,7 +37,11 @@ export function AppShell() {
             />
           </>
         )}
-        <CenterArea />
+        {/* 中栏 + 底部终端面板（垂直排列） */}
+        <div className="flex flex-1 flex-col overflow-hidden">
+          <CenterArea />
+          <BottomPanel />
+        </div>
         {!rightCollapsed && (
           <>
             <ResizeHandle

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal } from 'lucide-react';
+import { useEffect, useState, useCallback } from 'react';
+import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine } from 'lucide-react';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
@@ -14,6 +14,9 @@ import { FileEditor } from '@renderer/components/editor/FileEditor';
 import { DiffReviewView } from '@renderer/components/editor/DiffReviewView';
 import { useDiffReviewStore } from '@renderer/stores/diff-review';
 import { RunningCasesPanel } from '@renderer/components/simulation/RunningCasesPanel';
+import { TERMINAL_TAB_MIME } from '@renderer/components/layout/BottomPanel';
+import { trpc } from '@renderer/lib/trpc';
+import { useToastStore } from '@renderer/stores/toast';
 import { cn } from '@renderer/lib/utils';
 import type { SimulationHistoryEntry, CompileError, SimulationStatus } from '@shared/types';
 
@@ -63,7 +66,11 @@ export function CenterArea() {
   const setActiveTerminalTab = useTerminalStore((s) => s.setActiveTab);
 
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+  const [dropHover, setDropHover] = useState(false);
   const runningCount = activeRuns.filter((r) => r.status === 'running' || r.status === 'pending').length;
+
+  const moveTerminalLocation = useTerminalStore((s) => s.moveTerminalLocation);
 
   useEffect(() => {
     if (destination?.type === 'simulation-detail' && currentProjectId) {
@@ -86,6 +93,60 @@ export function CenterArea() {
     }
     closeWorkbenchTab(tabId);
   };
+
+  // ── 拖拽：将中栏终端拖拽到底部面板 ────────────────
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes(TERMINAL_TAB_MIME)) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      setDropHover(true);
+    }
+  }, []);
+
+  const handleDragLeave = useCallback(() => {
+    setDropHover(false);
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDropHover(false);
+      const tabId = e.dataTransfer.getData(TERMINAL_TAB_MIME);
+      if (tabId) {
+        moveTerminalLocation(tabId, 'bottom');
+      }
+    },
+    [moveTerminalLocation],
+  );
+
+  // ── “+”下拉菜单动作 ────────────────────────────────────
+  const handleNewTerminalCenter = useCallback(() => {
+    createTerminal(currentProjectId ?? undefined, undefined, 'center');
+    setPlusMenuOpen(false);
+  }, [createTerminal, currentProjectId]);
+
+  const handleNewTerminalBottom = useCallback(() => {
+    createTerminal(currentProjectId ?? undefined, undefined, 'bottom');
+    setPlusMenuOpen(false);
+  }, [createTerminal, currentProjectId]);
+
+  const handleOpenFile = useCallback(async () => {
+    setPlusMenuOpen(false);
+    if (!currentProjectId) {
+      useToastStore.getState().warning('请先打开项目', '需要先打开项目才能选择文件。');
+      return;
+    }
+    try {
+      const result = await trpc.project.pickFiles.mutate({ projectId: currentProjectId });
+      if (!result.canceled) {
+        for (const file of result.files) {
+          openDestination({ type: 'file', path: file.path, name: file.name });
+        }
+      }
+    } catch {
+      // best-effort
+    }
+  }, [currentProjectId, openDestination]);
 
   const openSimErrors = (runId: string) => {
     openDestination({ type: 'simulation-errors', runId });
@@ -130,11 +191,19 @@ export function CenterArea() {
             {tabs.map((tab) => (
               <div
                 key={tab.id}
+                draggable={tab.destination.type === 'terminal'}
+                onDragStart={(e) => {
+                  if (tab.destination.type === 'terminal') {
+                    e.dataTransfer.setData(TERMINAL_TAB_MIME, tab.destination.terminalTabId);
+                    e.dataTransfer.effectAllowed = 'move';
+                  }
+                }}
                 className={cn(
                   'flex h-full shrink-0 items-center gap-1.5 border-r px-3 text-xs transition-colors',
                   activeTabId === tab.id
                     ? 'bg-background text-foreground'
                     : 'text-muted-foreground hover:bg-background/50',
+                  tab.destination.type === 'terminal' && 'cursor-grab active:cursor-grabbing',
                 )}
                 onClick={() => {
                   if (tab.destination.type === 'terminal') {
@@ -176,6 +245,59 @@ export function CenterArea() {
 
         {/* ── 主操作（带文字）+ 溢出菜单 ──────────────────── */}
         <div className="ml-auto flex items-center gap-1 px-2">
+          {/* ＋新建下拉菜单 */}
+          <div className="relative">
+            <button
+              onClick={() => setPlusMenuOpen(!plusMenuOpen)}
+              title="新建"
+              className={cn(
+                'flex items-center rounded px-1.5 py-1 text-[11px] transition-colors hover:bg-accent hover:text-foreground',
+                plusMenuOpen ? 'bg-accent text-foreground' : 'text-muted-foreground',
+              )}
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+            {plusMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setPlusMenuOpen(false)} />
+                <div className="absolute right-0 top-7 z-50 min-w-44 overflow-hidden rounded-md border border-border bg-popover shadow-xl">
+                  <button
+                    onClick={handleNewTerminalCenter}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent"
+                  >
+                    <TerminalIcon className="h-3.5 w-3.5 opacity-70" />
+                    <span>新建终端（中栏）</span>
+                  </button>
+                  <button
+                    onClick={handleNewTerminalBottom}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent"
+                  >
+                    <ArrowDownToLine className="h-3.5 w-3.5 opacity-70" />
+                    <span>新建终端（底部）</span>
+                  </button>
+                  <div className="border-t border-border/50" />
+                  <button
+                    onClick={handleOpenFile}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent"
+                  >
+                    <FileText className="h-3.5 w-3.5 opacity-70" />
+                    <span>打开文件...</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      openDestination({ type: 'ai-artifacts' });
+                      setPlusMenuOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent"
+                  >
+                    <Sparkles className="h-3.5 w-3.5 opacity-70" />
+                    <span>AI 产物</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+
           {/* 仪表盘 */}
           <TabActionButton
             onClick={() => openDestination({ type: 'dashboard' })}
@@ -240,7 +362,19 @@ export function CenterArea() {
       </div>
 
       {/* ── Content area ─────────────────────────────── */}
-      <div className="flex flex-1 overflow-hidden">
+      <div
+        className="relative flex flex-1 overflow-hidden"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {/* 拖拽到底部的提示条 */}
+        {dropHover && (
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 h-12 border-t-2 border-dashed border-primary bg-primary/10 flex items-center justify-center text-xs text-primary">
+            <ArrowDownToLine className="mr-1 h-3 w-3" />
+            释放在此处将终端移动到底部面板
+          </div>
+        )}
         {destination?.type === 'file' && currentProjectId ? (
           <FileEditor
             key={destination.path}

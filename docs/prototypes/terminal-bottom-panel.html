@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SoC Verify — 终端底部面板原型</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1e1e2e; color: #cdd6f4; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+  
+  /* TitleBar */
+  .titlebar { height: 36px; background: #181825; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #313244; padding: 0 8px; -webkit-app-region: drag; user-select: none; }
+  .titlebar-left { display: flex; align-items: center; gap: 8px; }
+  .logo { font-size: 12px; font-weight: 600; letter-spacing: 0.5px; }
+  .tb-btn { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; border-radius: 4px; cursor: pointer; color: #6c7086; transition: all 0.15s; }
+  .tb-btn:hover { background: rgba(205,214,244,0.1); color: #cdd6f4; }
+  .tb-btn.active { color: #cdd6f4; }
+  .breadcrumb { flex: 1; display: flex; align-items: center; gap: 4px; font-size: 12px; color: #6c7086; padding: 0 16px; }
+  .breadcrumb span.hl { color: #cdd6f4; }
+  .titlebar-right { display: flex; align-items: center; gap: 8px; }
+  .badge { background: #fab387; color: #1e1e2e; font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+
+  /* Main 3-column */
+  .main { flex: 1; display: flex; overflow: hidden; position: relative; }
+  
+  /* Left Rail */
+  .left-rail { width: 256px; background: #181825; border-right: 1px solid #313244; display: flex; flex-direction: column; }
+  .lr-header { padding: 8px; border-bottom: 1px solid #313244; font-size: 12px; }
+  .lr-tabs { display: flex; border-bottom: 1px solid #313244; }
+  .lr-tab { flex: 1; text-align: center; padding: 6px; font-size: 10px; cursor: pointer; color: #6c7086; }
+  .lr-tab.active { color: #89b4fa; border-bottom: 2px solid #89b4fa; }
+  .lr-content { flex: 1; overflow-y: auto; padding: 4px; }
+  .file-item { padding: 3px 8px; font-size: 12px; cursor: pointer; border-radius: 3px; }
+  .file-item:hover { background: rgba(205,214,244,0.05); }
+
+  /* Center + Bottom wrapper */
+  .center-wrap { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  
+  /* Center Area */
+  .center { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+  .tab-bar { height: 32px; background: rgba(49,50,68,0.3); display: flex; align-items: center; border-bottom: 1px solid #313244; }
+  .tab { height: 100%; display: flex; align-items: center; gap: 6px; padding: 0 12px; font-size: 12px; border-right: 1px solid #313244; cursor: pointer; transition: background 0.15s; }
+  .tab.active { background: #1e1e2e; color: #cdd6f4; }
+  .tab:not(.active) { color: #6c7086; }
+  .tab:not(.active):hover { background: rgba(30,30,46,0.5); }
+  .tab.draggable { cursor: grab; }
+  .tab.draggable:active { cursor: grabbing; }
+  .tab-close { margin-left: 4px; padding: 2px; border-radius: 3px; opacity: 0.5; }
+  .tab-close:hover { background: rgba(205,214,244,0.1); opacity: 1; }
+  .tab-actions { margin-left: auto; display: flex; align-items: center; gap: 4px; padding: 0 8px; }
+  .tab-btn { display: flex; align-items: center; gap: 4px; padding: 4px 8px; font-size: 11px; color: #6c7086; border-radius: 3px; cursor: pointer; }
+  .tab-btn:hover { background: rgba(137,180,250,0.1); color: #cdd6f4; }
+  
+  /* + Button dropdown */
+  .plus-menu { position: absolute; right: 0; top: 28px; min-width: 176px; background: #313244; border: 1px solid #45475a; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); z-index: 50; overflow: hidden; }
+  .plus-menu-item { display: flex; align-items: center; gap: 8px; padding: 6px 12px; font-size: 12px; cursor: pointer; }
+  .plus-menu-item:hover { background: rgba(137,180,250,0.15); }
+  .plus-menu-sep { border-top: 1px solid #45475a; }
+  
+  /* Content area */
+  .content { flex: 1; overflow: hidden; position: relative; display: flex; }
+  .content-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #6c7086; }
+  .content-empty button { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid #313244; border-radius: 4px; background: transparent; color: #cdd6f4; font-size: 12px; cursor: pointer; }
+  .content-empty button:hover { background: rgba(137,180,250,0.1); }
+  
+  /* Terminal view */
+  .term-view { flex: 1; background: #1e1e2e; padding: 8px; font-family: 'Consolas', monospace; font-size: 13px; overflow-y: auto; }
+  .term-line { color: #a6e3a1; }
+  .term-prompt { color: #89b4fa; }
+  .term-output { color: #cdd6f4; }
+  
+  /* Drop zone overlay */
+  .drop-zone { position: absolute; left: 0; right: 0; bottom: 0; height: 48px; border-top: 2px dashed #89b4fa; background: rgba(137,180,250,0.1); display: flex; align-items: center; justify-content: center; font-size: 12px; color: #89b4fa; pointer-events: none; z-index: 30; }
+  
+  /* Bottom Panel */
+  .bottom-panel { height: 240px; background: #1e1e2e; border-top: 1px solid #313244; display: flex; flex-direction: column; position: relative; }
+  .bottom-panel.drag-hover { box-shadow: inset 0 1px 0 #89b4fa; }
+  .bp-resize { position: absolute; top: -2px; left: 0; right: 0; height: 4px; cursor: ns-resize; z-index: 20; }
+  .bp-resize:hover { background: rgba(137,180,250,0.3); }
+  .bp-header { height: 32px; background: rgba(49,50,68,0.3); display: flex; align-items: center; border-bottom: 1px solid #313244; }
+  .bp-label { padding: 0 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: #6c7086; display: flex; align-items: center; gap: 6px; }
+  .bp-tabs { flex: 1; display: flex; height: 100%; overflow-x: auto; }
+  .bp-tab { height: 100%; display: flex; align-items: center; gap: 6px; padding: 0 12px; font-size: 12px; border-right: 1px solid #313244; cursor: pointer; }
+  .bp-tab.active { background: #1e1e2e; color: #cdd6f4; }
+  .bp-tab:not(.active) { color: #6c7086; }
+  .bp-actions { display: flex; align-items: center; gap: 4px; padding: 0 8px; }
+  .bp-btn { width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 3px; cursor: pointer; color: #6c7086; }
+  .bp-btn:hover { background: rgba(137,180,250,0.1); color: #cdd6f4; }
+  .bp-content { flex: 1; overflow: hidden; }
+  
+  /* Right Panel */
+  .right-panel { width: 384px; background: #181825; border-left: 1px solid #313244; display: flex; flex-direction: column; }
+  .rp-header { padding: 8px 12px; border-bottom: 1px solid #313244; font-size: 12px; font-weight: 600; }
+  .rp-content { flex: 1; padding: 12px; }
+  
+  /* Option Dock */
+  .option-dock { background: rgba(49,50,68,0.3); border-top: 1px solid #313244; }
+  .od-header { padding: 6px 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; color: #6c7086; display: flex; align-items: center; gap: 6px; }
+  
+  /* SVG icons */
+  svg { display: inline-block; vertical-align: middle; }
+</style>
+</head>
+<body>
+
+<!-- ─── TitleBar ─── -->
+<div class="titlebar">
+  <div class="titlebar-left">
+    <span class="logo">⬡ SoC Verify</span>
+    <div class="tb-btn active" title="收起左栏">▮◀</div>
+  </div>
+  <div class="breadcrumb">
+    <span class="hl">chipnorth</span> › <span class="hl">alu_core</span> › <span class="hl">alu_add_test</span>
+  </div>
+  <div class="titlebar-right">
+    <div class="badge">REG · 2 RUNNING</div>
+    <div class="tb-btn active" title="收起右栏">▶▮</div>
+    <!-- ★ 新增：底部面板切换按钮 -->
+    <div class="tb-btn active" title="折叠底部终端" style="background:rgba(137,180,250,0.15);color:#89b4fa;">⬓</div>
+    <div class="tb-btn" title="命令面板">⌕</div>
+    <div class="tb-btn" title="设置">⚙</div>
+    <div class="tb-btn" title="最小ize">─</div>
+    <div class="tb-btn" title="最大化">▢</div>
+    <div class="tb-btn" title="关闭">✕</div>
+  </div>
+</div>
+
+<!-- ─── Main 3-column + Bottom Panel ─── -->
+<div class="main">
+  <!-- Left Rail -->
+  <div class="left-rail">
+    <div class="lr-header">📁 chipnorth</div>
+    <div class="lr-tabs">
+      <div class="lr-tab active">文件</div>
+      <div class="lr-tab">子系统</div>
+      <div class="lr-tab">概览</div>
+    </div>
+    <div class="lr-content">
+      <div class="file-item">📄 alu_add_tb.sv</div>
+      <div class="file-item">📄 alu_core.sv</div>
+      <div class="file-item">📄 alu_sub_tb.sv</div>
+      <div class="file-item">📁 sim/</div>
+      <div class="file-item">📁 rtl/</div>
+      <div class="file-item">📄 Makefile</div>
+    </div>
+  </div>
+
+  <!-- Center + Bottom wrapper -->
+  <div class="center-wrap">
+    <!-- Center Area -->
+    <div class="center">
+      <!-- Tab Bar with + button -->
+      <div class="tab-bar">
+        <div class="tab active draggable">
+          <span>▣</span> alu_core.sv
+          <span class="tab-close">✕</span>
+        </div>
+        <div class="tab draggable" style="cursor:grab;">
+          <span>▶</span> Terminal 1
+          <span class="tab-close">✕</span>
+        </div>
+        
+        <div class="tab-actions">
+          <!-- ★ 新增：+ 下拉按钮 -->
+          <div style="position:relative;">
+            <div class="tab-btn" style="font-size:14px;font-weight:bold;" onclick="togglePlusMenu()">+</div>
+            <div class="plus-menu" id="plusMenu" style="display:none;">
+              <div class="plus-menu-item">▶ 新建终端（中栏）</div>
+              <div class="plus-menu-item">⬇ 新建终端（底部）</div>
+              <div class="plus-menu-sep"></div>
+              <div class="plus-menu-item">📄 打开文件...</div>
+              <div class="plus-menu-item">✨ AI 产物</div>
+            </div>
+          </div>
+          <div class="tab-btn">📊 仪表盘</div>
+          <div class="tab-btn">📈 覆盖率</div>
+          <div class="tab-btn">◉ 运行中 <span style="background:#fab387;color:#1e1e2e;border-radius:7px;padding:0 4px;font-size:9px;">2</span></div>
+          <div class="tab-btn">⋯ 更多</div>
+        </div>
+      </div>
+
+      <!-- Content area -->
+      <div class="content">
+        <!-- Terminal content -->
+        <div class="term-view" style="flex:1;">
+          <div class="term-line"><span class="term-prompt">user@chipnorth:~/proj$</span> <span class="term-output">make compile</span></div>
+          <div class="term-output">Compiling alu_core.sv...</div>
+          <div class="term-output">Compiling alu_add_tb.sv...</div>
+          <div class="term-line"><span class="term-prompt">user@chipnorth:~/proj$</span> <span class="term-output">make sim TEST=alu_add_test</span></div>
+          <div class="term-output">Running simulation...</div>
+          <div class="term-output">[PASS] alu_add_test: 42 tests passed</div>
+          <div class="term-line"><span class="term-prompt">user@chipnorth:~/proj$</span> <span style="opacity:0.5;">_</span></div>
+        </div>
+        
+        <!-- Drop zone overlay (shown when dragging) -->
+        <div class="drop-zone" id="dropZone" style="display:none;">
+          ⬇ 释放在此处将终端移动到底部面板
+        </div>
+      </div>
+    </div>
+
+    <!-- ★ Bottom Panel -->
+    <div class="bottom-panel" id="bottomPanel">
+      <!-- Resize handle -->
+      <div class="bp-resize"></div>
+      
+      <!-- Header with tabs -->
+      <div class="bp-header">
+        <div class="bp-label">▶ Terminal</div>
+        <div class="bp-tabs">
+          <div class="bp-tab active" style="cursor:grab;">
+            <span>▶</span> Terminal 2
+            <span class="tab-close">✕</span>
+          </div>
+          <div class="bp-tab" style="cursor:grab;">
+            <span>▶</span> sim: alu_sub_test
+            <span class="tab-close">✕</span>
+          </div>
+        </div>
+        <div class="bp-actions">
+          <div class="bp-btn" title="新建终端">+</div>
+          <div class="bp-btn" title="移动到中栏">⬆</div>
+          <div class="bp-btn" title="折叠" onclick="toggleBottom()">⬓</div>
+        </div>
+      </div>
+      
+      <!-- Terminal content -->
+      <div class="bp-content">
+        <div class="term-view" style="height:100%;">
+          <div class="term-line"><span class="term-prompt">user@chipnorth:~/proj$</span> <span class="term-output">make sim TEST=alu_sub_test</span></div>
+          <div class="term-output">Running simulation...</div>
+          <div class="term-output">[PASS] alu_sub_test: 38 tests passed</div>
+          <div class="term-line"><span class="term-prompt">user@chipnorth:~/proj$</span> <span style="opacity:0.5;">_</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right Panel -->
+  <div class="right-panel">
+    <div class="rp-header">AI Agent</div>
+    <div class="rp-content">
+      <div style="font-size:12px;color:#6c7086;margin-bottom:8px;">与会话对话...</div>
+      <div style="background:rgba(137,180,250,0.1);padding:8px;border-radius:6px;font-size:12px;margin-bottom:8px;">
+        请帮我分析 alu_core 的仿真结果...
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Option Dock -->
+<div class="option-dock">
+  <div class="od-header">⚙ 仿真 Option <span style="background:rgba(137,180,250,0.2);color:#89b4fa;padding:1px 4px;border-radius:3px;font-size:10px;">12</span></div>
+</div>
+
+<script>
+function togglePlusMenu() {
+  const m = document.getElementById('plusMenu');
+  m.style.display = m.style.display === 'none' ? 'block' : 'none';
+}
+function toggleBottom() {
+  const p = document.getElementById('bottomPanel');
+  p.style.display = p.style.display === 'none' ? 'flex' : 'none';
+}
+// Click outside to close plus menu
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.tab-actions .tab-btn') && !e.target.closest('.plus-menu')) {
+    document.getElementById('plusMenu').style.display = 'none';
+  }
+});
+// Simulate drag visual
+let dragTimer;
+document.querySelectorAll('.tab.draggable').forEach(tab => {
+  tab.addEventListener('dragstart', () => {
+    dragTimer = setTimeout(() => {
+      document.getElementById('dropZone').style.display = 'flex';
+    }, 100);
+  });
+  tab.addEventListener('dragend', () => {
+    clearTimeout(dragTimer);
+    document.getElementById('dropZone').style.display = 'none';
+  });
+});
+</script>
+
+</body>
+</html>

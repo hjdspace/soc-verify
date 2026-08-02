@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Minus, Square, X, Copy, PanelLeft, PanelRight, Settings, Search, ChevronRight, GitCommitHorizontal } from 'lucide-react';
+import { Minus, Square, X, Copy, PanelLeft, PanelRight, PanelBottom, Settings, Search, ChevronRight, GitCommitHorizontal } from 'lucide-react';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
+import { useTerminalStore } from '@renderer/stores/terminal';
 import { cn } from '@renderer/lib/utils';
 
 /**
@@ -19,13 +20,19 @@ import { cn } from '@renderer/lib/utils';
 export function TitleBar() {
   const leftCollapsed = useUiStore((s) => s.leftRailCollapsed);
   const rightCollapsed = useUiStore((s) => s.rightPanelCollapsed);
+  const bottomPanelCollapsed = useUiStore((s) => s.bottomPanelCollapsed);
   const toggleLeftRail = useUiStore((s) => s.toggleLeftRail);
   const toggleRightPanel = useUiStore((s) => s.toggleRightPanel);
+  const setBottomPanelCollapsed = useUiStore((s) => s.setBottomPanelCollapsed);
   const settingsOpen = useUiStore((s) => s.settingsOpen);
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
   const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
   const sourceControlOpen = useUiStore((s) => s.sourceControlOpen);
   const setSourceControlOpen = useUiStore((s) => s.setSourceControlOpen);
+
+  const terminalTabs = useTerminalStore((s) => s.tabs);
+  const createTerminal = useTerminalStore((s) => s.createTerminal);
+  const bottomTabs = terminalTabs.filter((t) => t.location === 'bottom');
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const projects = useProjectStore((s) => s.projects);
@@ -53,6 +60,18 @@ export function TitleBar() {
   const handleMinimize = useCallback(() => window.windowControls?.minimize(), []);
   const handleMaximize = useCallback(() => window.windowControls?.toggleMaximize(), []);
   const handleClose = useCallback(() => window.windowControls?.close(), []);
+
+  // ── 底部面板切换（VSCode 风格） ──────────────────────
+  // 点击时：如果面板已折叠且无底部终端，创建一个；否则仅切换折叠状态。
+  // 折叠不销毁终端会话，再次展开后历史输出保留。
+  const handleToggleBottomPanel = useCallback(() => {
+    if (bottomPanelCollapsed && bottomTabs.length === 0) {
+      // No bottom terminals yet — create one and expand the panel
+      void createTerminal(currentProjectId ?? undefined, undefined, 'bottom');
+    } else {
+      setBottomPanelCollapsed(!bottomPanelCollapsed);
+    }
+  }, [bottomPanelCollapsed, bottomTabs.length, createTerminal, currentProjectId, setBottomPanelCollapsed]);
 
   return (
     <header
@@ -135,6 +154,15 @@ export function TitleBar() {
           active={!rightCollapsed}
         >
           <PanelRight className="h-3.5 w-3.5" />
+        </TitleBarButton>
+
+        {/* 底部面板切换按钮（终端） */}
+        <TitleBarButton
+          onClick={handleToggleBottomPanel}
+          title={bottomPanelCollapsed ? '展开底部终端' : '折叠底部终端'}
+          active={!bottomPanelCollapsed}
+        >
+          <PanelBottom className="h-3.5 w-3.5" />
         </TitleBarButton>
 
         {/* 命令面板按钮 */}

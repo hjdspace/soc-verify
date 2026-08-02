@@ -9,20 +9,27 @@ interface UiState {
   sourceControlOpen: boolean;
   leftRailWidth: number;
   rightPanelWidth: number;
+  bottomPanelCollapsed: boolean;
+  bottomPanelHeight: number;
   toggleLeftRail: () => void;
   toggleRightPanel: () => void;
   toggleOptionDock: () => void;
+  toggleBottomPanel: () => void;
   setSettingsOpen: (open: boolean) => void;
   setCommandPaletteOpen: (open: boolean) => void;
   setSourceControlOpen: (open: boolean) => void;
   setLeftRailWidth: (width: number) => void;
   setRightPanelWidth: (width: number) => void;
+  setBottomPanelCollapsed: (collapsed: boolean) => void;
+  setBottomPanelHeight: (height: number) => void;
 }
 
 const LEFT_MIN = 200;
 const LEFT_MAX = 500;
 const RIGHT_MIN = 280;
 const RIGHT_MAX = 600;
+const BOTTOM_MIN = 120;
+const BOTTOM_MAX = 600;
 
 export const useUiStore = create<UiState>((set) => ({
   leftRailCollapsed: false,
@@ -33,12 +40,17 @@ export const useUiStore = create<UiState>((set) => ({
   sourceControlOpen: false,
   leftRailWidth: 256,
   rightPanelWidth: 384,
+  bottomPanelCollapsed: true,
+  bottomPanelHeight: 240,
   toggleLeftRail: () => set((s) => ({ leftRailCollapsed: !s.leftRailCollapsed })),
   toggleRightPanel: () => set((s) => ({ rightPanelCollapsed: !s.rightPanelCollapsed })),
   toggleOptionDock: () => set((s) => ({ optionDockExpanded: !s.optionDockExpanded })),
+  toggleBottomPanel: () => set((s) => ({ bottomPanelCollapsed: !s.bottomPanelCollapsed })),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
   setSourceControlOpen: (open) => set({ sourceControlOpen: open }),
   setLeftRailWidth: (width) => set({ leftRailWidth: Math.max(LEFT_MIN, Math.min(LEFT_MAX, width)) }),
   setRightPanelWidth: (width) => set({ rightPanelWidth: Math.max(RIGHT_MIN, Math.min(RIGHT_MAX, width)) }),
+  setBottomPanelCollapsed: (collapsed) => set({ bottomPanelCollapsed: collapsed }),
+  setBottomPanelHeight: (height) => set({ bottomPanelHeight: Math.max(BOTTOM_MIN, Math.min(BOTTOM_MAX, height)) }),
 }));
