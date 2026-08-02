@@ -18,6 +18,7 @@ import rehypeRaw from 'rehype-raw';
 import { Save, Eye, Pencil, Loader2, AlertCircle } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { useThemeStore } from '@renderer/stores/theme';
+import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { cn } from '@renderer/lib/utils';
 
 // ── 语言扩展映射 ──────────────────────────────────────────────
@@ -62,6 +63,47 @@ function isMarkdownFile(filename: string): boolean {
   return ext === 'md' || ext === 'markdown';
 }
 
+// ── Markdown 预览链接处理 ─────────────────────────────────────
+
+/** 判断 href 是否为外部链接（http、mailto、锚点等） */
+function isExternalLink(href: string): boolean {
+  if (!href) return true;
+  return /^(https?:|mailto:|tel:|ftp:|file:|data:)/i.test(href) || href.startsWith('#');
+}
+
+/**
+ * 将相对路径 href 解析为基于当前文件目录的绝对路径。
+ * 处理 `./`、`../`、裸文件名等各种相对路径写法。
+ * 同时兼容 `/` 和 `\` 作为分隔符。
+ */
+function resolveRelativePath(baseFilePath: string, href: string): string {
+  // 去掉 anchor 和 query
+  const cleanHref = href.split('#')[0].split('?')[0];
+
+  // 确定基础目录（去掉文件名）
+  const sep = baseFilePath.includes('\\') ? '\\' : '/';
+  const parts = baseFilePath.split(/[/\\]/);
+  parts.pop(); // 移除文件名，保留目录
+
+  // 逐段处理 href
+  for (const segment of cleanHref.split(/[/\\]/)) {
+    if (segment === '.' || segment === '') continue;
+    if (segment === '..') {
+      parts.pop();
+    } else {
+      parts.push(segment);
+    }
+  }
+
+  return parts.join(sep);
+}
+
+/** 从路径中提取文件名 */
+function basename(filePath: string): string {
+  const parts = filePath.split(/[/\\]/);
+  return parts[parts.length - 1] || filePath;
+}
+
 // ── FileEditor 组件 ───────────────────────────────────────────
 
 interface FileEditorProps {
@@ -81,6 +123,7 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
   const currentTheme = useThemeStore((s) => s.currentTheme);
   const themes = useThemeStore((s) => s.themes);
   const themeMode = themes.find((t) => t.id === currentTheme)?.mode ?? 'dark';
+  const openDestination = useWorkbenchStore((s) => s.open);
 
   const isMd = isMarkdownFile(fileName);
   const languageExtension = useMemo(() => {
@@ -224,11 +267,29 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
                       </div>
                     );
                   },
-                  a: ({ href, children }) => (
-                    <a href={href} target="_blank" rel="noopener noreferrer">
-                      {children}
-                    </a>
-                  ),
+                  a: ({ href, children }) => {
+                    if (href && !isExternalLink(href)) {
+                      const resolvedPath = resolveRelativePath(filePath, href);
+                      const name = basename(resolvedPath);
+                      return (
+                        <a
+                          href={href}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            openDestination({ type: 'file', path: resolvedPath, name });
+                          }}
+                          className="cursor-pointer"
+                        >
+                          {children}
+                        </a>
+                      );
+                    }
+                    return (
+                      <a href={href} target="_blank" rel="noopener noreferrer">
+                        {children}
+                      </a>
+                    );
+                  },
                   img: ({ src, alt }) => (
                     <img src={src} alt={alt} loading="lazy" />
                   ),
