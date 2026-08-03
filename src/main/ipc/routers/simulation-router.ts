@@ -4,6 +4,7 @@
 
 import { resolve, isAbsolute } from 'node:path';
 import { createRequire } from 'node:module';
+import { dialog } from 'electron';
 import { t, TRPCError } from '../router-context';
 import { requireProject, ensurePluginsLoaded } from '../../services/project-service';
 import { getSimulationManager } from '../../services/simulation-service';
@@ -285,5 +286,36 @@ export const simulationRouter = t.router({
     .mutation(({ input }) => {
       simTerminalLinker.abort(input.terminalId);
       return { ok: true };
+    }),
+
+  // ── 回归列表文件选择（弹出原生文件对话框）──────────────────
+
+  /**
+   * 弹出原生文件选择对话框，让用户选择回归列表文件（.list / .txt）。
+   * 返回选中文件的绝对路径，用户取消时返回 null。
+   */
+  pickRegrFile: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const result = await dialog.showOpenDialog({
+        properties: ['openFile'],
+        title: '选择回归列表文件',
+        defaultPath: project.rootPath,
+        filters: [
+          { name: '回归列表文件', extensions: ['list', 'txt', 'lst'] },
+          { name: '所有文件', extensions: ['*'] },
+        ],
+      });
+      if (result.canceled || result.filePaths.length === 0) {
+        return { canceled: true as const, path: null };
+      }
+      return { canceled: false as const, path: result.filePaths[0] };
     }),
 });
