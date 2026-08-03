@@ -13,7 +13,7 @@
  *   3. 如果用户显式传入 caseName / corner，优先使用
  */
 
-import { basename, dirname, sep } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 /** Unisoc 默认 Corner 列表 */
 export const DEFAULT_CORNERS = [
@@ -153,8 +153,11 @@ export function parseCaseInfoFromPath(
   // 提取 corner（从 corner 目录名）
   const cornerInfo = parseCornerFromDirName(cornerDirName, corners);
 
-  // 确定 caseName：用户显式传入 > 从 corner 目录推断 > 从 seed 目录推断
-  const caseName = options?.caseName ?? cornerInfo.caseName ?? seedInfo.caseName;
+  // 确定 caseName：用户显式传入 > 从 corner 目录推断（仅当 corner 匹配成功时）> 从 seed 目录推断
+  // 当 corner 未匹配时，cornerInfo.caseName 是完整的目录名（无意义），不应使用
+  const caseName = options?.caseName
+    ?? (cornerInfo.corner !== null ? cornerInfo.caseName : null)
+    ?? seedInfo.caseName;
 
   // 确定 corner：用户显式传入 > 从 corner 目录推断
   const corner = options?.corner ?? cornerInfo.corner;
