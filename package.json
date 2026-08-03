@@ -5,7 +5,7 @@
   "author": "hjdspace",
   "main": "./out/main/index.cjs",
   "type": "module",
-  "officecliVersion": "v1.0.0",
+  "officecliVersion": "v1.0.143",
   "repository": {
     "type": "git",
     "url": "https://github.com/hjdspace/soc-verify.git"
