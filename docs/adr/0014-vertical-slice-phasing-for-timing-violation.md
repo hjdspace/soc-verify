@@ -38,11 +38,30 @@ Issue #1（DB 基础 + 单文件解析 + 违例列表）和 Issue #2（筛选 + 
 
 **验证**：`npm run build && npm run typecheck && npm run test` 全部通过。
 
-### Phase 2 — 完整确认流程 ⏳ 待实现
+### Phase 2 — 完整确认流程 🔨 进行中（Issue #4, #5 已完成，Issue #6 待实现）
 
-- 自动确认（复位时间/复位区间）（Issue #4）
-- 手动确认 + 批量确认（Issue #5）
-- Pattern 匹配 + Pattern CRUD（Issue #6）
+Issue #4（自动确认：复位时间 + 复位区间）和 Issue #5（手动确认 + 批量确认 + Pattern 自动保存）已完整实现：
+
+**已交付功能**：
+- 自动确认对话框（TVAutoConfirmDialog）：输入复位时间（纳秒）和/或复位区间（起止时间），支持 OR 关系
+- 手动确认对话框（TVConfirmationDialog）：填写确认人、确认结果（pass/issue）、确认理由，支持单条和批量
+- 违例表格行选择（checkbox）：支持多选、全选、清除选择
+- 每行确认按钮：快速打开确认对话框
+- 批量操作工具栏：批量确认、清除选择
+- 确认后自动刷新表格和统计卡片
+- Pattern 自动保存：每次手动确认后自动将 hier + check_info → confirmer + result + reason 保存到 violation_patterns 表
+- Pattern match_count 累加：已存在的 Pattern 自动累加使用次数
+- Corner 回退：指定 corner 未找到记录时回退到 default corner
+- AI 预留接口：`confirmation.suggestConfirmation` 返回空结果骨架
+
+**验证**：`npm run build && npm run typecheck && npm run test` 全部通过。
+
+### 待实现（Issue #6）
+
+- Pattern 精确匹配 + 模糊匹配（Pattern Normalization）
+- 一键应用历史确认模式
+- Pattern 管理面板（TVPatternManager）
+- Pattern CRUD tRPC API（pattern-router.ts）
 
 ### Phase 3 — 高级功能 ⏳ 待实现
 
