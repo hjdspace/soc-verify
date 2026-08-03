@@ -20,6 +20,8 @@ import { useToastStore } from '@renderer/stores/toast';
 import { cn } from '@renderer/lib/utils';
 import type { SimulationHistoryEntry, CompileError, SimulationStatus } from '@shared/types';
 import { PluginView } from '@renderer/components/plugins/PluginView';
+import { TVDashboard } from '@renderer/components/timing-violation/TVDashboard';
+import { Timer } from 'lucide-react';
 
 // ── 状态徽章：主题感知的点 + 文字 ────────────────────────────────
 const STATUS_BADGE_STYLES: Record<SimulationStatus, { dot: string; text: string }> = {
@@ -182,6 +184,7 @@ export function CenterArea() {
     { type: 'regression' as const, label: '回归套件', icon: GitBranch },
     { type: 'to-checklist' as const, label: 'TO 检查', icon: ListChecks },
     { type: 'simulation-history' as const, label: '仿真历史', icon: History },
+    { type: 'timing-violation' as const, label: '时序违例', icon: Timer },
   ];
   const centerPluginViews = pluginViews.filter(({ view }) => view.location === 'center');
 
@@ -233,6 +236,7 @@ export function CenterArea() {
                 {tab.destination.type === 'dashboard' && <LayoutDashboard className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'to-checklist' && <ListChecks className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'source-control' && <GitCommitHorizontal className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'timing-violation' && <Timer className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'plugin-view' && <Puzzle className="h-3 w-3 opacity-50" />}
                 <span className="max-w-32 truncate">{tab.title}</span>
                 {tab.closable && (
@@ -445,6 +449,8 @@ export function CenterArea() {
           <TOChecklistPanel />
         ) : destination?.type === 'source-control' ? (
           <SourceControlPanel />
+        ) : destination?.type === 'timing-violation' ? (
+          <TVDashboard />
         ) : destination?.type === 'plugin-view' ? (
           (() => {
             const entry = pluginViews.find(({ plugin, view }) => (
