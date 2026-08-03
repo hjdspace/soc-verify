@@ -20,6 +20,7 @@ import type { PluginBackedSimulation, PluginBackedCoverage } from '../plugin-ada
 import { HostToolsRegistry } from '../host/host-tools';
 import { HostUriRouter } from '../host/host-uris';
 import type { CoverageManager } from '../coverage/coverage-manager';
+import type { CaseStatsService } from '../case/case-stats-service';
 
 const MAX_CONCURRENT_SESSIONS = 10;
 const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -118,6 +119,8 @@ export interface CreateSessionOptions {
   simulationAdapter?: PluginBackedSimulation | null;
   coverageAdapter?: PluginBackedCoverage | null;
   coverageManager?: CoverageManager | null;
+  /** 用例聚合统计服务（UI 与 AI 共享，注入后启用 get_case_stats / get_project_overview） */
+  caseStatsService?: CaseStatsService | null;
 }
 
 export interface SessionEntry {
@@ -182,6 +185,7 @@ export class SessionManagerImpl extends EventEmitter {
     if (options.simulationAdapter) hostTools.setSimulationAdapter(options.simulationAdapter);
     if (options.coverageAdapter) hostTools.setCoverageAdapter(options.coverageAdapter);
     if (options.coverageManager) hostTools.setCoverageManager(options.coverageManager);
+    if (options.caseStatsService) hostTools.setCaseStatsService(options.caseStatsService);
 
     // Build custom tool definitions for the runner
     const customToolDefinitions: CustomToolDefinition[] = hostTools.getDefinitions().map((def) => ({

@@ -17,6 +17,8 @@ import { projectManager } from '../../project/project-manager';
 import { pluginLoader } from '../../plugins/loader';
 import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../../plugin-adapters';
 import { coverageRegistry } from '../../coverage/coverage-registry';
+import { caseStatsRegistry } from '../../case/case-stats-registry';
+import { simulationRegistry } from '../../simulation/simulation-registry';
 import { credentialManager } from '../../credentials/credential-manager';
 import {
   addSession,
@@ -65,6 +67,14 @@ export const sessionRouter = t.router({
       const coverage = new PluginBackedCoverage(project.rootPath, registry);
       // 从 CoverageRegistry 获取 per-project 实例（ADR 0009 摘要优先策略）
       const coverageManager = coverageRegistry.getOrCreate(project.rootPath, coverage);
+      // 从 CaseStatsRegistry 获取 per-project CaseStatsService（UI 与 AI 共享单一 source of truth）
+      // SimulationManager 同样从 registry 取（若已存在则同步注入，AI 的 list_cases 即可拿到实时 status）
+      const simManager = simulationRegistry.get(project.rootPath);
+      const caseStatsService = caseStatsRegistry.getOrCreate(
+        project.rootPath,
+        registry,
+        simManager,
+      );
 
       // Load stored credentials and build env vars for agent process
       const credEnv = await credentialManager.buildEnvForAgent();
@@ -94,6 +104,7 @@ export const sessionRouter = t.router({
         simulationAdapter: simulation,
         coverageAdapter: coverage,
         coverageManager,
+        caseStatsService,
         env: credEnv,
       });
 

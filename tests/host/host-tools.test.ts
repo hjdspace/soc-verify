@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { HostToolsRegistry } from '../../src/main/host/host-tools';
 import { NoopDiscovery } from '../../src/main/host/discovery';
 import type { SubsysDiscovery, SubsysInfo, CaseInfo, SimOptionsSchema } from '../../src/main/host/discovery';
+import { CaseStatsService } from '../../src/main/case/case-stats-service';
+import type { SimulationManager } from '../../src/main/simulation/simulation-manager';
+import type { SimulationHistoryEntry } from '../../src/shared/types';
+import type { SimulationRunRecord } from '../../src/main/simulation/simulation-manager';
 
 class MockDiscovery implements SubsysDiscovery {
   constructor(
@@ -21,6 +25,38 @@ class MockDiscovery implements SubsysDiscovery {
   async getSimOptionsSchema(): Promise<SimOptionsSchema> {
     return this.schema;
   }
+}
+
+/** Per-subsys mock: returns cases filtered by subsys (for CaseStatsService tests). */
+class MockPerSubsysDiscovery implements SubsysDiscovery {
+  constructor(
+    private subsys: SubsysInfo[] = [],
+    private casesBySubsys: Map<string, CaseInfo[]> = new Map(),
+    private schema: SimOptionsSchema = {},
+  ) {}
+
+  async listSubsys(_filter?: string): Promise<SubsysInfo[]> {
+    return this.subsys;
+  }
+
+  async listCases(subsys?: string, _status?: string): Promise<CaseInfo[]> {
+    if (!subsys) return [];
+    return this.casesBySubsys.get(subsys) ?? [];
+  }
+
+  async getSimOptionsSchema(): Promise<SimOptionsSchema> {
+    return this.schema;
+  }
+}
+
+function makeMockSimulationManager(
+  history: SimulationHistoryEntry[] = [],
+  activeRuns: SimulationRunRecord[] = [],
+): SimulationManager {
+  return {
+    getHistory: () => history,
+    getActiveRuns: () => activeRuns,
+  } as unknown as SimulationManager;
 }
 
 describe('HostToolsRegistry', () => {
@@ -147,5 +183,130 @@ describe('HostToolsRegistry', () => {
     });
     const parsed = JSON.parse((result as { content: Array<{ text: string }> }).content[0].text);
     expect(parsed).toEqual([]);
+  });
+});
+
+// ─── CaseStatsService-backed tools (get_case_stats / get_project_overview) ──
+
+describe('HostToolsRegistry with CaseStatsService', () => {
+  function makeStatsRegistry(simManager?: SimulationManager): {
+    registry: HostToolsRegistry;
+    statsService: CaseStatsService;
+  } {
+    const subsys: SubsysInfo[] = [
+      { name: 'cpu', path: '/subsystems/cpu' },
+    ];
+    const cases: CaseInfo[] = [
+      { name: 'cpu_alu_basic', subsys: 'cpu', path: '/cases/alu', filePath: '/tests/alu.cfg' },
+      { name: 'cpu_alu_overflow', subsys: 'cpu', path: '/cases/alu', filePath: '/tests/alu.cfg', baseCase: 'cpu_alu_basic' },
+      { name: 'cpu_reg_write', subsys: 'cpu', path: '/cases/reg', filePath: '/tests/reg.cfg' },
+    ];
+    const discovery = new MockPerSubsysDiscovery(subsys, new Map([['cpu', cases]]));
+    const statsService = new CaseStatsService({ discovery, simulationManager: simManager ?? null });
+    const registry = new HostToolsRegistry(discovery);
+    registry.setCaseStatsService(statsService);
+    return { registry, statsService };
+  }
+
+  it('registers get_case_stats and get_project_overview when CaseStatsService is set', () => {
+    const { registry } = makeStatsRegistry();
+    expect(registry.hasTool('get_case_stats')).toBe(true);
+    expect(registry.hasTool('get_project_overview')).toBe(true);
+  });
+
+  it('unregisters case stats tools when CaseStatsService is set to null', () => {
+    const { registry } = makeStatsRegistry();
+    registry.setCaseStatsService(null);
+    expect(registry.hasTool('get_case_stats')).toBe(false);
+    expect(registry.hasTool('get_project_overview')).toBe(false);
+  });
+
+  it('get_case_stats returns flat summary', async () => {
+    const { registry } = makeStatsRegistry();
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'get_case_stats',
+      arguments: { subsys: 'cpu' },
+    });
+    const parsed = JSON.parse((result as { content: Array<{ text: string }> }).content[0].text);
+    expect(parsed.subsys).toBe('cpu');
+    expect(parsed.total).toBe(3);
+    expect(parsed.byStatus.pending).toBe(3);
+    expect(parsed.byFile).toHaveLength(2);
+  });
+
+  it('get_project_overview returns project-wide aggregate', async () => {
+    const { registry } = makeStatsRegistry();
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'get_project_overview',
+      arguments: {},
+    });
+    const parsed = JSON.parse((result as { content: Array<{ text: string }> }).content[0].text);
+    expect(parsed.subsysCount).toBe(1);
+    expect(parsed.totalCases).toBe(3);
+    expect(parsed.bySubsys[0].name).toBe('cpu');
+    expect(parsed.bySubsys[0].caseCount).toBe(3);
+  });
+
+  it('list_cases with CaseStatsService joins status from simulation manager', async () => {
+    const history: SimulationHistoryEntry[] = [
+      {
+        runId: 'r1',
+        caseId: 'cpu_alu_basic',
+        caseName: 'cpu_alu_basic',
+        subsys: 'cpu',
+        options: {},
+        status: 'pass',
+        startTime: 100,
+        endTime: 200,
+        duration: 100,
+      },
+    ];
+    const simManager = makeMockSimulationManager(history);
+    const { registry } = makeStatsRegistry(simManager);
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'list_cases',
+      arguments: { subsys: 'cpu' },
+    });
+    const parsed = JSON.parse((result as { content: Array<{ text: string }> }).content[0].text);
+    expect(parsed).toHaveLength(3);
+    const aluBasic = parsed.find((c: CaseInfo) => c.name === 'cpu_alu_basic');
+    expect(aluBasic.status).toBe('pass');
+    const regWrite = parsed.find((c: CaseInfo) => c.name === 'cpu_reg_write');
+    expect(regWrite.status).toBe('pending');
+  });
+
+  it('list_cases requires subsys argument', async () => {
+    const { registry } = makeStatsRegistry();
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'list_cases',
+      arguments: {},
+    });
+    const parsed = JSON.parse((result as { content: Array<{ text: string }> }).content[0].text);
+    expect(parsed.error).toBeDefined();
+  });
+
+  it('list_subsys with CaseStatsService fills real caseCount', async () => {
+    const { registry } = makeStatsRegistry();
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'list_subsys',
+      arguments: {},
+    });
+    const parsed = JSON.parse((result as { content: Array<{ text: string }> }).content[0].text);
+    expect(parsed[0].caseCount).toBe(3);
   });
 });

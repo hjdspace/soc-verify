@@ -10,10 +10,12 @@ import { t, TRPCError } from '../router-context';
 import { requireProject, ensurePluginsLoaded } from '../../services/project-service';
 import { projectManager } from '../../project/project-manager';
 import { pluginLoader } from '../../plugins/loader';
-import { PluginBackedDiscovery } from '../../plugin-adapters';
 import type { CaseStatus } from '../../host/discovery';
 import { getFileDiff, applyRejections } from '../../diff/diff-engine';
 import { caseIndexManager } from '../../search/case-index-manager';
+import { caseStatsRegistry } from '../../case/case-stats-registry';
+import { simulationRegistry } from '../../simulation/simulation-registry';
+import type { CaseStatsService } from '../../case/case-stats-service';
 import type {
   PluginConfig,
   PluginConfigEntry,
@@ -21,6 +23,20 @@ import type {
   DiffToolCall,
   DiffRejection,
 } from '@shared/types';
+
+/**
+ * 获取或创建指定项目的 CaseStatsService（UI tRPC 与 AI HostTools 共享）。
+ *
+ * 不主动创建 SimulationManager——仅在已存在时注入，避免查询路径过早创建。
+ * SimulationManager 会在首次仿真运行时由 simulation-service 创建并回填到 service。
+ */
+async function getCaseStatsService(projectId: string): Promise<CaseStatsService> {
+  const project = requireProject(projectId);
+  await ensurePluginsLoaded(project.rootPath);
+  const registry = pluginLoader.getRegistry(project.rootPath);
+  const simManager = simulationRegistry.get(project.rootPath);
+  return caseStatsRegistry.getOrCreate(project.rootPath, registry, simManager);
+}
 
 export const projectRouter = t.router({
   open: t.procedure
@@ -174,8 +190,9 @@ export const projectRouter = t.router({
         return [];
       }
 
-      const discovery = new PluginBackedDiscovery(project.rootPath, registry);
-      const result = await discovery.listSubsys(input.filter);
+      // 走 CaseStatsService 填充真实 caseCount（原 PluginBackedDiscovery 永远返回 0）
+      const statsService = await getCaseStatsService(input.projectId);
+      const result = await statsService.listSubsysWithCaseCount(input.filter);
       console.log(`[router:getSubsystems] discovered ${result.length} subsystems`);
       return result;
     }),
@@ -198,9 +215,14 @@ export const projectRouter = t.router({
       const registry = pluginLoader.getRegistry(project.rootPath);
       if (registry.caseParsers.length === 0) return [];
 
-      const discovery = new PluginBackedDiscovery(project.rootPath, registry);
+      // 走 CaseStatsService：status 实时 join 自 SimulationManager 历史
+      const statsService = await getCaseStatsService(input.projectId);
+      const cases = await statsService.listCasesWithStatus(input.subsys);
       const status = input.status as CaseStatus | undefined;
-      return discovery.listCases(input.subsys, status);
+      if (status && status !== 'all') {
+        return cases.filter((c) => c.status === status);
+      }
+      return cases;
     }),
 
   searchCases: t.procedure
@@ -487,22 +509,18 @@ export const projectRouter = t.router({
       const project = requireProject(input.projectId);
       await ensurePluginsLoaded(project.rootPath);
       const registry = pluginLoader.getRegistry(project.rootPath);
-      const discovery = new PluginBackedDiscovery(project.rootPath, registry);
-
-      const subsystems = await discovery.listSubsys();
-      let totalCases = 0;
-      let passCount = 0;
-      for (const subsys of subsystems) {
-        const cases = await discovery.listCases(subsys.name);
-        subsys.caseCount = cases.length;
-        totalCases += cases.length;
-        passCount += cases.filter((c) => c.status === 'pass').length;
+      if (registry.subsysDiscoverers.length === 0) {
+        return { subsystemCount: 0, caseCount: 0, passRate: 0 };
       }
 
+      // 走 CaseStatsService：与 AI get_project_overview 同源，passRate 基于实时 status
+      const statsService = await getCaseStatsService(input.projectId);
+      const overview = await statsService.getProjectOverview();
+      const passCount = overview.bySubsys.reduce((sum, s) => sum + s.byStatus.pass, 0);
       return {
-        subsystemCount: subsystems.length,
-        caseCount: totalCases,
-        passRate: totalCases > 0 ? (passCount / totalCases) * 100 : 0,
+        subsystemCount: overview.subsysCount,
+        caseCount: overview.totalCases,
+        passRate: overview.totalCases > 0 ? (passCount / overview.totalCases) * 100 : 0,
       };
     }),
 

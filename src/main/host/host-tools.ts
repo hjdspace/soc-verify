@@ -6,6 +6,7 @@ import type { SubsysDiscovery, CaseStatus } from './discovery';
 import { NoopDiscovery } from './discovery';
 import type { PluginBackedSimulation, PluginBackedCoverage } from '../plugin-adapters';
 import type { CoverageManager } from '../coverage/coverage-manager';
+import type { CaseStatsService } from '../case/case-stats-service';
 import type { CoverageMetric } from '@shared/types';
 
 type HostToolHandler = (args: Record<string, unknown>) => Promise<AgentToolResult | string>;
@@ -67,6 +68,7 @@ export class HostToolsRegistry {
   private simulation: PluginBackedSimulation | null = null;
   private coverage: PluginBackedCoverage | null = null;
   private coverageManager: CoverageManager | null = null;
+  private caseStatsService: CaseStatsService | null = null;
   /** Working directory for resolving relative file paths in tools */
   cwd: string;
 
@@ -107,11 +109,31 @@ export class HostToolsRegistry {
     }
   }
 
+  /**
+   * 注入 CaseStatsService（用例聚合统计共享服务）。
+   *
+   * 设置后：
+   * - 注册 get_case_stats 工具（单 sys 摘要：总数/按状态/按文件分组）
+   * - 注册 get_project_overview 工具（全项目聚合，避免 N+1 调用）
+   * - 改造 list_cases：status 实时 join 自 SimulationManager 历史
+   *
+   * 传 null 回退到旧的 discovery.listCases 行为（status 一律 pending）并注销两个新工具。
+   */
+  setCaseStatsService(service: CaseStatsService | null): void {
+    this.caseStatsService = service;
+    if (service) {
+      this.registerCaseStatsTools();
+    } else {
+      this.unregister('get_case_stats');
+      this.unregister('get_project_overview');
+    }
+  }
+
   private registerDefaults(): void {
     this.register(
       defineTool(
         'list_subsys',
-        'List all subsystems in the current SoC verification project.',
+        'List all subsystems in the current SoC verification project, with case count for each.',
         {
           type: 'object',
           properties: {
@@ -121,7 +143,10 @@ export class HostToolsRegistry {
         },
         async (args) => {
           const filter = typeof args.filter === 'string' ? args.filter : undefined;
-          const subsys = await this.discovery.listSubsys(filter);
+          // 优先走 CaseStatsService（填充真实 caseCount）
+          const subsys = this.caseStatsService
+            ? await this.caseStatsService.listSubsysWithCaseCount(filter)
+            : await this.discovery.listSubsys(filter);
           return TEXT(JSON.stringify(subsys));
         },
       ),
@@ -130,23 +155,37 @@ export class HostToolsRegistry {
     this.register(
       defineTool(
         'list_cases',
-        'List verification cases for a subsystem or the entire project.',
+        'List verification cases for a subsystem. Case status is joined from the latest simulation run (pass/fail/running/pending). For aggregate counts (total / by-status / by-file), prefer get_case_stats which is token-efficient.',
         {
           type: 'object',
           properties: {
-            subsys: { type: 'string', description: 'Subsystem name to filter by' },
+            subsys: { type: 'string', description: 'Subsystem name (required)' },
             status: {
               type: 'string',
               enum: ['pass', 'fail', 'running', 'pending', 'all'],
               description: 'Filter by case status',
             },
           },
+          required: ['subsys'],
           additionalProperties: false,
         },
         async (args) => {
           const subsys = typeof args.subsys === 'string' ? args.subsys : undefined;
+          if (!subsys) {
+            return TEXT(JSON.stringify({ error: 'subsys is required. Use list_subsys to discover subsystem names, or get_project_overview for cross-subsystem aggregates.' }));
+          }
           const status = typeof args.status === 'string' ? (args.status as CaseStatus) : undefined;
-          const cases = await this.discovery.listCases(subsys, status);
+          // 优先走 CaseStatsService（status 实时 join 自 SimulationManager）
+          let cases;
+          if (this.caseStatsService) {
+            cases = await this.caseStatsService.listCasesWithStatus(subsys);
+          } else {
+            cases = await this.discovery.listCases(subsys, status);
+          }
+          // 客户端 status 过滤（service 路径不支持服务端过滤，因为 status 是 join 后才有的）
+          if (status && status !== 'all') {
+            cases = cases.filter((c) => c.status === status);
+          }
           return TEXT(JSON.stringify(cases));
         },
       ),
@@ -486,6 +525,66 @@ export class HostToolsRegistry {
             } catch (err) {
               return TEXT(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
             }
+          },
+        ),
+      );
+    }
+  }
+
+  /**
+   * 注册用例聚合统计工具（摘要优先策略）。
+   *
+   * - get_case_stats: 单个子系统的用例摘要（总数 / 按状态 / 按 filePath 分组）。
+   *   每个 filePath = 一个「功能」/「种类」；rootCases 含子用例数。
+   * - get_project_overview: 全项目聚合（所有子系统概览，避免 N+1 调用）。
+   *
+   * 仅在 CaseStatsService 可用时注册。
+   */
+  private registerCaseStatsTools(): void {
+    if (!this.hasTool('get_case_stats')) {
+      this.register(
+        defineTool(
+          'get_case_stats',
+          'Get aggregate case statistics for a single subsystem. Returns total count, breakdown by status (pass/fail/running/pending), and breakdown by file (each file = a "feature" or "category" of cases). Use this to answer "how many cases", "how many pass/fail", "what kinds of cases" without dumping the full case list. Use list_cases to drill down into specific cases.',
+          {
+            type: 'object',
+            properties: {
+              subsys: { type: 'string', description: 'Subsystem name (required)' },
+            },
+            required: ['subsys'],
+            additionalProperties: false,
+          },
+          async (args) => {
+            if (!this.caseStatsService) {
+              return TEXT(JSON.stringify({ error: 'Case stats service not available' }));
+            }
+            const subsys = typeof args.subsys === 'string' ? args.subsys : undefined;
+            if (!subsys) {
+              return TEXT(JSON.stringify({ error: 'subsys is required' }));
+            }
+            const stats = await this.caseStatsService.getCaseStats(subsys);
+            return TEXT(JSON.stringify(stats));
+          },
+        ),
+      );
+    }
+
+    if (!this.hasTool('get_project_overview')) {
+      this.register(
+        defineTool(
+          'get_project_overview',
+          'Get project-wide case overview in a single call (avoids N+1 list_subsys + list_cases). Returns total subsystem count, total case count, and per-subsystem breakdown (name, caseCount, byStatus). Use this to answer "how many cases in the whole project" or "which subsystem has the most cases".',
+          {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
+          },
+          async () => {
+            if (!this.caseStatsService) {
+              return TEXT(JSON.stringify({ error: 'Case stats service not available' }));
+            }
+            const overview = await this.caseStatsService.getProjectOverview();
+            return TEXT(JSON.stringify(overview));
           },
         ),
       );
