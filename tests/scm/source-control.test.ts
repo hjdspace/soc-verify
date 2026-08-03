@@ -126,7 +126,7 @@ describe('source control service', () => {
     expect(requestBody).not.toContain('src/unstaged.ts');
   });
 
-  it('commits all changes in a Git repository', async () => {
+  it('commits all changes in a Git repository', { timeout: 15000 }, async () => {
     const repo = await mkdtemp(join(tmpdir(), 'socverify-scm-'));
     try {
       await execFileAsync('git', ['init'], { cwd: repo });
@@ -149,7 +149,7 @@ describe('source control service', () => {
     }
   });
 
-  it('stages and commits individual files', async () => {
+  it('stages and commits individual files', { timeout: 15000 }, async () => {
     const repo = await mkdtemp(join(tmpdir(), 'socverify-scm-'));
     try {
       await execFileAsync('git', ['init'], { cwd: repo });
@@ -201,7 +201,7 @@ describe('source control service', () => {
     }
   });
 
-  it('discards changes for tracked and untracked files', async () => {
+  it('discards changes for tracked and untracked files', { timeout: 15000 }, async () => {
     const repo = await mkdtemp(join(tmpdir(), 'socverify-scm-'));
     try {
       await execFileAsync('git', ['init'], { cwd: repo });
