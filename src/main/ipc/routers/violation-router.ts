@@ -25,6 +25,7 @@ import {
   getMetadata,
   getDatabaseStats,
   clearCaseData,
+  clearAllData,
 } from '../../timing-violation/db/tv-repository';
 import type {
   QueryViolationsInput,
@@ -232,5 +233,21 @@ export const violationRouter = t.router({
     .mutation(async ({ input }) => {
       const db = getDb(input.projectId);
       return clearCaseData(db, input.caseName, input.corner);
+    }),
+
+  /**
+   * 清空所有违例数据（含确认记录，Pattern 保留）。
+   */
+  clearAllData: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .mutation(async ({ input }) => {
+      const db = getDb(input.projectId);
+      return clearAllData(db);
     }),
 });
