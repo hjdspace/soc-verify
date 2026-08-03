@@ -46,11 +46,13 @@ function legacyRunnerPath(): string {
   return resolve(__dirname, '../../', RUNNER_LEGACY_REL);
 }
 
-function candidateNames(base: string): string[] {
+/** 为给定基础名生成当前平台的候选可执行文件名（Windows 追加 .exe/.cmd 变体）。 */
+export function candidateNames(base: string): string[] {
   return process.platform === 'win32' ? [`${base}.exe`, base, `${base}.cmd`] : [base];
 }
 
-function findInDir(dir: string, base: string): string | null {
+/** 在指定目录中按候选名顺序查找第一个存在的可执行文件。 */
+export function findInDir(dir: string, base: string): string | null {
   if (!existsSync(dir)) return null;
   for (const name of candidateNames(base)) {
     const p = join(dir, name);
@@ -59,7 +61,8 @@ function findInDir(dir: string, base: string): string | null {
   return null;
 }
 
-function findInPath(executable: string): string | null {
+/** 在系统 PATH 中查找可执行文件（Windows 用 where，Unix 用 which）。 */
+export function findInPath(executable: string): string | null {
   const cmd = process.platform === 'win32' ? 'where' : 'which';
   try {
     const out = execFileSync(cmd, [executable], { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
