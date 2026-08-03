@@ -101,6 +101,7 @@ interface TimingViolationState {
   loadStatistics: (projectId: string) => Promise<void>;
   loadMetadata: (projectId: string) => Promise<void>;
   refreshAll: (projectId: string) => Promise<void>;
+  clearAllData: (projectId: string) => Promise<void>;
 
   setFilterCaseName: (v: string | null) => void;
   setFilterCorner: (v: string | null) => void;
@@ -130,7 +131,7 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
   filterSubsys: null,
   searchText: '',
 
-  sortField: 'time_fs',
+  sortField: 'num',
   sortOrder: 'asc',
 
   parsing: false,
@@ -212,6 +213,7 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
       set({ statistics: stats as ViolationStatistics, loadingStatistics: false });
     } catch (err) {
       set({ loadingStatistics: false });
+      getToast().error('加载统计信息失败', err instanceof Error ? err.message : String(err));
     }
   },
 
@@ -220,8 +222,9 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
     try {
       const meta = await trpc.violation.getMetadata.query({ projectId });
       set({ metadata: meta as ViolationMetadata, loadingMetadata: false });
-    } catch {
+    } catch (err) {
       set({ loadingMetadata: false });
+      getToast().error('加载元数据失败', err instanceof Error ? err.message : String(err));
     }
   },
 
@@ -231,6 +234,16 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
       get().loadStatistics(projectId),
       get().loadMetadata(projectId),
     ]);
+  },
+
+  clearAllData: async (projectId) => {
+    try {
+      const result = await trpc.violation.clearAllData.mutate({ projectId });
+      getToast().success(`已清空 ${result.deleted} 条违例数据`);
+      await get().refreshAll(projectId);
+    } catch (err) {
+      getToast().error('清空数据失败', err instanceof Error ? err.message : String(err));
+    }
   },
 
   setFilterCaseName: (v) => { set({ filterCaseName: v, page: 1 }); },
