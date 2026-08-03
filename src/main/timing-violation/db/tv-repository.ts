@@ -302,7 +302,20 @@ export function clearCaseData(
   return { deleted };
 }
 
-// ─── 数据库统计 ───────────────────────────────────────────────
+/**
+ * 清空所有违例数据（含确认记录）。
+ * Pattern 表不动（历史确认模式保留）。
+ */
+export function clearAllData(db: Database.Database): { deleted: number } {
+  const tx = db.transaction(() => {
+    const countRow = db.prepare('SELECT COUNT(*) as count FROM timing_violations').get() as { count: number };
+    db.prepare('DELETE FROM confirmation_records').run();
+    db.prepare('DELETE FROM timing_violations').run();
+    return countRow.count;
+  });
+  const deleted = tx();
+  return { deleted };
+}
 
 /**
  * 获取数据库整体统计信息。
