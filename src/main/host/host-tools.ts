@@ -10,7 +10,7 @@ import type { PluginBackedSimulation, PluginBackedCoverage } from '../plugin-ada
 import type { CoverageManager } from '../coverage/coverage-manager';
 import type { CaseStatsService } from '../case/case-stats-service';
 import type { CoverageMetric } from '@shared/types';
-import { execOfficeCli } from '../officecli/executor';
+import { execOfficeCli, type OfficeCliExecOptions, type OfficeCliExecResult } from '../officecli/executor';
 import { appendRows, updateCell, type CellValue } from '../document/xlsx-editor';
 import { isEditing, requestFlush, notifyFileChanged } from '../document/editor-registry';
 
@@ -88,6 +88,22 @@ function resolveDocumentOutputPath(outputPath: unknown, cwd: string, ext: string
 /** 确保目录存在，递归创建 */
 async function ensureDir(dir: string): Promise<void> {
   await mkdir(dir, { recursive: true });
+}
+
+/**
+ * 执行 officecli 命令并检查退出码，非 0 时抛出错误。
+ *
+ * execOfficeCli 本身只在超时或 spawn 错误时 reject，
+ * 非零退出码也正常 resolve——调用方必须自行检查 exitCode。
+ */
+async function execChecked(options: OfficeCliExecOptions): Promise<OfficeCliExecResult> {
+  const result = await execOfficeCli(options);
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `officecli ${options.args.join(' ')} failed (exit ${result.exitCode}): ${result.stderr || result.stdout}`,
+    );
+  }
+  return result;
 }
 
 /** 将 Markdown 文本解析为 officecli batch 操作数组（docx） */
@@ -518,10 +534,10 @@ export class HostToolsRegistry {
           try {
             await ensureDir(dirname(outputPath));
             // Step 1: 创建空白 docx
-            await execOfficeCli({ args: ['create', outputPath] });
+            await execChecked({ args: ['create', outputPath] });
             // Step 2: 应用 batch 操作（Markdown → 段落/标题/列表）
             const ops = parseMarkdownToDocxBatchOps(content);
-            await execOfficeCli({ args: ['batch', outputPath, JSON.stringify(ops)] });
+            await execChecked({ args: ['batch', outputPath], input: JSON.stringify(ops) });
             return TEXT(JSON.stringify({ path: outputPath, format: 'docx' }));
           } catch (err) {
             return TEXT(JSON.stringify({ error: `create_docx failed: ${err instanceof Error ? err.message : String(err)}` }));
@@ -561,9 +577,9 @@ export class HostToolsRegistry {
           const outputPath = resolveDocumentOutputPath(args.outputPath, this.cwd, 'xlsx');
           try {
             await ensureDir(dirname(outputPath));
-            await execOfficeCli({ args: ['create', outputPath] });
+            await execChecked({ args: ['create', outputPath] });
             const ops = buildXlsxBatchOps(sheets);
-            await execOfficeCli({ args: ['batch', outputPath, JSON.stringify(ops)] });
+            await execChecked({ args: ['batch', outputPath], input: JSON.stringify(ops) });
             return TEXT(JSON.stringify({ path: outputPath, format: 'xlsx' }));
           } catch (err) {
             return TEXT(JSON.stringify({ error: `create_xlsx failed: ${err instanceof Error ? err.message : String(err)}` }));
@@ -603,9 +619,9 @@ export class HostToolsRegistry {
           const outputPath = resolveDocumentOutputPath(args.outputPath, this.cwd, 'pptx');
           try {
             await ensureDir(dirname(outputPath));
-            await execOfficeCli({ args: ['create', outputPath] });
+            await execChecked({ args: ['create', outputPath] });
             const ops = buildPptxBatchOps(slides);
-            await execOfficeCli({ args: ['batch', outputPath, JSON.stringify(ops)] });
+            await execChecked({ args: ['batch', outputPath], input: JSON.stringify(ops) });
             return TEXT(JSON.stringify({ path: outputPath, format: 'pptx' }));
           } catch (err) {
             return TEXT(JSON.stringify({ error: `create_pptx failed: ${err instanceof Error ? err.message : String(err)}` }));
@@ -638,11 +654,11 @@ export class HostToolsRegistry {
           try {
             await ensureDir(dirname(pdfPath));
             // Step 1: 创建中间 docx 并填充 Markdown 内容
-            await execOfficeCli({ args: ['create', docxPath] });
+            await execChecked({ args: ['create', docxPath] });
             const ops = parseMarkdownToDocxBatchOps(content);
-            await execOfficeCli({ args: ['batch', docxPath, JSON.stringify(ops)] });
+            await execChecked({ args: ['batch', docxPath], input: JSON.stringify(ops) });
             // Step 2: 导出 docx 为 PDF
-            await execOfficeCli({ args: ['view', docxPath, 'pdf', '-o', pdfPath] });
+            await execChecked({ args: ['view', docxPath, 'pdf', '-o', pdfPath] });
             // Step 3: 清理中间 docx（best-effort，失败忽略）
             try { await unlink(docxPath); } catch { /* 中间文件清理失败不影响主流程 */ }
             return TEXT(JSON.stringify({ path: pdfPath, format: 'pdf' }));

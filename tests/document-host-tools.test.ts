@@ -70,6 +70,12 @@ function getCallArgs(mock: ExecMock, callIndex: number): string[] {
   return (call[0] as { args: string[] }).args;
 }
 
+/** 从 execOfficeCli mock 调用中提取 stdin input */
+function getCallInput(mock: ExecMock, callIndex: number): string | undefined {
+  const call = mock.mock.calls[callIndex];
+  return (call[0] as { input?: string }).input;
+}
+
 describe('Document Host Tools — 注册', () => {
   it('注册 create_docx / create_xlsx / create_pptx / create_pdf / read_document 5 个工具', () => {
     const registry = new HostToolsRegistry();
@@ -248,7 +254,10 @@ describe('create_xlsx', () => {
     // 验证 batch 操作包含 sheet 重命名和单元格设置
     const batchArgs = getCallArgs(mockExec, 1);
     expect(batchArgs[0]).toBe('batch');
-    const batchJson = JSON.parse(batchArgs[2]);
+    // batch 命令通过 stdin 传递 JSON（不再作为位置参数）
+    const batchInput = getCallInput(mockExec, 1);
+    expect(batchInput).toBeDefined();
+    const batchJson = JSON.parse(batchInput!);
     // 应包含至少一个 set 操作设置单元格值
     const setOps = batchJson.filter((op: { command: string }) => op.command === 'set');
     expect(setOps.length).toBeGreaterThan(0);
@@ -287,6 +296,53 @@ describe('create_xlsx', () => {
     expect(String(parsed.path)).toContain('docs');
     expect(String(parsed.path)).toMatch(/\.xlsx$/);
   });
+
+  it('batch 命令通过 stdin 传递 JSON（不作为位置参数）', async () => {
+    mockExec.mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' });
+
+    const registry = new HostToolsRegistry(undefined, tmpdir());
+    await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'create_xlsx',
+      arguments: {
+        sheets: [{ name: 'S1', data: [['A', 'B']] }],
+      },
+    });
+
+    // batch 调用只有 2 个 args：['batch', <path>]，JSON 通过 input 字段传递
+    const batchArgs = getCallArgs(mockExec, 1);
+    expect(batchArgs).toHaveLength(2);
+    expect(batchArgs[0]).toBe('batch');
+    const batchInput = getCallInput(mockExec, 1);
+    expect(batchInput).toBeDefined();
+    expect(() => JSON.parse(batchInput!)).not.toThrow();
+  });
+
+  it('officecli 返回非零退出码时返回错误信息', async () => {
+    mockExec.mockResolvedValue({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'Unrecognized command',
+      duration: 100,
+    });
+
+    const registry = new HostToolsRegistry(undefined, tmpdir());
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'create_xlsx',
+      arguments: {
+        sheets: [{ name: 'S1', data: [['A']] }],
+      },
+    });
+
+    const parsed = parseResult(result);
+    expect(parsed.error).toBeDefined();
+    expect(String(parsed.error)).toContain('failed');
+  });
 });
 
 describe('create_pptx', () => {
@@ -322,7 +378,10 @@ describe('create_pptx', () => {
     // 验证 batch 操作包含 add slide 操作
     const batchArgs = getCallArgs(mockExec, 1);
     expect(batchArgs[0]).toBe('batch');
-    const batchJson = JSON.parse(batchArgs[2]);
+    // batch 命令通过 stdin 传递 JSON（不再作为位置参数）
+    const batchInput = getCallInput(mockExec, 1);
+    expect(batchInput).toBeDefined();
+    const batchJson = JSON.parse(batchInput!);
     const addOps = batchJson.filter((op: { command: string }) => op.command === 'add');
     expect(addOps.length).toBeGreaterThan(0);
   });

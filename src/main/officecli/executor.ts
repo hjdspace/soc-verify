@@ -22,6 +22,8 @@ export type OfficeCliExecOptions = {
   timeout?: number;
   /** 额外环境变量 */
   env?: Record<string, string>;
+  /** 写入子进程 stdin 的数据（如 batch 命令的 JSON 数组） */
+  input?: string;
 };
 
 /** officecli 执行结果 */
@@ -117,6 +119,12 @@ export function execOfficeCli(options: OfficeCliExecOptions): Promise<OfficeCliE
     child.stderr?.on('data', (data: Buffer) => {
       stderr += data.toString();
     });
+
+    // 如果提供了 input，写入子进程 stdin（如 batch 命令的 JSON 数组）
+    if (options.input !== undefined) {
+      child.stdin?.write(options.input, 'utf-8');
+    }
+    child.stdin?.end();
 
     const timer = setTimeout(() => {
       if (child.pid) killProcessTree(child.pid, child);
