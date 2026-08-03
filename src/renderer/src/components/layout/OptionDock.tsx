@@ -8,6 +8,9 @@ import {
   Terminal,
   Copy,
   AlertCircle,
+  FileSearch,
+  Wand2,
+  X,
 } from 'lucide-react';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
@@ -15,7 +18,11 @@ import { useSimulationStore, type SimulationCase } from '@renderer/stores/simula
 import { useToastStore } from '@renderer/stores/toast';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
-import { generateRunsimCommand, tokenizeRunsimCommand } from '@renderer/lib/runsim-command';
+import {
+  generateRunsimCommand,
+  tokenizeRunsimCommand,
+  parseRunsimCommand,
+} from '@renderer/lib/runsim-command';
 import type { SimOptionField } from '@shared/plugin-types';
 
 // ─── 分组顺序定义 ──────────────────────────────────────────────
@@ -53,6 +60,8 @@ export function OptionDock() {
   const [presetName, setPresetName] = useState('');
   const [running, setRunning] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [showParseDialog, setShowParseDialog] = useState(false);
+  const [parseCommandText, setParseCommandText] = useState('');
 
   // Load schema when project or subsys changes
   useEffect(() => {
@@ -213,6 +222,41 @@ export function OptionDock() {
     }
   };
 
+  // ── 回归列表文件浏览 ──────────────────────────────────────
+  const handleBrowseRegrFile = async () => {
+    if (!currentProjectId) {
+      useToastStore.getState().error('浏览文件失败', '请先打开项目');
+      return;
+    }
+    try {
+      const result = await trpc.simulation.pickRegrFile.mutate({ projectId: currentProjectId });
+      if (result.canceled || !result.path) return;
+      setSimOption('regr_file', result.path);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      useToastStore.getState().error('浏览文件失败', msg);
+    }
+  };
+
+  // ── 解析回归指令 ──────────────────────────────────────────
+  const handleParseCommand = () => {
+    const text = parseCommandText.trim();
+    if (!text) {
+      useToastStore.getState().error('解析失败', '请输入回归指令');
+      return;
+    }
+    const parsed = parseRunsimCommand(text);
+    if (Object.keys(parsed).length === 0) {
+      useToastStore.getState().error('解析失败', '未找到有效的 runsim 命令');
+      return;
+    }
+    // 合并解析结果到当前选项（解析结果覆盖已有值）
+    setSimOptions({ ...simOptions, ...parsed });
+    setShowParseDialog(false);
+    setParseCommandText('');
+    useToastStore.getState().success('解析完成', `已提取 ${Object.keys(parsed).length} 个参数`);
+  };
+
   const hasCase = typeof simOptions.case === 'string' && simOptions.case.trim() !== '';
 
   return (
@@ -326,6 +370,9 @@ export function OptionDock() {
                   fields={fields}
                   values={simOptions}
                   onChange={(key, val) => setSimOption(key, val)}
+                  onBrowseRegrFile={handleBrowseRegrFile}
+                  onParseCommand={() => setShowParseDialog(true)}
+                  canBrowse={!!currentProjectId}
                 />
               ))}
             </div>
@@ -399,6 +446,98 @@ export function OptionDock() {
           未指定 CASE 名称，请填写 CASE 字段后才能运行仿真
         </div>
       )}
+
+      {/* ── Parse Regression Command Dialog ──────────────────── */}
+      {showParseDialog && (
+        <ParseCommandDialog
+          text={parseCommandText}
+          onChange={setParseCommandText}
+          onParse={handleParseCommand}
+          onClose={() => {
+            setShowParseDialog(false);
+            setParseCommandText('');
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Parse Command Dialog ──────────────────────────────────────
+
+function ParseCommandDialog({
+  text,
+  onChange,
+  onParse,
+  onClose,
+}: {
+  text: string;
+  onChange: (value: string) => void;
+  onParse: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div
+        className="w-full max-w-2xl rounded-lg border border-border bg-popover p-4 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Dialog header */}
+        <div className="mb-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Wand2 className="h-4 w-4 text-primary" />
+            <h3 className="text-sm font-semibold text-foreground">解析回归指令</h3>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Hint */}
+        <p className="mb-2 text-xs text-muted-foreground">
+          请粘贴回归用例指令（支持从网页直接复制粘贴，系统会自动提取 runsim 命令）
+        </p>
+
+        {/* Textarea */}
+        <textarea
+          value={text}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={'可以直接粘贴从网页复制的完整回归指令，系统会自动提取 runsim 命令部分\n\n示例:\n1. 完整指令: [其他文本] runsim -base top -block udtb/usvp -case apcpu_hello_world ...\n2. 简化指令: runsim -base top -block udtb/usvp -case apcpu_hello_world ...'}
+          className="h-32 w-full resize-y rounded border border-border bg-background/60 px-2.5 py-2 font-mono text-[11px] outline-none transition-colors focus:border-primary"
+          autoFocus
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+              onParse();
+            }
+          }}
+        />
+
+        {/* Dialog footer */}
+        <div className="mt-3 flex items-center justify-between">
+          <span className="text-[10px] text-muted-foreground/60">
+            Ctrl+Enter 解析
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              className="rounded border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              取消
+            </button>
+            <button
+              onClick={onParse}
+              disabled={!text.trim()}
+              className="flex items-center gap-1.5 rounded bg-primary px-4 py-1 text-xs font-semibold text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <Wand2 className="h-3 w-3" />
+              解析
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -410,13 +549,20 @@ function OptionCard({
   fields,
   values,
   onChange,
+  onBrowseRegrFile,
+  onParseCommand,
+  canBrowse,
 }: {
   name: string;
   fields: SimOptionField[];
   values: Record<string, unknown>;
   onChange: (key: string, value: unknown) => void;
+  onBrowseRegrFile: () => void;
+  onParseCommand: () => void;
+  canBrowse: boolean;
 }) {
   const color = getGroupColor(name);
+  const isRegrGroup = name === '回归测试';
   return (
     <div className="rounded border border-border bg-card/50 transition-colors hover:border-primary/30">
       {/* Card header */}
@@ -426,6 +572,17 @@ function OptionCard({
           {name}
         </span>
         <span className="text-[9px] text-muted-foreground/50">({fields.length})</span>
+        {/* 解析回归指令按钮 — 仅回归测试卡片显示 */}
+        {isRegrGroup && (
+          <button
+            onClick={onParseCommand}
+            className="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            title="粘贴回归指令，自动提取 runsim 命令参数"
+          >
+            <Wand2 className="h-2.5 w-2.5" />
+            解析指令
+          </button>
+        )}
       </div>
       {/* Card fields */}
       <div className="flex flex-col gap-1 px-2.5 pb-2">
@@ -435,6 +592,8 @@ function OptionCard({
             field={field}
             value={values[field.key]}
             onChange={(v) => onChange(field.key, v)}
+            onBrowseRegrFile={onBrowseRegrFile}
+            canBrowse={canBrowse}
           />
         ))}
       </div>
@@ -448,14 +607,18 @@ function OptionField({
   field,
   value,
   onChange,
+  onBrowseRegrFile,
+  canBrowse,
 }: {
   field: SimOptionField;
   value: unknown;
   onChange: (value: unknown) => void;
+  onBrowseRegrFile: () => void;
+  canBrowse: boolean;
 }) {
   const labelText = (
     <span
-      className="w-16 shrink-0 truncate text-[10px] font-medium text-muted-foreground"
+      className="shrink-0 whitespace-nowrap text-[10px] font-medium text-muted-foreground"
       title={field.key}
     >
       {field.label}
@@ -472,6 +635,9 @@ function OptionField({
       </span>
     ) : null;
 
+  // 回归列表文件字段：输入框 + 浏览按钮
+  const isRegrFile = field.key === 'regr_file';
+
   switch (field.type) {
     case 'string':
       return (
@@ -485,6 +651,17 @@ function OptionField({
             placeholder={field.default ? String(field.default) : ''}
             className="min-w-0 flex-1 rounded border border-border bg-background/60 px-1.5 py-0.5 font-mono text-[11px] outline-none transition-colors focus:border-primary"
           />
+          {isRegrFile && (
+            <button
+              onClick={onBrowseRegrFile}
+              disabled={!canBrowse}
+              className="flex shrink-0 items-center gap-1 rounded border border-border bg-background/60 px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-30"
+              title="浏览选择回归列表文件"
+            >
+              <FileSearch className="h-2.5 w-2.5" />
+              浏览
+            </button>
+          )}
         </div>
       );
 
