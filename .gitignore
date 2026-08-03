@@ -15,3 +15,4 @@ resources/binaries/*
 .cache/
 .tmp/
 .vscode/
+.scratch/
