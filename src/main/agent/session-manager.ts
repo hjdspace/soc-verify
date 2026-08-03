@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { AgentClient, type ToolCallHandler } from './agent-client';
-import { resolveAgentRuntime, resolveBuiltInExtensionDir, resolveRunnerBinary } from './paths';
+import { resolveAgentRuntime, resolveBuiltInExtensionDir, resolveRunnerBinary, resolveRunnerScript, resolveBunPath, checkBunVersion } from './paths';
 import type { CustomToolDefinition, InitConfig } from './types';
 import {
   buildModelInputOverrideConfig,
@@ -341,60 +341,57 @@ export class SessionManagerImpl extends EventEmitter {
       additionalExtensionPaths,
     };
 
-    const client = new AgentClient(
-      runtime.mode === 'binary'
-        ? {
-            runnerBinaryPath: runtime.runnerPath,
-            cwd: options.cwd,
-            env,
-          }
-        : {
-            bunPath: runtime.bunPath,
-            runnerPath: runtime.runnerPath,
-            cwd: options.cwd,
-            env,
-          },
-    );
+    // Helper: create an AgentClient configured for the given runtime mode
+    const createClientForRuntime = (rt: { mode: 'binary' | 'script'; runnerPath: string; bunPath?: string }) => {
+      const c = new AgentClient(
+        rt.mode === 'binary'
+          ? {
+              runnerBinaryPath: rt.runnerPath,
+              cwd: options.cwd,
+              env,
+            }
+          : {
+              bunPath: rt.bunPath!,
+              runnerPath: rt.runnerPath,
+              cwd: options.cwd,
+              env,
+            },
+      );
+      c.setToolCallHandler(toolCallHandler);
+      return c;
+    };
 
-    client.setToolCallHandler(toolCallHandler);
-
-    // Forward events
-    // High-frequency streaming events (message_update/chunk/delta) are excluded
-    // from the terminal log to avoid flooding; other events print a one-line
-    // summary with the most useful payload (LLM text, tool args/result, errors).
-    //
-    // When SOCVERIFY_DEBUG_EVENTS is set, ALL events (including streaming)
-    // are logged — this is invaluable for diagnosing empty-response issues
-    // in packaged builds where the omp engine's own file logs are ephemeral.
+    // Helper: attach event forwarding to a client
     const debugAllEvents = !!process.env.SOCVERIFY_DEBUG_EVENTS;
-    client.onEvent((event) => {
-      const evtType = (event as Record<string, unknown>)?.type as string | undefined;
-      if (debugAllEvents || !SILENT_EVENT_TYPES.has(evtType ?? '')) {
-        const summary = summarizeEvent(event);
-        console.log(
-          `[agent:session:${sessionId}] event type="${evtType}"${summary ? ` ${summary}` : ''}`,
-        );
-      }
-      // Detect empty assistant responses for diagnostic logging.
-      // An assistant message_end with no text and no error is the signature
-      // of an empty LLM completion — typically caused by TLS failures, network
-      // issues, or API key problems in packaged environments.
-      if (evtType === 'message_end') {
-        const msg = (event as Record<string, unknown>)?.message as Record<string, unknown> | undefined;
-        if (msg?.role === 'assistant') {
-          const hasText = Array.isArray(msg.content) &&
-            (msg.content as unknown[]).some((b) =>
-              typeof b === 'object' && b !== null &&
-              (b as Record<string, unknown>).type === 'text' &&
-              typeof (b as Record<string, unknown>).text === 'string' &&
-              ((b as Record<string, unknown>).text as string).length > 0);
-          if (!hasText && !msg.errorMessage) {
-            console.warn(`[agent:session:${sessionId}] WARNING: empty assistant response (no text, no error). Possible causes: TLS/SSL certificate issues, network errors, or API key problems. Check [agent:stderr] lines above for omp engine errors.`);
+    const attachEventForwarding = (c: AgentClient) => {
+      c.onEvent((event) => {
+        const evtType = (event as Record<string, unknown>)?.type as string | undefined;
+        if (debugAllEvents || !SILENT_EVENT_TYPES.has(evtType ?? '')) {
+          const summary = summarizeEvent(event);
+          console.log(
+            `[agent:session:${sessionId}] event type="${evtType}"${summary ? ` ${summary}` : ''}`,
+          );
+        }
+        if (evtType === 'message_end') {
+          const msg = (event as Record<string, unknown>)?.message as Record<string, unknown> | undefined;
+          if (msg?.role === 'assistant') {
+            const hasText = Array.isArray(msg.content) &&
+              (msg.content as unknown[]).some((b) =>
+                typeof b === 'object' && b !== null &&
+                (b as Record<string, unknown>).type === 'text' &&
+                typeof (b as Record<string, unknown>).text === 'string' &&
+                ((b as Record<string, unknown>).text as string).length > 0);
+            if (!hasText && !msg.errorMessage) {
+              console.warn(`[agent:session:${sessionId}] WARNING: empty assistant response (no text, no error). Possible causes: TLS/SSL certificate issues, network errors, or API key problems. Check [agent:stderr] lines above for omp engine errors.`);
+            }
           }
         }
-      }
-      this.emit('sessionEvent', { sessionId, event } satisfies SessionEventData);
-    });
+        this.emit('sessionEvent', { sessionId, event } satisfies SessionEventData);
+      });
+    };
+
+    let client = createClientForRuntime(runtime);
+    attachEventForwarding(client);
 
     // Log env vars being passed (mask API keys)
     if (Object.keys(env).length > 0) {
@@ -418,10 +415,72 @@ export class SessionManagerImpl extends EventEmitter {
       console.log(`[agent:session:${sessionId}] omp sessionId=${ompSessionId}`);
     } catch (err) {
       client.stop();
-      if (runtimeDir) {
-        await rm(runtimeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+
+      // If binary mode failed, try script mode (Bun + engine) as fallback.
+      // This handles the case where the pre-compiled runner binary exists
+      // but can't execute (e.g., missing shared libraries on Linux AppImage).
+      if (runtime.mode === 'binary') {
+        const scriptPath = resolveRunnerScript();
+        const bunPath = resolveBunPath();
+        if (scriptPath && bunPath) {
+          const versionCheck = checkBunVersion(bunPath);
+          if (versionCheck.ok) {
+            console.warn(
+              `[agent:session:${sessionId}] Binary runner failed (${err instanceof Error ? err.message : String(err)}). ` +
+              `Falling back to script mode (Bun ${versionCheck.version} + engine).`,
+            );
+            client = createClientForRuntime({
+              mode: 'script',
+              runnerPath: scriptPath,
+              bunPath,
+            });
+            attachEventForwarding(client);
+            try {
+              await client.start();
+              console.log(`[agent:session:${sessionId}] agent process started successfully (script mode)`);
+              const initResult = await client.init(initConfig);
+              ompSessionId = initResult.sessionId;
+              console.log(`[agent:session:${sessionId}] omp sessionId=${ompSessionId} (script mode)`);
+            } catch (scriptErr) {
+              client.stop();
+              if (runtimeDir) {
+                await rm(runtimeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+              }
+              throw new Error(
+                `Failed to initialize agent session. ` +
+                `Binary mode error: ${err instanceof Error ? err.message : String(err)}. ` +
+                `Script mode error: ${scriptErr instanceof Error ? scriptErr.message : String(scriptErr)}.`,
+              );
+            }
+          } else {
+            // Bun version too old
+            if (runtimeDir) {
+              await rm(runtimeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+            }
+            throw new Error(
+              `Failed to initialize agent session: ${err instanceof Error ? err.message : String(err)}. ` +
+              `Script mode fallback unavailable: Bun >= ${versionCheck.required} required (found ${versionCheck.version}).`,
+            );
+          }
+        } else {
+          // No script mode available
+          if (runtimeDir) {
+            await rm(runtimeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+          }
+          throw new Error(
+            `Failed to initialize agent session: ${err instanceof Error ? err.message : String(err)}. ` +
+            `Script mode fallback unavailable: ${!scriptPath ? 'engine submodule not found' : 'Bun not found'}. ` +
+            `On Linux AppImage, the runner binary may have missing shared libraries. ` +
+            `Try running 'ldd <runner-binary>' to diagnose, or install Bun and initialize the engine submodule.`,
+          );
+        }
+      } else {
+        // Script mode failed (no fallback)
+        if (runtimeDir) {
+          await rm(runtimeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+        }
+        throw new Error(`Failed to initialize agent session: ${err instanceof Error ? err.message : String(err)}`);
       }
-      throw new Error(`Failed to initialize agent session: ${err instanceof Error ? err.message : String(err)}`);
     }
     console.log(`[agent:session:${sessionId}] agent session initialized`);
 
