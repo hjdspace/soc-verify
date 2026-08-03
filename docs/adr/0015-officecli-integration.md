@@ -2,7 +2,19 @@
 
 ## 状态
 
-Accepted
+Implemented（8 个 Issue 全部交付）
+
+> 实施记录见 [docs/issues-officecli-integration.md](../issues-officecli-integration.md)，覆盖 Issue #1 ~ #8 的完整垂直切片。
+>
+> 已交付能力：
+> - **Issue #1**：二进制打包与下载脚本 + 路径解析（`scripts/download-officecli.mjs` + `src/main/officecli/binary.ts`）
+> - **Issue #2**：officecli 主进程服务（`executor.ts` + `service.ts` + `types.ts`）+ tRPC document router
+> - **Issue #3**：前端预览组件（`HtmlPreview` / `ScreenshotsPreview` / `WatchPreview` / `OfficeDocumentView`）
+> - **Issue #4**：PDF 预览（`PdfPreview.tsx`，react-pdf）
+> - **Issue #5**：xlsx 原地编辑（`XlsxEditor.tsx`，Fortune-sheet + exceljs + 自动保存）
+> - **Issue #6**：AI 文档创建工具（`create_docx` / `create_xlsx` / `create_pptx` / `create_pdf` / `read_document`）+ SKILL.md
+> - **Issue #7**：AI 编辑 xlsx（`append_xlsx_row` / `update_xlsx_cell`）+ flush 机制 + 文件变更同步
+> - **Issue #8**：错误降级完善 + 应用生命周期集成（`cleanupOfficeCli` / `cleanupEditorRegistry`）+ `document.downloadBinary` + 文档完善
 
 ## 背景
 

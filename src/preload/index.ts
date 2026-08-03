@@ -66,5 +66,30 @@ process.once('loaded', async () => {
       ipcRenderer.on('terminal:exit', handler);
       return () => ipcRenderer.removeListener('terminal:exit', handler);
     },
+
+    // ── officecli 文档事件（Issue #7 / #8）──────────────────────
+    // document:flush-request —— 主进程通知前端立即 flush XlsxEditor 未保存的修改
+    onDocumentFlushRequest: (callback: (filePath: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, filePath: string) => callback(filePath);
+      ipcRenderer.on('document:flush-request', handler);
+      return () => ipcRenderer.removeListener('document:flush-request', handler);
+    },
+    // document:file-changed —— AI 修改文件后通知前端重载
+    onDocumentFileChanged: (callback: (filePath: string) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, filePath: string) => callback(filePath);
+      ipcRenderer.on('document:file-changed', handler);
+      return () => ipcRenderer.removeListener('document:file-changed', handler);
+    },
+    // officecli:download-progress —— 开发模式下载 officecli 二进制的进度推送
+    onOfficecliDownloadProgress: (
+      callback: (data: { stage: string; message: string; percent?: number }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: { stage: string; message: string; percent?: number },
+      ) => callback(data);
+      ipcRenderer.on('officecli:download-progress', handler);
+      return () => ipcRenderer.removeListener('officecli:download-progress', handler);
+    },
   });
 });

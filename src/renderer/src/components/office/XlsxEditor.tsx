@@ -5,6 +5,13 @@
  * 用 <Workbook> 渲染电子表格。onChange 回调防抖 2 秒后调用 document.saveXlsx
  * 将当前工作簿数据写回文件，用户无感知，不会丢数据。
  *
+ * Issue #7 集成 flush 机制：
+ *  - mount 时调用 document.registerEditor 注册文件正在编辑
+ *  - unmount 时调用 document.unregisterEditor 注销
+ *  - 监听 'document:flush-request' IPC 事件，立即 flush Fortune-sheet 状态
+ *    （取消防抖定时器，立即保存），完成后调用 document.flushDone 回复
+ *  - 监听 'document:file-changed' IPC 事件，重新加载文件（AI 修改后同步）
+ *
  * 保存状态指示器：加载中... / 编辑中 / 保存中... / 已保存 / 保存失败
  */
 
@@ -29,13 +36,17 @@ export function XlsxEditor({ filePath }: XlsxEditorProps) {
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [sheets, setSheets] = useState<Sheet[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  /** 文件版本号，AI 修改后递增以触发重载 */
+  const [fileVersion, setFileVersion] = useState(0);
 
   // 用 ref 存储防抖定时器、最新编辑数据和工作簿名，避免闭包过期
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestDataRef = useRef<Sheet[]>([]);
   const workbookNameRef = useRef('Workbook');
+  const filePathRef = useRef(filePath);
+  filePathRef.current = filePath;
 
-  // 加载 xlsx 文件
+  // 加载 xlsx 文件（filePath 或 fileVersion 变化时重新加载）
   useEffect(() => {
     let cancelled = false;
     setLoadState('loading');
@@ -60,7 +71,32 @@ export function XlsxEditor({ filePath }: XlsxEditorProps) {
     return () => {
       cancelled = true;
     };
-  }, [filePath]);
+  }, [filePath, fileVersion]);
+
+  // 立即保存（取消防抖定时器，立即执行保存）
+  const flushNow = useCallback(async () => {
+    const currentFilePath = filePathRef.current;
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    setSaveState('saving');
+    try {
+      await trpc.document.saveXlsx.mutate({
+        filePath: currentFilePath,
+        workbook: { name: workbookNameRef.current, sheets: latestDataRef.current },
+      });
+      setSaveState('saved');
+    } catch {
+      setSaveState('error');
+    }
+    // 通知主进程 flush 完成
+    try {
+      await trpc.document.flushDone.mutate({ filePath: currentFilePath });
+    } catch {
+      // flushDone 失败不影响主流程
+    }
+  }, []);
 
   // 防抖保存：onChange 后 2 秒触发 saveXlsx
   const handleChange = useCallback(
@@ -86,14 +122,41 @@ export function XlsxEditor({ filePath }: XlsxEditorProps) {
     [filePath],
   );
 
-  // 卸载时清理防抖定时器
+  // 注册/注销编辑器 + 监听 IPC 事件（flush-request / file-changed）
   useEffect(() => {
+    // 注册文件正在前端编辑
+    trpc.document.registerEditor.mutate({ filePath }).catch(() => {
+      // 注册失败不阻断编辑
+    });
+
+    // 监听 flush-request：立即保存并回复 flush-done
+    // 通过 window.eventBridge（preload contextBridge 暴露）接收主进程事件
+    const unlistenFlush = window.eventBridge?.onDocumentFlushRequest?.((path: string) => {
+      if (path === filePath) {
+        void flushNow();
+      }
+    });
+
+    // 监听 file-changed：AI 修改文件后触发重载
+    const unlistenFileChanged = window.eventBridge?.onDocumentFileChanged?.((path: string) => {
+      if (path === filePath) {
+        setFileVersion((v) => v + 1);
+      }
+    });
+
     return () => {
+      unlistenFlush?.();
+      unlistenFileChanged?.();
+      // 注销编辑器
+      trpc.document.unregisterEditor.mutate({ filePath }).catch(() => {
+        // 注销失败不影响主流程
+      });
+      // 清理防抖定时器
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, []);
+  }, [filePath, flushNow]);
 
   if (loadState === 'loading') {
     return (
@@ -130,7 +193,7 @@ export function XlsxEditor({ filePath }: XlsxEditorProps) {
         </div>
         <div className="flex flex-1 overflow-hidden">
           <Workbook
-            key={filePath}
+            key={`${filePath}-${fileVersion}`}
             data={sheets}
             onChange={handleChange}
             showToolbar

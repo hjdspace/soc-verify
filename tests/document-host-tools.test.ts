@@ -18,7 +18,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 // Mock officecli executor —— 避免真实调用 officecli 二进制
 vi.mock('../src/main/officecli/executor', () => ({
@@ -29,6 +29,28 @@ vi.mock('../src/main/officecli/executor', () => ({
       this.name = 'OfficeCliNotAvailableError';
     }
   },
+}));
+
+// Mock xlsx-editor 细粒度编辑工具（避免真实文件操作）
+const { appendRowsMock, updateCellMock } = vi.hoisted(() => ({
+  appendRowsMock: vi.fn(),
+  updateCellMock: vi.fn(),
+}));
+vi.mock('../src/main/document/xlsx-editor', () => ({
+  appendRows: appendRowsMock,
+  updateCell: updateCellMock,
+}));
+
+// Mock editor-registry（避免真实 electron BrowserWindow 调用）
+const { isEditingMock, requestFlushMock, notifyFileChangedMock } = vi.hoisted(() => ({
+  isEditingMock: vi.fn(),
+  requestFlushMock: vi.fn(),
+  notifyFileChangedMock: vi.fn(),
+}));
+vi.mock('../src/main/document/editor-registry', () => ({
+  isEditing: isEditingMock,
+  requestFlush: requestFlushMock,
+  notifyFileChanged: notifyFileChangedMock,
 }));
 
 import { execOfficeCli } from '../src/main/officecli/executor';
@@ -471,5 +493,314 @@ describe('read_document', () => {
     // 验证 execOfficeCli 被调用时使用了绝对路径
     const viewArgs = getCallArgs(mockExec, 0);
     expect(viewArgs).toContain(absPath);
+  });
+});
+
+// ─── append_xlsx_row / update_xlsx_cell（Issue #7）──────────────
+
+describe('append_xlsx_row', () => {
+  beforeEach(() => {
+    appendRowsMock.mockReset();
+    isEditingMock.mockReset();
+    requestFlushMock.mockReset();
+    notifyFileChangedMock.mockReset();
+    // 默认：文件未在前端编辑
+    isEditingMock.mockReturnValue(false);
+    requestFlushMock.mockResolvedValue(undefined);
+  });
+
+  it('注册 append_xlsx_row 工具', () => {
+    const registry = new HostToolsRegistry();
+    expect(registry.hasTool('append_xlsx_row')).toBe(true);
+  });
+
+  it('成功追加行到 xlsx 文件', async () => {
+    const appendResult = {
+      path: '/tmp/sheet.xlsx',
+      sheet: 'Data',
+      appendedRows: 2,
+      startRow: 3,
+    };
+    appendRowsMock.mockResolvedValue(appendResult);
+
+    const registry = new HostToolsRegistry(undefined, '/project');
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'append_xlsx_row',
+      arguments: {
+        path: 'docs/sheet.xlsx',
+        sheet: 'Data',
+        rows: [['gpu', 78.3], ['memory', 88.1]],
+      },
+    });
+
+    const parsed = parseResult(result);
+    expect(parsed.appendedRows).toBe(2);
+    expect(parsed.startRow).toBe(3);
+
+    // 验证 appendRows 被调用时使用了绝对路径
+    expect(appendRowsMock).toHaveBeenCalledWith(
+      resolve('/project/docs/sheet.xlsx'),
+      'Data',
+      [['gpu', 78.3], ['memory', 88.1]],
+    );
+    // 通知前端文件已变更
+    expect(notifyFileChangedMock).toHaveBeenCalledWith(resolve('/project/docs/sheet.xlsx'));
+  });
+
+  it('文件正在前端编辑时先 flush 再追加', async () => {
+    isEditingMock.mockReturnValue(true);
+    appendRowsMock.mockResolvedValue({ path: '/tmp/sheet.xlsx', sheet: 'Data', appendedRows: 1, startRow: 1 });
+
+    const registry = new HostToolsRegistry(undefined, '/tmp');
+    await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'append_xlsx_row',
+      arguments: { path: 'sheet.xlsx', sheet: 'Data', rows: [['a']] },
+    });
+
+    // 应先调用 requestFlush
+    expect(requestFlushMock).toHaveBeenCalledWith(resolve('/tmp/sheet.xlsx'));
+    // 再调用 appendRows
+    expect(appendRowsMock).toHaveBeenCalled();
+  });
+
+  it('文件未在前端编辑时不调用 requestFlush', async () => {
+    isEditingMock.mockReturnValue(false);
+    appendRowsMock.mockResolvedValue({ path: '/tmp/sheet.xlsx', sheet: 'Data', appendedRows: 1, startRow: 1 });
+
+    const registry = new HostToolsRegistry(undefined, '/tmp');
+    await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'append_xlsx_row',
+      arguments: { path: 'sheet.xlsx', sheet: 'Data', rows: [['a']] },
+    });
+
+    expect(requestFlushMock).not.toHaveBeenCalled();
+  });
+
+  it('缺少 path 参数时返回错误', async () => {
+    const registry = new HostToolsRegistry(undefined, tmpdir());
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'append_xlsx_row',
+      arguments: { sheet: 'Data', rows: [['a']] },
+    });
+
+    const parsed = parseResult(result);
+    expect(parsed.error).toBeDefined();
+    expect(appendRowsMock).not.toHaveBeenCalled();
+  });
+
+  it('缺少 sheet 参数时返回错误', async () => {
+    const registry = new HostToolsRegistry(undefined, tmpdir());
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'append_xlsx_row',
+      arguments: { path: '/tmp/sheet.xlsx', rows: [['a']] },
+    });
+
+    const parsed = parseResult(result);
+    expect(parsed.error).toBeDefined();
+  });
+
+  it('rows 为空数组时返回错误', async () => {
+    const registry = new HostToolsRegistry(undefined, tmpdir());
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'append_xlsx_row',
+      arguments: { path: '/tmp/sheet.xlsx', sheet: 'Data', rows: [] },
+    });
+
+    const parsed = parseResult(result);
+    expect(parsed.error).toBeDefined();
+  });
+
+  it('appendRows 抛错时返回错误信息', async () => {
+    appendRowsMock.mockRejectedValue(new Error('File not found'));
+
+    const registry = new HostToolsRegistry(undefined, '/tmp');
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'append_xlsx_row',
+      arguments: { path: 'missing.xlsx', sheet: 'Data', rows: [['a']] },
+    });
+
+    const parsed = parseResult(result);
+    expect(parsed.error).toContain('append_xlsx_row failed');
+    expect(parsed.error).toContain('File not found');
+  });
+
+  it('使用绝对路径时不进行 cwd 拼接', async () => {
+    appendRowsMock.mockResolvedValue({ path: '/abs/sheet.xlsx', sheet: 'Data', appendedRows: 1, startRow: 1 });
+
+    const registry = new HostToolsRegistry(undefined, '/project');
+    await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'append_xlsx_row',
+      arguments: { path: '/abs/sheet.xlsx', sheet: 'Data', rows: [['a']] },
+    });
+
+    expect(appendRowsMock).toHaveBeenCalledWith('/abs/sheet.xlsx', 'Data', [['a']]);
+  });
+});
+
+describe('update_xlsx_cell', () => {
+  beforeEach(() => {
+    updateCellMock.mockReset();
+    isEditingMock.mockReset();
+    requestFlushMock.mockReset();
+    notifyFileChangedMock.mockReset();
+    isEditingMock.mockReturnValue(false);
+    requestFlushMock.mockResolvedValue(undefined);
+  });
+
+  it('注册 update_xlsx_cell 工具', () => {
+    const registry = new HostToolsRegistry();
+    expect(registry.hasTool('update_xlsx_cell')).toBe(true);
+  });
+
+  it('成功更新单元格值', async () => {
+    const updateResult = {
+      path: '/tmp/sheet.xlsx',
+      sheet: 'Data',
+      row: 2,
+      col: 2,
+      previousValue: 95.2,
+      newValue: 99.9,
+    };
+    updateCellMock.mockResolvedValue(updateResult);
+
+    const registry = new HostToolsRegistry(undefined, '/project');
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'update_xlsx_cell',
+      arguments: {
+        path: 'docs/sheet.xlsx',
+        sheet: 'Data',
+        row: 2,
+        col: 2,
+        value: 99.9,
+      },
+    });
+
+    const parsed = parseResult(result);
+    expect(parsed.previousValue).toBe(95.2);
+    expect(parsed.newValue).toBe(99.9);
+
+    expect(updateCellMock).toHaveBeenCalledWith(resolve('/project/docs/sheet.xlsx'), 'Data', 2, 2, 99.9);
+    expect(notifyFileChangedMock).toHaveBeenCalledWith(resolve('/project/docs/sheet.xlsx'));
+  });
+
+  it('文件正在前端编辑时先 flush 再更新', async () => {
+    isEditingMock.mockReturnValue(true);
+    updateCellMock.mockResolvedValue({
+      path: '/tmp/sheet.xlsx', sheet: 'Data', row: 1, col: 1,
+      previousValue: null, newValue: 'x',
+    });
+
+    const registry = new HostToolsRegistry(undefined, '/tmp');
+    await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'update_xlsx_cell',
+      arguments: { path: 'sheet.xlsx', sheet: 'Data', row: 1, col: 1, value: 'x' },
+    });
+
+    expect(requestFlushMock).toHaveBeenCalledWith(resolve('/tmp/sheet.xlsx'));
+    expect(updateCellMock).toHaveBeenCalled();
+  });
+
+  it('用 null 清除单元格值', async () => {
+    updateCellMock.mockResolvedValue({
+      path: '/tmp/sheet.xlsx', sheet: 'Data', row: 1, col: 1,
+      previousValue: 'old', newValue: null,
+    });
+
+    const registry = new HostToolsRegistry(undefined, '/tmp');
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'update_xlsx_cell',
+      arguments: { path: 'sheet.xlsx', sheet: 'Data', row: 1, col: 1, value: null },
+    });
+
+    const parsed = parseResult(result);
+    expect(parsed.newValue).toBeNull();
+    expect(updateCellMock).toHaveBeenCalledWith(resolve('/tmp/sheet.xlsx'), 'Data', 1, 1, null);
+  });
+
+  it('row 或 col 小于 1 时返回错误', async () => {
+    const registry = new HostToolsRegistry(undefined, tmpdir());
+
+    const result1 = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'update_xlsx_cell',
+      arguments: { path: '/tmp/sheet.xlsx', sheet: 'Data', row: 0, col: 1, value: 'x' },
+    });
+    expect(parseResult(result1).error).toBeDefined();
+
+    const result2 = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc2',
+      toolName: 'update_xlsx_cell',
+      arguments: { path: '/tmp/sheet.xlsx', sheet: 'Data', row: 1, col: 0, value: 'x' },
+    });
+    expect(parseResult(result2).error).toBeDefined();
+
+    expect(updateCellMock).not.toHaveBeenCalled();
+  });
+
+  it('缺少 path 参数时返回错误', async () => {
+    const registry = new HostToolsRegistry(undefined, tmpdir());
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'update_xlsx_cell',
+      arguments: { sheet: 'Data', row: 1, col: 1, value: 'x' },
+    });
+
+    expect(parseResult(result).error).toBeDefined();
+  });
+
+  it('updateCell 抛错时返回错误信息', async () => {
+    updateCellMock.mockRejectedValue(new Error('Sheet not found'));
+
+    const registry = new HostToolsRegistry(undefined, '/tmp');
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'update_xlsx_cell',
+      arguments: { path: 'sheet.xlsx', sheet: 'Missing', row: 1, col: 1, value: 'x' },
+    });
+
+    const parsed = parseResult(result);
+    expect(parsed.error).toContain('update_xlsx_cell failed');
+    expect(parsed.error).toContain('Sheet not found');
   });
 });

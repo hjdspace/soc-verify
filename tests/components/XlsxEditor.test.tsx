@@ -38,9 +38,12 @@ vi.mock('@fortune-sheet/react', () => ({
 }));
 
 // ── mock tRPC ────────────────────────────────────────────────
-const { loadXlsxMock, saveXlsxMock } = vi.hoisted(() => ({
+const { loadXlsxMock, saveXlsxMock, registerEditorMock, unregisterEditorMock, flushDoneMock } = vi.hoisted(() => ({
   loadXlsxMock: vi.fn(),
   saveXlsxMock: vi.fn(),
+  registerEditorMock: vi.fn(),
+  unregisterEditorMock: vi.fn(),
+  flushDoneMock: vi.fn(),
 }));
 
 vi.mock('@renderer/lib/trpc', () => ({
@@ -48,9 +51,39 @@ vi.mock('@renderer/lib/trpc', () => ({
     document: {
       loadXlsx: { query: loadXlsxMock },
       saveXlsx: { mutate: saveXlsxMock },
+      registerEditor: { mutate: registerEditorMock },
+      unregisterEditor: { mutate: unregisterEditorMock },
+      flushDone: { mutate: flushDoneMock },
     },
   },
 }));
+
+// ── mock window.eventBridge（preload 暴露的 IPC 事件监听器）─────
+const { flushRequestListeners, fileChangedListeners } = vi.hoisted(() => ({
+  flushRequestListeners: [] as Array<(filePath: string) => void>,
+  fileChangedListeners: [] as Array<(filePath: string) => void>,
+}));
+
+beforeEach(() => {
+  flushRequestListeners.length = 0;
+  fileChangedListeners.length = 0;
+  (window as unknown as { eventBridge: unknown }).eventBridge = {
+    onDocumentFlushRequest: (cb: (filePath: string) => void) => {
+      flushRequestListeners.push(cb);
+      return () => {
+        const idx = flushRequestListeners.indexOf(cb);
+        if (idx >= 0) flushRequestListeners.splice(idx, 1);
+      };
+    },
+    onDocumentFileChanged: (cb: (filePath: string) => void) => {
+      fileChangedListeners.push(cb);
+      return () => {
+        const idx = fileChangedListeners.indexOf(cb);
+        if (idx >= 0) fileChangedListeners.splice(idx, 1);
+      };
+    },
+  };
+});
 
 import { XlsxEditor } from '@renderer/components/office/XlsxEditor';
 
@@ -65,6 +98,10 @@ describe('XlsxEditor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     onChangeRef.current = null;
+    // registerEditor / unregisterEditor / flushDone 默认返回 resolved promise
+    registerEditorMock.mockResolvedValue({ registered: true });
+    unregisterEditorMock.mockResolvedValue({ unregistered: true });
+    flushDoneMock.mockResolvedValue({ flushed: true });
   });
 
   afterEach(() => {
@@ -260,6 +297,157 @@ describe('XlsxEditor', () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(screen.getByText(/保存失败/)).toBeInTheDocument();
+    });
+  });
+
+  // ─── flush 机制 + 文件变更同步（Issue #7）──────────────────
+
+  describe('flush 机制与文件变更同步', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    it('mount 时调用 registerEditor 注册文件编辑状态', async () => {
+      loadXlsxMock.mockResolvedValue({
+        workbook: { name: 'Workbook', sheets: [{ name: 'Sheet1', celldata: [] }] },
+      });
+
+      render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(registerEditorMock).toHaveBeenCalledWith({ filePath: '/tmp/sheet.xlsx' });
+    });
+
+    it('unmount 时调用 unregisterEditor 注销编辑状态', async () => {
+      loadXlsxMock.mockResolvedValue({
+        workbook: { name: 'Workbook', sheets: [{ name: 'Sheet1', celldata: [] }] },
+      });
+
+      const { unmount } = render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
+      await vi.advanceTimersByTimeAsync(0);
+
+      unmount();
+
+      expect(unregisterEditorMock).toHaveBeenCalledWith({ filePath: '/tmp/sheet.xlsx' });
+    });
+
+    it('收到 flush-request 事件时立即保存并回复 flushDone', async () => {
+      loadXlsxMock.mockResolvedValue({
+        workbook: { name: 'Workbook', sheets: [{ name: 'Sheet1', celldata: [] }] },
+      });
+      saveXlsxMock.mockResolvedValue({ success: true });
+
+      render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByTestId('fortune-workbook')).toBeInTheDocument();
+
+      // 模拟用户编辑触发 onChange（产生未保存的修改）
+      triggerOnChange([{ name: 'Sheet1', celldata: [{ r: 0, c: 0, v: { v: 'new', m: 'new' } }] }]);
+
+      // 防抖窗口内不应保存
+      expect(saveXlsxMock).not.toHaveBeenCalled();
+
+      // 触发 flush-request 事件（主进程通知前端立即保存）
+      act(() => {
+        for (const listener of flushRequestListeners) {
+          listener('/tmp/sheet.xlsx');
+        }
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 立即调用 saveXlsx（不等待防抖）
+      expect(saveXlsxMock).toHaveBeenCalledTimes(1);
+      // 回复主进程 flush 完成
+      expect(flushDoneMock).toHaveBeenCalledWith({ filePath: '/tmp/sheet.xlsx' });
+    });
+
+    it('flush-request 事件不匹配当前文件时忽略', async () => {
+      loadXlsxMock.mockResolvedValue({
+        workbook: { name: 'Workbook', sheets: [{ name: 'Sheet1', celldata: [] }] },
+      });
+      saveXlsxMock.mockResolvedValue({ success: true });
+
+      render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
+      await vi.advanceTimersByTimeAsync(0);
+
+      triggerOnChange([{ name: 'Sheet1', celldata: [] }]);
+
+      // 触发其他文件的 flush-request
+      act(() => {
+        for (const listener of flushRequestListeners) {
+          listener('/tmp/other.xlsx');
+        }
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(saveXlsxMock).not.toHaveBeenCalled();
+      expect(flushDoneMock).not.toHaveBeenCalled();
+    });
+
+    it('收到 file-changed 事件时触发文件重载', async () => {
+      // 第一次加载返回空 celldata
+      loadXlsxMock.mockResolvedValueOnce({
+        workbook: { name: 'Workbook', sheets: [{ name: 'Sheet1', celldata: [] }] },
+      });
+      // 重载后返回有数据的 celldata
+      loadXlsxMock.mockResolvedValueOnce({
+        workbook: {
+          name: 'Workbook',
+          sheets: [{ name: 'Sheet1', celldata: [{ r: 0, c: 0, v: { v: 'reloaded', m: 'reloaded' } }] }],
+        },
+      });
+
+      render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(loadXlsxMock).toHaveBeenCalledTimes(1);
+
+      // 触发 file-changed 事件（AI 修改文件后通知前端重载）
+      act(() => {
+        for (const listener of fileChangedListeners) {
+          listener('/tmp/sheet.xlsx');
+        }
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 应再次调用 loadXlsx
+      expect(loadXlsxMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('file-changed 事件不匹配当前文件时忽略', async () => {
+      loadXlsxMock.mockResolvedValue({
+        workbook: { name: 'Workbook', sheets: [{ name: 'Sheet1', celldata: [] }] },
+      });
+
+      render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(loadXlsxMock).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        for (const listener of fileChangedListeners) {
+          listener('/tmp/other.xlsx');
+        }
+      });
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(loadXlsxMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('unmount 时移除 IPC 事件监听器', async () => {
+      loadXlsxMock.mockResolvedValue({
+        workbook: { name: 'Workbook', sheets: [{ name: 'Sheet1', celldata: [] }] },
+      });
+
+      const { unmount } = render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(flushRequestListeners).toHaveLength(1);
+      expect(fileChangedListeners).toHaveLength(1);
+
+      unmount();
+
+      expect(flushRequestListeners).toHaveLength(0);
+      expect(fileChangedListeners).toHaveLength(0);
     });
   });
 });

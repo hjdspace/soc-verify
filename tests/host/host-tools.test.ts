@@ -60,10 +60,10 @@ function makeMockSimulationManager(
 }
 
 describe('HostToolsRegistry', () => {
-  it('registers 13 default tools (8 base + 5 document tools)', () => {
+  it('registers 15 default tools (8 base + 5 document tools + 2 xlsx edit tools)', () => {
     const registry = new HostToolsRegistry();
     const names = registry.getToolNames();
-    expect(names).toHaveLength(13);
+    expect(names).toHaveLength(15);
     expect(names).toContain('list_subsys');
     expect(names).toContain('list_cases');
     expect(names).toContain('get_sim_options_schema');
@@ -78,12 +78,15 @@ describe('HostToolsRegistry', () => {
     expect(names).toContain('create_pptx');
     expect(names).toContain('create_pdf');
     expect(names).toContain('read_document');
+    // xlsx 细粒度编辑工具（Issue #7）
+    expect(names).toContain('append_xlsx_row');
+    expect(names).toContain('update_xlsx_cell');
   });
 
   it('getDefinitions returns all tool definitions', () => {
     const registry = new HostToolsRegistry();
     const defs = registry.getDefinitions();
-    expect(defs).toHaveLength(13);
+    expect(defs).toHaveLength(15);
     for (const def of defs) {
       expect(def.name).toBeDefined();
       expect(def.description).toBeDefined();
@@ -102,14 +105,14 @@ describe('HostToolsRegistry', () => {
     const registry = new HostToolsRegistry();
     registry.registerCustom('custom_tool', 'A custom tool', { type: 'object' }, async () => 'ok');
     expect(registry.hasTool('custom_tool')).toBe(true);
-    expect(registry.getToolNames()).toHaveLength(14);
+    expect(registry.getToolNames()).toHaveLength(16);
   });
 
   it('unregister removes a tool', () => {
     const registry = new HostToolsRegistry();
     expect(registry.unregister('list_subsys')).toBe(true);
     expect(registry.hasTool('list_subsys')).toBe(false);
-    expect(registry.getToolNames()).toHaveLength(12);
+    expect(registry.getToolNames()).toHaveLength(14);
   });
 
   it('unregister returns false for nonexistent tool', () => {

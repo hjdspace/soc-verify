@@ -10,12 +10,12 @@
  * 预览模式切换栏（HTML/Screenshots/Watch 按钮组）仅对 .docx/.pptx 显示。
  *
  * officecli 不可用（document.checkInstalled 返回 false）时：
- *   显示"officecli 未安装"提示 + 下载按钮（仅开发模式可见）。
+ *   显示"officecli 未安装"提示 + 下载按钮（仅开发模式可见，调用 document.downloadBinary）。
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
-import { FileText, Download } from 'lucide-react';
+import { FileText, Download, Loader2 } from 'lucide-react';
 import { HtmlPreview } from './HtmlPreview';
 import { ScreenshotsPreview } from './ScreenshotsPreview';
 import { WatchPreview } from './WatchPreview';
@@ -33,6 +33,12 @@ type InstalledState =
   | { status: 'checking' }
   | { status: 'installed' }
   | { status: 'not-installed' };
+
+type DownloadState =
+  | { status: 'idle' }
+  | { status: 'downloading'; message: string; percent?: number }
+  | { status: 'success' }
+  | { status: 'error'; message: string };
 
 /** 从文件路径提取扩展名（小写，无前导点） */
 function getExt(filePath: string): string {
@@ -59,6 +65,9 @@ export function OfficeDocumentView({ filePath, mode, previewMode }: OfficeDocume
   // officecli 安装检查状态
   const [installState, setInstallState] = useState<InstalledState>({ status: 'checking' });
 
+  // officecli 下载状态（开发模式下点击下载按钮触发）
+  const [downloadState, setDownloadState] = useState<DownloadState>({ status: 'idle' });
+
   useEffect(() => {
     let cancelled = false;
     setInstallState({ status: 'checking' });
@@ -78,20 +87,95 @@ export function OfficeDocumentView({ filePath, mode, previewMode }: OfficeDocume
     };
   }, []);
 
-  // officecli 不可用降级：显示提示 + 下载按钮（开发模式可见）
+  // 监听下载进度推送（officecli:download-progress IPC 事件）
+  useEffect(() => {
+    const unlisten = window.eventBridge?.onOfficecliDownloadProgress?.((data) => {
+      if (data.stage === 'done') {
+        setDownloadState({ status: 'success' });
+      } else if (data.stage === 'error') {
+        setDownloadState({ status: 'error', message: data.message });
+      } else {
+        setDownloadState({ status: 'downloading', message: data.message, percent: data.percent });
+      }
+    });
+    return () => unlisten?.();
+  }, []);
+
+  // 下载成功后重新检查安装状态
+  useEffect(() => {
+    if (downloadState.status !== 'success') return;
+    trpc.document.checkInstalled
+      .query()
+      .then((r) => {
+        if (r.installed) {
+          setInstallState({ status: 'installed' });
+          setDownloadState({ status: 'idle' });
+        } else {
+          setDownloadState({ status: 'error', message: '下载完成但二进制未检测到，请重启应用' });
+        }
+      })
+      .catch(() => {
+        setDownloadState({ status: 'error', message: '下载完成但检查安装状态失败' });
+      });
+  }, [downloadState.status]);
+
+  const handleDownload = useCallback(async () => {
+    setDownloadState({ status: 'downloading', message: '开始下载...' });
+    try {
+      await trpc.document.downloadBinary.mutate();
+      // 成功后会通过 officecli:download-progress 的 done 事件触发状态更新
+    } catch (err) {
+      setDownloadState({
+        status: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, []);
+
+  // officecli 不可用降级：显示提示 + 下载按钮（开发模式可见，调用 document.downloadBinary）
   if (installState.status === 'not-installed') {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-muted-foreground">
         <FileText className="h-8 w-8 opacity-40" />
         <div className="font-medium text-foreground">officecli 未安装</div>
         <p className="max-w-md text-xs leading-relaxed">
-          Office 文档预览依赖 officecli 二进制。请在终端运行下方命令下载并安装后重启应用。
+          Office 文档预览依赖 officecli 二进制。{import.meta.env?.DEV ? '点击下方按钮下载安装，或' : '请在终端运行 '}
+          <code className="font-mono">npm run download:officecli</code>
+          {import.meta.env?.DEV ? ' 手动下载。' : ' 下载并安装后重启应用。'}
         </p>
-        {/* 仅开发模式可见下载提示按钮 */}
+        {/* 仅开发模式可见下载按钮（调用 document.downloadBinary tRPC procedure） */}
         {import.meta.env?.DEV && (
-          <div className="mt-2 flex items-center gap-2 rounded-md border border-border bg-secondary/30 px-3 py-1.5 text-xs">
-            <Download className="h-3.5 w-3.5 opacity-70" />
-            <code className="font-mono">npm run download:officecli</code>
+          <div className="mt-2 flex flex-col items-center gap-2">
+            <button
+              type="button"
+              onClick={handleDownload}
+              disabled={downloadState.status === 'downloading'}
+              className={cn(
+                'flex items-center gap-2 rounded-md border border-border bg-secondary/30 px-3 py-1.5 text-xs transition-colors',
+                downloadState.status === 'downloading'
+                  ? 'cursor-not-allowed opacity-60'
+                  : 'hover:bg-accent hover:text-foreground',
+              )}
+            >
+              {downloadState.status === 'downloading' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin opacity-70" />
+              ) : (
+                <Download className="h-3.5 w-3.5 opacity-70" />
+              )}
+              <span>
+                {downloadState.status === 'downloading'
+                  ? downloadState.percent
+                    ? `下载中 ${downloadState.percent}%`
+                    : '下载中...'
+                  : '下载 officecli'}
+              </span>
+            </button>
+            {downloadState.status === 'downloading' && downloadState.message && (
+              <span className="text-xs text-muted-foreground">{downloadState.message}</span>
+            )}
+            {downloadState.status === 'error' && (
+              <span className="text-xs text-destructive">{downloadState.message}</span>
+            )}
           </div>
         )}
       </div>

@@ -13,6 +13,8 @@ import { simulationRegistry } from './simulation/simulation-registry';
 import { simTerminalLinker } from './simulation/sim-terminal-linker';
 import { errorAnalysisCoordinator } from './simulation/error-analysis-coordinator';
 import { terminalManager } from './terminal/terminal-manager';
+import { registerDocumentIpcHandlers, cleanupEditorRegistry } from './document/editor-registry';
+import { cleanupOfficeCli } from './officecli/service';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -621,6 +623,9 @@ app.whenReady().then(async () => {
   registerWindowControls(mainWindow);
   registerEventForwarding(mainWindow);
 
+  // 注册 officecli 文档相关 IPC handlers（flush-done 由前端发送）
+  registerDocumentIpcHandlers();
+
   // Create system tray
   tray = createTray(mainWindow);
 
@@ -669,4 +674,7 @@ app.on('before-quit', async () => {
   pluginLoader.clearAll();
   await sessionManager.destroyAll();
   terminalManager.destroyAll();
+  // 清理 officecli watch 进程和文档编辑器注册表
+  cleanupOfficeCli();
+  cleanupEditorRegistry();
 });

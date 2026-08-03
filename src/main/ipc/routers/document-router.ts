@@ -13,12 +13,18 @@
  *  - document.readImageAsDataURL：读图为 base64 data URL
  *  - document.loadXlsx：读取 xlsx 文件并转为 Fortune-sheet 工作簿数据
  *  - document.saveXlsx：将 Fortune-sheet 工作簿数据写回 xlsx 文件
+ *  - document.registerEditor：注册文件正在前端编辑（XlsxEditor mount）
+ *  - document.unregisterEditor：注销文件的前端编辑状态（XlsxEditor unmount）
+ *  - document.flushDone：前端 flush 完成后回复主进程
+ *  - document.downloadBinary：下载 officecli 二进制（仅开发模式，进度通过 IPC 推送）
  *
  * officecli 不可用时，procedure 返回明确的 `OfficeCLI not available` 错误
  * （TRPCError INTERNAL_SERVER_ERROR with cause），不抛未捕获异常。
  */
 
 import ExcelJS from 'exceljs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { t, TRPCError } from '../router-context';
 import {
   checkInstalled,
@@ -33,6 +39,20 @@ import {
 } from '../../officecli/service';
 import { OfficeCliNotAvailableError } from '../../officecli/executor';
 import { excelToFortune, fortuneToExcel, type WorkbookData } from '../../document/fortune-sheet-bridge';
+import {
+  registerEditor,
+  unregisterEditor,
+  notifyFlushDone,
+} from '../../document/editor-registry';
+import { downloadOfficeCliBinary } from '../../officecli/downloader';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/** 开发模式下 download-officecli.mjs 的路径（<projectRoot>/scripts/download-officecli.mjs） */
+function devDownloadScriptPath(): string {
+  // src/main/ipc/routers/ → ../../../scripts/download-officecli.mjs
+  return resolve(__dirname, '../../../scripts/download-officecli.mjs');
+}
 
 /** 将 service 层错误映射为 tRPC 错误，保持 officecli 不可用时错误信息明确 */
 function toTrpcError(err: unknown, operation: string): TRPCError {
@@ -218,4 +238,65 @@ export const documentRouter = t.router({
         throw toTrpcError(err, 'saveXlsx');
       }
     }),
+
+  /** 注册文件正在前端编辑（XlsxEditor mount 时调用）。 */
+  registerEditor: t.procedure
+    .input((raw): { filePath: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.filePath !== 'string' || r.filePath.length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'filePath is required' });
+      }
+      return { filePath: r.filePath };
+    })
+    .mutation(({ input }) => {
+      registerEditor(input.filePath);
+      return { registered: true };
+    }),
+
+  /** 注销文件的前端编辑状态（XlsxEditor unmount 时调用）。 */
+  unregisterEditor: t.procedure
+    .input((raw): { filePath: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.filePath !== 'string' || r.filePath.length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'filePath is required' });
+      }
+      return { filePath: r.filePath };
+    })
+    .mutation(({ input }) => {
+      unregisterEditor(input.filePath);
+      return { unregistered: true };
+    }),
+
+  /** 前端 flush 完成后回复主进程（XlsxEditor 立即保存后调用）。 */
+  flushDone: t.procedure
+    .input((raw): { filePath: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.filePath !== 'string' || r.filePath.length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'filePath is required' });
+      }
+      return { filePath: r.filePath };
+    })
+    .mutation(({ input }) => {
+      notifyFlushDone(input.filePath);
+      return { flushed: true };
+    }),
+
+  /**
+   * 下载 officecli 二进制（仅开发模式）。
+   *
+   * 调用 scripts/download-officecli.mjs 脚本，通过 'officecli:download-progress'
+   * IPC 事件推送进度（stage、message、percent）。
+   *
+   * 生产模式返回错误，提示用户通过应用安装包获取 officecli。
+   */
+  downloadBinary: t.procedure.mutation(async () => {
+    const result = await downloadOfficeCliBinary(devDownloadScriptPath());
+    if (!result.success) {
+      throw new TRPCError({
+        code: 'INTERNAL_SERVER_ERROR',
+        message: result.error ?? 'Download failed',
+      });
+    }
+    return { success: true, path: result.path };
+  }),
 });

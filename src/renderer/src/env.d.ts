@@ -30,6 +30,12 @@ export interface EventBridgeAPI {
   onClosureEvent: (callback: (data: { type: string; [key: string]: unknown }) => void) => () => void;
   onTerminalData: (callback: (data: { id: string; data: string }) => void) => () => void;
   onTerminalExit: (callback: (data: { id: string; exitCode: number }) => void) => () => void;
+  // officecli 文档事件（Issue #7 / #8）
+  onDocumentFlushRequest: (callback: (filePath: string) => void) => () => void;
+  onDocumentFileChanged: (callback: (filePath: string) => void) => () => void;
+  onOfficecliDownloadProgress: (
+    callback: (data: { stage: string; message: string; percent?: number }) => void,
+  ) => () => void;
 }
 
 declare global {

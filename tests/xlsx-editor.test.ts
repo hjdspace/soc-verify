@@ -539,3 +539,225 @@ describe('fortune-sheet-bridge', () => {
     });
   });
 });
+
+// ─── xlsx-editor：appendRows / updateCell（Issue #7）──────────────
+
+import { appendRows, updateCell, colIndexToLetter } from '../src/main/document/xlsx-editor';
+
+describe('xlsx-editor — appendRows / updateCell', () => {
+  let tempDir: string | null = null;
+
+  beforeEach(() => {
+    tempDir = null;
+  });
+
+  afterEach(() => {
+    if (tempDir && existsSync(tempDir)) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  /** 创建带初始数据的 xlsx 文件 */
+  async function writeSeedXlsx(): Promise<string> {
+    const dir = mkdtempSync(join(tmpdir(), 'xlsx-editor-'));
+    tempDir = dir;
+    const filePath = join(dir, 'sheet.xlsx');
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Data');
+    ws.getCell(1, 1).value = 'module';
+    ws.getCell(1, 2).value = 'coverage';
+    ws.getCell(2, 1).value = 'cpu_core';
+    ws.getCell(2, 2).value = 95.2;
+    await wb.xlsx.writeFile(filePath);
+    return filePath;
+  }
+
+  // ─── colIndexToLetter ─────────────────────────────────────
+
+  describe('colIndexToLetter', () => {
+    it('1 → A', () => {
+      expect(colIndexToLetter(1)).toBe('A');
+    });
+    it('26 → Z', () => {
+      expect(colIndexToLetter(26)).toBe('Z');
+    });
+    it('27 → AA', () => {
+      expect(colIndexToLetter(27)).toBe('AA');
+    });
+    it('52 → AZ', () => {
+      expect(colIndexToLetter(52)).toBe('AZ');
+    });
+    it('53 → BA', () => {
+      expect(colIndexToLetter(53)).toBe('BA');
+    });
+  });
+
+  // ─── appendRows ──────────────────────────────────────────
+
+  describe('appendRows', () => {
+    it('在已有 sheet 末尾追加多行', async () => {
+      const filePath = await writeSeedXlsx();
+
+      const result = await appendRows(filePath, 'Data', [
+        ['gpu', 78.3],
+        ['memory_ctrl', 88.1],
+      ]);
+
+      expect(result.path).toBe(filePath);
+      expect(result.sheet).toBe('Data');
+      expect(result.appendedRows).toBe(2);
+      expect(result.startRow).toBe(3); // 原始 2 行，从第 3 行开始追加
+
+      // 读回验证
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(filePath);
+      const ws = wb.getWorksheet('Data');
+      expect(ws?.rowCount).toBe(4);
+      expect(ws?.getCell(3, 1).value).toBe('gpu');
+      expect(ws?.getCell(3, 2).value).toBe(78.3);
+      expect(ws?.getCell(4, 1).value).toBe('memory_ctrl');
+      expect(ws?.getCell(4, 2).value).toBe(88.1);
+    });
+
+    it('sheet 不存在时自动创建', async () => {
+      const filePath = await writeSeedXlsx();
+
+      const result = await appendRows(filePath, 'NewSheet', [['a', 'b']]);
+
+      expect(result.appendedRows).toBe(1);
+      expect(result.startRow).toBe(1);
+
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(filePath);
+      const ws = wb.getWorksheet('NewSheet');
+      expect(ws).toBeDefined();
+      expect(ws?.getCell(1, 1).value).toBe('a');
+      expect(ws?.getCell(1, 2).value).toBe('b');
+    });
+
+    it('支持不同类型的单元格值', async () => {
+      const filePath = await writeSeedXlsx();
+      const date = new Date('2024-01-15T00:00:00.000Z');
+
+      await appendRows(filePath, 'Data', [
+        ['string', 42, true, null, date],
+      ]);
+
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(filePath);
+      const ws = wb.getWorksheet('Data');
+      expect(ws?.getCell(3, 1).value).toBe('string');
+      expect(ws?.getCell(3, 2).value).toBe(42);
+      expect(ws?.getCell(3, 3).value).toBe(true);
+      expect(ws?.getCell(3, 4).value).toBeNull();
+      expect(ws?.getCell(3, 5).value).toBeInstanceOf(Date);
+    });
+
+    it('空 rows 数组追加 0 行', async () => {
+      const filePath = await writeSeedXlsx();
+
+      const result = await appendRows(filePath, 'Data', []);
+
+      expect(result.appendedRows).toBe(0);
+      expect(result.startRow).toBe(3);
+
+      // 文件仍可读，行数不变
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(filePath);
+      const ws = wb.getWorksheet('Data');
+      expect(ws?.rowCount).toBe(2);
+    });
+
+    it('文件不存在时抛错', async () => {
+      await expect(
+        appendRows(join(tmpdir(), 'nonexistent-file.xlsx'), 'Data', [['a']]),
+      ).rejects.toThrow();
+    });
+  });
+
+  // ─── updateCell ──────────────────────────────────────────
+
+  describe('updateCell', () => {
+    it('更新已有单元格的值并返回旧值', async () => {
+      const filePath = await writeSeedXlsx();
+
+      const result = await updateCell(filePath, 'Data', 2, 2, 99.9);
+
+      expect(result.path).toBe(filePath);
+      expect(result.sheet).toBe('Data');
+      expect(result.row).toBe(2);
+      expect(result.col).toBe(2);
+      expect(result.previousValue).toBe(95.2);
+      expect(result.newValue).toBe(99.9);
+
+      // 读回验证
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(filePath);
+      const ws = wb.getWorksheet('Data');
+      expect(ws?.getCell(2, 2).value).toBe(99.9);
+    });
+
+    it('更新空单元格时 previousValue 为 null', async () => {
+      const filePath = await writeSeedXlsx();
+
+      const result = await updateCell(filePath, 'Data', 5, 5, 'new-value');
+
+      expect(result.previousValue).toBeNull();
+      expect(result.newValue).toBe('new-value');
+
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(filePath);
+      const ws = wb.getWorksheet('Data');
+      expect(ws?.getCell(5, 5).value).toBe('new-value');
+    });
+
+    it('用 null 清除单元格值', async () => {
+      const filePath = await writeSeedXlsx();
+      // 先写入再清除
+      await updateCell(filePath, 'Data', 3, 1, 'temp');
+      const result = await updateCell(filePath, 'Data', 3, 1, null);
+
+      expect(result.previousValue).toBe('temp');
+      expect(result.newValue).toBeNull();
+
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.readFile(filePath);
+      const ws = wb.getWorksheet('Data');
+      expect(ws?.getCell(3, 1).value).toBeNull();
+    });
+
+    it('支持更新为布尔值', async () => {
+      const filePath = await writeSeedXlsx();
+
+      const result = await updateCell(filePath, 'Data', 2, 2, true);
+
+      expect(result.newValue).toBe(true);
+      expect(result.previousValue).toBe(95.2);
+    });
+
+    it('row 或 col 小于 1 时抛错', async () => {
+      const filePath = await writeSeedXlsx();
+
+      await expect(updateCell(filePath, 'Data', 0, 1, 'x')).rejects.toThrow(
+        /1-based positive integers/,
+      );
+      await expect(updateCell(filePath, 'Data', 1, 0, 'x')).rejects.toThrow(
+        /1-based positive integers/,
+      );
+    });
+
+    it('sheet 不存在时抛错', async () => {
+      const filePath = await writeSeedXlsx();
+
+      await expect(updateCell(filePath, 'Nonexistent', 1, 1, 'x')).rejects.toThrow(
+        /Sheet "Nonexistent" not found/,
+      );
+    });
+
+    it('文件不存在时抛错', async () => {
+      await expect(
+        updateCell(join(tmpdir(), 'nonexistent-file.xlsx'), 'Data', 1, 1, 'x'),
+      ).rejects.toThrow();
+    });
+  });
+});
