@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { parseLogFile, parseLogStream } from '../../src/main/timing-violation/parser/vio-parser';
 import { convertTimeToFs, convertTimeToNs, formatTimeDisplay } from '../../src/main/timing-violation/parser/time-utils';
 import {
@@ -154,6 +155,16 @@ describe('Case Info Parser', () => {
       expect(info.corner).toBe('npg_f1_ssg');
       expect(info.seed).toBe('1');
     });
+
+    it('falls back to seed dir name when corner dir does not match any corner', () => {
+      // Path: D:\...\work\page_test_027_test\log\vio_summary.log
+      // corner dir = 'work' (no corner match) → should fall back to seed dir
+      const path = 'D:\\doc\\python\\runsim_r3p0\\work\\page_test_027_test\\log\\vio_summary.log';
+      const info = parseCaseInfoFromPath(path);
+      expect(info.caseName).toBe('page_test_027_test');
+      expect(info.corner).toBeNull();
+      expect(info.seed).toBeNull();
+    });
   });
 });
 
@@ -163,7 +174,7 @@ describe('VioLogParser', () => {
   let tmpDir: string;
 
   beforeEach(() => {
-    tmpDir = require('node:os').tmpdir() + `/sv-tv-test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    tmpDir = tmpdir() + `/sv-tv-test-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     mkdirSync(tmpDir, { recursive: true });
   });
 
