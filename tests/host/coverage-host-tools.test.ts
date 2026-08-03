@@ -384,7 +384,7 @@ describe('get_coverage Host Tool (ADR 0009 摘要优先)', () => {
     const { mgr, cleanup } = await setupManager();
     try {
       const hostTools = new HostToolsRegistry();
-      // 默认 8 个工具，无 get_coverage_detail
+      // 默认 13 个工具（8 base + 5 document），无 get_coverage_detail
       expect(hostTools.hasTool('get_coverage_detail')).toBe(false);
 
       hostTools.setCoverageManager(mgr);
@@ -393,8 +393,8 @@ describe('get_coverage Host Tool (ADR 0009 摘要优先)', () => {
       expect(hostTools.hasTool('get_coverage_uncovered')).toBe(true);
       expect(hostTools.hasTool('get_coverage_grade')).toBe(true);
       expect(hostTools.hasTool('get_coverage_csv')).toBe(true);
-      // 共 12 个工具（8 默认 + 4 覆盖率分析）
-      expect(hostTools.getToolNames()).toHaveLength(12);
+      // 共 17 个工具（13 默认 + 4 覆盖率分析）
+      expect(hostTools.getToolNames()).toHaveLength(17);
     } finally {
       cleanup();
     }

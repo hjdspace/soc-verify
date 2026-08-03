@@ -60,10 +60,10 @@ function makeMockSimulationManager(
 }
 
 describe('HostToolsRegistry', () => {
-  it('registers 8 default tools', () => {
+  it('registers 13 default tools (8 base + 5 document tools)', () => {
     const registry = new HostToolsRegistry();
     const names = registry.getToolNames();
-    expect(names).toHaveLength(8);
+    expect(names).toHaveLength(13);
     expect(names).toContain('list_subsys');
     expect(names).toContain('list_cases');
     expect(names).toContain('get_sim_options_schema');
@@ -72,12 +72,18 @@ describe('HostToolsRegistry', () => {
     expect(names).toContain('get_compile_errors');
     expect(names).toContain('get_coverage');
     expect(names).toContain('read_file');
+    // 文档工具（Issue #6）
+    expect(names).toContain('create_docx');
+    expect(names).toContain('create_xlsx');
+    expect(names).toContain('create_pptx');
+    expect(names).toContain('create_pdf');
+    expect(names).toContain('read_document');
   });
 
   it('getDefinitions returns all tool definitions', () => {
     const registry = new HostToolsRegistry();
     const defs = registry.getDefinitions();
-    expect(defs).toHaveLength(8);
+    expect(defs).toHaveLength(13);
     for (const def of defs) {
       expect(def.name).toBeDefined();
       expect(def.description).toBeDefined();
@@ -88,6 +94,7 @@ describe('HostToolsRegistry', () => {
   it('hasTool returns true for registered tools', () => {
     const registry = new HostToolsRegistry();
     expect(registry.hasTool('list_subsys')).toBe(true);
+    expect(registry.hasTool('create_docx')).toBe(true);
     expect(registry.hasTool('nonexistent')).toBe(false);
   });
 
@@ -95,14 +102,14 @@ describe('HostToolsRegistry', () => {
     const registry = new HostToolsRegistry();
     registry.registerCustom('custom_tool', 'A custom tool', { type: 'object' }, async () => 'ok');
     expect(registry.hasTool('custom_tool')).toBe(true);
-    expect(registry.getToolNames()).toHaveLength(9);
+    expect(registry.getToolNames()).toHaveLength(14);
   });
 
   it('unregister removes a tool', () => {
     const registry = new HostToolsRegistry();
     expect(registry.unregister('list_subsys')).toBe(true);
     expect(registry.hasTool('list_subsys')).toBe(false);
-    expect(registry.getToolNames()).toHaveLength(7);
+    expect(registry.getToolNames()).toHaveLength(12);
   });
 
   it('unregister returns false for nonexistent tool', () => {

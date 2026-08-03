@@ -1,5 +1,14 @@
 import { create } from 'zustand';
 
+export type OfficePreviewMode = 'html' | 'screenshots' | 'watch';
+
+export type OfficeDocumentDestination = {
+  type: 'office-document';
+  filePath: string;
+  mode: 'preview' | 'edit';
+  previewMode?: OfficePreviewMode;
+};
+
 export type WorkbenchDestination =
   | { type: 'file'; path: string; name: string }
   | { type: 'terminal'; terminalTabId: string; title: string }
@@ -16,7 +25,8 @@ export type WorkbenchDestination =
   | { type: 'timing-violation' }
   | { type: 'ai-artifacts' }
   | { type: 'plugin-view'; pluginId: string; viewId: string; title: string }
-  | { type: 'diff-review'; filePath: string; fileName: string };
+  | { type: 'diff-review'; filePath: string; fileName: string }
+  | OfficeDocumentDestination;
 
 export type WorkbenchTab = {
   id: string;
@@ -68,7 +78,45 @@ function describeDestination(destination: WorkbenchDestination): Omit<WorkbenchT
       return { id: destination.type, title: 'AI 产物', closable: true };
     case 'plugin-view':
       return { id: `plugin-view:${destination.pluginId}:${destination.viewId}`, title: destination.title, closable: true };
+    case 'office-document': {
+      // tab 标题使用文件基本名，便于在多文档间区分
+      const sep = destination.filePath.includes('/') ? '/' : '\\';
+      const parts = destination.filePath.split(sep);
+      const fileName = parts[parts.length - 1] || destination.filePath;
+      return { id: `office-document:${destination.filePath}`, title: fileName, closable: true };
+    }
   }
+}
+
+/** 支持预览的 Office 文档扩展名（小写、无前导点） */
+const OFFICE_DOC_EXTENSIONS = new Set(['docx', 'pptx', 'xlsx', 'pdf']);
+
+/**
+ * 根据文件扩展名推断合适的 destination：
+ *   - .xlsx → office-document，mode='edit'（编辑能力在 Issue #5 实现，本期占位）
+ *   - .docx/.pptx → office-document，mode='preview'，previewMode='html'
+ *   - .pdf → office-document，mode='preview'，previewMode='html'（Issue #4 用 react-pdf，本期占位）
+ *   - 其他 → 普通 'file' destination
+ *
+ * 供文件树点击、文件选择对话框等调用方复用，避免分散判断。
+ */
+export function openFileDestination(
+  open: (destination: WorkbenchDestination) => void,
+  path: string,
+  name: string,
+): void {
+  const dot = path.lastIndexOf('.');
+  const ext = dot === -1 ? '' : path.slice(dot + 1).toLowerCase();
+  if (OFFICE_DOC_EXTENSIONS.has(ext)) {
+    open({
+      type: 'office-document',
+      filePath: path,
+      mode: ext === 'xlsx' ? 'edit' : 'preview',
+      previewMode: 'html',
+    });
+    return;
+  }
+  open({ type: 'file', path, name });
 }
 
 export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({

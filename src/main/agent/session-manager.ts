@@ -5,6 +5,7 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { AgentClient, type ToolCallHandler } from './agent-client';
 import { resolveAgentRuntime, resolveBuiltInExtensionDir, resolveRunnerBinary, resolveRunnerScript, resolveBunPath, checkBunVersion } from './paths';
+import { ensureOfficecliOnPath } from './officecli-paths';
 import type { CustomToolDefinition, InitConfig } from './types';
 import {
   buildModelInputOverrideConfig,
@@ -318,6 +319,15 @@ export class SessionManagerImpl extends EventEmitter {
           break;
         }
       }
+    }
+
+    // 注入 officecli 二进制路径到子进程 PATH（Issue #6）
+    // 同步内置 officecli 到 ~/.officecli/bin/ 并将该目录注入 env.PATH 前面，
+    // 使 omp 子进程及其衍生的 Host Tool（create_docx 等）可直接调用 officecli。
+    try {
+      await ensureOfficecliOnPath(env);
+    } catch (err) {
+      console.warn(`[agent:session:${sessionId}] officecli PATH injection failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // Build init config

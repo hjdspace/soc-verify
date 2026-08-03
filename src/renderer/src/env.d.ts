@@ -37,4 +37,30 @@ declare global {
     windowControls?: WindowControlsAPI;
     eventBridge?: EventBridgeAPI;
   }
+
+  // ── Electron <webview> 标签类型声明 ──────────────────────────
+  // webview 是 Electron 提供的自定义元素，独立于渲染进程运行，
+  // 不在 @types/react 的 JSX.IntrinsicElements 中。此处补齐常用属性。
+  namespace JSX {
+    interface IntrinsicElements {
+      webview: WebviewAttributes;
+    }
+  }
+}
+
+// webview 标签支持的常用属性（仅声明本期使用的子集）
+export interface WebviewAttributes {
+  src?: string;
+  partition?: string;
+  // 关闭 http/https 时的安全策略限制（用于加载 localhost watch 服务）
+  allowpopups?: boolean;
+  // 启用 Node 集成（默认 false，保持隔离）
+  nodeintegration?: boolean;
+  // 禁用 websecurity（仅用于本地 file:// 加载，跨平台兼容）
+  disablewebsecurity?: boolean;
+  // 事件回调
+  onLoad?: React.EventHandler<React.SyntheticEvent<HTMLElement>>;
+  onDomReady?: React.EventHandler<React.SyntheticEvent<HTMLElement>>;
+  onError?: React.EventHandler<React.SyntheticEvent<HTMLElement>>;
+  [key: string]: unknown;
 }

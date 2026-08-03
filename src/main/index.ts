@@ -407,7 +407,10 @@ function createWindow(): BrowserWindow {
       preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      // 启用 <webview> 标签：用于 Office 文档预览（HtmlPreview 加载 file://、WatchPreview 加载 localhost）
+      // webview 是独立进程，不受渲染进程 CSP（default-src 'self'）限制，不修改 index.html 的 CSP
+      webviewTag: true
     }
   });
 

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine, Puzzle } from 'lucide-react';
-import { useWorkbenchStore } from '@renderer/stores/workbench';
+import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine, Puzzle, FileType } from 'lucide-react';
+import { useWorkbenchStore, openFileDestination } from '@renderer/stores/workbench';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useTerminalStore } from '@renderer/stores/terminal';
@@ -21,6 +21,7 @@ import { cn } from '@renderer/lib/utils';
 import type { SimulationHistoryEntry, CompileError, SimulationStatus } from '@shared/types';
 import { PluginView } from '@renderer/components/plugins/PluginView';
 import { TVDashboard } from '@renderer/components/timing-violation/TVDashboard';
+import { OfficeDocumentView } from '@renderer/components/office/OfficeDocumentView';
 import { Timer } from 'lucide-react';
 
 // ── 状态徽章：主题感知的点 + 文字 ────────────────────────────────
@@ -148,7 +149,8 @@ export function CenterArea() {
       const result = await trpc.project.pickFiles.mutate({ projectId: currentProjectId });
       if (!result.canceled) {
         for (const file of result.files) {
-          openDestination({ type: 'file', path: file.path, name: file.name });
+          // 根据扩展名分发：Office 文档走 office-document 预览/编辑，其他走普通 file
+          openFileDestination(openDestination, file.path, file.name);
         }
       }
     } catch {
@@ -238,6 +240,7 @@ export function CenterArea() {
                 {tab.destination.type === 'source-control' && <GitCommitHorizontal className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'timing-violation' && <Timer className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'plugin-view' && <Puzzle className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'office-document' && <FileType className="h-3 w-3 opacity-50" />}
                 <span className="max-w-32 truncate">{tab.title}</span>
                 {tab.closable && (
                   <button
@@ -477,6 +480,13 @@ export function CenterArea() {
             }
             return <DiffReviewView key={target.filePath} entry={target} />;
           })()
+        ) : destination?.type === 'office-document' ? (
+          <OfficeDocumentView
+            key={destination.filePath}
+            filePath={destination.filePath}
+            mode={destination.mode}
+            previewMode={destination.previewMode}
+          />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
             {/* Active simulations */}

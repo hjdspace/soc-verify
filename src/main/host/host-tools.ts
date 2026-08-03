@@ -1,6 +1,8 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, mkdir, unlink } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import type { Dirent } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { extname, isAbsolute, join, resolve, dirname } from 'node:path';
 import type { AgentToolResult, RpcHostToolCallRequest, RpcHostToolDefinition } from './types';
 import type { SubsysDiscovery, CaseStatus } from './discovery';
 import { NoopDiscovery } from './discovery';
@@ -8,6 +10,7 @@ import type { PluginBackedSimulation, PluginBackedCoverage } from '../plugin-ada
 import type { CoverageManager } from '../coverage/coverage-manager';
 import type { CaseStatsService } from '../case/case-stats-service';
 import type { CoverageMetric } from '@shared/types';
+import { execOfficeCli } from '../officecli/executor';
 
 type HostToolHandler = (args: Record<string, unknown>) => Promise<AgentToolResult | string>;
 
@@ -60,6 +63,117 @@ async function findRtlFiles(dir: string, maxDepth = 4): Promise<string[]> {
   };
   await walk(dir, 0);
   return results;
+}
+
+// ─── 文档工具辅助函数 ─────────────────────────────────────
+
+/** 解析文档输出路径。outputPath 可为完整文件路径、目录路径或 undefined（默认 <cwd>/docs/） */
+function resolveDocumentOutputPath(outputPath: unknown, cwd: string, ext: string): string {
+  const extName = `.${ext}`;
+  if (typeof outputPath === 'string' && outputPath) {
+    // 以扩展名结尾 → 视为完整文件路径
+    if (outputPath.endsWith(extName)) {
+      return isAbsolute(outputPath) ? outputPath : resolve(cwd, outputPath);
+    }
+    // 否则视为目录，生成时间戳文件名
+    const dir = isAbsolute(outputPath) ? outputPath : resolve(cwd, outputPath);
+    return join(dir, `document-${Date.now()}${extName}`);
+  }
+  // 默认：<cwd>/docs/document-<timestamp>.<ext>
+  return join(cwd, 'docs', `document-${Date.now()}${extName}`);
+}
+
+/** 确保目录存在，递归创建 */
+async function ensureDir(dir: string): Promise<void> {
+  await mkdir(dir, { recursive: true });
+}
+
+/** 将 Markdown 文本解析为 officecli batch 操作数组（docx） */
+function parseMarkdownToDocxBatchOps(markdown: string): Array<Record<string, unknown>> {
+  const ops: Array<Record<string, unknown>> = [];
+  const lines = markdown.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    if (trimmed.startsWith('### ')) {
+      ops.push({ command: 'add', parent: '/body', type: 'paragraph', props: { text: trimmed.slice(4), style: 'Heading3' } });
+    } else if (trimmed.startsWith('## ')) {
+      ops.push({ command: 'add', parent: '/body', type: 'paragraph', props: { text: trimmed.slice(3), style: 'Heading2' } });
+    } else if (trimmed.startsWith('# ')) {
+      ops.push({ command: 'add', parent: '/body', type: 'paragraph', props: { text: trimmed.slice(2), style: 'Heading1' } });
+    } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+      ops.push({ command: 'add', parent: '/body', type: 'paragraph', props: { text: trimmed.slice(2), listStyle: 'bullet' } });
+    } else {
+      ops.push({ command: 'add', parent: '/body', type: 'paragraph', props: { text: trimmed } });
+    }
+  }
+  return ops;
+}
+
+/** xlsx sheet 数据结构 */
+type XlsxSheet = { name: string; data: unknown[][] };
+
+/** 将 sheets 二维数组转换为 officecli batch 操作数组（xlsx） */
+function buildXlsxBatchOps(sheets: XlsxSheet[]): Array<Record<string, unknown>> {
+  const ops: Array<Record<string, unknown>> = [];
+  sheets.forEach((sheet, sheetIdx) => {
+    // 第一个 sheet 重命名，后续 sheet 新增
+    if (sheetIdx === 0) {
+      ops.push({ command: 'set', path: '/Sheet1', props: { name: sheet.name } });
+    } else {
+      ops.push({ command: 'add', parent: '/', type: 'sheet', props: { name: sheet.name } });
+    }
+    const sheetPath = `/${sheet.name}`;
+    // 填充单元格数据
+    for (let rowIdx = 0; rowIdx < sheet.data.length; rowIdx++) {
+      const row = sheet.data[rowIdx];
+      if (!Array.isArray(row)) continue;
+      for (let colIdx = 0; colIdx < row.length; colIdx++) {
+        const cellValue = row[colIdx];
+        if (cellValue === undefined || cellValue === null) continue;
+        const colLetter = String.fromCharCode(65 + colIdx);
+        const cellRef = `${sheetPath}/${colLetter}${rowIdx + 1}`;
+        ops.push({ command: 'set', path: cellRef, props: { value: String(cellValue) } });
+      }
+    }
+  });
+  return ops;
+}
+
+/** pptx slide 数据结构 */
+type PptxSlide = { title: string; content: string };
+
+/** 将 slides 数组转换为 officecli batch 操作数组（pptx） */
+function buildPptxBatchOps(slides: PptxSlide[]): Array<Record<string, unknown>> {
+  const ops: Array<Record<string, unknown>> = [];
+  for (const slide of slides) {
+    // 添加 slide（blank 布局）
+    ops.push({ command: 'add', parent: '/', type: 'slide', props: { layout: 'blank', background: 'FFFFFF' } });
+    // 添加标题 shape
+    ops.push({
+      command: 'add',
+      parent: '/slide[last()]',
+      type: 'shape',
+      props: {
+        text: slide.title,
+        x: '1.5cm', y: '1cm', width: '30cm', height: '2cm',
+        font: 'Georgia', size: '36', bold: 'true', color: '1E2761',
+      },
+    });
+    // 添加内容 shape
+    ops.push({
+      command: 'add',
+      parent: '/slide[last()]',
+      type: 'shape',
+      props: {
+        text: slide.content,
+        x: '1.5cm', y: '4cm', width: '30cm', height: '10cm',
+        font: 'Calibri', size: '20', color: '333333',
+      },
+    });
+  }
+  return ops;
 }
 
 export class HostToolsRegistry {
@@ -373,6 +487,197 @@ export class HostToolsRegistry {
             return TEXT(result + suffix);
           } catch (err) {
             return TEXT(`Error reading file: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        },
+      ),
+    );
+
+    // ─── 文档创建/读取工具（Issue #6） ─────────────────────
+
+    this.register(
+      defineTool(
+        'create_docx',
+        'Create a DOCX document from Markdown content. Supports # / ## / ### headings, - / * bullet lists, and plain text paragraphs. Output defaults to <project>/docs/ but can be overridden via outputPath. Useful for generating SoC verification plans, test specifications, and review reports.',
+        {
+          type: 'object',
+          properties: {
+            content: { type: 'string', description: 'Markdown content for the document. Supports # / ## / ### headings, - / * bullet lists, and plain text paragraphs.' },
+            outputPath: { type: 'string', description: 'Optional output path. Can be a full file path (ending in .docx) or a directory. Defaults to <project>/docs/document-<timestamp>.docx.' },
+          },
+          required: ['content'],
+          additionalProperties: false,
+        },
+        async (args) => {
+          const content = typeof args.content === 'string' ? args.content : '';
+          if (!content) {
+            return TEXT(JSON.stringify({ error: 'content is required' }));
+          }
+          const outputPath = resolveDocumentOutputPath(args.outputPath, this.cwd, 'docx');
+          try {
+            await ensureDir(dirname(outputPath));
+            // Step 1: 创建空白 docx
+            await execOfficeCli({ args: ['create', outputPath] });
+            // Step 2: 应用 batch 操作（Markdown → 段落/标题/列表）
+            const ops = parseMarkdownToDocxBatchOps(content);
+            await execOfficeCli({ args: ['batch', outputPath, JSON.stringify(ops)] });
+            return TEXT(JSON.stringify({ path: outputPath, format: 'docx' }));
+          } catch (err) {
+            return TEXT(JSON.stringify({ error: `create_docx failed: ${err instanceof Error ? err.message : String(err)}` }));
+          }
+        },
+      ),
+    );
+
+    this.register(
+      defineTool(
+        'create_xlsx',
+        'Create an XLSX spreadsheet from a 2D array of sheets. Each sheet has a name and a data array of rows (array of cells). Output defaults to <project>/docs/. Useful for SoC coverage reports, regression summaries, and test case matrices. Note: xlsx files created by officecli may contain charts/styles that can be lost if later edited by exceljs.',
+        {
+          type: 'object',
+          properties: {
+            sheets: {
+              type: 'array',
+              description: 'Array of sheets. Each sheet: { name: string, data: unknown[][] } where data is a 2D array of cell values (row-major).',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  data: { type: 'array', items: { type: 'array' } },
+                },
+              },
+            },
+            outputPath: { type: 'string', description: 'Optional output path (file ending in .xlsx, or a directory).' },
+          },
+          required: ['sheets'],
+          additionalProperties: false,
+        },
+        async (args) => {
+          const sheets = Array.isArray(args.sheets) ? (args.sheets as XlsxSheet[]) : [];
+          if (sheets.length === 0) {
+            return TEXT(JSON.stringify({ error: 'sheets is required and must be a non-empty array' }));
+          }
+          const outputPath = resolveDocumentOutputPath(args.outputPath, this.cwd, 'xlsx');
+          try {
+            await ensureDir(dirname(outputPath));
+            await execOfficeCli({ args: ['create', outputPath] });
+            const ops = buildXlsxBatchOps(sheets);
+            await execOfficeCli({ args: ['batch', outputPath, JSON.stringify(ops)] });
+            return TEXT(JSON.stringify({ path: outputPath, format: 'xlsx' }));
+          } catch (err) {
+            return TEXT(JSON.stringify({ error: `create_xlsx failed: ${err instanceof Error ? err.message : String(err)}` }));
+          }
+        },
+      ),
+    );
+
+    this.register(
+      defineTool(
+        'create_pptx',
+        'Create a PPTX presentation from an array of slides. Each slide has a title and content. Output defaults to <project>/docs/. Useful for SoC verification plan reviews, regression sign-off decks, and TO (tape-out) checklists.',
+        {
+          type: 'object',
+          properties: {
+            slides: {
+              type: 'array',
+              description: 'Array of slides. Each slide: { title: string, content: string }.',
+              items: {
+                type: 'object',
+                properties: {
+                  title: { type: 'string' },
+                  content: { type: 'string' },
+                },
+              },
+            },
+            outputPath: { type: 'string', description: 'Optional output path (file ending in .pptx, or a directory).' },
+          },
+          required: ['slides'],
+          additionalProperties: false,
+        },
+        async (args) => {
+          const slides = Array.isArray(args.slides) ? (args.slides as PptxSlide[]) : [];
+          if (slides.length === 0) {
+            return TEXT(JSON.stringify({ error: 'slides is required and must be a non-empty array' }));
+          }
+          const outputPath = resolveDocumentOutputPath(args.outputPath, this.cwd, 'pptx');
+          try {
+            await ensureDir(dirname(outputPath));
+            await execOfficeCli({ args: ['create', outputPath] });
+            const ops = buildPptxBatchOps(slides);
+            await execOfficeCli({ args: ['batch', outputPath, JSON.stringify(ops)] });
+            return TEXT(JSON.stringify({ path: outputPath, format: 'pptx' }));
+          } catch (err) {
+            return TEXT(JSON.stringify({ error: `create_pptx failed: ${err instanceof Error ? err.message : String(err)}` }));
+          }
+        },
+      ),
+    );
+
+    this.register(
+      defineTool(
+        'create_pdf',
+        'Create a PDF document from Markdown content. Internally converts Markdown to DOCX then exports to PDF via officecli. Output defaults to <project>/docs/. Useful for SoC regression reports, TO checklists, and sign-off documents that need a fixed-format deliverable.',
+        {
+          type: 'object',
+          properties: {
+            content: { type: 'string', description: 'Markdown content for the document. Supports # / ## / ### headings, - / * bullet lists, and plain text paragraphs.' },
+            outputPath: { type: 'string', description: 'Optional output path (file ending in .pdf, or a directory).' },
+          },
+          required: ['content'],
+          additionalProperties: false,
+        },
+        async (args) => {
+          const content = typeof args.content === 'string' ? args.content : '';
+          if (!content) {
+            return TEXT(JSON.stringify({ error: 'content is required' }));
+          }
+          const pdfPath = resolveDocumentOutputPath(args.outputPath, this.cwd, 'pdf');
+          // 中间产物 docx 路径（与 pdf 同目录、同名，扩展名替换为 .docx）
+          const docxPath = pdfPath.replace(/\.pdf$/i, '.docx');
+          try {
+            await ensureDir(dirname(pdfPath));
+            // Step 1: 创建中间 docx 并填充 Markdown 内容
+            await execOfficeCli({ args: ['create', docxPath] });
+            const ops = parseMarkdownToDocxBatchOps(content);
+            await execOfficeCli({ args: ['batch', docxPath, JSON.stringify(ops)] });
+            // Step 2: 导出 docx 为 PDF
+            await execOfficeCli({ args: ['view', docxPath, 'pdf', '-o', pdfPath] });
+            // Step 3: 清理中间 docx（best-effort，失败忽略）
+            try { await unlink(docxPath); } catch { /* 中间文件清理失败不影响主流程 */ }
+            return TEXT(JSON.stringify({ path: pdfPath, format: 'pdf' }));
+          } catch (err) {
+            return TEXT(JSON.stringify({ error: `create_pdf failed: ${err instanceof Error ? err.message : String(err)}` }));
+          }
+        },
+      ),
+    );
+
+    this.register(
+      defineTool(
+        'read_document',
+        'Read the text content of a document (docx, xlsx, pptx, pdf). Returns the plain text extraction via officecli view text. Useful for AI to inspect existing verification plans, coverage reports, or regression summaries.',
+        {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Document path (absolute or relative to project root). Supported formats: .docx, .xlsx, .pptx, .pdf.' },
+          },
+          required: ['path'],
+          additionalProperties: false,
+        },
+        async (args) => {
+          const inputPath = typeof args.path === 'string' ? args.path : '';
+          if (!inputPath) {
+            return TEXT(JSON.stringify({ error: 'path is required' }));
+          }
+          const absPath = isAbsolute(inputPath) ? inputPath : resolve(this.cwd, inputPath);
+          const format = extname(absPath).slice(1).toLowerCase();
+          try {
+            const result = await execOfficeCli({ args: ['view', absPath, 'text'] });
+            if (result.exitCode !== 0) {
+              return TEXT(JSON.stringify({ error: `read_document failed: ${result.stderr || result.stdout || `exit code ${result.exitCode}`}` }));
+            }
+            return TEXT(JSON.stringify({ path: absPath, content: result.stdout, format }));
+          } catch (err) {
+            return TEXT(JSON.stringify({ error: `read_document failed: ${err instanceof Error ? err.message : String(err)}` }));
           }
         },
       ),
