@@ -1,7 +1,7 @@
 import { app, BrowserWindow, shell, ipcMain, Tray, Menu, nativeImage, dialog } from 'electron';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { createIPCHandler } from './ipc/electron-trpc-bridge';
 import { router } from './ipc/router';
@@ -83,9 +83,11 @@ function setupLinuxIme(): void {
 //   1. 若 DBUS_SESSION_BUS_ADDRESS 已设置且有效 → 正常使用
 //   2. 检测 systemd 管理的 session bus socket (/run/user/<uid>/bus)
 //   3. 检测传统 D-Bus socket (/run/user/<uid>/dbus/session_bus_socket)
-//   4. 从 X11 root window 属性获取（远程 X11 / Exceed / VNC+X11 环境）
-//   5. 通过 `dbus-launch` 启动新的会话总线（最后手段）
-//   6. 若以上都不可用 → 抑制 Chromium D-Bus 错误日志
+//   4. 从 ~/.dbus/session-bus/ 目录读取（远程 X11 / Exceed / XDMCP 环境）
+//   5. 从 X11 root window 属性获取（部分远程 X11 环境）
+//   6. 通过 `dbus-launch --autolaunch` 获取或启动 session bus
+//   7. 通过 `dbus-launch` 启动全新会话总线（最后手段）
+//   8. 若以上都不可用 → 抑制 Chromium D-Bus 错误日志
 function setupLinuxDbus(): void {
   if (process.platform !== 'linux') return;
 
@@ -121,10 +123,69 @@ function setupLinuxDbus(): void {
     // uid 检测失败，继续尝试其他方法
   }
 
-  // ── 3. 从 X11 root window 属性获取 D-Bus 地址 ──
-  // 在远程 X11 环境（Exceed / XDMCP / VNC+X11 转发 / SSH -X）中，
-  // D-Bus session bus 地址通过 dbus-launch 存储在 X11 root window 属性中。
-  // VSCode 等应用能自动读取此属性，但 AppImage 不能——需要主动获取。
+  // ── 3. 从 ~/.dbus/session-bus/ 目录读取 session bus 地址 ──
+  // dbus-launch 在启动 session bus 后会在此目录存储地址信息。
+  // 远程 X11 环境（Exceed / XDMCP / SSH -X）中，环境变量和 X11 属性
+  // 可能都没有 D-Bus 地址，但这个文件里一定有。
+  try {
+    const homeDir = process.env['HOME'];
+    if (homeDir) {
+      const sessionBusDir = join(homeDir, '.dbus', 'session-bus');
+      if (existsSync(sessionBusDir)) {
+        const files = readdirSync(sessionBusDir);
+        // 按修改时间降序排列（最新的在前）
+        const sortedFiles = files
+          .map(f => ({
+            name: f,
+            path: join(sessionBusDir, f),
+            mtime: statSync(join(sessionBusDir, f)).mtime.getTime()
+          }))
+          .sort((a, b) => b.mtime - a.mtime);
+
+        for (const file of sortedFiles) {
+          try {
+            const content = readFileSync(file.path, 'utf-8');
+            const match = content.match(/^DBUS_SESSION_BUS_ADDRESS=(.+?);?\s*$/m);
+            if (match) {
+              let addr = match[1].replace(/;$/, '').trim();
+              if ((addr.startsWith("'") && addr.endsWith("'")) ||
+                  (addr.startsWith('"') && addr.endsWith('"'))) {
+                addr = addr.slice(1, -1);
+              }
+              if (addr.startsWith('unix:')) {
+                // 验证对应的 PID 是否仍然存活
+                const pidMatch = content.match(/^DBUS_SESSION_BUS_PID=(\d+)/m);
+                if (pidMatch) {
+                  const pid = parseInt(pidMatch[1], 10);
+                  try {
+                    // 信号 0 不实际发送信号，仅检查进程是否存在
+                    process.kill(pid, 0);
+                    process.env['DBUS_SESSION_BUS_ADDRESS'] = addr;
+                    console.log(`[dbus] using session bus from ~/.dbus/session-bus/${file.name} (pid=${pid})`);
+                    return;
+                  } catch {
+                    console.log(`[dbus] session bus in ${file.name} has dead pid=${pid}, skipping`);
+                    continue;
+                  }
+                }
+                // 没有 PID 信息，直接使用地址
+                process.env['DBUS_SESSION_BUS_ADDRESS'] = addr;
+                console.log(`[dbus] using session bus from ~/.dbus/session-bus/${file.name}`);
+                return;
+              }
+            }
+          } catch {
+            // 文件读取失败，跳过
+          }
+        }
+      }
+    }
+  } catch {
+    // 目录读取失败，继续尝试其他方法
+  }
+
+  // ── 4. 从 X11 root window 属性获取 D-Bus 地址 ──
+  // 在远程 X11 环境中，dbus-launch 可能将地址存储在 X11 属性中
   try {
     const xpropOutput = execSync('xprop -root DBUS_SESSION_BUS_ADDRESS', {
       encoding: 'utf-8',
@@ -195,10 +256,9 @@ function setupLinuxDbus(): void {
     // dbus-launch not available or failed
   }
 
-  // ── 6. 完全无 D-Bus 可用 → 已由全局 log-level=3 抑制 ──
-  // （此处冗余但无害，保留作为文档说明：此场景下 Chromium 也会产生
-  //   D-Bus 相关的 ERROR 日志，已被文件顶部的全局设置抑制）
-  console.log('[dbus] no session bus available; Chromium error logs suppressed by global log-level=3');
+  // ── 6. 完全无 D-Bus 可用 → 抑制错误日志 ──
+  app.commandLine.appendSwitch('log-level', '3');
+  console.log('[dbus] no session bus available; suppressing Chromium D-Bus error logs');
 }
 
 // ── Chromium 日志级别抑制 ──────────────────────────────────────────
