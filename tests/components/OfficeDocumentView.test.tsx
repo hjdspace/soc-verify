@@ -30,6 +30,18 @@ vi.mock('@renderer/components/office/WatchPreview', () => ({
   ),
 }));
 
+vi.mock('@renderer/components/office/PdfPreview', () => ({
+  PdfPreview: ({ filePath }: { filePath: string }) => (
+    <div data-testid="pdf-preview" data-file={filePath}>PdfPreview</div>
+  ),
+}));
+
+vi.mock('@renderer/components/office/XlsxEditor', () => ({
+  XlsxEditor: ({ filePath }: { filePath: string }) => (
+    <div data-testid="xlsx-editor" data-file={filePath}>XlsxEditor</div>
+  ),
+}));
+
 // ── mock tRPC：仅 mock document.checkInstalled，其余 procedure 由子组件测试覆盖 ──
 // vi.mock 工厂会被提升到文件顶部，需用 vi.hoisted 让 mock 引用先于工厂执行时定义
 const { checkInstalledMock } = vi.hoisted(() => ({
@@ -96,7 +108,7 @@ describe('OfficeDocumentView 容器分发', () => {
     });
   });
 
-  it('edit 模式下渲染编辑占位（.xlsx）', async () => {
+  it('edit 模式下渲染 XlsxEditor（.xlsx）', async () => {
     render(
       <OfficeDocumentView
         filePath="/tmp/sheet.xlsx"
@@ -105,12 +117,12 @@ describe('OfficeDocumentView 容器分发', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(/编辑能力将在后续版本提供/)).toBeInTheDocument();
+      expect(screen.getByTestId('xlsx-editor')).toBeInTheDocument();
     });
     expect(screen.queryByTestId('html-preview')).not.toBeInTheDocument();
   });
 
-  it('PDF 文件渲染占位提示', async () => {
+  it('PDF 文件渲染 PdfPreview', async () => {
     render(
       <OfficeDocumentView
         filePath="/tmp/doc.pdf"
@@ -120,7 +132,7 @@ describe('OfficeDocumentView 容器分发', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(/PDF 预览即将支持/)).toBeInTheDocument();
+      expect(screen.getByTestId('pdf-preview')).toBeInTheDocument();
     });
     expect(screen.queryByTestId('html-preview')).not.toBeInTheDocument();
   });
@@ -152,7 +164,7 @@ describe('OfficeDocumentView 容器分发', () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(/PDF 预览即将支持/)).toBeInTheDocument();
+      expect(screen.getByTestId('pdf-preview')).toBeInTheDocument();
     });
     expect(screen.queryByRole('button', { name: 'HTML' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Watch' })).not.toBeInTheDocument();

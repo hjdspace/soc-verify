@@ -33,10 +33,15 @@
     "package:linux": "node scripts/download-officecli.mjs && node scripts/setup-agent.mjs --require-binary && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/build-linux-pty.mjs && node scripts/download-natives.mjs && node scripts/run-electron-builder.mjs --linux"
   },
   "dependencies": {
+    "@fortune-sheet/core": "^1.0.4",
+    "@fortune-sheet/react": "^1.0.4",
     "@tanstack/react-virtual": "^3.14.9",
     "better-sqlite3": "^13.0.2",
     "electron-trpc": "^0.7.1",
+    "exceljs": "^4.4.0",
     "node-pty": "^1.1.0",
+    "pdfjs-dist": "^5.4.296",
+    "react-pdf": "^10.4.1",
     "rehype-raw": "^7.0.0"
   },
   "optionalDependencies": {

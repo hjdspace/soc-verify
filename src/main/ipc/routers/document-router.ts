@@ -11,11 +11,14 @@
  *  - document.watchStopAll：停止所有 watch
  *  - document.listWatches：列出活跃 watch
  *  - document.readImageAsDataURL：读图为 base64 data URL
+ *  - document.loadXlsx：读取 xlsx 文件并转为 Fortune-sheet 工作簿数据
+ *  - document.saveXlsx：将 Fortune-sheet 工作簿数据写回 xlsx 文件
  *
  * officecli 不可用时，procedure 返回明确的 `OfficeCLI not available` 错误
  * （TRPCError INTERNAL_SERVER_ERROR with cause），不抛未捕获异常。
  */
 
+import ExcelJS from 'exceljs';
 import { t, TRPCError } from '../router-context';
 import {
   checkInstalled,
@@ -29,6 +32,7 @@ import {
   readImageAsDataURL,
 } from '../../officecli/service';
 import { OfficeCliNotAvailableError } from '../../officecli/executor';
+import { excelToFortune, fortuneToExcel, type WorkbookData } from '../../document/fortune-sheet-bridge';
 
 /** 将 service 层错误映射为 tRPC 错误，保持 officecli 不可用时错误信息明确 */
 function toTrpcError(err: unknown, operation: string): TRPCError {
@@ -168,6 +172,50 @@ export const documentRouter = t.router({
         return { dataUrl };
       } catch (err) {
         throw toTrpcError(err, 'readImageAsDataURL');
+      }
+    }),
+
+  /** 读取 xlsx 文件并转为 Fortune-sheet 工作簿数据。 */
+  loadXlsx: t.procedure
+    .input((raw): { filePath: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.filePath !== 'string' || r.filePath.length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'filePath is required' });
+      }
+      return { filePath: r.filePath };
+    })
+    .query(async ({ input }) => {
+      try {
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.readFile(input.filePath);
+        const data = excelToFortune(workbook);
+        return { workbook: data };
+      } catch (err) {
+        if (err instanceof TRPCError) throw err;
+        throw toTrpcError(err, 'loadXlsx');
+      }
+    }),
+
+  /** 将 Fortune-sheet 工作簿数据写回 xlsx 文件。 */
+  saveXlsx: t.procedure
+    .input((raw): { filePath: string; workbook: WorkbookData } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.filePath !== 'string' || r.filePath.length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'filePath is required' });
+      }
+      if (typeof r.workbook !== 'object' || r.workbook === null || !Array.isArray((r.workbook as { sheets?: unknown }).sheets)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'workbook is required' });
+      }
+      return { filePath: r.filePath, workbook: r.workbook as WorkbookData };
+    })
+    .mutation(async ({ input }) => {
+      try {
+        const workbook = await fortuneToExcel(input.workbook);
+        await workbook.xlsx.writeFile(input.filePath);
+        return { success: true };
+      } catch (err) {
+        if (err instanceof TRPCError) throw err;
+        throw toTrpcError(err, 'saveXlsx');
       }
     }),
 });

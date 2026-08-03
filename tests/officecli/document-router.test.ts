@@ -31,6 +31,40 @@ vi.mock('../../src/main/officecli/executor', () => ({
   },
 }));
 
+// Mock exceljs：构造函数返回带 xlsx.readFile/writeFile 的实例
+const { ExcelJSWorkbookMock } = vi.hoisted(() => {
+  const instance = {
+    xlsx: {
+      readFile: vi.fn(),
+      writeFile: vi.fn(),
+    },
+  };
+  return {
+    ExcelJSWorkbookMock: {
+      instance,
+      // 使用常规 function 而非箭头函数，使其可被 new 调用
+      ctor: vi.fn(function () {
+        return instance;
+      }),
+    },
+  };
+});
+
+vi.mock('exceljs', () => ({
+  default: { Workbook: ExcelJSWorkbookMock.ctor },
+}));
+
+// Mock fortune-sheet-bridge：隔离 exceljs ↔ fortune-sheet 转换逻辑
+const { excelToFortuneMock, fortuneToExcelMock } = vi.hoisted(() => ({
+  excelToFortuneMock: vi.fn(),
+  fortuneToExcelMock: vi.fn(),
+}));
+
+vi.mock('../../src/main/document/fortune-sheet-bridge', () => ({
+  excelToFortune: excelToFortuneMock,
+  fortuneToExcel: fortuneToExcelMock,
+}));
+
 import { documentRouter } from '../../src/main/ipc/routers/document-router';
 import * as service from '../../src/main/officecli/service';
 
@@ -288,6 +322,88 @@ describe('document-router', () => {
       );
       expect(err.message).toContain('readImageAsDataURL failed');
       expect(err.message).toContain('Image file not found');
+    });
+  });
+
+  // ─── loadXlsx ──────────────────────────────────────────────
+
+  describe('loadXlsx', () => {
+    it('读取 xlsx 文件并返回 Fortune-sheet 工作簿数据', async () => {
+      ExcelJSWorkbookMock.instance.xlsx.readFile.mockResolvedValue(undefined);
+      const fortuneData = { name: 'Workbook', sheets: [{ name: 'Sheet1', celldata: [] }] };
+      excelToFortuneMock.mockReturnValue(fortuneData);
+
+      const result = await caller.loadXlsx({ filePath: '/tmp/sheet.xlsx' });
+
+      expect(ExcelJSWorkbookMock.ctor).toHaveBeenCalledTimes(1);
+      expect(ExcelJSWorkbookMock.instance.xlsx.readFile).toHaveBeenCalledWith('/tmp/sheet.xlsx');
+      expect(excelToFortuneMock).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ workbook: fortuneData });
+    });
+
+    it('缺少 filePath 时返回 BAD_REQUEST', async () => {
+      const err = await trpcError(() => caller.loadXlsx({ filePath: '' }));
+      expect(err.message).toContain('filePath is required');
+    });
+
+    it('文件读取失败时返回错误信息', async () => {
+      ExcelJSWorkbookMock.instance.xlsx.readFile.mockRejectedValue(
+        new Error('File not found: /tmp/missing.xlsx'),
+      );
+
+      const err = await trpcError(() => caller.loadXlsx({ filePath: '/tmp/missing.xlsx' }));
+      expect(err.message).toContain('loadXlsx failed');
+      expect(err.message).toContain('File not found');
+    });
+  });
+
+  // ─── saveXlsx ──────────────────────────────────────────────
+
+  describe('saveXlsx', () => {
+    it('将 Fortune-sheet 工作簿数据写回 xlsx 文件', async () => {
+      const mockWorkbook = { xlsx: { writeFile: vi.fn().mockResolvedValue(undefined) } };
+      fortuneToExcelMock.mockResolvedValue(mockWorkbook);
+      const workbookData = { name: 'Workbook', sheets: [{ name: 'Sheet1', celldata: [] }] };
+
+      const result = await caller.saveXlsx({
+        filePath: '/tmp/sheet.xlsx',
+        workbook: workbookData,
+      });
+
+      expect(fortuneToExcelMock).toHaveBeenCalledWith(workbookData);
+      expect(mockWorkbook.xlsx.writeFile).toHaveBeenCalledWith('/tmp/sheet.xlsx');
+      expect(result).toEqual({ success: true });
+    });
+
+    it('缺少 filePath 时返回 BAD_REQUEST', async () => {
+      const err = await trpcError(() =>
+        caller.saveXlsx({ filePath: '', workbook: { name: 'x', sheets: [] } }),
+      );
+      expect(err.message).toContain('filePath is required');
+    });
+
+    it('缺少 workbook 时返回 BAD_REQUEST', async () => {
+      const err = await trpcError(() =>
+        // @ts-expect-error — 测试缺少 workbook 的非法输入
+        caller.saveXlsx({ filePath: '/tmp/sheet.xlsx' }),
+      );
+      expect(err.message).toContain('workbook is required');
+    });
+
+    it('文件写入失败时返回错误信息', async () => {
+      const mockWorkbook = {
+        xlsx: { writeFile: vi.fn().mockRejectedValue(new Error('Permission denied')) },
+      };
+      fortuneToExcelMock.mockResolvedValue(mockWorkbook);
+
+      const err = await trpcError(() =>
+        caller.saveXlsx({
+          filePath: '/readonly/sheet.xlsx',
+          workbook: { name: 'x', sheets: [] },
+        }),
+      );
+      expect(err.message).toContain('saveXlsx failed');
+      expect(err.message).toContain('Permission denied');
     });
   });
 });

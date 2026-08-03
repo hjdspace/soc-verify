@@ -15,10 +15,12 @@
 import { useEffect, useState } from 'react';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
-import { FileText, Download, FileType } from 'lucide-react';
+import { FileText, Download } from 'lucide-react';
 import { HtmlPreview } from './HtmlPreview';
 import { ScreenshotsPreview } from './ScreenshotsPreview';
 import { WatchPreview } from './WatchPreview';
+import { PdfPreview } from './PdfPreview';
+import { XlsxEditor } from './XlsxEditor';
 import type { OfficePreviewMode } from '@renderer/stores/workbench';
 
 export type OfficeDocumentViewProps = {
@@ -105,30 +107,14 @@ export function OfficeDocumentView({ filePath, mode, previewMode }: OfficeDocume
     );
   }
 
-  // PDF 占位：react-pdf 在 Issue #4 实现
+  // PDF 预览：使用 react-pdf 渲染（Issue #4 实现）
   if (ext === 'pdf') {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-muted-foreground">
-        <FileType className="h-8 w-8 opacity-40" />
-        <div className="font-medium text-foreground">PDF 预览即将支持</div>
-        <p className="max-w-md text-xs">
-          PDF 预览功能将在后续版本提供。当前可通过「打开文件」在外部 PDF 阅读器查看。
-        </p>
-      </div>
-    );
+    return <PdfPreview filePath={filePath} />;
   }
 
-  // edit 模式占位（.xlsx 编辑能力在 Issue #5 实现）
+  // edit 模式：.xlsx 原地编辑（Issue #5 实现）
   if (mode === 'edit') {
-    return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm text-muted-foreground">
-        <FileText className="h-8 w-8 opacity-40" />
-        <div className="font-medium text-foreground">编辑能力将在后续版本提供</div>
-        <p className="max-w-md text-xs">
-          Excel/Word/PPT 在线编辑功能开发中。当前可使用预览模式查看文档内容。
-        </p>
-      </div>
-    );
+    return <XlsxEditor filePath={filePath} />;
   }
 
   // preview 模式分发
