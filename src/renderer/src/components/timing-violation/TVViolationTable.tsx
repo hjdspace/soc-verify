@@ -4,6 +4,8 @@
  * 使用 @tanstack/react-virtual 实现虚拟滚动，支持几十万条数据流畅滚动。
  * 表格每行显示 NUM、Hier、Time、Check 摘要、确认状态（颜色标记）。
  * 点击列头切换排序，点击行展开查看违例详情。
+ *
+ * 使用 measureElement 动态测量行高，确保展开行不与下方行重叠。
  */
 
 import { useRef, useState, useCallback } from 'react';
@@ -31,7 +33,6 @@ type ViolationTableProps = {
 };
 
 const ROW_HEIGHT = 36;
-const EXPANDED_ROW_HEIGHT = 120;
 
 const STATUS_STYLES: Record<ConfirmationStatus, { dot: string; text: string; label: string }> = {
   pending: { dot: 'bg-amber-500', text: 'text-amber-600 dark:text-amber-400', label: '待确认' },
@@ -47,9 +48,8 @@ type ColumnDef = {
 
 const COLUMNS: ColumnDef[] = [
   { key: 'num', label: 'NUM', width: 'w-16' },
-  { key: 'hier', label: 'Hierarchy', width: 'flex-1' },
+  { key: 'hier', label: 'Hierarchy', width: 'flex-1 min-w-0' },
   { key: 'time_fs', label: '时间', width: 'w-28' },
-  { key: 'created_at', label: '导入时间', width: 'w-36' },
 ];
 
 export function TVViolationTable({
@@ -73,9 +73,9 @@ export function TVViolationTable({
   const rowVirtualizer = useVirtualizer({
     count: violations.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: (index) =>
-      violations[index]?.id === expandedId ? EXPANDED_ROW_HEIGHT : ROW_HEIGHT,
+    estimateSize: () => ROW_HEIGHT,
     overscan: 10,
+    measureElement: (el) => el.getBoundingClientRect().height,
   });
 
   const totalPages = Math.ceil(total / pageSize);
@@ -105,6 +105,8 @@ export function TVViolationTable({
             <SortIcon field={col.key} />
           </button>
         ))}
+        {/* Check 摘要列（不可排序） */}
+        <div className="flex-1 min-w-0 px-2 py-1.5">Check</div>
         <div className="w-24 px-2 py-1.5">状态</div>
       </div>
 
@@ -132,6 +134,8 @@ export function TVViolationTable({
               return (
                 <div
                   key={v.id}
+                  data-index={virtualRow.index}
+                  ref={rowVirtualizer.measureElement}
                   style={{
                     position: 'absolute',
                     top: 0,
@@ -158,14 +162,14 @@ export function TVViolationTable({
                       />
                     </div>
                     <div className="w-16 px-2 tabular-nums text-muted-foreground">{v.num}</div>
-                    <div className="flex-1 truncate px-2 font-mono text-foreground">
+                    <div className="flex-1 min-w-0 truncate px-2 font-mono text-foreground">
                       {v.hier}
                     </div>
                     <div className="w-28 px-2 tabular-nums text-muted-foreground">
                       {formatTimeDisplay(v.timeFs)}
                     </div>
-                    <div className="w-36 truncate px-2 text-muted-foreground">
-                      {v.createdAt}
+                    <div className="flex-1 min-w-0 truncate px-2 text-muted-foreground">
+                      {v.checkInfo}
                     </div>
                     <div className="w-24 px-2">
                       <span className="inline-flex items-center gap-1.5">
@@ -179,10 +183,7 @@ export function TVViolationTable({
 
                   {/* 展开详情 */}
                   {isExpanded && (
-                    <div
-                      className="border-b bg-secondary/10 px-10 py-3"
-                      style={{ height: EXPANDED_ROW_HEIGHT - ROW_HEIGHT }}
-                    >
+                    <div className="border-b bg-secondary/10 px-10 py-3">
                       <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-[11px]">
                         <div>
                           <span className="text-muted-foreground">完整 Hier: </span>
@@ -211,6 +212,10 @@ export function TVViolationTable({
                         <div>
                           <span className="text-muted-foreground">子系统: </span>
                           <span className="text-foreground">{v.subsys ?? '—'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground">导入时间: </span>
+                          <span className="text-foreground">{v.createdAt}</span>
                         </div>
                         <div className="col-span-2 truncate">
                           <span className="text-muted-foreground">文件路径: </span>
