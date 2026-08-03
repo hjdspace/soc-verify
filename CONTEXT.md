@@ -189,3 +189,37 @@ _Avoid_: coverage conversion, coverage extraction
 **EDA Tool Configuration**:
 项目级配置，指定 EDA 工具类型（Cadence IMC / Synopsys VCS urg / Mentor Questa vcover）、cov_merge 默认路径、命令模板。用于 Coverage Preprocessing 第一步。
 _Avoid_: coverage settings, EDA config
+
+### 时序违例域
+
+**Timing Violation**:
+后仿真阶段 EDA 工具报告的时序违例条目，从 `vio_summary.log` 日志中解析。每条违例包含 NUM（序号）、Hier（层级路径）、Time（违例时刻）、Check（检查类型和详细信息）四个核心字段。
+_Avoid_: timing violation entry, VIO entry
+
+**Violation Confirmation**:
+对一条 Timing Violation 的确认结论——是否为真实问题需要修复。包含 status（pending/confirmed/ignored）、confirmer（确认人）、result（pass/issue）、reason（确认理由）四个字段。每条违例有且只有一条确认记录。
+_Avoid_: violation review, violation disposition
+
+**Violation Pattern**:
+从历史确认记录中提取的重用模板，以 (hier_pattern, check_pattern) 为键。当新违例的层级路径和检查信息匹配已有模式时，自动建议确认人、结果和理由，减少重复确认工作。支持精确匹配和模糊匹配（标准化 check_info 后比较）。
+_Avoid_: confirmation template, violation template
+
+**Corner**:
+工艺-电压-温度组合（PVT condition），如 `npg_f1_ssg`、`npg_f2_ffg`。一条违例属于一个 corner，一个用例在多个 corner 下可能有不同的违例集合。Corner 列表项目相关，当前为展锐特定列表。
+_Avoid_: PVT corner, process corner
+
+**Reset Time**:
+仿真复位阶段的截止时间（纳秒）。时间戳 ≤ Reset Time 的违例被视为复位期间的噪声，可自动确认忽略。扩展概念 Reset Interval 允许指定多个时间区间进行自动确认。
+_Avoid_: reset period, reset threshold
+
+**Regression Scan**:
+递归扫描回归目录树，发现所有 `vio_summary.log` 文件并解析出 subsys/corner/case/seed 元信息的过程。支持标准模式（`<case>_<corner>/<case>_<seed>/log/vio_summary.log`）和通用模式。
+_Avoid_: regression discovery, batch scan
+
+**Violation Dashboard**:
+时序违例数据的可视化展示面板，包含统计概览（总数/已确认/待确认）、按子系统/corner/用例的分布图表、违例列表的分页检索和筛选。取代 Python 版本独立的 Web 服务器，集成到 Electron 渲染进程。
+_Avoid_: violation web view, timing report page
+
+**Pattern Normalization**:
+对 Check 信息进行标准化以实现模糊匹配的规则：层级路径必须完全匹配；括号前的检查类型必须匹配；括号内按逗号分割为三部分，前两部分去除冒号后的时间信息只匹配冒号前的内容，第三部分完全忽略。
+_Avoid_: check normalization, fuzzy match rule
