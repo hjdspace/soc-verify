@@ -120,7 +120,7 @@ describe('XlsxEditor', () => {
       expect(screen.queryByTestId('fortune-workbook')).not.toBeInTheDocument();
     });
 
-    it('加载完成后渲染 Fortune-sheet Workbook', async () => {
+  it('加载完成后渲染 Fortune-sheet Workbook', async () => {
       const workbook = {
         name: 'Workbook',
         sheets: [{ name: 'Sheet1', celldata: [] }],
@@ -132,8 +132,25 @@ describe('XlsxEditor', () => {
       await waitFor(() => {
         expect(screen.getByTestId('fortune-workbook')).toBeInTheDocument();
       });
-      expect(screen.getByTestId('fortune-workbook')).toHaveAttribute('data-sheet-count', '1');
+    expect(screen.getByTestId('fortune-workbook')).toHaveAttribute('data-sheet-count', '1');
+  });
+
+  it('为 Fortune-sheet 保留可用的宽高', async () => {
+    const workbook = {
+      name: 'Workbook',
+      sheets: [{ name: 'Sheet1', celldata: [] }],
+    };
+    loadXlsxMock.mockResolvedValue({ workbook });
+
+    render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('fortune-workbook')).toBeInTheDocument();
     });
+
+    const workbookHost = screen.getByTestId('fortune-workbook').parentElement;
+    expect(workbookHost).toHaveClass('min-h-0', 'min-w-0');
+  });
 
     it('加载失败显示错误信息', async () => {
       loadXlsxMock.mockRejectedValue(new Error('File not found'));

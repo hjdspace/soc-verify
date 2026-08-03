@@ -17,6 +17,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Workbook } from '@fortune-sheet/react';
+import '@fortune-sheet/react/dist/index.css';
 import type { Sheet } from '@fortune-sheet/core';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
@@ -177,7 +178,7 @@ export function XlsxEditor({ filePath }: XlsxEditorProps) {
 
   if (loadState === 'loaded' && sheets) {
     return (
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div className="flex shrink-0 items-center gap-2 border-b bg-secondary/30 px-3 py-1">
           <span
             className={cn(
@@ -191,7 +192,7 @@ export function XlsxEditor({ filePath }: XlsxEditorProps) {
             {saveState === 'error' && '保存失败'}
           </span>
         </div>
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <Workbook
             key={`${filePath}-${fileVersion}`}
             data={sheets}

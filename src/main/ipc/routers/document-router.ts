@@ -39,6 +39,7 @@ import {
 } from '../../officecli/service';
 import { OfficeCliNotAvailableError } from '../../officecli/executor';
 import { excelToFortune, fortuneToExcel, type WorkbookData } from '../../document/fortune-sheet-bridge';
+import { readXlsxWorkbook } from '../../document/xlsx-reader';
 import {
   registerEditor,
   unregisterEditor,
@@ -206,8 +207,7 @@ export const documentRouter = t.router({
     })
     .query(async ({ input }) => {
       try {
-        const workbook = new ExcelJS.Workbook();
-        await workbook.xlsx.readFile(input.filePath);
+        const workbook = await readXlsxWorkbook(input.filePath);
         const data = excelToFortune(workbook);
         return { workbook: data };
       } catch (err) {

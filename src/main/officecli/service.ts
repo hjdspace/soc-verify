@@ -56,7 +56,9 @@ const WATCH_STARTUP_TIMEOUT = 10000;
 export async function viewHtml(filePath: string, outputDir?: string): Promise<string> {
   const args = ['view', filePath, 'html'];
   if (outputDir) {
-    args.push('-o', outputDir);
+    mkdirSync(outputDir, { recursive: true });
+    const outputFile = join(outputDir, basename(filePath, extname(filePath)) + '.html');
+    args.push('-o', outputFile);
   }
   const result = await execOfficeCli({
     args,

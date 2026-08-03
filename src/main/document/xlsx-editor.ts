@@ -9,6 +9,7 @@
  */
 
 import ExcelJS from 'exceljs';
+import { readXlsxWorkbook } from './xlsx-reader';
 
 /** 单元格值类型（与 exceljs 兼容） */
 export type CellValue = string | number | boolean | Date | null;
@@ -59,8 +60,7 @@ export async function appendRows(
   sheetName: string,
   rows: CellValue[][],
 ): Promise<AppendRowsResult> {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(filePath);
+  const workbook = await readXlsxWorkbook(filePath);
 
   let worksheet = workbook.getWorksheet(sheetName);
   if (!worksheet) {
@@ -106,8 +106,7 @@ export async function updateCell(
     throw new Error(`row and col must be 1-based positive integers (got row=${row}, col=${col})`);
   }
 
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(filePath);
+  const workbook = await readXlsxWorkbook(filePath);
 
   const worksheet = workbook.getWorksheet(sheetName);
   if (!worksheet) {

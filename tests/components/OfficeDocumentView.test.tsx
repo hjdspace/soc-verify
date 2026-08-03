@@ -170,6 +170,35 @@ describe('OfficeDocumentView 容器分发', () => {
     expect(screen.queryByRole('button', { name: 'Watch' })).not.toBeInTheDocument();
   });
 
+  it('officecli 不可用时 PDF 仍直接渲染 PdfPreview', async () => {
+    checkInstalledMock.mockResolvedValue({ installed: false });
+
+    render(
+      <OfficeDocumentView
+        filePath="/tmp/doc.pdf"
+        mode="preview"
+        previewMode="html"
+      />,
+    );
+
+    expect(screen.getByTestId('pdf-preview')).toBeInTheDocument();
+    expect(checkInstalledMock).not.toHaveBeenCalled();
+  });
+
+  it('officecli 不可用时 XLSX 编辑器仍直接渲染', async () => {
+    checkInstalledMock.mockResolvedValue({ installed: false });
+
+    render(
+      <OfficeDocumentView
+        filePath="/tmp/sheet.xlsx"
+        mode="edit"
+      />,
+    );
+
+    expect(screen.getByTestId('xlsx-editor')).toBeInTheDocument();
+    expect(checkInstalledMock).not.toHaveBeenCalled();
+  });
+
   it('点击切换栏按钮切换预览模式', async () => {
     render(
       <OfficeDocumentView

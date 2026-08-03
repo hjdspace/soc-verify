@@ -11,6 +11,7 @@
  *
  * officecli 不可用（document.checkInstalled 返回 false）时：
  *   显示"officecli 未安装"提示 + 下载按钮（仅开发模式可见，调用 document.downloadBinary）。
+ * PDF 预览和 XLSX 编辑不依赖 officecli，不受安装检查影响。
  */
 import { useCallback, useEffect, useState } from 'react';
 import { trpc } from '@renderer/lib/trpc';
@@ -58,17 +59,25 @@ export function OfficeDocumentView({ filePath, mode, previewMode }: OfficeDocume
   const ext = getExt(filePath);
   // PDF 与 .xlsx edit 模式不显示切换栏
   const showSwitchBar = ext === 'docx' || ext === 'pptx';
+  const needsOfficeCli = mode === 'preview' && (ext === 'docx' || ext === 'pptx' || ext === 'xlsx');
 
   // 预览模式本地状态：从 props 初始化，但允许通过切换栏动态修改
   const [activePreview, setActivePreview] = useState<OfficePreviewMode>(previewMode ?? 'html');
 
   // officecli 安装检查状态
-  const [installState, setInstallState] = useState<InstalledState>({ status: 'checking' });
+  const [installState, setInstallState] = useState<InstalledState>(
+    needsOfficeCli ? { status: 'checking' } : { status: 'installed' },
+  );
 
   // officecli 下载状态（开发模式下点击下载按钮触发）
   const [downloadState, setDownloadState] = useState<DownloadState>({ status: 'idle' });
 
   useEffect(() => {
+    if (!needsOfficeCli) {
+      setInstallState({ status: 'installed' });
+      return;
+    }
+
     let cancelled = false;
     setInstallState({ status: 'checking' });
     trpc.document.checkInstalled
@@ -85,7 +94,7 @@ export function OfficeDocumentView({ filePath, mode, previewMode }: OfficeDocume
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [needsOfficeCli]);
 
   // 监听下载进度推送（officecli:download-progress IPC 事件）
   useEffect(() => {
