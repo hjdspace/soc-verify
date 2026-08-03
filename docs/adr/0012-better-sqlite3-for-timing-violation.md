@@ -20,5 +20,16 @@ Considered options:
 - `tv-database.ts` 实现 `initDatabase`（WAL + PRAGMA: synchronous=NORMAL, cache_size=10000, temp_store=MEMORY, mmap_size=256MB）、`createMemoryDatabase`（测试用）、`closeDatabase`
 - `tv-repository.ts` 实现批量插入（`transaction()` + `prepare()` + `INSERT OR IGNORE`，命名参数 `@caseName` 等）、`ensureConfirmationRecords`（`INSERT INTO ... SELECT ... WHERE NOT IN`）、分页查询（动态 WHERE + ORDER BY + LIMIT/OFFSET）、统计（COUNT + GROUP BY）、元数据（DISTINCT）、清除（级联删除）
 - 数据库文件路径默认 `.socverify/timing-violation/tv.db`，可通过 `config.json` 配置
-- DB 实例按 `projectId` 缓存在 `violation-router.ts` 中
+- DB 实例按 `projectId` 缓存在 `violation-router.ts` 和 `confirmation-router.ts` 中（共享同一缓存键）
 - 唯一键 `(case_name, corner, seed, hier, check_info, time_fs)` 实现 INSERT OR IGNORE 去重
+
+### Issue #3 + #4 + #5 已实现
+
+- `tv-repository.ts` 新增 `getPatterns`（查询所有 Pattern）和 `clearAllPatterns`（清除所有 Pattern）函数
+- `confirmation-manager.ts` 中所有确认操作使用 `transaction()` 保证原子性：
+  - `autoConfirmByResetTime` / `autoConfirmByInterval` — 批量 UPDATE confirmation_records（status='confirmed', confirmer='系统自动', is_auto_confirmed=1）
+  - `updateConfirmation` — 单条 UPDATE + `savePattern`（事务内）
+  - `batchUpdateConfirmations` — 批量 UPDATE + 多条 `savePattern`（事务内）
+  - `savePattern` — Pattern 存在时累加 `match_count`（SELECT + UPDATE），不存在时 INSERT
+- Corner 回退逻辑：指定 corner 未找到记录时回退到 `default` corner（`cornersToTry = [corner, 'default']`）
+- OR 条件查询：复位时间和复位区间条件用 SQL `OR` 连接，一次查询完成
