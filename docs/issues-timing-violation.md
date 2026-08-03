@@ -8,7 +8,7 @@
 
 ---
 
-## Issue #1: DB 基础 + 单文件解析 + 违例列表（最小闭环）
+## Issue #1: DB 基础 + 单文件解析 + 违例列表（最小闭环） ✅ 已完成
 
 ### Parent
 
@@ -22,25 +22,25 @@
 
 ### Acceptance criteria
 
-- [ ] 点击"选择文件"弹出文件选择对话框，选择 vio_summary.log 后自动解析
-- [ ] 解析过程在 Worker Thread 中执行，UI 不冻结
-- [ ] 解析时自动从文件路径推断 case_name、corner、seed 信息
-- [ ] 支持 FS/PS/NS 时间单位自动转换为飞秒（time_fs）
-- [ ] 重复文件解析时自动去重（INSERT OR IGNORE）
-- [ ] 解析完成后显示结果摘要（总数、新增数、跳过数）
-- [ ] 解析进度实时反馈（已处理违例数 / 预估总数）
-- [ ] 数据库使用 better-sqlite3 + WAL 模式 + PRAGMA 优化，3 张表结构正确
-- [ ] 数据库文件路径默认 `.socverify/timing-violation/tv.db`，可配置
-- [ ] CenterArea 中可打开 timing-violation Dashboard
-- [ ] Dashboard 展示统计概览行（总数、已确认、待确认）
-- [ ] 违例列表表格使用虚拟滚动（@tanstack/react-virtual），支持几十万条数据流畅滚动
-- [ ] 表格每行显示 NUM、Hier、Time、Check 摘要、确认状态（颜色标记）
-- [ ] tRPC API 有 `violation.parseLog` / `violation.queryViolations` / `violation.getStatistics` / `violation.getMetadata` procedure
-- [ ] tRPC router 在主 router 中注册
-- [ ] 解析器单测覆盖：标准日志格式、多行 Check、无效条目跳过、时间单位转换、空文件
-- [ ] tRPC 集成测试覆盖：单文件解析 → 查询验证 → 去重验证
-- [ ] UI 组件测试覆盖：Dashboard 渲染、表格虚拟滚动交互
-- [ ] `npm run build && npm run typecheck && npm run test` 全部通过
+- [x] 点击"选择文件"弹出文件选择对话框，选择 vio_summary.log 后自动解析
+- [x] 解析过程不冻结 UI（采用 readline 流式解析替代 Worker Thread，详见 ADR-0013）
+- [x] 解析时自动从文件路径推断 case_name、corner、seed 信息
+- [x] 支持 FS/PS/NS 时间单位自动转换为飞秒（time_fs）
+- [x] 重复文件解析时自动去重（INSERT OR IGNORE）
+- [x] 解析完成后显示结果摘要（总数、新增数、跳过数）
+- [ ] 解析进度实时反馈（已处理违例数 / 预估总数）— Phase 2 补充
+- [x] 数据库使用 better-sqlite3 + WAL 模式 + PRAGMA 优化，3 张表结构正确
+- [x] 数据库文件路径默认 `.socverify/timing-violation/tv.db`，可配置
+- [x] CenterArea 中可打开 timing-violation Dashboard
+- [x] Dashboard 展示统计概览行（总数、已确认、待确认）
+- [x] 违例列表表格使用虚拟滚动（@tanstack/react-virtual），支持几十万条数据流畅滚动
+- [x] 表格每行显示 NUM、Hier、Time、Check 摘要、确认状态（颜色标记）
+- [x] tRPC API 有 `violation.parseLog` / `violation.queryViolations` / `violation.getStatistics` / `violation.getMetadata` procedure
+- [x] tRPC router 在主 router 中注册
+- [x] 解析器单测覆盖：标准日志格式、多行 Check、无效条目跳过、时间单位转换、空文件
+- [x] tRPC 集成测试覆盖：单文件解析 → 查询验证 → 去重验证
+- [x] UI 组件测试覆盖：Dashboard 渲染、表格虚拟滚动交互
+- [x] `npm run build && npm run typecheck && npm run test` 全部通过
 
 ### Blocked by
 
@@ -48,7 +48,7 @@ None — can start immediately.
 
 ---
 
-## Issue #2: 筛选 + 排序 + 搜索 + 详情展开
+## Issue #2: 筛选 + 排序 + 搜索 + 详情展开 ✅ 已完成
 
 ### Parent
 
@@ -62,17 +62,17 @@ None — can start immediately.
 
 ### Acceptance criteria
 
-- [ ] 筛选栏包含用例名下拉、corner 下拉、状态下拉、子系统下拉
-- [ ] 下拉选项从 `violation.getMetadata` API 动态获取
-- [ ] 支持按时间戳、NUM、Hier 字段排序，点击列头切换升序/降序
-- [ ] 搜索框输入关键字可模糊搜索 Hier 和 Check 信息（SQL LIKE）
-- [ ] 筛选/排序/搜索条件组合使用
-- [ ] 点击表格行展开显示完整违例详情（Hier、Check、时间、文件路径、确认状态/确认人/结果/理由）
-- [ ] 筛选状态通过 Zustand store 管理，切换 Destination 后恢复
-- [ ] tRPC `violation.queryViolations` 支持 caseName/corner/status/subsys/searchText/sortField/sortOrder 参数
-- [ ] tRPC 集成测试覆盖：筛选、排序、搜索组合查询
-- [ ] UI 组件测试覆盖：筛选栏交互、行展开
-- [ ] `npm run build && npm run typecheck && npm run test` 全部通过
+- [x] 筛选栏包含用例名下拉、corner 下拉、状态下拉、子系统下拉
+- [x] 下拉选项从 `violation.getMetadata` API 动态获取
+- [x] 支持按时间戳、NUM、Hier 字段排序，点击列头切换升序/降序
+- [x] 搜索框输入关键字可模糊搜索 Hier 和 Check 信息（SQL LIKE）
+- [x] 筛选/排序/搜索条件组合使用
+- [x] 点击表格行展开显示完整违例详情（Hier、Check、时间、文件路径、确认状态/确认人/结果/理由）
+- [x] 筛选状态通过 Zustand store 管理，切换 Destination 后恢复
+- [x] tRPC `violation.queryViolations` 支持 caseName/corner/status/subsys/searchText/sortField/sortOrder 参数
+- [x] tRPC 集成测试覆盖：筛选、排序、搜索组合查询
+- [x] UI 组件测试覆盖：筛选栏交互、行展开
+- [x] `npm run build && npm run typecheck && npm run test` 全部通过
 
 ### Blocked by
 
