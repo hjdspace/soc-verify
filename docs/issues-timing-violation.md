@@ -80,7 +80,7 @@ None — can start immediately.
 
 ---
 
-## Issue #3: 统计卡片 + 元数据 API
+## Issue #3: 统计卡片 + 元数据 API ✅ 已完成
 
 ### Parent
 
@@ -94,15 +94,15 @@ None — can start immediately.
 
 ### Acceptance criteria
 
-- [ ] Dashboard 顶部展示 4 个统计卡片：总数、已确认、待确认、已忽略
-- [ ] 每个卡片用不同颜色区分（如绿色已确认、黄色待确认、灰色已忽略）
-- [ ] 统计数据支持按 caseName/corner 筛选聚合
-- [ ] 筛选条件变化时统计卡片同步更新
-- [ ] `violation.getMetadata` 返回 corners/cases/subsys 列表
-- [ ] `violation.getDatabaseStats` 返回数据库整体统计（总违例数、确认数、Pattern 数、用例数）
-- [ ] tRPC 集成测试覆盖：统计查询、元数据查询
-- [ ] UI 组件测试覆盖：卡片渲染、筛选联动
-- [ ] `npm run build && npm run typecheck && npm run test` 全部通过
+- [x] Dashboard 顶部展示 4 个统计卡片：总数、已确认、待确认、已忽略
+- [x] 每个卡片用不同颜色区分（如绿色已确认、黄色待确认、灰色已忽略）
+- [x] 统计数据支持按 caseName/corner 筛选聚合
+- [x] 筛选条件变化时统计卡片同步更新
+- [x] `violation.getMetadata` 返回 corners/cases/subsys 列表
+- [x] `violation.getDatabaseStats` 返回数据库整体统计（总违例数、确认数、Pattern 数、用例数）
+- [x] tRPC 集成测试覆盖：统计查询、元数据查询
+- [x] UI 组件测试覆盖：卡片渲染、筛选联动
+- [x] `npm run build && npm run typecheck && npm run test` 全部通过
 
 ### Blocked by
 
@@ -110,7 +110,7 @@ None — can start immediately.
 
 ---
 
-## Issue #4: 自动确认（复位时间 + 复位区间）
+## Issue #4: 自动确认（复位时间 + 复位区间） ✅ 已完成
 
 ### Parent
 
@@ -124,18 +124,18 @@ None — can start immediately.
 
 ### Acceptance criteria
 
-- [ ] 输入复位时间（纳秒）可自动确认该时间之前的 pending 违例
-- [ ] 输入复位区间（起止时间）可自动确认区间内的 pending 违例
-- [ ] 支持同时使用复位时间和复位区间（OR 关系）
-- [ ] 指定 corner 未找到记录时回退到 default corner
-- [ ] 自动确认记录的确认人标记为"系统自动"
-- [ ] 自动确认记录附带原因说明（含时间条件描述）
-- [ ] 自动确认后表格状态颜色实时更新
-- [ ] 自动确认后统计卡片同步更新
-- [ ] 返回确认数量供用户确认
-- [ ] tRPC API 有 `confirmation.autoConfirmByResetTime` / `confirmation.autoConfirmByInterval` procedure
-- [ ] tRPC 集成测试覆盖：复位时间确认、复位区间确认、corner 回退、已确认记录不重复确认
-- [ ] `npm run build && npm run typecheck && npm run test` 全部通过
+- [x] 输入复位时间（纳秒）可自动确认该时间之前的 pending 违例
+- [x] 输入复位区间（起止时间）可自动确认区间内的 pending 违例
+- [x] 支持同时使用复位时间和复位区间（OR 关系）
+- [x] 指定 corner 未找到记录时回退到 default corner
+- [x] 自动确认记录的确认人标记为"系统自动"
+- [x] 自动确认记录附带原因说明（含时间条件描述）
+- [x] 自动确认后表格状态颜色实时更新
+- [x] 自动确认后统计卡片同步更新
+- [x] 返回确认数量供用户确认
+- [x] tRPC API 有 `confirmation.autoConfirmByResetTime` / `confirmation.autoConfirmByInterval` procedure
+- [x] tRPC 集成测试覆盖：复位时间确认、复位区间确认、corner 回退、已确认记录不重复确认
+- [x] `npm run build && npm run typecheck && npm run test` 全部通过
 
 ### Blocked by
 
@@ -143,7 +143,7 @@ None — can start immediately.
 
 ---
 
-## Issue #5: 手动确认 + 批量确认
+## Issue #5: 手动确认 + 批量确认 ✅ 已完成
 
 ### Parent
 
@@ -157,19 +157,19 @@ None — can start immediately.
 
 ### Acceptance criteria
 
-- [ ] 选中一条违例可弹出确认对话框
-- [ ] 确认对话框包含确认人、确认结果（pass/issue 下拉）、确认理由（文本框）
-- [ ] 支持多选违例后批量确认（相同确认人/结果/理由）
-- [ ] 支持编辑已确认记录的确认人/结果/理由
-- [ ] 支持将违例标记为"忽略"（ignored 状态）
-- [ ] 每次手动确认后自动保存 Pattern 到 violation_patterns 表
-- [ ] Pattern 保存时如果已存在相同 (hier_pattern, check_pattern) 则累加 match_count
-- [ ] 确认后表格状态颜色实时更新
-- [ ] 确认后统计卡片同步更新
-- [ ] tRPC API 有 `confirmation.updateConfirmation` / `confirmation.batchUpdateConfirmations` procedure
-- [ ] tRPC 集成测试覆盖：单条确认、批量确认、编辑确认、忽略、Pattern 自动保存
-- [ ] UI 组件测试覆盖：确认对话框交互、批量选择
-- [ ] `npm run build && npm run typecheck && npm run test` 全部通过
+- [x] 选中一条违例可弹出确认对话框
+- [x] 确认对话框包含确认人、确认结果（pass/issue 下拉）、确认理由（文本框）
+- [x] 支持多选违例后批量确认（相同确认人/结果/理由）
+- [x] 支持编辑已确认记录的确认人/结果/理由
+- [x] 支持将违例标记为"忽略"（ignored 状态）
+- [x] 每次手动确认后自动保存 Pattern 到 violation_patterns 表
+- [x] Pattern 保存时如果已存在相同 (hier_pattern, check_pattern) 则累加 match_count
+- [x] 确认后表格状态颜色实时更新
+- [x] 确认后统计卡片同步更新
+- [x] tRPC API 有 `confirmation.updateConfirmation` / `confirmation.batchUpdateConfirmations` procedure
+- [x] tRPC 集成测试覆盖：单条确认、批量确认、编辑确认、忽略、Pattern 自动保存
+- [x] UI 组件测试覆盖：确认对话框交互、批量选择
+- [x] `npm run build && npm run typecheck && npm run test` 全部通过
 
 ### Blocked by
 
