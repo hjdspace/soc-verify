@@ -8,7 +8,11 @@
  * - PS (皮秒) → ×1000
  * - NS (纳秒) → ×1000000
  * - 无单位   → 假设为飞秒 (×1)
+ *
+ * formatTimeDisplay 的共享实现在 @shared/tv-utils，此处重新导出以保持现有导入路径不变。
  */
+
+export { formatTimeDisplay } from '@shared/tv-utils';
 
 const TIME_PATTERN = /(\d+(?:\.\d+)?)\s*([A-Za-z]*)/;
 
@@ -73,16 +77,4 @@ export function convertTimeToNs(timeStr: string): number {
     return value / divisor;
   }
   return value;
-}
-
-/**
- * 格式化飞秒为人类可读的时间字符串。
- */
-export function formatTimeDisplay(timeFs: number): string {
-  if (timeFs >= 1000000) {
-    return `${(timeFs / 1000000).toFixed(3)} ns`;
-  } else if (timeFs >= 1000) {
-    return `${(timeFs / 1000).toFixed(3)} ps`;
-  }
-  return `${timeFs} fs`;
 }
