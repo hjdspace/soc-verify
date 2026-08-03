@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { spawn, ChildProcess, execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import type * as NodePty from 'node-pty';
@@ -26,6 +26,8 @@ export interface TerminalCreateOptions {
   cols?: number;
   rows?: number;
   env?: Record<string, string>;
+  /** Override the shell binary path (e.g. '/bin/csh' for EDA environments). */
+  shell?: string;
 }
 
 /** Options for {@link TerminalManager.runCommand} — log-mode execution. */
@@ -36,6 +38,8 @@ export interface TerminalRunCommandOptions {
   cwd?: string;
   /** Additional environment variables to merge into `process.env`. */
   env?: Record<string, string>;
+  /** Override the shell binary path (e.g. '/bin/csh' for EDA environments). */
+  shell?: string;
 }
 
 export interface PtyLoadResult {
@@ -53,12 +57,21 @@ let ptyLoadAttempted = false;
  * On Linux AppImage, the PATH may not include `/bin` or `/usr/bin`, so
  * relying on `spawn('bash')` can fail with ENOENT. This function probes
  * known absolute locations before falling back to a PATH lookup.
+ *
+ * @param preferred - Optional list of preferred shell paths to check first
+ *                    (e.g. `['/bin/csh', '/usr/bin/csh']` for EDA environments).
  */
-function findShell(): string {
+function findShell(preferred?: string[]): string {
   if (process.platform === 'win32') {
     return 'powershell.exe';
   }
-  // Candidate shells in priority order — prefer bash, then sh
+  // Check preferred shells first (e.g. csh for EDA/simulation environments)
+  if (preferred && preferred.length > 0) {
+    for (const c of preferred) {
+      if (existsSync(c)) return c;
+    }
+  }
+  // Default candidate shells in priority order — prefer bash, then sh
   const candidates = ['/bin/bash', '/usr/bin/bash', '/usr/local/bin/bash', '/bin/sh', '/usr/bin/sh'];
   for (const c of candidates) {
     if (existsSync(c)) return c;
@@ -72,6 +85,77 @@ function findShell(): string {
   }
   // Absolute last resort — return 'bash' and hope PATH works
   return 'bash';
+}
+
+/**
+ * Shell preferences for simulation commands on different platforms.
+ *
+ * On Linux, EDA tools (runsim, xrun, vcs, etc.) typically require csh/tcsh
+ * because their environment setup scripts are written in csh syntax.
+ * On Windows, PowerShell is used.
+ */
+const SIM_SHELL_PREFERENCES: string[] =
+  process.platform === 'win32'
+    ? []
+    : ['/bin/csh', '/usr/bin/csh', '/bin/tcsh', '/usr/bin/tcsh'];
+
+/**
+ * Find a shell suitable for running simulation (runsim) commands.
+ *
+ * On Linux, prefers csh/tcsh (EDA environments require it) and falls back
+ * to bash/sh. On Windows, always uses PowerShell.
+ */
+export function findSimShell(): string {
+  return findShell(SIM_SHELL_PREFERENCES);
+}
+
+/**
+ * Validate that a directory exists and is accessible. If not, fall back to
+ * `process.cwd()` (or `/tmp` as a last resort) and return the effective path.
+ *
+ * This prevents `spawn ENOENT` errors caused by non-existent cwd paths,
+ * which is a common issue when running in AppImage where the project path
+ * might not be accessible or might be a Windows-style path.
+ */
+function validateCwd(cwd: string): { effective: string; fallback: boolean } {
+  if (existsSync(cwd) && statSync(cwd).isDirectory()) {
+    return { effective: cwd, fallback: false };
+  }
+  console.warn(`[terminal] cwd '${cwd}' does not exist or is not a directory, falling back to process.cwd()`);
+  const fallback = process.cwd();
+  if (existsSync(fallback) && statSync(fallback).isDirectory()) {
+    return { effective: fallback, fallback: true };
+  }
+  // Absolute last resort
+  return { effective: '/tmp', fallback: true };
+}
+
+/**
+ * Detect an available external terminal emulator on Linux.
+ *
+ * Returns the command and args to launch a terminal, or null if none found.
+ * Used as a last-resort fallback when neither node-pty nor log-mode work.
+ */
+function findExternalTerminal(): { cmd: string; args: string[] } | null {
+  if (process.platform !== 'linux') return null;
+  const terminals: Array<{ cmd: string; args: string[] }> = [
+    { cmd: 'gnome-terminal', args: ['--', 'bash', '-c'] },
+    { cmd: 'konsole', args: ['-e', 'bash', '-c'] },
+    { cmd: 'xterm', args: ['-e', 'bash', '-c'] },
+    { cmd: 'xfce4-terminal', args: ['-x', 'bash', '-c'] },
+    { cmd: 'mate-terminal', args: ['-e', 'bash', '-c'] },
+  ];
+  for (const t of terminals) {
+    try {
+      const which = execSync(`which ${t.cmd} 2>/dev/null`, { encoding: 'utf-8' }).trim();
+      if (which && existsSync(which)) {
+        return t;
+      }
+    } catch {
+      // continue searching
+    }
+  }
+  return null;
 }
 
 /**
@@ -308,10 +392,14 @@ export class TerminalManager extends EventEmitter {
    */
   async create(opts: TerminalCreateOptions = {}): Promise<TerminalSession> {
     const id = `term_${++this.idCounter}_${Date.now()}`;
-    const cwd = opts.cwd ?? process.cwd();
+    // Validate cwd — prevent spawn ENOENT from non-existent working directory
+    const cwdResult = validateCwd(opts.cwd ?? process.cwd());
+    const cwd = cwdResult.effective;
     const cols = opts.cols ?? 80;
     const rows = opts.rows ?? 24;
     const env = { ...process.env, ...opts.env } as Record<string, string>;
+    // Use caller-specified shell, or find one automatically
+    const shell = opts.shell ?? findShell();
 
     const session: TerminalSession = {
       id,
@@ -366,7 +454,6 @@ export class TerminalManager extends EventEmitter {
     let spawnError: Error | null = null;
     if (ptyModule) {
       try {
-        const shell = findShell();
         pty = ptyModule.spawn(shell, [], {
           name: 'xterm-color',
           cols,
@@ -400,7 +487,6 @@ export class TerminalManager extends EventEmitter {
       // This is a degraded mode: the shell runs non-interactively (no
       // $TERM, no ANSI capabilities, no resize support). Many CLI tools
       // (vim, top, htop, interactive menus) will not work correctly.
-      const shell = findShell();
       let child: ChildProcess;
       try {
         child = spawn(shell, [], {
@@ -649,7 +735,9 @@ export class TerminalManager extends EventEmitter {
    */
   async runCommand(opts: TerminalRunCommandOptions): Promise<TerminalSession> {
     const id = `term_${++this.idCounter}_${Date.now()}`;
-    const cwd = opts.cwd ?? process.cwd();
+    // Validate cwd — prevent spawn ENOENT from non-existent working directory
+    const cwdResult = validateCwd(opts.cwd ?? process.cwd());
+    const cwd = cwdResult.effective;
     const env = { ...process.env, ...opts.env } as Record<string, string>;
 
     const session: TerminalSession = {
@@ -708,9 +796,10 @@ export class TerminalManager extends EventEmitter {
     entry.pendingChunks.push(cmdEcho);
     entry.pendingSize += cmdEcho.length;
 
-    const shell = findShell();
+    // Use caller-specified shell, or find one suitable for simulation (csh on Linux)
+    const shell = opts.shell ?? findSimShell();
     const isWin = process.platform === 'win32';
-    // On Windows, use `powershell -Command "..."`; on Unix, `bash -c "..."`
+    // On Windows, use `powershell -Command "..."`; on Unix, `shell -c "..."`
     const shellArgs = isWin ? ['-NoProfile', '-Command', opts.command] : ['-c', opts.command];
 
     let child: ChildProcess;
@@ -768,6 +857,60 @@ export class TerminalManager extends EventEmitter {
     this.flushPending(id);
 
     return session;
+  }
+
+  /**
+   * Launch a command in the system's external terminal emulator.
+   *
+   * This is a last-resort fallback when neither node-pty nor log-mode work
+   * (e.g., on a locked-down Linux system where the AppImage environment
+   * prevents spawning shells inside the app).
+   *
+   * Limitations:
+   *   - Output is NOT streamed back to the app (the terminal runs externally)
+   *   - Pass/fail detection relies on the user manually checking the terminal
+   *   - The session appears as 'completed' immediately in the app UI
+   *
+   * @returns true if the external terminal was launched, false if none found
+   */
+  runInExternalTerminal(opts: TerminalRunCommandOptions): boolean {
+    const extTerm = findExternalTerminal();
+    if (!extTerm) {
+      console.warn('[terminal] No external terminal emulator found (tried: gnome-terminal, konsole, xterm, xfce4-terminal, mate-terminal)');
+      return false;
+    }
+
+    // Validate cwd
+    const cwdResult = validateCwd(opts.cwd ?? process.cwd());
+    const cwd = cwdResult.effective;
+    const env = { ...process.env, ...opts.env } as Record<string, string>;
+
+    // Build the full command: cd to cwd && run the command && keep terminal open
+    // The `; exec bash` keeps the terminal open after the command finishes
+    // so the user can read the output.
+    const fullCommand = `cd '${cwd}' && ${opts.command}; echo ''; echo '[Process finished with exit code $?]'; exec bash`;
+
+    try {
+      const child = spawn(extTerm.cmd, [...extTerm.args, fullCommand], {
+        cwd,
+        env,
+        stdio: 'ignore',
+        detached: true,
+      });
+      child.unref();
+      console.log(`[terminal] Launched external terminal: ${extTerm.cmd} (pid=${child.pid})`);
+      return true;
+    } catch (err) {
+      console.error(`[terminal] Failed to launch external terminal '${extTerm.cmd}': ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  }
+
+  /**
+   * Check if an external terminal emulator is available on this system.
+   */
+  hasExternalTerminal(): boolean {
+    return findExternalTerminal() !== null;
   }
 }
 
