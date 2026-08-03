@@ -6,6 +6,26 @@
 
 ---
 
+## [0.2.1](https://github.com/hjdspace/soc-verify/compare/v0.2.0...v0.2.1) (2026-08-04)
+
+### Features
+
+* **officecli:** 新增 Office 文档预览、PDF 预览、XLSX 原地编辑和 AI 文档创建能力
+* **timing-violation:** 新增时序违例解析、数据库管理、仪表盘筛选统计和确认工作流
+* **simulation:** 增强仿真命令解析、回归列表文件选择和运行状态聚合统计
+
+### Bug Fixes
+
+* **terminal:** 改进终端 shell、工作目录和仿真会话处理，增强二进制启动失败诊断
+* **config:** 规范化 EDA 配置和 JSON 解析，提升配置兼容性
+
+### Refactor
+
+* **officecli:** 拆分 XLSX 读取工具并改用 stdin 传递批处理 JSON
+* **timing-violation:** 引入 better-sqlite3、worker 解析和共享数据库缓存
+
+---
+
 ## [0.2.0](https://github.com/hjdspace/soc-verify/compare/v0.1.10...v0.2.0) (2026-08-03)
 
 ### Features
