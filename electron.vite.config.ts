@@ -13,7 +13,8 @@ export default defineConfig({
         // bundled by Rollup. Without this, the dynamic import('node-pty')
         // gets inlined into the CJS output and fails at runtime because the
         // native binary path resolution breaks.
-        external: ['node-pty'],
+        // better-sqlite3 is also a native module — same treatment.
+        external: ['node-pty', 'better-sqlite3'],
       }
     },
     resolve: {
