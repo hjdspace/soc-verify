@@ -4,6 +4,7 @@
  * 使用 @tanstack/react-virtual 实现虚拟滚动，支持几十万条数据流畅滚动。
  * 表格每行显示 NUM、Hier、Time、Check 摘要、确认状态（颜色标记）。
  * 点击列头切换排序，点击行展开查看违例详情。
+ * 行首有 checkbox 支持多选，用于批量确认/忽略。
  *
  * 使用 measureElement 动态测量行高，确保展开行不与下方行重叠。
  */
@@ -30,6 +31,10 @@ type ViolationTableProps = {
   page: number;
   pageSize: number;
   onPageChange: (page: number) => void;
+  selectedViolationIds: Set<number>;
+  onToggleSelect: (id: number) => void;
+  onSelectAll: () => void;
+  onRowConfirm: (violation: ViolationWithConfirmation) => void;
 };
 
 const ROW_HEIGHT = 36;
@@ -62,6 +67,10 @@ export function TVViolationTable({
   page,
   pageSize,
   onPageChange,
+  selectedViolationIds,
+  onToggleSelect,
+  onSelectAll,
+  onRowConfirm,
 }: ViolationTableProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -79,6 +88,8 @@ export function TVViolationTable({
   });
 
   const totalPages = Math.ceil(total / pageSize);
+  const allSelected = violations.length > 0 && violations.every((v) => selectedViolationIds.has(v.id));
+  const someSelected = violations.some((v) => selectedViolationIds.has(v.id));
 
   const SortIcon = ({ field }: { field: SortField }) => {
     if (sortField !== field) return null;
@@ -91,7 +102,18 @@ export function TVViolationTable({
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* 表头 */}
       <div className="flex shrink-0 items-center border-b bg-secondary/30 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        <div className="w-8" />
+        {/* Checkbox 列 */}
+        <div className="w-8 flex items-center justify-center">
+          <input
+            type="checkbox"
+            checked={allSelected}
+            ref={(el) => { if (el) el.indeterminate = !allSelected && someSelected; }}
+            onChange={onSelectAll}
+            className="h-3.5 w-3.5"
+            title={allSelected ? '取消全选' : '全选当前页'}
+          />
+        </div>
+        <div className="w-5" />
         {COLUMNS.map((col) => (
           <button
             key={col.key}
@@ -108,6 +130,7 @@ export function TVViolationTable({
         {/* Check 摘要列（不可排序） */}
         <div className="flex-1 min-w-0 px-2 py-1.5">Check</div>
         <div className="w-24 px-2 py-1.5">状态</div>
+        <div className="w-16 px-2 py-1.5">操作</div>
       </div>
 
       {/* 虚拟滚动区域 */}
@@ -129,6 +152,7 @@ export function TVViolationTable({
               const v = violations[virtualRow.index];
               if (!v) return null;
               const isExpanded = v.id === expandedId;
+              const isSelected = selectedViolationIds.has(v.id);
               const statusStyle = STATUS_STYLES[v.status];
 
               return (
@@ -146,14 +170,28 @@ export function TVViolationTable({
                 >
                   {/* 主行 */}
                   <div
-                    onClick={() => toggleExpand(v.id)}
                     className={cn(
-                      'flex cursor-pointer items-center border-b border-border/30 text-xs transition-colors hover:bg-accent/30',
+                      'flex items-center border-b border-border/30 text-xs transition-colors hover:bg-accent/30',
                       isExpanded && 'bg-accent/20',
+                      isSelected && 'bg-primary/5',
                     )}
                     style={{ height: ROW_HEIGHT }}
                   >
+                    {/* Checkbox */}
                     <div className="w-8 flex items-center justify-center">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => onToggleSelect(v.id)}
+                        className="h-3.5 w-3.5"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </div>
+                    {/* 展开按钮 */}
+                    <div
+                      className="w-5 flex items-center justify-center cursor-pointer"
+                      onClick={() => toggleExpand(v.id)}
+                    >
                       <ChevronRight
                         className={cn(
                           'h-3 w-3 text-muted-foreground transition-transform',
@@ -161,14 +199,28 @@ export function TVViolationTable({
                         )}
                       />
                     </div>
-                    <div className="w-16 px-2 tabular-nums text-muted-foreground">{v.num}</div>
-                    <div className="flex-1 min-w-0 truncate px-2 font-mono text-foreground">
+                    <div
+                      className="w-16 px-2 tabular-nums text-muted-foreground cursor-pointer"
+                      onClick={() => toggleExpand(v.id)}
+                    >
+                      {v.num}
+                    </div>
+                    <div
+                      className="flex-1 min-w-0 truncate px-2 font-mono text-foreground cursor-pointer"
+                      onClick={() => toggleExpand(v.id)}
+                    >
                       {v.hier}
                     </div>
-                    <div className="w-28 px-2 tabular-nums text-muted-foreground">
+                    <div
+                      className="w-28 px-2 tabular-nums text-muted-foreground cursor-pointer"
+                      onClick={() => toggleExpand(v.id)}
+                    >
                       {formatTimeDisplay(v.timeFs)}
                     </div>
-                    <div className="flex-1 min-w-0 truncate px-2 text-muted-foreground">
+                    <div
+                      className="flex-1 min-w-0 truncate px-2 text-muted-foreground cursor-pointer"
+                      onClick={() => toggleExpand(v.id)}
+                    >
                       {v.checkInfo}
                     </div>
                     <div className="w-24 px-2">
@@ -178,6 +230,19 @@ export function TVViolationTable({
                           {statusStyle.label}
                         </span>
                       </span>
+                    </div>
+                    {/* 操作按钮 */}
+                    <div className="w-16 px-2">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onRowConfirm(v);
+                        }}
+                        className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+                        title="确认此违例"
+                      >
+                        确认
+                      </button>
                     </div>
                   </div>
 
@@ -254,6 +319,11 @@ export function TVViolationTable({
         <div className="flex shrink-0 items-center justify-between border-t bg-secondary/20 px-3 py-1.5 text-[11px] text-muted-foreground">
           <span>
             共 {total.toLocaleString()} 条 · 第 {page}/{totalPages} 页
+            {selectedViolationIds.size > 0 && (
+              <span className="ml-2 text-primary">
+                · 已选 {selectedViolationIds.size} 条
+              </span>
+            )}
           </span>
           <div className="flex items-center gap-1">
             <button
