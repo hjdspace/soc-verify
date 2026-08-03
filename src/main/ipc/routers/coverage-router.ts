@@ -181,8 +181,10 @@ export const coverageRouter = t.router({
       let edaConfig = input.edaConfig ?? (await loadEdaConfig(project.rootPath));
       if (!edaConfig) {
         edaConfig = normalizeConfig({ tool: 'imc', covMergeDir: input.covMergeDir });
-      } else if (edaConfig.covMergeDir !== input.covMergeDir) {
-        edaConfig = { ...edaConfig, covMergeDir: input.covMergeDir };
+      } else {
+        // 前端或存储可能只传了 tool + covMergeDir，未含命令模板。
+        // 统一用 normalizeConfig 填充缺失的命令模板（ADR 0006）。
+        edaConfig = normalizeConfig({ ...edaConfig, covMergeDir: input.covMergeDir });
       }
       const targets = input.targets ?? { ...DEFAULT_COVERAGE_TARGETS };
       const result = await mgr.importCoverage(input.covMergeDir, edaConfig, targets);
