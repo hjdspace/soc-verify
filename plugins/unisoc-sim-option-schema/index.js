@@ -183,11 +183,10 @@ const SIM_OPTION_FIELDS = [
   {
     key: 'dump_mem',
     label: 'Dump Memory (-dump_mem)',
-    type: 'string',
-    default: '',
+    type: 'boolean',
+    default: false,
     group: GROUP_WAVE,
-    description:
-      'runsim -dump_mem 参数，指定内存 dump 选项（多个选项用空格分隔，如 "DMEM IMEM"）',
+    description: 'runsim -dump_mem 参数，开启内存 dump 功能，默认添加选项：+fsdb+autoflush、+fsdb+skip_cell_instance=0、+mda=on',
   },
   {
     key: 'wdd',
