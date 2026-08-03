@@ -22,6 +22,7 @@ import { settingsRouter } from './routers/settings-router';
 import { errorAnalysisRouter } from './routers/error-analysis-router';
 import { searchRouter } from './routers/search-router';
 import { violationRouter } from './routers/violation-router';
+import { confirmationRouter } from './routers/confirmation-router';
 
 export const router = t.router({
   ping: pingProcedure,
@@ -42,6 +43,7 @@ export const router = t.router({
   errorAnalysis: errorAnalysisRouter,
   search: searchRouter,
   violation: violationRouter,
+  confirmation: confirmationRouter,
 });
 
 export type AppRouter = typeof router;
