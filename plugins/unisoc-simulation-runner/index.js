@@ -128,15 +128,8 @@ function generateRunsimCommand(opts) {
   if (options.cov) cmd.push('-cov');
   if (options.upf) cmd.push('-upf');
 
-  // dump_mem
-  const dumpMem = (typeof options.dump_mem === 'string' ? options.dump_mem : '').trim();
-  if (dumpMem) {
-    if (dumpMem.includes(' ')) {
-      cmd.push('-dump_mem', `"${dumpMem}"`);
-    } else {
-      cmd.push('-dump_mem', dumpMem);
-    }
-  }
+  // dump_mem (boolean flag — checked → add -dump_mem)
+  if (options.dump_mem) cmd.push('-dump_mem');
 
   // wdd
   const wdd = (typeof options.wdd === 'string' ? options.wdd : '').trim();
