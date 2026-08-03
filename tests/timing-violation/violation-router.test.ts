@@ -11,6 +11,8 @@ import {
   getMetadata,
   getDatabaseStats,
   clearCaseData,
+  getPatterns,
+  clearAllPatterns,
 } from '../../src/main/timing-violation/db/tv-repository';
 import type { ParsedViolation } from '../../src/main/timing-violation/types';
 
@@ -308,6 +310,47 @@ describe('Timing Violation Database', () => {
       const insertResult2 = insertViolations(db, parseResult2.violations);
       expect(insertResult2.inserted).toBe(0);
       expect(insertResult2.skipped).toBe(2);
+    });
+  });
+
+  // ─── Pattern 管理测试 ──────────────────────────────────────
+
+  describe('getPatterns', () => {
+    it('returns empty array when no patterns exist', () => {
+      const patterns = getPatterns(db);
+      expect(patterns).toHaveLength(0);
+    });
+
+    it('returns all patterns ordered by last_used DESC', () => {
+      db.prepare(`
+        INSERT INTO violation_patterns (hier_pattern, check_pattern, default_confirmer, default_result, default_reason, match_count, last_used)
+        VALUES
+          ('tb_top.a', 'check_a', 'Alice', 'pass', 'safe', 1, '2024-01-01 10:00:00'),
+          ('tb_top.b', 'check_b', 'Bob', 'issue', 'has issue', 3, '2024-01-02 10:00:00')
+      `).run();
+
+      const patterns = getPatterns(db);
+      expect(patterns).toHaveLength(2);
+      // Ordered by last_used DESC — Bob's pattern is more recent
+      expect(patterns[0].hierPattern).toBe('tb_top.b');
+      expect(patterns[1].hierPattern).toBe('tb_top.a');
+    });
+  });
+
+  describe('clearAllPatterns', () => {
+    it('deletes all patterns', () => {
+      db.prepare(`
+        INSERT INTO violation_patterns (hier_pattern, check_pattern, default_confirmer, default_result, default_reason, match_count, last_used)
+        VALUES
+          ('tb_top.a', 'check_a', 'Alice', 'pass', 'safe', 1, '2024-01-01 10:00:00'),
+          ('tb_top.b', 'check_b', 'Bob', 'issue', 'has issue', 3, '2024-01-02 10:00:00')
+      `).run();
+
+      const result = clearAllPatterns(db);
+      expect(result.deleted).toBe(2);
+
+      const patterns = getPatterns(db);
+      expect(patterns).toHaveLength(0);
     });
   });
 });
