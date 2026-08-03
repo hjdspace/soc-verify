@@ -740,11 +740,23 @@ function scanCovMergeDir(covMergeDir, log) {
       }
     }
 
-    // 5. 检查是否有 .covdb 文件（IMC 二进制数据库）
+    // 5. 检查是否有二进制覆盖率数据库文件（IMC / VCS）
     var hasCovdb = entries.some(function(e) { return e.isFile() && /\.covdb$/i.test(e.name); });
     var hasCovdbDir = entries.some(function(e) { return e.isDirectory() && /covdb/i.test(e.name); });
     if (hasCovdb || hasCovdbDir) {
       if (log) log('[scanCovMergeDir] Found IMC coverage database (.covdb) but cannot parse binary format directly. EDA command (imc) is required to generate text reports.');
+    }
+
+    // Cadence IMC .ucd (Unified Coverage Database) / .ucm (merged coverage) 文件
+    var hasUcd = entries.some(function(e) { return e.isFile() && /\.(ucd|ucm)$/i.test(e.name); });
+    if (hasUcd) {
+      if (log) log('[scanCovMergeDir] Found Cadence IMC binary coverage files (.ucd/.ucm). These require the imc EDA tool to generate text reports. Check that imc is in PATH and EDA command templates are configured.');
+    }
+
+    // VCS .vdb 目录
+    var hasVdb = entries.some(function(e) { return e.isDirectory() && /\.vdb$/i.test(e.name); });
+    if (hasVdb) {
+      if (log) log('[scanCovMergeDir] Found VCS coverage database directory (.vdb). EDA command (urg) is required to generate text reports.');
     }
 
     if (log) log('[scanCovMergeDir] No parseable coverage data found');
