@@ -1,5 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { existsSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import type {
   AgentClientOptions,
   Command,
@@ -20,6 +22,62 @@ export type ToolCallHandler = (
 ) => Promise<unknown>;
 
 export type EventListener = (event: unknown) => void;
+
+/**
+ * Diagnose why a binary spawn failed. Returns a diagnostic string to append
+ * to the error message, or an empty string if no additional info is available.
+ *
+ * On Linux, when `spawn` returns ENOENT for a binary that exists on disk,
+ * the most common cause is a missing shared library — the dynamic linker
+ * fails to find a required `.so` file, and the kernel translates this to
+ * ENOENT. This function runs `ldd` to detect missing libraries.
+ */
+function diagnoseSpawnFailure(binaryPath: string, err: Error): string {
+  const errStr = err.message || String(err);
+
+  // Only diagnose ENOENT errors for binary mode (absolute paths)
+  if (!errStr.includes('ENOENT')) return '';
+  if (!existsSync(binaryPath)) {
+    return `\n  Binary not found at: ${binaryPath}`;
+  }
+
+  const parts: string[] = [];
+  const stats = statSync(binaryPath);
+  parts.push(`\n  Binary exists: yes (${stats.size} bytes)`);
+
+  // Check if the file is executable
+  const isExecutable = (stats.mode & 0o111) !== 0;
+  if (!isExecutable) {
+    parts.push('  Executable permission: NO — run `chmod +x` on the binary');
+  }
+
+  // On Linux, run ldd to check for missing shared libraries
+  if (process.platform === 'linux') {
+    try {
+      const lddOutput = execFileSync('ldd', [binaryPath], {
+        encoding: 'utf-8',
+        timeout: 5000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      const missingLibs = lddOutput
+        .split('\n')
+        .filter((line) => line.includes('not found'))
+        .map((line) => line.trim());
+      if (missingLibs.length > 0) {
+        parts.push('  Missing shared libraries (detected via ldd):');
+        for (const lib of missingLibs) {
+          parts.push(`    ${lib}`);
+        }
+        parts.push('  Install the missing libraries or use a compatible binary.');
+      }
+    } catch {
+      // ldd might fail for statically linked binaries or non-ELF files
+      parts.push('  (ldd analysis failed — binary may be statically linked or wrong format)');
+    }
+  }
+
+  return parts.join('\n');
+}
 
 export class AgentClient {
   private process: ChildProcess | null = null;
@@ -78,10 +136,11 @@ export class AgentClient {
     // socverify-runner binary can't execute (missing system libs, wrong
     // architecture, or the binary simply wasn't packaged for this platform).
     child.on('error', (err: Error) => {
+      const diagnostic = diagnoseSpawnFailure(spawnCmd, err);
       const enriched = new Error(
         `Failed to spawn agent process '${spawnCmd}': ${err.message}. ` +
         `This usually means the runner binary is missing, not executable, ` +
-        `or has missing shared libraries on this system.`,
+        `or has missing shared libraries on this system.${diagnostic}`,
       );
       if (!readySettled) {
         readySettled = true;
