@@ -15,8 +15,8 @@
 
 import { dialog } from 'electron';
 import { t, TRPCError } from '../router-context';
-import { loadTvConfig, getDbPath } from '../../timing-violation/tv-config';
-import { initDatabase, type TvDatabase } from '../../timing-violation/db/tv-database';
+import { getTvDb } from '../../timing-violation/db/tv-db-cache';
+import { loadTvConfig } from '../../timing-violation/tv-config';
 import {
   insertViolations,
   ensureConfirmationRecords,
@@ -32,21 +32,6 @@ import type {
   ConfirmationStatus,
   ParseLogInput,
 } from '../../timing-violation/types';
-
-// ─── DB 实例缓存（按 projectRoot 缓存） ─────────────────────────
-
-const dbCache = new Map<string, TvDatabase>();
-
-function getDb(projectRoot: string): TvDatabase {
-  let db = dbCache.get(projectRoot);
-  if (!db) {
-    const config = loadTvConfig(projectRoot);
-    const dbPath = getDbPath(projectRoot, config.dbPath);
-    db = initDatabase(dbPath);
-    dbCache.set(projectRoot, db);
-  }
-  return db;
-}
 
 // ─── 排序字段白名单 ───────────────────────────────────────────
 
@@ -98,7 +83,7 @@ export const violationRouter = t.router({
       };
     })
     .mutation(async ({ input }) => {
-      const db = getDb(input.projectId);
+      const db = getTvDb(input.projectId);
       const config = loadTvConfig(input.projectId);
 
       const { parseLogFile } = await import('../../timing-violation/parser/vio-parser');
@@ -156,7 +141,7 @@ export const violationRouter = t.router({
     })
     .query(async ({ input }) => {
       const { projectId, ...queryInput } = input;
-      const db = getDb(projectId);
+      const db = getTvDb(projectId);
       return queryViolations(db, queryInput);
     }),
 
@@ -176,7 +161,7 @@ export const violationRouter = t.router({
       };
     })
     .query(async ({ input }) => {
-      const db = getDb(input.projectId);
+      const db = getTvDb(input.projectId);
       return getStatistics(db, { caseName: input.caseName, corner: input.corner });
     }),
 
@@ -192,7 +177,7 @@ export const violationRouter = t.router({
       return { projectId: r.projectId };
     })
     .query(async ({ input }) => {
-      const db = getDb(input.projectId);
+      const db = getTvDb(input.projectId);
       return getMetadata(db);
     }),
 
@@ -208,7 +193,7 @@ export const violationRouter = t.router({
       return { projectId: r.projectId };
     })
     .query(async ({ input }) => {
-      const db = getDb(input.projectId);
+      const db = getTvDb(input.projectId);
       return getDatabaseStats(db);
     }),
 
@@ -231,7 +216,7 @@ export const violationRouter = t.router({
       };
     })
     .mutation(async ({ input }) => {
-      const db = getDb(input.projectId);
+      const db = getTvDb(input.projectId);
       return clearCaseData(db, input.caseName, input.corner);
     }),
 
@@ -247,7 +232,7 @@ export const violationRouter = t.router({
       return { projectId: r.projectId };
     })
     .mutation(async ({ input }) => {
-      const db = getDb(input.projectId);
+      const db = getTvDb(input.projectId);
       return clearAllData(db);
     }),
 });
