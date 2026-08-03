@@ -8,7 +8,7 @@ import { t, TRPCError } from '../router-context';
 import { requireProject, ensurePluginsLoaded } from '../../services/project-service';
 import { getSimulationManager } from '../../services/simulation-service';
 import { pluginLoader } from '../../plugins/loader';
-import { terminalManager } from '../../terminal/terminal-manager';
+import { terminalManager, findSimShell } from '../../terminal/terminal-manager';
 import { simTerminalLinker } from '../../simulation/sim-terminal-linker';
 import type { SimulationRunOptions } from '@shared/plugin-types';
 
@@ -206,14 +206,19 @@ export const simulationRouter = t.router({
       // 而非创建交互式 shell 并写入命令。这避免了 `spawn bash ENOENT`
       // 错误，并将仿真输出以只读日志形式展示在终端视图中。
       //
+      // 在 Linux 上，仿真命令（runsim）需要使用 csh 而非 bash，
+      // 因为 EDA 环境的初始化脚本使用 csh 语法。findSimShell() 会
+      // 优先查找 /bin/csh，回退到 bash/sh。
+      //
       // 与 PTY 模式的区别：
       //   - 不追加 `__SIM_DONE__` 标记（不需要，直接用 exit 事件判定）
       //   - 不等待 shell 初始化（直接执行命令）
       //   - 终端为只读（无交互输入）
+      const simShell = findSimShell();
       let session;
       if (await terminalManager.ensurePtyAvailable()) {
-        // PTY 模式：创建交互式终端会话
-        session = await terminalManager.create({ cwd });
+        // PTY 模式：创建交互式终端会话（使用 csh on Linux）
+        session = await terminalManager.create({ cwd, shell: simShell });
 
         // 等待 shell 初始化完成
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -223,10 +228,12 @@ export const simulationRouter = t.router({
         terminalManager.write(session.id, `${execCommand}\r`);
       } else {
         // Log 模式：直接执行命令，stdout/stderr 流式输出到终端视图
-        console.log('[simulation] node-pty unavailable — using log-mode execution.');
+        // runCommand() 默认使用 findSimShell()（csh on Linux）
+        console.log(`[simulation] node-pty unavailable — using log-mode execution (shell: ${simShell}).`);
         session = await terminalManager.runCommand({
           command: displayCommand,
           cwd,
+          shell: simShell,
         });
       }
 
