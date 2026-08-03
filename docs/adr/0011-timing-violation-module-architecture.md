@@ -39,9 +39,31 @@
 - `tests/ui/tv-dashboard.test.tsx` — 11 个 UI 组件测试（统计卡片、筛选栏交互）
 - `tests/ui/workbench-timing-violation.test.ts` — 3 个 workbench store 测试
 
-### 待实现（Phase 2-3）
+### Issue #3 + #4 + #5（Phase 2 部分）已实现
 
+**主进程**：
+- `src/main/timing-violation/confirm/confirmation-manager.ts` — 确认逻辑（`autoConfirmByResetTime` / `autoConfirmByInterval` / `updateConfirmation` / `batchUpdateConfirmations` / `savePattern`）
+- `src/main/ipc/routers/confirmation-router.ts` — tRPC API（autoConfirmByResetTime / autoConfirmByInterval / updateConfirmation / batchUpdateConfirmations / suggestConfirmation）
+- `src/main/timing-violation/db/tv-repository.ts` — 新增 `getPatterns` / `clearAllPatterns` 函数
+- 在 `src/main/ipc/router.ts` 注册 `confirmation` 子 router
+
+**渲染进程**：
+- `src/renderer/src/components/timing-violation/TVAutoConfirmDialog.tsx` — 自动确认对话框（复位时间 + 复位区间，OR 关系）
+- `src/renderer/src/components/timing-violation/TVConfirmationDialog.tsx` — 手动确认对话框（确认人/结果/理由，支持单条和批量）
+- `src/renderer/src/stores/timing-violation.ts` — 新增确认相关状态和 action（confirming / selectedViolationIds / showConfirmDialog / autoConfirmByResetTime / autoConfirmByInterval / updateConfirmation / batchUpdateConfirmations / toggleViolationSelection / selectAllViolations / clearSelection / openConfirmDialog / closeConfirmDialog）
+- `src/renderer/src/components/timing-violation/TVDashboard.tsx` — 集成自动确认按钮、批量操作按钮
+- `src/renderer/src/components/timing-violation/TVViolationTable.tsx` — 新增行选择 checkbox + 每行确认按钮
+
+**测试**：
+- `tests/timing-violation/confirmation-manager.test.ts` — 26 个确认逻辑单测（复位时间、复位区间、OR 条件、corner 回退、手动确认、批量确认、Pattern 保存、match_count 累加）
+- `tests/timing-violation/violation-router.test.ts` — 新增 Pattern 管理测试（getPatterns / clearAllPatterns）
+- `tests/ui/tv-dashboard.test.tsx` — 新增确认对话框和批量操作 UI 测试
+
+### 待实现（Phase 2 剩余 + Phase 3）
+
+- `confirm/pattern-normalizer.ts` — Check 信息标准化（Issue #6）
+- `confirm/pattern-matcher.ts` — 精确 + 模糊匹配（Issue #6）
+- `pattern-router.ts` — Pattern CRUD + 导出导入 API（Issue #6, #9）
 - `scanner/` — 回归目录扫描器（Issue #7）
-- `confirm/` — 确认逻辑 + Pattern 匹配（Issue #4, #5, #6）
 - `export/` — 导出导入（Issue #9）
-- `confirmation-router.ts`, `pattern-router.ts`, `scan-router.ts` — 后续子 router
+- `scan-router.ts` — 回归扫描 API（Issue #7）
