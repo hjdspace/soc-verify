@@ -12,6 +12,9 @@ vi.mock('@renderer/lib/trpc', () => ({
       getSimOptionPresets: { query: vi.fn().mockResolvedValue({}) },
       saveSimOptionPreset: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
     },
+    simulation: {
+      pickRegrFile: { mutate: vi.fn().mockResolvedValue({ canceled: true, path: null }) },
+    },
   },
 }));
 
@@ -55,10 +58,22 @@ vi.mock('@renderer/stores/simulation', () => ({
   ),
 }));
 
+// Mock the toast store
+vi.mock('@renderer/stores/toast', () => ({
+  useToastStore: {
+    getState: () => ({
+      error: vi.fn(),
+      success: vi.fn(),
+      info: vi.fn(),
+      warning: vi.fn(),
+    }),
+  },
+}));
+
 // Import after mocks are set up
 import { OptionDock } from '@renderer/components/layout/OptionDock';
 import { trpc } from '@renderer/lib/trpc';
-import { generateRunsimCommand, tokenizeRunsimCommand } from '@renderer/lib/runsim-command';
+import { generateRunsimCommand, tokenizeRunsimCommand, parseRunsimCommand } from '@renderer/lib/runsim-command';
 
 const mockSchemaFields: SimOptionField[] = [
   { key: 'base', label: 'BASE', type: 'string', default: '', group: '基础参数' },
@@ -285,5 +300,93 @@ describe('tokenizeRunsimCommand', () => {
     const tokens = tokenizeRunsimCommand('runsim');
     expect(tokens).toHaveLength(1);
     expect(tokens[0]).toEqual({ type: 'base', text: 'runsim' });
+  });
+});
+
+describe('parseRunsimCommand', () => {
+  it('returns empty object for empty text', () => {
+    expect(parseRunsimCommand('')).toEqual({});
+    expect(parseRunsimCommand('   ')).toEqual({});
+  });
+
+  it('returns empty object when no runsim command found', () => {
+    expect(parseRunsimCommand('hello world')).toEqual({});
+  });
+
+  it('parses basic command parameters', () => {
+    const result = parseRunsimCommand('runsim -base top -block usvp -case test_001');
+    expect(result.base).toBe('top');
+    expect(result.block).toBe('usvp');
+    expect(result.case).toBe('test_001');
+  });
+
+  it('parses regression command parameters', () => {
+    const result = parseRunsimCommand('runsim -regr regression.list -fm -tag nightly -m DETAG');
+    expect(result.regr_file).toBe('regression.list');
+    expect(result.fm).toBe(true);
+    expect(result.tag).toBe('nightly');
+    expect(result.dashboard).toBe('DETAG');
+  });
+
+  it('extracts runsim command from surrounding text', () => {
+    const result = parseRunsimCommand('请执行以下回归指令：\nrunsim -base top -block usvp -case test_001 -fsdb');
+    expect(result.base).toBe('top');
+    expect(result.block).toBe('usvp');
+    expect(result.case).toBe('test_001');
+    expect(result.fsdb).toBe(true);
+  });
+
+  it('parses boolean flags correctly', () => {
+    const result = parseRunsimCommand('runsim -cl -cov -upf -dump_mem -dump_sva');
+    expect(result.cl).toBe(true);
+    expect(result.cov).toBe(true);
+    expect(result.upf).toBe(true);
+    expect(result.dump_mem).toBe(true);
+    expect(result.dump_sva).toBe(true);
+  });
+
+  it('parses sim_only (-R) and compile_only (-C) flags', () => {
+    const result = parseRunsimCommand('runsim -base top -block usvp -case test_001 -R');
+    expect(result.sim_only).toBe(true);
+    expect(result.compile_only).toBeUndefined();
+
+    const result2 = parseRunsimCommand('runsim -base top -block usvp -case test_001 -C');
+    expect(result2.compile_only).toBe(true);
+    expect(result2.sim_only).toBeUndefined();
+  });
+
+  it('parses quoted simarg value', () => {
+    const result = parseRunsimCommand('runsim -simarg "+notimingchecks +define+DEBUG"');
+    expect(result.simarg).toBe('+notimingchecks +define+DEBUG');
+  });
+
+  it('parses fsdb with dump_level value', () => {
+    const result = parseRunsimCommand('runsim -fsdb tb_top.chip_top');
+    expect(result.fsdb).toBe(true);
+    expect(result.dump_level).toBe('tb_top.chip_top');
+  });
+
+  it('parses fsdb without dump_level value', () => {
+    const result = parseRunsimCommand('runsim -fsdb -cov');
+    expect(result.fsdb).toBe(true);
+    expect(result.cov).toBe(true);
+    expect(result.dump_level).toBeUndefined();
+  });
+
+  it('cleans HTML tags from pasted text', () => {
+    const result = parseRunsimCommand('<span>runsim</span> -base top -block usvp');
+    expect(result.base).toBe('top');
+    expect(result.block).toBe('usvp');
+  });
+
+  it('handles unknown flags gracefully', () => {
+    const result = parseRunsimCommand('runsim -base top -unknown_flag value -case test');
+    expect(result.base).toBe('top');
+    expect(result.case).toBe('test');
+  });
+
+  it('parses dump_mem as boolean flag (not string value)', () => {
+    const result = parseRunsimCommand('runsim -base top -dump_mem');
+    expect(result.dump_mem).toBe(true);
   });
 });
