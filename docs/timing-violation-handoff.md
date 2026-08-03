@@ -479,22 +479,24 @@ npm run build && npm run typecheck && npm run test
 ### Phase 2 — 完整确认流程
 
 **主进程**：
-- [ ] `src/main/timing-violation/confirm/pattern-normalizer.ts` — Check 标准化
-- [ ] `src/main/timing-violation/confirm/pattern-matcher.ts` — 精确+模糊匹配
-- [ ] `src/main/timing-violation/confirm/confirmation-manager.ts` — 自动+手动确认
-- [ ] `src/main/ipc/routers/confirmation-router.ts` — 所有确认 API
-- [ ] `src/main/ipc/routers/pattern-router.ts` — Pattern CRUD API
-- [ ] 在 router.ts 注册 confirmation + pattern sub-router
+- [x] `src/main/timing-violation/confirm/confirmation-manager.ts` — 自动+手动确认
+- [x] `src/main/ipc/routers/confirmation-router.ts` — 所有确认 API
+- [ ] `src/main/timing-violation/confirm/pattern-normalizer.ts` — Check 标准化（Issue #6）
+- [ ] `src/main/timing-violation/confirm/pattern-matcher.ts` — 精确+模糊匹配（Issue #6）
+- [ ] `src/main/ipc/routers/pattern-router.ts` — Pattern CRUD API（Issue #6）
+- [x] 在 router.ts 注册 confirmation sub-router
 
 **渲染进程**：
-- [ ] `src/renderer/src/components/timing-violation/TVConfirmationDialog.tsx` — 确认对话框
-- [ ] `src/renderer/src/components/timing-violation/TVPatternManager.tsx` — Pattern 管理
-- [ ] 更新 store 添加确认相关状态
+- [x] `src/renderer/src/components/timing-violation/TVConfirmationDialog.tsx` — 确认对话框
+- [x] `src/renderer/src/components/timing-violation/TVAutoConfirmDialog.tsx` — 自动确认对话框
+- [ ] `src/renderer/src/components/timing-violation/TVPatternManager.tsx` — Pattern 管理（Issue #6）
+- [x] 更新 store 添加确认相关状态
 
 **测试**：
-- [ ] Pattern Normalizer 单测（精确匹配、模糊匹配、边界情况）
-- [ ] Confirmation Manager 单测（复位时间、复位区间、历史模式）
-- [ ] confirmation-router + pattern-router 集成测试
+- [x] Confirmation Manager 单测（复位时间、复位区间、历史模式、Pattern 保存）
+- [ ] Pattern Normalizer 单测（精确匹配、模糊匹配、边界情况）（Issue #6）
+- [x] confirmation-router 集成测试
+- [ ] pattern-router 集成测试（Issue #6）
 
 ### Phase 3 — 高级功能
 
