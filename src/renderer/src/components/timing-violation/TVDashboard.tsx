@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { FolderOpen, Loader2, AlertCircle, FileText } from 'lucide-react';
+import { FolderOpen, Loader2, AlertCircle, FileText, Trash2 } from 'lucide-react';
 import { useTimingViolationStore } from '@renderer/stores/timing-violation';
 import { useProjectStore } from '@renderer/stores/project';
 import { TVStatsCards } from './TVStatsCards';
@@ -51,6 +51,7 @@ export function TVDashboard() {
   const setSort = useTimingViolationStore((s) => s.setSort);
   const setPage = useTimingViolationStore((s) => s.setPage);
   const resetFilters = useTimingViolationStore((s) => s.resetFilters);
+  const clearAllData = useTimingViolationStore((s) => s.clearAllData);
 
   // 搜索防抖
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -130,8 +131,29 @@ export function TVDashboard() {
           </div>
         )}
 
-        <div className="ml-auto text-[11px] text-muted-foreground">
-          {statistics && `数据库共 ${statistics.total.toLocaleString()} 条违例`}
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={() => {
+              if (window.confirm('确定要清空所有违例数据吗？此操作不可撤销。')) {
+                void clearAllData(projectId);
+              }
+            }}
+            disabled={parsing || total === 0}
+            className={cn(
+              'flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors',
+              'hover:bg-destructive/10 hover:text-destructive',
+              (parsing || total === 0) && 'opacity-40 cursor-not-allowed',
+            )}
+            title="清空所有违例数据"
+          >
+            <Trash2 className="h-3 w-3" />
+            清空数据
+          </button>
+          {statistics && (
+            <span className="text-[11px] text-muted-foreground">
+              数据库共 {statistics.total.toLocaleString()} 条违例
+            </span>
+          )}
         </div>
       </div>
 
