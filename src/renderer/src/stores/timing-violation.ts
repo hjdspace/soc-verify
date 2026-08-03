@@ -61,6 +61,14 @@ export type ParseResult = {
   errors: string[];
 };
 
+// ── 确认相关类型 ──────────────────────────────────────────
+
+export type ConfirmResult = 'pass' | 'issue';
+
+export type AutoConfirmResult = {
+  confirmedCount: number;
+};
+
 // ── Store 类型 ─────────────────────────────────────────────
 
 interface TimingViolationState {
@@ -94,6 +102,12 @@ interface TimingViolationState {
   loadingStatistics: boolean;
   loadingMetadata: boolean;
 
+  // 确认状态
+  confirming: boolean;
+  selectedViolationIds: Set<number>;
+  showConfirmDialog: boolean;
+  confirmDialogViolation: ViolationWithConfirmation | null;
+
   // ── Actions ─────────────────────────────
   pickAndParse: (projectId: string) => Promise<void>;
   parseFile: (projectId: string, filePath: string, caseName?: string, corner?: string) => Promise<void>;
@@ -112,6 +126,18 @@ interface TimingViolationState {
   setPage: (page: number) => void;
 
   resetFilters: () => void;
+
+  // 确认相关 Actions
+  autoConfirmByResetTime: (projectId: string, caseName: string, corner: string, resetTimeNs: number) => Promise<void>;
+  autoConfirmByInterval: (projectId: string, caseName: string, corner: string, opts: { resetTimeNs?: number; intervalStartNs?: number; intervalEndNs?: number }) => Promise<void>;
+  updateConfirmation: (projectId: string, violationId: number, status: ConfirmationStatus, confirmer: string, result: ConfirmResult, reason: string) => Promise<void>;
+  batchUpdateConfirmations: (projectId: string, violationIds: number[], status: ConfirmationStatus, confirmer: string, result: ConfirmResult, reason: string) => Promise<void>;
+
+  toggleViolationSelection: (id: number) => void;
+  selectAllVisibleViolations: () => void;
+  clearSelection: () => void;
+  openConfirmDialog: (violation: ViolationWithConfirmation | null) => void;
+  closeConfirmDialog: () => void;
 }
 
 // ── 实现 ──────────────────────────────────────────────────
@@ -140,6 +166,11 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
   loadingViolations: false,
   loadingStatistics: false,
   loadingMetadata: false,
+
+  confirming: false,
+  selectedViolationIds: new Set(),
+  showConfirmDialog: false,
+  confirmDialogViolation: null,
 
   pickAndParse: async (projectId) => {
     set({ parsing: true, parseResult: null });
@@ -271,4 +302,95 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
     searchText: '',
     page: 1,
   }),
+
+  // ── 确认相关 Actions ────────────────────────────────────
+
+  autoConfirmByResetTime: async (projectId, caseName, corner, resetTimeNs) => {
+    set({ confirming: true });
+    try {
+      const result = await trpc.confirmation.autoConfirmByResetTime.mutate({
+        projectId, caseName, corner, resetTimeNs,
+      });
+      getToast().success(`自动确认完成：${result.confirmedCount} 条违例已确认`);
+      await get().refreshAll(projectId);
+    } catch (err) {
+      getToast().error('自动确认失败', err instanceof Error ? err.message : String(err));
+    } finally {
+      set({ confirming: false });
+    }
+  },
+
+  autoConfirmByInterval: async (projectId, caseName, corner, opts) => {
+    set({ confirming: true });
+    try {
+      const result = await trpc.confirmation.autoConfirmByInterval.mutate({
+        projectId, caseName, corner,
+        resetTimeNs: opts.resetTimeNs,
+        intervalStartNs: opts.intervalStartNs,
+        intervalEndNs: opts.intervalEndNs,
+      });
+      getToast().success(`自动确认完成：${result.confirmedCount} 条违例已确认`);
+      await get().refreshAll(projectId);
+    } catch (err) {
+      getToast().error('自动确认失败', err instanceof Error ? err.message : String(err));
+    } finally {
+      set({ confirming: false });
+    }
+  },
+
+  updateConfirmation: async (projectId, violationId, status, confirmer, result, reason) => {
+    set({ confirming: true });
+    try {
+      await trpc.confirmation.updateConfirmation.mutate({
+        projectId, violationId, status, confirmer, result, reason,
+      });
+      getToast().success('确认成功');
+      set({ showConfirmDialog: false, confirmDialogViolation: null });
+      await get().refreshAll(projectId);
+    } catch (err) {
+      getToast().error('确认失败', err instanceof Error ? err.message : String(err));
+    } finally {
+      set({ confirming: false });
+    }
+  },
+
+  batchUpdateConfirmations: async (projectId, violationIds, status, confirmer, result, reason) => {
+    set({ confirming: true });
+    try {
+      const res = await trpc.confirmation.batchUpdateConfirmations.mutate({
+        projectId, violationIds, status, confirmer, result, reason,
+      });
+      getToast().success(`批量确认完成：${res.updatedCount} 条已更新`);
+      set({ showConfirmDialog: false, confirmDialogViolation: null, selectedViolationIds: new Set() });
+      await get().refreshAll(projectId);
+    } catch (err) {
+      getToast().error('批量确认失败', err instanceof Error ? err.message : String(err));
+    } finally {
+      set({ confirming: false });
+    }
+  },
+
+  toggleViolationSelection: (id) => {
+    set((s) => {
+      const next = new Set(s.selectedViolationIds);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return { selectedViolationIds: next };
+    });
+  },
+
+  selectAllVisibleViolations: () => {
+    set((s) => {
+      const allIds = new Set(s.violations.map((v) => v.id));
+      return { selectedViolationIds: allIds };
+    });
+  },
+
+  clearSelection: () => set({ selectedViolationIds: new Set() }),
+
+  openConfirmDialog: (violation) => set({ showConfirmDialog: true, confirmDialogViolation: violation }),
+  closeConfirmDialog: () => set({ showConfirmDialog: false, confirmDialogViolation: null }),
 }));
