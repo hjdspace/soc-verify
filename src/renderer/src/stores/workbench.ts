@@ -13,6 +13,7 @@ export type WorkbenchDestination =
   | { type: 'dashboard' }
   | { type: 'to-checklist' }
   | { type: 'source-control' }
+  | { type: 'timing-violation' }
   | { type: 'ai-artifacts' }
   | { type: 'plugin-view'; pluginId: string; viewId: string; title: string }
   | { type: 'diff-review'; filePath: string; fileName: string };
@@ -61,6 +62,8 @@ function describeDestination(destination: WorkbenchDestination): Omit<WorkbenchT
       return { id: destination.type, title: 'TO 检查清单', closable: true };
     case 'source-control':
       return { id: destination.type, title: '源代码管理', closable: true };
+    case 'timing-violation':
+      return { id: destination.type, title: '时序违例', closable: true };
     case 'ai-artifacts':
       return { id: destination.type, title: 'AI 产物', closable: true };
     case 'plugin-view':
