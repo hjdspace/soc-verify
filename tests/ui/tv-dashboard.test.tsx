@@ -13,6 +13,14 @@ vi.mock('@renderer/lib/trpc', () => ({
       getMetadata: { query: vi.fn().mockResolvedValue({ corners: [], cases: [], subsys: [] }) },
       getDatabaseStats: { query: vi.fn() },
       clearCaseData: { mutate: vi.fn() },
+      clearAllData: { mutate: vi.fn().mockResolvedValue({ deleted: 0 }) },
+    },
+    confirmation: {
+      autoConfirmByResetTime: { mutate: vi.fn().mockResolvedValue({ confirmedCount: 0 }) },
+      autoConfirmByInterval: { mutate: vi.fn().mockResolvedValue({ confirmedCount: 0 }) },
+      updateConfirmation: { mutate: vi.fn().mockResolvedValue({ success: true }) },
+      batchUpdateConfirmations: { mutate: vi.fn().mockResolvedValue({ updatedCount: 0 }) },
+      suggestConfirmation: { query: vi.fn() },
     },
   },
 }));
@@ -36,7 +44,8 @@ vi.mock('@renderer/stores/project', () => ({
 
 import { TVStatsCards } from '@renderer/components/timing-violation/TVStatsCards';
 import { TVFilterBar } from '@renderer/components/timing-violation/TVFilterBar';
-import type { ViolationStatistics, ViolationMetadata } from '@renderer/stores/timing-violation';
+import { TVConfirmationDialog } from '@renderer/components/timing-violation/TVConfirmationDialog';
+import type { ViolationStatistics, ViolationMetadata, ViolationWithConfirmation } from '@renderer/stores/timing-violation';
 
 // ─── TVStatsCards 测试 ──────────────────────────────────────────
 
@@ -188,5 +197,179 @@ describe('TVFilterBar', () => {
     const select = screen.getByTitle('按用例筛选') as HTMLSelectElement;
     fireEvent.change(select, { target: { value: 'test_case_1' } });
     expect(onCaseNameChange).toHaveBeenCalledWith('test_case_1');
+  });
+});
+
+// ─── TVConfirmationDialog 测试 ──────────────────────────────────
+
+describe('TVConfirmationDialog', () => {
+  const mockViolation: ViolationWithConfirmation = {
+    id: 1,
+    caseName: 'test_case',
+    corner: 'npg_f1_ssg',
+    seed: '1',
+    subsys: 'dsp_sys',
+    num: 1,
+    hier: 'tb_top.dut.reg',
+    timeFs: 1523423,
+    timeDisplay: '1523423 FS',
+    checkInfo: 'setup( posedge clk )',
+    filePath: '/path/to/vio_summary.log',
+    createdAt: '2024-01-01 10:00:00',
+    status: 'pending',
+    confirmer: null,
+    result: null,
+    reason: null,
+    isAutoConfirmed: false,
+    confirmedAt: null,
+  };
+
+  it('renders nothing when open is false', () => {
+    const { container } = render(
+      <TVConfirmationDialog
+        open={false}
+        violation={null}
+        batchIds={[]}
+        confirming={false}
+        onSubmit={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('renders dialog with violation info when open', () => {
+    render(
+      <TVConfirmationDialog
+        open={true}
+        violation={mockViolation}
+        batchIds={[]}
+        confirming={false}
+        onSubmit={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('确认违例 #1')).toBeTruthy();
+    expect(screen.getByPlaceholderText('输入确认人姓名')).toBeTruthy();
+    expect(screen.getByText('Pass')).toBeTruthy();
+    expect(screen.getByText('Issue')).toBeTruthy();
+  });
+
+  it('renders batch title when batchIds provided', () => {
+    render(
+      <TVConfirmationDialog
+        open={true}
+        violation={null}
+        batchIds={[1, 2, 3]}
+        confirming={false}
+        onSubmit={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('批量确认 3 条违例')).toBeTruthy();
+  });
+
+  it('disables confirm button when confirmer is empty', () => {
+    render(
+      <TVConfirmationDialog
+        open={true}
+        violation={mockViolation}
+        batchIds={[]}
+        confirming={false}
+        onSubmit={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const confirmBtn = screen.getByText('确认');
+    expect((confirmBtn as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('enables confirm button when confirmer is filled', () => {
+    render(
+      <TVConfirmationDialog
+        open={true}
+        violation={mockViolation}
+        batchIds={[]}
+        confirming={false}
+        onSubmit={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const input = screen.getByPlaceholderText('输入确认人姓名');
+    fireEvent.change(input, { target: { value: 'Alice' } });
+    const confirmBtn = screen.getByText('确认');
+    expect((confirmBtn as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('calls onSubmit with confirmed status when confirm button clicked', () => {
+    const onSubmit = vi.fn();
+    render(
+      <TVConfirmationDialog
+        open={true}
+        violation={mockViolation}
+        batchIds={[]}
+        confirming={false}
+        onSubmit={onSubmit}
+        onClose={vi.fn()}
+      />,
+    );
+    const input = screen.getByPlaceholderText('输入确认人姓名');
+    fireEvent.change(input, { target: { value: 'Alice' } });
+    fireEvent.click(screen.getByText('确认'));
+    expect(onSubmit).toHaveBeenCalledWith('confirmed', 'Alice', 'pass', '');
+  });
+
+  it('calls onSubmit with ignored status when ignore button clicked', () => {
+    const onSubmit = vi.fn();
+    render(
+      <TVConfirmationDialog
+        open={true}
+        violation={mockViolation}
+        batchIds={[]}
+        confirming={false}
+        onSubmit={onSubmit}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText('标记忽略'));
+    expect(onSubmit).toHaveBeenCalledWith('ignored', '', 'pass', '');
+  });
+
+  it('calls onClose when cancel button clicked', () => {
+    const onClose = vi.fn();
+    render(
+      <TVConfirmationDialog
+        open={true}
+        violation={mockViolation}
+        batchIds={[]}
+        confirming={false}
+        onSubmit={vi.fn()}
+        onClose={onClose}
+      />,
+    );
+    fireEvent.click(screen.getByText('取消'));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('prefills existing confirmation data', () => {
+    const confirmedViolation: ViolationWithConfirmation = {
+      ...mockViolation,
+      status: 'confirmed',
+      confirmer: 'Bob',
+      result: 'issue',
+      reason: 'Has issue',
+    };
+    render(
+      <TVConfirmationDialog
+        open={true}
+        violation={confirmedViolation}
+        batchIds={[]}
+        confirming={false}
+        onSubmit={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const input = screen.getByPlaceholderText('输入确认人姓名') as HTMLInputElement;
+    expect(input.value).toBe('Bob');
   });
 });
