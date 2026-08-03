@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createMemoryDatabase, closeDatabase, type TvDatabase } from '../../src/main/timing-violation/db/tv-database';
 import {
   insertViolations,
@@ -19,7 +20,7 @@ describe('Timing Violation Database', () => {
 
   beforeEach(() => {
     db = createMemoryDatabase();
-    tmpDir = require('node:os').tmpdir() + `/sv-tv-db-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    tmpDir = tmpdir() + `/sv-tv-db-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     mkdirSync(tmpDir, { recursive: true });
   });
 
