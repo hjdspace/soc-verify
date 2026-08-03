@@ -14,6 +14,7 @@ import type {
   ViolationStatistics,
   ViolationMetadata,
   ConfirmationStatus,
+  ViolationPattern,
 } from '../types';
 
 // ─── 批量插入 ─────────────────────────────────────────────────
@@ -349,6 +350,40 @@ export function getDatabaseStats(db: Database.Database): {
     patternCount: pRow.count,
     caseCount: cRow.count,
   };
+}
+
+// ─── Pattern 管理 ─────────────────────────────────────────────
+
+/**
+ * 获取所有 Pattern 列表。
+ */
+export function getPatterns(db: Database.Database): ViolationPattern[] {
+  const rows = db.prepare(`
+    SELECT id, hier_pattern, check_pattern,
+           default_confirmer, default_result, default_reason,
+           match_count, last_used
+    FROM violation_patterns
+    ORDER BY last_used DESC
+  `).all() as Record<string, unknown>[];
+
+  return rows.map((row) => ({
+    id: row['id'] as number,
+    hierPattern: row['hier_pattern'] as string,
+    checkPattern: row['check_pattern'] as string,
+    defaultConfirmer: (row['default_confirmer'] as string | null) ?? null,
+    defaultResult: (row['default_result'] as string | null) ?? null,
+    defaultReason: (row['default_reason'] as string | null) ?? null,
+    matchCount: row['match_count'] as number,
+    lastUsed: row['last_used'] as string,
+  }));
+}
+
+/**
+ * 清除所有 Pattern。
+ */
+export function clearAllPatterns(db: Database.Database): { deleted: number } {
+  const result = db.prepare('DELETE FROM violation_patterns').run();
+  return { deleted: result.changes };
 }
 
 // ─── 行映射 ───────────────────────────────────────────────────
