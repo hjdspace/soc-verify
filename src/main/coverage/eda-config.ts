@@ -32,7 +32,8 @@ export async function loadEdaConfig(projectRoot: string): Promise<EdaToolConfig 
     if (typeof parsed.tool !== 'string' || typeof parsed.covMergeDir !== 'string') {
       return null;
     }
-    return {
+    // 用 normalizeConfig 填充缺失的命令模板（防御性：存储的配置可能缺失命令字段）
+    return normalizeConfig({
       tool: parsed.tool as EdaTool,
       covMergeDir: parsed.covMergeDir,
       summaryCommand: parsed.summaryCommand,
@@ -41,7 +42,7 @@ export async function loadEdaConfig(projectRoot: string): Promise<EdaToolConfig 
       csvCommand: parsed.csvCommand,
       gradeCommand: parsed.gradeCommand,
       binsCommand: parsed.binsCommand,
-    };
+    });
   } catch {
     return null;
   }
