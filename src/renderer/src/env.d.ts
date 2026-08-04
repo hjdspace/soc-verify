@@ -36,6 +36,10 @@ export interface EventBridgeAPI {
   onOfficecliDownloadProgress: (
     callback: (data: { stage: string; message: string; percent?: number }) => void,
   ) => () => void;
+  // 时序违例解析进度
+  onViolationParseProgress: (
+    callback: (data: { filePath: string; processedLines: number; foundViolations: number }) => void,
+  ) => () => void;
 }
 
 declare global {
