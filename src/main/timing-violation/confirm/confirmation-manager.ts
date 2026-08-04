@@ -7,12 +7,13 @@
  * 自动确认规则（来自 docs/timing-violation-handoff.md §2.4.6）：
  * 1. 复位时间确认：time_fs <= reset_time_ns * 1000000 且 status='pending'
  * 2. 复位区间确认：time_fs 在 [interval_start_fs, interval_end_fs] 范围内
- * 3. Corner 回退：如果指定 corner 未找到记录，回退到 'default' corner
- * 4. OR 关系：同时使用复位时间和复位区间时，满足任一条件即可确认
+ * 3. OR 关系：同时使用复位时间和复位区间时，满足任一条件即可确认
+ * 4. 全局确认：caseName 为空时对所有用例进行确认；corner 不参与过滤
  */
 
 import type Database from 'better-sqlite3';
 import type { ConfirmationStatus } from '../types';
+import { findMatchingPattern } from './pattern-matcher';
 
 // ─── 自动确认（复位时间） ─────────────────────────────────────
 
@@ -20,28 +21,28 @@ import type { ConfirmationStatus } from '../types';
  * 根据复位时间自动确认违例。
  *
  * 确认所有 time_fs <= resetTimeNs * 1000000 且 status='pending' 的违例。
- * 如果指定 corner 未找到记录，回退到 'default' corner。
+ * caseName 为空时对所有用例进行确认（全局自动确认）。
+ * corner 不参与过滤——自动确认是按时间维度的全局操作。
  *
  * @returns 确认的记录数
  */
 export function autoConfirmByResetTime(
   db: Database.Database,
-  caseName: string,
-  corner: string,
+  caseName: string | undefined,
   resetTimeNs: number,
 ): { confirmedCount: number } {
   const resetTimeFs = Math.round(resetTimeNs * 1_000_000);
   const reason = `复位期间时序违例（<= ${resetTimeNs}ns），可以忽略`;
 
-  const result = findPendingViolationIds(
-    db, caseName, corner,
+  const ids = findPendingViolationIds(
+    db, caseName,
     'v.time_fs <= @resetTimeFs',
-    { caseName, resetTimeFs },
+    { resetTimeFs },
   );
 
-  if (result) {
-    applyAutoConfirmation(db, result.ids, reason);
-    return { confirmedCount: result.ids.length };
+  if (ids.length > 0) {
+    applyAutoConfirmation(db, ids, reason);
+    return { confirmedCount: ids.length };
   }
 
   return { confirmedCount: 0 };
@@ -53,20 +54,20 @@ export function autoConfirmByResetTime(
  * 根据复位时间和/或复位区间自动确认违例。
  *
  * 支持同时使用复位时间和复位区间条件（OR 关系）。
- * 如果指定 corner 未找到记录，回退到 'default' corner。
+ * caseName 为空时对所有用例进行确认（全局自动确认）。
+ * corner 不参与过滤——自动确认是按时间维度的全局操作。
  *
  * @returns 确认的记录数
  */
 export function autoConfirmByInterval(
   db: Database.Database,
-  caseName: string,
-  corner: string,
+  caseName: string | undefined,
   resetTimeNs?: number,
   intervalStartNs?: number,
   intervalEndNs?: number,
 ): { confirmedCount: number } {
   const conditions: string[] = [];
-  const params: Record<string, unknown> = { caseName };
+  const params: Record<string, unknown> = {};
 
   if (resetTimeNs !== undefined) {
     const resetTimeFs = Math.round(resetTimeNs * 1_000_000);
@@ -99,15 +100,15 @@ export function autoConfirmByInterval(
   }
   const reason = `${reasonParts.join('，')}，可以忽略`;
 
-  const result = findPendingViolationIds(
-    db, caseName, corner,
+  const ids = findPendingViolationIds(
+    db, caseName,
     timeCondition,
     params,
   );
 
-  if (result) {
-    applyAutoConfirmation(db, result.ids, reason);
-    return { confirmedCount: result.ids.length };
+  if (ids.length > 0) {
+    applyAutoConfirmation(db, ids, reason);
+    return { confirmedCount: ids.length };
   }
 
   return { confirmedCount: 0 };
@@ -238,41 +239,142 @@ export function savePattern(
   }
 }
 
+// ─── 应用历史确认（Pattern 匹配） ─────────────────────────────
+
+/**
+ * 对指定用例的待确认违例一键应用历史确认模式。
+ *
+ * 逻辑：
+ * 1. 检查 Pattern 表是否为空，空则返回 0
+ * 2. 获取该用例的所有 pending 违例（corner 无关）
+ * 3. 对每条违例，先尝试精确匹配，再尝试模糊匹配
+ * 4. 匹配成功后应用确认结论，并更新 Pattern 的 match_count + last_used
+ *
+ * Pattern 匹配不依赖 corner（corner 无关）。
+ *
+ * @returns 应用的确认记录数
+ */
+export function applyHistoricalConfirmations(
+  db: Database.Database,
+  caseName: string,
+  corner?: string,
+): { appliedCount: number } {
+  // 检查 Pattern 表是否为空
+  const patternCountRow = db.prepare('SELECT COUNT(*) as count FROM violation_patterns').get() as { count: number };
+  if (patternCountRow.count === 0) {
+    return { appliedCount: 0 };
+  }
+
+  // 获取待确认违例
+  let pendingQuery: string;
+  let queryParams: Record<string, unknown>;
+
+  if (corner) {
+    pendingQuery = `
+      SELECT v.id, v.hier, v.check_info, v.corner
+      FROM timing_violations v
+      JOIN confirmation_records c ON v.id = c.violation_id
+      WHERE v.case_name = @caseName AND v.corner = @corner AND c.status = 'pending'
+    `;
+    queryParams = { caseName, corner };
+  } else {
+    pendingQuery = `
+      SELECT v.id, v.hier, v.check_info, v.corner
+      FROM timing_violations v
+      JOIN confirmation_records c ON v.id = c.violation_id
+      WHERE v.case_name = @caseName AND c.status = 'pending'
+    `;
+    queryParams = { caseName };
+  }
+
+  const pendingViolations = db.prepare(pendingQuery).all(queryParams) as {
+    id: number; hier: string; check_info: string; corner: string | null;
+  }[];
+
+  if (pendingViolations.length === 0) {
+    return { appliedCount: 0 };
+  }
+
+  const tx = db.transaction(() => {
+    let appliedCount = 0;
+    const now = new Date().toLocaleString('sv-SE');
+
+    for (const v of pendingViolations) {
+      const matchResult = findMatchingPattern(db, v.hier, v.check_info);
+
+      if (matchResult) {
+        const { pattern, matched } = matchResult;
+
+        // 应用历史确认信息
+        db.prepare(`
+          UPDATE confirmation_records
+          SET status = 'confirmed',
+              confirmer = @confirmer,
+              result = @result,
+              reason = @reason,
+              is_auto_confirmed = 0,
+              confirmed_at = @now,
+              updated_at = @now
+          WHERE violation_id = @violationId
+        `).run({
+          confirmer: pattern.defaultConfirmer ?? '',
+          result: pattern.defaultResult ?? 'pass',
+          reason: pattern.defaultReason ?? '',
+          now,
+          violationId: v.id,
+        });
+
+        // 更新 Pattern 的 match_count + last_used
+        db.prepare(`
+          UPDATE violation_patterns
+          SET match_count = @matchCount, last_used = @now
+          WHERE id = @patternId
+        `).run({
+          matchCount: pattern.matchCount + 1,
+          now,
+          patternId: pattern.id,
+        });
+
+        appliedCount++;
+
+        // 避免未使用变量警告
+        void matched;
+      }
+    }
+
+    return appliedCount;
+  });
+
+  const appliedCount = tx();
+  return { appliedCount };
+}
+
 // ─── 内部辅助 ─────────────────────────────────────────────────
 
 /**
- * 获取 corner 回退列表：指定 corner 非默认时，先尝试指定 corner，再回退到 'default'。
- */
-function cornersToTry(corner: string): string[] {
-  return corner !== 'default' ? [corner, 'default'] : ['default'];
-}
-
-/**
- * 在 corner 回退列表中查找待确认违例 ID。
- * 返回第一个找到结果的 corner 的违例 ID 列表，如果都没有则返回 null。
+ * 查找待确认违例 ID。
+ *
+ * caseName 为空时不过滤用例（全局确认），corner 不参与过滤。
+ * 返回匹配的违例 ID 列表（可能为空）。
  */
 function findPendingViolationIds(
   db: Database.Database,
-  caseName: string,
-  corner: string,
+  caseName: string | undefined,
   timeCondition: string,
   params: Record<string, unknown>,
-): { ids: number[]; corner: string } | null {
-  for (const tryCorner of cornersToTry(corner)) {
-    const queryParams = { ...params, corner: tryCorner };
-    const rows = db.prepare(`
-      SELECT v.id
-      FROM timing_violations v
-      LEFT JOIN confirmation_records c ON v.id = c.violation_id
-      WHERE v.case_name = @caseName AND v.corner = @corner AND (${timeCondition})
-        AND COALESCE(c.status, 'pending') = 'pending'
-    `).all(queryParams) as { id: number }[];
+): number[] {
+  const caseFilter = caseName ? 'v.case_name = @caseName AND' : '';
+  const queryParams = caseName ? { ...params, caseName } : params;
 
-    if (rows.length > 0) {
-      return { ids: rows.map((r) => r.id), corner: tryCorner };
-    }
-  }
-  return null;
+  const rows = db.prepare(`
+    SELECT v.id
+    FROM timing_violations v
+    LEFT JOIN confirmation_records c ON v.id = c.violation_id
+    WHERE ${caseFilter} (${timeCondition})
+      AND COALESCE(c.status, 'pending') = 'pending'
+  `).all(queryParams) as { id: number }[];
+
+  return rows.map((r) => r.id);
 }
 
 /**
