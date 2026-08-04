@@ -8,6 +8,9 @@ import type { SimulationRunRecord } from '../../src/main/simulation/simulation-m
 // ─── Mocks ─────────────────────────────────────────────────
 
 class MockDiscovery implements SubsysDiscovery {
+  private cacheCleared = false;
+  private listCasesCallCount = 0;
+
   constructor(
     private subsys: SubsysInfo[] = [],
     private casesBySubsys: Map<string, CaseInfo[]> = new Map(),
@@ -19,12 +22,27 @@ class MockDiscovery implements SubsysDiscovery {
   }
 
   async listCases(subsys?: string): Promise<CaseInfo[]> {
+    this.listCasesCallCount++;
     if (!subsys) return [];
     return this.casesBySubsys.get(subsys) ?? [];
   }
 
   async getSimOptionsSchema(): Promise<SimOptionsSchema> {
     return this.schema;
+  }
+
+  clearCache(_subsys?: string): void {
+    this.cacheCleared = true;
+  }
+
+  /** Test helper: check if clearCache was called. */
+  get wasCacheCleared(): boolean {
+    return this.cacheCleared;
+  }
+
+  /** Test helper: check how many times listCases was called. */
+  get listCasesCalls(): number {
+    return this.listCasesCallCount;
   }
 }
 
@@ -263,6 +281,95 @@ describe('CaseStatsService', () => {
       const service = new CaseStatsService({ discovery: new MockDiscovery() });
       const overview = await service.getProjectOverview();
       expect(overview).toEqual({ subsysCount: 0, totalCases: 0, bySubsys: [] });
+    });
+
+    it('caches overview result within TTL (no recompute on second call)', async () => {
+      const discovery = makeDiscovery();
+      const service = new CaseStatsService({ discovery });
+
+      // First call: computes and caches
+      await service.getProjectOverview();
+      const firstCallCount = discovery.listCasesCalls;
+      expect(firstCallCount).toBe(2); // 2 subsys → 2 listCases calls
+
+      // Second call within TTL: returns cached, no additional listCases calls
+      await service.getProjectOverview();
+      expect(discovery.listCasesCalls).toBe(firstCallCount);
+    });
+
+    it('clearDiscoveryCache invalidates overview cache', async () => {
+      const discovery = makeDiscovery();
+      const service = new CaseStatsService({ discovery });
+
+      // First call: computes and caches
+      await service.getProjectOverview();
+      const firstCallCount = discovery.listCasesCalls;
+
+      // Clear cache
+      service.clearDiscoveryCache();
+      expect(discovery.wasCacheCleared).toBe(true);
+
+      // Second call: recomputes (cache was invalidated)
+      await service.getProjectOverview();
+      expect(discovery.listCasesCalls).toBe(firstCallCount * 2);
+    });
+
+    it('parallelizes subsys processing (Promise.all, not sequential)', async () => {
+      // Track call order: if sequential, subsys[0] finishes before subsys[1] starts.
+      // If parallel, both start before either finishes.
+      const callLog: string[] = [];
+      const slowSubsys: SubsysInfo[] = [
+        { name: 'cpu', path: '/cpu' },
+        { name: 'gpu', path: '/gpu' },
+      ];
+      const slowCases = new Map<string, CaseInfo[]>([
+        ['cpu', CPU_CASES],
+        ['gpu', GPU_CASES],
+      ]);
+      const slowDiscovery = new (class extends MockDiscovery {
+        async listCases(subsys?: string): Promise<CaseInfo[]> {
+          callLog.push(`start:${subsys}`);
+          // Simulate async delay
+          await new Promise((r) => setTimeout(r, 10));
+          callLog.push(`end:${subsys}`);
+          return super.listCases(subsys);
+        }
+      })(slowSubsys, slowCases);
+      const service = new CaseStatsService({ discovery: slowDiscovery });
+
+      await service.getProjectOverview();
+
+      // In parallel mode: both starts come before both ends
+      // [start:cpu, start:gpu, end:cpu, end:gpu] or similar
+      const startIndices = callLog.filter((l) => l.startsWith('start:'));
+      expect(startIndices).toHaveLength(2);
+      // Both starts should come before any end
+      const firstEndIdx = callLog.findIndex((l) => l.startsWith('end:'));
+      const secondStartIdx = callLog.findIndex((l, i) => i > 0 && l.startsWith('start:'));
+      expect(secondStartIdx).toBeLessThan(firstEndIdx);
+    });
+
+    it('global status map correctly maps status across multiple subsys', async () => {
+      const history: SimulationHistoryEntry[] = [
+        // cpu: alu pass, pipeline fail
+        makeHistoryEntry({ caseName: 'cpu_alu_basic', subsys: 'cpu', status: 'pass', startTime: 300 }),
+        makeHistoryEntry({ caseName: 'cpu_pipeline_stall', subsys: 'cpu', status: 'fail', startTime: 200 }),
+        // gpu: render pass
+        makeHistoryEntry({ caseName: 'gpu_render_basic', subsys: 'gpu', status: 'pass', startTime: 500 }),
+      ];
+      const simManager = makeMockSimulationManager(history);
+      const service = new CaseStatsService({ discovery: makeDiscovery(), simulationManager: simManager });
+
+      const overview = await service.getProjectOverview();
+
+      const cpu = overview.bySubsys.find((s) => s.name === 'cpu')!;
+      expect(cpu.byStatus.pass).toBe(1);
+      expect(cpu.byStatus.fail).toBe(1);
+      expect(cpu.byStatus.pending).toBe(2);
+
+      const gpu = overview.bySubsys.find((s) => s.name === 'gpu')!;
+      expect(gpu.byStatus.pass).toBe(1);
+      expect(gpu.byStatus.pending).toBe(1);
     });
   });
 
