@@ -46,6 +46,9 @@ export interface SubsysDiscovery {
   listSubsys(filter?: string): Promise<SubsysInfo[]>;
   listCases(subsys?: string, status?: CaseStatus): Promise<CaseInfo[]>;
   getSimOptionsSchema(): Promise<SimOptionsSchema>;
+  /** 清除内部缓存，下次查询将重新从数据源加载。用于 case_cfg 修改后刷新。
+   * 传入 subsys 时仅清除该子系统的用例缓存；不传时清除全部缓存。 */
+  clearCache?(subsys?: string): void;
 }
 
 /**
@@ -64,5 +67,9 @@ export class NoopDiscovery implements SubsysDiscovery {
 
   async getSimOptionsSchema(): Promise<SimOptionsSchema> {
     return {};
+  }
+
+  clearCache(_subsys?: string): void {
+    // Noop — no cache to clear
   }
 }
