@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { FolderOpen, Loader2, AlertCircle, FileText, Trash2, Zap, CheckSquare, XCircle, History, ListChecks, Download, Upload, ChevronDown, ChevronRight, FileSpreadsheet, Database } from 'lucide-react';
+import { FolderOpen, Loader2, AlertCircle, FileText, Trash2, Zap, CheckSquare, XCircle, History, ListChecks, Download, Upload, ChevronDown, ChevronRight, FileSpreadsheet, Database, Settings, Edit3 } from 'lucide-react';
 import { useTimingViolationStore } from '@renderer/stores/timing-violation';
 import { useProjectStore } from '@renderer/stores/project';
 import { TVStatsCards } from './TVStatsCards';
@@ -30,6 +30,8 @@ export function TVDashboard() {
   const metadata = useTimingViolationStore((s) => s.metadata);
   const parsing = useTimingViolationStore((s) => s.parsing);
   const parseResult = useTimingViolationStore((s) => s.parseResult);
+  const parseProgress = useTimingViolationStore((s) => s.parseProgress);
+  const setParseProgress = useTimingViolationStore((s) => s.setParseProgress);
   const loadingViolations = useTimingViolationStore((s) => s.loadingViolations);
   const loadingStatistics = useTimingViolationStore((s) => s.loadingStatistics);
   const confirming = useTimingViolationStore((s) => s.confirming);
@@ -85,10 +87,20 @@ export function TVDashboard() {
   const exporting = useTimingViolationStore((s) => s.exporting);
   const importing = useTimingViolationStore((s) => s.importing);
 
+  // 数据管理 Actions
+  const clearCaseData = useTimingViolationStore((s) => s.clearCaseData);
+  const updateCorner = useTimingViolationStore((s) => s.updateCorner);
+  const managingData = useTimingViolationStore((s) => s.managingData);
+
   // 本地 UI 状态
   const [showAutoConfirm, setShowAutoConfirm] = useState(false);
   const [showCharts, setShowCharts] = useState(true);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showDataMenu, setShowDataMenu] = useState(false);
+  const [showCornerEdit, setShowCornerEdit] = useState(false);
+  const [cornerEditCase, setCornerEditCase] = useState('');
+  const [cornerEditOld, setCornerEditOld] = useState('');
+  const [cornerEditNew, setCornerEditNew] = useState('');
 
   // 搜索防抖
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -124,6 +136,23 @@ export function TVDashboard() {
       if (searchTimer.current) clearTimeout(searchTimer.current);
     };
   }, [searchText, projectId, loadViolations]);
+
+  // 监听解析进度 IPC 事件
+  useEffect(() => {
+    if (!window.eventBridge) return;
+    const cleanup = window.eventBridge.onViolationParseProgress((data) => {
+      if (data.processedLines === -1) {
+        // 解析完成
+        setParseProgress(null);
+      } else {
+        setParseProgress({
+          processedLines: data.processedLines,
+          foundViolations: data.foundViolations,
+        });
+      }
+    });
+    return cleanup;
+  }, [setParseProgress]);
 
   if (!projectId) {
     return (
@@ -164,6 +193,16 @@ export function TVDashboard() {
           )}
           {parsing ? '解析中...' : '选择文件'}
         </button>
+
+        {/* 解析进度指示器 */}
+        {parsing && parseProgress && (
+          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            <span>
+              已处理 {parseProgress.processedLines.toLocaleString()} 行 · 发现 {parseProgress.foundViolations.toLocaleString()} 条违例
+            </span>
+          </div>
+        )}
 
         {/* 自动确认按钮 */}
         <button
@@ -361,6 +400,81 @@ export function TVDashboard() {
             <Trash2 className="h-3 w-3" />
             清空数据
           </button>
+
+          {/* 数据管理下拉菜单 */}
+          <div className="relative">
+            <button
+              onClick={() => setShowDataMenu((v) => !v)}
+              disabled={managingData || total === 0}
+              className={cn(
+                'flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] transition-colors',
+                'hover:bg-accent hover:text-foreground',
+                (managingData || total === 0) && 'opacity-40 cursor-not-allowed',
+              )}
+              title="数据管理"
+            >
+              {managingData ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Settings className="h-3 w-3" />
+              )}
+              数据管理
+            </button>
+            {showDataMenu && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowDataMenu(false)} />
+                <div className="absolute right-0 top-full z-20 mt-1 w-56 rounded-md border border-border bg-background shadow-lg">
+                  <div className="px-2 py-1 text-[10px] font-semibold uppercase text-muted-foreground">清除用例数据</div>
+                  {metadata.cases.length === 0 ? (
+                    <div className="px-3 py-1.5 text-[11px] text-muted-foreground/50">暂无用例</div>
+                  ) : (
+                    metadata.cases.slice(0, 10).map((c) => (
+                      <button
+                        key={c}
+                        onClick={() => {
+                          setShowDataMenu(false);
+                          if (window.confirm(`确定要清除用例 "${c}" 的所有违例数据吗？`)) {
+                            void clearCaseData(projectId, c);
+                          }
+                        }}
+                        className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
+                      >
+                        <Trash2 className="h-3 w-3 text-destructive/70" />
+                        <span className="truncate">{c}</span>
+                      </button>
+                    ))
+                  )}
+                  {metadata.cases.length > 10 && (
+                    <div className="px-3 py-1 text-[10px] text-muted-foreground/50">
+                      还有 {metadata.cases.length - 10} 个用例...
+                    </div>
+                  )}
+                  <div className="my-1 border-t border-border" />
+                  <div className="px-2 py-1 text-[10px] font-semibold uppercase text-muted-foreground">更新 Corner</div>
+                  {metadata.cases.length === 0 ? (
+                    <div className="px-3 py-1.5 text-[11px] text-muted-foreground/50">暂无用例</div>
+                  ) : (
+                    metadata.cases.slice(0, 10).map((c) => (
+                      <button
+                        key={c}
+                        onClick={() => {
+                          setShowDataMenu(false);
+                          setCornerEditCase(c);
+                          setCornerEditOld('');
+                          setCornerEditNew('');
+                          setShowCornerEdit(true);
+                        }}
+                        className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
+                      >
+                        <Edit3 className="h-3 w-3 text-primary/70" />
+                        <span className="truncate">{c}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </>
+            )}
+          </div>
           {statistics && (
             <span className="text-[11px] text-muted-foreground">
               数据库共 {statistics.total.toLocaleString()} 条违例
@@ -469,6 +583,70 @@ export function TVDashboard() {
         onSubmit={handleConfirmSubmit}
         onClose={closeConfirmDialog}
       />
+
+      {/* Corner 编辑对话框 */}
+      {showCornerEdit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-96 rounded-lg border border-border bg-popover p-4 shadow-2xl">
+            <h3 className="mb-3 text-sm font-semibold">更新 Corner — {cornerEditCase}</h3>
+            <div className="space-y-3">
+              <div>
+                <label className="mb-1 block text-[10px] font-semibold uppercase text-muted-foreground">
+                  旧 Corner（可选，留空更新所有）
+                </label>
+                <select
+                  value={cornerEditOld}
+                  onChange={(e) => setCornerEditOld(e.target.value)}
+                  className="w-full rounded border border-border bg-background px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value="">所有 Corner</option>
+                  {metadata.corners.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-semibold uppercase text-muted-foreground">
+                  新 Corner
+                </label>
+                <input
+                  type="text"
+                  value={cornerEditNew}
+                  onChange={(e) => setCornerEditNew(e.target.value)}
+                  placeholder="输入新 corner 名称"
+                  className="w-full rounded border border-border bg-background px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setShowCornerEdit(false)}
+                className="rounded px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => {
+                  if (cornerEditNew.trim()) {
+                    void updateCorner(projectId, cornerEditCase, cornerEditNew.trim(), cornerEditOld || undefined);
+                    setShowCornerEdit(false);
+                  }
+                }}
+                disabled={!cornerEditNew.trim() || managingData}
+                className={cn(
+                  'flex items-center gap-1 rounded px-3 py-1.5 text-xs font-medium transition-colors',
+                  cornerEditNew.trim() && !managingData
+                    ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                    : 'cursor-not-allowed bg-muted text-muted-foreground',
+                )}
+              >
+                {managingData ? <Loader2 className="h-3 w-3 animate-spin" /> : <Edit3 className="h-3 w-3" />}
+                更新
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
