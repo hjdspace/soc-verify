@@ -87,8 +87,33 @@ Issue #7（回归扫描 + 批量处理）已完整实现：
 
 **验证**：`npm run build && npm run typecheck && npm run test` 全部通过。
 
+### Issue #8 + #9 已实现（Phase 3 继续）
+
+**Issue #8 已交付功能**：
+- Recharts 分布图表组件（`TVDistributionCharts.tsx`）
+- 按子系统分布的违例数量横向柱状图
+- 按 Corner 分布的违例数量纵向柱状图
+- 按用例分布的违例数量 Top 10 横向柱状图
+- 状态分布饼图（已确认/待确认/已忽略）
+- 图表可折叠（点击标题切换展开/折叠）
+- 图表点击交互（点击柱/饼图扇区触发筛选）
+- 图表在亮色和暗色主题下均可正常显示（使用 CSS 变量 + Tailwind 语义类名）
+
+**Issue #9 已交付功能**：
+- 违例数据导出为 Excel 文件（exceljs，含所有字段 + 确认信息）
+- 违例数据导出为 CSV 文件（BOM + 逗号转义）
+- 违例数据导出支持按 caseName/corner 筛选
+- Pattern 导出为 Excel 文件
+- Pattern 导出为 CSV 文件
+- Pattern 导出为独立数据库文件（只含 violation_patterns 表）
+- 从数据库文件导入 Pattern（合并模式，相同 Pattern 累加 match_count）
+- 完整数据库合并（多 DB 合并 violations + confirmations + patterns）
+- 数据库合并前自动备份
+- 导出/导入下拉菜单集成在 TVDashboard 工具栏
+- tRPC API：`violation.exportViolations` / `pattern.exportPatterns` / `pattern.importPatterns` / `pattern.mergeDatabases`
+
+**验证**：`npm run build && npm run typecheck && npm run test` 全部通过。
+
 ### 待实现（Phase 3 剩余）
 
-- 分布图表 Recharts（Issue #8）
-- 导出 Excel/CSV/DB（Issue #9）
 - 数据管理 + 配置 UI + AI 预留（Issue #10）
