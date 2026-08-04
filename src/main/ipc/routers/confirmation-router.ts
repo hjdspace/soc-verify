@@ -18,6 +18,7 @@ import {
   autoConfirmByInterval,
   updateConfirmation,
   batchUpdateConfirmations,
+  applyHistoricalConfirmations,
 } from '../../timing-violation/confirm/confirmation-manager';
 import type { ConfirmationStatus } from '../../timing-violation/types';
 
@@ -32,43 +33,37 @@ export const confirmationRouter = t.router({
   /**
    * 复位时间自动确认。
    * 自动确认 time_fs <= resetTimeNs * 1000000 且 status='pending' 的违例。
+   * caseName 为空时对所有用例进行确认（全局自动确认）。
    */
   autoConfirmByResetTime: t.procedure
-    .input((raw): { projectId: string; caseName: string; corner: string; resetTimeNs: number } => {
+    .input((raw): { projectId: string; caseName?: string; resetTimeNs: number } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
-      }
-      if (typeof r.caseName !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'caseName is required' });
-      }
-      if (typeof r.corner !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'corner is required' });
       }
       if (typeof r.resetTimeNs !== 'number' || r.resetTimeNs < 0) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'resetTimeNs must be a non-negative number' });
       }
       return {
         projectId: r.projectId,
-        caseName: r.caseName,
-        corner: r.corner,
+        caseName: typeof r.caseName === 'string' && r.caseName ? r.caseName : undefined,
         resetTimeNs: r.resetTimeNs,
       };
     })
     .mutation(async ({ input }) => {
       const db = getTvDb(input.projectId);
-      return autoConfirmByResetTime(db, input.caseName, input.corner, input.resetTimeNs);
+      return autoConfirmByResetTime(db, input.caseName, input.resetTimeNs);
     }),
 
   /**
    * 复位时间 + 复位区间自动确认（OR 关系）。
    * 支持同时使用复位时间和复位区间条件。
+   * caseName 为空时对所有用例进行确认（全局自动确认）。
    */
   autoConfirmByInterval: t.procedure
     .input((raw): {
       projectId: string;
-      caseName: string;
-      corner: string;
+      caseName?: string;
       resetTimeNs?: number;
       intervalStartNs?: number;
       intervalEndNs?: number;
@@ -77,16 +72,9 @@ export const confirmationRouter = t.router({
       if (typeof r.projectId !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
       }
-      if (typeof r.caseName !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'caseName is required' });
-      }
-      if (typeof r.corner !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'corner is required' });
-      }
       return {
         projectId: r.projectId,
-        caseName: r.caseName,
-        corner: r.corner,
+        caseName: typeof r.caseName === 'string' && r.caseName ? r.caseName : undefined,
         resetTimeNs: typeof r.resetTimeNs === 'number' ? r.resetTimeNs : undefined,
         intervalStartNs: typeof r.intervalStartNs === 'number' ? r.intervalStartNs : undefined,
         intervalEndNs: typeof r.intervalEndNs === 'number' ? r.intervalEndNs : undefined,
@@ -97,7 +85,6 @@ export const confirmationRouter = t.router({
       return autoConfirmByInterval(
         db,
         input.caseName,
-        input.corner,
         input.resetTimeNs,
         input.intervalStartNs,
         input.intervalEndNs,
@@ -196,6 +183,31 @@ export const confirmationRouter = t.router({
         input.result,
         input.reason,
       );
+    }),
+
+  /**
+   * 一键应用历史确认模式。
+   * 对指定用例的待确认违例，自动匹配 Pattern 并应用确认结论。
+   * Pattern 匹配不依赖 corner（corner 无关），但可以可选传入 corner 过滤。
+   */
+  applyHistoricalConfirmations: t.procedure
+    .input((raw): { projectId: string; caseName: string; corner?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      if (typeof r.caseName !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'caseName is required' });
+      }
+      return {
+        projectId: r.projectId,
+        caseName: r.caseName,
+        corner: typeof r.corner === 'string' ? r.corner : undefined,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const db = getTvDb(input.projectId);
+      return applyHistoricalConfirmations(db, input.caseName, input.corner);
     }),
 
   /**
