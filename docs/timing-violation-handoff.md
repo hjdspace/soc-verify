@@ -504,21 +504,24 @@ npm run build && npm run typecheck && npm run test
 **主进程**：
 - [x] `src/main/timing-violation/scanner/violation-scanner.ts` — 回归扫描器
 - [x] `src/main/timing-violation/scanner/path-parser.ts` — 路径解析
-- [ ] `src/main/timing-violation/export/tv-exporter.ts` — Excel/CSV 导出
-- [ ] `src/main/timing-violation/export/tv-db-transfer.ts` — DB 导出导入合并
+- [x] `src/main/timing-violation/export/tv-exporter.ts` — Excel/CSV 导出
+- [x] `src/main/timing-violation/export/tv-db-transfer.ts` — DB 导出导入合并
 - [x] `src/main/ipc/routers/scan-router.ts` — 扫描 API
-- [ ] 更新 pattern-router 添加导出导入 API
-- [ ] 添加 `exceljs` 依赖
+- [x] 更新 pattern-router 添加导出导入 API（exportPatterns / importPatterns / mergeDatabases）
+- [x] 更新 violation-router 添加 exportViolations API
+- [x] 添加 `exceljs` 依赖（已在 package.json）
+- [x] 添加 `recharts` 依赖
 
 **渲染进程**：
-- [ ] `src/renderer/src/components/timing-violation/TVDistributionCharts.tsx` — Recharts 图表
+- [x] `src/renderer/src/components/timing-violation/TVDistributionCharts.tsx` — Recharts 图表
 - [x] `src/renderer/src/components/timing-violation/TVScanDialog.tsx` — 扫描对话框
-- [ ] 添加 `recharts` 依赖
+- [x] 添加 `recharts` 依赖
+- [x] 在 TVDashboard 工具栏中集成导出/导入下拉菜单
 - [ ] 在 TitleBar 或 LeftRail 中添加时序违例入口
 
 **测试**：
 - [x] 回归扫描器单测
-- [ ] 导出功能单测
+- [x] 导出功能单测（16 个测试：CSV/Excel/DB 导出、Pattern 导入合并、数据库合并）
 - [x] scan-router 集成测试
 - [ ] 图表组件测试
 
