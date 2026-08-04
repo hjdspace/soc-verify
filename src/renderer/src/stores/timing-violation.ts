@@ -58,6 +58,7 @@ export type ParseResult = {
   total: number;
   inserted: number;
   skipped: number;
+  appliedHistorical?: number;
   errors: string[];
 };
 
@@ -170,6 +171,10 @@ interface TimingViolationState {
   batchProgress: BatchProcessResult | null;
   showScanDialog: boolean;
 
+  // 导出/导入状态
+  exporting: boolean;
+  importing: boolean;
+
   // ── Actions ─────────────────────────────
   pickAndParse: (projectId: string) => Promise<void>;
   parseFile: (projectId: string, filePath: string, caseName?: string, corner?: string) => Promise<void>;
@@ -202,7 +207,7 @@ interface TimingViolationState {
   closeConfirmDialog: () => void;
 
   // Pattern 相关 Actions
-  applyHistoricalConfirmations: (projectId: string, caseName: string, corner?: string) => Promise<void>;
+  applyHistoricalConfirmations: (projectId: string, caseName?: string, corner?: string) => Promise<void>;
   loadPatterns: (projectId: string) => Promise<void>;
   clearAllPatterns: (projectId: string) => Promise<void>;
   setShowPatternManager: (show: boolean) => void;
@@ -212,6 +217,12 @@ interface TimingViolationState {
   batchProcess: (projectId: string, filePaths: string[]) => Promise<void>;
   pickRegressionDir: () => Promise<string | null>;
   setShowScanDialog: (show: boolean) => void;
+
+  // 导出/导入 Actions
+  exportViolations: (projectId: string, format: 'excel' | 'csv', caseName?: string, corner?: string) => Promise<void>;
+  exportPatterns: (projectId: string, format: 'excel' | 'csv' | 'db') => Promise<void>;
+  importPatterns: (projectId: string) => Promise<void>;
+  mergeDatabases: (projectId: string, sourceFilePaths: string[]) => Promise<void>;
 }
 
 // ── 实现 ──────────────────────────────────────────────────
@@ -256,6 +267,9 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
   batchProgress: null,
   showScanDialog: false,
 
+  exporting: false,
+  importing: false,
+
   pickAndParse: async (projectId) => {
     set({ parsing: true, parseResult: null });
     try {
@@ -281,9 +295,16 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
         corner,
       });
       set({ parseResult: result, parsing: false });
+      const detailParts: string[] = [];
+      if (result.appliedHistorical && result.appliedHistorical > 0) {
+        detailParts.push(`历史确认自动应用 ${result.appliedHistorical} 条`);
+      }
+      if (result.errors.length > 0) {
+        detailParts.push(`${result.errors.length} 个错误`);
+      }
       getToast().success(
         `解析完成：${result.inserted} 条新增，${result.skipped} 条跳过`,
-        result.errors.length > 0 ? `${result.errors.length} 个错误` : undefined,
+        detailParts.length > 0 ? detailParts.join('，') : undefined,
       );
       // 刷新数据
       await get().refreshAll(projectId);
@@ -486,7 +507,10 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
       const result = await trpc.confirmation.applyHistoricalConfirmations.mutate({
         projectId, caseName, corner,
       });
-      getToast().success(`应用历史确认完成：${result.appliedCount} 条违例已确认`);
+      const msg = caseName
+        ? `应用历史确认完成：${result.appliedCount} 条违例已确认`
+        : `全局应用历史确认完成：${result.appliedCount} 条违例已确认`;
+      getToast().success(msg);
       await get().refreshAll(projectId);
     } catch (err) {
       getToast().error('应用历史确认失败', err instanceof Error ? err.message : String(err));
@@ -560,4 +584,87 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
   },
 
   setShowScanDialog: (show) => set({ showScanDialog: show }),
+
+  // ── 导出/导入 Actions ────────────────────────────────────────
+
+  exportViolations: async (projectId, format, caseName, corner) => {
+    set({ exporting: true });
+    try {
+      const result = await trpc.violation.exportViolations.mutate({
+        projectId,
+        format,
+        caseName,
+        corner,
+      });
+      if (result.canceled) {
+        set({ exporting: false });
+        return;
+      }
+      getToast().success(`导出完成：${result.count} 条违例数据`);
+      set({ exporting: false });
+    } catch (err) {
+      set({ exporting: false });
+      getToast().error('导出违例数据失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  exportPatterns: async (projectId, format) => {
+    set({ exporting: true });
+    try {
+      const result = await trpc.pattern.exportPatterns.mutate({
+        projectId,
+        format,
+      });
+      if (result.canceled) {
+        set({ exporting: false });
+        return;
+      }
+      getToast().success(`导出完成：${result.count} 条 Pattern`);
+      set({ exporting: false });
+    } catch (err) {
+      set({ exporting: false });
+      getToast().error('导出 Pattern 失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  importPatterns: async (projectId) => {
+    set({ importing: true });
+    try {
+      const result = await trpc.pattern.importPatterns.mutate({
+        projectId,
+      });
+      if (result.canceled) {
+        set({ importing: false });
+        return;
+      }
+      getToast().success(`导入完成：新增 ${result.importedCount} 条，更新 ${result.updatedCount} 条`);
+      await get().loadPatterns(projectId);
+      set({ importing: false });
+    } catch (err) {
+      set({ importing: false });
+      getToast().error('导入 Pattern 失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  mergeDatabases: async (projectId, sourceFilePaths) => {
+    set({ importing: true });
+    try {
+      const result = await trpc.pattern.mergeDatabases.mutate({
+        projectId,
+        sourceFilePaths,
+        backup: true,
+      });
+      const msg = `合并完成：${result.mergedViolations} 条违例，${result.mergedPatterns} 条 Pattern`;
+      if (result.backupPath) {
+        getToast().success(msg, `已备份到: ${result.backupPath}`);
+      } else {
+        getToast().success(msg);
+      }
+      await get().refreshAll(projectId);
+      set({ importing: false });
+    } catch (err) {
+      set({ importing: false });
+      getToast().error('数据库合并失败', err instanceof Error ? err.message : String(err));
+    }
+  },
 }));
