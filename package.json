@@ -39,6 +39,7 @@
     "better-sqlite3": "^13.0.2",
     "electron-trpc": "^0.7.1",
     "exceljs": "^4.4.0",
+    "jszip": "^3.10.1",
     "node-pty": "^1.1.0",
     "pdfjs-dist": "^5.4.296",
     "react-pdf": "^10.4.1",
