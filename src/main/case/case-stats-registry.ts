@@ -50,6 +50,13 @@ class CaseStatsRegistryImpl {
     return this.services.get(projectRoot) ?? null;
   }
 
+  /** 清除指定项目 discovery 内部缓存（case_cfg 修改后刷新用）。
+   * 传入 subsys 时仅清除该子系统的用例缓存；不传时清除全部缓存。 */
+  clearDiscoveryCache(projectRoot: string, subsys?: string): void {
+    const service = this.services.get(projectRoot);
+    if (service) service.clearDiscoveryCache(subsys);
+  }
+
   remove(projectRoot: string): void {
     this.services.delete(projectRoot);
   }
