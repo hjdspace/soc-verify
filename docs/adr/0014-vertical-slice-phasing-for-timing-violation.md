@@ -38,11 +38,11 @@ Issue #1（DB 基础 + 单文件解析 + 违例列表）和 Issue #2（筛选 + 
 
 **验证**：`npm run build && npm run typecheck && npm run test` 全部通过。
 
-### Phase 2 — 完整确认流程 🔨 进行中（Issue #4, #5 已完成，Issue #6 待实现）
+### Phase 2 — 完整确认流程 ✅ 已完成
 
-Issue #4（自动确认：复位时间 + 复位区间）和 Issue #5（手动确认 + 批量确认 + Pattern 自动保存）已完整实现：
+Issue #4（自动确认：复位时间 + 复位区间）、Issue #5（手动确认 + 批量确认 + Pattern 自动保存）和 Issue #6（Pattern 匹配 + Pattern CRUD）已完整实现：
 
-**已交付功能**：
+**Issue #4 + #5 已交付功能**：
 - 自动确认对话框（TVAutoConfirmDialog）：输入复位时间（纳秒）和/或复位区间（起止时间），支持 OR 关系
 - 手动确认对话框（TVConfirmationDialog）：填写确认人、确认结果（pass/issue）、确认理由，支持单条和批量
 - 违例表格行选择（checkbox）：支持多选、全选、清除选择
@@ -54,18 +54,41 @@ Issue #4（自动确认：复位时间 + 复位区间）和 Issue #5（手动确
 - Corner 回退：指定 corner 未找到记录时回退到 default corner
 - AI 预留接口：`confirmation.suggestConfirmation` 返回空结果骨架
 
+**Issue #6 已交付功能**：
+- Pattern 精确匹配（hier + check_info 完全相同）
+- Pattern 模糊匹配（标准化 check_info 后比较，括号前必须匹配，括号内前两部分去冒号后内容匹配，第三部分忽略）
+- 模糊匹配优先级低于精确匹配（先尝试精确，未命中再尝试模糊）
+- 一键应用历史确认模式（`applyHistoricalConfirmations`）：自动匹配 Pattern 并应用确认结论
+- Pattern 匹配 Corner 无关
+- 匹配成功后 match_count 递增、last_used 更新
+- Pattern 管理面板（TVPatternManager）：列表展示所有 Pattern（hier/check/确认人/结果/理由/使用次数/最后使用时间），支持搜索和清除
+- tRPC API：`pattern.getPatterns` / `pattern.getPatternSuggestion` / `pattern.savePattern` / `pattern.clearAllPatterns` / `confirmation.applyHistoricalConfirmations`
+
 **验证**：`npm run build && npm run typecheck && npm run test` 全部通过。
 
-### 待实现（Issue #6）
+### Phase 3 — 高级功能 🔨 进行中（Issue #7 已完成）
 
-- Pattern 精确匹配 + 模糊匹配（Pattern Normalization）
-- 一键应用历史确认模式
-- Pattern 管理面板（TVPatternManager）
-- Pattern CRUD tRPC API（pattern-router.ts）
+Issue #7（回归扫描 + 批量处理）已完整实现：
 
-### Phase 3 — 高级功能 ⏳ 待实现
+**Issue #7 已交付功能**：
+- 递归扫描回归目录，发现所有 vio_summary.log 文件
+- 标准模式解析：`<case>_<corner>/<case>_<seed>/log/vio_summary.log` 提取完整元信息
+- 通用模式解析：任意层级目录/<case>_<seed>/log/vio_summary.log
+- 从路径中提取 subsys/corner/case/seed 元信息
+- 检测用例 PASS/FAIL 状态（检查 sprd_log_pass.log 文件存在）
+- 扫描结果按子系统、corner、用例、状态分组展示
+- 分组视图中可勾选/取消勾选文件
+- 一键选中/取消某子系统/corner 下的所有文件
+- 显示每个文件的元信息（路径、大小、修改时间、用例状态）
+- 批量处理选中的文件，逐个解析导入数据库
+- 批量处理显示实时进度（当前文件/总文件数、当前违例数）
+- Corner 列表和子系统识别规则从配置文件读取（`.socverify/timing-violation/config.json`）
+- tRPC API：`scan.scanRegression` / `scan.batchProcess` / `scan.pickDirectory`
 
-- 回归扫描 + 批量处理（Issue #7, #8）
+**验证**：`npm run build && npm run typecheck && npm run test` 全部通过。
+
+### 待实现（Phase 3 剩余）
+
 - 分布图表 Recharts（Issue #8）
 - 导出 Excel/CSV/DB（Issue #9）
 - 数据管理 + 配置 UI + AI 预留（Issue #10）
