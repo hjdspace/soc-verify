@@ -187,21 +187,19 @@ export const confirmationRouter = t.router({
 
   /**
    * 一键应用历史确认模式。
-   * 对指定用例的待确认违例，自动匹配 Pattern 并应用确认结论。
+   * 对待确认违例自动匹配 Pattern 并应用确认结论。
+   * caseName 为空时对所有用例的待确认违例进行应用（全局应用）。
    * Pattern 匹配不依赖 corner（corner 无关），但可以可选传入 corner 过滤。
    */
   applyHistoricalConfirmations: t.procedure
-    .input((raw): { projectId: string; caseName: string; corner?: string } => {
+    .input((raw): { projectId: string; caseName?: string; corner?: string } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
       }
-      if (typeof r.caseName !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'caseName is required' });
-      }
       return {
         projectId: r.projectId,
-        caseName: r.caseName,
+        caseName: typeof r.caseName === 'string' && r.caseName ? r.caseName : undefined,
         corner: typeof r.corner === 'string' ? r.corner : undefined,
       };
     })
