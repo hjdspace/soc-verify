@@ -177,7 +177,7 @@ None — can start immediately.
 
 ---
 
-## Issue #6: Pattern 匹配 + Pattern CRUD
+## Issue #6: Pattern 匹配 + Pattern CRUD ✅ 已完成
 
 ### Parent
 
@@ -191,18 +191,18 @@ None — can start immediately.
 
 ### Acceptance criteria
 
-- [ ] Pattern 精确匹配：hier + check_info 完全相同
-- [ ] Pattern 模糊匹配：标准化 check_info 后比较（括号前匹配，括号内前两部分去冒号后内容匹配，第三部分忽略）
-- [ ] 模糊匹配优先级低于精确匹配（先尝试精确，未命中再尝试模糊）
-- [ ] 一键应用历史确认模式，自动匹配并应用确认结论
-- [ ] Pattern 匹配不依赖 corner（corner 无关）
-- [ ] 匹配成功后 Pattern 的 match_count 递增、last_used 更新
-- [ ] Pattern 管理面板展示所有 Pattern 列表
-- [ ] 支持清除所有 Pattern
-- [ ] tRPC API 有 `confirmation.applyHistoricalConfirmations` / `pattern.getPatterns` / `pattern.clearAllPatterns` / `pattern.getPatternSuggestion` procedure
-- [ ] Pattern Normalizer 单测覆盖：精确匹配、模糊匹配、各种 Check 格式、括号嵌套、无括号、多逗号
-- [ ] tRPC 集成测试覆盖：应用历史确认、Pattern 列表、清除
-- [ ] `npm run build && npm run typecheck && npm run test` 全部通过
+- [x] Pattern 精确匹配：hier + check_info 完全相同
+- [x] Pattern 模糊匹配：标准化 check_info 后比较（括号前匹配，括号内前两部分去冒号后内容匹配，第三部分忽略）
+- [x] 模糊匹配优先级低于精确匹配（先尝试精确，未命中再尝试模糊）
+- [x] 一键应用历史确认模式，自动匹配并应用确认结论
+- [x] Pattern 匹配不依赖 corner（corner 无关）
+- [x] 匹配成功后 Pattern 的 match_count 递增、last_used 更新
+- [x] Pattern 管理面板展示所有 Pattern 列表
+- [x] 支持清除所有 Pattern
+- [x] tRPC API 有 `confirmation.applyHistoricalConfirmations` / `pattern.getPatterns` / `pattern.clearAllPatterns` / `pattern.getPatternSuggestion` procedure
+- [x] Pattern Normalizer 单测覆盖：精确匹配、模糊匹配、各种 Check 格式、括号嵌套、无括号、多逗号
+- [x] tRPC 集成测试覆盖：应用历史确认、Pattern 列表、清除
+- [x] `npm run build && npm run typecheck && npm run test` 全部通过
 
 ### Blocked by
 
@@ -210,7 +210,7 @@ None — can start immediately.
 
 ---
 
-## Issue #7: 回归扫描 + 批量处理
+## Issue #7: 回归扫描 + 批量处理 ✅ 已完成
 
 ### Parent
 
@@ -224,23 +224,23 @@ None — can start immediately.
 
 ### Acceptance criteria
 
-- [ ] 选择回归根目录后递归扫描发现所有 vio_summary.log 文件
-- [ ] 标准模式解析：`<case>_<corner>/<case>_<seed>/log/vio_summary.log` 提取完整元信息
-- [ ] 通用模式解析：任意层级目录/<case>_<seed>/log/vio_summary.log
-- [ ] 从路径中提取 subsys/corner/case/seed 元信息
-- [ ] 检测用例 PASS/FAIL 状态（检查 sprd_log_pass.log 文件存在）
-- [ ] 扫描结果按子系统、corner、用例、状态分组展示
-- [ ] 分组视图中可勾选/取消勾选文件
-- [ ] 一键选中/取消某子系统/corner 下的所有文件
-- [ ] 显示每个文件的元信息（路径、大小、修改时间、用例状态）
-- [ ] 批量处理选中的文件，逐个解析导入数据库
-- [ ] 批量处理显示实时进度（当前文件/总文件数、当前违例数）
-- [ ] Corner 列表从配置文件读取，不硬编码
-- [ ] 子系统识别规则从配置文件读取（如以 _sys 结尾或为 top）
-- [ ] tRPC API 有 `scan.scanRegression` / `scan.batchProcess` procedure
-- [ ] 扫描器单测覆盖：标准模式解析、通用模式解析、PASS/FAIL 检测、分组逻辑
-- [ ] tRPC 集成测试覆盖：扫描 → 选择 → 批量处理
-- [ ] `npm run build && npm run typecheck && npm run test` 全部通过
+- [x] 选择回归根目录后递归扫描发现所有 vio_summary.log 文件
+- [x] 标准模式解析：`<case>_<corner>/<case>_<seed>/log/vio_summary.log` 提取完整元信息
+- [x] 通用模式解析：任意层级目录/<case>_<seed>/log/vio_summary.log
+- [x] 从路径中提取 subsys/corner/case/seed 元信息
+- [x] 检测用例 PASS/FAIL 状态（检查 sprd_log_pass.log 文件存在）
+- [x] 扫描结果按子系统、corner、用例、状态分组展示
+- [x] 分组视图中可勾选/取消勾选文件
+- [x] 一键选中/取消某子系统/corner 下的所有文件
+- [x] 显示每个文件的元信息（路径、大小、修改时间、用例状态）
+- [x] 批量处理选中的文件，逐个解析导入数据库
+- [x] 批量处理显示实时进度（当前文件/总文件数、当前违例数）
+- [x] Corner 列表从配置文件读取，不硬编码
+- [x] 子系统识别规则从配置文件读取（如以 _sys 结尾或为 top）
+- [x] tRPC API 有 `scan.scanRegression` / `scan.batchProcess` procedure
+- [x] 扫描器单测覆盖：标准模式解析、通用模式解析、PASS/FAIL 检测、分组逻辑
+- [x] tRPC 集成测试覆盖：扫描 → 选择 → 批量处理
+- [x] `npm run build && npm run typecheck && npm run test` 全部通过
 
 ### Blocked by
 
