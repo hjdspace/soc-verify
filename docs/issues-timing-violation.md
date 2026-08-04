@@ -28,7 +28,7 @@
 - [x] 支持 FS/PS/NS 时间单位自动转换为飞秒（time_fs）
 - [x] 重复文件解析时自动去重（INSERT OR IGNORE）
 - [x] 解析完成后显示结果摘要（总数、新增数、跳过数）
-- [ ] 解析进度实时反馈（已处理违例数 / 预估总数）— Phase 2 补充
+- [x] 解析进度实时反馈（已处理违例数 / 已发现违例数，通过 IPC 事件推送）
 - [x] 数据库使用 better-sqlite3 + WAL 模式 + PRAGMA 优化，3 张表结构正确
 - [x] 数据库文件路径默认 `.socverify/timing-violation/tv.db`，可配置
 - [x] CenterArea 中可打开 timing-violation Dashboard
@@ -313,7 +313,7 @@ None — can start immediately.
 
 ---
 
-## Issue #10: 数据管理 + 配置 + AI 预留
+## Issue #10: 数据管理 + 配置 + AI 预留 ✅ 已完成
 
 ### Parent
 
@@ -327,20 +327,20 @@ None — can start immediately.
 
 ### Acceptance criteria
 
-- [ ] 清除指定用例的违例数据（含确认记录）
-- [ ] 清除指定用例指定 corner 的数据
-- [ ] 批量更新用例的 corner 信息
-- [ ] 设置面板中有时序违例配置区域
-- [ ] 可配置数据库路径
-- [ ] 可编辑 Corner 列表（添加/删除/排序）
-- [ ] 可编辑子系统识别规则
-- [ ] 可配置默认复位时间
-- [ ] 可启用/禁用自动备份
-- [ ] 配置持久化到 `.socverify/timing-violation/config.json`
-- [ ] `confirmation.suggestConfirmation` 接口存在且可调用，当前返回空结果骨架
-- [ ] tRPC API 有 `violation.clearCaseData` / `violation.updateCorner` / `settings.updateTvConfig` / `settings.getTvConfig` / `confirmation.suggestConfirmation` procedure
-- [ ] tRPC 集成测试覆盖：清除数据、更新 corner、配置读写、AI 接口骨架
-- [ ] `npm run build && npm run typecheck && npm run test` 全部通过
+- [x] 清除指定用例的违例数据（含确认记录）
+- [x] 清除指定用例指定 corner 的数据
+- [x] 批量更新用例的 corner 信息
+- [x] 设置面板中有时序违例配置区域
+- [x] 可配置数据库路径
+- [x] 可编辑 Corner 列表（添加/删除/排序）
+- [x] 可编辑子系统识别规则
+- [x] 可配置默认复位时间
+- [x] 可启用/禁用自动备份
+- [x] 配置持久化到 `.socverify/timing-violation/config.json`
+- [x] `confirmation.suggestConfirmation` 接口存在且可调用，当前返回空结果骨架
+- [x] tRPC API 有 `violation.clearCaseData` / `violation.updateCorner` / `settings.updateTvConfig` / `settings.getTvConfig` / `confirmation.suggestConfirmation` procedure
+- [x] tRPC 集成测试覆盖：清除数据、更新 corner、配置读写、AI 接口骨架
+- [x] `npm run build && npm run typecheck && npm run test` 全部通过
 
 ### Blocked by
 
