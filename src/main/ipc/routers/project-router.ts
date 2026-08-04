@@ -813,4 +813,34 @@ export const projectRouter = t.router({
       }
       return applyRejections(input.filePath, input.rejections);
     }),
+
+  /**
+   * 刷新用例树缓存。
+   *
+   * 当用户修改了 case_cfg（增加/删除/重命名用例）后，
+   * 调用此 procedure 清除 discovery 内部缓存和搜索索引，
+   * 使得下次 getSubsystems / getCases / searchCases 返回最新数据。
+   *
+   * 传入 subsys 时仅刷新该子系统的用例缓存（快速刷新）；
+   * 不传时刷新全部缓存。
+   */
+  refreshCases: t.procedure
+    .input((raw): { projectId: string; subsys?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return {
+        projectId: r.projectId,
+        subsys: typeof r.subsys === 'string' ? r.subsys : undefined,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      // 清除 discovery 缓存（按子系统或全部）
+      caseStatsRegistry.clearDiscoveryCache(project.rootPath, input.subsys);
+      // 清除搜索索引缓存（下次搜索时重建）
+      caseIndexManager.invalidate(input.projectId);
+      return { ok: true };
+    }),
 });
