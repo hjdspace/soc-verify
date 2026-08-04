@@ -11,7 +11,7 @@ import {
   Loader2, BarChart3, Upload, ChevronRight,
   Target as TargetIcon, AlertTriangle, ShieldBan, GitCompare, Trash2, Plus,
   Activity, Square, Download, FolderOpen, Bug, X,
-  Trophy, EyeOff,
+  Trophy, EyeOff, CheckCircle2, Clock,
 } from 'lucide-react';
 import { useCoverageStore } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
@@ -101,6 +101,14 @@ export function CoveragePanel() {
   const toggleDebugPanel = useCoverageStore((s) => s.toggleDebugPanel);
   const clearImportWarnings = useCoverageStore((s) => s.clearImportWarnings);
 
+  // ─── 导入进度 ────────────────────────────────────────────
+  const importProgress = useCoverageStore((s) => s.importProgress);
+  const importStep = useCoverageStore((s) => s.importStep);
+  const importStepLog = useCoverageStore((s) => s.importStepLog);
+  const showImportProgress = useCoverageStore((s) => s.showImportProgress);
+  const registerImportProgressListener = useCoverageStore((s) => s.registerImportProgressListener);
+  const clearImportProgress = useCoverageStore((s) => s.clearImportProgress);
+
   // ─── Closure 相关（Slice 6b） ──────────────────────────────
   const currentClosure = useCoverageStore((s) => s.currentClosure);
   const closureLive = useCoverageStore((s) => s.closureLive);
@@ -129,6 +137,11 @@ export function CoveragePanel() {
   useEffect(() => {
     registerClosureEventListener();
   }, [registerClosureEventListener]);
+
+  // 注册 coverage:import-progress IPC 监听器（幂等，全局一次）
+  useEffect(() => {
+    registerImportProgressListener();
+  }, [registerImportProgressListener]);
 
   useEffect(() => {
     if (currentProjectId && currentSessionId) {
@@ -264,6 +277,57 @@ export function CoveragePanel() {
             <div className="text-[10px] text-muted-foreground py-2 text-center">
               没有可用的日志文件。这可能是因为 EDA 命令未执行或报告目录为空。
             </div>
+          )}
+        </div>
+      )}
+
+      {/* 导入进度面板 */}
+      {showImportProgress && importing && (
+        <div className="mb-3 rounded border border-primary/40 bg-primary/5 p-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="flex items-center gap-1.5 text-xs font-medium text-primary">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              {importStep || '正在导入...'}
+            </span>
+            <span className="text-xs font-mono text-primary">{importProgress}%</span>
+          </div>
+          {/* 进度条 */}
+          <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+            <div
+              className="h-full rounded-full bg-primary transition-all duration-300 ease-out"
+              style={{ width: `${importProgress}%` }}
+            />
+          </div>
+          {/* 步骤日志 */}
+          {importStepLog.length > 0 && (
+            <div className="mt-2 max-h-32 overflow-auto rounded bg-muted/50 p-2">
+              {importStepLog.map((entry, i) => (
+                <div key={i} className="flex items-start gap-1.5 py-0.5 text-[10px]">
+                  {entry.step === 'done' ? (
+                    <CheckCircle2 className="mt-0.5 h-3 w-3 flex-shrink-0 text-primary" />
+                  ) : (
+                    <Clock className="mt-0.5 h-3 w-3 flex-shrink-0 text-muted-foreground" />
+                  )}
+                  <span className="text-muted-foreground">
+                    {new Date(entry.timestamp).toLocaleTimeString()}
+                  </span>
+                  <span className="flex-1 break-all">{entry.message}</span>
+                  {entry.durationMs !== undefined && (
+                    <span className="text-muted-foreground font-mono">{entry.durationMs}ms</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {/* 关闭按钮 */}
+          {!importing && (
+            <button
+              onClick={clearImportProgress}
+              className="mt-1.5 flex items-center gap-1 rounded border border-border bg-card px-1.5 py-0.5 text-[10px] hover:bg-secondary"
+            >
+              <X className="h-2.5 w-2.5" />
+              关闭
+            </button>
           )}
         </div>
       )}
