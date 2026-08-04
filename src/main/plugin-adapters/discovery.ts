@@ -99,7 +99,11 @@ export class PluginBackedDiscovery implements SubsysDiscovery {
     return result;
   }
 
-  clearCache(): void {
-    this.caseCache.clear();
+  clearCache(subsys?: string): void {
+    if (subsys) {
+      this.caseCache.delete(subsys);
+    } else {
+      this.caseCache.clear();
+    }
   }
 }
