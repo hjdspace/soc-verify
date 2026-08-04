@@ -349,8 +349,8 @@ CREATE TABLE IF NOT EXISTS violation_patterns (
 
 - 垂直切片 3 阶段（来自 ADR-0014）：
   - Phase 1：最小闭环（单文件解析 → DB 存储 → 列表展示）— ✅ 已完成（Issue #1, #2, #3）
-  - Phase 2：完整确认流程（自动 + 手动确认 + Pattern 匹配 + Pattern CRUD）— 🔨 进行中（Issue #4, #5 已完成，Issue #6 待实现）
-  - Phase 3：高级功能（回归扫描 + 图表 + 导出 + AI 接口预留）— ⏳ 待实现
+  - Phase 2：完整确认流程（自动 + 手动确认 + Pattern 匹配 + Pattern CRUD）— ✅ 已完成（Issue #4, #5, #6）
+  - Phase 3：高级功能（回归扫描 + 图表 + 导出 + AI 接口预留）— 🔨 进行中（Issue #7 已完成，Issue #8/#9/#10 待实现）
 
 ### 依赖添加
 
