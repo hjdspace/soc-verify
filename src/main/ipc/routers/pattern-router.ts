@@ -8,13 +8,19 @@
  *   - getPatternSuggestion: 获取 Pattern 建议（精确/模糊匹配）
  *   - savePattern:        手动保存 Pattern
  *   - clearAllPatterns:   清除所有 Pattern
+ *   - exportPatterns:     导出 Pattern 为 Excel/CSV/DB
+ *   - importPatterns:     从 DB 文件导入 Pattern（合并模式）
+ *   - mergeDatabases:     合并多个完整数据库
  */
 
+import { dialog } from 'electron';
 import { t, TRPCError } from '../router-context';
 import { getTvDb } from '../../timing-violation/db/tv-db-cache';
 import { getPatterns, clearAllPatterns } from '../../timing-violation/db/tv-repository';
 import { savePattern } from '../../timing-violation/confirm/confirmation-manager';
 import { getPatternSuggestion } from '../../timing-violation/confirm/pattern-matcher';
+import { exportPatternsToExcel, exportPatternsToCsv } from '../../timing-violation/export/tv-exporter';
+import { exportPatternsToDatabase, importPatternsFromDatabase, mergeDatabases } from '../../timing-violation/export/tv-db-transfer';
 
 // ─── Router ───────────────────────────────────────────────────
 
@@ -108,5 +114,135 @@ export const patternRouter = t.router({
     .mutation(async ({ input }) => {
       const db = getTvDb(input.projectId);
       return clearAllPatterns(db);
+    }),
+
+  /**
+   * 导出 Pattern 为 Excel/CSV/DB 文件。
+   */
+  exportPatterns: t.procedure
+    .input((raw): {
+      projectId: string;
+      format: 'excel' | 'csv' | 'db';
+      filePath?: string;
+    } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      const format = r.format === 'csv' ? 'csv' : r.format === 'db' ? 'db' : 'excel';
+      return {
+        projectId: r.projectId,
+        format,
+        filePath: typeof r.filePath === 'string' ? r.filePath : undefined,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const db = getTvDb(input.projectId);
+
+      // 如果没有指定路径，弹出保存对话框
+      let filePath = input.filePath;
+      if (!filePath) {
+        const ext = input.format === 'excel' ? 'xlsx' : input.format === 'csv' ? 'csv' : 'db';
+        const result = await dialog.showSaveDialog({
+          title: '导出 Pattern',
+          defaultPath: `violation_patterns.${ext}`,
+          filters: [
+            { name: input.format === 'excel' ? 'Excel' : input.format === 'csv' ? 'CSV' : 'Database', extensions: [ext] },
+            { name: '所有文件', extensions: ['*'] },
+          ],
+        });
+        if (result.canceled || !result.filePath) {
+          return { success: false as const, count: 0, canceled: true as const };
+        }
+        filePath = result.filePath;
+      }
+
+      if (input.format === 'excel') {
+        const result = await exportPatternsToExcel(db, filePath);
+        return { success: true as const, count: result.count, filePath, canceled: false as const };
+      } else if (input.format === 'csv') {
+        const result = exportPatternsToCsv(db, filePath);
+        return { success: true as const, count: result.count, filePath, canceled: false as const };
+      } else {
+        const result = exportPatternsToDatabase(db, filePath);
+        return { success: true as const, count: result.count, filePath, canceled: false as const };
+      }
+    }),
+
+  /**
+   * 从 DB 文件导入 Pattern（合并模式，相同 Pattern 累加 match_count）。
+   */
+  importPatterns: t.procedure
+    .input((raw): {
+      projectId: string;
+      filePath?: string;
+    } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return {
+        projectId: r.projectId,
+        filePath: typeof r.filePath === 'string' ? r.filePath : undefined,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const db = getTvDb(input.projectId);
+
+      // 如果没有指定路径，弹出文件选择对话框
+      let filePath = input.filePath;
+      if (!filePath) {
+        const result = await dialog.showOpenDialog({
+          title: '选择 Pattern 数据库文件',
+          properties: ['openFile'],
+          filters: [
+            { name: 'Database', extensions: ['db'] },
+            { name: '所有文件', extensions: ['*'] },
+          ],
+        });
+        if (result.canceled || result.filePaths.length === 0) {
+          return { importedCount: 0, updatedCount: 0, canceled: true as const };
+        }
+        filePath = result.filePaths[0];
+      }
+
+      const result = importPatternsFromDatabase(db, filePath);
+      return { ...result, canceled: false as const };
+    }),
+
+  /**
+   * 合并多个完整数据库。
+   * 合并前自动备份目标数据库。
+   */
+  mergeDatabases: t.procedure
+    .input((raw): {
+      projectId: string;
+      sourceFilePaths: string[];
+      backup?: boolean;
+    } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      const sourceFilePaths = Array.isArray(r.sourceFilePaths)
+        ? r.sourceFilePaths.filter((p) => typeof p === 'string')
+        : [];
+      return {
+        projectId: r.projectId,
+        sourceFilePaths,
+        backup: r.backup !== false,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const db = getTvDb(input.projectId);
+
+      let backupPath: string | undefined;
+      if (input.backup) {
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        backupPath = `${db.name}.backup-${ts}`;
+      }
+
+      const result = mergeDatabases(db, input.sourceFilePaths, backupPath);
+      return result;
     }),
 });
