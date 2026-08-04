@@ -12,6 +12,7 @@ import {
   updateConfirmation,
   batchUpdateConfirmations,
   savePattern,
+  applyHistoricalConfirmations,
 } from '../../src/main/timing-violation/confirm/confirmation-manager';
 import type { ParsedViolation } from '../../src/main/timing-violation/types';
 
@@ -323,6 +324,165 @@ describe('Confirmation Manager', () => {
       const patterns = getPatterns(db);
       expect(patterns.length).toBe(1);
       expect(patterns[0].matchCount).toBe(3);
+    });
+  });
+
+  // ─── applyHistoricalConfirmations ─────────────────────────
+
+  describe('applyHistoricalConfirmations', () => {
+    it('returns 0 when no patterns exist', () => {
+      setupViolations([makeViolation({ num: 1 })]);
+      const result = applyHistoricalConfirmations(db, 'test_case');
+      expect(result.appliedCount).toBe(0);
+    });
+
+    it('applies exact match patterns for a specific case', () => {
+      setupViolations([
+        makeViolation({ num: 1, hier: 'tb_top.match1', checkInfo: 'setup(clk, data, margin: -50 PS)' }),
+        makeViolation({ num: 2, hier: 'tb_top.no_match', checkInfo: 'hold(clk, data, margin: -20 PS)' }),
+      ]);
+      // Save a pattern matching violation 1
+      savePattern(db, 'tb_top.match1', 'setup(clk, data, margin: -50 PS)', 'Alice', 'pass', 'safe');
+
+      const result = applyHistoricalConfirmations(db, 'test_case');
+      expect(result.appliedCount).toBe(1);
+
+      // Verify the violation was confirmed
+      const queryResult = queryViolations(db, { page: 1, pageSize: 10, status: 'confirmed' });
+      expect(queryResult.total).toBe(1);
+      expect(queryResult.items[0].hier).toBe('tb_top.match1');
+      expect(queryResult.items[0].confirmer).toBe('Alice');
+    });
+
+    it('applies patterns to ALL pending violations when caseName is undefined', () => {
+      setupViolations([
+        makeViolation({ num: 1, caseName: 'case_a', hier: 'tb_top.hier_a', checkInfo: 'setup(clk, data, margin: -50 PS)' }),
+        makeViolation({ num: 2, caseName: 'case_b', hier: 'tb_top.hier_b', checkInfo: 'hold(clk, data, margin: -20 PS)' }),
+        makeViolation({ num: 3, caseName: 'case_c', hier: 'tb_top.hier_a', checkInfo: 'setup(clk, data, margin: -50 PS)' }),
+      ]);
+      // Save patterns matching violations 1 and 3 (same hier+check)
+      savePattern(db, 'tb_top.hier_a', 'setup(clk, data, margin: -50 PS)', 'Bob', 'pass', 'known safe');
+      savePattern(db, 'tb_top.hier_b', 'hold(clk, data, margin: -20 PS)', 'Charlie', 'issue', 'needs fix');
+
+      // Global apply — no caseName filter
+      const result = applyHistoricalConfirmations(db);
+      expect(result.appliedCount).toBe(3);
+
+      // All should be confirmed
+      const queryResult = queryViolations(db, { page: 1, pageSize: 10, status: 'confirmed' });
+      expect(queryResult.total).toBe(3);
+    });
+
+    it('does not re-confirm already confirmed violations', () => {
+      setupViolations([
+        makeViolation({ num: 1, hier: 'tb_top.hier_a', checkInfo: 'setup(clk, data, margin: -50 PS)' }),
+      ]);
+      savePattern(db, 'tb_top.hier_a', 'setup(clk, data, margin: -50 PS)', 'Alice', 'pass', 'safe');
+
+      // First application
+      const result1 = applyHistoricalConfirmations(db);
+      expect(result1.appliedCount).toBe(1);
+
+      // Second application — no more pending
+      const result2 = applyHistoricalConfirmations(db);
+      expect(result2.appliedCount).toBe(0);
+    });
+
+    it('applies fuzzy match patterns', () => {
+      setupViolations([
+        // Violation has different time in check_info but same structure
+        makeViolation({ num: 1, hier: 'tb_top.fuzzy', checkInfo: 'setup(posedge clk, negedge data, margin: -100 PS)' }),
+      ]);
+      // Pattern has different time value but same structure after normalization
+      savePattern(db, 'tb_top.fuzzy', 'setup(posedge clk, negedge data, margin: -50 PS)', 'Alice', 'pass', 'fuzzy match');
+
+      const result = applyHistoricalConfirmations(db, 'test_case');
+      expect(result.appliedCount).toBe(1);
+
+      const queryResult = queryViolations(db, { page: 1, pageSize: 10, status: 'confirmed' });
+      expect(queryResult.items[0].confirmer).toBe('Alice');
+    });
+
+    it('increments match_count after applying', () => {
+      setupViolations([
+        makeViolation({ num: 1, hier: 'tb_top.hier_a', checkInfo: 'setup(clk, data, margin: -50 PS)' }),
+        makeViolation({ num: 2, caseName: 'other_case', hier: 'tb_top.hier_a', checkInfo: 'setup(clk, data, margin: -50 PS)' }),
+      ]);
+      savePattern(db, 'tb_top.hier_a', 'setup(clk, data, margin: -50 PS)', 'Alice', 'pass', 'safe');
+
+      // Global apply — should match both violations
+      const result = applyHistoricalConfirmations(db);
+      expect(result.appliedCount).toBe(2);
+
+      // Pattern's match_count should have been incremented twice
+      const patterns = getPatterns(db);
+      expect(patterns[0].matchCount).toBe(3); // 1 initial + 2 applied
+    });
+  });
+
+  // ─── 大规模自动确认（验证 "too many SQL variables" 修复） ──
+
+  describe('large-scale auto-confirm (exceeds SQLite variable limit)', () => {
+    it('autoConfirmByResetTime handles >999 violations without "too many SQL variables"', () => {
+      // 创建 1200 条违例（超过 SQLite 默认变量上限 999）
+      const violations: ParsedViolation[] = [];
+      for (let i = 1; i <= 1200; i++) {
+        violations.push(
+          makeViolation({
+            num: i,
+            timeFs: 500000, // 0.5ns — all within 1ns reset time
+            hier: `tb_top.hier_${i}`,
+          }),
+        );
+      }
+      setupViolations(violations);
+
+      // 自动确认 200ns 以内的所有违例（应匹配全部 1200 条）
+      // 修复前会报 "too many SQL variables" 错误
+      const result = autoConfirmByResetTime(db, 'test_case', 200);
+      expect(result.confirmedCount).toBe(1200);
+
+      // 验证所有违例都已确认
+      const queryResult = queryViolations(db, { page: 1, pageSize: 2000, status: 'confirmed' });
+      expect(queryResult.total).toBe(1200);
+      expect(queryResult.items.every((v) => v.isAutoConfirmed)).toBe(true);
+    });
+
+    it('autoConfirmByInterval handles >999 violations without error', () => {
+      const violations: ParsedViolation[] = [];
+      for (let i = 1; i <= 1200; i++) {
+        violations.push(
+          makeViolation({
+            num: i,
+            timeFs: 500000,
+            hier: `tb_top.hier_${i}`,
+          }),
+        );
+      }
+      setupViolations(violations);
+
+      const result = autoConfirmByInterval(db, 'test_case', 200, undefined, undefined);
+      expect(result.confirmedCount).toBe(1200);
+    });
+
+    it('batchUpdateConfirmations handles >999 violations without error', () => {
+      const violations: ParsedViolation[] = [];
+      for (let i = 1; i <= 1200; i++) {
+        violations.push(
+          makeViolation({
+            num: i,
+            hier: `tb_top.hier_${i}`,
+          }),
+        );
+      }
+      setupViolations(violations);
+
+      // 获取所有违例 ID
+      const queryResult = queryViolations(db, { page: 1, pageSize: 2000 });
+      const allIds = queryResult.items.map((v) => v.id);
+
+      const result = batchUpdateConfirmations(db, allIds, 'confirmed', 'Charlie', 'pass', 'All safe');
+      expect(result.updatedCount).toBe(1200);
     });
   });
 });
