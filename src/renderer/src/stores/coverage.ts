@@ -156,6 +156,18 @@ interface CoverageStoreState {
   /** 是否显示 debug 面板 */
   showDebugPanel: boolean;
 
+  // ─── 导入进度（实时推送） ────────────────────────────────
+  /** 当前导入进度百分比 0-100 */
+  importProgress: number;
+  /** 当前导入步骤描述 */
+  importStep: string;
+  /** 导入步骤历史日志 */
+  importStepLog: Array<{ step: string; message: string; timestamp: number; durationMs?: number }>;
+  /** 是否显示导入进度面板 */
+  showImportProgress: boolean;
+  /** coverage:import-progress 监听器是否已注册 */
+  importProgressListenerRegistered: boolean;
+
   // ─── 覆盖率深度分析（urg -grade / imc report -bins / CSV） ──────
   /** 测试用例贡献度排名 */
   testContributions: TestContribution[];
@@ -286,6 +298,14 @@ interface CoverageStoreState {
   /** 清除导入警告 */
   clearImportWarnings: () => void;
 
+  // ─── 导入进度操作 ────────────────────────────────────────────
+  /** 注册 coverage:import-progress IPC 监听器（幂等，全局只需注册一次） */
+  registerImportProgressListener: () => void;
+  /** 处理导入进度事件（内部使用） */
+  handleImportProgress: (event: { step: string; message: string; percent?: number; durationMs?: number }) => void;
+  /** 清除导入进度状态 */
+  clearImportProgress: () => void;
+
   // ─── 覆盖率深度分析动作 ────────────────────────────────────
   /** 加载测试用例贡献度排名 */
   loadTestContributions: (projectId: string, sessionId?: string) => Promise<void>;
@@ -334,6 +354,13 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
   importReportDir: null,
   importLog: null,
   showDebugPanel: false,
+
+  // ─── 导入进度初始状态 ────────────────────────────────────
+  importProgress: 0,
+  importStep: '',
+  importStepLog: [],
+  showImportProgress: false,
+  importProgressListenerRegistered: false,
 
   // ─── 覆盖率深度分析初始状态 ────────────────────────────────
   testContributions: [],
@@ -392,7 +419,15 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
   },
 
   importCoverage: async (projectId, covMergeDir, edaConfig) => {
-    set({ importing: true, importWarnings: [], importReportDir: null });
+    set({
+      importing: true,
+      importWarnings: [],
+      importReportDir: null,
+      importProgress: 0,
+      importStep: '正在开始导入...',
+      importStepLog: [],
+      showImportProgress: true,
+    });
     try {
       const result = await trpc.coverage.import.mutate({
         projectId,
@@ -421,7 +456,7 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
       }
       return result.sessionId;
     } catch (err) {
-      set({ importing: false });
+      set({ importing: false, showImportProgress: false });
       useToastStore.getState().error('覆盖率导入失败', err instanceof Error ? err.message : String(err));
       return null;
     }
@@ -911,6 +946,45 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
   toggleDebugPanel: () => set((s) => ({ showDebugPanel: !s.showDebugPanel })),
 
   clearImportWarnings: () => set({ importWarnings: [], importReportDir: null }),
+
+  // ─── 导入进度实现 ────────────────────────────────────────────
+
+  registerImportProgressListener: () => {
+    if (get().importProgressListenerRegistered) return;
+    if (!window.eventBridge) return;
+    set({ importProgressListenerRegistered: true });
+    window.eventBridge.onCoverageImportProgress((event) => {
+      get().handleImportProgress(event);
+    });
+  },
+
+  handleImportProgress: (event) => {
+    const logEntry = {
+      step: event.step,
+      message: event.message,
+      timestamp: Date.now(),
+      durationMs: event.durationMs,
+    };
+    set((s) => ({
+      importProgress: event.percent ?? s.importProgress,
+      importStep: event.message,
+      showImportProgress: true,
+      importStepLog: [...s.importStepLog, logEntry],
+    }));
+    // 导入完成时自动隐藏进度面板（延迟 3 秒）
+    if (event.step === 'done') {
+      setTimeout(() => {
+        set({ showImportProgress: false });
+      }, 3000);
+    }
+  },
+
+  clearImportProgress: () => set({
+    importProgress: 0,
+    importStep: '',
+    importStepLog: [],
+    showImportProgress: false,
+  }),
 
   // ─── 覆盖率深度分析动作实现 ────────────────────────────────
   loadTestContributions: async (projectId, sessionId) => {
