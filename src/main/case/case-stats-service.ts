@@ -175,6 +175,12 @@ export class CaseStatsService {
     this.simulationManager = mgr;
   }
 
+  /** 清除 discovery 内部缓存（case_cfg 修改后刷新用）。
+   * 传入 subsys 时仅清除该子系统的用例缓存；不传时清除全部缓存。 */
+  clearDiscoveryCache(subsys?: string): void {
+    this.discovery.clearCache?.(subsys);
+  }
+
   // ─── 列表（带实时 status） ─────────────────────────────
 
   /**
@@ -208,6 +214,27 @@ export class CaseStatsService {
       }),
     );
     return withCounts;
+  }
+
+  // ─── Case → Subsys 映射 ─────────────────────────────
+
+  /**
+   * 构建用例名 → 子系统名的映射表。
+   *
+   * 遍历所有子系统下的用例，生成 caseName → subsys 映射。
+   * 用于时序违例分布图：当 vio_summary.log 解析出的 subsys 为空时，
+   * 可用用例名反查子系统。
+   */
+  async getCaseToSubsysMap(): Promise<Map<string, string>> {
+    const subsys = await this.discovery.listSubsys();
+    const map = new Map<string, string>();
+    for (const s of subsys) {
+      const cases = await this.discovery.listCases(s.name);
+      for (const c of cases) {
+        map.set(c.name, s.name);
+      }
+    }
+    return map;
   }
 
   // ─── 聚合统计 ─────────────────────────────────────────
