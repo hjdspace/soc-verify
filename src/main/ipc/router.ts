@@ -23,6 +23,8 @@ import { errorAnalysisRouter } from './routers/error-analysis-router';
 import { searchRouter } from './routers/search-router';
 import { violationRouter } from './routers/violation-router';
 import { confirmationRouter } from './routers/confirmation-router';
+import { patternRouter } from './routers/pattern-router';
+import { scanRouter } from './routers/scan-router';
 import { documentRouter } from './routers/document-router';
 
 export const router = t.router({
@@ -45,6 +47,8 @@ export const router = t.router({
   search: searchRouter,
   violation: violationRouter,
   confirmation: confirmationRouter,
+  pattern: patternRouter,
+  scan: scanRouter,
   document: documentRouter,
 });
 
