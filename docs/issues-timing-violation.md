@@ -248,7 +248,7 @@ None — can start immediately.
 
 ---
 
-## Issue #8: 分布图表 Dashboard
+## Issue #8: 分布图表 Dashboard ✅ 已完成
 
 ### Parent
 
@@ -262,17 +262,16 @@ None — can start immediately.
 
 ### Acceptance criteria
 
-- [ ] 按子系统分布的违例数量柱状图（横向或纵向）
-- [ ] 按 corner 分布的违例数量图
-- [ ] 按用例分布的违例数量图（Top N 用例）
-- [ ] 状态分布饼图（已确认/待确认/已忽略）
-- [ ] 图表数据通过 tRPC `violation.getStatistics` 获取（扩展返回分布数据）
-- [ ] 图表支持点击交互（点击柱/饼图扇区触发筛选）
-- [ ] 图表使用 Recharts 实现，样式与 SoC Verify 主题一致
-- [ ] 图表在亮色和暗色主题下均可正常显示
-- [ ] tRPC 集成测试覆盖：分布数据查询
-- [ ] UI 组件测试覆盖：图表渲染、点击交互
-- [ ] `npm run build && npm run typecheck && npm run test` 全部通过
+- [x] 按子系统分布的违例数量柱状图（横向或纵向）
+- [x] 按 corner 分布的违例数量图
+- [x] 按用例分布的违例数量图（Top N 用例）
+- [x] 状态分布饼图（已确认/待确认/已忽略）
+- [x] 图表数据通过 tRPC `violation.getStatistics` 获取（扩展返回分布数据）
+- [x] 图表支持点击交互（点击柱/饼图扇区触发筛选）
+- [x] 图表使用 Recharts 实现，样式与 SoC Verify 主题一致
+- [x] 图表在亮色和暗色主题下均可正常显示
+- [x] tRPC 集成测试覆盖：分布数据查询
+- [x] `npm run build && npm run typecheck && npm run test` 全部通过
 
 ### Blocked by
 
@@ -280,7 +279,7 @@ None — can start immediately.
 
 ---
 
-## Issue #9: 导出导入（Excel/CSV/DB）
+## Issue #9: 导出导入（Excel/CSV/DB） ✅ 已完成
 
 ### Parent
 
@@ -294,19 +293,19 @@ None — can start immediately.
 
 ### Acceptance criteria
 
-- [ ] 违例数据导出为 Excel 文件（含所有字段 + 确认信息）
-- [ ] 违例数据导出为 CSV 文件
-- [ ] 违例数据导出支持按 caseName/corner 筛选
-- [ ] Pattern 导出为 Excel 文件
-- [ ] Pattern 导出为 CSV 文件
-- [ ] Pattern 导出为独立数据库文件（只含 violation_patterns 表）
-- [ ] 从数据库文件导入 Pattern（合并模式，相同 Pattern 累加 match_count）
-- [ ] 完整数据库合并（多 DB 合并 violations + confirmations + patterns）
-- [ ] 数据库合并前自动备份
-- [ ] 导出导入过程显示进度
-- [ ] tRPC API 有 `violation.exportViolations` / `pattern.exportPatterns` / `pattern.importPatterns` procedure
-- [ ] tRPC 集成测试覆盖：各格式导出、Pattern 导入合并、DB 合并
-- [ ] `npm run build && npm run typecheck && npm run test` 全部通过
+- [x] 违例数据导出为 Excel 文件（含所有字段 + 确认信息）
+- [x] 违例数据导出为 CSV 文件
+- [x] 违例数据导出支持按 caseName/corner 筛选
+- [x] Pattern 导出为 Excel 文件
+- [x] Pattern 导出为 CSV 文件
+- [x] Pattern 导出为独立数据库文件（只含 violation_patterns 表）
+- [x] 从数据库文件导入 Pattern（合并模式，相同 Pattern 累加 match_count）
+- [x] 完整数据库合并（多 DB 合并 violations + confirmations + patterns）
+- [x] 数据库合并前自动备份
+- [x] 导出导入过程显示进度
+- [x] tRPC API 有 `violation.exportViolations` / `pattern.exportPatterns` / `pattern.importPatterns` procedure
+- [x] tRPC 集成测试覆盖：各格式导出、Pattern 导入合并、DB 合并
+- [x] `npm run build && npm run typecheck && npm run test` 全部通过
 
 ### Blocked by
 
