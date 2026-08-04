@@ -120,6 +120,17 @@ export type BatchProcessResult = {
   processedCount: number;
 };
 
+// ── 配置类型 ────────────────────────────────────────────────
+
+export type TvConfig = {
+  dbPath: string;
+  corners: string[];
+  subsysPatterns: string[];
+  defaultResetTimeNs: number;
+  autoBackup: boolean;
+  backupInterval: number;
+};
+
 // ── Store 类型 ─────────────────────────────────────────────
 
 interface TimingViolationState {
@@ -147,6 +158,7 @@ interface TimingViolationState {
   // 解析状态
   parsing: boolean;
   parseResult: ParseResult | null;
+  parseProgress: { processedLines: number; foundViolations: number } | null;
 
   // 加载状态
   loadingViolations: boolean;
@@ -175,14 +187,25 @@ interface TimingViolationState {
   exporting: boolean;
   importing: boolean;
 
+  // 配置状态
+  tvConfig: TvConfig | null;
+  loadingConfig: boolean;
+  savingConfig: boolean;
+
+  // 数据管理状态
+  managingData: boolean;
+
   // ── Actions ─────────────────────────────
   pickAndParse: (projectId: string) => Promise<void>;
   parseFile: (projectId: string, filePath: string, caseName?: string, corner?: string) => Promise<void>;
+  setParseProgress: (progress: { processedLines: number; foundViolations: number } | null) => void;
   loadViolations: (projectId: string) => Promise<void>;
   loadStatistics: (projectId: string) => Promise<void>;
   loadMetadata: (projectId: string) => Promise<void>;
   refreshAll: (projectId: string) => Promise<void>;
   clearAllData: (projectId: string) => Promise<void>;
+  clearCaseData: (projectId: string, caseName: string, corner?: string) => Promise<void>;
+  updateCorner: (projectId: string, caseName: string, newCorner: string, oldCorner?: string) => Promise<void>;
 
   setFilterCaseName: (v: string | null) => void;
   setFilterCorner: (v: string | null) => void;
@@ -223,6 +246,10 @@ interface TimingViolationState {
   exportPatterns: (projectId: string, format: 'excel' | 'csv' | 'db') => Promise<void>;
   importPatterns: (projectId: string) => Promise<void>;
   mergeDatabases: (projectId: string, sourceFilePaths: string[]) => Promise<void>;
+
+  // 配置 Actions
+  loadTvConfig: (projectId: string) => Promise<void>;
+  saveTvConfig: (projectId: string, config: TvConfig) => Promise<void>;
 }
 
 // ── 实现 ──────────────────────────────────────────────────
@@ -247,6 +274,7 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
 
   parsing: false,
   parseResult: null,
+  parseProgress: null,
 
   loadingViolations: false,
   loadingStatistics: false,
@@ -270,23 +298,28 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
   exporting: false,
   importing: false,
 
+  tvConfig: null,
+  loadingConfig: false,
+  savingConfig: false,
+  managingData: false,
+
   pickAndParse: async (projectId) => {
-    set({ parsing: true, parseResult: null });
+    set({ parsing: true, parseResult: null, parseProgress: null });
     try {
       const fileResult = await trpc.violation.pickFile.mutate({ defaultPath: undefined });
       if (fileResult.canceled || !fileResult.filePath) {
-        set({ parsing: false });
+        set({ parsing: false, parseProgress: null });
         return;
       }
       await get().parseFile(projectId, fileResult.filePath);
     } catch (err) {
       getToast().error('选择文件失败', err instanceof Error ? err.message : String(err));
-      set({ parsing: false });
+      set({ parsing: false, parseProgress: null });
     }
   },
 
   parseFile: async (projectId, filePath, caseName, corner) => {
-    set({ parsing: true, parseResult: null });
+    set({ parsing: true, parseResult: null, parseProgress: null });
     try {
       const result = await trpc.violation.parseLog.mutate({
         projectId,
@@ -294,7 +327,7 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
         caseName,
         corner,
       });
-      set({ parseResult: result, parsing: false });
+      set({ parseResult: result, parsing: false, parseProgress: null });
       const detailParts: string[] = [];
       if (result.appliedHistorical && result.appliedHistorical > 0) {
         detailParts.push(`历史确认自动应用 ${result.appliedHistorical} 条`);
@@ -310,9 +343,11 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
       await get().refreshAll(projectId);
     } catch (err) {
       getToast().error('解析日志失败', err instanceof Error ? err.message : String(err));
-      set({ parsing: false });
+      set({ parsing: false, parseProgress: null });
     }
   },
+
+  setParseProgress: (progress) => set({ parseProgress: progress }),
 
   loadViolations: async (projectId) => {
     set({ loadingViolations: true });
@@ -379,6 +414,35 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
       await get().refreshAll(projectId);
     } catch (err) {
       getToast().error('清空数据失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  clearCaseData: async (projectId, caseName, corner) => {
+    set({ managingData: true });
+    try {
+      const result = await trpc.violation.clearCaseData.mutate({ projectId, caseName, corner });
+      const msg = corner
+        ? `已清除 ${caseName} (${corner}) 的 ${result.deleted} 条数据`
+        : `已清除 ${caseName} 的 ${result.deleted} 条数据`;
+      getToast().success(msg);
+      await get().refreshAll(projectId);
+    } catch (err) {
+      getToast().error('清除数据失败', err instanceof Error ? err.message : String(err));
+    } finally {
+      set({ managingData: false });
+    }
+  },
+
+  updateCorner: async (projectId, caseName, newCorner, oldCorner) => {
+    set({ managingData: true });
+    try {
+      const result = await trpc.violation.updateCorner.mutate({ projectId, caseName, newCorner, oldCorner });
+      getToast().success(`已更新 ${result.updated} 条记录的 corner`);
+      await get().refreshAll(projectId);
+    } catch (err) {
+      getToast().error('更新 corner 失败', err instanceof Error ? err.message : String(err));
+    } finally {
+      set({ managingData: false });
     }
   },
 
@@ -665,6 +729,31 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
     } catch (err) {
       set({ importing: false });
       getToast().error('数据库合并失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  // ── 配置 Actions ────────────────────────────────────────────
+
+  loadTvConfig: async (projectId) => {
+    set({ loadingConfig: true });
+    try {
+      const config = await trpc.settings.getTvConfig.query({ projectId });
+      set({ tvConfig: config as TvConfig, loadingConfig: false });
+    } catch (err) {
+      set({ loadingConfig: false });
+      getToast().error('加载配置失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  saveTvConfig: async (projectId, config) => {
+    set({ savingConfig: true });
+    try {
+      await trpc.settings.updateTvConfig.mutate({ projectId, config });
+      set({ tvConfig: config, savingConfig: false });
+      getToast().success('配置已保存');
+    } catch (err) {
+      set({ savingConfig: false });
+      getToast().error('保存配置失败', err instanceof Error ? err.message : String(err));
     }
   },
 }));
