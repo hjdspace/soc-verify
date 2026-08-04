@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { FolderOpen, Loader2, AlertCircle, FileText, Trash2, Zap, CheckSquare, XCircle } from 'lucide-react';
+import { FolderOpen, Loader2, AlertCircle, FileText, Trash2, Zap, CheckSquare, XCircle, History, ListChecks } from 'lucide-react';
 import { useTimingViolationStore } from '@renderer/stores/timing-violation';
 import { useProjectStore } from '@renderer/stores/project';
 import { getToast } from '@renderer/lib/trpc-utils';
@@ -16,6 +16,8 @@ import { TVFilterBar } from './TVFilterBar';
 import { TVViolationTable } from './TVViolationTable';
 import { TVConfirmationDialog } from './TVConfirmationDialog';
 import { TVAutoConfirmDialog } from './TVAutoConfirmDialog';
+import { TVPatternManager } from './TVPatternManager';
+import { TVScanDialog } from './TVScanDialog';
 import { cn } from '@renderer/lib/utils';
 
 export function TVDashboard() {
@@ -34,6 +36,8 @@ export function TVDashboard() {
   const selectedViolationIds = useTimingViolationStore((s) => s.selectedViolationIds);
   const showConfirmDialog = useTimingViolationStore((s) => s.showConfirmDialog);
   const confirmDialogViolation = useTimingViolationStore((s) => s.confirmDialogViolation);
+  const showPatternManager = useTimingViolationStore((s) => s.showPatternManager);
+  const showScanDialog = useTimingViolationStore((s) => s.showScanDialog);
 
   // Filter/sort state
   const filterCaseName = useTimingViolationStore((s) => s.filterCaseName);
@@ -70,6 +74,9 @@ export function TVDashboard() {
   const clearSelection = useTimingViolationStore((s) => s.clearSelection);
   const openConfirmDialog = useTimingViolationStore((s) => s.openConfirmDialog);
   const closeConfirmDialog = useTimingViolationStore((s) => s.closeConfirmDialog);
+  const setShowPatternManager = useTimingViolationStore((s) => s.setShowPatternManager);
+  const applyHistoricalConfirmations = useTimingViolationStore((s) => s.applyHistoricalConfirmations);
+  const setShowScanDialog = useTimingViolationStore((s) => s.setShowScanDialog);
 
   // 本地 UI 状态
   const [showAutoConfirm, setShowAutoConfirm] = useState(false);
@@ -162,6 +169,56 @@ export function TVDashboard() {
         >
           <Zap className="h-3.5 w-3.5" />
           自动确认
+        </button>
+
+        {/* Pattern 管理按钮 */}
+        <button
+          onClick={() => setShowPatternManager(true)}
+          className={cn(
+            'flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium transition-colors',
+            'hover:bg-accent hover:text-foreground',
+          )}
+          title="管理历史确认模式"
+        >
+          <ListChecks className="h-3.5 w-3.5" />
+          Pattern
+        </button>
+
+        {/* 应用历史确认按钮 */}
+        <button
+          onClick={() => {
+            const caseName = filterCaseName ?? '';
+            if (!caseName) {
+              getToast().warning('请先在筛选栏中选择用例后再应用历史确认');
+              return;
+            }
+            void applyHistoricalConfirmations(projectId, caseName, filterCorner ?? undefined);
+          }}
+          disabled={confirming || total === 0}
+          className={cn(
+            'flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium transition-colors',
+            'hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400',
+            (confirming || total === 0) && 'opacity-40 cursor-not-allowed',
+          )}
+          title="一键应用历史确认模式"
+        >
+          <History className="h-3.5 w-3.5" />
+          应用历史确认
+        </button>
+
+        {/* 回归扫描按钮 */}
+        <button
+          onClick={() => setShowScanDialog(true)}
+          disabled={parsing}
+          className={cn(
+            'flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium transition-colors',
+            'hover:bg-accent hover:text-foreground',
+            parsing && 'opacity-40 cursor-not-allowed',
+          )}
+          title="扫描回归目录"
+        >
+          <FolderOpen className="h-3.5 w-3.5" />
+          回归扫描
         </button>
 
         {parseResult && (
@@ -282,20 +339,21 @@ export function TVDashboard() {
         </div>
       )}
 
+      {/* Pattern 管理面板 */}
+      <TVPatternManager open={showPatternManager} onClose={() => setShowPatternManager(false)} />
+
+      {/* 回归扫描对话框 */}
+      <TVScanDialog open={showScanDialog} onClose={() => setShowScanDialog(false)} />
+
       {/* 自动确认对话框 */}
       <TVAutoConfirmDialog
         open={showAutoConfirm}
         confirming={confirming}
         defaultResetTimeNs={1000}
         onSubmit={(opts) => {
-          // 使用 filterCaseName 和 filterCorner 作为默认参数，如果没选则用 'default'
-          const caseName = filterCaseName ?? '';
-          const corner = filterCorner ?? 'default';
-          if (!caseName) {
-            getToast().warning('请先在筛选栏中选择用例后再进行自动确认');
-            return;
-          }
-          void autoConfirmByInterval(projectId, caseName, corner, opts);
+          // 自动确认针对所有用例（或当前筛选的用例），不要求必须选择用例
+          const caseName = filterCaseName ?? undefined;
+          void autoConfirmByInterval(projectId, caseName, opts);
           setShowAutoConfirm(false);
         }}
         onClose={() => setShowAutoConfirm(false)}
