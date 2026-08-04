@@ -104,5 +104,30 @@ process.once('loaded', async () => {
       ipcRenderer.on('violation:parseProgress', handler);
       return () => ipcRenderer.removeListener('violation:parseProgress', handler);
     },
+
+    // ── 覆盖率导入进度 ──────────────────────────────────────
+    // coverage:import-progress —— 主进程推送覆盖率导入各步骤进度到前端
+    onCoverageImportProgress: (
+      callback: (data: {
+        step: string;
+        message: string;
+        percent?: number;
+        durationMs?: number;
+        details?: Record<string, unknown>;
+      }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: {
+          step: string;
+          message: string;
+          percent?: number;
+          durationMs?: number;
+          details?: Record<string, unknown>;
+        },
+      ) => callback(data);
+      ipcRenderer.on('coverage:import-progress', handler);
+      return () => ipcRenderer.removeListener('coverage:import-progress', handler);
+    },
   });
 });
