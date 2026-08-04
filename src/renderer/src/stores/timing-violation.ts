@@ -69,6 +69,56 @@ export type AutoConfirmResult = {
   confirmedCount: number;
 };
 
+// ── Pattern 相关类型 ──────────────────────────────────────
+
+export type ViolationPattern = {
+  id: number;
+  hierPattern: string;
+  checkPattern: string;
+  defaultConfirmer: string | null;
+  defaultResult: string | null;
+  defaultReason: string | null;
+  matchCount: number;
+  lastUsed: string;
+};
+
+export type PatternSuggestion = {
+  pattern: ViolationPattern;
+  matchType: 'exact' | 'fuzzy';
+} | null;
+
+// ── 扫描相关类型 ──────────────────────────────────────────
+
+export type RegressionFileInfo = {
+  filePath: string;
+  subsys: string;
+  cornerName: string;
+  caseName: string;
+  seed: string;
+  relativePath: string;
+  fileSize: number;
+  modifiedTime: string;
+  caseStatus: 'PASS' | 'FAIL';
+};
+
+export type ScanResult = {
+  totalFiles: number;
+  validFiles: RegressionFileInfo[];
+  invalidPaths: string[];
+  scanTime: number;
+  subsysGroups: Record<string, RegressionFileInfo[]>;
+  cornerGroups: Record<string, RegressionFileInfo[]>;
+  caseGroups: Record<string, RegressionFileInfo[]>;
+  statusGroups: Record<string, RegressionFileInfo[]>;
+};
+
+export type BatchProcessResult = {
+  totalInserted: number;
+  totalSkipped: number;
+  totalErrors: string[];
+  processedCount: number;
+};
+
 // ── Store 类型 ─────────────────────────────────────────────
 
 interface TimingViolationState {
@@ -108,6 +158,18 @@ interface TimingViolationState {
   showConfirmDialog: boolean;
   confirmDialogViolation: ViolationWithConfirmation | null;
 
+  // Pattern 状态
+  patterns: ViolationPattern[];
+  loadingPatterns: boolean;
+  showPatternManager: boolean;
+
+  // 扫描状态
+  scanning: boolean;
+  scanResult: ScanResult | null;
+  batchProcessing: boolean;
+  batchProgress: BatchProcessResult | null;
+  showScanDialog: boolean;
+
   // ── Actions ─────────────────────────────
   pickAndParse: (projectId: string) => Promise<void>;
   parseFile: (projectId: string, filePath: string, caseName?: string, corner?: string) => Promise<void>;
@@ -128,8 +190,8 @@ interface TimingViolationState {
   resetFilters: () => void;
 
   // 确认相关 Actions
-  autoConfirmByResetTime: (projectId: string, caseName: string, corner: string, resetTimeNs: number) => Promise<void>;
-  autoConfirmByInterval: (projectId: string, caseName: string, corner: string, opts: { resetTimeNs?: number; intervalStartNs?: number; intervalEndNs?: number }) => Promise<void>;
+  autoConfirmByResetTime: (projectId: string, caseName: string | undefined, resetTimeNs: number) => Promise<void>;
+  autoConfirmByInterval: (projectId: string, caseName: string | undefined, opts: { resetTimeNs?: number; intervalStartNs?: number; intervalEndNs?: number }) => Promise<void>;
   updateConfirmation: (projectId: string, violationId: number, status: ConfirmationStatus, confirmer: string, result: ConfirmResult, reason: string) => Promise<void>;
   batchUpdateConfirmations: (projectId: string, violationIds: number[], status: ConfirmationStatus, confirmer: string, result: ConfirmResult, reason: string) => Promise<void>;
 
@@ -138,6 +200,18 @@ interface TimingViolationState {
   clearSelection: () => void;
   openConfirmDialog: (violation: ViolationWithConfirmation | null) => void;
   closeConfirmDialog: () => void;
+
+  // Pattern 相关 Actions
+  applyHistoricalConfirmations: (projectId: string, caseName: string, corner?: string) => Promise<void>;
+  loadPatterns: (projectId: string) => Promise<void>;
+  clearAllPatterns: (projectId: string) => Promise<void>;
+  setShowPatternManager: (show: boolean) => void;
+
+  // 扫描相关 Actions
+  scanRegression: (projectId: string, regressionRoot: string, useStandardStructure: boolean) => Promise<void>;
+  batchProcess: (projectId: string, filePaths: string[]) => Promise<void>;
+  pickRegressionDir: () => Promise<string | null>;
+  setShowScanDialog: (show: boolean) => void;
 }
 
 // ── 实现 ──────────────────────────────────────────────────
@@ -171,6 +245,16 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
   selectedViolationIds: new Set(),
   showConfirmDialog: false,
   confirmDialogViolation: null,
+
+  patterns: [],
+  loadingPatterns: false,
+  showPatternManager: false,
+
+  scanning: false,
+  scanResult: null,
+  batchProcessing: false,
+  batchProgress: null,
+  showScanDialog: false,
 
   pickAndParse: async (projectId) => {
     set({ parsing: true, parseResult: null });
@@ -305,11 +389,11 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
 
   // ── 确认相关 Actions ────────────────────────────────────
 
-  autoConfirmByResetTime: async (projectId, caseName, corner, resetTimeNs) => {
+  autoConfirmByResetTime: async (projectId, caseName, resetTimeNs) => {
     set({ confirming: true });
     try {
       const result = await trpc.confirmation.autoConfirmByResetTime.mutate({
-        projectId, caseName, corner, resetTimeNs,
+        projectId, caseName, resetTimeNs,
       });
       getToast().success(`自动确认完成：${result.confirmedCount} 条违例已确认`);
       await get().refreshAll(projectId);
@@ -320,11 +404,11 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
     }
   },
 
-  autoConfirmByInterval: async (projectId, caseName, corner, opts) => {
+  autoConfirmByInterval: async (projectId, caseName, opts) => {
     set({ confirming: true });
     try {
       const result = await trpc.confirmation.autoConfirmByInterval.mutate({
-        projectId, caseName, corner,
+        projectId, caseName,
         resetTimeNs: opts.resetTimeNs,
         intervalStartNs: opts.intervalStartNs,
         intervalEndNs: opts.intervalEndNs,
@@ -393,4 +477,87 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
 
   openConfirmDialog: (violation) => set({ showConfirmDialog: true, confirmDialogViolation: violation }),
   closeConfirmDialog: () => set({ showConfirmDialog: false, confirmDialogViolation: null }),
+
+  // ── Pattern 相关 Actions ────────────────────────────────────
+
+  applyHistoricalConfirmations: async (projectId, caseName, corner) => {
+    set({ confirming: true });
+    try {
+      const result = await trpc.confirmation.applyHistoricalConfirmations.mutate({
+        projectId, caseName, corner,
+      });
+      getToast().success(`应用历史确认完成：${result.appliedCount} 条违例已确认`);
+      await get().refreshAll(projectId);
+    } catch (err) {
+      getToast().error('应用历史确认失败', err instanceof Error ? err.message : String(err));
+    } finally {
+      set({ confirming: false });
+    }
+  },
+
+  loadPatterns: async (projectId) => {
+    set({ loadingPatterns: true });
+    try {
+      const result = await trpc.pattern.getPatterns.query({ projectId });
+      set({ patterns: result as ViolationPattern[], loadingPatterns: false });
+    } catch (err) {
+      set({ loadingPatterns: false });
+      getToast().error('加载 Pattern 列表失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  clearAllPatterns: async (projectId) => {
+    try {
+      const result = await trpc.pattern.clearAllPatterns.mutate({ projectId });
+      getToast().success(`已清除 ${result.deleted} 条 Pattern`);
+      await get().loadPatterns(projectId);
+    } catch (err) {
+      getToast().error('清除 Pattern 失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  setShowPatternManager: (show) => set({ showPatternManager: show }),
+
+  // ── 扫描相关 Actions ────────────────────────────────────────
+
+  scanRegression: async (projectId, regressionRoot, useStandardStructure) => {
+    set({ scanning: true, scanResult: null });
+    try {
+      const result = await trpc.scan.scanRegression.mutate({
+        projectId, regressionRoot, useStandardStructure,
+      });
+      set({ scanResult: result as ScanResult, scanning: false });
+      getToast().success(`扫描完成：发现 ${result.totalFiles} 个文件`);
+    } catch (err) {
+      set({ scanning: false });
+      getToast().error('扫描回归目录失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  batchProcess: async (projectId, filePaths) => {
+    set({ batchProcessing: true, batchProgress: null });
+    try {
+      const result = await trpc.scan.batchProcess.mutate({
+        projectId, filePaths,
+      });
+      getToast().success(`批量处理完成：${result.totalInserted} 条新增`);
+      set({ batchProcessing: false, batchProgress: null });
+      await get().refreshAll(projectId);
+    } catch (err) {
+      set({ batchProcessing: false, batchProgress: null });
+      getToast().error('批量处理失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  pickRegressionDir: async () => {
+    try {
+      const result = await trpc.scan.pickDirectory.mutate({});
+      if (result.canceled || !result.path) return null;
+      return result.path;
+    } catch {
+      return null;
+    }
+  },
+
+  setShowScanDialog: (show) => set({ showScanDialog: show }),
 }));
