@@ -7,17 +7,19 @@
  *
  * 命令执行通过 CommandRunner 抽象注入，便于测试 mock。
  *
+ * **性能优化**：默认 runner 使用 `spawn` 替代 `exec`，避免 maxBuffer 限制。
+ * 大数据量（200万+条目）时 EDA 工具 stdout 可能超过 50MB，
+ * `exec` 会在超出 maxBuffer 时杀进程导致导入失败。
+ * `spawn` 流式处理 stdout，无内存缓冲限制。
+ *
  * Debug 日志：每次命令执行的 stdout/stderr/exitCode 都会写入
  * `.socverify/coverage/<sessionId>/reports/eda-commands.log`，便于排查问题。
  */
 
 import { mkdir, writeFile, appendFile, stat } from 'node:fs/promises';
 import { join, resolve, isAbsolute } from 'node:path';
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 import type { EdaToolConfig } from '@shared/types';
-
-const execAsync = promisify(exec);
 
 export interface CommandResult {
   exitCode: number;
@@ -25,27 +27,94 @@ export interface CommandResult {
   stderr: string;
 }
 
+/** 进度回调类型，用于向调用方推送实时进度 */
+export type ProgressCallback = (event: ImportProgressEvent) => void;
+
+/** 导入进度事件 */
+export type ImportProgressEvent = {
+  /** 当前步骤标识 */
+  step: string;
+  /** 人类可读的步骤描述 */
+  message: string;
+  /** 进度百分比 0-100（可选） */
+  percent?: number;
+  /** 当前步骤耗时（毫秒，可选） */
+  durationMs?: number;
+  /** 额外诊断信息 */
+  details?: Record<string, unknown>;
+};
+
 export type CommandRunner = (
   command: string,
   options: { cwd: string },
 ) => Promise<CommandResult>;
 
+/**
+ * 默认命令 runner — 使用 spawn 替代 exec。
+ *
+ * spawn 流式处理 stdout/stderr，不设 maxBuffer 限制，
+ * 适合处理大数据量（200万+条目）的 EDA 报告生成。
+ *
+ * stdout 会截断到 1MB 用于日志展示（实际报告数据由 EDA 工具
+ * 通过 -out 参数直接写入文件，stdout 通常只有状态信息）。
+ */
+const DEFAULT_STDOUT_TRUNCATE = 1 * 1024 * 1024; // 1MB — 日志展示用
+
 const defaultRunner: CommandRunner = async (command, options) => {
-  try {
-    const { stdout, stderr } = await execAsync(command, {
+  return new Promise((resolvePromise) => {
+    // 使用 shell: true 以支持包含管道、引号的复杂命令
+    const child = spawn(command, {
       cwd: options.cwd,
-      maxBuffer: 50 * 1024 * 1024,
+      shell: true,
       env: { ...process.env },
     });
-    return { exitCode: 0, stdout, stderr };
-  } catch (err) {
-    const e = err as { code?: number; stdout?: string; stderr?: string; message?: string };
-    return {
-      exitCode: e.code ?? 1,
-      stdout: e.stdout ?? '',
-      stderr: e.stderr ?? e.message ?? String(err),
-    };
-  }
+
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let stdoutTotalLen = 0;
+    let stderrTotalLen = 0;
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdoutTotalLen += chunk.length;
+      // 只保留前 1MB 用于日志，避免内存爆炸
+      if (stdoutTotalLen <= DEFAULT_STDOUT_TRUNCATE) {
+        stdoutChunks.push(chunk);
+      }
+    });
+
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderrTotalLen += chunk.length;
+      // stderr 通常较小，但也设上限保护
+      if (stderrTotalLen <= DEFAULT_STDOUT_TRUNCATE) {
+        stderrChunks.push(chunk);
+      }
+    });
+
+    child.on('close', (code) => {
+      const stdout = Buffer.concat(stdoutChunks).toString('utf-8');
+      let stderr = Buffer.concat(stderrChunks).toString('utf-8');
+      // 如果 stdout/stderr 被截断，追加提示
+      if (stdoutTotalLen > DEFAULT_STDOUT_TRUNCATE) {
+        stderr += `\n[truncated] stdout exceeded ${DEFAULT_STDOUT_TRUNCATE} bytes (total: ${stdoutTotalLen} bytes). Full output not captured in log.`;
+      }
+      if (stderrTotalLen > DEFAULT_STDOUT_TRUNCATE) {
+        stderr += `\n[truncated] stderr exceeded ${DEFAULT_STDOUT_TRUNCATE} bytes (total: ${stderrTotalLen} bytes).`;
+      }
+      resolvePromise({
+        exitCode: code ?? 1,
+        stdout,
+        stderr,
+      });
+    });
+
+    child.on('error', (err) => {
+      resolvePromise({
+        exitCode: 1,
+        stdout: '',
+        stderr: err.message,
+      });
+    });
+  });
 };
 
 export interface ReportGeneratorOptions {
@@ -98,11 +167,14 @@ export class CoverageReportGenerator {
    *
    * 命令在 covMergeDir 目录下执行（IMC 需要从覆盖率数据库目录启动）。
    * 所有命令的 stdout/stderr 会写入 `eda-commands.log` 文件。
+   *
+   * @param onProgress 可选的进度回调，在每个命令开始/完成时调用
    */
   async generate(
     config: EdaToolConfig,
     covMergeDir: string,
     sessionId: string,
+    onProgress?: ProgressCallback,
   ): Promise<GeneratedReports> {
     const reportDir = join(this.projectRoot, '.socverify', 'coverage', sessionId, 'reports');
     await mkdir(reportDir, { recursive: true });
@@ -126,7 +198,8 @@ export class CoverageReportGenerator {
         `reportDir: ${absReportDir}\n` +
         `projectRoot: ${this.projectRoot}\n` +
         `Timestamp: ${new Date().toISOString()}\n` +
-        `=================================\n\n`,
+        `=================================\n\n` +
+        `[INFO] Using spawn-based runner (no maxBuffer limit)\n\n`,
       'utf-8',
     );
 
@@ -152,6 +225,19 @@ export class CoverageReportGenerator {
     const gradePath = gradeCmd ? join(reportDir, 'grade.txt') : undefined;
     const binsPath = binsCmd ? join(reportDir, 'bins.txt') : undefined;
 
+    // 所有需要执行的命令（名称 → 命令字符串）
+    const commands: Array<{ name: string; cmd: string | null }> = [
+      { name: 'summary', cmd: summaryCmd },
+      { name: 'detail', cmd: detailCmd },
+      { name: 'metrics', cmd: metricsCmd },
+      { name: 'csv', cmd: csvCmd },
+      { name: 'grade', cmd: gradeCmd },
+      { name: 'bins', cmd: binsCmd },
+    ];
+
+    const totalCommands = commands.filter((c) => c.cmd !== null).length;
+    let completedCommands = 0;
+
     // 顺序执行命令（IMC 可能不支持并发访问覆盖率数据库）
     const runAndLog = async (
       name: string,
@@ -172,6 +258,14 @@ export class CoverageReportGenerator {
         return { exitCode: 0, stdout: '', stderr: '' };
       }
 
+      // 推送命令开始事件
+      onProgress?.({
+        step: `eda_${name}`,
+        message: `正在执行 EDA 命令: ${name} (${completedCommands + 1}/${totalCommands})`,
+        percent: totalCommands > 0 ? Math.round((completedCommands / totalCommands) * 100) : undefined,
+        details: { command: cmd, cwd: absCovMergeDir },
+      });
+
       const start = Date.now();
       const result = await this.runner(cmd, { cwd: absCovMergeDir });
       const durationMs = Date.now() - start;
@@ -188,19 +282,27 @@ export class CoverageReportGenerator {
       commandLog.push(entry);
       await appendLog(logPath, entry);
 
+      completedCommands++;
+
+      // 推送命令完成事件
+      onProgress?.({
+        step: `eda_${name}_done`,
+        message: `EDA 命令 ${name} 完成 (exit=${result.exitCode}, ${durationMs}ms)`,
+        percent: totalCommands > 0 ? Math.round((completedCommands / totalCommands) * 100) : undefined,
+        durationMs,
+        details: {
+          exitCode: result.exitCode,
+          stdoutLength: result.stdout.length,
+          stderrLength: result.stderr.length,
+        },
+      });
+
       return result;
     };
 
-    // 顺序执行命令（IMC 可能不支持并发访问覆盖率数据库）
-    await runAndLog('summary', summaryCmd);
-    await runAndLog('detail', detailCmd);
-    await runAndLog('metrics', metricsCmd);
-    // 新增：CSV 格式报告（urg -format csv）
-    await runAndLog('csv', csvCmd);
-    // 新增：测试用例贡献度分析（urg -grade testfile / imc report -test）
-    await runAndLog('grade', gradeCmd);
-    // 新增：Covergroup bin 级覆盖详情（imc report -bins）
-    await runAndLog('bins', binsCmd);
+    for (const { name, cmd } of commands) {
+      await runAndLog(name, cmd);
+    }
 
     // 检查哪些报告文件实际生成了
     const generatedFiles: string[] = [];
@@ -240,10 +342,10 @@ export class CoverageReportGenerator {
     const failedCount = commandLog.filter(
       (e) => e.exitCode !== 0 && e.command !== '(skipped — no command template)',
     ).length;
-    const totalCommands = commandLog.filter(
+    const actualTotalCommands = commandLog.filter(
       (e) => e.command !== '(skipped — no command template)',
     ).length;
-    const allFailed = totalCommands > 0 && failedCount === totalCommands;
+    const allFailed = actualTotalCommands > 0 && failedCount === actualTotalCommands;
 
     if (allFailed) {
       await appendFile(
