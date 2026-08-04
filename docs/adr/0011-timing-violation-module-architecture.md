@@ -93,9 +93,26 @@
 **测试**：
 - `tests/timing-violation/violation-scanner.test.ts` — 23 个扫描器测试（标准模式解析、通用模式解析、PASS/FAIL 检测、分组逻辑、批量处理、Corner 配置读取、子系统识别规则）
 
-### 待实现（Phase 3 剩余）
+### Issue #10 已实现（Phase 3 完成）
 
-- Issue #10：数据管理 + 配置 UI + AI 预留
+**主进程**：
+- `src/main/timing-violation/db/tv-repository.ts` — `updateCorner`（支持唯一键冲突自动去重）、`clearAllData`
+- `src/main/ipc/routers/violation-router.ts` — `clearCaseData` / `clearAllData` / `updateCorner` / `parseLog`（使用 `parseLogStream` + IPC 进度推送）
+- `src/main/ipc/routers/settings-router.ts` — `getTvConfig` / `updateTvConfig`（dbPath 变更时 `evictTvDb`）
+- `src/main/ipc/routers/confirmation-router.ts` — `suggestConfirmation` AI 预留接口骨架
+- `src/main/timing-violation/db/tv-db-cache.ts` — `evictTvDb` DB 连接缓存失效
+
+**渲染进程**：
+- `src/renderer/src/components/settings/SettingsPanel.tsx` — 时序违例配置 Tab（Corner 列表编辑、子系统规则、DB 路径、默认复位时间、自动备份开关）
+- `src/renderer/src/components/timing-violation/TVDashboard.tsx` — 数据管理下拉菜单 + Corner 编辑对话框 + 解析进度指示器
+- `src/renderer/src/stores/timing-violation.ts` — 配置/数据管理/进度状态和 Actions
+- `src/preload/index.ts` — `onViolationParseProgress` IPC 事件监听
+
+**测试**：
+- `tests/timing-violation/tv-config.test.ts` — 12 个配置测试 + AI 接口骨架测试
+- `tests/timing-violation/violation-router.test.ts` — `updateCorner` 测试（含唯一键冲突去重）
+
+### 全部 10 个 Issue 已完成 ✅
 
 ### Issue #8 + #9 已实现
 
