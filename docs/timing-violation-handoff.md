@@ -481,44 +481,45 @@ npm run build && npm run typecheck && npm run test
 **主进程**：
 - [x] `src/main/timing-violation/confirm/confirmation-manager.ts` — 自动+手动确认
 - [x] `src/main/ipc/routers/confirmation-router.ts` — 所有确认 API
-- [ ] `src/main/timing-violation/confirm/pattern-normalizer.ts` — Check 标准化（Issue #6）
-- [ ] `src/main/timing-violation/confirm/pattern-matcher.ts` — 精确+模糊匹配（Issue #6）
-- [ ] `src/main/ipc/routers/pattern-router.ts` — Pattern CRUD API（Issue #6）
+- [x] `src/main/timing-violation/confirm/pattern-normalizer.ts` — Check 标准化（Issue #6）
+- [x] `src/main/timing-violation/confirm/pattern-matcher.ts` — 精确+模糊匹配（Issue #6）
+- [x] `src/main/ipc/routers/pattern-router.ts` — Pattern CRUD API（Issue #6）
 - [x] 在 router.ts 注册 confirmation sub-router
+- [x] 在 router.ts 注册 pattern sub-router
 
 **渲染进程**：
 - [x] `src/renderer/src/components/timing-violation/TVConfirmationDialog.tsx` — 确认对话框
 - [x] `src/renderer/src/components/timing-violation/TVAutoConfirmDialog.tsx` — 自动确认对话框
-- [ ] `src/renderer/src/components/timing-violation/TVPatternManager.tsx` — Pattern 管理（Issue #6）
+- [x] `src/renderer/src/components/timing-violation/TVPatternManager.tsx` — Pattern 管理（Issue #6）
 - [x] 更新 store 添加确认相关状态
 
 **测试**：
 - [x] Confirmation Manager 单测（复位时间、复位区间、历史模式、Pattern 保存）
-- [ ] Pattern Normalizer 单测（精确匹配、模糊匹配、边界情况）（Issue #6）
+- [x] Pattern Normalizer 单测（精确匹配、模糊匹配、边界情况）（Issue #6）
 - [x] confirmation-router 集成测试
-- [ ] pattern-router 集成测试（Issue #6）
+- [x] pattern-router 集成测试（Issue #6）
 
 ### Phase 3 — 高级功能
 
 **主进程**：
-- [ ] `src/main/timing-violation/scanner/violation-scanner.ts` — 回归扫描器
-- [ ] `src/main/timing-violation/scanner/path-parser.ts` — 路径解析
+- [x] `src/main/timing-violation/scanner/violation-scanner.ts` — 回归扫描器
+- [x] `src/main/timing-violation/scanner/path-parser.ts` — 路径解析
 - [ ] `src/main/timing-violation/export/tv-exporter.ts` — Excel/CSV 导出
 - [ ] `src/main/timing-violation/export/tv-db-transfer.ts` — DB 导出导入合并
-- [ ] `src/main/ipc/routers/scan-router.ts` — 扫描 API
+- [x] `src/main/ipc/routers/scan-router.ts` — 扫描 API
 - [ ] 更新 pattern-router 添加导出导入 API
 - [ ] 添加 `exceljs` 依赖
 
 **渲染进程**：
 - [ ] `src/renderer/src/components/timing-violation/TVDistributionCharts.tsx` — Recharts 图表
-- [ ] `src/renderer/src/components/timing-violation/TVScanProgress.tsx` — 扫描进度
+- [x] `src/renderer/src/components/timing-violation/TVScanDialog.tsx` — 扫描对话框
 - [ ] 添加 `recharts` 依赖
 - [ ] 在 TitleBar 或 LeftRail 中添加时序违例入口
 
 **测试**：
-- [ ] 回归扫描器单测
+- [x] 回归扫描器单测
 - [ ] 导出功能单测
-- [ ] scan-router 集成测试
+- [x] scan-router 集成测试
 - [ ] 图表组件测试
 
 ## 6. 依赖添加
