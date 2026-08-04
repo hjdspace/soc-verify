@@ -7,11 +7,11 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { FolderOpen, Loader2, AlertCircle, FileText, Trash2, Zap, CheckSquare, XCircle, History, ListChecks } from 'lucide-react';
+import { FolderOpen, Loader2, AlertCircle, FileText, Trash2, Zap, CheckSquare, XCircle, History, ListChecks, Download, Upload, ChevronDown, ChevronRight, FileSpreadsheet, Database } from 'lucide-react';
 import { useTimingViolationStore } from '@renderer/stores/timing-violation';
 import { useProjectStore } from '@renderer/stores/project';
-import { getToast } from '@renderer/lib/trpc-utils';
 import { TVStatsCards } from './TVStatsCards';
+import { TVDistributionCharts } from './TVDistributionCharts';
 import { TVFilterBar } from './TVFilterBar';
 import { TVViolationTable } from './TVViolationTable';
 import { TVConfirmationDialog } from './TVConfirmationDialog';
@@ -78,8 +78,17 @@ export function TVDashboard() {
   const applyHistoricalConfirmations = useTimingViolationStore((s) => s.applyHistoricalConfirmations);
   const setShowScanDialog = useTimingViolationStore((s) => s.setShowScanDialog);
 
+  // 导出/导入 Actions
+  const exportViolations = useTimingViolationStore((s) => s.exportViolations);
+  const exportPatterns = useTimingViolationStore((s) => s.exportPatterns);
+  const importPatterns = useTimingViolationStore((s) => s.importPatterns);
+  const exporting = useTimingViolationStore((s) => s.exporting);
+  const importing = useTimingViolationStore((s) => s.importing);
+
   // 本地 UI 状态
   const [showAutoConfirm, setShowAutoConfirm] = useState(false);
+  const [showCharts, setShowCharts] = useState(true);
+  const [showExportMenu, setShowExportMenu] = useState(false);
 
   // 搜索防抖
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -184,15 +193,10 @@ export function TVDashboard() {
           Pattern
         </button>
 
-        {/* 应用历史确认按钮 */}
+        {/* 应用历史确认按钮（备选功能：对所有待确认违例应用历史 Pattern） */}
         <button
           onClick={() => {
-            const caseName = filterCaseName ?? '';
-            if (!caseName) {
-              getToast().warning('请先在筛选栏中选择用例后再应用历史确认');
-              return;
-            }
-            void applyHistoricalConfirmations(projectId, caseName, filterCorner ?? undefined);
+            void applyHistoricalConfirmations(projectId);
           }}
           disabled={confirming || total === 0}
           className={cn(
@@ -200,7 +204,7 @@ export function TVDashboard() {
             'hover:bg-blue-500/10 hover:text-blue-600 dark:hover:text-blue-400',
             (confirming || total === 0) && 'opacity-40 cursor-not-allowed',
           )}
-          title="一键应用历史确认模式"
+          title="一键应用历史确认模式（对所有待确认违例）"
         >
           <History className="h-3.5 w-3.5" />
           应用历史确认
@@ -220,6 +224,80 @@ export function TVDashboard() {
           <FolderOpen className="h-3.5 w-3.5" />
           回归扫描
         </button>
+
+        {/* 导出/导入下拉菜单 */}
+        <div className="relative">
+          <button
+            onClick={() => setShowExportMenu((v) => !v)}
+            disabled={exporting || importing || total === 0}
+            className={cn(
+              'flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium transition-colors',
+              'hover:bg-accent hover:text-foreground',
+              (exporting || importing || total === 0) && 'opacity-40 cursor-not-allowed',
+            )}
+            title="导出/导入"
+          >
+            {exporting || importing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Download className="h-3.5 w-3.5" />
+            )}
+            导出/导入
+          </button>
+            {showExportMenu && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowExportMenu(false)} />
+                <div className="absolute right-0 top-full z-20 mt-1 w-48 rounded-md border border-border bg-background shadow-lg">
+                  <div className="px-2 py-1 text-[10px] font-semibold uppercase text-muted-foreground">导出违例数据</div>
+                  <button
+                    onClick={() => { setShowExportMenu(false); void exportViolations(projectId, 'excel', filterCaseName ?? undefined, filterCorner ?? undefined); }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
+                  >
+                    <FileSpreadsheet className="h-3.5 w-3.5" />
+                    Excel (.xlsx)
+                  </button>
+                  <button
+                    onClick={() => { setShowExportMenu(false); void exportViolations(projectId, 'csv', filterCaseName ?? undefined, filterCorner ?? undefined); }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    CSV (.csv)
+                  </button>
+                  <div className="my-1 border-t border-border" />
+                  <div className="px-2 py-1 text-[10px] font-semibold uppercase text-muted-foreground">导出 Pattern</div>
+                  <button
+                    onClick={() => { setShowExportMenu(false); void exportPatterns(projectId, 'excel'); }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
+                  >
+                    <FileSpreadsheet className="h-3.5 w-3.5" />
+                    Pattern Excel
+                  </button>
+                  <button
+                    onClick={() => { setShowExportMenu(false); void exportPatterns(projectId, 'csv'); }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    Pattern CSV
+                  </button>
+                  <button
+                    onClick={() => { setShowExportMenu(false); void exportPatterns(projectId, 'db'); }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
+                  >
+                    <Database className="h-3.5 w-3.5" />
+                    Pattern DB
+                  </button>
+                  <div className="my-1 border-t border-border" />
+                  <button
+                    onClick={() => { setShowExportMenu(false); void importPatterns(projectId); }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    导入 Pattern DB
+                  </button>
+                </div>
+              </>
+            )}
+        </div>
 
         {parseResult && (
           <div className="flex items-center gap-2 text-[11px]">
@@ -296,6 +374,29 @@ export function TVDashboard() {
         <TVStatsCards statistics={statistics} loading={loadingStatistics} />
       </div>
 
+      {/* 分布图表（可折叠） */}
+      {statistics && statistics.total > 0 && (
+        <div className="shrink-0 border-b">
+          <button
+            onClick={() => setShowCharts((v) => !v)}
+            className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent/50"
+          >
+            {showCharts ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            分布图表
+          </button>
+          {showCharts && (
+            <TVDistributionCharts
+              statistics={statistics}
+              loading={loadingStatistics}
+              onSubsysClick={(subsys) => useTimingViolationStore.getState().setFilterSubsys(subsys)}
+              onCornerClick={(corner) => useTimingViolationStore.getState().setFilterCorner(corner)}
+              onCaseClick={(caseName) => useTimingViolationStore.getState().setFilterCaseName(caseName)}
+              onStatusClick={(status) => useTimingViolationStore.getState().setFilterStatus(status)}
+            />
+          )}
+        </div>
+      )}
+
       {/* 筛选栏 */}
       <TVFilterBar
         metadata={metadata}
@@ -350,10 +451,10 @@ export function TVDashboard() {
         open={showAutoConfirm}
         confirming={confirming}
         defaultResetTimeNs={1000}
-        onSubmit={(opts) => {
+        onSubmit={async (opts) => {
           // 自动确认针对所有用例（或当前筛选的用例），不要求必须选择用例
           const caseName = filterCaseName ?? undefined;
-          void autoConfirmByInterval(projectId, caseName, opts);
+          await autoConfirmByInterval(projectId, caseName, opts);
           setShowAutoConfirm(false);
         }}
         onClose={() => setShowAutoConfirm(false)}
