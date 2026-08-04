@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, RefreshCw, Cpu, FileText, LayoutDashboard, ChevronDown, Plus, Folder, Puzzle } from 'lucide-react';
 import { useProjectStore } from '@renderer/stores/project';
+import { useOverviewStore } from '@renderer/stores/overview';
 import { useWorkbenchStore, openFileDestination } from '@renderer/stores/workbench';
-import { trpc } from '@renderer/lib/trpc';
 import { FileTree } from '../project/FileTree';
 import { SubsysList } from '../project/SubsysList';
 import { cn } from '@renderer/lib/utils';
@@ -230,36 +230,40 @@ export function LeftRail({ width }: LeftRailProps) {
 }
 
 // ── 项目概览组件 ───────────────────────────────────────
-// 内联统计行，避免相同卡片网格（hero-metric 模板）
+// 使用 overview store 缓存数据，切换标签页时秒开，case 变更后自动刷新
 
 function ProjectOverview({ projectId }: { projectId: string }) {
-  const [overview, setOverview] = useState<{
-    subsystemCount: number;
-    caseCount: number;
-    passRate: number;
-  } | null>(null);
+  const overview = useOverviewStore((s) => s.dataByProject[projectId]);
+  const loading = useOverviewStore((s) => s.loading);
+  const invalidateCount = useOverviewStore((s) => s.invalidateCount);
+  const loadOverview = useOverviewStore((s) => s.loadOverview);
 
   useEffect(() => {
-    let cancelled = false;
-    trpc.project.getOverview.query({ projectId }).then((data) => {
-      if (!cancelled) setOverview(data);
-    }).catch(() => {
-      if (!cancelled) setOverview({ subsystemCount: 0, caseCount: 0, passRate: 0 });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId]);
+    loadOverview(projectId);
+  }, [projectId, invalidateCount, loadOverview]);
 
   if (!overview) {
-    return <div className="px-2 py-1 text-xs text-muted-foreground">加载中...</div>;
+    return <div className="px-2 py-1 text-xs text-muted-foreground">{loading ? '加载中...' : '暂无数据'}</div>;
   }
 
   return (
     <div className="px-1.5 py-1">
       {/* 标题 */}
-      <div className="mb-1.5 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        项目概览
+      <div className="mb-1.5 flex items-center justify-between px-1">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          项目概览
+        </span>
+        <button
+          onClick={() => loadOverview(projectId, true)}
+          disabled={loading}
+          className={cn(
+            'rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
+            loading && 'opacity-50',
+          )}
+          title="刷新概览"
+        >
+          <RefreshCw className={cn('h-2.5 w-2.5', loading && 'animate-spin')} />
+        </button>
       </div>
 
       {/* 内联统计行：单行展示，数字与单位分明 */}
