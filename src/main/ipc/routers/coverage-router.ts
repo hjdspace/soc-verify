@@ -19,6 +19,7 @@ import { ClosureManager } from '../../coverage/closure-manager';
 import { ClosureOrchestrator, type ClosureEvent } from '../../coverage/closure-orchestrator';
 import { TestPromoter } from '../../coverage/test-promoter';
 import { CoverageReportGenerator } from '../../coverage/coverage-report-generator';
+import type { ImportProgressEvent } from '../../coverage/coverage-report-generator';
 import {
   generateHtmlReport,
   generateJsonExport,
@@ -56,6 +57,17 @@ import {
  * 同一项目同时只允许一个活跃的 Closure 闭环。
  */
 const orchestrators = new Map<string, ClosureOrchestrator>();
+
+/**
+ * 向所有 BrowserWindow 转发覆盖率导入进度事件。
+ */
+function emitCoverageImportProgress(event: ImportProgressEvent): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('coverage:import-progress', event);
+    }
+  }
+}
 
 /**
  * 向所有 BrowserWindow 转发 Closure 事件（单用户桌面应用只有一个主窗口）。
@@ -187,7 +199,10 @@ export const coverageRouter = t.router({
         edaConfig = normalizeConfig({ ...edaConfig, covMergeDir: input.covMergeDir });
       }
       const targets = input.targets ?? { ...DEFAULT_COVERAGE_TARGETS };
-      const result = await mgr.importCoverage(input.covMergeDir, edaConfig, targets);
+      const result = await mgr.importCoverage(
+        input.covMergeDir, edaConfig, targets,
+        emitCoverageImportProgress,
+      );
       return {
         sessionId: result.sessionId,
         summary: (await mgr.getOverview(result.sessionId)).summary,
