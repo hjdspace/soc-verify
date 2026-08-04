@@ -68,7 +68,7 @@ export function TVConfirmationDialog({
     'w-full rounded-md border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={confirming ? undefined : onClose}>
       <div
         className="w-[480px] max-w-[90vw] rounded-lg border border-border bg-background shadow-lg"
         onClick={(e) => e.stopPropagation()}
@@ -76,7 +76,7 @@ export function TVConfirmationDialog({
         {/* Header */}
         <div className="flex items-center justify-between border-b px-4 py-3">
           <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
+          <button type="button" onClick={onClose} disabled={confirming} className="text-muted-foreground hover:text-foreground disabled:opacity-40">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -112,6 +112,7 @@ export function TVConfirmationDialog({
             <label className="mb-1 block text-[11px] font-medium text-muted-foreground">确认结果</label>
             <div className="flex gap-2">
               <button
+                type="button"
                 onClick={() => setResult('pass')}
                 className={cn(
                   'flex-1 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors',
@@ -123,6 +124,7 @@ export function TVConfirmationDialog({
                 Pass
               </button>
               <button
+                type="button"
                 onClick={() => setResult('issue')}
                 className={cn(
                   'flex-1 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors',
@@ -152,6 +154,7 @@ export function TVConfirmationDialog({
         {/* Footer */}
         <div className="flex items-center justify-end gap-2 border-t px-4 py-3">
           <button
+            type="button"
             onClick={() => handleSubmit('ignored')}
             disabled={confirming}
             className={cn(
@@ -163,13 +166,15 @@ export function TVConfirmationDialog({
             标记忽略
           </button>
           <button
+            type="button"
             onClick={onClose}
             disabled={confirming}
-            className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed"
           >
             取消
           </button>
           <button
+            type="button"
             onClick={() => handleSubmit('confirmed')}
             disabled={confirming || !confirmer.trim()}
             className={cn(
