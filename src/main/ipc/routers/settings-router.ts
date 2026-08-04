@@ -19,6 +19,9 @@ import { sessionManager } from '../../agent/session-manager';
 import { listMcpServers, getMcpConfig, setMcpConfig } from '../../mcp/mcp-config';
 import { probeAllServers, probeMcpServer, clearProbeCache } from '../../mcp/mcp-probe';
 import { getCombinedDefaultSystemPrompt } from '../../agent/default-system-prompt';
+import { loadTvConfig, saveTvConfig } from '../../timing-violation/tv-config';
+import { evictTvDb } from '../../timing-violation/db/tv-db-cache';
+import type { TvConfig } from '../../timing-violation/types';
 import type { CredentialInput, CredentialUpdateInput, CreateSkillInput, McpConfigFile, McpToolInfo } from '@shared/types';
 
 export const settingsRouter = t.router({
@@ -393,4 +396,67 @@ export const settingsRouter = t.router({
   getDefaultSystemPrompt: t.procedure.query(() => {
     return getCombinedDefaultSystemPrompt();
   }),
+
+  /**
+   * 获取时序违例配置（Corner 列表、子系统识别规则、DB 路径、默认复位时间、自动备份开关）。
+   * 配置文件路径：<projectRoot>/.socverify/timing-violation/config.json
+   */
+  getTvConfig: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .query(({ input }) => {
+      const project = requireProject(input.projectId);
+      return loadTvConfig(project.rootPath);
+    }),
+
+  /**
+   * 更新时序违例配置，持久化到 config.json。
+   * 如果 dbPath 变更，清除缓存的 DB 连接以便下次使用新路径。
+   */
+  updateTvConfig: t.procedure
+    .input((raw): { projectId: string; config: TvConfig } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      const cfg = r.config as Partial<TvConfig>;
+      if (!cfg || typeof cfg !== 'object') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'config is required' });
+      }
+      if (typeof cfg.dbPath !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'config.dbPath is required' });
+      }
+      if (!Array.isArray(cfg.corners)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'config.corners must be an array' });
+      }
+      if (!Array.isArray(cfg.subsysPatterns)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'config.subsysPatterns must be an array' });
+      }
+      if (typeof cfg.defaultResetTimeNs !== 'number') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'config.defaultResetTimeNs must be a number' });
+      }
+      if (typeof cfg.autoBackup !== 'boolean') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'config.autoBackup must be a boolean' });
+      }
+      if (typeof cfg.backupInterval !== 'number') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'config.backupInterval must be a number' });
+      }
+      return { projectId: r.projectId, config: cfg as TvConfig };
+    })
+    .mutation(({ input }) => {
+      const project = requireProject(input.projectId);
+      // 读取旧配置以检测 dbPath 变更
+      const oldConfig = loadTvConfig(project.rootPath);
+      saveTvConfig(project.rootPath, input.config);
+      // 如果 dbPath 变更，清除缓存的 DB 连接
+      if (oldConfig.dbPath !== input.config.dbPath) {
+        evictTvDb(input.projectId);
+      }
+      return { success: true as const };
+    }),
 });
