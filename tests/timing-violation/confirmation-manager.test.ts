@@ -59,59 +59,73 @@ describe('Confirmation Manager', () => {
     });
 
     it('confirms violations with time_fs <= reset_time_ns * 1000000', () => {
-      const result = autoConfirmByResetTime(db, 'test_case', 'npg_f1_ssg', 1);
+      const result = autoConfirmByResetTime(db, 'test_case', 1);
       expect(result.confirmedCount).toBe(2);
     });
 
     it('marks confirmed violations as "系统自动"', () => {
-      autoConfirmByResetTime(db, 'test_case', 'npg_f1_ssg', 1);
+      autoConfirmByResetTime(db, 'test_case', 1);
       const queryResult = queryViolations(db, { page: 1, pageSize: 10, status: 'confirmed' });
       const autoConfirmed = queryResult.items.filter((v) => v.confirmer === '系统自动');
       expect(autoConfirmed.length).toBe(2);
     });
 
     it('sets reason with time condition', () => {
-      autoConfirmByResetTime(db, 'test_case', 'npg_f1_ssg', 1);
+      autoConfirmByResetTime(db, 'test_case', 1);
       const queryResult = queryViolations(db, { page: 1, pageSize: 10, status: 'confirmed' });
       expect(queryResult.items[0].reason).toContain('复位期间时序违例');
       expect(queryResult.items[0].reason).toContain('<= 1ns');
     });
 
     it('sets result to pass', () => {
-      autoConfirmByResetTime(db, 'test_case', 'npg_f1_ssg', 1);
+      autoConfirmByResetTime(db, 'test_case', 1);
       const queryResult = queryViolations(db, { page: 1, pageSize: 10, status: 'confirmed' });
       expect(queryResult.items.every((v) => v.result === 'pass')).toBe(true);
     });
 
     it('sets isAutoConfirmed to true', () => {
-      autoConfirmByResetTime(db, 'test_case', 'npg_f1_ssg', 1);
+      autoConfirmByResetTime(db, 'test_case', 1);
       const queryResult = queryViolations(db, { page: 1, pageSize: 10, status: 'confirmed' });
       expect(queryResult.items.every((v) => v.isAutoConfirmed)).toBe(true);
     });
 
     it('does not confirm already confirmed violations', () => {
       // First confirm all ≤ 1ns
-      autoConfirmByResetTime(db, 'test_case', 'npg_f1_ssg', 1);
+      autoConfirmByResetTime(db, 'test_case', 1);
       // Run again — should find 0 pending
-      const result = autoConfirmByResetTime(db, 'test_case', 'npg_f1_ssg', 1);
+      const result = autoConfirmByResetTime(db, 'test_case', 1);
       expect(result.confirmedCount).toBe(0);
     });
 
-    it('falls back to default corner when specified corner has no records', () => {
+    it('confirms violations across all corners (no corner filter)', () => {
       setupViolations([
         makeViolation({ num: 10, corner: 'default', timeFs: 500000, hier: 'tb_top.default1' }),
+        makeViolation({ num: 11, corner: 'ffg_cloud', timeFs: 800000, hier: 'tb_top.ffg1' }),
       ]);
-      const result = autoConfirmByResetTime(db, 'test_case', 'nonexistent_corner', 1);
-      expect(result.confirmedCount).toBe(1);
+      // All pending violations with time ≤ 1ns across all corners should be confirmed
+      const result = autoConfirmByResetTime(db, 'test_case', 1);
+      // num 1 (0.5ns, npg_f1_ssg), num 3 (1ns, npg_f1_ssg), num 10 (0.5ns, default), num 11 (0.8ns, ffg_cloud)
+      expect(result.confirmedCount).toBe(4);
+    });
+
+    it('confirms violations for all cases when caseName is undefined', () => {
+      setupViolations([
+        makeViolation({ num: 10, caseName: 'other_case', timeFs: 500000, hier: 'tb_top.other1' }),
+        makeViolation({ num: 11, caseName: 'third_case', timeFs: 800000, hier: 'tb_top.third1' }),
+      ]);
+      // Global auto-confirm: all cases, all corners
+      const result = autoConfirmByResetTime(db, undefined, 1);
+      // num 1 (0.5ns, test_case), num 3 (1ns, test_case), num 10 (0.5ns, other_case), num 11 (0.8ns, third_case)
+      expect(result.confirmedCount).toBe(4);
     });
 
     it('returns 0 when no matching violations found', () => {
-      const result = autoConfirmByResetTime(db, 'nonexistent_case', 'npg_f1_ssg', 1000);
+      const result = autoConfirmByResetTime(db, 'nonexistent_case', 1000);
       expect(result.confirmedCount).toBe(0);
     });
 
     it('returns 0 when reset time is 0 and no violations at time 0', () => {
-      const result = autoConfirmByResetTime(db, 'test_case', 'npg_f1_ssg', 0);
+      const result = autoConfirmByResetTime(db, 'test_case', 0);
       // No violations with time_fs <= 0
       expect(result.confirmedCount).toBe(0);
     });
@@ -130,38 +144,50 @@ describe('Confirmation Manager', () => {
     });
 
     it('confirms violations in interval only', () => {
-      const result = autoConfirmByInterval(db, 'test_case', 'npg_f1_ssg', undefined, 2, 3);
+      const result = autoConfirmByInterval(db, 'test_case', undefined, 2, 3);
       // 2ns and 3ns violations
       expect(result.confirmedCount).toBe(2);
     });
 
     it('confirms violations by reset time only', () => {
-      const result = autoConfirmByInterval(db, 'test_case', 'npg_f1_ssg', 1, undefined, undefined);
+      const result = autoConfirmByInterval(db, 'test_case', 1, undefined, undefined);
       // Only 0.5ns
       expect(result.confirmedCount).toBe(1);
     });
 
     it('confirms with OR relationship (reset time OR interval)', () => {
-      const result = autoConfirmByInterval(db, 'test_case', 'npg_f1_ssg', 1, 4, 5);
+      const result = autoConfirmByInterval(db, 'test_case', 1, 4, 5);
       // ≤1ns (0.5ns) OR 4~5ns (5ns)
       expect(result.confirmedCount).toBe(2);
     });
 
     it('returns 0 when no conditions provided', () => {
-      const result = autoConfirmByInterval(db, 'test_case', 'npg_f1_ssg', undefined, undefined, undefined);
+      const result = autoConfirmByInterval(db, 'test_case', undefined, undefined, undefined);
       expect(result.confirmedCount).toBe(0);
     });
 
-    it('falls back to default corner', () => {
+    it('confirms across all corners (no corner filter)', () => {
       setupViolations([
         makeViolation({ num: 10, corner: 'default', timeFs: 500000, hier: 'tb_top.default1' }),
+        makeViolation({ num: 11, corner: 'ffg_cloud', timeFs: 800000, hier: 'tb_top.ffg1' }),
       ]);
-      const result = autoConfirmByInterval(db, 'test_case', 'nonexistent', 1, undefined, undefined);
-      expect(result.confirmedCount).toBe(1);
+      const result = autoConfirmByInterval(db, 'test_case', 1, undefined, undefined);
+      // All ≤ 1ns: num 1 (0.5ns), num 10 (0.5ns), num 11 (0.8ns)
+      expect(result.confirmedCount).toBe(3);
+    });
+
+    it('confirms for all cases when caseName is undefined', () => {
+      setupViolations([
+        makeViolation({ num: 10, caseName: 'other_case', timeFs: 500000, hier: 'tb_top.other1' }),
+        makeViolation({ num: 11, caseName: 'third_case', timeFs: 800000, hier: 'tb_top.third1' }),
+      ]);
+      const result = autoConfirmByInterval(db, undefined, 1, undefined, undefined);
+      // All ≤ 1ns: num 1 (0.5ns, test_case), num 10 (0.5ns, other_case), num 11 (0.8ns, third_case)
+      expect(result.confirmedCount).toBe(3);
     });
 
     it('includes both conditions in reason', () => {
-      autoConfirmByInterval(db, 'test_case', 'npg_f1_ssg', 1, 2, 3);
+      autoConfirmByInterval(db, 'test_case', 1, 2, 3);
       const queryResult = queryViolations(db, { page: 1, pageSize: 10, status: 'confirmed' });
       const reasons = queryResult.items.map((v) => v.reason);
       // At least one reason should mention both conditions
