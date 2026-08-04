@@ -3,6 +3,7 @@ import { ChevronRight, ChevronDown, Cpu, CircleDot, Play, X, RefreshCw, Settings
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import { useProjectStore } from '@renderer/stores/project';
+import { useOverviewStore } from '@renderer/stores/overview';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useEnvStore } from '@renderer/stores/env';
 import { useToastStore } from '@renderer/stores/toast';
@@ -662,6 +663,8 @@ export function SubsysList() {
       await trpc.project.refreshCases.mutate({ projectId: currentProjectId });
       setCases([]);
       setScanVersion((version) => version + 1);
+      // 联动刷新概览页缓存（case 数量变化后概览数据需要更新）
+      useOverviewStore.getState().invalidate();
       useToastStore.getState().success('用例树已刷新');
     } catch (err) {
       useToastStore.getState().error('刷新失败', err instanceof Error ? err.message : String(err));
@@ -681,6 +684,8 @@ export function SubsysList() {
     setRefreshingSubsys(subsysName);
     try {
       await trpc.project.refreshCases.mutate({ projectId: currentProjectId, subsys: subsysName });
+      // 联动刷新概览页缓存（case 数量变化后概览数据需要更新）
+      useOverviewStore.getState().invalidate();
       // 如果当前展开的就是该子系统，重新加载用例
       if (expandedSubsys === subsysName) {
         setLoadingCases(true);
