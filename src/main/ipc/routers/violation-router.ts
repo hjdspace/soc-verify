@@ -14,7 +14,7 @@
  *   - exportViolations: 导出违例数据为 Excel/CSV
  */
 
-import { dialog } from 'electron';
+import { dialog, BrowserWindow } from 'electron';
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { t, TRPCError } from '../router-context';
@@ -29,8 +29,10 @@ import {
   getDatabaseStats,
   clearCaseData,
   clearAllData,
+  updateCorner,
 } from '../../timing-violation/db/tv-repository';
-import { parseLogFile } from '../../timing-violation/parser/vio-parser';
+import { parseLogStream } from '../../timing-violation/parser/vio-parser';
+import type { ParsedViolation, ParseOptions } from '../../timing-violation/types';
 import { exportViolationsToExcel, exportViolationsToCsv } from '../../timing-violation/export/tv-exporter';
 import { applyHistoricalConfirmations } from '../../timing-violation/confirm/confirmation-manager';
 import { requireProject, ensurePluginsLoaded } from '../../services/project-service';
@@ -231,14 +233,50 @@ export const violationRouter = t.router({
       const db = getTvDb(input.projectId);
       const config = loadTvConfig(input.projectId);
 
-      const result = await parseLogFile(input.filePath, {
+      const parseOptions: ParseOptions = {
         caseName: input.caseName,
         corner: input.corner,
         corners: config.corners,
         subsysPatterns: config.subsysPatterns,
+      };
+
+      // 使用 parseLogStream 直接解析，支持实时进度推送
+      const violations: ParsedViolation[] = [];
+      let violationCount = 0;
+
+      // 向所有窗口推送解析进度
+      const sendProgress = (data: { filePath: string; processedLines: number; foundViolations: number }) => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) {
+            win.webContents.send('violation:parseProgress', data);
+          }
+        }
+      };
+
+      const result = await parseLogStream(
+        input.filePath,
+        parseOptions,
+        (v: ParsedViolation) => {
+          violations.push(v);
+          violationCount++;
+        },
+        (lineCount: number) => {
+          sendProgress({
+            filePath: input.filePath,
+            processedLines: lineCount,
+            foundViolations: violationCount,
+          });
+        },
+      );
+
+      // 解析完成，推送最终进度
+      sendProgress({
+        filePath: input.filePath,
+        processedLines: -1, // -1 表示解析完成
+        foundViolations: violationCount,
       });
 
-      const { inserted, skipped } = insertViolations(db, result.violations);
+      const { inserted, skipped } = insertViolations(db, violations);
       ensureConfirmationRecords(db);
 
       // 自动应用历史确认 Pattern（对新插入的 pending 违例自动匹配已有 Pattern）
@@ -246,7 +284,7 @@ export const violationRouter = t.router({
 
       return {
         success: true,
-        total: result.violations.length,
+        total: violations.length,
         inserted,
         skipped,
         appliedHistorical: appliedCount,
@@ -386,6 +424,33 @@ export const violationRouter = t.router({
     .mutation(async ({ input }) => {
       const db = getTvDb(input.projectId);
       return clearAllData(db);
+    }),
+
+  /**
+   * 批量更新用例的 corner 信息。
+   */
+  updateCorner: t.procedure
+    .input((raw): { projectId: string; caseName: string; newCorner: string; oldCorner?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      if (typeof r.caseName !== 'string' || !r.caseName) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'caseName is required' });
+      }
+      if (typeof r.newCorner !== 'string' || !r.newCorner) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'newCorner is required' });
+      }
+      return {
+        projectId: r.projectId,
+        caseName: r.caseName,
+        newCorner: r.newCorner,
+        oldCorner: typeof r.oldCorner === 'string' && r.oldCorner ? r.oldCorner : undefined,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const db = getTvDb(input.projectId);
+      return updateCorner(db, input.caseName, input.newCorner, input.oldCorner);
     }),
 
   /**
