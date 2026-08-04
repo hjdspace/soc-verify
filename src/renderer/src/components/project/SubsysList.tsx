@@ -400,6 +400,8 @@ export function SubsysList() {
   const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
   const [expandedCases, setExpandedCases] = useState<Set<string>>(new Set());
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshingSubsys, setRefreshingSubsys] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // ── Search state ────────────────────────────────────
@@ -645,6 +647,69 @@ export function SubsysList() {
     await startCaseRuns(currentProjectId, selected);
     setSelectedCases(new Set());
     setBatchMode(false);
+  };
+
+  /**
+   * 刷新全部用例树缓存。
+   *
+   * 当用户修改了 case_cfg（增加/删除/重命名用例）后调用，
+   * 清除 discovery 内部缓存和搜索索引，然后重新加载子系统列表。
+   */
+  const handleRefresh = async () => {
+    if (!currentProjectId || refreshing) return;
+    setRefreshing(true);
+    try {
+      await trpc.project.refreshCases.mutate({ projectId: currentProjectId });
+      setCases([]);
+      setScanVersion((version) => version + 1);
+      useToastStore.getState().success('用例树已刷新');
+    } catch (err) {
+      useToastStore.getState().error('刷新失败', err instanceof Error ? err.message : String(err));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  /**
+   * 刷新单个子系统的用例缓存。
+   *
+   * 仅清除该子系统的 caseCache，然后重新加载该子系统的用例列表。
+   * 比全局刷新快很多，因为不会重新扫描所有子系统。
+   */
+  const handleSubsysRefresh = async (subsysName: string) => {
+    if (!currentProjectId || refreshingSubsys) return;
+    setRefreshingSubsys(subsysName);
+    try {
+      await trpc.project.refreshCases.mutate({ projectId: currentProjectId, subsys: subsysName });
+      // 如果当前展开的就是该子系统，重新加载用例
+      if (expandedSubsys === subsysName) {
+        setLoadingCases(true);
+        try {
+          const data = await trpc.project.getCases.query({
+            projectId: currentProjectId,
+            subsys: subsysName,
+            status: caseStatusFilter === 'all' ? undefined : caseStatusFilter,
+          });
+          setCases(data as CaseData[]);
+          const filePaths = new Set<string>();
+          for (const c of data as CaseData[]) {
+            if (c.filePath) filePaths.add(c.filePath);
+          }
+          if (filePaths.size > 0) {
+            setExpandedFiles(filePaths);
+          }
+        } catch {
+          setCases([]);
+        } finally {
+          setLoadingCases(false);
+        }
+      }
+      useToastStore.getState().success(`子系统 ${subsysName} 已刷新`);
+    } catch (err) {
+      useToastStore.getState().error('刷新失败', err instanceof Error ? err.message : String(err));
+    } finally {
+      setRefreshingSubsys(null);
+    }
   };
 
   const toggleCaseSelection = (path: string) => {
@@ -937,6 +1002,17 @@ export function SubsysList() {
             </>
           )}
           <button
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className={cn(
+              'rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
+              refreshing && 'opacity-50 cursor-not-allowed',
+            )}
+            title="刷新全部用例树"
+          >
+            <RefreshCw className={cn('h-3 w-3', refreshing && 'animate-spin')} />
+          </button>
+          <button
             onClick={() => {
               setBatchMode(!batchMode);
               setSelectedCases(new Set());
@@ -975,23 +1051,39 @@ export function SubsysList() {
       {/* Subsystem list */}
       {subsystems.map((subsys) => (
         <div key={subsys.name}>
-          <button
-            onClick={() => toggleSubsys(subsys.name)}
-            className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-xs transition-colors hover:bg-accent"
-          >
-            {expandedSubsys === subsys.name ? (
-              <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
-            ) : (
-              <ChevronRight className="h-3 w-3 shrink-0 opacity-50" />
-            )}
-            <Cpu className="h-3 w-3 shrink-0 text-primary/70" />
-            <span className="truncate font-medium">{subsys.name}</span>
-            {subsys.caseCount !== undefined && subsys.caseCount > 0 && (
-              <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
-                {subsys.caseCount}
-              </span>
-            )}
-          </button>
+          <div className="flex items-center gap-0.5 rounded px-1 py-0.5 hover:bg-accent">
+            <button
+              onClick={() => toggleSubsys(subsys.name)}
+              className="flex flex-1 items-center gap-1 text-left text-xs transition-colors"
+            >
+              {expandedSubsys === subsys.name ? (
+                <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
+              ) : (
+                <ChevronRight className="h-3 w-3 shrink-0 opacity-50" />
+              )}
+              <Cpu className="h-3 w-3 shrink-0 text-primary/70" />
+              <span className="truncate font-medium">{subsys.name}</span>
+              {subsys.caseCount !== undefined && subsys.caseCount > 0 && (
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {subsys.caseCount}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                void handleSubsysRefresh(subsys.name);
+              }}
+              disabled={refreshingSubsys === subsys.name}
+              className={cn(
+                'shrink-0 rounded p-0.5 text-muted-foreground/60 transition-colors hover:bg-foreground/10 hover:text-foreground',
+                refreshingSubsys === subsys.name && 'opacity-50 cursor-not-allowed',
+              )}
+              title={`刷新 ${subsys.name} 用例`}
+            >
+              <RefreshCw className={cn('h-2.5 w-2.5', refreshingSubsys === subsys.name && 'animate-spin')} />
+            </button>
+          </div>
 
           {/* Cases under subsystem — tree view */}
           {expandedSubsys === subsys.name && (
