@@ -269,12 +269,16 @@ export function getMetadata(db: Database.Database): ViolationMetadata {
 /**
  * 清除指定用例的违例数据（含确认记录）。
  * 如果指定了 corner，只清除该 corner 的数据。
+ *
+ * 使用分批处理（每批 500 条）避免 "too many SQL variables" 错误。
  */
 export function clearCaseData(
   db: Database.Database,
   caseName: string,
   corner?: string,
 ): { deleted: number } {
+  const BATCH_SIZE = 500;
+
   const tx = db.transaction(() => {
     // 先删确认记录
     let violationsQuery: string;
@@ -291,10 +295,14 @@ export function clearCaseData(
     if (ids.length === 0) return 0;
 
     const idList = ids.map((r) => r.id);
-    const placeholders = idList.map(() => '?').join(',');
 
-    db.prepare(`DELETE FROM confirmation_records WHERE violation_id IN (${placeholders})`).run(...idList);
-    db.prepare(`DELETE FROM timing_violations WHERE id IN (${placeholders})`).run(...idList);
+    // 分批删除以避免 SQL 变量超限
+    for (let i = 0; i < idList.length; i += BATCH_SIZE) {
+      const batch = idList.slice(i, i + BATCH_SIZE);
+      const placeholders = batch.map(() => '?').join(',');
+      db.prepare(`DELETE FROM confirmation_records WHERE violation_id IN (${placeholders})`).run(...batch);
+      db.prepare(`DELETE FROM timing_violations WHERE id IN (${placeholders})`).run(...batch);
+    }
 
     return ids.length;
   });
