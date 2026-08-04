@@ -40,6 +40,16 @@ export interface EventBridgeAPI {
   onViolationParseProgress: (
     callback: (data: { filePath: string; processedLines: number; foundViolations: number }) => void,
   ) => () => void;
+  // 覆盖率导入进度
+  onCoverageImportProgress: (
+    callback: (data: {
+      step: string;
+      message: string;
+      percent?: number;
+      durationMs?: number;
+      details?: Record<string, unknown>;
+    }) => void,
+  ) => () => void;
 }
 
 declare global {
