@@ -165,6 +165,26 @@ describe('Case Info Parser', () => {
       expect(info.corner).toBeNull();
       expect(info.seed).toBeNull();
     });
+
+    it('extracts corner from immediate parent of log (no seed directory)', () => {
+      // Path: D:\...\work\page_test_026_test_npg_f7_ssg\log\vio_summary.log
+      // log 的直接父目录 = page_test_026_test_npg_f7_ssg (匹配 corner npg_f7_ssg)
+      // 参考 Python parser.py CaseInfoParser.parse_directory_name
+      const path = 'D:\\doc\\python\\runsim_r3p0\\work\\page_test_026_test_npg_f7_ssg\\log\\vio_summary.log';
+      const info = parseCaseInfoFromPath(path);
+      expect(info.caseName).toBe('page_test_026_test');
+      expect(info.corner).toBe('npg_f7_ssg');
+      expect(info.seed).toBeNull();
+    });
+
+    it('extracts corner from immediate parent with Windows-style path and corner suffix', () => {
+      // Path: D:\...\work\my_test_case_npg_f3_ffg\log\vio_summary.log
+      const path = 'D:\\project\\work\\my_test_case_npg_f3_ffg\\log\\vio_summary.log';
+      const info = parseCaseInfoFromPath(path);
+      expect(info.caseName).toBe('my_test_case');
+      expect(info.corner).toBe('npg_f3_ffg');
+      expect(info.seed).toBeNull();
+    });
   });
 });
 
