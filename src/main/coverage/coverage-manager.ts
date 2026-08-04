@@ -40,7 +40,7 @@ import {
   COVERAGE_METRICS,
 } from '@shared/types';
 import type { PluginBackedCoverage } from '../plugin-adapters';
-import { CoverageReportGenerator, type GeneratedReports } from './coverage-report-generator';
+import { CoverageReportGenerator, type GeneratedReports, type ProgressCallback, type ImportProgressEvent } from './coverage-report-generator';
 
 const SOCVERIFY_DIR = '.socverify';
 const COVERAGE_DIR = 'coverage';
@@ -97,26 +97,48 @@ export class CoverageManager {
 
   /**
    * 导入覆盖率数据：创建 session → 运行 EDA 命令（step 1）→ 插件解析（step 2）→ 缓存。
+   *
+   * **性能优化**：
+   * - EDA 命令使用 spawn 流式执行，无 maxBuffer 限制
+   * - JSON 缓存使用紧凑格式（无缩进），减少序列化和 I/O 开销
+   * - 每个步骤通过 onProgress 回调推送实时进度
+   * - 写入 import-timeline.log 记录各步骤耗时，便于诊断性能瓶颈
+   *
    * @param covMergeDir 用户指定的 cov_merge 目录
    * @param edaConfig EDA Tool Configuration（含命令模板）
    * @param targets 用户自定义目标（可选，缺省用 DEFAULT_COVERAGE_TARGETS）
+   * @param onProgress 可选的进度回调，在每个步骤开始/完成时调用
    * @returns 包含 sessionId、data、reportDir、warnings 的导入结果
    */
   async importCoverage(
     covMergeDir: string,
     edaConfig: EdaToolConfig,
     targets?: Partial<Record<string, number>>,
+    onProgress?: ProgressCallback,
   ): Promise<CoverageImportResult> {
     if (!this.adapter?.hasParser()) {
       throw new Error('No coverage-parser plugin loaded');
     }
+
+    const overallStart = Date.now();
+    const timelineLog: string[] = [];
+    const logStep = (step: string, start: number): void => {
+      const dur = Date.now() - start;
+      timelineLog.push(`[${new Date().toISOString()}] ${step}: ${dur}ms`);
+    };
 
     const warnings: string[] = [];
     const sessionId = this.generateSessionId();
     const sessionDir = join(this.projectRoot, SOCVERIFY_DIR, COVERAGE_DIR, sessionId);
     const reportDir = join(sessionDir, 'reports');
 
-    // 写入 meta.json 供解析器读取 covMergeDir 和 edaTool（在 EDA 命令运行前写入）
+    // Step 0: 初始化 session 目录
+    onProgress?.({
+      step: 'session_init',
+      message: '正在初始化导入会话...',
+      percent: 0,
+    });
+    const step0Start = Date.now();
     await mkdir(reportDir, { recursive: true });
     const metaPath = join(reportDir, 'meta.json');
     await writeFile(
@@ -124,18 +146,35 @@ export class CoverageManager {
       JSON.stringify({ covMergeDir, edaTool: edaConfig.tool, createdAt: Date.now() }, null, 2),
       'utf-8',
     );
+    logStep('session_init', step0Start);
 
     // Step 1: 平台运行 EDA 命令生成文本报告
-    // 容错处理：EDA 工具可能未安装或命令失败，此时报告目录为空，
-    // 解析器会通过 meta.json 中的 covMergeDir 尝试直接扫描覆盖率数据
     let edaAllFailed = false;
     let generatedFiles: string[] = [];
 
     if (this.reportGenerator) {
+      onProgress?.({
+        step: 'eda_commands',
+        message: '正在执行 EDA 命令生成文本报告...',
+        percent: 5,
+      });
+      const step1Start = Date.now();
       try {
-        const reports: GeneratedReports = await this.reportGenerator.generate(edaConfig, covMergeDir, sessionId);
+        const reports: GeneratedReports = await this.reportGenerator.generate(
+          edaConfig, covMergeDir, sessionId,
+          (event) => {
+            // 将 EDA 命令进度映射到 5%-60% 区间
+            const pct = event.percent ?? 0;
+            const mapped = 5 + Math.round((pct / 100) * 55);
+            onProgress?.({
+              ...event,
+              percent: mapped,
+            });
+          },
+        );
         edaAllFailed = reports.allFailed;
         generatedFiles = reports.generatedFiles;
+        logStep('eda_commands', step1Start);
 
         if (edaAllFailed) {
           warnings.push(
@@ -151,13 +190,35 @@ export class CoverageManager {
         const msg = err instanceof Error ? err.message : String(err);
         warnings.push(`EDA 报告生成异常：${msg}。将尝试直接扫描 cov_merge 目录。`);
         edaAllFailed = true;
+        logStep(`eda_commands (ERROR: ${msg})`, step1Start);
       }
     } else {
       warnings.push('未配置 EDA 报告生成器，跳过 EDA 命令执行。');
+      logStep('eda_commands (skipped — no generator)', step0Start);
     }
 
     // Step 2: 插件解析文本报告为层级 Coverage Tree
+    onProgress?.({
+      step: 'parsing',
+      message: '正在解析 EDA 文本报告为覆盖率树...',
+      percent: 65,
+    });
+    const step2Start = Date.now();
     const data = await this.adapter.parse(sessionId, reportDir);
+    logStep('parsing', step2Start);
+
+    // 统计解析结果大小（用于诊断）
+    const nodeCount = this.countNodes(data.root);
+    const dataJsonSize = JSON.stringify(data).length;
+
+    onProgress?.({
+      step: 'parsing_done',
+      message: `解析完成：${nodeCount} 个节点，数据大小 ${(dataJsonSize / 1024 / 1024).toFixed(2)} MB`,
+      percent: 75,
+      durationMs: Date.now() - step2Start,
+      details: { nodeCount, dataJsonSizeMB: Math.round(dataJsonSize / 1024 / 1024 * 100) / 100 },
+    });
+
     const enriched: CoverageData = {
       ...data,
       sessionId,
@@ -188,7 +249,23 @@ export class CoverageManager {
       );
     }
 
+    // Step 3: 缓存 CoverageData 到 JSON 文件
+    onProgress?.({
+      step: 'caching',
+      message: '正在缓存覆盖率数据到磁盘...',
+      percent: 85,
+    });
+    const step3Start = Date.now();
     await this.cache(enriched);
+    logStep('caching', step3Start);
+
+    // Step 4: 写入 session 元数据
+    onProgress?.({
+      step: 'session_metadata',
+      message: '正在写入会话元数据...',
+      percent: 95,
+    });
+    const step4Start = Date.now();
     await this.appendSession({
       sessionId,
       covMergeDir,
@@ -196,8 +273,54 @@ export class CoverageManager {
       createdAt: Date.now(),
       reportDir,
     });
+    logStep('session_metadata', step4Start);
+
+    // 写入时间线日志（用于诊断性能瓶颈）
+    const totalDuration = Date.now() - overallStart;
+    timelineLog.push(`[${new Date().toISOString()}] TOTAL: ${totalDuration}ms`);
+    try {
+      await writeFile(
+        join(reportDir, 'import-timeline.log'),
+        `=== Coverage Import Timeline ===
+` +
+        `Session: ${sessionId}
+` +
+        `EDA Tool: ${edaConfig.tool}
+` +
+        `covMergeDir: ${covMergeDir}
+` +
+        `Total Duration: ${totalDuration}ms
+` +
+        `Node Count: ${nodeCount}
+` +
+        `Data JSON Size: ${(dataJsonSize / 1024 / 1024).toFixed(2)} MB
+` +
+        `=================================\n\n` +
+        timelineLog.join('\n') + '\n',
+        'utf-8',
+      );
+    } catch {
+      // 日志写入失败不影响导入结果
+    }
+
+    onProgress?.({
+      step: 'done',
+      message: `导入完成（耗时 ${totalDuration}ms，${nodeCount} 个节点）`,
+      percent: 100,
+      durationMs: totalDuration,
+      details: { nodeCount, dataJsonSizeMB: Math.round(dataJsonSize / 1024 / 1024 * 100) / 100 },
+    });
 
     return { sessionId, data: enriched, reportDir, warnings, edaAllFailed, generatedFiles };
+  }
+
+  /** 递归统计 Coverage Tree 中的节点总数（用于诊断） */
+  private countNodes(node: CoverageNode): number {
+    let count = 1;
+    for (const child of node.children) {
+      count += this.countNodes(child);
+    }
+    return count;
   }
 
   // ─── Session 生命周期（ADR 0008） ─────────────────────────────
@@ -766,7 +889,9 @@ ${rows}
     const dir = join(this.projectRoot, SOCVERIFY_DIR, COVERAGE_DIR);
     await mkdir(dir, { recursive: true });
     const filePath = join(dir, `${data.sessionId}.json`);
-    await writeFile(filePath, JSON.stringify(data, null, 2), 'utf-8');
+    // 使用紧凑 JSON 格式（无缩进），大幅减少大数据量时的序列化时间和文件大小
+    // 对于 200万+条目的数据，pretty-printing 会增加 ~30% 的序列化开销和文件大小
+    await writeFile(filePath, JSON.stringify(data), 'utf-8');
   }
 
   // ─── Triage / Exclusion 持久化 ──────────────────────────────
