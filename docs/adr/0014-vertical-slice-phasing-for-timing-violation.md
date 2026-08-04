@@ -66,7 +66,7 @@ Issue #4（自动确认：复位时间 + 复位区间）、Issue #5（手动确�
 
 **验证**：`npm run build && npm run typecheck && npm run test` 全部通过。
 
-### Phase 3 — 高级功能 🔨 进行中（Issue #7 已完成）
+### Phase 3 — 高级功能 ✅ 已完成
 
 Issue #7（回归扫描 + 批量处理）已完整实现：
 
@@ -114,6 +114,18 @@ Issue #7（回归扫描 + 批量处理）已完整实现：
 
 **验证**：`npm run build && npm run typecheck && npm run test` 全部通过。
 
-### 待实现（Phase 3 剩余）
+### Issue #10 已实现（Phase 3 完成）
 
-- 数据管理 + 配置 UI + AI 预留（Issue #10）
+**Issue #10 已交付功能**：
+- 清除指定用例的违例数据（含确认记录），支持可选指定 corner
+- 批量更新用例的 corner 信息（支持 oldCorner 筛选，自动处理唯一键冲突）
+- 设置面板中新增"时序违例"配置 Tab（`TimingViolationConfigTab`）
+- 可配置数据库路径、Corner 列表、子系统识别规则、默认复位时间、自动备份开关
+- 配置持久化到 `.socverify/timing-violation/config.json`，dbPath 变更时自动失效 DB 缓存
+- AI 辅助确认预留接口 `confirmation.suggestConfirmation`（返回空结果骨架）
+- tRPC API：`violation.clearCaseData` / `violation.clearAllData` / `violation.updateCorner` / `settings.getTvConfig` / `settings.updateTvConfig` / `confirmation.suggestConfirmation`
+- 解析进度实时反馈：`parseLog` 使用 `parseLogStream` + `onProgress` 回调，通过 IPC 事件 `violation:parseProgress` 推送进度到前端，TVDashboard 显示已处理行数和已发现违例数
+
+**验证**：`npm run build && npm run typecheck && npm run test` 全部通过。
+
+### 全部 10 个 Issue 已完成 ✅
