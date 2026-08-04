@@ -164,21 +164,28 @@ export type CaseStatsServiceOptions = {
 export class CaseStatsService {
   private readonly discovery: SubsysDiscovery;
   private simulationManager: SimulationManager | null;
+  /** 概览缓存（TTL 5s，避免频繁切换概览页时重复全量计算）。 */
+  private overviewCache: { data: ProjectOverview; timestamp: number } | null = null;
+  private static readonly OVERVIEW_CACHE_TTL_MS = 5_000;
 
   constructor(opts: CaseStatsServiceOptions) {
     this.discovery = opts.discovery;
     this.simulationManager = opts.simulationManager ?? null;
   }
 
-  /** 注入仿真管理器（SimulationManager 可能在 service 创建后才被创建）。 */
+  /** 注入仿真管理器（SimulationManager 可能在 service 创建后才被创建）。
+   * 同时清除概览缓存，因为仿真状态变化会影响概览数据。 */
   setSimulationManager(mgr: SimulationManager | null): void {
     this.simulationManager = mgr;
+    this.overviewCache = null;
   }
 
   /** 清除 discovery 内部缓存（case_cfg 修改后刷新用）。
-   * 传入 subsys 时仅清除该子系统的用例缓存；不传时清除全部缓存。 */
+   * 传入 subsys 时仅清除该子系统的用例缓存；不传时清除全部缓存。
+   * 同时清除概览缓存，确保下次 getProjectOverview 返回最新数据。 */
   clearDiscoveryCache(subsys?: string): void {
     this.discovery.clearCache?.(subsys);
+    this.overviewCache = null;
   }
 
   // ─── 列表（带实时 status） ─────────────────────────────
@@ -265,30 +272,102 @@ export class CaseStatsService {
 
   /**
    * 获取项目级用例概览（一次性返回所有子系统的聚合，避免 N+1 工具调用）。
+   *
+   * 优化：
+   * - 5 秒 TTL 缓存，避免频繁切换概览页时重复全量计算
+   * - 并行处理所有子系统（Promise.all），而非串行 for 循环
+   * - 全局状态映射只构建一次（buildGlobalStatusMap），而非每个子系统遍历全部历史
    */
   async getProjectOverview(): Promise<ProjectOverview> {
+    // 检查缓存
+    if (this.overviewCache) {
+      const elapsed = Date.now() - this.overviewCache.timestamp;
+      if (elapsed < CaseStatsService.OVERVIEW_CACHE_TTL_MS) {
+        return this.overviewCache.data;
+      }
+      this.overviewCache = null;
+    }
+
     const subsys = await this.discovery.listSubsys();
     if (subsys.length === 0) {
-      return { subsysCount: 0, totalCases: 0, bySubsys: [] };
+      const empty = { subsysCount: 0, totalCases: 0, bySubsys: [] };
+      this.overviewCache = { data: empty, timestamp: Date.now() };
+      return empty;
     }
 
-    const bySubsys: SubsysOverview[] = [];
-    let totalCases = 0;
+    // 全局状态映射只构建一次（O(N) total），而非每个子系统遍历全部历史（O(N×M)）
+    const globalStatusMap = this.buildGlobalStatusMap();
 
-    for (const s of subsys) {
-      const cases = await this.listCasesWithStatus(s.name);
-      bySubsys.push({
-        name: s.name,
-        caseCount: cases.length,
-        byStatus: tallyStatuses(cases),
-      });
-      totalCases += cases.length;
-    }
+    // 并行处理所有子系统
+    const results = await Promise.all(
+      subsys.map(async (s) => {
+        const cases = await this.discovery.listCases(s.name);
+        const statusMap = globalStatusMap.get(s.name) ?? new Map<string, CaseStatus>();
+        const casesWithStatus = cases.map((c) => ({
+          ...c,
+          status: statusMap.get(c.name) ?? ('pending' as CaseStatus),
+        }));
+        return {
+          name: s.name,
+          caseCount: cases.length,
+          byStatus: tallyStatuses(casesWithStatus),
+        } satisfies SubsysOverview;
+      }),
+    );
 
-    return { subsysCount: subsys.length, totalCases, bySubsys };
+    const totalCases = results.reduce((sum, r) => sum + r.caseCount, 0);
+    const overview: ProjectOverview = {
+      subsysCount: subsys.length,
+      totalCases,
+      bySubsys: results,
+    };
+    this.overviewCache = { data: overview, timestamp: Date.now() };
+    return overview;
   }
 
   // ─── 内部方法 ─────────────────────────────────────────
+
+  /**
+   * 构建全局「subsys → caseName → 最近一次状态」映射（O(N) 一次遍历）。
+   *
+   * 替代 buildLatestStatusMap 的逐子系统遍历方案（O(N×M)）。
+   * 用于 getProjectOverview 并行处理时，每个子系统 O(1) 查找。
+   */
+  private buildGlobalStatusMap(): Map<string, Map<string, CaseStatus>> {
+    const globalMap = new Map<string, Map<string, CaseStatus>>();
+    if (!this.simulationManager) return globalMap;
+
+    // 1. history 取终态（倒序，第一次遇到 = 最新）
+    const history = this.simulationManager.getHistory();
+    for (const entry of history) {
+      if (!TERMINAL_STATUSES.has(entry.status)) continue;
+      let subsysMap = globalMap.get(entry.subsys);
+      if (!subsysMap) {
+        subsysMap = new Map();
+        globalMap.set(entry.subsys, subsysMap);
+      }
+      if (!subsysMap.has(entry.caseName)) {
+        subsysMap.set(entry.caseName, entry.status as CaseStatus);
+      }
+    }
+
+    // 2. activeRuns 取 running 状态（覆盖 history）
+    for (const run of this.simulationManager.getActiveRuns()) {
+      const subsysName = run.options.subsys;
+      const runStatus = run.status.status;
+      if (runStatus !== 'running') continue;
+      const caseName = run.options.caseName ?? run.options.caseId;
+      if (!caseName) continue;
+      let subsysMap = globalMap.get(subsysName);
+      if (!subsysMap) {
+        subsysMap = new Map();
+        globalMap.set(subsysName, subsysMap);
+      }
+      subsysMap.set(caseName, 'running');
+    }
+
+    return globalMap;
+  }
 
   /**
    * 为指定子系统构建「用例名 → 最近一次 run 状态」映射。
