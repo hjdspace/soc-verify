@@ -517,13 +517,34 @@ npm run build && npm run typecheck && npm run test
 - [x] `src/renderer/src/components/timing-violation/TVScanDialog.tsx` — 扫描对话框
 - [x] 添加 `recharts` 依赖
 - [x] 在 TVDashboard 工具栏中集成导出/导入下拉菜单
-- [ ] 在 TitleBar 或 LeftRail 中添加时序违例入口
+- [x] 在 TitleBar 或 LeftRail 中添加时序违例入口
 
 **测试**：
 - [x] 回归扫描器单测
 - [x] 导出功能单测（16 个测试：CSV/Excel/DB 导出、Pattern 导入合并、数据库合并）
 - [x] scan-router 集成测试
-- [ ] 图表组件测试
+- [ ] 图表组件测试（待补充）
+
+### Phase 3 — Issue #10（数据管理 + 配置 + AI 预留）✅ 已完成
+
+**主进程**：
+- [x] `src/main/timing-violation/tv-config.ts` — 配置读写 + `evictTvDb` 缓存失效
+- [x] `src/main/timing-violation/db/tv-repository.ts` — `updateCorner` 函数（支持唯一键冲突处理）
+- [x] `src/main/ipc/routers/violation-router.ts` — `clearCaseData` / `clearAllData` / `updateCorner` API
+- [x] `src/main/ipc/routers/settings-router.ts` — `getTvConfig` / `updateTvConfig` API
+- [x] `src/main/ipc/routers/confirmation-router.ts` — `suggestConfirmation` AI 预留接口
+- [x] `violation-router.ts` `parseLog` 使用 `parseLogStream` + `onProgress`，通过 IPC 推送解析进度
+
+**渲染进程**：
+- [x] `src/renderer/src/stores/timing-violation.ts` — 配置加载/保存、数据清除、Corner 更新 Actions + `parseProgress` 状态
+- [x] `src/renderer/src/components/settings/SettingsPanel.tsx` — 时序违例配置 Tab
+- [x] `src/renderer/src/components/timing-violation/TVDashboard.tsx` — 数据管理下拉菜单 + Corner 编辑对话框 + 解析进度指示器
+- [x] `src/preload/index.ts` — `onViolationParseProgress` 事件监听
+- [x] `src/renderer/src/env.d.ts` — `EventBridgeAPI` 类型声明
+
+**测试**：
+- [x] `tests/timing-violation/tv-config.test.ts` — 配置读写 + AI 接口骨架测试
+- [x] `tests/timing-violation/violation-router.test.ts` — `updateCorner` 测试（含唯一键冲突处理）
 
 ## 6. 依赖添加
 
