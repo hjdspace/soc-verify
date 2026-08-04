@@ -24,6 +24,9 @@ import { findMatchingPattern } from './pattern-matcher';
  * caseName 为空时对所有用例进行确认（全局自动确认）。
  * corner 不参与过滤——自动确认是按时间维度的全局操作。
  *
+ * 使用单条 UPDATE + 子查询避免 "too many SQL variables" 错误
+ * （当匹配的违例数量超过 SQLite 变量上限时会发生）。
+ *
  * @returns 确认的记录数
  */
 export function autoConfirmByResetTime(
@@ -34,18 +37,7 @@ export function autoConfirmByResetTime(
   const resetTimeFs = Math.round(resetTimeNs * 1_000_000);
   const reason = `复位期间时序违例（<= ${resetTimeNs}ns），可以忽略`;
 
-  const ids = findPendingViolationIds(
-    db, caseName,
-    'v.time_fs <= @resetTimeFs',
-    { resetTimeFs },
-  );
-
-  if (ids.length > 0) {
-    applyAutoConfirmation(db, ids, reason);
-    return { confirmedCount: ids.length };
-  }
-
-  return { confirmedCount: 0 };
+  return applyAutoConfirmWithSubquery(db, caseName, reason, 'v.time_fs <= @resetTimeFs', { resetTimeFs });
 }
 
 // ─── 自动确认（复位时间 + 复位区间，OR 关系） ──────────────────
@@ -56,6 +48,8 @@ export function autoConfirmByResetTime(
  * 支持同时使用复位时间和复位区间条件（OR 关系）。
  * caseName 为空时对所有用例进行确认（全局自动确认）。
  * corner 不参与过滤——自动确认是按时间维度的全局操作。
+ *
+ * 使用单条 UPDATE + 子查询避免 "too many SQL variables" 错误。
  *
  * @returns 确认的记录数
  */
@@ -100,18 +94,7 @@ export function autoConfirmByInterval(
   }
   const reason = `${reasonParts.join('，')}，可以忽略`;
 
-  const ids = findPendingViolationIds(
-    db, caseName,
-    timeCondition,
-    params,
-  );
-
-  if (ids.length > 0) {
-    applyAutoConfirmation(db, ids, reason);
-    return { confirmedCount: ids.length };
-  }
-
-  return { confirmedCount: 0 };
+  return applyAutoConfirmWithSubquery(db, caseName, reason, timeCondition, params);
 }
 
 // ─── 手动确认（单条） ─────────────────────────────────────────
@@ -161,6 +144,8 @@ export function updateConfirmation(
  *
  * 将相同的确认人/结果/理由应用到所有选中的违例。
  * 每条违例都会自动保存 Pattern。
+ *
+ * 使用分批处理（每批 500 条）避免 "too many SQL variables" 错误。
  */
 export function batchUpdateConfirmations(
   db: Database.Database,
@@ -172,27 +157,51 @@ export function batchUpdateConfirmations(
 ): { updatedCount: number } {
   if (violationIds.length === 0) return { updatedCount: 0 };
 
+  const BATCH_SIZE = 500;
+
   const tx = db.transaction(() => {
     const now = new Date().toLocaleString('sv-SE');
-    const placeholders = violationIds.map(() => '?').join(',');
+    let totalChanges = 0;
 
-    const updateResult = db.prepare(`
-      UPDATE confirmation_records
-      SET status = ?, confirmer = ?, result = ?, reason = ?,
-          is_auto_confirmed = 0, confirmed_at = ?, updated_at = ?
-      WHERE violation_id IN (${placeholders})
-    `).run(status, confirmer, result, reason, now, now, ...violationIds);
+    // 分批 UPDATE
+    for (let i = 0; i < violationIds.length; i += BATCH_SIZE) {
+      const batch = violationIds.slice(i, i + BATCH_SIZE);
+      const placeholders = batch.map(() => '?').join(',');
 
-    // 为每条违例保存 Pattern
-    const violations = db.prepare(`
-      SELECT hier, check_info FROM timing_violations WHERE id IN (${placeholders})
-    `).all(...violationIds) as { hier: string; check_info: string }[];
+      const updateResult = db.prepare(`
+        UPDATE confirmation_records
+        SET status = ?, confirmer = ?, result = ?, reason = ?,
+            is_auto_confirmed = 0, confirmed_at = ?, updated_at = ?
+        WHERE violation_id IN (${placeholders})
+      `).run(status, confirmer, result, reason, now, now, ...batch);
 
-    for (const v of violations) {
-      savePattern(db, v.hier, v.check_info, confirmer, result, reason);
+      totalChanges += updateResult.changes;
     }
 
-    return updateResult.changes;
+    // 分批查询并保存 Pattern（按 hier+check_info 去重，大幅减少 SQL 操作次数）
+    for (let i = 0; i < violationIds.length; i += BATCH_SIZE) {
+      const batch = violationIds.slice(i, i + BATCH_SIZE);
+      const placeholders = batch.map(() => '?').join(',');
+
+      const violations = db.prepare(`
+        SELECT hier, check_info FROM timing_violations WHERE id IN (${placeholders})
+      `).all(...batch) as { hier: string; check_info: string }[];
+
+      // 按 (hier, check_info) 去重，统计每个 pattern 出现次数
+      const patternCounts = new Map<string, number>();
+      for (const v of violations) {
+        const key = `${v.hier}\0${v.check_info}`;
+        patternCounts.set(key, (patternCounts.get(key) ?? 0) + 1);
+      }
+
+      // 每个 unique pattern 只调用一次 savePattern
+      for (const [key, cnt] of patternCounts) {
+        const [hier, check] = key.split('\0');
+        savePattern(db, hier, check, confirmer, result, reason, cnt);
+      }
+    }
+
+    return totalChanges;
   });
 
   const updatedCount = tx();
@@ -206,6 +215,9 @@ export function batchUpdateConfirmations(
  *
  * 如果 (hier_pattern, check_pattern) 已存在，更新确认信息并累加 match_count。
  * 否则插入新记录。
+ *
+ * @param count match_count 增量（默认 1）。批量确认时同一 pattern 的多条违例
+ *   只需累加一次 count，而非逐条调用。
  */
 export function savePattern(
   db: Database.Database,
@@ -214,6 +226,7 @@ export function savePattern(
   confirmer: string,
   result: string,
   reason: string,
+  count = 1,
 ): void {
   const now = new Date().toLocaleString('sv-SE');
 
@@ -228,35 +241,36 @@ export function savePattern(
       SET default_confirmer = ?, default_result = ?, default_reason = ?,
           match_count = ?, last_used = ?
       WHERE id = ?
-    `).run(confirmer, result, reason, existing.match_count + 1, now, existing.id);
+    `).run(confirmer, result, reason, existing.match_count + count, now, existing.id);
   } else {
     db.prepare(`
       INSERT INTO violation_patterns
       (hier_pattern, check_pattern, default_confirmer, default_result,
        default_reason, match_count, last_used)
-      VALUES (?, ?, ?, ?, ?, 1, ?)
-    `).run(hier, check, confirmer, result, reason, now);
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(hier, check, confirmer, result, reason, count, now);
   }
 }
 
 // ─── 应用历史确认（Pattern 匹配） ─────────────────────────────
 
 /**
- * 对指定用例的待确认违例一键应用历史确认模式。
+ * 对待确认违例一键应用历史确认模式。
  *
  * 逻辑：
  * 1. 检查 Pattern 表是否为空，空则返回 0
- * 2. 获取该用例的所有 pending 违例（corner 无关）
+ * 2. 获取待确认违例（caseName 为空时获取所有用例的 pending 违例）
  * 3. 对每条违例，先尝试精确匹配，再尝试模糊匹配
  * 4. 匹配成功后应用确认结论，并更新 Pattern 的 match_count + last_used
  *
  * Pattern 匹配不依赖 corner（corner 无关）。
+ * caseName 为空时对所有用例的待确认违例进行应用（全局应用）。
  *
  * @returns 应用的确认记录数
  */
 export function applyHistoricalConfirmations(
   db: Database.Database,
-  caseName: string,
+  caseName?: string,
   corner?: string,
 ): { appliedCount: number } {
   // 检查 Pattern 表是否为空
@@ -265,27 +279,25 @@ export function applyHistoricalConfirmations(
     return { appliedCount: 0 };
   }
 
-  // 获取待确认违例
-  let pendingQuery: string;
-  let queryParams: Record<string, unknown>;
+  // 获取待确认违例（caseName 为空时获取所有 pending 违例）
+  const conditions: string[] = ["c.status = 'pending'"];
+  const queryParams: Record<string, unknown> = {};
 
-  if (corner) {
-    pendingQuery = `
-      SELECT v.id, v.hier, v.check_info, v.corner
-      FROM timing_violations v
-      JOIN confirmation_records c ON v.id = c.violation_id
-      WHERE v.case_name = @caseName AND v.corner = @corner AND c.status = 'pending'
-    `;
-    queryParams = { caseName, corner };
-  } else {
-    pendingQuery = `
-      SELECT v.id, v.hier, v.check_info, v.corner
-      FROM timing_violations v
-      JOIN confirmation_records c ON v.id = c.violation_id
-      WHERE v.case_name = @caseName AND c.status = 'pending'
-    `;
-    queryParams = { caseName };
+  if (caseName) {
+    conditions.push('v.case_name = @caseName');
+    queryParams.caseName = caseName;
   }
+  if (corner) {
+    conditions.push('v.corner = @corner');
+    queryParams.corner = corner;
+  }
+
+  const pendingQuery = `
+    SELECT v.id, v.hier, v.check_info, v.corner
+    FROM timing_violations v
+    JOIN confirmation_records c ON v.id = c.violation_id
+    WHERE ${conditions.join(' AND ')}
+  `;
 
   const pendingViolations = db.prepare(pendingQuery).all(queryParams) as {
     id: number; hier: string; check_info: string; corner: string | null;
@@ -352,52 +364,39 @@ export function applyHistoricalConfirmations(
 // ─── 内部辅助 ─────────────────────────────────────────────────
 
 /**
- * 查找待确认违例 ID。
+ * 使用子查询批量应用自动确认（内部使用）。
  *
- * caseName 为空时不过滤用例（全局确认），corner 不参与过滤。
- * 返回匹配的违例 ID 列表（可能为空）。
+ * 通过单条 UPDATE + 子查询直接更新匹配的违例，
+ * 避免 SELECT IDs → UPDATE IN (...) 两步法导致的 "too many SQL variables" 错误。
+ *
+ * 子查询选取满足时间条件且 status='pending' 的违例 ID，
+ * 外层 UPDATE 直接更新这些记录。
+ *
+ * @returns 确认的记录数
  */
-function findPendingViolationIds(
+function applyAutoConfirmWithSubquery(
   db: Database.Database,
   caseName: string | undefined,
+  reason: string,
   timeCondition: string,
   params: Record<string, unknown>,
-): number[] {
+): { confirmedCount: number } {
   const caseFilter = caseName ? 'v.case_name = @caseName AND' : '';
-  const queryParams = caseName ? { ...params, caseName } : params;
+  const queryParams = caseName ? { ...params, caseName, reason, now: new Date().toLocaleString('sv-SE') } : { ...params, reason, now: new Date().toLocaleString('sv-SE') };
 
-  const rows = db.prepare(`
-    SELECT v.id
-    FROM timing_violations v
-    LEFT JOIN confirmation_records c ON v.id = c.violation_id
-    WHERE ${caseFilter} (${timeCondition})
-      AND COALESCE(c.status, 'pending') = 'pending'
-  `).all(queryParams) as { id: number }[];
+  const result = db.prepare(`
+    UPDATE confirmation_records
+    SET status = 'confirmed', result = 'pass', reason = @reason,
+        confirmer = '系统自动', is_auto_confirmed = 1,
+        confirmed_at = @now, updated_at = @now
+    WHERE violation_id IN (
+      SELECT v.id
+      FROM timing_violations v
+      LEFT JOIN confirmation_records c ON v.id = c.violation_id
+      WHERE ${caseFilter} (${timeCondition})
+        AND COALESCE(c.status, 'pending') = 'pending'
+    )
+  `).run(queryParams);
 
-  return rows.map((r) => r.id);
-}
-
-/**
- * 批量应用自动确认（内部使用）。
- * 更新确认记录状态为 confirmed、确认人为"系统自动"、结果为 pass。
- */
-function applyAutoConfirmation(
-  db: Database.Database,
-  violationIds: number[],
-  reason: string,
-): void {
-  const tx = db.transaction(() => {
-    const now = new Date().toLocaleString('sv-SE');
-    const placeholders = violationIds.map(() => '?').join(',');
-
-    db.prepare(`
-      UPDATE confirmation_records
-      SET status = 'confirmed', result = 'pass', reason = ?,
-          confirmer = '系统自动', is_auto_confirmed = 1,
-          confirmed_at = ?, updated_at = ?
-      WHERE violation_id IN (${placeholders})
-    `).run(reason, now, now, ...violationIds);
-  });
-
-  tx();
+  return { confirmedCount: result.changes };
 }
