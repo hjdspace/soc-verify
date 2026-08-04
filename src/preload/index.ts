@@ -91,5 +91,18 @@ process.once('loaded', async () => {
       ipcRenderer.on('officecli:download-progress', handler);
       return () => ipcRenderer.removeListener('officecli:download-progress', handler);
     },
+
+    // ── 时序违例解析进度 ──────────────────────────────────────
+    // violation:parseProgress —— 主进程推送解析进度到前端
+    onViolationParseProgress: (
+      callback: (data: { filePath: string; processedLines: number; foundViolations: number }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: { filePath: string; processedLines: number; foundViolations: number },
+      ) => callback(data);
+      ipcRenderer.on('violation:parseProgress', handler);
+      return () => ipcRenderer.removeListener('violation:parseProgress', handler);
+    },
   });
 });
