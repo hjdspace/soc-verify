@@ -125,9 +125,15 @@ function matchPattern(str: string, pattern: string): boolean {
 /**
  * 从 vio_summary.log 文件路径推断 case_name / corner / seed / subsys。
  *
- * 路径示例：
- *   /regression/dsp_sys/test_case_npg_f1_ssg/test_case_1/log/vio_summary.log
- *   → caseName=test_case, corner=npg_f1_ssg, seed=1, subsys=dsp_sys
+ * 支持两种目录结构：
+ *   1. 无 seed 目录：.../<case_name>_<corner>/log/vio_summary.log
+ *      → caseName=test_case, corner=npg_f1_ssg, seed=null
+ *   2. 标准 seed 结构：.../<case_name>_<corner>/<case_name>_<seed>/log/vio_summary.log
+ *      → caseName=test_case, corner=npg_f1_ssg, seed=1
+ *
+ * 参考 Python parser.py CaseInfoParser.parse_directory_name：
+ *   dir_path = os.path.dirname(os.path.dirname(file_path))  # 上溯 2 级
+ *   case_info = case_parser.parse_directory_name(dir_name)  # 从目录名匹配 corner
  *
  * 如果用户传入显式 caseName / corner，优先使用。
  */
@@ -138,36 +144,47 @@ export function parseCaseInfoFromPath(
   const corners = options?.corners ?? DEFAULT_CORNERS;
   const subsysPatterns = options?.subsysPatterns ?? DEFAULT_SUBSYS_PATTERNS;
 
-  // log 目录的父目录 → <case_name>_<seed>
-  const logDir = dirname(filePath);       // .../<case>_<corner>/<case>_<seed>/log
-  const seedDir = dirname(logDir);          // .../<case>_<corner>/<case>_<seed>
-  const seedDirName = basename(seedDir);
+  // log 目录 → log 的直接父目录（可能直接是 corner 目录，也可能是 seed 目录）
+  const logDir = dirname(filePath);         // .../<case>_<corner>/log  OR  .../<case>_<corner>/<case>_<seed>/log
+  const parentDir = dirname(logDir);          // .../<case>_<corner>      OR  .../<case>_<corner>/<case>_<seed>
+  const parentDirName = basename(parentDir);
 
-  // 再上一级 → <case_name>_<corner>
-  const cornerDir = dirname(seedDir);       // .../<case>_<corner>
-  const cornerDirName = basename(cornerDir);
+  // 首先尝试从 log 的直接父目录匹配 corner（兼容无 seed 目录的结构）
+  // 参考 Python parser.py: dir_path = os.path.dirname(os.path.dirname(file_path))
+  const cornerFromParent = parseCornerFromDirName(parentDirName, corners);
 
-  // 提取 seed
-  const seedInfo = parseSeedFromDirName(seedDirName);
+  let caseName: string;
+  let corner: string | null;
+  let seed: string | null;
 
-  // 提取 corner（从 corner 目录名）
-  const cornerInfo = parseCornerFromDirName(cornerDirName, corners);
+  if (cornerFromParent.corner !== null) {
+    // log 的直接父目录匹配到了 corner（无 seed 目录）
+    // 路径结构: .../<case>_<corner>/log/vio_summary.log
+    caseName = cornerFromParent.caseName;
+    corner = cornerFromParent.corner;
+    seed = null;
+  } else {
+    // log 的直接父目录未匹配到 corner，可能是 seed 目录
+    // 标准结构: .../<case>_<corner>/<case>_<seed>/log/vio_summary.log
+    const cornerDir = dirname(parentDir);     // .../<case>_<corner>
+    const cornerDirName = basename(cornerDir);
+    const cornerFromGrandparent = parseCornerFromDirName(cornerDirName, corners);
+    const seedInfo = parseSeedFromDirName(parentDirName);
 
-  // 确定 caseName：用户显式传入 > 从 corner 目录推断（仅当 corner 匹配成功时）> 从 seed 目录推断
-  // 当 corner 未匹配时，cornerInfo.caseName 是完整的目录名（无意义），不应使用
-  const caseName = options?.caseName
-    ?? (cornerInfo.corner !== null ? cornerInfo.caseName : null)
-    ?? seedInfo.caseName;
+    caseName = cornerFromGrandparent.corner !== null
+      ? cornerFromGrandparent.caseName
+      : seedInfo.caseName;
+    corner = cornerFromGrandparent.corner;
+    seed = seedInfo.seed;
+  }
 
-  // 确定 corner：用户显式传入 > 从 corner 目录推断
-  const corner = options?.corner ?? cornerInfo.corner;
-
-  // 确定 seed：从 seed 目录推断
-  const seed = seedInfo.seed;
+  // 用户显式传入的值优先
+  if (options?.caseName) caseName = options.caseName;
+  if (options?.corner) corner = options.corner;
 
   // 检测子系统（从路径中向上查找匹配 subsysPattern 的目录名）
   let subsys: string | null = null;
-  let currentDir = cornerDir;
+  let currentDir = parentDir;
   for (let i = 0; i < 20; i++) {
     const dirName = basename(currentDir);
     if (isSubsysDirName(dirName, subsysPatterns)) {
