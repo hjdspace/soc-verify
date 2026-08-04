@@ -59,11 +59,41 @@
 - `tests/timing-violation/violation-router.test.ts` — 新增 Pattern 管理测试（getPatterns / clearAllPatterns）
 - `tests/ui/tv-dashboard.test.tsx` — 新增确认对话框和批量操作 UI 测试
 
-### 待实现（Phase 2 剩余 + Phase 3）
+### Issue #6（Phase 2 完成）已实现
 
-- `confirm/pattern-normalizer.ts` — Check 信息标准化（Issue #6）
-- `confirm/pattern-matcher.ts` — 精确 + 模糊匹配（Issue #6）
-- `pattern-router.ts` — Pattern CRUD + 导出导入 API（Issue #6, #9）
-- `scanner/` — 回归目录扫描器（Issue #7）
+**主进程**：
+- `src/main/timing-violation/confirm/pattern-normalizer.ts` — Check 信息标准化（`normalizeCheckInfo`），完全复刻 Python `_normalize_check_info` 逻辑
+- `src/main/timing-violation/confirm/pattern-matcher.ts` — 精确匹配（hier + check_info 完全相同）+ 模糊匹配（标准化后比较），Corner 无关
+- `src/main/timing-violation/confirm/confirmation-manager.ts` — 新增 `applyHistoricalConfirmations`（一键应用历史确认，精确优先模糊其次）
+- `src/main/ipc/routers/pattern-router.ts` — tRPC API（getPatterns / getPatternSuggestion / savePattern / clearAllPatterns）
+- `src/main/ipc/routers/confirmation-router.ts` — 新增 `applyHistoricalConfirmations` procedure
+- 在 `src/main/ipc/router.ts` 注册 `pattern` 子 router
+
+**渲染进程**：
+- `src/renderer/src/components/timing-violation/TVPatternManager.tsx` — Pattern 管理面板（列表展示 + 搜索 + 清除）
+- `src/renderer/src/stores/timing-violation.ts` — 新增 Pattern 管理状态和 action（patterns / loadingPatterns / loadPatterns / clearAllPatterns / applyHistoricalConfirmations）
+- `src/renderer/src/components/timing-violation/TVDashboard.tsx` — 集成"应用历史确认"按钮和"Pattern 管理"入口
+
+**测试**：
+- `tests/timing-violation/pattern-normalizer.test.ts` — 14 个标准化单测（标准格式、hold、前缀匹配、第三部分忽略、模糊匹配、无括号、少逗号、空串、无冒号、混合、多逗号、嵌套括号、Python 参考示例）
+- `tests/timing-violation/pattern-matcher.test.ts` — 18 个匹配测试（精确匹配、模糊匹配、优先级、无匹配、前缀差异、hier 差异、corner 无关、建议、历史确认应用、fuzzy 应用、无 Pattern、无匹配违例、不重复确认、match_count 递增、last_used 更新、全 corner 应用、指定 corner 应用）
+
+### Issue #7（Phase 3 部分）已实现
+
+**主进程**：
+- `src/main/timing-violation/scanner/path-parser.ts` — 路径解析器（`parseStandardStructure` / `parseFlexibleStructure`），提取 subsys/corner/case/seed
+- `src/main/timing-violation/scanner/violation-scanner.ts` — 回归目录扫描器（`scanRegressionDirectory` 递归扫描 + 分组）+ 批量处理（`batchProcessFiles` 逐个解析导入 + 进度回调）
+- `src/main/ipc/routers/scan-router.ts` — tRPC API（scanRegression / batchProcess / pickDirectory）
+- 在 `src/main/ipc/router.ts` 注册 `scan` 子 router
+
+**渲染进程**：
+- `src/renderer/src/components/timing-violation/TVScanDialog.tsx` — 回归扫描对话框（目录选择 + 模式切换 + 分组列表 + 勾选 + 批量处理 + 进度展示）
+- `src/renderer/src/stores/timing-violation.ts` — 新增扫描相关状态和 action（scanResult / scanning / batchProcessing / batchProgress / scanRegression / batchProcess）
+
+**测试**：
+- `tests/timing-violation/violation-scanner.test.ts` — 23 个扫描器测试（标准模式解析、通用模式解析、PASS/FAIL 检测、分组逻辑、批量处理、Corner 配置读取、子系统识别规则）
+
+### 待实现（Phase 3 剩余）
+
 - `export/` — 导出导入（Issue #9）
-- `scan-router.ts` — 回归扫描 API（Issue #7）
+- `pattern-router.ts` 扩展导出导入 API（Issue #9）
