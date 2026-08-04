@@ -360,6 +360,66 @@ export function getDatabaseStats(db: Database.Database): {
   };
 }
 
+// ─── 批量更新 Corner ──────────────────────────────────────────
+
+/**
+ * 批量更新指定用例的 corner 信息。
+ *
+ * @param caseName 用例名
+ * @param oldCorner 旧 corner（可选，不指定则更新该用例所有记录）
+ * @param newCorner 新 corner
+ * @returns 更新的记录数
+ */
+export function updateCorner(
+  db: Database.Database,
+  caseName: string,
+  newCorner: string,
+  oldCorner?: string,
+): { updated: number } {
+  const tx = db.transaction(() => {
+    const sourceCondition = oldCorner
+      ? 'case_name = @caseName AND corner = @oldCorner'
+      : 'case_name = @caseName AND corner != @newCorner';
+    const params = oldCorner
+      ? { caseName, oldCorner, newCorner }
+      : { caseName, newCorner };
+
+    // Step 1: 删除目标 corner 中已存在、且与待更新记录唯一键相同的记录
+    // 避免 UPDATE 后 UNIQUE 约束冲突
+    db.prepare(`
+      DELETE FROM timing_violations
+      WHERE case_name = @caseName AND corner = @newCorner
+      AND (seed, hier, check_info, time_fs) IN (
+        SELECT seed, hier, check_info, time_fs
+        FROM timing_violations
+        WHERE ${sourceCondition}
+      )
+    `).run(params);
+
+    // Step 2: 在待更新记录中删除重复项（按唯一键分组，仅保留 rowid 最小的）
+    // 避免更新后多条记录变为同一唯一键
+    db.prepare(`
+      DELETE FROM timing_violations
+      WHERE ${sourceCondition}
+      AND rowid NOT IN (
+        SELECT MIN(rowid) FROM timing_violations
+        WHERE ${sourceCondition}
+        GROUP BY seed, hier, check_info, time_fs
+      )
+    `).run(params);
+
+    // Step 3: 更新剩余的源记录到新 corner
+    const result = db.prepare(`
+      UPDATE timing_violations SET corner = @newCorner
+      WHERE ${sourceCondition}
+    `).run(params);
+
+    return result.changes;
+  });
+  const updated = tx();
+  return { updated };
+}
+
 // ─── Pattern 管理 ─────────────────────────────────────────────
 
 /**
