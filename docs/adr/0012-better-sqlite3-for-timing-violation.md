@@ -49,3 +49,18 @@ Considered options:
 - `batchProcessFiles` 使用 `transaction()` + `INSERT OR IGNORE` 逐文件批量插入违例数据
 - 每个文件处理后调用 `ensureConfirmationRecords` 确保确认记录同步
 - 进度回调通过 `onProgress(current, total, inserted)` 传递实时进度
+
+### Issue #8 + #9 已实现
+
+**分布图表（Issue #8）**：
+- `getStatistics` 已返回 `bySubsys` / `byCorner` / `byCase` 分布数据（Issue #3 时已实现）
+- 前端 Recharts 图表组件直接消费分布数据，无需后端改动
+
+**导出导入（Issue #9）**：
+- `tv-exporter.ts` 中 `exportViolationsToExcel` / `exportViolationsToCsv` 使用 `queryViolationsForExport` 查询全部违例（含确认信息），不使用分页
+- `exportPatternsToExcel` / `exportPatternsToCsv` 导出 Pattern 表全部记录
+- `tv-db-transfer.ts` 中 `exportPatternsToDatabase` 创建只含 `violation_patterns` 表的独立 SQLite 文件
+- `importPatternsFromDatabase` 使用 `transaction()` 保证原子性：相同 Pattern 累加 `match_count`，新 Pattern 直接 INSERT
+- `mergeDatabases` 合并多个完整 DB：violations 用 `INSERT OR IGNORE` 去重，确认记录只覆盖 `pending` 状态的，Pattern 合并同 `importPatternsFromDatabase` 逻辑
+- 数据库合并前自动备份（`copyFileSync` 复制目标 DB 到 `.backup-{timestamp}` 文件）
+- Excel 导出使用 `exceljs` 动态 `import()` 避免影响启动性能
