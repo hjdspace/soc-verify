@@ -33,3 +33,19 @@ Considered options:
   - `savePattern` — Pattern 存在时累加 `match_count`（SELECT + UPDATE），不存在时 INSERT
 - Corner 回退逻辑：指定 corner 未找到记录时回退到 `default` corner（`cornersToTry = [corner, 'default']`）
 - OR 条件查询：复位时间和复位区间条件用 SQL `OR` 连接，一次查询完成
+
+### Issue #6 + #7 已实现
+
+**Pattern 匹配（Issue #6）**：
+- `pattern-matcher.ts` 中 `findMatchingPattern` 使用两步查询：
+  1. 精确匹配：`SELECT ... WHERE hier_pattern = ? AND check_pattern = ?`（`ORDER BY last_used DESC LIMIT 1`）
+  2. 模糊匹配：`SELECT ... WHERE hier_pattern = ?`（获取所有相同 hier 的 Pattern，在 JS 中标准化比较）
+- `applyHistoricalConfirmations` 使用 `transaction()` 保证原子性：
+  - 查询 pending 违例 → 逐条匹配 Pattern → `UPDATE confirmation_records` + `UPDATE violation_patterns`（match_count + 1, last_used = now）
+  - Corner 无关匹配：不使用 corner 作为查询条件
+  - 支持可选 corner 过滤参数（仅应用于指定 corner 的违例）
+
+**回归扫描与批量处理（Issue #7）**：
+- `batchProcessFiles` 使用 `transaction()` + `INSERT OR IGNORE` 逐文件批量插入违例数据
+- 每个文件处理后调用 `ensureConfirmationRecords` 确保确认记录同步
+- 进度回调通过 `onProgress(current, total, inserted)` 传递实时进度
