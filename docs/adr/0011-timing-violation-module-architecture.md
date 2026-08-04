@@ -95,5 +95,20 @@
 
 ### 待实现（Phase 3 剩余）
 
-- `export/` — 导出导入（Issue #9）
-- `pattern-router.ts` 扩展导出导入 API（Issue #9）
+- Issue #10：数据管理 + 配置 UI + AI 预留
+
+### Issue #8 + #9 已实现
+
+**主进程**：
+- `src/main/timing-violation/export/tv-exporter.ts` — Excel/CSV 导出（违例数据 + Pattern）
+- `src/main/timing-violation/export/tv-db-transfer.ts` — Pattern DB 导出导入 + 完整数据库合并
+- `src/main/ipc/routers/violation-router.ts` — 新增 `exportViolations` procedure
+- `src/main/ipc/routers/pattern-router.ts` — 新增 `exportPatterns` / `importPatterns` / `mergeDatabases` procedure
+
+**渲染进程**：
+- `src/renderer/src/components/timing-violation/TVDistributionCharts.tsx` — Recharts 分布图表（子系统柱状图 + Corner 柱状图 + 用例 Top10 + 状态饼图，可折叠，点击交互触发筛选）
+- `src/renderer/src/components/timing-violation/TVDashboard.tsx` — 集成分布图表区域 + 导出/导入下拉菜单
+- `src/renderer/src/stores/timing-violation.ts` — 新增导出/导入状态和 action（exporting / importing / exportViolations / exportPatterns / importPatterns / mergeDatabases）
+
+**测试**：
+- `tests/timing-violation/tv-exporter.test.ts` — 16 个导出导入测试（CSV 导出、Pattern CSV 导出、Pattern DB 导出、Pattern 导入合并、数据库合并、备份）
