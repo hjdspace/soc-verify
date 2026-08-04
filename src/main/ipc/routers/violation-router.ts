@@ -27,6 +27,7 @@ import {
   clearCaseData,
   clearAllData,
 } from '../../timing-violation/db/tv-repository';
+import { parseLogFile } from '../../timing-violation/parser/vio-parser';
 import type {
   QueryViolationsInput,
   ConfirmationStatus,
@@ -86,7 +87,6 @@ export const violationRouter = t.router({
       const db = getTvDb(input.projectId);
       const config = loadTvConfig(input.projectId);
 
-      const { parseLogFile } = await import('../../timing-violation/parser/vio-parser');
       const result = await parseLogFile(input.filePath, {
         caseName: input.caseName,
         corner: input.corner,
