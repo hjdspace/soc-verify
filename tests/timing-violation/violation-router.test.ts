@@ -13,6 +13,7 @@ import {
   clearCaseData,
   getPatterns,
   clearAllPatterns,
+  updateCorner,
 } from '../../src/main/timing-violation/db/tv-repository';
 import type { ParsedViolation } from '../../src/main/timing-violation/types';
 
@@ -351,6 +352,54 @@ describe('Timing Violation Database', () => {
 
       const patterns = getPatterns(db);
       expect(patterns).toHaveLength(0);
+    });
+  });
+
+  // ─── updateCorner 测试 ──────────────────────────────────────
+
+  describe('updateCorner', () => {
+    beforeEach(() => {
+      insertViolations(db, [
+        makeViolation({ num: 1, caseName: 'case1', corner: 'c1', hier: 'tb_top.a' }),
+        makeViolation({ num: 2, caseName: 'case1', corner: 'c2', hier: 'tb_top.b' }),
+        makeViolation({ num: 3, caseName: 'case2', corner: 'c1', hier: 'tb_top.c' }),
+      ]);
+      ensureConfirmationRecords(db);
+    });
+
+    it('updates corner for all violations of a case', () => {
+      const result = updateCorner(db, 'case1', 'new_corner');
+      expect(result.updated).toBe(2);
+      const meta = getMetadata(db);
+      expect(meta.corners).toContain('new_corner');
+      expect(meta.corners).toContain('c1'); // case2 still has c1
+      expect(meta.corners).not.toContain('c2'); // only case1 had c2
+    });
+
+    it('updates corner for specific old corner only', () => {
+      const result = updateCorner(db, 'case1', 'new_corner', 'c1');
+      expect(result.updated).toBe(1);
+      const meta = getMetadata(db);
+      expect(meta.corners).toContain('new_corner');
+      expect(meta.corners).toContain('c2'); // c2 should still exist
+      expect(meta.corners).toContain('c1'); // case2 still has c1
+    });
+
+    it('does not affect other cases', () => {
+      updateCorner(db, 'case1', 'new_corner');
+      const result = queryViolations(db, { page: 1, pageSize: 10, caseName: 'case2' });
+      expect(result.total).toBe(1);
+      expect(result.items[0].corner).toBe('c1');
+    });
+
+    it('returns 0 for non-existent case', () => {
+      const result = updateCorner(db, 'non_existent', 'new_corner');
+      expect(result.updated).toBe(0);
+    });
+
+    it('returns 0 for non-existent old corner', () => {
+      const result = updateCorner(db, 'case1', 'new_corner', 'non_existent');
+      expect(result.updated).toBe(0);
     });
   });
 });
