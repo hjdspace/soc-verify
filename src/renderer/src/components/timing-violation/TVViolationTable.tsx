@@ -9,9 +9,9 @@
  * 使用 measureElement 动态测量行高，确保展开行不与下方行重叠。
  */
 
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useMemo } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronUp, ChevronDown, ChevronRight, Sparkles, Loader2, Check } from 'lucide-react';
+import { ChevronUp, ChevronDown, ChevronRight, Sparkles, Loader2, Check, XCircle } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 import { formatTimeDisplay } from '@renderer/lib/tv-utils';
 import type {
@@ -63,6 +63,12 @@ const COLUMNS: ColumnDef[] = [
   { key: 'time_fs', label: '时间', width: 'w-28' },
 ];
 
+type RenderItem =
+  | { type: 'group'; caseName: string; count: number }
+  | { type: 'violation'; violation: ViolationWithConfirmation; violationIndex: number };
+
+const GROUP_HEADER_HEIGHT = 30;
+
 export function TVViolationTable({
   violations,
   total,
@@ -86,15 +92,64 @@ export function TVViolationTable({
 }: ViolationTableProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   const toggleExpand = useCallback((id: number) => {
     setExpandedId((prev) => (prev === id ? null : id));
   }, []);
 
+  const toggleGroup = useCallback((caseName: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(caseName)) {
+        next.delete(caseName);
+      } else {
+        next.add(caseName);
+      }
+      return next;
+    });
+  }, []);
+
+  // 当存在多个用例时，按用例名分组展示（可折叠）
+  const flatItems = useMemo<RenderItem[]>(() => {
+    const distinctCases = new Set(violations.map((v) => v.caseName));
+    const shouldGroup = distinctCases.size > 1;
+
+    if (!shouldGroup) {
+      return violations.map((v, i) => ({
+        type: 'violation' as const,
+        violation: v,
+        violationIndex: i,
+      }));
+    }
+
+    // 按用例名分组，保持原始顺序
+    const groupMap = new Map<string, ViolationWithConfirmation[]>();
+    for (const v of violations) {
+      const arr = groupMap.get(v.caseName) ?? [];
+      arr.push(v);
+      groupMap.set(v.caseName, arr);
+    }
+
+    const items: RenderItem[] = [];
+    for (const [caseName, groupViolations] of groupMap) {
+      items.push({ type: 'group', caseName, count: groupViolations.length });
+      if (!collapsedGroups.has(caseName)) {
+        for (const v of groupViolations) {
+          items.push({ type: 'violation', violation: v, violationIndex: items.length });
+        }
+      }
+    }
+    return items;
+  }, [violations, collapsedGroups]);
+
   const rowVirtualizer = useVirtualizer({
-    count: violations.length,
+    count: flatItems.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT,
+    estimateSize: (index: number) => {
+      const item = flatItems[index];
+      return item && item.type === 'group' ? GROUP_HEADER_HEIGHT : ROW_HEIGHT;
+    },
     overscan: 10,
     measureElement: (el) => el.getBoundingClientRect().height,
   });
@@ -161,8 +216,47 @@ export function TVViolationTable({
             style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: 'relative' }}
           >
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const v = violations[virtualRow.index];
-              if (!v) return null;
+              const item = flatItems[virtualRow.index];
+              if (!item) return null;
+
+              // 分组标题行
+              if (item.type === 'group') {
+                const isCollapsed = collapsedGroups.has(item.caseName);
+                return (
+                  <div
+                    key={`group-${item.caseName}`}
+                    data-index={virtualRow.index}
+                    ref={rowVirtualizer.measureElement}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                  >
+                    <div
+                      className="flex items-center border-b border-border bg-secondary/50 px-2 cursor-pointer select-none hover:bg-secondary/70 transition-colors"
+                      style={{ height: GROUP_HEADER_HEIGHT }}
+                      onClick={() => toggleGroup(item.caseName)}
+                    >
+                      <div className="w-8" />
+                      <div className="w-5 flex items-center justify-center">
+                        {isCollapsed ? (
+                          <ChevronRight className="h-3 w-3 text-muted-foreground" />
+                        ) : (
+                          <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                        )}
+                      </div>
+                      <span className="px-2 text-xs font-semibold text-foreground">{item.caseName}</span>
+                      <span className="ml-1 text-[10px] text-muted-foreground">({item.count} 条)</span>
+                    </div>
+                  </div>
+                );
+              }
+
+              // 违例行
+              const v = item.violation;
               const isExpanded = v.id === expandedId;
               const isSelected = selectedViolationIds.has(v.id);
               const statusStyle = STATUS_STYLES[v.status];
@@ -279,64 +373,121 @@ export function TVViolationTable({
                       {/* AI 建议展示 */}
                       {aiSuggestionViolationId === v.id && aiSuggestion && (
                         <div className="mb-3 rounded border border-primary/30 bg-primary/5 px-3 py-2">
-                          <div className="mb-1 flex items-center justify-between">
+                          {/* 当前违例标识 */}
+                          <div className="mb-2 rounded bg-background/60 px-2 py-1.5">
+                            <div className="text-[10px] font-semibold uppercase text-muted-foreground">
+                              当前分析的违例
+                            </div>
+                            <div className="mt-0.5 flex items-center gap-3 text-[11px]">
+                              <span className="font-mono font-semibold text-primary">Vio#{v.num}</span>
+                              <span className="truncate font-mono text-foreground">{v.hier}</span>
+                            </div>
+                            <div className="mt-0.5 flex items-center gap-3 text-[10px] text-muted-foreground">
+                              <span>时间: {formatTimeDisplay(v.timeFs)}</span>
+                              <span>用例: {v.caseName}</span>
+                              <span>Corner: {v.corner ?? '默认 (未匹配)'}</span>
+                            </div>
+                          </div>
+
+                          {/* AI 建议标题 + 置信度 */}
+                          <div className="mb-2 flex items-center justify-between">
                             <div className="flex items-center gap-1.5">
                               <Sparkles className="size-3 text-primary" />
-                              <span className="text-[11px] font-semibold text-primary">AI 建议</span>
+                              <span className="text-[11px] font-semibold text-primary">AI 分析建议</span>
                               {aiSuggestion.confidence > 0 && (
-                                <span className="text-[10px] text-muted-foreground">
-                                  置信度: {Math.round(aiSuggestion.confidence * 100)}%
-                                </span>
+                                <div className="flex items-center gap-1">
+                                  <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
+                                    <div
+                                      className={cn(
+                                        'h-full rounded-full transition-all',
+                                        aiSuggestion.confidence >= 0.7
+                                          ? 'bg-green-500'
+                                          : aiSuggestion.confidence >= 0.4
+                                            ? 'bg-amber-500'
+                                            : 'bg-red-500',
+                                      )}
+                                      style={{ width: `${Math.round(aiSuggestion.confidence * 100)}%` }}
+                                    />
+                                  </div>
+                                  <span className="text-[10px] text-muted-foreground">
+                                    {Math.round(aiSuggestion.confidence * 100)}%
+                                  </span>
+                                </div>
                               )}
                             </div>
-                            <div className="flex gap-1">
-                              {aiSuggestion.confirmer && aiSuggestion.result && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onApplyAISuggestion(v);
-                                  }}
-                                  className="flex items-center gap-0.5 rounded bg-primary px-2 py-0.5 text-[10px] font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
-                                >
-                                  <Check className="size-2.5" />
-                                  应用建议
-                                </button>
-                              )}
+                          </div>
+
+                          {/* 结构化展示 AI 建议 */}
+                          <div className="space-y-1.5">
+                            {aiSuggestion.confirmer && (
+                              <div className="flex items-start gap-2 text-[11px]">
+                                <span className="shrink-0 text-muted-foreground">确认人:</span>
+                                <span className="text-foreground">{aiSuggestion.confirmer}</span>
+                              </div>
+                            )}
+                            {aiSuggestion.result && (
+                              <div className="flex items-start gap-2 text-[11px]">
+                                <span className="shrink-0 text-muted-foreground">确认结果:</span>
+                                <span className={cn(
+                                  'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium',
+                                  aiSuggestion.result === 'pass'
+                                    ? 'bg-green-500/15 text-green-600 dark:text-green-400'
+                                    : 'bg-red-500/15 text-red-600 dark:text-red-400',
+                                )}>
+                                  {aiSuggestion.result === 'pass' ? '✓ Pass' : '✗ Issue'}
+                                </span>
+                              </div>
+                            )}
+                            {aiSuggestion.reason && (
+                              <div className="flex items-start gap-2 text-[11px]">
+                                <span className="shrink-0 text-muted-foreground">分析理由:</span>
+                                <span className="text-foreground">{aiSuggestion.reason}</span>
+                              </div>
+                            )}
+                            {aiSuggestion.analysis && (
+                              <div className="flex items-start gap-2 text-[11px]">
+                                <span className="shrink-0 text-muted-foreground">详细分析:</span>
+                                <span className="text-muted-foreground">{aiSuggestion.analysis}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* 操作按钮：确认 / 重新分析 / 拒绝 */}
+                          <div className="mt-2 flex items-center gap-1.5">
+                            {aiSuggestion.confirmer && aiSuggestion.result && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  onClearAISuggestion();
+                                  onApplyAISuggestion(v);
                                 }}
-                                className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-accent transition-colors"
+                                className="flex items-center gap-0.5 rounded bg-primary px-2.5 py-1 text-[10px] font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
                               >
-                                关闭
+                                <Check className="size-2.5" />
+                                确认并应用
                               </button>
-                            </div>
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onClearAISuggestion();
+                                onRowAISuggest(v);
+                              }}
+                              className="flex items-center gap-0.5 rounded border border-primary/40 bg-primary/5 px-2.5 py-1 text-[10px] font-medium text-primary hover:bg-primary/10 transition-colors"
+                            >
+                              <Sparkles className="size-2.5" />
+                              重新分析
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onClearAISuggestion();
+                              }}
+                              className="flex items-center gap-0.5 rounded border border-border px-2.5 py-1 text-[10px] font-medium text-muted-foreground hover:bg-accent transition-colors"
+                            >
+                              <XCircle className="size-2.5" />
+                              拒绝
+                            </button>
                           </div>
-                          {aiSuggestion.confirmer && (
-                            <div className="text-[11px]">
-                              <span className="text-muted-foreground">确认人: </span>
-                              <span className="text-foreground">{aiSuggestion.confirmer}</span>
-                              {aiSuggestion.result && (
-                                <>
-                                  <span className="text-muted-foreground ml-2">结果: </span>
-                                  <span className={aiSuggestion.result === 'pass' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
-                                    {aiSuggestion.result}
-                                  </span>
-                                </>
-                              )}
-                            </div>
-                          )}
-                          {aiSuggestion.reason && (
-                            <div className="mt-1 text-[11px] text-foreground">
-                              {aiSuggestion.reason}
-                            </div>
-                          )}
-                          {aiSuggestion.analysis && (
-                            <div className="mt-1 text-[10px] text-muted-foreground">
-                              {aiSuggestion.analysis}
-                            </div>
-                          )}
                         </div>
                       )}
                       <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-[11px]">
