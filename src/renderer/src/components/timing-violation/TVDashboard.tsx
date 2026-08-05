@@ -102,6 +102,9 @@ const aiSuggestionViolationId = useTimingViolationStore((s) => s.aiSuggestionVio
   const clearCaseData = useTimingViolationStore((s) => s.clearCaseData);
   const updateCorner = useTimingViolationStore((s) => s.updateCorner);
   const managingData = useTimingViolationStore((s) => s.managingData);
+  const caseCorners = useTimingViolationStore((s) => s.caseCorners);
+  const loadingCaseCorners = useTimingViolationStore((s) => s.loadingCaseCorners);
+  const loadCaseCorners = useTimingViolationStore((s) => s.loadCaseCorners);
 
   // 本地 UI 状态
   const [showAutoConfirm, setShowAutoConfirm] = useState(false);
@@ -474,6 +477,7 @@ const aiSuggestionViolationId = useTimingViolationStore((s) => s.aiSuggestionVio
                           setCornerEditOld('');
                           setCornerEditNew('');
                           setShowCornerEdit(true);
+                          void loadCaseCorners(projectId, c);
                         }}
                         className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
                       >
@@ -694,12 +698,46 @@ onClearAISuggestion={clearAISuggestion}
       {/* Corner 编辑对话框 */}
       {showCornerEdit && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="w-96 rounded-lg border border-border bg-popover p-4 shadow-2xl">
-            <h3 className="mb-3 text-sm font-semibold">更新 Corner — {cornerEditCase}</h3>
+          <div className="w-[420px] rounded-lg border border-border bg-popover p-4 shadow-2xl">
+            <h3 className="mb-1 text-sm font-semibold">更新 Corner — {cornerEditCase}</h3>
+            <p className="mb-3 text-[11px] text-muted-foreground">
+              选择要更新的 Corner（仅显示该用例已有的 Corner），输入新 Corner 名称
+            </p>
+            {/* 当用例 Corner 分布 */}
+            <div className="mb-3 rounded-md border border-border/50 bg-secondary/20 p-2">
+              <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">
+                当前用例 Corner 分布
+              </div>
+              {loadingCaseCorners ? (
+                <div className="flex items-center gap-1.5 py-1 text-[11px] text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  加载中...
+                </div>
+              ) : caseCorners.length === 0 ? (
+                <div className="py-1 text-[11px] text-muted-foreground/50">暂无数据</div>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {caseCorners.map((cc) => (
+                    <span
+                      key={cc.corner ?? '__null__'}
+                      className={cn(
+                        'inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px]',
+                        cc.corner === null
+                          ? 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                          : 'border-border bg-background text-foreground',
+                      )}
+                    >
+                      {cc.corner === null ? '默认 (未匹配)' : cc.corner}
+                      <span className="text-muted-foreground">{cc.count} 条</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
             <div className="space-y-3">
               <div>
                 <label className="mb-1 block text-[10px] font-semibold uppercase text-muted-foreground">
-                  旧 Corner（可选，留空更新所有）
+                  旧 Corner（可选，留空更新所有未匹配的）
                 </label>
                 <select
                   value={cornerEditOld}
@@ -707,10 +745,15 @@ onClearAISuggestion={clearAISuggestion}
                   className="w-full rounded border border-border bg-background px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary"
                 >
                   <option value="">所有 Corner</option>
-                  {metadata.corners.map((c) => (
-                    <option key={c} value={c}>{c}</option>
+                  {caseCorners.map((cc) => (
+                    <option key={cc.corner ?? '__null__'} value={cc.corner ?? ''}>
+                      {cc.corner === null ? '默认 (未匹配)' : cc.corner} ({cc.count} 条)
+                    </option>
                   ))}
                 </select>
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  提示：选择「默认 (未匹配)」可单独更新未匹配到 Corner 的记录
+                </p>
               </div>
               <div>
                 <label className="mb-1 block text-[10px] font-semibold uppercase text-muted-foreground">
