@@ -1,5 +1,15 @@
 /// <reference types="vite/client" />
 
+import type { SurfaceDeclaration, SurfaceEvent } from '@shared/surface-types';
+
+export interface SurfaceBridgeAPI {
+  sync: (declaration: SurfaceDeclaration) => Promise<void>;
+  show: (id: string) => Promise<void>;
+  hide: (id: string) => Promise<void>;
+  destroy: (id: string) => Promise<void>;
+  setOverlayHidden: (hidden: boolean) => Promise<void>;
+}
+
 // ── windowControls 类型声明（由 preload 通过 contextBridge 暴露）────
 export interface WindowControlsAPI {
   minimize: () => void;
@@ -41,6 +51,7 @@ export interface EventBridgeAPI {
     callback: (data: { filePath: string; processedLines: number; foundViolations: number }) => void,
   ) => () => void;
   // 覆盖率导入进度
+  onSurfaceEvent: (callback: (event: SurfaceEvent) => void) => () => void;
   onCoverageImportProgress: (
     callback: (data: {
       step: string;
@@ -55,6 +66,7 @@ export interface EventBridgeAPI {
 declare global {
   interface Window {
     windowControls?: WindowControlsAPI;
+    surfaceBridge?: SurfaceBridgeAPI;
     eventBridge?: EventBridgeAPI;
   }
 

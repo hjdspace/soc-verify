@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { exposeElectronTRPC } from 'electron-trpc/main';
+import type { SurfaceDeclaration } from '@shared/surface-types';
 
 // electron-trpc 要求在 'loaded' 事件后暴露桥接
 process.once('loaded', async () => {
@@ -19,8 +20,21 @@ process.once('loaded', async () => {
     },
   });
 
+  contextBridge.exposeInMainWorld('surfaceBridge', {
+    sync: (declaration: SurfaceDeclaration) => ipcRenderer.invoke('surface:sync', declaration),
+    show: (id: string) => ipcRenderer.invoke('surface:show', id),
+    hide: (id: string) => ipcRenderer.invoke('surface:hide', id),
+    destroy: (id: string) => ipcRenderer.invoke('surface:destroy', id),
+    setOverlayHidden: (hidden: boolean) => ipcRenderer.invoke('surface:set-overlay-hidden', hidden),
+  });
+
   // ── 事件监听 API（文件树更新、项目事件、会话事件）──────────────
   contextBridge.exposeInMainWorld('eventBridge', {
+    onSurfaceEvent: (callback: (event: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: unknown) => callback(data);
+      ipcRenderer.on('surface:event', handler);
+      return () => ipcRenderer.removeListener('surface:event', handler);
+    },
     onFileTreeUpdate: (callback: (update: unknown) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, update: unknown) => callback(update);
       ipcRenderer.on('filetree:update', handler);

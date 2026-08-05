@@ -16,3 +16,4 @@ resources/binaries/*
 .tmp/
 .vscode/
 .scratch/
+.workbuddy/

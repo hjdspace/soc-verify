@@ -14,5 +14,7 @@ export default defineConfig({
     include: ['tests/**/*.{test,spec}.{ts,tsx}'],
     globals: true,
     setupFiles: ['tests/setup.ts'],
+    pool: 'forks',
+    fileParallelism: false,
   },
 });

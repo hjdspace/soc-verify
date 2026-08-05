@@ -14,6 +14,7 @@ import { SourceControlDialog } from '@renderer/components/scm/SourceControlDialo
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSessionStore } from '@renderer/stores/session';
+import { useEnvStore } from '@renderer/stores/env';
 
 export function AppShell() {
   const leftCollapsed = useUiStore((s) => s.leftRailCollapsed);
@@ -33,6 +34,17 @@ export function AppShell() {
   );
   const saveProjectStateRef = useRef(saveProjectState);
   saveProjectStateRef.current = saveProjectState;
+  const settingsOpen = useUiStore((s) => s.settingsOpen);
+  const commandPaletteOpen = useUiStore((s) => s.commandPaletteOpen);
+  const sourceControlOpen = useUiStore((s) => s.sourceControlOpen);
+  const centerMenuOpen = useUiStore((s) => s.centerMenuOpen);
+  const wizardOpen = useEnvStore((s) => s.wizardOpen);
+
+  useEffect(() => {
+    void window.surfaceBridge?.setOverlayHidden(
+      settingsOpen || commandPaletteOpen || sourceControlOpen || centerMenuOpen || wizardOpen,
+    );
+  }, [settingsOpen, commandPaletteOpen, sourceControlOpen, centerMenuOpen, wizardOpen]);
 
   // Debounced save when UI layout or session tabs change.
   useEffect(() => {

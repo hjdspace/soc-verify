@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine, Puzzle, FileType } from 'lucide-react';
 import { useWorkbenchStore, openFileDestination } from '@renderer/stores/workbench';
+import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useTerminalStore } from '@renderer/stores/terminal';
@@ -23,6 +24,7 @@ import { PluginView } from '@renderer/components/plugins/PluginView';
 import { TVDashboard } from '@renderer/components/timing-violation/TVDashboard';
 import { OfficeDocumentView } from '@renderer/components/office/OfficeDocumentView';
 import { Timer } from 'lucide-react';
+import { SurfaceLayer } from '@renderer/components/surface/SurfaceLayer';
 
 // ── 状态徽章：主题感知的点 + 文字 ────────────────────────────────
 const STATUS_BADGE_STYLES: Record<SimulationStatus, { dot: string; text: string }> = {
@@ -52,6 +54,7 @@ export function CenterArea() {
   const closeWorkbenchTab = useWorkbenchStore((s) => s.close);
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
   const destination = activeTab?.destination ?? null;
+  const activeSurface = destination?.type === 'browser' ? destination : null;
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const plugins = useProjectStore((s) => s.plugins);
@@ -77,9 +80,15 @@ export function CenterArea() {
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
   const [dropHover, setDropHover] = useState(false);
+  const setCenterMenuOpen = useUiStore((s) => s.setCenterMenuOpen);
   const runningCount = activeRuns.filter((r) => r.status === 'running' || r.status === 'pending').length;
 
   const moveTerminalLocation = useTerminalStore((s) => s.moveTerminalLocation);
+
+  // Sync dropdown open state to UI store so AppShell can hide native views during overlays.
+  useEffect(() => {
+    setCenterMenuOpen(plusMenuOpen || moreMenuOpen);
+  }, [plusMenuOpen, moreMenuOpen, setCenterMenuOpen]);
 
   useEffect(() => {
     if (destination?.type === 'simulation-detail' && currentProjectId) {
@@ -226,6 +235,7 @@ export function CenterArea() {
                 }}
               >
                 {tab.destination.type === 'file' && <FileText className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'browser' && <FileType className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'terminal' && <TerminalIcon className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'ai-artifacts' && <Sparkles className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'simulation-errors' && <AlertCircle className="h-3 w-3 text-status-fail-foreground" />}
@@ -297,6 +307,16 @@ export function CenterArea() {
                   >
                     <FileText className="h-3.5 w-3.5 opacity-70" />
                     <span>打开文件...</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      openDestination({ type: 'browser', surfaceId: `browser-${crypto.randomUUID()}`, url: 'https://example.com', title: '新建网页' });
+                      setPlusMenuOpen(false);
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent"
+                  >
+                    <FileType className="h-3.5 w-3.5 opacity-70" />
+                    <span>新建网页</span>
                   </button>
                   <button
                     onClick={() => {
@@ -404,7 +424,14 @@ export function CenterArea() {
             释放在此处将终端移动到底部面板
           </div>
         )}
-        {destination?.type === 'file' && currentProjectId ? (
+        {activeSurface ? (
+          <SurfaceLayer
+            surfaceId={activeSurface.surfaceId}
+            kind="browser"
+            source={{ type: 'url', url: activeSurface.url }}
+            visible
+          />
+        ) : destination?.type === 'file' && currentProjectId ? (
           <FileEditor
             key={destination.path}
             projectId={currentProjectId}

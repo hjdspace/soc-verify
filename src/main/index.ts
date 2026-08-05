@@ -16,6 +16,7 @@ import { terminalManager } from './terminal/terminal-manager';
 import { registerDocumentIpcHandlers, cleanupEditorRegistry } from './document/editor-registry';
 import { cleanupOfficeCli } from './officecli/service';
 import { closeAllToolWindows } from './tools/tool-window-manager';
+import { destroyAllSurfaceManagers, registerSurfaceIpcHandlers } from './surface/surface-ipc';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -411,9 +412,6 @@ function createWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      // 启用 <webview> 标签：用于 Office 文档预览（HtmlPreview 加载 file://、WatchPreview 加载 localhost）
-      // webview 是独立进程，不受渲染进程 CSP（default-src 'self'）限制，不修改 index.html 的 CSP
-      webviewTag: true
     }
   });
 
@@ -641,6 +639,7 @@ app.whenReady().then(async () => {
   mainWindow = createWindow();
   createIPCHandler({ router, windows: [mainWindow] });
   registerWindowControls();
+  registerSurfaceIpcHandlers();
   registerEventForwarding(mainWindow);
 
   // 注册 officecli 文档相关 IPC handlers（flush-done 由前端发送）
@@ -698,4 +697,5 @@ app.on('before-quit', async () => {
   cleanupEditorRegistry();
   // 关闭所有工具窗口
   closeAllToolWindows();
+  destroyAllSurfaceManagers();
 });

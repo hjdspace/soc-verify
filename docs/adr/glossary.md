@@ -1,6 +1,50 @@
 # 术语表（Glossary）
 
-本术语表记录 SoC Verify 项目中 officecli 集成相关的核心术语，供 ADR 0015 及后续实施参考。
+本术语表记录 SoC Verify 项目中 officecli 集成、内置网页工作区和 WebContentsView 统一承载相关的核心术语，供 ADR 0015、ADR 0016 及后续实施参考。
+
+## 内置网页与原生视图
+
+### WebContentsView
+Electron 主进程可管理的原生网页视图。它拥有独立的 webContents，可加载网页并接收导航、标题、加载、下载、权限、弹窗和崩溃事件；不能可靠地被普通 Renderer DOM 的 z-index 覆盖，因此需要显式的 bounds 和可见性同步。
+
+### View Manager
+主进程中的深模块，统一负责 WebContentsView 的创建、销毁、挂载、隐藏、bounds、导航、事件、下载、权限、证书、弹窗和崩溃状态。业务模块通过 Surface seam 使用它，不直接操作 webContents。
+
+### Surface
+对一个可嵌入工作区内容的逻辑描述，包括唯一 id、kind、source、可见性和 bounds。Renderer 以声明式 Surface 描述驱动 View Manager；Surface 是逻辑状态与原生视图之间的 seam。
+
+### Browser Surface
+承载任意 http/https 网页的 Surface。它拥有地址栏、后退、前进、刷新、收藏、查找和系统浏览器打开等基础浏览能力，使用专属持久化 Browser session。
+
+### Document Surface
+承载 Office HTML/Watch 预览的 Surface。source 可为 local-file 或 local-server，由 Document Surface 协调器负责 officecli 生成、Watch 启停、CSS 注入和错误清理。使用隔离的非持久化 session。
+
+### Browser session
+Browser Surface 共享的专属持久化 Electron session/partition，保存 Cookie、LocalStorage 和 SSO 登录态；不复用系统浏览器 Cookie，也不与 Document Surface 共享。
+
+### Document session
+Document Surface 使用的隔离、非持久化 Electron session。其目的不是保存网页登录态，而是避免本地文档或 Watch 服务继承 Browser session 的 Cookie、缓存和站点权限。
+
+### Surface seam
+Renderer 的逻辑标签/声明式 Surface 描述与主进程 View Manager 之间的调用 seam。调用方只需声明所需内容和显示区域，不需要知道 WebContentsView 的创建顺序、事件清理或销毁细节。
+
+### Bounds 同步
+Renderer 使用 ResizeObserver 测量 DOM 容器相对 BrowserWindow 的坐标和尺寸，上报给主进程，由 View Manager 校验后调用 WebContentsView.setBounds()。用于适配 CenterArea 的栏宽拖拽、折叠、底部面板和窗口状态变化。
+
+### Overlay 隐藏策略
+由于 WebContentsView 不能可靠地被 Renderer DOM 覆盖，应用级设置、命令面板、向导和菜单打开时临时隐藏活动原生视图；Overlay 关闭后恢复并重新同步 bounds。
+
+### 认证临时浮层
+为 SSO/OAuth/MFA 使用的受控临时网页窗口。它保留来源页面需要的 opener 关系和 Browser session，但不创建永久 workbench 网页标签；认证完成或关闭后销毁。
+
+### Browser data
+主进程用户级 browser settings/data 文件，保存全局网页标签、书签、分组、排序和常用标记。采用版本化、变更防抖保存和退出前刷盘；不是项目状态文件，也不是 Renderer localStorage 权威源。
+
+### 书签与常用标记
+书签是全局网页条目，包含名称、URL、分组和排序。常用网页不是第二套数据，而是书签条目的常用标记投影，显示在新标签首页和快捷入口。
+
+### Local Report Surface
+由用户选择文件或业务入口明确创建的本地报告 Surface。允许加载受限 file:// 内容，但地址栏不能直接输入任意 file:// 路径。
 
 ## officecli 集成相关
 
@@ -29,13 +73,13 @@
 ## 预览模式
 
 ### HTML 模式（html）
-`officecli view <file> html` 将文档转为 HTML，前端用 `<webview>` 加载 `file://` URL。所有 Office 文件类型通用。
+`officecli view <file> html` 将文档转为 HTML。当前迁移目标由 Document Surface 使用 WebContentsView 加载 `file://` URL；历史 `<webview>` 实现仅保留在 ADR 0015 的原始记录中。所有 Office 文件类型通用。
 
 ### Screenshots 模式（screenshots）
 `officecli view <file> screenshot` 将文档转为 PNG 图片（每页一张），前端用 `<img>` 展示。需 `readImageAsDataURL` 将图片转为 base64 data URL 以绕过 file:// CORS 限制。
 
 ### Watch 模式（watch）
-`officecli watch <file>` 启动本地 HTTP 服务器（默认端口 26315），前端用 `<webview>` 加载 `http://localhost:PORT`。officecli 内部通过 WebSocket 推送文件变更刷新。仅用于 docx/pptx（xlsx 用 Fortune-sheet 编辑，PDF 用 react-pdf）。
+`officecli watch <file>` 启动本地 HTTP 服务器（默认端口 26315），Document Surface 使用 WebContentsView 加载 `http://localhost:PORT`。officecli 内部通过 WebSocket 推送文件变更刷新。Watch 的启动/停止由 Document Surface 协调器负责；仅用于 docx/pptx（xlsx 用 Fortune-sheet 编辑，PDF 用 react-pdf）。
 
 ### readImageAsDataURL
 主进程读取图片文件并转为 base64 data URL 的能力，用于绕过开发模式下 webview 的 `file://` CORS 限制。参考 SpaceCode `officeCliService.ts`。
@@ -89,8 +133,8 @@ type OfficeDocumentDestination = {
 }
 ```
 
-### webview（预览容器）
-Electron 的 `<webview>` 标签，独立进程，不受渲染进程 CSP 限制。需在 BrowserWindow 配置 `webviewTag: true`。使用 `partition="persist:office-preview"` 隔离 cookie/storage。
+### webview（历史预览容器）
+ADR 0015 原始 Office HTML/Watch 实现使用的 Electron `<webview>` 标签，需要 `webviewTag: true` 和 `persist:office-preview`。ADR 0016 已决定迁移到 WebContentsView；迁移完成后删除该标签、配置和类型声明，不保留双轨实现。
 
 ### react-pdf
 pdfjs-dist 的 React 封装，API 友好（`<Document><Page />`）。worker 本地加载（不走 CDN，符合内网约束）。仅用于 PDF 预览。

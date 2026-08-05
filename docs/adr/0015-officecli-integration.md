@@ -128,6 +128,8 @@ officecli 二进制不可用时：
 
 ### 主题 4：前端预览
 
+> **迁移说明（ADR 0016）**：本 ADR 原始设计使用 `<webview>` 承载 HTML/Watch。后续统一迁移方案已记录于 [ADR 0016](./0016-webcontentsview-surfaces.md)：HTML/Watch 改为 Document Surface + WebContentsView，Screenshots/PDF/Fortune-sheet 保持现有实现。以下历史决策中的 webview 描述仅作为原始实现记录，实施时以 ADR 0016 为准。
+
 **4.1 预览模式：HTML + Screenshots + Watch + PDF(pdfjs-dist)**
 
 | 文件类型 | 默认模式 | 可选模式 |

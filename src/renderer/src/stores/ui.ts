@@ -18,6 +18,7 @@ interface UiState {
   settingsOpen: boolean;
   commandPaletteOpen: boolean;
   sourceControlOpen: boolean;
+  centerMenuOpen: boolean;
   leftRailWidth: number;
   rightPanelWidth: number;
   bottomPanelCollapsed: boolean;
@@ -30,6 +31,7 @@ interface UiState {
   setSettingsOpen: (open: boolean) => void;
   setCommandPaletteOpen: (open: boolean) => void;
   setSourceControlOpen: (open: boolean) => void;
+  setCenterMenuOpen: (open: boolean) => void;
   setLeftRailWidth: (width: number) => void;
   setRightPanelWidth: (width: number) => void;
   setBottomPanelCollapsed: (collapsed: boolean) => void;
@@ -59,6 +61,7 @@ export const useUiStore = create<UiState>((set) => ({
   settingsOpen: false,
   commandPaletteOpen: false,
   sourceControlOpen: false,
+  centerMenuOpen: false,
   leftRailWidth: 256,
   rightPanelWidth: 384,
   bottomPanelCollapsed: true,
@@ -71,6 +74,7 @@ export const useUiStore = create<UiState>((set) => ({
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
   setSourceControlOpen: (open) => set({ sourceControlOpen: open }),
+  setCenterMenuOpen: (open) => set({ centerMenuOpen: open }),
   setLeftRailWidth: (width) => set({ leftRailWidth: Math.max(LEFT_MIN, Math.min(LEFT_MAX, width)) }),
   setRightPanelWidth: (width) => set({ rightPanelWidth: Math.max(RIGHT_MIN, Math.min(RIGHT_MAX, width)) }),
   setBottomPanelCollapsed: (collapsed) => set({ bottomPanelCollapsed: collapsed }),

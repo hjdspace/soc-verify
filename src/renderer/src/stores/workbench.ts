@@ -11,6 +11,7 @@ export type OfficeDocumentDestination = {
 
 export type WorkbenchDestination =
   | { type: 'file'; path: string; name: string }
+  | { type: 'browser'; surfaceId: string; url: string; title?: string }
   | { type: 'terminal'; terminalTabId: string; title: string }
   | { type: 'simulation-errors'; runId: string }
   | { type: 'simulation-history' }
@@ -48,6 +49,8 @@ function describeDestination(destination: WorkbenchDestination): Omit<WorkbenchT
   switch (destination.type) {
     case 'file':
       return { id: `file:${destination.path}`, title: destination.name, closable: true };
+    case 'browser':
+      return { id: `browser:${destination.surfaceId}`, title: destination.title ?? destination.url, closable: true };
     case 'terminal':
       return { id: `terminal:${destination.terminalTabId}`, title: destination.title, closable: true };
     case 'simulation-errors':
