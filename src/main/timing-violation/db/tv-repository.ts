@@ -264,6 +264,27 @@ export function getMetadata(db: Database.Database): ViolationMetadata {
   };
 }
 
+// ─── 用例 Corner 信息 ─────────────────────────────────────────
+
+/**
+ * 获取指定用例的所有 corner 及其违例数量。
+ * 包含 NULL corner（标记为 "默认 (未匹配)"），帮助用户识别哪些 corner 需要更新。
+ */
+export function getCaseCorners(
+  db: Database.Database,
+  caseName: string,
+): Array<{ corner: string | null; count: number }> {
+  const rows = db.prepare(`
+    SELECT corner, COUNT(*) as count
+    FROM timing_violations
+    WHERE case_name = @caseName
+    GROUP BY corner
+    ORDER BY corner IS NULL, corner
+  `).all({ caseName }) as { corner: string | null; count: number }[];
+
+  return rows.map((r) => ({ corner: r.corner, count: r.count }));
+}
+
 // ─── 清除数据 ─────────────────────────────────────────────────
 
 /**
