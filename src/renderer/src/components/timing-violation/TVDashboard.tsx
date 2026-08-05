@@ -10,6 +10,8 @@ import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, Loader2, AlertCircle, FileText, Trash2, Zap, CheckSquare, XCircle, History, ListChecks, Download, Upload, ChevronDown, ChevronRight, FileSpreadsheet, Database, Settings, Edit3 } from 'lucide-react';
 import { useTimingViolationStore } from '@renderer/stores/timing-violation';
 import { useProjectStore } from '@renderer/stores/project';
+import { useSessionStore } from '@renderer/stores/session';
+import { useUiStore } from '@renderer/stores/ui';
 import { TVStatsCards } from './TVStatsCards';
 import { TVDistributionCharts } from './TVDistributionCharts';
 import { TVFilterBar } from './TVFilterBar';
@@ -74,8 +76,17 @@ export function TVDashboard() {
   const toggleViolationSelection = useTimingViolationStore((s) => s.toggleViolationSelection);
   const selectAllVisibleViolations = useTimingViolationStore((s) => s.selectAllVisibleViolations);
   const clearSelection = useTimingViolationStore((s) => s.clearSelection);
-  const openConfirmDialog = useTimingViolationStore((s) => s.openConfirmDialog);
-  const closeConfirmDialog = useTimingViolationStore((s) => s.closeConfirmDialog);
+const openConfirmDialog = useTimingViolationStore((s) => s.openConfirmDialog);
+const closeConfirmDialog = useTimingViolationStore((s) => s.closeConfirmDialog);
+
+// AI 建议相关
+const startAISuggestion = useTimingViolationStore((s) => s.startAISuggestion);
+const parseAISuggestionResponse = useTimingViolationStore((s) => s.parseAISuggestionResponse);
+const clearAISuggestion = useTimingViolationStore((s) => s.clearAISuggestion);
+const applyAISuggestion = useTimingViolationStore((s) => s.applyAISuggestion);
+const aiSuggesting = useTimingViolationStore((s) => s.aiSuggesting);
+const aiSuggestion = useTimingViolationStore((s) => s.aiSuggestion);
+const aiSuggestionViolationId = useTimingViolationStore((s) => s.aiSuggestionViolationId);
   const setShowPatternManager = useTimingViolationStore((s) => s.setShowPatternManager);
   const applyHistoricalConfirmations = useTimingViolationStore((s) => s.applyHistoricalConfirmations);
   const setShowScanDialog = useTimingViolationStore((s) => s.setShowScanDialog);
@@ -541,8 +552,104 @@ export function TVDashboard() {
         selectedViolationIds={selectedViolationIds}
         onToggleSelect={toggleViolationSelection}
         onSelectAll={selectAllVisibleViolations}
-        onRowConfirm={(v) => openConfirmDialog(v)}
-      />
+onRowConfirm={(v) => openConfirmDialog(v)}
+onRowAISuggest={(v) => {
+  // 启动 AI 建议（流式模式）— 在右侧 AI 面板新开会话展示
+  void (async () => {
+    const result = await startAISuggestion(projectId, v.id);
+    if (!result) return;
+
+    // 在右侧 AI 面板创建新会话标签
+    const sessionStore = useSessionStore.getState();
+    const sessionId = `tv_ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const userMessage = {
+      id: `msg_${sessionId}_user`,
+      role: 'user' as const,
+      content: result.promptMessage,
+      timestamp: Date.now(),
+    };
+    const assistantMessage = {
+      id: `msg_${sessionId}_assistant`,
+      role: 'assistant' as const,
+      content: '',
+      timestamp: Date.now(),
+      isStreaming: true,
+    };
+    const newSession = {
+      id: sessionId,
+      runtimeSessionId: result.sessionId,
+      persistedSessionId: result.sessionId,
+      projectId,
+      name: `[TV分析] Vio#${v.num}`,
+      status: 'streaming' as const,
+      messages: [userMessage, assistantMessage],
+      composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
+      createdAt: Date.now(),
+      model: sessionStore.lastModel ?? undefined,
+    };
+
+    useSessionStore.setState((s) => ({
+      sessions: [...s.sessions, newSession],
+      currentSessionId: sessionId,
+    }));
+
+    // 如果右侧面板已折叠，展开它
+    if (useUiStore.getState().rightPanelCollapsed) {
+      useUiStore.getState().toggleRightPanel();
+    }
+
+    // 注册 sessionEvent 监听器，捕获 AI 响应完成事件
+    if (window.eventBridge) {
+      let responseText = '';
+      const cleanup = window.eventBridge.onSessionEvent(({ sessionId: sid, event }) => {
+        if (sid !== result.sessionId) return;
+        const evt = event as Record<string, unknown>;
+        const type = evt.type as string;
+
+        if (type === 'message_update' || type === 'message_end') {
+          const msg = evt.message as Record<string, unknown> | undefined;
+          if (msg?.role !== 'assistant') return;
+          // 提取文本
+          const content = msg.content;
+          if (typeof content === 'string') {
+            responseText = content;
+          } else if (Array.isArray(content)) {
+            let text = '';
+            for (const block of content) {
+              if (typeof block === 'object' && block !== null) {
+                const b = block as Record<string, unknown>;
+                if (b.type === 'text' && typeof b.text === 'string') {
+                  text += b.text;
+                }
+              }
+            }
+            responseText = text;
+          }
+        }
+
+        if (type === 'agent_end') {
+          // AI 响应完成，解析建议并更新 store
+          cleanup();
+          if (responseText) {
+            void parseAISuggestionResponse(responseText);
+          } else {
+            useTimingViolationStore.setState({ aiSuggesting: false });
+          }
+        }
+      });
+    }
+  })();
+}}
+aiSuggestingViolationId={aiSuggesting ? aiSuggestionViolationId : null}
+aiSuggestionViolationId={aiSuggestionViolationId}
+aiSuggestion={aiSuggestion}
+onApplyAISuggestion={(v) => {
+  if (aiSuggestion) {
+    applyAISuggestion(projectId, v.id, aiSuggestion);
+  }
+}}
+onClearAISuggestion={clearAISuggestion}
+/>
 
       {/* 空状态提示 */}
       {violations.length === 0 && !loadingViolations && !parsing && (
