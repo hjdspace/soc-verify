@@ -138,6 +138,10 @@ export type TvConfig = {
   corners: string[];
   subsysPatterns: string[];
   defaultResetTimeNs: number;
+  /** 复位区间起始（纳秒），用于自动确认和 AI 分析上下文 */
+  resetIntervalStartNs: number | null;
+  /** 复位区间结束（纳秒），用于自动确认和 AI 分析上下文 */
+  resetIntervalEndNs: number | null;
   autoBackup: boolean;
   backupInterval: number;
 };
