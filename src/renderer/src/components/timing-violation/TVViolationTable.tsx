@@ -11,7 +11,7 @@
 
 import { useRef, useState, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronUp, ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronUp, ChevronDown, ChevronRight, Sparkles, Loader2, Check } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 import { formatTimeDisplay } from '@renderer/lib/tv-utils';
 import type {
@@ -35,6 +35,12 @@ type ViolationTableProps = {
   onToggleSelect: (id: number) => void;
   onSelectAll: () => void;
   onRowConfirm: (violation: ViolationWithConfirmation) => void;
+  onRowAISuggest: (violation: ViolationWithConfirmation) => void;
+  aiSuggestingViolationId: number | null;
+  aiSuggestionViolationId: number | null;
+  aiSuggestion: { confirmer: string | undefined; result: string | undefined; reason: string | undefined; confidence: number; analysis?: string } | null;
+  onApplyAISuggestion: (violation: ViolationWithConfirmation) => void;
+  onClearAISuggestion: () => void;
 };
 
 const ROW_HEIGHT = 36;
@@ -71,6 +77,12 @@ export function TVViolationTable({
   onToggleSelect,
   onSelectAll,
   onRowConfirm,
+  onRowAISuggest,
+  aiSuggestingViolationId,
+  aiSuggestionViolationId,
+  aiSuggestion,
+  onApplyAISuggestion,
+  onClearAISuggestion,
 }: ViolationTableProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -101,7 +113,7 @@ export function TVViolationTable({
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* 表头 */}
-      <div className="flex shrink-0 items-center border-b bg-secondary/30 px-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="flex shrink-0 items-center border-b bg-secondary/30 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         {/* Checkbox 列 */}
         <div className="w-8 flex items-center justify-center">
           <input
@@ -130,7 +142,7 @@ export function TVViolationTable({
         {/* Check 摘要列（不可排序） */}
         <div className="flex-1 min-w-0 px-2 py-1.5">Check</div>
         <div className="w-24 px-2 py-1.5">状态</div>
-        <div className="w-16 px-2 py-1.5">操作</div>
+        <div className="w-28 px-2 py-1.5">操作</div>
       </div>
 
       {/* 虚拟滚动区域 */}
@@ -171,7 +183,7 @@ export function TVViolationTable({
                   {/* 主行 */}
                   <div
                     className={cn(
-                      'flex items-center border-b border-border/30 text-xs transition-colors hover:bg-accent/30',
+                      'flex items-center border-b border-border/30 px-2 text-xs transition-colors hover:bg-accent/30',
                       isExpanded && 'bg-accent/20',
                       isSelected && 'bg-primary/5',
                     )}
@@ -232,7 +244,7 @@ export function TVViolationTable({
                       </span>
                     </div>
                     {/* 操作按钮 */}
-                    <div className="w-16 px-2">
+                    <div className="w-28 px-2 flex items-center gap-1">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -243,12 +255,90 @@ export function TVViolationTable({
                       >
                         确认
                       </button>
+                      {aiSuggestingViolationId === v.id ? (
+                        <Loader2 className="size-3 animate-spin text-primary" />
+                      ) : (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRowAISuggest(v);
+                          }}
+                          className="flex items-center gap-0.5 rounded border border-border px-1.5 py-0.5 text-[10px] text-primary hover:bg-primary/10 transition-colors"
+                          title="AI 智能建议"
+                        >
+                          <Sparkles className="size-2.5" />
+                          AI
+                        </button>
+                      )}
                     </div>
                   </div>
 
                   {/* 展开详情 */}
                   {isExpanded && (
                     <div className="border-b bg-secondary/10 px-10 py-3">
+                      {/* AI 建议展示 */}
+                      {aiSuggestionViolationId === v.id && aiSuggestion && (
+                        <div className="mb-3 rounded border border-primary/30 bg-primary/5 px-3 py-2">
+                          <div className="mb-1 flex items-center justify-between">
+                            <div className="flex items-center gap-1.5">
+                              <Sparkles className="size-3 text-primary" />
+                              <span className="text-[11px] font-semibold text-primary">AI 建议</span>
+                              {aiSuggestion.confidence > 0 && (
+                                <span className="text-[10px] text-muted-foreground">
+                                  置信度: {Math.round(aiSuggestion.confidence * 100)}%
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex gap-1">
+                              {aiSuggestion.confirmer && aiSuggestion.result && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onApplyAISuggestion(v);
+                                  }}
+                                  className="flex items-center gap-0.5 rounded bg-primary px-2 py-0.5 text-[10px] font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+                                >
+                                  <Check className="size-2.5" />
+                                  应用建议
+                                </button>
+                              )}
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onClearAISuggestion();
+                                }}
+                                className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-accent transition-colors"
+                              >
+                                关闭
+                              </button>
+                            </div>
+                          </div>
+                          {aiSuggestion.confirmer && (
+                            <div className="text-[11px]">
+                              <span className="text-muted-foreground">确认人: </span>
+                              <span className="text-foreground">{aiSuggestion.confirmer}</span>
+                              {aiSuggestion.result && (
+                                <>
+                                  <span className="text-muted-foreground ml-2">结果: </span>
+                                  <span className={aiSuggestion.result === 'pass' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
+                                    {aiSuggestion.result}
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                          )}
+                          {aiSuggestion.reason && (
+                            <div className="mt-1 text-[11px] text-foreground">
+                              {aiSuggestion.reason}
+                            </div>
+                          )}
+                          {aiSuggestion.analysis && (
+                            <div className="mt-1 text-[10px] text-muted-foreground">
+                              {aiSuggestion.analysis}
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-[11px]">
                         <div>
                           <span className="text-muted-foreground">完整 Hier: </span>
