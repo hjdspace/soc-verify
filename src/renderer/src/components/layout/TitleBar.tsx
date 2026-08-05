@@ -5,6 +5,7 @@ import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useTerminalStore } from '@renderer/stores/terminal';
 import { cn } from '@renderer/lib/utils';
+import { ToolsDropdown } from './ToolsDropdown';
 
 /**
  * 自定义无边框窗口 TitleBar。
@@ -181,6 +182,9 @@ export function TitleBar() {
         >
           <GitCommitHorizontal className="h-3.5 w-3.5" />
         </TitleBarButton>
+
+        {/* 工具下拉菜单 */}
+        <ToolsDropdown />
 
         {/* 设置按钮 */}
         <TitleBarButton
