@@ -260,6 +260,8 @@ class TVAIAdvisorImpl {
     };
     config: {
       defaultResetTimeNs: number;
+      resetIntervalStartNs: number | null;
+      resetIntervalEndNs: number | null;
     };
   } {
     // 查询违例详情
@@ -326,6 +328,8 @@ class TVAIAdvisorImpl {
       },
       config: {
         defaultResetTimeNs: config.defaultResetTimeNs,
+        resetIntervalStartNs: config.resetIntervalStartNs,
+        resetIntervalEndNs: config.resetIntervalEndNs,
       },
     };
   }
