@@ -709,11 +709,30 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     persistSessionMessages(get().sessions.find((sess) => sess.id === sessionId));
 
     try {
-      const runtimeSessionId = await ensureRuntimeSession(sessionId, set, get);
+      let runtimeSessionId = await ensureRuntimeSession(sessionId, set, get);
       persistSessionMessages(get().sessions.find((sess) => sess.id === sessionId));
       // Images are passed as full data URLs (data:image/png;base64,...).
       // The runner parses these to extract MIME type + base64 data for the SDK.
-      await trpc.session.send.mutate({ sessionId: runtimeSessionId, message: fullMessage, images });
+      try {
+        await trpc.session.send.mutate({ sessionId: runtimeSessionId, message: fullMessage, images });
+      } catch (sendErr) {
+        // If the backend session was destroyed (e.g. idle timeout), reset the
+        // cached runtimeSessionId and retry once with a fresh runtime session.
+        const sendErrMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
+        if (/Session not found/i.test(sendErrMsg)) {
+          set((s) => ({
+            sessions: s.sessions.map((sess) =>
+              sess.id === sessionId
+                ? { ...sess, runtimeSessionId: undefined }
+                : sess,
+            ),
+          }));
+          runtimeSessionId = await ensureRuntimeSession(sessionId, set, get);
+          await trpc.session.send.mutate({ sessionId: runtimeSessionId, message: fullMessage, images });
+        } else {
+          throw sendErr;
+        }
+      }
 
       // Auto-rename session based on the first user message
       if (isFirstMessage && sessionBeforeSend) {
