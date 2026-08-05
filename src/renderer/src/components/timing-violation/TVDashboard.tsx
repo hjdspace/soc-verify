@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { FolderOpen, Loader2, AlertCircle, FileText, Trash2, Zap, CheckSquare, XCircle, History, ListChecks, Download, Upload, ChevronDown, ChevronRight, FileSpreadsheet, Database, Settings, Edit3 } from 'lucide-react';
+import { FolderOpen, Loader2, AlertCircle, FileText, Trash2, Zap, CheckSquare, XCircle, History, ListChecks, Download, Upload, ChevronDown, ChevronRight, FileSpreadsheet, Database, Settings, Edit3, RefreshCw } from 'lucide-react';
 import { useTimingViolationStore } from '@renderer/stores/timing-violation';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSessionStore } from '@renderer/stores/session';
@@ -98,6 +98,11 @@ const aiSuggestionViolationId = useTimingViolationStore((s) => s.aiSuggestionVio
   const exporting = useTimingViolationStore((s) => s.exporting);
   const importing = useTimingViolationStore((s) => s.importing);
 
+  // 配置状态
+  const tvConfig = useTimingViolationStore((s) => s.tvConfig);
+  const loadTvConfig = useTimingViolationStore((s) => s.loadTvConfig);
+  const saveTvConfig = useTimingViolationStore((s) => s.saveTvConfig);
+
   // 数据管理 Actions
   const clearCaseData = useTimingViolationStore((s) => s.clearCaseData);
   const updateCorner = useTimingViolationStore((s) => s.updateCorner);
@@ -105,6 +110,10 @@ const aiSuggestionViolationId = useTimingViolationStore((s) => s.aiSuggestionVio
   const caseCorners = useTimingViolationStore((s) => s.caseCorners);
   const loadingCaseCorners = useTimingViolationStore((s) => s.loadingCaseCorners);
   const loadCaseCorners = useTimingViolationStore((s) => s.loadCaseCorners);
+  const refreshSubsys = useTimingViolationStore((s) => s.refreshSubsys);
+  const refreshingSubsys = useTimingViolationStore((s) => s.refreshingSubsys);
+  const allCaseCorners = useTimingViolationStore((s) => s.allCaseCorners);
+  const loadAllCaseCorners = useTimingViolationStore((s) => s.loadAllCaseCorners);
 
   // 本地 UI 状态
   const [showAutoConfirm, setShowAutoConfirm] = useState(false);
@@ -125,7 +134,8 @@ const aiSuggestionViolationId = useTimingViolationStore((s) => s.aiSuggestionVio
     void loadViolations(projectId);
     void loadStatistics(projectId);
     void loadMetadata(projectId);
-  }, [projectId, loadViolations, loadStatistics, loadMetadata]);
+    void loadTvConfig(projectId);
+  }, [projectId, loadViolations, loadStatistics, loadMetadata, loadTvConfig]);
 
   // 筛选/排序/分页变化时重新加载
   useEffect(() => {
@@ -150,6 +160,13 @@ const aiSuggestionViolationId = useTimingViolationStore((s) => s.aiSuggestionVio
       if (searchTimer.current) clearTimeout(searchTimer.current);
     };
   }, [searchText, projectId, loadViolations]);
+
+  // 数据管理下拉列表打开时加载全量 corner 信息
+  useEffect(() => {
+    if (showDataMenu && projectId) {
+      void loadAllCaseCorners(projectId);
+    }
+  }, [showDataMenu, projectId, loadAllCaseCorners]);
 
   // 监听解析进度 IPC 事件
   useEffect(() => {
@@ -437,7 +454,27 @@ const aiSuggestionViolationId = useTimingViolationStore((s) => s.aiSuggestionVio
             {showDataMenu && (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setShowDataMenu(false)} />
-                <div className="absolute right-0 top-full z-20 mt-1 w-56 rounded-md border border-border bg-background shadow-lg">
+                <div className="absolute right-0 top-full z-20 mt-1 w-64 rounded-md border border-border bg-background shadow-lg">
+                  {/* 当存在 unknown 子系统时，显示刷新子系统按钮 */}
+                  {statistics && statistics.bySubsys['unknown'] && (
+                    <>
+                      <button
+                        onClick={() => {
+                          setShowDataMenu(false);
+                          void refreshSubsys(projectId);
+                        }}
+                        disabled={refreshingSubsys}
+                        className={cn(
+                          'flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent',
+                          refreshingSubsys && 'opacity-50 cursor-not-allowed',
+                        )}
+                      >
+                        {refreshingSubsys ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3 text-amber-600/70" />}
+                        <span className="text-amber-600 dark:text-amber-400">刷新子系统信息</span>
+                      </button>
+                      <div className="my-1 border-t border-border" />
+                    </>
+                  )}
                   <div className="px-2 py-1 text-[10px] font-semibold uppercase text-muted-foreground">清除用例数据</div>
                   {metadata.cases.length === 0 ? (
                     <div className="px-3 py-1.5 text-[11px] text-muted-foreground/50">暂无用例</div>
@@ -468,23 +505,44 @@ const aiSuggestionViolationId = useTimingViolationStore((s) => s.aiSuggestionVio
                   {metadata.cases.length === 0 ? (
                     <div className="px-3 py-1.5 text-[11px] text-muted-foreground/50">暂无用例</div>
                   ) : (
-                    metadata.cases.slice(0, 10).map((c) => (
-                      <button
-                        key={c}
-                        onClick={() => {
-                          setShowDataMenu(false);
-                          setCornerEditCase(c);
-                          setCornerEditOld('');
-                          setCornerEditNew('');
-                          setShowCornerEdit(true);
-                          void loadCaseCorners(projectId, c);
-                        }}
-                        className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
-                      >
-                        <Edit3 className="h-3 w-3 text-primary/70" />
-                        <span className="truncate">{c}</span>
-                      </button>
-                    ))
+                    metadata.cases.slice(0, 10).map((c) => {
+                      const corners = allCaseCorners?.[c];
+                      return (
+                        <button
+                          key={c}
+                          onClick={() => {
+                            setShowDataMenu(false);
+                            setCornerEditCase(c);
+                            setCornerEditOld('');
+                            setCornerEditNew('');
+                            setShowCornerEdit(true);
+                            void loadCaseCorners(projectId, c);
+                          }}
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
+                        >
+                          <Edit3 className="h-3 w-3 shrink-0 text-primary/70" />
+                          <span className="min-w-0 truncate">{c}</span>
+                          {corners && corners.length > 0 && (
+                            <div className="ml-auto flex shrink-0 gap-1">
+                              {corners.map((cc) => (
+                                <span
+                                  key={cc.corner ?? '__null__'}
+                                  className={cn(
+                                    'inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-[9px]',
+                                    cc.corner === null
+                                      ? 'border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                                      : 'border-border bg-secondary/30 text-muted-foreground',
+                                  )}
+                                >
+                                  {cc.corner === null ? '默认' : cc.corner}
+                                  <span className="opacity-60">{cc.count}</span>
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })
                   )}
                 </div>
               </>
@@ -506,13 +564,31 @@ const aiSuggestionViolationId = useTimingViolationStore((s) => s.aiSuggestionVio
       {/* 分布图表（可折叠） */}
       {statistics && statistics.total > 0 && (
         <div className="shrink-0 border-b">
-          <button
-            onClick={() => setShowCharts((v) => !v)}
-            className="flex w-full items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent/50"
-          >
-            {showCharts ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-            分布图表
-          </button>
+          <div className="flex items-center">
+            <button
+              onClick={() => setShowCharts((v) => !v)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-muted-foreground hover:bg-accent/50"
+            >
+              {showCharts ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              分布图表
+            </button>
+            {/* 刷新子系统按钮：当存在 unknown 子系统时显示 */}
+            {statistics.bySubsys['unknown'] && (
+              <button
+                onClick={() => void refreshSubsys(projectId)}
+                disabled={refreshingSubsys}
+                className={cn(
+                  'flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium transition-colors',
+                  'text-amber-600 dark:text-amber-400 hover:bg-amber-500/10',
+                  refreshingSubsys && 'opacity-50 cursor-not-allowed',
+                )}
+                title="更新 case cfg 后点击此按钮刷新子系统信息"
+              >
+                {refreshingSubsys ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                刷新子系统
+              </button>
+            )}
+          </div>
           {showCharts && (
             <TVDistributionCharts
               statistics={statistics}
@@ -590,6 +666,7 @@ onRowAISuggest={(v) => {
       composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
       createdAt: Date.now(),
       model: sessionStore.lastModel ?? undefined,
+      tvViolationId: v.id,
     };
 
     useSessionStore.setState((s) => ({
@@ -675,11 +752,25 @@ onClearAISuggestion={clearAISuggestion}
       <TVAutoConfirmDialog
         open={showAutoConfirm}
         confirming={confirming}
-        defaultResetTimeNs={1000}
+        defaultResetTimeNs={tvConfig?.defaultResetTimeNs ?? 1000}
+        defaultIntervalStartNs={tvConfig?.resetIntervalStartNs ?? null}
+        defaultIntervalEndNs={tvConfig?.resetIntervalEndNs ?? null}
         onSubmit={async (opts) => {
           // 自动确认针对所有用例（或当前筛选的用例），不要求必须选择用例
           const caseName = filterCaseName ?? undefined;
           await autoConfirmByInterval(projectId, caseName, opts);
+
+          // 将用户使用的复位时间和区间持久化到配置，供 AI 分析使用
+          if (tvConfig) {
+            const updatedConfig = {
+              ...tvConfig,
+              defaultResetTimeNs: opts.resetTimeNs ?? tvConfig.defaultResetTimeNs,
+              resetIntervalStartNs: opts.intervalStartNs ?? null,
+              resetIntervalEndNs: opts.intervalEndNs ?? null,
+            };
+            await saveTvConfig(projectId, updatedConfig);
+          }
+
           setShowAutoConfirm(false);
         }}
         onClose={() => setShowAutoConfirm(false)}
