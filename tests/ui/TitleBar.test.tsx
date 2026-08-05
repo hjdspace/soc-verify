@@ -51,6 +51,25 @@ vi.mock('@renderer/stores/simulation', () => ({
   ),
 }));
 
+vi.mock('@renderer/lib/trpc', () => ({
+  trpc: {
+    tools: {
+      open: { mutate: vi.fn() },
+    },
+  },
+}));
+
+vi.mock('@renderer/stores/toast', () => ({
+  useToastStore: vi.fn((selector: (state: Record<string, unknown>) => unknown) =>
+    selector({
+      error: vi.fn(),
+      info: vi.fn(),
+      success: vi.fn(),
+      warning: vi.fn(),
+    }),
+  ),
+}));
+
 import { TitleBar } from '@renderer/components/layout/TitleBar';
 
 describe('TitleBar context', () => {
