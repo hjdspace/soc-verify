@@ -440,6 +440,13 @@ export const settingsRouter = t.router({
       if (typeof cfg.defaultResetTimeNs !== 'number') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'config.defaultResetTimeNs must be a number' });
       }
+      // resetIntervalStartNs/EndNs 可为 null 或 number
+      if (cfg.resetIntervalStartNs !== null && typeof cfg.resetIntervalStartNs !== 'number') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'config.resetIntervalStartNs must be a number or null' });
+      }
+      if (cfg.resetIntervalEndNs !== null && typeof cfg.resetIntervalEndNs !== 'number') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'config.resetIntervalEndNs must be a number or null' });
+      }
       if (typeof cfg.autoBackup !== 'boolean') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'config.autoBackup must be a boolean' });
       }
