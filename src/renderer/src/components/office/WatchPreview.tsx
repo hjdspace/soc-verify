@@ -1,15 +1,25 @@
 /**
- * WatchPreview — 用 webview 加载 officecli watch 模式启动的本地 HTTP 服务。
+ * WatchPreview — 用 Document Surface (WebContentsView) 加载 officecli watch 模式启动的本地 HTTP 服务。
  *
  * 流程：
  *   1. 调用 trpc.document.watchStart.mutate({ filePath }) 获取 { id, url }
- *   2. 用 <webview> 加载 http://localhost:PORT 的 url
+ *   2. 用 SurfaceLayer (kind='document', source='local-server') 加载 http://localhost:PORT
  *   3. 组件卸载时调用 trpc.document.watchStop.mutate({ watchId: id }) 停止 watch
+ *   4. SurfaceHost unmount 时自动销毁 Document Surface
  *
- * watch 模式支持文档热更新：源文件改动后浏览器自动刷新。
+ * 生命周期协调（ADR 0016 Issue #4）：
+ *   - 模式切换 / 标签关闭 / 窗口关闭 → 组件 unmount → watchStop + surface destroy
+ *   - 启动竞态：watchStart 尚未完成时切走 → cancelled 标志 → 成功返回后立即 watchStop
+ *   - 启动失败 → 显示错误占位，不创建 Surface
+ *   - 重复销毁安全：watchStop 对不存在 id 返回 false，bridge.destroy 对不存在 surface 无操作
+ *
+ * watch 模式支持文档热更新：officecli 内部通过 WebSocket 推送文件变更刷新。
+ *
+ * 迁移自旧 <webview> 实现（ADR 0016 Issue #4）。
  */
 import { useEffect, useRef, useState } from 'react';
 import { trpc } from '@renderer/lib/trpc';
+import { SurfaceLayer } from '@renderer/components/surface/SurfaceLayer';
 
 export type WatchPreviewProps = {
   filePath: string;
@@ -32,7 +42,7 @@ export function WatchPreview({ filePath }: WatchPreviewProps) {
       .mutate({ filePath })
       .then((info) => {
         if (cancelled) {
-          // 组件已卸载：watch 已无意义，立即停止避免泄漏
+          // 组件已卸载：watch 已无意义，立即停止避免泄漏进程
           void trpc.document.watchStop.mutate({ watchId: info.id }).catch(() => {});
           return;
         }
@@ -75,11 +85,14 @@ export function WatchPreview({ filePath }: WatchPreviewProps) {
     );
   }
 
+  // Document Surface 加载 local-server (localhost) URL
+  // surfaceId 包含 watchId 以确保唯一性；SurfaceHost unmount 时自动销毁 Surface
   return (
-    <webview
-      src={state.url}
-      partition="persist:office-preview"
-      className="h-full w-full flex-1 border-0"
+    <SurfaceLayer
+      surfaceId={`doc-watch:${state.watchId}`}
+      kind="document"
+      source={{ type: 'local-server', url: state.url }}
+      visible
     />
   );
 }

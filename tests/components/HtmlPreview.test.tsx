@@ -2,18 +2,33 @@
  * HtmlPreview 组件测试。
  *
  * 验证组件调用 document.viewHtml 获取 HTML 路径后，
- * 用 webview 标签加载 file:// URL，并使用 partition 隔离。
+ * 使用 SurfaceLayer (kind='document', source='local-file') 加载 HTML 文件，
+ * 并通过 injectCSS 注入视口填充 CSS。
  *
- * jsdom 不支持 webview 标签，但会将其渲染为 HTMLElement，
- * 因此可以通过 querySelector('webview') 断言 src / partition 属性。
+ * 迁移自旧 <webview> 实现（ADR 0016 Issue #3）。
  */
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import type { JSX } from 'react';
 
 // vi.mock 工厂会被提升到文件顶部，需用 vi.hoisted 让 mock 引用先于工厂执行时定义
-const { viewHtmlMock } = vi.hoisted(() => ({
+const { viewHtmlMock, surfaceLayerMock } = vi.hoisted(() => ({
   viewHtmlMock: vi.fn(),
+  surfaceLayerMock: vi.fn((props: Record<string, unknown>): JSX.Element => {
+    const source = props.source as { type: string; path?: string; url?: string };
+    return (
+      <div
+        data-testid="surface-layer"
+        data-surface-id={props.surfaceId as string}
+        data-kind={props.kind as string}
+        data-source-type={source.type}
+        data-source-path={source.path ?? ''}
+        data-source-url={source.url ?? ''}
+        data-inject-css={(props.injectCSS as string) ?? ''}
+      />
+    );
+  }),
 }));
 
 vi.mock('@renderer/lib/trpc', () => ({
@@ -24,9 +39,13 @@ vi.mock('@renderer/lib/trpc', () => ({
   },
 }));
 
+vi.mock('@renderer/components/surface/SurfaceLayer', () => ({
+  SurfaceLayer: surfaceLayerMock,
+}));
+
 import { HtmlPreview } from '@renderer/components/office/HtmlPreview';
 
-describe('HtmlPreview webview 渲染', () => {
+describe('HtmlPreview Document Surface 渲染', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -38,31 +57,35 @@ describe('HtmlPreview webview 渲染', () => {
     const { container } = render(<HtmlPreview filePath="/tmp/report.docx" />);
 
     expect(screen.getByText(/渲染中/)).toBeInTheDocument();
-    expect(container.querySelector('webview')).toBeNull();
+    expect(container.querySelector('[data-testid="surface-layer"]')).toBeNull();
   });
 
-  it('获取 htmlPath 后用 webview 加载 file:// URL', async () => {
+  it('获取 htmlPath 后用 Document Surface 加载 local-file', async () => {
     viewHtmlMock.mockResolvedValue({ htmlPath: '/tmp/officecli-123.html' });
 
     const { container } = render(<HtmlPreview filePath="/tmp/report.docx" />);
 
     await waitFor(() => {
-      const webview = container.querySelector('webview');
-      expect(webview).not.toBeNull();
-      expect(webview?.getAttribute('src')).toContain('file://');
-      expect(webview?.getAttribute('src')).toContain('officecli-123.html');
+      const surface = container.querySelector('[data-testid="surface-layer"]');
+      expect(surface).not.toBeNull();
+      expect(surface?.getAttribute('data-kind')).toBe('document');
+      expect(surface?.getAttribute('data-source-type')).toBe('local-file');
+      expect(surface?.getAttribute('data-source-path')).toContain('officecli-123.html');
     });
   });
 
-  it('webview 使用 persist:office-preview partition 隔离', async () => {
+  it('Document Surface 注入视口填充 CSS', async () => {
     viewHtmlMock.mockResolvedValue({ htmlPath: '/tmp/officecli-456.html' });
 
     const { container } = render(<HtmlPreview filePath="/tmp/report.docx" />);
 
     await waitFor(() => {
-      const webview = container.querySelector('webview');
-      expect(webview).not.toBeNull();
-      expect(webview?.getAttribute('partition')).toBe('persist:office-preview');
+      const surface = container.querySelector('[data-testid="surface-layer"]');
+      expect(surface).not.toBeNull();
+      const css = surface?.getAttribute('data-inject-css') ?? '';
+      // CSS 应包含 html, body 选择器和 margin/padding 重置
+      expect(css).toContain('html');
+      expect(css).toContain('margin');
     });
   });
 

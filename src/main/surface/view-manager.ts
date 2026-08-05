@@ -11,6 +11,7 @@ export interface SurfaceWebContents {
   getTitle(): string;
   isDestroyed(): boolean;
   destroy(): void;
+  insertCSS?(css: string): Promise<string>;
 }
 
 export interface SurfaceView {
@@ -59,12 +60,15 @@ function isAllowedSource(declaration: SurfaceDeclaration, url: string): boolean 
     return declaration.source.type === 'url' && (parsed.protocol === 'http:' || parsed.protocol === 'https:');
   }
 
+  // Document surfaces only accept local-file and local-server sources.
+  // url-type sources are rejected to prevent document surfaces from loading
+  // arbitrary remote URLs.
   if (declaration.source.type === 'local-file') return parsed.protocol === 'file:';
   if (declaration.source.type === 'local-server') {
     return (parsed.protocol === 'http:' || parsed.protocol === 'https:')
       && (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1' || parsed.hostname === '[::1]');
   }
-  return parsed.protocol === 'http:' || parsed.protocol === 'https:' || parsed.protocol === 'file:';
+  return false;
 }
 
 export function constrainSurfaceBounds(bounds: SurfaceBounds | undefined, hostBounds: SurfaceBounds): SurfaceBounds | null {
@@ -190,6 +194,14 @@ export class ViewManager {
       entry.listeners.push({ event, listener });
     };
 
+    bind('dom-ready', () => {
+      const css = entry.declaration.injectCSS;
+      if (css && typeof entry.view.webContents.insertCSS === 'function') {
+        entry.view.webContents.insertCSS(css).catch(() => {
+          // CSS injection failure is non-fatal; the page still renders.
+        });
+      }
+    });
     bind('did-start-loading', () => this.options.emit({ id, type: 'loading', loading: true }));
     bind('did-stop-loading', () => this.options.emit({ id, type: 'loading', loading: false }));
     const emitURL = (_event: unknown, url: string) => this.options.emit({ id, type: 'url', url });

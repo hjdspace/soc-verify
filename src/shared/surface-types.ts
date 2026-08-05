@@ -18,6 +18,8 @@ export interface SurfaceDeclaration {
   source: SurfaceSource;
   visible: boolean;
   bounds?: SurfaceBounds;
+  /** CSS to inject into the page after dom-ready (e.g. viewport-fill for Document Surfaces). */
+  injectCSS?: string;
 }
 
 export type SurfaceEvent =

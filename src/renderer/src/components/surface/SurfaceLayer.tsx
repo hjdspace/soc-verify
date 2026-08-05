@@ -7,16 +7,19 @@ interface SurfaceLayerProps {
   kind: 'browser' | 'document';
   source: { type: 'url'; url: string } | { type: 'local-file'; path: string } | { type: 'local-server'; url: string };
   visible: boolean;
+  /** CSS to inject into the page after dom-ready (Document Surfaces only). */
+  injectCSS?: string;
 }
 
-export function SurfaceLayer({ surfaceId, kind, source, visible }: SurfaceLayerProps) {
+export function SurfaceLayer({ surfaceId, kind, source, visible, injectCSS }: SurfaceLayerProps) {
   const [failed, setFailed] = useState(false);
   const declaration = useMemo(() => ({
     id: surfaceId,
     kind,
     source,
     visible: visible && !failed,
-  }), [surfaceId, kind, source, visible, failed]);
+    injectCSS,
+  }), [surfaceId, kind, source, visible, failed, injectCSS]);
 
   useEffect(() => {
     const unlisten = window.eventBridge?.onSurfaceEvent((event) => {

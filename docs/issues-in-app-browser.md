@@ -53,7 +53,7 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ---
 
-## Issue #3：迁移 Office HTML 为 Document Surface
+## Issue #3：迁移 Office HTML 为 Document Surface ✅
 
 ### What to build
 
@@ -61,13 +61,13 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ### Acceptance criteria
 
-- [ ] `.docx/.pptx` HTML 模式不再渲染 `<webview>`。
-- [ ] officecli 生成 HTML 后由 Document Surface 加载。
-- [ ] View Manager 在页面就绪后注入视口填充 CSS。
-- [ ] 模式切换或标签关闭立即销毁对应 Surface。
-- [ ] file source 只接受文档协调器产出的授权路径。
-- [ ] officecli 不可用时的降级提示保持不变。
-- [ ] 现有 Screenshots/PDF/XLSX 行为不回归。
+- [x] `.docx/.pptx` HTML 模式不再渲染 `<webview>`。
+- [x] officecli 生成 HTML 后由 Document Surface 加载。
+- [x] View Manager 在页面就绪后注入视口填充 CSS。
+- [x] 模式切换或标签关闭立即销毁对应 Surface。
+- [x] file source 只接受文档协调器产出的授权路径。
+- [x] officecli 不可用时的降级提示保持不变。
+- [x] 现有 Screenshots/PDF/XLSX 行为不回归。
 
 ### Blocked by
 
@@ -75,7 +75,7 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ---
 
-## Issue #4：迁移 Office Watch 与生命周期协调
+## Issue #4：迁移 Office Watch 与生命周期协调 ✅
 
 ### What to build
 
@@ -83,13 +83,13 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ### Acceptance criteria
 
-- [ ] Watch 模式不再渲染 `<webview>`。
-- [ ] 进入 Watch 后启动服务并加载 localhost URL。
-- [ ] 离开 Watch、关闭标签、关闭窗口和应用退出都会停止服务。
-- [ ] 启动尚未完成时切走，成功返回后也会立即停止，不能泄漏进程。
-- [ ] Watch 启动失败显示错误占位，不遗留 Surface。
-- [ ] 热更新行为与现状一致。
-- [ ] 测试覆盖取消竞态和重复销毁。
+- [x] Watch 模式不再渲染 `<webview>`。
+- [x] 进入 Watch 后启动服务并加载 localhost URL。
+- [x] 离开 Watch、关闭标签、关闭窗口和应用退出都会停止服务。
+- [x] 启动尚未完成时切走，成功返回后也会立即停止，不能泄漏进程。
+- [x] Watch 启动失败显示错误占位，不遗留 Surface。
+- [x] 热更新行为与现状一致。
+- [x] 测试覆盖取消竞态和重复销毁。
 
 ### Blocked by
 
