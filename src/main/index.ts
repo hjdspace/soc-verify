@@ -15,6 +15,7 @@ import { errorAnalysisCoordinator } from './simulation/error-analysis-coordinato
 import { terminalManager } from './terminal/terminal-manager';
 import { registerDocumentIpcHandlers, cleanupEditorRegistry } from './document/editor-registry';
 import { cleanupOfficeCli } from './officecli/service';
+import { closeAllToolWindows } from './tools/tool-window-manager';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -418,6 +419,14 @@ function createWindow(): BrowserWindow {
 
   win.on('ready-to-show', () => win.show());
 
+  // Forward maximize/unmaximize events to this window's webContents
+  win.on('maximize', () => {
+    if (!win.isDestroyed()) win.webContents.send('window:maximize-changed', true);
+  });
+  win.on('unmaximize', () => {
+    if (!win.isDestroyed()) win.webContents.send('window:maximize-changed', false);
+  });
+
   // Close behavior: ask user to fully close or minimize to tray.
   // If a saved preference exists (via "不再询问" checkbox), use it directly.
   win.on('close', async (e) => {
@@ -479,21 +488,32 @@ function createWindow(): BrowserWindow {
   return win;
 }
 
-/** Register window-control IPC handlers (single-window app). */
-function registerWindowControls(win: BrowserWindow) {
-  ipcMain.on('window:minimize', () => win.minimize());
+/**
+ * Register global window-control IPC handlers.
+ *
+ * Uses `event.sender` to identify which BrowserWindow sent the request,
+ * so the same handlers work for both the main window and tool windows.
+ * Must be called exactly once (in app.whenReady).
+ */
+function registerWindowControls() {
+  ipcMain.on('window:minimize', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.minimize();
+  });
 
-  ipcMain.on('window:maximize', () => {
+  ipcMain.on('window:maximize', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return;
     if (win.isMaximized()) win.unmaximize();
     else win.maximize();
   });
 
-  ipcMain.on('window:close', () => win.close());
+  ipcMain.on('window:close', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.close();
+  });
 
-  ipcMain.handle('window:is-maximized', () => win.isMaximized());
-
-  win.on('maximize', () => win.webContents.send('window:maximize-changed', true));
-  win.on('unmaximize', () => win.webContents.send('window:maximize-changed', false));
+  ipcMain.handle('window:is-maximized', (event) => {
+    return BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false;
+  });
 }
 
 /** Forward backend events to the renderer via IPC. */
@@ -620,7 +640,7 @@ app.whenReady().then(async () => {
 
   mainWindow = createWindow();
   createIPCHandler({ router, windows: [mainWindow] });
-  registerWindowControls(mainWindow);
+  registerWindowControls();
   registerEventForwarding(mainWindow);
 
   // 注册 officecli 文档相关 IPC handlers（flush-done 由前端发送）
@@ -655,7 +675,6 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     mainWindow = createWindow();
-    registerWindowControls(mainWindow);
     registerEventForwarding(mainWindow);
   } else {
     mainWindow?.show();
@@ -677,4 +696,6 @@ app.on('before-quit', async () => {
   // 清理 officecli watch 进程和文档编辑器注册表
   cleanupOfficeCli();
   cleanupEditorRegistry();
+  // 关闭所有工具窗口
+  closeAllToolWindows();
 });
