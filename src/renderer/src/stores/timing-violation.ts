@@ -141,6 +141,13 @@ export type AISuggestion = {
   analysis?: string;
 };
 
+// ── 用例 Corner 信息类型 ────────────────────────────────
+
+export type CaseCornerInfo = {
+  corner: string | null;
+  count: number;
+};
+
 // ── Store 类型 ─────────────────────────────────────────────
 
 interface TimingViolationState {
@@ -210,6 +217,10 @@ interface TimingViolationState {
   // 数据管理状态
   managingData: boolean;
 
+  // 用例 Corner 信息（更新 corner 对话框使用）
+  caseCorners: CaseCornerInfo[];
+  loadingCaseCorners: boolean;
+
   // ── Actions ─────────────────────────────
   pickAndParse: (projectId: string) => Promise<void>;
   parseFile: (projectId: string, filePath: string, caseName?: string, corner?: string) => Promise<void>;
@@ -221,6 +232,7 @@ interface TimingViolationState {
   clearAllData: (projectId: string) => Promise<void>;
   clearCaseData: (projectId: string, caseName: string, corner?: string) => Promise<void>;
   updateCorner: (projectId: string, caseName: string, newCorner: string, oldCorner?: string) => Promise<void>;
+  loadCaseCorners: (projectId: string, caseName: string) => Promise<void>;
 
   setFilterCaseName: (v: string | null) => void;
   setFilterCorner: (v: string | null) => void;
@@ -329,6 +341,8 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
   loadingConfig: false,
   savingConfig: false,
   managingData: false,
+  caseCorners: [],
+  loadingCaseCorners: false,
 
   pickAndParse: async (projectId) => {
     set({ parsing: true, parseResult: null, parseProgress: null });
@@ -470,6 +484,17 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
       getToast().error('更新 corner 失败', err instanceof Error ? err.message : String(err));
     } finally {
       set({ managingData: false });
+    }
+  },
+
+  loadCaseCorners: async (projectId, caseName) => {
+    set({ loadingCaseCorners: true });
+    try {
+      const result = await trpc.violation.getCaseCorners.query({ projectId, caseName });
+      set({ caseCorners: result as CaseCornerInfo[], loadingCaseCorners: false });
+    } catch (err) {
+      set({ loadingCaseCorners: false, caseCorners: [] });
+      getToast().error('加载用例 Corner 信息失败', err instanceof Error ? err.message : String(err));
     }
   },
 
