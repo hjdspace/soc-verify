@@ -23,6 +23,8 @@ export const DEFAULT_TV_CONFIG: TvConfig = {
   corners: [...DEFAULT_CORNERS],
   subsysPatterns: [...DEFAULT_SUBSYS_PATTERNS],
   defaultResetTimeNs: 1000,
+  resetIntervalStartNs: null,
+  resetIntervalEndNs: null,
   autoBackup: true,
   backupInterval: 100,
 };
@@ -101,6 +103,8 @@ export function loadTvConfig(projectRoot: string): TvConfig {
       corners: Array.isArray(parsed.corners) ? (parsed.corners as string[]) : [...DEFAULT_CORNERS],
       subsysPatterns: Array.isArray(parsed.subsysPatterns) ? (parsed.subsysPatterns as string[]) : [...DEFAULT_SUBSYS_PATTERNS],
       defaultResetTimeNs: typeof parsed.defaultResetTimeNs === 'number' ? parsed.defaultResetTimeNs : 1000,
+      resetIntervalStartNs: typeof parsed.resetIntervalStartNs === 'number' ? parsed.resetIntervalStartNs : null,
+      resetIntervalEndNs: typeof parsed.resetIntervalEndNs === 'number' ? parsed.resetIntervalEndNs : null,
       autoBackup: typeof parsed.autoBackup === 'boolean' ? parsed.autoBackup : true,
       backupInterval: typeof parsed.backupInterval === 'number' ? parsed.backupInterval : 100,
     };
