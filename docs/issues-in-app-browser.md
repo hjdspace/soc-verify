@@ -97,7 +97,7 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ---
 
-## Issue #5：删除 `<webview>` 基础设施
+## Issue #5：删除 `<webview>` 基础设施 ✅
 
 ### What to build
 
@@ -105,11 +105,11 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ### Acceptance criteria
 
-- [ ] 删除 BrowserWindow 的 `webviewTag: true`。
-- [ ] 删除 renderer `env.d.ts` 中 JSX `<webview>` 和 WebviewAttributes 声明。
-- [ ] 删除或重写旧 HtmlPreview/WatchPreview 的 webview 事件代码。
-- [ ] 全仓无业务 `<webview>` 标签和 `persist:office-preview` 依赖。
-- [ ] 构建、类型检查和 Office 预览测试通过。
+- [x] 删除 BrowserWindow 的 `webviewTag: true`。
+- [x] 删除 renderer `env.d.ts` 中 JSX `<webview>` 和 WebviewAttributes 声明。
+- [x] 删除或重写旧 HtmlPreview/WatchPreview 的 webview 事件代码。
+- [x] 全仓无业务 `<webview>` 标签和 `persist:office-preview` 依赖。
+- [x] 构建、类型检查和 Office 预览测试通过。
 
 ### Blocked by
 
@@ -117,7 +117,7 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ---
 
-## Issue #6：Browser Surface、导航条和新标签首页
+## Issue #6：Browser Surface、导航条和新标签首页 ✅
 
 ### What to build
 
@@ -125,13 +125,13 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ### Acceptance criteria
 
-- [ ] 中栏“+”菜单可新建网页标签。
-- [ ] 新标签首页显示地址输入、常用书签占位和分组入口。
-- [ ] 提交 URL 后立即创建 Browser Surface 并加载。
-- [ ] 后退、前进、刷新、加载状态和系统浏览器打开可用。
-- [ ] URL、title、canGoBack/canGoForward、loading 状态由主进程事件更新。
-- [ ] 非 http/https 地址栏输入被拒绝并明确提示。
-- [ ] 相同标准化 URL 复用已有标签。
+- [x] 中栏“+”菜单可新建网页标签。
+- [x] 新标签首页显示地址输入、常用书签占位和分组入口。
+- [x] 提交 URL 后立即创建 Browser Surface 并加载。
+- [x] 后退、前进、刷新、加载状态和系统浏览器打开可用。
+- [x] URL、title、canGoBack/canGoForward、loading 状态由主进程事件更新。
+- [x] 非 http/https 地址栏输入被拒绝并明确提示。
+- [x] 相同标准化 URL 复用已有标签。
 
 ### Blocked by
 

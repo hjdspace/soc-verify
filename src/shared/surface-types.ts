@@ -27,4 +27,5 @@ export type SurfaceEvent =
   | { id: string; type: 'title'; title: string }
   | { id: string; type: 'loading'; loading: boolean }
   | { id: string; type: 'failure'; errorCode: number; errorDescription: string; validatedURL: string; isMainFrame: boolean }
-  | { id: string; type: 'crash'; reason?: string; exitCode?: number };
+  | { id: string; type: 'crash'; reason?: string; exitCode?: number }
+  | { id: string; type: 'navigation'; canGoBack: boolean; canGoForward: boolean };

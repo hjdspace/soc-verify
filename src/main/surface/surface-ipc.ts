@@ -52,6 +52,9 @@ export function registerSurfaceIpcHandlers(): void {
   ipcMain.handle('surface:hide', (event, id: string) => managerForEvent(event).hide(id));
   ipcMain.handle('surface:destroy', (event, id: string) => managerForEvent(event).destroy(id));
   ipcMain.handle('surface:set-overlay-hidden', (event, hidden: boolean) => managerForEvent(event).setOverlayHidden(hidden));
+  ipcMain.handle('surface:go-back', (event, id: string) => managerForEvent(event).goBack(id));
+  ipcMain.handle('surface:go-forward', (event, id: string) => managerForEvent(event).goForward(id));
+  ipcMain.handle('surface:reload', (event, id: string) => managerForEvent(event).reload(id));
 }
 
 export function destroyAllSurfaceManagers(): void {

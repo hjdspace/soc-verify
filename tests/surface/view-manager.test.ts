@@ -32,6 +32,11 @@ function setup() {
     isDestroyed: vi.fn().mockReturnValue(false),
     destroy: vi.fn(),
     insertCSS: vi.fn().mockResolvedValue('css-key'),
+    canGoBack: vi.fn().mockReturnValue(false),
+    canGoForward: vi.fn().mockReturnValue(false),
+    goBack: vi.fn(),
+    goForward: vi.fn(),
+    reload: vi.fn(),
   };
   const view: SurfaceView = {
     webContents,
@@ -108,6 +113,7 @@ describe('ViewManager', () => {
     expect(events).toEqual([
       { id: 'surface-1', type: 'loading', loading: true },
       { id: 'surface-1', type: 'url', url: 'https://example.com/next' },
+      { id: 'surface-1', type: 'navigation', canGoBack: false, canGoForward: false },
       { id: 'surface-1', type: 'crash', reason: 'crashed', exitCode: 9 },
     ]);
     expect(view.setVisible).toHaveBeenLastCalledWith(false);
@@ -401,5 +407,54 @@ describe('ViewManager', () => {
     expect(manager.has('doc-watch-b')).toBe(false);
     expect(host.contentView.removeChildView).toHaveBeenCalledTimes(2);
     expect(webContents.destroy).toHaveBeenCalledTimes(2);
+  });
+
+  // ── Issue #6: Navigation control (goBack/goForward/reload) ──────
+
+  it('calls webContents.goBack and emits navigation state', async () => {
+    const { manager, webContents, events } = setup();
+    (webContents.canGoBack as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    await manager.sync(declaration());
+
+    manager.goBack('surface-1');
+
+    expect(webContents.goBack).toHaveBeenCalledTimes(1);
+    expect(events).toContainEqual({ id: 'surface-1', type: 'navigation', canGoBack: true, canGoForward: false });
+  });
+
+  it('calls webContents.goForward and emits navigation state', async () => {
+    const { manager, webContents, events } = setup();
+    (webContents.canGoForward as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    await manager.sync(declaration());
+
+    manager.goForward('surface-1');
+
+    expect(webContents.goForward).toHaveBeenCalledTimes(1);
+    expect(events).toContainEqual({ id: 'surface-1', type: 'navigation', canGoBack: false, canGoForward: true });
+  });
+
+  it('calls webContents.reload', async () => {
+    const { manager, webContents } = setup();
+    await manager.sync(declaration());
+
+    manager.reload('surface-1');
+
+    expect(webContents.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not call goBack on a non-existent surface', async () => {
+    const { manager, webContents } = setup();
+    manager.goBack('non-existent');
+    expect(webContents.goBack).not.toHaveBeenCalled();
+  });
+
+  it('emits navigation event on did-stop-loading', async () => {
+    const { manager, listeners, events } = setup();
+    await manager.sync(declaration());
+
+    listeners.get('did-stop-loading')?.forEach((listener) => listener());
+
+    expect(events).toContainEqual({ id: 'surface-1', type: 'loading', loading: false });
+    expect(events).toContainEqual({ id: 'surface-1', type: 'navigation', canGoBack: false, canGoForward: false });
   });
 });

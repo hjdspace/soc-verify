@@ -43,6 +43,7 @@ type WorkbenchState = {
   activate: (tabId: string) => void;
   close: (tabId: string) => void;
   closeActive: () => void;
+  updateTabTitle: (tabId: string, title: string) => void;
 };
 
 function describeDestination(destination: WorkbenchDestination): Omit<WorkbenchTab, 'destination'> {
@@ -50,7 +51,7 @@ function describeDestination(destination: WorkbenchDestination): Omit<WorkbenchT
     case 'file':
       return { id: `file:${destination.path}`, title: destination.name, closable: true };
     case 'browser':
-      return { id: `browser:${destination.surfaceId}`, title: destination.title ?? destination.url, closable: true };
+      return { id: `browser:${destination.surfaceId}`, title: destination.title ?? (destination.url || '新标签页'), closable: true };
     case 'terminal':
       return { id: `terminal:${destination.terminalTabId}`, title: destination.title, closable: true };
     case 'simulation-errors':
@@ -159,5 +160,17 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   closeActive: () => {
     const activeTabId = get().activeTabId;
     if (activeTabId) get().close(activeTabId);
+  },
+
+  updateTabTitle: (tabId, title) => {
+    set((state) => {
+      const index = state.tabs.findIndex((tab) => tab.id === tabId);
+      if (index === -1) return state;
+      const tab = state.tabs[index];
+      if (tab.title === title) return state;
+      const tabs = [...state.tabs];
+      tabs[index] = { ...tab, title };
+      return { tabs };
+    });
   },
 }));

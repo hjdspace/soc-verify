@@ -5,9 +5,6 @@
  *   1. 调用 trpc.document.viewHtml.mutate({ filePath }) 获取 HTML 文件路径
  *   2. 用 SurfaceLayer (kind='document', source='local-file') 加载 file:// URL
  *   3. View Manager 在 dom-ready 后注入视口填充 CSS（通过 injectCSS 声明）
- *
- * 迁移自旧 <webview> 实现（ADR 0016 Issue #3）。
- * 不再使用 <webview> 标签、partition="persist:office-preview" 或手动 insertCSS。
  */
 import { useEffect, useState } from 'react';
 import { trpc } from '@renderer/lib/trpc';

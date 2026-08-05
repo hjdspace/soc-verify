@@ -14,8 +14,6 @@
  *   - 重复销毁安全：watchStop 对不存在 id 返回 false，bridge.destroy 对不存在 surface 无操作
  *
  * watch 模式支持文档热更新：officecli 内部通过 WebSocket 推送文件变更刷新。
- *
- * 迁移自旧 <webview> 实现（ADR 0016 Issue #4）。
  */
 import { useEffect, useRef, useState } from 'react';
 import { trpc } from '@renderer/lib/trpc';

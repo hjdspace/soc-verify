@@ -4,8 +4,6 @@
  * 验证组件调用 document.viewHtml 获取 HTML 路径后，
  * 使用 SurfaceLayer (kind='document', source='local-file') 加载 HTML 文件，
  * 并通过 injectCSS 注入视口填充 CSS。
- *
- * 迁移自旧 <webview> 实现（ADR 0016 Issue #3）。
  */
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';

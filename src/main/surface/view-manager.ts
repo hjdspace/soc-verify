@@ -12,6 +12,12 @@ export interface SurfaceWebContents {
   isDestroyed(): boolean;
   destroy(): void;
   insertCSS?(css: string): Promise<string>;
+  canGoBack?(): boolean;
+  canGoForward?(): boolean;
+  goBack?(): void;
+  goForward?(): void;
+  reload?(): void;
+  getNavigationHistory?(): { canGoBack: boolean; canGoForward: boolean };
 }
 
 export interface SurfaceView {
@@ -174,6 +180,35 @@ export class ViewManager {
     return this.surfaces.has(id);
   }
 
+  goBack(id: string): void {
+    const entry = this.surfaces.get(id);
+    if (!entry || entry.view.webContents.isDestroyed()) return;
+    entry.view.webContents.goBack?.();
+    this.emitNavigation(id);
+  }
+
+  goForward(id: string): void {
+    const entry = this.surfaces.get(id);
+    if (!entry || entry.view.webContents.isDestroyed()) return;
+    entry.view.webContents.goForward?.();
+    this.emitNavigation(id);
+  }
+
+  reload(id: string): void {
+    const entry = this.surfaces.get(id);
+    if (!entry || entry.view.webContents.isDestroyed()) return;
+    entry.view.webContents.reload?.();
+  }
+
+  private emitNavigation(id: string): void {
+    const entry = this.surfaces.get(id);
+    if (!entry || entry.view.webContents.isDestroyed()) return;
+    const wc = entry.view.webContents;
+    const canGoBack = typeof wc.canGoBack === 'function' ? wc.canGoBack() : false;
+    const canGoForward = typeof wc.canGoForward === 'function' ? wc.canGoForward() : false;
+    this.options.emit({ id, type: 'navigation', canGoBack, canGoForward });
+  }
+
   private applyPresentation(entry: SurfaceEntry): void {
     if (this.host.isDestroyed() || entry.view.webContents.isDestroyed()) return;
     const bounds = constrainSurfaceBounds(entry.declaration.bounds, this.host.getContentBounds());
@@ -203,8 +238,14 @@ export class ViewManager {
       }
     });
     bind('did-start-loading', () => this.options.emit({ id, type: 'loading', loading: true }));
-    bind('did-stop-loading', () => this.options.emit({ id, type: 'loading', loading: false }));
-    const emitURL = (_event: unknown, url: string) => this.options.emit({ id, type: 'url', url });
+    bind('did-stop-loading', () => {
+      this.options.emit({ id, type: 'loading', loading: false });
+      this.emitNavigation(id);
+    });
+    const emitURL = (_event: unknown, url: string) => {
+      this.options.emit({ id, type: 'url', url });
+      this.emitNavigation(id);
+    };
     bind('did-navigate', emitURL);
     bind('did-navigate-in-page', emitURL);
     bind('page-title-updated', (_event: unknown, title: string) => this.options.emit({ id, type: 'title', title }));

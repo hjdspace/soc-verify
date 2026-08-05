@@ -1,8 +1,17 @@
 import { useEffect, useRef } from 'react';
-import type { SurfaceDeclaration } from '@shared/surface-types';
+import type { SurfaceDeclaration, SurfaceSource } from '@shared/surface-types';
 
 interface SurfaceHostProps {
   declaration: SurfaceDeclaration;
+}
+
+/** Extract a primitive key from a SurfaceSource for useEffect dependencies. */
+function sourceKey(source: SurfaceSource): string {
+  switch (source.type) {
+    case 'url': return `url:${source.url}`;
+    case 'local-file': return `file:${source.path}`;
+    case 'local-server': return `server:${source.url}`;
+  }
 }
 
 /** DOM anchor for a main-process WebContentsView. The native view never enters React's DOM tree. */
@@ -56,6 +65,28 @@ export function SurfaceHost({ declaration }: SurfaceHostProps) {
       void bridge.destroy(surfaceId);
     };
   }, [declaration.id]);
+
+  // Re-sync when the source URL/path changes (e.g. browser navigation).
+  // The main effect above only runs on mount; this effect detects URL changes
+  // and calls bridge.sync() so the ViewManager loads the new URL without
+  // destroying and re-creating the WebContentsView.
+  useEffect(() => {
+    const bridge = window.surfaceBridge;
+    const container = containerRef.current;
+    if (!bridge || !container) return;
+    const rect = container.getBoundingClientRect();
+    void bridge.sync({
+      ...declarationRef.current,
+      bounds: {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      },
+    }).catch(() => {
+      // Best-effort; surface errors are reported through the event bridge.
+    });
+  }, [sourceKey(declaration.source)]);
 
   useEffect(() => {
     if (!window.surfaceBridge) return;

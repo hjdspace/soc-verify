@@ -24,7 +24,7 @@ import { PluginView } from '@renderer/components/plugins/PluginView';
 import { TVDashboard } from '@renderer/components/timing-violation/TVDashboard';
 import { OfficeDocumentView } from '@renderer/components/office/OfficeDocumentView';
 import { Timer } from 'lucide-react';
-import { SurfaceLayer } from '@renderer/components/surface/SurfaceLayer';
+import { BrowserView } from '@renderer/components/browser/BrowserView';
 
 // ── 状态徽章：主题感知的点 + 文字 ────────────────────────────────
 const STATUS_BADGE_STYLES: Record<SimulationStatus, { dot: string; text: string }> = {
@@ -55,7 +55,6 @@ export function CenterArea() {
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
   const destination = activeTab?.destination ?? null;
   const activeSurface = destination?.type === 'browser' ? destination : null;
-
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const plugins = useProjectStore((s) => s.plugins);
   const pluginViews = useMemo(
@@ -310,7 +309,7 @@ export function CenterArea() {
                   </button>
                   <button
                     onClick={() => {
-                      openDestination({ type: 'browser', surfaceId: `browser-${crypto.randomUUID()}`, url: 'https://example.com', title: '新建网页' });
+                      openDestination({ type: 'browser', surfaceId: `browser-${crypto.randomUUID()}`, url: '', title: '新标签页' });
                       setPlusMenuOpen(false);
                     }}
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent"
@@ -425,11 +424,9 @@ export function CenterArea() {
           </div>
         )}
         {activeSurface ? (
-          <SurfaceLayer
+          <BrowserView
             surfaceId={activeSurface.surfaceId}
-            kind="browser"
-            source={{ type: 'url', url: activeSurface.url }}
-            visible
+            url={activeSurface.url}
           />
         ) : destination?.type === 'file' && currentProjectId ? (
           <FileEditor

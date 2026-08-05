@@ -26,6 +26,9 @@ process.once('loaded', async () => {
     hide: (id: string) => ipcRenderer.invoke('surface:hide', id),
     destroy: (id: string) => ipcRenderer.invoke('surface:destroy', id),
     setOverlayHidden: (hidden: boolean) => ipcRenderer.invoke('surface:set-overlay-hidden', hidden),
+    goBack: (id: string) => ipcRenderer.invoke('surface:go-back', id),
+    goForward: (id: string) => ipcRenderer.invoke('surface:go-forward', id),
+    reload: (id: string) => ipcRenderer.invoke('surface:reload', id),
   });
 
   // ── 事件监听 API（文件树更新、项目事件、会话事件）──────────────
