@@ -35,6 +35,8 @@ describe('TV Config Management', () => {
       expect(DEFAULT_TV_CONFIG.corners.length).toBeGreaterThan(0);
       expect(Array.isArray(DEFAULT_TV_CONFIG.subsysPatterns)).toBe(true);
       expect(DEFAULT_TV_CONFIG.defaultResetTimeNs).toBe(1000);
+      expect(DEFAULT_TV_CONFIG.resetIntervalStartNs).toBeNull();
+      expect(DEFAULT_TV_CONFIG.resetIntervalEndNs).toBeNull();
       expect(DEFAULT_TV_CONFIG.autoBackup).toBe(true);
       expect(DEFAULT_TV_CONFIG.backupInterval).toBe(100);
     });
@@ -133,6 +135,8 @@ describe('TV Config Management', () => {
         corners: ['custom_corner'],
         subsysPatterns: ['*_custom$'],
         defaultResetTimeNs: 5000,
+        resetIntervalStartNs: 200,
+        resetIntervalEndNs: 800,
         autoBackup: false,
         backupInterval: 50,
       };
@@ -143,6 +147,8 @@ describe('TV Config Management', () => {
       expect(loaded.corners).toEqual(['custom_corner']);
       expect(loaded.subsysPatterns).toEqual(['*_custom$']);
       expect(loaded.defaultResetTimeNs).toBe(5000);
+      expect(loaded.resetIntervalStartNs).toBe(200);
+      expect(loaded.resetIntervalEndNs).toBe(800);
       expect(loaded.autoBackup).toBe(false);
       expect(loaded.backupInterval).toBe(50);
     });
@@ -165,6 +171,9 @@ describe('TV Config Management', () => {
       // dataDir should be derived from dbPath's directory
       expect(loaded.dataDir).toBe('.socverify/timing-violation');
       expect(loaded.corners).toEqual(['corner1']);
+      // New interval fields default to null for old configs
+      expect(loaded.resetIntervalStartNs).toBeNull();
+      expect(loaded.resetIntervalEndNs).toBeNull();
     });
   });
 
@@ -175,6 +184,8 @@ describe('TV Config Management', () => {
         corners: ['corner1', 'corner2'],
         subsysPatterns: ['*_sys$'],
         defaultResetTimeNs: 2000,
+        resetIntervalStartNs: 100,
+        resetIntervalEndNs: 500,
         autoBackup: true,
         backupInterval: 200,
       };
@@ -189,6 +200,8 @@ describe('TV Config Management', () => {
       expect(parsed.dataDir).toBe('test/data');
       expect(parsed.corners).toEqual(['corner1', 'corner2']);
       expect(parsed.defaultResetTimeNs).toBe(2000);
+      expect(parsed.resetIntervalStartNs).toBe(100);
+      expect(parsed.resetIntervalEndNs).toBe(500);
     });
 
     it('creates directory if it does not exist', () => {
@@ -218,6 +231,8 @@ describe('TV Config Management', () => {
         corners: ['npg_f1_ssg', 'npg_f2_ssg', 'npg_f1_ffg'],
         subsysPatterns: ['*_sys$', '^top$', '*_subsys$'],
         defaultResetTimeNs: 1500,
+        resetIntervalStartNs: 200,
+        resetIntervalEndNs: 900,
         autoBackup: false,
         backupInterval: 75,
       };
