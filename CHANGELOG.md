@@ -6,6 +6,46 @@
 
 ---
 
+## [0.2.2](https://github.com/hjdspace/soc-verify/compare/v0.2.1...v0.2.2) (2026-08-06)
+
+### Features
+
+* **surface:** 实现 View Manager 核心架构，提供视图边界与叠加层同步（Issue #1 #2）
+* **surface:** 完成 Document Surface 迁移（Issue #3 #4）
+* **browser:** 移除 webview 基础设施并新增 Browser Surface（Issue #5 #6）
+* **browser:** 实现浏览器标签持久化与书签管理
+* **browser:** 支持 window.open、SSO 登录和证书处理（Issue #9）
+* **browser:** 实现下载管理与权限处理（Issue #10）
+* **browser:** 新增页内查找、浏览器快捷键和统一 URL 打开（Issue #11 #12）
+* **browser:** 添加浏览器视图 URL 同步逻辑
+* **tools:** 新增工具注册中心、工具窗口管理和工具下拉菜单集成
+* **tools:** 新增 Git Diff、Git Manager、Git Quick Pull 多仓库管理工具
+* **tools:** 新增 Register Table Parser 和 Reg2C（Excel 转 C 头文件）
+* **tools:** 新增 SV Ifdef Checker 和 C-SV Converter
+* **tools:** 新增 Batch Execution 批量执行和 Code Line Counter 代码统计
+* **tools:** 新增 Coverage Merger 覆盖率合并和 Environment Checker 环境检查
+* **tools:** 新增 Find Replace、Log Analyzer 和 Performance Monitor
+* **tools:** 新增 Regression Analyzer、Regression List Gen 和 Time Analyzer
+* **timing-violation:** 新增 TV AI Advisor，提供时序违例智能建议
+* **timing-violation:** 新增 Pattern 管理和回归扫描，支持精确与模糊匹配
+* **timing-violation:** 新增导出/导入功能，支持 Excel/CSV 导出和数据库迁移
+* **timing-violation:** 新增 TVDistributionCharts 分布图表
+* **timing-violation:** 增强 TVDashboard，支持 case corner 加载和 reset interval 配置
+* **timing-violation:** 实现子系统批量更新和历史确认应用
+* **coverage:** 新增覆盖率导入进度跟踪
+* **overview:** 新增项目概览缓存（5 秒 TTL）和 Zustand store
+
+### Refactor
+
+* **surface:** 重构导航状态获取逻辑，统一使用 navigationHistory 对象
+* **timing-violation:** 重命名 dbPath 为 dataDir，改进目录处理
+
+### Chore
+
+* 批量清理未使用变量、导入项和冗余依赖
+
+---
+
 ## [0.2.1](https://github.com/hjdspace/soc-verify/compare/v0.2.0...v0.2.1) (2026-08-04)
 
 ### Features
