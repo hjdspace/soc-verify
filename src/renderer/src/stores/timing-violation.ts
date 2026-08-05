@@ -127,6 +127,8 @@ export type TvConfig = {
   corners: string[];
   subsysPatterns: string[];
   defaultResetTimeNs: number;
+  resetIntervalStartNs: number | null;
+  resetIntervalEndNs: number | null;
   autoBackup: boolean;
   backupInterval: number;
 };
@@ -147,6 +149,9 @@ export type CaseCornerInfo = {
   corner: string | null;
   count: number;
 };
+
+/** 全量用例→corner 映射（数据管理下拉列表用） */
+export type AllCaseCorners = Record<string, Array<{ corner: string | null; count: number }>>;
 
 // ── Store 类型 ─────────────────────────────────────────────
 
@@ -221,6 +226,12 @@ interface TimingViolationState {
   caseCorners: CaseCornerInfo[];
   loadingCaseCorners: boolean;
 
+  // 全量用例 Corner 信息（数据管理下拉列表使用）
+  allCaseCorners: AllCaseCorners | null;
+
+  // 子系统刷新状态
+  refreshingSubsys: boolean;
+
   // ── Actions ─────────────────────────────
   pickAndParse: (projectId: string) => Promise<void>;
   parseFile: (projectId: string, filePath: string, caseName?: string, corner?: string) => Promise<void>;
@@ -233,6 +244,8 @@ interface TimingViolationState {
   clearCaseData: (projectId: string, caseName: string, corner?: string) => Promise<void>;
   updateCorner: (projectId: string, caseName: string, newCorner: string, oldCorner?: string) => Promise<void>;
   loadCaseCorners: (projectId: string, caseName: string) => Promise<void>;
+  refreshSubsys: (projectId: string) => Promise<void>;
+  loadAllCaseCorners: (projectId: string) => Promise<void>;
 
   setFilterCaseName: (v: string | null) => void;
   setFilterCorner: (v: string | null) => void;
@@ -343,6 +356,8 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
   managingData: false,
   caseCorners: [],
   loadingCaseCorners: false,
+  allCaseCorners: null,
+  refreshingSubsys: false,
 
   pickAndParse: async (projectId) => {
     set({ parsing: true, parseResult: null, parseProgress: null });
@@ -494,6 +509,33 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
       set({ caseCorners: result as CaseCornerInfo[], loadingCaseCorners: false });
     } catch (err) {
       set({ loadingCaseCorners: false, caseCorners: [] });
+      getToast().error('加载用例 Corner 信息失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  refreshSubsys: async (projectId) => {
+    set({ refreshingSubsys: true });
+    try {
+      const result = await trpc.violation.refreshSubsys.mutate({ projectId });
+      if (result.updated > 0) {
+        getToast().success(`子系统刷新完成：${result.updated} 条记录已更新`);
+      } else {
+        getToast().info('没有需要刷新的子系统信息');
+      }
+      await get().refreshAll(projectId);
+    } catch (err) {
+      getToast().error('刷新子系统失败', err instanceof Error ? err.message : String(err));
+    } finally {
+      set({ refreshingSubsys: false });
+    }
+  },
+
+  loadAllCaseCorners: async (projectId) => {
+    try {
+      const result = await trpc.violation.getAllCaseCorners.query({ projectId });
+      set({ allCaseCorners: result as AllCaseCorners });
+    } catch (err) {
+      set({ allCaseCorners: null });
       getToast().error('加载用例 Corner 信息失败', err instanceof Error ? err.message : String(err));
     }
   },
