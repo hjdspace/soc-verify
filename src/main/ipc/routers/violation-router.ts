@@ -31,6 +31,8 @@ import {
   clearAllData,
   updateCorner,
   getCaseCorners,
+  updateSubsysForCases,
+  getAllCaseCorners,
 } from '../../timing-violation/db/tv-repository';
 import { parseLogStream } from '../../timing-violation/parser/vio-parser';
 import type { ParsedViolation, ParseOptions } from '../../timing-violation/types';
@@ -472,6 +474,72 @@ export const violationRouter = t.router({
     .mutation(async ({ input }) => {
       const db = getTvDb(input.projectId);
       return updateCorner(db, input.caseName, input.newCorner, input.oldCorner);
+    }),
+
+  /**
+   * 刷新子系统信息。
+   *
+   * 场景：用户上传的 vio_summary.log 路径中不含子系统目录名，导致数据库中 subsys 列为 NULL。
+   * 用户更新 case cfg 后，点击「刷新子系统」按钮，清除 discovery 缓存并重新解析 case→subsys 映射，
+   * 将匹配到的 subsys 回填到数据库中。
+   *
+   * 返回更新的记录数。
+   */
+  refreshSubsys: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .mutation(async ({ input }) => {
+      const db = getTvDb(input.projectId);
+
+      // 检查是否有 subsys 为 NULL 的记录
+      const nullSubsysRow = db.prepare(`
+        SELECT COUNT(*) as count FROM timing_violations WHERE subsys IS NULL
+      `).get() as { count: number };
+
+      if (nullSubsysRow.count === 0) {
+        return { updated: 0 };
+      }
+
+      // 清除 discovery 缓存，确保下次查询从数据源重新加载
+      const project = requireProject(input.projectId);
+      caseStatsRegistry.clearDiscoveryCache(project.rootPath);
+
+      // 获取 CaseStatsService 并构建 case→subsys 映射
+      const service = await getCaseStatsServiceForTv(input.projectId);
+      if (!service) {
+        return { updated: 0 };
+      }
+
+      const caseToSubsys = await service.getCaseToSubsysMap();
+      if (caseToSubsys.size === 0) {
+        return { updated: 0 };
+      }
+
+      // 批量更新数据库中 subsys 为 NULL 的记录
+      const result = updateSubsysForCases(db, caseToSubsys);
+      return { updated: result.updated };
+    }),
+
+  /**
+   * 获取所有用例的 corner 分布信息。
+   * 用于数据管理下拉列表中直接展示每个用例的 corner 信息。
+   */
+  getAllCaseCorners: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .query(async ({ input }) => {
+      const db = getTvDb(input.projectId);
+      return getAllCaseCorners(db);
     }),
 
   /**
