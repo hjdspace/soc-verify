@@ -6,6 +6,7 @@
  */
 
 import { loadTvConfig, getDbPath } from '../tv-config';
+// getDbPath now takes dataDir (not dbPath) — same import, different semantics
 import { initDatabase, type TvDatabase } from './tv-database';
 import { projectManager } from '../../project/project-manager';
 
@@ -22,7 +23,7 @@ export function getTvDb(projectId: string): TvDatabase {
     const project = projectManager.getProject(projectId);
     if (!project) throw new Error(`Project not found: ${projectId}`);
     const config = loadTvConfig(project.rootPath);
-    const dbPath = getDbPath(project.rootPath, config.dbPath);
+    const dbPath = getDbPath(project.rootPath, config.dataDir);
     db = initDatabase(dbPath);
     dbCache.set(projectId, db);
   }
