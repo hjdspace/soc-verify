@@ -12,7 +12,7 @@
  * 标签复用：提交 URL 时检查是否已有标签加载了相同标准化 URL，
  * 若有则激活已有标签并关闭当前空标签（仅当当前标签 url 为空时）。
  */
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { AlertCircle, RotateCw, ShieldAlert } from 'lucide-react';
 import type { SurfaceEvent } from '@shared/surface-types';
 import { useBrowserStore } from '@renderer/stores/browser';
@@ -21,6 +21,7 @@ import { SurfaceLayer } from '@renderer/components/surface/SurfaceLayer';
 import { NewTabPage } from './NewTabPage';
 import { NavigationBar } from './NavigationBar';
 import { FindBar } from './FindBar';
+import { shouldSyncDestinationUrl } from '@renderer/lib/browser-url-sync';
 
 export type BrowserViewProps = {
   surfaceId: string;
@@ -42,6 +43,7 @@ export function BrowserView({ surfaceId, url }: BrowserViewProps) {
   const activateTab = useWorkbenchStore((s) => s.activate);
   const closeWorkbenchTab = useWorkbenchStore((s) => s.close);
   const updateTabTitle = useWorkbenchStore((s) => s.updateTabTitle);
+  const previousDestinationUrl = useRef(url);
 
   // Create browser store entry on mount, remove on unmount
   useEffect(() => {
@@ -53,10 +55,12 @@ export function BrowserView({ surfaceId, url }: BrowserViewProps) {
 
   // Sync url from props to browser store when it changes
   useEffect(() => {
-    if (url && (!tab || tab.url !== url)) {
+    const previousUrl = previousDestinationUrl.current;
+    previousDestinationUrl.current = url;
+    if (shouldSyncDestinationUrl(previousUrl, url, tab?.url)) {
       setUrl(surfaceId, url);
     }
-  }, [surfaceId, url, tab, setUrl]);
+  }, [surfaceId, url, tab?.url, setUrl]);
 
   // Listen to surface events for this surface
   useEffect(() => {
