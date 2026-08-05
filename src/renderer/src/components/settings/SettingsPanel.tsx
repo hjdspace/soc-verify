@@ -1631,7 +1631,7 @@ function TimingViolationConfigTab() {
   const saveTvConfig = useTimingViolationStore((s) => s.saveTvConfig);
 
   // Local editing state
-  const [dbPath, setDbPath] = useState('');
+  const [dataDir, setDataDir] = useState('');
   const [corners, setCorners] = useState<string[]>([]);
   const [subsysPatterns, setSubsysPatterns] = useState<string[]>([]);
   const [defaultResetTimeNs, setDefaultResetTimeNs] = useState(1000);
@@ -1649,7 +1649,7 @@ function TimingViolationConfigTab() {
   // Sync loaded config into local state
   useEffect(() => {
     if (tvConfig) {
-      setDbPath(tvConfig.dbPath);
+      setDataDir(tvConfig.dataDir);
       setCorners([...tvConfig.corners]);
       setSubsysPatterns([...tvConfig.subsysPatterns]);
       setDefaultResetTimeNs(tvConfig.defaultResetTimeNs);
@@ -1673,7 +1673,7 @@ function TimingViolationConfigTab() {
 
   const handleSave = () => {
     void saveTvConfig(currentProjectId, {
-      dbPath,
+      dataDir,
       corners,
       subsysPatterns,
       defaultResetTimeNs,
@@ -1708,17 +1708,24 @@ function TimingViolationConfigTab() {
 
   return (
     <div className="space-y-4">
-      {/* 数据库路径 */}
+      {/* 数据根目录 */}
       <div>
-        <label className="mb-1 block text-[10px] font-semibold uppercase text-muted-foreground">数据库路径</label>
+        <label className="mb-1 block text-[10px] font-semibold uppercase text-muted-foreground">数据根目录</label>
         <input
           type="text"
-          value={dbPath}
-          onChange={(e) => setDbPath(e.target.value)}
-          placeholder=".socverify/timing-violation/tv.db"
+          value={dataDir}
+          onChange={(e) => setDataDir(e.target.value)}
+          placeholder=".socverify/timing-violation"
           className="w-full rounded border border-border bg-background px-2 py-1.5 font-mono text-xs outline-none focus:ring-1 focus:ring-primary"
         />
-        <p className="mt-0.5 text-[10px] text-muted-foreground/70">相对于项目根目录的路径，修改后需重启生效</p>
+        <p className="mt-0.5 text-[10px] text-muted-foreground/70">
+          相对于项目根目录，所有 TV 数据（数据库/导出/备份）统一存储在此目录下
+        </p>
+        <div className="mt-1 rounded border border-border/50 bg-secondary/20 px-2 py-1.5 text-[10px] text-muted-foreground/70">
+          <div>数据库: <span className="font-mono">{dataDir || '.socverify/timing-violation'}/tv.db</span></div>
+          <div>导出: <span className="font-mono">{dataDir || '.socverify/timing-violation'}/exports/</span></div>
+          <div>备份: <span className="font-mono">{dataDir || '.socverify/timing-violation'}/backups/</span></div>
+        </div>
       </div>
 
       {/* Corner 列表 */}
