@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { TitleBar } from './TitleBar';
 import { LeftRail } from './LeftRail';
 import { CenterArea } from './CenterArea';
@@ -13,6 +13,7 @@ import { SettingsPanel } from '@renderer/components/settings/SettingsPanel';
 import { SourceControlDialog } from '@renderer/components/scm/SourceControlDialog';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
+import { useSessionStore } from '@renderer/stores/session';
 
 export function AppShell() {
   const leftCollapsed = useUiStore((s) => s.leftRailCollapsed);
@@ -26,14 +27,30 @@ export function AppShell() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const uiStateReady = useProjectStore((s) => s.uiStateReady);
   const saveProjectState = useProjectStore((s) => s.saveState);
+  // Track session tab changes so that lastSessionIds is persisted.
+  const sessionIds = useSessionStore((s) =>
+    s.sessions.map((sess) => sess.persistedSessionId ?? sess.id).join(','),
+  );
+  const saveProjectStateRef = useRef(saveProjectState);
+  saveProjectStateRef.current = saveProjectState;
 
+  // Debounced save when UI layout or session tabs change.
   useEffect(() => {
     if (!currentProjectId || !uiStateReady) return;
     const timer = window.setTimeout(() => {
       void saveProjectState();
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [currentProjectId, uiStateReady, leftCollapsed, rightCollapsed, optionDockExpanded, pluginViewLayouts, saveProjectState]);
+  }, [currentProjectId, uiStateReady, leftCollapsed, rightCollapsed, optionDockExpanded, pluginViewLayouts, sessionIds, saveProjectState]);
+
+  // Save state before the window unloads so lastSessionIds is up-to-date.
+  useEffect(() => {
+    const handler = () => {
+      void saveProjectStateRef.current();
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, []);
 
   return (
     <div className="flex h-screen w-screen flex-col bg-background text-foreground">
