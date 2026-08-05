@@ -426,8 +426,8 @@ export function SubsysList() {
     setSubsystemError(null);
     trpc.project.getSubsystems
       .query({ projectId: currentProjectId })
-      .then((data) => {
-        if (!cancelled) setSubsystems(data as SubsysData[]);
+      .then((data: SubsysData[]) => {
+        if (!cancelled) setSubsystems(data);
       })
       .catch((error: unknown) => {
         if (!cancelled) {
@@ -457,12 +457,12 @@ export function SubsysList() {
         subsys: expandedSubsys,
         status: caseStatusFilter === 'all' ? undefined : caseStatusFilter,
       })
-      .then((data) => {
+      .then((data: CaseData[]) => {
         if (!cancelled) {
-          setCases(data as CaseData[]);
+          setCases(data);
           // Auto-expand all file nodes when cases are loaded
           const filePaths = new Set<string>();
-          for (const c of data as CaseData[]) {
+          for (const c of data) {
             if (c.filePath) filePaths.add(c.filePath);
           }
           if (filePaths.size > 0) {
@@ -500,8 +500,8 @@ export function SubsysList() {
           subsys: searchSubsys ?? undefined,
           limit: 200,
         })
-        .then((data) => {
-          setSearchResults(data as CaseData[]);
+        .then((data: CaseData[]) => {
+          setSearchResults(data);
         })
         .catch(() => {
           setSearchResults([]);
