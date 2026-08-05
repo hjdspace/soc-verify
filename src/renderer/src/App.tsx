@@ -7,6 +7,7 @@ import { useToastStore } from './stores/toast';
 import { useSessionStore } from './stores/session';
 import { trpc } from './lib/trpc';
 import { ToolApp } from './tools/ToolApp';
+import { useBrowserTabPersistence } from './hooks/use-browser-tab-persistence';
 
 /** Check if this renderer instance is a tool window (has `#tool=` hash). */
 function isToolWindow(): boolean {
@@ -60,6 +61,9 @@ export default function App() {
         errorToast('tRPC 连接失败', `后端服务不可达: ${detail}`);
       });
   }, [errorToast, toolMode]);
+
+  // Browser tab persistence: restore on startup, debounced save on changes
+  useBrowserTabPersistence();
 
   // Tool window: render ToolApp instead of AppShell
   if (toolMode) {

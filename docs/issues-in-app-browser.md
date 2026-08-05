@@ -139,7 +139,7 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ---
 
-## Issue #7：全局网页标签持久化与资源策略
+## Issue #7：全局网页标签持久化与资源策略 ✅
 
 ### What to build
 
@@ -147,12 +147,12 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ### Acceptance criteria
 
-- [ ] 切换/关闭项目不会关闭网页标签。
-- [ ] 应用重启恢复 URL、标题、顺序和最后激活项并重新加载。
-- [ ] 变更采用防抖保存，退出前同步刷盘。
-- [ ] 文件写入采用版本化和原子替换，损坏时可回退为空状态并提示。
-- [ ] 超过 12 个网页标签提示，不自动关闭或卸载后台页。
-- [ ] 单个 View 崩溃显示 React 错误页和手动重载。
+- [x] 切换/关闭项目不会关闭网页标签。
+- [x] 应用重启恢复 URL、标题、顺序和最后激活项并重新加载。
+- [x] 变更采用防抖保存，退出前同步刷盘。
+- [x] 文件写入采用版本化和原子替换，损坏时可回退为空状态并提示。
+- [x] 超过 12 个网页标签提示，不自动关闭或卸载后台页。
+- [x] 单个 View 崩溃显示 React 错误页和手动重载。
 
 ### Blocked by
 
@@ -160,7 +160,7 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ---
 
-## Issue #8：书签、常用网页和数据管理
+## Issue #8：书签、常用网页和数据管理 ✅
 
 ### What to build
 
@@ -168,13 +168,13 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ### Acceptance criteria
 
-- [ ] 可新增、编辑、删除书签和分组。
-- [ ] 可调整组内顺序并标记常用。
-- [ ] 收藏当前页使用主进程事件提供的当前 URL/title。
-- [ ] 常用项显示在新标签首页，不维护第二套 URL 数据。
-- [ ] JSON 导入校验版本、字段、URL 协议和重复项。
-- [ ] JSON 导出可恢复全部书签、分组、排序和常用状态。
-- [ ] 设置中可清理 Browser session Cookie、缓存和站点数据。
+- [x] 可新增、编辑、删除书签和分组。
+- [x] 可调整组内顺序并标记常用。
+- [x] 收藏当前页使用主进程事件提供的当前 URL/title。
+- [x] 常用项显示在新标签首页，不维护第二套 URL 数据。
+- [x] JSON 导入校验版本、字段、URL 协议和重复项。
+- [x] JSON 导出可恢复全部书签、分组、排序和常用状态。
+- [x] 设置中可清理 Browser session Cookie、缓存和站点数据。
 
 ### Blocked by
 

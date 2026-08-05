@@ -7,11 +7,13 @@
  *   3. url 为空时显示 NewTabPage（新标签首页）
  *   4. url 非空时显示 NavigationBar + SurfaceLayer（Browser Surface）
  *   5. 提供 onNavigate 回调：标准化 URL → 标签复用检查 → 更新 workbench destination
+ *   6. 页面崩溃时显示 React 错误页和手动重载按钮
  *
  * 标签复用：提交 URL 时检查是否已有标签加载了相同标准化 URL，
  * 若有则激活已有标签并关闭当前空标签（仅当当前标签 url 为空时）。
  */
 import { useEffect, useCallback } from 'react';
+import { AlertCircle, RotateCw } from 'lucide-react';
 import type { SurfaceEvent } from '@shared/surface-types';
 import { useBrowserStore } from '@renderer/stores/browser';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
@@ -31,6 +33,7 @@ export function BrowserView({ surfaceId, url }: BrowserViewProps) {
   const setUrl = useBrowserStore((s) => s.setUrl);
   const applyEvent = useBrowserStore((s) => s.applyEvent);
   const findByUrl = useBrowserStore((s) => s.findByUrl);
+  const reloadTab = useBrowserStore((s) => s.reloadTab);
 
   const openDestination = useWorkbenchStore((s) => s.open);
   const activateTab = useWorkbenchStore((s) => s.activate);
@@ -86,22 +89,63 @@ export function BrowserView({ surfaceId, url }: BrowserViewProps) {
     openDestination({ type: 'browser', surfaceId, url: targetUrl });
   }, [surfaceId, url, findByUrl, activateTab, closeWorkbenchTab, openDestination]);
 
+  // Handle manual reload from crash error page
+  const handleCrashReload = useCallback(() => {
+    reloadTab(surfaceId);
+    void window.surfaceBridge?.reload(surfaceId);
+  }, [surfaceId, reloadTab]);
+
   const currentUrl = tab?.url ?? url;
   const hasUrl = currentUrl !== '';
+  const isCrashed = tab?.crashed === true;
 
   if (!hasUrl) {
     return <NewTabPage onNavigate={handleNavigate} />;
   }
 
-  return (
-    <div className="flex h-full w-full flex-col">
-      <NavigationBar
-        surfaceId={surfaceId}
-        url={currentUrl}
-        loading={tab?.loading ?? false}
-        canGoBack={tab?.canGoBack ?? false}
-        canGoForward={tab?.canGoForward ?? false}
-        error={tab?.error ?? null}
+  if (isCrashed) {
+    return (
+      <div className="flex h-full w-full flex-col">
+        <NavigationBar
+          surfaceId={surfaceId}
+          url={currentUrl}
+          title={tab?.title}
+          loading={tab?.loading ?? false}
+          canGoBack={tab?.canGoBack ?? false}
+          canGoForward={tab?.canGoForward ?? false}
+          error={tab?.error ?? null}
+          onNavigate={handleNavigate}
+        />
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 bg-background px-4">
+          <AlertCircle className="h-10 w-10 text-status-fail-foreground" />
+          <div className="text-center">
+            <h2 className="text-sm font-semibold text-foreground">页面崩溃</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {tab?.error ?? '页面渲染进程意外退出'}
+            </p>
+          </div>
+          <button
+            onClick={handleCrashReload}
+            className="flex items-center gap-1.5 rounded-md border border-border bg-secondary/30 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent"
+          >
+            <RotateCw className="h-3.5 w-3.5" />
+            <span>重新加载</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+return (
+<div className="flex h-full w-full flex-col">
+<NavigationBar
+surfaceId={surfaceId}
+url={currentUrl}
+title={tab?.title}
+loading={tab?.loading ?? false}
+canGoBack={tab?.canGoBack ?? false}
+canGoForward={tab?.canGoForward ?? false}
+error={tab?.error ?? null}
         onNavigate={handleNavigate}
       />
       <SurfaceLayer

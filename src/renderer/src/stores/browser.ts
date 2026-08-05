@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { SurfaceEvent } from '@shared/surface-types';
+import { BROWSER_TAB_SOFT_LIMIT, type PersistedBrowserTab, type PersistedBrowserTabs } from '@shared/browser-types';
 
 export type BrowserTabState = {
   surfaceId: string;
@@ -12,6 +13,8 @@ export type BrowserTabState = {
   canGoBack: boolean;
   canGoForward: boolean;
   error: string | null;
+  /** True when the render process has crashed — UI shows error page with manual reload. */
+  crashed: boolean;
 };
 
 type BrowserStore = {
@@ -30,6 +33,14 @@ type BrowserStore = {
   getTab: (surfaceId: string) => BrowserTabState | undefined;
   /** Find an existing tab whose current URL matches the given normalized URL. */
   findByUrl: (normalizedUrl: string) => BrowserTabState | undefined;
+  /** Export current tabs in the format for main-process persistence. */
+  serializeForPersistence: () => PersistedBrowserTabs;
+  /** Restore tabs from persisted state (replaces all current tabs). */
+  restoreFromPersisted: (data: PersistedBrowserTabs) => void;
+  /** Returns true when the number of browser tabs exceeds the soft limit. */
+  exceedsSoftLimit: () => boolean;
+  /** Clear crashed state for a tab (user clicked reload on crash error page). */
+  reloadTab: (surfaceId: string) => void;
 };
 
 /**
@@ -88,6 +99,7 @@ export const useBrowserStore = create<BrowserStore>((set, get) => ({
             canGoBack: false,
             canGoForward: false,
             error: null,
+            crashed: false,
           },
         },
         order: [...state.order, surfaceId],
@@ -151,7 +163,7 @@ export const useBrowserStore = create<BrowserStore>((set, get) => ({
           return {
             tabs: {
               ...state.tabs,
-              [event.id]: { ...tab, error: `页面崩溃 (${event.reason ?? 'unknown'})` },
+              [event.id]: { ...tab, error: `页面崩溃 (${event.reason ?? 'unknown'})`, crashed: true },
             },
           };
         default:
@@ -165,5 +177,57 @@ export const useBrowserStore = create<BrowserStore>((set, get) => ({
   findByUrl: (normalizedUrl) => {
     const { tabs } = get();
     return Object.values(tabs).find((tab) => tab.url === normalizedUrl);
+  },
+
+  serializeForPersistence: () => {
+    const { tabs, order } = get();
+    const persistedTabs: PersistedBrowserTab[] = order
+      .map((id) => tabs[id])
+      .filter((tab) => tab != null && tab.url !== '')
+      .map((tab) => ({
+        surfaceId: tab.surfaceId,
+        url: tab.url,
+        title: tab.title,
+      }));
+    return { version: 1 as const, tabs: persistedTabs, activeTabId: null };
+  },
+
+  restoreFromPersisted: (data) => {
+    set(() => {
+      const tabs: Record<string, BrowserTabState> = {};
+      const order: string[] = [];
+      for (const ptab of data.tabs) {
+        tabs[ptab.surfaceId] = {
+          surfaceId: ptab.surfaceId,
+          url: ptab.url,
+          initialUrl: ptab.url,
+          title: ptab.title,
+          loading: false,
+          canGoBack: false,
+          canGoForward: false,
+          error: null,
+          crashed: false,
+        };
+        order.push(ptab.surfaceId);
+      }
+      return { tabs, order };
+    });
+  },
+
+  exceedsSoftLimit: () => {
+    return get().order.length > BROWSER_TAB_SOFT_LIMIT;
+  },
+
+  reloadTab: (surfaceId) => {
+    set((state) => {
+      const tab = state.tabs[surfaceId];
+      if (!tab) return state;
+      return {
+        tabs: {
+          ...state.tabs,
+          [surfaceId]: { ...tab, crashed: false, error: null, loading: true },
+        },
+      };
+    });
   },
 }));

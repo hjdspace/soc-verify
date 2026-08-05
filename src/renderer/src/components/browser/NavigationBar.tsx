@@ -5,19 +5,23 @@
  * - 后退、前进、刷新按钮
  * - 地址栏（显示当前 URL，可编辑提交新 URL）
  * - 加载状态指示
+ * - 收藏当前页（使用主进程事件提供的当前 URL/title）
  * - 在系统浏览器中打开
  *
  * 按钮 disabled 状态由主进程 navigation 事件驱动的 canGoBack/canGoForward 控制。
  */
 import { useState, useCallback, type FormEvent, useEffect } from 'react';
-import { ArrowLeft, ArrowRight, RotateCw, ExternalLink, Loader2, Globe, AlertCircle } from 'lucide-react';
+import { ArrowLeft, ArrowRight, RotateCw, ExternalLink, Loader2, Globe, AlertCircle, Star } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { normalizeUrl } from '@renderer/stores/browser';
+import { useBookmarkStore } from '@renderer/stores/bookmarks';
 import { cn } from '@renderer/lib/utils';
 
 export type NavigationBarProps = {
   surfaceId: string;
   url: string;
+  /** Current page title (from surface event, used when bookmarking). */
+  title?: string;
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
@@ -28,6 +32,7 @@ export type NavigationBarProps = {
 export function NavigationBar({
   surfaceId,
   url,
+  title,
   loading,
   canGoBack,
   canGoForward,
@@ -35,6 +40,12 @@ export function NavigationBar({
   onNavigate,
 }: NavigationBarProps) {
   const [addressValue, setAddressValue] = useState(url);
+  const bookmarks = useBookmarkStore((s) => s.bookmarks);
+  const addBookmark = useBookmarkStore((s) => s.addBookmark);
+  const toggleFrequent = useBookmarkStore((s) => s.toggleFrequent);
+
+  // Check if current URL is already bookmarked
+  const existingBookmark = bookmarks.find((b) => b.url === url);
 
   // Sync address bar when the URL changes from navigation (back/forward/link click)
   useEffect(() => {
@@ -61,6 +72,18 @@ export function NavigationBar({
       // best-effort
     }
   }, [url]);
+
+  // Bookmark the current page (or toggle frequent if already bookmarked)
+  const handleBookmark = useCallback(async () => {
+    if (!url) return;
+    if (existingBookmark) {
+      // Toggle frequent flag on existing bookmark
+      await toggleFrequent(existingBookmark.id);
+    } else {
+      // Create new bookmark with current URL and title
+      await addBookmark({ url, title: title || url, frequent: true });
+    }
+  }, [url, title, existingBookmark, addBookmark, toggleFrequent]);
 
   const handleSubmit = useCallback((e: FormEvent) => {
     e.preventDefault();
@@ -142,6 +165,23 @@ export function NavigationBar({
           )}
         </div>
       </form>
+
+      {/* 收藏当前页 */}
+      <button
+        onClick={handleBookmark}
+        disabled={!url}
+        title={existingBookmark ? '取消常用' : '收藏为常用书签'}
+        className={cn(
+          'flex items-center justify-center rounded p-1.5 transition-colors',
+          url
+            ? existingBookmark?.frequent
+              ? 'text-primary hover:bg-accent'
+              : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+            : 'cursor-not-allowed text-muted-foreground/30',
+        )}
+      >
+        <Star className={cn('h-4 w-4', existingBookmark?.frequent && 'fill-current')} />
+      </button>
 
       {/* 在系统浏览器中打开 */}
       <button
