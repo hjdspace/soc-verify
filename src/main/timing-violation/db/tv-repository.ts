@@ -441,6 +441,76 @@ export function updateCorner(
   return { updated };
 }
 
+// ─── 批量更新 Subsys ──────────────────────────────────────────
+
+/**
+ * 根据 caseName → subsys 映射，批量更新 subsys 为 NULL 的违例记录。
+ *
+ * 场景：用户上传的 vio_summary.log 路径中不含子系统目录名，
+ * 导致数据库中 subsys 列为 NULL。用户更新 case cfg 后，
+ * 通过用例树的 case→subsys 映射回填子系统信息。
+ *
+ * @param caseToSubsys caseName → subsys 映射表
+ * @returns 更新的记录数
+ */
+export function updateSubsysForCases(
+  db: Database.Database,
+  caseToSubsys: Map<string, string>,
+): { updated: number } {
+  if (caseToSubsys.size === 0) return { updated: 0 };
+
+  // 查询 subsys 为 NULL 的违例中所有的 case_name
+  const rows = db.prepare(`
+    SELECT DISTINCT case_name FROM timing_violations WHERE subsys IS NULL
+  `).all() as { case_name: string }[];
+
+  let updated = 0;
+  const stmt = db.prepare(`
+    UPDATE timing_violations SET subsys = @subsys WHERE case_name = @caseName AND subsys IS NULL
+  `);
+
+  const tx = db.transaction(() => {
+    for (const row of rows) {
+      const subsys = caseToSubsys.get(row.case_name);
+      if (subsys) {
+        const result = stmt.run({ subsys, caseName: row.case_name });
+        updated += result.changes;
+      }
+    }
+  });
+  tx();
+
+  return { updated };
+}
+
+// ─── 全量用例 Corner 信息 ─────────────────────────────────────
+
+/**
+ * 获取所有用例的 corner 分布信息。
+ * 返回 caseName → [{ corner, count }] 的映射。
+ * 用于数据管理下拉列表中直接展示每个用例的 corner 信息。
+ */
+export function getAllCaseCorners(
+  db: Database.Database,
+): Record<string, Array<{ corner: string | null; count: number }>> {
+  const rows = db.prepare(`
+    SELECT case_name, corner, COUNT(*) as count
+    FROM timing_violations
+    GROUP BY case_name, corner
+    ORDER BY case_name, corner IS NULL, corner
+  `).all() as { case_name: string; corner: string | null; count: number }[];
+
+  const result: Record<string, Array<{ corner: string | null; count: number }>> = {};
+  for (const row of rows) {
+    if (!result[row.case_name]) {
+      result[row.case_name] = [];
+    }
+    result[row.case_name].push({ corner: row.corner, count: row.count });
+  }
+
+  return result;
+}
+
 // ─── Pattern 管理 ─────────────────────────────────────────────
 
 /**
