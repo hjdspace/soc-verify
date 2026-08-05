@@ -123,12 +123,22 @@ export type BatchProcessResult = {
 // ── 配置类型 ────────────────────────────────────────────────
 
 export type TvConfig = {
-  dbPath: string;
+  dataDir: string;
   corners: string[];
   subsysPatterns: string[];
   defaultResetTimeNs: number;
   autoBackup: boolean;
   backupInterval: number;
+};
+
+// ── AI 建议类型 ───────────────────────────────────────────
+
+export type AISuggestion = {
+  confirmer: string | undefined;
+  result: string | undefined;
+  reason: string | undefined;
+  confidence: number;
+  analysis?: string;
 };
 
 // ── Store 类型 ─────────────────────────────────────────────
@@ -170,6 +180,11 @@ interface TimingViolationState {
   selectedViolationIds: Set<number>;
   showConfirmDialog: boolean;
   confirmDialogViolation: ViolationWithConfirmation | null;
+
+  // AI 建议状态
+  aiSuggesting: boolean;
+  aiSuggestion: AISuggestion | null;
+  aiSuggestionViolationId: number | null;
 
   // Pattern 状态
   patterns: ViolationPattern[];
@@ -222,6 +237,13 @@ interface TimingViolationState {
   autoConfirmByInterval: (projectId: string, caseName: string | undefined, opts: { resetTimeNs?: number; intervalStartNs?: number; intervalEndNs?: number }) => Promise<void>;
   updateConfirmation: (projectId: string, violationId: number, status: ConfirmationStatus, confirmer: string, result: ConfirmResult, reason: string) => Promise<void>;
   batchUpdateConfirmations: (projectId: string, violationIds: number[], status: ConfirmationStatus, confirmer: string, result: ConfirmResult, reason: string) => Promise<void>;
+
+  // AI 建议相关 Actions
+  suggestConfirmation: (projectId: string, violationId: number) => Promise<void>;
+  startAISuggestion: (projectId: string, violationId: number) => Promise<{ sessionId: string; promptMessage: string } | null>;
+  parseAISuggestionResponse: (responseText: string) => Promise<AISuggestion | null>;
+  clearAISuggestion: () => void;
+  applyAISuggestion: (projectId: string, violationId: number, suggestion: AISuggestion) => Promise<void>;
 
   toggleViolationSelection: (id: number) => void;
   selectAllVisibleViolations: () => void;
@@ -284,6 +306,11 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
   selectedViolationIds: new Set(),
   showConfirmDialog: false,
   confirmDialogViolation: null,
+
+  // AI 建议状态
+  aiSuggesting: false,
+  aiSuggestion: null,
+  aiSuggestionViolationId: null,
 
   patterns: [],
   loadingPatterns: false,
@@ -562,6 +589,69 @@ export const useTimingViolationStore = create<TimingViolationState>((set, get) =
 
   openConfirmDialog: (violation) => set({ showConfirmDialog: true, confirmDialogViolation: violation }),
   closeConfirmDialog: () => set({ showConfirmDialog: false, confirmDialogViolation: null }),
+
+  // ── AI 建议相关 Actions ────────────────────────────────
+
+  suggestConfirmation: async (projectId, violationId) => {
+    set({ aiSuggesting: true, aiSuggestion: null, aiSuggestionViolationId: violationId });
+    try {
+      const suggestion = await trpc.confirmation.suggestConfirmation.query({
+        projectId,
+        violationId,
+      });
+      set({ aiSuggestion: suggestion as AISuggestion, aiSuggesting: false });
+    } catch (err) {
+      set({ aiSuggesting: false, aiSuggestion: null, aiSuggestionViolationId: null });
+      getToast().error('AI 建议获取失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
+  startAISuggestion: async (projectId, violationId) => {
+    set({ aiSuggesting: true, aiSuggestion: null, aiSuggestionViolationId: violationId });
+    try {
+      const result = await trpc.confirmation.startAISuggestion.mutate({
+        projectId,
+        violationId,
+      });
+      return result;
+    } catch (err) {
+      set({ aiSuggesting: false, aiSuggestion: null, aiSuggestionViolationId: null });
+      getToast().error('AI 分析启动失败', err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  },
+
+  parseAISuggestionResponse: async (responseText) => {
+    try {
+      const suggestion = await trpc.confirmation.parseAISuggestion.query({
+        responseText,
+      });
+      set({ aiSuggestion: suggestion as AISuggestion, aiSuggesting: false });
+      return suggestion as AISuggestion;
+    } catch (err) {
+      set({ aiSuggesting: false });
+      getToast().error('AI 建议解析失败', err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  },
+
+  clearAISuggestion: () => set({ aiSuggestion: null, aiSuggestionViolationId: null }),
+
+  applyAISuggestion: async (projectId, violationId, suggestion) => {
+    if (!suggestion.confirmer || !suggestion.result) {
+      getToast().error('AI 建议信息不完整，无法应用');
+      return;
+    }
+    await get().updateConfirmation(
+      projectId,
+      violationId,
+      'confirmed',
+      suggestion.confirmer,
+      suggestion.result as ConfirmResult,
+      suggestion.reason ?? '',
+    );
+    set({ aiSuggestion: null, aiSuggestionViolationId: null });
+  },
 
   // ── Pattern 相关 Actions ────────────────────────────────────
 
