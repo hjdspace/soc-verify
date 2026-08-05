@@ -379,7 +379,7 @@ export function updateCorner(
   const tx = db.transaction(() => {
     const sourceCondition = oldCorner
       ? 'case_name = @caseName AND corner = @oldCorner'
-      : 'case_name = @caseName AND corner != @newCorner';
+      : 'case_name = @caseName AND (corner IS NULL OR corner != @newCorner)';
     const params = oldCorner
       ? { caseName, oldCorner, newCorner }
       : { caseName, newCorner };
