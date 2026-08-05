@@ -210,6 +210,12 @@ export function registerSurfaceIpcHandlers(): void {
   ipcMain.handle('surface:go-forward', (event, id: string) => managerForEvent(event).goForward(id));
   ipcMain.handle('surface:reload', (event, id: string) => managerForEvent(event).reload(id));
 
+  // Issue #11: Find-in-page
+  ipcMain.handle('surface:find-in-page', (event, id: string, searchText: string, options?: { forward?: boolean }) =>
+    managerForEvent(event).findInPage(id, searchText, options));
+  ipcMain.handle('surface:stop-find-in-page', (event, id: string, action?: 'clearSelection' | 'keepSelection' | 'activateSelection') =>
+    managerForEvent(event).stopFindInPage(id, action));
+
   // Issue #9: Certificate proceed — renderer asks to single-continue a certificate error
   ipcMain.handle('browser:proceed-certificate', (event, surfaceId: string, url: string) => {
     certTracker.allowProceed(surfaceId, url);

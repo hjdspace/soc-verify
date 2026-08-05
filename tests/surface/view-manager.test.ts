@@ -98,7 +98,7 @@ describe('ViewManager', () => {
     manager.destroy('surface-1');
 
     expect(host.contentView.removeChildView).toHaveBeenCalledTimes(1);
-    expect(webContents.off).toHaveBeenCalledTimes(9);
+    expect(webContents.off).toHaveBeenCalledTimes(10);
     expect(webContents.destroy).toHaveBeenCalledTimes(1);
     expect(manager.has('surface-1')).toBe(false);
   });

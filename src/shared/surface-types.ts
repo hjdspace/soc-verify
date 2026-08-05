@@ -31,4 +31,6 @@ export type SurfaceEvent =
   | { id: string; type: 'navigation'; canGoBack: boolean; canGoForward: boolean }
   // Issue #9: certificate error — emitted when a TLS certificate validation fails.
   // Default policy is deny; user can single-continue via browser.proceedCertificate.
-  | { id: string; type: 'certificate-error'; url: string; error: string; isMainFrame: boolean };
+  | { id: string; type: 'certificate-error'; url: string; error: string; isMainFrame: boolean }
+  // Issue #11: find-in-page result — emitted when the webContents reports match count.
+  | { id: string; type: 'find-result'; activeMatchOrdinal: number; matches: number; finalUpdate: boolean };

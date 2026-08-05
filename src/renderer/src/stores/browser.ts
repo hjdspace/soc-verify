@@ -17,6 +17,12 @@ export type BrowserTabState = {
   crashed: boolean;
   /** Issue #9: Certificate error details — when set, UI shows risk page with single-continue option. */
   certificateError: { url: string; error: string } | null;
+  /** Issue #11: Find-in-page bar visibility. */
+  findActive: boolean;
+  /** Issue #11: Total number of matches from the last find-in-page search. */
+  findMatches: number;
+  /** Issue #11: 1-based index of the currently active match. */
+  findActiveMatch: number;
 };
 
 type BrowserStore = {
@@ -45,6 +51,10 @@ type BrowserStore = {
   reloadTab: (surfaceId: string) => void;
   /** Issue #9: Clear certificate error state for a tab (user clicked continue or reload). */
   clearCertificateError: (surfaceId: string) => void;
+  /** Issue #11: Toggle the find-in-page bar visibility. */
+  toggleFind: (surfaceId: string) => void;
+  /** Issue #11: Close the find-in-page bar and clear find state. */
+  closeFind: (surfaceId: string) => void;
 };
 
 /**
@@ -105,6 +115,9 @@ export const useBrowserStore = create<BrowserStore>((set, get) => ({
             error: null,
             crashed: false,
             certificateError: null,
+            findActive: false,
+            findMatches: 0,
+            findActiveMatch: 0,
           },
         },
         order: [...state.order, surfaceId],
@@ -178,6 +191,13 @@ export const useBrowserStore = create<BrowserStore>((set, get) => ({
               [event.id]: { ...tab, certificateError: { url: event.url, error: event.error }, loading: false },
             },
           };
+        case 'find-result':
+          return {
+            tabs: {
+              ...state.tabs,
+              [event.id]: { ...tab, findMatches: event.matches, findActiveMatch: event.activeMatchOrdinal },
+            },
+          };
         default:
           return state;
       }
@@ -220,6 +240,9 @@ export const useBrowserStore = create<BrowserStore>((set, get) => ({
           error: null,
           crashed: false,
           certificateError: null,
+          findActive: false,
+          findMatches: 0,
+          findActiveMatch: 0,
         };
         order.push(ptab.surfaceId);
       }
@@ -252,6 +275,32 @@ export const useBrowserStore = create<BrowserStore>((set, get) => ({
         tabs: {
           ...state.tabs,
           [surfaceId]: { ...tab, certificateError: null },
+        },
+      };
+    });
+  },
+
+  toggleFind: (surfaceId) => {
+    set((state) => {
+      const tab = state.tabs[surfaceId];
+      if (!tab) return state;
+      return {
+        tabs: {
+          ...state.tabs,
+          [surfaceId]: { ...tab, findActive: !tab.findActive },
+        },
+      };
+    });
+  },
+
+  closeFind: (surfaceId) => {
+    set((state) => {
+      const tab = state.tabs[surfaceId];
+      if (!tab) return state;
+      return {
+        tabs: {
+          ...state.tabs,
+          [surfaceId]: { ...tab, findActive: false, findMatches: 0, findActiveMatch: 0 },
         },
       };
     });

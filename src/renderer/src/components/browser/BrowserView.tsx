@@ -20,6 +20,7 @@ import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { SurfaceLayer } from '@renderer/components/surface/SurfaceLayer';
 import { NewTabPage } from './NewTabPage';
 import { NavigationBar } from './NavigationBar';
+import { FindBar } from './FindBar';
 
 export type BrowserViewProps = {
   surfaceId: string;
@@ -35,6 +36,7 @@ export function BrowserView({ surfaceId, url }: BrowserViewProps) {
   const findByUrl = useBrowserStore((s) => s.findByUrl);
   const reloadTab = useBrowserStore((s) => s.reloadTab);
   const clearCertificateError = useBrowserStore((s) => s.clearCertificateError);
+  const findActive = useBrowserStore((s) => s.tabs[surfaceId]?.findActive ?? false);
 
   const openDestination = useWorkbenchStore((s) => s.open);
   const activateTab = useWorkbenchStore((s) => s.activate);
@@ -200,6 +202,7 @@ canGoForward={tab?.canGoForward ?? false}
 error={tab?.error ?? null}
         onNavigate={handleNavigate}
       />
+      {findActive && <FindBar surfaceId={surfaceId} />}
       <SurfaceLayer
         surfaceId={surfaceId}
         kind="browser"

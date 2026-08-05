@@ -128,7 +128,7 @@ officecli 二进制不可用时：
 
 ### 主题 4：前端预览
 
-> **迁移说明（ADR 0016）**：本 ADR 原始设计使用 `<webview>` 承载 HTML/Watch。后续统一迁移方案已记录于 [ADR 0016](./0016-webcontentsview-surfaces.md)：HTML/Watch 改为 Document Surface + WebContentsView，Screenshots/PDF/Fortune-sheet 保持现有实现。以下历史决策中的 webview 描述仅作为原始实现记录，实施时以 ADR 0016 为准。
+> **迁移完成（ADR 0016）**：本 ADR 原始设计使用 `<webview>` 承载 HTML/Watch。该迁移已全部完成并验证通过：HTML/Watch 已改为 Document Surface + WebContentsView，`<webview>` 标签、`webviewTag: true` 配置和 `persist:office-preview` 分区已删除，不再保留双轨实现。Screenshots/PDF/Fortune-sheet 保持现有实现不变。详见 [ADR 0016](./0016-webcontentsview-surfaces.md)。以下历史决策中的 webview 描述仅作为原始设计记录保留，实际实现以 ADR 0016 为准。
 
 **4.1 预览模式：HTML + Screenshots + Watch + PDF(pdfjs-dist)**
 
@@ -139,13 +139,15 @@ officecli 二进制不可用时：
 | `.xlsx` | Edit（Fortune-sheet） | Edit, HTML, Screenshots |
 | `.pdf` | pdfjs-dist | pdfjs-dist |
 
-**4.2 预览容器：webview**
+**4.2 预览容器：WebContentsView（已迁移）**
 
-- 在 `BrowserWindow` 配置中启用 `webviewTag: true`
-- webview 使用 `partition="persist:office-preview"` 隔离 cookie/storage
-- **不修改 index.html 的 CSP**（`default-src 'self'`）——webview 是独立进程，不受渲染进程 CSP 限制
-- HTML 模式：`webview src="file:///path/to/output.html"`
-- Watch 模式：`webview src="http://localhost:PORT"`
+> 以下为历史设计记录。实际实现已迁移至 Document Surface + WebContentsView（ADR 0016），不再使用 `<webview>` 标签。
+
+- ~~在 `BrowserWindow` 配置中启用 `webviewTag: true`~~（已删除）
+- ~~webview 使用 `partition="persist:office-preview"` 隔离 cookie/storage~~（已改为 Document Surface 独立 session）
+- **不修改 index.html 的 CSP**（`default-src 'self'`）——WebContentsView 是独立进程，不受渲染进程 CSP 限制
+- HTML 模式：Document Surface 加载 `file:///path/to/output.html`
+- Watch 模式：Document Surface 加载 `http://localhost:PORT`
 - Screenshots 模式：`<img>` 标签（需 `readImageAsDataURL` 绕过 file:// CORS）
 
 **4.3 PDF 预览：react-pdf**
@@ -204,7 +206,7 @@ officecli 二进制不可用时：
 type OfficeDocumentDestination = {
   type: 'office-document'
   filePath: string
-  mode: 'preview' | 'edit'  // preview=webview/react-pdf, edit=Fortune-sheet
+  mode: 'preview' | 'edit'  // preview=WebContentsView/react-pdf, edit=Fortune-sheet
   previewMode?: 'html' | 'screenshots' | 'watch'  // 仅 preview 模式有效
 }
 ```
@@ -310,9 +312,9 @@ AI 调用 append_xlsx_row(path, ...)
 
 **渲染进程**：
 - `src/renderer/src/components/office/OfficeDocumentView.tsx` —— 容器组件（根据 mode 分发）
-- `src/renderer/src/components/office/HtmlPreview.tsx` —— webview HTML 预览
+- `src/renderer/src/components/office/HtmlPreview.tsx` —— Document Surface HTML 预览（原 webview，已迁移）
 - `src/renderer/src/components/office/ScreenshotsPreview.tsx` —— PNG 截图预览
-- `src/renderer/src/components/office/WatchPreview.tsx` —— webview Watch 预览
+- `src/renderer/src/components/office/WatchPreview.tsx` —— Document Surface Watch 预览（原 webview，已迁移）
 - `src/renderer/src/components/office/PdfPreview.tsx` —— react-pdf 预览
 - `src/renderer/src/components/office/XlsxEditor.tsx` —— Fortune-sheet 编辑器
 - `src/renderer/src/stores/office.ts` —— office 文档状态（打开的文件、编辑器状态、flush 状态）
@@ -338,7 +340,7 @@ AI 调用 append_xlsx_row(path, ...)
 
 - `package.json` —— 新增依赖 + download:officecli/prebuild:officecli 脚本
 - `src/main/ipc/router.ts` —— 注册 `document: documentRouter`
-- `src/main/index.ts` —— BrowserWindow 启用 `webviewTag: true`；注册 officecli IPC；应用退出时 `cleanupOfficeCli`
+- `src/main/index.ts` —— ~~BrowserWindow 启用 `webviewTag: true`~~（已删除）；注册 officecli IPC；应用退出时 `cleanupOfficeCli`
 - `src/main/host/host-tools.ts` —— 在 `registerDefaults` 或单独方法中注册 7 个新工具
 - `src/main/agent/session-manager.ts`（或等效文件）—— omp 子进程启动前注入 PATH
 - `src/renderer/src/components/layout/CenterArea.tsx` —— 新增 `office-document` 分支
@@ -377,7 +379,7 @@ AI 调用 append_xlsx_row(path, ...)
 - **iframe + srcDoc**：受父页面 CSP 限制，无法加载 file:// 和 http://localhost（Watch 模式不可用）。
 - **直接注入 HTML**：丧失脚本能力，大文件性能差。
 - **自定义 Protocol**：可绕过 CSP 但需注册协议，复杂度中。
-- **webview**（选中）：独立进程，不受渲染进程 CSP 限制，SpaceCode 验证可行。
+- **webview**（历史选择，已迁移至 WebContentsView）：独立进程，不受渲染进程 CSP 限制，SpaceCode 验证可行。迁移原因和方案见 ADR 0016。
 
 ### xlsx 读写库
 - **SheetJS Community**：免费但部分高级功能（图表）需 Pro 版。

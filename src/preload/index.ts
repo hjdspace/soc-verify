@@ -29,6 +29,11 @@ process.once('loaded', async () => {
     goBack: (id: string) => ipcRenderer.invoke('surface:go-back', id),
     goForward: (id: string) => ipcRenderer.invoke('surface:go-forward', id),
     reload: (id: string) => ipcRenderer.invoke('surface:reload', id),
+    // Issue #11: Find-in-page
+    findInPage: (id: string, searchText: string, options?: { forward?: boolean }) =>
+      ipcRenderer.invoke('surface:find-in-page', id, searchText, options),
+    stopFindInPage: (id: string, action?: 'clearSelection' | 'keepSelection' | 'activateSelection') =>
+      ipcRenderer.invoke('surface:stop-find-in-page', id, action),
   });
 
   // ── 事件监听 API（文件树更新、项目事件、会话事件）──────────────

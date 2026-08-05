@@ -18,6 +18,8 @@ export interface SurfaceWebContents {
   goForward?(): void;
   reload?(): void;
   getNavigationHistory?(): { canGoBack: boolean; canGoForward: boolean };
+  findInPage?(text: string, options?: { forward?: boolean }): void;
+  stopFindInPage?(action: 'clearSelection' | 'keepSelection' | 'activateSelection'): void;
 }
 
 export interface SurfaceView {
@@ -204,6 +206,21 @@ export class ViewManager {
     entry.view.webContents.reload?.();
   }
 
+  /** Issue #11: Search for text in the page. */
+  findInPage(id: string, searchText: string, options?: { forward?: boolean }): void {
+    const entry = this.surfaces.get(id);
+    if (!entry || entry.view.webContents.isDestroyed()) return;
+    const forward = options?.forward ?? true;
+    entry.view.webContents.findInPage?.(searchText, { forward });
+  }
+
+  /** Issue #11: Stop the current find-in-page session. */
+  stopFindInPage(id: string, action: 'clearSelection' | 'keepSelection' | 'activateSelection' = 'clearSelection'): void {
+    const entry = this.surfaces.get(id);
+    if (!entry || entry.view.webContents.isDestroyed()) return;
+    entry.view.webContents.stopFindInPage?.(action);
+  }
+
   private emitNavigation(id: string): void {
     const entry = this.surfaces.get(id);
     if (!entry || entry.view.webContents.isDestroyed()) return;
@@ -263,6 +280,10 @@ export class ViewManager {
     bind('render-process-gone', (_event: unknown, details?: { reason?: string; exitCode?: number }) => {
       this.options.emit({ id, type: 'crash', reason: details?.reason, exitCode: details?.exitCode });
       entry.view.setVisible(false);
+    });
+    // Issue #11: found-in-page — emit find-result surface event with match count
+    bind('found-in-page', (_event: unknown, result: { activeMatchOrdinal: number; matches: number; finalUpdate: boolean }) => {
+      this.options.emit({ id, type: 'find-result', activeMatchOrdinal: result.activeMatchOrdinal, matches: result.matches, finalUpdate: result.finalUpdate });
     });
     // Issue #9: certificate-error — deny by default, emit event for renderer to show risk UI.
     // User can single-continue via browser.proceedCertificate IPC.

@@ -9,6 +9,7 @@ import { trpc } from './lib/trpc';
 import { ToolApp } from './tools/ToolApp';
 import { useBrowserTabPersistence } from './hooks/use-browser-tab-persistence';
 import { useBrowserEvents } from './hooks/use-browser-events';
+import { useBrowserShortcuts } from './hooks/use-browser-shortcuts';
 
 /** Check if this renderer instance is a tool window (has `#tool=` hash). */
 function isToolWindow(): boolean {
@@ -68,6 +69,9 @@ export default function App() {
 
   // Issue #9 + #10: Browser event listeners (window.open, downloads, auth popups)
   useBrowserEvents();
+
+  // Issue #11: Browser keyboard shortcuts (Ctrl+F, Ctrl+L, Ctrl+R, Alt+Left/Right, Ctrl+D, Ctrl+W)
+  useBrowserShortcuts();
 
   // Tool window: render ToolApp instead of AppShell
   if (toolMode) {

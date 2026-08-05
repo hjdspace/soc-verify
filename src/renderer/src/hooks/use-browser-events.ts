@@ -7,24 +7,17 @@
  * This hook should be called once at the app root level.
  */
 import { useEffect, useRef } from 'react';
-import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useToastStore } from '@renderer/stores/toast';
-import { normalizeUrl } from '@renderer/stores/browser';
+import { openInBrowser } from '@renderer/lib/browser-actions';
 
 export function useBrowserEvents(): void {
-  const openDestination = useWorkbenchStore((s) => s.open);
   const toast = useToastStore();
   const activeDownloads = useRef<Map<string, string>>(new Map()); // filename → toast tracking
 
   useEffect(() => {
-    // Issue #9: window.open → new browser tab
+    // Issue #9: window.open → new browser tab (uses unified openInBrowser seam)
     const unlistenNewTab = window.eventBridge?.onBrowserOpenNewTab((data) => {
-      const normalized = normalizeUrl(data.url);
-      if (normalized) {
-        // Generate a unique surface ID for the new tab
-        const surfaceId = `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        openDestination({ type: 'browser', surfaceId, url: normalized });
-      }
+      openInBrowser(data.url);
     });
 
     // Issue #9: Auth popup notifications
@@ -63,5 +56,5 @@ export function useBrowserEvents(): void {
       unlistenAuthPopup?.();
       unlistenDownload?.();
     };
-  }, [openDestination, toast]);
+  }, [toast]);
 }

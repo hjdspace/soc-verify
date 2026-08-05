@@ -82,7 +82,7 @@ Renderer 使用 ResizeObserver 测量 DOM 容器相对 BrowserWindow 的坐标�
 `officecli watch <file>` 启动本地 HTTP 服务器（默认端口 26315），Document Surface 使用 WebContentsView 加载 `http://localhost:PORT`。officecli 内部通过 WebSocket 推送文件变更刷新。Watch 的启动/停止由 Document Surface 协调器负责；仅用于 docx/pptx（xlsx 用 Fortune-sheet 编辑，PDF 用 react-pdf）。
 
 ### readImageAsDataURL
-主进程读取图片文件并转为 base64 data URL 的能力，用于绕过开发模式下 webview 的 `file://` CORS 限制。参考 SpaceCode `officeCliService.ts`。
+主进程读取图片文件并转为 base64 data URL 的能力，用于绕过开发模式下 WebContentsView 的 `file://` CORS 限制。参考 SpaceCode `officeCliService.ts`。
 
 ## xlsx 编辑相关
 
@@ -128,13 +128,13 @@ CenterArea 的工作区目标类型。新增 `office-document` 类型：
 type OfficeDocumentDestination = {
   type: 'office-document'
   filePath: string
-  mode: 'preview' | 'edit'  // preview=webview/react-pdf, edit=Fortune-sheet
+  mode: 'preview' | 'edit'  // preview=WebContentsView/react-pdf, edit=Fortune-sheet
   previewMode?: 'html' | 'screenshots' | 'watch'  // 仅 preview 模式有效
 }
 ```
 
-### webview（历史预览容器）
-ADR 0015 原始 Office HTML/Watch 实现使用的 Electron `<webview>` 标签，需要 `webviewTag: true` 和 `persist:office-preview`。ADR 0016 已决定迁移到 WebContentsView；迁移完成后删除该标签、配置和类型声明，不保留双轨实现。
+### webview（历史预览容器，已删除）
+ADR 0015 原始 Office HTML/Watch 实现使用的 Electron `<webview>` 标签，需要 `webviewTag: true` 和 `persist:office-preview`。ADR 0016 已完成迁移到 WebContentsView；`<webview>` 标签、`webviewTag: true` 配置、`persist:office-preview` 分区和相关类型声明已全部删除，不保留双轨实现。
 
 ### react-pdf
 pdfjs-dist 的 React 封装，API 友好（`<Document><Page />`）。worker 本地加载（不走 CDN，符合内网约束）。仅用于 PDF 预览。

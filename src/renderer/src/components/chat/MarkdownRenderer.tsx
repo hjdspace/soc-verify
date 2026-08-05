@@ -1,7 +1,7 @@
 import { memo, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { cn } from '@renderer/lib/utils';
+import { trpc } from '@renderer/lib/trpc';
 
 interface MarkdownRendererProps {
   content: string;
@@ -32,7 +32,14 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, onUriC
               );
             }
             return (
-              <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline">
+              <a
+                href={href}
+                onClick={(e) => {
+                  e.preventDefault();
+                  void trpc.system.openExternal.mutate(href);
+                }}
+                className="text-primary underline"
+              >
                 {children}
               </a>
             );

@@ -30,7 +30,7 @@ SoC Verify 平台需要在验证周期内产出并消费多种 Office 文档：�
 
 **AI 调用链路**：两者结合——高频操作（create/read/append/update）走 HostTools 注册（类型安全），低频/高级操作走 PATH 注入 + omp 的 Bash 工具。7 个新 HostTools：create_docx/xlsx/pptx/pdf、read_document、append_xlsx_row、update_xlsx_cell。SKILL.md 内置 skills 目录教 AI 何时调用。
 
-**前端预览**：webview 容器（独立进程，不受 CSP 限制）加载 officecli 生成的 HTML 或 Watch 服务的 HTTP URL。PDF 用 react-pdf（pdfjs-dist 的 React 封装，worker 本地加载）。四种预览模式：HTML、Screenshots（PNG）、Watch（实时刷新，仅 docx/pptx）、pdfjs-dist（仅 PDF）。
+**前端预览**：WebContentsView 容器（Document Surface，独立进程，不受 CSP 限制）加载 officecli 生成的 HTML 或 Watch 服务的 HTTP URL。PDF 用 react-pdf（pdfjs-dist 的 React 封装，worker 本地加载）。四种预览模式：HTML、Screenshots（PNG）、Watch（实时刷新，仅 docx/pptx）、pdfjs-dist（仅 PDF）。（原设计使用 `<webview>` 标签，已按 ADR 0016 全部迁移至 WebContentsView）
 
 **xlsx 原地编辑**：Fortune-sheet（Luckysheet 的 React fork）提供交互编辑，exceljs 负责读写 xlsx 文件。自动保存防抖 2 秒。职责边界：officecli 负责创建，exceljs 负责编辑。
 
@@ -157,10 +157,10 @@ SoC Verify 平台需要在验证周期内产出并消费多种 Office 文档：�
   - `.docx`/`.pptx`：HTML（默认）、Screenshots、Watch
   - `.xlsx`：Edit（Fortune-sheet，默认）、HTML、Screenshots
   - `.pdf`：pdfjs-dist（react-pdf）
-- 预览容器：Electron `<webview>` 标签，启用 `webviewTag: true`，使用 `partition="persist:office-preview"` 隔离
-- 不修改 index.html 的 CSP（`default-src 'self'`）——webview 是独立进程，不受渲染进程 CSP 限制
-- HTML 模式：webview 加载 `file:///path/to/output.html`
-- Watch 模式：webview 加载 `http://localhost:PORT`（officecli watch 启动本地 HTTP 服务器，默认端口 26315）
+- 预览容器：Electron WebContentsView（Document Surface），已从 `<webview>` 迁移（ADR 0016），使用独立 session 隔离
+- 不修改 index.html 的 CSP（`default-src 'self'`）——WebContentsView 是独立进程，不受渲染进程 CSP 限制
+- HTML 模式：WebContentsView 加载 `file:///path/to/output.html`
+- Watch 模式：WebContentsView 加载 `http://localhost:PORT`（officecli watch 启动本地 HTTP 服务器，默认端口 26315）
 - Screenshots 模式：`<img>` 标签，需 `readImageAsDataURL` 将 PNG 转为 base64 data URL 绕过 file:// CORS
 - PDF 预览：react-pdf（`<Document><Page />`），worker 本地加载（`node_modules/pdfjs-dist/build/pdf.worker.min.mjs`），不走 CDN
 - Watch 进程生命周期：在 `officecli/service.ts` 中维护 `watchProcesses: Map<string, OfficeCliWatchHandle>`，应用退出时统一清理
@@ -221,7 +221,7 @@ type OfficeDocumentDestination = {
 
 ### BrowserWindow 配置修改
 
-- 在 `src/main/index.ts` 的 BrowserWindow 配置中启用 `webviewTag: true`
+- ~~在 `src/main/index.ts` 的 BrowserWindow 配置中启用 `webviewTag: true`~~（已删除，迁移至 WebContentsView）
 - 注册 officecli IPC handlers（document router 已通过 tRPC 暴露，flush/file-changed 事件用原生 ipcMain.on/ipcRenderer.send）
 - 应用退出时调用 `cleanupOfficeCli()` 清理 watch 进程
 
@@ -270,7 +270,7 @@ type OfficeDocumentDestination = {
 - `tests/xlsx-editor.test.ts` —— exceljs 细粒度编辑（真实文件）
 - `tests/components/OfficeDocumentView.test.tsx` —— 容器组件分发
 - `tests/components/XlsxEditor.test.tsx` —— Fortune-sheet 渲染与交互
-- `tests/components/HtmlPreview.test.tsx` —— webview HTML 预览
+- `tests/components/HtmlPreview.test.tsx` —— WebContentsView HTML 预览（原 webview，已迁移）
 - `tests/components/PdfPreview.test.tsx` —— react-pdf 预览
 
 ## Out of Scope

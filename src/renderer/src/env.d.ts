@@ -11,6 +11,9 @@ export interface SurfaceBridgeAPI {
   goBack: (id: string) => Promise<void>;
   goForward: (id: string) => Promise<void>;
   reload: (id: string) => Promise<void>;
+  // Issue #11: Find-in-page
+  findInPage: (id: string, searchText: string, options?: { forward?: boolean }) => Promise<void>;
+  stopFindInPage: (id: string, action?: 'clearSelection' | 'keepSelection' | 'activateSelection') => Promise<void>;
   // Issue #9: Single-continue a certificate error for a specific surface+URL
   proceedCertificate: (surfaceId: string, url: string) => Promise<boolean>;
 }

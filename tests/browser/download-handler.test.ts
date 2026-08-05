@@ -12,7 +12,7 @@
  * - clearCompleted removes completed/failed/cancelled entries
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import { DownloadTracker, type DownloadState } from '../../src/main/browser/download-handler';
+import { DownloadTracker } from '../../src/main/browser/download-handler';
 
 describe('DownloadTracker', () => {
   let tracker: DownloadTracker;
@@ -98,7 +98,7 @@ describe('DownloadTracker', () => {
     });
 
     it('does not remove starting or progressing downloads', () => {
-      const id1 = tracker.startDownload('a.pdf', 'https://a.com/a.pdf');
+      tracker.startDownload('a.pdf', 'https://a.com/a.pdf');
       const id2 = tracker.startDownload('b.pdf', 'https://b.com/b.pdf');
 
       tracker.progressDownload(id2, 50, 1024);

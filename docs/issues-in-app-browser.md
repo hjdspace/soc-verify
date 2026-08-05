@@ -226,7 +226,7 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ---
 
-## Issue #11：页面查找、快捷键与业务链接接管
+## Issue #11：页面查找、快捷键与业务链接接管 ✅
 
 ### What to build
 
@@ -234,12 +234,12 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ### Acceptance criteria
 
-- [ ] Ctrl+F 显示查找条，支持上一项、下一项、匹配数和关闭。
-- [ ] Ctrl+L、Ctrl+R/F5、Alt+Left/Right、Ctrl+D 在 Browser Surface 激活时生效。
-- [ ] Ctrl+W 继续走 workbench 关闭标签逻辑。
-- [ ] 回归、CQP、插件业务区域链接默认进入 Browser Surface。
-- [ ] 聊天 Markdown、帮助和设置链接继续使用系统浏览器。
-- [ ] 业务调用方不直接操作 View Manager，只调用统一 URL 打开 seam。
+- [x] Ctrl+F 显示查找条，支持上一项、下一项、匹配数和关闭。
+- [x] Ctrl+L、Ctrl+R/F5、Alt+Left/Right、Ctrl+D 在 Browser Surface 激活时生效。
+- [x] Ctrl+W 继续走 workbench 关闭标签逻辑。
+- [x] 回归、CQP、插件业务区域链接默认进入 Browser Surface。
+- [x] 聊天 Markdown、帮助和设置链接继续使用系统浏览器。
+- [x] 业务调用方不直接操作 View Manager，只调用统一 URL 打开 seam。
 
 ### Blocked by
 
@@ -248,7 +248,7 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ---
 
-## Issue #12：跨平台验收、性能与文档收尾
+## Issue #12：跨平台验收、性能与文档收尾 ✅
 
 ### What to build
 
@@ -256,12 +256,12 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ### Acceptance criteria
 
-- [ ] Windows 覆盖 bounds、DPI、最大化、SSO、下载、上传、证书、权限和 Office 迁移。
-- [ ] Linux 构建、类型检查、单测和基础 http/https、bounds、Office HTML/Watch 回归通过。
-- [ ] 12 个后台网页标签下记录内存和 CPU 基线，无失控增长或后台高占用。
-- [ ] 应用退出无孤儿 WebContentsView、认证窗口或 officecli Watch 进程。
-- [ ] ADR 0015、officecli PRD/Issues 和 glossary 中旧 webview 描述更新为 WebContentsView 实施结果。
-- [ ] `npm run build && npm run typecheck && npm run lint && npm run test` 全部通过。
+- [x] Windows 覆盖 bounds、DPI、最大化、SSO、下载、上传、证书、权限和 Office 迁移。
+- [x] Linux 构建、类型检查、单测和基础 http/https、bounds、Office HTML/Watch 回归通过。
+- [x] 12 个后台网页标签下记录内存和 CPU 基线，无失控增长或后台高占用。
+- [x] 应用退出无孤儿 WebContentsView、认证窗口或 officecli Watch 进程。
+- [x] ADR 0015、officecli PRD/Issues 和 glossary 中旧 webview 描述更新为 WebContentsView 实施结果。
+- [x] `npm run build && npm run typecheck && npm run lint && npm run test` 全部通过。
 
 ### Blocked by
 

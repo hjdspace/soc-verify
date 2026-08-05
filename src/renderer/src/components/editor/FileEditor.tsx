@@ -321,7 +321,13 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
                       );
                     }
                     return (
-                      <a href={href} target="_blank" rel="noopener noreferrer">
+                      <a
+                        href={href}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          void trpc.system.openExternal.mutate(href!);
+                        }}
+                      >
                         {children}
                       </a>
                     );
