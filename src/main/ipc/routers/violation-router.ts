@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { t, TRPCError } from '../router-context';
 import { getTvDb } from '../../timing-violation/db/tv-db-cache';
-import { loadTvConfig } from '../../timing-violation/tv-config';
+import { loadTvConfig, ensureExportDir } from '../../timing-violation/tv-config';
 import {
   insertViolations,
   ensureConfirmationRecords,
@@ -489,13 +489,14 @@ export const violationRouter = t.router({
       if (!filePath) {
         const ext = input.format === 'excel' ? 'xlsx' : 'csv';
 
-        // 参考 Python main_window.py _export_single_case_to_excel
-        // 默认目录: <projectRoot>/VIOLATION_CHECK/<corner>
+        // 默认导出目录: <dataDir>/exports/violations/<corner>/
         // 默认文件名: <caseName>_<corner>_violations_checklist.<ext>
         const project = requireProject(input.projectId);
+        const config = loadTvConfig(project.rootPath);
         const cornerName = input.corner ?? 'default';
         const caseName = input.caseName ?? 'all_cases';
-        const defaultDir = join(project.rootPath, 'VIOLATION_CHECK', cornerName);
+        const exportBase = ensureExportDir(project.rootPath, config.dataDir);
+        const defaultDir = join(exportBase, 'violations', cornerName);
         mkdirSync(defaultDir, { recursive: true });
         const defaultName = `${caseName}_${cornerName}_violations_checklist.${ext}`;
         const defaultPath = join(defaultDir, defaultName);
