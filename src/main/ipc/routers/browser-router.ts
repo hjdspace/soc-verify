@@ -15,6 +15,7 @@ import type {
   BookmarkImportResult,
   CreateBookmarkInput,
   CreateGroupInput,
+  DownloadInfo,
   PersistedBrowserTab,
   PersistedBrowserTabs,
   PersistedBookmarks,
@@ -304,6 +305,30 @@ export const browserRouter = t.router({
     await browserSession.clearCache();
     await browserSession.clearHostResolverCache();
     await browserSession.clearAuthCache();
+    return { ok: true as const };
+  }),
+
+  // ── Issue #10: Download management ───────────────────────────
+
+  /** Get all tracked downloads (active and completed). */
+  getDownloads: t.procedure.query(async (): Promise<DownloadInfo[]> => {
+    // Lazy import to avoid circular dependency
+    const { getDownloadTracker } = await import('../../surface/surface-ipc');
+    return getDownloadTracker().getDownloads().map((d) => ({
+      id: d.id,
+      filename: d.filename,
+      url: d.url,
+      state: d.state,
+      percent: d.percent,
+      savedPath: d.savedPath,
+      error: d.error,
+    }));
+  }),
+
+  /** Clear completed/failed/cancelled downloads from the tracker. */
+  clearDownloads: t.procedure.mutation(async (): Promise<{ ok: true }> => {
+    const { getDownloadTracker } = await import('../../surface/surface-ipc');
+    getDownloadTracker().clearCompleted();
     return { ok: true as const };
   }),
 });

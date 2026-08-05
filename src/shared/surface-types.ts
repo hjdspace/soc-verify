@@ -28,4 +28,7 @@ export type SurfaceEvent =
   | { id: string; type: 'loading'; loading: boolean }
   | { id: string; type: 'failure'; errorCode: number; errorDescription: string; validatedURL: string; isMainFrame: boolean }
   | { id: string; type: 'crash'; reason?: string; exitCode?: number }
-  | { id: string; type: 'navigation'; canGoBack: boolean; canGoForward: boolean };
+  | { id: string; type: 'navigation'; canGoBack: boolean; canGoForward: boolean }
+  // Issue #9: certificate error — emitted when a TLS certificate validation fails.
+  // Default policy is deny; user can single-continue via browser.proceedCertificate.
+  | { id: string; type: 'certificate-error'; url: string; error: string; isMainFrame: boolean };

@@ -146,5 +146,51 @@ process.once('loaded', async () => {
       ipcRenderer.on('coverage:import-progress', handler);
       return () => ipcRenderer.removeListener('coverage:import-progress', handler);
     },
+
+    // ── Issue #9: Browser window-open events ────────────────────
+    // browser:open-new-tab —— 主进程通知前端打开新的浏览器标签页
+    onBrowserOpenNewTab: (callback: (data: { url: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { url: string }) => callback(data);
+      ipcRenderer.on('browser:open-new-tab', handler);
+      return () => ipcRenderer.removeListener('browser:open-new-tab', handler);
+    },
+    // browser:auth-popup —— 认证浮层打开/关闭事件
+    onAuthPopup: (
+      callback: (data: { type: 'opened' | 'closed'; url: string }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: { type: 'opened' | 'closed'; url: string },
+      ) => callback(data);
+      ipcRenderer.on('browser:auth-popup', handler);
+      return () => ipcRenderer.removeListener('browser:auth-popup', handler);
+    },
+
+    // ── Issue #10: Download events ───────────────────────────────
+    // browser:download-event —— 下载生命周期事件（开始/进度/完成/失败/取消）
+    onDownloadEvent: (
+      callback: (data: {
+        type: 'started' | 'progress' | 'completed' | 'failed' | 'cancelled';
+        filename: string;
+        percent?: number;
+        savedPath?: string;
+        error?: string;
+        url?: string;
+      }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: {
+          type: 'started' | 'progress' | 'completed' | 'failed' | 'cancelled';
+          filename: string;
+          percent?: number;
+          savedPath?: string;
+          error?: string;
+          url?: string;
+        },
+      ) => callback(data);
+      ipcRenderer.on('browser:download-event', handler);
+      return () => ipcRenderer.removeListener('browser:download-event', handler);
+    },
   });
 });

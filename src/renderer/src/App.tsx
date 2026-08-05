@@ -8,6 +8,7 @@ import { useSessionStore } from './stores/session';
 import { trpc } from './lib/trpc';
 import { ToolApp } from './tools/ToolApp';
 import { useBrowserTabPersistence } from './hooks/use-browser-tab-persistence';
+import { useBrowserEvents } from './hooks/use-browser-events';
 
 /** Check if this renderer instance is a tool window (has `#tool=` hash). */
 function isToolWindow(): boolean {
@@ -64,6 +65,9 @@ export default function App() {
 
   // Browser tab persistence: restore on startup, debounced save on changes
   useBrowserTabPersistence();
+
+  // Issue #9 + #10: Browser event listeners (window.open, downloads, auth popups)
+  useBrowserEvents();
 
   // Tool window: render ToolApp instead of AppShell
   if (toolMode) {

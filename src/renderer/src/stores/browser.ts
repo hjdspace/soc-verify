@@ -15,6 +15,8 @@ export type BrowserTabState = {
   error: string | null;
   /** True when the render process has crashed — UI shows error page with manual reload. */
   crashed: boolean;
+  /** Issue #9: Certificate error details — when set, UI shows risk page with single-continue option. */
+  certificateError: { url: string; error: string } | null;
 };
 
 type BrowserStore = {
@@ -41,6 +43,8 @@ type BrowserStore = {
   exceedsSoftLimit: () => boolean;
   /** Clear crashed state for a tab (user clicked reload on crash error page). */
   reloadTab: (surfaceId: string) => void;
+  /** Issue #9: Clear certificate error state for a tab (user clicked continue or reload). */
+  clearCertificateError: (surfaceId: string) => void;
 };
 
 /**
@@ -100,6 +104,7 @@ export const useBrowserStore = create<BrowserStore>((set, get) => ({
             canGoForward: false,
             error: null,
             crashed: false,
+            certificateError: null,
           },
         },
         order: [...state.order, surfaceId],
@@ -166,6 +171,13 @@ export const useBrowserStore = create<BrowserStore>((set, get) => ({
               [event.id]: { ...tab, error: `页面崩溃 (${event.reason ?? 'unknown'})`, crashed: true },
             },
           };
+        case 'certificate-error':
+          return {
+            tabs: {
+              ...state.tabs,
+              [event.id]: { ...tab, certificateError: { url: event.url, error: event.error }, loading: false },
+            },
+          };
         default:
           return state;
       }
@@ -207,6 +219,7 @@ export const useBrowserStore = create<BrowserStore>((set, get) => ({
           canGoForward: false,
           error: null,
           crashed: false,
+          certificateError: null,
         };
         order.push(ptab.surfaceId);
       }
@@ -225,7 +238,20 @@ export const useBrowserStore = create<BrowserStore>((set, get) => ({
       return {
         tabs: {
           ...state.tabs,
-          [surfaceId]: { ...tab, crashed: false, error: null, loading: true },
+          [surfaceId]: { ...tab, crashed: false, error: null, certificateError: null, loading: true },
+        },
+      };
+    });
+  },
+
+  clearCertificateError: (surfaceId) => {
+    set((state) => {
+      const tab = state.tabs[surfaceId];
+      if (!tab) return state;
+      return {
+        tabs: {
+          ...state.tabs,
+          [surfaceId]: { ...tab, certificateError: null },
         },
       };
     });

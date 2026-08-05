@@ -38,6 +38,10 @@ export interface SurfaceHost {
 export interface ViewManagerOptions {
   createView: (declaration: SurfaceDeclaration) => SurfaceView;
   emit: (event: SurfaceEvent) => void;
+  /** Issue #9: Check whether the user has granted a single-continue for a certificate error. */
+  shouldProceedCertificate?: (surfaceId: string, url: string) => boolean;
+  /** Issue #9: Consume (remove) a single-use certificate proceed after it has been used. */
+  consumeProceedCertificate?: (surfaceId: string, url: string) => void;
 }
 
 interface SurfaceEntry {
@@ -259,6 +263,25 @@ export class ViewManager {
     bind('render-process-gone', (_event: unknown, details?: { reason?: string; exitCode?: number }) => {
       this.options.emit({ id, type: 'crash', reason: details?.reason, exitCode: details?.exitCode });
       entry.view.setVisible(false);
+    });
+    // Issue #9: certificate-error — deny by default, emit event for renderer to show risk UI.
+    // User can single-continue via browser.proceedCertificate IPC.
+    bind('certificate-error', (
+      evt: unknown,
+      url: string,
+      error: string,
+      _certificate: unknown,
+      callback: (allow: boolean) => void,
+    ) => {
+      const e = evt as { preventDefault?: () => void };
+      e?.preventDefault?.();
+      if (this.options.shouldProceedCertificate?.(id, url)) {
+        this.options.consumeProceedCertificate?.(id, url);
+        callback(true);
+      } else {
+        callback(false);
+        this.options.emit({ id, type: 'certificate-error', url, error, isMainFrame: true });
+      }
     });
   }
 

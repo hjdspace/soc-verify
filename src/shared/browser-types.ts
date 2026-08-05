@@ -96,3 +96,40 @@ export type BookmarkImportResult = {
   skipped: number;
   errors: string[];
 };
+
+// ── Issue #9: Window open and auth events ─────────────────────
+
+/** Main→Renderer event: ask the workbench to open a new browser tab. */
+export type OpenNewTabEvent = {
+  url: string;
+};
+
+/** Main→Renderer event: an auth popup window was closed. */
+export type AuthPopupEvent = {
+  type: 'opened' | 'closed';
+  url: string;
+};
+
+// ── Issue #10: Download events ─────────────────────────────────
+
+/** Download lifecycle state. */
+export type DownloadState = 'starting' | 'progressing' | 'completed' | 'failed' | 'cancelled';
+
+/** Main→Renderer event: download lifecycle notification. */
+export type DownloadEvent =
+  | { type: 'started'; filename: string; url: string }
+  | { type: 'progress'; filename: string; percent: number }
+  | { type: 'completed'; filename: string; savedPath: string }
+  | { type: 'failed'; filename: string; error: string }
+  | { type: 'cancelled'; filename: string };
+
+/** Download entry returned by the getDownloads procedure. */
+export type DownloadInfo = {
+  id: string;
+  filename: string;
+  url: string;
+  state: DownloadState;
+  percent?: number;
+  savedPath?: string;
+  error?: string;
+};

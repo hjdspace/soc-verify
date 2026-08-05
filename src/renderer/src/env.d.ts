@@ -11,6 +11,8 @@ export interface SurfaceBridgeAPI {
   goBack: (id: string) => Promise<void>;
   goForward: (id: string) => Promise<void>;
   reload: (id: string) => Promise<void>;
+  // Issue #9: Single-continue a certificate error for a specific surface+URL
+  proceedCertificate: (surfaceId: string, url: string) => Promise<boolean>;
 }
 
 // ── windowControls 类型声明（由 preload 通过 contextBridge 暴露）────
@@ -62,6 +64,20 @@ export interface EventBridgeAPI {
       percent?: number;
       durationMs?: number;
       details?: Record<string, unknown>;
+    }) => void,
+  ) => () => void;
+  // Issue #9: Browser window-open events
+  onBrowserOpenNewTab: (callback: (data: { url: string }) => void) => () => void;
+  onAuthPopup: (callback: (data: { type: 'opened' | 'closed'; url: string }) => void) => () => void;
+  // Issue #10: Download events
+  onDownloadEvent: (
+    callback: (data: {
+      type: 'started' | 'progress' | 'completed' | 'failed' | 'cancelled';
+      filename: string;
+      percent?: number;
+      savedPath?: string;
+      error?: string;
+      url?: string;
     }) => void,
   ) => () => void;
 }

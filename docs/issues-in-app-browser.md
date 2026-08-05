@@ -182,7 +182,7 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ---
 
-## Issue #9：新窗口、SSO/OAuth/MFA 与证书策略
+## Issue #9：新窗口、SSO/OAuth/MFA 与证书策略 ✅
 
 ### What to build
 
@@ -190,13 +190,13 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ### Acceptance criteria
 
-- [ ] 普通 target=_blank/window.open 打开新网页标签。
-- [ ] 认证弹窗使用同一 Browser session 并保留 opener。
-- [ ] 认证完成/窗口关闭后浮层被销毁，不残留 workbench 标签。
-- [ ] 覆盖至少一种重定向 SSO、一种 OAuth popup 和一种 MFA 流程。
-- [ ] 证书错误默认阻止并显示风险信息。
-- [ ] 用户只能对当前访问单次继续，不写入永久信任。
-- [ ] 非 http/https/file 授权 source 被拒绝或安全地交给系统处理。
+- [x] 普通 target=_blank/window.open 打开新网页标签。
+- [x] 认证弹窗使用同一 Browser session 并保留 opener。
+- [x] 认证完成/窗口关闭后浮层被销毁，不残留 workbench 标签。
+- [x] 覆盖至少一种重定向 SSO、一种 OAuth popup 和一种 MFA 流程。
+- [x] 证书错误默认阻止并显示风险信息。
+- [x] 用户只能对当前访问单次继续，不写入永久信任。
+- [x] 非 http/https/file 授权 source 被拒绝或安全地交给系统处理。
 
 ### Blocked by
 
@@ -204,7 +204,7 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ---
 
-## Issue #10：下载、上传、权限与剪贴板
+## Issue #10：下载、上传、权限与剪贴板 ✅
 
 ### What to build
 
@@ -212,13 +212,13 @@ Renderer 提供 Surface 容器，使用 ResizeObserver 测量相对 BrowserWindo
 
 ### Acceptance criteria
 
-- [ ] 下载弹出系统保存对话框并提示开始、完成和失败。
-- [ ] 取消保存不会留下半成品或错误提示。
-- [ ] 文件上传只能由用户手势触发系统文件选择器。
-- [ ] 摄像头、麦克风、通知、地理位置和自动播放默认拒绝并提示。
-- [ ] 剪贴板只允许用户手势触发的读写。
-- [ ] Browser Surface 无 Node integration 和 Electron 权限。
-- [ ] Document session 与 Browser session 权限/数据隔离。
+- [x] 下载弹出系统保存对话框并提示开始、完成和失败。
+- [x] 取消保存不会留下半成品或错误提示。
+- [x] 文件上传只能由用户手势触发系统文件选择器。
+- [x] 摄像头、麦克风、通知、地理位置和自动播放默认拒绝并提示。
+- [x] 剪贴板只允许用户手势触发的读写。
+- [x] Browser Surface 无 Node integration 和 Electron 权限。
+- [x] Document session 与 Browser session 权限/数据隔离。
 
 ### Blocked by
 

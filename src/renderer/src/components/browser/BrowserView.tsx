@@ -13,7 +13,7 @@
  * 若有则激活已有标签并关闭当前空标签（仅当当前标签 url 为空时）。
  */
 import { useEffect, useCallback } from 'react';
-import { AlertCircle, RotateCw } from 'lucide-react';
+import { AlertCircle, RotateCw, ShieldAlert } from 'lucide-react';
 import type { SurfaceEvent } from '@shared/surface-types';
 import { useBrowserStore } from '@renderer/stores/browser';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
@@ -34,6 +34,7 @@ export function BrowserView({ surfaceId, url }: BrowserViewProps) {
   const applyEvent = useBrowserStore((s) => s.applyEvent);
   const findByUrl = useBrowserStore((s) => s.findByUrl);
   const reloadTab = useBrowserStore((s) => s.reloadTab);
+  const clearCertificateError = useBrowserStore((s) => s.clearCertificateError);
 
   const openDestination = useWorkbenchStore((s) => s.open);
   const activateTab = useWorkbenchStore((s) => s.activate);
@@ -95,12 +96,63 @@ export function BrowserView({ surfaceId, url }: BrowserViewProps) {
     void window.surfaceBridge?.reload(surfaceId);
   }, [surfaceId, reloadTab]);
 
+  // Issue #9: Handle certificate error — user clicks "继续访问 (不安全)"
+  // This grants a single-continue for the current URL, then reloads the surface.
+  // No permanent trust is written.
+  const handleCertificateProceed = useCallback(async () => {
+    const certError = tab?.certificateError;
+    if (!certError) return;
+    await window.surfaceBridge?.proceedCertificate(surfaceId, certError.url);
+    clearCertificateError(surfaceId);
+    void window.surfaceBridge?.reload(surfaceId);
+  }, [surfaceId, tab?.certificateError, clearCertificateError]);
+
   const currentUrl = tab?.url ?? url;
   const hasUrl = currentUrl !== '';
   const isCrashed = tab?.crashed === true;
+  const hasCertificateError = tab?.certificateError != null;
 
   if (!hasUrl) {
     return <NewTabPage onNavigate={handleNavigate} />;
+  }
+
+  // Issue #9: Certificate error — show risk page with single-continue option
+  if (hasCertificateError) {
+    return (
+      <div className="flex h-full w-full flex-col">
+        <NavigationBar
+          surfaceId={surfaceId}
+          url={currentUrl}
+          title={tab?.title}
+          loading={tab?.loading ?? false}
+          canGoBack={tab?.canGoBack ?? false}
+          canGoForward={tab?.canGoForward ?? false}
+          error={tab?.error ?? null}
+          onNavigate={handleNavigate}
+        />
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 bg-background px-4">
+          <ShieldAlert className="h-10 w-10 text-status-warn-foreground" />
+          <div className="text-center">
+            <h2 className="text-sm font-semibold text-foreground">证书风险</h2>
+            <p className="mt-1 max-w-md text-xs text-muted-foreground">
+              此网站的安全证书存在问题：{tab?.certificateError?.error}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              继续访问可能不安全。此操作仅对当前访问生效，不会写入永久信任。
+            </p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => void handleCertificateProceed()}
+              className="flex items-center gap-1.5 rounded-md border border-status-warn-foreground/50 bg-status-warn/10 px-3 py-1.5 text-xs text-status-warn-foreground transition-colors hover:bg-status-warn/20"
+            >
+              <ShieldAlert className="h-3.5 w-3.5" />
+              <span>继续访问 (不安全)</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (isCrashed) {
