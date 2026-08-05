@@ -117,7 +117,7 @@ interface SessionStoreState {
   renameSession: (sessionId: string, projectId: string, name: string) => Promise<void>;
   setInputMessage: (msg: string) => void;
   handleSessionEvent: (sessionId: string, event: unknown) => void;
-  restoreSessions: (projectId: string, cwd: string) => Promise<boolean>;
+  restoreSessions: (projectId: string, cwd: string, lastSessionIds?: string[]) => Promise<boolean>;
   setModel: (sessionId: string, provider: string, modelId: string, modelName?: string, providerId?: string) => Promise<void>;
   /** Holistically switch the entire model config (provider + apiKey + baseUrl + model)
    *  to the given credential. The backend destroys + recreates the runtime session
@@ -1034,13 +1034,24 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     }
   },
 
-  restoreSessions: async (projectId, cwd) => {
+  restoreSessions: async (projectId, cwd, lastSessionIds) => {
     try {
       const persisted = await trpc.session.getPersistedSessions.query({ projectId });
       if (persisted.length === 0) return false;
 
+      // Only restore sessions whose IDs are in lastSessionIds — the set of
+      // tabs that were open when the GUI was last closed. The caller is
+      // responsible for creating a fresh session when lastSessionIds is empty.
+      const openIdSet = lastSessionIds && lastSessionIds.length > 0
+        ? new Set(lastSessionIds)
+        : null;
+      const filtered = openIdSet
+        ? persisted.filter((p) => openIdSet.has(p.sessionId))
+        : persisted;
+      if (filtered.length === 0) return false;
+
       // Sort by lastActivityAt desc so the most recently active session becomes current.
-      const sorted = [...persisted].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+      const sorted = [...filtered].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
 
       // Skip sessions that are already open in the store (e.g. user switched back to the project).
       const existingIds = new Set(
