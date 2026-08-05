@@ -1,12 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   loadTvConfig,
   saveTvConfig,
   getConfigPath,
   getDbPath,
+  getDataDir,
+  getExportDir,
+  getBackupDir,
+  ensureExportDir,
+  ensureBackupDir,
   DEFAULT_TV_CONFIG,
 } from '../../src/main/timing-violation/tv-config';
 import type { TvConfig } from '../../src/main/timing-violation/types';
@@ -25,7 +30,7 @@ describe('TV Config Management', () => {
 
   describe('DEFAULT_TV_CONFIG', () => {
     it('has all required fields', () => {
-      expect(DEFAULT_TV_CONFIG.dbPath).toBe('.socverify/timing-violation/tv.db');
+      expect(DEFAULT_TV_CONFIG.dataDir).toBe('.socverify/timing-violation');
       expect(Array.isArray(DEFAULT_TV_CONFIG.corners)).toBe(true);
       expect(DEFAULT_TV_CONFIG.corners.length).toBeGreaterThan(0);
       expect(Array.isArray(DEFAULT_TV_CONFIG.subsysPatterns)).toBe(true);
@@ -36,31 +41,79 @@ describe('TV Config Management', () => {
   });
 
   describe('getConfigPath', () => {
-    it('returns config path under project root', () => {
+    it('returns config path under dataDir', () => {
       const path = getConfigPath(tmpDir);
-      expect(path).toBe(join(tmpDir, '.socverify', 'timing-violation', 'config.json'));
+      expect(path).toBe(resolve(tmpDir, '.socverify', 'timing-violation', 'config.json'));
+    });
+
+    it('uses custom dataDir when provided', () => {
+      const path = getConfigPath(tmpDir, 'custom/data/dir');
+      expect(path).toContain('custom');
+      expect(path).toContain('data');
+      expect(path).toContain('dir');
+      expect(path).toContain('config.json');
     });
   });
 
   describe('getDbPath', () => {
-    it('resolves db path relative to project root', () => {
+    it('resolves db path under dataDir', () => {
       const path = getDbPath(tmpDir);
       expect(path).toContain('.socverify');
       expect(path).toContain('timing-violation');
       expect(path).toContain('tv.db');
     });
 
-    it('uses custom dbPath when provided', () => {
-      const path = getDbPath(tmpDir, 'custom/path/tv.db');
+    it('uses custom dataDir when provided', () => {
+      const path = getDbPath(tmpDir, 'custom/data/dir');
       expect(path).toContain('custom');
       expect(path).toContain('tv.db');
+    });
+  });
+
+  describe('getDataDir', () => {
+    it('resolves dataDir relative to project root', () => {
+      const path = getDataDir(tmpDir);
+      expect(path).toBe(resolve(tmpDir, '.socverify', 'timing-violation'));
+    });
+
+    it('uses custom dataDir when provided', () => {
+      const path = getDataDir(tmpDir, 'custom/dir');
+      expect(path).toBe(resolve(tmpDir, 'custom', 'dir'));
+    });
+  });
+
+  describe('getExportDir', () => {
+    it('resolves export dir under dataDir', () => {
+      const path = getExportDir(tmpDir);
+      expect(path).toBe(resolve(tmpDir, '.socverify', 'timing-violation', 'exports'));
+    });
+  });
+
+  describe('getBackupDir', () => {
+    it('resolves backup dir under dataDir', () => {
+      const path = getBackupDir(tmpDir);
+      expect(path).toBe(resolve(tmpDir, '.socverify', 'timing-violation', 'backups'));
+    });
+  });
+
+  describe('ensureExportDir', () => {
+    it('creates export directory if it does not exist', () => {
+      const exportDir = ensureExportDir(tmpDir);
+      expect(existsSync(exportDir)).toBe(true);
+    });
+  });
+
+  describe('ensureBackupDir', () => {
+    it('creates backup directory if it does not exist', () => {
+      const backupDir = ensureBackupDir(tmpDir);
+      expect(existsSync(backupDir)).toBe(true);
     });
   });
 
   describe('loadTvConfig', () => {
     it('returns default config when config file does not exist', () => {
       const config = loadTvConfig(tmpDir);
-      expect(config.dbPath).toBe(DEFAULT_TV_CONFIG.dbPath);
+      expect(config.dataDir).toBe(DEFAULT_TV_CONFIG.dataDir);
       expect(config.corners).toEqual(DEFAULT_TV_CONFIG.corners);
       expect(config.defaultResetTimeNs).toBe(DEFAULT_TV_CONFIG.defaultResetTimeNs);
     });
@@ -68,17 +121,15 @@ describe('TV Config Management', () => {
     it('returns default config when JSON is invalid', () => {
       const configPath = getConfigPath(tmpDir);
       mkdirSync(join(tmpDir, '.socverify', 'timing-violation'), { recursive: true });
-      // Write invalid JSON
-      const { writeFileSync } = require('node:fs');
       writeFileSync(configPath, '{ invalid json }', 'utf-8');
 
       const config = loadTvConfig(tmpDir);
-      expect(config.dbPath).toBe(DEFAULT_TV_CONFIG.dbPath);
+      expect(config.dataDir).toBe(DEFAULT_TV_CONFIG.dataDir);
     });
 
     it('merges saved config with defaults', () => {
       const customConfig: TvConfig = {
-        dbPath: 'custom/tv.db',
+        dataDir: 'custom/data',
         corners: ['custom_corner'],
         subsysPatterns: ['*_custom$'],
         defaultResetTimeNs: 5000,
@@ -88,19 +139,39 @@ describe('TV Config Management', () => {
       saveTvConfig(tmpDir, customConfig);
 
       const loaded = loadTvConfig(tmpDir);
-      expect(loaded.dbPath).toBe('custom/tv.db');
+      expect(loaded.dataDir).toBe('custom/data');
       expect(loaded.corners).toEqual(['custom_corner']);
       expect(loaded.subsysPatterns).toEqual(['*_custom$']);
       expect(loaded.defaultResetTimeNs).toBe(5000);
       expect(loaded.autoBackup).toBe(false);
       expect(loaded.backupInterval).toBe(50);
     });
+
+    it('backward compat: derives dataDir from old dbPath', () => {
+      // Write an old-style config with dbPath but no dataDir
+      const configPath = getConfigPath(tmpDir);
+      mkdirSync(join(tmpDir, '.socverify', 'timing-violation'), { recursive: true });
+      const oldConfig = {
+        dbPath: '.socverify/timing-violation/tv.db',
+        corners: ['corner1'],
+        subsysPatterns: ['*_sys$'],
+        defaultResetTimeNs: 1000,
+        autoBackup: true,
+        backupInterval: 100,
+      };
+      writeFileSync(configPath, JSON.stringify(oldConfig, null, 2), 'utf-8');
+
+      const loaded = loadTvConfig(tmpDir);
+      // dataDir should be derived from dbPath's directory
+      expect(loaded.dataDir).toBe('.socverify/timing-violation');
+      expect(loaded.corners).toEqual(['corner1']);
+    });
   });
 
   describe('saveTvConfig', () => {
     it('creates config file with correct content', () => {
       const config: TvConfig = {
-        dbPath: 'test/tv.db',
+        dataDir: 'test/data',
         corners: ['corner1', 'corner2'],
         subsysPatterns: ['*_sys$'],
         defaultResetTimeNs: 2000,
@@ -109,12 +180,13 @@ describe('TV Config Management', () => {
       };
       saveTvConfig(tmpDir, config);
 
+      // Config file is always at the default location, not at config.dataDir
       const configPath = getConfigPath(tmpDir);
       expect(existsSync(configPath)).toBe(true);
 
       const raw = readFileSync(configPath, 'utf-8');
       const parsed = JSON.parse(raw);
-      expect(parsed.dbPath).toBe('test/tv.db');
+      expect(parsed.dataDir).toBe('test/data');
       expect(parsed.corners).toEqual(['corner1', 'corner2']);
       expect(parsed.defaultResetTimeNs).toBe(2000);
     });
@@ -142,7 +214,7 @@ describe('TV Config Management', () => {
   describe('Round-trip: save → load', () => {
     it('preserves all fields through save and load', () => {
       const original: TvConfig = {
-        dbPath: '.socverify/tv.db',
+        dataDir: '.socverify/tv-data',
         corners: ['npg_f1_ssg', 'npg_f2_ssg', 'npg_f1_ffg'],
         subsysPatterns: ['*_sys$', '^top$', '*_subsys$'],
         defaultResetTimeNs: 1500,
