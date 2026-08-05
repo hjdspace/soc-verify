@@ -416,7 +416,7 @@ export const settingsRouter = t.router({
 
   /**
    * 更新时序违例配置，持久化到 config.json。
-   * 如果 dbPath 变更，清除缓存的 DB 连接以便下次使用新路径。
+   * 如果 dataDir 变更，清除缓存的 DB 连接以便下次使用新路径。
    */
   updateTvConfig: t.procedure
     .input((raw): { projectId: string; config: TvConfig } => {
@@ -428,8 +428,8 @@ export const settingsRouter = t.router({
       if (!cfg || typeof cfg !== 'object') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'config is required' });
       }
-      if (typeof cfg.dbPath !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'config.dbPath is required' });
+      if (typeof cfg.dataDir !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'config.dataDir is required' });
       }
       if (!Array.isArray(cfg.corners)) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'config.corners must be an array' });
@@ -450,11 +450,11 @@ export const settingsRouter = t.router({
     })
     .mutation(({ input }) => {
       const project = requireProject(input.projectId);
-      // 读取旧配置以检测 dbPath 变更
+      // 读取旧配置以检测 dataDir 变更
       const oldConfig = loadTvConfig(project.rootPath);
       saveTvConfig(project.rootPath, input.config);
-      // 如果 dbPath 变更，清除缓存的 DB 连接
-      if (oldConfig.dbPath !== input.config.dbPath) {
+      // 如果 dataDir 变更，清除缓存的 DB 连接
+      if (oldConfig.dataDir !== input.config.dataDir) {
         evictTvDb(input.projectId);
       }
       return { success: true as const };
