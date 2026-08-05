@@ -16,6 +16,28 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { dialog, BrowserWindow } from 'electron';
 
+// ── Batch 3 tool imports ──
+import { checkFiles, scanDirectory, type CheckResult } from '../../tools/sv-ifdef-checker';
+import { scanRepos, executePull } from '../../tools/git-quick-pull';
+import { parseRegisterTable } from '../../tools/register-table-parser';
+import { parseRegisterFile, generateCHeader, generatePreview } from '../../tools/reg2c';
+import {
+  getRepoInfo,
+  getTrackedFiles,
+  getFileCommits,
+  getFileContentAtCommit,
+  getCurrentFileContent,
+  calculateDiff,
+} from '../../tools/git-diff';
+import {
+  discoverRepos as discoverGitRepos,
+  getRepoTags,
+  checkoutTag,
+  updateAllRepos,
+  updateSubsysRepos,
+} from '../../tools/git-manager';
+import { convertCToSv, previewCToSv } from '../../tools/c-sv-converter';
+
 // ── Sub-router: env-checker ────────────────────────────────────────
 import {
   discoverSubsystems,
@@ -561,6 +583,289 @@ const regressionListGenRouter = t.router({
     }),
 });
 
+// ── Sub-router: sv-ifdef-checker ─────────────────────────────────────
+
+const svIfdefCheckerRouter = t.router({
+  check: t.procedure
+    .input((raw): { inputPath: string; mode: 'directory' | 'file'; recursive: boolean; includeSvi: boolean } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.inputPath !== 'string') throw new TRPCError({ code: 'BAD_REQUEST', message: 'inputPath is required' });
+      return {
+        inputPath: r.inputPath,
+        mode: r.mode === 'file' ? 'file' : 'directory',
+        recursive: r.recursive !== false,
+        includeSvi: r.includeSvi !== false,
+      };
+    })
+    .mutation(async ({ input }) => {
+      let files: string[] = [];
+      if (input.mode === 'directory') {
+        const exts = input.includeSvi ? ['.sv', '.svi'] : ['.sv'];
+        files = scanDirectory(input.inputPath, { extensions: exts, recursive: input.recursive });
+      } else {
+        files = [input.inputPath];
+      }
+      const { results, summary } = await checkFiles(files);
+      return { results, summary };
+    }),
+});
+
+// ── Sub-router: git-quick-pull ──────────────────────────────────────
+
+const gitQuickPullRouter = t.router({
+  scanRepos: t.procedure
+    .input((raw): { projectDir: string; repoType: 'dv' | 'de' | 'all' } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectDir !== 'string') throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectDir is required' });
+      return {
+        projectDir: r.projectDir,
+        repoType: r.repoType === 'dv' || r.repoType === 'de' ? r.repoType : 'all',
+      };
+    })
+    .query(({ input }) => {
+      const repos = scanRepos(input.projectDir, input.repoType);
+      return { repos };
+    }),
+
+  executePull: t.procedure
+    .input((raw): {
+      repos: Array<{ name: string; path: string; repoType: 'dv' | 'de' }>;
+      mode: 'pull' | 'pull_reset' | 'custom';
+      customCommand: string | null;
+    } => {
+      const r = raw as Record<string, unknown>;
+      return {
+        repos: Array.isArray(r.repos) ? r.repos as Array<{ name: string; path: string; repoType: 'dv' | 'de' }> : [],
+        mode: r.mode === 'pull_reset' || r.mode === 'custom' ? r.mode : 'pull',
+        customCommand: typeof r.customCommand === 'string' ? r.customCommand : null,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const result = await executePull(input.repos, input.mode, input.customCommand);
+      return result;
+    }),
+});
+
+// ── Sub-router: register-table-parser ───────────────────────────────
+
+const registerTableParserRouter = t.router({
+  parse: t.procedure
+    .input((raw): { filePath: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.filePath !== 'string') throw new TRPCError({ code: 'BAD_REQUEST', message: 'filePath is required' });
+      return { filePath: r.filePath };
+    })
+    .mutation(async ({ input }) => {
+      return await parseRegisterTable(input.filePath);
+    }),
+});
+
+// ── Sub-router: reg2c ───────────────────────────────────────────────
+
+const reg2cRouter = t.router({
+  parse: t.procedure
+    .input((raw): { filePath: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.filePath !== 'string') throw new TRPCError({ code: 'BAD_REQUEST', message: 'filePath is required' });
+      return { filePath: r.filePath };
+    })
+    .mutation(async ({ input }) => {
+      return await parseRegisterFile(input.filePath);
+    }),
+
+  preview: t.procedure
+    .input((raw): { regData: Record<string, unknown> } => {
+      const r = raw as Record<string, unknown>;
+      return { regData: r.regData as Record<string, unknown> };
+    })
+    .query(({ input }) => {
+      return generatePreview(input.regData as Parameters<typeof generatePreview>[0]);
+    }),
+
+  export: t.procedure
+    .input((raw): { content: string; savePath: string } => {
+      const r = raw as Record<string, unknown>;
+      return {
+        content: typeof r.content === 'string' ? r.content : '',
+        savePath: typeof r.savePath === 'string' ? r.savePath : '',
+      };
+    })
+    .mutation(async ({ input }) => {
+      await writeFile(input.savePath, input.content, 'utf-8');
+      return { success: true };
+    }),
+});
+
+// ── Sub-router: git-diff ────────────────────────────────────────────
+
+const gitDiffRouter = t.router({
+  openRepo: t.procedure
+    .input((raw): { repoPath: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.repoPath !== 'string') throw new TRPCError({ code: 'BAD_REQUEST', message: 'repoPath is required' });
+      return { repoPath: r.repoPath };
+    })
+    .query(({ input }) => {
+      return getRepoInfo(input.repoPath);
+    }),
+
+  getTrackedFiles: t.procedure
+    .input((raw): { repoPath: string } => {
+      const r = raw as Record<string, unknown>;
+      return { repoPath: typeof r.repoPath === 'string' ? r.repoPath : '' };
+    })
+    .query(({ input }) => {
+      const files = getTrackedFiles(input.repoPath);
+      return { files };
+    }),
+
+  getFileCommits: t.procedure
+    .input((raw): { repoPath: string; filePath: string } => {
+      const r = raw as Record<string, unknown>;
+      return {
+        repoPath: typeof r.repoPath === 'string' ? r.repoPath : '',
+        filePath: typeof r.filePath === 'string' ? r.filePath : '',
+      };
+    })
+    .query(({ input }) => {
+      const commits = getFileCommits(input.repoPath, input.filePath);
+      return { commits };
+    }),
+
+  calculateDiff: t.procedure
+    .input((raw): { repoPath: string; filePath: string; oldCommitSha?: string; newCommitSha?: string } => {
+      const r = raw as Record<string, unknown>;
+      return {
+        repoPath: typeof r.repoPath === 'string' ? r.repoPath : '',
+        filePath: typeof r.filePath === 'string' ? r.filePath : '',
+        oldCommitSha: typeof r.oldCommitSha === 'string' ? r.oldCommitSha : undefined,
+        newCommitSha: typeof r.newCommitSha === 'string' ? r.newCommitSha : undefined,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const oldContent = input.oldCommitSha
+        ? getFileContentAtCommit(input.repoPath, input.filePath, input.oldCommitSha)
+        : getCurrentFileContent(input.filePath);
+      const newContent = input.newCommitSha
+        ? getFileContentAtCommit(input.repoPath, input.filePath, input.newCommitSha)
+        : getCurrentFileContent(input.filePath);
+      return calculateDiff(oldContent, newContent);
+    }),
+});
+
+// ── Sub-router: git-manager ────────────────────────────────────────
+
+const gitManagerRouter = t.router({
+  discoverRepos: t.procedure
+    .input((raw): { projectDir: string; repoType: 'de' | 'dv' | 'all' } => {
+      const r = raw as Record<string, unknown>;
+      return {
+        projectDir: typeof r.projectDir === 'string' ? r.projectDir : '',
+        repoType: r.repoType === 'de' || r.repoType === 'dv' ? r.repoType : 'all',
+      };
+    })
+    .mutation(({ input }) => {
+      const repos = discoverGitRepos(input.projectDir, input.repoType);
+      return { repos };
+    }),
+
+  getRepoTags: t.procedure
+    .input((raw): { repo: { name: string; path: string; repoType: 'de' | 'dv' }; projectDir: string } => {
+      const r = raw as Record<string, unknown>;
+      const repo = r.repo as { name: string; path: string; repoType: 'de' | 'dv' };
+      return {
+        repo,
+        projectDir: typeof r.projectDir === 'string' ? r.projectDir : '',
+      };
+    })
+    .query(({ input }) => {
+      const tags = getRepoTags(input.repo, input.projectDir);
+      return { tags };
+    }),
+
+  checkoutTag: t.procedure
+    .input((raw): { repo: { name: string; path: string; repoType: 'de' | 'dv' }; tag: string; projectDir: string } => {
+      const r = raw as Record<string, unknown>;
+      const repo = r.repo as { name: string; path: string; repoType: 'de' | 'dv' };
+      return {
+        repo,
+        tag: typeof r.tag === 'string' ? r.tag : '',
+        projectDir: typeof r.projectDir === 'string' ? r.projectDir : '',
+      };
+    })
+    .mutation(async ({ input }) => {
+      const logs = await checkoutTag(input.repo, input.tag, input.projectDir);
+      return { logs };
+    }),
+
+  updateAllRepos: t.procedure
+    .input((raw): { projectDir: string; repoType: 'de' | 'dv' } => {
+      const r = raw as Record<string, unknown>;
+      return {
+        projectDir: typeof r.projectDir === 'string' ? r.projectDir : '',
+        repoType: r.repoType === 'de' ? 'de' : 'dv',
+      };
+    })
+    .mutation(async ({ input }) => {
+      return await updateAllRepos(input.projectDir, input.repoType);
+    }),
+
+  updateSubsysRepos: t.procedure
+    .input((raw): { projectDir: string; subsysName: string; repoType: 'de' | 'dv' } => {
+      const r = raw as Record<string, unknown>;
+      return {
+        projectDir: typeof r.projectDir === 'string' ? r.projectDir : '',
+        subsysName: typeof r.subsysName === 'string' ? r.subsysName : '',
+        repoType: r.repoType === 'de' ? 'de' : 'dv',
+      };
+    })
+    .mutation(async ({ input }) => {
+      return await updateSubsysRepos(input.projectDir, input.subsysName, input.repoType);
+    }),
+});
+
+// ── Sub-router: c-sv-converter ──────────────────────────────────────
+
+const cSvConverterRouter = t.router({
+  preview: t.procedure
+    .input((raw): {
+      filePaths: string[];
+      config: {
+        preserveComments?: boolean;
+        addAutomatic?: boolean;
+        coreNameDefault?: string;
+        typeMappings?: Record<string, string>;
+      };
+    } => {
+      const r = raw as Record<string, unknown>;
+      return {
+        filePaths: Array.isArray(r.filePaths) ? r.filePaths as string[] : [],
+        config: r.config as {
+          preserveComments?: boolean;
+          addAutomatic?: boolean;
+          coreNameDefault?: string;
+          typeMappings?: Record<string, string>;
+        },
+      };
+    })
+    .mutation(async ({ input }) => {
+      return await previewCToSv(input.filePaths, input.config ?? {});
+    }),
+
+  export: t.procedure
+    .input((raw): { content: string; savePath: string } => {
+      const r = raw as Record<string, unknown>;
+      return {
+        content: typeof r.content === 'string' ? r.content : '',
+        savePath: typeof r.savePath === 'string' ? r.savePath : '',
+      };
+    })
+    .mutation(async ({ input }) => {
+      await writeFile(input.savePath, input.content, 'utf-8');
+      return { success: true };
+    }),
+});
+
 // ── Main tools router ──────────────────────────────────────────────
 
 export const toolsRouter = t.router({
@@ -672,4 +977,13 @@ export const toolsRouter = t.router({
   batchExecution: batchExecutionRouter,
   regressionAnalyzer: regressionAnalyzerRouter,
   regressionListGen: regressionListGenRouter,
+
+  // Batch 3 tool sub-routers
+  svIfdefChecker: svIfdefCheckerRouter,
+  gitQuickPull: gitQuickPullRouter,
+  registerTableParser: registerTableParserRouter,
+  reg2c: reg2cRouter,
+  gitDiff: gitDiffRouter,
+  gitManager: gitManagerRouter,
+  cSvConverter: cSvConverterRouter,
 });
