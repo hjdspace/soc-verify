@@ -76,12 +76,22 @@ export function buildSuggestPrompt(params: {
   };
   config: {
     defaultResetTimeNs: number;
+    resetIntervalStartNs: number | null;
+    resetIntervalEndNs: number | null;
   };
 }): string {
   const { violation, patterns, stats, config } = params;
 
   const resetTimeFs = config.defaultResetTimeNs * 1_000_000;
   const isWithinReset = violation.timeFs <= resetTimeFs;
+
+  // 复位区间判断
+  const hasInterval = config.resetIntervalStartNs !== null && config.resetIntervalEndNs !== null;
+  const intervalStartFs = hasInterval ? (config.resetIntervalStartNs as number) * 1_000_000 : null;
+  const intervalEndFs = hasInterval ? (config.resetIntervalEndNs as number) * 1_000_000 : null;
+  const isWithinInterval = hasInterval && intervalStartFs !== null && intervalEndFs !== null
+    ? violation.timeFs >= intervalStartFs && violation.timeFs <= intervalEndFs
+    : false;
 
   const parts: string[] = [
     `## 时序违例确认建议请求`,
@@ -99,8 +109,15 @@ export function buildSuggestPrompt(params: {
     `- **检查信息 (Check)**: \`${violation.checkInfo}\``,
     `- **源文件**: ${violation.filePath}`,
     `- **是否在复位期间内**: ${isWithinReset ? '是' : '否'}（复位时间阈值: ${config.defaultResetTimeNs}ns = ${resetTimeFs}fs）`,
-    ``,
   ];
+
+  if (hasInterval) {
+    parts.push(
+      `- **是否在复位区间内**: ${isWithinInterval ? '是' : '否'}（复位区间: ${config.resetIntervalStartNs}ns~${config.resetIntervalEndNs}ns = ${intervalStartFs}fs~${intervalEndFs}fs）`,
+    );
+  }
+
+  parts.push('');
 
   if (patterns.length > 0) {
     parts.push(`### 历史确认模式（同 Hier 路径）`, ``);
