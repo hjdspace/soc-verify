@@ -6,7 +6,7 @@
  * 支持同时使用复位时间和复位区间条件（OR 关系）。
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, Loader2, Zap } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 
@@ -33,7 +33,16 @@ export function TVAutoConfirmDialog({
   const [intervalStartNs, setIntervalStartNs] = useState('');
   const [intervalEndNs, setIntervalEndNs] = useState('');
 
-  if (!open) return null;
+  // Reset form state when dialog opens
+  useEffect(() => {
+    if (open) {
+      setUseResetTime(true);
+      setUseInterval(false);
+      setResetTimeNs(defaultResetTimeNs !== undefined ? String(defaultResetTimeNs) : '1000');
+      setIntervalStartNs('');
+      setIntervalEndNs('');
+    }
+  }, [open, defaultResetTimeNs]);
 
   const canSubmit = () => {
     if (confirming) return false;
@@ -57,6 +66,8 @@ export function TVAutoConfirmDialog({
 
   const inputClass =
     'w-full rounded-md border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary';
+
+  if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={confirming ? undefined : onClose}>
