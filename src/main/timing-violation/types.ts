@@ -133,7 +133,8 @@ export type ParseOptions = {
 
 /** TV 配置 */
 export type TvConfig = {
-  dbPath: string;
+  /** 数据根目录（相对于项目根目录），所有 TV 数据（db/exports/backups）统一存储在此目录下 */
+  dataDir: string;
   corners: string[];
   subsysPatterns: string[];
   defaultResetTimeNs: number;
