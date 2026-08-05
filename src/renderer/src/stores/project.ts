@@ -34,13 +34,35 @@ interface ProjectState {
   restoreState: () => Promise<void>;
 }
 
-/** Restore the most recent persisted AI session for a project, if one exists. */
+/** Restore the AI sessions that were open as tabs when the GUI was last closed.
+ *  If no tabs were open (first launch or all were closed last time), create
+ *  a fresh session so the user can start chatting immediately. */
 async function restoreOrCreateSession(projectId: string, cwd: string): Promise<void> {
   const sessionStore = useSessionStore.getState();
   // If sessions already exist for this project (e.g. user switched back), do nothing
   const existing = sessionStore.sessions.some((s) => s.projectId === projectId);
   if (existing) return;
-  await sessionStore.restoreSessions(projectId, cwd);
+
+  // Fetch the persisted project state to get lastSessionIds — the list of
+  // session IDs that were open as tabs when the GUI was last closed.
+  let lastSessionIds: string[] | undefined;
+  try {
+    const state = await trpc.project.getState.query({ projectId });
+    lastSessionIds = state?.lastSessionIds;
+  } catch {
+    // If state can't be loaded, proceed with no lastSessionIds
+  }
+
+  // Only restore sessions that were explicitly open as tabs last time.
+  // If lastSessionIds is empty/undefined (no tabs were open), skip restoring
+  // and create a fresh session instead.
+  if (lastSessionIds && lastSessionIds.length > 0) {
+    const restored = await sessionStore.restoreSessions(projectId, cwd, lastSessionIds);
+    if (restored) return;
+  }
+
+  // No tabs to restore — create a fresh session so the user can start chatting.
+  await sessionStore.createSession(projectId, cwd);
 }
 
 async function restoreProjectUiState(projectId: string): Promise<void> {
@@ -183,7 +205,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             optionDockExpanded: useUiStore.getState().optionDockExpanded,
             pluginViews: useUiStore.getState().pluginViewLayouts,
           },
-          lastSessionIds: [],
+          lastSessionIds: useSessionStore.getState().sessions
+            .map((s) => s.persistedSessionId ?? s.id)
+            .filter((id): id is string => Boolean(id)),
         },
       });
     } catch (err) {
