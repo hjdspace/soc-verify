@@ -30,6 +30,7 @@ import {
   clearCaseData,
   clearAllData,
   updateCorner,
+  getCaseCorners,
 } from '../../timing-violation/db/tv-repository';
 import { parseLogStream } from '../../timing-violation/parser/vio-parser';
 import type { ParsedViolation, ParseOptions } from '../../timing-violation/types';
@@ -424,6 +425,26 @@ export const violationRouter = t.router({
     .mutation(async ({ input }) => {
       const db = getTvDb(input.projectId);
       return clearAllData(db);
+    }),
+
+  /**
+   * 获取指定用例的所有 corner 及其违例数量。
+   * 用于更新 corner 对话框中展示当前用例的 corner 分布。
+   */
+  getCaseCorners: t.procedure
+    .input((raw): { projectId: string; caseName: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      if (typeof r.caseName !== 'string' || !r.caseName) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'caseName is required' });
+      }
+      return { projectId: r.projectId, caseName: r.caseName };
+    })
+    .query(async ({ input }) => {
+      const db = getTvDb(input.projectId);
+      return getCaseCorners(db, input.caseName);
     }),
 
   /**
