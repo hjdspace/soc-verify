@@ -27,7 +27,7 @@ export function TVScanDialog({ open, onClose }: ScanDialogProps) {
   const pickRegressionDir = useTimingViolationStore((s) => s.pickRegressionDir);
 
   const [regressionRoot, setRegressionRoot] = useState('');
-  const [useStandard, setUseStandard] = useState(true);
+  const [useStandard, setUseStandard] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
@@ -199,6 +199,15 @@ export function TVScanDialog({ open, onClose }: ScanDialogProps) {
                       {/* 文件列表 */}
                       {expanded && (
                         <div className="border-t border-border/20">
+                          {/* 列标题栏 */}
+                          <div className="flex items-center gap-2 px-6 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70 border-b border-border/10">
+                            <span className="w-3.5 shrink-0" />
+                            <span className="flex-1 min-w-0">用例名</span>
+                            <span className="w-24 shrink-0">Corner</span>
+                            <span className="w-24 shrink-0">Seed</span>
+                            <span className="w-14 shrink-0">状态</span>
+                            <span className="w-20 shrink-0 text-right">大小</span>
+                          </div>
                           {files.map((f) => (
                             <FileRow
                               key={f.filePath}
@@ -266,11 +275,11 @@ function FileRow({
       className="flex items-center gap-2 px-6 py-1 text-xs hover:bg-accent/20 cursor-pointer"
       onClick={onToggle}
     >
-      {selected ? <CheckSquare className="h-3 w-3 text-primary" /> : <Square className="h-3 w-3 text-muted-foreground" />}
+      {selected ? <CheckSquare className="h-3 w-3 shrink-0 text-primary" /> : <Square className="h-3 w-3 shrink-0 text-muted-foreground" />}
       <span className="flex-1 min-w-0 truncate font-mono text-foreground">{file.caseName}</span>
-      <span className="w-24 shrink-0 text-muted-foreground">{file.cornerName}</span>
-      <span className="w-12 shrink-0 text-muted-foreground">seed:{file.seed}</span>
-      <span className={cn('w-12 shrink-0 font-medium', statusColor)}>{file.caseStatus}</span>
+      <span className="w-24 shrink-0 truncate text-muted-foreground">{file.cornerName}</span>
+      <span className="w-24 shrink-0 truncate text-muted-foreground">seed:{file.seed}</span>
+      <span className={cn('w-14 shrink-0 truncate font-medium', statusColor)}>{file.caseStatus}</span>
       <span className="w-20 shrink-0 text-right text-[10px] text-muted-foreground">{sizeStr}</span>
     </div>
   );
