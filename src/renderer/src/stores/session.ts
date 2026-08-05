@@ -77,6 +77,8 @@ export interface SessionEntry {
   composer: SessionComposer;
   createdAt: number;
   model?: SessionModel;
+  /** TV AI session: the violation ID this session is analyzing. */
+  tvViolationId?: number;
 }
 
 export interface HistorySession {
