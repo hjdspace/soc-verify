@@ -123,7 +123,7 @@ export class SourceControlService {
 
   async getStatus(projectRoot: string): Promise<SourceControlStatus> {
     try {
-      const result = await this.runGit(projectRoot, ['status', '--porcelain=v1', '-z', '--branch', ...PROJECT_SOURCE_PATHSPEC]);
+      const result = await this.runGit(projectRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--branch', ...PROJECT_SOURCE_PATHSPEC]);
       return parseGitStatus(result.stdout);
     } catch {
       return { isRepository: false, branch: null, ahead: 0, behind: 0, files: [] };
