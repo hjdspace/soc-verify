@@ -47,18 +47,6 @@ export function RegisterTableParser({ projectRoot, onProjectRootChange }: ToolCo
   const [parsing, setParsing] = useState(false);
   const [status, setStatus] = useState('请选择 Excel 文件');
 
-  const handleBrowse = useCallback(async () => {
-    const res = await trpc.tools.selectFiles.mutate({
-      title: '选择寄存器表格',
-      filters: [{ name: 'Excel 文件', extensions: ['xlsx', 'xls'] }],
-      defaultPath: projectRoot ?? undefined,
-    });
-    if (res.paths.length > 0) {
-      setFilePath(res.paths[0]);
-      await handleParse(res.paths[0]);
-    }
-  }, [projectRoot]);
-
   const handleParse = useCallback(async (path: string) => {
     if (!path) {
       setStatus('请先选择文件');
@@ -81,6 +69,18 @@ export function RegisterTableParser({ projectRoot, onProjectRootChange }: ToolCo
       setParsing(false);
     }
   }, []);
+
+  const handleBrowse = useCallback(async () => {
+    const res = await trpc.tools.selectFiles.mutate({
+      title: '选择寄存器表格',
+      filters: [{ name: 'Excel 文件', extensions: ['xlsx', 'xls'] }],
+      defaultPath: projectRoot ?? undefined,
+    });
+    if (res.paths.length > 0) {
+      setFilePath(res.paths[0]);
+      await handleParse(res.paths[0]);
+    }
+  }, [projectRoot, handleParse]);
 
   const filteredRegisters = tableData
     ? tableData.registers.filter((r) => {

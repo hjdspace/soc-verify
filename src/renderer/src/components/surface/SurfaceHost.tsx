@@ -70,6 +70,7 @@ export function SurfaceHost({ declaration }: SurfaceHostProps) {
   // The main effect above only runs on mount; this effect detects URL changes
   // and calls bridge.sync() so the ViewManager loads the new URL without
   // destroying and re-creating the WebContentsView.
+  const sourceKeyValue = sourceKey(declaration.source);
   useEffect(() => {
     const bridge = window.surfaceBridge;
     const container = containerRef.current;
@@ -86,7 +87,7 @@ export function SurfaceHost({ declaration }: SurfaceHostProps) {
     }).catch(() => {
       // Best-effort; surface errors are reported through the event bridge.
     });
-  }, [sourceKey(declaration.source)]);
+  }, [sourceKeyValue]);
 
   useEffect(() => {
     if (!window.surfaceBridge) return;

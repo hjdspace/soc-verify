@@ -9,12 +9,8 @@ import { useBrowserStore, normalizeUrl } from '@renderer/stores/browser';
 import type { SurfaceEvent } from '@shared/surface-types';
 
 describe('normalizeUrl', () => {
-  it('adds http:// prefix when scheme is missing', () => {
-    expect(normalizeUrl('example.com')).toBe('http://example.com');
-  });
-
-  it('keeps bare HTTP-compatible hosts reachable', () => {
-    expect(normalizeUrl('www.baudi.com')).toBe('http://www.baudi.com');
+  it('adds https:// prefix when scheme is missing', () => {
+    expect(normalizeUrl('example.com')).toBe('https://example.com');
   });
 
   it('preserves http:// scheme', () => {
@@ -34,7 +30,7 @@ describe('normalizeUrl', () => {
   });
 
   it('preserves query params and fragments', () => {
-    expect(normalizeUrl('example.com/page?id=1#section')).toBe('http://example.com/page?id=1#section');
+    expect(normalizeUrl('example.com/page?id=1#section')).toBe('https://example.com/page?id=1#section');
   });
 
   it('returns null for empty input', () => {

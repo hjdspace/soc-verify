@@ -44,8 +44,10 @@ function setup() {
     isDestroyed: vi.fn().mockReturnValue(false),
     destroy: vi.fn(),
     insertCSS: vi.fn().mockResolvedValue('css-key'),
-    canGoBack: vi.fn().mockReturnValue(false),
-    canGoForward: vi.fn().mockReturnValue(false),
+    navigationHistory: {
+      canGoBack: vi.fn().mockReturnValue(false),
+      canGoForward: vi.fn().mockReturnValue(false),
+    },
     goBack: vi.fn(),
     goForward: vi.fn(),
     reload: vi.fn(),

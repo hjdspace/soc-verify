@@ -20,6 +20,10 @@ export interface SurfaceWebContents {
   getNavigationHistory?(): { canGoBack: boolean; canGoForward: boolean };
   findInPage?(text: string, options?: { forward?: boolean }): void;
   stopFindInPage?(action: 'clearSelection' | 'keepSelection' | 'activateSelection'): void;
+  navigationHistory?: {
+    canGoBack(): boolean;
+    canGoForward(): boolean;
+  };
 }
 
 export interface SurfaceView {
@@ -237,8 +241,9 @@ export class ViewManager {
     const entry = this.surfaces.get(id);
     if (!entry || entry.view.webContents.isDestroyed()) return;
     const wc = entry.view.webContents;
-    const canGoBack = typeof wc.canGoBack === 'function' ? wc.canGoBack() : false;
-    const canGoForward = typeof wc.canGoForward === 'function' ? wc.canGoForward() : false;
+    const navHistory = wc.navigationHistory;
+    const canGoBack = navHistory && typeof navHistory.canGoBack === 'function' ? navHistory.canGoBack() : false;
+    const canGoForward = navHistory && typeof navHistory.canGoForward === 'function' ? navHistory.canGoForward() : false;
     this.options.emit({ id, type: 'navigation', canGoBack, canGoForward });
   }
 

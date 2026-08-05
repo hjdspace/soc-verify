@@ -60,7 +60,7 @@ type BrowserStore = {
 /**
  * Normalize a URL string for comparison:
  * - Trim whitespace
- * - Add `http://` prefix if missing scheme (e.g. "example.com" → "http://example.com")
+ * - Add `https://` prefix if missing scheme (e.g. "example.com" → "https://example.com")
  * - Remove trailing slash for root paths (e.g. "https://example.com/" → "https://example.com")
  *
  * Returns `null` if the result is not a valid http/https URL.
@@ -69,13 +69,11 @@ export function normalizeUrl(input: string): string | null {
   const trimmed = input.trim();
   if (!trimmed) return null;
 
-  // Use HTTP for bare hostnames so sites with HTTP-only or legacy TLS endpoints
-  // remain reachable; normal sites can redirect to HTTPS themselves. Explicit
-  // http:// and https:// inputs are preserved unchanged.
+  // Add https:// prefix only if the input doesn't already have a URL scheme.
   // This prevents prepending https:// to inputs like file:/// or javascript:
   let withScheme = trimmed;
   if (!/^[a-z][a-z0-9+.-]*:/i.test(withScheme)) {
-    withScheme = `http://${withScheme}`;
+    withScheme = `https://${withScheme}`;
   }
 
   let parsed: URL;

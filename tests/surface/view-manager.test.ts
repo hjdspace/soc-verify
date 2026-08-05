@@ -32,8 +32,10 @@ function setup() {
     isDestroyed: vi.fn().mockReturnValue(false),
     destroy: vi.fn(),
     insertCSS: vi.fn().mockResolvedValue('css-key'),
-    canGoBack: vi.fn().mockReturnValue(false),
-    canGoForward: vi.fn().mockReturnValue(false),
+    navigationHistory: {
+      canGoBack: vi.fn().mockReturnValue(false),
+      canGoForward: vi.fn().mockReturnValue(false),
+    },
     goBack: vi.fn(),
     goForward: vi.fn(),
     reload: vi.fn(),
@@ -444,7 +446,7 @@ describe('ViewManager', () => {
 
   it('calls webContents.goBack and emits navigation state', async () => {
     const { manager, webContents, events } = setup();
-    (webContents.canGoBack as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (webContents.navigationHistory.canGoBack as ReturnType<typeof vi.fn>).mockReturnValue(true);
     await manager.sync(declaration());
 
     manager.goBack('surface-1');
@@ -455,7 +457,7 @@ describe('ViewManager', () => {
 
   it('calls webContents.goForward and emits navigation state', async () => {
     const { manager, webContents, events } = setup();
-    (webContents.canGoForward as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (webContents.navigationHistory.canGoForward as ReturnType<typeof vi.fn>).mockReturnValue(true);
     await manager.sync(declaration());
 
     manager.goForward('surface-1');

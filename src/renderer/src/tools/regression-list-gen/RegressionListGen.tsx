@@ -39,11 +39,6 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
   const [output, setOutput] = useState('');
   const [status, setStatus] = useState('就绪');
 
-  // Load history on mount
-  useEffect(() => {
-    void loadHistoryData();
-  }, []);
-
   const loadHistoryData = useCallback(async () => {
     try {
       const res = await trpc.tools.regressionListGen.loadHistory.query();
@@ -56,10 +51,10 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
     }
   }, []);
 
-  // Auto-update command preview when config changes
+  // Load history on mount
   useEffect(() => {
-    void updateCommand();
-  }, [config]);
+    void loadHistoryData();
+  }, [loadHistoryData]);
 
   const updateCommand = useCallback(async () => {
     try {
@@ -69,6 +64,11 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
       // Ignore
     }
   }, [config]);
+
+  // Auto-update command preview when config changes
+  useEffect(() => {
+    void updateCommand();
+  }, [config, updateCommand]);
 
   const handleBrowseCfg = useCallback(async () => {
     const res = await trpc.tools.selectFiles.mutate({
