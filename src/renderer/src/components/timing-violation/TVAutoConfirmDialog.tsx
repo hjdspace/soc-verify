@@ -14,6 +14,8 @@ type AutoConfirmDialogProps = {
   open: boolean;
   confirming: boolean;
   defaultResetTimeNs?: number;
+  defaultIntervalStartNs?: number | null;
+  defaultIntervalEndNs?: number | null;
   onSubmit: (opts: { resetTimeNs?: number; intervalStartNs?: number; intervalEndNs?: number }) => void;
   onClose: () => void;
 };
@@ -22,6 +24,8 @@ export function TVAutoConfirmDialog({
   open,
   confirming,
   defaultResetTimeNs,
+  defaultIntervalStartNs,
+  defaultIntervalEndNs,
   onSubmit,
   onClose,
 }: AutoConfirmDialogProps) {
@@ -30,19 +34,23 @@ export function TVAutoConfirmDialog({
   const [resetTimeNs, setResetTimeNs] = useState(
     defaultResetTimeNs !== undefined ? String(defaultResetTimeNs) : '1000',
   );
-  const [intervalStartNs, setIntervalStartNs] = useState('');
-  const [intervalEndNs, setIntervalEndNs] = useState('');
+  const [intervalStartNs, setIntervalStartNs] = useState(
+    defaultIntervalStartNs != null ? String(defaultIntervalStartNs) : '',
+  );
+  const [intervalEndNs, setIntervalEndNs] = useState(
+    defaultIntervalEndNs != null ? String(defaultIntervalEndNs) : '',
+  );
 
   // Reset form state when dialog opens
   useEffect(() => {
     if (open) {
       setUseResetTime(true);
-      setUseInterval(false);
+      setUseInterval(defaultIntervalStartNs != null && defaultIntervalEndNs != null);
       setResetTimeNs(defaultResetTimeNs !== undefined ? String(defaultResetTimeNs) : '1000');
-      setIntervalStartNs('');
-      setIntervalEndNs('');
+      setIntervalStartNs(defaultIntervalStartNs != null ? String(defaultIntervalStartNs) : '');
+      setIntervalEndNs(defaultIntervalEndNs != null ? String(defaultIntervalEndNs) : '');
     }
-  }, [open, defaultResetTimeNs]);
+  }, [open, defaultResetTimeNs, defaultIntervalStartNs, defaultIntervalEndNs]);
 
   const canSubmit = () => {
     if (confirming) return false;
