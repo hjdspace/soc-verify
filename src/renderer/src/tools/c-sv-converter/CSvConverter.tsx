@@ -6,7 +6,7 @@
  */
 
 import { useState, useCallback } from 'react';
-import { FolderOpen, FileCode2, ArrowLeftRight, Download, Eye } from 'lucide-react';
+import { FolderOpen, FileCode2, Download, Eye } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import type { ToolComponentProps } from '../registry';
 import { cn } from '@renderer/lib/utils';

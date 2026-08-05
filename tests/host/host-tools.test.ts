@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { HostToolsRegistry } from '../../src/main/host/host-tools';
-import { NoopDiscovery } from '../../src/main/host/discovery';
 import type { SubsysDiscovery, SubsysInfo, CaseInfo, SimOptionsSchema } from '../../src/main/host/discovery';
 import { CaseStatsService } from '../../src/main/case/case-stats-service';
 import type { SimulationManager } from '../../src/main/simulation/simulation-manager';

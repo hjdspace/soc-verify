@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { HostUriRouter } from '../../src/main/host/host-uris';
-import type { RpcHostUriRequest, RpcHostUriResult } from '../../src/main/host/types';
-
 describe('HostUriRouter', () => {
   it('registers 3 default schemes', () => {
     const router = new HostUriRouter();

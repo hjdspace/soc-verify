@@ -25,8 +25,6 @@ import { Reg2C } from './reg2c/Reg2C';
 import { GitDiff } from './git-diff/GitDiff';
 import { GitManager } from './git-manager/GitManager';
 import { CSvConverter } from './c-sv-converter/CSvConverter';
-import { ToolPlaceholder } from './ToolPlaceholder';
-
 export type ToolComponentProps = {
   projectRoot: string | null;
   onProjectRootChange: (path: string) => void;

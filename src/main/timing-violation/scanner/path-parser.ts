@@ -7,7 +7,7 @@
  * 通用模式: ./regression/任意/<case_name>_<seed>/log/vio_summary.log
  */
 
-import { basename, dirname, relative, sep } from 'node:path';
+import { relative, sep } from 'node:path';
 import {
   DEFAULT_CORNERS,
   DEFAULT_SUBSYS_PATTERNS,
@@ -155,7 +155,7 @@ function findSubsysInPath(pathParts: string[], subsysPatterns: string[]): string
  * 检测用例状态（PASS/FAIL）。
  * 检查同目录下是否存在 sprd_log_pass.log 文件。
  */
-export function detectCaseStatus(filePath: string): 'PASS' | 'FAIL' {
+export function detectCaseStatus(_filePath: string): 'PASS' | 'FAIL' {
   // 注：此处依赖 fs，延迟导入避免纯函数测试中引入 fs
   // 实际由 violation-scanner.ts 调用时注入
   return 'FAIL';

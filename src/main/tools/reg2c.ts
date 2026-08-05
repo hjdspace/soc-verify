@@ -6,7 +6,6 @@
  * generate C macros, struct, and access functions.
  */
 
-import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { extname } from 'node:path';
 import ExcelJS from 'exceljs';
@@ -209,10 +208,10 @@ export async function parseRegisterFile(
     let regName = getVal('regname');
     let offsetStr = getVal('offset');
     let widthStr = getVal('width') || (lastWidth ? String(lastWidth) : '32');
-    let bitStr = getVal('bit');
-    let fieldName = getVal('fieldname');
-    let rwStr = getVal('rw');
-    let resetStr = getVal('resetvalue');
+    const bitStr = getVal('bit');
+    const fieldName = getVal('fieldname');
+    const rwStr = getVal('rw');
+    const resetStr = getVal('resetvalue');
     let descStr = getVal('description') || getVal('shortdescription');
     const shortDescStr = getVal('shortdescription') || '';
 

@@ -18,7 +18,6 @@ import { coverageRegistry } from '../../coverage/coverage-registry';
 import { ClosureManager } from '../../coverage/closure-manager';
 import { ClosureOrchestrator, type ClosureEvent } from '../../coverage/closure-orchestrator';
 import { TestPromoter } from '../../coverage/test-promoter';
-import { CoverageReportGenerator } from '../../coverage/coverage-report-generator';
 import type { ImportProgressEvent } from '../../coverage/coverage-report-generator';
 import {
   generateHtmlReport,

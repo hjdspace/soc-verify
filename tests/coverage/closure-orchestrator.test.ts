@@ -73,7 +73,7 @@ function makeSummary(overall: number): CoverageSummary {
 }
 
 /** 构造 CoverageDelta[]（8 个 metric，delta 统一） */
-function makeDeltas(delta: number): CoverageDelta[] {
+function _makeDeltas(delta: number): CoverageDelta[] {
   const metrics: CoverageMetric[] = [
     'line', 'branch', 'toggle', 'condition',
     'fsm_state', 'fsm_transition', 'functional', 'assertion',

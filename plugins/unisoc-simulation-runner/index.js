@@ -16,7 +16,7 @@
 
 const { spawn } = require('node:child_process');
 const { existsSync, readFileSync } = require('node:fs');
-const { join, basename } = require('node:path');
+const { join } = require('node:path');
 const { randomUUID } = require('node:crypto');
 
 const MANIFEST = {

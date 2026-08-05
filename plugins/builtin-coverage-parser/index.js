@@ -22,8 +22,8 @@
  * Debug 日志：解析过程会写入 reportDir/parser-debug.log，记录每一步的解析结果。
  */
 
-const { readFileSync, readdirSync, existsSync, statSync, writeFileSync, appendFileSync } = require('node:fs');
-const { join, basename, dirname } = require('node:path');
+const { readFileSync, readdirSync, existsSync, writeFileSync, appendFileSync } = require('node:fs');
+const { join } = require('node:path');
 
 const MANIFEST = {
   apiVersion: '1.0',
@@ -67,7 +67,7 @@ function emptyMetrics() {
   return m;
 }
 
-function makeTriplet(covered, total) {
+function _makeTriplet(covered, total) {
   if (total === 0 || (covered === null && total === null)) {
     return { percentage: 100, covered: covered || 0, total: total || 0 };
   }
@@ -208,7 +208,7 @@ function parseImcSummary(text, log) {
     log('  ' + i + ': ' + JSON.stringify(lines[i]));
   }
 
-  for (var i = 0; i < lines.length; i++) {
+  for (i = 0; i < lines.length; i++) {
     var line = lines[i];
     var trimmed = line.trim();
     if (!trimmed) continue;
@@ -240,7 +240,7 @@ function parseImcSummary(text, log) {
  * 从一行文本中尝试提取 metric 名称和覆盖率值。
  * 返回 { key: metricKey, triplet: {percentage, covered, total} } 或 null。
  */
-function tryParseMetricFromLine(line, log) {
+function tryParseMetricFromLine(line, _log) {
   // 策略1: "Metric: 95.30% (9530/10000)" 格式
   var match1 = line.match(/^\s*(.+?)\s*[:=]\s*([\d.]+)\s*%\s*(?:\(?(\d+)\s*\/\s*(\d+)\)?)?/i);
   if (match1) {
@@ -331,7 +331,6 @@ function tryParseMetricFromLine(line, log) {
 function parseImcDetail(text, log) {
   if (!text) return { nodes: [], tree: null };
   var lines = text.split('\n');
-  var nodes = [];
   var tree = null;
 
   log('[parseImcDetail] Starting, total lines: ' + lines.length);
@@ -344,9 +343,8 @@ function parseImcDetail(text, log) {
   var headerLineIdx = -1;
   var columnMetrics = []; // 列索引到 metric key 的映射
 
-  for (var i = 0; i < lines.length; i++) {
+  for (i = 0; i < lines.length; i++) {
     var line = lines[i];
-    var lower = line.toLowerCase();
 
     // 检测列头行：包含多个 metric 名称
     if (/instance|hierarchy|module/i.test(line) && /line|branch|toggle|cond|fsm|assert|function/i.test(line)) {
@@ -426,8 +424,8 @@ function parseImcDetail(text, log) {
   var startIdx = headerLineIdx >= 0 ? headerLineIdx + 1 : 0;
   var instanceNodes = [];
 
-  for (var i = startIdx; i < lines.length; i++) {
-    var line = lines[i];
+  for (i = startIdx; i < lines.length; i++) {
+    line = lines[i];
     if (!line.trim()) continue;
     // 跳过分隔线
     if (/^[-=+_#|~\s]+$/.test(line)) continue;
@@ -529,7 +527,7 @@ function parseImcDetail(text, log) {
  * 将扁平的实例节点列表（带缩进信息）构建为层级树。
  * 使用栈算法：根据缩进级别确定父子关系。
  */
-function buildHierarchyTree(nodes, log) {
+function buildHierarchyTree(nodes, _log) {
   if (!nodes || nodes.length === 0) return null;
 
   var root = null;

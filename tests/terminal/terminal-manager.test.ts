@@ -65,7 +65,7 @@ describe('TerminalManager', () => {
     manager = new TerminalManager();
 
     const dataPromise = new Promise<string>((resolve) => {
-      manager.on('data', ({ id, data }) => {
+      manager.on('data', ({ id: _id, data }) => {
         resolve(data);
       });
     });

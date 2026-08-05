@@ -240,7 +240,7 @@ function updateRepoInfo(repo: GitRepoInfo): void {
 }
 
 /** Get the latest CQP tag for a repo. */
-function getLatestCqpTag(repoPath: string, repoName: string): string {
+function getLatestCqpTag(repoPath: string, _repoName: string): string {
   // Try exact match first
   let result = runGitCommand(repoPath, ['describe', '--exact-match', '--tags', 'HEAD']).trim();
   if (result) return result;

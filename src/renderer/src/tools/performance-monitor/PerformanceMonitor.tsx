@@ -7,7 +7,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Cpu, MemoryStick, Clock, Gauge, Trash2 } from 'lucide-react';
+import { Cpu, MemoryStick, Gauge, Trash2 } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import type { ToolComponentProps } from '../registry';
 import { cn } from '@renderer/lib/utils';
@@ -34,7 +34,7 @@ type Metrics = {
 
 const MAX_HISTORY = 100;
 
-export function PerformanceMonitor({ }: ToolComponentProps) {
+export function PerformanceMonitor(_props: ToolComponentProps) {
   const [metrics, setMetrics] = useState<Metrics | null>(null);
   const [history, setHistory] = useState<Metrics[]>([]);
   const [interval, setIntervalMs] = useState(2000);

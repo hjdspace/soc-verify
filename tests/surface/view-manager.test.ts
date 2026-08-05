@@ -14,15 +14,15 @@ function declaration(overrides: Partial<SurfaceDeclaration> = {}): SurfaceDeclar
 }
 
 function setup() {
-  const listeners = new Map<string, Set<(...args: any[]) => void>>();
+  const listeners = new Map<string, Set<(...args: unknown[]) => void>>();
   const webContents = {
-    on: vi.fn((event: string, listener: (...args: any[]) => void) => {
+    on: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
       const set = listeners.get(event) ?? new Set();
       set.add(listener);
       listeners.set(event, set);
       return webContents;
     }),
-    off: vi.fn((event: string, listener: (...args: any[]) => void) => {
+    off: vi.fn((event: string, listener: (...args: unknown[]) => void) => {
       listeners.get(event)?.delete(listener);
       return webContents;
     }),
@@ -373,6 +373,37 @@ describe('ViewManager', () => {
     expect(webContents.destroy).toHaveBeenCalledTimes(1);
   });
 
+  it('ignores a stale load failure after the same surface id is recreated', async () => {
+    const first = setup();
+    const second = setup();
+    const rejectFirst: { current: ((error: Error & { errno?: number }) => void) | null } = { current: null };
+    (first.webContents.loadURL as ReturnType<typeof vi.fn>).mockImplementationOnce(() =>
+      new Promise<void>((_resolve, reject) => {
+        rejectFirst.current = reject;
+      }),
+    );
+
+    const events: unknown[] = [];
+    const manager = new ViewManager(first.host, {
+      createView: () => first.view,
+      emit: (event) => events.push(event),
+    });
+    const firstSync = manager.sync(declaration({ source: { type: 'url', url: 'https://www.baidu.com' } }));
+    manager.destroy('surface-1');
+
+    const recreated = new ViewManager(first.host, {
+      createView: () => second.view,
+      emit: (event) => events.push(event),
+    });
+    await recreated.sync(declaration({ source: { type: 'url', url: 'https://www.baidu.com' } }));
+
+    rejectFirst.current?.(Object.assign(new Error('ERR_FAILED'), { errno: -2 }));
+    await firstSync;
+
+    expect(events.filter((event) => (event as { type?: string }).type === 'failure')).toHaveLength(0);
+    expect(second.webContents.loadURL).toHaveBeenCalledWith('https://www.baidu.com');
+  });
+
   it('safe to destroy the same surface multiple times', async () => {
     const { manager, host, webContents } = setup();
     await manager.sync(declaration({
@@ -484,7 +515,7 @@ describe('ViewManager', () => {
   it('allows certificate error when proceed is granted (single-continue)', async () => {
     const proceedUrls: string[] = [];
     const consumedUrls: string[] = [];
-    const { manager, host, view, webContents, listeners, events } = setup();
+    const { manager: _manager, host, view, webContents: _webContents, listeners, events } = setup();
     // Create a manager with proceed support
     const managerWithProceed = new ViewManager(host, {
       createView: () => view,
@@ -515,7 +546,7 @@ describe('ViewManager', () => {
 
     // Second call should be denied (proceed was consumed)
     callbackResult = null;
-    const managerWithProceedDenied = new ViewManager(host, {
+    const _managerWithProceedDenied = new ViewManager(host, {
       createView: () => view,
       emit: (event) => events.push(event),
       shouldProceedCertificate: () => false,
@@ -524,5 +555,40 @@ describe('ViewManager', () => {
     // Can't re-sync since surface already exists, but we can test the callback directly
     // This verifies that without a proceed, the error is denied
     expect(callbackResult).toBeNull();
+  });
+
+  // ── loadURL rejection handling ─────────────────────────────────
+
+  it('does NOT emit failure when loadURL rejects with ERR_ABORTED (redirect)', async () => {
+    // Simulate a redirect: loadURL rejects because the original navigation
+    // was aborted (ERR_ABORTED, -3). The did-fail-load event handler already
+    // emits a filtered event with errorCode: -3. The catch block must NOT
+    // emit a second event with errorCode: -1 that would bypass the filter.
+    const { manager, webContents, events } = setup();
+    const abortError = Object.assign(new Error('ERR_ABORTED'), { errno: -3 });
+    (webContents.loadURL as ReturnType<typeof vi.fn>).mockRejectedValue(abortError);
+
+    await manager.sync(declaration({ source: { type: 'url', url: 'https://baidu.com' } }));
+
+    const failureEvents = events.filter(
+      (e) => (e as { type?: string }).type === 'failure',
+    );
+    expect(failureEvents).toHaveLength(0);
+  });
+
+  it('emits failure with real error code when loadURL rejects with non-ABORTED error', async () => {
+    const { manager, webContents, events } = setup();
+    const connError = Object.assign(new Error('ERR_CONNECTION_REFUSED'), { errno: -102 });
+    (webContents.loadURL as ReturnType<typeof vi.fn>).mockRejectedValue(connError);
+
+    await manager.sync(declaration({ source: { type: 'url', url: 'https://example.com' } }));
+
+    const failureEvents = events.filter(
+      (e) => (e as { type?: string }).type === 'failure',
+    );
+    expect(failureEvents).toHaveLength(1);
+    const failure = failureEvents[0] as { errorCode: number; isMainFrame: boolean };
+    expect(failure.errorCode).toBe(-102);
+    expect(failure.isMainFrame).toBe(true);
   });
 });

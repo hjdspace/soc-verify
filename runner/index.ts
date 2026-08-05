@@ -170,7 +170,7 @@ function callHostTool(toolName: string, args: unknown): Promise<unknown> {
 // This allows the runner to start quickly and respond to the ready signal.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let session: any = null;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 let unsubscribe: (() => void) | null = null;
 
 async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
@@ -427,7 +427,7 @@ async function handleGetMcpStatus(cmd: Command & { type: "getMcpStatus" }): Prom
 		}
 
 		sendResponse(cmd.id, true, { servers: statusMap });
-	} catch (err) {
+	} catch (_err) {
 		// If MCPManager is not available (e.g. enableMCP was false), return empty.
 		sendResponse(cmd.id, true, { servers: {} });
 	}

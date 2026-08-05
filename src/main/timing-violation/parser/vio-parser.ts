@@ -90,7 +90,7 @@ export async function parseLogStream(
   onProgress?: (lineCount: number) => void,
 ): Promise<ParseResult> {
   const errors: string[] = [];
-  let violationCount = 0;
+  let _violationCount = 0;
   let lineCount = 0;
 
   const stream = createReadStream(filePath, { encoding: 'utf-8' });
@@ -116,7 +116,7 @@ export async function parseLogStream(
         if (validateViolation(current)) {
           try {
             onViolation(processViolation(current, filePath, options));
-            violationCount++;
+            _violationCount++;
           } catch (err) {
             errors.push(`Failed to process violation at line ${lineCount}: ${err instanceof Error ? err.message : String(err)}`);
           }
@@ -147,7 +147,7 @@ export async function parseLogStream(
     if (validateViolation(current)) {
       try {
         onViolation(processViolation(current, filePath, options));
-        violationCount++;
+        _violationCount++;
       } catch (err) {
         errors.push(`Failed to process final violation: ${err instanceof Error ? err.message : String(err)}`);
       }

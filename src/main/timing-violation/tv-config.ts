@@ -10,7 +10,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import type { TvConfig } from './types';
 import { DEFAULT_CORNERS, DEFAULT_SUBSYS_PATTERNS } from './parser/case-info-parser';
 

@@ -133,7 +133,7 @@ export class RegressionManager {
           status: status.status,
           duration: 0,
         });
-      } catch (err) {
+      } catch (_err) {
         results.failed++;
         results.results.push({
           caseId,

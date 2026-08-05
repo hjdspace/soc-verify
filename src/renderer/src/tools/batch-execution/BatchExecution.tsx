@@ -7,7 +7,7 @@
  */
 
 import { useState, useCallback, useRef } from 'react';
-import { Plus, Trash2, Play, Square, RefreshCw, FileText } from 'lucide-react';
+import { Plus, Trash2, Play, Square, FileText } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import type { ToolComponentProps } from '../registry';
 import { cn } from '@renderer/lib/utils';

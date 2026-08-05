@@ -7,7 +7,7 @@ function createMockAdapter(overrides: Partial<PluginBackedSimulation> = {}): Plu
   const runs = new Map<string, SimulationRunStatus>();
   return {
     hasRunner: overrides.hasRunner ?? (() => true),
-    run: overrides.run ?? (async (opts) => {
+    run: overrides.run ?? (async (_opts) => {
       const runId = `run_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
       runs.set(runId, { runId, status: 'running', startTime: Date.now() });
       return { runId } as SimulationRunHandle;
@@ -116,7 +116,7 @@ describe('SimulationManager', () => {
       simulationAdapter: adapter,
     });
 
-    const handle = await manager.run({ caseId: 'case_1', subsys: 'sub_a' });
+    await manager.run({ caseId: 'case_1', subsys: 'sub_a' });
 
     // Wait for polling to detect completion (poll interval is 2s)
     await new Promise((resolve) => setTimeout(resolve, 2500));

@@ -227,9 +227,9 @@ export function parseTaskItems(resultText: string): TaskItemData[] {
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed.startsWith('\u2713') || /^\[(done|ok)\]/i.test(trimmed)) {
-      items.push({ title: trimmed.replace(/^[\u2713\[]+(done|ok)?\]?\s*/i, '').trim(), status: 'done' });
+      items.push({ title: trimmed.replace(/^[\u2713[]+(done|ok)?\]?\s*/i, '').trim(), status: 'done' });
     } else if (trimmed.startsWith('\u27f3') || /^\[running\]/i.test(trimmed)) {
-      items.push({ title: trimmed.replace(/^[\u27f3\[]+(running)?\]?\s*/i, '').trim(), status: 'running' });
+      items.push({ title: trimmed.replace(/^[\u27f3[]+(running)?\]?\s*/i, '').trim(), status: 'running' });
     } else if (/^[-*]\s/.test(trimmed)) {
       items.push({ title: trimmed.replace(/^[-*]\s/, ''), status: 'done' });
     }

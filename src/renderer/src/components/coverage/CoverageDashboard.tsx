@@ -148,7 +148,7 @@ function collectVisible(
 
 /** 取 session ID 简写（取最后一段，最多 8 字符） */
 function shortSessionId(sid: string): string {
-  const parts = sid.split(/[_\-]/);
+  const parts = sid.split(/[_-]/);
   const last = parts[parts.length - 1] ?? sid;
   return last.length > 8 ? last.slice(0, 8) : last;
 }

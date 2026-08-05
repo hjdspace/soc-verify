@@ -18,7 +18,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { BookmarkStore } from '../../src/main/browser/bookmark-store';
-import type { Bookmark, BookmarkGroup, PersistedBookmarks } from '../../src/shared/browser-types';
+import type { PersistedBookmarks } from '../../src/shared/browser-types';
 
 const TMP_BASE = tmpdir();
 
@@ -303,8 +303,8 @@ describe('BookmarkStore', () => {
     it('export → import round-trip preserves all data', async () => {
       // Setup original data
       const grp = await store.addGroup({ name: 'Work' });
-      const bm1 = await store.addBookmark({ url: 'https://a.com', title: 'A', groupId: grp.id, frequent: true });
-      const bm2 = await store.addBookmark({ url: 'https://b.com', title: 'B', groupId: grp.id });
+      const _bm1 = await store.addBookmark({ url: 'https://a.com', title: 'A', groupId: grp.id, frequent: true });
+      const _bm2 = await store.addBookmark({ url: 'https://b.com', title: 'B', groupId: grp.id });
 
       // Export
       const exported = await store.exportData();

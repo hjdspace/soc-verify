@@ -19,7 +19,7 @@ interface EnvStoreState {
   updateConfig: (updates: Partial<EnvConfig>) => void;
 }
 
-export const useEnvStore = create<EnvStoreState>((set, get) => ({
+export const useEnvStore = create<EnvStoreState>((set, _get) => ({
   config: null,
   knownEnvVars: [],
   detecting: false,

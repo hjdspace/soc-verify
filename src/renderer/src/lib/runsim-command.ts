@@ -151,7 +151,7 @@ function preprocessCommandText(rawText: string): string {
   // 合并多余空白
   text = text.replace(/\s+/g, ' ');
   // 移除命令行不需要的特殊字符（保留常用字符）
-  text = text.replace(/[^\w\s\-=/.,:;_+*()\[\]{}|&$#@!~`"'\\]/g, '');
+  text = text.replace(/[^\w\s\-=/.,:;_+*()[\]{}|&$#@!~`"'\\]/g, '');
 
   return text.trim();
 }

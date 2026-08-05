@@ -135,7 +135,7 @@ export function generateCommand(parts: string[]): string {
 
   // Add seed (strip brackets)
   if (seed && seed.includes('[') && seed.includes(']')) {
-    const seedValue = seed.replace(/[\[\]]/g, '');
+    const seedValue = seed.replace(/[\][]/g, '');
     cmd.push(`-seed ${seedValue}`);
   }
 
@@ -147,7 +147,7 @@ export function generateCommand(parts: string[]): string {
   }
 
   if (cfgDef) {
-    const cfgDefValue = cfgDef.replace(/[\[\]]/g, '');
+    const cfgDefValue = cfgDef.replace(/[\][]/g, '');
     if (cfgDefValue.toLowerCase() !== 'default') {
       cmd.push(`-cfg_def ${cfgDefValue}`);
     }
@@ -159,7 +159,7 @@ export function generateCommand(parts: string[]): string {
       for (const arg of plusargValue.split(',')) {
         if (arg.includes('=')) {
           const [key, value] = arg.split('=', 2);
-          const cleanValue = value.replace(/[\[\]]/g, '');
+          const cleanValue = value.replace(/[\][]/g, '');
           cmd.push(`-simarg +${key}=${cleanValue}`);
         } else {
           cmd.push(`-simarg +${arg}`);
@@ -181,7 +181,7 @@ export function generateCommand(parts: string[]): string {
 export function parseRegressionFile(
   content: string,
   _filePath: string,
-  resultType: 'pass' | 'fail',
+  _resultType: 'pass' | 'fail',
 ): Record<string, CaseInfo[]> {
   const groups: Record<string, CaseInfo[]> = {};
   let currentGroup: string | null = null;
@@ -352,10 +352,10 @@ export async function parseAllTimes(data: RegressionData): Promise<RegressionDat
 
   for (const ts of Object.keys(data)) {
     for (const resultType of ['pass', 'fail'] as const) {
-      for (const [group, cases] of Object.entries(data[ts][resultType])) {
+      for (const [_group, cases] of Object.entries(data[ts][resultType])) {
         for (let i = 0; i < cases.length; i++) {
           const caseInfo = cases[i];
-          const tag = caseInfo.tag.replace(/[\[\]]/g, '');
+          const tag = caseInfo.tag.replace(/[\][]/g, '');
 
           if (!['PASS', 'RSF', 'RSP'].includes(tag)) continue;
           if (!caseInfo.log || !existsSync(caseInfo.log)) continue;
@@ -427,11 +427,11 @@ export function aggregateCaseData(
             aggregated[uniqueKey] = {
               caseName: caseInfo.case,
               corner: corner || '-',
-              finalStatus: caseInfo.tag.replace(/[\[\]]/g, ''),
+              finalStatus: caseInfo.tag.replace(/[\][]/g, ''),
               executionCount: 1,
               simTimes: [],
               latestCompileTime: caseInfo.compileTime,
-              seeds: [caseInfo.seed.replace(/[\[\]]/g, '')],
+              seeds: [caseInfo.seed.replace(/[\][]/g, '')],
               latestLog: caseInfo.log,
               latestCommand: caseInfo.command,
               latestTimestamp: ts,
@@ -446,14 +446,14 @@ export function aggregateCaseData(
             agg.executionCount++;
 
             if (!specificTimestamp && ts >= agg.latestTimestamp) {
-              agg.finalStatus = caseInfo.tag.replace(/[\[\]]/g, '');
+              agg.finalStatus = caseInfo.tag.replace(/[\][]/g, '');
               agg.hasFail = resultType === 'fail';
               agg.latestCompileTime = caseInfo.compileTime;
               agg.latestLog = caseInfo.log;
               agg.latestCommand = caseInfo.command;
               agg.latestTimestamp = ts;
             } else if (specificTimestamp && resultType === 'fail') {
-              agg.finalStatus = caseInfo.tag.replace(/[\[\]]/g, '');
+              agg.finalStatus = caseInfo.tag.replace(/[\][]/g, '');
               agg.hasFail = true;
               agg.latestLog = caseInfo.log;
               agg.latestCommand = caseInfo.command;
@@ -463,7 +463,7 @@ export function aggregateCaseData(
               agg.simTimes.push(caseInfo.simTime);
             }
 
-            const seedValue = caseInfo.seed.replace(/[\[\]]/g, '');
+            const seedValue = caseInfo.seed.replace(/[\][]/g, '');
             if (!agg.seeds.includes(seedValue)) {
               agg.seeds.push(seedValue);
             }

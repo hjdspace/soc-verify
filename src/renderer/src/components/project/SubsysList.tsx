@@ -369,7 +369,7 @@ function CaseTreeItem({
 
 export function SubsysList() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
-  const selectedSubsys = useProjectStore((s) => s.selectedSubsys);
+  const _selectedSubsys = useProjectStore((s) => s.selectedSubsys);
   const setSelectedSubsys = useProjectStore((s) => s.setSelectedSubsys);
   const caseStatusFilter = useProjectStore((s) => s.caseStatusFilter);
   const setCaseStatusFilter = useProjectStore((s) => s.setCaseStatusFilter);

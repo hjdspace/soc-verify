@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { tRPCError, getToast } from '@renderer/lib/trpc-utils';
 
 describe('tRPCError', () => {

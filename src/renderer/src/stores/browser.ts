@@ -60,7 +60,7 @@ type BrowserStore = {
 /**
  * Normalize a URL string for comparison:
  * - Trim whitespace
- * - Add `https://` prefix if missing scheme (e.g. "example.com" → "https://example.com")
+ * - Add `http://` prefix if missing scheme (e.g. "example.com" → "http://example.com")
  * - Remove trailing slash for root paths (e.g. "https://example.com/" → "https://example.com")
  *
  * Returns `null` if the result is not a valid http/https URL.
@@ -69,11 +69,13 @@ export function normalizeUrl(input: string): string | null {
   const trimmed = input.trim();
   if (!trimmed) return null;
 
-  // Add https:// prefix only if the input doesn't already have a URL scheme.
+  // Use HTTP for bare hostnames so sites with HTTP-only or legacy TLS endpoints
+  // remain reachable; normal sites can redirect to HTTPS themselves. Explicit
+  // http:// and https:// inputs are preserved unchanged.
   // This prevents prepending https:// to inputs like file:/// or javascript:
   let withScheme = trimmed;
   if (!/^[a-z][a-z0-9+.-]*:/i.test(withScheme)) {
-    withScheme = `https://${withScheme}`;
+    withScheme = `http://${withScheme}`;
   }
 
   let parsed: URL;
@@ -168,7 +170,10 @@ export const useBrowserStore = create<BrowserStore>((set, get) => ({
             },
           };
         case 'failure':
-          if (event.isMainFrame) {
+          // Only record errors for main-frame failures that are not ERR_ABORTED (-3).
+          // ERR_ABORTED is normal during redirects (e.g., http→https) and navigation
+          // cancellations; sub-frame failures (isMainFrame: false) are ads/iframes/etc.
+          if (event.isMainFrame && event.errorCode !== -3) {
             return {
               tabs: {
                 ...state.tabs,

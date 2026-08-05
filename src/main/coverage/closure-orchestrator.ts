@@ -422,8 +422,8 @@ export class ClosureOrchestrator {
    */
   private async createAgentSession(
     session: ClosureSession,
-    gap: ClosureGap,
-    round: number,
+    _gap: ClosureGap,
+    _round: number,
   ): Promise<string> {
     const workspaceDir = this.opts.closureManager.getWorkspaceDir(session.id);
     // 每轮迭代的 round 目录由 AI 写入测试文件，但 cwd 共用 workspaceDir

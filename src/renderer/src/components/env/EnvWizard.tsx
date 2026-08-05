@@ -3,8 +3,6 @@ import { Search, Check, X, ChevronRight, ChevronLeft, Plus, Trash2, Loader2, Wre
 import { useEnvStore } from '@renderer/stores/env';
 import { useProjectStore } from '@renderer/stores/project';
 import { cn } from '@renderer/lib/utils';
-import type { EdaToolInfo, EnvConfig } from '@shared/types';
-
 export function EnvWizard() {
   const wizardOpen = useEnvStore((s) => s.wizardOpen);
   if (!wizardOpen) return null;

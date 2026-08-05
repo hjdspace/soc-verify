@@ -11,7 +11,7 @@
  */
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useBrowserStore, normalizeUrl } from '@renderer/stores/browser';
+import { useBrowserStore } from '@renderer/stores/browser';
 import type { SurfaceEvent } from '@shared/surface-types';
 import { BROWSER_TAB_SOFT_LIMIT } from '@shared/browser-types';
 

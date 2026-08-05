@@ -6,7 +6,7 @@ import { Construction } from 'lucide-react';
 import { ALL_TOOLS, type ToolMeta } from '@shared/tool-types';
 import type { ToolComponentProps } from './registry';
 
-export function ToolPlaceholder({ }: ToolComponentProps) {
+export function ToolPlaceholder(_props: ToolComponentProps) {
   const toolId = new URLSearchParams(window.location.search).get('tool')
     || window.location.hash.slice('#tool='.length);
   const tool = ALL_TOOLS.find((t: ToolMeta) => t.id === toolId);

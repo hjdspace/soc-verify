@@ -7,7 +7,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { FolderOpen, RefreshCw, GitBranch, Tag, Play, Download, ChevronDown } from 'lucide-react';
+import { FolderOpen, RefreshCw, GitBranch, Tag, Play } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import type { ToolComponentProps } from '../registry';
 import { cn } from '@renderer/lib/utils';

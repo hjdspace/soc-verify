@@ -10,8 +10,6 @@ import { useState, useCallback } from 'react';
 import { FolderOpen, FilePlus, Trash2, Play, Square, Download } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import type { ToolComponentProps } from '../registry';
-import { cn } from '@renderer/lib/utils';
-
 type FileInfo = {
   path: string;
   lines: number;
@@ -32,7 +30,7 @@ type CountResult = {
 
 const VERILOG_EXTENSIONS = ['.v', '.sv', '.svh', '.svi'];
 
-export function CodeLineCounter({ projectRoot, onProjectRootChange }: ToolComponentProps) {
+export function CodeLineCounter({ projectRoot, onProjectRootChange: _onProjectRootChange }: ToolComponentProps) {
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [extensions, setExtensions] = useState<Record<string, boolean>>({
     '.v': true, '.sv': true, '.svh': true, '.svi': true,

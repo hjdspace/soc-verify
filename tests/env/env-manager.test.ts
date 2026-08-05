@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { detectEdaTools, loadEnvConfig, saveEnvConfig, buildEnvFromConfig, getKnownEnvVarNames } from '../../src/main/env/env-manager';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';

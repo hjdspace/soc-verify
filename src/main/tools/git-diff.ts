@@ -7,9 +7,9 @@
  * get file content at commit, calculate diffs.
  */
 
-import { spawn, execSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { join, relative, sep, isAbsolute } from 'node:path';
+import { relative, sep, isAbsolute } from 'node:path';
 
 // ── Types ──────────────────────────────────────────────────────────
 

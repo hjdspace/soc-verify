@@ -6,7 +6,7 @@
  * Ported from the Python `env_checker_one_touch` plugin.
  */
 
-import { readFile, writeFile, readdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { join, extname, relative } from 'node:path';
 import { existsSync } from 'node:fs';
 

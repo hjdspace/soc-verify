@@ -7,8 +7,6 @@
 
 import { cpus, totalmem, freemem, platform } from 'node:os';
 import { statfs } from 'node:fs/promises';
-import { dirname } from 'node:path';
-
 export type SystemMetrics = {
   timestamp: number;
   cpuUsage: number;        // percentage (0-100)

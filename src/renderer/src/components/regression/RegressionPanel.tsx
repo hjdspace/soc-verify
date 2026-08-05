@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Play, Plus, Trash2, Edit3, History, GitCompare, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
+import { Play, Plus, Trash2, History, GitCompare, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { useRegressionStore } from '@renderer/stores/regression';
 import { useProjectStore } from '@renderer/stores/project';
 import { cn } from '@renderer/lib/utils';
-import type { RegressionSuite, RegressionResult } from '@shared/types';
+import type { RegressionSuite } from '@shared/types';
 
 export function RegressionPanel() {
   const suites = useRegressionStore((s) => s.suites);

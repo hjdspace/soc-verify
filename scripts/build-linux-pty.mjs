@@ -105,7 +105,7 @@ function getNpmRegistry() {
 
 // ─── Build on Linux (direct) ────────────────────────────
 
-function buildOnLinux(electronVersion, ptyVersion) {
+function buildOnLinux(electronVersion, _ptyVersion) {
   console.log('[build-linux-pty] Building on Linux directly...');
 
   // Run @electron/rebuild to compile node-pty for Electron's ABI

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
-import { join, sep } from 'node:path';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   parseStandardStructure,
@@ -29,7 +29,7 @@ describe('Violation Scanner', () => {
   }
 
   function createPassLog(pathParts: string[]) {
-    const dir = join(tempDir, ...pathParts.slice(0, -1));
+    const _dir = join(tempDir, ...pathParts.slice(0, -1));
     const filePath = join(tempDir, ...pathParts);
     writeFileSync(filePath, '', 'utf-8');
     return filePath;
@@ -165,7 +165,7 @@ describe('Violation Scanner', () => {
     });
 
     it('detects PASS status when sprd_log_pass.log exists', () => {
-      const filePath = createLogFile(['dsp_sys', 'test_case_npg_f1_ssg', 'test_case_1', 'log', 'vio_summary.log']);
+      const _filePath = createLogFile(['dsp_sys', 'test_case_npg_f1_ssg', 'test_case_1', 'log', 'vio_summary.log']);
       // Create sprd_log_pass.log in the same log directory
       createPassLog(['dsp_sys', 'test_case_npg_f1_ssg', 'test_case_1', 'log', 'sprd_log_pass.log']);
 

@@ -31,7 +31,7 @@ export function TVConfirmationDialog({
   const [confirmer, setConfirmer] = useState('');
   const [result, setResult] = useState<ConfirmResult>('pass');
   const [reason, setReason] = useState('');
-  const [status, setStatus] = useState<ConfirmationStatus>('confirmed');
+  const [_status, setStatus] = useState<ConfirmationStatus>('confirmed');
 
   // 当对话框打开或违例变化时，预填充已有确认信息
   useEffect(() => {

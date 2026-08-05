@@ -49,7 +49,7 @@ function makeMockSimulationRunner(): SimulationRunnerPlugin {
   const runs = new Map<string, { status: string; errors: unknown[] }>();
   return {
     manifest: { id: 'mock-sr', name: 'Mock SR', version: '1.0.0', kind: 'simulation-runner' },
-    async run(opts) {
+    async run(_opts) {
       const runId = `run_${Date.now()}`;
       runs.set(runId, { status: 'running', errors: [] });
       return { runId };

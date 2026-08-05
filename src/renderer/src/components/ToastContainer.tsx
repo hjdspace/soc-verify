@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { X, AlertCircle, Info, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { useToastStore } from '@renderer/stores/toast';
 import { cn } from '@renderer/lib/utils';

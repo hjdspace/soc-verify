@@ -7,7 +7,7 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { FolderOpen, FileSearch, Play, Copy, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
+import { FolderOpen, Play, Copy, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import type { ToolComponentProps } from '../registry';
 import { cn } from '@renderer/lib/utils';
@@ -40,14 +40,14 @@ export function SvIfdefChecker({ projectRoot, onProjectRootChange }: ToolCompone
   const [mode, setMode] = useState<'directory' | 'file'>('directory');
   const [recursive, setRecursive] = useState(true);
   const [includeSvi, setIncludeSvi] = useState(true);
-  const [scanning, setScanning] = useState(false);
+  const [_scanning, _setScanning] = useState(false);
   const [checking, setChecking] = useState(false);
   const [results, setResults] = useState<CheckResult[]>([]);
   const [summary, setSummary] = useState<CheckSummary | null>(null);
   const [selectedFile, setSelectedFile] = useState<CheckResult | null>(null);
   const [status, setStatus] = useState('就绪');
   const [copied, setCopied] = useState(false);
-  const logRef = useRef<HTMLDivElement>(null);
+  const _logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (projectRoot) setInputPath(projectRoot);

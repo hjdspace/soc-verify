@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Search, Terminal as TerminalIcon, LayoutDashboard, BarChart3, ListChecks, GitBranch, Settings, FileText } from 'lucide-react';
 import { useUiStore } from '@renderer/stores/ui';
 import { useWorkbenchStore } from '@renderer/stores/workbench';

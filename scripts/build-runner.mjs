@@ -41,6 +41,7 @@ const OUTPUT_PATH = join(OUTPUT_DIR, OUTPUT_NAME);
 
 /** Check whether a string contains only ASCII characters. */
 function isAscii(str) {
+  // eslint-disable-next-line no-control-regex
   return /^[\x00-\x7F]*$/.test(str);
 }
 

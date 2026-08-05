@@ -885,7 +885,7 @@ export function RightPanel({ width }: RightPanelProps) {
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder={currentSessionId ? '输入消息... (\"/" 加载技能, "@" 添加上下文)' : '请先创建会话'}
+            placeholder={currentSessionId ? '输入消息... ("/" 加载技能, "@" 添加上下文)' : '请先创建会话'}
             disabled={!currentSessionId || isCurrentSessionCreating}
             rows={3}
             className="resize-none bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50"

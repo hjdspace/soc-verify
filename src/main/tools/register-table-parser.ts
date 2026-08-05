@@ -6,7 +6,7 @@
  * auto-fix Excel format issues (BOM, zero-width spaces, etc.).
  */
 
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -227,7 +227,7 @@ function extractRowData(
 /** Create a FieldInfo object from row data (new format). */
 function createFieldInfo(
   rowData: Record<string, string | number | null>,
-  rowNum: number,
+  _rowNum: number,
 ): FieldInfo | null {
   const fieldNameRaw = rowData.fieldName;
   const fieldName =

@@ -5,7 +5,17 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
 
 export default tseslint.config(
-  { ignores: ['out', 'dist', 'node_modules', 'resources/binaries', 'engine/oh-my-pi'] },
+  {
+    ignores: [
+      'out',
+      'dist',
+      'node_modules',
+      'resources/binaries',
+      'engine/oh-my-pi',
+      '.tmp',
+      '.cache'
+    ]
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -38,6 +48,32 @@ export default tseslint.config(
   },
   {
     files: ['electron.vite.config.ts', 'vitest.config.ts', 'eslint.config.js', 'tests/**/*'],
+    languageOptions: { globals: { ...globals.node } },
+    rules: {
+      // Tests use require() inside vi.hoisted() for dynamic imports in Vitest
+      '@typescript-eslint/no-require-imports': 'off'
+    }
+  },
+  {
+    // Node.js scripts (ESM .mjs / CJS .cjs)
+    files: ['scripts/**/*'],
+    languageOptions: { globals: { ...globals.node } },
+    rules: {
+      // CJS scripts legitimately use require()
+      '@typescript-eslint/no-require-imports': 'off'
+    }
+  },
+  {
+    // Plugin files are CommonJS modules loaded at runtime
+    files: ['plugins/**/*'],
+    languageOptions: { globals: { ...globals.node } },
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off'
+    }
+  },
+  {
+    // Runner is a Node.js TypeScript file
+    files: ['runner/**/*'],
     languageOptions: { globals: { ...globals.node } }
   }
 );

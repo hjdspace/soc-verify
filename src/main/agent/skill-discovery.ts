@@ -14,7 +14,7 @@
  *   # Body content...
  */
 
-import { readdir, readFile, writeFile, mkdir, rm, stat } from 'node:fs/promises';
+import { readdir, readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { homedir } from 'node:os';

@@ -40,7 +40,7 @@ import {
   COVERAGE_METRICS,
 } from '@shared/types';
 import type { PluginBackedCoverage } from '../plugin-adapters';
-import { CoverageReportGenerator, type GeneratedReports, type ProgressCallback, type ImportProgressEvent } from './coverage-report-generator';
+import { CoverageReportGenerator, type GeneratedReports, type ProgressCallback } from './coverage-report-generator';
 
 const SOCVERIFY_DIR = '.socverify';
 const COVERAGE_DIR = 'coverage';

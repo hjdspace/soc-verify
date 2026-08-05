@@ -242,7 +242,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
     }
   },
 
-  handleTerminalData: (id, _data) => {
+  handleTerminalData: (_id, _data) => {
     // Data is handled by the TerminalView component via its own event listener
     // This is a no-op in the store; the actual rendering happens in the xterm.js instance
   },

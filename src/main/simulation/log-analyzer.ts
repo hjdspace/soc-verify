@@ -259,7 +259,7 @@ export function processCompileLog(
       truncated,
       criticalErrors,
     };
-  } catch (err) {
+  } catch (_err) {
     return {
       filePath,
       toolType: 'unknown',

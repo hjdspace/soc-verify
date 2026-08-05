@@ -1,7 +1,5 @@
 import { readFile, readdir, mkdir, unlink } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import type { Dirent } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { extname, isAbsolute, join, resolve, dirname } from 'node:path';
 import type { AgentToolResult, RpcHostToolCallRequest, RpcHostToolDefinition } from './types';
 import type { SubsysDiscovery, CaseStatus } from './discovery';

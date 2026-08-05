@@ -43,7 +43,7 @@ export function ToolApp() {
     return null;
   }
 
-  const tool = ALL_TOOLS.find((t: ToolMeta) => t.id === toolId);
+  const _tool = ALL_TOOLS.find((t: ToolMeta) => t.id === toolId);
   const ToolComponent = getToolComponent(toolId) ?? ToolPlaceholder;
 
   return (

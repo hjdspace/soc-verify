@@ -1,8 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { SimulationManager, type SimulationRunRecord } from './simulation-manager';
 import type { PluginBackedSimulation } from '../plugin-adapters';
-import type { SimulationRunOptions } from '@shared/plugin-types';
-
 /**
  * Registry that manages SimulationManager instances per project root.
  * Provides a singleton-like access pattern for the tRPC router.

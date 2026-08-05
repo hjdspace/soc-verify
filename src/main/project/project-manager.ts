@@ -1,9 +1,9 @@
 import { EventEmitter } from 'node:events';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readdir, stat, mkdir, readFile, writeFile, access } from 'node:fs/promises';
+import { readdir, stat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync, watch as fsWatch, type FSWatcher as NodeFSWatcher } from 'node:fs';
-import { join, basename, relative, extname } from 'node:path';
+import { join, basename, relative } from 'node:path';
 import { app } from 'electron';
 import { caseIndexManager } from '../search/case-index-manager';
 
@@ -19,7 +19,7 @@ import type { PluginConfigEntry } from '@shared/types';
 
 const SOCVERIFY_DIR = '.socverify';
 const PROJECTS_DB_FILE = 'projects.json';
-const PROJECT_STATE_FILE = 'project-state.json';
+const _PROJECT_STATE_FILE = 'project-state.json';
 const PLUGIN_CONFIG_FILE = 'plugins.json';
 
 const DEFAULT_IGNORE_PATTERNS = [

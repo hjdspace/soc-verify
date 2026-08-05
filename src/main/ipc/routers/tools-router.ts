@@ -13,14 +13,13 @@ import { t, TRPCError } from '../router-context';
 import { ALL_TOOLS, type ToolMeta } from '../../../shared/tool-types';
 import { openToolWindow } from '../../tools/tool-window-manager';
 import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { dialog, BrowserWindow } from 'electron';
 
 // ── Batch 3 tool imports ──
-import { checkFiles, scanDirectory, type CheckResult } from '../../tools/sv-ifdef-checker';
+import { checkFiles, scanDirectory } from '../../tools/sv-ifdef-checker';
 import { scanRepos, executePull } from '../../tools/git-quick-pull';
 import { parseRegisterTable } from '../../tools/register-table-parser';
-import { parseRegisterFile, generateCHeader, generatePreview } from '../../tools/reg2c';
+import { parseRegisterFile, generatePreview } from '../../tools/reg2c';
 import {
   getRepoInfo,
   getTrackedFiles,
@@ -36,7 +35,7 @@ import {
   updateAllRepos,
   updateSubsysRepos,
 } from '../../tools/git-manager';
-import { convertCToSv, previewCToSv } from '../../tools/c-sv-converter';
+import { previewCToSv } from '../../tools/c-sv-converter';
 
 // ── Sub-router: env-checker ────────────────────────────────────────
 import {
@@ -373,7 +372,6 @@ import {
   BatchExecutor,
   checkSimStatusFromLog,
   getLogPathFromCommand,
-  type CaseInfo,
   type ExecutionTask,
 } from '../../tools/batch-execution';
 

@@ -17,7 +17,6 @@ import {
   parseFlexibleStructure,
 } from './path-parser';
 import { loadTvConfig } from '../tv-config';
-import type { ParsedViolation } from '../types';
 import { parseLogFile } from '../parser/vio-parser';
 import { getTvDb } from '../db/tv-db-cache';
 import { insertViolations, ensureConfirmationRecords } from '../db/tv-repository';

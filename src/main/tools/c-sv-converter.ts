@@ -8,7 +8,7 @@
 
 import { readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { basename, dirname, extname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -765,7 +765,7 @@ function convertPointerOperation(stmt: string, func: FunctionInfo): string {
 }
 
 /** Convert return statement. */
-function convertReturn(stmt: string, func: FunctionInfo, typeMappings: Record<string, string>): string {
+function convertReturn(stmt: string, func: FunctionInfo, _typeMappings: Record<string, string>): string {
   if (func.returnType === 'void') return '';
 
   const isFunction = shouldBeFunction(func);

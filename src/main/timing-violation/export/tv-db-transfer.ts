@@ -11,7 +11,7 @@
 
 import Database from 'better-sqlite3';
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { SCHEMA_SQL, PRAGMA_SQL } from '../db/tv-schema';
 
 // ─── Pattern DB 导出 ─────────────────────────────────────────
@@ -216,7 +216,7 @@ export function mergeDatabases(
           AND hier = @hier AND check_info = @check_info AND time_fs = @time_fs
       `);
 
-      const insertConfirmation = targetDb.prepare(`
+      const _insertConfirmation = targetDb.prepare(`
         INSERT OR IGNORE INTO confirmation_records (violation_id, status)
         SELECT id, 'pending' FROM timing_violations
         WHERE id = @violationId

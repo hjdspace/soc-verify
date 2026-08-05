@@ -73,7 +73,7 @@ export const useTaskStore = create<TaskStoreState>((set, get) => ({
 
     if (task.type === 'ai') {
       // AI session is managed by session store
-      const sessionStore = await import('./session');
+      const _sessionStore = await import('./session');
       // Find the session associated with this task
       // This is a simplified approach - in real implementation, we'd link task to session
     } else if (task.type === 'simulation') {

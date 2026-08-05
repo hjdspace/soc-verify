@@ -236,7 +236,7 @@ function getVersionedNativesDir(version) {
  * This is the primary extraction method because it's faster than running the
  * binary (no process startup overhead) and can extract all matching .node files.
  */
-async function extractNativesFromBinary(ompBinaryPath, nodeFiles, platformTag) {
+async function extractNativesFromBinary(ompBinaryPath, nodeFiles, _platformTag) {
   console.log('[download-natives] Extracting .node files from omp binary...');
 
   const zlib = await import('node:zlib');

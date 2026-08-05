@@ -230,7 +230,7 @@ export class BatchExecutor {
 
   stop(): void {
     this.stopping = true;
-    for (const [rowIndex, proc] of this.processes) {
+    for (const [_rowIndex, proc] of this.processes) {
       try {
         proc.kill('SIGTERM');
       } catch {

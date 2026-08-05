@@ -57,7 +57,7 @@ export const projectRouter = t.router({
       const loadResults = await pluginLoader.loadPlugins(info.rootPath);
       await pluginLoader.activateForEvent(info.rootPath, 'onProjectOpen');
       await pluginLoader.emitEvent(info.rootPath, 'project.opened', info);
-      const registry = pluginLoader.getRegistry(info.rootPath);
+      const _registry = pluginLoader.getRegistry(info.rootPath);
 
       // Return plugin load info alongside project info
       const plugins = loadResults.map((r) => ({

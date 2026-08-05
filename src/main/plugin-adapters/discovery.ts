@@ -9,9 +9,6 @@
 
 import type { SubsysDiscovery, CaseStatus, SubsysInfo, CaseInfo, SimOptionsSchema } from '../host/discovery';
 import type {
-  SubsysDiscoveryPlugin,
-  CaseParserPlugin,
-  SimOptionSchemaProvider,
   PluginRegistry,
   CaseInfo as PluginCaseInfo,
   SubsysInfo as PluginSubsysInfo,

@@ -477,7 +477,7 @@ function buildOverview(data: RawData, specificTs?: string): OverviewRow[] {
           const caseName = c.case as string;
           const corner = (c.sdfCorner as string ?? '').trim();
           const key = isPostSim && corner ? `${caseName}_${corner}` : caseName;
-          const tag = (c.tag as string ?? '').replace(/[\[\]]/g, '');
+          const tag = (c.tag as string ?? '').replace(/[\][]/g, '');
 
           if (!(key in aggregated)) {
             aggregated[key] = {
@@ -488,7 +488,7 @@ function buildOverview(data: RawData, specificTs?: string): OverviewRow[] {
               avgSimTime: null,
               simTimes: c.simTime != null ? [c.simTime as number] : [],
               latestCompileTime: (c.compileTime as number | null) ?? null,
-              seeds: [(c.seed as string ?? '').replace(/[\[\]]/g, '')],
+              seeds: [(c.seed as string ?? '').replace(/[\][]/g, '')],
               latestLog: (c.log as string | null) ?? null,
               latestCommand: (c.command as string) ?? '',
               latestTimestamp: ts,
@@ -509,7 +509,7 @@ function buildOverview(data: RawData, specificTs?: string): OverviewRow[] {
               agg.latestCommand = (c.command as string) ?? '';
             }
             if (c.simTime != null) agg.simTimes.push(c.simTime as number);
-            const seedVal = (c.seed as string ?? '').replace(/[\[\]]/g, '');
+            const seedVal = (c.seed as string ?? '').replace(/[\][]/g, '');
             if (!agg.seeds.includes(seedVal)) agg.seeds.push(seedVal);
           }
         }
@@ -528,7 +528,7 @@ function buildOverview(data: RawData, specificTs?: string): OverviewRow[] {
     }
   }
 
-  return Object.values(aggregated).map(({ simTimes, ...rest }) => rest).sort((a, b) => a.caseName.localeCompare(b.caseName));
+  return Object.values(aggregated).map(({ simTimes: _simTimes, ...rest }) => rest).sort((a, b) => a.caseName.localeCompare(b.caseName));
 }
 
 function checkPostSim(data: RawData, timestamps: string[]): boolean {
@@ -576,8 +576,8 @@ function buildGroupCases(tsData: RawData[string], group: string): { passCases: C
 function toCaseRow(c: Record<string, unknown>): CaseRow {
   return {
     caseName: (c.case as string) ?? '',
-    status: (c.tag as string ?? '').replace(/[\[\]]/g, ''),
-    seed: (c.seed as string ?? '').replace(/[\[\]]/g, ''),
+    status: (c.tag as string ?? '').replace(/[\][]/g, ''),
+    seed: (c.seed as string ?? '').replace(/[\][]/g, ''),
     corner: (c.sdfCorner as string ?? '').trim(),
     compileTime: (c.compileTime as number | null) ?? null,
     simTime: (c.simTime as number | null) ?? null,

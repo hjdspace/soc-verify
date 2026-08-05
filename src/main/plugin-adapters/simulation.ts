@@ -6,7 +6,6 @@
  */
 
 import type {
-  SimulationRunnerPlugin,
   PluginRegistry,
   SimulationRunOptions,
   SimulationRunHandle,

@@ -19,7 +19,7 @@ import { cn } from '@renderer/lib/utils';
 import type {
   EdaTool, CoverageMetric, CoverageGap,
   TriageCause, TriageConfidence,
-  TestContribution, UncoveredItem,
+  UncoveredItem,
 } from '@shared/types';
 import { COVERAGE_METRICS, DEFAULT_COVERAGE_TARGETS } from '@shared/types';
 import { CoverageTreeTable } from './CoverageTreeTable';

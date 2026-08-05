@@ -22,7 +22,6 @@
  * （TRPCError INTERNAL_SERVER_ERROR with cause），不抛未捕获异常。
  */
 
-import ExcelJS from 'exceljs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { t, TRPCError } from '../router-context';

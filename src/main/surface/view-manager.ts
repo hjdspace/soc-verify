@@ -138,12 +138,24 @@ export class ViewManager {
       try {
         await entry.view.webContents.loadURL(url);
       } catch (error) {
-        if (!this.surfaces.has(declaration.id)) return;
+        // The renderer can tear down and recreate the same surface id while
+        // React StrictMode is mounting. Ignore results from that stale view,
+        // or from a URL that has already been superseded on this view.
+        if (this.surfaces.get(declaration.id) !== entry || entry.currentURL !== url) return;
+        // Extract the Chromium error code from the rejection.
+        // Electron attaches `errno` to loadURL rejections; fall back to -1 if absent.
+        const errno = (error as { errno?: number })?.errno;
+        const errorDescription = error instanceof Error ? error.message : String(error);
+        // ERR_ABORTED (-3) is normal during redirects (e.g., http→https).
+        // The did-fail-load event handler already emitted a filtered event with
+        // errorCode: -3. Don't emit a second event here that would bypass the
+        // SurfaceLayer filter with a different error code.
+        if (errno === -3 || errorDescription.includes('ERR_ABORTED')) return;
         this.options.emit({
           id: declaration.id,
           type: 'failure',
-          errorCode: -1,
-          errorDescription: error instanceof Error ? error.message : String(error),
+          errorCode: errno ?? -1,
+          errorDescription,
           validatedURL: url,
           isMainFrame: true,
         });

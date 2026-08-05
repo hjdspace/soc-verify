@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Key, Package, Server, FileText, Plus, Trash2, Save, Download, Upload, Palette, Check, Cpu, RefreshCw, Zap, Info, BookOpen, Folder, ChevronDown, ChevronRight, Pencil, Terminal, Globe, Power, Loader2, Wrench, Type, Clock } from 'lucide-react';
+import { X, Key, Package, Server, FileText, Plus, Trash2, Save, Palette, Check, Cpu, RefreshCw, Zap, Info, BookOpen, Folder, ChevronDown, ChevronRight, Pencil, Terminal, Globe, Power, Loader2, Wrench, Type, Clock } from 'lucide-react';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { useUiStore } from '@renderer/stores/ui';
@@ -9,7 +9,7 @@ import { useSessionStore } from '@renderer/stores/session';
 import { useTimingViolationStore } from '@renderer/stores/timing-violation';
 import { cn } from '@renderer/lib/utils';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
-import type { CredentialEntry, SkillInfo, CreateSkillInput, McpConfigFile, McpServerConfig, McpTransportType, McpServerInfo, McpToolInfo } from '@shared/types';
+import type { CredentialEntry, SkillInfo, CreateSkillInput, McpConfigFile, McpServerConfig, McpTransportType, McpServerInfo } from '@shared/types';
 
 type SettingsTab = 'credentials' | 'skills' | 'mcp' | 'prompt' | 'appearance' | 'timing-violation';
 

@@ -6,7 +6,7 @@
  * from log files, unit conversion, Excel export.
  */
 
-import { readFile, writeFile, readdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -63,7 +63,7 @@ export function formatTime(minutes: number, unit: TimeUnit): string {
  * Looks for patterns like "CPU time: 123.45s" or "Total time: 5m30s".
  * Returns time in minutes.
  */
-export async function getTimeFromLog(logPath: string, isSimLog = false): Promise<number | null> {
+export async function getTimeFromLog(logPath: string, _isSimLog = false): Promise<number | null> {
   if (!existsSync(logPath)) return null;
 
   try {

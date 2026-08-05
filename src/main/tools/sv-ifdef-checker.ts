@@ -7,8 +7,8 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import { readdirSync, statSync } from 'node:fs';
-import { join, extname, basename } from 'node:path';
+import { readdirSync } from 'node:fs';
+import { join, extname } from 'node:path';
 
 // ── Types ──────────────────────────────────────────────────────────
 
