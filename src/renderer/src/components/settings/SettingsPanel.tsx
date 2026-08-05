@@ -1635,6 +1635,8 @@ function TimingViolationConfigTab() {
   const [corners, setCorners] = useState<string[]>([]);
   const [subsysPatterns, setSubsysPatterns] = useState<string[]>([]);
   const [defaultResetTimeNs, setDefaultResetTimeNs] = useState(1000);
+  const [resetIntervalStartNs, setResetIntervalStartNs] = useState<string>('');
+  const [resetIntervalEndNs, setResetIntervalEndNs] = useState<string>('');
   const [autoBackup, setAutoBackup] = useState(true);
   const [backupInterval, setBackupInterval] = useState(100);
   const [newCorner, setNewCorner] = useState('');
@@ -1653,6 +1655,8 @@ function TimingViolationConfigTab() {
       setCorners([...tvConfig.corners]);
       setSubsysPatterns([...tvConfig.subsysPatterns]);
       setDefaultResetTimeNs(tvConfig.defaultResetTimeNs);
+      setResetIntervalStartNs(tvConfig.resetIntervalStartNs != null ? String(tvConfig.resetIntervalStartNs) : '');
+      setResetIntervalEndNs(tvConfig.resetIntervalEndNs != null ? String(tvConfig.resetIntervalEndNs) : '');
       setAutoBackup(tvConfig.autoBackup);
       setBackupInterval(tvConfig.backupInterval);
     }
@@ -1677,6 +1681,8 @@ function TimingViolationConfigTab() {
       corners,
       subsysPatterns,
       defaultResetTimeNs,
+      resetIntervalStartNs: resetIntervalStartNs.trim() !== '' ? Number(resetIntervalStartNs) : null,
+      resetIntervalEndNs: resetIntervalEndNs.trim() !== '' ? Number(resetIntervalEndNs) : null,
       autoBackup,
       backupInterval,
     });
@@ -1836,6 +1842,31 @@ function TimingViolationConfigTab() {
           className="w-32 rounded border border-border bg-background px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary"
         />
         <p className="mt-0.5 text-[10px] text-muted-foreground/70">自动确认时使用的默认复位时间阈值</p>
+      </div>
+
+      {/* 复位区间 */}
+      <div>
+        <label className="mb-1 block text-[10px] font-semibold uppercase text-muted-foreground">复位区间（纳秒，可选）</label>
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            value={resetIntervalStartNs}
+            onChange={(e) => setResetIntervalStartNs(e.target.value)}
+            placeholder="起始"
+            min={0}
+            className="w-32 rounded border border-border bg-background px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary"
+          />
+          <span className="text-xs text-muted-foreground">~</span>
+          <input
+            type="number"
+            value={resetIntervalEndNs}
+            onChange={(e) => setResetIntervalEndNs(e.target.value)}
+            placeholder="结束"
+            min={0}
+            className="w-32 rounded border border-border bg-background px-2 py-1.5 text-xs outline-none focus:ring-1 focus:ring-primary"
+          />
+        </div>
+        <p className="mt-0.5 text-[10px] text-muted-foreground/70">留空表示不使用复位区间，AI 分析时也会参考此配置</p>
       </div>
 
       {/* 自动备份 */}
