@@ -14,8 +14,12 @@
  */
 
 import { dialog } from 'electron';
+import { join } from 'node:path';
+import { mkdirSync } from 'node:fs';
 import { t, TRPCError } from '../router-context';
 import { getTvDb } from '../../timing-violation/db/tv-db-cache';
+import { loadTvConfig, ensureExportDir } from '../../timing-violation/tv-config';
+import { requireProject } from '../../services/project-service';
 import { getPatterns, clearAllPatterns } from '../../timing-violation/db/tv-repository';
 import { savePattern } from '../../timing-violation/confirm/confirmation-manager';
 import { getPatternSuggestion } from '../../timing-violation/confirm/pattern-matcher';
@@ -143,9 +147,15 @@ export const patternRouter = t.router({
       let filePath = input.filePath;
       if (!filePath) {
         const ext = input.format === 'excel' ? 'xlsx' : input.format === 'csv' ? 'csv' : 'db';
+        const project = requireProject(input.projectId);
+        const config = loadTvConfig(project.rootPath);
+        const exportBase = ensureExportDir(project.rootPath, config.dataDir);
+        const patternsDir = join(exportBase, 'patterns');
+        mkdirSync(patternsDir, { recursive: true });
+        const defaultPath = join(patternsDir, `violation_patterns.${ext}`);
         const result = await dialog.showSaveDialog({
           title: '导出 Pattern',
-          defaultPath: `violation_patterns.${ext}`,
+          defaultPath,
           filters: [
             { name: input.format === 'excel' ? 'Excel' : input.format === 'csv' ? 'CSV' : 'Database', extensions: [ext] },
             { name: '所有文件', extensions: ['*'] },
