@@ -201,6 +201,40 @@ describe('source control service', () => {
     }
   });
 
+  it('lists untracked files inside subdirectories individually', { timeout: 15000 }, async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'socverify-scm-'));
+    try {
+      await execFileAsync('git', ['init'], { cwd: repo });
+      await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+      await execFileAsync('git', ['config', 'user.name', 'Test User'], { cwd: repo });
+
+      // Create and commit an initial file so the repo is not empty
+      await writeFile(join(repo, 'readme.md'), 'hello\n', 'utf-8');
+      await execFileAsync('git', ['add', 'readme.md'], { cwd: repo });
+      await execFileAsync('git', ['commit', '-m', 'init'], { cwd: repo });
+
+      // Create multiple untracked files inside a subdirectory
+      await mkdir(join(repo, 'src', 'tools'), { recursive: true });
+      await writeFile(join(repo, 'src', 'tools', 'a.ts'), 'a\n', 'utf-8');
+      await writeFile(join(repo, 'src', 'tools', 'b.ts'), 'b\n', 'utf-8');
+      await writeFile(join(repo, 'src', 'tools', 'c.ts'), 'c\n', 'utf-8');
+
+      const service = new SourceControlService();
+      const status = await service.getStatus(repo);
+
+      // Each file should be listed individually, not collapsed into "src/tools/"
+      const toolFiles = status.files.filter((f) => f.path.startsWith('src/tools/'));
+      expect(toolFiles).toHaveLength(3);
+      expect(toolFiles.map((f) => f.path).sort()).toEqual([
+        'src/tools/a.ts',
+        'src/tools/b.ts',
+        'src/tools/c.ts',
+      ]);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
   it('discards changes for tracked and untracked files', { timeout: 15000 }, async () => {
     const repo = await mkdtemp(join(tmpdir(), 'socverify-scm-'));
     try {
