@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
 import { Plus, Send, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon } from 'lucide-react';
-import { useSessionStore, type ChatMessage, type AvailableModel, type SelectedSkill, type ContextFile, type HistorySession } from '@renderer/stores/session';
+import { useSessionStore, type ChatMessage, type AvailableModel, type SelectedSkill, type ContextFile, type HistorySession, type SessionEntry } from '@renderer/stores/session';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
 import { ToolCard } from '@renderer/components/chat/ToolCard';
 import { ThinkingBlock } from '@renderer/components/chat/ThinkingBlock';
+import { TVAISuggestionCard } from '@renderer/components/chat/TVAISuggestionCard';
 import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
 import { PluginViewHost } from '@renderer/components/plugins/PluginViewHost';
@@ -655,7 +656,7 @@ export function RightPanel({ width }: RightPanelProps) {
         ) : (
           <div className="flex flex-col gap-3">
             {currentSession.messages.map((msg) => (
-              <MessageBubble key={msg.id} message={msg} />
+              <MessageBubble key={msg.id} message={msg} session={currentSession} />
             ))}
             <div ref={messagesEndRef} />
           </div>
@@ -1026,7 +1027,7 @@ const StreamingCursor = memo(function StreamingCursor() {
   );
 });
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({ message, session }: { message: ChatMessage; session?: SessionEntry }) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   if (message.role === 'tool') {
@@ -1092,31 +1093,96 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   }
 
   // Assistant messages: render thinking block + content
+  // TV AI sessions: detect JSON suggestion and render visual card
+  const isTVSession = session?.tvViolationId !== undefined;
+  const isStreaming = !!message.isStreaming;
+  const canRenderTVCard = isTVSession && !isStreaming && message.role === 'assistant' && message.content.trim().length > 0;
+
   return (
     <div className="flex flex-col gap-0.5">
       {message.thinking && (
         <ThinkingBlock
           thinking={message.thinking}
-          isStreaming={!!message.isStreaming}
+          isStreaming={isStreaming}
           hasContent={!!message.content}
         />
       )}
-      {message.content ? (
+      {canRenderTVCard ? (
+        <TVAISuggestionCardRenderer content={message.content} violationId={session!.tvViolationId!} />
+      ) : message.content ? (
         <MarkdownRenderer content={message.content} />
       ) : (
-        message.isStreaming && !message.thinking && (
+        isStreaming && !message.thinking && (
           <div className="flex items-center gap-1 text-muted-foreground">
             <Loader2 className="h-3 w-3 animate-spin" />
             <span className="text-[10px]">思考中...</span>
           </div>
         )
       )}
-      {message.isStreaming && message.content && <StreamingCursor />}
+      {isStreaming && message.content && <StreamingCursor />}
     </div>
   );
 }
 
 // ToolCard is now imported from '@renderer/components/chat/ToolCard'
+
+// ── TV AI Suggestion 渲染包装器 ────────────────────────────
+
+/**
+ * 尝试用 TVAISuggestionCard 渲染 TV AI 建议 JSON。
+ * 如果内容不是有效的 TV 建议 JSON，回退到 MarkdownRenderer。
+ */
+function TVAISuggestionCardRenderer({ content, violationId }: { content: string; violationId: number }) {
+  // 先尝试渲染卡片；如果 TVAISuggestionCard 返回 null（无法解析），回退到 Markdown
+  return (
+    <TVAISuggestionCardFallback content={content} violationId={violationId} />
+  );
+}
+
+function TVAISuggestionCardFallback({ content, violationId }: { content: string; violationId: number }) {
+  // TVAISuggestionCard 内部会尝试解析 JSON，失败时返回 null
+  // 我们用一个隐藏的检测来决定是否回退
+  const tryParse = (() => {
+    try {
+      const parsed = JSON.parse(content);
+      if (typeof parsed === 'object' && parsed !== null && ('confirmer' in parsed || 'result' in parsed)) {
+        return true;
+      }
+    } catch {
+      // 尝试 markdown 代码块
+      const codeBlockMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (codeBlockMatch) {
+        try {
+          const parsed = JSON.parse(codeBlockMatch[1].trim());
+          if (typeof parsed === 'object' && parsed !== null && ('confirmer' in parsed || 'result' in parsed)) {
+            return true;
+          }
+        } catch {
+          // 继续
+        }
+      }
+      // 尝试 { ... } 块
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (typeof parsed === 'object' && parsed !== null && ('confirmer' in parsed || 'result' in parsed)) {
+            return true;
+          }
+        } catch {
+          // 解析失败
+        }
+      }
+    }
+    return false;
+  })();
+
+  if (tryParse) {
+    return <TVAISuggestionCard content={content} violationId={violationId} />;
+  }
+  // 回退到普通 Markdown 渲染
+  return <MarkdownRenderer content={content} />;
+}
 
 // ── 历史会话页面 ───────────────────────────────────────
 
