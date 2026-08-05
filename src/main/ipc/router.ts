@@ -26,6 +26,7 @@ import { confirmationRouter } from './routers/confirmation-router';
 import { patternRouter } from './routers/pattern-router';
 import { scanRouter } from './routers/scan-router';
 import { documentRouter } from './routers/document-router';
+import { toolsRouter } from './routers/tools-router';
 
 export const router = t.router({
   ping: pingProcedure,
@@ -50,6 +51,7 @@ export const router = t.router({
   pattern: patternRouter,
   scan: scanRouter,
   document: documentRouter,
+  tools: toolsRouter,
 });
 
 export type AppRouter = typeof router;
