@@ -18,6 +18,13 @@ import { CoverageMerger } from './coverage-merger/CoverageMerger';
 import { BatchExecution } from './batch-execution/BatchExecution';
 import { RegressionAnalyzer } from './regression-analyzer/RegressionAnalyzer';
 import { RegressionListGen } from './regression-list-gen/RegressionListGen';
+import { SvIfdefChecker } from './sv-ifdef-checker/SvIfdefChecker';
+import { GitQuickPull } from './git-quick-pull/GitQuickPull';
+import { RegisterTableParser } from './register-table-parser/RegisterTableParser';
+import { Reg2C } from './reg2c/Reg2C';
+import { GitDiff } from './git-diff/GitDiff';
+import { GitManager } from './git-manager/GitManager';
+import { CSvConverter } from './c-sv-converter/CSvConverter';
 import { ToolPlaceholder } from './ToolPlaceholder';
 
 export type ToolComponentProps = {
@@ -46,14 +53,14 @@ const registry: Record<string, ToolRegistryEntry> = {
   'regression-analyzer': { component: RegressionAnalyzer },
   'regression-list-gen': { component: RegressionListGen },
 
-  // ── Batch 3 (placeholders) ──
-  'git-manager': { component: ToolPlaceholder },
-  'git-diff': { component: ToolPlaceholder },
-  'git-quick-pull': { component: ToolPlaceholder },
-  'register-table-parser': { component: ToolPlaceholder },
-  'reg2c': { component: ToolPlaceholder },
-  'c-sv-converter': { component: ToolPlaceholder },
-  'sv-ifdef-checker': { component: ToolPlaceholder },
+  // ── Batch 3 (implemented) ──
+  'sv-ifdef-checker': { component: SvIfdefChecker },
+  'git-quick-pull': { component: GitQuickPull },
+  'register-table-parser': { component: RegisterTableParser },
+  'reg2c': { component: Reg2C },
+  'git-diff': { component: GitDiff },
+  'git-manager': { component: GitManager },
+  'c-sv-converter': { component: CSvConverter },
 };
 
 export function getToolComponent(toolId: string): ComponentType<ToolComponentProps> | null {
