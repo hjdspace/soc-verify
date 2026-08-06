@@ -171,6 +171,45 @@ process.once('loaded', async () => {
       return () => ipcRenderer.removeListener('browser:auth-popup', handler);
     },
 
+    // ── Git Quick Pull 实时日志事件 ────────────────────────────
+    // git-quick-pull:log —— 主进程推送批量 git pull 的实时日志
+    onGitQuickPullLog: (
+      callback: (data: {
+        type: 'start' | 'repo' | 'end';
+        lines: string[];
+        repoName?: string;
+        success?: boolean;
+        reason?: string | null;
+        isSkipped?: boolean;
+        stats?: {
+          total: number;
+          success: number;
+          skipped: Array<{ name: string; reason: string }>;
+          failed: Array<{ name: string; reason: string }>;
+        };
+      }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: {
+          type: 'start' | 'repo' | 'end';
+          lines: string[];
+          repoName?: string;
+          success?: boolean;
+          reason?: string | null;
+          isSkipped?: boolean;
+          stats?: {
+            total: number;
+            success: number;
+            skipped: Array<{ name: string; reason: string }>;
+            failed: Array<{ name: string; reason: string }>;
+          };
+        },
+      ) => callback(data);
+      ipcRenderer.on('git-quick-pull:log', handler);
+      return () => ipcRenderer.removeListener('git-quick-pull:log', handler);
+    },
+
     // ── Issue #10: Download events ───────────────────────────────
     // browser:download-event —— 下载生命周期事件（开始/进度/完成/失败/取消）
     onDownloadEvent: (
