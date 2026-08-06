@@ -6,6 +6,7 @@ import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useTerminalStore } from '@renderer/stores/terminal';
 import { TerminalView } from '@renderer/components/terminal/TerminalView';
+import { TerminalPanel } from '@renderer/components/terminal/TerminalPanel';
 import { CoveragePanel } from '@renderer/components/coverage/CoveragePanel';
 import { RegressionPanel } from '@renderer/components/regression/RegressionPanel';
 import { DashboardPanel } from '@renderer/components/dashboard/DashboardPanel';
@@ -445,7 +446,7 @@ export function CenterArea() {
                 </div>
               );
             }
-            return <TerminalView terminalId={termTab.terminalId} />;
+            return <TerminalPanel terminalId={termTab.terminalId} tabTitle={termTab.title} />;
           })()
         ) : destination?.type === 'simulation-errors' ? (
           <CompileErrorView errors={simErrors} runId={simErrorsRunId} />
