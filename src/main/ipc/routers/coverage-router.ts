@@ -82,7 +82,9 @@ function emitClosureEvent(event: ClosureEvent): void {
 
 function buildManager(projectRoot: string): CoverageManager {
   const registry = pluginLoader.getRegistry(projectRoot);
-  const adapter = new PluginBackedCoverage(projectRoot, registry);
+  // 获取覆盖率解析插件的绝对路径，用于 Worker Thread 加载
+  const pluginPath = pluginLoader.getResolvedPluginPath(projectRoot, 'coverage-parser') ?? undefined;
+  const adapter = new PluginBackedCoverage(projectRoot, registry, pluginPath);
   return coverageRegistry.getOrCreate(projectRoot, adapter);
 }
 
