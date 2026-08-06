@@ -4,6 +4,7 @@ import { useTerminalStore } from '@renderer/stores/terminal';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
 import { TerminalView } from '@renderer/components/terminal/TerminalView';
+import { TerminalPanel } from '@renderer/components/terminal/TerminalPanel';
 import { cn } from '@renderer/lib/utils';
 import { PluginViewHost } from '@renderer/components/plugins/PluginViewHost';
 
@@ -240,7 +241,7 @@ export function BottomPanel() {
       {/* ── Terminal content ──────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden">
         {activeTab && activeTab.terminalId ? (
-          <TerminalView key={activeTab.terminalId} terminalId={activeTab.terminalId} />
+          <TerminalPanel key={activeTab.terminalId} terminalId={activeTab.terminalId} tabTitle={activeTab.title} />
         ) : (
           <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
             {activeTab?.creating ? '正在创建终端...' : '无活动终端'}
