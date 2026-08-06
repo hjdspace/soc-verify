@@ -3,6 +3,9 @@
  */
 
 import { resolve, isAbsolute } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { dialog } from 'electron';
 import { t, TRPCError } from '../router-context';
@@ -239,12 +242,16 @@ export const simulationRouter = t.router({
       }
 
       // 注册仿真-终端关联（监听终端退出 → 判定 pass/fail）
+      // logMode=true 时，linker 在进程退出后扫描输出中的 pass/fail 标记，
+      // 而非直接使用 exit code（避免 LSF 提交成功被误判为仿真 PASS）
+      const logMode = session.backend === 'log-mode';
       const run = simTerminalLinker.register(
         input.projectId,
         session.id,
         displayCommand,
         cwd,
         input.options,
+        logMode,
       );
 
       return {
@@ -317,5 +324,167 @@ export const simulationRouter = t.router({
         return { canceled: true as const, path: null };
       }
       return { canceled: false as const, path: result.filePaths[0] };
+    }),
+
+  // ── 仿真控制便利功能（参考 Python GUI log_panel.py）──────────
+
+  /**
+   * 使用指定命令重新执行仿真（不经过插件命令生成，直接执行用户指定的命令）。
+   *
+   * 用于 LogPanel 的"重新执行"按钮、以及 -fsdb / -R 选项变更后重新执行。
+   * 与 runInTerminal 的区别：runInTerminal 从插件生成命令，而此接口
+   * 直接使用传入的命令字符串（可能是用户修改过的命令）。
+   */
+  rerunWithCommand: t.procedure
+    .input((raw): { projectId: string; command: string; cwd: string; caseId: string; caseName?: string; subsys: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      if (typeof r.command !== 'string' || !r.command) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'command is required' });
+      }
+      if (typeof r.cwd !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'cwd is required' });
+      }
+      return {
+        projectId: r.projectId,
+        command: r.command,
+        cwd: r.cwd,
+        caseId: typeof r.caseId === 'string' ? r.caseId : '',
+        caseName: typeof r.caseName === 'string' ? r.caseName : undefined,
+        subsys: typeof r.subsys === 'string' ? r.subsys : '',
+      };
+    })
+    .mutation(async ({ input }) => {
+      // 构建 displayCommand：若 $PROJ_WORK 已定义且命令中尚未包含 cd 前缀，先 cd 到项目工作目录
+      // 这与 runInTerminal 的逻辑保持一致，确保 rerun 也在正确的目录下执行
+      const projWork = process.env.PROJ_WORK;
+      const hasCdPrefix = input.command.trimStart().startsWith('cd ');
+      const cdPrefix = projWork && !hasCdPrefix ? `cd "${projWork}" && ` : '';
+      const displayCommand = `${cdPrefix}${input.command}`;
+
+      console.log(`[simulation.rerunWithCommand] command="${input.command}" → displayCommand="${displayCommand}"`);
+
+      const simShell = findSimShell();
+      let session;
+      if (await terminalManager.ensurePtyAvailable()) {
+        // PTY 模式
+        session = await terminalManager.create({ cwd: input.cwd, shell: simShell });
+        await new Promise(resolve => setTimeout(resolve, 500));
+        const execCommand = `${displayCommand}; echo "__SIM_DONE__$?__"`;
+        terminalManager.write(session.id, `${execCommand}\r`);
+      } else {
+        // Log 模式
+        console.log(`[simulation] node-pty unavailable — using log-mode for rerun (shell: ${simShell}).`);
+        session = await terminalManager.runCommand({
+          command: displayCommand,
+          cwd: input.cwd,
+          shell: simShell,
+        });
+      }
+
+      const logMode = session.backend === 'log-mode';
+      const run = simTerminalLinker.register(
+        input.projectId,
+        session.id,
+        displayCommand,
+        input.cwd,
+        {
+          caseId: input.caseId,
+          caseName: input.caseName,
+          subsys: input.subsys,
+          options: {},
+        },
+        logMode,
+      );
+
+      return {
+        runId: run.runId,
+        terminalId: session.id,
+        command: displayCommand,
+        cwd: input.cwd,
+        backend: session.backend,
+        warning: session.warning,
+      };
+    }),
+
+  /**
+   * 从仿真日志中提取种子号。
+   *
+   * 在 cwd 下查找用例的仿真日志文件（irun_sim.log / vcs_sim.log 等），
+   * 读取内容并搜索 -seed <number> 模式，返回种子号字符串。
+   * 如果找不到日志文件或种子号，返回 null。
+   */
+  getSeedFromLog: t.procedure
+    .input((raw): { cwd: string; caseName?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.cwd !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'cwd is required' });
+      }
+      return {
+        cwd: r.cwd,
+        caseName: typeof r.caseName === 'string' ? r.caseName : undefined,
+      };
+    })
+    .query(async ({ input }) => {
+      // 构建可能的日志文件路径
+      const { cwd, caseName } = input;
+      const possiblePaths: string[] = [];
+
+      if (caseName) {
+        possiblePaths.push(join(cwd, caseName, 'log', 'irun_sim.log'));
+        possiblePaths.push(join(cwd, caseName, 'log', 'vcs_sim.log'));
+        possiblePaths.push(join(cwd, caseName, 'log', 'simulation.log'));
+        possiblePaths.push(join(cwd, caseName, 'log', 'ncsim_sim.log'));
+        possiblePaths.push(join(cwd, caseName, 'sim.log'));
+      }
+      possiblePaths.push(join(cwd, 'log', 'irun_sim.log'));
+      possiblePaths.push(join(cwd, 'log', 'vcs_sim.log'));
+
+      // 查找第一个存在的日志文件
+      let logPath: string | null = null;
+      for (const p of possiblePaths) {
+        if (existsSync(p)) {
+          logPath = p;
+          break;
+        }
+      }
+
+      if (!logPath) {
+        return { seed: null, logPath: null };
+      }
+
+      try {
+        const content = await readFile(logPath, 'utf-8');
+        // 搜索 -seed <number> 模式
+        const seedMatch = content.match(/-seed\s+(\d+)/);
+        if (seedMatch) {
+          return { seed: seedMatch[1], logPath };
+        }
+        // 也搜索 seed=<number> 模式
+        const seedEqMatch = content.match(/seed\s*=\s*(\d+)/);
+        if (seedEqMatch) {
+          return { seed: seedEqMatch[1], logPath };
+        }
+        return { seed: null, logPath };
+      } catch {
+        return { seed: null, logPath };
+      }
+    }),
+
+  /**
+   * 获取终端仿真运行的完整输出内容（用于前端分析或种子号提取）。
+   */
+  getRunOutput: t.procedure
+    .input((raw): { terminalId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.terminalId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'terminalId is required' });
+      }
+      return { terminalId: r.terminalId };
+    })
+    .query(({ input }) => {
+      return { output: terminalManager.getOutputContent(input.terminalId) };
     }),
 });
