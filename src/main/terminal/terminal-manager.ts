@@ -349,6 +349,10 @@ interface SessionEntry {
   pendingSize: number;
   /** Flush timer handle */
   flushTimer: NodeJS.Timeout | null;
+  /** Exit code from the 'exit' event (null until exit fires). */
+  exitCode: number | null;
+  /** Whether the child process 'exit' event has fired. */
+  exited: boolean;
 }
 
 interface CompletedSession {
@@ -420,6 +424,8 @@ export class TerminalManager extends EventEmitter {
       pendingChunks: [],
       pendingSize: 0,
       flushTimer: null,
+      exitCode: null,
+      exited: false,
     };
 
     const ptyResult = await loadNodePty();
@@ -547,16 +553,28 @@ export class TerminalManager extends EventEmitter {
         const errMsg = `\r\n\x1b[31m[terminal] Failed to spawn shell '${shell}': ${err.message}\x1b[0m\r\n`;
         enqueueData(errMsg);
         // Also emit an exit event so the simTerminalLinker can handle it
+        entry.exited = true;
+        entry.exitCode = 1;
         this.completeSession(id, 1);
       });
 
       child.on('exit', (exitCode: number | null) => {
         // Skip if already handled by 'error' event (spawn failure case)
         if (!this.sessions.has(id)) return;
-        // When a process is killed by a signal, exitCode is null.
-        // Treat this as a failure (non-zero) so simulation pass/fail
-        // detection works correctly.
-        const effectiveExitCode = exitCode ?? 1;
+        // Record exit code but DON'T complete the session yet — wait for
+        // the 'close' event to ensure all buffered stdout/stderr data is
+        // captured. In Node.js, 'exit' fires when the process terminates,
+        // but stdio streams may still have pending data. 'close' fires
+        // after all streams are fully closed.
+        entry.exited = true;
+        entry.exitCode = exitCode ?? 1;
+      });
+
+      // 'close' is emitted after all stdio streams are closed, ensuring
+      // no data is lost. This is the reliable point to complete the session.
+      child.on('close', () => {
+        if (!this.sessions.has(id)) return;
+        const effectiveExitCode = entry.exitCode ?? 1;
         this.completeSession(id, effectiveExitCode);
       });
 
@@ -676,6 +694,27 @@ export class TerminalManager extends EventEmitter {
   }
 
   /**
+   * Get the full output content as a single string.
+   *
+   * Used by simTerminalLinker to scan for simulation pass/fail markers
+   * after a log-mode session exits.
+   */
+  getOutputContent(id: string): string {
+    return this.getOutputBuffer(id).join('');
+  }
+
+  /**
+   * Get the exit code of a completed or exiting session.
+   *
+   * Returns null if the session hasn't exited yet or doesn't exist.
+   */
+  getExitCode(id: string): number | null {
+    const active = this.sessions.get(id);
+    if (active) return active.exitCode;
+    return null;
+  }
+
+  /**
    * Destroy all terminal sessions.
    */
   destroyAll(): void {
@@ -759,6 +798,8 @@ export class TerminalManager extends EventEmitter {
       pendingChunks: [],
       pendingSize: 0,
       flushTimer: null,
+      exitCode: null,
+      exited: false,
     };
 
     // Helper: enqueue data for batched flush (same as create())
@@ -836,18 +877,24 @@ export class TerminalManager extends EventEmitter {
     child.on('error', (err: Error) => {
       const errMsg = `\r\n\x1b[31m[terminal] Process error: ${err.message}\x1b[0m\r\n`;
       enqueueData(errMsg);
+      entry.exited = true;
+      entry.exitCode = 1;
       this.completeSession(id, 1);
     });
 
     child.on('exit', (exitCode: number | null) => {
       // Skip if already handled by 'error' event (spawn failure case).
-      // When spawn fails, Node.js fires both 'error' and 'exit' — the
-      // 'error' handler already emitted the exit event and cleaned up.
       if (!this.sessions.has(id)) return;
-      // When a process is killed by a signal, exitCode is null.
-      // Treat this as a failure (non-zero) so simulation pass/fail
-      // detection works correctly in log-mode.
-      const effectiveExitCode = exitCode ?? 1;
+      // Record exit code but wait for 'close' to ensure all data is captured.
+      entry.exited = true;
+      entry.exitCode = exitCode ?? 1;
+    });
+
+    // 'close' fires after all stdio streams are closed — this is the
+    // reliable point to complete the session and emit the exit event.
+    child.on('close', () => {
+      if (!this.sessions.has(id)) return;
+      const effectiveExitCode = entry.exitCode ?? 1;
       this.completeSession(id, effectiveExitCode);
     });
 
