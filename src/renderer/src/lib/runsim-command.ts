@@ -1,6 +1,18 @@
 /**
- * runsim 命令生成工具（前端预览用）
+ * runsim 命令生成工具（前端预览用）+ 命令解析和修改工具
  *
+ * 此模块包含两部分：
+ * 1. 命令生成（generateRunsimCommand）— 复刻插件逻辑，用于 OptionDock 预览
+ * 2. 命令解析和修改（parseRunsimCommand, modifyCommandOptions 等）— 用于 SimControlToolbar
+ *
+ * 第二部分参考 Python GUI 的 `utils/command_generator.py` CommandParser 类。
+ */
+
+// ═══════════════════════════════════════════════════════════════════════
+// Part 1: 命令生成（原始实现，供 OptionDock 使用）
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
  * 此函数复刻 `unisoc-simulation-runner` 插件的 `generateRunsimCommand()` 逻辑，
  * 用于在 OptionDock 底部命令预览栏实时展示将要执行的 runsim 命令。
  *
@@ -113,44 +125,31 @@ export function generateRunsimCommand(options: Record<string, unknown>): string 
   return cmd.join(' ');
 }
 
-// ─── runsim 命令解析（从粘贴文本中提取选项）────────────────────
-//
-// 参考 Python runsim_r3p0/controllers/config_controller.py 的
-// _preprocess_command_text() + do_parse_command() + _parse_command_params()。
-// 用户从网页或邮件中复制完整的回归指令文本（可能包含 HTML 标签、
-// 前后说明文字等），系统自动提取 runsim 命令部分并解析为选项键值对。
+// ═══════════════════════════════════════════════════════════════════════
+// Part 1b: 命令解析（从粘贴文本中提取选项）
+// ═══════════════════════════════════════════════════════════════════════
 
 /**
  * 预处理命令文本，提取 runsim 命令部分并清理 HTML 标签和特殊字符。
- *
- * @param rawText 用户粘贴的原始文本
- * @returns 清理后的 runsim 命令字符串，未找到则返回空字符串
  */
 function preprocessCommandText(rawText: string): string {
   if (!rawText.trim()) return '';
 
-  // 先移除 HTML 标签，避免 runsim 关键字被 HTML 包裹导致查找失败
   let text = rawText.replace(/<[^>]+>/g, ' ');
-  // 将多行文本合并为单行，处理换行符和多余空格
   text = text.split(/\s+/).join(' ').trim();
 
-  // 查找 runsim 命令的开始位置
   const runsimIndex = text.indexOf('runsim ');
   if (runsimIndex !== -1) {
     text = text.slice(runsimIndex).trim();
   } else if (text.startsWith('runsim')) {
-    // 只有一个 runsim 没有参数
     return text.trim();
   } else if (text.startsWith('-')) {
-    // 不完整的命令，添加 runsim 前缀
     return `runsim ${text}`;
   } else {
     return '';
   }
 
-  // 合并多余空白
   text = text.replace(/\s+/g, ' ');
-  // 移除命令行不需要的特殊字符（保留常用字符）
   text = text.replace(/[^\w\s\-=/.,:;_+*()[\]{}|&$#@!~`"'\\]/g, '');
 
   return text.trim();
@@ -196,29 +195,17 @@ const BOOL_FLAG_TO_KEY: Record<string, string> = {
 
 /**
  * 解析 runsim 命令文本，提取选项键值对。
- *
- * 支持：
- *   - 从包含其他文字的文本中自动提取 runsim 命令
- *   - 清理 HTML 标签和特殊字符
- *   - 解析带引号的参数值（-simarg "..."）
- *   - 识别 boolean flag 和带值参数
- *   - 解析 -fsdb/-vwdb 后可选的 dump_level 值
- *
- * @param rawText 用户粘贴的原始命令文本
- * @returns 解析出的选项键值对，可直接用于 setSimOptions
  */
 export function parseRunsimCommand(rawText: string): Record<string, unknown> {
   const command = preprocessCommandText(rawText);
   if (!command) return {};
 
-  // Tokenize：处理引号包裹的值
   const parts: string[] = command.match(/"[^"]*"|\S+/g) ?? [];
   if (parts.length === 0) return {};
 
-  // parts[0] 应为 "runsim"
   const result: Record<string, unknown> = {};
 
-  let i = 1; // 跳过 runsim
+  let i = 1;
   while (i < parts.length) {
     const part = parts[i];
     if (!part.startsWith('-')) {
@@ -226,16 +213,12 @@ export function parseRunsimCommand(rawText: string): Record<string, unknown> {
       continue;
     }
 
-    // 移除前导横杠
     const option = part.slice(1);
 
-    // fsdb/vwdb：boolean flag，但后面可能跟 dump_level 值
     if (option === 'fsdb' || option === 'vwdb') {
       result[option] = true;
-      // 检查后面是否有非 flag 参数（dump_level 或 tcl 文件）
       if (i + 1 < parts.length && !parts[i + 1].startsWith('-')) {
         const next = parts[i + 1];
-        // 如果以 .tcl 结尾，跳过（TCL 文件参数）；否则作为 dump_level
         if (!next.toLowerCase().endsWith('.tcl')) {
           result.dump_level = next;
         }
@@ -246,7 +229,6 @@ export function parseRunsimCommand(rawText: string): Record<string, unknown> {
       continue;
     }
 
-    // 其他 boolean flag（无参数值）
     if (BOOLEAN_FLAGS.has(option)) {
       const key = BOOL_FLAG_TO_KEY[option];
       if (key) result[key] = true;
@@ -254,10 +236,8 @@ export function parseRunsimCommand(rawText: string): Record<string, unknown> {
       continue;
     }
 
-    // 带参数值的选项
     const valueKey = VALUE_FLAG_TO_KEY[option];
     if (valueKey === undefined) {
-      // 未知选项，跳过
       i++;
       continue;
     }
@@ -265,9 +245,7 @@ export function parseRunsimCommand(rawText: string): Record<string, unknown> {
     if (i + 1 < parts.length) {
       let value = parts[i + 1];
 
-      // 处理引号包裹的值（如 -simarg "..."）
       if (value.startsWith('"') && !value.endsWith('"')) {
-        // 引号开始但未结束，收集直到结束引号
         value = value.slice(1);
         let j = i + 2;
         while (j < parts.length && !parts[j].endsWith('"')) {
@@ -275,21 +253,18 @@ export function parseRunsimCommand(rawText: string): Record<string, unknown> {
           j++;
         }
         if (j < parts.length) {
-          value += ' ' + parts[j].slice(0, -1); // 移除结束引号
+          value += ' ' + parts[j].slice(0, -1);
           i = j + 1;
         } else {
           i = j;
         }
       } else if (value.startsWith('"') && value.endsWith('"') && value.length > 1) {
-        // 完整引号包裹的值
         value = value.slice(1, -1);
         i += 2;
       } else {
-        // 普通值
         i += 2;
       }
 
-      // cfg_def 可能收集多个连续非 flag 值
       if (option === 'cfg_def') {
         let j = i;
         while (j < parts.length && !parts[j].startsWith('-')) {
@@ -304,7 +279,6 @@ export function parseRunsimCommand(rawText: string): Record<string, unknown> {
 
       result[valueKey] = value;
     } else {
-      // 最后一个 flag 没有值，跳过
       i++;
     }
   }
@@ -323,18 +297,9 @@ export interface CmdToken {
 }
 
 /**
- * 将 runsim 命令字符串拆分为带类型的 token 数组，
- * 用于前端语法高亮渲染。
- *
- * - `base`: runsim 命令名
- * - `flag`: 以 `-` 开头的参数标志
- * - `value`: 参数值
- *
- * @param command - runsim 命令字符串
- * @returns token 数组
+ * 将 runsim 命令字符串拆分为带类型的 token 数组，用于前端语法高亮渲染。
  */
 export function tokenizeRunsimCommand(command: string): CmdToken[] {
-  // 简单按空格拆分，处理引号包裹的值
   const tokens: CmdToken[] = [];
   const parts = command.match(/"[^"]*"|\S+/g) ?? [];
 
@@ -351,4 +316,171 @@ export function tokenizeRunsimCommand(command: string): CmdToken[] {
   }
 
   return tokens;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Part 2: 命令修改工具（供 SimControlToolbar 使用）
+// 参考 Python GUI 的 CommandParser.modify_command_options()
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * Check if the command contains the -fsdb option.
+ */
+export function hasFsdbOption(command: string): boolean {
+  const parts = command.split(/\s+/);
+  return parts.includes('-fsdb');
+}
+
+/**
+ * Check if the command contains the -R option (sim-only, skip compile).
+ */
+export function hasROption(command: string): boolean {
+  const parts = command.split(/\s+/);
+  return parts.includes('-R');
+}
+
+/**
+ * Modify the -fsdb and -R options in a runsim command string.
+ *
+ * @param command - The original command string
+ * @param opts - Which options to modify (undefined = don't change)
+ * @returns The modified command string
+ */
+export function modifyCommandOptions(
+  command: string,
+  opts: { fsdb?: boolean; R?: boolean },
+): string {
+  if (!command) return command;
+
+  // Handle BATCH RUN mode (semicolon-separated commands)
+  if (command.includes(' ; ')) {
+    const commands = command.split(' ; ');
+    const modified = commands.map((cmd) => {
+      const trimmed = cmd.trim();
+      if (trimmed) {
+        return modifySingleCommandOptions(trimmed, opts);
+      }
+      return trimmed;
+    });
+    return modified.join(' ; ');
+  }
+
+  return modifySingleCommandOptions(command, opts);
+}
+
+/**
+ * Modify options in a single command string.
+ *
+ * Aligned with Python GUI's CommandParser._modify_single_command_options():
+ * 1. Remove ALL existing occurrences of the flag (and any following non-flag argument)
+ * 2. If enabled, append the flag at the END of the command
+ */
+function modifySingleCommandOptions(
+  command: string,
+  opts: { fsdb?: boolean; R?: boolean },
+): string {
+  let parts = command.split(/\s+/).filter((p) => p.length > 0);
+  if (parts.length === 0) return command;
+
+  if (opts.fsdb !== undefined) {
+    parts = toggleBooleanFlag(parts, '-fsdb', opts.fsdb);
+  }
+
+  if (opts.R !== undefined) {
+    parts = toggleBooleanFlag(parts, '-R', opts.R);
+  }
+
+  return parts.join(' ');
+}
+
+/**
+ * Add or remove a boolean flag option from the command parts array.
+ *
+ * Mirrors Python's _modify_fsdb_option / _modify_r_option:
+ * - When removing: also remove any following non-flag argument (e.g. dump level)
+ * - When adding: append at the END of the command (not before -case)
+ */
+function toggleBooleanFlag(parts: string[], flag: string, enabled: boolean): string[] {
+  // Remove ALL existing occurrences of the flag (and following non-flag argument)
+  const result: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i] === flag) {
+      // Skip the flag itself
+      // Also skip the following argument if it doesn't start with '-' (e.g. dump level)
+      if (i + 1 < parts.length && !parts[i + 1].startsWith('-')) {
+        i++; // skip the argument too
+      }
+      continue;
+    }
+    result.push(parts[i]);
+  }
+
+  // If enabling, append at the END of the command
+  if (enabled) {
+    result.push(flag);
+  }
+
+  return result;
+}
+
+/**
+ * Update or add a -seed <value> option in the command string.
+ *
+ * Aligned with Python's CommandParser._update_seed_in_single_command:
+ * 1. Remove ALL existing -seed flags (and their values)
+ * 2. Append -seed <value> at the END of the command
+ *
+ * @param command - The original command string
+ * @param seed - The seed value to set
+ * @returns The modified command string with the updated seed
+ */
+export function updateSeedInCommand(command: string, seed: string): string {
+  if (!command || !seed) return command;
+
+  const parts = command.split(/\s+/).filter((p) => p.length > 0);
+
+  // Remove ALL existing -seed flags (and their values)
+  const result: string[] = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i] === '-seed') {
+      // Skip -seed and its value
+      if (i + 1 < parts.length && !parts[i + 1].startsWith('-')) {
+        i++; // skip the value too
+      }
+      continue;
+    }
+    result.push(parts[i]);
+  }
+
+  // Append -seed <value> at the END
+  result.push('-seed', seed);
+  return result.join(' ');
+}
+
+/**
+ * Parse the case name from a runsim command string.
+ */
+export function parseCaseFromCommand(command: string): string | null {
+  if (!command) return null;
+  const parts = command.split(/\s+/);
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i] === '-case' && i + 1 < parts.length) {
+      return parts[i + 1];
+    }
+  }
+  return null;
+}
+
+/**
+ * Parse the rundir from a runsim command string.
+ */
+export function parseRundirFromCommand(command: string): string | null {
+  if (!command) return null;
+  const parts = command.split(/\s+/);
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i] === '-rundir' && i + 1 < parts.length) {
+      return parts[i + 1];
+    }
+  }
+  return null;
 }
