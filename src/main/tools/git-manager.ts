@@ -633,3 +633,89 @@ export function discoverRepos(
 
   return repos;
 }
+
+/** Refresh a single repo's info (branch, tag, commit, changes). Returns a new GitRepoInfo object. */
+export function refreshRepoInfo(
+  repo: Pick<GitRepoInfo, 'name' | 'path' | 'repoType'>,
+): GitRepoInfo {
+  const refreshed: GitRepoInfo = {
+    name: repo.name,
+    path: repo.path,
+    repoType: repo.repoType,
+    currentBranch: 'Unknown',
+    currentTag: 'No tag',
+    lastCommitHash: 'Unknown',
+    lastCommitMessage: 'Unknown',
+    lastCommitTime: 'Unknown',
+    hasChanges: false,
+    tags: [],
+    subsysTag: null,
+  };
+  updateRepoInfo(refreshed);
+  return refreshed;
+}
+
+/** Update a single repo to master latest version (fetch + checkout master + pull). */
+export async function updateRepoToMaster(
+  repo: Pick<GitRepoInfo, 'name' | 'path' | 'repoType'>,
+): Promise<{ logs: string[]; success: boolean; summary: string }> {
+  const logs: string[] = [];
+
+  logs.push(`开始更新仓库: ${repo.name}`);
+  logs.push(`路径: ${repo.path}`);
+  logs.push('='.repeat(50));
+
+  // Get current branch
+  const branch = runGitCommand(repo.path, ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
+  logs.push(`当前分支: ${branch || 'unknown'}`);
+
+  // Step 1: git fetch origin
+  logs.push('执行 git fetch origin...');
+  let exitCode = await runGitStreaming(repo.path, ['fetch', 'origin'], (line) => {
+    logs.push(`  ${line}`);
+  });
+  if (exitCode !== 0) {
+    logs.push('❌ git fetch 失败');
+    return { logs, success: false, summary: 'git fetch 失败' };
+  }
+  logs.push('✅ fetch 完成');
+
+  // Step 2: checkout master (if not on master)
+  if (branch !== 'master') {
+    logs.push('切换到master分支...');
+    const checkoutResult = runGitCommand(repo.path, ['checkout', 'master']).trim();
+    if (checkoutResult) {
+      logs.push(`  ${checkoutResult}`);
+    }
+    // Verify we're on master now
+    const newBranch = runGitCommand(repo.path, ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
+    if (newBranch !== 'master') {
+      logs.push('❌ 切换到master分支失败');
+      return { logs, success: false, summary: '切换到master分支失败' };
+    }
+    logs.push('✅ 已切换到master分支');
+  }
+
+  // Step 3: git pull origin master
+  logs.push('执行 git pull origin master...');
+  const pullOutput: string[] = [];
+  exitCode = await runGitStreaming(repo.path, ['pull', 'origin', 'master'], (line) => {
+    logs.push(`  ${line}`);
+    pullOutput.push(line);
+  });
+
+  if (exitCode === 0) {
+    logs.push('✅ 更新成功');
+    const isUpToDate = pullOutput.some(
+      (l) => l.includes('Already up to date') || l.includes('Already up-to-date'),
+    );
+    const summary = isUpToDate ? '仓库已是最新版本' : '仓库已更新到最新版本';
+    logs.push(isUpToDate ? '  (已是最新版本)' : '  (已更新到最新版本)');
+    return { logs, success: true, summary };
+  } else {
+    const errorDetail = pullOutput.join('\n') || '未知错误';
+    logs.push(`❌ 更新失败 (退出码: ${exitCode})`);
+    logs.push(`  错误信息: ${errorDetail}`);
+    return { logs, success: false, summary: `git pull失败 (退出码: ${exitCode})` };
+  }
+}
