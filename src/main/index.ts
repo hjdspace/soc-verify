@@ -9,14 +9,13 @@ import { resolveAgentRuntime } from './agent/paths';
 import { projectManager } from './project/project-manager';
 import { sessionManager } from './agent/session-manager';
 import { pluginLoader } from './plugins/loader';
-import { simulationRegistry } from './simulation/simulation-registry';
-import { simTerminalLinker } from './simulation/sim-terminal-linker';
 import { errorAnalysisCoordinator } from './simulation/error-analysis-coordinator';
 import { terminalManager } from './terminal/terminal-manager';
 import { registerDocumentIpcHandlers, cleanupEditorRegistry } from './document/editor-registry';
 import { cleanupOfficeCli } from './officecli/service';
 import { closeAllToolWindows } from './tools/tool-window-manager';
 import { destroyAllSurfaceManagers, registerSurfaceIpcHandlers } from './surface/surface-ipc';
+import { createEventRelay, type EventRelay } from './ipc/event-relay';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -286,6 +285,7 @@ setupLinuxDbus();
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isQuitting = false;
+let eventRelay: EventRelay | null = null;
 
 /** Resolve tray icon path: prefers build/icons PNG, falls back to icon.ico */
 function resolveTrayIcon(): string {
@@ -514,119 +514,12 @@ function registerWindowControls() {
   });
 }
 
-/** Forward backend events to the renderer via IPC. */
-function registerEventForwarding(win: BrowserWindow) {
-  // File tree updates from project watcher
-  projectManager.on('filetree:update', (update) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('filetree:update', update);
-    }
-  });
-
-  // Project opened/closed events
-  projectManager.on('project:opened', (info) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('project:opened', info);
-    }
-  });
-
-  projectManager.on('project:closed', (projectId) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('project:closed', projectId);
-    }
-  });
-
-  // Session events from agent
-  sessionManager.on('sessionEvent', ({ sessionId, event }) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('session:event', { sessionId, event });
-    }
-  });
-
-  // Simulation events
-  simulationRegistry.on('run:started', (record) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('simulation:event', { type: 'started', record });
-    }
-  });
-  simulationRegistry.on('run:statusChanged', (record) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('simulation:event', { type: 'statusChanged', record });
-    }
-  });
-  simulationRegistry.on('run:completed', (record) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('simulation:event', { type: 'completed', record });
-    }
-  });
-  simulationRegistry.on('run:aborted', (record) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('simulation:event', { type: 'aborted', record });
-    }
-  });
-
-  // Terminal-based simulation events (from simTerminalLinker)
-  simTerminalLinker.on('run:started', (run) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('simulation:event', { type: 'started', record: run });
-    }
-  });
-
-  simTerminalLinker.on('run:completed', (run) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('simulation:event', { type: 'completed', record: run });
-    }
-  });
-
-  simTerminalLinker.on('run:aborted', (run) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('simulation:event', { type: 'aborted', record: run });
-    }
-  });
-
-  // Terminal data events
-  terminalManager.on('data', ({ id, data }) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('terminal:data', { id, data });
-    }
-  });
-
-  terminalManager.on('exit', ({ id, exitCode }) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('terminal:exit', { id, exitCode });
-    }
-  });
-
-  // Error analysis events (from ErrorAnalysisCoordinator)
-  errorAnalysisCoordinator.on('errorAnalysis:started', (data) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('errorAnalysis:event', { type: 'started', ...data });
-    }
-  });
-
-  errorAnalysisCoordinator.on('errorAnalysis:retrying', (data) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('errorAnalysis:event', { type: 'retrying', ...data });
-    }
-  });
-
-  errorAnalysisCoordinator.on('errorAnalysis:stopped', (data) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('errorAnalysis:event', { type: 'stopped', ...data });
-    }
-  });
-
-  errorAnalysisCoordinator.on('errorAnalysis:failed', (data) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('errorAnalysis:event', { type: 'failed', ...data });
-    }
-  });
-
-  errorAnalysisCoordinator.on('errorAnalysis:statusChanged', (data) => {
-    if (!win.isDestroyed()) {
-      win.webContents.send('errorAnalysis:event', { type: 'statusChanged', ...data });
-    }
-  });
+/** Set up declarative event relay: forwards backend EventEmitter events to the renderer. */
+function setupEventRelay(win: BrowserWindow): EventRelay {
+  // Destroy previous relay to clean up listeners (prevents leak on window recreation)
+  eventRelay?.destroy();
+  eventRelay = createEventRelay(win);
+  return eventRelay;
 }
 
 app.whenReady().then(async () => {
@@ -640,7 +533,7 @@ app.whenReady().then(async () => {
   createIPCHandler({ router, windows: [mainWindow] });
   registerWindowControls();
   registerSurfaceIpcHandlers();
-  registerEventForwarding(mainWindow);
+  setupEventRelay(mainWindow);
 
   // 注册 officecli 文档相关 IPC handlers（flush-done 由前端发送）
   registerDocumentIpcHandlers();
@@ -674,7 +567,7 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     mainWindow = createWindow();
-    registerEventForwarding(mainWindow);
+    setupEventRelay(mainWindow);
   } else {
     mainWindow?.show();
     mainWindow?.focus();
@@ -685,6 +578,9 @@ app.on('before-quit', async () => {
   // Destroy tray before quitting
   tray?.destroy();
   tray = null;
+  // Clean up event relay listeners
+  eventRelay?.destroy();
+  eventRelay = null;
   // Save project state before quitting
   await projectManager.saveProjectsDb();
   projectManager.destroy();
