@@ -2,8 +2,8 @@
  * Git Quick Pull — lightweight batch git pull tool.
  *
  * Ported from the Python `git_quick_pull` plugin (`repo_scanner.py` + `pull_log_dialog.py`).
- * Features: scan DV/DE repos (no git commands), parallel pull,
- * real-time log output, error categorization.
+ * Features: scan DV/DE repos (no git commands), parallel pull (8 workers),
+ * real-time log output via callback, error categorization, start/end summary.
  */
 
 import { spawn } from 'node:child_process';
@@ -32,12 +32,34 @@ export type PullLogEntry = {
   lines: string[];
   success: boolean;
   reason: string | null;
+  isSkipped: boolean;
 };
 
 export type PullResult = {
   logs: PullLogEntry[];
   stats: PullStats;
 };
+
+/** Real-time event emitted during batch pull execution. */
+export type GitQuickPullEvent =
+  | { type: 'start'; lines: string[] }
+  | {
+      type: 'repo';
+      lines: string[];
+      repoName: string;
+      success: boolean;
+      reason: string | null;
+      isSkipped: boolean;
+    }
+  | { type: 'end'; lines: string[]; stats: PullStats };
+
+/** Callback for real-time log streaming (matches Python's pyqtSignal pattern). */
+export type PullEventCallback = (event: GitQuickPullEvent) => void;
+
+// ── Constants ──────────────────────────────────────────────────────
+
+/** Maximum parallel workers (matches Python's max_workers=8). */
+const MAX_WORKERS = 8;
 
 // ── Repo scanning (no git commands, just .git dir check) ────────────
 
@@ -186,7 +208,7 @@ function extractErrorReason(outputLines: string[]): string | null {
   return null;
 }
 
-/** Execute git pull for a single repo. Returns [success, reason, logLines]. */
+/** Execute git pull for a single repo. Returns [success, reason]. */
 async function executeGitPull(
   repoPath: string,
   buf: string[],
@@ -246,47 +268,28 @@ async function executeGitPull(
   });
 }
 
-/** Execute git fetch + git reset --hard origin/master. */
+/** Execute git fetch + git reset --hard origin/master (dangerous: discards local changes). */
 async function executeGitPullAndReset(
   repoPath: string,
   buf: string[],
 ): Promise<[boolean, string | null]> {
-  // Step 1: Check for uncommitted changes
-  const statusResult = await runGitCommand(repoPath, ['status', '--porcelain']);
-  if (statusResult.trim()) {
-    buf.push('⚠️ 警告: 仓库有未提交的更改，强制重置会丢失这些更改');
-    buf.push('未提交的文件:');
-    for (const line of statusResult.trim().split('\n')) {
-      buf.push(`  ${line}`);
-    }
-    buf.push('跳过此仓库的更新');
-    return [false, '有未提交更改（跳过）'];
-  }
-
-  // Step 2: git fetch
+  // Step 1: git fetch
   buf.push('执行 git fetch...');
   const fetchResult = await new Promise<[boolean, string | null]>((resolve) => {
     const proc = spawn('git', ['fetch', 'origin'], {
       cwd: repoPath,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    const lines: string[] = [];
     proc.stdout?.on('data', (data: Buffer) => {
       for (const line of data.toString().split('\n')) {
         const trimmed = line.trim();
-        if (trimmed) {
-          buf.push(`  ${trimmed}`);
-          lines.push(trimmed);
-        }
+        if (trimmed) buf.push(`  ${trimmed}`);
       }
     });
     proc.stderr?.on('data', (data: Buffer) => {
       for (const line of data.toString().split('\n')) {
         const trimmed = line.trim();
-        if (trimmed) {
-          buf.push(`  ${trimmed}`);
-          lines.push(trimmed);
-        }
+        if (trimmed) buf.push(`  ${trimmed}`);
       }
     });
     proc.on('exit', (code) => {
@@ -305,30 +308,23 @@ async function executeGitPullAndReset(
 
   if (!fetchResult[0]) return fetchResult;
 
-  // Step 3: git reset --hard origin/master
+  // Step 2: git reset --hard origin/master
   buf.push('执行 git reset --hard origin/master...');
   return new Promise((resolve) => {
     const proc = spawn('git', ['reset', '--hard', 'origin/master'], {
       cwd: repoPath,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    const lines: string[] = [];
     proc.stdout?.on('data', (data: Buffer) => {
       for (const line of data.toString().split('\n')) {
         const trimmed = line.trim();
-        if (trimmed) {
-          buf.push(`  ${trimmed}`);
-          lines.push(trimmed);
-        }
+        if (trimmed) buf.push(`  ${trimmed}`);
       }
     });
     proc.stderr?.on('data', (data: Buffer) => {
       for (const line of data.toString().split('\n')) {
         const trimmed = line.trim();
-        if (trimmed) {
-          buf.push(`  ${trimmed}`);
-          lines.push(trimmed);
-        }
+        if (trimmed) buf.push(`  ${trimmed}`);
       }
     });
     proc.on('exit', (code) => {
@@ -347,20 +343,19 @@ async function executeGitPullAndReset(
   });
 }
 
-/** Execute custom git command. */
+/** Execute custom git command (no shell, matching Python's subprocess.Popen behavior). */
 async function executeCustomCommand(
   repoPath: string,
   customCommand: string,
   buf: string[],
 ): Promise<[boolean, string | null]> {
-  const cmdParts = customCommand.split(/\s+/);
+  const cmdParts = customCommand.trim().split(/\s+/).filter(Boolean);
   buf.push(`执行自定义命令: ${cmdParts.join(' ')}`);
 
   return new Promise((resolve) => {
     const proc = spawn(cmdParts[0], cmdParts.slice(1), {
       cwd: repoPath,
       stdio: ['pipe', 'pipe', 'pipe'],
-      shell: true,
     });
 
     const outputLines: string[] = [];
@@ -403,7 +398,40 @@ async function executeCustomCommand(
   });
 }
 
-/** Process a single repo: returns log entry + updates stats. */
+// ── Parallel execution helpers ─────────────────────────────────────
+
+/**
+ * Run async tasks with a concurrency limit (matches Python's ThreadPoolExecutor).
+ *
+ * Items are processed in parallel up to `concurrency` at a time. Each task
+ * receives the original index (0-based) for log ordering.
+ */
+async function runWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex++;
+      await fn(items[currentIndex], currentIndex);
+    }
+  };
+  const workerCount = Math.min(concurrency, items.length) || 1;
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+}
+
+// ── Core: process a single repo ────────────────────────────────────
+
+/**
+ * Process a single repo: returns log entry with success/skipped/failed status.
+ *
+ * Core logic (matches Python's _process_single_repo):
+ * 1. pull_reset mode: check uncommitted changes → skip if any
+ * 2. Execute git operation based on mode
+ * 3. Never throws — catches all exceptions and records as failure
+ */
 async function processSingleRepo(
   repo: RepoInfo,
   index: number,
@@ -419,8 +447,32 @@ async function processSingleRepo(
 
   let success = false;
   let reason: string | null = null;
+  const isSkipped = false;
 
   try {
+    // Only pull_reset mode skips repos with uncommitted changes (would discard them).
+    // pull and custom modes are safe — git will error on conflict, not overwrite.
+    if (mode === 'pull_reset') {
+      const statusResult = await runGitCommand(repo.path, ['status', '--porcelain']);
+      if (statusResult.trim()) {
+        buf.push('⚠️ 警告: 仓库有未提交的更改，强制重置会丢失这些更改');
+        buf.push('未提交的文件:');
+        for (const line of statusResult.trim().split('\n')) {
+          buf.push(`  ${line}`);
+        }
+        buf.push('跳过此仓库的更新');
+        buf.push('');
+        return {
+          repoName: repo.name,
+          lines: buf,
+          success: false,
+          reason: '有未提交更改',
+          isSkipped: true,
+        };
+      }
+    }
+
+    // Execute git operation based on mode
     if (mode === 'pull') {
       [success, reason] = await executeGitPull(repo.path, buf);
     } else if (mode === 'pull_reset') {
@@ -446,14 +498,26 @@ async function processSingleRepo(
     lines: buf,
     success,
     reason,
+    isSkipped,
   };
 }
 
-/** Execute batch pull on all repos (sequential to preserve log order). */
+// ── Batch execution ────────────────────────────────────────────────
+
+/**
+ * Execute batch pull on all repos in parallel (up to 8 concurrent).
+ *
+ * Matches Python's PullWorker.run():
+ * - Emits start summary, per-repo logs, and end summary via `onLog` callback
+ * - Parallel execution with MAX_WORKERS concurrency
+ * - Per-repo log buffering prevents interleaving in parallel mode
+ * - Single repo failure never interrupts the batch
+ */
 export async function executePull(
   repos: RepoInfo[],
   mode: PullMode,
   customCommand: string | null = null,
+  onLog?: PullEventCallback,
 ): Promise<PullResult> {
   const total = repos.length;
   const logs: PullLogEntry[] = [];
@@ -464,27 +528,90 @@ export async function executePull(
     failed: [],
   };
 
-  for (let i = 0; i < repos.length; i++) {
-    const entry = await processSingleRepo(
-      repos[i],
-      i + 1,
-      total,
-      mode,
-      customCommand,
-    );
+  // Determine env name (matches Python heuristic)
+  const envName =
+    total > 10
+      ? 'DV+DE'
+      : repos.length > 0 && repos[0].repoType === 'dv'
+        ? 'DV'
+        : 'DE';
+
+  // ── Start summary (matches Python's start logs) ──
+  const startLines: string[] = [
+    `开始更新${envName}环境Git仓库（并行模式，${MAX_WORKERS}线程）...`,
+    '='.repeat(60),
+    `找到 ${total} 个Git仓库`,
+    '',
+  ];
+  onLog?.({ type: 'start', lines: startLines });
+
+  // ── Process repos in parallel ──
+  await runWithConcurrency(repos, MAX_WORKERS, async (repo, i) => {
+    const entry = await processSingleRepo(repo, i + 1, total, mode, customCommand);
     logs.push(entry);
 
+    // Update stats
     if (entry.success) {
       stats.success += 1;
-    } else if (entry.reason && entry.reason.includes('跳过')) {
-      stats.skipped.push({ name: entry.repoName, reason: entry.reason });
+    } else if (entry.isSkipped) {
+      stats.skipped.push({ name: entry.repoName, reason: entry.reason ?? '跳过' });
     } else {
       stats.failed.push({
         name: entry.repoName,
         reason: entry.reason ?? '未知错误',
       });
     }
+
+    // Emit per-repo logs (buffered, flushed atomically to prevent interleaving)
+    onLog?.({
+      type: 'repo',
+      lines: entry.lines,
+      repoName: entry.repoName,
+      success: entry.success,
+      reason: entry.reason,
+      isSkipped: entry.isSkipped,
+    });
+  });
+
+  // ── End summary (matches Python's completion logs) ──
+  const endLines: string[] = [
+    '',
+    '='.repeat(60),
+    '更新完成总结:',
+    `总仓库数: ${stats.total}`,
+    `成功更新: ${stats.success}`,
+    `跳过数量: ${stats.skipped.length}`,
+    `失败数量: ${stats.failed.length}`,
+  ];
+
+  if (stats.failed.length > 0) {
+    endLines.push('');
+    endLines.push('失败的仓库:');
+    for (const { name, reason } of stats.failed) {
+      endLines.push(`  - ${name} (${reason})`);
+    }
   }
+
+  if (stats.skipped.length > 0) {
+    endLines.push('');
+    endLines.push('跳过的仓库:');
+    for (const { name, reason } of stats.skipped) {
+      endLines.push(`  - ${name} (${reason})`);
+    }
+  }
+
+  if (stats.success === total) {
+    endLines.push('');
+    endLines.push('🎉 所有仓库更新成功!');
+  } else if (stats.success > 0) {
+    endLines.push('');
+    endLines.push(`⚠️ 部分仓库更新成功 (${stats.success}/${total})`);
+  } else {
+    endLines.push('');
+    endLines.push('❌ 所有仓库更新失败');
+  }
+
+  onLog?.({ type: 'end', lines: endLines, stats });
 
   return { logs, stats };
 }
