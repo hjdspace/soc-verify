@@ -1,9 +1,12 @@
 /**
  * Register Table Parser — Excel register specification table parser.
  *
- * Ported from the Python `register_table_parser` plugin (`parser.py` + `models.py`).
+ * Ported from the Python `register_table_parser` plugin (`parser.py` + `models.py` + `utils.py`).
  * Features: parse .xlsx/.xls register tables, extract header info + register + field data,
  * auto-fix Excel format issues (BOM, zero-width spaces, etc.).
+ *
+ * Key fix: Uses SheetJS (xlsx) for .xls files (OLE/binary format) which ExcelJS cannot read,
+ * and ExcelJS for .xlsx files (ZIP/OOXML format) which is already used elsewhere in the project.
  */
 
 import { mkdir } from 'node:fs/promises';
@@ -11,6 +14,7 @@ import { existsSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { tmpdir } from 'node:os';
 import ExcelJS from 'exceljs';
+import * as XLSX from 'xlsx';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -57,6 +61,60 @@ const COLUMN_MAPPING = {
 
 const HEADER_ROW = 10;
 const DATA_START_ROW = 12;
+
+// ── Unified worksheet interface ────────────────────────────────────
+
+/**
+ * Unified worksheet interface that abstracts the differences between
+ * ExcelJS (used for .xlsx) and SheetJS (used for .xls).
+ * Both use 1-indexed row/column numbers.
+ */
+interface UnifiedWorksheet {
+  getCell(row: number, col: number): { value: unknown };
+  rowCount: number;
+  columnCount: number;
+}
+
+/** Wrap an ExcelJS worksheet to conform to the unified interface. */
+class ExcelJsWorksheetWrapper implements UnifiedWorksheet {
+  constructor(private ws: ExcelJS.Worksheet) {}
+
+  getCell(row: number, col: number): { value: unknown } {
+    return { value: this.ws.getCell(row, col).value };
+  }
+
+  get rowCount(): number {
+    return this.ws.rowCount;
+  }
+
+  get columnCount(): number {
+    return this.ws.columnCount;
+  }
+}
+
+/** Wrap a SheetJS worksheet to conform to the unified interface. */
+class SheetJsWorksheetWrapper implements UnifiedWorksheet {
+  private range: XLSX.Range;
+
+  constructor(private ws: XLSX.WorkSheet) {
+    this.range = XLSX.utils.decode_range(ws['!ref'] ?? 'A1:A1');
+  }
+
+  getCell(row: number, col: number): { value: unknown } {
+    // SheetJS uses 0-indexed addresses
+    const addr = XLSX.utils.encode_cell({ r: row - 1, c: col - 1 });
+    const cell = this.ws[addr];
+    return { value: cell ? cell.v : null };
+  }
+
+  get rowCount(): number {
+    return this.range.e.r + 1; // 0-indexed → count
+  }
+
+  get columnCount(): number {
+    return this.range.e.c + 1;
+  }
+}
 
 // ── Cell value cleaning ─────────────────────────────────────────────
 
@@ -166,9 +224,7 @@ function parseWidth(value: unknown): number {
 // ── Header extraction ───────────────────────────────────────────────
 
 /** Extract header info from the first 4 rows. */
-function extractHeaderInfo(
-  worksheet: ExcelJS.Worksheet,
-): HeaderInfo {
+function extractHeaderInfo(ws: UnifiedWorksheet): HeaderInfo {
   const header: HeaderInfo = {
     projectName: '',
     subSystem: '',
@@ -177,24 +233,24 @@ function extractHeaderInfo(
   };
 
   for (let row = 1; row <= 4; row++) {
-    const cellA = worksheet.getCell(row, 1).value;
-    const cellB = worksheet.getCell(row, 2).value;
+    const cellA = ws.getCell(row, 1).value;
+    const cellB = ws.getCell(row, 2).value;
 
     const label = cleanCellValue(cellA);
     const value = cleanCellValue(cellB);
 
     if (label && value && typeof label === 'string' && typeof value === 'string') {
-    const labelLower = label.toLowerCase();
+      const labelLower = label.toLowerCase();
 
-    if (labelLower.includes('project') || labelLower.includes('proj') || labelLower.includes('项目')) {
-      header.projectName = value;
-    } else if (labelLower.includes('sub') || labelLower.includes('system') || labelLower.includes('子系统') || labelLower.includes('系统')) {
-      header.subSystem = value;
-    } else if (labelLower.includes('module') || labelLower.includes('mod') || labelLower.includes('模块')) {
-      header.moduleName = value;
-    } else if (labelLower.includes('base') || labelLower.includes('addr') || labelLower.includes('address') || labelLower.includes('基地址') || labelLower.includes('地址')) {
-      header.baseAddr = value;
-    }
+      if (labelLower.includes('project') || labelLower.includes('proj') || labelLower.includes('项目')) {
+        header.projectName = value;
+      } else if (labelLower.includes('sub') || labelLower.includes('system') || labelLower.includes('子系统') || labelLower.includes('系统')) {
+        header.subSystem = value;
+      } else if (labelLower.includes('module') || labelLower.includes('mod') || labelLower.includes('模块')) {
+        header.moduleName = value;
+      } else if (labelLower.includes('base') || labelLower.includes('addr') || labelLower.includes('address') || labelLower.includes('基地址') || labelLower.includes('地址')) {
+        header.baseAddr = value;
+      }
     }
   }
 
@@ -211,13 +267,13 @@ function extractHeaderInfo(
 
 /** Extract a row's data by fixed column positions. */
 function extractRowData(
-  worksheet: ExcelJS.Worksheet,
+  ws: UnifiedWorksheet,
   rowNum: number,
 ): Record<string, string | number | null> {
   const row: Record<string, string | number | null> = {};
 
   for (const [colType, colNum] of Object.entries(COLUMN_MAPPING)) {
-    const cellValue = worksheet.getCell(rowNum, colNum).value;
+    const cellValue = ws.getCell(rowNum, colNum).value;
     row[colType] = cleanCellValue(cellValue);
   }
 
@@ -270,16 +326,14 @@ function createFieldInfo(
 }
 
 /** Extract register data from the worksheet. */
-function extractRegisterData(
-  worksheet: ExcelJS.Worksheet,
-): RegisterInfo[] {
+function extractRegisterData(ws: UnifiedWorksheet): RegisterInfo[] {
   const registers: RegisterInfo[] = [];
   let currentRegister: RegisterInfo | null = null;
 
-  const maxRow = worksheet.rowCount;
+  const maxRow = ws.rowCount;
 
   for (let rowNum = DATA_START_ROW; rowNum <= maxRow; rowNum++) {
-    const rowData = extractRowData(worksheet, rowNum);
+    const rowData = extractRowData(ws, rowNum);
 
     // Skip empty rows
     const hasData = Object.values(rowData).some(
@@ -332,16 +386,49 @@ function extractRegisterData(
   return registers;
 }
 
+// ── Validation ─────────────────────────────────────────────────────
+
+/** Validate registers for duplicates and completeness. */
+function validateRegisters(registers: RegisterInfo[]): void {
+  if (registers.length === 0) {
+    throw new Error('验证错误: 未找到有效的寄存器数据');
+  }
+
+  // Check duplicate register names
+  const nameCounts: Record<string, number> = {};
+  for (const reg of registers) {
+    nameCounts[reg.name] = (nameCounts[reg.name] ?? 0) + 1;
+  }
+  const dupNames = Object.entries(nameCounts)
+    .filter(([, count]) => count > 1)
+    .map(([name]) => name);
+  if (dupNames.length > 0) {
+    throw new Error(`验证错误: 发现重复的寄存器名称: ${dupNames.join(', ')}`);
+  }
+
+  // Check duplicate offsets
+  const offsetCounts: Record<string, number> = {};
+  for (const reg of registers) {
+    offsetCounts[reg.offset] = (offsetCounts[reg.offset] ?? 0) + 1;
+  }
+  const dupOffsets = Object.entries(offsetCounts)
+    .filter(([, count]) => count > 1)
+    .map(([offset]) => offset);
+  if (dupOffsets.length > 0) {
+    throw new Error(`验证错误: 发现重复的偏移地址: ${dupOffsets.join(', ')}`);
+  }
+}
+
 // ── Excel format auto-fix ───────────────────────────────────────────
 
 /** Check if the Excel file needs format fixing. */
-function checkIfNeedsFormatFix(worksheet: ExcelJS.Worksheet): boolean {
+function checkIfNeedsFormatFix(ws: UnifiedWorksheet): boolean {
   let issuesFound = 0;
 
   // Check header area (first 4 rows)
   for (let row = 1; row <= 4; row++) {
     for (let col = 1; col <= 2; col++) {
-      const value = worksheet.getCell(row, col).value;
+      const value = ws.getCell(row, col).value;
       if (value && typeof value === 'string') {
         if (value.includes('\ufeff') || value.includes('\u200b') || value.includes('\xa0')) {
           issuesFound++;
@@ -352,7 +439,7 @@ function checkIfNeedsFormatFix(worksheet: ExcelJS.Worksheet): boolean {
 
   // Check header row (row 10)
   for (let col = 1; col <= 12; col++) {
-    const value = worksheet.getCell(HEADER_ROW, col).value;
+    const value = ws.getCell(HEADER_ROW, col).value;
     if (value && typeof value === 'string') {
       if (value.includes('\ufeff') || value.includes('\u200b') || value.includes('\xa0')) {
         issuesFound++;
@@ -361,9 +448,9 @@ function checkIfNeedsFormatFix(worksheet: ExcelJS.Worksheet): boolean {
   }
 
   // Check data area (rows 12-16)
-  for (let row = 12; row <= Math.min(16, worksheet.rowCount); row++) {
+  for (let row = 12; row <= Math.min(16, ws.rowCount); row++) {
     for (let col = 1; col <= 12; col++) {
-      const value = worksheet.getCell(row, col).value;
+      const value = ws.getCell(row, col).value;
       if (value && typeof value === 'string') {
         if (value.includes('\ufeff') || value.includes('\u200b') || value.includes('\xa0')) {
           issuesFound++;
@@ -375,8 +462,11 @@ function checkIfNeedsFormatFix(worksheet: ExcelJS.Worksheet): boolean {
   return issuesFound > 2;
 }
 
-/** Auto-fix Excel format by copying to a clean new workbook. */
-async function autoFixExcelFormat(filePath: string): Promise<string> {
+/** Auto-fix Excel format by copying to a clean new workbook (xlsx output). */
+async function autoFixExcelFormat(
+  filePath: string,
+  ws: UnifiedWorksheet,
+): Promise<UnifiedWorksheet> {
   const tempDir = join(tmpdir(), `register_parser_${Date.now()}`);
   await mkdir(tempDir, { recursive: true });
 
@@ -385,23 +475,16 @@ async function autoFixExcelFormat(filePath: string): Promise<string> {
     `fixed_${filePath.split(/[/\\]/).pop()}`.replace(/\.xls$/, '.xlsx'),
   );
 
-  // Read original
-  const originalWorkbook = new ExcelJS.Workbook();
-  await originalWorkbook.xlsx.readFile(filePath);
-  const originalWorksheet = originalWorkbook.worksheets[0];
-
-  if (!originalWorksheet) return filePath;
-
-  // Create new workbook
+  // Create new workbook with ExcelJS and copy cleaned data
   const newWorkbook = new ExcelJS.Workbook();
   const newWorksheet = newWorkbook.addWorksheet('RegisterTable');
 
-  const maxRow = Math.max(originalWorksheet.rowCount, 50);
-  const maxCol = Math.max(originalWorksheet.columnCount, 15);
+  const maxRow = Math.max(ws.rowCount, 50);
+  const maxCol = Math.max(ws.columnCount, 15);
 
   for (let row = 1; row <= maxRow; row++) {
     for (let col = 1; col <= maxCol; col++) {
-      const sourceCell = originalWorksheet.getCell(row, col);
+      const sourceCell = ws.getCell(row, col);
       const cleaned = cleanCellValue(sourceCell.value);
       if (cleaned !== null) {
         newWorksheet.getCell(row, col).value = cleaned;
@@ -410,14 +493,67 @@ async function autoFixExcelFormat(filePath: string): Promise<string> {
   }
 
   await newWorkbook.xlsx.writeFile(tempFilePath);
-  return tempFilePath;
+
+  // Re-read the fixed file
+  const fixedWorkbook = new ExcelJS.Workbook();
+  await fixedWorkbook.xlsx.readFile(tempFilePath);
+  const fixedWs = fixedWorkbook.worksheets[0];
+  if (!fixedWs) {
+    throw new Error('Fixed workbook has no worksheet');
+  }
+  return new ExcelJsWorksheetWrapper(fixedWs);
+}
+
+// ── Worksheet loading ──────────────────────────────────────────────
+
+/**
+ * Load a worksheet from a file, using the appropriate library based on extension.
+ * - .xlsx: ExcelJS (ZIP/OOXML format)
+ * - .xls: SheetJS (OLE/binary format, which ExcelJS cannot read)
+ */
+async function loadWorksheet(filePath: string): Promise<UnifiedWorksheet> {
+  const ext = extname(filePath).toLowerCase();
+
+  if (ext === '.xls') {
+    // SheetJS for .xls files — this fixes the "Can't find end of central directory" error
+    const workbook = XLSX.readFile(filePath, { type: 'file' });
+    const firstSheetName = workbook.SheetNames[0];
+    if (!firstSheetName) {
+      throw new Error('Excel 文件中没有工作表');
+    }
+    const ws = workbook.Sheets[firstSheetName];
+    if (!ws) {
+      throw new Error('Excel 文件中没有工作表');
+    }
+    return new SheetJsWorksheetWrapper(ws);
+  }
+
+  if (ext === '.xlsx') {
+    // ExcelJS for .xlsx files
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(filePath);
+    const ws = workbook.worksheets[0];
+    if (!ws) {
+      throw new Error('Excel 文件中没有工作表');
+    }
+    return new ExcelJsWorksheetWrapper(ws);
+  }
+
+  throw new Error(`不支持的文件格式: ${ext}，请使用 .xls 或 .xlsx 文件`);
 }
 
 // ── Main parse function ─────────────────────────────────────────────
 
-/** Parse a register table Excel file. */
+/**
+ * Parse a register table Excel file.
+ *
+ * @param filePath - Path to the .xls or .xlsx file
+ * @param autoFix - Whether to auto-fix format issues (default: true)
+ * @returns Parsed register table data
+ */
 export async function parseRegisterTable(
   filePath: string,
+  autoFix = true,
 ): Promise<RegisterTableData> {
   if (!existsSync(filePath)) {
     throw new Error(`文件不存在: ${filePath}`);
@@ -428,35 +564,32 @@ export async function parseRegisterTable(
     throw new Error('不支持的文件格式，请使用 Excel 文件 (.xlsx 或 .xls)');
   }
 
-  let actualFilePath = filePath;
+  // Load worksheet using the appropriate library
+  let ws = await loadWorksheet(filePath);
 
   // Auto-fix format if needed
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(filePath);
-  const worksheet = workbook.worksheets[0];
-
-  if (!worksheet) {
-    throw new Error('Excel 文件中没有工作表');
-  }
-
-  if (checkIfNeedsFormatFix(worksheet)) {
+  if (autoFix && checkIfNeedsFormatFix(ws)) {
     try {
-      actualFilePath = await autoFixExcelFormat(filePath);
-      const fixedWorkbook = new ExcelJS.Workbook();
-      await fixedWorkbook.xlsx.readFile(actualFilePath);
-      const fixedWorksheet = fixedWorkbook.worksheets[0];
-      if (fixedWorksheet) {
-        const headerInfo = extractHeaderInfo(fixedWorksheet);
-        const registers = extractRegisterData(fixedWorksheet);
-        return { header: headerInfo, registers };
-      }
+      ws = await autoFixExcelFormat(filePath, ws);
     } catch {
-      // Fall through to use original
+      // Fall through to use original worksheet
     }
   }
 
-  const headerInfo = extractHeaderInfo(worksheet);
-  const registers = extractRegisterData(worksheet);
+  // Validate table format
+  if (ws.rowCount < DATA_START_ROW) {
+    throw new Error(`表格行数不足，至少需要 ${DATA_START_ROW} 行`);
+  }
+  if (ws.rowCount < HEADER_ROW) {
+    throw new Error(`未找到表头行（第 ${HEADER_ROW} 行）`);
+  }
+
+  // Extract data
+  const headerInfo = extractHeaderInfo(ws);
+  const registers = extractRegisterData(ws);
+
+  // Validate
+  validateRegisters(registers);
 
   return { header: headerInfo, registers };
 }
