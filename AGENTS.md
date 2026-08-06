@@ -164,16 +164,7 @@ Electron 应用分三个进程，由 `electron.vite.config.ts` 分别构建：
 
 ### 主题系统
 
-支持 6 套主题，通过 CSS 变量 + `data-theme` 属性实现：
-
-| 主题 ID | 名称 | 模式 | 说明 |
-|---------|------|------|------|
-| `light` | 浅色 | light | 干净明亮的浅色主题 |
-| `dark` | 深色 | dark | 经典深色主题，高对比度 |
-| `midnight` | 午夜蓝 | dark | 深蓝色调，长时间使用不伤眼 |
-| `carbon` | 碳灰 | dark | 工业风碳灰色，冷色调 |
-| `nord` | 极地 | dark | Nord 极地配色，蓝灰冷色 |
-| `solarized-light` | Solarized 浅 | light | 暖色调浅色主题 |
+支持 4 套主题，通过 CSS 变量 + `data-theme` 属性实现：
 
 - 主题定义在 `src/renderer/src/styles/globals.css` 的 `[data-theme="<id>"]` 选择器中
 - 主题状态管理在 `src/renderer/src/stores/theme.ts`（Zustand）
@@ -256,15 +247,16 @@ Office 文档（docx/xlsx/pptx/pdf）的预览、创建与编辑能力通过 [of
 
 ## 修改后验证检查
 
-**每次修改代码后，必须依次执行以下三条命令，全部通过才算完成：**
+**每次修改代码后，必须依次执行以下四条命令，全部通过才算完成：**
 
 ```sh
 npm run build        # 1. 确认编译成功（main + preload + renderer 三进程构建）
 npm run typecheck    # 2. 确认类型检查通过（tsconfig.node.json + tsconfig.web.json）
 npm run test         # 3. 确认测试通过（Vitest 全部测试用例）
+npm run lint         # 4. 确认代码规范通过（ESLint）
 ```
 
-- 如果任一命令失败，必须修复后重新执行全部三条命令
+- 如果任一命令失败，必须修复后重新执行全部四条命令
 - 不得跳过或忽略任何一条检查
 - 修复 linter 报错后也需重新执行上述检查
 
