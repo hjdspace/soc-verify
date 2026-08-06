@@ -8,8 +8,13 @@
  *   - 一键展开/全部折叠
  *   - "仅看未达标"过滤
  *   - 顶部 8 个概览卡片（总体覆盖率 + 达标状态徽章 + 进度条）
+ *
+ * 性能优化：
+ *   - 虚拟滚动：仅渲染可视区域内的行，支持万级节点流畅滚动
+ *   - React.memo：行组件缓存，避免不必要的重渲染
+ *   - 预计算过滤匹配集：O(n) 替代 O(n²) 的递归子树匹配
  */
-import { useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useRef, useState, useEffect } from 'react';
 import {
   ChevronRight, ChevronDown, Check, AlertTriangle, X, Minus,
 } from 'lucide-react';
@@ -47,12 +52,6 @@ type Status = 'pass' | 'warn' | 'fail' | 'na';
 
 // ─── 颜色分类 ────────────────────────────────────────────────────
 
-/**
- * 根据 metric、百分比和目标值分类覆盖率状态。
- * - percentage === null → na（灰）
- * - 无目标（assertion）: >= 90 pass; >= 80 warn; 否则 fail
- * - 有目标: >= target pass; >= target-5 warn; 否则 fail
- */
 function classify(
   metric: CoverageMetric,
   percentage: number | null,
@@ -124,12 +123,6 @@ function collectExpandablePaths(node: CoverageNode, out: Set<string> = new Set()
   return out;
 }
 
-/** 判断子树中是否有名字匹配过滤的节点 */
-function subtreeMatchesFilter(node: CoverageNode, filter: string): boolean {
-  if (node.name.toLowerCase().includes(filter)) return true;
-  return node.children.some((c) => subtreeMatchesFilter(c, filter));
-}
-
 /** 判断节点自身是否有 fail 状态的 metric */
 function nodeHasFail(
   node: CoverageNode,
@@ -146,22 +139,51 @@ type VisibleRow = {
 };
 
 /**
+ * 预计算过滤匹配集合 —— O(n) 一次遍历，标记所有匹配节点及其祖先路径。
+ * 替代原来的 subtreeMatchesFilter 递归调用（O(n²)）。
+ */
+function precomputeFilterMatch(
+  node: CoverageNode,
+  filter: string,
+  matchSet: Set<string> = new Set(),
+): Set<string> {
+  const selfMatch = !filter || node.name.toLowerCase().includes(filter);
+  if (selfMatch) {
+    matchSet.add(node.path);
+  }
+  for (const child of node.children) {
+    precomputeFilterMatch(child, filter, matchSet);
+  }
+  // 如果任何子节点（或其后代）匹配，则当前节点作为祖先路径也应加入 matchSet
+  if (!matchSet.has(node.path)) {
+    for (const child of node.children) {
+      if (matchSet.has(child.path)) {
+        matchSet.add(node.path);
+        break;
+      }
+    }
+  }
+  return matchSet;
+}
+
+/**
  * 递归收集可见行。
  * - 展开状态：祖先全部展开时行才可见
  * - 过滤：节点或其后代匹配过滤时才可见（过滤时自动展开匹配子树）
+ * 使用 matchSet 替代递归 subtreeMatchesFilter，性能从 O(n²) 提升到 O(n)
  */
 function collectVisible(
   node: CoverageNode,
   expanded: Set<string>,
   filter: string,
+  matchSet: Set<string>,
   unmetOnly: boolean,
   effectiveTargets: Partial<Record<CoverageMetric, number>>,
   isAncestorExpanded: boolean,
   out: VisibleRow[],
 ): void {
   const filterActive = filter.length > 0;
-  const selfMatch = !filterActive || node.name.toLowerCase().includes(filter);
-  const subtreeMatch = !filterActive || selfMatch || subtreeMatchesFilter(node, filter);
+  const subtreeMatch = !filterActive || matchSet.has(node.path);
 
   if (!subtreeMatch) return;
   if (!isAncestorExpanded) return;
@@ -175,11 +197,16 @@ function collectVisible(
   const isExpanded = expanded.has(node.path) || (filterActive && subtreeMatch);
   for (const child of node.children) {
     collectVisible(
-      child, expanded, filter, unmetOnly, effectiveTargets,
+      child, expanded, filter, matchSet, unmetOnly, effectiveTargets,
       isAncestorExpanded && isExpanded, out,
     );
   }
 }
+
+// ─── 虚拟滚动常量 ────────────────────────────────────────────────
+
+const ROW_HEIGHT = 32; // px
+const OVERSCAN = 10; // 额外渲染的行数（上下各 overscan）
 
 // ─── 主组件 ──────────────────────────────────────────────────────
 
@@ -204,26 +231,71 @@ export function CoverageTreeTable({ data, targets }: CoverageTreeTableProps) {
   const [filter, setFilter] = useState('');
   const [unmetOnly, setUnmetOnly] = useState(false);
 
+  // 预计算过滤匹配集
+  const matchSet = useMemo(() => {
+    const trimmed = filter.trim().toLowerCase();
+    if (!trimmed) return new Set<string>();
+    return precomputeFilterMatch(root, trimmed);
+  }, [root, filter]);
+
   const visibleRows = useMemo(() => {
     const rows: VisibleRow[] = [];
     collectVisible(
-      root, expanded, filter.trim().toLowerCase(), unmetOnly,
+      root, expanded, filter.trim().toLowerCase(), matchSet, unmetOnly,
       effectiveTargets, true, rows,
     );
     return rows;
-  }, [root, expanded, filter, unmetOnly, effectiveTargets]);
+  }, [root, expanded, filter, unmetOnly, effectiveTargets, matchSet]);
 
-  const toggleNode = (path: string) => {
+  const toggleNode = useCallback((path: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
       else next.add(path);
       return next;
     });
-  };
+  }, []);
 
-  const expandAll = () => setExpanded(new Set(allExpandablePaths));
-  const collapseAll = () => setExpanded(new Set());
+  const expandAll = useCallback(() => setExpanded(new Set(allExpandablePaths)), [allExpandablePaths]);
+  const collapseAll = useCallback(() => setExpanded(new Set()), []);
+
+  // ─── 虚拟滚动 ──────────────────────────────────────────────
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(400);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setViewportHeight(el.clientHeight);
+    const onScroll = () => setScrollTop(el.scrollTop);
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // 监听容器大小变化（窗口 resize 等）
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // ResizeObserver may not be available in some environments (jsdom, older Electron)
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      setViewportHeight(el.clientHeight);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const totalRows = visibleRows.length;
+  const totalHeight = totalRows * ROW_HEIGHT;
+  const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const endIndex = Math.min(
+    totalRows,
+    Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN,
+  );
+  const visibleSlice = visibleRows.slice(startIndex, endIndex);
+  const topSpacer = startIndex * ROW_HEIGHT;
+  const bottomSpacer = (totalRows - endIndex) * ROW_HEIGHT;
 
   return (
     <div className="space-y-3">
@@ -262,21 +334,25 @@ export function CoverageTreeTable({ data, targets }: CoverageTreeTableProps) {
         >
           仅看未达标
         </button>
+        <span className="text-[10px] text-muted-foreground">
+          {totalRows} 个节点
+        </span>
       </div>
 
-      {/* 主树表格 */}
+      {/* 主树表格（虚拟滚动） */}
       <div className="overflow-hidden rounded border border-border">
-        <div className="max-h-[60vh] overflow-auto">
-          <table className="w-full text-xs">
+        <div ref={scrollRef} className="max-h-[60vh] overflow-auto">
+          <table className="w-full text-xs" style={{ tableLayout: 'fixed' }}>
             <thead className="sticky top-0 z-10 bg-secondary">
               <tr>
-                <th className="px-2 py-1.5 text-left text-[10px] uppercase text-muted-foreground">
+                <th className="px-2 py-1.5 text-left text-[10px] uppercase text-muted-foreground" style={{ width: '30%' }}>
                   模块
                 </th>
                 {COVERAGE_METRICS.map((m) => (
                   <th
                     key={m}
                     className="px-2 py-1.5 text-right text-[10px] uppercase text-muted-foreground"
+                    style={{ width: '8.75%' }}
                   >
                     {METRIC_LABELS[m]}
                     <span className="block font-normal normal-case text-muted-foreground/70">
@@ -287,15 +363,21 @@ export function CoverageTreeTable({ data, targets }: CoverageTreeTableProps) {
               </tr>
             </thead>
             <tbody>
-              {visibleRows.length === 0 ? (
+              {/* 顶部空间 — 撑起虚拟滚动上方区域 */}
+              {topSpacer > 0 && (
+                <tr style={{ height: topSpacer }}>
+                  <td colSpan={9} style={{ padding: 0, border: 'none' }} />
+                </tr>
+              )}
+              {visibleSlice.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="px-2 py-4 text-center text-muted-foreground">
                     无匹配模块
                   </td>
                 </tr>
               ) : (
-                visibleRows.map(({ node, dimmed }) => (
-                  <TreeRow
+                visibleSlice.map(({ node, dimmed }) => (
+                  <VirtualTreeRow
                     key={node.path}
                     node={node}
                     expanded={expanded.has(node.path)}
@@ -304,6 +386,12 @@ export function CoverageTreeTable({ data, targets }: CoverageTreeTableProps) {
                     onToggle={toggleNode}
                   />
                 ))
+              )}
+              {/* 底部空间 — 撑起虚拟滚动下方区域 */}
+              {bottomSpacer > 0 && (
+                <tr style={{ height: bottomSpacer }}>
+                  <td colSpan={9} style={{ padding: 0, border: 'none' }} />
+                </tr>
               )}
             </tbody>
           </table>
@@ -323,7 +411,7 @@ export function CoverageTreeTable({ data, targets }: CoverageTreeTableProps) {
 
 // ─── 概览卡片 ────────────────────────────────────────────────────
 
-function OverviewCards({
+const OverviewCards = memo(function OverviewCards({
   root,
   targets,
 }: {
@@ -375,11 +463,11 @@ function OverviewCards({
       })}
     </div>
   );
-}
+});
 
-// ─── 树行 ────────────────────────────────────────────────────────
+// ─── 树行（memo 化，避免不必要的重渲染） ──────────────────────────
 
-function TreeRow({
+const VirtualTreeRow = memo(function TreeRow({
   node,
   expanded,
   dimmed,
@@ -397,6 +485,7 @@ function TreeRow({
 
   return (
     <tr
+      style={{ height: ROW_HEIGHT }}
       className={cn(
         'border-t border-border',
         isRoot && 'bg-card font-medium',
@@ -440,7 +529,7 @@ function TreeRow({
       })}
     </tr>
   );
-}
+});
 
 // ─── 图例 ────────────────────────────────────────────────────────
 
