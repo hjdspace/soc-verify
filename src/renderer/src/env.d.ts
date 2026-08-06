@@ -72,6 +72,23 @@ export interface EventBridgeAPI {
   // Issue #9: Browser window-open events
   onBrowserOpenNewTab: (callback: (data: { url: string }) => void) => () => void;
   onAuthPopup: (callback: (data: { type: 'opened' | 'closed'; url: string }) => void) => () => void;
+  // Git Quick Pull 实时日志
+  onGitQuickPullLog: (
+    callback: (data: {
+      type: 'start' | 'repo' | 'end';
+      lines: string[];
+      repoName?: string;
+      success?: boolean;
+      reason?: string | null;
+      isSkipped?: boolean;
+      stats?: {
+        total: number;
+        success: number;
+        skipped: Array<{ name: string; reason: string }>;
+        failed: Array<{ name: string; reason: string }>;
+      };
+    }) => void,
+  ) => () => void;
   // Issue #10: Download events
   onDownloadEvent: (
     callback: (data: {
