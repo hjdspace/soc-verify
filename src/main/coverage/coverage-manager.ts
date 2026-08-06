@@ -46,6 +46,11 @@ const SOCVERIFY_DIR = '.socverify';
 const COVERAGE_DIR = 'coverage';
 const SESSIONS_FILE = 'sessions.json';
 
+/** Yield to the event loop — 让主进程有机会处理积压的 IPC 消息和窗口事件 */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 /** 导入覆盖率数据的结果（包含 debug 信息）。 */
 export interface CoverageImportResult {
   sessionId: string;
@@ -198,6 +203,7 @@ export class CoverageManager {
     }
 
     // Step 2: 插件解析文本报告为层级 Coverage Tree
+    // 注意：adapter.parse() 现在在 Worker Thread 中执行，不阻塞主进程
     onProgress?.({
       step: 'parsing',
       message: '正在解析 EDA 文本报告为覆盖率树...',
@@ -207,17 +213,11 @@ export class CoverageManager {
     const data = await this.adapter.parse(sessionId, reportDir);
     logStep('parsing', step2Start);
 
-    // 统计解析结果大小（用于诊断）
-    const nodeCount = this.countNodes(data.root);
-    const dataJsonSize = JSON.stringify(data).length;
+    // yield to event loop — 让主进程有机会处理积压的 IPC 消息
+    await yieldToEventLoop();
 
-    onProgress?.({
-      step: 'parsing_done',
-      message: `解析完成：${nodeCount} 个节点，数据大小 ${(dataJsonSize / 1024 / 1024).toFixed(2)} MB`,
-      percent: 75,
-      durationMs: Date.now() - step2Start,
-      details: { nodeCount, dataJsonSizeMB: Math.round(dataJsonSize / 1024 / 1024 * 100) / 100 },
-    });
+    // 统计解析结果（iterative 避免 deep tree stack overflow）
+    const nodeCount = this.countNodes(data.root);
 
     const enriched: CoverageData = {
       ...data,
@@ -229,6 +229,21 @@ export class CoverageManager {
       },
       targets: targets ?? { ...DEFAULT_COVERAGE_TARGETS },
     };
+
+    // 一次性序列化 enriched，用于缓存写入和数据大小报告（避免重复 JSON.stringify）
+    const enrichedJson = JSON.stringify(enriched);
+    const dataJsonSize = enrichedJson.length;
+
+    onProgress?.({
+      step: 'parsing_done',
+      message: `解析完成：${nodeCount} 个节点，数据大小 ${(dataJsonSize / 1024 / 1024).toFixed(2)} MB`,
+      percent: 75,
+      durationMs: Date.now() - step2Start,
+      details: { nodeCount, dataJsonSizeMB: Math.round(dataJsonSize / 1024 / 1024 * 100) / 100 },
+    });
+
+    // yield — 让 UI 有机会更新进度
+    await yieldToEventLoop();
 
     // 检查解析结果是否全为 NA
     const allNa = COVERAGE_METRICS.every(
@@ -249,15 +264,18 @@ export class CoverageManager {
       );
     }
 
-    // Step 3: 缓存 CoverageData 到 JSON 文件
+    // Step 3: 缓存 CoverageData 到 JSON 文件（复用已序列化的字符串）
     onProgress?.({
       step: 'caching',
       message: '正在缓存覆盖率数据到磁盘...',
       percent: 85,
     });
     const step3Start = Date.now();
-    await this.cache(enriched);
+    await this.cacheFromString(enriched.sessionId, enrichedJson);
     logStep('caching', step3Start);
+
+    // yield — 让主进程处理积压 IPC
+    await yieldToEventLoop();
 
     // Step 4: 写入 session 元数据
     onProgress?.({
@@ -314,11 +332,16 @@ export class CoverageManager {
     return { sessionId, data: enriched, reportDir, warnings, edaAllFailed, generatedFiles };
   }
 
-  /** 递归统计 Coverage Tree 中的节点总数（用于诊断） */
+  /** 递归统计 Coverage Tree 中的节点总数（iterative 实现，避免 deep tree stack overflow） */
   private countNodes(node: CoverageNode): number {
-    let count = 1;
-    for (const child of node.children) {
-      count += this.countNodes(child);
+    let count = 0;
+    const stack: CoverageNode[] = [node];
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      count++;
+      for (const child of current.children) {
+        stack.push(child);
+      }
     }
     return count;
   }
@@ -890,8 +913,15 @@ ${rows}
     await mkdir(dir, { recursive: true });
     const filePath = join(dir, `${data.sessionId}.json`);
     // 使用紧凑 JSON 格式（无缩进），大幅减少大数据量时的序列化时间和文件大小
-    // 对于 200万+条目的数据，pretty-printing 会增加 ~30% 的序列化开销和文件大小
     await writeFile(filePath, JSON.stringify(data), 'utf-8');
+  }
+
+  /** 使用已序列化的 JSON 字符串缓存 CoverageData，避免重复 JSON.stringify */
+  private async cacheFromString(sessionId: string, jsonStr: string): Promise<void> {
+    const dir = join(this.projectRoot, SOCVERIFY_DIR, COVERAGE_DIR);
+    await mkdir(dir, { recursive: true });
+    const filePath = join(dir, `${sessionId}.json`);
+    await writeFile(filePath, jsonStr, 'utf-8');
   }
 
   // ─── Triage / Exclusion 持久化 ──────────────────────────────
