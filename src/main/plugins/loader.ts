@@ -589,6 +589,21 @@ class PluginLoaderImpl {
     await writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
   }
 
+  /**
+   * 获取指定类型的已加载插件的解析后绝对路径。
+   * 用于 Worker Thread 等需要独立加载插件模块的场景。
+   */
+  getResolvedPluginPath(projectRoot: string, kind: string): string | null {
+    const records = this.loadedPlugins.get(projectRoot);
+    if (!records) return null;
+    for (const record of records.values()) {
+      if (record.manifest.kind === kind && !record.result.error) {
+        return resolvePluginPath(record.source, record.path, projectRoot);
+      }
+    }
+    return null;
+  }
+
   clearProject(projectRoot: string): void {
     void this.deactivateProject(projectRoot);
     this.registries.delete(projectRoot);
