@@ -34,6 +34,8 @@ import {
   checkoutTag,
   updateAllRepos,
   updateSubsysRepos,
+  refreshRepoInfo,
+  updateRepoToMaster,
 } from '../../tools/git-manager';
 import { previewCToSv } from '../../tools/c-sv-converter';
 
@@ -819,6 +821,27 @@ const gitManagerRouter = t.router({
     })
     .mutation(async ({ input }) => {
       return await updateSubsysRepos(input.projectDir, input.subsysName, input.repoType);
+    }),
+
+  refreshRepoInfo: t.procedure
+    .input((raw): { repo: { name: string; path: string; repoType: 'de' | 'dv' } } => {
+      const r = raw as Record<string, unknown>;
+      const repo = r.repo as { name: string; path: string; repoType: 'de' | 'dv' };
+      return { repo };
+    })
+    .mutation(({ input }) => {
+      const refreshed = refreshRepoInfo(input.repo);
+      return { repo: refreshed };
+    }),
+
+  updateRepoToMaster: t.procedure
+    .input((raw): { repo: { name: string; path: string; repoType: 'de' | 'dv' } } => {
+      const r = raw as Record<string, unknown>;
+      const repo = r.repo as { name: string; path: string; repoType: 'de' | 'dv' };
+      return { repo };
+    })
+    .mutation(async ({ input }) => {
+      return await updateRepoToMaster(input.repo);
     }),
 });
 
