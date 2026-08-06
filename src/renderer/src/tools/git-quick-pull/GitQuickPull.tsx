@@ -3,7 +3,7 @@
  *
  * Ported from the Python `git_quick_pull` plugin.
  * Features: select environment (DV/DE/All), choose pull mode,
- * execute batch pull with real-time log output.
+ * execute batch pull with real-time log output via IPC events.
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
@@ -25,13 +25,6 @@ type PullStats = {
   failed: Array<{ name: string; reason: string }>;
 };
 
-type PullLogEntry = {
-  repoName: string;
-  lines: string[];
-  success: boolean;
-  reason: string | null;
-};
-
 export function GitQuickPull({ projectRoot, onProjectRootChange }: ToolComponentProps) {
   const [projectDir, setProjectDir] = useState(projectRoot ?? '');
   const [repoType, setRepoType] = useState<'dv' | 'de' | 'all'>('all');
@@ -40,21 +33,45 @@ export function GitQuickPull({ projectRoot, onProjectRootChange }: ToolComponent
   const [scanning, setScanning] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [repos, setRepos] = useState<RepoInfo[]>([]);
-  const [logs, setLogs] = useState<PullLogEntry[]>([]);
+  const [logLines, setLogLines] = useState<string[]>([]);
   const [stats, setStats] = useState<PullStats | null>(null);
+  const [completedCount, setCompletedCount] = useState(0);
   const [status, setStatus] = useState('请选择项目目录');
   const [copied, setCopied] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
+  // Sync projectRoot prop → local state
   useEffect(() => {
     if (projectRoot) setProjectDir(projectRoot);
   }, [projectRoot]);
 
+  // Auto-scroll log to bottom on new lines
   useEffect(() => {
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
     }
-  }, [logs]);
+  }, [logLines]);
+
+  // ── Real-time event listener (matches Python's pyqtSignal pattern) ──
+  useEffect(() => {
+    if (!window.eventBridge) return;
+    const unsubscribe = window.eventBridge.onGitQuickPullLog((event) => {
+      if (event.type === 'start') {
+        setLogLines(event.lines);
+        setCompletedCount(0);
+        setStats(null);
+      } else if (event.type === 'repo') {
+        setLogLines((prev) => [...prev, ...event.lines]);
+        setCompletedCount((prev) => prev + 1);
+      } else if (event.type === 'end') {
+        setLogLines((prev) => [...prev, ...event.lines]);
+        if (event.stats) {
+          setStats(event.stats as PullStats);
+        }
+      }
+    });
+    return unsubscribe;
+  }, []);
 
   const handleBrowse = useCallback(async () => {
     const res = await trpc.tools.selectDirectory.mutate({
@@ -94,30 +111,55 @@ export function GitQuickPull({ projectRoot, onProjectRootChange }: ToolComponent
       setStatus('请先扫描仓库');
       return;
     }
+
+    // Validate custom command (matches Python's validation)
+    if (mode === 'custom') {
+      const cmd = customCommand.trim();
+      if (!cmd) {
+        setStatus('请输入自定义 Git 命令');
+        return;
+      }
+      if (!cmd.toLowerCase().startsWith('git ')) {
+        setStatus('自定义命令必须以 "git" 开头，例如: git pull --rebase origin master');
+        return;
+      }
+    }
+
+    // pull_reset danger confirmation (matches Python's detailed message)
     if (mode === 'pull_reset') {
       const confirmed = window.confirm(
-        '⚠️ pull_reset 模式会丢弃本地更改！\n\n确定要继续吗？',
+        '⚠️ 危险操作确认\n\n' +
+          '此操作将执行以下步骤:\n\n' +
+          '1. git fetch origin\n' +
+          '2. git reset --hard origin/master\n\n' +
+          '⚠️ 这将丢弃所有本地未提交更改且不可恢复！\n\n' +
+          '有未提交更改的仓库将被自动跳过。\n\n' +
+          '确定要继续吗？',
       );
       if (!confirmed) return;
     }
 
     setExecuting(true);
-    setLogs([]);
+    setLogLines([]);
     setStats(null);
+    setCompletedCount(0);
     setStatus('正在执行批量 pull...');
+
     try {
       const res = await trpc.tools.gitQuickPull.executePull.mutate({
         repos,
         mode,
         customCommand: mode === 'custom' ? customCommand : null,
       });
-      setLogs(res.logs as PullLogEntry[]);
-      setStats(res.stats as PullStats);
+      // Stats may already be set by the 'end' event, but set here for safety
       const s = res.stats as PullStats;
+      setStats(s);
       if (s.success === s.total) {
         setStatus(`🎉 所有仓库更新成功! (${s.success}/${s.total})`);
       } else if (s.success > 0) {
-        setStatus(`⚠️ 部分成功 (${s.success}/${s.total}), 跳过 ${s.skipped.length}, 失败 ${s.failed.length}`);
+        setStatus(
+          `⚠️ 部分成功 (${s.success}/${s.total}), 跳过 ${s.skipped.length}, 失败 ${s.failed.length}`,
+        );
       } else {
         setStatus(`❌ 所有仓库更新失败`);
       }
@@ -129,16 +171,10 @@ export function GitQuickPull({ projectRoot, onProjectRootChange }: ToolComponent
   }, [repos, mode, customCommand]);
 
   const handleCopy = useCallback(() => {
-    const lines: string[] = [];
-    for (const entry of logs) {
-      lines.push(...entry.lines);
-    }
-    navigator.clipboard.writeText(lines.join('\n'));
+    navigator.clipboard.writeText(logLines.join('\n'));
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
-  }, [logs]);
-
-  const allLogLines = logs.flatMap((l) => l.lines);
+  }, [logLines]);
 
   return (
     <div className="flex h-full flex-col gap-3 p-4">
@@ -200,11 +236,18 @@ export function GitQuickPull({ projectRoot, onProjectRootChange }: ToolComponent
               type="text"
               value={customCommand}
               onChange={(e) => setCustomCommand(e.target.value)}
-              placeholder="例如: git pull --rebase"
+              placeholder="例如: git pull --rebase origin master"
               className="rounded border border-border bg-background px-2 py-1.5 text-xs font-mono"
             />
           </div>
         )}
+
+        {/* Info tips (matches Python's info_label) */}
+        <div className="mt-2 rounded bg-muted/50 p-2 text-[10px] text-muted-foreground">
+          ℹ️ pull 模式下有冲突的仓库会报错，不会覆盖本地更改
+          <br />
+          ℹ️ 强制重置模式下有未提交更改的仓库将被自动跳过
+        </div>
       </div>
 
       {/* ── Buttons ── */}
@@ -224,7 +267,7 @@ export function GitQuickPull({ projectRoot, onProjectRootChange }: ToolComponent
           <Play className={cn('h-3 w-3', executing && 'animate-pulse')} />
           {executing ? '执行中...' : '开始 Pull'}
         </button>
-        {logs.length > 0 && (
+        {logLines.length > 0 && (
           <button
             onClick={handleCopy}
             className="flex items-center gap-1.5 rounded border border-border px-4 py-1.5 text-xs font-medium hover:bg-accent"
@@ -235,11 +278,26 @@ export function GitQuickPull({ projectRoot, onProjectRootChange }: ToolComponent
         )}
       </div>
 
-      {/* ── Status + repo count ── */}
+      {/* ── Status + repo count + progress ── */}
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <span>{status}</span>
-        {repos.length > 0 && <span>找到 {repos.length} 个仓库</span>}
+        {repos.length > 0 && (
+          <span>
+            找到 {repos.length} 个仓库
+            {executing && completedCount > 0 && ` · 已完成 ${completedCount}/${repos.length}`}
+          </span>
+        )}
       </div>
+
+      {/* ── Progress bar ── */}
+      {executing && repos.length > 0 && (
+        <div className="h-1 w-full overflow-hidden rounded bg-border">
+          <div
+            className="h-full bg-primary transition-all duration-300"
+            style={{ width: `${repos.length > 0 ? (completedCount / repos.length) * 100 : 0}%` }}
+          />
+        </div>
+      )}
 
       {/* ── Stats summary ── */}
       {stats && (
@@ -264,16 +322,18 @@ export function GitQuickPull({ projectRoot, onProjectRootChange }: ToolComponent
       )}
 
       {/* ── Log output ── */}
-      {allLogLines.length > 0 && (
+      {logLines.length > 0 && (
         <div className="min-h-0 flex-1 overflow-auto rounded border border-border bg-zinc-900 p-2" ref={logRef}>
           <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed">
-            {allLogLines.map((line, i) => {
+            {logLines.map((line, i) => {
               let color = '#d4d4d4';
               if (line.startsWith('✅')) color = '#4ade80';
               else if (line.startsWith('⚠️')) color = '#facc15';
               else if (line.startsWith('❌')) color = '#f87171';
+              else if (line.startsWith('🎉')) color = '#4ade80';
               else if (line.startsWith('='.repeat(10)) || line.startsWith('-'.repeat(10))) color = '#666666';
               else if (line.startsWith('[')) color = '#8ab4f8';
+              else if (line.startsWith('开始更新') || line.startsWith('更新完成') || line.startsWith('总仓库数') || line.startsWith('成功更新') || line.startsWith('跳过数量') || line.startsWith('失败数量') || line.startsWith('找到 ')) color = '#c0c0c0';
               return (
                 <div key={i} style={{ color }}>
                   {line}
