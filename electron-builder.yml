@@ -27,6 +27,7 @@ extraResources:
 asarUnpack:
   - resources/binaries/**
   - node_modules/node-pty/**
+  - node_modules/better-sqlite3/**
 win:
   target:
     - nsis
