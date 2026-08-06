@@ -4,10 +4,13 @@
  * Ported from the Python `regression_result_analyzer` plugin.
  * Features: scan regression directories, view pass/fail cases by timestamp,
  * aggregate overview, parse compile/sim times, export report.
+ *
+ * Double-click on log path → opens with gvim (Linux) / notepad (Windows).
+ * Double-click on command → sends to terminal for execution.
  */
 
-import { useState, useCallback, useMemo } from 'react';
-import { FolderOpen, Search, RefreshCw, Clock, Download, ChevronRight } from 'lucide-react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { FolderOpen, Search, RefreshCw, Clock, Download, ChevronRight, TerminalSquare, X } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import type { ToolComponentProps } from '../registry';
 import { cn } from '@renderer/lib/utils';
@@ -55,6 +58,59 @@ export function RegressionAnalyzer({ projectRoot, onProjectRootChange }: ToolCom
   const [parsingTimes, setParsingTimes] = useState(false);
   const [status, setStatus] = useState('就绪');
   const [rawData, setRawData] = useState<RawData | null>(null);
+
+  // ── Terminal state ──────────────────────────────────────────────
+  const [terminalOutput, setTerminalOutput] = useState<string[]>([]);
+  const [showTerminal, setShowTerminal] = useState(false);
+  const [terminalRunning, setTerminalRunning] = useState(false);
+  const terminalIdRef = useRef<string | null>(null);
+  const outputEndRef = useRef<HTMLDivElement | null>(null);
+
+  // Auto-scroll terminal output to bottom
+  useEffect(() => {
+    outputEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [terminalOutput]);
+
+  // Listen for terminal data and exit events
+  useEffect(() => {
+    const bridge = window.eventBridge;
+    if (!bridge) return;
+
+    const offData = bridge.onTerminalData((data: { id: string; data: string }) => {
+      if (data.id === terminalIdRef.current) {
+        setTerminalOutput((prev) => {
+          const next = [...prev, data.data];
+          // Keep last 5000 chunks to prevent memory issues
+          if (next.length > 5000) return next.slice(-5000);
+          return next;
+        });
+      }
+    });
+
+    const offExit = bridge.onTerminalExit((data: { id: string; exitCode: number }) => {
+      if (data.id === terminalIdRef.current) {
+        setTerminalRunning(false);
+        setTerminalOutput((prev) => [...prev, `\r\n\x1b[33m[Process exited with code ${data.exitCode}]\x1b[0m\r\n`]);
+      }
+    });
+
+    return () => {
+      offData();
+      offExit();
+    };
+  }, []);
+
+  // Cleanup terminal session on unmount
+  useEffect(() => {
+    return () => {
+      if (terminalIdRef.current) {
+        trpc.terminal.destroy.mutate({ terminalId: terminalIdRef.current }).catch(() => {
+          // Ignore errors during cleanup
+        });
+        terminalIdRef.current = null;
+      }
+    };
+  }, []);
 
   const handleBrowse = useCallback(async () => {
     const res = await trpc.tools.selectDirectory.mutate({
@@ -188,6 +244,84 @@ export function RegressionAnalyzer({ projectRoot, onProjectRootChange }: ToolCom
     }
   }, [rawData, scanData, selectedTs]);
 
+  // ── Double-click: open log file with gvim/notepad ──────────────
+  // Reuses project.openInSystem which uses gvim on Linux, notepad on Windows.
+  const handleOpenLog = useCallback(async (logPath: string | null) => {
+    if (!logPath) {
+      setStatus('日志路径为空');
+      return;
+    }
+    try {
+      await trpc.project.openInSystem.mutate({ path: logPath, type: 'file' });
+      setStatus(`已打开日志: ${logPath}`);
+    } catch (err) {
+      setStatus(`打开日志失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, []);
+
+  // ── Double-click: send command to terminal ─────────────────────
+  // Creates a terminal session (PTY or log-mode), writes the command,
+  // and streams output to the terminal panel at the bottom.
+  const handleExecuteCommand = useCallback(async (command: string) => {
+    if (!command || command.startsWith('无法生成命令') || command.startsWith('命令生成失败')) {
+      setStatus('无效的仿真命令');
+      return;
+    }
+
+    // Confirmation dialog (matches Python version's QMessageBox.question behavior)
+    const confirmed = window.confirm(`确定要执行以下命令吗？\n\n${command}`);
+    if (!confirmed) return;
+
+    // Destroy previous terminal session if exists
+    if (terminalIdRef.current) {
+      try {
+        await trpc.terminal.destroy.mutate({ terminalId: terminalIdRef.current });
+      } catch {
+        // Ignore errors
+      }
+      terminalIdRef.current = null;
+    }
+
+    // Determine cwd: prefer projectRoot, fallback to regDir parent
+    const cwd = projectRoot ?? (regDir ? regDir.replace(/[/\\]work[/\\]regression$/i, '') : undefined);
+
+    try {
+      setStatus('正在创建终端会话...');
+      const session = await trpc.terminal.create.mutate({ cwd });
+
+      terminalIdRef.current = session.id;
+      setTerminalOutput([]);
+      setShowTerminal(true);
+      setTerminalRunning(true);
+
+      // Wait for shell initialization (matches simulation-router pattern)
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Write command + Enter
+      await trpc.terminal.write.mutate({ terminalId: session.id, data: `${command}\r` });
+
+      setStatus(`命令已发送到终端 (session: ${session.id})`);
+    } catch (err) {
+      setStatus(`执行命令失败: ${err instanceof Error ? err.message : String(err)}`);
+      setTerminalRunning(false);
+    }
+  }, [projectRoot, regDir]);
+
+  // Close terminal panel and destroy session
+  const handleCloseTerminal = useCallback(async () => {
+    if (terminalIdRef.current) {
+      try {
+        await trpc.terminal.destroy.mutate({ terminalId: terminalIdRef.current });
+      } catch {
+        // Ignore errors
+      }
+      terminalIdRef.current = null;
+    }
+    setShowTerminal(false);
+    setTerminalRunning(false);
+    setTerminalOutput([]);
+  }, []);
+
   // Filter rows by search text
   const filterRows = useCallback(<T extends { caseName: string }>(rows: T[]): T[] => {
     if (!searchText) return rows;
@@ -290,7 +424,7 @@ export function RegressionAnalyzer({ projectRoot, onProjectRootChange }: ToolCom
           )}
         </div>
 
-        {/* Right panel: tables */}
+        {/* Right panel: tables + terminal output */}
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           {/* Search */}
           <div className="flex items-center gap-2">
@@ -323,20 +457,57 @@ export function RegressionAnalyzer({ projectRoot, onProjectRootChange }: ToolCom
           </div>
 
           {/* Table */}
-          <div className="min-h-0 flex-1 overflow-auto rounded border border-border">
+          <div className={cn('min-h-0 flex-1 overflow-auto rounded border border-border', showTerminal && 'flex-none')}>
             {!scanData ? (
               <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
                 请选择回归目录并点击"扫描"
               </div>
             ) : activeTab === 'overview' ? (
-              <OverviewTable rows={filteredOverview} />
+              <OverviewTable rows={filteredOverview} onOpenLog={handleOpenLog} onExecuteCommand={handleExecuteCommand} />
             ) : activeTab === 'pass' ? (
-              <DetailTable rows={filteredPass} />
+              <DetailTable rows={filteredPass} onOpenLog={handleOpenLog} onExecuteCommand={handleExecuteCommand} />
             ) : (
-              <DetailTable rows={filteredFail} />
+              <DetailTable rows={filteredFail} onOpenLog={handleOpenLog} onExecuteCommand={handleExecuteCommand} />
             )}
           </div>
+
+          {/* ── Terminal output panel ── */}
+          {showTerminal && (
+            <div className="flex h-48 flex-none flex-col rounded border border-border">
+              <div className="flex items-center justify-between border-b border-border bg-muted px-2 py-1">
+                <div className="flex items-center gap-1.5">
+                  <TerminalSquare className="h-3 w-3" />
+                  <span className="text-xs font-semibold">终端输出</span>
+                  {terminalRunning && (
+                    <span className="flex items-center gap-1 text-[10px] text-green-500">
+                      <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-green-500" />
+                      运行中
+                    </span>
+                  )}
+                </div>
+                <button
+                  onClick={handleCloseTerminal}
+                  className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs hover:bg-accent"
+                >
+                  <X className="h-3 w-3" />
+                  关闭
+                </button>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto bg-black p-2">
+                <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-green-400">
+                  {terminalOutput.join('')}
+                </pre>
+                <div ref={outputEndRef} />
+              </div>
+            </div>
+          )}
         </div>
+      </div>
+
+      {/* ── Hint bar ── */}
+      <div className="flex items-center gap-4 text-[10px] text-muted-foreground">
+        <span>💡 双击<span className="text-blue-500">日志</span>列用 gvim 打开日志文件</span>
+        <span>双击<span className="text-green-600">命令</span>列发送仿真命令到终端执行</span>
       </div>
     </div>
   );
@@ -344,7 +515,12 @@ export function RegressionAnalyzer({ projectRoot, onProjectRootChange }: ToolCom
 
 // ── Overview table ─────────────────────────────────────────────────
 
-function OverviewTable({ rows }: { rows: OverviewRow[] }) {
+type TableCallbacks = {
+  onOpenLog: (logPath: string | null) => void;
+  onExecuteCommand: (command: string) => void;
+};
+
+function OverviewTable({ rows, onOpenLog, onExecuteCommand }: { rows: OverviewRow[] } & TableCallbacks) {
   if (rows.length === 0) {
     return <div className="flex h-full items-center justify-center text-xs text-muted-foreground">无数据</div>;
   }
@@ -384,13 +560,21 @@ function OverviewTable({ rows }: { rows: OverviewRow[] }) {
                 {row.seeds.join(', ')}
               </span>
             </td>
-            <td className="border-b border-border px-2 py-1.5">
-              <span className="block max-w-[200px] truncate text-[10px] text-blue-500" title={row.latestLog ?? ''}>
+            <td
+              className="cursor-pointer border-b border-border px-2 py-1.5"
+              onDoubleClick={() => onOpenLog(row.latestLog)}
+              title="双击用 gvim 打开日志文件"
+            >
+              <span className="block max-w-[200px] truncate text-[10px] text-blue-500 hover:underline" title={row.latestLog ?? ''}>
                 {row.latestLog ?? '-'}
               </span>
             </td>
-            <td className="border-b border-border px-2 py-1.5">
-              <span className="block max-w-[300px] truncate font-mono text-[10px] text-green-600" title={row.latestCommand}>
+            <td
+              className="cursor-pointer border-b border-border px-2 py-1.5"
+              onDoubleClick={() => onExecuteCommand(row.latestCommand)}
+              title="双击发送命令到终端执行"
+            >
+              <span className="block max-w-[300px] truncate font-mono text-[10px] text-green-600 hover:underline" title={row.latestCommand}>
                 {row.latestCommand}
               </span>
             </td>
@@ -403,7 +587,7 @@ function OverviewTable({ rows }: { rows: OverviewRow[] }) {
 
 // ── Detail table ───────────────────────────────────────────────────
 
-function DetailTable({ rows }: { rows: CaseRow[] }) {
+function DetailTable({ rows, onOpenLog, onExecuteCommand }: { rows: CaseRow[] } & TableCallbacks) {
   if (rows.length === 0) {
     return <div className="flex h-full items-center justify-center text-xs text-muted-foreground">无数据</div>;
   }
@@ -437,13 +621,21 @@ function DetailTable({ rows }: { rows: CaseRow[] }) {
             <td className="border-b border-border px-2 py-1.5 text-right tabular-nums">
               {row.simTime !== null ? row.simTime.toFixed(2) : '-'}
             </td>
-            <td className="border-b border-border px-2 py-1.5">
-              <span className="block max-w-[200px] truncate text-[10px] text-blue-500" title={row.log ?? ''}>
+            <td
+              className="cursor-pointer border-b border-border px-2 py-1.5"
+              onDoubleClick={() => onOpenLog(row.log)}
+              title="双击用 gvim 打开日志文件"
+            >
+              <span className="block max-w-[200px] truncate text-[10px] text-blue-500 hover:underline" title={row.log ?? ''}>
                 {row.log ?? '-'}
               </span>
             </td>
-            <td className="border-b border-border px-2 py-1.5">
-              <span className="block max-w-[300px] truncate font-mono text-[10px] text-green-600" title={row.command}>
+            <td
+              className="cursor-pointer border-b border-border px-2 py-1.5"
+              onDoubleClick={() => onExecuteCommand(row.command)}
+              title="双击发送命令到终端执行"
+            >
+              <span className="block max-w-[300px] truncate font-mono text-[10px] text-green-600 hover:underline" title={row.command}>
                 {row.command}
               </span>
             </td>
