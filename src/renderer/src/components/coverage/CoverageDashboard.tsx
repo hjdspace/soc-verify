@@ -10,7 +10,7 @@
  *
  * US-29 视图切换已在 Slice 3 的 CoveragePanel 中实现。
  */
-import { useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronRight, ChevronDown, Check, AlertTriangle, X, Minus, Sparkles,
   Loader2, Square, RefreshCw, ArrowUpCircle,
@@ -420,6 +420,8 @@ function TrendChart({
 // ─── 紧凑树表格（仅 line/branch/functional 三列） ────────────────
 
 const COMPACT_METRICS: CoverageMetric[] = ['line', 'branch', 'functional'];
+const COMPACT_ROW_HEIGHT = 32;
+const COMPACT_OVERSCAN = 10;
 
 function CompactTreeTable({
   root,
@@ -438,17 +440,53 @@ function CompactTreeTable({
     return rows;
   }, [root, expanded]);
 
-  const toggleNode = (path: string) => {
+  const toggleNode = useCallback((path: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(path)) next.delete(path);
       else next.add(path);
       return next;
     });
-  };
+  }, []);
 
-  const expandAll = () => setExpanded(new Set(allExpandablePaths));
-  const collapseAll = () => setExpanded(new Set());
+  const expandAll = useCallback(() => setExpanded(new Set(allExpandablePaths)), [allExpandablePaths]);
+  const collapseAll = useCallback(() => setExpanded(new Set()), []);
+
+  // ─── 虚拟滚动 ──────────────────────────────────────────────
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(320);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setViewportHeight(el.clientHeight);
+    const onScroll = () => setScrollTop(el.scrollTop);
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      setViewportHeight(el.clientHeight);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const totalRows = visibleRows.length;
+  const totalHeight = totalRows * COMPACT_ROW_HEIGHT;
+  const startIndex = Math.max(0, Math.floor(scrollTop / COMPACT_ROW_HEIGHT) - COMPACT_OVERSCAN);
+  const endIndex = Math.min(
+    totalRows,
+    Math.ceil((scrollTop + viewportHeight) / COMPACT_ROW_HEIGHT) + COMPACT_OVERSCAN,
+  );
+  const visibleSlice = visibleRows.slice(startIndex, endIndex);
+  const topSpacer = startIndex * COMPACT_ROW_HEIGHT;
+  const bottomSpacer = (totalRows - endIndex) * COMPACT_ROW_HEIGHT;
 
   return (
     <div className="rounded border border-border bg-card">
@@ -470,18 +508,19 @@ function CompactTreeTable({
           </button>
         </div>
       </div>
-      {/* 表格 */}
-      <div className="max-h-[40vh] overflow-auto">
-        <table className="w-full text-xs">
+      {/* 表格（虚拟滚动） */}
+      <div ref={scrollRef} className="max-h-[40vh] overflow-auto">
+        <table className="w-full text-xs" style={{ tableLayout: 'fixed' }}>
           <thead className="sticky top-0 z-10 bg-secondary">
             <tr>
-              <th className="px-2 py-1.5 text-left text-[10px] uppercase text-muted-foreground">
+              <th className="px-2 py-1.5 text-left text-[10px] uppercase text-muted-foreground" style={{ width: '55%' }}>
                 模块
               </th>
               {COMPACT_METRICS.map((m) => (
                 <th
                   key={m}
                   className="px-2 py-1.5 text-right text-[10px] uppercase text-muted-foreground"
+                  style={{ width: '15%' }}
                 >
                   {METRIC_LABELS[m]}
                 </th>
@@ -489,7 +528,12 @@ function CompactTreeTable({
             </tr>
           </thead>
           <tbody>
-            {visibleRows.map(({ node }) => (
+            {topSpacer > 0 && (
+              <tr style={{ height: topSpacer }}>
+                <td colSpan={4} style={{ padding: 0, border: 'none' }} />
+              </tr>
+            )}
+            {visibleSlice.map(({ node }) => (
               <CompactTreeRow
                 key={node.path}
                 node={node}
@@ -498,6 +542,11 @@ function CompactTreeTable({
                 onToggle={toggleNode}
               />
             ))}
+            {bottomSpacer > 0 && (
+              <tr style={{ height: bottomSpacer }}>
+                <td colSpan={4} style={{ padding: 0, border: 'none' }} />
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -505,7 +554,7 @@ function CompactTreeTable({
   );
 }
 
-function CompactTreeRow({
+const CompactTreeRow = memo(function CompactTreeRow({
   node,
   expanded,
   targets,
@@ -520,7 +569,10 @@ function CompactTreeRow({
   const isRoot = node.depth === 0;
 
   return (
-    <tr className={cn('border-t border-border', isRoot && 'bg-secondary/30 font-medium')}>
+    <tr
+      style={{ height: COMPACT_ROW_HEIGHT }}
+      className={cn('border-t border-border', isRoot && 'bg-secondary/30 font-medium')}
+    >
       <td className="px-2 py-1">
         <div className="flex items-center" style={{ paddingLeft: `${node.depth * 14}px` }}>
           {hasChildren ? (
@@ -558,7 +610,7 @@ function CompactTreeRow({
       })}
     </tr>
   );
-}
+});
 
 // ─── 未覆盖项列表（按 metric 切换 tab） ──────────────────────────
 
