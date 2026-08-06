@@ -17,7 +17,7 @@ import { dialog, BrowserWindow } from 'electron';
 
 // ── Batch 3 tool imports ──
 import { checkFiles, scanDirectory } from '../../tools/sv-ifdef-checker';
-import { scanRepos, executePull } from '../../tools/git-quick-pull';
+import { scanRepos, executePull, type GitQuickPullEvent } from '../../tools/git-quick-pull';
 import { parseRegisterTable } from '../../tools/register-table-parser';
 import { parseRegisterFile, generatePreview } from '../../tools/reg2c';
 import {
@@ -641,7 +641,16 @@ const gitQuickPullRouter = t.router({
       };
     })
     .mutation(async ({ input }) => {
-      const result = await executePull(input.repos, input.mode, input.customCommand);
+      // Broadcast real-time log events to all windows (matches violation-router pattern).
+      // Tool windows receive the events via the preload eventBridge.
+      const onLog = (event: GitQuickPullEvent) => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) {
+            win.webContents.send('git-quick-pull:log', event);
+          }
+        }
+      };
+      const result = await executePull(input.repos, input.mode, input.customCommand, onLog);
       return result;
     }),
 });
