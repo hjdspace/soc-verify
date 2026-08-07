@@ -17,11 +17,9 @@
 
 import type Database from 'better-sqlite3';
 import { sessionManager } from '../../agent/session-manager';
-import { pluginLoader } from '../../plugins/loader';
-import { credentialManager } from '../../credentials/credential-manager';
+import { createSessionContext } from '../../agent/session-context-factory';
 import { projectManager } from '../../project/project-manager';
 import { loadSessions } from '../../agent/session-persistence';
-import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../../plugin-adapters';
 import { getTvDb } from '../db/tv-db-cache';
 import { loadTvConfig } from '../tv-config';
 import { getPatterns } from '../db/tv-repository';
@@ -170,45 +168,22 @@ class TVAIAdvisorImpl {
       .sort((a, b) => b.lastActivityAt - a.lastActivityAt)
       .find((session) => session.model?.id)?.model;
 
-    // 加载凭证
-    const credEnv = await credentialManager.buildEnvForAgent();
-    const selectedCred = persistedModel?.providerId
-      ? await credentialManager.get(persistedModel.providerId)
-      : await credentialManager.getDefaultCredential();
-    const provider = persistedModel?.provider
-      ?? (selectedCred
-        ? credentialManager.mapProviderForAgent(selectedCred.providerId)
-        : undefined);
-    const apiKey = selectedCred?.apiKey;
-    const baseUrl = selectedCred?.baseUrl;
-    const model = persistedModel?.id;
-
-    // 创建 plugin adapters
-    const registry = pluginLoader.getRegistry(cwd);
-    const discovery = new PluginBackedDiscovery(cwd, registry);
-    const simulation = new PluginBackedSimulation(registry);
-    const coverage = new PluginBackedCoverage(cwd, registry);
-
-    // 创建会话
-    const sessionId = await sessionManager.createSession({
+    // 创建会话（adapter 创建 + 凭证解析 + sessionManager.createSession
+    // 统一由 createSessionContext 工厂处理）
+    const ctx = await createSessionContext({
       projectId,
       cwd,
-      provider,
-      model,
-      apiKey,
-      baseUrl,
-      discovery,
-      simulationAdapter: simulation,
-      coverageAdapter: coverage,
-      env: credEnv,
+      model: persistedModel?.id,
+      persistedModel,
+      includeCoverageManager: false,
+      ensurePlugins: false,
       systemPrompt: TV_AI_SYSTEM_PROMPT,
     });
 
     // 注册 TV 专用工具（在 hostTools 上注册，AI 可通过 tool_call 调用）
-    // 参考 ErrorAnalysisSessionFactory 中注册 runsim_retry 的模式
     const db = getTvDb(projectId);
     const tvTools = createTVTools(db);
-    const sessionEntry = sessionManager.getSession(sessionId);
+    const sessionEntry = sessionManager.getSession(ctx.sessionId);
     if (sessionEntry) {
       for (const tool of tvTools) {
         sessionEntry.hostTools.registerCustom(
@@ -220,7 +195,7 @@ class TVAIAdvisorImpl {
       }
     }
 
-    return sessionId;
+    return ctx.sessionId;
   }
 
   /**
