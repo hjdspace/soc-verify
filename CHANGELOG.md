@@ -6,6 +6,29 @@
 
 ---
 
+## [0.2.4](https://github.com/hjdspace/soc-verify/compare/v0.2.3...v0.2.4) (2026-08-08)
+
+### Features
+
+* **case-db:** 实现基于 SQLite 的用例数据库方案，新增 Case Database、Scanner 和 getSubsystems 从 DB 读取
+* **case-db:** CaseStatsService 全量从 DB 读取，Repository 新增 getLatestStatusBySubsys/getAllLatestStatuses/getCaseNameToSubsysMap，移除 PluginBackedDiscovery 依赖和 TTL 缓存
+* **case:** 新增 case 信息的 phase 字段支持
+* **database:** 新增 SQLite 数据库查看功能
+* **unisoc:** 新增 USVP 伪子系统支持，改进 case parser
+* **frontend:** SubsysList 文件节点默认折叠，按需点击展开，保留批量展开/折叠和搜索点击功能
+
+### Bug Fixes
+
+* **case-scanner:** 调整清除数据顺序以适配外键约束
+
+### Refactor
+
+* **violation-router:** 实现 ADR 0017，将 case→subsys 数据源从插件切换到 cases DB
+* **SubsysList:** 重构子系统用例加载和展开逻辑
+* **case-scanner:** 简化同步模式清理逻辑
+
+---
+
 ## [0.2.3](https://github.com/hjdspace/soc-verify/compare/v0.2.2...v0.2.3) (2026-08-07)
 
 ### Features
