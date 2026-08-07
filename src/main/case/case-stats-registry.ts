@@ -1,24 +1,58 @@
 /**
- * Case Stats Registry — per-project CaseStatsService 生命周期管理。
+ * Case Stats Registry — per-project CaseStatsService + DB 生命周期管理。
  *
  * 镜像 SimulationRegistry / CoverageRegistry 的单例模式：
- * 一个 projectRoot 对应一个 CaseStatsService，懒创建，跨调用复用。
- * 这样 PluginBackedDiscovery 的 caseCache 也能跨调用复用。
+ * 一个 projectRoot 对应一个 CaseStatsService + CaseDatabase，懒创建，跨调用复用。
+ * 关闭项目时关闭 DB 连接（ADR 0017）。
  */
 
 import type { PluginRegistry } from '@shared/plugin-types';
 import type { SimulationManager } from '../simulation/simulation-manager';
 import { PluginBackedDiscovery } from '../plugin-adapters/discovery';
 import { CaseStatsService } from './case-stats-service';
+import { initDatabase, closeDatabase, getDbPath, type CaseDatabase } from './db/case-database';
+import { CaseScanner } from './case-scanner';
 
 class CaseStatsRegistryImpl {
   private services = new Map<string, CaseStatsService>();
+  private dbs = new Map<string, CaseDatabase>();
+  private scanners = new Map<string, CaseScanner>();
+
+  /**
+   * 获取或创建指定项目的 DB 连接（懒创建）。
+   * DB 文件位于 .socverify/cases.db（ADR 0017）。
+   */
+  getOrCreateDb(projectRoot: string): CaseDatabase {
+    let db = this.dbs.get(projectRoot);
+    if (!db) {
+      const dbPath = getDbPath(projectRoot);
+      db = initDatabase(dbPath);
+      this.dbs.set(projectRoot, db);
+    }
+    return db;
+  }
+
+  /**
+   * 获取或创建指定项目的 CaseScanner（懒创建）。
+   */
+  getOrCreateScanner(projectRoot: string, registry: PluginRegistry): CaseScanner {
+    let scanner = this.scanners.get(projectRoot);
+    if (!scanner) {
+      const db = this.getOrCreateDb(projectRoot);
+      scanner = new CaseScanner(projectRoot, registry, db);
+      this.scanners.set(projectRoot, scanner);
+    }
+    return scanner;
+  }
 
   /**
    * 获取或创建指定项目的 CaseStatsService。
    *
+   * 当 DB 可用时，CaseStatsService 从 DB 读取数据（秒开）。
+   * DB 不可用时回退到插件 discovery（原行为）。
+   *
    * @param projectRoot 项目根路径
-   * @param registry 插件注册表（用于创建 PluginBackedDiscovery）
+   * @param registry 插件注册表（用于创建 PluginBackedDiscovery + CaseScanner）
    * @param simulationManager 仿真管理器（可选，可在创建后通过 setSimulationManager 注入）
    */
   getOrCreate(
@@ -28,8 +62,9 @@ class CaseStatsRegistryImpl {
   ): CaseStatsService {
     let service = this.services.get(projectRoot);
     if (!service) {
+      const db = this.getOrCreateDb(projectRoot);
       const discovery = new PluginBackedDiscovery(projectRoot, registry);
-      service = new CaseStatsService({ discovery, simulationManager });
+      service = new CaseStatsService({ discovery, simulationManager, db });
       this.services.set(projectRoot, service);
     } else if (simulationManager) {
       // 已存在的 service 也同步更新 simulationManager 引用
@@ -50,6 +85,16 @@ class CaseStatsRegistryImpl {
     return this.services.get(projectRoot) ?? null;
   }
 
+  /** 获取指定项目的 DB 实例（若已创建）。 */
+  getDb(projectRoot: string): CaseDatabase | null {
+    return this.dbs.get(projectRoot) ?? null;
+  }
+
+  /** 获取指定项目的 Scanner 实例（若已创建）。 */
+  getScanner(projectRoot: string): CaseScanner | null {
+    return this.scanners.get(projectRoot) ?? null;
+  }
+
   /** 清除指定项目 discovery 内部缓存（case_cfg 修改后刷新用）。
    * 传入 subsys 时仅清除该子系统的用例缓存；不传时清除全部缓存。 */
   clearDiscoveryCache(projectRoot: string, subsys?: string): void {
@@ -58,11 +103,24 @@ class CaseStatsRegistryImpl {
   }
 
   remove(projectRoot: string): void {
+    // Close DB connection
+    const db = this.dbs.get(projectRoot);
+    if (db) {
+      closeDatabase(db);
+      this.dbs.delete(projectRoot);
+    }
     this.services.delete(projectRoot);
+    this.scanners.delete(projectRoot);
   }
 
   clearAll(): void {
+    // Close all DB connections
+    for (const db of this.dbs.values()) {
+      closeDatabase(db);
+    }
+    this.dbs.clear();
     this.services.clear();
+    this.scanners.clear();
   }
 }
 

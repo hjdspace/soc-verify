@@ -16,6 +16,7 @@ import { caseIndexManager } from '../../search/case-index-manager';
 import { caseStatsRegistry } from '../../case/case-stats-registry';
 import { simulationRegistry } from '../../simulation/simulation-registry';
 import type { CaseStatsService } from '../../case/case-stats-service';
+import { getScanMetadata } from '../../case/db/case-repository';
 import type {
   PluginConfig,
   PluginConfigEntry,
@@ -29,6 +30,8 @@ import type {
  *
  * 不主动创建 SimulationManager——仅在已存在时注入，避免查询路径过早创建。
  * SimulationManager 会在首次仿真运行时由 simulation-service 创建并回填到 service。
+ *
+ * 当 DB 可用时（ADR 0017），CaseStatsService 从 DB 读取数据（秒开）。
  */
 async function getCaseStatsService(projectId: string): Promise<CaseStatsService> {
   const project = requireProject(projectId);
@@ -36,6 +39,44 @@ async function getCaseStatsService(projectId: string): Promise<CaseStatsService>
   const registry = pluginLoader.getRegistry(project.rootPath);
   const simManager = simulationRegistry.get(project.rootPath);
   return caseStatsRegistry.getOrCreate(project.rootPath, registry, simManager);
+}
+
+/**
+ * 获取或创建指定项目的 CaseScanner（ADR 0017）。
+ * 用于 refreshCases 全量扫描和项目打开时后台增量扫描。
+ */
+async function getCaseScanner(projectId: string) {
+  const project = requireProject(projectId);
+  await ensurePluginsLoaded(project.rootPath);
+  const registry = pluginLoader.getRegistry(project.rootPath);
+  return caseStatsRegistry.getOrCreateScanner(project.rootPath, registry);
+}
+
+/**
+ * 后台触发 Case Scanner 增量扫描（fire-and-forget）。
+ *
+ * 项目打开时调用：有 DB 数据则 UI 秒开，后台扫描有差异则更新 DB。
+ * 扫描失败只记日志，不影响 UI 响应。
+ */
+function triggerBackgroundScan(projectId: string, projectRoot: string): void {
+  // fire-and-forget — 不 await，不阻塞 UI 响应
+  ensurePluginsLoaded(projectRoot)
+    .then(() => {
+      const registry = pluginLoader.getRegistry(projectRoot);
+      if (registry.subsysDiscoverers.length === 0 || registry.caseParsers.length === 0) {
+        return;
+      }
+      const scanner = caseStatsRegistry.getOrCreateScanner(projectRoot, registry);
+      return scanner.fullScan().then((result) => {
+        console.log(
+          `[router:triggerBackgroundScan] project=${projectId}, ` +
+          `scanned ${result.subsysCount} subsystems, ${result.caseCount} cases`,
+        );
+      });
+    })
+    .catch((err) => {
+      console.error(`[router:triggerBackgroundScan] background scan failed for project=${projectId}:`, err);
+    });
 }
 
 export const projectRouter = t.router({
@@ -58,6 +99,10 @@ export const projectRouter = t.router({
       await pluginLoader.activateForEvent(info.rootPath, 'onProjectOpen');
       await pluginLoader.emitEvent(info.rootPath, 'project.opened', info);
       const _registry = pluginLoader.getRegistry(info.rootPath);
+
+      // 后台触发 Case Scanner 增量扫描（ADR 0017）
+      // 有 DB 数据则 UI 秒开，后台扫描有差异则更新 DB
+      triggerBackgroundScan(info.id, info.rootPath);
 
       // Return plugin load info alongside project info
       const plugins = loadResults.map((r) => ({
@@ -93,6 +138,10 @@ export const projectRouter = t.router({
       const loadResults = await pluginLoader.loadPlugins(info.rootPath);
       await pluginLoader.activateForEvent(info.rootPath, 'onProjectOpen');
       await pluginLoader.emitEvent(info.rootPath, 'project.opened', info);
+
+      // 后台触发 Case Scanner 增量扫描（ADR 0017）
+      triggerBackgroundScan(info.id, info.rootPath);
+
       const plugins = loadResults.map((r) => ({
         id: r.manifest.id,
         apiVersion: r.manifest.apiVersion,
@@ -124,6 +173,8 @@ export const projectRouter = t.router({
       await pluginLoader.emitEvent(project.rootPath, 'project.closed', project);
       await pluginLoader.deactivateProject(project.rootPath);
       pluginLoader.clearProject(project.rootPath);
+      // 关闭 DB 连接，释放资源（ADR 0017）
+      caseStatsRegistry.remove(project.rootPath);
       return { ok: true };
     }),
 
@@ -841,6 +892,37 @@ export const projectRouter = t.router({
       caseStatsRegistry.clearDiscoveryCache(project.rootPath, input.subsys);
       // 清除搜索索引缓存（下次搜索时重建）
       caseIndexManager.invalidate(input.projectId);
-      return { ok: true };
+
+      // 触发 Case Scanner 全量扫描并更新 DB（ADR 0017）
+      const scanner = await getCaseScanner(input.projectId);
+      const scanResult = await scanner.fullScan({ sync: true });
+      console.log(`[router:refreshCases] scan complete: ${scanResult.subsysCount} subsystems, ${scanResult.caseCount} cases`);
+
+      return { ok: true, scanResult };
+    }),
+
+  /**
+   * 查询后台扫描状态（ADR 0017）。
+   *
+   * 返回 idle / scanning / complete + 最后扫描时间。
+   * 前端可轮询此 procedure 在扫描完成后刷新 UI。
+   */
+  scanStatus: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .query(({ input }) => {
+      const project = requireProject(input.projectId);
+      const db = caseStatsRegistry.getDb(project.rootPath);
+      if (!db) {
+        return { status: 'idle' as const, lastScanTime: null };
+      }
+      const status = getScanMetadata(db, 'scanStatus') ?? 'idle';
+      const lastScanTime = getScanMetadata(db, 'lastScanTime');
+      return { status, lastScanTime };
     }),
 });

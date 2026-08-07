@@ -223,3 +223,25 @@ _Avoid_: violation web view, timing report page
 **Pattern Normalization**:
 对 Check 信息进行标准化以实现模糊匹配的规则：层级路径必须完全匹配；括号前的检查类型必须匹配；括号内按逗号分割为三部分，前两部分去除冒号后的时间信息只匹配冒号前的内容，第三部分完全忽略。
 _Avoid_: check normalization, fuzzy match rule
+
+### 用例数据库域
+
+**Case Database**:
+项目级 SQLite 数据库（`.socverify/cases.db`），作为用例数据的单一数据源，包含子系统、用例和仿真历史三张表。所有消费者（UI、AI Agent、时序违例、Dashboard）统一从 DB 读取数据，插件降级为「扫描器」仅在刷新时调用。
+_Avoid_: case store, case cache
+
+**Case Scanner**:
+`SubsysDiscoveryPlugin` 和 `CaseParserPlugin` 在数据库架构中的新角色——不再作为实时数据源，而是在项目打开（后台增量扫描）或用户点击「刷新」时被调用，扫描结果写入 Case Database。
+_Avoid_: case data source, case provider
+
+**Simulation Run Record**:
+`simulation_runs` 表中的一行记录，代表一次仿真运行的完整信息（case_name, subsys, status, start_time, end_time, duration_ms, corner, seed, options_json）。由 `run:completed` 事件监听器写入 DB，支持 Dashboard 的时间趋势查询和不稳定用例识别。
+_Avoid_: sim log, run entry
+
+**Simulation Phase**:
+用例所属的仿真阶段（如 DVR1、DVR2、DVR3、DVS1、DVS2、POST），由 `CaseParserPlugin` 从 case_cfg 解析返回。作为用例的属性存储在 `cases` 表的 `phase` 列中，Dashboard 可按阶段分组查询通过率。阶段列表项目相关，可配置。
+_Avoid_: verification stage, simulation stage
+
+**Case Scan**:
+通过 Case Scanner 全量扫描项目用例配置文件并写入 Case Database 的过程。项目打开时若 DB 已有数据则秒开，后台并行执行 Case Scan 增量更新；用户点击「刷新」按钮时触发全量 Case Scan。
+_Avoid_: case discovery, case indexing

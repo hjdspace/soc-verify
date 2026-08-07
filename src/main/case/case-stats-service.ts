@@ -152,6 +152,8 @@ export type CaseStatsServiceOptions = {
   discovery: SubsysDiscovery;
   /** 仿真管理器（用于 status 实时 join，可选；为 null 时 status 一律 pending）。 */
   simulationManager?: SimulationManager | null;
+  /** 用例数据库实例（可选）。提供时 listSubsysWithCaseCount 从 DB 读取，秒开。 */
+  db?: import('./db/case-database').CaseDatabase | null;
 };
 
 /**
@@ -164,6 +166,7 @@ export type CaseStatsServiceOptions = {
 export class CaseStatsService {
   private readonly discovery: SubsysDiscovery;
   private simulationManager: SimulationManager | null;
+  private readonly db: import('./db/case-database').CaseDatabase | null;
   /** 概览缓存（TTL 5s，避免频繁切换概览页时重复全量计算）。 */
   private overviewCache: { data: ProjectOverview; timestamp: number } | null = null;
   private static readonly OVERVIEW_CACHE_TTL_MS = 5_000;
@@ -171,6 +174,7 @@ export class CaseStatsService {
   constructor(opts: CaseStatsServiceOptions) {
     this.discovery = opts.discovery;
     this.simulationManager = opts.simulationManager ?? null;
+    this.db = opts.db ?? null;
   }
 
   /** 注入仿真管理器（SimulationManager 可能在 service 创建后才被创建）。
@@ -209,9 +213,25 @@ export class CaseStatsService {
   }
 
   /**
-   * 列出子系统，并填充真实的 caseCount（原 PluginBackedDiscovery 永远返回 0）。
+   * 列出子系统，并填充真实的 caseCount。
+   *
+   * 当 DB 可用时，从 DB 读取（秒开，后台扫描后自动更新）。
+   * 当 DB 不可用时，回退到插件 discovery（原行为）。
    */
   async listSubsysWithCaseCount(filter?: string): Promise<SubsysInfo[]> {
+    // DB 路径：从 cases.db 读取（ADR 0017）
+    if (this.db) {
+      const { getSubsysWithCaseCount } = await import('./db/case-repository');
+      const rows = getSubsysWithCaseCount(this.db, filter);
+      return rows.map((r) => ({
+        name: r.name,
+        path: r.path ?? '',
+        caseCount: r.caseCount,
+        description: r.description ?? undefined,
+      }));
+    }
+
+    // 回退路径：插件 discovery（原行为）
     const subsys = await this.discovery.listSubsys(filter);
     // 并行计算每个 subsys 的用例数（discovery 内部有缓存，开销可控）
     const withCounts = await Promise.all(
