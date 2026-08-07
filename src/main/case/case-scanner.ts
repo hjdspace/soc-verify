@@ -90,7 +90,7 @@ export class CaseScanner {
           baseCase: c.baseCase,
           base: c.base,
           block: c.block,
-          phase: (c as { phase?: string }).phase,
+          phase: c.phase,
         });
       }
     }

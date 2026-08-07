@@ -288,5 +288,62 @@ describe('Case Scanner', () => {
       expect(cases[1].phase).toBe('POST');
       expect(cases[2].phase).toBeUndefined();
     });
+
+    it('backward compat: plugin returning no phase field does not error, phase is undefined in DB', async () => {
+      // Plugin returns cases without phase — simulates existing plugins
+      // that haven't been updated to support the phase field yet.
+      const subsysPlugin = makeMockSubsysDiscoverer(['cpu', 'gpu']);
+      const casePlugin = makeMockCaseParser({
+        cpu: [
+          { id: 't1', name: 'test1', path: '/proj/cpu/test1' },
+          { id: 't2', name: 'test2', path: '/proj/cpu/test2' },
+        ],
+        gpu: [
+          { id: 't3', name: 'test3', path: '/proj/gpu/test3' },
+        ],
+      });
+      const registry = makeRegistry(subsysPlugin, casePlugin);
+      const scanner = new CaseScanner(projectRoot, registry, db);
+
+      // Should not throw
+      const result = await scanner.fullScan();
+      expect(result.subsysCount).toBe(2);
+      expect(result.caseCount).toBe(3);
+
+      // All cases should have undefined phase in DB
+      const cpuCases = getCases(db, 'cpu');
+      expect(cpuCases).toHaveLength(2);
+      for (const c of cpuCases) {
+        expect(c.phase).toBeUndefined();
+      }
+
+      const gpuCases = getCases(db, 'gpu');
+      expect(gpuCases).toHaveLength(1);
+      expect(gpuCases[0].phase).toBeUndefined();
+    });
+
+    it('mixed phase: some cases have phase, some do not, in same subsys', async () => {
+      const subsysPlugin = makeMockSubsysDiscoverer(['cpu']);
+      const casePlugin = makeMockCaseParser({
+        cpu: [
+          { id: 't1', name: 'test_dvr1', path: '/proj/cpu/test_dvr1', phase: 'DVR1' },
+          { id: 't2', name: 'test_dvr2', path: '/proj/cpu/test_dvr2', phase: 'DVR2' },
+          { id: 't3', name: 'test_nophase', path: '/proj/cpu/test_nophase' },
+          { id: 't4', name: 'test_post', path: '/proj/cpu/test_post', phase: 'POST' },
+        ],
+      });
+      const registry = makeRegistry(subsysPlugin, casePlugin);
+      const scanner = new CaseScanner(projectRoot, registry, db);
+
+      await scanner.fullScan();
+
+      const cases = getCases(db, 'cpu');
+      expect(cases).toHaveLength(4);
+      const byName = new Map(cases.map((c) => [c.name, c.phase]));
+      expect(byName.get('test_dvr1')).toBe('DVR1');
+      expect(byName.get('test_dvr2')).toBe('DVR2');
+      expect(byName.get('test_nophase')).toBeUndefined();
+      expect(byName.get('test_post')).toBe('POST');
+    });
   });
 });

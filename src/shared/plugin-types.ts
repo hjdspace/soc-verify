@@ -63,6 +63,8 @@ export interface CaseInfo {
   base?: string;
   /** Simulation -block parameter parsed from config file path */
   block?: string;
+  /** Verification phase (e.g. DVR1/DVR2/DVR3/DVS1/DVS2/POST) — optional, parsed by plugin from case_cfg */
+  phase?: string;
 }
 
 export interface SubsysInfo {

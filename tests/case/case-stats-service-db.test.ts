@@ -233,6 +233,40 @@ describe('CaseStatsService — DB-backed (ADR 0017 Issue #4)', () => {
       expect(overflow?.baseCase).toBe('cpu_alu_basic');
     });
 
+    it('returns phase field from DB in listCasesWithStatus', async () => {
+      insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
+      insertCases(db, [
+        { name: 'test_dvr1', subsys: 'cpu', path: '/proj/cpu/test_dvr1', phase: 'DVR1' },
+        { name: 'test_post', subsys: 'cpu', path: '/proj/cpu/test_post', phase: 'POST' },
+        { name: 'test_nophase', subsys: 'cpu', path: '/proj/cpu/test_nophase' },
+      ]);
+      const service = new CaseStatsService({ db });
+
+      const result = await service.listCasesWithStatus('cpu');
+      expect(result).toHaveLength(3);
+
+      const dvr1 = result.find((c) => c.name === 'test_dvr1');
+      expect(dvr1?.phase).toBe('DVR1');
+
+      const post = result.find((c) => c.name === 'test_post');
+      expect(post?.phase).toBe('POST');
+
+      const nophase = result.find((c) => c.name === 'test_nophase');
+      expect(nophase?.phase).toBeUndefined();
+    });
+
+    it('returns phase field from DB in searchCases', async () => {
+      insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
+      insertCases(db, [
+        { name: 'test_dvr1', subsys: 'cpu', path: '/proj/cpu/test_dvr1', phase: 'DVR1' },
+      ]);
+      const service = new CaseStatsService({ db });
+
+      const result = await service.searchCases('dvr');
+      expect(result).toHaveLength(1);
+      expect(result[0].phase).toBe('DVR1');
+    });
+
     it('does not read from SimulationManager history (status from DB only)', async () => {
       seedDb(db);
       // SimulationManager has history entries, but no simulation_runs in DB

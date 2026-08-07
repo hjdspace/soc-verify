@@ -432,5 +432,6 @@ function caseRowToInfo(
     baseCase: row.baseCase,
     base: row.base,
     block: row.block,
+    phase: row.phase,
   };
 }
