@@ -287,7 +287,6 @@ export function CoverageTreeTable({ data, targets }: CoverageTreeTableProps) {
   }, []);
 
   const totalRows = visibleRows.length;
-  const totalHeight = totalRows * ROW_HEIGHT;
   const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
   const endIndex = Math.min(
     totalRows,

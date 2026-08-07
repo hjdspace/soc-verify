@@ -14,8 +14,8 @@
  * - Search filter per tab
  */
 
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { RefreshCw, Play, Search, GitBranch, Tag, Layers } from 'lucide-react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import { RefreshCw, Play, Search, GitBranch, Layers } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import type { ToolComponentProps } from '../registry';
 import { cn } from '@renderer/lib/utils';
@@ -40,8 +40,6 @@ export function GitManager({ projectRoot }: ToolComponentProps) {
   const [dialog, setDialog] = useState<DialogState>(null);
   const [status, setStatus] = useState('就绪');
   const [progress, setProgress] = useState<{ value: number; message: string } | null>(null);
-  const logRef = useRef<HTMLDivElement>(null);
-
   // Auto-discover repos on mount when projectRoot is available
   const discoverRepos = useCallback(async () => {
     if (!projectRoot) {

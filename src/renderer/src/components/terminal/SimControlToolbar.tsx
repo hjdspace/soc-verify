@@ -14,7 +14,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { Play, Square, RefreshCw, Copy, Check } from 'lucide-react';
+import { Square, RefreshCw, Copy, Check } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useTerminalStore } from '@renderer/stores/terminal';

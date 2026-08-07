@@ -3,7 +3,6 @@ import { Terminal as TerminalIcon, Plus, X, ChevronDown, ArrowUpToLine } from 'l
 import { useTerminalStore } from '@renderer/stores/terminal';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
-import { TerminalView } from '@renderer/components/terminal/TerminalView';
 import { TerminalPanel } from '@renderer/components/terminal/TerminalPanel';
 import { cn } from '@renderer/lib/utils';
 import { PluginViewHost } from '@renderer/components/plugins/PluginViewHost';

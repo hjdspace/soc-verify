@@ -94,6 +94,12 @@ function triggerOnChange(data: Sheet[]): void {
   });
 }
 
+async function advanceTimers(ms: number): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+}
+
 describe('XlsxEditor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -194,7 +200,7 @@ describe('XlsxEditor', () => {
       render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
 
       // 刷新微任务让 loadXlsx resolve
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
       expect(screen.getByTestId('fortune-workbook')).toBeInTheDocument();
 
       // 模拟用户编辑触发 onChange
@@ -204,7 +210,7 @@ describe('XlsxEditor', () => {
       expect(saveXlsxMock).not.toHaveBeenCalled();
 
       // 推进 2 秒触发防抖
-      await vi.advanceTimersByTimeAsync(2000);
+      await advanceTimers(2000);
 
       expect(saveXlsxMock).toHaveBeenCalledTimes(1);
       expect(saveXlsxMock).toHaveBeenCalledWith({
@@ -226,20 +232,20 @@ describe('XlsxEditor', () => {
 
       render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
 
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
       expect(screen.getByTestId('fortune-workbook')).toBeInTheDocument();
 
       // 连续触发 3 次 onChange，每次间隔 500ms（均在 2 秒防抖窗口内）
       triggerOnChange([{ name: 'Sheet1', celldata: [] }]);
-      await vi.advanceTimersByTimeAsync(500);
+      await advanceTimers(500);
       triggerOnChange([{ name: 'Sheet1', celldata: [] }]);
-      await vi.advanceTimersByTimeAsync(500);
+      await advanceTimers(500);
       triggerOnChange([{ name: 'Sheet1', celldata: [] }]);
 
       expect(saveXlsxMock).not.toHaveBeenCalled();
 
       // 最后一次 onChange 后 2 秒触发保存
-      await vi.advanceTimersByTimeAsync(2000);
+      await advanceTimers(2000);
 
       expect(saveXlsxMock).toHaveBeenCalledTimes(1);
     });
@@ -263,13 +269,13 @@ describe('XlsxEditor', () => {
 
       render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
 
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
       expect(screen.getByTestId('fortune-workbook')).toBeInTheDocument();
 
       triggerOnChange([{ name: 'Sheet1', celldata: [] }]);
-      await vi.advanceTimersByTimeAsync(2000);
+      await advanceTimers(2000);
       // 刷新微任务让 setSaveState('saving') 渲染到 DOM
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
 
       expect(screen.getByText(/保存中/)).toBeInTheDocument();
     });
@@ -284,14 +290,14 @@ describe('XlsxEditor', () => {
 
       render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
 
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
       expect(screen.getByTestId('fortune-workbook')).toBeInTheDocument();
 
       triggerOnChange([{ name: 'Sheet1', celldata: [] }]);
-      await vi.advanceTimersByTimeAsync(2000);
+      await advanceTimers(2000);
 
       // 刷新微任务让 saveXlsx resolve
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
 
       expect(screen.getByText(/已保存/)).toBeInTheDocument();
     });
@@ -306,12 +312,12 @@ describe('XlsxEditor', () => {
 
       render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
 
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
       expect(screen.getByTestId('fortune-workbook')).toBeInTheDocument();
 
       triggerOnChange([{ name: 'Sheet1', celldata: [] }]);
-      await vi.advanceTimersByTimeAsync(2000);
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(2000);
+      await advanceTimers(0);
 
       expect(screen.getByText(/保存失败/)).toBeInTheDocument();
     });
@@ -331,7 +337,7 @@ describe('XlsxEditor', () => {
 
       render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
 
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
 
       expect(registerEditorMock).toHaveBeenCalledWith({ filePath: '/tmp/sheet.xlsx' });
     });
@@ -342,7 +348,7 @@ describe('XlsxEditor', () => {
       });
 
       const { unmount } = render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
 
       unmount();
 
@@ -356,7 +362,7 @@ describe('XlsxEditor', () => {
       saveXlsxMock.mockResolvedValue({ success: true });
 
       render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
       expect(screen.getByTestId('fortune-workbook')).toBeInTheDocument();
 
       // 模拟用户编辑触发 onChange（产生未保存的修改）
@@ -371,7 +377,7 @@ describe('XlsxEditor', () => {
           listener('/tmp/sheet.xlsx');
         }
       });
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
 
       // 立即调用 saveXlsx（不等待防抖）
       expect(saveXlsxMock).toHaveBeenCalledTimes(1);
@@ -386,7 +392,7 @@ describe('XlsxEditor', () => {
       saveXlsxMock.mockResolvedValue({ success: true });
 
       render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
 
       triggerOnChange([{ name: 'Sheet1', celldata: [] }]);
 
@@ -396,7 +402,7 @@ describe('XlsxEditor', () => {
           listener('/tmp/other.xlsx');
         }
       });
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
 
       expect(saveXlsxMock).not.toHaveBeenCalled();
       expect(flushDoneMock).not.toHaveBeenCalled();
@@ -416,7 +422,7 @@ describe('XlsxEditor', () => {
       });
 
       render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
       expect(loadXlsxMock).toHaveBeenCalledTimes(1);
 
       // 触发 file-changed 事件（AI 修改文件后通知前端重载）
@@ -425,7 +431,7 @@ describe('XlsxEditor', () => {
           listener('/tmp/sheet.xlsx');
         }
       });
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
 
       // 应再次调用 loadXlsx
       expect(loadXlsxMock).toHaveBeenCalledTimes(2);
@@ -437,7 +443,7 @@ describe('XlsxEditor', () => {
       });
 
       render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
       expect(loadXlsxMock).toHaveBeenCalledTimes(1);
 
       act(() => {
@@ -445,7 +451,7 @@ describe('XlsxEditor', () => {
           listener('/tmp/other.xlsx');
         }
       });
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
 
       expect(loadXlsxMock).toHaveBeenCalledTimes(1);
     });
@@ -456,7 +462,7 @@ describe('XlsxEditor', () => {
       });
 
       const { unmount } = render(<XlsxEditor filePath="/tmp/sheet.xlsx" />);
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceTimers(0);
 
       expect(flushRequestListeners).toHaveLength(1);
       expect(fileChangedListeners).toHaveLength(1);

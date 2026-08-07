@@ -21,7 +21,6 @@ interface TerminalPanelProps {
 
 export function TerminalPanel({ terminalId, tabTitle }: TerminalPanelProps) {
   const activeRuns = useSimulationStore((s) => s.activeRuns);
-  const createTabForSession = useTerminalStore((s) => s.createTabForSession);
   const setActiveTab = useTerminalStore((s) => s.setActiveTab);
 
   // Find the simulation run associated with this terminal

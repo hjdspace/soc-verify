@@ -155,8 +155,8 @@ function patchUtilsJs(utilsPath) {
 
   const original = readFileSync(utilsPath, 'utf-8');
 
-  // Check if already patched
-  if (original.includes('socverify-patch')) {
+  // Check if the current patch version is already present.
+  if (original.includes('[socverify-patch-v2]')) {
     console.log('[patch-native] Already patched: node-pty/lib/utils.js');
     return false;
   }
@@ -170,8 +170,7 @@ function patchUtilsJs(utilsPath) {
     '                lastError = e;\n' +
     '            }';
 
-  // Replacement: try asar unpacked path before falling through to lastError
-  const newCatch =
+  const oldV1Catch =
     '            catch (e) {\n' +
     '                // [socverify-patch] asar unpacked fallback\n' +
     '                // When running inside an Electron asar archive, the native\n' +
@@ -190,7 +189,33 @@ function patchUtilsJs(utilsPath) {
     '                lastError = e;\n' +
     '            }';
 
-  const patched = original.replace(oldCatch, newCatch);
+  // Replacement: try asar unpacked path before falling through to lastError
+  const newCatch =
+    '            catch (e) {\n' +
+    '                // [socverify-patch-v2] asar unpacked fallback\n' +
+    '                // When running inside an Electron asar archive, the native\n' +
+    '                // .node binary is unpacked to app.asar.unpacked/ but require()\n' +
+    '                // from inside the asar fails to find it. Resolve the absolute\n' +
+    '                // path and try the unpacked location directly.\n' +
+    '                var _unpackedError;\n' +
+    '                try {\n' +
+    '                    var _p = require("path");\n' +
+    '                    var _fs = require("fs");\n' +
+    '                    var _rp = _p.resolve(__dirname, dir + name + ".node");\n' +
+    '                    var _up = _rp.replace("app.asar", "app.asar.unpacked").replace("node_modules.asar", "node_modules.asar.unpacked");\n' +
+    '                    if (_up !== _rp && _fs.existsSync(_up)) {\n' +
+    '                        return { dir: dir, module: require(_up) };\n' +
+    '                    }\n' +
+    '                } catch (_e2) { _unpackedError = _e2; }\n' +
+    '                if (_unpackedError) {\n' +
+    '                    lastError = _unpackedError;\n' +
+    '                } else if (!lastError || e.code !== "MODULE_NOT_FOUND") {\n' +
+    '                    lastError = e;\n' +
+    '                }\n' +
+    '            }';
+
+  const sourceCatch = original.includes('[socverify-patch]') ? oldV1Catch : oldCatch;
+  const patched = original.replace(sourceCatch, newCatch);
 
   if (original === patched) {
     console.warn('[patch-native] Could not find catch block in utils.js — skipping');
@@ -198,7 +223,7 @@ function patchUtilsJs(utilsPath) {
   }
 
   writeFileSync(utilsPath, patched, 'utf-8');
-  console.log('[patch-native] Patched: node-pty/lib/utils.js (asar unpacked fallback)');
+  console.log('[patch-native] Patched: node-pty/lib/utils.js (asar unpacked fallback v2)');
   return true;
 }
 

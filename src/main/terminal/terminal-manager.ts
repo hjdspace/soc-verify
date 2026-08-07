@@ -236,16 +236,20 @@ function buildDiagnosticMessage(err: unknown): string {
   let category: string;
   let hint: string;
 
-  if (errStr.includes('Module did not self-register') || errStr.includes('NODE_MODULE_VERSION')) {
+  if (errStr.includes('GLIBC_') || errStr.includes('GLIBCXX_') || errStr.includes('CXXABI_')) {
+    category = 'Native binary requires a newer Linux system runtime';
+    hint = 'The packaged node-pty binary was built against a newer glibc or libstdc++ than this system provides. ' +
+      'Rebuild the Linux package with `npm run package:linux`; its pinned Rocky Linux 8 build rejects pty.node ' +
+      'artifacts that are incompatible with CentOS 8.';
+  } else if (errStr.includes('Module did not self-register') || errStr.includes('NODE_MODULE_VERSION')) {
     category = 'ABI mismatch (native module compiled for a different Node/Electron version)';
     hint = 'The node-pty binary was compiled against a different ABI than the current Electron runtime. ' +
       'Run `npx @electron/rebuild -f -w node-pty` to recompile for Electron.';
   } else if (errStr.includes('Cannot find module') || errStr.includes('MODULE_NOT_FOUND')) {
     if (binaryFound) {
-      category = 'Native binary exists but cannot be loaded (missing system dependencies)';
-      hint = 'The node-pty binary is present but fails to load, usually because a shared library is missing on this system. ' +
-        'On Linux, install: `sudo apt install libutil1` (or the equivalent for your distro). ' +
-        'On older Linux kernels (< 3.8), openpty() may be unavailable.';
+      category = 'Native binary exists but node-pty obscured the loader error';
+      hint = 'The binary is present, so installing libutil without an `ldd` error is not justified. ' +
+        'Repackage after running `npm run patch:native`; patch v2 preserves the actual native loader error.';
     } else if (dirsExist && process.platform === 'linux') {
       // Directory exists but pty.node is missing — typical for Linux where node-pty
       // doesn't ship prebuilds. This is the most common packaging issue.
@@ -263,8 +267,7 @@ function buildDiagnosticMessage(err: unknown): string {
   } else if (errStr.includes('libutil.so') || errStr.includes('libuv.so') || errStr.includes('cannot open shared object file')) {
     category = 'Missing shared library on this system';
     hint = 'A system shared library required by node-pty is missing. ' +
-      'On Linux, install: `sudo apt install libutil1 libtinfo5` (or equivalent for your distro). ' +
-      'On AppImage, the host system must provide these libraries — AppImage does not bundle them.';
+      'Run `ldd` on the packaged pty.node to identify the exact missing library, then install its CentOS/RHEL package.';
   } else {
     category = 'Unknown error';
     hint = 'See the full error message above for details. ' +

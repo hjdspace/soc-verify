@@ -49,8 +49,6 @@ export function RepoCard({
     return name.endsWith('_sys');
   })();
 
-  const closeMenu = useCallback(() => setShowMenu(false), []);
-
   useEffect(() => {
     if (!showMenu) return;
     const handleClick = (e: MouseEvent) => {

@@ -478,7 +478,6 @@ function CompactTreeTable({
   }, []);
 
   const totalRows = visibleRows.length;
-  const totalHeight = totalRows * COMPACT_ROW_HEIGHT;
   const startIndex = Math.max(0, Math.floor(scrollTop / COMPACT_ROW_HEIGHT) - COMPACT_OVERSCAN);
   const endIndex = Math.min(
     totalRows,

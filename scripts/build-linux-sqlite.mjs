@@ -113,7 +113,7 @@ function getNpmRegistry() {
 
 // ─── Build on Linux (direct) ────────────────────────────
 
-function buildOnLinux(electronVersion, sqliteVersion) {
+function buildOnLinux(electronVersion, _sqliteVersion) {
   console.log('[build-linux-sqlite] Building on Linux directly...');
 
   // Remove the prebuilt binary so binding.gyp's prebuild_exists check

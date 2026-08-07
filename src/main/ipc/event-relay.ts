@@ -80,7 +80,7 @@ export class EventRelay {
 // ── Helper factories for common transform patterns ──────────────────────
 
 /** Wrap a record with a type tag: `(record) => { type, record }` */
-function withTypeTag<T>(type: string): (record: unknown) => { type: string; record: unknown } {
+function withTypeTag(type: string): (record: unknown) => { type: string; record: unknown } {
   return (record: unknown) => ({ type, record });
 }
 

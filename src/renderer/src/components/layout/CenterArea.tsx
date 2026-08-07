@@ -5,7 +5,6 @@ import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useTerminalStore } from '@renderer/stores/terminal';
-import { TerminalView } from '@renderer/components/terminal/TerminalView';
 import { TerminalPanel } from '@renderer/components/terminal/TerminalPanel';
 import { CoveragePanel } from '@renderer/components/coverage/CoveragePanel';
 import { RegressionPanel } from '@renderer/components/regression/RegressionPanel';

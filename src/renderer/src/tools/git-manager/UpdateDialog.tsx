@@ -28,7 +28,6 @@ export function UpdateDialog({
   const [logs, setLogs] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
   const [stats, setStats] = useState<{ total: number; success: number; failed: Array<{ name: string; reason: string }> } | null>(null);
-  const [confirmed, setConfirmed] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
   const envName = repoType.toUpperCase();

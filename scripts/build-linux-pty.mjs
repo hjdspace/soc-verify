@@ -2,32 +2,28 @@
  * Build node-pty native binary for Linux (linux-x64).
  *
  * Problem:
- *   node-pty 1.1.0 ships prebuilds for darwin (macOS) and win32 (Windows),
- *   but NOT for Linux. When packaging a Linux AppImage on Windows/macOS,
- *   the Linux pty.node binary is missing, causing terminal functionality
- *   to fail on Linux with:
- *     "Cannot find module './prebuilds/linux-x64//pty.node'"
+ *   node-pty does not ship Linux prebuilds. A binary compiled on a modern
+ *   distro can also require a newer glibc than enterprise targets such as
+ *   CentOS 8 (glibc 2.28), causing the packaged AppImage to fall back to
+ *   log mode even though pty.node is present.
  *
  * Solution:
- *   This script compiles node-pty for Linux + Electron ABI:
- *   - On Linux: compiles directly using @electron/rebuild
- *   - On Windows/macOS: uses Docker to cross-compile in a Linux container
- *   The resulting pty.node is placed in prebuilds/linux-x64/ where
- *   node-pty's loadNativeModule() finds it at runtime.
+ *   Build in a pinned Rocky Linux 8 container, statically link the C++
+ *   runtime, and reject binaries that require glibc newer than 2.28. The
+ *   resulting pty.node is placed in prebuilds/linux-x64/.
  *
  * Usage:
  *   node scripts/build-linux-pty.mjs           # build if missing
  *   node scripts/build-linux-pty.mjs --force   # force rebuild
  *
  * Requirements:
- *   - On Windows/macOS: Docker Desktop must be running
- *   - On Linux: build-essential, python3, make must be installed
+ *   - Docker must be running
  *
  * Environment variables:
  *   NPM_REGISTRY  - override npm registry (e.g. https://registry.npmmirror.com)
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { platform } from 'node:os';
@@ -37,14 +33,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
 const PTY_DIR = join(ROOT, 'node_modules', 'node-pty');
+const BUILD_DIR = join(PTY_DIR, 'build');
 const PREBUILD_DIR = join(PTY_DIR, 'prebuilds', 'linux-x64');
 const PREBUILD_FILE = join(PREBUILD_DIR, 'pty.node');
-const PREBUILD_HELPER = join(PREBUILD_DIR, 'spawn-helper');
 const CACHE_DIR = join(ROOT, '.cache', 'linux-pty');
 const VERSION_STAMP = join(CACHE_DIR, '.version');
 
-const IS_LINUX = platform() === 'linux';
 const IS_WIN = platform() === 'win32';
+const DOCKER_NODE_VERSION = '22.18.0';
+const BUILD_PROFILE = 'rockylinux8-glibc228-static-cxx-v2';
 
 // ─── Version resolution ─────────────────────────────────
 
@@ -103,59 +100,10 @@ function getNpmRegistry() {
   return 'https://registry.npmjs.org/';
 }
 
-// ─── Build on Linux (direct) ────────────────────────────
-
-function buildOnLinux(electronVersion, _ptyVersion) {
-  console.log('[build-linux-pty] Building on Linux directly...');
-
-  // Run @electron/rebuild to compile node-pty for Electron's ABI
-  const result = spawnSync('npx', [
-    '@electron/rebuild',
-    '-v', electronVersion,
-    '-f', '-w', 'node-pty',
-    '--arch', 'x64',
-  ], {
-    cwd: ROOT,
-    stdio: 'inherit',
-    shell: true,
-    encoding: 'utf-8',
-  });
-
-  if (result.status !== 0) {
-    throw new Error(
-      '@electron/rebuild failed.\n' +
-      'Make sure build tools are installed:\n' +
-      '  Ubuntu/Debian: sudo apt install build-essential python3 make\n' +
-      '  Fedora/RHEL:   sudo dnf install gcc-c++ make python3'
-    );
-  }
-
-  // The binary is at node_modules/node-pty/build/Release/pty.node
-  const builtFile = join(PTY_DIR, 'build', 'Release', 'pty.node');
-  if (!existsSync(builtFile)) {
-    throw new Error(`Expected build output not found: ${builtFile}`);
-  }
-
-  // Copy to prebuilds directory
-  mkdirSync(PREBUILD_DIR, { recursive: true });
-  copyFileSync(builtFile, PREBUILD_FILE);
-  console.log(`[build-linux-pty] Copied to ${PREBUILD_FILE}`);
-
-  // Copy spawn-helper (required by UnixTerminal to fork the child process)
-  const builtHelper = join(PTY_DIR, 'build', 'Release', 'spawn-helper');
-  if (existsSync(builtHelper)) {
-    copyFileSync(builtHelper, PREBUILD_HELPER);
-    console.log(`[build-linux-pty] Copied spawn-helper to ${PREBUILD_HELPER}`);
-  } else {
-    console.warn(`[build-linux-pty] WARNING: spawn-helper not found at ${builtHelper}`);
-    console.warn('[build-linux-pty] Terminal functionality may be impaired.');
-  }
-}
-
-// ─── Build via Docker (cross-compile) ───────────────────
+// ─── Reproducible Linux build ───────────────────────────
 
 function buildViaDocker(electronVersion, ptyVersion) {
-  console.log('[build-linux-pty] Building via Docker (cross-compile)...');
+  console.log('[build-linux-pty] Building via Docker (Rocky Linux 8 / glibc 2.28)...');
 
   const registry = getNpmRegistry();
   mkdirSync(CACHE_DIR, { recursive: true });
@@ -163,21 +111,35 @@ function buildViaDocker(electronVersion, ptyVersion) {
   // Convert path for Docker volume mount (Windows needs forward slashes)
   const cacheDir = CACHE_DIR.replace(/\\/g, '/');
 
-  // Docker build script: install node-pty, rebuild for Electron, extract pty.node
+  // Node is only the build runner. The native binary is compiled and linked
+  // inside Rocky Linux 8, which fixes the maximum glibc baseline at 2.28.
   const dockerScript = [
     'set -e',
-    `echo "[docker] Installing build dependencies..."`,
-    'apt-get update -qq && apt-get install -y -qq build-essential python3 make > /dev/null 2>&1',
+    'dnf install -y gcc-toolset-10-gcc gcc-toolset-10-gcc-c++ make python3 tar gzip xz curl binutils > /dev/null',
+    `curl -fsSL https://nodejs.org/dist/v${DOCKER_NODE_VERSION}/node-v${DOCKER_NODE_VERSION}-linux-x64.tar.gz | tar -xz -C /usr/local --strip-components=1`,
+    'source /opt/rh/gcc-toolset-10/enable',
+    'export LDFLAGS="-static-libstdc++ -static-libgcc"',
     'echo "[docker] Setting up build environment..."',
     'mkdir -p /tmp/pty-build && cd /tmp/pty-build',
     'npm init -y > /dev/null',
-    `npm install node-pty@${ptyVersion} --registry ${registry} 2>&1 | tail -5`,
+    `npm install node-pty@${ptyVersion} --ignore-scripts --registry ${registry} 2>&1 | tail -5`,
     `echo "[docker] Rebuilding node-pty for Electron ${electronVersion}..."`,
-    `npx @electron/rebuild -v ${electronVersion} -f -w node-pty --arch x64 2>&1 | tail -10`,
-    'echo "[docker] Extracting pty.node and spawn-helper..."',
+    `npx @electron/rebuild@4.2.0 -v ${electronVersion} -f -w node-pty --arch x64 --build-from-source 2>&1 | tail -20`,
+    'echo "[docker] Verifying CentOS 8 compatibility..."',
+    'required_glibc=$(readelf --version-info node_modules/node-pty/build/Release/pty.node | grep -o "GLIBC_[0-9.]*" | sort -Vu | tail -1)',
+    'required_glibcxx=$(readelf --version-info node_modules/node-pty/build/Release/pty.node | grep -o "GLIBCXX_[0-9.]*" | sort -Vu | tail -1)',
+    'test -n "$required_glibc"',
+    'test "$(printf "%s\\n" "$required_glibc" "GLIBC_2.28" | sort -V | tail -1)" = "GLIBC_2.28"',
+    'test -z "$required_glibcxx" || test "$(printf "%s\\n" "$required_glibcxx" "GLIBCXX_3.4.25" | sort -V | tail -1)" = "GLIBCXX_3.4.25"',
+    '! readelf -d node_modules/node-pty/build/Release/pty.node | grep -q "libstdc++.so"',
+    'echo "[docker] Maximum required glibc: $required_glibc"',
+    'echo "[docker] Maximum required glibcxx: ${required_glibcxx:-none}"',
+    '! ldd node_modules/node-pty/build/Release/pty.node | grep -q "not found"',
+    'echo "[docker] Running PTY spawn/input/output/resize/exit smoke test..."',
+    `node -e 'const pty=require("./node_modules/node-pty");let out="";const p=pty.spawn("/bin/bash",[],{cols:80,rows:24});const timer=setTimeout(()=>{console.error(out);process.exit(1)},5000);p.onData(d=>out+=d);p.onExit(e=>{clearTimeout(timer);process.exit(e.exitCode===0&&out.includes("__PTY_OK__")?0:1)});p.resize(100,30);p.write("echo __PTY_OK__; exit\\n")'`,
+    'echo "[docker] Extracting pty.node..."',
     'mkdir -p /output',
     'cp node_modules/node-pty/build/Release/pty.node /output/pty.node',
-    'cp node_modules/node-pty/build/Release/spawn-helper /output/spawn-helper',
     'echo "[docker] Build complete!"',
   ].join(' && ');
 
@@ -185,12 +147,14 @@ function buildViaDocker(electronVersion, ptyVersion) {
     'run', '--rm',
     '--platform', 'linux/amd64',
     '-v', `${cacheDir}:/output`,
-    'node:22-bookworm',
+    'rockylinux:8',
     'bash', '-c', dockerScript,
   ];
 
   console.log('[build-linux-pty] Launching Docker container...');
-  console.log(`[build-linux-pty]   Image: node:22-bookworm (linux/amd64)`);
+  console.log('[build-linux-pty]   Image: rockylinux:8 (linux/amd64)');
+  console.log(`[build-linux-pty]   Node.js: ${DOCKER_NODE_VERSION} (build runner only)`);
+  console.log('[build-linux-pty]   Target glibc: <= 2.28 (CentOS 8)');
   console.log(`[build-linux-pty]   Electron: ${electronVersion}`);
   console.log(`[build-linux-pty]   node-pty: ${ptyVersion}`);
   console.log(`[build-linux-pty]   Registry: ${registry}\n`);
@@ -204,7 +168,7 @@ function buildViaDocker(electronVersion, ptyVersion) {
   if (result.status !== 0) {
     throw new Error(
       'Docker build failed.\n' +
-      'Make sure Docker Desktop is running.\n' +
+      'Make sure Docker is running and can access the configured npm registry.\n' +
       'On Apple Silicon Macs, QEMU emulation will be used (slower but functional).'
     );
   }
@@ -218,16 +182,13 @@ function buildViaDocker(electronVersion, ptyVersion) {
   mkdirSync(PREBUILD_DIR, { recursive: true });
   copyFileSync(cachedFile, PREBUILD_FILE);
   console.log(`[build-linux-pty] Copied to ${PREBUILD_FILE}`);
+}
 
-  // Copy spawn-helper from cache
-  const cachedHelper = join(CACHE_DIR, 'spawn-helper');
-  if (existsSync(cachedHelper)) {
-    copyFileSync(cachedHelper, PREBUILD_HELPER);
-    console.log(`[build-linux-pty] Copied spawn-helper to ${PREBUILD_HELPER}`);
-  } else {
-    console.warn(`[build-linux-pty] WARNING: spawn-helper not found at ${cachedHelper}`);
-    console.warn('[build-linux-pty] Terminal functionality may be impaired.');
-  }
+function preparePackageLayout() {
+  // node-pty checks build/Release before prebuilds/. Removing this directory
+  // prevents a stale host or modern-Linux binary from shadowing our verified
+  // CentOS 8-compatible prebuild in the AppImage.
+  rmSync(BUILD_DIR, { recursive: true, force: true });
 }
 
 // ─── Main ───────────────────────────────────────────────
@@ -246,7 +207,7 @@ async function main() {
   const electronVersion = readVersion(join(ROOT, 'node_modules', 'electron', 'package.json'));
   const ptyVersion = readVersion(join(PTY_DIR, 'package.json'));
   // Version key includes both versions so stale binaries are detected after upgrades
-  const versionKey = `electron-${electronVersion}_pty-${ptyVersion}`;
+  const versionKey = `electron-${electronVersion}_pty-${ptyVersion}_${BUILD_PROFILE}`;
 
   console.log(`[build-linux-pty] Electron version: ${electronVersion}`);
   console.log(`[build-linux-pty] node-pty version: ${ptyVersion}`);
@@ -257,6 +218,7 @@ async function main() {
   const force = process.argv.includes('--force');
   if (!force && existsSync(PREBUILD_FILE) && checkVersionStamp(versionKey)) {
     const stats = statSync(PREBUILD_FILE);
+    preparePackageLayout();
     console.log(`[build-linux-pty] Linux prebuild already exists (${(stats.size / 1024).toFixed(0)} KB), skipping.`);
     console.log('[build-linux-pty] Use --force to rebuild.');
     return;
@@ -272,31 +234,13 @@ async function main() {
 
   // Build
   try {
-    if (IS_LINUX) {
-      buildOnLinux(electronVersion, ptyVersion);
-    } else {
-      if (!isDockerAvailable()) {
-        console.error('[build-linux-pty] ERROR: Docker is required for cross-compilation on ' + platform() + '.');
-        console.error('');
-        console.error('[build-linux-pty] Options:');
-        console.error('[build-linux-pty]   1. Install Docker Desktop and run this script again');
-        console.error('[build-linux-pty]   2. Build on a Linux machine (or WSL2):');
-        console.error('[build-linux-pty]      # In WSL2 or on a Linux machine:');
-        console.error('[build-linux-pty]      npm run build:linux-pty');
-        console.error('[build-linux-pty]   3. Manually compile on Linux and copy pty.node to:');
-        console.error(`[build-linux-pty]      ${PREBUILD_FILE}`);
-        console.error('');
-        console.error('[build-linux-pty] Manual compilation on Linux:');
-        console.error('[build-linux-pty]   sudo apt install build-essential python3 make');
-        console.error('[build-linux-pty]   npx @electron/rebuild -v ' + electronVersion + ' -f -w node-pty');
-        console.error('[build-linux-pty]   cp node_modules/node-pty/build/Release/pty.node \\');
-        console.error('[build-linux-pty]      node_modules/node-pty/prebuilds/linux-x64/pty.node');
-        console.error('[build-linux-pty]   cp node_modules/node-pty/build/Release/spawn-helper \\');
-        console.error('[build-linux-pty]      node_modules/node-pty/prebuilds/linux-x64/spawn-helper');
-        process.exit(1);
-      }
-      buildViaDocker(electronVersion, ptyVersion);
+    if (!isDockerAvailable()) {
+      throw new Error(
+        `Docker is required on ${platform()} so node-pty is always built against the pinned CentOS 8 baseline.`
+      );
     }
+    buildViaDocker(electronVersion, ptyVersion);
+    preparePackageLayout();
   } catch (err) {
     console.error(`[build-linux-pty] ERROR: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
