@@ -1,9 +1,12 @@
 /**
  * Time Analyzer — simulation time and memory analysis logic.
  *
- * Ported from the Python `time_analyzer` plugin.
+ * Ported from the Python `time_analyzer` plugin + `utils/log_analyze_utils.py`
+ * + `utils/time_unit_converter.py`.
+ *
  * Features: scan case directories, extract compile/sim time and memory
- * from log files, unit conversion, Excel export.
+ * from log files (xrun / VCS format), unit conversion (minutes/hours/days),
+ * CSV export, default directory resolution ($PROJ_WORK).
  */
 
 import { readFile, writeFile, readdir } from 'node:fs/promises';
@@ -12,7 +15,7 @@ import { join } from 'node:path';
 
 // ── Types ──────────────────────────────────────────────────────────
 
-export type TimeUnit = 'seconds' | 'minutes' | 'hours';
+export type TimeUnit = 'minutes' | 'hours' | 'days';
 
 export type CaseTimeData = {
   case: string;
@@ -28,73 +31,150 @@ export type AnalysisResult = {
   totals: CaseTimeData;
 };
 
+// ── Default directory resolution ───────────────────────────────────
+
+/**
+ * Get the default analysis directory.
+ *
+ * Priority: $PROJ_WORK environment variable → process.cwd().
+ * Matches Python's `get_default_analysis_dir()`.
+ */
+export function getDefaultAnalysisDir(): string {
+  const projWork = process.env.PROJ_WORK;
+  if (projWork && existsSync(projWork)) {
+    return projWork;
+  }
+  return process.cwd();
+}
+
 // ── Time unit conversion ───────────────────────────────────────────
 
-const UNIT_FACTORS: Record<TimeUnit, number> = {
-  seconds: 60, // minutes → seconds: multiply by 60
-  minutes: 1, // already in minutes
-  hours: 1 / 60, // minutes → hours: divide by 60
+/**
+ * Conversion factors: how many minutes one unit represents.
+ * (Python CONVERSION_FACTORS maps unit → minutes-per-unit.)
+ */
+const UNIT_TO_MINUTES: Record<TimeUnit, number> = {
+  minutes: 1,
+  hours: 60,
+  days: 1440, // 24 * 60
 };
 
+/**
+ * Precision (decimal places) per unit, matching Python's UNIT_PRECISION.
+ */
+const UNIT_PRECISION: Record<TimeUnit, number> = {
+  minutes: 2,
+  hours: 2,
+  days: 3,
+};
+
+/** Display name for each unit (Chinese). */
+const UNIT_DISPLAY_NAMES: Record<TimeUnit, string> = {
+  minutes: '分钟',
+  hours: '小时',
+  days: '天',
+};
+
+/**
+ * Convert a time value from minutes to the target unit.
+ * Matches Python's `TimeUnitConverter.convert_time(value, MINUTES, target)`.
+ */
 export function convertTime(minutes: number, targetUnit: TimeUnit): number {
-  return minutes * UNIT_FACTORS[targetUnit];
+  if (minutes === 0) return 0;
+  return minutes / UNIT_TO_MINUTES[targetUnit];
 }
 
+/** Get the display label for a time unit. */
 export function getUnitLabel(unit: TimeUnit): string {
-  switch (unit) {
-    case 'seconds': return '秒';
-    case 'minutes': return '分钟';
-    case 'hours': return '小时';
-  }
+  return UNIT_DISPLAY_NAMES[unit];
 }
 
+/**
+ * Format a time value (given in minutes) for display in the target unit.
+ *
+ * Matches Python's `TimeUnitConverter.format_time()`:
+ * 1. Convert to target unit
+ * 2. Format to unit-specific precision
+ * 3. Strip trailing zeros (and trailing dot if any)
+ */
 export function formatTime(minutes: number, unit: TimeUnit): string {
+  if (minutes === 0) return '0';
+
   const value = convertTime(minutes, unit);
-  if (value === 0) return '0';
-  if (value < 0.01) return value.toFixed(4);
-  if (value < 1) return value.toFixed(3);
-  return value.toFixed(2);
+  const precision = UNIT_PRECISION[unit];
+
+  // Format to fixed precision, then strip trailing zeros
+  let formatted = value.toFixed(precision);
+  if (formatted.includes('.')) {
+    formatted = formatted.replace(/0+$/, '').replace(/\.$/, '');
+  }
+  return formatted;
+}
+
+/** Get all supported time units in display order. */
+export function getAllUnits(): TimeUnit[] {
+  return ['minutes', 'hours', 'days'];
+}
+
+/**
+ * Build a table header string like "编译时间(分钟)".
+ * Matches Python's `TimeUnitConverter.get_table_header()`.
+ */
+export function getTableHeader(baseName: string, unit: TimeUnit): string {
+  return `${baseName}(${UNIT_DISPLAY_NAMES[unit]})`;
 }
 
 // ── Log parsing ────────────────────────────────────────────────────
 
 /**
- * Extract simulation time from a log file.
- * Looks for patterns like "CPU time: 123.45s" or "Total time: 5m30s".
- * Returns time in minutes.
+ * Extract time from a log file.
+ *
+ * Ported from Python `utils/log_analyze_utils.get_time_from_log`.
+ *
+ * Strategy:
+ * 1. Try xrun format: `xrun: Time - <seconds>s`
+ * 2. Try VCS format (requires "Compilation Performance Summary" in content):
+ *    - Sim log (is_sim_log=True): find "SimuLation Performance Summary"
+ *      section, then `Elapsed Time : <sec> sec` (capital T)
+ *    - Compile log (is_sim_log=False): `Elapsed time : <sec> sec` (lowercase t)
+ *
+ * Returns time in **minutes**, or null if not found.
  */
-export async function getTimeFromLog(logPath: string, _isSimLog = false): Promise<number | null> {
+export async function getTimeFromLog(
+  logPath: string,
+  isSimLog = false,
+): Promise<number | null> {
   if (!existsSync(logPath)) return null;
 
   try {
     const content = await readFile(logPath, 'utf-8');
-    const lines = content.split('\n');
 
-    // Common patterns for time extraction
-    const patterns = [
-      /CPU\s*time:\s*(\d+(?:\.\d+)?)\s*s/i,
-      /Total\s*time:\s*(\d+(?:\.\d+)?)\s*s/i,
-      /Elapsed\s*time:\s*(\d+(?:\.\d+)?)\s*s/i,
-      /Simulation\s*time:\s*(\d+(?:\.\d+)?)\s*s/i,
-      /real\s+(\d+)m(\d+(?:\.\d+)?)s/i, // Linux time format: real 5m30.123s
-      / totalTime:\s*(\d+(?:\.\d+)?)\s*s/i,
-    ];
+    // 1. Try xrun format: xrun: Time - 123.45s
+    const xrunMatch = content.match(/xrun: Time - (\d+\.?\d*)s/);
+    if (xrunMatch) {
+      const seconds = parseFloat(xrunMatch[1]);
+      return Math.round((seconds / 60) * 100) / 100;
+    }
 
-    // Search from the end of the file (last 200 lines)
-    const searchLines = lines.slice(-200);
-    for (let i = searchLines.length - 1; i >= 0; i--) {
-      const line = searchLines[i];
-      for (const pattern of patterns) {
-        const match = line.match(pattern);
-        if (match) {
-          if (pattern.source.includes('real')) {
-            // Format: real 5m30.123s
-            const minutes = parseInt(match[1], 10);
-            const seconds = parseFloat(match[2]);
-            return minutes + seconds / 60;
+    // 2. Try VCS format
+    if (content.includes('Compilation Performance Summary')) {
+      if (isSimLog) {
+        // Sim log: locate the simulation section first
+        if (content.includes('SimuLation Performance Summary')) {
+          // Note: Python uses capital "L" in "SimuLation"
+          const simPart = content.split('SimuLation Performance Summary').pop() ?? '';
+          const simMatch = simPart.match(/Elapsed Time\s*:\s*(\d+)\s*sec/);
+          if (simMatch) {
+            const simTime = parseFloat(simMatch[1]);
+            return Math.round((simTime / 60) * 100) / 100;
           }
-          const seconds = parseFloat(match[1]);
-          return seconds / 60;
+        }
+      } else {
+        // Compile log: find first "Elapsed time"
+        const compileMatch = content.match(/Elapsed time\s*:\s*(\d+)\s*sec/);
+        if (compileMatch) {
+          const compileTime = parseFloat(compileMatch[1]);
+          return Math.round((compileTime / 60) * 100) / 100;
         }
       }
     }
@@ -107,33 +187,36 @@ export async function getTimeFromLog(logPath: string, _isSimLog = false): Promis
 
 /**
  * Extract memory usage from a log file.
- * Looks for patterns like "Memory: 1234 MB" or "Max memory: 2.5 GB".
- * Returns memory in MB.
+ *
+ * Ported from Python `utils/log_analyze_utils.get_memory_from_log`.
+ *
+ * - Sim log (is_sim_log=True): `xmsim: Memory Usage - Final: XXX.XM`
+ * - Compile log (is_sim_log=False): `xmelab: Memory Usage - Final: XXX.XM`
+ *
+ * Returns memory in **MB**, or null if not found.
  */
-export async function getMemoryFromLog(logPath: string, _isSimLog = false): Promise<number | null> {
+export async function getMemoryFromLog(
+  logPath: string,
+  isSimLog = false,
+): Promise<number | null> {
   if (!existsSync(logPath)) return null;
 
   try {
     const content = await readFile(logPath, 'utf-8');
-    const lines = content.split('\n');
 
-    const patterns = [
-      /Max\s*memory:\s*(\d+(?:\.\d+)?)\s*(MB|GB)/i,
-      /Memory\s*usage:\s*(\d+(?:\.\d+)?)\s*(MB|GB)/i,
-      /Memory:\s*(\d+(?:\.\d+)?)\s*(MB|GB)/i,
-      /Peak\s*memory:\s*(\d+(?:\.\d+)?)\s*(MB|GB)/i,
-    ];
-
-    const searchLines = lines.slice(-200);
-    for (let i = searchLines.length - 1; i >= 0; i--) {
-      const line = searchLines[i];
-      for (const pattern of patterns) {
-        const match = line.match(pattern);
-        if (match) {
-          const value = parseFloat(match[1]);
-          const unit = match[2].toUpperCase();
-          return unit === 'GB' ? value * 1024 : value;
-        }
+    if (isSimLog) {
+      // Sim log: xmsim: Memory Usage - Final: XXX.XM
+      const match = content.match(/xmsim: Memory Usage - Final:\s*(\d+\.?\d*)M/);
+      if (match) {
+        const memoryMb = parseFloat(match[1]);
+        return Math.round(memoryMb * 10) / 10;
+      }
+    } else {
+      // Compile log: xmelab: Memory Usage - Final: XXX.XM
+      const match = content.match(/xmelab: Memory Usage - Final:\s*(\d+\.?\d*)M/);
+      if (match) {
+        const memoryMb = parseFloat(match[1]);
+        return Math.round(memoryMb * 10) / 10;
       }
     }
 
@@ -148,6 +231,8 @@ export async function getMemoryFromLog(logPath: string, _isSimLog = false): Prom
 /**
  * Scan a directory for case subdirectories with log folders,
  * extract time and memory data from compile and sim logs.
+ *
+ * Ported from Python `AnalysisThread.run()`.
  */
 export async function analyzeDirectory(
   analysisDir: string,
@@ -195,7 +280,7 @@ export async function analyzeDirectory(
     const compileMemory = await getMemoryFromLog(compileLog, false);
     const simMemory = await getMemoryFromLog(simLog, true);
 
-    // Skip if no time data found
+    // Skip if no time data found (both compile and sim returned null)
     if (compileTime === null && simTime === null) continue;
 
     const total = (compileTime ?? 0) + (simTime ?? 0);
@@ -232,10 +317,17 @@ export async function analyzeDirectory(
   return { cases: caseData, totals };
 }
 
-// ── Excel export (CSV format for simplicity) ───────────────────────
+// ── CSV export ──────────────────────────────────────────────────────
 
-/** Export analysis results to CSV file. */
-export async function exportToCsv(data: AnalysisResult, savePath: string, unit: TimeUnit = 'minutes'): Promise<void> {
+/**
+ * Export analysis results to CSV file.
+ * Matches Python's `export_to_excel()` data layout (but in CSV format).
+ */
+export async function exportToCsv(
+  data: AnalysisResult,
+  savePath: string,
+  unit: TimeUnit = 'minutes',
+): Promise<void> {
   const unitLabel = getUnitLabel(unit);
   const headers = [
     '用例名称',
