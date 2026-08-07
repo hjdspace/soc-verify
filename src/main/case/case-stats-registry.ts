@@ -8,7 +8,6 @@
 
 import type { PluginRegistry } from '@shared/plugin-types';
 import type { SimulationManager } from '../simulation/simulation-manager';
-import { PluginBackedDiscovery } from '../plugin-adapters/discovery';
 import { CaseStatsService } from './case-stats-service';
 import { initDatabase, closeDatabase, getDbPath, type CaseDatabase } from './db/case-database';
 import { CaseScanner } from './case-scanner';
@@ -50,23 +49,22 @@ class CaseStatsRegistryImpl {
   /**
    * 获取或创建指定项目的 CaseStatsService。
    *
-   * 当 DB 可用时，CaseStatsService 从 DB 读取数据（秒开）。
-   * DB 不可用时回退到插件 discovery（原行为）。
+   * ADR 0017 Issue #4: CaseStatsService 全量从 DB 读取，不再依赖 PluginBackedDiscovery。
+   * DB 始终可用（getOrCreateDb 懒创建），所有读取走 DB。
    *
    * @param projectRoot 项目根路径
-   * @param registry 插件注册表（用于创建 PluginBackedDiscovery + CaseScanner）
+   * @param _registry 插件注册表（保留参数兼容性，CaseScanner 仍需要，CaseStatsService 不再使用）
    * @param simulationManager 仿真管理器（可选，可在创建后通过 setSimulationManager 注入）
    */
   getOrCreate(
     projectRoot: string,
-    registry: PluginRegistry,
+    _registry: PluginRegistry,
     simulationManager?: SimulationManager | null,
   ): CaseStatsService {
     let service = this.services.get(projectRoot);
     if (!service) {
       const db = this.getOrCreateDb(projectRoot);
-      const discovery = new PluginBackedDiscovery(projectRoot, registry);
-      service = new CaseStatsService({ discovery, simulationManager, db });
+      service = new CaseStatsService({ db, simulationManager });
       this.services.set(projectRoot, service);
     } else if (simulationManager) {
       // 已存在的 service 也同步更新 simulationManager 引用
@@ -129,11 +127,11 @@ class CaseStatsRegistryImpl {
     return this.scanners.get(projectRoot) ?? null;
   }
 
-  /** 清除指定项目 discovery 内部缓存（case_cfg 修改后刷新用）。
-   * 传入 subsys 时仅清除该子系统的用例缓存；不传时清除全部缓存。 */
-  clearDiscoveryCache(projectRoot: string, subsys?: string): void {
-    const service = this.services.get(projectRoot);
-    if (service) service.clearDiscoveryCache(subsys);
+  /** No-op（ADR 0017 — DB 是 source of truth，无 discovery 缓存可清除）。
+   * 保留方法签名以兼容调用方（project-router.refreshCases / violation-router.autoFillSubsys）。 */
+  clearDiscoveryCache(_projectRoot: string, _subsys?: string): void {
+    // No-op — DB is the single source of truth.
+    // The scanner handles updating the DB; callers just read fresh data.
   }
 
   remove(projectRoot: string): void {

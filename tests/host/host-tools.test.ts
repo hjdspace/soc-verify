@@ -1,7 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { HostToolsRegistry } from '../../src/main/host/host-tools';
 import type { SubsysDiscovery, SubsysInfo, CaseInfo, SimOptionsSchema } from '../../src/main/host/discovery';
 import { CaseStatsService } from '../../src/main/case/case-stats-service';
+import { createMemoryDatabase, closeDatabase, type CaseDatabase } from '../../src/main/case/db/case-database';
+import { insertSubsystems, insertCases, insertSimulationRun } from '../../src/main/case/db/case-repository';
 import type { SimulationManager } from '../../src/main/simulation/simulation-manager';
 import type { SimulationHistoryEntry } from '../../src/shared/types';
 import type { SimulationRunRecord } from '../../src/main/simulation/simulation-manager';
@@ -198,6 +200,16 @@ describe('HostToolsRegistry', () => {
 // ─── CaseStatsService-backed tools (get_case_stats / get_project_overview) ──
 
 describe('HostToolsRegistry with CaseStatsService', () => {
+  let db: CaseDatabase;
+
+  beforeEach(() => {
+    db = createMemoryDatabase();
+  });
+
+  afterEach(() => {
+    closeDatabase(db);
+  });
+
   function makeStatsRegistry(simManager?: SimulationManager): {
     registry: HostToolsRegistry;
     statsService: CaseStatsService;
@@ -210,8 +222,14 @@ describe('HostToolsRegistry with CaseStatsService', () => {
       { name: 'cpu_alu_overflow', subsys: 'cpu', path: '/cases/alu', filePath: '/tests/alu.cfg', baseCase: 'cpu_alu_basic' },
       { name: 'cpu_reg_write', subsys: 'cpu', path: '/cases/reg', filePath: '/tests/reg.cfg' },
     ];
+    // Seed DB with subsystem and case data
+    insertSubsystems(db, subsys.map((s) => ({ name: s.name, path: s.path })));
+    insertCases(db, cases.map((c) => ({
+      name: c.name, subsys: c.subsys, path: c.path, filePath: c.filePath, baseCase: c.baseCase,
+    })));
+    // MockPerSubsysDiscovery still needed for HostToolsRegistry (get_sim_options_schema etc.)
     const discovery = new MockPerSubsysDiscovery(subsys, new Map([['cpu', cases]]));
-    const statsService = new CaseStatsService({ discovery, simulationManager: simManager ?? null });
+    const statsService = new CaseStatsService({ db, simulationManager: simManager ?? null });
     const registry = new HostToolsRegistry(discovery);
     registry.setCaseStatsService(statsService);
     return { registry, statsService };
@@ -262,21 +280,15 @@ describe('HostToolsRegistry with CaseStatsService', () => {
     expect(parsed.bySubsys[0].caseCount).toBe(3);
   });
 
-  it('list_cases with CaseStatsService joins status from simulation manager', async () => {
-    const history: SimulationHistoryEntry[] = [
-      {
-        runId: 'r1',
-        caseId: 'cpu_alu_basic',
-        caseName: 'cpu_alu_basic',
-        subsys: 'cpu',
-        options: {},
-        status: 'pass',
-        startTime: 100,
-        endTime: 200,
-        duration: 100,
-      },
-    ];
-    const simManager = makeMockSimulationManager(history);
+  it('list_cases with CaseStatsService joins status from simulation_runs DB', async () => {
+    // Seed a simulation run into the DB (ADR 0017 Issue #4: status from DB, not SimulationManager history)
+    insertSimulationRun(db, {
+      caseName: 'cpu_alu_basic',
+      subsys: 'cpu',
+      status: 'pass',
+      startTime: '2024-01-01T10:00:00',
+    });
+    const simManager = makeMockSimulationManager();
     const { registry } = makeStatsRegistry(simManager);
     const result = await registry.handleToolCall({
       type: 'host_tool_call',

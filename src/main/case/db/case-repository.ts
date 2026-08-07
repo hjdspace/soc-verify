@@ -272,6 +272,85 @@ export function getLatestRunStatus(
   return row?.status ?? null;
 }
 
+/**
+ * 获取指定子系统下所有用例的最近一次终态状态（ADR 0017 决策 4）。
+ *
+ * 只返回终态（pass/fail/error/aborted），running 状态由 SimulationManager.activeRuns 提供。
+ * 使用 ROW_NUMBER() 窗口函数取每个 case 的最新一条终态记录。
+ *
+ * @returns Map<caseName, status> — 无终态记录的 case 不在 map 中（调用方默认 pending）
+ */
+export function getLatestStatusBySubsys(
+  db: Database.Database,
+  subsys: string,
+): Map<string, string> {
+  const rows = db.prepare(`
+    SELECT case_name, status FROM (
+      SELECT case_name, status,
+        ROW_NUMBER() OVER (PARTITION BY case_name ORDER BY start_time DESC) as rn
+      FROM simulation_runs
+      WHERE subsys = @subsys AND status IN ('pass', 'fail', 'error', 'aborted')
+    ) WHERE rn = 1
+  `).all({ subsys }) as { case_name: string; status: string }[];
+
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    map.set(row.case_name, row.status);
+  }
+  return map;
+}
+
+/**
+ * 获取所有子系统下所有用例的最近一次终态状态（ADR 0017 决策 4）。
+ *
+ * 用于 getProjectOverview：一次查询获取全局状态映射，避免逐子系统 N+1 查询。
+ *
+ * @returns Map<subsys, Map<caseName, status>>
+ */
+export function getAllLatestStatuses(
+  db: Database.Database,
+): Map<string, Map<string, string>> {
+  const rows = db.prepare(`
+    SELECT subsys, case_name, status FROM (
+      SELECT subsys, case_name, status,
+        ROW_NUMBER() OVER (PARTITION BY subsys, case_name ORDER BY start_time DESC) as rn
+      FROM simulation_runs
+      WHERE status IN ('pass', 'fail', 'error', 'aborted')
+    ) WHERE rn = 1
+  `).all() as { subsys: string; case_name: string; status: string }[];
+
+  const globalMap = new Map<string, Map<string, string>>();
+  for (const row of rows) {
+    let subsysMap = globalMap.get(row.subsys);
+    if (!subsysMap) {
+      subsysMap = new Map();
+      globalMap.set(row.subsys, subsysMap);
+    }
+    subsysMap.set(row.case_name, row.status);
+  }
+  return globalMap;
+}
+
+/**
+ * 构建用例名 → 子系统名的映射表（ADR 0017）。
+ *
+ * SELECT name, subsys FROM cases
+ * 用于时序违例模块的 case→subsys 映射，替代旧的 discovery 遍历。
+ */
+export function getCaseNameToSubsysMap(
+  db: Database.Database,
+): Map<string, string> {
+  const rows = db.prepare(`
+    SELECT name, subsys FROM cases
+  `).all() as { name: string; subsys: string }[];
+
+  const map = new Map<string, string>();
+  for (const row of rows) {
+    map.set(row.name, row.subsys);
+  }
+  return map;
+}
+
 // ─── scan_metadata ───────────────────────────────────────
 
 /**

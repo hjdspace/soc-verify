@@ -1,160 +1,82 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createMemoryDatabase, closeDatabase, type CaseDatabase } from '../../src/main/case/db/case-database';
-import { insertSubsystems, insertCases } from '../../src/main/case/db/case-repository';
+import { insertSubsystems, insertCases, insertSimulationRun } from '../../src/main/case/db/case-repository';
 import { CaseStatsService } from '../../src/main/case/case-stats-service';
-import { NoopDiscovery } from '../../src/main/host/discovery';
-import type { SubsysInfo, CaseInfo } from '../../src/main/host/discovery';
 import type { SimulationHistoryEntry, SimulationStatus } from '@shared/types';
-
-describe('CaseStatsService — DB-backed listSubsysWithCaseCount', () => {
-  let db: CaseDatabase;
-
-  beforeEach(() => {
-    db = createMemoryDatabase();
-  });
-
-  afterEach(() => {
-    closeDatabase(db);
-  });
-
-  it('reads subsystems with case counts from DB when db is available', async () => {
-    insertSubsystems(db, [
-      { name: 'cpu', path: '/proj/cpu' },
-      { name: 'gpu', path: '/proj/gpu' },
-    ]);
-    insertCases(db, [
-      { name: 't1', subsys: 'cpu', path: '/p/t1' },
-      { name: 't2', subsys: 'cpu', path: '/p/t2' },
-      { name: 't3', subsys: 'gpu', path: '/p/t3' },
-    ]);
-
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      db,
-    });
-
-    const result = await service.listSubsysWithCaseCount();
-
-    expect(result).toHaveLength(2);
-    const cpu = result.find((s) => s.name === 'cpu');
-    const gpu = result.find((s) => s.name === 'gpu');
-    expect(cpu?.caseCount).toBe(2);
-    expect(gpu?.caseCount).toBe(1);
-  });
-
-  it('returns empty array when DB has no subsystems', async () => {
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      db,
-    });
-
-    const result = await service.listSubsysWithCaseCount();
-    expect(result).toEqual([]);
-  });
-
-  it('filters subsystems by name from DB', async () => {
-    insertSubsystems(db, [
-      { name: 'cpu', path: '/proj/cpu' },
-      { name: 'gpu', path: '/proj/gpu' },
-    ]);
-    insertCases(db, [
-      { name: 't1', subsys: 'cpu', path: '/p/t1' },
-      { name: 't2', subsys: 'gpu', path: '/p/t2' },
-    ]);
-
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      db,
-    });
-
-    const result = await service.listSubsysWithCaseCount('cp');
-    expect(result).toHaveLength(1);
-    expect(result[0].name).toBe('cpu');
-    expect(result[0].caseCount).toBe(1);
-  });
-
-  it('returns zero caseCount for subsystems with no cases from DB', async () => {
-    insertSubsystems(db, [{ name: 'empty_subsys', path: '/proj/empty' }]);
-
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      db,
-    });
-
-    const result = await service.listSubsysWithCaseCount();
-    expect(result).toHaveLength(1);
-    expect(result[0].caseCount).toBe(0);
-  });
-
-  it('falls back to plugin discovery when db is not available', async () => {
-    // Create a mock discovery that returns subsystems
-    const mockDiscovery = {
-      async listSubsys() {
-        return [{ name: 'plugin_subsys', path: '/proj/plugin', caseCount: 0 }] as SubsysInfo[];
-      },
-      async listCases() {
-        return [{ name: 'p1', subsys: 'plugin_subsys', path: '/p/p1', status: 'pending' as const }] as CaseInfo[];
-      },
-      async getSimOptionsSchema() {
-        return {};
-      },
-      clearCache() {},
-    };
-
-    const service = new CaseStatsService({
-      discovery: mockDiscovery as unknown as NoopDiscovery,
-    });
-
-    const result = await service.listSubsysWithCaseCount();
-    expect(result).toHaveLength(1);
-    expect(result[0].name).toBe('plugin_subsys');
-    expect(result[0].caseCount).toBe(1);
-  });
-
-  it('returns path from DB in subsystem result', async () => {
-    insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
-
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      db,
-    });
-
-    const result = await service.listSubsysWithCaseCount();
-    expect(result).toHaveLength(1);
-    expect(result[0].path).toBe('/proj/cpu');
-  });
-});
+import type { SimulationRunRecord } from '../../src/main/simulation/simulation-manager';
 
 // ─── Mock SimulationManager ─────────────────────────────────
 
-function makeMockSimManager(history: SimulationHistoryEntry[] = []): {
-  getHistory: () => SimulationHistoryEntry[];
-  getActiveRuns: () => never[];
-} {
+function makeMockSimManager(
+  history: SimulationHistoryEntry[] = [],
+  activeRuns: SimulationRunRecord[] = [],
+): { getHistory: () => SimulationHistoryEntry[]; getActiveRuns: () => SimulationRunRecord[] } {
   return {
     getHistory: () => history,
-    getActiveRuns: () => [],
+    getActiveRuns: () => activeRuns,
   };
 }
 
-function makeHistoryEntry(
-  overrides: Partial<SimulationHistoryEntry> = {},
-): SimulationHistoryEntry {
+function makeHistoryEntry(opts: {
+  caseName: string;
+  subsys: string;
+  status: SimulationStatus;
+  startTime: number;
+}): SimulationHistoryEntry {
   return {
-    runId: 'run-1',
-    caseId: 'case-1',
-    caseName: 'test1',
-    subsys: 'cpu',
+    runId: `run_${opts.caseName}_${opts.startTime}`,
+    caseId: opts.caseName,
+    caseName: opts.caseName,
+    subsys: opts.subsys,
     options: {},
-    status: 'pass' as SimulationStatus,
-    startTime: 1000,
-    endTime: 2000,
+    status: opts.status,
+    startTime: opts.startTime,
+    endTime: opts.startTime + 1000,
     duration: 1000,
-    ...overrides,
   };
 }
 
-describe('CaseStatsService — DB-backed listCasesWithStatus', () => {
+function makeActiveRun(opts: {
+  caseName: string;
+  subsys: string;
+  startTime?: number;
+}): SimulationRunRecord {
+  const startTime = opts.startTime ?? Date.now();
+  return {
+    runId: `active_${opts.caseName}`,
+    projectId: 'p1',
+    options: { caseId: opts.caseName, caseName: opts.caseName, subsys: opts.subsys },
+    status: { runId: `active_${opts.caseName}`, status: 'running' as SimulationStatus, startTime },
+    startTime,
+  };
+}
+
+// ─── Fixtures ─────────────────────────────────────────────
+
+function seedDb(db: CaseDatabase): void {
+  insertSubsystems(db, [
+    { name: 'cpu', path: '/subsystems/cpu' },
+    { name: 'gpu', path: '/subsystems/gpu' },
+  ]);
+  insertCases(db, [
+    // cpu: 4 cases across 2 files
+    { name: 'cpu_alu_basic', subsys: 'cpu', path: '/cases/alu_basic', filePath: '/tests/alu_tests.cfg' },
+    { name: 'cpu_alu_overflow', subsys: 'cpu', path: '/cases/alu_overflow', filePath: '/tests/alu_tests.cfg', baseCase: 'cpu_alu_basic' },
+    { name: 'cpu_reg_write', subsys: 'cpu', path: '/cases/reg_write', filePath: '/tests/alu_tests.cfg' },
+    { name: 'cpu_pipeline_stall', subsys: 'cpu', path: '/cases/pipeline_stall', filePath: '/tests/pipeline.cfg' },
+    // gpu: 2 cases in 1 file
+    { name: 'gpu_render_basic', subsys: 'gpu', path: '/cases/render_basic', filePath: '/tests/gpu_render.cfg' },
+    { name: 'gpu_texture_load', subsys: 'gpu', path: '/cases/texture_load', filePath: '/tests/gpu_render.cfg' },
+  ]);
+}
+
+function seedRun(db: CaseDatabase, caseName: string, subsys: string, status: string, startTime: string): void {
+  insertSimulationRun(db, { caseName, subsys, status, startTime });
+}
+
+// ─── Tests ────────────────────────────────────────────────
+
+describe('CaseStatsService — DB-backed (ADR 0017 Issue #4)', () => {
   let db: CaseDatabase;
 
   beforeEach(() => {
@@ -165,317 +87,419 @@ describe('CaseStatsService — DB-backed listCasesWithStatus', () => {
     closeDatabase(db);
   });
 
-  it('reads cases from DB when db is available', async () => {
-    insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
-    insertCases(db, [
-      { name: 't1', subsys: 'cpu', path: '/p/t1' },
-      { name: 't2', subsys: 'cpu', path: '/p/t2' },
-    ]);
+  // ─── listSubsysWithCaseCount ────────────────────────────
 
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      simulationManager: makeMockSimManager() as never,
-      db,
+  describe('listSubsysWithCaseCount', () => {
+    it('reads subsystems with case counts from DB', async () => {
+      seedDb(db);
+      const service = new CaseStatsService({ db });
+
+      const result = await service.listSubsysWithCaseCount();
+      expect(result).toHaveLength(2);
+      const cpu = result.find((s) => s.name === 'cpu');
+      const gpu = result.find((s) => s.name === 'gpu');
+      expect(cpu?.caseCount).toBe(4);
+      expect(gpu?.caseCount).toBe(2);
     });
 
-    const result = await service.listCasesWithStatus('cpu');
-    expect(result).toHaveLength(2);
-    expect(result[0].name).toBe('t1');
-    expect(result[1].name).toBe('t2');
-  });
-
-  it('joins pass status from SimulationManager history', async () => {
-    insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
-    insertCases(db, [
-      { name: 't1', subsys: 'cpu', path: '/p/t1' },
-      { name: 't2', subsys: 'cpu', path: '/p/t2' },
-    ]);
-
-    const mockSim = makeMockSimManager([
-      makeHistoryEntry({ caseName: 't1', subsys: 'cpu', status: 'pass' }),
-    ]);
-
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      simulationManager: mockSim as never,
-      db,
+    it('returns empty array when DB has no subsystems', async () => {
+      const service = new CaseStatsService({ db });
+      const result = await service.listSubsysWithCaseCount();
+      expect(result).toEqual([]);
     });
 
-    const result = await service.listCasesWithStatus('cpu');
-    expect(result).toHaveLength(2);
-    const t1 = result.find((c) => c.name === 't1');
-    const t2 = result.find((c) => c.name === 't2');
-    expect(t1?.status).toBe('pass');
-    expect(t2?.status).toBe('pending');
-  });
+    it('filters subsystems by name from DB', async () => {
+      seedDb(db);
+      const service = new CaseStatsService({ db });
 
-  it('joins fail status from SimulationManager history', async () => {
-    insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
-    insertCases(db, [
-      { name: 't1', subsys: 'cpu', path: '/p/t1' },
-    ]);
-
-    const mockSim = makeMockSimManager([
-      makeHistoryEntry({ caseName: 't1', subsys: 'cpu', status: 'fail' }),
-    ]);
-
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      simulationManager: mockSim as never,
-      db,
+      const result = await service.listSubsysWithCaseCount('cp');
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('cpu');
+      expect(result[0].caseCount).toBe(4);
     });
 
-    const result = await service.listCasesWithStatus('cpu');
-    expect(result[0].status).toBe('fail');
-  });
+    it('returns zero caseCount for subsystems with no cases', async () => {
+      insertSubsystems(db, [{ name: 'empty_subsys', path: '/proj/empty' }]);
+      const service = new CaseStatsService({ db });
 
-  it('uses latest run status when multiple history entries exist', async () => {
-    insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
-    insertCases(db, [{ name: 't1', subsys: 'cpu', path: '/p/t1' }]);
-
-    // History is unshift (newest first); so latest is the first entry
-    const mockSim = makeMockSimManager([
-      makeHistoryEntry({ caseName: 't1', subsys: 'cpu', status: 'pass', startTime: 2000 }),
-      makeHistoryEntry({ caseName: 't1', subsys: 'cpu', status: 'fail', startTime: 1000 }),
-    ]);
-
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      simulationManager: mockSim as never,
-      db,
+      const result = await service.listSubsysWithCaseCount();
+      expect(result).toHaveLength(1);
+      expect(result[0].caseCount).toBe(0);
     });
 
-    const result = await service.listCasesWithStatus('cpu');
-    expect(result[0].status).toBe('pass');
+    it('returns path from DB in subsystem result', async () => {
+      insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
+      const service = new CaseStatsService({ db });
+
+      const result = await service.listSubsysWithCaseCount();
+      expect(result[0].path).toBe('/proj/cpu');
+    });
   });
 
-  it('returns pending status for cases with no simulation history', async () => {
-    insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
-    insertCases(db, [{ name: 'never_run', subsys: 'cpu', path: '/p/never' }]);
+  // ─── listCasesWithStatus ────────────────────────────────
 
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      simulationManager: makeMockSimManager() as never,
-      db,
+  describe('listCasesWithStatus', () => {
+    it('reads cases from DB with pending status when no simulation runs', async () => {
+      seedDb(db);
+      const service = new CaseStatsService({ db });
+
+      const result = await service.listCasesWithStatus('cpu');
+      expect(result).toHaveLength(4);
+      for (const c of result) {
+        expect(c.status).toBe('pending');
+      }
     });
 
-    const result = await service.listCasesWithStatus('cpu');
-    expect(result[0].status).toBe('pending');
-  });
+    it('joins pass/fail status from simulation_runs table', async () => {
+      seedDb(db);
+      seedRun(db, 'cpu_alu_basic', 'cpu', 'pass', '2024-01-01T10:00:00');
+      seedRun(db, 'cpu_pipeline_stall', 'cpu', 'fail', '2024-01-01T10:00:00');
 
-  it('returns empty array when subsys has no cases in DB', async () => {
-    insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
+      const service = new CaseStatsService({ db });
+      const result = await service.listCasesWithStatus('cpu');
+      const byName = new Map(result.map((c) => [c.name, c.status]));
 
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      db,
+      expect(byName.get('cpu_alu_basic')).toBe('pass');
+      expect(byName.get('cpu_pipeline_stall')).toBe('fail');
+      expect(byName.get('cpu_alu_overflow')).toBe('pending');
+      expect(byName.get('cpu_reg_write')).toBe('pending');
     });
 
-    const result = await service.listCasesWithStatus('cpu');
-    expect(result).toEqual([]);
-  });
+    it('takes the latest run status from simulation_runs', async () => {
+      seedDb(db);
+      // fail then pass → latest = pass
+      seedRun(db, 'cpu_alu_basic', 'cpu', 'fail', '2024-01-01T10:00:00');
+      seedRun(db, 'cpu_alu_basic', 'cpu', 'pass', '2024-01-02T10:00:00');
 
-  it('returns empty array when subsys is undefined', async () => {
-    insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
-    insertCases(db, [{ name: 't1', subsys: 'cpu', path: '/p/t1' }]);
-
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      db,
+      const service = new CaseStatsService({ db });
+      const result = await service.listCasesWithStatus('cpu');
+      const aluBasic = result.find((c) => c.name === 'cpu_alu_basic');
+      expect(aluBasic?.status).toBe('pass');
     });
 
-    const result = await service.listCasesWithStatus();
-    expect(result).toEqual([]);
-  });
+    it('overlays running status from SimulationManager activeRuns', async () => {
+      seedDb(db);
+      // DB has a terminal status (pass)
+      seedRun(db, 'cpu_alu_basic', 'cpu', 'pass', '2024-01-01T10:00:00');
 
-  it('falls back to discovery when db is not available', async () => {
-    const mockDiscovery = {
-      async listSubsys() {
-        return [{ name: 'cpu', path: '/proj/cpu' }] as SubsysInfo[];
-      },
-      async listCases() {
-        return [{ name: 'p1', subsys: 'cpu', path: '/p/p1', status: 'pending' as const }] as CaseInfo[];
-      },
-      async getSimOptionsSchema() {
-        return {};
-      },
-      clearCache() {},
-    };
+      // But activeRuns shows it's currently running
+      const mockSim = makeMockSimManager([], [
+        makeActiveRun({ caseName: 'cpu_alu_basic', subsys: 'cpu' }),
+      ]);
 
-    const service = new CaseStatsService({
-      discovery: mockDiscovery as unknown as NoopDiscovery,
+      const service = new CaseStatsService({ db, simulationManager: mockSim as never });
+      const result = await service.listCasesWithStatus('cpu');
+      const aluBasic = result.find((c) => c.name === 'cpu_alu_basic');
+      expect(aluBasic?.status).toBe('running');
     });
 
-    const result = await service.listCasesWithStatus('cpu');
-    expect(result).toHaveLength(1);
-    expect(result[0].name).toBe('p1');
-    expect(result[0].status).toBe('pending');
-  });
+    it('running from activeRuns does not bleed into other subsys', async () => {
+      seedDb(db);
+      const mockSim = makeMockSimManager([], [
+        makeActiveRun({ caseName: 'cpu_alu_basic', subsys: 'cpu' }),
+      ]);
 
-  it('preserves case fields (filePath, baseCase, etc.) from DB', async () => {
-    insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
-    insertCases(db, [{
-      name: 't1',
-      subsys: 'cpu',
-      path: '/p/t1',
-      filePath: '/proj/cfg.py',
-      baseCase: 'base_case',
-      base: 'base_val',
-      block: 'block_val',
-    }]);
-
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      db,
+      const service = new CaseStatsService({ db, simulationManager: mockSim as never });
+      const gpuResult = await service.listCasesWithStatus('gpu');
+      // No running status should appear in gpu results
+      for (const c of gpuResult) {
+        expect(c.status).not.toBe('running');
+      }
     });
 
-    const result = await service.listCasesWithStatus('cpu');
-    expect(result[0].filePath).toBe('/proj/cfg.py');
-    expect(result[0].baseCase).toBe('base_case');
-    expect(result[0].base).toBe('base_val');
-    expect(result[0].block).toBe('block_val');
-  });
-});
+    it('returns empty array when subsys has no cases in DB', async () => {
+      insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
+      const service = new CaseStatsService({ db });
 
-describe('CaseStatsService — DB-backed searchCases', () => {
-  let db: CaseDatabase;
-
-  beforeEach(() => {
-    db = createMemoryDatabase();
-  });
-
-  afterEach(() => {
-    closeDatabase(db);
-  });
-
-  it('finds cases by substring match from DB', async () => {
-    insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
-    insertCases(db, [
-      { name: 'test_basic', subsys: 'cpu', path: '/p/t1' },
-      { name: 'test_advanced', subsys: 'cpu', path: '/p/t2' },
-      { name: 'smoke_test', subsys: 'cpu', path: '/p/t3' },
-    ]);
-
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      db,
+      const result = await service.listCasesWithStatus('cpu');
+      expect(result).toEqual([]);
     });
 
-    const result = await service.searchCases('basic');
-    expect(result).toHaveLength(1);
-    expect(result[0].name).toBe('test_basic');
-  });
+    it('returns empty array when subsys is undefined', async () => {
+      seedDb(db);
+      const service = new CaseStatsService({ db });
 
-  it('finds multiple matches', async () => {
-    insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
-    insertCases(db, [
-      { name: 'test_basic', subsys: 'cpu', path: '/p/t1' },
-      { name: 'test_advanced', subsys: 'cpu', path: '/p/t2' },
-      { name: 'smoke_test', subsys: 'cpu', path: '/p/t3' },
-    ]);
-
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      db,
+      const result = await service.listCasesWithStatus();
+      expect(result).toEqual([]);
     });
 
-    const result = await service.searchCases('test');
-    expect(result).toHaveLength(3);
-  });
+    it('preserves case fields (filePath, baseCase, etc.) from DB', async () => {
+      seedDb(db);
+      const service = new CaseStatsService({ db });
 
-  it('returns empty for no match', async () => {
-    insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
-    insertCases(db, [{ name: 'test_basic', subsys: 'cpu', path: '/p/t1' }]);
-
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      db,
+      const result = await service.listCasesWithStatus('cpu');
+      const overflow = result.find((c) => c.name === 'cpu_alu_overflow');
+      expect(overflow?.filePath).toBe('/tests/alu_tests.cfg');
+      expect(overflow?.baseCase).toBe('cpu_alu_basic');
     });
 
-    const result = await service.searchCases('nonexistent');
-    expect(result).toEqual([]);
+    it('does not read from SimulationManager history (status from DB only)', async () => {
+      seedDb(db);
+      // SimulationManager has history entries, but no simulation_runs in DB
+      const mockSim = makeMockSimManager([
+        makeHistoryEntry({ caseName: 'cpu_alu_basic', subsys: 'cpu', status: 'pass', startTime: 100 }),
+      ]);
+
+      const service = new CaseStatsService({ db, simulationManager: mockSim as never });
+      const result = await service.listCasesWithStatus('cpu');
+      // Status should be pending because no simulation_runs in DB
+      const aluBasic = result.find((c) => c.name === 'cpu_alu_basic');
+      expect(aluBasic?.status).toBe('pending');
+    });
   });
 
-  it('filters by subsys', async () => {
-    insertSubsystems(db, [
-      { name: 'cpu', path: '/proj/cpu' },
-      { name: 'gpu', path: '/proj/gpu' },
-    ]);
-    insertCases(db, [
-      { name: 'test1', subsys: 'cpu', path: '/p/t1' },
-      { name: 'test2', subsys: 'gpu', path: '/p/t2' },
-    ]);
+  // ─── searchCases ────────────────────────────────────────
 
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      db,
+  describe('searchCases', () => {
+    it('finds cases by substring match from DB', async () => {
+      seedDb(db);
+      const service = new CaseStatsService({ db });
+
+      const result = await service.searchCases('alu');
+      expect(result).toHaveLength(2);
+      expect(result.some((c) => c.name === 'cpu_alu_basic')).toBe(true);
+      expect(result.some((c) => c.name === 'cpu_alu_overflow')).toBe(true);
     });
 
-    const cpuResults = await service.searchCases('test', 'cpu');
-    expect(cpuResults).toHaveLength(1);
-    expect(cpuResults[0].name).toBe('test1');
+    it('returns empty for no match', async () => {
+      seedDb(db);
+      const service = new CaseStatsService({ db });
+
+      const result = await service.searchCases('nonexistent');
+      expect(result).toEqual([]);
+    });
+
+    it('filters by subsys', async () => {
+      seedDb(db);
+      const service = new CaseStatsService({ db });
+
+      const cpuResults = await service.searchCases('cpu', 'cpu');
+      expect(cpuResults).toHaveLength(4);
+    });
+
+    it('respects limit', async () => {
+      seedDb(db);
+      const service = new CaseStatsService({ db });
+
+      const result = await service.searchCases('cpu', undefined, 2);
+      expect(result).toHaveLength(2);
+    });
+
+    it('returns empty on empty query', async () => {
+      seedDb(db);
+      const service = new CaseStatsService({ db });
+
+      const result = await service.searchCases('');
+      expect(result).toEqual([]);
+    });
   });
 
-  it('respects limit', async () => {
-    insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
-    insertCases(db, [
-      { name: 'test1', subsys: 'cpu', path: '/p/t1' },
-      { name: 'test2', subsys: 'cpu', path: '/p/t2' },
-      { name: 'test3', subsys: 'cpu', path: '/p/t3' },
-    ]);
+  // ─── getCaseToSubsysMap ─────────────────────────────────
 
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      db,
+  describe('getCaseToSubsysMap', () => {
+    it('returns caseName → subsys map from DB', async () => {
+      seedDb(db);
+      const service = new CaseStatsService({ db });
+
+      const map = await service.getCaseToSubsysMap();
+      expect(map.size).toBe(6);
+      expect(map.get('cpu_alu_basic')).toBe('cpu');
+      expect(map.get('gpu_render_basic')).toBe('gpu');
     });
 
-    const result = await service.searchCases('test', undefined, 2);
-    expect(result).toHaveLength(2);
+    it('returns empty map when no cases in DB', async () => {
+      const service = new CaseStatsService({ db });
+      const map = await service.getCaseToSubsysMap();
+      expect(map.size).toBe(0);
+    });
   });
 
-  it('returns empty on empty query', async () => {
-    insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
-    insertCases(db, [{ name: 'test1', subsys: 'cpu', path: '/p/t1' }]);
+  // ─── getCaseStats ───────────────────────────────────────
 
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      db,
+  describe('getCaseStats', () => {
+    it('returns flat summary with total, byStatus, byFile', async () => {
+      seedDb(db);
+      seedRun(db, 'cpu_alu_basic', 'cpu', 'pass', '2024-01-01T10:00:00');
+      seedRun(db, 'cpu_pipeline_stall', 'cpu', 'fail', '2024-01-01T10:00:00');
+
+      const service = new CaseStatsService({ db });
+      const stats = await service.getCaseStats('cpu');
+
+      expect(stats).not.toBeNull();
+      expect(stats!.subsys).toBe('cpu');
+      expect(stats!.total).toBe(4);
+      expect(stats!.byStatus.pass).toBe(1);
+      expect(stats!.byStatus.fail).toBe(1);
+      expect(stats!.byStatus.pending).toBe(2);
     });
 
-    const result = await service.searchCases('');
-    expect(result).toEqual([]);
+    it('groups by filePath with rootCases and childCount', async () => {
+      seedDb(db);
+      const service = new CaseStatsService({ db });
+
+      const stats = await service.getCaseStats('cpu');
+      expect(stats).not.toBeNull();
+
+      // 2 files: alu_tests.cfg (3 cases) and pipeline.cfg (1 case)
+      expect(stats!.byFile).toHaveLength(2);
+
+      const aluFile = stats!.byFile.find((f) => f.fileName === 'alu_tests.cfg');
+      expect(aluFile).toBeDefined();
+      expect(aluFile!.caseCount).toBe(3);
+      // rootCases: cpu_alu_basic (1 child) + cpu_reg_write (0 children)
+      expect(aluFile!.rootCases).toHaveLength(2);
+      const aluBasic = aluFile!.rootCases.find((r) => r.name === 'cpu_alu_basic');
+      expect(aluBasic?.childCount).toBe(1);
+      const regWrite = aluFile!.rootCases.find((r) => r.name === 'cpu_reg_write');
+      expect(regWrite?.childCount).toBe(0);
+
+      const pipelineFile = stats!.byFile.find((f) => f.fileName === 'pipeline.cfg');
+      expect(pipelineFile).toBeDefined();
+      expect(pipelineFile!.caseCount).toBe(1);
+    });
+
+    it('sorts byFile by caseCount descending', async () => {
+      seedDb(db);
+      const service = new CaseStatsService({ db });
+
+      const stats = await service.getCaseStats('cpu');
+      expect(stats!.byFile[0]!.caseCount).toBeGreaterThanOrEqual(stats!.byFile[1]!.caseCount);
+    });
+
+    it('returns null for undefined subsys', async () => {
+      const service = new CaseStatsService({ db });
+      const stats = await service.getCaseStats(undefined);
+      expect(stats).toBeNull();
+    });
+
+    it('returns zero stats for nonexistent subsys', async () => {
+      const service = new CaseStatsService({ db });
+      const stats = await service.getCaseStats('nonexistent');
+      expect(stats).toEqual({
+        subsys: 'nonexistent',
+        total: 0,
+        byStatus: { pass: 0, fail: 0, running: 0, pending: 0, error: 0, aborted: 0 },
+        byFile: [],
+      });
+    });
+
+    it('overlays running status from activeRuns in byStatus', async () => {
+      seedDb(db);
+      seedRun(db, 'cpu_alu_basic', 'cpu', 'pass', '2024-01-01T10:00:00');
+
+      const mockSim = makeMockSimManager([], [
+        makeActiveRun({ caseName: 'cpu_reg_write', subsys: 'cpu' }),
+      ]);
+
+      const service = new CaseStatsService({ db, simulationManager: mockSim as never });
+      const stats = await service.getCaseStats('cpu');
+
+      expect(stats!.byStatus.pass).toBe(1);
+      expect(stats!.byStatus.running).toBe(1);
+      expect(stats!.byStatus.pending).toBe(2);
+    });
   });
 
-  it('returns empty array when db is not available', async () => {
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
+  // ─── getProjectOverview ─────────────────────────────────
+
+  describe('getProjectOverview', () => {
+    it('returns project-wide aggregate from DB', async () => {
+      seedDb(db);
+      seedRun(db, 'cpu_alu_basic', 'cpu', 'pass', '2024-01-01T10:00:00');
+      seedRun(db, 'gpu_render_basic', 'gpu', 'fail', '2024-01-01T10:00:00');
+
+      const service = new CaseStatsService({ db });
+      const overview = await service.getProjectOverview();
+
+      expect(overview.subsysCount).toBe(2);
+      expect(overview.totalCases).toBe(6);
+      expect(overview.bySubsys).toHaveLength(2);
+
+      const cpu = overview.bySubsys.find((s) => s.name === 'cpu');
+      expect(cpu?.caseCount).toBe(4);
+      expect(cpu?.byStatus.pass).toBe(1);
+      expect(cpu?.byStatus.pending).toBe(3);
+
+      const gpu = overview.bySubsys.find((s) => s.name === 'gpu');
+      expect(gpu?.caseCount).toBe(2);
+      expect(gpu?.byStatus.fail).toBe(1);
+      expect(gpu?.byStatus.pending).toBe(1);
     });
 
-    const result = await service.searchCases('test');
-    expect(result).toEqual([]);
+    it('returns empty overview when no subsystems', async () => {
+      const service = new CaseStatsService({ db });
+      const overview = await service.getProjectOverview();
+      expect(overview).toEqual({ subsysCount: 0, totalCases: 0, bySubsys: [] });
+    });
+
+    it('does not cache overview (no TTL — DB is fast enough)', async () => {
+      seedDb(db);
+      const service = new CaseStatsService({ db });
+
+      // First call
+      const overview1 = await service.getProjectOverview();
+      expect(overview1.totalCases).toBe(6);
+
+      // Add a new case to DB
+      insertCases(db, [{ name: 'cpu_new_case', subsys: 'cpu', path: '/cases/new' }]);
+
+      // Second call should reflect the new data (no stale cache)
+      const overview2 = await service.getProjectOverview();
+      expect(overview2.totalCases).toBe(7);
+    });
+
+    it('overlays running status from activeRuns in overview', async () => {
+      seedDb(db);
+      const mockSim = makeMockSimManager([], [
+        makeActiveRun({ caseName: 'cpu_alu_basic', subsys: 'cpu' }),
+      ]);
+
+      const service = new CaseStatsService({ db, simulationManager: mockSim as never });
+      const overview = await service.getProjectOverview();
+
+      const cpu = overview.bySubsys.find((s) => s.name === 'cpu')!;
+      expect(cpu.byStatus.running).toBe(1);
+      expect(cpu.byStatus.pending).toBe(3);
+    });
   });
 
-  it('returns CaseInfo-shaped results with all fields', async () => {
-    insertSubsystems(db, [{ name: 'cpu', path: '/proj/cpu' }]);
-    insertCases(db, [{
-      name: 'test1',
-      subsys: 'cpu',
-      path: '/p/t1',
-      filePath: '/proj/cfg.py',
-      baseCase: 'base_case',
-    }]);
+  // ─── setSimulationManager ───────────────────────────────
 
-    const service = new CaseStatsService({
-      discovery: new NoopDiscovery(),
-      db,
+  describe('setSimulationManager', () => {
+    it('allows late injection of simulation manager for running status overlay', async () => {
+      seedDb(db);
+      const service = new CaseStatsService({ db });
+
+      // Before injection: all pending
+      let result = await service.listCasesWithStatus('cpu');
+      expect(result.every((c) => c.status === 'pending')).toBe(true);
+
+      // After injection: running overlay works
+      const mockSim = makeMockSimManager([], [
+        makeActiveRun({ caseName: 'cpu_alu_basic', subsys: 'cpu' }),
+      ]);
+      service.setSimulationManager(mockSim as never);
+
+      result = await service.listCasesWithStatus('cpu');
+      const aluBasic = result.find((c) => c.name === 'cpu_alu_basic');
+      expect(aluBasic?.status).toBe('running');
     });
+  });
 
-    const result = await service.searchCases('test');
-    expect(result).toHaveLength(1);
-    expect(result[0].name).toBe('test1');
-    expect(result[0].subsys).toBe('cpu');
-    expect(result[0].path).toBe('/p/t1');
-    expect(result[0].filePath).toBe('/proj/cfg.py');
-    expect(result[0].baseCase).toBe('base_case');
+  // ─── clearDiscoveryCache (no-op) ───────────────────────
+
+  describe('clearDiscoveryCache', () => {
+    it('is a no-op (no discovery cache to clear, DB is source of truth)', async () => {
+      seedDb(db);
+      const service = new CaseStatsService({ db });
+
+      // Should not throw
+      service.clearDiscoveryCache();
+      service.clearDiscoveryCache('cpu');
+
+      // Data should still be accessible
+      const result = await service.listSubsysWithCaseCount();
+      expect(result).toHaveLength(2);
+    });
   });
 });

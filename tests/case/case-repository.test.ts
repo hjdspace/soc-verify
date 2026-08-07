@@ -9,6 +9,9 @@ import {
   searchCases,
   insertSimulationRun,
   getLatestRunStatus,
+  getLatestStatusBySubsys,
+  getAllLatestStatuses,
+  getCaseNameToSubsysMap,
   getScanMetadata,
   setScanMetadata,
   clearAllCases,
@@ -422,6 +425,148 @@ describe('Case Database Repository', () => {
       setScanMetadata(db, 'status', 'scanning');
       setScanMetadata(db, 'status', 'complete');
       expect(getScanMetadata(db, 'status')).toBe('complete');
+    });
+  });
+
+  // ─── getLatestStatusBySubsys ───────────────────────────
+
+  describe('getLatestStatusBySubsys', () => {
+    it('returns empty map when no simulation runs exist', () => {
+      insertSubsystems(db, [makeSubsys({ name: 'cpu' })]);
+      insertCases(db, [makeCase({ name: 't1', subsys: 'cpu' })]);
+
+      const result = getLatestStatusBySubsys(db, 'cpu');
+      expect(result.size).toBe(0);
+    });
+
+    it('returns latest terminal status per case for a subsys', () => {
+      insertSubsystems(db, [makeSubsys({ name: 'cpu' })]);
+      insertCases(db, [
+        makeCase({ name: 't1', subsys: 'cpu' }),
+        makeCase({ name: 't2', subsys: 'cpu' }),
+      ]);
+
+      // t1: fail then pass (latest = pass)
+      insertSimulationRun(db, { caseName: 't1', subsys: 'cpu', status: 'fail', startTime: '2024-01-01T10:00:00' });
+      insertSimulationRun(db, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: '2024-01-02T10:00:00' });
+      // t2: only fail
+      insertSimulationRun(db, { caseName: 't2', subsys: 'cpu', status: 'fail', startTime: '2024-01-01T10:00:00' });
+
+      const result = getLatestStatusBySubsys(db, 'cpu');
+      expect(result.size).toBe(2);
+      expect(result.get('t1')).toBe('pass');
+      expect(result.get('t2')).toBe('fail');
+    });
+
+    it('ignores running status (only terminal statuses)', () => {
+      insertSubsystems(db, [makeSubsys({ name: 'cpu' })]);
+      insertCases(db, [makeCase({ name: 't1', subsys: 'cpu' })]);
+
+      // A running entry should not be returned as latest terminal status
+      insertSimulationRun(db, { caseName: 't1', subsys: 'cpu', status: 'running', startTime: '2024-01-01T10:00:00' });
+
+      const result = getLatestStatusBySubsys(db, 'cpu');
+      expect(result.size).toBe(0);
+    });
+
+    it('only returns statuses for the specified subsys', () => {
+      insertSubsystems(db, [makeSubsys({ name: 'cpu' }), makeSubsys({ name: 'gpu' })]);
+      insertCases(db, [
+        makeCase({ name: 't1', subsys: 'cpu' }),
+        makeCase({ name: 't1', subsys: 'gpu' }),
+      ]);
+
+      insertSimulationRun(db, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: '2024-01-01T10:00:00' });
+      insertSimulationRun(db, { caseName: 't1', subsys: 'gpu', status: 'fail', startTime: '2024-01-01T10:00:00' });
+
+      const cpuResult = getLatestStatusBySubsys(db, 'cpu');
+      expect(cpuResult.get('t1')).toBe('pass');
+
+      const gpuResult = getLatestStatusBySubsys(db, 'gpu');
+      expect(gpuResult.get('t1')).toBe('fail');
+    });
+
+    it('handles error and aborted statuses', () => {
+      insertSubsystems(db, [makeSubsys({ name: 'cpu' })]);
+      insertCases(db, [
+        makeCase({ name: 't1', subsys: 'cpu' }),
+        makeCase({ name: 't2', subsys: 'cpu' }),
+      ]);
+
+      insertSimulationRun(db, { caseName: 't1', subsys: 'cpu', status: 'error', startTime: '2024-01-01T10:00:00' });
+      insertSimulationRun(db, { caseName: 't2', subsys: 'cpu', status: 'aborted', startTime: '2024-01-01T10:00:00' });
+
+      const result = getLatestStatusBySubsys(db, 'cpu');
+      expect(result.get('t1')).toBe('error');
+      expect(result.get('t2')).toBe('aborted');
+    });
+  });
+
+  // ─── getAllLatestStatuses ───────────────────────────────
+
+  describe('getAllLatestStatuses', () => {
+    it('returns empty map when no simulation runs exist', () => {
+      insertSubsystems(db, [makeSubsys({ name: 'cpu' })]);
+      insertCases(db, [makeCase({ name: 't1', subsys: 'cpu' })]);
+
+      const result = getAllLatestStatuses(db);
+      expect(result.size).toBe(0);
+    });
+
+    it('returns latest terminal status per case across all subsys', () => {
+      insertSubsystems(db, [makeSubsys({ name: 'cpu' }), makeSubsys({ name: 'gpu' })]);
+      insertCases(db, [
+        makeCase({ name: 't1', subsys: 'cpu' }),
+        makeCase({ name: 't2', subsys: 'gpu' }),
+      ]);
+
+      insertSimulationRun(db, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: '2024-01-01T10:00:00' });
+      insertSimulationRun(db, { caseName: 't2', subsys: 'gpu', status: 'fail', startTime: '2024-01-01T10:00:00' });
+
+      const result = getAllLatestStatuses(db);
+      expect(result.size).toBe(2);
+
+      const cpuMap = result.get('cpu');
+      expect(cpuMap).toBeDefined();
+      expect(cpuMap!.get('t1')).toBe('pass');
+
+      const gpuMap = result.get('gpu');
+      expect(gpuMap).toBeDefined();
+      expect(gpuMap!.get('t2')).toBe('fail');
+    });
+
+    it('takes the latest when multiple runs exist for same case', () => {
+      insertSubsystems(db, [makeSubsys({ name: 'cpu' })]);
+      insertCases(db, [makeCase({ name: 't1', subsys: 'cpu' })]);
+
+      insertSimulationRun(db, { caseName: 't1', subsys: 'cpu', status: 'fail', startTime: '2024-01-01T10:00:00' });
+      insertSimulationRun(db, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: '2024-01-02T10:00:00' });
+
+      const result = getAllLatestStatuses(db);
+      expect(result.get('cpu')!.get('t1')).toBe('pass');
+    });
+  });
+
+  // ─── getCaseNameToSubsysMap ────────────────────────────
+
+  describe('getCaseNameToSubsysMap', () => {
+    it('returns empty map when no cases exist', () => {
+      expect(getCaseNameToSubsysMap(db).size).toBe(0);
+    });
+
+    it('returns caseName → subsys mapping from cases table', () => {
+      insertSubsystems(db, [makeSubsys({ name: 'cpu' }), makeSubsys({ name: 'gpu' })]);
+      insertCases(db, [
+        makeCase({ name: 't1', subsys: 'cpu' }),
+        makeCase({ name: 't2', subsys: 'cpu' }),
+        makeCase({ name: 't3', subsys: 'gpu' }),
+      ]);
+
+      const map = getCaseNameToSubsysMap(db);
+      expect(map.size).toBe(3);
+      expect(map.get('t1')).toBe('cpu');
+      expect(map.get('t2')).toBe('cpu');
+      expect(map.get('t3')).toBe('gpu');
     });
   });
 
