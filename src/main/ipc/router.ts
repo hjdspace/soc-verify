@@ -28,6 +28,7 @@ import { scanRouter } from './routers/scan-router';
 import { documentRouter } from './routers/document-router';
 import { toolsRouter } from './routers/tools-router';
 import { browserRouter } from './routers/browser-router';
+import { databaseRouter } from './routers/database-router';
 
 export const router = t.router({
   ping: pingProcedure,
@@ -54,6 +55,7 @@ export const router = t.router({
   document: documentRouter,
   tools: toolsRouter,
   browser: browserRouter,
+  database: databaseRouter,
 });
 
 export type AppRouter = typeof router;

@@ -2,6 +2,11 @@ import { create } from 'zustand';
 
 export type OfficePreviewMode = 'html' | 'screenshots' | 'watch';
 
+export type DatabaseDestination = {
+  type: 'database';
+  filePath: string;
+};
+
 export type OfficeDocumentDestination = {
   type: 'office-document';
   filePath: string;
@@ -27,7 +32,8 @@ export type WorkbenchDestination =
   | { type: 'ai-artifacts' }
   | { type: 'plugin-view'; pluginId: string; viewId: string; title: string }
   | { type: 'diff-review'; filePath: string; fileName: string }
-  | OfficeDocumentDestination;
+  | OfficeDocumentDestination
+  | DatabaseDestination;
 
 export type WorkbenchTab = {
   id: string;
@@ -89,11 +95,20 @@ function describeDestination(destination: WorkbenchDestination): Omit<WorkbenchT
       const fileName = parts[parts.length - 1] || destination.filePath;
       return { id: `office-document:${destination.filePath}`, title: fileName, closable: true };
     }
+    case 'database': {
+      const sep = destination.filePath.includes('/') ? '/' : '\\';
+      const parts = destination.filePath.split(sep);
+      const fileName = parts[parts.length - 1] || destination.filePath;
+      return { id: `database:${destination.filePath}`, title: fileName, closable: true };
+    }
   }
 }
 
 /** 支持预览的 Office 文档扩展名（小写、无前导点） */
 const OFFICE_DOC_EXTENSIONS = new Set(['docx', 'pptx', 'xlsx', 'pdf']);
+
+/** 支持查看的数据库文件扩展名（小写、无前导点） */
+const DB_EXTENSIONS = new Set(['db', 'sqlite', 'sqlite3', 'db3']);
 
 /**
  * 根据文件扩展名推断合适的 destination：
@@ -118,6 +133,10 @@ export function openFileDestination(
       mode: ext === 'xlsx' ? 'edit' : 'preview',
       previewMode: 'html',
     });
+    return;
+  }
+  if (DB_EXTENSIONS.has(ext)) {
+    open({ type: 'database', filePath: path });
     return;
   }
   open({ type: 'file', path, name });

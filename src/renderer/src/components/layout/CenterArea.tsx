@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine, Puzzle, FileType } from 'lucide-react';
+import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine, Puzzle, FileType, Database as DatabaseIcon } from 'lucide-react';
 import { useWorkbenchStore, openFileDestination } from '@renderer/stores/workbench';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
@@ -23,6 +23,7 @@ import type { SimulationHistoryEntry, CompileError, SimulationStatus } from '@sh
 import { PluginView } from '@renderer/components/plugins/PluginView';
 import { TVDashboard } from '@renderer/components/timing-violation/TVDashboard';
 import { OfficeDocumentView } from '@renderer/components/office/OfficeDocumentView';
+import { DatabaseViewer } from '@renderer/components/db/DatabaseViewer';
 import { Timer } from 'lucide-react';
 import { BrowserView } from '@renderer/components/browser/BrowserView';
 
@@ -250,6 +251,7 @@ export function CenterArea() {
                 {tab.destination.type === 'timing-violation' && <Timer className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'plugin-view' && <Puzzle className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'office-document' && <FileType className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'database' && <DatabaseIcon className="h-3 w-3 opacity-50" />}
                 <span className="max-w-32 truncate">{tab.title}</span>
                 {tab.closable && (
                   <button
@@ -511,6 +513,8 @@ export function CenterArea() {
             mode={destination.mode}
             previewMode={destination.previewMode}
           />
+        ) : destination?.type === 'database' ? (
+          <DatabaseViewer key={destination.filePath} filePath={destination.filePath} />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
             {/* Active simulations */}
