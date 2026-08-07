@@ -103,8 +103,9 @@ export class CaseScanner {
         // In sync mode, clear all old subsystems and cases before inserting
         // new scan results. This ensures subsystems that no longer exist
         // (e.g. after PROJ_RTL / PROJ_ENV change) are removed from the DB.
-        clearAllSubsystems(this.db);
+        // Cases must be deleted before subsystems due to FOREIGN KEY constraint.
         clearAllCases(this.db);
+        clearAllSubsystems(this.db);
       }
 
       insertSubsystems(this.db, subsysRows);
