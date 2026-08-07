@@ -3,10 +3,13 @@
  *
  * Ported from the Python `time_analyzer` plugin.
  * Features: directory selection, time/memory extraction, table display,
- * unit conversion, CSV export.
+ * unit conversion (minutes/hours/days), CSV export.
+ *
+ * Default directory is resolved from $PROJ_WORK (via tRPC), matching
+ * the Python `get_default_analysis_dir()` behavior.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { FolderOpen, Play, Download, Clock } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import type { ToolComponentProps } from '../registry';
@@ -26,29 +29,75 @@ type AnalysisResult = {
   totals: CaseTimeData;
 };
 
-type TimeUnit = 'seconds' | 'minutes' | 'hours';
+type TimeUnit = 'minutes' | 'hours' | 'days';
 
 const UNIT_LABELS: Record<TimeUnit, string> = {
-  seconds: '秒',
   minutes: '分钟',
   hours: '小时',
+  days: '天',
 };
 
+/** Precision per unit (matches Python UNIT_PRECISION). */
+const UNIT_PRECISION: Record<TimeUnit, number> = {
+  minutes: 2,
+  hours: 2,
+  days: 3,
+};
+
+/** Conversion factors: how many minutes one unit represents. */
+const UNIT_TO_MINUTES: Record<TimeUnit, number> = {
+  minutes: 1,
+  hours: 60,
+  days: 1440,
+};
+
+/**
+ * Format a time value (given in minutes) for display in the target unit.
+ *
+ * Matches Python's `TimeUnitConverter.format_time()`:
+ * 1. Convert to target unit
+ * 2. Format to unit-specific precision
+ * 3. Strip trailing zeros
+ */
 function formatTime(minutes: number, unit: TimeUnit): string {
-  const factor = unit === 'seconds' ? 60 : unit === 'hours' ? 1 / 60 : 1;
-  const value = minutes * factor;
-  if (value === 0) return '0';
-  if (value < 0.01) return value.toFixed(4);
-  if (value < 1) return value.toFixed(3);
-  return value.toFixed(2);
+  if (minutes === 0) return '0';
+  const value = minutes / UNIT_TO_MINUTES[unit];
+  const precision = UNIT_PRECISION[unit];
+  let formatted = value.toFixed(precision);
+  if (formatted.includes('.')) {
+    formatted = formatted.replace(/0+$/, '').replace(/\.$/, '');
+  }
+  return formatted;
 }
 
 export function TimeAnalyzer({ projectRoot, onProjectRootChange }: ToolComponentProps) {
+  // Initialize with projectRoot if available; will be overridden by $PROJ_WORK on mount
   const [analysisDir, setAnalysisDir] = useState(projectRoot ?? '');
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [unit, setUnit] = useState<TimeUnit>('minutes');
   const [status, setStatus] = useState('就绪');
+
+  // On mount: fetch the default analysis directory ($PROJ_WORK or cwd) from backend.
+  // Only set it if the user hasn't already provided a projectRoot via URL param,
+  // so that an explicitly-passed project path takes precedence.
+  useEffect(() => {
+    if (projectRoot) {
+      setAnalysisDir(projectRoot);
+      return;
+    }
+    // Fetch $PROJ_WORK from backend
+    trpc.tools.timeAnalyzer.getDefaultDir
+      .query()
+      .then((res) => {
+        if (res.dir) {
+          setAnalysisDir(res.dir);
+        }
+      })
+      .catch(() => {
+        // Ignore — user can manually select a directory
+      });
+  }, [projectRoot]);
 
   const handleSelectDir = useCallback(async () => {
     const res = await trpc.tools.selectDirectory.mutate({
@@ -112,7 +161,7 @@ export function TimeAnalyzer({ projectRoot, onProjectRootChange }: ToolComponent
         <input
           value={analysisDir}
           onChange={(e) => setAnalysisDir(e.target.value)}
-          placeholder="选择要分析的目录..."
+          placeholder="选择要分析的目录（默认 $PROJ_WORK）..."
           className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1.5 text-xs"
         />
         <button
@@ -145,9 +194,9 @@ export function TimeAnalyzer({ projectRoot, onProjectRootChange }: ToolComponent
                 onChange={(e) => setUnit(e.target.value as TimeUnit)}
                 className="rounded border border-border bg-background px-1.5 py-1 text-xs"
               >
-                <option value="seconds">秒</option>
                 <option value="minutes">分钟</option>
                 <option value="hours">小时</option>
+                <option value="days">天</option>
               </select>
             </div>
             <button
