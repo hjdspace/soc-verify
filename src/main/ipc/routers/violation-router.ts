@@ -43,6 +43,7 @@ import { pluginLoader } from '../../plugins/loader';
 import { simulationRegistry } from '../../simulation/simulation-registry';
 import { caseStatsRegistry } from '../../case/case-stats-registry';
 import type { CaseStatsService } from '../../case/case-stats-service';
+import type { PluginRegistry } from '@shared/plugin-types';
 import type {
   QueryViolationsInput,
   ConfirmationStatus,
@@ -60,16 +61,24 @@ const VALID_STATUSES = ['pending', 'confirmed', 'ignored'] as const;
 
 /**
  * 获取或创建指定项目的 CaseStatsService。
- * 用于从用例树（discovery service）获取 case→subsys 映射。
+ *
+ * ADR 0017 Issue #7: 不再要求插件已加载——DB 是数据源，插件仅在扫描时需要。
+ * CaseStatsService 从 DB 读取，即使没有插件也能返回已有数据。
  */
 async function getCaseStatsServiceForTv(projectId: string): Promise<CaseStatsService | null> {
   try {
     const project = requireProject(projectId);
-    await ensurePluginsLoaded(project.rootPath);
-    const registry = pluginLoader.getRegistry(project.rootPath);
-    if (registry.subsysDiscoverers.length === 0 || registry.caseParsers.length === 0) return null;
     const simManager = simulationRegistry.get(project.rootPath);
-    return caseStatsRegistry.getOrCreate(project.rootPath, registry, simManager);
+    // ADR 0017: CaseStatsService 从 DB 读取，不需要 PluginBackedDiscovery。
+    // 传空 registry（caseStatsRegistry.getOrCreate 内部忽略 registry 参数）。
+    const emptyRegistry: PluginRegistry = {
+      subsysDiscoverers: [],
+      caseParsers: [],
+      coverageParsers: [],
+      simulationRunners: [],
+      simOptionSchemaProviders: [],
+    };
+    return caseStatsRegistry.getOrCreate(project.rootPath, emptyRegistry, simManager);
   } catch {
     return null;
   }
@@ -77,15 +86,18 @@ async function getCaseStatsServiceForTv(projectId: string): Promise<CaseStatsSer
 
 /**
  * 当违例数据中存在 subsys 为空的记录时，
- * 通过用例树（discovery service）的 case→subsys 映射补充子系统信息。
+ * 通过 cases DB 的 case→subsys 映射补充子系统信息。
  *
+ * ADR 0017 Issue #7: 数据源从 CaseStatsService（插件扫描）切换到 cases DB（SQL 查询）。
  * 场景：用户上传的 vio_summary.log 路径中不含子系统目录名，
- * 但左侧用例树中有完整的 case→subsys 关联。
+ * 但 cases DB 中有完整的 case→subsys 关联。
+ *
+ * @param caseToSubsysMap 从 cases DB 查询的 caseName → subsys 映射
  */
-async function enrichSubsysFromDiscovery(
+export async function enrichSubsysFromDiscovery(
   db: ReturnType<typeof getTvDb>,
   stats: ViolationStatistics,
-  projectId: string,
+  caseToSubsysMap: Map<string, string>,
   caseName?: string,
   corner?: string,
 ): Promise<ViolationStatistics> {
@@ -93,12 +105,8 @@ async function enrichSubsysFromDiscovery(
   const unknownCount = stats.bySubsys['unknown'] ?? 0;
   if (unknownCount === 0) return stats;
 
-  const service = await getCaseStatsServiceForTv(projectId);
-  if (!service) return stats;
-
-  // 构建 caseName → subsys 映射
-  const caseToSubsys = await service.getCaseToSubsysMap();
-  if (caseToSubsys.size === 0) return stats;
+  // 没有可用的 case→subsys 映射
+  if (caseToSubsysMap.size === 0) return stats;
 
   // 查询 subsys 为空的违例，按 case_name 分组计数
   const conditions: string[] = ['v.subsys IS NULL'];
@@ -125,7 +133,7 @@ async function enrichSubsysFromDiscovery(
 
   let remainingUnknown = 0;
   for (const row of rows) {
-    const matchedSubsys = caseToSubsys.get(row.caseName);
+    const matchedSubsys = caseToSubsysMap.get(row.caseName);
     if (matchedSubsys) {
       newBySubsys[matchedSubsys] = (newBySubsys[matchedSubsys] ?? 0) + row.count;
     } else {
@@ -144,15 +152,18 @@ async function enrichSubsysFromDiscovery(
 
 /**
  * 当违例数据中存在 subsys 为空的记录时，
- * 通过用例树（discovery service）的 case→subsys 映射补充子系统列表。
+ * 通过 cases DB 的 case→subsys 映射补充子系统列表。
  *
+ * ADR 0017 Issue #7: 数据源从 CaseStatsService（插件扫描）切换到 cases DB（SQL 查询）。
  * 场景：用户上传的 vio_summary.log 路径中不含子系统目录名（如 *_sys），
- * 导致数据库中 subsys 列为 NULL，但左侧用例树中有完整的 case→subsys 关联。
+ * 导致数据库中 subsys 列为 NULL，但 cases DB 中有完整的 case→subsys 关联。
+ *
+ * @param caseToSubsysMap 从 cases DB 查询的 caseName → subsys 映射
  */
-async function enrichMetadataSubsysFromDiscovery(
+export async function enrichMetadataSubsysFromDiscovery(
   db: ReturnType<typeof getTvDb>,
   metadata: ViolationMetadata,
-  projectId: string,
+  caseToSubsysMap: Map<string, string>,
 ): Promise<ViolationMetadata> {
   // 检查数据库中是否有 subsys 为 NULL 的记录
   const nullSubsysRow = db.prepare(`
@@ -161,12 +172,8 @@ async function enrichMetadataSubsysFromDiscovery(
 
   if (nullSubsysRow.count === 0) return metadata;
 
-  const service = await getCaseStatsServiceForTv(projectId);
-  if (!service) return metadata;
-
-  // 构建 caseName → subsys 映射
-  const caseToSubsys = await service.getCaseToSubsysMap();
-  if (caseToSubsys.size === 0) return metadata;
+  // 没有可用的 case→subsys 映射
+  if (caseToSubsysMap.size === 0) return metadata;
 
   // 查询 subsys 为空的违例中所有的 case_name
   const rows = db.prepare(`
@@ -176,7 +183,7 @@ async function enrichMetadataSubsysFromDiscovery(
   // 通过 case_name 反查 subsys
   const discoveredSubsys = new Set<string>(metadata.subsys);
   for (const row of rows) {
-    const matchedSubsys = caseToSubsys.get(row.case_name);
+    const matchedSubsys = caseToSubsysMap.get(row.case_name);
     if (matchedSubsys) {
       discoveredSubsys.add(matchedSubsys);
     }
@@ -352,8 +359,10 @@ export const violationRouter = t.router({
     .query(async ({ input }) => {
       const db = getTvDb(input.projectId);
       const stats = getStatistics(db, { caseName: input.caseName, corner: input.corner });
-      // 当存在 subsys 为空的违例时，通过用例树补充子系统信息
-      return enrichSubsysFromDiscovery(db, stats, input.projectId, input.caseName, input.corner);
+      // ADR 0017 Issue #7: 从 cases DB 获取 case→subsys 映射
+      const service = await getCaseStatsServiceForTv(input.projectId);
+      const caseToSubsysMap = service ? await service.getCaseToSubsysMap() : new Map<string, string>();
+      return enrichSubsysFromDiscovery(db, stats, caseToSubsysMap, input.caseName, input.corner);
     }),
 
   /**
@@ -370,8 +379,10 @@ export const violationRouter = t.router({
     .query(async ({ input }) => {
       const db = getTvDb(input.projectId);
       const metadata = getMetadata(db);
-      // 当存在 subsys 为空的违例时，通过用例树补充子系统列表
-      return enrichMetadataSubsysFromDiscovery(db, metadata, input.projectId);
+      // ADR 0017 Issue #7: 从 cases DB 获取 case→subsys 映射
+      const service = await getCaseStatsServiceForTv(input.projectId);
+      const caseToSubsysMap = service ? await service.getCaseToSubsysMap() : new Map<string, string>();
+      return enrichMetadataSubsysFromDiscovery(db, metadata, caseToSubsysMap);
     }),
 
   /**
@@ -505,11 +516,16 @@ export const violationRouter = t.router({
         return { updated: 0 };
       }
 
-      // 清除 discovery 缓存，确保下次查询从数据源重新加载
+      // ADR 0017 Issue #7: 触发 re-scan 更新 cases DB，然后从 DB 读取最新映射
       const project = requireProject(input.projectId);
-      caseStatsRegistry.clearDiscoveryCache(project.rootPath);
+      await ensurePluginsLoaded(project.rootPath);
+      const registry = pluginLoader.getRegistry(project.rootPath);
+      if (registry.subsysDiscoverers.length > 0 && registry.caseParsers.length > 0) {
+        const scanner = caseStatsRegistry.getOrCreateScanner(project.rootPath, registry);
+        await scanner.fullScan();
+      }
 
-      // 获取 CaseStatsService 并构建 case→subsys 映射
+      // 获取 CaseStatsService 并从 DB 构建 case→subsys 映射
       const service = await getCaseStatsServiceForTv(input.projectId);
       if (!service) {
         return { updated: 0 };
