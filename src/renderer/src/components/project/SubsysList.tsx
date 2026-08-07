@@ -460,14 +460,8 @@ export function SubsysList() {
       .then((data: CaseData[]) => {
         if (!cancelled) {
           setCases(data);
-          // Auto-expand all file nodes when cases are loaded
-          const filePaths = new Set<string>();
-          for (const c of data) {
-            if (c.filePath) filePaths.add(c.filePath);
-          }
-          if (filePaths.size > 0) {
-            setExpandedFiles(filePaths);
-          }
+          // File nodes default to collapsed; user expands on demand.
+          // The "Expand All" button is available for bulk expansion.
         }
       })
       .catch(() => {
@@ -696,13 +690,7 @@ export function SubsysList() {
             status: caseStatusFilter === 'all' ? undefined : caseStatusFilter,
           });
           setCases(data as CaseData[]);
-          const filePaths = new Set<string>();
-          for (const c of data as CaseData[]) {
-            if (c.filePath) filePaths.add(c.filePath);
-          }
-          if (filePaths.size > 0) {
-            setExpandedFiles(filePaths);
-          }
+          // After subsystem refresh, file nodes stay collapsed (no auto-expand).
         } catch {
           setCases([]);
         } finally {

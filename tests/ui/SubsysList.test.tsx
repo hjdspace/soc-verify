@@ -144,3 +144,105 @@ describe('SubsysList discovery states', () => {
     expect(screen.getByText('Discovery crashed')).toBeInTheDocument();
   });
 });
+
+describe('SubsysList case tree rendering', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.projectState.currentProjectId = 'test-project';
+    mocks.projectState.plugins = [
+      {
+        id: 'unisoc-subsys-discoverer',
+        kind: 'subsys-discoverer',
+        enabled: true,
+      },
+    ];
+    vi.mocked(trpc.project.getSubsystems.query).mockResolvedValue([
+      { name: 'cpu_sub_sys', path: 'D:/rtl/cpu_sub_sys', caseCount: 2 },
+    ]);
+    vi.mocked(trpc.project.getCases.query).mockResolvedValue([
+      {
+        name: 'case_alpha',
+        subsys: 'cpu_sub_sys',
+        path: '/path/case_alpha',
+        filePath: '/path/cases.sv',
+        status: 'pass',
+      },
+      {
+        name: 'case_beta',
+        subsys: 'cpu_sub_sys',
+        path: '/path/case_beta',
+        filePath: '/path/other.sv',
+        status: 'pending',
+      },
+    ]);
+  });
+
+  it('file nodes are collapsed by default after cases are loaded', async () => {
+    render(<SubsysList />);
+
+    // Expand the subsystem
+    fireEvent.click(await screen.findByText('cpu_sub_sys'));
+
+    // File nodes are always rendered (their names are visible)
+    await screen.findByText('cases.sv');
+    await screen.findByText('other.sv');
+
+    // Case names should NOT be visible because file nodes are collapsed
+    expect(screen.queryByText('case_alpha')).not.toBeInTheDocument();
+    expect(screen.queryByText('case_beta')).not.toBeInTheDocument();
+  });
+
+  it('clicking a file node expands it and shows its cases', async () => {
+    render(<SubsysList />);
+
+    fireEvent.click(await screen.findByText('cpu_sub_sys'));
+
+    // Wait for file node to appear
+    await screen.findByText('cases.sv');
+
+    // Click the file node to expand it
+    fireEvent.click(screen.getByText('cases.sv'));
+
+    // Cases under this file should now be visible
+    await screen.findByText('case_alpha');
+
+    // Cases under the other file should still be hidden
+    expect(screen.queryByText('case_beta')).not.toBeInTheDocument();
+  });
+
+  it('expand all button expands all file nodes', async () => {
+    render(<SubsysList />);
+
+    fireEvent.click(await screen.findByText('cpu_sub_sys'));
+
+    // Wait for file nodes to appear
+    await screen.findByText('cases.sv');
+    await screen.findByText('other.sv');
+
+    // Click "Expand All" button
+    fireEvent.click(screen.getByRole('button', { name: '展开全部' }));
+
+    // All cases should now be visible
+    await screen.findByText('case_alpha');
+    await screen.findByText('case_beta');
+  });
+
+  it('collapse all button collapses all file nodes', async () => {
+    render(<SubsysList />);
+
+    fireEvent.click(await screen.findByText('cpu_sub_sys'));
+    await screen.findByText('cases.sv');
+
+    // Expand all first
+    fireEvent.click(screen.getByRole('button', { name: '展开全部' }));
+    await screen.findByText('case_alpha');
+    await screen.findByText('case_beta');
+
+    // Collapse all
+    fireEvent.click(screen.getByRole('button', { name: '折叠全部' }));
+
+    // All case names should be hidden again
+    expect(screen.queryByText('case_alpha')).not.toBeInTheDocument();
+    expect(screen.queryByText('case_beta')).not.toBeInTheDocument();
+  });
+});
