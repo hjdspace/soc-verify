@@ -46,7 +46,6 @@ beforeAll(() => {
       content TEXT,
       status TEXT DEFAULT 'draft'
     );
-    CREATE TABLE sqlite_sequence (name TEXT, seq TEXT);
   `);
 
   // 插入测试数据
@@ -70,7 +69,11 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  rmSync(tempDir, { recursive: true, force: true });
+  try {
+    rmSync(tempDir, { recursive: true, force: true });
+  } catch {
+    // Windows 上可能因文件锁无法删除，忽略
+  }
 });
 
 // ── 测试 ──────────────────────────────────────────────────

@@ -386,9 +386,9 @@ export function SubsysList() {
   const [loadingSubsystems, setLoadingSubsystems] = useState(false);
   const [subsystemError, setSubsystemError] = useState<string | null>(null);
   const [scanVersion, setScanVersion] = useState(0);
-  const [expandedSubsys, setExpandedSubsys] = useState<string | null>(null);
-  const [cases, setCases] = useState<CaseData[]>([]);
-  const [loadingCases, setLoadingCases] = useState(false);
+  const [expandedSubsys, setExpandedSubsys] = useState<Set<string>>(new Set());
+  const [casesBySubsys, setCasesBySubsys] = useState<Map<string, CaseData[]>>(new Map());
+  const [loadingSubsysCases, setLoadingSubsysCases] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
     x: 0,
@@ -443,37 +443,53 @@ export function SubsysList() {
     };
   }, [currentProjectId, configuredProjRtl, scanVersion]);
 
-  // Load cases when subsys is expanded
+  // Clear cases and expanded state when project changes
   useEffect(() => {
-    if (!currentProjectId || !expandedSubsys) {
-      setCases([]);
-      return;
-    }
-    let cancelled = false;
-    setLoadingCases(true);
-    trpc.project.getCases
-      .query({
+    setExpandedSubsys(new Set());
+    setCasesBySubsys(new Map());
+    setExpandedFiles(new Set());
+    setExpandedCases(new Set());
+  }, [currentProjectId]);
+
+  /**
+   * Load cases for a single subsystem and store in casesBySubsys map.
+   *
+   * Accepts an optional status override so callers (e.g. status-filter change)
+   * can pass the new value before the store has propagated it.
+   */
+  const loadSubsysCases = async (subsysName: string, statusOverride?: string) => {
+    if (!currentProjectId) return;
+    const effectiveStatus = statusOverride ?? caseStatusFilter;
+    setLoadingSubsysCases((prev) => {
+      const next = new Set(prev);
+      next.add(subsysName);
+      return next;
+    });
+    try {
+      const data = await trpc.project.getCases.query({
         projectId: currentProjectId,
-        subsys: expandedSubsys,
-        status: caseStatusFilter === 'all' ? undefined : caseStatusFilter,
-      })
-      .then((data: CaseData[]) => {
-        if (!cancelled) {
-          setCases(data);
-          // File nodes default to collapsed; user expands on demand.
-          // The "Expand All" button is available for bulk expansion.
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setCases([]);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingCases(false);
+        subsys: subsysName,
+        status: effectiveStatus === 'all' ? undefined : effectiveStatus,
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [currentProjectId, expandedSubsys, caseStatusFilter]);
+      setCasesBySubsys((prev) => {
+        const next = new Map(prev);
+        next.set(subsysName, data as CaseData[]);
+        return next;
+      });
+    } catch {
+      setCasesBySubsys((prev) => {
+        const next = new Map(prev);
+        next.set(subsysName, []);
+        return next;
+      });
+    } finally {
+      setLoadingSubsysCases((prev) => {
+        const next = new Set(prev);
+        next.delete(subsysName);
+        return next;
+      });
+    }
+  };
 
   // ── Search: debounced query ──────────────────────
   useEffect(() => {
@@ -539,12 +555,17 @@ export function SubsysList() {
   }, [contextMenu.visible]);
 
   const toggleSubsys = (name: string) => {
-    const newExpanded = expandedSubsys === name ? null : name;
-    setExpandedSubsys(newExpanded);
-    setSelectedSubsys(newExpanded);
-    // Reset expanded states when switching subsystems
-    setExpandedFiles(new Set());
-    setExpandedCases(new Set());
+    setExpandedSubsys((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) {
+        next.delete(name);
+      } else {
+        next.add(name);
+        void loadSubsysCases(name);
+      }
+      return next;
+    });
+    setSelectedSubsys(name);
   };
 
   const toggleFile = useCallback((path: string) => {
@@ -623,21 +644,15 @@ export function SubsysList() {
    * When clicking a search result, select the case and optionally expand
    * the corresponding subsystem so the user can see context.
    */
-  const handleSearchResultClick = (caseData: CaseData) => {
-    const caseId = getCaseId(caseData);
-    setSelectedCaseId(caseId);
-    selectCase(caseData);
-  };
-
-  const handleSearchResultRun = async (caseData: CaseData) => {
-    if (!currentProjectId) return;
-    await startCaseRun(currentProjectId, caseData);
-  };
-
   const handleBatchRun = async () => {
     if (!currentProjectId || selectedCases.size === 0) return;
+    // Collect all cases from all loaded subsystems
+    const allCases: CaseData[] = [];
+    for (const subsysCases of casesBySubsys.values()) {
+      allCases.push(...subsysCases);
+    }
     const selected = Array.from(selectedCases)
-      .map((casePath) => cases.find((candidate) => getCaseId(candidate) === casePath))
+      .map((casePath) => allCases.find((candidate) => getCaseId(candidate) === casePath))
       .filter((candidate): candidate is CaseData => !!candidate);
     await startCaseRuns(currentProjectId, selected);
     setSelectedCases(new Set());
@@ -655,11 +670,15 @@ export function SubsysList() {
     setRefreshing(true);
     try {
       await trpc.project.refreshCases.mutate({ projectId: currentProjectId });
-      setCases([]);
+      setCasesBySubsys(new Map());
       setScanVersion((version) => version + 1);
       // 联动刷新概览页缓存（case 数量变化后概览数据需要更新）
       useOverviewStore.getState().invalidate();
       useToastStore.getState().success('用例树已刷新');
+      // Reload cases for all currently expanded subsys
+      for (const subsys of expandedSubsys) {
+        void loadSubsysCases(subsys);
+      }
     } catch (err) {
       useToastStore.getState().error('刷新失败', err instanceof Error ? err.message : String(err));
     } finally {
@@ -680,22 +699,9 @@ export function SubsysList() {
       await trpc.project.refreshCases.mutate({ projectId: currentProjectId, subsys: subsysName });
       // 联动刷新概览页缓存（case 数量变化后概览数据需要更新）
       useOverviewStore.getState().invalidate();
-      // 如果当前展开的就是该子系统，重新加载用例
-      if (expandedSubsys === subsysName) {
-        setLoadingCases(true);
-        try {
-          const data = await trpc.project.getCases.query({
-            projectId: currentProjectId,
-            subsys: subsysName,
-            status: caseStatusFilter === 'all' ? undefined : caseStatusFilter,
-          });
-          setCases(data as CaseData[]);
-          // After subsystem refresh, file nodes stay collapsed (no auto-expand).
-        } catch {
-          setCases([]);
-        } finally {
-          setLoadingCases(false);
-        }
+      // 如果该子系统已展开，重新加载用例
+      if (expandedSubsys.has(subsysName)) {
+        await loadSubsysCases(subsysName);
       }
       useToastStore.getState().success(`子系统 ${subsysName} 已刷新`);
     } catch (err) {
@@ -714,16 +720,53 @@ export function SubsysList() {
     });
   };
 
-  // Build case tree from flat list
-  const caseTree = useMemo(() => buildCaseTree(cases), [cases]);
+  // Build case tree per subsystem from casesBySubsys map
+  const caseTreeBySubsys = useMemo(() => {
+    const trees = new Map<string, CaseTreeNode[]>();
+    for (const [subsys, subsysCases] of casesBySubsys) {
+      trees.set(subsys, buildCaseTree(subsysCases));
+    }
+    return trees;
+  }, [casesBySubsys]);
+
+  // Group search results by subsys and build case tree per group
+  const searchGrouped = useMemo<Array<{ subsys: string; tree: CaseTreeNode[]; caseCount: number }>>(() => {
+    if (searchResults.length === 0) return [];
+    const bySubsys = new Map<string, CaseData[]>();
+    for (const c of searchResults) {
+      if (!bySubsys.has(c.subsys)) bySubsys.set(c.subsys, []);
+      bySubsys.get(c.subsys)!.push(c);
+    }
+    const groups: Array<{ subsys: string; tree: CaseTreeNode[]; caseCount: number }> = [];
+    for (const [subsys, subsysCases] of bySubsys) {
+      groups.push({ subsys, tree: buildCaseTree(subsysCases), caseCount: subsysCases.length });
+    }
+    return groups;
+  }, [searchResults]);
+
+  // In search mode, auto-expand all file nodes so matching cases are visible
+  const searchExpandedFiles = useMemo(() => {
+    const paths = new Set<string>();
+    for (const { tree } of searchGrouped) {
+      for (const node of tree) {
+        if (node.type === 'file') paths.add(node.path);
+      }
+    }
+    return paths;
+  }, [searchGrouped]);
+
+  // No-op toggle for search mode (file nodes are always expanded)
+  const noopToggle = useCallback(() => {}, []);
 
   const expandAllFiles = useCallback(() => {
     const allPaths = new Set<string>();
-    caseTree.forEach((node) => {
-      if (node.type === 'file') allPaths.add(node.path);
-    });
+    for (const tree of caseTreeBySubsys.values()) {
+      tree.forEach((node) => {
+        if (node.type === 'file') allPaths.add(node.path);
+      });
+    }
     setExpandedFiles(allPaths);
-  }, [caseTree]);
+  }, [caseTreeBySubsys]);
 
   const collapseAllFiles = useCallback(() => {
     setExpandedFiles(new Set());
@@ -896,7 +939,7 @@ export function SubsysList() {
         )}
       </div>
 
-      {/* ── Search results mode ──────────────────────── */}
+      {/* ── Search results mode (grouped by subsys/case_cfg) ─── */}
       {isSearching ? (
         <div className="flex flex-col gap-0.5">
           {searchResults.length === 0 && !searching && (
@@ -914,44 +957,39 @@ export function SubsysList() {
               <div className="mb-0.5 px-1 text-[10px] text-muted-foreground">
                 找到 {searchResults.length} 个用例
               </div>
-              {searchResults.map((caseData) => {
-                const caseId = getCaseId(caseData);
-                const isActive = selectedCaseId === caseId;
-                return (
-                  <div
-                    key={caseId}
-                    className={cn(
-                      'group flex cursor-pointer items-center gap-1 rounded py-0.5 text-xs transition-colors',
-                      isActive
-                        ? 'bg-primary/15 text-primary'
-                        : 'text-foreground/70 hover:bg-foreground/10',
-                    )}
-                    style={{ paddingLeft: '8px' }}
-                    onClick={() => handleSearchResultClick(caseData)}
-                  >
-                    <CircleDot
-                      className={cn(
-                        'h-2.5 w-2.5 shrink-0',
-                        STATUS_COLORS[caseData.status ?? 'pending'],
-                      )}
-                    />
-                    <span className="truncate">{caseData.name}</span>
-                    <span className="shrink-0 text-[9px] text-muted-foreground/60">
-                      {caseData.subsys}
+              {searchGrouped.map(({ subsys, tree, caseCount }) => (
+                <div key={subsys}>
+                  {/* Subsystem header — always expanded in search mode */}
+                  <div className="flex items-center gap-1 rounded px-1 py-0.5">
+                    <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
+                    <Cpu className="h-3 w-3 shrink-0 text-primary/70" />
+                    <span className="truncate font-medium text-xs">{subsys}</span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                      {caseCount}
                     </span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleSearchResultRun(caseData);
-                      }}
-                      className="ml-auto shrink-0 rounded p-0.5 opacity-40 transition-opacity hover:bg-foreground/10 hover:opacity-100"
-                      title="运行仿真"
-                    >
-                      <Play className="h-3 w-3 text-primary" />
-                    </button>
                   </div>
-                );
-              })}
+                  {/* File groups — always expanded, show only matching cases */}
+                  {tree.map((node) => (
+                    <CaseTreeItem
+                      key={node.path || node.name}
+                      node={node}
+                      level={0}
+                      expandedFiles={searchExpandedFiles}
+                      expandedCases={expandedCases}
+                      toggleFile={noopToggle}
+                      toggleCase={toggleCase}
+                      batchMode={batchMode}
+                      selectedCases={selectedCases}
+                      selectedCaseId={selectedCaseId}
+                      toggleCaseSelection={toggleCaseSelection}
+                      onCaseSelect={handleCaseSelect}
+                      onContextMenu={handleCaseContextMenu}
+                      onFileContextMenu={handleFileContextMenu}
+                      onRunCase={handleRunCase}
+                    />
+                  ))}
+                </div>
+              ))}
             </>
           )}
         </div>
@@ -963,7 +1001,12 @@ export function SubsysList() {
           {STATUS_FILTERS.map((f) => (
             <button
               key={f.value}
-              onClick={() => setCaseStatusFilter(f.value)}
+              onClick={() => {
+                setCaseStatusFilter(f.value);
+                for (const subsys of expandedSubsys) {
+                  void loadSubsysCases(subsys, f.value);
+                }
+              }}
               className={cn(
                 'rounded px-1.5 py-0.5 text-[10px] transition-colors',
                 caseStatusFilter === f.value
@@ -976,7 +1019,7 @@ export function SubsysList() {
           ))}
         </div>
         <div className="flex items-center gap-0.5">
-          {caseTree.length > 0 && (
+          {caseTreeBySubsys.size > 0 && (
             <>
               <button
                 onClick={expandAllFiles}
@@ -1042,14 +1085,19 @@ export function SubsysList() {
       )}
 
       {/* Subsystem list */}
-      {subsystems.map((subsys) => (
+      {subsystems.map((subsys) => {
+        const isExpanded = expandedSubsys.has(subsys.name);
+        const subsysCases = casesBySubsys.get(subsys.name);
+        const subsysTree = caseTreeBySubsys.get(subsys.name) ?? [];
+        const isLoading = loadingSubsysCases.has(subsys.name);
+        return (
         <div key={subsys.name}>
           <div className="flex items-center gap-0.5 rounded px-1 py-0.5 hover:bg-accent">
             <button
               onClick={() => toggleSubsys(subsys.name)}
               className="flex flex-1 items-center gap-1 text-left text-xs transition-colors"
             >
-              {expandedSubsys === subsys.name ? (
+              {isExpanded ? (
                 <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
               ) : (
                 <ChevronRight className="h-3 w-3 shrink-0 opacity-50" />
@@ -1079,15 +1127,15 @@ export function SubsysList() {
           </div>
 
           {/* Cases under subsystem — tree view */}
-          {expandedSubsys === subsys.name && (
+          {isExpanded && (
             <div className="pb-1">
-              {loadingCases ? (
+              {isLoading && !subsysCases ? (
                 <div className="px-4 py-1 text-[10px] text-muted-foreground">加载中...</div>
-              ) : caseTree.length === 0 ? (
+              ) : subsysTree.length === 0 ? (
                 <div className="px-4 py-1 text-[10px] text-muted-foreground">无用例</div>
               ) : (
                 <div>
-                  {caseTree.map((node) => (
+                  {subsysTree.map((node) => (
                     <CaseTreeItem
                       key={node.path || node.name}
                       node={node}
@@ -1111,7 +1159,8 @@ export function SubsysList() {
             </div>
           )}
         </div>
-      ))}
+        );
+      })}
         </>
       )}
 

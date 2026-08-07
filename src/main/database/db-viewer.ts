@@ -24,11 +24,6 @@ const OPERATOR_MAP: Record<string, string> = {
   lte: '<=',
 };
 
-/** WHERE 子句中禁止的关键字（防注入） */
-const FORBIDDEN_KEYWORDS = /;\s|--|\/\*|\*\/|\bUNION\b|\bATTACH\b|\bPRAGMA\b|\bINSERT\b|\bUPDATE\b|\bDELETE\b|\bDROP\b|\bALTER\b|\bCREATE\b/i;
-
-// ── 类型定义 ──────────────────────────────────────────────
-
 export type TableInfo = {
   name: string;
   rowCount: number;
