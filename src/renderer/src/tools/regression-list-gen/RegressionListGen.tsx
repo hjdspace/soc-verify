@@ -1,12 +1,17 @@
 /**
- * RegressionListGen — generate regression list commands and execute.
+ * RegressionListGen — generate regression list natively (no Python dependency).
  *
- * Ported from the Python `regression_list_gen_plugin` / `gen_regr_list_gui`.
- * Features: configure params, preview command, execute, history management.
+ * Ported from Python `regression_list_gen_plugin` / `gen_regr_list_gui`.
+ * Features:
+ *   - Configure params with -cfg as the primary input (first field)
+ *   - Auto-infer -block/-base from cfg file path (user can override)
+ *   - Preview parsed cases from cfg file
+ *   - Execute natively (TypeScript implementation, not subprocess)
+ *   - History management
  */
 
-import { useState, useCallback, useEffect } from 'react';
-import { FolderOpen, Save, Play, Terminal, History } from 'lucide-react';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { FolderOpen, Save, Play, Terminal, History, FileText, Wand2 } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import type { ToolComponentProps } from '../registry';
 import { cn } from '@renderer/lib/utils';
@@ -21,6 +26,11 @@ type Config = {
 };
 
 type HistoryEntry = Config & { timestamp: string };
+
+type CasePreview = {
+  name: string;
+  cfgDef: string;
+};
 
 const EMPTY_CONFIG: Config = {
   block: '',
@@ -38,13 +48,23 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
   const [executing, setExecuting] = useState(false);
   const [output, setOutput] = useState('');
   const [status, setStatus] = useState('就绪');
+  const [casePreview, setCasePreview] = useState<CasePreview[]>([]);
+  const [casePreviewError, setCasePreviewError] = useState<string | null>(null);
+
+  // Track whether user manually modified block/base (to prevent auto-fill overwriting)
+  const userModified = useRef<{ block: boolean; base: boolean }>({ block: false, base: false });
+  // Track whether we're applying history (to skip auto-fill)
+  const applyingHistory = useRef(false);
 
   const loadHistoryData = useCallback(async () => {
     try {
       const res = await trpc.tools.regressionListGen.loadHistory.query();
       setHistory(res.history as HistoryEntry[]);
       if (res.current) {
+        applyingHistory.current = true;
         setConfig(res.current as Config);
+        // Reset modification flags since we're loading saved values
+        userModified.current = { block: true, base: true };
       }
     } catch {
       // Ignore — first run has no config
@@ -70,6 +90,58 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
     void updateCommand();
   }, [config, updateCommand]);
 
+  const loadCasePreview = useCallback(async (cfgPath: string) => {
+    try {
+      const res = await trpc.tools.regressionListGen.previewCases.query({ cfgPath });
+      setCasePreview(res.cases as CasePreview[]);
+      setCasePreviewError(res.error ?? null);
+    } catch {
+      setCasePreview([]);
+      setCasePreviewError(null);
+    }
+  }, []);
+
+  // Auto-infer base/block and preview cases when cfg path changes
+  useEffect(() => {
+    if (!config.cfg) {
+      setCasePreview([]);
+      setCasePreviewError(null);
+      return;
+    }
+
+    // Skip auto-fill when applying history (values already set)
+    if (applyingHistory.current) {
+      applyingHistory.current = false;
+      // Still load case preview
+      void loadCasePreview(config.cfg);
+      return;
+    }
+
+    // Infer base/block from cfg path
+    void (async () => {
+      try {
+        const res = await trpc.tools.regressionListGen.inferBaseBlock.query({ cfgPath: config.cfg });
+        setConfig((prev) => ({
+          ...prev,
+          // Only auto-fill if user hasn't manually modified the field
+          block: userModified.current.block ? prev.block : res.block,
+          base: userModified.current.base ? prev.base : res.base,
+        }));
+        if (!userModified.current.block && res.block) {
+          setStatus(`已自动推断 Block=${res.block}`);
+        }
+        if (!userModified.current.base && res.base) {
+          setStatus((prev) => `${prev}${res.base ? `, Base=${res.base}` : ''}`);
+        }
+      } catch {
+        // Ignore inference errors
+      }
+    })();
+
+    // Load case preview
+    void loadCasePreview(config.cfg);
+  }, [config.cfg, loadCasePreview]);
+
   const handleBrowseCfg = useCallback(async () => {
     const res = await trpc.tools.selectFiles.mutate({
       title: '选择配置文件',
@@ -80,6 +152,8 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
       defaultPath: projectRoot ?? undefined,
     });
     if (res.paths.length > 0) {
+      // Reset modification flags so auto-fill can work
+      userModified.current = { block: false, base: false };
       setConfig((prev) => ({ ...prev, cfg: res.paths[0] }));
     }
   }, [projectRoot]);
@@ -88,7 +162,7 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
     const res = await trpc.tools.saveFileDialog.mutate({
       title: '选择输出文件',
       defaultPath: config.output || projectRoot || undefined,
-      filters: [{ name: '列表文件', extensions: ['list'] }],
+      filters: [{ name: '列表文件', extensions: ['lst'] }],
     });
     if (res.path) {
       setConfig((prev) => ({ ...prev, output: res.path }));
@@ -110,6 +184,10 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
       setStatus('请选择配置文件路径');
       return;
     }
+    if (!config.block) {
+      setStatus('请填写环境 block 名');
+      return;
+    }
     if (!config.output) {
       setStatus('请选择输出文件路径');
       return;
@@ -117,7 +195,7 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
 
     setExecuting(true);
     setOutput('');
-    setStatus('正在执行命令...');
+    setStatus('正在生成回归列表...');
 
     try {
       const res = await trpc.tools.regressionListGen.execute.mutate({
@@ -126,7 +204,7 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
       });
       setOutput(res.logs.join('\n'));
       if (res.success) {
-        setStatus('执行完成，回归列表生成成功');
+        setStatus(`执行完成，回归列表已生成${res.output ? `: ${res.output}` : ''}`);
         // Save to history
         await trpc.tools.regressionListGen.saveHistory.mutate({ config });
         await loadHistoryData();
@@ -152,6 +230,9 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
   const handleApplyHistory = useCallback((index: number) => {
     if (index < 0 || index >= history.length) return;
     const entry = history[index];
+    applyingHistory.current = true;
+    // When applying history, mark fields as user-modified (don't auto-fill)
+    userModified.current = { block: true, base: true };
     setConfig({
       block: entry.block,
       base: entry.base,
@@ -163,8 +244,34 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
   }, [history]);
 
   const updateField = (field: keyof Config, value: string) => {
+    // Track manual modification of block/base
+    if (field === 'block') {
+      userModified.current.block = true;
+    } else if (field === 'base') {
+      userModified.current.base = true;
+    }
     setConfig((prev) => ({ ...prev, [field]: value }));
   };
+
+  const handleReinfer = useCallback(async () => {
+    if (!config.cfg) {
+      setStatus('请先选择配置文件');
+      return;
+    }
+    try {
+      const res = await trpc.tools.regressionListGen.inferBaseBlock.query({ cfgPath: config.cfg });
+      // Force re-inference regardless of user modification flags
+      userModified.current = { block: false, base: false };
+      setConfig((prev) => ({
+        ...prev,
+        block: res.block,
+        base: res.base,
+      }));
+      setStatus(`已重新推断 Block=${res.block}${res.base ? `, Base=${res.base}` : ''}`);
+    } catch (err) {
+      setStatus(`推断失败: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [config.cfg]);
 
   return (
     <div className="flex h-full flex-col gap-3 p-4">
@@ -191,26 +298,60 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
       {/* ── Config form ── */}
       <div className="rounded border border-border p-3">
         <div className="grid grid-cols-2 gap-3">
-          {/* Block */}
+          {/* Cfg file — FIRST field (primary input) */}
+          <div className="col-span-2 flex flex-col gap-1">
+            <label className="text-xs font-medium">
+              配置文件 (-cfg) <span className="text-destructive">*</span>
+            </label>
+            <div className="flex items-center gap-1">
+              <input
+                type="text"
+                value={config.cfg}
+                onChange={(e) => {
+                  // Reset modification flags when cfg path is manually typed
+                  userModified.current = { block: false, base: false };
+                  updateField('cfg', e.target.value);
+                }}
+                placeholder="请选择 case 配置文件路径（选择后自动推断 Block/Base）"
+                className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1.5 text-xs"
+              />
+              <button onClick={handleBrowseCfg} className="flex items-center gap-1 rounded border border-border px-2 py-1.5 text-xs hover:bg-accent">
+                <FolderOpen className="h-3 w-3" />
+                浏览
+              </button>
+            </div>
+          </div>
+
+          {/* Block — auto-filled from cfg path */}
           <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium">环境 Block (-block)</label>
+            <label className="text-xs font-medium flex items-center gap-1">
+              环境 Block (-block) <span className="text-destructive">*</span>
+              {!userModified.current.block && config.block && (
+                <span className="rounded bg-primary/10 px-1 text-[10px] text-primary">自动</span>
+              )}
+            </label>
             <input
               type="text"
               value={config.block}
               onChange={(e) => updateField('block', e.target.value)}
-              placeholder="请输入环境block名"
+              placeholder="请输入环境 block 名"
               className="rounded border border-border bg-background px-2 py-1.5 text-xs"
             />
           </div>
 
-          {/* Base */}
+          {/* Base — auto-filled from cfg path */}
           <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium">Base 环境 (-base)</label>
+            <label className="text-xs font-medium flex items-center gap-1">
+              Base 环境 (-base)
+              {!userModified.current.base && config.base && (
+                <span className="rounded bg-primary/10 px-1 text-[10px] text-primary">自动</span>
+              )}
+            </label>
             <input
               type="text"
               value={config.base}
               onChange={(e) => updateField('base', e.target.value)}
-              placeholder="请输入base环境名"
+              placeholder="请输入 base 环境名"
               className="rounded border border-border bg-background px-2 py-1.5 text-xs"
             />
           </div>
@@ -222,7 +363,7 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
               type="text"
               value={config.tag}
               onChange={(e) => updateField('tag', e.target.value)}
-              placeholder="请输入TAG名"
+              placeholder="请输入 TAG 名"
               className="rounded border border-border bg-background px-2 py-1.5 text-xs"
             />
           </div>
@@ -239,33 +380,17 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
             />
           </div>
 
-          {/* Cfg file */}
-          <div className="col-span-2 flex flex-col gap-1">
-            <label className="text-xs font-medium">配置文件 (-cfg)</label>
-            <div className="flex items-center gap-1">
-              <input
-                type="text"
-                value={config.cfg}
-                onChange={(e) => updateField('cfg', e.target.value)}
-                placeholder="请选择case配置文件路径"
-                className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1.5 text-xs"
-              />
-              <button onClick={handleBrowseCfg} className="flex items-center gap-1 rounded border border-border px-2 py-1.5 text-xs hover:bg-accent">
-                <FolderOpen className="h-3 w-3" />
-                浏览
-              </button>
-            </div>
-          </div>
-
           {/* Output file */}
           <div className="col-span-2 flex flex-col gap-1">
-            <label className="text-xs font-medium">输出路径 (-o)</label>
+            <label className="text-xs font-medium">
+              输出路径 (-o) <span className="text-destructive">*</span>
+            </label>
             <div className="flex items-center gap-1">
               <input
                 type="text"
                 value={config.output}
                 onChange={(e) => updateField('output', e.target.value)}
-                placeholder="请选择回归列表生成路径"
+                placeholder="请选择回归列表生成路径（目录或 .lst 文件）"
                 className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1.5 text-xs"
               />
               <button onClick={handleBrowseOutput} className="flex items-center gap-1 rounded border border-border px-2 py-1.5 text-xs hover:bg-accent">
@@ -275,7 +400,62 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
             </div>
           </div>
         </div>
+
+        {/* Re-infer button */}
+        {config.cfg && (
+          <div className="mt-2 flex justify-end">
+            <button
+              onClick={handleReinfer}
+              className="flex items-center gap-1 rounded border border-border px-2 py-1 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <Wand2 className="h-3 w-3" />
+              重新推断 Block/Base
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* ── Case preview ── */}
+      {config.cfg && (
+        <div className="rounded border border-border">
+          <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-1.5">
+            <FileText className="h-3 w-3" />
+            <span className="text-xs font-semibold">用例预览</span>
+            {casePreview.length > 0 && (
+              <span className="text-[10px] text-muted-foreground">({casePreview.length} 个用例)</span>
+            )}
+            {casePreviewError && (
+              <span className="text-[10px] text-destructive">— {casePreviewError}</span>
+            )}
+          </div>
+          <div className="max-h-32 overflow-auto p-2">
+            {casePreview.length > 0 ? (
+              <table className="w-full text-[10px]">
+                <thead>
+                  <tr className="border-b border-border text-left text-muted-foreground">
+                    <th className="pb-1 pr-2 font-medium">#</th>
+                    <th className="pb-1 pr-2 font-medium">用例名</th>
+                    <th className="pb-1 font-medium">CFG_DEF</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {casePreview.map((c, i) => (
+                    <tr key={i} className="border-b border-border/50 last:border-0">
+                      <td className="py-0.5 pr-2 text-muted-foreground">{i + 1}</td>
+                      <td className="py-0.5 pr-2 font-mono">{c.name}</td>
+                      <td className="py-0.5 font-mono text-muted-foreground">{c.cfgDef}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div className="py-2 text-center text-[10px] text-muted-foreground">
+                {casePreviewError ? casePreviewError : '解析中...'}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Command preview ── */}
       <div className="rounded border border-border">
