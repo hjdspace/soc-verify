@@ -13,7 +13,9 @@ import { t, TRPCError } from '../router-context';
 import { ALL_TOOLS, type ToolMeta } from '../../../shared/tool-types';
 import { openToolWindow } from '../../tools/tool-window-manager';
 import { writeFile } from 'node:fs/promises';
-import { dialog, BrowserWindow } from 'electron';
+import { existsSync } from 'node:fs';
+import { dialog, BrowserWindow, shell } from 'electron';
+import { spawn } from 'node:child_process';
 
 // ── Batch 3 tool imports ──
 import { checkFiles, scanDirectory } from '../../tools/sv-ifdef-checker';
@@ -37,7 +39,15 @@ import {
   refreshRepoInfo,
   updateRepoToMaster,
 } from '../../tools/git-manager';
-import { previewCToSv } from '../../tools/c-sv-converter';
+import {
+  previewCToSv,
+  previewSvToC,
+  convertCToSv,
+  convertSvToC,
+  getDefaultTypeMappings,
+  getDefaultFunctionMappings,
+  type ConversionConfig,
+} from '../../tools/c-sv-converter';
 
 // ── Sub-router: env-checker ────────────────────────────────────────
 import {
@@ -275,11 +285,18 @@ const logAnalyzerRouter = t.router({
 import {
   analyzeDirectory,
   exportToCsv,
+  getDefaultAnalysisDir,
   type TimeUnit,
   type AnalysisResult,
 } from '../../tools/time-analyzer';
 
 const timeAnalyzerRouter = t.router({
+  /** Return the default analysis directory ($PROJ_WORK or cwd). */
+  getDefaultDir: t.procedure
+    .query(() => {
+      return { dir: getDefaultAnalysisDir() };
+    }),
+
   analyze: t.procedure
     .input((raw): { analysisDir: string } => {
       const r = raw as Record<string, unknown>;
@@ -314,10 +331,14 @@ const timeAnalyzerRouter = t.router({
 // ── Sub-router: coverage-merger ───────────────────────────────────
 import {
   buildMergeCommand,
-  executeMerge,
+  executeMergeStream,
   loadHistory as loadMergeHistory,
   saveHistory as saveMergeHistory,
+  deleteHistoryItem as deleteMergeHistoryItem,
+  clearHistory as clearMergeHistory,
+  formatCommandText as formatMergeCommand,
   type MergeConfig,
+  type CoverageMergeEvent,
 } from '../../tools/coverage-merger';
 
 const coverageMergerRouter = t.router({
@@ -340,20 +361,34 @@ const coverageMergerRouter = t.router({
     })
     .mutation(async ({ input }) => {
       const command = buildMergeCommand(input.config);
-      const logs: string[] = [];
-      const success = await new Promise<boolean>((resolve) => {
-        executeMerge(command, input.cwd, {
-          onOutput: (line) => logs.push(line),
-          onExit: (code) => resolve(code === 0),
-        });
-      });
-      return { success, logs, errorMessage: success ? undefined : `Process exited with non-zero code` };
+
+      // Broadcast real-time log events to all windows (matches git-quick-pull pattern).
+      const onEvent = (event: CoverageMergeEvent) => {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) {
+            win.webContents.send('coverage-merger:log', event);
+          }
+        }
+      };
+
+      const result = await executeMergeStream(command, input.cwd, onEvent);
+      return {
+        success: result.success,
+        logs: result.logs,
+        errorMessage: result.success ? undefined : `Process exited with non-zero code`,
+      };
     }),
 
   loadHistory: t.procedure
     .query(async () => {
       const history = await loadMergeHistory();
-      return { history };
+      // Return both raw history and display-formatted entries for the dropdown
+      const displayItems = history.map((h) => ({
+        command: h.command,
+        displayText: formatMergeCommand(h.command),
+        timestamp: h.timestamp,
+      }));
+      return { history, displayItems };
     }),
 
   saveHistory: t.procedure
@@ -363,6 +398,26 @@ const coverageMergerRouter = t.router({
     })
     .mutation(async ({ input }) => {
       await saveMergeHistory(input.config);
+      const history = await loadMergeHistory();
+      return { success: true, history };
+    }),
+
+  deleteHistory: t.procedure
+    .input((raw): { index: number } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.index !== 'number') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'index is required' });
+      }
+      return { index: r.index };
+    })
+    .mutation(async ({ input }) => {
+      const history = await deleteMergeHistoryItem(input.index);
+      return { success: true, history };
+    }),
+
+  clearHistory: t.procedure
+    .mutation(async () => {
+      await clearMergeHistory();
       return { success: true };
     }),
 });
@@ -607,6 +662,80 @@ const svIfdefCheckerRouter = t.router({
       }
       const { results, summary } = await checkFiles(files);
       return { results, summary };
+    }),
+
+  /** Open a file with gvim (or fallback editor) at an optional line number. */
+  openFile: t.procedure
+    .input((raw): { filePath: string; lineNumber?: number | null } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.filePath !== 'string') throw new TRPCError({ code: 'BAD_REQUEST', message: 'filePath is required' });
+      return {
+        filePath: r.filePath,
+        lineNumber: typeof r.lineNumber === 'number' && r.lineNumber > 0 ? r.lineNumber : null,
+      };
+    })
+    .mutation(async ({ input }) => {
+      if (!existsSync(input.filePath)) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: `文件不存在: ${input.filePath}` });
+      }
+
+      const isWindows = process.platform === 'win32';
+      const lineArg = input.lineNumber ? `+${input.lineNumber}` : null;
+
+      // Editor candidates in priority order (matching the Python implementation).
+      const editorCmds: string[][] = [];
+      if (lineArg) {
+        editorCmds.push(['gvim', lineArg, input.filePath]);
+        if (isWindows) {
+          editorCmds.push(['vim', lineArg, input.filePath]);
+          editorCmds.push(['notepad++', `-n${input.lineNumber}`, input.filePath]);
+        } else {
+          editorCmds.push(['vim', lineArg, input.filePath]);
+          editorCmds.push(['gedit', lineArg, input.filePath]);
+          editorCmds.push(['nano', lineArg, input.filePath]);
+        }
+      } else {
+        editorCmds.push(['gvim', input.filePath]);
+        if (isWindows) {
+          editorCmds.push(['vim', input.filePath]);
+          editorCmds.push(['notepad++', input.filePath]);
+          editorCmds.push(['notepad', input.filePath]);
+        } else {
+          editorCmds.push(['vim', input.filePath]);
+          editorCmds.push(['gedit', input.filePath]);
+          editorCmds.push(['nano', input.filePath]);
+        }
+      }
+
+      // Try each editor in order.
+      for (const cmd of editorCmds) {
+        try {
+          const child = spawn(cmd[0], cmd.slice(1), {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: false,
+          });
+          child.unref();
+          // Wait briefly: if the command doesn't exist, spawn emits 'error' quickly.
+          let hadError = false;
+          await new Promise<void>((resolve) => {
+            child.on('error', () => { hadError = true; resolve(); });
+            setTimeout(() => resolve(), 300);
+          });
+          if (!hadError) {
+            return { success: true, editor: cmd[0] };
+          }
+        } catch {
+          // Try next editor.
+        }
+      }
+
+      // Fallback: use system default program.
+      const err = await shell.openPath(input.filePath);
+      if (err) {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `无法打开文件: ${err}` });
+      }
+      return { success: true, editor: 'system-default' };
     }),
 });
 
@@ -882,6 +1011,75 @@ const cSvConverterRouter = t.router({
       return await previewCToSv(input.filePaths, input.config ?? {});
     }),
 
+  previewSvToC: t.procedure
+    .input((raw): {
+      filePaths: string[];
+      config: {
+        preserveComments?: boolean;
+        addAutomatic?: boolean;
+        coreNameDefault?: string;
+        typeMappings?: Record<string, string>;
+      };
+    } => {
+      const r = raw as Record<string, unknown>;
+      return {
+        filePaths: Array.isArray(r.filePaths) ? r.filePaths as string[] : [],
+        config: r.config as {
+          preserveComments?: boolean;
+          addAutomatic?: boolean;
+          coreNameDefault?: string;
+          typeMappings?: Record<string, string>;
+        },
+      };
+    })
+    .mutation(async ({ input }) => {
+      return await previewSvToC(input.filePaths, input.config ?? {});
+    }),
+
+  convert: t.procedure
+    .input((raw): {
+      inputFiles: string[];
+      outputPath: string;
+      direction: 'c-to-sv' | 'sv-to-c';
+      preserveComments: boolean;
+      addAutomatic: boolean;
+      coreNameDefault: string;
+      typeMappings: Record<string, string>;
+    } => {
+      const r = raw as Record<string, unknown>;
+      return {
+        inputFiles: Array.isArray(r.inputFiles) ? r.inputFiles as string[] : [],
+        outputPath: typeof r.outputPath === 'string' ? r.outputPath : '',
+        direction: r.direction === 'sv-to-c' ? 'sv-to-c' : 'c-to-sv',
+        preserveComments: typeof r.preserveComments === 'boolean' ? r.preserveComments : true,
+        addAutomatic: typeof r.addAutomatic === 'boolean' ? r.addAutomatic : true,
+        coreNameDefault: typeof r.coreNameDefault === 'string' ? r.coreNameDefault : 'AON',
+        typeMappings: (r.typeMappings && typeof r.typeMappings === 'object') ? r.typeMappings as Record<string, string> : {},
+      };
+    })
+    .mutation(async ({ input }) => {
+      const config: ConversionConfig = {
+        inputFiles: input.inputFiles,
+        outputPath: input.outputPath,
+        direction: input.direction,
+        preserveComments: input.preserveComments,
+        addAutomatic: input.addAutomatic,
+        coreNameDefault: input.coreNameDefault,
+        typeMappings: input.typeMappings,
+        functionMappings: {},
+      };
+      if (input.direction === 'sv-to-c') {
+        return await convertSvToC(config);
+      }
+      return await convertCToSv(config);
+    }),
+
+  getDefaultTypeMappings: t.procedure
+    .query(() => ({
+      typeMappings: getDefaultTypeMappings(),
+      functionMappings: getDefaultFunctionMappings(),
+    })),
+
   export: t.procedure
     .input((raw): { content: string; savePath: string } => {
       const r = raw as Record<string, unknown>;
@@ -893,6 +1091,40 @@ const cSvConverterRouter = t.router({
     .mutation(async ({ input }) => {
       await writeFile(input.savePath, input.content, 'utf-8');
       return { success: true };
+    }),
+
+  /** Walk a directory and return files matching the given extensions. */
+  scanDirectory: t.procedure
+    .input((raw): { directory: string; extensions: string[] } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.directory !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'directory is required' });
+      }
+      return {
+        directory: r.directory,
+        extensions: Array.isArray(r.extensions) ? r.extensions as string[] : [],
+      };
+    })
+    .mutation(async ({ input }) => {
+      const { readdirSync, statSync } = await import('node:fs');
+      const { join } = await import('node:path');
+      const results: string[] = [];
+
+      function walk(dir: string): void {
+        const entries = readdirSync(dir);
+        for (const entry of entries) {
+          const fullPath = join(dir, entry);
+          const stat = statSync(fullPath);
+          if (stat.isDirectory()) {
+            walk(fullPath);
+          } else if (input.extensions.length === 0 || input.extensions.some((ext) => entry.endsWith(ext))) {
+            results.push(fullPath);
+          }
+        }
+      }
+
+      walk(input.directory);
+      return { files: results };
     }),
 });
 
