@@ -16,6 +16,7 @@
 import type { CaseInfo, CaseStatus, SubsysDiscovery, SubsysInfo } from '../host/discovery';
 import type { SimulationManager } from '../simulation/simulation-manager';
 import type { SimulationStatus } from '@shared/types';
+import type { CaseRow } from './db/case-repository';
 
 // ─── 公共类型 ───────────────────────────────────────────────
 
@@ -198,10 +199,26 @@ export class CaseStatsService {
    * 列出指定子系统的用例，status 实时 join 自 SimulationManager 历史（最近一次 run）。
    * 未跑过的用例 status = 'pending'。
    *
+   * 当 DB 可用时，从 DB 读取 cases（ADR 0017），status 仍从 SimulationManager
+   * 内存 join（混合模式，transitional）。
+   * 当 DB 不可用时，回退到插件 discovery（原行为）。
+   *
    * 这是 list_cases 工具与 project.getCases tRPC 的共享实现。
    */
   async listCasesWithStatus(subsys?: string): Promise<CaseInfo[]> {
     if (!subsys) return [];
+
+    // DB 路径：从 cases 表读取（ADR 0017）
+    if (this.db) {
+      const { getCases } = await import('./db/case-repository');
+      const rows = getCases(this.db, subsys);
+      if (rows.length === 0) return [];
+
+      const statusByCaseName = this.buildLatestStatusMap(subsys);
+      return rows.map((r) => caseRowToInfo(r, statusByCaseName.get(r.name)));
+    }
+
+    // 回退路径：插件 discovery（原行为）
     const cases = await this.discovery.listCases(subsys);
     if (cases.length === 0) return [];
 
@@ -210,6 +227,24 @@ export class CaseStatsService {
       ...c,
       status: statusByCaseName.get(c.name) ?? ('pending' as CaseStatus),
     }));
+  }
+
+  /**
+   * 搜索用例（LIKE 子串匹配，从 DB 查询）。
+   *
+   * 当 DB 可用时，使用 SQL LIKE 查询替代内存倒排索引（ADR 0017）。
+   * 万级数据 < 5ms。
+   * 当 DB 不可用时，返回空数组。
+   */
+  async searchCases(
+    query: string,
+    subsys?: string,
+    limit = 200,
+  ): Promise<CaseInfo[]> {
+    if (!this.db) return [];
+    const { searchCases } = await import('./db/case-repository');
+    const rows = searchCases(this.db, query, subsys, limit);
+    return rows.map((r) => caseRowToInfo(r, undefined));
   }
 
   /**
@@ -470,4 +505,27 @@ export class CaseStatsService {
     result.sort((a, b) => b.caseCount - a.caseCount);
     return result;
   }
+}
+
+// ─── CaseRow → CaseInfo 转换 ───────────────────────────────
+
+/**
+ * 将 DB CaseRow 转换为 CaseInfo，附加 status。
+ *
+ * status 为 undefined 时默认 'pending'。
+ */
+function caseRowToInfo(
+  row: CaseRow,
+  status?: CaseStatus | undefined,
+): CaseInfo {
+  return {
+    name: row.name,
+    subsys: row.subsys,
+    path: row.path,
+    status: status ?? ('pending' as CaseStatus),
+    filePath: row.filePath,
+    baseCase: row.baseCase,
+    base: row.base,
+    block: row.block,
+  };
 }

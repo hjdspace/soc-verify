@@ -12,11 +12,10 @@ import { projectManager } from '../../project/project-manager';
 import { pluginLoader } from '../../plugins/loader';
 import type { CaseStatus } from '../../host/discovery';
 import { getFileDiff, applyRejections } from '../../diff/diff-engine';
-import { caseIndexManager } from '../../search/case-index-manager';
 import { caseStatsRegistry } from '../../case/case-stats-registry';
 import { simulationRegistry } from '../../simulation/simulation-registry';
 import type { CaseStatsService } from '../../case/case-stats-service';
-import { getScanMetadata } from '../../case/db/case-repository';
+import { getScanMetadata, getSubsysWithCaseCount } from '../../case/db/case-repository';
 import type {
   PluginConfig,
   PluginConfigEntry,
@@ -290,24 +289,12 @@ export const projectRouter = t.router({
       };
     })
     .query(async ({ input }) => {
-      const project = requireProject(input.projectId);
-      await ensurePluginsLoaded(project.rootPath);
-      const registry = pluginLoader.getRegistry(project.rootPath);
-      if (registry.caseParsers.length === 0) return [];
-
-      // 确保索引已构建（首次会加载所有用例，后续直接用缓存）
-      await caseIndexManager.ensureIndex(input.projectId, project.rootPath, registry);
-
-      // 直接查内存索引，不触碰文件系统
-      return caseIndexManager.search(
-        input.projectId,
-        input.query,
-        input.subsys,
-        input.limit,
-      );
+      // 走 CaseStatsService：DB LIKE 查询替代内存倒排索引（ADR 0017）
+      const statsService = await getCaseStatsService(input.projectId);
+      return statsService.searchCases(input.query, input.subsys, input.limit);
     }),
 
-  /** 获取用例索引统计信息 */
+  /** 获取用例索引统计信息（从 DB 聚合） */
   getIndexStats: t.procedure
     .input((raw): { projectId: string } => {
       const r = raw as Record<string, unknown>;
@@ -317,10 +304,17 @@ export const projectRouter = t.router({
       return { projectId: r.projectId };
     })
     .query(({ input }) => {
-      return caseIndexManager.getStats(input.projectId);
+      const project = requireProject(input.projectId);
+      const db = caseStatsRegistry.getDb(project.rootPath);
+      if (!db) return null;
+      const subsysRows = getSubsysWithCaseCount(db);
+      return {
+        caseCount: subsysRows.reduce((sum, s) => sum + s.caseCount, 0),
+        subsysCount: subsysRows.length,
+      };
     }),
 
-  /** 手动重建用例索引 */
+  /** 手动重建用例索引（触发全量扫描刷新 DB） */
   rebuildIndex: t.procedure
     .input((raw): { projectId: string } => {
       const r = raw as Record<string, unknown>;
@@ -330,12 +324,16 @@ export const projectRouter = t.router({
       return { projectId: r.projectId };
     })
     .mutation(async ({ input }) => {
-      const project = requireProject(input.projectId);
-      await ensurePluginsLoaded(project.rootPath);
-      const registry = pluginLoader.getRegistry(project.rootPath);
-      caseIndexManager.invalidate(input.projectId);
-      await caseIndexManager.ensureIndex(input.projectId, project.rootPath, registry);
-      return caseIndexManager.getStats(input.projectId);
+      const scanner = await getCaseScanner(input.projectId);
+      const scanResult = await scanner.fullScan({ sync: true });
+      const db = caseStatsRegistry.getDb(requireProject(input.projectId).rootPath);
+      if (!db) return null;
+      const subsysRows = getSubsysWithCaseCount(db);
+      return {
+        caseCount: subsysRows.reduce((sum, s) => sum + s.caseCount, 0),
+        subsysCount: subsysRows.length,
+        scanResult,
+      };
     }),
 
   getPlugins: t.procedure
@@ -890,8 +888,6 @@ export const projectRouter = t.router({
       const project = requireProject(input.projectId);
       // 清除 discovery 缓存（按子系统或全部）
       caseStatsRegistry.clearDiscoveryCache(project.rootPath, input.subsys);
-      // 清除搜索索引缓存（下次搜索时重建）
-      caseIndexManager.invalidate(input.projectId);
 
       // 触发 Case Scanner 全量扫描并更新 DB（ADR 0017）
       const scanner = await getCaseScanner(input.projectId);

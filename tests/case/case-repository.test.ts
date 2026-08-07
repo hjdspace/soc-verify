@@ -272,6 +272,111 @@ describe('Case Database Repository', () => {
       const result = insertSimulationRun(db, run);
       expect(result.inserted).toBe(1);
     });
+
+    it('stores all fields correctly and they are retrievable', () => {
+      const run: SimulationRunRow = {
+        caseName: 'full_case',
+        subsys: 'cpu',
+        status: 'fail',
+        startTime: '2024-03-15T08:30:00.000Z',
+        endTime: '2024-03-15T08:35:42.000Z',
+        durationMs: 342000,
+        corner: 'npg_f1_ffg',
+        seed: '42',
+        optionsJson: JSON.stringify({ corner: 'npg_f1_ffg', seed: '42', base: 'base_x' }),
+      };
+      insertSimulationRun(db, run);
+
+      const row = db.prepare(
+        'SELECT case_name, subsys, status, start_time, end_time, duration_ms, corner, seed, options_json FROM simulation_runs WHERE case_name = @caseName',
+      ).get({ caseName: 'full_case' }) as Record<string, unknown>;
+
+      expect(row['case_name']).toBe('full_case');
+      expect(row['subsys']).toBe('cpu');
+      expect(row['status']).toBe('fail');
+      expect(row['start_time']).toBe('2024-03-15T08:30:00.000Z');
+      expect(row['end_time']).toBe('2024-03-15T08:35:42.000Z');
+      expect(row['duration_ms']).toBe(342000);
+      expect(row['corner']).toBe('npg_f1_ffg');
+      expect(row['seed']).toBe('42');
+      expect(JSON.parse(row['options_json'] as string)).toEqual({ corner: 'npg_f1_ffg', seed: '42', base: 'base_x' });
+    });
+
+    it('stores ISO format timestamps as provided', () => {
+      const isoStart = '2024-06-01T12:00:00.000Z';
+      const isoEnd = '2024-06-01T12:10:30.000Z';
+
+      insertSimulationRun(db, {
+        caseName: 'time_test',
+        subsys: 'cpu',
+        status: 'pass',
+        startTime: isoStart,
+        endTime: isoEnd,
+        durationMs: 630000,
+      });
+
+      const row = db.prepare(
+        'SELECT start_time, end_time FROM simulation_runs WHERE case_name = @caseName',
+      ).get({ caseName: 'time_test' }) as Record<string, unknown>;
+
+      expect(row['start_time']).toBe(isoStart);
+      expect(row['end_time']).toBe(isoEnd);
+    });
+
+    it('allows multiple runs for the same case (no unique constraint)', () => {
+      for (let i = 0; i < 5; i++) {
+        insertSimulationRun(db, {
+          caseName: 'repeat_case',
+          subsys: 'cpu',
+          status: i % 2 === 0 ? 'pass' : 'fail',
+          startTime: `2024-01-0${i + 1}T10:00:00`,
+        });
+      }
+
+      const count = db.prepare(
+        'SELECT COUNT(*) as count FROM simulation_runs WHERE case_name = @caseName',
+      ).get({ caseName: 'repeat_case' }) as { count: number };
+
+      expect(count.count).toBe(5);
+    });
+
+    it('stores null for optional fields when not provided', () => {
+      insertSimulationRun(db, {
+        caseName: 'minimal_case',
+        subsys: 'cpu',
+        status: 'pass',
+        startTime: '2024-01-01T10:00:00',
+      });
+
+      const row = db.prepare(
+        'SELECT end_time, duration_ms, corner, seed, options_json FROM simulation_runs WHERE case_name = @caseName',
+      ).get({ caseName: 'minimal_case' }) as Record<string, unknown>;
+
+      expect(row['end_time']).toBeNull();
+      expect(row['duration_ms']).toBeNull();
+      expect(row['corner']).toBeNull();
+      expect(row['seed']).toBeNull();
+      expect(row['options_json']).toBeNull();
+    });
+
+    it('stores options_json as a parseable JSON string', () => {
+      const opts = { corner: 'tt', seed: '999', extra: { nested: true } };
+      insertSimulationRun(db, {
+        caseName: 'json_case',
+        subsys: 'cpu',
+        status: 'pass',
+        startTime: '2024-01-01T10:00:00',
+        optionsJson: JSON.stringify(opts),
+      });
+
+      const row = db.prepare(
+        'SELECT options_json FROM simulation_runs WHERE case_name = @caseName',
+      ).get({ caseName: 'json_case' }) as Record<string, unknown>;
+
+      const parsed = JSON.parse(row['options_json'] as string);
+      expect(parsed).toEqual(opts);
+      expect(parsed.extra.nested).toBe(true);
+    });
   });
 
   describe('getLatestRunStatus', () => {

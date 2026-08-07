@@ -12,11 +12,13 @@ import { PluginBackedDiscovery } from '../plugin-adapters/discovery';
 import { CaseStatsService } from './case-stats-service';
 import { initDatabase, closeDatabase, getDbPath, type CaseDatabase } from './db/case-database';
 import { CaseScanner } from './case-scanner';
+import { SimulationRunListener } from './sim-run-listener';
 
 class CaseStatsRegistryImpl {
   private services = new Map<string, CaseStatsService>();
   private dbs = new Map<string, CaseDatabase>();
   private scanners = new Map<string, CaseScanner>();
+  private listeners = new Map<string, SimulationRunListener>();
 
   /**
    * 获取或创建指定项目的 DB 连接（懒创建）。
@@ -70,6 +72,11 @@ class CaseStatsRegistryImpl {
       // 已存在的 service 也同步更新 simulationManager 引用
       service.setSimulationManager(simulationManager);
     }
+    // 仿真运行记录持久化（ADR 0017 决策 4）：
+    // 当 SimulationManager 可用时，创建并启动 Listener，监听 run:completed 事件写入 DB。
+    if (simulationManager) {
+      this.attachListener(projectRoot, simulationManager);
+    }
     return service;
   }
 
@@ -78,6 +85,33 @@ class CaseStatsRegistryImpl {
     const service = this.services.get(projectRoot);
     if (service) {
       service.setSimulationManager(mgr);
+    }
+    // 同步管理 Listener 生命周期
+    if (mgr) {
+      this.attachListener(projectRoot, mgr);
+    } else {
+      this.detachListener(projectRoot);
+    }
+  }
+
+  /**
+   * 创建并启动 SimulationRunListener，监听 run:completed 事件并写入 DB。
+   * 如果该项目已存在 Listener，先停止旧的再创建新的。
+   */
+  private attachListener(projectRoot: string, mgr: SimulationManager): void {
+    this.detachListener(projectRoot);
+    const db = this.getOrCreateDb(projectRoot);
+    const listener = new SimulationRunListener(mgr, db);
+    listener.start();
+    this.listeners.set(projectRoot, listener);
+  }
+
+  /** 停止并移除指定项目的 SimulationRunListener。 */
+  private detachListener(projectRoot: string): void {
+    const listener = this.listeners.get(projectRoot);
+    if (listener) {
+      listener.stop();
+      this.listeners.delete(projectRoot);
     }
   }
 
@@ -103,6 +137,8 @@ class CaseStatsRegistryImpl {
   }
 
   remove(projectRoot: string): void {
+    // Stop simulation run listener
+    this.detachListener(projectRoot);
     // Close DB connection
     const db = this.dbs.get(projectRoot);
     if (db) {
@@ -114,6 +150,11 @@ class CaseStatsRegistryImpl {
   }
 
   clearAll(): void {
+    // Stop all listeners
+    for (const listener of this.listeners.values()) {
+      listener.stop();
+    }
+    this.listeners.clear();
     // Close all DB connections
     for (const db of this.dbs.values()) {
       closeDatabase(db);
