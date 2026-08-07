@@ -574,7 +574,9 @@ const regressionAnalyzerRouter = t.router({
 // ── Sub-router: regression-list-gen ───────────────────────────────
 import {
   buildCommand,
-  executeCommand,
+  generateRegressionList,
+  parseBaseBlockFromPath,
+  parseCaseCfg,
   loadHistory as loadRegListHistory,
   saveHistory as saveRegListHistory,
   saveConfig as saveRegListConfig,
@@ -591,6 +593,40 @@ const regressionListGenRouter = t.router({
       return { command: buildCommand(input.config) };
     }),
 
+  /** Infer -base and -block from a case cfg file path. */
+  inferBaseBlock: t.procedure
+    .input((raw): { cfgPath: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.cfgPath !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'cfgPath is required' });
+      }
+      return { cfgPath: r.cfgPath };
+    })
+    .query(({ input }) => {
+      const { base, block } = parseBaseBlockFromPath(input.cfgPath);
+      return { base, block };
+    }),
+
+  /** Preview parsed cases from a cfg file (without generating output). */
+  previewCases: t.procedure
+    .input((raw): { cfgPath: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.cfgPath !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'cfgPath is required' });
+      }
+      return { cfgPath: r.cfgPath };
+    })
+    .query(async ({ input }) => {
+      const { readFile } = await import('node:fs/promises');
+      const { existsSync } = await import('node:fs');
+      if (!existsSync(input.cfgPath)) {
+        return { cases: [], error: '配置文件不存在' };
+      }
+      const content = await readFile(input.cfgPath, 'utf-8');
+      const cases = parseCaseCfg(content);
+      return { cases, error: undefined as string | undefined };
+    }),
+
   execute: t.procedure
     .input((raw): { config: RegressionListConfig; cwd?: string } => {
       const r = raw as Record<string, unknown>;
@@ -600,15 +636,13 @@ const regressionListGenRouter = t.router({
       };
     })
     .mutation(async ({ input }) => {
-      const command = buildCommand(input.config);
-      const logs: string[] = [];
-      const success = await new Promise<boolean>((resolve) => {
-        executeCommand(command, input.cwd ?? process.cwd(), {
-          onOutput: (line) => logs.push(line),
-          onExit: (code) => resolve(code === 0),
-        });
-      });
-      return { success, logs, errorMessage: success ? undefined : 'Process exited with non-zero code' };
+      const result = await generateRegressionList(input.config);
+      return {
+        success: result.success,
+        logs: result.logs,
+        output: result.output,
+        errorMessage: result.errorMessage,
+      };
     }),
 
   loadHistory: t.procedure
