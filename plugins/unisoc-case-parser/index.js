@@ -15,12 +15,15 @@ const { join, relative, basename, sep } = require('node:path');
  *
  * 配置文件查找路径（基于 PROJ_ENV）：
  *   1. PROJ_ENV/{subsys}/bin/case_cfg/ .cfg           — 子系统直接配置
- *   2. PROJ_ENV/udtb/{subsys}/{subenv}/bin/ .cfg      — UDTB 子环境配置
- *   3. PROJ_ENV/udtb/usvp/bin/case_cfg/ .cfg           — USVP 顶层配置（特定子系统）
+ *   2. PROJ_ENV/udtb/{subsys}/{subenv}/bin/ .cfg      — UDTB 子环境配置（bin/ 直接文件）
+ *   2a. PROJ_ENV/udtb/{subsys}/{subenv}/bin/case_cfg/ .cfg — UDTB 子环境配置（bin/case_cfg/ 子目录）
+ *   3. PROJ_ENV/udtb/usvp/bin/case_cfg/ .cfg           — USVP 顶层配置（特定子系统，通过 USVP_CFG_PATTERNS 映射）
+ *   3a. 当 subsystem 为 'usvp' 时，扫描 USVP 目录下的全部 .cfg 文件
  *
  * Base/Block 参数解析规则（从文件路径推断）：
  *   1. {subsys}/bin/case_cfg/xxx.cfg           -> base="", block="{subsys}"
  *   2. udtb/{subsys}/{subenv}/bin/xxx.cfg      -> base="{subsys}", block="udtb/{subsys}/{subenv}"
+ *   2a. udtb/{subsys}/{subenv}/bin/case_cfg/xxx.cfg -> base="{subsys}", block="udtb/{subsys}/{subenv}"
  *   3. udtb/usvp/bin/case_cfg/<sys>_subsys_case.cfg -> base="<sys>_sys", block="udtb/usvp"
  *   4. udtb/usvp/bin/case_cfg/<sys>_top_case.cfg    -> base="top", block="udtb/usvp"
  *   5. udtb/usvp/bin/case_cfg/xxx.cfg          -> base="top", block="udtb/usvp" (默认)
@@ -148,8 +151,9 @@ function parseBaseBlockFromPath(filePath, projEnvPath) {
       return { base: '', block: subsys };
     }
 
-    // 规则 2: udtb/{subsys}/{subenv}/bin/xxx.cfg（非 usvp）
+    // 规则 2/2a: udtb/{subsys}/{subenv}/bin/[case_cfg/]xxx.cfg（非 usvp）
     //   base="{subsys}", block="udtb/{subsys}/{subenv}"
+    //   覆盖 bin/ 直接文件和 bin/case_cfg/ 子目录文件两种情况
     if (parts.includes('udtb') && parts.includes('bin')) {
       const udtbIndex = parts.indexOf('udtb');
       if (parts.length > udtbIndex + 3 && parts[udtbIndex + 1] !== 'usvp') {
@@ -238,8 +242,9 @@ function findCaseConfigFiles(projEnvPath, subsys) {
     }
   }
 
-  // 2. $PROJ_ENV/udtb/{subsys}/*/bin/*.cfg
-  //    递归扫描 UDTB 子环境目录，查找包含 bin/ 的子目录
+  // 2. $PROJ_ENV/udtb/{subsys}/*/bin/*.cfg 及 */bin/case_cfg/*.cfg
+  //    递归扫描 UDTB 子环境目录，查找包含 bin/ 的子目录，
+  //    收集 bin/ 和 bin/case_cfg/ 中的 .cfg 文件
   const udtbSubsysPath = join(projEnvPath, 'udtb', subsys);
   if (existsSync(udtbSubsysPath)) {
     function scanForBinDirs(dirPath) {
@@ -263,6 +268,20 @@ function findCaseConfigFiles(projEnvPath, subsys) {
         } catch {
           // 读取 bin/ 失败，跳过
         }
+
+        // 同时扫描 bin/case_cfg/ 子目录（规则 2a）
+        const caseCfgDir = join(binDir, 'case_cfg');
+        if (existsSync(caseCfgDir)) {
+          try {
+            for (const file of readdirSync(caseCfgDir)) {
+              if (file.endsWith('.cfg')) {
+                addCfgFile(join(caseCfgDir, file));
+              }
+            }
+          } catch {
+            // 读取 case_cfg/ 失败，跳过
+          }
+        }
       }
 
       // 递归扫描子目录
@@ -275,10 +294,24 @@ function findCaseConfigFiles(projEnvPath, subsys) {
     scanForBinDirs(udtbSubsysPath);
   }
 
-  // 3. $PROJ_ENV/udtb/usvp/bin/case_cfg/*.cfg（特定子系统）
-  if (USVP_CFG_PATTERNS[subsys]) {
-    const usvpCfgPath = join(projEnvPath, 'udtb', 'usvp', 'bin', 'case_cfg');
-    if (existsSync(usvpCfgPath)) {
+  // 3. $PROJ_ENV/udtb/usvp/bin/case_cfg/*.cfg
+  //    对于 'usvp' 伪子系统：扫描全部 .cfg 文件
+  //    对于其他子系统：仅扫描 USVP_CFG_PATTERNS 中映射的特定文件
+  const usvpCfgPath = join(projEnvPath, 'udtb', 'usvp', 'bin', 'case_cfg');
+  if (existsSync(usvpCfgPath)) {
+    if (subsys === 'usvp') {
+      // usvp 伪子系统：扫描全部 .cfg 文件
+      try {
+        for (const cfg of readdirSync(usvpCfgPath)) {
+          if (cfg.endsWith('.cfg')) {
+            addCfgFile(join(usvpCfgPath, cfg));
+          }
+        }
+      } catch {
+        // 读取目录失败，跳过
+      }
+    } else if (USVP_CFG_PATTERNS[subsys]) {
+      // 特定子系统：仅扫描映射的 cfg 文件
       for (const pattern of USVP_CFG_PATTERNS[subsys]) {
         const cfgPath = join(usvpCfgPath, pattern);
         if (existsSync(cfgPath)) {

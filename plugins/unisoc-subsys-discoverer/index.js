@@ -10,6 +10,9 @@ const { join, resolve } = require('node:path');
  * - 文件夹名以 `_sys` 结尾 → 子系统 (subsys)
  * - 文件夹名为 `top` → 顶层模块 (top)
  *
+ * 此外，如果 $PROJ_ENV/udtb/usvp/ 目录存在，则添加 `usvp` 伪子系统，
+ * 用于扫描 USVP 顶层验证平台的所有 .cfg 配置文件（参见 ADR 0017）。
+ *
  * 如果 $PROJ_RTL 环境变量未定义，则读取项目 `.socverify/subsys-config.json`
  * 配置文件中用户手动配置的子系统列表。
  */
@@ -27,6 +30,29 @@ const MANIFEST = {
 const MANUAL_CONFIG_FILE = 'subsys-config.json';
 const ENV_CONFIG_FILE = 'env.json';
 const SOCVERIFY_DIR = '.socverify';
+
+/**
+ * 从进程环境变量或项目环境配置中解析 $PROJ_ENV
+ * @param {string} projectRoot - 项目根路径
+ * @returns {string|null}
+ */
+function resolveProjEnv(projectRoot) {
+  let projEnv = process.env.PROJ_ENV;
+  if (projEnv && projEnv.trim()) return projEnv;
+
+  const envConfigPath = join(projectRoot, SOCVERIFY_DIR, ENV_CONFIG_FILE);
+  try {
+    const envConfig = JSON.parse(readFileSync(envConfigPath, 'utf-8'));
+    const configuredProjEnv = envConfig?.envVars?.PROJ_ENV;
+    if (typeof configuredProjEnv === 'string' && configuredProjEnv.trim()) {
+      return configuredProjEnv;
+    }
+  } catch {
+    // 配置文件不存在或格式无效，继续
+  }
+
+  return null;
+}
 
 /**
  * 从 $PROJ_RTL 环境变量指向的目录中扫描子系统
@@ -131,7 +157,7 @@ const plugin = {
    * @param {string} projectRoot - 项目根路径
    * @returns {Promise<Array<{id: string, name: string, path: string, kind: 'subsys'|'top'}>>}
    */
-  async discover(projectRoot) {
+    async discover(projectRoot) {
     // 启动进程环境优先，其次使用项目环境配置。
     let projRtl = process.env.PROJ_RTL;
     if (!projRtl) {
@@ -147,15 +173,38 @@ const plugin = {
       }
     }
 
+    let results;
     if (projRtl) {
-      const results = discoverFromProjRtl(projRtl);
-      if (results.length > 0) {
-        return results;
+      results = discoverFromProjRtl(projRtl);
+    }
+    if (!results || results.length === 0) {
+      // $PROJ_RTL 未定义或扫描结果为空时，尝试从手动配置文件读取
+      results = discoverFromManualConfig(projectRoot);
+    }
+
+    // 如果 $PROJ_ENV/udtb/usvp/ 目录存在，添加 usvp 伪子系统
+    // 用于扫描 USVP 顶层验证平台的所有 .cfg 配置文件
+    const projEnv = resolveProjEnv(projectRoot);
+    if (projEnv) {
+      const usvpPath = join(projEnv, 'udtb', 'usvp');
+      const usvpAlreadyExists = results.some((r) => r.name === 'usvp');
+      if (!usvpAlreadyExists && existsSync(usvpPath)) {
+        results.push({
+          id: 'usvp',
+          name: 'usvp',
+          path: usvpPath,
+          kind: 'subsys',
+        });
+        // 重新排序：top 最后，subsys 按字母排序
+        results.sort((a, b) => {
+          if (a.kind === 'top' && b.kind !== 'top') return 1;
+          if (a.kind !== 'top' && b.kind === 'top') return -1;
+          return a.name.localeCompare(b.name);
+        });
       }
     }
 
-    // $PROJ_RTL 未定义或扫描结果为空时，尝试从手动配置文件读取
-    return discoverFromManualConfig(projectRoot);
+    return results;
   },
 };
 

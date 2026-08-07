@@ -9,12 +9,14 @@ describe('unisoc-subsys-discoverer', () => {
   let tempDir: string;
   let projRtlDir: string;
   let originalProjRtl: string | undefined;
+  let originalProjEnv: string | undefined;
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'socverify-test-'));
     projRtlDir = join(tempDir, 'rtl');
     mkdirSync(projRtlDir, { recursive: true });
     originalProjRtl = process.env.PROJ_RTL;
+    originalProjEnv = process.env.PROJ_ENV;
   });
 
   afterEach(() => {
@@ -22,6 +24,11 @@ describe('unisoc-subsys-discoverer', () => {
       process.env.PROJ_RTL = originalProjRtl;
     } else {
       delete process.env.PROJ_RTL;
+    }
+    if (originalProjEnv !== undefined) {
+      process.env.PROJ_ENV = originalProjEnv;
+    } else {
+      delete process.env.PROJ_ENV;
     }
     rmSync(tempDir, { recursive: true, force: true });
   });
@@ -180,5 +187,66 @@ describe('unisoc-subsys-discoverer', () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].name).toBe('fallback_sub_sys');
+  });
+
+  // ─── USVP pseudo-subsystem ──────────────────────────
+
+  it('should discover usvp pseudo-subsystem when $PROJ_ENV/udtb/usvp/ exists', async () => {
+    process.env.PROJ_RTL = projRtlDir;
+    process.env.PROJ_ENV = projRtlDir; // same dir for simplicity
+    mkdirSync(join(projRtlDir, 'cpu_sub_sys'));
+    mkdirSync(join(projRtlDir, 'udtb', 'usvp'), { recursive: true });
+
+    const result = await plugin.discover(tempDir);
+
+    const usvp = result.find((r: { name: string }) => r.name === 'usvp');
+    expect(usvp).toBeDefined();
+    expect(usvp.kind).toBe('subsys');
+  });
+
+  it('should not duplicate usvp if already discovered via PROJ_RTL', async () => {
+    process.env.PROJ_RTL = projRtlDir;
+    process.env.PROJ_ENV = projRtlDir;
+    // Create a usvp directory directly under PROJ_RTL (unlikely but edge case)
+    mkdirSync(join(projRtlDir, 'usvp'));
+    mkdirSync(join(projRtlDir, 'udtb', 'usvp'), { recursive: true });
+
+    const result = await plugin.discover(tempDir);
+
+    // usvp should appear at most once
+    const usvpCount = result.filter((r: { name: string }) => r.name === 'usvp').length;
+    expect(usvpCount).toBeLessThanOrEqual(1);
+  });
+
+  it('should not add usvp when $PROJ_ENV/udtb/usvp/ does not exist', async () => {
+    process.env.PROJ_RTL = projRtlDir;
+    process.env.PROJ_ENV = projRtlDir;
+    mkdirSync(join(projRtlDir, 'cpu_sub_sys'));
+
+    const result = await plugin.discover(tempDir);
+
+    expect(result.find((r: { name: string }) => r.name === 'usvp')).toBeUndefined();
+  });
+
+  it('should discover usvp from project env config when PROJ_ENV not in process env', async () => {
+    delete process.env.PROJ_ENV;
+    process.env.PROJ_RTL = projRtlDir;
+    mkdirSync(join(projRtlDir, 'cpu_sub_sys'));
+    mkdirSync(join(projRtlDir, 'udtb', 'usvp'), { recursive: true });
+
+    const socverifyDir = join(tempDir, '.socverify');
+    mkdirSync(socverifyDir, { recursive: true });
+    writeFileSync(
+      join(socverifyDir, 'env.json'),
+      JSON.stringify({
+        tools: [],
+        envVars: { PROJ_ENV: projRtlDir },
+      }),
+    );
+
+    const result = await plugin.discover(tempDir);
+
+    const usvp = result.find((r: { name: string }) => r.name === 'usvp');
+    expect(usvp).toBeDefined();
   });
 });

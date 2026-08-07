@@ -250,6 +250,43 @@ describe('unisoc-case-parser', () => {
     expect(result.map((r: { name: string }) => r.name).sort()).toEqual(['subsys_test', 'top_test']);
   });
 
+  it('should scan ALL .cfg files from USVP for usvp pseudo-subsystem', async () => {
+    process.env.PROJ_ENV = projEnvDir;
+    const subsys = 'usvp';
+    const usvpCfgDir = join(projEnvDir, 'udtb', 'usvp', 'bin', 'case_cfg');
+    mkdirSync(usvpCfgDir, { recursive: true });
+    writeFileSync(join(usvpCfgDir, 'apcpu_subsys_case.cfg'), '[case subsys_test]\n');
+    writeFileSync(join(usvpCfgDir, 'apcpu_top_case.cfg'), '[case top_test]\n');
+    writeFileSync(join(usvpCfgDir, 'other_case.cfg'), '[case other_test]\n');
+
+    const result = await plugin.parse(tempDir, subsys);
+
+    // usvp pseudo-subsystem should find ALL .cfg files, including other_case.cfg
+    expect(result).toHaveLength(3);
+    expect(result.map((r: { name: string }) => r.name).sort()).toEqual(['other_test', 'subsys_test', 'top_test']);
+  });
+
+  it('should find .cfg files from UDTB sub-environment bin/case_cfg/ subdirectory', async () => {
+    process.env.PROJ_ENV = projEnvDir;
+    const subsys = 'cpu_sub_sys';
+    // Create UDTB sub-environment with bin/case_cfg/ structure (rule 2a)
+    const udtbCaseCfgDir = join(projEnvDir, 'udtb', subsys, 'env1', 'bin', 'case_cfg');
+    mkdirSync(udtbCaseCfgDir, { recursive: true });
+    writeFileSync(join(udtbCaseCfgDir, 'case_cfg_test.cfg'), '[case case_cfg_env_test]\n');
+    // Also create a .cfg directly in bin/ (rule 2)
+    const udtbBinDir = join(projEnvDir, 'udtb', subsys, 'env1', 'bin');
+    writeFileSync(join(udtbBinDir, 'bin_test.cfg'), '[case bin_env_test]\n');
+
+    const result = await plugin.parse(tempDir, subsys);
+
+    // Should find both bin/ and bin/case_cfg/ cfg files
+    expect(result).toHaveLength(2);
+    expect(result.map((r: { name: string }) => r.name).sort()).toEqual(['bin_env_test', 'case_cfg_env_test']);
+    // Both should have the same base/block (rule 2/2a)
+    expect(result.every((r: { base: string }) => r.base === 'cpu_sub_sys')).toBe(true);
+    expect(result.every((r: { block: string }) => r.block === 'udtb/cpu_sub_sys/env1')).toBe(true);
+  });
+
   it('should combine cases from multiple config sources', async () => {
     process.env.PROJ_ENV = projEnvDir;
     const subsys = 'apcpu_sys';
