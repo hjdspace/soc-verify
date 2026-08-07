@@ -6,6 +6,50 @@
 
 ---
 
+## [0.2.3](https://github.com/hjdspace/soc-verify/compare/v0.2.2...v0.2.3) (2026-08-07)
+
+### Features
+
+* **host-tools:** 拆分 HostTools 单体为注册器 + 工具模块，新增 EventRelay 实现 IPC 事件转发与管理
+* **host-tools:** 新增 RTL 上下文、仿真、覆盖率统计、文档创建和 xlsx 编辑等 Host Tool
+* **tools:** 新增 17 个工具子路由（time-analyzer、system-monitor、sv-ifdef-checker、regression-list-gen、regression-analyzer、register-table-parser、reg2c、log-analyzer、git-quick-pull、git-manager、git-diff、find-replace、env-checker、coverage-merger、code-line-counter、c-sv-converter、batch-execution）
+* **tools:** 新增共享 input-validation 辅助工具
+* **git-manager:** 实现 Git 仓库管理（RepoCard、TagDialog、UpdateDialog、SingleRepoUpdateDialog、批量更新与回主分支）
+* **git-quick-pull:** 增强并行执行和实时日志输出
+* **terminal:** 新增 TerminalPanel 组件和 SimControlToolbar 仿真控制工具栏
+* **simulation:** 增强 runsim 命令生成与解析，新增 rerunWithCommand 和 getSeedFromLog
+* **window:** 实现窗口工厂与 IPC 控制，新增系统托盘功能
+* **linux:** 新增 Linux 平台 IME 和 D-Bus 设置
+* **session:** 实现 SessionContextFactory 会话上下文工厂
+* **coverage:** 在 worker 线程中解析覆盖率，新增插件路径解析
+* **coverage-merger:** 增强日志流式传输和历史记录管理
+* **time-analyzer:** 增强实时事件流和额外时间单位支持
+* **register-table-parser:** 新增 autoFix 选项和工具函数
+* **theme:** 更新主题支持和验证命令
+* **window:** 新增窗口关闭偏好管理
+
+### Refactor
+
+* **linux:** 清理冗余代码并完善终端依赖兼容性
+* **terminal:** 用 TerminalPanel 替换 TerminalView（CenterArea 和 BottomPanel）
+* **coverage:** 重构 CoverageDashboard 和覆盖率管理器以提升性能
+* **git-manager:** 重构 GitManager 以增强仓库管理
+* **session:** 重构 tv-ai-advisor 会话创建逻辑
+* **tools:** 简化 tools 路由结构，重构 RegressionListGen 为 TypeScript
+* **c-sv-converter:** 重构 C/SV 转换器增强功能
+* **register-table-parser:** 重构为统一工作表接口
+* **coverage-merger:** 重构日志为 IPC 事件实时输出
+
+### Performance
+
+* **coverage:** 优化 CoverageTreeTable 过滤和渲染性能
+
+### Build
+
+* 新增 build-linux-sqlite 构建脚本，将 better-sqlite3 加入 asarUnpack 配置
+
+---
+
 ## [0.2.2](https://github.com/hjdspace/soc-verify/compare/v0.2.1...v0.2.2) (2026-08-06)
 
 ### Features
