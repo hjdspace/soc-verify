@@ -265,6 +265,36 @@ describe('Case Scanner', () => {
       expect(getCases(db, 'cpu')).toHaveLength(1);
       expect(getCases(db, 'cpu')[0].name).toBe('test1');
     });
+
+    it('sync mode removes old subsystems no longer present after env config change', async () => {
+      // First scan with 2 subsystems
+      let subsysPlugin = makeMockSubsysDiscoverer(['cpu', 'gpu']);
+      const casePlugin = makeMockCaseParser({
+        cpu: [{ id: 't1', name: 'test1', path: '/proj/cpu/test1' }],
+        gpu: [{ id: 't2', name: 'test2', path: '/proj/gpu/test2' }],
+      });
+      let registry = makeRegistry(subsysPlugin, casePlugin);
+      let scanner = new CaseScanner(projectRoot, registry, db);
+      await scanner.fullScan();
+
+      expect(getSubsystems(db)).toHaveLength(2);
+
+      // Second scan with only 1 subsystem (gpu removed — e.g. PROJ_RTL changed)
+      subsysPlugin = makeMockSubsysDiscoverer(['cpu']);
+      const updatedCasePlugin = makeMockCaseParser({
+        cpu: [{ id: 't1', name: 'test1', path: '/proj/cpu/test1' }],
+      });
+      registry = makeRegistry(subsysPlugin, updatedCasePlugin);
+      scanner = new CaseScanner(projectRoot, registry, db);
+
+      await scanner.fullScan({ sync: true });
+
+      const subsys = getSubsystems(db);
+      expect(subsys).toHaveLength(1);
+      expect(subsys[0].name).toBe('cpu');
+      // gpu's cases should also be gone
+      expect(getCases(db, 'gpu')).toHaveLength(0);
+    });
   });
 
   describe('phase field', () => {

@@ -388,6 +388,14 @@ export function clearAllCases(db: Database.Database): void {
   db.prepare('DELETE FROM cases').run();
 }
 
+/**
+ * 清除所有子系统数据（保留 cases 表）。
+ * 用于 sync 模式下全量重扫前清理旧的子系统记录。
+ */
+export function clearAllSubsystems(db: Database.Database): void {
+  db.prepare('DELETE FROM subsystems').run();
+}
+
 // ─── 行映射 ───────────────────────────────────────────────
 
 function rowToSubsysRow(row: Record<string, unknown>): SubsysRow {

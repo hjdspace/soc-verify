@@ -16,6 +16,7 @@ import {
   getSubsystems,
   setScanMetadata,
   clearAllCases,
+  clearAllSubsystems,
   type SubsysRow,
   type CaseRow,
 } from './db/case-repository';
@@ -26,7 +27,8 @@ export type ScanResult = {
 };
 
 export type ScanOptions = {
-  /** sync=true 时，清除 DB 中不再存在的 cases（stale removal）。
+  /** sync=true 时，清除 DB 中旧的 subsystems 和 cases 后再写入新扫描结果。
+   * 用于环境变量变更（PROJ_RTL/PROJ_ENV）或手动刷新后确保 DB 与最新扫描一致。
    * sync=false（默认），只插入/更新，不删除旧数据。 */
   sync?: boolean;
 };
@@ -97,13 +99,15 @@ export class CaseScanner {
 
     // Use transaction for atomic write
     const tx = this.db.transaction(() => {
-      insertSubsystems(this.db, subsysRows);
-
       if (sync) {
-        // In sync mode, clear stale cases not in current scan
-        this.removeStaleCases(caseRows);
+        // In sync mode, clear all old subsystems and cases before inserting
+        // new scan results. This ensures subsystems that no longer exist
+        // (e.g. after PROJ_RTL / PROJ_ENV change) are removed from the DB.
+        clearAllSubsystems(this.db);
+        clearAllCases(this.db);
       }
 
+      insertSubsystems(this.db, subsysRows);
       insertCases(this.db, caseRows);
     });
     tx();
@@ -140,35 +144,4 @@ export class CaseScanner {
     tx();
   }
 
-  /**
-   * 移除不再存在于当前扫描结果中的 stale cases。
-   * 仅在 sync 模式下调用。
-   */
-  private removeStaleCases(currentCases: CaseRow[]): void {
-    if (currentCases.length === 0) {
-      clearAllCases(this.db);
-      return;
-    }
-
-    // Build a set of (name, subsys) pairs from current scan
-    const currentKeys = new Set(
-      currentCases.map((c) => `${c.name}||${c.subsys}`),
-    );
-
-    // Get all existing cases from DB
-    const existingCases = this.db.prepare(
-      'SELECT name, subsys FROM cases',
-    ).all() as { name: string; subsys: string }[];
-
-    // Delete cases not in current scan
-    const staleKeys = existingCases
-      .filter((c) => !currentKeys.has(`${c.name}||${c.subsys}`))
-      .map((c) => `(${c.name}, ${c.subsys})`);
-
-    if (staleKeys.length > 0) {
-      // Simple approach: delete all cases and re-insert
-      // (more efficient than row-by-row deletion for large datasets)
-      clearAllCases(this.db);
-    }
-  }
 }
