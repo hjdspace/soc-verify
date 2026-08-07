@@ -72,6 +72,16 @@ export interface EventBridgeAPI {
   // Issue #9: Browser window-open events
   onBrowserOpenNewTab: (callback: (data: { url: string }) => void) => () => void;
   onAuthPopup: (callback: (data: { type: 'opened' | 'closed'; url: string }) => void) => () => void;
+  // Coverage Merger 实时日志
+  onCoverageMergerLog: (
+    callback: (data: {
+      type: 'start' | 'output' | 'end';
+      command?: string;
+      line?: string;
+      lines?: string[];
+      success?: boolean;
+    }) => void,
+  ) => () => void;
   // Git Quick Pull 实时日志
   onGitQuickPullLog: (
     callback: (data: {
