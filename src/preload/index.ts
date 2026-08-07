@@ -171,6 +171,31 @@ process.once('loaded', async () => {
       return () => ipcRenderer.removeListener('browser:auth-popup', handler);
     },
 
+    // ── Coverage Merger 实时日志事件 ────────────────────────────
+    // coverage-merger:log —— 主进程推送覆盖率合并的实时日志
+    onCoverageMergerLog: (
+      callback: (data: {
+        type: 'start' | 'output' | 'end';
+        command?: string;
+        line?: string;
+        lines?: string[];
+        success?: boolean;
+      }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: {
+          type: 'start' | 'output' | 'end';
+          command?: string;
+          line?: string;
+          lines?: string[];
+          success?: boolean;
+        },
+      ) => callback(data);
+      ipcRenderer.on('coverage-merger:log', handler);
+      return () => ipcRenderer.removeListener('coverage-merger:log', handler);
+    },
+
     // ── Git Quick Pull 实时日志事件 ────────────────────────────
     // git-quick-pull:log —— 主进程推送批量 git pull 的实时日志
     onGitQuickPullLog: (
