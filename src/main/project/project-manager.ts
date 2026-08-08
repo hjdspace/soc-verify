@@ -318,7 +318,59 @@ class ProjectManagerImpl extends EventEmitter {
     // Ensure default config files exist
     await this.ensurePluginConfig(projectRoot);
     await this.ensureProjectConfig(projectRoot);
+
+    // Ensure `.socverify` is git-ignored: append to `.gitignore` if missing,
+    // create `.gitignore` if it doesn't exist. Idempotent — no-op when already ignored.
+    await this.ensureGitignoreEntry(projectRoot);
     return dir;
+  }
+
+  /**
+   * 保证项目根目录的 `.gitignore` 中包含 `.socverify` 条目。
+   *
+   * - `.gitignore` 不存在：新建并写入条目
+   * - `.gitignore` 存在但未忽略 `.socverify`：在末尾追加条目
+   * - 已存在条目（含 `.socverify/` 变体）：幂等不修改
+   *
+   * 写入失败仅记录日志，不阻断项目打开流程。
+   */
+  private async ensureGitignoreEntry(projectRoot: string): Promise<void> {
+    const gitignorePath = join(projectRoot, '.gitignore');
+    const ENTRY = SOCVERIFY_DIR; // `.socverify`
+
+    let content = '';
+    try {
+      content = await readFile(gitignorePath, 'utf-8');
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT') {
+        console.warn(`[project-manager] failed to read .gitignore at ${gitignorePath}:`, err);
+        return;
+      }
+      // .gitignore 不存在 — 新建并写入条目
+      try {
+        await writeFile(gitignorePath, `# SoC Verify workspace\n${ENTRY}\n`, 'utf-8');
+      } catch (writeErr) {
+        console.warn(`[project-manager] failed to create .gitignore at ${gitignorePath}:`, writeErr);
+      }
+      return;
+    }
+
+    // 检查是否已忽略：行首匹配 `.socverify` 或 `.socverify/`，允许前导空白和行内注释
+    const alreadyIgnored = content.split(/\r?\n/).some((line) => {
+      const hashIdx = line.indexOf('#');
+      const pattern = (hashIdx >= 0 ? line.slice(0, hashIdx) : line).trim();
+      return pattern === ENTRY || pattern === `${ENTRY}/`;
+    });
+    if (alreadyIgnored) return;
+
+    // 追加条目，确保既有内容以换行结尾
+    const prefix = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
+    try {
+      await writeFile(gitignorePath, content + `${prefix}\n# SoC Verify workspace\n${ENTRY}\n`, 'utf-8');
+    } catch (writeErr) {
+      console.warn(`[project-manager] failed to append .socverify to ${gitignorePath}:`, writeErr);
+    }
   }
 
   private async ensurePluginConfig(projectRoot: string): Promise<void> {

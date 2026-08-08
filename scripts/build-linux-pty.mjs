@@ -114,10 +114,13 @@ function buildViaDocker(electronVersion, ptyVersion) {
   // Node is only the build runner. The native binary is compiled and linked
   // inside Rocky Linux 8, which fixes the maximum glibc baseline at 2.28.
   const dockerScript = [
-    'set -e',
-    'dnf install -y gcc-toolset-10-gcc gcc-toolset-10-gcc-c++ make python3 tar gzip xz curl binutils > /dev/null',
+    'set -euo pipefail',
+    'dnf install -y gcc-toolset-10-gcc gcc-toolset-10-gcc-c++ make python39 tar gzip xz curl binutils > /dev/null',
     `curl -fsSL https://nodejs.org/dist/v${DOCKER_NODE_VERSION}/node-v${DOCKER_NODE_VERSION}-linux-x64.tar.gz | tar -xz -C /usr/local --strip-components=1`,
     'source /opt/rh/gcc-toolset-10/enable',
+    'export PYTHON=/usr/bin/python3.9',
+    'export npm_config_python=/usr/bin/python3.9',
+    'python3.9 --version',
     'export LDFLAGS="-static-libstdc++ -static-libgcc"',
     'echo "[docker] Setting up build environment..."',
     'mkdir -p /tmp/pty-build && cd /tmp/pty-build',

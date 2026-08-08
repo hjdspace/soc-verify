@@ -21,6 +21,13 @@ describe('Linux node-pty packaging', () => {
     expect(buildScript).toContain('__PTY_OK__');
   });
 
+  it('uses a Python version supported by the node-gyp bundled with electron-rebuild', () => {
+    expect(buildScript).toContain('set -euo pipefail');
+    expect(buildScript).toContain('python39');
+    expect(buildScript).toContain('PYTHON=/usr/bin/python3.9');
+    expect(buildScript).toContain('npm_config_python=/usr/bin/python3.9');
+  });
+
   it('removes the higher-priority build output after copying the Linux prebuild', () => {
     expect(buildScript).toContain('rmSync(BUILD_DIR, { recursive: true, force: true })');
   });
