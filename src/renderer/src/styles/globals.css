@@ -689,3 +689,21 @@ body {
   height: auto;
   display: block;
 }
+
+/* Subtle drop-shadow for depth — light mode */
+[data-mode="light"] .mermaid-preview-svg > svg,
+:root[data-theme="drafting"] .mermaid-preview-svg > svg,
+:root[data-theme="daylight"] .mermaid-preview-svg > svg {
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.08));
+}
+
+/* Subtle drop-shadow for depth — dark mode */
+:root[data-theme="bench"] .mermaid-preview-svg > svg,
+:root[data-theme="slate"] .mermaid-preview-svg > svg {
+  filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.3));
+}
+
+/* Modal shadow — stronger for the dark backdrop */
+.mermaid-modal-svg > svg {
+  filter: drop-shadow(0 2px 12px rgba(0, 0, 0, 0.4));
+}

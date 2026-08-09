@@ -15,6 +15,133 @@ const MAX_ZOOM = 10;
 const ZOOM_STEP = 0.15;
 const WHEEL_ZOOM_STEP = 0.08;
 
+// ── SVG Style Isolation ──────────────────────────────────────────
+// Mermaid SVGs embed <style> tags whose CSS rules can leak beyond the
+// SVG scope and affect the entire document (e.g., disabling pointer
+// events on toolbar buttons).  These functions scope every selector
+// inside <style> tags to a container class so styles stay contained.
+
+function scopeCssRules(css: string, scope: string): string {
+  // Strip CSS comments
+  let result = css.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  // Handle @-rules (@media, @supports, …) — recurse into their body
+  const atRuleRegex = /(@[\w-]+[^{]*)\{([\s\S]*?)\}/g;
+  result = result.replace(atRuleRegex, (_m, atRule: string, body: string) => {
+    return `${atRule.trim()}{${scopeCssRules(body, scope)}}`;
+  });
+
+  // Scope regular CSS rules  selector { props }
+  result = result.replace(/([^{}]+)\{([^{}]*)\}/g, (_m, selectors: string, body: string) => {
+    const scoped = selectors
+      .split(',')
+      .map((s) => {
+        const trimmed = s.trim();
+        if (!trimmed) return '';
+        if (trimmed.startsWith('@')) return trimmed; // shouldn't happen, but safe
+        if (trimmed.startsWith(scope)) return trimmed; // already scoped
+        return `${scope} ${trimmed}`;
+      })
+      .filter(Boolean)
+      .join(', ');
+    return `${scoped}{${body}}`;
+  });
+
+  return result;
+}
+
+/** Scopes all <style> tags inside the SVG HTML to `.` + `scopeClass`. */
+function scopeSvgStyles(svgHtml: string, scopeClass: string): string {
+  const scope = `.${scopeClass}`;
+  return svgHtml.replace(
+    /<style([^>]*)>([\s\S]*?)<\/style>/gi,
+    (_m, attrs: string, css: string) => `<style${attrs}>${scopeCssRules(css, scope)}</style>`,
+  );
+}
+
+// ── Theme Color Resolution ───────────────────────────────────────
+// Reads CSS custom properties from the active theme and converts them
+// to #hex / rgba() strings that mermaid can safely use in themeVariables.
+//
+// IMPORTANT: Chromium preserves oklch() when serialising Canvas fillStyle,
+// but mermaid cannot parse it. Drawing the colour and reading the pixel data
+// converts every browser-supported CSS colour to sRGB bytes.
+
+type ThemeColors = {
+  primaryColor: string;
+  primaryTextColor: string;
+  primaryBorderColor: string;
+  lineColor: string;
+  secondaryColor: string;
+  tertiaryColor: string;
+};
+
+const FALLBACK_DARK: ThemeColors = {
+  primaryColor: '#334155',
+  primaryTextColor: '#e2e8f0',
+  primaryBorderColor: '#475569',
+  lineColor: '#64748b',
+  secondaryColor: '#1e293b',
+  tertiaryColor: '#0f172a',
+};
+
+const FALLBACK_LIGHT: ThemeColors = {
+  primaryColor: '#f1f5f9',
+  primaryTextColor: '#1e293b',
+  primaryBorderColor: '#cbd5e1',
+  lineColor: '#94a3b8',
+  secondaryColor: '#e2e8f0',
+  tertiaryColor: '#f8fafc',
+};
+
+function resolveThemeColors(dark: boolean): ThemeColors {
+  const fallback = dark ? FALLBACK_DARK : FALLBACK_LIGHT;
+  if (typeof window === 'undefined') return fallback;
+
+  try {
+    const root = document.documentElement;
+    const cs = getComputedStyle(root);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return fallback;
+
+    const resolve = (varName: string): string => {
+      const raw = cs.getPropertyValue(varName).trim();
+      if (!raw) return '';
+      ctx.fillStyle = '#000001';
+      ctx.fillStyle = raw;
+      if (ctx.fillStyle === '#000001' && raw.toLowerCase() !== '#000001') return '';
+
+      ctx.clearRect(0, 0, 1, 1);
+      ctx.fillRect(0, 0, 1, 1);
+      const [red, green, blue, alpha] = ctx.getImageData(0, 0, 1, 1).data;
+      if (alpha === 255) {
+        const hex = [red, green, blue]
+          .map((value) => value.toString(16).padStart(2, '0'))
+          .join('');
+        return `#${hex}`;
+      }
+      return `rgba(${red}, ${green}, ${blue}, ${(alpha / 255).toFixed(3)})`;
+    };
+
+    return {
+      primaryColor: resolve('--secondary') || fallback.primaryColor,
+      primaryTextColor: resolve('--foreground') || fallback.primaryTextColor,
+      primaryBorderColor: resolve('--border') || fallback.primaryBorderColor,
+      lineColor: resolve('--muted-foreground') || fallback.lineColor,
+      secondaryColor: resolve('--muted') || fallback.secondaryColor,
+      tertiaryColor: resolve('--card') || fallback.tertiaryColor,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+// ── MermaidDiagram Component ─────────────────────────────────────
+
 /**
  * Renders a mermaid diagram from source code.
  * - Debounces rendering during streaming to avoid repeated failed renders
@@ -35,23 +162,59 @@ export const MermaidDiagram = memo(function MermaidDiagram({ code }: MermaidDiag
   const themeMode = themes.find((t) => t.id === currentTheme)?.mode ?? 'dark';
 
   const instanceIdRef = useRef(`mermaid-diagram-${++mermaidIdCounter}`);
+  // Unique scope class shared by preview and modal containers
+  const scopeClassRef = useRef(`mermaid-scope-${instanceIdRef.current}`);
 
   useEffect(() => {
     let cancelled = false;
     const debounceTimer = setTimeout(async () => {
       try {
-        mermaid.initialize({
-          startOnLoad: false,
-          theme: themeMode === 'dark' ? 'dark' : 'default',
-          securityLevel: 'loose',
-          fontFamily: 'inherit',
-        });
+        const dark = themeMode === 'dark';
+        const themeColors = resolveThemeColors(dark);
 
         const renderId = `${instanceIdRef.current}-${Date.now()}`;
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: dark ? 'dark' : 'default',
+          securityLevel: 'loose',
+          fontFamily: 'inherit',
+          themeVariables: {
+            borderRadius: 8,
+            fontSize: '14px',
+            ...themeColors,
+          },
+          flowchart: {
+            curve: 'basis',
+            padding: 20,
+            nodeSpacing: 50,
+            rankSpacing: 50,
+            useMaxWidth: true,
+            htmlLabels: true,
+          },
+          sequence: {
+            actorMargin: 50,
+            boxMargin: 10,
+            boxTextMargin: 5,
+            noteMargin: 10,
+            messageMargin: 35,
+            mirrorActors: true,
+          },
+          gantt: {
+            leftPadding: 75,
+            gridLineStartPadding: 35,
+            fontSize: 14,
+          },
+          journey: {
+            leftMargin: 20,
+          },
+        });
+
         const { svg: renderedSvg } = await mermaid.render(renderId, code);
 
         if (!cancelled) {
-          setSvg(renderedSvg);
+          // Scope SVG <style> rules to prevent CSS leaking to the document
+          const scopedSvg = scopeSvgStyles(renderedSvg, scopeClassRef.current);
+          setSvg(scopedSvg);
           setError('');
           setLoading(false);
         }
@@ -105,7 +268,7 @@ export const MermaidDiagram = memo(function MermaidDiagram({ code }: MermaidDiag
       >
         <div className="overflow-auto p-3" style={{ maxHeight: '520px' }}>
           <div
-            className="mermaid-preview-svg"
+            className={`mermaid-preview-svg ${scopeClassRef.current}`}
             dangerouslySetInnerHTML={{ __html: svg }}
           />
         </div>
@@ -117,7 +280,7 @@ export const MermaidDiagram = memo(function MermaidDiagram({ code }: MermaidDiag
         </div>
       </div>
       {showModal && (
-        <MermaidZoomModal svg={svg} onClose={() => setShowModal(false)} />
+        <MermaidZoomModal svg={svg} scopeClass={scopeClassRef.current} onClose={() => setShowModal(false)} />
       )}
     </>
   );
@@ -127,10 +290,11 @@ export const MermaidDiagram = memo(function MermaidDiagram({ code }: MermaidDiag
 
 interface MermaidZoomModalProps {
   svg: string;
+  scopeClass: string;
   onClose: () => void;
 }
 
-function MermaidZoomModal({ svg, onClose }: MermaidZoomModalProps) {
+function MermaidZoomModal({ svg, scopeClass, onClose }: MermaidZoomModalProps) {
   const [zoom, setZoom] = useState(1);
   const scrollRef = useRef<HTMLDivElement>(null);
   const dragState = useRef({ isDragging: false, startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 });
@@ -231,8 +395,13 @@ function MermaidZoomModal({ svg, onClose }: MermaidZoomModalProps) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      {/* Toolbar */}
-      <div className="flex items-center justify-between px-4 py-2.5 bg-black/50 border-b border-white/10">
+      {/* Toolbar — z-30 + relative ensures it sits above any SVG content.
+          stopPropagation prevents stray clicks from reaching the backdrop. */}
+      <div
+        className="relative z-30 flex items-center justify-between px-4 py-2.5 bg-black/50 border-b border-white/10"
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center gap-1.5">
           <button
             onClick={handleZoomOut}
@@ -281,7 +450,10 @@ function MermaidZoomModal({ svg, onClose }: MermaidZoomModalProps) {
       </div>
 
       {/* Hint bar */}
-      <div className="px-4 py-1.5 bg-black/30 border-b border-white/5 text-[10px] text-white/40 flex items-center gap-4">
+      <div
+        className="relative z-20 px-4 py-1.5 bg-black/30 border-b border-white/5 text-[10px] text-white/40 flex items-center gap-4"
+        onClick={(e) => e.stopPropagation()}
+      >
         <span className="flex items-center gap-1">
           <RotateCcw className="h-2.5 w-2.5" />
           滚轮缩放
@@ -314,7 +486,7 @@ function MermaidZoomModal({ svg, onClose }: MermaidZoomModalProps) {
           }}
         >
           <div
-            className="mermaid-modal-svg"
+            className={`mermaid-modal-svg ${scopeClass}`}
             dangerouslySetInnerHTML={{ __html: svg }}
           />
         </div>
