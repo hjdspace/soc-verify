@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EDA Log Summary</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --canvas: oklch(97% 0.006 210);
+        --surface: oklch(99% 0.004 210);
+        --surface-muted: oklch(94% 0.008 210);
+        --text: oklch(25% 0.018 210);
+        --text-muted: oklch(52% 0.018 210);
+        --border: oklch(86% 0.012 210);
+        --accent: oklch(54% 0.13 215);
+        --accent-hover: oklch(47% 0.13 215);
+        --accent-text: oklch(98% 0.01 210);
+        --pass: oklch(53% 0.13 155);
+        --pass-bg: oklch(95% 0.035 155);
+        --fail: oklch(55% 0.18 25);
+        --fail-bg: oklch(95% 0.035 25);
+        --incomplete: oklch(57% 0.12 75);
+        --incomplete-bg: oklch(95% 0.035 75);
+        font-family: Inter, "Segoe UI", system-ui, sans-serif;
+        font-size: 14px;
+        letter-spacing: 0;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --canvas: oklch(18% 0.01 210);
+          --surface: oklch(22% 0.012 210);
+          --surface-muted: oklch(27% 0.014 210);
+          --text: oklch(92% 0.012 210);
+          --text-muted: oklch(70% 0.016 210);
+          --border: oklch(35% 0.016 210);
+          --accent: oklch(70% 0.13 215);
+          --accent-hover: oklch(76% 0.12 215);
+          --accent-text: oklch(18% 0.02 210);
+          --pass: oklch(72% 0.14 155);
+          --pass-bg: oklch(27% 0.045 155);
+          --fail: oklch(72% 0.16 25);
+          --fail-bg: oklch(27% 0.05 25);
+          --incomplete: oklch(76% 0.13 75);
+          --incomplete-bg: oklch(29% 0.045 75);
+        }
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        min-width: 280px;
+        min-height: 100vh;
+        background: var(--canvas);
+        color: var(--text);
+      }
+
+      button, input { font: inherit; letter-spacing: 0; }
+
+      .app { min-height: 100vh; }
+
+      .toolbar {
+        display: grid;
+        grid-template-columns: minmax(170px, 1fr) minmax(300px, 1.4fr);
+        align-items: end;
+        gap: 24px;
+        padding: 18px 22px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface);
+      }
+
+      .title-row { display: flex; align-items: center; gap: 10px; }
+
+      .mark {
+        display: grid;
+        width: 30px;
+        height: 30px;
+        place-items: center;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--surface-muted);
+        color: var(--accent);
+        font-size: 11px;
+        font-weight: 750;
+      }
+
+      h1 { margin: 0; font-size: 15px; line-height: 1.25; font-weight: 700; }
+      .subtitle { margin: 3px 0 0; color: var(--text-muted); font-size: 11px; }
+
+      form { display: flex; align-items: end; gap: 8px; }
+      .field { min-width: 0; flex: 1; }
+
+      label {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--text-muted);
+        font-size: 10px;
+        font-weight: 700;
+        text-transform: uppercase;
+      }
+
+      input {
+        width: 100%;
+        height: 34px;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        outline: none;
+        background: var(--canvas);
+        color: var(--text);
+        padding: 0 10px;
+        font-family: "Cascadia Code", Consolas, monospace;
+        font-size: 11px;
+      }
+
+      input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in oklch, var(--accent) 20%, transparent); }
+
+      .analyze {
+        height: 34px;
+        border: 0;
+        border-radius: 5px;
+        background: var(--accent);
+        color: var(--accent-text);
+        padding: 0 14px;
+        font-size: 11px;
+        font-weight: 700;
+        cursor: pointer;
+        transition: background 160ms ease-out, opacity 160ms ease-out;
+      }
+
+      .analyze:hover { background: var(--accent-hover); }
+      .analyze:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      .analyze:disabled { cursor: wait; opacity: 0.65; }
+
+      main { max-width: 1040px; margin: 0 auto; padding: 28px 22px; }
+
+      .empty {
+        min-height: 260px;
+        display: grid;
+        place-items: center;
+        color: var(--text-muted);
+        text-align: center;
+      }
+
+      .empty strong { display: block; color: var(--text); font-size: 13px; }
+      .empty span { display: block; margin-top: 5px; font-family: "Cascadia Code", Consolas, monospace; font-size: 11px; }
+
+      .result { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; background: var(--surface); }
+
+      .result-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        min-height: 58px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .status-line { display: flex; align-items: center; gap: 9px; }
+      .status-indicator { width: 9px; height: 9px; border-radius: 2px; background: var(--text-muted); }
+      .status-title { font-size: 13px; font-weight: 700; text-transform: capitalize; }
+      .analyzed-path { margin-top: 2px; color: var(--text-muted); font-family: "Cascadia Code", Consolas, monospace; font-size: 10px; }
+
+      .status-badge { border: 1px solid currentColor; border-radius: 4px; padding: 3px 7px; font-size: 9px; font-weight: 750; text-transform: uppercase; }
+      .is-pass .status-indicator { background: var(--pass); }
+      .is-pass .status-badge { color: var(--pass); background: var(--pass-bg); }
+      .is-fail .status-indicator { background: var(--fail); }
+      .is-fail .status-badge { color: var(--fail); background: var(--fail-bg); }
+      .is-incomplete .status-indicator { background: var(--incomplete); }
+      .is-incomplete .status-badge { color: var(--incomplete); background: var(--incomplete-bg); }
+
+      .metrics { display: grid; grid-template-columns: repeat(4, 1fr); }
+      .metric { min-width: 0; padding: 18px 16px; border-right: 1px solid var(--border); }
+      .metric:last-child { border-right: 0; }
+      .metric-label { color: var(--text-muted); font-size: 10px; font-weight: 650; text-transform: uppercase; }
+      .metric-value { margin-top: 7px; font-size: 24px; line-height: 1; font-weight: 700; font-variant-numeric: tabular-nums; }
+      .metric-unit { margin-left: 3px; color: var(--text-muted); font-size: 10px; font-weight: 500; }
+      .metric-pass .metric-value { color: var(--pass); }
+      .metric-fail .metric-value { color: var(--fail); }
+
+      .error {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        border: 1px solid color-mix(in oklch, var(--fail) 35%, var(--border));
+        border-radius: 6px;
+        background: var(--fail-bg);
+        padding: 14px 16px;
+        color: var(--fail);
+      }
+
+      .error-mark { font-weight: 800; }
+      .error strong { display: block; font-size: 12px; }
+      .error p { margin: 4px 0 0; color: var(--text); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+      [hidden] { display: none !important; }
+
+      @media (max-width: 680px) {
+        .toolbar { grid-template-columns: 1fr; gap: 14px; padding: 14px; }
+        form { align-items: stretch; flex-direction: column; }
+        .analyze { width: 100%; }
+        main { padding: 18px 14px; }
+        .metrics { grid-template-columns: repeat(2, 1fr); }
+        .metric:nth-child(2) { border-right: 0; }
+        .metric:nth-child(-n + 2) { border-bottom: 1px solid var(--border); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * { transition: none !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header class="toolbar">
+        <div class="title-row">
+          <div class="mark" aria-hidden="true">SV</div>
+          <div>
+            <h1>EDA Log Summary</h1>
+            <p class="subtitle">Regression run snapshot</p>
+          </div>
+        </div>
+        <form id="analyze-form">
+          <div class="field">
+            <label for="path">Log path</label>
+            <input id="path" value="logs/eda-run.log" autocomplete="off" spellcheck="false" />
+          </div>
+          <button class="analyze" id="analyze" type="submit">Analyze log</button>
+        </form>
+      </header>
+
+      <main>
+        <section class="empty" id="empty">
+          <div>
+            <strong>No analysis yet</strong>
+            <span>logs/eda-run.log</span>
+          </div>
+        </section>
+
+        <section class="result" id="result" aria-live="polite" hidden>
+          <div class="result-header" id="result-header">
+            <div class="status-line">
+              <span class="status-indicator" aria-hidden="true"></span>
+              <div>
+                <div class="status-title" id="status-title">Incomplete</div>
+                <div class="analyzed-path" id="analyzed-path"></div>
+              </div>
+            </div>
+            <span class="status-badge" id="status-badge">Incomplete</span>
+          </div>
+          <div class="metrics">
+            <div class="metric">
+              <div class="metric-label">Tests</div>
+              <div class="metric-value" id="tests">--</div>
+            </div>
+            <div class="metric metric-pass">
+              <div class="metric-label">Passed</div>
+              <div class="metric-value" id="passed">--</div>
+            </div>
+            <div class="metric metric-fail">
+              <div class="metric-label">Failed</div>
+              <div class="metric-value" id="failed">--</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Elapsed</div>
+              <div class="metric-value"><span id="elapsed">--</span><span class="metric-unit">s</span></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="error" id="error" role="alert" hidden>
+          <span class="error-mark" aria-hidden="true">!</span>
+          <div>
+            <strong>Analysis failed</strong>
+            <p id="error-message"></p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const form = document.querySelector('#analyze-form');
+      const pathInput = document.querySelector('#path');
+      const analyzeButton = document.querySelector('#analyze');
+      const emptyState = document.querySelector('#empty');
+      const result = document.querySelector('#result');
+      const errorState = document.querySelector('#error');
+      const resultHeader = document.querySelector('#result-header');
+
+      function valueOrDash(value) {
+        return value === undefined || value === null ? '--' : String(value);
+      }
+
+      function setBusy(busy) {
+        analyzeButton.disabled = busy;
+        analyzeButton.textContent = busy ? 'Analyzing...' : 'Analyze log';
+      }
+
+      function showResult(summary, relativePath) {
+        const status = ['pass', 'fail'].includes(summary.status) ? summary.status : 'incomplete';
+        resultHeader.className = `result-header is-${status}`;
+        document.querySelector('#status-title').textContent = status;
+        document.querySelector('#status-badge').textContent = status;
+        document.querySelector('#analyzed-path').textContent = relativePath;
+        document.querySelector('#tests').textContent = valueOrDash(summary.tests);
+        document.querySelector('#passed').textContent = valueOrDash(summary.passed);
+        document.querySelector('#failed').textContent = valueOrDash(summary.failed);
+        document.querySelector('#elapsed').textContent = valueOrDash(summary.elapsedSeconds);
+        emptyState.hidden = true;
+        errorState.hidden = true;
+        result.hidden = false;
+      }
+
+      function showError(error) {
+        document.querySelector('#error-message').textContent = error instanceof Error ? error.message : String(error);
+        emptyState.hidden = true;
+        result.hidden = true;
+        errorState.hidden = false;
+      }
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const relativePath = pathInput.value.trim();
+        if (!relativePath) {
+          showError(new Error('Enter a project-relative log path.'));
+          return;
+        }
+        setBusy(true);
+        try {
+          const summary = await window.socVerify.invoke('eda-log-summary.analyze', [relativePath]);
+          showResult(summary, relativePath);
+        } catch (error) {
+          showError(error);
+        } finally {
+          setBusy(false);
+        }
+      });
+    </script>
+  </body>
+</html>

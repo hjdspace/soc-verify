@@ -1,0 +1,10 @@
+{
+  "name": "eda-log-summary",
+  "version": "0.1.0",
+  "main": "index.cjs",
+  "socverify": {
+    "apiVersion": "1.0",
+    "id": "eda-log-summary",
+    "kind": "ui"
+  }
+}

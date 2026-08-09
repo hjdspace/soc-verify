@@ -16,6 +16,7 @@ interface ProjectState {
   fileTree: FileTreeNode | null;
   fileTreeLoading: boolean;
   plugins: PluginConfigEntry[];
+  pluginsLoading: boolean;
   selectedSubsys: string | null;
   caseStatusFilter: string;
   uiStateReady: boolean;
@@ -27,6 +28,7 @@ interface ProjectState {
   loadFileTree: (projectId: string) => Promise<void>;
   refreshFileTree: () => Promise<void>;
   loadPlugins: (projectId: string) => Promise<void>;
+  reloadPlugins: () => Promise<void>;
   togglePlugin: (pluginId: string, enabled: boolean) => Promise<void>;
   setSelectedSubsys: (subsys: string | null) => void;
   setCaseStatusFilter: (filter: string) => void;
@@ -80,6 +82,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   fileTree: null,
   fileTreeLoading: false,
   plugins: [],
+  pluginsLoading: false,
   selectedSubsys: null,
   caseStatusFilter: 'all',
   uiStateReady: false,
@@ -169,11 +172,27 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   },
 
   loadPlugins: async (projectId) => {
+    set({ pluginsLoading: true });
     try {
       const plugins = await trpc.project.getPlugins.query({ projectId });
-      set({ plugins: plugins as PluginConfigEntry[] });
+      set({ plugins: plugins as PluginConfigEntry[], pluginsLoading: false });
     } catch (err) {
+      set({ pluginsLoading: false });
       getToast().error('加载插件列表失败', tRPCError(err));
+    }
+  },
+
+  reloadPlugins: async () => {
+    const projectId = get().currentProjectId;
+    if (!projectId) return;
+    set({ pluginsLoading: true });
+    try {
+      const plugins = await trpc.project.reloadPlugins.mutate({ projectId });
+      set({ plugins: plugins as PluginConfigEntry[], pluginsLoading: false });
+      getToast().success(`已重新扫描 ${plugins.length} 个插件`);
+    } catch (err) {
+      set({ pluginsLoading: false });
+      getToast().error('重新扫描插件失败', tRPCError(err));
     }
   },
 

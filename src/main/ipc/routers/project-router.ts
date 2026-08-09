@@ -499,6 +499,7 @@ export const projectRouter = t.router({
         name: result.manifest.name,
         version: result.manifest.version,
         kind: result.manifest.kind,
+        description: result.manifest.description,
         source: result.source,
         origin: result.origin,
         path: result.path,

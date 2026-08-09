@@ -28,7 +28,10 @@ function devBinariesDir(): string {
 
 /** 开发模式下内置扩展包目录（含 skills/ 和 agents/ 子目录） */
 function devBuiltInExtensionDir(): string {
-  return resolve(__dirname, '../../resources/built-in-extension');
+  // electron-vite output lives under out/main; source tests run from src/main/agent.
+  const outputPath = resolve(__dirname, '../../resources/built-in-extension');
+  if (existsSync(join(outputPath, 'skills'))) return outputPath;
+  return resolve(__dirname, '../../../resources/built-in-extension');
 }
 
 /** 打包模式下内置扩展包目录 */

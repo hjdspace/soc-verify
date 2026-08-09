@@ -12,7 +12,7 @@ This creates a plugin directly under `~/.socverify/plugins/my-plugin`. Pass an e
 node scripts/create-plugin.mjs ./plugins/my-plugin my-plugin
 ```
 
-The scaffold creates a CJS backend module, a VS Code-style manifest, and an HTML view. Restart the app or use plugin reload after editing; no project configuration is needed for a user plugin.
+The scaffold creates a CJS backend module, a VS Code-style manifest, and an HTML view. Open a project, then use **Settings > Plugin Management > Reload** after editing; no project configuration is needed for a user plugin.
 
 ## User plugin discovery
 
@@ -74,3 +74,5 @@ await bridge.invoke('my-plugin.refresh');
 ```
 
 Plugin HTML is rendered in a sandboxed iframe and cannot access Electron APIs directly.
+
+The host reads a view entry as one HTML document. Keep CSS in an inline `<style>` block and use native JavaScript. Relative external stylesheets, scripts, fonts, and images are not served automatically, and the iframe does not inherit the desktop application's Tailwind classes, React components, or CSS variables. Use embedded data URIs for small static assets and include explicit loading, empty, error, focus, and responsive states.

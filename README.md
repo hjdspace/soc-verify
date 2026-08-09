@@ -27,7 +27,7 @@
 | 能力域 | 说明 |
 |--------|------|
 | **项目管理** | 多项目打开/切换、文件树浏览、文件编辑器、项目状态持久化与恢复、源码控制 |
-| **插件系统** | 5 种插件类型（子系统发现 / 用例解析 / 仿真执行 / 覆盖率解析 / 选项 Schema），npm 包分发；内置 Unisoc 参考插件集 |
+| **插件系统** | 6 种插件类型（子系统发现 / 用例解析 / 仿真执行 / 覆盖率解析 / 选项 Schema / UI），支持用户目录自动发现、状态管理和沙箱视图 |
 | **仿真执行** | SimulationManager 管理仿真生命周期，编译错误解析，运行历史记录与对比 |
 | **终端集成** | node-pty + xterm.js 多标签终端，支持 EDA 工具交互与仿真直连执行 |
 | **错误分析** | 仿真失败自动触发 AI 错误分析，编译错误自动修复重试（最大 3 次），仿真错误给出建议 |
@@ -194,7 +194,7 @@ soc-verify/
 
 **omp 集成** — AI Agent 通过 `socverify-runner` JSONL 子进程通信，`SessionManager` 管理多会话（并发上限 10），支持预编译 runner 和 Bun + engine submodule 两种启动方式，同时可对接第三方 OpenAI 兼容 LLM 服务。
 
-**插件系统** — 5 种 `PluginKind`（case-parser / subsys-discoverer / coverage-parser / simulation-runner / sim-option-schema），以 npm 包形式分发，通过 `PluginLoader` 从 `node_modules` 或本地路径加载。内置 4 个 Unisoc 参考插件。
+**插件系统** — 6 种 `PluginKind`（case-parser / subsys-discoverer / coverage-parser / simulation-runner / sim-option-schema / ui），从内置包、`~/.socverify/plugins` 和项目配置发现，通过设置中的插件管理页重载、启停和打开视图。
 
 **Diff Review** — AI Agent 代码改动逐块审阅：hunk accept/reject、before reconstruction 重建修改前状态、overwritten hunk 检测、全局 Review Queue 跨会话聚合。
 

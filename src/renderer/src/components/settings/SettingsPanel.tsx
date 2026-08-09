@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Key, Package, Server, FileText, Plus, Trash2, Save, Palette, Check, Cpu, RefreshCw, Zap, Info, BookOpen, Folder, ChevronDown, ChevronRight, Pencil, Terminal, Globe, Power, Loader2, Wrench, Type, Clock, CircleGauge } from 'lucide-react';
+import { X, Key, Package, Server, FileText, Plus, Trash2, Save, Palette, Check, Cpu, RefreshCw, Zap, Info, BookOpen, Folder, ChevronDown, ChevronRight, Pencil, Terminal, Globe, Power, Loader2, Wrench, Type, Clock, CircleGauge, Puzzle } from 'lucide-react';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { useUiStore } from '@renderer/stores/ui';
@@ -9,9 +9,10 @@ import { useSessionStore } from '@renderer/stores/session';
 import { useTimingViolationStore } from '@renderer/stores/timing-violation';
 import { cn } from '@renderer/lib/utils';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
+import { PluginsTab } from './PluginsTab';
 import type { CredentialEntry, SkillInfo, CreateSkillInput, McpConfigFile, McpServerConfig, McpTransportType, McpServerInfo } from '@shared/types';
 
-type SettingsTab = 'credentials' | 'skills' | 'mcp' | 'prompt' | 'appearance' | 'timing-violation';
+type SettingsTab = 'credentials' | 'plugins' | 'skills' | 'mcp' | 'prompt' | 'appearance' | 'timing-violation';
 
 export function SettingsPanel() {
   const settingsOpen = useUiStore((s) => s.settingsOpen);
@@ -22,6 +23,7 @@ export function SettingsPanel() {
 
   const tabs: Array<{ id: SettingsTab; label: string; icon: typeof Key }> = [
     { id: 'credentials', label: '模型配置', icon: Cpu },
+    { id: 'plugins', label: '插件管理', icon: Puzzle },
     { id: 'skills', label: 'Skill 管理', icon: Package },
     { id: 'mcp', label: 'MCP 配置', icon: Server },
     { id: 'prompt', label: '系统提示词', icon: FileText },
@@ -31,7 +33,7 @@ export function SettingsPanel() {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="flex h-[520px] w-[680px] flex-col overflow-hidden rounded-lg border border-border bg-popover shadow-2xl">
+      <div className="flex h-[580px] max-h-[calc(100vh-32px)] w-[760px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-lg border border-border bg-popover shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between border-b px-4 py-2.5">
           <h2 className="text-sm font-semibold">设置</h2>
@@ -44,13 +46,13 @@ export function SettingsPanel() {
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b">
+        <div className="flex shrink-0 overflow-x-auto border-b">
           {tabs.map((t) => (
             <button
               key={t.id}
               onClick={() => setTab(t.id)}
               className={cn(
-                'flex items-center gap-1.5 px-4 py-2 text-xs font-medium transition-colors',
+                'flex shrink-0 items-center gap-1.5 px-4 py-2 text-xs font-medium transition-colors',
                 tab === t.id
                   ? 'border-b border-primary text-primary'
                   : 'text-muted-foreground hover:text-foreground',
@@ -66,6 +68,7 @@ export function SettingsPanel() {
         <div className="flex-1 overflow-auto p-4">
           {tab === 'appearance' && <AppearanceTab />}
           {tab === 'credentials' && <CredentialsTab />}
+          {tab === 'plugins' && <PluginsTab />}
           {tab === 'skills' && <SkillsTab />}
           {tab === 'mcp' && <McpTab />}
           {tab === 'prompt' && <PromptTab />}
