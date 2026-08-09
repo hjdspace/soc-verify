@@ -670,3 +670,22 @@ body {
 .hljs-strong {
   font-weight: bold;
 }
+
+/* ── Mermaid diagram responsive SVG ──────────────────────── */
+/* Mermaid SVGs carry fixed width/height attributes from the
+   renderer. CSS overrides make them scale to the container. */
+
+/* Chat preview: scale down to fit, never upscale beyond natural */
+.mermaid-preview-svg > svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
+/* Modal: always fill the wrapper width so 100% zoom = fit-to-width */
+.mermaid-modal-svg > svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
