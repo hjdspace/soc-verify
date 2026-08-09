@@ -2,6 +2,7 @@ import { memo, useState, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { trpc } from '@renderer/lib/trpc';
+import { MermaidDiagram } from './MermaidDiagram';
 
 interface MarkdownRendererProps {
   content: string;
@@ -54,6 +55,9 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, onUriC
               );
             }
             const lang = className?.replace('language-', '') ?? '';
+            if (lang === 'mermaid') {
+              return <MermaidDiagram code={String(children).trim()} />;
+            }
             return <CodeBlock language={lang}>{String(children)}</CodeBlock>;
           },
           pre: ({ children }) => <>{children}</>,
