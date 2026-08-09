@@ -23,6 +23,7 @@ describe('Linux node-pty packaging', () => {
 
   it('uses a Python version supported by the node-gyp bundled with electron-rebuild', () => {
     expect(buildScript).toContain('set -euo pipefail');
+    expect(buildScript).toContain('MANPATH="${MANPATH:-}"');
     expect(buildScript).toContain('python39');
     expect(buildScript).toContain('PYTHON=/usr/bin/python3.9');
     expect(buildScript).toContain('npm_config_python=/usr/bin/python3.9');

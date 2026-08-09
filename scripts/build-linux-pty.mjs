@@ -117,6 +117,8 @@ function buildViaDocker(electronVersion, ptyVersion) {
     'set -euo pipefail',
     'dnf install -y gcc-toolset-10-gcc gcc-toolset-10-gcc-c++ make python39 tar gzip xz curl binutils > /dev/null',
     `curl -fsSL https://nodejs.org/dist/v${DOCKER_NODE_VERSION}/node-v${DOCKER_NODE_VERSION}-linux-x64.tar.gz | tar -xz -C /usr/local --strip-components=1`,
+    // gcc-toolset's enable script expands MANPATH; initialize it for `set -u`.
+    'export MANPATH="${MANPATH:-}"',
     'source /opt/rh/gcc-toolset-10/enable',
     'export PYTHON=/usr/bin/python3.9',
     'export npm_config_python=/usr/bin/python3.9',
