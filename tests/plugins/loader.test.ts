@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { existsSync } from 'node:fs';
-import { pluginLoader } from '../../src/main/plugins/loader';
+import { createPluginLoader, pluginLoader } from '../../src/main/plugins/loader';
 
 describe('PluginLoader', () => {
   let tempDir: string;
@@ -73,6 +73,222 @@ describe('PluginLoader', () => {
   });
 
   describe('loadPlugins', () => {
+    it('discovers user plugins without project configuration', async () => {
+      const userPluginsDir = join(tempDir, 'user-plugins');
+      const pluginDir = join(userPluginsDir, 'user-dashboard');
+      await mkdir(pluginDir, { recursive: true });
+      await writeFile(
+        join(pluginDir, 'package.json'),
+        JSON.stringify({
+          name: 'user-dashboard',
+          version: '1.2.3',
+          main: 'index.cjs',
+          socverify: { apiVersion: '1.0', id: 'user-dashboard', kind: 'ui' },
+        }),
+        'utf-8',
+      );
+      await writeFile(
+        join(pluginDir, 'index.cjs'),
+        `module.exports = {
+  manifest: { apiVersion: '1.0', id: 'user-dashboard', name: 'User Dashboard', version: '1.2.3', kind: 'ui', contributes: { views: [] } }
+};`,
+        'utf-8',
+      );
+      const loader = createPluginLoader({ builtinPluginsDir: null, userPluginsDir });
+
+      const results = await loader.loadPlugins(tempDir);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        origin: 'user',
+        enabled: true,
+        active: true,
+        manifest: { id: 'user-dashboard', version: '1.2.3' },
+      });
+
+      await loader.setPluginEnabled(tempDir, 'user-dashboard', false);
+      const disabledResults = await loader.loadPlugins(tempDir);
+      expect(disabledResults[0]).toMatchObject({
+        origin: 'user',
+        enabled: false,
+        active: false,
+      });
+      loader.clearAll();
+    });
+
+    it('lets project configuration override a user plugin with the same id', async () => {
+      const userPluginsDir = join(tempDir, 'user-plugins');
+      const userPluginDir = join(userPluginsDir, 'shared-plugin');
+      const projectPluginDir = join(tempDir, 'project-plugin');
+      await mkdir(userPluginDir, { recursive: true });
+      await mkdir(projectPluginDir, { recursive: true });
+      await writeFile(
+        join(userPluginDir, 'package.json'),
+        JSON.stringify({
+          name: 'shared-plugin',
+          version: '1.0.0',
+          main: 'index.cjs',
+          socverify: { apiVersion: '1.0', id: 'shared-plugin', kind: 'ui' },
+        }),
+        'utf-8',
+      );
+      await writeFile(
+        join(userPluginDir, 'index.cjs'),
+        `module.exports = { manifest: { apiVersion: '1.0', id: 'shared-plugin', name: 'User Plugin', version: '1.0.0', kind: 'ui', contributes: {} } };`,
+        'utf-8',
+      );
+      await writeFile(
+        join(projectPluginDir, 'index.cjs'),
+        `module.exports = { manifest: { apiVersion: '1.0', id: 'shared-plugin', name: 'Project Plugin', version: '2.0.0', kind: 'ui', contributes: {} } };`,
+        'utf-8',
+      );
+      await mkdir(join(tempDir, '.socverify'), { recursive: true });
+      await writeFile(
+        join(tempDir, '.socverify', 'plugins.json'),
+        JSON.stringify({ plugins: [{
+          id: 'shared-plugin',
+          name: 'Project Plugin',
+          version: '2.0.0',
+          kind: 'ui',
+          source: 'local',
+          path: join(projectPluginDir, 'index.cjs'),
+          enabled: true,
+        }] }),
+        'utf-8',
+      );
+      const loader = createPluginLoader({ builtinPluginsDir: null, userPluginsDir });
+
+      const results = await loader.loadPlugins(tempDir);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        origin: 'project',
+        manifest: { id: 'shared-plugin', version: '2.0.0' },
+      });
+      loader.clearAll();
+    });
+
+    it('isolates malformed user packages and continues loading healthy plugins', async () => {
+      const userPluginsDir = join(tempDir, 'user-plugins');
+      const brokenDir = join(userPluginsDir, 'broken-plugin');
+      const healthyDir = join(userPluginsDir, 'healthy-plugin');
+      await mkdir(brokenDir, { recursive: true });
+      await mkdir(healthyDir, { recursive: true });
+      await writeFile(join(brokenDir, 'package.json'), '{ not json', 'utf-8');
+      await writeFile(
+        join(healthyDir, 'package.json'),
+        JSON.stringify({
+          name: 'healthy-plugin',
+          version: '1.0.0',
+          main: 'index.cjs',
+          socverify: { apiVersion: '1.0', id: 'healthy-plugin', kind: 'ui' },
+        }),
+        'utf-8',
+      );
+      await writeFile(
+        join(healthyDir, 'index.cjs'),
+        `module.exports = { manifest: { apiVersion: '1.0', id: 'healthy-plugin', name: 'Healthy Plugin', version: '1.0.0', kind: 'ui', contributes: {} } };`,
+        'utf-8',
+      );
+      const loader = createPluginLoader({ builtinPluginsDir: null, userPluginsDir });
+
+      const results = await loader.loadPlugins(tempDir);
+
+      expect(results.find((result) => result.manifest.id === 'healthy-plugin')?.error).toBeUndefined();
+      expect(results.find((result) => result.manifest.id === 'broken-plugin')?.error).toContain('Invalid package.json');
+      loader.clearAll();
+    });
+
+    it('rolls back registrations from a plugin that fails activation', async () => {
+      const pluginDir = join(tempDir, 'plugins');
+      await mkdir(pluginDir, { recursive: true });
+      const pluginPath = join(pluginDir, 'broken-activation.cjs');
+      await writeFile(
+        pluginPath,
+        `module.exports = {
+  manifest: { apiVersion: '1.0', id: 'broken-activation', name: 'Broken Activation', version: '1.0.0', kind: 'ui', contributes: {} },
+  activate(context) {
+    context.registerCommand('broken-activation.partial', () => 'should not run');
+    context.on('test.event', () => { throw new Error('should not run'); });
+    throw new Error('activation failed');
+  }
+};`,
+        'utf-8',
+      );
+      await mkdir(join(tempDir, '.socverify'), { recursive: true });
+      await writeFile(
+        join(tempDir, '.socverify', 'plugins.json'),
+        JSON.stringify({ plugins: [{
+          id: 'broken-activation',
+          apiVersion: '1.0',
+          name: 'Broken Activation',
+          version: '1.0.0',
+          kind: 'ui',
+          source: 'local',
+          path: pluginPath,
+          enabled: true,
+        }] }),
+        'utf-8',
+      );
+      const loader = createPluginLoader({ builtinPluginsDir: null, userPluginsDir: null });
+
+      const results = await loader.loadPlugins(tempDir);
+
+      expect(results[0].error).toContain('activation failed');
+      await expect(loader.executeCommand(tempDir, 'broken-activation.partial')).rejects.toThrow('not found');
+      const notificationCount = loader.getNotifications(tempDir).length;
+      await loader.emitEvent(tempDir, 'test.event');
+      expect(loader.getNotifications(tempDir)).toHaveLength(notificationCount);
+      loader.clearAll();
+    });
+
+    it('keeps a project-disabled user plugin visible but out of the registry', async () => {
+      const userPluginsDir = join(tempDir, 'user-plugins');
+      const pluginDir = join(userPluginsDir, 'user-discoverer');
+      const pluginPath = join(pluginDir, 'index.cjs');
+      await mkdir(pluginDir, { recursive: true });
+      await writeFile(
+        join(pluginDir, 'package.json'),
+        JSON.stringify({
+          name: 'user-discoverer',
+          version: '1.0.0',
+          main: 'index.cjs',
+          socverify: { apiVersion: '1.0', id: 'user-discoverer', kind: 'subsys-discoverer' },
+        }),
+        'utf-8',
+      );
+      await writeFile(
+        pluginPath,
+        `module.exports = {
+  manifest: { apiVersion: '1.0', id: 'user-discoverer', name: 'User Discoverer', version: '1.0.0', kind: 'subsys-discoverer' },
+  async discover() { return []; }
+};`,
+        'utf-8',
+      );
+      await mkdir(join(tempDir, '.socverify'), { recursive: true });
+      await writeFile(
+        join(tempDir, '.socverify', 'plugins.json'),
+        JSON.stringify({ plugins: [{
+          id: 'user-discoverer',
+          name: 'User Discoverer',
+          version: '1.0.0',
+          kind: 'subsys-discoverer',
+          source: 'local',
+          path: pluginPath,
+          enabled: false,
+        }] }),
+        'utf-8',
+      );
+      const loader = createPluginLoader({ builtinPluginsDir: null, userPluginsDir });
+
+      const results = await loader.loadPlugins(tempDir);
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({ origin: 'user', enabled: false, active: false });
+      expect(loader.getRegistry(tempDir).subsysDiscoverers).toEqual([]);
+      loader.clearAll();
+    });
+
     it('loads bundled plugins when no project plugins are configured', async () => {
       const results = await pluginLoader.loadPlugins(tempDir);
 
@@ -208,7 +424,7 @@ describe('PluginLoader', () => {
       expect(plugin?.error).toBeUndefined();
     });
 
-    it('skips disabled plugins', async () => {
+    it('keeps disabled project plugins visible without loading them', async () => {
       const socverifyDir = join(tempDir, '.socverify');
       await mkdir(socverifyDir, { recursive: true });
       await writeFile(
@@ -230,7 +446,15 @@ describe('PluginLoader', () => {
       );
 
       const results = await pluginLoader.loadPlugins(tempDir);
-      expect(results.some((result) => result.manifest.id === 'disabled-plugin')).toBe(false);
+      expect(results.find((result) => result.manifest.id === 'disabled-plugin')).toMatchObject({
+        enabled: false,
+        active: false,
+      });
+      expect(
+        pluginLoader.getRegistry(tempDir).caseParsers.some(
+          (plugin) => plugin.manifest.id === 'disabled-plugin',
+        ),
+      ).toBe(false);
     });
 
     it('loads a UI-only plugin, resolves its view HTML, and activates commands', async () => {
@@ -281,6 +505,9 @@ describe('PluginLoader', () => {
       expect(plugin?.error).toBeUndefined();
       expect(plugin?.contributes?.views?.[0].html).toContain('Plugin UI');
       await expect(pluginLoader.executeCommand(tempDir, 'ui-plugin.hello', ['world'])).resolves.toBe('hello world');
+      await expect(
+        pluginLoader.executeCommand(tempDir, 'ui-plugin.hello', ['world'], 'other-plugin'),
+      ).rejects.toThrow('cannot invoke command owned by ui-plugin');
     });
 
     it('exposes state, events, notifications, and guarded project file access to plugins', async () => {
@@ -384,7 +611,7 @@ module.exports = {
       const secondLoad = await pluginLoader.loadPlugins(tempDir);
       await pluginLoader.activateForView(tempDir, 'lazy-plugin', 'overview');
       expect(secondLoad.find((result) => result.manifest.id === 'lazy-plugin')?.active).toBe(true);
-      await expect(pluginLoader.executeCommand(tempDir, 'lazy-plugin.status')).resolves.toBe(2);
+      await expect(pluginLoader.executeCommand(tempDir, 'lazy-plugin.status')).resolves.toBe(1);
     });
   });
 

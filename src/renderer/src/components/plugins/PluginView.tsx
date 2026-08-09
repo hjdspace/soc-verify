@@ -71,6 +71,7 @@ export function PluginView({ projectId, pluginId, view }: PluginViewProps) {
       try {
         const response = await trpc.project.invokePluginCommand.mutate({
           projectId,
+          pluginId,
           command: message.command,
           args: message.args ?? [],
         });
@@ -94,7 +95,7 @@ export function PluginView({ projectId, pluginId, view }: PluginViewProps) {
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [projectId]);
+  }, [pluginId, projectId]);
 
   if (!view.html) {
     return (

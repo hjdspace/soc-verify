@@ -1,12 +1,16 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { join, resolve } from 'node:path';
 
-const [, , targetArg, idArg] = process.argv;
-if (!targetArg || !idArg) {
-  console.error('Usage: node scripts/create-plugin.mjs <target-directory> <plugin-id>');
+const args = process.argv.slice(2);
+if (args.length < 1 || args.length > 2) {
+  console.error('Usage: node scripts/create-plugin.mjs [target-directory] <plugin-id>');
   process.exit(1);
 }
 
+const [targetArg, idArg] = args.length === 1
+  ? [join(homedir(), '.socverify', 'plugins', args[0]), args[0]]
+  : args;
 const target = resolve(targetArg);
 const name = idArg.replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 

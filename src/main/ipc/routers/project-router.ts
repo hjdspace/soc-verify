@@ -111,10 +111,11 @@ export const projectRouter = t.router({
         version: r.manifest.version,
         kind: r.manifest.kind,
         source: r.source,
+        origin: r.origin,
         path: r.path,
         contributes: r.contributes,
         active: r.active ?? false,
-        enabled: !r.error,
+        enabled: r.enabled,
         error: r.error,
       }));
 
@@ -148,10 +149,11 @@ export const projectRouter = t.router({
         version: r.manifest.version,
         kind: r.manifest.kind,
         source: r.source,
+        origin: r.origin,
         path: r.path,
         contributes: r.contributes,
         active: r.active ?? false,
-        enabled: !r.error,
+        enabled: r.enabled,
         error: r.error,
       }));
 
@@ -348,7 +350,7 @@ export const projectRouter = t.router({
       const project = requireProject(input.projectId);
       await ensurePluginsLoaded(project.rootPath);
       const loadResults = pluginLoader.getLoadResults(project.rootPath);
-      const config = await projectManager.getPluginConfig(project.rootPath);
+      const config = await pluginLoader.readPluginConfig(project.rootPath);
 
       return loadResults.map((r) => {
         const configEntry = config.plugins.find((p) => p.id === r.manifest.id);
@@ -360,10 +362,11 @@ export const projectRouter = t.router({
           kind: r.manifest.kind,
           description: r.manifest.description,
           source: r.source,
+          origin: r.origin,
           path: r.path,
           contributes: r.contributes,
           active: r.active ?? false,
-          enabled: configEntry?.enabled ?? !r.error,
+          enabled: configEntry?.enabled ?? r.enabled,
           error: r.error,
         };
       });
@@ -379,13 +382,13 @@ export const projectRouter = t.router({
     })
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
-      const config = await projectManager.togglePlugin(project.rootPath, input.pluginId, input.enabled);
+      const entry = await pluginLoader.setPluginEnabled(project.rootPath, input.pluginId, input.enabled);
 
       // Reload plugins
       await pluginLoader.loadPlugins(project.rootPath);
       await pluginLoader.activateForEvent(project.rootPath, 'onProjectOpen');
 
-      return config.plugins.find((p) => p.id === input.pluginId);
+      return entry;
     }),
 
   savePluginConfig: t.procedure
@@ -399,7 +402,7 @@ export const projectRouter = t.router({
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
       const config: PluginConfig = { plugins: input.plugins };
-      await projectManager.savePluginConfig(project.rootPath, config);
+      await pluginLoader.savePluginConfig(project.rootPath, config);
 
       // Reload plugins
       await pluginLoader.loadPlugins(project.rootPath);
@@ -409,13 +412,14 @@ export const projectRouter = t.router({
     }),
 
   invokePluginCommand: t.procedure
-    .input((raw): { projectId: string; command: string; args?: unknown[] } => {
+    .input((raw): { projectId: string; pluginId: string; command: string; args?: unknown[] } => {
       const r = raw as Record<string, unknown>;
-      if (typeof r.projectId !== 'string' || typeof r.command !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and command are required' });
+      if (typeof r.projectId !== 'string' || typeof r.pluginId !== 'string' || typeof r.command !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, pluginId and command are required' });
       }
       return {
         projectId: r.projectId,
+        pluginId: r.pluginId,
         command: r.command,
         args: Array.isArray(r.args) ? r.args : [],
       };
@@ -425,7 +429,7 @@ export const projectRouter = t.router({
       await ensurePluginsLoaded(project.rootPath);
       try {
         return {
-          result: await pluginLoader.executeCommand(project.rootPath, input.command, input.args),
+          result: await pluginLoader.executeCommand(project.rootPath, input.command, input.args, input.pluginId),
         };
       } catch (err) {
         throw new TRPCError({
@@ -496,10 +500,11 @@ export const projectRouter = t.router({
         version: result.manifest.version,
         kind: result.manifest.kind,
         source: result.source,
+        origin: result.origin,
         path: result.path,
         contributes: result.contributes,
         active: result.active ?? false,
-        enabled: !result.error,
+        enabled: result.enabled,
         error: result.error,
       }));
     }),
@@ -542,7 +547,10 @@ export const projectRouter = t.router({
       };
     })
     .mutation(async ({ input }) => {
-      const info = await projectManager.createProject(input.rootPath, input.name, input.plugins);
+      const info = await projectManager.createProject(input.rootPath, input.name);
+      if (input.plugins?.length) {
+        await pluginLoader.savePluginConfig(info.rootPath, { plugins: input.plugins });
+      }
       return info;
     }),
 

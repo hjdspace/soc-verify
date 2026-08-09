@@ -12,9 +12,7 @@ import type {
   ProjectState,
   FileTreeNode,
   FileTreeUpdate,
-  PluginConfig,
 } from '@shared/types';
-import type { PluginConfigEntry } from '@shared/types';
 
 const SOCVERIFY_DIR = '.socverify';
 const PROJECTS_DB_FILE = 'projects.json';
@@ -391,34 +389,6 @@ class ProjectManagerImpl extends EventEmitter {
     }
   }
 
-  // ─── 插件配置 ─────────────────────────────────────────
-
-  async getPluginConfig(projectRoot: string): Promise<PluginConfig> {
-    const configPath = join(projectRoot, SOCVERIFY_DIR, PLUGIN_CONFIG_FILE);
-    try {
-      const content = await readFile(configPath, 'utf-8');
-      return JSON.parse(content) as PluginConfig;
-    } catch {
-      return { plugins: [] };
-    }
-  }
-
-  async savePluginConfig(projectRoot: string, config: PluginConfig): Promise<void> {
-    const configPath = join(projectRoot, SOCVERIFY_DIR, PLUGIN_CONFIG_FILE);
-    await this.ensureSocverifyDir(projectRoot);
-    await writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
-  }
-
-  async togglePlugin(projectRoot: string, pluginId: string, enabled: boolean): Promise<PluginConfig> {
-    const config = await this.getPluginConfig(projectRoot);
-    const entry = config.plugins.find((p) => p.id === pluginId);
-    if (entry) {
-      entry.enabled = enabled;
-      await this.savePluginConfig(projectRoot, config);
-    }
-    return config;
-  }
-
   // ─── 项目状态持久化 ───────────────────────────────────
 
   async saveProjectState(state: ProjectState): Promise<void> {
@@ -496,18 +466,13 @@ class ProjectManagerImpl extends EventEmitter {
 
   // ─── 新建项目 ─────────────────────────────────────────
 
-  async createProject(rootPath: string, name: string, pluginEntries?: PluginConfigEntry[]): Promise<ProjectInfo> {
+  async createProject(rootPath: string, name: string): Promise<ProjectInfo> {
     // Verify path exists or create it
     if (!existsSync(rootPath)) {
       await mkdir(rootPath, { recursive: true });
     }
 
     const info = await this.openProject(rootPath, name);
-
-    // Save initial plugin config
-    if (pluginEntries && pluginEntries.length > 0) {
-      await this.savePluginConfig(rootPath, { plugins: pluginEntries });
-    }
 
     return info;
   }

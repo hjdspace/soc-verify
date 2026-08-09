@@ -12,4 +12,8 @@ function getPluginUiBridge(target = globalThis) {
   return target.socVerify;
 }
 
-module.exports = { getPluginUiBridge };
+function definePlugin(plugin) {
+  return plugin;
+}
+
+module.exports = { definePlugin, getPluginUiBridge };

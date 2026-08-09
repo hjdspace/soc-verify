@@ -34,6 +34,8 @@ export interface PluginContributions {
 
 export type PluginHostEvent = string;
 
+export type PluginOrigin = 'builtin' | 'user' | 'project';
+
 export interface PluginNotification {
   level: 'info' | 'warning' | 'error';
   message: string;
@@ -185,9 +187,11 @@ export interface PluginRegistry {
 
 export interface PluginLoadResult {
   manifest: PluginManifest;
-  plugin: AnyPlugin;
+  plugin?: AnyPlugin;
   source: 'node_modules' | 'local';
+  origin: PluginOrigin;
   path: string;
+  enabled: boolean;
   error?: string;
   contributes?: PluginContributions;
   active?: boolean;

@@ -1,4 +1,4 @@
-import type { PluginContributions, PluginKind } from '../plugin-types';
+import type { PluginContributions, PluginKind, PluginOrigin } from '../plugin-types';
 
 export interface PluginConfigEntry {
   id: string;
@@ -7,6 +7,7 @@ export interface PluginConfigEntry {
   version: string;
   kind: PluginKind;
   source: 'node_modules' | 'local';
+  origin?: PluginOrigin;
   path: string;
   enabled: boolean;
   active?: boolean;

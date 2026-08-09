@@ -39,7 +39,14 @@ describe('project-service', () => {
   describe('ensurePluginsLoaded', () => {
     it('skips loading when plugins are already loaded', async () => {
       vi.mocked(pluginLoader.getLoadResults).mockReturnValue([
-        { manifest: { id: 'p1', name: 'P1', version: '1.0.0', kind: 'case-parser' }, plugin: {} as never, source: 'local', path: '/tmp' },
+        {
+          manifest: { id: 'p1', name: 'P1', version: '1.0.0', kind: 'case-parser' },
+          plugin: {} as never,
+          source: 'local',
+          origin: 'project',
+          path: '/tmp',
+          enabled: true,
+        },
       ]);
       await ensurePluginsLoaded('/tmp/proj');
       expect(pluginLoader.loadPlugins).not.toHaveBeenCalled();

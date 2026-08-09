@@ -1,6 +1,6 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve, dirname, isAbsolute, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import type {
@@ -18,8 +18,15 @@ import type {
   PluginLifecycle,
   PluginHostEvent,
   PluginNotification,
+  PluginOrigin,
 } from '@shared/plugin-types';
 import type { PluginConfig, PluginConfigEntry } from '@shared/types';
+import {
+  discoverPluginPackages,
+  getBuiltinPluginsDir,
+  getDefaultUserPluginsDir,
+  type PluginPackageCandidate,
+} from './catalog';
 
 const SOCVERIFY_DIR = '.socverify';
 const PLUGIN_CONFIG_FILE = 'plugins.json';
@@ -27,6 +34,13 @@ const PLUGIN_STATE_DIR = 'plugin-state';
 
 type PluginCommandHandler = (...args: unknown[]) => unknown | Promise<unknown>;
 type PluginEventHandler = (payload: unknown) => unknown | Promise<unknown>;
+type RegisteredCommand = { pluginId: string; handler: PluginCommandHandler };
+type RegisteredEventHandler = { pluginId: string; handler: PluginEventHandler };
+
+export type PluginLoaderOptions = {
+  builtinPluginsDir?: string | null;
+  userPluginsDir?: string | null;
+};
 
 type LoadedPluginRecord = {
   plugin: AnyPlugin;
@@ -79,7 +93,12 @@ function classifyPlugin(plugin: unknown, manifest: PluginManifest): AnyPlugin | 
       if (typeof p.parse === 'function') return plugin as CoverageParserPlugin;
       break;
     case 'simulation-runner':
-      if (typeof p.run === 'function') return plugin as SimulationRunnerPlugin;
+      if (
+        typeof p.run === 'function' &&
+        typeof p.getStatus === 'function' &&
+        typeof p.getCompileErrors === 'function' &&
+        typeof p.abort === 'function'
+      ) return plugin as SimulationRunnerPlugin;
       break;
     case 'sim-option-schema':
       if (typeof p.getSchema === 'function') return plugin as SimOptionSchemaProvider;
@@ -91,7 +110,7 @@ function classifyPlugin(plugin: unknown, manifest: PluginManifest): AnyPlugin | 
   return null;
 }
 
-function resolveContributions(manifest: PluginManifest, pluginPath: string): PluginContributions | undefined {
+function resolveContributions(manifest: PluginManifest, packageRoot: string): PluginContributions | undefined {
   const contributions = manifest.contributes;
   if (!contributions) return undefined;
 
@@ -100,7 +119,10 @@ function resolveContributions(manifest: PluginManifest, pluginPath: string): Plu
     const html = view.html ?? (view.entry
       ? (() => {
           try {
-            return readFileSync(resolve(dirname(pluginPath), view.entry), 'utf-8');
+            const target = resolve(packageRoot, view.entry);
+            const rel = relative(packageRoot, target);
+            if (rel.startsWith('..') || isAbsolute(rel)) return undefined;
+            return readFileSync(target, 'utf-8');
           } catch {
             return undefined;
           }
@@ -129,81 +151,29 @@ function resolvePluginPath(source: 'node_modules' | 'local', pluginPath: string,
   }
 }
 
-/** Resolve the app's built-in plugins directory (plugins/ at app root). */
-function getBuiltinPluginsDir(): string | null {
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
-  const candidates = [
-    resourcesPath ? join(resourcesPath, 'plugins') : null,
-    // Source: src/main/plugins/loader.ts -> repository plugins/
-    resolve(__dirname, '../../../plugins'),
-    // electron-vite output: out/main/index.cjs -> repository plugins/
-    resolve(__dirname, '../../plugins'),
-  ];
-
-  for (const candidate of candidates) {
-    if (candidate && existsSync(candidate)) return candidate;
-  }
-  return null;
-}
-
-/** Discover built-in plugins from the app's plugins/ directory. */
-function discoverBuiltinPlugins(): PluginConfigEntry[] {
-  const pluginsDir = getBuiltinPluginsDir();
-  if (!pluginsDir) return [];
-
-  const entries: PluginConfigEntry[] = [];
-  let dirs: string[];
-  try {
-    dirs = readdirSync(pluginsDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
-  } catch {
-    return [];
-  }
-
-  for (const dir of dirs) {
-    const pkgPath = join(pluginsDir, dir, 'package.json');
-    if (!existsSync(pkgPath)) continue;
-    try {
-      const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as Record<string, unknown>;
-      const sv = pkg.socverify as Record<string, unknown> | undefined;
-      if (!sv || typeof sv.kind !== 'string' || typeof sv.id !== 'string') continue;
-
-      const mainFile = (typeof pkg.main === 'string' ? pkg.main : 'index.js');
-      const pluginPath = join(pluginsDir, dir, mainFile);
-
-      entries.push({
-        id: sv.id,
-        apiVersion: typeof sv.apiVersion === 'string' ? sv.apiVersion : undefined,
-        name: (typeof pkg.name === 'string' ? pkg.name : sv.id),
-        version: (typeof pkg.version === 'string' ? pkg.version : '0.0.0'),
-        kind: sv.kind as PluginConfigEntry['kind'],
-        source: 'local',
-        path: pluginPath,
-        enabled: true,
-      });
-    } catch {
-      // Skip invalid package.json
-    }
-  }
-
-  return entries;
-}
-
 async function loadPluginModule(
-  source: 'node_modules' | 'local',
   pluginPath: string,
 ): Promise<{ plugin: unknown; manifest: PluginManifest } | { error: string }> {
   try {
-    // Use createRequire for CJS plugins — import() of file:// URLs is unreliable
-    // in electron-vite's bundled CJS output.
     const require = createRequire(import.meta.url);
-    const mod = require(pluginPath);
+    let mod: unknown;
+    if (pluginPath.endsWith('.mjs')) {
+      mod = await import(/* @vite-ignore */ `${pathToFileURL(pluginPath).href}?reload=${Date.now()}`);
+    } else {
+      const resolvedPath = require.resolve(pluginPath);
+      delete require.cache[resolvedPath];
+      try {
+        mod = require(resolvedPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ERR_REQUIRE_ESM') throw error;
+        mod = await import(/* @vite-ignore */ `${pathToFileURL(resolvedPath).href}?reload=${Date.now()}`);
+      }
+    }
 
     // The plugin module should export a default or named `plugin` / `default` object
-    const exported = mod?.default ?? mod?.plugin ?? mod;
-    const manifest: unknown = exported?.manifest;
+    const moduleRecord = mod as Record<string, unknown> | null;
+    const exported = moduleRecord?.default ?? moduleRecord?.plugin ?? mod;
+    const manifest: unknown = (exported as Record<string, unknown> | null)?.manifest;
 
     if (!validateManifest(manifest)) {
       return { error: `Invalid or missing manifest in plugin at ${pluginPath}` };
@@ -215,103 +185,187 @@ async function loadPluginModule(
   }
 }
 
+function manifestFromEntry(entry: PluginConfigEntry): PluginManifest {
+  return {
+    apiVersion: entry.apiVersion,
+    id: entry.id,
+    name: entry.name,
+    version: entry.version,
+    kind: entry.kind,
+  };
+}
+
+function validateConfigEntry(entry: unknown): entry is PluginConfigEntry {
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return false;
+  const value = entry as Record<string, unknown>;
+  return validateManifest(value) &&
+    (value.source === 'local' || value.source === 'node_modules') &&
+    typeof value.path === 'string' &&
+    typeof value.enabled === 'boolean';
+}
+
+function pluginTargetsMatch(
+  left: PluginConfigEntry,
+  right: PluginConfigEntry,
+  projectRoot: string,
+): boolean {
+  return left.source === right.source &&
+    resolvePluginPath(left.source, left.path, projectRoot) === resolvePluginPath(right.source, right.path, projectRoot);
+}
+
 class PluginLoaderImpl {
   private registries = new Map<string, PluginRegistry>();
   private loadResults = new Map<string, PluginLoadResult[]>();
   private loadedPlugins = new Map<string, Map<string, LoadedPluginRecord>>();
-  private commandHandlers = new Map<string, Map<string, PluginCommandHandler>>();
+  private commandHandlers = new Map<string, Map<string, RegisteredCommand>>();
   private activePlugins = new Map<string, Map<string, PluginLifecycle>>();
-  private eventHandlers = new Map<string, Map<PluginHostEvent, Set<PluginEventHandler>>>();
+  private eventHandlers = new Map<string, Map<PluginHostEvent, Set<RegisteredEventHandler>>>();
   private pluginStates = new Map<string, Map<string, Record<string, unknown>>>();
   private notifications = new Map<string, PluginNotification[]>();
+
+  constructor(private readonly options: PluginLoaderOptions = {}) {}
+
+  get userPluginsDir(): string | null {
+    return this.options.userPluginsDir === undefined
+      ? getDefaultUserPluginsDir()
+      : this.options.userPluginsDir;
+  }
 
   async loadPlugins(projectRoot: string): Promise<PluginLoadResult[]> {
     await this.deactivateProject(projectRoot);
     const config = await this.readPluginConfig(projectRoot);
     const results: PluginLoadResult[] = [];
     const registry = emptyRegistry();
-    const commandHandlers = new Map<string, PluginCommandHandler>();
+    const commandHandlers = new Map<string, RegisteredCommand>();
     const activePlugins = new Map<string, PluginLifecycle>();
-    const eventHandlers = new Map<PluginHostEvent, Set<PluginEventHandler>>();
+    const eventHandlers = new Map<PluginHostEvent, Set<RegisteredEventHandler>>();
     const loadedPlugins = new Map<string, LoadedPluginRecord>();
     this.eventHandlers.set(projectRoot, eventHandlers);
 
-    // Merge built-in plugins with project-level config.
-    // Project-level config entries with the same id override built-in entries.
-    const builtinEntries = discoverBuiltinPlugins();
-    console.log(`[plugin-loader] built-in plugins discovered: ${builtinEntries.length}`);
-    for (const b of builtinEntries) {
-      console.log(`[plugin-loader]   - ${b.id} (${b.kind}) → ${b.path}`);
+    const builtinPluginsDir = this.options.builtinPluginsDir === undefined
+      ? getBuiltinPluginsDir()
+      : this.options.builtinPluginsDir;
+    const userPluginsDir = this.userPluginsDir;
+    if (userPluginsDir) {
+      try {
+        await mkdir(userPluginsDir, { recursive: true });
+      } catch (error) {
+        console.warn(`[plugin-loader] failed to create user plugin directory ${userPluginsDir}:`, error);
+      }
     }
-    const projectIds = new Set(config.plugins.map((p) => p.id));
-    const mergedEntries = [
-      ...builtinEntries.filter((b) => !projectIds.has(b.id)),
-      ...config.plugins,
-    ];
-    console.log(`[plugin-loader] total entries to load: ${mergedEntries.length} (project: ${config.plugins.length})`);
+    const builtinCandidates = discoverPluginPackages(builtinPluginsDir, 'builtin');
+    const userCandidates = discoverPluginPackages(userPluginsDir, 'user');
+    const candidates = new Map<string, PluginPackageCandidate>();
+    for (const candidate of [...builtinCandidates, ...userCandidates]) {
+      candidates.set(candidate.entry.id, candidate);
+    }
+    for (const entry of config.plugins) {
+      const existing = candidates.get(entry.id);
+      const origin: PluginOrigin = existing && pluginTargetsMatch(existing.entry, entry, projectRoot)
+        ? existing.origin
+        : 'project';
+      const pluginPath = resolvePluginPath(entry.source, entry.path, projectRoot);
+      candidates.set(entry.id, {
+        entry,
+        origin,
+        packageRoot: existing && origin !== 'project' ? existing.packageRoot : dirname(pluginPath),
+      });
+    }
+    console.log(
+      `[plugin-loader] discovered ${builtinCandidates.length} built-in, ${userCandidates.length} user, ` +
+      `${config.plugins.length} project plugin entries`,
+    );
 
-    for (const entry of mergedEntries) {
-      if (!entry.enabled) continue;
+    for (const candidate of candidates.values()) {
+      const { entry, origin } = candidate;
+      if (!entry.enabled) {
+        results.push({
+          manifest: manifestFromEntry(entry),
+          source: entry.source,
+          origin,
+          path: entry.path,
+          enabled: false,
+          active: false,
+        });
+        continue;
+      }
+      if (candidate.error) {
+        results.push({
+          manifest: manifestFromEntry(entry),
+          source: entry.source,
+          origin,
+          path: entry.path,
+          enabled: true,
+          active: false,
+          error: candidate.error,
+        });
+        continue;
+      }
 
-      // For local plugins, resolve relative to projectRoot only if path is relative.
-      // Built-in plugins already have absolute paths.
       const pluginPath = resolvePluginPath(entry.source, entry.path, projectRoot);
 
       if (!existsSync(pluginPath)) {
         results.push({
-          manifest: {
-            apiVersion: entry.apiVersion,
-            id: entry.id,
-            name: entry.name,
-            version: entry.version,
-            kind: entry.kind,
-          },
-          plugin: null as never,
+          manifest: manifestFromEntry(entry),
           source: entry.source,
+          origin,
           path: entry.path,
+          enabled: true,
+          active: false,
           error: `Plugin path not found: ${pluginPath}`,
         });
         continue;
       }
 
-      const loadResult = await loadPluginModule(entry.source, pluginPath);
+      const loadResult = await loadPluginModule(pluginPath);
       if ('error' in loadResult) {
         results.push({
-          manifest: {
-            apiVersion: entry.apiVersion,
-            id: entry.id,
-            name: entry.name,
-            version: entry.version,
-            kind: entry.kind,
-          },
-          plugin: null as never,
+          manifest: manifestFromEntry(entry),
           source: entry.source,
+          origin,
           path: entry.path,
+          enabled: true,
+          active: false,
           error: loadResult.error,
         });
         continue;
       }
 
       const { plugin, manifest } = loadResult;
-      const classified = classifyPlugin(plugin, manifest);
-      if (!classified) {
-        console.log(`[plugin-loader] FAILED to classify ${manifest.id} (kind: ${manifest.kind})`);
+      if (manifest.id !== entry.id || manifest.kind !== entry.kind) {
         results.push({
           manifest,
-          plugin: null as never,
           source: entry.source,
+          origin,
           path: entry.path,
+          enabled: true,
+          active: false,
+          error: `Plugin manifest does not match package metadata: expected ${entry.id}/${entry.kind}`,
+        });
+        continue;
+      }
+      const classified = classifyPlugin(plugin, manifest);
+      if (!classified) {
+        results.push({
+          manifest,
+          source: entry.source,
+          origin,
+          path: entry.path,
+          enabled: true,
+          active: false,
           error: `Plugin does not implement required interface for kind: ${manifest.kind}`,
         });
         continue;
       }
 
-      const contributes = resolveContributions(manifest, pluginPath);
+      const contributes = resolveContributions(manifest, candidate.packageRoot);
       const result: PluginLoadResult = {
         manifest,
         plugin: classified,
         source: entry.source,
+        origin,
         path: entry.path,
+        enabled: true,
         contributes,
         active: false,
       };
@@ -370,11 +424,19 @@ class PluginLoaderImpl {
     await this.activateForEvent(projectRoot, `onCommand:${command}`);
   }
 
-  async executeCommand(projectRoot: string, command: string, args: unknown[] = []): Promise<unknown> {
+  async executeCommand(
+    projectRoot: string,
+    command: string,
+    args: unknown[] = [],
+    callerPluginId?: string,
+  ): Promise<unknown> {
     await this.activateForCommand(projectRoot, command);
-    const handler = this.commandHandlers.get(projectRoot)?.get(command);
-    if (!handler) throw new Error(`Plugin command not found: ${command}`);
-    return handler(...args);
+    const registered = this.commandHandlers.get(projectRoot)?.get(command);
+    if (!registered) throw new Error(`Plugin command not found: ${command}`);
+    if (callerPluginId && registered.pluginId !== callerPluginId) {
+      throw new Error(`Plugin ${callerPluginId} cannot invoke command owned by ${registered.pluginId}`);
+    }
+    return registered.handler(...args);
   }
 
   private activationMatches(manifest: PluginManifest, event: PluginHostEvent): boolean {
@@ -383,10 +445,10 @@ class PluginLoaderImpl {
   }
 
   private async activateRecord(projectRoot: string, record: LoadedPluginRecord): Promise<void> {
-    if (record.active) return;
+    if (record.active || record.result.error) return;
 
-    const commandHandlers = this.commandHandlers.get(projectRoot) ?? new Map<string, PluginCommandHandler>();
-    const eventHandlers = this.eventHandlers.get(projectRoot) ?? new Map<PluginHostEvent, Set<PluginEventHandler>>();
+    const commandHandlers = this.commandHandlers.get(projectRoot) ?? new Map<string, RegisteredCommand>();
+    const eventHandlers = this.eventHandlers.get(projectRoot) ?? new Map<PluginHostEvent, Set<RegisteredEventHandler>>();
     const state = await this.loadPluginState(projectRoot, record.manifest.id);
     try {
       await record.lifecycle.activate?.({
@@ -394,14 +456,19 @@ class PluginLoaderImpl {
         projectRoot,
         registerCommand: (command, handler) => {
           if (typeof command === 'string' && typeof handler === 'function') {
-            commandHandlers.set(command, handler);
+            const existing = commandHandlers.get(command);
+            if (existing && existing.pluginId !== record.manifest.id) {
+              throw new Error(`Plugin command already registered by ${existing.pluginId}: ${command}`);
+            }
+            commandHandlers.set(command, { pluginId: record.manifest.id, handler });
           }
         },
         on: (event, handler) => {
-          const handlers = eventHandlers.get(event) ?? new Set<PluginEventHandler>();
-          handlers.add(handler);
+          const handlers = eventHandlers.get(event) ?? new Set<RegisteredEventHandler>();
+          const registered = { pluginId: record.manifest.id, handler };
+          handlers.add(registered);
           eventHandlers.set(event, handlers);
-          return () => handlers.delete(handler);
+          return () => handlers.delete(registered);
         },
         getState: async <T>(key: string) => state[key] as T | undefined,
         setState: async <T>(key: string, value: T) => {
@@ -423,6 +490,14 @@ class PluginLoaderImpl {
       record.active = true;
       record.result.active = true;
     } catch (err) {
+      for (const [command, registered] of commandHandlers) {
+        if (registered.pluginId === record.manifest.id) commandHandlers.delete(command);
+      }
+      for (const handlers of eventHandlers.values()) {
+        for (const registered of handlers) {
+          if (registered.pluginId === record.manifest.id) handlers.delete(registered);
+        }
+      }
       record.result.error = `Failed to activate plugin ${record.manifest.id}: ${err instanceof Error ? err.message : String(err)}`;
       record.result.active = false;
       this.pushNotification(projectRoot, {
@@ -471,13 +546,13 @@ class PluginLoaderImpl {
 
   async emitEvent(projectRoot: string, event: PluginHostEvent, payload: unknown = {}): Promise<void> {
     const handlers = [...(this.eventHandlers.get(projectRoot)?.get(event) ?? [])];
-    for (const handler of handlers) {
+    for (const registered of handlers) {
       try {
-        await handler(payload);
+        await registered.handler(payload);
       } catch (err) {
         this.pushNotification(projectRoot, {
           level: 'error',
-          message: `Plugin event handler failed: ${event}`,
+          message: `Plugin ${registered.pluginId} event handler failed: ${event}`,
           detail: err instanceof Error ? err.message : String(err),
         });
       }
@@ -573,8 +648,13 @@ class PluginLoaderImpl {
   async readPluginConfig(projectRoot: string): Promise<PluginConfig> {
     const configPath = join(projectRoot, SOCVERIFY_DIR, PLUGIN_CONFIG_FILE);
     try {
-      const content = await readFile(configPath, 'utf-8');
-      return JSON.parse(content) as PluginConfig;
+      const parsed: unknown = JSON.parse(await readFile(configPath, 'utf-8'));
+      if (typeof parsed !== 'object' || parsed === null || !Array.isArray((parsed as { plugins?: unknown }).plugins)) {
+        return { plugins: [] };
+      }
+      return {
+        plugins: (parsed as { plugins: unknown[] }).plugins.filter(validateConfigEntry),
+      };
     } catch {
       return { plugins: [] };
     }
@@ -587,6 +667,30 @@ class PluginLoaderImpl {
     }
     const configPath = join(configDir, PLUGIN_CONFIG_FILE);
     await writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
+  }
+
+  async setPluginEnabled(projectRoot: string, pluginId: string, enabled: boolean): Promise<PluginConfigEntry> {
+    const config = await this.readPluginConfig(projectRoot);
+    let entry = config.plugins.find((plugin) => plugin.id === pluginId);
+    if (!entry) {
+      const result = this.getLoadResults(projectRoot).find((plugin) => plugin.manifest.id === pluginId);
+      if (!result) throw new Error(`Plugin not found: ${pluginId}`);
+      entry = {
+        id: result.manifest.id,
+        apiVersion: result.manifest.apiVersion,
+        name: result.manifest.name,
+        version: result.manifest.version,
+        kind: result.manifest.kind,
+        source: result.source,
+        path: result.path,
+        enabled,
+      };
+      config.plugins.push(entry);
+    } else {
+      entry.enabled = enabled;
+    }
+    await this.savePluginConfig(projectRoot, config);
+    return entry;
   }
 
   /**
@@ -626,4 +730,8 @@ class PluginLoaderImpl {
   }
 }
 
-export const pluginLoader = new PluginLoaderImpl();
+export function createPluginLoader(options: PluginLoaderOptions = {}): PluginLoaderImpl {
+  return new PluginLoaderImpl(options);
+}
+
+export const pluginLoader = createPluginLoader();
