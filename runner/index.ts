@@ -81,6 +81,7 @@ interface InitConfig {
 	enableMCP?: boolean;
 	resumeSessionId?: string;
 	systemPrompt?: string;
+	contextWindow: number;
 	customToolDefinitions?: Array<{
 		name: string;
 		label?: string;
@@ -100,6 +101,7 @@ type Command =
 	| { id: string; type: "setModel"; provider: string; modelId: string }
 	| { id: string; type: "getMessages" }
 	| { id: string; type: "getState" }
+	| { id: string; type: "compact" }
 	| { id: string; type: "getMcpStatus" }
 	| { id: string; type: "getMcpServerTools"; serverName: string }
 	| { id: string; type: "reloadMcp" }
@@ -124,6 +126,17 @@ function sendResponse(id: string, success: boolean, data?: unknown, error?: stri
 
 function sendEvent(event: unknown): void {
 	send({ type: "event", event });
+}
+
+function sendContextUsage(): void {
+	if (!session) return;
+	sendEvent({
+		type: "context_usage",
+		contextUsage: session.getContextUsage?.(),
+		contextBreakdown: session.getContextBreakdown?.(),
+		isCompacting: session.isCompacting === true,
+		autoCompactionEnabled: session.autoCompactionEnabled !== false,
+	});
 }
 
 function sendToolCall(id: string, toolName: string, args: unknown): void {
@@ -196,6 +209,9 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 	const { createAgentSession, discoverAuthStorage } = await import(
 		"../engine/oh-my-pi/packages/coding-agent/src/sdk"
 	);
+	const { ModelRegistry } = await import(
+		"../engine/oh-my-pi/packages/coding-agent/src/config/model-registry"
+	);
 	const { SessionManager } = await import(
 		"../engine/oh-my-pi/packages/coding-agent/src/session/session-manager"
 	);
@@ -216,6 +232,7 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 
 	// Set up auth storage
 	const authStorage = await discoverAuthStorage();
+	const modelRegistry = new ModelRegistry(authStorage);
 
 	// Set runtime API key if provided
 	if (config.apiKey && config.provider) {
@@ -309,6 +326,7 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 	const sessionOptions: any = {
 		cwd: config.cwd,
 		authStorage,
+		modelRegistry,
 		sessionManager,
 		customTools,
 		enableMCP: config.enableMCP ?? true,
@@ -321,7 +339,16 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 
 	// Set model pattern if provided
 	if (config.provider && config.model) {
-		sessionOptions.modelPattern = `${config.provider}/${config.model}`;
+		const advertisedModel = modelRegistry.find(config.provider, config.model);
+		if (advertisedModel) {
+			const advertisedWindow = advertisedModel.contextWindow ?? 0;
+			const effectiveWindow = advertisedWindow > 0
+				? Math.min(config.contextWindow, advertisedWindow)
+				: config.contextWindow;
+			sessionOptions.model = { ...advertisedModel, contextWindow: effectiveWindow };
+		} else {
+			sessionOptions.modelPattern = `${config.provider}/${config.model}`;
+		}
 	}
 
 	// Set system prompt if provided
@@ -336,7 +363,14 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 	// Subscribe to events and forward them to the host
 	unsubscribe = session.subscribe((event: unknown) => {
 		sendEvent(event);
+		const eventType = typeof event === "object" && event !== null && "type" in event
+			? String((event as { type: unknown }).type)
+			: "";
+		if (eventType === "agent_end" || eventType === "compaction_end" || eventType === "auto_compaction_end") {
+			sendContextUsage();
+		}
 	});
+	sendContextUsage();
 
 	sendResponse(cmd.id, true, { sessionId: session.sessionId });
 }
@@ -390,8 +424,24 @@ async function handleGetMessages(cmd: Command & { type: "getMessages" }): Promis
 
 async function handleGetState(cmd: Command & { type: "getState" }): Promise<void> {
 	if (!session) throw new Error("Session not initialized");
-	const state = session.state;
+	const state = {
+		...session.state,
+		model: session.model,
+		contextUsage: session.getContextUsage?.(),
+		contextBreakdown: session.getContextBreakdown?.(),
+		isCompacting: session.isCompacting === true,
+		autoCompactionEnabled: session.autoCompactionEnabled !== false,
+	};
 	sendResponse(cmd.id, true, { state });
+}
+
+async function handleCompact(cmd: Command & { type: "compact" }): Promise<void> {
+	if (!session) throw new Error("Session not initialized");
+	const result = await session.compact();
+	const contextUsage = session.getContextUsage?.();
+	const contextBreakdown = session.getContextBreakdown?.();
+	sendResponse(cmd.id, true, { result, contextUsage, contextBreakdown });
+	sendContextUsage();
 }
 
 async function handleGetMcpStatus(cmd: Command & { type: "getMcpStatus" }): Promise<void> {
@@ -564,6 +614,9 @@ async function handleCommand(cmd: Command): Promise<void> {
 				break;
 			case "getState":
 				await handleGetState(cmd);
+				break;
+			case "compact":
+				await handleCompact(cmd);
 				break;
 			case "getMcpStatus":
 				await handleGetMcpStatus(cmd);

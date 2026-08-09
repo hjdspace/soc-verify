@@ -16,6 +16,7 @@ const {
   mockListHistory,
   mockDeleteHistorySession,
   mockRename,
+  mockCompact,
   mockToastSuccess,
 } = vi.hoisted(() => ({
   mockSend: vi.fn().mockResolvedValue(undefined),
@@ -31,6 +32,16 @@ const {
   mockListHistory: vi.fn().mockResolvedValue([]),
   mockDeleteHistorySession: vi.fn().mockResolvedValue(undefined),
   mockRename: vi.fn().mockResolvedValue(undefined),
+  mockCompact: vi.fn().mockResolvedValue({
+    contextUsage: { tokens: 12000, contextWindow: 200000, percent: 6 },
+    contextBreakdown: {
+      systemPromptTokens: 1000,
+      systemToolsTokens: 2000,
+      systemContextTokens: 1000,
+      skillsTokens: 0,
+      messagesTokens: 8000,
+    },
+  }),
   mockToastSuccess: vi.fn(),
 }));
 
@@ -50,6 +61,7 @@ vi.mock('@renderer/lib/trpc', () => ({
       listHistory: { query: mockListHistory },
       deleteHistorySession: { mutate: mockDeleteHistorySession },
       rename: { mutate: mockRename },
+      compact: { mutate: mockCompact },
     },
   },
 }));
@@ -82,6 +94,16 @@ describe('SessionStore — event handling and state machine', () => {
     mockGetPersistedSessions.mockResolvedValue([]);
     mockGetStoredMessages.mockResolvedValue([]);
     mockSaveStoredMessages.mockResolvedValue(undefined);
+    mockCompact.mockResolvedValue({
+      contextUsage: { tokens: 12000, contextWindow: 200000, percent: 6 },
+      contextBreakdown: {
+        systemPromptTokens: 1000,
+        systemToolsTokens: 2000,
+        systemContextTokens: 1000,
+        skillsTokens: 0,
+        messagesTokens: 8000,
+      },
+    });
     mockListHistory.mockResolvedValue([]);
   });
 
@@ -494,6 +516,45 @@ describe('SessionStore — event handling and state machine', () => {
     useSessionStore.getState().handleSessionEvent('unknown_session', { type: 'message_start' });
 
     expect(useSessionStore.getState().sessions[0].status).toBe('idle');
+  });
+
+  it('tracks context usage and its estimated breakdown from runner events', async () => {
+    const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    useSessionStore.getState().handleSessionEvent(id!, {
+      type: 'context_usage',
+      contextUsage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+      contextBreakdown: {
+        systemPromptTokens: 5000,
+        systemToolsTokens: 10000,
+        systemContextTokens: 5000,
+        skillsTokens: 2000,
+        messagesTokens: 28000,
+      },
+      autoCompactionEnabled: true,
+    });
+
+    expect(useSessionStore.getState().sessions[0]).toMatchObject({
+      contextUsage: { tokens: 50000, contextWindow: 200000, percent: 25 },
+      contextBreakdown: { messagesTokens: 28000, systemToolsTokens: 10000 },
+      autoCompactionEnabled: true,
+    });
+  });
+
+  it('manually compacts an idle session and refreshes context usage', async () => {
+    const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    useSessionStore.setState((state) => ({
+      sessions: state.sessions.map((session) => ({
+        ...session,
+        runtimeSessionId: 'session_test_1',
+        contextUsage: { tokens: 90000, contextWindow: 200000, percent: 45 },
+      })),
+    }));
+
+    await useSessionStore.getState().compactSession();
+
+    expect(mockCompact).toHaveBeenCalledWith({ sessionId: 'session_test_1' });
+    expect(useSessionStore.getState().sessions.find((session) => session.id === id)?.contextUsage)
+      .toEqual({ tokens: 12000, contextWindow: 200000, percent: 6 });
   });
 
   it('creates and selects an error analysis session for the right panel', () => {

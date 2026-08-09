@@ -22,6 +22,7 @@ import { HostToolsRegistry } from '../host/host-tools';
 import { HostUriRouter } from '../host/host-uris';
 import type { CoverageManager } from '../coverage/coverage-manager';
 import type { CaseStatsService } from '../case/case-stats-service';
+import { contextSettings } from './context-settings';
 
 const MAX_CONCURRENT_SESSIONS = 10;
 const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -116,6 +117,8 @@ export interface CreateSessionOptions {
   env?: Record<string, string>;
   enableMCP?: boolean;
   systemPrompt?: string;
+  /** Model context window advertised to omp. Falls back to the global setting. */
+  contextWindow?: number;
   discovery?: SubsysDiscovery;
   simulationAdapter?: PluginBackedSimulation | null;
   coverageAdapter?: PluginBackedCoverage | null;
@@ -163,6 +166,8 @@ export class SessionManagerImpl extends EventEmitter {
     if (this.sessions.size >= MAX_CONCURRENT_SESSIONS) {
       throw new Error(`Maximum concurrent sessions (${MAX_CONCURRENT_SESSIONS}) reached`);
     }
+
+    const contextWindow = options.contextWindow ?? await contextSettings.getContextWindow();
 
     const runtime = resolveAgentRuntime();
     if (!runtime) {
@@ -245,6 +250,7 @@ export class SessionManagerImpl extends EventEmitter {
         modelId: model,
         models: allModels,
         apiKeyEnvVar: OPENAI_COMPATIBLE_API_KEY_ENV,
+        contextWindow,
       });
       const modelsJson = JSON.stringify(modelsConfig);
       // Write both models.json (legacy) and models.yml (preferred by ConfigFile).
@@ -351,6 +357,7 @@ export class SessionManagerImpl extends EventEmitter {
       enableMCP: options.enableMCP ?? true,
       resumeSessionId: options.resumeSessionId,
       systemPrompt: options.systemPrompt,
+      contextWindow,
       customToolDefinitions,
       additionalExtensionPaths,
     };

@@ -192,6 +192,20 @@ export const sessionRouter = t.router({
       return client.getState();
     }),
 
+  compact: t.procedure
+    .input((raw): { sessionId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.sessionId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'sessionId is required' });
+      }
+      return { sessionId: r.sessionId };
+    })
+    .mutation(async ({ input }) => {
+      const client = requireSession(input.sessionId);
+      sessionManager.touchActivity(input.sessionId);
+      return client.compact();
+    }),
+
   getMessages: t.procedure
     .input((raw): { sessionId: string } => {
       const r = raw as Record<string, unknown>;

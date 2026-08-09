@@ -10,6 +10,7 @@ import { TVAISuggestionCard } from '@renderer/components/chat/TVAISuggestionCard
 import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
 import { PluginViewHost } from '@renderer/components/plugins/PluginViewHost';
+import { ContextUsageIndicator } from '@renderer/components/chat/ContextUsageIndicator';
 
 interface RightPanelProps {
   width: number;
@@ -29,6 +30,7 @@ export function RightPanel({ width }: RightPanelProps) {
   const setInputMessage = useSessionStore((s) => s.setInputMessage);
   const sendMessage = useSessionStore((s) => s.sendMessage);
   const abortSession = useSessionStore((s) => s.abortSession);
+  const compactSession = useSessionStore((s) => s.compactSession);
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const currentProject = useProjectStore((s) =>
@@ -970,6 +972,9 @@ export function RightPanel({ width }: RightPanelProps) {
                   </>
                 )}
               </div>
+              {currentSession && (
+                <ContextUsageIndicator session={currentSession} onCompact={compactSession} />
+              )}
               {/* Steer 按钮 */}
               {isSending && !showSteerInput && (
                 <button

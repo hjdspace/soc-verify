@@ -15,6 +15,7 @@ import {
   isResponseFrame,
   isToolCallFrame,
 } from './types';
+import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
 
 export type ToolCallHandler = (
   toolName: string,
@@ -308,6 +309,19 @@ export class AgentClient {
   async getState(): Promise<unknown> {
     const response = await this.send({ type: 'getState' });
     return this.getData<{ state: unknown }>(response).state;
+  }
+
+  async compact(): Promise<{
+    result: unknown;
+    contextUsage?: ContextUsage;
+    contextBreakdown?: ContextBreakdown;
+  }> {
+    const response = await this.send({ type: 'compact' }, 5 * 60 * 1000);
+    return this.getData<{
+      result: unknown;
+      contextUsage?: ContextUsage;
+      contextBreakdown?: ContextBreakdown;
+    }>(response);
   }
 
   /**

@@ -5,6 +5,7 @@ import { useThemeStore } from './stores/theme';
 import { useFontStore } from './stores/font';
 import { useToastStore } from './stores/toast';
 import { useSessionStore } from './stores/session';
+import { useSettingsStore } from './stores/settings';
 import { trpc } from './lib/trpc';
 import { ToolApp } from './tools/ToolApp';
 import { useBrowserTabPersistence } from './hooks/use-browser-tab-persistence';
@@ -21,6 +22,7 @@ export default function App() {
   const initFont = useFontStore((s) => s.initFont);
   const initLastModel = useSessionStore((s) => s.initLastModel);
   const registerSessionEventListeners = useSessionStore((s) => s.registerEventListeners);
+  const loadContextWindow = useSettingsStore((s) => s.loadContextWindow);
   const errorToast = useToastStore((s) => s.error);
   const healthCheckDone = useRef(false);
 
@@ -31,10 +33,11 @@ export default function App() {
     initTheme();
     initFont();
     if (!toolMode) {
+      void loadContextWindow();
       initLastModel();
       registerSessionEventListeners();
     }
-  }, [initTheme, initFont, initLastModel, registerSessionEventListeners, toolMode]);
+  }, [initTheme, initFont, initLastModel, loadContextWindow, registerSessionEventListeners, toolMode]);
 
   // Startup health check: verify tRPC IPC bridge is working
   // (only needed for the main window, not tool windows)

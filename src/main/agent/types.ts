@@ -24,6 +24,7 @@ export interface InitConfig {
   enableMCP?: boolean;
   resumeSessionId?: string;
   systemPrompt?: string;
+  contextWindow: number;
   customToolDefinitions: CustomToolDefinition[];
   /** 额外的 extension 包路径（每个包的 skills/ 和 agents/ 子目录会被 omp 扫描） */
   additionalExtensionPaths?: string[];
@@ -45,6 +46,7 @@ export type Command =
   | { id: string; type: 'setModel'; provider: string; modelId: string }
   | { id: string; type: 'getMessages' }
   | { id: string; type: 'getState' }
+  | { id: string; type: 'compact' }
   | { id: string; type: 'getMcpStatus' }
   | { id: string; type: 'getMcpServerTools'; serverName: string }
   | { id: string; type: 'reloadMcp' }

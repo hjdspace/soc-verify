@@ -21,10 +21,32 @@ import { probeAllServers, probeMcpServer, clearProbeCache } from '../../mcp/mcp-
 import { getCombinedDefaultSystemPrompt } from '../../agent/default-system-prompt';
 import { loadTvConfig, saveTvConfig } from '../../timing-violation/tv-config';
 import { evictTvDb } from '../../timing-violation/db/tv-db-cache';
+import { contextSettings } from '../../agent/context-settings';
 import type { TvConfig } from '../../timing-violation/types';
 import type { CredentialInput, CredentialUpdateInput, CreateSkillInput, McpConfigFile, McpToolInfo } from '@shared/types';
+import { MAX_CONTEXT_WINDOW, MIN_CONTEXT_WINDOW } from '@shared/context-management';
 
 export const settingsRouter = t.router({
+  getContextWindow: t.procedure.query(() => contextSettings.getContextWindow()),
+
+  setContextWindow: t.procedure
+    .input((raw): { contextWindow: number } => {
+      const r = raw as Record<string, unknown>;
+      if (!Number.isInteger(r.contextWindow) ||
+          (r.contextWindow as number) < MIN_CONTEXT_WINDOW ||
+          (r.contextWindow as number) > MAX_CONTEXT_WINDOW) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `contextWindow must be an integer between ${MIN_CONTEXT_WINDOW} and ${MAX_CONTEXT_WINDOW}`,
+        });
+      }
+      return { contextWindow: r.contextWindow as number };
+    })
+    .mutation(async ({ input }) => {
+      await contextSettings.setContextWindow(input.contextWindow);
+      return { contextWindow: input.contextWindow };
+    }),
+
   getCredentials: t.procedure.query(() => {
     return credentialManager.listMasked();
   }),

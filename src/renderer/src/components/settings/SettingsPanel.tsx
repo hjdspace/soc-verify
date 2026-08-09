@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X, Key, Package, Server, FileText, Plus, Trash2, Save, Palette, Check, Cpu, RefreshCw, Zap, Info, BookOpen, Folder, ChevronDown, ChevronRight, Pencil, Terminal, Globe, Power, Loader2, Wrench, Type, Clock } from 'lucide-react';
+import { X, Key, Package, Server, FileText, Plus, Trash2, Save, Palette, Check, Cpu, RefreshCw, Zap, Info, BookOpen, Folder, ChevronDown, ChevronRight, Pencil, Terminal, Globe, Power, Loader2, Wrench, Type, Clock, CircleGauge } from 'lucide-react';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { useUiStore } from '@renderer/stores/ui';
@@ -227,6 +227,9 @@ endmodule`}
 // ── Credentials Tab (with inline model switcher) ───────
 
 function CredentialsTab() {
+  const contextWindow = useSettingsStore((s) => s.contextWindow);
+  const loadContextWindow = useSettingsStore((s) => s.loadContextWindow);
+  const setContextWindow = useSettingsStore((s) => s.setContextWindow);
   const credentials = useSettingsStore((s) => s.credentials);
   const loadCredentials = useSettingsStore((s) => s.loadCredentials);
   const setCredential = useSettingsStore((s) => s.setCredential);
@@ -248,7 +251,8 @@ function CredentialsTab() {
 
   useEffect(() => {
     loadCredentials();
-  }, [loadCredentials]);
+    void loadContextWindow();
+  }, [loadContextWindow, loadCredentials]);
 
   const isEditing = editingProviderId !== null;
   // In add mode: providerId + apiKey are required.
@@ -325,6 +329,29 @@ function CredentialsTab() {
 
   return (
     <div className="space-y-3">
+      <div className="flex items-center gap-3 rounded-md border border-border/60 bg-secondary/15 px-3 py-2.5">
+        <CircleGauge className="h-4 w-4 shrink-0 text-primary" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-medium text-foreground">模型上下文窗口</div>
+          <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+            应与模型实际支持值一致，新建或重新加载 AI 会话后生效。
+          </p>
+        </div>
+        <select
+          aria-label="模型上下文窗口"
+          value={contextWindow}
+          onChange={(event) => void setContextWindow(Number(event.target.value))}
+          className="h-7 rounded border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary"
+        >
+          <option value={32_000}>32k</option>
+          <option value={64_000}>64k</option>
+          <option value={128_000}>128k</option>
+          <option value={200_000}>200k（默认）</option>
+          <option value={256_000}>256k</option>
+          <option value={1_000_000}>1M</option>
+        </select>
+      </div>
+
       {/* Existing credentials — click a card to apply the whole config */}
       <div>
         <div className="mb-1.5 text-[10px] font-semibold uppercase text-muted-foreground">已存储凭据</div>

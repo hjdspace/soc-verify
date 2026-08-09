@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
 import type { CredentialEntry, CredentialInput, CredentialUpdateInput, SkillInfo, SkillInstallInfo, CreateSkillInput, McpServerInfo, McpToolInfo, McpConfigFile } from '@shared/types';
+import { DEFAULT_CONTEXT_WINDOW } from '@shared/context-management';
 
 export interface ApiModel {
   id: string;
@@ -11,6 +12,7 @@ export interface ApiModel {
 }
 
 interface SettingsStoreState {
+  contextWindow: number;
   credentials: CredentialEntry[];
   skills: SkillInfo[];
   skillInstallInfo: SkillInstallInfo | null;
@@ -35,6 +37,8 @@ interface SettingsStoreState {
   /** Per-provider loading flag for the inline model switcher. */
   modelsLoadingByProvider: Record<string, boolean>;
 
+  loadContextWindow: () => Promise<void>;
+  setContextWindow: (contextWindow: number) => Promise<void>;
   loadCredentials: () => Promise<void>;
   setCredential: (input: CredentialInput) => Promise<void>;
   updateCredential: (input: CredentialUpdateInput) => Promise<void>;
@@ -62,6 +66,7 @@ interface SettingsStoreState {
 }
 
 export const useSettingsStore = create<SettingsStoreState>((set) => ({
+  contextWindow: DEFAULT_CONTEXT_WINDOW,
   credentials: [],
   skills: [],
   skillInstallInfo: null,
@@ -78,6 +83,25 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
   modelsLoading: false,
   modelsByProvider: {},
   modelsLoadingByProvider: {},
+
+  loadContextWindow: async () => {
+    try {
+      const contextWindow = await trpc.settings.getContextWindow.query();
+      set({ contextWindow });
+    } catch {
+      // The main process also falls back to the same default.
+    }
+  },
+
+  setContextWindow: async (contextWindow) => {
+    try {
+      const result = await trpc.settings.setContextWindow.mutate({ contextWindow });
+      set({ contextWindow: result.contextWindow });
+      useToastStore.getState().success('上下文窗口已保存');
+    } catch (err) {
+      useToastStore.getState().error('保存上下文窗口失败', err instanceof Error ? err.message : String(err));
+    }
+  },
 
   loadCredentials: async () => {
     try {

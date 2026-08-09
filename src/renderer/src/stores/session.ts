@@ -2,7 +2,9 @@ import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
 import { useUiStore } from './ui';
+import { useSettingsStore } from './settings';
 import { tRPCError } from '@renderer/lib/trpc-utils';
+import { DEFAULT_CONTEXT_WINDOW, type ContextBreakdown, type ContextUsage } from '@shared/context-management';
 
 export type SessionStatus = 'creating' | 'idle' | 'streaming' | 'tool_executing' | 'error';
 
@@ -77,6 +79,10 @@ export interface SessionEntry {
   composer: SessionComposer;
   createdAt: number;
   model?: SessionModel;
+  contextUsage?: ContextUsage;
+  contextBreakdown?: ContextBreakdown;
+  isCompacting?: boolean;
+  autoCompactionEnabled?: boolean;
   /** TV AI session: the violation ID this session is analyzing. */
   tvViolationId?: number;
 }
@@ -116,6 +122,7 @@ interface SessionStoreState {
   switchSession: (sessionId: string) => void;
   sendMessage: (message: string, images?: string[]) => Promise<void>;
   abortSession: () => Promise<void>;
+  compactSession: () => Promise<void>;
   renameSession: (sessionId: string, projectId: string, name: string) => Promise<void>;
   setInputMessage: (msg: string) => void;
   handleSessionEvent: (sessionId: string, event: unknown) => void;
@@ -140,6 +147,38 @@ let errorAnalysisListenerRegistered = false;
 const historySessionLoads = new Map<string, Promise<void>>();
 const runtimeSessionStarts = new Map<string, Promise<string>>();
 const pendingSessionEvents = new Map<string, unknown[]>();
+
+function emptyContextUsage(): ContextUsage {
+  const configured = useSettingsStore.getState().contextWindow;
+  const contextWindow = Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_CONTEXT_WINDOW;
+  return { tokens: 0, contextWindow, percent: 0 };
+}
+
+function readContextUsage(value: unknown, fallback: ContextUsage): ContextUsage {
+  if (typeof value !== 'object' || value === null) return fallback;
+  const usage = value as Record<string, unknown>;
+  if (typeof usage.tokens !== 'number' || typeof usage.contextWindow !== 'number') return fallback;
+  const percent = typeof usage.percent === 'number'
+    ? usage.percent
+    : usage.contextWindow > 0 ? (usage.tokens / usage.contextWindow) * 100 : 0;
+  return { tokens: usage.tokens, contextWindow: usage.contextWindow, percent };
+}
+
+function readContextBreakdown(value: unknown, fallback?: ContextBreakdown): ContextBreakdown | undefined {
+  if (typeof value !== 'object' || value === null) return fallback;
+  const breakdown = value as Record<string, unknown>;
+  const keys: Array<keyof ContextBreakdown> = [
+    'systemPromptTokens',
+    'systemToolsTokens',
+    'systemContextTokens',
+    'skillsTokens',
+    'messagesTokens',
+  ];
+  if (!keys.every((key) => typeof breakdown[key] === 'number')) return fallback;
+  return Object.fromEntries(keys.map((key) => [key, breakdown[key]])) as ContextBreakdown;
+}
 
 // ─── 流式 message_update 节流 ────────────────────────────
 //
@@ -509,6 +548,13 @@ async function ensureRuntimeSession(
           : sess,
       ),
     }));
+    const pendingEvents = pendingSessionEvents.get(runtimeSessionId);
+    if (pendingEvents) {
+      pendingSessionEvents.delete(runtimeSessionId);
+      for (const pendingEvent of pendingEvents) {
+        get().handleSessionEvent(runtimeSessionId, pendingEvent);
+      }
+    }
     persistSessionMessages(get().sessions.find((sess) => sess.id === latest.id));
     return runtimeSessionId;
   })();
@@ -575,6 +621,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       composer: emptyComposer(),
       createdAt: Date.now(),
       model: get().lastModel ?? undefined,
+      contextUsage: emptyContextUsage(),
     };
 
     set((state) => ({
@@ -608,6 +655,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       composer: emptyComposer(),
       createdAt: Date.now(),
       model: lastModel ?? undefined,
+      contextUsage: emptyContextUsage(),
     };
     set((s) => ({
       sessions: [...s.sessions, session],
@@ -787,6 +835,44 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     }
   },
 
+  compactSession: async () => {
+    const sessionId = get().currentSessionId;
+    if (!sessionId) return;
+    const session = get().sessions.find((candidate) => candidate.id === sessionId);
+    if (!session || session.status !== 'idle' || (session.contextUsage?.tokens ?? 0) <= 0) return;
+
+    set((state) => ({
+      sessions: state.sessions.map((candidate) =>
+        candidate.id === sessionId ? { ...candidate, isCompacting: true } : candidate,
+      ),
+    }));
+
+    try {
+      const runtimeSessionId = await ensureRuntimeSession(sessionId, set, get);
+      const result = await trpc.session.compact.mutate({ sessionId: runtimeSessionId });
+      set((state) => ({
+        sessions: state.sessions.map((candidate) =>
+          candidate.id === sessionId
+            ? {
+                ...candidate,
+                isCompacting: false,
+                contextUsage: readContextUsage(result.contextUsage, candidate.contextUsage ?? emptyContextUsage()),
+                contextBreakdown: readContextBreakdown(result.contextBreakdown, candidate.contextBreakdown),
+              }
+            : candidate,
+        ),
+      }));
+      useToastStore.getState().success('上下文压缩完成');
+    } catch (err) {
+      set((state) => ({
+        sessions: state.sessions.map((candidate) =>
+          candidate.id === sessionId ? { ...candidate, isCompacting: false } : candidate,
+        ),
+      }));
+      useToastStore.getState().error('上下文压缩失败', tRPCError(err));
+    }
+  },
+
   renameSession: async (sessionId, projectId, name) => {
     try {
       const session = get().sessions.find((sess) => sessionMatchesId(sess, sessionId));
@@ -857,6 +943,23 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         if (!sessionMatchesId(sess, sessionId)) return sess;
 
         switch (type) {
+          case 'context_usage':
+            return {
+              ...sess,
+              contextUsage: readContextUsage(evt.contextUsage, sess.contextUsage ?? emptyContextUsage()),
+              contextBreakdown: readContextBreakdown(evt.contextBreakdown, sess.contextBreakdown),
+              isCompacting: evt.isCompacting === true,
+              autoCompactionEnabled: evt.autoCompactionEnabled !== false,
+            };
+
+          case 'compaction_start':
+          case 'auto_compaction_start':
+            return { ...sess, isCompacting: true };
+
+          case 'compaction_end':
+          case 'auto_compaction_end':
+            return { ...sess, isCompacting: false };
+
           case 'message_start': {
             const message = evt.message as Record<string, unknown> | undefined;
             if (message?.role && message.role !== 'assistant') return sess;
@@ -1082,6 +1185,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         composer: emptyComposer(),
         createdAt: p.createdAt,
         model: p.model,
+        contextUsage: emptyContextUsage(),
       }));
 
       // The most recently active session among ALL persisted (not just newly added)
@@ -1318,6 +1422,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
           composer: emptyComposer(),
           createdAt: historySession.createdAt,
           model: historySession.model,
+          contextUsage: emptyContextUsage(),
         };
         set((s) => ({
           sessions: [...s.sessions, session],

@@ -1,3 +1,5 @@
+import { DEFAULT_CONTEXT_WINDOW } from '@shared/context-management';
+
 export const OPENAI_COMPATIBLE_PROVIDER = 'socverify-openai-compatible';
 export const OPENAI_COMPATIBLE_API_KEY_ENV = 'SOCVERIFY_AGENT_API_KEY';
 
@@ -21,6 +23,7 @@ type ModelsConfigOptions = {
    *  them at runtime (instead of being locked to a single model). */
   models?: OpenAICompatibleModel[];
   apiKeyEnvVar: string;
+  contextWindow?: number;
 };
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -88,6 +91,7 @@ export function buildOpenAICompatibleModelsConfig({
   modelId,
   models,
   apiKeyEnvVar,
+  contextWindow = DEFAULT_CONTEXT_WINDOW,
 }: ModelsConfigOptions) {
   // Use the full model list when provided; otherwise fall back to a single-model
   // config. Writing all models is essential for runtime model switching via the
@@ -108,7 +112,7 @@ export function buildOpenAICompatibleModelsConfig({
           id: m.id,
           name: m.name,
           supportsTools: true,
-          contextWindow: 128000,
+          contextWindow,
           maxTokens: 8192,
           // Default to text+image so screenshots and pasted images are sent
           // to the LLM as multimodal content. Without "image" in the input

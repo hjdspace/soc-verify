@@ -91,6 +91,18 @@ describe('OpenAI-compatible Agent configuration', () => {
 
     const model = config.providers['socverify-openai-compatible'].models[0];
     expect(model.input).toEqual(['text', 'image']);
+    expect(model.contextWindow).toBe(200000);
+  });
+
+  it('uses the configured context window for an OpenAI-compatible model', () => {
+    const config = buildOpenAICompatibleModelsConfig({
+      baseUrl: 'https://gateway.example/v1',
+      modelId: 'long-context-model',
+      apiKeyEnvVar: 'SOCVERIFY_AGENT_API_KEY',
+      contextWindow: 256000,
+    });
+
+    expect(config.providers['socverify-openai-compatible'].models[0].contextWindow).toBe(256000);
   });
 });
 
