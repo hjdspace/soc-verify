@@ -97,6 +97,8 @@ export interface HistorySession {
   lastActivityAt: number;
   model?: { provider: string; id: string; name: string };
   isActive: boolean;
+  contextUsage?: ContextUsage;
+  contextBreakdown?: ContextBreakdown;
 }
 
 interface SessionStoreState {
@@ -381,6 +383,18 @@ function persistSessionMessages(session: SessionEntry | undefined): void {
   }).catch(() => {
     // Message persistence is best-effort; live chat state remains authoritative.
   });
+  // Also persist context usage to sessions.json so the indicator shows the
+  // correct value immediately when the app is reopened.
+  if (session.contextUsage) {
+    void trpc.session.updateContextUsage.mutate({
+      projectId: session.projectId,
+      sessionId: persistedSessionId,
+      contextUsage: session.contextUsage,
+      contextBreakdown: session.contextBreakdown,
+    }).catch(() => {
+      // Best-effort; context usage will be refreshed on next event.
+    });
+  }
 }
 
 type SessionStoreSet = (
@@ -557,6 +571,36 @@ async function ensureRuntimeSession(
       }
     }
     persistSessionMessages(get().sessions.find((sess) => sess.id === latest.id));
+
+    // Fire-and-forget: fetch the current context usage from the omp engine so
+    // the UI reflects the real token count immediately after session
+    // create/restore — not just 0% until the next context_usage event arrives
+    // during an active conversation. This is especially important for restored
+    // history sessions that already have many messages.
+    void (async () => {
+      try {
+        const state = await trpc.session.getState.query({ sessionId: runtimeSessionId });
+        const stateObj = state as Record<string, unknown> | null;
+        if (!stateObj || typeof stateObj !== 'object') return;
+        const usage = stateObj.contextUsage;
+        if (usage === undefined || usage === null) return;
+        set((s) => ({
+          sessions: s.sessions.map((sess) =>
+            sess.id === latest.id
+              ? {
+                  ...sess,
+                  contextUsage: readContextUsage(usage, sess.contextUsage ?? emptyContextUsage()),
+                  autoCompactionEnabled: stateObj.autoCompactionEnabled !== false,
+                }
+              : sess,
+          ),
+        }));
+      } catch {
+        // Best-effort: context usage will be updated on the next context_usage
+        // event during active conversation.
+      }
+    })();
+
     return runtimeSessionId;
   })();
 
@@ -1141,7 +1185,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       type === 'tool_execution_end' ||
       type === 'agent_end' ||
       type === 'notice' ||
-      type === 'irc_message'
+      type === 'irc_message' ||
+      type === 'context_usage'
     ) {
       schedulePersist(get, sessionId);
     }
@@ -1196,7 +1241,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         composer: emptyComposer(),
         createdAt: p.createdAt,
         model: p.model,
-        contextUsage: emptyContextUsage(),
+        contextUsage: p.contextUsage ?? emptyContextUsage(),
+        contextBreakdown: p.contextBreakdown,
       }));
 
       // The most recently active session among ALL persisted (not just newly added)
@@ -1433,7 +1479,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
           composer: emptyComposer(),
           createdAt: historySession.createdAt,
           model: historySession.model,
-          contextUsage: emptyContextUsage(),
+          contextUsage: historySession.contextUsage ?? emptyContextUsage(),
+          contextBreakdown: historySession.contextBreakdown,
         };
         set((s) => ({
           sessions: [...s.sessions, session],

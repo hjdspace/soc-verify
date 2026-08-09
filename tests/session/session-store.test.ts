@@ -13,6 +13,7 @@ const {
   mockGetPersistedSessions,
   mockGetStoredMessages,
   mockSaveStoredMessages,
+  mockUpdateContextUsage,
   mockListHistory,
   mockDeleteHistorySession,
   mockRename,
@@ -29,6 +30,7 @@ const {
   mockGetPersistedSessions: vi.fn().mockResolvedValue([]),
   mockGetStoredMessages: vi.fn().mockResolvedValue([]),
   mockSaveStoredMessages: vi.fn().mockResolvedValue(undefined),
+  mockUpdateContextUsage: vi.fn().mockResolvedValue(undefined),
   mockListHistory: vi.fn().mockResolvedValue([]),
   mockDeleteHistorySession: vi.fn().mockResolvedValue(undefined),
   mockRename: vi.fn().mockResolvedValue(undefined),
@@ -58,6 +60,7 @@ vi.mock('@renderer/lib/trpc', () => ({
       getPersistedSessions: { query: mockGetPersistedSessions },
       getStoredMessages: { query: mockGetStoredMessages },
       saveStoredMessages: { mutate: mockSaveStoredMessages },
+      updateContextUsage: { mutate: mockUpdateContextUsage },
       listHistory: { query: mockListHistory },
       deleteHistorySession: { mutate: mockDeleteHistorySession },
       rename: { mutate: mockRename },
@@ -94,6 +97,7 @@ describe('SessionStore — event handling and state machine', () => {
     mockGetPersistedSessions.mockResolvedValue([]);
     mockGetStoredMessages.mockResolvedValue([]);
     mockSaveStoredMessages.mockResolvedValue(undefined);
+    mockUpdateContextUsage.mockResolvedValue(undefined);
     mockCompact.mockResolvedValue({
       contextUsage: { tokens: 12000, contextWindow: 200000, percent: 6 },
       contextBreakdown: {

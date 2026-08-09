@@ -993,10 +993,11 @@ export function RightPanel({ width }: RightPanelProps) {
               {isSending ? (
                 <button
                   onClick={abortSession}
-                  className="flex items-center gap-1 rounded bg-destructive/10 px-2 py-1 text-[10px] text-destructive transition-colors hover:bg-destructive/20"
+                  title="中止"
+                  aria-label="中止"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-destructive text-destructive-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-destructive"
                 >
                   <Square className="h-3 w-3" />
-                  中止
                 </button>
               ) : (
                 <button

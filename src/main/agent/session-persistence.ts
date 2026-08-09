@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
 
 const SOCVERIFY_DIR = '.socverify';
 const SESSIONS_FILE = 'sessions.json';
@@ -15,6 +16,10 @@ export interface PersistedSession {
   lastActivityAt: number;
   /** Persisted model info so the model survives app restart */
   model?: { provider: string; id: string; name: string; providerId?: string };
+  /** Last known context usage — restored on app reopen so the indicator
+   *  shows the correct value before the runtime session is started. */
+  contextUsage?: ContextUsage;
+  contextBreakdown?: ContextBreakdown;
 }
 
 /**
@@ -100,6 +105,26 @@ export async function updateSessionActivity(
   const idx = sessions.findIndex((s) => s.sessionId === sessionId);
   if (idx >= 0) {
     sessions[idx] = { ...sessions[idx], lastActivityAt: Date.now() };
+    await saveSessions(projectRoot, sessions);
+  }
+}
+
+/**
+ * Update the context usage on a persisted session.
+ * Called when context_usage events arrive so the indicator shows the correct
+ * value immediately when the app is reopened (before the runtime session is
+ * started).
+ */
+export async function updateSessionContextUsage(
+  projectRoot: string,
+  sessionId: string,
+  contextUsage: ContextUsage,
+  contextBreakdown?: ContextBreakdown,
+): Promise<void> {
+  const sessions = await loadSessions(projectRoot);
+  const idx = sessions.findIndex((s) => s.sessionId === sessionId);
+  if (idx >= 0) {
+    sessions[idx] = { ...sessions[idx], contextUsage, contextBreakdown };
     await saveSessions(projectRoot, sessions);
   }
 }

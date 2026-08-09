@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Loader2, Minimize2 } from 'lucide-react';
 import { DEFAULT_CONTEXT_WINDOW } from '@shared/context-management';
 import type { SessionEntry } from '@renderer/stores/session';
@@ -20,8 +20,12 @@ function formatTokens(value: number): string {
 }
 
 export function ContextUsageIndicator({ session, onCompact }: ContextUsageIndicatorProps) {
-  const [open, setOpen] = useState(false);
-  const [suppressUntilLeave, setSuppressUntilLeave] = useState(false);
+  // `detailOpen` is toggled by click; stays open until user clicks again or
+  // clicks outside.  Hover shows a lightweight tooltip with just the percent.
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
   const usage = session.contextUsage ?? {
     tokens: 0,
     contextWindow: DEFAULT_CONTEXT_WINDOW,
@@ -39,32 +43,30 @@ export function ContextUsageIndicator({ session, onCompact }: ContextUsageIndica
     ? 'stroke-destructive'
     : percent >= 75 ? 'stroke-warning-foreground' : 'stroke-primary';
 
+  // Close detail popover on outside click
+  useEffect(() => {
+    if (!detailOpen) return;
+    function handleOutside(e: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setDetailOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [detailOpen]);
+
   return (
     <div
+      ref={containerRef}
       className="relative"
-      onMouseEnter={() => {
-        if (!suppressUntilLeave) setOpen(true);
-      }}
-      onMouseLeave={() => {
-        setOpen(false);
-        setSuppressUntilLeave(false);
-      }}
-      onFocus={() => {
-        if (!suppressUntilLeave) setOpen(true);
-      }}
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
-      }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
       <button
         type="button"
         aria-label={`上下文已使用 ${Math.round(percent)}%`}
-        aria-expanded={open}
-        title="上下文用量"
-        onClick={() => {
-          setSuppressUntilLeave(false);
-          setOpen(true);
-        }}
+        aria-expanded={detailOpen}
+        onClick={() => setDetailOpen((v) => !v)}
         className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
       >
         <svg viewBox="0 0 24 24" className="h-[18px] w-[18px] -rotate-90" aria-hidden="true">
@@ -83,10 +85,18 @@ export function ContextUsageIndicator({ session, onCompact }: ContextUsageIndica
         </svg>
       </button>
 
+      {/* ── Hover tooltip: simple percent only ─────────────── */}
+      {hovered && !detailOpen && (
+        <div className="absolute bottom-7 right-0 z-50 rounded-md border border-border bg-popover px-2.5 py-1 text-popover-foreground shadow-xl">
+          <span className="whitespace-nowrap font-mono text-[11px] font-medium">上下文已使用 {Math.round(percent)}%</span>
+        </div>
+      )}
+
+      {/* ── Click detail popover: full breakdown ───────────── */}
       <div
         className={cn(
           'absolute bottom-7 right-0 z-50 w-56 rounded-md border border-border bg-popover p-3 text-popover-foreground shadow-xl transition-opacity duration-150',
-          open
+          detailOpen
             ? 'visible pointer-events-auto opacity-100'
             : 'invisible pointer-events-none opacity-0',
         )}
@@ -143,8 +153,7 @@ export function ContextUsageIndicator({ session, onCompact }: ContextUsageIndica
           onClick={() => {
             void onCompact().then((succeeded) => {
               if (succeeded) {
-                setOpen(false);
-                setSuppressUntilLeave(true);
+                setDetailOpen(false);
               }
             });
           }}

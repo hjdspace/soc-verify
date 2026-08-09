@@ -27,10 +27,32 @@ function session(): SessionEntry {
 }
 
 describe('ContextUsageIndicator', () => {
-  it('shows usage details and estimated context composition', () => {
+  it('renders the ring with correct aria-label', () => {
+    render(<ContextUsageIndicator session={session()} onCompact={vi.fn()} />);
+    expect(screen.getByLabelText('上下文已使用 25%')).toBeInTheDocument();
+  });
+
+  it('shows simple tooltip on hover without detail popover', () => {
     render(<ContextUsageIndicator session={session()} onCompact={vi.fn()} />);
 
-    expect(screen.getByLabelText('上下文已使用 25%')).toBeInTheDocument();
+    const trigger = screen.getByRole('button', { name: '上下文已使用 25%' });
+    // Hover over the button
+    fireEvent.mouseEnter(trigger.parentElement!);
+    // Simple tooltip with percent text is shown
+    expect(screen.getByText('上下文已使用 25%')).toBeInTheDocument();
+    // Detail popover content exists in the DOM but is invisible (opacity-0, pointer-events-none)
+    // We verify the popover is not visible by checking the container class
+    const popover = trigger.parentElement!.querySelector('.pointer-events-none.opacity-0');
+    expect(popover).not.toBeNull();
+  });
+
+  it('shows full detail popover on click', () => {
+    render(<ContextUsageIndicator session={session()} onCompact={vi.fn()} />);
+
+    const trigger = screen.getByRole('button', { name: '上下文已使用 25%' });
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    // Now the detail-only content should be visible
     expect(screen.getByText('50k')).toBeInTheDocument();
     expect(screen.getByText('150k')).toBeInTheDocument();
     expect(screen.getByText('28k')).toBeInTheDocument();
@@ -57,6 +79,9 @@ describe('ContextUsageIndicator', () => {
       />,
     );
 
+    // Open detail popover first so the compact button is visible
+    const trigger = screen.getByRole('button', { name: '上下文已使用 25%' });
+    fireEvent.click(trigger);
     expect(screen.getByRole('button', { name: '手动压缩' })).toBeDisabled();
   });
 });

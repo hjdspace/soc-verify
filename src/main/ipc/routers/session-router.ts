@@ -24,11 +24,13 @@ import {
   saveSessions,
   updateSessionModel,
   updateSessionActivity,
+  updateSessionContextUsage,
   type PersistedSession,
 } from '../../agent/session-persistence';
 import { discoverSkills, readSkillContent } from '../../agent/skill-discovery';
 import { errorAnalysisCoordinator } from '../../simulation/error-analysis-coordinator';
 import type { ErrorType } from '@shared/types';
+import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
 
 export const sessionRouter = t.router({
   create: t.procedure
@@ -245,6 +247,45 @@ export const sessionRouter = t.router({
       const dir = join(project.rootPath, '.socverify', 'chat-messages');
       await mkdir(dir, { recursive: true });
       await writeFile(storedMessagesPath(project.rootPath, input.sessionId), JSON.stringify(input.messages, null, 2), 'utf-8');
+      return { ok: true };
+    }),
+
+  updateContextUsage: t.procedure
+    .input((raw): { projectId: string; sessionId: string; contextUsage: ContextUsage; contextBreakdown?: ContextBreakdown } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and sessionId are required' });
+      }
+      const cu = r.contextUsage as Record<string, unknown> | undefined;
+      if (!cu || typeof cu.tokens !== 'number' || typeof cu.contextWindow !== 'number') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'contextUsage with tokens and contextWindow is required' });
+      }
+      const contextUsage: ContextUsage = {
+        tokens: cu.tokens,
+        contextWindow: cu.contextWindow,
+        percent: typeof cu.percent === 'number' ? cu.percent : (cu.contextWindow > 0 ? (cu.tokens / cu.contextWindow) * 100 : 0),
+      };
+      let contextBreakdown: ContextBreakdown | undefined;
+      const cb = r.contextBreakdown as Record<string, unknown> | undefined;
+      if (cb && typeof cb.systemPromptTokens === 'number' && typeof cb.systemToolsTokens === 'number' && typeof cb.systemContextTokens === 'number' && typeof cb.skillsTokens === 'number' && typeof cb.messagesTokens === 'number') {
+        contextBreakdown = {
+          systemPromptTokens: cb.systemPromptTokens,
+          systemToolsTokens: cb.systemToolsTokens,
+          systemContextTokens: cb.systemContextTokens,
+          skillsTokens: cb.skillsTokens,
+          messagesTokens: cb.messagesTokens,
+        };
+      }
+      return { projectId: r.projectId, sessionId: r.sessionId, contextUsage, contextBreakdown };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      await updateSessionContextUsage(
+        project.rootPath,
+        input.sessionId,
+        input.contextUsage,
+        input.contextBreakdown,
+      );
       return { ok: true };
     }),
 
