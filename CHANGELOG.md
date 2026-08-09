@@ -6,6 +6,19 @@
 
 ---
 
+## [0.2.5](https://github.com/hjdspace/soc-verify/compare/v0.2.4...v0.2.5) (2026-08-09)
+
+### Features
+
+* **plugin:** 新增 UI 插件类型支持，实现用户级插件系统，支持全局插件发现、优先级管理与 EDA 日志摘要插件
+* **markdown:** 新增 Mermaid 图表渲染支持，包含样式作用域隔离、主题适配、缩放与平移交互
+* **session:** 添加上下文管理功能，支持上下文用量展示、手动压缩与压缩状态管理
+* **session-router,discovery:** 新增 case stats include flag 并修复子系统用例计数
+
+### Refactor
+
+* **ui:** 重构上下文用量指示器交互逻辑
+
 ## [0.2.4](https://github.com/hjdspace/soc-verify/compare/v0.2.3...v0.2.4) (2026-08-08)
 
 ### Features
