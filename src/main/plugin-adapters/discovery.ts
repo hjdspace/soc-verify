@@ -36,10 +36,34 @@ export class PluginBackedDiscovery implements SubsysDiscovery {
       subsysList = subsysList.filter((s) => s.name.toLowerCase().includes(lowerFilter));
     }
 
-    return subsysList.map((s: PluginSubsysInfo) => ({
+    // Compute real case counts by parsing cases for each subsystem (in parallel).
+    // Results are cached in caseCache for subsequent listCases() calls.
+    // This replaces the previous hardcoded `caseCount: 0` which was always wrong.
+    const casePlugin = this.registry.caseParsers[0];
+    if (!casePlugin) {
+      return subsysList.map((s: PluginSubsysInfo) => ({
+        name: s.name,
+        path: s.path,
+        caseCount: 0,
+        description: undefined,
+      }));
+    }
+
+    const counts = await Promise.all(
+      subsysList.map(async (s) => {
+        let cached = this.caseCache.get(s.name);
+        if (!cached) {
+          cached = await casePlugin.parse(this.projectRoot, s.name);
+          this.caseCache.set(s.name, cached);
+        }
+        return cached.length;
+      }),
+    );
+
+    return subsysList.map((s: PluginSubsysInfo, i) => ({
       name: s.name,
       path: s.path,
-      caseCount: 0, // Will be filled by listCases
+      caseCount: counts[i],
       description: undefined,
     }));
   }

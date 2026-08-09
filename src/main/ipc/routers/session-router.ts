@@ -324,6 +324,7 @@ export const sessionRouter = t.router({
           model: input.modelId,
           resumeSessionId: ompSessionId,
           persistedSessionId,
+          includeCaseStats: true,
         });
 
         const { sessionId: newSessionId, provider, model: resolvedModel } = ctx;
@@ -479,6 +480,7 @@ export const sessionRouter = t.router({
         // Use the omp sessionId for resume — this is what the runner matches against
         resumeSessionId: persisted?.ompSessionId ?? input.sessionId,
         persistedSessionId: input.sessionId,
+        includeCaseStats: true,
       });
       const { sessionId, provider, model: resolvedModelId, providerId } = ctx;
 
