@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
-import { Plus, Send, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon } from 'lucide-react';
+import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon } from 'lucide-react';
 import { useSessionStore, type ChatMessage, type AvailableModel, type SelectedSkill, type ContextFile, type HistorySession, type SessionEntry } from '@renderer/stores/session';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
@@ -972,9 +972,6 @@ export function RightPanel({ width }: RightPanelProps) {
                   </>
                 )}
               </div>
-              {currentSession && (
-                <ContextUsageIndicator session={currentSession} onCompact={compactSession} />
-              )}
               {/* Steer 按钮 */}
               {isSending && !showSteerInput && (
                 <button
@@ -989,24 +986,30 @@ export function RightPanel({ width }: RightPanelProps) {
             <span className="text-[10px] text-muted-foreground">
               Enter 发送 · Shift+Enter 换行
             </span>
-            {isSending ? (
-              <button
-                onClick={abortSession}
-                className="flex items-center gap-1 rounded bg-destructive/10 px-2 py-1 text-[10px] text-destructive transition-colors hover:bg-destructive/20"
-              >
-                <Square className="h-3 w-3" />
-                中止
-              </button>
-            ) : (
-              <button
-                onClick={handleSend}
-                disabled={!inputMessage.trim() || !currentSessionId || isCurrentSessionCreating}
-                className="flex items-center gap-1 rounded bg-primary/10 px-2 py-1 text-[10px] text-primary transition-colors hover:bg-primary/20 disabled:opacity-30"
-              >
-                <Send className="h-3 w-3" />
-                发送
-              </button>
-            )}
+            <div className="flex items-center gap-1">
+              {currentSession && (
+                <ContextUsageIndicator session={currentSession} onCompact={compactSession} />
+              )}
+              {isSending ? (
+                <button
+                  onClick={abortSession}
+                  className="flex items-center gap-1 rounded bg-destructive/10 px-2 py-1 text-[10px] text-destructive transition-colors hover:bg-destructive/20"
+                >
+                  <Square className="h-3 w-3" />
+                  中止
+                </button>
+              ) : (
+                <button
+                  onClick={handleSend}
+                  disabled={!inputMessage.trim() || !currentSessionId || isCurrentSessionCreating}
+                  title="发送"
+                  aria-label="发送"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:opacity-60"
+                >
+                  <ArrowUp className="h-4 w-4" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>

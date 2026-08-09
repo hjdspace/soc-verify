@@ -6,7 +6,7 @@ import { cn } from '@renderer/lib/utils';
 
 type ContextUsageIndicatorProps = {
   session: SessionEntry;
-  onCompact: () => Promise<void>;
+  onCompact: () => Promise<boolean>;
 };
 
 function formatTokens(value: number): string {
@@ -20,7 +20,8 @@ function formatTokens(value: number): string {
 }
 
 export function ContextUsageIndicator({ session, onCompact }: ContextUsageIndicatorProps) {
-  const [pinned, setPinned] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [suppressUntilLeave, setSuppressUntilLeave] = useState(false);
   const usage = session.contextUsage ?? {
     tokens: 0,
     contextWindow: DEFAULT_CONTEXT_WINDOW,
@@ -29,20 +30,41 @@ export function ContextUsageIndicator({ session, onCompact }: ContextUsageIndica
   const percent = Math.min(100, Math.max(0, usage.percent));
   const remaining = Math.max(0, usage.contextWindow - usage.tokens);
   const isCompacting = session.isCompacting === true;
-  const canCompact = session.status === 'idle' && usage.tokens > 0 && !isCompacting;
+  const canCompact = session.status === 'idle'
+    && usage.tokens > 0
+    && !isCompacting
+    && !session.contextCompacted;
   const breakdown = session.contextBreakdown;
   const ringColor = percent >= 90
     ? 'stroke-destructive'
     : percent >= 75 ? 'stroke-warning-foreground' : 'stroke-primary';
 
   return (
-    <div className="group relative">
+    <div
+      className="relative"
+      onMouseEnter={() => {
+        if (!suppressUntilLeave) setOpen(true);
+      }}
+      onMouseLeave={() => {
+        setOpen(false);
+        setSuppressUntilLeave(false);
+      }}
+      onFocus={() => {
+        if (!suppressUntilLeave) setOpen(true);
+      }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+    >
       <button
         type="button"
         aria-label={`上下文已使用 ${Math.round(percent)}%`}
-        aria-expanded={pinned}
+        aria-expanded={open}
         title="上下文用量"
-        onClick={() => setPinned((value) => !value)}
+        onClick={() => {
+          setSuppressUntilLeave(false);
+          setOpen(true);
+        }}
         className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
       >
         <svg viewBox="0 0 24 24" className="h-[18px] w-[18px] -rotate-90" aria-hidden="true">
@@ -63,9 +85,10 @@ export function ContextUsageIndicator({ session, onCompact }: ContextUsageIndica
 
       <div
         className={cn(
-          'absolute bottom-7 left-0 z-50 w-56 rounded-md border border-border bg-popover p-3 text-popover-foreground shadow-xl transition-opacity duration-150',
-          'invisible pointer-events-none opacity-0 group-hover:visible group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:visible group-focus-within:pointer-events-auto group-focus-within:opacity-100',
-          pinned && 'visible pointer-events-auto opacity-100',
+          'absolute bottom-7 right-0 z-50 w-56 rounded-md border border-border bg-popover p-3 text-popover-foreground shadow-xl transition-opacity duration-150',
+          open
+            ? 'visible pointer-events-auto opacity-100'
+            : 'invisible pointer-events-none opacity-0',
         )}
       >
         <div className="flex items-baseline justify-between">
@@ -117,7 +140,14 @@ export function ContextUsageIndicator({ session, onCompact }: ContextUsageIndica
 
         <button
           type="button"
-          onClick={() => void onCompact()}
+          onClick={() => {
+            void onCompact().then((succeeded) => {
+              if (succeeded) {
+                setOpen(false);
+                setSuppressUntilLeave(true);
+              }
+            });
+          }}
           disabled={!canCompact}
           className="mt-3 flex h-7 w-full items-center justify-center gap-1.5 rounded bg-primary/10 px-2 text-[10px] font-medium text-primary transition-colors hover:bg-primary/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-40"
         >

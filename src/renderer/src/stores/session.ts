@@ -82,6 +82,7 @@ export interface SessionEntry {
   contextUsage?: ContextUsage;
   contextBreakdown?: ContextBreakdown;
   isCompacting?: boolean;
+  contextCompacted?: boolean;
   autoCompactionEnabled?: boolean;
   /** TV AI session: the violation ID this session is analyzing. */
   tvViolationId?: number;
@@ -122,7 +123,7 @@ interface SessionStoreState {
   switchSession: (sessionId: string) => void;
   sendMessage: (message: string, images?: string[]) => Promise<void>;
   abortSession: () => Promise<void>;
-  compactSession: () => Promise<void>;
+  compactSession: () => Promise<boolean>;
   renameSession: (sessionId: string, projectId: string, name: string) => Promise<void>;
   setInputMessage: (msg: string) => void;
   handleSessionEvent: (sessionId: string, event: unknown) => void;
@@ -752,6 +753,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
               status: 'streaming',
               messages: [...sess.messages, userMsg, assistantMsg],
               composer: emptyComposer(),
+              contextCompacted: false,
             }
           : sess,
       ),
@@ -837,9 +839,15 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
 
   compactSession: async () => {
     const sessionId = get().currentSessionId;
-    if (!sessionId) return;
+    if (!sessionId) return false;
     const session = get().sessions.find((candidate) => candidate.id === sessionId);
-    if (!session || session.status !== 'idle' || (session.contextUsage?.tokens ?? 0) <= 0) return;
+    if (
+      !session
+      || session.status !== 'idle'
+      || (session.contextUsage?.tokens ?? 0) <= 0
+      || session.isCompacting
+      || session.contextCompacted
+    ) return false;
 
     set((state) => ({
       sessions: state.sessions.map((candidate) =>
@@ -856,6 +864,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             ? {
                 ...candidate,
                 isCompacting: false,
+                contextCompacted: true,
                 contextUsage: readContextUsage(result.contextUsage, candidate.contextUsage ?? emptyContextUsage()),
                 contextBreakdown: readContextBreakdown(result.contextBreakdown, candidate.contextBreakdown),
               }
@@ -863,6 +872,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         ),
       }));
       useToastStore.getState().success('上下文压缩完成');
+      return true;
     } catch (err) {
       set((state) => ({
         sessions: state.sessions.map((candidate) =>
@@ -870,6 +880,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         ),
       }));
       useToastStore.getState().error('上下文压缩失败', tRPCError(err));
+      return false;
     }
   },
 

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ContextUsageIndicator } from '@renderer/components/chat/ContextUsageIndicator';
 import type { SessionEntry } from '@renderer/stores/session';
@@ -37,12 +37,26 @@ describe('ContextUsageIndicator', () => {
     expect(screen.getByText('Model 1')).toBeInTheDocument();
   });
 
-  it('runs manual compaction from the detail popover', () => {
-    const onCompact = vi.fn().mockResolvedValue(undefined);
+  it('closes the detail popover after manual compaction succeeds', async () => {
+    const onCompact = vi.fn().mockResolvedValue(true);
     render(<ContextUsageIndicator session={session()} onCompact={onCompact} />);
 
+    const trigger = screen.getByRole('button', { name: '上下文已使用 25%' });
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
     fireEvent.click(screen.getByRole('button', { name: '手动压缩' }));
+    await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'false'));
     expect(onCompact).toHaveBeenCalledOnce();
   });
-});
 
+  it('disables manual compaction until a new message is sent', () => {
+    render(
+      <ContextUsageIndicator
+        session={{ ...session(), contextCompacted: true }}
+        onCompact={vi.fn().mockResolvedValue(true)}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: '手动压缩' })).toBeDisabled();
+  });
+});

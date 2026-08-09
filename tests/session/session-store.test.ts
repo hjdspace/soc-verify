@@ -550,11 +550,21 @@ describe('SessionStore — event handling and state machine', () => {
       })),
     }));
 
-    await useSessionStore.getState().compactSession();
+    const succeeded = await useSessionStore.getState().compactSession();
 
+    expect(succeeded).toBe(true);
     expect(mockCompact).toHaveBeenCalledWith({ sessionId: 'session_test_1' });
-    expect(useSessionStore.getState().sessions.find((session) => session.id === id)?.contextUsage)
-      .toEqual({ tokens: 12000, contextWindow: 200000, percent: 6 });
+    expect(useSessionStore.getState().sessions.find((session) => session.id === id)).toMatchObject({
+      contextCompacted: true,
+      contextUsage: { tokens: 12000, contextWindow: 200000, percent: 6 },
+    });
+
+    expect(await useSessionStore.getState().compactSession()).toBe(false);
+    expect(mockCompact).toHaveBeenCalledOnce();
+
+    await useSessionStore.getState().sendMessage('Continue after compaction');
+    expect(useSessionStore.getState().sessions.find((session) => session.id === id)?.contextCompacted)
+      .toBe(false);
   });
 
   it('creates and selects an error analysis session for the right panel', () => {
