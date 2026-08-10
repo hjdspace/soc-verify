@@ -48,6 +48,7 @@ type ScanData = {
 };
 
 export function RegressionAnalyzer({ projectRoot, onProjectRootChange }: ToolComponentProps) {
+  // Initialize with projectRoot fallback; will be overridden by $PROJ_WORK/regression on mount
   const [regDir, setRegDir] = useState(projectRoot ? `${projectRoot}/work/regression` : '');
   const [scanData, setScanData] = useState<ScanData | null>(null);
   const [selectedTs, setSelectedTs] = useState<string | null>(null);
@@ -65,6 +66,21 @@ export function RegressionAnalyzer({ projectRoot, onProjectRootChange }: ToolCom
   const [terminalRunning, setTerminalRunning] = useState(false);
   const terminalIdRef = useRef<string | null>(null);
   const outputEndRef = useRef<HTMLDivElement | null>(null);
+
+  // On mount: fetch the default regression directory ($PROJ_WORK/regression) from backend.
+  // This resolves the PROJ_WORK environment variable, which takes priority over projectRoot.
+  useEffect(() => {
+    trpc.tools.regressionAnalyzer.getDefaultDir
+      .query()
+      .then((res) => {
+        if (res.dir) {
+          setRegDir(res.dir);
+        }
+      })
+      .catch(() => {
+        // Ignore — user can manually select a directory
+      });
+  }, []);
 
   // Auto-scroll terminal output to bottom
   useEffect(() => {
