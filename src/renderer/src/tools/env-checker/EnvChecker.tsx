@@ -282,9 +282,37 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
   const [previewLoading, setPreviewLoading] = useState(false);
   const [status, setStatus] = useState('就绪');
 
-  // Track confirmed and suspicious files
+  // Track confirmed files and suspicious marks (per check type: force/wait)
   const [confirmedFiles, setConfirmedFiles] = useState<Set<string>>(new Set());
-  const [suspiciousFiles, setSuspiciousFiles] = useState<Set<string>>(new Set());
+  const [suspiciousMarks, setSuspiciousMarks] = useState<{ force: Set<string>; wait: Set<string> }>({
+    force: new Set(),
+    wait: new Set(),
+  });
+
+  // Persist suspicious marks to the backend (fire-and-forget)
+  const persistMarks = useCallback((marks: { force: Set<string>; wait: Set<string> }) => {
+    trpc.tools.envChecker.saveSuspiciousMarks
+      .mutate({
+        marks: {
+          force: [...marks.force],
+          wait: [...marks.wait],
+        },
+      })
+      .catch(() => {});
+  }, []);
+
+  // Load suspicious marks from the backend
+  const loadMarks = useCallback(async () => {
+    try {
+      const res = await trpc.tools.envChecker.loadSuspiciousMarks.query();
+      setSuspiciousMarks({
+        force: new Set(res.force),
+        wait: new Set(res.wait),
+      });
+    } catch {
+      // ignore
+    }
+  }, []);
 
   // Prompt dialog state
   const [promptConfig, setPromptConfig] = useState<{
@@ -293,22 +321,24 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
     onSubmit: (value: string) => void;
   } | null>(null);
 
-  // Resolve $PROJ_ENV on mount if no projectRoot
+  // Resolve $PROJ_ENV on mount if no projectRoot, and load suspicious marks
   useEffect(() => {
     if (projectRoot) {
       setEffectiveRoot(projectRoot);
-      return;
+    } else {
+      // Try to resolve $PROJ_ENV
+      trpc.tools.envChecker.resolveProjEnv
+        .query({ projectDir: '' })
+        .then((res) => {
+          if (res.path) {
+            setResolvedProjEnv(res.path);
+            setEffectiveRoot(res.path);
+          }
+        })
+        .catch(() => {});
     }
-    // Try to resolve $PROJ_ENV
-    trpc.tools.envChecker.resolveProjEnv
-      .query({ projectDir: '' })
-      .then((res) => {
-        if (res.path) {
-          setResolvedProjEnv(res.path);
-          setEffectiveRoot(res.path);
-        }
-      })
-      .catch(() => {});
+    // Load persisted suspicious marks
+    loadMarks();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Discover subsystems when effective root changes
@@ -350,7 +380,8 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
     setSelectedFile(null);
     setPreview(null);
     setConfirmedFiles(new Set());
-    setSuspiciousFiles(new Set());
+    // Reload suspicious marks from persistence (sync with backend)
+    await loadMarks();
     try {
       const res = await trpc.tools.envChecker.scan.mutate({
         projectRoot: effectiveRoot,
@@ -363,7 +394,7 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
     } finally {
       setScanning(false);
     }
-  }, [effectiveRoot, selectedSubsys]);
+  }, [effectiveRoot, selectedSubsys, loadMarks]);
 
   // Preview file with context
   const handlePreview = useCallback(async (file: FileResult) => {
@@ -414,6 +445,13 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
               comment,
             });
             setConfirmedFiles((prev) => new Set(prev).add(file.path));
+            // Clear suspicious mark on confirm and persist
+            setSuspiciousMarks((prev) => {
+              const next = { force: new Set(prev.force), wait: new Set(prev.wait) };
+              next[activeTab].delete(file.path);
+              persistMarks(next);
+              return next;
+            });
             setStatus(`已标记 ${file.path.split(/[/\\]/).pop()}`);
           } catch (err) {
             setStatus(`标记失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -421,7 +459,7 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
         },
       });
     },
-    [activeTab],
+    [activeTab, persistMarks],
   );
 
   // Batch confirm
@@ -447,23 +485,37 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
           }
         }
         setConfirmedFiles(newConfirmed);
+        // Clear suspicious marks for all confirmed files and persist
+        setSuspiciousMarks((prev) => {
+          const next = { force: new Set(prev.force), wait: new Set(prev.wait) };
+          for (const file of files) {
+            next[activeTab].delete(file.path);
+          }
+          persistMarks(next);
+          return next;
+        });
         setStatus(`批量标记完成: ${files.length} 个文件`);
       },
     });
-  }, [results, activeTab, confirmedFiles]);
+  }, [results, activeTab, confirmedFiles, persistMarks]);
 
-  // Toggle suspicious marking
-  const handleToggleSuspicious = useCallback((filePath: string) => {
-    setSuspiciousFiles((prev) => {
-      const next = new Set(prev);
-      if (next.has(filePath)) {
-        next.delete(filePath);
-      } else {
-        next.add(filePath);
-      }
-      return next;
-    });
-  }, []);
+  // Toggle suspicious marking (per check type) and persist
+  const handleToggleSuspicious = useCallback(
+    (filePath: string) => {
+      setSuspiciousMarks((prev) => {
+        const next = { force: new Set(prev.force), wait: new Set(prev.wait) };
+        const set = next[activeTab];
+        if (set.has(filePath)) {
+          set.delete(filePath);
+        } else {
+          set.add(filePath);
+        }
+        persistMarks(next);
+        return next;
+      });
+    },
+    [activeTab, persistMarks],
+  );
 
   // Export report
   const handleExport = useCallback(async () => {
@@ -489,6 +541,8 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
   const currentResults = results[activeTab];
   const forceCount = results.force.length;
   const waitCount = results.wait.length;
+  const suspiciousSet = suspiciousMarks[activeTab];
+  const totalSuspicious = suspiciousMarks.force.size + suspiciousMarks.wait.size;
 
   return (
     <div className="flex h-full flex-col gap-2 p-3">
@@ -612,7 +666,7 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
                 <tbody>
                   {currentResults.map((file) => {
                     const isConfirmed = confirmedFiles.has(file.path);
-                    const isSuspicious = suspiciousFiles.has(file.path);
+                    const isSuspicious = suspiciousSet.has(file.path);
                     return (
                       <tr
                         key={file.path}
@@ -773,10 +827,10 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
       <div className="flex items-center gap-2 border-t border-border pt-1 text-xs text-muted-foreground">
         <FileText className="h-3 w-3" />
         <span>{status}</span>
-        {suspiciousFiles.size > 0 && (
+        {totalSuspicious > 0 && (
           <span className="ml-auto flex items-center gap-1 text-red-500">
             <Flag className="h-3 w-3" fill="currentColor" />
-            可疑项: {suspiciousFiles.size}
+            可疑项: {totalSuspicious}
           </span>
         )}
       </div>
