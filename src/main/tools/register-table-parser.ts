@@ -507,9 +507,30 @@ async function autoFixExcelFormat(
 // ── Worksheet loading ──────────────────────────────────────────────
 
 /**
+ * Count non-empty cells in the first N rows and M columns of a SheetJS worksheet.
+ * Used to find the best sheet when a file has multiple sheets.
+ */
+function countNonEmptyCells(ws: XLSX.WorkSheet, maxRow = 15, maxCol = 12): number {
+  let count = 0;
+  for (let r = 0; r < maxRow; r++) {
+    for (let c = 0; c < maxCol; c++) {
+      const addr = XLSX.utils.encode_cell({ r, c });
+      const cell = ws[addr];
+      if (cell && cell.v !== null && cell.v !== undefined && String(cell.v).trim() !== '') {
+        count++;
+      }
+    }
+  }
+  return count;
+}
+
+/**
  * Load a worksheet from a file, using the appropriate library based on extension.
  * - .xlsx: ExcelJS (ZIP/OOXML format)
  * - .xls: SheetJS (OLE/binary format, which ExcelJS cannot read)
+ *
+ * For .xls files with multiple sheets, iterates through all sheets and selects
+ * the first one with enough data (matching the Python xlrd behavior).
  */
 async function loadWorksheet(filePath: string): Promise<UnifiedWorksheet> {
   const ext = extname(filePath).toLowerCase();
@@ -517,29 +538,100 @@ async function loadWorksheet(filePath: string): Promise<UnifiedWorksheet> {
   if (ext === '.xls') {
     // SheetJS for .xls files — this fixes the "Can't find end of central directory" error
     const workbook = XLSX.readFile(filePath, { type: 'file' });
-    const firstSheetName = workbook.SheetNames[0];
-    if (!firstSheetName) {
+    if (!workbook.SheetNames.length) {
       throw new Error('Excel 文件中没有工作表');
     }
-    const ws = workbook.Sheets[firstSheetName];
-    if (!ws) {
-      throw new Error('Excel 文件中没有工作表');
+
+    // Iterate through all sheets and find the first one with enough data.
+    // This matches the Python version's behavior of skipping hidden/empty sheets.
+    let bestWs: XLSX.WorkSheet | null = null;
+    let bestCount = 0;
+    for (const sheetName of workbook.SheetNames) {
+      const ws = workbook.Sheets[sheetName];
+      if (!ws || !ws['!ref']) continue;
+      const nonEmptyCount = countNonEmptyCells(ws);
+      if (nonEmptyCount > bestCount) {
+        bestCount = nonEmptyCount;
+        bestWs = ws;
+      }
     }
-    return new SheetJsWorksheetWrapper(ws);
+
+    if (!bestWs) {
+      throw new Error('Excel 文件中没有有效的工作表数据');
+    }
+    return new SheetJsWorksheetWrapper(bestWs);
   }
 
   if (ext === '.xlsx') {
     // ExcelJS for .xlsx files
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(filePath);
-    const ws = workbook.worksheets[0];
-    if (!ws) {
+    // Find first non-empty worksheet
+    let bestWs: ExcelJS.Worksheet | null = null;
+    for (const ws of workbook.worksheets) {
+      if (ws.rowCount >= DATA_START_ROW) {
+        bestWs = ws;
+        break;
+      }
+    }
+    if (!bestWs) {
+      bestWs = workbook.worksheets[0] ?? null;
+    }
+    if (!bestWs) {
       throw new Error('Excel 文件中没有工作表');
     }
-    return new ExcelJsWorksheetWrapper(ws);
+    return new ExcelJsWorksheetWrapper(bestWs);
   }
 
   throw new Error(`不支持的文件格式: ${ext}，请使用 .xls 或 .xlsx 文件`);
+}
+
+/**
+ * Convert a .xls file to .xlsx using SheetJS, then read with ExcelJS.
+ * This can work around SheetJS .xls parsing limitations by going through
+ * a clean .xlsx intermediate file.
+ */
+async function convertXlsToXlsxAndRead(filePath: string): Promise<UnifiedWorksheet | null> {
+  try {
+    const tempDir = join(tmpdir(), `register_parser_convert_${Date.now()}`);
+    await mkdir(tempDir, { recursive: true });
+    const tempFilePath = join(
+      tempDir,
+      `converted_${filePath.split(/[/\\]/).pop()}`.replace(/\.xls$/, '.xlsx'),
+    );
+
+    // Read with SheetJS and write as .xlsx
+    const workbook = XLSX.readFile(filePath, { type: 'file' });
+    if (!workbook.SheetNames.length) return null;
+
+    // Find the best sheet
+    let bestWs: XLSX.WorkSheet | null = null;
+    let bestCount = 0;
+    for (const sheetName of workbook.SheetNames) {
+      const ws = workbook.Sheets[sheetName];
+      if (!ws || !ws['!ref']) continue;
+      const nonEmptyCount = countNonEmptyCells(ws);
+      if (nonEmptyCount > bestCount) {
+        bestCount = nonEmptyCount;
+        bestWs = ws;
+      }
+    }
+    if (!bestWs) return null;
+
+    // Create a clean workbook with only the best sheet
+    const newWb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(newWb, bestWs, 'RegisterTable');
+    XLSX.writeFile(newWb, tempFilePath, { bookType: 'xlsx' });
+
+    // Read the .xlsx with ExcelJS
+    const exceljsWb = new ExcelJS.Workbook();
+    await exceljsWb.xlsx.readFile(tempFilePath);
+    const ws = exceljsWb.worksheets[0];
+    if (!ws) return null;
+    return new ExcelJsWorksheetWrapper(ws);
+  } catch {
+    return null;
+  }
 }
 
 // ── Main parse function ─────────────────────────────────────────────
@@ -564,6 +656,8 @@ export async function parseRegisterTable(
     throw new Error('不支持的文件格式，请使用 Excel 文件 (.xlsx 或 .xls)');
   }
 
+  const isXls = ext === '.xls';
+
   // Load worksheet using the appropriate library
   let ws = await loadWorksheet(filePath);
 
@@ -587,6 +681,21 @@ export async function parseRegisterTable(
   // Extract data
   const headerInfo = extractHeaderInfo(ws);
   const registers = extractRegisterData(ws);
+
+  // If no registers found and this is a .xls file, try converting to .xlsx
+  // and re-parsing. SheetJS's .xls support may miss data that ExcelJS can read
+  // from the converted .xlsx format.
+  if (registers.length === 0 && isXls) {
+    const convertedWs = await convertXlsToXlsxAndRead(filePath);
+    if (convertedWs) {
+      const convertedRegisters = extractRegisterData(convertedWs);
+      if (convertedRegisters.length > 0) {
+        const convertedHeader = extractHeaderInfo(convertedWs);
+        validateRegisters(convertedRegisters);
+        return { header: convertedHeader, registers: convertedRegisters };
+      }
+    }
+  }
 
   // Validate
   validateRegisters(registers);
