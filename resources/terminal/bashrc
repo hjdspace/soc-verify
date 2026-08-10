@@ -1,0 +1,5 @@
+if [ -r "${HOME}/.bashrc" ]; then
+  . "${HOME}/.bashrc"
+fi
+
+PS1='\w\$ '

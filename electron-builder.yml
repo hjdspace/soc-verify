@@ -15,6 +15,9 @@ extraResources:
   - from: plugins
     to: plugins
     filter: ["**/*"]
+  - from: resources/terminal
+    to: terminal
+    filter: ["**/*"]
   - from: resources/binaries
     to: binaries
     filter: ["**/*", "!README.md"]

@@ -87,6 +87,24 @@ function findShell(preferred?: string[]): string {
   return 'bash';
 }
 
+function resolveBashRcPath(): string {
+  const packagedPath = process.resourcesPath
+    ? join(process.resourcesPath, 'terminal', 'bashrc')
+    : '';
+  if (packagedPath && existsSync(packagedPath)) return packagedPath;
+  return join(process.cwd(), 'resources', 'terminal', 'bashrc');
+}
+
+export function getInteractiveShellArgs(
+  shell: string,
+  platform: NodeJS.Platform = process.platform,
+  bashRcPath: string = resolveBashRcPath(),
+): string[] {
+  const isBash = shell === 'bash' || shell.endsWith('/bash');
+  if (platform !== 'linux' || !isBash) return [];
+  return ['--rcfile', bashRcPath, '-i'];
+}
+
 /**
  * Shell preferences for simulation commands on different platforms.
  *
@@ -407,6 +425,7 @@ export class TerminalManager extends EventEmitter {
     const env = { ...process.env, ...opts.env } as Record<string, string>;
     // Use caller-specified shell, or find one automatically
     const shell = opts.shell ?? findShell();
+    const shellArgs = getInteractiveShellArgs(shell);
 
     const session: TerminalSession = {
       id,
@@ -463,7 +482,7 @@ export class TerminalManager extends EventEmitter {
     let spawnError: Error | null = null;
     if (ptyModule) {
       try {
-        pty = ptyModule.spawn(shell, [], {
+        pty = ptyModule.spawn(shell, shellArgs, {
           name: 'xterm-color',
           cols,
           rows,

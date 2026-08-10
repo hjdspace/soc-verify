@@ -1,5 +1,20 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { TerminalManager } from '../../src/main/terminal/terminal-manager';
+import { getInteractiveShellArgs, TerminalManager } from '../../src/main/terminal/terminal-manager';
+
+describe('getInteractiveShellArgs', () => {
+  it('loads the project-path prompt configuration for Linux Bash', () => {
+    expect(getInteractiveShellArgs('/bin/bash', 'linux', '/app/terminal/bashrc')).toEqual([
+      '--rcfile',
+      '/app/terminal/bashrc',
+      '-i',
+    ]);
+  });
+
+  it('does not change other shells or Windows terminals', () => {
+    expect(getInteractiveShellArgs('/bin/zsh', 'linux', '/app/terminal/bashrc')).toEqual([]);
+    expect(getInteractiveShellArgs('powershell.exe', 'win32', 'unused')).toEqual([]);
+  });
+});
 
 describe('TerminalManager', () => {
   let manager: TerminalManager;
