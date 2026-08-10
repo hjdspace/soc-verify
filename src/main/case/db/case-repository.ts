@@ -688,6 +688,124 @@ export function getSubsysStatus(
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/** Dashboard getRecentFailures 返回结构（失败标签页） */
+export type RecentFailureRow = {
+  caseName: string;
+  subsys: string;
+  startTime: string;
+  durationMs: number | null;
+};
+
+/** Dashboard getRegressionProgress 返回结构（回归标签页） */
+export type RegressionProgress = {
+  totalCases: number;
+  runCases: number;
+  passedCases: number;
+  failedCases: number;
+  notRunCases: number;
+  passRate: number;
+};
+
+/**
+ * 获取最近失败的用例列表。
+ *
+ * 从 simulation_runs 表查询 status='fail' 的记录，
+ * 按 start_time 倒序排列，最多返回 50 条。
+ * 不返回 corner 字段（Corner 是 post sim 阶段概念，前仿真不展示）。
+ * 受 subsys + timeRange 筛选。
+ */
+export function getRecentFailures(
+  db: Database.Database,
+  filter?: SummaryFilter,
+): RecentFailureRow[] {
+  const subsys = filter?.subsys;
+  const tr = timeRangeToClause(filter?.timeRange);
+
+  const conditions = ["status = 'fail'"];
+  const params: Record<string, unknown> = {};
+  if (subsys) {
+    conditions.push('subsys = @subsys');
+    params.subsys = subsys;
+  }
+  if (tr.clause) {
+    conditions.push(tr.clause);
+    Object.assign(params, tr.params);
+  }
+
+  const rows = db.prepare(`
+    SELECT case_name as caseName, subsys, start_time as startTime, duration_ms as durationMs
+    FROM simulation_runs
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY start_time DESC
+    LIMIT 50
+  `).all(params) as { caseName: string; subsys: string; startTime: string; durationMs: number | null }[];
+
+  return rows.map((row) => ({
+    caseName: row.caseName,
+    subsys: row.subsys,
+    startTime: row.startTime,
+    durationMs: row.durationMs,
+  }));
+}
+
+/**
+ * 获取回归进度数据。
+ *
+ * 从 cases 表统计总用例数，从 simulation_runs 表统计已跑用例数、通过数和失败数。
+ * 已跑/通过/失败基于每个用例的最新终态（pass/fail/error/aborted）统计。
+ * **不受 timeRange 影响**（回归进度衡量整体完成度，始终按全量统计）。
+ * 受 subsys 筛选（有值时仅统计该子系统的用例）。
+ */
+export function getRegressionProgress(
+  db: Database.Database,
+  filter?: { subsys?: string },
+): RegressionProgress {
+  const subsys = filter?.subsys;
+
+  // ─── totalCases: 从 cases 表统计 ───
+  let totalCases: number;
+  if (subsys) {
+    const row = db.prepare('SELECT COUNT(*) as c FROM cases WHERE subsys = ?').get(subsys) as { c: number };
+    totalCases = row.c;
+  } else {
+    const row = db.prepare('SELECT COUNT(*) as c FROM cases').get() as { c: number };
+    totalCases = row.c;
+  }
+
+  // ─── latest status per case ───
+  const statusConditions = ["status IN ('pass', 'fail', 'error', 'aborted')"];
+  const statusParams: Record<string, unknown> = {};
+  if (subsys) {
+    statusConditions.push('subsys = @subsys');
+    statusParams.subsys = subsys;
+  }
+
+  const statusRows = db.prepare(`
+    SELECT case_name, status FROM (
+      SELECT case_name, status,
+        ROW_NUMBER() OVER (PARTITION BY case_name ORDER BY start_time DESC) as rn
+      FROM simulation_runs
+      WHERE ${statusConditions.join(' AND ')}
+    ) WHERE rn = 1
+  `).all(statusParams) as { case_name: string; status: string }[];
+
+  let passedCases = 0;
+  let failedCases = 0;
+  for (const row of statusRows) {
+    if (row.status === 'pass') {
+      passedCases++;
+    } else {
+      failedCases++;
+    }
+  }
+
+  const runCases = passedCases + failedCases;
+  const notRunCases = Math.max(0, totalCases - runCases);
+  const passRate = runCases > 0 ? Math.round((passedCases / runCases) * 1000) / 10 : 0;
+
+  return { totalCases, runCases, passedCases, failedCases, notRunCases, passRate };
+}
+
 // ─── scan_metadata (original) ──────────────────────────────
 
 /**

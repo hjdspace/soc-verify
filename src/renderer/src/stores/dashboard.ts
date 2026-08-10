@@ -4,6 +4,7 @@
  * ADR 0019: 按标签页存储数据 + 全局筛选状态 + 加载状态。
  * Issue 02: getSummary 数据加载（概览标签页 + 左栏缩略）。
  * Issue 03: getTrend 数据加载（趋势标签页 + 日/周粒度切换）。
+ * Issue 05: getRecentFailures + getRegressionProgress 数据加载（失败/回归标签页）。
  */
 
 import { create } from 'zustand';
@@ -49,6 +50,34 @@ export type SubsysStatusData = {
   passRate: number;
 }[];
 
+/** getSubsysHeatmap 返回结构 */
+export type SubsysHeatmapData = {
+  subsys: string;
+  pass: number;
+  fail: number;
+  error: number;
+  total: number;
+  passRate: number;
+}[];
+
+/** getRecentFailures 返回结构（失败标签页） */
+export type RecentFailuresData = {
+  caseName: string;
+  subsys: string;
+  startTime: string;
+  durationMs: number | null;
+}[];
+
+/** getRegressionProgress 返回结构（回归标签页） */
+export type RegressionProgressData = {
+  totalCases: number;
+  runCases: number;
+  passedCases: number;
+  failedCases: number;
+  notRunCases: number;
+  passRate: number;
+};
+
 /** 标签页列表（固定顺序，不支持重排） */
 export const DASHBOARD_TABS: { id: DashboardTab; label: string }[] = [
   { id: 'overview', label: '概览' },
@@ -90,6 +119,9 @@ interface DashboardStoreState {
   subsysStatus: SubsysStatusData | null;
   trend: TrendData | null;
   trendGranularity: TrendGranularity;
+  subsysHeatmap: SubsysHeatmapData | null;
+  recentFailures: RecentFailuresData | null;
+  regressionProgress: RegressionProgressData | null;
   tabLoaded: Partial<Record<DashboardTab, boolean>>;
   tabError: Partial<Record<DashboardTab, string>>;
 
@@ -140,6 +172,9 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
   subsysStatus: null,
   trend: null,
   trendGranularity: 'daily',
+  subsysHeatmap: null,
+  recentFailures: null,
+  regressionProgress: null,
   tabLoaded: {},
   tabError: {},
   loadingTab: null,
@@ -155,6 +190,9 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
       summary: null,
       subsysStatus: null,
       trend: null,
+      subsysHeatmap: null,
+      recentFailures: null,
+      regressionProgress: null,
       tabLoaded: {},
       tabError: {},
     });
@@ -167,6 +205,9 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
       summary: null,
       subsysStatus: null,
       trend: null,
+      subsysHeatmap: null,
+      recentFailures: null,
+      regressionProgress: null,
       tabLoaded: {},
       tabError: {},
     });
@@ -183,7 +224,16 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
   },
 
   // ─── 清除缓存 ─────────────────────────────────────────────
-  clearCache: () => set({ summary: null, subsysStatus: null, trend: null, tabLoaded: {}, tabError: {} }),
+  clearCache: () => set({
+    summary: null,
+    subsysStatus: null,
+    trend: null,
+    subsysHeatmap: null,
+    recentFailures: null,
+    regressionProgress: null,
+    tabLoaded: {},
+    tabError: {},
+  }),
 
   // ─── 加载子系统列表 ───────────────────────────────────────
   loadSubsysList: async (projectId) => {
@@ -232,6 +282,30 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
         set({
           loadingTab: null,
           trend: data,
+          tabLoaded: { ...get().tabLoaded, [tab]: true },
+          tabError: { ...get().tabError, [tab]: undefined },
+        });
+      } else if (tab === 'subsys') {
+        const data = await trpc.dashboard.getSubsysHeatmap.query(filter);
+        set({
+          loadingTab: null,
+          subsysHeatmap: data,
+          tabLoaded: { ...get().tabLoaded, [tab]: true },
+          tabError: { ...get().tabError, [tab]: undefined },
+        });
+      } else if (tab === 'failures') {
+        const data = await trpc.dashboard.getRecentFailures.query(filter);
+        set({
+          loadingTab: null,
+          recentFailures: data,
+          tabLoaded: { ...get().tabLoaded, [tab]: true },
+          tabError: { ...get().tabError, [tab]: undefined },
+        });
+      } else if (tab === 'regression') {
+        const data = await trpc.dashboard.getRegressionProgress.query(filter);
+        set({
+          loadingTab: null,
+          regressionProgress: data,
           tabLoaded: { ...get().tabLoaded, [tab]: true },
           tabError: { ...get().tabError, [tab]: undefined },
         });

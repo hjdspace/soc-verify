@@ -24,6 +24,8 @@ const VARS = {
   muted: '--muted',
   mutedForeground: '--muted-foreground',
   border: '--border',
+  card: '--card',
+  cardForeground: '--card-foreground',
   statusPass: '--status-pass',
   statusFail: '--status-fail',
   statusError: '--status-error',
@@ -40,6 +42,8 @@ export type DashboardEChartsTheme = {
   textColor: string;
   borderColor: string;
   mutedColor: string;
+  cardColor: string;
+  cardForegroundColor: string;
   colors: string[];
   statusPass: string;
   statusFail: string;
@@ -55,6 +59,8 @@ export function buildEChartsTheme(): DashboardEChartsTheme {
   const foreground = cssVar(VARS.foreground) || '#333333';
   const border = cssVar(VARS.border) || '#cccccc';
   const mutedForeground = cssVar(VARS.mutedForeground) || '#999999';
+  const card = cssVar(VARS.card) || background;
+  const cardForeground = cssVar(VARS.cardForeground) || foreground;
   const chartColors = [
     cssVar(VARS.chart1) || '#5470c6',
     cssVar(VARS.chart2) || '#91cc75',
@@ -71,6 +77,8 @@ export function buildEChartsTheme(): DashboardEChartsTheme {
     textColor: foreground,
     borderColor: border,
     mutedColor: mutedForeground,
+    cardColor: card,
+    cardForegroundColor: cardForeground,
     colors: chartColors,
     statusPass,
     statusFail,

@@ -9,6 +9,8 @@ const mockTheme = {
   textColor: '#333',
   borderColor: '#ccc',
   mutedColor: '#999',
+  cardColor: '#fff',
+  cardForegroundColor: '#333',
   colors: ['#5470c6', '#91cc75', '#fac858', '#ee6666'],
   statusPass: '#91cc75',
   statusFail: '#ee6666',
@@ -63,6 +65,24 @@ vi.mock('@renderer/lib/trpc', () => {
     { date: '2024-01-02', pass: 0, fail: 1, error: 0 },
     { date: '2024-01-03', pass: 2, fail: 1, error: 0 },
   ];
+  const mockSubsysHeatmapData = [
+    { subsys: 'cpu', pass: 5, fail: 2, error: 1, total: 8, passRate: 62.5 },
+    { subsys: 'gpu', pass: 3, fail: 1, error: 0, total: 4, passRate: 75.0 },
+    { subsys: 'axi', pass: 0, fail: 2, error: 1, total: 3, passRate: 0 },
+  ];
+  const mockRecentFailuresData = [
+    { caseName: 'test_case_1', subsys: 'cpu', startTime: '2024-01-10T10:00:00.000Z', durationMs: 5000 },
+    { caseName: 'test_case_2', subsys: 'gpu', startTime: '2024-01-09T14:30:00.000Z', durationMs: 3000 },
+    { caseName: 'test_case_3', subsys: 'cpu', startTime: '2024-01-08T09:15:00.000Z', durationMs: null },
+  ];
+  const mockRegressionProgressData = {
+    totalCases: 10,
+    runCases: 7,
+    passedCases: 5,
+    failedCases: 2,
+    notRunCases: 3,
+    passRate: 71.4,
+  };
   return {
     trpc: {
       dashboard: {
@@ -70,6 +90,9 @@ vi.mock('@renderer/lib/trpc', () => {
         getSummary: { query: vi.fn().mockResolvedValue(mockSummaryData) },
         getSubsysStatus: { query: vi.fn().mockResolvedValue(mockSubsysStatusData) },
         getTrend: { query: vi.fn().mockResolvedValue(mockTrendData) },
+        getSubsysHeatmap: { query: vi.fn().mockResolvedValue(mockSubsysHeatmapData) },
+        getRecentFailures: { query: vi.fn().mockResolvedValue(mockRecentFailuresData) },
+        getRegressionProgress: { query: vi.fn().mockResolvedValue(mockRegressionProgressData) },
         saveLayout: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
         getLayout: { query: vi.fn().mockResolvedValue(null) },
       },
@@ -102,6 +125,9 @@ function resetDashboardStore() {
     summary: null,
     subsysStatus: null,
     trend: null,
+    subsysHeatmap: null,
+    recentFailures: null,
+    regressionProgress: null,
     trendGranularity: 'daily',
     tabLoaded: {},
     tabError: {},
@@ -161,6 +187,10 @@ describe('DashboardPanel', () => {
         subsysCount: 0, caseCount: 0, passRate: 0, failCount: 0, trend7d: [],
       });
       vi.mocked(trpc.dashboard.getTrend.query).mockResolvedValue([]);
+      vi.mocked(trpc.dashboard.getRecentFailures.query).mockResolvedValue([]);
+      vi.mocked(trpc.dashboard.getRegressionProgress.query).mockResolvedValue({
+        totalCases: 0, runCases: 0, passedCases: 0, failedCases: 0, notRunCases: 0, passRate: 0,
+      });
 
       render(<DashboardPanel />);
 
@@ -255,6 +285,11 @@ describe('DashboardPanel', () => {
     });
 
     it('shows regression hint on regression tab', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.dashboard.getRegressionProgress.query).mockResolvedValue({
+        totalCases: 0, runCases: 0, passedCases: 0, failedCases: 0, notRunCases: 0, passRate: 0,
+      });
+
       render(<DashboardPanel />);
 
       fireEvent.click(screen.getByText('回归'));
@@ -380,6 +415,252 @@ describe('DashboardPanel', () => {
 
       // The store should have updated granularity
       expect(useDashboardStore.getState().trendGranularity).toBe('weekly');
+    });
+  });
+
+  // ─── 子系统标签页内容 ─────────────────────────────────────
+
+  describe('subsys tab content', () => {
+    function setupSubsysTab() {
+      useDashboardStore.setState({
+        activeTab: 'subsys',
+        subsysHeatmap: [
+          { subsys: 'cpu', pass: 5, fail: 2, error: 1, total: 8, passRate: 62.5 },
+          { subsys: 'gpu', pass: 3, fail: 1, error: 0, total: 4, passRate: 75.0 },
+          { subsys: 'axi', pass: 0, fail: 2, error: 1, total: 3, passRate: 0 },
+        ],
+        tabLoaded: { subsys: true },
+        loadingTab: null,
+      });
+    }
+
+    it('renders ECharts heatmap when subsys data is loaded', async () => {
+      setupSubsysTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('echarts-mock')).toBeTruthy();
+      });
+    });
+
+    it('renders subsystem detail data table with all columns', async () => {
+      setupSubsysTab();
+
+      render(<DashboardPanel />);
+
+      // Table headers should be present — use getAllByText since "子系统" also appears as a tab label
+      await waitFor(() => {
+        const subsysHeaders = screen.getAllByText('子系统');
+        expect(subsysHeaders.length).toBeGreaterThanOrEqual(1);
+      });
+      // Should have total, pass, fail, error, passRate columns
+      // Use getAllByText since some headers (e.g. 失败) also appear as tab labels
+      expect(screen.getAllByText('总数').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('通过').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('失败').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('错误').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('通过率').length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('renders subsystem names in the data table', async () => {
+      setupSubsysTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        // cpu, gpu, axi should all appear in the table
+        const cpuElements = screen.getAllByText('cpu');
+        expect(cpuElements.length).toBeGreaterThanOrEqual(1);
+      });
+      expect(screen.getAllByText('gpu').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('axi').length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('shows pass rate values in the data table', async () => {
+      setupSubsysTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        // 62.5% should be rendered for cpu
+        expect(screen.getByText('62.5%')).toBeTruthy();
+      });
+      // 75% for gpu
+      expect(screen.getByText('75%')).toBeTruthy();
+      // 0% for axi
+      expect(screen.getByText('0%')).toBeTruthy();
+    });
+
+    it('shows empty state hint when subsys data is empty', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.dashboard.getSubsysHeatmap.query).mockResolvedValue([]);
+
+      useDashboardStore.setState({
+        activeTab: 'subsys',
+        subsysHeatmap: null,
+        tabLoaded: {},
+        loadingTab: null,
+      });
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/各子系统.*分布热力图/)).toBeTruthy();
+      });
+    });
+  });
+
+  // ─── 失败标签页内容 ─────────────────────────────────────
+
+  describe('failures tab content', () => {
+    function setupFailuresTab() {
+      useDashboardStore.setState({
+        activeTab: 'failures',
+        recentFailures: [
+          { caseName: 'test_case_1', subsys: 'cpu', startTime: '2024-01-10T10:00:00.000Z', durationMs: 5000 },
+          { caseName: 'test_case_2', subsys: 'gpu', startTime: '2024-01-09T14:30:00.000Z', durationMs: 3000 },
+          { caseName: 'test_case_3', subsys: 'cpu', startTime: '2024-01-08T09:15:00.000Z', durationMs: null },
+        ],
+        tabLoaded: { failures: true },
+        loadingTab: null,
+      });
+    }
+
+    it('renders failures table with correct columns when data is loaded', async () => {
+      setupFailuresTab();
+
+      render(<DashboardPanel />);
+
+      // Table headers should be present
+      await waitFor(() => {
+        expect(screen.getByText('用例名')).toBeTruthy();
+      });
+      expect(screen.getByText('失败时间')).toBeTruthy();
+      // '耗时' appears both as a tab label and as a table header
+      expect(screen.getAllByText('耗时').length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('does not render Corner column in failures table', async () => {
+      setupFailuresTab();
+
+      render(<DashboardPanel />);
+
+      // Should not have a Corner header
+      expect(screen.queryByText('Corner')).toBeNull();
+      expect(screen.queryByText('corner')).toBeNull();
+    });
+
+    it('renders case names in the failures table', async () => {
+      setupFailuresTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByText('test_case_1')).toBeTruthy();
+      });
+      expect(screen.getByText('test_case_2')).toBeTruthy();
+      expect(screen.getByText('test_case_3')).toBeTruthy();
+    });
+
+    it('shows failure count in section title', async () => {
+      setupFailuresTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        // Title should show count (3 failures)
+        expect(screen.getByText(/共 3 条/)).toBeTruthy();
+      });
+    });
+
+    it('shows empty state hint when failures data is empty', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.dashboard.getRecentFailures.query).mockResolvedValue([]);
+
+      useDashboardStore.setState({
+        activeTab: 'failures',
+        recentFailures: null,
+        tabLoaded: {},
+        loadingTab: null,
+      });
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/最近失败用例列表/)).toBeTruthy();
+      });
+    });
+  });
+
+  // ─── 回归标签页内容 ─────────────────────────────────────
+
+  describe('regression tab content', () => {
+    function setupRegressionTab() {
+      useDashboardStore.setState({
+        activeTab: 'regression',
+        regressionProgress: {
+          totalCases: 10,
+          runCases: 7,
+          passedCases: 5,
+          failedCases: 2,
+          notRunCases: 3,
+          passRate: 71.4,
+        },
+        tabLoaded: { regression: true },
+        loadingTab: null,
+      });
+    }
+
+    it('renders ECharts pie chart when regression data is loaded', async () => {
+      setupRegressionTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('echarts-mock')).toBeTruthy();
+      });
+    });
+
+    it('renders stat cards with regression numbers', async () => {
+      setupRegressionTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        // totalCases=10 should be rendered
+        expect(screen.getByText('总用例')).toBeTruthy();
+        expect(screen.getByText('10')).toBeTruthy();
+      });
+      expect(screen.getByText('已跑')).toBeTruthy();
+      // '通过' appears both as a tab label and as a stat card label
+      expect(screen.getAllByText('通过').length).toBeGreaterThanOrEqual(1);
+      // '失败' appears both as a tab label and as a stat card label
+      expect(screen.getAllByText('失败').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText('未跑')).toBeTruthy();
+      expect(screen.getByText('通过率')).toBeTruthy();
+      // passRate = 71.4%
+      expect(screen.getByText('71.4%')).toBeTruthy();
+    });
+
+    it('shows empty state hint when regression data is empty', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.dashboard.getRegressionProgress.query).mockResolvedValue({
+        totalCases: 0, runCases: 0, passedCases: 0, failedCases: 0, notRunCases: 0, passRate: 0,
+      });
+
+      useDashboardStore.setState({
+        activeTab: 'regression',
+        regressionProgress: null,
+        tabLoaded: {},
+        loadingTab: null,
+      });
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/回归进度环形图/)).toBeTruthy();
+      });
     });
   });
 });

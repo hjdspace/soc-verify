@@ -405,4 +405,199 @@ describe('dashboard-router', () => {
       expect(result[0].passRate).toBe(75); // 3/4 = 75.0%
     });
   });
+
+  // ─── getRecentFailures ──────────────────────────────────
+
+  describe('getRecentFailures', () => {
+    it('returns recent failed runs ordered by start_time descending', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }, { name: 'gpu' }]);
+      insertCases(memDb!, [
+        { name: 't1', subsys: 'cpu', path: '/p/t1' },
+        { name: 't2', subsys: 'gpu', path: '/p/t2' },
+      ]);
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0), durationMs: 5000 });
+      insertSimulationRun(memDb!, { caseName: 't2', subsys: 'gpu', status: 'fail', startTime: isoDaysAgo(1), durationMs: 3000 });
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(2) });
+
+      const result = await caller.getRecentFailures({ projectId: 'test-project-id' });
+
+      expect(result).toHaveLength(2);
+      // Most recent first (today's failure)
+      expect(result[0].caseName).toBe('t1');
+      expect(result[0].subsys).toBe('cpu');
+      expect(result[0].durationMs).toBe(5000);
+      // Yesterday's failure
+      expect(result[1].caseName).toBe('t2');
+      expect(result[1].subsys).toBe('gpu');
+    });
+
+    it('does not include corner field in returned data', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [{ name: 't1', subsys: 'cpu', path: '/p/t1' }]);
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0), corner: 'post_sim' });
+
+      const result = await caller.getRecentFailures({ projectId: 'test-project-id' });
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).not.toHaveProperty('corner');
+    });
+
+    it('filters by subsys when provided', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }, { name: 'gpu' }]);
+      insertCases(memDb!, [
+        { name: 't1', subsys: 'cpu', path: '/p/t1' },
+        { name: 't2', subsys: 'gpu', path: '/p/t2' },
+      ]);
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0) });
+      insertSimulationRun(memDb!, { caseName: 't2', subsys: 'gpu', status: 'fail', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getRecentFailures({ projectId: 'test-project-id', subsys: 'cpu' });
+
+      expect(result).toHaveLength(1);
+      expect(result[0].caseName).toBe('t1');
+      expect(result[0].subsys).toBe('cpu');
+    });
+
+    it('filters by timeRange when provided', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [{ name: 't1', subsys: 'cpu', path: '/p/t1' }]);
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0) });
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(20) });
+
+      const result = await caller.getRecentFailures({ projectId: 'test-project-id', timeRange: '7d' });
+
+      expect(result).toHaveLength(1);
+      expect(result[0].caseName).toBe('t1');
+    });
+
+    it('returns empty array for empty database', async () => {
+      const result = await caller.getRecentFailures({ projectId: 'test-project-id' });
+      expect(result).toEqual([]);
+    });
+
+    it('limits results to 50 entries', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      const cases = Array.from({ length: 60 }, (_, i) => ({
+        name: `case_${i}`,
+        subsys: 'cpu',
+        path: `/p/case_${i}`,
+      }));
+      insertCases(memDb!, cases);
+      for (let i = 0; i < 60; i++) {
+        insertSimulationRun(memDb!, {
+          caseName: `case_${i}`,
+          subsys: 'cpu',
+          status: 'fail',
+          startTime: isoDaysAgo(0, 10 + (i % 10)),
+        });
+      }
+
+      const result = await caller.getRecentFailures({ projectId: 'test-project-id' });
+
+      expect(result).toHaveLength(50);
+    });
+  });
+
+  // ─── getRegressionProgress ─────────────────────────────
+
+  describe('getRegressionProgress', () => {
+    it('returns correct progress with total, run, passed, failed, notRun, and passRate', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }, { name: 'gpu' }]);
+      insertCases(memDb!, [
+        { name: 't1', subsys: 'cpu', path: '/p/t1' },
+        { name: 't2', subsys: 'cpu', path: '/p/t2' },
+        { name: 't3', subsys: 'gpu', path: '/p/t3' },
+        { name: 't4', subsys: 'gpu', path: '/p/t4' },
+      ]);
+      // t1: pass, t2: fail, t3: pass → 3 run, 2 passed, 1 failed, 1 not run
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+      insertSimulationRun(memDb!, { caseName: 't2', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0) });
+      insertSimulationRun(memDb!, { caseName: 't3', subsys: 'gpu', status: 'pass', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getRegressionProgress({ projectId: 'test-project-id' });
+
+      expect(result.totalCases).toBe(4);
+      expect(result.runCases).toBe(3);
+      expect(result.passedCases).toBe(2);
+      expect(result.failedCases).toBe(1);
+      expect(result.notRunCases).toBe(1);
+      // passRate = passed / run = 2/3 ≈ 66.7
+      expect(result.passRate).toBeCloseTo(66.7, 1);
+    });
+
+    it('filters by subsys when provided (only counts cases in that subsys)', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }, { name: 'gpu' }]);
+      insertCases(memDb!, [
+        { name: 't1', subsys: 'cpu', path: '/p/t1' },
+        { name: 't2', subsys: 'cpu', path: '/p/t2' },
+        { name: 't3', subsys: 'gpu', path: '/p/t3' },
+      ]);
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+      insertSimulationRun(memDb!, { caseName: 't2', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0) });
+      insertSimulationRun(memDb!, { caseName: 't3', subsys: 'gpu', status: 'pass', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getRegressionProgress({ projectId: 'test-project-id', subsys: 'cpu' });
+
+      expect(result.totalCases).toBe(2);
+      expect(result.runCases).toBe(2);
+      expect(result.passedCases).toBe(1);
+      expect(result.failedCases).toBe(1);
+      expect(result.notRunCases).toBe(0);
+    });
+
+    it('does not accept timeRange (always counts full history)', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [{ name: 't1', subsys: 'cpu', path: '/p/t1' }]);
+      // Old run — outside 7d window — should still be counted
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(20) });
+
+      // Even if timeRange is passed, the result should reflect full history
+      // The procedure's input type intentionally excludes timeRange, but at runtime
+      // validateFilter still accepts it (strips it). Cast to bypass type check.
+      const result = await caller.getRegressionProgress({ projectId: 'test-project-id', timeRange: '7d' } as { projectId: string; subsys?: string });
+
+      expect(result.totalCases).toBe(1);
+      expect(result.runCases).toBe(1);
+      expect(result.passedCases).toBe(1);
+    });
+
+    it('counts a case as run even if latest status is pass but had earlier fails', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [{ name: 't1', subsys: 'cpu', path: '/p/t1' }]);
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(5) });
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getRegressionProgress({ projectId: 'test-project-id' });
+
+      expect(result.totalCases).toBe(1);
+      expect(result.runCases).toBe(1);
+      // Latest status is pass
+      expect(result.passedCases).toBe(1);
+      expect(result.failedCases).toBe(0);
+    });
+
+    it('counts a case as failed when latest status is fail', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [{ name: 't1', subsys: 'cpu', path: '/p/t1' }]);
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(5) });
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getRegressionProgress({ projectId: 'test-project-id' });
+
+      expect(result.runCases).toBe(1);
+      expect(result.passedCases).toBe(0);
+      expect(result.failedCases).toBe(1);
+    });
+
+    it('returns zero values for empty database', async () => {
+      const result = await caller.getRegressionProgress({ projectId: 'test-project-id' });
+
+      expect(result.totalCases).toBe(0);
+      expect(result.runCases).toBe(0);
+      expect(result.passedCases).toBe(0);
+      expect(result.failedCases).toBe(0);
+      expect(result.notRunCases).toBe(0);
+      expect(result.passRate).toBe(0);
+    });
+  });
 });
