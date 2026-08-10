@@ -8,7 +8,7 @@
  */
 
 import { spawn, execSync } from 'node:child_process';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -84,6 +84,59 @@ function runGitStreaming(
   });
 }
 
+// ── Env var resolution ─────────────────────────────────────────────
+
+const SOCVERIFY_DIR = '.socverify';
+const ENV_CONFIG_FILE = 'env.json';
+
+/**
+ * Resolve $PROJ_RTL from process.env, falling back to .socverify/env.json.
+ * Matches the pattern used by unisoc-subsys-discoverer plugin.
+ */
+function resolveProjRtl(projectDir: string): string | null {
+  const envVal = process.env.PROJ_RTL;
+  if (envVal && envVal.trim()) return envVal.trim();
+
+  try {
+    const configPath = join(projectDir, SOCVERIFY_DIR, ENV_CONFIG_FILE);
+    const config = JSON.parse(readFileSync(configPath, 'utf-8')) as {
+      envVars?: Record<string, string>;
+    };
+    const configured = config?.envVars?.PROJ_RTL;
+    if (typeof configured === 'string' && configured.trim()) {
+      return configured.trim();
+    }
+  } catch {
+    // Config file not found or invalid
+  }
+
+  return null;
+}
+
+/**
+ * Resolve $PROJ_ENV from process.env, falling back to .socverify/env.json.
+ * Matches the pattern used by unisoc-subsys-discoverer plugin.
+ */
+function resolveProjEnv(projectDir: string): string | null {
+  const envVal = process.env.PROJ_ENV;
+  if (envVal && envVal.trim()) return envVal.trim();
+
+  try {
+    const configPath = join(projectDir, SOCVERIFY_DIR, ENV_CONFIG_FILE);
+    const config = JSON.parse(readFileSync(configPath, 'utf-8')) as {
+      envVars?: Record<string, string>;
+    };
+    const configured = config?.envVars?.PROJ_ENV;
+    if (typeof configured === 'string' && configured.trim()) {
+      return configured.trim();
+    }
+  } catch {
+    // Config file not found or invalid
+  }
+
+  return null;
+}
+
 // ── Repo scanning ──────────────────────────────────────────────────
 
 /** Check if a directory is a git repository. */
@@ -91,11 +144,13 @@ function isGitRepo(path: string): boolean {
   return existsSync(join(path, '.git'));
 }
 
-/** Scan DE repos: $PROJ_DIR/de/* */
+/** Scan DE repos: $PROJ_RTL/* (DE/RTL git repositories) */
 function getDeRepos(projectDir: string): GitRepoInfo[] {
   const repos: GitRepoInfo[] = [];
-  const dePath = join(projectDir, 'de');
+  const rtlPath = resolveProjRtl(projectDir);
+  if (!rtlPath) return repos;
 
+  const dePath = rtlPath;
   if (!existsSync(dePath)) return repos;
 
   let items: string[];
@@ -132,11 +187,13 @@ function getDeRepos(projectDir: string): GitRepoInfo[] {
   return repos;
 }
 
-/** Scan DV repos: $PROJ_DIR/dv/* (excluding udtb) + $PROJ_DIR/dv/udtb/* */
+/** Scan DV repos: $PROJ_ENV/* (excluding udtb) + $PROJ_ENV/udtb/* */
 function getDvRepos(projectDir: string): GitRepoInfo[] {
   const repos: GitRepoInfo[] = [];
-  const dvPath = join(projectDir, 'dv');
+  const envPath = resolveProjEnv(projectDir);
+  if (!envPath) return repos;
 
+  const dvPath = envPath;
   if (!existsSync(dvPath)) return repos;
 
   let items: string[];
