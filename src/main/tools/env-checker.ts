@@ -7,7 +7,8 @@
  */
 
 import { readFile, writeFile, readdir } from 'node:fs/promises';
-import { join, extname, relative } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 import { existsSync } from 'node:fs';
 
 // ── Regex patterns (ported from Python) ────────────────────────────
@@ -17,8 +18,11 @@ import { existsSync } from 'node:fs';
 const FORCE_PATTERN = /(?!\/\/.*)(\bforce\b|sprd_hld_force|uvm_hld_force)/;
 const WAIT_PATTERN = /(?!\/\/.*)\bwait\b/;
 
-/** Supported file extensions for scanning. */
-const SCAN_EXTENSIONS = new Set(['.v', '.sv', '.svi', '.svh']);
+/** Environment variable pattern for expanding $VAR and ${VAR} in filter files. */
+const ENV_VAR_PATTERN = /\$\{([^}]+)\}|\$([a-zA-Z_][a-zA-Z0-9_]*)/g;
+
+/** Supported file extensions for scanning (without dot, matching Python's split('.').pop()). */
+const SCAN_EXTENSIONS = new Set(['v', 'sv', 'svi', 'svh']);
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -45,6 +49,44 @@ export type SubsystemInfo = {
   path: string;
 };
 
+export type PreviewLine = {
+  lineNo: number;
+  content: string;
+  isMatch: boolean;
+};
+
+export type PreviewSection = {
+  matchLine: number;
+  lines: PreviewLine[];
+};
+
+export type PreviewResult = {
+  filePath: string;
+  sections: PreviewSection[];
+};
+
+// ── Encoding-safe file reading ─────────────────────────────────────
+
+/**
+ * Read a file as a string, handling encoding errors gracefully.
+ * Matches Python's `open(file_path, 'r', errors='ignore')` behavior:
+ * invalid UTF-8 byte sequences are removed rather than replaced.
+ */
+async function readFileText(filePath: string): Promise<string> {
+  const buffer = await readFile(filePath);
+  // toString('utf-8') replaces invalid sequences with \uFFFD; remove them
+  // to match Python's errors='ignore' behavior.
+  return buffer.toString('utf-8').replace(/\uFFFD/g, '');
+}
+
+/** Expand environment variables ($VAR / ${VAR}) in a path string. */
+function expandEnvVars(path: string): string {
+  return path.replace(ENV_VAR_PATTERN, (_match, brace, plain) => {
+    const varName = brace || plain;
+    return process.env[varName] ?? '';
+  });
+}
+
 // ── Core scanning logic ────────────────────────────────────────────
 
 /**
@@ -56,7 +98,12 @@ export type SubsystemInfo = {
 async function scanFile(
   filePath: string,
 ): Promise<{ force: ScanMatch[]; wait: ScanMatch[] }> {
-  const content = await readFile(filePath, 'utf-8').catch(() => '');
+  let content: string;
+  try {
+    content = await readFileText(filePath);
+  } catch {
+    return { force: [], wait: [] };
+  }
   if (!content) return { force: [], wait: [] };
 
   const forceMatches: ScanMatch[] = [];
@@ -188,15 +235,25 @@ export async function scanSubsys(
   return { force: forceResults, wait: waitResults };
 }
 
-/** Recursively collect files with supported extensions. */
+/**
+ * Recursively collect files with supported extensions.
+ * Uses `name.split('.').pop()` to match Python's `f.split('.')[-1]` behavior
+ * exactly (including edge cases like hidden files).
+ */
 async function collectFiles(dir: string, results: string[]): Promise<void> {
   const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
     const fullPath = join(dir, entry.name);
     if (entry.isDirectory()) {
       await collectFiles(fullPath, results);
-    } else if (entry.isFile() && SCAN_EXTENSIONS.has(extname(entry.name).toLowerCase())) {
-      results.push(fullPath);
+    } else if (entry.isFile()) {
+      // Match Python's `f.split('.')[-1] in ('v', 'sv', 'svi', 'svh')` exactly.
+      // This is case-sensitive (no toLowerCase) and uses split('.').pop()
+      // which handles edge cases like hidden files differently from extname().
+      const ext = entry.name.split('.').pop() ?? '';
+      if (SCAN_EXTENSIONS.has(ext)) {
+        results.push(fullPath);
+      }
     }
   }
 }
@@ -226,6 +283,7 @@ export async function discoverSubsystems(
 /**
  * Load filter files for a subsystem.
  * Filter files have extensions `.force_filter` and `.wait.filter`.
+ * Environment variables in filter entries are expanded (matching Python behavior).
  */
 export async function loadFilters(
   projectRoot: string,
@@ -244,14 +302,21 @@ export async function loadFilters(
     const files = await readdir(dir).catch(() => []);
     for (const file of files) {
       const filePath = join(dir, file);
-      const content = await readFile(filePath, 'utf-8').catch(() => '');
+      let content: string;
+      try {
+        content = await readFileText(filePath);
+      } catch {
+        continue;
+      }
       for (const line of content.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed) continue;
+        // Expand environment variables (matching Python's expand_env_vars)
+        const expanded = expandEnvVars(trimmed);
         if (file.endsWith('.force_filter')) {
-          force.add(trimmed);
+          force.add(expanded);
         } else if (file.endsWith('.wait.filter')) {
-          wait.add(trimmed);
+          wait.add(expanded);
         }
       }
     }
@@ -273,8 +338,12 @@ export async function addCheckComment(
   checkType: CheckType,
   comment = '',
 ): Promise<boolean> {
-  const content = await readFile(filePath, 'utf-8').catch(() => null);
-  if (content === null) return false;
+  let content: string;
+  try {
+    content = await readFileText(filePath);
+  } catch {
+    return false;
+  }
 
   const lines = content.split('\n');
   let modified = false;
@@ -322,6 +391,83 @@ export async function addCheckComment(
   }
 
   return modified;
+}
+
+/**
+ * Read a file and return preview sections with context lines around each match.
+ *
+ * @param filePath  File to read
+ * @param matches  Match line numbers and statements
+ * @param contextBefore  Number of lines before each match (default 3)
+ * @param contextAfter  Number of lines after each match (default 2)
+ */
+export async function readFileWithContext(
+  filePath: string,
+  matches: ScanMatch[],
+  contextBefore = 3,
+  contextAfter = 2,
+): Promise<PreviewResult> {
+  let content: string;
+  try {
+    content = await readFileText(filePath);
+  } catch {
+    return { filePath, sections: [] };
+  }
+
+  const lines = content.split('\n');
+  const matchLineNumbers = new Set(matches.map((m) => m.line));
+
+  const sections: PreviewSection[] = [];
+
+  for (const match of matches) {
+    const start = Math.max(0, match.line - 1 - contextBefore);
+    const end = Math.min(lines.length, match.line + contextAfter);
+
+    const sectionLines: PreviewLine[] = [];
+    for (let i = start; i < end; i++) {
+      sectionLines.push({
+        lineNo: i + 1,
+        content: lines[i] ?? '',
+        isMatch: matchLineNumbers.has(i + 1),
+      });
+    }
+
+    sections.push({
+      matchLine: match.line,
+      lines: sectionLines,
+    });
+  }
+
+  return { filePath, sections };
+}
+
+// ── $PROJ_ENV resolution ───────────────────────────────────────────
+
+const SOCVERIFY_DIR = '.socverify';
+const ENV_CONFIG_FILE = 'env.json';
+
+/**
+ * Resolve $PROJ_ENV from process.env, falling back to .socverify/env.json.
+ * Matches the pattern used by git-quick-pull and git-manager.
+ */
+export function resolveProjEnv(projectDir: string): string | null {
+  const envVal = process.env.PROJ_ENV;
+  if (envVal && envVal.trim()) return envVal.trim();
+
+  try {
+    const configPath = join(projectDir, SOCVERIFY_DIR, ENV_CONFIG_FILE);
+    const config = JSON.parse(readFileSync(configPath, 'utf-8')) as {
+      envVars?: Record<string, string>;
+    };
+    const configured = config?.envVars?.PROJ_ENV;
+    if (typeof configured === 'string' && configured.trim()) {
+      return configured.trim();
+    }
+  } catch {
+    // Config file not found or invalid
+  }
+
+  return null;
 }
 
 /**
