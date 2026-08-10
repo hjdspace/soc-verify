@@ -8,6 +8,7 @@
  * This script always builds in Rocky Linux 8, statically links the C++ runtime,
  * verifies the ELF symbol requirements, and replaces the upstream prebuild.
  * Docker is required on every host, including Linux CI runners.
+ * Set NODE_DIST_URL to use a Node.js binary mirror when needed.
  */
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -27,6 +28,7 @@ const CACHED_FILE = join(CACHE_DIR, 'better_sqlite3.node');
 const VERSION_STAMP = join(CACHE_DIR, '.version');
 
 const DOCKER_NODE_VERSION = '22.18.0';
+const NODE_DIST_URL = (process.env.NODE_DIST_URL ?? 'https://nodejs.org/dist').replace(/\/$/, '');
 const BUILD_PROFILE = 'rockylinux8-glibc228-static-cxx-v1';
 
 function readVersion(filePath) {
@@ -85,7 +87,7 @@ function buildViaDocker(electronVersion, sqliteVersion) {
   const dockerScript = [
     'set -euo pipefail',
     'dnf install -y gcc-toolset-10-gcc gcc-toolset-10-gcc-c++ make python39 tar gzip xz curl binutils > /dev/null',
-    `curl -fsSL https://nodejs.org/dist/v${DOCKER_NODE_VERSION}/node-v${DOCKER_NODE_VERSION}-linux-x64.tar.gz | tar -xz -C /usr/local --strip-components=1`,
+    `curl -fsSL ${NODE_DIST_URL}/v${DOCKER_NODE_VERSION}/node-v${DOCKER_NODE_VERSION}-linux-x64.tar.gz | tar -xz -C /usr/local --strip-components=1`,
     'export MANPATH="${MANPATH:-}"',
     'source /opt/rh/gcc-toolset-10/enable',
     'export PYTHON=/usr/bin/python3.9',
@@ -126,6 +128,7 @@ function buildViaDocker(electronVersion, sqliteVersion) {
   console.log('[build-linux-sqlite] Launching Docker container...');
   console.log('[build-linux-sqlite]   Image: rockylinux:8 (linux/amd64)');
   console.log(`[build-linux-sqlite]   Node.js: ${DOCKER_NODE_VERSION} (build runner only)`);
+  console.log(`[build-linux-sqlite]   Node.js download: ${NODE_DIST_URL}`);
   console.log('[build-linux-sqlite]   Target glibc: <= 2.28 (CentOS 8)');
   console.log(`[build-linux-sqlite]   Electron: ${electronVersion}`);
   console.log(`[build-linux-sqlite]   better-sqlite3: ${sqliteVersion}`);
