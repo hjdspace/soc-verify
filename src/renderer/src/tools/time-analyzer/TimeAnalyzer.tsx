@@ -78,24 +78,23 @@ export function TimeAnalyzer({ projectRoot, onProjectRootChange }: ToolComponent
   const [unit, setUnit] = useState<TimeUnit>('minutes');
   const [status, setStatus] = useState('就绪');
 
-  // On mount: fetch the default analysis directory ($PROJ_WORK or cwd) from backend.
-  // Only set it if the user hasn't already provided a projectRoot via URL param,
-  // so that an explicitly-passed project path takes precedence.
+  // On mount: fetch the default analysis directory from $PROJ_WORK (takes precedence).
+  // Falls back to projectRoot only if $PROJ_WORK is not set.
   useEffect(() => {
-    if (projectRoot) {
-      setAnalysisDir(projectRoot);
-      return;
-    }
-    // Fetch $PROJ_WORK from backend
     trpc.tools.timeAnalyzer.getDefaultDir
       .query()
       .then((res) => {
         if (res.dir) {
           setAnalysisDir(res.dir);
+        } else if (projectRoot) {
+          setAnalysisDir(projectRoot);
         }
       })
       .catch(() => {
-        // Ignore — user can manually select a directory
+        // Fallback to projectRoot if backend call fails
+        if (projectRoot) {
+          setAnalysisDir(projectRoot);
+        }
       });
   }, [projectRoot]);
 
