@@ -10,7 +10,7 @@
  */
 
 import { readFile, writeFile, readdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -229,10 +229,86 @@ export async function getMemoryFromLog(
 // ── Directory analysis ─────────────────────────────────────────────
 
 /**
+ * Compile log file names to try, in order.
+ * Matches Python `log_analyze_utils.get_compile_log_path()` possible_paths.
+ */
+const COMPILE_LOG_NAMES = [
+  'irun_compile.log',
+  'irun_comp.log',
+  'compile.log',
+  'vcs_comp.log',
+  'ncsim_comp.log',
+];
+
+/**
+ * Sim log file names to try, in order.
+ * Matches Python `log_analyze_utils.get_simulation_log_path()` possible_paths.
+ */
+const SIM_LOG_NAMES = [
+  'irun_sim.log',
+  'simulation.log',
+  'vcs_sim.log',
+  'ncsim_sim.log',
+  'sim.log',
+];
+
+/** Log directory names to try (case-insensitive on Windows). */
+const LOG_DIR_NAMES = ['log', 'logs', 'LOG'];
+
+/**
+ * Check if a path is a directory, following symlinks/junctions.
+ *
+ * This matches Python's `os.path.isdir()` behavior, which follows symlinks.
+ * Node.js's `Dirent.isDirectory()` does NOT follow symlinks, causing
+ * Windows junction directories to be skipped — the root cause of
+ * "未找到任何包含日志的用例目录" errors.
+ */
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** Find a compile log file in a directory, trying multiple file names. */
+function findCompileLog(logDir: string): string | null {
+  for (const name of COMPILE_LOG_NAMES) {
+    const path = join(logDir, name);
+    if (existsSync(path)) return path;
+  }
+  return null;
+}
+
+/** Find a sim log file in a directory, trying multiple file names. */
+function findSimLog(logDir: string): string | null {
+  for (const name of SIM_LOG_NAMES) {
+    const path = join(logDir, name);
+    if (existsSync(path)) return path;
+  }
+  return null;
+}
+
+/** Find a log directory within a case directory, trying multiple names. */
+function findLogDir(caseDir: string): string | null {
+  for (const name of LOG_DIR_NAMES) {
+    const path = join(caseDir, name);
+    if (isDirectory(path)) return path;
+  }
+  return null;
+}
+
+/**
  * Scan a directory for case subdirectories with log folders,
  * extract time and memory data from compile and sim logs.
  *
- * Ported from Python `AnalysisThread.run()`.
+ * Ported from Python `AnalysisThread.run()` + `log_analyze_utils.py`.
+ *
+ * Improvements over the original:
+ * - Uses `statSync` to follow symlinks/junctions (matches Python `os.path.isdir`)
+ * - Supports multiple log file names (irun_compile.log, compile.log, vcs_comp.log, etc.)
+ * - Supports multiple log directory names (log, logs, LOG)
+ * - Better error diagnostics
  */
 export async function analyzeDirectory(
   analysisDir: string,
@@ -244,20 +320,35 @@ export async function analyzeDirectory(
 
   onProgress?.('开始扫描目录...');
 
-  const entries = await readdir(analysisDir, { withFileTypes: true });
-  const caseDirs = entries.filter((e) => e.isDirectory());
+  // Read directory entries (without withFileTypes, use statSync for reliable directory check)
+  const entryNames = await readdir(analysisDir);
 
-  // Filter to directories that have a log subdirectory
+  // Filter to directories (using statSync to follow symlinks/junctions like Python os.path.isdir)
+  const caseDirNames: string[] = [];
+  for (const name of entryNames) {
+    const fullPath = join(analysisDir, name);
+    if (isDirectory(fullPath)) {
+      caseDirNames.push(name);
+    }
+  }
+
+  // Filter to directories that have a log subdirectory (trying multiple log dir names)
   const validCases: string[] = [];
-  for (const dir of caseDirs) {
-    const logDir = join(analysisDir, dir.name, 'log');
-    if (existsSync(logDir)) {
-      validCases.push(dir.name);
+  for (const dirName of caseDirNames) {
+    const casePath = join(analysisDir, dirName);
+    const logDir = findLogDir(casePath);
+    if (logDir) {
+      validCases.push(dirName);
     }
   }
 
   if (validCases.length === 0) {
-    throw new Error('未找到任何包含日志的用例目录');
+    // Build a diagnostic error message to help users troubleshoot
+    const totalDirs = caseDirNames.length;
+    const hint = totalDirs > 0
+      ? `已扫描 ${totalDirs} 个子目录，均未找到 log 子目录。请确认目录结构为: <work>/<case>/log/*.log`
+      : '该目录下没有任何子目录。请选择包含用例子目录的 work 目录。';
+    throw new Error(`未找到任何包含日志的用例目录。${hint}`);
   }
 
   onProgress?.(`找到 ${validCases.length} 个用例目录，开始分析...`);
@@ -269,16 +360,16 @@ export async function analyzeDirectory(
     onProgress?.(`正在分析 ${caseName} (${i + 1}/${validCases.length})`);
 
     const casePath = join(analysisDir, caseName);
-    const logDir = join(casePath, 'log');
+    const logDir = findLogDir(casePath)!; // Non-null: validCases only contains dirs with log subdirs
 
-    // Find compile and sim logs
-    const compileLog = join(logDir, 'irun_compile.log');
-    const simLog = join(logDir, 'irun_sim.log');
+    // Find compile and sim logs (trying multiple file names)
+    const compileLogPath = findCompileLog(logDir);
+    const simLogPath = findSimLog(logDir);
 
-    const compileTime = await getTimeFromLog(compileLog, false);
-    const simTime = await getTimeFromLog(simLog, true);
-    const compileMemory = await getMemoryFromLog(compileLog, false);
-    const simMemory = await getMemoryFromLog(simLog, true);
+    const compileTime = compileLogPath ? await getTimeFromLog(compileLogPath, false) : null;
+    const simTime = simLogPath ? await getTimeFromLog(simLogPath, true) : null;
+    const compileMemory = compileLogPath ? await getMemoryFromLog(compileLogPath, false) : null;
+    const simMemory = simLogPath ? await getMemoryFromLog(simLogPath, true) : null;
 
     // Skip if no time data found (both compile and sim returned null)
     if (compileTime === null && simTime === null) continue;
@@ -296,7 +387,7 @@ export async function analyzeDirectory(
   }
 
   if (caseData.length === 0) {
-    throw new Error('未找到任何有效的时间数据');
+    throw new Error(`未找到任何有效的时间数据。已分析 ${validCases.length} 个用例目录，但未找到包含有效时间信息的日志文件。请确认日志格式为 xrun 或 VCS。`);
   }
 
   // Sort by total time descending
