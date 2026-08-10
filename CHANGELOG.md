@@ -6,6 +6,34 @@
 
 ---
 
+## [0.2.6](https://github.com/hjdspace/soc-verify/compare/v0.2.5...v0.2.6) (2026-08-11)
+
+### Features
+
+* **dashboard:** 完成仪表盘全功能迭代，新增 Overview/Trend/Failures/Regression/Duration/Unstable/Phase 七大数据标签页，支持多维度统计与 ECharts 可视化
+* **terminal:** 新增自定义 bashrc 配置与 Linux 终端适配优化
+
+### Bug Fixes
+
+* **env-checker:** 修复过滤器处理逻辑与相关 bug
+
+### Refactor
+
+* **suspicious-files:** 重构可疑文件管理流程与持久化逻辑
+* **env-checker:** 重构 EnvChecker 功能模块与默认目录获取
+* **regression:** 重构回归分析工具与默认目录解析
+* **coverage:** 重构覆盖率合并工具与默认目录获取
+* **project:** 重构项目目录解析与 Git 仓库扫描流程
+* **imports:** 优化 case-repository 导入与下载流程
+
+### Build
+
+* **linux-sqlite:** 支持通过环境变量自定义 Node.js 下载源
+
+### Documentation
+
+* **dashboard:** 添加仪表盘相关文档与术语表
+
 ## [0.2.5](https://github.com/hjdspace/soc-verify/compare/v0.2.4...v0.2.5) (2026-08-09)
 
 ### Features
