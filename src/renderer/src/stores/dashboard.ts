@@ -2,7 +2,8 @@
  * Dashboard Store — 验证数据可视化面板状态管理。
  *
  * ADR 0019: 按标签页存储数据 + 全局筛选状态 + 加载状态。
- * Issue 01: 仅实现标签页骨架 + 筛选状态 + 空状态。后续 issue 逐个添加数据加载。
+ * Issue 02: getSummary 数据加载（概览标签页 + 左栏缩略）。
+ * Issue 03: getTrend 数据加载（趋势标签页 + 日/周粒度切换）。
  */
 
 import { create } from 'zustand';
@@ -23,6 +24,30 @@ export type DashboardTab =
   | 'debug';
 
 export type TimeRange = 'all' | '7d' | '30d' | { start: string; end: string };
+
+/** 趋势粒度 */
+export type TrendGranularity = 'daily' | 'weekly';
+
+/** getSummary 返回结构 */
+export type SummaryData = {
+  subsysCount: number;
+  caseCount: number;
+  passRate: number;
+  failCount: number;
+  trend7d: { date: string; pass: number; fail: number; error: number }[];
+};
+
+/** getTrend 返回结构 */
+export type TrendData = { date: string; pass: number; fail: number; error: number }[];
+
+/** getSubsysStatus 返回结构 */
+export type SubsysStatusData = {
+  name: string;
+  caseCount: number;
+  pass: number;
+  fail: number;
+  passRate: number;
+}[];
 
 /** 标签页列表（固定顺序，不支持重排） */
 export const DASHBOARD_TABS: { id: DashboardTab; label: string }[] = [
@@ -61,8 +86,10 @@ interface DashboardStoreState {
   subsysListLoading: boolean;
 
   // ─── 按标签页存储数据 ─────────────────────────────────────
-  // key = tab id, value = tab-specific data (后续 issue 填充)
-  tabData: Partial<Record<DashboardTab, unknown>>;
+  summary: SummaryData | null;
+  subsysStatus: SubsysStatusData | null;
+  trend: TrendData | null;
+  trendGranularity: TrendGranularity;
   tabLoaded: Partial<Record<DashboardTab, boolean>>;
   tabError: Partial<Record<DashboardTab, string>>;
 
@@ -76,6 +103,7 @@ interface DashboardStoreState {
   setActiveTab: (tab: DashboardTab) => void;
   setSubsys: (subsys: string | null) => void;
   setTimeRange: (range: TimeRange) => void;
+  setTrendGranularity: (granularity: TrendGranularity) => void;
   clearCache: () => void;
   loadSubsysList: (projectId: string) => Promise<void>;
   loadTabData: (tab: DashboardTab, projectId: string) => Promise<void>;
@@ -86,8 +114,14 @@ interface DashboardStoreState {
 
 // ─── 辅助函数 ───────────────────────────────────────────────
 
-function buildFilter(projectId: string, subsys: string | null, timeRange: TimeRange) {
-  const filter: Record<string, unknown> = { projectId };
+type DashboardFilterInput = {
+  projectId: string;
+  subsys?: string;
+  timeRange?: 'all' | '7d' | '30d' | { start: string; end: string };
+};
+
+function buildFilter(projectId: string, subsys: string | null, timeRange: TimeRange): DashboardFilterInput {
+  const filter: DashboardFilterInput = { projectId };
   if (subsys) filter.subsys = subsys;
   if (timeRange !== 'all') filter.timeRange = timeRange;
   return filter;
@@ -102,7 +136,10 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
   timeRange: 'all',
   subsysList: [],
   subsysListLoading: false,
-  tabData: {},
+  summary: null,
+  subsysStatus: null,
+  trend: null,
+  trendGranularity: 'daily',
   tabLoaded: {},
   tabError: {},
   loadingTab: null,
@@ -115,7 +152,9 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
   setSubsys: (subsys) => {
     set({
       selectedSubsys: subsys,
-      tabData: {},
+      summary: null,
+      subsysStatus: null,
+      trend: null,
       tabLoaded: {},
       tabError: {},
     });
@@ -125,14 +164,26 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
   setTimeRange: (range) => {
     set({
       timeRange: range,
-      tabData: {},
+      summary: null,
+      subsysStatus: null,
+      trend: null,
       tabLoaded: {},
       tabError: {},
     });
   },
 
+  // ─── 趋势粒度切换 ─────────────────────────────────────────
+  setTrendGranularity: (granularity) => {
+    set({
+      trendGranularity: granularity,
+      trend: null,
+      tabLoaded: { ...get().tabLoaded, trend: false },
+      tabError: { ...get().tabError, trend: undefined },
+    });
+  },
+
   // ─── 清除缓存 ─────────────────────────────────────────────
-  clearCache: () => set({ tabData: {}, tabLoaded: {}, tabError: {} }),
+  clearCache: () => set({ summary: null, subsysStatus: null, trend: null, tabLoaded: {}, tabError: {} }),
 
   // ─── 加载子系统列表 ───────────────────────────────────────
   loadSubsysList: async (projectId) => {
@@ -161,21 +212,38 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
     try {
       const filter = buildFilter(projectId, state.selectedSubsys, state.timeRange);
 
-      // Issue 01: 大多数 procedure 尚未实现，仅标记为已加载（空数据）。
-      // 后续 issue 逐个添加真实查询。
-      // 可用的 procedure: getSubsysList（已在 loadSubsysList 中使用）
-      // 尚未实现的 procedure: getSummary, getTrend, getSubsysHeatmap, getRecentFailures,
-      //   getRegressionProgress, getDurationHistogram, getUnstableCases,
-      //   getPhasePassRate, getDebugDifficulty
-      void filter; // 后续 issue 使用
-
-      // 标记为已加载（数据为 null — 显示空状态引导提示）
-      set({
-        loadingTab: null,
-        tabData: { ...get().tabData, [tab]: null },
-        tabLoaded: { ...get().tabLoaded, [tab]: true },
-        tabError: { ...get().tabError, [tab]: undefined },
-      });
+      if (tab === 'overview') {
+        const [summaryData, subsysStatusData] = await Promise.all([
+          trpc.dashboard.getSummary.query(filter),
+          trpc.dashboard.getSubsysStatus.query(filter),
+        ]);
+        set({
+          loadingTab: null,
+          summary: summaryData,
+          subsysStatus: subsysStatusData,
+          tabLoaded: { ...get().tabLoaded, [tab]: true },
+          tabError: { ...get().tabError, [tab]: undefined },
+        });
+      } else if (tab === 'trend') {
+        const data = await trpc.dashboard.getTrend.query({
+          ...filter,
+          granularity: state.trendGranularity,
+        });
+        set({
+          loadingTab: null,
+          trend: data,
+          tabLoaded: { ...get().tabLoaded, [tab]: true },
+          tabError: { ...get().tabError, [tab]: undefined },
+        });
+      } else {
+        // 后续 issue 实现其他标签页
+        void filter;
+        set({
+          loadingTab: null,
+          tabLoaded: { ...get().tabLoaded, [tab]: true },
+          tabError: { ...get().tabError, [tab]: undefined },
+        });
+      }
     } catch (err) {
       set({
         loadingTab: null,

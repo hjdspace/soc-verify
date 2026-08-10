@@ -12,7 +12,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { t, TRPCError } from '../router-context';
 import { requireProject } from '../../services/project-service';
 import { caseStatsRegistry } from '../../case/case-stats-registry';
-import { getSubsysList } from '../../case/db/case-repository';
+import { getSubsysList, getDashboardSummary, getDashboardTrend, getSubsysStatus, getSubsysHeatmap } from '../../case/db/case-repository';
 
 // ─── 共享筛选参数验证 ───────────────────────────────────────
 
@@ -45,6 +45,82 @@ function validateFilter(raw: unknown): DashboardFilter {
 }
 
 export const dashboardRouter = t.router({
+  // ─── 概览汇总（左栏缩略 + 概览标签页） ────────────────────
+  getSummary: t.procedure
+    .input((raw): { projectId: string; subsys?: string; timeRange?: 'all' | '7d' | '30d' | { start: string; end: string } } => {
+      const f = validateFilter(raw);
+      const result: { projectId: string; subsys?: string; timeRange?: 'all' | '7d' | '30d' | { start: string; end: string } } = { projectId: f.projectId };
+      if (f.subsys) result.subsys = f.subsys;
+      if (f.timeRange) result.timeRange = f.timeRange;
+      return result;
+    })
+    .query(({ input }) => {
+      const project = requireProject(input.projectId);
+      const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
+      return getDashboardSummary(db, {
+        subsys: input.subsys,
+        timeRange: input.timeRange,
+      });
+    }),
+
+  // ─── 趋势数据（每日/每周 pass/fail/error） ─────────────────
+  getTrend: t.procedure
+    .input((raw): { projectId: string; subsys?: string; timeRange?: 'all' | '7d' | '30d' | { start: string; end: string }; granularity?: 'daily' | 'weekly' } => {
+      const f = validateFilter(raw);
+      const result: { projectId: string; subsys?: string; timeRange?: 'all' | '7d' | '30d' | { start: string; end: string }; granularity?: 'daily' | 'weekly' } = { projectId: f.projectId };
+      if (f.subsys) result.subsys = f.subsys;
+      if (f.timeRange) result.timeRange = f.timeRange;
+      const r = raw as Record<string, unknown>;
+      if (r.granularity === 'weekly' || r.granularity === 'daily') {
+        result.granularity = r.granularity;
+      }
+      return result;
+    })
+    .query(({ input }) => {
+      const project = requireProject(input.projectId);
+      const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
+      return getDashboardTrend(db, {
+        subsys: input.subsys,
+        timeRange: input.timeRange,
+        granularity: input.granularity ?? 'daily',
+      });
+    }),
+
+  // ─── 子系统状态表（概览标签页） ──────────────────────────
+  getSubsysStatus: t.procedure
+    .input((raw): { projectId: string; subsys?: string; timeRange?: 'all' | '7d' | '30d' | { start: string; end: string } } => {
+      const f = validateFilter(raw);
+      const result: { projectId: string; subsys?: string; timeRange?: 'all' | '7d' | '30d' | { start: string; end: string } } = { projectId: f.projectId };
+      if (f.subsys) result.subsys = f.subsys;
+      if (f.timeRange) result.timeRange = f.timeRange;
+      return result;
+    })
+    .query(({ input }) => {
+      const project = requireProject(input.projectId);
+      const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
+      return getSubsysStatus(db, {
+        subsys: input.subsys,
+        timeRange: input.timeRange,
+      });
+    }),
+
+  // ─── 子系统热力图（子系统标签页） ────────────────────
+  getSubsysHeatmap: t.procedure
+    .input((raw): { projectId: string; timeRange?: 'all' | '7d' | '30d' | { start: string; end: string } } => {
+      const f = validateFilter(raw);
+      const result: { projectId: string; timeRange?: 'all' | '7d' | '30d' | { start: string; end: string } } = { projectId: f.projectId };
+      // 不支持 subsys 参数——本标签页展示所有子系统分布
+      if (f.timeRange) result.timeRange = f.timeRange;
+      return result;
+    })
+    .query(({ input }) => {
+      const project = requireProject(input.projectId);
+      const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
+      return getSubsysHeatmap(db, {
+        timeRange: input.timeRange,
+      });
+    }),
+
   // ─── 子系统列表（下拉筛选） ──────────────────────────────
   getSubsysList: t.procedure
     .input((raw): { projectId: string } => {

@@ -7,6 +7,7 @@ import { FileTree } from '../project/FileTree';
 import { SubsysList } from '../project/SubsysList';
 import { cn } from '@renderer/lib/utils';
 import { PluginViewHost } from '@renderer/components/plugins/PluginViewHost';
+import { DashboardSummary } from '../dashboard/DashboardSummary';
 
 type Tab = 'files' | 'subsystems' | 'overview' | 'plugins';
 
@@ -284,6 +285,9 @@ function ProjectOverview({ projectId }: { projectId: string }) {
       <div className="mt-2 px-1 text-[11px] text-muted-foreground">
         切换到「子系统」标签查看用例列表
       </div>
+
+      {/* ─── Dashboard Summary（迷你进度条 + sparkline + 打开按钮）── */}
+      <DashboardSummary projectId={projectId} />
     </div>
   );
 }

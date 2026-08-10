@@ -2,17 +2,80 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
+// ─── Mock ECharts theme ─────────────────────────────────────
+
+const mockTheme = {
+  backgroundColor: 'transparent',
+  textColor: '#333',
+  borderColor: '#ccc',
+  mutedColor: '#999',
+  colors: ['#5470c6', '#91cc75', '#fac858', '#ee6666'],
+  statusPass: '#91cc75',
+  statusFail: '#ee6666',
+  statusError: '#ee6666',
+  statusRunning: '#73c0de',
+  toDefaults: () => ({
+    backgroundColor: 'transparent',
+    textStyle: { color: '#333' },
+    color: ['#5470c6', '#91cc75', '#fac858', '#ee6666'],
+  }),
+};
+
+vi.mock('@renderer/lib/echarts-theme', () => ({
+  getEChartsTheme: () => mockTheme,
+  onThemeChange: () => () => {},
+  startThemeObserver: () => {},
+  stopThemeObserver: () => {},
+  rebuildTheme: () => mockTheme,
+  resetThemeState: () => {},
+}));
+
+// ─── Mock ECharts component ─────────────────────────────────
+
+vi.mock('echarts-for-react', () => ({
+  default: () => React.createElement('div', { 'data-testid': 'echarts-mock' }),
+}));
+
 // ─── Mock tRPC ──────────────────────────────────────────────
 
-vi.mock('@renderer/lib/trpc', () => ({
-  trpc: {
-    dashboard: {
-      getSubsysList: { query: vi.fn().mockResolvedValue([]) },
-      saveLayout: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
-      getLayout: { query: vi.fn().mockResolvedValue(null) },
+vi.mock('@renderer/lib/trpc', () => {
+  const mockSummaryData = {
+    subsysCount: 2,
+    caseCount: 5,
+    passRate: 60.0,
+    failCount: 2,
+    trend7d: [
+      { date: '2024-01-01', pass: 1, fail: 0, error: 0 },
+      { date: '2024-01-02', pass: 0, fail: 1, error: 0 },
+      { date: '2024-01-03', pass: 2, fail: 0, error: 0 },
+      { date: '2024-01-04', pass: 0, fail: 0, error: 0 },
+      { date: '2024-01-05', pass: 1, fail: 1, error: 0 },
+      { date: '2024-01-06', pass: 0, fail: 0, error: 0 },
+      { date: '2024-01-07', pass: 1, fail: 0, error: 0 },
+    ],
+  };
+  const mockSubsysStatusData = [
+    { name: 'cpu', caseCount: 3, pass: 2, fail: 1, passRate: 66.7 },
+    { name: 'gpu', caseCount: 2, pass: 1, fail: 1, passRate: 50.0 },
+  ];
+  const mockTrendData = [
+    { date: '2024-01-01', pass: 1, fail: 0, error: 0 },
+    { date: '2024-01-02', pass: 0, fail: 1, error: 0 },
+    { date: '2024-01-03', pass: 2, fail: 1, error: 0 },
+  ];
+  return {
+    trpc: {
+      dashboard: {
+        getSubsysList: { query: vi.fn().mockResolvedValue([]) },
+        getSummary: { query: vi.fn().mockResolvedValue(mockSummaryData) },
+        getSubsysStatus: { query: vi.fn().mockResolvedValue(mockSubsysStatusData) },
+        getTrend: { query: vi.fn().mockResolvedValue(mockTrendData) },
+        saveLayout: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
+        getLayout: { query: vi.fn().mockResolvedValue(null) },
+      },
     },
-  },
-}));
+  };
+});
 
 // ─── Mock project store ─────────────────────────────────────
 
@@ -26,6 +89,7 @@ vi.mock('@renderer/stores/project', () => ({
 
 import { DashboardPanel } from '@renderer/components/dashboard/DashboardPanel';
 import { useDashboardStore } from '@renderer/stores/dashboard';
+import React from 'react';
 
 /** Reset dashboard store to initial state between tests */
 function resetDashboardStore() {
@@ -35,7 +99,10 @@ function resetDashboardStore() {
     timeRange: 'all',
     subsysList: [],
     subsysListLoading: false,
-    tabData: {},
+    summary: null,
+    subsysStatus: null,
+    trend: null,
+    trendGranularity: 'daily',
     tabLoaded: {},
     tabError: {},
     loadingTab: null,
@@ -89,6 +156,12 @@ describe('DashboardPanel', () => {
     });
 
     it('shows different empty state hint when switching tabs', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.dashboard.getSummary.query).mockResolvedValue({
+        subsysCount: 0, caseCount: 0, passRate: 0, failCount: 0, trend7d: [],
+      });
+      vi.mocked(trpc.dashboard.getTrend.query).mockResolvedValue([]);
+
       render(<DashboardPanel />);
 
       // Wait for overview tab to settle
@@ -169,7 +242,12 @@ describe('DashboardPanel', () => {
   // ─── 空状态 ───────────────────────────────────────────────
 
   describe('empty state', () => {
-    it('shows overview hint on overview tab', async () => {
+    it('shows overview hint on overview tab when no data', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.dashboard.getSummary.query).mockResolvedValue({
+        subsysCount: 0, caseCount: 0, passRate: 0, failCount: 0, trend7d: [],
+      });
+
       render(<DashboardPanel />);
       await waitFor(() => {
         expect(screen.getByText(/汇总指标卡片和子系统状态表/)).toBeTruthy();
@@ -192,6 +270,116 @@ describe('DashboardPanel', () => {
       await waitFor(() => {
         expect(screen.getByText(/调试难度散点图/)).toBeTruthy();
       });
+    });
+  });
+
+  // ─── 概览标签页内容 ─────────────────────────────────────
+
+  describe('overview tab content', () => {
+    function setupOverviewTab() {
+      useDashboardStore.setState({
+        activeTab: 'overview',
+        summary: {
+          subsysCount: 2,
+          caseCount: 5,
+          passRate: 60.0,
+          failCount: 2,
+          trend7d: [],
+        },
+        subsysStatus: [
+          { name: 'cpu', caseCount: 3, pass: 2, fail: 1, passRate: 66.7 },
+          { name: 'gpu', caseCount: 2, pass: 1, fail: 1, passRate: 50.0 },
+        ],
+        tabLoaded: { overview: true },
+        loadingTab: null,
+      });
+    }
+
+    it('renders metric cards with summary data', async () => {
+      setupOverviewTab();
+
+      render(<DashboardPanel />);
+
+      // Should show the subsysCount from mock data in a metric card
+      await waitFor(() => {
+        // subsysCount=2 and caseCount=5 should both be rendered as metric card values
+        const twos = screen.getAllByText('2');
+        expect(twos.length).toBeGreaterThanOrEqual(1);
+      });
+    });
+
+    it('renders subsystem status table with per-subsystem data', async () => {
+      setupOverviewTab();
+
+      render(<DashboardPanel />);
+
+      // Both cpu and gpu should appear in the subsystem status table
+      await waitFor(() => {
+        expect(screen.getAllByText('cpu').length).toBeGreaterThanOrEqual(1);
+      });
+      expect(screen.getAllByText('gpu').length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  // ─── 趋势标签页内容 ─────────────────────────────────────
+
+  describe('trend tab content', () => {
+    // Pre-set store state to bypass async loading timing issues
+    function setupTrendTab() {
+      useDashboardStore.setState({
+        activeTab: 'trend',
+        trend: [
+          { date: '2024-01-01', pass: 1, fail: 0, error: 0 },
+          { date: '2024-01-02', pass: 0, fail: 1, error: 0 },
+          { date: '2024-01-03', pass: 2, fail: 1, error: 0 },
+        ],
+        tabLoaded: { overview: true, trend: true },
+        summary: {
+          subsysCount: 2,
+          caseCount: 5,
+          passRate: 60.0,
+          failCount: 2,
+          trend7d: [],
+        },
+        subsysStatus: [],
+        loadingTab: null,
+      });
+    }
+
+    it('renders ECharts chart when trend data is loaded', async () => {
+      setupTrendTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('echarts-mock')).toBeTruthy();
+      });
+    });
+
+    it('renders daily/weekly granularity toggle', async () => {
+      setupTrendTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByText('每日')).toBeTruthy();
+      });
+      expect(screen.getByText('每周')).toBeTruthy();
+    });
+
+    it('switches to weekly granularity when clicked', async () => {
+      setupTrendTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByText('每日')).toBeTruthy();
+      });
+
+      fireEvent.click(screen.getByText('每周'));
+
+      // The store should have updated granularity
+      expect(useDashboardStore.getState().trendGranularity).toBe('weekly');
     });
   });
 });

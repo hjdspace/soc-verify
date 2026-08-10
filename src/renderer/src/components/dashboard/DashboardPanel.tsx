@@ -3,7 +3,8 @@
  *
  * ADR 0019: 9 个标签页 + 顶部工具栏（子系统下拉 + 时间范围 + 刷新）。
  * Issue 01: 标签页骨架 + 空状态引导提示 + 工具栏交互 + 布局持久化。
- * 后续 issue 逐个添加图表渲染。
+ * Issue 02: 概览标签页（指标卡片 + 子系统状态表）。
+ * Issue 03: 趋势标签页（ECharts 堆叠柱状图 + 日/周切换）。
  */
 
 import { useEffect, useCallback } from 'react';
@@ -12,6 +13,8 @@ import { useDashboardStore, DASHBOARD_TABS, TAB_EMPTY_HINTS, type DashboardTab }
 import { useProjectStore } from '@renderer/stores/project';
 import { cn } from '@renderer/lib/utils';
 import { startThemeObserver, stopThemeObserver } from '@renderer/lib/echarts-theme';
+import { OverviewTab } from './OverviewTab';
+import { TrendTab } from './TrendTab';
 
 const TIME_RANGE_OPTIONS: { value: 'all' | '7d' | '30d'; label: string }[] = [
   { value: 'all', label: '全部' },
@@ -31,6 +34,8 @@ export function DashboardPanel() {
   const tabLoaded = useDashboardStore((s) => s.tabLoaded);
   const tabError = useDashboardStore((s) => s.tabError);
   const layoutLoaded = useDashboardStore((s) => s.layoutLoaded);
+  const summary = useDashboardStore((s) => s.summary);
+  const trend = useDashboardStore((s) => s.trend);
 
   const setActiveTab = useDashboardStore((s) => s.setActiveTab);
   const setSubsys = useDashboardStore((s) => s.setSubsys);
@@ -115,6 +120,12 @@ export function DashboardPanel() {
   const error = tabError[activeTab];
   const hasData = tabLoaded[activeTab] && !error;
 
+  // ─── 判断当前标签页是否有实际数据 ─────────────────────────
+  const hasTabData =
+    (activeTab === 'overview' && summary !== null && summary.caseCount > 0) ||
+    (activeTab === 'trend' && trend !== null && trend.length > 0) ||
+    (activeTab !== 'overview' && activeTab !== 'trend');
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* ─── 工具栏 ────────────────────────────────────────── */}
@@ -191,8 +202,9 @@ export function DashboardPanel() {
           <div className="flex h-full items-center justify-center text-xs text-destructive">
             加载失败: {error}
           </div>
-        ) : hasData ? (
-          // 后续 issue 在此渲染图表。当前显示空状态引导提示。
+        ) : hasData && hasTabData ? (
+          activeTab === 'overview' ? <OverviewTab /> :
+          activeTab === 'trend' ? <TrendTab /> :
           <EmptyState hint={TAB_EMPTY_HINTS[activeTab]} />
         ) : (
           <EmptyState hint={TAB_EMPTY_HINTS[activeTab]} />
