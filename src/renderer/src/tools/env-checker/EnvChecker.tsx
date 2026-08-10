@@ -2,20 +2,38 @@
  * EnvChecker — verification environment force/wait statement checker.
  *
  * Ported from the Python `env_checker_one_touch` plugin.
- * Features: subsystem discovery, force/wait scanning, code preview,
- * confirmation marking, HTML report export.
+ * Features: subsystem discovery from $PROJ_ENV, force/wait scanning,
+ * code preview with context + syntax highlighting, gvim open,
+ * confirmation marking, suspicious item marking, HTML report export.
+ *
+ * Layout: vertical split (file list on top, preview on bottom)
+ * to ensure long file paths are always visible.
  */
 
-import { useState, useCallback, useEffect } from 'react';
-import { FolderOpen, Play, Square, FileText, CheckCircle, PackageCheck, Download } from 'lucide-react';
+import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import {
+  FolderOpen,
+  Play,
+  FileText,
+  CheckCircle,
+  PackageCheck,
+  Download,
+  ExternalLink,
+  Flag,
+  X,
+} from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import type { ToolComponentProps } from '../registry';
 import { cn } from '@renderer/lib/utils';
 
+// ── Types ──────────────────────────────────────────────────────────
+
+type ScanMatch = { line: number; statement: string };
+
 type FileResult = {
   path: string;
   count: number;
-  lines: { line: number; statement: string }[];
+  lines: ScanMatch[];
 };
 
 type ScanResult = {
@@ -25,24 +43,282 @@ type ScanResult = {
 
 type Tab = 'force' | 'wait';
 
+type PreviewLine = {
+  lineNo: number;
+  content: string;
+  isMatch: boolean;
+};
+
+type PreviewSection = {
+  matchLine: number;
+  lines: PreviewLine[];
+};
+
+type PreviewResult = {
+  filePath: string;
+  sections: PreviewSection[];
+};
+
+// ── Verilog syntax highlighting ────────────────────────────────────
+
+const SV_KEYWORDS = new Set([
+  'module', 'endmodule', 'begin', 'end', 'if', 'else', 'case', 'endcase',
+  'casex', 'casez', 'always', 'assign', 'initial', 'wire', 'reg', 'logic',
+  'input', 'output', 'inout', 'parameter', 'localparam', 'generate', 'endgenerate',
+  'integer', 'real', 'time', 'function', 'endfunction', 'task', 'endtask',
+  'for', 'while', 'repeat', 'forever', 'fork', 'join', 'join_any', 'join_none',
+  'posedge', 'negedge', 'or', 'and', 'not', 'class', 'endclass', 'package',
+  'endpackage', 'import', 'export', 'virtual', 'static', 'automatic',
+  'typedef', 'struct', 'union', 'enum', 'return', 'break', 'continue',
+  'force', 'wait', 'release', 'deassign', 'disable',
+]);
+
+const SV_TYPES = new Set([
+  'bit', 'byte', 'shortint', 'int', 'longint', 'shortreal', 'string',
+  'event', 'chandle', 'void',
+]);
+
+/** Tokenize a single line of Verilog/SystemVerilog and return highlighted React nodes. */
+function highlightVerilog(line: string, isMatchLine: boolean): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let i = 0;
+  let key = 0;
+
+  while (i < line.length) {
+    // Line comment
+    if (line[i] === '/' && line[i + 1] === '/') {
+      nodes.push(
+        <span key={key++} className="text-muted-foreground/60 italic">
+          {line.slice(i)}
+        </span>,
+      );
+      break;
+    }
+
+    // String literal
+    if (line[i] === '"') {
+      let end = i + 1;
+      while (end < line.length && line[end] !== '"') {
+        if (line[end] === '\\') end++;
+        end++;
+      }
+      end++;
+      nodes.push(
+        <span key={key++} className="text-green-600 dark:text-green-400">
+          {line.slice(i, end)}
+        </span>,
+      );
+      i = end;
+      continue;
+    }
+
+    // Number (including sized literals like 8'hFF, 'b1010)
+    if (/[0-9']/.test(line[i]) && (i === 0 || /[\s;,:(]/.test(line[i - 1]))) {
+      let end = i;
+      // Check for sized literal: size 'base value
+      const sizedMatch = line.slice(i).match(/^(\d+)\s*'[bdhBDH][0-9a-fA-FxXzZ_]+/);
+      if (sizedMatch) {
+        end = i + sizedMatch[0].length;
+      } else {
+        const numMatch = line.slice(i).match(/^[0-9][0-9a-fA-FxXzZ_]*h/);
+        if (numMatch) {
+          end = i + numMatch[0].length;
+        } else {
+          while (end < line.length && /[0-9a-fA-FxXzZ_]/.test(line[end])) end++;
+        }
+      }
+      nodes.push(
+        <span key={key++} className="text-orange-600 dark:text-orange-400">
+          {line.slice(i, end)}
+        </span>,
+      );
+      i = end;
+      continue;
+    }
+
+    // Identifier / keyword
+    if (/[a-zA-Z_]/.test(line[i])) {
+      let end = i;
+      while (end < line.length && /[a-zA-Z0-9_$]/.test(line[end])) end++;
+      const word = line.slice(i, end);
+
+      if (SV_KEYWORDS.has(word)) {
+        nodes.push(
+          <span
+            key={key++}
+            className={cn(
+              'font-semibold',
+              isMatchLine && (word === 'force' || word === 'wait')
+                ? 'text-red-600 dark:text-red-400 underline'
+                : 'text-blue-600 dark:text-blue-400',
+            )}
+          >
+            {word}
+          </span>,
+        );
+      } else if (SV_TYPES.has(word)) {
+        nodes.push(
+          <span key={key++} className="text-purple-600 dark:text-purple-400">
+            {word}
+          </span>,
+        );
+      } else if (/^\$/.test(word)) {
+        // System task/function call like $display
+        nodes.push(
+          <span key={key++} className="text-cyan-600 dark:text-cyan-400">
+            {word}
+          </span>,
+        );
+      } else {
+        nodes.push(<span key={key++}>{word}</span>);
+      }
+      i = end;
+      continue;
+    }
+
+    // Operator or punctuation
+    if (/[{}[\]();,]/.test(line[i])) {
+      nodes.push(
+        <span key={key++} className="text-muted-foreground">
+          {line[i]}
+        </span>,
+      );
+      i++;
+      continue;
+    }
+
+    // Default: single character
+    nodes.push(<span key={key++}>{line[i]}</span>);
+    i++;
+  }
+
+  return nodes;
+}
+
+// ── Prompt dialog (replaces window.prompt which doesn't work in Electron) ──
+
+function PromptDialog({
+  title,
+  label,
+  defaultValue,
+  onSubmit,
+  onCancel,
+}: {
+  title: string;
+  label: string;
+  defaultValue: string;
+  onSubmit: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(defaultValue);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  const handleSubmit = useCallback(
+    (e: React.FormEvent) => {
+      e.preventDefault();
+      onSubmit(value);
+    },
+    [value, onSubmit],
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onCancel}>
+      <form
+        onSubmit={handleSubmit}
+        onClick={(e) => e.stopPropagation()}
+        className="w-96 rounded-lg border border-border bg-background p-4 shadow-xl"
+      >
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-sm font-semibold">{title}</h3>
+          <button type="button" onClick={onCancel} className="text-muted-foreground hover:text-foreground">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <label className="mb-1 block text-xs text-muted-foreground">{label}</label>
+        <input
+          ref={inputRef}
+          type="text"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          className="mb-3 w-full rounded border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded border border-border px-3 py-1.5 text-xs hover:bg-accent"
+          >
+            取消
+          </button>
+          <button
+            type="submit"
+            className="rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90"
+          >
+            确认
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ── Main component ─────────────────────────────────────────────────
+
 export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentProps) {
+  const [resolvedProjEnv, setResolvedProjEnv] = useState<string | null>(null);
+  const [effectiveRoot, setEffectiveRoot] = useState<string | null>(projectRoot);
   const [subsystems, setSubsystems] = useState<string[]>([]);
   const [selectedSubsys, setSelectedSubsys] = useState('');
   const [scanning, setScanning] = useState(false);
   const [results, setResults] = useState<ScanResult>({ force: [], wait: [] });
   const [activeTab, setActiveTab] = useState<Tab>('force');
   const [selectedFile, setSelectedFile] = useState<FileResult | null>(null);
-  const [previewContent, setPreviewContent] = useState('');
+  const [preview, setPreview] = useState<PreviewResult | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [status, setStatus] = useState('就绪');
 
-  // Discover subsystems when project root changes
+  // Track confirmed and suspicious files
+  const [confirmedFiles, setConfirmedFiles] = useState<Set<string>>(new Set());
+  const [suspiciousFiles, setSuspiciousFiles] = useState<Set<string>>(new Set());
+
+  // Prompt dialog state
+  const [promptConfig, setPromptConfig] = useState<{
+    title: string;
+    label: string;
+    onSubmit: (value: string) => void;
+  } | null>(null);
+
+  // Resolve $PROJ_ENV on mount if no projectRoot
   useEffect(() => {
-    if (!projectRoot) {
+    if (projectRoot) {
+      setEffectiveRoot(projectRoot);
+      return;
+    }
+    // Try to resolve $PROJ_ENV
+    trpc.tools.envChecker.resolveProjEnv
+      .query({ projectDir: '' })
+      .then((res) => {
+        if (res.path) {
+          setResolvedProjEnv(res.path);
+          setEffectiveRoot(res.path);
+        }
+      })
+      .catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Discover subsystems when effective root changes
+  useEffect(() => {
+    if (!effectiveRoot) {
       setSubsystems([]);
       return;
     }
     trpc.tools.envChecker.discoverSubsystems
-      .query({ projectRoot })
+      .query({ projectRoot: effectiveRoot })
       .then((res) => {
         setSubsystems(res.subsystems);
         if (res.subsystems.length > 0 && !selectedSubsys) {
@@ -50,26 +326,34 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
         }
       })
       .catch(() => setSubsystems([]));
-  }, [projectRoot]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [effectiveRoot]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const displayPath = effectiveRoot ?? resolvedProjEnv ?? projectRoot ?? '未设置';
 
   const handleSelectDirectory = useCallback(async () => {
     const result = await trpc.tools.selectDirectory.mutate({
       title: '选择项目根目录',
-      defaultPath: projectRoot ?? undefined,
+      defaultPath: effectiveRoot ?? undefined,
     });
     if (result.path) {
+      setEffectiveRoot(result.path);
       onProjectRootChange(result.path);
+      setSelectedSubsys('');
     }
-  }, [projectRoot, onProjectRootChange]);
+  }, [effectiveRoot, onProjectRootChange]);
 
   const handleScan = useCallback(async () => {
-    if (!projectRoot || !selectedSubsys) return;
+    if (!effectiveRoot || !selectedSubsys) return;
     setScanning(true);
     setStatus('扫描中...');
     setResults({ force: [], wait: [] });
+    setSelectedFile(null);
+    setPreview(null);
+    setConfirmedFiles(new Set());
+    setSuspiciousFiles(new Set());
     try {
       const res = await trpc.tools.envChecker.scan.mutate({
-        projectRoot,
+        projectRoot: effectiveRoot,
         subsys: selectedSubsys,
       });
       setResults(res);
@@ -79,47 +363,109 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
     } finally {
       setScanning(false);
     }
-  }, [projectRoot, selectedSubsys]);
+  }, [effectiveRoot, selectedSubsys]);
 
-  const handlePreview = useCallback((file: FileResult) => {
+  // Preview file with context
+  const handlePreview = useCallback(async (file: FileResult) => {
     setSelectedFile(file);
-    const lines = file.lines.map((l) => `===== 行 ${l.line} =====\n${l.statement}`).join('\n\n');
-    setPreviewContent(lines);
+    setPreviewLoading(true);
+    setPreview(null);
+    try {
+      const res = await trpc.tools.envChecker.previewFile.query({
+        filePath: file.path,
+        matches: file.lines,
+      });
+      setPreview(res);
+    } catch (err) {
+      setStatus(`预览失败: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setPreviewLoading(false);
+    }
   }, []);
 
-  const handleConfirm = useCallback(async (file: FileResult) => {
-    const comment = window.prompt('请输入确认信息 (如: Confirmed by xxx):', '');
-    if (comment === null) return;
-    try {
-      await trpc.tools.envChecker.confirm.mutate({
-        filePath: file.path,
-        checkType: activeTab,
-        comment,
-      });
-      setStatus(`已标记 ${file.path}`);
-    } catch (err) {
-      setStatus(`标记失败: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }, [activeTab]);
-
-  const handleBatchConfirm = useCallback(async () => {
-    const comment = window.prompt('请输入确认信息 (如: Confirmed by xxx):', '');
-    if (comment === null) return;
-    const files = results[activeTab];
-    for (const file of files) {
+  // Open file in gvim
+  const handleOpenFile = useCallback(
+    async (filePath: string, lineNumber?: number) => {
       try {
-        await trpc.tools.envChecker.confirm.mutate({
-          filePath: file.path,
-          checkType: activeTab,
-          comment,
+        await trpc.tools.envChecker.openFile.mutate({
+          filePath,
+          lineNumber: lineNumber ?? null,
         });
+        setStatus(`已打开文件: ${filePath.split(/[/\\]/).pop()}`);
       } catch (err) {
-        console.error(`Failed to confirm ${file.path}:`, err);
+        setStatus(`打开文件失败: ${err instanceof Error ? err.message : String(err)}`);
       }
-    }
-    setStatus(`批量标记完成: ${files.length} 个文件`);
-  }, [results, activeTab]);
+    },
+    [],
+  );
 
+  // Confirm marking (replaces window.prompt with custom dialog)
+  const handleConfirm = useCallback(
+    (file: FileResult) => {
+      setPromptConfig({
+        title: '确认标记',
+        label: '请输入确认信息 (如: Confirmed by xxx):',
+        onSubmit: async (comment: string) => {
+          setPromptConfig(null);
+          try {
+            await trpc.tools.envChecker.confirm.mutate({
+              filePath: file.path,
+              checkType: activeTab,
+              comment,
+            });
+            setConfirmedFiles((prev) => new Set(prev).add(file.path));
+            setStatus(`已标记 ${file.path.split(/[/\\]/).pop()}`);
+          } catch (err) {
+            setStatus(`标记失败: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        },
+      });
+    },
+    [activeTab],
+  );
+
+  // Batch confirm
+  const handleBatchConfirm = useCallback(() => {
+    setPromptConfig({
+      title: '批量确认',
+      label: '请输入确认信息 (如: Confirmed by xxx):',
+      onSubmit: async (comment: string) => {
+        setPromptConfig(null);
+        const files = results[activeTab];
+        const newConfirmed = new Set(confirmedFiles);
+        for (const file of files) {
+          if (confirmedFiles.has(file.path)) continue;
+          try {
+            await trpc.tools.envChecker.confirm.mutate({
+              filePath: file.path,
+              checkType: activeTab,
+              comment,
+            });
+            newConfirmed.add(file.path);
+          } catch (err) {
+            console.error(`Failed to confirm ${file.path}:`, err);
+          }
+        }
+        setConfirmedFiles(newConfirmed);
+        setStatus(`批量标记完成: ${files.length} 个文件`);
+      },
+    });
+  }, [results, activeTab, confirmedFiles]);
+
+  // Toggle suspicious marking
+  const handleToggleSuspicious = useCallback((filePath: string) => {
+    setSuspiciousFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(filePath)) {
+        next.delete(filePath);
+      } else {
+        next.add(filePath);
+      }
+      return next;
+    });
+  }, []);
+
+  // Export report
   const handleExport = useCallback(async () => {
     if (!selectedSubsys) return;
     const result = await trpc.tools.saveFileDialog.mutate({
@@ -145,22 +491,38 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
   const waitCount = results.wait.length;
 
   return (
-    <div className="flex h-full flex-col gap-3 p-4">
-      {/* ── Header: project path + subsystem + actions ── */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">项目路径:</span>
-          <span className="max-w-[300px] truncate text-xs font-medium">{projectRoot ?? '未设置'}</span>
+    <div className="flex h-full flex-col gap-2 p-3">
+      {/* Prompt dialog */}
+      {promptConfig && (
+        <PromptDialog
+          title={promptConfig.title}
+          label={promptConfig.label}
+          defaultValue=""
+          onSubmit={promptConfig.onSubmit}
+          onCancel={() => setPromptConfig(null)}
+        />
+      )}
+
+      {/* ── Header: project path + subsystem + scan ── */}
+      <div className="flex flex-wrap items-center gap-3 rounded border border-border p-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <span className="shrink-0 text-xs text-muted-foreground">项目路径:</span>
+          <span
+            className="min-w-0 flex-1 truncate text-xs font-medium"
+            title={displayPath}
+          >
+            {displayPath}
+          </span>
           <button
             onClick={handleSelectDirectory}
-            className="flex items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-accent"
+            className="flex shrink-0 items-center gap-1 rounded border border-border px-2 py-1 text-xs hover:bg-accent"
           >
             <FolderOpen className="h-3 w-3" /> 选择
           </button>
         </div>
 
         <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">子系统:</span>
+          <span className="shrink-0 text-xs text-muted-foreground">子系统:</span>
           <select
             value={selectedSubsys}
             onChange={(e) => setSelectedSubsys(e.target.value)}
@@ -174,11 +536,11 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
 
         <button
           onClick={handleScan}
-          disabled={scanning || !selectedSubsys}
-          className="flex items-center gap-1 rounded bg-primary px-3 py-1 text-xs text-primary-foreground disabled:opacity-50"
+          disabled={scanning || !selectedSubsys || !effectiveRoot}
+          className="flex shrink-0 items-center gap-1 rounded bg-primary px-3 py-1 text-xs text-primary-foreground disabled:opacity-50"
         >
-          {scanning ? <Square className="h-3 w-3" /> : <Play className="h-3 w-3" />}
-          {scanning ? '扫描中' : '扫描'}
+          <Play className="h-3 w-3" />
+          {scanning ? '扫描中...' : '扫描'}
         </button>
       </div>
 
@@ -208,13 +570,13 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
         </button>
       </div>
 
-      {/* ── Main content: file list + preview ── */}
-      <div className="flex min-h-0 flex-1 gap-3">
-        {/* File list */}
-        <div className="flex w-1/2 flex-col">
-          <div className="flex items-center justify-between pb-2">
+      {/* ── Main content: vertical split (file list on top, preview on bottom) ── */}
+      <div className="flex min-h-0 flex-1 flex-col gap-2">
+        {/* Top: File list */}
+        <div className="flex min-h-0 flex-1 flex-col rounded border border-border">
+          <div className="flex items-center justify-between border-b border-border bg-muted/30 px-2 py-1">
             <span className="text-xs font-medium text-muted-foreground">文件列表</span>
-            <div className="flex gap-2">
+            <div className="flex gap-1">
               <button
                 onClick={handleBatchConfirm}
                 disabled={currentResults.length === 0}
@@ -231,58 +593,192 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
               </button>
             </div>
           </div>
-          <div className="min-h-0 flex-1 overflow-auto rounded border border-border">
+          <div className="min-h-0 flex-1 overflow-auto">
             {currentResults.length === 0 ? (
               <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
                 {scanning ? '扫描中...' : '暂无数据'}
               </div>
             ) : (
-              <ul className="divide-y divide-border">
-                {currentResults.map((file) => (
-                  <li
-                    key={file.path}
-                    onClick={() => handlePreview(file)}
-                    className={cn(
-                      'flex cursor-pointer items-center justify-between px-3 py-2 text-xs transition-colors hover:bg-accent',
-                      selectedFile?.path === file.path && 'bg-accent',
-                    )}
-                  >
-                    <span className="truncate" title={file.path}>{file.path}</span>
-                    <span className="ml-2 shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px]">
-                      {file.count} 处
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-muted/50">
+                  <tr className="text-left">
+                    <th className="px-2 py-1 w-8"></th>
+                    <th className="px-2 py-1">文件路径</th>
+                    <th className="px-2 py-1 text-center w-16">数量</th>
+                    <th className="px-2 py-1 text-center w-20">状态</th>
+                    <th className="px-2 py-1 text-center w-16">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {currentResults.map((file) => {
+                    const isConfirmed = confirmedFiles.has(file.path);
+                    const isSuspicious = suspiciousFiles.has(file.path);
+                    return (
+                      <tr
+                        key={file.path}
+                        onClick={() => handlePreview(file)}
+                        className={cn(
+                          'cursor-pointer border-b border-border/50 hover:bg-accent/30',
+                          selectedFile?.path === file.path && 'bg-accent/50',
+                          isConfirmed && 'opacity-50',
+                        )}
+                      >
+                        <td className="px-2 py-1 text-center">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleSuspicious(file.path);
+                            }}
+                            title={isSuspicious ? '取消可疑标记' : '标记为可疑'}
+                            className={cn(
+                              'inline-flex h-4 w-4 items-center justify-center rounded',
+                              isSuspicious
+                                ? 'text-red-500'
+                                : 'text-muted-foreground/30 hover:text-red-500',
+                            )}
+                          >
+                            <Flag className="h-3 w-3" fill={isSuspicious ? 'currentColor' : 'none'} />
+                          </button>
+                        </td>
+                        <td className="px-2 py-1">
+                          <span
+                            className={cn(
+                              'block truncate',
+                              isConfirmed && 'text-muted-foreground line-through',
+                              isSuspicious && !isConfirmed && 'text-red-600 dark:text-red-400 font-medium',
+                            )}
+                            title={file.path}
+                          >
+                            {file.path}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1 text-center">
+                          <span
+                            className={cn(
+                              'rounded px-1.5 py-0.5 text-[10px]',
+                              isSuspicious
+                                ? 'bg-red-500/15 text-red-600 dark:text-red-400'
+                                : 'bg-muted',
+                            )}
+                          >
+                            {file.count} 处
+                          </span>
+                        </td>
+                        <td className="px-2 py-1 text-center">
+                          {isConfirmed && (
+                            <span className="text-[10px] text-green-600 dark:text-green-400">已确认</span>
+                          )}
+                          {isSuspicious && !isConfirmed && (
+                            <span className="text-[10px] text-red-600 dark:text-red-400">可疑</span>
+                          )}
+                          {!isConfirmed && !isSuspicious && (
+                            <span className="text-[10px] text-muted-foreground">待处理</span>
+                          )}
+                        </td>
+                        <td className="px-2 py-1 text-center">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleConfirm(file);
+                            }}
+                            disabled={isConfirmed}
+                            title="确认标记"
+                            className="inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:text-foreground disabled:opacity-30"
+                          >
+                            <CheckCircle className="h-3 w-3" />
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             )}
           </div>
         </div>
 
-        {/* Preview + actions */}
-        <div className="flex w-1/2 flex-col">
-          <div className="flex items-center justify-between pb-2">
-            <span className="text-xs font-medium text-muted-foreground">代码预览</span>
+        {/* Bottom: Code preview with context + syntax highlighting */}
+        <div className="flex min-h-0 flex-1 flex-col rounded border border-border">
+          <div className="flex items-center justify-between border-b border-border bg-muted/30 px-2 py-1">
+            <span className="text-xs font-medium text-muted-foreground">
+              代码预览
+              {selectedFile && (
+                <span className="ml-2 text-foreground/70" title={selectedFile.path}>
+                  {selectedFile.path.split(/[/\\]/).pop()}
+                </span>
+              )}
+            </span>
             {selectedFile && (
-              <div className="flex gap-2">
+              <div className="flex items-center gap-1">
                 <button
-                  onClick={() => handleConfirm(selectedFile)}
+                  onClick={() => handleOpenFile(selectedFile.path)}
                   className="flex items-center gap-1 rounded border border-border px-2 py-0.5 text-xs hover:bg-accent"
+                  title="用 gvim 打开文件"
                 >
-                  <CheckCircle className="h-3 w-3" /> 确认标记
+                  <ExternalLink className="h-3 w-3" /> gvim 打开
                 </button>
               </div>
             )}
           </div>
-          <pre className="min-h-0 flex-1 overflow-auto rounded border border-border bg-muted/30 p-3 text-xs font-mono">
-            {previewContent || '选择文件查看预览'}
-          </pre>
+          <div className="min-h-0 flex-1 overflow-auto bg-muted/10 font-mono text-xs">
+            {!selectedFile && (
+              <div className="flex h-full items-center justify-center text-muted-foreground">
+                选择文件查看预览
+              </div>
+            )}
+            {selectedFile && previewLoading && (
+              <div className="flex h-full items-center justify-center text-muted-foreground">
+                加载中...
+              </div>
+            )}
+            {selectedFile && preview && !previewLoading && (
+              <div className="p-2">
+                {preview.sections.map((section, si) => (
+                  <div key={si} className="mb-3">
+                    <div className="mb-1 border-b border-border/50 pb-0.5 text-[10px] font-semibold text-muted-foreground">
+                      ──── 匹配行 {section.matchLine} ────
+                    </div>
+                    {section.lines.map((ln) => (
+                      <div
+                        key={ln.lineNo}
+                        className={cn(
+                          'flex items-start hover:bg-accent/20',
+                          ln.isMatch && 'bg-red-500/10',
+                        )}
+                      >
+                        <button
+                          onClick={() => handleOpenFile(preview.filePath, ln.lineNo)}
+                          className="w-12 shrink-0 select-none py-0.5 pr-2 text-right text-[10px] text-muted-foreground/60 hover:text-primary hover:underline"
+                          title="用 gvim 打开并跳转到此行"
+                        >
+                          {ln.isMatch ? `>${ln.lineNo}` : ` ${ln.lineNo}`}
+                        </button>
+                        <span className="select-none py-0.5 pr-2 text-muted-foreground/30">
+                          {'│'}
+                        </span>
+                        <code className="whitespace-pre-wrap break-all py-0.5 pr-2">
+                          {highlightVerilog(ln.content, ln.isMatch)}
+                        </code>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       {/* ── Status bar ── */}
-      <div className="flex items-center gap-2 border-t border-border pt-2 text-xs text-muted-foreground">
+      <div className="flex items-center gap-2 border-t border-border pt-1 text-xs text-muted-foreground">
         <FileText className="h-3 w-3" />
         <span>{status}</span>
+        {suspiciousFiles.size > 0 && (
+          <span className="ml-auto flex items-center gap-1 text-red-500">
+            <Flag className="h-3 w-3" fill="currentColor" />
+            可疑项: {suspiciousFiles.size}
+          </span>
+        )}
       </div>
     </div>
   );
