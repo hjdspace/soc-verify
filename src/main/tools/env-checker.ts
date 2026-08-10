@@ -6,17 +6,26 @@
  * Ported from the Python `env_checker_one_touch` plugin.
  */
 
-import { readFile, writeFile, readdir } from 'node:fs/promises';
+import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join } from 'node:path';
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 
 // ── Regex patterns (ported from Python) ────────────────────────────
 
-// Matches `force` keyword (but not in comments). Also matches special
-// force macros like `sprd_hld_force` and `uvm_hld_force`.
-const FORCE_PATTERN = /(?!\/\/.*)(\bforce\b|sprd_hld_force|uvm_hld_force)/;
-const WAIT_PATTERN = /(?!\/\/.*)\bwait\b/;
+// Matches `force` assignment statements (but not in comments).
+// Requires `force <signal> = <value>;` pattern (case-insensitive).
+// Also matches special force macros like `sprd_hld_force` and `uvm_hld_force`.
+const FORCE_PATTERN = /(?!\/\/.*)(\s*\bforce\b\s+.*\s*=\s*.*\s*;|sprd_hld_force|uvm_hld_force)/i;
+
+// Matches `wait(...)` statements (but not in comments), case-insensitive.
+// Requires parentheses with at least one argument.
+const WAIT_PATTERN = /(?!\/\/.*)\bwait\b\s*\(.*\)/i;
+
+// Matches wait statements that use init_done signals — these are filtered out
+// (not considered suspicious). Ported from Python's `init_done` pattern.
+const INIT_DONE_PATTERN = /^\s*wait\s*\(\s*(`INIT_DONE|`CHIP_INIT_DONE|`SIG_CHIP_INIT_DONE|(ipv_soc_if|tb_top|`HIER_TOP)\.(chip|systba)_init_done).*\);/;
 
 /** Environment variable pattern for expanding $VAR and ${VAR} in filter files. */
 const ENV_VAR_PATTERN = /\$\{([^}]+)\}|\$([a-zA-Z_][a-zA-Z0-9_]*)/g;
@@ -136,6 +145,12 @@ async function scanFile(
     if (!statementBuffer) {
       statementStartLine = lineNum;
     }
+
+    // Bug fix: adjust start line to where `wait` or `force` keyword actually appears
+    if (line.includes('wait') || line.includes('force')) {
+      statementStartLine = lineNum;
+    }
+
     statementBuffer += ' ' + trimmed;
 
     // If statement not complete (no semicolon), continue to next line
@@ -149,7 +164,12 @@ async function scanFile(
       });
     }
 
-    if (WAIT_PATTERN.test(statementBuffer) && !statementBuffer.includes('WAIT_CHECK')) {
+    // Bug fix: filter out wait statements using init_done signals
+    if (
+      WAIT_PATTERN.test(statementBuffer) &&
+      !statementBuffer.includes('WAIT_CHECK') &&
+      !INIT_DONE_PATTERN.test(line)
+    ) {
       waitMatches.push({
         line: statementStartLine,
         statement: statementBuffer.trim(),
@@ -209,11 +229,11 @@ export async function scanSubsys(
   // Scan files sequentially (can be parallelized later if needed)
   for (let i = 0; i < allFiles.length; i++) {
     const filePath = allFiles[i];
-    const relPath = relative(projectRoot, filePath);
 
     const { force, wait } = await scanFile(filePath);
 
-    if (force.length > 0 && !filters.force.has(relPath)) {
+    // Bug fix: use absolute file path for filter comparison (matching Python's is_filtered)
+    if (force.length > 0 && !filters.force.has(filePath)) {
       forceResults.push({
         path: filePath,
         count: force.length,
@@ -221,7 +241,7 @@ export async function scanSubsys(
       });
     }
 
-    if (wait.length > 0 && !filters.wait.has(relPath)) {
+    if (wait.length > 0 && !filters.wait.has(filePath)) {
       waitResults.push({
         path: filePath,
         count: wait.length,
@@ -282,7 +302,7 @@ export async function discoverSubsystems(
 
 /**
  * Load filter files for a subsystem.
- * Filter files have extensions `.force_filter` and `.wait.filter`.
+ * Filter files have extensions `.force.filter` and `.wait.filter`.
  * Environment variables in filter entries are expanded (matching Python behavior).
  */
 export async function loadFilters(
@@ -292,9 +312,10 @@ export async function loadFilters(
   const force = new Set<string>();
   const wait = new Set<string>();
 
+  // Bug fix: Python uses `env_check` (not `env_checker`)
   const filterDirs = [
-    join(projectRoot, subsys, 'env_checker'),
-    join(projectRoot, 'udtb', subsys, 'env_checker'),
+    join(projectRoot, subsys, 'env_check'),
+    join(projectRoot, 'udtb', subsys, 'env_check'),
   ];
 
   for (const dir of filterDirs) {
@@ -313,7 +334,8 @@ export async function loadFilters(
         if (!trimmed) continue;
         // Expand environment variables (matching Python's expand_env_vars)
         const expanded = expandEnvVars(trimmed);
-        if (file.endsWith('.force_filter')) {
+        // Bug fix: Python uses `.force.filter` (not `.force_filter`)
+        if (file.endsWith('.force.filter')) {
           force.add(expanded);
         } else if (file.endsWith('.wait.filter')) {
           wait.add(expanded);
@@ -378,7 +400,9 @@ export async function addCheckComment(
     if (pattern.test(statementBuffer) && !statementBuffer.includes(checkTag)) {
       const lastIdx = statementLines[statementLines.length - 1];
       const suffix = comment ? ` // ${checkTag}(${comment})` : ` // ${checkTag}`;
-      lines[lastIdx] = lines[lastIdx].replace(/\n?$/, '') + suffix + '\n';
+      // Bug fix: use rstrip-like behavior to handle \r\n (Windows) line endings.
+      // Also fix: don't add extra \n (join already adds \n between lines).
+      lines[lastIdx] = lines[lastIdx].replace(/\s+$/, '') + suffix;
       modified = true;
     }
 
@@ -530,4 +554,37 @@ function escapeHtml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// ── Suspicious marks persistence ─────────────────────────────────────
+
+export type SuspiciousMarks = {
+  force: string[];
+  wait: string[];
+};
+
+const SUSPICIOUS_DIR = join(homedir(), '.socverify');
+const SUSPICIOUS_FILE = join(SUSPICIOUS_DIR, 'env-check-suspicious.json');
+
+/** Load suspicious marks from the persistence file. */
+export async function loadSuspiciousMarks(): Promise<SuspiciousMarks> {
+  if (!existsSync(SUSPICIOUS_FILE)) {
+    return { force: [], wait: [] };
+  }
+  try {
+    const content = await readFile(SUSPICIOUS_FILE, 'utf-8');
+    const data = JSON.parse(content) as Partial<SuspiciousMarks>;
+    return {
+      force: Array.isArray(data.force) ? data.force : [],
+      wait: Array.isArray(data.wait) ? data.wait : [],
+    };
+  } catch {
+    return { force: [], wait: [] };
+  }
+}
+
+/** Save suspicious marks to the persistence file. */
+export async function saveSuspiciousMarks(marks: SuspiciousMarks): Promise<void> {
+  await mkdir(SUSPICIOUS_DIR, { recursive: true });
+  await writeFile(SUSPICIOUS_FILE, JSON.stringify(marks, null, 2), 'utf-8');
 }
