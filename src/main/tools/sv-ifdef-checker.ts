@@ -47,13 +47,40 @@ export type CheckSummary = {
   totalInline: number;
 };
 
-// ── Regex patterns (match the Python originals) ─────────────────────
+// ── Regex patterns ───────────────────────────────────────────────
 
-const ifdefPattern = /`(ifdef|ifndef)\s+(\w+)/i;
-const endifPattern = /`endif/i;
-const inlinePattern = /`(ifdef|ifndef)\s+(\w+).*?`endif/gi;
+/**
+ * Match all preprocessor directives on a line in order of appearance.
+ * Captures: `ifdef MACRO, `ifndef MACRO, `endif
+ */
+const directivePattern = /`(ifdef|ifndef|endif)(?:\s+(\w+))?/gi;
 
 // ── Core logic ─────────────────────────────────────────────────────
+
+/**
+ * Find all preprocessor directives on a line in order of appearance.
+ * Returns an array of { type, condition?, position } for each directive.
+ */
+type Directive = {
+  type: 'ifdef' | 'ifndef' | 'endif';
+  condition: string;
+  position: number;
+};
+
+function findDirectivesOnLine(line: string): Directive[] {
+  const directives: Directive[] = [];
+  const re = new RegExp(directivePattern);
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(line)) !== null) {
+    const directive = match[1].toLowerCase() as 'ifdef' | 'ifndef' | 'endif';
+    directives.push({
+      type: directive,
+      condition: directive === 'endif' ? '' : (match[2] ?? ''),
+      position: match.index,
+    });
+  }
+  return directives;
+}
 
 /** Check a single SV file for ifdef/endif balance. */
 export async function checkFile(filePath: string): Promise<CheckResult> {
@@ -115,56 +142,42 @@ export async function checkFile(filePath: string): Promise<CheckResult> {
       if (!line) continue;
     }
 
-    // Check inline ifdef...endif (same line)
-    const inlineMatches: RegExpMatchArray[] = [];
-    let m: RegExpExecArray | null;
-    const inlineRe = new RegExp(inlinePattern);
-    while ((m = inlineRe.exec(line)) !== null) {
-      inlineMatches.push(m);
-    }
-    if (inlineMatches.length > 0) {
-      result.inlineMatches += inlineMatches.length;
-      for (const match of inlineMatches) {
-        const directive = match[1].toLowerCase();
-        if (directive === 'ifdef') {
+    // Find ALL directives on this line in order of appearance.
+    // This correctly handles:
+    //   1) `ifdef MACRO   do_task(); `endif          (single-line inline)
+    //   2) `ifdef A `ifdef B do_task(); `endif `endif  (nested on same line)
+    //   3) `ifdef A `ifdef B do_task();                (multi-line nested)
+    //      `endif
+    //      `endif
+    const directives = findDirectivesOnLine(line);
+
+    for (const dir of directives) {
+      if (dir.type === 'ifdef' || dir.type === 'ifndef') {
+        ifdefStack.push({
+          type: dir.type,
+          condition: dir.condition,
+          line: lineNum,
+          content: originalLine.trim(),
+        });
+        if (dir.type === 'ifdef') {
           result.totalIfdef += 1;
         } else {
           result.totalIfndef += 1;
         }
+      } else if (dir.type === 'endif') {
         result.totalEndif += 1;
-      }
-      continue;
-    }
-
-    // Check ifdef/ifndef
-    const ifdefMatch = ifdefPattern.exec(line);
-    if (ifdefMatch) {
-      const directive = ifdefMatch[1].toLowerCase() as 'ifdef' | 'ifndef';
-      const condition = ifdefMatch[2];
-      ifdefStack.push({
-        type: directive,
-        condition,
-        line: lineNum,
-        content: originalLine.trim(),
-      });
-      if (directive === 'ifdef') {
-        result.totalIfdef += 1;
-      } else {
-        result.totalIfndef += 1;
-      }
-      continue;
-    }
-
-    // Check endif
-    if (endifPattern.test(line)) {
-      result.totalEndif += 1;
-      if (ifdefStack.length > 0) {
-        ifdefStack.pop();
-      } else {
-        result.unmatchedEndif.push({
-          line: lineNum,
-          content: originalLine.trim(),
-        });
+        if (ifdefStack.length > 0) {
+          const popped = ifdefStack.pop();
+          // Track inline match: ifdef and endif on the same line
+          if (popped && popped.line === lineNum) {
+            result.inlineMatches += 1;
+          }
+        } else {
+          result.unmatchedEndif.push({
+            line: lineNum,
+            content: originalLine.trim(),
+          });
+        }
       }
     }
   }
