@@ -6,11 +6,34 @@
  * export as .h file.
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { FolderOpen, FileCode2, Download, Eye } from 'lucide-react';
+import hljs from 'highlight.js';
 import { trpc } from '@renderer/lib/trpc';
 import type { ToolComponentProps } from '../registry';
 import { cn } from '@renderer/lib/utils';
+
+// ── Syntax highlighting helpers ────────────────────────────────────
+
+/** Escape HTML special characters. */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** Highlight C code using highlight.js and return HTML string. */
+function highlightC(code: string): string {
+  if (!code) return '';
+  try {
+    return hljs.highlight(code, { language: 'c' }).value;
+  } catch {
+    return escapeHtml(code);
+  }
+}
 
 type RegField = {
   bit: string;
@@ -47,7 +70,7 @@ export function Reg2C({ projectRoot, onProjectRootChange }: ToolComponentProps) 
   const [filePath, setFilePath] = useState('');
   const [regData, setRegData] = useState<RegData | null>(null);
   const [preview, setPreview] = useState<PreviewData | null>(null);
-  const [activeTab, setActiveTab] = useState<'macros' | 'struct' | 'functions'>('macros');
+  const [activeTab, setActiveTab] = useState<'overview' | 'macros' | 'struct' | 'functions'>('overview');
   const [parsing, setParsing] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [status, setStatus] = useState('请选择 Excel 文件');
@@ -104,6 +127,19 @@ export function Reg2C({ projectRoot, onProjectRootChange }: ToolComponentProps) 
     }
   }, [regData]);
 
+  // Full code (all sections combined) — used for overview tab and export
+  const fullCode = useMemo(() => {
+    if (!preview) return '';
+    return [preview.macros, '', preview.struct, '', preview.functions].join('\n');
+  }, [preview]);
+
+  // Highlighted HTML for the active tab
+  const highlightedHtml = useMemo(() => {
+    if (!preview) return '';
+    if (activeTab === 'overview') return highlightC(fullCode);
+    return highlightC(preview[activeTab]);
+  }, [preview, activeTab, fullCode]);
+
   const handleExport = useCallback(async () => {
     if (!regData || !preview) return;
 
@@ -114,11 +150,10 @@ export function Reg2C({ projectRoot, onProjectRootChange }: ToolComponentProps) 
     });
 
     if (res.path) {
-      const fullCode = [preview.macros, '', preview.struct, '', preview.functions].join('\n');
       await trpc.tools.reg2c.export.mutate({ content: fullCode, savePath: res.path });
       setStatus(`已导出到 ${res.path}`);
     }
-  }, [regData, preview]);
+  }, [regData, preview, fullCode]);
 
   return (
     <div className="flex h-full flex-col gap-3 p-4">
@@ -222,7 +257,7 @@ export function Reg2C({ projectRoot, onProjectRootChange }: ToolComponentProps) 
         <div className="flex min-h-0 flex-1 flex-col rounded border border-border">
           {/* Tabs */}
           <div className="flex border-b border-border">
-            {(['macros', 'struct', 'functions'] as const).map((tab) => (
+            {(['overview', 'macros', 'struct', 'functions'] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -231,15 +266,16 @@ export function Reg2C({ projectRoot, onProjectRootChange }: ToolComponentProps) 
                   activeTab === tab ? 'bg-accent/50 text-foreground' : 'text-muted-foreground hover:bg-accent/20',
                 )}
               >
-                {tab === 'macros' ? '宏定义' : tab === 'struct' ? '结构体' : '函数'}
+                {tab === 'overview' ? '整体视图' : tab === 'macros' ? '宏定义' : tab === 'struct' ? '结构体' : '函数'}
               </button>
             ))}
           </div>
           {/* Code content */}
           <div className="min-h-0 flex-1 overflow-auto bg-zinc-900 p-2">
-            <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-zinc-300">
-              {preview[activeTab]}
-            </pre>
+            <pre
+              className="hljs whitespace-pre-wrap font-mono text-[11px] leading-relaxed"
+              dangerouslySetInnerHTML={{ __html: highlightedHtml }}
+            />
           </div>
         </div>
       )}
