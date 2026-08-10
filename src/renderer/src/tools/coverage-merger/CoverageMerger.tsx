@@ -48,6 +48,20 @@ export function CoverageMerger({ projectRoot, onProjectRootChange }: ToolCompone
   const logRef = useRef<HTMLDivElement>(null);
   // Track the active history index for highlighting (-1 = new config)
   const [activeHistoryIndex, setActiveHistoryIndex] = useState(-1);
+  // Default directory from $PROJ_WORK (fetched from backend)
+  const [defaultDir, setDefaultDir] = useState('');
+
+  // Fetch $PROJ_WORK on mount
+  useEffect(() => {
+    trpc.tools.coverageMerger.getDefaultDir
+      .query()
+      .then((res) => {
+        if (res.dir) setDefaultDir(res.dir);
+      })
+      .catch(() => {
+        // Ignore — fallback to projectRoot
+      });
+  }, []);
 
   // Load history on mount
   const refreshHistory = useCallback(async () => {
@@ -116,10 +130,10 @@ export function CoverageMerger({ projectRoot, onProjectRootChange }: ToolCompone
   const handleSelectDir = useCallback(async (key: 'baseDir' | 'mergeWork') => {
     const res = await trpc.tools.selectDirectory.mutate({
       title: '选择目录',
-      defaultPath: projectRoot ?? undefined,
+      defaultPath: defaultDir || projectRoot || undefined,
     });
     if (res.path) updateConfig(key, res.path);
-  }, [projectRoot]);
+  }, [defaultDir, projectRoot]);
 
   // Fix: use selectFiles (open file dialog) instead of saveFileDialog for merge_cfg
   const handleSelectFile = useCallback(async (key: 'mergeCfg') => {
@@ -132,12 +146,12 @@ export function CoverageMerger({ projectRoot, onProjectRootChange }: ToolCompone
   const handleAddDatabase = useCallback(async () => {
     const res = await trpc.tools.selectDirectory.mutate({
       title: '选择覆盖率数据库目录',
-      defaultPath: projectRoot ?? undefined,
+      defaultPath: defaultDir || projectRoot || undefined,
     });
     if (res.path) {
       setConfig((prev) => ({ ...prev, databases: [...prev.databases, res.path!] }));
     }
-  }, [projectRoot]);
+  }, [defaultDir, projectRoot]);
 
   const handleRemoveDatabase = (index: number) => {
     setConfig((prev) => ({ ...prev, databases: prev.databases.filter((_, i) => i !== index) }));
