@@ -64,6 +64,7 @@ export type SubsysHeatmapData = {
 export type RecentFailuresData = {
   caseName: string;
   subsys: string;
+  status: string;
   startTime: string;
   durationMs: number | null;
 }[];
@@ -82,6 +83,24 @@ export type RegressionProgressData = {
 export type DurationHistogramData = {
   bucket: string;
   count: number;
+}[];
+
+/** getSlowestCases 返回结构（耗时标签页 Top 10） */
+export type SlowestCasesData = {
+  caseName: string;
+  subsys: string;
+  durationMs: number;
+  status: string;
+  startTime: string;
+}[];
+
+/** getRegressionBySubsys 返回结构（回归标签页按子系统） */
+export type RegressionBySubsysData = {
+  subsys: string;
+  totalCases: number;
+  passedCases: number;
+  failedCases: number;
+  notRunCases: number;
 }[];
 
 /** getUnstableCases 返回结构（不稳定标签页） */
@@ -157,7 +176,9 @@ interface DashboardStoreState {
   subsysHeatmap: SubsysHeatmapData | null;
   recentFailures: RecentFailuresData | null;
   regressionProgress: RegressionProgressData | null;
+  regressionBySubsys: RegressionBySubsysData | null;
   durationHistogram: DurationHistogramData | null;
+  slowestCases: SlowestCasesData | null;
   unstableCases: UnstableCasesData | null;
   phasePassRate: PhasePassRateData | null;
   debugDifficulty: DebugDifficultyData | null;
@@ -214,7 +235,9 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
   subsysHeatmap: null,
   recentFailures: null,
   regressionProgress: null,
+  regressionBySubsys: null,
   durationHistogram: null,
+  slowestCases: null,
   unstableCases: null,
   phasePassRate: null,
   debugDifficulty: null,
@@ -236,7 +259,9 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
       subsysHeatmap: null,
       recentFailures: null,
       regressionProgress: null,
+      regressionBySubsys: null,
       durationHistogram: null,
+      slowestCases: null,
       unstableCases: null,
       phasePassRate: null,
       debugDifficulty: null,
@@ -255,7 +280,9 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
       subsysHeatmap: null,
       recentFailures: null,
       regressionProgress: null,
+      regressionBySubsys: null,
       durationHistogram: null,
+      slowestCases: null,
       unstableCases: null,
       phasePassRate: null,
       debugDifficulty: null,
@@ -282,7 +309,9 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
     subsysHeatmap: null,
     recentFailures: null,
     regressionProgress: null,
+    regressionBySubsys: null,
     durationHistogram: null,
+    slowestCases: null,
     unstableCases: null,
     phasePassRate: null,
     debugDifficulty: null,
@@ -357,18 +386,26 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
           tabError: { ...get().tabError, [tab]: undefined },
         });
       } else if (tab === 'regression') {
-        const data = await trpc.dashboard.getRegressionProgress.query(filter);
+        const [progressData, bySubsysData] = await Promise.all([
+          trpc.dashboard.getRegressionProgress.query(filter),
+          trpc.dashboard.getRegressionBySubsys.query(filter),
+        ]);
         set({
           loadingTab: null,
-          regressionProgress: data,
+          regressionProgress: progressData,
+          regressionBySubsys: bySubsysData,
           tabLoaded: { ...get().tabLoaded, [tab]: true },
           tabError: { ...get().tabError, [tab]: undefined },
         });
       } else if (tab === 'duration') {
-        const data = await trpc.dashboard.getDurationHistogram.query(filter);
+        const [histogramData, slowestData] = await Promise.all([
+          trpc.dashboard.getDurationHistogram.query(filter),
+          trpc.dashboard.getSlowestCases.query(filter),
+        ]);
         set({
           loadingTab: null,
-          durationHistogram: data,
+          durationHistogram: histogramData,
+          slowestCases: slowestData,
           tabLoaded: { ...get().tabLoaded, [tab]: true },
           tabError: { ...get().tabError, [tab]: undefined },
         });

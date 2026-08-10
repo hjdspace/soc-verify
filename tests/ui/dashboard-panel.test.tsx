@@ -71,9 +71,9 @@ vi.mock('@renderer/lib/trpc', () => {
     { subsys: 'axi', pass: 0, fail: 2, error: 1, total: 3, passRate: 0 },
   ];
   const mockRecentFailuresData = [
-    { caseName: 'test_case_1', subsys: 'cpu', startTime: '2024-01-10T10:00:00.000Z', durationMs: 5000 },
-    { caseName: 'test_case_2', subsys: 'gpu', startTime: '2024-01-09T14:30:00.000Z', durationMs: 3000 },
-    { caseName: 'test_case_3', subsys: 'cpu', startTime: '2024-01-08T09:15:00.000Z', durationMs: null },
+    { caseName: 'test_case_1', subsys: 'cpu', status: 'fail', startTime: '2024-01-10T10:00:00.000Z', durationMs: 5000 },
+    { caseName: 'test_case_2', subsys: 'gpu', status: 'fail', startTime: '2024-01-09T14:30:00.000Z', durationMs: 3000 },
+    { caseName: 'test_case_3', subsys: 'cpu', status: 'error', startTime: '2024-01-08T09:15:00.000Z', durationMs: null },
   ];
   const mockRegressionProgressData = {
     totalCases: 10,
@@ -102,6 +102,14 @@ vi.mock('@renderer/lib/trpc', () => {
     { caseName: 'hard_case', subsys: 'cpu', daysToFirstPass: 5, failCountBeforePass: 3 },
     { caseName: 'easy_case', subsys: 'gpu', daysToFirstPass: 1, failCountBeforePass: 1 },
   ];
+  const mockSlowestCasesData = [
+    { caseName: 'slow_case_1', subsys: 'cpu', durationMs: 1200000, status: 'pass', startTime: '2024-01-10T10:00:00.000Z' },
+    { caseName: 'slow_case_2', subsys: 'gpu', durationMs: 600000, status: 'fail', startTime: '2024-01-09T14:30:00.000Z' },
+  ];
+  const mockRegressionBySubsysData = [
+    { subsys: 'cpu', totalCases: 5, passedCases: 3, failedCases: 1, notRunCases: 1 },
+    { subsys: 'gpu', totalCases: 5, passedCases: 2, failedCases: 1, notRunCases: 2 },
+  ];
   return {
     trpc: {
       dashboard: {
@@ -116,6 +124,8 @@ vi.mock('@renderer/lib/trpc', () => {
         getUnstableCases: { query: vi.fn().mockResolvedValue(mockUnstableCasesData) },
         getPhasePassRate: { query: vi.fn().mockResolvedValue(mockPhasePassRateData) },
         getDebugDifficulty: { query: vi.fn().mockResolvedValue(mockDebugDifficultyData) },
+        getSlowestCases: { query: vi.fn().mockResolvedValue(mockSlowestCasesData) },
+        getRegressionBySubsys: { query: vi.fn().mockResolvedValue(mockRegressionBySubsysData) },
         saveLayout: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
         getLayout: { query: vi.fn().mockResolvedValue(null) },
       },
@@ -179,7 +189,9 @@ function resetDashboardStore() {
     subsysHeatmap: null,
     recentFailures: null,
     regressionProgress: null,
+    regressionBySubsys: null,
     durationHistogram: null,
+    slowestCases: null,
     unstableCases: null,
     phasePassRate: null,
     debugDifficulty: null,
@@ -445,7 +457,7 @@ describe('DashboardPanel', () => {
       render(<DashboardPanel />);
 
       await waitFor(() => {
-        expect(screen.getByTestId('echarts-mock')).toBeTruthy();
+        expect(screen.getAllByTestId('echarts-mock').length).toBeGreaterThanOrEqual(1);
       });
     });
 
@@ -576,9 +588,9 @@ describe('DashboardPanel', () => {
       useDashboardStore.setState({
         activeTab: 'failures',
         recentFailures: [
-          { caseName: 'test_case_1', subsys: 'cpu', startTime: '2024-01-10T10:00:00.000Z', durationMs: 5000 },
-          { caseName: 'test_case_2', subsys: 'gpu', startTime: '2024-01-09T14:30:00.000Z', durationMs: 3000 },
-          { caseName: 'test_case_3', subsys: 'cpu', startTime: '2024-01-08T09:15:00.000Z', durationMs: null },
+          { caseName: 'test_case_1', subsys: 'cpu', status: 'fail', startTime: '2024-01-10T10:00:00.000Z', durationMs: 5000 },
+          { caseName: 'test_case_2', subsys: 'gpu', status: 'fail', startTime: '2024-01-09T14:30:00.000Z', durationMs: 3000 },
+          { caseName: 'test_case_3', subsys: 'cpu', status: 'error', startTime: '2024-01-08T09:15:00.000Z', durationMs: null },
         ],
         tabLoaded: { failures: true },
         loadingTab: null,
@@ -665,6 +677,10 @@ describe('DashboardPanel', () => {
           notRunCases: 3,
           passRate: 71.4,
         },
+        regressionBySubsys: [
+          { subsys: 'cpu', totalCases: 5, passedCases: 3, failedCases: 1, notRunCases: 1 },
+          { subsys: 'gpu', totalCases: 5, passedCases: 2, failedCases: 1, notRunCases: 2 },
+        ],
         tabLoaded: { regression: true },
         loadingTab: null,
       });
@@ -687,16 +703,13 @@ describe('DashboardPanel', () => {
 
       await waitFor(() => {
         // totalCases=10 should be rendered
-        expect(screen.getByText('总用例')).toBeTruthy();
+        expect(screen.getByText('用例总数')).toBeTruthy();
         expect(screen.getByText('10')).toBeTruthy();
       });
-      expect(screen.getByText('已跑')).toBeTruthy();
-      // '通过' appears both as a tab label and as a stat card label
-      expect(screen.getAllByText('通过').length).toBeGreaterThanOrEqual(1);
-      // '失败' appears both as a tab label and as a stat card label
-      expect(screen.getAllByText('失败').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText('未跑')).toBeTruthy();
-      expect(screen.getByText('通过率')).toBeTruthy();
+      expect(screen.getByText('已通过')).toBeTruthy();
+      expect(screen.getByText('已跑未通过')).toBeTruthy();
+      expect(screen.getByText('未运行')).toBeTruthy();
+      expect(screen.getByText('整体通过率')).toBeTruthy();
       // passRate = 71.4%
       expect(screen.getByText('71.4%')).toBeTruthy();
     });

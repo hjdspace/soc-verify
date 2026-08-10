@@ -2,7 +2,7 @@
  * FailuresTab — 失败标签页：最近失败用例列表。
  *
  * Issue 05: 从 dashboard store 读取 recentFailures 数据。
- * 不展示 Corner 列（Corner 是 post sim 阶段概念，前仿真不展示）。
+ * Update: 添加状态列，展示状态圆点+状态文本。
  */
 
 import { useDashboardStore } from '@renderer/stores/dashboard';
@@ -32,6 +32,16 @@ function formatTime(iso: string): string {
   }
 }
 
+/** 根据 status 返回颜色类名 */
+function statusColorClass(status: string): string {
+  switch (status) {
+    case 'fail': return 'text-status-fail-foreground';
+    case 'error': return 'text-status-fail-foreground';
+    case 'aborted': return 'text-muted-foreground';
+    default: return 'text-muted-foreground';
+  }
+}
+
 export function FailuresTab() {
   const recentFailures = useDashboardStore((s) => s.recentFailures);
 
@@ -51,6 +61,9 @@ export function FailuresTab() {
             <th className="border-b border-border bg-secondary px-2.5 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
               子系统
             </th>
+            <th className="border-b border-border bg-secondary px-2.5 py-1.5 text-left text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              状态
+            </th>
             <th className="border-b border-border bg-secondary px-2.5 py-1.5 text-right text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
               失败时间
             </th>
@@ -67,6 +80,10 @@ export function FailuresTab() {
               </td>
               <td className="border-b border-border px-2.5 py-1 text-muted-foreground">
                 {f.subsys}
+              </td>
+              <td className={`border-b border-border px-2.5 py-1 ${statusColorClass(f.status)}`}>
+                <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-status-fail align-middle" />
+                {f.status}
               </td>
               <td className="border-b border-border px-2.5 py-1 text-right tabular-nums text-muted-foreground">
                 {formatTime(f.startTime)}

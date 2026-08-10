@@ -692,6 +692,7 @@ export function getSubsysStatus(
 export type RecentFailureRow = {
   caseName: string;
   subsys: string;
+  status: string;
   startTime: string;
   durationMs: number | null;
 };
@@ -733,16 +734,17 @@ export function getRecentFailures(
   }
 
   const rows = db.prepare(`
-    SELECT case_name as caseName, subsys, start_time as startTime, duration_ms as durationMs
+    SELECT case_name as caseName, subsys, status, start_time as startTime, duration_ms as durationMs
     FROM simulation_runs
     WHERE ${conditions.join(' AND ')}
     ORDER BY start_time DESC
     LIMIT 50
-  `).all(params) as { caseName: string; subsys: string; startTime: string; durationMs: number | null }[];
+  `).all(params) as { caseName: string; subsys: string; status: string; startTime: string; durationMs: number | null }[];
 
   return rows.map((row) => ({
     caseName: row.caseName,
     subsys: row.subsys,
+    status: row.status,
     startTime: row.startTime,
     durationMs: row.durationMs,
   }));
@@ -955,6 +957,143 @@ export function getUnstableCases(
     failRate: row.totalCount > 0 ? Math.round((row.failCount / row.totalCount) * 1000) / 10 : 0,
     lastStatus: row.lastStatus,
   }));
+}
+
+// ─── Dashboard 最慢用例 + 按子系统回归进度 ─────────────────
+
+/** Dashboard getSlowestCases 返回结构（耗时标签页 Top 10） */
+export type SlowestCaseRow = {
+  caseName: string;
+  subsys: string;
+  durationMs: number;
+  status: string;
+  startTime: string;
+};
+
+/** Dashboard getRegressionBySubsys 返回结构（回归标签页按子系统） */
+export type RegressionBySubsysRow = {
+  subsys: string;
+  totalCases: number;
+  passedCases: number;
+  failedCases: number;
+  notRunCases: number;
+};
+
+/**
+ * 获取最慢用例 Top 10。
+ *
+ * 从 simulation_runs 表查询有 duration_ms 的记录，
+ * 按 duration_ms 降序排列，最多返回 10 条。
+ * 受 subsys + timeRange 筛选。
+ */
+export function getSlowestCases(
+  db: Database.Database,
+  filter?: SummaryFilter,
+): SlowestCaseRow[] {
+  const subsys = filter?.subsys;
+  const tr = timeRangeToClause(filter?.timeRange);
+
+  const conditions = ['duration_ms IS NOT NULL'];
+  const params: Record<string, unknown> = {};
+  if (subsys) {
+    conditions.push('subsys = @subsys');
+    params.subsys = subsys;
+  }
+  if (tr.clause) {
+    conditions.push(tr.clause);
+    Object.assign(params, tr.params);
+  }
+
+  const rows = db.prepare(`
+    SELECT case_name as caseName, subsys, duration_ms as durationMs, status, start_time as startTime
+    FROM simulation_runs
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY duration_ms DESC
+    LIMIT 10
+  `).all(params) as { caseName: string; subsys: string; durationMs: number; status: string; startTime: string }[];
+
+  return rows.map((row) => ({
+    caseName: row.caseName,
+    subsys: row.subsys,
+    durationMs: row.durationMs,
+    status: row.status,
+    startTime: row.startTime,
+  }));
+}
+
+/**
+ * 获取按子系统分组的回归进度数据。
+ *
+ * 从 cases 表统计每个子系统的总用例数，
+ * 从 simulation_runs 表按最新终态统计每个子系统的已通过/未通过用例数。
+ * 未跑用例数 = 总用例数 - 已跑用例数。
+ * **不受 timeRange 影响**（回归进度衡量整体完成度）。
+ * 受 subsys 筛选。
+ */
+export function getRegressionBySubsys(
+  db: Database.Database,
+  filter?: { subsys?: string },
+): RegressionBySubsysRow[] {
+  const subsys = filter?.subsys;
+
+  // ─── totalCases per subsys ───
+  let caseRows: { subsys: string; caseCount: number }[];
+  if (subsys) {
+    caseRows = db.prepare(`
+      SELECT subsys, COUNT(*) as caseCount
+      FROM cases WHERE subsys = ?
+      GROUP BY subsys
+    `).all(subsys) as { subsys: string; caseCount: number }[];
+  } else {
+    caseRows = db.prepare(`
+      SELECT subsys, COUNT(*) as caseCount
+      FROM cases
+      GROUP BY subsys
+    `).all() as { subsys: string; caseCount: number }[];
+  }
+
+  // ─── latest status per case per subsys ───
+  const statusConditions = ["status IN ('pass', 'fail', 'error', 'aborted')"];
+  const statusParams: Record<string, unknown> = {};
+  if (subsys) {
+    statusConditions.push('subsys = @subsys');
+    statusParams.subsys = subsys;
+  }
+
+  const statusRows = db.prepare(`
+    SELECT subsys, case_name, status FROM (
+      SELECT subsys, case_name, status,
+        ROW_NUMBER() OVER (PARTITION BY subsys, case_name ORDER BY start_time DESC) as rn
+      FROM simulation_runs
+      WHERE ${statusConditions.join(' AND ')}
+    ) WHERE rn = 1
+  `).all(statusParams) as { subsys: string; case_name: string; status: string }[];
+
+  // ─── aggregate per subsys ───
+  const statusMap = new Map<string, { passed: number; failed: number }>();
+  for (const row of statusRows) {
+    const entry = statusMap.get(row.subsys) ?? { passed: 0, failed: 0 };
+    if (row.status === 'pass') {
+      entry.passed++;
+    } else {
+      entry.failed++;
+    }
+    statusMap.set(row.subsys, entry);
+  }
+
+  return caseRows
+    .map((row) => {
+      const status = statusMap.get(row.subsys) ?? { passed: 0, failed: 0 };
+      const runCases = status.passed + status.failed;
+      return {
+        subsys: row.subsys,
+        totalCases: row.caseCount,
+        passedCases: status.passed,
+        failedCases: status.failed,
+        notRunCases: Math.max(0, row.caseCount - runCases),
+      };
+    })
+    .sort((a, b) => a.subsys.localeCompare(b.subsys));
 }
 
 // ─── Dashboard 阶段通过率 + 调试难度 ─────────────────────

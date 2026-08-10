@@ -2,7 +2,7 @@
  * SubsysTab — 子系统标签页：ECharts 热力图 + 子系统详细数据表。
  *
  * Issue 04: 热力图颜色根据状态和强度动态混合（参考原型 blendColors / parseColor）。
- * 热力图标签颜色自适应（深色背景用浅色文字，浅色背景用深色文字）。
+ * Update: 修复热力图渲染问题 — 确保数据格式正确，使用 min/max visualMap。
  */
 
 import { useMemo, useEffect, useState } from 'react';
@@ -66,42 +66,46 @@ export function SubsysTab() {
       Math.max(...subsysHeatmap.map((s) => s.error), 1),
     ];
 
-    // 构建热力图数据
-    const data: { value: [number, number, number]; itemStyle: { color: string; borderColor: string; borderWidth: number }; label: { color: string } }[] = [];
+    // 构建热力图数据 — ECharts heatmap data format: [xIndex, yIndex, value]
+    const data: Array<{ value: [number, number, number]; itemStyle: { color: string; borderColor: string; borderWidth: number }; label: { show: boolean; color: string } }> = [];
 
-    subsysHeatmap.forEach((s, i) => {
+    subsysHeatmap.forEach((s, yIdx) => {
       const cols = [s.pass, s.fail, s.error];
-      cols.forEach((val, col) => {
-        const max = maxByCol[col];
+      cols.forEach((val, xIdx) => {
+        const max = maxByCol[xIdx];
         const intensity = max > 0 ? val / max : 0;
-        const baseColor = statusColors[col];
-        const blended = blendColors(theme.cardColor, baseColor, intensity);
+        const baseColor = statusColors[xIdx];
+        const blended = blendColors(theme.cardColor, baseColor, Math.max(0.1, intensity));
         // 标签颜色自适应：高强度用浅色文字，低强度用深色文字
         const labelColor = intensity > 0.5 ? '#ffffff' : theme.textColor;
 
         data.push({
-          value: [col, i, val],
+          value: [xIdx, yIdx, val],
           itemStyle: {
             color: blended,
             borderColor: theme.borderColor,
             borderWidth: 1,
           },
-          label: { color: labelColor },
+          label: { show: true, color: labelColor },
         });
       });
     });
 
     return {
-      ...theme.toDefaults(),
+      backgroundColor: 'transparent',
+      textStyle: { color: theme.textColor },
       tooltip: {
+        backgroundColor: theme.cardColor,
+        borderColor: theme.borderColor,
+        textStyle: { color: theme.textColor },
         position: 'top',
-        ...theme.toDefaults().tooltip,
-        formatter: (params: { data: [number, number, number] }) => {
-          const subsysIdx = params.data[1];
-          const statusIdx = params.data[0];
-          const val = params.data[2];
-          const subsys = subsysNames[subsysIdx] ?? '';
-          const status = STATUS_LABELS[statusIdx] ?? '';
+        formatter: (params: unknown) => {
+          const p = params as { data: { value: [number, number, number] } };
+          const xIdx = p.data.value[0];
+          const yIdx = p.data.value[1];
+          const val = p.data.value[2];
+          const subsys = subsysNames[yIdx] ?? '';
+          const status = STATUS_LABELS[xIdx] ?? '';
           return `${subsys}<br/>${status}: ${val}`;
         },
       },
@@ -110,11 +114,13 @@ export function SubsysTab() {
         type: 'category',
         data: STATUS_LABELS,
         splitArea: { show: false },
+        axisLabel: { color: theme.mutedColor, fontSize: 11 },
       },
       yAxis: {
         type: 'category',
         data: subsysNames,
         splitArea: { show: false },
+        axisLabel: { color: theme.mutedColor, fontSize: 10 },
       },
       series: [
         {

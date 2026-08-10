@@ -1,7 +1,8 @@
 /**
- * TrendTab — 趋势标签页：每日/每周 pass/fail/error 堆叠柱状图。
+ * TrendTab — 趋势标签页：每日/每周 pass/fail/error 堆叠柱状图 + 累计通过率趋势折线图。
  *
  * Issue 03: ECharts stacked bar chart + daily/weekly toggle。
+ * Update: 补充累计通过率趋势折线图。
  */
 
 import { useMemo } from 'react';
@@ -22,7 +23,7 @@ export function TrendTab() {
     return onThemeChange(() => setThemeTick((t) => t + 1));
   }, []);
 
-  const option = useMemo<EChartsOption>(() => {
+  const stackedOption = useMemo<EChartsOption>(() => {
     if (!trend || trend.length === 0) return {};
 
     const theme = getEChartsTheme();
@@ -83,6 +84,54 @@ export function TrendTab() {
     };
   }, [trend]);
 
+  // ─── 累计通过率 ────────────────────────────────────────────
+  const cumulativeOption = useMemo<EChartsOption>(() => {
+    if (!trend || trend.length === 0) return {};
+
+    const theme = getEChartsTheme();
+    let cumPass = 0;
+    let cumTotal = 0;
+    const cumRate = trend.map((d) => {
+      cumPass += d.pass;
+      cumTotal += d.pass + d.fail + d.error;
+      return cumTotal > 0 ? Math.round((cumPass / cumTotal) * 1000) / 10 : 0;
+    });
+
+    return {
+      ...theme.toDefaults(),
+      tooltip: {
+        trigger: 'axis',
+        ...theme.toDefaults().tooltip,
+      },
+      grid: {
+        left: '3%',
+        right: '4%',
+        bottom: '10%',
+        top: '5%',
+        containLabel: true,
+      },
+      xAxis: {
+        type: 'category',
+        data: trend.map((t) => t.date),
+      },
+      yAxis: {
+        type: 'value',
+        max: 100,
+        axisLabel: { formatter: '{value}%', color: theme.mutedColor },
+      },
+      series: [
+        {
+          name: '累计通过率',
+          type: 'line',
+          smooth: true,
+          data: cumRate,
+          itemStyle: { color: theme.colors[0] },
+          areaStyle: { opacity: 0.1 },
+        },
+      ],
+    };
+  }, [trend]);
+
   if (!trend || trend.length === 0) return null;
 
   return (
@@ -111,8 +160,20 @@ export function TrendTab() {
           {granularity === 'daily' ? '每日' : '每周'} Pass/Fail/Error 趋势
         </div>
         <ReactECharts
-          option={option}
+          option={stackedOption}
           style={{ height: '360px', width: '100%' }}
+          opts={{ renderer: 'canvas' }}
+        />
+      </div>
+
+      {/* ─── 累计通过率折线图 ─────────────────────────────── */}
+      <div className="rounded-md border border-border bg-card p-3">
+        <div className="mb-2 text-xs font-semibold text-muted-foreground">
+          累计通过率趋势
+        </div>
+        <ReactECharts
+          option={cumulativeOption}
+          style={{ height: '200px', width: '100%' }}
           opts={{ renderer: 'canvas' }}
         />
       </div>

@@ -1,8 +1,8 @@
 /**
- * RegressionTab — 回归标签页：回归进度环形图 + 统计数字。
+ * RegressionTab — 回归标签页：统计数字卡片 + 整体通过率进度条 + 按子系统回归进度图。
  *
  * Issue 05: 从 dashboard store 读取 regressionProgress 数据。
- * ECharts pie chart 展示已跑/未跑占比。
+ * Update: 修复环形图尺寸，补充整体通过率进度条和按子系统回归进度堆叠柱状图。
  */
 
 import { useMemo, useEffect, useState } from 'react';
@@ -13,6 +13,7 @@ import { getEChartsTheme, onThemeChange } from '@renderer/lib/echarts-theme';
 
 export function RegressionTab() {
   const regressionProgress = useDashboardStore((s) => s.regressionProgress);
+  const regressionBySubsys = useDashboardStore((s) => s.regressionBySubsys);
 
   // Re-render when theme changes
   const [, setThemeTick] = useState(0);
@@ -20,78 +21,114 @@ export function RegressionTab() {
     return onThemeChange(() => setThemeTick((t) => t + 1));
   }, []);
 
-  const option = useMemo<EChartsOption>(() => {
-    if (!regressionProgress) return {};
+  // ─── 按子系统回归进度堆叠柱状图 ──────────────────────────
+  const bySubsysOption = useMemo<EChartsOption>(() => {
+    if (!regressionBySubsys || regressionBySubsys.length === 0) return {};
 
     const theme = getEChartsTheme();
-    const runCases = regressionProgress.runCases;
-    const notRunCases = regressionProgress.notRunCases;
+    const subsysNames = regressionBySubsys.map((s) => s.subsys);
 
     return {
       ...theme.toDefaults(),
       tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
         ...theme.toDefaults().tooltip,
-        trigger: 'item',
-        formatter: '{b}: {c} ({d}%)',
       },
       legend: {
-        bottom: 10,
-        textStyle: { color: theme.mutedColor },
+        data: ['Pass', 'Fail/Error', '未跑'],
+        bottom: 0,
+        textStyle: { color: theme.mutedColor, fontSize: 10 },
+      },
+      grid: {
+        left: '3%',
+        right: '4%',
+        bottom: '12%',
+        top: '5%',
+        containLabel: true,
+      },
+      xAxis: {
+        type: 'category',
+        data: subsysNames,
+        axisLabel: { fontSize: 9, rotate: 30, color: theme.mutedColor },
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: { fontSize: 9, color: theme.mutedColor },
       },
       series: [
         {
-          type: 'pie',
-          radius: ['45%', '70%'],
-          center: ['50%', '45%'],
-          avoidLabelOverlap: false,
-          label: {
-            show: true,
-            position: 'center',
-            formatter: () => {
-              const rate = regressionProgress.totalCases > 0
-                ? Math.round((runCases / regressionProgress.totalCases) * 100)
-                : 0;
-              return `{a|${rate}%}\n{b|完成度}`;
-            },
-            rich: {
-              a: { fontSize: 28, fontWeight: 'bold', color: theme.textColor },
-              b: { fontSize: 11, color: theme.mutedColor, padding: [4, 0, 0, 0] },
-            },
-          },
-          data: [
-            { value: runCases, name: '已跑', itemStyle: { color: theme.statusPass } },
-            { value: notRunCases, name: '未跑', itemStyle: { color: theme.mutedColor } },
-          ],
+          name: 'Pass',
+          type: 'bar',
+          stack: 'total',
+          data: regressionBySubsys.map((s) => s.passedCases),
+          itemStyle: { color: theme.statusPass },
+        },
+        {
+          name: 'Fail/Error',
+          type: 'bar',
+          stack: 'total',
+          data: regressionBySubsys.map((s) => s.failedCases),
+          itemStyle: { color: theme.statusFail },
+        },
+        {
+          name: '未跑',
+          type: 'bar',
+          stack: 'total',
+          data: regressionBySubsys.map((s) => s.notRunCases),
+          itemStyle: { color: theme.mutedColor },
         },
       ],
     };
-  }, [regressionProgress]);
+  }, [regressionBySubsys]);
 
   if (!regressionProgress) return null;
 
+  const passRate = regressionProgress.passRate;
+
   return (
     <div className="space-y-3">
-      {/* ─── ECharts 环形图 ────────────────────────────────── */}
-      <div className="rounded-md border border-border bg-card p-3">
-        <div className="mb-2 text-xs font-semibold text-muted-foreground">
-          回归进度
-        </div>
-        <ReactECharts
-          option={option}
-          style={{ height: '280px', width: '100%' }}
-          opts={{ renderer: 'canvas' }}
-        />
+      {/* ─── 统计数字卡片 ──────────────────────────────────── */}
+      <div className="grid grid-cols-4 gap-2.5">
+        <StatCard label="用例总数" value={regressionProgress.totalCases} variant="info" />
+        <StatCard label="已通过" value={regressionProgress.passedCases} variant="pass" />
+        <StatCard label="已跑未通过" value={regressionProgress.failedCases} variant="fail" />
+        <StatCard label="未运行" value={regressionProgress.notRunCases} variant="muted" />
       </div>
 
-      {/* ─── 统计数字 ──────────────────────────────────────── */}
-      <div className="grid grid-cols-6 gap-2.5">
-        <StatCard label="总用例" value={regressionProgress.totalCases} variant="info" />
-        <StatCard label="已跑" value={regressionProgress.runCases} variant="pass" />
-        <StatCard label="通过" value={regressionProgress.passedCases} variant="pass" />
-        <StatCard label="失败" value={regressionProgress.failedCases} variant="fail" />
-        <StatCard label="未跑" value={regressionProgress.notRunCases} variant="muted" />
-        <StatCard label="通过率" value={`${regressionProgress.passRate}%`} variant="info" />
+      {/* ─── 整体通过率进度条 ─────────────────────────────── */}
+      <div className="rounded-md border border-border bg-card p-3">
+        <div className="mb-2 text-xs font-semibold text-muted-foreground">整体通过率</div>
+        <div className="flex items-center gap-4 py-2">
+          <div className="text-3xl font-bold text-status-pass-foreground">{passRate}%</div>
+          <div className="flex-1">
+            <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-status-pass transition-all"
+                style={{ width: `${Math.min(100, passRate)}%` }}
+              />
+            </div>
+            <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
+              <span>{regressionProgress.passedCases} pass / {regressionProgress.totalCases} total</span>
+              <span>目标: 90%</span>
+            </div>
+          </div>
+        </div>
       </div>
+
+      {/* ─── 按子系统回归进度图 ───────────────────────────── */}
+      {regressionBySubsys && regressionBySubsys.length > 0 && (
+        <div className="rounded-md border border-border bg-card p-3">
+          <div className="mb-2 text-xs font-semibold text-muted-foreground">
+            按子系统回归进度
+          </div>
+          <ReactECharts
+            option={bySubsysOption}
+            style={{ height: '360px', width: '100%' }}
+            opts={{ renderer: 'canvas' }}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -115,11 +152,9 @@ function StatCard({
   };
 
   return (
-    <div className={`rounded-md border p-3 ${colorClasses[variant]}`}>
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-      <div className="mt-1 text-lg font-bold text-foreground">{value}</div>
+    <div className={`rounded-md border p-3 text-center ${colorClasses[variant]}`}>
+      <div className="text-lg font-bold text-foreground">{value}</div>
+      <div className="mt-0.5 text-[10px] text-muted-foreground">{label}</div>
     </div>
   );
 }

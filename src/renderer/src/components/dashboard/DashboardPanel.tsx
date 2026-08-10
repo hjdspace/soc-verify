@@ -94,6 +94,14 @@ export function DashboardPanel() {
     }
   }, [currentProjectId, layoutLoaded, loadLayout, loadSubsysList]);
 
+  // ─── 加载 summary 数据（用于失败标签页徽章计数） ──────────
+  useEffect(() => {
+    if (!currentProjectId) return;
+    if (!tabLoaded['overview']) {
+      loadTabData('overview', currentProjectId);
+    }
+  }, [currentProjectId, tabLoaded, loadTabData]);
+
   // ─── Unmount: 保存布局 ───────────────────────────────────
   useEffect(() => {
     return () => {
@@ -214,13 +222,23 @@ export function DashboardPanel() {
             onClick={() => handleTabClick(tab.id)}
             data-active={activeTab === tab.id}
             className={cn(
-              'relative px-3 py-2 text-xs font-medium transition-colors',
+              'relative flex items-center gap-1.5 px-3 py-2 text-xs font-medium transition-colors',
               activeTab === tab.id
                 ? 'text-foreground'
                 : 'text-muted-foreground hover:text-foreground',
             )}
           >
             {tab.label}
+            {tab.id === 'failures' && summary && summary.failCount > 0 && (
+              <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-status-fail px-1 text-[9px] font-bold text-primary-foreground">
+                {summary.failCount}
+              </span>
+            )}
+            {tab.id === 'unstable' && unstableCases && unstableCases.length > 0 && (
+              <span className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[9px] font-bold text-accent-foreground">
+                {unstableCases.length}
+              </span>
+            )}
             {activeTab === tab.id && (
               <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary" />
             )}

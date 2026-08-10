@@ -12,7 +12,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { t, TRPCError } from '../router-context';
 import { requireProject } from '../../services/project-service';
 import { caseStatsRegistry } from '../../case/case-stats-registry';
-import { getSubsysList, getDashboardSummary, getDashboardTrend, getSubsysStatus, getSubsysHeatmap, getRecentFailures, getRegressionProgress, getDurationHistogram, getUnstableCases, getPhasePassRate, getDebugDifficulty } from '../../case/db/case-repository';
+import { getSubsysList, getDashboardSummary, getDashboardTrend, getSubsysStatus, getSubsysHeatmap, getRecentFailures, getRegressionProgress, getDurationHistogram, getUnstableCases, getPhasePassRate, getDebugDifficulty, getSlowestCases, getRegressionBySubsys } from '../../case/db/case-repository';
 
 // ─── 共享筛选参数验证 ───────────────────────────────────────
 
@@ -187,6 +187,40 @@ export const dashboardRouter = t.router({
       return getDurationHistogram(db, {
         subsys: input.subsys,
         timeRange: input.timeRange,
+      });
+    }),
+
+  // ─── 最慢用例 Top 10（耗时标签页） ──────────────────────
+  getSlowestCases: t.procedure
+    .input((raw): { projectId: string; subsys?: string; timeRange?: 'all' | '7d' | '30d' | { start: string; end: string } } => {
+      const f = validateFilter(raw);
+      const result: { projectId: string; subsys?: string; timeRange?: 'all' | '7d' | '30d' | { start: string; end: string } } = { projectId: f.projectId };
+      if (f.subsys) result.subsys = f.subsys;
+      if (f.timeRange) result.timeRange = f.timeRange;
+      return result;
+    })
+    .query(({ input }) => {
+      const project = requireProject(input.projectId);
+      const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
+      return getSlowestCases(db, {
+        subsys: input.subsys,
+        timeRange: input.timeRange,
+      });
+    }),
+
+  // ─── 按子系统回归进度（回归标签页） ──────────────────────
+  getRegressionBySubsys: t.procedure
+    .input((raw): { projectId: string; subsys?: string } => {
+      const f = validateFilter(raw);
+      const result: { projectId: string; subsys?: string } = { projectId: f.projectId };
+      if (f.subsys) result.subsys = f.subsys;
+      return result;
+    })
+    .query(({ input }) => {
+      const project = requireProject(input.projectId);
+      const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
+      return getRegressionBySubsys(db, {
+        subsys: input.subsys,
       });
     }),
 
