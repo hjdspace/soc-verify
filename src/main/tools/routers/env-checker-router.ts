@@ -2,7 +2,8 @@
  * env-checker sub-router — environment check (force/wait statement scanner).
  *
  * Procedures: resolveProjEnv · discoverSubsystems · scan · confirm ·
- *             previewFile · openFile · exportReport
+ *             previewFile · openFile · exportReport ·
+ *             loadSuspiciousMarks · saveSuspiciousMarks
  */
 
 import { t, TRPCError } from '../../ipc/router-context';
@@ -14,8 +15,11 @@ import {
   generateReport,
   resolveProjEnv,
   readFileWithContext,
+  loadSuspiciousMarks,
+  saveSuspiciousMarks,
   type CheckType,
   type ScanMatch,
+  type SuspiciousMarks,
 } from '../env-checker';
 import { reqString, cast } from './shared';
 import { writeFile } from 'node:fs/promises';
@@ -181,6 +185,27 @@ export const envCheckerRouter = t.router({
     .mutation(async ({ input }) => {
       const html = generateReport(input.subsys, input.results as never);
       await writeFile(input.savePath, html, 'utf-8');
+      return { success: true };
+    }),
+
+  /** Load suspicious marks from the persistence file. */
+  loadSuspiciousMarks: t.procedure
+    .query(async () => {
+      return loadSuspiciousMarks();
+    }),
+
+  /** Save suspicious marks to the persistence file. */
+  saveSuspiciousMarks: t.procedure
+    .input((raw): { marks: SuspiciousMarks } => {
+      const r = raw as Record<string, unknown>;
+      const marks = r.marks as Record<string, unknown>;
+      if (!marks || !Array.isArray(marks.force) || !Array.isArray(marks.wait)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'marks with force[] and wait[] arrays are required' });
+      }
+      return { marks: { force: marks.force as string[], wait: marks.wait as string[] } };
+    })
+    .mutation(async ({ input }) => {
+      await saveSuspiciousMarks(input.marks);
       return { success: true };
     }),
 });
