@@ -59,7 +59,7 @@ export const ALL_TOOLS: ToolMeta[] = [
   { id: 'coverage-merger', name: '覆盖率合并工具', description: '合并多个覆盖率数据库', icon: 'Merge', category: 'coverage', width: 1000, height: 700 },
   { id: 'batch-execution', name: '批量执行工具', description: '批量执行仿真用例', icon: 'Play', category: 'batch', width: 1000, height: 700 },
   { id: 'regression-analyzer', name: '回归结果解析器', description: '解析回归测试结果', icon: 'BarChart3', category: 'regression', width: 1200, height: 800 },
-  { id: 'regression-list-gen', name: '回归列表生成工具', description: '生成回归测试用例列表', icon: 'ListPlus', category: 'regression', width: 1000, height: 700 },
+  { id: 'regression-list-gen', name: '回归列表生成工具', description: '生成回归测试用例列表', icon: 'ListPlus', category: 'regression', width: 1000, height: 850 },
 
   // ── Batch 3: Complex Tools ──
   { id: 'git-manager', name: 'Git 版本控制管理', description: 'Git 仓库状态、提交、分支管理', icon: 'GitBranch', category: 'version-control', width: 1200, height: 800 },
