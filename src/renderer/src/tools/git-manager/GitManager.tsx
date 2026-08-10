@@ -214,7 +214,7 @@ export function GitManager({ projectRoot }: ToolComponentProps) {
           <div className="text-center">
             <GitBranch className="mx-auto mb-2 h-8 w-8 text-muted-foreground/50" />
             <p className="text-sm text-muted-foreground">
-              请先在主窗口中打开项目，Git Manager 将自动扫描 de/ 和 dv/ 目录下的仓库
+              请先在主窗口中打开项目，Git Manager 将自动扫描 $PROJ_RTL 和 $PROJ_ENV 目录下的仓库
             </p>
           </div>
         </div>
@@ -306,7 +306,7 @@ export function GitManager({ projectRoot }: ToolComponentProps) {
           <div className="text-center">
             <GitBranch className="mx-auto mb-2 h-8 w-8 text-muted-foreground/50" />
             <p className="text-sm text-muted-foreground">
-              未找到 Git 仓库。请确保 de/ 或 dv/ 目录存在且包含 Git 仓库。
+              未找到 Git 仓库。请确保 $PROJ_RTL 或 $PROJ_ENV 环境变量已配置且包含 Git 仓库。
             </p>
             <button
               onClick={discoverRepos}
