@@ -12,7 +12,7 @@
 import type { CaseInfo, CaseStatus, SubsysInfo } from '../host/discovery';
 import type { SimulationManager } from '../simulation/simulation-manager';
 import type { SimulationStatus } from '@shared/types';
-import type { CaseRow } from './db/case-repository';
+import { type CaseRow, getCases, getLatestStatusBySubsys, searchCases, getSubsysWithCaseCount, getCaseNameToSubsysMap, getAllLatestStatuses } from './db/case-repository';
 import type { CaseDatabase } from './db/case-database';
 
 // ─── 公共类型 ───────────────────────────────────────────────
@@ -187,7 +187,6 @@ export class CaseStatsService {
   async listCasesWithStatus(subsys?: string): Promise<CaseInfo[]> {
     if (!subsys) return [];
 
-    const { getCases, getLatestStatusBySubsys } = await import('./db/case-repository');
     const rows = getCases(this.db, subsys);
     if (rows.length === 0) return [];
 
@@ -212,7 +211,6 @@ export class CaseStatsService {
     subsys?: string,
     limit = 200,
   ): Promise<CaseInfo[]> {
-    const { searchCases } = await import('./db/case-repository');
     const rows = searchCases(this.db, query, subsys, limit);
     return rows.map((r) => caseRowToInfo(r, undefined));
   }
@@ -221,7 +219,6 @@ export class CaseStatsService {
    * 列出子系统，并填充真实的 caseCount（从 DB 读取，秒开）。
    */
   async listSubsysWithCaseCount(filter?: string): Promise<SubsysInfo[]> {
-    const { getSubsysWithCaseCount } = await import('./db/case-repository');
     const rows = getSubsysWithCaseCount(this.db, filter);
     return rows.map((r) => ({
       name: r.name,
@@ -240,7 +237,6 @@ export class CaseStatsService {
    * 可用用例名反查子系统。
    */
   async getCaseToSubsysMap(): Promise<Map<string, string>> {
-    const { getCaseNameToSubsysMap } = await import('./db/case-repository');
     return getCaseNameToSubsysMap(this.db);
   }
 
@@ -276,8 +272,6 @@ export class CaseStatsService {
    * 全局状态映射通过 getAllLatestStatuses 一次查询获取。
    */
   async getProjectOverview(): Promise<ProjectOverview> {
-    const { getSubsysWithCaseCount, getAllLatestStatuses, getCases } = await import('./db/case-repository');
-
     const subsysRows = getSubsysWithCaseCount(this.db);
     if (subsysRows.length === 0) {
       return { subsysCount: 0, totalCases: 0, bySubsys: [] };
