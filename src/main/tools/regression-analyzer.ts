@@ -10,6 +10,22 @@ import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { existsSync, statSync } from 'node:fs';
 import { join, basename, dirname } from 'node:path';
 
+// ── Default directory resolution ───────────────────────────────────
+
+/**
+ * Get the default regression directory.
+ *
+ * Priority: $PROJ_WORK/regression → process.cwd()/work/regression.
+ * Matches the Python `get_default_regression_dir()` behavior.
+ */
+export function getDefaultRegressionDir(): string {
+  const projWork = process.env.PROJ_WORK;
+  if (projWork && existsSync(projWork)) {
+    return join(projWork, 'regression');
+  }
+  return join(process.cwd(), 'work', 'regression');
+}
+
 // ── Types ──────────────────────────────────────────────────────────
 
 export type CaseInfo = {
