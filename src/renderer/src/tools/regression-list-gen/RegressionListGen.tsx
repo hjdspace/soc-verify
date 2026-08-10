@@ -159,10 +159,9 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
   }, [projectRoot]);
 
   const handleBrowseOutput = useCallback(async () => {
-    const res = await trpc.tools.saveFileDialog.mutate({
-      title: '选择输出文件',
+    const res = await trpc.tools.selectDirectory.mutate({
+      title: '选择输出目录',
       defaultPath: config.output || projectRoot || undefined,
-      filters: [{ name: '列表文件', extensions: ['lst'] }],
     });
     if (res.path) {
       setConfig((prev) => ({ ...prev, output: res.path }));
@@ -473,8 +472,8 @@ export function RegressionListGen({ projectRoot, onProjectRootChange }: ToolComp
 
       {/* ── Output ── */}
       {output && (
-        <div className="min-h-0 max-h-40 overflow-auto rounded border border-border bg-muted/30 p-2">
-          <pre className="whitespace-pre-wrap font-mono text-[10px] leading-relaxed text-foreground/70">{output}</pre>
+        <div className="min-h-0 max-h-72 overflow-auto rounded border border-border bg-muted/30 p-2">
+          <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-foreground/70">{output}</pre>
         </div>
       )}
 
