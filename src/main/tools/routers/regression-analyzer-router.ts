@@ -10,11 +10,18 @@ import {
   parseAllTimes,
   aggregateCaseData,
   exportReport,
+  getDefaultRegressionDir,
   type RegressionData,
 } from '../regression-analyzer';
 import { cast, optStringUndef } from './shared';
 
 export const regressionAnalyzerRouter = t.router({
+  /** Return the default regression directory ($PROJ_WORK/regression or cwd/work/regression). */
+  getDefaultDir: t.procedure
+    .query(() => {
+      return { dir: getDefaultRegressionDir() };
+    }),
+
   scan: t.procedure
     .input((raw): { regressionDir: string } => {
       const r = raw as Record<string, unknown>;
