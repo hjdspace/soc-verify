@@ -14,12 +14,19 @@ import {
   deleteHistoryItem as deleteMergeHistoryItem,
   clearHistory as clearMergeHistory,
   formatCommandText as formatMergeCommand,
+  getDefaultMergeDir,
   type MergeConfig,
   type CoverageMergeEvent,
 } from '../coverage-merger';
 import { cast } from './shared';
 
 export const coverageMergerRouter = t.router({
+  /** Return the default merge directory ($PROJ_WORK or cwd). */
+  getDefaultDir: t.procedure
+    .query(() => {
+      return { dir: getDefaultMergeDir() };
+    }),
+
   previewCommand: t.procedure
     .input((raw): { config: MergeConfig } => {
       const r = raw as Record<string, unknown>;
