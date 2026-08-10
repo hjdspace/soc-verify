@@ -1,0 +1,1599 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="drafting">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SoC Verify — Dashboard 原型</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+/* ════════════════════════════════════════════════════════════
+   主题 CSS 变量（从 globals.css 提取）
+   ════════════════════════════════════════════════════════════ */
+
+/* Drafting（浅·紫梅） */
+[data-theme="drafting"] {
+  --background: oklch(0.97 0.006 75);
+  --foreground: oklch(0.22 0.012 75);
+  --card: oklch(0.99 0.004 75);
+  --card-foreground: oklch(0.32 0.012 75);
+  --primary: oklch(0.42 0.13 285);
+  --primary-foreground: oklch(0.98 0.005 75);
+  --secondary: oklch(0.93 0.008 75);
+  --secondary-foreground: oklch(0.32 0.012 75);
+  --muted: oklch(0.93 0.008 75);
+  --muted-foreground: oklch(0.50 0.012 75);
+  --accent: oklch(0.91 0.014 285);
+  --accent-foreground: oklch(0.32 0.012 75);
+  --destructive: oklch(0.55 0.20 25);
+  --border: oklch(0.88 0.008 75);
+  --titlebar: oklch(0.94 0.008 75);
+  --titlebar-foreground: oklch(0.40 0.012 75);
+  --titlebar-border: oklch(0.86 0.008 75);
+  --sidebar: oklch(0.95 0.008 75);
+  --sidebar-foreground: oklch(0.45 0.012 75);
+  --radius: 0.5rem;
+  --status-pass: oklch(0.50 0.13 145);
+  --status-pass-foreground: oklch(0.50 0.13 145);
+  --status-fail: oklch(0.50 0.16 28);
+  --status-fail-foreground: oklch(0.50 0.16 28);
+  --status-running: oklch(0.50 0.11 230);
+  --status-running-foreground: oklch(0.50 0.11 230);
+  --status-pending: oklch(0.50 0.05 75);
+  --status-pending-foreground: oklch(0.50 0.05 75);
+  --status-aborted: oklch(0.50 0.13 65);
+  --chart-1: oklch(0.55 0.14 250);
+  --chart-2: oklch(0.60 0.16 145);
+  --chart-3: oklch(0.55 0.16 285);
+  --chart-4: oklch(0.65 0.15 55);
+  --info: oklch(0.88 0.04 250);
+  --info-foreground: oklch(0.32 0.10 250);
+  --warning: oklch(0.88 0.06 75);
+  --warning-foreground: oklch(0.32 0.08 75);
+  --violet: oklch(0.88 0.05 295);
+  --violet-foreground: oklch(0.32 0.10 295);
+}
+
+/* Bench（深·暖·磷光绿） */
+[data-theme="bench"] {
+  --background: oklch(0.16 0.008 60);
+  --foreground: oklch(0.88 0.008 60);
+  --card: oklch(0.19 0.008 60);
+  --card-foreground: oklch(0.85 0.008 60);
+  --primary: oklch(0.72 0.15 145);
+  --primary-foreground: oklch(0.16 0.008 60);
+  --secondary: oklch(0.22 0.008 60);
+  --secondary-foreground: oklch(0.80 0.008 60);
+  --muted: oklch(0.22 0.008 60);
+  --muted-foreground: oklch(0.58 0.008 60);
+  --accent: oklch(0.26 0.012 145);
+  --accent-foreground: oklch(0.82 0.012 145);
+  --destructive: oklch(0.65 0.18 25);
+  --border: oklch(0.28 0.008 60);
+  --titlebar: oklch(0.14 0.008 60);
+  --titlebar-foreground: oklch(0.70 0.008 60);
+  --titlebar-border: oklch(0.26 0.008 60);
+  --sidebar: oklch(0.14 0.008 60);
+  --sidebar-foreground: oklch(0.65 0.008 60);
+  --status-pass: oklch(0.62 0.15 145);
+  --status-pass-foreground: oklch(0.62 0.15 145);
+  --status-fail: oklch(0.60 0.16 28);
+  --status-fail-foreground: oklch(0.60 0.16 28);
+  --status-running: oklch(0.60 0.12 230);
+  --status-running-foreground: oklch(0.60 0.12 230);
+  --status-pending: oklch(0.55 0.008 60);
+  --status-pending-foreground: oklch(0.55 0.008 60);
+  --status-aborted: oklch(0.60 0.12 65);
+  --chart-1: oklch(0.60 0.14 250);
+  --chart-2: oklch(0.65 0.16 145);
+  --chart-3: oklch(0.55 0.16 285);
+  --chart-4: oklch(0.70 0.15 55);
+  --info: oklch(0.30 0.04 250);
+  --info-foreground: oklch(0.72 0.10 250);
+  --warning: oklch(0.30 0.06 75);
+  --warning-foreground: oklch(0.72 0.08 75);
+  --violet: oklch(0.30 0.05 295);
+  --violet-foreground: oklch(0.72 0.10 295);
+}
+
+/* 全局样式 */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  background: var(--background);
+  color: var(--foreground);
+  transition: background 0.2s, color 0.2s;
+}
+
+/* ════════════════════════════════════════════════════════════
+   布局结构
+   ════════════════════════════════════════════════════════════ */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.title-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+  padding: 0 8px;
+  background: var(--titlebar);
+  border-bottom: 1px solid var(--titlebar-border);
+  -webkit-app-region: drag;
+  flex-shrink: 0;
+}
+.title-bar .left { display: flex; align-items: center; gap: 8px; }
+.title-bar .logo { font-size: 11px; font-weight: 600; color: var(--titlebar-foreground); letter-spacing: 0.5px; }
+.title-bar .right { display: flex; align-items: center; gap: 4px; -webkit-app-region: no-drag; }
+.title-bar .theme-btn {
+  padding: 2px 8px; font-size: 10px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; color: var(--titlebar-foreground);
+  cursor: pointer; transition: all 0.15s;
+}
+.title-bar .theme-btn:hover { background: var(--accent); color: var(--accent-foreground); }
+.title-bar .theme-btn.active { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+
+.main-area {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* 左栏 */
+.left-rail {
+  width: 240px;
+  flex-shrink: 0;
+  background: var(--sidebar);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.rail-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.rail-tab {
+  flex: 1;
+  padding: 5px 0;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+.rail-tab:hover { color: var(--foreground); }
+.rail-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+.rail-content { flex: 1; padding: 8px 6px; }
+
+/* 左栏 — 概览缩略数据 */
+.overview-section { padding: 4px 6px; }
+.overview-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 6px; padding: 0 2px;
+}
+.overview-header span {
+  font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; color: var(--muted-foreground);
+}
+.overview-header button {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--muted-foreground); padding: 2px;
+}
+.overview-header button:hover { color: var(--foreground); }
+
+.stats-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.stat-inline {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px;
+  font-size: 11px;
+}
+.stat-inline .num { font-weight: 700; color: var(--foreground); }
+.stat-inline .num.pass { color: var(--status-pass-foreground); }
+.stat-inline .num.fail { color: var(--status-fail-foreground); }
+.stat-inline .lbl { color: var(--muted-foreground); }
+.stat-inline .sep { color: var(--muted-foreground); opacity: 0.4; }
+
+.mini-progress {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.mini-progress .label {
+  font-size: 10px; color: var(--muted-foreground); margin-bottom: 4px;
+}
+.mini-progress .track {
+  height: 4px; border-radius: 2px; background: var(--muted); overflow: hidden;
+}
+.mini-progress .fill {
+  height: 100%; border-radius: 2px; background: var(--status-pass);
+  transition: width 0.3s;
+}
+.mini-progress .nums {
+  display: flex; justify-content: space-between; margin-top: 3px;
+  font-size: 9px; color: var(--muted-foreground);
+}
+
+.sparkline-section {
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.sparkline-section .label {
+  font-size: 10px; color: var(--muted-foreground); margin-bottom: 2px;
+}
+.sparkline-section .chart { width: 100%; height: 32px; }
+
+.open-dashboard-btn {
+  width: 100%;
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  padding: 6px 10px;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 11px; font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.open-dashboard-btn:hover { opacity: 0.85; }
+
+/* 中栏 */
+.center-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--background);
+}
+
+.center-tab-bar {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  border-bottom: 1px solid var(--border);
+  background: var(--secondary);
+  flex-shrink: 0;
+  padding: 0 4px;
+}
+.center-tab-bar .tab-label {
+  font-size: 11px; font-weight: 600; color: var(--foreground);
+  padding: 0 8px;
+}
+
+.dashboard-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Dashboard 顶部工具栏 */
+.dash-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.dash-title {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 700; color: var(--foreground);
+}
+
+.dash-controls {
+  display: flex; align-items: center; gap: 8px;
+}
+
+.range-selector {
+  display: flex; gap: 2px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden;
+}
+.range-btn {
+  padding: 3px 10px; font-size: 10px;
+  border: none; background: transparent; color: var(--muted-foreground);
+  cursor: pointer; transition: all 0.15s;
+}
+.range-btn:hover { background: var(--accent); color: var(--accent-foreground); }
+.range-btn.active { background: var(--primary); color: var(--primary-foreground); }
+
+.granularity-toggle {
+  display: flex; gap: 2px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden;
+}
+.granularity-btn {
+  padding: 3px 10px; font-size: 10px;
+  border: none; background: transparent; color: var(--muted-foreground);
+  cursor: pointer; transition: all 0.15s;
+}
+.granularity-btn:hover { background: var(--accent); color: var(--accent-foreground); }
+.granularity-btn.active { background: var(--primary); color: var(--primary-foreground); }
+
+.refresh-btn {
+  display: flex; align-items: center; gap: 3px;
+  padding: 3px 8px; font-size: 10px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: transparent; color: var(--muted-foreground);
+  cursor: pointer; transition: all 0.15s;
+}
+
+/* 子系统筛选下拉 */
+.subsys-filter {
+  padding: 3px 8px; font-size: 10px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--card); color: var(--foreground);
+  cursor: pointer; transition: all 0.15s;
+  outline: none;
+}
+.subsys-filter:hover { border-color: var(--primary); }
+.subsys-filter:focus { border-color: var(--primary); }
+.subsys-filter option { font-size: 11px; }
+.refresh-btn:hover { background: var(--accent); color: var(--accent-foreground); }
+.refresh-btn .icon { font-size: 12px; }
+.refresh-btn .icon.spinning { animation: spin 1s linear infinite; }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* Dashboard 标签页导航 */
+.dash-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 0 12px;
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.dash-tab {
+  display: flex; align-items: center; gap: 4px;
+  padding: 6px 12px;
+  font-size: 11px; font-weight: 500;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.dash-tab:hover { color: var(--foreground); }
+.dash-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+.dash-tab .badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 8px;
+  font-size: 9px; font-weight: 700;
+  background: var(--accent); color: var(--accent-foreground);
+}
+.dash-tab .badge.fail { background: var(--status-fail); color: var(--primary-foreground); }
+
+/* Dashboard 内容区 */
+.dash-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.dash-panel { display: none; }
+.dash-panel.active { display: block; }
+
+/* 概览卡片网格 */
+.overview-cards {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.metric-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  background: var(--card);
+}
+.metric-card.pass { border-color: color-mix(in oklch, var(--status-pass) 30%, transparent); background: color-mix(in oklch, var(--status-pass) 8%, var(--card)); }
+.metric-card.fail { border-color: color-mix(in oklch, var(--status-fail) 30%, transparent); background: color-mix(in oklch, var(--status-fail) 8%, var(--card)); }
+.metric-card.info { border-color: color-mix(in oklch, var(--info) 30%, transparent); background: color-mix(in oklch, var(--info) 8%, var(--card)); }
+.metric-card.violet { border-color: color-mix(in oklch, var(--violet) 30%, transparent); background: color-mix(in oklch, var(--violet) 8%, var(--card)); }
+
+.metric-card .header { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.metric-card .header .icon { font-size: 16px; }
+.metric-card .header .label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted-foreground); }
+.metric-card .value { font-size: 22px; font-weight: 700; color: var(--foreground); }
+.metric-card .sub { font-size: 10px; color: var(--muted-foreground); margin-top: 2px; }
+
+/* 图表容器 */
+.chart-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.chart-card .chart-title {
+  font-size: 11px; font-weight: 600; color: var(--muted-foreground);
+  margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;
+}
+.chart-card .chart-body { width: 100%; }
+
+.chart-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* 表格 */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.data-table th {
+  text-align: left;
+  padding: 6px 10px;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  color: var(--muted-foreground);
+  border-bottom: 1px solid var(--border);
+  background: var(--secondary);
+}
+.data-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--foreground);
+}
+.data-table tr:hover td { background: var(--accent); }
+.data-table .status-dot {
+  display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+  margin-right: 5px; vertical-align: middle;
+}
+.data-table .status-dot.pass { background: var(--status-pass); }
+.data-table .status-dot.fail { background: var(--status-fail); }
+.data-table .status-dot.running { background: var(--status-running); }
+.data-table .status-dot.pending { background: var(--status-pending); }
+.data-table .status-dot.aborted { background: var(--status-aborted); }
+.data-table .num { font-variant-numeric: tabular-nums; font-weight: 600; }
+.data-table .num.pass { color: var(--status-pass-foreground); }
+.data-table .num.fail { color: var(--status-fail-foreground); }
+
+/* 视图切换按钮 */
+.view-toggle {
+  display: flex; gap: 2px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  overflow: hidden;
+}
+.view-toggle-btn {
+  padding: 2px 8px; font-size: 10px;
+  border: none; background: transparent; color: var(--muted-foreground);
+  cursor: pointer; transition: all 0.15s;
+}
+.view-toggle-btn:hover { background: var(--accent); color: var(--accent-foreground); }
+.view-toggle-btn.active { background: var(--primary); color: var(--primary-foreground); }
+
+/* 进度条 */
+.progress-bar {
+  height: 6px; border-radius: 3px; background: var(--muted); overflow: hidden;
+}
+.progress-bar .fill {
+  height: 100%; border-radius: 3px; background: var(--status-pass);
+}
+
+/* 回归进度仪表盘 */
+.regression-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.reg-stat {
+  text-align: center;
+  padding: 14px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.reg-stat .num { font-size: 28px; font-weight: 700; color: var(--foreground); }
+.reg-stat .num.pass { color: var(--status-pass-foreground); }
+.reg-stat .num.fail { color: var(--status-fail-foreground); }
+.reg-stat .num.pending { color: var(--status-pending-foreground); }
+.reg-stat .lbl { font-size: 10px; color: var(--muted-foreground); margin-top: 2px; }
+
+/* 空状态 */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 40px 20px;
+  text-align: center;
+}
+.empty-state .icon { font-size: 32px; color: var(--muted-foreground); margin-bottom: 8px; opacity: 0.5; }
+.empty-state .title { font-size: 13px; font-weight: 600; color: var(--foreground); margin-bottom: 4px; }
+.empty-state .desc { font-size: 11px; color: var(--muted-foreground); max-width: 300px; line-height: 1.5; }
+
+/* 右栏占位 */
+.right-panel {
+  width: 300px;
+  flex-shrink: 0;
+  background: var(--sidebar);
+  border-left: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted-foreground); }
+
+/* SVG sparkline */
+.sparkline-svg { width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+
+<div class="app-shell">
+  <!-- TitleBar -->
+  <div class="title-bar">
+    <div class="left">
+      <span class="logo">SoC Verify</span>
+    </div>
+    <div class="right">
+      <button class="theme-btn active" data-theme="drafting" onclick="switchTheme('drafting')">Drafting</button>
+      <button class="theme-btn" data-theme="bench" onclick="switchTheme('bench')">Bench</button>
+    </div>
+  </div>
+
+  <div class="main-area">
+    <!-- 左栏 LeftRail -->
+    <div class="left-rail">
+      <div class="rail-tabs">
+        <div class="rail-tab">文件</div>
+        <div class="rail-tab">子系统</div>
+        <div class="rail-tab active">概览</div>
+        <div class="rail-tab">插件</div>
+      </div>
+      <div class="rail-content">
+        <!-- 概览缩略数据 -->
+        <div class="overview-section">
+          <div class="overview-header">
+            <span>项目概览</span>
+            <button title="刷新概览" onclick="refreshOverview()">↻</button>
+          </div>
+
+          <!-- 统计行 -->
+          <div class="stats-row">
+            <div class="stat-inline">
+              <span class="num">12</span><span class="lbl">子系统</span>
+              <span class="sep">·</span>
+              <span class="num">842</span><span class="lbl">用例</span>
+              <span class="sep">·</span>
+              <span class="num pass">68.3%</span><span class="lbl">通过率</span>
+              <span class="sep">·</span>
+              <span class="num fail">237</span><span class="lbl">失败</span>
+            </div>
+          </div>
+
+          <!-- 迷你回归进度条 -->
+          <div class="mini-progress">
+            <div class="label">回归进度</div>
+            <div class="track">
+              <div class="fill" style="width: 71.9%"></div>
+            </div>
+            <div class="nums">
+              <span>已跑 606 / 842</span>
+              <span>71.9%</span>
+            </div>
+          </div>
+
+          <!-- 7 天 sparkline -->
+          <div class="sparkline-section">
+            <div class="label">近 7 天 pass/fail 趋势</div>
+            <div class="chart" id="leftSparkline"></div>
+          </div>
+
+          <!-- 打开仪表盘按钮 -->
+          <button class="open-dashboard-btn" onclick="openDashboard()">
+            📊 打开完整仪表盘
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 中栏 CenterArea -->
+    <div class="center-area">
+      <!-- Tab bar -->
+      <div class="center-tab-bar">
+        <span class="tab-label">📊 仪表盘</span>
+      </div>
+
+      <div class="dashboard-container">
+        <!-- 顶部工具栏 -->
+        <div class="dash-toolbar">
+          <div class="dash-title">项目仪表盘</div>
+          <div class="dash-controls">
+            <!-- 时间范围选择器 -->
+            <div class="range-selector">
+              <button class="range-btn active" data-range="all" onclick="switchRange('all')">全部</button>
+              <button class="range-btn" data-range="7d" onclick="switchRange('7d')">最近 7 天</button>
+              <button class="range-btn" data-range="30d" onclick="switchRange('30d')">最近 30 天</button>
+              <button class="range-btn" data-range="custom" onclick="switchRange('custom')">自定义</button>
+            </div>
+            <!-- 子系统筛选 -->
+            <select class="subsys-filter" id="subsysFilter" onchange="switchSubsysFilter(this.value)">
+              <option value="all">全部子系统</option>
+            </select>
+            <!-- 粒度切换（仅趋势标签页可见） -->
+            <div class="granularity-toggle" id="granularityToggle" style="display:none;">
+              <button class="granularity-btn active" data-gran="daily" onclick="switchGranularity('daily')">每日</button>
+              <button class="granularity-btn" data-gran="weekly" onclick="switchGranularity('weekly')">每周</button>
+            </div>
+            <!-- 视图切换（仅子系统标签页可见） -->
+            <div class="view-toggle" id="viewToggle" style="display:none;">
+              <button class="view-toggle-btn active" data-view="heatmap" onclick="switchView('heatmap')">热力图</button>
+              <button class="view-toggle-btn" data-view="table" onclick="switchView('table')">表格</button>
+            </div>
+            <!-- 刷新按钮 -->
+            <button class="refresh-btn" onclick="refreshDashboard()">
+              <span class="icon" id="refreshIcon">↻</span>
+              <span>刷新</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 标签页导航 -->
+        <div class="dash-tabs">
+          <div class="dash-tab active" data-tab="overview" onclick="switchTab('overview')">概览</div>
+          <div class="dash-tab" data-tab="trend" onclick="switchTab('trend')">趋势</div>
+          <div class="dash-tab" data-tab="subsys" onclick="switchTab('subsys')">子系统</div>
+          <div class="dash-tab" data-tab="failures" onclick="switchTab('failures')">失败 <span class="badge fail">237</span></div>
+          <div class="dash-tab" data-tab="regression" onclick="switchTab('regression')">回归进度</div>
+          <div class="dash-tab" data-tab="duration" onclick="switchTab('duration')">耗时分布</div>
+          <div class="dash-tab" data-tab="unstable" onclick="switchTab('unstable')">不稳定 <span class="badge">18</span></div>
+          <div class="dash-tab" data-tab="phase" onclick="switchTab('phase')">阶段</div>
+          <div class="dash-tab" data-tab="debug" onclick="switchTab('debug')">调试难度</div>
+        </div>
+
+        <!-- 内容区 -->
+        <div class="dash-content">
+
+          <!-- ═══ 概览标签页 ═══ -->
+          <div class="dash-panel active" data-panel="overview">
+            <div class="overview-cards">
+              <div class="metric-card pass">
+                <div class="header"><span class="icon" style="color:var(--status-pass-foreground)">✓</span><span class="label">通过率</span></div>
+                <div class="value">68.3%</div>
+                <div class="sub">575 / 842 用例通过</div>
+              </div>
+              <div class="metric-card fail">
+                <div class="header"><span class="icon" style="color:var(--status-fail-foreground)">✗</span><span class="label">失败率</span></div>
+                <div class="value">28.1%</div>
+                <div class="sub">237 次失败</div>
+              </div>
+              <div class="metric-card info">
+                <div class="header"><span class="icon" style="color:var(--info-foreground)">📊</span><span class="label">已跑仿真</span></div>
+                <div class="value">3,284</div>
+                <div class="sub">总计 1,240 小时</div>
+              </div>
+              <div class="metric-card violet">
+                <div class="header"><span class="icon" style="color:var(--violet-foreground)">🔄</span><span class="label">回归次数</span></div>
+                <div class="value">15</div>
+                <div class="sub">历史运行</div>
+              </div>
+            </div>
+
+            <div class="chart-grid-2">
+              <div class="chart-card">
+                <div class="chart-title">仿真通过/失败分布</div>
+                <div class="chart-body" id="overviewPassFail" style="height: 200px;"></div>
+              </div>
+              <div class="chart-card">
+                <div class="chart-title">近 14 天趋势</div>
+                <div class="chart-body" id="overviewTrend" style="height: 200px;"></div>
+              </div>
+            </div>
+
+            <div class="chart-card">
+              <div class="chart-title">子系统通过率概览</div>
+              <div class="chart-body" id="overviewSubsys" style="height: 280px;"></div>
+            </div>
+          </div>
+
+          <!-- ═══ 趋势标签页 ═══ -->
+          <div class="dash-panel" data-panel="trend">
+            <div class="chart-card">
+              <div class="chart-title">每日 pass/fail 趋势</div>
+              <div class="chart-body" id="trendChart" style="height: 360px;"></div>
+            </div>
+            <div class="chart-card">
+              <div class="chart-title">累计通过率趋势</div>
+              <div class="chart-body" id="cumulativeTrend" style="height: 200px;"></div>
+            </div>
+          </div>
+
+          <!-- ═══ 子系统标签页 ═══ -->
+          <div class="dash-panel" data-panel="subsys">
+            <div class="chart-card" id="subsysHeatmapCard">
+              <div class="chart-title">子系统 pass/fail 热力图</div>
+              <div class="chart-body" id="subsysHeatmap" style="height: 400px;"></div>
+            </div>
+            <div class="chart-card" id="subsysTableCard" style="display:none;">
+              <div class="chart-title">子系统通过率明细表</div>
+              <table class="data-table" id="subsysTable">
+                <thead>
+                  <tr>
+                    <th>子系统</th><th>用例总数</th><th>Pass</th><th>Fail</th>
+                    <th>Pending</th><th>通过率</th><th>进度</th>
+                  </tr>
+                </thead>
+                <tbody id="subsysTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- ═══ 失败标签页 ═══ -->
+          <div class="dash-panel" data-panel="failures">
+            <div class="chart-card">
+              <div class="chart-title">最近失败用例</div>
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>用例名</th><th>子系统</th><th>状态</th><th>时间</th>
+                    <th>耗时</th>
+                  </tr>
+                </thead>
+                <tbody id="failuresBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- ═══ 回归进度标签页 ═══ -->
+          <div class="dash-panel" data-panel="regression">
+            <div class="regression-grid">
+              <div class="reg-stat">
+                <div class="num">842</div>
+                <div class="lbl">用例总数</div>
+              </div>
+              <div class="reg-stat">
+                <div class="num pass">575</div>
+                <div class="lbl">已通过</div>
+              </div>
+              <div class="reg-stat">
+                <div class="num fail">31</div>
+                <div class="lbl">已跑未通过</div>
+              </div>
+              <div class="reg-stat">
+                <div class="num pending">236</div>
+                <div class="lbl">未运行</div>
+              </div>
+            </div>
+            <div class="chart-card">
+              <div class="chart-title">整体通过率</div>
+              <div style="display:flex;align-items:center;gap:16px;padding:12px 0;">
+                <div style="font-size:36px;font-weight:700;color:var(--status-pass-foreground);">68.3%</div>
+                <div style="flex:1;">
+                  <div class="progress-bar"><div class="fill" style="width:68.3%"></div></div>
+                  <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:var(--muted-foreground);">
+                    <span>575 pass / 842 total</span>
+                    <span>目标: 90%</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="chart-card">
+              <div class="chart-title">按子系统回归进度</div>
+              <div class="chart-body" id="regressionBySubsys" style="height: 360px;"></div>
+            </div>
+          </div>
+
+          <!-- ═══ 耗时分布标签页 ═══ -->
+          <div class="dash-panel" data-panel="duration">
+            <div class="chart-card">
+              <div class="chart-title">仿真耗时分布直方图 <span style="font-size:10px;color:var(--muted-foreground);">— 红线为 P95 分位（42.3s）</span></div>
+              <div class="chart-body" id="durationHistogram" style="height: 360px;"></div>
+            </div>
+            <div class="chart-card">
+              <div class="chart-title">最慢用例 Top 10</div>
+              <table class="data-table">
+                <thead>
+                  <tr><th>用例名</th><th>子系统</th><th>耗时</th><th>状态</th><th>时间</th></tr>
+                </thead>
+                <tbody id="slowestBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- ═══ 不稳定用例标签页 ═══ -->
+          <div class="dash-panel" data-panel="unstable">
+            <div class="chart-card">
+              <div class="chart-title">不稳定用例（有时 pass 有时 fail）— 按失败率降序</div>
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>用例名</th><th>子系统</th><th>Pass 次数</th><th>Fail 次数</th>
+                    <th>总运行</th><th>失败率</th><th>最近状态</th>
+                  </tr>
+                </thead>
+                <tbody id="unstableBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- ═══ 阶段标签页 ═══ -->
+          <div class="dash-panel" data-panel="phase">
+            <div class="chart-card">
+              <div class="chart-title">按仿真阶段分组的通过率</div>
+              <div class="chart-body" id="phaseChart" style="height: 320px;"></div>
+            </div>
+            <div class="chart-card">
+              <div class="chart-title">阶段明细</div>
+              <table class="data-table">
+                <thead>
+                  <tr><th>阶段</th><th>用例数</th><th>Pass</th><th>Fail</th><th>Pending</th><th>通过率</th></tr>
+                </thead>
+                <tbody id="phaseTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- ═══ 调试难度标签页 ═══ -->
+          <div class="dash-panel" data-panel="debug">
+            <div class="chart-card">
+              <div class="chart-title">调试难度散点图 <span style="font-size:10px;color:var(--muted-foreground);">— X: 首次提交到首次 pass 天数 · Y: pass 前 fail 次数</span></div>
+              <div class="chart-body" id="debugScatter" style="height: 360px;"></div>
+            </div>
+            <div class="chart-card">
+              <div class="chart-title">调试难度最高用例 Top 10</div>
+              <table class="data-table">
+                <thead>
+                  <tr><th>用例名</th><th>子系统</th><th>调试天数</th><th>Pass 前 Fail</th><th>难度指数</th></tr>
+                </thead>
+                <tbody id="debugTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- 右栏占位 -->
+    <div class="right-panel">AI Agent 会话</div>
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════
+// Mock 数据
+// ════════════════════════════════════════════════════════════
+
+const SUBSYSTEMS = ['cpu_core', 'gpu_render', 'ddr_ctrl', 'pcie_phy', 'usb_ctrl', 'spi_flash', 'i2c_bus', 'uart_dbg', 'dma_eng', 'interrupt', 'timer_unit', 'clock_mgr'];
+
+const MOCK = {
+  // 趋势数据 — 14 天
+  trend: (() => {
+    const days = [];
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      const label = `${d.getMonth()+1}/${d.getDate()}`;
+      const pass = Math.floor(80 + Math.random() * 120);
+      const fail = Math.floor(10 + Math.random() * 40);
+      days.push({ label, pass, fail });
+    }
+    return days;
+  })(),
+
+  // 子系统 pass/fail
+  subsys: SUBSYSTEMS.map(name => {
+    const total = 30 + Math.floor(Math.random() * 100);
+    const pass = Math.floor(total * (0.5 + Math.random() * 0.4));
+    const fail = Math.floor(total * Math.random() * 0.3);
+    const pending = total - pass - fail;
+    return { name, total, pass, fail, pending, passRate: (pass/total*100) };
+  }),
+
+  // 最近失败
+  failures: Array.from({length: 15}, (_, i) => {
+    const subsys = SUBSYSTEMS[i % SUBSYSTEMS.length];
+    const d = new Date(Date.now() - i * 3600000 * (1 + Math.random() * 3));
+    const dur = Math.floor(Math.random() * 120);
+    return {
+      caseName: `${subsys}_case_${String.fromCharCode(97 + i)}${Math.floor(Math.random()*99)}`,
+      subsys,
+      status: 'fail',
+      time: d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
+      duration: dur,
+    };
+  }),
+
+  // 耗时分布
+  durations: Array.from({length: 500}, () => {
+    const r = Math.random();
+    if (r < 0.3) return Math.floor(Math.random() * 5);
+    if (r < 0.6) return Math.floor(5 + Math.random() * 20);
+    if (r < 0.85) return Math.floor(25 + Math.random() * 50);
+    if (r < 0.95) return Math.floor(75 + Math.random() * 100);
+    return Math.floor(175 + Math.random() * 300);
+  }),
+
+  // 不稳定用例
+  unstable: Array.from({length: 18}, (_, i) => {
+    const subsys = SUBSYSTEMS[i % SUBSYSTEMS.length];
+    const pass = Math.floor(1 + Math.random() * 8);
+    const fail = Math.floor(1 + Math.random() * 12);
+    const total = pass + fail;
+    return {
+      caseName: `${subsys}_flaky_${i}`,
+      subsys,
+      passCount: pass,
+      failCount: fail,
+      totalRuns: total,
+      failRate: (fail / total * 100),
+      lastStatus: Math.random() > 0.5 ? 'pass' : 'fail',
+    };
+  }).sort((a, b) => b.failRate - a.failRate),
+
+  // 阶段
+  phases: [
+    { name: 'DVR1', total: 142, pass: 128, fail: 8, pending: 6 },
+    { name: 'DVR2', total: 186, pass: 152, fail: 21, pending: 13 },
+    { name: 'DVR3', total: 134, pass: 98, fail: 28, pending: 8 },
+    { name: 'DVS1', total: 168, pass: 112, fail: 35, pending: 21 },
+    { name: 'DVS2', total: 120, pass: 58, fail: 42, pending: 20 },
+    { name: 'POST', total: 92, pass: 27, fail: 103, pending: 168 },
+  ],
+
+  // 调试难度
+  debug: Array.from({length: 60}, (_, i) => {
+    const subsys = SUBSYSTEMS[i % SUBSYSTEMS.length];
+    const days = Math.floor(Math.random() * 30);
+    const failsBeforePass = Math.floor(Math.random() * 15);
+    return {
+      caseName: `${subsys}_case_${i}`,
+      subsys,
+      daysToFirstPass: days,
+      failsBeforePass,
+      difficulty: days * failsBeforePass,
+    };
+  }).sort((a, b) => b.difficulty - a.difficulty),
+};
+
+// ════════════════════════════════════════════════════════════
+// ECharts 主题构建 — 从 CSS 变量读取
+// ════════════════════════════════════════════════════════════
+
+function buildEChartsTheme() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (name) => cs.getPropertyValue(name).trim();
+
+  return {
+    color: [v('--chart-1'), v('--chart-2'), v('--chart-3'), v('--chart-4'),
+            v('--status-pass'), v('--status-fail'), v('--status-running'), v('--status-pending')],
+    backgroundColor: 'transparent',
+    textStyle: { color: v('--foreground'), fontFamily: 'inherit' },
+    title: { textStyle: { color: v('--foreground') } },
+    legend: { textStyle: { color: v('--muted-foreground') } },
+    tooltip: {
+      backgroundColor: v('--card'),
+      borderColor: v('--border'),
+      textStyle: { color: v('--card-foreground') },
+    },
+    xAxis: {
+      axisLine: { lineStyle: { color: v('--border') } },
+      axisLabel: { color: v('--muted-foreground') },
+      splitLine: { lineStyle: { color: v('--border'), opacity: 0.3 } },
+    },
+    yAxis: {
+      axisLine: { lineStyle: { color: v('--border') } },
+      axisLabel: { color: v('--muted-foreground') },
+      splitLine: { lineStyle: { color: v('--border'), opacity: 0.3 } },
+    },
+    grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+  };
+}
+
+function getCSSVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+// 图表实例缓存
+const charts = {};
+
+function initChart(id, option) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (charts[id]) charts[id].dispose();
+  const chart = echarts.init(el, null, { renderer: 'canvas' });
+  chart.setOption(option);
+  charts[id] = chart;
+  return chart;
+}
+
+function refreshAllCharts() {
+  renderCurrentTab();
+}
+
+// ════════════════════════════════════════════════════════════
+// 图表渲染函数
+// ════════════════════════════════════════════════════════════
+
+function renderLeftSparkline() {
+  const pass = getCSSVar('--status-pass');
+  const fail = getCSSVar('--status-fail');
+  const border = getCSSVar('--border');
+  const muted = getCSSVar('--muted-foreground');
+
+  const data = MOCK.trend.slice(-7);
+  const svg = `<svg class="sparkline-svg" viewBox="0 0 200 32" preserveAspectRatio="none">
+    ${data.map((d, i) => {
+      const x = (i / (data.length - 1)) * 190 + 5;
+      const yPass = 28 - (d.pass / 200) * 24;
+      return `<circle cx="${x}" cy="${yPass}" r="1.5" fill="${pass}"/>`;
+    }).join('')}
+    <polyline points="${data.map((d, i) => {
+      const x = (i / (data.length - 1)) * 190 + 5;
+      const yPass = 28 - (d.pass / 200) * 24;
+      return `${x},${yPass}`;
+    }).join(' ')}" fill="none" stroke="${pass}" stroke-width="1"/>
+    ${data.map((d, i) => {
+      const x = (i / (data.length - 1)) * 190 + 5;
+      const yFail = 28 - (d.fail / 200) * 24;
+      return `<circle cx="${x}" cy="${yFail}" r="1.5" fill="${fail}"/>`;
+    }).join('')}
+    <polyline points="${data.map((d, i) => {
+      const x = (i / (data.length - 1)) * 190 + 5;
+      const yFail = 28 - (d.fail / 200) * 24;
+      return `${x},${yFail}`;
+    }).join(' ')}" fill="none" stroke="${fail}" stroke-width="1"/>
+  </svg>`;
+  document.getElementById('leftSparkline').innerHTML = svg;
+}
+
+function renderOverview() {
+  const pass = getCSSVar('--status-pass');
+  const fail = getCSSVar('--status-fail');
+  const chart1 = getCSSVar('--chart-1');
+  const chart2 = getCSSVar('--chart-2');
+
+  const subsysData = getFilteredData(MOCK.subsys, 'name');
+  const totalPass = subsysData.reduce((s, x) => s + x.pass, 0);
+  const totalFail = subsysData.reduce((s, x) => s + x.fail, 0);
+  const totalPending = subsysData.reduce((s, x) => s + x.pending, 0);
+
+  // Pass/Fail 饼图
+  initChart('overviewPassFail', {
+    tooltip: { trigger: 'item' },
+    legend: { bottom: 0, textStyle: { color: getCSSVar('--muted-foreground'), fontSize: 10 } },
+    series: [{
+      type: 'pie', radius: ['40%', '65%'], center: ['50%', '45%'],
+      label: { show: false },
+      data: [
+        { value: totalPass, name: 'Pass', itemStyle: { color: pass } },
+        { value: totalFail, name: 'Fail', itemStyle: { color: fail } },
+        { value: totalPending, name: 'Pending', itemStyle: { color: getCSSVar('--status-pending') } },
+      ]
+    }]
+  });
+
+  // 趋势迷你折线图
+  initChart('overviewTrend', {
+    tooltip: { trigger: 'axis' },
+    legend: { bottom: 0, textStyle: { color: getCSSVar('--muted-foreground'), fontSize: 10 } },
+    xAxis: { type: 'category', data: MOCK.trend.map(d => d.label), axisLabel: { fontSize: 9 } },
+    yAxis: { type: 'value', axisLabel: { fontSize: 9 } },
+    series: [
+      { name: 'Pass', type: 'line', smooth: true, data: MOCK.trend.map(d => d.pass), itemStyle: { color: pass }, areaStyle: { opacity: 0.1 } },
+      { name: 'Fail', type: 'line', smooth: true, data: MOCK.trend.map(d => d.fail), itemStyle: { color: fail } },
+    ]
+  });
+
+  // 子系统通过率柱状图
+  initChart('overviewSubsys', {
+    tooltip: { trigger: 'axis' },
+    legend: { bottom: 0, textStyle: { color: getCSSVar('--muted-foreground'), fontSize: 10 } },
+    xAxis: { type: 'category', data: subsysData.map(s => s.name), axisLabel: { fontSize: 9, rotate: 30, color: getCSSVar('--muted-foreground') } },
+    yAxis: { type: 'value', axisLabel: { fontSize: 9, formatter: '{value}%', color: getCSSVar('--muted-foreground') }, max: 100 },
+    series: [
+      { name: '通过率', type: 'bar', data: subsysData.map(s => s.passRate.toFixed(1)), itemStyle: { color: pass, borderRadius: [2,2,0,0] } },
+    ]
+  });
+}
+
+function renderTrend() {
+  const pass = getCSSVar('--status-pass');
+  const fail = getCSSVar('--status-fail');
+
+  // 每日趋势柱状图
+  initChart('trendChart', {
+    tooltip: { trigger: 'axis' },
+    legend: { bottom: 0, textStyle: { color: getCSSVar('--muted-foreground'), fontSize: 10 } },
+    xAxis: { type: 'category', data: MOCK.trend.map(d => d.label), axisLabel: { color: getCSSVar('--muted-foreground') } },
+    yAxis: { type: 'value', axisLabel: { color: getCSSVar('--muted-foreground') } },
+    series: [
+      { name: 'Pass', type: 'bar', stack: 'total', data: MOCK.trend.map(d => d.pass), itemStyle: { color: pass } },
+      { name: 'Fail', type: 'bar', stack: 'total', data: MOCK.trend.map(d => d.fail), itemStyle: { color: fail } },
+    ]
+  });
+
+  // 累计通过率
+  let cumPass = 0, cumTotal = 0;
+  const cumRate = MOCK.trend.map(d => {
+    cumPass += d.pass; cumTotal += d.pass + d.fail;
+    return cumTotal > 0 ? (cumPass / cumTotal * 100).toFixed(1) : 0;
+  });
+  initChart('cumulativeTrend', {
+    tooltip: { trigger: 'axis' },
+    xAxis: { type: 'category', data: MOCK.trend.map(d => d.label), axisLabel: { color: getCSSVar('--muted-foreground') } },
+    yAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}%', color: getCSSVar('--muted-foreground') } },
+    series: [{ name: '累计通过率', type: 'line', smooth: true, data: cumRate, itemStyle: { color: getCSSVar('--chart-1') }, areaStyle: { opacity: 0.1 } }]
+  });
+}
+
+function renderSubsysHeatmap() {
+  const passColor = getCSSVar('--status-pass');
+  const failColor = getCSSVar('--status-fail');
+  const pendingColor = getCSSVar('--status-pending');
+  const cardColor = getCSSVar('--card');
+  const fgColor = getCSSVar('--foreground');
+  const cardFgColor = getCSSVar('--card-foreground');
+
+  const subsysData = getFilteredData(MOCK.subsys, 'name');
+  const statusLabels = ['pass', 'fail', 'pending'];
+  const statusColors = [passColor, failColor, pendingColor];
+
+  // 按列（status）计算各自的最大值，用于渐变强度
+  const maxByCol = [
+    Math.max(...subsysData.map(s => s.pass), 1),
+    Math.max(...subsysData.map(s => s.fail), 1),
+    Math.max(...subsysData.map(s => s.pending), 1),
+  ];
+
+  const data = [];
+  subsysData.forEach((s, i) => {
+    data.push([i, 0, s.pass]);
+    data.push([i, 1, s.fail]);
+    data.push([i, 2, s.pending]);
+  });
+
+  // 自定义 itemStyle：每列用对应 status 颜色的渐变
+  function getItemStyle(params) {
+    const val = params.data[2];
+    const col = params.data[1]; // 0=pass, 1=fail, 2=pending
+    const max = maxByCol[col];
+    const intensity = max > 0 ? val / max : 0; // 0~1
+    const baseColor = statusColors[col];
+    // 从 cardColor（低值）到 statusColor（高值）的渐变
+    return {
+      color: blendColors(cardColor, baseColor, intensity),
+      borderColor: getCSSVar('--border'),
+      borderWidth: 1,
+    };
+  }
+
+  // 标签颜色根据背景明暗自适应
+  function getLabelColor(params) {
+    const val = params.data[2];
+    const col = params.data[1];
+    const max = maxByCol[col];
+    const intensity = max > 0 ? val / max : 0;
+    // 高强度（深色背景）用浅色文字，低强度用深色文字
+    return intensity > 0.5 ? '#ffffff' : fgColor;
+  }
+
+  initChart('subsysHeatmap', {
+    tooltip: {
+      trigger: 'item',
+      formatter: (p) => {
+        const s = subsysData[p.data[0]];
+        const status = statusLabels[p.data[1]];
+        return `${s.name}<br/>${status}: ${p.data[2]}`;
+      }
+    },
+    grid: { left: 100, right: 30, top: 20, bottom: 20 },
+    xAxis: { type: 'category', data: statusLabels, axisLabel: { fontSize: 11, color: getCSSVar('--muted-foreground') }, splitArea: { show: false } },
+    yAxis: { type: 'category', data: subsysData.map(s => s.name), axisLabel: { fontSize: 10, color: getCSSVar('--muted-foreground') }, splitArea: { show: false } },
+    series: [{
+      type: 'heatmap',
+      data: data,
+      itemStyle: { borderColor: getCSSVar('--border'), borderWidth: 1 },
+      label: {
+        show: true, fontSize: 10,
+        color: getLabelColor,
+      },
+      emphasis: {
+        itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.3)' }
+      },
+      // 用 visualMap 不行（单色），改用自定义 series data itemStyle
+      data: data.map(d => ({
+        value: d,
+        itemStyle: getItemStyle({ data: d }),
+        label: { color: getLabelColor({ data: d }) },
+      })),
+    }]
+  });
+}
+
+// OKLCH 颜色混合工具（简化：直接用 rgba 混合）
+function blendColors(color1, color2, ratio) {
+  // 如果是 oklch，浏览器会自动解析为 rgb，这里用 canvas 辅助
+  try {
+    const c1 = parseColor(color1);
+    const c2 = parseColor(color2);
+    const r = Math.round(c1.r * (1 - ratio) + c2.r * ratio);
+    const g = Math.round(c1.g * (1 - ratio) + c2.g * ratio);
+    const b = Math.round(c1.b * (1 - ratio) + c2.b * ratio);
+    return `rgb(${r},${g},${b})`;
+  } catch {
+    return color2;
+  }
+}
+
+function parseColor(str) {
+  // 用一个临时元素来解析颜色
+  const div = document.createElement('div');
+  div.style.color = str;
+  document.body.appendChild(div);
+  const computed = getComputedStyle(div).color;
+  document.body.removeChild(div);
+  const match = computed.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (match) {
+    return { r: parseInt(match[1]), g: parseInt(match[2]), b: parseInt(match[3]) };
+  }
+  return { r: 128, g: 128, b: 128 };
+}
+
+function renderSubsysTable() {
+  const subsysData = getFilteredData(MOCK.subsys, 'name');
+  const tbody = document.getElementById('subsysTableBody');
+  tbody.innerHTML = subsysData.map(s => `
+    <tr>
+      <td>${s.name}</td>
+      <td class="num">${s.total}</td>
+      <td class="num pass">${s.pass}</td>
+      <td class="num fail">${s.fail}</td>
+      <td class="num">${s.pending}</td>
+      <td class="num ${s.passRate > 70 ? 'pass' : s.passRate < 50 ? 'fail' : ''}">${s.passRate.toFixed(1)}%</td>
+      <td style="width:100px;">
+        <div class="progress-bar"><div class="fill" style="width:${(s.pass+s.fail)/s.total*100}%; background: ${s.passRate>70?getCSSVar('--status-pass'):s.passRate<50?getCSSVar('--status-fail'):getCSSVar('--status-pending')}"></div></div>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function renderFailures() {
+  const filtered = getFilteredData(MOCK.failures, 'subsys');
+  const tbody = document.getElementById('failuresBody');
+  tbody.innerHTML = filtered.map(f => `
+    <tr>
+      <td>${f.caseName}</td>
+      <td>${f.subsys}</td>
+      <td><span class="status-dot fail"></span>fail</td>
+      <td>${f.time}</td>
+      <td class="num">${f.duration}s</td>
+    </tr>
+  `).join('');
+}
+
+function renderRegression() {
+  const subsysData = getFilteredData(MOCK.subsys, 'name');
+  initChart('regressionBySubsys', {
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    legend: { bottom: 0, textStyle: { color: getCSSVar('--muted-foreground'), fontSize: 10 } },
+    xAxis: { type: 'category', data: subsysData.map(s => s.name), axisLabel: { fontSize: 9, rotate: 30, color: getCSSVar('--muted-foreground') } },
+    yAxis: { type: 'value', axisLabel: { fontSize: 9, color: getCSSVar('--muted-foreground') } },
+    series: [
+      { name: 'Pass', type: 'bar', stack: 'total', data: subsysData.map(s => s.pass), itemStyle: { color: getCSSVar('--status-pass') } },
+      { name: 'Fail', type: 'bar', stack: 'total', data: subsysData.map(s => s.fail), itemStyle: { color: getCSSVar('--status-fail') } },
+      { name: 'Pending', type: 'bar', stack: 'total', data: subsysData.map(s => s.pending), itemStyle: { color: getCSSVar('--status-pending') } },
+    ]
+  });
+}
+
+function renderDuration() {
+  const pass = getCSSVar('--status-pass');
+  const fail = getCSSVar('--status-fail');
+  const muted = getCSSVar('--muted-foreground');
+  const border = getCSSVar('--border');
+  const durations = MOCK.durations.sort((a, b) => a - b);
+  const p95 = durations[Math.floor(durations.length * 0.95)];
+
+  // 自动分桶
+  const min = 0, max = durations[durations.length - 1];
+  const bucketCount = 15;
+  const bucketSize = Math.ceil((max - min) / bucketCount);
+  const buckets = Array(bucketCount).fill(0);
+  const labels = [];
+  for (let i = 0; i < bucketCount; i++) {
+    labels.push(`${min + i * bucketSize}-${min + (i+1) * bucketSize}s`);
+  }
+  for (const d of durations) {
+    const idx = Math.min(Math.floor((d - min) / bucketSize), bucketCount - 1);
+    buckets[idx]++;
+  }
+
+  initChart('durationHistogram', {
+    tooltip: { trigger: 'axis' },
+    xAxis: { type: 'category', data: labels, axisLabel: { fontSize: 9, rotate: 30, color: muted } },
+    yAxis: { type: 'value', axisLabel: { color: muted } },
+    series: [{
+      type: 'bar', data: buckets.map((v, i) => ({
+        value: v,
+        itemStyle: { color: (min + i * bucketSize) > p95 ? fail : pass, borderRadius: [2,2,0,0] }
+      })),
+      markLine: {
+        data: [{ xAxis: p95 / bucketSize - 0.5, label: { formatter: `P95: ${p95}s`, color: fail } }],
+        lineStyle: { color: fail, width: 2, type: 'dashed' },
+      }
+    }]
+  });
+
+  // 最慢用例表
+  const allSlow = MOCK.durations.map((d, i) => ({
+    caseName: `${SUBSYSTEMS[i % SUBSYSTEMS.length]}_case_${i}`,
+    subsys: SUBSYSTEMS[i % SUBSYSTEMS.length],
+    duration: d,
+    status: Math.random() > 0.3 ? 'pass' : 'fail',
+    time: new Date(Date.now() - Math.random() * 86400000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }),
+  }));
+  const slowest = getFilteredData(allSlow, 'subsys').sort((a, b) => b.duration - a.duration).slice(0, 10);
+
+  document.getElementById('slowestBody').innerHTML = slowest.map(s => `
+    <tr>
+      <td>${s.caseName}</td>
+      <td>${s.subsys}</td>
+      <td class="num">${s.duration}s</td>
+      <td><span class="status-dot ${s.status}"></span>${s.status}</td>
+      <td>${s.time}</td>
+    </tr>
+  `).join('');
+}
+
+function renderUnstable() {
+  const unstableData = getFilteredData(MOCK.unstable, 'subsys');
+  const tbody = document.getElementById('unstableBody');
+  tbody.innerHTML = unstableData.map(u => `
+    <tr>
+      <td>${u.caseName}</td>
+      <td>${u.subsys}</td>
+      <td class="num pass">${u.passCount}</td>
+      <td class="num fail">${u.failCount}</td>
+      <td class="num">${u.totalRuns}</td>
+      <td class="num ${u.failRate > 60 ? 'fail' : ''}">${u.failRate.toFixed(0)}%</td>
+      <td><span class="status-dot ${u.lastStatus}"></span>${u.lastStatus}</td>
+    </tr>
+  `).join('');
+}
+
+function renderPhase() {
+  const pass = getCSSVar('--status-pass');
+  const fail = getCSSVar('--status-fail');
+  const pending = getCSSVar('--status-pending');
+
+  initChart('phaseChart', {
+    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+    legend: { bottom: 0, textStyle: { color: getCSSVar('--muted-foreground'), fontSize: 10 } },
+    xAxis: { type: 'category', data: MOCK.phases.map(p => p.name) },
+    yAxis: { type: 'value', max: 100, axisLabel: { formatter: '{value}%' } },
+    series: [
+      { name: '通过率', type: 'bar', data: MOCK.phases.map(p => (p.pass / p.total * 100).toFixed(1)), itemStyle: { color: pass, borderRadius: [2,2,0,0] } },
+      { name: '失败率', type: 'bar', data: MOCK.phases.map(p => (p.fail / p.total * 100).toFixed(1)), itemStyle: { color: fail, borderRadius: [2,2,0,0] } },
+    ]
+  });
+
+  document.getElementById('phaseTableBody').innerHTML = MOCK.phases.map(p => {
+    const passRate = (p.pass / p.total * 100).toFixed(1);
+    return `
+      <tr>
+        <td>${p.name}</td>
+        <td class="num">${p.total}</td>
+        <td class="num pass">${p.pass}</td>
+        <td class="num fail">${p.fail}</td>
+        <td class="num">${p.pending}</td>
+        <td class="num ${passRate > 70 ? 'pass' : passRate < 50 ? 'fail' : ''}">${passRate}%</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function renderDebug() {
+  const pass = getCSSVar('--status-pass');
+  const fail = getCSSVar('--status-fail');
+  const muted = getCSSVar('--muted-foreground');
+  const border = getCSSVar('--border');
+
+  const debugData = getFilteredData(MOCK.debug, 'subsys');
+
+  initChart('debugScatter', {
+    tooltip: {
+      trigger: 'item',
+      formatter: (p) => `${p.data[2]}<br/>调试天数: ${p.data[0]}<br/>Pass 前 Fail: ${p.data[1]}<br/>难度指数: ${p.data[3]}`
+    },
+    xAxis: { name: '首次提交→首次 pass 天数', nameTextStyle: { color: muted }, nameLocation: 'middle', nameGap: 30, type: 'value', splitLine: { lineStyle: { color: border, opacity: 0.3 } }, axisLabel: { color: muted } },
+    yAxis: { name: 'Pass 前 Fail 次数', nameTextStyle: { color: muted }, nameLocation: 'middle', nameGap: 40, type: 'value', splitLine: { lineStyle: { color: border, opacity: 0.3 } }, axisLabel: { color: muted } },
+    series: [{
+      type: 'scatter',
+      symbolSize: (data) => Math.sqrt(data[3]) * 2 + 4,
+      data: debugData.map(d => [d.daysToFirstPass, d.failsBeforePass, d.caseName, d.difficulty]),
+      itemStyle: {
+        color: (params) => {
+          const diff = params.data[3];
+          if (diff > 100) return fail;
+          if (diff > 30) return getCSSVar('--warning-foreground');
+          return pass;
+        },
+        opacity: 0.7,
+      }
+    }]
+  });
+
+  document.getElementById('debugTableBody').innerHTML = debugData.slice(0, 10).map(d => `
+    <tr>
+      <td>${d.caseName}</td>
+      <td>${d.subsys}</td>
+      <td class="num">${d.daysToFirstPass} 天</td>
+      <td class="num fail">${d.failsBeforePass}</td>
+      <td class="num ${d.difficulty > 100 ? 'fail' : d.difficulty > 30 ? '' : 'pass'}">${d.difficulty}</td>
+    </tr>
+  `).join('');
+}
+
+// ════════════════════════════════════════════════════════════
+// 标签页切换
+// ════════════════════════════════════════════════════════════
+
+const renderers = {
+  overview: renderOverview,
+  trend: renderTrend,
+  subsys: () => { renderSubsysHeatmap(); renderSubsysTable(); },
+  failures: renderFailures,
+  regression: renderRegression,
+  duration: renderDuration,
+  unstable: renderUnstable,
+  phase: renderPhase,
+  debug: renderDebug,
+};
+
+function switchTab(tab) {
+  document.querySelectorAll('.dash-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  document.querySelectorAll('.dash-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === tab));
+
+  // 控制工具栏元素的可见性
+  document.getElementById('granularityToggle').style.display = tab === 'trend' ? 'flex' : 'none';
+  document.getElementById('viewToggle').style.display = tab === 'subsys' ? 'flex' : 'none';
+
+  renderCurrentTab();
+}
+
+function renderCurrentTab() {
+  const active = document.querySelector('.dash-tab.active');
+  if (!active) return;
+  const tab = active.dataset.tab;
+  const renderer = renderers[tab];
+  if (renderer) {
+    setTimeout(() => renderer(), 50);
+  }
+}
+
+// ════════════════════════════════════════════════════════════
+// 交互
+// ════════════════════════════════════════════════════════════
+
+function switchTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  document.querySelectorAll('.theme-btn').forEach(b => b.classList.toggle('active', b.dataset.theme === theme));
+  // 重建 ECharts 主题
+  echarts.registerTheme('app', buildEChartsTheme());
+  // 刷新所有图表
+  setTimeout(() => {
+    renderLeftSparkline();
+    renderCurrentTab();
+  }, 100);
+}
+
+function switchRange(range) {
+  document.querySelectorAll('.range-btn').forEach(b => b.classList.toggle('active', b.dataset.range === range));
+  // 实际实现中会重新查询数据
+  renderCurrentTab();
+}
+
+// ── 子系统筛选 ──────────────────────────────────────────
+let currentSubsysFilter = 'all';
+
+function switchSubsysFilter(value) {
+  currentSubsysFilter = value;
+  renderCurrentTab();
+}
+
+/** 根据当前子系统筛选过滤 mock 数据 */
+function getFilteredData(data, subsysField) {
+  if (currentSubsysFilter === 'all') return data;
+  return data.filter(item => item[subsysField] === currentSubsysFilter);
+}
+
+/** 初始化子系统筛选下拉选项 */
+function initSubsysFilterOptions() {
+  const select = document.getElementById('subsysFilter');
+  if (!select) return;
+  // 保留「全部子系统」选项
+  select.innerHTML = '<option value="all">全部子系统</option>';
+  for (const name of SUBSYSTEMS) {
+    select.innerHTML += `<option value="${name}">${name}</option>`;
+  }
+}
+
+function switchGranularity(gran) {
+  document.querySelectorAll('.granularity-btn').forEach(b => b.classList.toggle('active', b.dataset.gran === gran));
+  // 实际实现中会重新查询趋势数据
+  renderTrend();
+}
+
+let subsysView = 'heatmap';
+function switchView(view) {
+  subsysView = view;
+  document.querySelectorAll('.view-toggle-btn').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+  document.getElementById('subsysHeatmapCard').style.display = view === 'heatmap' ? 'block' : 'none';
+  document.getElementById('subsysTableCard').style.display = view === 'table' ? 'block' : 'none';
+  if (view === 'heatmap') renderSubsysHeatmap();
+}
+
+function refreshOverview() {
+  // 左栏刷新
+  renderLeftSparkline();
+}
+
+function refreshDashboard() {
+  const icon = document.getElementById('refreshIcon');
+  icon.classList.add('spinning');
+  setTimeout(() => {
+    icon.classList.remove('spinning');
+    renderCurrentTab();
+  }, 500);
+}
+
+function openDashboard() {
+  // 在实际应用中调用 workbench.open({ type: 'dashboard' })
+  // 原型中已经展示了 Dashboard
+  switchTab('overview');
+}
+
+// ════════════════════════════════════════════════════════════
+// 初始化
+// ════════════════════════════════════════════════════════════
+
+window.addEventListener('load', () => {
+  echarts.registerTheme('app', buildEChartsTheme());
+  initSubsysFilterOptions();
+  renderLeftSparkline();
+  renderOverview();
+});
+
+window.addEventListener('resize', () => {
+  Object.values(charts).forEach(c => c && c.resize());
+});
+</script>
+
+</body>
+</html>

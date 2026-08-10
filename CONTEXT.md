@@ -245,3 +245,29 @@ _Avoid_: verification stage, simulation stage
 **Case Scan**:
 通过 Case Scanner 全量扫描项目用例配置文件并写入 Case Database 的过程。项目打开时若 DB 已有数据则秒开，后台并行执行 Case Scan 增量更新；用户点击「刷新」按钮时触发全量 Case Scan。
 _Avoid_: case discovery, case indexing
+
+### Dashboard 域
+
+**Dashboard**:
+中栏 CenterArea 中的完整验证数据可视化面板，由标签页分区组成，包含趋势图、子系统热力图、失败列表、回归进度、耗时分布、不稳定用例、阶段通过率、调试难度等图表。数据全部来自 Case Database 的 SQL 聚合查询。通过 `workbench.open({ type: 'dashboard' })` 打开。
+_Avoid_: dashboard panel, metrics view
+
+**Dashboard Summary**:
+左侧 LeftRail 概览页中的缩略数据区域，包含统计行（子系统数/用例数/通过率/失败数）、迷你回归进度条、7 天 pass/fail sparkline 趋势，以及「打开完整仪表盘」按钮。数据为 Dashboard 数据的子集，供用户快速概览。
+_Avoid_: overview stats, mini dashboard
+
+**Unstable Case**:
+在多次仿真运行中既有 pass 又有 fail 记录的用例（也称 flaky case）。Dashboard 的不稳定用例标签页按失败率降序列出此类用例，展示 pass 次数、fail 次数、总运行次数、失败率、最近一次状态。SQL 查询：`GROUP BY case_name HAVING SUM(CASE WHEN status='pass' THEN 1 ELSE 0 END) > 0 AND SUM(CASE WHEN status='fail' THEN 1 ELSE 0 END) > 0`。
+_Avoid_: flaky test, intermittent failure
+
+**Debug Difficulty**:
+用例调试难度的量化指标，由两个维度表征：(1) 首次提交仿真到首次 pass 的时间（天）；(2) pass 之前的 fail 次数。两个值越大，调试难度越高。Dashboard 的调试难度标签页用散点图展示（X 轴=天数，Y 轴=fail 次数），右上角用例为调试难度最高者。SQL 通过窗口函数查找每个用例的首次 run 时间和首次 pass 时间。
+_Avoid_: case complexity, fix difficulty
+
+**Dashboard Time Range**:
+Dashboard 顶部的全局时间范围选择器，可选全部/最近 7 天/最近 30 天/自定义。所有图表默认使用该范围过滤 `simulation_runs` 数据，但回归进度始终按全量统计（衡量整体完成度）。
+_Avoid_: date filter, time window
+
+**Dashboard Theme**:
+ECharts 图表的主题，通过读取应用 CSS 变量（`--background`/`--foreground`/`--primary`/`--status-pass`/`--status-fail` 等）动态构建 ECharts theme 对象。主题切换时重新构建，确保图表颜色与 UI 完全一致。
+_Avoid_: chart theme, echarts skin
