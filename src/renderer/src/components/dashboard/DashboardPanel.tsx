@@ -20,6 +20,8 @@ import { FailuresTab } from './FailuresTab';
 import { RegressionTab } from './RegressionTab';
 import { DurationTab } from './DurationTab';
 import { UnstableTab } from './UnstableTab';
+import { PhaseTab } from './PhaseTab';
+import { DebugTab } from './DebugTab';
 
 const TIME_RANGE_OPTIONS: { value: 'all' | '7d' | '30d'; label: string }[] = [
   { value: 'all', label: '全部' },
@@ -46,6 +48,8 @@ export function DashboardPanel() {
   const regressionProgress = useDashboardStore((s) => s.regressionProgress);
   const durationHistogram = useDashboardStore((s) => s.durationHistogram);
   const unstableCases = useDashboardStore((s) => s.unstableCases);
+  const phasePassRate = useDashboardStore((s) => s.phasePassRate);
+  const debugDifficulty = useDashboardStore((s) => s.debugDifficulty);
 
   const setActiveTab = useDashboardStore((s) => s.setActiveTab);
   const setSubsys = useDashboardStore((s) => s.setSubsys);
@@ -63,6 +67,21 @@ export function DashboardPanel() {
       stopThemeObserver();
     };
   }, []);
+
+  // ─── 监听 simulation:event 事件流，仿真完成时自动刷新当前标签页 ───
+  useEffect(() => {
+    if (!currentProjectId) return;
+    if (!window.eventBridge) return;
+
+    const unsubscribe = window.eventBridge.onSimulationEvent(({ type }) => {
+      // 仅 run:completed 事件触发自动刷新
+      if (type !== 'completed') return;
+      // 当前正在加载时跳过，避免重复请求
+      if (useDashboardStore.getState().loadingTab !== null) return;
+      refresh(currentProjectId);
+    });
+    return unsubscribe;
+  }, [currentProjectId, refresh]);
 
   useEffect(() => {
     if (!currentProjectId) return;
@@ -139,7 +158,9 @@ export function DashboardPanel() {
     (activeTab === 'regression' && regressionProgress !== null && regressionProgress.totalCases > 0) ||
     (activeTab === 'duration' && durationHistogram !== null && durationHistogram.length > 0) ||
     (activeTab === 'unstable' && unstableCases !== null && unstableCases.length > 0) ||
-    (activeTab !== 'overview' && activeTab !== 'trend' && activeTab !== 'subsys' && activeTab !== 'failures' && activeTab !== 'regression' && activeTab !== 'duration' && activeTab !== 'unstable');
+    (activeTab === 'phase' && phasePassRate !== null && phasePassRate.length > 0) ||
+    (activeTab === 'debug' && debugDifficulty !== null && debugDifficulty.length > 0) ||
+    (activeTab !== 'overview' && activeTab !== 'trend' && activeTab !== 'subsys' && activeTab !== 'failures' && activeTab !== 'regression' && activeTab !== 'duration' && activeTab !== 'unstable' && activeTab !== 'phase' && activeTab !== 'debug');
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -225,6 +246,8 @@ export function DashboardPanel() {
           activeTab === 'regression' ? <RegressionTab /> :
           activeTab === 'duration' ? <DurationTab /> :
           activeTab === 'unstable' ? <UnstableTab /> :
+          activeTab === 'phase' ? <PhaseTab /> :
+          activeTab === 'debug' ? <DebugTab /> :
           <EmptyState hint={TAB_EMPTY_HINTS[activeTab]} />
         ) : (
           <EmptyState hint={TAB_EMPTY_HINTS[activeTab]} />

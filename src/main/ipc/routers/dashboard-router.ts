@@ -12,7 +12,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { t, TRPCError } from '../router-context';
 import { requireProject } from '../../services/project-service';
 import { caseStatsRegistry } from '../../case/case-stats-registry';
-import { getSubsysList, getDashboardSummary, getDashboardTrend, getSubsysStatus, getSubsysHeatmap, getRecentFailures, getRegressionProgress, getDurationHistogram, getUnstableCases } from '../../case/db/case-repository';
+import { getSubsysList, getDashboardSummary, getDashboardTrend, getSubsysStatus, getSubsysHeatmap, getRecentFailures, getRegressionProgress, getDurationHistogram, getUnstableCases, getPhasePassRate, getDebugDifficulty } from '../../case/db/case-repository';
 
 // ─── 共享筛选参数验证 ───────────────────────────────────────
 
@@ -203,6 +203,42 @@ export const dashboardRouter = t.router({
       const project = requireProject(input.projectId);
       const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
       return getUnstableCases(db, {
+        subsys: input.subsys,
+        timeRange: input.timeRange,
+      });
+    }),
+
+  // ─── 阶段通过率（阶段标签页） ──────────────────────────
+  getPhasePassRate: t.procedure
+    .input((raw): { projectId: string; subsys?: string; timeRange?: 'all' | '7d' | '30d' | { start: string; end: string } } => {
+      const f = validateFilter(raw);
+      const result: { projectId: string; subsys?: string; timeRange?: 'all' | '7d' | '30d' | { start: string; end: string } } = { projectId: f.projectId };
+      if (f.subsys) result.subsys = f.subsys;
+      if (f.timeRange) result.timeRange = f.timeRange;
+      return result;
+    })
+    .query(({ input }) => {
+      const project = requireProject(input.projectId);
+      const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
+      return getPhasePassRate(db, {
+        subsys: input.subsys,
+        timeRange: input.timeRange,
+      });
+    }),
+
+  // ─── 调试难度散点图（调试难度标签页） ──────────────────
+  getDebugDifficulty: t.procedure
+    .input((raw): { projectId: string; subsys?: string; timeRange?: 'all' | '7d' | '30d' | { start: string; end: string } } => {
+      const f = validateFilter(raw);
+      const result: { projectId: string; subsys?: string; timeRange?: 'all' | '7d' | '30d' | { start: string; end: string } } = { projectId: f.projectId };
+      if (f.subsys) result.subsys = f.subsys;
+      if (f.timeRange) result.timeRange = f.timeRange;
+      return result;
+    })
+    .query(({ input }) => {
+      const project = requireProject(input.projectId);
+      const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
+      return getDebugDifficulty(db, {
         subsys: input.subsys,
         timeRange: input.timeRange,
       });

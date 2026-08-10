@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 // ─── Mock ECharts theme ─────────────────────────────────────
@@ -94,6 +94,14 @@ vi.mock('@renderer/lib/trpc', () => {
     { caseName: 'flaky_case_1', subsys: 'cpu', passCount: 2, failCount: 3, totalCount: 5, failRate: 60.0, lastStatus: 'fail' },
     { caseName: 'flaky_case_2', subsys: 'gpu', passCount: 3, failCount: 1, totalCount: 4, failRate: 25.0, lastStatus: 'pass' },
   ];
+  const mockPhasePassRateData = [
+    { phase: 'DVR1', total: 10, pass: 8, fail: 1, error: 1, passRate: 80.0 },
+    { phase: 'DVS1', total: 5, pass: 3, fail: 2, error: 0, passRate: 60.0 },
+  ];
+  const mockDebugDifficultyData = [
+    { caseName: 'hard_case', subsys: 'cpu', daysToFirstPass: 5, failCountBeforePass: 3 },
+    { caseName: 'easy_case', subsys: 'gpu', daysToFirstPass: 1, failCountBeforePass: 1 },
+  ];
   return {
     trpc: {
       dashboard: {
@@ -106,6 +114,8 @@ vi.mock('@renderer/lib/trpc', () => {
         getRegressionProgress: { query: vi.fn().mockResolvedValue(mockRegressionProgressData) },
         getDurationHistogram: { query: vi.fn().mockResolvedValue(mockDurationHistogramData) },
         getUnstableCases: { query: vi.fn().mockResolvedValue(mockUnstableCasesData) },
+        getPhasePassRate: { query: vi.fn().mockResolvedValue(mockPhasePassRateData) },
+        getDebugDifficulty: { query: vi.fn().mockResolvedValue(mockDebugDifficultyData) },
         saveLayout: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
         getLayout: { query: vi.fn().mockResolvedValue(null) },
       },
@@ -121,11 +131,39 @@ vi.mock('@renderer/stores/project', () => ({
   ),
 }));
 
+// ─── Mock eventBridge for simulation:event ────────────────────
+
+const simulationEventCallbacks: Array<(data: { type: string; record: unknown }) => void> = [];
+
+beforeEach(() => {
+  simulationEventCallbacks.length = 0;
+  (window as unknown as { eventBridge: unknown }).eventBridge = {
+    onSimulationEvent: (callback: (data: { type: string; record: unknown }) => void) => {
+      simulationEventCallbacks.push(callback);
+      return () => {
+        const idx = simulationEventCallbacks.indexOf(callback);
+        if (idx >= 0) simulationEventCallbacks.splice(idx, 1);
+      };
+    },
+  };
+});
+
+afterEach(() => {
+  delete (window as unknown as { eventBridge?: unknown }).eventBridge;
+});
+
 // ─── Import after mocks ─────────────────────────────────────
 
 import { DashboardPanel } from '@renderer/components/dashboard/DashboardPanel';
 import { useDashboardStore } from '@renderer/stores/dashboard';
 import React from 'react';
+
+/** Helper to simulate a simulation:event run:completed event */
+function simulateRunCompleted() {
+  for (const cb of simulationEventCallbacks) {
+    cb({ type: 'completed', record: {} });
+  }
+}
 
 /** Reset dashboard store to initial state between tests */
 function resetDashboardStore() {
@@ -143,6 +181,8 @@ function resetDashboardStore() {
     regressionProgress: null,
     durationHistogram: null,
     unstableCases: null,
+    phasePassRate: null,
+    debugDifficulty: null,
     trendGranularity: 'daily',
     tabLoaded: {},
     tabError: {},
@@ -314,6 +354,9 @@ describe('DashboardPanel', () => {
     });
 
     it('shows debug difficulty hint on debug tab', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.dashboard.getDebugDifficulty.query).mockResolvedValue([]);
+
       render(<DashboardPanel />);
 
       fireEvent.click(screen.getByText('调试难度'));
@@ -816,6 +859,186 @@ describe('DashboardPanel', () => {
       await waitFor(() => {
         expect(screen.getByText(/不稳定用例列表/)).toBeTruthy();
       });
+    });
+  });
+
+  // ─── 阶段标签页内容 ─────────────────────────────────────
+
+  describe('phase tab content', () => {
+    function setupPhaseTab() {
+      useDashboardStore.setState({
+        activeTab: 'phase',
+        phasePassRate: [
+          { phase: 'DVR1', total: 10, pass: 8, fail: 1, error: 1, passRate: 80.0 },
+          { phase: 'DVS1', total: 5, pass: 3, fail: 2, error: 0, passRate: 60.0 },
+        ],
+        tabLoaded: { phase: true },
+        loadingTab: null,
+      });
+    }
+
+    it('renders ECharts bar chart when phase data is loaded', async () => {
+      setupPhaseTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('echarts-mock')).toBeTruthy();
+      });
+    });
+
+    it('renders section title with phase count', async () => {
+      setupPhaseTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/共 2 个阶段/)).toBeTruthy();
+      });
+    });
+
+    it('shows empty state hint when phase data is empty', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.dashboard.getPhasePassRate.query).mockResolvedValue([]);
+
+      useDashboardStore.setState({
+        activeTab: 'phase',
+        phasePassRate: null,
+        tabLoaded: {},
+        loadingTab: null,
+      });
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/各仿真阶段通过率/)).toBeTruthy();
+      });
+    });
+  });
+
+  // ─── 调试难度标签页内容 ─────────────────────────────────
+
+  describe('debug tab content', () => {
+    function setupDebugTab() {
+      useDashboardStore.setState({
+        activeTab: 'debug',
+        debugDifficulty: [
+          { caseName: 'hard_case', subsys: 'cpu', daysToFirstPass: 5, failCountBeforePass: 3 },
+          { caseName: 'easy_case', subsys: 'gpu', daysToFirstPass: 1, failCountBeforePass: 1 },
+        ],
+        tabLoaded: { debug: true },
+        loadingTab: null,
+      });
+    }
+
+    it('renders ECharts scatter plot when debug data is loaded', async () => {
+      setupDebugTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('echarts-mock')).toBeTruthy();
+      });
+    });
+
+    it('renders section title with case count', async () => {
+      setupDebugTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/共 2 个已通过用例/)).toBeTruthy();
+      });
+    });
+
+    it('shows empty state hint when debug data is empty', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.dashboard.getDebugDifficulty.query).mockResolvedValue([]);
+
+      useDashboardStore.setState({
+        activeTab: 'debug',
+        debugDifficulty: null,
+        tabLoaded: {},
+        loadingTab: null,
+      });
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/调试难度散点图/)).toBeTruthy();
+      });
+    });
+  });
+
+  // ─── 自动刷新（simulation:event 监听） ──────────────────
+
+  describe('auto-refresh on simulation completion', () => {
+    it('refreshes current tab data when run:completed event is received', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+
+      render(<DashboardPanel />);
+
+      // Wait for initial overview tab data to load
+      await waitFor(() => {
+        expect(trpc.dashboard.getSummary.query).toHaveBeenCalled();
+      });
+
+      const initialCallCount = vi.mocked(trpc.dashboard.getSummary.query).mock.calls.length;
+
+      // Simulate run:completed event
+      simulateRunCompleted();
+
+      // The refresh should trigger a re-fetch of the current tab data
+      await waitFor(() => {
+        expect(vi.mocked(trpc.dashboard.getSummary.query).mock.calls.length).toBeGreaterThan(initialCallCount);
+      });
+    });
+
+    it('skips auto-refresh when current tab is already loading', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+
+      render(<DashboardPanel />);
+
+      // Wait for initial load
+      await waitFor(() => {
+        expect(trpc.dashboard.getSummary.query).toHaveBeenCalled();
+      });
+
+      // Set loading state to simulate an in-progress load
+      useDashboardStore.setState({ loadingTab: 'overview' });
+
+      const initialCallCount = vi.mocked(trpc.dashboard.getSummary.query).mock.calls.length;
+
+      // Simulate run:completed event
+      simulateRunCompleted();
+
+      // Wait a tick to ensure no new call was made
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(vi.mocked(trpc.dashboard.getSummary.query).mock.calls.length).toBe(initialCallCount);
+    });
+
+    it('does not refresh on non-completed events', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+
+      render(<DashboardPanel />);
+
+      // Wait for initial load
+      await waitFor(() => {
+        expect(trpc.dashboard.getSummary.query).toHaveBeenCalled();
+      });
+
+      const initialCallCount = vi.mocked(trpc.dashboard.getSummary.query).mock.calls.length;
+
+      // Simulate a non-completed event (e.g., 'started')
+      for (const cb of simulationEventCallbacks) {
+        cb({ type: 'started', record: {} });
+      }
+
+      // Wait a tick to ensure no new call was made
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      expect(vi.mocked(trpc.dashboard.getSummary.query).mock.calls.length).toBe(initialCallCount);
     });
   });
 });

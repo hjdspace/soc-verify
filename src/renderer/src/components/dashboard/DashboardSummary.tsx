@@ -41,6 +41,20 @@ export function DashboardSummary({ projectId }: { projectId: string }) {
     return () => { cancelled = true; };
   }, [projectId]);
 
+  // ─── 监听 simulation:event，仿真完成时自动刷新 summary 数据 ───
+  useEffect(() => {
+    if (!window.eventBridge) return;
+
+    const unsubscribe = window.eventBridge.onSimulationEvent(({ type }) => {
+      if (type !== 'completed') return;
+      // 重新拉取 summary 数据
+      trpc.dashboard.getSummary.query({ projectId })
+        .then((data) => setSummary(data))
+        .catch(() => {});
+    });
+    return unsubscribe;
+  }, [projectId]);
+
   if (loading || !summary) return null;
 
   // Mini progress: use pass runs as "已跑" approximation

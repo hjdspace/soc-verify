@@ -95,6 +95,24 @@ export type UnstableCasesData = {
   lastStatus: string;
 }[];
 
+/** getPhasePassRate 返回结构（阶段标签页） */
+export type PhasePassRateData = {
+  phase: string;
+  total: number;
+  pass: number;
+  fail: number;
+  error: number;
+  passRate: number;
+}[];
+
+/** getDebugDifficulty 返回结构（调试难度标签页） */
+export type DebugDifficultyData = {
+  caseName: string;
+  subsys: string;
+  daysToFirstPass: number;
+  failCountBeforePass: number;
+}[];
+
 /** 标签页列表（固定顺序，不支持重排） */
 export const DASHBOARD_TABS: { id: DashboardTab; label: string }[] = [
   { id: 'overview', label: '概览' },
@@ -141,6 +159,8 @@ interface DashboardStoreState {
   regressionProgress: RegressionProgressData | null;
   durationHistogram: DurationHistogramData | null;
   unstableCases: UnstableCasesData | null;
+  phasePassRate: PhasePassRateData | null;
+  debugDifficulty: DebugDifficultyData | null;
   tabLoaded: Partial<Record<DashboardTab, boolean>>;
   tabError: Partial<Record<DashboardTab, string>>;
 
@@ -196,6 +216,8 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
   regressionProgress: null,
   durationHistogram: null,
   unstableCases: null,
+  phasePassRate: null,
+  debugDifficulty: null,
   tabLoaded: {},
   tabError: {},
   loadingTab: null,
@@ -216,6 +238,8 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
       regressionProgress: null,
       durationHistogram: null,
       unstableCases: null,
+      phasePassRate: null,
+      debugDifficulty: null,
       tabLoaded: {},
       tabError: {},
     });
@@ -233,6 +257,8 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
       regressionProgress: null,
       durationHistogram: null,
       unstableCases: null,
+      phasePassRate: null,
+      debugDifficulty: null,
       tabLoaded: {},
       tabError: {},
     });
@@ -258,6 +284,8 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
     regressionProgress: null,
     durationHistogram: null,
     unstableCases: null,
+    phasePassRate: null,
+    debugDifficulty: null,
     tabLoaded: {},
     tabError: {},
   }),
@@ -349,6 +377,22 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
         set({
           loadingTab: null,
           unstableCases: data,
+          tabLoaded: { ...get().tabLoaded, [tab]: true },
+          tabError: { ...get().tabError, [tab]: undefined },
+        });
+      } else if (tab === 'phase') {
+        const data = await trpc.dashboard.getPhasePassRate.query(filter);
+        set({
+          loadingTab: null,
+          phasePassRate: data,
+          tabLoaded: { ...get().tabLoaded, [tab]: true },
+          tabError: { ...get().tabError, [tab]: undefined },
+        });
+      } else if (tab === 'debug') {
+        const data = await trpc.dashboard.getDebugDifficulty.query(filter);
+        set({
+          loadingTab: null,
+          debugDifficulty: data,
           tabLoaded: { ...get().tabLoaded, [tab]: true },
           tabError: { ...get().tabError, [tab]: undefined },
         });

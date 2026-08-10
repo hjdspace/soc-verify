@@ -957,6 +957,157 @@ export function getUnstableCases(
   }));
 }
 
+// ─── Dashboard 阶段通过率 + 调试难度 ─────────────────────
+
+/** Dashboard getPhasePassRate 返回结构（阶段标签页） */
+export type PhasePassRateRow = {
+  phase: string;
+  total: number;
+  pass: number;
+  fail: number;
+  error: number;
+  passRate: number;
+};
+
+/** Dashboard getDebugDifficulty 返回结构（调试难度标签页） */
+export type DebugDifficultyRow = {
+  caseName: string;
+  subsys: string;
+  daysToFirstPass: number;
+  failCountBeforePass: number;
+};
+
+/**
+ * 获取各仿真阶段的通过率（阶段标签页）。
+ *
+ * JOIN cases 表获取 phase 字段，按 phase 聚合 pass/fail/error 数量。
+ * phase 为 NULL 的用例归入「未分类」组。
+ * 受 subsys + timeRange 筛选。
+ */
+export function getPhasePassRate(
+  db: Database.Database,
+  filter?: SummaryFilter,
+): PhasePassRateRow[] {
+  const subsys = filter?.subsys;
+  const tr = timeRangeToClause(filter?.timeRange);
+
+  const conditions: string[] = [];
+  const params: Record<string, unknown> = {};
+  if (subsys) {
+    conditions.push('r.subsys = @subsys');
+    params.subsys = subsys;
+  }
+  if (tr.clause) {
+    // timeRange clause references start_time, which is r.start_time in the JOIN
+    const trClause = tr.clause.replace(/start_time/g, 'r.start_time');
+    conditions.push(trClause);
+    Object.assign(params, tr.params);
+  }
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const rows = db.prepare(`
+    SELECT
+      COALESCE(c.phase, '未分类') as phase,
+      COUNT(*) as total,
+      SUM(CASE WHEN r.status = 'pass' THEN 1 ELSE 0 END) as pass,
+      SUM(CASE WHEN r.status = 'fail' THEN 1 ELSE 0 END) as fail,
+      SUM(CASE WHEN r.status = 'error' THEN 1 ELSE 0 END) as error
+    FROM simulation_runs r
+    JOIN cases c ON c.name = r.case_name AND c.subsys = r.subsys
+    ${where}
+    GROUP BY COALESCE(c.phase, '未分类')
+    ORDER BY phase
+  `).all(params) as { phase: string; total: number; pass: number; fail: number; error: number }[];
+
+  return rows.map((row) => ({
+    phase: row.phase,
+    total: row.total,
+    pass: row.pass,
+    fail: row.fail,
+    error: row.error,
+    passRate: row.total > 0 ? Math.round((row.pass / row.total) * 1000) / 10 : 0,
+  }));
+}
+
+/**
+ * 获取调试难度散点图数据（调试难度标签页）。
+ *
+ * 使用窗口函数查找每个用例的首次 run 时间和首次 pass 时间。
+ * - daysToFirstPass = 首次 pass 的 start_time 减去首次 run 的 start_time（天为单位，取整）
+ * - failCountBeforePass = 首次 pass 之前 status='fail' 的记录数
+ * 仅包含有 pass 记录的用例（未通过的不计入散点图）。
+ * 按 daysToFirstPass * failCountBeforePass 降序排列（调试难度最高者在前）。
+ * 受 subsys + timeRange 筛选。
+ */
+export function getDebugDifficulty(
+  db: Database.Database,
+  filter?: SummaryFilter,
+): DebugDifficultyRow[] {
+  const subsys = filter?.subsys;
+  const tr = timeRangeToClause(filter?.timeRange);
+
+  const conditions: string[] = [];
+  const params: Record<string, unknown> = {};
+  if (subsys) {
+    conditions.push('subsys = @subsys');
+    params.subsys = subsys;
+  }
+  if (tr.clause) {
+    conditions.push(tr.clause);
+    Object.assign(params, tr.params);
+  }
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  // Use CTEs to compute first run time, first pass time, and fail count before first pass
+  const rows = db.prepare(`
+    WITH filtered AS (
+      SELECT case_name, subsys, status, start_time
+      FROM simulation_runs
+      ${where}
+    ),
+    first_run AS (
+      SELECT case_name, subsys, start_time as first_run_time
+      FROM (
+        SELECT case_name, subsys, start_time,
+          ROW_NUMBER() OVER (PARTITION BY case_name, subsys ORDER BY start_time ASC) as rn
+        FROM filtered
+      ) WHERE rn = 1
+    ),
+    first_pass AS (
+      SELECT case_name, subsys, start_time as first_pass_time
+      FROM (
+        SELECT case_name, subsys, start_time,
+          ROW_NUMBER() OVER (PARTITION BY case_name, subsys ORDER BY start_time ASC) as rn
+        FROM filtered
+        WHERE status = 'pass'
+      ) WHERE rn = 1
+    ),
+    fail_count AS (
+      SELECT f.case_name, f.subsys, COUNT(*) as fail_count_before_pass
+      FROM first_pass f
+      JOIN filtered fr ON fr.case_name = f.case_name AND fr.subsys = f.subsys
+        AND fr.status = 'fail' AND fr.start_time < f.first_pass_time
+      GROUP BY f.case_name, f.subsys
+    )
+    SELECT
+      fp.case_name as caseName,
+      fp.subsys,
+      CAST(julianday(fp.first_pass_time) - julianday(fr.first_run_time) AS INTEGER) as daysToFirstPass,
+      COALESCE(fc.fail_count_before_pass, 0) as failCountBeforePass
+    FROM first_pass fp
+    JOIN first_run fr ON fr.case_name = fp.case_name AND fr.subsys = fp.subsys
+    LEFT JOIN fail_count fc ON fc.case_name = fp.case_name AND fc.subsys = fp.subsys
+    ORDER BY (CAST(julianday(fp.first_pass_time) - julianday(fr.first_run_time) AS INTEGER) * COALESCE(fc.fail_count_before_pass, 0)) DESC
+  `).all(params) as { caseName: string; subsys: string; daysToFirstPass: number; failCountBeforePass: number }[];
+
+  return rows.map((row) => ({
+    caseName: row.caseName,
+    subsys: row.subsys,
+    daysToFirstPass: Math.max(0, row.daysToFirstPass),
+    failCountBeforePass: row.failCountBeforePass,
+  }));
+}
+
 // ─── scan_metadata (original) ──────────────────────────────
 
 /**

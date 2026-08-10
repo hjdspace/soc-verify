@@ -855,4 +855,219 @@ describe('dashboard-router', () => {
       expect(result[0].lastStatus).toBe('fail');
     });
   });
+
+  // ─── getPhasePassRate ──────────────────────────────────
+
+  describe('getPhasePassRate', () => {
+    it('returns pass rate per phase by joining cases and simulation_runs', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }, { name: 'gpu' }]);
+      insertCases(memDb!, [
+        { name: 't1', subsys: 'cpu', path: '/p/t1', phase: 'DVR1' },
+        { name: 't2', subsys: 'cpu', path: '/p/t2', phase: 'DVR1' },
+        { name: 't3', subsys: 'gpu', path: '/p/t3', phase: 'DVS1' },
+      ]);
+      // DVR1: 2 pass + 1 fail
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+      insertSimulationRun(memDb!, { caseName: 't2', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(1) });
+      // DVS1: 1 pass + 1 error
+      insertSimulationRun(memDb!, { caseName: 't3', subsys: 'gpu', status: 'pass', startTime: isoDaysAgo(0) });
+      insertSimulationRun(memDb!, { caseName: 't3', subsys: 'gpu', status: 'error', startTime: isoDaysAgo(1) });
+
+      const result = await caller.getPhasePassRate({ projectId: 'test-project-id' });
+
+      expect(result).toHaveLength(2);
+
+      const dvr1 = result.find((r) => r.phase === 'DVR1');
+      expect(dvr1).toBeDefined();
+      expect(dvr1!.total).toBe(3);
+      expect(dvr1!.pass).toBe(2);
+      expect(dvr1!.fail).toBe(1);
+      expect(dvr1!.error).toBe(0);
+      expect(dvr1!.passRate).toBeCloseTo(66.7, 1);
+
+      const dvs1 = result.find((r) => r.phase === 'DVS1');
+      expect(dvs1).toBeDefined();
+      expect(dvs1!.total).toBe(2);
+      expect(dvs1!.pass).toBe(1);
+      expect(dvs1!.fail).toBe(0);
+      expect(dvs1!.error).toBe(1);
+      expect(dvs1!.passRate).toBe(50);
+    });
+
+    it('filters by subsys when provided', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }, { name: 'gpu' }]);
+      insertCases(memDb!, [
+        { name: 't1', subsys: 'cpu', path: '/p/t1', phase: 'DVR1' },
+        { name: 't2', subsys: 'gpu', path: '/p/t2', phase: 'DVS1' },
+      ]);
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+      insertSimulationRun(memDb!, { caseName: 't2', subsys: 'gpu', status: 'fail', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getPhasePassRate({ projectId: 'test-project-id', subsys: 'cpu' });
+
+      expect(result).toHaveLength(1);
+      expect(result[0].phase).toBe('DVR1');
+      expect(result[0].pass).toBe(1);
+    });
+
+    it('filters by timeRange when provided', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [{ name: 't1', subsys: 'cpu', path: '/p/t1', phase: 'DVR1' }]);
+      // Recent run
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+      // Old run — outside 7d
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(20) });
+
+      const result = await caller.getPhasePassRate({ projectId: 'test-project-id', timeRange: '7d' });
+
+      expect(result).toHaveLength(1);
+      expect(result[0].pass).toBe(1);
+      expect(result[0].fail).toBe(0);
+      expect(result[0].total).toBe(1);
+    });
+
+    it('returns empty array for empty database', async () => {
+      const result = await caller.getPhasePassRate({ projectId: 'test-project-id' });
+      expect(result).toEqual([]);
+    });
+
+    it('handles cases with null phase (groups as "未分类")', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [
+        { name: 't1', subsys: 'cpu', path: '/p/t1' }, // no phase
+        { name: 't2', subsys: 'cpu', path: '/p/t2', phase: 'DVR1' },
+      ]);
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+      insertSimulationRun(memDb!, { caseName: 't2', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getPhasePassRate({ projectId: 'test-project-id' });
+
+      expect(result).toHaveLength(2);
+      const unclassified = result.find((r) => r.phase === '未分类');
+      expect(unclassified).toBeDefined();
+      expect(unclassified!.pass).toBe(1);
+      const dvr1 = result.find((r) => r.phase === 'DVR1');
+      expect(dvr1).toBeDefined();
+      expect(dvr1!.fail).toBe(1);
+    });
+  });
+
+  // ─── getDebugDifficulty ───────────────────────────────
+
+  describe('getDebugDifficulty', () => {
+    it('returns debug difficulty data with daysToFirstPass and failCountBeforePass', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [{ name: 't1', subsys: 'cpu', path: '/p/t1' }]);
+      // First run: fail 5 days ago
+      // Second run: fail 3 days ago
+      // Third run: pass 1 day ago
+      // daysToFirstPass = 5 - 1 = 4 days, failCountBeforePass = 2
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(5) });
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(3) });
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(1) });
+
+      const result = await caller.getDebugDifficulty({ projectId: 'test-project-id' });
+
+      expect(result).toHaveLength(1);
+      expect(result[0].caseName).toBe('t1');
+      expect(result[0].subsys).toBe('cpu');
+      expect(result[0].daysToFirstPass).toBeGreaterThanOrEqual(3); // ~4 days (allowing for hour rounding)
+      expect(result[0].failCountBeforePass).toBe(2);
+    });
+
+    it('only includes cases that have eventually passed', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [
+        { name: 'passed_case', subsys: 'cpu', path: '/p/p1' },
+        { name: 'never_passed', subsys: 'cpu', path: '/p/p2' },
+      ]);
+      // This case eventually passes
+      insertSimulationRun(memDb!, { caseName: 'passed_case', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(3) });
+      insertSimulationRun(memDb!, { caseName: 'passed_case', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+      // This case never passes
+      insertSimulationRun(memDb!, { caseName: 'never_passed', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getDebugDifficulty({ projectId: 'test-project-id' });
+
+      expect(result).toHaveLength(1);
+      expect(result[0].caseName).toBe('passed_case');
+    });
+
+    it('returns zero daysToFirstPass when first run is already a pass', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [{ name: 't1', subsys: 'cpu', path: '/p/t1' }]);
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getDebugDifficulty({ projectId: 'test-project-id' });
+
+      expect(result).toHaveLength(1);
+      expect(result[0].daysToFirstPass).toBe(0);
+      expect(result[0].failCountBeforePass).toBe(0);
+    });
+
+    it('filters by subsys when provided', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }, { name: 'gpu' }]);
+      insertCases(memDb!, [
+        { name: 't1', subsys: 'cpu', path: '/p/t1' },
+        { name: 't2', subsys: 'gpu', path: '/p/t2' },
+      ]);
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(2) });
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+      insertSimulationRun(memDb!, { caseName: 't2', subsys: 'gpu', status: 'fail', startTime: isoDaysAgo(2) });
+      insertSimulationRun(memDb!, { caseName: 't2', subsys: 'gpu', status: 'pass', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getDebugDifficulty({ projectId: 'test-project-id', subsys: 'cpu' });
+
+      expect(result).toHaveLength(1);
+      expect(result[0].caseName).toBe('t1');
+      expect(result[0].subsys).toBe('cpu');
+    });
+
+    it('filters by timeRange when provided', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [{ name: 't1', subsys: 'cpu', path: '/p/t1' }]);
+      // Old runs — outside 7d
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(20) });
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(15) });
+      // Recent run
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(2) });
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getDebugDifficulty({ projectId: 'test-project-id', timeRange: '7d' });
+
+      // Within 7d: first run is fail 2 days ago, first pass is 0 days ago
+      expect(result).toHaveLength(1);
+      expect(result[0].failCountBeforePass).toBe(1);
+      expect(result[0].daysToFirstPass).toBeGreaterThanOrEqual(1);
+    });
+
+    it('returns empty array for empty database', async () => {
+      const result = await caller.getDebugDifficulty({ projectId: 'test-project-id' });
+      expect(result).toEqual([]);
+    });
+
+    it('sorts by debug difficulty descending (daysToFirstPass * failCountBeforePass)', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [
+        { name: 'easy', subsys: 'cpu', path: '/p/easy' },
+        { name: 'hard', subsys: 'cpu', path: '/p/hard' },
+      ]);
+      // easy: 1 fail, 1 day to pass → difficulty = 1
+      insertSimulationRun(memDb!, { caseName: 'easy', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(1) });
+      insertSimulationRun(memDb!, { caseName: 'easy', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+      // hard: 3 fails, 5 days to pass → difficulty = 15
+      insertSimulationRun(memDb!, { caseName: 'hard', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(5) });
+      insertSimulationRun(memDb!, { caseName: 'hard', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(4) });
+      insertSimulationRun(memDb!, { caseName: 'hard', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(3) });
+      insertSimulationRun(memDb!, { caseName: 'hard', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getDebugDifficulty({ projectId: 'test-project-id' });
+
+      expect(result).toHaveLength(2);
+      // hard should come first (higher difficulty)
+      expect(result[0].caseName).toBe('hard');
+      expect(result[1].caseName).toBe('easy');
+    });
+  });
 });
