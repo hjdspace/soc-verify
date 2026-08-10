@@ -187,7 +187,7 @@ export function GitQuickPull({ projectRoot, onProjectRootChange }: ToolComponent
             type="text"
             value={projectDir}
             onChange={(e) => setProjectDir(e.target.value)}
-            placeholder="请选择项目根目录 ($PROJ_DIR)"
+            placeholder="请选择项目根目录（用于解析 $PROJ_RTL / $PROJ_ENV）"
             className="min-w-0 flex-1 rounded border border-border bg-background px-2 py-1.5 text-xs"
           />
           <button
