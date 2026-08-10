@@ -37,6 +37,22 @@ export type CoverageMergeEvent =
 /** Callback for real-time log streaming. */
 export type MergeEventCallback = (event: CoverageMergeEvent) => void;
 
+// ── Default directory resolution ───────────────────────────────────
+
+/**
+ * Get the default working directory for coverage merge operations.
+ *
+ * Priority: $PROJ_WORK environment variable → process.cwd().
+ * Matches the time-analyzer's getDefaultAnalysisDir() behavior.
+ */
+export function getDefaultMergeDir(): string {
+  const projWork = process.env.PROJ_WORK;
+  if (projWork && existsSync(projWork)) {
+    return projWork;
+  }
+  return process.cwd();
+}
+
 // ── Command building ───────────────────────────────────────────────
 
 /** Build the runsim merge command string from config. */
