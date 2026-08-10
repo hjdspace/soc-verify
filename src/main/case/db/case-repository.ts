@@ -806,6 +806,157 @@ export function getRegressionProgress(
   return { totalCases, runCases, passedCases, failedCases, notRunCases, passRate };
 }
 
+// ─── Dashboard 耗时分布 + 不稳定用例 ─────────────────────
+
+/** Dashboard getDurationHistogram 返回结构（耗时标签页） */
+export type DurationBucket = {
+  bucket: string;
+  count: number;
+};
+
+/** Dashboard getUnstableCases 返回结构（不稳定标签页） */
+export type UnstableCaseRow = {
+  caseName: string;
+  subsys: string;
+  passCount: number;
+  failCount: number;
+  totalCount: number;
+  failRate: number;
+  lastStatus: string;
+};
+
+/** 耗时直方图分桶定义（分钟 → 桶名） */
+const DURATION_BUCKETS: { min: number; max: number; label: string }[] = [
+  { min: 0, max: 60_000, label: '0-1min' },
+  { min: 60_000, max: 300_000, label: '1-5min' },
+  { min: 300_000, max: 900_000, label: '5-15min' },
+  { min: 900_000, max: 1_800_000, label: '15-30min' },
+];
+
+/**
+ * 获取仿真耗时分布直方图数据。
+ *
+ * 从 simulation_runs 表查询所有有 duration_ms 的记录，
+ * 按 0-1min / 1-5min / 5-15min / 15-30min / 30min+ 分桶。
+ * 受 subsys + timeRange 筛选。
+ * 使用 SQL CASE WHEN 分桶，避免拉全量数据到前端。
+ */
+export function getDurationHistogram(
+  db: Database.Database,
+  filter?: SummaryFilter,
+): DurationBucket[] {
+  const subsys = filter?.subsys;
+  const tr = timeRangeToClause(filter?.timeRange);
+
+  const conditions = ['duration_ms IS NOT NULL'];
+  const params: Record<string, unknown> = {};
+  if (subsys) {
+    conditions.push('subsys = @subsys');
+    params.subsys = subsys;
+  }
+  if (tr.clause) {
+    conditions.push(tr.clause);
+    Object.assign(params, tr.params);
+  }
+
+  const rows = db.prepare(`
+    SELECT
+      CASE
+        WHEN duration_ms < 60000 THEN '0-1min'
+        WHEN duration_ms < 300000 THEN '1-5min'
+        WHEN duration_ms < 900000 THEN '5-15min'
+        WHEN duration_ms < 1800000 THEN '15-30min'
+        ELSE '30min+'
+      END as bucket,
+      COUNT(*) as count
+    FROM simulation_runs
+    WHERE ${conditions.join(' AND ')}
+    GROUP BY bucket
+  `).all(params) as { bucket: string; count: number }[];
+
+  // Build complete bucket list (fill missing buckets with zero count, preserve order)
+  const countMap = new Map<string, number>();
+  for (const row of rows) {
+    countMap.set(row.bucket, row.count);
+  }
+
+  const allBuckets = [...DURATION_BUCKETS.map((b) => b.label), '30min+'];
+  return allBuckets
+    .map((label) => ({ bucket: label, count: countMap.get(label) ?? 0 }))
+    .filter((b) => b.count > 0);
+}
+
+/**
+ * 获取不稳定用例列表（有 pass 又有 fail 的用例）。
+ *
+ * 从 simulation_runs 表按 case_name + subsys 分组，
+ * HAVING pass_count > 0 AND fail_count > 0。
+ * 返回 { caseName, subsys, passCount, failCount, totalCount, failRate, lastStatus }[]。
+ * 按失败率降序排列。
+ * 受 subsys + timeRange 筛选。
+ */
+export function getUnstableCases(
+  db: Database.Database,
+  filter?: SummaryFilter,
+): UnstableCaseRow[] {
+  const subsys = filter?.subsys;
+  const tr = timeRangeToClause(filter?.timeRange);
+
+  const conditions: string[] = [];
+  const params: Record<string, unknown> = {};
+  if (subsys) {
+    conditions.push('subsys = @subsys');
+    params.subsys = subsys;
+  }
+  if (tr.clause) {
+    conditions.push(tr.clause);
+    Object.assign(params, tr.params);
+  }
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  // Use CTE to correctly compute lastStatus per case within the filtered set
+  const rows = db.prepare(`
+    WITH filtered_runs AS (
+      SELECT case_name, subsys, status, start_time
+      FROM simulation_runs
+      ${where}
+    ),
+    aggregated AS (
+      SELECT
+        case_name as caseName,
+        subsys,
+        SUM(CASE WHEN status = 'pass' THEN 1 ELSE 0 END) as passCount,
+        SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END) as failCount,
+        COUNT(*) as totalCount
+      FROM filtered_runs
+      GROUP BY case_name, subsys
+      HAVING passCount > 0 AND failCount > 0
+    ),
+    latest AS (
+      SELECT case_name, subsys, status as lastStatus
+      FROM (
+        SELECT case_name, subsys, status,
+          ROW_NUMBER() OVER (PARTITION BY case_name, subsys ORDER BY start_time DESC) as rn
+        FROM filtered_runs
+      ) WHERE rn = 1
+    )
+    SELECT a.caseName, a.subsys, a.passCount, a.failCount, a.totalCount, l.lastStatus
+    FROM aggregated a
+    JOIN latest l ON a.caseName = l.case_name AND a.subsys = l.subsys
+    ORDER BY (CAST(a.failCount AS REAL) / a.totalCount) DESC
+  `).all(params) as { caseName: string; subsys: string; passCount: number; failCount: number; totalCount: number; lastStatus: string }[];
+
+  return rows.map((row) => ({
+    caseName: row.caseName,
+    subsys: row.subsys,
+    passCount: row.passCount,
+    failCount: row.failCount,
+    totalCount: row.totalCount,
+    failRate: row.totalCount > 0 ? Math.round((row.failCount / row.totalCount) * 1000) / 10 : 0,
+    lastStatus: row.lastStatus,
+  }));
+}
+
 // ─── scan_metadata (original) ──────────────────────────────
 
 /**

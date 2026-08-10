@@ -83,6 +83,17 @@ vi.mock('@renderer/lib/trpc', () => {
     notRunCases: 3,
     passRate: 71.4,
   };
+  const mockDurationHistogramData = [
+    { bucket: '0-1min', count: 5 },
+    { bucket: '1-5min', count: 3 },
+    { bucket: '5-15min', count: 2 },
+    { bucket: '15-30min', count: 1 },
+    { bucket: '30min+', count: 1 },
+  ];
+  const mockUnstableCasesData = [
+    { caseName: 'flaky_case_1', subsys: 'cpu', passCount: 2, failCount: 3, totalCount: 5, failRate: 60.0, lastStatus: 'fail' },
+    { caseName: 'flaky_case_2', subsys: 'gpu', passCount: 3, failCount: 1, totalCount: 4, failRate: 25.0, lastStatus: 'pass' },
+  ];
   return {
     trpc: {
       dashboard: {
@@ -93,6 +104,8 @@ vi.mock('@renderer/lib/trpc', () => {
         getSubsysHeatmap: { query: vi.fn().mockResolvedValue(mockSubsysHeatmapData) },
         getRecentFailures: { query: vi.fn().mockResolvedValue(mockRecentFailuresData) },
         getRegressionProgress: { query: vi.fn().mockResolvedValue(mockRegressionProgressData) },
+        getDurationHistogram: { query: vi.fn().mockResolvedValue(mockDurationHistogramData) },
+        getUnstableCases: { query: vi.fn().mockResolvedValue(mockUnstableCasesData) },
         saveLayout: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
         getLayout: { query: vi.fn().mockResolvedValue(null) },
       },
@@ -128,6 +141,8 @@ function resetDashboardStore() {
     subsysHeatmap: null,
     recentFailures: null,
     regressionProgress: null,
+    durationHistogram: null,
+    unstableCases: null,
     trendGranularity: 'daily',
     tabLoaded: {},
     tabError: {},
@@ -660,6 +675,146 @@ describe('DashboardPanel', () => {
 
       await waitFor(() => {
         expect(screen.getByText(/回归进度环形图/)).toBeTruthy();
+      });
+    });
+  });
+
+  // ─── 耗时标签页内容 ─────────────────────────────────────
+
+  describe('duration tab content', () => {
+    function setupDurationTab() {
+      useDashboardStore.setState({
+        activeTab: 'duration',
+        durationHistogram: [
+          { bucket: '0-1min', count: 5 },
+          { bucket: '1-5min', count: 3 },
+          { bucket: '5-15min', count: 2 },
+          { bucket: '15-30min', count: 1 },
+          { bucket: '30min+', count: 1 },
+        ],
+        tabLoaded: { duration: true },
+        loadingTab: null,
+      });
+    }
+
+    it('renders ECharts bar chart when duration data is loaded', async () => {
+      setupDurationTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('echarts-mock')).toBeTruthy();
+      });
+    });
+
+    it('renders section title with total run count', async () => {
+      setupDurationTab();
+
+      render(<DashboardPanel />);
+
+      // Total count = 5+3+2+1+1 = 12
+      await waitFor(() => {
+        expect(screen.getByText(/共 12 次运行/)).toBeTruthy();
+      });
+    });
+
+    it('shows empty state hint when duration data is empty', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.dashboard.getDurationHistogram.query).mockResolvedValue([]);
+
+      useDashboardStore.setState({
+        activeTab: 'duration',
+        durationHistogram: null,
+        tabLoaded: {},
+        loadingTab: null,
+      });
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/仿真耗时分布直方图/)).toBeTruthy();
+      });
+    });
+  });
+
+  // ─── 不稳定标签页内容 ─────────────────────────────────────
+
+  describe('unstable tab content', () => {
+    function setupUnstableTab() {
+      useDashboardStore.setState({
+        activeTab: 'unstable',
+        unstableCases: [
+          { caseName: 'flaky_case_1', subsys: 'cpu', passCount: 2, failCount: 3, totalCount: 5, failRate: 60.0, lastStatus: 'fail' },
+          { caseName: 'flaky_case_2', subsys: 'gpu', passCount: 3, failCount: 1, totalCount: 4, failRate: 25.0, lastStatus: 'pass' },
+        ],
+        tabLoaded: { unstable: true },
+        loadingTab: null,
+      });
+    }
+
+    it('renders unstable cases table with correct columns when data is loaded', async () => {
+      setupUnstableTab();
+
+      render(<DashboardPanel />);
+
+      // Table headers should be present
+      await waitFor(() => {
+        expect(screen.getByText('用例名')).toBeTruthy();
+      });
+      expect(screen.getByText('Pass次数')).toBeTruthy();
+      expect(screen.getByText('Fail次数')).toBeTruthy();
+      expect(screen.getByText('总运行')).toBeTruthy();
+      expect(screen.getByText('失败率')).toBeTruthy();
+      expect(screen.getByText('最近状态')).toBeTruthy();
+    });
+
+    it('renders case names in the unstable cases table', async () => {
+      setupUnstableTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByText('flaky_case_1')).toBeTruthy();
+      });
+      expect(screen.getByText('flaky_case_2')).toBeTruthy();
+    });
+
+    it('shows fail rate values in the table', async () => {
+      setupUnstableTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByText('60%')).toBeTruthy();
+      });
+      expect(screen.getByText('25%')).toBeTruthy();
+    });
+
+    it('shows count in section title', async () => {
+      setupUnstableTab();
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/共 2 个/)).toBeTruthy();
+      });
+    });
+
+    it('shows empty state hint when unstable cases data is empty', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.dashboard.getUnstableCases.query).mockResolvedValue([]);
+
+      useDashboardStore.setState({
+        activeTab: 'unstable',
+        unstableCases: null,
+        tabLoaded: {},
+        loadingTab: null,
+      });
+
+      render(<DashboardPanel />);
+
+      await waitFor(() => {
+        expect(screen.getByText(/不稳定用例列表/)).toBeTruthy();
       });
     });
   });

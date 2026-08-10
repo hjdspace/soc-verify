@@ -78,6 +78,23 @@ export type RegressionProgressData = {
   passRate: number;
 };
 
+/** getDurationHistogram 返回结构（耗时标签页） */
+export type DurationHistogramData = {
+  bucket: string;
+  count: number;
+}[];
+
+/** getUnstableCases 返回结构（不稳定标签页） */
+export type UnstableCasesData = {
+  caseName: string;
+  subsys: string;
+  passCount: number;
+  failCount: number;
+  totalCount: number;
+  failRate: number;
+  lastStatus: string;
+}[];
+
 /** 标签页列表（固定顺序，不支持重排） */
 export const DASHBOARD_TABS: { id: DashboardTab; label: string }[] = [
   { id: 'overview', label: '概览' },
@@ -122,6 +139,8 @@ interface DashboardStoreState {
   subsysHeatmap: SubsysHeatmapData | null;
   recentFailures: RecentFailuresData | null;
   regressionProgress: RegressionProgressData | null;
+  durationHistogram: DurationHistogramData | null;
+  unstableCases: UnstableCasesData | null;
   tabLoaded: Partial<Record<DashboardTab, boolean>>;
   tabError: Partial<Record<DashboardTab, string>>;
 
@@ -175,6 +194,8 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
   subsysHeatmap: null,
   recentFailures: null,
   regressionProgress: null,
+  durationHistogram: null,
+  unstableCases: null,
   tabLoaded: {},
   tabError: {},
   loadingTab: null,
@@ -193,6 +214,8 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
       subsysHeatmap: null,
       recentFailures: null,
       regressionProgress: null,
+      durationHistogram: null,
+      unstableCases: null,
       tabLoaded: {},
       tabError: {},
     });
@@ -208,6 +231,8 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
       subsysHeatmap: null,
       recentFailures: null,
       regressionProgress: null,
+      durationHistogram: null,
+      unstableCases: null,
       tabLoaded: {},
       tabError: {},
     });
@@ -231,6 +256,8 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
     subsysHeatmap: null,
     recentFailures: null,
     regressionProgress: null,
+    durationHistogram: null,
+    unstableCases: null,
     tabLoaded: {},
     tabError: {},
   }),
@@ -306,6 +333,22 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
         set({
           loadingTab: null,
           regressionProgress: data,
+          tabLoaded: { ...get().tabLoaded, [tab]: true },
+          tabError: { ...get().tabError, [tab]: undefined },
+        });
+      } else if (tab === 'duration') {
+        const data = await trpc.dashboard.getDurationHistogram.query(filter);
+        set({
+          loadingTab: null,
+          durationHistogram: data,
+          tabLoaded: { ...get().tabLoaded, [tab]: true },
+          tabError: { ...get().tabError, [tab]: undefined },
+        });
+      } else if (tab === 'unstable') {
+        const data = await trpc.dashboard.getUnstableCases.query(filter);
+        set({
+          loadingTab: null,
+          unstableCases: data,
           tabLoaded: { ...get().tabLoaded, [tab]: true },
           tabError: { ...get().tabError, [tab]: undefined },
         });

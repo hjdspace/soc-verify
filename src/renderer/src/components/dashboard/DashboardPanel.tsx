@@ -18,6 +18,8 @@ import { TrendTab } from './TrendTab';
 import { SubsysTab } from './SubsysTab';
 import { FailuresTab } from './FailuresTab';
 import { RegressionTab } from './RegressionTab';
+import { DurationTab } from './DurationTab';
+import { UnstableTab } from './UnstableTab';
 
 const TIME_RANGE_OPTIONS: { value: 'all' | '7d' | '30d'; label: string }[] = [
   { value: 'all', label: '全部' },
@@ -42,6 +44,8 @@ export function DashboardPanel() {
   const subsysHeatmap = useDashboardStore((s) => s.subsysHeatmap);
   const recentFailures = useDashboardStore((s) => s.recentFailures);
   const regressionProgress = useDashboardStore((s) => s.regressionProgress);
+  const durationHistogram = useDashboardStore((s) => s.durationHistogram);
+  const unstableCases = useDashboardStore((s) => s.unstableCases);
 
   const setActiveTab = useDashboardStore((s) => s.setActiveTab);
   const setSubsys = useDashboardStore((s) => s.setSubsys);
@@ -133,7 +137,9 @@ export function DashboardPanel() {
     (activeTab === 'subsys' && subsysHeatmap !== null && subsysHeatmap.length > 0) ||
     (activeTab === 'failures' && recentFailures !== null && recentFailures.length > 0) ||
     (activeTab === 'regression' && regressionProgress !== null && regressionProgress.totalCases > 0) ||
-    (activeTab !== 'overview' && activeTab !== 'trend' && activeTab !== 'subsys' && activeTab !== 'failures' && activeTab !== 'regression');
+    (activeTab === 'duration' && durationHistogram !== null && durationHistogram.length > 0) ||
+    (activeTab === 'unstable' && unstableCases !== null && unstableCases.length > 0) ||
+    (activeTab !== 'overview' && activeTab !== 'trend' && activeTab !== 'subsys' && activeTab !== 'failures' && activeTab !== 'regression' && activeTab !== 'duration' && activeTab !== 'unstable');
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -217,6 +223,8 @@ export function DashboardPanel() {
           activeTab === 'subsys' ? <SubsysTab /> :
           activeTab === 'failures' ? <FailuresTab /> :
           activeTab === 'regression' ? <RegressionTab /> :
+          activeTab === 'duration' ? <DurationTab /> :
+          activeTab === 'unstable' ? <UnstableTab /> :
           <EmptyState hint={TAB_EMPTY_HINTS[activeTab]} />
         ) : (
           <EmptyState hint={TAB_EMPTY_HINTS[activeTab]} />

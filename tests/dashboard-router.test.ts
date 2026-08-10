@@ -61,17 +61,18 @@ const caller = dashboardRouter.createCaller({});
 // ─── Test Suite ─────────────────────────────────────────────
 
 // ─── Date helpers (relative to now for trend7d tests) ──────
+// Uses UTC methods to stay consistent with SQLite's date() function.
 
 function isoDaysAgo(days: number, hour = 10): string {
   const d = new Date();
-  d.setDate(d.getDate() - days);
-  d.setHours(hour, 0, 0, 0);
+  d.setUTCDate(d.getUTCDate() - days);
+  d.setUTCHours(hour, 0, 0, 0);
   return d.toISOString();
 }
 
 function dateStrDaysAgo(days: number): string {
   const d = new Date();
-  d.setDate(d.getDate() - days);
+  d.setUTCDate(d.getUTCDate() - days);
   return d.toISOString().slice(0, 10);
 }
 
@@ -598,6 +599,260 @@ describe('dashboard-router', () => {
       expect(result.failedCases).toBe(0);
       expect(result.notRunCases).toBe(0);
       expect(result.passRate).toBe(0);
+    });
+  });
+
+  // ─── getDurationHistogram ───────────────────────────────
+
+  describe('getDurationHistogram', () => {
+    it('returns duration buckets grouped by time range', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [
+        { name: 't1', subsys: 'cpu', path: '/p/t1' },
+        { name: 't2', subsys: 'cpu', path: '/p/t2' },
+        { name: 't3', subsys: 'cpu', path: '/p/t3' },
+        { name: 't4', subsys: 'cpu', path: '/p/t4' },
+        { name: 't5', subsys: 'cpu', path: '/p/t5' },
+      ]);
+      // 30s → 0-1min bucket
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0), durationMs: 30_000 });
+      // 2min → 1-5min bucket
+      insertSimulationRun(memDb!, { caseName: 't2', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0), durationMs: 120_000 });
+      // 10min → 5-15min bucket
+      insertSimulationRun(memDb!, { caseName: 't3', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0), durationMs: 600_000 });
+      // 20min → 15-30min bucket
+      insertSimulationRun(memDb!, { caseName: 't4', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0), durationMs: 1_200_000 });
+      // 45min → 30min+ bucket
+      insertSimulationRun(memDb!, { caseName: 't5', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0), durationMs: 2_700_000 });
+
+      const result = await caller.getDurationHistogram({ projectId: 'test-project-id' });
+
+      expect(result).toHaveLength(5);
+      const bucket0to1 = result.find((r) => r.bucket === '0-1min');
+      expect(bucket0to1).toBeDefined();
+      expect(bucket0to1!.count).toBe(1);
+      const bucket1to5 = result.find((r) => r.bucket === '1-5min');
+      expect(bucket1to5).toBeDefined();
+      expect(bucket1to5!.count).toBe(1);
+      const bucket5to15 = result.find((r) => r.bucket === '5-15min');
+      expect(bucket5to15).toBeDefined();
+      expect(bucket5to15!.count).toBe(1);
+      const bucket15to30 = result.find((r) => r.bucket === '15-30min');
+      expect(bucket15to30).toBeDefined();
+      expect(bucket15to30!.count).toBe(1);
+      const bucket30plus = result.find((r) => r.bucket === '30min+');
+      expect(bucket30plus).toBeDefined();
+      expect(bucket30plus!.count).toBe(1);
+    });
+
+    it('groups multiple runs into the same bucket', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [
+        { name: 't1', subsys: 'cpu', path: '/p/t1' },
+        { name: 't2', subsys: 'cpu', path: '/p/t2' },
+        { name: 't3', subsys: 'cpu', path: '/p/t3' },
+      ]);
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0), durationMs: 30_000 });
+      insertSimulationRun(memDb!, { caseName: 't2', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0), durationMs: 45_000 });
+      insertSimulationRun(memDb!, { caseName: 't3', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0), durationMs: 180_000 });
+
+      const result = await caller.getDurationHistogram({ projectId: 'test-project-id' });
+
+      const bucket0to1 = result.find((r) => r.bucket === '0-1min');
+      expect(bucket0to1!.count).toBe(2);
+      const bucket1to5 = result.find((r) => r.bucket === '1-5min');
+      expect(bucket1to5!.count).toBe(1);
+    });
+
+    it('filters by subsys when provided', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }, { name: 'gpu' }]);
+      insertCases(memDb!, [
+        { name: 't1', subsys: 'cpu', path: '/p/t1' },
+        { name: 't2', subsys: 'gpu', path: '/p/t2' },
+      ]);
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0), durationMs: 30_000 });
+      insertSimulationRun(memDb!, { caseName: 't2', subsys: 'gpu', status: 'pass', startTime: isoDaysAgo(0), durationMs: 120_000 });
+
+      const result = await caller.getDurationHistogram({ projectId: 'test-project-id', subsys: 'cpu' });
+
+      const bucket0to1 = result.find((r) => r.bucket === '0-1min');
+      expect(bucket0to1!.count).toBe(1);
+      const bucket1to5 = result.find((r) => r.bucket === '1-5min');
+      expect(bucket1to5).toBeUndefined();
+    });
+
+    it('filters by timeRange when provided', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [{ name: 't1', subsys: 'cpu', path: '/p/t1' }]);
+      // Recent run
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0), durationMs: 30_000 });
+      // Old run — outside 7d window
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(20), durationMs: 120_000 });
+
+      const result = await caller.getDurationHistogram({ projectId: 'test-project-id', timeRange: '7d' });
+
+      const bucket0to1 = result.find((r) => r.bucket === '0-1min');
+      expect(bucket0to1!.count).toBe(1);
+      const bucket1to5 = result.find((r) => r.bucket === '1-5min');
+      expect(bucket1to5).toBeUndefined();
+    });
+
+    it('returns empty array for empty database', async () => {
+      const result = await caller.getDurationHistogram({ projectId: 'test-project-id' });
+      expect(result).toEqual([]);
+    });
+
+    it('excludes runs with null duration_ms', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [
+        { name: 't1', subsys: 'cpu', path: '/p/t1' },
+        { name: 't2', subsys: 'cpu', path: '/p/t2' },
+      ]);
+      // Run with no duration_ms
+      insertSimulationRun(memDb!, { caseName: 't1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+      // Run with duration_ms
+      insertSimulationRun(memDb!, { caseName: 't2', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0), durationMs: 30_000 });
+
+      const result = await caller.getDurationHistogram({ projectId: 'test-project-id' });
+
+      // Only 1 run should be counted (the one with duration_ms)
+      const bucket0to1 = result.find((r) => r.bucket === '0-1min');
+      expect(bucket0to1!.count).toBe(1);
+    });
+  });
+
+  // ─── getUnstableCases ─────────────────────────────────
+
+  describe('getUnstableCases', () => {
+    it('identifies unstable cases that have both pass and fail', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [
+        { name: 'flaky1', subsys: 'cpu', path: '/p/flaky1' },
+        { name: 'stable_pass', subsys: 'cpu', path: '/p/stable_pass' },
+        { name: 'stable_fail', subsys: 'cpu', path: '/p/stable_fail' },
+      ]);
+      // flaky1: 2 pass + 1 fail → unstable
+      insertSimulationRun(memDb!, { caseName: 'flaky1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(2) });
+      insertSimulationRun(memDb!, { caseName: 'flaky1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(1) });
+      insertSimulationRun(memDb!, { caseName: 'flaky1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+      // stable_pass: only pass → not unstable
+      insertSimulationRun(memDb!, { caseName: 'stable_pass', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+      // stable_fail: only fail → not unstable
+      insertSimulationRun(memDb!, { caseName: 'stable_fail', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getUnstableCases({ projectId: 'test-project-id' });
+
+      expect(result).toHaveLength(1);
+      expect(result[0].caseName).toBe('flaky1');
+      expect(result[0].subsys).toBe('cpu');
+      expect(result[0].passCount).toBe(2);
+      expect(result[0].failCount).toBe(1);
+      expect(result[0].totalCount).toBe(3);
+      expect(result[0].failRate).toBeCloseTo(33.3, 1);
+      expect(result[0].lastStatus).toBe('pass');
+    });
+
+    it('sorts by failRate descending', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [
+        { name: 'case_75', subsys: 'cpu', path: '/p/c75' },
+        { name: 'case_50', subsys: 'cpu', path: '/p/c50' },
+        { name: 'case_25', subsys: 'cpu', path: '/p/c25' },
+      ]);
+      // case_75: 1 pass + 3 fail → 75% fail rate
+      insertSimulationRun(memDb!, { caseName: 'case_75', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(3) });
+      insertSimulationRun(memDb!, { caseName: 'case_75', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(2) });
+      insertSimulationRun(memDb!, { caseName: 'case_75', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(1) });
+      insertSimulationRun(memDb!, { caseName: 'case_75', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0) });
+      // case_50: 2 pass + 2 fail → 50% fail rate
+      insertSimulationRun(memDb!, { caseName: 'case_50', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(3) });
+      insertSimulationRun(memDb!, { caseName: 'case_50', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(2) });
+      insertSimulationRun(memDb!, { caseName: 'case_50', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(1) });
+      insertSimulationRun(memDb!, { caseName: 'case_50', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0) });
+      // case_25: 3 pass + 1 fail → 25% fail rate
+      insertSimulationRun(memDb!, { caseName: 'case_25', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(3) });
+      insertSimulationRun(memDb!, { caseName: 'case_25', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(2) });
+      insertSimulationRun(memDb!, { caseName: 'case_25', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(1) });
+      insertSimulationRun(memDb!, { caseName: 'case_25', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getUnstableCases({ projectId: 'test-project-id' });
+
+      expect(result).toHaveLength(3);
+      expect(result[0].caseName).toBe('case_75');
+      expect(result[1].caseName).toBe('case_50');
+      expect(result[2].caseName).toBe('case_25');
+    });
+
+    it('filters by subsys when provided', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }, { name: 'gpu' }]);
+      insertCases(memDb!, [
+        { name: 'flaky_cpu', subsys: 'cpu', path: '/p/fc' },
+        { name: 'flaky_gpu', subsys: 'gpu', path: '/p/fg' },
+      ]);
+      insertSimulationRun(memDb!, { caseName: 'flaky_cpu', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(1) });
+      insertSimulationRun(memDb!, { caseName: 'flaky_cpu', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0) });
+      insertSimulationRun(memDb!, { caseName: 'flaky_gpu', subsys: 'gpu', status: 'pass', startTime: isoDaysAgo(1) });
+      insertSimulationRun(memDb!, { caseName: 'flaky_gpu', subsys: 'gpu', status: 'fail', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getUnstableCases({ projectId: 'test-project-id', subsys: 'cpu' });
+
+      expect(result).toHaveLength(1);
+      expect(result[0].caseName).toBe('flaky_cpu');
+    });
+
+    it('filters by timeRange when provided', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [{ name: 'flaky1', subsys: 'cpu', path: '/p/f1' }]);
+      // Recent pass + recent fail → unstable within 7d
+      insertSimulationRun(memDb!, { caseName: 'flaky1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(1) });
+      insertSimulationRun(memDb!, { caseName: 'flaky1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0) });
+      // Old run (outside 7d) — only pass, so within 7d the case is unstable
+      insertSimulationRun(memDb!, { caseName: 'flaky1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(20) });
+
+      const result7d = await caller.getUnstableCases({ projectId: 'test-project-id', timeRange: '7d' });
+
+      // Within 7d: 1 pass + 1 fail → unstable
+      expect(result7d).toHaveLength(1);
+      expect(result7d[0].caseName).toBe('flaky1');
+      expect(result7d[0].passCount).toBe(1);
+      expect(result7d[0].failCount).toBe(1);
+
+      // Without timeRange: 2 pass + 1 fail → still unstable
+      const resultAll = await caller.getUnstableCases({ projectId: 'test-project-id' });
+      expect(resultAll).toHaveLength(1);
+      expect(resultAll[0].passCount).toBe(2);
+      expect(resultAll[0].failCount).toBe(1);
+    });
+
+    it('returns empty array for empty database', async () => {
+      const result = await caller.getUnstableCases({ projectId: 'test-project-id' });
+      expect(result).toEqual([]);
+    });
+
+    it('returns empty array when no unstable cases exist', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [
+        { name: 'only_pass', subsys: 'cpu', path: '/p/op' },
+        { name: 'only_fail', subsys: 'cpu', path: '/p/of' },
+      ]);
+      insertSimulationRun(memDb!, { caseName: 'only_pass', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(0) });
+      insertSimulationRun(memDb!, { caseName: 'only_fail', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getUnstableCases({ projectId: 'test-project-id' });
+      expect(result).toEqual([]);
+    });
+
+    it('returns correct lastStatus based on most recent run', async () => {
+      insertSubsystems(memDb!, [{ name: 'cpu' }]);
+      insertCases(memDb!, [{ name: 'flaky1', subsys: 'cpu', path: '/p/f1' }]);
+      // pass first, then fail → lastStatus = fail
+      insertSimulationRun(memDb!, { caseName: 'flaky1', subsys: 'cpu', status: 'pass', startTime: isoDaysAgo(1) });
+      insertSimulationRun(memDb!, { caseName: 'flaky1', subsys: 'cpu', status: 'fail', startTime: isoDaysAgo(0) });
+
+      const result = await caller.getUnstableCases({ projectId: 'test-project-id' });
+
+      expect(result).toHaveLength(1);
+      expect(result[0].lastStatus).toBe('fail');
     });
   });
 });
