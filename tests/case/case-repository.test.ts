@@ -15,6 +15,7 @@ import {
   getScanMetadata,
   setScanMetadata,
   clearAllCases,
+  getSubsysList,
   type SubsysRow,
   type CaseRow,
   type SimulationRunRow,
@@ -567,6 +568,35 @@ describe('Case Database Repository', () => {
       expect(map.get('t1')).toBe('cpu');
       expect(map.get('t2')).toBe('cpu');
       expect(map.get('t3')).toBe('gpu');
+    });
+  });
+
+  // ─── getSubsysList ─────────────────────────────────────
+
+  describe('getSubsysList', () => {
+    it('returns empty array when no subsystems exist', () => {
+      expect(getSubsysList(db)).toEqual([]);
+    });
+
+    it('returns all subsystem names sorted alphabetically', () => {
+      insertSubsystems(db, [
+        makeSubsys({ name: 'gpu' }),
+        makeSubsys({ name: 'cpu' }),
+        makeSubsys({ name: 'axi' }),
+      ]);
+
+      const result = getSubsysList(db);
+      expect(result).toEqual(['axi', 'cpu', 'gpu']);
+    });
+
+    it('returns names only (not full subsystem objects)', () => {
+      insertSubsystems(db, [
+        makeSubsys({ name: 'cpu', path: '/proj/cpu', description: 'CPU' }),
+      ]);
+
+      const result = getSubsysList(db);
+      expect(result).toEqual(['cpu']);
+      expect(typeof result[0]).toBe('string');
     });
   });
 

@@ -101,6 +101,17 @@ export function getSubsystems(
   return rows.map(rowToSubsysRow);
 }
 
+/**
+ * 获取所有子系统名称列表（用于 Dashboard 下拉筛选）。
+ * 返回按名称排序的字符串数组。
+ */
+export function getSubsysList(db: Database.Database): string[] {
+  const rows = db.prepare(`
+    SELECT name FROM subsystems ORDER BY name
+  `).all() as { name: string }[];
+  return rows.map((r) => r.name);
+}
+
 // ─── cases ───────────────────────────────────────────────
 
 /**

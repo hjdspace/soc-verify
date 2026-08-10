@@ -1,19 +1,52 @@
 /**
- * Dashboard router — aggregate metrics, layout persistence.
+ * Dashboard router — subsystem list, layout persistence.
+ *
+ * ADR 0019: Dashboard 数据源切换为 Case Database。
+ * 废弃 getMetrics（从 sim-history.json 读取），所有查询走 CaseDatabase。
+ * 本 issue（01）仅实现 getSubsysList + 保留 saveLayout/getLayout。
+ * 后续 issue 逐个添加 getTrend / getSubsysHeatmap / 等聚合查询。
  */
 
 import { join } from 'node:path';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { t, TRPCError } from '../router-context';
 import { requireProject } from '../../services/project-service';
-import { pluginLoader } from '../../plugins/loader';
-import { PluginBackedCoverage, PluginBackedSimulation } from '../../plugin-adapters';
-import { coverageRegistry } from '../../coverage/coverage-registry';
-import { RegressionManager } from '../../regression/regression-manager';
-import type { SimulationHistoryEntry, CoverageSummary } from '@shared/types';
+import { caseStatsRegistry } from '../../case/case-stats-registry';
+import { getSubsysList } from '../../case/db/case-repository';
+
+// ─── 共享筛选参数验证 ───────────────────────────────────────
+
+type DashboardFilter = {
+  projectId: string;
+  subsys?: string;
+  timeRange?: 'all' | '7d' | '30d' | { start: string; end: string };
+};
+
+function validateFilter(raw: unknown): DashboardFilter {
+  const r = raw as Record<string, unknown>;
+  if (typeof r.projectId !== 'string') {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+  }
+  const filter: DashboardFilter = { projectId: r.projectId };
+  if (typeof r.subsys === 'string' && r.subsys.length > 0) {
+    filter.subsys = r.subsys;
+  }
+  if (r.timeRange !== undefined) {
+    if (typeof r.timeRange === 'string' && ['all', '7d', '30d'].includes(r.timeRange)) {
+      filter.timeRange = r.timeRange as 'all' | '7d' | '30d';
+    } else if (typeof r.timeRange === 'object' && r.timeRange !== null) {
+      const tr = r.timeRange as Record<string, unknown>;
+      if (typeof tr.start === 'string' && typeof tr.end === 'string') {
+        filter.timeRange = { start: tr.start, end: tr.end };
+      }
+    }
+  }
+  return filter;
+}
 
 export const dashboardRouter = t.router({
-  getMetrics: t.procedure
+  // ─── 子系统列表（下拉筛选） ──────────────────────────────
+  getSubsysList: t.procedure
     .input((raw): { projectId: string } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string') {
@@ -21,53 +54,13 @@ export const dashboardRouter = t.router({
       }
       return { projectId: r.projectId };
     })
-    .query(async ({ input }) => {
+    .query(({ input }) => {
       const project = requireProject(input.projectId);
-      const registry = pluginLoader.getRegistry(project.rootPath);
-
-      // Aggregate metrics from simulation history and coverage
-      const simHistoryPath = join(project.rootPath, '.socverify', 'sim-history.json');
-      let totalRuns = 0;
-      let passRate = 0;
-      try {
-        const data = await readFile(simHistoryPath, 'utf-8');
-        const history = JSON.parse(data) as SimulationHistoryEntry[];
-        totalRuns = history.length;
-        const passed = history.filter((h) => h.status === 'pass').length;
-        passRate = totalRuns > 0 ? (passed / totalRuns) * 100 : 0;
-      } catch {
-        // No history yet
-      }
-
-      // Coverage overview
-      let coverageOverview: CoverageSummary | null = null;
-      try {
-        const covAdapter = new PluginBackedCoverage(project.rootPath, registry);
-        const covMgr = coverageRegistry.getOrCreate(project.rootPath, covAdapter);
-        coverageOverview = (await covMgr.getOverview()).summary;
-      } catch {
-        // No coverage data
-      }
-
-      // Regression history
-      let regressionCount = 0;
-      try {
-        const simAdapter = new PluginBackedSimulation(registry);
-        const regMgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: simAdapter });
-        const history = await regMgr.getHistory();
-        regressionCount = history.length;
-      } catch {
-        // No regression data
-      }
-
-      return {
-        passRate,
-        totalRuns,
-        coverage: coverageOverview,
-        regressionCount,
-      };
+      const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
+      return getSubsysList(db);
     }),
 
+  // ─── 布局持久化 ──────────────────────────────────────────
   saveLayout: t.procedure
     .input((raw): { projectId: string; layout: unknown } => {
       const r = raw as Record<string, unknown>;
@@ -103,3 +96,7 @@ export const dashboardRouter = t.router({
       }
     }),
 });
+
+// Export filter type + validator for reuse in future procedures
+export type { DashboardFilter };
+export { validateFilter };
