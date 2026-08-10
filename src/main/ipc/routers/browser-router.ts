@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { t, TRPCError } from '../router-context';
 import { BrowserTabStore } from '../../browser/browser-tab-store';
 import { BookmarkStore } from '../../browser/bookmark-store';
+import { getDownloadTracker } from '../../surface/surface-ipc';
 import type {
   Bookmark,
   BookmarkGroup,
@@ -312,8 +313,6 @@ export const browserRouter = t.router({
 
   /** Get all tracked downloads (active and completed). */
   getDownloads: t.procedure.query(async (): Promise<DownloadInfo[]> => {
-    // Lazy import to avoid circular dependency
-    const { getDownloadTracker } = await import('../../surface/surface-ipc');
     return getDownloadTracker().getDownloads().map((d) => ({
       id: d.id,
       filename: d.filename,
@@ -327,7 +326,6 @@ export const browserRouter = t.router({
 
   /** Clear completed/failed/cancelled downloads from the tracker. */
   clearDownloads: t.procedure.mutation(async (): Promise<{ ok: true }> => {
-    const { getDownloadTracker } = await import('../../surface/surface-ipc');
     getDownloadTracker().clearCompleted();
     return { ok: true as const };
   }),
