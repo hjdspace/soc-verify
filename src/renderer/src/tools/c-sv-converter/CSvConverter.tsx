@@ -15,9 +15,34 @@
 
 import { useState, useCallback, useMemo } from 'react';
 import { FolderOpen, FileCode2, Download, Eye, Columns2, GitCompare, Folder, Settings, FileText } from 'lucide-react';
+import hljs from 'highlight.js';
 import { trpc } from '@renderer/lib/trpc';
 import type { ToolComponentProps } from '../registry';
 import { cn } from '@renderer/lib/utils';
+
+// ── Syntax highlighting helpers ────────────────────────────────────
+
+/** Highlight code using highlight.js and return HTML string. */
+function highlightCode(code: string, language: string): string {
+  if (!code) return '';
+  try {
+    if (language && language !== 'plaintext' && hljs.getLanguage(language)) {
+      return hljs.highlight(code, { language }).value;
+    }
+    return hljs.highlightAuto(code).value;
+  } catch {
+    return escapeHtml(code);
+  }
+}
+
+/** Get the highlight.js language name based on conversion direction. */
+function getInputLanguage(direction: 'c-to-sv' | 'sv-to-c'): string {
+  return direction === 'c-to-sv' ? 'c' : 'verilog';
+}
+
+function getOutputLanguage(direction: 'c-to-sv' | 'sv-to-c'): string {
+  return direction === 'c-to-sv' ? 'verilog' : 'c';
+}
 
 type FunctionParameter = {
   name: string;
@@ -58,8 +83,8 @@ type ConversionResult = {
   warnings: string[];
 };
 
-/** Generate a simple line-by-line diff HTML. */
-function generateDiffHtml(inputCode: string, outputCode: string): string {
+/** Generate a simple line-by-line diff HTML with syntax highlighting. */
+function generateDiffHtml(inputCode: string, outputCode: string, inputLang: string, outputLang: string): string {
   const inputLines = inputCode.split('\n');
   const outputLines = outputCode.split('\n');
   const maxLines = Math.max(inputLines.length, outputLines.length);
@@ -72,12 +97,14 @@ function generateDiffHtml(inputCode: string, outputCode: string): string {
     const isDel = inLine && !outLine;
     const isChg = inLine && outLine && inLine !== outLine;
     const cls = isAdd ? 'diff-add' : isDel ? 'diff-del' : isChg ? 'diff-chg' : '';
+    const inHighlighted = inLine ? highlightCode(inLine, inputLang) : '&nbsp;';
+    const outHighlighted = outLine ? highlightCode(outLine, outputLang) : '&nbsp;';
     rows.push(
       `<tr class="${cls}">` +
       `<td class="line-num">${i + 1}</td>` +
-      `<td class="line-content">${escapeHtml(inLine) || '&nbsp;'}</td>` +
+      `<td class="line-content">${inHighlighted}</td>` +
       `<td class="line-num">${i + 1}</td>` +
-      `<td class="line-content">${escapeHtml(outLine) || '&nbsp;'}</td>` +
+      `<td class="line-content">${outHighlighted}</td>` +
       `</tr>`
     );
   }
@@ -606,10 +633,8 @@ export function CSvConverter({ projectRoot, onProjectRootChange }: ToolComponent
             <div className="border-b border-border bg-muted/30 px-2 py-1 text-xs font-semibold">
               {direction === 'c-to-sv' ? 'SystemVerilog 代码' : 'C 代码'}
             </div>
-            <div className="min-h-0 flex-1 overflow-auto bg-zinc-900 p-2">
-              <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-zinc-300">
-                {outputCode}
-              </pre>
+            <div className="min-h-0 flex-1 overflow-auto bg-muted/20 p-2">
+              <pre className="hljs whitespace-pre-wrap font-mono text-[11px] leading-relaxed" dangerouslySetInnerHTML={{ __html: highlightCode(outputCode, getOutputLanguage(direction)) }} />
             </div>
           </div>
         </div>
@@ -622,20 +647,16 @@ export function CSvConverter({ projectRoot, onProjectRootChange }: ToolComponent
             <div className="border-b border-border bg-muted/30 px-2 py-1 text-xs font-semibold">
               输入代码（前100行）
             </div>
-            <div className="min-h-0 flex-1 overflow-auto bg-zinc-900 p-2">
-              <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-zinc-300">
-                {inputContent}
-              </pre>
+            <div className="min-h-0 flex-1 overflow-auto bg-muted/20 p-2">
+              <pre className="hljs whitespace-pre-wrap font-mono text-[11px] leading-relaxed" dangerouslySetInnerHTML={{ __html: highlightCode(inputContent, getInputLanguage(direction)) }} />
             </div>
           </div>
           <div className="flex min-w-0 flex-1 flex-col rounded border border-border">
             <div className="border-b border-border bg-muted/30 px-2 py-1 text-xs font-semibold">
               输出代码预览
             </div>
-            <div className="min-h-0 flex-1 overflow-auto bg-zinc-900 p-2">
-              <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-zinc-300">
-                {outputCode}
-              </pre>
+            <div className="min-h-0 flex-1 overflow-auto bg-muted/20 p-2">
+              <pre className="hljs whitespace-pre-wrap font-mono text-[11px] leading-relaxed" dangerouslySetInnerHTML={{ __html: highlightCode(outputCode, getOutputLanguage(direction)) }} />
             </div>
           </div>
         </div>
@@ -647,21 +668,18 @@ export function CSvConverter({ projectRoot, onProjectRootChange }: ToolComponent
           <div className="border-b border-border bg-muted/30 px-2 py-1 text-xs font-semibold">
             差异对比
           </div>
-          <div
-            className="min-h-0 flex-1 overflow-auto bg-zinc-900 p-2"
+            <div
+            className="min-h-0 flex-1 overflow-auto bg-muted/20 p-2"
             dangerouslySetInnerHTML={{
               __html: `<style>
                 .diff-table { width: 100%; border-collapse: collapse; font-family: monospace; font-size: 11px; }
-                .diff-table td { padding: 1px 8px; vertical-align: top; white-space: pre-wrap; word-wrap: break-word; color: #d4d4d4; }
-                .diff-table .line-num { text-align: right; color: #666; background: #1e1e1e; width: 40px; min-width: 40px; user-select: none; }
-                .diff-add { background: rgba(40, 167, 69, 0.15); }
-                .diff-add .line-content { color: #4ade80; }
-                .diff-del { background: rgba(220, 53, 69, 0.15); }
-                .diff-del .line-content { color: #f87171; }
-                .diff-chg { background: rgba(255, 193, 7, 0.15); }
-                .diff-chg .line-content { color: #fbbf24; }
+                .diff-table td { padding: 1px 8px; vertical-align: top; white-space: pre-wrap; word-wrap: break-word; }
+                .diff-table .line-num { text-align: right; color: var(--muted-foreground); background: var(--muted); width: 40px; min-width: 40px; user-select: none; }
+                .diff-add { background: color-mix(in oklch, var(--status-pass-foreground) 10%, transparent); }
+                .diff-del { background: color-mix(in oklch, var(--status-fail-foreground) 10%, transparent); }
+                .diff-chg { background: color-mix(in oklch, var(--status-running-foreground) 10%, transparent); }
               </style>
-              ${generateDiffHtml(inputContent, outputCode)}`
+              ${generateDiffHtml(inputContent, outputCode, getInputLanguage(direction), getOutputLanguage(direction))}`
             }}
           />
         </div>
