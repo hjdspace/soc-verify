@@ -53,6 +53,32 @@ function runGitCommand(repoPath: string, args: string[]): string {
   }
 }
 
+/** Run a git command asynchronously (non-blocking) and return stdout. */
+function runGitCommandAsync(repoPath: string, args: string[]): Promise<string> {
+  return new Promise((resolve) => {
+    const proc = spawn('git', args, {
+      cwd: repoPath,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    proc.stdout?.on('data', (data: Buffer) => {
+      stdout += data.toString();
+    });
+    proc.stderr?.on('data', () => {});
+    proc.on('exit', () => resolve(stdout));
+    proc.on('error', () => resolve(''));
+    // Safety timeout
+    setTimeout(() => {
+      try {
+        proc.kill();
+      } catch {
+        // already exited
+      }
+      resolve(stdout);
+    }, 30000);
+  });
+}
+
 /** Run a git command with streaming output. */
 function runGitStreaming(
   repoPath: string,
@@ -667,9 +693,82 @@ export async function updateSubsysRepos(
   };
 }
 
+// ── Async repo info update (non-blocking, for parallel scanning) ──
+
+/** Async version of updateRepoInfo — uses spawn instead of execSync. */
+async function updateRepoInfoAsync(repo: GitRepoInfo): Promise<void> {
+  // Current branch
+  const branch = (await runGitCommandAsync(repo.path, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+  if (branch) repo.currentBranch = branch;
+
+  // Current tag
+  repo.currentTag = await getLatestCqpTagAsync(repo.path);
+
+  // Subsys tag for xxx_sys repos
+  const sysName = repo.name.replace('udtb/', '');
+  if (sysName.endsWith('_sys')) {
+    repo.subsysTag = await getSubsysTagAsync(repo.path, sysName);
+  }
+
+  // Last commit info
+  const commitInfo = await runGitCommandAsync(repo.path, ['log', '-1', '--pretty=format:%h|%s|%ar']);
+  if (commitInfo) {
+    const parts = commitInfo.trim().split('|', 3);
+    if (parts.length >= 3) {
+      repo.lastCommitHash = parts[0];
+      repo.lastCommitMessage = parts[1];
+      repo.lastCommitTime = parts[2];
+    }
+  }
+
+  // Check for uncommitted changes
+  const status = await runGitCommandAsync(repo.path, ['status', '--porcelain']);
+  repo.hasChanges = !!status.trim();
+}
+
+/** Async version of getLatestCqpTag. */
+async function getLatestCqpTagAsync(repoPath: string): Promise<string> {
+  let result = (await runGitCommandAsync(repoPath, ['describe', '--exact-match', '--tags', 'HEAD'])).trim();
+  if (result) return result;
+
+  result = (await runGitCommandAsync(repoPath, ['describe', '--tags', '--abbrev=0'])).trim();
+  if (result) return `${result} (近似)`;
+
+  result = (await runGitCommandAsync(repoPath, ['tag', '-l'])).trim();
+  if (result) return 'No tag (有标签但不在标签上)';
+
+  return 'No tag';
+}
+
+/** Async version of getSubsysTag. */
+async function getSubsysTagAsync(repoPath: string, sysName: string): Promise<string | null> {
+  if (!sysName.endsWith('_sys')) return null;
+
+  const tagList = (await runGitCommandAsync(repoPath, ['tag', '-l'])).trim();
+  if (!tagList) return null;
+
+  const allTags = tagList.split('\n').map((t) => t.trim()).filter(Boolean);
+  const pattern = new RegExp(`^DE_${sysName}_(\\d{4})_.*_goodcode`);
+
+  const matchingTags: Array<{ num: number; tag: string }> = [];
+  for (const tag of allTags) {
+    const match = tag.match(pattern);
+    if (match) {
+      matchingTags.push({ num: parseInt(match[1], 10), tag });
+    }
+  }
+
+  if (matchingTags.length > 0) {
+    matchingTags.sort((a, b) => b.num - a.num);
+    return matchingTags[0].tag;
+  }
+
+  return null;
+}
+
 // ── Discover repos ─────────────────────────────────────────────────
 
-/** Discover all repos and update their info. */
+/** Discover all repos and update their info (sync, blocking). */
 export function discoverRepos(
   projectDir: string,
   repoType: 'de' | 'dv' | 'all' = 'all',
@@ -689,6 +788,77 @@ export function discoverRepos(
   }
 
   return repos;
+}
+
+/**
+ * Discover all repos and update their info in parallel (async, non-blocking).
+ * Calls onProgress after each repo completes.
+ */
+export async function discoverReposParallel(
+  projectDir: string,
+  repoType: 'de' | 'dv' | 'all' = 'all',
+  onProgress?: (completed: number, total: number, repoName: string) => void,
+): Promise<GitRepoInfo[]> {
+  let repos: GitRepoInfo[] = [];
+
+  if (repoType === 'de' || repoType === 'all') {
+    repos = repos.concat(getDeRepos(projectDir));
+  }
+  if (repoType === 'dv' || repoType === 'all') {
+    repos = repos.concat(getDvRepos(projectDir));
+  }
+
+  const total = repos.length;
+  if (total === 0) return repos;
+
+  // Parallel scan with concurrency limit
+  const CONCURRENCY = 8;
+  const results: GitRepoInfo[] = new Array(total);
+  let completed = 0;
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < total) {
+      const i = nextIndex++;
+      const repo = { ...repos[i] };
+      await updateRepoInfoAsync(repo);
+      results[i] = repo;
+      completed++;
+      onProgress?.(completed, total, repo.name);
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.min(CONCURRENCY, total) },
+    () => worker(),
+  );
+  await Promise.all(workers);
+
+  return results;
+}
+
+/**
+ * Refresh a single repo's info asynchronously (non-blocking).
+ * Returns a new GitRepoInfo object.
+ */
+export async function refreshRepoInfoAsync(
+  repo: Pick<GitRepoInfo, 'name' | 'path' | 'repoType'>,
+): Promise<GitRepoInfo> {
+  const refreshed: GitRepoInfo = {
+    name: repo.name,
+    path: repo.path,
+    repoType: repo.repoType,
+    currentBranch: 'Unknown',
+    currentTag: 'No tag',
+    lastCommitHash: 'Unknown',
+    lastCommitMessage: 'Unknown',
+    lastCommitTime: 'Unknown',
+    hasChanges: false,
+    tags: [],
+    subsysTag: null,
+  };
+  await updateRepoInfoAsync(refreshed);
+  return refreshed;
 }
 
 /** Refresh a single repo's info (branch, tag, commit, changes). Returns a new GitRepoInfo object. */
