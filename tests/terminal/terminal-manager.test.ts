@@ -10,8 +10,16 @@ describe('getInteractiveShellArgs', () => {
     ]);
   });
 
-  it('does not change other shells or Windows terminals', () => {
-    expect(getInteractiveShellArgs('/bin/zsh', 'linux', '/app/terminal/bashrc')).toEqual([]);
+  it('starts zsh as a login + interactive shell to source .zshrc', () => {
+    expect(getInteractiveShellArgs('/bin/zsh', 'linux', '/app/terminal/bashrc')).toEqual(['-l', '-i']);
+  });
+
+  it('starts csh as a login + interactive shell to source .cshrc', () => {
+    expect(getInteractiveShellArgs('/bin/csh', 'linux', '/app/terminal/bashrc')).toEqual(['-l', '-i']);
+    expect(getInteractiveShellArgs('/bin/tcsh', 'linux', '/app/terminal/bashrc')).toEqual(['-l', '-i']);
+  });
+
+  it('does not change Windows terminals', () => {
     expect(getInteractiveShellArgs('powershell.exe', 'win32', 'unused')).toEqual([]);
   });
 });
