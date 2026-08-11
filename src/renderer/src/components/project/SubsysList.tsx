@@ -744,7 +744,9 @@ export function SubsysList() {
     return groups;
   }, [searchResults]);
 
-  // In search mode, auto-expand all file nodes so matching cases are visible
+  // In search mode, auto-expand all file nodes so matching cases are visible.
+  // Users can still collapse individual file nodes or subsystem groups —
+  // their choices are tracked in `searchCollapsedFiles` / `searchCollapsedSubsys`.
   const searchExpandedFiles = useMemo(() => {
     const paths = new Set<string>();
     for (const { tree } of searchGrouped) {
@@ -755,8 +757,43 @@ export function SubsysList() {
     return paths;
   }, [searchGrouped]);
 
-  // No-op toggle for search mode (file nodes are always expanded)
-  const noopToggle = useCallback(() => {}, []);
+  // Track which file nodes / subsystem groups the user has manually collapsed in search mode
+  const [searchCollapsedFiles, setSearchCollapsedFiles] = useState<Set<string>>(new Set());
+  const [searchCollapsedSubsys, setSearchCollapsedSubsys] = useState<Set<string>>(new Set());
+
+  // Clear collapsed state when search results change
+  useEffect(() => {
+    setSearchCollapsedFiles(new Set());
+    setSearchCollapsedSubsys(new Set());
+  }, [searchQuery]);
+
+  // Effective expanded files in search mode = all matching files minus user-collapsed ones
+  const searchEffectiveExpandedFiles = useMemo(() => {
+    if (searchCollapsedFiles.size === 0) return searchExpandedFiles;
+    const result = new Set<string>();
+    for (const path of searchExpandedFiles) {
+      if (!searchCollapsedFiles.has(path)) result.add(path);
+    }
+    return result;
+  }, [searchExpandedFiles, searchCollapsedFiles]);
+
+  const toggleSearchFile = useCallback((path: string) => {
+    setSearchCollapsedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+
+  const toggleSearchSubsys = useCallback((subsys: string) => {
+    setSearchCollapsedSubsys((prev) => {
+      const next = new Set(prev);
+      if (next.has(subsys)) next.delete(subsys);
+      else next.add(subsys);
+      return next;
+    });
+  }, []);
 
   const expandAllFiles = useCallback(() => {
     const allPaths = new Set<string>();
@@ -957,26 +994,35 @@ export function SubsysList() {
               <div className="mb-0.5 px-1 text-[10px] text-muted-foreground">
                 找到 {searchResults.length} 个用例
               </div>
-              {searchGrouped.map(({ subsys, tree, caseCount }) => (
+              {searchGrouped.map(({ subsys, tree, caseCount }) => {
+                const subsysCollapsed = searchCollapsedSubsys.has(subsys);
+                return (
                 <div key={subsys}>
-                  {/* Subsystem header — always expanded in search mode */}
-                  <div className="flex items-center gap-1 rounded px-1 py-0.5">
-                    <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
+                  {/* Subsystem header — collapsible in search mode */}
+                  <button
+                    onClick={() => toggleSearchSubsys(subsys)}
+                    className="flex w-full items-center gap-1 rounded px-1 py-0.5 transition-colors hover:bg-accent/50"
+                  >
+                    {subsysCollapsed ? (
+                      <ChevronRight className="h-3 w-3 shrink-0 opacity-50" />
+                    ) : (
+                      <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
+                    )}
                     <Cpu className="h-3 w-3 shrink-0 text-primary/70" />
                     <span className="truncate font-medium text-xs">{subsys}</span>
                     <span className="shrink-0 text-[10px] text-muted-foreground">
                       {caseCount}
                     </span>
-                  </div>
-                  {/* File groups — always expanded, show only matching cases */}
-                  {tree.map((node) => (
+                  </button>
+                  {/* File groups — collapsible, show only matching cases */}
+                  {!subsysCollapsed && tree.map((node) => (
                     <CaseTreeItem
                       key={node.path || node.name}
                       node={node}
                       level={0}
-                      expandedFiles={searchExpandedFiles}
+                      expandedFiles={searchEffectiveExpandedFiles}
                       expandedCases={expandedCases}
-                      toggleFile={noopToggle}
+                      toggleFile={toggleSearchFile}
                       toggleCase={toggleCase}
                       batchMode={batchMode}
                       selectedCases={selectedCases}
@@ -989,7 +1035,8 @@ export function SubsysList() {
                     />
                   ))}
                 </div>
-              ))}
+                );
+              })}
             </>
           )}
         </div>
