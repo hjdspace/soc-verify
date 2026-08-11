@@ -228,7 +228,11 @@ export const simulationRouter = t.router({
         await new Promise(resolve => setTimeout(resolve, 500));
 
         // 写入仿真命令 + 完成标记
-        const execCommand = `${displayCommand}; echo "__SIM_DONE__$?__"`;
+        // 在 csh/tcsh 中，$? 后跟变量名字符会被解析为 "$?name"（检查变量是否定义），
+        // 而非退出状态码。因此 csh/tcsh 使用 ${status}，bash 使用 $?
+        const isCsh = simShell.endsWith('csh');
+        const statusVar = isCsh ? '${status}' : '$?';
+        const execCommand = `${displayCommand}; echo "__SIM_DONE__${statusVar}__"`;
         terminalManager.write(session.id, `${execCommand}\r`);
       } else {
         // Log 模式：直接执行命令，stdout/stderr 流式输出到终端视图
@@ -372,7 +376,9 @@ export const simulationRouter = t.router({
         // PTY 模式
         session = await terminalManager.create({ cwd: input.cwd, shell: simShell });
         await new Promise(resolve => setTimeout(resolve, 500));
-        const execCommand = `${displayCommand}; echo "__SIM_DONE__$?__"`;
+        const isCsh = simShell.endsWith('csh');
+        const statusVar = isCsh ? '${status}' : '$?';
+        const execCommand = `${displayCommand}; echo "__SIM_DONE__${statusVar}__"`;
         terminalManager.write(session.id, `${execCommand}\r`);
       } else {
         // Log 模式
