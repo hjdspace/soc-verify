@@ -235,6 +235,35 @@ process.once('loaded', async () => {
       return () => ipcRenderer.removeListener('git-quick-pull:log', handler);
     },
 
+    // ── Git Manager 事件（缓存加载 + 后台刷新进度）─────────────
+    // git-manager:event —— 主进程推送扫描进度 / 单仓库刷新完成 / 扫描完成
+    onGitManagerEvent: (
+      callback: (data: {
+        type: 'progress' | 'repoRefreshed' | 'scanComplete' | 'error';
+        completed?: number;
+        total?: number;
+        repoName?: string;
+        repo?: unknown;
+        fromCache?: boolean;
+        message?: string;
+      }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: {
+          type: 'progress' | 'repoRefreshed' | 'scanComplete' | 'error';
+          completed?: number;
+          total?: number;
+          repoName?: string;
+          repo?: unknown;
+          fromCache?: boolean;
+          message?: string;
+        },
+      ) => callback(data);
+      ipcRenderer.on('git-manager:event', handler);
+      return () => ipcRenderer.removeListener('git-manager:event', handler);
+    },
+
     // ── Issue #10: Download events ───────────────────────────────
     // browser:download-event —— 下载生命周期事件（开始/进度/完成/失败/取消）
     onDownloadEvent: (
