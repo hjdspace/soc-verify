@@ -110,6 +110,18 @@ export interface EventBridgeAPI {
       url?: string;
     }) => void,
   ) => () => void;
+  // Git Manager 事件（缓存加载 + 后台刷新进度）
+  onGitManagerEvent: (
+    callback: (data: {
+      type: 'progress' | 'repoRefreshed' | 'scanComplete' | 'error';
+      completed?: number;
+      total?: number;
+      repoName?: string;
+      repo?: unknown;
+      fromCache?: boolean;
+      message?: string;
+    }) => void,
+  ) => () => void;
 }
 
 declare global {
