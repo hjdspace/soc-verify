@@ -26,8 +26,10 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
-  const writeToTerminal = useTerminalStore((s) => s.writeToTerminal);
-  const resizeTerminal = useTerminalStore((s) => s.resizeTerminal);
+  // Use refs for stable store functions so they don't enter the useEffect
+  // dependency array — the effect should only re-run when terminalId changes.
+  const writeToTerminalRef = useTerminalStore((s) => s.writeToTerminal);
+  const resizeTerminalRef = useTerminalStore((s) => s.resizeTerminal);
   const currentTheme = useThemeStore((s) => s.currentTheme);
 
   useEffect(() => {
@@ -63,12 +65,12 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
 
     // Handle user input → send to main process
     const inputDisposable = term.onData((data) => {
-      void writeToTerminal(terminalId, data);
+      void writeToTerminalRef(terminalId, data);
     });
 
     // Handle resize → send new size to main process
     const resizeDisposable = term.onResize(({ cols, rows }) => {
-      void resizeTerminal(terminalId, cols, rows);
+      void resizeTerminalRef(terminalId, cols, rows);
     });
 
     // Listen for terminal data from main process
@@ -87,23 +89,32 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
       });
     }
 
-    // Restore output buffer from main process
+    // Restore output buffer from main process.
+    // When the TerminalView is remounted (e.g., user switched to another tab
+    // and came back), the xterm.js instance is recreated and starts empty.
+    // Fetch the terminal's output buffer from the main process and write it
+    // to restore the previous output.
     trpc.terminal.getOutputBuffer
       .query({ terminalId })
       .then((chunks) => {
-        if (termRef.current && chunks.length > 0) {
+        if (!termRef.current) {
+          outputRestored = true;
+          return;
+        }
+        if (chunks.length > 0) {
           termRef.current.write(chunks.join(''));
         }
         // Flush any data that arrived while fetching the output buffer
-        if (termRef.current && pendingData.length > 0) {
+        if (pendingData.length > 0) {
           for (const data of pendingData) {
             termRef.current.write(data);
           }
         }
         outputRestored = true;
       })
-      .catch(() => {
+      .catch((err) => {
         // Terminal session might not exist (e.g., already destroyed)
+        console.warn(`[TerminalView] Failed to restore output buffer for ${terminalId}:`, err);
         outputRestored = true;
       });
 
@@ -120,7 +131,7 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
     resizeObserver.observe(containerRef.current);
 
     // Initial resize notification
-    void resizeTerminal(terminalId, term.cols, term.rows);
+    void resizeTerminalRef(terminalId, term.cols, term.rows);
 
     return () => {
       inputDisposable.dispose();
@@ -131,7 +142,7 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [terminalId, writeToTerminal, resizeTerminal]);
+  }, [terminalId, writeToTerminalRef, resizeTerminalRef]);
 
   // 主题切换时同步终端配色
   useEffect(() => {
