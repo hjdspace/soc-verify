@@ -71,8 +71,15 @@ function findShell(preferred?: string[]): string {
       if (existsSync(c)) return c;
     }
   }
-  // Default candidate shells in priority order — prefer bash, then sh
-  const candidates = ['/bin/bash', '/usr/bin/bash', '/usr/local/bin/bash', '/bin/sh', '/usr/bin/sh'];
+  // Check the user's login shell from $SHELL (e.g. /bin/zsh)
+  // This ensures the interactive terminal uses the same shell the user
+  // configured, including sourcing .zshrc / .bashrc / .cshrc properly.
+  const userShell = process.env.SHELL;
+  if (userShell && existsSync(userShell)) {
+    return userShell;
+  }
+  // Default candidate shells in priority order — prefer zsh, then bash, then sh
+  const candidates = ['/bin/zsh', '/usr/bin/zsh', '/usr/local/bin/zsh', '/bin/bash', '/usr/bin/bash', '/usr/local/bin/bash', '/bin/sh', '/usr/bin/sh'];
   for (const c of candidates) {
     if (existsSync(c)) return c;
   }
@@ -100,9 +107,21 @@ export function getInteractiveShellArgs(
   platform: NodeJS.Platform = process.platform,
   bashRcPath: string = resolveBashRcPath(),
 ): string[] {
+  if (platform !== 'linux') return [];
   const isBash = shell === 'bash' || shell.endsWith('/bash');
-  if (platform !== 'linux' || !isBash) return [];
-  return ['--rcfile', bashRcPath, '-i'];
+  const isZsh = shell === 'zsh' || shell.endsWith('/zsh');
+  const isCsh = shell === 'csh' || shell.endsWith('/csh') || shell === 'tcsh' || shell.endsWith('/tcsh');
+
+  // Bash: use --rcfile to source the app's bashrc (which in turn sources ~/.bashrc)
+  if (isBash) return ['--rcfile', bashRcPath, '-i'];
+
+  // Zsh: start as a login + interactive shell so .zprofile and .zshrc are sourced
+  if (isZsh) return ['-l', '-i'];
+
+  // Csh/tcsh: start as a login + interactive shell so .login and .cshrc are sourced
+  if (isCsh) return ['-l', '-i'];
+
+  return [];
 }
 
 /**
