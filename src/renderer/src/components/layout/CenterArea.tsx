@@ -447,7 +447,7 @@ export function CenterArea() {
                 </div>
               );
             }
-            return <TerminalPanel terminalId={termTab.terminalId} tabTitle={termTab.title} />;
+            return <TerminalPanel key={termTab.terminalId} terminalId={termTab.terminalId} tabTitle={termTab.title} />;
           })()
         ) : destination?.type === 'simulation-errors' ? (
           <CompileErrorView errors={simErrors} runId={simErrorsRunId} />
