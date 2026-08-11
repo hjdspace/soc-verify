@@ -45,8 +45,14 @@ export interface TerminalSimRun {
   logMode: boolean;
 }
 
-/** Marker pattern echoed after runsim finishes: __SIM_DONE__<exitCode>__ */
-const SIM_DONE_MARKER_RE = /__SIM_DONE__(True|False|\d+)__/;
+/** Marker pattern echoed after runsim finishes: __SIM_DONE__<exitCode>__
+ *
+ * The trailing underscores are optional (`_{0,2}`) to handle csh/tcsh edge
+ * cases where `$?name` modifier consumes the underscores. With the `${status}`
+ * fix in simulation-router, the marker should always have trailing `__`,
+ * but we keep the lenient pattern as a safety net.
+ */
+const SIM_DONE_MARKER_RE = /__SIM_DONE__(True|False|\d+)_{0,2}/;
 /** Max buffer length for marker scanning (keep last 256 chars) */
 const MARKER_BUFFER_MAX = 256;
 
