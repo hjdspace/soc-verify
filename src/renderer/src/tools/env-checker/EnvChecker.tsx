@@ -10,7 +10,7 @@
  * to ensure long file paths are always visible.
  */
 
-import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import {
   FolderOpen,
   Play,
@@ -289,6 +289,15 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
     wait: new Set(),
   });
 
+  // Scan results cache: keyed by subsys name, allows switching between subsystems
+  // without re-scanning every time.
+  const [scanCache, setScanCache] = useState<Map<string, ScanResult>>(new Map());
+
+  // Preview request race-condition guard: only the latest request updates UI.
+  const previewRequestId = useRef(0);
+  // Debounce timer for preview requests.
+  const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Persist suspicious marks to the backend (fire-and-forget)
   const persistMarks = useCallback((marks: { force: Set<string>; wait: Set<string> }) => {
     trpc.tools.envChecker.saveSuspiciousMarks
@@ -321,22 +330,25 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
     onSubmit: (value: string) => void;
   } | null>(null);
 
-  // Resolve $PROJ_ENV on mount if no projectRoot, and load suspicious marks
+  // Resolve $PROJ_ENV on mount — $PROJ_ENV takes priority over projectRoot prop
+  // because this tool scans verification environments which live under $PROJ_ENV.
+  // Fall back to projectRoot only when $PROJ_ENV is not available.
   useEffect(() => {
-    if (projectRoot) {
-      setEffectiveRoot(projectRoot);
-    } else {
-      // Try to resolve $PROJ_ENV
-      trpc.tools.envChecker.resolveProjEnv
-        .query({ projectDir: '' })
-        .then((res) => {
-          if (res.path) {
-            setResolvedProjEnv(res.path);
-            setEffectiveRoot(res.path);
-          }
-        })
-        .catch(() => {});
-    }
+    trpc.tools.envChecker.resolveProjEnv
+      .query({ projectDir: projectRoot ?? '' })
+      .then((res) => {
+        if (res.path) {
+          setResolvedProjEnv(res.path);
+          setEffectiveRoot(res.path);
+        } else if (projectRoot) {
+          setEffectiveRoot(projectRoot);
+        }
+      })
+      .catch(() => {
+        if (projectRoot) {
+          setEffectiveRoot(projectRoot);
+        }
+      });
     // Load persisted suspicious marks
     loadMarks();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -388,6 +400,15 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
         subsys: selectedSubsys,
       });
       setResults(res);
+      // Cache results for this subsystem (both in-memory and backend persistence)
+      setScanCache((prev) => {
+        const next = new Map(prev);
+        next.set(selectedSubsys, res);
+        return next;
+      });
+      trpc.tools.envChecker.saveScanCache
+        .mutate({ projectRoot: effectiveRoot, subsys: selectedSubsys, results: res })
+        .catch(() => {});
       setStatus(`扫描完成：Force ${res.force.length} 个文件，Wait ${res.wait.length} 个文件`);
     } catch (err) {
       setStatus(`扫描失败: ${err instanceof Error ? err.message : String(err)}`);
@@ -396,22 +417,76 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
     }
   }, [effectiveRoot, selectedSubsys, loadMarks]);
 
-  // Preview file with context
-  const handlePreview = useCallback(async (file: FileResult) => {
+  // When switching subsystem, restore cached scan results (memory first, then backend).
+  useEffect(() => {
+    if (!selectedSubsys || !effectiveRoot) return;
+    const memCached = scanCache.get(selectedSubsys);
+    if (memCached) {
+      setResults(memCached);
+      setSelectedFile(null);
+      setPreview(null);
+      setConfirmedFiles(new Set());
+      setStatus(`已加载缓存结果：Force ${memCached.force.length} 个文件，Wait ${memCached.wait.length} 个文件`);
+      return;
+    }
+    // Try loading from backend persistence
+    trpc.tools.envChecker.loadScanCache
+      .query({ projectRoot: effectiveRoot, subsys: selectedSubsys })
+      .then((res) => {
+        if (res.cached) {
+          setResults(res.cached);
+          setScanCache((prev) => {
+            const next = new Map(prev);
+            next.set(selectedSubsys, res.cached as ScanResult);
+            return next;
+          });
+          setStatus(`已加载持久化结果：Force ${(res.cached as ScanResult).force.length} 个文件，Wait ${(res.cached as ScanResult).wait.length} 个文件`);
+        } else {
+          setResults({ force: [], wait: [] });
+        }
+      })
+      .catch(() => setResults({ force: [], wait: [] }));
+  }, [selectedSubsys, scanCache, effectiveRoot]);
+
+  // Preview file with context (debounced + race-condition guarded)
+  const handlePreview = useCallback((file: FileResult) => {
     setSelectedFile(file);
     setPreviewLoading(true);
     setPreview(null);
-    try {
-      const res = await trpc.tools.envChecker.previewFile.query({
-        filePath: file.path,
-        matches: file.lines,
-      });
-      setPreview(res);
-    } catch (err) {
-      setStatus(`预览失败: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setPreviewLoading(false);
+
+    // Cancel any pending debounce
+    if (previewDebounceRef.current) {
+      clearTimeout(previewDebounceRef.current);
     }
+
+    previewDebounceRef.current = setTimeout(async () => {
+      const requestId = ++previewRequestId.current;
+      try {
+        const res = await trpc.tools.envChecker.previewFile.query({
+          filePath: file.path,
+          matches: file.lines,
+        });
+        // Only update if this is still the latest request
+        if (requestId !== previewRequestId.current) return;
+        setPreview(res);
+      } catch (err) {
+        if (requestId !== previewRequestId.current) return;
+        setStatus(`预览失败: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        if (requestId === previewRequestId.current) {
+          setPreviewLoading(false);
+        }
+      }
+    }, 150);
+  }, []);
+
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (previewDebounceRef.current) {
+        clearTimeout(previewDebounceRef.current);
+      }
+    };
   }, []);
 
   // Open file in gvim
@@ -429,6 +504,45 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
     },
     [],
   );
+
+  // Memoized preview rendering to avoid re-processing highlightVerilog on every render.
+  const previewContent = useMemo(() => {
+    if (!preview) return null;
+    return (
+      <div className="p-2">
+        {preview.sections.map((section, si) => (
+          <div key={si} className="mb-3">
+            <div className="mb-1 border-b border-border/50 pb-0.5 text-[10px] font-semibold text-muted-foreground">
+              ──── 匹配行 {section.matchLine} ────
+            </div>
+            {section.lines.map((ln) => (
+              <div
+                key={ln.lineNo}
+                className={cn(
+                  'flex items-start hover:bg-accent/20',
+                  ln.isMatch && 'bg-red-500/10',
+                )}
+              >
+                <button
+                  onClick={() => handleOpenFile(preview.filePath, ln.lineNo)}
+                  className="w-12 shrink-0 select-none py-0.5 pr-2 text-right text-[10px] text-muted-foreground/60 hover:text-primary hover:underline"
+                  title="用 gvim 打开并跳转到此行"
+                >
+                  {ln.isMatch ? `>${ln.lineNo}` : ` ${ln.lineNo}`}
+                </button>
+                <span className="select-none py-0.5 pr-2 text-muted-foreground/30">
+                  {'│'}
+                </span>
+                <code className="whitespace-pre-wrap break-all py-0.5 pr-2">
+                  {highlightVerilog(ln.content, ln.isMatch)}
+                </code>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    );
+  }, [preview, handleOpenFile]);
 
   // Confirm marking (replaces window.prompt with custom dialog)
   const handleConfirm = useCallback(
@@ -594,7 +708,7 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
           className="flex shrink-0 items-center gap-1 rounded bg-primary px-3 py-1 text-xs text-primary-foreground disabled:opacity-50"
         >
           <Play className="h-3 w-3" />
-          {scanning ? '扫描中...' : '扫描'}
+          {scanning ? '扫描中...' : scanCache.has(selectedSubsys) ? '重新扫描' : '扫描'}
         </button>
       </div>
 
@@ -656,7 +770,7 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-muted/50">
                   <tr className="text-left">
-                    <th className="px-2 py-1 w-8"></th>
+                    <th className="px-2 py-1 w-10 text-center" title="标记可疑">标记</th>
                     <th className="px-2 py-1">文件路径</th>
                     <th className="px-2 py-1 text-center w-16">数量</th>
                     <th className="px-2 py-1 text-center w-20">状态</th>
@@ -685,13 +799,13 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
                             }}
                             title={isSuspicious ? '取消可疑标记' : '标记为可疑'}
                             className={cn(
-                              'inline-flex h-4 w-4 items-center justify-center rounded',
+                              'inline-flex h-5 w-5 items-center justify-center rounded transition-colors',
                               isSuspicious
                                 ? 'text-red-500'
-                                : 'text-muted-foreground/30 hover:text-red-500',
+                                : 'text-muted-foreground hover:text-red-500 hover:bg-red-500/10',
                             )}
                           >
-                            <Flag className="h-3 w-3" fill={isSuspicious ? 'currentColor' : 'none'} />
+                            <Flag className="h-3.5 w-3.5" fill={isSuspicious ? 'currentColor' : 'none'} />
                           </button>
                         </td>
                         <td className="px-2 py-1">
@@ -785,40 +899,7 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
                 加载中...
               </div>
             )}
-            {selectedFile && preview && !previewLoading && (
-              <div className="p-2">
-                {preview.sections.map((section, si) => (
-                  <div key={si} className="mb-3">
-                    <div className="mb-1 border-b border-border/50 pb-0.5 text-[10px] font-semibold text-muted-foreground">
-                      ──── 匹配行 {section.matchLine} ────
-                    </div>
-                    {section.lines.map((ln) => (
-                      <div
-                        key={ln.lineNo}
-                        className={cn(
-                          'flex items-start hover:bg-accent/20',
-                          ln.isMatch && 'bg-red-500/10',
-                        )}
-                      >
-                        <button
-                          onClick={() => handleOpenFile(preview.filePath, ln.lineNo)}
-                          className="w-12 shrink-0 select-none py-0.5 pr-2 text-right text-[10px] text-muted-foreground/60 hover:text-primary hover:underline"
-                          title="用 gvim 打开并跳转到此行"
-                        >
-                          {ln.isMatch ? `>${ln.lineNo}` : ` ${ln.lineNo}`}
-                        </button>
-                        <span className="select-none py-0.5 pr-2 text-muted-foreground/30">
-                          {'│'}
-                        </span>
-                        <code className="whitespace-pre-wrap break-all py-0.5 pr-2">
-                          {highlightVerilog(ln.content, ln.isMatch)}
-                        </code>
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            )}
+            {selectedFile && preview && !previewLoading && previewContent}
           </div>
         </div>
       </div>
