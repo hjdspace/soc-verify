@@ -879,9 +879,9 @@ export function EnvChecker({ projectRoot, onProjectRootChange }: ToolComponentPr
             {selectedFile && (
               <div className="flex items-center gap-1">
                 <button
-                  onClick={() => handleOpenFile(selectedFile.path)}
+                  onClick={() => handleOpenFile(selectedFile.path, selectedFile.lines[0]?.line)}
                   className="flex items-center gap-1 rounded border border-border px-2 py-0.5 text-xs hover:bg-accent"
-                  title="用 gvim 打开文件"
+                  title={selectedFile.lines.length > 0 ? `用 gvim 打开并跳转到第 ${selectedFile.lines[0].line} 行` : '用 gvim 打开文件'}
                 >
                   <ExternalLink className="h-3 w-3" /> gvim 打开
                 </button>
