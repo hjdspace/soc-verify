@@ -17,6 +17,8 @@ import {
   readFileWithContext,
   loadSuspiciousMarks,
   saveSuspiciousMarks,
+  loadScanCache,
+  saveScanCache,
   type CheckType,
   type ScanMatch,
   type SuspiciousMarks,
@@ -206,6 +208,38 @@ export const envCheckerRouter = t.router({
     })
     .mutation(async ({ input }) => {
       await saveSuspiciousMarks(input.marks);
+      return { success: true };
+    }),
+
+  /** Load cached scan results for a subsystem. */
+  loadScanCache: t.procedure
+    .input((raw): { projectRoot: string; subsys: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectRoot !== 'string' || typeof r.subsys !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectRoot and subsys are required' });
+      }
+      return { projectRoot: r.projectRoot, subsys: r.subsys };
+    })
+    .query(async ({ input }) => {
+      const cached = await loadScanCache(input.projectRoot, input.subsys);
+      return { cached };
+    }),
+
+  /** Save scan results to the cache for a subsystem. */
+  saveScanCache: t.procedure
+    .input((raw): { projectRoot: string; subsys: string; results: unknown } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectRoot !== 'string' || typeof r.subsys !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectRoot and subsys are required' });
+      }
+      return {
+        projectRoot: r.projectRoot,
+        subsys: r.subsys,
+        results: cast<{ force: unknown[]; wait: unknown[] }>(r, 'results'),
+      };
+    })
+    .mutation(async ({ input }) => {
+      await saveScanCache(input.projectRoot, input.subsys, input.results as never);
       return { success: true };
     }),
 });
