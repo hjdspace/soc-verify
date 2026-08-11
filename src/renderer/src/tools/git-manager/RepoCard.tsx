@@ -4,9 +4,13 @@
  * Ported from the Python `git_manager` plugin's `repo_card.py`.
  * Displays repo name, tag, subsys tag, branch, last commit, status.
  * Left-click: open tag selection. Right-click: context menu.
+ *
+ * The context menu (three-dots dropdown) uses a React Portal to avoid
+ * being clipped by the parent container's `overflow-auto`.
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { GitBranch, Tag, MoreVertical, RefreshCw, Download, Layers } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 
@@ -33,6 +37,8 @@ type RepoCardProps = {
   isRefreshing?: boolean;
 };
 
+type MenuPosition = { top: number; left: number };
+
 export function RepoCard({
   repo,
   onClick,
@@ -42,13 +48,16 @@ export function RepoCard({
   isRefreshing,
 }: RepoCardProps) {
   const [showMenu, setShowMenu] = useState(false);
+  const [menuPos, setMenuPos] = useState<MenuPosition>({ top: 0, left: 0 });
   const menuRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   const isSysRepo = (() => {
     const name = repo.name.replace('udtb/', '');
     return name.endsWith('_sys');
   })();
 
+  // Close menu on outside click
   useEffect(() => {
     if (!showMenu) return;
     const handleClick = (e: MouseEvent) => {
@@ -60,127 +69,158 @@ export function RepoCard({
     return () => document.removeEventListener('mousedown', handleClick);
   }, [showMenu]);
 
+  // Close menu on scroll/resize to avoid stale positioning
+  useEffect(() => {
+    if (!showMenu) return;
+    const handleClose = () => setShowMenu(false);
+    window.addEventListener('scroll', handleClose, true);
+    window.addEventListener('resize', handleClose);
+    return () => {
+      window.removeEventListener('scroll', handleClose, true);
+      window.removeEventListener('resize', handleClose);
+    };
+  }, [showMenu]);
+
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
+    e.stopPropagation();
+    // Position menu at cursor
+    setMenuPos({ top: e.clientY, left: e.clientX });
     setShowMenu(true);
   }, []);
 
+  const handleButtonClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    // Position menu below the button, aligned to the right
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (rect) {
+      const menuWidth = 180;
+      const left = Math.max(4, rect.right - menuWidth);
+      const top = rect.bottom + 4;
+      setMenuPos({ top, left });
+    }
+    setShowMenu((v) => !v);
+  }, []);
+
+  const closeMenu = useCallback(() => setShowMenu(false), []);
+
   return (
-    <div
-      className={cn(
-        'relative cursor-pointer rounded-lg border p-3 transition-colors',
-        repo.repoType === 'de'
-          ? 'border-blue-500/30 bg-blue-500/5 hover:border-blue-500/60 hover:bg-blue-500/10'
-          : 'border-green-500/30 bg-green-500/5 hover:border-green-500/60 hover:bg-green-500/10',
-        isRefreshing && 'border-yellow-500/60 bg-yellow-500/5',
-      )}
-      onClick={() => onClick(repo)}
-      onContextMenu={handleContextMenu}
-      title="左键点击: 选择标签 | 右键点击: 显示菜单"
-    >
-      {/* Header: name + type badge */}
-      <div className="flex items-center gap-1.5">
-        <span
-          className={cn(
-            'rounded px-1.5 py-0.5 text-[10px] font-bold',
-            repo.repoType === 'de'
-              ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
-              : 'bg-green-500/15 text-green-600 dark:text-green-400',
-          )}
-        >
-          {repo.repoType.toUpperCase()}
-        </span>
-        <span className="truncate text-xs font-bold" title={repo.name}>
-          {repo.name}
-        </span>
-        <button
-          className="ml-auto rounded p-0.5 hover:bg-foreground/10"
-          onClick={(e) => {
-            e.stopPropagation();
-            setShowMenu((v) => !v);
-          }}
-        >
-          <MoreVertical className="h-3.5 w-3.5 text-muted-foreground" />
-        </button>
-      </div>
-
-      {/* Separator */}
-      <div className="my-1.5 border-t border-border/50" />
-
-      {/* Tag */}
-      <div className="flex items-center gap-1 text-[10px]">
-        <Tag className="h-3 w-3 shrink-0 text-muted-foreground" />
-        <span className="font-semibold text-muted-foreground">Tag:</span>
-        <span
-          className="truncate font-medium text-blue-600 dark:text-blue-400"
-          title={repo.currentTag}
-        >
-          {repo.currentTag}
-        </span>
-      </div>
-
-      {/* Subsys tag (only for xxx_sys repos) */}
-      {isSysRepo && repo.subsysTag && (
-        <div className="flex items-center gap-1 text-[10px]">
-          <Layers className="h-3 w-3 shrink-0 text-muted-foreground" />
-          <span className="font-semibold text-muted-foreground">Subsys:</span>
+    <>
+      <div
+        className={cn(
+          'relative cursor-pointer rounded-lg border p-3 transition-colors',
+          repo.repoType === 'de'
+            ? 'border-blue-500/30 bg-blue-500/5 hover:border-blue-500/60 hover:bg-blue-500/10'
+            : 'border-green-500/30 bg-green-500/5 hover:border-green-500/60 hover:bg-green-500/10',
+          isRefreshing && 'border-yellow-500/60 bg-yellow-500/5',
+        )}
+        onClick={() => onClick(repo)}
+        onContextMenu={handleContextMenu}
+        title="左键点击: 选择标签 | 右键点击: 显示菜单"
+      >
+        {/* Header: name + type badge */}
+        <div className="flex items-center gap-1.5">
           <span
-            className="truncate font-medium text-purple-600 dark:text-purple-400"
-            title={repo.subsysTag}
+            className={cn(
+              'rounded px-1.5 py-0.5 text-[10px] font-bold',
+              repo.repoType === 'de'
+                ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
+                : 'bg-green-500/15 text-green-600 dark:text-green-400',
+            )}
           >
-            {repo.subsysTag}
+            {repo.repoType.toUpperCase()}
+          </span>
+          <span className="truncate text-xs font-bold" title={repo.name}>
+            {repo.name}
+          </span>
+          <button
+            ref={buttonRef}
+            className="ml-auto rounded p-0.5 hover:bg-foreground/10"
+            onClick={handleButtonClick}
+          >
+            <MoreVertical className="h-3.5 w-3.5 text-muted-foreground" />
+          </button>
+        </div>
+
+        {/* Separator */}
+        <div className="my-1.5 border-t border-border/50" />
+
+        {/* Tag */}
+        <div className="flex items-center gap-1 text-[10px]">
+          <Tag className="h-3 w-3 shrink-0 text-muted-foreground" />
+          <span className="font-semibold text-muted-foreground">Tag:</span>
+          <span
+            className="truncate font-medium text-blue-600 dark:text-blue-400"
+            title={repo.currentTag}
+          >
+            {repo.currentTag}
           </span>
         </div>
-      )}
 
-      {/* Branch */}
-      <div className="flex items-center gap-1 text-[10px]">
-        <GitBranch className="h-3 w-3 shrink-0 text-muted-foreground" />
-        <span className="font-semibold text-muted-foreground">Branch:</span>
-        <span className="truncate text-muted-foreground" title={repo.currentBranch}>
-          {repo.currentBranch}
-        </span>
-      </div>
+        {/* Subsys tag (only for xxx_sys repos) */}
+        {isSysRepo && repo.subsysTag && (
+          <div className="flex items-center gap-1 text-[10px]">
+            <Layers className="h-3 w-3 shrink-0 text-muted-foreground" />
+            <span className="font-semibold text-muted-foreground">Subsys:</span>
+            <span
+              className="truncate font-medium text-purple-600 dark:text-purple-400"
+              title={repo.subsysTag}
+            >
+              {repo.subsysTag}
+            </span>
+          </div>
+        )}
 
-      {/* Last commit */}
-      <div className="mt-1 text-[10px]">
-        <div className="truncate text-muted-foreground" title={repo.lastCommitMessage}>
-          <span className="font-mono text-muted-foreground">{repo.lastCommitHash}</span>{' '}
-          {repo.lastCommitMessage}
+        {/* Branch */}
+        <div className="flex items-center gap-1 text-[10px]">
+          <GitBranch className="h-3 w-3 shrink-0 text-muted-foreground" />
+          <span className="font-semibold text-muted-foreground">Branch:</span>
+          <span className="truncate text-muted-foreground" title={repo.currentBranch}>
+            {repo.currentBranch}
+          </span>
         </div>
-        <div className="text-muted-foreground/70">{repo.lastCommitTime}</div>
+
+        {/* Last commit */}
+        <div className="mt-1 text-[10px]">
+          <div className="truncate text-muted-foreground" title={repo.lastCommitMessage}>
+            <span className="font-mono text-muted-foreground">{repo.lastCommitHash}</span>{' '}
+            {repo.lastCommitMessage}
+          </div>
+          <div className="text-muted-foreground/70">{repo.lastCommitTime}</div>
+        </div>
+
+        {/* Status indicator */}
+        <div className="mt-1.5 flex items-center justify-end gap-1">
+          <span
+            className={cn(
+              'h-2 w-2 rounded-full',
+              repo.hasChanges ? 'bg-orange-500' : 'bg-green-500',
+            )}
+          />
+          <span
+            className={cn(
+              'text-[10px] font-medium',
+              repo.hasChanges ? 'text-orange-600 dark:text-orange-400' : 'text-green-600 dark:text-green-400',
+            )}
+          >
+            {repo.hasChanges ? 'Modified' : 'Clean'}
+          </span>
+        </div>
       </div>
 
-      {/* Status indicator */}
-      <div className="mt-1.5 flex items-center justify-end gap-1">
-        <span
-          className={cn(
-            'h-2 w-2 rounded-full',
-            repo.hasChanges ? 'bg-orange-500' : 'bg-green-500',
-          )}
-        />
-        <span
-          className={cn(
-            'text-[10px] font-medium',
-            repo.hasChanges ? 'text-orange-600 dark:text-orange-400' : 'text-green-600 dark:text-green-400',
-          )}
-        >
-          {repo.hasChanges ? 'Modified' : 'Clean'}
-        </span>
-      </div>
-
-      {/* Context menu */}
-      {showMenu && (
+      {/* Context menu — rendered via Portal to avoid overflow clipping */}
+      {showMenu && createPortal(
         <div
           ref={menuRef}
-          className="absolute right-0 top-full z-50 mt-1 min-w-[160px] rounded-lg border border-border bg-popover p-1 shadow-lg"
+          className="fixed z-[9999] min-w-[160px] rounded-lg border border-border bg-popover p-1 shadow-lg"
+          style={{ top: `${menuPos.top}px`, left: `${menuPos.left}px` }}
           onClick={(e) => e.stopPropagation()}
         >
           <button
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-accent"
             onClick={(e) => {
               e.stopPropagation();
-              setShowMenu(false);
+              closeMenu();
               onRefresh(repo);
             }}
           >
@@ -193,7 +233,7 @@ export function RepoCard({
               className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-accent"
               onClick={(e) => {
                 e.stopPropagation();
-                setShowMenu(false);
+                closeMenu();
                 onSubsysUpdate(repo);
               }}
             >
@@ -204,21 +244,22 @@ export function RepoCard({
 
           <div className="my-1 border-t border-border/50" />
 
-          {(repo.currentBranch !== 'master' || repo.hasChanges) && (
-            <button
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-accent"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowMenu(false);
-                onUpdateToMaster(repo);
-              }}
-            >
-              <Download className="h-3 w-3" />
-              更新到Master最新
-            </button>
-          )}
-        </div>
+          {/* Always show "update to master" — previously hidden when on master + clean,
+              but the dropdown was being clipped so users couldn't see it */}
+          <button
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-accent"
+            onClick={(e) => {
+              e.stopPropagation();
+              closeMenu();
+              onUpdateToMaster(repo);
+            }}
+          >
+            <Download className="h-3 w-3" />
+            更新到Master最新
+          </button>
+        </div>,
+        document.body,
       )}
-    </div>
+    </>
   );
 }
