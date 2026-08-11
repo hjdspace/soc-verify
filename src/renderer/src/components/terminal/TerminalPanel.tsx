@@ -55,7 +55,7 @@ export function TerminalPanel({ terminalId, tabTitle }: TerminalPanelProps) {
         />
       )}
       <div className="min-h-0 flex-1">
-        <TerminalView terminalId={terminalId} />
+        <TerminalView key={terminalId} terminalId={terminalId} />
       </div>
     </div>
   );
