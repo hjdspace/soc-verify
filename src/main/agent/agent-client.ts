@@ -8,12 +8,15 @@ import type {
   ResponseFrame,
   ToolCallFrame,
   ToolResultCommand,
+  ApprovalRequestFrame,
+  ApprovalResponseCommand,
 } from './types';
 import {
   isEventFrame,
   isReadyFrame,
   isResponseFrame,
   isToolCallFrame,
+  isApprovalRequestFrame,
 } from './types';
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
 
@@ -23,6 +26,13 @@ export type ToolCallHandler = (
 ) => Promise<unknown>;
 
 export type EventListener = (event: unknown) => void;
+
+/** 审批请求处理器——返回 true 表示用户同意，false 表示拒绝 */
+export type ApprovalHandler = (
+  requestId: string,
+  toolName: string,
+  args: unknown,
+) => Promise<boolean>;
 
 /**
  * Diagnose why a binary spawn failed. Returns a diagnostic string to append
@@ -89,6 +99,7 @@ export class AgentClient {
   >();
   private pendingToolCalls = new Map<string, AbortController>();
   private toolCallHandler: ToolCallHandler | null = null;
+  private approvalHandler: ApprovalHandler | null = null;
   private eventListeners: EventListener[] = [];
   private stderrBuffer = '';
   private readyTimeoutMs: number;
@@ -263,10 +274,25 @@ export class AgentClient {
     };
   }
 
-  // ─── Tool Call Handler 注册 ───────────────────────────
+  // ─── Tool Call Handler 注册 ─────────────────────────────
 
   setToolCallHandler(handler: ToolCallHandler): void {
     this.toolCallHandler = handler;
+  }
+
+  // ─── 审批 Handler 注册 ─────────────────────────────────
+
+  setApprovalHandler(handler: ApprovalHandler): void {
+    this.approvalHandler = handler;
+  }
+
+  /** 发送审批响应到 runner */
+  sendApprovalResponse(requestId: string, approved: boolean): void {
+    this.writeFrame({
+      type: 'approval_response',
+      id: requestId,
+      approved,
+    } satisfies ApprovalResponseCommand);
   }
 
   // ─── 命令方法 ─────────────────────────────────────────
@@ -299,6 +325,10 @@ export class AgentClient {
 
   async setModel(provider: string, modelId: string): Promise<void> {
     await this.send({ type: 'setModel', provider, modelId });
+  }
+
+  async setApprovalMode(approvalMode: import('./types').ApprovalMode): Promise<void> {
+    await this.send({ type: 'setApprovalMode', approvalMode });
   }
 
   async getMessages(): Promise<unknown[]> {
@@ -444,6 +474,11 @@ export class AgentClient {
       return;
     }
 
+    if (isApprovalRequestFrame(data)) {
+      void this.handleApprovalRequest(data);
+      return;
+    }
+
     if (isEventFrame(data)) {
       for (const listener of this.eventListeners) listener(data.event);
       return;
@@ -493,6 +528,20 @@ export class AgentClient {
       } satisfies ToolResultCommand);
     } finally {
       this.pendingToolCalls.delete(frame.id);
+    }
+  }
+
+  private async handleApprovalRequest(frame: ApprovalRequestFrame): Promise<void> {
+    if (!this.approvalHandler) {
+      // No handler — auto-approve to avoid blocking
+      this.sendApprovalResponse(frame.id, true);
+      return;
+    }
+    try {
+      const approved = await this.approvalHandler(frame.id, frame.toolName, frame.args);
+      this.sendApprovalResponse(frame.id, approved);
+    } catch {
+      this.sendApprovalResponse(frame.id, false);
     }
   }
 
