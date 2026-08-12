@@ -924,14 +924,55 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     }
     try {
       await trpc.session.abort.mutate({ sessionId: runtimeSessionId });
-      set((s) => ({
-        sessions: s.sessions.map((sess) =>
-          sessionMatchesId(sess, sessionId) ? { ...sess, status: 'idle' } : sess,
-        ),
-      }));
     } catch (err) {
-      useToastStore.getState().error('中止会话失败', tRPCError(err));
+      const errMsg = tRPCError(err);
+      // If the backend session is already gone (e.g. idle timeout destroyed it
+      // during a long-running agent turn), treat it as "already aborted" —
+      // reset the stale runtimeSessionId and silently set status to idle.
+      // The desired outcome (stop the session) is already achieved.
+      if (/Session not found/i.test(errMsg)) {
+        set((s) => ({
+          sessions: s.sessions.map((sess) =>
+            sessionMatchesId(sess, sessionId)
+              ? { ...sess, status: 'idle', runtimeSessionId: undefined }
+              : sess,
+          ),
+        }));
+        // Also stop any streaming assistant messages
+        set((s) => ({
+          sessions: s.sessions.map((sess) =>
+            sessionMatchesId(sess, sessionId)
+              ? {
+                  ...sess,
+                  messages: sess.messages.map((m) =>
+                    m.isStreaming ? { ...m, isStreaming: false } : m,
+                  ),
+                }
+              : sess,
+          ),
+        }));
+        return;
+      }
+      useToastStore.getState().error('中止会话失败', errMsg);
     }
+    set((s) => ({
+      sessions: s.sessions.map((sess) =>
+        sessionMatchesId(sess, sessionId) ? { ...sess, status: 'idle' } : sess,
+      ),
+    }));
+    // Stop any streaming assistant messages on successful abort
+    set((s) => ({
+      sessions: s.sessions.map((sess) =>
+        sessionMatchesId(sess, sessionId)
+          ? {
+              ...sess,
+              messages: sess.messages.map((m) =>
+                m.isStreaming ? { ...m, isStreaming: false } : m,
+              ),
+            }
+          : sess,
+      ),
+    }));
   },
 
   compactSession: async () => {
