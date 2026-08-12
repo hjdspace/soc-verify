@@ -39,6 +39,8 @@ interface DiffReviewStoreState {
   hunkStates: HunkStates;
   /** 是否正在加载 diff */
   loading: boolean;
+  /** 已审阅完成的文件路径集合（全部 hunk 已接受或已处理） */
+  reviewedFiles: Set<string>;
 
   // Actions
   refreshQueue: () => void;
@@ -50,6 +52,8 @@ interface DiffReviewStoreState {
   nextFile: () => void;
   getQueuePosition: () => { current: number; total: number };
   getNextFileName: () => string | null;
+  /** 关闭当前 diff review 视图，返回正常文件展示 */
+  closeReview: () => void;
 }
 
 // ─── Constants ─────────────────────────────────────────────
@@ -173,12 +177,15 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
   currentDiff: null,
   hunkStates: {},
   loading: false,
+  reviewedFiles: new Set<string>(),
 
   refreshQueue: () => {
     const newQueue = aggregateQueue();
     set((s) => {
+      // 过滤掉已审阅完成的文件
+      const filteredQueue = newQueue.filter((e) => !s.reviewedFiles.has(e.filePath));
       // 保留已有 hunkStates 中仍在队列里的条目
-      const validPaths = new Set(newQueue.map((e) => e.filePath));
+      const validPaths = new Set(filteredQueue.map((e) => e.filePath));
       const cleanedHunkStates: HunkStates = {};
       for (const [filePath, states] of Object.entries(s.hunkStates)) {
         if (validPaths.has(filePath)) cleanedHunkStates[filePath] = states;
@@ -187,11 +194,18 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
       const currentFilePath = s.currentFilePath && validPaths.has(s.currentFilePath)
         ? s.currentFilePath
         : null;
+      // 清理 reviewedFiles 中不再有对应 tool call 的条目
+      const allPaths = new Set(newQueue.map((e) => e.filePath));
+      const cleanedReviewed = new Set<string>();
+      for (const fp of s.reviewedFiles) {
+        if (allPaths.has(fp)) cleanedReviewed.add(fp);
+      }
       return {
-        queue: newQueue,
+        queue: filteredQueue,
         hunkStates: cleanedHunkStates,
         currentFilePath,
         currentDiff: currentFilePath ? s.currentDiff : null,
+        reviewedFiles: cleanedReviewed,
       };
     });
   },
@@ -241,6 +255,17 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
         [filePath]: { ...s.hunkStates[filePath], [hunkId]: state },
       },
     }));
+    // 检查是否所有 hunk 都已处理（accepted 或 rejected）
+    // 如果全部处理完毕，自动标记为已审阅并关闭 diff 视图
+    const { currentDiff, hunkStates } = get();
+    if (!currentDiff) return;
+    const allResolved = currentDiff.hunks.every((h) => {
+      const st = hunkStates[filePath]?.[h.id];
+      return h.overwritten || st === 'accepted' || st === 'rejected';
+    });
+    if (allResolved) {
+      markFileReviewedAndClose(filePath);
+    }
   },
 
   acceptAll: (filePath) => {
@@ -257,6 +282,8 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
       states[filePath] = fileStates;
       return { hunkStates: states };
     });
+    // 接受全部后，标记为已审阅并关闭 diff 视图
+    markFileReviewedAndClose(filePath);
   },
 
   rejectAll: (filePath) => {
@@ -309,8 +336,8 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
         filePath,
         rejections,
       });
-      // 应用后刷新 diff
-      get().openFile(filePath);
+      // 应用拒绝后，标记为已审阅并关闭 diff 视图
+      markFileReviewedAndClose(filePath);
     } catch {
       // 错误处理留给 toast
     }
@@ -344,7 +371,46 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
     }
     return null;
   },
+
+  closeReview: () => {
+    const { currentFilePath } = get();
+    if (currentFilePath) {
+      const tabId = `diff-review:${currentFilePath}`;
+      useWorkbenchStore.getState().close(tabId);
+    }
+    set({ currentFilePath: null, currentDiff: null, loading: false });
+  },
 }));
+
+// ─── Helpers ────────────────────────────────────────────────
+
+/**
+ * 标记文件为已审阅，关闭 diff 视图，并从队列中移除。
+ * 如果队列中还有其他文件，自动打开下一个；否则返回正常文件展示。
+ */
+function markFileReviewedAndClose(filePath: string): void {
+  const store = useDiffReviewStore.getState();
+  // 添加到已审阅集合
+  const newReviewed = new Set(store.reviewedFiles);
+  newReviewed.add(filePath);
+  // 从队列中移除
+  const newQueue = store.queue.filter((e) => e.filePath !== filePath);
+  // 关闭 diff-review tab
+  const tabId = `diff-review:${filePath}`;
+  useWorkbenchStore.getState().close(tabId);
+  // 更新 store 状态
+  useDiffReviewStore.setState({
+    reviewedFiles: newReviewed,
+    queue: newQueue,
+    currentFilePath: null,
+    currentDiff: null,
+    loading: false,
+  });
+  // 如果还有待审阅文件，自动打开下一个
+  if (newQueue.length > 0) {
+    useDiffReviewStore.getState().openFile(newQueue[0].filePath);
+  }
+}
 
 let projectedSessions = useSessionStore.getState().sessions;
 useSessionStore.subscribe((state) => {
