@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { AgentClient, type ToolCallHandler } from './agent-client';
 import { resolveAgentRuntime, resolveBuiltInExtensionDir, resolveRunnerBinary, resolveRunnerScript, resolveBunPath, checkBunVersion } from './paths';
 import { ensureOfficecliOnPath } from './officecli-paths';
-import type { CustomToolDefinition, InitConfig } from './types';
+import type { CustomToolDefinition, InitConfig, ApprovalMode } from './types';
 import {
   buildModelInputOverrideConfig,
   buildOpenAICompatibleModelsConfig,
@@ -125,6 +125,8 @@ export interface CreateSessionOptions {
   coverageManager?: CoverageManager | null;
   /** 用例聚合统计服务（UI 与 AI 共享，注入后启用 get_case_stats / get_project_overview） */
   caseStatsService?: CaseStatsService | null;
+  /** 工具审批模式 */
+  approvalMode?: ApprovalMode;
 }
 
 export interface SessionEntry {
@@ -156,6 +158,8 @@ export class SessionManagerImpl extends EventEmitter {
   private sessions = new Map<string, SessionEntry>();
   private projectSessions = new Map<string, Set<string>>();
   private idleTimeoutMs: number;
+  /** Pending approval requests: requestId → { resolve, sessionId } */
+  private pendingApprovals = new Map<string, { resolve: (approved: boolean) => void; sessionId: string }>();
 
   constructor(idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS) {
     super();
@@ -360,6 +364,7 @@ export class SessionManagerImpl extends EventEmitter {
       contextWindow,
       customToolDefinitions,
       additionalExtensionPaths,
+      approvalMode: options.approvalMode,
     };
 
     // Helper: create an AgentClient configured for the given runtime mode
@@ -379,6 +384,12 @@ export class SessionManagerImpl extends EventEmitter {
             },
       );
       c.setToolCallHandler(toolCallHandler);
+      c.setApprovalHandler(async (requestId, toolName, args) => {
+        const { promise, resolve } = Promise.withResolvers<boolean>();
+        this.pendingApprovals.set(requestId, { resolve, sessionId });
+        this.emit('approvalRequest', { sessionId, requestId, toolName, args });
+        return promise;
+      });
       return c;
     };
 
@@ -575,6 +586,12 @@ export class SessionManagerImpl extends EventEmitter {
     this.touchActivity(sessionId);
   }
 
+  async setApprovalMode(sessionId: string, approvalMode: ApprovalMode): Promise<void> {
+    const client = this.requireClient(sessionId);
+    await client.setApprovalMode(approvalMode);
+    this.touchActivity(sessionId);
+  }
+
   async getAvailableModels(_sessionId: string): Promise<unknown[]> {
     // The SDK discovers models via the ModelRegistry.
     // Model selection is handled via the settings.fetchModels API
@@ -701,6 +718,15 @@ export class SessionManagerImpl extends EventEmitter {
       void this.destroySession(sessionId).catch(() => {});
     }, this.idleTimeoutMs);
     entry.idleTimer.unref();
+  }
+
+  /** Resolve a pending approval request from the user. */
+  resolveApproval(requestId: string, approved: boolean): boolean {
+    const pending = this.pendingApprovals.get(requestId);
+    if (!pending) return false;
+    this.pendingApprovals.delete(requestId);
+    pending.resolve(approved);
+    return true;
   }
 }
 
