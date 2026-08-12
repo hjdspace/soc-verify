@@ -201,8 +201,12 @@ export function createSimTools(ctx: ToolContext): HostToolEntry[] {
         try {
           const sessionId = typeof args.sessionId === 'string' ? args.sessionId : 'latest';
           const reportDir = typeof args.reportDir === 'string' ? args.reportDir : '';
-          const data = await ctx.coverage.parse(sessionId, reportDir);
-          return TEXT(JSON.stringify(data));
+          const result = await ctx.coverage.parse(sessionId, reportDir, {
+            sessionId,
+            covMergeDir: '',
+            edaTool: 'unknown',
+          });
+          return TEXT(JSON.stringify(result.data));
         } catch (err) {
           return TEXT(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
         }
