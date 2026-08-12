@@ -1,69 +1,188 @@
 /**
- * Regression suite router — create, update, delete, list, run, compare, history.
+ * Regression router — discover, parse, run, and track regressions.
+ *
+ * See ADR 0020 for the redesign rationale.
+ *
+ * Procedures:
+ *   discover     — scan $PROJ_ENV for regression lists/groups grouped by subsystem
+ *   parseList    — parse a .lst file into entries
+ *   parseGroup   — parse a .grp file into referenced file paths
+ *   run          — submit `runsim -regr` with options
+ *   getHistory   — list past regression runs
+ *   getResult    — get details of a specific regression run
+ *   abort        — abort an active regression run
  */
 
+import { readFile } from 'node:fs/promises';
 import { t, TRPCError } from '../router-context';
 import { requireProject } from '../../services/project-service';
-import { RegressionManager } from '../../regression/regression-manager';
-import { pluginLoader } from '../../plugins/loader';
-import { PluginBackedSimulation } from '../../plugin-adapters';
+import { loadEnvConfig } from '../../env/env-manager';
+import {
+  discoverRegressions,
+  parseRegressionList,
+  parseRegressionGroup,
+  resolveGroupRefs,
+} from '../../regression/regression-discovery';
+import { RegressionRunner } from '../../regression/regression-runner';
+import type { RegressionRunOptions } from '@shared/types/regression';
+
+// ── Discovery cache ───────────────────────────────────
+
+const discoveryCache = new Map<string, ReturnType<typeof discoverRegressions>>();
+
+/** Clear cached discovery results for a project. */
+export function clearDiscoveryCache(projectId: string): void {
+  discoveryCache.delete(projectId);
+}
 
 export const regressionRouter = t.router({
-  create: t.procedure
-    .input((raw): { projectId: string; name: string; caseIds: string[]; options: Record<string, unknown> } => {
+  /**
+   * Discover regression items from $PROJ_ENV directory tree.
+   * Results are cached in-memory; cleared on project switch or manual refresh.
+   */
+  discover: t.procedure
+    .input((raw): { projectId: string; refresh?: boolean } => {
       const r = raw as Record<string, unknown>;
-      if (typeof r.projectId !== 'string' || typeof r.name !== 'string' || !Array.isArray(r.caseIds)) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, name and caseIds are required' });
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
       }
-      return { projectId: r.projectId, name: r.name, caseIds: r.caseIds as string[], options: (r.options as Record<string, unknown>) ?? {} };
+      return { projectId: r.projectId, refresh: r.refresh === true };
     })
-    .mutation(async ({ input }) => {
+    .query(async ({ input }) => {
       const project = requireProject(input.projectId);
-      const registry = pluginLoader.getRegistry(project.rootPath);
-      const adapter = new PluginBackedSimulation(registry);
-      const mgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: adapter });
-      return mgr.createSuite(input.name, input.caseIds, input.options);
+
+      // Return cached result unless refresh is requested
+      if (!input.refresh && discoveryCache.has(input.projectId)) {
+        return discoveryCache.get(input.projectId);
+      }
+
+      const envConfig = await loadEnvConfig(project.rootPath);
+      const projEnv = envConfig?.envVars?.PROJ_ENV;
+      if (!projEnv) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'PROJ_ENV 环境变量未配置，请在环境设置中配置 PROJ_ENV。',
+        });
+      }
+
+      const result = discoverRegressions(project.rootPath, projEnv);
+      discoveryCache.set(input.projectId, result);
+      return result;
     }),
 
-  update: t.procedure
-    .input((raw): { projectId: string; name: string; caseIds?: string[]; options?: Record<string, unknown> } => {
+  /**
+   * Parse a regression list file (`.lst`) into entries.
+   */
+  parseList: t.procedure
+    .input((raw): { filePath: string } => {
       const r = raw as Record<string, unknown>;
-      if (typeof r.projectId !== 'string' || typeof r.name !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and name are required' });
+      if (typeof r.filePath !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'filePath is required' });
       }
-      return {
-        projectId: r.projectId,
-        name: r.name,
-        caseIds: Array.isArray(r.caseIds) ? r.caseIds as string[] : undefined,
-        options: typeof r.options === 'object' ? r.options as Record<string, unknown> : undefined,
+      return { filePath: r.filePath };
+    })
+    .query(async ({ input }) => {
+      try {
+        const content = await readFile(input.filePath, 'utf-8');
+        return parseRegressionList(content);
+      } catch {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `无法读取文件: ${input.filePath}` });
+      }
+    }),
+
+  /**
+   * Parse a regression group file (`.grp`) into referenced file paths.
+   * Recursively resolves nested groups (max depth 10, cycle detection).
+   */
+  parseGroup: t.procedure
+    .input((raw): { filePath: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.filePath !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'filePath is required' });
+      }
+      return { filePath: r.filePath };
+    })
+    .query(async ({ input }) => {
+      try {
+        const content = await readFile(input.filePath, 'utf-8');
+        const refPaths = parseRegressionGroup(content);
+        // Resolve nested groups
+        const resolved = await resolveGroupRefs(
+          input.filePath,
+          async (path: string) => readFile(path, 'utf-8'),
+        );
+        return { refPaths, resolved };
+      } catch {
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: `无法读取文件: ${input.filePath}` });
+      }
+    }),
+
+  /**
+   * Submit a regression run via `runsim -regr`.
+   */
+  run: t.procedure
+    .input((raw): {
+      projectId: string;
+      filePath: string;
+      subsys: string;
+      options: RegressionRunOptions;
+    } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.filePath !== 'string' || typeof r.subsys !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, filePath, and subsys are required' });
+      }
+      const opts = (r.options as Record<string, unknown>) ?? {};
+      const options: RegressionRunOptions = {
+        tags: Array.isArray(opts.tags) ? opts.tags as string[] : undefined,
+        nonTags: Array.isArray(opts.nonTags) ? opts.nonTags as string[] : undefined,
+        failMode: typeof opts.failMode === 'boolean' ? opts.failMode : undefined,
+        coverage: typeof opts.coverage === 'boolean' ? opts.coverage : undefined,
+        regrWork: typeof opts.regrWork === 'string' ? opts.regrWork : undefined,
+        merge: typeof opts.merge === 'boolean' ? opts.merge : undefined,
       };
+      return { projectId: r.projectId, filePath: r.filePath, subsys: r.subsys, options };
     })
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
-      const registry = pluginLoader.getRegistry(project.rootPath);
-      const adapter = new PluginBackedSimulation(registry);
-      const mgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: adapter });
-      return mgr.updateSuite(input.name, { caseIds: input.caseIds, options: input.options });
-    }),
 
-  delete: t.procedure
-    .input((raw): { projectId: string; name: string } => {
-      const r = raw as Record<string, unknown>;
-      if (typeof r.projectId !== 'string' || typeof r.name !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and name are required' });
+      // Validate merge requires coverage
+      if (input.options.merge && !input.options.coverage) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '-merge 选项需要同时启用 -cov' });
       }
-      return { projectId: r.projectId, name: r.name };
-    })
-    .mutation(async ({ input }) => {
-      const project = requireProject(input.projectId);
-      const registry = pluginLoader.getRegistry(project.rootPath);
-      const adapter = new PluginBackedSimulation(registry);
-      const mgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: adapter });
-      await mgr.deleteSuite(input.name);
-      return { ok: true };
+
+      const runner = new RegressionRunner(project.rootPath);
+      const result = await runner.run(
+        input.filePath,
+        input.subsys,
+        input.options,
+        project.rootPath,
+      );
+
+      return result;
     }),
 
-  list: t.procedure
+  /**
+   * Abort an active regression run.
+   */
+  abort: t.procedure
+    .input((raw): { projectId: string; runId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.runId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and runId are required' });
+      }
+      return { projectId: r.projectId, runId: r.runId };
+    })
+    .mutation(({ input }) => {
+      const project = requireProject(input.projectId);
+      const runner = new RegressionRunner(project.rootPath);
+      const ok = runner.abort(input.runId);
+      return { ok };
+    }),
+
+  /**
+   * Get regression history (past runs).
+   */
+  getHistory: t.procedure
     .input((raw): { projectId: string } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string') {
@@ -73,28 +192,13 @@ export const regressionRouter = t.router({
     })
     .query(async ({ input }) => {
       const project = requireProject(input.projectId);
-      const registry = pluginLoader.getRegistry(project.rootPath);
-      const adapter = new PluginBackedSimulation(registry);
-      const mgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: adapter });
-      return mgr.listSuites();
+      const runner = new RegressionRunner(project.rootPath);
+      return runner.getHistory();
     }),
 
-  run: t.procedure
-    .input((raw): { projectId: string; name: string } => {
-      const r = raw as Record<string, unknown>;
-      if (typeof r.projectId !== 'string' || typeof r.name !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and name are required' });
-      }
-      return { projectId: r.projectId, name: r.name };
-    })
-    .mutation(async ({ input }) => {
-      const project = requireProject(input.projectId);
-      const registry = pluginLoader.getRegistry(project.rootPath);
-      const adapter = new PluginBackedSimulation(registry);
-      const mgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: adapter });
-      return mgr.runSuite(input.name);
-    }),
-
+  /**
+   * Get details of a specific regression run.
+   */
   getResult: t.procedure
     .input((raw): { projectId: string; runId: string } => {
       const r = raw as Record<string, unknown>;
@@ -105,41 +209,7 @@ export const regressionRouter = t.router({
     })
     .query(async ({ input }) => {
       const project = requireProject(input.projectId);
-      const registry = pluginLoader.getRegistry(project.rootPath);
-      const adapter = new PluginBackedSimulation(registry);
-      const mgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: adapter });
-      return mgr.getResult(input.runId);
-    }),
-
-  compareRuns: t.procedure
-    .input((raw): { projectId: string; runId1: string; runId2: string } => {
-      const r = raw as Record<string, unknown>;
-      if (typeof r.projectId !== 'string' || typeof r.runId1 !== 'string' || typeof r.runId2 !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, runId1 and runId2 are required' });
-      }
-      return { projectId: r.projectId, runId1: r.runId1, runId2: r.runId2 };
-    })
-    .query(async ({ input }) => {
-      const project = requireProject(input.projectId);
-      const registry = pluginLoader.getRegistry(project.rootPath);
-      const adapter = new PluginBackedSimulation(registry);
-      const mgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: adapter });
-      return mgr.compareRuns(input.runId1, input.runId2);
-    }),
-
-  getHistory: t.procedure
-    .input((raw): { projectId: string; suiteName?: string } => {
-      const r = raw as Record<string, unknown>;
-      if (typeof r.projectId !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
-      }
-      return { projectId: r.projectId, suiteName: typeof r.suiteName === 'string' ? r.suiteName : undefined };
-    })
-    .query(async ({ input }) => {
-      const project = requireProject(input.projectId);
-      const registry = pluginLoader.getRegistry(project.rootPath);
-      const adapter = new PluginBackedSimulation(registry);
-      const mgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: adapter });
-      return mgr.getHistory(input.suiteName);
+      const runner = new RegressionRunner(project.rootPath);
+      return runner.getHistoryEntry(input.runId);
     }),
 });
