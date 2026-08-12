@@ -7,6 +7,35 @@ vi.mock('@renderer/stores/diff-review', () => ({
   useDiffReviewStore: (selector: (state: { queue: never[] }) => unknown) => selector({ queue: [] }),
 }));
 
+vi.mock('@renderer/lib/trpc', () => ({
+  trpc: {
+    simulation: {
+      runInTerminal: { mutate: vi.fn().mockResolvedValue({ terminalId: 'test', cwd: '.', backend: 'log-mode', warning: null }) },
+    },
+  },
+}));
+
+vi.mock('@renderer/stores/project', () => ({
+  useProjectStore: Object.assign(
+    vi.fn((selector: (state: { currentProjectId: string | null }) => unknown) => selector({ currentProjectId: 'test-project' })),
+    { getState: () => ({ currentProjectId: 'test-project' }) },
+  ),
+}));
+
+vi.mock('@renderer/stores/terminal', () => ({
+  useTerminalStore: Object.assign(
+    vi.fn(),
+    { getState: () => ({ createTabForSession: vi.fn() }) },
+  ),
+}));
+
+vi.mock('@renderer/stores/toast', () => ({
+  useToastStore: Object.assign(
+    vi.fn(),
+    { getState: () => ({ warning: vi.fn(), error: vi.fn() }) },
+  ),
+}));
+
 import { ToolCard } from '@renderer/components/chat/ToolCard';
 
 function completedMessage(toolName: string, toolArgs: unknown, result: unknown): ChatMessage {
