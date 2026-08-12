@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
-import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon } from 'lucide-react';
+import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon, Shield, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { useSessionStore, type ChatMessage, type AvailableModel, type SelectedSkill, type ContextFile, type HistorySession, type SessionEntry } from '@renderer/stores/session';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
@@ -11,6 +11,7 @@ import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
 import { PluginViewHost } from '@renderer/components/plugins/PluginViewHost';
 import { ContextUsageIndicator } from '@renderer/components/chat/ContextUsageIndicator';
+import { ApprovalCard } from '@renderer/components/chat/ApprovalCard';
 
 interface RightPanelProps {
   width: number;
@@ -52,6 +53,7 @@ export function RightPanel({ width }: RightPanelProps) {
   const [showSteerInput, setShowSteerInput] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [showAttachDropdown, setShowAttachDropdown] = useState(false);
+  const [showApprovalDropdown, setShowApprovalDropdown] = useState(false);
 
   // Skill & context state
   const [availableSkills, setAvailableSkills] = useState<SelectedSkill[]>([]);
@@ -76,6 +78,9 @@ export function RightPanel({ width }: RightPanelProps) {
   const steerSession = useSessionStore((s) => s.steerSession);
   const setModel = useSessionStore((s) => s.setModel);
   const fetchModelsFromApi = useSettingsStore((s) => s.fetchModels);
+  const setApprovalMode = useSessionStore((s) => s.setApprovalMode);
+  const resolveApproval = useSessionStore((s) => s.resolveApproval);
+  const approvalRequests = useSessionStore((s) => s.approvalRequests);
 
   const isCurrentSessionCreating = currentSession?.status === 'creating';
   const renameSession = useSessionStore((s) => s.renameSession);
@@ -660,6 +665,19 @@ export function RightPanel({ width }: RightPanelProps) {
             {currentSession.messages.map((msg) => (
               <MessageBubble key={msg.id} message={msg} session={currentSession} />
             ))}
+            {/* Approval request cards */}
+            {approvalRequests
+              .filter((req) => {
+                const sess = currentSession;
+                return sess && (sess.id === req.sessionId || sess.runtimeSessionId === req.sessionId || sess.persistedSessionId === req.sessionId);
+              })
+              .map((req) => (
+                <ApprovalCard
+                  key={req.requestId}
+                  request={req}
+                  onResolve={resolveApproval}
+                />
+              ))}
             <div ref={messagesEndRef} />
           </div>
         )}
@@ -933,6 +951,60 @@ export function RightPanel({ width }: RightPanelProps) {
                   </>
                 )}
               </div>
+              {/* 权限模式选择器 */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowApprovalDropdown((v) => !v)}
+                  disabled={!currentSessionId || isCurrentSessionCreating}
+                  title="权限审批模式"
+                  className="flex items-center gap-0.5 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
+                >
+                  {(() => {
+                    const mode = currentSession?.approvalMode ?? 'yolo';
+                    if (mode === 'always-ask') return <ShieldAlert className="h-3 w-3 text-status-warn-foreground" />;
+                    if (mode === 'write') return <Shield className="h-3 w-3 text-primary" />;
+                    return <ShieldCheck className="h-3 w-3 text-status-pass-foreground" />;
+                  })()}
+                  <span className="text-[10px] font-medium text-foreground/80">
+                    {(() => {
+                      const mode = currentSession?.approvalMode ?? 'yolo';
+                      if (mode === 'always-ask') return '总询问';
+                      if (mode === 'write') return '自动编辑';
+                      return '信任';
+                    })()}
+                  </span>
+                </button>
+                {showApprovalDropdown && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowApprovalDropdown(false)} />
+                    <div className="absolute bottom-7 left-0 z-50 w-44 rounded-md border border-border bg-popover shadow-xl">
+                      {([
+                        { mode: 'always-ask' as const, label: '总询问', desc: '写入和执行均需确认', icon: ShieldAlert },
+                        { mode: 'write' as const, label: '自动编辑', desc: '仅执行命令需确认', icon: Shield },
+                        { mode: 'yolo' as const, label: '完全信任', desc: '自动批准所有操作', icon: ShieldCheck },
+                      ]).map(({ mode, label, desc, icon: Icon }) => (
+                        <button
+                          key={mode}
+                          onClick={() => {
+                            setApprovalMode(mode);
+                            setShowApprovalDropdown(false);
+                          }}
+                          className={cn(
+                            'flex w-full items-start gap-1.5 px-2 py-1.5 text-left text-xs hover:bg-accent',
+                            (currentSession?.approvalMode ?? 'yolo') === mode && 'bg-accent/50',
+                          )}
+                        >
+                          <Icon className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
+                          <div className="flex flex-col gap-0.5">
+                            <span className="font-medium text-foreground">{label}</span>
+                            <span className="text-[9px] text-muted-foreground">{desc}</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
               {/* 模型选择器 */}
               <div className="relative">
                 <button
@@ -983,9 +1055,6 @@ export function RightPanel({ width }: RightPanelProps) {
                 </button>
               )}
             </div>
-            <span className="text-[10px] text-muted-foreground">
-              Enter 发送 · Shift+Enter 换行
-            </span>
             <div className="flex items-center gap-1">
               {currentSession && (
                 <ContextUsageIndicator session={currentSession} onCompact={compactSession} />
