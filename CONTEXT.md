@@ -246,6 +246,36 @@ _Avoid_: verification stage, simulation stage
 通过 Case Scanner 全量扫描项目用例配置文件并写入 Case Database 的过程。项目打开时若 DB 已有数据则秒开，后台并行执行 Case Scan 增量更新；用户点击「刷新」按钮时触发全量 Case Scan。
 _Avoid_: case discovery, case indexing
 
+### 回归域
+
+**Regression List**:
+一个回归列表文件（通常 `.lst`），包含多行 case 定义。每行字段：on/off、block、case、seed、iterative、tag、priority、config、CFG_DEF、env/base、plusargs。由 `RegressionDiscovery` 从 `$PROJ_ENV` 目录树自动发现，不做 seed × plusargs 交叉展开（这是 runsim 脚本的职责）。
+_Avoid_: regression suite, test list
+
+**Regression Group**:
+一个回归组文件（通常 `.grp`），包含多个 Regression List 或 Regression Group 的文件路径引用。支持两级嵌套，递归解析时最大深度 10 层，检测循环引用。
+_Avoid_: regression collection, batch group
+
+**Regression Entry**:
+Regression List 文件中的一行 case 定义，是回归的最小组成单元。包含 on/off 开关、block 名、case 名、seed 模式、迭代次数、标签、优先级、config、CFG_DEF、env/base、plusargs 等字段。
+_Avoid_: regression case, regression item
+
+**Regression Discovery**:
+从 `$PROJ_ENV` 目录树自动扫描回归列表文件的过程。扫描三个来源：`$PROJ_ENV/<subsys>/regression/`（子系统直接列表）、`$PROJ_ENV/udtb/<subsys>/<block>/regression/`（ip2soc 列表，合并到子系统维度）、`$PROJ_ENV/udtb/usvp/regression/<short>/`（usvp 列表，通过 `.socverify/usvp-subsys-map.json` 映射短名到子系统全名）。按文件绝对路径去重，以文件内容格式判断是 List 还是 Group。
+_Avoid_: regression scan, regression indexing
+
+**Regression Run**:
+通过 `runsim -regr <file>` 提交的一次回归执行。可选附加选项：`-tag`（只跑特定标签）、`-nt`（non-tag，排除特定标签）、`-fm`（fail mode，只跑失败用例）、`-cov`（收集覆盖率）、`-regr_work`（工作目录）、`-merge`（回归完成后自动 coverage merge）。输出流式写入终端面板，状态记录在回归历史中。
+_Avoid_: regression execution, regression batch
+
+**Regression History**:
+持久化的回归执行记录，存储在 `.socverify/regressions/regr_<timestamp>.json` 中。包含 runId、文件路径、子系统、命令、选项、提交时间、进程状态（running/completed/aborted/failed）、退出码、输出尾部。不记录 case 级别的 pass/fail（由 runsim 管理）。
+_Avoid_: regression results, regression log
+
+**usvp Subsystem Mapping**:
+`.socverify/usvp-subsys-map.json` 配置文件，将 usvp 回归目录下的短名映射到子系统全名（如 `apcpu` → `apcpu_sys`、`sp` → `aon_sys`）。文件不存在时短名直接作为子系统名展示。映射是项目特定的。
+_Avoid_: usvp mapping, subsystem alias
+
 ### Dashboard 域
 
 **Dashboard**:
