@@ -70,6 +70,8 @@ process.stdout.write = ((data: unknown, ...args: unknown[]) => {
 
 // ─── Types ──────────────────────────────────────────────
 
+type ApprovalMode = "always-ask" | "write" | "yolo";
+
 interface InitConfig {
 	cwd: string;
 	apiKey?: string;
@@ -91,6 +93,8 @@ interface InitConfig {
 	}>;
 	/** 额外的 extension 包路径（每个包的 skills/ 和 agents/ 子目录会被 omp 扫描） */
 	additionalExtensionPaths?: string[];
+	/** 工具审批模式：always-ask（总询问）、write（自动编辑）、yolo（完全信任） */
+	approvalMode?: ApprovalMode;
 }
 
 type Command =
@@ -99,6 +103,7 @@ type Command =
 	| { id: string; type: "abort" }
 	| { id: string; type: "steer"; message: string }
 	| { id: string; type: "setModel"; provider: string; modelId: string }
+	| { id: string; type: "setApprovalMode"; approvalMode: ApprovalMode }
 	| { id: string; type: "getMessages" }
 	| { id: string; type: "getState" }
 	| { id: string; type: "compact" }
@@ -112,6 +117,116 @@ interface ToolResultMessage {
 	id: string;
 	result: unknown;
 	isError?: boolean;
+}
+
+// ─── 审批请求/响应 ──────────────────────────────────────
+
+interface ApprovalResponseMessage {
+	type: "approval_response";
+	id: string;
+	approved: boolean;
+}
+
+const pendingApprovalRequests = new Map<
+	string,
+	{ resolve: (approved: boolean) => void; reject: (error: Error) => void }
+>();
+
+function handleApprovalResponse(msg: ApprovalResponseMessage): void {
+	const pending = pendingApprovalRequests.get(msg.id);
+	if (!pending) return;
+	pendingApprovalRequests.delete(msg.id);
+	pending.resolve(msg.approved);
+}
+
+function requestApproval(toolName: string, args: unknown): Promise<boolean> {
+	const id = `approval_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+	return new Promise((resolve, reject) => {
+		pendingApprovalRequests.set(id, { resolve, reject });
+		send({ type: "approval_request", id, toolName, args });
+		// Timeout after 5 minutes — user might be away
+		const timeout = setTimeout(() => {
+			if (pendingApprovalRequests.has(id)) {
+				pendingApprovalRequests.delete(id);
+				reject(new Error("Approval request timed out"));
+			}
+		}, 300_000);
+		timeout.unref?.();
+	});
+}
+
+// ─── 工具审批逻辑 ──────────────────────────────────────
+
+/** 工具能力层级 */
+const READ_TOOLS = new Set(["read", "grep", "glob", "ast_grep", "todo", "web_search", "ask", "inspect_image"]);
+const WRITE_TOOLS = new Set(["edit", "write", "ast_edit"]);
+
+function getToolTier(toolName: string): "read" | "write" | "exec" {
+	if (READ_TOOLS.has(toolName)) return "read";
+	if (WRITE_TOOLS.has(toolName)) return "write";
+	return "exec";
+}
+
+function needsApproval(toolName: string, mode: ApprovalMode): boolean {
+	if (mode === "yolo") return false;
+	const tier = getToolTier(toolName);
+	if (mode === "always-ask") return tier !== "read";
+	if (mode === "write") return tier === "exec";
+	return false;
+}
+
+/** 当前生效的审批模式（init 时设置，setApprovalMode 时动态更新） */
+let currentApprovalMode: ApprovalMode = "yolo";
+
+/** 原始工具的快照——包装前保存，以便切换模式时从原始工具重新包装 */
+let originalTools: unknown[] | null = null;
+
+/**
+ * 用当前审批模式包装工具并设置到 agent 上。
+ * - yolo 模式下恢复原始工具（无包装）
+ * - 其他模式下对需要审批的工具插入 requestApproval 代理
+ */
+function applyApprovalMode(): void {
+	if (!session) return;
+	try {
+		// 首次调用时保存原始工具快照
+		if (!originalTools) {
+			const activeNames = session.getActiveToolNames();
+			originalTools = activeNames
+				.map((name) => session.getToolByName(name))
+				.filter((tool): tool is NonNullable<typeof tool> => tool != null);
+		}
+
+		if (currentApprovalMode === "yolo") {
+			// yolo 模式：恢复原始工具
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			session.agent.setTools(originalTools as any);
+			return;
+		}
+
+		const wrappedTools = (originalTools as Array<Record<string, unknown>>).map((tool) => {
+			const toolName = tool.name as string;
+			if (!needsApproval(toolName, currentApprovalMode)) return tool;
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const origExecute = (tool.execute as (...args: any[]) => any).bind(tool);
+			return {
+				...tool,
+				execute: async (args: unknown, opts: unknown) => {
+					const approved = await requestApproval(toolName, args);
+					if (!approved) {
+						return {
+							content: [{ type: "text" as const, text: `[已拒绝] 用户拒绝了此工具调用的执行。` }],
+						};
+					}
+					return origExecute(args, opts);
+				},
+			};
+		});
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		session.agent.setTools(wrappedTools as any);
+	} catch (wrapErr) {
+		console.error("[socverify-runner] failed to apply approval mode:", wrapErr);
+	}
 }
 
 // ─── JSONL Helpers ──────────────────────────────────────
@@ -335,6 +450,13 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 		// Inject built-in extension packages (skills/ and agents/ subdirectories
 		// are auto-discovered by the omp-plugins provider).
 		additionalExtensionPaths: config.additionalExtensionPaths ?? [],
+		// 追加到默认系统提示词末尾，引导 AI 优先使用 edit 工具修改已有文件
+		appendSystemPrompt: [
+			"## 文件编辑规则",
+			"- 修改已有文件时，**必须**优先使用 `edit` 工具（而非 `write`），以便用户可以逐一审查修改差异",
+			"- 仅在创建全新文件时才使用 `write` 工具",
+			"- `write` 会覆盖整个文件，导致 diff 全部显示为新增（绿色），无法逐项确认修改",
+		].join("\n"),
 	};
 
 	// Set model pattern if provided
@@ -359,6 +481,12 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 	// Create the session
 	const result = await createAgentSession(sessionOptions);
 	session = result.session;
+
+	// Wrap built-in tools with approval proxy when approvalMode is set
+	currentApprovalMode = config.approvalMode ?? "yolo";
+	if (currentApprovalMode !== "yolo") {
+		applyApprovalMode();
+	}
 
 	// Subscribe to events and forward them to the host
 	unsubscribe = session.subscribe((event: unknown) => {
@@ -414,6 +542,13 @@ async function handleSetModel(cmd: Command & { type: "setModel" }): Promise<void
 	// Model switching requires recreating the session or using the agent's internal API.
 	// For now, we just acknowledge the request.
 	sendResponse(cmd.id, true, { ok: true, note: "Model switching via SDK is not yet supported" });
+}
+
+async function handleSetApprovalMode(cmd: Command & { type: "setApprovalMode" }): Promise<void> {
+	if (!session) throw new Error("Session not initialized");
+	currentApprovalMode = cmd.approvalMode;
+	applyApprovalMode();
+	sendResponse(cmd.id, true, { ok: true, approvalMode: currentApprovalMode });
 }
 
 async function handleGetMessages(cmd: Command & { type: "getMessages" }): Promise<void> {
@@ -609,6 +744,9 @@ async function handleCommand(cmd: Command): Promise<void> {
 			case "setModel":
 				await handleSetModel(cmd);
 				break;
+			case "setApprovalMode":
+				await handleSetApprovalMode(cmd);
+				break;
 			case "getMessages":
 				await handleGetMessages(cmd);
 				break;
@@ -659,6 +797,12 @@ rl.on("line", (line: string) => {
 	// Handle tool_result messages (these don't have a regular command type)
 	if (typeof parsed === "object" && parsed !== null && (parsed as Record<string, unknown>).type === "tool_result") {
 		handleToolResult(parsed as ToolResultMessage);
+		return;
+	}
+
+	// Handle approval_response messages from the host
+	if (typeof parsed === "object" && parsed !== null && (parsed as Record<string, unknown>).type === "approval_response") {
+		handleApprovalResponse(parsed as ApprovalResponseMessage);
 		return;
 	}
 
