@@ -230,8 +230,8 @@ export function DiffReviewView({ entry }: DiffReviewViewProps) {
               key={i}
               className={cn(
                 'px-2 py-0 text-[11px] tabular-nums',
-                line.displayType === 'add' && 'bg-diff-add/10 text-diff-add-foreground/60',
-                line.displayType === 'del' && 'bg-diff-del/10 text-diff-del-foreground/60',
+                line.displayType === 'add' && 'bg-diff-add/20 text-diff-add-foreground/60',
+                line.displayType === 'del' && 'bg-diff-del/20 text-diff-del-foreground/60',
                 line.displayType === 'ctx' && 'text-muted-foreground/30',
               )}
               style={{ minHeight: '1.55em', minWidth: '44px' }}
@@ -442,8 +442,8 @@ function renderLines(
         key={i}
         className={cn(
           'flex',
-          displayType === 'add' && 'bg-diff-add/10',
-          displayType === 'del' && 'bg-diff-del/10',
+          displayType === 'add' && 'bg-diff-add/20',
+          displayType === 'del' && 'bg-diff-del/20',
         )}
       >
         <span
