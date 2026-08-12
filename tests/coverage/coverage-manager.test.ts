@@ -93,9 +93,24 @@ function makeMockData(sessionId: string): CoverageData {
 function createMockAdapter(data: CoverageData | null) {
   return {
     hasParser: () => data !== null,
-    parse: vi.fn(async (_sessionId: string, _reportDir: string) =>
-      data ?? makeMockData('fallback'),
-    ),
+    parse: vi.fn(async (
+      _sessionId: string,
+      _reportDir: string,
+      enrichment: { sessionId: string; covMergeDir: string; edaTool: string; targets?: Partial<Record<string, number>> },
+    ) => {
+      const d = data ?? makeMockData('fallback');
+      const enriched: CoverageData = {
+        ...d,
+        sessionId: enrichment.sessionId,
+        source: {
+          covMergeDir: enrichment.covMergeDir,
+          edaTool: enrichment.edaTool as CoverageData['source']['edaTool'],
+          reportGeneratedAt: Date.now(),
+        },
+        targets: enrichment.targets ?? d.targets,
+      };
+      return { data: enriched, jsonStr: JSON.stringify(enriched) };
+    }),
   };
 }
 
