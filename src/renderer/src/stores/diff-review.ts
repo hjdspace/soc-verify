@@ -54,9 +54,24 @@ interface DiffReviewStoreState {
 
 // ─── Constants ─────────────────────────────────────────────
 
-const FILE_EDITING_TOOLS = new Set(['write', 'edit', 'apply_patch', 'ast_edit']);
+const FILE_EDITING_TOOLS = new Set(['write', 'write_file', 'edit', 'edit_file', 'apply_patch', 'ast_edit']);
 
 // ─── Helpers ────────────────────────────────────────────────
+
+/** Extract old/new text from omp edit tool's `edits` array format.
+ * The omp edit tool sends args like { path, edits: [{ old_text, new_text }] }
+ */
+function extractFromEdits(args: Record<string, unknown>, ...keys: string[]): string | undefined {
+  const edits = args.edits;
+  if (!Array.isArray(edits) || edits.length === 0) return undefined;
+  const firstEdit = edits[0];
+  if (!firstEdit || typeof firstEdit !== 'object') return undefined;
+  const editObj = firstEdit as Record<string, unknown>;
+  for (const k of keys) {
+    if (typeof editObj[k] === 'string') return editObj[k] as string;
+  }
+  return undefined;
+}
 
 function extractToolCallFromMessage(msg: ChatMessage): DiffToolCall | null {
   const name = msg.toolName ?? '';
@@ -85,17 +100,26 @@ function extractToolCallFromMessage(msg: ChatMessage): DiffToolCall | null {
     ? args.oldText
     : typeof args.old_string === 'string'
       ? args.old_string
-      : typeof args.find === 'string'
-        ? args.find
-        : undefined;
+      : typeof args.old_text === 'string'
+        ? args.old_text
+        : typeof args.find === 'string'
+          ? args.find
+          : undefined;
 
   const newText = typeof args.newText === 'string'
     ? args.newText
     : typeof args.new_string === 'string'
       ? args.new_string
-      : typeof args.replace === 'string'
-        ? args.replace
-        : undefined;
+      : typeof args.new_text === 'string'
+        ? args.new_text
+        : typeof args.replace === 'string'
+          ? args.replace
+          : undefined;
+
+  // omp edit tool uses { path, edits: [{ old_text, new_text }] }
+  // If flat oldText/newText not found, try extracting from edits array
+  const finalOldText = oldText ?? extractFromEdits(args, 'old_text', 'oldText', 'old_string');
+  const finalNewText = newText ?? extractFromEdits(args, 'new_text', 'newText', 'new_string');
 
   const content = typeof args.content === 'string' ? args.content : undefined;
 
@@ -107,8 +131,8 @@ function extractToolCallFromMessage(msg: ChatMessage): DiffToolCall | null {
     filePath,
     timestamp: msg.timestamp,
     sessionId: msg.toolCallId,
-    oldText,
-    newText,
+    oldText: finalOldText,
+    newText: finalNewText,
     content,
     isNewFile,
   };
