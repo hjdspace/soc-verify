@@ -3,6 +3,7 @@ import { Search, Terminal as TerminalIcon, LayoutDashboard, BarChart3, ListCheck
 import { useUiStore } from '@renderer/stores/ui';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useProjectStore } from '@renderer/stores/project';
+import { useTerminalStore } from '@renderer/stores/terminal';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 
@@ -80,7 +81,7 @@ export function CommandPalette() {
 
   const commands: CommandItem[] = [
     { id: 'cmd-terminal', label: '新建终端', icon: TerminalIcon, action: () => {
-      import('@renderer/stores/terminal').then((m) => m.useTerminalStore.getState().createTerminal(currentProjectId ?? undefined));
+      useTerminalStore.getState().createTerminal(currentProjectId ?? undefined);
       setCommandPaletteOpen(false);
     }},
     { id: 'cmd-dashboard', label: '打开仪表盘', icon: LayoutDashboard, action: () => {
