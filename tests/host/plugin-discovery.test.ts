@@ -354,10 +354,14 @@ describe('PluginBackedCoverage', () => {
       simOptionSchemaProviders: [],
     };
     const cov = new PluginBackedCoverage('/proj', registry);
-    const data = await cov.parse('session_1', '/report/dir');
-    expect(data.sessionId).toBe('session_1');
-    expect(data.root.name).toBe('top');
-    expect(data.root.metrics.line.percentage).toBe(90.0);
+    const result = await cov.parse('session_1', '/report/dir', {
+      sessionId: 'session_1',
+      covMergeDir: '/mock/cov_merge',
+      edaTool: 'imc',
+    });
+    expect(result.data.sessionId).toBe('session_1');
+    expect(result.data.root.name).toBe('top');
+    expect(result.data.root.metrics.line.percentage).toBe(90.0);
   });
 
   it('throws when no coverage plugin', async () => {
@@ -369,7 +373,11 @@ describe('PluginBackedCoverage', () => {
       simOptionSchemaProviders: [],
     };
     const cov = new PluginBackedCoverage('/proj', registry);
-    await expect(cov.parse('session_1', '/report/dir')).rejects.toThrow(
+    await expect(cov.parse('session_1', '/report/dir', {
+      sessionId: 'session_1',
+      covMergeDir: '/mock/cov_merge',
+      edaTool: 'imc',
+    })).rejects.toThrow(
       'No coverage-parser plugin loaded',
     );
   });
