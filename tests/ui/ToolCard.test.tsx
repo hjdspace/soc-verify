@@ -1,10 +1,21 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { ChatMessage } from '@renderer/stores/session';
 
 vi.mock('@renderer/stores/diff-review', () => ({
-  useDiffReviewStore: (selector: (state: { queue: never[] }) => unknown) => selector({ queue: [] }),
+  useDiffReviewStore: Object.assign(
+    vi.fn((selector: (state: { queue: never[] }) => unknown) => selector({ queue: [] })),
+    { getState: () => ({ openFile: vi.fn() }) },
+  ),
+}));
+
+vi.mock('@renderer/stores/workbench', () => ({
+  useWorkbenchStore: Object.assign(
+    vi.fn(),
+    { getState: () => ({ open: vi.fn() }) },
+  ),
+  openFileDestination: vi.fn(),
 }));
 
 vi.mock('@renderer/lib/trpc', () => ({
@@ -93,5 +104,73 @@ describe('ToolCard file tools', () => {
     expect(card.textContent).toContain('old');
     expect(card.textContent).toContain('new');
     expect(card.textContent).not.toContain('ARGS');
+  });
+
+  it('renders omp edit tool file path extracted from result text', () => {
+    render(<ToolCard message={completedMessage(
+      'edit',
+      { input: '[approval-mode.test.ts#DEBA]\nDEL 42-49\n' },
+      '[D:\\doc\\AI\\soc-verify\\tests\\agent\\approval-mode.test.ts#8C05]\n40:// ─── Fixtures ───\n41:\n42:\n43:// ─── Tests ───\n\nWarnings:\nPath "approval-mode.test.ts" does not exist; matched its filename and snapshot tag #DEBA to D:\\doc\\AI\\soc-verify\\tests\\agent\\approval-mode.test.ts (read earlier this session). Anchor future edits on [D:\\doc\\AI\\soc-verify\\tests\\agent\\approval-mode.test.ts#TAG].',
+    )} />);
+
+    // The summary should show the file path extracted from result
+    expect(screen.getByText('.../agent/approval-mode.test.ts')).toBeInTheDocument();
+    // Summary should mention warnings
+    expect(screen.getByTestId('tool-card').textContent).toContain('with warnings');
+  });
+
+  it('shows warning-colored status dot when result contains Warnings', () => {
+    render(<ToolCard message={completedMessage(
+      'edit',
+      { path: 'src/demo.ts', oldText: 'old', newText: 'new' },
+      '[src/demo.ts#TAG]\n1:old\n2:new\n\nWarnings:\nPath "demo.ts" does not exist; matched its filename.',
+    )} />);
+
+    // The status dot should have the warning color class
+    const dot = screen.getByTestId('tool-card').querySelector('.bg-warning-foreground');
+    expect(dot).not.toBeNull();
+  });
+
+  it('shows green status dot for successful edit without warnings', () => {
+    render(<ToolCard message={completedMessage(
+      'edit',
+      { path: 'src/demo.ts', oldText: 'old', newText: 'new' },
+      'Edit applied',
+    )} />);
+
+    const dot = screen.getByTestId('tool-card').querySelector('.bg-status-pass-foreground');
+    expect(dot).not.toBeNull();
+  });
+
+  it('renders omp edit result as code view with warnings when expanded', () => {
+    render(<ToolCard message={completedMessage(
+      'edit',
+      { input: '[test.ts#ABCD]\nDEL 42-49\n' },
+      '[D:\\project\\test.ts#TAG]\n40:// code line\n41:\n42:\n43:// more code\n\nWarnings:\nPath "test.ts" does not exist; matched its filename.',
+    )} />);
+
+    fireEvent.click(screen.getByTitle('展开'));
+
+    const card = screen.getByTestId('tool-card');
+    // Should show file content (not ARGS/RESULT generic view)
+    expect(card.textContent).toContain('code line');
+    expect(card.textContent).toContain('more code');
+    // Should show warnings section
+    expect(card.textContent).toContain('Warnings');
+    // Should NOT show the generic ARGS section
+    expect(card.textContent).not.toContain('"input"');
+  });
+
+  it('shows edit file path as clickable link even when not in review queue', () => {
+    render(<ToolCard message={completedMessage(
+      'edit',
+      { path: 'src/demo.ts', oldText: 'old', newText: 'new' },
+      'Edit applied',
+    )} />);
+
+    // The summary text should be clickable (cursor-pointer)
+    const summary = screen.getByTestId('tool-card').querySelector('.cursor-pointer');
+    expect(summary).not.toBeNull();
+    expect(summary?.textContent).toContain('demo.ts');
   });
 });
