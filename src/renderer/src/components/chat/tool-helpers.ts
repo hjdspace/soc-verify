@@ -373,41 +373,247 @@ export function parseJobItems(resultText: string): JobItemData[] {
   return [];
 }
 
-export type TodoItemData = { text: string; done: boolean };
+// ── Todo types (three-state) ───────────────────────────
+
+export type TodoItemStatus = 'pending' | 'in_progress' | 'completed' | 'abandoned';
+
+export type TodoItemData = { text: string; status: TodoItemStatus };
+
+export type TodoPhaseData = {
+  name: string;
+  items: TodoItemData[];
+};
+
+/** Result of scanning session messages for the latest todo state. */
+export type TodoPanelState = {
+  phases: TodoPhaseData[];
+  isExecuting: boolean;
+};
+
+/** Map a raw status string to our TodoItemStatus union. */
+function normalizeTodoStatus(raw: string): TodoItemStatus {
+  const s = raw.toLowerCase();
+  if (s === 'completed' || s === 'done' || s === 'complete') return 'completed';
+  if (s === 'in_progress' || s === 'inprogress' || s === 'running' || s === 'active') return 'in_progress';
+  if (s === 'abandoned' || s === 'dropped' || s === 'skipped') return 'abandoned';
+  return 'pending';
+}
+
+/**
+ * Extract todo phases from the omp todo tool result object.
+ * The result contains `details.phases` with `TodoPhase[]` where each task has
+ * `{ content: string, status: "pending" | "in_progress" | "completed" | "abandoned" }`.
+ */
+export function extractTodoPhases(result: unknown): TodoPhaseData[] {
+  if (typeof result !== 'object' || result === null) return [];
+  const obj = result as Record<string, unknown>;
+  const details = obj.details;
+  if (typeof details !== 'object' || details === null) return [];
+  const phases = (details as Record<string, unknown>).phases;
+  if (!Array.isArray(phases)) return [];
+  return (phases as Array<Record<string, unknown>>)
+    .map((phase) => {
+      const tasks = Array.isArray(phase.tasks) ? phase.tasks : [];
+      return {
+        name: String(phase.name ?? ''),
+        items: (tasks as Array<Record<string, unknown>>)
+          .map((task) => ({
+            text: String(task.content ?? task.text ?? task.task ?? ''),
+            status: normalizeTodoStatus(String(task.status ?? 'pending')),
+          }))
+          .filter((item) => item.text),
+      };
+    })
+    .filter((phase) => phase.items.length > 0);
+}
+
+/**
+ * Extract todo phases from the omp todo tool args (for `init` op preview).
+ * Only `init` ops carry the full list in args; other ops (`start`, `done`, etc.)
+ * only carry the target task/phase name.
+ */
+export function extractTodoPhasesFromArgs(args: unknown): TodoPhaseData[] {
+  if (typeof args !== 'object' || args === null) return [];
+  const obj = args as Record<string, unknown>;
+  const op = String(obj.op ?? '');
+
+  if (op === 'init') {
+    // `list: [{ phase, items: string[] }]` format
+    if (Array.isArray(obj.list)) {
+      return (obj.list as Array<Record<string, unknown>>)
+        .map((phase) => ({
+          name: String(phase.name ?? ''),
+          items: (Array.isArray(phase.items) ? phase.items : [])
+            .map((item) => ({
+              text: String(item),
+              status: 'pending' as const,
+            }))
+            .filter((item) => item.text),
+        }))
+        .filter((phase) => phase.items.length > 0);
+    }
+    // Flat `items: string[]` format
+    if (Array.isArray(obj.items)) {
+      const items = (obj.items as unknown[])
+        .map((item) => ({
+          text: typeof item === 'string' ? item : String((item as Record<string, unknown>)?.text ?? item),
+          status: 'pending' as const,
+        }))
+        .filter((item) => item.text);
+      if (items.length > 0) {
+        return [{ name: String(obj.phase ?? 'Tasks'), items }];
+      }
+    }
+  }
+
+  return [];
+}
+
+/**
+ * Parse todo phases from the omp todo tool result text (markdown fallback).
+ * Format: `## Phase Name` headers followed by `[ ]`, `[/]`, `[x]`, `[-]` task lines.
+ */
+function parseTodoPhasesFromText(text: string): TodoPhaseData[] {
+  if (!text) return [];
+  const lines = text.split('\n');
+  const phases: TodoPhaseData[] = [];
+  let currentPhase: TodoPhaseData | null = null;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // Task lines: [ ] task, [/] task, [x] task, [-] task, ✓ task
+    const taskMatch = trimmed.match(/^\[([ xX/-])\]\s*(.+)$/);
+    if (taskMatch) {
+      if (!currentPhase) currentPhase = { name: 'Tasks', items: [] };
+      const status: TodoItemStatus =
+        taskMatch[1].toLowerCase() === 'x' ? 'completed'
+        : taskMatch[1] === '/' ? 'in_progress'
+        : taskMatch[1] === '-' ? 'abandoned'
+        : 'pending';
+      currentPhase.items.push({ text: taskMatch[2], status });
+      continue;
+    }
+
+    // ✓ or ✗ prefix
+    if (trimmed.startsWith('\u2713')) {
+      if (!currentPhase) currentPhase = { name: 'Tasks', items: [] };
+      currentPhase.items.push({ text: trimmed.replace(/^\u2713\s*/, ''), status: 'completed' });
+      continue;
+    }
+
+    // Phase header: ## Phase Name or Phase: Name (only if not a task line)
+    const phaseMatch = trimmed.match(/^#{1,3}\s+(.+)$/);
+    if (phaseMatch) {
+      if (currentPhase && currentPhase.items.length > 0) phases.push(currentPhase);
+      currentPhase = { name: phaseMatch[1], items: [] };
+      continue;
+    }
+    const phaseColon = trimmed.match(/^Phase:\s*(.+)$/i);
+    if (phaseColon) {
+      if (currentPhase && currentPhase.items.length > 0) phases.push(currentPhase);
+      currentPhase = { name: phaseColon[1], items: [] };
+      continue;
+    }
+  }
+  if (currentPhase && currentPhase.items.length > 0) phases.push(currentPhase);
+  return phases;
+}
+
+/**
+ * Scan session messages for the latest todo tool state.
+ * Returns the phases from the most recent completed `todo` tool call.
+ * If a newer `todo` call is still executing, `isExecuting` is true.
+ * For `init` ops still executing, shows the initial items from args.
+ */
+export function getLatestTodoState(messages: ReadonlyArray<{ role: string; toolName?: string; toolResult?: unknown; toolArgs?: unknown }>): TodoPanelState | null {
+  let phases: TodoPhaseData[] | null = null;
+  let isExecuting = false;
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== 'tool' || msg.toolName !== 'todo') continue;
+
+    if (msg.toolResult != null) {
+      // Found the latest completed todo tool call
+      if (!phases) {
+        phases = extractTodoPhases(msg.toolResult);
+        if (phases.length === 0) {
+          // Fallback: try parsing result text
+          const resultText = extractResultText(msg.toolResult);
+          phases = parseTodoPhasesFromText(resultText);
+        }
+        if (phases.length === 0) {
+          // Fallback: try args
+          phases = extractTodoPhasesFromArgs(msg.toolArgs);
+        }
+      }
+      break; // Stop after finding the latest result
+    } else {
+      // This todo tool is still executing
+      isExecuting = true;
+      // For init ops, try to show the items from args as a preview
+      if (!phases) {
+        const fromArgs = extractTodoPhasesFromArgs(msg.toolArgs);
+        if (fromArgs.length > 0) phases = fromArgs;
+      }
+    }
+  }
+
+  if (!phases || phases.length === 0) return null;
+  return { phases, isExecuting };
+}
+
+/**
+ * Flattened todo items from phases (for backward compat with ToolCard summary/body).
+ */
+export function flattenTodoItems(phases: TodoPhaseData[]): TodoItemData[] {
+  return phases.flatMap((phase) => phase.items);
+}
+
+// ── Legacy parseTodoItems (backward compat for inline ToolCard) ─────
 
 export function parseTodoItems(args: unknown, resultText: string): TodoItemData[] {
   const todosArg = argVal(args, 'todos');
   if (Array.isArray(todosArg)) {
-    return todosArg.map((item) => {
-      if (typeof item === 'string') return { text: item, done: false };
-      const obj = item as Record<string, unknown>;
+    return (todosArg as Array<Record<string, unknown>>).map((item): TodoItemData => {
+      if (typeof item === 'string') return { text: item, status: 'pending' };
+      const statusRaw = String(item.status ?? '');
+      if (statusRaw) return { text: String(item.text ?? item.content ?? item.task ?? ''), status: normalizeTodoStatus(statusRaw) };
       return {
-        text: String(obj.text ?? obj.content ?? obj.task ?? ''),
-        done: Boolean(obj.done ?? obj.completed ?? obj.checked),
+        text: String(item.text ?? item.content ?? item.task ?? ''),
+        status: (item.done ?? item.completed ?? item.checked) ? 'completed' : 'pending',
       };
-    });
+    }).filter((item) => item.text);
   }
 
   const parsed = tryParseJSON(resultText);
   if (Array.isArray(parsed)) {
-    return parsed.map((item) => {
-      if (typeof item === 'string') return { text: item, done: false };
-      const obj = item as Record<string, unknown>;
+    return (parsed as Array<Record<string, unknown>>).map((item): TodoItemData => {
+      if (typeof item === 'string') return { text: item, status: 'pending' };
+      const statusRaw = String(item.status ?? '');
+      if (statusRaw) return { text: String(item.text ?? item.content ?? item.task ?? ''), status: normalizeTodoStatus(statusRaw) };
       return {
-        text: String(obj.text ?? obj.content ?? obj.task ?? ''),
-        done: Boolean(obj.done ?? obj.completed ?? obj.checked),
+        text: String(item.text ?? item.content ?? item.task ?? ''),
+        status: (item.done ?? item.completed ?? item.checked) ? 'completed' : 'pending',
       };
-    });
+    }).filter((item) => item.text);
   }
 
+  // Try parsing as phases from text
+  const fromText = parseTodoPhasesFromText(resultText);
+  if (fromText.length > 0) return flattenTodoItems(fromText);
+
+  // Legacy line parsing
   const lines = resultText.split('\n').filter(Boolean);
   const items: TodoItemData[] = [];
   for (const line of lines) {
     const trimmed = line.trim();
     if (/^\[x\]/i.test(trimmed) || trimmed.startsWith('\u2713')) {
-      items.push({ text: trimmed.replace(/^(\[x\]|\[X\]|\u2713)\s*/, ''), done: true });
+      items.push({ text: trimmed.replace(/^(\[x\]|\[X\]|\u2713)\s*/, ''), status: 'completed' });
     } else if (/^\[ \]/.test(trimmed) || /^[-*]\s/.test(trimmed)) {
-      items.push({ text: trimmed.replace(/^(\[ \]|[-*])\s*/, ''), done: false });
+      items.push({ text: trimmed.replace(/^(\[ \]|[-*])\s*/, ''), status: 'pending' });
     }
   }
   return items;

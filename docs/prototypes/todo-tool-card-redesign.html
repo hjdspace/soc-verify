@@ -1,0 +1,1152 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="bench">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TODO 工具卡片重新设计 — 原型</title>
+<style>
+/* ════════════════════════════════════════════════════════════
+   主题变量（从 globals.css 提取）
+   ════════════════════════════════════════════════════════════ */
+
+/* Bench 主题（深·暖·磷光绿）— 默认 */
+[data-theme="bench"] {
+  --background: oklch(0.18 0.008 60);
+  --foreground: oklch(0.92 0.006 60);
+  --card: oklch(0.21 0.008 60);
+  --card-foreground: oklch(0.92 0.006 60);
+  --popover: oklch(0.23 0.008 60);
+  --popover-foreground: oklch(0.92 0.006 60);
+  --primary: oklch(0.78 0.15 145);
+  --primary-foreground: oklch(0.16 0.008 60);
+  --secondary: oklch(0.25 0.008 60);
+  --secondary-foreground: oklch(0.92 0.006 60);
+  --muted: oklch(0.25 0.008 60);
+  --muted-foreground: oklch(0.62 0.008 60);
+  --accent: oklch(0.28 0.010 60);
+  --accent-foreground: oklch(0.92 0.006 60);
+  --destructive: oklch(0.65 0.20 25);
+  --destructive-foreground: oklch(0.96 0.005 60);
+  --border: oklch(0.28 0.008 60);
+  --input: oklch(0.28 0.008 60);
+  --ring: oklch(0.78 0.15 145);
+  --sidebar: oklch(0.16 0.008 60);
+  --sidebar-foreground: oklch(0.60 0.008 60);
+  --radius: 0.5rem;
+
+  --status-pass: oklch(0.78 0.15 145);
+  --status-pass-foreground: oklch(0.78 0.15 145);
+  --status-fail: oklch(0.65 0.18 25);
+  --status-fail-foreground: oklch(0.65 0.18 25);
+  --status-running: oklch(0.72 0.13 195);
+  --status-running-foreground: oklch(0.72 0.13 195);
+  --status-pending: oklch(0.62 0.06 60);
+  --status-pending-foreground: oklch(0.62 0.06 60);
+
+  --warning: oklch(0.30 0.05 75);
+  --warning-foreground: oklch(0.80 0.12 75);
+  --violet: oklch(0.28 0.05 295);
+  --violet-foreground: oklch(0.78 0.13 295);
+
+  --chart-1: oklch(0.72 0.13 250);
+  --chart-2: oklch(0.78 0.15 145);
+  --chart-3: oklch(0.72 0.15 285);
+  --chart-4: oklch(0.78 0.13 55);
+}
+
+/* Drafting 主题（浅·紫梅）*/
+[data-theme="drafting"] {
+  --background: oklch(0.97 0.006 75);
+  --foreground: oklch(0.22 0.012 75);
+  --card: oklch(0.99 0.004 75);
+  --card-foreground: oklch(0.32 0.012 75);
+  --popover: oklch(0.99 0.005 75);
+  --popover-foreground: oklch(0.32 0.012 75);
+  --primary: oklch(0.42 0.13 285);
+  --primary-foreground: oklch(0.98 0.005 75);
+  --secondary: oklch(0.93 0.008 75);
+  --secondary-foreground: oklch(0.32 0.012 75);
+  --muted: oklch(0.93 0.008 75);
+  --muted-foreground: oklch(0.50 0.012 75);
+  --accent: oklch(0.91 0.014 285);
+  --accent-foreground: oklch(0.32 0.012 75);
+  --destructive: oklch(0.55 0.20 25);
+  --destructive-foreground: oklch(0.98 0.005 75);
+  --border: oklch(0.88 0.008 75);
+  --input: oklch(0.88 0.008 75);
+  --ring: oklch(0.42 0.13 285);
+  --sidebar: oklch(0.95 0.008 75);
+  --sidebar-foreground: oklch(0.45 0.012 75);
+  --radius: 0.5rem;
+
+  --status-pass: oklch(0.50 0.13 145);
+  --status-pass-foreground: oklch(0.50 0.13 145);
+  --status-fail: oklch(0.50 0.16 28);
+  --status-fail-foreground: oklch(0.50 0.16 28);
+  --status-running: oklch(0.50 0.11 230);
+  --status-running-foreground: oklch(0.50 0.11 230);
+  --status-pending: oklch(0.50 0.05 75);
+  --status-pending-foreground: oklch(0.50 0.05 75);
+
+  --warning: oklch(0.88 0.06 75);
+  --warning-foreground: oklch(0.32 0.08 75);
+  --violet: oklch(0.88 0.05 295);
+  --violet-foreground: oklch(0.32 0.10 295);
+
+  --chart-1: oklch(0.55 0.14 250);
+  --chart-2: oklch(0.60 0.16 145);
+  --chart-3: oklch(0.55 0.16 285);
+  --chart-4: oklch(0.65 0.15 55);
+}
+
+/* ════════════════════════════════════════════════════════════
+   全局样式
+   ════════════════════════════════════════════════════════════ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  background: var(--background);
+  color: var(--foreground);
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+  gap: 32px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+/* 主题切换按钮 */
+.theme-toggle {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 100;
+  display: flex;
+  gap: 4px;
+  background: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px;
+  box-shadow: 0 4px 12px oklch(0 0 0 / 0.15);
+}
+.theme-toggle button {
+  background: transparent;
+  border: none;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+.theme-toggle button.active {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+/* ════════════════════════════════════════════════════════════
+   聊天面板容器（模拟 RightPanel）
+   ════════════════════════════════════════════════════════════ */
+.chat-panel {
+  width: 420px;
+  height: 680px;
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 8px 32px oklch(0 0 0 / 0.2);
+}
+
+/* 标签栏 */
+.tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar);
+  flex-shrink: 0;
+}
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  max-width: 140px;
+  background: var(--background);
+  color: var(--foreground);
+  border: 1px solid var(--border);
+}
+.tab-item .tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tab-item .tab-close {
+  opacity: 0.4;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.tab-item .tab-close:hover { opacity: 1; }
+.tab-bar-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+.tab-bar-actions button {
+  background: transparent;
+  border: none;
+  color: var(--muted-foreground);
+  font-size: 16px;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tab-bar-actions button:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+/* 消息列表 */
+.message-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.message-list::-webkit-scrollbar { width: 6px; }
+.message-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+/* 用户消息 */
+.msg-user {
+  align-self: flex-end;
+  max-width: 85%;
+  background: color-mix(in oklch, var(--primary) 15%, transparent);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--foreground);
+}
+
+/* AI 消息 */
+.msg-ai {
+  align-self: flex-start;
+  width: 100%;
+  font-size: 12px;
+  color: var(--foreground);
+  line-height: 1.6;
+}
+.msg-ai .ai-label {
+  font-size: 10px;
+  color: var(--muted-foreground);
+  margin-bottom: 4px;
+}
+
+/* 工具卡片（inline，消息流中） */
+.tool-card-inline {
+  border: 1px solid color-mix(in oklch, var(--border) 60%, transparent);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--secondary) 20%, transparent);
+  font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+  overflow: hidden;
+  align-self: flex-start;
+  width: 100%;
+}
+.tool-card-inline-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+}
+.tool-card-inline-header .tool-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--status-pass-foreground);
+  flex-shrink: 0;
+}
+.tool-card-inline-header .tool-label {
+  font-weight: 600;
+  color: var(--violet-foreground);
+  flex-shrink: 0;
+}
+.tool-card-inline-header .tool-summary {
+  color: var(--muted-foreground);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ════════════════════════════════════════════════════════════
+   ★ TODO 工具卡片 — 固定在输入框上方
+   ════════════════════════════════════════════════════════════ */
+.todo-panel {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--card);
+}
+
+/* 折叠状态 — 摘要栏 */
+.todo-summary-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+  user-select: none;
+}
+.todo-summary-bar:hover {
+  background: var(--accent);
+}
+
+/* 进度环 */
+.todo-progress-ring {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+.todo-progress-ring svg {
+  transform: rotate(-90deg);
+  width: 100%;
+  height: 100%;
+}
+.todo-progress-ring .ring-bg {
+  fill: none;
+  stroke: var(--secondary);
+  stroke-width: 3;
+}
+.todo-progress-ring .ring-fg {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.4s ease;
+}
+.todo-progress-ring .ring-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--foreground);
+}
+
+/* 标题和状态 */
+.todo-title-area {
+  flex: 1;
+  min-width: 0;
+}
+.todo-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--foreground);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.todo-title .todo-icon {
+  color: var(--violet-foreground);
+  font-size: 13px;
+}
+.todo-status-text {
+  font-size: 10px;
+  color: var(--muted-foreground);
+  margin-top: 1px;
+}
+
+/* 折叠/展开箭头 */
+.todo-chevron {
+  flex-shrink: 0;
+  color: var(--muted-foreground);
+  transition: transform 0.2s;
+  font-size: 14px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+.todo-chevron:hover {
+  background: var(--secondary);
+}
+.todo-panel.expanded .todo-chevron {
+  transform: rotate(180deg);
+}
+
+/* 进度条（折叠栏底部细线） */
+.todo-progress-bar {
+  height: 2px;
+  background: var(--secondary);
+  overflow: hidden;
+}
+.todo-progress-bar-fill {
+  height: 100%;
+  background: var(--primary);
+  transition: width 0.4s ease;
+}
+
+/* ── 展开内容 ── */
+.todo-body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.25s ease;
+}
+.todo-panel.expanded .todo-body {
+  max-height: 320px;
+  overflow-y: auto;
+}
+.todo-body::-webkit-scrollbar { width: 5px; }
+.todo-body::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.todo-items {
+  padding: 4px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* 单个 todo 项 */
+.todo-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+.todo-item:hover {
+  background: color-mix(in oklch, var(--secondary) 40%, transparent);
+}
+
+/* 状态图标 */
+.todo-item-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* 已完成 */
+.todo-item.completed .todo-item-icon {
+  background: var(--status-pass-foreground);
+  color: var(--background);
+}
+.todo-item.completed .todo-item-text {
+  color: var(--muted-foreground);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklch, var(--muted-foreground) 60%, transparent);
+}
+
+/* 进行中 */
+.todo-item.in-progress .todo-item-icon {
+  background: color-mix(in oklch, var(--primary) 20%, transparent);
+  color: var(--primary);
+  border: 1.5px solid var(--primary);
+}
+.todo-item.in-progress .todo-item-text {
+  color: var(--foreground);
+  font-weight: 500;
+}
+.todo-item.in-progress .todo-item-text::after {
+  content: '';
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--primary);
+  margin-left: 6px;
+  animation: pulse-dot 1.2s ease-in-out infinite;
+  vertical-align: middle;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 0.3; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+/* 待办 */
+.todo-item.pending .todo-item-icon {
+  background: transparent;
+  border: 1.5px solid var(--border);
+  color: transparent;
+}
+.todo-item.pending .todo-item-text {
+  color: var(--muted-foreground);
+}
+
+/* 文本 */
+.todo-item-text {
+  font-size: 11px;
+  line-height: 1.5;
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+/* 时间戳/备注 */
+.todo-item-meta {
+  font-size: 9px;
+  color: var(--muted-foreground);
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 分隔线（已完成和未完成之间）*/
+.todo-divider {
+  height: 1px;
+  background: color-mix(in oklch, var(--border) 50%, transparent);
+  margin: 4px 8px;
+}
+
+/* ════════════════════════════════════════════════════════════
+   输入框区域
+   ════════════════════════════════════════════════════════════ */
+.input-area {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  padding: 8px;
+}
+.input-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+  padding: 8px;
+}
+.input-box textarea {
+  resize: none;
+  border: none;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  min-height: 48px;
+  width: 100%;
+}
+.input-box textarea::placeholder {
+  color: var(--muted-foreground);
+}
+.input-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.input-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.input-toolbar-left button {
+  background: transparent;
+  border: none;
+  color: var(--muted-foreground);
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+}
+.input-toolbar-left button:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+.send-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: var(--foreground);
+  color: var(--background);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+.send-btn:disabled {
+  background: var(--muted);
+  color: var(--muted-foreground);
+  cursor: not-allowed;
+}
+
+/* ════════════════════════════════════════════════════════════
+   原型标注
+   ════════════════════════════════════════════════════════════ */
+.prototype-label {
+  width: 420px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--foreground);
+  margin-bottom: -16px;
+  padding-top: 8px;
+}
+.prototype-sublabel {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted-foreground);
+  margin-top: 2px;
+}
+
+/* 模拟 AI 工具调用文本 */
+.tool-exec-text {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  padding: 4px 0;
+}
+.tool-exec-text .tool-name {
+  color: var(--violet-foreground);
+  font-weight: 600;
+}
+
+/* spinner */
+.spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--primary);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: middle;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+</style>
+</head>
+<body>
+
+<!-- 主题切换 -->
+<div class="theme-toggle">
+  <button class="active" onclick="setTheme('bench', this)">Bench（深色）</button>
+  <button onclick="setTheme('drafting', this)">Drafting（浅色）</button>
+</div>
+
+<!-- ════════════════════════════════════════════════════════
+     场景 1：TODO 面板展开状态（进行中）
+     ════════════════════════════════════════════════════════ -->
+<div>
+  <div class="prototype-label">
+    场景 1：展开状态（进行中）
+    <div class="prototype-sublabel">3/6 已完成，1 项进行中，面板固定在输入框上方</div>
+  </div>
+  <div class="chat-panel">
+    <!-- 标签栏 -->
+    <div class="tab-bar">
+      <div class="tab-item">
+        <span class="tab-label">分析 ALU 仿真失败</span>
+        <span class="tab-close">×</span>
+      </div>
+      <div class="tab-bar-actions">
+        <button>+</button>
+      </div>
+    </div>
+
+    <!-- 消息列表 -->
+    <div class="message-list">
+      <!-- 用户消息 -->
+      <div class="msg-user">请帮我分析 ALU 子系统的仿真失败原因，逐步排查。</div>
+
+      <!-- AI 消息 -->
+      <div class="msg-ai">
+        <div class="ai-label">AI</div>
+        好的，我来逐步分析 ALU 仿真失败的原因。我先制定一个排查计划，然后逐步执行。
+      </div>
+
+      <!-- inline tool card (read) -->
+      <div class="tool-card-inline">
+        <div class="tool-card-inline-header">
+          <span class="tool-dot"></span>
+          <span class="tool-label">read</span>
+          <span class="tool-summary">.../alu/alu_tb.sv · 142 lines</span>
+        </div>
+      </div>
+
+      <!-- inline tool card (bash) -->
+      <div class="tool-card-inline">
+        <div class="tool-card-inline-header">
+          <span class="tool-dot"></span>
+          <span class="tool-label">bash</span>
+          <span class="tool-summary">runsim -cmd run -case alu_all</span>
+        </div>
+      </div>
+
+      <!-- AI 消息 -->
+      <div class="msg-ai">
+        <div class="ai-label">AI</div>
+        仿真运行完毕，发现 3 个断言失败。我正在按计划逐步排查，当前进度见下方 TODO 面板。
+      </div>
+    </div>
+
+    <!-- ★ TODO 面板（展开状态）★ -->
+    <div class="todo-panel expanded" id="todo-panel-1">
+      <div class="todo-summary-bar" onclick="toggleTodo('todo-panel-1')">
+        <!-- 进度环 -->
+        <div class="todo-progress-ring">
+          <svg viewBox="0 0 28 28">
+            <circle class="ring-bg" cx="14" cy="14" r="11"></circle>
+            <circle class="ring-fg" cx="14" cy="14" r="11"
+              stroke-dasharray="69.12" stroke-dashoffset="34.56"></circle>
+          </svg>
+          <div class="ring-text">50%</div>
+        </div>
+        <div class="todo-title-area">
+          <div class="todo-title">
+            <span class="todo-icon">✓</span>
+            排查计划
+          </div>
+          <div class="todo-status-text">3/6 已完成 · 1 项进行中</div>
+        </div>
+        <div class="todo-chevron">▾</div>
+      </div>
+      <div class="todo-progress-bar">
+        <div class="todo-progress-bar-fill" style="width: 50%"></div>
+      </div>
+      <div class="todo-body">
+        <div class="todo-items">
+          <!-- 已完成项 -->
+          <div class="todo-item completed">
+            <div class="todo-item-icon">✓</div>
+            <div>
+              <div class="todo-item-text">读取 ALU testbench 文件，检查激励生成逻辑</div>
+              <div class="todo-item-meta">完成于 14:23</div>
+            </div>
+          </div>
+          <div class="todo-item completed">
+            <div class="todo-item-icon">✓</div>
+            <div>
+              <div class="todo-item-text">运行仿真，收集失败断言列表</div>
+              <div class="todo-item-meta">完成于 14:24</div>
+            </div>
+          </div>
+          <div class="todo-item completed">
+            <div class="todo-item-icon">✓</div>
+            <div>
+              <div class="todo-item-text">查看波形，定位第一个失败断言的时间窗口</div>
+              <div class="todo-item-meta">完成于 14:26</div>
+            </div>
+          </div>
+
+          <div class="todo-divider"></div>
+
+          <!-- 进行中 -->
+          <div class="todo-item in-progress">
+            <div class="todo-item-icon">▶</div>
+            <div>
+              <div class="todo-item-text">分析 carry 信号在溢出时的传播延迟</div>
+              <div class="todo-item-meta">进行中...</div>
+            </div>
+          </div>
+
+          <!-- 待办 -->
+          <div class="todo-item pending">
+            <div class="todo-item-icon"></div>
+            <div>
+              <div class="todo-item-text">检查 DUT 中 carry 链的组合逻辑实现</div>
+            </div>
+          </div>
+          <div class="todo-item pending">
+            <div class="todo-item-icon"></div>
+            <div>
+              <div class="todo-item-text">对比参考模型，定位差异根因</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 输入框 -->
+    <div class="input-area">
+      <div class="input-box">
+        <textarea placeholder="输入消息... ("/" 加载技能, "@" 添加上下文)"></textarea>
+        <div class="input-toolbar">
+          <div class="input-toolbar-left">
+            <button title="添加附件">+</button>
+            <button title="模型" style="font-size: 11px; width: auto; padding: 0 6px;">GPT-4o</button>
+          </div>
+          <button class="send-btn" disabled>↑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════
+     场景 2：TODO 面板折叠状态
+     ════════════════════════════════════════════════════════ -->
+<div>
+  <div class="prototype-label">
+    场景 2：折叠状态
+    <div class="prototype-sublabel">点击摘要栏可展开/折叠，不占用聊天空间</div>
+  </div>
+  <div class="chat-panel">
+    <!-- 标签栏 -->
+    <div class="tab-bar">
+      <div class="tab-item">
+        <span class="tab-label">分析 ALU 仿真失败</span>
+        <span class="tab-close">×</span>
+      </div>
+      <div class="tab-bar-actions">
+        <button>+</button>
+      </div>
+    </div>
+
+    <!-- 消息列表 -->
+    <div class="message-list">
+      <div class="msg-user">请帮我分析 ALU 子系统的仿真失败原因，逐步排查。</div>
+      <div class="msg-ai">
+        <div class="ai-label">AI</div>
+        好的，我来逐步分析 ALU 仿真失败的原因。我先制定了一个排查计划，正在按步骤执行...
+      </div>
+      <div class="tool-card-inline">
+        <div class="tool-card-inline-header">
+          <span class="tool-dot"></span>
+          <span class="tool-label">read</span>
+          <span class="tool-summary">.../alu/alu_tb.sv · 142 lines</span>
+        </div>
+      </div>
+      <div class="tool-card-inline">
+        <div class="tool-card-inline-header">
+          <span class="tool-dot"></span>
+          <span class="tool-label">bash</span>
+          <span class="tool-summary">runsim -cmd run -case alu_all</span>
+        </div>
+      </div>
+      <div class="msg-ai">
+        <div class="ai-label">AI</div>
+        仿真运行完毕，发现 3 个断言失败。正在逐步排查中...
+        <div class="tool-exec-text" style="margin-top: 6px;">
+          <span class="spinner"></span>
+          <span class="tool-name">analyzing</span> carry 信号传播延迟...
+        </div>
+      </div>
+    </div>
+
+    <!-- ★ TODO 面板（折叠状态）★ -->
+    <div class="todo-panel" id="todo-panel-2">
+      <div class="todo-summary-bar" onclick="toggleTodo('todo-panel-2')">
+        <div class="todo-progress-ring">
+          <svg viewBox="0 0 28 28">
+            <circle class="ring-bg" cx="14" cy="14" r="11"></circle>
+            <circle class="ring-fg" cx="14" cy="14" r="11"
+              stroke-dasharray="69.12" stroke-dashoffset="34.56"></circle>
+          </svg>
+          <div class="ring-text">50%</div>
+        </div>
+        <div class="todo-title-area">
+          <div class="todo-title">
+            <span class="todo-icon">✓</span>
+            排查计划
+          </div>
+          <div class="todo-status-text">3/6 已完成 · 1 项进行中</div>
+        </div>
+        <div class="todo-chevron">▾</div>
+      </div>
+      <div class="todo-progress-bar">
+        <div class="todo-progress-bar-fill" style="width: 50%"></div>
+      </div>
+      <div class="todo-body">
+        <div class="todo-items">
+          <div class="todo-item completed">
+            <div class="todo-item-icon">✓</div>
+            <div><div class="todo-item-text">读取 ALU testbench 文件</div></div>
+          </div>
+          <div class="todo-item completed">
+            <div class="todo-item-icon">✓</div>
+            <div><div class="todo-item-text">运行仿真，收集失败断言</div></div>
+          </div>
+          <div class="todo-item completed">
+            <div class="todo-item-icon">✓</div>
+            <div><div class="todo-item-text">查看波形，定位失败窗口</div></div>
+          </div>
+          <div class="todo-divider"></div>
+          <div class="todo-item in-progress">
+            <div class="todo-item-icon">▶</div>
+            <div><div class="todo-item-text">分析 carry 信号传播延迟</div></div>
+          </div>
+          <div class="todo-item pending">
+            <div class="todo-item-icon"></div>
+            <div><div class="todo-item-text">检查 carry 链组合逻辑</div></div>
+          </div>
+          <div class="todo-item pending">
+            <div class="todo-item-icon"></div>
+            <div><div class="todo-item-text">对比参考模型，定位根因</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 输入框 -->
+    <div class="input-area">
+      <div class="input-box">
+        <textarea placeholder="输入消息... ("/" 加载技能, "@" 添加上下文)"></textarea>
+        <div class="input-toolbar">
+          <div class="input-toolbar-left">
+            <button title="添加附件">+</button>
+            <button title="模型" style="font-size: 11px; width: auto; padding: 0 6px;">GPT-4o</button>
+          </div>
+          <button class="send-btn" disabled>↑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════
+     场景 3：全部完成状态
+     ════════════════════════════════════════════════════════ -->
+<div>
+  <div class="prototype-label">
+    场景 3：全部完成
+    <div class="prototype-sublabel">所有项已完成，进度环显示 100%，面板自动折叠</div>
+  </div>
+  <div class="chat-panel">
+    <div class="tab-bar">
+      <div class="tab-item">
+        <span class="tab-label">分析 ALU 仿真失败</span>
+        <span class="tab-close">×</span>
+      </div>
+      <div class="tab-bar-actions">
+        <button>+</button>
+      </div>
+    </div>
+
+    <div class="message-list">
+      <div class="msg-user">请帮我分析 ALU 子系统的仿真失败原因，逐步排查。</div>
+      <div class="msg-ai">
+        <div class="ai-label">AI</div>
+        排查完成！根因已定位：carry 链在溢出时存在 1 拍延迟，导致 `assert_overflow` 在第 42 个时钟周期失败。建议修复方案：在 carry 传播路径插入 1 级流水寄存器。
+      </div>
+      <div class="tool-card-inline">
+        <div class="tool-card-inline-header">
+          <span class="tool-dot"></span>
+          <span class="tool-label">edit</span>
+          <span class="tool-summary">.../alu/alu_dut.sv · edited</span>
+        </div>
+      </div>
+      <div class="msg-ai">
+        <div class="ai-label">AI</div>
+        修复已应用，重新仿真通过所有断言。✓
+      </div>
+    </div>
+
+    <!-- ★ TODO 面板（全部完成，折叠）★ -->
+    <div class="todo-panel" id="todo-panel-3">
+      <div class="todo-summary-bar" onclick="toggleTodo('todo-panel-3')">
+        <div class="todo-progress-ring">
+          <svg viewBox="0 0 28 28">
+            <circle class="ring-bg" cx="14" cy="14" r="11"></circle>
+            <circle class="ring-fg" cx="14" cy="14" r="11"
+              stroke-dasharray="69.12" stroke-dashoffset="0"
+              style="stroke: var(--status-pass-foreground);"></circle>
+          </svg>
+          <div class="ring-text" style="color: var(--status-pass-foreground);">✓</div>
+        </div>
+        <div class="todo-title-area">
+          <div class="todo-title">
+            <span class="todo-icon" style="color: var(--status-pass-foreground);">✓</span>
+            <span style="color: var(--status-pass-foreground);">排查计划 — 全部完成</span>
+          </div>
+          <div class="todo-status-text">6/6 已完成 · 用时 8 分钟</div>
+        </div>
+        <div class="todo-chevron">▾</div>
+      </div>
+      <div class="todo-progress-bar">
+        <div class="todo-progress-bar-fill" style="width: 100%; background: var(--status-pass-foreground);"></div>
+      </div>
+      <div class="todo-body">
+        <div class="todo-items">
+          <div class="todo-item completed">
+            <div class="todo-item-icon">✓</div>
+            <div><div class="todo-item-text">读取 ALU testbench 文件</div><div class="todo-item-meta">14:23</div></div>
+          </div>
+          <div class="todo-item completed">
+            <div class="todo-item-icon">✓</div>
+            <div><div class="todo-item-text">运行仿真，收集失败断言</div><div class="todo-item-meta">14:24</div></div>
+          </div>
+          <div class="todo-item completed">
+            <div class="todo-item-icon">✓</div>
+            <div><div class="todo-item-text">查看波形，定位失败窗口</div><div class="todo-item-meta">14:26</div></div>
+          </div>
+          <div class="todo-item completed">
+            <div class="todo-item-icon">✓</div>
+            <div><div class="todo-item-text">分析 carry 信号传播延迟</div><div class="todo-item-meta">14:28</div></div>
+          </div>
+          <div class="todo-item completed">
+            <div class="todo-item-icon">✓</div>
+            <div><div class="todo-item-text">检查 carry 链组合逻辑</div><div class="todo-item-meta">14:30</div></div>
+          </div>
+          <div class="todo-item completed">
+            <div class="todo-item-icon">✓</div>
+            <div><div class="todo-item-text">对比参考模型，定位根因</div><div class="todo-item-meta">14:31</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <div class="input-box">
+        <textarea placeholder="输入消息... ("/" 加载技能, "@" 添加上下文)"></textarea>
+        <div class="input-toolbar">
+          <div class="input-toolbar-left">
+            <button title="添加附件">+</button>
+            <button title="模型" style="font-size: 11px; width: auto; padding: 0 6px;">GPT-4o</button>
+          </div>
+          <button class="send-btn" disabled>↑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════
+     场景 4：初始状态（刚创建 todo，全部 pending）
+     ════════════════════════════════════════════════════════ -->
+<div>
+  <div class="prototype-label">
+    场景 4：初始创建
+    <div class="prototype-sublabel">LLM 刚创建 TODO 列表，尚未开始执行</div>
+  </div>
+  <div class="chat-panel">
+    <div class="tab-bar">
+      <div class="tab-item">
+        <span class="tab-label">分析 ALU 仿真失败</span>
+        <span class="tab-close">×</span>
+      </div>
+      <div class="tab-bar-actions">
+        <button>+</button>
+      </div>
+    </div>
+
+    <div class="message-list">
+      <div class="msg-user">请帮我分析 ALU 子系统的仿真失败原因，逐步排查。</div>
+      <div class="msg-ai">
+        <div class="ai-label">AI</div>
+        好的，我制定了以下排查计划，即将开始执行：
+      </div>
+    </div>
+
+    <!-- ★ TODO 面板（初始，展开）★ -->
+    <div class="todo-panel expanded" id="todo-panel-4">
+      <div class="todo-summary-bar" onclick="toggleTodo('todo-panel-4')">
+        <div class="todo-progress-ring">
+          <svg viewBox="0 0 28 28">
+            <circle class="ring-bg" cx="14" cy="14" r="11"></circle>
+            <circle class="ring-fg" cx="14" cy="14" r="11"
+              stroke-dasharray="69.12" stroke-dashoffset="69.12"></circle>
+          </svg>
+          <div class="ring-text">0%</div>
+        </div>
+        <div class="todo-title-area">
+          <div class="todo-title">
+            <span class="todo-icon">✓</span>
+            排查计划
+          </div>
+          <div class="todo-status-text">0/6 已完成 · 待开始</div>
+        </div>
+        <div class="todo-chevron">▾</div>
+      </div>
+      <div class="todo-progress-bar">
+        <div class="todo-progress-bar-fill" style="width: 0%"></div>
+      </div>
+      <div class="todo-body">
+        <div class="todo-items">
+          <div class="todo-item pending">
+            <div class="todo-item-icon"></div>
+            <div><div class="todo-item-text">读取 ALU testbench 文件，检查激励生成逻辑</div></div>
+          </div>
+          <div class="todo-item pending">
+            <div class="todo-item-icon"></div>
+            <div><div class="todo-item-text">运行仿真，收集失败断言列表</div></div>
+          </div>
+          <div class="todo-item pending">
+            <div class="todo-item-icon"></div>
+            <div><div class="todo-item-text">查看波形，定位第一个失败断言的时间窗口</div></div>
+          </div>
+          <div class="todo-item pending">
+            <div class="todo-item-icon"></div>
+            <div><div class="todo-item-text">分析 carry 信号在溢出时的传播延迟</div></div>
+          </div>
+          <div class="todo-item pending">
+            <div class="todo-item-icon"></div>
+            <div><div class="todo-item-text">检查 DUT 中 carry 链的组合逻辑实现</div></div>
+          </div>
+          <div class="todo-item pending">
+            <div class="todo-item-icon"></div>
+            <div><div class="todo-item-text">对比参考模型，定位差异根因</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <div class="input-box">
+        <textarea placeholder="输入消息... ("/" 加载技能, "@" 添加上下文)"></textarea>
+        <div class="input-toolbar">
+          <div class="input-toolbar-left">
+            <button title="添加附件">+</button>
+            <button title="模型" style="font-size: 11px; width: auto; padding: 0 6px;">GPT-4o</button>
+          </div>
+          <button class="send-btn" disabled>↑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function toggleTodo(id) {
+  const panel = document.getElementById(id);
+  panel.classList.toggle('expanded');
+}
+
+function setTheme(theme, btn) {
+  document.documentElement.setAttribute('data-theme', theme);
+  // Update active button
+  document.querySelectorAll('.theme-toggle button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+</script>
+
+</body>
+</html>

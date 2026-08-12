@@ -304,7 +304,7 @@ function buildSummary(message: ChatMessage): ReactNode {
     }
     case 'todo': {
       const todos = parseTodoItems(args, resultText);
-      const done = todos.filter((t) => t.done).length;
+      const done = todos.filter((t) => t.status === 'completed').length;
       return <>{todos.length} items {' \u00b7 '} {done}/{todos.length} done</>;
     }
     case 'web_search': {
@@ -877,9 +877,19 @@ function TodoBody({ args, resultText }: { args: unknown; resultText: string }) {
         <div key={i} className="flex items-center gap-2 py-0.5">
           <span className={cn(
             'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[8px]',
-            item.done ? 'border-violet-foreground bg-violet-foreground text-background' : 'border-border bg-transparent text-transparent',
-          )}>{item.done ? '\u2713' : ''}</span>
-          <span className={cn(item.done ? 'text-muted-foreground/50 line-through' : 'text-muted-foreground')}>{item.text}</span>
+            item.status === 'completed' && 'border-violet-foreground bg-violet-foreground text-background',
+            item.status === 'in_progress' && 'border-primary bg-primary/20 text-primary',
+            item.status === 'pending' && 'border-border bg-transparent text-transparent',
+            item.status === 'abandoned' && 'border-muted-foreground/40 bg-transparent text-muted-foreground/40',
+          )}>
+            {item.status === 'completed' ? '\u2713' : item.status === 'in_progress' ? '\u25b6' : item.status === 'abandoned' ? '\u2013' : ''}
+          </span>
+          <span className={cn(
+            item.status === 'completed' && 'text-muted-foreground/50 line-through',
+            item.status === 'in_progress' && 'font-medium text-foreground',
+            item.status === 'pending' && 'text-muted-foreground',
+            item.status === 'abandoned' && 'text-muted-foreground/40 line-through',
+          )}>{item.text}</span>
         </div>
       ))}
     </div>

@@ -12,6 +12,9 @@ import { trpc } from '@renderer/lib/trpc';
 import { PluginViewHost } from '@renderer/components/plugins/PluginViewHost';
 import { ContextUsageIndicator } from '@renderer/components/chat/ContextUsageIndicator';
 import { ApprovalCard } from '@renderer/components/chat/ApprovalCard';
+import { TodoPanel } from '@renderer/components/chat/TodoPanel';
+import { getLatestTodoState } from '@renderer/components/chat/tool-helpers';
+import { useTodoPanelStore } from '@renderer/stores/todo-panel';
 
 interface RightPanelProps {
   width: number;
@@ -83,6 +86,18 @@ export function RightPanel({ width }: RightPanelProps) {
   const approvalRequests = useSessionStore((s) => s.approvalRequests);
 
   const isCurrentSessionCreating = currentSession?.status === 'creating';
+
+  // ── Todo panel state ───────────────────────────────
+  const currentMessages = currentSession?.messages;
+  const todoState = useMemo(
+    () => currentMessages ? getLatestTodoState(currentMessages) : null,
+    [currentMessages],
+  );
+  const todoCollapsed = useTodoPanelStore((s) =>
+    currentSessionId ? (s.collapsed[currentSessionId] ?? false) : false,
+  );
+  const toggleTodoCollapse = useTodoPanelStore((s) => s.toggleCollapse);
+
   const renameSession = useSessionStore((s) => s.renameSession);
   const historySessions = useSessionStore((s) => s.historySessions);
   const historyLoading = useSessionStore((s) => s.historyLoading);
@@ -724,6 +739,16 @@ export function RightPanel({ width }: RightPanelProps) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Todo 面板（固定在输入框上方） ───────────── */}
+      {todoState && currentSessionId && (
+        <TodoPanel
+          phases={todoState.phases}
+          isExecuting={todoState.isExecuting}
+          collapsed={todoCollapsed}
+          onToggleCollapse={() => toggleTodoCollapse(currentSessionId)}
+        />
       )}
 
       {/* ── 输入框 ──────────────────────────────────── */}
