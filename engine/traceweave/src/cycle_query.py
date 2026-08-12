@@ -1,0 +1,729 @@
+"""
+cycle_query.py
+按 clock 边沿对齐，返回多个信号的周期级采样结果。
+"""
+
+from __future__ import annotations
+
+import time
+from bisect import bisect_left, bisect_right
+from statistics import median
+from typing import Any
+
+from .cancellation import CANCEL_CHECK_STRIDE, check_cancelled
+from . import operation_metrics
+
+
+class EdgeSamplingSession:
+    """Bounded reuse state for a group of inspections on one shared clock.
+
+    A full sweep creates one session per clock group and consumes that group
+    before moving to the next. The high-activity clock transition list and its
+    extracted edge/sample-time vectors therefore exist only once per group.
+
+    Signal transition results are cached only when the sweep says a signal is
+    used by more than one interface. A small reference count evicts each cached
+    result immediately after its last consumer, so unique payload buses never
+    accumulate and shared buses have a bounded lifetime.
+    """
+
+    def __init__(
+        self,
+        *,
+        clock_path: str,
+        start_ps: int,
+        end_ps: int,
+        edge: str,
+        sample_offset_ps: int,
+        signal_use_counts: dict[str, int] | None = None,
+    ):
+        self.clock_path = clock_path
+        self.start_ps = int(start_ps)
+        self.end_ps = int(end_ps)
+        self.edge = edge
+        self.sample_offset_ps = int(sample_offset_ps)
+        self._signal_uses_remaining = dict(signal_use_counts or {})
+        self._signal_transition_cache: dict[
+            tuple[str, int, int], dict[str, Any]
+        ] = {}
+        self._cached_transition_count = 0
+        self._bound_clock_path: str | None = None
+        self._clock_result: dict[str, Any] | None = None
+        self._edge_times: list[int] | None = None
+        self._sample_times: list[int] | None = None
+        self._clock_period_ps: int | None = None
+
+    def _check_compatible(
+        self,
+        clock_path: str,
+        start_ps: int,
+        end_ps: int,
+        edge: str,
+        sample_offset_ps: int,
+    ) -> None:
+        actual_window = (
+            int(start_ps), int(end_ps), edge, int(sample_offset_ps)
+        )
+        expected_window = (
+            self.start_ps, self.end_ps, self.edge, self.sample_offset_ps
+        )
+        if actual_window != expected_window:
+            raise ValueError(
+                "EdgeSamplingSession reused with incompatible clock/window/edge"
+            )
+        # Discovery can return an unsuffixed FSDB path while inspect_handshake
+        # resolves it to the native ``name[msb:lsb]`` spelling. Bind the first
+        # resolved path and require every later consumer in this raw-clock group
+        # to resolve identically.
+        if self._bound_clock_path is None:
+            self._bound_clock_path = clock_path
+        elif clock_path != self._bound_clock_path:
+            raise ValueError(
+                "EdgeSamplingSession reused with an incompatible resolved clock"
+            )
+
+    def bind_signal_alias(self, original_path: str, resolved_path: str) -> None:
+        """Move a discovery-path refcount to its resolved parser spelling."""
+        if original_path == resolved_path:
+            return
+        remaining = self._signal_uses_remaining.pop(original_path, 0)
+        if remaining:
+            self._signal_uses_remaining[resolved_path] = (
+                int(self._signal_uses_remaining.get(resolved_path, 0)) + remaining
+            )
+
+    def clear(self) -> None:
+        """Release all cached transition/edge vectors after the clock unit ends."""
+        self._signal_transition_cache.clear()
+        self._signal_uses_remaining.clear()
+        self._cached_transition_count = 0
+        self._clock_result = None
+        self._edge_times = None
+        self._sample_times = None
+        self._clock_period_ps = None
+
+    def clock_context(
+        self,
+        parser: Any,
+        *,
+        clock_path: str,
+        start_ps: int,
+        end_ps: int,
+        edge: str,
+        sample_offset_ps: int,
+    ) -> tuple[dict[str, Any], list[int], list[int], int | None]:
+        self._check_compatible(
+            clock_path, start_ps, end_ps, edge, sample_offset_ps
+        )
+        check_cancelled()
+        if self._clock_result is not None:
+            operation_metrics.record_sweep_reuse_hit("clock")
+            assert self._edge_times is not None
+            assert self._sample_times is not None
+            return (
+                self._clock_result,
+                self._edge_times,
+                self._sample_times,
+                self._clock_period_ps,
+            )
+
+        self._clock_result = _read_sweep_transition_result(
+            parser, clock_path, start_ps, end_ps, kind="clock"
+        )
+        _validate_clock_width(parser, clock_path)
+        edge_extract_started = time.perf_counter()
+        try:
+            self._edge_times = _extract_edge_times(
+                self._clock_result.get("transitions", []), edge
+            )
+        finally:
+            operation_metrics.add_sweep_cpu_timing(
+                "edge_extract",
+                (time.perf_counter() - edge_extract_started) * 1000.0,
+            )
+        self._sample_times = [
+            edge_time + sample_offset_ps for edge_time in self._edge_times
+        ]
+        self._clock_period_ps = _compute_clock_period_ps(self._edge_times)
+        return (
+            self._clock_result,
+            self._edge_times,
+            self._sample_times,
+            self._clock_period_ps,
+        )
+
+    def signal_transitions(
+        self,
+        parser: Any,
+        signal_path: str,
+        start_ps: int,
+        end_ps: int,
+    ) -> dict[str, Any]:
+        check_cancelled()
+        key = (signal_path, int(start_ps), int(end_ps))
+        remaining = int(self._signal_uses_remaining.get(signal_path, 1))
+        try:
+            cached = self._signal_transition_cache.get(key)
+            if cached is not None:
+                operation_metrics.record_sweep_reuse_hit("signal")
+                return cached
+            result = _read_sweep_transition_result(
+                parser, signal_path, start_ps, end_ps, kind="signal"
+            )
+            if remaining > 1:
+                self._signal_transition_cache[key] = result
+                self._cached_transition_count += len(result.get("transitions", []))
+                operation_metrics.record_sweep_cache_peak(
+                    len(self._signal_transition_cache),
+                    self._cached_transition_count,
+                )
+            return result
+        finally:
+            if signal_path in self._signal_uses_remaining:
+                remaining -= 1
+                if remaining <= 0:
+                    self._signal_uses_remaining.pop(signal_path, None)
+                    evicted = self._signal_transition_cache.pop(key, None)
+                    if evicted is not None:
+                        self._cached_transition_count -= len(
+                            evicted.get("transitions", [])
+                        )
+                else:
+                    self._signal_uses_remaining[signal_path] = remaining
+
+
+def _read_sweep_transition_result(
+    parser: Any,
+    signal_path: str,
+    start_ps: int,
+    end_ps: int,
+    *,
+    kind: str,
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    try:
+        return parser.get_transitions(
+            signal_path, start_ps=start_ps, end_ps=end_ps
+        )
+    finally:
+        operation_metrics.record_sweep_transition_read(
+            kind, (time.perf_counter() - started) * 1000.0
+        )
+
+
+def get_signals_by_cycle(
+    parser,
+    clock_path: str,
+    signal_paths: list[str],
+    edge: str = "posedge",
+    start_cycle: int = 0,
+    num_cycles: int = 16,
+    sample_offset_ps: int = 1,
+    requested_num_cycles: int | None = None,
+    capped: bool = False,
+    start_time_ps: int | None = None,
+    end_time_ps: int | None = None,
+    max_cycles: int | None = None,
+) -> dict[str, Any]:
+    """Sample ``signal_paths`` on ``num_cycles`` clock edges from ``start_cycle``.
+
+    Two orthogonal locating axes; pick one per axis (the dispatch layer rejects
+    mixing within an axis):
+
+    * start axis: ``start_cycle`` (index) OR ``start_time_ps`` (ps) — the latter
+      snaps to the first edge at/after the given time (``bisect_left``).
+    * count axis: ``num_cycles`` OR ``end_time_ps`` (ps) — the latter counts every
+      edge in ``[start, end_time_ps]`` (``bisect_right``), so the window is
+      inclusive on both ends and a partial trailing period contributes a cycle
+      iff it actually contains an edge. The count is always an exact edge count,
+      never a fractional-cycle division. ``max_cycles`` caps a time-derived count
+      (sets ``capped``); the slow path stays bounded.
+    """
+    if edge not in {"posedge", "negedge"}:
+        raise ValueError(f"edge must be 'posedge' or 'negedge', got {edge!r}")
+    if start_cycle < 0:
+        raise ValueError("start_cycle must be >= 0")
+    if num_cycles < 0:
+        raise ValueError("num_cycles must be >= 0")
+    if sample_offset_ps < 0:
+        raise ValueError("sample_offset_ps must be >= 0")
+    if start_time_ps is not None and start_time_ps < 0:
+        raise ValueError("start_time_ps must be >= 0")
+    if end_time_ps is not None and end_time_ps < 0:
+        raise ValueError("end_time_ps must be >= 0")
+
+    clock_result = parser.get_transitions(clock_path, start_ps=0, end_ps=-1)
+    clock_transitions = clock_result.get("transitions", [])
+    _validate_clock_width(parser, clock_path)
+    edge_times = _extract_edge_times(clock_transitions, edge)
+
+    resolved_from_time = start_time_ps is not None or end_time_ps is not None
+    if start_time_ps is not None:
+        start_cycle = bisect_left(edge_times, start_time_ps)
+    if end_time_ps is not None:
+        derived = max(0, bisect_right(edge_times, end_time_ps) - start_cycle)
+        requested_num_cycles = derived
+        if max_cycles is not None and derived > max_cycles:
+            num_cycles = max_cycles
+            capped = True
+        else:
+            num_cycles = derived
+
+    target_edges = edge_times[start_cycle:start_cycle + num_cycles]
+    truncated = len(target_edges) < num_cycles
+    original_num_cycles = num_cycles if requested_num_cycles is None else requested_num_cycles
+
+    result = {
+        "clock_path": clock_path,
+        "edge": edge,
+        "sample_offset_ps": sample_offset_ps,
+        "clock_period_ps": _compute_clock_period_ps(edge_times),
+        "total_edges_found": len(edge_times),
+        "start_cycle": start_cycle,
+        "num_cycles_requested": original_num_cycles,
+        "effective_num_cycles": num_cycles,
+        "num_cycles_returned": len(target_edges),
+        "capped": capped,
+        "truncated": truncated,
+        "resolved_from_time": resolved_from_time,
+        "requested_start_time_ps": start_time_ps,
+        "requested_end_time_ps": end_time_ps,
+        "cycles": [],
+        "signal_errors": {},
+    }
+    if not target_edges:
+        return result
+
+    per_cycle_signals, signal_errors, _ = _sample_signals_at_edges(
+        parser, signal_paths, target_edges, sample_offset_ps
+    )
+    result["signal_errors"] = signal_errors
+
+    result["cycles"] = [
+        {
+            "cycle": start_cycle + index,
+            "time_ps": edge_time,
+            "time_ns": edge_time / 1000,
+            "signals": signals,
+        }
+        for index, (edge_time, signals) in enumerate(zip(target_edges, per_cycle_signals))
+    ]
+    return result
+
+
+def sample_signals_on_edges(
+    parser,
+    clock_path: str,
+    signal_paths: list[str],
+    start_ps: int = 0,
+    end_ps: int = -1,
+    edge: str = "posedge",
+    sample_offset_ps: int = 1,
+    sampling_session: EdgeSamplingSession | None = None,
+    compact: bool = False,
+) -> dict[str, Any]:
+    """Sample ``signal_paths`` on every ``clock_path`` edge inside a *time
+    window* (as opposed to ``get_signals_by_cycle``, which slices by cycle
+    index and caps the count).
+
+    This is the shared clock-sampling substrate for window-scoped relational
+    analysis (e.g. ``verify_condition.inspect_handshake``). Returns one entry
+    per edge in chronological order, each carrying the edge time and the
+    normalized ``{bin,hex,dec}`` value of each signal sampled at
+    ``edge + sample_offset_ps``.
+    """
+    if edge not in {"posedge", "negedge"}:
+        raise ValueError(f"edge must be 'posedge' or 'negedge', got {edge!r}")
+    if sample_offset_ps < 0:
+        raise ValueError("sample_offset_ps must be >= 0")
+
+    check_cancelled()
+    if sampling_session is not None:
+        clock_result, edge_times, sample_times, clock_period_ps = (
+            sampling_session.clock_context(
+                parser,
+                clock_path=clock_path,
+                start_ps=start_ps,
+                end_ps=end_ps,
+                edge=edge,
+                sample_offset_ps=sample_offset_ps,
+            )
+        )
+    else:
+        clock_result = _read_sweep_transition_result(
+            parser, clock_path, start_ps, end_ps, kind="clock"
+        )
+        _validate_clock_width(parser, clock_path)
+        edge_extract_started = time.perf_counter()
+        try:
+            edge_times = _extract_edge_times(
+                clock_result.get("transitions", []), edge
+            )
+        finally:
+            operation_metrics.add_sweep_cpu_timing(
+                "edge_extract",
+                (time.perf_counter() - edge_extract_started) * 1000.0,
+            )
+        sample_times = [edge_time + sample_offset_ps for edge_time in edge_times]
+        clock_period_ps = _compute_clock_period_ps(edge_times)
+
+    if compact:
+        signal_columns, signal_errors, signal_transition_truncations = (
+            _sample_signal_columns_at_edges(
+                parser,
+                signal_paths,
+                edge_times,
+                sample_offset_ps,
+                sample_times=sample_times,
+                sampling_session=sampling_session,
+            )
+        )
+        per_edge_signals: list[dict[str, Any]] = []
+    else:
+        per_edge_signals, signal_errors, signal_transition_truncations = (
+            _sample_signals_at_edges(
+                parser,
+                signal_paths,
+                edge_times,
+                sample_offset_ps,
+                sample_times=sample_times,
+                sampling_session=sampling_session,
+            )
+        )
+        signal_columns = {}
+    operation_metrics.record_sweep_sampling_shape(
+        len(edge_times), len(dict.fromkeys(signal_paths))
+    )
+    transition_signals_truncated = []
+    if clock_result.get("truncated"):
+        transition_signals_truncated.append(clock_path)
+    for signal_path in signal_transition_truncations:
+        if signal_path not in transition_signals_truncated:
+            transition_signals_truncated.append(signal_path)
+    result = {
+        "clock_path": clock_path,
+        "edge": edge,
+        "sample_offset_ps": sample_offset_ps,
+        "clock_period_ps": clock_period_ps,
+        "total_edges_found": len(edge_times),
+        "samples": [
+            {"time_ps": edge_time, "time_ns": edge_time / 1000, "signals": signals}
+            for edge_time, signals in zip(edge_times, per_edge_signals)
+        ],
+        "signal_errors": signal_errors,
+        "transition_data_truncated": bool(transition_signals_truncated),
+        "transition_signals_truncated": transition_signals_truncated,
+    }
+    if compact:
+        # Internal full-sweep representation: one time vector plus one value
+        # column per signal. Values remain references to the parser's enriched
+        # transition values, avoiding one normalized dict and one row-dict
+        # insertion per sampled signal per edge. Public tool results are built
+        # by inspect_handshake and remain unchanged.
+        result["edge_times"] = edge_times
+        result["signal_columns"] = signal_columns
+    return result
+
+
+def _sample_signal_columns_at_edges(
+    parser,
+    signal_paths: list[str],
+    target_edges: list[int],
+    sample_offset_ps: int,
+    *,
+    sample_times: list[int] | None = None,
+    sampling_session: EdgeSamplingSession | None = None,
+) -> tuple[dict[str, list[Any]], dict[str, str], list[str]]:
+    """Compact sweep-only counterpart of :func:`_sample_signals_at_edges`."""
+    columns: dict[str, list[Any]] = {}
+    signal_errors: dict[str, str] = {}
+    transition_signals_truncated: list[str] = []
+    if not target_edges:
+        return columns, signal_errors, transition_signals_truncated
+
+    range_start = target_edges[0]
+    range_end = target_edges[-1] + sample_offset_ps + 1
+    if sample_times is None:
+        sample_times = [edge_time + sample_offset_ps for edge_time in target_edges]
+
+    for signal_path in dict.fromkeys(signal_paths):
+        check_cancelled()
+        try:
+            if sampling_session is not None:
+                transitions_result = sampling_session.signal_transitions(
+                    parser, signal_path, range_start, range_end
+                )
+            else:
+                transitions_result = _read_sweep_transition_result(
+                    parser, signal_path, range_start, range_end, kind="signal"
+                )
+            if transitions_result.get("truncated"):
+                transition_signals_truncated.append(signal_path)
+            columns[signal_path] = _lookup_signal_values(
+                parser,
+                signal_path,
+                transitions_result.get("transitions", []),
+                sample_times,
+            )
+        except KeyError as exc:
+            signal_errors[signal_path] = str(exc)
+    return columns, signal_errors, transition_signals_truncated
+
+
+def _sample_signals_at_edges(
+    parser,
+    signal_paths: list[str],
+    target_edges: list[int],
+    sample_offset_ps: int,
+    *,
+    sample_times: list[int] | None = None,
+    sampling_session: EdgeSamplingSession | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, str], list[str]]:
+    """Sample each signal at ``edge + offset`` for the given edge times.
+
+    Shared by ``get_signals_by_cycle`` and ``sample_signals_on_edges``. A
+    missing signal is recorded in the returned error map rather than aborting
+    the whole sample (multi-signal calls stay best-effort per signal); other
+    backend errors propagate.
+    """
+    per_edge_signals: list[dict[str, Any]] = [dict() for _ in target_edges]
+    signal_errors: dict[str, str] = {}
+    transition_signals_truncated: list[str] = []
+    if not target_edges:
+        return per_edge_signals, signal_errors, transition_signals_truncated
+
+    range_start = target_edges[0]
+    range_end = target_edges[-1] + sample_offset_ps + 1
+    if sample_times is None:
+        sample_times = [edge_time + sample_offset_ps for edge_time in target_edges]
+
+    # AHB may surface HWRITE both as address payload and as the write-data
+    # qualifier. Sampling it twice is pure duplicate work and the per-edge dict
+    # would overwrite the first value with the same second value anyway.
+    for signal_path in dict.fromkeys(signal_paths):
+        check_cancelled()
+        try:
+            if sampling_session is not None:
+                transitions_result = sampling_session.signal_transitions(
+                    parser, signal_path, range_start, range_end
+                )
+            else:
+                transitions_result = _read_sweep_transition_result(
+                    parser,
+                    signal_path,
+                    range_start,
+                    range_end,
+                    kind="signal",
+                )
+            if transitions_result.get("truncated"):
+                transition_signals_truncated.append(signal_path)
+            transitions = transitions_result.get("transitions", [])
+            sampled_values = _sample_signal_values(
+                parser, signal_path, transitions, sample_times
+            )
+            for index, value in enumerate(sampled_values):
+                per_edge_signals[index][signal_path] = value
+        except KeyError as exc:
+            signal_errors[signal_path] = str(exc)
+    return per_edge_signals, signal_errors, transition_signals_truncated
+
+
+def _validate_clock_width(parser, clock_path: str) -> None:
+    width = parser.get_signal_width(clock_path)
+    if width != 1:
+        raise ValueError(f"clock signal must be 1-bit, got {width}-bit")
+
+
+def _extract_edge_times(transitions: list[dict[str, Any]], edge: str) -> list[int]:
+    edge_times: list[int] = []
+    prev_val: int | None = None
+    for index, transition in enumerate(transitions):
+        if not index % CANCEL_CHECK_STRIDE:
+            check_cancelled()
+        value = transition.get("value") or {}
+        cur_val = value.get("dec")
+        if cur_val not in {0, 1}:
+            prev_val = None
+            continue
+        if edge == "posedge" and prev_val == 0 and cur_val == 1:
+            edge_times.append(transition["time_ps"])
+        elif edge == "negedge" and prev_val == 1 and cur_val == 0:
+            edge_times.append(transition["time_ps"])
+        prev_val = cur_val
+    return edge_times
+
+
+def _compute_clock_period_ps(edge_times: list[int]) -> int | None:
+    if len(edge_times) < 2:
+        return None
+    deltas = [curr - prev for prev, curr in zip(edge_times, edge_times[1:]) if curr >= prev]
+    if not deltas:
+        return None
+    return int(median(deltas))
+
+
+def _sample_signal_values(
+    parser,
+    signal_path: str,
+    transitions: list[dict[str, Any]],
+    sample_times: list[int],
+) -> list[dict[str, Any]]:
+    raw_values = _lookup_signal_values(
+        parser, signal_path, transitions, sample_times
+    )
+    sampled_values: list[dict[str, Any]] = []
+    materialize_started = time.perf_counter()
+    try:
+        for value_index, value in enumerate(raw_values):
+            if not value_index % CANCEL_CHECK_STRIDE:
+                check_cancelled()
+            sampled_values.append(_normalize_signal_value(value))
+    finally:
+        materialize_ms = (time.perf_counter() - materialize_started) * 1000.0
+        operation_metrics.add_sweep_execution_timing(
+            "sample_materialize", materialize_ms
+        )
+        operation_metrics.add_sweep_cpu_timing(
+            "value_sample", materialize_ms
+        )
+    return sampled_values
+
+
+def _lookup_signal_values(
+    parser,
+    signal_path: str,
+    transitions: list[dict[str, Any]],
+    sample_times: list[int],
+) -> list[Any]:
+    """Return parser value references at monotonic sample times in linear time."""
+    if not sample_times:
+        return []
+    transition_times = [transition["time_ps"] for transition in transitions]
+    fallback_value = None
+    raw_values: list[Any] = []
+    transition_index = -1
+    next_transition = 0
+    previous_sample_time: int | None = None
+
+    lookup_started = time.perf_counter()
+    try:
+        for sample_index, sample_time in enumerate(sample_times):
+            if not sample_index % CANCEL_CHECK_STRIDE:
+                check_cancelled()
+            if (
+                previous_sample_time is not None
+                and sample_time < previous_sample_time
+            ):
+                # The production edge sampler is monotonic. Preserve the old
+                # private helper behavior for an unexpected decreasing input,
+                # then continue linearly from the restored cursor.
+                transition_index = bisect_right(
+                    transition_times, sample_time
+                ) - 1
+                next_transition = transition_index + 1
+            else:
+                while (
+                    next_transition < len(transition_times)
+                    and transition_times[next_transition] <= sample_time
+                ):
+                    transition_index = next_transition
+                    next_transition += 1
+            previous_sample_time = sample_time
+            if transition_index >= 0:
+                value = transitions[transition_index].get("value")
+            else:
+                if fallback_value is None:
+                    fallback_result = parser.get_value_at_time(
+                        signal_path, sample_times[0]
+                    )
+                    fallback_value = fallback_result.get("value")
+                value = fallback_value
+            raw_values.append(value)
+    finally:
+        lookup_ms = (time.perf_counter() - lookup_started) * 1000.0
+        operation_metrics.add_sweep_execution_timing(
+            "sample_lookup", lookup_ms
+        )
+        operation_metrics.add_sweep_cpu_timing("value_sample", lookup_ms)
+
+    return raw_values
+
+
+def _normalize_signal_value(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return {
+            "bin": value.get("bin"),
+            "hex": value.get("hex"),
+            "dec": value.get("dec"),
+        }
+    return {"bin": None, "hex": None, "dec": None}
+
+
+# ---------------------------------------------------------------------------
+# Sub-cycle transient annotation for get_signals_around_time
+# ---------------------------------------------------------------------------
+
+def _value_key(v: Any) -> Any:
+    """Comparable key for an enriched value dict ({bin,hex,dec}) or a raw value."""
+    if isinstance(v, dict):
+        return v.get("bin") or v.get("hex") or v.get("dec")
+    return v
+
+
+def annotate_center_transients(result: dict[str, Any]) -> dict[str, Any]:
+    """Flag a ``value_at_center`` that is a sub-cycle transient — a combinational
+    glitch at/just-after a clock edge that settles back within the same cycle.
+
+    The sampled value is CORRECT for that exact ps, but a model reading it as the
+    settled protocol value can misattribute: e.g. an interconnect owner-mux drives
+    its data output to the idle value for ~1ns at each clock edge (sequential
+    lock_owner updates on the edge while the combinational mux re-settles), so a
+    point sample at the edge reads idle/garbage that the design never actually
+    captures. Detect the unmistakable, zero-FP signature: the centre value is a
+    brief excursion that RETURNS to the value held just before it (X -> glitch -> X),
+    and add ``center_transient`` + ``center_settles_to`` + ``center_settle_ps`` so
+    the reader treats the settled value as the protocol value. Mutates and returns
+    ``result``. Best-effort: only fires when the window captured the settle."""
+    center = result.get("center_time_ps")
+    if center is None:
+        return result
+    flagged: list[str] = []
+    for path, sig in (result.get("signals") or {}).items():
+        if not isinstance(sig, dict) or sig.get("error"):
+            continue
+        vc = sig.get("value_at_center")
+        trs = sig.get("transitions_in_window") or []
+        pre = sig.get("pre_window_transitions") or []
+        if vc is None or not trs:
+            continue
+        trs_sorted = sorted(trs, key=lambda t: t["time_ps"])
+        after = [t for t in trs_sorted if t["time_ps"] > center]
+        before = [t for t in trs_sorted if t["time_ps"] <= center]
+        if not after:
+            continue
+        t_next = after[0]
+        # value the signal held just BEFORE the centre value was entered
+        if len(before) >= 2:
+            v_prev = before[-2]["value"]
+        elif pre:
+            v_prev = sorted(pre, key=lambda t: t["time_ps"])[-1]["value"]
+        else:
+            continue  # cannot establish the pre-value -> stay conservative
+        kc, kn, kp = _value_key(vc), _value_key(t_next["value"]), _value_key(v_prev)
+        # dip-and-return: centre differs from a value that is the same before & after
+        if kc != kn and kn == kp:
+            sig["center_transient"] = True
+            sig["center_settles_to"] = t_next["value"]
+            sig["center_settle_ps"] = t_next["time_ps"]
+            flagged.append(path)
+    if flagged:
+        result["transient_note"] = (
+            "value_at_center is a SUB-CYCLE TRANSIENT (glitch) for: "
+            + ", ".join(flagged)
+            + " — it settles back to center_settles_to at center_settle_ps within the "
+            "same cycle. Treat the SETTLED value as the protocol value; the edge "
+            "sample is likely a combinational glitch (e.g. an interconnect mux "
+            "re-settling at the clock edge), not what the design captures. Do not "
+            "attribute a root cause to this edge value alone."
+        )
+    return result

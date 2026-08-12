@@ -1,0 +1,195 @@
+"""Privacy and timing tests for per-call waveform operation metrics."""
+
+import time
+
+from src import operation_metrics
+
+
+def test_snapshot_exposes_only_public_fields():
+    metrics = operation_metrics.OperationMetrics()
+    operation_metrics.set_value("search_count", 3, metrics)
+    operation_metrics.set_value("signal_path", "top.secret", metrics)
+    operation_metrics.set_value("scope", "top.customer", metrics)
+    operation_metrics.set_value("sweep_phase", "top.secret", metrics)
+    operation_metrics.set_value("wave_lock_wait_ms", "top.secret", metrics)
+
+    assert operation_metrics.snapshot(metrics) == {"search_count": 3}
+
+
+def test_search_aggregate_has_count_total_and_max_only():
+    metrics = operation_metrics.OperationMetrics()
+    token = operation_metrics.push(metrics)
+    try:
+        operation_metrics.record_search(2.25)
+        operation_metrics.record_search(5.75)
+    finally:
+        operation_metrics.pop(token)
+
+    assert operation_metrics.snapshot(metrics) == {
+        "search_count": 2,
+        "search_total_ms": 8.0,
+        "search_max_ms": 5.8,
+    }
+
+
+def test_preemption_latency_is_published_only_after_cancel_observed():
+    metrics = operation_metrics.OperationMetrics()
+    token = operation_metrics.push(metrics)
+    try:
+        operation_metrics.mark_preemption_requested(metrics)
+        assert "preemption_to_cancel_ms" not in operation_metrics.snapshot(metrics)
+        time.sleep(0.001)
+        operation_metrics.mark_cancel_observed()
+    finally:
+        operation_metrics.pop(token)
+
+    snapshot = operation_metrics.snapshot(metrics)
+    assert snapshot["preemption_to_cancel_ms"] >= 0
+    assert "_preemption_requested_at" not in snapshot
+
+
+def test_sweep_interface_metrics_are_aggregate_and_privacy_safe():
+    metrics = operation_metrics.OperationMetrics()
+    token = operation_metrics.push(metrics)
+    try:
+        operation_metrics.set_value("sweep_interfaces_planned", 3)
+        operation_metrics.set_value("sweep_unique_clocks", 1)
+        operation_metrics.set_value("sweep_unique_signals", 9)
+        operation_metrics.record_sweep_interface(12.25, completed=True)
+        operation_metrics.record_sweep_interface(
+            7.75, completed=True, transition_truncated=True
+        )
+        operation_metrics.record_sweep_interface(4.0, completed=False)
+        operation_metrics.set_value("interface_name", "top.customer.secret")
+    finally:
+        operation_metrics.pop(token)
+
+    assert operation_metrics.snapshot(metrics) == {
+        "sweep_interfaces_planned": 3,
+        "sweep_unique_clocks": 1,
+        "sweep_unique_signals": 9,
+        "sweep_interfaces_attempted": 3,
+        "sweep_inspect_total_ms": 24.0,
+        "sweep_inspect_max_ms": 12.2,
+        "sweep_interfaces_completed": 2,
+        "sweep_transition_truncated_interfaces": 1,
+    }
+
+
+def test_sweep_subphase_timings_require_fixed_labels_and_active_sweep():
+    metrics = operation_metrics.OperationMetrics()
+    token = operation_metrics.push(metrics)
+    try:
+        operation_metrics.record_sweep_transition_read("clock", 99.0)
+        operation_metrics.set_value("_sweep_active", True)
+        operation_metrics.record_sweep_transition_read("clock", 2.0)
+        operation_metrics.record_sweep_transition_read("signal", 5.0)
+        operation_metrics.record_sweep_transition_read("top.secret", 1000.0)
+        operation_metrics.add_sweep_cpu_timing("edge_extract", 1.5)
+        operation_metrics.add_sweep_cpu_timing("value_sample", 3.5)
+        operation_metrics.add_sweep_cpu_timing("top.secret", 1000.0)
+        operation_metrics.add_sweep_execution_timing("path_resolution", 0.5)
+        operation_metrics.add_sweep_execution_timing("sample_lookup", 2.5)
+        operation_metrics.add_sweep_execution_timing("sample_materialize", 1.0)
+        operation_metrics.add_sweep_execution_timing("protocol_scan", 4.0)
+        operation_metrics.add_sweep_execution_timing("write_data_scan", 0.75)
+        operation_metrics.add_sweep_execution_timing("top.secret", 1000.0)
+        operation_metrics.record_sweep_reuse_hit("clock")
+        operation_metrics.record_sweep_reuse_hit("signal")
+        operation_metrics.record_sweep_reuse_hit("top.secret")
+    finally:
+        operation_metrics.pop(token)
+
+    assert operation_metrics.snapshot(metrics) == {
+        "sweep_clock_read_count": 1,
+        "sweep_clock_read_total_ms": 2.0,
+        "sweep_clock_read_max_ms": 2.0,
+        "sweep_signal_read_count": 1,
+        "sweep_signal_read_total_ms": 5.0,
+        "sweep_signal_read_max_ms": 5.0,
+        "sweep_edge_extract_total_ms": 1.5,
+        "sweep_value_sample_total_ms": 3.5,
+        "sweep_path_resolution_total_ms": 0.5,
+        "sweep_sample_lookup_total_ms": 2.5,
+        "sweep_sample_materialize_total_ms": 1.0,
+        "sweep_protocol_scan_total_ms": 4.0,
+        "sweep_write_data_scan_total_ms": 0.8,
+        "sweep_clock_reuse_hits": 1,
+        "sweep_signal_reuse_hits": 1,
+    }
+
+
+def test_native_group_metrics_are_aggregate_and_fixed_label_only(monkeypatch):
+    metrics = operation_metrics.OperationMetrics()
+    token = operation_metrics.push(metrics)
+    operation_metrics.set_value("_sweep_active", True)
+    monkeypatch.setattr(operation_metrics, "read_process_rss_kib", lambda: 100)
+    try:
+        operation_metrics.record_sweep_native_group_begin({
+            "signal_count": 4,
+            "lookup_ns": 1_000_000,
+            "add_signal_ns": 2_000_000,
+            "load_ns": 3_000_000,
+        })
+        operation_metrics.record_sweep_native_transition({
+            "create_handle_ns": 4_000_000,
+            "seek_ns": 5_000_000,
+            "traverse_format_ns": 6_000_000,
+            "free_handle_ns": 7_000_000,
+            "transition_count": 8,
+            "output_bytes": 9,
+            "truncated": 1,
+        })
+        operation_metrics.record_sweep_native_transition({
+            "load_ns": 11_000_000,
+            "transition_count": 2,
+        }, standalone_load=True)
+        operation_metrics.record_sweep_native_group_end({
+            "unload_ns": 10_000_000,
+        })
+        operation_metrics.record_sweep_native_group_fallback(
+            "unsupported", signal_count=5
+        )
+        operation_metrics.record_sweep_native_group_fallback("top.secret")
+        operation_metrics.record_sweep_group_pack(clock_count=2, chunked=True)
+        operation_metrics.record_sweep_group_pack(clock_count=1)
+        operation_metrics.record_sweep_cache_peak(2, 20)
+        operation_metrics.record_sweep_sampling_shape(10, 4)
+        operation_metrics.record_sweep_sampling_shape(5, 2)
+        operation_metrics.record_sweep_rss(phase="start")
+        monkeypatch.setattr(operation_metrics, "read_process_rss_kib", lambda: 160)
+        operation_metrics.record_sweep_rss(phase="end")
+    finally:
+        operation_metrics.pop(token)
+
+    snapshot = operation_metrics.snapshot(metrics)
+    assert snapshot["sweep_native_group_count"] == 1
+    assert snapshot["sweep_native_group_signal_total"] == 4
+    assert snapshot["sweep_native_load_total_ms"] == 14.0
+    assert snapshot["sweep_native_group_load_call_count"] == 1
+    assert snapshot["sweep_native_group_load_total_ms"] == 3.0
+    assert snapshot["sweep_native_group_load_max_ms"] == 3.0
+    assert snapshot["sweep_native_standalone_load_call_count"] == 1
+    assert snapshot["sweep_native_standalone_load_total_ms"] == 11.0
+    assert snapshot["sweep_native_standalone_load_max_ms"] == 11.0
+    assert snapshot["sweep_native_traverse_format_total_ms"] == 6.0
+    assert snapshot["sweep_native_unload_total_ms"] == 10.0
+    assert snapshot["sweep_native_transition_count"] == 10
+    assert snapshot["sweep_native_output_bytes"] == 9
+    assert snapshot["sweep_native_truncated_calls"] == 1
+    assert snapshot["sweep_native_group_fallback_count"] == 1
+    assert snapshot["sweep_native_group_unsupported_count"] == 1
+    assert snapshot["sweep_native_fallback_signal_total"] == 5
+    assert snapshot["sweep_group_pack_count"] == 2
+    assert snapshot["sweep_group_pack_clock_total"] == 3
+    assert snapshot["sweep_group_chunk_count"] == 1
+    assert snapshot["sweep_cached_signal_results_peak"] == 2
+    assert snapshot["sweep_cached_transition_count_peak"] == 20
+    assert snapshot["sweep_sample_edges_total"] == 15
+    assert snapshot["sweep_sample_edges_max"] == 10
+    assert snapshot["sweep_sample_values_total"] == 50
+    assert snapshot["sweep_sample_values_max"] == 40
+    assert snapshot["sweep_rss_start_kib"] == 100
+    assert snapshot["sweep_rss_peak_kib"] == 160
+    assert snapshot["sweep_rss_end_kib"] == 160
+    assert snapshot["sweep_rss_peak_delta_kib"] == 60

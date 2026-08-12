@@ -24,7 +24,16 @@ extraResources:
   - from: resources/built-in-extension
     to: built-in-extension
     filter: ["**/*"]
-  # engine/oh-my-pi is no longer packaged as extraResources.
+  - from: engine/traceweave
+    to: traceweave
+    filter:
+      - "**/*"
+      - "!**/__pycache__/**"
+      - "!**/*.pyc"
+      - "!**/.pytest_cache/**"
+      - "!third_party/**"
+      - "!libfsdb_wrapper.so"
+      # engine/oh-my-pi is no longer packaged as extraResources.
   # The runner is pre-compiled into a standalone binary in resources/binaries/.
   # This eliminates the need to bundle the entire engine source + node_modules.
 asarUnpack:

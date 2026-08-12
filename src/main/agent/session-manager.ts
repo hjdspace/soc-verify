@@ -23,6 +23,8 @@ import { HostUriRouter } from '../host/host-uris';
 import type { CoverageManager } from '../coverage/coverage-manager';
 import type { CaseStatsService } from '../case/case-stats-service';
 import { contextSettings } from './context-settings';
+import { ensureBuiltinMcpServers } from '../mcp/mcp-config';
+import { ensureTraceweaveDefaultMcp } from '../mcp/traceweave-paths';
 
 const MAX_CONCURRENT_SESSIONS = 10;
 const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -342,6 +344,23 @@ export class SessionManagerImpl extends EventEmitter {
       await ensureOfficecliOnPath(env);
     } catch (err) {
       console.warn(`[agent:session:${sessionId}] officecli PATH injection failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // Ensure built-in MCP servers (TraceWeave) are registered in the
+    // user-level MCP config so the omp engine discovers them on init.
+    // This is idempotent: if the server is already in the config, it is
+    // not overridden. If TraceWeave or Python is unavailable, it is
+    // silently skipped (graceful degradation).
+    try {
+      const traceweave = ensureTraceweaveDefaultMcp();
+      if (traceweave) {
+        const modified = await ensureBuiltinMcpServers([traceweave]);
+        if (modified) {
+          console.log(`[agent:session:${sessionId}] registered built-in MCP server: ${traceweave.name}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[agent:session:${sessionId}] built-in MCP registration failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
     // Build init config

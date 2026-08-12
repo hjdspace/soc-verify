@@ -273,3 +273,41 @@ export async function setMcpConfig(
   await mkdir(dir, { recursive: true });
   await writeFile(configPath, JSON.stringify(configWithSchema, null, 2) + '\n', 'utf-8');
 }
+
+/**
+ * Ensure built-in MCP servers (like TraceWeave) are registered in the
+ * user-level MCP config (`~/.omp/mcp.json`).
+ *
+ * This merges built-in server configs into the existing user-level config
+ * without removing or overriding user-configured servers. If a built-in
+ * server name already exists in the config, the user's entry is preserved
+ * (the user may have customized it or explicitly disabled it).
+ *
+ * @param builtinServers  Map of server name → config to inject as defaults.
+ * @returns true if the config file was modified (new servers were added).
+ */
+export async function ensureBuiltinMcpServers(
+  builtinServers: Array<{ name: string; config: McpServerConfig }>,
+): Promise<boolean> {
+  if (builtinServers.length === 0) return false;
+
+  const configPath = userMcpConfigPath();
+  const existing = await readConfigFile(configPath);
+  const servers = existing.mcpServers ?? {};
+  let modified = false;
+
+  for (const { name, config } of builtinServers) {
+    // Don't override if the user already configured this server
+    if (!(name in servers)) {
+      servers[name] = config;
+      modified = true;
+    }
+  }
+
+  if (modified) {
+    existing.mcpServers = servers;
+    await setMcpConfig('', existing, 'user');
+  }
+
+  return modified;
+}
