@@ -34,7 +34,7 @@ import type { ContextBreakdown, ContextUsage } from '@shared/context-management'
 
 export const sessionRouter = t.router({
   create: t.procedure
-    .input((raw): { projectId: string; cwd: string; provider?: string; model?: string; providerId?: string } => {
+    .input((raw): { projectId: string; cwd: string; provider?: string; model?: string; providerId?: string; approvalMode?: 'always-ask' | 'write' | 'yolo' } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string' || typeof r.cwd !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and cwd are required' });
@@ -45,6 +45,7 @@ export const sessionRouter = t.router({
         provider: typeof r.provider === 'string' ? r.provider : undefined,
         model: typeof r.model === 'string' ? r.model : undefined,
         providerId: typeof r.providerId === 'string' ? r.providerId : undefined,
+        approvalMode: typeof r.approvalMode === 'string' ? (r.approvalMode as 'always-ask' | 'write' | 'yolo') : undefined,
       };
     })
     .mutation(async ({ input }) => {
@@ -72,6 +73,7 @@ export const sessionRouter = t.router({
         model: input.model,
         includeCaseStats: true,
         ensurePlugins: false, // already loaded above
+        approvalMode: input.approvalMode,
       });
 
       const { sessionId, provider, model: resolvedModel, providerId } = ctx;
@@ -492,7 +494,7 @@ export const sessionRouter = t.router({
     }),
 
   restore: t.procedure
-    .input((raw): { projectId: string; cwd: string; sessionId: string; name?: string; providerId?: string } => {
+    .input((raw): { projectId: string; cwd: string; sessionId: string; name?: string; providerId?: string; approvalMode?: 'always-ask' | 'write' | 'yolo' } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string' || typeof r.cwd !== 'string' || typeof r.sessionId !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, cwd and sessionId are required' });
@@ -503,6 +505,7 @@ export const sessionRouter = t.router({
         sessionId: r.sessionId,
         name: typeof r.name === 'string' ? r.name : undefined,
         providerId: typeof r.providerId === 'string' ? r.providerId : undefined,
+        approvalMode: typeof r.approvalMode === 'string' ? (r.approvalMode as 'always-ask' | 'write' | 'yolo') : undefined,
       };
     })
     .mutation(async ({ input }) => {
@@ -522,6 +525,7 @@ export const sessionRouter = t.router({
         resumeSessionId: persisted?.ompSessionId ?? input.sessionId,
         persistedSessionId: input.sessionId,
         includeCaseStats: true,
+        approvalMode: input.approvalMode,
       });
       const { sessionId, provider, model: resolvedModelId, providerId } = ctx;
 
@@ -710,5 +714,48 @@ export const sessionRouter = t.router({
       await addSession(project.rootPath, persisted);
 
       return { sessionId, name: sessionName };
+    }),
+
+  // ── 工具审批 ──────────────────────────────────────────
+
+  resolveApproval: t.procedure
+    .input((raw): { requestId: string; approved: boolean } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.requestId !== 'string' || typeof r.approved !== 'boolean') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'requestId (string) and approved (boolean) are required' });
+      }
+      return { requestId: r.requestId, approved: r.approved };
+    })
+    .mutation(async ({ input }) => {
+      const resolved = sessionManager.resolveApproval(input.requestId, input.approved);
+      if (!resolved) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Approval request not found or already resolved' });
+      }
+      return { ok: true };
+    }),
+
+  setApprovalMode: t.procedure
+    .input((raw): { sessionId: string; approvalMode: 'always-ask' | 'write' | 'yolo' } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.sessionId !== 'string' || typeof r.approvalMode !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'sessionId and approvalMode are required' });
+      }
+      const validModes = ['always-ask', 'write', 'yolo'];
+      if (!validModes.includes(r.approvalMode)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: `approvalMode must be one of: ${validModes.join(', ')}` });
+      }
+      return { sessionId: r.sessionId, approvalMode: r.approvalMode as 'always-ask' | 'write' | 'yolo' };
+    })
+    .mutation(async ({ input }) => {
+      // Dynamically update the approval mode on the running session.
+      // The runner re-wraps the tools with the new approval mode.
+      // If the session doesn't exist yet (lazy creation), the mode will be
+      // applied when the session is created via ensureRuntimeSession.
+      try {
+        await sessionManager.setApprovalMode(input.sessionId, input.approvalMode);
+      } catch {
+        // Session not running — mode will be applied on next session create/restore.
+      }
+      return { ok: true };
     }),
 });
