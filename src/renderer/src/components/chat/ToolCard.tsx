@@ -19,8 +19,12 @@
  * - fallback: generic JSON display
  */
 import { useState, useEffect, useMemo, useCallback, type ReactNode } from 'react';
-import { Loader2, ChevronDown } from 'lucide-react';
+import { Loader2, ChevronDown, Terminal } from 'lucide-react';
 import { useDiffReviewStore } from '@renderer/stores/diff-review';
+import { useProjectStore } from '@renderer/stores/project';
+import { useTerminalStore } from '@renderer/stores/terminal';
+import { trpc } from '@renderer/lib/trpc';
+import { useToastStore } from '@renderer/stores/toast';
 import hljs from 'highlight.js';
 import { cn } from '@renderer/lib/utils';
 import type { ChatMessage } from '@renderer/stores/session';
@@ -217,6 +221,7 @@ function buildSummary(message: ChatMessage): ReactNode {
     case 'apply_patch':
     case 'ast_edit': {
       const path = argStr(args, 'path', 'file_path') ?? extractPatchPath(args);
+      if (!path) return <>{isExecuting ? 'editing...' : 'edited'}</>;
       return <><span className="text-foreground">{shortenPath(path)}</span> {' \u00b7 '} {isExecuting ? 'editing...' : 'edited'}</>;
     }
     case 'bash': {
@@ -300,6 +305,12 @@ function buildSummary(message: ChatMessage): ReactNode {
       const runId = argStr(args, 'runId') ?? '';
       return <><span className="text-foreground">{runId}</span></>;
     }
+    case 'get_sim_options_schema': {
+      if (isExecuting) return <>loading schema...</>;
+      const parsed = tryParseJSON(resultText);
+      const count = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.keys(parsed).length : 0;
+      return <>{count > 0 ? `${count} options` : 'no options'}</>;
+    }
     default: {
       if (isExecuting) return <span className="text-foreground/60">executing...</span>;
       if (!resultText) return 'no output';
@@ -374,9 +385,11 @@ function ToolBody({ message, isExecuting }: { message: ChatMessage; isExecuting:
         { key: 'name', label: 'Case' },
         { key: 'subsys', label: 'Subsystem' },
         { key: 'status', label: 'Status', type: 'badge' as const },
-      ]} />;
+      ]} emptyMessage="未找到用例" />;
     case 'run_simulation':
-      return <SimRunBody args={message.toolArgs} resultText={resultText} />;
+      return <SimRunBody args={message.toolArgs} resultText={resultText} message={message} />;
+    case 'get_sim_options_schema':
+      return <SimOptionsSchemaBody resultText={resultText} />;
     case 'get_coverage':
       return <CoverageBody resultText={resultText} />;
     case 'get_compile_errors':
@@ -472,17 +485,55 @@ function WriteBody({ args, resultText }: { args: unknown; resultText: string }) 
 
 // ── Edit ────────────────────────────────────────────────
 
+/** Extract old/new text from omp edit tool args, handling the `edits` array format. */
+function extractEditTexts(args: unknown): { oldText: string | undefined; newText: string | undefined } {
+  // Try flat arg names first (oldText, old_string, old_text, find)
+  const flatOld = argStr(args, 'oldText', 'old_string', 'old_text', 'find');
+  const flatNew = argStr(args, 'newText', 'new_string', 'new_text', 'replace');
+  if (flatOld != null || flatNew != null) {
+    return { oldText: flatOld, newText: flatNew };
+  }
+
+  // omp edit tool uses { path, edits: [{ old_text, new_text }] }
+  const editsVal = argVal(args, 'edits');
+  if (Array.isArray(editsVal) && editsVal.length > 0) {
+    const firstEdit = editsVal[0];
+    if (firstEdit && typeof firstEdit === 'object') {
+      const editObj = firstEdit as Record<string, unknown>;
+      const oldText = typeof editObj.old_text === 'string' ? editObj.old_text
+        : typeof editObj.oldText === 'string' ? editObj.oldText
+        : typeof editObj.old_string === 'string' ? editObj.old_string
+        : undefined;
+      const newText = typeof editObj.new_text === 'string' ? editObj.new_text
+        : typeof editObj.newText === 'string' ? editObj.newText
+        : typeof editObj.new_string === 'string' ? editObj.new_string
+        : undefined;
+      if (oldText != null || newText != null) {
+        return { oldText, newText };
+      }
+    }
+  }
+  return { oldText: undefined, newText: undefined };
+}
+
 function EditBody({ args, resultText }: { args: unknown; resultText: string }) {
   const filePath = argStr(args, 'path', 'file_path') ?? extractPatchPath(args);
   const language = detectLanguage(filePath);
-  const oldText = argStr(args, 'oldText', 'old_string', 'find');
-  const newText = argStr(args, 'newText', 'new_string', 'replace');
+  const { oldText, newText } = extractEditTexts(args);
 
   if (oldText != null && newText != null) {
     const diff = computeSimpleDiff(oldText, newText);
+    // Show file path header
     return (
-      <div className="max-h-80 overflow-auto text-[11px] leading-relaxed">
-        {diff.map((line, i) => <DiffLineView key={i} line={line} language={language} />)}
+      <div className="text-[11px] leading-relaxed">
+        {filePath && (
+          <div className="border-b border-border/30 bg-background/50 px-2.5 py-0.5 text-[10px] text-muted-foreground/60">
+            {filePath}
+          </div>
+        )}
+        <div className="max-h-80 overflow-auto">
+          {diff.map((line, i) => <DiffLineView key={i} line={line} language={language} />)}
+        </div>
       </div>
     );
   }
@@ -497,13 +548,20 @@ function EditBody({ args, resultText }: { args: unknown; resultText: string }) {
       return { type: 'ctx' as const, content: content.startsWith(' ') ? content.slice(1) : content };
     });
     return (
-      <div className="max-h-80 overflow-auto text-[11px] leading-relaxed">
-        {lines.map((line, i) => {
-          if (line.type === 'hunk') {
-            return <div key={i} className="bg-secondary/40 px-2.5 py-0.5 text-[10px] text-muted-foreground/70">{line.content}</div>;
-          }
-          return <DiffLineView key={i} line={line} language={language} />;
-        })}
+      <div className="text-[11px] leading-relaxed">
+        {filePath && (
+          <div className="border-b border-border/30 bg-background/50 px-2.5 py-0.5 text-[10px] text-muted-foreground/60">
+            {filePath}
+          </div>
+        )}
+        <div className="max-h-80 overflow-auto">
+          {lines.map((line, i) => {
+            if (line.type === 'hunk') {
+              return <div key={i} className="bg-secondary/40 px-2.5 py-0.5 text-[10px] text-muted-foreground/70">{line.content}</div>;
+            }
+            return <DiffLineView key={i} line={line} language={language} />;
+          })}
+        </div>
       </div>
     );
   }
@@ -797,10 +855,15 @@ function AskBody({ args }: { args: unknown }) {
 
 type TableColumn = { key: string; label: string; type?: 'badge' | 'text' };
 
-function HostTableBody({ resultText, columns }: { resultText: string; columns: TableColumn[] }) {
+function HostTableBody({ resultText, columns, emptyMessage }: { resultText: string; columns: TableColumn[]; emptyMessage?: string }) {
   const items = parseJsonArray(resultText);
   if (!items || items.length === 0) {
-    return <pre className="max-h-72 overflow-auto px-2.5 py-1.5 text-[11px] text-muted-foreground">{resultText || 'no data'}</pre>;
+    // Check if result is an error object
+    const parsed = tryParseJSON(resultText);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'error' in parsed) {
+      return <div className="px-2.5 py-2 text-[11px] text-status-fail-foreground">{String((parsed as Record<string, unknown>).error)}</div>;
+    }
+    return <div className="px-2.5 py-2 text-[11px] text-muted-foreground">{emptyMessage ?? '无数据'}</div>;
   }
   return (
     <div className="max-h-80 overflow-auto text-[11px] leading-relaxed">
@@ -844,7 +907,7 @@ function StatusBadge({ status }: { status: string }) {
 
 // ── Simulation Run ──────────────────────────────────────
 
-function SimRunBody({ args, resultText }: { args: unknown; resultText: string }) {
+function SimRunBody({ args, resultText }: { args: unknown; resultText: string; message: ChatMessage }) {
   const parsed = tryParseJSON(resultText) as Record<string, unknown> | null;
   const caseId = argStr(args, 'caseId', 'case', 'testcase') ?? '';
   const subsys = argStr(args, 'subsys') ?? '';
@@ -852,12 +915,60 @@ function SimRunBody({ args, resultText }: { args: unknown; resultText: string })
   const runId = parsed ? String(parsed.runId ?? parsed.run_id ?? '') : '';
   const seed = parsed ? String(parsed.seed ?? '') : '';
   const simTime = parsed ? String(parsed.simTime ?? parsed.sim_time ?? '') : '';
+  const isError = parsed && 'error' in parsed;
+
+  // Build a display command from the args
+  const cmdParts = ['runsim', '-cmd', 'run'];
+  if (caseId) cmdParts.push('-case', caseId);
+  if (subsys) cmdParts.push('-subsys', subsys);
+  const optionsVal = argVal(args, 'options');
+  if (optionsVal && typeof optionsVal === 'object') {
+    for (const [k, v] of Object.entries(optionsVal as Record<string, unknown>)) {
+      if (v !== undefined && v !== null && v !== '') {
+        cmdParts.push(`-${k}`, String(v));
+      }
+    }
+  }
+  const displayCommand = cmdParts.join(' ');
+
+  const handleOpenInTerminal = useCallback(() => {
+    const projectId = useProjectStore.getState().currentProjectId;
+    if (!projectId) {
+      useToastStore.getState().warning('未打开项目', '需要先打开项目才能在终端中运行仿真。');
+      return;
+    }
+    trpc.simulation.runInTerminal.mutate({
+      projectId,
+      options: {
+        caseId,
+        caseName: caseId,
+        subsys,
+        options: (typeof optionsVal === 'object' && optionsVal !== null ? optionsVal : {}) as Record<string, unknown>,
+      },
+    })
+      .then((result) => {
+        useTerminalStore.getState().createTabForSession(
+          result.terminalId,
+          `sim: ${caseId}`,
+          result.cwd,
+          (result as { backend?: string }).backend === 'log-mode',
+          (result as { warning?: string | null }).warning ?? null,
+        );
+      })
+      .catch((err) => {
+        useToastStore.getState().error('终端启动失败', err instanceof Error ? err.message : String(err));
+      });
+  }, [caseId, subsys, optionsVal]);
 
   return (
     <div className="px-2.5 py-2 text-[11px] leading-relaxed">
       <div className="mb-1.5 flex items-center gap-2">
         <span className="font-semibold text-foreground">{subsys && caseId ? `${subsys}/${caseId}` : caseId || 'simulation'}</span>
         {status && <StatusBadge status={status} />}
+      </div>
+      {/* Command display */}
+      <div className="mb-1.5 rounded border border-border/40 bg-background/50 px-2 py-1 font-mono text-[10px] text-violet-foreground break-all">
+        <span className="text-muted-foreground/50">$ </span>{displayCommand}
       </div>
       {(runId || seed || simTime) && (
         <div className="flex flex-wrap gap-3 text-[10px] text-muted-foreground/60">
@@ -866,7 +977,87 @@ function SimRunBody({ args, resultText }: { args: unknown; resultText: string })
           {simTime && <span>sim_time: {simTime}</span>}
         </div>
       )}
-      {!parsed && <pre className="mt-1 text-muted-foreground">{resultText}</pre>}
+      {isError && (
+        <div className="mt-1 text-status-fail-foreground">{String(parsed!.error)}</div>
+      )}
+      {!parsed && !isError && <pre className="mt-1 text-muted-foreground">{resultText}</pre>}
+      {/* Open in terminal button */}
+      {!isError && (
+        <button
+          onClick={handleOpenInTerminal}
+          className="mt-1.5 flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          title="在终端中运行此仿真命令"
+        >
+          <Terminal className="h-2.5 w-2.5" />
+          在终端中运行
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ── Sim Options Schema ──────────────────────────────────
+
+function SimOptionsSchemaBody({ resultText }: { resultText: string }) {
+  const parsed = tryParseJSON(resultText) as Record<string, unknown> | null;
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return <GenericBody args={null} resultText={resultText} />;
+  }
+
+  const fields = Object.entries(parsed).map(([key, val]) => {
+    const v = (val ?? {}) as Record<string, unknown>;
+    return {
+      key,
+      label: typeof v.label === 'string' ? v.label : key,
+      type: typeof v.type === 'string' ? v.type : 'string',
+      default: v.default,
+      enumValues: Array.isArray(v.enumValues) ? v.enumValues as string[] : undefined,
+      description: typeof v.description === 'string' ? v.description : undefined,
+    };
+  });
+
+  if (fields.length === 0) {
+    return <div className="px-2.5 py-2 text-[11px] text-muted-foreground">无仿真选项</div>;
+  }
+
+  return (
+    <div className="max-h-80 overflow-auto text-[11px] leading-relaxed">
+      <table className="w-full border-collapse">
+        <thead>
+          <tr className="border-b border-border/40 bg-background/50">
+            <th className="px-2.5 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/60">Option</th>
+            <th className="px-2.5 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/60">Type</th>
+            <th className="px-2.5 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/60">Default</th>
+            <th className="px-2.5 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/60">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          {fields.map((f) => (
+            <tr key={f.key} className="border-b border-border/30 last:border-b-0">
+              <td className="px-2.5 py-1">
+                <span className="font-mono text-foreground">{f.key}</span>
+                <span className="ml-1 text-[10px] text-muted-foreground/50">{f.label !== f.key ? f.label : ''}</span>
+              </td>
+              <td className="px-2.5 py-1">
+                <span className="rounded bg-secondary/60 px-1 py-0.5 text-[9px] font-medium text-muted-foreground">{f.type}</span>
+              </td>
+              <td className="px-2.5 py-1 font-mono text-[10px] text-muted-foreground">
+                {f.enumValues ? (
+                  <span className="text-chart-1">{f.enumValues.join(' | ')}</span>
+                ) : f.default !== undefined ? (
+                  String(f.default)
+                ) : (
+                  <span className="text-muted-foreground/40">—</span>
+                )}
+              </td>
+              <td className="px-2.5 py-1 text-[10px] text-muted-foreground/70">
+                {f.description ?? ''}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
