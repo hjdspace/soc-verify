@@ -3,6 +3,7 @@ import { spawn, ChildProcess, execSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
+import { userInfo } from 'node:os';
 import type * as NodePty from 'node-pty';
 
 /** Which PTY backend a terminal session is using. */
@@ -52,46 +53,53 @@ let ptyLoadResult: PtyLoadResult = { module: null, error: null };
 let ptyLoadAttempted = false;
 
 /**
- * Find a usable shell binary by checking absolute paths first, then PATH.
+ * Find a usable shell binary from the account configuration and known paths.
  *
- * On Linux AppImage, the PATH may not include `/bin` or `/usr/bin`, so
- * relying on `spawn('bash')` can fail with ENOENT. This function probes
- * known absolute locations before falling back to a PATH lookup.
+ * On Linux AppImage, `$SHELL` may be missing when launched from the desktop.
+ * The account login shell is therefore authoritative for interactive terminals.
  *
  * @param preferred - Optional list of preferred shell paths to check first
  *                    (e.g. `['/bin/csh', '/usr/bin/csh']` for EDA environments).
  */
-function findShell(preferred?: string[]): string {
-  if (process.platform === 'win32') {
-    return 'powershell.exe';
+export function resolveInteractiveShell(
+  platform: NodeJS.Platform,
+  inheritedShell: string | undefined,
+  accountShell: string | null,
+  pathExists: (path: string) => boolean = existsSync,
+): string {
+  if (platform === 'win32') return 'powershell.exe';
+
+  if (accountShell && pathExists(accountShell)) return accountShell;
+  if (inheritedShell && pathExists(inheritedShell)) return inheritedShell;
+
+  const candidates = ['/bin/bash', '/usr/bin/bash', '/usr/local/bin/bash', '/bin/sh', '/usr/bin/sh'];
+  return candidates.find(pathExists) ?? 'bash';
+}
+
+function getAccountLoginShell(): string | null {
+  if (process.platform === 'win32') return null;
+  try {
+    return userInfo().shell;
+  } catch {
+    return null;
   }
+}
+
+function findShell(preferred?: string[]): string {
+  if (process.platform === 'win32') return 'powershell.exe';
+
   // Check preferred shells first (e.g. csh for EDA/simulation environments)
   if (preferred && preferred.length > 0) {
     for (const c of preferred) {
       if (existsSync(c)) return c;
     }
   }
-  // Check the user's login shell from $SHELL (e.g. /bin/zsh)
-  // This ensures the interactive terminal uses the same shell the user
-  // configured, including sourcing .zshrc / .bashrc / .cshrc properly.
-  const userShell = process.env.SHELL;
-  if (userShell && existsSync(userShell)) {
-    return userShell;
-  }
-  // Default candidate shells in priority order — prefer zsh, then bash, then sh
-  const candidates = ['/bin/zsh', '/usr/bin/zsh', '/usr/local/bin/zsh', '/bin/bash', '/usr/bin/bash', '/usr/local/bin/bash', '/bin/sh', '/usr/bin/sh'];
-  for (const c of candidates) {
-    if (existsSync(c)) return c;
-  }
-  // Last resort: try `which bash` / `which sh` via execSync
-  try {
-    const which = execSync('which bash 2>/dev/null || which sh 2>/dev/null', { encoding: 'utf-8' }).trim();
-    if (which && existsSync(which)) return which;
-  } catch {
-    // ignore
-  }
-  // Absolute last resort — return 'bash' and hope PATH works
-  return 'bash';
+
+  return resolveInteractiveShell(
+    process.platform,
+    process.env.SHELL,
+    getAccountLoginShell(),
+  );
 }
 
 function resolveBashRcPath(): string {
@@ -118,8 +126,8 @@ export function getInteractiveShellArgs(
   // Zsh: start as a login + interactive shell so .zprofile and .zshrc are sourced
   if (isZsh) return ['-l', '-i'];
 
-  // Csh/tcsh: start as a login + interactive shell so .login and .cshrc are sourced
-  if (isCsh) return ['-l', '-i'];
+  // Csh/tcsh: -l must be the only option and loads .cshrc plus .login.
+  if (isCsh) return ['-l'];
 
   return [];
 }
@@ -536,7 +544,7 @@ export class TerminalManager extends EventEmitter {
       // (vim, top, htop, interactive menus) will not work correctly.
       let child: ChildProcess;
       try {
-        child = spawn(shell, [], {
+        child = spawn(shell, shellArgs, {
           cwd,
           env,
           stdio: ['pipe', 'pipe', 'pipe'],

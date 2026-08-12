@@ -23,7 +23,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import type { McpServerConfig } from '@shared/types';
-import { findInPath } from '../agent/paths';
+import { findAllInPath } from '../agent/paths';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const lazyRequire = createRequire(import.meta.url);
@@ -31,8 +31,29 @@ const lazyRequire = createRequire(import.meta.url);
 /** Server name used in the MCP config (matches omp's mcpServers key). */
 export const TRACEWEAVE_SERVER_NAME = 'TraceWeave';
 
-/** Python binary candidate names in priority order. */
-const PYTHON_CANDIDATES = ['python3.11', 'python3', 'python'];
+/** Python binary candidate names in priority order (Unix). */
+const PYTHON_CANDIDATES_UNIX = ['python3.11', 'python3', 'python'];
+
+/**
+ * Python binary candidate names in priority order (Windows).
+ *
+ * On Windows, real Python installations register as `python.exe` (not
+ * `python3.exe`), so `python` is tried first. The `py` launcher (installed
+ * with Python from python.org) is tried last as a fallback.
+ */
+const PYTHON_CANDIDATES_WIN = ['python', 'python3', 'python3.11', 'py'];
+
+/**
+ * Check if a binary path is a Windows Store app execution alias stub.
+ *
+ * Windows creates 0-byte stub executables in
+ * `C:\Users\<user>\AppData\Local\Microsoft\WindowsApps\` for `python3.exe`
+ * and `python.exe`. These stubs either redirect to the Microsoft Store or
+ * exit with code 9009. They must be filtered out when resolving Python.
+ */
+function isWindowsStoreStub(binPath: string): boolean {
+  return process.platform === 'win32' && binPath.toLowerCase().includes('windowsapps');
+}
 
 /**
  * Resolve the TraceWeave source directory.
@@ -72,14 +93,24 @@ export function resolveTraceweaveDir(): string | null {
 /**
  * Resolve the Python binary path.
  *
- * Tries python3.11 → python3 → python in order, using `which`/`where`.
+ * On Unix, tries python3.11 → python3 → python in order using `which`.
+ * On Windows, tries python → python3 → python3.11 → py in order using
+ * `where`, filtering out Windows Store app execution alias stubs (which
+ * exit with code 9009 when invoked).
  *
  * @returns Absolute path to the Python binary, or null if none found.
  */
 export function resolvePythonBin(): string | null {
-  for (const candidate of PYTHON_CANDIDATES) {
-    const found = findInPath(candidate);
-    if (found) return found;
+  const candidates = process.platform === 'win32' ? PYTHON_CANDIDATES_WIN : PYTHON_CANDIDATES_UNIX;
+  for (const candidate of candidates) {
+    const allPaths = findAllInPath(candidate);
+    for (const p of allPaths) {
+      // Skip Windows Store stubs (0-byte alias executables that exit with
+      // code 9009). Real Python installations live elsewhere.
+      if (!isWindowsStoreStub(p)) {
+        return p;
+      }
+    }
   }
   return null;
 }

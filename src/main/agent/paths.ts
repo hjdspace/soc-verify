@@ -66,13 +66,25 @@ export function findInDir(dir: string, base: string): string | null {
 
 /** 在系统 PATH 中查找可执行文件（Windows 用 where，Unix 用 which）。 */
 export function findInPath(executable: string): string | null {
+  const all = findAllInPath(executable);
+  return all.length > 0 ? all[0] : null;
+}
+
+/**
+ * 在系统 PATH 中查找可执行文件的所有匹配路径（Windows 用 where，Unix 用 which）。
+ *
+ * 与 `findInPath` 不同，此函数返回所有匹配路径而非仅第一个。
+ * 这对于 Windows 上存在多个同名可执行文件（如 Windows Store 的
+ * `python3.exe` stub 和真实安装的 `python.exe`）的场景特别有用，
+ * 调用方可以过滤掉无效的 stub 路径。
+ */
+export function findAllInPath(executable: string): string[] {
   const cmd = process.platform === 'win32' ? 'where' : 'which';
   try {
     const out = execFileSync(cmd, [executable], { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
-    const first = out.trim().split(/\r?\n/)[0];
-    return first || null;
+    return out.trim().split(/\r?\n/).filter(Boolean);
   } catch {
-    return null;
+    return [];
   }
 }
 

@@ -12,6 +12,7 @@
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import type {
   McpConfigFile,
@@ -49,7 +50,12 @@ function projectMcpConfigPaths(projectRoot: string): string[] {
  */
 function parseConfig(content: string): McpConfigFile {
   try {
-    const parsed = JSON.parse(content) as Record<string, unknown>;
+    // Strip UTF-8 BOM if present. Windows PowerShell's Set-Content -Encoding UTF8
+    // adds a BOM (EF BB BF / \uFEFF) which causes JSON.parse to throw SyntaxError,
+    // leading to config loss (parseConfig returns empty config, caller writes
+    // only built-in servers, user-configured servers like codegraph are lost).
+    const stripped = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
+    const parsed = JSON.parse(stripped) as Record<string, unknown>;
     if (typeof parsed !== 'object' || parsed === null) {
       return { mcpServers: {} };
     }
@@ -275,6 +281,36 @@ export async function setMcpConfig(
 }
 
 /**
+ * Check if an existing built-in server config is stale and should be updated.
+ *
+ * A config is considered stale when:
+ * - On Windows: the command path contains `WindowsApps` (Windows Store
+ *   app execution alias stub that exits with code 9009)
+ * - The command points to a file that no longer exists
+ *
+ * This allows `ensureBuiltinMcpServers` to auto-fix configs that were
+ * written by a previous run with an incorrect Python path, while still
+ * preserving genuine user customizations (e.g., a custom command that
+ * works and doesn't match either stale condition).
+ */
+function isStaleBuiltinConfig(existing: McpServerConfig): boolean {
+  const cmd = existing.command;
+  if (!cmd) return false;
+
+  // Windows Store stub detection
+  if (process.platform === 'win32' && cmd.toLowerCase().includes('windowsapps')) {
+    return true;
+  }
+
+  // Command file no longer exists
+  if (!existsSync(cmd)) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Ensure built-in MCP servers (like TraceWeave) are registered in the
  * user-level MCP config (`~/.omp/mcp.json`).
  *
@@ -283,8 +319,13 @@ export async function setMcpConfig(
  * server name already exists in the config, the user's entry is preserved
  * (the user may have customized it or explicitly disabled it).
  *
+ * However, if the existing entry is "stale" (e.g., its command points to
+ * a Windows Store stub or a non-existent file), it is automatically updated
+ * with the fresh built-in config. This handles the case where a previous
+ * run auto-registered the server with an incorrect Python path.
+ *
  * @param builtinServers  Map of server name → config to inject as defaults.
- * @returns true if the config file was modified (new servers were added).
+ * @returns true if the config file was modified (new servers were added or stale ones updated).
  */
 export async function ensureBuiltinMcpServers(
   builtinServers: Array<{ name: string; config: McpServerConfig }>,
@@ -297,11 +338,16 @@ export async function ensureBuiltinMcpServers(
   let modified = false;
 
   for (const { name, config } of builtinServers) {
-    // Don't override if the user already configured this server
     if (!(name in servers)) {
+      // New built-in server — register it
+      servers[name] = config;
+      modified = true;
+    } else if (isStaleBuiltinConfig(servers[name])) {
+      // Existing entry is stale (e.g., Windows Store Python stub) — update it
       servers[name] = config;
       modified = true;
     }
+    // Otherwise: user has a valid custom config — preserve it
   }
 
   if (modified) {

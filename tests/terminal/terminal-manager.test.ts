@@ -1,5 +1,30 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { getInteractiveShellArgs, TerminalManager } from '../../src/main/terminal/terminal-manager';
+import {
+  getInteractiveShellArgs,
+  resolveInteractiveShell,
+  TerminalManager,
+} from '../../src/main/terminal/terminal-manager';
+
+describe('resolveInteractiveShell', () => {
+  const available = new Set(['/bin/bash', '/bin/zsh', '/bin/sh']);
+  const exists = (path: string): boolean => available.has(path);
+
+  it('uses the account login shell when the AppImage environment has no SHELL', () => {
+    expect(resolveInteractiveShell('linux', undefined, '/bin/zsh', exists)).toBe('/bin/zsh');
+  });
+
+  it('prefers the account login shell over a stale inherited SHELL', () => {
+    expect(resolveInteractiveShell('linux', '/bin/bash', '/bin/zsh', exists)).toBe('/bin/zsh');
+  });
+
+  it('falls back to an inherited SHELL when the account shell is unavailable', () => {
+    expect(resolveInteractiveShell('linux', '/bin/zsh', null, exists)).toBe('/bin/zsh');
+  });
+
+  it('does not treat an installed zsh as the account default', () => {
+    expect(resolveInteractiveShell('linux', undefined, null, exists)).toBe('/bin/bash');
+  });
+});
 
 describe('getInteractiveShellArgs', () => {
   it('loads the project-path prompt configuration for Linux Bash', () => {
@@ -15,8 +40,8 @@ describe('getInteractiveShellArgs', () => {
   });
 
   it('starts csh as a login + interactive shell to source .cshrc', () => {
-    expect(getInteractiveShellArgs('/bin/csh', 'linux', '/app/terminal/bashrc')).toEqual(['-l', '-i']);
-    expect(getInteractiveShellArgs('/bin/tcsh', 'linux', '/app/terminal/bashrc')).toEqual(['-l', '-i']);
+    expect(getInteractiveShellArgs('/bin/csh', 'linux', '/app/terminal/bashrc')).toEqual(['-l']);
+    expect(getInteractiveShellArgs('/bin/tcsh', 'linux', '/app/terminal/bashrc')).toEqual(['-l']);
   });
 
   it('does not change Windows terminals', () => {

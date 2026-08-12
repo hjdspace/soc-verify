@@ -292,3 +292,72 @@ describe('traceweave-paths - ensureTraceweaveDefaultMcp', () => {
     expect(result).toBeNull();
   });
 });
+
+describe('traceweave-paths - resolvePythonBin (Windows Store stub filtering)', () => {
+  const isWindows = process.platform === 'win32';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error('not found');
+    });
+  });
+
+  it('filters out Windows Store stubs and returns real Python', () => {
+    // On Windows: where python returns both WindowsApps stub and real Python.
+    // On Unix: where/which python returns a single path (no stub filtering).
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const exe = args?.[0] ?? '';
+      if (cmd === 'where' && exe === 'python') {
+        return 'C:\\Users\\test\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe\nD:\\Program\\Python\\Python313\\python.exe\n';
+      }
+      throw new Error('not found');
+    });
+
+    const result = resolvePythonBin();
+    if (isWindows) {
+      // Should skip the WindowsApps stub and return the real Python
+      expect(result).toBe('D:\\Program\\Python\\Python313\\python.exe');
+    } else {
+      // On Unix, the first result is returned (no stub filtering)
+      expect(result).toContain('python');
+    }
+  });
+
+  it('falls through to next candidate when only WindowsApps stub found', () => {
+    // where python → only WindowsApps stub
+    // where python3 → real Python
+    mockExecFileSync.mockImplementation((cmd: string, args?: readonly string[]) => {
+      const exe = args?.[0] ?? '';
+      if (cmd === 'where' && exe === 'python') {
+        return 'C:\\Users\\test\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe\n';
+      }
+      if (cmd === 'where' && exe === 'python3') {
+        return 'D:\\Program\\Python\\Python313\\python3.exe\n';
+      }
+      throw new Error('not found');
+    });
+
+    const result = resolvePythonBin();
+    if (isWindows) {
+      expect(result).toBe('D:\\Program\\Python\\Python313\\python3.exe');
+    } else {
+      // On Unix, python is the last candidate; the mock for 'python' throws,
+      // and 'python3' returns a real path
+      expect(result).toContain('python');
+    }
+  });
+
+  it('returns null when all candidates return only WindowsApps stubs', () => {
+    mockExecFileSync.mockImplementation(() => {
+      return 'C:\\Users\\test\\AppData\\Local\\Microsoft\\WindowsApps\\python3.exe\n';
+    });
+
+    if (isWindows) {
+      expect(resolvePythonBin()).toBeNull();
+    } else {
+      // On Unix, no stub filtering — returns the path as-is
+      expect(resolvePythonBin()).not.toBeNull();
+    }
+  });
+});
