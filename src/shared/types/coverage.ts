@@ -158,7 +158,8 @@ export const DEFAULT_EDA_COMMANDS: Readonly<Record<Exclude<EdaTool, 'unknown'>, 
     detailCommand:
       'imc -load {covMergeDir} -execcmd "report -detail -all -out {reportDir}/detail.txt"',
     metricsCommand:
-      'imc -load {covMergeDir} -execcmd "report_metrics -out {reportDir}/metrics.txt"',
+      // report_metrics 生成 HTML 目录而非文本文件，改用 report -metrics 获取文本格式
+      'imc -load {covMergeDir} -execcmd "report -metrics -out {reportDir}/metrics.txt"',
     // IMC 不支持 CSV 格式，不设 csvCommand
     gradeCommand:
       'imc -load {covMergeDir} -execcmd "report -test -out {reportDir}/grade.txt"',
