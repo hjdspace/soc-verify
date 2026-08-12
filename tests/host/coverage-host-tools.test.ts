@@ -155,7 +155,23 @@ function makeMockData(sessionId: string): CoverageData {
 function createMockAdapter(data: CoverageData) {
   return {
     hasParser: () => true,
-    parse: vi.fn(async (_sessionId: string, _reportDir: string) => data),
+    parse: vi.fn(async (
+      _sessionId: string,
+      _reportDir: string,
+      enrichment: { sessionId: string; covMergeDir: string; edaTool: string; targets?: Partial<Record<string, number>> },
+    ) => {
+      const enriched: CoverageData = {
+        ...data,
+        sessionId: enrichment.sessionId,
+        source: {
+          covMergeDir: enrichment.covMergeDir,
+          edaTool: enrichment.edaTool as CoverageData['source']['edaTool'],
+          reportGeneratedAt: Date.now(),
+        },
+        targets: enrichment.targets ?? data.targets,
+      };
+      return { data: enriched, jsonStr: JSON.stringify(enriched) };
+    }),
   };
 }
 
