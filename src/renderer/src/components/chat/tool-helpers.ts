@@ -159,6 +159,115 @@ export function argVal(args: unknown, key: string): unknown {
   return (args as Record<string, unknown>)[key];
 }
 
+/**
+ * Extract file path from omp edit tool's `input` field.
+ * omp edit format: `[filename#tag]\nDEL 42-49\n` or `[filename#tag]\nINS ...\n`
+ * The first line contains `[filename#tag]` where filename may be a relative
+ * path or just a basename.
+ */
+export function extractOmpEditPathFromInput(args: unknown): string {
+  const input = argStr(args, 'input');
+  if (!input) return '';
+  // Match [path#tag] at the start of the input
+  const match = input.match(/^\[([^\]]+)#[A-Za-z0-9_]+\]/);
+  if (match) return match[1];
+  return '';
+}
+
+/**
+ * Extract file path from omp edit tool's result text.
+ * Result format starts with `[absolute_path#tag]` on the first line.
+ */
+export function extractOmpEditPathFromResult(resultText: string): string {
+  if (!resultText) return '';
+  const match = resultText.match(/^\[([^\]]+)#[A-Za-z0-9_]+\]/m);
+  if (match) return match[1];
+  return '';
+}
+
+/**
+ * Unified file path extraction for edit-family tools.
+ * Tries args.path / args.file_path first, then omp input format, then result text.
+ */
+export function extractEditFilePath(args: unknown, resultText: string): string {
+  const direct = argStr(args, 'path', 'file_path');
+  if (direct) return direct;
+  // Try result text first (has absolute path), then input field (may only have filename)
+  const fromResult = extractOmpEditPathFromResult(resultText);
+  if (fromResult) return fromResult;
+  const fromInput = extractOmpEditPathFromInput(args);
+  if (fromInput) return fromInput;
+  // Try apply_patch format
+  const patch = argStr(args, 'input', 'patch', 'diff');
+  if (patch) {
+    const m = patch.match(/^\*\*\*\s+(?:Update|Add|Delete) File:\s*(.+)$/m);
+    if (m?.[1]) return m[1].trim();
+  }
+  return '';
+}
+
+/**
+ * Check if result text contains warnings (omp edit tool format).
+ * omp results have a "Warnings:" section when path resolution had issues.
+ */
+export function hasResultWarning(resultText: string): boolean {
+  if (!resultText) return false;
+  return /^Warnings?:/m.test(resultText);
+}
+
+/**
+ * Parse omp edit result text into content lines and warnings.
+ * Result format:
+ * ```
+ * [path#tag]
+ * 40:// code line
+ * 41:
+ * 42:
+ * 43:// more code
+ * 
+ * Warnings:
+ * Path "..." does not exist; matched ...
+ * ```
+ */
+export function parseOmpEditResult(resultText: string): {
+  filePath: string;
+  contentLines: Array<{ lineNum: string; content: string }>;
+  warnings: string[];
+} {
+  const filePath = extractOmpEditPathFromResult(resultText);
+  const lines = resultText.split('\n');
+  const contentLines: Array<{ lineNum: string; content: string }> = [];
+  const warnings: string[] = [];
+  let inWarnings = false;
+  let skipHeader = filePath ? 1 : 0; // skip the [path#tag] header line
+
+  for (const line of lines) {
+    if (skipHeader > 0) {
+      skipHeader--;
+      continue;
+    }
+    if (/^Warnings?:/i.test(line.trim())) {
+      inWarnings = true;
+      continue;
+    }
+    if (inWarnings) {
+      // Warning content lines (indented or plain text)
+      if (line.trim()) warnings.push(line.trim());
+      continue;
+    }
+    // Content lines: `42:// code` or `42:` or empty
+    const match = line.match(/^(\d+):(.*)$/);
+    if (match) {
+      contentLines.push({ lineNum: match[1], content: match[2] });
+    } else if (line.trim() === '') {
+      // Empty line in content area
+      contentLines.push({ lineNum: '', content: '' });
+    }
+  }
+
+  return { filePath, contentLines, warnings };
+}
+
 /** Shorten a file path for display */
 export function shortenPath(p: string): string {
   if (!p) return '';
