@@ -204,34 +204,32 @@ export class CoverageManager {
 
     // Step 2: 插件解析文本报告为层级 Coverage Tree
     // 注意：adapter.parse() 现在在 Worker Thread 中执行，不阻塞主进程
+    // Worker Thread 同时完成 enrichment + JSON.stringify，避免主进程同步阻塞
     onProgress?.({
       step: 'parsing',
       message: '正在解析 EDA 文本报告为覆盖率树...',
       percent: 65,
     });
     const step2Start = Date.now();
-    const data = await this.adapter.parse(sessionId, reportDir);
+    const workerResult = await this.adapter.parse(sessionId, reportDir, {
+      sessionId,
+      covMergeDir,
+      edaTool: edaConfig.tool,
+      targets: targets ?? { ...DEFAULT_COVERAGE_TARGETS },
+    });
     logStep('parsing', step2Start);
 
     // yield to event loop — 让主进程有机会处理积压的 IPC 消息
     await yieldToEventLoop();
 
+    const enriched = workerResult.data;
+
     // 统计解析结果（iterative 避免 deep tree stack overflow）
-    const nodeCount = this.countNodes(data.root);
+    const nodeCount = this.countNodes(enriched.root);
 
-    const enriched: CoverageData = {
-      ...data,
-      sessionId,
-      source: {
-        covMergeDir,
-        edaTool: edaConfig.tool,
-        reportGeneratedAt: Date.now(),
-      },
-      targets: targets ?? { ...DEFAULT_COVERAGE_TARGETS },
-    };
-
-    // 一次性序列化 enriched，用于缓存写入和数据大小报告（避免重复 JSON.stringify）
-    const enrichedJson = JSON.stringify(enriched);
+    // 使用 Worker Thread 预序列化的 JSON 字符串（避免主进程同步 JSON.stringify 阻塞）
+    // 如果 Worker 未返回 jsonStr（回退模式），在此处序列化
+    const enrichedJson = workerResult.jsonStr || JSON.stringify(enriched);
     const dataJsonSize = enrichedJson.length;
 
     onProgress?.({
@@ -902,6 +900,8 @@ ${rows}
     const filePath = join(this.projectRoot, SOCVERIFY_DIR, COVERAGE_DIR, `${sessionId}.json`);
     try {
       const raw = await readFile(filePath, 'utf-8');
+      // yield — 让主进程在 readFile 完成后有机会处理 IPC 消息
+      await yieldToEventLoop();
       return JSON.parse(raw) as CoverageData;
     } catch {
       return null;
