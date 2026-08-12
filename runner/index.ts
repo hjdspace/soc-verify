@@ -185,6 +185,10 @@ let originalTools: unknown[] | null = null;
  * 用当前审批模式包装工具并设置到 agent 上。
  * - yolo 模式下恢复原始工具（无包装）
  * - 其他模式下对需要审批的工具插入 requestApproval 代理
+ *
+ * 使用 Proxy 包装而非对象展开（{ ...tool }），以保留原型链上的方法和属性。
+ * omp 引擎的工具 execute 签名为 (toolCallId, args, signal, onUpdate, ctx)，
+ * wrapper 必须匹配此签名并透传所有参数。
  */
 function applyApprovalMode(): void {
 	if (!session) return;
@@ -204,23 +208,33 @@ function applyApprovalMode(): void {
 			return;
 		}
 
-		const wrappedTools = (originalTools as Array<Record<string, unknown>>).map((tool) => {
-			const toolName = tool.name as string;
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const wrappedTools = (originalTools as any[]).map((tool: any) => {
+			const toolName: string = tool.name;
 			if (!needsApproval(toolName, currentApprovalMode)) return tool;
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			const origExecute = (tool.execute as (...args: any[]) => any).bind(tool);
-			return {
-				...tool,
-				execute: async (args: unknown, opts: unknown) => {
-					const approved = await requestApproval(toolName, args);
-					if (!approved) {
-						return {
-							content: [{ type: "text" as const, text: `[已拒绝] 用户拒绝了此工具调用的执行。` }],
-						};
-					}
-					return origExecute(args, opts);
+
+			// 使用 Proxy 保留原型链，仅拦截 execute 方法
+			return new Proxy(tool, {
+				get(target, prop, receiver) {
+					if (prop !== "execute") return Reflect.get(target, prop, receiver);
+					return async (
+						toolCallId: string,
+						args: unknown,
+						signal: unknown,
+						onUpdate: unknown,
+						ctx: unknown,
+					) => {
+						const approved = await requestApproval(toolName, args);
+						if (!approved) {
+							return {
+								content: [{ type: "text" as const, text: `[已拒绝] 用户拒绝了此工具调用的执行。` }],
+							};
+						}
+						// eslint-disable-next-line @typescript-eslint/no-explicit-any
+						return target.execute(toolCallId, args, signal as any, onUpdate as any, ctx as any);
+					};
 				},
-			};
+			});
 		});
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		session.agent.setTools(wrappedTools as any);
