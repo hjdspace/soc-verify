@@ -6,9 +6,8 @@ import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { t, TRPCError } from '../router-context';
 import { requireProject } from '../../services/project-service';
-import { pluginLoader } from '../../plugins/loader';
-import { PluginBackedSimulation } from '../../plugin-adapters';
-import { RegressionManager } from '../../regression/regression-manager';
+import { loadEnvConfig } from '../../env/env-manager';
+import { discoverRegressions } from '../../regression/regression-discovery';
 import type { SimulationHistoryEntry } from '@shared/types';
 
 export const searchRouter = t.router({
@@ -43,23 +42,27 @@ export const searchRouter = t.router({
         // No history
       }
 
-      // Search regression suites
+      // Search regression lists
       try {
-        const registry = pluginLoader.getRegistry(project.rootPath);
-        const simAdapter = new PluginBackedSimulation(registry);
-        const regMgr = new RegressionManager({ projectRoot: project.rootPath, simulationAdapter: simAdapter });
-        const suites = await regMgr.listSuites();
-        for (const s of suites) {
-          if (s.name.includes(input.query)) {
-            results.push({
-              type: 'regression',
-              label: s.name,
-              detail: `${s.caseIds.length} cases`,
-            });
+        const envConfig = await loadEnvConfig(project.rootPath);
+        const projEnv = envConfig?.envVars?.PROJ_ENV;
+        if (projEnv) {
+          const discoveries = await discoverRegressions(project.rootPath, projEnv);
+          for (const { subsys, items } of discoveries) {
+            for (const item of items) {
+              const fileName = item.filePath.split(/[/\\]/).pop() ?? item.filePath;
+              if (fileName.includes(input.query) || subsys.includes(input.query)) {
+                results.push({
+                  type: 'regression',
+                  label: fileName,
+                  detail: `${subsys} · ${item.type}`,
+                });
+              }
+            }
           }
         }
       } catch {
-        // No suites
+        // No regression data
       }
 
       return results;
