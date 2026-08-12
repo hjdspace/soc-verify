@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
+import { useSessionStore } from './session';
 
 export type TaskType = 'simulation' | 'ai' | 'regression' | 'coverage';
 
@@ -73,7 +74,7 @@ export const useTaskStore = create<TaskStoreState>((set, get) => ({
 
     if (task.type === 'ai') {
       // AI session is managed by session store
-      const _sessionStore = await import('./session');
+      const _sessionStore = useSessionStore;
       // Find the session associated with this task
       // This is a simplified approach - in real implementation, we'd link task to session
     } else if (task.type === 'simulation') {
