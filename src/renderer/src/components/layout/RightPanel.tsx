@@ -678,6 +678,13 @@ export function RightPanel({ width }: RightPanelProps) {
                   onResolve={resolveApproval}
                 />
               ))}
+            {/* AI waiting indicator: show when session is active but no
+                streaming assistant message exists (e.g. gap between tool
+                execution end and next message_start from the LLM) */}
+            {isSending &&
+              !currentSession.messages.some(
+                (m) => m.role === 'assistant' && m.isStreaming,
+              ) && <WaitingDots />}
             <div ref={messagesEndRef} />
           </div>
         )}
@@ -1102,6 +1109,35 @@ const StreamingCursor = memo(function StreamingCursor() {
       aria-hidden
       className="ml-0.5 inline-block h-3 w-0.5 cursor-blink bg-foreground align-middle"
     />
+  );
+});
+
+/**
+ * AI 等待响应指示器——三个跳动点 + 文字。
+ *
+ * 当 session 处于 streaming/tool_executing 但没有正在流式输出的 assistant 消息时
+ * 显示在消息列表底部，让用户知道 AI 正在工作（例如工具执行完毕后
+ * 等待 LLM 生成下一段回复的间隙）。
+ */
+const WaitingDots = memo(function WaitingDots() {
+  return (
+    <div className="flex items-center gap-1.5 py-1 text-muted-foreground">
+      <div className="flex items-center gap-0.5">
+        <span
+          className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce"
+          style={{ animationDelay: '0ms' }}
+        />
+        <span
+          className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce"
+          style={{ animationDelay: '150ms' }}
+        />
+        <span
+          className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce"
+          style={{ animationDelay: '300ms' }}
+        />
+      </div>
+      <span className="text-[10px]">AI 正在思考...</span>
+    </div>
   );
 });
 
