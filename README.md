@@ -32,7 +32,7 @@
 | **终端集成** | node-pty + xterm.js 多标签终端，支持仿真直连执行、自定义 bashrc 配置 |
 | **错误分析** | 仿真失败自动触发 AI 错误分析，compile_error 自动修复并重试（最大 3 次），sim_error 给出建议 |
 | **Diff Review** | AI Agent 代码改动的逐块审阅系统，接受/拒绝每个 hunk，支持 overwritten hunk 检测和 before reconstruction |
-| **覆盖率分析** | CoverageManager 多维度覆盖率（行 / Toggle / 功能 / 断言），Coverage Closure 闭环，HTML/JSON 导出 |
+| **覆盖率分析** | CoverageManager 多维度覆盖率（行/Toggle/条件/FSM/断言），Coverage Closure 闭环迭代，gap 识别与定向测试生成，HTML/JSON 导出，Test Promotion |
 | **时序违例管理** | vio_summary.log 解析、违例确认工作流、Pattern 匹配、Violation Dashboard、AI Advisor |
 | **用例数据库** | SQLite 统一数据源，Case Scanner 增量扫描，仿真历史自动记录，phase 字段支持 |
 | **仪表盘** | ECharts 可视化，8+ 数据标签页（趋势/热力图/失败/回归进度/耗时分布/不稳定用例/阶段通过率/调试难度） |
@@ -45,7 +45,7 @@
 | **TO 检查清单** | 流片前检查项管理，自动评估与报告导出 |
 | **凭据管理** | API 密钥安全存储、自定义接口地址 |
 | **命令面板** | 快捷键触发，快速操作 |
-| **内建工具集** | 17+ 专业工具：Git Manager / Git Diff / Git Quick Pull / Time Analyzer / SV Ifdef Checker / Regression Analyzer / Register Table Parser / Coverage Merger / Code Line Counter / C-SV Converter / Batch Execution / Find Replace / Log Analyzer / Performance Monitor |
+| **内建工具集** | 20+ 专业工具：Git Manager / Git Diff / Git Quick Pull / Time Analyzer / SV Ifdef Checker / Regression Analyzer / Register Table Parser / Coverage Merger / Code Line Counter / C-SV Converter / Batch Execution / Find Replace / Log Analyzer / System Monitor |
 
 ## 技术栈
 
@@ -301,12 +301,13 @@ npm run package:linux # 打包 Linux AppImage
 
 ### 修改后验证
 
-每次修改代码后，依次执行以下三条命令，全部通过才算完成：
+每次修改代码后，依次执行以下四条命令，全部通过才算完成：
 
 ```sh
 npm run build        # 编译成功
 npm run typecheck    # 类型检查通过
 npm run test         # 测试通过
+npm run lint         # ESLint 检查
 ```
 
 ## 打包
@@ -359,6 +360,7 @@ npm run package:linux  # Linux AppImage
 ## 文档
 
 - [PRD (M2-M10)](./docs/prd-m2-m7.md) — 产品需求文档
+- [PRD (Case Database)](./docs/prd-case-database.md) — 用例数据库产品需求文档
 - [Issues (M2-M10)](./docs/issues-m2-m7.md) — 垂直切片 Issue
 - [CHANGELOG](./CHANGELOG.md) — 变更日志
 - [Release Notes](./release-notes/) — 各版本发布说明
