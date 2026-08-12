@@ -21,6 +21,7 @@ import { simulationRegistry } from '../simulation/simulation-registry';
 import { credentialManager } from '../credentials/credential-manager';
 import { sessionManager } from './session-manager';
 import type { CaseStatsService } from '../case/case-stats-service';
+import type { ApprovalMode } from './types';
 
 /** Subset of persisted session model info used for credential/provider fallback. */
 export type PersistedModelRef = {
@@ -53,6 +54,8 @@ export type SessionContextOptions = {
   systemPrompt?: string;
   /** Persisted model info — used for credential/provider/model fallback. */
   persistedModel?: PersistedModelRef;
+  /** 工具审批模式 */
+  approvalMode?: ApprovalMode;
 };
 
 export type SessionContext = {
@@ -137,6 +140,7 @@ export async function createSessionContext(options: SessionContextOptions): Prom
     persistedSessionId: options.persistedSessionId,
     env: credEnv,
     systemPrompt: options.systemPrompt,
+    approvalMode: options.approvalMode,
   });
 
   // 7. Read back the resolved model (may differ from input when createSession
