@@ -8,41 +8,63 @@
  * 方案：使用 worker_threads 的 eval 模式，在独立线程中加载插件并执行 parse()，
  * 主进程事件循环保持畅通，GUI 可以正常响应。
  *
+ * 额外优化：Worker Thread 同时完成 enriched 数据构建和 JSON.stringify，
+ * 避免主进程在大数据量时同步序列化阻塞事件循环。
+ * 返回 { data, jsonStr } 供调用方直接使用。
+ *
  * 参考 ADR 0013（Worker Thread for Violation Parsing）的同类设计。
  */
 
 import { Worker } from 'node:worker_threads';
-import type { CoverageData } from '@shared/types';
+import type { CoverageData, EdaTool } from '@shared/types';
+import { DEFAULT_COVERAGE_TARGETS } from '@shared/types';
 
-/** Worker 执行的超时时间（5 分钟） */
-const WORKER_TIMEOUT_MS = 5 * 60 * 1000;
+/** Worker 执行的超时时间（10 分钟，覆盖率数据可能很大） */
+const WORKER_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** 传递给 Worker 的 enrichment 字段 */
+export interface WorkerEnrichment {
+  sessionId: string;
+  covMergeDir: string;
+  edaTool: EdaTool;
+  targets?: Partial<Record<string, number>>;
+}
+
+/** Worker 返回结果：包含解析后的数据和预序列化的 JSON 字符串 */
+export interface CoverageWorkerResult {
+  /** 解析后并 enriched 的 CoverageData */
+  data: CoverageData;
+  /** 预序列化的 JSON 字符串（JSON.stringify(enrichedData)），避免主进程同步序列化 */
+  jsonStr: string;
+}
 
 /**
  * 在 Worker Thread 中执行覆盖率插件的 parse() 方法。
  *
  * @param pluginPath 插件模块的绝对路径（CJS 模块）
  * @param projectRoot 项目根目录
- * @param sessionId Coverage Merge Session ID
  * @param reportDir 平台已生成文本报告的目录
- * @returns 解析后的 CoverageData
+ * @param enrichment 用于 enriched CoverageData 的附加字段
+ * @returns 包含解析后 CoverageData 和预序列化 JSON 字符串的结果
  *
  * 如果 Worker 创建失败（如不支持 worker_threads），回退到主进程同步调用。
  */
 export async function parseCoverageInWorker(
   pluginPath: string,
   projectRoot: string,
-  sessionId: string,
   reportDir: string,
-): Promise<CoverageData> {
-  return new Promise<CoverageData>((resolve, reject) => {
+  enrichment: WorkerEnrichment,
+): Promise<CoverageWorkerResult> {
+  return new Promise<CoverageWorkerResult>((resolve, reject) => {
     // Worker 代码字符串 —— 在独立线程中执行
     // 使用 eval 模式避免需要单独编译 worker 入口文件
+    // Worker 同时完成 parse() + enrichment + JSON.stringify()，避免主进程同步阻塞
     const workerCode = `
       'use strict';
-      const { workerData, parentPort } = require('worker_threads');
+      var { workerData, parentPort } = require('worker_threads');
       try {
-        const mod = require(workerData.pluginPath);
-        const plugin = mod?.default ?? mod?.plugin ?? mod;
+        var mod = require(workerData.pluginPath);
+        var plugin = mod && mod.default ? mod.default : (mod && mod.plugin ? mod.plugin : mod);
         if (!plugin || typeof plugin.parse !== 'function') {
           parentPort.postMessage({
             success: false,
@@ -50,9 +72,30 @@ export async function parseCoverageInWorker(
           });
           return;
         }
-        const result = plugin.parse(workerData.projectRoot, workerData.sessionId, workerData.reportDir);
+        var result = plugin.parse(workerData.projectRoot, workerData.sessionId, workerData.reportDir);
         Promise.resolve(result).then(function(data) {
-          parentPort.postMessage({ success: true, data: data });
+          // 在 Worker Thread 中完成 enrichment + JSON.stringify，避免主进程同步阻塞
+          try {
+            var enriched = Object.assign({}, data, {
+              sessionId: workerData.enrichment.sessionId,
+              source: {
+                covMergeDir: workerData.enrichment.covMergeDir,
+                edaTool: workerData.enrichment.edaTool,
+                reportGeneratedAt: Date.now()
+              },
+              targets: workerData.enrichment.targets || {}
+            });
+            var jsonStr = JSON.stringify(enriched);
+            parentPort.postMessage({ success: true, data: enriched, jsonStr: jsonStr });
+          } catch (strErr) {
+            // enrichment 或 JSON.stringify 失败，仍然返回原始 data
+            parentPort.postMessage({
+              success: true,
+              data: data,
+              jsonStr: null,
+              stringifyError: strErr && strErr.message ? strErr.message : String(strErr)
+            });
+          }
         }).catch(function(err) {
           parentPort.postMessage({
             success: false,
@@ -79,12 +122,18 @@ export async function parseCoverageInWorker(
     try {
       worker = new Worker(workerCode, {
         eval: true,
-        workerData: { pluginPath, projectRoot, sessionId, reportDir },
+        workerData: {
+          pluginPath,
+          projectRoot,
+          sessionId: enrichment.sessionId,
+          reportDir,
+          enrichment,
+        },
       });
     } catch (err) {
       // Worker 创建失败，回退到主进程同步调用
       console.warn('[coverage-worker] Failed to create worker, falling back to sync parse:', err);
-      fallbackSyncParse(pluginPath, projectRoot, sessionId, reportDir)
+      fallbackSyncParse(pluginPath, projectRoot, reportDir, enrichment)
         .then(resolve)
         .catch(reject);
       return;
@@ -99,14 +148,17 @@ export async function parseCoverageInWorker(
       }
     }, WORKER_TIMEOUT_MS);
 
-    worker.on('message', (msg: { success: boolean; data?: CoverageData; error?: string }) => {
+    worker.on('message', (msg: { success: boolean; data?: CoverageData; jsonStr?: string | null; error?: string; stringifyError?: string }) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeoutHandle);
       cleanup();
 
       if (msg.success && msg.data) {
-        resolve(msg.data);
+        resolve({
+          data: msg.data,
+          jsonStr: msg.jsonStr ?? '',
+        });
       } else {
         reject(new Error(msg.error ?? 'Unknown coverage parsing error'));
       }
@@ -138,9 +190,9 @@ export async function parseCoverageInWorker(
 async function fallbackSyncParse(
   pluginPath: string,
   projectRoot: string,
-  sessionId: string,
   reportDir: string,
-): Promise<CoverageData> {
+  enrichment: WorkerEnrichment,
+): Promise<CoverageWorkerResult> {
   const { createRequire } = await import('node:module');
   const require = createRequire(import.meta.url);
   const mod = require(pluginPath);
@@ -148,5 +200,16 @@ async function fallbackSyncParse(
   if (!plugin || typeof plugin.parse !== 'function') {
     throw new Error(`Plugin does not export a parse function: ${pluginPath}`);
   }
-  return plugin.parse(projectRoot, sessionId, reportDir);
+  const data = await plugin.parse(projectRoot, enrichment.sessionId, reportDir);
+  const enriched: CoverageData = {
+    ...data,
+    sessionId: enrichment.sessionId,
+    source: {
+      covMergeDir: enrichment.covMergeDir,
+      edaTool: enrichment.edaTool,
+      reportGeneratedAt: Date.now(),
+    },
+    targets: enrichment.targets ?? { ...DEFAULT_COVERAGE_TARGETS },
+  };
+  return { data: enriched, jsonStr: JSON.stringify(enriched) };
 }
