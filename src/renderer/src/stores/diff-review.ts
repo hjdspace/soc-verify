@@ -3,14 +3,18 @@
  *
  * 队列来源：从所有会话的 tool messages 中提取 WRITE/EDIT/apply_patch/ast_edit 工具调用，
  * 按文件路径聚合。hunk 状态在 store 中管理，「应用」时调用后端 API 批量撤销。
+ *
+ * reviewed 文件保留在队列中（标记 reviewed=true），这样 ToolCard 路径始终可点击。
+ * 点击已 reviewed 的路径会打开文件编辑器；未 reviewed 的路径会打开 diff-review。
  */
 
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useSessionStore, type ChatMessage } from './session';
-import { useWorkbenchStore } from './workbench';
+import { useWorkbenchStore, openFileDestination } from './workbench';
 import { useProjectStore } from './project';
 import type { DiffToolCall, DiffRejection, FileDiffResult } from '@shared/types';
+import { extractResultText } from '@renderer/components/chat/tool-helpers';
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -26,10 +30,12 @@ export interface ReviewEntry {
   toolCalls: DiffToolCall[];
   /** 是否为新文件（WRITE） */
   isNewFile: boolean;
+  /** 是否已完成审阅（全部 hunk 已接受或已处理） */
+  reviewed: boolean;
 }
 
 interface DiffReviewStoreState {
-  /** 全局 review queue（按文件路径聚合） */
+  /** 全局 review queue（按文件路径聚合，包含已审阅的文件） */
   queue: ReviewEntry[];
   /** 当前正在审阅的文件路径 */
   currentFilePath: string | null;
@@ -77,6 +83,27 @@ function extractFromEdits(args: Record<string, unknown>, ...keys: string[]): str
   return undefined;
 }
 
+/**
+ * Extract file path from omp edit tool's `input` field.
+ * omp edit format: `[filename#tag]\nDEL 42-49\n`
+ */
+function extractOmpPathFromInput(args: Record<string, unknown>): string | null {
+  const input = typeof args.input === 'string' ? args.input : null;
+  if (!input) return null;
+  const match = input.match(/^\[([^\]]+)#[A-Za-z0-9_]+\]/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Extract file path from omp edit tool's result text.
+ * Result format starts with `[absolute_path#tag]` on the first line.
+ */
+function extractOmpPathFromResult(resultText: string): string | null {
+  if (!resultText) return null;
+  const match = resultText.match(/^\[([^\]]+)#[A-Za-z0-9_]+\]/m);
+  return match ? match[1] : null;
+}
+
 function extractToolCallFromMessage(msg: ChatMessage): DiffToolCall | null {
   const name = msg.toolName ?? '';
   if (!FILE_EDITING_TOOLS.has(name)) return null;
@@ -84,11 +111,22 @@ function extractToolCallFromMessage(msg: ChatMessage): DiffToolCall | null {
   const args = msg.toolArgs as Record<string, unknown> | null;
   if (!args) return null;
 
-  const filePath = typeof args.path === 'string'
+  // Try direct path/file_path args first
+  let filePath = typeof args.path === 'string'
     ? args.path
     : typeof args.file_path === 'string'
       ? args.file_path
       : null;
+
+  // If not found, try omp edit format: extract from result text first (has absolute path),
+  // then input field (may only have filename)
+  if (!filePath && msg.toolResult) {
+    const resultText = extractResultText(msg.toolResult);
+    filePath = extractOmpPathFromResult(resultText);
+  }
+  if (!filePath) {
+    filePath = extractOmpPathFromInput(args);
+  }
   if (!filePath) return null;
 
   // 检查是否有 toolResult（工具必须已完成执行）
@@ -142,7 +180,7 @@ function extractToolCallFromMessage(msg: ChatMessage): DiffToolCall | null {
   };
 }
 
-function aggregateQueue(): ReviewEntry[] {
+function aggregateQueue(reviewedFiles: Set<string>): ReviewEntry[] {
   const sessions = useSessionStore.getState().sessions;
   const byFile = new Map<string, DiffToolCall[]>();
 
@@ -163,7 +201,8 @@ function aggregateQueue(): ReviewEntry[] {
     toolCalls.sort((a, b) => a.timestamp - b.timestamp);
     const fileName = filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
     const isNewFile = toolCalls.some((tc) => tc.isNewFile);
-    entries.push({ filePath, fileName, toolCalls, isNewFile });
+    const reviewed = reviewedFiles.has(filePath);
+    entries.push({ filePath, fileName, toolCalls, isNewFile, reviewed });
   }
 
   return entries;
@@ -180,12 +219,10 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
   reviewedFiles: new Set<string>(),
 
   refreshQueue: () => {
-    const newQueue = aggregateQueue();
     set((s) => {
-      // 过滤掉已审阅完成的文件
-      const filteredQueue = newQueue.filter((e) => !s.reviewedFiles.has(e.filePath));
+      const newQueue = aggregateQueue(s.reviewedFiles);
       // 保留已有 hunkStates 中仍在队列里的条目
-      const validPaths = new Set(filteredQueue.map((e) => e.filePath));
+      const validPaths = new Set(newQueue.map((e) => e.filePath));
       const cleanedHunkStates: HunkStates = {};
       for (const [filePath, states] of Object.entries(s.hunkStates)) {
         if (validPaths.has(filePath)) cleanedHunkStates[filePath] = states;
@@ -195,13 +232,12 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
         ? s.currentFilePath
         : null;
       // 清理 reviewedFiles 中不再有对应 tool call 的条目
-      const allPaths = new Set(newQueue.map((e) => e.filePath));
       const cleanedReviewed = new Set<string>();
       for (const fp of s.reviewedFiles) {
-        if (allPaths.has(fp)) cleanedReviewed.add(fp);
+        if (validPaths.has(fp)) cleanedReviewed.add(fp);
       }
       return {
-        queue: filteredQueue,
+        queue: newQueue,
         hunkStates: cleanedHunkStates,
         currentFilePath,
         currentDiff: currentFilePath ? s.currentDiff : null,
@@ -213,6 +249,12 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
   openFile: (filePath) => {
     const entry = get().queue.find((e) => e.filePath === filePath);
     if (!entry) return;
+
+    // If already reviewed, open the file in the editor instead of diff-review
+    if (entry.reviewed) {
+      openFileDestination(useWorkbenchStore.getState().open, entry.filePath, entry.fileName);
+      return;
+    }
 
     const projectId = useProjectStore.getState().currentProjectId;
     if (!projectId) return;
@@ -256,7 +298,7 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
       },
     }));
     // 检查是否所有 hunk 都已处理（accepted 或 rejected）
-    // 如果全部处理完毕，自动标记为已审阅并关闭 diff 视图
+    // 如果全部处理完毕，自动标记为已审阅
     const { currentDiff, hunkStates } = get();
     if (!currentDiff) return;
     const allResolved = currentDiff.hunks.every((h) => {
@@ -264,7 +306,7 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
       return h.overwritten || st === 'accepted' || st === 'rejected';
     });
     if (allResolved) {
-      markFileReviewedAndClose(filePath);
+      markFileReviewed(filePath);
     }
   },
 
@@ -282,8 +324,8 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
       states[filePath] = fileStates;
       return { hunkStates: states };
     });
-    // 接受全部后，标记为已审阅并关闭 diff 视图
-    markFileReviewedAndClose(filePath);
+    // 接受全部后，标记为已审阅
+    markFileReviewed(filePath);
   },
 
   rejectAll: (filePath) => {
@@ -336,8 +378,8 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
         filePath,
         rejections,
       });
-      // 应用拒绝后，标记为已审阅并关闭 diff 视图
-      markFileReviewedAndClose(filePath);
+      // 应用拒绝后，标记为已审阅
+      markFileReviewed(filePath);
     } catch {
       // 错误处理留给 toast
     }
@@ -347,27 +389,33 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
     const { queue, currentFilePath } = get();
     if (!currentFilePath || queue.length === 0) return;
 
+    // Find next unreviewed file
     const currentIdx = queue.findIndex((e) => e.filePath === currentFilePath);
-    const nextIdx = currentIdx + 1;
-    if (nextIdx < queue.length) {
-      get().openFile(queue[nextIdx].filePath);
+    for (let i = currentIdx + 1; i < queue.length; i++) {
+      if (!queue[i].reviewed) {
+        get().openFile(queue[i].filePath);
+        return;
+      }
     }
   },
 
   getQueuePosition: () => {
     const { queue, currentFilePath } = get();
-    if (!currentFilePath) return { current: 0, total: queue.length };
-    const idx = queue.findIndex((e) => e.filePath === currentFilePath);
-    return { current: idx + 1, total: queue.length };
+    // Only count unreviewed files for the position
+    const pending = queue.filter((e) => !e.reviewed);
+    if (!currentFilePath) return { current: 0, total: pending.length };
+    const idx = pending.findIndex((e) => e.filePath === currentFilePath);
+    return { current: idx + 1, total: pending.length };
   },
 
   getNextFileName: () => {
     const { queue, currentFilePath } = get();
     if (!currentFilePath || queue.length === 0) return null;
-    const idx = queue.findIndex((e) => e.filePath === currentFilePath);
-    const nextIdx = idx + 1;
-    if (nextIdx < queue.length) {
-      return queue[nextIdx].fileName;
+    const currentIdx = queue.findIndex((e) => e.filePath === currentFilePath);
+    for (let i = currentIdx + 1; i < queue.length; i++) {
+      if (!queue[i].reviewed) {
+        return queue[i].fileName;
+      }
     }
     return null;
   },
@@ -385,16 +433,19 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
 // ─── Helpers ────────────────────────────────────────────────
 
 /**
- * 标记文件为已审阅，关闭 diff 视图，并从队列中移除。
- * 如果队列中还有其他文件，自动打开下一个；否则返回正常文件展示。
+ * 标记文件为已审阅：在队列中标记 reviewed=true，关闭 diff-review tab，
+ * 并在中栏打开文件编辑器显示审阅后的文件内容。
+ * 不自动打开下一个文件——用户可以通过浮动按钮或工具卡片路径手动打开。
  */
-function markFileReviewedAndClose(filePath: string): void {
+function markFileReviewed(filePath: string): void {
   const store = useDiffReviewStore.getState();
   // 添加到已审阅集合
   const newReviewed = new Set(store.reviewedFiles);
   newReviewed.add(filePath);
-  // 从队列中移除
-  const newQueue = store.queue.filter((e) => e.filePath !== filePath);
+  // 在队列中标记为已审阅（不从队列中移除，保持 ToolCard 路径可点击）
+  const newQueue = store.queue.map((e) =>
+    e.filePath === filePath ? { ...e, reviewed: true } : e,
+  );
   // 关闭 diff-review tab
   const tabId = `diff-review:${filePath}`;
   useWorkbenchStore.getState().close(tabId);
@@ -406,10 +457,9 @@ function markFileReviewedAndClose(filePath: string): void {
     currentDiff: null,
     loading: false,
   });
-  // 如果还有待审阅文件，自动打开下一个
-  if (newQueue.length > 0) {
-    useDiffReviewStore.getState().openFile(newQueue[0].filePath);
-  }
+  // 打开文件编辑器，显示审阅后的文件内容
+  const fileName = filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
+  openFileDestination(useWorkbenchStore.getState().open, filePath, fileName);
 }
 
 let projectedSessions = useSessionStore.getState().sessions;
