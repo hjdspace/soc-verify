@@ -1,113 +1,128 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
-import type { RegressionSuite, RegressionResult } from '@shared/types';
+import { useWorkbenchStore } from './workbench';
+import { useTerminalStore } from './terminal';
+import type {
+  RegressionDiscoveryResult,
+  RegressionRunOptions,
+  RegressionHistoryEntry,
+  RegressionEntry,
+} from '@shared/types';
 
 interface RegressionStoreState {
-  suites: RegressionSuite[];
-  currentResult: RegressionResult | null;
-  compareResult: {
-    run1: RegressionResult | null;
-    run2: RegressionResult | null;
-    newFailures: Array<{ caseId: string; caseName: string }>;
-    fixed: Array<{ caseId: string; caseName: string }>;
-    unchanged: Array<{ caseId: string; caseName: string; status: string }>;
-  } | null;
-  history: RegressionResult[];
-  loading: boolean;
+  // ── Discovery ──
+  discovery: RegressionDiscoveryResult;
+  discoveryLoading: boolean;
+  discoveryError: string | null;
 
-  loadSuites: (projectId: string) => Promise<void>;
-  createSuite: (projectId: string, name: string, caseIds: string[], options: Record<string, unknown>) => Promise<void>;
-  updateSuite: (projectId: string, name: string, caseIds?: string[], options?: Record<string, unknown>) => Promise<void>;
-  deleteSuite: (projectId: string, name: string) => Promise<void>;
-  runSuite: (projectId: string, name: string) => Promise<void>;
-  getResult: (projectId: string, runId: string) => Promise<void>;
-  compareRuns: (projectId: string, runId1: string, runId2: string) => Promise<void>;
-  loadHistory: (projectId: string, suiteName?: string) => Promise<void>;
+  // ── Parsed list entries (lazy loaded) ──
+  parsedLists: Map<string, { entries: RegressionEntry[]; tagSet: string[]; onCount: number; offCount: number }>;
+  parsingListPath: string | null;
+
+  // ── Parsed group refs (lazy loaded) ──
+  parsedGroups: Map<string, { refPaths: string[]; resolved: Array<{ path: string; type: 'list' | 'group' }> }>;
+
+  // ── History ──
+  history: RegressionHistoryEntry[];
+  historyLoading: boolean;
+
+  // ── Actions ──
+  discover: (projectId: string, refresh?: boolean) => Promise<void>;
+  parseList: (filePath: string) => Promise<void>;
+  parseGroup: (filePath: string) => Promise<void>;
+  runRegression: (projectId: string, filePath: string, subsys: string, options: RegressionRunOptions) => Promise<void>;
+  abortRegression: (projectId: string, runId: string) => Promise<void>;
+  loadHistory: (projectId: string) => Promise<void>;
 }
 
-export const useRegressionStore = create<RegressionStoreState>((set) => ({
-  suites: [],
-  currentResult: null,
-  compareResult: null,
+export const useRegressionStore = create<RegressionStoreState>((set, get) => ({
+  discovery: [],
+  discoveryLoading: false,
+  discoveryError: null,
+  parsedLists: new Map(),
+  parsingListPath: null,
+  parsedGroups: new Map(),
   history: [],
-  loading: false,
+  historyLoading: false,
 
-  loadSuites: async (projectId) => {
+  discover: async (projectId, refresh) => {
+    set({ discoveryLoading: true, discoveryError: null });
     try {
-      const suites = await trpc.regression.list.query({ projectId });
-      set({ suites });
+      const result = await trpc.regression.discover.query({ projectId, refresh });
+      set({ discovery: result, discoveryLoading: false });
     } catch (err) {
-      useToastStore.getState().error('加载回归套件失败', err instanceof Error ? err.message : String(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      set({ discoveryLoading: false, discoveryError: msg });
     }
   },
 
-  createSuite: async (projectId, name, caseIds, options) => {
+  parseList: async (filePath) => {
+    if (get().parsedLists.has(filePath)) return;
+    set({ parsingListPath: filePath });
     try {
-      await trpc.regression.create.mutate({ projectId, name, caseIds, options });
-      await useRegressionStore.getState().loadSuites(projectId);
-      useToastStore.getState().success('回归套件已创建');
+      const result = await trpc.regression.parseList.query({ filePath });
+      set((s) => {
+        const next = new Map(s.parsedLists);
+        next.set(filePath, result);
+        return { parsedLists: next, parsingListPath: null };
+      });
     } catch (err) {
-      useToastStore.getState().error('创建套件失败', err instanceof Error ? err.message : String(err));
+      set({ parsingListPath: null });
+      useToastStore.getState().error('解析回归列表失败', err instanceof Error ? err.message : String(err));
     }
   },
 
-  updateSuite: async (projectId, name, caseIds, options) => {
+  parseGroup: async (filePath) => {
+    if (get().parsedGroups.has(filePath)) return;
     try {
-      await trpc.regression.update.mutate({ projectId, name, caseIds, options });
-      await useRegressionStore.getState().loadSuites(projectId);
-      useToastStore.getState().success('套件已更新');
+      const result = await trpc.regression.parseGroup.query({ filePath });
+      set((s) => {
+        const next = new Map(s.parsedGroups);
+        next.set(filePath, result);
+        return { parsedGroups: next };
+      });
     } catch (err) {
-      useToastStore.getState().error('更新套件失败', err instanceof Error ? err.message : String(err));
+      useToastStore.getState().error('解析回归组失败', err instanceof Error ? err.message : String(err));
     }
   },
 
-  deleteSuite: async (projectId, name) => {
+  runRegression: async (projectId, filePath, subsys, options) => {
     try {
-      await trpc.regression.delete.mutate({ projectId, name });
-      await useRegressionStore.getState().loadSuites(projectId);
-      useToastStore.getState().success('套件已删除');
+      const result = await trpc.regression.run.mutate({ projectId, filePath, subsys, options });
+      useToastStore.getState().success('回归已提交', `运行 ID: ${result.runId}`);
+
+      // Open terminal tab to show output
+      const createTabForSession = useTerminalStore.getState().createTabForSession;
+      const tabId = createTabForSession(result.terminalId, `回归 ${result.runId.slice(-6)}`);
+      const open = useWorkbenchStore.getState().open;
+      open({ type: 'terminal', terminalTabId: tabId, title: `回归 ${result.runId.slice(-6)}` });
+
+      // Refresh history
+      void get().loadHistory(projectId);
     } catch (err) {
-      useToastStore.getState().error('删除套件失败', err instanceof Error ? err.message : String(err));
+      useToastStore.getState().error('提交回归失败', err instanceof Error ? err.message : String(err));
     }
   },
 
-  runSuite: async (projectId, name) => {
+  abortRegression: async (projectId, runId) => {
     try {
-      set({ loading: true });
-      const result = await trpc.regression.run.mutate({ projectId, name });
-      useToastStore.getState().success(`回归套件 "${name}" 已启动`, `运行 ID: ${result.runId}`);
-      set({ loading: false, currentResult: result.results });
+      await trpc.regression.abort.mutate({ projectId, runId });
+      useToastStore.getState().success('回归已中止', `运行 ID: ${runId}`);
+      void get().loadHistory(projectId);
     } catch (err) {
-      set({ loading: false });
-      useToastStore.getState().error('启动回归失败', err instanceof Error ? err.message : String(err));
+      useToastStore.getState().error('中止回归失败', err instanceof Error ? err.message : String(err));
     }
   },
 
-  getResult: async (projectId, runId) => {
+  loadHistory: async (projectId) => {
+    set({ historyLoading: true });
     try {
-      const result = await trpc.regression.getResult.query({ projectId, runId });
-      set({ currentResult: result });
+      const history = await trpc.regression.getHistory.query({ projectId });
+      set({ history, historyLoading: false });
     } catch (err) {
-      useToastStore.getState().error('获取结果失败', err instanceof Error ? err.message : String(err));
-    }
-  },
-
-  compareRuns: async (projectId, runId1, runId2) => {
-    try {
-      const result = await trpc.regression.compareRuns.query({ projectId, runId1, runId2 });
-      set({ compareResult: result });
-    } catch (err) {
-      useToastStore.getState().error('对比失败', err instanceof Error ? err.message : String(err));
-    }
-  },
-
-  loadHistory: async (projectId, suiteName) => {
-    try {
-      const history = await trpc.regression.getHistory.query({ projectId, suiteName });
-      set({ history });
-    } catch (err) {
-      useToastStore.getState().error('加载历史失败', err instanceof Error ? err.message : String(err));
+      set({ historyLoading: false });
+      useToastStore.getState().error('加载回归历史失败', err instanceof Error ? err.message : String(err));
     }
   },
 }));
