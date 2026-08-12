@@ -13,6 +13,8 @@ export interface ReadyFrame {
 
 // ─── 命令（host → runner stdin）────────────────────────────
 
+export type ApprovalMode = 'always-ask' | 'write' | 'yolo';
+
 export interface InitConfig {
   cwd: string;
   apiKey?: string;
@@ -28,6 +30,8 @@ export interface InitConfig {
   customToolDefinitions: CustomToolDefinition[];
   /** 额外的 extension 包路径（每个包的 skills/ 和 agents/ 子目录会被 omp 扫描） */
   additionalExtensionPaths?: string[];
+  /** 工具审批模式：always-ask（总询问）、write（自动编辑）、yolo（完全信任） */
+  approvalMode?: ApprovalMode;
 }
 
 export interface CustomToolDefinition {
@@ -44,6 +48,7 @@ export type Command =
   | { id: string; type: 'abort' }
   | { id: string; type: 'steer'; message: string }
   | { id: string; type: 'setModel'; provider: string; modelId: string }
+  | { id: string; type: 'setApprovalMode'; approvalMode: ApprovalMode }
   | { id: string; type: 'getMessages' }
   | { id: string; type: 'getState' }
   | { id: string; type: 'compact' }
@@ -85,6 +90,23 @@ export interface ToolResultCommand {
   id: string;
   result: unknown;
   isError?: boolean;
+}
+
+// ─── 审批请求/响应帧 ───────────────────────────────────────
+
+/** Runner → Host：请求用户审批工具调用 */
+export interface ApprovalRequestFrame {
+  type: 'approval_request';
+  id: string;
+  toolName: string;
+  args: unknown;
+}
+
+/** Host → Runner：用户审批结果 */
+export interface ApprovalResponseCommand {
+  type: 'approval_response';
+  id: string;
+  approved: boolean;
 }
 
 // ─── Agent Client 配置 ─────────────────────────────────────
@@ -134,6 +156,15 @@ export function isToolCallFrame(value: unknown): value is ToolCallFrame {
   return (
     isRecord(value) &&
     value.type === 'tool_call' &&
+    typeof value.id === 'string' &&
+    typeof value.toolName === 'string'
+  );
+}
+
+export function isApprovalRequestFrame(value: unknown): value is ApprovalRequestFrame {
+  return (
+    isRecord(value) &&
+    value.type === 'approval_request' &&
     typeof value.id === 'string' &&
     typeof value.toolName === 'string'
   );
