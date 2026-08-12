@@ -28,6 +28,20 @@ function completedEdit(filePath: string): ChatMessage {
   };
 }
 
+/** Build a ChatMessage for omp edit format (input-based, no path field). */
+function completedOmpEdit(resultText: string): ChatMessage {
+  return {
+    id: 'tool-omp-1',
+    role: 'tool',
+    content: '',
+    timestamp: 100,
+    toolName: 'edit',
+    toolCallId: 'call-omp-1',
+    toolArgs: { input: '[test.ts#DEBA]\nDEL 42-49\n' },
+    toolResult: { content: [{ type: 'text', text: resultText }] },
+  };
+}
+
 describe('Diff Review flow', () => {
   beforeEach(() => {
     useSessionStore.setState({ sessions: [] });
@@ -37,6 +51,7 @@ describe('Diff Review flow', () => {
       currentDiff: null,
       hunkStates: {},
       loading: false,
+      reviewedFiles: new Set(),
     });
     useProjectStore.setState({ currentProjectId: 'project-1' });
     useWorkbenchStore.setState({ tabs: [], activeTabId: null });
@@ -60,8 +75,29 @@ describe('Diff Review flow', () => {
       expect.objectContaining({
         filePath: 'D:\\project\\rtl\\core.sv',
         fileName: 'core.sv',
+        reviewed: false,
       }),
     ]);
+  });
+
+  it('projects omp edit format tool calls (path extracted from result text)', () => {
+    const ompResult = '[D:\\project\\test.ts#TAG]\n40:// code\n41:\n\nWarnings:\nPath "test.ts" does not exist; matched its filename.';
+    useSessionStore.setState({
+      sessions: [{
+        id: 'session-1',
+        projectId: 'project-1',
+        name: 'Agent conversation',
+        status: 'idle',
+        messages: [completedOmpEdit(ompResult)],
+        composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
+        createdAt: 1,
+      }],
+    });
+
+    const queue = useDiffReviewStore.getState().queue;
+    expect(queue).toHaveLength(1);
+    expect(queue[0].filePath).toBe('D:\\project\\test.ts');
+    expect(queue[0].fileName).toBe('test.ts');
   });
 
   it('retains hunk decisions for Windows file paths when the Review Queue refreshes', () => {
@@ -130,5 +166,31 @@ describe('Diff Review flow', () => {
       filePath,
       fileName: 'core.sv',
     });
+  });
+
+  it('keeps reviewed entries in queue with reviewed=true (not removed)', () => {
+    const filePath = 'D:\\project\\rtl\\core.sv';
+    useSessionStore.setState({
+      sessions: [{
+        id: 'session-1',
+        projectId: 'project-1',
+        name: 'Agent conversation',
+        status: 'idle',
+        messages: [completedEdit(filePath)],
+        composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
+        createdAt: 1,
+      }],
+    });
+
+    // Simulate marking as reviewed
+    useDiffReviewStore.setState({
+      reviewedFiles: new Set([filePath]),
+    });
+    useDiffReviewStore.getState().refreshQueue();
+
+    const queue = useDiffReviewStore.getState().queue;
+    expect(queue).toHaveLength(1);
+    expect(queue[0].filePath).toBe(filePath);
+    expect(queue[0].reviewed).toBe(true);
   });
 });
