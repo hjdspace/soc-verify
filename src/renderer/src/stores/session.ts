@@ -8,6 +8,16 @@ import { DEFAULT_CONTEXT_WINDOW, type ContextBreakdown, type ContextUsage } from
 
 export type SessionStatus = 'creating' | 'idle' | 'streaming' | 'tool_executing' | 'error';
 
+export type ApprovalMode = 'always-ask' | 'write' | 'yolo';
+
+export interface ApprovalRequest {
+  requestId: string;
+  sessionId: string;
+  toolName: string;
+  args: unknown;
+  timestamp: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'tool';
@@ -44,6 +54,7 @@ export interface SessionModel {
 }
 
 const MODEL_STORAGE_KEY = 'socverify:lastModel';
+const APPROVAL_MODE_STORAGE_KEY = 'socverify:approvalMode';
 
 export interface SelectedSkill {
   name: string;
@@ -86,6 +97,8 @@ export interface SessionEntry {
   autoCompactionEnabled?: boolean;
   /** TV AI session: the violation ID this session is analyzing. */
   tvViolationId?: number;
+  /** 工具审批模式 */
+  approvalMode?: ApprovalMode;
 }
 
 export interface HistorySession {
@@ -108,6 +121,8 @@ interface SessionStoreState {
   historyLoading: boolean;
   /** Last user-selected model, persisted to localStorage so new sessions reuse it. */
   lastModel: SessionModel | null;
+  /** Pending approval requests awaiting user decision */
+  approvalRequests: ApprovalRequest[];
 
   initLastModel: () => void;
   registerEventListeners: () => void;
@@ -143,6 +158,8 @@ interface SessionStoreState {
   fetchHistorySessions: (projectId: string) => Promise<void>;
   loadHistorySession: (historySession: HistorySession, projectId: string, cwd: string) => Promise<void>;
   deleteHistorySession: (sessionId: string, projectId: string) => Promise<void>;
+  setApprovalMode: (mode: ApprovalMode) => void;
+  resolveApproval: (requestId: string, approved: boolean) => Promise<void>;
 }
 
 let eventListenerRegistered = false;
@@ -253,6 +270,28 @@ function registerErrorAnalysisEventListener(get: () => SessionStoreState): void 
         `AI 分析失败: ${String(event.caseName ?? '')}`,
         hint,
       );
+    }
+  });
+}
+
+let approvalRequestListenerRegistered = false;
+
+function registerApprovalRequestListener(_get: () => SessionStoreState): void {
+  if (approvalRequestListenerRegistered || !window.eventBridge?.onApprovalRequest) return;
+  approvalRequestListenerRegistered = true;
+  window.eventBridge.onApprovalRequest((data: { sessionId: string; requestId: string; toolName: string; args: unknown }) => {
+    const request: ApprovalRequest = {
+      requestId: data.requestId,
+      sessionId: data.sessionId,
+      toolName: data.toolName,
+      args: data.args,
+      timestamp: Date.now(),
+    };
+    useSessionStore.setState((s) => ({ approvalRequests: [...s.approvalRequests, request] }));
+
+    // Auto-expand the right panel if collapsed so the user sees the request
+    if (useUiStore.getState().rightPanelCollapsed) {
+      useUiStore.getState().toggleRightPanel();
     }
   });
 }
@@ -539,6 +578,7 @@ async function ensureRuntimeSession(
           sessionId: latest.persistedSessionId,
           name: latest.name,
           providerId: latest.model?.providerId,
+          approvalMode: latest.approvalMode,
         })
       : await trpc.session.create.mutate({
           projectId: latest.projectId,
@@ -546,6 +586,7 @@ async function ensureRuntimeSession(
           provider: latest.model?.provider,
           model: latest.model?.id,
           providerId: latest.model?.providerId,
+          approvalMode: latest.approvalMode,
         });
 
     const runtimeSessionId = result.sessionId;
@@ -618,6 +659,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   historySessions: [],
   historyLoading: false,
   lastModel: null,
+  approvalRequests: [],
 
   initLastModel: () => {
     try {
@@ -636,6 +678,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   registerEventListeners: () => {
     registerSessionEventListener(get);
     registerErrorAnalysisEventListener(get);
+    registerApprovalRequestListener(get);
   },
 
   addErrorAnalysisSession: (event) => {
@@ -690,6 +733,15 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   createSession: async (projectId, cwd) => {
     const sessionId = `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const lastModel = get().lastModel;
+    let storedApprovalMode: ApprovalMode | undefined;
+    try {
+      const saved = localStorage.getItem(APPROVAL_MODE_STORAGE_KEY);
+      if (saved === 'always-ask' || saved === 'write' || saved === 'yolo') {
+        storedApprovalMode = saved;
+      }
+    } catch {
+      // Corrupted localStorage — ignore
+    }
     const session: SessionEntry = {
       id: sessionId,
       projectId,
@@ -701,6 +753,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       createdAt: Date.now(),
       model: lastModel ?? undefined,
       contextUsage: emptyContextUsage(),
+      approvalMode: storedApprovalMode ?? 'yolo',
     };
     set((s) => ({
       sessions: [...s.sessions, session],
@@ -1096,22 +1149,49 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
 
           case 'tool_execution_end': {
             const endToolCallId = evt.toolCallId as string | undefined;
+            const endToolName = evt.toolName as string;
+            // Check if there's a matching pending tool message from tool_execution_start
+            const hasMatch = sess.messages.some((m) => {
+              if (m.role !== 'tool' || m.toolResult) return false;
+              if (endToolCallId && m.toolCallId) return m.toolCallId === endToolCallId;
+              return m.toolName === endToolName;
+            });
+            if (hasMatch) {
+              return {
+                ...sess,
+                status: 'streaming',
+                messages: sess.messages.map((m) => {
+                  if (m.role !== 'tool' || m.toolResult) return m;
+                  if (endToolCallId && m.toolCallId) {
+                    return m.toolCallId === endToolCallId
+                      ? { ...m, toolResult: evt.result, toolEndTime: Date.now() }
+                      : m;
+                  }
+                  return m.toolName === endToolName && !m.toolResult
+                    ? { ...m, toolResult: evt.result, toolEndTime: Date.now() }
+                    : m;
+                }),
+              };
+            }
+            // Fallback: no matching tool message found (tool_execution_start was missed).
+            // Create a completed tool message so the tool card is always visible.
+            const fallbackToolCallId = endToolCallId ?? `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            const toolMsg: ChatMessage = {
+              id: `tool_${fallbackToolCallId}`,
+              role: 'tool',
+              content: '',
+              timestamp: Date.now(),
+              toolName: endToolName,
+              toolCallId: fallbackToolCallId,
+              toolArgs: evt.args,
+              toolResult: evt.result,
+              toolStartTime: Date.now(),
+              toolEndTime: Date.now(),
+            };
             return {
               ...sess,
               status: 'streaming',
-              messages: sess.messages.map((m) => {
-                // Match by toolCallId if available (precise), otherwise by toolName + pending (fallback)
-                if (m.role !== 'tool' || m.toolResult) return m;
-                if (endToolCallId && m.toolCallId) {
-                  return m.toolCallId === endToolCallId
-                    ? { ...m, toolResult: evt.result, toolEndTime: Date.now() }
-                    : m;
-                }
-                // Fallback: match by toolName (legacy behavior)
-                return m.toolName === evt.toolName && !m.toolResult
-                  ? { ...m, toolResult: evt.result, toolEndTime: Date.now() }
-                  : m;
-              }),
+              messages: [...sess.messages, toolMsg],
             };
           }
 
@@ -1522,6 +1602,40 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       useToastStore.getState().success('历史会话已删除');
     } catch (err) {
       useToastStore.getState().error('删除历史会话失败', tRPCError(err));
+    }
+  },
+
+  setApprovalMode: (mode) => {
+    const sessionId = get().currentSessionId;
+    if (!sessionId) return;
+    try {
+      localStorage.setItem(APPROVAL_MODE_STORAGE_KEY, mode);
+    } catch {
+      // localStorage might be unavailable — ignore
+    }
+    set((s) => ({
+      sessions: s.sessions.map((sess) =>
+        sess.id === sessionId
+          ? { ...sess, approvalMode: mode }
+          : sess,
+      ),
+    }));
+    // Fire-and-forget: backend dynamically re-wraps tools on the running session.
+    // If the session is not yet running, the mode will be applied on creation.
+    const session = get().sessions.find((sess) => sess.id === sessionId);
+    const runtimeSessionId = session?.runtimeSessionId ?? sessionId;
+    void trpc.session.setApprovalMode.mutate({ sessionId: runtimeSessionId, approvalMode: mode }).catch(() => {});
+  },
+
+  resolveApproval: async (requestId, approved) => {
+    // Remove from pending list immediately
+    set((s) => ({
+      approvalRequests: s.approvalRequests.filter((r) => r.requestId !== requestId),
+    }));
+    try {
+      await trpc.session.resolveApproval.mutate({ requestId, approved });
+    } catch (err) {
+      useToastStore.getState().error('审批响应失败', tRPCError(err));
     }
   },
 }));
