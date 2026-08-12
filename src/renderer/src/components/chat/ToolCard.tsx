@@ -46,8 +46,13 @@ import {
   parseJobItems,
   parseTodoItems,
   computeSimpleDiff,
+  extractEditFilePath,
+  extractOmpEditPathFromResult,
+  hasResultWarning,
+  parseOmpEditResult,
   type DiffLineData,
 } from './tool-helpers';
+import { useWorkbenchStore, openFileDestination } from '@renderer/stores/workbench';
 
 // ── Syntax highlighting ─────────────────────────────────
 
@@ -90,21 +95,41 @@ function CodeHighlight({ code, language, className }: { code: string; language: 
 
 // ── Main ToolCard ───────────────────────────────────────
 
+const FILE_EDITING_TOOLS = new Set(['write', 'write_file', 'edit', 'edit_file', 'apply_patch', 'ast_edit']);
+
 export function ToolCard({ message }: { message: ChatMessage }) {
   const [expanded, setExpanded] = useState(false);
   const isExecuting = !message.toolResult;
   const meta = getToolMeta(message.toolName);
-  const reviewEntry = useDiffReviewStore((state) =>
-    state.queue.find((entry) => entry.toolCalls.some((toolCall) => toolCall.id === message.id)),
-  );
-  const isFileTool = !isExecuting && !!reviewEntry;
-  const filePath = reviewEntry?.filePath ?? '';
+  const resultText = extractResultText(message.toolResult);
 
-  const handleOpenDiffReview = useCallback((e: React.MouseEvent) => {
+  // Extract file path from args directly so it's always available,
+  // even after the file has been reviewed and removed from the queue.
+  const toolName = message.toolName ?? '';
+  const isFileTool = !isExecuting && FILE_EDITING_TOOLS.has(toolName);
+  const filePath = isFileTool ? extractEditFilePath(message.toolArgs, resultText) : '';
+
+  // Check if this tool call is in the review queue (not yet reviewed)
+  const reviewEntry = useDiffReviewStore((state) =>
+    state.queue.find((entry) =>
+      entry.toolCalls.some((toolCall) => toolCall.id === message.id)
+      && !entry.reviewed,
+    ),
+  );
+  const isInReviewQueue = !isExecuting && !!reviewEntry && !!reviewEntry.filePath && reviewEntry.filePath === filePath;
+
+  const handlePathClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     if (!filePath) return;
-    useDiffReviewStore.getState().openFile(filePath);
-  }, [filePath]);
+    if (isInReviewQueue) {
+      // Still pending review — open diff review
+      useDiffReviewStore.getState().openFile(filePath);
+    } else {
+      // Already reviewed or not in queue — open file in editor
+      const fileName = filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
+      openFileDestination(useWorkbenchStore.getState().open, filePath, fileName);
+    }
+  }, [filePath, isInReviewQueue]);
 
   const [, tick] = useState(0);
   useEffect(() => {
@@ -123,6 +148,15 @@ export function ToolCard({ message }: { message: ChatMessage }) {
   const isError = typeof message.toolResult === 'object' && message.toolResult !== null
     && 'isError' in message.toolResult
     && (message.toolResult as { isError: boolean }).isError;
+  const hasWarning = !isError && !isExecuting && hasResultWarning(resultText);
+
+  const statusDotClass = isExecuting
+    ? ''
+    : isError
+      ? 'bg-status-fail-foreground'
+      : hasWarning
+        ? 'bg-warning-foreground'
+        : 'bg-status-pass-foreground';
 
   return (
     <div
@@ -138,16 +172,16 @@ export function ToolCard({ message }: { message: ChatMessage }) {
         {isExecuting ? (
           <Loader2 className="h-2.5 w-2.5 shrink-0 animate-spin text-primary" />
         ) : (
-          <span className={cn('h-2 w-2 shrink-0 rounded-full', isError ? 'bg-status-fail-foreground' : 'bg-status-pass-foreground')} />
+          <span className={cn('h-2 w-2 shrink-0 rounded-full', statusDotClass)} />
         )}
         <span className={cn('shrink-0 text-[11px] font-semibold', meta.color)}>
           {meta.label}
         </span>
         {isFileTool && filePath ? (
           <span
-            onClick={handleOpenDiffReview}
+            onClick={handlePathClick}
             className="flex-1 min-w-0 truncate text-[11px] cursor-pointer text-status-running-foreground hover:underline"
-            title={`点击在 Diff Review 中打开: ${filePath}`}
+            title={isInReviewQueue ? `点击在 Diff Review 中打开: ${filePath}` : `点击打开文件: ${filePath}`}
           >
             {summary}
           </span>
@@ -220,9 +254,10 @@ function buildSummary(message: ChatMessage): ReactNode {
     case 'edit_file':
     case 'apply_patch':
     case 'ast_edit': {
-      const path = argStr(args, 'path', 'file_path') ?? extractPatchPath(args);
+      const path = extractEditFilePath(args, resultText);
       if (!path) return <>{isExecuting ? 'editing...' : 'edited'}</>;
-      return <><span className="text-foreground">{shortenPath(path)}</span> {' \u00b7 '} {isExecuting ? 'editing...' : 'edited'}</>;
+      const hasWarn = !isExecuting && hasResultWarning(resultText);
+      return <><span className="text-foreground">{shortenPath(path)}</span> {' \u00b7 '} {isExecuting ? 'editing...' : hasWarn ? 'edited (with warnings)' : 'edited'}</>;
     }
     case 'bash': {
       const cmd = argStr(args, 'command') ?? '';
@@ -469,7 +504,7 @@ function WriteBody({ args, resultText }: { args: unknown; resultText: string }) 
   const lines = content.split('\n');
 
   return (
-    <div className="max-h-80 overflow-auto bg-diff-add/10 text-[11px] leading-relaxed">
+    <div className="max-h-80 overflow-auto bg-diff-add/20 text-[11px] leading-relaxed">
       {lines.map((line, i) => (
         <div key={i} className="flex">
           <span className="w-5 shrink-0 select-none text-center text-status-pass-foreground">+</span>
@@ -517,7 +552,7 @@ function extractEditTexts(args: unknown): { oldText: string | undefined; newText
 }
 
 function EditBody({ args, resultText }: { args: unknown; resultText: string }) {
-  const filePath = argStr(args, 'path', 'file_path') ?? extractPatchPath(args);
+  const filePath = extractEditFilePath(args, resultText);
   const language = detectLanguage(filePath);
   const { oldText, newText } = extractEditTexts(args);
 
@@ -534,12 +569,13 @@ function EditBody({ args, resultText }: { args: unknown; resultText: string }) {
         <div className="max-h-80 overflow-auto">
           {diff.map((line, i) => <DiffLineView key={i} line={line} language={language} />)}
         </div>
+        {hasResultWarning(resultText) && <EditWarningBlock resultText={resultText} />}
       </div>
     );
   }
 
   // Fallback: apply_patch and some edit adapters carry the unified patch in args.
-  const patchText = argStr(args, 'input', 'patch', 'diff') ?? resultText;
+  const patchText = argStr(args, 'input', 'patch', 'diff') ?? '';
   if (patchText.includes('@@') || /^[+-]/m.test(patchText)) {
     const lines = patchText.split('\n').map((content) => {
       if (content.startsWith('*** ') || content.startsWith('+++') || content.startsWith('---') || content.startsWith('@@')) return { type: 'hunk' as const, content };
@@ -562,23 +598,77 @@ function EditBody({ args, resultText }: { args: unknown; resultText: string }) {
             return <DiffLineView key={i} line={line} language={language} />;
           })}
         </div>
+        {hasResultWarning(resultText) && <EditWarningBlock resultText={resultText} />}
       </div>
     );
+  }
+
+  // omp edit format: input is `[file#tag]\nDEL 42-49\n`, result has `[path#tag]\n42:content...\nWarnings:...`
+  const ompPath = extractOmpEditPathFromResult(resultText);
+  if (ompPath || (argStr(args, 'input') && resultText.match(/^\[[^\]]+#[A-Za-z0-9_]+\]/))) {
+    return <OmpEditResultView resultText={resultText} language={detectLanguage(ompPath || filePath)} />;
   }
 
   return <GenericBody args={args} resultText={resultText} />;
 }
 
-function extractPatchPath(args: unknown): string {
-  const patch = argStr(args, 'input', 'patch', 'diff');
-  if (!patch) return '';
-  return patch.match(/^\*\*\*\s+(?:Update|Add|Delete) File:\s*(.+)$/m)?.[1]?.trim() ?? '';
+/** Render omp edit tool result: shows post-edit file content + warnings. */
+function OmpEditResultView({ resultText, language }: { resultText: string; language: string }) {
+  const { filePath, contentLines, warnings } = parseOmpEditResult(resultText);
+  return (
+    <div className="text-[11px] leading-relaxed">
+      {filePath && (
+        <div className="border-b border-border/30 bg-background/50 px-2.5 py-0.5 text-[10px] text-muted-foreground/60">
+          {filePath}
+        </div>
+      )}
+      {contentLines.length > 0 && (
+        <div className="max-h-80 overflow-auto">
+          {contentLines.map((line, i) => (
+            <div key={i} className="flex">
+              <span className="w-10 shrink-0 select-none border-r border-border/30 pr-1 text-right text-[10px] text-muted-foreground/40">
+                {line.lineNum || '\u00A0'}
+              </span>
+              <span className="flex-1 overflow-x-auto px-2 text-muted-foreground">
+                <CodeHighlight code={line.content || '\u00A0'} language={language} />
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {warnings.length > 0 && (
+        <div className="border-t border-warning/30 bg-warning/5 px-2.5 py-1">
+          <div className="text-[9px] font-semibold uppercase tracking-wide text-warning-foreground">Warnings</div>
+          {warnings.map((w, i) => (
+            <div key={i} className="text-[10px] text-warning-foreground/80">{w}</div>
+          ))}
+        </div>
+      )}
+      {contentLines.length === 0 && warnings.length === 0 && (
+        <pre className="max-h-48 overflow-auto px-2.5 py-1 text-[10px] text-muted-foreground">{resultText}</pre>
+      )}
+    </div>
+  );
+}
+
+/** Render the warnings section from an edit result. */
+function EditWarningBlock({ resultText }: { resultText: string }) {
+  const { warnings } = parseOmpEditResult(resultText);
+  if (warnings.length === 0) return null;
+  return (
+    <div className="border-t border-warning/30 bg-warning/5 px-2.5 py-1">
+      <div className="text-[9px] font-semibold uppercase tracking-wide text-warning-foreground">Warnings</div>
+      {warnings.map((w, i) => (
+        <div key={i} className="text-[10px] text-warning-foreground/80">{w}</div>
+      ))}
+    </div>
+  );
 }
 
 function DiffLineView({ line, language }: { line: DiffLineData; language: string }) {
   const sign = line.type === 'add' ? '+' : line.type === 'del' ? '-' : ' ';
   return (
-    <div className={cn('flex', line.type === 'add' && 'bg-diff-add/10', line.type === 'del' && 'bg-diff-del/10')}>
+    <div className={cn('flex', line.type === 'add' && 'bg-diff-add/20', line.type === 'del' && 'bg-diff-del/20')}>
       <span className={cn(
         'w-8 shrink-0 select-none pr-1 text-right text-[10px]',
         line.type === 'add' && 'text-status-pass-foreground/60',
