@@ -88,8 +88,9 @@ export function CenterArea() {
   // Diff review queue — reactive subscription for the floating 'Review next file' button
   const diffReviewQueue = useDiffReviewStore((s) => s.queue);
   const isViewingDiffReview = destination?.type === 'diff-review';
-  const pendingReviewCount = diffReviewQueue.length;
-  const nextReviewFile = diffReviewQueue.length > 0 ? diffReviewQueue[0] : null;
+  // Only count unreviewed files for the pending review count
+  const pendingReviewCount = diffReviewQueue.filter((e) => !e.reviewed).length;
+  const nextReviewFile = diffReviewQueue.find((e) => !e.reviewed) ?? null;
 
   // Sync dropdown open state to UI store so AppShell can hide native views during overlays.
   useEffect(() => {
