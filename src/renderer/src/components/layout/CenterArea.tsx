@@ -85,6 +85,12 @@ export function CenterArea() {
 
   const moveTerminalLocation = useTerminalStore((s) => s.moveTerminalLocation);
 
+  // Diff review queue — reactive subscription for the floating 'Review next file' button
+  const diffReviewQueue = useDiffReviewStore((s) => s.queue);
+  const isViewingDiffReview = destination?.type === 'diff-review';
+  const pendingReviewCount = diffReviewQueue.length;
+  const nextReviewFile = diffReviewQueue.length > 0 ? diffReviewQueue[0] : null;
+
   // Sync dropdown open state to UI store so AppShell can hide native views during overlays.
   useEffect(() => {
     setCenterMenuOpen(plusMenuOpen || moreMenuOpen);
@@ -574,6 +580,26 @@ export function CenterArea() {
               {activeTab ? `活动页签：${activeTab.title}` : '从左栏选择文件或在右栏与 AI 对话'}
             </p>
           </div>
+        )}
+        
+        {/* ── Floating 'Review next file' button ─────────── */}
+        {pendingReviewCount > 0 && !isViewingDiffReview && nextReviewFile && (
+          <button
+            onClick={() => useDiffReviewStore.getState().openFile(nextReviewFile.filePath)}
+            className="absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-4 py-2 text-xs text-primary shadow-lg backdrop-blur-sm transition-all hover:bg-primary/20 hover:shadow-xl"
+            title={`审阅文件改动: ${nextReviewFile.filePath}`}
+          >
+            <GitCompare className="h-3.5 w-3.5" />
+            <span>Review next file</span>
+            <span className="max-w-[200px] truncate font-mono text-[10px] text-muted-foreground">
+              {nextReviewFile.fileName}
+            </span>
+            {pendingReviewCount > 1 && (
+              <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary/20 px-1 text-[10px] font-bold">
+                +{pendingReviewCount - 1}
+              </span>
+            )}
+          </button>
         )}
       </div>
     </main>
