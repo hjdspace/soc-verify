@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  从项目 Kickoff 到 Tape-Out，所有验证工作——项目管理、仿真执行、覆盖率分析、回归测试、AI 辅助验证——尽在单一桌面应用中完成。
+  从项目 Kickoff 到 Tape-Out，所有验证工作——项目管理、仿真执行、覆盖率分析、时序违例管理、回归测试、AI 辅助验证——尽在单一桌面应用中完成。
 </p>
 
 <p align="center">
@@ -27,19 +27,25 @@
 | 能力域 | 说明 |
 |--------|------|
 | **项目管理** | 多项目打开/切换、文件树浏览、文件编辑器、项目状态持久化与恢复、源码控制 |
-| **插件系统** | 6 种插件类型（子系统发现 / 用例解析 / 仿真执行 / 覆盖率解析 / 选项 Schema / UI），支持用户目录自动发现、状态管理和沙箱视图 |
-| **仿真执行** | SimulationManager 管理仿真生命周期，编译错误解析，运行历史记录与对比 |
-| **终端集成** | node-pty + xterm.js 多标签终端，支持 EDA 工具交互与仿真直连执行 |
-| **错误分析** | 仿真失败自动触发 AI 错误分析，编译错误自动修复重试（最大 3 次），仿真错误给出建议 |
-| **Diff Review** | AI Agent 代码改动的逐块审阅系统，接受/拒绝每个 hunk，支持 overwritten hunk 检测 |
-| **覆盖率分析** | CoverageManager 多维度覆盖率（行 / Toggle / 功能 / 断言），趋势可视化，HTML/JSON 导出 |
+| **插件系统** | 6 种插件类型（case-parser / subsys-discoverer / simulation-runner / coverage-parser / sim-option-schema / ui），支持用户目录自动发现、优先级管理和沙箱视图 |
+| **仿真执行** | SimulationManager 管理仿真生命周期，编译错误解析，运行历史记录与对比，运行预设管理 |
+| **终端集成** | node-pty + xterm.js 多标签终端，支持仿真直连执行、自定义 bashrc 配置 |
+| **错误分析** | 仿真失败自动触发 AI 错误分析，compile_error 自动修复并重试（最大 3 次），sim_error 给出建议 |
+| **Diff Review** | AI Agent 代码改动的逐块审阅系统，接受/拒绝每个 hunk，支持 overwritten hunk 检测和 before reconstruction |
+| **覆盖率分析** | CoverageManager 多维度覆盖率（行 / Toggle / 功能 / 断言），Coverage Closure 闭环，HTML/JSON 导出 |
+| **时序违例管理** | vio_summary.log 解析、违例确认工作流、Pattern 匹配、Violation Dashboard、AI Advisor |
+| **用例数据库** | SQLite 统一数据源，Case Scanner 增量扫描，仿真历史自动记录，phase 字段支持 |
+| **仪表盘** | ECharts 可视化，8+ 数据标签页（趋势/热力图/失败/回归进度/耗时分布/不稳定用例/阶段通过率/调试难度） |
 | **回归测试** | 回归套件管理、批量执行、结果汇总 |
-| **AI Agent** | 多会话管理、流式消息、Markdown 渲染、工具卡片、技能发现、上下文文件管理、OpenAI 兼容代理 |
+| **AI Agent** | 多会话管理（并发上限 10）、流式消息、Markdown + Mermaid 渲染、技能发现、上下文管理、OpenAI 兼容代理 |
+| **文档预览** | Office 文档创建/编辑、PDF/Markdown/HTML 预览、xlsx 原地编辑 |
+| **浏览器** | In-app browser 支持 window.open、SSO、书签管理、下载处理 |
+| **MCP 配置** | 多作用域 MCP 服务器配置管理、连接状态查询、工具查看 |
 | **环境配置** | EDA 工具自动检测、环境变量配置向导 |
-| **Dashboard** | 项目仿真与覆盖率指标全景视图 |
 | **TO 检查清单** | 流片前检查项管理，自动评估与报告导出 |
 | **凭据管理** | API 密钥安全存储、自定义接口地址 |
 | **命令面板** | 快捷键触发，快速操作 |
+| **内建工具集** | 17+ 专业工具：Git Manager / Git Diff / Git Quick Pull / Time Analyzer / SV Ifdef Checker / Regression Analyzer / Register Table Parser / Coverage Merger / Code Line Counter / C-SV Converter / Batch Execution / Find Replace / Log Analyzer / Performance Monitor |
 
 ## 技术栈
 
@@ -54,10 +60,12 @@
 | RPC | electron-trpc (tRPC) | 0.7.1 |
 | 终端 | node-pty + xterm.js | 1.1 / 6.0 |
 | 代码编辑器 | CodeMirror | 4.25 |
-| Markdown | react-markdown + remark-gfm | 10.1 / 4.0 |
+| Markdown | react-markdown + remark-gfm + rehype-raw | 10.1 / 4.0 |
 | AI 引擎 | oh-my-pi (omp) | 预编译 runner + git submodule 开发回退 |
+| 图表 | Apache ECharts | 5.6 |
 | 测试 | Vitest | 4 |
 | 图标 | lucide-react | 1.24 |
+| 文档 | officecli | v1.0.143 |
 
 ## 项目结构
 
@@ -66,7 +74,7 @@ soc-verify/
 ├── src/
 │   ├── main/                          # Electron 主进程 (ESM → CJS)
 │   │   ├── index.ts                   # 应用入口
-│   │   ├── ipc/router.ts              # tRPC router（~14 个子路由）
+│   │   ├── ipc/router.ts              # tRPC router（~20 个子路由）
 │   │   ├── agent/                     # AI Agent 引擎集成
 │   │   │   ├── agent-client.ts        # omp RPC 客户端
 │   │   │   ├── openai-compatible.ts   # OpenAI 兼容代理
@@ -74,32 +82,64 @@ soc-verify/
 │   │   │   ├── session-persistence.ts # 会话持久化
 │   │   │   ├── skill-discovery.ts     # 技能发现（SKILL.md 扫描）
 │   │   │   └── paths.ts               # omp/bun 路径解析
+│   │   ├── tools/                     # 内建工具集（17+ 工具）
+│   │   │   ├── git-manager.ts         # Git 仓库管理（含缓存）
+│   │   │   ├── git-quick-pull.ts      # 快速拉取
+│   │   │   ├── git-diff.ts            # Git diff 查看
+│   │   │   ├── env-checker.ts         # 环境检查（含缓存）
+│   │   │   ├── time-analyzer.ts       # 时间分析
+│   │   │   ├── sv-ifdef-checker.ts    # SV ifdef 检查
+│   │   │   ├── regression-analyzer.ts # 回归分析
+│   │   │   ├── regression-list-gen.ts # 回归列表生成
+│   │   │   ├── register-table-parser.ts # 寄存器表解析
+│   │   │   ├── reg2c.ts               # Excel→C 头文件转换
+│   │   │   ├── coverage-merger.ts     # 覆盖率合并
+│   │   │   ├── c-sv-converter.ts      # C↔SV 转换
+│   │   │   ├── batch-execution.ts     # 批量执行
+│   │   │   ├── code-line-counter.ts   # 代码行数统计
+│   │   │   ├── find-replace-router.ts # 查找替换
+│   │   │   └── log-analyzer.ts        # 日志分析
 │   │   ├── host/                      # Host Tools / URI 注册中心
 │   │   │   ├── host-tools.ts          # 工具注册中心
 │   │   │   ├── host-uris.ts           # URI scheme handler
-│   │   │   ├── discovery.ts           # 子系统/用例发现接口
 │   │   │   └── plugin-discovery.ts    # 插件驱动适配层
-│   │   ├── project/project-manager.ts # 项目管理
-│   │   ├── plugins/loader.ts          # 插件加载器
 │   │   ├── simulation/                # 仿真管理
 │   │   │   ├── simulation-manager.ts  # 仿真生命周期
-│   │   │   ├── simulation-registry.ts # 运行历史与详情
 │   │   │   ├── log-analyzer.ts        # 编译/仿真日志解析
 │   │   │   ├── error-analysis-coordinator.ts  # 自动错误分析
 │   │   │   ├── sim-terminal-linker.ts # 仿真→终端关联
 │   │   │   └── sim-presets.ts         # 仿真预设管理
+│   │   ├── case/                      # 用例数据库
+│   │   │   ├── db/                    # SQLite 数据库实现
+│   │   │   ├── case-scanner.ts        # 用例增量扫描
+│   │   │   └── case-stats-service.ts  # 用例统计服务
+│   │   ├── timing-violation/          # 时序违例管理
+│   │   │   ├── parser/                # vio_summary.log 解析
+│   │   │   ├── scanner/               # 回归目录扫描
+│   │   │   ├── confirm/               # 违例确认工作流
+│   │   │   ├── export/                # Excel/CSV 导出
+│   │   │   ├── ai/                    # TV AI Advisor
+│   │   │   └── types.ts               # 类型定义
 │   │   ├── diff/                      # Diff Review 引擎
 │   │   │   ├── diff-engine.ts         # Hunk 解析/接受/拒绝/overwritten 检测
 │   │   │   └── review-queue.ts        # 全局待审阅队列
 │   │   ├── coverage/                  # 覆盖率管理
-│   │   ├── regression/                # 回归测试管理
+│   │   │   ├── coverage-manager.ts    # 覆盖率数据管理
+│   │   │   └── coverage-worker.ts     # Worker 线程解析
+│   │   ├── browser/                   # In-app 浏览器
+│   │   ├── surface/                   # View Manager（视图边界与叠加层）
+│   │   ├── document/                  # Office 文档预览/编辑
+│   │   ├── mcp/                       # MCP 配置管理
+│   │   ├── scm/                       # 源码控制服务
+│   │   ├── project/project-manager.ts # 项目管理
+│   │   ├── plugins/loader.ts          # 插件加载器
+│   │   ├── plugin-adapters/           # 插件适配器
 │   │   ├── terminal/                  # PTY 终端管理
 │   │   ├── env/                       # 环境配置管理
 │   │   ├── credentials/               # 凭据管理
-│   │   ├── scm/                       # 源码控制服务
 │   │   └── ipc/electron-trpc-bridge.ts# tRPC ↔ Electron 桥接
 │   ├── preload/                       # Preload 脚本 (CJS)
-│   │   └── index.ts                   # contextBridge：tRPC + windowControls
+│   │   └── index.ts                   # contextBridge：tRPC + windowControls + eventBridge
 │   ├── renderer/                      # 渲染进程 (React SPA)
 │   │   └── src/
 │   │       ├── App.tsx                # 根组件
@@ -109,18 +149,21 @@ soc-verify/
 │   │       │   │   ├── LeftRail.tsx   # 左栏：文件树 / 用例树 / Dashboard
 │   │       │   │   ├── CenterArea.tsx # 中栏：终端 / AI产物 / 文件 / DiffReview
 │   │       │   │   ├── RightPanel.tsx # 右栏：AI Agent 会话
+│   │       │   │   ├── BottomPanel.tsx# 底部面板（终端/仿真选项）
 │   │       │   │   ├── ResizeHandle.tsx # 面板宽度拖拽调节
 │   │       │   │   └── OptionDock.tsx # 底部仿真选项浮窗
+│   │       │   ├── dashboard/         # 仪表盘（8+ 标签页）
 │   │       │   ├── coverage/          # 覆盖率面板
-│   │       │   ├── dashboard/         # 仪表盘
 │   │       │   ├── env/               # 环境向导
 │   │       │   ├── regression/        # 回归面板
 │   │       │   ├── terminal/          # 终端视图
 │   │       │   ├── to/                # TO 检查清单
 │   │       │   ├── diff-review/       # Diff Review 组件
-│   │       │   ├── source-control/    # 源码控制组件
+│   │       │   ├── settings/          # 设置面板
+│   │       │   ├── plugins/           # 插件管理
+│   │       │   ├── tools/             # 工具面板（17+ 工具）
 │   │       │   └── ui/                # shadcn/ui 组件
-│   │       ├── stores/                # Zustand stores（16 个）
+│   │       ├── stores/                # Zustand stores（16+ 个）
 │   │       │   ├── ui.ts              # 面板折叠 / 宽度 / 设置面板
 │   │       │   ├── theme.ts           # 主题状态
 │   │       │   ├── session.ts         # AI 会话管理
@@ -136,19 +179,20 @@ soc-verify/
 │   │       │   ├── settings.ts        # 应用设置
 │   │       │   ├── env.ts             # 环境配置
 │   │       │   ├── toast.ts           # 消息提示
-│   │       │   └── source-control.ts  # 源码控制状态
+│   │       │   ├── source-control.ts  # 源码控制状态
+│   │       │   └── workbench.ts       # 工作区状态
 │   │       ├── lib/                   # tRPC 客户端、工具函数
 │   │       └── styles/globals.css     # 全局样式 + 6 套主题
 │   └── shared/                        # 主↔渲染共享类型
 │       ├── types.ts                   # 通用类型定义
-│       └── plugin-types.ts            # 插件接口契约（5 种 PluginKind）
+│       └── plugin-types.ts            # 插件接口契约（6 种 PluginKind）
 ├── engine/oh-my-pi/                   # omp 引擎 (git submodule，仅重编 runner 需要)
 ├── plugins/                           # 内置插件
 │   ├── unisoc-subsys-discoverer/      # Unisoc 子系统发现
 │   ├── unisoc-case-parser/            # Unisoc 用例解析
 │   ├── unisoc-simulation-runner/      # Unisoc 仿真执行
 │   └── unisoc-sim-option-schema/      # Unisoc 仿真选项 Schema
-├── tests/                             # Vitest 测试（~30 个测试文件）
+├── tests/                             # Vitest 测试（~80 个测试文件）
 ├── docs/                              # PRD、issues、ADR 文档
 ├── resources/binaries/                # omp/bun 预编译二进制
 ├── electron.vite.config.ts            # 三进程构建配置
@@ -163,7 +207,7 @@ soc-verify/
 | 进程 | 目录 | 构建产物 | 职责 |
 |------|------|----------|------|
 | 主进程 | `src/main/` | CJS | 窗口管理、omp 子进程、tRPC router、IPC |
-| Preload | `src/preload/` | CJS | contextBridge：tRPC 桥接 + 窗口控制 |
+| Preload | `src/preload/` | CJS | contextBridge：tRPC 桥接 + 窗口控制 + 事件总线 |
 | 渲染进程 | `src/renderer/` | ESM | React SPA，通过 tRPC proxy 调用主进程 API |
 
 ### tRPC API
@@ -173,18 +217,26 @@ soc-verify/
 | `system` | 1 | Agent 运行时解析 |
 | `ping` / `version` / `scm` | 4 | 健康检查、版本信息、源码控制状态/提交/推送 |
 | `project` | 18 | 项目 CRUD、文件树、文件读写、子系统/用例发现、插件管理、搜索 |
-| `session` | 20+ | AI 会话创建/发送/中止/销毁、模型切换、技能发现、事件流、历史管理 |
+| `session` | 20+ | AI 会话创建/发送/中止/销毁、模型切换、技能发现、上下文管理、事件流 |
 | `simulation` | 12 | 仿真运行/状态/编译错误/中止/历史/详情/对比/终端仿真 |
 | `terminal` | 7 | 终端创建/写入/调整大小/销毁/列表/输出缓冲 |
 | `env` | 4 | EDA 工具检测、环境变量配置 |
-| `coverage` | 7 | 覆盖率总览/分子系统/趋势/导出 |
+| `coverage` | 7 | 覆盖率总览/分子系统/趋势/导出/Closure |
 | `regression` | 5 | 回归套件创建/列表/执行/取消/结果 |
-| `dashboard` | 2 | 项目指标总览 |
+| `dashboard` | 9 | 项目指标总览（8+ 图表聚合查询） |
 | `to` | 4 | TO 检查清单管理 |
 | `settings` | 10+ | 凭据管理、应用设置、MCP 配置、系统 Prompt |
 | `search` | 1 | 全局搜索（仿真历史 / 回归套件） |
 | `diff-review` | 2 | Diff 获取、拒绝应用 |
 | `errorAnalysis` | 6 | 错误分析会话管理、日志读取 |
+| `violation` | 多 | 时序违例查询/解析/统计 |
+| `confirmation` | 多 | 违例确认工作流 |
+| `pattern` | 多 | 违例 Pattern 管理 |
+| `scan` | 多 | 环境扫描缓存 |
+| `document` | 多 | Office/PDF 文档预览/编辑 |
+| `tools` | 多 | 17+ 内建工具路由 |
+| `browser` | 多 | In-app 浏览器管理 |
+| `database` | 多 | SQLite 数据库查看 |
 
 ### 关键机制
 
@@ -199,6 +251,12 @@ soc-verify/
 **Diff Review** — AI Agent 代码改动逐块审阅：hunk accept/reject、before reconstruction 重建修改前状态、overwritten hunk 检测、全局 Review Queue 跨会话聚合。
 
 **自动错误分析** — 仿真失败自动触发 AI 分析：compile_error 自动修复并重试（最大 3 次），sim_error 仅给建议。
+
+**用例数据库** — SQLite 单一数据源（`.socverify/cases.db`），Case Scanner 后台增量扫描更新，Dashboard 和 AI Agent 统一从 DB 读取。
+
+**时序违例闭环** — Regression Scan → Parsed Violations → Pattern Match → AI Confirmation Suggestion → Manual Confirmation，支持精确与模糊 Pattern 匹配。
+
+**Dashboard 架构** — 8+ 图表标签页，全量基于 Case Database SQL 聚合查询，ECharts 渲染，支持时间范围过滤和自动刷新。
 
 ## 开发
 
@@ -295,15 +353,18 @@ npm run package:linux  # Linux AppImage
 | M6 | ✅ 完成 | 仪表盘 / TO 检查清单 / 回归测试 |
 | M7 | ✅ 完成 | 技能发现 / 会话持久化 / 凭据管理 / 源码控制 / 打磨 |
 | M8 | ✅ 完成 | Diff Review 系统 / 自动错误分析 / 终端仿真执行 / Unisoc 插件集 |
+| M9 | ✅ 完成 | 时序违例管理（解析/确认/Pattern/AI Advisor）/ Case Database / 仪表盘重构 |
+| M10 | ✅ 完成 | 17+ 内建工具（Git Manager / Env Checker / Time Analyzer / SV Ifdef Checker 等）/ In-app 浏览器 / Document 预览 / Surface View Manager / MCP 配置 |
 
 ## 文档
 
-- [PRD (M2-M7)](./docs/prd-m2-m7.md) — 产品需求文档
-- [Issues (M2-M7)](./docs/issues-m2-m7.md) — 23 个垂直切片 Issue
+- [PRD (M2-M10)](./docs/prd-m2-m7.md) — 产品需求文档
+- [Issues (M2-M10)](./docs/issues-m2-m7.md) — 垂直切片 Issue
 - [CHANGELOG](./CHANGELOG.md) — 变更日志
 - [Release Notes](./release-notes/) — 各版本发布说明
 - [CONTEXT.md](./CONTEXT.md) — 领域术语与统一语言
 - [AGENTS.md](./AGENTS.md) — AI 编码助手项目指南
+- [ADR 系列](./docs/adr/) — 架构决策记录（0001-0019）
 
 ## 贡献
 
