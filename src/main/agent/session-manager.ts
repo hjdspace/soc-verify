@@ -147,6 +147,10 @@ export interface SessionEntry {
    *  (may differ from the requested model when createSession auto-fetched
    *  the first model from the API). */
   model?: string;
+  /** Whether the agent is currently processing (between agent_start and agent_end).
+   *  When true, the idle retirement timer is NOT scheduled — the session
+   *  is actively working and must not be destroyed regardless of elapsed time. */
+  isActive: boolean;
 }
 
 export interface SessionEventData {
@@ -404,6 +408,21 @@ export class SessionManagerImpl extends EventEmitter {
             `[agent:session:${sessionId}] event type="${evtType}"${summary ? ` ${summary}` : ''}`,
           );
         }
+        // Track active processing state to gate the idle timer.
+        // agent_start → session is actively working: cancel idle timer.
+        // agent_end   → session finished: schedule idle timer.
+        // This ensures a long-running agent turn (tool calls + LLM thinking
+        // that takes many minutes) is never destroyed by the idle timeout.
+        if (evtType === 'agent_start') {
+          this.setActive(sessionId, true);
+        } else if (evtType === 'agent_end') {
+          this.setActive(sessionId, false);
+        } else if (evtType && !SILENT_EVENT_TYPES.has(evtType)) {
+          // Secondary safety net: refresh idle timer on other activity events.
+          // Normally the timer is cancelled by agent_start, but if agent_start
+          // was missed (e.g. session restored mid-turn), this keeps the session alive.
+          this.touchActivity(sessionId);
+        }
         if (evtType === 'message_end') {
           const msg = (event as Record<string, unknown>)?.message as Record<string, unknown> | undefined;
           if (msg?.role === 'assistant') {
@@ -532,6 +551,7 @@ export class SessionManagerImpl extends EventEmitter {
       idleTimer: null,
       runtimeDir,
       model,
+      isActive: false,
     };
 
     this.sessions.set(sessionId, entry);
@@ -688,11 +708,39 @@ export class SessionManagerImpl extends EventEmitter {
     await Promise.all(ids.map((id) => this.destroySession(id)));
   }
 
+/**
+   * Mark a session as actively processing or idle.
+   *
+   * When `active` is true, the idle retirement timer is cancelled — the
+   * session is between agent_start and agent_end and must not be destroyed
+   * regardless of how long the LLM takes. When `active` is false, the timer
+   * is scheduled fresh from this moment.
+   */
+  private setActive(sessionId: string, active: boolean): void {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+    entry.isActive = active;
+    entry.lastActivityAt = Date.now();
+    if (active) {
+      // Cancel any pending idle timer — the session is working.
+      if (entry.idleTimer) {
+        clearTimeout(entry.idleTimer);
+        entry.idleTimer = null;
+      }
+    } else {
+      // Session finished — start the idle countdown.
+      this.scheduleIdleRetirement(sessionId);
+    }
+  }
+
   touchActivity(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
     entry.lastActivityAt = Date.now();
-    this.scheduleIdleRetirement(sessionId);
+    // Don't reschedule the timer if the session is actively processing.
+    if (!entry.isActive) {
+      this.scheduleIdleRetirement(sessionId);
+    }
   }
 
   getIdleTimeoutMs(): number {
@@ -709,6 +757,9 @@ export class SessionManagerImpl extends EventEmitter {
   private scheduleIdleRetirement(sessionId: string): void {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
+
+    // Never schedule idle retirement for an actively processing session.
+    if (entry.isActive) return;
 
     if (entry.idleTimer) {
       clearTimeout(entry.idleTimer);
