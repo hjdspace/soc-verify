@@ -316,6 +316,14 @@ export class CoverageReportGenerator {
     for (const [name, path] of reportFiles) {
       try {
         const info = await stat(path);
+        if (info.isDirectory()) {
+          await appendFile(
+            logPath,
+            `\n[${name}] Path is a DIRECTORY (not a file): ${path}. IMC report_metrics may generate HTML directory. Skipping.\n`,
+            'utf-8',
+          );
+          continue;
+        }
         if (info.size > 0) {
           generatedFiles.push(path);
           await appendFile(
