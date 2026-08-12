@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Minus, Square, X, Copy, PanelLeft, PanelRight, PanelBottom, Settings, Search, ChevronRight, GitCommitHorizontal, Terminal } from 'lucide-react';
+import { Minus, Square, X, Copy, PanelLeft, PanelRight, PanelBottom, Settings, Search, ChevronRight, GitCommitHorizontal, SlidersHorizontal } from 'lucide-react';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
 import { useEnvStore } from '@renderer/stores/env';
@@ -193,7 +193,7 @@ export function TitleBar() {
           title="环境变量管理"
           active={managerOpen}
         >
-          <Terminal className="h-3.5 w-3.5" />
+          <SlidersHorizontal className="h-3.5 w-3.5" />
         </TitleBarButton>
 
         {/* 工具下拉菜单 */}

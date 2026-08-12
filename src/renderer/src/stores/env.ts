@@ -1,13 +1,11 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
-import type { EdaToolInfo, EnvConfig, EnvVarGroup, SystemEnvVars } from '@shared/types';
+import type { EdaToolInfo, EnvConfig, SystemEnvVars } from '@shared/types';
 
 interface EnvStoreState {
   config: EnvConfig | null;
   knownEnvVars: string[];
-  /** Env var catalog grouped by category. */
-  catalog: EnvVarGroup[];
   /** System-detected env vars from the current terminal/shell. */
   systemEnvVars: SystemEnvVars;
   detecting: boolean;
@@ -22,7 +20,6 @@ interface EnvStoreState {
   loadConfig: (projectId: string) => Promise<void>;
   saveConfig: (projectId: string, config: EnvConfig) => Promise<void>;
   loadKnownEnvVars: () => Promise<void>;
-  loadCatalog: () => Promise<void>;
   loadSystemEnv: () => Promise<void>;
   /** Auto-detect system env vars and merge into project config (persists to disk). */
   autoDetect: (projectId: string) => Promise<void>;
@@ -39,7 +36,6 @@ interface EnvStoreState {
 export const useEnvStore = create<EnvStoreState>((set, _get) => ({
   config: null,
   knownEnvVars: [],
-  catalog: [],
   systemEnvVars: {},
   detecting: false,
   detectingSystemEnv: false,
@@ -89,15 +85,6 @@ export const useEnvStore = create<EnvStoreState>((set, _get) => ({
     try {
       const vars = await trpc.env.getKnownEnvVars.query();
       set({ knownEnvVars: vars });
-    } catch {
-      // Best-effort
-    }
-  },
-
-  loadCatalog: async () => {
-    try {
-      const catalog = await trpc.env.getCatalog.query();
-      set({ catalog });
     } catch {
       // Best-effort
     }

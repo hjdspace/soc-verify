@@ -18,7 +18,7 @@ import {
   Save,
   Search,
   RefreshCw,
-  Terminal,
+  SlidersHorizontal,
   Folder,
   Check,
   Loader2,
@@ -28,7 +28,11 @@ import {
 import { useEnvStore } from '@renderer/stores/env';
 import { useProjectStore } from '@renderer/stores/project';
 import { cn } from '@renderer/lib/utils';
+import { getEnvVarCatalog } from '@shared/env-catalog';
 import type { EnvVarCategory, EnvVarGroup } from '@shared/types';
+
+/** Static catalog — available immediately, no async loading needed. */
+const CATALOG = getEnvVarCatalog();
 
 export function EnvManagerDialog() {
   const managerOpen = useEnvStore((s) => s.managerOpen);
@@ -38,9 +42,7 @@ export function EnvManagerDialog() {
 
 function Dialog() {
   const config = useEnvStore((s) => s.config);
-  const catalog = useEnvStore((s) => s.catalog);
   const systemEnvVars = useEnvStore((s) => s.systemEnvVars);
-  const loadCatalog = useEnvStore((s) => s.loadCatalog);
   const loadSystemEnv = useEnvStore((s) => s.loadSystemEnv);
   const loadConfig = useEnvStore((s) => s.loadConfig);
   const detectTools = useEnvStore((s) => s.detectTools);
@@ -57,15 +59,14 @@ function Dialog() {
   );
   const [saving, setSaving] = useState(false);
 
-  // Load catalog, system env, and project config on open
+  // Load system env and project config on open
   useEffect(() => {
-    void loadCatalog();
     void loadSystemEnv();
     if (currentProjectId) {
       void loadConfig(currentProjectId);
       void detectTools();
     }
-  }, [loadCatalog, loadSystemEnv, loadConfig, detectTools, currentProjectId]);
+  }, [loadSystemEnv, loadConfig, detectTools, currentProjectId]);
 
   const envVars = config?.envVars ?? {};
 
@@ -98,20 +99,18 @@ function Dialog() {
 
   // Filter catalog by search
   const filteredCatalog: EnvVarGroup[] = search
-    ? catalog
-        .map((group) => ({
-          ...group,
-          vars: group.vars.filter(
-            (v) =>
-              v.name.toLowerCase().includes(search.toLowerCase()) ||
-              v.description.toLowerCase().includes(search.toLowerCase()),
-          ),
-        }))
-        .filter((g) => g.vars.length > 0)
-    : catalog;
+    ? CATALOG.map((group) => ({
+        ...group,
+        vars: group.vars.filter(
+          (v) =>
+            v.name.toLowerCase().includes(search.toLowerCase()) ||
+            v.description.toLowerCase().includes(search.toLowerCase()),
+        ),
+      })).filter((g) => g.vars.length > 0)
+    : CATALOG;
 
   // Custom env vars (not in catalog)
-  const catalogVarNames = new Set(catalog.flatMap((g) => g.vars.map((v) => v.name)));
+  const catalogVarNames = new Set(CATALOG.flatMap((g) => g.vars.map((v) => v.name)));
   const customVars = Object.entries(envVars).filter(([key]) => !catalogVarNames.has(key));
 
   const detectedCount = Object.keys(systemEnvVars).length;
@@ -123,7 +122,7 @@ function Dialog() {
         {/* ── Header ─────────────────────────────────────── */}
         <div className="flex items-center justify-between border-b px-5 py-3">
           <div className="flex items-center gap-2">
-            <Terminal className="h-4 w-4 text-primary" />
+            <SlidersHorizontal className="h-4 w-4 text-primary" />
             <span className="text-sm font-semibold">环境变量管理</span>
             <span className="ml-2 text-xs text-muted-foreground">
               {configuredCount} 已配置 · {detectedCount} 系统检测
@@ -203,12 +202,18 @@ function Dialog() {
 
           {/* Custom env vars */}
           {customVars.length > 0 && (
-            <div className="mt-4">
-              <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
-                <ChevronRight className="h-3 w-3" />
-                自定义环境变量
-              </div>
-              <div className="space-y-1.5">
+            <div className="mb-2">
+              <button className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left">
+                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="text-xs font-semibold">自定义环境变量</span>
+                <span className="text-[10px] text-muted-foreground">非标准变量</span>
+                <div className="ml-auto flex items-center gap-2 text-[10px]">
+                  <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-primary">
+                    {customVars.length} 已配置
+                  </span>
+                </div>
+              </button>
+              <div className="ml-5 space-y-1.5 border-l border-border/50 pl-3">
                 {customVars.map(([key, val]) => (
                   <EnvVarRow
                     key={key}
@@ -488,7 +493,7 @@ function EdaToolsSection({
   const notDetected = tools.filter((t) => !t.detected);
 
   return (
-    <div className="mb-3">
+    <div className="mb-2">
       <button
         onClick={() => setExpanded(!expanded)}
         className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors hover:bg-accent/50"
@@ -522,29 +527,55 @@ function EdaToolsSection({
       </button>
 
       {expanded && !detecting && (
-        <div className="ml-5 space-y-1 border-l border-border/50 pl-3">
+        <div className="ml-5 space-y-1.5 border-l border-border/50 pl-3">
           {detected.map((tool) => (
             <div
               key={tool.name}
-              className="flex items-center gap-2 rounded border border-status-pass/30 bg-status-pass/5 px-2 py-1"
+              className="flex items-start gap-2 rounded border border-status-pass/30 bg-status-pass/5 px-1 py-1"
             >
-              <Check className="h-3 w-3 text-status-pass-foreground" />
-              <span className="w-40 shrink-0 text-xs font-medium">{tool.name}</span>
-              <span className="flex-1 truncate font-mono text-[10px] text-muted-foreground" title={tool.path}>
-                {tool.path}
-              </span>
-              {tool.version && (
-                <span className="max-w-[200px] truncate text-[10px] text-muted-foreground" title={tool.version}>
-                  {tool.version}
+              <div className="w-44 shrink-0 pt-1">
+                <div className="flex items-center gap-1">
+                  <Check className="h-3 w-3 shrink-0 text-status-pass-foreground" />
+                  <span className="truncate text-xs font-medium" title={tool.name}>
+                    {tool.name}
+                  </span>
+                </div>
+                {tool.version && (
+                  <div className="mt-0.5 truncate text-[10px] text-muted-foreground" title={tool.version}>
+                    {tool.version}
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 pt-1">
+                <span className="block truncate font-mono text-[10px] text-muted-foreground" title={tool.path}>
+                  {tool.path}
                 </span>
-              )}
+              </div>
+              <div className="shrink-0 pt-1">
+                <span className="rounded-full bg-status-pass/10 px-1.5 py-0.5 text-[10px] text-status-pass-foreground">
+                  已检测
+                </span>
+              </div>
             </div>
           ))}
           {notDetected.map((tool) => (
-            <div key={tool.name} className="flex items-center gap-2 rounded px-2 py-1 opacity-60">
-              <X className="h-3 w-3 text-muted-foreground" />
-              <span className="w-40 shrink-0 text-xs">{tool.name}</span>
-              <span className="flex-1 text-[10px] text-muted-foreground">未检测到</span>
+            <div key={tool.name} className="flex items-start gap-2 rounded px-1 py-1 opacity-60">
+              <div className="w-44 shrink-0 pt-1">
+                <div className="flex items-center gap-1">
+                  <X className="h-3 w-3 shrink-0 text-muted-foreground" />
+                  <span className="truncate text-xs font-medium" title={tool.name}>
+                    {tool.name}
+                  </span>
+                </div>
+              </div>
+              <div className="flex-1 pt-1">
+                <span className="text-[10px] text-muted-foreground">未检测到</span>
+              </div>
+              <div className="shrink-0 pt-1">
+                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  未检测
+                </span>
+              </div>
             </div>
           ))}
         </div>
