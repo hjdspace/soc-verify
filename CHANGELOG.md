@@ -6,6 +6,23 @@
 
 ---
 
+## [0.2.7](https://github.com/hjdspace/soc-verify/compare/v0.2.6...v0.2.7) (2026-08-13)
+
+### Features
+
+* **todo:** 新增 todo 面板功能，支持多状态任务展示与会话级折叠状态
+* **env:** 新增环境变量管理功能与文件路径交互优化
+* **mcp:** 集成 TraceWeave 作为内置 MCP 服务器
+* **python:** 新增 Python 路径解析、终端 shell 修复及 MCP 配置增强
+
+### Bug Fixes
+
+* **diff-review:** 恢复 AI edit diff review 工作流
+
+### Refactor
+
+* **env:** 统一环境变量目录管理，移除冗余状态
+
 ## [0.2.6](https://github.com/hjdspace/soc-verify/compare/v0.2.5...v0.2.6) (2026-08-11)
 
 ### Features
