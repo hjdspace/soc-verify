@@ -22,7 +22,7 @@
  * Debug 日志：解析过程会写入 reportDir/parser-debug.log，记录每一步的解析结果。
  */
 
-const { readFileSync, readdirSync, existsSync, writeFileSync, appendFileSync } = require('node:fs');
+const { readFileSync, readdirSync, existsSync, writeFileSync, appendFileSync, statSync } = require('node:fs');
 const { join } = require('node:path');
 
 const MANIFEST = {
@@ -986,49 +986,48 @@ async function parse(projectRoot, sessionId, reportDir) {
   log('covMergeDir: ' + covMergeDir);
   log('edaTool: ' + edaTool);
 
+  // 辅助函数：安全读取文本文件，跳过目录（IMC report_metrics 会生成目录而非文件）
+  function safeReadTextFile(filePath, log, label) {
+    if (!existsSync(filePath)) {
+      log(label + ': NOT FOUND at ' + filePath);
+      return '';
+    }
+    try {
+      var stats = statSync(filePath);
+      if (stats.isDirectory()) {
+        log(label + ': is a DIRECTORY (not a file) at ' + filePath + ' — skipping');
+        return '';
+      }
+      var content = readFileSync(filePath, 'utf-8');
+      log(label + ': found, ' + content.length + ' chars');
+      return content;
+    } catch (e) {
+      log(label + ': read error: ' + (e && e.message ? e.message : String(e)));
+      return '';
+    }
+  }
+
   // 2. 尝试读取文本报告
   var summaryText = '';
   var detailText = '';
-  var metricsText = '';
 
   var summaryPath = join(reportDir, 'summary.txt');
   var detailPath = join(reportDir, 'detail.txt');
   var metricsPath = join(reportDir, 'metrics.txt');
 
-  if (existsSync(summaryPath)) {
-    try {
-      summaryText = readFileSync(summaryPath, 'utf-8');
-      log('summary.txt: found, ' + summaryText.length + ' chars');
-      log('summary.txt first 500 chars:\n' + summaryText.substring(0, 500));
-    } catch (e) {
-      log('summary.txt: read error: ' + (e && e.message ? e.message : String(e)));
-    }
-  } else {
-    log('summary.txt: NOT FOUND at ' + summaryPath);
+  // 使用 safeReadTextFile 安全读取，处理 IMC 可能生成目录而非文件的情况
+  summaryText = safeReadTextFile(summaryPath, log, 'summary.txt');
+  if (summaryText) {
+    log('summary.txt first 500 chars:\n' + summaryText.substring(0, 500));
   }
 
-  if (existsSync(detailPath)) {
-    try {
-      detailText = readFileSync(detailPath, 'utf-8');
-      log('detail.txt: found, ' + detailText.length + ' chars');
-      log('detail.txt first 500 chars:\n' + detailText.substring(0, 500));
-    } catch (e) {
-      log('detail.txt: read error: ' + (e && e.message ? e.message : String(e)));
-    }
-  } else {
-    log('detail.txt: NOT FOUND at ' + detailPath);
+  detailText = safeReadTextFile(detailPath, log, 'detail.txt');
+  if (detailText) {
+    log('detail.txt first 500 chars:\n' + detailText.substring(0, 500));
   }
 
-  if (existsSync(metricsPath)) {
-    try {
-      metricsText = readFileSync(metricsPath, 'utf-8');
-      log('metrics.txt: found, ' + metricsText.length + ' chars');
-    } catch (e) {
-      log('metrics.txt: read error: ' + (e && e.message ? e.message : String(e)));
-    }
-  } else {
-    log('metrics.txt: NOT FOUND at ' + metricsPath);
-  }
+  // metrics.txt 读取（仅用于 debug 日志，IMC report_metrics 可能生成目录）
+  safeReadTextFile(metricsPath, log, 'metrics.txt');
 
   // 3. 解析文本报告
   var summaryMetrics = null;
@@ -1068,42 +1067,23 @@ async function parse(projectRoot, sessionId, reportDir) {
 
   // grade 报告
   var gradePath = join(reportDir, 'grade.txt');
-  if (existsSync(gradePath)) {
-    try {
-      var gradeText = readFileSync(gradePath, 'utf-8');
-      log('grade.txt: found, ' + gradeText.length + ' chars');
-      testContributions = parseGradeReport(gradeText, log);
-    } catch (e) {
-      log('grade.txt: read error: ' + (e && e.message ? e.message : String(e)));
-    }
+  var gradeText = safeReadTextFile(gradePath, log, 'grade.txt');
+  if (gradeText) {
+    testContributions = parseGradeReport(gradeText, log);
   } else {
     // urg -grade testfile 生成的是 gradedtests.txt
     var urgGradePath = join(reportDir, 'gradedtests.txt');
-    if (existsSync(urgGradePath)) {
-      try {
-        var urgGradeText = readFileSync(urgGradePath, 'utf-8');
-        log('gradedtests.txt: found, ' + urgGradeText.length + ' chars');
-        testContributions = parseGradeReport(urgGradeText, log);
-      } catch (e) {
-        log('gradedtests.txt: read error: ' + (e && e.message ? e.message : String(e)));
-      }
-    } else {
-      log('grade.txt / gradedtests.txt: NOT FOUND');
+    var urgGradeText = safeReadTextFile(urgGradePath, log, 'gradedtests.txt');
+    if (urgGradeText) {
+      testContributions = parseGradeReport(urgGradeText, log);
     }
   }
 
   // bins 报告
   var binsPath = join(reportDir, 'bins.txt');
-  if (existsSync(binsPath)) {
-    try {
-      var binsText = readFileSync(binsPath, 'utf-8');
-      log('bins.txt: found, ' + binsText.length + ' chars');
-      uncoveredBins = parseBinsReport(binsText, log);
-    } catch (e) {
-      log('bins.txt: read error: ' + (e && e.message ? e.message : String(e)));
-    }
-  } else {
-    log('bins.txt: NOT FOUND');
+  var binsText = safeReadTextFile(binsPath, log, 'bins.txt');
+  if (binsText) {
+    uncoveredBins = parseBinsReport(binsText, log);
   }
 
   // CSV 数据
