@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine, Puzzle, FileType, Database as DatabaseIcon } from 'lucide-react';
-import { useWorkbenchStore, openFileDestination } from '@renderer/stores/workbench';
+import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
@@ -13,7 +13,7 @@ import { TOChecklistPanel } from '@renderer/components/to/TOChecklistPanel';
 import { SourceControlPanel } from '@renderer/components/scm/SourceControlPanel';
 import { FileEditor } from '@renderer/components/editor/FileEditor';
 import { DiffReviewView } from '@renderer/components/editor/DiffReviewView';
-import { useDiffReviewStore } from '@renderer/stores/diff-review';
+import { openReviewAwareFile, useDiffReviewStore } from '@renderer/stores/diff-review';
 import { RunningCasesPanel } from '@renderer/components/simulation/RunningCasesPanel';
 import { TERMINAL_TAB_MIME } from '@renderer/components/layout/BottomPanel';
 import { trpc } from '@renderer/lib/trpc';
@@ -166,13 +166,13 @@ export function CenterArea() {
       if (!result.canceled) {
         for (const file of result.files) {
           // 根据扩展名分发：Office 文档走 office-document 预览/编辑，其他走普通 file
-          openFileDestination(openDestination, file.path, file.name);
+          openReviewAwareFile(file.path, file.name);
         }
       }
     } catch {
       // best-effort
     }
-  }, [currentProjectId, openDestination]);
+  }, [currentProjectId]);
 
   const openSimErrors = (runId: string) => {
     openDestination({ type: 'simulation-errors', runId });

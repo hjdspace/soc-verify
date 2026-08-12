@@ -4,10 +4,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import type { ChatMessage } from '@renderer/stores/session';
 
 vi.mock('@renderer/stores/diff-review', () => ({
-  useDiffReviewStore: Object.assign(
-    vi.fn((selector: (state: { queue: never[] }) => unknown) => selector({ queue: [] })),
-    { getState: () => ({ openFile: vi.fn() }) },
-  ),
+  openReviewAwareFile: vi.fn(),
 }));
 
 vi.mock('@renderer/stores/workbench', () => ({
@@ -48,6 +45,7 @@ vi.mock('@renderer/stores/toast', () => ({
 }));
 
 import { ToolCard } from '@renderer/components/chat/ToolCard';
+import { openReviewAwareFile } from '@renderer/stores/diff-review';
 
 function completedMessage(toolName: string, toolArgs: unknown, result: unknown): ChatMessage {
   return {
@@ -201,5 +199,20 @@ describe('ToolCard file tools', () => {
     const header = Array.from(clickable).find((el) => el.textContent === 'src/demo.ts');
     expect(header).not.toBeUndefined();
     expect(header?.getAttribute('title')).toContain('点击打开文件');
+  });
+
+  it('opens an edit through the review-aware file entry from summary and expanded path', () => {
+    render(<ToolCard message={completedMessage(
+      'edit',
+      { path: 'D:\\project\\src\\demo.ts', oldText: 'old', newText: 'new' },
+      'Edit applied',
+    )} />);
+
+    fireEvent.click(screen.getByText('.../src/demo.ts'));
+    expect(openReviewAwareFile).toHaveBeenCalledWith('D:\\project\\src\\demo.ts', 'demo.ts');
+
+    fireEvent.click(screen.getByTitle('展开'));
+    fireEvent.click(screen.getByText('D:\\project\\src\\demo.ts'));
+    expect(openReviewAwareFile).toHaveBeenCalledTimes(2);
   });
 });

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, RefreshCw, Cpu, FileText, LayoutDashboard, ChevronDown, Plus, Folder, Puzzle } from 'lucide-react';
 import { useProjectStore } from '@renderer/stores/project';
 import { useOverviewStore } from '@renderer/stores/overview';
-import { useWorkbenchStore, openFileDestination } from '@renderer/stores/workbench';
+import { openReviewAwareFile } from '@renderer/stores/diff-review';
 import { FileTree } from '../project/FileTree';
 import { SubsysList } from '../project/SubsysList';
 import { cn } from '@renderer/lib/utils';
@@ -27,7 +27,6 @@ export function LeftRail({ width }: LeftRailProps) {
   const loadFileTree = useProjectStore((s) => s.loadFileTree);
   const closeProject = useProjectStore((s) => s.closeProject);
   const refreshFileTree = useProjectStore((s) => s.refreshFileTree);
-  const openDestination = useWorkbenchStore((s) => s.open);
   const plugins = useProjectStore((s) => s.plugins);
 
   const currentProject = projects.find((p) => p.id === currentProjectId);
@@ -53,8 +52,7 @@ export function LeftRail({ width }: LeftRailProps) {
   }, []);
 
   const handleSelectFile = (path: string, name: string) => {
-    // 根据扩展名分发：.docx/.pptx/.xlsx/.pdf → office-document，其他 → 普通 file
-    openFileDestination(openDestination, path, name);
+    openReviewAwareFile(path, name);
   };
 
   const handleSelectProject = (projectId: string) => {

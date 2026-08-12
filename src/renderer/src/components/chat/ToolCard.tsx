@@ -20,7 +20,7 @@
  */
 import { useState, useEffect, useMemo, useCallback, type ReactNode } from 'react';
 import { Loader2, ChevronDown, Terminal } from 'lucide-react';
-import { useDiffReviewStore } from '@renderer/stores/diff-review';
+import { openReviewAwareFile } from '@renderer/stores/diff-review';
 import { useProjectStore } from '@renderer/stores/project';
 import { useTerminalStore } from '@renderer/stores/terminal';
 import { trpc } from '@renderer/lib/trpc';
@@ -52,7 +52,6 @@ import {
   parseOmpEditResult,
   type DiffLineData,
 } from './tool-helpers';
-import { useWorkbenchStore, openFileDestination } from '@renderer/stores/workbench';
 
 // ── Syntax highlighting ─────────────────────────────────
 
@@ -103,7 +102,7 @@ function ClickablePathHeader({ filePath }: { filePath: string }) {
   const handleClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     const fileName = filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
-    openFileDestination(useWorkbenchStore.getState().open, filePath, fileName);
+    openReviewAwareFile(filePath, fileName);
   }, [filePath]);
 
   return (
@@ -132,27 +131,12 @@ export function ToolCard({ message }: { message: ChatMessage }) {
   const isFileTool = !isExecuting && FILE_TOOLS.has(toolName);
   const filePath = isFileTool ? extractEditFilePath(message.toolArgs, resultText) : '';
 
-  // Check if this tool call is in the review queue (not yet reviewed)
-  const reviewEntry = useDiffReviewStore((state) =>
-    state.queue.find((entry) =>
-      entry.toolCalls.some((toolCall) => toolCall.id === message.id)
-      && !entry.reviewed,
-    ),
-  );
-  const isInReviewQueue = !isExecuting && !!reviewEntry && !!reviewEntry.filePath && reviewEntry.filePath === filePath;
-
   const handlePathClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     if (!filePath) return;
-    if (isInReviewQueue) {
-      // Still pending review — open diff review
-      useDiffReviewStore.getState().openFile(filePath);
-    } else {
-      // Already reviewed or not in queue — open file in editor
-      const fileName = filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
-      openFileDestination(useWorkbenchStore.getState().open, filePath, fileName);
-    }
-  }, [filePath, isInReviewQueue]);
+    const fileName = filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
+    openReviewAwareFile(filePath, fileName);
+  }, [filePath]);
 
   const [, tick] = useState(0);
   useEffect(() => {
@@ -204,7 +188,7 @@ export function ToolCard({ message }: { message: ChatMessage }) {
           <span
             onClick={handlePathClick}
             className="flex-1 min-w-0 truncate text-[11px] cursor-pointer text-status-running-foreground hover:underline"
-            title={isInReviewQueue ? `点击在 Diff Review 中打开: ${filePath}` : `点击打开文件: ${filePath}`}
+            title={`点击打开文件: ${filePath}`}
           >
             {summary}
           </span>
