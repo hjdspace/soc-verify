@@ -181,6 +181,8 @@ describe('SessionStore — event handling and state machine', () => {
       cwd: '/tmp/proj',
       provider: undefined,
       model: undefined,
+      providerId: undefined,
+      approvalMode: 'yolo',
     });
     expect(mockSend).toHaveBeenCalledWith({ sessionId: 'session_test_1', message: 'Hello AI' });
     const session = state.sessions[0];
@@ -480,6 +482,28 @@ describe('SessionStore — event handling and state machine', () => {
     expect(session.status).toBe('streaming');
     const toolMsg = session.messages.find((m) => m.role === 'tool');
     expect(toolMsg!.toolResult).toEqual([{ name: 'subsys_a' }]);
+    expect(toolMsg!.toolEndTime).toBeDefined();
+  });
+
+  it('creates a tool message on tool_execution_end when tool_execution_start was missed', async () => {
+    const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+
+    // Send tool_execution_end WITHOUT a preceding tool_execution_start
+    useSessionStore.getState().handleSessionEvent(id!, {
+      type: 'tool_execution_end',
+      toolCallId: 'tc_missed_1',
+      toolName: 'write',
+      args: { path: '/tmp/test.txt', content: 'hello' },
+      result: { content: [{ type: 'text', text: 'File written successfully' }] },
+    });
+
+    const session = useSessionStore.getState().sessions[0];
+    expect(session.status).toBe('streaming');
+    const toolMsg = session.messages.find((m) => m.role === 'tool');
+    expect(toolMsg).toBeDefined();
+    expect(toolMsg!.toolName).toBe('write');
+    expect(toolMsg!.toolCallId).toBe('tc_missed_1');
+    expect(toolMsg!.toolResult).toEqual({ content: [{ type: 'text', text: 'File written successfully' }] });
     expect(toolMsg!.toolEndTime).toBeDefined();
   });
 
