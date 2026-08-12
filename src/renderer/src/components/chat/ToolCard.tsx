@@ -93,9 +93,33 @@ function CodeHighlight({ code, language, className }: { code: string; language: 
   );
 }
 
+// ── Clickable file path header ──────────────────────────
+
+/**
+ * Renders a clickable file path header used in expanded body views.
+ * Clicking opens the file in the workbench editor via openFileDestination.
+ */
+function ClickablePathHeader({ filePath }: { filePath: string }) {
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    const fileName = filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
+    openFileDestination(useWorkbenchStore.getState().open, filePath, fileName);
+  }, [filePath]);
+
+  return (
+    <div
+      onClick={handleClick}
+      className="cursor-pointer border-b border-border/30 bg-background/50 px-2.5 py-0.5 text-[10px] text-muted-foreground/60 hover:underline"
+      title={`点击打开文件: ${filePath}`}
+    >
+      {filePath}
+    </div>
+  );
+}
+
 // ── Main ToolCard ───────────────────────────────────────
 
-const FILE_EDITING_TOOLS = new Set(['write', 'write_file', 'edit', 'edit_file', 'apply_patch', 'ast_edit']);
+const FILE_TOOLS = new Set(['read', 'read_file', 'write', 'write_file', 'edit', 'edit_file', 'apply_patch', 'ast_edit']);
 
 export function ToolCard({ message }: { message: ChatMessage }) {
   const [expanded, setExpanded] = useState(false);
@@ -103,10 +127,9 @@ export function ToolCard({ message }: { message: ChatMessage }) {
   const meta = getToolMeta(message.toolName);
   const resultText = extractResultText(message.toolResult);
 
-  // Extract file path from args directly so it's always available,
   // even after the file has been reviewed and removed from the queue.
   const toolName = message.toolName ?? '';
-  const isFileTool = !isExecuting && FILE_EDITING_TOOLS.has(toolName);
+  const isFileTool = !isExecuting && FILE_TOOLS.has(toolName);
   const filePath = isFileTool ? extractEditFilePath(message.toolArgs, resultText) : '';
 
   // Check if this tool call is in the review queue (not yet reviewed)
@@ -484,12 +507,15 @@ function ReadBody({ args, resultText }: { args: unknown; resultText: string }) {
   const lines = resultText.split('\n');
 
   return (
-    <div className="flex max-h-80 overflow-auto text-[11px] leading-relaxed">
-      <div className="select-none border-r border-border/40 bg-background/50 px-2 py-1.5 text-right text-muted-foreground/60">
-        {lines.map((_, i) => <div key={i}>{offset + i}</div>)}
-      </div>
-      <div className="flex-1 overflow-x-auto px-2.5 py-1.5">
-        <CodeHighlight code={resultText} language={language} className="text-foreground/90" />
+    <div className="text-[11px] leading-relaxed">
+      {filePath && <ClickablePathHeader filePath={filePath} />}
+      <div className="flex max-h-80 overflow-auto">
+        <div className="select-none border-r border-border/40 bg-background/50 px-2 py-1.5 text-right text-muted-foreground/60">
+          {lines.map((_, i) => <div key={i}>{offset + i}</div>)}
+        </div>
+        <div className="flex-1 overflow-x-auto px-2.5 py-1.5">
+          <CodeHighlight code={resultText} language={language} className="text-foreground/90" />
+        </div>
       </div>
     </div>
   );
@@ -504,16 +530,19 @@ function WriteBody({ args, resultText }: { args: unknown; resultText: string }) 
   const lines = content.split('\n');
 
   return (
-    <div className="max-h-80 overflow-auto bg-diff-add/20 text-[11px] leading-relaxed">
-      {lines.map((line, i) => (
-        <div key={i} className="flex">
-          <span className="w-5 shrink-0 select-none text-center text-status-pass-foreground">+</span>
-          <span className="w-8 shrink-0 select-none border-r border-status-pass-foreground/20 pr-1 text-right text-status-pass-foreground/60">{i + 1}</span>
-          <span className="flex-1 overflow-x-auto px-2 text-diff-add-foreground">
-            <CodeHighlight code={line || '\u00A0'} language={language} />
-          </span>
-        </div>
-      ))}
+    <div className="text-[11px] leading-relaxed">
+      {filePath && <ClickablePathHeader filePath={filePath} />}
+      <div className="max-h-80 overflow-auto bg-diff-add/20">
+        {lines.map((line, i) => (
+          <div key={i} className="flex">
+            <span className="w-5 shrink-0 select-none text-center text-status-pass-foreground">+</span>
+            <span className="w-8 shrink-0 select-none border-r border-status-pass-foreground/20 pr-1 text-right text-status-pass-foreground/60">{i + 1}</span>
+            <span className="flex-1 overflow-x-auto px-2 text-diff-add-foreground">
+              <CodeHighlight code={line || '\u00A0'} language={language} />
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -561,11 +590,7 @@ function EditBody({ args, resultText }: { args: unknown; resultText: string }) {
     // Show file path header
     return (
       <div className="text-[11px] leading-relaxed">
-        {filePath && (
-          <div className="border-b border-border/30 bg-background/50 px-2.5 py-0.5 text-[10px] text-muted-foreground/60">
-            {filePath}
-          </div>
-        )}
+        {filePath && <ClickablePathHeader filePath={filePath} />}
         <div className="max-h-80 overflow-auto">
           {diff.map((line, i) => <DiffLineView key={i} line={line} language={language} />)}
         </div>
@@ -585,11 +610,7 @@ function EditBody({ args, resultText }: { args: unknown; resultText: string }) {
     });
     return (
       <div className="text-[11px] leading-relaxed">
-        {filePath && (
-          <div className="border-b border-border/30 bg-background/50 px-2.5 py-0.5 text-[10px] text-muted-foreground/60">
-            {filePath}
-          </div>
-        )}
+        {filePath && <ClickablePathHeader filePath={filePath} />}
         <div className="max-h-80 overflow-auto">
           {lines.map((line, i) => {
             if (line.type === 'hunk') {
@@ -617,11 +638,7 @@ function OmpEditResultView({ resultText, language }: { resultText: string; langu
   const { filePath, contentLines, warnings } = parseOmpEditResult(resultText);
   return (
     <div className="text-[11px] leading-relaxed">
-      {filePath && (
-        <div className="border-b border-border/30 bg-background/50 px-2.5 py-0.5 text-[10px] text-muted-foreground/60">
-          {filePath}
-        </div>
-      )}
+      {filePath && <ClickablePathHeader filePath={filePath} />}
       {contentLines.length > 0 && (
         <div className="max-h-80 overflow-auto">
           {contentLines.map((line, i) => (

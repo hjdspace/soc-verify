@@ -9,6 +9,7 @@ import { TaskPanel } from './TaskPanel';
 import { BottomPanel } from './BottomPanel';
 import { CommandPalette } from './CommandPalette';
 import { EnvWizard } from '@renderer/components/env/EnvWizard';
+import { EnvManagerDialog } from '@renderer/components/env/EnvManagerDialog';
 import { SettingsPanel } from '@renderer/components/settings/SettingsPanel';
 import { SourceControlDialog } from '@renderer/components/scm/SourceControlDialog';
 import { useUiStore } from '@renderer/stores/ui';
@@ -39,12 +40,13 @@ export function AppShell() {
   const sourceControlOpen = useUiStore((s) => s.sourceControlOpen);
   const centerMenuOpen = useUiStore((s) => s.centerMenuOpen);
   const wizardOpen = useEnvStore((s) => s.wizardOpen);
+  const managerOpen = useEnvStore((s) => s.managerOpen);
 
   useEffect(() => {
     void window.surfaceBridge?.setOverlayHidden(
-      settingsOpen || commandPaletteOpen || sourceControlOpen || centerMenuOpen || wizardOpen,
+      settingsOpen || commandPaletteOpen || sourceControlOpen || centerMenuOpen || wizardOpen || managerOpen,
     );
-  }, [settingsOpen, commandPaletteOpen, sourceControlOpen, centerMenuOpen, wizardOpen]);
+  }, [settingsOpen, commandPaletteOpen, sourceControlOpen, centerMenuOpen, wizardOpen, managerOpen]);
 
   // Debounced save when UI layout or session tabs change.
   useEffect(() => {
@@ -106,6 +108,8 @@ export function AppShell() {
 
       {/* ── 环境搭建向导 ─────────────────────────────────── */}
       <EnvWizard />
+
+      <EnvManagerDialog />
 
       {/* ── 设置面板 ─────────────────────────────────────── */}
       <SettingsPanel />

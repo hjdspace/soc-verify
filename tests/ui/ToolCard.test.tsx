@@ -173,4 +173,33 @@ describe('ToolCard file tools', () => {
     expect(summary).not.toBeNull();
     expect(summary?.textContent).toContain('demo.ts');
   });
+
+  it('shows read_file path as clickable link in the summary', () => {
+    render(<ToolCard message={completedMessage(
+      'read_file',
+      { path: 'src/renderer/src/lib/runsim-command.ts' },
+      { content: [{ type: 'text', text: 'const command = "runsim";' }] },
+    )} />);
+
+    // The summary path should be clickable (cursor-pointer)
+    const summary = screen.getByTestId('tool-card').querySelector('.cursor-pointer');
+    expect(summary).not.toBeNull();
+    expect(summary?.textContent).toContain('runsim-command.ts');
+  });
+
+  it('shows read clickable path header in expanded view', () => {
+    render(<ToolCard message={completedMessage(
+      'read',
+      { path: 'src/demo.ts' },
+      'const value = 1;',
+    )} />);
+
+    fireEvent.click(screen.getByTitle('展开'));
+    const card = screen.getByTestId('tool-card');
+    // The expanded body should show a clickable header with the full path
+    const clickable = card.querySelectorAll('.cursor-pointer');
+    const header = Array.from(clickable).find((el) => el.textContent === 'src/demo.ts');
+    expect(header).not.toBeUndefined();
+    expect(header?.getAttribute('title')).toContain('点击打开文件');
+  });
 });

@@ -4,7 +4,15 @@
 
 import { t, TRPCError } from '../router-context';
 import { requireProject, ensurePluginsLoaded } from '../../services/project-service';
-import { detectEdaTools, loadEnvConfig, saveEnvConfig, getKnownEnvVarNames } from '../../env/env-manager';
+import {
+  detectEdaTools,
+  loadEnvConfig,
+  saveEnvConfig,
+  getKnownEnvVarNames,
+  getEnvVarCatalog,
+  detectSystemEnvVars,
+  mergeSystemEnvVars,
+} from '../../env/env-manager';
 import { pluginLoader } from '../../plugins/loader';
 import { caseStatsRegistry } from '../../case/case-stats-registry';
 import type { EnvConfig } from '@shared/types';
@@ -75,4 +83,36 @@ export const envRouter = t.router({
   getKnownEnvVars: t.procedure.query(() => {
     return getKnownEnvVarNames();
   }),
+
+  /** Return the env var catalog grouped by category. */
+  getCatalog: t.procedure.query(() => {
+    return getEnvVarCatalog();
+  }),
+
+  /** Return current system (terminal) env vars for all known names. */
+  getSystemEnv: t.procedure.query(() => {
+    return detectSystemEnvVars();
+  }),
+
+  /** Auto-detect system env vars and merge into the project's saved config. */
+  autoDetect: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const existing = await loadEnvConfig(project.rootPath);
+      const currentEnvVars = existing?.envVars ?? {};
+      const mergedEnvVars = mergeSystemEnvVars(currentEnvVars);
+      const config: EnvConfig = {
+        tools: existing?.tools ?? [],
+        envVars: mergedEnvVars,
+      };
+      await saveEnvConfig(project.rootPath, config);
+      return { config, detectedCount: Object.keys(mergedEnvVars).length - Object.keys(currentEnvVars).length };
+    }),
 });

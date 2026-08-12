@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Minus, Square, X, Copy, PanelLeft, PanelRight, PanelBottom, Settings, Search, ChevronRight, GitCommitHorizontal } from 'lucide-react';
+import { Minus, Square, X, Copy, PanelLeft, PanelRight, PanelBottom, Settings, Search, ChevronRight, GitCommitHorizontal, Terminal } from 'lucide-react';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
+import { useEnvStore } from '@renderer/stores/env';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useTerminalStore } from '@renderer/stores/terminal';
 import { cn } from '@renderer/lib/utils';
@@ -30,6 +31,9 @@ export function TitleBar() {
   const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
   const sourceControlOpen = useUiStore((s) => s.sourceControlOpen);
   const setSourceControlOpen = useUiStore((s) => s.setSourceControlOpen);
+
+  const managerOpen = useEnvStore((s) => s.managerOpen);
+  const setManagerOpen = useEnvStore((s) => s.setManagerOpen);
 
   const terminalTabs = useTerminalStore((s) => s.tabs);
   const createTerminal = useTerminalStore((s) => s.createTerminal);
@@ -181,6 +185,15 @@ export function TitleBar() {
           active={sourceControlOpen}
         >
           <GitCommitHorizontal className="h-3.5 w-3.5" />
+        </TitleBarButton>
+
+        {/* 环境变量管理按钮 */}
+        <TitleBarButton
+          onClick={() => setManagerOpen(!managerOpen)}
+          title="环境变量管理"
+          active={managerOpen}
+        >
+          <Terminal className="h-3.5 w-3.5" />
         </TitleBarButton>
 
         {/* 工具下拉菜单 */}
