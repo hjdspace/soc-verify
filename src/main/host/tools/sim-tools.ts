@@ -53,6 +53,11 @@ export function createSimTools(ctx: ToolContext): HostToolEntry[] {
         let cases;
         if (ctx.caseStatsService) {
           cases = await ctx.caseStatsService.listCasesWithStatus(subsys);
+          // Fallback: if DB has no cases for this subsys (e.g. usvp pseudo-subsystem
+          // where cases might not be scanned into DB yet), try discovery plugin directly
+          if (cases.length === 0) {
+            cases = await ctx.discovery.listCases(subsys, status);
+          }
         } else {
           cases = await ctx.discovery.listCases(subsys, status);
         }
