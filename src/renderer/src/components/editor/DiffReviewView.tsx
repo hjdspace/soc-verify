@@ -184,6 +184,11 @@ export function DiffReviewView({ entry }: DiffReviewViewProps) {
   // Group diff lines by hunk for rendering
   const hunks = diffData.hunks;
 
+  // Check if all non-overwritten hunks are already accepted
+  const allAccepted = hunks.length > 0 && hunks.every((h) =>
+    h.overwritten || hunkStates[entry.filePath]?.[h.id] === 'accepted',
+  );
+
   return (
     <div className="flex h-full flex-1 flex-col overflow-hidden">
       {/* ── Header ── */}
@@ -257,7 +262,13 @@ export function DiffReviewView({ entry }: DiffReviewViewProps) {
         {/* Accept all */}
         <button
           onClick={() => acceptAll(entry.filePath)}
-          className="flex items-center gap-1 rounded border border-status-pass/30 bg-status-pass/10 px-2.5 py-1 text-[11px] text-status-pass-foreground transition-colors hover:bg-status-pass/20"
+          disabled={allAccepted}
+          className={cn(
+            'flex items-center gap-1 rounded border px-2.5 py-1 text-[11px] transition-colors',
+            allAccepted
+              ? 'cursor-not-allowed border-border bg-secondary/30 text-muted-foreground/50'
+              : 'border-status-pass/30 bg-status-pass/10 text-status-pass-foreground hover:bg-status-pass/20',
+          )}
         >
           <Check className="h-3 w-3" />
           全部接受
@@ -367,10 +378,11 @@ function renderLines(
           >
             <button
               onClick={() => setHunkState(entry.filePath, hunk.id, 'accepted')}
+              disabled={state === 'accepted'}
               className={cn(
                 'flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-medium transition-colors',
                 state === 'accepted'
-                  ? 'border-status-pass-foreground/50 bg-status-pass/20 text-status-pass-foreground'
+                  ? 'cursor-not-allowed border-status-pass-foreground/50 bg-status-pass/20 text-status-pass-foreground'
                   : 'border-border bg-secondary/80 text-muted-foreground hover:text-foreground',
               )}
             >
@@ -379,10 +391,11 @@ function renderLines(
             </button>
             <button
               onClick={() => setHunkState(entry.filePath, hunk.id, 'rejected')}
+              disabled={state === 'rejected'}
               className={cn(
                 'flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-medium transition-colors',
                 state === 'rejected'
-                  ? 'border-status-fail-foreground/50 bg-status-fail/20 text-status-fail-foreground'
+                  ? 'cursor-not-allowed border-status-fail-foreground/50 bg-status-fail/20 text-status-fail-foreground'
                   : 'border-border bg-secondary/80 text-muted-foreground hover:text-foreground',
               )}
             >
