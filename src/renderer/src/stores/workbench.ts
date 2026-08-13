@@ -50,6 +50,7 @@ type WorkbenchState = {
   activate: (tabId: string) => void;
   close: (tabId: string) => void;
   closeActive: () => void;
+  closeAll: () => void;
   updateTabTitle: (tabId: string, title: string) => void;
 };
 
@@ -182,6 +183,10 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   closeActive: () => {
     const activeTabId = get().activeTabId;
     if (activeTabId) get().close(activeTabId);
+  },
+
+  closeAll: () => {
+    set({ tabs: [], activeTabId: null });
   },
 
   updateTabTitle: (tabId, title) => {
