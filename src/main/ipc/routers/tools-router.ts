@@ -34,6 +34,7 @@ import { reg2cRouter } from '../../tools/routers/reg2c-router';
 import { gitDiffRouter } from '../../tools/routers/git-diff-router';
 import { gitManagerRouter } from '../../tools/routers/git-manager-router';
 import { cSvConverterRouter } from '../../tools/routers/c-sv-converter-router';
+import { sysbaseGenRouter } from '../../tools/routers/sysbase-gen-router';
 
 // ── Main tools router ──────────────────────────────────────────────
 
@@ -153,4 +154,5 @@ export const toolsRouter = t.router({
   gitDiff: gitDiffRouter,
   gitManager: gitManagerRouter,
   cSvConverter: cSvConverterRouter,
+  sysbaseGen: sysbaseGenRouter,
 });
