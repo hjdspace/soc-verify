@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine, Puzzle, FileType, Database as DatabaseIcon, Workflow } from 'lucide-react';
+import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine, Puzzle, FileType, Database as DatabaseIcon, Workflow, XCircle } from 'lucide-react';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
@@ -54,6 +54,7 @@ export function CenterArea() {
   const openDestination = useWorkbenchStore((s) => s.open);
   const activateTab = useWorkbenchStore((s) => s.activate);
   const closeWorkbenchTab = useWorkbenchStore((s) => s.close);
+  const closeAllWorkbenchTabs = useWorkbenchStore((s) => s.closeAll);
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? null;
   const destination = activeTab?.destination ?? null;
   const activeSurface = destination?.type === 'browser' ? destination : null;
@@ -119,6 +120,16 @@ export function CenterArea() {
     }
     closeWorkbenchTab(tabId);
   };
+
+  // Close all open tabs, properly cleaning up terminal tabs via the terminal store.
+  const handleCloseAll = useCallback(() => {
+    for (const tab of tabs) {
+      if (tab.destination.type === 'terminal') {
+        void closeTerminal(tab.destination.terminalTabId);
+      }
+    }
+    closeAllWorkbenchTabs();
+  }, [tabs, closeTerminal, closeAllWorkbenchTabs]);
 
   // ── 拖拽：将中栏终端拖拽到底部面板 ────────────────
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -276,6 +287,17 @@ export function CenterArea() {
               </div>
             ))}
           </div>
+        )}
+
+        {/* ── 关闭全部标签 ─────────────────────────────── */}
+        {tabs.length > 0 && (
+          <button
+            onClick={handleCloseAll}
+            title="关闭全部标签页"
+            className="flex items-center rounded px-1.5 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <XCircle className="h-3.5 w-3.5" />
+          </button>
         )}
 
         {/* ── 主操作（带文字）+ 溢出菜单 ──────────────────── */}
