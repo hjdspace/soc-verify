@@ -20,6 +20,23 @@ export type WorkbookData = {
   sheets: Sheet[];
 };
 
+// ─── 列宽单位转换 ─────────────────────────────────────────────
+// exceljs 列宽以「字符」为单位（默认字体下 '0' 的宽度），
+// Fortune-sheet 的 columnlen 以像素为单位。
+// 转换公式：pixels ≈ characters * 7 + 5 （Calibri 11pt 近似）
+const CHAR_TO_PIXEL_MULTIPLIER = 7;
+const CHAR_TO_PIXEL_OFFSET = 5;
+
+/** exceljs 字符宽度 → Fortune-sheet 像素宽度 */
+function charWidthToPixels(charWidth: number): number {
+  return Math.round(charWidth * CHAR_TO_PIXEL_MULTIPLIER + CHAR_TO_PIXEL_OFFSET);
+}
+
+/** Fortune-sheet 像素宽度 → exceljs 字符宽度 */
+function pixelsToCharWidth(pixels: number): number {
+  return (pixels - CHAR_TO_PIXEL_OFFSET) / CHAR_TO_PIXEL_MULTIPLIER;
+}
+
 // ─── 颜色转换 ──────────────────────────────────────────────────
 
 /** exceljs ARGB ('FFRRGGBB') → Fortune-sheet hex ('#RRGGBB') */
@@ -220,12 +237,12 @@ function convertWorksheet(ws: ExcelJS.Worksheet, order: number): Sheet {
     config.merge = mergeMap;
   }
 
-  // 列宽
+  // 列宽（exceljs 字符宽度 → Fortune-sheet 像素宽度）
   const columnlen: Record<string, number> = {};
   for (let i = 1; i <= ws.columnCount; i++) {
     const col = ws.getColumn(i);
-    if (col.width !== undefined) {
-      columnlen[String(i - 1)] = col.width;
+    if (col.width !== undefined && col.width > 0) {
+      columnlen[String(i - 1)] = charWidthToPixels(col.width);
     }
   }
   if (Object.keys(columnlen).length > 0) {
@@ -397,11 +414,14 @@ export async function fortuneToExcel(data: WorkbookData): Promise<ExcelJS.Workbo
       ws.mergeCells(top, left, bottom, right);
     }
 
-    // 列宽
+    // 列宽（Fortune-sheet 像素宽度 → exceljs 字符宽度）
     const columnlen = sheet.config?.columnlen ?? {};
     for (const key of Object.keys(columnlen)) {
       const colIndex = parseInt(key, 10);
-      ws.getColumn(colIndex + 1).width = columnlen[key];
+      const pixelWidth = columnlen[key];
+      if (pixelWidth > 0) {
+        ws.getColumn(colIndex + 1).width = pixelsToCharWidth(pixelWidth);
+      }
     }
 
     // 行高
