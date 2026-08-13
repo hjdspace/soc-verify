@@ -295,5 +295,57 @@ process.once('loaded', async () => {
       ipcRenderer.on('browser:download-event', handler);
       return () => ipcRenderer.removeListener('browser:download-event', handler);
     },
+
+    // ── Sysbase Gen Module IO 生成实时日志事件 ──────────────────
+    // sysbase-gen:mod-io-log —— 主进程推送 Module IO 生成的实时日志
+    onSysbaseGenModIoLog: (
+      callback: (data: {
+        type: 'start' | 'output' | 'end';
+        command?: string;
+        line?: string;
+        lines?: string[];
+        success?: boolean;
+        outputFilePath?: string;
+      }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: {
+          type: 'start' | 'output' | 'end';
+          command?: string;
+          line?: string;
+          lines?: string[];
+          success?: boolean;
+          outputFilePath?: string;
+        },
+      ) => callback(data);
+      ipcRenderer.on('sysbase-gen:mod-io-log', handler);
+      return () => ipcRenderer.removeListener('sysbase-gen:mod-io-log', handler);
+    },
+
+    // ── Sysbase Gen 执行 sysbase_gen.py 实时日志事件 ─────────────
+    // sysbase-gen:run-log —— 主进程推送 sysbase_gen.py 执行的实时日志
+    onSysbaseGenRunLog: (
+      callback: (data: {
+        type: 'start' | 'output' | 'end';
+        command?: string;
+        line?: string;
+        lines?: string[];
+        success?: boolean;
+      }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: {
+          type: 'start' | 'output' | 'end';
+          command?: string;
+          line?: string;
+          lines?: string[];
+          success?: boolean;
+        },
+      ) => callback(data);
+      ipcRenderer.on('sysbase-gen:run-log', handler);
+      return () => ipcRenderer.removeListener('sysbase-gen:run-log', handler);
+    },
   });
 });
