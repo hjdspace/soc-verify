@@ -1,11 +1,14 @@
 /**
  * Diff Review Store — 全局 review queue + hunk 接受/拒绝状态管理。
  *
- * 队列来源：从所有会话的 tool messages 中提取 WRITE/EDIT/apply_patch/ast_edit 工具调用，
+ * 队列来源：从当前项目的会话 tool messages 中提取 WRITE/EDIT/apply_patch/ast_edit 工具调用，
  * 按文件路径聚合。hunk 状态在 store 中管理，「应用」时调用后端 API 批量撤销。
  *
  * reviewed 文件保留在队列中（标记 reviewed=true），这样 ToolCard 路径始终可点击。
  * 点击已 reviewed 的路径会打开文件编辑器；未 reviewed 的路径会打开 diff-review。
+ *
+ * 持久化：reviewedFiles 按 projectId 存储在 localStorage，切换项目时恢复对应的
+ * 审阅状态，避免重启后已审阅文件再次出现 "Review next file" 按钮。
  */
 
 import { create } from 'zustand';
@@ -288,10 +291,15 @@ function extractToolCallsFromMessage(msg: ChatMessage): DiffToolCall[] {
 }
 
 function aggregateQueue(reviewedFiles: Set<string>): ReviewEntry[] {
+  // 只聚合当前项目的会话，避免切换项目后旧项目的 diff-review 队列残留
+  const currentProjectId = useProjectStore.getState().currentProjectId;
   const sessions = useSessionStore.getState().sessions;
+  const relevantSessions = currentProjectId
+    ? sessions.filter((s) => s.projectId === currentProjectId)
+    : sessions;
   const byFile = new Map<string, { filePath: string; toolCalls: DiffToolCall[] }>();
 
-  for (const session of sessions) {
+  for (const session of relevantSessions) {
     for (const msg of session.messages) {
       if (msg.role !== 'tool') continue;
       for (const tc of extractToolCallsFromMessage(msg)) {
@@ -322,6 +330,34 @@ function aggregateQueue(reviewedFiles: Set<string>): ReviewEntry[] {
   return entries;
 }
 
+// ─── 持久化：按 projectId 存储 reviewedFiles ────────────────────
+
+const REVIEWED_STORAGE_PREFIX = 'socverify:reviewedFiles:';
+
+function loadReviewedFiles(projectId: string | null): Set<string> {
+  if (!projectId) return new Set();
+  try {
+    const raw = localStorage.getItem(REVIEWED_STORAGE_PREFIX + projectId);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw) as string[];
+    return Array.isArray(arr) ? new Set(arr) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function persistReviewedFiles(projectId: string | null, reviewedFiles: Set<string>): void {
+  if (!projectId) return;
+  try {
+    localStorage.setItem(
+      REVIEWED_STORAGE_PREFIX + projectId,
+      JSON.stringify([...reviewedFiles]),
+    );
+  } catch {
+    // localStorage may be unavailable — ignore
+  }
+}
+
 // ─── Store ──────────────────────────────────────────────────
 
 export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
@@ -331,7 +367,7 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
   currentDiff: null,
   hunkStates: {},
   loading: false,
-  reviewedFiles: new Set<string>(),
+  reviewedFiles: loadReviewedFiles(useProjectStore.getState().currentProjectId),
 
   refreshQueue: () => {
     set((s) => {
@@ -353,6 +389,8 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
           cleanedReviewed.add(marker);
         }
       }
+      // 持久化到 localStorage（按 projectId）
+      persistReviewedFiles(useProjectStore.getState().currentProjectId, cleanedReviewed);
       return {
         queue: newQueue,
         hunkStates: cleanedHunkStates,
@@ -581,6 +619,8 @@ function markFileReviewed(filePath: string): void {
   // 记录已审阅到哪个 tool call；后续新 edit 会重新进入 review queue。
   const newReviewed = new Set(store.reviewedFiles);
   newReviewed.add(reviewMarker(entry.filePath, reviewedToolCallId));
+  // 持久化到 localStorage
+  persistReviewedFiles(useProjectStore.getState().currentProjectId, newReviewed);
   // 在队列中标记为已审阅（不从队列中移除，保持 ToolCard 路径可点击）
   const newQueue = aggregateQueue(newReviewed);
   const newHunkStates = { ...store.hunkStates };
@@ -614,5 +654,25 @@ let projectedSessions = useSessionStore.getState().sessions;
 useSessionStore.subscribe((state) => {
   if (state.sessions === projectedSessions) return;
   projectedSessions = state.sessions;
+  useDiffReviewStore.getState().refreshQueue();
+});
+
+// ── 监听项目切换：加载该项目的 reviewedFiles 并刷新队列 ──
+let projectedProjectId = useProjectStore.getState().currentProjectId;
+useProjectStore.subscribe((state) => {
+  const newProjectId = state.currentProjectId;
+  if (newProjectId === projectedProjectId) return;
+  projectedProjectId = newProjectId;
+  // 加载新项目的持久化审阅状态
+  const restoredReviewed = loadReviewedFiles(newProjectId);
+  // 重置 diff-review 状态，用新项目的 reviewedFiles 重建队列
+  useDiffReviewStore.setState({
+    reviewedFiles: restoredReviewed,
+    currentFilePath: null,
+    currentReviewToolCallId: null,
+    currentDiff: null,
+    loading: false,
+    hunkStates: {},
+  });
   useDiffReviewStore.getState().refreshQueue();
 });
