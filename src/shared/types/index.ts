@@ -20,3 +20,4 @@ export * from './error-analysis';
 export * from './diff-review';
 export * from './skill';
 export * from './mcp';
+export * from './sysbase-gen';
