@@ -26,6 +26,7 @@ export type WorkbenchDestination =
   | { type: 'coverage' }
   | { type: 'regression' }
   | { type: 'dashboard' }
+  | { type: 'sysbase-env-gen' }
   | { type: 'to-checklist' }
   | { type: 'source-control' }
   | { type: 'timing-violation' }
@@ -78,6 +79,8 @@ function describeDestination(destination: WorkbenchDestination): Omit<WorkbenchT
       return { id: destination.type, title: '回归套件', closable: true };
     case 'dashboard':
       return { id: destination.type, title: '仪表盘', closable: true };
+    case 'sysbase-env-gen':
+      return { id: destination.type, title: '验证环境生成器', closable: true };
     case 'to-checklist':
       return { id: destination.type, title: 'TO 检查清单', closable: true };
     case 'source-control':
