@@ -21,9 +21,12 @@ import '@fortune-sheet/react/dist/index.css';
 import type { Sheet } from '@fortune-sheet/core';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
+import { Save, FileOutput } from 'lucide-react';
 
 export type XlsxEditorProps = {
   filePath: string;
+  /** 可选：另存为成功后的回调，传入新文件路径 */
+  onSaveAs?: (newPath: string) => void;
 };
 
 type LoadState = 'loading' | 'loaded' | 'error';
@@ -32,7 +35,7 @@ type SaveState = 'idle' | 'saving' | 'saved' | 'error';
 /** 防抖延迟（毫秒） */
 const SAVE_DEBOUNCE_MS = 2000;
 
-export function XlsxEditor({ filePath }: XlsxEditorProps) {
+export function XlsxEditor({ filePath, onSaveAs }: XlsxEditorProps) {
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [sheets, setSheets] = useState<Sheet[] | null>(null);
@@ -73,6 +76,32 @@ export function XlsxEditor({ filePath }: XlsxEditorProps) {
       cancelled = true;
     };
   }, [filePath, fileVersion]);
+
+  // 另存为：打开保存对话框，将当前工作簿数据写入新路径
+  const handleSaveAs = useCallback(async () => {
+    // 先 flush 当前编辑数据（取消防抖）
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    try {
+      const result = await trpc.tools.saveFileDialog.mutate({
+        title: '另存为 Excel 文件',
+        defaultPath: filePath,
+        filters: [{ name: 'Excel 文件', extensions: ['xlsx'] }],
+      });
+      if (!result.path) return; // 用户取消
+      setSaveState('saving');
+      await trpc.document.saveXlsx.mutate({
+        filePath: result.path,
+        workbook: { name: workbookNameRef.current, sheets: latestDataRef.current },
+      });
+      setSaveState('saved');
+      onSaveAs?.(result.path);
+    } catch {
+      setSaveState('error');
+    }
+  }, [filePath, onSaveAs]);
 
   // 立即保存（取消防抖定时器，立即执行保存）
   const flushNow = useCallback(async () => {
@@ -191,6 +220,24 @@ export function XlsxEditor({ filePath }: XlsxEditorProps) {
             {saveState === 'saved' && '已保存'}
             {saveState === 'error' && '保存失败'}
           </span>
+          <div className="ml-auto flex items-center gap-1">
+            <button
+              onClick={() => void flushNow()}
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              title="立即保存到当前文件"
+            >
+              <Save className="h-3 w-3" />
+              <span>保存</span>
+            </button>
+            <button
+              onClick={() => void handleSaveAs()}
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              title="另存为新的 Excel 文件"
+            >
+              <FileOutput className="h-3 w-3" />
+              <span>另存为</span>
+            </button>
+          </div>
         </div>
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
           <Workbook
