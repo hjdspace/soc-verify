@@ -11,7 +11,7 @@
  */
 
 import { useState } from 'react';
-import { FileSpreadsheet, FolderOpen, FileEdit, Info, Loader2 } from 'lucide-react';
+import { FileSpreadsheet, FolderOpen, FileEdit, Info, Loader2, CheckCircle } from 'lucide-react';
 import { useSysbaseGenStore } from '@renderer/stores/sysbase-gen';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { trpc } from '@renderer/lib/trpc';
@@ -23,6 +23,7 @@ export function StepMini() {
   const openDestination = useWorkbenchStore((s) => s.open);
 
   const [openingTemplate, setOpeningTemplate] = useState(false);
+  const [templatePath, setTemplatePath] = useState<string | null>(null);
 
   // Import button: open file dialog
   const handleImport = async () => {
@@ -46,6 +47,7 @@ export function StepMini() {
     setOpeningTemplate(true);
     try {
       const result = await trpc.tools.sysbaseGen.getTemplatePath.query({ template: 'mini' });
+      setTemplatePath(result.path);
       openDestination({
         type: 'office-document',
         filePath: result.path,
@@ -55,6 +57,16 @@ export function StepMini() {
       // best-effort
     } finally {
       setOpeningTemplate(false);
+    }
+  };
+
+  // Use the template file as the Mini Excel input
+  const handleUseTemplate = async () => {
+    try {
+      const path = templatePath ?? (await trpc.tools.sysbaseGen.getTemplatePath.query({ template: 'mini' })).path;
+      updateConfig({ miniExcelPath: path });
+    } catch {
+      // best-effort
     }
   };
 
@@ -111,9 +123,21 @@ export function StepMini() {
           </button>
         </div>
         <p className="text-[10px] text-muted-foreground">
-          支持 .xlsx / .xls 格式。点击「打开模板编辑」可在应用内直接编辑空白模板
+          支持 .xlsx / .xls 格式。点击「打开模板编辑」可在应用内直接编辑模板，
+          编辑完成后点击「使用此模板」将其作为 Mini Excel 输入，或在编辑器中「另存为」后用「导入」选择
         </p>
       </div>
+
+      {/* Use template button */}
+      {templatePath && (
+        <button
+          onClick={() => void handleUseTemplate()}
+          className="flex w-full items-center justify-center gap-1.5 rounded-md border border-status-pass/30 bg-status-pass/5 px-3 py-1.5 text-xs text-status-pass-foreground transition-colors hover:bg-status-pass/10"
+        >
+          <CheckCircle className="h-3.5 w-3.5" />
+          使用此模板作为 Mini Excel 输入
+        </button>
+      )}
 
       {/* Selected file indicator */}
       {config.miniExcelPath && (
