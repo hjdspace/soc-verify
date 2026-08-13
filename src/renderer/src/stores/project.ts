@@ -23,6 +23,7 @@ interface ProjectState {
   // ── 动作 ──────────────────────────────────────────────
   openProject: (rootPath: string, name?: string) => Promise<void>;
   openProjectDialog: () => Promise<void>;
+  switchProject: (projectId: string) => Promise<void>;
   closeProject: (projectId: string) => Promise<void>;
   refreshProjects: () => Promise<void>;
   loadFileTree: (projectId: string) => Promise<void>;
@@ -128,6 +129,52 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       getToast().success(`已打开项目: ${result.project.name}`);
     } catch (err) {
       getToast().error('打开项目对话框失败', tRPCError(err));
+    }
+  },
+
+  switchProject: async (projectId) => {
+    const { currentProjectId } = get();
+    if (currentProjectId === projectId) return;
+
+    const project = get().projects.find((p) => p.id === projectId);
+    if (!project) return;
+
+    // Save the current project state before switching (so lastSessionIds is up-to-date).
+    if (currentProjectId) {
+      await get().saveState();
+    }
+
+    // Re-open on the backend to update lastOpenedAt and get fresh plugins.
+    // This also ensures file watchers are started for the project.
+    try {
+      const result = await trpc.project.open.mutate({ rootPath: project.rootPath, name: project.name });
+      set((s) => ({
+        projects: [...s.projects.filter((p) => p.id !== result.project.id), result.project],
+        currentProjectId: result.project.id,
+        plugins: result.plugins as PluginConfigEntry[],
+        fileTree: null,
+        uiStateReady: false,
+      }));
+      await get().loadFileTree(result.project.id);
+      await restoreProjectUiState(result.project.id);
+      set({ uiStateReady: true });
+      await restoreOrCreateSession(result.project.id, result.project.rootPath);
+
+      // Switch to a session belonging to the new project.
+      // restoreOrCreateSession may have created or restored sessions, but
+      // currentSessionId could still point to the old project's session.
+      const sessionStore = useSessionStore.getState();
+      const projectSessions = sessionStore.sessions.filter((s) => s.projectId === result.project.id);
+      if (projectSessions.length > 0) {
+        const current = sessionStore.sessions.find((s) => s.id === sessionStore.currentSessionId);
+        if (!current || current.projectId !== result.project.id) {
+          // Pick the most recently active session for this project.
+          const latest = projectSessions[projectSessions.length - 1];
+          sessionStore.switchSession(latest.id);
+        }
+      }
+    } catch (err) {
+      getToast().error('切换项目失败', tRPCError(err));
     }
   },
 
