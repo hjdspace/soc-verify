@@ -74,6 +74,56 @@ gen:
 ```
 
 ### dut_spec格式
+Excel表格，多个sheet组成，前两个sheet格式如下：
+## Architecture
+
+| Subsystem_Name | APCPU_SYS |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| AXI_Name | Type | is_Active | Spec_Ver | Is_Lite | Spec_Subtype | Addr_Width | Data_Width | WID_Width | RID_Width | Auser_Width | Message_L | Rtl_Hier | Rtl_File | Clock_Name | Reset_Name | Sig_Mch_Pattern | Not_Touch | SV_MODEL |
+| AXIMST_APCPU_DSU_MM | MASTER | ACTIVE | AMBA4 | NO | AXI_BASE | 64 | 256 | 10 | 10 | 14 | MEDIUM | `HIER_APCPU_CLUSTER | $PROJ_RTL/apcpu_sys/xxx | ACLKENM0 | nRESET | *M0 | YES | YES |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| AHB_Name | Type | is_Active | Spec_Ver | Is_Lite | Addr_Width | Data_Width | Has_Hsel | Hsel_Number | Hsel_Addr_Map | Message_L | Rtl_Hier | Rtl_File | Clock_Name | Reset_Name | Sig_Mch_Pattern | Not_Touch | SV_MODEL |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| APB_Name | Type | is_Active | Spec_Ver | Addr_Width | Data_Width | Psel_Number | Psel_Addr_Map | Message_L | Rtl_Hier | Rtl_File | Clock_Name | Reset_Name | Sig_Mch_Pattern | Not_Touch | SV_MODEL |  |  |  |
+| APBMST_APCPU_FROM_TOP | MASTER | ACTIVE | APB3 | 64 | 32 | 1 | 0x20_6495_0000:0x20_6495_FFFF | MEDIUM | `HIER_APCPU_AON_APB_ASYNC_BRG | $PROJ_RTL/common/… | clk_c | reset_c_n | *_c | YES | YES |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| POWER_Name | Type | Is_Active | Parent_Domain | Clock_Name | Ctrl_CLKRST_Name | Not_Touch |  |  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+| CLKRST_Name | Type | Is_Active | Sync_Clock | Ref_Clock | Freq | Rest_Time | Clock_Name | Reset_Name | Not_Touch |  |  |  |  |  |  |  |  |  |
+| u_clk_func_ate | CLK_ARST | ACTIVE | NO | NA | 26MHZ | 500ns | clk_func_ate | NA | NO |  |  |  |  |  |  |  |  |  |
+
+## MemoryMap
+
+| Subsystem_Name | APCPU_SYS |  |  |  |  |  |  |  |  |  |
+| Region_Name | Start_Address | End_Address | RW | Test_Offset | Enable_Bit | Power | Remap | MapAddr0 |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |
+| Slave_Name | Region_Name | Power | Power_Domain | Father_Power_Domain | Response_error | sys_not_child_domain | ligth_care |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |
+|  |  |  |  |  |  |  |  |  |  |  |
+| Master_Name | Slave_Name | Remap | RAL_MapAddr | Power | Power_Domain | Father_Power_Domain | is_dsp | pd_auto_en_addr | pd_auto_en_bit_num | light_care |
 
 
 ## top：生成top socv env（同步生成sysbase和systba环境）
