@@ -1,0 +1,1287 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="bench">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>原型 · Unisoc SoC 验证环境自动生成向导</title>
+<style>
+/* ═══ 主题变量（从 globals.css 移植） ═══ */
+[data-theme="bench"] {
+  --background: oklch(0.18 0.008 60);
+  --foreground: oklch(0.92 0.006 60);
+  --card: oklch(0.21 0.008 60);
+  --card-foreground: oklch(0.92 0.006 60);
+  --popover: oklch(0.23 0.008 60);
+  --popover-foreground: oklch(0.92 0.006 60);
+  --primary: oklch(0.78 0.15 145);
+  --primary-foreground: oklch(0.16 0.008 60);
+  --secondary: oklch(0.25 0.008 60);
+  --secondary-foreground: oklch(0.92 0.006 60);
+  --muted: oklch(0.25 0.008 60);
+  --muted-foreground: oklch(0.62 0.008 60);
+  --accent: oklch(0.28 0.010 60);
+  --accent-foreground: oklch(0.92 0.006 60);
+  --destructive: oklch(0.65 0.20 25);
+  --destructive-foreground: oklch(0.96 0.005 60);
+  --border: oklch(0.28 0.008 60);
+  --input: oklch(0.28 0.008 60);
+  --ring: oklch(0.78 0.15 145);
+  --titlebar: oklch(0.15 0.008 60);
+  --titlebar-foreground: oklch(0.72 0.008 60);
+  --titlebar-border: oklch(0.26 0.008 60);
+  --sidebar: oklch(0.16 0.008 60);
+  --sidebar-foreground: oklch(0.60 0.008 60);
+  --radius: 0.5rem;
+  --status-pass: oklch(0.78 0.15 145);
+  --status-pass-foreground: oklch(0.78 0.15 145);
+  --status-fail: oklch(0.65 0.18 25);
+  --status-fail-foreground: oklch(0.65 0.18 25);
+  --status-running: oklch(0.72 0.13 195);
+  --status-running-foreground: oklch(0.72 0.13 195);
+  --status-aborted: oklch(0.72 0.14 65);
+  --status-aborted-foreground: oklch(0.72 0.14 65);
+  --info: oklch(0.28 0.05 250);
+  --info-foreground: oklch(0.78 0.13 250);
+  --warning: oklch(0.30 0.05 75);
+  --warning-foreground: oklch(0.80 0.12 75);
+  --chart-4: oklch(0.78 0.13 55);
+}
+[data-theme="daylight"] {
+  --background: oklch(0.99 0.002 240);
+  --foreground: oklch(0.21 0.01 240);
+  --card: oklch(1.00 0 0);
+  --card-foreground: oklch(0.21 0.01 240);
+  --popover: oklch(1.00 0 0);
+  --popover-foreground: oklch(0.21 0.01 240);
+  --primary: oklch(0.48 0.18 264);
+  --primary-foreground: oklch(0.99 0.002 240);
+  --secondary: oklch(0.96 0.003 240);
+  --secondary-foreground: oklch(0.28 0.01 240);
+  --muted: oklch(0.96 0.003 240);
+  --muted-foreground: oklch(0.52 0.008 240);
+  --accent: oklch(0.94 0.01 264);
+  --accent-foreground: oklch(0.28 0.01 240);
+  --destructive: oklch(0.54 0.20 25);
+  --destructive-foreground: oklch(0.99 0.002 240);
+  --border: oklch(0.90 0.004 240);
+  --input: oklch(0.90 0.004 240);
+  --ring: oklch(0.48 0.18 264);
+  --titlebar: oklch(0.97 0.003 240);
+  --titlebar-foreground: oklch(0.40 0.01 240);
+  --titlebar-border: oklch(0.88 0.004 240);
+  --sidebar: oklch(0.98 0.002 240);
+  --sidebar-foreground: oklch(0.45 0.008 240);
+  --radius: 0.5rem;
+  --status-pass: oklch(0.52 0.13 145);
+  --status-pass-foreground: oklch(0.52 0.13 145);
+  --status-fail: oklch(0.54 0.20 25);
+  --status-fail-foreground: oklch(0.54 0.20 25);
+  --status-running: oklch(0.50 0.15 264);
+  --status-running-foreground: oklch(0.50 0.15 264);
+  --info: oklch(0.92 0.03 264);
+  --info-foreground: oklch(0.32 0.10 264);
+  --warning: oklch(0.92 0.05 75);
+  --warning-foreground: oklch(0.32 0.08 75);
+  --chart-4: oklch(0.65 0.15 55);
+}
+
+/* ═══ 全局 ═══ */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 13px;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.mono { font-family: 'Cascadia Code', 'SF Mono', 'Fira Code', Consolas, 'Courier New', monospace; }
+
+/* ═══ 主题切换栏 ═══ */
+.theme-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: var(--titlebar);
+  border-bottom: 1px solid var(--titlebar-border);
+  color: var(--titlebar-foreground);
+  font-size: 11px;
+}
+.theme-bar button {
+  padding: 2px 10px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: all .15s;
+}
+.theme-bar button:hover { background: var(--accent); color: var(--accent-foreground); }
+.theme-bar button.active { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+.theme-bar .label { color: var(--titlebar-foreground); font-weight: 600; margin-right: auto; }
+
+/* ═══ 向导容器 ═══ */
+.wizard-container {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.wizard-dialog {
+  width: 100%;
+  max-width: 980px;
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+  overflow: hidden;
+}
+
+/* ═══ Header ═══ */
+.wizard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklch, var(--popover) 95%, var(--primary) 5%);
+}
+.wizard-header-left { display: flex; align-items: center; gap: 10px; }
+.wizard-header .icon-box {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--primary) 15%, transparent);
+  color: var(--primary);
+}
+.wizard-header .title { font-size: 14px; font-weight: 600; }
+.wizard-header .subtitle { font-size: 11px; color: var(--muted-foreground); }
+.wizard-header-right { display: flex; align-items: center; gap: 6px; }
+.header-btn {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 10px; font-size: 11px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; color: var(--muted-foreground);
+  cursor: pointer; transition: all .15s;
+}
+.header-btn:hover { background: var(--accent); color: var(--accent-foreground); }
+.header-btn.primary { background: color-mix(in oklch, var(--primary) 12%, transparent); color: var(--primary); border-color: color-mix(in oklch, var(--primary) 30%, transparent); }
+.header-btn.primary:hover { background: color-mix(in oklch, var(--primary) 20%, transparent); }
+
+/* ═══ Stepper ═══ */
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklch, var(--secondary) 30%, var(--popover));
+  overflow-x: auto;
+}
+.step-pill {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all .15s;
+}
+.step-pill .step-num {
+  width: 16px; height: 16px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 700;
+}
+.step-pill.active {
+  background: color-mix(in oklch, var(--primary) 15%, transparent);
+  color: var(--primary);
+}
+.step-pill.active .step-num { background: var(--primary); color: var(--primary-foreground); }
+.step-pill.completed {
+  background: color-mix(in oklch, var(--status-pass) 10%, transparent);
+  color: var(--status-pass-foreground);
+}
+.step-pill.completed .step-num { background: var(--status-pass); color: var(--popover); }
+.step-pill.pending {
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+.step-pill.pending .step-num { background: var(--muted-foreground); color: var(--popover); opacity: 0.5; }
+.step-arrow { color: var(--muted-foreground); font-size: 10px; flex-shrink: 0; }
+
+/* ═══ Content Area ═══ */
+.wizard-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 24px;
+}
+.step-content { display: none; }
+.step-content.active { display: block; animation: fadeIn .2s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ═══ Step Common ═══ */
+.step-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.step-desc {
+  font-size: 12px;
+  color: var(--muted-foreground);
+  margin-bottom: 16px;
+}
+.field-group { margin-bottom: 14px; }
+.field-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+.field-label .required { color: var(--status-fail-foreground); }
+.field-label .optional { color: var(--muted-foreground); font-weight: 400; font-size: 10px; }
+.field-hint { font-size: 10px; color: var(--muted-foreground); margin-top: 3px; }
+
+/* ═══ Inputs ═══ */
+.input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.text-input, .select-input {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 12px;
+  background: var(--background);
+  border: 1px solid var(--input);
+  border-radius: 5px;
+  color: var(--foreground);
+  outline: none;
+  transition: border-color .15s;
+}
+.text-input:focus, .select-input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px color-mix(in oklch, var(--ring) 20%, transparent); }
+.text-input.mono { font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace; }
+.select-input { cursor: pointer; }
+
+.btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: all .15s;
+  white-space: nowrap;
+}
+.btn:hover { background: var(--accent); color: var(--accent-foreground); }
+.btn.primary {
+  background: color-mix(in oklch, var(--primary) 12%, transparent);
+  color: var(--primary);
+  border-color: color-mix(in oklch, var(--primary) 30%, transparent);
+}
+.btn.primary:hover { background: color-mix(in oklch, var(--primary) 20%, transparent); }
+.btn.success {
+  background: color-mix(in oklch, var(--status-pass) 12%, transparent);
+  color: var(--status-pass-foreground);
+  border-color: color-mix(in oklch, var(--status-pass) 30%, transparent);
+}
+.btn.success:hover { background: color-mix(in oklch, var(--status-pass) 20%, transparent); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn .icon { width: 14px; height: 14px; flex-shrink: 0; }
+
+/* ═══ Badges ═══ */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 500;
+}
+.badge.success { background: color-mix(in oklch, var(--status-pass) 12%, transparent); color: var(--status-pass-foreground); }
+.badge.info { background: color-mix(in oklch, var(--primary) 12%, transparent); color: var(--primary); }
+.badge.muted { background: var(--muted); color: var(--muted-foreground); }
+.badge.warning { background: color-mix(in oklch, var(--warning) 15%, transparent); color: var(--warning-foreground); }
+
+/* ═══ File List Items ═══ */
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  margin-bottom: 4px;
+  font-size: 12px;
+  transition: all .15s;
+  cursor: pointer;
+}
+.file-item:hover { background: var(--accent); border-color: color-mix(in oklch, var(--primary) 30%, var(--border)); }
+.file-item.selected { background: color-mix(in oklch, var(--primary) 10%, transparent); border-color: var(--primary); }
+.file-item .file-icon { color: var(--chart-4); flex-shrink: 0; }
+.file-item .file-name { font-weight: 500; }
+.file-item .file-path { color: var(--muted-foreground); font-size: 10px; font-family: 'Cascadia Code', monospace; margin-left: auto; }
+
+/* ═══ RAL Dir List ═══ */
+.dir-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.dir-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 12px;
+  font-family: 'Cascadia Code', monospace;
+}
+.dir-item .dir-icon { color: var(--warning-foreground); flex-shrink: 0; }
+.dir-item .dir-path { flex: 1; color: var(--foreground); word-break: break-all; }
+.dir-item .dir-struct { font-size: 10px; color: var(--status-pass-foreground); }
+.dir-item .remove-btn {
+  padding: 2px; border: none; background: transparent;
+  color: var(--muted-foreground); cursor: pointer; border-radius: 3px;
+}
+.dir-item .remove-btn:hover { background: color-mix(in oklch, var(--destructive) 15%, transparent); color: var(--destructive); }
+
+/* ═══ Terminal Output ═══ */
+.terminal-box {
+  background: color-mix(in oklch, var(--background) 80%, #000);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 10px 12px;
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 200px;
+  overflow-y: auto;
+  color: oklch(0.85 0.005 60);
+}
+.terminal-box .term-line { white-space: pre-wrap; word-break: break-all; }
+.terminal-box .term-pass { color: var(--status-pass-foreground); }
+.terminal-box .term-fail { color: var(--status-fail-foreground); }
+.terminal-box .term-info { color: var(--status-running-foreground); }
+.terminal-box .term-warn { color: var(--warning-foreground); }
+.terminal-box .term-cmd { color: var(--primary); }
+
+/* ═══ Command Preview ═══ */
+.command-preview {
+  background: color-mix(in oklch, var(--background) 90%, #000);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px 16px;
+  font-family: 'Cascadia Code', 'SF Mono', Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-x: auto;
+  white-space: pre;
+}
+.command-preview .cmd-python { color: var(--status-running-foreground); }
+.command-preview .cmd-script { color: var(--chart-4); }
+.command-preview .cmd-flag { color: var(--primary); }
+.command-preview .cmd-value { color: var(--status-pass-foreground); }
+.command-preview .cmd-optional { color: var(--warning-foreground); opacity: 0.8; }
+
+/* ═══ Footer ═══ */
+.wizard-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 18px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in oklch, var(--secondary) 30%, var(--popover));
+}
+.footer-left { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted-foreground); }
+.footer-right { display: flex; align-items: center; gap: 6px; }
+.nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 14px;
+  font-size: 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all .15s;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted-foreground);
+}
+.nav-btn:hover { background: var(--accent); color: var(--accent-foreground); }
+.nav-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.nav-btn.next {
+  background: color-mix(in oklch, var(--primary) 12%, transparent);
+  color: var(--primary);
+  border-color: color-mix(in oklch, var(--primary) 30%, transparent);
+}
+.nav-btn.next:hover { background: color-mix(in oklch, var(--primary) 20%, transparent); }
+.nav-btn.execute {
+  background: color-mix(in oklch, var(--status-pass) 12%, transparent);
+  color: var(--status-pass-foreground);
+  border-color: color-mix(in oklch, var(--status-pass) 30%, transparent);
+  font-weight: 600;
+}
+.nav-btn.execute:hover { background: color-mix(in oklch, var(--status-pass) 20%, transparent); }
+
+/* ═══ Info Callout ═══ */
+.callout {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 5px;
+  font-size: 11px;
+  margin-bottom: 12px;
+}
+.callout.info { background: color-mix(in oklch, var(--info) 30%, transparent); color: var(--info-foreground); }
+.callout.warning { background: color-mix(in oklch, var(--warning) 30%, transparent); color: var(--warning-foreground); }
+.callout .callout-icon { flex-shrink: 0; margin-top: 1px; }
+
+/* ═══ Two Column Grid ═══ */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+/* ═══ Loading Spinner ═══ */
+.spinner {
+  width: 14px; height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin .6s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ═══ SVG Icons (inline lucide-style) ═══ */
+svg { display: inline-block; vertical-align: middle; }
+
+/* ═══ Scrollbar ═══ */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: color-mix(in oklch, var(--muted-foreground) 30%, transparent); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: color-mix(in oklch, var(--muted-foreground) 50%, transparent); }
+</style>
+</head>
+<body>
+
+<!-- ═══ 主题切换栏 ═══ -->
+<div class="theme-bar">
+  <span class="label">Unisoc SoC 验证环境自动生成向导 · 原型</span>
+  <button onclick="setTheme('bench')" id="theme-bench" class="active">Bench 深色</button>
+  <button onclick="setTheme('daylight')" id="theme-daylight">Daylight 浅色</button>
+</div>
+
+<!-- ═══ 向导容器 ═══ -->
+<div class="wizard-container">
+<div class="wizard-dialog">
+
+<!-- ═══ Header ═══ -->
+<div class="wizard-header">
+  <div class="wizard-header-left">
+    <div class="icon-box">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+      </svg>
+    </div>
+    <div>
+      <div class="title">验证环境自动生成</div>
+      <div class="subtitle">sysbase_gen.py · Subsys SoC Verification Environment Generator</div>
+    </div>
+  </div>
+  <div class="wizard-header-right">
+    <button class="header-btn" onclick="loadConfig()">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      加载配置
+    </button>
+    <button class="header-btn" onclick="saveConfig()">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+      保存配置
+    </button>
+    <button class="header-btn primary" onclick="closeWizard()">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- ═══ Stepper ═══ -->
+<div class="stepper" id="stepper">
+  <div class="step-pill active" onclick="goToStep(0)">
+    <span class="step-num">1</span> Subsys
+  </div>
+  <span class="step-arrow">→</span>
+  <div class="step-pill pending" onclick="goToStep(1)">
+    <span class="step-num">2</span> RTL 顶层
+  </div>
+  <span class="step-arrow">→</span>
+  <div class="step-pill pending" onclick="goToStep(2)">
+    <span class="step-num">3</span> DUT Spec
+  </div>
+  <span class="step-arrow">→</span>
+  <div class="step-pill pending" onclick="goToStep(3)">
+    <span class="step-num">4</span> Mini Excel
+  </div>
+  <span class="step-arrow">→</span>
+  <div class="step-pill pending" onclick="goToStep(4)">
+    <span class="step-num">5</span> RAL 目录
+  </div>
+  <span class="step-arrow">→</span>
+  <div class="step-pill pending" onclick="goToStep(5)">
+    <span class="step-num">6</span> CLK 目录
+  </div>
+  <span class="step-arrow">→</span>
+  <div class="step-pill pending" onclick="goToStep(6)">
+    <span class="step-num">7</span> Module IO
+  </div>
+  <span class="step-arrow">→</span>
+  <div class="step-pill pending" onclick="goToStep(7)">
+    <span class="step-num">8</span> 可选项
+  </div>
+  <span class="step-arrow">→</span>
+  <div class="step-pill pending" onclick="goToStep(8)">
+    <span class="step-num">9</span> 预览执行
+  </div>
+</div>
+
+<!-- ═══ Content ═══ -->
+<div class="wizard-content">
+
+<!-- ── Step 1: Subsys + Instance Name ── -->
+<div class="step-content active" id="step-0">
+  <div class="step-title">选择 Subsystem 与例化名</div>
+  <div class="step-desc">选择要生成验证环境的 Subsys，系统将自动推导例化名。</div>
+
+  <div class="callout info">
+    <svg class="callout-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+    <span>Subsys 名称需与项目仓库名一致，保证所有环节的 subsys name 统一。例化名用于在 top 上例化 DUT 时的命名。</span>
+  </div>
+
+  <div class="two-col">
+    <div class="field-group">
+      <div class="field-label">
+        <span>Subsystem 名称</span>
+        <span class="required">*</span>
+        <span style="margin-left:auto"><span class="badge info">-n</span></span>
+      </div>
+      <div class="input-row">
+        <select class="select-input" id="subsys-select" onchange="onSubsysChange(this.value)">
+          <option value="">请选择 Subsys...</option>
+          <option value="apcpu_sys">apcpu_sys</option>
+          <option value="ap_sys">ap_sys</option>
+          <option value="aon_sys">aon_sys</option>
+          <option value="camera_sys">camera_sys</option>
+          <option value="dpu_sys">dpu_sys</option>
+          <option value="vpu_sys">vpu_sys</option>
+          <option value="gpu_sys">gpu_sys</option>
+          <option value="lpach_sys">lpach_sys</option>
+          <option value="dbg_sys">dbg_sys</option>
+          <option value="ai_sys">ai_sys</option>
+          <option value="pcie_sys">pcie_sys</option>
+        </select>
+      </div>
+      <div class="field-hint">已知 Subsys 列表，后续可从 Case Database 动态获取</div>
+    </div>
+
+    <div class="field-group">
+      <div class="field-label">
+        <span>例化名 (Instance Name)</span>
+        <span class="required">*</span>
+        <span style="margin-left:auto"><span class="badge info">-i</span></span>
+      </div>
+      <div class="input-row">
+        <input type="text" class="text-input mono" id="inst-name" placeholder="自动生成，可修改..." value="">
+        <button class="btn" onclick="inferInstName()" title="重新推导">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 1-9 9c-2.4 0-4.6-.9-6.2-2.4L3 21"/><path d="M3 12a9 9 0 0 1 9-9c2.4 0 4.6.9 6.2 2.4L21 3"/><path d="M21 3v6h-6"/><path d="M3 21v-6h6"/></svg>
+        </button>
+      </div>
+      <div class="field-hint">规则：apcpu_sys → u_sys_apcpu，ap_sys → u_sys_ap</div>
+    </div>
+  </div>
+
+  <div class="field-group">
+    <div class="field-label">
+      <span>脚本路径 (sysbase_gen.py)</span>
+      <span style="margin-left:auto"><span class="badge muted">可修改</span></span>
+    </div>
+    <div class="input-row">
+      <input type="text" class="text-input mono" id="script-path" value="/pri/project/tools/sprd/dv/sysbase/r3p4/bin/sysbase_gen.py">
+      <button class="btn" onclick="pickFile('script-path')">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        浏览
+      </button>
+    </div>
+    <div class="field-hint">默认路径，可修改为其他版本</div>
+  </div>
+</div>
+
+<!-- ── Step 2: RTL 顶层文件 ── -->
+<div class="step-content" id="step-1">
+  <div class="step-title">选择 DUT 顶层 RTL 文件</div>
+  <div class="step-desc">从 <span class="mono">$PROJ_RTL/&lt;subsys&gt;/design/rtl/top/</span> 目录下选择顶层 .v 文件</div>
+
+  <div class="callout warning">
+    <svg class="callout-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    <span>$PROJ_RTL 环境变量已检测到：<span class="mono">/pri/project/rtl</span>。若不正确请先在环境变量管理中修改。</span>
+  </div>
+
+  <div class="field-group">
+    <div class="field-label">
+      <span>DUT 顶层文件 (.v)</span>
+      <span class="required">*</span>
+      <span style="margin-left:auto"><span class="badge info">-rtl</span></span>
+    </div>
+    <div class="input-row" style="margin-bottom: 8px;">
+      <input type="text" class="text-input mono" id="rtl-path" placeholder="选择下方文件或手动输入路径..." value="" readonly>
+      <button class="btn" onclick="pickFile('rtl-path')">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        浏览
+      </button>
+    </div>
+    <div class="field-hint" style="margin-bottom: 8px;">扫描 $PROJ_RTL/apcpu_sys/design/rtl/top/ 下的 .v 文件：</div>
+
+    <div class="file-item selected" onclick="selectRtlFile(this, 'apcpu_top_pwr_wrap.v')">
+      <svg class="file-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <span class="file-name">apcpu_top_pwr_wrap.v</span>
+      <span class="badge success">module: apcpu_top_pwr_wrap</span>
+      <span class="file-path">$PROJ_RTL/apcpu_sys/design/rtl/top/</span>
+    </div>
+    <div class="file-item" onclick="selectRtlFile(this, 'apcpu_top.v')">
+      <svg class="file-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <span class="file-name">apcpu_top.v</span>
+      <span class="badge muted">module: apcpu_top</span>
+      <span class="file-path">$PROJ_RTL/apcpu_sys/design/rtl/top/</span>
+    </div>
+    <div class="file-item" onclick="selectRtlFile(this, 'apcpu_cluster_wrap.v')">
+      <svg class="file-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <span class="file-name">apcpu_cluster_wrap.v</span>
+      <span class="badge muted">module: apcpu_cluster_wrap</span>
+      <span class="file-path">$PROJ_RTL/apcpu_sys/design/rtl/top/</span>
+    </div>
+  </div>
+
+  <div class="field-group">
+    <div class="field-label">
+      <span>Module 名（自动提取）</span>
+    </div>
+    <div class="input-row">
+      <input type="text" class="text-input mono" id="module-name" value="apcpu_top_pwr_wrap" readonly style="opacity:0.7;">
+      <span class="badge success">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+        已提取
+      </span>
+    </div>
+    <div class="field-hint">从 RTL 文件中自动提取 module 声明名，用于后续 Module IO 生成</div>
+  </div>
+</div>
+
+<!-- ── Step 3: DUT Spec ── -->
+<div class="step-content" id="step-2">
+  <div class="step-title">DUT Spec Excel</div>
+  <div class="step-desc">提供填写好的 dut_spec Excel 文件，用于生成 systba VIP / sysbase BFM 组件环境</div>
+
+  <div class="callout info">
+    <svg class="callout-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+    <span>dut_spec 包含 Architecture 和 MemoryMap 两个 sheet，描述 Subsys 的接口和内存映射信息。</span>
+  </div>
+
+  <div class="field-group">
+    <div class="field-label">
+      <span>DUT Spec 文件路径</span>
+      <span class="required">*</span>
+      <span style="margin-left:auto"><span class="badge info">-x</span></span>
+    </div>
+    <div class="input-row">
+      <input type="text" class="text-input mono" id="dutspec-path" placeholder="选择或导入 Excel 文件..." value="">
+      <button class="btn" onclick="pickFile('dutspec-path')">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        导入
+      </button>
+      <button class="btn primary" onclick="openTemplate('dut_spec')">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+        打开模板编辑
+      </button>
+    </div>
+    <div class="field-hint">支持 .xlsx / .xls 格式。点击「打开模板编辑」可在应用内直接编辑空白模板</div>
+  </div>
+
+  <!-- 模板预览缩略图 -->
+  <div style="margin-top: 12px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;">
+    <div style="padding: 6px 10px; background: var(--secondary); font-size: 11px; font-weight: 600; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between;">
+      <span>模板预览 · dut_spec_template.xlsx</span>
+      <span class="badge muted">2 sheets</span>
+    </div>
+    <div style="padding: 10px; font-size: 10px; color: var(--muted-foreground); font-family: 'Cascadia Code', monospace; line-height: 1.6;">
+      <div style="color: var(--primary); margin-bottom: 4px;">Sheet 1: Architecture</div>
+      <div>Subsystem_Name | APCPU_SYS | ...</div>
+      <div>AXI_Name | Type | is_Active | Spec_Ver | Is_Lite | Spec_Subtype | Addr_Width | ...</div>
+      <div>AXIMST_APCPU_DSU_MM | MASTER | ACTIVE | AMBA4 | NO | AXI_BASE | 64 | ...</div>
+      <div style="color: var(--primary); margin-top: 8px; margin-bottom: 4px;">Sheet 2: MemoryMap</div>
+      <div>Subsystem_Name | APCPU_SYS | ...</div>
+      <div>Region_Name | Start_Address | End_Address | RW | ...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Step 4: Mini Excel ── -->
+<div class="step-content" id="step-3">
+  <div class="step-title">Sysbase Mini Case Excel</div>
+  <div class="step-desc">提供填写好的 mini_excel，用于生成提供给 ipsocv 的相关环境</div>
+
+  <div class="field-group">
+    <div class="field-label">
+      <span>Mini Excel 文件路径</span>
+      <span class="required">*</span>
+      <span style="margin-left:auto"><span class="badge info">-mini</span></span>
+    </div>
+    <div class="input-row">
+      <input type="text" class="text-input mono" id="mini-path" placeholder="选择或导入 Excel 文件..." value="">
+      <button class="btn" onclick="pickFile('mini-path')">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        导入
+      </button>
+      <button class="btn primary" onclick="openTemplate('mini')">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+        打开模板编辑
+      </button>
+    </div>
+    <div class="field-hint">示例文件名：sysbase_mini_case_apcpu.xlsx</div>
+  </div>
+</div>
+
+<!-- ── Step 5: RAL 目录 ── -->
+<div class="step-content" id="step-4">
+  <div class="step-title">RAL 寄存器目录</div>
+  <div class="step-desc">由 DE 提供的所有 reg 目录所在的总目录，支持多个目录空格分隔</div>
+
+  <div class="callout info">
+    <svg class="callout-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+    <span>每个 reg 独立目录下应包含 for_de / for_dv 子目录。自动推导将扫描 spec 和 rtl 两个根目录。</span>
+  </div>
+
+  <div style="margin-bottom: 8px;">
+    <button class="btn primary" onclick="inferRalDirs()" id="infer-ral-btn">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 1-9 9c-2.4 0-4.6-.9-6.2-2.4L3 21"/><path d="M3 12a9 9 0 0 1 9-9c2.4 0 4.6.9 6.2 2.4L21 3"/><path d="M21 3v6h-6"/><path d="M3 21v-6h6"/></svg>
+      一键自动推导
+    </button>
+    <span class="badge success" style="margin-left: 8px;" id="ral-status">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+      已推导 3 个目录
+    </span>
+  </div>
+
+  <div class="field-group">
+    <div class="field-label">
+      <span>RAL 目录列表</span>
+      <span class="required">*</span>
+      <span style="margin-left:auto"><span class="badge info">-ral</span></span>
+    </div>
+
+    <div class="dir-list" id="ral-dir-list">
+      <div class="dir-item">
+        <svg class="dir-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <span class="dir-path">$PROJ_RTL/apcpu_sys/design/spec/autoreg</span>
+        <span class="dir-struct">✓ for_de ✓ for_dv</span>
+        <button class="remove-btn" onclick="removeDir(this)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>
+      <div class="dir-item">
+        <svg class="dir-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <span class="dir-path">$PROJ_RTL/apcpu_sys/design/rtl/slv_fw_apcpu</span>
+        <span class="dir-struct">✓ for_de ✓ for_dv</span>
+        <button class="remove-btn" onclick="removeDir(this)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>
+      <div class="dir-item">
+        <svg class="dir-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <span class="dir-path">$PROJ_RTL/common/rtl/TDC_sensor_ctrl/RegsBuilder</span>
+        <span class="dir-struct">✓ for_de ✓ for_dv</span>
+        <button class="remove-btn" onclick="removeDir(this)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="input-row">
+      <input type="text" class="text-input mono" id="ral-add-input" placeholder="手动添加目录路径...">
+      <button class="btn" onclick="addRalDir()">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        添加
+      </button>
+    </div>
+    <div class="field-hint">自动推导扫描 $PROJ_RTL/&lt;subsys&gt;/design/spec/ 和 $PROJ_RTL/&lt;subsys&gt;/design/rtl/ 目录</div>
+  </div>
+</div>
+
+<!-- ── Step 6: CLK 目录 ── -->
+<div class="step-content" id="step-5">
+  <div class="step-title">CLK 时钟目录</div>
+  <div class="step-desc">由 DE 提供的 clk_max cfg、set clk_freq task 和 clk_max sva 三份文件所在目录</div>
+
+  <div class="two-col">
+    <div class="field-group">
+      <div class="field-label">
+        <span>CLK 目录</span>
+        <span class="required">*</span>
+        <span style="margin-left:auto"><span class="badge info">-clk</span></span>
+      </div>
+      <div class="input-row">
+        <input type="text" class="text-input mono" id="clk-dir" placeholder="自动推导或手动输入..." value="">
+        <button class="btn primary" onclick="inferClkDir()" id="infer-clk-btn">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 1-9 9c-2.4 0-4.6-.9-6.2-2.4L3 21"/><path d="M3 12a9 9 0 0 1 9-9c2.4 0 4.6.9 6.2 2.4L21 3"/><path d="M21 3v6h-6"/><path d="M3 21v-6h6"/></svg>
+          推导
+        </button>
+        <button class="btn" onclick="pickDir('clk-dir')">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        </button>
+      </div>
+      <div class="field-hint">扫描包含 clk_max_cfg 关键字的文件所在目录</div>
+    </div>
+
+    <div class="field-group">
+      <div class="field-label">
+        <span>CLK2 目录（可选）</span>
+        <span class="optional">多 clk core subsys 使用</span>
+        <span style="margin-left:auto"><span class="badge info">-clk2</span></span>
+      </div>
+      <div class="input-row">
+        <input type="text" class="text-input mono" id="clk2-dir" placeholder="格式: <de路径>,<clk文件名前缀>" value="">
+        <button class="btn" onclick="pickDir('clk2-dir')">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        </button>
+      </div>
+      <div class="field-hint">仅存在多个 clk core 的 subsys 需要，格式: &lt;de路径&gt;,&lt;clk文件名前缀&gt;</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Step 7: Module IO ── -->
+<div class="step-content" id="step-6">
+  <div class="step-title">Module IO 文件生成</div>
+  <div class="step-desc">由 Verdi getModIO 脚本从 filelist 和 module 名自动生成 Module IO 文件</div>
+
+  <div class="callout info">
+    <svg class="callout-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+    <span>命令：<span class="mono">$VERDI_HOME/share/VIA/Apps/DesignComprehension/GetModIO/getModIO_batch.p -f &lt;filelist&gt; -modules "&lt;module_name&gt;" -o getModIO.log</span></span>
+  </div>
+
+  <div class="two-col">
+    <div class="field-group">
+      <div class="field-label">
+        <span>Filelist 文件</span>
+        <span class="required">*</span>
+      </div>
+      <div class="input-row">
+        <input type="text" class="text-input mono" id="filelist-path" placeholder="选择 filelist 文件..." value="">
+        <button class="btn" onclick="pickFile('filelist-path')">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          浏览
+        </button>
+      </div>
+    </div>
+
+    <div class="field-group">
+      <div class="field-label">
+        <span>Module 名（自动填充）</span>
+      </div>
+      <div class="input-row">
+        <input type="text" class="text-input mono" id="modio-module" value="apcpu_top_pwr_wrap" readonly style="opacity:0.7;">
+        <span class="badge success">从 Step 2</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="field-group">
+    <div class="field-label">
+      <span>Module IO 输出文件</span>
+      <span class="required">*</span>
+      <span style="margin-left:auto"><span class="badge info">-mod_io</span></span>
+    </div>
+    <div class="input-row" style="margin-bottom: 8px;">
+      <input type="text" class="text-input mono" id="modio-path" placeholder="生成后自动填充..." value="./materials/getModIO.log" readonly style="opacity:0.7;">
+      <button class="btn primary" onclick="generateModIo()" id="gen-modio-btn">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        生成 Module IO
+      </button>
+    </div>
+  </div>
+
+  <!-- 终端输出区域 -->
+  <div class="terminal-box" id="modio-terminal">
+    <div class="term-line term-info">[getModIO] Starting getModIO_batch.p ...</div>
+    <div class="term-line term-cmd">$ perl $VERDI_HOME/share/VIA/Apps/DesignComprehension/GetModIO/getModIO_batch.p -f filelist.f -modules "apcpu_top_pwr_wrap" -o getModIO.log</div>
+    <div class="term-line">Processing design files...</div>
+    <div class="term-line">Extracting module interface: apcpu_top_pwr_wrap</div>
+    <div class="term-line term-pass">[getModIO] Success! Output written to getModIO.log (1247 ports extracted)</div>
+  </div>
+</div>
+
+<!-- ── Step 8: 可选参数 ── -->
+<div class="step-content" id="step-7">
+  <div class="step-title">可选参数（Pinlist / Dmalist）</div>
+  <div class="step-desc">以下参数为可选项，可留空。后续可单独生成。</div>
+
+  <div class="two-col">
+    <div class="field-group">
+      <div class="field-label">
+        <span>Pin List 文件</span>
+        <span class="optional">可选</span>
+        <span style="margin-left:auto"><span class="badge info">-pinlist</span></span>
+      </div>
+      <div class="input-row">
+        <input type="text" class="text-input mono" id="pinlist-path" placeholder="留空跳过..." value="">
+        <button class="btn" onclick="pickFile('pinlist-path')">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          浏览
+        </button>
+      </div>
+      <div class="field-hint">Pin list 用于生成 ip pin cfg task / define</div>
+    </div>
+
+    <div class="field-group">
+      <div class="field-label">
+        <span>DMA List 文件</span>
+        <span class="optional">可选</span>
+        <span style="margin-left:auto"><span class="badge info">-dmalist</span></span>
+      </div>
+      <div class="input-row">
+        <input type="text" class="text-input mono" id="dmalist-path" placeholder="留空跳过..." value="">
+        <button class="btn" onclick="pickFile('dmalist-path')">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          浏览
+        </button>
+      </div>
+      <div class="field-hint">DMA req Excel 用于生成 get dma req id task</div>
+    </div>
+  </div>
+
+  <div class="field-group">
+    <div class="field-label">
+      <span>输出目录</span>
+      <span class="required">*</span>
+      <span style="margin-left:auto"><span class="badge info">-o</span></span>
+    </div>
+    <div class="input-row">
+      <input type="text" class="text-input mono" id="output-dir" value="./">
+      <button class="btn" onclick="pickDir('output-dir')">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        浏览
+      </button>
+    </div>
+    <div class="field-hint">脚本有较多后处理，当前只支持在当前目录下生成</div>
+  </div>
+</div>
+
+<!-- ── Step 9: 命令预览与执行 ── -->
+<div class="step-content" id="step-8">
+  <div class="step-title">命令预览与执行</div>
+  <div class="step-desc">确认所有参数无误后，可在终端中执行或复制命令</div>
+
+  <!-- 配置摘要 -->
+  <div style="margin-bottom: 16px;">
+    <div style="font-size: 12px; font-weight: 600; margin-bottom: 8px; color: var(--muted-foreground);">配置摘要</div>
+    <div style="display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 11px; font-family: 'Cascadia Code', monospace; padding: 10px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--card);">
+      <span style="color: var(--primary);">-n</span><span>apcpu_sys</span>
+      <span style="color: var(--primary);">-i</span><span>u_sys_apcpu</span>
+      <span style="color: var(--primary);">-rtl</span><span>$PROJ_RTL/apcpu_sys/design/rtl/top/apcpu_top_pwr_wrap.v</span>
+      <span style="color: var(--primary);">-x</span><span>./materials/apcpu_sys_dut_spec.xlsx</span>
+      <span style="color: var(--primary);">-mini</span><span>./materials/sysbase_mini_case_apcpu.xlsx</span>
+      <span style="color: var(--primary);">-ral</span><span>$PROJ_RTL/apcpu_sys/design/spec/autoreg $PROJ_RTL/.../slv_fw_apcpu $PROJ_RTL/.../RegsBuilder</span>
+      <span style="color: var(--primary);">-clk</span><span>$PROJ_RTL/apcpu_sys/design/rtl/clk</span>
+      <span style="color: var(--warning-foreground);">-clk2</span><span style="color: var(--muted-foreground);">(未设置)</span>
+      <span style="color: var(--primary);">-mod_io</span><span>./materials/getModIO.log</span>
+      <span style="color: var(--warning-foreground);">-pinlist</span><span style="color: var(--muted-foreground);">(未设置)</span>
+      <span style="color: var(--warning-foreground);">-dmalist</span><span style="color: var(--muted-foreground);">(未设置)</span>
+      <span style="color: var(--primary);">-o</span><span>./</span>
+    </div>
+  </div>
+
+  <!-- 命令预览 -->
+  <div class="field-group">
+    <div class="field-label">
+      <span>完整命令</span>
+      <button class="btn" style="margin-left:auto;" onclick="copyCommand()">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+        复制
+      </button>
+    </div>
+    <div class="command-preview" id="command-preview"><span class="cmd-python">python3</span> <span class="cmd-script">/pri/project/tools/sprd/dv/sysbase/r3p4/bin/sysbase_gen.py</span> gen \
+    <span class="cmd-flag">-rtl</span>     <span class="cmd-value">$PROJ_RTL/apcpu_sys/design/rtl/top/apcpu_top_pwr_wrap.v</span> \
+    <span class="cmd-flag">-n</span>       <span class="cmd-value">apcpu_sys</span> \
+    <span class="cmd-flag">-i</span>       <span class="cmd-value">u_sys_apcpu</span> \
+    <span class="cmd-flag">-x</span>       <span class="cmd-value">./materials/apcpu_sys_dut_spec.xlsx</span> \
+    <span class="cmd-flag">-mini</span>    <span class="cmd-value">./materials/sysbase_mini_case_apcpu.xlsx</span> \
+    <span class="cmd-flag">-ral</span>     <span class="cmd-value">$PROJ_RTL/apcpu_sys/design/spec/autoreg $PROJ_RTL/apcpu_sys/design/rtl/slv_fw_apcpu $PROJ_RTL/common/rtl/TDC_sensor_ctrl/RegsBuilder</span> \
+    <span class="cmd-flag">-clk</span>     <span class="cmd-value">$PROJ_RTL/apcpu_sys/design/rtl/clk</span> \
+    <span class="cmd-flag">-mod_io</span>  <span class="cmd-value">./materials/getModIO.log</span> \
+    <span class="cmd-flag">-o</span>       <span class="cmd-value">./</span></div>
+  </div>
+
+  <!-- 执行终端 -->
+  <div class="field-group">
+    <div class="field-label">
+      <span>执行输出</span>
+      <span class="badge muted" id="exec-status">待执行</span>
+    </div>
+    <div class="terminal-box" id="exec-terminal">
+      <div class="term-line term-muted" style="color: var(--muted-foreground);">点击「执行生成」按钮在终端中运行命令...</div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /wizard-content -->
+
+<!-- ═══ Footer ═══ -->
+<div class="wizard-footer">
+  <div class="footer-left">
+    <span id="step-indicator">步骤 1 / 9</span>
+    <span style="opacity:0.3;">·</span>
+    <span id="step-status">选择 Subsys</span>
+  </div>
+  <div class="footer-right">
+    <button class="nav-btn" onclick="prevStep()" id="prev-btn" disabled>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+      上一步
+    </button>
+    <button class="nav-btn next" onclick="nextStep()" id="next-btn">
+      下一步
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+    <button class="nav-btn execute" onclick="executeGen()" id="execute-btn" style="display:none;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+      执行生成
+    </button>
+  </div>
+</div>
+
+</div><!-- /wizard-dialog -->
+</div><!-- /wizard-container -->
+
+<script>
+// ═══ 状态 ═══
+let currentStep = 0;
+const totalSteps = 9;
+const stepNames = ['选择 Subsys', 'RTL 顶层文件', 'DUT Spec', 'Mini Excel', 'RAL 目录', 'CLK 目录', 'Module IO', '可选项', '预览执行'];
+
+// ═══ 主题切换 ═══
+function setTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  document.getElementById('theme-bench').classList.toggle('active', theme === 'bench');
+  document.getElementById('theme-daylight').classList.toggle('active', theme === 'daylight');
+}
+
+// ═══ 步骤导航 ═══
+function updateStepper() {
+  const pills = document.querySelectorAll('.step-pill');
+  pills.forEach((pill, i) => {
+    pill.classList.remove('active', 'completed', 'pending');
+    if (i < currentStep) pill.classList.add('completed');
+    else if (i === currentStep) pill.classList.add('active');
+    else pill.classList.add('pending');
+  });
+
+  // 更新内容
+  document.querySelectorAll('.step-content').forEach((content, i) => {
+    content.classList.toggle('active', i === currentStep);
+  });
+
+  // 更新底部
+  document.getElementById('step-indicator').textContent = `步骤 ${currentStep + 1} / ${totalSteps}`;
+  document.getElementById('step-status').textContent = stepNames[currentStep];
+  document.getElementById('prev-btn').disabled = currentStep === 0;
+
+  const isLast = currentStep === totalSteps - 1;
+  document.getElementById('next-btn').style.display = isLast ? 'none' : '';
+  document.getElementById('execute-btn').style.display = isLast ? '' : 'none';
+}
+
+function nextStep() {
+  if (currentStep < totalSteps - 1) {
+    currentStep++;
+    updateStepper();
+  }
+}
+
+function prevStep() {
+  if (currentStep > 0) {
+    currentStep--;
+    updateStepper();
+  }
+}
+
+function goToStep(step) {
+  currentStep = step;
+  updateStepper();
+}
+
+// ═══ 交互函数（模拟） ═══
+function onSubsysChange(value) {
+  if (value) {
+    // 推导例化名
+    const parts = value.replace(/_sys$/, '');
+    document.getElementById('inst-name').value = `u_sys_${parts}`;
+  } else {
+    document.getElementById('inst-name').value = '';
+  }
+}
+
+function inferInstName() {
+  const subsys = document.getElementById('subsys-select').value;
+  if (subsys) onSubsysChange(subsys);
+}
+
+function selectRtlFile(element, fileName) {
+  document.querySelectorAll('.file-item').forEach(item => {
+    item.classList.remove('selected');
+    const badge = item.querySelector('.badge');
+    if (badge) badge.classList.remove('success');
+    if (badge) badge.classList.add('muted');
+  });
+  element.classList.add('selected');
+  const badge = element.querySelector('.badge');
+  if (badge) { badge.classList.remove('muted'); badge.classList.add('success'); }
+  document.getElementById('rtl-path').value = `$PROJ_RTL/apcpu_sys/design/rtl/top/${fileName}`;
+  document.getElementById('module-name').value = fileName.replace('.v', '');
+}
+
+function inferRalDirs() {
+  const btn = document.getElementById('infer-ral-btn');
+  btn.innerHTML = '<div class="spinner"></div> 推导中...';
+  btn.disabled = true;
+  setTimeout(() => {
+    btn.innerHTML = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 1-9 9c-2.4 0-4.6-.9-6.2-2.4L3 21"/><path d="M3 12a9 9 0 0 1 9-9c2.4 0 4.6.9 6.2 2.4L21 3"/><path d="M21 3v6h-6"/><path d="M3 21v-6h6"/></svg> 一键自动推导';
+    btn.disabled = false;
+    document.getElementById('ral-status').innerHTML = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> 已推导 3 个目录';
+  }, 800);
+}
+
+function inferClkDir() {
+  const btn = document.getElementById('infer-clk-btn');
+  btn.innerHTML = '<div class="spinner"></div>';
+  btn.disabled = true;
+  setTimeout(() => {
+    btn.innerHTML = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 1-9 9c-2.4 0-4.6-.9-6.2-2.4L3 21"/><path d="M3 12a9 9 0 0 1 9-9c2.4 0 4.6.9 6.2 2.4L21 3"/><path d="M21 3v6h-6"/><path d="M3 21v-6h6"/></svg> 推导';
+    btn.disabled = false;
+    document.getElementById('clk-dir').value = '$PROJ_RTL/apcpu_sys/design/rtl/clk';
+  }, 600);
+}
+
+function generateModIo() {
+  const btn = document.getElementById('gen-modio-btn');
+  btn.innerHTML = '<div class="spinner"></div> 生成中...';
+  btn.disabled = true;
+  setTimeout(() => {
+    btn.innerHTML = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg> 重新生成';
+    btn.disabled = false;
+  }, 1200);
+}
+
+function removeDir(btn) {
+  btn.closest('.dir-item').remove();
+  const count = document.querySelectorAll('#ral-dir-list .dir-item').length;
+  document.getElementById('ral-status').innerHTML = count > 0
+    ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg> 已推导 ${count} 个目录`
+    : '<span class="badge warning">无目录</span>';
+}
+
+function addRalDir() {
+  const input = document.getElementById('ral-add-input');
+  const path = input.value.trim();
+  if (!path) return;
+  const list = document.getElementById('ral-dir-list');
+  const item = document.createElement('div');
+  item.className = 'dir-item';
+  item.innerHTML = `
+    <svg class="dir-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+    <span class="dir-path">${path}</span>
+    <span class="dir-struct">手动添加</span>
+    <button class="remove-btn" onclick="removeDir(this)">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+    </button>`;
+  list.appendChild(item);
+  input.value = '';
+}
+
+function executeGen() {
+  const terminal = document.getElementById('exec-terminal');
+  const status = document.getElementById('exec-status');
+  status.className = 'badge info';
+  status.textContent = '执行中';
+  terminal.innerHTML = '';
+
+  const lines = [
+    { text: '$ python3 /pri/project/tools/sprd/dv/sysbase/r3p4/bin/sysbase_gen.py gen -rtl ... -n apcpu_sys ...', cls: 'term-cmd' },
+    { text: '[sysbase_gen] Building environment for subsys: apcpu_sys', cls: 'term-info' },
+    { text: '[sysbase_gen] Instantiating DUT: u_sys_apcpu (apcpu_top_pwr_wrap)', cls: '' },
+    { text: '[sysbase_gen] Processing dut_spec: ./materials/apcpu_sys_dut_spec.xlsx', cls: '' },
+    { text: '[sysbase_gen]   AXI masters: 3, AXI slaves: 5', cls: '' },
+    { text: '[sysbase_gen]   AHB masters: 1, AHB slaves: 2', cls: '' },
+    { text: '[sysbase_gen]   APB masters: 2, APB slaves: 8', cls: '' },
+    { text: '[sysbase_gen] Processing mini_excel: sysbase_mini_case_apcpu.xlsx', cls: '' },
+    { text: '[sysbase_gen] Processing RAL directories (3 dirs)...', cls: '' },
+    { text: '[sysbase_gen]   clk_apb_rf: 45 registers', cls: '' },
+    { text: '[sysbase_gen]   aon_apb_rf: 32 registers', cls: '' },
+    { text: '[sysbase_gen]   sensor_ctrl: 18 registers', cls: '' },
+    { text: '[sysbase_gen] Linking DE clk files...', cls: '' },
+    { text: '[sysbase_gen] Processing Module IO: 1247 ports', cls: '' },
+    { text: '[sysbase_gen] Generating VIP connection files...', cls: '' },
+    { text: '[sysbase_gen] Generating sysbase ral files...', cls: '' },
+    { text: '[sysbase_gen] Environment generated successfully!', cls: 'term-pass' },
+    { text: '[sysbase_gen] Output directory: ./', cls: 'term-pass' },
+  ];
+
+  let idx = 0;
+  const interval = setInterval(() => {
+    if (idx >= lines.length) {
+      clearInterval(interval);
+      status.className = 'badge success';
+      status.textContent = '执行完成';
+      return;
+    }
+    const line = lines[idx];
+    const div = document.createElement('div');
+    div.className = `term-line ${line.cls}`;
+    div.textContent = line.text;
+    terminal.appendChild(div);
+    terminal.scrollTop = terminal.scrollHeight;
+    idx++;
+  }, 200);
+}
+
+function copyCommand() {
+  const text = document.getElementById('command-preview').textContent;
+  navigator.clipboard?.writeText(text);
+  // 视觉反馈
+  const btn = event.target.closest('button');
+  const orig = btn.innerHTML;
+  btn.innerHTML = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> 已复制';
+  setTimeout(() => btn.innerHTML = orig, 1500);
+}
+
+// 模拟函数
+function pickFile(id) { console.log('pickFile:', id); }
+function pickDir(id) { console.log('pickDir:', id); }
+function openTemplate(type) { console.log('openTemplate:', type); }
+function saveConfig() { console.log('saveConfig'); }
+function loadConfig() { console.log('loadConfig'); }
+function closeWizard() { console.log('closeWizard'); }
+
+// 初始化
+updateStepper();
+</script>
+</body>
+</html>
