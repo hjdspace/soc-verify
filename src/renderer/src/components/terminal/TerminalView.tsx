@@ -1,10 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { useTerminalStore } from '@renderer/stores/terminal';
 import { useThemeStore } from '@renderer/stores/theme';
 import { trpc } from '@renderer/lib/trpc';
+import { Copy, Check } from 'lucide-react';
 
 interface TerminalViewProps {
   terminalId: string;
@@ -31,6 +32,28 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
   const writeToTerminalRef = useTerminalStore((s) => s.writeToTerminal);
   const resizeTerminalRef = useTerminalStore((s) => s.resizeTerminal);
   const currentTheme = useThemeStore((s) => s.currentTheme);
+
+  // Copy button feedback state
+  const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Copy the current terminal selection to clipboard. Returns true if text was copied. */
+  const copySelection = useCallback(async (): Promise<boolean> => {
+    const term = termRef.current;
+    if (!term) return false;
+    const selection = term.getSelection();
+    if (!selection) return false;
+    try {
+      await navigator.clipboard.writeText(selection);
+      // Show "已复制" feedback
+      setCopied(true);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = setTimeout(() => setCopied(false), 1500);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -65,6 +88,9 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
 
     // Handle user input → send to main process
     const inputDisposable = term.onData((data) => {
+      // Intercept Ctrl+Shift+C for copy
+      // xterm.js sends \x1b[97;2;9u or similar for Ctrl+Shift+C with modifyOtherKeys
+      // Simpler: check for the raw Ctrl+Shift+C sequence
       void writeToTerminalRef(terminalId, data);
     });
 
@@ -133,11 +159,53 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
     // Initial resize notification
     void resizeTerminalRef(terminalId, term.cols, term.rows);
 
+    // ── Right-click copy: intercept contextmenu on the terminal container ──
+    // When the user right-clicks with a selection, copy it to clipboard.
+    // This matches the behaviour of Windows Terminal, PuTTY, etc.
+    const handleContextMenu = (e: MouseEvent): void => {
+      const selection = term.getSelection();
+      if (selection) {
+        e.preventDefault();
+        void navigator.clipboard.writeText(selection).then(() => {
+          setCopied(true);
+          if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+          copiedTimerRef.current = setTimeout(() => setCopied(false), 1500);
+        }).catch(() => {
+          // clipboard write failed — let default context menu show
+        });
+      }
+    };
+    containerRef.current.addEventListener('contextmenu', handleContextMenu);
+
+    // ── Ctrl+Shift+C / Ctrl+Insert keyboard copy shortcut ──
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      // Ctrl+Shift+C (standard terminal copy) or Ctrl+Insert (Windows copy)
+      if ((e.ctrlKey && e.shiftKey && e.key === 'C') || (e.ctrlKey && e.key === 'Insert')) {
+        const selection = term.getSelection();
+        if (selection) {
+          e.preventDefault();
+          void navigator.clipboard.writeText(selection).then(() => {
+            setCopied(true);
+            if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+            copiedTimerRef.current = setTimeout(() => setCopied(false), 1500);
+          }).catch(() => {});
+        }
+      }
+    };
+    // Attach to the container so it captures keyboard events from the terminal
+    containerRef.current.addEventListener('keydown', handleKeyDown);
+
+    // Capture the container element for the cleanup function — containerRef.current
+    // may have changed by the time the cleanup runs.
+    const container = containerRef.current;
+
     return () => {
       inputDisposable.dispose();
       resizeDisposable.dispose();
       cleanup?.();
       resizeObserver.disconnect();
+      container?.removeEventListener('contextmenu', handleContextMenu);
+      container?.removeEventListener('keydown', handleKeyDown);
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
@@ -151,10 +219,37 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
     }
   }, [currentTheme]);
 
+  // Cleanup copied feedback timer on unmount
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+    };
+  }, []);
+
   return (
-    <div
-      ref={containerRef}
-      className="h-full w-full overflow-hidden bg-background"
-    />
+    <div className="relative h-full w-full overflow-hidden bg-background">
+      <div
+        ref={containerRef}
+        className="h-full w-full"
+      />
+      {/* Copy button — always visible in the top-right corner */}
+      <button
+        onClick={() => void copySelection()}
+        className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border border-border/50 bg-background/80 px-2 py-1 text-[10px] text-muted-foreground shadow-sm backdrop-blur-sm transition-all hover:bg-accent hover:text-foreground"
+        title="复制选中内容 (右键或 Ctrl+Shift+C)"
+      >
+        {copied ? (
+          <>
+            <Check className="h-3 w-3 text-status-pass-foreground" />
+            <span className="text-status-pass-foreground">已复制</span>
+          </>
+        ) : (
+          <>
+            <Copy className="h-3 w-3" />
+            <span>复制</span>
+          </>
+        )}
+      </button>
+    </div>
   );
 }
