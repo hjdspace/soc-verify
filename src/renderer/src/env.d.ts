@@ -123,6 +123,27 @@ export interface EventBridgeAPI {
       message?: string;
     }) => void,
   ) => () => void;
+  // Sysbase Gen Module IO 生成实时日志
+  onSysbaseGenModIoLog: (
+    callback: (data: {
+      type: 'start' | 'output' | 'end';
+      command?: string;
+      line?: string;
+      lines?: string[];
+      success?: boolean;
+      outputFilePath?: string;
+    }) => void,
+  ) => () => void;
+  // Sysbase Gen 执行 sysbase_gen.py 实时日志
+  onSysbaseGenRunLog: (
+    callback: (data: {
+      type: 'start' | 'output' | 'end';
+      command?: string;
+      line?: string;
+      lines?: string[];
+      success?: boolean;
+    }) => void,
+  ) => () => void;
 }
 
 declare global {
