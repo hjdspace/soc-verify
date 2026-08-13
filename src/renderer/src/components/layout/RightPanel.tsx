@@ -40,6 +40,8 @@ export function RightPanel({ width }: RightPanelProps) {
   const currentProject = useProjectStore((s) =>
     s.projects.find((p) => p.id === s.currentProjectId),
   );
+  // 只在 tab 栏中显示当前项目的会话，避免切换项目后旧项目的聊天记录残留
+  const projectSessions = sessions.filter((s) => !currentProjectId || s.projectId === currentProjectId);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -556,7 +558,7 @@ export function RightPanel({ width }: RightPanelProps) {
           className="flex items-center gap-0.5 flex-1 overflow-x-auto px-1 py-1"
           style={{ scrollbarWidth: 'thin' }}
         >
-          {sessions.map((sess) => {
+          {projectSessions.map((sess) => {
             const isActive = sess.id === currentSessionId;
             const isEditing = editingSessionId === sess.id;
             const isSessionRunning = sess.status === 'streaming' || sess.status === 'tool_executing';
