@@ -195,14 +195,15 @@ describe('fortune-sheet-bridge', () => {
       expect(m.cs).toBe(2);
     });
 
-    it('转换列宽到 config.columnlen', () => {
+    it('转换列宽到 config.columnlen（字符→像素）', () => {
       const wb = new ExcelJS.Workbook();
       const ws = wb.addWorksheet('Sheet1');
       ws.getCell(1, 1).value = 'x';
       ws.getColumn(1).width = 25;
 
       const data = excelToFortune(wb);
-      expect(data.sheets[0].config?.columnlen?.['0']).toBe(25);
+      // 25 chars → 25 * 7 + 5 = 180 pixels
+      expect(data.sheets[0].config?.columnlen?.['0']).toBe(180);
     });
 
     it('转换行高到 config.rowlen', () => {
@@ -355,12 +356,13 @@ describe('fortune-sheet-bridge', () => {
           {
             name: 'Sheet1',
             celldata: [{ r: 0, c: 0, v: { v: 'x', m: 'x' } }],
-            config: { columnlen: { '0': 25 } },
+            config: { columnlen: { '0': 180 } },
           },
         ],
       };
 
       const wb = await fortuneToExcel(data);
+      // 180 pixels → (180 - 5) / 7 = 25 chars
       expect(wb.getWorksheet('Sheet1')?.getColumn(1).width).toBe(25);
     });
 
