@@ -24,7 +24,7 @@ export function LeftRail({ width }: LeftRailProps) {
   const fileTree = useProjectStore((s) => s.fileTree);
   const fileTreeLoading = useProjectStore((s) => s.fileTreeLoading);
   const openProjectDialog = useProjectStore((s) => s.openProjectDialog);
-  const loadFileTree = useProjectStore((s) => s.loadFileTree);
+  const switchProject = useProjectStore((s) => s.switchProject);
   const closeProject = useProjectStore((s) => s.closeProject);
   const refreshFileTree = useProjectStore((s) => s.refreshFileTree);
   const plugins = useProjectStore((s) => s.plugins);
@@ -56,9 +56,8 @@ export function LeftRail({ width }: LeftRailProps) {
   };
 
   const handleSelectProject = (projectId: string) => {
-    useProjectStore.setState({ currentProjectId: projectId });
-    loadFileTree(projectId);
     setShowProjectList(false);
+    void switchProject(projectId);
   };
 
   const tabs: Array<{ id: Tab; label: string; icon: typeof FileText }> = [
