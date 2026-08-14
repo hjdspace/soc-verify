@@ -33,7 +33,6 @@ export async function detectEdaTools(): Promise<EdaToolInfo[]> {
     try {
       const { stdout } = await execFileAsync('where', [tool.command], {
         timeout: 5000,
-        shell: true,
       });
       const path = stdout.trim().split('\n')[0].trim();
       if (path) {
@@ -41,7 +40,6 @@ export async function detectEdaTools(): Promise<EdaToolInfo[]> {
         try {
           const { stdout: verOut } = await execFileAsync(tool.command, tool.versionArgs, {
             timeout: 10000,
-            shell: true,
           });
           // Extract version from first few lines
           version = verOut.split('\n').slice(0, 3).join(' ').trim();

@@ -95,12 +95,16 @@ console.log('[electron-builder] ELECTRON_MIRROR:', env.ELECTRON_MIRROR);
 console.log('[electron-builder] ELECTRON_BUILDER_BINARIES_MIRROR:', env.ELECTRON_BUILDER_BINARIES_MIRROR);
 console.log('[electron-builder] Args:', args.join(' '));
 
-// Spawn electron-builder with the modified environment
-const child = spawn('npx', ['electron-builder', ...args], {
+// Spawn electron-builder with the modified environment.
+// Resolve the JS entry directly to avoid spawning .cmd/.sh wrapper scripts.
+// This lets us pass args safely without shell:true, avoiding the Node.js
+// DEP0190 deprecation warning.
+const electronBuilderEntry = join(ROOT, 'node_modules', 'electron-builder', 'cli.js');
+
+const child = spawn(process.execPath, [electronBuilderEntry, ...args], {
   cwd: ROOT,
   stdio: 'inherit',
   env,
-  shell: true,
 });
 
 child.on('error', (err) => {

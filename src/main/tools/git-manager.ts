@@ -455,7 +455,6 @@ export async function checkoutTag(
     const proc = spawn(cmd[0], cmd.slice(1), {
       cwd: projectDir,
       stdio: ['pipe', 'pipe', 'pipe'],
-      shell: true,
     });
 
     proc.stdout?.on('data', (data: Buffer) => {

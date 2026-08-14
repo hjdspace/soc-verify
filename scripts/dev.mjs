@@ -6,14 +6,19 @@
  * Electron APIs. This script ensures the variable is deleted before launch.
  */
 import { spawn } from 'node:child_process';
+import { resolve } from 'node:path';
 
 // Delete the env var so Electron runs in full mode (not Node.js compat mode)
 delete process.env.ELECTRON_RUN_AS_NODE;
 
-const child = spawn('electron-vite', ['dev', ...process.argv.slice(2)], {
+// Resolve the electron-vite JS entry directly to avoid spawning .cmd/.sh
+// wrapper scripts.  This lets us pass args safely without shell:true,
+// avoiding the Node.js DEP0190 deprecation warning.
+const electronViteEntry = resolve('node_modules/electron-vite/bin/electron-vite.js');
+
+const child = spawn(process.execPath, [electronViteEntry, 'dev', ...process.argv.slice(2)], {
   stdio: 'inherit',
   env: process.env,
-  shell: true,
 });
 
 child.on('exit', (code) => {
