@@ -301,3 +301,53 @@ _Avoid_: date filter, time window
 **Dashboard Theme**:
 ECharts 图表的主题，通过读取应用 CSS 变量（`--background`/`--foreground`/`--primary`/`--status-pass`/`--status-fail` 等）动态构建 ECharts theme 对象。主题切换时重新构建，确保图表颜色与 UI 完全一致。
 _Avoid_: chart theme, echarts skin
+
+### 知识库域
+
+**Knowledge Base**:
+用户注册的任意目录，作为 Markdown 文档知识资产的容器，自包含（源文档副本、转换产物、索引、图片资产），可整体拷贝迁移。应用级注册，项目级挂载使用。
+_Avoid_: 文档库, doc library, document store
+
+**KB Registration**:
+将一个目录登记为知识库的动作，登记信息存应用全局配置。注册空目录时初始化标准结构（`sources/`、`docs/`、`index.md`）。
+_Avoid_: library creation, 库创建
+
+**KB Mount**:
+项目与知识库的挂载关系，存项目配置。挂载后库对项目内 AI Agent 会话可见（索引注入 + kb_search）。v1 单库挂载，架构预留多库。
+_Avoid_: library link, 库关联
+
+**Source Document**:
+上传时复制入库的原始文档副本（pdf/docx/pptx 等），存 `sources/`，是重新转换的唯一依据。同名上传即覆盖并触发重转。
+_Avoid_: 原件, original file
+
+**Conversion**:
+anydoc 将 Source Document 转为 GitHub-Flavored Markdown 的过程。嵌入图片提取到 `docs/assets/<文档名>/` 并在 markdown 中替换为相对路径链接。
+_Avoid_: transformation, 文档解析
+
+**Conversion Failure**:
+anydoc 无法产出有意义 Markdown 的情况，以错误码呈现（扫描版 PDF → `unsupported`、加密文档 → `encrypted` 等）。失败条目在文档列表中可见、可重试。
+_Avoid_: conversion error
+
+**KB Index**:
+单文件 `index.md`，知识库的目录结构索引：层级目录树 + 每文档的标题、一句话摘要、关键词、相对路径链接。AI Agent 速查知识库的入口地图，用户可直接阅读编辑。
+_Avoid_: catalog, 目录清单
+
+**Auto Classification**:
+转换完成后由 LLM 根据文档内容决定其归属的分类子目录（`docs/<分类>/`），与 Fast Reindex 合并为一次 LLM 调用。用户可拖拽改分类后重建索引。
+_Avoid_: auto categorization
+
+**Fast Reindex**:
+直连 LLM API 的一次性调用，基于文档骨架（标题结构 + 前若干行）为新增文档生成索引条目并增量合并进 KB Index。上传转换成功后自动触发。
+_Avoid_: quick index
+
+**Deep Reindex**:
+走完整 omp Agent 会话的索引重建模式，agent 可逐文档深入阅读后重写摘要，质量上限高、耗时更长。用户手动触发。
+_Avoid_: full reindex
+
+**doc_to_markdown**:
+Host Tool。AI Agent 按需将任意支持格式文档转为 Markdown 返回内容，不入库。Agent 承接"看 word/pdf 文档"类任务时的决策路径。
+_Avoid_: convert tool
+
+**kb_search**:
+Host Tool。跨挂载知识库检索（KB Index 关键词 + `docs/` 全文匹配），返回匹配文档路径与摘要。
+_Avoid_: knowledge query, kb query

@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="drafting">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SoC Verify — 知识库 原型</title>
+<style>
+/* ════════════════════════════════════════════════════════════
+   主题 CSS 变量（从 globals.css 提取，与 dashboard.html 一致）
+   ════════════════════════════════════════════════════════════ */
+
+[data-theme="drafting"] {
+  --background: oklch(0.97 0.006 75);
+  --foreground: oklch(0.22 0.012 75);
+  --card: oklch(0.99 0.004 75);
+  --card-foreground: oklch(0.32 0.012 75);
+  --primary: oklch(0.42 0.13 285);
+  --primary-foreground: oklch(0.98 0.005 75);
+  --secondary: oklch(0.93 0.008 75);
+  --secondary-foreground: oklch(0.32 0.012 75);
+  --muted: oklch(0.93 0.008 75);
+  --muted-foreground: oklch(0.50 0.012 75);
+  --accent: oklch(0.91 0.014 285);
+  --accent-foreground: oklch(0.32 0.012 75);
+  --destructive: oklch(0.55 0.20 25);
+  --border: oklch(0.88 0.008 75);
+  --titlebar: oklch(0.94 0.008 75);
+  --titlebar-foreground: oklch(0.40 0.012 75);
+  --titlebar-border: oklch(0.86 0.008 75);
+  --sidebar: oklch(0.95 0.008 75);
+  --sidebar-foreground: oklch(0.45 0.012 75);
+  --radius: 0.5rem;
+  --status-pass: oklch(0.50 0.13 145);
+  --status-fail: oklch(0.50 0.16 28);
+  --status-running: oklch(0.50 0.11 230);
+  --status-pending: oklch(0.50 0.05 75);
+  --info: oklch(0.88 0.04 250);
+  --info-foreground: oklch(0.32 0.10 250);
+  --warning: oklch(0.88 0.06 75);
+  --warning-foreground: oklch(0.32 0.08 75);
+  --violet: oklch(0.88 0.05 295);
+  --violet-foreground: oklch(0.32 0.10 295);
+}
+
+[data-theme="bench"] {
+  --background: oklch(0.16 0.008 60);
+  --foreground: oklch(0.88 0.008 60);
+  --card: oklch(0.19 0.008 60);
+  --card-foreground: oklch(0.85 0.008 60);
+  --primary: oklch(0.72 0.15 145);
+  --primary-foreground: oklch(0.16 0.008 60);
+  --secondary: oklch(0.22 0.008 60);
+  --secondary-foreground: oklch(0.80 0.008 60);
+  --muted: oklch(0.22 0.008 60);
+  --muted-foreground: oklch(0.58 0.008 60);
+  --accent: oklch(0.26 0.012 145);
+  --accent-foreground: oklch(0.82 0.012 145);
+  --destructive: oklch(0.65 0.18 25);
+  --border: oklch(0.28 0.008 60);
+  --titlebar: oklch(0.14 0.008 60);
+  --titlebar-foreground: oklch(0.70 0.008 60);
+  --titlebar-border: oklch(0.26 0.008 60);
+  --sidebar: oklch(0.14 0.008 60);
+  --sidebar-foreground: oklch(0.65 0.008 60);
+  --status-pass: oklch(0.62 0.15 145);
+  --status-fail: oklch(0.60 0.16 28);
+  --status-running: oklch(0.60 0.12 230);
+  --status-pending: oklch(0.55 0.008 60);
+  --info: oklch(0.30 0.04 250);
+  --info-foreground: oklch(0.72 0.10 250);
+  --warning: oklch(0.30 0.06 75);
+  --warning-foreground: oklch(0.72 0.08 75);
+  --violet: oklch(0.30 0.05 295);
+  --violet-foreground: oklch(0.72 0.10 295);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+  background: var(--background);
+  color: var(--foreground);
+  transition: background 0.2s, color 0.2s;
+}
+
+/* ════════════════════════════════════════════════════════════
+   布局
+   ════════════════════════════════════════════════════════════ */
+.app-shell { display: flex; flex-direction: column; height: 100vh; }
+
+.title-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  height: 32px; padding: 0 8px;
+  background: var(--titlebar); border-bottom: 1px solid var(--titlebar-border);
+  flex-shrink: 0;
+}
+.title-bar .left { display: flex; align-items: center; gap: 8px; }
+.title-bar .logo { font-size: 11px; font-weight: 600; color: var(--titlebar-foreground); letter-spacing: 0.5px; }
+.title-bar .right { display: flex; align-items: center; gap: 4px; }
+.title-bar .theme-btn {
+  padding: 2px 8px; font-size: 10px;
+  border: 1px solid var(--border); border-radius: 4px;
+  background: transparent; color: var(--titlebar-foreground);
+  cursor: pointer; transition: all 0.15s;
+}
+.title-bar .theme-btn:hover { background: var(--accent); color: var(--accent-foreground); }
+.title-bar .theme-btn.active { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+
+.main-area { display: flex; flex: 1; overflow: hidden; }
+
+/* 左栏导航 */
+.left-rail {
+  width: 200px; flex-shrink: 0;
+  background: var(--sidebar); border-right: 1px solid var(--border);
+  padding: 10px 8px; display: flex; flex-direction: column; gap: 2px;
+  overflow-y: auto;
+}
+.left-rail .section-label {
+  font-size: 10px; color: var(--muted-foreground); text-transform: uppercase;
+  letter-spacing: 0.5px; padding: 8px 8px 4px;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-radius: 6px;
+  color: var(--sidebar-foreground); cursor: pointer;
+  font-size: 12px; transition: background 0.12s;
+  border: none; background: none; width: 100%; text-align: left;
+}
+.nav-item:hover { background: var(--accent); color: var(--accent-foreground); }
+.nav-item.active { background: var(--primary); color: var(--primary-foreground); font-weight: 500; }
+.nav-item .icon { font-size: 14px; width: 18px; text-align: center; }
+
+/* ════════════════════════════════════════════════════════════
+   知识库主视图
+   ════════════════════════════════════════════════════════════ */
+.kb-view { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* 库头部 */
+.kb-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px; border-bottom: 1px solid var(--border);
+  background: var(--card); flex-shrink: 0;
+}
+.kb-select {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--background); cursor: pointer; font-size: 12px; font-weight: 500;
+}
+.kb-select .chev { color: var(--muted-foreground); font-size: 10px; }
+.kb-path { font-size: 11px; color: var(--muted-foreground); font-family: ui-monospace, monospace; }
+.kb-stats { display: flex; gap: 12px; margin-left: 8px; }
+.kb-stat { display: flex; flex-direction: column; align-items: center; min-width: 52px; }
+.kb-stat .num { font-size: 15px; font-weight: 600; line-height: 1.2; }
+.kb-stat .label { font-size: 10px; color: var(--muted-foreground); }
+.kb-header .spacer { flex: 1; }
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--card); color: var(--card-foreground);
+  font-size: 12px; cursor: pointer; transition: all 0.12s;
+}
+.btn:hover { background: var(--accent); color: var(--accent-foreground); }
+.btn.primary { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
+.btn.primary:hover { filter: brightness(1.1); }
+.btn.small { padding: 3px 8px; font-size: 11px; border-radius: 4px; }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.ghost:hover { background: var(--accent); }
+
+/* 主体：分类树 + 内容 */
+.kb-body { flex: 1; display: flex; overflow: hidden; }
+
+/* 分类树面板 */
+.cat-panel {
+  width: 210px; flex-shrink: 0; border-right: 1px solid var(--border);
+  background: var(--card); padding: 10px 8px; overflow-y: auto;
+}
+.cat-panel .panel-title {
+  font-size: 10px; color: var(--muted-foreground); text-transform: uppercase;
+  letter-spacing: 0.5px; padding: 2px 8px 8px;
+}
+.cat-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 10px; border-radius: 5px; cursor: pointer;
+  font-size: 12px; color: var(--card-foreground); transition: background 0.12s;
+}
+.cat-item:hover { background: var(--accent); }
+.cat-item.active { background: var(--primary); color: var(--primary-foreground); }
+.cat-item .name { display: flex; align-items: center; gap: 7px; overflow: hidden; }
+.cat-item .name .icon { font-size: 13px; }
+.cat-item .count {
+  font-size: 10px; color: var(--muted-foreground);
+  background: var(--secondary); border-radius: 8px; padding: 1px 7px;
+}
+.cat-item.active .count { background: rgba(255,255,255,0.2); color: inherit; }
+
+/* 内容区 */
+.content-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; background: var(--background); }
+
+/* tabs */
+.tabs {
+  display: flex; gap: 2px; padding: 8px 16px 0; border-bottom: 1px solid var(--border);
+  background: var(--card); flex-shrink: 0;
+}
+.tab {
+  padding: 6px 14px; font-size: 12px; cursor: pointer; color: var(--muted-foreground);
+  border: none; background: none; border-bottom: 2px solid transparent;
+  display: flex; align-items: center; gap: 6px;
+}
+.tab:hover { color: var(--foreground); }
+.tab.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 500; }
+
+.tab-body { flex: 1; overflow-y: auto; padding: 14px 16px; }
+
+/* ── 文档列表 tab ── */
+.dropzone {
+  border: 2px dashed var(--border); border-radius: var(--radius);
+  padding: 18px; text-align: center; margin-bottom: 14px;
+  color: var(--muted-foreground); transition: all 0.15s;
+  cursor: pointer; background: var(--card);
+}
+.dropzone:hover, .dropzone.drag {
+  border-color: var(--primary); color: var(--primary);
+  background: var(--accent);
+}
+.dropzone .dz-icon { font-size: 22px; margin-bottom: 4px; }
+.dropzone .dz-main { font-size: 13px; font-weight: 500; }
+.dropzone .dz-sub { font-size: 11px; margin-top: 3px; }
+.dropzone .dz-formats { margin-top: 6px; font-size: 10px; letter-spacing: 0.3px; }
+
+.doc-table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: var(--radius); overflow: hidden; box-shadow: 0 1px 2px oklch(0 0 0 / 0.04); }
+.doc-table th {
+  text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--muted-foreground); padding: 8px 12px; border-bottom: 1px solid var(--border);
+  background: var(--secondary); font-weight: 500;
+}
+.doc-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 12px; vertical-align: middle; }
+.doc-table tr:last-child td { border-bottom: none; }
+.doc-table tr.row { cursor: pointer; transition: background 0.1s; }
+.doc-table tr.row:hover { background: var(--accent); }
+
+.file-cell { display: flex; align-items: center; gap: 9px; }
+.file-icon {
+  width: 26px; height: 26px; border-radius: 5px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; color: white;
+}
+.fi-pdf { background: oklch(0.55 0.16 28); }
+.fi-doc { background: oklch(0.55 0.13 250); }
+.fi-ppt { background: oklch(0.60 0.14 55); }
+.fi-xls { background: oklch(0.55 0.13 145); }
+.file-name { font-weight: 500; }
+.file-meta { font-size: 10px; color: var(--muted-foreground); font-family: ui-monospace, monospace; }
+
+.cat-badge {
+  font-size: 11px; padding: 2px 8px; border-radius: 10px;
+  background: var(--violet); color: var(--violet-foreground);
+}
+
+.status-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11px; padding: 2px 9px; border-radius: 10px; font-weight: 500;
+}
+.st-ok { background: oklch(0.50 0.13 145 / 0.12); color: var(--status-pass); }
+.st-run { background: oklch(0.50 0.11 230 / 0.12); color: var(--status-running); }
+.st-fail { background: oklch(0.50 0.16 28 / 0.12); color: var(--status-fail); }
+.spinner {
+  width: 10px; height: 10px; border: 2px solid var(--status-running);
+  border-top-color: transparent; border-radius: 50%;
+  animation: spin 0.8s linear infinite; display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.fail-detail { font-size: 10px; color: var(--status-fail); margin-top: 2px; font-family: ui-monospace, monospace; }
+
+.row-actions { display: flex; gap: 4px; justify-content: flex-end; }
+
+/* ── 库索引 tab ── */
+.index-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.index-toolbar .hint { font-size: 11px; color: var(--muted-foreground); flex: 1; }
+.index-meta { font-size: 11px; color: var(--muted-foreground); }
+
+.index-doc {
+  background: var(--card); border-radius: var(--radius); padding: 18px 22px;
+  max-width: 860px; box-shadow: 0 1px 2px oklch(0 0 0 / 0.04);
+  font-size: 13px; line-height: 1.65;
+}
+.index-doc h1 { font-size: 19px; margin-bottom: 4px; }
+.index-doc .idx-sub { font-size: 11px; color: var(--muted-foreground); margin-bottom: 14px; font-family: ui-monospace, monospace; }
+.index-doc h2 { font-size: 15px; margin: 16px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.index-doc ul { list-style: none; }
+.index-doc li.doc-entry { padding: 7px 0; border-bottom: 1px dashed var(--border); }
+.index-doc li.doc-entry:last-child { border-bottom: none; }
+.idx-link { color: var(--primary); font-weight: 500; cursor: pointer; text-decoration: none; }
+.idx-link:hover { text-decoration: underline; }
+.idx-path { font-size: 10px; color: var(--muted-foreground); font-family: ui-monospace, monospace; margin-left: 8px; }
+.idx-desc { font-size: 12px; color: var(--card-foreground); margin-top: 3px; }
+.idx-tags { margin-top: 5px; display: flex; gap: 4px; flex-wrap: wrap; }
+.idx-tag {
+  font-size: 10px; padding: 1px 7px; border-radius: 8px;
+  background: var(--secondary); color: var(--muted-foreground);
+}
+
+/* ── 预览 tab ── */
+.preview-layout { display: flex; gap: 14px; height: 100%; }
+.md-view {
+  flex: 1; background: var(--card); border-radius: var(--radius); padding: 22px 26px;
+  overflow-y: auto; box-shadow: 0 1px 2px oklch(0 0 0 / 0.04);
+  font-size: 13px; line-height: 1.7; max-width: 900px;
+}
+.md-view h1 { font-size: 20px; margin-bottom: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.md-view h2 { font-size: 16px; margin: 18px 0 8px; }
+.md-view h3 { font-size: 14px; margin: 14px 0 6px; }
+.md-view p { margin: 8px 0; }
+.md-view code {
+  font-family: ui-monospace, monospace; font-size: 11.5px;
+  background: var(--secondary); padding: 1px 5px; border-radius: 4px;
+}
+.md-view table { border-collapse: collapse; margin: 10px 0; width: 100%; font-size: 12px; }
+.md-view th, .md-view td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; }
+.md-view th { background: var(--secondary); font-weight: 500; }
+.md-view .md-figure {
+  margin: 12px 0; padding: 14px; border: 1px solid var(--border); border-radius: 8px;
+  text-align: center; color: var(--muted-foreground); font-size: 11px;
+  background: var(--secondary);
+}
+.md-view .md-figure .ph { font-size: 26px; margin-bottom: 4px; }
+
+.side-info {
+  width: 240px; flex-shrink: 0; background: var(--card); border-radius: var(--radius);
+  padding: 14px; box-shadow: 0 1px 2px oklch(0 0 0 / 0.04); height: fit-content;
+}
+.side-info h3 { font-size: 12px; margin-bottom: 10px; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.5px; }
+.kv { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; font-size: 12px; border-bottom: 1px dashed var(--border); }
+.kv:last-child { border-bottom: none; }
+.kv .k { color: var(--muted-foreground); flex-shrink: 0; }
+.kv .v { text-align: right; word-break: break-all; }
+.ai-summary {
+  margin-top: 12px; padding: 10px; border-radius: 8px;
+  background: var(--info); color: var(--info-foreground); font-size: 11.5px; line-height: 1.6;
+}
+.ai-summary .lbl { font-weight: 600; margin-bottom: 4px; display: flex; align-items: center; gap: 5px; }
+
+/* 库注册对话框 */
+.modal-mask {
+  position: fixed; inset: 0; background: oklch(0 0 0 / 0.35);
+  display: none; align-items: center; justify-content: center; z-index: 50;
+}
+.modal-mask.open { display: flex; }
+.modal {
+  width: 460px; background: var(--card); border-radius: 10px;
+  box-shadow: 0 10px 40px oklch(0 0 0 / 0.25); padding: 20px;
+}
+.modal h2 { font-size: 15px; margin-bottom: 4px; }
+.modal .sub { font-size: 11px; color: var(--muted-foreground); margin-bottom: 16px; }
+.form-row { margin-bottom: 12px; }
+.form-row label { display: block; font-size: 11px; color: var(--muted-foreground); margin-bottom: 5px; }
+.path-input {
+  display: flex; gap: 6px;
+}
+.path-input input {
+  flex: 1; padding: 7px 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--background); color: var(--foreground); font-size: 12px;
+  font-family: ui-monospace, monospace;
+}
+.path-input input:focus { outline: none; border-color: var(--primary); }
+.modal .footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.structure-hint {
+  font-family: ui-monospace, monospace; font-size: 10.5px; line-height: 1.6;
+  background: var(--secondary); border-radius: 6px; padding: 10px 12px;
+  color: var(--muted-foreground);
+}
+
+/* toast */
+.toast {
+  position: fixed; bottom: 20px; right: 20px;
+  background: var(--card); border: 1px solid var(--border);
+  border-left: 3px solid var(--status-pass);
+  border-radius: 8px; padding: 10px 16px; font-size: 12px;
+  box-shadow: 0 6px 20px oklch(0 0 0 / 0.18);
+  opacity: 0; transform: translateY(8px); transition: all 0.25s;
+  pointer-events: none; z-index: 60;
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="app-shell">
+  <!-- 标题栏 -->
+  <div class="title-bar">
+    <div class="left">
+      <span class="logo">SoC Verify</span>
+    </div>
+    <div class="right">
+      <button class="theme-btn active" data-t="drafting" onclick="setTheme('drafting', this)">浅色</button>
+      <button class="theme-btn" data-t="bench" onclick="setTheme('bench', this)">深色</button>
+    </div>
+  </div>
+
+  <div class="main-area">
+    <!-- 左栏 -->
+    <nav class="left-rail">
+      <div class="section-label">分析</div>
+      <button class="nav-item"><span class="icon">📊</span>仪表盘</button>
+      <button class="nav-item"><span class="icon">📁</span>用例库</button>
+      <button class="nav-item"><span class="icon">📈</span>覆盖率</button>
+      <button class="nav-item"><span class="icon">🔁</span>回归</button>
+      <div class="section-label">AI</div>
+      <button class="nav-item"><span class="icon">💬</span>AI 会话</button>
+      <div class="section-label">资料</div>
+      <button class="nav-item active"><span class="icon">📚</span>知识库</button>
+      <div class="section-label">其他</div>
+      <button class="nav-item"><span class="icon">🧰</span>工具箱</button>
+      <button class="nav-item"><span class="icon">⚙️</span>设置</button>
+    </nav>
+
+    <!-- 知识库视图 -->
+    <div class="kb-view">
+      <!-- 库头部 -->
+      <div class="kb-header">
+        <div class="kb-select" onclick="openModal('kb-modal')">
+          📚 芯片验证文档库 <span class="chev">▼</span>
+        </div>
+        <span class="kb-path">D:\docs\soc-kb</span>
+        <div class="kb-stats">
+          <div class="kb-stat"><span class="num">24</span><span class="label">文档</span></div>
+          <div class="kb-stat"><span class="num">5</span><span class="label">分类</span></div>
+          <div class="kb-stat"><span class="num">✓</span><span class="label">索引就绪</span></div>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn" onclick="toast('已触发增量更新：无新文档，索引已是最新')">⟳ 更新索引</button>
+        <button class="btn" onclick="toast('深度重建已提交：omp Agent 会话逐文档重读中…')">🤖 深度重建</button>
+        <button class="btn primary" onclick="document.getElementById('file-pick').click()">⬆ 上传文档</button>
+        <input type="file" id="file-pick" class="hidden" multiple onchange="toast('已入队转换：' + this.files.length + ' 个文档')">
+      </div>
+
+      <div class="kb-body">
+        <!-- 分类树 -->
+        <aside class="cat-panel">
+          <div class="panel-title">分类（AI 自动归类）</div>
+          <div class="cat-item active" data-cat="all" onclick="filterCat(this)">
+            <span class="name"><span class="icon">📂</span>全部文档</span><span class="count">24</span>
+          </div>
+          <div class="cat-item" data-cat="协议手册" onclick="filterCat(this)">
+            <span class="name"><span class="icon">📘</span>协议手册</span><span class="count">8</span>
+          </div>
+          <div class="cat-item" data-cat="DVT 计划" onclick="filterCat(this)">
+            <span class="name"><span class="icon">🗓️</span>DVT 计划</span><span class="count">4</span>
+          </div>
+          <div class="cat-item" data-cat="寄存器手册" onclick="filterCat(this)">
+            <span class="name"><span class="icon">🎛️</span>寄存器手册</span><span class="count">6</span>
+          </div>
+          <div class="cat-item" data-cat="设计规范" onclick="filterCat(this)">
+            <span class="name"><span class="icon">📐</span>设计规范</span><span class="count">3</span>
+          </div>
+          <div class="cat-item" data-cat="培训材料" onclick="filterCat(this)">
+            <span class="name"><span class="icon">🎓</span>培训材料</span><span class="count">3</span>
+          </div>
+        </aside>
+
+        <!-- 内容区 -->
+        <div class="content-area">
+          <div class="tabs">
+            <button class="tab active" data-tab="list" onclick="switchTab('list', this)">📄 文档列表</button>
+            <button class="tab" data-tab="index" onclick="switchTab('index', this)">🗺️ 库索引 index.md</button>
+            <button class="tab" data-tab="preview" onclick="switchTab('preview', this)">👁 文档预览</button>
+          </div>
+
+          <!-- Tab 1: 文档列表 -->
+          <div class="tab-body" id="tab-list">
+            <div class="dropzone" id="dz">
+              <div class="dz-icon">📄</div>
+              <div class="dz-main">拖拽文档到此处，或点击选择文件</div>
+              <div class="dz-sub">上传后自动转换 Markdown → AI 自动分类 → 更新索引</div>
+              <div class="dz-formats">pdf · doc/docx · ppt/pptx · xls/xlsx · odt · rtf · epub · csv</div>
+            </div>
+
+            <table class="doc-table">
+              <thead>
+                <tr>
+                  <th style="width:32%">文档</th>
+                  <th>分类</th>
+                  <th>大小</th>
+                  <th>状态</th>
+                  <th style="text-align:right">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="row" data-cat="协议手册" onclick="openPreview('AMBA AXI 协议规范 v4.1')">
+                  <td>
+                    <div class="file-cell">
+                      <div class="file-icon fi-pdf">PDF</div>
+                      <div>
+                        <div class="file-name">AMBA AXI 协议规范 v4.1</div>
+                        <div class="file-meta">sources/AMBA_AXI_v4.1.pdf → docs/协议手册/AMBA_AXI_v4.1.md</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td><span class="cat-badge">协议手册</span></td>
+                  <td>4.2 MB</td>
+                  <td><span class="status-badge st-ok">✓ 已转换</span></td>
+                  <td class="row-actions" onclick="event.stopPropagation()">
+                    <button class="btn small ghost" title="预览" onclick="openPreview('AMBA AXI 协议规范 v4.1')">👁</button>
+                    <button class="btn small ghost" title="重新转换" onclick="toast('已重新入队：AMBA_AXI_v4.1.pdf')">⟳</button>
+                    <button class="btn small ghost" title="删除" onclick="toast('已删除（含源文件与转换产物）')">🗑</button>
+                  </td>
+                </tr>
+                <tr class="row" data-cat="DVT 计划" onclick="openPreview('APCPU 子系统 DVT 验证计划')">
+                  <td>
+                    <div class="file-cell">
+                      <div class="file-icon fi-xls">XLS</div>
+                      <div>
+                        <div class="file-name">APCPU 子系统 DVT 验证计划</div>
+                        <div class="file-meta">sources/apcpu_dvt_plan.xlsx → docs/DVT 计划/apcpu_dvt_plan.md</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td><span class="cat-badge">DVT 计划</span></td>
+                  <td>1.8 MB</td>
+                  <td><span class="status-badge st-ok">✓ 已转换</span></td>
+                  <td class="row-actions" onclick="event.stopPropagation()">
+                    <button class="btn small ghost" title="预览" onclick="openPreview('APCPU 子系统 DVT 验证计划')">👁</button>
+                    <button class="btn small ghost" title="重新转换" onclick="toast('已重新入队：apcpu_dvt_plan.xlsx')">⟳</button>
+                    <button class="btn small ghost" title="删除" onclick="toast('已删除')">🗑</button>
+                  </td>
+                </tr>
+                <tr class="row" data-cat="寄存器手册" onclick="openPreview('DDR5 PHY 寄存器手册')">
+                  <td>
+                    <div class="file-cell">
+                      <div class="file-icon fi-doc">DOC</div>
+                      <div>
+                        <div class="file-name">DDR5 PHY 寄存器手册</div>
+                        <div class="file-meta">sources/ddr5_phy_regs.docx → docs/寄存器手册/ddr5_phy_regs.md</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td><span class="cat-badge">寄存器手册</span></td>
+                  <td>6.1 MB</td>
+                  <td><span class="status-badge st-run"><span class="spinner"></span>转换中 · 42%</span></td>
+                  <td class="row-actions" onclick="event.stopPropagation()">
+                    <button class="btn small ghost" title="取消" onclick="toast('已取消转换')">✕</button>
+                  </td>
+                </tr>
+                <tr class="row" data-cat="协议手册" onclick="openPreview('UVM 1.2 参考手册')">
+                  <td>
+                    <div class="file-cell">
+                      <div class="file-icon fi-pdf">PDF</div>
+                      <div>
+                        <div class="file-name">UVM 1.2 参考手册</div>
+                        <div class="file-meta">sources/uvm_1.2_ref.pdf → docs/协议手册/uvm_1.2_ref.md</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td><span class="cat-badge">协议手册</span></td>
+                  <td>2.7 MB</td>
+                  <td><span class="status-badge st-ok">✓ 已转换</span></td>
+                  <td class="row-actions" onclick="event.stopPropagation()">
+                    <button class="btn small ghost" title="预览" onclick="openPreview('UVM 1.2 参考手册')">👁</button>
+                    <button class="btn small ghost" title="重新转换" onclick="toast('已重新入队：uvm_1.2_ref.pdf')">⟳</button>
+                    <button class="btn small ghost" title="删除" onclick="toast('已删除')">🗑</button>
+                  </td>
+                </tr>
+                <tr class="row" data-cat="设计规范" onclick="event.stopPropagation()">
+                  <td>
+                    <div class="file-cell">
+                      <div class="file-icon fi-pdf" style="background:var(--muted-foreground)">PDF</div>
+                      <div>
+                        <div class="file-name">低功耗设计评审纪要（扫描版）</div>
+                        <div class="file-meta">sources/lp_review_scan.pdf</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td><span class="cat-badge" style="background:var(--warning);color:var(--warning-foreground)">未分类</span></td>
+                  <td>12.4 MB</td>
+                  <td>
+                    <span class="status-badge st-fail">✕ 转换失败</span>
+                    <div class="fail-detail">unsupported · 扫描版 PDF 无文字层，需 OCR（不支持）</div>
+                  </td>
+                  <td class="row-actions">
+                    <button class="btn small ghost" title="重试" onclick="toast('重试转换：仍失败（unsupported）')">⟳</button>
+                    <button class="btn small ghost" title="删除" onclick="toast('已删除')">🗑</button>
+                  </td>
+                </tr>
+                <tr class="row" data-cat="设计规范" onclick="event.stopPropagation()">
+                  <td>
+                    <div class="file-cell">
+                      <div class="file-icon fi-doc">DOC</div>
+                      <div>
+                        <div class="file-name">Clock 架构规范（加密）</div>
+                        <div class="file-meta">sources/clock_arch_spec.docx</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td><span class="cat-badge" style="background:var(--warning);color:var(--warning-foreground)">未分类</span></td>
+                  <td>3.3 MB</td>
+                  <td>
+                    <span class="status-badge st-fail">✕ 转换失败</span>
+                    <div class="fail-detail">encrypted · 文档受密码保护，请解除后重新上传</div>
+                  </td>
+                  <td class="row-actions">
+                    <button class="btn small ghost" title="重试" onclick="toast('重试转换：仍失败（encrypted）')">⟳</button>
+                    <button class="btn small ghost" title="删除" onclick="toast('已删除')">🗑</button>
+                  </td>
+                </tr>
+                <tr class="row" data-cat="培训材料" onclick="openPreview('UVM 环境搭建入门培训')">
+                  <td>
+                    <div class="file-cell">
+                      <div class="file-icon fi-ppt">PPT</div>
+                      <div>
+                        <div class="file-name">UVM 环境搭建入门培训</div>
+                        <div class="file-meta">sources/uvm_env_training.pptx → docs/培训材料/uvm_env_training.md</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td><span class="cat-badge">培训材料</span></td>
+                  <td>8.9 MB</td>
+                  <td><span class="status-badge st-run"><span class="spinner"></span>AI 分类中</span></td>
+                  <td class="row-actions" onclick="event.stopPropagation()">
+                    <button class="btn small ghost" title="取消" onclick="toast('已取消')">✕</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Tab 2: 库索引 -->
+          <div class="tab-body hidden" id="tab-index">
+            <div class="index-toolbar">
+              <span class="hint">此文件即 AI Agent 会话启动时注入的库地图（KB Index）——人工可直接编辑，编辑后下次会话生效</span>
+              <span class="index-meta">上次 Fast Reindex：2 分钟前 · 24 条目</span>
+              <button class="btn small" onclick="toast('已进入编辑模式（原型演示）')">✎ 编辑</button>
+            </div>
+            <div class="index-doc">
+              <h1>芯片验证文档库 · 目录索引</h1>
+              <div class="idx-sub">24 documents · 5 categories · auto-generated, human-editable</div>
+
+              <h2>📘 协议手册（8）</h2>
+              <ul>
+                <li class="doc-entry">
+                  <span class="idx-link" onclick="openPreview('AMBA AXI 协议规范 v4.1')">AMBA AXI 协议规范 v4.1</span><span class="idx-path">docs/协议手册/AMBA_AXI_v4.1.md</span>
+                  <div class="idx-desc">AXI4/AXI4-Lite/AXI4-Stream 通道信号、握手协议、读写时序与 QoS 机制的完整定义。</div>
+                  <div class="idx-tags"><span class="idx-tag">#AXI</span><span class="idx-tag">#总线</span><span class="idx-tag">#握手时序</span><span class="idx-tag">#outstanding</span></div>
+                </li>
+                <li class="doc-entry">
+                  <span class="idx-link" onclick="openPreview('UVM 1.2 参考手册')">UVM 1.2 参考手册</span><span class="idx-path">docs/协议手册/uvm_1.2_ref.md</span>
+                  <div class="idx-desc">UVM 1.2 类库参考：factory、sequence、config_db、TLM、phase 与 objection 机制。</div>
+                  <div class="idx-tags"><span class="idx-tag">#UVM</span><span class="idx-tag">#sequence</span><span class="idx-tag">#config_db</span><span class="idx-tag">#TLM</span></div>
+                </li>
+              </ul>
+
+              <h2>🎛️ 寄存器手册（6）</h2>
+              <ul>
+                <li class="doc-entry">
+                  <span class="idx-link" onclick="openPreview('DDR5 PHY 寄存器手册')">DDR5 PHY 寄存器手册</span><span class="idx-path">docs/寄存器手册/ddr5_phy_regs.md</span>
+                  <div class="idx-desc">DDR5 PHY 全量寄存器位段定义：地址映射、复位值、读写属性与配置流程。</div>
+                  <div class="idx-tags"><span class="idx-tag">#DDR5</span><span class="idx-tag">#寄存器</span><span class="idx-tag">#位段</span></div>
+                </li>
+              </ul>
+
+              <h2>🗓️ DVT 计划（4）</h2>
+              <ul>
+                <li class="doc-entry">
+                  <span class="idx-link" onclick="openPreview('APCPU 子系统 DVT 验证计划')">APCPU 子系统 DVT 验证计划</span><span class="idx-path">docs/DVT 计划/apcpu_dvt_plan.md</span>
+                  <div class="idx-desc">APCPU 子系统 DVT 阶段验证项清单、用例分配、进度跟踪与签核标准。</div>
+                  <div class="idx-tags"><span class="idx-tag">#APCPU</span><span class="idx-tag">#DVT</span><span class="idx-tag">#计划表</span></div>
+                </li>
+              </ul>
+              <p style="margin-top:14px;color:var(--muted-foreground);font-size:11px">… 其余 21 条目略（原型演示）</p>
+            </div>
+          </div>
+
+          <!-- Tab 3: 文档预览 -->
+          <div class="tab-body hidden" id="tab-preview">
+            <div class="preview-layout">
+              <div class="md-view">
+                <h1>AMBA AXI 协议规范 v4.1</h1>
+                <p style="color:var(--muted-foreground);font-size:11px">docs/协议手册/AMBA_AXI_v4.1.md · 由 sources/AMBA_AXI_v4.1.pdf 转换</p>
+                <h2>Chapter A2 · Signal Descriptions</h2>
+                <p>本章节定义 AXI4 的五个独立通道：Write Address（AW）、Write Data（W）、Write Response（B）、Read Address（AR）、Read Data（R）。</p>
+                <div class="md-figure">
+                  <div class="ph">🖼️ assets/AMBA_AXI_v4.1/image-003.png</div>
+                  图 A2-1：AXI 通道架构图（提取自原文档的嵌入图片）
+                </div>
+                <h3>Handshake Requirements</h3>
+                <p>所有通道使用相同的 VALID/READY 握手机制。源端置起 <code>AXVALID</code> 后必须保持，直到宿主置起 <code>AXREADY</code>：</p>
+                <table>
+                  <tr><th>信号</th><th>源</th><th>描述</th></tr>
+                  <tr><td><code>AWVALID</code></td><td>Master</td><td>写地址有效指示</td></tr>
+                  <tr><td><code>AWREADY</code></td><td>Slave</td><td>写地址就绪指示</td></tr>
+                  <tr><td><code>AWBURST</code></td><td>Master</td><td>突发类型：FIXED / INCR / WRAP</td></tr>
+                </table>
+                <h3>Dependencies between channel handshakes</h3>
+                <p>读响应 <code>RVALID</code> 必须等待 <code>ARVALID &amp; ARREADY</code> 完成之后……</p>
+              </div>
+              <aside class="side-info">
+                <h3>文档信息</h3>
+                <div class="kv"><span class="k">源文件</span><span class="v" style="font-family:ui-monospace,monospace;font-size:10px">AMBA_AXI_v4.1.pdf</span></div>
+                <div class="kv"><span class="k">分类</span><span class="v">协议手册</span></div>
+                <div class="kv"><span class="k">大小</span><span class="v">4.2 MB / md 386 KB</span></div>
+                <div class="kv"><span class="k">图片</span><span class="v">27 张已提取</span></div>
+                <div class="kv"><span class="k">转换时间</span><span class="v">2026-08-14 09:32</span></div>
+                <div class="ai-summary">
+                  <div class="lbl">🤖 AI 摘要</div>
+                  ARM AMBA AXI 协议完整规范。覆盖三种子协议（AXI4/AXI4-Lite/AXI4-Stream）的信号定义、通道握手、突发传输、乱序与交织、QoS、低功耗接口及 ATB 追踪。适用于总线接口验证环境的行为参考。
+                </div>
+              </aside>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 库注册 / 切换对话框 -->
+<div class="modal-mask" id="kb-modal">
+  <div class="modal">
+    <h2>知识库</h2>
+    <div class="sub">应用级注册，项目设置中选择挂载；v1 单库挂载</div>
+    <div class="form-row">
+      <label>已注册的库</label>
+      <div class="cat-item active" style="border:1px solid var(--border)">
+        <span class="name"><span class="icon">📚</span>芯片验证文档库<span class="idx-path" style="margin-left:6px">D:\docs\soc-kb · 24 文档</span></span>
+        <span style="font-size:10px;color:var(--status-pass)">挂载中</span>
+      </div>
+      <div class="cat-item" style="border:1px solid var(--border);margin-top:6px">
+        <span class="name"><span class="icon">📚</span>通用协议手册库<span class="idx-path" style="margin-left:6px">E:\shared\amba-refs · 156 文档</span></span>
+        <button class="btn small" onclick="toast('已挂载「通用协议手册库」（原型演示）')">挂载</button>
+      </div>
+    </div>
+    <div class="form-row">
+      <label>注册新库（选择或输入目录，空目录将初始化结构）</label>
+      <div class="path-input">
+        <input type="text" placeholder="D:\docs\new-kb" id="new-kb-path">
+        <button class="btn" onclick="document.getElementById('new-kb-path').value ? toast('已注册并初始化：' + document.getElementById('new-kb-path').value) : toast('请输入目录路径')">浏览…</button>
+      </div>
+      <div class="structure-hint" style="margin-top:8px">
+        &lt;kb&gt;/<br>
+        ├── sources/&nbsp;&nbsp;&nbsp;# 原始文档副本（自包含，可整体迁移）<br>
+        ├── docs/&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# Markdown + assets/&lt;文档名&gt;/ 图片<br>
+        └── index.md&nbsp;&nbsp;# AI 生成的目录索引（Agent 速查地图）
+      </div>
+    </div>
+    <div class="footer">
+      <button class="btn" onclick="closeModal('kb-modal')">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+function setTheme(t, btn) {
+  document.documentElement.setAttribute('data-theme', t);
+  document.querySelectorAll('.theme-btn').forEach(b => b.classList.toggle('active', b === btn));
+}
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === btn));
+  ['list', 'index', 'preview'].forEach(n =>
+    document.getElementById('tab-' + n).classList.toggle('hidden', n !== name));
+}
+function filterCat(el) {
+  document.querySelectorAll('.cat-item').forEach(c => c.classList.toggle('active', c === el));
+  const cat = el.dataset.cat;
+  document.querySelectorAll('#tab-list tbody tr').forEach(r => {
+    r.style.display = (cat === 'all' || r.dataset.cat === cat) ? '' : 'none';
+  });
+}
+function openPreview(name) {
+  switchTab('preview', document.querySelector('.tab[data-tab="preview"]'));
+}
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.getElementById('kb-modal').addEventListener('click', e => {
+  if (e.target.id === 'kb-modal') closeModal('kb-modal');
+});
+
+let toastTimer;
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+/* 拖拽高亮 */
+const dz = document.getElementById('dz');
+['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('drag'); }));
+['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('drag'); }));
+dz.addEventListener('drop', e => toast('已入队转换：' + (e.dataTransfer.files.length || 3) + ' 个文档'));
+dz.addEventListener('click', () => document.getElementById('file-pick').click());
+</script>
+</body>
+</html>
