@@ -105,6 +105,8 @@ const eventMappings: EventMapping[] = [
   { source: sessionManager, event: 'sessionEvent', channel: 'session:event' },
   // sessionManager → approval request forwarding (approvalRequest → session:approval-request)
   { source: sessionManager, event: 'approvalRequest', channel: 'session:approval-request' },
+  // sessionManager → ask request forwarding (askRequest → session:ask-request)
+  { source: sessionManager, event: 'askRequest', channel: 'session:ask-request' },
 
   // simulationRegistry → wrap with type tag
   { source: simulationRegistry, event: 'run:started', channel: 'simulation:event', transform: withTypeTag('started') },
