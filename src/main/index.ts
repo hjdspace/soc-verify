@@ -19,6 +19,26 @@ import { createWindow, registerWindowControls } from './window-factory';
 // ── Linux 平台环境设置（IME + D-Bus）─────────────────────────────
 setupLinuxPlatform();
 
+// ── 单实例锁：防止多个实例共享同一 userData，避免 localStorage leveldb 锁竞争 ──
+// 若无锁则说明已有实例在运行，退出并让已有实例聚焦窗口。
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  // 第二实例直接退出：用 exit() 跳过 before-quit 清理，避免未初始化的
+  // projectManager 将空 projects.json 写回，覆盖主实例的数据。
+  app.exit(0);
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    } else {
+      mainWindow = createWindow();
+      setupEventRelay(mainWindow);
+    }
+  });
+}
+
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let eventRelay: EventRelay | null = null;
