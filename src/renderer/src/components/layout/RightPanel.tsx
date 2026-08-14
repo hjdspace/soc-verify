@@ -14,6 +14,7 @@ import { ContextUsageIndicator } from '@renderer/components/chat/ContextUsageInd
 import { ApprovalCard } from '@renderer/components/chat/ApprovalCard';
 import { AskQuestionCard } from '@renderer/components/chat/AskQuestionCard';
 import { TodoPanel } from '@renderer/components/chat/TodoPanel';
+import { ChangeSummaryBar } from '@renderer/components/chat/ChangeSummaryBar';
 import { getLatestTodoState } from '@renderer/components/chat/tool-helpers';
 import { useTodoPanelStore } from '@renderer/stores/todo-panel';
 
@@ -769,6 +770,9 @@ export function RightPanel({ width }: RightPanelProps) {
           onToggleCollapse={() => toggleTodoCollapse(currentSessionId)}
         />
       )}
+
+      {/* ── 代码改动摘要条 ──────────────────────────────── */}
+      <ChangeSummaryBar />
 
       {/* ── 输入框 ──────────────────────────────────── */}
       <div className="border-t p-2">
