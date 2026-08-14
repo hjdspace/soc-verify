@@ -25,6 +25,7 @@ import type { CaseStatsService } from '../case/case-stats-service';
 import { contextSettings } from './context-settings';
 import { ensureBuiltinMcpServers } from '../mcp/mcp-config';
 import { ensureTraceweaveDefaultMcp } from '../mcp/traceweave-paths';
+import type { AskAnswer, AskQuestion } from '@shared/ask-types';
 
 const MAX_CONCURRENT_SESSIONS = 10;
 const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -106,6 +107,27 @@ function summarizeEvent(event: unknown): string {
   }
 }
 
+/**
+ * Format the answer for a single-question `ask` call as a natural-language
+ * response the AI can consume. Matches the omp engine's AskTool format.
+ */
+function formatSingleAnswer(question: AskQuestion, answers: AskAnswer[]): string {
+  const ans = answers.find((a) => a.questionId === question.id);
+  if (!ans) return 'User cancelled the selection';
+  if (ans.customInput !== undefined && ans.customInput !== '') {
+    return ans.customInput.includes('\n')
+      ? `User provided custom input:\n${ans.customInput.split('\n').map((l) => `  ${l}`).join('\n')}`
+      : `User provided custom input: ${ans.customInput}`;
+  }
+  if (ans.selectedOptions.length > 0) {
+    const selected = question.multi
+      ? `User selected: ${ans.selectedOptions.join(', ')}`
+      : `User selected: ${ans.selectedOptions[0]}`;
+    return selected;
+  }
+  return 'User cancelled the selection';
+}
+
 export interface CreateSessionOptions {
   projectId: string;
   cwd: string;
@@ -166,6 +188,8 @@ export class SessionManagerImpl extends EventEmitter {
   private idleTimeoutMs: number;
   /** Pending approval requests: requestId → { resolve, sessionId } */
   private pendingApprovals = new Map<string, { resolve: (approved: boolean) => void; sessionId: string }>();
+  /** Pending ask requests: requestId → { resolve, sessionId } */
+  private pendingAsks = new Map<string, { resolve: (answers: AskAnswer[]) => void; sessionId: string }>();
 
   constructor(idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS) {
     super();
@@ -212,8 +236,58 @@ export class SessionManagerImpl extends EventEmitter {
       approval: 'read',
     }));
 
-    // Tool call handler: when the runner calls a tool, delegate to HostToolsRegistry
+    // Register `ask` as a custom host tool so the omp engine routes it to the
+    // host instead of using its built-in terminal-based AskTool (which requires
+    // a TTY not available in the subprocess). The toolCallHandler below
+    // intercepts `ask` calls and surfaces them as interactive UI in the renderer.
+    customToolDefinitions.push({
+      name: 'ask',
+      label: 'Ask',
+      description:
+        'Ask the user a clarifying question with selectable options. Use this when you need to gather preferences, clarify ambiguous instructions, or get decisions on implementation choices. Each question has an id, question text, and a list of options (each with a label and optional description). Set multi:true to allow multiple selections. Set recommended to the index of the default option. Users can always choose "Other" to type a custom answer.',
+      parameters: {
+        type: 'object',
+        properties: {
+          questions: {
+            type: 'array',
+            description: 'Questions to ask the user',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'Question identifier' },
+                question: { type: 'string', description: 'Question text' },
+                options: {
+                  type: 'array',
+                  description: 'Available options',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      label: { type: 'string', description: 'Display label' },
+                      description: { type: 'string', description: 'Optional explanatory text' },
+                    },
+                    required: ['label'],
+                  },
+                },
+                multi: { type: 'boolean', description: 'Allow multiple selections' },
+                recommended: { type: 'number', description: 'Recommended option index (0-based)' },
+              },
+              required: ['id', 'question', 'options'],
+            },
+            minItems: 1,
+          },
+        },
+        required: ['questions'],
+      },
+      approval: 'read',
+    });
+
+    // Tool call handler: when the runner calls a tool, delegate to HostToolsRegistry.
+    // `ask` is intercepted here — instead of delegating to hostTools, it emits an
+    // `askRequest` event to the renderer and waits for the user to submit answers.
     const toolCallHandler: ToolCallHandler = async (toolName, args) => {
+      if (toolName === 'ask') {
+        return this.handleAskToolCall(sessionId, args);
+      }
       const result = await hostTools.handleToolCall({
         type: 'host_tool_call',
         id: '',
@@ -788,6 +862,76 @@ export class SessionManagerImpl extends EventEmitter {
       void this.destroySession(sessionId).catch(() => {});
     }, this.idleTimeoutMs);
     entry.idleTimer.unref();
+  }
+
+  /**
+   * Intercept `ask` tool calls: emit an `askRequest` event to the renderer
+   * and block until the user submits answers via `resolveAsk`.
+   * Returns an AgentToolResult with the formatted answers as text content.
+   */
+  private async handleAskToolCall(sessionId: string, args: unknown): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
+    const rawQuestions = (args as Record<string, unknown>)?.questions;
+    if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
+      return { content: [{ type: 'text', text: 'Error: questions must not be empty' }] };
+    }
+
+    // Normalize questions — guard against malformed model output
+    const questions: AskQuestion[] = rawQuestions.map((q: unknown) => {
+      const qo = q as Record<string, unknown>;
+      const rawOpts = Array.isArray(qo.options) ? qo.options : [];
+      return {
+        id: typeof qo.id === 'string' ? qo.id : `q_${Math.random().toString(36).slice(2, 8)}`,
+        question: typeof qo.question === 'string' ? qo.question : '',
+        options: rawOpts.map((o: unknown) => {
+          const oo = o as Record<string, unknown>;
+          if (typeof oo === 'string') return { label: oo };
+          return {
+            label: typeof oo.label === 'string' ? oo.label : String(oo.label ?? ''),
+            ...(typeof oo.description === 'string' && oo.description.trim() ? { description: oo.description.trim() } : {}),
+          };
+        }),
+        ...(qo.multi === true ? { multi: true } : {}),
+        ...(typeof qo.recommended === 'number' ? { recommended: qo.recommended } : {}),
+      };
+    });
+
+    const requestId = `ask_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const { promise, resolve } = Promise.withResolvers<AskAnswer[]>();
+    this.pendingAsks.set(requestId, { resolve, sessionId });
+    this.emit('askRequest', { sessionId, requestId, questions });
+
+    try {
+      const answers = await promise;
+      // Format the response text for the AI
+      const lines = questions.map((q) => {
+        const ans = answers.find((a) => a.questionId === q.id);
+        if (!ans) return `${q.id}: (no answer)`;
+        if (ans.customInput !== undefined && ans.customInput !== '') {
+          return `${q.id}: "${ans.customInput}"`;
+        }
+        if (ans.selectedOptions.length > 0) {
+          return q.multi
+            ? `${q.id}: [${ans.selectedOptions.join(', ')}]`
+            : `${q.id}: ${ans.selectedOptions[0]}`;
+        }
+        return `${q.id}: (no answer)`;
+      });
+      const responseText = questions.length === 1
+        ? formatSingleAnswer(questions[0], answers)
+        : `User answers:\n${lines.join('\n')}`;
+      return { content: [{ type: 'text', text: responseText }] };
+    } finally {
+      this.pendingAsks.delete(requestId);
+    }
+  }
+
+  /** Resolve a pending ask request from the user. */
+  resolveAsk(requestId: string, answers: AskAnswer[]): boolean {
+    const pending = this.pendingAsks.get(requestId);
+    if (!pending) return false;
+    this.pendingAsks.delete(requestId);
+    pending.resolve(answers);
+    return true;
   }
 
   /** Resolve a pending approval request from the user. */
