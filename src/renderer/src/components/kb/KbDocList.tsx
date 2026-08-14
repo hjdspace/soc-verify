@@ -14,8 +14,6 @@
 import { useCallback, useState } from 'react';
 import { Upload, RotateCcw, Trash2, FileText, AlertCircle } from 'lucide-react';
 import { useKbStore, type KbDocument } from '@renderer/stores/kb';
-import { useToastStore } from '@renderer/stores/toast';
-import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 
 // ── 文件类型图标 ────────────────────────────────────────────
@@ -114,7 +112,6 @@ export function KbDocList() {
   const loading = useKbStore((s) => s.documentsLoading);
   const retryDocument = useKbStore((s) => s.retryDocument);
   const deleteDocument = useKbStore((s) => s.deleteDocument);
-  const uploadFiles = useKbStore((s) => s.uploadFiles);
   const openPreview = useKbStore((s) => s.openPreview);
   const [dragOver, setDragOver] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
@@ -135,36 +132,18 @@ export function KbDocList() {
     setDragOver(false);
   }, []);
 
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
+  const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    const files = Array.from(e.dataTransfer.files);
-    if (files.length > 0) {
-      // 获取文件路径 — Electron 的 File 对象有 path 属性
-      const filePaths = files
-        .map((f) => (f as File & { path?: string }).path)
-        .filter((p): p is string => typeof p === 'string' && p.length > 0);
-      if (filePaths.length > 0) {
-        await uploadFiles(filePaths);
-      } else {
-        // 在浏览器环境中 path 可能不可用，使用文件名提示
-        useToastStore.getState().warning('拖拽上传需要在桌面环境中使用');
-      }
-    }
-  }, [uploadFiles]);
+    // Electron 安全上下文下 File.path 不可用，
+    // 改为打开文件选择器让用户选择文件
+    void useKbStore.getState().pickAndUpload();
+  }, []);
 
   // ── 按钮上传 ─────────────────────────────────────────────
-  const handleButtonClick = useCallback(async () => {
-    try {
-      const result = await trpc.project.pickFiles.mutate({ projectId: 'default' });
-      if (!result.canceled && result.files.length > 0) {
-        const filePaths = result.files.map((f) => f.path);
-        await uploadFiles(filePaths);
-      }
-    } catch {
-      // best-effort
-    }
-  }, [uploadFiles]);
+  const handleButtonClick = useCallback(() => {
+    void useKbStore.getState().pickAndUpload();
+  }, []);
 
   // ── 重试 ─────────────────────────────────────────────────
   const handleRetry = useCallback((name: string) => {

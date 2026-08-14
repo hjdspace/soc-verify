@@ -120,6 +120,7 @@ interface KbStoreState {
   loadDocuments: () => Promise<void>;
   setSelectedCategory: (category: string | null) => void;
   uploadFiles: (filePaths: string[]) => Promise<void>;
+  pickAndUpload: () => Promise<void>;
   retryDocument: (name: string) => Promise<void>;
   deleteDocument: (name: string) => Promise<void>;
   registerKb: (name: string, path: string) => Promise<boolean>;
@@ -231,6 +232,21 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
 
   // ── 分类筛选 ─────────────────────────────────────────────
   setSelectedCategory: (category) => set({ selectedCategory: category }),
+
+  // ── 打开文件选择器并上传 ─────────────────────────────────
+  pickAndUpload: async () => {
+    try {
+      const result = await trpc.kb.pickFiles.mutate({});
+      if (!result.canceled && result.filePaths.length > 0) {
+        await get().uploadFiles(result.filePaths);
+      }
+    } catch (err) {
+      useToastStore.getState().error(
+        '选择文件失败',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  },
 
   // ── 上传文档 ─────────────────────────────────────────────
   uploadFiles: async (filePaths) => {

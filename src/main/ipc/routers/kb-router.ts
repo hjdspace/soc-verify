@@ -23,7 +23,7 @@
  * @see ADR 0021 — anydoc 文档知识库
  */
 
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, dialog } from 'electron';
 import { t, TRPCError } from '../router-context';
 import { projectManager } from '../../project/project-manager';
 import { kbRegistry } from '../../kb/registry';
@@ -239,6 +239,26 @@ export const kbRouter = t.router({
     .query(async () => {
       const rootPath = getActiveProjectRoot();
       return kbRegistry.status(rootPath);
+    }),
+
+  // ─── kb.pickFiles ──────────────────────────────────────────
+  //
+  // 打开系统文件选择对话框，返回选中的文件路径列表。
+  // 不依赖 projectId — 知识库的文件选择不需要项目上下文。
+
+  pickFiles: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .mutation(async () => {
+      const result = await dialog.showOpenDialog({
+        properties: ['openFile', 'multiSelections'],
+        title: '选择文档上传到知识库',
+      });
+      if (result.canceled || result.filePaths.length === 0) {
+        return { canceled: true as const };
+      }
+      return { canceled: false as const, filePaths: result.filePaths };
     }),
 
   // ─── kb.upload ────────────────────────────────────────────

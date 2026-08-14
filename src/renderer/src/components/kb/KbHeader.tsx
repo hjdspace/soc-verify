@@ -4,7 +4,6 @@
 
 import { BookOpen, ChevronDown, Upload, CheckCircle } from 'lucide-react';
 import { useKbStore } from '@renderer/stores/kb';
-import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 
 export function KbHeader() {
@@ -19,16 +18,8 @@ export function KbHeader() {
   const catCount = categories.length;
   const indexReady = kbStatus?.health.hasIndex ?? false;
 
-  const handleUploadClick = async () => {
-    try {
-      const result = await trpc.project.pickFiles.mutate({ projectId: 'default' });
-      if (!result.canceled && result.files.length > 0) {
-        const filePaths = result.files.map((f) => f.path);
-        await useKbStore.getState().uploadFiles(filePaths);
-      }
-    } catch {
-      // best-effort
-    }
+  const handleUploadClick = () => {
+    void useKbStore.getState().pickAndUpload();
   };
 
   return (

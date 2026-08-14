@@ -116,6 +116,7 @@ vi.mock('@renderer/lib/trpc', () => ({
       preview: { query: vi.fn().mockResolvedValue({ content: '# 测试文档\n\n内容' }) },
       moveCategory: { mutate: vi.fn().mockResolvedValue({ ok: true, newPath: 'D:\\docs\\kb\\docs\\新分类\\test.md' }) },
       deepReindex: { mutate: vi.fn().mockResolvedValue({ ok: true, sessionId: 'temp-session-1', documentCount: 3 }) },
+      pickFiles: { mutate: vi.fn().mockResolvedValue({ canceled: true }) },
     },
     project: {
       pickFiles: { mutate: vi.fn() },

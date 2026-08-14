@@ -117,6 +117,7 @@ vi.mock('@renderer/lib/trpc', () => ({
       index: { mutate: vi.fn().mockResolvedValue({ content: '# 知识库索引\n\n## 协议手册\n\n### AMBA AXI 协议规范 v4.1\n- **路径**: `协议手册/AMBA_AXI_v4.1.md`\n- **摘要**: AXI4 协议规范\n- **关键词**: `AXI` · `总线`\n' }) },
       preview: { query: vi.fn().mockResolvedValue({ content: '# AMBA AXI 协议规范 v4.1\n\nAXI4 通道信号定义。\n\n## Chapter A2' }) },
       moveCategory: { mutate: vi.fn().mockResolvedValue({ ok: true, newPath: 'D:\\docs\\kb\\docs\\新分类\\test.md' }) },
+      pickFiles: { mutate: vi.fn().mockResolvedValue({ canceled: true }) },
     },
     project: {
       pickFiles: { mutate: vi.fn().mockResolvedValue({ canceled: true }) },

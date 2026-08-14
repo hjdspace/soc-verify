@@ -52,6 +52,9 @@ vi.mock('electron', () => ({
   BrowserWindow: {
     getAllWindows: vi.fn(() => []),
   },
+  dialog: {
+    showOpenDialog: vi.fn().mockResolvedValue({ canceled: true, filePaths: [] }),
+  },
 }));
 
 vi.mock('../src/main/project/project-manager', () => ({
