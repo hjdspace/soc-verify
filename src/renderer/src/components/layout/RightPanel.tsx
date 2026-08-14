@@ -12,6 +12,7 @@ import { trpc } from '@renderer/lib/trpc';
 import { PluginViewHost } from '@renderer/components/plugins/PluginViewHost';
 import { ContextUsageIndicator } from '@renderer/components/chat/ContextUsageIndicator';
 import { ApprovalCard } from '@renderer/components/chat/ApprovalCard';
+import { AskQuestionCard } from '@renderer/components/chat/AskQuestionCard';
 import { TodoPanel } from '@renderer/components/chat/TodoPanel';
 import { getLatestTodoState } from '@renderer/components/chat/tool-helpers';
 import { useTodoPanelStore } from '@renderer/stores/todo-panel';
@@ -86,6 +87,8 @@ export function RightPanel({ width }: RightPanelProps) {
   const setApprovalMode = useSessionStore((s) => s.setApprovalMode);
   const resolveApproval = useSessionStore((s) => s.resolveApproval);
   const approvalRequests = useSessionStore((s) => s.approvalRequests);
+  const askRequests = useSessionStore((s) => s.askRequests);
+  const resolveAsk = useSessionStore((s) => s.resolveAsk);
 
   const isCurrentSessionCreating = currentSession?.status === 'creating';
 
@@ -693,6 +696,20 @@ export function RightPanel({ width }: RightPanelProps) {
                   key={req.requestId}
                   request={req}
                   onResolve={resolveApproval}
+                />
+              ))}
+            {/* Ask question cards */}
+            {askRequests
+              .filter((req) => {
+                const sess = currentSession;
+                return sess && (sess.id === req.sessionId || sess.runtimeSessionId === req.sessionId || sess.persistedSessionId === req.sessionId);
+              })
+              .map((req) => (
+                <AskQuestionCard
+                  key={req.requestId}
+                  requestId={req.requestId}
+                  questions={req.questions}
+                  onResolve={resolveAsk}
                 />
               ))}
             {/* AI waiting indicator: show when session is active but no
