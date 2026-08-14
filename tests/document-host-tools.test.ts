@@ -53,6 +53,38 @@ vi.mock('../src/main/document/editor-registry', () => ({
   notifyFileChanged: notifyFileChangedMock,
 }));
 
+// Mock @firecrawl/anydoc（NAPI 模块，测试环境不可用 — kb-tools 间接依赖）
+vi.mock('@firecrawl/anydoc', () => ({
+  toDocument: vi.fn(),
+  toMarkdownBytes: vi.fn(),
+  formatFromPath: vi.fn(() => null),
+  toMarkdown: vi.fn(),
+  formatFromBytes: vi.fn(),
+  formatFromExtension: vi.fn(),
+}));
+
+// Mock electron（kb/registry 依赖 app.getPath）
+vi.mock('electron', () => ({
+  app: { getPath: vi.fn(() => '/tmp/test-appdata') },
+  BrowserWindow: { getAllWindows: vi.fn(() => []) },
+}));
+
+// Mock project-service（kb-tools 依赖 requireProject）
+vi.mock('../src/main/services/project-service', () => ({
+  requireProject: vi.fn(() => ({
+    id: 'test-project-id',
+    rootPath: '/tmp/test-project',
+    name: 'Test Project',
+  })),
+}));
+
+// Mock kb/registry（kb-tools 依赖 kbRegistry.status）
+vi.mock('../src/main/kb/registry', () => ({
+  kbRegistry: {
+    status: vi.fn(() => ({ mounted: null, health: { hasSources: false, hasDocs: false, hasIndex: false } })),
+  },
+}));
+
 import { execOfficeCli } from '../src/main/officecli/executor';
 import { HostToolsRegistry } from '../src/main/host/host-tools';
 

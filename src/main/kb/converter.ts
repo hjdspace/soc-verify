@@ -357,3 +357,172 @@ export async function convertDocument(
     assetCount: assetFileNames.length,
   };
 }
+
+// ── 临时转换（不入库） ──────────────────────────────────────────
+
+/** 临时转换结果（成功） */
+export type ConvertToStringSuccess = {
+  ok: true;
+  /** Markdown 内容字符串 */
+  markdown: string;
+};
+
+/** 临时转换结果（失败） */
+export type ConvertToStringFailure = {
+  ok: false;
+  error: KBConvertError;
+};
+
+/** 临时转换结果联合类型 */
+export type ConvertToStringResult = ConvertToStringSuccess | ConvertToStringFailure;
+
+/**
+ * 将文档转换为 Markdown 字符串，**不入库、不落盘产物**。
+ *
+ * 用于 doc_to_markdown Host Tool：Agent 承接"看 word/pdf 文档"任务时，
+ * 按需转换任意支持格式文档，直接返回 Markdown 内容字符串。
+ *
+ * 内部复用 anydoc 的 toDocument / toMarkdownBytes，
+ * 但不创建文件、不写入 docs/ 目录。
+ *
+ * 图片占位保留为 `![alt](imageN)` 格式（不落盘 assets），
+ * Agent 能感知图片位置但无法查看图片字节。
+ */
+export async function convertDocumentToMarkdownString(
+  sourcePath: string,
+): Promise<ConvertToStringResult> {
+  const docName = docNameFromPath(sourcePath);
+
+  // 检测格式
+  const format = formatFromPath(sourcePath);
+  if (!format) {
+    return {
+      ok: false,
+      error: {
+        code: 'unsupported',
+        message: ERROR_MESSAGES.unsupported,
+        detail: `未知格式：${extname(sourcePath) || '无扩展名'}`,
+      },
+    };
+  }
+
+  // 读取源文件字节
+  let bytes: Uint8Array;
+  try {
+    const buf = await readFile(sourcePath);
+    bytes = new Uint8Array(buf);
+  } catch (e) {
+    return {
+      ok: false,
+      error: {
+        code: 'io',
+        message: ERROR_MESSAGES.io,
+        detail: (e as Error).message,
+      },
+    };
+  }
+
+  // 尝试获取 Markdown 文本
+  let markdown = '';
+
+  try {
+    // 优先尝试 toMarkdownBytes（直接获取 Markdown）
+    markdown = await toMarkdownBytes(bytes, format);
+  } catch (e) {
+    const code = (e as Error & { code?: string }).code as ConvertErrorCode | undefined;
+    if (!code) {
+      return {
+        ok: false,
+        error: {
+          code: 'io',
+          message: ERROR_MESSAGES.io,
+          detail: (e as Error).message,
+        },
+      };
+    }
+
+    // PDF 格式：toMarkdownBytes 可能抛 unsupported，尝试 toDocument
+    if (format === 'pdf' && code === 'unsupported') {
+      try {
+        const doc = await toDocument(bytes, format);
+        // 从 document model 生成简单 Markdown
+        markdown = docToSimpleMarkdown(doc.blocks, docName);
+      } catch (e2) {
+        const code2 = (e2 as Error & { code?: string }).code as ConvertErrorCode | undefined;
+        const finalCode = code2 ?? 'io';
+        return {
+          ok: false,
+          error: {
+            code: finalCode,
+            message: ERROR_MESSAGES[finalCode] ?? ERROR_MESSAGES.io,
+            detail: (e2 as Error).message,
+          },
+        };
+      }
+    } else {
+      // 其他错误码：透传
+      return {
+        ok: false,
+        error: {
+          code,
+          message: ERROR_MESSAGES[code] ?? `转换失败（${code}）`,
+          detail: (e as Error).message,
+        },
+      };
+    }
+  }
+
+  // 如果 markdown 为空，尝试从 toDocument 获取
+  if (!markdown) {
+    try {
+      const doc = await toDocument(bytes, format);
+      markdown = docToSimpleMarkdown(doc.blocks, docName);
+    } catch {
+      // 降级为占位
+      markdown = `# ${docName}\n\n（文档内容提取不完整）\n`;
+    }
+  }
+
+  return { ok: true, markdown };
+}
+
+/**
+ * 从 document model 的 blocks 生成简单 Markdown。
+ * 用于 toDocument 成功但 toMarkdownBytes 失败的降级场景。
+ */
+function docToSimpleMarkdown(blocks: Block[], docName: string): string {
+  const lines: string[] = [`# ${docName}`, ''];
+
+  function visitBlocks(bs: Block[]): void {
+    for (const block of bs) {
+      if (block.content) {
+        const textParts: string[] = [];
+        for (const inline of block.content) {
+          if (inline.kind === 'text' && inline.text) {
+            textParts.push(inline.text);
+          }
+        }
+        if (textParts.length > 0) {
+          lines.push(textParts.join(''));
+        }
+      }
+      if (block.blocks) visitBlocks(block.blocks);
+      if (block.list?.items) {
+        for (const item of block.list.items) {
+          visitBlocks(item.blocks);
+        }
+      }
+      if (block.table?.grid) {
+        for (const row of block.table.grid) {
+          for (const slot of row) {
+            if (slot.cell?.blocks) visitBlocks(slot.cell.blocks);
+          }
+        }
+      }
+      lines.push('');
+    }
+  }
+
+  visitBlocks(blocks);
+  return lines.join('\n');
+}

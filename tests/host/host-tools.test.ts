@@ -1,4 +1,61 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// Mock @firecrawl/anydoc（NAPI 模块，测试环境不可用）
+vi.mock('@firecrawl/anydoc', () => ({
+  toDocument: vi.fn(),
+  toMarkdownBytes: vi.fn(),
+  formatFromPath: vi.fn(() => null),
+  toMarkdown: vi.fn(),
+  formatFromBytes: vi.fn(),
+  formatFromExtension: vi.fn(),
+}));
+
+// Mock electron（kb/registry 依赖 app.getPath）
+vi.mock('electron', () => ({
+  app: { getPath: vi.fn(() => '/tmp/test-appdata') },
+  BrowserWindow: { getAllWindows: vi.fn(() => []) },
+}));
+
+// Mock project-service（kb-tools 依赖 requireProject）
+vi.mock('../../src/main/services/project-service', () => ({
+  requireProject: vi.fn(() => ({
+    id: 'test-project-id',
+    rootPath: '/tmp/test-project',
+    name: 'Test Project',
+  })),
+}));
+
+// Mock kb/registry（kb-tools 依赖 kbRegistry.status）
+vi.mock('../../src/main/kb/registry', () => ({
+  kbRegistry: {
+    status: vi.fn(() => ({ mounted: null, health: { hasSources: false, hasDocs: false, hasIndex: false } })),
+  },
+}));
+
+// Mock officecli executor（doc-tools 依赖）
+vi.mock('../../src/main/officecli/executor', () => ({
+  execOfficeCli: vi.fn(),
+  OfficeCliNotAvailableError: class OfficeCliNotAvailableError extends Error {
+    constructor() {
+      super('OfficeCLI not available');
+      this.name = 'OfficeCliNotAvailableError';
+    }
+  },
+}));
+
+// Mock xlsx-editor（xlsx-edit-tools 依赖）
+vi.mock('../../src/main/document/xlsx-editor', () => ({
+  appendRows: vi.fn(),
+  updateCell: vi.fn(),
+}));
+
+// Mock editor-registry（xlsx-edit-tools 依赖）
+vi.mock('../../src/main/document/editor-registry', () => ({
+  isEditing: vi.fn(() => false),
+  requestFlush: vi.fn(),
+  notifyFileChanged: vi.fn(),
+}));
+
 import { HostToolsRegistry } from '../../src/main/host/host-tools';
 import type { SubsysDiscovery, SubsysInfo, CaseInfo, SimOptionsSchema } from '../../src/main/host/discovery';
 import { CaseStatsService } from '../../src/main/case/case-stats-service';
@@ -61,10 +118,10 @@ function makeMockSimulationManager(
 }
 
 describe('HostToolsRegistry', () => {
-  it('registers 15 default tools (8 base + 5 document tools + 2 xlsx edit tools)', () => {
+  it('registers 17 default tools (8 base + 5 document tools + 2 xlsx edit tools + 2 kb tools)', () => {
     const registry = new HostToolsRegistry();
     const names = registry.getToolNames();
-    expect(names).toHaveLength(15);
+    expect(names).toHaveLength(17);
     expect(names).toContain('list_subsys');
     expect(names).toContain('list_cases');
     expect(names).toContain('get_sim_options_schema');
@@ -82,12 +139,15 @@ describe('HostToolsRegistry', () => {
     // xlsx 细粒度编辑工具（Issue #7）
     expect(names).toContain('append_xlsx_row');
     expect(names).toContain('update_xlsx_cell');
+    // 知识库工具（Issue #4）
+    expect(names).toContain('doc_to_markdown');
+    expect(names).toContain('kb_search');
   });
 
   it('getDefinitions returns all tool definitions', () => {
     const registry = new HostToolsRegistry();
     const defs = registry.getDefinitions();
-    expect(defs).toHaveLength(15);
+    expect(defs).toHaveLength(17);
     for (const def of defs) {
       expect(def.name).toBeDefined();
       expect(def.description).toBeDefined();
@@ -106,14 +166,14 @@ describe('HostToolsRegistry', () => {
     const registry = new HostToolsRegistry();
     registry.registerCustom('custom_tool', 'A custom tool', { type: 'object' }, async () => 'ok');
     expect(registry.hasTool('custom_tool')).toBe(true);
-    expect(registry.getToolNames()).toHaveLength(16);
+    expect(registry.getToolNames()).toHaveLength(18);
   });
 
   it('unregister removes a tool', () => {
     const registry = new HostToolsRegistry();
     expect(registry.unregister('list_subsys')).toBe(true);
     expect(registry.hasTool('list_subsys')).toBe(false);
-    expect(registry.getToolNames()).toHaveLength(14);
+    expect(registry.getToolNames()).toHaveLength(16);
   });
 
   it('unregister returns false for nonexistent tool', () => {

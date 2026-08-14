@@ -10,6 +10,7 @@ import { createDocTools } from './tools/doc-tools';
 import { createCoverageAnalysisTools, createCaseStatsTools } from './tools/coverage-tools';
 import { createContextTools } from './tools/context-tools';
 import { createXlsxEditTools } from './tools/xlsx-edit-tools';
+import { createKbTools } from './tools/kb-tools';
 
 // ──────────────────────────────────────────────────────────────────────────
 // HostToolsRegistry — thin registry that maps tool names to handlers.
@@ -89,11 +90,12 @@ export class HostToolsRegistry {
     }
   }
 
-  /** Register base + document + xlsx edit tools. */
+  /** Register base + document + xlsx edit + kb tools. */
   private registerDefaults(): void {
     for (const entry of createSimTools(this.ctx)) this.register(entry);
     for (const entry of createDocTools(this.ctx)) this.register(entry);
     for (const entry of createXlsxEditTools(this.ctx)) this.register(entry);
+    for (const entry of createKbTools(this.ctx)) this.register(entry);
   }
 
   /** Register coverage analysis tools (conditional on CoverageManager). */

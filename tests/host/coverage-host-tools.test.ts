@@ -10,6 +10,63 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+
+// Mock @firecrawl/anydoc（NAPI 模块，测试环境不可用）
+vi.mock('@firecrawl/anydoc', () => ({
+  toDocument: vi.fn(),
+  toMarkdownBytes: vi.fn(),
+  formatFromPath: vi.fn(() => null),
+  toMarkdown: vi.fn(),
+  formatFromBytes: vi.fn(),
+  formatFromExtension: vi.fn(),
+}));
+
+// Mock electron（kb/registry 依赖 app.getPath）
+vi.mock('electron', () => ({
+  app: { getPath: vi.fn(() => '/tmp/test-appdata') },
+  BrowserWindow: { getAllWindows: vi.fn(() => []) },
+}));
+
+// Mock project-service（kb-tools 依赖 requireProject）
+vi.mock('../../src/main/services/project-service', () => ({
+  requireProject: vi.fn(() => ({
+    id: 'test-project-id',
+    rootPath: '/tmp/test-project',
+    name: 'Test Project',
+  })),
+}));
+
+// Mock kb/registry（kb-tools 依赖 kbRegistry.status）
+vi.mock('../../src/main/kb/registry', () => ({
+  kbRegistry: {
+    status: vi.fn(() => ({ mounted: null, health: { hasSources: false, hasDocs: false, hasIndex: false } })),
+  },
+}));
+
+// Mock officecli executor（doc-tools 依赖）
+vi.mock('../../src/main/officecli/executor', () => ({
+  execOfficeCli: vi.fn(),
+  OfficeCliNotAvailableError: class OfficeCliNotAvailableError extends Error {
+    constructor() {
+      super('OfficeCLI not available');
+      this.name = 'OfficeCliNotAvailableError';
+    }
+  },
+}));
+
+// Mock xlsx-editor（xlsx-edit-tools 依赖）
+vi.mock('../../src/main/document/xlsx-editor', () => ({
+  appendRows: vi.fn(),
+  updateCell: vi.fn(),
+}));
+
+// Mock editor-registry（xlsx-edit-tools 依赖）
+vi.mock('../../src/main/document/editor-registry', () => ({
+  isEditing: vi.fn(() => false),
+  requestFlush: vi.fn(),
+  notifyFileChanged: vi.fn(),
+}));
+
 import { CoverageManager } from '../../src/main/coverage/coverage-manager';
 import { CoverageReportGenerator } from '../../src/main/coverage/coverage-report-generator';
 import { HostToolsRegistry } from '../../src/main/host/host-tools';
@@ -409,8 +466,8 @@ describe('get_coverage Host Tool (ADR 0009 摘要优先)', () => {
       expect(hostTools.hasTool('get_coverage_uncovered')).toBe(true);
       expect(hostTools.hasTool('get_coverage_grade')).toBe(true);
       expect(hostTools.hasTool('get_coverage_csv')).toBe(true);
-      // 共 19 个工具（15 默认 + 4 覆盖率分析）
-      expect(hostTools.getToolNames()).toHaveLength(19);
+      // 共 21 个工具（17 默认 + 4 覆盖率分析）
+      expect(hostTools.getToolNames()).toHaveLength(21);
     } finally {
       cleanup();
     }

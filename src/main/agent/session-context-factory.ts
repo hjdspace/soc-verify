@@ -20,6 +20,7 @@ import { caseStatsRegistry } from '../case/case-stats-registry';
 import { simulationRegistry } from '../simulation/simulation-registry';
 import { credentialManager } from '../credentials/credential-manager';
 import { sessionManager } from './session-manager';
+import { injectKbContext } from '../kb/context-injector';
 import type { CaseStatsService } from '../case/case-stats-service';
 import type { ApprovalMode } from './types';
 
@@ -123,7 +124,10 @@ export async function createSessionContext(options: SessionContextOptions): Prom
   const apiKey = cred?.apiKey;
   const baseUrl = cred?.baseUrl;
 
-  // 6. Create the runtime session
+  // 6. Inject KB index context into system prompt (if a KB is mounted)
+  const systemPrompt = await injectKbContext(options.systemPrompt, cwd);
+
+  // 7. Create the runtime session
   const sessionId = await sessionManager.createSession({
     projectId,
     cwd,
@@ -139,12 +143,12 @@ export async function createSessionContext(options: SessionContextOptions): Prom
     resumeSessionId: options.resumeSessionId,
     persistedSessionId: options.persistedSessionId,
     env: credEnv,
-    systemPrompt: options.systemPrompt,
+    systemPrompt,
     approvalMode: options.approvalMode,
   });
 
-  // 7. Read back the resolved model (may differ from input when createSession
-  //    auto-fetched the first model from the API)
+  // 8. Read back the resolved model (may differ from input when createSession
+  //     auto-fetched the first model from the API)
   const resolvedModel = sessionManager.getModel(sessionId) ?? options.model;
 
   return {
