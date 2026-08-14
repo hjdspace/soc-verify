@@ -6,9 +6,10 @@
  * overridden. The script path defaults to the standard location and is editable.
  */
 
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import { RefreshCw, FolderOpen, Info } from 'lucide-react';
 import { useSysbaseGenStore } from '@renderer/stores/sysbase-gen';
+import { useProjectStore } from '@renderer/stores/project';
 import { KNOWN_SUBSYSTEMS } from '@shared/types';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
@@ -19,6 +20,22 @@ export function StepSubsys() {
   const updateConfig = useSysbaseGenStore((s) => s.updateConfig);
   const setScriptPath = useSysbaseGenStore((s) => s.setScriptPath);
   const loading = useSysbaseGenStore((s) => s.loading);
+  const projectId = useProjectStore((s) => s.currentProjectId);
+
+  // 动态获取子系统列表，排除 usvp 伪子系统
+  const [subsysOptions, setSubsysOptions] = useState<string[]>([...KNOWN_SUBSYSTEMS]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    void trpc.dashboard.getSubsysList.query({ projectId })
+      .then((list) => {
+        const filtered = list.filter((s) => s !== 'usvp');
+        if (filtered.length > 0) setSubsysOptions(filtered);
+      })
+      .catch(() => {
+        // 获取失败时保留硬编码列表作为回退
+      });
+  }, [projectId]);
 
   // Auto-infer instance name when subsys changes
   const inferInstance = useCallback(async (subsys: string) => {
@@ -88,11 +105,11 @@ export function StepSubsys() {
             )}
           >
             <option value="">请选择 Subsys...</option>
-            {KNOWN_SUBSYSTEMS.map((s) => (
+            {subsysOptions.map((s) => (
               <option key={s} value={s}>{s}</option>
             ))}
           </select>
-          <p className="text-[10px] text-muted-foreground">已知 Subsys 列表，后续可从 Case Database 动态获取</p>
+          <p className="text-[10px] text-muted-foreground">从项目数据库动态获取，已排除 usvp 伪子系统</p>
         </div>
 
         {/* Instance name */}
