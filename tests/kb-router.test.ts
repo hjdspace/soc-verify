@@ -2,7 +2,8 @@
  * kb-router 端到端测试。
  *
  * 测试缝：tRPC server-side caller（router.createCaller）。
- * mock electron（app.getPath 返回临时目录）和 project-service（requireProject 返回临时项目路径）。
+ * mock electron（app.getPath 返回临时目录 + BrowserWindow.getAllWindows 返回空列表）
+ * 和 project-service（requireProject 返回临时项目路径）。
  * 参照 dashboard-router 测试模式。
  *
  * 覆盖场景：
@@ -12,6 +13,11 @@
  *  - kb.mount：成功挂载、超限拒绝、未注册拒绝、重复挂载拒绝
  *  - kb.unmount：成功卸载、未挂载拒绝
  *  - kb.status：当前挂载库 + 结构健康检查
+ *  - kb.upload：成功上传 → sources/ 副本 → 转换 → 分类 → index.md 条目
+ *  - kb.documents：文档列表
+ *  - kb.delete：删除文档
+ *  - kb.retry：重试失败转换
+ *  - kb.categories：分类树 + 计数
  *  - 输入校验：缺少必填参数拒绝
  */
 
@@ -43,6 +49,9 @@ vi.mock('electron', () => ({
   app: {
     getPath: vi.fn(() => globalDataDir),
   },
+  BrowserWindow: {
+    getAllWindows: vi.fn(() => []),
+  },
 }));
 
 vi.mock('../src/main/services/project-service', () => ({
@@ -53,10 +62,33 @@ vi.mock('../src/main/services/project-service', () => ({
   })),
 }));
 
+// Mock credential-manager: 返回 null 使 LLM 降级为占位条目
+vi.mock('../src/main/credentials/credential-manager', () => ({
+  credentialManager: {
+    getDefaultCredential: vi.fn(() => null),
+  },
+}));
+
+// Mock @firecrawl/anydoc：converter 依赖
+const { toDocumentMock, toMarkdownBytesMock, formatFromPathMock } = vi.hoisted(() => ({
+  toDocumentMock: vi.fn(),
+  toMarkdownBytesMock: vi.fn(),
+  formatFromPathMock: vi.fn(),
+}));
+
+vi.mock('@firecrawl/anydoc', () => ({
+  toDocument: toDocumentMock,
+  toMarkdownBytes: toMarkdownBytesMock,
+  formatFromPath: formatFromPathMock,
+  toMarkdown: vi.fn(),
+  formatFromBytes: vi.fn(),
+  formatFromExtension: vi.fn(),
+}));
+
 // ─── Imports (after mocks) ──────────────────────────────────
 
 import { kbRouter } from '../src/main/ipc/routers/kb-router';
-import type { KbListEntry, KbStatus } from '../src/main/kb/types';
+import type { KbListEntry, KbStatus, KbDocument, KbCategory } from '../src/main/kb/types';
 
 const caller = kbRouter.createCaller({});
 
@@ -138,12 +170,44 @@ function makeCategorizedKbDir(name: string): string {
   return dir;
 }
 
+/** 创建一个假的源文件（模拟上传的 docx） */
+function makeSourceFile(name: string): string {
+  const dir = join(tmpDir, 'source-files');
+  mkdirSync(dir, { recursive: true });
+  const filePath = join(dir, name);
+  writeFileSync(filePath, Buffer.from([0x50, 0x4b, 0x03, 0x04])); // fake zip header
+  return filePath;
+}
+
+/** 设置 converter mock 为成功（返回无图片的 doc） */
+function setupConverterSuccess(): void {
+  formatFromPathMock.mockReturnValue('docx');
+  toDocumentMock.mockResolvedValue({
+    blocks: [{ kind: 'heading', level: 1, content: [{ kind: 'text', text: '测试文档' }] }],
+    notes: [],
+    assets: [],
+  });
+  toMarkdownBytesMock.mockResolvedValue('# 测试文档\n\n这是一段测试内容。');
+}
+
+/** 设置 converter mock 为失败 */
+function setupConverterFailure(code: string, message: string): void {
+  formatFromPathMock.mockReturnValue('docx');
+  const err = new Error(message);
+  (err as Error & { code: string }).code = code;
+  toDocumentMock.mockRejectedValue(err);
+}
+
 // ─── Test Suite ─────────────────────────────────────────────
 
 describe('kb-router', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     await resetState();
+    // 重置 converter mocks
+    toDocumentMock.mockReset();
+    toMarkdownBytesMock.mockReset();
+    formatFromPathMock.mockReset();
   });
 
   afterEach(() => {
@@ -498,6 +562,205 @@ describe('kb-router', () => {
       const statusResult: KbStatus = await caller.status({});
       expect(statusResult.mounted).not.toBeNull();
       expect(statusResult.mounted!.kbId).toBe(id);
+    });
+  });
+
+  // ─── kb.upload ────────────────────────────────────────────
+
+  describe('kb.upload', () => {
+    it('上传 → sources/ 副本 → 转换 → 分类归位 → index.md 增量条目', async () => {
+      const kbDir = makeEmptyKbDir('upload-kb');
+      const regResult = await caller.register({ name: '上传库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      // Mock converter 成功
+      setupConverterSuccess();
+
+      const sourcePath = makeSourceFile('验证计划.docx');
+      const result = await caller.upload({ filePaths: [sourcePath] });
+
+      expect(result.results).toHaveLength(1);
+      expect(result.results[0].ok).toBe(true);
+
+      // 验证 sources/ 副本存在
+      expect(existsSync(join(kbDir, 'sources', '验证计划.docx'))).toBe(true);
+
+      // 验证 index.md 有条目
+      const indexContent = readFileSync(join(kbDir, 'index.md'), 'utf-8');
+      expect(indexContent).toContain('验证计划');
+    });
+
+    it('同名上传覆盖触发完整重转', async () => {
+      const kbDir = makeEmptyKbDir('overwrite-kb');
+      const regResult = await caller.register({ name: '覆盖库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      setupConverterSuccess();
+
+      const sourcePath = makeSourceFile('覆盖测试.docx');
+
+      // 第一次上传
+      await caller.upload({ filePaths: [sourcePath] });
+
+      // 第二次上传同名文件
+      const result = await caller.upload({ filePaths: [sourcePath] });
+      expect(result.results[0].ok).toBe(true);
+    });
+
+    it('扫描版 PDF（unsupported）失败可见：状态 + 错误码持久化', async () => {
+      const kbDir = makeEmptyKbDir('pdf-kb');
+      const regResult = await caller.register({ name: 'PDF库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      setupConverterFailure('unsupported', 'image-only PDF');
+
+      const sourcePath = makeSourceFile('扫描版.pdf');
+      const result = await caller.upload({ filePaths: [sourcePath] });
+
+      expect(result.results).toHaveLength(1);
+      // 转换失败时 document.status 为 failed + errorCode
+      if (!result.results[0].ok) throw new Error('expected document result');
+      expect(result.results[0].document.status).toBe('failed');
+      expect(result.results[0].document.errorCode).toBe('unsupported');
+    });
+
+    it('未挂载知识库时上传被拒绝', async () => {
+      setupConverterSuccess();
+      const sourcePath = makeSourceFile('无库.docx');
+      await expect(
+        caller.upload({ filePaths: [sourcePath] }),
+      ).rejects.toThrow();
+    });
+
+    it('缺少 filePaths 参数抛出 BAD_REQUEST', async () => {
+      await expect(
+        caller.upload({} as { filePaths: string[] }),
+      ).rejects.toThrow();
+    });
+
+    it('空 filePaths 数组抛出 BAD_REQUEST', async () => {
+      await expect(
+        caller.upload({ filePaths: [] }),
+      ).rejects.toThrow();
+    });
+  });
+
+  // ─── kb.documents ──────────────────────────────────────────
+
+  describe('kb.documents', () => {
+    it('返回文档列表', async () => {
+      const kbDir = makeEmptyKbDir('docs-kb');
+      const regResult = await caller.register({ name: '文档库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      // 手动放入 sources/ 文件和 docs/ Markdown
+      writeFileSync(join(kbDir, 'sources', 'manual.docx'), 'fake');
+      mkdirSync(join(kbDir, 'docs', '协议手册'), { recursive: true });
+      writeFileSync(join(kbDir, 'docs', '协议手册', 'manual.md'), '# 手动文档\n');
+
+      const docs: KbDocument[] = await caller.documents({});
+      expect(docs.length).toBeGreaterThan(0);
+      expect(docs.some((d) => d.name === 'manual')).toBe(true);
+      const manualDoc = docs.find((d) => d.name === 'manual');
+      expect(manualDoc?.category).toBe('协议手册');
+      expect(manualDoc?.status).toBe('done');
+    });
+
+    it('未挂载知识库时查询被拒绝', async () => {
+      await expect(caller.documents({})).rejects.toThrow();
+    });
+  });
+
+  // ─── kb.delete ────────────────────────────────────────────
+
+  describe('kb.delete', () => {
+    it('删除文档：源文件 + Markdown + 索引条目一并清理', async () => {
+      const kbDir = makeEmptyKbDir('delete-kb');
+      const regResult = await caller.register({ name: '删除库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      setupConverterSuccess();
+      const sourcePath = makeSourceFile('待删除.docx');
+      await caller.upload({ filePaths: [sourcePath] });
+
+      // 确认文档存在
+      expect(existsSync(join(kbDir, 'sources', '待删除.docx'))).toBe(true);
+
+      // 删除
+      const result = await caller.delete({ name: '待删除' });
+      expect(result.ok).toBe(true);
+
+      // 源文件已删除
+      expect(existsSync(join(kbDir, 'sources', '待删除.docx'))).toBe(false);
+    });
+
+    it('缺少 name 参数抛出 BAD_REQUEST', async () => {
+      await expect(
+        caller.delete({} as { name: string }),
+      ).rejects.toThrow();
+    });
+  });
+
+  // ─── kb.retry ─────────────────────────────────────────────
+
+  describe('kb.retry', () => {
+    it('重试失败转换：清理旧产物并重新走流水线', async () => {
+      const kbDir = makeEmptyKbDir('retry-kb');
+      const regResult = await caller.register({ name: '重试库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      // 第一次上传失败
+      setupConverterFailure('unsupported', 'image-only PDF');
+      const sourcePath = makeSourceFile('重试测试.pdf');
+      await caller.upload({ filePaths: [sourcePath] });
+
+      // 第二次重试时设置成功（模拟用户修复了文件）
+      setupConverterSuccess();
+      const result = await caller.retry({ name: '重试测试' });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error('expected retry success');
+      expect(result.document.status).toBe('done');
+    });
+
+    it('重试不存在的文档返回错误', async () => {
+      const kbDir = makeEmptyKbDir('retry-not-found-kb');
+      const regResult = await caller.register({ name: '重试不存在库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      const result = await caller.retry({ name: '不存在' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('notFound');
+      }
+    });
+
+    it('缺少 name 参数抛出 BAD_REQUEST', async () => {
+      await expect(
+        caller.retry({} as { name: string }),
+      ).rejects.toThrow();
+    });
+  });
+
+  // ─── kb.categories ─────────────────────────────────────────
+
+  describe('kb.categories', () => {
+    it('返回分类树 + 计数', async () => {
+      const kbDir = makeCategorizedKbDir('categories-kb');
+      const regResult = await caller.register({ name: '分类库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      const cats: KbCategory[] = await caller.categories({});
+      expect(cats.length).toBeGreaterThanOrEqual(2);
+      expect(cats.some((c) => c.name === '协议手册')).toBe(true);
+      expect(cats.some((c) => c.name === '验证计划')).toBe(true);
+      // 每个分类下有 1 个文档
+      const protocolCat = cats.find((c) => c.name === '协议手册');
+      expect(protocolCat?.count).toBe(1);
+    });
+
+    it('未挂载知识库时查询被拒绝', async () => {
+      await expect(caller.categories({})).rejects.toThrow();
     });
   });
 });

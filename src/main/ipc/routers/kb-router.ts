@@ -1,5 +1,5 @@
 /**
- * Knowledge Base router — 注册、挂载、状态管理。
+ * Knowledge Base router — 注册、挂载、状态管理、上传流水线。
  *
  * Procedure（inline input validator，非 zod）：
  *   - kb.list       已注册库列表 + 每库文档数/分类数统计
@@ -8,18 +8,36 @@
  *   - kb.mount      挂载知识库到项目（v1 上限 1）
  *   - kb.unmount    卸载知识库
  *   - kb.status     当前挂载库 + 结构健康检查
+ *   - kb.upload     上传文档 → 转换 → 分类 → 索引
+ *   - kb.documents  文档列表
+ *   - kb.delete     删除文档
+ *   - kb.retry      重试失败转换
+ *   - kb.categories 分类树 + 计数
  *
  * 错误处理：register/unregister/mount/unmount 返回 Result 联合
  * （{ ok: true, ...data } | { ok: false, error: KbError }），
  * 保留结构化错误码供渲染端精确分支处理。
  *
+ * 状态与进度通过原生 IPC 推送（kb:* 通道）。
+ *
  * @see ADR 0021 — anydoc 文档知识库
  */
 
+import { BrowserWindow } from 'electron';
 import { t, TRPCError } from '../router-context';
 import { requireProject } from '../../services/project-service';
 import { kbRegistry } from '../../kb/registry';
-import type { KbRegistration, KbMount, KbError } from '../../kb/types';
+import {
+  uploadDocument,
+  listDocuments,
+  deleteDocument,
+  retryDocument,
+  listCategories,
+} from '../../kb/pipeline';
+import type { LlmConfig } from '../../kb/indexer';
+import { credentialManager } from '../../credentials/credential-manager';
+import { ensureV1Prefix } from '../../agent/openai-compatible';
+import type { KbRegistration, KbMount, KbError, KbDocument, KbCategory, KbDocStatusEvent } from '../../kb/types';
 
 // ── Result 联合类型（供 tRPC 输出推导） ─────────────────────────
 
@@ -38,6 +56,52 @@ type MountResult =
 type UnmountResult =
   | { ok: true }
   | { ok: false; error: KbError };
+
+type UploadResult =
+  | { ok: true; document: KbDocument }
+  | { ok: false; error: { code: string; message: string } };
+
+// ── 辅助函数 ─────────────────────────────────────────────────────
+
+/**
+ * 获取当前挂载的知识库路径。
+ * 未挂载时抛出 TRPCError。
+ */
+async function getMountedKbPath(): Promise<string> {
+  const project = requireProject('default');
+  const status = await kbRegistry.status(project.rootPath);
+  if (!status.mounted) {
+    throw new TRPCError({ code: 'PRECONDITION_FAILED', message: '未挂载知识库，请先挂载' });
+  }
+  return status.mounted.path;
+}
+
+/**
+ * 尝试获取 LLM 配置（从已存储的 credential 中获取）。
+ * 无配置时返回 null（降级为占位条目）。
+ */
+async function getLlmConfig(): Promise<LlmConfig | null> {
+  const cred = await credentialManager.getDefaultCredential();
+  if (!cred || !cred.baseUrl || !cred.apiKey) {
+    return null;
+  }
+  return {
+    baseUrl: ensureV1Prefix(cred.baseUrl),
+    apiKey: cred.apiKey,
+    model: 'gpt-4o-mini', // 默认模型
+  };
+}
+
+/**
+ * 推送文档状态变化事件到所有窗口。
+ */
+function notifyKbStatus(event: KbDocStatusEvent): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('kb:docStatus', event);
+    }
+  }
+}
 
 export const kbRouter = t.router({
   // ─── kb.list ──────────────────────────────────────────────
@@ -145,5 +209,95 @@ export const kbRouter = t.router({
     .query(async () => {
       const project = requireProject('default');
       return kbRegistry.status(project.rootPath);
+    }),
+
+  // ─── kb.upload ────────────────────────────────────────────
+
+  upload: t.procedure
+    .input((raw): { filePaths: string[] } => {
+      const r = raw as Record<string, unknown>;
+      if (!Array.isArray(r.filePaths) || r.filePaths.length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'filePaths is required and must be non-empty' });
+      }
+      for (const p of r.filePaths) {
+        if (typeof p !== 'string' || p.trim().length === 0) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'each filePath must be a non-empty string' });
+        }
+      }
+      return { filePaths: r.filePaths as string[] };
+    })
+    .mutation(async ({ input }): Promise<{ results: UploadResult[] }> => {
+      const kbPath = await getMountedKbPath();
+      const llmConfig = await getLlmConfig();
+
+      const results: UploadResult[] = [];
+      for (const filePath of input.filePaths) {
+        const result = await uploadDocument(filePath, kbPath, llmConfig, notifyKbStatus);
+        if (result.ok) {
+          results.push({ ok: true, document: result.document });
+        } else {
+          results.push({ ok: false, error: result.error });
+        }
+      }
+
+      return { results };
+    }),
+
+  // ─── kb.documents ──────────────────────────────────────────
+
+  documents: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .query(async (): Promise<KbDocument[]> => {
+      const kbPath = await getMountedKbPath();
+      return listDocuments(kbPath);
+    }),
+
+  // ─── kb.delete ────────────────────────────────────────────
+
+  delete: t.procedure
+    .input((raw): { name: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.name !== 'string' || r.name.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'name is required' });
+      }
+      return { name: r.name.trim() };
+    })
+    .mutation(async ({ input }): Promise<{ ok: true }> => {
+      const kbPath = await getMountedKbPath();
+      await deleteDocument(kbPath, input.name);
+      return { ok: true };
+    }),
+
+  // ─── kb.retry ─────────────────────────────────────────────
+
+  retry: t.procedure
+    .input((raw): { name: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.name !== 'string' || r.name.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'name is required' });
+      }
+      return { name: r.name.trim() };
+    })
+    .mutation(async ({ input }): Promise<UploadResult> => {
+      const kbPath = await getMountedKbPath();
+      const llmConfig = await getLlmConfig();
+      const result = await retryDocument(kbPath, input.name, llmConfig, notifyKbStatus);
+      if (result.ok) {
+        return { ok: true, document: result.document };
+      }
+      return { ok: false, error: result.error };
+    }),
+
+  // ─── kb.categories ─────────────────────────────────────────
+
+  categories: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .query(async (): Promise<KbCategory[]> => {
+      const kbPath = await getMountedKbPath();
+      return listCategories(kbPath);
     }),
 });

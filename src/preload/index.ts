@@ -352,5 +352,30 @@ process.once('loaded', async () => {
       ipcRenderer.on('sysbase-gen:run-log', handler);
       return () => ipcRenderer.removeListener('sysbase-gen:run-log', handler);
     },
+
+    // ── 知识库文档状态事件（Issue #3）────────────────────────
+    // kb:docStatus —— 主进程推送文档状态变化（queued/converting/classifying/done/failed）
+    onKbDocStatus: (
+      callback: (data: {
+        name: string;
+        status: 'queued' | 'converting' | 'classifying' | 'done' | 'failed';
+        errorCode?: string;
+        errorMessage?: string;
+        category?: string;
+      }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: {
+          name: string;
+          status: 'queued' | 'converting' | 'classifying' | 'done' | 'failed';
+          errorCode?: string;
+          errorMessage?: string;
+          category?: string;
+        },
+      ) => callback(data);
+      ipcRenderer.on('kb:docStatus', handler);
+      return () => ipcRenderer.removeListener('kb:docStatus', handler);
+    },
   });
 });
