@@ -6,6 +6,7 @@ import { useFontStore } from './stores/font';
 import { useToastStore } from './stores/toast';
 import { useSessionStore } from './stores/session';
 import { useSettingsStore } from './stores/settings';
+import { useProjectStore } from './stores/project';
 import { trpc } from './lib/trpc';
 import { ToolApp } from './tools/ToolApp';
 import { useBrowserTabPersistence } from './hooks/use-browser-tab-persistence';
@@ -25,6 +26,7 @@ export default function App() {
   const loadContextWindow = useSettingsStore((s) => s.loadContextWindow);
   const errorToast = useToastStore((s) => s.error);
   const healthCheckDone = useRef(false);
+  const restoreDone = useRef(false);
 
   // Tool window: skip main-window initialization (sessions, etc.)
   const toolMode = isToolWindow();
@@ -38,6 +40,18 @@ export default function App() {
       registerSessionEventListeners();
     }
   }, [initTheme, initFont, initLastModel, loadContextWindow, registerSessionEventListeners, toolMode]);
+
+  // Restore the most recently opened project on startup (non-tool windows only).
+  // This was previously in LeftRail, but LeftRail is conditionally mounted/unmounted
+  // when the sidebar is toggled — each remount re-ran restoreState(), which read
+  // stale persisted UI layout from the backend and overwrote the current layout,
+  // causing the sidebar to collapse immediately after expanding.
+  useEffect(() => {
+    if (toolMode) return;
+    if (restoreDone.current) return;
+    restoreDone.current = true;
+    void useProjectStore.getState().restoreState();
+  }, [toolMode]);
 
   // Startup health check: verify tRPC IPC bridge is working
   // (only needed for the main window, not tool windows)
