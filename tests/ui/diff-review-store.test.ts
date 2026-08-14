@@ -90,6 +90,7 @@ describe('Diff Review flow', () => {
       currentDiff: null,
       hunkStates: {},
       loading: false,
+      loadError: null,
       reviewedFiles: new Set(),
     });
     useProjectStore.setState({ currentProjectId: 'project-1' });
@@ -513,5 +514,73 @@ describe('Diff Review flow', () => {
     const entry = useDiffReviewStore.getState().queue[0];
     expect(entry.reviewed).toBe(false);
     expect(entry.toolCalls.map((toolCall) => toolCall.id)).toEqual(['tool-2']);
+  });
+
+  it('preserves reviewedFiles when sessions are restored with empty messages (race condition)', () => {
+    const filePath = 'D:\\project\\rtl\\core.sv';
+    const marker = `${filePath.toLowerCase().replace(/\\/g, '/')}\ntool-1`;
+
+    // Simulate the app-startup race: sessions are created with empty messages,
+    // then messages are loaded asynchronously. reviewedFiles from localStorage
+    // must survive the intermediate refreshQueue() calls.
+
+    // Step 1: reviewedFiles loaded from localStorage, sessions empty
+    useDiffReviewStore.setState({ reviewedFiles: new Set([marker]) });
+    useSessionStore.setState({ sessions: [] });
+    useDiffReviewStore.getState().refreshQueue();
+
+    // reviewedFiles must not be cleared
+    expect(useDiffReviewStore.getState().reviewedFiles.has(marker)).toBe(true);
+
+    // Step 2: session created with empty messages (before async message load)
+    useSessionStore.setState({
+      sessions: [{
+        id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
+        messages: [], composer: { inputMessage: '', selectedSkills: [], contextFiles: [] }, createdAt: 1,
+      }],
+    });
+
+    // reviewedFiles must still survive
+    expect(useDiffReviewStore.getState().reviewedFiles.has(marker)).toBe(true);
+
+    // Step 3: messages loaded asynchronously — now the file appears in the queue
+    useSessionStore.setState((state) => ({
+      sessions: state.sessions.map((session) => ({
+        ...session,
+        messages: [completedEdit(filePath)],
+      })),
+    }));
+
+    // Now the file should be marked as reviewed in the queue
+    const queue = useDiffReviewStore.getState().queue;
+    expect(queue).toHaveLength(1);
+    expect(queue[0].reviewed).toBe(true);
+    expect(useDiffReviewStore.getState().reviewedFiles.has(marker)).toBe(true);
+  });
+
+  it('auto-restores reviewedFiles from localStorage when store has empty set', () => {
+    const filePath = 'D:\\project\\rtl\\core.sv';
+    const marker = `${filePath.toLowerCase().replace(/\\/g, '/')}\ntool-1`;
+
+    // Mock localStorage for this test
+    const store: Record<string, string> = {};
+    const localStorageMock = {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => { store[key] = value; },
+    };
+    vi.stubGlobal('localStorage', localStorageMock);
+
+    // Simulate: store initialized with empty reviewedFiles (currentProjectId was null),
+    // but localStorage has data. refreshQueue should auto-restore.
+    store['socverify:reviewedFiles:project-1'] = JSON.stringify([marker]);
+    useDiffReviewStore.setState({ reviewedFiles: new Set() });
+    useProjectStore.setState({ currentProjectId: 'project-1' });
+
+    useDiffReviewStore.getState().refreshQueue();
+
+    // reviewedFiles should be auto-restored from localStorage
+    expect(useDiffReviewStore.getState().reviewedFiles.has(marker)).toBe(true);
+
+    vi.unstubAllGlobals();
   });
 });
