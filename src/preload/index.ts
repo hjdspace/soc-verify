@@ -68,6 +68,11 @@ process.once('loaded', async () => {
       ipcRenderer.on('session:approval-request', handler);
       return () => ipcRenderer.removeListener('session:approval-request', handler);
     },
+    onAskRequest: (callback: (data: { sessionId: string; requestId: string; questions: unknown[] }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { sessionId: string; requestId: string; questions: unknown[] }) => callback(data);
+      ipcRenderer.on('session:ask-request', handler);
+      return () => ipcRenderer.removeListener('session:ask-request', handler);
+    },
     onSimulationEvent: (callback: (data: { type: string; record: unknown }) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, data: { type: string; record: unknown }) => callback(data);
       ipcRenderer.on('simulation:event', handler);
