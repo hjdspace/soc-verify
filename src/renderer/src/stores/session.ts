@@ -5,6 +5,7 @@ import { useUiStore } from './ui';
 import { useSettingsStore } from './settings';
 import { tRPCError } from '@renderer/lib/trpc-utils';
 import { DEFAULT_CONTEXT_WINDOW, type ContextBreakdown, type ContextUsage } from '@shared/context-management';
+import type { AskAnswer, AskQuestion } from '@shared/ask-types';
 
 export type SessionStatus = 'creating' | 'idle' | 'streaming' | 'tool_executing' | 'error';
 
@@ -15,6 +16,13 @@ export interface ApprovalRequest {
   sessionId: string;
   toolName: string;
   args: unknown;
+  timestamp: number;
+}
+
+export interface AskRequest {
+  requestId: string;
+  sessionId: string;
+  questions: AskQuestion[];
   timestamp: number;
 }
 
@@ -123,6 +131,8 @@ interface SessionStoreState {
   lastModel: SessionModel | null;
   /** Pending approval requests awaiting user decision */
   approvalRequests: ApprovalRequest[];
+  /** Pending ask requests awaiting user answers */
+  askRequests: AskRequest[];
 
   initLastModel: () => void;
   registerEventListeners: () => void;
@@ -160,6 +170,7 @@ interface SessionStoreState {
   deleteHistorySession: (sessionId: string, projectId: string) => Promise<void>;
   setApprovalMode: (mode: ApprovalMode) => void;
   resolveApproval: (requestId: string, approved: boolean) => Promise<void>;
+  resolveAsk: (requestId: string, answers: AskAnswer[]) => Promise<void>;
 }
 
 let eventListenerRegistered = false;
@@ -275,6 +286,7 @@ function registerErrorAnalysisEventListener(get: () => SessionStoreState): void 
 }
 
 let approvalRequestListenerRegistered = false;
+let askRequestListenerRegistered = false;
 
 function registerApprovalRequestListener(_get: () => SessionStoreState): void {
   if (approvalRequestListenerRegistered || !window.eventBridge?.onApprovalRequest) return;
@@ -290,6 +302,38 @@ function registerApprovalRequestListener(_get: () => SessionStoreState): void {
     useSessionStore.setState((s) => ({ approvalRequests: [...s.approvalRequests, request] }));
 
     // Auto-expand the right panel if collapsed so the user sees the request
+    if (useUiStore.getState().rightPanelCollapsed) {
+      useUiStore.getState().toggleRightPanel();
+    }
+  });
+}
+
+function registerAskRequestListener(_get: () => SessionStoreState): void {
+  if (askRequestListenerRegistered || !window.eventBridge?.onAskRequest) return;
+  askRequestListenerRegistered = true;
+  window.eventBridge.onAskRequest((data: { sessionId: string; requestId: string; questions: unknown[] }) => {
+    const questions = (data.questions as AskQuestion[]).map((q) => ({
+      id: typeof q.id === 'string' ? q.id : `q_${Math.random().toString(36).slice(2, 8)}`,
+      question: typeof q.question === 'string' ? q.question : '',
+      options: Array.isArray(q.options) ? q.options.map((o) => {
+        if (typeof o === 'string') return { label: o };
+        return {
+          label: typeof o.label === 'string' ? o.label : String(o.label ?? ''),
+          ...(typeof o.description === 'string' && o.description.trim() ? { description: o.description.trim() } : {}),
+        };
+      }) : [],
+      ...(q.multi === true ? { multi: true } : {}),
+      ...(typeof q.recommended === 'number' ? { recommended: q.recommended } : {}),
+    }));
+    const request: AskRequest = {
+      requestId: data.requestId,
+      sessionId: data.sessionId,
+      questions,
+      timestamp: Date.now(),
+    };
+    useSessionStore.setState((s) => ({ askRequests: [...s.askRequests, request] }));
+
+    // Auto-expand the right panel if collapsed so the user sees the question
     if (useUiStore.getState().rightPanelCollapsed) {
       useUiStore.getState().toggleRightPanel();
     }
@@ -660,6 +704,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   historyLoading: false,
   lastModel: null,
   approvalRequests: [],
+  askRequests: [],
 
   initLastModel: () => {
     try {
@@ -679,6 +724,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     registerSessionEventListener(get);
     registerErrorAnalysisEventListener(get);
     registerApprovalRequestListener(get);
+    registerAskRequestListener(get);
   },
 
   addErrorAnalysisSession: (event) => {
@@ -1677,6 +1723,18 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       await trpc.session.resolveApproval.mutate({ requestId, approved });
     } catch (err) {
       useToastStore.getState().error('审批响应失败', tRPCError(err));
+    }
+  },
+
+  resolveAsk: async (requestId, answers) => {
+    // Remove from pending list immediately
+    set((s) => ({
+      askRequests: s.askRequests.filter((r) => r.requestId !== requestId),
+    }));
+    try {
+      await trpc.session.resolveAsk.mutate({ requestId, answers });
+    } catch (err) {
+      useToastStore.getState().error('提交答案失败', tRPCError(err));
     }
   },
 }));
