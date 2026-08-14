@@ -19,21 +19,12 @@ const PROJECTS_DB_FILE = 'projects.json';
 const _PROJECT_STATE_FILE = 'project-state.json';
 const PLUGIN_CONFIG_FILE = 'plugins.json';
 
-const DEFAULT_IGNORE_PATTERNS = [
-  'node_modules',
-  '.git',
-  'out',
-  'dist',
-  'build',
-  '__pycache__',
-  '.next',
-  '*.pyc',
-  'coverage',
-  'work',
-  'sim_build',
-];
+// Only hide application-internal directories. All user directories (node_modules,
+// dist, build, etc.) are fully visible — performance is handled by the tree's
+// virtual scroller and lazy expansion, not by hiding content.
+const HIDDEN_DIRS = new Set(['.socverify', '.git']);
 
-const MAX_DEPTH = 5;
+const MAX_DEPTH = 10;
 const WATCH_DEBOUNCE_MS = 500;
 
 export interface ProjectEntry {
@@ -224,21 +215,20 @@ class ProjectManagerImpl extends EventEmitter {
         return a.name.localeCompare(b.name);
       });
 
-      const filtered = sorted.filter((entry) =>
-        !DEFAULT_IGNORE_PATTERNS.some((pattern) => {
-          if (pattern.startsWith('*')) {
-            return entry.name.endsWith(pattern.slice(1));
-          }
-          return entry.name === pattern;
-        }),
-      );
-
-      // Build children in parallel for better performance
+      // All directories (including .socverify, .git) are fully recursed
+      // into so users can browse their contents. Application-internal
+      // directories are marked gitIgnored for dimmed display.
+      // All other directories (node_modules, dist, build, etc.) are fully
+      // visible and recursed into — performance is handled at the UI layer.
       const children = await Promise.all(
-        filtered.map(async (entry) => {
+        sorted.map(async (entry) => {
           const childPath = join(dirPath, entry.name);
           if (entry.isDirectory()) {
-            return this.buildFileTree(childPath, depth + 1);
+            const child = await this.buildFileTree(childPath, depth + 1);
+            if (HIDDEN_DIRS.has(entry.name)) {
+              child.gitIgnored = true;
+            }
+            return child;
           }
           return {
             name: entry.name,
@@ -267,13 +257,8 @@ class ProjectManagerImpl extends EventEmitter {
         (_eventType, filename) => {
           if (!filename) return;
           const fullPath = join(rootPath, filename);
-          // Filter out .socverify internal changes (config writes etc.)
-          if (filename.includes('.socverify')) return;
-          // Ignore changes to known build/dependency dirs
-          for (const pattern of DEFAULT_IGNORE_PATTERNS) {
-            const needle = pattern.startsWith('*') ? pattern.slice(1) : pattern;
-            if (filename.includes(needle)) return;
-          }
+          // Filter out application-internal directory changes
+          if (filename.includes('.socverify') || filename.includes('.git')) return;
           this.scheduleDebouncedUpdate(projectId, fullPath);
         },
       );
