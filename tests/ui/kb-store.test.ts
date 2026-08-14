@@ -216,6 +216,18 @@ describe('KbStore', () => {
       expect(useKbStore.getState().kbListLoading).toBe(false);
       expect(useKbStore.getState().kbList).toEqual([]);
     });
+
+    it('silently handles no-project error without toast', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.kb.list.query).mockRejectedValueOnce(
+        new Error('未找到打开的项目，请先打开项目'),
+      );
+
+      await useKbStore.getState().loadKbList();
+
+      expect(useKbStore.getState().kbListLoading).toBe(false);
+      expect(useKbStore.getState().kbList).toEqual([]);
+    });
   });
 
   // ── 加载挂载状态 ─────────────────────────────────────────
@@ -233,6 +245,18 @@ describe('KbStore', () => {
       const { trpc } = await import('@renderer/lib/trpc');
       vi.mocked(trpc.kb.status.query).mockRejectedValueOnce(
         new Error('未挂载知识库，请先挂载'),
+      );
+
+      await useKbStore.getState().loadKbStatus();
+
+      expect(useKbStore.getState().kbStatus).toBeNull();
+      expect(useKbStore.getState().kbStatusLoading).toBe(false);
+    });
+
+    it('handles no-project gracefully without toast', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.kb.status.query).mockRejectedValueOnce(
+        new Error('未找到打开的项目，请先打开项目'),
       );
 
       await useKbStore.getState().loadKbStatus();

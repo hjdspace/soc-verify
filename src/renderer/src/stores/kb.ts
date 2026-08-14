@@ -178,11 +178,14 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
       const result = await trpc.kb.list.query({});
       set({ kbList: result, kbListLoading: false });
     } catch (err) {
-      set({ kbListLoading: false });
-      useToastStore.getState().error(
-        '加载知识库列表失败',
-        err instanceof Error ? err.message : String(err),
-      );
+      set({ kbListLoading: false, kbList: [] });
+      // 静默失败：未打开项目时主进程返回 NOT_FOUND
+      if (err instanceof Error && !err.message.includes('未找到打开的项目')) {
+        useToastStore.getState().error(
+          '加载知识库列表失败',
+          err.message,
+        );
+      }
     }
   },
 
@@ -194,8 +197,8 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
       set({ kbStatus: result, kbStatusLoading: false });
     } catch (err) {
       set({ kbStatusLoading: false, kbStatus: null });
-      // 静默失败：未挂载时主进程返回 PRECONDITION_FAILED
-      if (err instanceof Error && !err.message.includes('未挂载')) {
+      // 静默失败：未打开项目或未挂载时主进程返回错误
+      if (err instanceof Error && !err.message.includes('未挂载') && !err.message.includes('未找到打开的项目')) {
         useToastStore.getState().error(
           '加载知识库状态失败',
           err.message,

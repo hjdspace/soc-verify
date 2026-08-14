@@ -54,12 +54,21 @@ vi.mock('electron', () => ({
   },
 }));
 
-vi.mock('../src/main/services/project-service', () => ({
-  requireProject: vi.fn(() => ({
-    id: 'test-project-id',
-    rootPath: projectDir,
-    name: 'Test Project',
-  })),
+vi.mock('../src/main/project/project-manager', () => ({
+  projectManager: {
+    listProjects: vi.fn(() => [{
+      id: 'test-project-id',
+      rootPath: projectDir,
+      name: 'Test Project',
+      lastOpenedAt: Date.now(),
+    }]),
+    getProjectByPath: vi.fn(() => ({
+      id: 'test-project-id',
+      rootPath: projectDir,
+      name: 'Test Project',
+      lastOpenedAt: Date.now(),
+    })),
+  },
 }));
 
 // Mock credential-manager: 返回 null 使 LLM 降级为占位条目

@@ -25,7 +25,7 @@
 
 import { BrowserWindow } from 'electron';
 import { t, TRPCError } from '../router-context';
-import { requireProject } from '../../services/project-service';
+import { projectManager } from '../../project/project-manager';
 import { kbRegistry } from '../../kb/registry';
 import {
   uploadDocument,
@@ -69,12 +69,26 @@ type UploadResult =
 // ── 辅助函数 ─────────────────────────────────────────────────────
 
 /**
+ * 获取当前活跃项目的 rootPath。
+ * 单用户桌面应用：取最近打开的项目。无项目时抛 NOT_FOUND。
+ */
+function getActiveProjectRoot(): string {
+  const projects = projectManager.listProjects();
+  if (projects.length === 0) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: '未找到打开的项目，请先打开项目' });
+  }
+  // 取最近打开的项目
+  const latest = projects.sort((a, b) => b.lastOpenedAt - a.lastOpenedAt)[0];
+  return latest.rootPath;
+}
+
+/**
  * 获取当前挂载的知识库路径。
  * 未挂载时抛出 TRPCError。
  */
 async function getMountedKbPath(): Promise<string> {
-  const project = requireProject('default');
-  const status = await kbRegistry.status(project.rootPath);
+  const rootPath = getActiveProjectRoot();
+  const status = await kbRegistry.status(rootPath);
   if (!status.mounted) {
     throw new TRPCError({ code: 'PRECONDITION_FAILED', message: '未挂载知识库，请先挂载' });
   }
@@ -127,8 +141,8 @@ export const kbRouter = t.router({
       return {};
     })
     .query(async () => {
-      const project = requireProject('default');
-      return kbRegistry.list(project.rootPath);
+      const rootPath = getActiveProjectRoot();
+      return kbRegistry.list(rootPath);
     }),
 
   // ─── kb.register ──────────────────────────────────────────
@@ -170,8 +184,8 @@ export const kbRouter = t.router({
       return { kbId: r.kbId.trim() };
     })
     .mutation(async ({ input }): Promise<UnregisterResult> => {
-      const project = requireProject('default');
-      const result = await kbRegistry.unregister(input.kbId, project.rootPath);
+      const rootPath = getActiveProjectRoot();
+      const result = await kbRegistry.unregister(input.kbId, rootPath);
       if (!result.ok) {
         return { ok: false, error: result.error };
       }
@@ -189,8 +203,8 @@ export const kbRouter = t.router({
       return { kbId: r.kbId.trim() };
     })
     .mutation(async ({ input }): Promise<MountResult> => {
-      const project = requireProject('default');
-      const result = await kbRegistry.mount(input.kbId, project.rootPath);
+      const rootPath = getActiveProjectRoot();
+      const result = await kbRegistry.mount(input.kbId, rootPath);
       if (!result.ok) {
         return { ok: false, error: result.error };
       }
@@ -208,8 +222,8 @@ export const kbRouter = t.router({
       return { kbId: r.kbId.trim() };
     })
     .mutation(async ({ input }): Promise<UnmountResult> => {
-      const project = requireProject('default');
-      const result = await kbRegistry.unmount(input.kbId, project.rootPath);
+      const rootPath = getActiveProjectRoot();
+      const result = await kbRegistry.unmount(input.kbId, rootPath);
       if (!result.ok) {
         return { ok: false, error: result.error };
       }
@@ -223,8 +237,8 @@ export const kbRouter = t.router({
       return {};
     })
     .query(async () => {
-      const project = requireProject('default');
-      return kbRegistry.status(project.rootPath);
+      const rootPath = getActiveProjectRoot();
+      return kbRegistry.status(rootPath);
     }),
 
   // ─── kb.upload ────────────────────────────────────────────
@@ -386,12 +400,16 @@ export const kbRouter = t.router({
     })
     .mutation(async (): Promise<{ ok: true; sessionId: string; documentCount: number } | { ok: false; error: { code: string; message: string } }> => {
       const kbPath = await getMountedKbPath();
-      const project = requireProject('default');
+      const rootPath = getActiveProjectRoot();
+      const project = projectManager.getProjectByPath(rootPath);
+      if (!project) {
+        return { ok: false, error: { code: 'noProject', message: '未找到活跃项目' } };
+      }
 
       const result = await deepReindex({
         kbPath,
         projectId: project.id,
-        cwd: project.rootPath,
+        cwd: rootPath,
         notify: notifyKbDeepReindex,
       });
 
