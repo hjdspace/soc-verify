@@ -22,6 +22,7 @@ import { getCombinedDefaultSystemPrompt } from '../../agent/default-system-promp
 import { loadTvConfig, saveTvConfig } from '../../timing-violation/tv-config';
 import { evictTvDb } from '../../timing-violation/db/tv-db-cache';
 import { contextSettings } from '../../agent/context-settings';
+import { themeSettings } from '../../agent/theme-settings';
 import type { TvConfig } from '../../timing-violation/types';
 import type { CredentialInput, CredentialUpdateInput, CreateSkillInput, McpConfigFile, McpToolInfo } from '@shared/types';
 import { MAX_CONTEXT_WINDOW, MIN_CONTEXT_WINDOW } from '@shared/context-management';
@@ -45,6 +46,22 @@ export const settingsRouter = t.router({
     .mutation(async ({ input }) => {
       await contextSettings.setContextWindow(input.contextWindow);
       return { contextWindow: input.contextWindow };
+    }),
+
+  // ── 主题持久化（文件级，确保重启后恢复） ───────────────────
+  getTheme: t.procedure.query(() => themeSettings.getTheme()),
+
+  setTheme: t.procedure
+    .input((raw): { theme: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.theme !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'theme is required' });
+      }
+      return { theme: r.theme };
+    })
+    .mutation(async ({ input }) => {
+      await themeSettings.setTheme(input.theme);
+      return { ok: true };
     }),
 
   getCredentials: t.procedure.query(() => {
