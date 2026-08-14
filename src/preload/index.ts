@@ -377,5 +377,30 @@ process.once('loaded', async () => {
       ipcRenderer.on('kb:docStatus', handler);
       return () => ipcRenderer.removeListener('kb:docStatus', handler);
     },
+
+    // ── 知识库深度重建进度事件（Issue #7）────────────────────────
+    // kb:deepReindex —— 主进程推送深度重建进度（processing/completed/failed）
+    onKbDeepReindex: (
+      callback: (data: {
+        phase: 'processing' | 'completed' | 'failed';
+        current?: number;
+        total?: number;
+        message: string;
+        error?: string;
+      }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: {
+          phase: 'processing' | 'completed' | 'failed';
+          current?: number;
+          total?: number;
+          message: string;
+          error?: string;
+        },
+      ) => callback(data);
+      ipcRenderer.on('kb:deepReindex', handler);
+      return () => ipcRenderer.removeListener('kb:deepReindex', handler);
+    },
   });
 });

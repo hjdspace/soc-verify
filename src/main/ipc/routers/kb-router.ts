@@ -38,6 +38,7 @@ import {
   readMarkdownDoc,
   moveDocumentCategory,
 } from '../../kb/pipeline';
+import { deepReindex, type DeepReindexEvent } from '../../kb/deep-reindexer';
 import type { LlmConfig } from '../../kb/indexer';
 import { credentialManager } from '../../credentials/credential-manager';
 import { ensureV1Prefix } from '../../agent/openai-compatible';
@@ -103,6 +104,17 @@ function notifyKbStatus(event: KbDocStatusEvent): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       win.webContents.send('kb:docStatus', event);
+    }
+  }
+}
+
+/**
+ * 推送深度重建进度事件到所有窗口。
+ */
+function notifyKbDeepReindex(event: DeepReindexEvent): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('kb:deepReindex', event);
     }
   }
 }
@@ -364,5 +376,28 @@ export const kbRouter = t.router({
         return { ok: false, error: { code: 'notFound', message: `文档未找到: ${input.name}` } };
       }
       return { ok: true, newPath };
+    }),
+
+  // ─── kb.deepReindex ────────────────────────────────────────
+
+  deepReindex: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .mutation(async (): Promise<{ ok: true; sessionId: string; documentCount: number } | { ok: false; error: { code: string; message: string } }> => {
+      const kbPath = await getMountedKbPath();
+      const project = requireProject('default');
+
+      const result = await deepReindex({
+        kbPath,
+        projectId: project.id,
+        cwd: project.rootPath,
+        notify: notifyKbDeepReindex,
+      });
+
+      if (result.ok) {
+        return { ok: true, sessionId: result.sessionId, documentCount: result.documentCount };
+      }
+      return { ok: false, error: result.error };
     }),
 });

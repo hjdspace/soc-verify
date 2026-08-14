@@ -170,6 +170,7 @@ beforeEach(() => {
         if (idx >= 0) kbDocStatusCallbacks.splice(idx, 1);
       };
     },
+    onKbDeepReindex: () => () => {},
   };
 });
 
@@ -697,6 +698,79 @@ describe('KbView', () => {
       await waitFor(() => {
         expect(screen.getByText('保存')).toBeTruthy();
         expect(screen.getByText('取消')).toBeTruthy();
+      });
+    });
+
+    // ── 深度重建按钮（Issue #7）──────────────────────────────
+
+    it('renders deep reindex button in index tab', async () => {
+      render(<KbView />);
+
+      await waitFor(() => {
+        expect(screen.getByText('库索引 index.md')).toBeTruthy();
+      });
+      fireEvent.click(screen.getByText('库索引 index.md'));
+
+      await waitFor(() => {
+        expect(screen.getByText('深度重建')).toBeTruthy();
+      });
+    });
+
+    it('shows confirmation dialog when deep reindex button clicked', async () => {
+      render(<KbView />);
+
+      await waitFor(() => {
+        expect(screen.getByText('库索引 index.md')).toBeTruthy();
+      });
+      fireEvent.click(screen.getByText('库索引 index.md'));
+
+      await waitFor(() => {
+        expect(screen.getByText('深度重建')).toBeTruthy();
+      });
+      fireEvent.click(screen.getByText('深度重建'));
+
+      await waitFor(() => {
+        expect(screen.getByText('确认深度重建索引？')).toBeTruthy();
+        expect(screen.getByText('确认重建')).toBeTruthy();
+      });
+    });
+
+    it('closes confirmation dialog on cancel', async () => {
+      render(<KbView />);
+
+      await waitFor(() => {
+        expect(screen.getByText('库索引 index.md')).toBeTruthy();
+      });
+      fireEvent.click(screen.getByText('库索引 index.md'));
+
+      await waitFor(() => {
+        expect(screen.getByText('深度重建')).toBeTruthy();
+      });
+      fireEvent.click(screen.getByText('深度重建'));
+
+      await waitFor(() => {
+        expect(screen.getByText('确认深度重建索引？')).toBeTruthy();
+      });
+      fireEvent.click(screen.getByText('取消'));
+
+      await waitFor(() => {
+        expect(screen.queryByText('确认深度重建索引？')).toBeNull();
+      });
+    });
+
+    it('shows deep reindexing state when in progress', async () => {
+      useKbStore.setState({
+        kbStatus: mockKbStatus,
+        activeTab: 'index',
+        indexContent: '# 知识库索引',
+        deepReindexing: true,
+        deepReindexProgress: { current: 2, total: 5, message: '正在处理第 2/5 篇文档' },
+      });
+
+      render(<KbView />);
+
+      await waitFor(() => {
+        expect(screen.getByText('深度重建中...')).toBeTruthy();
       });
     });
 

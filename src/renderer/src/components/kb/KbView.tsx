@@ -28,6 +28,7 @@ export function KbView() {
   const loadCategories = useKbStore((s) => s.loadCategories);
   const loadDocuments = useKbStore((s) => s.loadDocuments);
   const handleDocStatusEvent = useKbStore((s) => s.handleDocStatusEvent);
+  const handleDeepReindexEvent = useKbStore((s) => s.handleDeepReindexEvent);
   const kbModalOpen = useKbStore((s) => s.kbModalOpen);
   const activeTab = useKbStore((s) => s.activeTab);
   const setActiveTab = useKbStore((s) => s.setActiveTab);
@@ -62,6 +63,15 @@ export function KbView() {
     });
     return unlisten;
   }, [handleDocStatusEvent]);
+
+  // ─── 订阅 kb:deepReindex 事件（Issue #7）─────────────────
+  useEffect(() => {
+    if (!window.eventBridge) return;
+    const unlisten = window.eventBridge.onKbDeepReindex((event) => {
+      handleDeepReindexEvent(event);
+    });
+    return unlisten;
+  }, [handleDeepReindexEvent]);
 
   const handleRefresh = useCallback(() => {
     void loadKbStatus();

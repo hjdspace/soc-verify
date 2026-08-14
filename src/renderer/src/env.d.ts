@@ -155,6 +155,16 @@ export interface EventBridgeAPI {
       category?: string;
     }) => void,
   ) => () => void;
+  // 知识库深度重建进度事件（Issue #7）
+  onKbDeepReindex: (
+    callback: (data: {
+      phase: 'processing' | 'completed' | 'failed';
+      current?: number;
+      total?: number;
+      message: string;
+      error?: string;
+    }) => void,
+  ) => () => void;
 }
 
 declare global {

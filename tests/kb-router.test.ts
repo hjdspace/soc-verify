@@ -69,6 +69,15 @@ vi.mock('../src/main/credentials/credential-manager', () => ({
   },
 }));
 
+// Mock deep-reindexer
+const { mockDeepReindex } = vi.hoisted(() => ({
+  mockDeepReindex: vi.fn() as ReturnType<typeof vi.fn>,
+}));
+
+vi.mock('../src/main/kb/deep-reindexer', () => ({
+  deepReindex: mockDeepReindex,
+}));
+
 // Mock @firecrawl/anydoc：converter 依赖
 const { toDocumentMock, toMarkdownBytesMock, formatFromPathMock } = vi.hoisted(() => ({
   toDocumentMock: vi.fn(),
@@ -882,6 +891,51 @@ describe('kb-router', () => {
       await expect(
         caller.moveCategory({ name: 'test' } as { name: string; category: string }),
       ).rejects.toThrow();
+    });
+  });
+
+  // ─── kb.deepReindex ────────────────────────────────────────
+
+  describe('kb.deepReindex', () => {
+    it('触发深度重建并返回成功', async () => {
+      const kbDir = makeEmptyKbDir('reindex-kb');
+      const regResult = await caller.register({ name: '重建库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      mockDeepReindex.mockResolvedValue({
+        ok: true,
+        sessionId: 'temp-session-1',
+        documentCount: 5,
+      });
+
+      const result = await caller.deepReindex({});
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.sessionId).toBe('temp-session-1');
+        expect(result.documentCount).toBe(5);
+      }
+    });
+
+    it('深度重建失败时返回错误', async () => {
+      const kbDir = makeEmptyKbDir('reindex-fail-kb');
+      const regResult = await caller.register({ name: '重建失败库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      mockDeepReindex.mockResolvedValue({
+        ok: false,
+        error: { code: 'sessionFailed', message: 'LLM 配置异常' },
+      });
+
+      const result = await caller.deepReindex({});
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('sessionFailed');
+        expect(result.error.message).toContain('LLM');
+      }
+    });
+
+    it('未挂载知识库时被拒绝', async () => {
+      await expect(caller.deepReindex({})).rejects.toThrow();
     });
   });
 });

@@ -14,7 +14,7 @@
 import { useEffect, useCallback, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { RefreshCw, Pencil, Save, X, Info } from 'lucide-react';
+import { RefreshCw, Pencil, Save, X, Info, Zap } from 'lucide-react';
 import { useKbStore } from '@renderer/stores/kb';
 
 export function KbIndexTab() {
@@ -27,6 +27,9 @@ export function KbIndexTab() {
   const setIndexEditing = useKbStore((s) => s.setIndexEditing);
   const openPreview = useKbStore((s) => s.openPreview);
   const documents = useKbStore((s) => s.documents);
+  const deepReindexing = useKbStore((s) => s.deepReindexing);
+  const deepReindexProgress = useKbStore((s) => s.deepReindexProgress);
+  const deepReindex = useKbStore((s) => s.deepReindex);
 
   const [editContent, setEditContent] = useState('');
 
@@ -47,6 +50,13 @@ export function KbIndexTab() {
     // 刷新索引内容
     void loadIndex();
   }, [loadIndex]);
+
+  // ── 深度重建（Issue #7）─────────────────────────────────
+  const [showDeepReindexConfirm, setShowDeepReindexConfirm] = useState(false);
+  const handleDeepReindex = useCallback(() => {
+    setShowDeepReindexConfirm(false);
+    void deepReindex();
+  }, [deepReindex]);
 
   // ── 保存编辑 ─────────────────────────────────────────────
   const handleSave = useCallback(() => {
@@ -101,6 +111,15 @@ export function KbIndexTab() {
               <Pencil className="h-3 w-3" />
               编辑
             </button>
+            <button
+              onClick={() => setShowDeepReindexConfirm(true)}
+              disabled={deepReindexing}
+              title="深度重建索引"
+              className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+            >
+              <Zap className={`h-3 w-3 ${deepReindexing ? 'animate-pulse text-primary' : ''}`} />
+              {deepReindexing ? '深度重建中...' : '深度重建'}
+            </button>
           </>
         ) : (
           <>
@@ -123,6 +142,46 @@ export function KbIndexTab() {
           </>
         )}
       </div>
+
+      {/* 深度重建确认对话框 */}
+      {showDeepReindexConfirm && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80" style={{ zIndex: 10 }}>
+          <div className="rounded-lg border border-border bg-card p-4 shadow-lg">
+            <p className="mb-2 text-sm font-medium">确认深度重建索引？</p>
+            <p className="mb-3 max-w-sm text-xs text-muted-foreground">
+              深度重建将创建临时 AI Agent 会话逐文档深读，耗时较长。完成后原索引将被原子替换。
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setShowDeepReindexConfirm(false)}
+                className="rounded px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleDeepReindex}
+                className="rounded bg-primary px-3 py-1 text-xs text-primary-foreground transition-colors hover:bg-primary/90"
+              >
+                确认重建
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 深度重建进度提示 */}
+      {deepReindexing && deepReindexProgress && (
+        <div className="border-b border-border bg-primary/5 px-4 py-1.5">
+          <span className="text-[11px] text-primary">
+            {deepReindexProgress.message}
+            {deepReindexProgress.total > 0 && (
+              <span className="ml-2 text-muted-foreground">
+                ({deepReindexProgress.current}/{deepReindexProgress.total})
+              </span>
+            )}
+          </span>
+        </div>
+      )}
 
       {/* 内容区 */}
       <div className="flex-1 overflow-y-auto p-4">
