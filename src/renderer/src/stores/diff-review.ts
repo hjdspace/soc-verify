@@ -17,7 +17,7 @@ import { useSessionStore, type ChatMessage } from './session';
 import { useWorkbenchStore, openFileDestination } from './workbench';
 import { useProjectStore } from './project';
 import type { DiffToolCall, DiffRejection, FileDiffResult } from '@shared/types';
-import { extractResultText } from '@renderer/components/chat/tool-helpers';
+import { extractResultText, hasResultWarning } from '@renderer/components/chat/tool-helpers';
 
 // ─── Types ──────────────────────────────────────────────────
 
@@ -238,6 +238,13 @@ function extractToolCallsFromMessage(msg: ChatMessage): DiffToolCall[] {
     return [];
   }
 
+  // 检查是否为 warning 结果（omp edit 工具在路径匹配失败时会返回 warning 而非 error）
+  // warning 结果意味着编辑未实际生效，不应进入 diff-review 队列
+  const resultText = extractResultText(msg.toolResult);
+  if (hasResultWarning(resultText)) {
+    return [];
+  }
+
   const oldText = typeof args.oldText === 'string'
     ? args.oldText
     : typeof args.old_string === 'string'
@@ -276,6 +283,11 @@ function extractToolCallsFromMessage(msg: ChatMessage): DiffToolCall[] {
   const edits = ompEdits.length > 0
     ? ompEdits
     : [{ oldText: finalOldText, newText: finalNewText }];
+
+  // 跳过无实际变更的编辑（oldText === newText 表示没有改动，会产生 +0 -0 的空 diff）
+  if (!isNewFile && edits.every((e) => e.oldText === e.newText)) {
+    return [];
+  }
 
   return edits.map((edit, index) => ({
     id: edits.length === 1 ? msg.id : `${msg.id}:${index}`,
