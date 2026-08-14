@@ -17,6 +17,7 @@ import { TodoPanel } from '@renderer/components/chat/TodoPanel';
 import { ChangeSummaryBar } from '@renderer/components/chat/ChangeSummaryBar';
 import { getLatestTodoState } from '@renderer/components/chat/tool-helpers';
 import { useTodoPanelStore } from '@renderer/stores/todo-panel';
+import { ComposerEditor, type ChipData, type ComposerEditorApi } from './ComposerEditor';
 
 interface RightPanelProps {
   width: number;
@@ -80,7 +81,7 @@ export function RightPanel({ width }: RightPanelProps) {
   const addContextFile = useSessionStore((s) => s.addContextFile);
   const removeContextFile = useSessionStore((s) => s.removeContextFile);
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editorApiRef = useRef<ComposerEditorApi | null>(null);
 
   const steerSession = useSessionStore((s) => s.steerSession);
   const setModel = useSessionStore((s) => s.setModel);
@@ -169,10 +170,14 @@ export function RightPanel({ width }: RightPanelProps) {
     // waiting for the async sendMessage to resolve.
     const images = attachedImages.length > 0 ? attachedImages : undefined;
     setAttachedImages([]);
-    await sendMessage(inputMessage, images);
+    const text = inputMessage;
+    editorApiRef.current?.clear();
+    await sendMessage(text, images);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // IME 组合中的按键（如中文选词的 Enter）不触发导航/发送
+    if (e.nativeEvent.isComposing) return;
     // Handle skill dropdown navigation
     if (showSkillDropdown && filteredSkills.length > 0) {
       if (e.key === 'ArrowDown') {
@@ -357,7 +362,7 @@ export function RightPanel({ width }: RightPanelProps) {
   };
 
   // ── Paste images via Ctrl-V ───────────────────────────────────
-  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+  const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
     const items = e.clipboardData?.items;
     if (!items) return;
 
@@ -449,9 +454,7 @@ export function RightPanel({ width }: RightPanelProps) {
   const filteredSkills = useMemo(() => {
     if (!skillSearch) return availableSkills;
     const q = skillSearch.toLowerCase();
-    return availableSkills.filter((s) =>
-      s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q),
-    );
+    return availableSkills.filter((s) => s.name.toLowerCase().includes(q));
   }, [availableSkills, skillSearch]);
 
   // ── File search (debounced) ────────────────────────────
@@ -482,16 +485,12 @@ export function RightPanel({ width }: RightPanelProps) {
     };
   }, [fileSearch, showFileDropdown, performFileSearch]);
 
-  // ── Input change with slash/@ detection ────────────────
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value;
-    setInputMessage(value);
+  // ── Editor input with slash/@ detection ────────────────
+  const handleEditorInput = (text: string, textBeforeCaret: string) => {
+    setInputMessage(text);
 
-    const cursorPos = e.target.selectionStart;
-    const textBeforeCursor = value.slice(0, cursorPos);
-
-    // Check for slash command trigger: `/` at start or after whitespace
-    const slashMatch = textBeforeCursor.match(/(?:^|\s)\/(\S*)$/);
+    // Check for slash command trigger: `/` anywhere before caret
+    const slashMatch = textBeforeCaret.match(/\/(\S*)$/);
     if (slashMatch) {
       setSkillSearch(slashMatch[1]);
       setShowSkillDropdown(true);
@@ -500,8 +499,8 @@ export function RightPanel({ width }: RightPanelProps) {
       return;
     }
 
-    // Check for @ mention trigger: `@` at start or after whitespace
-    const atMatch = textBeforeCursor.match(/(?:^|\s)@(\S*)$/);
+    // Check for @ mention trigger: `@` anywhere before caret
+    const atMatch = textBeforeCaret.match(/@(\S*)$/);
     if (atMatch) {
       setFileSearch(atMatch[1]);
       setShowFileDropdown(true);
@@ -514,40 +513,48 @@ export function RightPanel({ width }: RightPanelProps) {
     if (showFileDropdown) setShowFileDropdown(false);
   };
 
+  // ── Chip set reconciliation (X 点击 / Backspace 删除 chip 时同步 store) ──
+  const handleChipsChange = (chips: ChipData[]) => {
+    const skillNames = new Set(chips.filter((c) => c.kind === 'skill').map((c) => c.name ?? c.label));
+    const filePaths = new Set(chips.filter((c) => c.kind === 'file').map((c) => c.path ?? c.label));
+    for (const s of selectedSkills) {
+      if (!skillNames.has(s.name)) removeSkill(s.name);
+    }
+    for (const f of contextFiles) {
+      if (!filePaths.has(f.path)) removeContextFile(f.path);
+    }
+  };
+
+  // ── Session switch: restore editor content (snapshot 优先，保留 chip 行内位置) ──
+  useEffect(() => {
+    if (!currentSessionId) {
+      // 无会话时清空编辑器（与会话快照无关，切回原会话仍可恢复草稿）
+      editorApiRef.current?.clear();
+      return;
+    }
+    const sess = useSessionStore.getState().sessions.find((s) => s.id === currentSessionId);
+    const composer = sess?.composer;
+    const fallbackChips: ChipData[] = [
+      ...(composer?.selectedSkills ?? []).map((s): ChipData => ({ kind: 'skill', label: s.name, name: s.name })),
+      ...(composer?.contextFiles ?? []).map((f): ChipData => ({ kind: 'file', label: f.name, path: f.path, fileType: f.type })),
+    ];
+    editorApiRef.current?.restore(currentSessionId, composer?.inputMessage ?? '', fallbackChips);
+  }, [currentSessionId]);
+
   // ── Skill selection ────────────────────────────────────
   const handleSelectSkill = (skill: SelectedSkill) => {
+    editorApiRef.current?.insertChip({ kind: 'skill', label: skill.name, name: skill.name }, /\/\S*$/);
     addSkill(skill);
-    const value = inputMessage;
-    const cursorPos = textareaRef.current?.selectionStart ?? value.length;
-    const textBeforeCursor = value.slice(0, cursorPos);
-    const textAfterCursor = value.slice(cursorPos);
-    const slashMatch = textBeforeCursor.match(/(?:^|\s)\/\S*$/);
-    if (slashMatch) {
-      const prefix = slashMatch[0].startsWith(' ') ? ' ' : '';
-      const newText = textBeforeCursor.slice(0, slashMatch.index) + prefix + textAfterCursor;
-      setInputMessage(newText);
-    }
     setShowSkillDropdown(false);
     setSkillSearch('');
-    textareaRef.current?.focus();
   };
 
   // ── File selection ─────────────────────────────────────
   const handleSelectFile = (file: ContextFile) => {
+    editorApiRef.current?.insertChip({ kind: 'file', label: file.name, path: file.path, fileType: file.type }, /@\S*$/);
     addContextFile(file);
-    const value = inputMessage;
-    const cursorPos = textareaRef.current?.selectionStart ?? value.length;
-    const textBeforeCursor = value.slice(0, cursorPos);
-    const textAfterCursor = value.slice(cursorPos);
-    const atMatch = textBeforeCursor.match(/(?:^|\s)@\S*$/);
-    if (atMatch) {
-      const prefix = atMatch[0].startsWith(' ') ? ' ' : '';
-      const newText = textBeforeCursor.slice(0, atMatch.index) + prefix + textAfterCursor;
-      setInputMessage(newText);
-    }
     setShowFileDropdown(false);
     setFileSearch('');
-    textareaRef.current?.focus();
   };
 
   return (
@@ -815,46 +822,6 @@ export function RightPanel({ width }: RightPanelProps) {
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
-          {/* ── Chips: Skills & Context Files ─────────────── */}
-          {(selectedSkills.length > 0 || contextFiles.length > 0) && (
-            <div className="flex flex-wrap gap-1 pb-1">
-              {selectedSkills.map((skill) => (
-                <span
-                  key={`skill-${skill.name}`}
-                  className="inline-flex items-center gap-1 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary"
-                >
-                  <Sparkles className="h-2.5 w-2.5" />
-                  <span className="max-w-[120px] truncate font-medium">{skill.name}</span>
-                  <button
-                    onClick={() => removeSkill(skill.name)}
-                    className="rounded-sm hover:bg-primary/20"
-                  >
-                    <X className="h-2.5 w-2.5" />
-                  </button>
-                </span>
-              ))}
-              {contextFiles.map((file) => (
-                <span
-                  key={`ctx-${file.path}`}
-                  className="inline-flex items-center gap-1 rounded bg-accent px-1.5 py-0.5 text-[10px] text-foreground"
-                >
-                  {file.type === 'directory' ? (
-                    <Folder className="h-2.5 w-2.5 text-muted-foreground" />
-                  ) : (
-                    <FileText className="h-2.5 w-2.5 text-muted-foreground" />
-                  )}
-                  <span className="max-w-[150px] truncate font-medium">{file.name}</span>
-                  <button
-                    onClick={() => removeContextFile(file.path)}
-                    className="rounded-sm hover:bg-accent/80"
-                  >
-                    <X className="h-2.5 w-2.5" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-
           {/* ── Skill dropdown ────────────────────────────── */}
           {showSkillDropdown && (
             <>
@@ -954,16 +921,17 @@ export function RightPanel({ width }: RightPanelProps) {
             </>
           )}
 
-          <textarea
-            ref={textareaRef}
-            value={inputMessage}
-            onChange={handleInputChange}
+          {/* ── 行内 chip 编辑器：技能/上下文 chip 嵌入文本流中光标位置 ── */}
+          <ComposerEditor
+            sessionId={currentSessionId ?? ''}
+            disabled={!currentSessionId || isCurrentSessionCreating}
+            placeholder={currentSessionId ? '输入消息... ("/" 加载技能, "@" 添加上下文)' : '请先创建会话'}
+            className="composer-editor min-h-[60px] max-h-[140px] overflow-y-auto whitespace-pre-wrap break-words px-0.5 py-1 text-xs leading-4 text-foreground outline-none"
+            onInput={handleEditorInput}
+            onChipsChange={handleChipsChange}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder={currentSessionId ? '输入消息... ("/" 加载技能, "@" 添加上下文)' : '请先创建会话'}
-            disabled={!currentSessionId || isCurrentSessionCreating}
-            rows={3}
-            className="resize-none bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-50"
+            apiRef={editorApiRef}
           />
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1">

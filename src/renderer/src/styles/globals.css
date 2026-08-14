@@ -707,3 +707,10 @@ body {
 .mermaid-modal-svg > svg {
   filter: drop-shadow(0 2px 12px rgba(0, 0, 0, 0.4));
 }
+
+/* ── 会话输入框（contentEditable chip 编辑器）占位符 ───────────── */
+.composer-editor:empty::before {
+  content: attr(data-placeholder);
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
