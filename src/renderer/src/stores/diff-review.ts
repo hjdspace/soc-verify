@@ -163,6 +163,43 @@ function normalizeFilePath(filePath: string): string {
   return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
+// URI scheme 前缀（case://、local:// 等），不是文件系统路径，不指向项目内文件
+const FILE_URI_SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//;
+
+/**
+ * 将（可能为相对）的文件路径解析为项目根内的绝对路径。
+ * - 相对路径按项目根解析；绝对路径（盘符）原样使用。
+ * - 解析后不在项目根内、是 URI scheme 路径、或无法解析时返回 null。
+ * - 返回统一使用正斜杠的绝对路径（含盘符）。
+ */
+function resolveInsideProject(rawPath: string, rootPath: string): string | null {
+  const normalized = rawPath.replace(/\\/g, '/');
+  if (FILE_URI_SCHEME_RE.test(normalized)) return null;
+
+  const root = rootPath.replace(/\\/g, '/').replace(/\/+$/, '');
+  const isAbsolute = /^[A-Za-z]:\//.test(normalized);
+  const segments = [...(isAbsolute ? [] : root.split('/')), ...normalized.split('/')];
+
+  const resolved: string[] = [];
+  for (const segment of segments) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') {
+      resolved.pop();
+      continue;
+    }
+    resolved.push(segment);
+  }
+  if (resolved.length === 0) return null;
+
+  const absolute = resolved.join('/');
+  // Windows 下路径大小写不敏感
+  const lowerAbsolute = absolute.toLowerCase();
+  const lowerRoot = root.toLowerCase();
+  if (lowerAbsolute === lowerRoot) return null;
+  if (!lowerAbsolute.startsWith(`${lowerRoot}/`)) return null;
+  return absolute;
+}
+
 function sameFilePath(left: string, right: string): boolean {
   return normalizeFilePath(left) === normalizeFilePath(right);
 }
@@ -207,13 +244,16 @@ function extractToolCallsFromMessage(msg: ChatMessage): DiffToolCall[] {
   const resultDetails = extractResultDetails(msg.toolResult);
 
   // The successful result path is authoritative and normally absolute.
+  // omp write 成功时返回 details.resolvedPath（解析后的绝对路径），omp edit 返回 details.path。
   let filePath = typeof resultDetails?.path === 'string'
     ? resultDetails.path
-    : typeof args.path === 'string'
-    ? args.path
-    : typeof args.file_path === 'string'
-      ? args.file_path
-      : null;
+    : typeof resultDetails?.resolvedPath === 'string'
+      ? resultDetails.resolvedPath
+      : typeof args.path === 'string'
+      ? args.path
+      : typeof args.file_path === 'string'
+        ? args.file_path
+        : null;
 
   // If not found, try omp edit format: extract from result text first (has absolute path),
   // then input field (may only have filename)
@@ -239,6 +279,12 @@ function extractToolCallsFromMessage(msg: ChatMessage): DiffToolCall[] {
   // warning 结果意味着编辑未实际生效，不应进入 diff-review 队列
   const resultText = extractResultText(msg.toolResult);
   if (hasResultWarning(resultText)) {
+    return [];
+  }
+
+  // omp write 工具成功时总是返回 details.resolvedPath（写入目标解析后的绝对路径）。
+  // 缺少该字段说明写入失败（如 EISDIR / 校验错误），没有产生实际文件改动，不应进入审阅队列。
+  if (name === 'write' && typeof resultDetails?.resolvedPath !== 'string') {
     return [];
   }
 
@@ -302,6 +348,10 @@ function extractToolCallsFromMessage(msg: ChatMessage): DiffToolCall[] {
 function aggregateQueue(reviewedFiles: Set<string>): ReviewEntry[] {
   // 只聚合当前项目的会话，避免切换项目后旧项目的 diff-review 队列残留
   const currentProjectId = useProjectStore.getState().currentProjectId;
+  const currentProject = currentProjectId
+    ? useProjectStore.getState().projects.find((p) => p.id === currentProjectId)
+    : undefined;
+  const rootPath = currentProject?.rootPath ?? null;
   const sessions = useSessionStore.getState().sessions;
   const relevantSessions = currentProjectId
     ? sessions.filter((s) => s.projectId === currentProjectId)
@@ -312,9 +362,12 @@ function aggregateQueue(reviewedFiles: Set<string>): ReviewEntry[] {
     for (const msg of session.messages) {
       if (msg.role !== 'tool') continue;
       for (const tc of extractToolCallsFromMessage(msg)) {
-        const key = normalizeFilePath(tc.filePath);
-        const existing = byFile.get(key) ?? { filePath: tc.filePath, toolCalls: [] };
-        existing.toolCalls.push(tc);
+        // 相对路径按项目根解析并校验在项目根内，避免队列里出现后端无法接受的路径。
+        const absolutePath = rootPath ? resolveInsideProject(tc.filePath, rootPath) : tc.filePath;
+        if (!absolutePath) continue;
+        const key = normalizeFilePath(absolutePath);
+        const existing = byFile.get(key) ?? { filePath: absolutePath, toolCalls: [] };
+        existing.toolCalls.push({ ...tc, filePath: absolutePath });
         byFile.set(key, existing);
       }
     }
@@ -619,15 +672,24 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
 // ─── Helpers ────────────────────────────────────────────────
 
 export function openReviewAwareFile(filePath: string, fileName: string): void {
+  // 工具卡片中的路径可能是相对路径（如 README.md、src-tauri/tauri.conf.json），
+  // 先解析为项目根内的绝对路径，避免以相对路径打开文件导致后端校验失败。
+  const currentProjectId = useProjectStore.getState().currentProjectId;
+  const currentProject = currentProjectId
+    ? useProjectStore.getState().projects.find((p) => p.id === currentProjectId)
+    : undefined;
+  const rootPath = currentProject?.rootPath ?? null;
+  const resolvedPath = rootPath ? resolveInsideProject(filePath, rootPath) ?? filePath : filePath;
+
   const reviewStore = useDiffReviewStore.getState();
   const pendingEntry = reviewStore.queue.find((entry) =>
-    !entry.reviewed && sameFilePath(entry.filePath, filePath),
+    !entry.reviewed && sameFilePath(entry.filePath, resolvedPath),
   );
   if (pendingEntry) {
     reviewStore.openFile(pendingEntry.filePath);
     return;
   }
-  openFileDestination(useWorkbenchStore.getState().open, filePath, fileName);
+  openFileDestination(useWorkbenchStore.getState().open, resolvedPath, fileName);
 }
 
 /**
