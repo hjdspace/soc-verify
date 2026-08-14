@@ -130,7 +130,7 @@ export type EdaToolConfig = {
   csvCommand?: string;
   /** 测试用例贡献度分析命令（urg -grade testfile / imc report -test） */
   gradeCommand?: string;
-  /** Covergroup bin 级覆盖详情命令（imc report -bins / urg -detail） */
+  /** Covergroup bin 级覆盖详情命令（imc report -detail -metrics functional / urg -detail） */
   binsCommand?: string;
 };
 
@@ -146,7 +146,7 @@ export type EdaToolConfig = {
  * Cadence IMC 工具说明：
  *   - IMC 通过 TCL `report` 子命令生成文本报告，用 `-execcmd` 直接执行单条命令
  *   - `report -test` 生成按测试用例的覆盖率贡献分析（等效 urg -grade testfile）
- *   - `report -bins` 生成 covergroup bin 级覆盖详情
+ *   - `report -detail -metrics functional` 生成 covergroup bin 级覆盖详情
  *   - IMC 不支持 CSV 格式输出，csvCommand 为 undefined
  */
 export const DEFAULT_EDA_COMMANDS: Readonly<Record<Exclude<EdaTool, 'unknown'>, EdaToolConfig>> = {
@@ -158,13 +158,12 @@ export const DEFAULT_EDA_COMMANDS: Readonly<Record<Exclude<EdaTool, 'unknown'>, 
     detailCommand:
       'imc -load {covMergeDir} -execcmd "report -detail -all -out {reportDir}/detail.txt"',
     metricsCommand:
-      // report_metrics 生成 HTML 目录而非文本文件，改用 report -metrics 获取文本格式
-      'imc -load {covMergeDir} -execcmd "report -metrics -out {reportDir}/metrics.txt"',
+      'imc -load {covMergeDir} -execcmd "report -metrics overall -out {reportDir}/metrics.txt"',
     // IMC 不支持 CSV 格式，不设 csvCommand
     gradeCommand:
       'imc -load {covMergeDir} -execcmd "report -test -out {reportDir}/grade.txt"',
     binsCommand:
-      'imc -load {covMergeDir} -execcmd "report -bins -out {reportDir}/bins.txt"',
+      'imc -load {covMergeDir} -execcmd "report -detail -metrics functional -all -out {reportDir}/bins.txt"',
   },
   'vcs-urg': {
     tool: 'vcs-urg',

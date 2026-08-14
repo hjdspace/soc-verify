@@ -66,11 +66,7 @@ export async function parseCoverageInWorker(
         var mod = require(workerData.pluginPath);
         var plugin = mod && mod.default ? mod.default : (mod && mod.plugin ? mod.plugin : mod);
         if (!plugin || typeof plugin.parse !== 'function') {
-          parentPort.postMessage({
-            success: false,
-            error: 'Plugin does not export a parse function: ' + workerData.pluginPath
-          });
-          return;
+          throw new Error('Plugin does not export a parse function: ' + workerData.pluginPath);
         }
         var result = plugin.parse(workerData.projectRoot, workerData.sessionId, workerData.reportDir);
         Promise.resolve(result).then(function(data) {

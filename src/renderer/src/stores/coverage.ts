@@ -168,7 +168,7 @@ interface CoverageStoreState {
   /** coverage:import-progress 监听器是否已注册 */
   importProgressListenerRegistered: boolean;
 
-  // ─── 覆盖率深度分析（urg -grade / imc report -bins / CSV） ──────
+  // ─── 覆盖率深度分析（urg -grade / imc functional detail / CSV） ─
   /** 测试用例贡献度排名 */
   testContributions: TestContribution[];
   /** 未覆盖项列表（按 metric 分组） */

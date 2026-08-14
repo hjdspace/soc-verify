@@ -141,7 +141,7 @@ export interface GeneratedReports {
   csvPath?: string;
   /** 测试用例贡献度报告路径（urg -grade testfile / imc report -test） */
   gradePath?: string;
-  /** Covergroup bin 级报告路径（imc report -bins） */
+  /** Covergroup bin 级报告路径（imc report -detail -metrics functional） */
   binsPath?: string;
   /** EDA 命令执行日志（用于 debug） */
   commandLog: CommandLogEntry[];

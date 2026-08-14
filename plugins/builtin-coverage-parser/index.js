@@ -237,6 +237,75 @@ function parseImcSummary(text, log) {
 }
 
 /**
+ * 解析 IMC 24.09 的层级 summary 表格。
+ *
+ * 该格式把覆盖率放在每个层级实例的一行，而不是按 metric 一行：
+ *   name  Overall Average  Overall Covered  Code Average  Code Covered ...
+ *   |--dut 94.13% 94.13% (353/375) ...
+ * Code/Fsm 是 IMC 的聚合列，映射到平台最接近的 line/fsm_state 指标，
+ * 同时保留 covered/total，供覆盖率树和中间页面渲染。
+ */
+function parseImcHierarchySummary(text, log) {
+  if (!text) return null;
+  var lines = text.split('\n');
+  var headerIndex = -1;
+  var header;
+  for (var i = 0; i < lines.length; i++) {
+    if (/^\s*name\s+/i.test(lines[i]) && /overall\s+average/i.test(lines[i]) &&
+        /code\s+covered/i.test(lines[i])) {
+      headerIndex = i;
+      header = lines[i];
+      break;
+    }
+  }
+  if (headerIndex < 0 || !header) return null;
+
+  function triplet(averageText, coveredText) {
+    var counts = parseCoveredTotal(coveredText);
+    var percentage = parsePercent(coveredText);
+    if (percentage === null) percentage = parsePercent(averageText);
+    if (percentage === null && !counts) return naTriplet();
+    return {
+      percentage: percentage,
+      covered: counts ? counts.covered : null,
+      total: counts ? counts.total : null,
+    };
+  }
+
+  var nodes = [];
+  for (i = headerIndex + 1; i < lines.length; i++) {
+    var line = lines[i];
+    if (!line.trim() || /^\s*[-=+_#|~]+\s*$/.test(line)) continue;
+    var valuePattern = /n\/a|[\d.]+%\s*(?:\(\s*\d+\s*\/\s*\d+\s*\))?/gi;
+    var valueMatch = valuePattern.exec(line);
+    if (!valueMatch) continue;
+    var rawName = line.substring(0, valueMatch.index).trim();
+    if (!rawName || /^name$/i.test(rawName)) continue;
+
+    var values = [valueMatch[0]];
+    while ((valueMatch = valuePattern.exec(line)) !== null) values.push(valueMatch[0]);
+    if (values.length < 8) continue;
+
+    var prefix = rawName.match(/^(?:[|+`]\s*(?:--)?\s*)+/);
+    var depth = prefix ? (prefix[0].match(/[|+`]/g) || []).length : 0;
+    var name = (prefix ? rawName.substring(prefix[0].length) : rawName).trim();
+    if (!name) continue;
+
+    var metrics = emptyMetrics();
+    metrics.line = triplet(values[2], values[3]);
+    metrics.fsm_state = triplet(values[4], values[5]);
+    metrics.functional = triplet(values[6], values[7]);
+    nodes.push({ name: name, depth: depth, metrics: metrics, children: [] });
+  }
+
+  if (nodes.length === 0) return null;
+  var tree = buildHierarchyTree(nodes, log);
+  if (!tree) return null;
+  log('[parseImcHierarchySummary] Parsed ' + nodes.length + ' hierarchy nodes');
+  return { tree: tree, metrics: nodes[0].metrics };
+}
+
+/**
  * 从一行文本中尝试提取 metric 名称和覆盖率值。
  * 返回 { key: metricKey, triplet: {percentage, covered, total} } 或 null。
  */
@@ -867,7 +936,7 @@ function parseGradeReport(text, log) {
 // ─── Covergroup Bin 级报告解析 ─────────────────────────────────
 
 /**
- * 解析 IMC report -bins 输出，提取未覆盖的 bin 列表。
+ * 解析 IMC report -detail -metrics functional 输出，提取未覆盖的 bin 列表。
  *
  * 输出格式示例：
  *   Covergroup: my_cg
@@ -1031,12 +1100,14 @@ async function parse(projectRoot, sessionId, reportDir) {
 
   // 3. 解析文本报告
   var summaryMetrics = null;
+  var summaryHierarchy = null;
   var detailResult = { nodes: [], tree: null };
 
   if (summaryText) {
     if (edaTool === 'imc') {
       log('[parse] Using IMC summary parser');
-      summaryMetrics = parseImcSummary(summaryText, log);
+      summaryHierarchy = parseImcHierarchySummary(summaryText, log);
+      summaryMetrics = summaryHierarchy ? summaryHierarchy.metrics : parseImcSummary(summaryText, log);
     } else if (edaTool === 'vcs-urg') {
       log('[parse] Using VCS urg summary parser');
       var urgResult = parseUrgReport(summaryText, log);
@@ -1116,6 +1187,9 @@ async function parse(projectRoot, sessionId, reportDir) {
     root = detailResult.tree;
     root.metrics = rootMetrics;
     log('[parse] Using detail tree as root, root.name=' + root.name + ', children=' + root.children.length);
+  } else if (summaryHierarchy) {
+    root = summaryHierarchy.tree;
+    log('[parse] Using summary hierarchy as root, root.name=' + root.name + ', children=' + root.children.length);
   } else {
     // 如果有扁平模块节点，构建层级树
     var children = [];

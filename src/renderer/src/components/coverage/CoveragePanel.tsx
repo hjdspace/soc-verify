@@ -1330,7 +1330,7 @@ function UncoveredSection({
       <div className="rounded border border-border bg-card p-4 text-center text-xs text-muted-foreground">
         暂无未覆盖项数据。
         <br />
-        需要使用 <code className="font-mono">imc report -bins</code>（Cadence）或 <code className="font-mono">urg -detail</code>（VCS）生成报告。
+        需要使用 <code className="font-mono">imc report -detail -metrics functional</code>（Cadence）或 <code className="font-mono">urg -detail</code>（VCS）生成报告。
       </div>
     );
   }

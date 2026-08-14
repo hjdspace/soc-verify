@@ -288,7 +288,7 @@ export const coverageRouter = t.router({
       return mgr.getTree(input.sessionId);
     }),
 
-  // ─── 覆盖率深度分析（urg -grade / imc report -bins / CSV） ──────
+  // ─── 覆盖率深度分析（urg -grade / imc functional detail / CSV） ─
 
   getUncovered: t.procedure
     .input((raw): { projectId: string; sessionId?: string; metric?: CoverageMetric } => {
