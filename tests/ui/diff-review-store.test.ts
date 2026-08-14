@@ -93,7 +93,7 @@ describe('Diff Review flow', () => {
       loadError: null,
       reviewedFiles: new Set(),
     });
-    useProjectStore.setState({ currentProjectId: 'project-1' });
+    useProjectStore.setState({ currentProjectId: 'project-1', projects: [] });
     useWorkbenchStore.setState({ tabs: [], activeTabId: null });
     vi.mocked(trpc.project.getFileDiff.query).mockReset();
   });
@@ -219,6 +219,76 @@ describe('Diff Review flow', () => {
     expect(useDiffReviewStore.getState().queue).toEqual([]);
   });
 
+  it('does not queue a failed omp write (EISDIR, no resolvedPath)', () => {
+    useSessionStore.setState({
+      sessions: [{
+        id: 'session-1',
+        projectId: 'project-1',
+        name: 'Agent conversation',
+        status: 'idle',
+        messages: [{
+          id: 'tool-write-eisdir',
+          role: 'tool',
+          content: '',
+          timestamp: 100,
+          toolName: 'write',
+          toolCallId: 'call-write-eisdir',
+          toolArgs: { path: 'README.md', content: '# TopDash' },
+          toolResult: {
+            content: [{ type: 'text', text: 'EISDIR: illegal operation on a directory, read' }],
+            details: {},
+          },
+        }],
+        composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
+        createdAt: 1,
+      }],
+    });
+
+    expect(useDiffReviewStore.getState().queue).toEqual([]);
+  });
+
+  it('resolves a cwd-relative result path into the project root for the review queue', () => {
+    useProjectStore.setState({
+      currentProjectId: 'project-1',
+      projects: [{ id: 'project-1', name: 'Project', rootPath: 'D:\\project', createdAt: 1, lastOpenedAt: 1 }],
+    });
+    useSessionStore.setState({
+      sessions: [{
+        id: 'session-1',
+        projectId: 'project-1',
+        name: 'Agent conversation',
+        status: 'idle',
+        messages: [completedOmpEditWithDetails('rtl/core.sv')],
+        composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
+        createdAt: 1,
+      }],
+    });
+
+    const queue = useDiffReviewStore.getState().queue;
+    expect(queue).toHaveLength(1);
+    expect(queue[0].filePath).toBe('D:/project/rtl/core.sv');
+  });
+
+  it('skips an edit whose resolved path lies outside the project root', () => {
+    useProjectStore.setState({
+      currentProjectId: 'project-1',
+      projects: [{ id: 'project-1', name: 'Project', rootPath: 'D:\\project', createdAt: 1, lastOpenedAt: 1 }],
+    });
+    useSessionStore.setState({
+      sessions: [{
+        id: 'session-1',
+        projectId: 'project-1',
+        name: 'Agent conversation',
+        status: 'idle',
+        messages: [completedOmpEditWithDetails('../outside.sv')],
+        composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
+        createdAt: 1,
+      }],
+    });
+
+    expect(useDiffReviewStore.getState().queue).toEqual([]);
+  });
+
   it('retains hunk decisions for Windows file paths when the Review Queue refreshes', () => {
     const filePath = 'D:\\project\\rtl\\core.sv';
     const message = completedEdit(filePath);
@@ -332,6 +402,42 @@ describe('Diff Review flow', () => {
     });
 
     openReviewAwareFile(filePath, 'core.sv');
+    await vi.waitFor(() => expect(useDiffReviewStore.getState().loading).toBe(false));
+
+    expect(useWorkbenchStore.getState().tabs[0]?.destination.type).toBe('diff-review');
+  });
+
+  it('resolves a relative path against the project root before opening a file tab', () => {
+    useProjectStore.setState({
+      currentProjectId: 'project-1',
+      projects: [{ id: 'project-1', name: 'Project', rootPath: 'D:\\project', createdAt: 1, lastOpenedAt: 1 }],
+    });
+
+    openReviewAwareFile('README.md', 'README.md');
+
+    expect(useWorkbenchStore.getState().tabs[0]?.destination).toEqual({
+      type: 'file',
+      path: 'D:/project/README.md',
+      name: 'README.md',
+    });
+  });
+
+  it('matches a relative clicked path against an absolute queue entry', async () => {
+    vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue({
+      filePath: 'D:/project/rtl/core.sv', isNewFile: false, lines: [], hunks: [], totalAdd: 0, totalDel: 0,
+    });
+    useProjectStore.setState({
+      currentProjectId: 'project-1',
+      projects: [{ id: 'project-1', name: 'Project', rootPath: 'D:\\project', createdAt: 1, lastOpenedAt: 1 }],
+    });
+    useSessionStore.setState({
+      sessions: [{
+        id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
+        messages: [completedEdit('rtl/core.sv')], composer: { inputMessage: '', selectedSkills: [], contextFiles: [] }, createdAt: 1,
+      }],
+    });
+
+    openReviewAwareFile('rtl/core.sv', 'core.sv');
     await vi.waitFor(() => expect(useDiffReviewStore.getState().loading).toBe(false));
 
     expect(useWorkbenchStore.getState().tabs[0]?.destination.type).toBe('diff-review');
