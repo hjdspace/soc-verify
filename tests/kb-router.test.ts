@@ -763,4 +763,125 @@ describe('kb-router', () => {
       await expect(caller.categories({})).rejects.toThrow();
     });
   });
+
+  // ─── kb.index ──────────────────────────────────────────────
+
+  describe('kb.index', () => {
+    it('读取 index.md 内容', async () => {
+      const kbDir = makeExistingKbDir('index-read-kb');
+      const regResult = await caller.register({ name: '索引读取库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      const result = await caller.index({});
+      expect(result.content).toContain('已有索引');
+    });
+
+    it('写入 index.md 内容', async () => {
+      const kbDir = makeEmptyKbDir('index-write-kb');
+      const regResult = await caller.register({ name: '索引写入库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      await caller.index({ content: '# 自定义索引\n\n## 测试\n' });
+
+      const result = await caller.index({});
+      expect(result.content).toContain('自定义索引');
+    });
+
+    it('未挂载知识库时被拒绝', async () => {
+      await expect(caller.index({})).rejects.toThrow();
+    });
+  });
+
+  // ─── kb.preview ────────────────────────────────────────────
+
+  describe('kb.preview', () => {
+    it('读取文档 Markdown 内容', async () => {
+      const kbDir = makeEmptyKbDir('preview-kb');
+      const regResult = await caller.register({ name: '预览库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      // 手动放入 docs/ Markdown
+      mkdirSync(join(kbDir, 'docs', '协议手册'), { recursive: true });
+      writeFileSync(join(kbDir, 'docs', '协议手册', 'test.md'), '# 测试文档\n\n内容', 'utf-8');
+
+      const result = await caller.preview({ name: 'test' });
+      expect(result.content).toContain('测试文档');
+    });
+
+    it('文档不存在时返回 null', async () => {
+      const kbDir = makeEmptyKbDir('preview-not-found-kb');
+      const regResult = await caller.register({ name: '预览不存在库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      const result = await caller.preview({ name: '不存在' });
+      expect(result.content).toBeNull();
+    });
+
+    it('未挂载知识库时被拒绝', async () => {
+      await expect(caller.preview({ name: 'test' })).rejects.toThrow();
+    });
+
+    it('缺少 name 参数抛出 BAD_REQUEST', async () => {
+      await expect(
+        caller.preview({} as { name: string }),
+      ).rejects.toThrow();
+    });
+  });
+
+  // ─── kb.moveCategory ───────────────────────────────────────
+
+  describe('kb.moveCategory', () => {
+    it('移动文档到新分类', async () => {
+      const kbDir = makeEmptyKbDir('move-kb');
+      const regResult = await caller.register({ name: '移动库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      // 创建初始分类和文档
+      mkdirSync(join(kbDir, 'docs', '旧分类'), { recursive: true });
+      writeFileSync(join(kbDir, 'docs', '旧分类', 'movetest.md'), '# 测试\n', 'utf-8');
+      writeFileSync(join(kbDir, 'index.md'), '# 知识库索引\n\n## 旧分类\n\n### 测试\n- **路径**: `旧分类/movetest.md`\n- **摘要**: 测试摘要\n', 'utf-8');
+
+      const result = await caller.moveCategory({ name: 'movetest', category: '新分类' });
+      expect(result.ok).toBe(true);
+
+      // 验证文件已移动
+      expect(existsSync(join(kbDir, 'docs', '新分类', 'movetest.md'))).toBe(true);
+      expect(existsSync(join(kbDir, 'docs', '旧分类', 'movetest.md'))).toBe(false);
+
+      // 验证 index.md 已更新
+      const indexContent = readFileSync(join(kbDir, 'index.md'), 'utf-8');
+      expect(indexContent).toContain('新分类');
+      expect(indexContent).toContain('新分类/movetest.md');
+    });
+
+    it('文档不存在时返回 notFound', async () => {
+      const kbDir = makeEmptyKbDir('move-not-found-kb');
+      const regResult = await caller.register({ name: '移动不存在库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      const result = await caller.moveCategory({ name: '不存在', category: '新分类' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('notFound');
+      }
+    });
+
+    it('未挂载知识库时被拒绝', async () => {
+      await expect(
+        caller.moveCategory({ name: 'test', category: 'cat' }),
+      ).rejects.toThrow();
+    });
+
+    it('缺少 name 参数抛出 BAD_REQUEST', async () => {
+      await expect(
+        caller.moveCategory({ category: 'cat' } as { name: string; category: string }),
+      ).rejects.toThrow();
+    });
+
+    it('缺少 category 参数抛出 BAD_REQUEST', async () => {
+      await expect(
+        caller.moveCategory({ name: 'test' } as { name: string; category: string }),
+      ).rejects.toThrow();
+    });
+  });
 });

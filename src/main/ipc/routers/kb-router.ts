@@ -33,6 +33,10 @@ import {
   deleteDocument,
   retryDocument,
   listCategories,
+  readIndexMd,
+  writeIndexMd,
+  readMarkdownDoc,
+  moveDocumentCategory,
 } from '../../kb/pipeline';
 import type { LlmConfig } from '../../kb/indexer';
 import { credentialManager } from '../../credentials/credential-manager';
@@ -299,5 +303,66 @@ export const kbRouter = t.router({
     .query(async (): Promise<KbCategory[]> => {
       const kbPath = await getMountedKbPath();
       return listCategories(kbPath);
+    }),
+
+  // ─── kb.index ──────────────────────────────────────────────
+
+  index: t.procedure
+    .input((raw): { content?: string } => {
+      const r = raw as Record<string, unknown>;
+      // If content is provided, it's a write; otherwise it's a read
+      if (r.content !== undefined && typeof r.content !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'content must be a string' });
+      }
+      return { content: r.content as string | undefined };
+    })
+    .mutation(async ({ input }): Promise<{ content: string }> => {
+      const kbPath = await getMountedKbPath();
+      if (input.content !== undefined) {
+        // Write mode
+        await writeIndexMd(kbPath, input.content);
+        return { content: input.content };
+      }
+      // Read mode
+      const content = await readIndexMd(kbPath);
+      return { content };
+    }),
+
+  // ─── kb.preview ────────────────────────────────────────────
+
+  preview: t.procedure
+    .input((raw): { name: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.name !== 'string' || r.name.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'name is required' });
+      }
+      return { name: r.name.trim() };
+    })
+    .query(async ({ input }): Promise<{ content: string | null }> => {
+      const kbPath = await getMountedKbPath();
+      const content = await readMarkdownDoc(kbPath, input.name);
+      return { content };
+    }),
+
+  // ─── kb.moveCategory ────────────────────────────────────────
+
+  moveCategory: t.procedure
+    .input((raw): { name: string; category: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.name !== 'string' || r.name.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'name is required' });
+      }
+      if (typeof r.category !== 'string' || r.category.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'category is required' });
+      }
+      return { name: r.name.trim(), category: r.category.trim() };
+    })
+    .mutation(async ({ input }): Promise<{ ok: true; newPath: string } | { ok: false; error: { code: string; message: string } }> => {
+      const kbPath = await getMountedKbPath();
+      const newPath = await moveDocumentCategory(kbPath, input.name, input.category);
+      if (newPath === null) {
+        return { ok: false, error: { code: 'notFound', message: `文档未找到: ${input.name}` } };
+      }
+      return { ok: true, newPath };
     }),
 });

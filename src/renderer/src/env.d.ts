@@ -145,6 +145,16 @@ export interface EventBridgeAPI {
       success?: boolean;
     }) => void,
   ) => () => void;
+  // 知识库文档状态事件（Issue #3 / #5）
+  onKbDocStatus: (
+    callback: (data: {
+      name: string;
+      status: 'queued' | 'converting' | 'classifying' | 'done' | 'failed';
+      errorCode?: string;
+      errorMessage?: string;
+      category?: string;
+    }) => void,
+  ) => () => void;
 }
 
 declare global {

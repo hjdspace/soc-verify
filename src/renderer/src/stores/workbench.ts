@@ -33,6 +33,7 @@ export type WorkbenchDestination =
   | { type: 'ai-artifacts' }
   | { type: 'plugin-view'; pluginId: string; viewId: string; title: string }
   | { type: 'diff-review'; filePath: string; fileName: string }
+  | { type: 'kb' }
   | OfficeDocumentDestination
   | DatabaseDestination;
 
@@ -90,6 +91,8 @@ function describeDestination(destination: WorkbenchDestination): Omit<WorkbenchT
       return { id: destination.type, title: '时序违例', closable: true };
     case 'ai-artifacts':
       return { id: destination.type, title: 'AI 产物', closable: true };
+    case 'kb':
+      return { id: destination.type, title: '知识库', closable: true };
     case 'plugin-view':
       return { id: `plugin-view:${destination.pluginId}:${destination.viewId}`, title: destination.title, closable: true };
     case 'office-document': {

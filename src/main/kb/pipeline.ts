@@ -13,7 +13,7 @@
  * @see ADR 0021 — anydoc 文档知识库
  */
 
-import { join, basename, extname } from 'node:path';
+import { join, basename, extname, dirname } from 'node:path';
 import { readFile, writeFile, mkdir, rm, readdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { convertDocument } from './converter';
@@ -29,6 +29,7 @@ import type {
   KbDocStatus,
   KbCategory,
   KbDocStatusEvent,
+  IndexEntry,
 } from './types';
 
 // ── 类型 ────────────────────────────────────────────────────────
@@ -473,4 +474,210 @@ export async function listCategories(kbPath: string): Promise<KbCategory[]> {
   }
 
   return Array.from(categoryMap.entries()).map(([name, count]) => ({ name, count }));
+}
+
+// ── 读取 index.md ──────────────────────────────────────────────
+
+/**
+ * 读取知识库的 index.md 内容。
+ * 不存在时返回空字符串。
+ */
+export async function readIndexMd(kbPath: string): Promise<string> {
+  const indexMdPath = join(kbPath, 'index.md');
+  if (!existsSync(indexMdPath)) return '';
+  return readFile(indexMdPath, 'utf-8');
+}
+
+// ── 写入 index.md ──────────────────────────────────────────────
+
+/**
+ * 写入知识库的 index.md 内容（编辑保存）。
+ */
+export async function writeIndexMd(kbPath: string, content: string): Promise<void> {
+  const indexMdPath = join(kbPath, 'index.md');
+  await mkdir(dirname(indexMdPath), { recursive: true });
+  await writeFile(indexMdPath, content, 'utf-8');
+}
+
+// ── 读取 Markdown 文档 ─────────────────────────────────────────
+
+/**
+ * 读取知识库中某个文档的 Markdown 内容。
+ * docName 对应文档名（不含扩展名），在 docs/ 的子目录或根目录中查找。
+ *
+ * @returns Markdown 内容；文档不存在时返回 null。
+ */
+export async function readMarkdownDoc(kbPath: string, docName: string): Promise<string | null> {
+  const docsDir = join(kbPath, 'docs');
+
+  // 先在 docs/ 根查找
+  const rootMdPath = join(docsDir, `${docName}.md`);
+  if (existsSync(rootMdPath)) {
+    return readFile(rootMdPath, 'utf-8');
+  }
+
+  // 在 docs/ 子目录中查找
+  if (existsSync(docsDir)) {
+    try {
+      const entries = await readdir(docsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name === 'assets') continue;
+        const subMd = join(docsDir, entry.name, `${docName}.md`);
+        if (existsSync(subMd)) {
+          return readFile(subMd, 'utf-8');
+        }
+      }
+    } catch {
+      // 忽略
+    }
+  }
+
+  return null;
+}
+
+// ── 移动文档到新分类 ─────────────────────────────────────────────
+
+/**
+ * 将文档移动到新分类目录，并更新 index.md 中该文档条目的分类。
+ *
+ * 步骤：
+ *  1. 查找文档当前 Markdown 路径
+ *  2. 创建目标分类目录（如不存在）
+ *  3. 移动 Markdown 文件
+ *  4. 更新 index.md 中该条目的分类和路径
+ *
+ * @returns 移动后的新 Markdown 路径；文档不存在时返回 null。
+ */
+export async function moveDocumentCategory(
+  kbPath: string,
+  docName: string,
+  newCategory: string,
+): Promise<string | null> {
+  const docsDir = join(kbPath, 'docs');
+  const indexMdPath = join(kbPath, 'index.md');
+
+  // 查找当前 Markdown 路径
+  let currentMdPath = '';
+  let oldCategory = '';
+
+  const rootMdPath = join(docsDir, `${docName}.md`);
+  if (existsSync(rootMdPath)) {
+    currentMdPath = rootMdPath;
+    oldCategory = '';
+  } else {
+    try {
+      const entries = await readdir(docsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name === 'assets') continue;
+        const subMd = join(docsDir, entry.name, `${docName}.md`);
+        if (existsSync(subMd)) {
+          currentMdPath = subMd;
+          oldCategory = entry.name;
+          break;
+        }
+      }
+    } catch {
+      // 忽略
+    }
+  }
+
+  if (!currentMdPath) return null;
+
+  // 如果新旧分类相同，不需要移动
+  if (oldCategory === newCategory) return currentMdPath;
+
+  // 创建目标分类目录
+  const targetDir = join(docsDir, newCategory);
+  await mkdir(targetDir, { recursive: true });
+  const targetMdPath = join(targetDir, `${docName}.md`);
+
+  // 读取内容并写入新位置，删除旧文件
+  const content = await readFile(currentMdPath, 'utf-8');
+  await writeFile(targetMdPath, content, 'utf-8');
+  await rm(currentMdPath, { force: true });
+
+  // 更新 index.md 中该条目的分类和路径
+  if (existsSync(indexMdPath)) {
+    const indexContent = await readFile(indexMdPath, 'utf-8');
+    const { entries, categoryOrder } = parseIndexMd(indexContent);
+
+    // 计算旧相对路径和新相对路径
+    const docsDirNormalized = docsDir.replace(/\\/g, '/');
+    const oldRelPath = currentMdPath.replace(/\\/g, '/').replace(docsDirNormalized + '/', '');
+    const newRelPath = `${newCategory}/${docName}.md`;
+
+    // 查找并更新条目
+    const idx = entries.findIndex((e) => e.path === oldRelPath || e.path.endsWith(`/${docName}.md`) || e.path === `${docName}.md`);
+    if (idx >= 0) {
+      entries[idx] = {
+        ...entries[idx],
+        category: newCategory,
+        path: newRelPath,
+      };
+    }
+
+    // 确保新分类在顺序中
+    if (!categoryOrder.includes(newCategory)) {
+      categoryOrder.push(newCategory);
+    }
+
+    // 重新序列化并写入
+    const updatedContent = serializeIndexMdForMove(entries, categoryOrder);
+    await writeFile(indexMdPath, updatedContent, 'utf-8');
+  }
+
+  return targetMdPath;
+}
+
+// ── 序列化 index.md（用于移动分类时） ──────────────────────────
+
+/**
+ * 将条目列表 + 分类顺序序列化为 index.md 文本。
+ * 与 indexer.ts 的 serializeIndexMd 逻辑一致，此处独立实现以避免导出内部函数。
+ */
+function serializeIndexMdForMove(entries: IndexEntry[], categoryOrder: string[]): string {
+  const byCategory = new Map<string, IndexEntry[]>();
+  for (const entry of entries) {
+    const list = byCategory.get(entry.category) ?? [];
+    list.push(entry);
+    byCategory.set(entry.category, list);
+  }
+
+  const allCategories = [...categoryOrder];
+  for (const cat of byCategory.keys()) {
+    if (!allCategories.includes(cat)) {
+      allCategories.push(cat);
+    }
+  }
+
+  const parts: string[] = [
+    '# 知识库索引',
+    '',
+    '<!-- 此文件由 AI Agent 会话启动时注入为库地图 -->',
+    '<!-- 手动编辑可调整分类体系与条目 -->',
+    '',
+  ];
+
+  for (const cat of allCategories) {
+    const list = byCategory.get(cat);
+    if (!list || list.length === 0) continue;
+
+    parts.push(`## ${cat}`, '');
+    for (const entry of list) {
+      const keywords = entry.keywords.length > 0
+        ? entry.keywords.map((k) => `\`${k}\``).join(' · ')
+        : '';
+      const lines = [
+        `### ${entry.title}`,
+        `- **路径**: \`${entry.path}\``,
+        `- **摘要**: ${entry.summary || '（暂无摘要）'}`,
+      ];
+      if (keywords) {
+        lines.push(`- **关键词**: ${keywords}`);
+      }
+      parts.push(lines.join('\n'), '');
+    }
+  }
+
+  return parts.join('\n');
 }
