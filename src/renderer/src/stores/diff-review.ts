@@ -50,6 +50,8 @@ interface DiffReviewStoreState {
   hunkStates: HunkStates;
   /** 是否正在加载 diff */
   loading: boolean;
+  /** diff 加载失败的错误信息（null 表示无错误） */
+  loadError: string | null;
   /** 已审阅到的 tool call 标记集合 */
   reviewedFiles: Set<string>;
 
@@ -167,11 +169,6 @@ function sameFilePath(left: string, right: string): boolean {
 
 function reviewMarker(filePath: string, toolCallId: string): string {
   return `${normalizeFilePath(filePath)}\n${toolCallId}`;
-}
-
-function markerFilePath(marker: string): string {
-  const separator = marker.indexOf('\n');
-  return separator === -1 ? marker : marker.slice(0, separator);
 }
 
 function extractResultDetails(result: unknown): Record<string, unknown> | null {
@@ -379,11 +376,24 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
   currentDiff: null,
   hunkStates: {},
   loading: false,
+  loadError: null,
   reviewedFiles: loadReviewedFiles(useProjectStore.getState().currentProjectId),
 
   refreshQueue: () => {
     set((s) => {
-      const newQueue = aggregateQueue(s.reviewedFiles);
+      // 如果当前 reviewedFiles 为空但 localStorage 有数据（如重启后 store 初始化时
+      // currentProjectId 为 null 导致 reviewedFiles 为空，后来 project 加载完成
+      // 但 subscribe 可能已经错过），在此处自动恢复。
+      let reviewedFiles = s.reviewedFiles;
+      const currentProjectId = useProjectStore.getState().currentProjectId;
+      if (reviewedFiles.size === 0 && currentProjectId) {
+        const stored = loadReviewedFiles(currentProjectId);
+        if (stored.size > 0) {
+          reviewedFiles = stored;
+        }
+      }
+
+      const newQueue = aggregateQueue(reviewedFiles);
       // 保留已有 hunkStates 中仍在队列里的条目
       const validPaths = new Set(newQueue.map((e) => e.filePath));
       const cleanedHunkStates: HunkStates = {};
@@ -394,22 +404,15 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
       const currentFilePath = s.currentFilePath && validPaths.has(s.currentFilePath)
         ? s.currentFilePath
         : null;
-      // 清理 reviewedFiles 中不再有对应 tool call 的条目
-      const cleanedReviewed = new Set<string>();
-      for (const marker of s.reviewedFiles) {
-        if ([...validPaths].some((path) => normalizeFilePath(path) === markerFilePath(marker))) {
-          cleanedReviewed.add(marker);
-        }
-      }
-      // 持久化到 localStorage（按 projectId）
-      persistReviewedFiles(useProjectStore.getState().currentProjectId, cleanedReviewed);
+      // 不清理 reviewedFiles——保留所有标记，避免竞态条件导致标记丢失。
+      // reviewedFiles 只增不减：markFileReviewed 添加标记，project 切换时整体替换。
       return {
         queue: newQueue,
         hunkStates: cleanedHunkStates,
         currentFilePath,
         currentReviewToolCallId: currentFilePath ? s.currentReviewToolCallId : null,
         currentDiff: currentFilePath ? s.currentDiff : null,
-        reviewedFiles: cleanedReviewed,
+        reviewedFiles,
       };
     });
   },
@@ -432,6 +435,7 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
       currentFilePath: reviewPath,
       currentReviewToolCallId: entry.toolCalls[entry.toolCalls.length - 1]?.id ?? null,
       loading: true,
+      loadError: null,
     });
 
     useWorkbenchStore.getState().open({
@@ -446,7 +450,7 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
       toolCalls: entry.toolCalls,
     })
       .then((diff) => {
-        set({ currentDiff: diff, loading: false });
+        set({ currentDiff: diff, loading: false, loadError: null });
         // 初始化 hunkStates：overwritten hunks 默认 accepted，其余 pending
         const states: HunkStates = { ...get().hunkStates };
         const fileStates = { ...states[reviewPath] };
@@ -458,8 +462,9 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
         states[reviewPath] = fileStates;
         set({ hunkStates: states });
       })
-      .catch(() => {
-        set({ loading: false, currentDiff: null });
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        set({ loading: false, currentDiff: null, loadError: message });
       });
   },
 
@@ -484,18 +489,21 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
 
   acceptAll: (filePath) => {
     const diff = get().currentDiff;
-    if (!diff) return;
-    set((s) => {
-      const states = { ...s.hunkStates };
-      const fileStates = { ...states[filePath] };
-      for (const hunk of diff.hunks) {
-        if (!hunk.overwritten) {
-          fileStates[hunk.id] = 'accepted';
+    // 即使 diff 未加载或加载失败，也要标记为已审阅——
+    // 用户明确选择了「接受」，不应因 diff 不可用而阻止审阅完成。
+    if (diff) {
+      set((s) => {
+        const states = { ...s.hunkStates };
+        const fileStates = { ...states[filePath] };
+        for (const hunk of diff.hunks) {
+          if (!hunk.overwritten) {
+            fileStates[hunk.id] = 'accepted';
+          }
         }
-      }
-      states[filePath] = fileStates;
-      return { hunkStates: states };
-    });
+        states[filePath] = fileStates;
+        return { hunkStates: states };
+      });
+    }
     // 接受全部后，标记为已审阅
     markFileReviewed(filePath);
   },
@@ -518,7 +526,12 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
 
   applyRejections: async (filePath) => {
     const { currentDiff, hunkStates } = get();
-    if (!currentDiff) return;
+    // diff 不可用（文件不存在、加载失败等）时，直接标记为已审阅。
+    // 用户已明确选择「拒绝」，即使无法回滚也应完成审阅流程。
+    if (!currentDiff) {
+      markFileReviewed(filePath);
+      return;
+    }
 
     const projectId = useProjectStore.getState().currentProjectId;
     if (!projectId) return;
@@ -599,7 +612,7 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
       const tabId = `diff-review:${currentFilePath}`;
       useWorkbenchStore.getState().close(tabId);
     }
-    set({ currentFilePath: null, currentReviewToolCallId: null, currentDiff: null, loading: false });
+    set({ currentFilePath: null, currentReviewToolCallId: null, currentDiff: null, loading: false, loadError: null });
   },
 }));
 
@@ -619,18 +632,29 @@ export function openReviewAwareFile(filePath: string, fileName: string): void {
 
 /**
  * 标记文件为已审阅：在队列中标记 reviewed=true，关闭 diff-review tab，
- * 并在中栏打开文件编辑器显示审阅后的文件内容。
+ * 并刷新 store 状态。不自动打开文件编辑器——用户可以通过工具卡片路径
+ * 或文件树手动打开已审阅的文件。
  * 不自动打开下一个文件——用户可以通过浮动按钮或工具卡片路径手动打开。
  */
 function markFileReviewed(filePath: string): void {
   const store = useDiffReviewStore.getState();
   const entry = store.queue.find((candidate) => sameFilePath(candidate.filePath, filePath));
+  if (!entry) return;
+  // 确定已审阅到哪个 tool call：优先用 currentReviewToolCallId，
+  // 回退到 entry 中最后一个 pending tool call 的 id。
+  // 如果 entry.toolCalls 为空（不应发生但防御性处理），也直接标记。
   const reviewedToolCallId = store.currentReviewToolCallId
-    ?? entry?.toolCalls[entry.toolCalls.length - 1]?.id;
-  if (!entry || !reviewedToolCallId) return;
+    ?? entry.toolCalls[entry.toolCalls.length - 1]?.id;
   // 记录已审阅到哪个 tool call；后续新 edit 会重新进入 review queue。
   const newReviewed = new Set(store.reviewedFiles);
-  newReviewed.add(reviewMarker(entry.filePath, reviewedToolCallId));
+  if (reviewedToolCallId) {
+    newReviewed.add(reviewMarker(entry.filePath, reviewedToolCallId));
+  } else {
+    // 没有可用 tool call id 时，标记该文件所有 pending tool calls 为已审阅
+    for (const tc of entry.toolCalls) {
+      newReviewed.add(reviewMarker(entry.filePath, tc.id));
+    }
+  }
   // 持久化到 localStorage
   persistReviewedFiles(useProjectStore.getState().currentProjectId, newReviewed);
   // 在队列中标记为已审阅（不从队列中移除，保持 ToolCard 路径可点击）
@@ -649,17 +673,8 @@ function markFileReviewed(filePath: string): void {
     currentReviewToolCallId: null,
     currentDiff: null,
     loading: false,
+    loadError: null,
   });
-  const pendingEntry = newQueue.find((candidate) =>
-    sameFilePath(candidate.filePath, filePath) && !candidate.reviewed,
-  );
-  if (pendingEntry) {
-    useDiffReviewStore.getState().openFile(pendingEntry.filePath);
-    return;
-  }
-  // 打开文件编辑器，显示审阅后的文件内容
-  const fileName = filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
-  openFileDestination(useWorkbenchStore.getState().open, filePath, fileName);
 }
 
 let projectedSessions = useSessionStore.getState().sessions;
@@ -684,6 +699,7 @@ useProjectStore.subscribe((state) => {
     currentReviewToolCallId: null,
     currentDiff: null,
     loading: false,
+    loadError: null,
     hunkStates: {},
   });
   useDiffReviewStore.getState().refreshQueue();
