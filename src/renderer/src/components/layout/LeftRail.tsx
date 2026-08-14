@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FolderOpen, RefreshCw, Cpu, FileText, LayoutDashboard, ChevronDown, Plus, Folder, Puzzle } from 'lucide-react';
 import { useProjectStore } from '@renderer/stores/project';
 import { useOverviewStore } from '@renderer/stores/overview';
@@ -39,17 +39,6 @@ export function LeftRail({ width }: LeftRailProps) {
     });
     return unlisten;
   }, [refreshFileTree]);
-
-  // Restore projects on mount (guarded against StrictMode double-execution)
-  const restoreDone = useRef(false);
-  useEffect(() => {
-    if (restoreDone.current) return;
-    restoreDone.current = true;
-    const restore = async () => {
-      await useProjectStore.getState().restoreState();
-    };
-    restore();
-  }, []);
 
   const handleSelectFile = (path: string, name: string) => {
     openReviewAwareFile(path, name);
