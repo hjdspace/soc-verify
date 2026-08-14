@@ -31,6 +31,7 @@ import { discoverSkills, readSkillContent } from '../../agent/skill-discovery';
 import { errorAnalysisCoordinator } from '../../simulation/error-analysis-coordinator';
 import type { ErrorType } from '@shared/types';
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
+import type { AskAnswer } from '@shared/ask-types';
 
 export const sessionRouter = t.router({
   create: t.procedure
@@ -730,6 +731,22 @@ export const sessionRouter = t.router({
       const resolved = sessionManager.resolveApproval(input.requestId, input.approved);
       if (!resolved) {
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Approval request not found or already resolved' });
+      }
+      return { ok: true };
+    }),
+
+  resolveAsk: t.procedure
+    .input((raw): { requestId: string; answers: AskAnswer[] } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.requestId !== 'string' || !Array.isArray(r.answers)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'requestId (string) and answers (array) are required' });
+      }
+      return { requestId: r.requestId, answers: r.answers as AskAnswer[] };
+    })
+    .mutation(async ({ input }) => {
+      const resolved = sessionManager.resolveAsk(input.requestId, input.answers);
+      if (!resolved) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Ask request not found or already resolved' });
       }
       return { ok: true };
     }),
