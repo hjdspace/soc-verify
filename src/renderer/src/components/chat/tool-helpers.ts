@@ -522,14 +522,32 @@ function parseTodoPhasesFromText(text: string): TodoPhaseData[] {
 }
 
 /**
+ * Check whether all todo items across all phases are completed or abandoned
+ * (i.e. no pending or in_progress items remain).
+ */
+function isAllTodoDone(phases: TodoPhaseData[]): boolean {
+  const allItems = phases.flatMap((p) => p.items);
+  if (allItems.length === 0) return false;
+  return allItems.every(
+    (item) => item.status === 'completed' || item.status === 'abandoned',
+  );
+}
+
+/**
  * Scan session messages for the latest todo tool state.
  * Returns the phases from the most recent completed `todo` tool call.
  * If a newer `todo` call is still executing, `isExecuting` is true.
  * For `init` ops still executing, shows the initial items from args.
+ *
+ * If the latest todo is fully completed and a new user turn has started
+ * (a user message appears after the todo tool call), returns null so the
+ * pinned panel is hidden. The completed todo is still visible in the chat
+ * scroll area via the ToolCard renderer.
  */
 export function getLatestTodoState(messages: ReadonlyArray<{ role: string; toolName?: string; toolResult?: unknown; toolArgs?: unknown }>): TodoPanelState | null {
   let phases: TodoPhaseData[] | null = null;
   let isExecuting = false;
+  let todoIndex = -1;
 
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
@@ -549,6 +567,7 @@ export function getLatestTodoState(messages: ReadonlyArray<{ role: string; toolN
           phases = extractTodoPhasesFromArgs(msg.toolArgs);
         }
       }
+      todoIndex = i;
       break; // Stop after finding the latest result
     } else {
       // This todo tool is still executing
@@ -558,10 +577,24 @@ export function getLatestTodoState(messages: ReadonlyArray<{ role: string; toolN
         const fromArgs = extractTodoPhasesFromArgs(msg.toolArgs);
         if (fromArgs.length > 0) phases = fromArgs;
       }
+      if (todoIndex === -1) todoIndex = i;
     }
   }
 
   if (!phases || phases.length === 0) return null;
+
+  // If all todo items are completed/abandoned, check whether a new user
+  // turn has started after the latest todo tool call. If so, hide the
+  // pinned panel — the completed todo is still visible in the chat stream
+  // via the ToolCard component.
+  if (!isExecuting && isAllTodoDone(phases) && todoIndex >= 0) {
+    for (let i = todoIndex + 1; i < messages.length; i++) {
+      if (messages[i].role === 'user') {
+        return null;
+      }
+    }
+  }
+
   return { phases, isExecuting };
 }
 
