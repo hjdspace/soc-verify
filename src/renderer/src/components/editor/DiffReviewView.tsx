@@ -92,6 +92,7 @@ interface DiffReviewViewProps {
 export function DiffReviewView({ entry }: DiffReviewViewProps) {
   const currentDiff = useDiffReviewStore((s) => s.currentDiff);
   const loading = useDiffReviewStore((s) => s.loading);
+  const loadError = useDiffReviewStore((s) => s.loadError);
   const hunkStates = useDiffReviewStore((s) => s.hunkStates);
   const setHunkState = useDiffReviewStore((s) => s.setHunkState);
   const acceptAll = useDiffReviewStore((s) => s.acceptAll);
@@ -169,11 +170,47 @@ export function DiffReviewView({ entry }: DiffReviewViewProps) {
   };
 
   // ── Loading state ──
-  if (loading || !diffData) {
+  if (loading) {
     return (
       <div className="flex h-full flex-1 items-center justify-center text-xs text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         加载 diff...
+      </div>
+    );
+  }
+
+  // ── Error state: diff 加载失败（如文件不存在）──
+  // 仍然提供「全部接受」和「全部拒绝」按钮，让用户能完成审阅。
+  if (!diffData) {
+    return (
+      <div className="flex h-full flex-1 flex-col items-center justify-center gap-3 text-xs">
+        <GitCompare className="h-6 w-6 text-destructive" />
+        <div className="font-medium text-destructive">加载文件 diff 失败</div>
+        <div className="max-w-md text-center text-muted-foreground font-mono text-[10px]">
+          {loadError ?? '未知错误'}
+        </div>
+        <div className="text-muted-foreground">
+          文件可能已被删除或移动。您仍可以选择接受或拒绝此改动以完成审阅。
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              rejectAll(entry.filePath);
+              void applyRejections(entry.filePath);
+            }}
+            className="flex items-center gap-1 rounded border border-border px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <X className="h-3 w-3" />
+            全部拒绝
+          </button>
+          <button
+            onClick={() => acceptAll(entry.filePath)}
+            className="flex items-center gap-1 rounded border border-status-pass/30 bg-status-pass/10 px-2.5 py-1 text-[11px] text-status-pass-foreground transition-colors hover:bg-status-pass/20"
+          >
+            <Check className="h-3 w-3" />
+            全部接受
+          </button>
+        </div>
       </div>
     );
   }
