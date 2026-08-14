@@ -149,12 +149,6 @@ export function BottomPanel() {
 
       {/* ── Tab bar + actions ─────────────────────────────── */}
       <div className="flex h-8 shrink-0 items-center border-b bg-secondary/30">
-        {/* Terminal icon */}
-        <div className="flex items-center gap-1.5 px-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          <TerminalIcon className="h-3 w-3" />
-          <span>Terminal</span>
-        </div>
-
         {/* Bottom terminal tabs */}
         <div className="flex h-full flex-1 items-center overflow-x-auto">
           {bottomTabs.map((tab) => (
