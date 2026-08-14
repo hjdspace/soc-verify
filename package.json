@@ -34,6 +34,7 @@
     "package:linux": "node scripts/download-officecli.mjs && node scripts/setup-agent.mjs --require-binary && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/build-linux-pty.mjs && node scripts/build-linux-sqlite.mjs && node scripts/download-natives.mjs && node scripts/run-electron-builder.mjs --linux"
   },
   "dependencies": {
+    "@firecrawl/anydoc": "^0.1.9",
     "@fortune-sheet/core": "^1.0.4",
     "@fortune-sheet/react": "^1.0.4",
     "@tanstack/react-virtual": "^3.14.9",
