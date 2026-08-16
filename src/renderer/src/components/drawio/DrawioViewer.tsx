@@ -15,6 +15,9 @@
  *     viewer 初始化后还需手动调用 graph.setPanning(true)，
  *     因为 viewer-static.min.js 中 setPanning(false) 被硬编码调用。
  *   - 右键上下文菜单提供"打开放大图"入口，调用 showLocalLightbox()。
+ *   - 中键拖拽缩放：按下中键后上下移动鼠标即可缩放，
+ *     上移放大、下移缩小（参考 3D 软件 / Figma 中键缩放手感）。
+ *     每累积 MOUSE_ZOOM_THRESHOLD 像素触发一次 zoom(ZOOM_FACTOR)。
  *   - 容器 CSS 隔离（.drawio-viewer-root）阻止 Tailwind preflight 的
  *     `img { display: block }` 渗透到 viewer 内部。
  *     lightbox 元素被添加到 document.body（不在容器内），
@@ -31,10 +34,25 @@ export type DrawioViewerProps = {
   onError: (message: string) => void;
 };
 
+/**
+ * 中键拖拽缩放参数。
+ * - 每累积 MOUSE_ZOOM_THRESHOLD 像素的垂直位移触发一次 zoom(ZOOM_FACTOR)。
+ * - ZOOM_FACTOR 取 1.1（小于 mxGraph 默认 zoomFactor 1.2），
+ *   让中键拖拽的缩放步长更细、手感更平滑。
+ */
+const MOUSE_ZOOM_THRESHOLD = 8;
+const ZOOM_FACTOR = 1.1;
+
 export function DrawioViewer({ xml, onError }: DrawioViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<GraphViewerInstance | null>(null);
   const [dragging, setDragging] = useState(false);
+  /** 中键拖拽缩放进行中 */
+  const [zoomDragging, setZoomDragging] = useState(false);
+  /** 中键拖拽过程中累积的垂直位移（用于按阈值触发 zoom） */
+  const zoomAccumY = useRef(0);
+  /** 上一帧鼠标 clientY，用于计算增量 */
+  const zoomLastY = useRef(0);
 
   useEffect(() => {
     if (!dragging) return;
@@ -51,6 +69,54 @@ export function DrawioViewer({ xml, onError }: DrawioViewerProps) {
     const cursor = dragging ? 'grabbing' : 'grab';
     viewerRef.current?.graph?.container?.style.setProperty('cursor', cursor, 'important');
   }, [dragging]);
+
+  // ── 中键拖拽缩放 ───────────────────────────────────────
+  // 监听全局 mousemove / mouseup / blur：
+  //   - mousemove：累积垂直位移，达到阈值时触发 graph.zoom(factor)。
+  //     上移（deltaY < 0）放大，下移（deltaY > 0）缩小。
+  //   - mouseup / blur：结束中键拖拽。
+  // 阈值循环处理一次性长距离移动，保证快速拖动也能连续缩放。
+  useEffect(() => {
+    if (!zoomDragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      // 阻止中键拖拽时浏览器自动滚动光标行为
+      e.preventDefault();
+      const dy = e.clientY - zoomLastY.current;
+      zoomLastY.current = e.clientY;
+      zoomAccumY.current += dy;
+
+      const graph = viewerRef.current?.graph;
+      if (!graph?.zoom) return;
+
+      // 累积位移达阈值后循环触发 zoom，支持一次移动跨多个阈值
+      while (zoomAccumY.current >= MOUSE_ZOOM_THRESHOLD) {
+        graph.zoom(1 / ZOOM_FACTOR); // 下移 → 缩小
+        zoomAccumY.current -= MOUSE_ZOOM_THRESHOLD;
+      }
+      while (zoomAccumY.current <= -MOUSE_ZOOM_THRESHOLD) {
+        graph.zoom(ZOOM_FACTOR); // 上移 → 放大
+        zoomAccumY.current += MOUSE_ZOOM_THRESHOLD;
+      }
+    };
+
+    const stopZoomDrag = () => setZoomDragging(false);
+
+    window.addEventListener('mousemove', handleMouseMove, { passive: false });
+    window.addEventListener('mouseup', stopZoomDrag);
+    window.addEventListener('blur', stopZoomDrag);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', stopZoomDrag);
+      window.removeEventListener('blur', stopZoomDrag);
+    };
+  }, [zoomDragging]);
+
+  // 中键拖拽时同步 graph 容器 cursor 为 ns-resize，明示垂直缩放方向
+  useEffect(() => {
+    if (!zoomDragging) return;
+    viewerRef.current?.graph?.container?.style.setProperty('cursor', 'ns-resize', 'important');
+  }, [zoomDragging]);
 
   useEffect(() => {
     let cancelled = false;
@@ -179,12 +245,25 @@ export function DrawioViewer({ xml, onError }: DrawioViewerProps) {
   return (
     <div
       ref={containerRef}
-      className={`drawio-viewer-root h-full min-w-0 max-w-full overflow-hidden ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+      className={`drawio-viewer-root h-full min-w-0 max-w-full overflow-hidden ${
+        zoomDragging ? 'cursor-ns-resize' : dragging ? 'cursor-grabbing' : 'cursor-grab'
+      }`}
       onContextMenu={handleContextMenu}
       onMouseDown={(e) => {
-        if (e.button === 0) setDragging(true);
+        if (e.button === 1) {
+          // 中键：启动拖拽缩放，阻止浏览器自动滚动行为
+          e.preventDefault();
+          zoomAccumY.current = 0;
+          zoomLastY.current = e.clientY;
+          setZoomDragging(true);
+        } else if (e.button === 0) {
+          setDragging(true);
+        }
       }}
-      onMouseUp={() => setDragging(false)}
+      onMouseUp={() => {
+        setDragging(false);
+        setZoomDragging(false);
+      }}
     />
   );
 }

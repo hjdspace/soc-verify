@@ -6,10 +6,16 @@
  * 以相对路径从应用自身加载，无外网请求。
  */
 
-/** viewer 实例的 graph 对象（panning 等操作需要） */
+/** viewer 实例的 graph 对象（panning / zoom 等操作需要） */
 type GraphViewerGraph = {
   container?: HTMLElement;
   setPanning: (enabled: boolean) => void;
+  /**
+   * mxGraph.prototype.zoom(factor)。
+   * factor > 1 放大（如 1.1），factor < 1 缩小（如 1/1.1）。
+   * viewer-static.min.js 中 zoomIn/zoomOut 即调用此方法。
+   */
+  zoom?: (factor: number) => void;
 };
 
 type GraphViewerLightbox = {
