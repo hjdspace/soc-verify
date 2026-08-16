@@ -28,6 +28,7 @@ import { BrowserWindow, dialog } from 'electron';
 import { t, TRPCError } from '../router-context';
 import { projectManager } from '../../project/project-manager';
 import { kbRegistry } from '../../kb/registry';
+import { kbLayout, docNameFromFileName } from '../../kb/layout';
 import {
   uploadDocument,
   listDocuments,
@@ -275,6 +276,7 @@ function notifyKbDeepReindex(event: DeepReindexEvent): void {
  * 对于 sources/ 中已有但 docs/ 中无对应 .md 的文件，自动触发上传流水线。
  * 对于库根目录下的文档文件，复制到 sources/ 后触发上传流水线。
  *
+ * 文档发现逻辑由 layout 模块单一拥有，不再手写第 4 份「docs/ 里找 .md」。
  * 支持的扩展名跟随当前生效的转换引擎（用户可在设置页切换）。
  *
  * 异步执行，不阻塞 mount 响应。
@@ -283,53 +285,25 @@ async function autoScanDocuments(
   kbPath: string,
   _kbId: string,
 ): Promise<{ scanned: number }> {
-  const { readdir, copyFile } = await import('node:fs/promises');
-  const { join } = await import('node:path');
+  const { readdir, copyFile, mkdir } = await import('node:fs/promises');
   const { existsSync } = await import('node:fs');
 
+  const layout = kbLayout(kbPath);
   const supportedExtensions = (await getActiveConvertEngine()).supportedExtensions;
-
-  const sourcesDir = join(kbPath, 'sources');
-  const docsDir = join(kbPath, 'docs');
   const toUpload: string[] = [];
 
   // 1. 扫描 sources/ 中已有文档
-  if (existsSync(sourcesDir)) {
-    try {
-      const entries = await readdir(sourcesDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isFile()) continue;
-        const ext = entry.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? '';
-        if (!supportedExtensions.includes(ext)) continue;
+  const sourceFiles = await layout.listSourceFiles();
+  for (const fileName of sourceFiles) {
+    const ext = fileName.toLowerCase().match(/\.[^.]+$/)?.[0] ?? '';
+    if (!supportedExtensions.includes(ext)) continue;
 
-        const docName = entry.name.slice(0, -ext.length) || entry.name;
-        // 检查 docs/ 中是否已有对应的 .md
-        const rootMd = join(docsDir, `${docName}.md`);
-        if (existsSync(rootMd)) continue;
+    const docName = docNameFromFileName(fileName);
+    // 检查 docs/ 中是否已有对应的 .md（使用 layout 的文档发现操作）
+    const foundMd = await layout.findMarkdown(docName);
+    if (foundMd) continue;
 
-        // 检查子目录
-        let found = false;
-        if (existsSync(docsDir)) {
-          try {
-            const docEntries = await readdir(docsDir, { withFileTypes: true });
-            for (const de of docEntries) {
-              if (!de.isDirectory() || de.name === 'assets') continue;
-              if (existsSync(join(docsDir, de.name, `${docName}.md`))) {
-                found = true;
-                break;
-              }
-            }
-          } catch {
-            // ignore
-          }
-        }
-        if (!found) {
-          toUpload.push(join(sourcesDir, entry.name));
-        }
-      }
-    } catch {
-      // ignore
-    }
+    toUpload.push(layout.sourcePath(fileName));
   }
 
   // 2. 扫描库根目录下的文档文件（非 sources/、docs/）
@@ -342,12 +316,12 @@ async function autoScanDocuments(
       const ext = entry.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? '';
       if (!supportedExtensions.includes(ext)) continue;
 
-      const srcPath = join(kbPath, entry.name);
+      const srcPath = layout.kbPath === kbPath ? (await import('node:path')).join(kbPath, entry.name) : entry.name;
       // 复制到 sources/ 后上传
-      if (!existsSync(sourcesDir)) {
-        await import('node:fs/promises').then((fs) => fs.mkdir(sourcesDir, { recursive: true }));
+      if (!existsSync(layout.sourcesDir)) {
+        await mkdir(layout.sourcesDir, { recursive: true });
       }
-      const destPath = join(sourcesDir, entry.name);
+      const destPath = layout.sourcePath(entry.name);
       if (!existsSync(destPath)) {
         await copyFile(srcPath, destPath);
       }

@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { readFile, writeFile, readdir, rename, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { ensureV1Prefix } from '../agent/openai-compatible';
+import { kbLayout } from './layout';
 
 // ── 类型 ────────────────────────────────────────────────────────
 
@@ -149,11 +150,11 @@ function extractSkeleton(markdown: string, maxLines = 60): string {
  * 返回相对路径 + 骨架内容。
  */
 async function collectDocuments(kbPath: string): Promise<Array<{ path: string; skeleton: string }>> {
-  const docsDir = join(kbPath, 'docs');
-  if (!existsSync(docsDir)) return [];
+  const layout = kbLayout(kbPath);
+  if (!existsSync(layout.docsDir)) return [];
 
   const documents: Array<{ path: string; skeleton: string }> = [];
-  const docsDirNormalized = docsDir.replace(/\\/g, '/');
+  const docsDirNormalized = layout.docsDir.replace(/\\/g, '/');
 
   async function scanDir(dir: string): Promise<void> {
     const entries = await readdir(dir, { withFileTypes: true });
@@ -171,7 +172,7 @@ async function collectDocuments(kbPath: string): Promise<Array<{ path: string; s
     }
   }
 
-  await scanDir(docsDir);
+  await scanDir(layout.docsDir);
   return documents;
 }
 
@@ -182,14 +183,14 @@ async function collectDocuments(kbPath: string): Promise<Array<{ path: string; s
  * 失败时原 index.md 完好。
  */
 async function atomicWriteIndexMd(kbPath: string, content: string): Promise<void> {
-  const indexMdPath = join(kbPath, 'index.md');
+  const layout = kbLayout(kbPath);
   const tmpPath = join(kbPath, '.index.md.tmp');
 
   // 写入临时文件
   await writeFile(tmpPath, content, 'utf-8');
 
   // 原子 rename（在 Windows 上 rename 会覆盖目标文件）
-  await rename(tmpPath, indexMdPath);
+  await rename(tmpPath, layout.indexMdPath);
 }
 
 // ── 核心函数 ─────────────────────────────────────────────────────
@@ -227,10 +228,10 @@ export async function deepReindex(params: DeepReindexParams): Promise<DeepReinde
   }
 
   // 3. 读取现有 index.md
-  const indexMdPath = join(kbPath, 'index.md');
+  const layout = kbLayout(kbPath);
   let existingIndex = '';
-  if (existsSync(indexMdPath)) {
-    existingIndex = await readFile(indexMdPath, 'utf-8');
+  if (existsSync(layout.indexMdPath)) {
+    existingIndex = await readFile(layout.indexMdPath, 'utf-8');
   }
 
   // 4. 构建 prompt
@@ -341,7 +342,7 @@ export async function deepReindex(params: DeepReindexParams): Promise<DeepReinde
 
     // 如果到这里还没有 .index.md.new，说明 Agent 可能直接修改了 index.md
     // 检查 index.md 是否被修改
-    const currentContent = await readFile(indexMdPath, 'utf-8');
+    const currentContent = await readFile(layout.indexMdPath, 'utf-8');
     if (currentContent !== existingIndex) {
       // index.md 已被 Agent 直接修改，不需要再替换
       notify({ phase: 'completed', message: `深度重建完成，已重写 ${total} 篇文档的索引` });

@@ -10,10 +10,10 @@
  * @see ADR 0021 — anydoc 文档知识库
  */
 
-import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { kbRegistry } from '../kb/registry';
+import { kbLayout } from '../kb/layout';
 
 // ── 常量 ────────────────────────────────────────────────────────
 
@@ -81,15 +81,15 @@ export async function buildKbContext(projectRoot: string): Promise<KbContextResu
 
   const kbPath = status.mounted.path;
   const kbName = status.mounted.name;
-  const indexMdPath = join(kbPath, 'index.md');
+  const layout = kbLayout(kbPath);
 
-  if (!existsSync(indexMdPath)) {
+  if (!existsSync(layout.indexMdPath)) {
     return { contextText: '', kbName, kbPath, truncated: false };
   }
 
   let indexContent: string;
   try {
-    indexContent = await readFile(indexMdPath, 'utf-8');
+    indexContent = await readFile(layout.indexMdPath, 'utf-8');
   } catch {
     return { contextText: '', kbName, kbPath, truncated: false };
   }

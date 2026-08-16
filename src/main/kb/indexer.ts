@@ -470,8 +470,11 @@ function formatEntryBlock(entry: IndexEntry): string {
 
 /**
  * 将条目列表 + 分类顺序序列化为 index.md 文本。
+ *
+ * 这是 index.md 格式的单一拥有者：parse / merge / remove / serialize 都住在此模块。
+ * pipeline 的 moveDocumentCategory / renameCategory 消费此函数，不再各自维护副本。
  */
-function serializeIndexMd(entries: IndexEntry[], categoryOrder: string[]): string {
+export function serializeIndexMd(entries: IndexEntry[], categoryOrder: string[]): string {
   // 收集实际有条目的分类
   const byCategory = new Map<string, IndexEntry[]>();
   for (const entry of entries) {

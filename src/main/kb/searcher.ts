@@ -19,6 +19,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { existsSync } from 'node:fs';
 import { parseIndexMd } from './indexer';
+import { kbLayout } from './layout';
 import type { IndexEntry } from './types';
 
 // ── 类型定义 ──────────────────────────────────────────────────────
@@ -266,13 +267,12 @@ export async function searchKb(
   options?: SearchOptions,
 ): Promise<SearchResult[]> {
   const limit = options?.limit ?? DEFAULT_LIMIT;
-  const docsDir = join(kbPath, 'docs');
-  const indexMdPath = join(kbPath, 'index.md');
+  const layout = kbLayout(kbPath);
 
   // 1. 解析 index.md 条目
   let entries: IndexEntry[] = [];
-  if (existsSync(indexMdPath)) {
-    const content = await readFile(indexMdPath, 'utf-8');
+  if (existsSync(layout.indexMdPath)) {
+    const content = await readFile(layout.indexMdPath, 'utf-8');
     const parsed = parseIndexMd(content);
     entries = parsed.entries;
   }
@@ -290,7 +290,7 @@ export async function searchKb(
   }
 
   // 3. 全文搜索
-  const fulltextResults = await searchInFullText(docsDir, query, indexMap);
+  const fulltextResults = await searchInFullText(layout.docsDir, query, indexMap);
 
   // 全文阶段可能更新了 indexMap 中的得分，也可能新增了结果
   for (const r of fulltextResults) {

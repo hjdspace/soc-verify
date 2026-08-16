@@ -7,6 +7,11 @@ export type DatabaseDestination = {
   filePath: string;
 };
 
+export type DrawioDiagramDestination = {
+  type: 'drawio-diagram';
+  filePath: string;
+};
+
 export type OfficeDocumentDestination = {
   type: 'office-document';
   filePath: string;
@@ -35,7 +40,8 @@ export type WorkbenchDestination =
   | { type: 'diff-review'; filePath: string; fileName: string }
   | { type: 'kb' }
   | OfficeDocumentDestination
-  | DatabaseDestination;
+  | DatabaseDestination
+  | DrawioDiagramDestination;
 
 export type WorkbenchTab = {
   id: string;
@@ -108,6 +114,12 @@ function describeDestination(destination: WorkbenchDestination): Omit<WorkbenchT
       const fileName = parts[parts.length - 1] || destination.filePath;
       return { id: `database:${destination.filePath}`, title: fileName, closable: true };
     }
+    case 'drawio-diagram': {
+      const sep = destination.filePath.includes('/') ? '/' : '\\';
+      const parts = destination.filePath.split(sep);
+      const fileName = parts[parts.length - 1] || destination.filePath;
+      return { id: `drawio-diagram:${destination.filePath}`, title: fileName, closable: true };
+    }
   }
 }
 
@@ -116,6 +128,9 @@ const OFFICE_DOC_EXTENSIONS = new Set(['docx', 'pptx', 'xlsx', 'pdf']);
 
 /** 支持查看的数据库文件扩展名（小写、无前导点） */
 const DB_EXTENSIONS = new Set(['db', 'sqlite', 'sqlite3', 'db3']);
+
+/** draw.io 框图文件扩展名（小写、无前导点；.drawio.xml 为双扩展名特判） */
+const DRAWIO_EXTENSIONS = new Set(['drawio', 'dio']);
 
 /**
  * 根据文件扩展名推断合适的 destination：
@@ -144,6 +159,10 @@ export function openFileDestination(
   }
   if (DB_EXTENSIONS.has(ext)) {
     open({ type: 'database', filePath: path });
+    return;
+  }
+  if (DRAWIO_EXTENSIONS.has(ext) || path.toLowerCase().endsWith('.drawio.xml')) {
+    open({ type: 'drawio-diagram', filePath: path });
     return;
   }
   open({ type: 'file', path, name });

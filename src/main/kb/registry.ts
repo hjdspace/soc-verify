@@ -16,14 +16,19 @@
 
 import { app } from 'electron';
 import { join } from 'node:path';
-import { readFile, writeFile, mkdir, readdir, stat, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { readFile, writeFile, mkdir, stat, rm } from 'node:fs/promises';
+import {
+  kbLayout,
+  initKbLayout,
+  checkKbHealth,
+  countKbDocs,
+  INDEX_MD_SKELETON,
+} from './layout';
 import type {
   KbRegistration,
   KbMount,
   KbListEntry,
   KbStatus,
-  KbHealthStatus,
   KbErrorCode,
   KbError,
 } from './types';
@@ -62,8 +67,7 @@ function generateKbId(name: string): string {
   return `${slug || 'kb'}-${suffix}`;
 }
 
-/** index.md 骨架内容 */
-const INDEX_MD_SKELETON = `# 知识库索引\n\n<!-- 此文件由 AI Agent 会话启动时注入为库地图 -->\n<!-- 手动编辑可调整分类体系与条目 -->\n\n`;
+// INDEX_MD_SKELETON 由 layout.ts 单一拥有，此处不再维护副本
 
 // ── 注册表读写 ──────────────────────────────────────────────────
 
@@ -103,55 +107,11 @@ async function saveMounts(projectRoot: string, mounts: KbMount[]): Promise<void>
 
 // ── 库结构校验与初始化 ──────────────────────────────────────────
 
-/** 检查目录结构是否兼容知识库（存在 sources/ 与 docs/ 即认可） */
-async function checkStructure(kbPath: string): Promise<KbHealthStatus> {
-  const hasSources = existsSync(join(kbPath, 'sources'));
-  const hasDocs = existsSync(join(kbPath, 'docs'));
-  const hasIndex = existsSync(join(kbPath, 'index.md'));
-  return { hasSources, hasDocs, hasIndex };
-}
-
-/** 初始化标准库结构（sources/ docs/ index.md 骨架） */
-async function initKbStructure(kbPath: string): Promise<void> {
-  await mkdir(join(kbPath, 'sources'), { recursive: true });
-  await mkdir(join(kbPath, 'docs'), { recursive: true });
-  await writeFile(join(kbPath, 'index.md'), INDEX_MD_SKELETON, 'utf-8');
-}
+// 库结构校验与初始化由 layout.ts 单一拥有（checkKbHealth / initKbLayout）
 
 // ── 统计 ────────────────────────────────────────────────────────
 
-/** 统计 docs/ 下的文档数（.md 文件）和分类数（一级子目录） */
-async function countDocs(kbPath: string): Promise<{ documentCount: number; categoryCount: number }> {
-  const docsDir = join(kbPath, 'docs');
-  let documentCount = 0;
-  let categoryCount = 0;
-
-  try {
-    const entries = await readdir(docsDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        categoryCount++;
-        // 递归统计子目录中的 .md 文件
-        try {
-          const subEntries = await readdir(join(docsDir, entry.name), { withFileTypes: true });
-          for (const subEntry of subEntries) {
-            if (subEntry.isFile() && subEntry.name.endsWith('.md')) {
-              documentCount++;
-            }
-          }
-        } catch {
-          // 子目录读取失败，跳过
-        }
-      } else if (entry.isFile() && entry.name.endsWith('.md')) {
-        documentCount++;
-      }
-    }
-  } catch {
-    // docs/ 不存在或读取失败
-  }
-
-  return { documentCount, categoryCount };
-}
+// 统计逻辑由 layout.ts 的 countKbDocs 单一拥有
 
 // ── 公开 API ────────────────────────────────────────────────────
 
@@ -186,14 +146,15 @@ async function register(name: string, kbPath: string): Promise<KbResult<KbRegist
   }
 
   // 检查目录结构是否兼容
-  const health = await checkStructure(kbPath);
+  const health = checkKbHealth(kbPath);
   if (!health.hasSources || !health.hasDocs) {
     // 空目录 → 初始化标准结构
-    await initKbStructure(kbPath);
+    await initKbLayout(kbPath);
   }
   // 有 sources/ 和 docs/ 但无 index.md → 补创建
   if (!health.hasIndex && health.hasSources && health.hasDocs) {
-    await writeFile(join(kbPath, 'index.md'), INDEX_MD_SKELETON, 'utf-8');
+    const layout = kbLayout(kbPath);
+    await writeFile(layout.indexMdPath, INDEX_MD_SKELETON, 'utf-8');
   }
   // 空目录初始化后 index.md 已创建
 
@@ -266,7 +227,7 @@ async function list(projectRoot: string): Promise<KbListEntry[]> {
 
   const result: KbListEntry[] = [];
   for (const entry of entries) {
-    const { documentCount, categoryCount } = await countDocs(entry.path);
+    const { documentCount, categoryCount } = await countKbDocs(entry.path);
     result.push({
       id: entry.id,
       name: entry.name,
@@ -349,7 +310,7 @@ async function status(projectRoot: string): Promise<KbStatus> {
     };
   }
 
-  const health = await checkStructure(entry.path);
+  const health = checkKbHealth(entry.path);
 
   return {
     mounted: {
