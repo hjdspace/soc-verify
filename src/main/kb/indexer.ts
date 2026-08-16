@@ -32,6 +32,11 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { IndexEntry, ClassificationResult } from './types';
+import { type LlmConfig, protocolForProvider } from './llm-config';
+
+// Re-export for backward compatibility — consumers that imported
+// LlmConfig / protocolForProvider from indexer still work.
+export { type LlmConfig, protocolForProvider };
 
 // ── 常量 ────────────────────────────────────────────────────────
 
@@ -105,31 +110,13 @@ ${skeleton}
 }
 
 // ── LLM 调用 ────────────────────────────────────────────────────
-
-/** LLM 调用配置 */
-export type LlmConfig = {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-  /** 凭证 providerId — 决定调用协议（anthropic / gemini 走原生协议，其余走 openai-compatible） */
-  providerId?: string;
-  fetchFn?: typeof fetch;
-};
+// LlmConfig 类型和 protocolForProvider 函数已迁移到 ./llm-config.ts
+// 此处通过文件顶部 re-export 重新导出，保持向后兼容。
 
 /** LLM 调用结果（成功） */
 type LlmSuccess = { ok: true; result: ClassificationResult };
 type LlmFailure = { ok: false; error: string };
 type LlmResponse = LlmSuccess | LlmFailure;
-
-/** LLM 协议（按凭证 providerId 推导） */
-type LlmProtocol = 'openai' | 'anthropic' | 'gemini';
-
-export function protocolForProvider(providerId: string | undefined): LlmProtocol {
-  const lower = (providerId ?? '').toLowerCase();
-  if (lower === 'anthropic' || lower === 'claude') return 'anthropic';
-  if (lower === 'google' || lower === 'gemini') return 'gemini';
-  return 'openai';
-}
 
 /**
  * 解析 LLM 返回的 JSON 文本为 ClassificationResult。

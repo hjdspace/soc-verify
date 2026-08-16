@@ -615,6 +615,21 @@ body {
   vertical-align: middle;
 }
 
+/* ── drawio viewer CSS 隔离 ────────────────────────────────────── */
+/* Tailwind v4 preflight 设置 img { display: block }，会渗透到 drawio
+   viewer 内部（特别是 lightbox 的 chromelessToolbar），导致工具栏按钮
+   纵向排列。
+
+   1) .drawio-viewer-root img — 恢复 viewer 容器内的 img 为 inline。
+   2) .geEditor img — lightbox 弹出时元素被 document.body.appendChild()
+      添加到 body（不在 .drawio-viewer-root 容器内），需要全局规则
+      恢复 chromelessToolbar 内 img 为 inline，否则工具栏按钮纵向排列。
+*/
+.drawio-viewer-root img,
+.geEditor img {
+  display: inline;
+}
+
 /* ── highlight.js syntax highlighting for tool cards ─────── */
 /* Minimal theme that adapts to light/dark via CSS variables */
 .hljs {

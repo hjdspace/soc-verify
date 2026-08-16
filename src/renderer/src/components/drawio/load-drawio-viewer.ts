@@ -6,8 +6,15 @@
  * 以相对路径从应用自身加载，无外网请求。
  */
 
+/** viewer 实例的 graph 对象（panning 等操作需要） */
+type GraphViewerGraph = {
+  setPanning: (enabled: boolean) => void;
+};
+
 export type GraphViewerInstance = {
   destroy?: () => void;
+  showLocalLightbox?: () => void;
+  graph?: GraphViewerGraph;
 };
 
 export type GraphViewerStatic = {
@@ -28,6 +35,10 @@ export type GraphViewerConfig = {
   toolbar?: string;
   'auto-fit'?: boolean;
   'auto-crop'?: boolean;
+  /** lightbox: false 禁用左键点击触发 lightbox，改由右键菜单调用 */
+  lightbox?: boolean;
+  /** move: true 启用拖拽平移 */
+  move?: boolean;
   xml: string;
 };
 
