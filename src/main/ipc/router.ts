@@ -30,6 +30,7 @@ import { toolsRouter } from './routers/tools-router';
 import { browserRouter } from './routers/browser-router';
 import { databaseRouter } from './routers/database-router';
 import { kbRouter } from './routers/kb-router';
+import { drawioRouter } from './routers/drawio-router';
 
 export const router = t.router({
   ping: pingProcedure,
@@ -58,6 +59,7 @@ export const router = t.router({
   browser: browserRouter,
   database: databaseRouter,
   kb: kbRouter,
+  drawio: drawioRouter,
 });
 
 export type AppRouter = typeof router;

@@ -13,7 +13,9 @@ export default tseslint.config(
       'resources/binaries',
       'engine/oh-my-pi',
       '.tmp',
-      '.cache'
+      '.cache',
+      // 渲染端静态资源（drawio viewer-static.min.js 等第三方打包产物）
+      'src/renderer/public'
     ]
   },
   js.configs.recommended,

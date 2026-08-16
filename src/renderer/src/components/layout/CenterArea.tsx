@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine, Puzzle, FileType, Database as DatabaseIcon, Workflow, XCircle, BookOpen } from 'lucide-react';
+import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, ChevronUp, ChevronDown, GitCompare, GitGraph, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine, Puzzle, FileType, Database as DatabaseIcon, Workflow, XCircle, BookOpen } from 'lucide-react';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
@@ -24,6 +24,7 @@ import { PluginView } from '@renderer/components/plugins/PluginView';
 import { TVDashboard } from '@renderer/components/timing-violation/TVDashboard';
 import { OfficeDocumentView } from '@renderer/components/office/OfficeDocumentView';
 import { DatabaseViewer } from '@renderer/components/db/DatabaseViewer';
+import { DrawioPreview } from '@renderer/components/drawio/DrawioPreview';
 import { Timer } from 'lucide-react';
 import { BrowserView } from '@renderer/components/browser/BrowserView';
 import { SysbaseEnvGen } from '@renderer/tools/sysbase-env-gen/SysbaseEnvGen';
@@ -272,6 +273,7 @@ export function CenterArea() {
                 {tab.destination.type === 'plugin-view' && <Puzzle className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'office-document' && <FileType className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'database' && <DatabaseIcon className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'drawio-diagram' && <GitGraph className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'kb' && <BookOpen className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'sysbase-env-gen' && <Workflow className="h-3 w-3 opacity-50" />}
                 <span className="max-w-32 truncate">{tab.title}</span>
@@ -562,6 +564,8 @@ export function CenterArea() {
           />
         ) : destination?.type === 'database' ? (
           <DatabaseViewer key={destination.filePath} filePath={destination.filePath} />
+        ) : destination?.type === 'drawio-diagram' ? (
+          <DrawioPreview key={destination.filePath} filePath={destination.filePath} />
         ) : destination?.type === 'kb' ? (
           <KbView />
         ) : (
