@@ -61,7 +61,10 @@ function StatusBadge({ doc }: { doc: KbDocument }) {
               已转换 · AI 未分类
             </span>
             {doc.aiError && (
-              <span className="font-mono text-[10px] text-warning-foreground" title={doc.aiError}>
+              <span
+                className="font-mono text-[10px] text-warning-foreground truncate"
+                title={doc.aiError}
+              >
                 {doc.aiError}
               </span>
             )}
@@ -101,7 +104,10 @@ function StatusBadge({ doc }: { doc: KbDocument }) {
             转换失败
           </span>
           {doc.errorCode && (
-            <span className="font-mono text-[10px] text-status-fail-foreground">
+            <span
+              className="font-mono text-[10px] text-status-fail-foreground truncate"
+              title={`${doc.errorCode}${doc.errorMessage ? ` · ${doc.errorMessage}` : ''}`}
+            >
               {doc.errorCode}
               {doc.errorMessage ? ` · ${doc.errorMessage}` : ''}
             </span>
@@ -225,14 +231,15 @@ export function KbDocList() {
           </p>
         </div>
       ) : (
-        <table className="w-full overflow-hidden rounded-lg border border-border bg-card text-xs shadow-sm">
+        <table className="table-fixed w-full overflow-hidden rounded-lg border border-border bg-card text-xs shadow-sm">
+          {/* table-fixed：列宽严格按表头分配，长文件名在单元格内截断，不撑宽表格 */}
           <thead>
             <tr className="border-b border-border bg-secondary/50 text-left text-[10px] uppercase tracking-wide text-muted-foreground">
-              <th className="px-3 py-2" style={{ width: '32%' }}>文档</th>
-              <th className="px-3 py-2">分类</th>
-              <th className="px-3 py-2">大小</th>
-              <th className="px-3 py-2">状态</th>
-              <th className="px-3 py-2 text-right">操作</th>
+              <th className="px-3 py-2">文档</th>
+              <th className="w-[14%] px-3 py-2">分类</th>
+              <th className="w-[9%] px-3 py-2">大小</th>
+              <th className="w-[20%] px-3 py-2">状态</th>
+              <th className="w-24 px-3 py-2 text-right">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -264,7 +271,10 @@ export function KbDocList() {
                 {/* 分类 */}
                 <td className="px-3 py-2">
                   {doc.category ? (
-                    <span className="rounded-full bg-violet/10 px-2 py-0.5 text-[11px] text-violet-foreground">
+                    <span
+                      title={doc.category}
+                      className="inline-block max-w-full truncate rounded-full bg-violet/10 px-2 py-0.5 text-[11px] text-violet-foreground"
+                    >
                       {doc.category}
                     </span>
                   ) : (
