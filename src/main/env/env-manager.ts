@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { EdaToolInfo, EnvConfig, SystemEnvVars } from '@shared/types';
 import { KNOWN_ENV_VAR_NAMES, getEnvVarCatalog as sharedGetEnvVarCatalog } from '@shared/env-catalog';
+import { getLoginShellEnv, refreshLoginShellEnv, findInPathAsync } from './login-shell-env';
 
 const SOCVERIFY_DIR = '.socverify';
 const ENV_CONFIG_FILE = 'env.json';
@@ -24,22 +25,38 @@ const EDA_TOOLS: Array<{ command: string; name: string; versionArgs: string[] }>
 
 /**
  * Detect EDA tools available on the system PATH.
- * Returns a list of all known tools with their detection status.
+ *
+ * Uses the login shell's environment (which includes `.bashrc`/`.profile`/
+ * `module init` PATH extensions) rather than the minimal desktop-launch
+ * environment.  This ensures EDA tools installed in non-standard directories
+ * (e.g. `/tools/synopsys/.../bin`) are detected even when the app is launched
+ * from the desktop (AppImage).
+ *
+ * On Windows, `where` is used; on Linux/macOS, `which` is used.
+ *
+ * @param refresh - Force a fresh capture of the login shell environment
+ *                  before detection (default: `false`, uses cache).
+ * @returns a list of all known tools with their detection status.
  */
-export async function detectEdaTools(): Promise<EdaToolInfo[]> {
+export async function detectEdaTools(refresh = false): Promise<EdaToolInfo[]> {
+  if (refresh) refreshLoginShellEnv();
+
+  const mergedEnv = await getLoginShellEnv();
   const results: EdaToolInfo[] = [];
 
   for (const tool of EDA_TOOLS) {
     try {
-      const { stdout } = await execFileAsync('where', [tool.command], {
-        timeout: 5000,
-      });
-      const path = stdout.trim().split('\n')[0].trim();
+      // Find the tool using the login shell's PATH
+      const paths = await findInPathAsync(tool.command, mergedEnv);
+      const path = paths[0]?.trim();
       if (path) {
         let version: string | undefined;
         try {
-          const { stdout: verOut } = await execFileAsync(tool.command, tool.versionArgs, {
+          // Execute the resolved absolute path with the merged env
+          // so that VCS_HOME / LD_LIBRARY_PATH etc. are available.
+          const { stdout: verOut } = await execFileAsync(path, tool.versionArgs, {
             timeout: 10000,
+            env: mergedEnv,
           });
           // Extract version from first few lines
           version = verOut.split('\n').slice(0, 3).join(' ').trim();
@@ -48,6 +65,8 @@ export async function detectEdaTools(): Promise<EdaToolInfo[]> {
           // Version detection failed, still report as detected
         }
         results.push({ name: tool.name, version, path, detected: true });
+      } else {
+        results.push({ name: tool.name, path: '', detected: false });
       }
     } catch {
       results.push({ name: tool.name, path: '', detected: false });
@@ -98,14 +117,20 @@ export function getEnvVarCatalog() {
 /**
  * Detect current system (terminal) environment variables for all known env var names.
  *
- * Reads `process.env` and returns the values for any known env var that is
- * currently set.  This allows the UI to pre-fill fields from the user's
- * shell environment.
+ * Uses the login shell environment (which includes `.bashrc`/`.profile`/
+ * `module init` variables) rather than the minimal desktop-launch environment.
+ * This ensures `VCS_HOME`, `LM_LICENSE_FILE` etc. are detected even when the
+ * app is launched from the desktop (AppImage).
+ *
+ * @param refresh - Force a fresh capture of the login shell environment.
  */
-export function detectSystemEnvVars(): SystemEnvVars {
+export async function detectSystemEnvVars(refresh = false): Promise<SystemEnvVars> {
+  if (refresh) refreshLoginShellEnv();
+
+  const env = await getLoginShellEnv();
   const result: SystemEnvVars = {};
   for (const name of KNOWN_ENV_VAR_NAMES) {
-    const value = process.env[name];
+    const value = env[name];
     if (value !== undefined && value !== '') {
       result[name] = value;
     }
@@ -119,9 +144,14 @@ export function detectSystemEnvVars(): SystemEnvVars {
  * For each known env var that exists in the system environment but is not
  * yet set in `current`, the system value is filled in.  Existing user-set
  * values are never overwritten.
+ *
+ * @param refresh - Force a fresh capture of the login shell environment.
  */
-export function mergeSystemEnvVars(current: Record<string, string>): Record<string, string> {
-  const system = detectSystemEnvVars();
+export async function mergeSystemEnvVars(
+  current: Record<string, string>,
+  refresh = false,
+): Promise<Record<string, string>> {
+  const system = await detectSystemEnvVars(refresh);
   const merged: Record<string, string> = { ...current };
   for (const [name, value] of Object.entries(system)) {
     if (merged[name] === undefined || merged[name] === '') {

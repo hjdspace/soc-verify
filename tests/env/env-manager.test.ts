@@ -1,29 +1,21 @@
-import { describe, it, expect, vi } from 'vitest';
-import { detectEdaTools, loadEnvConfig, saveEnvConfig, buildEnvFromConfig, getKnownEnvVarNames, getEnvVarCatalog, detectSystemEnvVars, mergeSystemEnvVars } from '../../src/main/env/env-manager';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-// Mock child_process
+// ─── Hoisted mock state ─────────────────────────────────────
+// vi.mock factories are hoisted to the top of the file, so any variables
+// they reference must also be hoisted via vi.hoisted().
+const { execFileMock, mockLoginShellEnv } = vi.hoisted(() => ({
+  execFileMock: vi.fn(),
+  mockLoginShellEnv: {} as Record<string, string>,
+}));
+
+// ─── Mock child_process ─────────────────────────────────────
+// The mock must handle both 'where' (Windows) and 'which' (Linux/macOS)
+// commands for tool path lookup, plus tool version commands.
 vi.mock('node:child_process', () => ({
-  execFile: vi.fn((cmd, args, opts, cb) => {
-    if (cmd === 'where') {
-      // Simulate finding 'vcs' but not others
-      if (args[0] === 'vcs') {
-        cb(null, { stdout: '/usr/bin/vcs\n', stderr: '' });
-      } else if (args[0] === 'verilator') {
-        cb(null, { stdout: '/usr/bin/verilator\n', stderr: '' });
-      } else {
-        cb(new Error('not found'), { stdout: '', stderr: '' });
-      }
-    } else if (cmd === 'vcs') {
-      cb(null, { stdout: 'VCS version Q-2020.03', stderr: '' });
-    } else if (cmd === 'verilator') {
-      cb(null, { stdout: 'Verilator 5.0', stderr: '' });
-    } else {
-      cb(new Error('error'), { stdout: '', stderr: '' });
-    }
-  }),
+  execFile: execFileMock,
 }));
 
 vi.mock('node:util', async () => {
@@ -41,9 +33,92 @@ vi.mock('node:util', async () => {
   };
 });
 
+// ─── Mock login-shell-env ───────────────────────────────────
+// Mock the login shell env module so tests don't actually spawn shells.
+// The mock returns a controlled environment that simulates what a login
+// shell would produce.
+vi.mock('../../src/main/env/login-shell-env', () => ({
+  getLoginShellEnv: vi.fn(async () => ({ ...process.env, ...mockLoginShellEnv })),
+  refreshLoginShellEnv: vi.fn(),
+  findInPathAsync: vi.fn(async (executable: string, _env?: Record<string, string>) => {
+    // Simulate 'which'/'where' behavior using the execFileMock.
+    // This is called by detectEdaTools instead of the raw execFile('where', ...).
+    const cmd = process.platform === 'win32' ? 'where' : 'which';
+    return new Promise<string[]>((resolve) => {
+      execFileMock(cmd, [executable], { timeout: 5000 }, (err: unknown, result: { stdout: string }) => {
+        if (err) return resolve([]);
+        resolve(result.stdout.trim().split(/\r?\n/).filter(Boolean));
+      });
+    });
+  }),
+}));
+
+// Import after mocks are set up
+import {
+  detectEdaTools,
+  loadEnvConfig,
+  saveEnvConfig,
+  buildEnvFromConfig,
+  getKnownEnvVarNames,
+  getEnvVarCatalog,
+  detectSystemEnvVars,
+  mergeSystemEnvVars,
+} from '../../src/main/env/env-manager';
+
+// ─── Helper: configure execFileMock for a set of tools ──────
+/**
+ * Set up the execFileMock to simulate finding specific tools.
+ *
+ * @param foundTools - Map of tool command → path (e.g. { vcs: '/usr/bin/vcs' })
+ * @param versionOutputs - Map of tool command → version string
+ */
+function setupToolMocks(
+  foundTools: Record<string, string>,
+  versionOutputs: Record<string, string> = {},
+): void {
+  execFileMock.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: (err: unknown, result: { stdout: string; stderr: string }) => void) => {
+    if (cmd === 'where' || cmd === 'which') {
+      const toolName = args[0];
+      if (foundTools[toolName]) {
+        cb(null, { stdout: foundTools[toolName] + '\n', stderr: '' });
+      } else {
+        cb(new Error('not found'), { stdout: '', stderr: '' });
+      }
+    } else {
+      // Version detection: cmd is the resolved absolute path (e.g. '/usr/bin/vcs').
+      // Match by the basename of the path, or by the full path, or by the
+      // command name in versionOutputs.
+      const basename = cmd.split(/[/\\]/).pop() ?? cmd;
+      const versionKey = Object.keys(versionOutputs).find(
+        (key) => key === cmd || key === basename || foundTools[key] === cmd,
+      );
+      if (versionKey) {
+        cb(null, { stdout: versionOutputs[versionKey], stderr: '' });
+      } else {
+        cb(new Error('error'), { stdout: '', stderr: '' });
+      }
+    }
+  });
+}
+
+// ─── Reset mocks before each test ───────────────────────────
+beforeEach(() => {
+  execFileMock.mockReset();
+  // Clear mock login shell env
+  for (const key of Object.keys(mockLoginShellEnv)) {
+    delete mockLoginShellEnv[key];
+  }
+});
+
+// ─── Tests ──────────────────────────────────────────────────
 describe('env-manager', () => {
   describe('detectEdaTools', () => {
     it('returns a list of all known EDA tools with detection status', async () => {
+      setupToolMocks(
+        { vcs: '/usr/bin/vcs', verilator: '/usr/bin/verilator' },
+        { vcs: 'VCS version Q-2020.03', verilator: 'Verilator 5.0' },
+      );
+
       const tools = await detectEdaTools();
       expect(tools.length).toBeGreaterThan(0);
       const vcs = tools.find((t) => t.name.includes('VCS'));
@@ -55,6 +130,47 @@ describe('env-manager', () => {
       const xrun = tools.find((t) => t.name.includes('Xcelium'));
       expect(xrun).toBeDefined();
       expect(xrun!.detected).toBe(false);
+    });
+
+    it('works with both "where" and "which" commands (platform adaptive)', async () => {
+      // This test verifies that the mock handles whichever command
+      // the platform uses. The findInPathAsync mock dispatches to
+      // execFileMock with the correct command name.
+      setupToolMocks(
+        { vcs: '/usr/bin/vcs' },
+        { vcs: 'VCS version Q-2020.03' },
+      );
+
+      const tools = await detectEdaTools();
+      const vcs = tools.find((t) => t.name.includes('VCS'));
+      expect(vcs!.detected).toBe(true);
+
+      // Verify that either 'where' or 'which' was called (not both)
+      const whichCalls = execFileMock.mock.calls.filter(
+        (c: unknown[]) => c[0] === 'where' || c[0] === 'which',
+      );
+      expect(whichCalls.length).toBeGreaterThan(0);
+    });
+
+    it('reports version as undefined when version command fails but tool is detected', async () => {
+      setupToolMocks({ vcs: '/usr/bin/vcs' }, {});
+
+      const tools = await detectEdaTools();
+      const vcs = tools.find((t) => t.name.includes('VCS'));
+      expect(vcs).toBeDefined();
+      expect(vcs!.detected).toBe(true);
+      expect(vcs!.version).toBeUndefined();
+    });
+
+    it('reports detected=false when tool is not found in PATH', async () => {
+      setupToolMocks({}, {});
+
+      const tools = await detectEdaTools();
+      // All tools should be undetected
+      for (const tool of tools) {
+        expect(tool.detected).toBe(false);
+        expect(tool.path).toBe('');
+      }
     });
   });
 
@@ -228,110 +344,81 @@ describe('env-manager', () => {
   });
 
   describe('detectSystemEnvVars', () => {
-    it('returns known env vars from process.env', () => {
-      const original = { ...process.env };
-      process.env['PROJ_RTL'] = '/home/user/proj/rtl';
-      process.env['VCS_HOME'] = '/tools/synopsys/vcs';
-      process.env['LM_LICENSE_FILE'] = '27000@license-server';
+    it('returns known env vars from the login shell environment', async () => {
+      // Simulate login shell env having EDA variables set
+      mockLoginShellEnv['PROJ_RTL'] = '/home/user/proj/rtl';
+      mockLoginShellEnv['VCS_HOME'] = '/tools/synopsys/vcs';
+      mockLoginShellEnv['LM_LICENSE_FILE'] = '27000@license-server';
 
-      const detected = detectSystemEnvVars();
+      const detected = await detectSystemEnvVars();
       expect(detected['PROJ_RTL']).toBe('/home/user/proj/rtl');
       expect(detected['VCS_HOME']).toBe('/tools/synopsys/vcs');
       expect(detected['LM_LICENSE_FILE']).toBe('27000@license-server');
-
-      // Restore
-      for (const key of ['PROJ_RTL', 'VCS_HOME', 'LM_LICENSE_FILE']) {
-        if (original[key] !== undefined) {
-          process.env[key] = original[key];
-        } else {
-          delete process.env[key];
-        }
-      }
     });
 
-    it('does not include empty string values', () => {
-      const original = process.env['PROJ_ENV'];
-      process.env['PROJ_ENV'] = '';
+    it('does not include empty string values', async () => {
+      mockLoginShellEnv['PROJ_ENV'] = '';
 
-      const detected = detectSystemEnvVars();
+      const detected = await detectSystemEnvVars();
       expect(detected['PROJ_ENV']).toBeUndefined();
-
-      if (original !== undefined) {
-        process.env['PROJ_ENV'] = original;
-      } else {
-        delete process.env['PROJ_ENV'];
-      }
     });
 
-    it('does not include unknown env var names', () => {
-      const original = process.env['UNKNOWN_VAR_XYZ'];
-      process.env['UNKNOWN_VAR_XYZ'] = 'some-value';
+    it('does not include unknown env var names', async () => {
+      mockLoginShellEnv['UNKNOWN_VAR_XYZ'] = 'some-value';
 
-      const detected = detectSystemEnvVars();
+      const detected = await detectSystemEnvVars();
       expect(detected['UNKNOWN_VAR_XYZ']).toBeUndefined();
+    });
 
-      if (original !== undefined) {
-        process.env['UNKNOWN_VAR_XYZ'] = original;
-      } else {
-        delete process.env['UNKNOWN_VAR_XYZ'];
+    it('detects env vars that are only in login shell env (not process.env)', async () => {
+      // This simulates the AppImage desktop launch scenario where VCS_HOME
+      // is set in .bashrc but not in the desktop environment.
+      const originalVcsHome = process.env['VCS_HOME'];
+      delete process.env['VCS_HOME'];
+      mockLoginShellEnv['VCS_HOME'] = '/tools/synopsys/vcs/M-2023.06';
+
+      try {
+        const detected = await detectSystemEnvVars();
+        expect(detected['VCS_HOME']).toBe('/tools/synopsys/vcs/M-2023.06');
+      } finally {
+        if (originalVcsHome !== undefined) {
+          process.env['VCS_HOME'] = originalVcsHome;
+        }
       }
     });
   });
 
   describe('mergeSystemEnvVars', () => {
-    it('fills in system values for vars not yet set', () => {
-      const original = { ...process.env };
-      process.env['PROJ_RTL'] = '/home/user/proj/rtl';
-      process.env['VCS_HOME'] = '/tools/synopsys/vcs';
+    it('fills in system values for vars not yet set', async () => {
+      mockLoginShellEnv['PROJ_RTL'] = '/home/user/proj/rtl';
+      mockLoginShellEnv['VCS_HOME'] = '/tools/synopsys/vcs';
 
       const current = { PROJ_ENV: '/home/user/proj/dv' };
-      const merged = mergeSystemEnvVars(current);
+      const merged = await mergeSystemEnvVars(current);
       expect(merged['PROJ_ENV']).toBe('/home/user/proj/dv');
       expect(merged['PROJ_RTL']).toBe('/home/user/proj/rtl');
       expect(merged['VCS_HOME']).toBe('/tools/synopsys/vcs');
-
-      for (const key of ['PROJ_RTL', 'VCS_HOME']) {
-        if (original[key] !== undefined) {
-          process.env[key] = original[key];
-        } else {
-          delete process.env[key];
-        }
-      }
     });
 
-    it('does not overwrite existing user-set values', () => {
-      const original = process.env['PROJ_RTL'];
-      process.env['PROJ_RTL'] = '/system/path';
+    it('does not overwrite existing user-set values', async () => {
+      mockLoginShellEnv['PROJ_RTL'] = '/system/path';
 
       const current = { PROJ_RTL: '/user/custom/path' };
-      const merged = mergeSystemEnvVars(current);
+      const merged = await mergeSystemEnvVars(current);
       expect(merged['PROJ_RTL']).toBe('/user/custom/path');
-
-      if (original !== undefined) {
-        process.env['PROJ_RTL'] = original;
-      } else {
-        delete process.env['PROJ_RTL'];
-      }
     });
 
-    it('overwrites empty string values with system values', () => {
-      const original = process.env['PROJ_RTL'];
-      process.env['PROJ_RTL'] = '/system/path';
+    it('overwrites empty string values with system values', async () => {
+      mockLoginShellEnv['PROJ_RTL'] = '/system/path';
 
       const current = { PROJ_RTL: '' };
-      const merged = mergeSystemEnvVars(current);
+      const merged = await mergeSystemEnvVars(current);
       expect(merged['PROJ_RTL']).toBe('/system/path');
-
-      if (original !== undefined) {
-        process.env['PROJ_RTL'] = original;
-      } else {
-        delete process.env['PROJ_RTL'];
-      }
     });
 
-    it('preserves custom (non-catalog) env vars', () => {
+    it('preserves custom (non-catalog) env vars', async () => {
       const current = { MY_CUSTOM_VAR: 'custom-value' };
-      const merged = mergeSystemEnvVars(current);
+      const merged = await mergeSystemEnvVars(current);
       expect(merged['MY_CUSTOM_VAR']).toBe('custom-value');
     });
   });

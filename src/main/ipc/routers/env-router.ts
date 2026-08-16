@@ -20,7 +20,7 @@ import type { EnvConfig } from '@shared/types';
 export const envRouter = t.router({
   detectTools: t.procedure
     .mutation(async () => {
-      const tools = await detectEdaTools();
+      const tools = await detectEdaTools(true);
       return { tools };
     }),
 
@@ -90,7 +90,7 @@ export const envRouter = t.router({
   }),
 
   /** Return current system (terminal) env vars for all known names. */
-  getSystemEnv: t.procedure.query(() => {
+  getSystemEnv: t.procedure.query(async () => {
     return detectSystemEnvVars();
   }),
 
@@ -107,7 +107,7 @@ export const envRouter = t.router({
       const project = requireProject(input.projectId);
       const existing = await loadEnvConfig(project.rootPath);
       const currentEnvVars = existing?.envVars ?? {};
-      const mergedEnvVars = mergeSystemEnvVars(currentEnvVars);
+      const mergedEnvVars = await mergeSystemEnvVars(currentEnvVars, true);
       const config: EnvConfig = {
         tools: existing?.tools ?? [],
         envVars: mergedEnvVars,
