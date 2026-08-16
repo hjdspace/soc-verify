@@ -13,6 +13,7 @@
  *   - kb.delete     删除文档
  *   - kb.retry      重试失败转换
  *   - kb.categories 分类树 + 计数
+ *   - kb.getSettings / kb.updateSettings 知识库设置（引擎 + AI 模型）
  *
  * 错误处理：register/unregister/mount/unmount 返回 Result 联合
  * （{ ok: true, ...data } | { ok: false, error: KbError }），
@@ -43,7 +44,9 @@ import {
 import { deepReindex, type DeepReindexEvent } from '../../kb/deep-reindexer';
 import { protocolForProvider, type LlmConfig } from '../../kb/indexer';
 import { credentialManager } from '../../credentials/credential-manager';
-import { ensureV1Prefix } from '../../agent/openai-compatible';
+import { kbSettingsManager, ENGINE_IDS, type KbSettings } from '../../kb/kb-settings';
+import { listConvertEngines, getActiveConvertEngine, type ConvertEngineInfo } from '../../kb/engines';
+import { ensureV1Prefix, fetchOpenAICompatibleModels } from '../../agent/openai-compatible';
 import { loadSessions } from '../../agent/session-persistence';
 import type { KbRegistration, KbMount, KbError, KbDocument, KbCategory, KbDocStatusEvent } from '../../kb/types';
 
@@ -120,46 +123,120 @@ type ActiveCredential = {
   model?: string;
 };
 
+/** resolveActiveCredential 结果：生效凭证 + Agent 面板实际使用的模型 ID */
+type ResolvedLlm = {
+  credential: ActiveCredential;
+  /** 最近 AI 会话持久化的 model.id（Agent 面板当前对话所用、已验证可用的模型） */
+  sessionModelId?: string;
+};
+
 /**
  * 解析当前生效的 LLM 凭证 — 与右侧 AI Agent 面板保持一致：
  * 优先用项目最近 AI 会话持久化的 providerId（用户在 Agent 面板
  * 实际选择且验证可用的凭证），回退到默认凭证（列表第一条）。
+ *
+ * 同时带回该会话的 model.id，供 KB 分类复用 Agent 面板的模型选择。
  */
-async function resolveActiveCredential(): Promise<ActiveCredential | null> {
+async function resolveActiveCredential(): Promise<ResolvedLlm | null> {
   try {
     const rootPath = getActiveProjectRoot();
     const sessions = await loadSessions(rootPath);
     const latest = sessions
       .filter((s) => s.model?.providerId)
       .sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0];
-    const providerId = latest?.model?.providerId;
-    if (providerId) {
-      const cred = await credentialManager.get(providerId);
-      if (cred) return cred;
+    const modelRef = latest?.model;
+    if (modelRef?.providerId) {
+      const cred = await credentialManager.get(modelRef.providerId);
+      if (cred) {
+        // setModel 持久化时 id 可能为空串，视为未指定
+        return { credential: cred, sessionModelId: modelRef.id || undefined };
+      }
     }
   } catch {
     // 项目未打开等 — 回退默认凭证
   }
-  return credentialManager.getDefaultCredential();
+  const fallback = await credentialManager.getDefaultCredential();
+  return fallback ? { credential: fallback } : null;
 }
 
 /**
- * 尝试获取 LLM 配置（复用 AI Agent 面板的凭证选择）。
+ * 从 openai-compatible 端点拉取第一个可用模型 — 与设置页 fetchModels /
+ * omp 自动选模行为一致。硬编码默认模型（如 gpt-4o-mini）在中转网关上
+ * 常不存在，会导致 404 "model is not found"。
+ * anthropic / gemini 原生端点或拉取失败时回退 provider 默认模型。
+ */
+async function firstAvailableModel(
+  cred: ActiveCredential,
+  baseUrl: string,
+): Promise<string> {
+  if (protocolForProvider(cred.providerId) !== 'openai') {
+    return defaultModelForProvider(cred.providerId);
+  }
+  try {
+    const models = await fetchOpenAICompatibleModels({
+      baseUrl,
+      apiKey: cred.apiKey,
+    });
+    if (models.length > 0) return models[0].id;
+  } catch {
+    // 网络失败等 — 回退硬编码默认
+  }
+  return defaultModelForProvider(cred.providerId);
+}
+
+/**
+ * 解析凭证的对话端点。
+ * gemini 原生端点用 /v1beta 版本前缀，不能强加 /v1。
+ * 调用方需先确认 cred.baseUrl 非空。
+ */
+function baseUrlForCredential(cred: ActiveCredential): string {
+  const baseUrl = cred.baseUrl ?? '';
+  return protocolForProvider(cred.providerId) === 'gemini'
+    ? baseUrl.replace(/\/+$/, '')
+    : ensureV1Prefix(baseUrl);
+}
+
+/**
+ * 尝试获取 LLM 配置。
+ *
+ * 模型优先级：KB 设置显式配置（设置页知识库 Tab）> 凭证 model 字段
+ * （凭证表单显式配置）> Agent 会话持久化模型 > API 拉取的第一个可用
+ * 模型（openai-compatible）> provider 默认。
+ *
+ * 凭证优先级（未在 KB 设置显式指定时）：Agent 会话 providerId > 默认凭证。
  * 无配置时返回 null（上传时降级为占位条目）。
+ * 注意 model 解析用 `||` 而非 `??` — 空字符串视为未指定，需继续回退。
  */
 async function getLlmConfig(): Promise<LlmConfig | null> {
-  const cred = await resolveActiveCredential();
-  if (!cred || !cred.baseUrl || !cred.apiKey) {
+  // 1. KB 设置显式配置 — 用户在设置页知识库 Tab 指定的凭证与模型
+  const kbSettings = await kbSettingsManager.load();
+  if (kbSettings.llm.providerId) {
+    const cred = await credentialManager.get(kbSettings.llm.providerId);
+    if (cred?.baseUrl && cred.apiKey) {
+      const baseUrl = baseUrlForCredential(cred);
+      const model = kbSettings.llm.model?.trim()
+        || cred.model?.trim()
+        || await firstAvailableModel(cred, baseUrl);
+      return { baseUrl, apiKey: cred.apiKey, model, providerId: cred.providerId };
+    }
+    // 凭证已被删除 — 落回自动推导链
+  }
+
+  // 2. 自动推导（既有默认逻辑，行为不变）
+  const resolved = await resolveActiveCredential();
+  if (!resolved) return null;
+  const { credential: cred, sessionModelId } = resolved;
+  if (!cred.baseUrl || !cred.apiKey) {
     return null;
   }
-  // gemini 原生端点用 /v1beta 版本前缀，不能强加 /v1
-  const baseUrl = protocolForProvider(cred.providerId) === 'gemini'
-    ? cred.baseUrl.replace(/\/+$/, '')
-    : ensureV1Prefix(cred.baseUrl);
+  const baseUrl = baseUrlForCredential(cred);
+  const model = cred.model?.trim()
+    || sessionModelId
+    || await firstAvailableModel(cred, baseUrl);
   return {
     baseUrl,
     apiKey: cred.apiKey,
-    model: cred.model ?? defaultModelForProvider(cred.providerId),
+    model,
     providerId: cred.providerId,
   };
 }
@@ -188,12 +265,6 @@ function notifyKbDeepReindex(event: DeepReindexEvent): void {
 
 // ── 自动扫描文档 ─────────────────────────────────────────────
 
-/** 支持的文档文件扩展名 */
-const SUPPORTED_EXTENSIONS = new Set([
-  '.pdf', '.doc', '.docx', '.ppt', '.pptx',
-  '.xls', '.xlsx', '.odt', '.rtf', '.epub', '.csv',
-]);
-
 /**
  * 扫描知识库目录下的文档文件。
  *
@@ -204,6 +275,8 @@ const SUPPORTED_EXTENSIONS = new Set([
  * 对于 sources/ 中已有但 docs/ 中无对应 .md 的文件，自动触发上传流水线。
  * 对于库根目录下的文档文件，复制到 sources/ 后触发上传流水线。
  *
+ * 支持的扩展名跟随当前生效的转换引擎（用户可在设置页切换）。
+ *
  * 异步执行，不阻塞 mount 响应。
  */
 async function autoScanDocuments(
@@ -213,6 +286,8 @@ async function autoScanDocuments(
   const { readdir, copyFile } = await import('node:fs/promises');
   const { join } = await import('node:path');
   const { existsSync } = await import('node:fs');
+
+  const supportedExtensions = (await getActiveConvertEngine()).supportedExtensions;
 
   const sourcesDir = join(kbPath, 'sources');
   const docsDir = join(kbPath, 'docs');
@@ -225,7 +300,7 @@ async function autoScanDocuments(
       for (const entry of entries) {
         if (!entry.isFile()) continue;
         const ext = entry.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? '';
-        if (!SUPPORTED_EXTENSIONS.has(ext)) continue;
+        if (!supportedExtensions.includes(ext)) continue;
 
         const docName = entry.name.slice(0, -ext.length) || entry.name;
         // 检查 docs/ 中是否已有对应的 .md
@@ -262,8 +337,10 @@ async function autoScanDocuments(
     const entries = await readdir(kbPath, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isFile()) continue;
+      // 知识库自身的索引文件不可作为文档自吞（markitdown 引擎支持 .md）
+      if (entry.name.toLowerCase() === 'index.md') continue;
       const ext = entry.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? '';
-      if (!SUPPORTED_EXTENSIONS.has(ext)) continue;
+      if (!supportedExtensions.includes(ext)) continue;
 
       const srcPath = join(kbPath, entry.name);
       // 复制到 sources/ 后上传
@@ -697,5 +774,53 @@ export const kbRouter = t.router({
         return { ok: true, sessionId: result.sessionId, documentCount: result.documentCount };
       }
       return { ok: false, error: result.error };
+    }),
+
+  // ─── kb.getSettings ────────────────────────────────────────
+  //
+  // 知识库应用级设置（转换引擎 + AI 分类模型显式配置）。
+
+  getSettings: t.procedure
+    .input((_raw): Record<string, never> => {
+      return {};
+    })
+    .query(async (): Promise<{ settings: KbSettings; engines: ConvertEngineInfo[] }> => {
+      const settings = await kbSettingsManager.load();
+      return { settings, engines: listConvertEngines() };
+    }),
+
+  // ─── kb.updateSettings ─────────────────────────────────────
+  //
+  // 全量覆写知识库设置。llm.providerId/model 传空字符串即清除
+  // （回退自动推导）。未提供的字段按默认值处理（覆写语义，
+  // 渲染端先 load 再整体提交，与 TV 配置保存模式一致）。
+
+  updateSettings: t.procedure
+    .input((raw): { convertEngine: string; llm: { providerId?: string; model?: string } } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.convertEngine !== 'string' || !ENGINE_IDS.has(r.convertEngine)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'convertEngine must be anydoc or markitdown' });
+      }
+      const llmRaw = (r.llm ?? {}) as Record<string, unknown>;
+      if (
+        (llmRaw.providerId !== undefined && typeof llmRaw.providerId !== 'string')
+        || (llmRaw.model !== undefined && typeof llmRaw.model !== 'string')
+      ) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'llm.providerId and llm.model must be strings' });
+      }
+      return {
+        convertEngine: r.convertEngine,
+        llm: {
+          providerId: typeof llmRaw.providerId === 'string' ? llmRaw.providerId : '',
+          model: typeof llmRaw.model === 'string' ? llmRaw.model : '',
+        },
+      };
+    })
+    .mutation(async ({ input }): Promise<{ settings: KbSettings }> => {
+      const settings = await kbSettingsManager.save({
+        convertEngine: input.convertEngine as KbSettings['convertEngine'],
+        llm: input.llm,
+      });
+      return { settings };
     }),
 });

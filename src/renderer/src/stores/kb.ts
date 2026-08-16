@@ -73,6 +73,30 @@ export type KbDocStatusEvent = {
   aiError?: string;
 };
 
+// ── 设置类型（kb.getSettings / kb.updateSettings）──────────────
+
+/** 转换引擎 ID */
+export type KbConvertEngineId = 'anydoc' | 'markitdown';
+
+/** 转换引擎元信息（设置页展示） */
+export type KbEngineInfo = {
+  id: KbConvertEngineId;
+  label: string;
+  description: string;
+  supportedExtensions: string[];
+};
+
+/** 知识库 AI 模型配置（字段为空 = 自动跟随 Agent 面板） */
+export type KbLlmSettings = {
+  providerId?: string;
+  model?: string;
+};
+
+export type KbSettings = {
+  convertEngine: KbConvertEngineId;
+  llm: KbLlmSettings;
+};
+
 // ── Store 接口 ──────────────────────────────────────────────
 
 interface KbStoreState {
@@ -153,6 +177,13 @@ interface KbStoreState {
     message: string;
     error?: string;
   }) => void;
+
+  // ── 知识库设置（引擎 + AI 模型）────────────────────────
+  kbSettings: KbSettings | null;
+  kbSettingsLoading: boolean;
+  kbEngines: KbEngineInfo[];
+  loadKbSettings: () => Promise<void>;
+  updateKbSettings: (settings: KbSettings) => Promise<boolean>;
 }
 
 export const useKbStore = create<KbStoreState>((set, get) => ({
@@ -178,6 +209,9 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
   previewDocName: null,
   previewContent: null,
   previewLoading: false,
+  kbSettings: null,
+  kbSettingsLoading: false,
+  kbEngines: [],
 
   // ── 加载库列表 ───────────────────────────────────────────
   loadKbList: async () => {
@@ -701,6 +735,36 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
       set({ deepReindexing: false, deepReindexProgress: null });
     } else if (event.phase === 'failed') {
       set({ deepReindexing: false, deepReindexProgress: null });
+    }
+  },
+
+  // ── 知识库设置 ─────────────────────────────────────────
+  loadKbSettings: async () => {
+    set({ kbSettingsLoading: true });
+    try {
+      const result = await trpc.kb.getSettings.query({});
+      set({ kbSettings: result.settings, kbEngines: result.engines, kbSettingsLoading: false });
+    } catch (err) {
+      set({ kbSettingsLoading: false });
+      useToastStore.getState().error(
+        '加载知识库设置失败',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  },
+
+  updateKbSettings: async (settings) => {
+    try {
+      const result = await trpc.kb.updateSettings.mutate(settings);
+      set({ kbSettings: result.settings });
+      useToastStore.getState().success('知识库设置已保存');
+      return true;
+    } catch (err) {
+      useToastStore.getState().error(
+        '保存知识库设置失败',
+        err instanceof Error ? err.message : String(err),
+      );
+      return false;
     }
   },
 }));

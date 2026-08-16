@@ -10,9 +10,10 @@ import { useTimingViolationStore } from '@renderer/stores/timing-violation';
 import { cn } from '@renderer/lib/utils';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
 import { PluginsTab } from './PluginsTab';
+import { KbSettingsTab } from './KbSettingsTab';
 import type { CredentialEntry, SkillInfo, CreateSkillInput, McpConfigFile, McpServerConfig, McpTransportType, McpServerInfo } from '@shared/types';
 
-type SettingsTab = 'credentials' | 'plugins' | 'skills' | 'mcp' | 'prompt' | 'appearance' | 'timing-violation';
+type SettingsTab = 'credentials' | 'kb' | 'plugins' | 'skills' | 'mcp' | 'prompt' | 'appearance' | 'timing-violation';
 
 export function SettingsPanel() {
   const settingsOpen = useUiStore((s) => s.settingsOpen);
@@ -23,6 +24,7 @@ export function SettingsPanel() {
 
   const tabs: Array<{ id: SettingsTab; label: string; icon: typeof Key }> = [
     { id: 'credentials', label: '模型配置', icon: Cpu },
+    { id: 'kb', label: '知识库', icon: BookOpen },
     { id: 'plugins', label: '插件管理', icon: Puzzle },
     { id: 'skills', label: 'Skill 管理', icon: Package },
     { id: 'mcp', label: 'MCP 配置', icon: Server },
@@ -68,6 +70,7 @@ export function SettingsPanel() {
         <div className="flex-1 overflow-auto p-4">
           {tab === 'appearance' && <AppearanceTab />}
           {tab === 'credentials' && <CredentialsTab />}
+          {tab === 'kb' && <KbSettingsTab />}
           {tab === 'plugins' && <PluginsTab />}
           {tab === 'skills' && <SkillsTab />}
           {tab === 'mcp' && <McpTab />}

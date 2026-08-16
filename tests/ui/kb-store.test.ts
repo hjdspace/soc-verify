@@ -119,6 +119,20 @@ vi.mock('@renderer/lib/trpc', () => ({
       reclassify: { mutate: vi.fn().mockResolvedValue({ ok: true, category: '验证方法', title: '测试文档', summary: '新摘要', keywords: ['UVM'], moved: true }) },
       deepReindex: { mutate: vi.fn().mockResolvedValue({ ok: true, sessionId: 'temp-session-1', documentCount: 3 }) },
       pickFiles: { mutate: vi.fn().mockResolvedValue({ canceled: true }) },
+      getSettings: {
+        query: vi.fn().mockResolvedValue({
+          settings: { convertEngine: 'anydoc', llm: {} },
+          engines: [
+            { id: 'anydoc', label: 'anydoc（默认）', description: 'Rust 原生引擎', supportedExtensions: ['.docx', '.pdf'] },
+            { id: 'markitdown', label: 'MarkItDown 兼容（纯 JS）', description: '纯本地转换', supportedExtensions: ['.docx', '.csv'] },
+          ],
+        }),
+      },
+      updateSettings: {
+        mutate: vi.fn().mockImplementation(async (input: { convertEngine: string; llm: { providerId?: string; model?: string } }) => ({
+          settings: { convertEngine: input.convertEngine, llm: input.llm },
+        })),
+      },
     },
     project: {
       pickFiles: { mutate: vi.fn() },
@@ -178,6 +192,9 @@ function resetKbStore() {
     previewDocName: null,
     previewContent: null,
     previewLoading: false,
+    kbSettings: null,
+    kbSettingsLoading: false,
+    kbEngines: [],
   });
 }
 
@@ -821,6 +838,59 @@ describe('KbStore', () => {
       });
       expect(useKbStore.getState().deepReindexing).toBe(false);
       expect(useKbStore.getState().deepReindexProgress).toBeNull();
+    });
+  });
+
+  // ─── 知识库设置 ──────────────────────────────────────────────
+
+  describe('loadKbSettings', () => {
+    it('加载设置与引擎元信息', async () => {
+      await useKbStore.getState().loadKbSettings();
+
+      const { trpc } = await import('@renderer/lib/trpc');
+      expect(vi.mocked(trpc.kb.getSettings.query)).toHaveBeenCalledWith({});
+      expect(useKbStore.getState().kbSettings).toEqual({ convertEngine: 'anydoc', llm: {} });
+      expect(useKbStore.getState().kbEngines).toHaveLength(2);
+      expect(useKbStore.getState().kbSettingsLoading).toBe(false);
+    });
+
+    it('加载失败时提示错误', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.kb.getSettings.query).mockRejectedValueOnce(new Error('Network error'));
+      await useKbStore.getState().loadKbSettings();
+
+      expect(toastMocks.error).toHaveBeenCalledWith('加载知识库设置失败', 'Network error');
+      expect(useKbStore.getState().kbSettingsLoading).toBe(false);
+    });
+  });
+
+  describe('updateKbSettings', () => {
+    it('保存设置并更新 state + 成功提示', async () => {
+      const ok = await useKbStore.getState().updateKbSettings({
+        convertEngine: 'markitdown',
+        llm: { providerId: 'relay', model: 'glm-4.7' },
+      });
+
+      const { trpc } = await import('@renderer/lib/trpc');
+      expect(ok).toBe(true);
+      expect(vi.mocked(trpc.kb.updateSettings.mutate)).toHaveBeenCalledWith({
+        convertEngine: 'markitdown',
+        llm: { providerId: 'relay', model: 'glm-4.7' },
+      });
+      expect(useKbStore.getState().kbSettings).toEqual({
+        convertEngine: 'markitdown',
+        llm: { providerId: 'relay', model: 'glm-4.7' },
+      });
+      expect(toastMocks.success).toHaveBeenCalledWith('知识库设置已保存');
+    });
+
+    it('保存失败返回 false 并提示错误', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.kb.updateSettings.mutate).mockRejectedValueOnce(new Error('Save failed'));
+      const ok = await useKbStore.getState().updateKbSettings({ convertEngine: 'anydoc', llm: {} });
+
+      expect(ok).toBe(false);
+      expect(toastMocks.error).toHaveBeenCalledWith('保存知识库设置失败', 'Save failed');
     });
   });
 });

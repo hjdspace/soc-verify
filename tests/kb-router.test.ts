@@ -115,6 +115,7 @@ vi.mock('@firecrawl/anydoc', () => ({
 // ─── Imports (after mocks) ──────────────────────────────────
 
 import { kbRouter } from '../src/main/ipc/routers/kb-router';
+import { kbSettingsManager } from '../src/main/kb/kb-settings';
 import type { KbListEntry, KbStatus, KbDocument, KbCategory } from '../src/main/kb/types';
 
 const caller = kbRouter.createCaller({});
@@ -165,6 +166,10 @@ async function resetState(): Promise<void> {
   const mountDir = join(projectDir, '.socverify');
   await mkdirP(mountDir, { recursive: true });
   await writeFile(join(mountDir, 'kb-mounts.json'), '[]', 'utf-8');
+
+  // 重置知识库设置（引擎 + LLM 显式配置）
+  kbSettingsManager.resetCache();
+  rmSync(join(regDir, 'kb-settings.json'), { force: true });
 }
 
 /** 创建一个空的知识库目录 */
@@ -439,6 +444,23 @@ describe('kb-router', () => {
         caller.mount({} as { kbId: string }),
       ).rejects.toThrow();
     });
+
+    it('markitdown 引擎下挂载扫描不吞知识库自身的 index.md', async () => {
+      const kbDir = makeExistingKbDir('self-ingest-kb');
+      const regResult = await caller.register({ name: '自吞检查库', path: kbDir });
+      // 切到 markitdown 引擎（支持 .md，扫描窗口更大）
+      await caller.updateSettings({ convertEngine: 'markitdown', llm: {} });
+
+      try {
+        await caller.mount({ kbId: regId(regResult) });
+
+        // 根目录 index.md 不应被复制进 sources/ 当作文档上传
+        expect(existsSync(join(kbDir, 'sources', 'index.md'))).toBe(false);
+        expect(existsSync(join(kbDir, 'index.md'))).toBe(true);
+      } finally {
+        await caller.unmount({ kbId: regId(regResult) }).catch(() => undefined);
+      }
+    });
   });
 
   // ─── kb.unmount ───────────────────────────────────────────
@@ -536,8 +558,7 @@ describe('kb-router', () => {
       expect(result.health.hasIndex).toBe(false);
     });
 
-    it('挂载库被注销后 status 不报错（mounted 为 null）', async () => {
-      const kbDir = makeEmptyKbDir('gone-kb');
+    it('挂载库被注销后 status 不报错（mounted 为 null）', async () => {      const kbDir = makeEmptyKbDir('gone-kb');
       const regResult = await caller.register({ name: '已消失库', path: kbDir });
       const id = regId(regResult);
       await caller.mount({ kbId: id });
@@ -1063,6 +1084,167 @@ describe('kb-router', () => {
       }
     });
 
+    it('凭证未配置模型时复用 Agent 会话持久化的模型（修复 404 model not found）', async () => {
+      const kbDir = makeEmptyKbDir('reclassify-session-model-kb');
+      const regResult = await caller.register({ name: '会话模型库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      mkdirSync(join(kbDir, 'docs', '未分类'), { recursive: true });
+      writeFileSync(join(kbDir, 'docs', '未分类', 'doc.md'), '# doc\n', 'utf-8');
+
+      // 项目最近 AI 会话持久化了中转网关上实际使用的模型
+      const socverifyDir = join(projectDir, '.socverify');
+      mkdirSync(socverifyDir, { recursive: true });
+      writeFileSync(join(socverifyDir, 'sessions.json'), JSON.stringify([{
+        sessionId: 's1',
+        name: 'Agent 会话',
+        projectId: 'test-project-id',
+        createdAt: Date.now(),
+        lastActivityAt: Date.now(),
+        model: { provider: 'openai', id: 'glm-4.7', name: 'GLM-4.7', providerId: 'relay-cred' },
+      }]), 'utf-8');
+
+      // 对应凭证存在但未填写可选的 model 字段
+      mockGetCredential.mockResolvedValue({
+        providerId: 'relay-cred',
+        apiKey: 'sk-relay',
+        baseUrl: 'http://relay.example:3000',
+      });
+
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: '{"category": "验证方法", "title": "doc", "summary": "摘要", "keywords": ["a"]}',
+            },
+          }],
+        }),
+      } as unknown as Response);
+      vi.stubGlobal('fetch', fetchMock);
+
+      try {
+        const result = await caller.reclassify({ name: 'doc' });
+        expect(result.ok).toBe(true);
+
+        // LLM 请求使用会话模型而非硬编码默认模型
+        const chatCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/chat/completions'));
+        expect(chatCall).toBeDefined();
+        const body = JSON.parse(String((chatCall?.[1] as RequestInit | undefined)?.body)) as { model: string };
+        expect(body.model).toBe('glm-4.7');
+      } finally {
+        vi.unstubAllGlobals();
+        mockGetCredential.mockReset();
+        rmSync(join(socverifyDir, 'sessions.json'), { force: true });
+      }
+    });
+
+    it('凭证与会话均无模型时自动拉取端点第一个可用模型', async () => {
+      const kbDir = makeEmptyKbDir('reclassify-autofetch-kb');
+      const regResult = await caller.register({ name: '自动选模库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      mkdirSync(join(kbDir, 'docs', '未分类'), { recursive: true });
+      writeFileSync(join(kbDir, 'docs', '未分类', 'doc.md'), '# doc\n', 'utf-8');
+
+      // 默认凭证（无 model 字段、无 Agent 会话）
+      mockDefaultCredential.mockReturnValue({
+        providerId: 'openai-compatible',
+        apiKey: 'sk-test',
+        baseUrl: 'http://localhost:8557',
+      });
+
+      const fetchMock = vi.fn(async (url: string | URL | Request, _init?: RequestInit): Promise<Response> => {
+        const u = String(url);
+        if (u.endsWith('/models')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ data: [{ id: 'relay-first-model' }, { id: 'relay-second' }] }),
+          } as unknown as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: '{"category": "验证方法", "title": "doc", "summary": "摘要", "keywords": ["a"]}',
+              },
+            }],
+          }),
+        } as unknown as Response;
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      try {
+        const result = await caller.reclassify({ name: 'doc' });
+        expect(result.ok).toBe(true);
+
+        const chatCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/chat/completions'));
+        expect(chatCall).toBeDefined();
+        const body = JSON.parse(String((chatCall?.[1] as RequestInit | undefined)?.body)) as { model: string };
+        expect(body.model).toBe('relay-first-model');
+      } finally {
+        vi.unstubAllGlobals();
+        mockDefaultCredential.mockReturnValue(null);
+      }
+    });
+
+    it('凭证 model 为空字符串时视为未指定（继续回退拉取，不产生空模型名）', async () => {
+      const kbDir = makeEmptyKbDir('reclassify-empty-model-kb');
+      const regResult = await caller.register({ name: '空模型库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      mkdirSync(join(kbDir, 'docs', '未分类'), { recursive: true });
+      writeFileSync(join(kbDir, 'docs', '未分类', 'doc.md'), '# doc\n', 'utf-8');
+
+      // 凭证 model 字段被清空为 ''（表单清空场景）
+      mockDefaultCredential.mockReturnValue({
+        providerId: 'openai-compatible',
+        apiKey: 'sk-test',
+        baseUrl: 'http://localhost:8557',
+        model: '',
+      });
+
+      const fetchMock = vi.fn(async (url: string | URL | Request, _init?: RequestInit): Promise<Response> => {
+        const u = String(url);
+        if (u.endsWith('/models')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ data: [{ id: 'fetched-model' }] }),
+          } as unknown as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            choices: [{
+              message: {
+                content: '{"category": "验证方法", "title": "doc", "summary": "摘要", "keywords": ["a"]}',
+              },
+            }],
+          }),
+        } as unknown as Response;
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      try {
+        const result = await caller.reclassify({ name: 'doc' });
+        expect(result.ok).toBe(true);
+
+        const chatCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/chat/completions'));
+        expect(chatCall).toBeDefined();
+        const body = JSON.parse(String((chatCall?.[1] as RequestInit | undefined)?.body)) as { model: string };
+        expect(body.model).toBe('fetched-model');
+      } finally {
+        vi.unstubAllGlobals();
+        mockDefaultCredential.mockReturnValue(null);
+      }
+    });
+
     it('LLM 调用失败时返回 llmFailed 错误', async () => {
       const kbDir = makeEmptyKbDir('reclassify-fail-kb');
       const regResult = await caller.register({ name: '重分类失败库', path: kbDir });
@@ -1155,6 +1337,170 @@ describe('kb-router', () => {
 
     it('未挂载知识库时被拒绝', async () => {
       await expect(caller.deepReindex({})).rejects.toThrow();
+    });
+  });
+
+  // ─── kb.getSettings / kb.updateSettings ─────────────────────
+
+  describe('kb.getSettings', () => {
+    it('默认返回 anydoc 引擎 + 空 LLM 配置 + 两个引擎元信息', async () => {
+      const result = await caller.getSettings({});
+
+      expect(result.settings.convertEngine).toBe('anydoc');
+      expect(result.settings.llm).toEqual({});
+      expect(result.engines.map((e) => e.id).sort()).toEqual(['anydoc', 'markitdown']);
+      for (const engine of result.engines) {
+        expect(engine.label).toBeTruthy();
+        expect(engine.supportedExtensions.length).toBeGreaterThan(0);
+      }
+    });
+  });
+
+  describe('kb.updateSettings', () => {
+    it('保存引擎与 LLM 显式配置并持久化（重新读取生效）', async () => {
+      await caller.updateSettings({
+        convertEngine: 'markitdown',
+        llm: { providerId: 'relay-cred', model: 'glm-4.7' },
+      });
+
+      // 清缓存模拟重启
+      kbSettingsManager.resetCache();
+      const result = await caller.getSettings({});
+      expect(result.settings.convertEngine).toBe('markitdown');
+      expect(result.settings.llm.providerId).toBe('relay-cred');
+      expect(result.settings.llm.model).toBe('glm-4.7');
+    });
+
+    it('llm 传空字符串清除显式配置（回退自动）', async () => {
+      await caller.updateSettings({
+        convertEngine: 'anydoc',
+        llm: { providerId: 'relay-cred', model: 'glm-4.7' },
+      });
+      const result = await caller.updateSettings({
+        convertEngine: 'anydoc',
+        llm: { providerId: '', model: '' },
+      });
+
+      expect(result.settings.llm).toEqual({});
+    });
+
+    it('非法引擎 ID 抛出 BAD_REQUEST', async () => {
+      await expect(
+        caller.updateSettings({ convertEngine: 'pandoc' } as { convertEngine: string; llm: { providerId?: string; model?: string } }),
+      ).rejects.toThrow();
+    });
+
+    it('llm 字段类型错误抛出 BAD_REQUEST', async () => {
+      await expect(
+        caller.updateSettings({
+          convertEngine: 'markitdown',
+          llm: { providerId: 123 },
+        } as unknown as { convertEngine: string; llm: { providerId?: string; model?: string } }),
+      ).rejects.toThrow();
+    });
+  });
+
+  // ─── KB 设置显式模型 > 自动推导 ─────────────────────────────
+
+  describe('reclassify × KB 设置显式模型', () => {
+    it('KB 设置显式指定凭证与模型时优先生效', async () => {
+      const kbDir = makeEmptyKbDir('reclassify-kb-settings-kb');
+      const regResult = await caller.register({ name: '显式模型库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      mkdirSync(join(kbDir, 'docs', '未分类'), { recursive: true });
+      writeFileSync(join(kbDir, 'docs', '未分类', 'doc.md'), '# doc\n', 'utf-8');
+
+      // KB 设置显式指定专用凭证（与默认凭证不同）
+      await caller.updateSettings({
+        convertEngine: 'anydoc',
+        llm: { providerId: 'kb-dedicated-cred', model: 'kb-classifier-model' },
+      });
+      mockGetCredential.mockResolvedValue({
+        providerId: 'kb-dedicated-cred',
+        apiKey: 'sk-kb',
+        baseUrl: 'http://kb-relay.example:3000',
+      });
+
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: '{"category": "验证方法", "title": "doc", "summary": "摘要", "keywords": ["a"]}',
+            },
+          }],
+        }),
+      } as unknown as Response);
+      vi.stubGlobal('fetch', fetchMock);
+
+      try {
+        const result = await caller.reclassify({ name: 'doc' });
+        expect(result.ok).toBe(true);
+
+        // 请求打到显式凭证的 baseUrl 且使用显式模型（未拉取 /models）
+        const chatCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/chat/completions'));
+        expect(chatCall).toBeDefined();
+        expect(String(chatCall?.[0])).toContain('kb-relay.example:3000');
+        const body = JSON.parse(String((chatCall?.[1] as RequestInit | undefined)?.body)) as { model: string };
+        expect(body.model).toBe('kb-classifier-model');
+        expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/models'))).toBe(false);
+      } finally {
+        vi.unstubAllGlobals();
+        mockGetCredential.mockReset();
+      }
+    });
+
+    it('KB 设置指向的凭证已删除时回退自动推导链', async () => {
+      const kbDir = makeEmptyKbDir('reclassify-stale-cred-kb');
+      const regResult = await caller.register({ name: '失效凭证库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      mkdirSync(join(kbDir, 'docs', '未分类'), { recursive: true });
+      writeFileSync(join(kbDir, 'docs', '未分类', 'doc.md'), '# doc\n', 'utf-8');
+
+      // 显式配置指向已不存在的凭证
+      await caller.updateSettings({
+        convertEngine: 'anydoc',
+        llm: { providerId: 'deleted-cred', model: 'whatever' },
+      });
+      mockGetCredential.mockResolvedValue(null);
+
+      // 默认凭证兜底
+      mockDefaultCredential.mockReturnValue({
+        providerId: 'fallback-cred',
+        apiKey: 'sk-fallback',
+        baseUrl: 'http://fallback.example:3000',
+        model: 'fallback-model',
+      });
+
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: '{"category": "验证方法", "title": "doc", "summary": "摘要", "keywords": ["a"]}',
+            },
+          }],
+        }),
+      } as unknown as Response);
+      vi.stubGlobal('fetch', fetchMock);
+
+      try {
+        const result = await caller.reclassify({ name: 'doc' });
+        expect(result.ok).toBe(true);
+
+        const chatCall = fetchMock.mock.calls.find((c) => String(c[0]).includes('/chat/completions'));
+        expect(String(chatCall?.[0])).toContain('fallback.example:3000');
+        const body = JSON.parse(String((chatCall?.[1] as RequestInit | undefined)?.body)) as { model: string };
+        expect(body.model).toBe('fallback-model');
+      } finally {
+        vi.unstubAllGlobals();
+        mockGetCredential.mockReset();
+        mockDefaultCredential.mockReturnValue(null);
+      }
     });
   });
 });

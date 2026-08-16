@@ -17,19 +17,19 @@ import { existsSync } from 'node:fs';
 import { convertDocumentToMarkdownString } from '../../kb/converter';
 import { searchKb } from '../../kb/searcher';
 import { kbRegistry } from '../../kb/registry';
-import { requireProject } from '../../services/project-service';
 import { TEXT, defineTool, type HostToolEntry, type ToolContext } from './shared';
 
 // ── 辅助函数 ─────────────────────────────────────────────────────
 
 /**
  * 获取当前挂载的知识库路径。
+ * projectRoot 为会话工作目录（即项目根目录，与 context-injector 读取
+ * .socverify/kb-mounts.json 的路径同源）。
  * 返回 null 表示未挂载知识库。
  */
-async function getMountedKbPath(): Promise<string | null> {
+async function getMountedKbPath(projectRoot: string): Promise<string | null> {
   try {
-    const project = requireProject('default');
-    const status = await kbRegistry.status(project.rootPath);
+    const status = await kbRegistry.status(projectRoot);
     return status.mounted?.path ?? null;
   } catch {
     return null;
@@ -48,8 +48,8 @@ function resolvePath(inputPath: string, cwd: string): string {
 /**
  * 创建知识库相关 Host Tools。
  *
- * 依赖 ctx.cwd 用于解析相对路径。
- * kb_search 依赖项目挂载的知识库（运行时动态查询，无静态依赖）。
+ * 依赖 ctx.cwd（会话工作目录 = 项目根目录）用于解析相对路径与
+ * 查询项目挂载的知识库（运行时动态查询，无静态依赖）。
  */
 export function createKbTools(ctx: ToolContext): HostToolEntry[] {
   return [
@@ -126,7 +126,7 @@ export function createKbTools(ctx: ToolContext): HostToolEntry[] {
 
         const limit = typeof args.limit === 'number' && args.limit > 0 ? args.limit : undefined;
 
-        const kbPath = await getMountedKbPath();
+        const kbPath = await getMountedKbPath(ctx.cwd);
         if (!kbPath) {
           return TEXT(JSON.stringify({ error: 'No knowledge base mounted. Mount a knowledge base first.' }));
         }
