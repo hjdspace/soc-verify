@@ -24,11 +24,12 @@
  * @see ADR 0021 — anydoc 文档知识库
  */
 
-import { BrowserWindow, dialog } from 'electron';
+import { dialog } from 'electron';
 import { t, TRPCError } from '../router-context';
 import { projectManager } from '../../project/project-manager';
+import { activeProject } from '../../services/project-service';
+import { broadcastToWindows } from '../broadcast';
 import { kbRegistry } from '../../kb/registry';
-import { kbLayout, docNameFromFileName } from '../../kb/layout';
 import {
   uploadDocument,
   listDocuments,
@@ -44,8 +45,9 @@ import {
 } from '../../kb/pipeline';
 import { deepReindex, type DeepReindexEvent } from '../../kb/deep-reindexer';
 import { resolveKbLlmConfig } from '../../kb/llm-config';
+import { autoScanDocuments } from '../../kb/scanner';
 import { kbSettingsManager, ENGINE_IDS, type KbSettings } from '../../kb/kb-settings';
-import { listConvertEngines, getActiveConvertEngine, type ConvertEngineInfo } from '../../kb/engines';
+import { listConvertEngines, type ConvertEngineInfo } from '../../kb/engines';
 import type { KbRegistration, KbMount, KbError, KbDocument, KbCategory, KbDocStatusEvent } from '../../kb/types';
 
 // ── Result 联合类型（供 tRPC 输出推导） ─────────────────────────
@@ -73,25 +75,11 @@ type UploadResult =
 // ── 辅助函数 ─────────────────────────────────────────────────────
 
 /**
- * 获取当前活跃项目的 rootPath。
- * 单用户桌面应用：取最近打开的项目。无项目时抛 NOT_FOUND。
- */
-function getActiveProjectRoot(): string {
-  const projects = projectManager.listProjects();
-  if (projects.length === 0) {
-    throw new TRPCError({ code: 'NOT_FOUND', message: '未找到打开的项目，请先打开项目' });
-  }
-  // 取最近打开的项目
-  const latest = projects.sort((a, b) => b.lastOpenedAt - a.lastOpenedAt)[0];
-  return latest.rootPath;
-}
-
-/**
  * 获取当前挂载的知识库路径。
  * 未挂载时抛出 TRPCError。
  */
 async function getMountedKbPath(): Promise<string> {
-  const rootPath = getActiveProjectRoot();
+  const rootPath = activeProject().rootPath;
   const status = await kbRegistry.status(rootPath);
   if (!status.mounted) {
     throw new TRPCError({ code: 'PRECONDITION_FAILED', message: '未挂载知识库，请先挂载' });
@@ -103,107 +91,14 @@ async function getMountedKbPath(): Promise<string> {
  * 推送文档状态变化事件到所有窗口。
  */
 function notifyKbStatus(event: KbDocStatusEvent): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) {
-      win.webContents.send('kb:docStatus', event);
-    }
-  }
+  broadcastToWindows('kb:docStatus', event);
 }
 
 /**
  * 推送深度重建进度事件到所有窗口。
  */
 function notifyKbDeepReindex(event: DeepReindexEvent): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) {
-      win.webContents.send('kb:deepReindex', event);
-    }
-  }
-}
-
-// ── 自动扫描文档 ─────────────────────────────────────────────
-
-/**
- * 扫描知识库目录下的文档文件。
- *
- * 策略：
- *  1. 扫描 sources/ 目录中已有的文档文件（已上传但可能未转换）
- *  2. 扫描库根目录下（非 sources/、docs/）的文档文件
- *
- * 对于 sources/ 中已有但 docs/ 中无对应 .md 的文件，自动触发上传流水线。
- * 对于库根目录下的文档文件，复制到 sources/ 后触发上传流水线。
- *
- * 文档发现逻辑由 layout 模块单一拥有，不再手写第 4 份「docs/ 里找 .md」。
- * 支持的扩展名跟随当前生效的转换引擎（用户可在设置页切换）。
- *
- * 异步执行，不阻塞 mount 响应。
- */
-async function autoScanDocuments(
-  kbPath: string,
-  _kbId: string,
-): Promise<{ scanned: number }> {
-  const { readdir, copyFile, mkdir } = await import('node:fs/promises');
-  const { existsSync } = await import('node:fs');
-
-  const layout = kbLayout(kbPath);
-  const supportedExtensions = (await getActiveConvertEngine()).supportedExtensions;
-  const toUpload: string[] = [];
-
-  // 1. 扫描 sources/ 中已有文档
-  const sourceFiles = await layout.listSourceFiles();
-  for (const fileName of sourceFiles) {
-    const ext = fileName.toLowerCase().match(/\.[^.]+$/)?.[0] ?? '';
-    if (!supportedExtensions.includes(ext)) continue;
-
-    const docName = docNameFromFileName(fileName);
-    // 检查 docs/ 中是否已有对应的 .md（使用 layout 的文档发现操作）
-    const foundMd = await layout.findMarkdown(docName);
-    if (foundMd) continue;
-
-    toUpload.push(layout.sourcePath(fileName));
-  }
-
-  // 2. 扫描库根目录下的文档文件（非 sources/、docs/）
-  try {
-    const entries = await readdir(kbPath, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isFile()) continue;
-      // 知识库自身的索引文件不可作为文档自吞（markitdown 引擎支持 .md）
-      if (entry.name.toLowerCase() === 'index.md') continue;
-      const ext = entry.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? '';
-      if (!supportedExtensions.includes(ext)) continue;
-
-      const srcPath = layout.kbPath === kbPath ? (await import('node:path')).join(kbPath, entry.name) : entry.name;
-      // 复制到 sources/ 后上传
-      if (!existsSync(layout.sourcesDir)) {
-        await mkdir(layout.sourcesDir, { recursive: true });
-      }
-      const destPath = layout.sourcePath(entry.name);
-      if (!existsSync(destPath)) {
-        await copyFile(srcPath, destPath);
-      }
-      toUpload.push(destPath);
-    }
-  } catch {
-    // ignore
-  }
-
-  // 3. 异步上传所有待处理文档
-  if (toUpload.length > 0) {
-    const llmConfig = await resolveKbLlmConfig();
-    // 异步执行，不等待
-    void (async () => {
-      for (const filePath of toUpload) {
-        try {
-          await uploadDocument(filePath, kbPath, llmConfig, notifyKbStatus);
-        } catch {
-          // 单个文件失败不阻塞其他文件
-        }
-      }
-    })();
-  }
-
-  return { scanned: toUpload.length };
+  broadcastToWindows('kb:deepReindex', event);
 }
 
 export const kbRouter = t.router({
@@ -214,7 +109,7 @@ export const kbRouter = t.router({
       return {};
     })
     .query(async () => {
-      const rootPath = getActiveProjectRoot();
+      const rootPath = activeProject().rootPath;
       return kbRegistry.list(rootPath);
     }),
 
@@ -257,7 +152,7 @@ export const kbRouter = t.router({
       return { kbId: r.kbId.trim() };
     })
     .mutation(async ({ input }): Promise<UnregisterResult> => {
-      const rootPath = getActiveProjectRoot();
+      const rootPath = activeProject().rootPath;
       const result = await kbRegistry.unregister(input.kbId, rootPath);
       if (!result.ok) {
         return { ok: false, error: result.error };
@@ -279,7 +174,7 @@ export const kbRouter = t.router({
       return { kbId: r.kbId.trim() };
     })
     .mutation(async ({ input }): Promise<UnregisterResult> => {
-      const rootPath = getActiveProjectRoot();
+      const rootPath = activeProject().rootPath;
       const result = await kbRegistry.deleteKb(input.kbId, rootPath);
       if (!result.ok) {
         return { ok: false, error: result.error };
@@ -298,7 +193,7 @@ export const kbRouter = t.router({
       return { kbId: r.kbId.trim() };
     })
     .mutation(async ({ input }): Promise<MountResult & { autoScanned?: number }> => {
-      const rootPath = getActiveProjectRoot();
+      const rootPath = activeProject().rootPath;
       const result = await kbRegistry.mount(input.kbId, rootPath);
       if (!result.ok) {
         return { ok: false, error: result.error };
@@ -309,7 +204,7 @@ export const kbRouter = t.router({
         const entries = await kbRegistry.list(rootPath);
         const mounted = entries.find((e) => e.id === input.kbId);
         if (mounted) {
-          const scanResult = await autoScanDocuments(mounted.path, mounted.id);
+          const scanResult = await autoScanDocuments(mounted.path, notifyKbStatus);
           if (scanResult.scanned > 0) {
             // 异步触发上传，不阻塞 mount 响应
             void scanResult;
@@ -334,7 +229,7 @@ export const kbRouter = t.router({
       return { kbId: r.kbId.trim() };
     })
     .mutation(async ({ input }): Promise<UnmountResult> => {
-      const rootPath = getActiveProjectRoot();
+      const rootPath = activeProject().rootPath;
       const result = await kbRegistry.unmount(input.kbId, rootPath);
       if (!result.ok) {
         return { ok: false, error: result.error };
@@ -349,7 +244,7 @@ export const kbRouter = t.router({
       return {};
     })
     .query(async () => {
-      const rootPath = getActiveProjectRoot();
+      const rootPath = activeProject().rootPath;
       return kbRegistry.status(rootPath);
     }),
 
@@ -588,7 +483,7 @@ export const kbRouter = t.router({
     })
     .mutation(async (): Promise<{ ok: true; sessionId: string; documentCount: number } | { ok: false; error: { code: string; message: string } }> => {
       const kbPath = await getMountedKbPath();
-      const rootPath = getActiveProjectRoot();
+      const rootPath = activeProject().rootPath;
       const project = projectManager.getProjectByPath(rootPath);
       if (!project) {
         return { ok: false, error: { code: 'noProject', message: '未找到活跃项目' } };

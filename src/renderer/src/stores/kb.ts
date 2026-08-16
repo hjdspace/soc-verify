@@ -4,6 +4,8 @@
  * 管理库列表、当前挂载库、分类树、文档列表、上传状态。
  * 通过 tRPC kb-router 调用主进程 API，通过 eventBridge 订阅 kb:docStatus 事件。
  *
+ * 类型从 @shared/kb-types 统一导入，消除手工复刻类型的漂移风险。
+ *
  * @see ADR 0021 — anydoc 文档知识库
  * @see Issue #5 — 知识库 UI 列表 Tab
  */
@@ -11,90 +13,36 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
+import type {
+  KbDocument,
+  KbCategory,
+  KbDocStatusEvent,
+  KbSettings,
+  ConvertEngineInfo,
+  ConvertEngineId,
+  KbLlmSettings,
+  KbMount,
+  KbStatus,
+  KbListEntry,
+} from '@shared/kb-types';
 
-// ── 类型（从 tRPC 自动推导，这里显式声明供组件使用） ─────────
+// ── 渲染端独有类型（不跨进程） ─────────────────────────────────
 
 export type KbTab = 'list' | 'index' | 'preview';
 
-export type KbListEntry = {
-  id: string;
-  name: string;
-  path: string;
-  registeredAt: number;
-  documentCount: number;
-  categoryCount: number;
-  isMounted: boolean;
-};
+// ── 重新导出共享类型（供组件 import 不变） ────────────────────
 
-export type KbStatus = {
-  mounted: (KbMount & { name: string; path: string }) | null;
-  health: {
-    hasSources: boolean;
-    hasDocs: boolean;
-    hasIndex: boolean;
-  };
-};
-
-export type KbMount = {
-  kbId: string;
-  mountedAt: number;
-};
-
-export type KbDocument = {
-  name: string;
-  sourceExt: string;
-  sourcePath: string;
-  markdownPath: string;
-  category: string;
-  sourceSize: number;
-  markdownSize: number;
-  assetCount: number;
-  status: 'queued' | 'converting' | 'classifying' | 'done' | 'failed';
-  errorCode?: string;
-  errorMessage?: string;
-  convertedAt?: number;
-  classifiedAt?: number;
-  aiDegraded?: boolean;
-  aiError?: string;
-};
-
-export type KbCategory = {
-  name: string;
-  count: number;
-};
-
-export type KbDocStatusEvent = {
-  name: string;
-  status: 'queued' | 'converting' | 'classifying' | 'done' | 'failed';
-  errorCode?: string;
-  errorMessage?: string;
-  category?: string;
-  aiDegraded?: boolean;
-  aiError?: string;
-};
-
-// ── 设置类型（kb.getSettings / kb.updateSettings）──────────────
-
-/** 转换引擎 ID */
-export type KbConvertEngineId = 'anydoc' | 'markitdown';
-
-/** 转换引擎元信息（设置页展示） */
-export type KbEngineInfo = {
-  id: KbConvertEngineId;
-  label: string;
-  description: string;
-  supportedExtensions: string[];
-};
-
-/** 知识库 AI 模型配置（字段为空 = 自动跟随 Agent 面板） */
-export type KbLlmSettings = {
-  providerId?: string;
-  model?: string;
-};
-
-export type KbSettings = {
-  convertEngine: KbConvertEngineId;
-  llm: KbLlmSettings;
+export type {
+  KbDocument,
+  KbCategory,
+  KbDocStatusEvent,
+  KbSettings,
+  ConvertEngineInfo as KbEngineInfo,
+  ConvertEngineId as KbConvertEngineId,
+  KbLlmSettings,
+  KbMount,
+  KbListEntry,
+  KbStatus,
 };
 
 // ── Store 接口 ──────────────────────────────────────────────
@@ -181,7 +129,7 @@ interface KbStoreState {
   // ── 知识库设置（引擎 + AI 模型）────────────────────────
   kbSettings: KbSettings | null;
   kbSettingsLoading: boolean;
-  kbEngines: KbEngineInfo[];
+  kbEngines: ConvertEngineInfo[];
   loadKbSettings: () => Promise<void>;
   updateKbSettings: (settings: KbSettings) => Promise<boolean>;
 }

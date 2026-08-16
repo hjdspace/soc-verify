@@ -13,8 +13,9 @@
  * @see ADR 0022 — 双转换引擎（anydoc / markitdown）
  */
 
-/** 引擎 ID（设置页可切换） */
-export type ConvertEngineId = 'anydoc' | 'markitdown';
+/** 引擎 ID（设置页可切换） — 跨进程共享，从 @shared/kb-types 导入 */
+export type { ConvertEngineId } from '@shared/kb-types';
+import type { ConvertEngineId } from '@shared/kb-types';
 
 /** 结构化转换错误码（与 @firecrawl/anydoc 的 ConvertErrorCode 对齐） */
 export type ConvertErrorCode =
@@ -69,10 +70,5 @@ export type ConvertEngine = {
   convert(bytes: Uint8Array, sourcePath: string): Promise<EngineResult>;
 };
 
-/** 引擎元信息（tRPC 输出，剥离 convert 函数） */
-export type ConvertEngineInfo = {
-  id: ConvertEngineId;
-  label: string;
-  description: string;
-  supportedExtensions: string[];
-};
+/** 引擎元信息（tRPC 输出，剥离 convert 函数） — 跨进程共享，从 @shared/kb-types 导入 */
+export type { ConvertEngineInfo } from '@shared/kb-types';

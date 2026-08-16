@@ -15,25 +15,15 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { app } from 'electron';
-import type { ConvertEngineId } from './engines/types';
+import type { ConvertEngineId, KbLlmSettings, KbSettings } from '@shared/kb-types';
+
+// Re-export for backwards compatibility (main process callers import from kb-settings)
+export type { KbLlmSettings, KbSettings } from '@shared/kb-types';
 
 const SETTINGS_FILE = 'kb-settings.json';
 
 /** 合法的引擎 ID 集合（router 校验与默认值共用，新增引擎只改这里） */
 export const ENGINE_IDS: ReadonlySet<string> = new Set(['anydoc', 'markitdown']);
-
-/** KB AI 模型配置（字段为空 = 自动） */
-export type KbLlmSettings = {
-  /** 显式指定的凭证 providerId；空 = 自动（跟随 Agent 面板） */
-  providerId?: string;
-  /** 显式指定的模型 ID；空 = 自动 */
-  model?: string;
-};
-
-export type KbSettings = {
-  convertEngine: ConvertEngineId;
-  llm: KbLlmSettings;
-};
 
 export const DEFAULT_KB_SETTINGS: KbSettings = {
   convertEngine: 'anydoc',
