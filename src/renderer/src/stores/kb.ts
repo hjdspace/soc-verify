@@ -54,6 +54,8 @@ export type KbDocument = {
   errorMessage?: string;
   convertedAt?: number;
   classifiedAt?: number;
+  aiDegraded?: boolean;
+  aiError?: string;
 };
 
 export type KbCategory = {
@@ -67,6 +69,8 @@ export type KbDocStatusEvent = {
   errorCode?: string;
   errorMessage?: string;
   category?: string;
+  aiDegraded?: boolean;
+  aiError?: string;
 };
 
 // ── Store 接口 ──────────────────────────────────────────────
@@ -125,6 +129,7 @@ interface KbStoreState {
   deleteDocument: (name: string) => Promise<void>;
   registerKb: (name: string, path: string) => Promise<boolean>;
   unregisterKb: (kbId: string) => Promise<boolean>;
+  deleteKb: (kbId: string) => Promise<boolean>;
   mountKb: (kbId: string) => Promise<boolean>;
   unmountKb: (kbId: string) => Promise<boolean>;
   setKbModalOpen: (open: boolean) => void;
@@ -137,6 +142,8 @@ interface KbStoreState {
   setIndexEditing: (editing: boolean) => void;
   loadPreview: (docName: string) => Promise<void>;
   moveCategory: (docName: string, category: string) => Promise<boolean>;
+  renameCategory: (oldName: string, newName: string) => Promise<boolean>;
+  reclassifyDocument: (name: string) => Promise<boolean>;
   // ── 深度重建（Issue #7）─────────────────────────────────
   deepReindex: () => Promise<void>;
   handleDeepReindexEvent: (event: {
@@ -264,7 +271,16 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
         );
       }
       const successes = result.results.filter((r) => r.ok);
-      if (successes.length > 0) {
+      const degraded = successes.filter((r) => r.ok && r.document.aiDegraded);
+      if (degraded.length > 0) {
+        const firstError = degraded[0].ok ? degraded[0].document.aiError : undefined;
+        useToastStore.getState().warning(
+          `${degraded.length} 个文档 AI 分类/摘要失败，已归入「未分类」`,
+          firstError
+            ? `${firstError}。修复后可用列表行内的「AI 重分类」按钮重试。`
+            : '请在配置 LLM 凭证后使用「AI 重分类」按钮重试。',
+        );
+      } else if (successes.length > 0) {
         useToastStore.getState().success(
           `${successes.length} 个文档上传成功`,
         );
@@ -415,12 +431,41 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
     }
   },
 
+  // ── 删除知识库（注销 + 删除目录） ──────────────────────────────────────────
+  deleteKb: async (kbId) => {
+    try {
+      const result = await trpc.kb.deleteKb.mutate({ kbId });
+      if (result.ok) {
+        useToastStore.getState().success('已删除知识库');
+        set({
+          kbStatus: null,
+          categories: [],
+          documents: [],
+          selectedCategory: null,
+        });
+        await get().loadKbList();
+        return true;
+      }
+      useToastStore.getState().error(
+        '删除知识库失败',
+        result.ok === false ? `${result.error.code}: ${result.error.message}` : '',
+      );
+      return false;
+    } catch (err) {
+      useToastStore.getState().error(
+        '删除知识库失败',
+        err instanceof Error ? err.message : String(err),
+      );
+      return false;
+    }
+  },
+
   // ── 库注册/挂载对话框 ───────────────────────────────────
   setKbModalOpen: (open) => set({ kbModalOpen: open }),
 
   // ── 处理文档状态事件（kb:docStatus） ─────────────────────
   handleDocStatusEvent: (event) => {
-    const { documents } = get();
+    const { documents, uploading } = get();
     const idx = documents.findIndex((d) => d.name === event.name);
     if (idx === -1) {
       // 新文档，添加到列表
@@ -436,6 +481,8 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
         status: event.status,
         errorCode: event.errorCode,
         errorMessage: event.errorMessage,
+        aiDegraded: event.aiDegraded,
+        aiError: event.aiError,
       };
       set({ documents: [...documents, newDoc] });
     } else {
@@ -447,8 +494,20 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
         errorCode: event.errorCode,
         errorMessage: event.errorMessage,
         category: event.category ?? updated[idx].category,
+        aiDegraded: event.aiDegraded ?? updated[idx].aiDegraded,
+        aiError: event.aiError ?? updated[idx].aiError,
       };
       set({ documents: updated });
+    }
+
+    // 挂载时自动扫描的后台上传（非用户主动上传流程）AI 降级 → 明确提示
+    if (event.status === 'done' && event.aiDegraded && !uploading) {
+      useToastStore.getState().warning(
+        `文档「${event.name}」AI 分类/摘要失败，已归入「未分类」`,
+        event.aiError
+          ? `${event.aiError}。修复后可用列表行内的「AI 重分类」按钮重试。`
+          : '请在配置 LLM 凭证后使用「AI 重分类」按钮重试。',
+      );
     }
 
     // done 状态时刷新分类树和文档列表（获取完整数据）
@@ -541,6 +600,57 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
     } catch (err) {
       useToastStore.getState().error(
         '移动分类失败',
+        err instanceof Error ? err.message : String(err),
+      );
+      return false;
+    }
+  },
+
+  // ── 重命名分类 ─────────────────────────────────────────────
+  renameCategory: async (oldName, newName) => {
+    try {
+      const result = await trpc.kb.renameCategory.mutate({ oldName, newName });
+      if (result.ok) {
+        useToastStore.getState().success(`已重命名为「${newName}」`);
+        await get().refreshAll();
+        await get().loadIndex();
+        return true;
+      }
+      useToastStore.getState().error(
+        '重命名分类失败',
+        result.ok === false ? `${result.error.code}: ${result.error.message}` : '',
+      );
+      return false;
+    } catch (err) {
+      useToastStore.getState().error(
+        '重命名分类失败',
+        err instanceof Error ? err.message : String(err),
+      );
+      return false;
+    }
+  },
+
+  // ── AI 重新分类/摘要 ─────────────────────────────────────
+  reclassifyDocument: async (name) => {
+    try {
+      const result = await trpc.kb.reclassify.mutate({ name });
+      if (result.ok) {
+        useToastStore.getState().success(
+          `已重新分类到「${result.category}」`,
+          result.moved ? '文档已移动到新分类目录' : '分类未变化，摘要与关键词已更新',
+        );
+        await get().refreshAll();
+        await get().loadIndex();
+        return true;
+      }
+      useToastStore.getState().error(
+        `AI 重新分类失败: ${name}`,
+        result.ok === false ? result.error.message : '',
+      );
+      return false;
+    } catch (err) {
+      useToastStore.getState().error(
+        `AI 重新分类失败: ${name}`,
         err instanceof Error ? err.message : String(err),
       );
       return false;

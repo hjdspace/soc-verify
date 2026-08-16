@@ -250,6 +250,7 @@ function CredentialsTab() {
   const [label, setLabel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
+  const [model, setModel] = useState('');
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -264,41 +265,45 @@ function CredentialsTab() {
     ? providerId.trim().length > 0
     : providerId.trim().length > 0 && apiKey.trim().length > 0;
 
-  const resetForm = () => {
-    setProviderId('');
-    setLabel('');
-    setApiKey('');
-    setBaseUrl('');
-    setEditingProviderId(null);
-  };
+const resetForm = () => {
+setProviderId('');
+setLabel('');
+setApiKey('');
+setBaseUrl('');
+setModel('');
+setEditingProviderId(null);
+};
 
   const handleSave = async () => {
     if (!canSave) return;
-    if (isEditing) {
-      await updateCredential({
-        providerId: providerId.trim(),
-        label: label.trim(),
-        apiKey: apiKey.trim() || undefined,
-        baseUrl: baseUrl.trim() || undefined,
-      });
-    } else {
-      await setCredential({
-        providerId: providerId.trim(),
-        label: label.trim() || providerId.trim(),
-        apiKey: apiKey.trim(),
-        baseUrl: baseUrl.trim() || undefined,
-      });
-    }
+if (isEditing) {
+await updateCredential({
+providerId: providerId.trim(),
+label: label.trim(),
+apiKey: apiKey.trim() || undefined,
+baseUrl: baseUrl.trim() || undefined,
+model: model.trim() || undefined,
+});
+} else {
+await setCredential({
+providerId: providerId.trim(),
+label: label.trim() || providerId.trim(),
+apiKey: apiKey.trim(),
+baseUrl: baseUrl.trim() || undefined,
+model: model.trim() || undefined,
+});
+}
     resetForm();
   };
 
-  const handleEdit = (c: CredentialEntry) => {
-    setEditingProviderId(c.providerId);
-    setProviderId(c.providerId);
-    setLabel(c.label);
-    setApiKey('');
-    setBaseUrl(c.baseUrl ?? '');
-  };
+const handleEdit = (c: CredentialEntry) => {
+setEditingProviderId(c.providerId);
+setProviderId(c.providerId);
+setLabel(c.label);
+setApiKey('');
+setBaseUrl(c.baseUrl ?? '');
+setModel(c.model ?? '');
+};
 
   const handleCancelEdit = () => {
     resetForm();
@@ -497,6 +502,13 @@ function CredentialsTab() {
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
             placeholder="Base URL（可选）"
+            className="rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
+          />
+          <input
+            type="text"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="模型名（可选，如 gpt-4o-mini）"
             className="rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
           />
         </div>

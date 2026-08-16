@@ -37,11 +37,14 @@ import {
   writeIndexMd,
   readMarkdownDoc,
   moveDocumentCategory,
+  renameCategory,
+  reclassifyDocument,
 } from '../../kb/pipeline';
 import { deepReindex, type DeepReindexEvent } from '../../kb/deep-reindexer';
-import type { LlmConfig } from '../../kb/indexer';
+import { protocolForProvider, type LlmConfig } from '../../kb/indexer';
 import { credentialManager } from '../../credentials/credential-manager';
 import { ensureV1Prefix } from '../../agent/openai-compatible';
+import { loadSessions } from '../../agent/session-persistence';
 import type { KbRegistration, KbMount, KbError, KbDocument, KbCategory, KbDocStatusEvent } from '../../kb/types';
 
 // ── Result 联合类型（供 tRPC 输出推导） ─────────────────────────
@@ -96,18 +99,68 @@ async function getMountedKbPath(): Promise<string> {
 }
 
 /**
- * 尝试获取 LLM 配置（从已存储的 credential 中获取）。
- * 无配置时返回 null（降级为占位条目）。
+ * 根据 providerId 推导默认模型名。
+ * 用户未显式配置 model 时使用此映射。
+ */
+function defaultModelForProvider(providerId: string): string {
+  const lower = providerId.toLowerCase();
+  if (lower === 'openai' || lower === 'openai-compatible') return 'gpt-4o-mini';
+  if (lower === 'anthropic' || lower === 'claude') return 'claude-sonnet-4-20250514';
+  if (lower === 'google' || lower === 'gemini') return 'gemini-2.5-flash';
+  if (lower === 'deepseek') return 'deepseek-chat';
+  if (lower === 'ollama') return 'llama3.2';
+  return 'gpt-4o-mini';
+}
+
+/** credentialManager 返回的凭证结构（模块内使用） */
+type ActiveCredential = {
+  providerId: string;
+  apiKey: string;
+  baseUrl?: string;
+  model?: string;
+};
+
+/**
+ * 解析当前生效的 LLM 凭证 — 与右侧 AI Agent 面板保持一致：
+ * 优先用项目最近 AI 会话持久化的 providerId（用户在 Agent 面板
+ * 实际选择且验证可用的凭证），回退到默认凭证（列表第一条）。
+ */
+async function resolveActiveCredential(): Promise<ActiveCredential | null> {
+  try {
+    const rootPath = getActiveProjectRoot();
+    const sessions = await loadSessions(rootPath);
+    const latest = sessions
+      .filter((s) => s.model?.providerId)
+      .sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0];
+    const providerId = latest?.model?.providerId;
+    if (providerId) {
+      const cred = await credentialManager.get(providerId);
+      if (cred) return cred;
+    }
+  } catch {
+    // 项目未打开等 — 回退默认凭证
+  }
+  return credentialManager.getDefaultCredential();
+}
+
+/**
+ * 尝试获取 LLM 配置（复用 AI Agent 面板的凭证选择）。
+ * 无配置时返回 null（上传时降级为占位条目）。
  */
 async function getLlmConfig(): Promise<LlmConfig | null> {
-  const cred = await credentialManager.getDefaultCredential();
+  const cred = await resolveActiveCredential();
   if (!cred || !cred.baseUrl || !cred.apiKey) {
     return null;
   }
+  // gemini 原生端点用 /v1beta 版本前缀，不能强加 /v1
+  const baseUrl = protocolForProvider(cred.providerId) === 'gemini'
+    ? cred.baseUrl.replace(/\/+$/, '')
+    : ensureV1Prefix(cred.baseUrl);
   return {
-    baseUrl: ensureV1Prefix(cred.baseUrl),
+    baseUrl,
     apiKey: cred.apiKey,
-    model: 'gpt-4o-mini', // 默认模型
+    model: cred.model ?? defaultModelForProvider(cred.providerId),
+    providerId: cred.providerId,
   };
 }
 
@@ -131,6 +184,118 @@ function notifyKbDeepReindex(event: DeepReindexEvent): void {
       win.webContents.send('kb:deepReindex', event);
     }
   }
+}
+
+// ── 自动扫描文档 ─────────────────────────────────────────────
+
+/** 支持的文档文件扩展名 */
+const SUPPORTED_EXTENSIONS = new Set([
+  '.pdf', '.doc', '.docx', '.ppt', '.pptx',
+  '.xls', '.xlsx', '.odt', '.rtf', '.epub', '.csv',
+]);
+
+/**
+ * 扫描知识库目录下的文档文件。
+ *
+ * 策略：
+ *  1. 扫描 sources/ 目录中已有的文档文件（已上传但可能未转换）
+ *  2. 扫描库根目录下（非 sources/、docs/）的文档文件
+ *
+ * 对于 sources/ 中已有但 docs/ 中无对应 .md 的文件，自动触发上传流水线。
+ * 对于库根目录下的文档文件，复制到 sources/ 后触发上传流水线。
+ *
+ * 异步执行，不阻塞 mount 响应。
+ */
+async function autoScanDocuments(
+  kbPath: string,
+  _kbId: string,
+): Promise<{ scanned: number }> {
+  const { readdir, copyFile } = await import('node:fs/promises');
+  const { join } = await import('node:path');
+  const { existsSync } = await import('node:fs');
+
+  const sourcesDir = join(kbPath, 'sources');
+  const docsDir = join(kbPath, 'docs');
+  const toUpload: string[] = [];
+
+  // 1. 扫描 sources/ 中已有文档
+  if (existsSync(sourcesDir)) {
+    try {
+      const entries = await readdir(sourcesDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        const ext = entry.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? '';
+        if (!SUPPORTED_EXTENSIONS.has(ext)) continue;
+
+        const docName = entry.name.slice(0, -ext.length) || entry.name;
+        // 检查 docs/ 中是否已有对应的 .md
+        const rootMd = join(docsDir, `${docName}.md`);
+        if (existsSync(rootMd)) continue;
+
+        // 检查子目录
+        let found = false;
+        if (existsSync(docsDir)) {
+          try {
+            const docEntries = await readdir(docsDir, { withFileTypes: true });
+            for (const de of docEntries) {
+              if (!de.isDirectory() || de.name === 'assets') continue;
+              if (existsSync(join(docsDir, de.name, `${docName}.md`))) {
+                found = true;
+                break;
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
+        if (!found) {
+          toUpload.push(join(sourcesDir, entry.name));
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 2. 扫描库根目录下的文档文件（非 sources/、docs/）
+  try {
+    const entries = await readdir(kbPath, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const ext = entry.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? '';
+      if (!SUPPORTED_EXTENSIONS.has(ext)) continue;
+
+      const srcPath = join(kbPath, entry.name);
+      // 复制到 sources/ 后上传
+      if (!existsSync(sourcesDir)) {
+        await import('node:fs/promises').then((fs) => fs.mkdir(sourcesDir, { recursive: true }));
+      }
+      const destPath = join(sourcesDir, entry.name);
+      if (!existsSync(destPath)) {
+        await copyFile(srcPath, destPath);
+      }
+      toUpload.push(destPath);
+    }
+  } catch {
+    // ignore
+  }
+
+  // 3. 异步上传所有待处理文档
+  if (toUpload.length > 0) {
+    const llmConfig = await getLlmConfig();
+    // 异步执行，不等待
+    void (async () => {
+      for (const filePath of toUpload) {
+        try {
+          await uploadDocument(filePath, kbPath, llmConfig, notifyKbStatus);
+        } catch {
+          // 单个文件失败不阻塞其他文件
+        }
+      }
+    })();
+  }
+
+  return { scanned: toUpload.length };
 }
 
 export const kbRouter = t.router({
@@ -192,6 +357,28 @@ export const kbRouter = t.router({
       return { ok: true };
     }),
 
+  // ─── kb.deleteKb ──────────────────────────────────────────
+  //
+  // 删除知识库：注销注册 + 删除库目录全部内容。
+  // 如果库已挂载，先自动卸载。
+
+  deleteKb: t.procedure
+    .input((raw): { kbId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.kbId !== 'string' || r.kbId.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'kbId is required' });
+      }
+      return { kbId: r.kbId.trim() };
+    })
+    .mutation(async ({ input }): Promise<UnregisterResult> => {
+      const rootPath = getActiveProjectRoot();
+      const result = await kbRegistry.deleteKb(input.kbId, rootPath);
+      if (!result.ok) {
+        return { ok: false, error: result.error };
+      }
+      return { ok: true };
+    }),
+
   // ─── kb.mount ─────────────────────────────────────────────
 
   mount: t.procedure
@@ -202,12 +389,29 @@ export const kbRouter = t.router({
       }
       return { kbId: r.kbId.trim() };
     })
-    .mutation(async ({ input }): Promise<MountResult> => {
+    .mutation(async ({ input }): Promise<MountResult & { autoScanned?: number }> => {
       const rootPath = getActiveProjectRoot();
       const result = await kbRegistry.mount(input.kbId, rootPath);
       if (!result.ok) {
         return { ok: false, error: result.error };
       }
+
+      // 挂载成功后自动扫描库目录下的文档
+      try {
+        const entries = await kbRegistry.list(rootPath);
+        const mounted = entries.find((e) => e.id === input.kbId);
+        if (mounted) {
+          const scanResult = await autoScanDocuments(mounted.path, mounted.id);
+          if (scanResult.scanned > 0) {
+            // 异步触发上传，不阻塞 mount 响应
+            void scanResult;
+          }
+          return { ok: true, data: result.data, autoScanned: scanResult.scanned };
+        }
+      } catch {
+        // 自动扫描失败不阻塞挂载
+      }
+
       return { ok: true, data: result.data };
     }),
 
@@ -410,6 +614,62 @@ export const kbRouter = t.router({
         return { ok: false, error: { code: 'notFound', message: `文档未找到: ${input.name}` } };
       }
       return { ok: true, newPath };
+    }),
+
+  // ─── kb.renameCategory ──────────────────────────────────────
+
+  renameCategory: t.procedure
+    .input((raw): { oldName: string; newName: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.oldName !== 'string' || r.oldName.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'oldName is required' });
+      }
+      if (typeof r.newName !== 'string' || r.newName.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'newName is required' });
+      }
+      return { oldName: r.oldName.trim(), newName: r.newName.trim() };
+    })
+    .mutation(async ({ input }): Promise<{ ok: true } | { ok: false; error: { code: string; message: string } }> => {
+      const kbPath = await getMountedKbPath();
+      const success = await renameCategory(kbPath, input.oldName, input.newName);
+      if (!success) {
+        return { ok: false, error: { code: 'notFound', message: `分类不存在: ${input.oldName}` } };
+      }
+      return { ok: true };
+    }),
+
+  // ─── kb.reclassify ─────────────────────────────────────────
+  //
+  // AI 重新分类单个文档并重新生成标题/摘要/关键词。
+  // 分类变化时自动移动文件到新分类目录并同步 index.md 路径。
+  // 无 LLM 配置或调用失败时返回明确错误（不降级）。
+
+  reclassify: t.procedure
+    .input((raw): { name: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.name !== 'string' || r.name.trim().length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'name is required' });
+      }
+      return { name: r.name.trim() };
+    })
+    .mutation(async ({ input }): Promise<
+      { ok: true; category: string; title: string; summary: string; keywords: string[]; moved: boolean }
+      | { ok: false; error: { code: string; message: string } }
+    > => {
+      const kbPath = await getMountedKbPath();
+      const llmConfig = await getLlmConfig();
+      const result = await reclassifyDocument(kbPath, input.name, llmConfig);
+      if (!result.ok) {
+        return result;
+      }
+      return {
+        ok: true,
+        category: result.entry.category,
+        title: result.entry.title,
+        summary: result.entry.summary,
+        keywords: result.entry.keywords,
+        moved: result.moved,
+      };
     }),
 
   // ─── kb.deepReindex ────────────────────────────────────────

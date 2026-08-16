@@ -3,6 +3,7 @@ export interface CredentialEntry {
   label: string;
   apiKeyMasked: string;
   baseUrl?: string;
+  model?: string;
   createdAt: number;
 }
 
@@ -11,6 +12,7 @@ export interface CredentialInput {
   label: string;
   apiKey: string;
   baseUrl?: string;
+  model?: string;
 }
 
 /**
@@ -22,4 +24,5 @@ export interface CredentialUpdateInput {
   label?: string;
   apiKey?: string;
   baseUrl?: string;
+  model?: string;
 }

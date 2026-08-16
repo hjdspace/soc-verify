@@ -13,7 +13,7 @@
 import { useEffect, useCallback, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { FileText, Image, Clock, Folder, ArrowRightCircle, Bot, Loader2 } from 'lucide-react';
+import { FileText, Image as ImageIcon, Clock, Folder, ArrowRightCircle, Bot, Loader2, Sparkles } from 'lucide-react';
 import { useKbStore } from '@renderer/stores/kb';
 import { parseIndexMd } from '@renderer/lib/kb-index-parser';
 import { cn } from '@renderer/lib/utils';
@@ -44,16 +44,17 @@ export function KbPreviewTab() {
   const categories = useKbStore((s) => s.categories);
   const moveCategory = useKbStore((s) => s.moveCategory);
   const loadIndex = useKbStore((s) => s.loadIndex);
+  const reclassifyDocument = useKbStore((s) => s.reclassifyDocument);
 
   const [showMoveMenu, setShowMoveMenu] = useState(false);
   const [moving, setMoving] = useState(false);
+  const [reclassifying, setReclassifying] = useState(false);
 
   // 挂载时加载索引内容（用于 AI 摘要）
   useEffect(() => {
-    if (!indexContent) {
-      void loadIndex();
-    }
-  }, [indexContent, loadIndex]);
+    // 每次打开预览时刷新 index 内容，确保获取最新摘要
+    void loadIndex();
+  }, [loadIndex, previewDocName]);
 
   // 查找当前文档的元数据
   const doc = documents.find((d) => d.name === previewDocName);
@@ -73,6 +74,14 @@ export function KbPreviewTab() {
     await moveCategory(previewDocName, category);
     setMoving(false);
   }, [previewDocName, moveCategory]);
+
+  // ── AI 重新分类/摘要 ─────────────────────────────────────
+  const handleReclassify = useCallback(async () => {
+    if (!previewDocName) return;
+    setReclassifying(true);
+    await reclassifyDocument(previewDocName);
+    setReclassifying(false);
+  }, [previewDocName, reclassifyDocument]);
 
   if (!previewDocName) {
     return (
@@ -100,7 +109,7 @@ export function KbPreviewTab() {
       <div className="flex-1 overflow-y-auto bg-background p-6">
         <div className="mx-auto max-w-[900px] rounded-lg bg-card p-6 shadow-sm">
           {previewContent ? (
-            <div className="prose prose-sm max-w-none dark:prose-invert">
+            <div className="kb-markdown max-w-none">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {previewContent}
               </ReactMarkdown>
@@ -143,7 +152,7 @@ export function KbPreviewTab() {
 
         {/* 图片数 */}
         <div className="flex items-center justify-between gap-2 border-b border-dashed border-border py-1.5 text-xs">
-          <Image className="h-3 w-3 shrink-0 text-muted-foreground" />
+          <ImageIcon className="h-3 w-3 shrink-0 text-muted-foreground" />
           <span className="text-right">{doc?.assetCount ?? 0} 张已提取</span>
         </div>
 
@@ -154,13 +163,37 @@ export function KbPreviewTab() {
         </div>
 
         {/* AI 摘要卡 */}
-        {indexEntry && indexEntry.summary && (
+        {indexEntry && indexEntry.summary ? (
           <div className="mt-2 rounded-lg bg-info p-2.5 text-[11px] leading-relaxed text-info-foreground">
             <div className="mb-1 flex items-center gap-1.5 font-semibold">
               <Bot className="h-3 w-3" />
               AI 摘要
+              <button
+                onClick={() => void handleReclassify()}
+                disabled={reclassifying}
+                title="AI 重新分类并重新生成摘要"
+                className="ml-auto rounded p-0.5 transition-colors hover:bg-info-foreground/10 disabled:opacity-50"
+              >
+                <Sparkles className={cn('h-3 w-3', reclassifying && 'animate-pulse')} />
+              </button>
             </div>
             {indexEntry.summary}
+          </div>
+        ) : (
+          <div className="mt-2 rounded-lg border border-dashed border-border p-2.5 text-[11px] text-muted-foreground">
+            <div className="mb-1 flex items-center gap-1.5">
+              <Bot className="h-3 w-3" />
+              AI 摘要
+              <button
+                onClick={() => void handleReclassify()}
+                disabled={reclassifying}
+                title="AI 重新分类并生成摘要"
+                className="ml-auto rounded p-0.5 transition-colors hover:bg-accent disabled:opacity-50"
+              >
+                <Sparkles className={cn('h-3 w-3', reclassifying && 'animate-pulse')} />
+              </button>
+            </div>
+            暂无摘要。请确保已在设置中配置 LLM 凭证（与 AI Agent 面板共用），点击右上角按钮让 AI 重新分类并生成摘要。
           </div>
         )}
 

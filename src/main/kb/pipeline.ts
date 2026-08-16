@@ -14,11 +14,12 @@
  */
 
 import { join, basename, extname, dirname } from 'node:path';
-import { readFile, writeFile, mkdir, rm, readdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rm, readdir, stat, rename } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { convertDocument } from './converter';
 import {
-  indexDocument,
+  classifyMarkdownFile,
+  upsertIndexEntry,
   removeFromIndex,
   parseIndexMd,
   listCategoriesFromIndex,
@@ -45,6 +46,44 @@ function docNameFromPath(filePath: string): string {
   const base = basename(filePath);
   const ext = extname(base);
   return ext ? base.slice(0, -ext.length) : base;
+}
+
+/** 绝对路径 → 相对 docs/ 的路径（正斜杠分隔，如 `分类/文档.md`） */
+function toRelPath(absPath: string, docsDir: string): string {
+  return absPath
+    .replace(docsDir + '/', '')
+    .replace(docsDir + '\\', '')
+    .replace(/\\/g, '/');
+}
+
+/**
+ * 在 docs/ 根目录与子目录中查找文档的 Markdown 文件。
+ * @returns 绝对路径；未找到返回 null。
+ */
+async function findMarkdownPath(docsDir: string, docName: string): Promise<string | null> {
+  const rootMdPath = join(docsDir, `${docName}.md`);
+  if (existsSync(rootMdPath)) return rootMdPath;
+
+  if (existsSync(docsDir)) {
+    try {
+      const entries = await readdir(docsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name === 'assets') continue;
+        const subMd = join(docsDir, entry.name, `${docName}.md`);
+        if (existsSync(subMd)) return subMd;
+      }
+    } catch {
+      // 忽略
+    }
+  }
+  return null;
+}
+
+/** 读取 index.md 中的现有分类列表（文件不存在返回空） */
+async function readExistingCategories(indexMdPath: string): Promise<string[]> {
+  if (!existsSync(indexMdPath)) return [];
+  const indexContent = await readFile(indexMdPath, 'utf-8');
+  return listCategoriesFromIndex(indexContent);
 }
 
 // ── 上传流水线 ──────────────────────────────────────────────────
@@ -128,18 +167,16 @@ export async function uploadDocument(
   const markdownSize = (await stat(tempMdPath)).size;
   const convertedAt = Date.now();
 
-  // 3. LLM 分类
+  // 3. AI 分类（读临时 Markdown 骨架，不写 index.md）
   notify({ name: docName, status: 'classifying' });
 
-  // 读取现有分类体系
-  let existingCategories: string[] = [];
-  if (existsSync(indexMdPath)) {
-    const indexContent = await readFile(indexMdPath, 'utf-8');
-    existingCategories = listCategoriesFromIndex(indexContent);
+  const existingCategories = await readExistingCategories(indexMdPath);
+  const classifyResult = await classifyMarkdownFile(tempMdPath, existingCategories, llmConfig);
+  const { classification, degraded, error } = classifyResult;
+  if (degraded) {
+    console.error(`[kb] 文档「${docName}」AI 分类/摘要降级: ${error ?? '未知错误'}`);
   }
-
-  const indexResult = await indexDocument(tempMdPath, docsDir, indexMdPath, existingCategories, llmConfig);
-  const category = indexResult.entry.category;
+  const category = classification.category;
   const classifiedAt = Date.now();
 
   // 4. 归位：移动 Markdown 到 docs/<分类>/<docName>.md
@@ -147,28 +184,21 @@ export async function uploadDocument(
   await mkdir(categoryDir, { recursive: true });
   const finalMdPath = join(categoryDir, `${docName}.md`);
 
-  // 如果 tempMdPath 和 finalMdPath 相同（分类正好是 docs/ 根），不需要移动
   if (tempMdPath !== finalMdPath) {
-    // 读取临时 Markdown 内容，写入最终位置，删除临时文件
-    const mdContent = await readFile(tempMdPath, 'utf-8');
-    await writeFile(finalMdPath, mdContent, 'utf-8');
-    await rm(tempMdPath, { force: true });
+    await rename(tempMdPath, finalMdPath);
   }
 
-  // 更新 index.md 中的路径（临时路径 → 最终路径）
-  if (existsSync(indexMdPath)) {
-    const indexContent = await readFile(indexMdPath, 'utf-8');
-    const tempRelPath = tempMdPath.replace(docsDir + '/', '').replace(docsDir + '\\', '').replace(/\\/g, '/');
-    const finalRelPath = finalMdPath.replace(docsDir + '/', '').replace(docsDir + '\\', '').replace(/\\/g, '/');
+  // 5. 以最终路径写入 index.md（先清除该文档旧条目，防止重复/脏路径残留）
+  const finalRelPath = toRelPath(finalMdPath, docsDir);
+  await upsertIndexEntry(indexMdPath, docName, {
+    title: classification.title,
+    path: finalRelPath,
+    category,
+    summary: classification.summary,
+    keywords: classification.keywords,
+  });
 
-    // 同步替换 index.md 中的临时路径为最终路径
-    if (tempRelPath !== finalRelPath) {
-      const newIndexContent = indexContent.split(tempRelPath).join(finalRelPath);
-      await writeFile(indexMdPath, newIndexContent, 'utf-8');
-    }
-  }
-
-  notify({ name: docName, status: 'done', category });
+  notify({ name: docName, status: 'done', category, aiDegraded: degraded, aiError: error });
 
   const doc: KbDocument = {
     name: docName,
@@ -182,6 +212,8 @@ export async function uploadDocument(
     status: 'done',
     convertedAt,
     classifiedAt,
+    aiDegraded: degraded,
+    aiError: error,
   };
 
   return { ok: true, document: doc };
@@ -265,47 +297,33 @@ export async function listDocuments(kbPath: string): Promise<KbDocument[]> {
     let category = '';
     let markdownSize = 0;
     let status: KbDocStatus = 'failed';
-    let errorCode: string | undefined;
-    let errorMessage: string | undefined;
     let convertedAt: number | undefined;
     let classifiedAt: number | undefined;
+    let aiDegraded: boolean | undefined;
 
-    // 先在 docs/ 根查找
-    const rootMdPath = join(docsDir, `${docName}.md`);
-    if (existsSync(rootMdPath)) {
-      markdownPath = rootMdPath;
-      markdownSize = (await stat(rootMdPath)).size;
+    const foundMd = await findMarkdownPath(docsDir, docName);
+    if (foundMd) {
+      markdownPath = foundMd;
+      markdownSize = (await stat(foundMd)).size;
       status = 'done';
-      convertedAt = (await stat(rootMdPath)).mtimeMs;
-    } else {
-      // 在 docs/ 子目录中查找
-      try {
-        const docEntries = await readdir(docsDir, { withFileTypes: true });
-        for (const de of docEntries) {
-          if (!de.isDirectory()) continue;
-          const subMd = join(docsDir, de.name, `${docName}.md`);
-          if (existsSync(subMd)) {
-            markdownPath = subMd;
-            category = de.name;
-            markdownSize = (await stat(subMd)).size;
-            status = 'done';
-            convertedAt = (await stat(subMd)).mtimeMs;
-            classifiedAt = convertedAt;
-            break;
-          }
-        }
-      } catch {
-        // docs/ 不存在或读取失败
+      convertedAt = (await stat(foundMd)).mtimeMs;
+      if (foundMd !== join(docsDir, `${docName}.md`)) {
+        category = basename(dirname(foundMd));
+        classifiedAt = convertedAt;
       }
     }
 
     // 检查 index.md 是否有对应条目
     if (status === 'done') {
-      const mdRelPath = markdownPath.replace(docsDir + '/', '').replace(docsDir + '\\', '').replace(/\\/g, '/');
+      const mdRelPath = toRelPath(markdownPath, docsDir);
       const indexEntry = indexEntries.find((e) => e.path === mdRelPath);
       if (indexEntry) {
         category = indexEntry.category;
         classifiedAt = classifiedAt ?? convertedAt;
+        // AI 降级推断：无摘要且归入未分类（上传时 LLM 未配置或调用失败）
+        if (!indexEntry.summary && indexEntry.category === '未分类') {
+          aiDegraded = true;
+        }
       }
     }
 
@@ -319,10 +337,9 @@ export async function listDocuments(kbPath: string): Promise<KbDocument[]> {
       markdownSize,
       assetCount: 0, // 不在此扫描 assets
       status,
-      errorCode,
-      errorMessage,
       convertedAt,
       classifiedAt,
+      aiDegraded,
     });
   }
 
@@ -509,30 +526,9 @@ export async function writeIndexMd(kbPath: string, content: string): Promise<voi
  */
 export async function readMarkdownDoc(kbPath: string, docName: string): Promise<string | null> {
   const docsDir = join(kbPath, 'docs');
-
-  // 先在 docs/ 根查找
-  const rootMdPath = join(docsDir, `${docName}.md`);
-  if (existsSync(rootMdPath)) {
-    return readFile(rootMdPath, 'utf-8');
-  }
-
-  // 在 docs/ 子目录中查找
-  if (existsSync(docsDir)) {
-    try {
-      const entries = await readdir(docsDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory() || entry.name === 'assets') continue;
-        const subMd = join(docsDir, entry.name, `${docName}.md`);
-        if (existsSync(subMd)) {
-          return readFile(subMd, 'utf-8');
-        }
-      }
-    } catch {
-      // 忽略
-    }
-  }
-
-  return null;
+  const foundMd = await findMarkdownPath(docsDir, docName);
+  if (!foundMd) return null;
+  return readFile(foundMd, 'utf-8');
 }
 
 // ── 移动文档到新分类 ─────────────────────────────────────────────
@@ -557,31 +553,12 @@ export async function moveDocumentCategory(
   const indexMdPath = join(kbPath, 'index.md');
 
   // 查找当前 Markdown 路径
-  let currentMdPath = '';
-  let oldCategory = '';
-
-  const rootMdPath = join(docsDir, `${docName}.md`);
-  if (existsSync(rootMdPath)) {
-    currentMdPath = rootMdPath;
-    oldCategory = '';
-  } else {
-    try {
-      const entries = await readdir(docsDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory() || entry.name === 'assets') continue;
-        const subMd = join(docsDir, entry.name, `${docName}.md`);
-        if (existsSync(subMd)) {
-          currentMdPath = subMd;
-          oldCategory = entry.name;
-          break;
-        }
-      }
-    } catch {
-      // 忽略
-    }
-  }
-
+  const currentMdPath = await findMarkdownPath(docsDir, docName);
   if (!currentMdPath) return null;
+
+  const oldCategory = currentMdPath === join(docsDir, `${docName}.md`)
+    ? ''
+    : basename(dirname(currentMdPath));
 
   // 如果新旧分类相同，不需要移动
   if (oldCategory === newCategory) return currentMdPath;
@@ -601,9 +578,7 @@ export async function moveDocumentCategory(
     const indexContent = await readFile(indexMdPath, 'utf-8');
     const { entries, categoryOrder } = parseIndexMd(indexContent);
 
-    // 计算旧相对路径和新相对路径
-    const docsDirNormalized = docsDir.replace(/\\/g, '/');
-    const oldRelPath = currentMdPath.replace(/\\/g, '/').replace(docsDirNormalized + '/', '');
+    const oldRelPath = toRelPath(currentMdPath, docsDir);
     const newRelPath = `${newCategory}/${docName}.md`;
 
     // 查找并更新条目
@@ -680,4 +655,168 @@ function serializeIndexMdForMove(entries: IndexEntry[], categoryOrder: string[])
   }
 
   return parts.join('\n');
+}
+
+// ── 重命名分类 ─────────────────────────────────────────────────
+
+/**
+ * 重命名分类目录，并更新 index.md 中所有相关条目的分类名和路径。
+ *
+ * 步骤：
+ *  1. 将 docs/<oldCategory>/ 重命名为 docs/<newCategory>/
+ *  2. 更新 index.md 中所有 category === oldCategory 的条目
+ *
+ * @returns 成功返回 true；分类目录不存在返回 false。
+ */
+export async function renameCategory(
+  kbPath: string,
+  oldCategory: string,
+  newCategory: string,
+): Promise<boolean> {
+  const docsDir = join(kbPath, 'docs');
+  const oldDir = join(docsDir, oldCategory);
+  const newDir = join(docsDir, newCategory);
+
+  if (!existsSync(oldDir)) return false;
+
+  // 如果新旧名称相同，无需操作
+  if (oldCategory === newCategory) return true;
+
+  // 重命名目录
+  // 如果目标目录已存在，合并：将旧目录中的文件移动到新目录
+  if (existsSync(newDir)) {
+    // 合并：移动旧目录下的所有文件到新目录
+    const entries = await readdir(oldDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const srcPath = join(oldDir, entry.name);
+      const destPath = join(newDir, entry.name);
+      await rename(srcPath, destPath);
+    }
+    await rm(oldDir, { recursive: true, force: true });
+  } else {
+    await rename(oldDir, newDir);
+  }
+
+  // 更新 index.md
+  const indexMdPath = join(kbPath, 'index.md');
+  if (existsSync(indexMdPath)) {
+    const indexContent = await readFile(indexMdPath, 'utf-8');
+    const { entries, categoryOrder } = parseIndexMd(indexContent);
+
+    // 更新所有匹配分类的条目。
+    // 匹配条件：条目分类名 === 旧分类，或路径首段 === 旧分类
+    // （后者兜底手动编辑 index.md 导致的 category 字段与路径不一致）。
+    for (const entry of entries) {
+      const firstSeg = entry.path.split('/')[0];
+      if (entry.category === oldCategory || firstSeg === oldCategory) {
+        entry.category = newCategory;
+        if (firstSeg === oldCategory) {
+          // 替换首段，并清理连续重复的旧分类前缀
+          // （历史 bug 产生的「未分类/未分类/x.md」脏数据）
+          let rest = entry.path.slice(oldCategory.length);
+          while (rest.startsWith(`/${oldCategory}/`)) {
+            rest = rest.slice(oldCategory.length + 1);
+          }
+          entry.path = newCategory + rest;
+        }
+      }
+    }
+
+    // 更新 categoryOrder
+    const idx = categoryOrder.indexOf(oldCategory);
+    if (idx >= 0) {
+      // 如果新分类已在 order 中，移除旧的；否则替换
+      if (categoryOrder.includes(newCategory)) {
+        categoryOrder.splice(idx, 1);
+      } else {
+        categoryOrder[idx] = newCategory;
+      }
+    } else if (!categoryOrder.includes(newCategory)) {
+      categoryOrder.push(newCategory);
+    }
+
+    const updatedContent = serializeIndexMdForMove(entries, categoryOrder);
+    await writeFile(indexMdPath, updatedContent, 'utf-8');
+  }
+
+  return true;
+}
+
+// ── AI 重新分类/摘要 ────────────────────────────────────────────
+
+/** reclassifyDocument 结果 */
+export type ReclassifyResult =
+  | { ok: true; entry: IndexEntry; moved: boolean }
+  | { ok: false; error: { code: string; message: string } };
+
+/**
+ * AI 重新分类单个文档并重新生成标题/摘要/关键词。
+ *
+ * 流程：
+ *  1. 查找文档 Markdown
+ *  2. LLM 分类（复用上传流水线的 classifyMarkdownFile）
+ *  3. 分类变化时移动文件到新分类目录
+ *  4. 以最终路径更新 index.md 条目（清除旧条目）
+ *
+ * 与上传不同：LLM 失败时不降级，直接返回错误（用户显式触发，失败必须可见）。
+ */
+export async function reclassifyDocument(
+  kbPath: string,
+  docName: string,
+  llmConfig: LlmConfig | null,
+): Promise<ReclassifyResult> {
+  const docsDir = join(kbPath, 'docs');
+  const indexMdPath = join(kbPath, 'index.md');
+
+  // 1. 查找文档
+  const currentMdPath = await findMarkdownPath(docsDir, docName);
+  if (!currentMdPath) {
+    return { ok: false, error: { code: 'notFound', message: `文档未找到: ${docName}` } };
+  }
+
+  if (!llmConfig) {
+    return {
+      ok: false,
+      error: { code: 'noLlmConfig', message: '未配置 LLM 凭证，请先在设置中配置（与 AI Agent 面板共用同一凭证）' },
+    };
+  }
+
+  // 2. AI 分类
+  const existingCategories = await readExistingCategories(indexMdPath);
+  const { classification, degraded, error } = await classifyMarkdownFile(currentMdPath, existingCategories, llmConfig);
+  if (degraded) {
+    return { ok: false, error: { code: 'llmFailed', message: `AI 分类失败: ${error ?? '未知错误'}` } };
+  }
+
+  // 3. 分类变化时移动文件
+  let finalMdPath = currentMdPath;
+  let moved = false;
+  const currentCategory = currentMdPath === join(docsDir, `${docName}.md`)
+    ? ''
+    : basename(dirname(currentMdPath));
+
+  if (classification.category && classification.category !== currentCategory) {
+    const targetDir = join(docsDir, classification.category);
+    await mkdir(targetDir, { recursive: true });
+    const targetMdPath = join(targetDir, `${docName}.md`);
+    if (currentMdPath !== targetMdPath) {
+      const content = await readFile(currentMdPath, 'utf-8');
+      await writeFile(targetMdPath, content, 'utf-8');
+      await rm(currentMdPath, { force: true });
+      finalMdPath = targetMdPath;
+      moved = true;
+    }
+  }
+
+  // 4. 更新 index.md 条目
+  const entry: IndexEntry = {
+    title: classification.title,
+    path: toRelPath(finalMdPath, docsDir),
+    category: classification.category || currentCategory || '未分类',
+    summary: classification.summary,
+    keywords: classification.keywords,
+  };
+  await upsertIndexEntry(indexMdPath, docName, entry);
+
+  return { ok: true, entry, moved };
 }

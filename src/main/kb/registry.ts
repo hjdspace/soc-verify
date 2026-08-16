@@ -16,7 +16,7 @@
 
 import { app } from 'electron';
 import { join } from 'node:path';
-import { readFile, writeFile, mkdir, readdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir, stat, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import type {
   KbRegistration,
@@ -231,6 +231,33 @@ async function unregister(kbId: string, projectRoot: string): Promise<KbResult<v
   return { ok: true, data: undefined };
 }
 
+/** 删除知识库（注销注册 + 删除库目录全部内容） */
+async function deleteKb(kbId: string, projectRoot: string): Promise<KbResult<void>> {
+  const existing = await loadRegistry();
+  const entry = existing.find((e) => e.id === kbId);
+  if (!entry) {
+    return { ok: false, error: makeError('notRegistered', '知识库未注册') };
+  }
+
+  // 先从所有项目的挂载记录中移除（当前项目）
+  const mounts = await loadMounts(projectRoot);
+  if (mounts.some((m) => m.kbId === kbId)) {
+    await saveMounts(projectRoot, mounts.filter((m) => m.kbId !== kbId));
+  }
+
+  // 从注册表中删除
+  await saveRegistry(existing.filter((e) => e.id !== kbId));
+
+  // 删除库目录全部内容
+  try {
+    await rm(entry.path, { recursive: true, force: true });
+  } catch {
+    // 目录删除失败不阻塞——注册表已清理
+  }
+
+  return { ok: true, data: undefined };
+}
+
 /** 列出所有已注册的知识库（含统计） */
 async function list(projectRoot: string): Promise<KbListEntry[]> {
   const entries = await loadRegistry();
@@ -339,6 +366,7 @@ async function status(projectRoot: string): Promise<KbStatus> {
 export const kbRegistry = {
   register,
   unregister,
+  deleteKb,
   list,
   mount,
   unmount,

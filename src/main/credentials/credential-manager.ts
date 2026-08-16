@@ -11,6 +11,7 @@ interface StoredCredential {
   label: string;
   apiKey: string;
   baseUrl?: string;
+  model?: string;
   createdAt: number;
 }
 
@@ -46,6 +47,7 @@ class CredentialManagerImpl {
       label: input.label || input.providerId,
       apiKey: input.apiKey,
       baseUrl: input.baseUrl,
+      model: input.model,
       createdAt: idx >= 0 ? all[idx].createdAt : Date.now(),
     };
 
@@ -62,6 +64,7 @@ class CredentialManagerImpl {
       label: stored.label,
       apiKeyMasked: stored.apiKey.slice(0, 4) + '***',
       baseUrl: stored.baseUrl,
+      model: stored.model,
       createdAt: stored.createdAt,
     };
   }
@@ -85,6 +88,7 @@ class CredentialManagerImpl {
       label: input.label !== undefined ? (input.label || existing.providerId) : existing.label,
       apiKey: input.apiKey !== undefined && input.apiKey !== '' ? input.apiKey : existing.apiKey,
       baseUrl: input.baseUrl !== undefined ? (input.baseUrl || undefined) : existing.baseUrl,
+      model: input.model !== undefined ? (input.model || undefined) : existing.model,
       createdAt: existing.createdAt,
     };
     all[idx] = updated;
@@ -95,6 +99,7 @@ class CredentialManagerImpl {
       label: updated.label,
       apiKeyMasked: updated.apiKey.slice(0, 4) + '***',
       baseUrl: updated.baseUrl,
+      model: updated.model,
       createdAt: updated.createdAt,
     };
   }
@@ -113,6 +118,7 @@ class CredentialManagerImpl {
       label: c.label,
       apiKeyMasked: c.apiKey.slice(0, 4) + '***',
       baseUrl: c.baseUrl,
+      model: c.model,
       createdAt: c.createdAt,
     }));
   }

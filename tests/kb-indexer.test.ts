@@ -5,10 +5,11 @@
  *  - 骨架截取（extractSkeleton）
  *  - Prompt 组装（buildClassificationPrompt）
  *  - LLM 响应解析（parseClassificationResponse）
- *  - LLM 调用（classifyWithLlm）mock fetch
- *  - 降级占位条目（makePlaceholderEntry）
+ *  - LLM 调用（classifyWithLlm）mock fetch — openai / anthropic / gemini 三协议
+ *  - 协议推导（protocolForProvider）
+ *  - 单文档分类流程（classifyMarkdownFile）
+ *  - index.md 条目写入（upsertIndexEntry：清旧条目 + 最终路径）
  *  - index.md 增量合并（mergeEntry / removeEntry / parseIndexMd）
- *  - 完整索引流程（indexDocument）mock LLM + 临时文件
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -21,12 +22,13 @@ import {
   buildClassificationPrompt,
   parseClassificationResponse,
   classifyWithLlm,
-  makePlaceholderEntry,
+  protocolForProvider,
+  classifyMarkdownFile,
+  upsertIndexEntry,
   mergeEntry,
   removeEntry,
   parseIndexMd,
   listCategoriesFromIndex,
-  indexDocument,
   removeFromIndex,
   type LlmConfig,
 } from '../src/main/kb/indexer';
@@ -149,6 +151,65 @@ describe('classifyWithLlm', () => {
     expect(headers['Content-Type']).toBe('application/json');
   });
 
+  it('anthropic 凭证走 /messages 端点 + x-api-key 头', async () => {
+    const mockResponse = {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        content: [
+          { type: 'text', text: '{"category": "验证计划", "title": "PLAN", "summary": "验证计划文档", "keywords": ["UVM"]}' },
+        ],
+      }),
+    } as unknown as Response;
+
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse);
+    const result = await classifyWithLlm('骨架', [], {
+      ...config,
+      providerId: 'anthropic',
+      fetchFn: fetchMock as unknown as typeof fetch,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.result.category).toBe('验证计划');
+    }
+
+    const callArgs = fetchMock.mock.calls[0];
+    expect(callArgs[0]).toBe('http://localhost:8557/messages');
+    const init = callArgs[1] as RequestInit;
+    const headers = init.headers as Record<string, string>;
+    expect(headers['x-api-key']).toBe('sk-test');
+    expect(headers['anthropic-version']).toBe('2023-06-01');
+    expect(headers['Authorization']).toBeUndefined();
+  });
+
+  it('gemini 凭证走 generateContent 端点（key 查询参数）', async () => {
+    const mockResponse = {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        candidates: [{
+          content: { parts: [{ text: '{"category": "协议手册", "title": "AXI", "summary": "AXI协议", "keywords": ["AXI"]}' }] },
+        }],
+      }),
+    } as unknown as Response;
+
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse);
+    const result = await classifyWithLlm('骨架', [], {
+      ...config,
+      providerId: 'gemini',
+      fetchFn: fetchMock as unknown as typeof fetch,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.result.category).toBe('协议手册');
+    }
+
+    const callArgs = fetchMock.mock.calls[0];
+    expect(callArgs[0]).toBe('http://localhost:8557/v1beta/models/test-model:generateContent?key=sk-test');
+  });
+
   it('LLM 返回非 200 时返回错误', async () => {
     const mockResponse = {
       ok: false,
@@ -189,16 +250,18 @@ describe('classifyWithLlm', () => {
   });
 });
 
-// ── makePlaceholderEntry ─────────────────────────────────────────
+// ── protocolForProvider ─────────────────────────────────────────
 
-describe('makePlaceholderEntry', () => {
-  it('生成占位条目：标题为文档名，分类为未分类', () => {
-    const entry = makePlaceholderEntry('DDR5', '未分类/DDR5.md');
-    expect(entry.title).toBe('DDR5');
-    expect(entry.path).toBe('未分类/DDR5.md');
-    expect(entry.category).toBe('未分类');
-    expect(entry.summary).toBe('');
-    expect(entry.keywords).toEqual([]);
+describe('protocolForProvider', () => {
+  it('按 providerId 推导调用协议', () => {
+    expect(protocolForProvider('openai')).toBe('openai');
+    expect(protocolForProvider('openai-compatible')).toBe('openai');
+    expect(protocolForProvider('deepseek')).toBe('openai');
+    expect(protocolForProvider('anthropic')).toBe('anthropic');
+    expect(protocolForProvider('claude')).toBe('anthropic');
+    expect(protocolForProvider('google')).toBe('gemini');
+    expect(protocolForProvider('gemini')).toBe('gemini');
+    expect(protocolForProvider(undefined)).toBe('openai');
   });
 });
 
@@ -346,26 +409,21 @@ describe('listCategoriesFromIndex', () => {
   });
 });
 
-// ── indexDocument（完整流程）──────────────────────────────────
+// ── classifyMarkdownFile（单文档分类流程）──────────────────────
 
-describe('indexDocument', () => {
-  let docsDir: string;
-  let indexMdPath: string;
+describe('classifyMarkdownFile', () => {
+  let dir: string;
+  let mdPath: string;
   let cleanup: () => Promise<void>;
 
   beforeEach(async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'kb-indexer-test-'));
-    docsDir = join(dir, 'docs');
-    const catDir = join(docsDir, '协议手册');
-    await mkdir(catDir, { recursive: true });
-    const mdPath = join(catDir, 'DDR5.md');
+    dir = await mkdtemp(join(tmpdir(), 'kb-classify-test-'));
+    mdPath = join(dir, 'DDR5.md');
     await writeFile(mdPath, '# DDR5 协议\n\nDDR5 是新一代内存标准。\n', 'utf-8');
-    indexMdPath = join(dir, 'index.md');
-    await writeFile(indexMdPath, '# 知识库索引\n', 'utf-8');
     cleanup = async () => { await rm(dir, { recursive: true, force: true }); };
   });
 
-  it('LLM 成功时正常分类并合并到 index.md', async () => {
+  it('LLM 成功时返回分类结果，不写 index.md', async () => {
     const mockResponse = {
       ok: true,
       status: 200,
@@ -386,22 +444,17 @@ describe('indexDocument', () => {
       fetchFn: fetchMock as unknown as typeof fetch,
     };
 
-    const mdPath = join(docsDir, '协议手册', 'DDR5.md');
-    const { entry, degraded } = await indexDocument(mdPath, docsDir, indexMdPath, ['协议手册'], config);
+    const { classification, degraded } = await classifyMarkdownFile(mdPath, ['协议手册'], config);
 
     expect(degraded).toBe(false);
-    expect(entry.title).toBe('DDR5');
-    expect(entry.category).toBe('协议手册');
-
-    // index.md 已合并
-    const indexContent = await readFile(indexMdPath, 'utf-8');
-    expect(indexContent).toContain('DDR5');
-    expect(indexContent).toContain('DDR5协议');
+    expect(classification.title).toBe('DDR5');
+    expect(classification.category).toBe('协议手册');
+    expect(classification.summary).toBe('DDR5协议');
 
     await cleanup();
   });
 
-  it('LLM 失败时降级为占位条目，不阻塞流程', async () => {
+  it('LLM 调用失败时降级为未分类，并返回降级原因', async () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error('network error'));
     const config: LlmConfig = {
       baseUrl: 'http://localhost:8557',
@@ -410,27 +463,123 @@ describe('indexDocument', () => {
       fetchFn: fetchMock as unknown as typeof fetch,
     };
 
-    const mdPath = join(docsDir, '协议手册', 'DDR5.md');
-    const { entry, degraded } = await indexDocument(mdPath, docsDir, indexMdPath, ['协议手册'], config);
+    const { classification, degraded, error } = await classifyMarkdownFile(mdPath, ['协议手册'], config);
 
     expect(degraded).toBe(true);
-    expect(entry.category).toBe('未分类');
-    expect(entry.title).toBe('DDR5');
-    expect(entry.summary).toBe('');
-
-    // index.md 仍有条目（占位）
-    const indexContent = await readFile(indexMdPath, 'utf-8');
-    expect(indexContent).toContain('DDR5');
+    expect(error).toContain('network error');
+    expect(classification.category).toBe('未分类');
+    expect(classification.title).toBe('DDR5');
+    expect(classification.summary).toBe('');
 
     await cleanup();
   });
 
-  it('无 LLM 配置时直接降级', async () => {
-    const mdPath = join(docsDir, '协议手册', 'DDR5.md');
-    const { entry, degraded } = await indexDocument(mdPath, docsDir, indexMdPath, [], null);
+  it('无 LLM 配置时直接降级，error 提示配置凭证', async () => {
+    const { classification, degraded, error } = await classifyMarkdownFile(mdPath, [], null);
 
     expect(degraded).toBe(true);
-    expect(entry.category).toBe('未分类');
+    expect(error).toContain('LLM 凭证');
+    expect(classification.category).toBe('未分类');
+
+    await cleanup();
+  });
+});
+
+// ── upsertIndexEntry（最终路径写入 + 清除旧条目）──────────────
+
+describe('upsertIndexEntry', () => {
+  let dir: string;
+  let indexMdPath: string;
+  let cleanup: () => Promise<void>;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'kb-upsert-test-'));
+    indexMdPath = join(dir, 'index.md');
+    await mkdir(dir, { recursive: true });
+    cleanup = async () => { await rm(dir, { recursive: true, force: true }); };
+  });
+
+  it('空 index.md 插入条目', async () => {
+    await upsertIndexEntry(indexMdPath, 'DDR5', {
+      title: 'DDR5',
+      path: '协议手册/DDR5.md',
+      category: '协议手册',
+      summary: 'DDR5协议',
+      keywords: ['DDR5'],
+    });
+
+    const { entries, categoryOrder } = parseIndexMd(await readFile(indexMdPath, 'utf-8'));
+    expect(entries).toHaveLength(1);
+    expect(entries[0].path).toBe('协议手册/DDR5.md');
+    expect(categoryOrder).toEqual(['协议手册']);
+
+    await cleanup();
+  });
+
+  it('重复上传/跨分类移动后：清除同文档的所有旧路径条目，只保留新条目', async () => {
+    // 模拟历史脏数据：同一文档两条条目（一条脏路径）
+    await writeFile(indexMdPath, [
+      '# 知识库索引',
+      '',
+      '## 未分类',
+      '',
+      '### DDR5',
+      '- **路径**: `未分类/未分类/DDR5.md`',
+      '- **摘要**: （暂无摘要）',
+      '',
+      '### DDR5',
+      '- **路径**: `未分类/DDR5.md`',
+      '- **摘要**: （暂无摘要）',
+      '',
+      '## 协议手册',
+      '',
+      '### LPDDR',
+      '- **路径**: `协议手册/LPDDR.md`',
+      '- **摘要**: LPDDR',
+      '',
+    ].join('\n'), 'utf-8');
+
+    await upsertIndexEntry(indexMdPath, 'DDR5', {
+      title: 'DDR5',
+      path: '协议手册/DDR5.md',
+      category: '协议手册',
+      summary: 'DDR5协议',
+      keywords: [],
+    });
+
+    const { entries } = parseIndexMd(await readFile(indexMdPath, 'utf-8'));
+    // DDR5 只剩一条新路径条目，LPDDR 不受影响
+    const ddr5 = entries.filter((e) => e.path.endsWith('DDR5.md'));
+    expect(ddr5).toHaveLength(1);
+    expect(ddr5[0].path).toBe('协议手册/DDR5.md');
+    expect(entries.some((e) => e.path === '协议手册/LPDDR.md')).toBe(true);
+
+    await cleanup();
+  });
+
+  it('无条目的分类节在重写后不残留', async () => {
+    await writeFile(indexMdPath, [
+      '# 知识库索引',
+      '',
+      '## 未分类',
+      '',
+      '### OLD',
+      '- **路径**: `未分类/OLD.md`',
+      '- **摘要**: （暂无摘要）',
+      '',
+    ].join('\n'), 'utf-8');
+
+    await upsertIndexEntry(indexMdPath, 'OLD', {
+      title: 'OLD',
+      path: '新分类/OLD.md',
+      category: '新分类',
+      summary: 'x',
+      keywords: [],
+    });
+
+    const content = await readFile(indexMdPath, 'utf-8');
+    expect(content).toContain('## 新分类');
+    expect(content).not.toContain('## 未分类');
 
     await cleanup();
   });

@@ -115,6 +115,8 @@ vi.mock('@renderer/lib/trpc', () => ({
       index: { mutate: vi.fn().mockResolvedValue({ content: '# 知识库索引\n\n## 协议手册\n' }) },
       preview: { query: vi.fn().mockResolvedValue({ content: '# 测试文档\n\n内容' }) },
       moveCategory: { mutate: vi.fn().mockResolvedValue({ ok: true, newPath: 'D:\\docs\\kb\\docs\\新分类\\test.md' }) },
+      renameCategory: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
+      reclassify: { mutate: vi.fn().mockResolvedValue({ ok: true, category: '验证方法', title: '测试文档', summary: '新摘要', keywords: ['UVM'], moved: true }) },
       deepReindex: { mutate: vi.fn().mockResolvedValue({ ok: true, sessionId: 'temp-session-1', documentCount: 3 }) },
       pickFiles: { mutate: vi.fn().mockResolvedValue({ canceled: true }) },
     },
@@ -129,23 +131,20 @@ vi.mock('@renderer/lib/trpc', () => ({
 
 // ─── Mock toast store ───────────────────────────────────────
 
+const { toastMocks } = vi.hoisted(() => ({
+  toastMocks: {
+    success: vi.fn() as ReturnType<typeof vi.fn>,
+    error: vi.fn() as ReturnType<typeof vi.fn>,
+    warning: vi.fn() as ReturnType<typeof vi.fn>,
+    info: vi.fn() as ReturnType<typeof vi.fn>,
+  },
+}));
+
 vi.mock('@renderer/stores/toast', () => ({
   useToastStore: Object.assign(
-    vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
-      selector({
-        success: vi.fn(),
-        error: vi.fn(),
-        warning: vi.fn(),
-        info: vi.fn(),
-      }),
-    ),
+    vi.fn((selector: (s: Record<string, unknown>) => unknown) => selector(toastMocks)),
     {
-      getState: () => ({
-        success: vi.fn(),
-        error: vi.fn(),
-        warning: vi.fn(),
-        info: vi.fn(),
-      }),
+      getState: () => toastMocks,
     },
   ),
 }));
@@ -353,6 +352,54 @@ describe('KbStore', () => {
       await useKbStore.getState().uploadFiles(['D:\\file1.pdf', 'D:\\file2.pdf']);
 
       expect(useKbStore.getState().uploading).toBe(false);
+    });
+
+    it('AI 降级时不显示成功 toast（提示 AI 分类失败）', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.kb.upload.mutate).mockResolvedValueOnce({
+        results: [
+          {
+            ok: true as const,
+            document: {
+              ...mockDocuments[0],
+              status: 'done' as const,
+              category: '未分类',
+              aiDegraded: true,
+              aiError: 'LLM API 返回 401',
+            },
+          },
+        ],
+      });
+
+      await useKbStore.getState().uploadFiles(['D:\\file1.pdf']);
+
+      expect(toastMocks.success).not.toHaveBeenCalled();
+      expect(toastMocks.warning).toHaveBeenCalled();
+      expect(useKbStore.getState().uploading).toBe(false);
+    });
+  });
+
+  // ── AI 重新分类 ─────────────────────────────────────────
+
+  describe('reclassifyDocument', () => {
+    it('calls tRPC reclassify and refreshes', async () => {
+      await useKbStore.getState().reclassifyDocument('AMBA AXI');
+
+      const { trpc } = await import('@renderer/lib/trpc');
+      expect(trpc.kb.reclassify.mutate).toHaveBeenCalledWith({ name: 'AMBA AXI' });
+    });
+
+    it('handles noLlmConfig failure without throwing', async () => {
+      const { trpc } = await import('@renderer/lib/trpc');
+      vi.mocked(trpc.kb.reclassify.mutate).mockResolvedValueOnce({
+        ok: false as const,
+        error: { code: 'noLlmConfig', message: '未配置 LLM 凭证' },
+      });
+
+      const result = await useKbStore.getState().reclassifyDocument('AMBA AXI');
+
+      expect(result).toBe(false);
+      expect(trpc.kb.reclassify.mutate).toHaveBeenCalled();
     });
   });
 

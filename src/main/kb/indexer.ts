@@ -111,6 +111,8 @@ export type LlmConfig = {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /** 凭证 providerId — 决定调用协议（anthropic / gemini 走原生协议，其余走 openai-compatible） */
+  providerId?: string;
   fetchFn?: typeof fetch;
 };
 
@@ -118,6 +120,16 @@ export type LlmConfig = {
 type LlmSuccess = { ok: true; result: ClassificationResult };
 type LlmFailure = { ok: false; error: string };
 type LlmResponse = LlmSuccess | LlmFailure;
+
+/** LLM 协议（按凭证 providerId 推导） */
+type LlmProtocol = 'openai' | 'anthropic' | 'gemini';
+
+export function protocolForProvider(providerId: string | undefined): LlmProtocol {
+  const lower = (providerId ?? '').toLowerCase();
+  if (lower === 'anthropic' || lower === 'claude') return 'anthropic';
+  if (lower === 'google' || lower === 'gemini') return 'gemini';
+  return 'openai';
+}
 
 /**
  * 解析 LLM 返回的 JSON 文本为 ClassificationResult。
@@ -148,12 +160,52 @@ export function parseClassificationResponse(raw: string): ClassificationResult {
   };
 }
 
+/** LLM 请求的 max_tokens（推理模型需要更大预算，否则可能返回空 content） */
+const LLM_MAX_TOKENS = 2000;
+
+const CLASSIFY_SYSTEM_PROMPT = '你是一个文档分类助手。只返回 JSON。';
+
+/** 从 openai-compatible 响应提取 message.content */
+function extractOpenAiContent(payload: Record<string, unknown>): string | null {
+  const choices = payload.choices as Array<Record<string, unknown>> | undefined;
+  const message = choices?.[0]?.message as Record<string, unknown> | undefined;
+  const content = message?.content;
+  return typeof content === 'string' ? content : null;
+}
+
+/** 从 anthropic /v1/messages 响应提取 content[].text */
+function extractAnthropicContent(payload: Record<string, unknown>): string | null {
+  const blocks = payload.content as Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(blocks)) return null;
+  const text = blocks
+    .filter((b) => b.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text as string)
+    .join('');
+  return text || null;
+}
+
+/** 从 gemini generateContent 响应提取 candidates[].content.parts[].text */
+function extractGeminiContent(payload: Record<string, unknown>): string | null {
+  const candidates = payload.candidates as Array<Record<string, unknown>> | undefined;
+  const content = candidates?.[0]?.content as Record<string, unknown> | undefined;
+  const parts = content?.parts as Array<Record<string, unknown>> | undefined;
+  if (!Array.isArray(parts)) return null;
+  const text = parts
+    .filter((p) => typeof p.text === 'string')
+    .map((p) => p.text as string)
+    .join('');
+  return text || null;
+}
+
 /**
  * 调用 LLM 获取分类结果。
  *
- * 使用 openai-compatible API（chat/completions），
- * 单次调用产出分类 + 标题 + 摘要 + 关键词。
+ * 按凭证 providerId 分派协议：
+ *  - anthropic / claude → Anthropic Messages API（/messages + x-api-key）
+ *  - google / gemini    → Gemini generateContent API
+ *  - 其余               → openai-compatible（/chat/completions + Bearer）
  *
+ * 单次调用产出分类 + 标题 + 摘要 + 关键词。
  * 失败时返回 { ok: false }，由调用方决定降级策略。
  */
 export async function classifyWithLlm(
@@ -163,27 +215,60 @@ export async function classifyWithLlm(
 ): Promise<LlmResponse> {
   const prompt = buildClassificationPrompt(skeleton, existingCategories);
   const fetchFn = config.fetchFn ?? fetch;
+  const base = config.baseUrl.replace(/\/+$/, '');
+  const protocol = protocolForProvider(config.providerId);
 
-  const url = config.baseUrl.replace(/\/+$/, '') + '/chat/completions';
+  let url: string;
+  let headers: Record<string, string>;
+  let body: Record<string, unknown>;
+
+  if (protocol === 'anthropic') {
+    url = `${base}/messages`;
+    headers = {
+      'Content-Type': 'application/json',
+      'x-api-key': config.apiKey,
+      'anthropic-version': '2023-06-01',
+    };
+    body = {
+      model: config.model,
+      max_tokens: LLM_MAX_TOKENS,
+      system: CLASSIFY_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: prompt }],
+    };
+  } else if (protocol === 'gemini') {
+    const vbase = base.includes('/v1beta') ? base : `${base}/v1beta`;
+    url = `${vbase}/models/${config.model}:generateContent?key=${config.apiKey}`;
+    headers = { 'Content-Type': 'application/json' };
+    body = {
+      systemInstruction: { parts: [{ text: CLASSIFY_SYSTEM_PROMPT }] },
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.3, maxOutputTokens: LLM_MAX_TOKENS },
+    };
+  } else {
+    url = `${base}/chat/completions`;
+    headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${config.apiKey}`,
+    };
+    body = {
+      model: config.model,
+      messages: [
+        { role: 'system', content: CLASSIFY_SYSTEM_PROMPT },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.3,
+      max_tokens: LLM_MAX_TOKENS,
+    };
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), LLM_TIMEOUT_MS);
 
   try {
     const response = await fetchFn(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model,
-        messages: [
-          { role: 'system', content: '你是一个文档分类助手。只返回 JSON。' },
-          { role: 'user', content: prompt },
-        ],
-        temperature: 0.3,
-        max_tokens: 500,
-      }),
+      headers,
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
 
@@ -193,11 +278,14 @@ export async function classifyWithLlm(
     }
 
     const payload = await response.json() as Record<string, unknown>;
-    const choices = payload.choices as Array<Record<string, unknown>> | undefined;
-    const message = choices?.[0]?.message as Record<string, unknown> | undefined;
-    const content = message?.content;
-    if (typeof content !== 'string') {
-      return { ok: false, error: 'LLM 返回格式异常：缺少 message.content' };
+    const content = protocol === 'anthropic'
+      ? extractAnthropicContent(payload)
+      : protocol === 'gemini'
+        ? extractGeminiContent(payload)
+        : extractOpenAiContent(payload);
+
+    if (content === null) {
+      return { ok: false, error: `LLM 返回格式异常：无法从 ${protocol} 响应中提取文本` };
     }
 
     const result = parseClassificationResponse(content);
@@ -210,17 +298,57 @@ export async function classifyWithLlm(
   }
 }
 
-// ── 降级占位条目 ────────────────────────────────────────────────
+// ── 单文档分类流程 ──────────────────────────────────────────────
+
+/** classifyMarkdownFile 结果 */
+export type ClassifyFileResult = {
+  classification: ClassificationResult;
+  /** true = LLM 未配置或调用失败，降级为占位分类 */
+  degraded: boolean;
+  /** 降级原因（用户可读） */
+  error?: string;
+};
 
 /**
- * 生成降级占位条目（LLM 失败时使用）。
- * 标题用文档名，摘要留空，分类为"未分类"。
+ * 读取 Markdown 文件 → 骨架截取 → LLM 分类。
+ *
+ * 不写 index.md（由调用方在文件归位后以最终路径调用 upsertIndexEntry），
+ * 避免"临时路径写入 + 字符串替换修正"在重复上传时污染索引路径。
+ *
+ * LLM 失败时降级：分类"未分类"、标题用文件名、摘要留空。
  */
-export function makePlaceholderEntry(docName: string, markdownRelPath: string): IndexEntry {
+export async function classifyMarkdownFile(
+  markdownPath: string,
+  existingCategories: string[],
+  llmConfig: LlmConfig | null,
+): Promise<ClassifyFileResult> {
+  const markdown = await readFile(markdownPath, 'utf-8');
+  const skeleton = extractSkeleton(markdown);
+
+  if (!llmConfig) {
+    return {
+      degraded: true,
+      error: '未配置 LLM 凭证（设置 → 凭证管理）',
+      classification: degradedClassification(markdownPath),
+    };
+  }
+
+  const llmResult = await classifyWithLlm(skeleton, existingCategories, llmConfig);
+  if (llmResult.ok) {
+    return { classification: llmResult.result, degraded: false };
+  }
   return {
-    title: docName,
-    path: markdownRelPath,
+    degraded: true,
+    error: llmResult.error,
+    classification: degradedClassification(markdownPath),
+  };
+}
+
+/** 降级占位分类：分类"未分类"、标题用文件名 */
+function degradedClassification(markdownPath: string): ClassificationResult {
+  return {
     category: '未分类',
+    title: basename(markdownPath, '.md'),
     summary: '',
     keywords: [],
   };
@@ -295,9 +423,9 @@ export function parseIndexMd(content: string): { entries: IndexEntry[]; category
       continue;
     }
 
-    // 路径行
+    // 路径行（容错：strip 首尾多余反引号，自愈历史双前导反引号脏数据）
     if (trimmed.startsWith(PATH_PREFIX)) {
-      currentPath = trimmed.slice(PATH_PREFIX.length, -1); // 去掉末尾的 `
+      currentPath = trimmed.slice(PATH_PREFIX.length).replace(/^`+/, '').replace(/`+$/, '');
       continue;
     }
 
@@ -326,9 +454,12 @@ function formatEntryBlock(entry: IndexEntry): string {
   const keywords = entry.keywords.length > 0
     ? entry.keywords.map((k) => `\`${k}\``).join(' · ')
     : '';
+  // 注意：PATH_PREFIX 已含开头的反引号，这里只补结尾反引号。
+  // （历史上此处多写了一个前导反引号，导致解析出的 path 带 ` 前缀，
+  //  renameCategory 的路径前缀匹配失效 —— 路径永远是旧分类。）
   const lines = [
     `### ${entry.title}`,
-    `${PATH_PREFIX}\`${entry.path}\``,
+    `${PATH_PREFIX}${entry.path}\``,
     `${SUMMARY_PREFIX}${entry.summary || '（暂无摘要）'}`,
   ];
   if (keywords) {
@@ -414,84 +545,42 @@ export function removeEntry(indexContent: string, markdownRelPath: string): stri
 
 // ── 完整索引流程 ─────────────────────────────────────────────────
 
+/** 判断 index 条目是否指向指定文档（按路径末段匹配文档名） */
+function entryBelongsToDoc(entry: IndexEntry, docName: string): boolean {
+  return entry.path === `${docName}.md` || entry.path.endsWith(`/${docName}.md`);
+}
+
 /**
- * 完整的分类索引流程：
- *  1. 读取 Markdown 骨架
- * 2. 调用 LLM 分类
- * 3. LLM 失败时降级为占位条目
- * 4. 合并到 index.md
+ * 以最终路径写入/更新文档的索引条目。
  *
- * @param markdownPath Markdown 文件绝对路径
- * @param docsDir docs/ 目录绝对路径
+ * 先移除该文档的所有旧条目（覆盖重复上传、跨分类移动残留的
+ * 陈旧路径，如「未分类/未分类/x.md」这类脏数据），再合并新条目。
+ *
  * @param indexMdPath index.md 绝对路径
- * @param existingCategories 现有分类列表
- * @param llmConfig LLM 配置（为 null 时直接降级占位）
- * @param categoryOverride 覆盖分类（非空时跳过 LLM，直接用此分类）
- * @returns 分类结果 + 是否降级
+ * @param docName 文档名（不含扩展名，主键）
+ * @param entry 新条目（path 必须是相对 docs/ 的最终路径）
  */
-export async function indexDocument(
-  markdownPath: string,
-  docsDir: string,
+export async function upsertIndexEntry(
   indexMdPath: string,
-  existingCategories: string[],
-  llmConfig: LlmConfig | null,
-): Promise<{ entry: IndexEntry; degraded: boolean }> {
-  // 读取 Markdown
-  const markdown = await readFile(markdownPath, 'utf-8');
-  const skeleton = extractSkeleton(markdown);
-
-  // 计算相对路径
-  const markdownRelPath = markdownPath.replace(docsDir + '/', '').replace(docsDir + '\\', '').replace(/\\/g, '/');
-
-  // 调用 LLM 分类
-  let classification: ClassificationResult;
-  let degraded = false;
-
-  if (llmConfig) {
-    const llmResult = await classifyWithLlm(skeleton, existingCategories, llmConfig);
-    if (llmResult.ok) {
-      classification = llmResult.result;
-    } else {
-      // 降级为占位条目
-      degraded = true;
-      classification = {
-        category: '未分类',
-        title: basename(markdownPath, '.md'),
-        summary: '',
-        keywords: [],
-      };
-    }
-  } else {
-    // 无 LLM 配置，直接降级
-    degraded = true;
-    classification = {
-      category: '未分类',
-      title: basename(markdownPath, '.md'),
-      summary: '',
-      keywords: [],
-    };
-  }
-
-  const entry: IndexEntry = {
-    title: classification.title,
-    path: markdownRelPath,
-    category: classification.category,
-    summary: classification.summary,
-    keywords: classification.keywords,
-  };
-
-  // 读取现有 index.md
+  docName: string,
+  entry: IndexEntry,
+): Promise<void> {
   let indexContent = '';
   if (existsSync(indexMdPath)) {
     indexContent = await readFile(indexMdPath, 'utf-8');
   }
 
-  // 增量合并
-  const merged = mergeEntry(indexContent, entry);
-  await mkdir(dirname(indexMdPath), { recursive: true });
-  await writeFile(indexMdPath, merged, 'utf-8');
+  const { entries, categoryOrder } = parseIndexMd(indexContent);
+  const cleaned = entries.filter((e) => !entryBelongsToDoc(e, docName));
+  cleaned.push(entry);
 
-  return { entry, degraded };
+  const keptOrder = categoryOrder.filter((c) => cleaned.some((e) => e.category === c));
+  if (!keptOrder.includes(entry.category)) {
+    keptOrder.push(entry.category);
+  }
+
+  await mkdir(dirname(indexMdPath), { recursive: true });
+  await writeFile(indexMdPath, serializeIndexMd(cleaned, keptOrder), 'utf-8');
 }
 
 /**

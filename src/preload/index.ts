@@ -362,6 +362,8 @@ process.once('loaded', async () => {
         errorCode?: string;
         errorMessage?: string;
         category?: string;
+        aiDegraded?: boolean;
+        aiError?: string;
       }) => void,
     ) => {
       const handler = (
@@ -372,6 +374,8 @@ process.once('loaded', async () => {
           errorCode?: string;
           errorMessage?: string;
           category?: string;
+          aiDegraded?: boolean;
+          aiError?: string;
         },
       ) => callback(data);
       ipcRenderer.on('kb:docStatus', handler);

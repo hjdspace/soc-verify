@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { BookOpen, X, Folder, Link2, Unlink, Check } from 'lucide-react';
+import { BookOpen, X, Folder, Link2, Unlink, Check, Trash2 } from 'lucide-react';
 import { useKbStore } from '@renderer/stores/kb';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
@@ -17,11 +17,13 @@ export function KbModal() {
   const mountKb = useKbStore((s) => s.mountKb);
   const unmountKb = useKbStore((s) => s.unmountKb);
   const registerKb = useKbStore((s) => s.registerKb);
+  const deleteKb = useKbStore((s) => s.deleteKb);
   const loadKbList = useKbStore((s) => s.loadKbList);
 
   const [newKbName, setNewKbName] = useState('');
   const [newKbPath, setNewKbPath] = useState('');
   const [registering, setRegistering] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // ── 点击遮罩关闭 ─────────────────────────────────────────
   const handleMaskClick = useCallback((e: React.MouseEvent) => {
@@ -59,6 +61,18 @@ export function KbModal() {
       await loadKbList();
     }
   }, [newKbName, newKbPath, registerKb, loadKbList]);
+
+  // ── 删除库（带确认） ────────────────────────────────────
+  const handleDelete = useCallback(async (kbId: string, _kbName: string) => {
+    if (confirmDeleteId === kbId) {
+      await deleteKb(kbId);
+      setConfirmDeleteId(null);
+    } else {
+      setConfirmDeleteId(kbId);
+      // 3 秒后自动取消确认状态
+      setTimeout(() => setConfirmDeleteId((prev) => prev === kbId ? null : prev), 3000);
+    }
+  }, [confirmDeleteId, deleteKb]);
 
   // ── ESC 关闭 ──────────────────────────────────────────────
   useEffect(() => {
@@ -118,18 +132,41 @@ export function KbModal() {
                       </span>
                     </div>
                     {isMounted ? (
-                      <span className="flex shrink-0 items-center gap-1 text-[10px] text-status-pass-foreground">
-                        <Check className="h-3 w-3" />
-                        挂载中
-                      </span>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <span className="flex items-center gap-1 text-[10px] text-status-pass-foreground">
+                          <Check className="h-3 w-3" />
+                          挂载中
+                        </span>
+                        <button
+                          onClick={() => void unmountKb(kb.id)}
+                          title="卸载"
+                          className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                        >
+                          <Unlink className="h-3 w-3" />
+                        </button>
+                      </div>
                     ) : (
-                      <button
-                        onClick={() => void mountKb(kb.id)}
-                        className="flex shrink-0 items-center gap-1 rounded px-2 py-0.5 text-[10px] text-primary transition-colors hover:bg-accent"
-                      >
-                        <Link2 className="h-3 w-3" />
-                        挂载
-                      </button>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          onClick={() => void mountKb(kb.id)}
+                          className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] text-primary transition-colors hover:bg-accent"
+                        >
+                          <Link2 className="h-3 w-3" />
+                          挂载
+                        </button>
+                        <button
+                          onClick={() => void handleDelete(kb.id, kb.name)}
+                          title={confirmDeleteId === kb.id ? '再次点击确认删除（含目录）' : '删除'}
+                          className={cn(
+                            'rounded p-1 transition-colors hover:bg-accent',
+                            confirmDeleteId === kb.id
+                              ? 'text-status-fail-foreground'
+                              : 'text-muted-foreground hover:text-foreground',
+                          )}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
                     )}
                   </div>
                 );

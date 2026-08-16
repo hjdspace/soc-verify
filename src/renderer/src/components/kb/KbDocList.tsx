@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useState } from 'react';
-import { Upload, RotateCcw, Trash2, FileText, AlertCircle } from 'lucide-react';
+import { Upload, RotateCcw, Trash2, FileText, AlertCircle, Sparkles } from 'lucide-react';
 import { useKbStore, type KbDocument } from '@renderer/stores/kb';
 import { cn } from '@renderer/lib/utils';
 
@@ -52,6 +52,22 @@ function FileIcon({ ext }: { ext: string }) {
 function StatusBadge({ doc }: { doc: KbDocument }) {
   switch (doc.status) {
     case 'done':
+      // AI 分类/摘要降级：黄色警示徽章（LLM 未配置或调用失败）
+      if (doc.aiDegraded) {
+        return (
+          <div className="flex flex-col gap-0.5">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-warning/10 px-2.5 py-0.5 text-[11px] font-medium text-warning-foreground">
+              <AlertCircle className="h-3 w-3" />
+              已转换 · AI 未分类
+            </span>
+            {doc.aiError && (
+              <span className="font-mono text-[10px] text-warning-foreground" title={doc.aiError}>
+                {doc.aiError}
+              </span>
+            )}
+          </div>
+        );
+      }
       return (
         <span className="inline-flex items-center gap-1.5 rounded-full bg-status-pass/10 px-2.5 py-0.5 text-[11px] font-medium text-status-pass-foreground">
           ✓ 已转换
@@ -112,9 +128,11 @@ export function KbDocList() {
   const loading = useKbStore((s) => s.documentsLoading);
   const retryDocument = useKbStore((s) => s.retryDocument);
   const deleteDocument = useKbStore((s) => s.deleteDocument);
+  const reclassifyDocument = useKbStore((s) => s.reclassifyDocument);
   const openPreview = useKbStore((s) => s.openPreview);
   const [dragOver, setDragOver] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [reclassifying, setReclassifying] = useState<string | null>(null);
 
   // ── 分类筛选 ─────────────────────────────────────────────
   const filteredDocs = selectedCategory
@@ -149,6 +167,13 @@ export function KbDocList() {
   const handleRetry = useCallback((name: string) => {
     void retryDocument(name);
   }, [retryDocument]);
+
+  // ── AI 重新分类 ─────────────────────────────────────────
+  const handleReclassify = useCallback(async (name: string) => {
+    setReclassifying(name);
+    await reclassifyDocument(name);
+    setReclassifying(null);
+  }, [reclassifyDocument]);
 
   // ── 删除（带确认） ───────────────────────────────────────
   const handleDelete = useCallback((name: string) => {
@@ -262,6 +287,24 @@ export function KbDocList() {
                 {/* 行内操作 */}
                 <td className="px-3 py-2">
                   <div className="flex items-center justify-end gap-1">
+                    {doc.status === 'done' && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleReclassify(doc.name);
+                        }}
+                        disabled={reclassifying === doc.name}
+                        title={doc.aiDegraded ? 'AI 重新分类并生成摘要（当前未分类，建议重试）' : 'AI 重新分类并重新生成摘要'}
+                        className={cn(
+                          'rounded p-1 transition-colors hover:bg-accent',
+                          doc.aiDegraded
+                            ? 'text-warning-foreground hover:text-warning-foreground'
+                            : 'text-muted-foreground hover:text-foreground',
+                        )}
+                      >
+                        <Sparkles className={cn('h-3.5 w-3.5', reclassifying === doc.name && 'animate-pulse')} />
+                      </button>
+                    )}
                     {doc.status === 'failed' && (
                       <button
                         onClick={(e) => {

@@ -103,13 +103,24 @@ export function parseGitStatus(output: string): SourceControlStatus {
 }
 
 export function sanitizeCommitMessage(message: string): string {
-  return message
-    .trim()
-    .replace(/^```(?:text)?/i, '')
-    .replace(/```$/i, '')
-    .trim()
-    .replace(/^["']|["']$/g, '')
-    .trim();
+  let result = message.trim();
+
+  // Strip markdown code fences (```text ... ``` or ``` ... ```)
+  result = result.replace(/^```[a-zA-Z]*\n?/m, '').replace(/\n?```$/m, '');
+  result = result.trim();
+
+  // Strip wrapping quotes
+  result = result.replace(/^["']+|["']+$/g, '').trim();
+
+  // Some models prepend conversational filler like "Here is the commit message:"
+  // or "以下是提交信息：".  If the text contains a Conventional Commits type
+  // prefix somewhere, keep from that point onward.
+  const ccMatch = result.match(/((?:feat|fix|docs|style|refactor|perf|test|chore|build|ci)(?:\([^)]+\))?:\s.*)/s);
+  if (ccMatch) {
+    result = ccMatch[1].trim();
+  }
+
+  return result;
 }
 
 export class SourceControlService {
@@ -259,6 +270,11 @@ export class SourceControlService {
   /**
    * Generate a commit message using AI based on **staged** changes only.
    * If nothing is staged, falls back to all changes.
+   *
+   * The method tolerates a wide variety of OpenAI-compatible response shapes
+   * (string content, array content, reasoning_content, delta, etc.) and will
+   * retry once with a stricter prompt if the first attempt yields no usable
+   * text.
    */
   async generateCommitMessage(projectRoot: string, credential: AiCredential, modelId?: string): Promise<string> {
     const status = await this.getStatus(projectRoot);
@@ -278,43 +294,47 @@ export class SourceControlService {
     const model = modelId ?? await this.resolveModel(credential);
     const diffContext = await this.buildStagedDiffContext(projectRoot, useStagedOnly);
     const url = this.chatCompletionsUrl(credential.baseUrl);
+
+    const systemPrompt = [
+      '你是一位资深的软件工程师，擅长编写清晰、规范的 Git 提交信息。',
+      '遵循 Conventional Commits 规范：<type>(<可选 scope>): <简述>',
+      '',
+      'Type 必须是以下之一：feat, fix, docs, style, refactor, perf, test, chore, build, ci',
+      '',
+      '规则：',
+      '- 提交信息必须全部用中文撰写（type 和 scope 保持英文）。',
+      '- 标题行简洁明了地描述本次变更，不超过 72 个字符。',
+      '- 标题行之后必须空一行，然后写 body 正文。',
+      '- body 正文必须详细说明 *改了什么* 以及 *为什么改*，不要只是重复 diff 内容。',
+      '- body 正文使用中文，可以使用无序列表（- 开头）分条列举要点。',
+      '- 只返回提交信息文本，不要加引号、markdown 代码块标记或任何前言。',
+    ].join('\n');
+
+    const userPrompt = [
+      `分析以下${useStagedOnly ? '已暂存' : '所有'}变更，并生成符合 Conventional Commits 规范的中文提交信息（包含标题和 body 正文）。`,
+      '',
+      '直接输出提交信息，不要包含任何解释、前缀或说明文字。',
+      '',
+      diffContext,
+    ].join('\n');
+
+    const requestBody = JSON.stringify({
+      model,
+      temperature: 0.3,
+      max_tokens: 1024,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    });
+
     const response = await this.fetchFn(url, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${credential.apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model,
-        temperature: 0.3,
-        max_tokens: 500,
-        messages: [
-          {
-            role: 'system',
-            content: [
-              '你是一位资深的软件工程师，擅长编写清晰、规范的 Git 提交信息。',
-              '遵循 Conventional Commits 规范：<type>(<可选 scope>): <简述>',
-              '',
-              'Type 必须是以下之一：feat, fix, docs, style, refactor, perf, test, chore, build, ci',
-              '',
-              '规则：',
-              '- 提交信息必须全部用中文撰写（type 和 scope 保持英文）。',
-              '- 标题行简洁明了地描述本次变更，不超过 72 个字符。',
-              '- 标题行之后必须空一行，然后写 body 正文。',
-              '- body 正文必须详细说明 *改了什么* 以及 *为什么改*，不要只是重复 diff 内容。',
-              '- body 正文使用中文，可以使用无序列表（- 开头）分条列举要点。',
-              '- 只返回提交信息文本，不要加引号、markdown 代码块标记或任何前言。',
-            ].join('\n'),
-          },
-          {
-            role: 'user',
-            content: [
-              `分析以下${useStagedOnly ? '已暂存' : '所有'}变更，并生成符合 Conventional Commits 规范的中文提交信息（包含标题和 body 正文）。\n`,
-              diffContext,
-            ].join('\n'),
-          },
-        ],
-      }),
+      body: requestBody,
     });
 
     if (!response.ok) {
@@ -324,10 +344,58 @@ export class SourceControlService {
 
     const payload = await response.json() as Record<string, unknown>;
     const message = this.extractMessage(payload);
-    if (!message) {
-      throw new Error('AI response did not include a commit message');
+
+    if (message) {
+      return sanitizeCommitMessage(message);
     }
-    return sanitizeCommitMessage(message);
+
+    // ── Retry once with an even stricter prompt ──────────────────────
+    // Some models ignore the system prompt and wrap the answer in prose.
+    // A second call with an explicit example usually recovers a usable message.
+    const retryBody = JSON.stringify({
+      model,
+      temperature: 0.2,
+      max_tokens: 256,
+      messages: [
+        {
+          role: 'system',
+          content: '只输出 Git 提交信息，不要包含任何其他文字。',
+        },
+        {
+          role: 'user',
+          content: [
+            '根据以下代码变更生成一条 Conventional Commits 格式的中文提交信息。',
+            '示例输出：',
+            'feat: 添加用户登录功能',
+            '',
+            '- 新增 /login 路由和登录表单组件',
+            '- 集成 JWT 认证中间件',
+            '',
+            '请直接输出提交信息，不要加任何前缀说明：',
+            diffContext.slice(0, MAX_DIFF_CHARS),
+          ].join('\n'),
+        },
+      ],
+    });
+
+    const retryResponse = await this.fetchFn(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${credential.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: retryBody,
+    });
+
+    if (retryResponse.ok) {
+      const retryPayload = await retryResponse.json() as Record<string, unknown>;
+      const retryMessage = this.extractMessage(retryPayload);
+      if (retryMessage) {
+        return sanitizeCommitMessage(retryMessage);
+      }
+    }
+
+    throw new Error('AI response did not include a commit message');
   }
 
   /**
@@ -420,15 +488,96 @@ export class SourceControlService {
     throw new Error('No AI model available for commit message generation');
   }
 
+  /**
+   * Extract a text message from an OpenAI-compatible chat completion
+   * response, tolerating a wide variety of provider-specific shapes:
+   *
+   * 1. Standard:   choices[0].message.content  (string)
+   * 2. Array:      choices[0].message.content  [{type:"text", text:"…"}]
+   * 3. Reasoning:  choices[0].message.content === null, text in
+   *                reasoning_content (DeepSeek-R1 etc.)
+   * 4. Streaming:  choices[0].delta.content (string)
+   * 5. Non-standard: payload.data[...] wrapper used by some gateways
+   *
+   * Returns the first non-empty text fragment, or null if nothing usable
+   * was found.
+   */
   private extractMessage(payload: Record<string, unknown>): string | null {
+    // ── Helper: pull text from a "message" or "delta" object ─────────
+    const extractFromObj = (obj: Record<string, unknown>): string | null => {
+      // 1. content as string (most common)
+      const content = obj.content;
+      if (typeof content === 'string' && content.trim()) {
+        return content;
+      }
+      // 2. content as array of content parts (OpenAI vision / some providers)
+      if (Array.isArray(content)) {
+        const texts: string[] = [];
+        for (const part of content) {
+          if (typeof part === 'object' && part !== null) {
+            const text = (part as Record<string, unknown>).text;
+            if (typeof text === 'string') texts.push(text);
+          }
+        }
+        const joined = texts.join('').trim();
+        if (joined) return joined;
+      }
+      // 3. reasoning_content fallback (DeepSeek-R1 / thinking models)
+      const reasoning = obj.reasoning_content;
+      if (typeof reasoning === 'string' && reasoning.trim()) {
+        return reasoning;
+      }
+      return null;
+    };
+
+    // ── Standard: choices array ───────────────────────────────────────
     const choices = payload.choices;
-    if (!Array.isArray(choices) || choices.length === 0) return null;
-    const first = choices[0];
-    if (typeof first !== 'object' || first === null) return null;
-    const message = (first as Record<string, unknown>).message;
-    if (typeof message !== 'object' || message === null) return null;
-    const content = (message as Record<string, unknown>).content;
-    return typeof content === 'string' ? content : null;
+    if (Array.isArray(choices) && choices.length > 0) {
+      for (const choice of choices) {
+        if (typeof choice !== 'object' || choice === null) continue;
+        const choiceObj = choice as Record<string, unknown>;
+        // message (non-streaming)
+        const message = choiceObj.message;
+        if (typeof message === 'object' && message !== null) {
+          const text = extractFromObj(message as Record<string, unknown>);
+          if (text) return text;
+        }
+        // delta (streaming-style payload returned as a single object)
+        const delta = choiceObj.delta;
+        if (typeof delta === 'object' && delta !== null) {
+          const text = extractFromObj(delta as Record<string, unknown>);
+          if (text) return text;
+        }
+      }
+    }
+
+    // ── Non-standard: some gateways wrap in payload.data ─────────────
+    const data = payload.data;
+    if (Array.isArray(data) && data.length > 0) {
+      const first = data[0];
+      if (typeof first === 'object' && first !== null) {
+        // could be {content: ...} or {message: {content: ...}}
+        const text = extractFromObj(first as Record<string, unknown>);
+        if (text) return text;
+        const message = (first as Record<string, unknown>).message;
+        if (typeof message === 'object' && message !== null) {
+          const innerText = extractFromObj(message as Record<string, unknown>);
+          if (innerText) return innerText;
+        }
+      }
+    }
+
+    // ── Last resort: top-level content / text field ───────────────────
+    const topContent = payload.content;
+    if (typeof topContent === 'string' && topContent.trim()) {
+      return topContent;
+    }
+    const topText = payload.text;
+    if (typeof topText === 'string' && topText.trim()) {
+      return topText;
+    }
+
+    return null;
   }
 
   private modelsUrl(baseUrl?: string): string {

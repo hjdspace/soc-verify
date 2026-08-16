@@ -126,6 +126,10 @@ export type KbDocument = {
   convertedAt?: number;
   /** 分类完成时间（Unix ms） */
   classifiedAt?: number;
+  /** AI 分类/摘要降级（LLM 未配置或调用失败，已归入未分类且无摘要） */
+  aiDegraded?: boolean;
+  /** AI 降级原因（用户可读） */
+  aiError?: string;
 };
 
 /** 分类树节点（kb.categories 返回） */
@@ -174,4 +178,8 @@ export type KbDocStatusEvent = {
   errorMessage?: string;
   /** 分类（classifying/done 时有值） */
   category?: string;
+  /** AI 分类/摘要降级标记（done 状态时有值） */
+  aiDegraded?: boolean;
+  /** AI 降级原因 */
+  aiError?: string;
 };

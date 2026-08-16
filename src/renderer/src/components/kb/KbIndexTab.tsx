@@ -234,7 +234,7 @@ function MarkdownIndexRenderer({
   onEntryClick: (title: string) => void;
 }) {
   return (
-    <div className="prose prose-sm max-w-none dark:prose-invert">
+    <div className="kb-markdown max-w-none">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{

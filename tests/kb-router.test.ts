@@ -74,10 +74,16 @@ vi.mock('../src/main/project/project-manager', () => ({
   },
 }));
 
-// Mock credential-manager: 返回 null 使 LLM 降级为占位条目
+// Mock credential-manager: 默认返回 null 使 LLM 降级为占位条目
+const { mockGetCredential, mockDefaultCredential } = vi.hoisted(() => ({
+  mockGetCredential: vi.fn() as ReturnType<typeof vi.fn>,
+  mockDefaultCredential: vi.fn() as ReturnType<typeof vi.fn>,
+}));
+
 vi.mock('../src/main/credentials/credential-manager', () => ({
   credentialManager: {
-    getDefaultCredential: vi.fn(() => null),
+    get: mockGetCredential,
+    getDefaultCredential: mockDefaultCredential.mockReturnValue(null),
   },
 }));
 
@@ -902,6 +908,207 @@ describe('kb-router', () => {
     it('缺少 category 参数抛出 BAD_REQUEST', async () => {
       await expect(
         caller.moveCategory({ name: 'test' } as { name: string; category: string }),
+      ).rejects.toThrow();
+    });
+  });
+
+  // ─── kb.renameCategory ─────────────────────────────────────
+
+  describe('kb.renameCategory', () => {
+    it('重命名分类：目录重命名 + index.md 路径与分类同步更新', async () => {
+      const kbDir = makeEmptyKbDir('rename-kb');
+      const regResult = await caller.register({ name: '重命名库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      mkdirSync(join(kbDir, 'docs', '未分类'), { recursive: true });
+      writeFileSync(join(kbDir, 'docs', '未分类', '03_UVM-Harness.md'), '# UVM Harness\n', 'utf-8');
+      writeFileSync(join(kbDir, 'index.md'), [
+        '# 知识库索引',
+        '',
+        '## 未分类',
+        '',
+        '### 03_UVM-Harness',
+        '- **路径**: `未分类/03_UVM-Harness.md`',
+        '- **摘要**: （暂无摘要）',
+        '',
+      ].join('\n'), 'utf-8');
+
+      const result = await caller.renameCategory({ oldName: '未分类', newName: 'UVM' });
+      expect(result.ok).toBe(true);
+
+      // 目录已重命名
+      expect(existsSync(join(kbDir, 'docs', 'UVM', '03_UVM-Harness.md'))).toBe(true);
+      expect(existsSync(join(kbDir, 'docs', '未分类'))).toBe(false);
+
+      // index.md 路径已更新为新分类前缀
+      const indexContent = readFileSync(join(kbDir, 'index.md'), 'utf-8');
+      expect(indexContent).toContain('`UVM/03_UVM-Harness.md`');
+      expect(indexContent).not.toContain('未分类');
+    });
+
+    it('历史脏数据（未分类/未分类/x.md）重命名后路径一并修复', async () => {
+      const kbDir = makeEmptyKbDir('rename-dirty-kb');
+      const regResult = await caller.register({ name: '脏数据库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      mkdirSync(join(kbDir, 'docs', '未分类'), { recursive: true });
+      writeFileSync(join(kbDir, 'docs', '未分类', 'doc.md'), '# doc\n', 'utf-8');
+      // 历史重复上传 bug 产生的双层前缀脏路径
+      writeFileSync(join(kbDir, 'index.md'), [
+        '# 知识库索引',
+        '',
+        '## 未分类',
+        '',
+        '### doc',
+        '- **路径**: `未分类/未分类/doc.md`',
+        '- **摘要**: （暂无摘要）',
+        '',
+      ].join('\n'), 'utf-8');
+
+      const result = await caller.renameCategory({ oldName: '未分类', newName: '验证方法' });
+      expect(result.ok).toBe(true);
+
+      const indexContent = readFileSync(join(kbDir, 'index.md'), 'utf-8');
+      expect(indexContent).toContain('`验证方法/doc.md`');
+      expect(indexContent).not.toContain('未分类/未分类');
+    });
+
+    it('分类不存在时返回 notFound', async () => {
+      const kbDir = makeEmptyKbDir('rename-not-found-kb');
+      const regResult = await caller.register({ name: '重命名不存在库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      const result = await caller.renameCategory({ oldName: '不存在', newName: '新名字' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('notFound');
+      }
+    });
+
+    it('缺少参数抛出 BAD_REQUEST', async () => {
+      await expect(
+        caller.renameCategory({ oldName: 'a' } as { oldName: string; newName: string }),
+      ).rejects.toThrow();
+    });
+  });
+
+  // ─── kb.reclassify ─────────────────────────────────────────
+
+  describe('kb.reclassify', () => {
+    it('未配置 LLM 凭证时返回 noLlmConfig 错误（不静默降级）', async () => {
+      const kbDir = makeEmptyKbDir('reclassify-nollm-kb');
+      const regResult = await caller.register({ name: '无凭证库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      mkdirSync(join(kbDir, 'docs', '未分类'), { recursive: true });
+      writeFileSync(join(kbDir, 'docs', '未分类', 'doc.md'), '# doc\n', 'utf-8');
+
+      const result = await caller.reclassify({ name: 'doc' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('noLlmConfig');
+      }
+    });
+
+    it('AI 重新分类成功：更新摘要并移动到新分类目录', async () => {
+      const kbDir = makeEmptyKbDir('reclassify-ok-kb');
+      const regResult = await caller.register({ name: '重分类库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      mkdirSync(join(kbDir, 'docs', '未分类'), { recursive: true });
+      writeFileSync(join(kbDir, 'docs', '未分类', 'uvm.md'), '# UVM Harness\n\nUVM 验证方法学文档。\n', 'utf-8');
+      writeFileSync(join(kbDir, 'index.md'), '# 知识库索引\n', 'utf-8');
+
+      // 配置 LLM 凭证（resolveActiveCredential 回退 default credential）
+      mockDefaultCredential.mockReturnValue({
+        providerId: 'openai-compatible',
+        apiKey: 'sk-test',
+        baseUrl: 'http://localhost:8557',
+        model: 'test-model',
+      });
+
+      // mock 全局 fetch 返回 openai 格式分类结果
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          choices: [{
+            message: {
+              content: '{"category": "验证方法", "title": "UVM Harness", "summary": "UVM 验证方法学", "keywords": ["UVM", "验证"]}',
+            },
+          }],
+        }),
+      } as unknown as Response);
+      vi.stubGlobal('fetch', fetchMock);
+
+      try {
+        const result = await caller.reclassify({ name: 'uvm' });
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.category).toBe('验证方法');
+          expect(result.moved).toBe(true);
+        }
+
+        // 文件已移动
+        expect(existsSync(join(kbDir, 'docs', '验证方法', 'uvm.md'))).toBe(true);
+        expect(existsSync(join(kbDir, 'docs', '未分类', 'uvm.md'))).toBe(false);
+
+        // index.md 已更新（最终路径 + 摘要）
+        const indexContent = readFileSync(join(kbDir, 'index.md'), 'utf-8');
+        expect(indexContent).toContain('`验证方法/uvm.md`');
+        expect(indexContent).toContain('UVM 验证方法学');
+      } finally {
+        vi.unstubAllGlobals();
+        mockDefaultCredential.mockReturnValue(null);
+      }
+    });
+
+    it('LLM 调用失败时返回 llmFailed 错误', async () => {
+      const kbDir = makeEmptyKbDir('reclassify-fail-kb');
+      const regResult = await caller.register({ name: '重分类失败库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      mkdirSync(join(kbDir, 'docs', '未分类'), { recursive: true });
+      writeFileSync(join(kbDir, 'docs', '未分类', 'doc.md'), '# doc\n', 'utf-8');
+
+      mockDefaultCredential.mockReturnValue({
+        providerId: 'openai-compatible',
+        apiKey: 'sk-test',
+        baseUrl: 'http://localhost:8557',
+        model: 'test-model',
+      });
+
+      const fetchMock = vi.fn().mockRejectedValue(new Error('network error'));
+      vi.stubGlobal('fetch', fetchMock);
+
+      try {
+        const result = await caller.reclassify({ name: 'doc' });
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.code).toBe('llmFailed');
+          expect(result.error.message).toContain('network error');
+        }
+      } finally {
+        vi.unstubAllGlobals();
+        mockDefaultCredential.mockReturnValue(null);
+      }
+    });
+
+    it('文档不存在时返回 notFound', async () => {
+      const kbDir = makeEmptyKbDir('reclassify-notfound-kb');
+      const regResult = await caller.register({ name: '重分类不存在库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      const result = await caller.reclassify({ name: '不存在' });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('notFound');
+      }
+    });
+
+    it('缺少 name 参数抛出 BAD_REQUEST', async () => {
+      await expect(
+        caller.reclassify({} as { name: string }),
       ).rejects.toThrow();
     });
   });

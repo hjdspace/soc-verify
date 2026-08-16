@@ -47,6 +47,16 @@ describe('source control service', () => {
     expect(sanitizeCommitMessage('```text\n"feat: add scm panel"\n```')).toBe('feat: add scm panel');
   });
 
+  it('sanitizes conversational filler before the commit type', () => {
+    expect(sanitizeCommitMessage('以下是提交信息：\n\nfeat: add scm panel')).toBe('feat: add scm panel');
+    expect(sanitizeCommitMessage('Here is the commit message:\nfix: resolve null pointer')).toBe('fix: resolve null pointer');
+  });
+
+  it('sanitizes multi-line code fences with body', () => {
+    const msg = '```\nfeat: add feature\n\n- detail line\n```';
+    expect(sanitizeCommitMessage(msg)).toBe('feat: add feature\n\n- detail line');
+  });
+
   it('generates commit messages through an OpenAI-compatible endpoint', async () => {
     let requestBody = '';
     const execFileFn = vi.fn((file, args, _options, callback) => {
@@ -124,6 +134,119 @@ describe('source control service', () => {
     expect(requestBody).toContain('src/staged.ts');
     // When staged files exist, unstaged diff should NOT be included
     expect(requestBody).not.toContain('src/unstaged.ts');
+  });
+
+  // ── Helper: create a fake execFile that always returns staged src/a.ts ─
+  const fakeExecFileFn = vi.fn((file, args, _options, callback) => {
+    const gitArgs = args.slice(2);
+    if (file !== 'git') {
+      callback(new Error('unexpected binary'), '', '');
+      return;
+    }
+    if (gitArgs[0] === 'status') {
+      callback(null, '## main\0M  src/a.ts\0', '');
+      return;
+    }
+    callback(null, 'M\tsrc/a.ts\n', '');
+  });
+
+  it('extracts message from array content format', async () => {
+    const fetchFn = vi.fn((async () => {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: [{ type: 'text', text: 'feat: array content support' }] } }],
+      }), { status: 200 });
+    }) as typeof fetch);
+    const service = new SourceControlService({ execFileFn: fakeExecFileFn, fetchFn });
+    const message = await service.generateCommitMessage(
+      'D:\\repo',
+      { providerId: 'openai-compatible', apiKey: 'test-key', baseUrl: 'https://example.test/v1' },
+      'test-model',
+    );
+    expect(message).toBe('feat: array content support');
+  });
+
+  it('falls back to reasoning_content when content is null', async () => {
+    const fetchFn = vi.fn((async () => {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: null, reasoning_content: 'fix: reasoning fallback' } }],
+      }), { status: 200 });
+    }) as typeof fetch);
+    const service = new SourceControlService({ execFileFn: fakeExecFileFn, fetchFn });
+    const message = await service.generateCommitMessage(
+      'D:\\repo',
+      { providerId: 'openai-compatible', apiKey: 'test-key', baseUrl: 'https://example.test/v1' },
+      'test-model',
+    );
+    expect(message).toBe('fix: reasoning fallback');
+  });
+
+  it('handles delta-style response', async () => {
+    const fetchFn = vi.fn((async () => {
+      return new Response(JSON.stringify({
+        choices: [{ delta: { content: 'feat: delta format' } }],
+      }), { status: 200 });
+    }) as typeof fetch);
+    const service = new SourceControlService({ execFileFn: fakeExecFileFn, fetchFn });
+    const message = await service.generateCommitMessage(
+      'D:\\repo',
+      { providerId: 'openai-compatible', apiKey: 'test-key', baseUrl: 'https://example.test/v1' },
+      'test-model',
+    );
+    expect(message).toBe('feat: delta format');
+  });
+
+  it('strips conversational filler and code fences from AI response', async () => {
+    const fetchFn = vi.fn((async () => {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: '以下是提交信息：\n```text\nfeat: cleaned message\n```' } }],
+      }), { status: 200 });
+    }) as typeof fetch);
+    const service = new SourceControlService({ execFileFn: fakeExecFileFn, fetchFn });
+    const message = await service.generateCommitMessage(
+      'D:\\repo',
+      { providerId: 'openai-compatible', apiKey: 'test-key', baseUrl: 'https://example.test/v1' },
+      'test-model',
+    );
+    expect(message).toBe('feat: cleaned message');
+  });
+
+  it('retries with stricter prompt when first response is empty', async () => {
+    let callCount = 0;
+    const fetchFn = vi.fn((async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: null } }],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'feat: recovered on retry' } }],
+      }), { status: 200 });
+    }) as typeof fetch);
+    const service = new SourceControlService({ execFileFn: fakeExecFileFn, fetchFn });
+    const message = await service.generateCommitMessage(
+      'D:\\repo',
+      { providerId: 'openai-compatible', apiKey: 'test-key', baseUrl: 'https://example.test/v1' },
+      'test-model',
+    );
+    expect(message).toBe('feat: recovered on retry');
+    expect(callCount).toBe(2);
+  });
+
+  it('throws when both first and retry responses are empty', async () => {
+    const fetchFn = vi.fn((async () => {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: null } }],
+      }), { status: 200 });
+    }) as typeof fetch);
+    const service = new SourceControlService({ execFileFn: fakeExecFileFn, fetchFn });
+    await expect(
+      service.generateCommitMessage(
+        'D:\\repo',
+        { providerId: 'openai-compatible', apiKey: 'test-key', baseUrl: 'https://example.test/v1' },
+        'test-model',
+      ),
+    ).rejects.toThrow('AI response did not include a commit message');
   });
 
   it('commits all changes in a Git repository', { timeout: 15000 }, async () => {
