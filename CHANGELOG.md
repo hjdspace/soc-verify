@@ -6,6 +6,40 @@
 
 ---
 
+## [0.3.0](https://github.com/hjdspace/soc-verify/compare/v0.2.7...v0.3.0) (2026-08-17)
+
+### Features
+
+* **kb:** 完成知识库全功能迭代——anydoc 依赖接入与 Conversion 服务、KB 注册/挂载/kb-router 最小闭环、上传-转换-分类-索引流水线、Host Tools 与索引上下文注入、知识库 UI（列表/索引/预览 Tab + 移动分类 + 深度重建）、kb_search 挂载检测与 markitdown 第二引擎、AI 分类降级/重分类及凭证模型字段
+* **kb:** 重构知识库架构——拆分 LLM 配置逻辑到独立模块、统一路径与文档逻辑、文件上传统一 pickAndUpload 流程、活跃项目替代默认项目、域行为提取与类型整合
+* **sysbase-gen:** 新增 SoC 验证环境生成器完整模块——向导式 UI（DUT Spec/Mini Case/CLK/RAL/Module IO/Optional/Subsys/RTL/Review 九步）、Zustand store、命令构建器、目录推断、模板加载、路径扫描、Module IO runner、gen-runner 事件执行、配置持久化、tRPC 子路由与共享类型
+* **drawio:** 新增 DrawIO 图表查看器支持及相关工具，支持中键拖拽缩放交互
+* **coverage:** 适配 Cadence IMC 24.09 新命令格式，新增层级覆盖率解析
+* **env:** 新增登录 shell 环境捕获逻辑以正确检测 EDA 工具与环境变量
+* **app:** 新增应用单实例锁，防止多开
+* **theme:** 新增主题持久化（tRPC settings + Zustand），防止默认主题闪烁
+* **ask:** 新增交互式 AskQuestion 工具处理——IPC 转发、answer 格式化、AskQuestionCard 组件
+* **workbench:** 新增关闭所有 Tab 功能与项目切换 switchProject 方法
+* **terminal:** 新增终端视图选中文本复制功能
+* **xlsx:** 新增列宽格式转换功能与 XlsxEditor onSaveAs 回调
+* **composer:** 新增 ComposerEditor 组件并集成到 RightPanel
+* **diff-review:** 增强 diff 审查功能——reviewedFiles 持久化、warning 结果处理、加载失败错误处理
+* **docs:** 添加知识库相关文档（ADR、issues、PRD、原型）和术语定义，添加 UVM Harness 白皮书文档
+* **project:** 启动时项目恢复与子系统动态获取过滤
+* **docs:** 添加 SoC 验证环境生成器文档与原型 UI
+
+### Bug Fixes
+
+* **drawio:** 修复 lightbox 工具栏布局异常并添加拖拽交互
+
+### Refactor
+
+* **kb:** 优化知识库架构候选方案 4/5a/6——域行为提取、类型整合、活跃项目 Owner
+
+### Build
+
+* **deps:** 移除 shell: true 并修复 spawn 调用以规避 DEP0190 警告
+
 ## [0.2.7](https://github.com/hjdspace/soc-verify/compare/v0.2.6...v0.2.7) (2026-08-13)
 
 ### Features
