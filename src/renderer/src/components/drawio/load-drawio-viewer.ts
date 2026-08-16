@@ -8,17 +8,25 @@
 
 /** viewer 实例的 graph 对象（panning 等操作需要） */
 type GraphViewerGraph = {
+  container?: HTMLElement;
   setPanning: (enabled: boolean) => void;
+};
+
+type GraphViewerLightbox = {
+  chromelessToolbar?: HTMLElement;
 };
 
 export type GraphViewerInstance = {
   destroy?: () => void;
-  showLocalLightbox?: () => void;
+  showLocalLightbox?: () => GraphViewerLightbox | void;
   graph?: GraphViewerGraph;
 };
 
 export type GraphViewerStatic = {
-  createViewerForElement: (element: HTMLElement) => GraphViewerInstance;
+  createViewerForElement: (
+    element: HTMLElement,
+    callback?: (viewer: GraphViewerInstance) => void,
+  ) => void;
 };
 
 declare global {

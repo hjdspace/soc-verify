@@ -21,7 +21,7 @@
  *     需额外全局 CSS 规则恢复其 img 为 inline（见 globals.css）。
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { loadDrawioViewer, type GraphViewerInstance } from './load-drawio-viewer';
 
 export type DrawioViewerProps = {
@@ -34,6 +34,23 @@ export type DrawioViewerProps = {
 export function DrawioViewer({ xml, onError }: DrawioViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<GraphViewerInstance | null>(null);
+  const [dragging, setDragging] = useState(false);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const stopDragging = () => setDragging(false);
+    window.addEventListener('mouseup', stopDragging);
+    window.addEventListener('blur', stopDragging);
+    return () => {
+      window.removeEventListener('mouseup', stopDragging);
+      window.removeEventListener('blur', stopDragging);
+    };
+  }, [dragging]);
+
+  useEffect(() => {
+    const cursor = dragging ? 'grabbing' : 'grab';
+    viewerRef.current?.graph?.container?.style.setProperty('cursor', cursor, 'important');
+  }, [dragging]);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,13 +75,17 @@ export function DrawioViewer({ xml, onError }: DrawioViewerProps) {
             toolbar: 'zoom',
             xml,
           });
-          const viewer = GraphViewer.createViewerForElement(containerRef.current);
-          viewerRef.current = viewer;
-
-          // viewer-static.min.js 中 setPanning(false) 被硬编码调用，
-          // 需要手动启用 panning 以支持左键拖拽平移。
-          // panningHandler 在 init 中已配置好 useLeftButtonForPanning 等。
-          viewer.graph?.setPanning?.(true);
+          // createViewerForElement 不返回值（返回 undefined），
+          // viewer 实例通过第二个参数（回调）获取。
+          GraphViewer.createViewerForElement(containerRef.current, (v) => {
+            if (cancelled) return;
+            viewerRef.current = v;
+            // viewer-static.min.js 中 setPanning(false) 被硬编码调用，
+            // 需要手动启用 panning 以支持左键拖拽平移。
+            // panningHandler 在 init 中已配置好 useLeftButtonForPanning 等。
+            v.graph?.setPanning?.(true);
+            v.graph?.container?.style.setProperty('cursor', 'grab', 'important');
+          });
         } catch (err) {
           onError(err instanceof Error ? err.message : String(err));
         }
@@ -128,7 +149,8 @@ export function DrawioViewer({ xml, onError }: DrawioViewerProps) {
     });
     btn.addEventListener('click', () => {
       try {
-        viewer.showLocalLightbox?.();
+        const lightbox = viewer.showLocalLightbox?.();
+        lightbox?.chromelessToolbar?.classList.add('drawio-lightbox-toolbar');
       } catch {
         // showLocalLightbox 可能因各种原因失败，静默处理
       }
@@ -157,8 +179,12 @@ export function DrawioViewer({ xml, onError }: DrawioViewerProps) {
   return (
     <div
       ref={containerRef}
-      className="drawio-viewer-root h-full w-full"
+      className={`drawio-viewer-root h-full min-w-0 max-w-full overflow-hidden ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
       onContextMenu={handleContextMenu}
+      onMouseDown={(e) => {
+        if (e.button === 0) setDragging(true);
+      }}
+      onMouseUp={() => setDragging(false)}
     />
   );
 }

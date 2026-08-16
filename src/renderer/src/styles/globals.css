@@ -621,13 +621,18 @@ body {
    纵向排列。
 
    1) .drawio-viewer-root img — 恢复 viewer 容器内的 img 为 inline。
-   2) .geEditor img — lightbox 弹出时元素被 document.body.appendChild()
-      添加到 body（不在 .drawio-viewer-root 容器内），需要全局规则
-      恢复 chromelessToolbar 内 img 为 inline，否则工具栏按钮纵向排列。
+   2) .drawio-lightbox-toolbar — lightbox 弹出时由 DrawioViewer 标记
+      chromelessToolbar，强制其子项横向排列。
 */
 .drawio-viewer-root img,
-.geEditor img {
+.drawio-lightbox-toolbar img {
   display: inline;
+}
+
+.drawio-lightbox-toolbar {
+  display: flex !important;
+  flex-direction: row;
+  align-items: center;
 }
 
 /* ── highlight.js syntax highlighting for tool cards ─────── */
