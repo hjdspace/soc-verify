@@ -1,5 +1,16 @@
 @import "tailwindcss";
 
+/* ── 跨平台 button appearance 重置 ─────────────────────────────── */
+/* Linux Chromium 严格遵循 UA 默认的 appearance: button，会压制自定义
+   background-color（hover:bg-accent / bg-accent/60 等），导致目录树、
+   菜单等 button 元素的 hover/selected 灰色背景不显示。
+   Windows Chromium 对此更宽松，所以只表现为 Linux 端的 bug。
+   显式重置为 none 后，所有平台行为一致。 */
+button {
+  appearance: none;
+  -webkit-appearance: none;
+}
+
 /* ── 字体管理 CSS 变量（由 useFontStore 动态设置） ─────────── */
 :root {
   --app-font-family-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
