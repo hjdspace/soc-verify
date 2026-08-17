@@ -13,9 +13,11 @@
 import { create } from 'zustand';
 import {
   type SysbaseGenConfig,
+  type GenLevel,
   createEmptySysbaseConfig,
   DEFAULT_SYSBASE_SCRIPT,
-  SYSBASE_GEN_STEPS,
+  getGenSteps,
+  type SysbaseGenStep,
 } from '@shared/types';
 import type { RtlFileEntry } from '@main/tools/sysbase-gen/path-scanner';
 
@@ -26,6 +28,7 @@ interface SysbaseGenStoreState {
   // ── Navigation ──
   step: number;
   totalSteps: number;
+  steps: readonly SysbaseGenStep[];
 
   // ── Configuration ──
   config: SysbaseGenConfig;
@@ -72,6 +75,7 @@ interface SysbaseGenStoreState {
   setScriptPath: (path: string) => void;
   resetConfig: () => void;
   loadConfigIntoStore: (config: SysbaseGenConfig, scriptPath: string) => void;
+  setGenLevel: (level: GenLevel) => void;
 
   // ── Actions: RTL files ──
   setRtlFiles: (files: RtlFileEntry[]) => void;
@@ -111,7 +115,8 @@ interface SysbaseGenStoreState {
 
 export const useSysbaseGenStore = create<SysbaseGenStoreState>((set, get) => ({
   step: 0,
-  totalSteps: SYSBASE_GEN_STEPS.length,
+  totalSteps: getGenSteps('subsys').length,
+  steps: getGenSteps('subsys'),
 
   config: createEmptySysbaseConfig(),
   scriptPath: DEFAULT_SYSBASE_SCRIPT,
@@ -169,9 +174,13 @@ export const useSysbaseGenStore = create<SysbaseGenStoreState>((set, get) => ({
   },
 
   resetConfig: () => {
+    const level = get().config.genLevel;
+    const steps = getGenSteps(level);
     set({
-      config: createEmptySysbaseConfig(),
+      config: { ...createEmptySysbaseConfig(), genLevel: level },
       step: 0,
+      totalSteps: steps.length,
+      steps,
       rtlFiles: [],
       rtlError: null,
       ralError: null,
@@ -185,10 +194,13 @@ export const useSysbaseGenStore = create<SysbaseGenStoreState>((set, get) => ({
   },
 
   loadConfigIntoStore: (config, scriptPath) => {
+    const steps = getGenSteps(config.genLevel);
     set({
       config,
       scriptPath,
       step: 0,
+      totalSteps: steps.length,
+      steps,
       rtlError: null,
       ralError: null,
       clkError: null,
@@ -198,6 +210,25 @@ export const useSysbaseGenStore = create<SysbaseGenStoreState>((set, get) => ({
       runGenLogs: [],
       runGenStatus: 'idle',
     });
+  },
+
+  setGenLevel: (level) => {
+    const steps = getGenSteps(level);
+    set((s) => ({
+      config: { ...s.config, genLevel: level, subsys: '', instanceName: '' },
+      step: 0,
+      totalSteps: steps.length,
+      steps,
+      rtlFiles: [],
+      rtlError: null,
+      ralError: null,
+      clkError: null,
+      modIoLogs: [],
+      modIoError: null,
+      runGenLogs: [],
+      runGenError: null,
+      runGenStatus: 'idle',
+    }));
   },
 
   setRtlFiles: (files) => {
@@ -282,6 +313,24 @@ export const useSysbaseGenStore = create<SysbaseGenStoreState>((set, get) => ({
 
   canProceed: () => {
     const { step, config } = get();
+    const level = config.genLevel;
+    if (level === 'top') {
+      switch (step) {
+        case 0: // Step 1: top info (chip name + instanceName)
+          return config.subsys.trim() !== '' && config.instanceName.trim() !== '';
+        case 1: // Step 2: rtlFile
+          return config.rtlFile.trim() !== '';
+        case 2: // Step 3: csvPath
+          return config.csvPath.trim() !== '';
+        case 3: // Step 4: ralDirs
+          return config.ralDirs.length > 0;
+        case 4: // Step 5: outputDir
+          return config.outputDir.trim() !== '';
+        default:
+          return true;
+      }
+    }
+    // subsys level
     switch (step) {
       case 0: // Step 1: subsys + instanceName
         return config.subsys.trim() !== '' && config.instanceName.trim() !== '';
