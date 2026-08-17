@@ -139,7 +139,7 @@ export interface GeneratedReports {
   metricsPath: string;
   /** CSV 格式报告路径（urg -format csv 生成） */
   csvPath?: string;
-  /** 测试用例贡献度报告路径（urg -grade testfile / imc report -test） */
+  /** 测试用例贡献度报告路径（urg -grade testfile / imc report -grading） */
   gradePath?: string;
   /** Covergroup bin 级报告路径（imc report -detail -metrics functional） */
   binsPath?: string;
