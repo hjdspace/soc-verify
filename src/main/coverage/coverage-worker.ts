@@ -28,6 +28,8 @@ export interface WorkerEnrichment {
   covMergeDir: string;
   edaTool: EdaTool;
   targets?: Partial<Record<string, number>>;
+  /** 分层解析：true=只解析summary，跳过detail/grade/bins/csv */
+  summaryOnly?: boolean;
 }
 
 /** Worker 返回结果：包含解析后的数据和预序列化的 JSON 字符串 */
@@ -68,7 +70,11 @@ export async function parseCoverageInWorker(
         if (!plugin || typeof plugin.parse !== 'function') {
           throw new Error('Plugin does not export a parse function: ' + workerData.pluginPath);
         }
-        var result = plugin.parse(workerData.projectRoot, workerData.sessionId, workerData.reportDir);
+        // 分层解析：summaryOnly 模式只解析 summary.txt
+        var parseOptions = workerData.enrichment.summaryOnly
+          ? { summaryOnly: true }
+          : {};
+        var result = plugin.parse(workerData.projectRoot, workerData.sessionId, workerData.reportDir, parseOptions);
         Promise.resolve(result).then(function(data) {
           // 在 Worker Thread 中完成 enrichment + JSON.stringify，避免主进程同步阻塞
           try {
@@ -196,7 +202,9 @@ async function fallbackSyncParse(
   if (!plugin || typeof plugin.parse !== 'function') {
     throw new Error(`Plugin does not export a parse function: ${pluginPath}`);
   }
-  const data = await plugin.parse(projectRoot, enrichment.sessionId, reportDir);
+  // 分层解析：summaryOnly 模式只解析 summary.txt
+  const parseOptions = enrichment.summaryOnly ? { summaryOnly: true } : {};
+  const data = await plugin.parse(projectRoot, enrichment.sessionId, reportDir, parseOptions);
   const enriched: CoverageData = {
     ...data,
     sessionId: enrichment.sessionId,
