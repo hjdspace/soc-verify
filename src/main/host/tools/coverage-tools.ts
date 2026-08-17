@@ -72,7 +72,7 @@ export function createCoverageAnalysisTools(ctx: ToolContext): HostToolEntry[] {
 
     defineTool(
       'get_coverage_grade',
-      'Get test case coverage contribution ranking. Returns a list of test cases with their coverage scores and ranks. Useful for AI to identify which tests contribute most to coverage and which tests are redundant. Data source: urg -grade testfile (VCS) or imc report -test (Cadence).',
+      'Get test case coverage contribution ranking. Returns a list of test cases with their coverage scores and ranks. Useful for AI to identify which tests contribute most to coverage and which tests are redundant. Data source: urg -grade testfile (VCS) or imc report -grading (Cadence).',
       {
         type: 'object',
         properties: {
