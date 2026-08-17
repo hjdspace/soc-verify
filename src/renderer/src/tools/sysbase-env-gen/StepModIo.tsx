@@ -70,7 +70,7 @@ export function StepModIo() {
       const result = await trpc.tools.selectFiles.mutate({
         title: '选择 Filelist 文件',
         filters: [
-          { name: 'Filelist 文件', extensions: ['f', 'flist', 'txt'] },
+          { name: 'Filelist 文件', extensions: ['f', 'flist', 'txt', 'vc'] },
           { name: '所有文件', extensions: ['*'] },
         ],
       });
