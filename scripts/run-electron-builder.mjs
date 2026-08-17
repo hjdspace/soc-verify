@@ -26,11 +26,15 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
 // Pass through all CLI arguments to electron-builder.
-// In CI, default to --publish always so electron-builder uploads installer
-// assets to the GitHub Release using GH_TOKEN. Local runs remain publish-free.
+// In CI, the PUBLISH env var controls the publish strategy:
+//   - "always" (default if CI && not set): electron-builder uploads to GitHub directly
+//   - "never": skip publishing; artifacts are uploaded via gh CLI with retry in the workflow
+// Local runs always remain publish-free.
 const userArgs = process.argv.slice(2);
-const args = (process.env.CI && !userArgs.some((a) => a.startsWith('--publish')))
-  ? ['--publish', 'always', ...userArgs]
+const hasPublishArg = userArgs.some((a) => a.startsWith('--publish'));
+const publishMode = process.env.CI ? (process.env.PUBLISH ?? 'always') : null;
+const args = !hasPublishArg && publishMode
+  ? ['--publish', publishMode, ...userArgs]
   : userArgs;
 
 // ─── Pre-build cleanup ───────────────────────────────────────────────────────

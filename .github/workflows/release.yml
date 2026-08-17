@@ -78,7 +78,11 @@ jobs:
       - name: Package desktop app
         run: npm run ${{ matrix.package_script }}
         env:
+          # Use 'never' so electron-builder does NOT publish directly to GitHub
+          # (which would fail on 503 with no retry). Instead, we upload the
+          # built artifacts via gh CLI with retry in the upload-installer step.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PUBLISH: never
 
       - name: Upload runner binary artifact
         uses: actions/upload-artifact@v4
@@ -86,9 +90,104 @@ jobs:
           name: runner-${{ matrix.os }}
           path: ${{ matrix.runner_output }}
 
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.name }}
+          path: |
+            dist/*.exe
+            dist/*.AppImage
+            dist/*.yml
+            dist/*.blockmap
+            dist/latest*.yml
+          if-no-files-found: warn
+
+  upload-installer-assets:
+    name: Upload installer binaries
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: installer-artifacts
+          merge-multiple: true
+
+      - name: Create draft release (if not exists)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          # Retry wrapper for GitHub API 5xx errors
+          gh_retry() {
+            local max_retries=5
+            local delay=30
+            local attempt=1
+            while [ "$attempt" -le "$max_retries" ]; do
+              if "$@"; then
+                return 0
+              fi
+              local rc=$?
+              if [ "$attempt" -eq "$max_retries" ]; then
+                echo "::error::Command failed after $max_retries attempts: $*"
+                return $rc
+              fi
+              echo "::warning::Attempt $attempt/$max_retries failed (exit $rc), retrying in ${delay}s..."
+              sleep "$delay"
+              delay=$((delay * 2))
+              attempt=$((attempt + 1))
+            done
+          }
+
+          if ! gh_retry gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
+            gh_retry gh release create "${GITHUB_REF_NAME}" \
+              --draft \
+              --title "${GITHUB_REF_NAME}" \
+              --notes ""
+            echo "Created draft release ${GITHUB_REF_NAME}"
+          else
+            echo "Release ${GITHUB_REF_NAME} already exists, skipping creation"
+          fi
+
+      - name: Upload installer binaries to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Retry wrapper for GitHub API 5xx errors
+          gh_retry() {
+            local max_retries=5
+            local delay=30
+            local attempt=1
+            while [ "$attempt" -le "$max_retries" ]; do
+              if "$@"; then
+                return 0
+              fi
+              local rc=$?
+              if [ "$attempt" -eq "$max_retries" ]; then
+                echo "::error::Command failed after $max_retries attempts: $*"
+                return $rc
+              fi
+              echo "::warning::Attempt $attempt/$max_retries failed (exit $rc), retrying in ${delay}s..."
+              sleep "$delay"
+              delay=$((delay * 2))
+              attempt=$((attempt + 1))
+            done
+          }
+
+          for f in installer-artifacts/*; do
+            [ -e "$f" ] || continue
+            gh_retry gh release upload "${GITHUB_REF_NAME}" "$f" --clobber
+          done
+
   upload-runner-assets:
     name: Upload runner binaries
-    needs: build
+    needs: [build, upload-installer-assets]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -102,20 +201,45 @@ jobs:
           path: runner-artifacts
           merge-multiple: true
 
-      - name: Create draft release
+      - name: Wait for draft release (created by upload-installer-assets)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+        shell: bash
         run: |
-          if ! gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
-            gh release create "${GITHUB_REF_NAME}" \
-              --draft \
-              --title "${GITHUB_REF_NAME}" \
-              --notes ""
-            echo "Created draft release ${GITHUB_REF_NAME}"
-          else
-            echo "Release ${GITHUB_REF_NAME} already exists, skipping creation"
-          fi
+          # Retry wrapper for GitHub API 5xx errors
+          gh_retry() {
+            local max_retries=5
+            local delay=30
+            local attempt=1
+            while [ "$attempt" -le "$max_retries" ]; do
+              if "$@"; then
+                return 0
+              fi
+              local rc=$?
+              if [ "$attempt" -eq "$max_retries" ]; then
+                echo "::error::Command failed after $max_retries attempts: $*"
+                return $rc
+              fi
+              echo "::warning::Attempt $attempt/$max_retries failed (exit $rc), retrying in ${delay}s..."
+              sleep "$delay"
+              delay=$((delay * 2))
+              attempt=$((attempt + 1))
+            done
+          }
+
+          # Wait for the draft release to be created by upload-installer-assets job.
+          # Polls every 15s up to 10 minutes.
+          for i in $(seq 1 40); do
+            if gh_retry gh release view "${GITHUB_REF_NAME}" > /dev/null 2>&1; then
+              echo "Release ${GITHUB_REF_NAME} is ready."
+              exit 0
+            fi
+            echo "Waiting for release ${GITHUB_REF_NAME} to be created... (attempt $i/40)"
+            sleep 15
+          done
+          echo "::error::Timed out waiting for release ${GITHUB_REF_NAME}"
+          exit 1
 
       - name: Upload runner binaries to release
         shell: bash
@@ -123,14 +247,36 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+
+          # Retry wrapper for GitHub API 5xx errors
+          gh_retry() {
+            local max_retries=5
+            local delay=30
+            local attempt=1
+            while [ "$attempt" -le "$max_retries" ]; do
+              if "$@"; then
+                return 0
+              fi
+              local rc=$?
+              if [ "$attempt" -eq "$max_retries" ]; then
+                echo "::error::Command failed after $max_retries attempts: $*"
+                return $rc
+              fi
+              echo "::warning::Attempt $attempt/$max_retries failed (exit $rc), retrying in ${delay}s..."
+              sleep "$delay"
+              delay=$((delay * 2))
+              attempt=$((attempt + 1))
+            done
+          }
+
           for f in runner-artifacts/*; do
             [ -e "$f" ] || continue
-            gh release upload "${GITHUB_REF_NAME}" "$f" --clobber
+            gh_retry gh release upload "${GITHUB_REF_NAME}" "$f" --clobber
           done
 
   publish-release:
     name: Publish GitHub Release
-    needs: [build, upload-runner-assets]
+    needs: [build, upload-runner-assets, upload-installer-assets]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -166,6 +312,28 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+        shell: bash
         run: |
-          gh release edit "${GITHUB_REF_NAME}" --draft=false --notes "${{ steps.release_notes.outputs.body }}"
+          # Retry wrapper for GitHub API 5xx errors
+          gh_retry() {
+            local max_retries=5
+            local delay=30
+            local attempt=1
+            while [ "$attempt" -le "$max_retries" ]; do
+              if "$@"; then
+                return 0
+              fi
+              local rc=$?
+              if [ "$attempt" -eq "$max_retries" ]; then
+                echo "::error::Command failed after $max_retries attempts: $*"
+                return $rc
+              fi
+              echo "::warning::Attempt $attempt/$max_retries failed (exit $rc), retrying in ${delay}s..."
+              sleep "$delay"
+              delay=$((delay * 2))
+              attempt=$((attempt + 1))
+            done
+          }
+
+          gh_retry gh release edit "${GITHUB_REF_NAME}" --draft=false --notes "${{ steps.release_notes.outputs.body }}"
           echo "Release published with release notes."
