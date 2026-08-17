@@ -883,6 +883,49 @@ export const coverageRouter = t.router({
       return { ok: true };
     }),
 
+  /**
+   * 单独中止一个 Target（Issue 06 闭环 UI）。
+   * 语义：中止即转人工——orchestrator 在检查点将 target 标记为 escalated
+   * （reason = '用户手动中止该 target'）并发出 gap_escalated 事件；其他 target 不受影响。
+   */
+  abortClosureTarget: t.procedure
+    .input((raw): { projectId: string; closureId: string; targetId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.closureId !== 'string' || typeof r.targetId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, closureId and targetId are required' });
+      }
+      return { projectId: r.projectId, closureId: r.closureId, targetId: r.targetId };
+    })
+    .mutation(async ({ input }) => {
+      requireProject(input.projectId);
+
+      // 标记待中止的 target；orchestrator 不在运行（闭环已终态）时为 no-op
+      const orchestrator = orchestrators.get(input.projectId);
+      if (orchestrator) {
+        await orchestrator.abortTarget(input.closureId, input.targetId);
+      }
+      return { ok: true };
+    }),
+
+  /**
+   * 列出指定 closure 的 AI exclusion 建议（工单 07）。
+   * 返回按 targetId 分组的 StoredExclusionSuggestion 列表（状态固定记录 pending 初始态；
+   * 审批状态以 listExclusions / 审批面板为准）。
+   */
+  listExclusionSuggestions: t.procedure
+    .input((raw): { projectId: string; closureId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.closureId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and closureId are required' });
+      }
+      return { projectId: r.projectId, closureId: r.closureId };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildClosureManager(project.rootPath);
+      return mgr.listExclusionSuggestions(input.closureId);
+    }),
+
   completeIteration: t.procedure
     .input((raw): {
       projectId: string;

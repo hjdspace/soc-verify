@@ -26,6 +26,7 @@
  *   - closure:iteration_done  { closureId, targetId, round, deltaBefore, deltaAfter }
  *   - closure:gap_closed      { closureId, targetId }
  *   - closure:gap_escalated   { closureId, targetId, reason }
+ *   - closure:exclusion_suggested { closureId, targetId, round, count }  （工单 07）
  *   - closure:gap_failed      { closureId, targetId, error }
  *   - closure:completed       { closureId }
  *   - closure:aborted         { closureId }
@@ -43,6 +44,7 @@ import type { SessionManagerImpl } from '../agent/session-manager';
 import type { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../plugin-adapters';
 import { executeRecovery, persistRecoveryResult, type RecoveryResult } from './coverage-recovery';
 import type { CommandRunner } from './coverage-report-generator';
+import { parseExclusionSuggestions, buildExclusionPromptSection } from './exclusion-suggestions';
 
 /** Closure 事件载荷：所有事件都带 type + closureId，具体字段按 type 不同 */
 export type ClosureEvent =
@@ -65,6 +67,14 @@ export type ClosureEvent =
     }
   | { type: 'closure:gap_closed'; closureId: string; targetId: string }
   | { type: 'closure:gap_escalated'; closureId: string; targetId: string; reason: string }
+  | {
+      /** AI 输出 exclusion 建议并已持久化为 pending（工单 07：AI 只建议不排除） */
+      type: 'closure:exclusion_suggested';
+      closureId: string;
+      targetId: string;
+      round: number;
+      count: number;
+    }
   | { type: 'closure:gap_failed'; closureId: string; targetId: string; error: string }
   | { type: 'closure:completed'; closureId: string }
   | { type: 'closure:finalized'; closureId: string; mergeSessionId: string }
@@ -134,6 +144,8 @@ export class ClosureOrchestrator {
   private runningPromises = new Map<string, Promise<void>>();
   /** closureId → 最后一轮 Recovery 的结果（用于闭环结束后固化为 Merge Session） */
   private lastRecoveryResults = new Map<string, RecoveryResult>();
+  /** 用户单独中止的 target（key = `${closureId}:${targetId}`），runTargetLoop 检查点消费 */
+  private abortedTargetIds = new Set<string>();
 
   constructor(opts: ClosureOrchestratorOptions) {
     this.opts = opts;
@@ -176,6 +188,7 @@ export class ClosureOrchestrator {
       this.abortControllers.delete(session.id);
       this.runningPromises.delete(session.id);
       this.lastRecoveryResults.delete(session.id);
+      this.clearAbortedTargets(session.id);
     });
 
     this.runningPromises.set(session.id, promise);
@@ -209,6 +222,20 @@ export class ClosureOrchestrator {
       // 可能已被其他路径 abort
     }
     this.emit({ type: 'closure:aborted', closureId });
+  }
+
+  /**
+   * 单独中止一个 Target（Issue 06 闭环 UI）。
+   *
+   * 语义：中止即转人工——不引入新的 target 状态。runTargetLoop 在每轮中止
+   * 检查点检测到该 target 被标记后，调用 closureManager.escalateTarget
+   * （reason = '用户手动中止该 target'）并发出 gap_escalated 事件，然后退出
+   * 该 target 的循环。不影响同一闭环中的其他 target。
+   *
+   * 幂等：对已终态或已标记的 target 重复调用无副作用。
+   */
+  async abortTarget(closureId: string, targetId: string): Promise<void> {
+    this.abortedTargetIds.add(`${closureId}:${targetId}`);
   }
 
   // ─── 内部实现 ─────────────────────────────────────────────────
@@ -255,6 +282,11 @@ export class ClosureOrchestrator {
     while (true) {
       // 中止检查
       if (controller.signal.aborted) return;
+      // 单 target 中止检查（Issue 06）：命中后转人工（escalated）并退出该 target 循环
+      if (this.isTargetAborted(session.id, target.id)) {
+        await this.handleTargetAborted(session.id, target.id);
+        return;
+      }
 
       // 重新读取 target 最新状态（可能已被 completeIteration 标记为 closed/escalated）
       const freshSession = await closureManager.getClosure(session.id);
@@ -343,9 +375,9 @@ export class ClosureOrchestrator {
         return;
       }
 
-      // 4. 等待 agent_end 事件
+      // 4. 等待 agent_end 事件（同时捕获 AI 最后一条 assistant 回复文本）
       try {
-        await this.waitForAgentEnd(agentSessionId, controller);
+        const agentText = await this.waitForAgentEnd(agentSessionId, controller);
         this.emit({
           type: 'closure:agent_ended',
           closureId: session.id,
@@ -353,6 +385,9 @@ export class ClosureOrchestrator {
           round,
           sessionId: agentSessionId,
         });
+
+        // 工单 07：解析 AI 的 dead_code 豁免建议并持久化为 pending（AI 只建议不排除）
+        await this.collectExclusionSuggestions(session, currentTarget, round, agentText);
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         await closureManager.failIteration(session.id, target.id, `agent execution failed: ${errorMsg}`);
@@ -370,6 +405,12 @@ export class ClosureOrchestrator {
 
       if (controller.signal.aborted) {
         await this.safeDestroySession(agentSessionId);
+        return;
+      }
+      // 单 target 中止检查（Issue 06）：agent 已结束，销毁会话后转人工退出
+      if (this.isTargetAborted(session.id, target.id)) {
+        await this.safeDestroySession(agentSessionId);
+        await this.handleTargetAborted(session.id, target.id);
         return;
       }
 
@@ -537,10 +578,12 @@ export class ClosureOrchestrator {
   }
 
   /**
-   * 等待 agent_end 事件或超时。
+   * 等待 agent_end 事件或超时，并捕获本轮 AI 最后一条 assistant 回复文本。
    *
    * 监听 sessionManager 的 'sessionEvent' 事件，过滤 sessionId === agentSessionId：
-   *   - event.type === 'agent_end' → resolve
+   *   - event.type === 'message_end' 且 message.role === 'assistant' → 记录文本
+   *     （供 parseExclusionSuggestions 解析 dead_code 豁免建议，工单 07）
+   *   - event.type === 'agent_end' → resolve（返回最后捕获的 assistant 文本）
    *   - event.type === 'error' → reject
    *   - 超时（10 分钟）→ reject
    *   - abort signal → reject
@@ -548,8 +591,9 @@ export class ClosureOrchestrator {
   private waitForAgentEnd(
     agentSessionId: string,
     controller: AbortController,
-  ): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
+  ): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      let lastAssistantText = '';
       const timeoutId = setTimeout(() => {
         cleanup();
         reject(new Error(`Agent timed out after ${AGENT_END_TIMEOUT_MS / 60000} minutes`));
@@ -567,9 +611,12 @@ export class ClosureOrchestrator {
         const evt = event as Record<string, unknown> | null;
         if (!evt || typeof evt.type !== 'string') return;
 
-        if (evt.type === 'agent_end') {
+        if (evt.type === 'message_end') {
+          const text = extractAssistantText(evt.message);
+          if (text !== null) lastAssistantText = text;
+        } else if (evt.type === 'agent_end') {
           cleanup();
-          resolve();
+          resolve(lastAssistantText);
         } else if (evt.type === 'error') {
           cleanup();
           const errMsg = typeof evt.message === 'string'
@@ -589,6 +636,41 @@ export class ClosureOrchestrator {
 
       this.opts.sessionManager.on('sessionEvent', onSessionEvent);
     });
+  }
+
+  /**
+   * 从 AI 回复文本解析 exclusion 建议并持久化为 pending（工单 07 链路）。
+   *
+   * - 仅当 AI 输出了 ```exclusion-suggestions 块（判定 dead_code 根因）时才有建议
+   * - addExclusionSuggestions 只产生 pending 建议，绝不自动审批（PRD US-33 安全底线）
+   * - best-effort：解析/持久化失败不影响迭代主流程
+   */
+  private async collectExclusionSuggestions(
+    session: ClosureSession,
+    target: ClosureTarget,
+    round: number,
+    agentText: string,
+  ): Promise<void> {
+    let suggestions;
+    try {
+      suggestions = parseExclusionSuggestions(agentText);
+    } catch {
+      return; // AI 输出畸形是常态，静默跳过
+    }
+    if (suggestions.length === 0) return;
+
+    try {
+      await this.opts.closureManager.addExclusionSuggestions(session.id, target.id, suggestions);
+      this.emit({
+        type: 'closure:exclusion_suggested',
+        closureId: session.id,
+        targetId: target.id,
+        round,
+        count: suggestions.length,
+      });
+    } catch {
+      // best-effort：持久化失败不阻断迭代（建议丢失可由下一轮补出）
+    }
   }
 
   /**
@@ -685,6 +767,9 @@ export class ClosureOrchestrator {
       `- 遵循现有测试框架的风格（testbench + virtual sequence）`,
       `- 聚焦该目标模块，不要重构无关代码`,
       `- 不要修改项目的正式 testbench/ 目录`,
+      ``,
+      // 工单 07：告知 AI dead_code 根因时的 exclusion 建议输出格式（可选输出）
+      buildExclusionPromptSection(),
     ];
 
     // 若有历史迭代，附上之前的迭代结果供 AI 参考
@@ -836,6 +921,35 @@ export class ClosureOrchestrator {
     }
   }
 
+  /** 判断 target 是否被用户单独中止（Issue 06） */
+  private isTargetAborted(closureId: string, targetId: string): boolean {
+    return this.abortedTargetIds.has(`${closureId}:${targetId}`);
+  }
+
+  /**
+   * 处理被用户单独中止的 target（Issue 06）：
+   * 标记为 escalated（转人工，reason 固定）并发出 gap_escalated 事件，
+   * 然后清理标记（幂等）。escalateTarget 抛错时不阻断退出（target 可能已终态）。
+   */
+  private async handleTargetAborted(closureId: string, targetId: string): Promise<void> {
+    const reason = '用户手动中止该 target';
+    try {
+      await this.opts.closureManager.escalateTarget(closureId, targetId, reason);
+    } catch {
+      // target 可能已进入终态（closed/escalated/failed），保持原终态
+    }
+    this.abortedTargetIds.delete(`${closureId}:${targetId}`);
+    this.emit({ type: 'closure:gap_escalated', closureId, targetId, reason });
+  }
+
+  /** 清理指定 closure 的全部单 target 中止标记（闭环结束时调用） */
+  private clearAbortedTargets(closureId: string): void {
+    const prefix = `${closureId}:`;
+    for (const key of this.abortedTargetIds) {
+      if (key.startsWith(prefix)) this.abortedTargetIds.delete(key);
+    }
+  }
+
   private emit(event: ClosureEvent): void {
     try {
       this.opts.emit(event);
@@ -851,6 +965,28 @@ function findNodeByPath(node: CoverageNode, path: string): CoverageNode | null {
   for (const child of node.children) {
     const found = findNodeByPath(child, path);
     if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * 从 message_end 事件的 message 中提取 assistant 文本（工单 07）。
+ * content 为字符串或 {type:'text', text} 块数组；非 assistant 消息返回 null。
+ */
+function extractAssistantText(message: unknown): string | null {
+  if (!message || typeof message !== 'object') return null;
+  const msg = message as Record<string, unknown>;
+  if (msg.role !== 'assistant') return null;
+  if (typeof msg.content === 'string') return msg.content;
+  if (Array.isArray(msg.content)) {
+    let text = '';
+    for (const block of msg.content) {
+      if (block && typeof block === 'object') {
+        const b = block as Record<string, unknown>;
+        if (b.type === 'text' && typeof b.text === 'string') text += b.text;
+      }
+    }
+    return text;
   }
   return null;
 }

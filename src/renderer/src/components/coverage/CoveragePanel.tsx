@@ -24,6 +24,7 @@ import type {
 import { COVERAGE_METRICS, DEFAULT_COVERAGE_TARGETS } from '@shared/types';
 import { CoverageTreeTable } from './CoverageTreeTable';
 import { CoverageDashboard } from './CoverageDashboard';
+import { ClosureDetailPage } from './ClosureDetailPage';
 import { ExportDialog } from './ExportDialog';
 
 const EDA_TOOL_OPTIONS: Array<{ value: EdaTool; label: string }> = [
@@ -461,7 +462,7 @@ export function CoveragePanel() {
             ).length;
             return (
               <button
-                onClick={() => setView('dashboard')}
+                onClick={() => setView('closure-detail')}
                 className="flex items-center gap-1.5 rounded border border-primary/40 bg-primary/10 px-2 py-1 text-[10px] text-primary hover:bg-primary/20"
                 title="查看 AI Closure 详情"
                 data-testid="closure-status-pill"
@@ -572,7 +573,10 @@ export function CoveragePanel() {
         </div>
       )}
 
-      {!tree && !loading && (
+      {/* Closure 详情视图（Issue 06）：不依赖 tree 数据，重启后也可直接查看历史闭环 */}
+      {view === 'closure-detail' && <ClosureDetailPage />}
+
+      {view !== 'closure-detail' && !tree && !loading && (
         <div className="flex flex-col items-center justify-center gap-2 py-8">
           <BarChart3 className="h-8 w-8 text-muted-foreground/50" />
           <p className="text-xs text-muted-foreground">暂无覆盖率数据</p>
@@ -581,7 +585,7 @@ export function CoveragePanel() {
       )}
 
       {/* 视图切换 + Tab 导航 */}
-      {tree && (
+      {view !== 'closure-detail' && tree && (
         <>
           {/* 视图切换按钮组 */}
           <div className="mb-3 flex gap-1">

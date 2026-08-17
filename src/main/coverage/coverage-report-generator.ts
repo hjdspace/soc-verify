@@ -20,6 +20,7 @@ import { mkdir, writeFile, appendFile, stat } from 'node:fs/promises';
 import { join, resolve, isAbsolute } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { EdaToolConfig } from '@shared/types';
+import { existingElfile } from './exclusion-el';
 
 export interface CommandResult {
   exitCode: number;
@@ -185,6 +186,10 @@ export class CoverageReportGenerator {
       : resolve(this.projectRoot, covMergeDir);
     const absReportDir = resolve(reportDir);
 
+    // Coverage Preprocessing 前检查已审批 EL 文件（ADR 0026 决策 3）：
+    // .socverify/coverage/exclusions/<sessionId>.el 存在时全部 urg 命令附加 -elfile
+    const elfile = await existingElfile(this.projectRoot, sessionId);
+
     const logPath = join(reportDir, 'eda-commands.log');
     const commandLog: CommandLogEntry[] = [];
 
@@ -205,9 +210,12 @@ export class CoverageReportGenerator {
 
     const substitute = (template: string | undefined): string | null => {
       if (!template) return null;
-      return template
+      const base = template
         .replaceAll('{covMergeDir}', absCovMergeDir)
         .replaceAll('{reportDir}', absReportDir);
+      // EL 应用（ADR 0026 决策 3）：存在已审批 EL 文件时（vcs-urg），
+      // 在模板替换结果后追加 -elfile 参数——被排除项移出报告计数（豁免后达标语义）
+      return elfile && config.tool === 'vcs-urg' ? `${base} -elfile "${elfile}"` : base;
     };
 
     const summaryCmd = substitute(config.summaryCommand);

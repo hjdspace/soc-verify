@@ -401,6 +401,10 @@ export type ExclusionStatus = 'pending' | 'approved' | 'rejected';
 /**
  * 覆盖率排除项。建议排除的覆盖率项（如 dead code），
  * 必须人工审批后才能排除，不可自动排除。
+ *
+ * 语义 selector 扩展（ADR 0026）：AI 建议链路补充可选的精确定位字段——
+ * file/line（code metric 行级排除）或 bin（covergroup bin 排除），
+ * 以及 AI 置信度（requestedBy='ai-triage' 时存在）。旧数据无这些字段。
  */
 export type CoverageExclusion = {
   id: string;
@@ -414,6 +418,14 @@ export type CoverageExclusion = {
   requestedAt: number;
   approvedAt?: number;
   rejectionReason?: string;
+  /** file/line 形态：源文件路径（与 line 配合使用） */
+  file?: string;
+  /** file/line 形态：行号 */
+  line?: number;
+  /** bin 形态：covergroup bin 名 */
+  bin?: string;
+  /** AI 置信度 ∈ [0,1]（requestedBy='ai-triage' 时存在） */
+  confidence?: number;
 };
 
 // ─── Test Promotion（ADR 0009 决策 10 / Issue #10 Slice 8） ──────

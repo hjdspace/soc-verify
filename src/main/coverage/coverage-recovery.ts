@@ -27,6 +27,7 @@ import { defaultRunner, type CommandRunner, type CommandResult, type ProgressCal
 import type { PluginBackedCoverage } from '../plugin-adapters';
 import type { CoverageManager } from './coverage-manager';
 import { createLsfRunner, type LsfProgressEvent } from './lsf-runner';
+import { existingElfile } from './exclusion-el';
 
 /** Recovery 进度事件（通过 onProgress 回调推送） */
 export type RecoveryProgressEvent = {
@@ -107,16 +108,24 @@ export interface RecoveryInput {
  * 基线 VDB 只作为 -dir 输入，不被修改（urg 合并是只读操作）。
  * 若 edaConfig.summaryCommand 存在自定义模板，则用占位符替换方式构造（支持 {covMergeDir} {reportDir}），
  * 但 Recovery 需要多 -dir 输入，因此自定义模板中单个 {covMergeDir} 会被替换为多个 -dir 参数。
+ *
+ * EL 应用（ADR 0026 决策 3）：传入 elfilePath 时（vcs-urg 工具），在命令末尾追加
+ * `-elfile <path>`——模板替换结果后同样追加，保持自定义模板兼容。被排除项随
+ * urg 报告生成移出 covered/total 计数（豁免后达标语义）。
  */
 export function buildMergeCommand(
   baselineVdbDir: string,
   newVdbPaths: string[],
   edaConfig: EdaToolConfig,
   reportDir: string,
+  elfilePath?: string,
 ): string {
   // 所有 VDB 路径（基线 + 新仿真产生的）
   const allDirs = [baselineVdbDir, ...newVdbPaths];
   const multiDirArg = allDirs.map((d) => `-dir "${d}"`).join(' ');
+  // EL 参数：仅 vcs-urg 且显式传入 elfilePath 时附加（imc/vcover 无 -elfile 选项）
+  const elfileArg =
+    elfilePath && edaConfig.tool === 'vcs-urg' ? ` -elfile "${elfilePath}"` : '';
 
   // 构造 urg summary 命令（-xml_verbose 生成 session.xml + -show summary 生成 summary 文本）
   // 使用与 DEFAULT_EDA_COMMANDS['vcs-urg'].summaryCommand 一致的形态，但 -dir 改为多 VDB 输入
@@ -125,20 +134,24 @@ export function buildMergeCommand(
     // 如果用户自定义了 summaryCommand，尝试替换 {covMergeDir} 为多 -dir 参数
     const template = edaConfig.summaryCommand;
     if (template && template.includes('{covMergeDir}')) {
-      return template
-        .replaceAll('{covMergeDir}', allDirs.map((d) => `"${d}"`).join(' -dir '))
-        .replaceAll('{reportDir}', reportDir);
+      return (
+        template
+          .replaceAll('{covMergeDir}', allDirs.map((d) => `"${d}"`).join(' -dir '))
+          .replaceAll('{reportDir}', reportDir) + elfileArg
+      );
     }
     // 默认形态：urg -full64 -dir <vdb1> -dir <vdb2> ... -xml_verbose -format text -show summary -report <reportDir>
-    return `urg -full64 ${multiDirArg} -xml_verbose -format text -show summary -report "${reportDir}"`;
+    return `urg -full64 ${multiDirArg} -xml_verbose -format text -show summary -report "${reportDir}"${elfileArg}`;
   }
 
   // 非 vcs-urg 工具：使用模板替换（IMC/vcover 可能不支持多 VDB，但走通用路径）
   const template = edaConfig.summaryCommand;
   if (template) {
-    return template
-      .replaceAll('{covMergeDir}', baselineVdbDir)
-      .replaceAll('{reportDir}', reportDir);
+    return (
+      template
+        .replaceAll('{covMergeDir}', baselineVdbDir)
+        .replaceAll('{reportDir}', reportDir) + elfileArg
+    );
   }
 
   // 无可用模板
@@ -206,7 +219,9 @@ export async function executeRecovery(input: RecoveryInput): Promise<RecoveryRes
     message: `正在构造 urg 合并命令（${1 + newVdbPaths.length} 个 VDB 输入）...`,
     percent: 10,
   });
-  const command = buildMergeCommand(baselineVdbDir, newVdbPaths, edaConfig, reportDir);
+  // Recovery 前检查已审批 EL 文件（ADR 0026 决策 3）：存在则 urg 命令附加 -elfile 应用豁免
+  const elfile = await existingElfile(projectRoot, sessionId);
+  const command = buildMergeCommand(baselineVdbDir, newVdbPaths, edaConfig, reportDir, elfile ?? undefined);
 
   // Step 2: 执行 urg 命令（direct 或 LSF backend）
   onProgress?.({

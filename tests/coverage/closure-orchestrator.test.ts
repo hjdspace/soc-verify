@@ -26,7 +26,9 @@ import type {
   ClosureTarget,
   TargetIteration,
   ClosureTargetStatus,
+  StoredExclusionSuggestion,
 } from '../../src/main/coverage/closure-manager';
+import type { ExclusionSuggestion } from '../../src/main/coverage/exclusion-suggestions';
 import type { ClosureManager } from '../../src/main/coverage/closure-manager';
 import type { SessionManagerImpl } from '../../src/main/agent/session-manager';
 import type { CoverageManager } from '../../src/main/coverage/coverage-manager';
@@ -104,11 +106,13 @@ const MULTI_GAPS: CoverageGap[] = [
 /**
  * 创建 mock SessionManager。
  * - autoEmit=true 时，createSession 后自动在 delay ms 后发出 agent_end 事件
+ * - assistantText 提供时，agent_end 前先发出携带该文本的 assistant message_end（工单 07）
  * - autoEmit=false 时，不发出 agent_end（用于中止测试）
  */
 function createMockSessionManager(
   autoEmit = true,
   delay = 50,
+  assistantText?: string,
 ): SessionManagerImpl {
   const mgr = Object.assign(new EventEmitter(), {
     createSession: vi.fn(),
@@ -122,6 +126,15 @@ function createMockSessionManager(
       const sid = `agent-session-${++counter}`;
       if (autoEmit) {
         setTimeout(() => {
+          if (assistantText !== undefined) {
+            mgr.emit('sessionEvent', {
+              sessionId: sid,
+              event: {
+                type: 'message_end',
+                message: { role: 'assistant', content: assistantText },
+              },
+            });
+          }
           mgr.emit('sessionEvent', { sessionId: sid, event: { type: 'agent_end' } });
         }, delay);
       }
@@ -197,8 +210,11 @@ const DEFAULT_MAX_ROUNDS = 5;
  */
 function createInMemoryClosureManager(gapPool: CoverageGap[]): ClosureManager {
   const sessions = new Map<string, ClosureSession>();
+  /** 工单 07：exclusion 建议存储（closureId → targetId → 建议列表），与真实 triage.json 行为一致 */
+  const triageStore = new Map<string, Record<string, StoredExclusionSuggestion[]>>();
   let closureCounter = 0;
   let targetCounter = 0;
+  let suggCounter = 0;
 
   function shouldEscalate(target: ClosureTarget, threshold = DEFAULT_ESCALATION_THRESHOLD): boolean {
     const completed = target.iterations.filter(
@@ -366,6 +382,37 @@ function createInMemoryClosureManager(gapPool: CoverageGap[]): ClosureManager {
     getWorkspaceDir: (closureId: string): string => {
       return `/tmp/closure-test-${closureId}`;
     },
+    addExclusionSuggestions: async (
+      closureId: string,
+      targetId: string,
+      suggestions: ExclusionSuggestion[],
+    ): Promise<StoredExclusionSuggestion[]> => {
+      const session = sessions.get(closureId);
+      if (!session) throw new Error(`Closure ${closureId} not found`);
+      if (!session.targets.some((t) => t.id === targetId)) {
+        throw new Error(`Target ${targetId} not found in closure ${closureId}`);
+      }
+      if (!Array.isArray(suggestions) || suggestions.length === 0) {
+        throw new Error('suggestions must be a non-empty array');
+      }
+      const stored = suggestions.map((s) => ({
+        ...s,
+        // 固定 pending + ai-triage 来源（AI 只建议不排除，PRD US-33）
+        status: 'pending' as const,
+        requestedBy: 'ai-triage' as const,
+        id: `sugg_${++suggCounter}`,
+        createdAt: Date.now(),
+      }));
+      const byTarget = triageStore.get(closureId) ?? {};
+      byTarget[targetId] = [...(byTarget[targetId] ?? []), ...stored];
+      triageStore.set(closureId, byTarget);
+      return stored;
+    },
+    listExclusionSuggestions: async (
+      closureId: string,
+    ): Promise<Record<string, StoredExclusionSuggestion[]>> => {
+      return triageStore.get(closureId) ?? {};
+    },
   };
 
   return mgr as unknown as ClosureManager;
@@ -400,6 +447,8 @@ function setupOrchestrator(
     recoveryCoveragePct?: number;
     /** 模块 metric 是否已达标（true=getTargetCoverageSnapshot 返回达标值→gap 关闭） */
     coverageMet?: boolean;
+    /** agent_end 前发出的 assistant 回复文本（工单 07：exclusion 建议解析） */
+    assistantText?: string;
   } = {},
 ): SetupResult {
   const events: ClosureEvent[] = [];
@@ -422,6 +471,7 @@ function setupOrchestrator(
   const sessionManager = createMockSessionManager(
     opts.autoEmit ?? true,
     opts.emitDelay ?? 50,
+    opts.assistantText,
   );
   // 模块 metric 默认已达标（line=96 >= 95, toggle=86 >= 85）
   // → completeIteration 的 isTargetMet 判定通过 → gap 关闭
@@ -1369,6 +1419,170 @@ describe('ClosureOrchestrator', () => {
           (e) => e.type === 'closure:finalized',
         );
         expect(finalized).toBeUndefined();
+      } finally {
+        setup.cleanup();
+      }
+    });
+  });
+
+  // ─── AI Exclusion 建议链路（工单 07 / PRD US-30~33） ──────────
+
+  describe('AI Exclusion 建议', () => {
+    /** 含单条 file/line 建议 + 单条 bin 建议的 AI 回复文本 */
+    const AI_TEXT_WITH_SUGGESTIONS = [
+      '经分析，以下覆盖项判定为 dead_code，建议人工审查豁免：',
+      '```exclusion-suggestions',
+      JSON.stringify(
+        [
+          {
+            module: 'top/cpu_core',
+            metric: 'line',
+            file: 'rtl/cpu_core.sv',
+            line: 142,
+            reason: '该分支受 power-down 门控，正常功能模式下不可达，仅 DFT 模式可激活',
+            confidence: 0.86,
+          },
+          {
+            module: 'top/cpu_core',
+            metric: 'functional',
+            bin: 'err_inject.bin_backdoor',
+            reason: 'backdoor 注入路径仅验证平台自检使用，前门访问永不触发',
+            confidence: 0.92,
+          },
+        ],
+        null,
+        2,
+      ),
+      '```',
+    ].join('\n');
+
+    it('AI 输出 exclusion-suggestions 块时，建议被持久化并发出 closure:exclusion_suggested 事件', async () => {
+      const setup = setupOrchestrator(SAMPLE_GAPS, {
+        emitDelay: 30,
+        assistantText: AI_TEXT_WITH_SUGGESTIONS,
+      });
+      try {
+        setOverviewSequence(setup.coverageManager, [80.0, 82.0]);
+
+        const session = await setup.closureManager.startClosure({
+          sessionId: 'merge-1',
+          maxRounds: 5,
+        });
+
+        await setup.orchestrator.startClosure(session);
+        await setup.donePromise;
+
+        // 验证：closure:exclusion_suggested 事件（count=2）
+        const suggested = setup.events.find(
+          (e) => e.type === 'closure:exclusion_suggested',
+        );
+        expect(suggested).toBeDefined();
+        expect((suggested as { count: number }).count).toBe(2);
+        expect((suggested as { targetId: string }).targetId).toBe(
+          session.targets[0].id,
+        );
+        expect((suggested as { round: number }).round).toBe(1);
+
+        // 验证：建议已持久化（listExclusionSuggestions 可查）
+        const byTarget = await setup.closureManager.listExclusionSuggestions(session.id);
+        const list = byTarget[session.targets[0].id];
+        expect(list).toHaveLength(2);
+        expect(list[0].module).toBe('top/cpu_core');
+        expect(list[0].file).toBe('rtl/cpu_core.sv');
+        expect(list[0].line).toBe(142);
+        expect(list[1].bin).toBe('err_inject.bin_backdoor');
+      } finally {
+        setup.cleanup();
+      }
+    });
+
+    it('AI 无自动排除断言：持久化建议状态固定 pending、来源固定 ai-triage', async () => {
+      const setup = setupOrchestrator(SAMPLE_GAPS, {
+        emitDelay: 30,
+        assistantText: AI_TEXT_WITH_SUGGESTIONS,
+      });
+      try {
+        setOverviewSequence(setup.coverageManager, [80.0, 82.0]);
+
+        const session = await setup.closureManager.startClosure({
+          sessionId: 'merge-1',
+          maxRounds: 5,
+        });
+
+        await setup.orchestrator.startClosure(session);
+        await setup.donePromise;
+
+        const byTarget = await setup.closureManager.listExclusionSuggestions(session.id);
+        const list = byTarget[session.targets[0].id];
+        expect(list).toHaveLength(2);
+        // 安全底线（PRD US-33）：AI 只能建议（pending），绝不自动审批
+        for (const s of list) {
+          expect(s.status).toBe('pending');
+          expect(s.requestedBy).toBe('ai-triage');
+        }
+      } finally {
+        setup.cleanup();
+      }
+    });
+
+    it('AI 回复无 exclusion 块时不产生建议、不发出事件', async () => {
+      const setup = setupOrchestrator(SAMPLE_GAPS, {
+        emitDelay: 30,
+        assistantText: '根因为缺少定向测试，已生成新用例，无需豁免。',
+      });
+      try {
+        setOverviewSequence(setup.coverageManager, [80.0, 82.0]);
+
+        const session = await setup.closureManager.startClosure({
+          sessionId: 'merge-1',
+          maxRounds: 5,
+        });
+
+        await setup.orchestrator.startClosure(session);
+        await setup.donePromise;
+
+        // 验证：无 exclusion_suggested 事件
+        const suggested = setup.events.find(
+          (e) => e.type === 'closure:exclusion_suggested',
+        );
+        expect(suggested).toBeUndefined();
+
+        // 验证：无持久化建议
+        const byTarget = await setup.closureManager.listExclusionSuggestions(session.id);
+        expect(Object.keys(byTarget)).toHaveLength(0);
+      } finally {
+        setup.cleanup();
+      }
+    });
+
+    it('AI 输出畸形 JSON 块时静默跳过，不阻断迭代主流程', async () => {
+      const setup = setupOrchestrator(SAMPLE_GAPS, {
+        emitDelay: 30,
+        assistantText: '```exclusion-suggestions\n[{ broken json !!\n```',
+      });
+      try {
+        setOverviewSequence(setup.coverageManager, [80.0, 82.0]);
+
+        const session = await setup.closureManager.startClosure({
+          sessionId: 'merge-1',
+          maxRounds: 5,
+        });
+
+        await setup.orchestrator.startClosure(session);
+        await setup.donePromise;
+
+        // 验证：无事件、无建议
+        expect(
+          setup.events.find((e) => e.type === 'closure:exclusion_suggested'),
+        ).toBeUndefined();
+        const byTarget = await setup.closureManager.listExclusionSuggestions(session.id);
+        expect(Object.keys(byTarget)).toHaveLength(0);
+
+        // 验证：迭代主流程不受影响（正常关闭 + completed）
+        const closed = setup.events.find((e) => e.type === 'closure:gap_closed');
+        expect(closed).toBeDefined();
+        const completed = setup.events.find((e) => e.type === 'closure:completed');
+        expect(completed).toBeDefined();
       } finally {
         setup.cleanup();
       }

@@ -9,6 +9,9 @@
  *   - "仅看未达标"过滤
  *   - 顶部 8 个概览卡片（总体覆盖率 + 达标状态徽章 + 进度条）
  *
+ * Issue 06（闭环 UI）：勾选有缺口的模块（可多选）→「启动 AI 收敛」，
+ * 以模块选择调用 startClosure 并跳转闭环详情页。
+ *
  * 性能优化：
  *   - 虚拟滚动：仅渲染可视区域内的行，支持万级节点流畅滚动
  *   - React.memo：行组件缓存，避免不必要的重渲染
@@ -16,9 +19,11 @@
  */
 import { memo, useCallback, useMemo, useRef, useState, useEffect } from 'react';
 import {
-  ChevronRight, ChevronDown, Check, AlertTriangle, X, Minus,
+  ChevronRight, ChevronDown, Check, AlertTriangle, X, Minus, Sparkles,
 } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
+import { useCoverageStore } from '@renderer/stores/coverage';
+import { useProjectStore } from '@renderer/stores/project';
 import type {
   CoverageData, CoverageMetric, CoverageNode, CoverageTriplet,
 } from '@shared/types';
@@ -218,6 +223,14 @@ export type CoverageTreeTableProps = {
 export function CoverageTreeTable({ data, targets }: CoverageTreeTableProps) {
   const { root } = data;
 
+  // ─── AI 收敛入口（Issue 06）：模块多选 → startClosure ──────
+  const startClosure = useCoverageStore((s) => s.startClosure);
+  const setView = useCoverageStore((s) => s.setView);
+  const currentSessionId = useCoverageStore((s) => s.currentSessionId);
+  const currentProjectId = useProjectStore((s) => s.currentProjectId);
+  const [selectedModules, setSelectedModules] = useState<Set<string>>(new Set());
+  const [startingClosure, setStartingClosure] = useState(false);
+
   // 合并默认目标与项目级覆盖
   const effectiveTargets = useMemo<Partial<Record<CoverageMetric, number>>>(
     () => ({ ...DEFAULT_COVERAGE_TARGETS, ...targets }),
@@ -258,6 +271,33 @@ export function CoverageTreeTable({ data, targets }: CoverageTreeTableProps) {
 
   const expandAll = useCallback(() => setExpanded(new Set(allExpandablePaths)), [allExpandablePaths]);
   const collapseAll = useCallback(() => setExpanded(new Set()), []);
+
+  // ─── AI 收敛入口（Issue 06） ─────────────────────────────────
+  const toggleSelectModule = useCallback((path: string) => {
+    setSelectedModules((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+
+  const canStartClosure = !!currentProjectId && !!currentSessionId && selectedModules.size > 0;
+
+  const handleStartClosure = async (): Promise<void> => {
+    if (!currentProjectId || !currentSessionId || selectedModules.size === 0) return;
+    setStartingClosure(true);
+    const closureId = await startClosure(
+      currentProjectId,
+      currentSessionId,
+      Array.from(selectedModules),
+    );
+    setStartingClosure(false);
+    if (closureId) {
+      setSelectedModules(new Set());
+      setView('closure-detail');
+    }
+  };
 
   // ─── 虚拟滚动 ──────────────────────────────────────────────
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -336,6 +376,27 @@ export function CoverageTreeTable({ data, targets }: CoverageTreeTableProps) {
         <span className="text-[10px] text-muted-foreground">
           {totalRows} 个节点
         </span>
+        {/* AI 收敛入口（Issue 06）：选中模块（可多选）启动闭环 */}
+        <button
+          onClick={() => void handleStartClosure()}
+          disabled={!canStartClosure || startingClosure}
+          className={cn(
+            'ml-auto flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors',
+            canStartClosure && !startingClosure
+              ? 'border border-primary/50 bg-primary/10 text-primary hover:bg-primary/20'
+              : 'cursor-not-allowed border border-border bg-secondary text-muted-foreground',
+          )}
+          title={
+            selectedModules.size === 0
+              ? '勾选左侧复选框选中要收敛的模块（仅有未达标指标的模块可选）'
+              : '对选中的模块启动 AI 覆盖率收敛闭环'
+          }
+          data-testid="tree-table-start-closure-btn"
+        >
+          <Sparkles className="h-3 w-3" />
+          启动 AI 收敛
+          {selectedModules.size > 0 && `（${selectedModules.size}）`}
+        </button>
       </div>
 
       {/* 主树表格（虚拟滚动） */}
@@ -344,7 +405,10 @@ export function CoverageTreeTable({ data, targets }: CoverageTreeTableProps) {
           <table className="w-full text-xs" style={{ tableLayout: 'fixed' }}>
             <thead className="sticky top-0 z-10 bg-secondary">
               <tr>
-                <th className="px-2 py-1.5 text-left text-[10px] uppercase text-muted-foreground" style={{ width: '30%' }}>
+                <th className="px-1 py-1.5 text-center text-[10px] uppercase text-muted-foreground" style={{ width: '4%' }} title="选择模块启动 AI 收敛">
+                  收敛
+                </th>
+                <th className="px-2 py-1.5 text-left text-[10px] uppercase text-muted-foreground" style={{ width: '26%' }}>
                   模块
                 </th>
                 {COVERAGE_METRICS.map((m) => (
@@ -365,12 +429,12 @@ export function CoverageTreeTable({ data, targets }: CoverageTreeTableProps) {
               {/* 顶部空间 — 撑起虚拟滚动上方区域 */}
               {topSpacer > 0 && (
                 <tr style={{ height: topSpacer }}>
-                  <td colSpan={9} style={{ padding: 0, border: 'none' }} />
+                  <td colSpan={10} style={{ padding: 0, border: 'none' }} />
                 </tr>
               )}
               {visibleSlice.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-2 py-4 text-center text-muted-foreground">
+                  <td colSpan={10} className="px-2 py-4 text-center text-muted-foreground">
                     无匹配模块
                   </td>
                 </tr>
@@ -383,13 +447,16 @@ export function CoverageTreeTable({ data, targets }: CoverageTreeTableProps) {
                     dimmed={dimmed}
                     targets={effectiveTargets}
                     onToggle={toggleNode}
+                    selectable={node.depth > 0 && nodeHasFail(node, effectiveTargets)}
+                    selected={selectedModules.has(node.path)}
+                    onToggleSelect={toggleSelectModule}
                   />
                 ))
               )}
               {/* 底部空间 — 撑起虚拟滚动下方区域 */}
               {bottomSpacer > 0 && (
                 <tr style={{ height: bottomSpacer }}>
-                  <td colSpan={9} style={{ padding: 0, border: 'none' }} />
+                  <td colSpan={10} style={{ padding: 0, border: 'none' }} />
                 </tr>
               )}
             </tbody>
@@ -472,12 +539,19 @@ const VirtualTreeRow = memo(function TreeRow({
   dimmed,
   targets,
   onToggle,
+  selectable,
+  selected,
+  onToggleSelect,
 }: {
   node: CoverageNode;
   expanded: boolean;
   dimmed: boolean;
   targets: Partial<Record<CoverageMetric, number>>;
   onToggle: (path: string) => void;
+  /** 是否可选中用于 AI 收敛（非根节点且有未达标指标，Issue 06） */
+  selectable: boolean;
+  selected: boolean;
+  onToggleSelect: (path: string) => void;
 }) {
   const hasChildren = node.children.length > 0;
   const isRoot = node.depth === 0;
@@ -491,6 +565,19 @@ const VirtualTreeRow = memo(function TreeRow({
         dimmed && 'opacity-30',
       )}
     >
+      <td className="px-1 py-1 text-center">
+        {selectable && (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onToggleSelect(node.path)}
+            onClick={(e) => e.stopPropagation()}
+            className="h-3 w-3 cursor-pointer accent-[var(--primary)]"
+            title={selected ? '移出 AI 收敛选择' : '加入 AI 收敛选择'}
+            data-testid={`select-module-${node.path}`}
+          />
+        )}
+      </td>
       <td className="px-2 py-1">
         <div className="flex items-center" style={{ paddingLeft: `${node.depth * 14}px` }}>
           {hasChildren ? (

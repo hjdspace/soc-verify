@@ -41,6 +41,7 @@ import {
 } from '@shared/types';
 import type { PluginBackedCoverage } from '../plugin-adapters';
 import { CoverageReportGenerator, type GeneratedReports, type ProgressCallback } from './coverage-report-generator';
+import { generateElFile } from './exclusion-el';
 
 const SOCVERIFY_DIR = '.socverify';
 const COVERAGE_DIR = 'coverage';
@@ -817,6 +818,8 @@ export class CoverageManager {
 
   /**
    * 发起排除请求（status=pending）。不可自动排除，必须经过 approve。
+   * 语义 selector 扩展（ADR 0026）：file/line 或 bin + AI 置信度为可选字段
+   * （AI 建议链路传入；人工发起的请求只有 nodePath + metric）。
    */
   async requestExclusion(input: {
     sessionId: string;
@@ -824,6 +827,10 @@ export class CoverageManager {
     metric: CoverageMetric;
     reason: string;
     requestedBy: string;
+    file?: string;
+    line?: number;
+    bin?: string;
+    confidence?: number;
   }): Promise<CoverageExclusion> {
     const entry: CoverageExclusion = {
       id: this.generateId('excl'),
@@ -834,6 +841,10 @@ export class CoverageManager {
       status: 'pending',
       requestedBy: input.requestedBy,
       requestedAt: Date.now(),
+      file: input.file,
+      line: input.line,
+      bin: input.bin,
+      confidence: input.confidence,
     };
     const list = await this.loadExclusions(input.sessionId);
     list.push(entry);
@@ -841,14 +852,22 @@ export class CoverageManager {
     return entry;
   }
 
-  /** 审批通过：将 pending → approved。 */
+  /**
+   * 审批通过：将 pending → approved。
+   * 审批通过后触发 EL 文件重新生成（ADR 0026 决策 3）：该 sessionId 全部
+   * approved 条目合并写入 `.socverify/coverage/exclusions/<sessionId>.el`，
+   * 下次 Coverage Preprocessing / Recovery 的 urg 命令附加 -elfile 应用。
+   * EL 生成 best-effort：失败不阻断审批（审批数据已持久化，下次审批可再触发）。
+   */
   async approveExclusion(id: string, approver: string): Promise<CoverageExclusion> {
-    return this.updateExclusion(id, (e) => ({
+    const updated = await this.updateExclusion(id, (e) => ({
       ...e,
       status: 'approved' as ExclusionStatus,
       approvedBy: approver,
       approvedAt: Date.now(),
     }));
+    await this.regenerateElfile(updated.sessionId);
+    return updated;
   }
 
   /** 驳回：将 pending → rejected，并记录原因。 */
@@ -1169,6 +1188,19 @@ ${rows}
     const ts = Date.now().toString(36);
     const rand = Math.random().toString(36).slice(2, 8);
     return `${prefix}_${ts}_${rand}`;
+  }
+
+  /**
+   * 重新生成该 sessionId 的 EL 文件（全部 approved 条目合并写入）。
+   * best-effort：失败仅忽略（审批数据已持久化，不阻断审批流程）。
+   */
+  private async regenerateElfile(sessionId: string): Promise<void> {
+    try {
+      const list = await this.loadExclusions(sessionId);
+      await generateElFile(this.projectRoot, sessionId, list);
+    } catch {
+      // EL 生成失败不影响审批结果
+    }
   }
 
   private async safeDelete(filePath: string): Promise<void> {

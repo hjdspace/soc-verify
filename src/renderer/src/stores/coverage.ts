@@ -10,6 +10,7 @@ import type {
   CoverageMetric,
   CoverageGap,
   CoverageDelta,
+  CoverageTriplet,
   CoverageTriage,
   CoverageExclusion,
   TriageCause,
@@ -36,6 +37,10 @@ type TargetIteration = {
   deltaBefore?: CoverageSummary;
   deltaAfter?: CoverageSummary;
   deltas?: CoverageDelta[];
+  /** 豁免前覆盖率快照（per metric 三元组，ADR 0026 决策 4；未应用豁免时与 after 相等） */
+  beforeExclusionMetrics?: Record<CoverageMetric, CoverageTriplet>;
+  /** 豁免后覆盖率快照（per metric 三元组）；达标判定基于此数字 */
+  afterExclusionMetrics?: Record<CoverageMetric, CoverageTriplet>;
   status: TargetIterationStatus;
   error?: string;
 };
@@ -83,6 +88,8 @@ type ClosureLiveProgress = {
   lastError?: string;
   /** 最近一轮扫描到的测试文件 */
   lastGeneratedTests?: string[];
+  /** 最近一次升级事件（gap_escalated：targetId + 原因），供详情页展示 */
+  lastEscalation?: { targetId: string; reason: string };
 };
 
 // ─── 报告导出（Slice 7 / Issue #9） ──────────────────────────────
@@ -117,9 +124,9 @@ interface CoverageStoreState {
   loading: boolean;
   importing: boolean;
 
-  /** 当前 UI 视图：树表格 / 仪表盘 */
-  view: 'tree-table' | 'dashboard';
-  setView: (view: 'tree-table' | 'dashboard') => void;
+  /** 当前 UI 视图：树表格 / 仪表盘 / 闭环详情（Issue 06） */
+  view: 'tree-table' | 'dashboard' | 'closure-detail';
+  setView: (view: 'tree-table' | 'dashboard' | 'closure-detail') => void;
 
   // ─── Closure 相关状态（Slice 6b） ────────────────────────────
   /** 所有 Closure Session 列表 */
@@ -222,6 +229,8 @@ interface CoverageStoreState {
     maxRounds?: number,
   ) => Promise<string | null>;
   abortClosure: (projectId: string, closureId: string) => Promise<void>;
+  /** 单独中止一个 target（Issue 06）：中止即转人工（escalated），不影响其他 target */
+  abortClosureTarget: (projectId: string, closureId: string, targetId: string) => Promise<void>;
   loadClosures: (projectId: string) => Promise<void>;
   loadClosure: (projectId: string, closureId: string) => Promise<void>;
   setCurrentClosure: (closureId: string | null) => void;
@@ -558,6 +567,17 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
     }
   },
 
+  abortClosureTarget: async (projectId, closureId, targetId) => {
+    try {
+      await trpc.coverage.abortClosureTarget.mutate({ projectId, closureId, targetId });
+      useToastStore.getState().info('Target 已中止，转为人工处理');
+      // 刷新当前 closure（该 target 将在检查点后变为 escalated）
+      await get().loadClosure(projectId, closureId);
+    } catch (err) {
+      useToastStore.getState().error('中止 Target 失败', err instanceof Error ? err.message : String(err));
+    }
+  },
+
   loadClosures: async (projectId) => {
     try {
       const closures = await trpc.coverage.listClosures.query({ projectId });
@@ -649,10 +669,23 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
           live.agentPhase = undefined;
           break;
         case 'closure:gap_closed':
-        case 'closure:gap_escalated':
           live.activeTargetId = undefined;
           live.activeRound = undefined;
           live.agentPhase = undefined;
+          break;
+        case 'closure:gap_escalated':
+          // 记录升级原因（Issue 06：详情页展示 escalationReason / AI triage 前态）
+          live.lastEscalation = {
+            targetId: typeof event.targetId === 'string' ? event.targetId : '',
+            reason: typeof event.reason === 'string' ? event.reason : '',
+          };
+          live.activeTargetId = undefined;
+          live.activeRound = undefined;
+          live.agentPhase = undefined;
+          break;
+        case 'closure:exclusion_suggested':
+          // AI 建议已持久化为 pending（工单 07）——审批面板数据由
+          // ExclusionApprovalPanel 自行拉取，live 状态无变化；下方 loadClosure 兜底刷新
           break;
         case 'closure:gap_failed':
           live.lastError = typeof event.error === 'string' ? event.error : 'Target 失败';

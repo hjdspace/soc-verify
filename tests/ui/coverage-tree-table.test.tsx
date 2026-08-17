@@ -1,9 +1,27 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CoverageTreeTable } from '@renderer/components/coverage/CoverageTreeTable';
 import type { CoverageData, CoverageMetric, CoverageTriplet } from '@shared/types';
 import { COVERAGE_METRICS, NA_TRIPLET } from '@shared/types';
+
+// ─── Store mock（Issue 06：组件引入 AI 收敛入口所需的 store 字段） ──
+
+vi.mock('@renderer/stores/coverage', () => ({
+  useCoverageStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
+    selector({
+      startClosure: vi.fn().mockResolvedValue('closure_new'),
+      setView: vi.fn(),
+      currentSessionId: 'test-session',
+    }),
+  ),
+}));
+
+vi.mock('@renderer/stores/project', () => ({
+  useProjectStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
+    selector({ currentProjectId: 'proj-1' }),
+  ),
+}));
 
 // ─── Mock 数据 ───────────────────────────────────────────────────
 
