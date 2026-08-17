@@ -501,6 +501,36 @@ export class CoverageManager {
   }
 
   /**
+   * 将 CoverageData 固化为新的 Coverage Merge Session（PRD Issue #05 决策）。
+   *
+   * 闭环结束后，最后一轮 Recovery 产生的 CoverageData 通过此方法注册为常规 Merge Session，
+   * 进入趋势跟踪。与 importCoverage 不同，此方法不执行 EDA 命令和解析——
+   * 数据已由 Recovery 流程生成并缓存，仅需追加 session 元数据。
+   *
+   * @param data 已缓存的 CoverageData（Recovery 产物）
+   * @param reportDir Recovery 报告目录
+   * @param covMergeDir 基线 cov_merge 目录
+   * @param edaTool EDA 工具标识
+   * @returns 新注册的 CoverageMergeSession
+   */
+  async registerMergeSession(
+    data: CoverageData,
+    reportDir: string,
+    covMergeDir: string,
+    edaTool: EdaToolConfig['tool'],
+  ): Promise<CoverageMergeSession> {
+    const session: CoverageMergeSession = {
+      sessionId: data.sessionId,
+      covMergeDir,
+      edaTool,
+      createdAt: Date.now(),
+      reportDir,
+    };
+    await this.appendSession(session);
+    return session;
+  }
+
+  /**
    * 返回扁平覆盖率摘要（root 节点 8 metric 百分比）。
    * sessionId 缺省时使用最近一个 session。用于仪表盘等简单消费方。
    */

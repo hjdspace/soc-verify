@@ -60,7 +60,7 @@ export type CommandRunner = (
  */
 const DEFAULT_STDOUT_TRUNCATE = 1 * 1024 * 1024; // 1MB — 日志展示用
 
-const defaultRunner: CommandRunner = async (command, options) => {
+export const defaultRunner: CommandRunner = async (command, options) => {
   return new Promise((resolvePromise) => {
     // 使用 shell: true 以支持包含管道、引号的复杂命令
     const child = spawn(command, {

@@ -781,6 +781,17 @@ export const coverageRouter = t.router({
       const simulationAdapter = new PluginBackedSimulation(registry);
       const coverageAdapter = new PluginBackedCoverage(project.rootPath, registry);
 
+      // 2b. 加载 EDA 配置与基线 VDB 目录（用于 Coverage Recovery）
+      const edaConfig = await loadEdaConfig(project.rootPath);
+      let baselineVdbDir: string | undefined;
+      if (edaConfig) {
+        const sessions = await coverageManager.listSessions();
+        const mergeSession = sessions.find((s) => s.sessionId === input.sessionId);
+        if (mergeSession) {
+          baselineVdbDir = mergeSession.covMergeDir;
+        }
+      }
+
       // 3. 加载凭据
       const agentEnv = await credentialManager.buildEnvForAgent();
       const defaultCred = await credentialManager.getDefaultCredential();
@@ -804,6 +815,8 @@ export const coverageRouter = t.router({
         apiKey,
         baseUrl,
         emit: emitClosureEvent,
+        baselineVdbDir,
+        edaConfig: edaConfig ?? undefined,
       });
       orchestrators.set(input.projectId, orchestrator);
 

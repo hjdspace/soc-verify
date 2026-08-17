@@ -16,6 +16,10 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { isTargetMet } from '../../src/main/coverage/closure-manager';
 import { ClosureOrchestrator, type ClosureEvent } from '../../src/main/coverage/closure-orchestrator';
 import type {
   ClosureSession,
@@ -37,8 +41,11 @@ import type {
   CoverageDelta,
   CoverageMetric,
   CoverageNode,
+  CoverageData,
+  EdaToolConfig,
 } from '@shared/types';
-import { COVERAGE_METRICS } from '@shared/types';
+import { COVERAGE_METRICS, DEFAULT_COVERAGE_TARGETS } from '@shared/types';
+import type { CommandRunner, CommandResult } from '../../src/main/coverage/coverage-report-generator';
 
 // ─── Mock 数据辅助 ──────────────────────────────────────────────
 
@@ -131,8 +138,13 @@ function createMockSessionManager(
   return mgr;
 }
 
-/** 创建 mock CoverageManager */
-function createMockCoverageManager(): CoverageManager {
+/** 创建 mock CoverageManager
+ * moduleMetrics 可传入自定义模块 metric 值，控制 getTargetCoverageSnapshot 的返回值
+ */
+function createMockCoverageManager(moduleMetrics?: {
+  cpu_core?: Partial<Record<CoverageMetric, number>>;
+  memory_ctrl?: Partial<Record<CoverageMetric, number>>;
+}): CoverageManager {
   // 样例树：与 SAMPLE_GAPS / MULTI_GAPS 的模块对应
   const na = (): { percentage: null; covered: null; total: null } => ({
     percentage: null,
@@ -152,8 +164,8 @@ function createMockCoverageManager(): CoverageManager {
     depth: 0,
     metrics: mkMetrics({}),
     children: [
-      { name: 'cpu_core', path: 'top/cpu_core', depth: 1, metrics: mkMetrics({ line: 80 }), children: [] },
-      { name: 'memory_ctrl', path: 'top/memory_ctrl', depth: 1, metrics: mkMetrics({ toggle: 75 }), children: [] },
+      { name: 'cpu_core', path: 'top/cpu_core', depth: 1, metrics: mkMetrics(moduleMetrics?.cpu_core ?? { line: 80 }), children: [] },
+      { name: 'memory_ctrl', path: 'top/memory_ctrl', depth: 1, metrics: mkMetrics(moduleMetrics?.memory_ctrl ?? { toggle: 75 }), children: [] },
     ],
   };
   return {
@@ -288,8 +300,14 @@ function createInMemoryClosureManager(gapPool: CoverageGap[]): ClosureManager {
       iteration.deltaAfter = result.deltaAfter;
       iteration.deltas = result.deltas;
       iteration.status = 'completed';
-      // 使用 mgr.shouldEscalate 而非独立函数，以便 vi.spyOn 可以拦截
-      if (mgr.shouldEscalate(target, session.escalationThreshold)) {
+      // 达标判定优先：模块全部 metric 达到 Coverage Target → closed
+      // 与真实 ClosureManager.completeIteration 行为一致（ADR 0025 决策 2）
+      if (
+        result.coverage &&
+        isTargetMet(target, result.coverage.metrics, result.coverage.targets)
+      ) {
+        target.status = 'closed';
+      } else if (mgr.shouldEscalate(target, session.escalationThreshold)) {
         target.status = 'escalated';
         target.escalationReason =
           `连续 ${session.escalationThreshold} 轮 overall delta < ${ESCALATION_DELTA_THRESHOLD}%`;
@@ -376,6 +394,12 @@ function setupOrchestrator(
     maxRounds?: number;
     autoEmit?: boolean;
     emitDelay?: number;
+    /** 注入 Recovery 配置（baselineVdbDir + edaConfig + recoveryRunner）后，闭环走 Recovery 路径 */
+    withRecovery?: boolean;
+    /** Recovery runner 返回的覆盖率数据（withRecovery=true 时生效） */
+    recoveryCoveragePct?: number;
+    /** 模块 metric 是否已达标（true=getTargetCoverageSnapshot 返回达标值→gap 关闭） */
+    coverageMet?: boolean;
   } = {},
 ): SetupResult {
   const events: ClosureEvent[] = [];
@@ -399,20 +423,103 @@ function setupOrchestrator(
     opts.autoEmit ?? true,
     opts.emitDelay ?? 50,
   );
-  const coverageManager = createMockCoverageManager();
+  // 模块 metric 默认已达标（line=96 >= 95, toggle=86 >= 85）
+  // → completeIteration 的 isTargetMet 判定通过 → gap 关闭
+  // 需要"不关闭"的测试可传 coverageMet=false
+  const coverageMet = opts.coverageMet ?? true;
+  const coverageManager = createMockCoverageManager(
+    coverageMet
+      ? { cpu_core: { line: 96 }, memory_ctrl: { toggle: 86 } }
+      : { cpu_core: { line: 80 }, memory_ctrl: { toggle: 75 } },
+  );
   const closureManager = createInMemoryClosureManager(gaps);
 
-  const orchestrator = new ClosureOrchestrator({
+  // Recovery 配置注入
+  const tmpDir = mkdtempSync(join(tmpdir(), 'closure-recovery-'));
+  const baselineVdbDir = join(tmpDir, 'cov_merge');
+  mkdirSync(baselineVdbDir, { recursive: true });
+
+  const edaConfig: EdaToolConfig = {
+    tool: 'vcs-urg',
+    covMergeDir: 'cov_merge',
+    summaryCommand: 'urg -full64 -dir {covMergeDir} -xml_verbose -format text -show summary -report {reportDir}',
+    detailCommand: 'urg -full64 -dir {covMergeDir} -format text -report {reportDir}/detail',
+    gradeCommand: 'urg -full64 -dir {covMergeDir} -grade testfile -format text -report {reportDir}/grade',
+    execBackend: 'direct',
+  };
+
+  const recoveryPct = opts.recoveryCoveragePct ?? 82;
+  const recoveryRunner: CommandRunner = vi.fn(async (): Promise<CommandResult> => ({
+    exitCode: 0,
+    stdout: '',
+    stderr: '',
+  }));
+
+  // Recovery 后的 CoverageData（coverageAdapter.parse 返回）
+  const triplet = { percentage: recoveryPct, covered: Math.round(recoveryPct * 10), total: 1000 };
+  const recoveryMetrics = {} as CoverageNode['metrics'];
+  for (const m of COVERAGE_METRICS) {
+    recoveryMetrics[m] = triplet;
+  }
+  const recoveryData: CoverageData = {
+    sessionId: 'merge-1',
+    source: { covMergeDir: baselineVdbDir, edaTool: 'vcs-urg', reportGeneratedAt: Date.now() },
+    root: {
+      name: 'top',
+      path: 'top',
+      depth: 0,
+      metrics: recoveryMetrics,
+      children: [
+        { name: 'cpu_core', path: 'top/cpu_core', depth: 1, metrics: recoveryMetrics, children: [] },
+        { name: 'memory_ctrl', path: 'top/memory_ctrl', depth: 1, metrics: recoveryMetrics, children: [] },
+      ],
+    },
+    targets: { ...DEFAULT_COVERAGE_TARGETS },
+    summaryOnly: true,
+  };
+
+  const recoveryAdapter = {
+    hasParser: () => true,
+    parse: vi.fn(async () => ({
+      data: recoveryData,
+      jsonStr: JSON.stringify(recoveryData),
+    })),
+  } as unknown as PluginBackedCoverage;
+
+  // 覆盖 coverageManager.cache 方法（persistRecoveryResult 调用）
+  const mockCache = vi.fn().mockResolvedValue(undefined);
+  (coverageManager as unknown as { cache: ReturnType<typeof vi.fn> }).cache = mockCache;
+
+  // 覆盖 coverageManager.registerMergeSession 方法（finalizeRecovery 调用）
+  const mockRegisterMergeSession = vi.fn(async (data: CoverageData) => ({
+    sessionId: data.sessionId,
+    covMergeDir: baselineVdbDir,
+    edaTool: edaConfig.tool,
+    createdAt: Date.now(),
+    reportDir: '',
+  }));
+  (coverageManager as unknown as { registerMergeSession: ReturnType<typeof vi.fn> }).registerMergeSession =
+    mockRegisterMergeSession;
+
+  const orchestratorOpts: ConstructorParameters<typeof ClosureOrchestrator>[0] = {
     sessionManager,
     coverageManager,
     closureManager,
     projectId: 'test-project',
     discovery: {} as PluginBackedDiscovery,
     simulationAdapter: {} as PluginBackedSimulation,
-    coverageAdapter: {} as PluginBackedCoverage,
+    coverageAdapter: recoveryAdapter,
     agentEnv: {},
     emit,
-  });
+  };
+
+  if (opts.withRecovery) {
+    orchestratorOpts.baselineVdbDir = baselineVdbDir;
+    orchestratorOpts.edaConfig = edaConfig;
+    orchestratorOpts.recoveryRunner = recoveryRunner;
+  }
+
+  const orchestrator = new ClosureOrchestrator(orchestratorOpts);
 
   void opts.maxRounds;
 
@@ -423,7 +530,9 @@ function setupOrchestrator(
     coverageManager,
     events,
     donePromise,
-    cleanup: () => {},
+    cleanup: () => {
+      rmSync(tmpDir, { recursive: true });
+    },
   };
 }
 
@@ -474,7 +583,7 @@ describe('ClosureOrchestrator', () => {
 
   describe('5 轮循环逻辑', () => {
     it('每轮执行 startIteration → prompt → completeIteration，达到 maxRounds 后升级', async () => {
-      const setup = setupOrchestrator(SAMPLE_GAPS, { maxRounds: 5, emitDelay: 30 });
+      const setup = setupOrchestrator(SAMPLE_GAPS, { maxRounds: 5, emitDelay: 30, coverageMet: false });
       try {
         // 抑制 shouldEscalate，确保 5 轮都能跑完（不被连续低 delta 升级打断）
         vi.spyOn(setup.closureManager, 'shouldEscalate').mockReturnValue(false);
@@ -557,7 +666,7 @@ describe('ClosureOrchestrator', () => {
 
   describe('升级判定', () => {
     it('连续 2 轮 delta < 1% 触发升级', async () => {
-      const setup = setupOrchestrator(SAMPLE_GAPS, { emitDelay: 30 });
+      const setup = setupOrchestrator(SAMPLE_GAPS, { emitDelay: 30, coverageMet: false });
       try {
         // Round 1: delta=0.5%, Round 2: delta=0.3% → 连续 2 轮 < 1% → 升级
         setOverviewSequence(setup.coverageManager, [
@@ -596,8 +705,8 @@ describe('ClosureOrchestrator', () => {
     });
   });
 
-  describe('Delta Validation Phase 1', () => {
-    it('deltaOverall >= 1% 时关闭 Gap（数字上升即有效）', async () => {
+  describe('达标判定与迭代关闭', () => {
+    it('metric 达标时关闭 Gap（isTargetMet 判定）', async () => {
       const setup = setupOrchestrator(SAMPLE_GAPS, { emitDelay: 30 });
       try {
         // Round 1: delta=1.5% → >= 1% → 关闭
@@ -647,19 +756,15 @@ describe('ClosureOrchestrator', () => {
       }
     });
 
-    it('deltaOverall < 1% 时不关闭 Gap，继续迭代', async () => {
-      const setup = setupOrchestrator(SAMPLE_GAPS, { emitDelay: 30 });
+    it('deltaOverall < 1% 且 metric 未达标时不关闭 Gap，连续 2 轮后升级', async () => {
+      const setup = setupOrchestrator(SAMPLE_GAPS, { emitDelay: 30, coverageMet: false });
       try {
-        // Round 1: delta=0.5% → 不关闭，继续
-        // Round 2: delta=1.5% → >= 1% → 关闭
+        // Round 1: delta=0.5% → 不关闭（metric 未达标 + delta < 1%）
+        // Round 2: delta=0.3% → 连续 2 轮 < 1% → 升级
         setOverviewSequence(setup.coverageManager, [
-          80.0, 80.5, // Round 1: delta=0.5 (不关闭)
-          80.5, 82.0, // Round 2: delta=1.5 (关闭)
+          80.0, 80.5, // Round 1: delta=0.5
+          80.5, 80.8, // Round 2: delta=0.3 → shouldEscalate=true
         ]);
-
-        // 抑制 shouldEscalate（因为 Round 1 delta < 1%，Round 2 不会连续 2 轮低 delta）
-        // 实际上 shouldEscalate 检查最近 2 轮都 < 1%，Round 2 delta=1.5 所以不会升级
-        // 但为了确保不被升级干扰，这里不 mock shouldEscalate
 
         const session = await setup.closureManager.startClosure({
           sessionId: 'merge-1',
@@ -669,27 +774,27 @@ describe('ClosureOrchestrator', () => {
         await setup.orchestrator.startClosure(session);
         await setup.donePromise;
 
-        // 验证：2 轮迭代
+        // 验证：2 轮迭代后升级（连续 2 轮 delta < 1%）
         const iterations = setup.events.filter(
           (e) => e.type === 'closure:iteration_done',
         );
         expect(iterations).toHaveLength(2);
 
-        // 验证：gap 在第 2 轮关闭
+        // 验证：无 gap_closed（metric 未达标，从未关闭）
         const closed = setup.events.find(
           (e) => e.type === 'closure:gap_closed',
         );
-        expect(closed).toBeDefined();
+        expect(closed).toBeUndefined();
 
-        // 验证：无升级
+        // 验证：升级事件
         const escalated = setup.events.find(
           (e) => e.type === 'closure:gap_escalated',
         );
-        expect(escalated).toBeUndefined();
+        expect(escalated).toBeDefined();
 
-        // 验证：gap 状态为 closed
+        // 验证：gap 状态为 escalated
         const finalSession = await setup.closureManager.getClosure(session.id);
-        expect(finalSession!.targets[0].status).toBe('closed');
+        expect(finalSession!.targets[0].status).toBe('escalated');
         expect(finalSession!.targets[0].iterations).toHaveLength(2);
       } finally {
         setup.cleanup();
@@ -916,6 +1021,354 @@ describe('ClosureOrchestrator', () => {
         expect(
           Array.isArray((scanned as { files: string[] }).files),
         ).toBe(true);
+      } finally {
+        setup.cleanup();
+      }
+    });
+  });
+
+  // ─── Recovery 集成测试（Issue #03） ────────────────────────────
+
+  describe('Coverage Recovery 集成', () => {
+    it('Recovery 注入后，事件序列包含 recovery_started → recovery_done', async () => {
+      const setup = setupOrchestrator(SAMPLE_GAPS, {
+        emitDelay: 30,
+        withRecovery: true,
+        recoveryCoveragePct: 82,
+      });
+      try {
+        // deltaBefore=80, Recovery 后=82 → deltaOverall=2 >= 1% → gap 关闭
+        setOverviewSequence(setup.coverageManager, [80.0]);
+
+        const session = await setup.closureManager.startClosure({
+          sessionId: 'merge-1',
+          maxRounds: 5,
+        });
+
+        await setup.orchestrator.startClosure(session);
+        await setup.donePromise;
+
+        // 验证事件序列包含 recovery_started
+        const recoveryStarted = setup.events.find(
+          (e) => e.type === 'closure:recovery_started',
+        );
+        expect(recoveryStarted).toBeDefined();
+
+        // 验证 recovery_done 事件存在，且 deltaOverall=2
+        const recoveryDone = setup.events.find(
+          (e) => e.type === 'closure:recovery_done',
+        );
+        expect(recoveryDone).toBeDefined();
+        expect((recoveryDone as { deltaOverall: number }).deltaOverall).toBe(2);
+
+        // 验证：gap 在第 1 轮关闭（delta >= 1%）
+        const closed = setup.events.find(
+          (e) => e.type === 'closure:gap_closed',
+        );
+        expect(closed).toBeDefined();
+
+        // 验证事件顺序：recovery_started 在 recovery_done 之前，recovery_done 在 iteration_done 之前
+        const recoveryStartedIdx = setup.events.findIndex(
+          (e) => e.type === 'closure:recovery_started',
+        );
+        const recoveryDoneIdx = setup.events.findIndex(
+          (e) => e.type === 'closure:recovery_done',
+        );
+        const iterationDoneIdx = setup.events.findIndex(
+          (e) => e.type === 'closure:iteration_done',
+        );
+        expect(recoveryStartedIdx).toBeGreaterThan(-1);
+        expect(recoveryDoneIdx).toBeGreaterThan(recoveryStartedIdx);
+        expect(iterationDoneIdx).toBeGreaterThan(recoveryDoneIdx);
+      } finally {
+        setup.cleanup();
+      }
+    });
+
+    it('Recovery 失败时发出 recovery_failed 事件并标记 target 失败', async () => {
+      const setup = setupOrchestrator(SAMPLE_GAPS, {
+        emitDelay: 30,
+        withRecovery: true,
+      });
+      try {
+        // 让 recoveryRunner 返回失败
+        const runner = vi.fn(async (): Promise<CommandResult> => ({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'urg: error: cannot open vdb',
+        }));
+        // 覆盖 orchestrator 的 recoveryRunner（通过重新 setup）
+        // 由于 setupOrchestrator 内部已注入 recoveryRunner，这里通过闭包无法直接覆盖
+        // 改为直接测试 setupOrchestrator 中注入的 runner 的 mock
+        // 实际上，setupOrchestrator 内的 runner 默认返回 exitCode=0
+        // 要测试失败场景，需要手动 mock runner 返回失败
+        // 这里我们通过 mockImplementation 覆盖
+
+        // 获取注入的 recoveryRunner 并覆盖
+        const orchestratorOpts = (setup.orchestrator as unknown as {
+          opts: { recoveryRunner?: CommandRunner };
+        }).opts;
+        if (orchestratorOpts?.recoveryRunner) {
+          (orchestratorOpts.recoveryRunner as unknown as ReturnType<typeof vi.fn>)
+            .mockImplementation(async () => ({
+              exitCode: 1,
+              stdout: '',
+              stderr: 'urg: error: cannot open vdb',
+            }));
+        }
+
+        setOverviewSequence(setup.coverageManager, [80.0]);
+
+        const session = await setup.closureManager.startClosure({
+          sessionId: 'merge-1',
+          maxRounds: 5,
+        });
+
+        await setup.orchestrator.startClosure(session);
+        await setup.donePromise;
+
+        // 验证 recovery_failed 事件
+        const recoveryFailed = setup.events.find(
+          (e) => e.type === 'closure:recovery_failed',
+        );
+        expect(recoveryFailed).toBeDefined();
+        expect((recoveryFailed as { error: string }).error).toContain('urg');
+
+        // 验证 gap_failed 事件
+        const gapFailed = setup.events.find(
+          (e) => e.type === 'closure:gap_failed',
+        );
+        expect(gapFailed).toBeDefined();
+
+        // 验证 target 状态为 failed
+        const finalSession = await setup.closureManager.getClosure(session.id);
+        expect(finalSession!.targets[0].status).toBe('failed');
+
+        // 不使用 runner 变量以避免 lint 警告
+        void runner;
+      } finally {
+        setup.cleanup();
+      }
+    });
+
+    it('无 Recovery 配置时走降级路径（无 recovery 事件，delta=0）', async () => {
+      const setup = setupOrchestrator(SAMPLE_GAPS, {
+        emitDelay: 30,
+        withRecovery: false,
+      });
+      try {
+        // 降级路径：delta 恒为零
+        setOverviewSequence(setup.coverageManager, [80.0, 80.0]);
+
+        const session = await setup.closureManager.startClosure({
+          sessionId: 'merge-1',
+          maxRounds: 5,
+        });
+
+        await setup.orchestrator.startClosure(session);
+        await setup.donePromise;
+
+        // 验证：无 recovery_started 事件
+        const recoveryStarted = setup.events.find(
+          (e) => e.type === 'closure:recovery_started',
+        );
+        expect(recoveryStarted).toBeUndefined();
+
+        // 验证：无 recovery_done 事件
+        const recoveryDone = setup.events.find(
+          (e) => e.type === 'closure:recovery_done',
+        );
+        expect(recoveryDone).toBeUndefined();
+
+        // 验证：iteration_done 的 deltaOverall=0（降级路径 delta 恒为零）
+        const iterationDone = setup.events.find(
+          (e) => e.type === 'closure:iteration_done',
+        );
+        expect(iterationDone).toBeDefined();
+        expect((iterationDone as { deltaOverall: number }).deltaOverall).toBe(0);
+      } finally {
+        setup.cleanup();
+      }
+    });
+
+    it('闭环完成后发出 closure:finalized 事件，将最终 Recovery 报告固化为 Merge Session', async () => {
+      const setup = setupOrchestrator(SAMPLE_GAPS, {
+        emitDelay: 30,
+        withRecovery: true,
+        recoveryCoveragePct: 96, // Recovery 后 line=96 >= 95 target → 达标关闭
+      });
+      try {
+        setOverviewSequence(setup.coverageManager, [80.0]);
+
+        const session = await setup.closureManager.startClosure({
+          sessionId: 'merge-1',
+          maxRounds: 5,
+        });
+
+        await setup.orchestrator.startClosure(session);
+        await setup.donePromise;
+
+        // 验证：closure:finalized 事件存在
+        const finalized = setup.events.find(
+          (e) => e.type === 'closure:finalized',
+        );
+        expect(finalized).toBeDefined();
+        expect((finalized as { mergeSessionId: string }).mergeSessionId).toBe('merge-1');
+
+        // 验证：registerMergeSession 被调用
+        const mockRegister = (setup.coverageManager as unknown as {
+          registerMergeSession: ReturnType<typeof vi.fn>;
+        }).registerMergeSession;
+        expect(mockRegister).toHaveBeenCalledTimes(1);
+
+        // 验证事件顺序：finalized 在 completed 之前
+        const finalizedIdx = setup.events.findIndex(
+          (e) => e.type === 'closure:finalized',
+        );
+        const completedIdx = setup.events.findIndex(
+          (e) => e.type === 'closure:completed',
+        );
+        expect(finalizedIdx).toBeGreaterThan(-1);
+        expect(completedIdx).toBeGreaterThan(finalizedIdx);
+      } finally {
+        setup.cleanup();
+      }
+    });
+
+    it('Recovery 路径下多 Target 并行，全部达标后发出 closure:completed', async () => {
+      const setup = setupOrchestrator(MULTI_GAPS, {
+        emitDelay: 30,
+        withRecovery: true,
+        recoveryCoveragePct: 96, // 两模块都达标
+      });
+      try {
+        setOverviewSequence(setup.coverageManager, [80.0]);
+
+        const session = await setup.closureManager.startClosure({
+          sessionId: 'merge-1',
+          maxRounds: 5,
+        });
+
+        await setup.orchestrator.startClosure(session);
+        await setup.donePromise;
+
+        // 验证：2 个 gap_closed 事件
+        const closedEvents = setup.events.filter(
+          (e) => e.type === 'closure:gap_closed',
+        );
+        expect(closedEvents).toHaveLength(2);
+
+        // 验证：2 个 recovery_done 事件（每个 target 各一次）
+        const recoveryDoneEvents = setup.events.filter(
+          (e) => e.type === 'closure:recovery_done',
+        );
+        expect(recoveryDoneEvents).toHaveLength(2);
+
+        // 验证：closure:completed
+        const completed = setup.events.find(
+          (e) => e.type === 'closure:completed',
+        );
+        expect(completed).toBeDefined();
+
+        // 验证：closure:finalized（只需一次固化，最后一个 Recovery 结果）
+        const finalized = setup.events.find(
+          (e) => e.type === 'closure:finalized',
+        );
+        expect(finalized).toBeDefined();
+
+        // 验证：两个 target 都为 closed
+        const finalSession = await setup.closureManager.getClosure(session.id);
+        expect(finalSession!.status).toBe('completed');
+        expect(finalSession!.targets.every((t) => t.status === 'closed')).toBe(true);
+      } finally {
+        setup.cleanup();
+      }
+    });
+
+    it('Recovery 失败时其余 target 不受影响（fail-closed 隔离）', async () => {
+      // 两个 target：第一个 Recovery 失败，第二个正常
+      const setup = setupOrchestrator(MULTI_GAPS, {
+        emitDelay: 30,
+        withRecovery: true,
+        recoveryCoveragePct: 96,
+      });
+      try {
+        // 覆盖 recoveryRunner：第一次调用失败，第二次成功
+        let recoveryCallCount = 0;
+        const orchestratorOpts = (setup.orchestrator as unknown as {
+          opts: { recoveryRunner?: CommandRunner };
+        }).opts;
+        if (orchestratorOpts?.recoveryRunner) {
+          (orchestratorOpts.recoveryRunner as unknown as ReturnType<typeof vi.fn>)
+            .mockImplementation(async (): Promise<CommandResult> => {
+              recoveryCallCount++;
+              if (recoveryCallCount === 1) {
+                return { exitCode: 1, stdout: '', stderr: 'urg: error: vdb not found' };
+              }
+              return { exitCode: 0, stdout: '', stderr: '' };
+            });
+        }
+
+        setOverviewSequence(setup.coverageManager, [80.0]);
+
+        const session = await setup.closureManager.startClosure({
+          sessionId: 'merge-1',
+          maxRounds: 5,
+        });
+
+        await setup.orchestrator.startClosure(session);
+        await setup.donePromise;
+
+        // 验证：1 个 recovery_failed 事件
+        const recoveryFailed = setup.events.filter(
+          (e) => e.type === 'closure:recovery_failed',
+        );
+        expect(recoveryFailed.length).toBeGreaterThanOrEqual(1);
+
+        // 验证：1 个 gap_failed 事件（Recovery 失败的 target）
+        const gapFailed = setup.events.filter(
+          (e) => e.type === 'closure:gap_failed',
+        );
+        expect(gapFailed.length).toBeGreaterThanOrEqual(1);
+
+        // 验证：至少 1 个 gap_closed 事件（另一个 target 正常关闭）
+        const gapClosed = setup.events.filter(
+          (e) => e.type === 'closure:gap_closed',
+        );
+        expect(gapClosed.length).toBeGreaterThanOrEqual(1);
+
+        // 验证：closure:completed（所有 target 都进入终态）
+        const completed = setup.events.find(
+          (e) => e.type === 'closure:completed',
+        );
+        expect(completed).toBeDefined();
+      } finally {
+        setup.cleanup();
+      }
+    });
+
+    it('降级路径（无 Recovery）不发出 closure:finalized 事件', async () => {
+      const setup = setupOrchestrator(SAMPLE_GAPS, {
+        emitDelay: 30,
+        withRecovery: false,
+        coverageMet: true,
+      });
+      try {
+        setOverviewSequence(setup.coverageManager, [80.0, 82.0]);
+
+        const session = await setup.closureManager.startClosure({
+          sessionId: 'merge-1',
+          maxRounds: 5,
+        });
+
+        await setup.orchestrator.startClosure(session);
+        await setup.donePromise;
+
+        // 验证：无 closure:finalized 事件（无 Recovery 结果，跳过固化）
+        const finalized = setup.events.find(
+          (e) => e.type === 'closure:finalized',
+        );
+        expect(finalized).toBeUndefined();
       } finally {
         setup.cleanup();
       }

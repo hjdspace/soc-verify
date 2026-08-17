@@ -76,7 +76,7 @@ type ClosureLiveProgress = {
   activeRound?: number;
   /** 最近一次 agent 状态 */
   agentSessionId?: string;
-  agentPhase?: 'prompting' | 'ended';
+  agentPhase?: 'prompting' | 'ended' | 'recovering';
   /** 最近一轮 delta */
   lastDeltaOverall?: number;
   /** 最近一次错误（gap_failed / closure:error） */
@@ -633,6 +633,17 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
         case 'closure:tests_scanned':
           live.lastGeneratedTests = Array.isArray(event.files) ? (event.files as string[]) : live.lastGeneratedTests;
           break;
+        case 'closure:recovery_started':
+          live.agentPhase = 'recovering';
+          break;
+        case 'closure:recovery_done':
+          live.lastDeltaOverall = typeof event.deltaOverall === 'number' ? event.deltaOverall : live.lastDeltaOverall;
+          live.agentPhase = undefined;
+          break;
+        case 'closure:recovery_failed':
+          live.lastError = typeof event.error === 'string' ? event.error : 'Recovery 失败';
+          live.agentPhase = undefined;
+          break;
         case 'closure:iteration_done':
           live.lastDeltaOverall = typeof event.deltaOverall === 'number' ? event.deltaOverall : live.lastDeltaOverall;
           live.agentPhase = undefined;
@@ -655,6 +666,9 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
           live.activeTargetId = undefined;
           live.activeRound = undefined;
           live.agentPhase = undefined;
+          break;
+        case 'closure:finalized':
+          // 固化完成，mergeSessionId 可用于后续操作（best-effort，不改变 live 状态）
           break;
         case 'closure:error':
           live.running = false;

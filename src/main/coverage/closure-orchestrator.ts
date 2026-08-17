@@ -20,6 +20,9 @@
  *   - closure:agent_prompting { closureId, targetId, round, sessionId }
  *   - closure:agent_ended     { closureId, targetId, round, sessionId }
  *   - closure:tests_scanned   { closureId, targetId, round, files }
+ *   - closure:recovery_started { closureId, targetId, round }
+ *   - closure:recovery_done   { closureId, targetId, round, deltaOverall }
+ *   - closure:recovery_failed { closureId, targetId, round, error }
  *   - closure:iteration_done  { closureId, targetId, round, deltaBefore, deltaAfter }
  *   - closure:gap_closed      { closureId, targetId }
  *   - closure:gap_escalated   { closureId, targetId, reason }
@@ -31,13 +34,15 @@
 
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { CoverageSummary, CoverageDelta, CoverageNode } from '@shared/types';
+import type { CoverageSummary, CoverageDelta, CoverageNode, EdaToolConfig } from '@shared/types';
 import { calculateDelta } from '@shared/types';
 import type { ClosureManager } from './closure-manager';
 import type { ClosureTarget, ClosureSession, TargetCoverageSnapshot } from './closure-manager';
 import type { CoverageManager } from './coverage-manager';
 import type { SessionManagerImpl } from '../agent/session-manager';
 import type { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../plugin-adapters';
+import { executeRecovery, persistRecoveryResult, type RecoveryResult } from './coverage-recovery';
+import type { CommandRunner } from './coverage-report-generator';
 
 /** Closure 事件载荷：所有事件都带 type + closureId，具体字段按 type 不同 */
 export type ClosureEvent =
@@ -46,6 +51,9 @@ export type ClosureEvent =
   | { type: 'closure:agent_prompting'; closureId: string; targetId: string; round: number; sessionId: string }
   | { type: 'closure:agent_ended'; closureId: string; targetId: string; round: number; sessionId: string }
   | { type: 'closure:tests_scanned'; closureId: string; targetId: string; round: number; files: string[] }
+  | { type: 'closure:recovery_started'; closureId: string; targetId: string; round: number }
+  | { type: 'closure:recovery_done'; closureId: string; targetId: string; round: number; deltaOverall: number }
+  | { type: 'closure:recovery_failed'; closureId: string; targetId: string; round: number; error: string }
   | {
       type: 'closure:iteration_done';
       closureId: string;
@@ -59,6 +67,7 @@ export type ClosureEvent =
   | { type: 'closure:gap_escalated'; closureId: string; targetId: string; reason: string }
   | { type: 'closure:gap_failed'; closureId: string; targetId: string; error: string }
   | { type: 'closure:completed'; closureId: string }
+  | { type: 'closure:finalized'; closureId: string; mergeSessionId: string }
   | { type: 'closure:aborted'; closureId: string }
   | { type: 'closure:error'; closureId: string; error: string };
 
@@ -84,6 +93,12 @@ export interface ClosureOrchestratorOptions {
   baseUrl?: string;
   /** 事件回调（注入） */
   emit: ClosureEventEmitter;
+  /** 基线 cov_merge VDB 目录（用于 Coverage Recovery） */
+  baselineVdbDir?: string;
+  /** EDA Tool Configuration（用于 Recovery urg 合并命令构造） */
+  edaConfig?: EdaToolConfig;
+  /** 可选的 CommandRunner（用于 Recovery；测试注入 mock） */
+  recoveryRunner?: CommandRunner;
 }
 
 /** waitForAgentEnd 的超时时间：10 分钟 */
@@ -117,6 +132,8 @@ export class ClosureOrchestrator {
   private abortControllers = new Map<string, AbortController>();
   /** closureId → 正在运行的 Promise（用于 await 完成或 abort 后等待退出） */
   private runningPromises = new Map<string, Promise<void>>();
+  /** closureId → 最后一轮 Recovery 的结果（用于闭环结束后固化为 Merge Session） */
+  private lastRecoveryResults = new Map<string, RecoveryResult>();
 
   constructor(opts: ClosureOrchestratorOptions) {
     this.opts = opts;
@@ -158,6 +175,7 @@ export class ClosureOrchestrator {
     }).finally(() => {
       this.abortControllers.delete(session.id);
       this.runningPromises.delete(session.id);
+      this.lastRecoveryResults.delete(session.id);
     });
 
     this.runningPromises.set(session.id, promise);
@@ -205,6 +223,9 @@ export class ClosureOrchestrator {
 
     // 所有 Target 完成后，检查是否被中止
     if (controller.signal.aborted) return;
+
+    // 固化最终轮 Recovery 报告为新的 Merge Session（PRD Issue #05）
+    await this.finalizeRecovery(session);
 
     // 发出完成事件（closureManager 内部已自动标记 completed）
     this.emit({ type: 'closure:completed', closureId: session.id });
@@ -363,13 +384,81 @@ export class ClosureOrchestrator {
         files: generatedTests,
       });
 
-      // 6. 计算 delta（通过 coverageManager 重新获取覆盖率；
-      //    当前为缓存的 getOverview，工单 05 接 Coverage Recovery 后为真实 re-merge 数据）
-      const deltaAfter = await this.getCoverageSummary(session.sessionId);
+      // 6. Coverage Recovery（ADR 0025 决策 1 + Issue #03）
+      //    每轮迭代 agent_end 后，平台自动合并本轮仿真产生的 VDB 并重新生成报告 → 重新解析
+      //    → 计算真实 Delta。基线 cov_merge VDB 只读。
+      //    Recovery 配置缺失时（baselineVdbDir 或 edaConfig 未注入）走降级路径：
+      //    读取 CoverageManager 缓存的 getOverview（与旧行为一致，delta 恒为零的已知缺陷）。
+      let deltaAfter: CoverageSummary;
+      let deltas: CoverageDelta[];
+
+      if (this.canRunRecovery()) {
+        // 发出 recovery_started 事件
+        this.emit({
+          type: 'closure:recovery_started',
+          closureId: session.id,
+          targetId: target.id,
+          round,
+        });
+
+        try {
+          const recoveryResult = await this.runRecovery(
+            session,
+            currentTarget,
+            round,
+            deltaBefore,
+            roundDir,
+          );
+
+          // Recovery 成功：结果写入 CoverageManager 缓存（get_coverage 可见最新数据）
+          await persistRecoveryResult(this.opts.coverageManager, recoveryResult);
+
+          // 记录最后一轮 Recovery 结果（用于闭环结束后固化为 Merge Session）
+          this.lastRecoveryResults.set(session.id, recoveryResult);
+
+          this.emit({
+            type: 'closure:recovery_done',
+            closureId: session.id,
+            targetId: target.id,
+            round,
+            deltaOverall: recoveryResult.deltaOverall,
+          });
+
+          deltaAfter = recoveryResult.after;
+          deltas = recoveryResult.deltas;
+        } catch (recoveryErr) {
+          const recoveryErrorMsg = recoveryErr instanceof Error ? recoveryErr.message : String(recoveryErr);
+
+          // Recovery 失败：发出 recovery_failed 事件，该 target 本轮标记失败并暂停
+          this.emit({
+            type: 'closure:recovery_failed',
+            closureId: session.id,
+            targetId: target.id,
+            round,
+            error: recoveryErrorMsg,
+          });
+
+          await closureManager.failIteration(session.id, target.id, `recovery failed: ${recoveryErrorMsg}`);
+          await this.safeDestroySession(agentSessionId);
+          if (controller.signal.aborted) return;
+          await closureManager.failTarget(session.id, target.id, `recovery failed: ${recoveryErrorMsg}`);
+          this.emit({
+            type: 'closure:gap_failed',
+            closureId: session.id,
+            targetId: target.id,
+            error: `Coverage Recovery 失败: ${recoveryErrorMsg}`,
+          });
+          return;
+        }
+      } else {
+        // 降级路径：无 Recovery 配置，读取 CoverageManager 缓存
+        // 此时 delta 恒为零（ADR 0025 修复前的已知缺陷），闭环实际不闭合
+        deltaAfter = await this.getCoverageSummary(session.sessionId);
+        deltas = calculateDelta(deltaBefore, deltaAfter);
+      }
 
       // 7. 完成本轮迭代：传入目标模块的缓存覆盖率快照，
       //    closureManager 内部据此做达标判定（isTargetMet）与升级判定
-      const deltas: CoverageDelta[] = calculateDelta(deltaBefore, deltaAfter);
       const coverage = await this.getTargetCoverageSnapshot(session.sessionId, currentTarget.module.path);
       await closureManager.completeIteration(session.id, target.id, {
         generatedTests,
@@ -414,17 +503,8 @@ export class ClosureOrchestrator {
         return;
       }
 
-      // Delta Validation Phase 1 占位判定：若 delta >= 1%（ESCALATION_DELTA_THRESHOLD），
-      // 视为已关闭。精确的模块级达标判定已由 completeIteration 的 coverage 快照完成，
-      // 此占位逻辑在工单 05 接入 Coverage Recovery 后移除。
-      const deltaOverall = deltaAfter.overall - deltaBefore.overall;
-      if (deltaOverall >= 1) {
-        await closureManager.closeTarget(session.id, target.id);
-        this.emit({ type: 'closure:gap_closed', closureId: session.id, targetId: target.id });
-        return;
-      }
-
-      // 否则进入下一轮迭代
+      // 否则进入下一轮迭代（达标判定已由 completeIteration 的 coverage 快照完成，
+      // 不再使用 deltaOverall >= 1% 占位逻辑——Recovery 后 delta 真实可信）
     }
   }
 
@@ -632,6 +712,118 @@ export class ClosureOrchestrator {
   private async getCoverageSummary(sessionId: string): Promise<CoverageSummary> {
     const overview = await this.opts.coverageManager.getOverview(sessionId);
     return overview.summary;
+  }
+
+  /**
+   * 判断是否具备运行 Coverage Recovery 的条件。
+   * 需要：基线 VDB 目录 + EDA 配置 + coverageAdapter + recoveryRunner（或 edaConfig.execBackend 配置）。
+   */
+  private canRunRecovery(): boolean {
+    return !!(
+      this.opts.baselineVdbDir &&
+      this.opts.edaConfig &&
+      this.opts.coverageAdapter
+    );
+  }
+
+  /**
+   * 执行 Coverage Recovery（ADR 0025 决策 1 + Issue #03）。
+   *
+   * 收集本轮仿真产生的 simv.vdb 路径（从 roundDir 扫描 .vdb 目录），
+   * 与基线 cov_merge VDB 合并运行 urg 生成新报告 → 重新解析为 Coverage Tree
+   * → 计算 Delta。基线 cov_merge VDB 只读。
+   *
+   * @param session Closure Session
+   * @param _target 目标 Target
+   * @param round 当前轮次
+   * @param before Recovery 前的覆盖率摘要
+   * @param roundDir 本轮 round 目录（含 AI 生成的测试和仿真产生的 VDB）
+   * @returns Recovery 结果（含 delta）
+   */
+  private async runRecovery(
+    session: ClosureSession,
+    _target: ClosureTarget,
+    round: number,
+    before: CoverageSummary,
+    roundDir: string,
+  ): Promise<RecoveryResult> {
+    const { baselineVdbDir, edaConfig, recoveryRunner, coverageAdapter } = this.opts;
+
+    // 扫描本轮仿真产生的 .vdb 目录
+    const newVdbPaths = await this.scanVdbFiles(roundDir);
+
+    // 构造报告输出目录
+    const reportDir = join(roundDir, 'report');
+
+    // 获取当前生效的 Coverage Target 配置
+    const targets = await this.opts.coverageManager.getTargets(session.sessionId);
+
+    return executeRecovery({
+      projectRoot: this.opts.projectId,
+      baselineVdbDir: baselineVdbDir!,
+      newVdbPaths,
+      edaConfig: edaConfig!,
+      reportDir,
+      sessionId: session.sessionId,
+      targets,
+      before,
+      coverageAdapter: coverageAdapter!,
+      runner: recoveryRunner,
+    });
+  }
+
+  /**
+   * 扫描 round 目录下的 .vdb 目录（本轮仿真产生的覆盖率数据库）。
+   * VCS 仿真通常在 round 目录下生成 simv.vdb / test_xxx.vdb 等。
+   */
+  private async scanVdbFiles(roundDir: string): Promise<string[]> {
+    try {
+      const entries = await readdir(roundDir, { withFileTypes: true });
+      return entries
+        .filter((e) => e.isDirectory() && /\.vdb$/i.test(e.name))
+        .map((e) => join(roundDir, e.name));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * 固化最终轮 Recovery 报告为新的 Coverage Merge Session（PRD Issue #05 决策）。
+   *
+   * 闭环结束后（未被中止且有 Recovery 结果时），将最后一轮 Recovery 的 CoverageData
+   * 注册为常规 CoverageMergeSession，进入趋势跟踪。
+   *
+   * 失败时不阻断闭环完成（best-effort），仅发出不含 mergeSessionId 的事件。
+   */
+  private async finalizeRecovery(session: ClosureSession): Promise<void> {
+    const recoveryResult = this.lastRecoveryResults.get(session.id);
+    if (!recoveryResult) {
+      // 无 Recovery 结果（降级路径或全部 target 在 Recovery 前已终态），跳过固化
+      return;
+    }
+
+    const { baselineVdbDir, edaConfig } = this.opts;
+    if (!baselineVdbDir || !edaConfig) {
+      // Recovery 配置不完整（理论上不会到达此处，因为 Recovery 仅在配置完整时运行）
+      return;
+    }
+
+    try {
+      const mergeSession = await this.opts.coverageManager.registerMergeSession(
+        recoveryResult.data,
+        recoveryResult.reportDir,
+        baselineVdbDir,
+        edaConfig.tool,
+      );
+      this.emit({
+        type: 'closure:finalized',
+        closureId: session.id,
+        mergeSessionId: mergeSession.sessionId,
+      });
+    } catch {
+      // 固化失败不阻断闭环完成（best-effort）
+      // 用户仍可通过 Test Promotion 审阅测试，手动导入覆盖率
+    }
   }
 
   /** 安全销毁会话，吞掉异常 */
