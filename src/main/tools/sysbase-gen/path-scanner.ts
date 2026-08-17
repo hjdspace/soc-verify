@@ -4,7 +4,9 @@
  * Provides:
  *   - resolveProjRtl: resolve $PROJ_RTL from process.env or .socverify/env.json
  *   - inferInstanceName: derive instance name from subsys name (pure string transform)
+ *   - inferTopInstanceName: top-level default instance name is 'dut'
  *   - listRtlFiles: scan $PROJ_RTL/<subsys>/design/rtl/top/ for .v files
+ *   - listTopRtlFiles: scan $PROJ_RTL/top/design/rtl/top/ for .v files
  *   - extractModuleName: regex extract `module <name>` from .v file content
  */
 
@@ -58,6 +60,21 @@ export function inferInstanceName(subsys: string): string {
     : subsys;
   return `u_sys_${prefix}`;
 }
+
+/**
+ * Top-level default instance name.
+ *
+ * Per the Makefile example: `TOP_INST_NAME := dut`.
+ * Top env always uses `dut` as the instance name.
+ */
+export const TOP_INSTANCE_NAME = 'dut';
+
+/**
+ * Top-level default chip name.
+ *
+ * Per the Makefile example: `TOP_NAME := top`.
+ */
+export const TOP_CHIP_NAME = 'top';
 
 /** RTL file entry returned by listRtlFiles. */
 export type RtlFileEntry = {
