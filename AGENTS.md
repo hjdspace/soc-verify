@@ -16,16 +16,18 @@
 
 ## 修改后验证检查
 
-每次修改代码后，依次执行四条命令，全部通过才算完成：
+每次修改代码后，执行**增量验证**，通过即可提交，无需跑全量测试：
 
 ```sh
-npm run build        # 编译（main + preload + renderer）
-npm run typecheck    # 类型检查（tsconfig.node + tsconfig.web）
-npm run test         # Vitest 全部测试
-npm run lint         # ESLint
+npm run typecheck                 # 类型检查（tsconfig.node + tsconfig.web）
+npm run lint                      # ESLint
+npx vitest run tests/<相关目录>     # 仅运行改动相关的测试目录
 ```
 
-任一失败则修复后重新执行全部四条。
+- 测试范围按改动确定：改 `src/main/coverage/` → 跑 `tests/coverage/`；改 `src/renderer/src/components/coverage/` → 跑 `tests/ui/coverage*.test.tsx`，以此类推。
+- 无测试文件的改动可跳过测试步骤，仅跑 typecheck + lint。
+- 任一失败则修复后重新执行这三条。
+- 提交前不再重复执行验证（修改时已验证通过）。
 
 ## 编码规范
 
