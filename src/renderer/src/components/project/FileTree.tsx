@@ -3,6 +3,7 @@ import { ChevronRight, ChevronDown, File, Folder, FolderOpen, FolderOpen as Open
 import type { FileTreeNode } from '@shared/types';
 import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
+import { useProjectStore } from '@renderer/stores/project';
 import { useSessionStore } from '@renderer/stores/session';
 import { useToastStore } from '@renderer/stores/toast';
 
@@ -43,6 +44,7 @@ export function FileTree({ node, onSelectFile, selectedPath, projectRootPath }: 
     y: 0,
     node: null,
   });
+  const projectId = useProjectStore((s) => s.currentProjectId) ?? undefined;
 
   const addContextFile = useSessionStore((s) => s.addContextFile);
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
@@ -126,6 +128,7 @@ export function FileTree({ node, onSelectFile, selectedPath, projectRootPath }: 
         onSelectFile={onSelectFile}
         selectedPath={selectedPath}
         onContextMenu={handleContextMenu}
+        projectId={projectId}
       />
       {contextMenu.visible && contextMenu.node && (
         <div
@@ -177,9 +180,11 @@ interface FileTreeNodeProps {
   onSelectFile: (path: string, name: string) => void;
   selectedPath?: string;
   onContextMenu: (e: React.MouseEvent, node: FileTreeNode) => void;
+  /** Project ID for lazy-loading directory children via tRPC. */
+  projectId?: string;
 }
 
-function FileTreeNode({ node, depth, onSelectFile, selectedPath, onContextMenu }: FileTreeNodeProps) {
+function FileTreeNode({ node, depth, onSelectFile, selectedPath, onContextMenu, projectId }: FileTreeNodeProps) {
   if (node.type === 'file') {
     return (
       <FileTreeItem
@@ -199,6 +204,7 @@ function FileTreeNode({ node, depth, onSelectFile, selectedPath, onContextMenu }
       onSelectFile={onSelectFile}
       selectedPath={selectedPath}
       onContextMenu={onContextMenu}
+      projectId={projectId}
     />
   );
 }
@@ -254,6 +260,8 @@ interface FileTreeDirectoryProps {
   onSelectFile: (path: string, name: string) => void;
   selectedPath?: string;
   onContextMenu: (e: React.MouseEvent, node: FileTreeNode) => void;
+  /** Project ID for lazy-loading directory children via tRPC. */
+  projectId?: string;
 }
 
 const FileTreeDirectory = memo(function FileTreeDirectory({
@@ -262,10 +270,38 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
   onSelectFile,
   selectedPath,
   onContextMenu,
+  projectId,
 }: FileTreeDirectoryProps) {
+  // Root-level directories (depth 0) are expanded by default.
+  // All other directories start collapsed.
   const [expanded, setExpanded] = useState(depth < 1);
 
-  const toggle = useCallback(() => setExpanded((e) => !e), []);
+  // Lazy children state: when node.lazy is true, children are fetched on first expand.
+  // The loaded children replace the empty array from the server.
+  const [lazyChildren, setLazyChildren] = useState<FileTreeNode[] | null>(null);
+  const [loadingChildren, setLoadingChildren] = useState(false);
+
+  const toggle = useCallback(() => {
+    setExpanded((e) => {
+      const next = !e;
+      // If expanding a lazy node that hasn't been loaded yet, fetch children.
+      if (next && node.lazy && !lazyChildren && projectId && !loadingChildren) {
+        setLoadingChildren(true);
+        trpc.project.getDirChildren
+          .query({ projectId, dirPath: node.path })
+          .then((children: FileTreeNode[]) => {
+            setLazyChildren(children);
+          })
+          .catch(() => {
+            setLazyChildren([]);
+          })
+          .finally(() => {
+            setLoadingChildren(false);
+          });
+      }
+      return next;
+    });
+  }, [node.lazy, node.path, lazyChildren, projectId, loadingChildren]);
 
   const handleDragStart = useCallback((e: React.DragEvent) => {
     e.dataTransfer.setData('application/json', JSON.stringify({
@@ -275,6 +311,10 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
     }));
     e.dataTransfer.effectAllowed = 'copy';
   }, [node.path, node.name]);
+
+  // Use lazyChildren if loaded, otherwise fall back to the node's children array.
+  // For lazy nodes that haven't been expanded yet, children is empty (from server).
+  const displayChildren = lazyChildren ?? node.children;
 
   return (
     <div>
@@ -300,10 +340,13 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
           <Folder className="h-3 w-3 shrink-0 text-primary/70" />
         )}
         <span className="truncate font-medium">{node.name}</span>
+        {loadingChildren && (
+          <span className="ml-1 h-2.5 w-2.5 shrink-0 animate-spin rounded-full border border-current border-t-transparent opacity-50" />
+        )}
       </button>
-      {expanded && node.children && (
+      {expanded && displayChildren && (
         <div>
-          {node.children.map((child) => (
+          {displayChildren.map((child) => (
             <FileTreeNode
               key={child.path}
               node={child}
@@ -311,6 +354,7 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
               onSelectFile={onSelectFile}
               selectedPath={selectedPath}
               onContextMenu={onContextMenu}
+              projectId={projectId}
             />
           ))}
         </div>
