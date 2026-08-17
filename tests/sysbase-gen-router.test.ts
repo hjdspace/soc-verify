@@ -9,7 +9,7 @@
  *   - inferInstanceName: pure string transform (subsys → instance name)
  *   - listRtlFiles: scan $PROJ_RTL/<subsys>/design/rtl/top/ for .v files
  *   - extractModuleName: regex extract `module <name>` from .v file content
- *   - getTemplatePath / getTemplatePreview (Issue 3)
+ *   - getTemplatePath (mini only) / getDutSpecGeneratedPreview / getMiniExcelGeneratedPreview (Issue 3)
  *   - inferRalDirs / inferClkDirs (Issue 4)
  *   - generateModIo (Issue 5): spawn perl script, stream output, return result
  */
@@ -259,11 +259,9 @@ describe('sysbase-gen-router', () => {
   // ─── getTemplatePath (Issue 3) ───────────────────────────
 
   describe('getTemplatePath', () => {
-    it('returns absolute path for dut_spec template', async () => {
-      const result = await caller.getTemplatePath({ template: 'dut_spec' });
-      expect(result.path).toContain('docs');
-      expect(result.path).toContain('dut_spec_template.xlsx');
-    });
+    // Note: dut_spec template is now generated on-the-fly via
+    // generateDutSpecTemplate (no static xlsx file). Only mini still
+    // has a static template file in docs/.
 
     it('returns absolute path for mini template', async () => {
       const result = await caller.getTemplatePath({ template: 'mini' });
@@ -362,6 +360,39 @@ describe('sysbase-gen-router', () => {
 
     it('throws BAD_REQUEST for empty subsys', async () => {
       await expect(caller.inferRalDirs({ subsys: '' })).rejects.toThrow();
+    });
+
+    it('collapses sibling for_de/for_dv dirs to their common parent', async () => {
+      // Create: spec/regs_rtl/ANLG_PHY_G0/for_de + for_dv
+      //         spec/regs_rtl/ANLG_PHY_G1/for_de + for_dv
+      // Should collapse to: spec/regs_rtl/ (the parent)
+      const parentDir = join(projRtlDir, 'apcpu_sys', 'design', 'spec', 'regs_rtl');
+      const g0Dir = join(parentDir, 'ANLG_PHY_G0');
+      const g1Dir = join(parentDir, 'ANLG_PHY_G1');
+      mkdirSync(join(g0Dir, 'for_de'), { recursive: true });
+      mkdirSync(join(g0Dir, 'for_dv'), { recursive: true });
+      mkdirSync(join(g1Dir, 'for_de'), { recursive: true });
+      mkdirSync(join(g1Dir, 'for_dv'), { recursive: true });
+
+      const result = await caller.inferRalDirs({ subsys: 'apcpu_sys' });
+
+      // Should contain the parent dir, not the individual subdirs
+      expect(result.dirs).toContain(parentDir);
+      expect(result.dirs).not.toContain(g0Dir);
+      expect(result.dirs).not.toContain(g1Dir);
+    });
+
+    it('keeps single for_de/for_dv dir as-is (no collapse)', async () => {
+      // Only one subdir with for_de/for_dv — should NOT collapse to parent
+      const parentDir = join(projRtlDir, 'apcpu_sys', 'design', 'spec', 'single_parent');
+      const childDir = join(parentDir, 'only_child');
+      mkdirSync(join(childDir, 'for_de'), { recursive: true });
+      mkdirSync(join(childDir, 'for_dv'), { recursive: true });
+
+      const result = await caller.inferRalDirs({ subsys: 'apcpu_sys' });
+
+      expect(result.dirs).toContain(childDir);
+      expect(result.dirs).not.toContain(parentDir);
     });
   });
 
@@ -603,11 +634,15 @@ describe('sysbase-gen-router', () => {
     });
   });
 
-  // ─── getTemplatePreview (Issue 3) ────────────────────────
+  // ─── getDutSpecGeneratedPreview & getMiniExcelGeneratedPreview ─
+  // These replace the old getTemplatePreview tests. dut_spec and mini
+  // templates are now generated on-the-fly from code-defined structures
+  // (dut-spec-template.ts and mini-excel-template.ts), so we test the
+  // generated preview procedures instead of reading static xlsx files.
 
-  describe('getTemplatePreview', () => {
+  describe('getDutSpecGeneratedPreview', () => {
     it('returns sheet names for dut_spec template (Architecture + MemoryMap)', async () => {
-      const result = await caller.getTemplatePreview({ template: 'dut_spec' });
+      const result = await caller.getDutSpecGeneratedPreview();
       expect(result.sheets.length).toBeGreaterThanOrEqual(2);
       const sheetNames = result.sheets.map((s) => s.name);
       expect(sheetNames).toContain('Architecture');
@@ -615,21 +650,33 @@ describe('sysbase-gen-router', () => {
     });
 
     it('returns headers for each sheet in dut_spec template', async () => {
-      const result = await caller.getTemplatePreview({ template: 'dut_spec' });
+      const result = await caller.getDutSpecGeneratedPreview();
       for (const sheet of result.sheets) {
         expect(Array.isArray(sheet.headers)).toBe(true);
+        // Each sheet should have at least one header
+        expect(sheet.headers.length).toBeGreaterThan(0);
       }
     });
+  });
 
-    it('returns at least one sheet for mini template', async () => {
-      const result = await caller.getTemplatePreview({ template: 'mini' });
-      expect(result.sheets.length).toBeGreaterThanOrEqual(1);
+  describe('getMiniExcelGeneratedPreview', () => {
+    it('returns 4 sheets for mini excel template (BFM_INFO, IP_PATH_INFO, IP_CFG_INFO, IP_IPV_INFO)', async () => {
+      const result = await caller.getMiniExcelGeneratedPreview();
+      expect(result.sheets.length).toBe(4);
+      const sheetNames = result.sheets.map((s) => s.name);
+      expect(sheetNames).toContain('BFM_INFO');
+      expect(sheetNames).toContain('IP_PATH_INFO');
+      expect(sheetNames).toContain('IP_CFG_INFO');
+      expect(sheetNames).toContain('IP_IPV_INFO');
     });
 
-    it('throws BAD_REQUEST for invalid template name', async () => {
-      await expect(
-        caller.getTemplatePreview({ template: 'invalid' as 'dut_spec' }),
-      ).rejects.toThrow();
+    it('returns headers for each sheet in mini excel template', async () => {
+      const result = await caller.getMiniExcelGeneratedPreview();
+      for (const sheet of result.sheets) {
+        expect(Array.isArray(sheet.headers)).toBe(true);
+        // Each sheet should have at least one header
+        expect(sheet.headers.length).toBeGreaterThan(0);
+      }
     });
   });
 
@@ -638,12 +685,14 @@ describe('sysbase-gen-router', () => {
   describe('saveConfig', () => {
     it('saves config to .socverify/sysbase-gen/<subsys>.json and returns success', async () => {
       const config: Record<string, unknown> = {
+        genLevel: 'subsys',
         subsys: 'apcpu_sys',
         instanceName: 'u_sys_apcpu',
         rtlFile: '/path/to/rtl.v',
         moduleName: 'apcpu_top',
         dutSpecPath: '/path/to/dut_spec.xlsx',
         miniExcelPath: '/path/to/mini.xlsx',
+        csvPath: '',
         ralDirs: ['/ral/dir1', '/ral/dir2'],
         clkDir: '/clk/dir',
         clk2Dir: '',
@@ -675,12 +724,14 @@ describe('sysbase-gen-router', () => {
 
     it('also persists scriptPath to .socverify/sysbase-gen/config.json', async () => {
       const config: Record<string, unknown> = {
+        genLevel: 'subsys',
         subsys: 'aon_sys',
         instanceName: 'u_sys_aon',
         rtlFile: '',
         moduleName: '',
         dutSpecPath: '',
         miniExcelPath: '',
+        csvPath: '',
         ralDirs: [],
         clkDir: '',
         clk2Dir: '',
@@ -706,12 +757,14 @@ describe('sysbase-gen-router', () => {
 
     it('throws BAD_REQUEST when subsys is empty', async () => {
       const config: Record<string, unknown> = {
+        genLevel: 'subsys',
         subsys: '',
         instanceName: '',
         rtlFile: '',
         moduleName: '',
         dutSpecPath: '',
         miniExcelPath: '',
+        csvPath: '',
         ralDirs: [],
         clkDir: '',
         clk2Dir: '',
@@ -732,12 +785,14 @@ describe('sysbase-gen-router', () => {
     it('loads a previously saved config and scriptPath', async () => {
       // First save
       const config: Record<string, unknown> = {
+        genLevel: 'subsys',
         subsys: 'apcpu_sys',
         instanceName: 'u_sys_apcpu',
         rtlFile: '/path/to/top.v',
         moduleName: 'apcpu_top',
         dutSpecPath: '/path/to/dut_spec.xlsx',
         miniExcelPath: '/path/to/mini.xlsx',
+        csvPath: '',
         ralDirs: ['/ral/dir1', '/ral/dir2'],
         clkDir: '/clk/dir',
         clk2Dir: '/de/path,clk_prefix',
@@ -793,14 +848,14 @@ describe('sysbase-gen-router', () => {
     it('lists all saved configs grouped by subsys name', async () => {
       // Save two configs
       const config1: Record<string, unknown> = {
-        subsys: 'apcpu_sys', instanceName: 'u_sys_apcpu', rtlFile: '/a.v',
-        moduleName: '', dutSpecPath: '', miniExcelPath: '', ralDirs: [],
+        genLevel: 'subsys', subsys: 'apcpu_sys', instanceName: 'u_sys_apcpu', rtlFile: '/a.v',
+        moduleName: '', dutSpecPath: '', miniExcelPath: '', csvPath: '', ralDirs: [],
         clkDir: '', clk2Dir: '', modIoPath: '', filelistPath: '',
         pinlistPath: '', dmalistPath: '', outputDir: './',
       };
       const config2: Record<string, unknown> = {
-        subsys: 'aon_sys', instanceName: 'u_sys_aon', rtlFile: '/b.v',
-        moduleName: '', dutSpecPath: '', miniExcelPath: '', ralDirs: [],
+        genLevel: 'subsys', subsys: 'aon_sys', instanceName: 'u_sys_aon', rtlFile: '/b.v',
+        moduleName: '', dutSpecPath: '', miniExcelPath: '', csvPath: '', ralDirs: [],
         clkDir: '', clk2Dir: '', modIoPath: '', filelistPath: '',
         pinlistPath: '', dmalistPath: '', outputDir: './',
       };
@@ -827,8 +882,8 @@ describe('sysbase-gen-router', () => {
     it('does not include config.json in the list', async () => {
       // Save a config (which also creates config.json)
       const config: Record<string, unknown> = {
-        subsys: 'apcpu_sys', instanceName: 'u_sys_apcpu', rtlFile: '/a.v',
-        moduleName: '', dutSpecPath: '', miniExcelPath: '', ralDirs: [],
+        genLevel: 'subsys', subsys: 'apcpu_sys', instanceName: 'u_sys_apcpu', rtlFile: '/a.v',
+        moduleName: '', dutSpecPath: '', miniExcelPath: '', csvPath: '', ralDirs: [],
         clkDir: '', clk2Dir: '', modIoPath: '', filelistPath: '',
         pinlistPath: '', dmalistPath: '', outputDir: './',
       };
