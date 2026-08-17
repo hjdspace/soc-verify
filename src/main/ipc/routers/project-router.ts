@@ -3,7 +3,8 @@
  */
 
 import { join, relative } from 'node:path';
-import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir, rm } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import { exec } from 'node:child_process';
 import { dialog, shell } from 'electron';
 import { t, TRPCError } from '../router-context';
@@ -943,5 +944,53 @@ export const projectRouter = t.router({
       const status = getScanMetadata(db, 'scanStatus') ?? 'idle';
       const lastScanTime = getScanMetadata(db, 'lastScanTime');
       return { status, lastScanTime };
+    }),
+
+  // ─── Delete file or directory ──────────────────────────
+
+  /**
+   * 删除文件或文件夹（递归删除）。
+   *
+   * 安全检查：
+   * 1. 路径必须在项目根目录内（防止目录穿越）
+   * 2. 禁止删除项目根目录本身
+   * 3. 禁止删除 .socverify / .git 等内部目录
+   *
+   * 删除后由 file watcher 自动触发文件树刷新（filetree:update 事件）。
+   */
+  deleteNode: t.procedure
+    .input((raw): { projectId: string; path: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.path !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and path are required' });
+      }
+      return { projectId: r.projectId, path: r.path };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const rel = relative(project.rootPath, input.path);
+      if (rel.startsWith('..') || rel === '') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '不能删除项目根目录或项目外的路径' });
+      }
+      // 禁止删除 .socverify / .git 等内部目录
+      const topSeg = rel.split(/[/\\]/)[0];
+      if (topSeg === '.socverify' || topSeg === '.git') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: '不能删除应用内部目录' });
+      }
+
+      // 确认路径存在
+      let stats;
+      try {
+        stats = await stat(input.path);
+      } catch {
+        throw new TRPCError({ code: 'NOT_FOUND', message: '路径不存在' });
+      }
+
+      await rm(input.path, {
+        recursive: stats.isDirectory(),
+        force: false,
+      });
+
+      return { ok: true, wasDirectory: stats.isDirectory() };
     }),
 });
