@@ -6,6 +6,28 @@
 
 ---
 
+## [0.3.1](https://github.com/hjdspace/soc-verify/compare/v0.3.0...v0.3.1) (2026-08-18)
+
+### Features
+
+* **coverage:** AI 覆盖率闭合 P1——urg session.xml 解析、模块级 ClosureTarget、EDA 配置迁移
+* **coverage:** Orchestrator 闭合集成 Recovery 与 finalizeRecovery 恢复机制（issue #5）
+* **coverage:** 闭合详情 UI 与 AI 排除建议链（issues #6 #7）
+* **settings:** 设置界面重构为左侧垂直分组导航布局，新增 UI 原型文档
+
+### Bug Fixes
+
+* **coverage:** 修复 get_coverage_grade 工具中数据源引用错误
+
+### Refactor
+
+* **sysbase-gen:** 全面重构向导步骤——StepReview/StepOptional 重命名与功能增强、StepMini 模板生成与预览、StepCsv 组件、DUT Spec 模板生成器、目录推断与折叠、命令构建器重构、顶层配置支持
+* **sysbase-gen:** clk 参数改为可选，新增 XCELIUM_HOME/XLM_ROOT 环境变量处理与回退逻辑
+* **coverage:** 覆盖率解析增强——summaryOnly 选项、详细报告解析与进度跟踪、IMC summary 格式文档、summary 优先导入优化
+* **filetree:** 文件树懒加载优化——getDirChildren 子路由、FileTreeNode 懒加载、目录展开性能提升
+* **security:** 内容安全策略改进——CSP 修改、local-resource 协议注册、FileEditor 图片预览与缩放
+* **tests:** 增强测试覆盖——sysbase 模板/目录/时钟测试、StepReview 可选参数测试、mock adapter 与 parseDetails 测试
+
 ## [0.3.0](https://github.com/hjdspace/soc-verify/compare/v0.2.7...v0.3.0) (2026-08-17)
 
 ### Features
