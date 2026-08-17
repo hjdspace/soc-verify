@@ -22,7 +22,8 @@ export const ENV_VAR_CATALOG: EnvVarDefinition[] = [
   { name: 'SNPSLMD_LICENSE_FILE', category: 'synopsys', description: 'Synopsys License 文件' },
 
   // ── Cadence 工具 ─────────────────────────────────
-  { name: 'XLM_ROOT', category: 'cadence', description: 'Xcelium 安装路径', isPath: true },
+  { name: 'XCELIUM_HOME', category: 'cadence', description: 'Xcelium 安装路径（标准变量名）', isPath: true },
+  { name: 'XLM_ROOT', category: 'cadence', description: 'Xcelium 安装路径（TraceWeave 使用，回退到 XCELIUM_HOME）', isPath: true },
   { name: 'CDS_INST_DIR', category: 'cadence', description: 'Cadence 安装路径', isPath: true },
   { name: 'CDS_LICENSE_FILE', category: 'cadence', description: 'Cadence License 文件' },
 
