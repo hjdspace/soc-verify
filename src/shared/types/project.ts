@@ -37,6 +37,9 @@ export interface FileTreeNode {
   children?: FileTreeNode[];
   /** True when this file/directory is ignored by .gitignore (dimmed in the tree). */
   gitIgnored?: boolean;
+  /** True when this directory's children have not been loaded yet (lazy loading).
+   * The UI shows an expand arrow; children are fetched on first expand. */
+  lazy?: boolean;
 }
 
 export interface FileTreeUpdate {
