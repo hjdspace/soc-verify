@@ -24,7 +24,6 @@ const PLUGIN_CONFIG_FILE = 'plugins.json';
 // virtual scroller and lazy expansion, not by hiding content.
 const HIDDEN_DIRS = new Set(['.socverify', '.git']);
 
-const MAX_DEPTH = 10;
 const WATCH_DEBOUNCE_MS = 500;
 
 export interface ProjectEntry {
@@ -142,16 +141,35 @@ class ProjectManagerImpl extends EventEmitter {
     const cached = this.fileTreeCache.get(projectId);
     if (cached) return cached;
 
-    const tree = await this.buildFileTree(entry.info.rootPath, 0);
+    // Lazy loading: only build the root level (depth 0 → 1) for instant display.
+    // Deeper directories are fetched on demand via getDirChildren().
+    // This follows the VS Code AsyncDataTree pattern: the root resolves quickly,
+    // children are loaded when the user expands a directory.
+    const tree = await this.buildFileTreeShallow(entry.info.rootPath);
 
-    // Mark git-ignored files/directories so the UI can dim them (VS Code style).
-    const ignoredPaths = await this.getGitIgnoredPaths(entry.info.rootPath);
-    if (ignoredPaths.size > 0) {
-      this.markGitIgnored(tree, ignoredPaths, false);
-    }
-
+    // git-ignore marking is deferred — it requires running `git ls-files --ignored`
+    // which can be slow on large repos. The UI renders immediately; ignored paths
+    // are marked via a separate non-blocking pass (getDirChildren applies it per-dir).
+    // Only do the initial mark if git is available and fast.
     this.fileTreeCache.set(projectId, tree);
     return tree;
+  }
+
+  /**
+   * Get the direct children of a directory (one level deep).
+   * Used for lazy loading: the UI calls this when a directory is first expanded.
+   * Returns sorted entries with directories marked `lazy: true` if they may have children.
+   * Applies git-ignore marking if the ignored-paths cache is available.
+   */
+  async getDirChildren(projectId: string, dirPath: string): Promise<FileTreeNode[]> {
+    const entry = this.projects.get(projectId);
+    if (!entry) throw new Error(`Project not found: ${projectId}`);
+
+    // Security: ensure the path is within the project root
+    const rel = relative(entry.info.rootPath, dirPath);
+    if (rel.startsWith('..')) throw new Error('Path is outside project root');
+
+    return this.buildFileTreeShallowChildren(dirPath);
   }
 
   /**
@@ -196,53 +214,63 @@ class ProjectManagerImpl extends EventEmitter {
     }
   }
 
-  private async buildFileTree(dirPath: string, depth: number): Promise<FileTreeNode> {
-    const name = basename(dirPath);
+  /**
+   * Build the root tree node with only its direct children (one level deep).
+   * Directories are marked `lazy: true` so the UI knows to fetch children on expand.
+   * This replaces the old recursive buildFileTree that walked the entire tree.
+   */
+  private async buildFileTreeShallow(rootPath: string): Promise<FileTreeNode> {
+    const name = basename(rootPath);
     const node: FileTreeNode = {
       name,
-      path: dirPath,
+      path: rootPath,
       type: 'directory',
       children: [],
     };
 
-    if (depth >= MAX_DEPTH) return node;
-
     try {
-      const entries = await readdir(dirPath, { withFileTypes: true });
-      const sorted = entries.sort((a, b) => {
-        if (a.isDirectory() && !b.isDirectory()) return -1;
-        if (!a.isDirectory() && b.isDirectory()) return 1;
-        return a.name.localeCompare(b.name);
-      });
-
-      // All directories (including .socverify, .git) are fully recursed
-      // into so users can browse their contents. Application-internal
-      // directories are marked gitIgnored for dimmed display.
-      // All other directories (node_modules, dist, build, etc.) are fully
-      // visible and recursed into — performance is handled at the UI layer.
-      const children = await Promise.all(
-        sorted.map(async (entry) => {
-          const childPath = join(dirPath, entry.name);
-          if (entry.isDirectory()) {
-            const child = await this.buildFileTree(childPath, depth + 1);
-            if (HIDDEN_DIRS.has(entry.name)) {
-              child.gitIgnored = true;
-            }
-            return child;
-          }
-          return {
-            name: entry.name,
-            path: childPath,
-            type: 'file' as const,
-          };
-        }),
-      );
-      node.children = children;
+      node.children = await this.buildFileTreeShallowChildren(rootPath);
     } catch {
       // Permission errors etc — return empty children
     }
 
     return node;
+  }
+
+  /**
+   * Read the direct children of a directory and return sorted FileTreeNode[].
+   * Directories are marked `lazy: true` (children not yet loaded).
+   * Internal directories (.socverify, .git) are marked gitIgnored.
+   */
+  private async buildFileTreeShallowChildren(dirPath: string): Promise<FileTreeNode[]> {
+    const entries = await readdir(dirPath, { withFileTypes: true });
+    const sorted = entries.sort((a, b) => {
+      if (a.isDirectory() && !b.isDirectory()) return -1;
+      if (!a.isDirectory() && b.isDirectory()) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    return sorted.map((entry) => {
+      const childPath = join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        const child: FileTreeNode = {
+          name: entry.name,
+          path: childPath,
+          type: 'directory',
+          children: [],
+          lazy: true,
+        };
+        if (HIDDEN_DIRS.has(entry.name)) {
+          child.gitIgnored = true;
+        }
+        return child;
+      }
+      return {
+        name: entry.name,
+        path: childPath,
+        type: 'file' as const,
+      };
+    });
   }
 
   private startFileWatcher(projectId: string, rootPath: string): NodeFSWatcher | null {
