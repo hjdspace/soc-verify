@@ -101,9 +101,14 @@ export class CoverageManager {
   // ─── 导入流程（ADR 0006 两步流水线） ─────────────────────────
 
   /**
-   * 导入覆盖率数据：创建 session → 运行 EDA 命令（step 1）→ 插件解析（step 2）→ 缓存。
+   * 导入覆盖率数据：创建 session → 运行 EDA summary 命令（step 1）→ 插件解析 summary（step 2）→ 缓存。
    *
-   * **性能优化**：
+   * **分层解析优化**（ADR 0006 扩展）：
+   * - 导入时只运行 summary EDA 命令，只解析 summary.txt
+   * - detail/metrics/grade/bins/csv 命令和解析推迟到用户按需触发（parseDetails）
+   * - 避免大数据量（2万+行 detail.txt）一次性解析导致 GUI 卡顿
+   *
+   * **其他性能优化**：
    * - EDA 命令使用 spawn 流式执行，无 maxBuffer 限制
    * - JSON 缓存使用紧凑格式（无缩进），减少序列化和 I/O 开销
    * - 每个步骤通过 onProgress 回调推送实时进度
@@ -153,20 +158,29 @@ export class CoverageManager {
     );
     logStep('session_init', step0Start);
 
-    // Step 1: 平台运行 EDA 命令生成文本报告
+    // Step 1: 平台运行 EDA summary 命令生成文本报告（分层解析：仅 summary）
     let edaAllFailed = false;
     let generatedFiles: string[] = [];
 
     if (this.reportGenerator) {
       onProgress?.({
         step: 'eda_commands',
-        message: '正在执行 EDA 命令生成文本报告...',
+        message: '正在执行 EDA 命令生成 summary 报告...',
         percent: 5,
       });
       const step1Start = Date.now();
+      // 分层解析：导入时只运行 summary 命令，detail/grade/bins/csv 推迟到按需解析
+      const summaryOnlyConfig: EdaToolConfig = {
+        ...edaConfig,
+        detailCommand: undefined,
+        metricsCommand: undefined,
+        csvCommand: undefined,
+        gradeCommand: undefined,
+        binsCommand: undefined,
+      };
       try {
         const reports: GeneratedReports = await this.reportGenerator.generate(
-          edaConfig, covMergeDir, sessionId,
+          summaryOnlyConfig, covMergeDir, sessionId,
           (event) => {
             // 将 EDA 命令进度映射到 5%-60% 区间
             const pct = event.percent ?? 0;
@@ -202,12 +216,12 @@ export class CoverageManager {
       logStep('eda_commands (skipped — no generator)', step0Start);
     }
 
-    // Step 2: 插件解析文本报告为层级 Coverage Tree
+    // Step 2: 插件解析 summary 文本报告为层级 Coverage Tree（分层解析：仅 summary）
     // 注意：adapter.parse() 现在在 Worker Thread 中执行，不阻塞主进程
     // Worker Thread 同时完成 enrichment + JSON.stringify，避免主进程同步阻塞
     onProgress?.({
       step: 'parsing',
-      message: '正在解析 EDA 文本报告为覆盖率树...',
+      message: '正在解析 summary 报告为覆盖率树...',
       percent: 65,
     });
     const step2Start = Date.now();
@@ -216,6 +230,7 @@ export class CoverageManager {
       covMergeDir,
       edaTool: edaConfig.tool,
       targets: targets ?? { ...DEFAULT_COVERAGE_TARGETS },
+      summaryOnly: true,
     });
     logStep('parsing', step2Start);
 
@@ -328,6 +343,131 @@ export class CoverageManager {
     });
 
     return { sessionId, data: enriched, reportDir, warnings, edaAllFailed, generatedFiles };
+  }
+
+  /**
+   * 按需详细解析（ADR 0006 扩展：分层解析第二步）。
+   *
+   * 用户在导入后通过 UI 主动触发，运行 detail/metrics/grade/bins/csv EDA 命令
+   * 并解析这些报告，将结果合并到已有的 summary CoverageData 中。
+   *
+   * 过程：
+   *   1. 从 session 元数据获取 reportDir 和 edaConfig
+   *   2. 运行 detail/metrics/grade/bins/csv EDA 命令（非 summary）
+   *   3. 在 Worker Thread 中解析这些报告
+   *   4. 将详细数据合并到已有的 summary CoverageData（保留 summary 的层级树）
+   *   5. 更新缓存文件
+   *
+   * @param sessionId 已导入的 Coverage Merge Session ID
+   * @param edaConfig EDA Tool Configuration（含命令模板）
+   * @param onProgress 可选的进度回调
+   * @returns 更新后的 CoverageData（包含 detail/grade/bins/csv 数据）
+   */
+  async parseDetails(
+    sessionId: string,
+    edaConfig: EdaToolConfig,
+    onProgress?: ProgressCallback,
+  ): Promise<CoverageData> {
+    // 加载已有的 summary CoverageData
+    const existing = await this.loadCached(sessionId);
+    if (!existing) {
+      throw new Error(`Session ${sessionId} not found. Import coverage data first.`);
+    }
+
+    // 从 session 元数据获取 reportDir
+    const sessions = await this.listSessions();
+    const session = sessions.find((s) => s.sessionId === sessionId);
+    if (!session) {
+      throw new Error(`Session metadata for ${sessionId} not found.`);
+    }
+    const reportDir = session.reportDir;
+
+    // Step 1: 运行 detail/metrics/grade/bins/csv EDA 命令（非 summary）
+    if (this.reportGenerator) {
+      onProgress?.({
+        step: 'eda_detail_commands',
+        message: '正在执行 EDA 命令生成详细报告...',
+        percent: 5,
+      });
+
+      // 只运行非 summary 命令
+      const detailOnlyConfig: EdaToolConfig = {
+        ...edaConfig,
+        summaryCommand: undefined,
+      };
+
+      try {
+        await this.reportGenerator.generate(
+          detailOnlyConfig, session.covMergeDir, sessionId,
+          (event) => {
+            const pct = event.percent ?? 0;
+            const mapped = 5 + Math.round((pct / 100) * 55);
+            onProgress?.({ ...event, percent: mapped });
+          },
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        onProgress?.({
+          step: 'eda_detail_commands_error',
+          message: `EDA 详细报告生成异常：${msg}`,
+          percent: 60,
+        });
+      }
+    }
+
+    // Step 2: 在 Worker Thread 中解析所有报告（summaryOnly=false，完整解析）
+    onProgress?.({
+      step: 'parsing_detail',
+      message: '正在解析详细覆盖率报告...',
+      percent: 65,
+    });
+    const step2Start = Date.now();
+
+    if (!this.adapter?.hasParser()) {
+      throw new Error('No coverage-parser plugin loaded');
+    }
+    const workerResult = await this.adapter.parse(sessionId, reportDir, {
+      sessionId,
+      covMergeDir: session.covMergeDir,
+      edaTool: edaConfig.tool,
+      targets: existing.targets,
+      summaryOnly: false,
+    });
+    await yieldToEventLoop();
+
+    const detailed = workerResult.data;
+    const durationMs = Date.now() - step2Start;
+
+    // Step 3: 合并详细数据到已有 CoverageData
+    // 保留 summary 的层级树（如果 detail 解析出了更丰富的树也用它替换）
+    const merged: CoverageData = {
+      ...existing,
+      root: detailed.root.children.length > 0 ? detailed.root : existing.root,
+      uncovered: detailed.uncovered ?? existing.uncovered,
+      testContributions: detailed.testContributions ?? existing.testContributions,
+      csvData: detailed.csvData ?? existing.csvData,
+      summaryOnly: false,
+    };
+
+    // Step 4: 更新缓存
+    onProgress?.({
+      step: 'caching_detail',
+      message: '正在缓存详细覆盖率数据...',
+      percent: 85,
+    });
+    await this.cache(merged);
+    await yieldToEventLoop();
+
+    const nodeCount = this.countNodes(merged.root);
+    onProgress?.({
+      step: 'done',
+      message: `详细解析完成（耗时 ${durationMs}ms，${nodeCount} 个节点）`,
+      percent: 100,
+      durationMs,
+      details: { nodeCount },
+    });
+
+    return merged;
   }
 
   /** 递归统计 Coverage Tree 中的节点总数（iterative 实现，避免 deep tree stack overflow） */
@@ -486,7 +626,7 @@ export class CoverageManager {
 
   /**
    * 返回测试用例覆盖率贡献度排名。
- * 来源于 urg -grade testfile 或 imc report -test。
+   * 来源于 urg -grade testfile 或 imc report -grading。
  * 供 AI Host Tool get_coverage_grade 消费。
  */
   async getTestContributions(sessionId?: string): Promise<{
