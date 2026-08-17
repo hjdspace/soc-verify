@@ -195,6 +195,20 @@ export const projectRouter = t.router({
       return projectManager.getFileTree(input.projectId);
     }),
 
+  /** Lazy-load the children of a directory (one level deep).
+   * The UI calls this when a user first expands a directory node. */
+  getDirChildren: t.procedure
+    .input((raw): { projectId: string; dirPath: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.dirPath !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and dirPath are required' });
+      }
+      return { projectId: r.projectId, dirPath: r.dirPath };
+    })
+    .query(async ({ input }) => {
+      return projectManager.getDirChildren(input.projectId, input.dirPath);
+    }),
+
   readFile: t.procedure
     .input((raw): { projectId: string; filePath: string } => {
       const r = raw as Record<string, unknown>;
