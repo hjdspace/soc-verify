@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>设置页面 UI 原型 — PROTOTYPE（三变体，?variant=A/B/C）</title>
+<!--
+  PROTOTYPE — 一次性原型，用于回答：设置页面的布局与样式应该是什么样？
+  三个结构完全不同的变体，通过 URL ?variant=A/B/C 切换，底部悬浮条 / 方向键可循环切换。
+  变体 A：左侧垂直导航（IDE 风格，宽弹窗）
+  变体 B：双栏表单式（macOS 系统设置风格：分组侧栏 + 搜索 + 右侧 label/控制 分行）
+  变体 C：单栏流式 + 置顶锚点导航（宽屏卡片流）
+  参考现有实现: src/renderer/src/components/settings/SettingsPanel.tsx
+-->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      colors: {
+        bg: '#1a1b21', surface: '#212229', surface2: '#2a2b33',
+        border: '#33343d', primary: '#7c8cf8', primaryfg: '#12131a',
+        muted: '#8b8d99', fg: '#e4e5ec',
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { font-family: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-thumb { background: #3a3b45; border-radius: 3px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  .switch { position: relative; width: 32px; height: 18px; border-radius: 9px; background: #3a3b45; transition: background .15s; cursor: pointer; flex-shrink: 0; }
+  .switch.on { background: #7c8cf8; }
+  .switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .switch.on::after { left: 16px; }
+  select, input, textarea { outline: none; }
+  select:focus, input:focus, textarea:focus { box-shadow: 0 0 0 1px #7c8cf8; }
+  .fade-in { animation: fadeIn .18s ease-out; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+</style>
+</head>
+<body class="dark bg-[#111216] text-fg overflow-hidden">
+
+<!-- 背景模拟应用环境 -->
+<div class="fixed inset-0 flex items-center justify-center bg-black/60" id="stage">
+
+<!-- ════════════════ 变体 A：左侧垂直导航（IDE 风格） ════════════════ -->
+<div id="variant-A" class="hidden">
+  <div class="flex h-[620px] max-h-[calc(100vh-32px)] w-[960px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-2xl fade-in">
+    <!-- 标题栏 -->
+    <div class="flex items-center justify-between border-b border-border px-5 py-3">
+      <div class="flex items-center gap-2.5">
+        <span class="text-sm font-semibold">设置</span>
+        <span class="rounded bg-surface2 px-1.5 py-0.5 text-[10px] text-muted">SoC Verify</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <div class="flex h-7 w-56 items-center gap-1.5 rounded-md border border-border bg-bg px-2 text-xs text-muted">
+          <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg>
+          搜索设置项…
+        </div>
+        <button class="rounded p-1.5 text-muted hover:bg-surface2 hover:text-fg">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+    </div>
+    <div class="flex min-h-0 flex-1">
+      <!-- 左侧垂直导航 -->
+      <nav class="flex w-52 shrink-0 flex-col border-r border-border bg-surface2/40 p-2 overflow-y-auto">
+        <div class="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted/70">AI 能力</div>
+        <button class="A-nav flex items-center gap-2.5 rounded-md bg-primary/15 px-2.5 py-2 text-xs font-medium text-primary" data-tab="model">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>
+          模型配置
+        </button>
+        <button class="A-nav flex items-center gap-2.5 rounded-md px-2.5 py-2 text-xs text-muted hover:bg-surface2 hover:text-fg" data-tab="kb">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V4H6.5A2.5 2.5 0 0 0 4 6.5v13z"/></svg>
+          知识库
+        </button>
+        <button class="A-nav flex items-center gap-2.5 rounded-md px-2.5 py-2 text-xs text-muted hover:bg-surface2 hover:text-fg" data-tab="prompt">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+          系统提示词
+        </button>
+        <div class="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wide text-muted/70">扩展</div>
+        <button class="A-nav flex items-center gap-2.5 rounded-md px-2.5 py-2 text-xs text-muted hover:bg-surface2 hover:text-fg" data-tab="plugins">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10 3v3M14 3v3M10 18v3M14 18v3M3 10h3M3 14h3M18 10h3M18 14h3"/><rect x="7" y="7" width="10" height="10" rx="1"/></svg>
+          插件管理
+        </button>
+        <button class="A-nav flex items-center gap-2.5 rounded-md px-2.5 py-2 text-xs text-muted hover:bg-surface2 hover:text-fg" data-tab="skills">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="m7.5 4.27 9 5.15M21 8v8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z"/></svg>
+          Skill 管理
+        </button>
+        <button class="A-nav flex items-center gap-2.5 rounded-md px-2.5 py-2 text-xs text-muted hover:bg-surface2 hover:text-fg" data-tab="mcp">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><path d="M6 6h.01M6 18h.01"/></svg>
+          MCP 配置
+        </button>
+        <div class="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wide text-muted/70">环境</div>
+        <button class="A-nav flex items-center gap-2.5 rounded-md px-2.5 py-2 text-xs text-muted hover:bg-surface2 hover:text-fg" data-tab="appearance">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r="2.5"/><circle cx="19" cy="13" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="10" cy="19" r="2.5"/></svg>
+          外观
+        </button>
+        <button class="A-nav flex items-center gap-2.5 rounded-md px-2.5 py-2 text-xs text-muted hover:bg-surface2 hover:text-fg" data-tab="tv">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+          时序违例
+        </button>
+        <div class="mt-auto p-2">
+          <div class="rounded-md border border-border/50 bg-bg/60 px-2.5 py-2 text-[10px] leading-relaxed text-muted">
+            当前会话：<span class="text-fg">Claude · gpt-4o</span><br>
+            上下文窗口：<span class="text-fg">200k</span>
+          </div>
+        </div>
+      </nav>
+      <!-- 右侧内容 -->
+      <div class="min-w-0 flex-1 overflow-y-auto p-6" id="A-content"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════ 变体 B：双栏表单式（macOS 系统设置风格） ════════════════ -->
+<div id="variant-B" class="hidden">
+  <div class="flex h-[620px] max-h-[calc(100vh-32px)] w-[900px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-2xl fade-in">
+    <!-- 顶部：标题 + 大搜索框 -->
+    <div class="border-b border-border px-6 pb-3 pt-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-base font-semibold">设置</h2>
+        <button class="rounded p-1.5 text-muted hover:bg-surface2 hover:text-fg">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="mt-2.5 flex h-8 items-center gap-2 rounded-lg border border-border bg-bg px-3 text-xs text-muted">
+        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg>
+        搜索（例如 "API Key"、"主题"、"MCP"）
+        <span class="ml-auto rounded bg-surface2 px-1.5 py-0.5 text-[9px]">⌘F</span>
+      </div>
+    </div>
+    <div class="flex min-h-0 flex-1">
+      <!-- 左：分组列表（紧凑，无图标文字描述） -->
+      <nav class="w-56 shrink-0 overflow-y-auto border-r border-border bg-bg/50 p-2.5 space-y-0.5">
+        <div class="B-nav flex items-center gap-2 rounded-md bg-primary/15 px-2.5 py-1.5 text-xs font-medium text-primary" data-tab="model">
+          <span class="flex h-6 w-6 items-center justify-center rounded bg-primary/20">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>
+          </span>
+          模型配置
+          <span class="ml-auto text-[9px] text-muted">2 项</span>
+        </div>
+        <div class="B-nav flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-muted hover:bg-surface2 hover:text-fg" data-tab="kb">
+          <span class="flex h-6 w-6 items-center justify-center rounded bg-surface2">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V4H6.5A2.5 2.5 0 0 0 4 6.5v13z"/></svg>
+          </span>
+          知识库
+        </div>
+        <div class="B-nav flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-muted hover:bg-surface2 hover:text-fg" data-tab="prompt">
+          <span class="flex h-6 w-6 items-center justify-center rounded bg-surface2">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+          </span>
+          系统提示词
+        </div>
+        <div class="B-nav flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-muted hover:bg-surface2 hover:text-fg" data-tab="plugins">
+          <span class="flex h-6 w-6 items-center justify-center rounded bg-surface2">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="1"/><path d="M10 3v3M14 3v3M10 18v3M14 18v3M3 10h3M3 14h3M18 10h3M18 14h3"/></svg>
+          </span>
+          插件管理
+        </div>
+        <div class="B-nav flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-muted hover:bg-surface2 hover:text-fg" data-tab="skills">
+          <span class="flex h-6 w-6 items-center justify-center rounded bg-surface2">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="m21 8-9-5-9 5v8l9 5 9-5V8z"/></svg>
+          </span>
+          Skill 管理
+          <span class="ml-auto text-[9px] text-muted">12</span>
+        </div>
+        <div class="B-nav flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-muted hover:bg-surface2 hover:text-fg" data-tab="mcp">
+          <span class="flex h-6 w-6 items-center justify-center rounded bg-surface2">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/></svg>
+          </span>
+          MCP 配置
+          <span class="ml-auto text-[9px] text-muted">3</span>
+        </div>
+        <div class="B-nav flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-muted hover:bg-surface2 hover:text-fg" data-tab="appearance">
+          <span class="flex h-6 w-6 items-center justify-center rounded bg-surface2">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r="2.5"/><circle cx="19" cy="13" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="10" cy="19" r="2.5"/></svg>
+          </span>
+          外观
+        </div>
+        <div class="B-nav flex items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-muted hover:bg-surface2 hover:text-fg" data-tab="tv">
+          <span class="flex h-6 w-6 items-center justify-center rounded bg-surface2">
+            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+          </span>
+          时序违例
+        </div>
+      </nav>
+      <!-- 右：设置行（label 左 / 控制右，macOS 风格） -->
+      <div class="min-w-0 flex-1 overflow-y-auto px-6 py-5" id="B-content"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════ 变体 C：单栏流式 + 置顶锚点导航 ════════════════ -->
+<div id="variant-C" class="hidden">
+  <div class="flex h-[640px] max-h-[calc(100vh-32px)] w-[820px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-2xl fade-in">
+    <!-- 顶部：标题 + 置顶锚点 chips -->
+    <div class="border-b border-border bg-bg/60 px-5 pt-3">
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-semibold">设置</h2>
+        <div class="flex items-center gap-2 text-[10px] text-muted">
+          <span class="rounded-full bg-emerald-500/15 px-2 py-0.5 text-emerald-400">自动保存已启用</span>
+          <button class="rounded p-1.5 text-muted hover:bg-surface2 hover:text-fg">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+      </div>
+      <!-- 水平锚点导航（sticky） -->
+      <div class="mt-2.5 flex gap-1 overflow-x-auto pb-2.5" id="C-chips">
+        <button class="C-chip shrink-0 rounded-full bg-primary px-3 py-1 text-[11px] font-medium text-primaryfg" data-tab="model">模型配置</button>
+        <button class="C-chip shrink-0 rounded-full border border-border px-3 py-1 text-[11px] text-muted hover:text-fg" data-tab="kb">知识库</button>
+        <button class="C-chip shrink-0 rounded-full border border-border px-3 py-1 text-[11px] text-muted hover:text-fg" data-tab="plugins">插件管理</button>
+        <button class="C-chip shrink-0 rounded-full border border-border px-3 py-1 text-[11px] text-muted hover:text-fg" data-tab="skills">Skill 管理</button>
+        <button class="C-chip shrink-0 rounded-full border border-border px-3 py-1 text-[11px] text-muted hover:text-fg" data-tab="mcp">MCP 配置</button>
+        <button class="C-chip shrink-0 rounded-full border border-border px-3 py-1 text-[11px] text-muted hover:text-fg" data-tab="prompt">系统提示词</button>
+        <button class="C-chip shrink-0 rounded-full border border-border px-3 py-1 text-[11px] text-muted hover:text-fg" data-tab="appearance">外观</button>
+        <button class="C-chip shrink-0 rounded-full border border-border px-3 py-1 text-[11px] text-muted hover:text-fg" data-tab="tv">时序违例</button>
+      </div>
+    </div>
+    <!-- 单栏流式内容 -->
+    <div class="min-h-0 flex-1 overflow-y-auto scroll-smooth px-6 py-5" id="C-content"></div>
+  </div>
+</div>
+
+</div>
+
+<!-- ════════════════ 原型切换浮动条（仅原型，生产移除） ════════════════ -->
+<div class="fixed bottom-4 left-1/2 z-50 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/10 bg-black/80 px-4 py-2 text-xs text-white shadow-xl backdrop-blur">
+  <span class="text-white/50">原型切换</span>
+  <button class="V-btn rounded-full px-3 py-1 font-medium hover:bg-white/10" data-v="A">A 左侧导航</button>
+  <button class="V-btn rounded-full px-3 py-1 font-medium hover:bg-white/10" data-v="B">B 双栏表单</button>
+  <button class="V-btn rounded-full px-3 py-1 font-medium hover:bg-white/10" data-v="C">C 单栏流式</button>
+  <span class="text-white/30">←/→ 或 URL ?variant=</span>
+</div>
+
+<script>
+// ══════════ 组件模板 ══════════
+const inp = (w) => `<input class="${w||'w-64'} h-8 rounded-md border border-border bg-bg px-2.5 text-xs text-fg placeholder:text-muted/60" placeholder="…">`;
+const sel = () => `<select class="h-8 rounded-md border border-border bg-bg px-2 text-xs text-fg"><option>Claude</option><option>GPT-4o</option><option>DeepSeek</option></select>`;
+const btnP = (t) => `<button class="h-8 rounded-md bg-primary px-3 text-xs font-medium text-primaryfg hover:opacity-90">${t}</button>`;
+const btnG = (t) => `<button class="h-8 rounded-md border border-border bg-surface2 px-3 text-xs text-muted hover:text-fg">${t}</button>`;
+const btnD = (t) => `<button class="h-8 rounded-md border border-red-500/30 bg-red-500/10 px-3 text-xs text-red-400 hover:bg-red-500/20">${t}</button>`;
+const tog = (on, cb) => `<div class="switch ${on?'on':''}" ${cb?`onclick="this.classList.toggle('on')"`:''}></div>`;
+
+// A/B 变体的卡片区块
+const card = (title, desc, body) => `
+  <div class="rounded-lg border border-border bg-bg/50 p-4 mb-4">
+    <div class="mb-3"><div class="text-xs font-semibold">${title}</div>${desc?`<div class="mt-0.5 text-[10px] text-muted">${desc}</div>`:''}</div>
+    ${body}
+  </div>`;
+
+// B 变体的表单行（label 左 / 控制右）
+const brow = (label, ctrl, hint) => `
+  <div class="flex items-center justify-between gap-4 border-b border-border/60 py-2.5 last:border-0">
+    <div class="min-w-0">
+      <div class="text-xs text-fg">${label}</div>
+      ${hint?`<div class="mt-0.5 text-[10px] text-muted">${hint}</div>`:''}
+    </div>
+    <div class="flex shrink-0 items-center gap-2">${ctrl}</div>
+  </div>`;
+const bgroup = (title, rows) => `
+  <div class="mb-5">
+    ${title?`<div class="mb-2 text-[10px] font-semibold uppercase tracking-wide text-muted/70">${title}</div>`:''}
+    <div class="rounded-lg border border-border bg-bg/50 px-4">${rows}</div>
+  </div>`;
+
+// ══════════ Tab 内容 ══════════
+const TABS = {
+  model: { title: '模型配置' },
+  kb: { title: '知识库' },
+  prompt: { title: '系统提示词' },
+  plugins: { title: '插件管理' },
+  skills: { title: 'Skill 管理' },
+  mcp: { title: 'MCP 配置' },
+  appearance: { title: '外观' },
+  tv: { title: '时序违例' },
+};
+
+const CONTENT = {
+  model: () => ({
+    A: card('默认模型', '选择对话与任务使用的模型', `
+        <div class="flex items-center gap-3">${sel()}<span class="text-[10px] text-muted">上下文窗口 200k</span></div>`)
+      + card('API 密钥', '按供应商配置，存储在本地', `
+        <div class="space-y-2">${inp('w-full')} ${inp('w-full')}</div>`)
+      + `<div class="flex justify-end gap-2">${btnG('测试连接')}${btnP('保存')}</div>`,
+    B: bgroup('默认模型', brow('对话模型', sel(), '用于 Agent 对话与任务执行'))
+      + bgroup('API 密钥', brow('Anthropic API Key', inp('w-72')) + brow('OpenAI API Key', inp('w-72'), '本地加密存储'))
+      + `<div class="flex justify-end gap-2">${btnG('测试连接')}${btnP('保存')}</div>`,
+    C: card('模型配置', '默认模型与 API 密钥', `
+        <div class="flex flex-col gap-3"><div class="flex items-center justify-between">${brow('对话模型', sel(), '上下文 200k')}${''}</div>
+        <div class="flex items-center justify-between gap-4 border-b border-border/60 py-2.5"><div class="min-w-0"><div class="text-xs text-fg">Anthropic API Key</div></div>${inp('w-72')}</div>
+        <div class="flex items-center justify-between gap-4 py-2.5"><div class="min-w-0"><div class="text-xs text-fg">OpenAI API Key</div></div>${inp('w-72')}</div></div>`)
+  }),
+  kb: () => ({
+    A: card('知识库挂载', '管理挂载到会话的知识库目录', `
+        <div class="mb-3 flex gap-2">${inp('flex-1')} ${btnG('浏览…')}</div>
+        <div class="divide-y divide-border/60 rounded-md border border-border text-xs">
+          <div class="flex items-center justify-between px-3 py-2"><div><div class="font-medium">unisoc-soc-env</div><div class="text-[10px] text-muted">1,247 文档 · 已索引</div></div><div class="flex gap-2">${btnG('重建索引')}${btnD('卸载')}</div></div>
+          <div class="flex items-center justify-between px-3 py-2"><div><div class="font-medium">case-database-kb</div><div class="text-[10px] text-muted">356 文档 · 已索引</div></div><div class="flex gap-2">${btnG('重建索引')}${btnD('卸载')}</div></div>
+        </div>`)
+      + `<div class="mt-3">${btnP('挂载目录')}</div>`,
+    B: bgroup('挂载列表', brow('unisoc-soc-env', btnG('重建索引'), '1,247 文档 · 已索引') + brow('case-database-kb', btnG('重建索引'), '356 文档 · 已索引'))
+      + bgroup('操作', brow('挂载新目录', btnP('浏览…')))
+      + bgroup('索引策略', brow('自动增量索引', tog(true)) + brow('深度重索引', btnG('立即执行'), '全量重建，耗时较长')),
+    C: card('知识库', '挂载目录与索引管理', `
+        <div class="divide-y divide-border/60 rounded-md border border-border text-xs">
+          <div class="flex items-center justify-between px-3 py-2.5"><div><div class="font-medium">unisoc-soc-env</div><div class="text-[10px] text-muted">1,247 文档 · 已索引</div></div><div class="flex gap-2">${btnG('重建索引')}${btnD('卸载')}</div></div>
+          <div class="flex items-center justify-between px-3 py-2.5"><div><div class="font-medium">case-database-kb</div><div class="text-[10px] text-muted">356 文档 · 已索引</div></div><div class="flex gap-2">${btnG('重建索引')}${btnD('卸载')}</div></div>
+        </div><div class="mt-3 flex gap-2">${inp('flex-1')}${btnP('挂载目录')}</div>`)
+  }),
+  prompt: () => ({
+    A: card('系统提示词', '追加到每次对话的固定指令', `
+        <textarea class="min-h-40 w-full rounded-md border border-border bg-bg p-3 font-mono text-xs text-fg" placeholder="You are a SoC verification assistant…">你是一名 SoC 验证专家，熟悉 UVM 方法学与 SystemVerilog 断言。</textarea>`)
+      + `<div class="flex justify-end gap-2">${btnG('恢复默认')}${btnP('保存')}</div>`,
+    B: bgroup('System Prompt', brow('系统提示词', `<div class="flex-1"></div>`, '编辑区见下方'))
+      + `<textarea class="min-h-48 w-full rounded-md border border-border bg-bg p-3 font-mono text-xs text-fg">你是一名 SoC 验证专家，熟悉 UVM 方法学与 SystemVerilog 断言。</textarea>
+         <div class="mt-2 flex justify-end gap-2">${btnG('恢复默认')}${btnP('保存')}</div>`,
+    C: card('系统提示词', '追加到每次对话的固定指令', `
+        <textarea class="min-h-40 w-full rounded-md border border-border bg-bg p-3 font-mono text-xs text-fg">你是一名 SoC 验证专家，熟悉 UVM 方法学与 SystemVerilog 断言。</textarea>
+        <div class="mt-3 flex justify-end gap-2">${btnG('恢复默认')}${btnP('保存')}</div>`)
+  }),
+  plugins: () => ({
+    A: card('已安装插件', 'builtin-coverage-parser · unisoc-simulation-runner 等 5 个', `
+        <div class="divide-y divide-border/60 rounded-md border border-border text-xs">
+          <div class="flex items-center justify-between px-3 py-2.5"><div class="flex items-center gap-2"><span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span><div><div class="font-medium">unisoc-simulation-runner</div><div class="text-[10px] text-muted">v1.2.0 · 仿真运行器</div></div></div><div class="flex items-center gap-2">${tog(true)} ${btnG('设置')}</div></div>
+          <div class="flex items-center justify-between px-3 py-2.5"><div class="flex items-center gap-2"><span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span><div><div class="font-medium">builtin-coverage-parser</div><div class="text-[10px] text-muted">v1.0.3 · 覆盖率解析</div></div></div><div class="flex items-center gap-2">${tog(true)} ${btnG('设置')}</div></div>
+          <div class="flex items-center justify-between px-3 py-2.5"><div class="flex items-center gap-2"><span class="h-1.5 w-1.5 rounded-full bg-amber-400"></span><div><div class="font-medium">unisoc-case-parser</div><div class="text-[10px] text-muted">v0.9.1 · 用例解析（有更新）</div></div></div><div class="flex items-center gap-2">${tog(true)} ${btnG('更新')}</div></div>
+        </div>`)
+      + `<div class="mt-3 flex gap-2">${btnP('安装插件…')}${btnG('打开插件目录')}</div>`,
+    B: bgroup('插件列表', brow('unisoc-simulation-runner', tog(true), 'v1.2.0') + brow('builtin-coverage-parser', tog(true), 'v1.0.3') + brow('unisoc-case-parser', tog(true), 'v0.9.1 · 有更新') + brow('unisoc-subsys-discoverer', tog(false), 'v1.1.0'))
+      + bgroup('操作', brow('安装插件', btnP('选择 .svp…')) + brow('插件目录', btnG('打开'))),
+    C: card('插件管理', '已安装 5 个插件', `
+        <div class="divide-y divide-border/60 rounded-md border border-border text-xs">
+          <div class="flex items-center justify-between px-3 py-2.5"><div><div class="font-medium">unisoc-simulation-runner <span class="text-[9px] text-emerald-400">启用</span></div><div class="text-[10px] text-muted">v1.2.0 · 仿真运行器</div></div><div class="flex gap-2">${btnG('设置')}${btnG('禁用')}</div></div>
+          <div class="flex items-center justify-between px-3 py-2.5"><div><div class="font-medium">unisoc-case-parser <span class="text-[9px] text-amber-400">可更新</span></div><div class="text-[10px] text-muted">v0.9.1 · 用例解析</div></div><div class="flex gap-2">${btnG('更新')}${btnG('禁用')}</div></div>
+        </div><div class="mt-3 flex gap-2">${btnP('安装插件…')}${btnG('打开插件目录')}</div>`)
+  }),
+  skills: () => ({
+    A: card('Skill 管理', '已安装 12 个 Skill', `
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div class="rounded-md border border-border bg-bg px-3 py-2"><div class="font-medium">diagnosing-bugs</div><div class="text-[10px] text-muted">诊断循环 · 已启用</div></div>
+          <div class="rounded-md border border-border bg-bg px-3 py-2"><div class="font-medium">doc-writer</div><div class="text-[10px] text-muted">文档生成 · 已启用</div></div>
+          <div class="rounded-md border border-border bg-bg px-3 py-2"><div class="font-medium">prototype</div><div class="text-[10px] text-muted">原型设计 · 已启用</div></div>
+          <div class="rounded-md border border-border bg-bg px-3 py-2"><div class="font-medium">tdd</div><div class="text-[10px] text-muted">测试驱动 · 已禁用</div></div>
+        </div>`)
+      + `<div class="mt-3">${btnP('安装 Skill…')}</div>`,
+    B: bgroup('Skill 列表', brow('diagnosing-bugs', tog(true), '诊断循环') + brow('doc-writer', tog(true), '文档生成') + brow('prototype', tog(true), '原型设计') + brow('tdd', tog(false), '测试驱动')),
+    C: card('Skill 管理', '已安装 12 个 Skill', `
+        <div class="grid grid-cols-3 gap-2 text-xs">
+          <div class="rounded-md border border-border bg-bg px-3 py-2.5"><div class="font-medium">diagnosing-bugs</div><div class="text-[10px] text-muted">诊断循环 · 启用</div></div>
+          <div class="rounded-md border border-border bg-bg px-3 py-2.5"><div class="font-medium">doc-writer</div><div class="text-[10px] text-muted">文档生成 · 启用</div></div>
+          <div class="rounded-md border border-border bg-bg px-3 py-2.5"><div class="font-medium">prototype</div><div class="text-[10px] text-muted">原型设计 · 启用</div></div>
+          <div class="rounded-md border border-border bg-bg px-3 py-2.5"><div class="font-medium">tdd</div><div class="text-[10px] text-muted">测试驱动 · 禁用</div></div>
+        </div>`)
+  }),
+  mcp: () => ({
+    A: card('MCP 服务器', '已配置 3 个 MCP 服务器', `
+        <div class="divide-y divide-border/60 rounded-md border border-border text-xs">
+          <div class="flex items-center justify-between px-3 py-2.5"><div><div class="font-medium">case-database-mcp</div><div class="text-[10px] text-muted">stdio · 8 tools · 已连接</div></div><div class="flex gap-2">${btnG('编辑')}${btnD('移除')}</div></div>
+          <div class="flex items-center justify-between px-3 py-2.5"><div><div class="font-medium">coverage-mcp</div><div class="text-[10px] text-muted">sse · 3 tools · 已连接</div></div><div class="flex gap-2">${btnG('编辑')}${btnD('移除')}</div></div>
+        </div>`)
+      + `<div class="mt-3">${btnP('添加服务器')}</div>`,
+    B: bgroup('服务器列表', brow('case-database-mcp', `<span class="text-[10px] text-emerald-400">已连接</span>`, 'stdio · 8 tools') + brow('coverage-mcp', `<span class="text-[10px] text-emerald-400">已连接</span>`, 'sse · 3 tools') + brow('officecli-mcp', `<span class="text-[10px] text-muted">未连接</span>`, 'stdio'))
+      + bgroup('操作', brow('添加服务器', btnP('添加'))),
+    C: card('MCP 配置', '已配置 3 个服务器', `
+        <div class="divide-y divide-border/60 rounded-md border border-border text-xs">
+          <div class="flex items-center justify-between px-3 py-2.5"><div><div class="font-medium">case-database-mcp</div><div class="text-[10px] text-muted">stdio · 8 tools · <span class="text-emerald-400">已连接</span></div></div><div class="flex gap-2">${btnG('编辑')}${btnD('移除')}</div></div>
+          <div class="flex items-center justify-between px-3 py-2.5"><div><div class="font-medium">officecli-mcp</div><div class="text-[10px] text-muted">stdio · <span class="text-muted">未连接</span></div></div><div class="flex gap-2">${btnG('编辑')}${btnD('移除')}</div></div>
+        </div><div class="mt-3">${btnP('添加服务器')}</div>`)
+  }),
+  appearance: () => ({
+    A: card('主题', '界面外观', `
+        <div class="flex gap-2">${btnG('浅色')}${btnP('深色')}${btnG('跟随系统')}</div>`)
+      + card('编辑器', '字号与渲染', `
+        <div class="flex items-center gap-3"><span class="text-[10px] text-muted">字号</span><div class="flex gap-1"><button class="h-7 w-7 rounded border border-border text-xs">A-</button><span class="flex h-7 w-10 items-center justify-center rounded border border-border text-xs">14</span><button class="h-7 w-7 rounded border border-border text-xs">A+</button></div></div>`),
+    B: bgroup('主题', brow('界面主题', sel(), '深色 / 浅色 / 跟随系统') + brow('强调色', `<div class="flex gap-1.5"><span class="h-5 w-5 rounded-full bg-primary ring-1 ring-fg/20"></span><span class="h-5 w-5 rounded-full bg-emerald-500"></span><span class="h-5 w-5 rounded-full bg-sky-500"></span></div>`))
+      + bgroup('编辑器', brow('字号', btnG('14 px'), '调整编辑器与代码字号') + brow('等宽字体', tog(true), '代码区使用等宽字体')),
+    C: card('外观', '主题与编辑器设置', `
+        <div class="flex items-center justify-between gap-4 border-b border-border/60 py-2.5"><div class="text-xs text-fg">界面主题</div><div class="flex gap-2">${btnG('浅色')}${btnP('深色')}${btnG('跟随系统')}</div></div>
+        <div class="flex items-center justify-between gap-4 border-b border-border/60 py-2.5"><div class="text-xs text-fg">编辑器等宽字体</div>${tog(true)}</div>
+        <div class="flex items-center justify-between gap-4 py-2.5"><div class="text-xs text-fg">字号</div><span class="text-xs text-muted">14 px（示例）</span></div>`)
+  }),
+  tv: () => ({
+    A: card('时序违例分析', 'Timing Violation 报告解析配置', `
+        <div class="space-y-2.5 text-xs">
+          <div class="flex items-center justify-between gap-4"><div><div>启用自动解析</div><div class="text-[10px] text-muted">仿真结束后自动解析 timing violation 报告</div></div>${tog(true)}</div>
+          <div class="flex items-center justify-between gap-4"><div><div>严重性阈值</div><div class="text-[10px] text-muted">低于该级别的违例不展示</div></div>${sel()}</div>
+          <div class="flex items-center justify-between gap-4"><div><div>同步到用例库</div><div class="text-[10px] text-muted">解析结果写入 case database</div></div>${tog(true)}</div>
+        </div>`),
+    B: bgroup('解析', brow('自动解析', tog(true), '仿真结束后自动解析报告') + brow('严重性阈值', sel(), '低于该级别不展示'))
+      + bgroup('集成', brow('同步到用例库', tog(true), '解析结果写入 case database') + brow('手动导入报告', btnG('选择文件…'))),
+    C: card('时序违例', 'Timing Violation 分析配置', `
+        <div class="flex items-center justify-between gap-4 border-b border-border/60 py-2.5"><div><div class="text-xs text-fg">启用自动解析</div><div class="text-[10px] text-muted">仿真结束后自动解析报告</div></div>${tog(true)}</div>
+        <div class="flex items-center justify-between gap-4 border-b border-border/60 py-2.5"><div class="text-xs text-fg">严重性阈值</div>${sel()}</div>
+        <div class="flex items-center justify-between gap-4 py-2.5"><div><div class="text-xs text-fg">同步到用例库</div><div class="text-[10px] text-muted">写入 case database</div></div>${tog(true)}</div>`)
+  }),
+};
+
+// ══════════ 导航绑定（A/B 通用） ══════════
+function bindNav(cls, contentId, renderFn) {
+  const contentEl = document.getElementById(contentId);
+  document.querySelectorAll('.' + cls).forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('.' + cls).forEach(x => {
+      x.classList.remove('bg-primary/15','text-primary','font-medium');
+      x.classList.add('text-muted');
+    });
+    b.classList.add('bg-primary/15','text-primary','font-medium');
+    b.classList.remove('text-muted');
+    contentEl.innerHTML = renderFn(b.dataset.tab);
+    contentEl.classList.remove('fade-in'); void contentEl.offsetWidth; contentEl.classList.add('fade-in');
+  }));
+}
+bindNav('A-nav', 'A-content', t => (CONTENT[t] || CONTENT.model)().A);
+bindNav('B-nav', 'B-content', t => (CONTENT[t] || CONTENT.model)().B);
+
+// ══════════ 变体 C：流式渲染全部 Tab + 锚点跳转 ══════════
+(function () {
+  const c = document.getElementById('C-content');
+  c.innerHTML = Object.keys(TABS).map(t => `
+    <section id="C-sec-${t}" class="mb-8" data-sec="${t}">
+      <div class="mb-3 flex items-center gap-2">
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-muted/80">${TABS[t].title}</h3>
+        <div class="h-px flex-1 bg-border"></div>
+      </div>
+      ${(CONTENT[t] || CONTENT.model)().C}
+    </section>`).join('');
+  // 锚点 chips 高亮 + 平滑滚动
+  const chips = document.querySelectorAll('.C-chip');
+  chips.forEach(ch => ch.addEventListener('click', () => {
+    chips.forEach(x => { x.className = 'C-chip shrink-0 rounded-full border border-border px-3 py-1 text-[11px] text-muted hover:text-fg'; });
+    ch.className = 'C-chip shrink-0 rounded-full bg-primary px-3 py-1 text-[11px] font-medium text-primaryfg';
+    document.getElementById('C-sec-' + ch.dataset.tab).scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }));
+  // 滚动监听：当前可视 section 高亮对应 chip
+  const secObs = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (!e.isIntersecting) return;
+      const tab = e.target.dataset.sec;
+      chips.forEach(x => {
+        if (x.dataset.tab === tab) x.click();
+      });
+    });
+  }, { root: c, rootMargin: '-15% 0px -70% 0px' });
+  document.querySelectorAll('[data-sec]').forEach(s => secObs.observe(s));
+})();
+
+// ══════════ 变体切换 ══════════
+const VARIANTS = ['A', 'B', 'C'];
+function showVariant(v) {
+  if (!VARIANTS.includes(v)) v = 'A';
+  VARIANTS.forEach(x => document.getElementById('variant-' + x).classList.add('hidden'));
+  document.getElementById('variant-' + v).classList.remove('hidden');
+  document.querySelectorAll('.V-btn').forEach(b => {
+    b.classList.toggle('bg-white/15', b.dataset.v === v);
+    b.classList.toggle('text-white/50', b.dataset.v !== v);
+  });
+  history.replaceState(null, '', '?variant=' + v);
+}
+document.querySelectorAll('.V-btn').forEach(b => b.addEventListener('click', () => showVariant(b.dataset.v)));
+document.addEventListener('keydown', e => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  const cur = new URLSearchParams(location.search).get('variant') || 'A';
+  const i = VARIANTS.indexOf(cur);
+  showVariant(VARIANTS[(i + (e.key === 'ArrowRight' ? 1 : VARIANTS.length - 1)) % VARIANTS.length]);
+});
+
+// 初始渲染
+document.querySelector('.A-nav').click();
+document.querySelector('.B-nav').click();
+showVariant(new URLSearchParams(location.search).get('variant'));
+</script>
+</body>
+</html>
+    <div class="min-h-0 flex-1 overflow-y-auto px-5 py-5" id="C-content"></div>
+  </div>
+</div>
+</div>
