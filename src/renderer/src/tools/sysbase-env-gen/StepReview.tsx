@@ -43,7 +43,7 @@ function buildSubsysEntries(config: SysbaseGenConfig): ConfigEntry[] {
     { flag: '-x', value: config.dutSpecPath, required: true },
     { flag: '-mini', value: config.miniExcelPath, required: true },
     { flag: '-ral', value: config.ralDirs.join(' '), required: true },
-    { flag: '-clk', value: config.clkDir, required: true },
+    { flag: '-clk', value: config.clkDir, required: false },
     { flag: '-clk2', value: config.clk2Dir, required: false },
     { flag: '-mod_io', value: config.modIoPath, required: true },
     { flag: '-pinlist', value: config.pinlistPath, required: false },
