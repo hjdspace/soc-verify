@@ -9,6 +9,9 @@
  */
 
 import { existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 import { t, TRPCError } from '../../ipc/router-context';
 import { BrowserWindow } from 'electron';
 import { reqString, optStringUndef, cast } from './shared';
@@ -39,6 +42,14 @@ import {
   loadScriptPath,
   listSavedConfigs,
 } from '../sysbase-gen/config-persistence';
+import {
+  generateDutSpecTemplate,
+  getDutSpecTemplatePreview,
+} from '../sysbase-gen/dut-spec-template';
+import {
+  generateMiniExcelTemplate,
+  getMiniExcelTemplatePreview,
+} from '../sysbase-gen/mini-excel-template';
 import type { SysbaseGenConfig } from '../../../shared/types/sysbase-gen';
 import {
   executeGen,
@@ -346,6 +357,128 @@ export const sysbaseGenRouter = t.router({
       const config = await loadSysgenConfig(input.subsys, projectDir);
       const scriptPath = await loadScriptPath(projectDir);
       return { config, scriptPath };
+    }),
+
+  /** Generate a dut_spec template xlsx from the markdown-defined structure (replaces static template file). */
+  generateDutSpecTemplate: t.procedure
+    .input((raw): { outputPath?: string; subsysName?: string } => {
+      const r = raw as Record<string, unknown>;
+      return {
+        outputPath: typeof r.outputPath === 'string' ? r.outputPath : undefined,
+        subsysName: typeof r.subsysName === 'string' ? r.subsysName : undefined,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const outputPath = input.outputPath || join(tmpdir(), `soc-verify-dut-spec-${Date.now()}.xlsx`);
+      try {
+        await generateDutSpecTemplate(outputPath, input.subsysName);
+        return { path: outputPath };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message });
+      }
+    }),
+
+  /** Get a preview of the dut_spec template structure (sheet names + section headers). */
+  getDutSpecGeneratedPreview: t.procedure
+    .query(() => {
+      return getDutSpecTemplatePreview();
+    }),
+
+  /** Generate a mini excel template xlsx from the code-defined structure (replaces static template file). */
+  generateMiniExcelTemplate: t.procedure
+    .input((raw): { outputPath?: string; subsysName?: string } => {
+      const r = raw as Record<string, unknown>;
+      return {
+        outputPath: typeof r.outputPath === 'string' ? r.outputPath : undefined,
+        subsysName: typeof r.subsysName === 'string' ? r.subsysName : undefined,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const outputPath = input.outputPath || join(tmpdir(), `soc-verify-mini-excel-${Date.now()}.xlsx`);
+      try {
+        await generateMiniExcelTemplate(outputPath, input.subsysName);
+        return { path: outputPath };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message });
+      }
+    }),
+
+  /** Get a preview of the mini excel template structure (sheet names + headers). */
+  getMiniExcelGeneratedPreview: t.procedure
+    .query(() => {
+      return getMiniExcelTemplatePreview();
+    }),
+
+  /** Read a CSV file and return its content (for preview in StepCsv). */
+  readCsvFile: t.procedure
+    .input((raw): { path: string } => {
+      const r = raw as Record<string, unknown>;
+      const path = reqString(r, 'path');
+      if (!path.trim()) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'path 不能为空' });
+      }
+      return { path };
+    })
+    .query(({ input }) => {
+      if (!existsSync(input.path)) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: `文件不存在: ${input.path}` });
+      }
+      try {
+        const content = readFileSync(input.path, 'utf-8');
+        return { content };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message });
+      }
+    }),
+
+  /** Create a temp CSV template file and return its path (for editing). */
+  createCsvTemplate: t.procedure
+    .input((raw): { content: string; filename?: string } => {
+      const r = raw as Record<string, unknown>;
+      const content = reqString(r, 'content');
+      return {
+        content,
+        filename: typeof r.filename === 'string' ? r.filename : undefined,
+      };
+    })
+    .mutation(({ input }) => {
+      const fileName = input.filename ?? `soc-verify-top-csv-${Date.now()}.csv`;
+      const tmpPath = join(tmpdir(), fileName);
+      try {
+        writeFileSync(tmpPath, input.content, 'utf-8');
+        return { path: tmpPath };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message });
+      }
+    }),
+
+  /** Write CSV content to a specified path (for export). */
+  writeCsvFile: t.procedure
+    .input((raw): { path: string; content: string } => {
+      const r = raw as Record<string, unknown>;
+      const path = reqString(r, 'path');
+      const content = reqString(r, 'content');
+      if (!path.trim()) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'path 不能为空' });
+      }
+      return { path, content };
+    })
+    .mutation(({ input }) => {
+      try {
+        const dir = dirname(input.path);
+        if (!existsSync(dir)) {
+          mkdirSync(dir, { recursive: true });
+        }
+        writeFileSync(input.path, input.content, 'utf-8');
+        return { success: true };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message });
+      }
     }),
 
   /** List all saved configs grouped by subsys name (Issue 6). */
