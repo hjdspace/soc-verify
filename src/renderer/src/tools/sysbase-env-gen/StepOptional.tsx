@@ -1,9 +1,12 @@
 /**
- * StepOptional — Step 8: Optional parameters (pinlist, dmalist, output dir).
+ * StepOptional — Optional parameters step.
+ *
+ * Subsys mode (Step 8): pinlist + dmalist + output dir.
+ * Top mode (Step 5): output dir only (no pinlist/dmalist).
  *
  * Provides:
- *   - pinlist file path (optional) + browse button
- *   - dmalist file path (optional) + browse button
+ *   - pinlist file path (optional, subsys only) + browse button
+ *   - dmalist file path (optional, subsys only) + browse button
  *   - output directory (required, default ./) + browse button
  *   - Parameter explanation callout
  */
@@ -16,6 +19,7 @@ import { cn } from '@renderer/lib/utils';
 export function StepOptional() {
   const config = useSysbaseGenStore((s) => s.config);
   const updateConfig = useSysbaseGenStore((s) => s.updateConfig);
+  const isTopLevel = config.genLevel === 'top';
 
   // Browse for pinlist file
   const handleBrowsePinlist = async () => {
@@ -74,12 +78,14 @@ export function StepOptional() {
       <div className="flex items-start gap-2 rounded-md border border-info/30 bg-info/5 p-3 text-xs text-info-foreground">
         <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>
-          可选参数用于补充 Pin Mux 和 DMA 配置信息。未填写时将省略对应命令参数。
-          输出目录为生成文件的存放路径。
+          {isTopLevel
+            ? '输出目录为生成文件的存放路径。Top 级环境生成仅需要输出目录。'
+            : '可选参数用于补充 Pin Mux 和 DMA 配置信息。未填写时将省略对应命令参数。输出目录为生成文件的存放路径。'}
         </span>
       </div>
 
-      {/* pinlist (optional) */}
+      {/* pinlist (optional, subsys only) */}
+      {!isTopLevel && (
       <div className="space-y-1.5">
         <div className="flex items-center gap-1">
           <span className="text-xs font-medium">Pinlist 文件路径</span>
@@ -112,8 +118,10 @@ export function StepOptional() {
           </div>
         )}
       </div>
+      )}
 
-      {/* dmalist (optional) */}
+      {/* dmalist (optional, subsys only) */}
+      {!isTopLevel && (
       <div className="space-y-1.5">
         <div className="flex items-center gap-1">
           <span className="text-xs font-medium">DMA List 文件路径</span>
@@ -146,6 +154,7 @@ export function StepOptional() {
           </div>
         )}
       </div>
+      )}
 
       {/* output directory (required) */}
       <div className="space-y-1.5">
