@@ -14,8 +14,8 @@
  *       -x       <dutSpecPath> \
  *       -mini    <miniExcelPath> \
  *       -ral     <ralDirs.join(' ')> \
- *       -clk     <clkDir> \
- *       [-clk2   <clk2Dir>] \
+*       [-clk    <clkDir>] \
+*       [-clk2   <clk2Dir>] \
  *       -mod_io  <modIoPath> \
  *       [-pinlist <pinlistPath>] \
  *       [-dmalist <dmalistPath>] \
@@ -86,7 +86,11 @@ function buildSubsysCommand(config: SysbaseGenConfig, scriptPath: string): strin
   lines.push(formatLine('-x', config.dutSpecPath));
   lines.push(formatLine('-mini', config.miniExcelPath));
   lines.push(formatLine('-ral', config.ralDirs.join(' ')));
-  lines.push(formatLine('-clk', config.clkDir));
+
+  // Optional: -clk (some subsys don't need a CLK directory)
+  if (config.clkDir.trim()) {
+    lines.push(formatLine('-clk', config.clkDir));
+  }
 
   // Optional: -clk2
   if (config.clk2Dir.trim()) {
