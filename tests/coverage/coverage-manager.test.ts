@@ -90,24 +90,40 @@ function makeMockData(sessionId: string): CoverageData {
 
 // ─── Mock 适配器 ─────────────────────────────────────────────────
 
-function createMockAdapter(data: CoverageData | null) {
+/**
+ * 创建 mock adapter。
+ * - summaryData: summaryOnly=true 时返回的数据（不含 uncovered/testContributions/csvData）
+ * - fullData: summaryOnly=false 时返回的完整数据（含 uncovered 等详细字段）
+ * 如果只传 data，则两种模式都返回同一份数据。
+ */
+function createMockAdapter(data: CoverageData | null, fullData?: CoverageData | null) {
   return {
     hasParser: () => data !== null,
     parse: vi.fn(async (
       _sessionId: string,
       _reportDir: string,
-      enrichment: { sessionId: string; covMergeDir: string; edaTool: string; targets?: Partial<Record<string, number>> },
+      enrichment: {
+        sessionId: string;
+        covMergeDir: string;
+        edaTool: string;
+        targets?: Partial<Record<string, number>>;
+        summaryOnly?: boolean;
+      },
     ) => {
-      const d = data ?? makeMockData('fallback');
+      // summaryOnly=true 返回 summaryData（参数 data），summaryOnly=false 返回 fullData（如果有）
+      const sourceData = (enrichment.summaryOnly || !fullData)
+        ? (data ?? makeMockData('fallback'))
+        : (fullData ?? data ?? makeMockData('fallback'));
       const enriched: CoverageData = {
-        ...d,
+        ...sourceData,
         sessionId: enrichment.sessionId,
         source: {
           covMergeDir: enrichment.covMergeDir,
           edaTool: enrichment.edaTool as CoverageData['source']['edaTool'],
           reportGeneratedAt: Date.now(),
         },
-        targets: enrichment.targets ?? d.targets,
+        targets: enrichment.targets ?? sourceData.targets,
+        summaryOnly: enrichment.summaryOnly ?? false,
       };
       return { data: enriched, jsonStr: JSON.stringify(enriched) };
     }),
@@ -836,6 +852,127 @@ describe('CoverageManager', () => {
       const after = await mgr.listSessions();
       expect(after).toHaveLength(1);
       expect(after[0].sessionId).toBe(r2.sessionId);
+
+      rmSync(tmpDir, { recursive: true });
+    });
+  });
+
+  // ─── 分层解析：parseDetails 测试 ────────────────────────────────
+
+  describe('parseDetails', () => {
+    it('throws when session not found', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'cov-detail-notfound-'));
+      const adapter = createMockAdapter(makeMockData('pre'));
+      const mgr = new CoverageManager({
+        projectRoot: tmpDir,
+        coverageAdapter: adapter as never,
+        reportGenerator: createMockReportGenerator(tmpDir),
+      });
+
+      await expect(mgr.parseDetails('nonexistent', MOCK_EDA_CONFIG)).rejects.toThrow(
+        /not found/,
+      );
+      rmSync(tmpDir, { recursive: true });
+    });
+
+    it('parses details and merges into existing session', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'cov-detail-merge-'));
+      // summary data：只有 root，没有 uncovered
+      const summaryData = makeMockData('pre-summary');
+      summaryData.summaryOnly = true;
+
+      // full data：有 uncovered 数据
+      const fullData = makeMockData('pre-full');
+      fullData.summaryOnly = false;
+      fullData.uncovered = {
+        functional: [
+          { module: 'top/cpu_core', description: 'uncovered bin[0]' },
+        ],
+      };
+
+      const adapter = createMockAdapter(summaryData, fullData);
+      const mgr = new CoverageManager({
+        projectRoot: tmpDir,
+        coverageAdapter: adapter as never,
+        reportGenerator: createMockReportGenerator(tmpDir),
+      });
+
+      // Step 1: 导入（只解析 summary）
+      const { sessionId } = await mgr.importCoverage('/mock', MOCK_EDA_CONFIG);
+      const cached = await mgr.getSession(sessionId);
+      expect(cached?.summaryOnly).toBe(true);
+      expect(cached?.uncovered).toBeUndefined();
+
+      // Step 2: 按需详细解析
+      const result = await mgr.parseDetails(sessionId, MOCK_EDA_CONFIG);
+      expect(result.summaryOnly).toBe(false);
+      expect(result.uncovered).toBeDefined();
+      expect(result.uncovered?.functional).toHaveLength(1);
+
+      // 缓存应已更新
+      const updated = await mgr.getSession(sessionId);
+      expect(updated?.summaryOnly).toBe(false);
+      expect(updated?.uncovered).toBeDefined();
+
+      rmSync(tmpDir, { recursive: true });
+    });
+
+    it('throws when no parser available', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'cov-detail-noparser-'));
+      const adapter = createMockAdapter(makeMockData('pre'));
+      const mgr = new CoverageManager({
+        projectRoot: tmpDir,
+        coverageAdapter: adapter as never,
+        reportGenerator: createMockReportGenerator(tmpDir),
+      });
+
+      // 先正常导入
+      const { sessionId } = await mgr.importCoverage('/mock', MOCK_EDA_CONFIG);
+
+      // 移除 adapter
+      mgr.setAdapter(null);
+
+      await expect(mgr.parseDetails(sessionId, MOCK_EDA_CONFIG)).rejects.toThrow(
+        'No coverage-parser plugin loaded',
+      );
+      rmSync(tmpDir, { recursive: true });
+    });
+
+    it('calls adapter.parse with summaryOnly=false', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'cov-detail-opt-'));
+      const summaryData = makeMockData('pre-summary');
+      summaryData.summaryOnly = true;
+      const fullData = makeMockData('pre-full');
+      fullData.summaryOnly = false;
+
+      const adapter = createMockAdapter(summaryData, fullData);
+      const mgr = new CoverageManager({
+        projectRoot: tmpDir,
+        coverageAdapter: adapter as never,
+        reportGenerator: createMockReportGenerator(tmpDir),
+      });
+
+      const { sessionId } = await mgr.importCoverage('/mock', MOCK_EDA_CONFIG);
+
+      // 验证导入时以 summaryOnly=true 调用
+      expect(adapter.parse).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.objectContaining({ summaryOnly: true }),
+      );
+
+      // 清除 mock 调用记录
+      adapter.parse.mockClear();
+
+      // 执行详细解析
+      await mgr.parseDetails(sessionId, MOCK_EDA_CONFIG);
+
+      // 验证详细解析时以 summaryOnly=false 调用
+      expect(adapter.parse).toHaveBeenCalledWith(
+        sessionId,
+        expect.any(String),
+        expect.objectContaining({ summaryOnly: false }),
+      );
 
       rmSync(tmpDir, { recursive: true });
     });
