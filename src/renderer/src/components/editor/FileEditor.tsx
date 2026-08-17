@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import CodeMirror from '@uiw/react-codemirror';
 import { StreamLanguage } from '@codemirror/language';
 import { javascript } from '@codemirror/lang-javascript';
@@ -69,6 +70,48 @@ function isHtmlFile(filename: string): boolean {
   return ext === 'html' || ext === 'htm';
 }
 
+/** 图片扩展名集合 */
+const IMAGE_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'ico', 'svg', 'avif', 'tiff', 'tif',
+]);
+
+function isImageFile(filename: string): boolean {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  return IMAGE_EXTENSIONS.has(ext);
+}
+
+/**
+ * 将本地文件路径转换为 `local-resource://` URL，用于在渲染进程中安全加载本地资源。
+ * 主进程通过 `protocol.handle` 注册的 handler 会读取对应文件并返回。
+ *
+ * 路径中的反斜杠统一转为正斜杠后再编码，避免 Chromium URL 规范化问题。
+ * Windows 的 fs API 兼容正斜杠路径。
+ */
+function toLocalResourceUrl(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/');
+  const encoded = encodeURIComponent(normalized);
+  return `local-resource://app/${encoded}`;
+}
+
+/**
+ * 将相对路径 href 解析为 `local-resource://` URL。
+ * 用于 Markdown 预览中图片 src 的重写：将相对于 markdown 文件的路径
+ * 解析为绝对路径后编码为 local-resource URL。
+ * 外部链接（http/https/data）直接返回原值。
+ */
+function resolveImageSrc(baseFilePath: string, src: string | undefined): string | undefined {
+  if (!src) return undefined;
+  // 外部链接不重写
+  if (/^(https?:|data:|blob:|local-resource:)/i.test(src)) return src;
+  // 锚点链接不重写（图片一般不会有，但防御性处理）
+  if (src.startsWith('#')) return src;
+  // 去掉 anchor 和 query
+  const cleanHref = src.split('#')[0].split('?')[0];
+  // 解析为绝对路径
+  const resolvedPath = resolveRelativePath(baseFilePath, cleanHref);
+  return toLocalResourceUrl(resolvedPath);
+}
+
 // ── Markdown 预览链接处理 ─────────────────────────────────────
 
 /** 判断 href 是否为外部链接（http、mailto、锚点等） */
@@ -125,6 +168,7 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [previewMode, setPreviewMode] = useState(false);
+  const [imgZoom, setImgZoom] = useState(1);
 
   const currentTheme = useThemeStore((s) => s.currentTheme);
   const themes = useThemeStore((s) => s.themes);
@@ -133,13 +177,21 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
 
   const isMd = isMarkdownFile(fileName);
   const isHtml = isHtmlFile(fileName);
+  const isImage = isImageFile(fileName);
+  const imageUrl = useMemo(() => (isImage ? toLocalResourceUrl(filePath) : ''), [isImage, filePath]);
   const languageExtension = useMemo(() => {
     const ext = getLanguageExtension(fileName);
     return ext ? [ext] : [];
   }, [fileName]);
 
-  // 加载文件内容
+  // 加载文件内容（图片文件跳过文本读取，直接使用 local-resource URL 预览）
   useEffect(() => {
+    if (isImage) {
+      setLoading(false);
+      setContent('');
+      setOriginalContent('');
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setSaveError(null);
@@ -162,7 +214,7 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
         if (!cancelled) setLoading(false);
       });
     return () => { cancelled = true; };
-  }, [projectId, filePath]);
+  }, [projectId, filePath, isImage]);
 
   const isDirty = content !== originalContent;
 
@@ -218,6 +270,64 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
       <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         加载中...
+      </div>
+    );
+  }
+
+  // ── 图片预览模式 ──────────────────────────────────────
+  if (isImage) {
+    return (
+      <div className="flex h-full flex-1 flex-col overflow-hidden">
+        {/* 工具栏 */}
+        <div className="flex items-center justify-between border-b bg-secondary/20 px-3 py-1">
+          <span className="truncate text-xs text-muted-foreground" title={filePath}>
+            {filePath}
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setImgZoom((z) => Math.max(0.1, z - 0.25))}
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              title="缩小"
+            >
+              <ZoomOut className="h-3 w-3" />
+            </button>
+            <span className="text-[10px] text-muted-foreground tabular-nums">
+              {Math.round(imgZoom * 100)}%
+            </span>
+            <button
+              onClick={() => setImgZoom((z) => Math.min(10, z + 0.25))}
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              title="放大"
+            >
+              <ZoomIn className="h-3 w-3" />
+            </button>
+            <button
+              onClick={() => setImgZoom(1)}
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              title="重置缩放"
+            >
+              <Maximize2 className="h-3 w-3" />
+            </button>
+          </div>
+        </div>
+        {/* 图片显示区域 */}
+        <div
+          className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-secondary/10"
+          onClick={() => {
+            // 点击图片区域时切换实际大小/适应窗口
+            if (imgZoom === 1) return;
+            setImgZoom(1);
+          }}
+        >
+          <img
+            src={imageUrl}
+            alt={fileName}
+            className="max-h-full max-w-full select-none object-contain"
+            style={{ transform: `scale(${imgZoom})`, transformOrigin: 'center center', cursor: imgZoom === 1 ? 'default' : 'zoom-in' }}
+            loading="lazy"
+            draggable={false}
+          />
+        </div>
       </div>
     );
   }
@@ -333,7 +443,7 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
                     );
                   },
                   img: ({ src, alt }) => (
-                    <img src={src} alt={alt} loading="lazy" />
+                    <img src={resolveImageSrc(filePath, src)} alt={alt} loading="lazy" className="max-w-full" />
                   ),
                 }}
               >
