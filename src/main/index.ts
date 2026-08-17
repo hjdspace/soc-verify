@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray } from 'electron';
+import { app, BrowserWindow, Tray, protocol } from 'electron';
 import { createIPCHandler } from './ipc/electron-trpc-bridge';
 import { router } from './ipc/router';
 import { resolveAgentRuntime } from './agent/paths';
@@ -15,9 +15,24 @@ import { createEventRelay, type EventRelay } from './ipc/event-relay';
 import { setupLinuxPlatform } from './platform-setup';
 import { createTray } from './tray-manager';
 import { createWindow, registerWindowControls } from './window-factory';
+import { registerLocalResourceProtocol, LOCAL_RESOURCE_SCHEME } from './local-resource-protocol';
 
 // ── Linux 平台环境设置（IME + D-Bus）─────────────────────────────
 setupLinuxPlatform();
+
+// ── 注册自定义协议 scheme（必须在 app.ready 之前）──────────────────
+// local-resource:// 用于渲染进程安全加载本地图片等资源文件
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: LOCAL_RESOURCE_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+    },
+  },
+]);
 
 // ── 单实例锁：防止多个实例共享同一 userData，避免 localStorage leveldb 锁竞争 ──
 // 若无锁则说明已有实例在运行，退出并让已有实例聚焦窗口。
@@ -52,6 +67,9 @@ function setupEventRelay(win: BrowserWindow): EventRelay {
 }
 
 app.whenReady().then(async () => {
+  // 注册 local-resource:// 协议 handler（必须在 ready 之后）
+  registerLocalResourceProtocol();
+
   await projectManager.ensureDataDir();
   const restoredCount = await projectManager.restorePersistedProjects();
   if (restoredCount > 0) {
