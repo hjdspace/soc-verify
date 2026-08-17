@@ -71,6 +71,16 @@ export interface EventBridgeAPI {
       details?: Record<string, unknown>;
     }) => void,
   ) => () => void;
+  // 覆盖率详细解析进度（按需触发详细解析时推送）
+  onCoverageDetailProgress: (
+    callback: (data: {
+      step: string;
+      message: string;
+      percent?: number;
+      durationMs?: number;
+      details?: Record<string, unknown>;
+    }) => void,
+  ) => () => void;
   // Issue #9: Browser window-open events
   onBrowserOpenNewTab: (callback: (data: { url: string }) => void) => () => void;
   onAuthPopup: (callback: (data: { type: 'opened' | 'closed'; url: string }) => void) => () => void;
