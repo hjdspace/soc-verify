@@ -258,6 +258,7 @@ describe('env-manager', () => {
 
     it('includes all Cadence environment variables', () => {
       const vars = getKnownEnvVarNames();
+      expect(vars).toContain('XCELIUM_HOME');
       expect(vars).toContain('XLM_ROOT');
       expect(vars).toContain('CDS_INST_DIR');
       expect(vars).toContain('CDS_LICENSE_FILE');
@@ -304,11 +305,12 @@ describe('env-manager', () => {
       expect(names).toContain('SNPSLMD_LICENSE_FILE');
     });
 
-    it('cadence group contains XLM_ROOT, CDS_INST_DIR, CDS_LICENSE_FILE', () => {
+    it('cadence group contains XCELIUM_HOME, XLM_ROOT, CDS_INST_DIR, CDS_LICENSE_FILE', () => {
       const catalog = getEnvVarCatalog();
       const cadenceGroup = catalog.find((g) => g.category === 'cadence');
       expect(cadenceGroup).toBeDefined();
       const names = cadenceGroup!.vars.map((v) => v.name);
+      expect(names).toContain('XCELIUM_HOME');
       expect(names).toContain('XLM_ROOT');
       expect(names).toContain('CDS_INST_DIR');
       expect(names).toContain('CDS_LICENSE_FILE');
