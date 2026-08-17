@@ -233,6 +233,68 @@ describe('traceweave-paths - buildTraceweaveMcpConfig', () => {
     delete process.env.VCS_HOME;
   });
 
+  it('passes through XCELIUM_HOME from process.env', () => {
+    mockExistsSync.mockImplementation((p) => {
+      const s = String(p).replace(/\\/g, '/');
+      return s.includes('traceweave') && s.includes('server.py');
+    });
+    process.env.XCELIUM_HOME = '/opt/cadence/xcelium';
+
+    const config = buildTraceweaveMcpConfig();
+    expect(config).not.toBeNull();
+    expect(config!.env!.XCELIUM_HOME).toBe('/opt/cadence/xcelium');
+
+    delete process.env.XCELIUM_HOME;
+  });
+
+  it('falls back XLM_ROOT to XCELIUM_HOME when XLM_ROOT is not set', () => {
+    mockExistsSync.mockImplementation((p) => {
+      const s = String(p).replace(/\\/g, '/');
+      return s.includes('traceweave') && s.includes('server.py');
+    });
+    process.env.XCELIUM_HOME = '/opt/cadence/xcelium';
+    // Ensure XLM_ROOT is not set
+    delete process.env.XLM_ROOT;
+
+    const config = buildTraceweaveMcpConfig();
+    expect(config).not.toBeNull();
+    expect(config!.env!.XCELIUM_HOME).toBe('/opt/cadence/xcelium');
+    expect(config!.env!.XLM_ROOT).toBe('/opt/cadence/xcelium');
+
+    delete process.env.XCELIUM_HOME;
+  });
+
+  it('does not override XLM_ROOT when both XLM_ROOT and XCELIUM_HOME are set', () => {
+    mockExistsSync.mockImplementation((p) => {
+      const s = String(p).replace(/\\/g, '/');
+      return s.includes('traceweave') && s.includes('server.py');
+    });
+    process.env.XCELIUM_HOME = '/opt/cadence/xcelium';
+    process.env.XLM_ROOT = '/opt/cadence/xcelium/custom';
+
+    const config = buildTraceweaveMcpConfig();
+    expect(config).not.toBeNull();
+    expect(config!.env!.XCELIUM_HOME).toBe('/opt/cadence/xcelium');
+    expect(config!.env!.XLM_ROOT).toBe('/opt/cadence/xcelium/custom');
+
+    delete process.env.XCELIUM_HOME;
+    delete process.env.XLM_ROOT;
+  });
+
+  it('does not set XLM_ROOT when neither XLM_ROOT nor XCELIUM_HOME is set', () => {
+    mockExistsSync.mockImplementation((p) => {
+      const s = String(p).replace(/\\/g, '/');
+      return s.includes('traceweave') && s.includes('server.py');
+    });
+    delete process.env.XLM_ROOT;
+    delete process.env.XCELIUM_HOME;
+
+    const config = buildTraceweaveMcpConfig();
+    expect(config).not.toBeNull();
+    expect(config!.env!.XLM_ROOT).toBeUndefined();
+    expect(config!.env!.XCELIUM_HOME).toBeUndefined();
+  });
+
   it('returns null when TraceWeave dir is not available', () => {
     mockExistsSync.mockReturnValue(false);
     expect(buildTraceweaveMcpConfig()).toBeNull();
