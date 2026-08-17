@@ -342,8 +342,8 @@ export const useSysbaseGenStore = create<SysbaseGenStoreState>((set, get) => ({
         return config.miniExcelPath.trim() !== '';
       case 4: // Step 5: ralDirs
         return config.ralDirs.length > 0;
-      case 5: // Step 6: clkDir
-        return config.clkDir.trim() !== '';
+      case 5: // Step 6: clkDir (optional — some subsys don't need -clk)
+        return true;
       case 7: // Step 8: outputDir (required, default ./)
         return config.outputDir.trim() !== '';
       default:
