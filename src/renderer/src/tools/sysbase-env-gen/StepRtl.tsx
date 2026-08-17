@@ -22,7 +22,7 @@ export function StepRtl() {
   const setRtlLoading = useSysbaseGenStore((s) => s.setRtlLoading);
   const setRtlError = useSysbaseGenStore((s) => s.setRtlError);
 
-  // Load RTL files when subsys is set
+  // Load RTL files when subsys/chip is set
   const loadRtlFiles = useCallback(async (subsys: string) => {
     if (!subsys) {
       setRtlFiles([]);
