@@ -12,6 +12,11 @@
  *   3. 如果文本报告为空或不存在，尝试直接从 cov_merge 目录扫描覆盖率数据文件
  *   4. 如果都失败，返回一个包含基本结构的占位 CoverageData
  *
+ * 分层解析模式（options.summaryOnly）：
+ *   - summaryOnly=true：只解析 summary.txt，快速返回层级树 + 覆盖率摘要
+ *   - summaryOnly=false（默认）：解析全部报告（summary + detail + metrics + grade + bins + csv）
+ *   分层解析避免大数据量时一次性解析所有报告导致 GUI 卡顿
+ *
  * 支持的报告格式：
  *   - IMC summary report: 表格格式，含 Metric / Covered/Total / Coverage%
  *   - IMC detail report: 层级缩进格式，含 Instance / 各 metric 百分比
@@ -845,7 +850,7 @@ function scanCovMergeDir(covMergeDir, log) {
  *    Score: 95.50
  *    Rank: 1
  *
- * 2. Cadence IMC report -test 输出（grade.txt）:
+ * 2. Cadence IMC report -grading 输出（grade.txt）:
  *    Name             Line%   Branch%   Toggle%   ...
  *    testname1        95.5    87.2      76.0      ...
  */
@@ -881,7 +886,7 @@ function parseGradeReport(text, log) {
     return contributions;
   }
 
-  // 尝试 IMC report -test 格式（表格）
+  // 尝试 IMC report -grading 格式（表格）
   // 找到表头行（包含 % 或 test/name 等关键词）
   var lines = text.split('\n');
   var headerIdx = -1;
@@ -1038,10 +1043,12 @@ function readCsvData(csvDir, log) {
 
 // ─── 主解析入口 ───────────────────────────────────────────────
 
-async function parse(projectRoot, sessionId, reportDir) {
+async function parse(projectRoot, sessionId, reportDir, options) {
+  // 分层解析：options.summaryOnly=true 时只解析 summary.txt，跳过 detail/grade/bins/csv
+  var summaryOnly = !!(options && options.summaryOnly);
   var log = createDebugLogger(reportDir);
 
-  log('=== Parse Start ===');
+  log('=== Parse Start (summaryOnly=' + summaryOnly + ') ===');
   log('projectRoot: ' + projectRoot);
   log('sessionId: ' + sessionId);
   log('reportDir: ' + reportDir);
@@ -1090,13 +1097,18 @@ async function parse(projectRoot, sessionId, reportDir) {
     log('summary.txt first 500 chars:\n' + summaryText.substring(0, 500));
   }
 
-  detailText = safeReadTextFile(detailPath, log, 'detail.txt');
-  if (detailText) {
-    log('detail.txt first 500 chars:\n' + detailText.substring(0, 500));
-  }
+  // 分层解析：summaryOnly 模式跳过 detail/metrics/grade/bins/csv
+  if (!summaryOnly) {
+    detailText = safeReadTextFile(detailPath, log, 'detail.txt');
+    if (detailText) {
+      log('detail.txt first 500 chars:\n' + detailText.substring(0, 500));
+    }
 
-  // metrics.txt 读取（仅用于 debug 日志，IMC report_metrics 可能生成目录）
-  safeReadTextFile(metricsPath, log, 'metrics.txt');
+    // metrics.txt 读取（仅用于 debug 日志，IMC report_metrics 可能生成目录）
+    safeReadTextFile(metricsPath, log, 'metrics.txt');
+  } else {
+    log('[parse] summaryOnly mode — skipping detail/metrics/grade/bins/csv');
+  }
 
   // 3. 解析文本报告
   var summaryMetrics = null;
@@ -1132,34 +1144,37 @@ async function parse(projectRoot, sessionId, reportDir) {
   }
 
   // 3b. 读取并解析新增报告（grade / bins / csv）
+  // 分层解析：summaryOnly 模式跳过这些报告
   var testContributions = null;
   var uncoveredBins = null;
   var csvData = null;
 
-  // grade 报告
-  var gradePath = join(reportDir, 'grade.txt');
-  var gradeText = safeReadTextFile(gradePath, log, 'grade.txt');
-  if (gradeText) {
-    testContributions = parseGradeReport(gradeText, log);
-  } else {
-    // urg -grade testfile 生成的是 gradedtests.txt
-    var urgGradePath = join(reportDir, 'gradedtests.txt');
-    var urgGradeText = safeReadTextFile(urgGradePath, log, 'gradedtests.txt');
-    if (urgGradeText) {
-      testContributions = parseGradeReport(urgGradeText, log);
+  if (!summaryOnly) {
+    // grade 报告
+    var gradePath = join(reportDir, 'grade.txt');
+    var gradeText = safeReadTextFile(gradePath, log, 'grade.txt');
+    if (gradeText) {
+      testContributions = parseGradeReport(gradeText, log);
+    } else {
+      // urg -grade testfile 生成的是 gradedtests.txt
+      var urgGradePath = join(reportDir, 'gradedtests.txt');
+      var urgGradeText = safeReadTextFile(urgGradePath, log, 'gradedtests.txt');
+      if (urgGradeText) {
+        testContributions = parseGradeReport(urgGradeText, log);
+      }
     }
-  }
 
-  // bins 报告
-  var binsPath = join(reportDir, 'bins.txt');
-  var binsText = safeReadTextFile(binsPath, log, 'bins.txt');
-  if (binsText) {
-    uncoveredBins = parseBinsReport(binsText, log);
-  }
+    // bins 报告
+    var binsPath = join(reportDir, 'bins.txt');
+    var binsText = safeReadTextFile(binsPath, log, 'bins.txt');
+    if (binsText) {
+      uncoveredBins = parseBinsReport(binsText, log);
+    }
 
-  // CSV 数据
-  var csvDir = join(reportDir, 'csv');
-  csvData = readCsvData(csvDir, log);
+    // CSV 数据
+    var csvDir = join(reportDir, 'csv');
+    csvData = readCsvData(csvDir, log);
+  }
 
   // 4. 如果文本报告解析失败，尝试从 cov_merge 目录直接扫描
   if (!summaryMetrics && covMergeDir) {
@@ -1233,10 +1248,19 @@ async function parse(projectRoot, sessionId, reportDir) {
     uncovered: uncovered,
     testContributions: testContributions || undefined,
     csvData: csvData || undefined,
+    // 标记本次解析的模式：true=仅解析了summary，detail/grade/bins/csv未解析
+    summaryOnly: summaryOnly,
   };
 }
 
 module.exports = {
   manifest: MANIFEST,
   parse: parse,
+  // 导出内部函数供按需调用
+  parseImcHierarchySummary: parseImcHierarchySummary,
+  parseImcSummary: parseImcSummary,
+  parseImcDetail: parseImcDetail,
+  parseGradeReport: parseGradeReport,
+  parseBinsReport: parseBinsReport,
+  readCsvData: readCsvData,
 };
