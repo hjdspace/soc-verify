@@ -15,16 +15,31 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 // ─── Mock store state ───────────────────────────────────────
 
+const mockSubsysSteps = [
+  { index: 0, key: 'subsys', label: '选择 Subsys' },
+  { index: 1, key: 'rtl', label: 'RTL 顶层文件' },
+  { index: 2, key: 'dut-spec', label: 'DUT Spec' },
+  { index: 3, key: 'mini', label: 'Mini Excel' },
+  { index: 4, key: 'ral', label: 'RAL 目录' },
+  { index: 5, key: 'clk', label: 'CLK 目录' },
+  { index: 6, key: 'mod-io', label: 'Module IO' },
+  { index: 7, key: 'optional', label: '可选项' },
+  { index: 8, key: 'review', label: '预览执行' },
+];
+
 const mockStoreState = {
   step: 0,
   totalSteps: 9,
+  steps: mockSubsysSteps,
   config: {
+    genLevel: 'subsys' as const,
     subsys: 'apcpu_sys',
     instanceName: 'u_sys_apcpu',
     rtlFile: '/path/to/top.v',
     moduleName: 'apcpu_top',
     dutSpecPath: '/path/to/dut_spec.xlsx',
     miniExcelPath: '/path/to/mini.xlsx',
+    csvPath: '',
     ralDirs: ['/ral/dir1', '/ral/dir2'],
     clkDir: '/clk/dir',
     clk2Dir: '',
@@ -60,6 +75,7 @@ const mockStoreState = {
   setScriptPath: vi.fn(),
   resetConfig: vi.fn(),
   loadConfigIntoStore: vi.fn(),
+  setGenLevel: vi.fn(),
   setRtlFiles: vi.fn(),
   setRtlLoading: vi.fn(),
   setRtlError: vi.fn(),
