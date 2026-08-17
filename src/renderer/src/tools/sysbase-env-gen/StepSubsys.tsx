@@ -29,7 +29,7 @@ export function StepSubsys() {
     if (!projectId) return;
     void trpc.dashboard.getSubsysList.query({ projectId })
       .then((list) => {
-        const filtered = list.filter((s) => s !== 'usvp');
+        const filtered = list.filter((s) => s !== 'usvp' && s !== 'top');
         if (filtered.length > 0) setSubsysOptions(filtered);
       })
       .catch(() => {
@@ -109,7 +109,7 @@ export function StepSubsys() {
               <option key={s} value={s}>{s}</option>
             ))}
           </select>
-          <p className="text-[10px] text-muted-foreground">从项目数据库动态获取，已排除 usvp 伪子系统</p>
+          <p className="text-[10px] text-muted-foreground">从项目数据库动态获取，已排除 usvp 伪子系统和 top</p>
         </div>
 
         {/* Instance name */}
