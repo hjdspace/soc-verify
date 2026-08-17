@@ -168,6 +168,22 @@ interface CoverageStoreState {
   /** coverage:import-progress 监听器是否已注册 */
   importProgressListenerRegistered: boolean;
 
+  // ─── 按需详细解析状态（分层解析） ────────────────────────────
+  /** 是否正在解析详细报告 */
+  detailParsing: boolean;
+  /** 详细解析进度百分比 0-100 */
+  detailParseProgress: number;
+  /** 详细解析步骤描述 */
+  detailParseStep: string;
+  /** 详细解析步骤历史日志 */
+  detailParseStepLog: Array<{ step: string; message: string; timestamp: number; durationMs?: number }>;
+  /** 是否显示详细解析进度面板 */
+  showDetailParseProgress: boolean;
+  /** coverage:detail-progress 监听器是否已注册 */
+  detailProgressListenerRegistered: boolean;
+  /** 当前 session 是否已解析详细报告（summaryOnly=false） */
+  detailParsed: boolean;
+
   // ─── 覆盖率深度分析（urg -grade / imc functional detail / CSV） ─
   /** 测试用例贡献度排名 */
   testContributions: TestContribution[];
@@ -306,6 +322,16 @@ interface CoverageStoreState {
   /** 清除导入进度状态 */
   clearImportProgress: () => void;
 
+  // ─── 按需详细解析动作（分层解析） ────────────────────────────
+  /** 触发按需详细解析（运行 detail/grade/bins/csv EDA 命令并解析） */
+  parseDetails: (projectId: string, sessionId: string) => Promise<boolean>;
+  /** 注册 coverage:detail-progress IPC 监听器（幂等，全局只需注册一次） */
+  registerDetailProgressListener: () => void;
+  /** 处理详细解析进度事件（内部使用） */
+  handleDetailProgress: (event: { step: string; message: string; percent?: number; durationMs?: number }) => void;
+  /** 清除详细解析进度状态 */
+  clearDetailParseProgress: () => void;
+
   // ─── 覆盖率深度分析动作 ────────────────────────────────────
   /** 加载测试用例贡献度排名 */
   loadTestContributions: (projectId: string, sessionId?: string) => Promise<void>;
@@ -362,6 +388,15 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
   showImportProgress: false,
   importProgressListenerRegistered: false,
 
+  // ─── 按需详细解析初始状态（分层解析） ────────────────────
+  detailParsing: false,
+  detailParseProgress: 0,
+  detailParseStep: '',
+  detailParseStepLog: [],
+  showDetailParseProgress: false,
+  detailProgressListenerRegistered: false,
+  detailParsed: false,
+
   // ─── 覆盖率深度分析初始状态 ────────────────────────────────
   testContributions: [],
   uncoveredItems: {},
@@ -393,6 +428,8 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
         overview: overview.summary,
         currentSessionId: overview.sessionId,
         loading: false,
+        // 根据 summaryOnly 标记判断是否已解析详细报告
+        detailParsed: tree.summaryOnly === false,
       });
     } catch (err) {
       set({ loading: false, tree: null, overview: null });
@@ -984,6 +1021,76 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
     importStep: '',
     importStepLog: [],
     showImportProgress: false,
+  }),
+
+  // ─── 按需详细解析实现（分层解析） ────────────────────────────
+
+  parseDetails: async (projectId, sessionId) => {
+    set({
+      detailParsing: true,
+      detailParseProgress: 0,
+      detailParseStep: '正在开始详细解析...',
+      detailParseStepLog: [],
+      showDetailParseProgress: true,
+    });
+    try {
+      await trpc.coverage.parseDetails.mutate({ projectId, sessionId });
+      set({
+        detailParsing: false,
+        detailParsed: true,
+      });
+      // 详细解析完成后刷新树和深度分析数据
+      await get().loadTree(projectId, sessionId);
+      // 自动加载深度分析数据
+      await Promise.all([
+        get().loadTestContributions(projectId, sessionId),
+        get().loadUncovered(projectId, sessionId),
+        get().loadCsvData(projectId, sessionId),
+      ]);
+      useToastStore.getState().success('详细覆盖率解析完成', `Session: ${sessionId}`);
+      return true;
+    } catch (err) {
+      set({ detailParsing: false });
+      useToastStore.getState().error('详细覆盖率解析失败', err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  },
+
+  registerDetailProgressListener: () => {
+    if (get().detailProgressListenerRegistered) return;
+    if (!window.eventBridge) return;
+    set({ detailProgressListenerRegistered: true });
+    window.eventBridge.onCoverageDetailProgress((event) => {
+      get().handleDetailProgress(event);
+    });
+  },
+
+  handleDetailProgress: (event) => {
+    const logEntry = {
+      step: event.step,
+      message: event.message,
+      timestamp: Date.now(),
+      durationMs: event.durationMs,
+    };
+    set((s) => ({
+      detailParseProgress: event.percent ?? s.detailParseProgress,
+      detailParseStep: event.message,
+      showDetailParseProgress: true,
+      detailParseStepLog: [...s.detailParseStepLog, logEntry],
+    }));
+    // 详细解析完成时自动隐藏进度面板（延迟 3 秒）
+    if (event.step === 'done') {
+      setTimeout(() => {
+        set({ showDetailParseProgress: false });
+      }, 3000);
+    }
+  },
+
+  clearDetailParseProgress: () => set({
+    detailParseProgress: 0,
+    detailParseStep: '',
+    detailParseStepLog: [],
+    showDetailParseProgress: false,
   }),
 
   // ─── 覆盖率深度分析动作实现 ────────────────────────────────
