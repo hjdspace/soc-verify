@@ -1,27 +1,29 @@
 /**
- * ClosureOrchestrator — AI Coverage Closure 闭环编排器（ADR 0009 / Issue #8 Slice 6b）。
+ * ClosureOrchestrator — AI Coverage Closure 闭环编排器（ADR 0009 / Issue #8 Slice 6b，
+ * 工作项模型按 ADR 0025 重构为模块级 ClosureTarget）。
  *
- * 驱动 AI 闭环：识别 Gap → 创建独立 Agent 会话 → 生成定向测试 → 等待 agent_end →
- * 扫描生成的测试 → 计算 delta → 记录迭代 → 判定升级/关闭 → 销毁会话。
+ * 驱动 AI 闭环：模块级 Target（同模块全部未达标 metric 聚合）→ 创建独立 Agent 会话 →
+ * 生成定向测试 → 等待 agent_end → 扫描生成的测试 → 计算 delta → 记录迭代 →
+ * 判定达标/升级/关闭 → 销毁会话。
  *
  * 关键设计：
- *   - 每个 Gap 拥有独立 omp 会话（cwd = Closure Workspace，workspace 隔离）
- *   - 多 Gap 并行调度（Promise.allSettled，受 SessionManager 并发上限限制）
+ *   - 每个 Target 拥有独立 omp 会话（cwd = Closure Workspace，workspace 隔离）
+ *   - 多 Target 并行调度（Promise.allSettled，受 SessionManager 并发上限限制）
  *   - prompt 为 fire-and-forget，通过监听 sessionEvent 的 agent_end 事件获知完成
  *   - waitForAgentEnd 含 10 分钟超时 + error 事件立即拒绝
- *   - AbortController 实现中止：abort 后所有运行中的 Gap 循环退出
+ *   - AbortController 实现中止：abort 后所有运行中的 Target 循环退出
  *   - 通过注入的 emit 回调向 router 层推送实时事件（router 层负责 mainWindow.webContents.send）
  *
- * 事件流（通过 emit 回调发出）：
- *   - closure:started         { closureId, gapCount }
- *   - closure:gap_started     { closureId, gapId, round }
- *   - closure:agent_prompting { closureId, gapId, round, sessionId }
- *   - closure:agent_ended     { closureId, gapId, round, sessionId }
- *   - closure:tests_scanned   { closureId, gapId, round, files }
- *   - closure:iteration_done  { closureId, gapId, round, deltaBefore, deltaAfter }
- *   - closure:gap_closed      { closureId, gapId }
- *   - closure:gap_escalated   { closureId, gapId, reason }
- *   - closure:gap_failed      { closureId, gapId, error }
+ * 事件流（通过 emit 回调发出；事件名沿用 Slice 6b 契约，载荷字段为 targetId）：
+ *   - closure:started         { closureId, targetCount }
+ *   - closure:gap_started     { closureId, targetId, round }
+ *   - closure:agent_prompting { closureId, targetId, round, sessionId }
+ *   - closure:agent_ended     { closureId, targetId, round, sessionId }
+ *   - closure:tests_scanned   { closureId, targetId, round, files }
+ *   - closure:iteration_done  { closureId, targetId, round, deltaBefore, deltaAfter }
+ *   - closure:gap_closed      { closureId, targetId }
+ *   - closure:gap_escalated   { closureId, targetId, reason }
+ *   - closure:gap_failed      { closureId, targetId, error }
  *   - closure:completed       { closureId }
  *   - closure:aborted         { closureId }
  *   - closure:error           { closureId, error }
@@ -29,33 +31,33 @@
 
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { CoverageSummary, CoverageDelta } from '@shared/types';
+import type { CoverageSummary, CoverageDelta, CoverageNode } from '@shared/types';
 import { calculateDelta } from '@shared/types';
 import type { ClosureManager } from './closure-manager';
-import type { ClosureGap, ClosureSession } from './closure-manager';
+import type { ClosureTarget, ClosureSession, TargetCoverageSnapshot } from './closure-manager';
 import type { CoverageManager } from './coverage-manager';
 import type { SessionManagerImpl } from '../agent/session-manager';
 import type { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../plugin-adapters';
 
 /** Closure 事件载荷：所有事件都带 type + closureId，具体字段按 type 不同 */
 export type ClosureEvent =
-  | { type: 'closure:started'; closureId: string; gapCount: number }
-  | { type: 'closure:gap_started'; closureId: string; gapId: string; round: number }
-  | { type: 'closure:agent_prompting'; closureId: string; gapId: string; round: number; sessionId: string }
-  | { type: 'closure:agent_ended'; closureId: string; gapId: string; round: number; sessionId: string }
-  | { type: 'closure:tests_scanned'; closureId: string; gapId: string; round: number; files: string[] }
+  | { type: 'closure:started'; closureId: string; targetCount: number }
+  | { type: 'closure:gap_started'; closureId: string; targetId: string; round: number }
+  | { type: 'closure:agent_prompting'; closureId: string; targetId: string; round: number; sessionId: string }
+  | { type: 'closure:agent_ended'; closureId: string; targetId: string; round: number; sessionId: string }
+  | { type: 'closure:tests_scanned'; closureId: string; targetId: string; round: number; files: string[] }
   | {
       type: 'closure:iteration_done';
       closureId: string;
-      gapId: string;
+      targetId: string;
       round: number;
       deltaBefore: CoverageSummary;
       deltaAfter: CoverageSummary;
       deltaOverall: number;
     }
-  | { type: 'closure:gap_closed'; closureId: string; gapId: string }
-  | { type: 'closure:gap_escalated'; closureId: string; gapId: string; reason: string }
-  | { type: 'closure:gap_failed'; closureId: string; gapId: string; error: string }
+  | { type: 'closure:gap_closed'; closureId: string; targetId: string }
+  | { type: 'closure:gap_escalated'; closureId: string; targetId: string; reason: string }
+  | { type: 'closure:gap_failed'; closureId: string; targetId: string; error: string }
   | { type: 'closure:completed'; closureId: string }
   | { type: 'closure:aborted'; closureId: string }
   | { type: 'closure:error'; closureId: string; error: string };
@@ -131,8 +133,8 @@ export class ClosureOrchestrator {
    * 流程：
    * 1. 创建 AbortController
    * 2. 发出 closure:started 事件
-   * 3. 通过 Promise.allSettled 并行运行所有 Gap 的 runGapLoop
-   * 4. 所有 Gap 完成后发出 closure:completed 事件
+   * 3. 通过 Promise.allSettled 并行运行所有 Target 的 runTargetLoop
+   * 4. 所有 Target 完成后发出 closure:completed 事件
    *
    * @param session 已通过 closureManager.startClosure 创建的 ClosureSession
    */
@@ -145,9 +147,9 @@ export class ClosureOrchestrator {
     const controller = new AbortController();
     this.abortControllers.set(session.id, controller);
 
-    this.emit({ type: 'closure:started', closureId: session.id, gapCount: session.gaps.length });
+    this.emit({ type: 'closure:started', closureId: session.id, targetCount: session.targets.length });
 
-    const promise = this.runAllGaps(session, controller).catch((err) => {
+    const promise = this.runAllTargets(session, controller).catch((err) => {
       this.emit({
         type: 'closure:error',
         closureId: session.id,
@@ -194,14 +196,14 @@ export class ClosureOrchestrator {
   // ─── 内部实现 ─────────────────────────────────────────────────
 
   /**
-   * 并行运行所有 Gap 的迭代循环。
-   * 使用 Promise.allSettled 确保单个 Gap 失败不影响其他 Gap（ADR 0009 决策 8）。
+   * 并行运行所有 Target 的迭代循环。
+   * 使用 Promise.allSettled 确保单个 Target 失败不影响其他 Target（ADR 0025 决策 3）。
    */
-  private async runAllGaps(session: ClosureSession, controller: AbortController): Promise<void> {
-    const gapPromises = session.gaps.map((gap) => this.runGapLoop(session, gap, controller));
-    await Promise.allSettled(gapPromises);
+  private async runAllTargets(session: ClosureSession, controller: AbortController): Promise<void> {
+    const targetPromises = session.targets.map((target) => this.runTargetLoop(session, target, controller));
+    await Promise.allSettled(targetPromises);
 
-    // 所有 Gap 完成后，检查是否被中止
+    // 所有 Target 完成后，检查是否被中止
     if (controller.signal.aborted) return;
 
     // 发出完成事件（closureManager 内部已自动标记 completed）
@@ -209,61 +211,61 @@ export class ClosureOrchestrator {
   }
 
   /**
-   * 单个 Gap 的迭代循环：
-   *   while (round < maxRounds && !aborted && gap not in terminal state):
+   * 单个 Target 的迭代循环：
+   *   while (round < maxRounds && !aborted && target not in terminal state):
    *     1. startIteration
    *     2. 创建独立 omp 会话（cwd = workspaceDir）
    *     3. 发送 prompt（fire-and-forget）
    *     4. waitForAgentEnd
    *     5. scanGeneratedTests
-   *     6. 计算 delta（通过 coverageManager.getOverview）
-   *     7. completeIteration（内部会判定 shouldEscalate）
-   *     8. 检查 gap 是否进入终态（closed/escalated/failed）
+   *     6. 计算 delta（通过 coverageManager.getOverview，工单 05 接 Recovery）
+   *     7. completeIteration（传入缓存覆盖率快照，内部判定达标/shouldEscalate）
+   *     8. 检查 target 是否进入终态（closed/escalated/failed）
    *     9. destroySession
    */
-  private async runGapLoop(
+  private async runTargetLoop(
     session: ClosureSession,
-    gap: ClosureGap,
+    target: ClosureTarget,
     controller: AbortController,
   ): Promise<void> {
     const { closureManager } = this.opts;
-    let currentGap = gap;
+    let currentTarget = target;
 
     while (true) {
       // 中止检查
       if (controller.signal.aborted) return;
 
-      // 重新读取 gap 最新状态（可能已被 completeIteration 标记为 escalated）
+      // 重新读取 target 最新状态（可能已被 completeIteration 标记为 closed/escalated）
       const freshSession = await closureManager.getClosure(session.id);
       if (!freshSession) return;
-      currentGap = freshSession.gaps.find((g) => g.id === gap.id) ?? currentGap;
+      currentTarget = freshSession.targets.find((t) => t.id === target.id) ?? currentTarget;
 
       // 终态检查
-      if (['closed', 'escalated', 'failed'].includes(currentGap.status)) {
+      if (['closed', 'escalated', 'failed'].includes(currentTarget.status)) {
         return;
       }
 
       // 最大轮数检查
-      const round = currentGap.iterations.length + 1;
+      const round = currentTarget.iterations.length + 1;
       if (round > session.maxRounds) {
         // 达到最大轮数仍未达标 → 升级转人工
-        await closureManager.escalateGap(
+        await closureManager.escalateTarget(
           session.id,
-          gap.id,
+          target.id,
           `达到最大迭代轮数 (${session.maxRounds}) 仍未关闭`,
         );
         this.emit({
           type: 'closure:gap_escalated',
           closureId: session.id,
-          gapId: gap.id,
+          targetId: target.id,
           reason: `达到最大迭代轮数 (${session.maxRounds}) 仍未关闭`,
         });
         return;
       }
 
       // 1. 开始本轮迭代
-      await closureManager.startIteration(session.id, gap.id);
-      this.emit({ type: 'closure:gap_started', closureId: session.id, gapId: gap.id, round });
+      await closureManager.startIteration(session.id, target.id);
+      this.emit({ type: 'closure:gap_started', closureId: session.id, targetId: target.id, round });
 
       // 获取本轮 delta 前 baseline
       const deltaBefore = await this.getCoverageSummary(session.sessionId);
@@ -271,15 +273,15 @@ export class ClosureOrchestrator {
       // 2. 创建独立 omp 会话
       let agentSessionId: string | null = null;
       try {
-        agentSessionId = await this.createAgentSession(session, currentGap, round);
+        agentSessionId = await this.createAgentSession(session, currentTarget, round);
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        await closureManager.failIteration(session.id, gap.id, `session creation failed: ${errorMsg}`);
-        await closureManager.failGap(session.id, gap.id, `session creation failed: ${errorMsg}`);
+        await closureManager.failIteration(session.id, target.id, `session creation failed: ${errorMsg}`);
+        await closureManager.failTarget(session.id, target.id, `session creation failed: ${errorMsg}`);
         this.emit({
           type: 'closure:gap_failed',
           closureId: session.id,
-          gapId: gap.id,
+          targetId: target.id,
           error: errorMsg,
         });
         return;
@@ -294,7 +296,7 @@ export class ClosureOrchestrator {
       this.emit({
         type: 'closure:agent_prompting',
         closureId: session.id,
-        gapId: gap.id,
+        targetId: target.id,
         round,
         sessionId: agentSessionId,
       });
@@ -304,17 +306,17 @@ export class ClosureOrchestrator {
         if (!client) {
           throw new Error('Agent client not available after session creation');
         }
-        const prompt = this.buildClosurePrompt(session, currentGap, round);
+        const prompt = this.buildClosurePrompt(session, currentTarget, round);
         await client.prompt(prompt);
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        await closureManager.failIteration(session.id, gap.id, `prompt failed: ${errorMsg}`);
-        await closureManager.failGap(session.id, gap.id, `prompt failed: ${errorMsg}`);
+        await closureManager.failIteration(session.id, target.id, `prompt failed: ${errorMsg}`);
+        await closureManager.failTarget(session.id, target.id, `prompt failed: ${errorMsg}`);
         await this.safeDestroySession(agentSessionId);
         this.emit({
           type: 'closure:gap_failed',
           closureId: session.id,
-          gapId: gap.id,
+          targetId: target.id,
           error: errorMsg,
         });
         return;
@@ -326,20 +328,20 @@ export class ClosureOrchestrator {
         this.emit({
           type: 'closure:agent_ended',
           closureId: session.id,
-          gapId: gap.id,
+          targetId: target.id,
           round,
           sessionId: agentSessionId,
         });
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        await closureManager.failIteration(session.id, gap.id, `agent execution failed: ${errorMsg}`);
+        await closureManager.failIteration(session.id, target.id, `agent execution failed: ${errorMsg}`);
         await this.safeDestroySession(agentSessionId);
         if (controller.signal.aborted) return;
-        await closureManager.failGap(session.id, gap.id, `agent execution failed: ${errorMsg}`);
+        await closureManager.failTarget(session.id, target.id, `agent execution failed: ${errorMsg}`);
         this.emit({
           type: 'closure:gap_failed',
           closureId: session.id,
-          gapId: gap.id,
+          targetId: target.id,
           error: errorMsg,
         });
         return;
@@ -351,32 +353,36 @@ export class ClosureOrchestrator {
       }
 
       // 5. 扫描生成的测试文件
-      const roundDir = join(session.workspaceDir, gap.id, `round_${round}`);
+      const roundDir = join(session.workspaceDir, target.id, `round_${round}`);
       const generatedTests = await this.scanGeneratedTests(roundDir);
       this.emit({
         type: 'closure:tests_scanned',
         closureId: session.id,
-        gapId: gap.id,
+        targetId: target.id,
         round,
         files: generatedTests,
       });
 
-      // 6. 计算 delta（通过 coverageManager 重新获取覆盖率）
+      // 6. 计算 delta（通过 coverageManager 重新获取覆盖率；
+      //    当前为缓存的 getOverview，工单 05 接 Coverage Recovery 后为真实 re-merge 数据）
       const deltaAfter = await this.getCoverageSummary(session.sessionId);
 
-      // 7. 完成本轮迭代（closureManager 内部判定 shouldEscalate）
+      // 7. 完成本轮迭代：传入目标模块的缓存覆盖率快照，
+      //    closureManager 内部据此做达标判定（isTargetMet）与升级判定
       const deltas: CoverageDelta[] = calculateDelta(deltaBefore, deltaAfter);
-      await closureManager.completeIteration(session.id, gap.id, {
+      const coverage = await this.getTargetCoverageSnapshot(session.sessionId, currentTarget.module.path);
+      await closureManager.completeIteration(session.id, target.id, {
         generatedTests,
         deltaBefore,
         deltaAfter,
         deltas,
+        coverage,
       });
 
       this.emit({
         type: 'closure:iteration_done',
         closureId: session.id,
-        gapId: gap.id,
+        targetId: target.id,
         round,
         deltaBefore,
         deltaAfter,
@@ -386,29 +392,35 @@ export class ClosureOrchestrator {
       // 8. 销毁会话（每轮独立，避免上下文污染）
       await this.safeDestroySession(agentSessionId);
 
-      // 9. 检查 gap 是否因 shouldEscalate 进入 escalated 终态
+      // 9. 检查 target 是否因达标/shouldEscalate 进入终态
       // 重新读取以获取最新状态
       const updated = await closureManager.getClosure(session.id);
       if (!updated) return;
-      const updatedGap = updated.gaps.find((g) => g.id === gap.id);
-      if (!updatedGap) return;
+      const updatedTarget = updated.targets.find((t) => t.id === target.id);
+      if (!updatedTarget) return;
 
-      if (updatedGap.status === 'escalated') {
+      if (updatedTarget.status === 'escalated') {
         this.emit({
           type: 'closure:gap_escalated',
           closureId: session.id,
-          gapId: gap.id,
-          reason: updatedGap.escalationReason ?? '连续多轮无显著提升',
+          targetId: target.id,
+          reason: updatedTarget.escalationReason ?? '连续多轮无显著提升',
         });
         return;
       }
 
-      // 简化判定：若 delta >= 1%（ESCALATION_DELTA_THRESHOLD），视为已关闭
-      // 实际生产中需要更精确的目标达成判定，但 Phase 1 阶段简化处理
+      if (updatedTarget.status === 'closed') {
+        this.emit({ type: 'closure:gap_closed', closureId: session.id, targetId: target.id });
+        return;
+      }
+
+      // Delta Validation Phase 1 占位判定：若 delta >= 1%（ESCALATION_DELTA_THRESHOLD），
+      // 视为已关闭。精确的模块级达标判定已由 completeIteration 的 coverage 快照完成，
+      // 此占位逻辑在工单 05 接入 Coverage Recovery 后移除。
       const deltaOverall = deltaAfter.overall - deltaBefore.overall;
       if (deltaOverall >= 1) {
-        await closureManager.closeGap(session.id, gap.id);
-        this.emit({ type: 'closure:gap_closed', closureId: session.id, gapId: gap.id });
+        await closureManager.closeTarget(session.id, target.id);
+        this.emit({ type: 'closure:gap_closed', closureId: session.id, targetId: target.id });
         return;
       }
 
@@ -422,7 +434,7 @@ export class ClosureOrchestrator {
    */
   private async createAgentSession(
     session: ClosureSession,
-    _gap: ClosureGap,
+    _target: ClosureTarget,
     _round: number,
   ): Promise<string> {
     const workspaceDir = this.opts.closureManager.getWorkspaceDir(session.id);
@@ -520,11 +532,33 @@ export class ClosureOrchestrator {
   }
 
   /**
-   * 构造 AI prompt：包含 gap 信息、当前覆盖率、workspace 路径、round 信息。
+   * 获取目标模块的覆盖率快照（模块 8 metric 三元组 + 生效 targets 配置）。
+   * 供 completeIteration 做模块级达标判定；模块不在 Coverage Tree 上时返回
+   * undefined（无法评估，交由升级/maxRounds 兜底）。
+   * 当前读取的是 CoverageManager 缓存数据，工单 05 接 Coverage Recovery。
    */
-  private buildClosurePrompt(session: ClosureSession, gap: ClosureGap, round: number): string {
+  private async getTargetCoverageSnapshot(
+    sessionId: string,
+    modulePath: string,
+  ): Promise<TargetCoverageSnapshot | undefined> {
+    try {
+      const data = await this.opts.coverageManager.getTree(sessionId);
+      const node = findNodeByPath(data.root, modulePath);
+      if (!node) return undefined;
+      const targets = await this.opts.coverageManager.getTargets(data.sessionId);
+      return { metrics: node.metrics, targets };
+    } catch {
+      // 覆盖率数据不可用时跳过达标评估
+      return undefined;
+    }
+  }
+
+  /**
+   * 构造 AI prompt：包含目标模块全部 metric 缺口、当前覆盖率、workspace 路径、round 信息。
+   */
+  private buildClosurePrompt(session: ClosureSession, target: ClosureTarget, round: number): string {
     const workspaceDir = this.opts.closureManager.getWorkspaceDir(session.id);
-    const roundDir = join(workspaceDir, gap.id, `round_${round}`);
+    const roundDir = join(workspaceDir, target.id, `round_${round}`);
 
     const parts: string[] = [
       `## Coverage Closure 任务`,
@@ -533,14 +567,19 @@ export class ClosureOrchestrator {
       `**当前轮次**: ${round} / ${session.maxRounds}`,
       `**Coverage Merge Session**: ${session.sessionId}`,
       ``,
-      `### 目标 Gap`,
+      `### 目标模块（Closure Target）`,
       ``,
-      `- **模块路径**: ${gap.gap.nodePath}`,
-      `- **模块名**: ${gap.gap.nodeName}`,
-      `- **覆盖率指标**: ${gap.gap.metric}`,
-      `- **当前覆盖率**: ${gap.gap.actual.toFixed(1)}%`,
-      `- **目标覆盖率**: ${gap.gap.target}%`,
-      `- **缺口**: ${gap.gap.deficit.toFixed(1)}%`,
+      `- **模块路径**: ${target.module.path}`,
+      `- **模块名**: ${target.module.name}`,
+      `- **未达标指标数**: ${target.gaps.length}`,
+      ``,
+      `该模块以下覆盖率指标均未达标，请在本轮内一起补齐（一个 directed test 通常`,
+      `能同时提升多种 code metric）：`,
+      ``,
+      ...target.gaps.map(
+        (gap) =>
+          `- **${gap.metric}**: 当前 ${gap.actual.toFixed(1)}% / 目标 ${gap.target}%（缺口 ${gap.deficit.toFixed(1)}%）`,
+      ),
       ``,
       `### 工作目录`,
       ``,
@@ -553,10 +592,10 @@ export class ClosureOrchestrator {
       `### 任务步骤`,
       ``,
       `1. 使用 get_coverage 工具查看当前覆盖率（sessionId: ${session.sessionId}）`,
-      `2. 使用 get_coverage_detail 工具查看模块 ${gap.gap.nodePath} 的详细覆盖率`,
-      `3. 使用 get_module_source 工具读取模块 ${gap.gap.nodeName} 的 RTL 源码`,
+      `2. 使用 get_coverage_detail 工具查看模块 ${target.module.path} 的详细覆盖率`,
+      `3. 使用 get_module_source 工具读取模块 ${target.module.name} 的 RTL 源码`,
       `4. 使用 get_test_template 工具查看现有测试用例结构`,
-      `5. 生成针对 ${gap.gap.metric} 缺口的定向测试，写入上述工作目录`,
+      `5. 生成针对上述全部指标缺口的定向测试，写入上述工作目录`,
       `6. 使用 run_simulation 工具运行生成的测试`,
       `7. 使用 get_coverage 工具验证覆盖率是否提升`,
       ``,
@@ -564,14 +603,14 @@ export class ClosureOrchestrator {
       ``,
       `- 测试文件必须为 .sv / .v / .svh 格式`,
       `- 遵循现有测试框架的风格（testbench + virtual sequence）`,
-      `- 聚焦该 Gap，不要重构无关代码`,
+      `- 聚焦该目标模块，不要重构无关代码`,
       `- 不要修改项目的正式 testbench/ 目录`,
     ];
 
     // 若有历史迭代，附上之前的迭代结果供 AI 参考
-    if (gap.iterations.length > 0) {
+    if (target.iterations.length > 0) {
       parts.push('', '### 历史迭代', '');
-      for (const it of gap.iterations) {
+      for (const it of target.iterations) {
         const deltaOverall = it.deltaBefore && it.deltaAfter
           ? it.deltaAfter.overall - it.deltaBefore.overall
           : 0;
@@ -612,4 +651,14 @@ export class ClosureOrchestrator {
       // emit 失败不应影响闭环运行
     }
   }
+}
+
+/** 在 Coverage Tree 中按 path 查找节点（DFS），未找到返回 null。 */
+function findNodeByPath(node: CoverageNode, path: string): CoverageNode | null {
+  if (node.path === path) return node;
+  for (const child of node.children) {
+    const found = findNodeByPath(child, path);
+    if (found) return found;
+  }
+  return null;
 }

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+  <report type="summary">
+    <scope name="tb_top">
+      <!-- 负值 sentinel（urg 以 -1 标记无效/不适用计数）：fail-closed，解析必须报错 -->
+      <coverage type="toggle" score="-1" covered="-1" total="-1"/>
+    </scope>
+  </report>
+</session>

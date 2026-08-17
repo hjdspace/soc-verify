@@ -19,9 +19,9 @@ import { EventEmitter } from 'node:events';
 import { ClosureOrchestrator, type ClosureEvent } from '../../src/main/coverage/closure-orchestrator';
 import type {
   ClosureSession,
-  ClosureGap,
-  GapIteration,
-  ClosureGapStatus,
+  ClosureTarget,
+  TargetIteration,
+  ClosureTargetStatus,
 } from '../../src/main/coverage/closure-manager';
 import type { ClosureManager } from '../../src/main/coverage/closure-manager';
 import type { SessionManagerImpl } from '../../src/main/agent/session-manager';
@@ -36,7 +36,9 @@ import type {
   CoverageSummary,
   CoverageDelta,
   CoverageMetric,
+  CoverageNode,
 } from '@shared/types';
+import { COVERAGE_METRICS } from '@shared/types';
 
 // ─── Mock 数据辅助 ──────────────────────────────────────────────
 
@@ -131,15 +133,45 @@ function createMockSessionManager(
 
 /** 创建 mock CoverageManager */
 function createMockCoverageManager(): CoverageManager {
+  // 样例树：与 SAMPLE_GAPS / MULTI_GAPS 的模块对应
+  const na = (): { percentage: null; covered: null; total: null } => ({
+    percentage: null,
+    covered: null,
+    total: null,
+  });
+  const mkMetrics = (pcts: Partial<Record<CoverageMetric, number>>): CoverageNode['metrics'] => {
+    const m = {} as CoverageNode['metrics'];
+    for (const metric of COVERAGE_METRICS) {
+      m[metric] = pcts[metric] !== undefined ? { percentage: pcts[metric]!, covered: null, total: null } : na();
+    }
+    return m;
+  };
+  const root: CoverageNode = {
+    name: 'top',
+    path: 'top',
+    depth: 0,
+    metrics: mkMetrics({}),
+    children: [
+      { name: 'cpu_core', path: 'top/cpu_core', depth: 1, metrics: mkMetrics({ line: 80 }), children: [] },
+      { name: 'memory_ctrl', path: 'top/memory_ctrl', depth: 1, metrics: mkMetrics({ toggle: 75 }), children: [] },
+    ],
+  };
   return {
     getOverview: vi.fn().mockResolvedValue({
       summary: makeSummary(80),
       sessionId: 'merge-1',
     }),
+    getTree: vi.fn().mockResolvedValue({
+      sessionId: 'merge-1',
+      source: { covMergeDir: 'cov_merge', edaTool: 'imc', reportGeneratedAt: 0 },
+      root,
+      targets: { line: 95, toggle: 85 },
+    }),
+    getTargets: vi.fn().mockResolvedValue({ line: 95, toggle: 85 }),
   } as unknown as CoverageManager;
 }
 
-// ─── 内存版 ClosureManager（线程安全，避免并行 Gap 时的文件 I/O 竞态） ──
+// ─── 内存版 ClosureManager（线程安全，避免并行 Target 时的文件 I/O 竞态） ──
 
 const ESCALATION_DELTA_THRESHOLD = 1;
 const DEFAULT_ESCALATION_THRESHOLD = 2;
@@ -147,20 +179,21 @@ const DEFAULT_MAX_ROUNDS = 5;
 
 /**
  * 创建内存版 ClosureManager mock。
- * 与真实 ClosureManager 行为一致，但状态全部保存在内存中，
- * 避免多 Gap 并行时的 read-modify-write 文件竞态。
+ * 与真实 ClosureManager 行为一致（模块级聚合 + 状态机），但状态全部保存在内存中，
+ * 避免多 Target 并行时的 read-modify-write 文件竞态。
+ * gapPool 为可用的 CoverageGap 池（按模块分组聚合为 target，modules 可过滤）。
  */
-function createInMemoryClosureManager(): ClosureManager {
+function createInMemoryClosureManager(gapPool: CoverageGap[]): ClosureManager {
   const sessions = new Map<string, ClosureSession>();
   let closureCounter = 0;
-  let gapCounter = 0;
+  let targetCounter = 0;
 
-  function shouldEscalate(gap: ClosureGap): boolean {
-    const completed = gap.iterations.filter(
+  function shouldEscalate(target: ClosureTarget, threshold = DEFAULT_ESCALATION_THRESHOLD): boolean {
+    const completed = target.iterations.filter(
       (it) => it.status === 'completed' && it.deltaBefore !== undefined && it.deltaAfter !== undefined,
     );
-    if (completed.length < DEFAULT_ESCALATION_THRESHOLD) return false;
-    const recent = completed.slice(-DEFAULT_ESCALATION_THRESHOLD);
+    if (completed.length < threshold) return false;
+    const recent = completed.slice(-threshold);
     return recent.every((it) => {
       const delta = it.deltaAfter!.overall - it.deltaBefore!.overall;
       return delta < ESCALATION_DELTA_THRESHOLD;
@@ -168,8 +201,8 @@ function createInMemoryClosureManager(): ClosureManager {
   }
 
   function maybeCompleteClosure(session: ClosureSession): void {
-    const allTerminal = session.gaps.every((g) =>
-      ['closed', 'escalated', 'failed'].includes(g.status));
+    const allTerminal = session.targets.every((t) =>
+      ['closed', 'escalated', 'failed'].includes(t.status));
     if (allTerminal && session.status === 'running') {
       session.status = 'completed';
     }
@@ -178,24 +211,38 @@ function createInMemoryClosureManager(): ClosureManager {
   const mgr = {
     startClosure: async (input: {
       sessionId: string;
-      gaps?: CoverageGap[];
+      modules?: string[];
       maxRounds?: number;
+      escalationThreshold?: number;
     }): Promise<ClosureSession> => {
       const closureId = `closure_test_${++closureCounter}`;
-      const gaps = input.gaps ?? [];
+      const selected = input.modules
+        ? gapPool.filter((g) => input.modules!.includes(g.nodePath))
+        : gapPool;
+      // 按模块分组聚合（与真实 ClosureManager.startClosure 一致）
+      const byModule = new Map<string, CoverageGap[]>();
+      for (const gap of selected) {
+        const list = byModule.get(gap.nodePath) ?? [];
+        list.push(gap);
+        byModule.set(gap.nodePath, list);
+      }
+      if (byModule.size === 0) {
+        throw new Error('选中的模块均无未达标 metric，无法启动 Closure');
+      }
       const session: ClosureSession = {
         id: closureId,
         sessionId: input.sessionId,
         createdAt: Date.now(),
         status: 'running',
-        gaps: gaps.map((g) => ({
-          id: `gap_${++gapCounter}`,
-          gap: g,
+        targets: Array.from(byModule.entries()).map(([path, gaps]) => ({
+          id: `target_${++targetCounter}`,
+          module: { path, name: gaps[0].nodeName },
+          gaps,
           iterations: [],
-          status: 'pending' as ClosureGapStatus,
+          status: 'pending' as ClosureTargetStatus,
         })),
         maxRounds: input.maxRounds ?? DEFAULT_MAX_ROUNDS,
-        escalationThreshold: DEFAULT_ESCALATION_THRESHOLD,
+        escalationThreshold: input.escalationThreshold ?? DEFAULT_ESCALATION_THRESHOLD,
         workspaceDir: `/tmp/closure-test-${closureId}`,
       };
       sessions.set(closureId, session);
@@ -207,92 +254,93 @@ function createInMemoryClosureManager(): ClosureManager {
     listClosures: async (): Promise<ClosureSession[]> => {
       return Array.from(sessions.values());
     },
-    startIteration: async (closureId: string, gapId: string): Promise<GapIteration> => {
+    startIteration: async (closureId: string, targetId: string): Promise<TargetIteration> => {
       const session = sessions.get(closureId);
       if (!session) throw new Error(`Closure ${closureId} not found`);
       if (session.status !== 'running') throw new Error(`Closure ${closureId} is ${session.status}`);
-      const gap = session.gaps.find((g) => g.id === gapId);
-      if (!gap) throw new Error(`Gap ${gapId} not found in closure ${closureId}`);
-      const round = gap.iterations.length + 1;
-      const iteration: GapIteration = { round, generatedTests: [], status: 'running' };
-      gap.iterations.push(iteration);
-      if (gap.status === 'pending') gap.status = 'in_progress';
+      const target = session.targets.find((t) => t.id === targetId);
+      if (!target) throw new Error(`Target ${targetId} not found in closure ${closureId}`);
+      const round = target.iterations.length + 1;
+      const iteration: TargetIteration = { round, generatedTests: [], status: 'running' };
+      target.iterations.push(iteration);
+      if (target.status === 'pending') target.status = 'in_progress';
       return iteration;
     },
     completeIteration: async (
       closureId: string,
-      gapId: string,
+      targetId: string,
       result: {
         generatedTests: string[];
         deltaBefore: CoverageSummary;
         deltaAfter: CoverageSummary;
         deltas: CoverageDelta[];
+        coverage?: { metrics: Record<CoverageMetric, { percentage: number | null; covered: number | null; total: number | null }>; targets: Partial<Record<CoverageMetric, number>> };
       },
-    ): Promise<GapIteration> => {
+    ): Promise<TargetIteration> => {
       const session = sessions.get(closureId);
       if (!session) throw new Error(`Closure ${closureId} not found`);
-      const gap = session.gaps.find((g) => g.id === gapId);
-      if (!gap) throw new Error(`Gap ${gapId} not found`);
-      const iteration = gap.iterations[gap.iterations.length - 1];
-      if (!iteration) throw new Error(`No active iteration in gap ${gapId}`);
+      const target = session.targets.find((t) => t.id === targetId);
+      if (!target) throw new Error(`Target ${targetId} not found`);
+      const iteration = target.iterations[target.iterations.length - 1];
+      if (!iteration) throw new Error(`No active iteration in target ${targetId}`);
       iteration.generatedTests = result.generatedTests;
       iteration.deltaBefore = result.deltaBefore;
       iteration.deltaAfter = result.deltaAfter;
       iteration.deltas = result.deltas;
       iteration.status = 'completed';
       // 使用 mgr.shouldEscalate 而非独立函数，以便 vi.spyOn 可以拦截
-      if (mgr.shouldEscalate(gap)) {
-        gap.status = 'escalated';
-        gap.escalationReason =
+      if (mgr.shouldEscalate(target, session.escalationThreshold)) {
+        target.status = 'escalated';
+        target.escalationReason =
           `连续 ${session.escalationThreshold} 轮 overall delta < ${ESCALATION_DELTA_THRESHOLD}%`;
       }
       maybeCompleteClosure(session);
       return iteration;
     },
-    failIteration: async (closureId: string, gapId: string, error: string): Promise<void> => {
+    failIteration: async (closureId: string, targetId: string, error: string): Promise<void> => {
       const session = sessions.get(closureId);
       if (!session) return;
-      const gap = session.gaps.find((g) => g.id === gapId);
-      if (!gap) return;
-      const iteration = gap.iterations[gap.iterations.length - 1];
+      const target = session.targets.find((t) => t.id === targetId);
+      if (!target) return;
+      const iteration = target.iterations[target.iterations.length - 1];
       if (iteration) {
         iteration.status = 'failed';
         iteration.error = error;
       }
     },
-    failGap: async (closureId: string, gapId: string, reason: string): Promise<void> => {
+    failTarget: async (closureId: string, targetId: string, reason: string): Promise<void> => {
       const session = sessions.get(closureId);
       if (!session) return;
-      const gap = session.gaps.find((g) => g.id === gapId);
-      if (!gap) return;
-      gap.status = 'failed';
-      gap.escalationReason = reason;
+      const target = session.targets.find((t) => t.id === targetId);
+      if (!target) return;
+      target.status = 'failed';
+      target.escalationReason = reason;
       maybeCompleteClosure(session);
     },
     shouldEscalate,
-    closeGap: async (closureId: string, gapId: string): Promise<void> => {
+    closeTarget: async (closureId: string, targetId: string): Promise<void> => {
       const session = sessions.get(closureId);
       if (!session) return;
-      const gap = session.gaps.find((g) => g.id === gapId);
-      if (!gap) return;
-      gap.status = 'closed';
+      const target = session.targets.find((t) => t.id === targetId);
+      if (!target) return;
+      target.status = 'closed';
       maybeCompleteClosure(session);
     },
-    escalateGap: async (closureId: string, gapId: string, reason: string): Promise<void> => {
+    escalateTarget: async (closureId: string, targetId: string, reason: string): Promise<void> => {
       const session = sessions.get(closureId);
       if (!session) return;
-      const gap = session.gaps.find((g) => g.id === gapId);
-      if (!gap) return;
-      gap.status = 'escalated';
-      gap.escalationReason = reason;
+      const target = session.targets.find((t) => t.id === targetId);
+      if (!target) return;
+      target.status = 'escalated';
+      target.escalationReason = reason;
       maybeCompleteClosure(session);
     },
     abortClosure: async (closureId: string): Promise<void> => {
       const session = sessions.get(closureId);
       if (!session) return;
-      for (const gap of session.gaps) {
-        if (gap.status === 'pending' || gap.status === 'in_progress') {
-          gap.status = 'failed';
+      for (const target of session.targets) {
+        if (target.status === 'pending' || target.status === 'in_progress') {
+          target.status = 'failed';
         }
       }
       session.status = 'aborted';
@@ -323,7 +371,7 @@ interface SetupResult {
  * emit 回调捕获所有事件，donePromise 在终态事件（completed/aborted/error）时 resolve。
  */
 function setupOrchestrator(
-  _gaps: CoverageGap[],
+  gaps: CoverageGap[],
   opts: {
     maxRounds?: number;
     autoEmit?: boolean;
@@ -352,7 +400,7 @@ function setupOrchestrator(
     opts.emitDelay ?? 50,
   );
   const coverageManager = createMockCoverageManager();
-  const closureManager = createInMemoryClosureManager();
+  const closureManager = createInMemoryClosureManager(gaps);
 
   const orchestrator = new ClosureOrchestrator({
     sessionManager,
@@ -442,7 +490,6 @@ describe('ClosureOrchestrator', () => {
 
         const session = await setup.closureManager.startClosure({
           sessionId: 'merge-1',
-          gaps: SAMPLE_GAPS,
           maxRounds: 5,
         });
 
@@ -500,8 +547,8 @@ describe('ClosureOrchestrator', () => {
         // 验证：ClosureSession 状态为 completed
         const finalSession = await setup.closureManager.getClosure(session.id);
         expect(finalSession!.status).toBe('completed');
-        expect(finalSession!.gaps[0].status).toBe('escalated');
-        expect(finalSession!.gaps[0].iterations).toHaveLength(5);
+        expect(finalSession!.targets[0].status).toBe('escalated');
+        expect(finalSession!.targets[0].iterations).toHaveLength(5);
       } finally {
         setup.cleanup();
       }
@@ -520,7 +567,6 @@ describe('ClosureOrchestrator', () => {
 
         const session = await setup.closureManager.startClosure({
           sessionId: 'merge-1',
-          gaps: SAMPLE_GAPS,
           maxRounds: 5,
         });
 
@@ -542,8 +588,8 @@ describe('ClosureOrchestrator', () => {
 
         // 验证：gap 状态为 escalated
         const finalSession = await setup.closureManager.getClosure(session.id);
-        expect(finalSession!.gaps[0].status).toBe('escalated');
-        expect(finalSession!.gaps[0].escalationReason).toContain('连续');
+        expect(finalSession!.targets[0].status).toBe('escalated');
+        expect(finalSession!.targets[0].escalationReason).toContain('连续');
       } finally {
         setup.cleanup();
       }
@@ -561,7 +607,6 @@ describe('ClosureOrchestrator', () => {
 
         const session = await setup.closureManager.startClosure({
           sessionId: 'merge-1',
-          gaps: SAMPLE_GAPS,
           maxRounds: 5,
         });
 
@@ -594,9 +639,9 @@ describe('ClosureOrchestrator', () => {
 
         // 验证：gap 状态为 closed
         const finalSession = await setup.closureManager.getClosure(session.id);
-        expect(finalSession!.gaps[0].status).toBe('closed');
-        expect(finalSession!.gaps[0].iterations).toHaveLength(1);
-        expect(finalSession!.gaps[0].iterations[0].deltaAfter!.overall).toBe(81.5);
+        expect(finalSession!.targets[0].status).toBe('closed');
+        expect(finalSession!.targets[0].iterations).toHaveLength(1);
+        expect(finalSession!.targets[0].iterations[0].deltaAfter!.overall).toBe(81.5);
       } finally {
         setup.cleanup();
       }
@@ -618,7 +663,6 @@ describe('ClosureOrchestrator', () => {
 
         const session = await setup.closureManager.startClosure({
           sessionId: 'merge-1',
-          gaps: SAMPLE_GAPS,
           maxRounds: 5,
         });
 
@@ -645,8 +689,8 @@ describe('ClosureOrchestrator', () => {
 
         // 验证：gap 状态为 closed
         const finalSession = await setup.closureManager.getClosure(session.id);
-        expect(finalSession!.gaps[0].status).toBe('closed');
-        expect(finalSession!.gaps[0].iterations).toHaveLength(2);
+        expect(finalSession!.targets[0].status).toBe('closed');
+        expect(finalSession!.targets[0].iterations).toHaveLength(2);
       } finally {
         setup.cleanup();
       }
@@ -662,7 +706,6 @@ describe('ClosureOrchestrator', () => {
 
         const session = await setup.closureManager.startClosure({
           sessionId: 'merge-1',
-          gaps: SAMPLE_GAPS,
           maxRounds: 5,
         });
 
@@ -694,7 +737,7 @@ describe('ClosureOrchestrator', () => {
         const finalSession = await setup.closureManager.getClosure(session.id);
         expect(finalSession!.status).toBe('aborted');
         // gap 状态由 abortClosure 标记为 failed
-        expect(finalSession!.gaps[0].status).toBe('failed');
+        expect(finalSession!.targets[0].status).toBe('failed');
 
         // 验证：orchestrator 不再追踪该 closure
         expect(setup.orchestrator.isRunning(session.id)).toBe(false);
@@ -714,7 +757,6 @@ describe('ClosureOrchestrator', () => {
 
         const session = await setup.closureManager.startClosure({
           sessionId: 'merge-1',
-          gaps: MULTI_GAPS,
           maxRounds: 5,
         });
 
@@ -736,8 +778,8 @@ describe('ClosureOrchestrator', () => {
         // 验证：两个 gap 都为 closed
         const finalSession = await setup.closureManager.getClosure(session.id);
         expect(finalSession!.status).toBe('completed');
-        expect(finalSession!.gaps).toHaveLength(2);
-        expect(finalSession!.gaps.every((g) => g.status === 'closed')).toBe(true);
+        expect(finalSession!.targets).toHaveLength(2);
+        expect(finalSession!.targets.every((g) => g.status === 'closed')).toBe(true);
 
         // 验证：createSession 被调用 2 次（每个 gap 一个）
         expect(
@@ -778,7 +820,6 @@ describe('ClosureOrchestrator', () => {
 
         const session = await setup.closureManager.startClosure({
           sessionId: 'merge-1',
-          gaps: MULTI_GAPS,
           maxRounds: 5,
         });
 
@@ -810,17 +851,17 @@ describe('ClosureOrchestrator', () => {
         // 验证：最终状态
         const finalSession = await setup.closureManager.getClosure(session.id);
         expect(finalSession!.status).toBe('completed');
-        expect(finalSession!.gaps).toHaveLength(2);
-        // 第一个 gap 失败
-        const failedGap = finalSession!.gaps.find(
+        expect(finalSession!.targets).toHaveLength(2);
+        // 第一个 target 失败
+        const failedTarget = finalSession!.targets.find(
           (g) => g.status === 'failed',
         );
-        expect(failedGap).toBeDefined();
-        // 第二个 gap 关闭
-        const closedGap = finalSession!.gaps.find(
+        expect(failedTarget).toBeDefined();
+        // 第二个 target 关闭
+        const closedTarget = finalSession!.targets.find(
           (g) => g.status === 'closed',
         );
-        expect(closedGap).toBeDefined();
+        expect(closedTarget).toBeDefined();
       } finally {
         setup.cleanup();
       }
@@ -828,14 +869,13 @@ describe('ClosureOrchestrator', () => {
   });
 
   describe('事件流', () => {
-    it('发出 closure:started 事件，包含 gapCount', async () => {
+    it('发出 closure:started 事件，包含 targetCount', async () => {
       const setup = setupOrchestrator(MULTI_GAPS, { emitDelay: 30 });
       try {
         setIncrementingOverview(setup.coverageManager, 80, 1);
 
         const session = await setup.closureManager.startClosure({
           sessionId: 'merge-1',
-          gaps: MULTI_GAPS,
           maxRounds: 5,
         });
 
@@ -847,7 +887,7 @@ describe('ClosureOrchestrator', () => {
           (e) => e.type === 'closure:started',
         );
         expect(started).toBeDefined();
-        expect((started as { gapCount: number }).gapCount).toBe(2);
+        expect((started as { targetCount: number }).targetCount).toBe(2);
 
         await setup.donePromise;
       } finally {
@@ -862,7 +902,6 @@ describe('ClosureOrchestrator', () => {
 
         const session = await setup.closureManager.startClosure({
           sessionId: 'merge-1',
-          gaps: SAMPLE_GAPS,
           maxRounds: 5,
         });
 

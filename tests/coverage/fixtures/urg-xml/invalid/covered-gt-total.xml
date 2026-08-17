@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+  <report type="summary">
+    <scope name="tb_top">
+      <!-- 违规数据：covered > total（fail-closed，解析必须报错） -->
+      <coverage type="line" covered="1050" total="1000"/>
+    </scope>
+  </report>
+</session>

@@ -20,7 +20,12 @@
  * 支持的报告格式：
  *   - IMC summary report: 表格格式，含 Metric / Covered/Total / Coverage%
  *   - IMC detail report: 层级缩进格式，含 Instance / 各 metric 百分比
- *   - VCS urg report: 包含 hierarchy 和 coverage 数据
+ *   - VCS urg -format text 报告目录（ADR 0024 解析优先级）：
+ *     ① session.xml（`-xml_verbose -show summary` 类型化 XML，确定性）优先；
+ *     ② 降级 → dashboard.txt（顶层摘要）+ hierarchy.txt（层级树）；
+ *     ③ 两者都缺失 → 报错。
+ *     此外 line.dat/branch.dat/cond.dat/tgl.dat/fsm.dat/assert.dat
+ *     （file/line 级未覆盖项，供 AI 覆盖收敛消费）在 ①② 两路径均解析。
  *   - vcover report: 包含 summary 和 detail 数据
  *   - JSON 覆盖率数据文件: 直接解析为 CoverageData
  *
@@ -51,7 +56,7 @@ const COVERAGE_METRICS = [
 const METRIC_NAME_MAP = {
   'line': 'line', 'lines': 'line',
   'branch': 'branch', 'branches': 'branch',
-  'toggle': 'toggle', 'toggles': 'toggle',
+  'toggle': 'toggle', 'toggles': 'toggle', 'tgl': 'toggle',
   'condition': 'condition', 'conditions': 'condition', 'cond': 'condition',
   'fsm state': 'fsm_state', 'fsm states': 'fsm_state', 'fsm-state': 'fsm_state', 'fsm': 'fsm_state',
   'fsm transition': 'fsm_transition', 'fsm transitions': 'fsm_transition', 'fsm-trans': 'fsm_transition',
@@ -59,6 +64,632 @@ const METRIC_NAME_MAP = {
   'assertion': 'assertion', 'assert': 'assertion', 'asserts': 'assertion',
   'statement': 'line', 'statements': 'line', // IMC 有时用 statement 代替 line
 };
+
+// ─── VCS urg -format text 报告解析（ADR 0021）────────────────
+
+/**
+ * urg text 报告目录中的文件名 → 平台 metric key。
+ * urg -format text 生成一组 ASCII 产物：dashboard.txt、hierarchy.txt、
+ * 以及逐 metric 的 .dat 文件（每行一个覆盖点，未覆盖项带 file:line）。
+ */
+var URG_METRIC_DAT = {
+  'line.dat': 'line',
+  'branch.dat': 'branch',
+  'cond.dat': 'condition',
+  'tgl.dat': 'toggle',
+  'fsm.dat': 'fsm_state',
+  'assert.dat': 'assertion',
+};
+
+/** UncoveredItem 中 description 汇总时的最大条数（防超大 prompt） */
+var URG_UNCOVERED_PER_METRIC_CAP = 200;
+
+// ─── 最小 XML 解析器（ADR 0024：session.xml 优先解析）──────────
+//
+// 插件运行时被 coverage worker 加载，打包后 plugins 目录无法解析
+// node_modules，因此手写最小 XML 解析器（无外部依赖）：
+//   - 支持元素嵌套、属性（双引号/单引号）、自闭合标签
+//   - 支持文本/属性实体转义：&amp; &lt; &gt; &quot; &apos; 及数字实体 &#65; &#x42;
+//   - 跳过 XML 声明、注释、处理指令、DOCTYPE
+//   - CDATA 段按原文跳过（内容不作为标记解析、不做实体解码）
+//   - 结构性错误（标签未闭合、闭合标签不匹配、属性缺引号等）抛 Error
+
+var XML_ENTITY_MAP = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" };
+
+/** 解码 XML 实体（命名 + 十进制/十六进制数字实体）；未知实体保留原样 */
+function decodeXmlEntities(input) {
+  if (!input || input.indexOf('&') < 0) return input;
+  return input.replace(/&(#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g, function (all, name) {
+    if (name.charAt(0) === '#') {
+      var code = (name.charAt(1) === 'x' || name.charAt(1) === 'X')
+        ? parseInt(name.substring(2), 16)
+        : parseInt(name.substring(1), 10);
+      if (isNaN(code) || code < 0 || code > 0x10ffff) return all; // 非法字符引用保留原样
+      try {
+        return String.fromCodePoint(code);
+      } catch (_e) {
+        return all;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(XML_ENTITY_MAP, name)) return XML_ENTITY_MAP[name];
+    return all; // 未知命名实体保留原样（宽松，不阻断解析）
+  });
+}
+
+/**
+ * 解析 XML 文档，返回根元素节点 { name, attrs, text, children }。
+ * 仅覆盖 session.xml 所需的 XML 子集；结构错误抛 Error（fail-closed）。
+ */
+function parseXmlDocument(text) {
+  if (typeof text !== 'string' || !text.trim()) {
+    throw new Error('XML 解析错误：输入为空');
+  }
+  var pos = 0;
+  var len = text.length;
+
+  function err(msg) {
+    return new Error('XML 解析错误（offset ' + pos + '）：' + msg);
+  }
+
+  function startsWith(s) {
+    return len - pos >= s.length && text.substr(pos, s.length) === s;
+  }
+
+  function skipWhitespace() {
+    while (pos < len) {
+      var c = text.charCodeAt(pos);
+      if (c === 32 || c === 9 || c === 10 || c === 13) pos++;
+      else break;
+    }
+  }
+
+  function isNameStartChar(ch) {
+    return /[A-Za-z_:]/.test(ch);
+  }
+
+  function isNameChar(ch) {
+    return /[A-Za-z0-9_.:-]/.test(ch);
+  }
+
+  function readName() {
+    if (pos >= len || !isNameStartChar(text[pos])) throw err('期望元素/属性名');
+    var start = pos;
+    while (pos < len && isNameChar(text[pos])) pos++;
+    return text.substring(start, pos);
+  }
+
+  /** 跳过注释 / 处理指令（含 XML 声明）/ <! 声明，返回是否跳过了内容 */
+  function skipMisc() {
+    if (startsWith('<!--')) {
+      var end = text.indexOf('-->', pos + 4);
+      if (end < 0) throw err('注释未闭合');
+      pos = end + 3;
+      return true;
+    }
+    if (startsWith('<?')) {
+      var end2 = text.indexOf('?>', pos + 2);
+      if (end2 < 0) throw err('处理指令/XML 声明未闭合');
+      pos = end2 + 2;
+      return true;
+    }
+    if (startsWith('<!')) {
+      // DOCTYPE 等 <!...> 声明：跳到 '>'（不支持内部子集，session.xml 不使用）
+      var end3 = text.indexOf('>', pos + 2);
+      if (end3 < 0) throw err('<! 声明未闭合');
+      pos = end3 + 1;
+      return true;
+    }
+    return false;
+  }
+
+  /** 解析一个元素（进入时 pos 指向 '<'），返回节点 */
+  function parseElement() {
+    pos++; // 消费 '<'
+    var name = readName();
+    var attrs = {};
+    var selfClosed = false;
+
+    // 属性表
+    for (;;) {
+      skipWhitespace();
+      if (pos >= len) throw err('元素 <' + name + '> 意外结束');
+      var ch = text[pos];
+      if (ch === '>') { pos++; break; }
+      if (ch === '/') {
+        if (pos + 1 >= len || text[pos + 1] !== '>') throw err('自闭合标签格式错误');
+        pos += 2;
+        selfClosed = true;
+        break;
+      }
+      var attrName = readName();
+      skipWhitespace();
+      if (text[pos] !== '=') throw err('属性 ' + attrName + ' 缺少取值（XML 不支持无值属性）');
+      pos++;
+      skipWhitespace();
+      var quote = text[pos];
+      if (quote !== '"' && quote !== "'") throw err('属性 ' + attrName + ' 取值未加引号');
+      pos++;
+      var endQ = text.indexOf(quote, pos);
+      if (endQ < 0) throw err('属性 ' + attrName + ' 取值未闭合');
+      var rawValue = text.substring(pos, endQ);
+      pos = endQ + 1;
+      if (Object.prototype.hasOwnProperty.call(attrs, attrName)) {
+        throw err('属性 ' + attrName + ' 重复');
+      }
+      attrs[attrName] = decodeXmlEntities(rawValue);
+    }
+
+    var node = { name: name, attrs: attrs, text: '', children: [] };
+    if (selfClosed) return node;
+
+    // 元素内容：文本 / CDATA / 注释 / 子元素，直至 </name>
+    for (;;) {
+      if (pos >= len) throw err('元素 <' + name + '> 未闭合');
+      if (startsWith('</')) {
+        pos += 2;
+        var closeName = readName();
+        skipWhitespace();
+        if (text[pos] !== '>') throw err('闭合标签 </' + closeName + '> 格式错误');
+        pos++;
+        if (closeName !== name) {
+          throw err('闭合标签不匹配：期望 </' + name + '>，实际 </' + closeName + '>');
+        }
+        return node;
+      }
+      if (startsWith('<![CDATA[')) {
+        // CDATA 段按原文跳过（内容不作为标记解析、不做实体解码）；
+        // 注意必须在 <! 通配分支之前检查（CDATA 也以 <! 开头）
+        var endC = text.indexOf(']]>', pos + 9);
+        if (endC < 0) throw err('CDATA 段未闭合');
+        node.text += text.substring(pos + 9, endC);
+        pos = endC + 3;
+        continue;
+      }
+      if (startsWith('<!--') || startsWith('<?') || startsWith('<!')) {
+        skipMisc();
+        continue;
+      }
+      if (text[pos] === '<') {
+        node.children.push(parseElement());
+        continue;
+      }
+      // 普通文本：累积到下一个 '<'（实体不含 '<'，不会跨块拆分）
+      var nextLt = text.indexOf('<', pos);
+      if (nextLt < 0) nextLt = len;
+      node.text += decodeXmlEntities(text.substring(pos, nextLt));
+      pos = nextLt;
+    }
+  }
+
+  // 根元素之前：只允许空白与声明/注释/DOCTYPE
+  for (;;) {
+    skipWhitespace();
+    if (pos >= len) throw err('未找到根元素');
+    if (skipMisc()) continue;
+    if (text[pos] === '<') break;
+    throw err('根元素之前存在非法文本');
+  }
+  var root = parseElement();
+
+  // 根元素之后：只允许空白与注释/处理指令
+  for (;;) {
+    skipWhitespace();
+    if (pos >= len) break;
+    if (skipMisc()) continue;
+    throw err('根元素之后存在非法内容');
+  }
+  return root;
+}
+
+// ─── urg session.xml 解析（ADR 0024 优先路径）──────────────────
+
+/**
+ * session.xml 中 coverage 元素 type 属性值 → 平台 metric key。
+ * urg 的 code coverage 只有单一 "fsm" type（state 与 transition 合并统计），
+ * 沿用 URG_METRIC_DAT 中 'fsm.dat' → 'fsm_state' 的既有语义：整体映射到
+ * fsm_state，fsm_transition 在 XML 路径下不单独产出（text 路径同样不区分）。
+ */
+var URG_XML_TYPE_MAP = {
+  'line': 'line', 'statement': 'line',
+  'branch': 'branch',
+  'condition': 'condition', 'cond': 'condition', 'expression': 'condition',
+  'toggle': 'toggle', 'tgl': 'toggle',
+  'fsm': 'fsm_state', 'fsm state': 'fsm_state',
+  'assertion': 'assertion', 'assert': 'assertion',
+  'functional': 'functional', 'covergroup': 'functional', 'cover': 'functional',
+};
+
+/** 解析 session.xml 数值属性：缺失/明确不适用（n/a、-、空）→ null；非数字 → 抛错 */
+function parseUrgXmlNumber(raw, what) {
+  if (raw === undefined || raw === null) return null;
+  var t = String(raw).trim();
+  if (t === '' || t === '-' || t === 'n/a' || t.toLowerCase() === 'na' || t.toLowerCase() === 'none') {
+    return null;
+  }
+  if (!/^-?\d+(\.\d+)?$/.test(t)) {
+    throw new Error('session.xml 解析错误：' + what + ' 属性值不是数字：' + raw);
+  }
+  return parseFloat(t);
+}
+
+/**
+ * 从 coverage 元素构造 triplet。
+ *
+ * URG SCORE 语义（ADR 0024，fail-closed）：
+ *   - covered > total、负值 sentinel（如 -1）、score > 100 → 解析错误，不静默错算
+ *   - 不适用（属性缺失或 n/a）→ { percentage: null, covered: null, total: null }
+ *   - score 缺失但有 covered/total 时按 covered/total 计算（与 _makeTriplet 语义一致）
+ */
+function urgXmlTriplet(el, context) {
+  var score = parseUrgXmlNumber(el.attrs.score, context + ' score');
+  var covered = parseUrgXmlNumber(el.attrs.covered, context + ' covered');
+  var total = parseUrgXmlNumber(el.attrs.total, context + ' total');
+
+  if (score !== null && score < 0) {
+    throw new Error('session.xml 解析错误：' + context + ' score 为负值 sentinel（' + score + '），数据无效（fail-closed）');
+  }
+  if (covered !== null && covered < 0) {
+    throw new Error('session.xml 解析错误：' + context + ' covered 为负值 sentinel（' + covered + '），数据无效（fail-closed）');
+  }
+  if (total !== null && total < 0) {
+    throw new Error('session.xml 解析错误：' + context + ' total 为负值 sentinel（' + total + '），数据无效（fail-closed）');
+  }
+  if (score !== null && score > 100) {
+    throw new Error('session.xml 解析错误：' + context + ' score 超过 100（' + score + '），数据无效（fail-closed）');
+  }
+  if (covered !== null && total !== null && covered > total) {
+    throw new Error('session.xml 解析错误：' + context + ' covered(' + covered + ') > total(' + total + ')，违背 SCORE 语义（fail-closed）');
+  }
+
+  if (score === null && covered === null && total === null) {
+    return naTriplet(); // 不适用 → 三者均 null
+  }
+  if (score === null) {
+    // score 缺失但有计数：按计数计算（total=0 时视为 100%，与 _makeTriplet 一致）
+    score = total > 0 ? (covered / total) * 100 : 100;
+  }
+  return { percentage: score, covered: covered, total: total };
+}
+
+/** 深度优先查找第一个名为 scope 的元素（urg session.xml 的层级根） */
+function findFirstScopeElement(node) {
+  if (node.name === 'scope') return node;
+  for (var i = 0; i < node.children.length; i++) {
+    var found = findFirstScopeElement(node.children[i]);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * scope 元素 → CoverageNode（递归）。
+ *
+ * URG SCORE 语义：父 scope 的 metric 分数已包含 subtree，此处直接取 XML 中的
+ * 分数，禁止对 descendants 做任何累加/重算；多 metric 聚合的 coverage_pct 应为
+ * 所选 metric 百分比的算术平均——平台数据模型按 metric 独立建模 triplet，
+ * 解析器不产出聚合 covered/total 计数（聚合由消费方按算术平均语义计算）。
+ */
+function urgXmlScopeToNode(el, parentPath, depth, log) {
+  var name = el.attrs.name;
+  if (!name || !name.trim()) {
+    throw new Error('session.xml 解析错误：scope 元素缺少 name 属性（depth=' + depth + '）');
+  }
+  name = name.trim();
+  var path = parentPath ? parentPath + '/' + name : 'top/' + name;
+  var metrics = emptyMetrics();
+  var children = [];
+
+  for (var i = 0; i < el.children.length; i++) {
+    var child = el.children[i];
+    if (child.name === 'scope') {
+      children.push(urgXmlScopeToNode(child, path, depth + 1, log));
+      continue;
+    }
+    if (child.name === 'coverage' || child.name === 'metric') {
+      var rawType = (child.attrs.type || '').toLowerCase().trim();
+      var metricKey = URG_XML_TYPE_MAP[rawType];
+      if (!metricKey) {
+        log('[parseUrgSessionXml] 忽略未知 metric type: ' + rawType + ' (scope ' + path + ')');
+        continue;
+      }
+      if (metrics[metricKey].percentage !== null || metrics[metricKey].covered !== null) {
+        // 同一 scope 内重复 type：保留后者并记录日志（urg 正常不产出，防御式）
+        log('[parseUrgSessionXml] scope ' + path + ' 中 metric type ' + rawType + ' 重复，取后者');
+      }
+      metrics[metricKey] = urgXmlTriplet(child, path + ' ' + rawType);
+    }
+    // 其他子元素（report 包装层、label 等）忽略
+  }
+
+  return makeNode(name, path, depth, metrics, children);
+}
+
+/**
+ * 解析 urg session.xml（`urg -xml_verbose -show summary` 产物，ADR 0024）。
+ * 返回 { tree, summary }：tree 为层级 CoverageNode 树，summary 为根 scope metrics。
+ * XML 结构错误或违背 SCORE 语义的数据直接抛 Error（fail-closed，不降级）。
+ */
+function parseUrgSessionXml(text, log) {
+  if (typeof log !== 'function') log = function () {}; // log 可选（独立调用/单测场景）
+  var root = parseXmlDocument(text);
+  var scopeEl = findFirstScopeElement(root);
+  if (!scopeEl) {
+    throw new Error('session.xml 解析错误：未找到 scope 元素（非 urg -xml_verbose 产物？）');
+  }
+  var tree = urgXmlScopeToNode(scopeEl, '', 0, log);
+  log('[parseUrgSessionXml] root=' + tree.name + ', direct children=' + tree.children.length);
+  return { tree: tree, summary: tree.metrics };
+}
+
+/**
+ * 解析 dashboard.txt：顶层 8 metric 摘要。
+ *
+ * dashboard.txt 中的典型表格行（列名可能随版本变化，采用防御式解析）：
+ *   Line Coverage:            95.30%  (9530/10000)
+ *   Branch Coverage:          87.20%
+ *   Toggle Coverage:          ...
+ * 也兼容 "Line  95.30%" 等无 Coverage 后缀写法。
+ */
+function parseUrgDashboard(text, log) {
+  if (!text) return null;
+  var metrics = emptyMetrics();
+  var foundAny = false;
+  var lines = text.split('\n');
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    // 只匹配 metric 名 + 百分比（可带 covered/total 括号）的行
+    var m = line.match(/(line|branch|toggle|tgl|cond(?:ition)?|fsm|assert(?:ion)?|functional|covergroup)[^:%\d]*:?[ \t]+([\d.]+)\s*%\s*(?:\(\s*(\d+)\s*\/\s*(\d+)\s*\))?/i);
+    if (!m) continue;
+    var key = normalizeMetricName(m[1]);
+    if (!key) continue;
+    var pct = parseFloat(m[2]);
+    if (isNaN(pct)) continue;
+    metrics[key] = {
+      percentage: pct,
+      covered: m[3] ? parseInt(m[3], 10) : null,
+      total: m[4] ? parseInt(m[4], 10) : null,
+    };
+    foundAny = true;
+    if (log) log('[parseUrgDashboard] ' + key + ' = ' + pct + '% from: ' + JSON.stringify(line.trim()));
+  }
+
+  if (log) log('[parseUrgDashboard] foundAny=' + foundAny);
+  return foundAny ? metrics : null;
+}
+
+/**
+ * 从一行文本中提取层级路径与一组百分比（0-100 纯数字或 xx.xx%）。
+ * 返回 { name, depth, values: number[] } 或 null。
+ * depth 由前导 "|--"/"| "/缩进推断。
+ */
+function parseUrgHierarchyLine(line) {
+  if (!line) return null;
+  // 去掉行尾注释与表头残留
+  var trimmed = line.replace(/\s*#.*$/, '');
+  if (!trimmed.trim()) return null;
+  if (/^[-=+_|~\s]+$/.test(trimmed)) return null; // 分隔线
+
+  // 计算层级："|--" 与 "| " 每个竖线一级
+  var depth = 0;
+  var m;
+  var prefixRe = /^(?:\|\s*)+/;
+  if ((m = prefixRe.exec(trimmed))) {
+    depth = (m[0].match(/\|/g) || []).length;
+  }
+  var body = trimmed.substring(m ? m[0].length : 0).replace(/^-+\s*/, '');
+  body = body.trim();
+  if (!body) return null;
+
+  // 名称 = 首个空白前的 token
+  var nameMatch = body.match(/^(\S+)/);
+  if (!nameMatch) return null;
+  var name = nameMatch[1];
+  // 跳过表头/合计行
+  if (/^(name|module|instance|hierarchy|total|summary|overall)$/i.test(name)) return null;
+
+  // 提取名称后的所有数字（百分比或计数）
+  var afterName = body.substring(name.length);
+  var values = [];
+  var numRe = /(-?[\d.]+)/g;
+  var nm;
+  while ((nm = numRe.exec(afterName)) !== null) {
+    var v = parseFloat(nm[1]);
+    if (!isNaN(v)) values.push(v);
+  }
+  if (values.length === 0) return null;
+  return { name: name, depth: depth, values: values };
+}
+
+/**
+ * 解析 hierarchy.txt：层级模块树。
+ *
+ * 每行一个实例（"| "前缀表层级），后面跟一列列百分比。列顺序无法预知
+ * （取决于 urg 版本与启用的 metric），采用启发式：
+ *   1. 从表头行解析列名 → 列名→metric 映射
+ *   2. 无表头时按常见顺序（line/toggle/branch/cond/fsm/functional/assert）映射
+ *   3. 数值 >100 视为计数而非百分比，跳过
+ * 返回 { tree, headerMetrics } 或 null。
+ */
+function parseUrgHierarchy(text, log) {
+  if (!text) return null;
+  var lines = text.split('\n');
+  // 找表头行：包含 name/module/instance 且含多个 metric 关键词
+  var headerMetrics = null;
+  for (var i = 0; i < lines.length; i++) {
+    var lower = lines[i].toLowerCase();
+    if ((/name|module|instance|hier/i.test(lines[i])) &&
+        (/line|branch|tgl|toggle|cond|fsm|assert|func|cov/i.test(lower))) {
+      // 收集表头中的 metric 列（按出现顺序）
+      var cols = [];
+      var colRe = /(line|branch|tgl|toggle|cond(?:ion)?|fsm|assert(?:ion)?|functional|covergroup|cov|group)/gi;
+      var cm;
+      while ((cm = colRe.exec(lines[i])) !== null) {
+        var key = normalizeMetricName(cm[1]);
+        if (key) cols.push(key);
+      }
+      // 去重（同 metric 多列时保序去重）
+      var seen = {};
+      var uniq = [];
+      for (var c = 0; c < cols.length; c++) {
+        if (!seen[cols[c]]) { seen[cols[c]] = true; uniq.push(cols[c]); }
+      }
+      if (uniq.length > 0) {
+        headerMetrics = uniq;
+        log('[parseUrgHierarchy] header at line ' + i + ': metrics=' + uniq.join(','));
+      }
+      break;
+    }
+  }
+  if (!headerMetrics) {
+    // 无表头 → 常见顺序
+    headerMetrics = ['line', 'toggle', 'branch', 'condition', 'fsm_state', 'functional', 'assertion'];
+    log('[parseUrgHierarchy] no header found, using default metric order');
+  }
+
+  var nodes = [];
+  for (var j = 0; j < lines.length; j++) {
+    var parsed = parseUrgHierarchyLine(lines[j]);
+    if (!parsed) continue;
+    var metrics = emptyMetrics();
+    var vi = 0;
+    for (var k = 0; k < parsed.values.length && vi < headerMetrics.length; k++) {
+      var v2 = parsed.values[k];
+      // 跳过明显不是百分比的计数（>100 或负数）
+      if (v2 < 0 || v2 > 100) continue;
+      metrics[headerMetrics[vi]] = { percentage: v2, covered: null, total: null };
+      vi++;
+    }
+    nodes.push({ name: parsed.name, depth: parsed.depth, metrics: metrics, children: [] });
+  }
+
+  if (nodes.length === 0) {
+    if (log) log('[parseUrgHierarchy] no nodes parsed');
+    return null;
+  }
+  var tree = buildHierarchyTree(nodes, log);
+  if (!tree) return null;
+  if (log) log('[parseUrgHierarchy] parsed ' + nodes.length + ' nodes');
+  return { tree: tree, headerMetrics: headerMetrics };
+}
+
+/** 从 .dat 行中提取 file:line 证据。返回 { file, line } 或 null。 */
+function parseUrgFileLine(text) {
+  if (!text) return null;
+  // 常见形态："...file.v:123..."（行号紧跟冒号）
+  var m = text.match(/(\S+\.[va]h?)\s*[:\s]\s*(\d+)/i);
+  if (m) return { file: m[1], line: parseInt(m[2], 10) };
+  // "line 123 in file.v"
+  m = text.match(/line\s+(\d+)\s+in\s+(\S+)/i);
+  if (m) return { file: m[2], line: parseInt(m[1], 10) };
+  return null;
+}
+
+/**
+ * 解析 urg 目录下逐 metric 的 .dat 文件 → 未覆盖项（file/line 级）。
+ * session.xml 优先路径与 text 降级路径共用（ADR 0024：summary 与 detail 数据互不影响）。
+ * includeDat=false（summaryOnly 快速导入）时跳过。
+ */
+function parseUrgDatFiles(reportDir, log, includeDat) {
+  var uncovered = {};
+  if (includeDat === false) {
+    log('[parseUrgDatFiles] summaryOnly mode — skipping .dat uncovered parsing');
+    return null;
+  }
+  for (var datName in URG_METRIC_DAT) {
+    var metricKey = URG_METRIC_DAT[datName];
+    var datPath = join(reportDir, datName);
+    if (!existsSync(datPath)) continue;
+    try {
+      var lines = readFileSync(datPath, 'utf-8').split('\n');
+      var items = [];
+      for (var i = 0; i < lines.length; i++) {
+        var l = lines[i];
+        if (!l.trim()) continue;
+        // 未覆盖行通常含 "uncovered"/"never"/"0/" 标记或按格式全部为未覆盖清单；
+        // 防御式：有 UNCOVERED/NOT COVERED 标记优先，否则只要能提取 file:line 就收
+        var lower = l.toLowerCase();
+        var flagged = lower.indexOf('uncovered') >= 0 || lower.indexOf('not covered') >= 0 ||
+                      lower.indexOf('never') >= 0;
+        var fl = parseUrgFileLine(l);
+        if (!fl) continue;
+        if (!flagged && lower.indexOf('covered') >= 0) continue; // 明确标为已覆盖则跳过
+        items.push({
+          module: '',
+          file: fl.file,
+          line: fl.line,
+          description: l.trim().substring(0, 200),
+        });
+        if (items.length >= URG_UNCOVERED_PER_METRIC_CAP) break;
+      }
+      if (items.length > 0) {
+        uncovered[metricKey] = items;
+        log('[parseUrgDatFiles] ' + datName + ' → ' + items.length + ' uncovered items (' + metricKey + ')');
+      }
+    } catch (err) {
+      log('[parseUrgDatFiles] ' + datName + ' read error: ' + String(err));
+    }
+  }
+  var hasAny = false;
+  for (var mk in uncovered) { if (uncovered[mk] && uncovered[mk].length > 0) { hasAny = true; break; } }
+  return hasAny ? uncovered : null;
+}
+
+/**
+ * 解析 urg text 报告目录（降级路径，启发式，ADR 0024）：
+ *   1. dashboard.txt → 顶层 metric 摘要
+ *   2. hierarchy.txt → 层级模块树
+ *   3. *.dat → file/line 级未覆盖项（每 metric 一组 UncoveredItem）
+ * dashboard/hierarchy 缺失时逐项降级，不整体失败。
+ * includeDat=false（summaryOnly 快速导入）时跳过 .dat 解析。
+ */
+function parseUrgReportDir(reportDir, log, includeDat) {
+  var result = { summary: null, tree: null, uncovered: null, filesSeen: [] };
+  if (!existsSync(reportDir)) {
+    log('[parseUrgReportDir] reportDir not found: ' + reportDir);
+    return result;
+  }
+
+  var entries;
+  try {
+    entries = readdirSync(reportDir);
+  } catch (err) {
+    log('[parseUrgReportDir] readdir failed: ' + (err && err.message ? err.message : String(err)));
+    return result;
+  }
+  result.filesSeen = entries.slice();
+  log('[parseUrgReportDir] entries: ' + entries.join(', '));
+
+  // 1. dashboard.txt（若不存在，尝试目录内任意 dashboard*.txt）
+  var dashboardFile = entries.find(function (f) { return /^dashboard.*\.txt$/i.test(f); });
+  if (dashboardFile) {
+    try {
+      result.summary = parseUrgDashboard(readFileSync(join(reportDir, dashboardFile), 'utf-8'), log);
+    } catch (err) {
+      log('[parseUrgReportDir] dashboard read error: ' + String(err));
+    }
+  } else {
+    log('[parseUrgReportDir] no dashboard*.txt found');
+  }
+
+  // 2. hierarchy.txt
+  var hierFile = entries.find(function (f) { return /^hierarchy.*\.txt$/i.test(f); });
+  if (hierFile) {
+    try {
+      var parsed = parseUrgHierarchy(readFileSync(join(reportDir, hierFile), 'utf-8'), log);
+      if (parsed) result.tree = parsed.tree;
+    } catch (err) {
+      log('[parseUrgReportDir] hierarchy read error: ' + String(err));
+    }
+  } else {
+    log('[parseUrgReportDir] no hierarchy*.txt found');
+  }
+
+  // 3. *.dat → 未覆盖项
+  result.uncovered = parseUrgDatFiles(reportDir, log, includeDat);
+
+  return result;
+}
 
 function naTriplet() {
   return { percentage: null, covered: null, total: null };
@@ -1114,16 +1745,50 @@ async function parse(projectRoot, sessionId, reportDir, options) {
   var summaryMetrics = null;
   var summaryHierarchy = null;
   var detailResult = { nodes: [], tree: null };
+  // urg text 报告目录解析结果（vcs-urg 路径，ADR 0021）
+  var urgDirResult = null;
 
-  if (summaryText) {
+  if (edaTool === 'vcs-urg') {
+    // 解析优先级（ADR 0024）：
+    //   ① session.xml 存在 → XML 解析（确定性；解析失败直接抛错，不降级）
+    //   ② 降级 → dashboard.txt + hierarchy.txt（启发式 text 路径，向后兼容）
+    //   ③ 两者都缺失 → 报错（fail-closed）
+    log('[parse] Using VCS urg report-directory parser (session.xml first)');
+    var sessionXmlText = safeReadTextFile(join(reportDir, 'session.xml'), log, 'session.xml');
+    if (sessionXmlText) {
+      // ① XML 优先路径：summary + 层级树来自 session.xml；.dat 未覆盖项仍从目录解析
+      var urgXml = parseUrgSessionXml(sessionXmlText, log);
+      summaryMetrics = urgXml.summary;
+      summaryHierarchy = { tree: urgXml.tree };
+      urgDirResult = {
+        summary: urgXml.summary,
+        tree: urgXml.tree,
+        uncovered: parseUrgDatFiles(reportDir, log, !summaryOnly),
+        filesSeen: ['session.xml'],
+      };
+    } else {
+      // ② text 降级路径：dashboard.txt / hierarchy.txt / *.dat
+      urgDirResult = parseUrgReportDir(reportDir, log, !summaryOnly);
+      summaryMetrics = urgDirResult.summary;
+      summaryHierarchy = urgDirResult.tree ? { tree: urgDirResult.tree } : null;
+      // 兼容：若目录内没有 dashboard/hierarchy（如旧版模板写了 summary.txt），
+      // 退回旧行为解析 summary.txt
+      if (!summaryMetrics && summaryText) {
+        var urgLegacy = parseUrgReport(summaryText, log);
+        summaryMetrics = urgLegacy.summary;
+      }
+      // ③ session.xml 与 text 报告全部缺失 → 报错（fail-closed，不让空数据流入闭环）
+      if (!summaryMetrics && !summaryHierarchy) {
+        throw new Error(
+          'urg 报告目录解析失败：缺少 session.xml，且未找到可解析的 dashboard.txt/hierarchy.txt 文本报告（reportDir=' + reportDir + '）',
+        );
+      }
+    }
+  } else if (summaryText) {
     if (edaTool === 'imc') {
       log('[parse] Using IMC summary parser');
       summaryHierarchy = parseImcHierarchySummary(summaryText, log);
       summaryMetrics = summaryHierarchy ? summaryHierarchy.metrics : parseImcSummary(summaryText, log);
-    } else if (edaTool === 'vcs-urg') {
-      log('[parse] Using VCS urg summary parser');
-      var urgResult = parseUrgReport(summaryText, log);
-      summaryMetrics = urgResult.summary;
     } else {
       log('[parse] Unknown EDA tool, trying all parsers');
       summaryMetrics = parseImcSummary(summaryText, log);
@@ -1150,18 +1815,19 @@ async function parse(projectRoot, sessionId, reportDir, options) {
   var csvData = null;
 
   if (!summaryOnly) {
-    // grade 报告
-    var gradePath = join(reportDir, 'grade.txt');
-    var gradeText = safeReadTextFile(gradePath, log, 'grade.txt');
+    // grade 报告（urg 默认命令输出到 {reportDir}/grade/ 子目录，其次查根目录与 gradedtests.txt）
+    var gradeCandidates = [
+      join(reportDir, 'grade', 'grade.txt'),
+      join(reportDir, 'grade', 'gradedtests.txt'),
+      join(reportDir, 'grade.txt'),
+      join(reportDir, 'gradedtests.txt'),
+    ];
+    var gradeText = '';
+    for (var gi = 0; gi < gradeCandidates.length && !gradeText; gi++) {
+      gradeText = safeReadTextFile(gradeCandidates[gi], log, 'grade:' + gradeCandidates[gi]);
+    }
     if (gradeText) {
       testContributions = parseGradeReport(gradeText, log);
-    } else {
-      // urg -grade testfile 生成的是 gradedtests.txt
-      var urgGradePath = join(reportDir, 'gradedtests.txt');
-      var urgGradeText = safeReadTextFile(urgGradePath, log, 'gradedtests.txt');
-      if (urgGradeText) {
-        testContributions = parseGradeReport(urgGradeText, log);
-      }
     }
 
     // bins 报告
@@ -1202,8 +1868,9 @@ async function parse(projectRoot, sessionId, reportDir, options) {
     root = detailResult.tree;
     root.metrics = rootMetrics;
     log('[parse] Using detail tree as root, root.name=' + root.name + ', children=' + root.children.length);
-  } else if (summaryHierarchy) {
+  } else if (summaryHierarchy && summaryHierarchy.tree) {
     root = summaryHierarchy.tree;
+    root.metrics = rootMetrics;
     log('[parse] Using summary hierarchy as root, root.name=' + root.name + ', children=' + root.children.length);
   } else {
     // 如果有扁平模块节点，构建层级树
@@ -1229,9 +1896,16 @@ async function parse(projectRoot, sessionId, reportDir, options) {
   }
   log('Root metrics: ' + JSON.stringify(metricSummary));
 
-  // 6. 构建 uncovered 项
+  // 6. 构建 uncovered 项（优先 urg .dat 文件级未覆盖，其次 bins 报告）
   var uncovered = undefined;
-  if (uncoveredBins && uncoveredBins.length > 0) {
+  if (urgDirResult && urgDirResult.uncovered) {
+    uncovered = urgDirResult.uncovered;
+    var urgCount = 0;
+    for (var uk in uncovered) {
+      if (uncovered[uk]) urgCount += uncovered[uk].length;
+    }
+    log('[parse] Added ' + urgCount + ' uncovered items from urg .dat files');
+  } else if (uncoveredBins && uncoveredBins.length > 0) {
     uncovered = { functional: uncoveredBins };
     log('[parse] Added ' + uncoveredBins.length + ' uncovered bins from bins report');
   }
@@ -1263,4 +1937,11 @@ module.exports = {
   parseGradeReport: parseGradeReport,
   parseBinsReport: parseBinsReport,
   readCsvData: readCsvData,
+  parseUrgDashboard: parseUrgDashboard,
+  parseUrgHierarchy: parseUrgHierarchy,
+  parseUrgHierarchyLine: parseUrgHierarchyLine,
+  parseUrgFileLine: parseUrgFileLine,
+  parseUrgReportDir: parseUrgReportDir,
+  parseXmlDocument: parseXmlDocument,
+  parseUrgSessionXml: parseUrgSessionXml,
 };

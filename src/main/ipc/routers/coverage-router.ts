@@ -32,7 +32,12 @@ import { sessionManager } from '../../agent/session-manager';
 import { credentialManager } from '../../credentials/credential-manager';
 import { pluginLoader } from '../../plugins/loader';
 import { PluginBackedCoverage, PluginBackedDiscovery, PluginBackedSimulation } from '../../plugin-adapters';
-import { loadEdaConfig, saveEdaConfig, normalizeConfig } from '../../coverage/eda-config';
+import {
+  loadEdaConfig,
+  saveEdaConfig,
+  normalizeConfig,
+  EdaConfigValidationError,
+} from '../../coverage/eda-config';
 import type {
   EdaToolConfig,
   CoverageMetric,
@@ -173,12 +178,26 @@ export const coverageRouter = t.router({
           csvCommand: typeof cfg.csvCommand === 'string' ? cfg.csvCommand : undefined,
           gradeCommand: typeof cfg.gradeCommand === 'string' ? cfg.gradeCommand : undefined,
           binsCommand: typeof cfg.binsCommand === 'string' ? cfg.binsCommand : undefined,
+          // 执行后端与超时（ADR 0024）：渲染端未传时由 normalizeConfig 填默认值
+          execBackend: cfg.execBackend === 'lsf' ? 'lsf' : undefined,
+          lsfQueue: typeof cfg.lsfQueue === 'string' ? cfg.lsfQueue : undefined,
+          lsfResource: typeof cfg.lsfResource === 'string' ? cfg.lsfResource : undefined,
+          startupTimeoutSec: typeof cfg.startupTimeoutSec === 'number' ? cfg.startupTimeoutSec : undefined,
+          runTimeoutSec: typeof cfg.runTimeoutSec === 'number' ? cfg.runTimeoutSec : undefined,
         },
       };
     })
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
-      return saveEdaConfig(project.rootPath, normalizeConfig(input.config));
+      try {
+        return await saveEdaConfig(project.rootPath, normalizeConfig(input.config));
+      } catch (err) {
+        // lsf 缺少队列等校验错误映射为 BAD_REQUEST（中文信息直达用户）
+        if (err instanceof EdaConfigValidationError) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
+        }
+        throw err;
+      }
     }),
 
   // ─── 导入流程（ADR 0006 两步流水线） ─────────────────────────
@@ -704,17 +723,31 @@ export const coverageRouter = t.router({
       return mgr.listExclusions(input.sessionId, input.status);
     }),
 
-  // ─── Coverage Closure（ADR 0009 Slice 6a） ───────────────────
+  // ─── Coverage Closure（ADR 0009 Slice 6a / ADR 0025 模块级 Target） ──
 
   startClosure: t.procedure
-    .input((raw): { projectId: string; sessionId: string; gaps?: CoverageGap[]; maxRounds?: number } => {
+    .input((raw): {
+      projectId: string;
+      sessionId: string;
+      /** 选中的模块路径列表；缺省自动聚合全部有 gap 的模块 */
+      modules?: string[];
+      maxRounds?: number;
+      escalationThreshold?: number;
+    } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and sessionId are required' });
       }
-      const gaps = Array.isArray(r.gaps) ? (r.gaps as CoverageGap[]) : undefined;
+      let modules: string[] | undefined;
+      if (r.modules !== undefined) {
+        if (!Array.isArray(r.modules) || r.modules.length === 0 || !r.modules.every((m) => typeof m === 'string')) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'modules must be a non-empty string[] when provided' });
+        }
+        modules = r.modules as string[];
+      }
       const maxRounds = typeof r.maxRounds === 'number' ? r.maxRounds : undefined;
-      return { projectId: r.projectId, sessionId: r.sessionId, gaps, maxRounds };
+      const escalationThreshold = typeof r.escalationThreshold === 'number' ? r.escalationThreshold : undefined;
+      return { projectId: r.projectId, sessionId: r.sessionId, modules, maxRounds, escalationThreshold };
     })
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
@@ -734,11 +767,12 @@ export const coverageRouter = t.router({
         coverageManager,
       });
 
-      // 1. 创建 ClosureSession（持久化 gap 列表 + workspace 目录）
+      // 1. 创建 ClosureSession（按模块聚合 target + workspace 目录）
       const session = await closureManager.startClosure({
         sessionId: input.sessionId,
-        gaps: input.gaps,
+        modules: input.modules,
         maxRounds: input.maxRounds,
+        escalationThreshold: input.escalationThreshold,
       });
 
       // 2. 构建 orchestrator 依赖
@@ -840,15 +874,15 @@ export const coverageRouter = t.router({
     .input((raw): {
       projectId: string;
       closureId: string;
-      gapId: string;
+      targetId: string;
       generatedTests: string[];
       deltaBefore: CoverageSummary;
       deltaAfter: CoverageSummary;
       deltas: CoverageDelta[];
     } => {
       const r = raw as Record<string, unknown>;
-      if (typeof r.projectId !== 'string' || typeof r.closureId !== 'string' || typeof r.gapId !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, closureId and gapId are required' });
+      if (typeof r.projectId !== 'string' || typeof r.closureId !== 'string' || typeof r.targetId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, closureId and targetId are required' });
       }
       const generatedTests = Array.isArray(r.generatedTests) ? (r.generatedTests as string[]) : [];
       const deltaBefore = r.deltaBefore as CoverageSummary;
@@ -863,7 +897,7 @@ export const coverageRouter = t.router({
       return {
         projectId: r.projectId,
         closureId: r.closureId,
-        gapId: r.gapId,
+        targetId: r.targetId,
         generatedTests,
         deltaBefore,
         deltaAfter,
@@ -873,7 +907,7 @@ export const coverageRouter = t.router({
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
       const mgr = buildClosureManager(project.rootPath);
-      return mgr.completeIteration(input.closureId, input.gapId, {
+      return mgr.completeIteration(input.closureId, input.targetId, {
         generatedTests: input.generatedTests,
         deltaBefore: input.deltaBefore,
         deltaAfter: input.deltaAfter,

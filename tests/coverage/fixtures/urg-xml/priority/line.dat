@@ -1,0 +1,4 @@
+# uncovered line items (constructed sample, detail .dat artifact)
+# 注：使用 .v 扩展名 —— 现有 parseUrgFileLine 启发式仅识别 .v/.a（不识别 .sv），保留其行为不动
+alu_op.v:42 always block not covered
+decoder.v:100 case item never covered

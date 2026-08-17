@@ -785,16 +785,16 @@ function AiClosurePanel({ overview }: { overview: CoverageSummary | null }) {
     );
   }
 
-  // 有 closure 记录（运行中或已完成）
-  const gaps = currentClosure.gaps;
-  const completedGaps = gaps.filter((g) => g.status === 'closed').length;
-  const escalatedGaps = gaps.filter((g) => g.status === 'escalated').length;
-  const failedGaps = gaps.filter((g) => g.status === 'failed').length;
+  // 有 closure 记录（运行中或已完成）—— 工单 04：模块级 Target 队列
+  const targets = currentClosure.targets;
+  const completedTargets = targets.filter((t) => t.status === 'closed').length;
+  const escalatedTargets = targets.filter((t) => t.status === 'escalated').length;
+  const failedTargets = targets.filter((t) => t.status === 'failed').length;
 
   // 计算总 delta（最后一个迭代的 deltaBefore → deltaAfter）
   let totalDeltaOverall = 0;
-  for (const gap of gaps) {
-    const lastIter = gap.iterations[gap.iterations.length - 1];
+  for (const target of targets) {
+    const lastIter = target.iterations[target.iterations.length - 1];
     if (lastIter?.deltaBefore && lastIter?.deltaAfter) {
       totalDeltaOverall += lastIter.deltaAfter.overall - lastIter.deltaBefore.overall;
     }
@@ -823,7 +823,7 @@ function AiClosurePanel({ overview }: { overview: CoverageSummary | null }) {
             <div className="text-[10px] text-muted-foreground">
               {overview
                 ? `当前总体覆盖率 ${overview.overall.toFixed(1)}%`
-                : `${gaps.length} 个 Gap`}
+                : `${targets.length} 个目标模块`}
             </div>
           </div>
         </div>
@@ -865,12 +865,12 @@ function AiClosurePanel({ overview }: { overview: CoverageSummary | null }) {
       </div>
 
       {/* 运行中实时进度 */}
-      {isActive && closureLive.activeGapId && (
+      {isActive && closureLive.activeTargetId && (
         <div className="mt-2 rounded bg-secondary/40 p-2">
           <div className="flex items-center gap-2 text-[11px]">
             <Loader2 className="h-3 w-3 animate-spin text-primary" />
             <span className="text-foreground">
-              Gap 迭代中 · Round {closureLive.activeRound ?? '?'}
+              目标模块迭代中 · Round {closureLive.activeRound ?? '?'}
               {closureLive.agentPhase === 'prompting' && ' · AI 生成测试中'}
               {closureLive.agentPhase === 'ended' && ' · AI 完成，计算 Delta'}
             </span>
@@ -893,38 +893,42 @@ function AiClosurePanel({ overview }: { overview: CoverageSummary | null }) {
         </div>
       ) : (
         <>
-          {/* Gap 队列 */}
+          {/* Target 队列（模块级工作项，每项含该模块全部未达标 metric） */}
           <div className="mt-2">
             <div className="mb-1 text-[10px] font-medium text-muted-foreground">
-              Gap 队列（{gaps.length}）· 已关闭 {completedGaps} · 升级 {escalatedGaps} · 失败 {failedGaps}
+              Target 队列（{targets.length}）· 已关闭 {completedTargets} · 升级 {escalatedTargets} · 失败 {failedTargets}
             </div>
             <div className="flex max-h-[180px] flex-col gap-1 overflow-y-auto">
-              {gaps.map((gap) => {
-                const lastIter = gap.iterations[gap.iterations.length - 1];
+              {targets.map((target) => {
+                const lastIter = target.iterations[target.iterations.length - 1];
                 const iterDelta = lastIter?.deltaBefore && lastIter?.deltaAfter
                   ? lastIter.deltaAfter.overall - lastIter.deltaBefore.overall
                   : undefined;
-                const isLiveGap = isActive && closureLive.activeGapId === gap.id;
+                const isLiveTarget = isActive && closureLive.activeTargetId === target.id;
+                const metricLabels = target.gaps
+                  .map((g) => METRIC_LABELS[g.metric] ?? g.metric)
+                  .join(', ');
+                const maxDeficit = Math.max(...target.gaps.map((g) => g.deficit));
                 return (
                   <div
-                    key={gap.id}
+                    key={target.id}
                     className={cn(
                       'flex items-center gap-2 rounded px-2 py-1.5 text-[11px]',
-                      isLiveGap ? 'bg-primary/10' : 'bg-secondary/50',
+                      isLiveTarget ? 'bg-primary/10' : 'bg-secondary/50',
                     )}
                   >
-                    <span className={cn('h-2 w-2 flex-shrink-0 rounded-full', GAP_STATUS_DOT[gap.status] ?? 'bg-muted-foreground')} />
+                    <span className={cn('h-2 w-2 flex-shrink-0 rounded-full', GAP_STATUS_DOT[target.status] ?? 'bg-muted-foreground')} />
                     <span className="min-w-[100px] font-mono font-medium text-foreground">
-                      {gap.gap.nodeName}
+                      {target.module.name}
                     </span>
-                    <span className="text-muted-foreground">{METRIC_LABELS[gap.gap.metric] ?? gap.gap.metric}</span>
-                    <span className="font-mono text-destructive">−{gap.gap.deficit.toFixed(1)}</span>
-                    <span className={cn('ml-auto', GAP_STATUS_COLOR[gap.status] ?? 'text-muted-foreground')}>
-                      {GAP_STATUS_LABEL[gap.status] ?? gap.status}
+                    <span className="text-muted-foreground">{metricLabels}</span>
+                    <span className="font-mono text-destructive">−{maxDeficit.toFixed(1)}</span>
+                    <span className={cn('ml-auto', GAP_STATUS_COLOR[target.status] ?? 'text-muted-foreground')}>
+                      {GAP_STATUS_LABEL[target.status] ?? target.status}
                     </span>
-                    {gap.iterations.length > 0 && (
+                    {target.iterations.length > 0 && (
                       <span className="font-mono text-[10px] text-muted-foreground">
-                        R{gap.iterations.length}
+                        R{target.iterations.length}
                         {typeof iterDelta === 'number' && (
                           <span className={iterDelta >= 1 ? 'text-primary' : 'text-yellow-500'}>
                             {' '}({iterDelta >= 0 ? '+' : ''}{iterDelta.toFixed(1)}%)
@@ -932,7 +936,7 @@ function AiClosurePanel({ overview }: { overview: CoverageSummary | null }) {
                         )}
                       </span>
                     )}
-                    {isLiveGap && (
+                    {isLiveTarget && (
                       <Loader2 className="h-3 w-3 animate-spin text-primary" />
                     )}
                   </div>
@@ -953,9 +957,9 @@ function AiClosurePanel({ overview }: { overview: CoverageSummary | null }) {
               {currentClosure.status === 'aborted' && (
                 <div className="mt-1 text-destructive">闭环已被用户中止</div>
               )}
-              {escalatedGaps > 0 && (
+              {escalatedTargets > 0 && (
                 <div className="mt-1 text-destructive">
-                  {escalatedGaps} 个 Gap 已升级至人工审查（Dead code 确认 / Exclusion 审批需人工介入）
+                  {escalatedTargets} 个目标模块已升级至人工审查（Dead code 确认 / Exclusion 审批需人工介入）
                 </div>
               )}
             </div>

@@ -1,14 +1,14 @@
 /**
- * Test Promotion 端到端集成测试（ADR 0009 决策 10 / Issue #10 Slice 8）。
+ * Test Promotion 端到端集成测试（ADR 0009 决策 10 / Issue #10 Slice 8；工单 04 适配模块级 Target）。
  *
  * 端到端验证 Closure 结束后 → Test Promotion 完整流程：
- *   1. 构建真实 ClosureSession（ClosureManager + 真实文件 IO）
+ *   1. 构建真实 ClosureSession（ClosureManager + 真实文件 IO，模块级 target）
  *   2. 模拟多轮迭代，写入生成的测试文件到 Closure Workspace
- *   3. 关闭/升级各 Gap，使 Closure 进入终态
+ *   3. 关闭/升级各 Target，使 Closure 进入终态
  *   4. TestPromoter.getPromotionQueue 扫描队列
  *   5. TestPromoter.promoteTests 复制 accepted 文件到正式 testbench 目录
  *   6. 验证目标目录文件内容、源文件保留
- *   7. TestPromoter.getClosureSummary 返回 gap 状态 / delta / 计数
+ *   7. TestPromoter.getClosureSummary 返回 target 状态 / delta / 计数
  *   8. TestPromoter.cleanupClosure 删除整个 workspace 目录
  *
  * 这条链路正是 coverage-router 中 promoteTests/getClosureSummary/cleanupClosure
@@ -25,8 +25,9 @@ import {
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type {
-  CoverageGap, CoverageSummary, CoverageDelta, CoverageMetric,
+  CoverageGap, CoverageSummary, CoverageDelta, CoverageMetric, CoverageNode,
 } from '@shared/types';
+import { COVERAGE_METRICS } from '@shared/types';
 
 // ─── Mock 数据辅助 ──────────────────────────────────────────────
 
@@ -68,9 +69,48 @@ function makeDeltas(delta: number): CoverageDelta[] {
   return metrics.map((m) => ({ metric: m, before: 0, after: delta, delta }));
 }
 
+/**
+ * 创建 mock CoverageManager：按 gap 列表构建 Coverage Tree（每个模块一个节点），
+ * 供 ClosureManager.startClosure 用 detectGaps 做模块级聚合。
+ */
 function createMockCoverageManager(gaps: CoverageGap[] = []): CoverageManager {
+  const byPath = new Map<string, { name: string; pcts: Partial<Record<CoverageMetric, number>> }>();
+  const targets: Partial<Record<CoverageMetric, number>> = {};
+  for (const gap of gaps) {
+    targets[gap.metric] = gap.target;
+    const entry = byPath.get(gap.nodePath) ?? { name: gap.nodeName, pcts: {} };
+    entry.pcts[gap.metric] = gap.actual;
+    byPath.set(gap.nodePath, entry);
+  }
+  const mkMetrics = (pcts: Partial<Record<CoverageMetric, number>>): CoverageNode['metrics'] => {
+    const m = {} as CoverageNode['metrics'];
+    for (const metric of COVERAGE_METRICS) {
+      m[metric] = { percentage: pcts[metric] ?? null, covered: null, total: null };
+    }
+    return m;
+  };
+  const root: CoverageNode = {
+    name: 'top',
+    path: 'top',
+    depth: 0,
+    metrics: mkMetrics({}),
+    children: Array.from(byPath.entries()).map(([path, { name, pcts }]) => ({
+      name,
+      path,
+      depth: 1,
+      metrics: mkMetrics(pcts),
+      children: [],
+    })),
+  };
+  const data = {
+    sessionId: 'mock-session',
+    source: { covMergeDir: 'cov_merge', edaTool: 'imc' as const, reportGeneratedAt: 0 },
+    root,
+    targets,
+  };
   return {
-    listGaps: async (_sessionId?: string) => ({ sessionId: 'mock-session', gaps }),
+    getTree: async () => data,
+    getTargets: async () => targets,
   } as unknown as CoverageManager;
 }
 
@@ -91,12 +131,12 @@ function setup(gaps: CoverageGap[] = []) {
 /** 在 Closure Workspace 中写入测试文件 */
 function writeTestFile(
   workspaceDir: string,
-  gapId: string,
+  targetId: string,
   round: number,
   fileName: string,
   content: string,
 ): void {
-  const dir = join(workspaceDir, gapId, `round_${round}`);
+  const dir = join(workspaceDir, targetId, `round_${round}`);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, fileName), content, 'utf-8');
 }
@@ -112,53 +152,53 @@ describe('Test Promotion 端到端集成', () => {
   it('完整流程：Closure 终态 → 队列扫描 → 提升接受文件 → 摘要 → 清理', async () => {
     const { tmpDir, closureManager, promoter, cleanup } = setup(SAMPLE_GAPS);
     try {
-      // ── 步骤 1：启动 Closure，两个 Gap ────────────────────────
+      // ── 步骤 1：启动 Closure，两个模块级 Target ───────────────
       const session = await closureManager.startClosure({
         sessionId: 'merge_e2e',
-        gaps: SAMPLE_GAPS,
+        modules: ['top/cpu_core', 'top/memory_ctrl'],
       });
-      const gap0 = session.gaps[0]; // cpu_core
-      const gap1 = session.gaps[1]; // memory_ctrl
+      const target0 = session.targets[0]; // cpu_core
+      const target1 = session.targets[1]; // memory_ctrl
 
-      // ── 步骤 2：gap0 进行 1 轮迭代，生成 2 个测试文件，delta=3% ──
-      await closureManager.startIteration(session.id, gap0.id);
-      await closureManager.completeIteration(session.id, gap0.id, {
+      // ── 步骤 2：target0 进行 1 轮迭代，生成 2 个测试文件，delta=3% ──
+      await closureManager.startIteration(session.id, target0.id);
+      await closureManager.completeIteration(session.id, target0.id, {
         generatedTests: ['test_cpu_r1.sv', 'vseq_cpu_r1.sv'],
         deltaBefore: makeSummary(80),
         deltaAfter: makeSummary(83),
         deltas: makeDeltas(3),
       });
-      writeTestFile(session.workspaceDir, gap0.id, 1, 'test_cpu_r1.sv', '// CPU test round 1');
-      writeTestFile(session.workspaceDir, gap0.id, 1, 'vseq_cpu_r1.sv', '// CPU vseq round 1');
-      // 关闭 gap0
-      await closureManager.closeGap(session.id, gap0.id);
+      writeTestFile(session.workspaceDir, target0.id, 1, 'test_cpu_r1.sv', '// CPU test round 1');
+      writeTestFile(session.workspaceDir, target0.id, 1, 'vseq_cpu_r1.sv', '// CPU vseq round 1');
+      // 关闭 target0
+      await closureManager.closeTarget(session.id, target0.id);
 
-      // ── 步骤 3：gap1 进行 1 轮迭代后升级（无显著提升） ────────
-      await closureManager.startIteration(session.id, gap1.id);
-      await closureManager.completeIteration(session.id, gap1.id, {
+      // ── 步骤 3：target1 进行 1 轮迭代后升级（无显著提升） ──────
+      await closureManager.startIteration(session.id, target1.id);
+      await closureManager.completeIteration(session.id, target1.id, {
         generatedTests: ['test_mem_r1.sv'],
         deltaBefore: makeSummary(75),
         deltaAfter: makeSummary(75.5), // delta=0.5% < 1%
         deltas: makeDeltas(0.5),
       });
-      writeTestFile(session.workspaceDir, gap1.id, 1, 'test_mem_r1.sv', '// MEM test round 1');
+      writeTestFile(session.workspaceDir, target1.id, 1, 'test_mem_r1.sv', '// MEM test round 1');
       // 第二轮低 delta 触发升级
-      await closureManager.startIteration(session.id, gap1.id);
-      await closureManager.completeIteration(session.id, gap1.id, {
+      await closureManager.startIteration(session.id, target1.id);
+      await closureManager.completeIteration(session.id, target1.id, {
         generatedTests: ['test_mem_r2.sv'],
         deltaBefore: makeSummary(75.5),
         deltaAfter: makeSummary(75.8), // delta=0.3% < 1%，连续 2 轮升级
         deltas: makeDeltas(0.3),
       });
-      writeTestFile(session.workspaceDir, gap1.id, 2, 'test_mem_r2.sv', '// MEM test round 2');
+      writeTestFile(session.workspaceDir, target1.id, 2, 'test_mem_r2.sv', '// MEM test round 2');
 
-      // 此时 Closure 应已自动 completed（两个 gap 均进入终态）
+      // 此时 Closure 应已自动 completed（两个 target 均进入终态）
       const finalSession = await closureManager.getClosure(session.id);
       expect(finalSession?.status).toBe('completed');
 
       // ── 步骤 4：扫描 Test Promotion 审阅队列 ──────────────────
       const queue = await promoter.getPromotionQueue(session.id);
-      // gap0 round1: 2 个文件 + gap1 round1: 1 个 + gap1 round2: 1 个 = 4
+      // target0 round1: 2 个文件 + target1 round1: 1 个 + target1 round2: 1 个 = 4
       expect(queue).toHaveLength(4);
       expect(queue.every((i) => i.status === 'pending')).toBe(true);
       expect(queue.every((i) => i.closureId === session.id)).toBe(true);
@@ -170,7 +210,7 @@ describe('Test Promotion 端到端集成', () => {
       }
 
       // ── 步骤 5：执行 Test Promotion ──────────────────────────
-      // 接受 gap0 的两个文件 + gap1 round1 的文件，拒绝 gap1 round2 的文件
+      // 接受 target0 的两个文件 + target1 round1 的文件，拒绝 target1 round2 的文件
       const acceptIds = queue
         .filter((i) => i.fileName !== 'test_mem_r2.sv')
         .map((i) => i.id);
@@ -203,7 +243,7 @@ describe('Test Promotion 端到端集成', () => {
       expect(existsSync(join(targetDir, 'test_mem_r2.sv'))).toBe(false);
 
       // 源文件仍保留在 Closure Workspace（promote 不删除源）
-      expect(existsSync(join(session.workspaceDir, gap0.id, 'round_1', 'test_cpu_r1.sv'))).toBe(true);
+      expect(existsSync(join(session.workspaceDir, target0.id, 'round_1', 'test_cpu_r1.sv'))).toBe(true);
 
       // promotion.json 决策记录已持久化
       const promotionFile = join(session.workspaceDir, 'promotion.json');
@@ -228,16 +268,16 @@ describe('Test Promotion 端到端集成', () => {
       expect(summary.status).toBe('completed');
       expect(summary.gaps).toHaveLength(2);
 
-      // gap0: closed, 1 round, finalDelta = 83 - 80 = 3
-      const sg0 = summary.gaps.find((g) => g.gapId === gap0.id)!;
+      // target0: closed, 1 round, finalDelta = 83 - 80 = 3
+      const sg0 = summary.gaps.find((g) => g.gapId === target0.id)!;
       expect(sg0.status).toBe('closed');
       expect(sg0.moduleName).toBe('cpu_core');
       expect(sg0.metric).toBe('line');
       expect(sg0.rounds).toBe(1);
       expect(sg0.finalDelta).toBe(3);
 
-      // gap1: escalated, 2 rounds, finalDelta = 75.8 - 75.5 = 0.3
-      const sg1 = summary.gaps.find((g) => g.gapId === gap1.id)!;
+      // target1: escalated, 2 rounds, finalDelta = 75.8 - 75.5 = 0.3
+      const sg1 = summary.gaps.find((g) => g.gapId === target1.id)!;
       expect(sg1.status).toBe('escalated');
       expect(sg1.moduleName).toBe('memory_ctrl');
       expect(sg1.rounds).toBe(2);
@@ -277,12 +317,12 @@ describe('Test Promotion 端到端集成', () => {
     try {
       const session = await closureManager.startClosure({
         sessionId: 'merge_empty',
-        gaps: SAMPLE_GAPS,
+        modules: ['top/cpu_core', 'top/memory_ctrl'],
       });
 
-      // 直接关闭所有 gap，不进行任何迭代
-      await closureManager.closeGap(session.id, session.gaps[0].id);
-      await closureManager.closeGap(session.id, session.gaps[1].id);
+      // 直接关闭所有 target，不进行任何迭代
+      await closureManager.closeTarget(session.id, session.targets[0].id);
+      await closureManager.closeTarget(session.id, session.targets[1].id);
 
       // 队列为空
       const queue = await promoter.getPromotionQueue(session.id);
@@ -320,19 +360,19 @@ describe('Test Promotion 端到端集成', () => {
     try {
       const session = await closureManager.startClosure({
         sessionId: 'merge_aborted',
-        gaps: SAMPLE_GAPS,
+        modules: ['top/cpu_core', 'top/memory_ctrl'],
       });
-      const gap0 = session.gaps[0];
+      const target0 = session.targets[0];
 
-      // gap0 进行 1 轮迭代后中止整个 Closure
-      await closureManager.startIteration(session.id, gap0.id);
-      await closureManager.completeIteration(session.id, gap0.id, {
+      // target0 进行 1 轮迭代后中止整个 Closure
+      await closureManager.startIteration(session.id, target0.id);
+      await closureManager.completeIteration(session.id, target0.id, {
         generatedTests: ['pre_abort.sv'],
         deltaBefore: makeSummary(80),
         deltaAfter: makeSummary(82),
         deltas: makeDeltas(2),
       });
-      writeTestFile(session.workspaceDir, gap0.id, 1, 'pre_abort.sv', '// before abort');
+      writeTestFile(session.workspaceDir, target0.id, 1, 'pre_abort.sv', '// before abort');
       await closureManager.abortClosure(session.id);
 
       // 中止后仍可扫描队列

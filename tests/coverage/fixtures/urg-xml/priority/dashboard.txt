@@ -1,0 +1,4 @@
+Coverage Dashboard (DELIBERATELY WRONG values - this file coexists with session.xml
+to assert the XML path wins and the text fallback is NOT consulted)
+  Line Coverage:            1.11%  (11/1000)
+  Branch Coverage:          1.11%  (11/1000)

@@ -126,22 +126,34 @@ export type EdaToolConfig = {
   summaryCommand?: string;
   detailCommand?: string;
   metricsCommand?: string;
-  /** CSV 格式覆盖率报告命令（urg -format csv），生成结构化数据供 AI 消费 */
+  /** CSV 格式覆盖率报告命令（结构化数据供 AI 消费）。注意 urg 无 -format csv 选项。 */
   csvCommand?: string;
-  /** 测试用例贡献度分析命令（urg -grade testfile / imc report -grading） */
+  /** 测试用例贡献度分析命令（urg -grade testfile / imc report -grading）。 */
   gradeCommand?: string;
-  /** Covergroup bin 级覆盖详情命令（imc report -detail -metrics functional / urg -detail） */
+  /** Covergroup bin 级覆盖详情命令（imc report -detail -metrics functional）。 */
   binsCommand?: string;
+  /** 命令执行后端：direct=本地直接执行（默认），lsf=提交到 LSF 队列（ADR 0024）。 */
+  execBackend?: 'direct' | 'lsf';
+  /** LSF 队列名（execBackend='lsf' 时必填）。 */
+  lsfQueue?: string;
+  /** LSF 资源需求串（如 `rusage[mem=8192]`，可选）。 */
+  lsfResource?: string;
+  /** EDA 命令启动超时（秒），默认 120。 */
+  startupTimeoutSec?: number;
+  /** EDA 命令运行超时（秒），默认 600。 */
+  runTimeoutSec?: number;
 };
 
 /**
  * 各 EDA 工具的默认命令模板。
  *
- * VCS urg 工具说明：
- *   - urg 默认生成 HTML 报告，必须加 `-format text` 才能生成可解析的 ASCII 文本报告
- *   - `-format csv` 生成 CSV 格式，适合 AI/pandas 直接消费
+ * VCS urg 工具说明（ADR 0021 修正）：
+ *   - urg 默认生成 HTML 报告，必须加 `-format text` 生成 ASCII 文本报告
+ *   - `-report {dir}` 生成一组文本产物（dashboard.txt / hierarchy.txt /
+ *     *.dat 等），不是单个 summary.txt 文件；解析侧按文件名读取这些产物
+ *   - `-full64` 为 64 位环境标准写法
  *   - `-grade testfile` 生成测试用例贡献度排名（gradedtests.txt）
- *   - `-show tests` 在报告中标注每个覆盖点由哪个测试用例覆盖
+ *   - urg 无 `-detail` / `-metrics` / `-format csv` 选项，历史默认命令为错误值，已移除
  *
  * Cadence IMC 工具说明：
  *   - IMC 通过 TCL `report` 子命令生成文本报告，用 `-execcmd` 直接执行单条命令
@@ -167,16 +179,22 @@ export const DEFAULT_EDA_COMMANDS: Readonly<Record<Exclude<EdaTool, 'unknown'>, 
   },
   'vcs-urg': {
     tool: 'vcs-urg',
-    covMergeDir: 'urgReport',
-    // 修正：必须加 -format text 才能生成可解析的 ASCII 文本报告
-    summaryCommand: 'urg -dir {covMergeDir} -format text -report {reportDir}',
-    detailCommand: 'urg -dir {covMergeDir} -format text -detail -report {reportDir}',
-    metricsCommand: 'urg -dir {covMergeDir} -format text -metrics -report {reportDir}',
-    // CSV 格式：结构化数据，AI 可直接消费
-    csvCommand: 'urg -dir {covMergeDir} -format csv -report {reportDir}/csv',
-    // 测试用例贡献度排名
-    gradeCommand: 'urg -dir {covMergeDir} -grade testfile -report {reportDir}',
-    // urg 没有 report -bins 等效命令，用 -detail 获取 bin 级信息
+    // VCS urg 修正用法（ADR 0024，xcov 方法论）
+    //   - covMergeDir 是 urg 的「输入」目录（含 simv.vdb / merged.vdb），
+    //     旧默认 'urgReport' 是 urg 的输出目录名，语义颠倒，修正为 'cov_merge'
+    //   - summary 命令加 `-xml_verbose` 生成类型化 session.xml（首选解析源），
+    //     同时 `-show summary` 输出 summary 文本（降级解析源）
+    //   - detail 命令为原全量 text 报告，移作 detail 层，供 uncovered 项导出
+    //   - `-full64` 是 64 位环境标准写法（与 xcov 一致）
+    covMergeDir: 'cov_merge',
+    summaryCommand:
+      'urg -full64 -dir {covMergeDir} -xml_verbose -format text -show summary -report {reportDir}',
+    detailCommand: 'urg -full64 -dir {covMergeDir} -format text -report {reportDir}/detail',
+    metricsCommand: undefined,
+    // grade 用独立命令：生成 gradedtests.txt（测试用例贡献度排名）
+    gradeCommand: 'urg -full64 -dir {covMergeDir} -grade testfile -format text -report {reportDir}/grade',
+    // urg 无 CSV 输出格式（无 -format csv），无 bin 级独立报告命令
+    csvCommand: undefined,
     binsCommand: undefined,
   },
   vcover: {

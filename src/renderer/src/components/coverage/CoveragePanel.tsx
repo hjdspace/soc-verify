@@ -118,7 +118,6 @@ export function CoveragePanel() {
   const detailParsed = useCoverageStore((s) => s.detailParsed);
   const parseDetails = useCoverageStore((s) => s.parseDetails);
   const registerDetailProgressListener = useCoverageStore((s) => s.registerDetailProgressListener);
-  const clearDetailParseProgress = useCoverageStore((s) => s.clearDetailParseProgress);
 
   // ─── Closure 相关（Slice 6b） ──────────────────────────────
   const currentClosure = useCoverageStore((s) => s.currentClosure);
@@ -456,9 +455,9 @@ export function CoveragePanel() {
         {/* 右对齐组：Closure 状态 pill + EDA 配置 */}
         <div className="ml-auto flex items-center gap-2">
           {closureLive.running && currentClosure && (() => {
-            const total = currentClosure.gaps.length;
-            const done = currentClosure.gaps.filter((g) =>
-              ['closed', 'escalated', 'failed'].includes(g.status),
+            const total = currentClosure.targets.length;
+            const done = currentClosure.targets.filter((t) =>
+              ['closed', 'escalated', 'failed'].includes(t.status),
             ).length;
             return (
               <button
@@ -472,7 +471,7 @@ export function CoveragePanel() {
                   <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
                 </span>
                 <Activity className="h-3 w-3" />
-                Closure 运行中 · Gap {done}/{total}
+                Closure 运行中 · Target {done}/{total}
                 {closureLive.activeRound !== undefined && ` · Round ${closureLive.activeRound}`}
               </button>
             );

@@ -1,11 +1,11 @@
 /**
- * TestPromoter 单元测试（ADR 0009 决策 10 / Issue #10 Slice 8）。
+ * TestPromoter 单元测试（ADR 0009 决策 10 / Issue #10 Slice 8；工单 04 适配模块级 Target）。
  *
  * 覆盖：
- * - getPromotionQueue: 扫描 Closure Workspace 生成审阅队列（多 gap 多轮）
+ * - getPromotionQueue: 扫描 Closure Workspace 生成审阅队列（多 target 多轮）
  * - promoteTests: accepted 复制到目标目录，rejected 不复制
  * - cleanupClosure: 删除整个 workspace 目录
- * - getClosureSummary: 各 gap 状态 / finalDelta / 提升计数
+ * - getClosureSummary: 各 target 状态 / finalDelta / 提升计数
  * - 空队列处理（无生成的测试文件）
  * - 决策记录持久化（promotion.json）
  */
@@ -22,7 +22,9 @@ import type {
   CoverageSummary,
   CoverageDelta,
   CoverageMetric,
+  CoverageNode,
 } from '@shared/types';
+import { COVERAGE_METRICS } from '@shared/types';
 
 // ─── Mock 数据辅助 ──────────────────────────────────────────────
 
@@ -64,9 +66,53 @@ function makeDeltas(delta: number): CoverageDelta[] {
   return metrics.map((m) => ({ metric: m, before: 0, after: delta, delta }));
 }
 
+/**
+ * 创建 mock CoverageManager：按 gap 列表构建 Coverage Tree（每个模块一个节点），
+ * 供 ClosureManager.startClosure 用 detectGaps 做模块级聚合。
+ */
 function createMockCoverageManager(gaps: CoverageGap[] = []): CoverageManager {
+  // 按 nodePath 分组（同模块多 metric 合并到一个节点）
+  const byPath = new Map<string, { name: string; pcts: Partial<Record<CoverageMetric, number>> }>();
+  const targets: Partial<Record<CoverageMetric, number>> = {};
+  for (const gap of gaps) {
+    targets[gap.metric] = gap.target;
+    const entry = byPath.get(gap.nodePath) ?? { name: gap.nodeName, pcts: {} };
+    entry.pcts[gap.metric] = gap.actual;
+    byPath.set(gap.nodePath, entry);
+  }
+  const mkMetrics = (pcts: Partial<Record<CoverageMetric, number>>): CoverageNode['metrics'] => {
+    const m = {} as CoverageNode['metrics'];
+    for (const metric of COVERAGE_METRICS) {
+      m[metric] = {
+        percentage: pcts[metric] ?? null,
+        covered: null,
+        total: null,
+      };
+    }
+    return m;
+  };
+  const root: CoverageNode = {
+    name: 'top',
+    path: 'top',
+    depth: 0,
+    metrics: mkMetrics({}),
+    children: Array.from(byPath.entries()).map(([path, { name, pcts }]) => ({
+      name,
+      path,
+      depth: 1,
+      metrics: mkMetrics(pcts),
+      children: [],
+    })),
+  };
+  const data = {
+    sessionId: 'mock-session',
+    source: { covMergeDir: 'cov_merge', edaTool: 'imc' as const, reportGeneratedAt: 0 },
+    root,
+    targets,
+  };
   return {
-    listGaps: async (_sessionId?: string) => ({ sessionId: 'mock-session', gaps }),
+    getTree: async () => data,
+    getTargets: async () => targets,
   } as unknown as CoverageManager;
 }
 
@@ -91,71 +137,71 @@ const SAMPLE_GAPS: CoverageGap[] = [
 
 /**
  * 在 Closure Workspace 中写入测试文件。
- * 路径：<workspaceDir>/<gapId>/round_<round>/<fileName>
+ * 路径：<workspaceDir>/<targetId>/round_<round>/<fileName>
  */
 function writeTestFile(
   workspaceDir: string,
-  gapId: string,
+  targetId: string,
   round: number,
   fileName: string,
   content: string,
 ): void {
-  const dir = join(workspaceDir, gapId, `round_${round}`);
+  const dir = join(workspaceDir, targetId, `round_${round}`);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, fileName), content, 'utf-8');
 }
 
 describe('TestPromoter', () => {
   describe('getPromotionQueue', () => {
-    it('扫描多 gap 多轮生成审阅队列', async () => {
+    it('扫描多 target 多轮生成审阅队列', async () => {
       const { closureManager, promoter, tmpDir, cleanup } = setup(SAMPLE_GAPS);
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          gaps: SAMPLE_GAPS,
+          modules: ['top/cpu_core', 'top/memory_ctrl'],
         });
-        const gap0 = session.gaps[0];
-        const gap1 = session.gaps[1];
+        const target0 = session.targets[0];
+        const target1 = session.targets[1];
 
-        // gap0 round1: 2 个测试文件
-        await closureManager.startIteration(session.id, gap0.id);
-        await closureManager.completeIteration(session.id, gap0.id, {
+        // target0 round1: 2 个测试文件
+        await closureManager.startIteration(session.id, target0.id);
+        await closureManager.completeIteration(session.id, target0.id, {
           generatedTests: ['test_cpu_r1.sv', 'vseq_cpu_r1.sv'],
           deltaBefore: makeSummary(80),
           deltaAfter: makeSummary(83),
           deltas: makeDeltas(3),
         });
-        writeTestFile(session.workspaceDir, gap0.id, 1, 'test_cpu_r1.sv', '// test 1');
-        writeTestFile(session.workspaceDir, gap0.id, 1, 'vseq_cpu_r1.sv', '// vseq 1');
+        writeTestFile(session.workspaceDir, target0.id, 1, 'test_cpu_r1.sv', '// test 1');
+        writeTestFile(session.workspaceDir, target0.id, 1, 'vseq_cpu_r1.sv', '// vseq 1');
 
-        // gap1 round1: 1 个测试文件
-        await closureManager.startIteration(session.id, gap1.id);
-        await closureManager.completeIteration(session.id, gap1.id, {
+        // target1 round1: 1 个测试文件
+        await closureManager.startIteration(session.id, target1.id);
+        await closureManager.completeIteration(session.id, target1.id, {
           generatedTests: ['test_mem_r1.sv'],
           deltaBefore: makeSummary(75),
           deltaAfter: makeSummary(78),
           deltas: makeDeltas(3),
         });
-        writeTestFile(session.workspaceDir, gap1.id, 1, 'test_mem_r1.sv', '// mem test 1');
+        writeTestFile(session.workspaceDir, target1.id, 1, 'test_mem_r1.sv', '// mem test 1');
 
         const queue = await promoter.getPromotionQueue(session.id);
         expect(queue).toHaveLength(3);
 
         // 验证队列项字段
         const item0 = queue.find((i) => i.fileName === 'test_cpu_r1.sv')!;
-        expect(item0.gapId).toBe(gap0.id);
+        expect(item0.gapId).toBe(target0.id); // gapId 字段沿用 shared 类型，语义为 targetId
         expect(item0.round).toBe(1);
         expect(item0.closureId).toBe(session.id);
         expect(item0.status).toBe('pending');
-        expect(item0.sourcePath).toBe(join(session.workspaceDir, gap0.id, 'round_1', 'test_cpu_r1.sv'));
+        expect(item0.sourcePath).toBe(join(session.workspaceDir, target0.id, 'round_1', 'test_cpu_r1.sv'));
         expect(item0.relativePath).toBe('test_cpu_r1.sv');
         // 目标路径为 <projectRoot>/testbench/<fileName>（tmpDir 即为 projectRoot）
         expect(item0.targetPath).toBe(join(tmpDir, 'testbench', 'test_cpu_r1.sv'));
         expect(existsSync(item0.sourcePath)).toBe(true);
 
-        // 不同 gap 的文件
+        // 不同 target 的文件
         const memItem = queue.find((i) => i.fileName === 'test_mem_r1.sv')!;
-        expect(memItem.gapId).toBe(gap1.id);
+        expect(memItem.gapId).toBe(target1.id);
       } finally {
         cleanup();
       }
@@ -166,19 +212,19 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          gaps: [SAMPLE_GAPS[0]],
+          modules: ['top/cpu_core'],
         });
-        const gap0 = session.gaps[0];
+        const target0 = session.targets[0];
 
-        await closureManager.startIteration(session.id, gap0.id);
-        await closureManager.completeIteration(session.id, gap0.id, {
+        await closureManager.startIteration(session.id, target0.id);
+        await closureManager.completeIteration(session.id, target0.id, {
           // generatedTests 包含 2 个文件，但只写入 1 个
           generatedTests: ['exists.sv', 'missing.sv'],
           deltaBefore: makeSummary(80),
           deltaAfter: makeSummary(83),
           deltas: makeDeltas(3),
         });
-        writeTestFile(session.workspaceDir, gap0.id, 1, 'exists.sv', '// real');
+        writeTestFile(session.workspaceDir, target0.id, 1, 'exists.sv', '// real');
 
         const queue = await promoter.getPromotionQueue(session.id);
         expect(queue).toHaveLength(1);
@@ -193,7 +239,7 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          gaps: SAMPLE_GAPS,
+          modules: ['top/cpu_core', 'top/memory_ctrl'],
         });
         // 未执行任何迭代
         const queue = await promoter.getPromotionQueue(session.id);
@@ -219,20 +265,20 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          gaps: [SAMPLE_GAPS[0]],
+          modules: ['top/cpu_core'],
         });
-        const gap0 = session.gaps[0];
+        const target0 = session.targets[0];
 
-        await closureManager.startIteration(session.id, gap0.id);
-        await closureManager.completeIteration(session.id, gap0.id, {
+        await closureManager.startIteration(session.id, target0.id);
+        await closureManager.completeIteration(session.id, target0.id, {
           generatedTests: ['accept.sv', 'reject.sv', 'pending.sv'],
           deltaBefore: makeSummary(80),
           deltaAfter: makeSummary(83),
           deltas: makeDeltas(3),
         });
-        writeTestFile(session.workspaceDir, gap0.id, 1, 'accept.sv', '// accept content');
-        writeTestFile(session.workspaceDir, gap0.id, 1, 'reject.sv', '// reject content');
-        writeTestFile(session.workspaceDir, gap0.id, 1, 'pending.sv', '// pending content');
+        writeTestFile(session.workspaceDir, target0.id, 1, 'accept.sv', '// accept content');
+        writeTestFile(session.workspaceDir, target0.id, 1, 'reject.sv', '// reject content');
+        writeTestFile(session.workspaceDir, target0.id, 1, 'pending.sv', '// pending content');
 
         const queue = await promoter.getPromotionQueue(session.id);
         const acceptId = queue.find((i) => i.fileName === 'accept.sv')!.id;
@@ -258,7 +304,7 @@ describe('TestPromoter', () => {
         expect(existsSync(join(targetDir, 'pending.sv'))).toBe(false);
 
         // 源文件仍保留在 Closure Workspace（promote 不删除源）
-        expect(existsSync(join(session.workspaceDir, gap0.id, 'round_1', 'accept.sv'))).toBe(true);
+        expect(existsSync(join(session.workspaceDir, target0.id, 'round_1', 'accept.sv'))).toBe(true);
       } finally {
         cleanup();
       }
@@ -269,18 +315,18 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          gaps: [SAMPLE_GAPS[0]],
+          modules: ['top/cpu_core'],
         });
-        const gap0 = session.gaps[0];
+        const target0 = session.targets[0];
 
-        await closureManager.startIteration(session.id, gap0.id);
-        await closureManager.completeIteration(session.id, gap0.id, {
+        await closureManager.startIteration(session.id, target0.id);
+        await closureManager.completeIteration(session.id, target0.id, {
           generatedTests: ['default_target.sv'],
           deltaBefore: makeSummary(80),
           deltaAfter: makeSummary(83),
           deltas: makeDeltas(3),
         });
-        writeTestFile(session.workspaceDir, gap0.id, 1, 'default_target.sv', '// default');
+        writeTestFile(session.workspaceDir, target0.id, 1, 'default_target.sv', '// default');
 
         const queue = await promoter.getPromotionQueue(session.id);
         const itemId = queue[0].id;
@@ -299,18 +345,18 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          gaps: [SAMPLE_GAPS[0]],
+          modules: ['top/cpu_core'],
         });
-        const gap0 = session.gaps[0];
+        const target0 = session.targets[0];
 
-        await closureManager.startIteration(session.id, gap0.id);
-        await closureManager.completeIteration(session.id, gap0.id, {
+        await closureManager.startIteration(session.id, target0.id);
+        await closureManager.completeIteration(session.id, target0.id, {
           generatedTests: ['persist.sv'],
           deltaBefore: makeSummary(80),
           deltaAfter: makeSummary(83),
           deltas: makeDeltas(3),
         });
-        writeTestFile(session.workspaceDir, gap0.id, 1, 'persist.sv', '// persist');
+        writeTestFile(session.workspaceDir, target0.id, 1, 'persist.sv', '// persist');
 
         const queue = await promoter.getPromotionQueue(session.id);
         const itemId = queue[0].id;
@@ -337,18 +383,18 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          gaps: [SAMPLE_GAPS[0]],
+          modules: ['top/cpu_core'],
         });
-        const gap0 = session.gaps[0];
+        const target0 = session.targets[0];
 
-        await closureManager.startIteration(session.id, gap0.id);
-        await closureManager.completeIteration(session.id, gap0.id, {
+        await closureManager.startIteration(session.id, target0.id);
+        await closureManager.completeIteration(session.id, target0.id, {
           generatedTests: ['no_promote.sv'],
           deltaBefore: makeSummary(80),
           deltaAfter: makeSummary(83),
           deltas: makeDeltas(3),
         });
-        writeTestFile(session.workspaceDir, gap0.id, 1, 'no_promote.sv', '// no');
+        writeTestFile(session.workspaceDir, target0.id, 1, 'no_promote.sv', '// no');
 
         const targetDir = join(tmpDir, 'tb');
         const result = await promoter.promoteTests(session.id, [], [], targetDir);
@@ -367,18 +413,18 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          gaps: [SAMPLE_GAPS[0]],
+          modules: ['top/cpu_core'],
         });
-        const gap0 = session.gaps[0];
+        const target0 = session.targets[0];
 
-        await closureManager.startIteration(session.id, gap0.id);
-        await closureManager.completeIteration(session.id, gap0.id, {
+        await closureManager.startIteration(session.id, target0.id);
+        await closureManager.completeIteration(session.id, target0.id, {
           generatedTests: ['cleanup.sv'],
           deltaBefore: makeSummary(80),
           deltaAfter: makeSummary(83),
           deltas: makeDeltas(3),
         });
-        writeTestFile(session.workspaceDir, gap0.id, 1, 'cleanup.sv', '// cleanup');
+        writeTestFile(session.workspaceDir, target0.id, 1, 'cleanup.sv', '// cleanup');
 
         expect(existsSync(session.workspaceDir)).toBe(true);
 
@@ -395,7 +441,7 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          gaps: [SAMPLE_GAPS[0]],
+          modules: ['top/cpu_core'],
         });
         // 先清理一次
         await promoter.cleanupClosure(session.id);
@@ -409,29 +455,29 @@ describe('TestPromoter', () => {
   });
 
   describe('getClosureSummary', () => {
-    it('返回各 gap 状态 / finalDelta / 提升计数', async () => {
+    it('返回各 target 状态 / finalDelta / 提升计数', async () => {
       const { closureManager, promoter, cleanup } = setup(SAMPLE_GAPS);
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          gaps: SAMPLE_GAPS,
+          modules: ['top/cpu_core', 'top/memory_ctrl'],
         });
-        const gap0 = session.gaps[0];
-        const gap1 = session.gaps[1];
+        const target0 = session.targets[0];
+        const target1 = session.targets[1];
 
-        // gap0: 1 轮迭代后关闭，delta=3%
-        await closureManager.startIteration(session.id, gap0.id);
-        await closureManager.completeIteration(session.id, gap0.id, {
+        // target0: 1 轮迭代后关闭，delta=3%
+        await closureManager.startIteration(session.id, target0.id);
+        await closureManager.completeIteration(session.id, target0.id, {
           generatedTests: ['test_a.sv'],
           deltaBefore: makeSummary(80),
           deltaAfter: makeSummary(83),
           deltas: makeDeltas(3),
         });
-        await closureManager.closeGap(session.id, gap0.id);
-        writeTestFile(session.workspaceDir, gap0.id, 1, 'test_a.sv', '// a');
+        await closureManager.closeTarget(session.id, target0.id);
+        writeTestFile(session.workspaceDir, target0.id, 1, 'test_a.sv', '// a');
 
-        // gap1: 升级
-        await closureManager.escalateGap(session.id, gap1.id, 'dead code suspected');
+        // target1: 升级
+        await closureManager.escalateTarget(session.id, target1.id, 'dead code suspected');
 
         // 执行 promotion：接受 test_a.sv
         const queue = await promoter.getPromotionQueue(session.id);
@@ -443,21 +489,21 @@ describe('TestPromoter', () => {
         expect(summary.status).toBe('completed');
         expect(summary.gaps).toHaveLength(2);
 
-        // gap0 状态
-        const sg0 = summary.gaps.find((g) => g.gapId === gap0.id)!;
+        // target0 状态（单 metric target，代表 metric 为 line）
+        const sg0 = summary.gaps.find((g) => g.gapId === target0.id)!;
         expect(sg0.status).toBe('closed');
         expect(sg0.moduleName).toBe('cpu_core');
         expect(sg0.metric).toBe('line');
         expect(sg0.rounds).toBe(1);
         expect(sg0.finalDelta).toBe(3); // 83 - 80
 
-        // gap1 状态
-        const sg1 = summary.gaps.find((g) => g.gapId === gap1.id)!;
+        // target1 状态
+        const sg1 = summary.gaps.find((g) => g.gapId === target1.id)!;
         expect(sg1.status).toBe('escalated');
         expect(sg1.escalationReason).toBe('dead code suspected');
         expect(sg1.finalDelta).toBeNull(); // 无迭代
 
-        // totalDelta = 3（仅 gap0 有 finalDelta）
+        // totalDelta = 3（仅 target0 有 finalDelta）
         expect(summary.totalDelta).toBe(3);
 
         // 计数
@@ -474,11 +520,11 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          gaps: SAMPLE_GAPS,
+          modules: ['top/cpu_core', 'top/memory_ctrl'],
         });
         // 不执行任何迭代
-        await closureManager.closeGap(session.id, session.gaps[0].id);
-        await closureManager.closeGap(session.id, session.gaps[1].id);
+        await closureManager.closeTarget(session.id, session.targets[0].id);
+        await closureManager.closeTarget(session.id, session.targets[1].id);
 
         const summary = await promoter.getClosureSummary(session.id);
         expect(summary.totalDelta).toBeNull();

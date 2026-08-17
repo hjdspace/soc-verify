@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 构造样本：urg -full64 -xml_verbose -format text -show summary 的 session.xml（非真实产物，见 README.md） -->
+<session version="1.0">
+  <report type="summary">
+    <scope name="tb_top">
+      <coverage type="line" score="90.00" covered="900" total="1000"/>
+      <coverage type="branch" score="87.20" covered="436" total="500"/>
+      <coverage type="toggle" score="78.50" covered="785" total="1000"/>
+      <coverage type="condition" score="80.00" covered="160" total="200"/>
+      <coverage type="fsm" score="90.00" covered="90" total="100"/>
+      <coverage type="assertion" score="100.00" covered="50" total="50"/>
+      <!-- functional 在 tb_top 不适用：coverage 元素缺失 → 三元组为 null -->
+      <scope name="u_core">
+        <coverage type="line" score="95.00" covered="190" total="200"/>
+        <coverage type="branch" score="90.00" covered="90" total="100"/>
+        <coverage type="toggle" score="82.00" covered="410" total="500"/>
+        <coverage type="condition" score="75.00" covered="60" total="80"/>
+        <coverage type="fsm" score="90.00" covered="18" total="20"/>
+        <coverage type="functional" score="66.67" covered="20" total="30"/>
+        <scope name="u_alu">
+          <coverage type="line" score="100.00" covered="80" total="80"/>
+          <coverage type="branch" score="92.00" covered="46" total="50"/>
+          <coverage type="toggle" score="84.00" covered="210" total="250"/>
+          <coverage type="condition" score="75.00" covered="30" total="40"/>
+          <coverage type="fsm" score="100.00" covered="8" total="8"/>
+          <coverage type="functional" score="70.00" covered="14" total="20"/>
+        </scope>
+        <scope name="u_decoder">
+          <coverage type="line" score="90.00" covered="90" total="100"/>
+          <coverage type="branch" score="88.00" covered="44" total="50"/>
+          <coverage type="toggle" score="80.00" covered="200" total="250"/>
+          <coverage type="condition" score="75.00" covered="30" total="40"/>
+          <coverage type="fsm" score="83.33" covered="10" total="12"/>
+          <coverage type="functional" score="60.00" covered="6" total="10"/>
+        </scope>
+      </scope>
+      <scope name="u_mem">
+        <coverage type="line" score="80.00" covered="640" total="800"/>
+        <coverage type="branch" score="84.00" covered="336" total="400"/>
+        <coverage type="toggle" score="75.00" covered="375" total="500"/>
+        <coverage type="condition" score="83.33" covered="70" total="84"/>
+        <coverage type="fsm" score="88.00" covered="66" total="75"/>
+        <coverage type="assertion" score="100.00" covered="22" total="22"/>
+        <!-- functional 在 u_mem 不适用 -->
+      </scope>
+    </scope>
+  </report>
+</session>

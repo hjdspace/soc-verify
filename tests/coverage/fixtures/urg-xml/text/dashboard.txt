@@ -1,0 +1,7 @@
+Coverage Dashboard (constructed sample - urg -format text summary)
+  Line Coverage:            95.30%  (9530/10000)
+  Branch Coverage:          87.20%  (4360/5000)
+  Toggle Coverage:          78.50%  (7850/10000)
+  Condition Coverage:       80.00%  (1600/2000)
+  FSM Coverage:             90.00%  (900/1000)
+  Assertion Coverage:      100.00%  (500/500)

@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 /**
- * AI 覆盖收敛面板 UI 测试（Slice 6b / Issue #8）。
+ * AI 覆盖收敛面板 UI 测试（Slice 6b / Issue #8；工单 04 适配模块级 Target）。
  *
  * AiClosurePanel 是 CoverageDashboard 的内部组件，通过 mock
  * useCoverageStore / useProjectStore 模拟不同 Closure 状态：
  *   - 无 Closure（启动按钮）
- *   - 运行中（中止按钮 + 实时进度 + Gap 队列）
+ *   - 运行中（中止按钮 + 实时进度 + Target 队列）
  *   - 已完成（重启按钮 + 摘要）
  *   - 已中止（中止提示）
- *   - Gap 队列渲染（多种状态混合）
+ *   - Target 队列渲染（多种状态混合）
  */
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -83,16 +83,26 @@ const defaultProps = {
   trend: [],
 };
 
-// ─── Closure 数据构造辅助 ────────────────────────────────────────
+// ─── Closure 数据构造辅助（模块级 Target 结构） ──────────────────
+
+type GapLike = {
+  nodePath: string;
+  nodeName: string;
+  metric: string;
+  target: number;
+  actual: number;
+  deficit: number;
+};
 
 type ClosureSessionLike = {
   id: string;
   sessionId: string;
   createdAt: number;
   status: string;
-  gaps: Array<{
+  targets: Array<{
     id: string;
-    gap: { nodePath: string; nodeName: string; metric: string; target: number; actual: number; deficit: number };
+    module: { path: string; name: string };
+    gaps: GapLike[];
     iterations: Array<{
       round: number;
       generatedTests: string[];
@@ -112,7 +122,7 @@ function makeClosureSession(
   opts: {
     id?: string;
     status?: string;
-    gaps?: ClosureSessionLike['gaps'];
+    targets?: ClosureSessionLike['targets'];
   } = {},
 ): ClosureSessionLike {
   return {
@@ -120,37 +130,41 @@ function makeClosureSession(
     sessionId: 'merge-1',
     createdAt: Date.now(),
     status: opts.status ?? 'running',
-    gaps: opts.gaps ?? [],
+    targets: opts.targets ?? [],
     maxRounds: 5,
     escalationThreshold: 2,
     workspaceDir: '/tmp/closure-test',
   };
 }
 
-function makeGap(
+/** 构造模块级 Target（默认单 metric gap，可通过 metrics 指定多个）。 */
+function makeTarget(
   opts: {
     id?: string;
     nodeName?: string;
-    metric?: string;
+    metrics?: Array<{ metric: string; actual?: number; target?: number }>;
     status?: string;
-    actual?: number;
-    target?: number;
-    iterations?: ClosureSessionLike['gaps'][number]['iterations'];
+    iterations?: ClosureSessionLike['targets'][number]['iterations'];
     escalationReason?: string;
   } = {},
-): ClosureSessionLike['gaps'][number] {
-  const actual = opts.actual ?? 80;
-  const target = opts.target ?? 95;
-  return {
-    id: opts.id ?? 'gap_1',
-    gap: {
-      nodePath: `top/${opts.nodeName ?? 'cpu_core'}`,
-      nodeName: opts.nodeName ?? 'cpu_core',
-      metric: opts.metric ?? 'line',
+): ClosureSessionLike['targets'][number] {
+  const nodeName = opts.nodeName ?? 'cpu_core';
+  const gaps: GapLike[] = (opts.metrics ?? [{ metric: 'line' }]).map((m) => {
+    const actual = m.actual ?? 80;
+    const target = m.target ?? 95;
+    return {
+      nodePath: `top/${nodeName}`,
+      nodeName,
+      metric: m.metric,
       target,
       actual,
       deficit: target - actual,
-    },
+    };
+  });
+  return {
+    id: opts.id ?? 'target_1',
+    module: { path: `top/${nodeName}`, name: nodeName },
+    gaps,
     iterations: opts.iterations ?? [],
     status: opts.status ?? 'pending',
     escalationReason: opts.escalationReason,
@@ -161,7 +175,7 @@ function makeIteration(
   round: number,
   beforeOverall: number,
   afterOverall: number,
-): ClosureSessionLike['gaps'][number]['iterations'][number] {
+): ClosureSessionLike['targets'][number]['iterations'][number] {
   return {
     round,
     generatedTests: [`test_round_${round}.sv`],
@@ -254,11 +268,11 @@ describe('AiClosurePanel', () => {
     it('显示中止按钮和运行中状态徽章', () => {
       const closure = makeClosureSession({
         status: 'running',
-        gaps: [makeGap({ status: 'in_progress', iterations: [makeIteration(1, 80, 80.5)] })],
+        targets: [makeTarget({ status: 'in_progress', iterations: [makeIteration(1, 80, 80.5)] })],
       });
       setupAndRender({
         currentClosure: closure,
-        closureLive: { running: true, activeGapId: 'gap_1', activeRound: 1 },
+        closureLive: { running: true, activeTargetId: 'target_1', activeRound: 1 },
       });
 
       expect(screen.getByText('运行中')).toBeInTheDocument();
@@ -271,7 +285,7 @@ describe('AiClosurePanel', () => {
       const abortClosure = vi.fn().mockResolvedValue(undefined);
       const closure = makeClosureSession({
         status: 'running',
-        gaps: [makeGap({ status: 'in_progress' })],
+        targets: [makeTarget({ status: 'in_progress' })],
       });
       setupAndRender(
         {
@@ -286,23 +300,23 @@ describe('AiClosurePanel', () => {
       expect(abortClosure).toHaveBeenCalledWith('proj-1', closure.id);
     });
 
-    it('显示实时进度（Gap 迭代中 + Round + AI 阶段）', () => {
+    it('显示实时进度（目标模块迭代中 + Round + AI 阶段）', () => {
       const closure = makeClosureSession({
         status: 'running',
-        gaps: [makeGap({ status: 'in_progress' })],
+        targets: [makeTarget({ status: 'in_progress' })],
       });
       setupAndRender({
         currentClosure: closure,
         closureLive: {
           running: true,
-          activeGapId: 'gap_1',
+          activeTargetId: 'target_1',
           activeRound: 2,
           agentPhase: 'prompting',
           lastDeltaOverall: 1.5,
         },
       });
 
-      expect(screen.getByText(/Gap 迭代中/)).toBeInTheDocument();
+      expect(screen.getByText(/目标模块迭代中/)).toBeInTheDocument();
       expect(screen.getByText(/Round 2/)).toBeInTheDocument();
       expect(screen.getByText(/AI 生成测试中/)).toBeInTheDocument();
       expect(screen.getByText(/最近 Delta:/)).toBeInTheDocument();
@@ -312,13 +326,13 @@ describe('AiClosurePanel', () => {
     it('agent_ended 阶段显示"AI 完成，计算 Delta"', () => {
       const closure = makeClosureSession({
         status: 'running',
-        gaps: [makeGap({ status: 'in_progress' })],
+        targets: [makeTarget({ status: 'in_progress' })],
       });
       setupAndRender({
         currentClosure: closure,
         closureLive: {
           running: true,
-          activeGapId: 'gap_1',
+          activeTargetId: 'target_1',
           activeRound: 1,
           agentPhase: 'ended',
         },
@@ -330,13 +344,13 @@ describe('AiClosurePanel', () => {
     it('显示最近错误信息', () => {
       const closure = makeClosureSession({
         status: 'running',
-        gaps: [makeGap({ status: 'in_progress' })],
+        targets: [makeTarget({ status: 'in_progress' })],
       });
       setupAndRender({
         currentClosure: closure,
         closureLive: {
           running: true,
-          activeGapId: 'gap_1',
+          activeTargetId: 'target_1',
           activeRound: 1,
           lastError: 'Agent timed out',
         },
@@ -346,59 +360,67 @@ describe('AiClosurePanel', () => {
     });
   });
 
-  describe('Gap 队列渲染', () => {
-    it('显示 Gap 数量、已关闭、升级、失败统计', () => {
+  describe('Target 队列渲染', () => {
+    it('显示 Target 数量、已关闭、升级、失败统计', () => {
       const closure = makeClosureSession({
         status: 'running',
-        gaps: [
-          makeGap({ id: 'g1', status: 'closed', nodeName: 'cpu_core' }),
-          makeGap({ id: 'g2', status: 'escalated', nodeName: 'memory_ctrl', metric: 'toggle' }),
-          makeGap({ id: 'g3', status: 'failed', nodeName: 'dma_engine', metric: 'branch' }),
-          makeGap({ id: 'g4', status: 'in_progress', nodeName: 'uart_top', metric: 'condition' }),
+        targets: [
+          makeTarget({ id: 't1', status: 'closed', nodeName: 'cpu_core' }),
+          makeTarget({ id: 't2', status: 'escalated', nodeName: 'memory_ctrl', metrics: [{ metric: 'toggle' }] }),
+          makeTarget({ id: 't3', status: 'failed', nodeName: 'dma_engine', metrics: [{ metric: 'branch' }] }),
+          makeTarget({ id: 't4', status: 'in_progress', nodeName: 'uart_top', metrics: [{ metric: 'condition' }] }),
         ],
       });
       setupAndRender({
         currentClosure: closure,
-        closureLive: { running: true, activeGapId: 'g4', activeRound: 1 },
+        closureLive: { running: true, activeTargetId: 't4', activeRound: 1 },
       });
 
-      // 统计行：Gap 队列（4）· 已关闭 1 · 升级 1 · 失败 1
-      expect(screen.getByText(/Gap 队列（4）/)).toBeInTheDocument();
+      // 统计行：Target 队列（4）· 已关闭 1 · 升级 1 · 失败 1
+      expect(screen.getByText(/Target 队列（4）/)).toBeInTheDocument();
       expect(screen.getByText(/已关闭 1/)).toBeInTheDocument();
       expect(screen.getByText(/升级 1/)).toBeInTheDocument();
       expect(screen.getByText(/失败 1/)).toBeInTheDocument();
     });
 
-    it('渲染每个 Gap 的模块名和指标', () => {
+    it('渲染每个 Target 的模块名与全部未达标指标', () => {
       const closure = makeClosureSession({
         status: 'running',
-        gaps: [
-          makeGap({ id: 'g1', status: 'closed', nodeName: 'cpu_core', metric: 'line' }),
-          makeGap({ id: 'g2', status: 'in_progress', nodeName: 'memory_ctrl', metric: 'toggle' }),
+        targets: [
+          makeTarget({ id: 't1', status: 'closed', nodeName: 'cpu_core', metrics: [{ metric: 'line' }] }),
+          makeTarget({
+            id: 't2',
+            status: 'in_progress',
+            nodeName: 'memory_ctrl',
+            // 同模块多 metric 聚合为一个 target
+            metrics: [{ metric: 'toggle' }, { metric: 'branch' }],
+          }),
         ],
       });
       setupAndRender({
         currentClosure: closure,
-        closureLive: { running: true, activeGapId: 'g2', activeRound: 1 },
+        closureLive: { running: true, activeTargetId: 't2', activeRound: 1 },
       });
 
       expect(screen.getByText('cpu_core')).toBeInTheDocument();
       expect(screen.getByText('memory_ctrl')).toBeInTheDocument();
+      // 多 metric 拼接展示（METRIC_LABELS：Toggle, Branch）
+      expect(screen.getByText('Toggle, Branch')).toBeInTheDocument();
     });
 
-    it('Gap 显示状态标签', () => {
+    it('Target 显示状态标签', () => {
       const closure = makeClosureSession({
         status: 'running',
-        gaps: [
-          makeGap({ id: 'g1', status: 'closed', nodeName: 'cpu_core' }),
-          makeGap({ id: 'g2', status: 'escalated', nodeName: 'mem_ctrl' }),
-          makeGap({ id: 'g3', status: 'failed', nodeName: 'dma' }),
-          makeGap({ id: 'g4', status: 'in_progress', nodeName: 'uart' }),
+        targets: [
+          makeTarget({ id: 't1', status: 'closed', nodeName: 'cpu_core' }),
+          makeTarget({ id: 't2', status: 'escalated', nodeName: 'mem_ctrl' }),
+          makeTarget({ id: 't3', status: 'failed', nodeName: 'dma' }),
+          makeTarget({ id: 't4', status: 'in_progress', nodeName: 'uart' }),
         ],
       });
       setupAndRender({
         currentClosure: closure,
-        closureLive: { running: true, activeGapId: 'g4', activeRound: 1 },
+        closureLive: { running: true, activeTargetId: 't4', activeRound: 1 },
       });
 
       // 状态文本（GAP_STATUS_LABEL）
@@ -408,12 +430,12 @@ describe('AiClosurePanel', () => {
       expect(screen.getAllByText('进行中').length).toBeGreaterThanOrEqual(1);
     });
 
-    it('Gap 显示迭代轮次和 delta', () => {
+    it('Target 显示迭代轮次和 delta', () => {
       const closure = makeClosureSession({
         status: 'running',
-        gaps: [
-          makeGap({
-            id: 'g1',
+        targets: [
+          makeTarget({
+            id: 't1',
             status: 'in_progress',
             nodeName: 'cpu_core',
             iterations: [makeIteration(1, 80.0, 81.5)],
@@ -422,7 +444,7 @@ describe('AiClosurePanel', () => {
       });
       setupAndRender({
         currentClosure: closure,
-        closureLive: { running: true, activeGapId: 'g1', activeRound: 1 },
+        closureLive: { running: true, activeTargetId: 't1', activeRound: 1 },
       });
 
       // R1 (+1.5%)
@@ -435,9 +457,9 @@ describe('AiClosurePanel', () => {
     it('显示重启按钮和结果摘要', () => {
       const closure = makeClosureSession({
         status: 'completed',
-        gaps: [
-          makeGap({
-            id: 'g1',
+        targets: [
+          makeTarget({
+            id: 't1',
             status: 'closed',
             nodeName: 'cpu_core',
             iterations: [makeIteration(1, 80.0, 82.5)],
@@ -467,7 +489,7 @@ describe('AiClosurePanel', () => {
       const startClosure = vi.fn().mockResolvedValue(undefined);
       const closure = makeClosureSession({
         status: 'completed',
-        gaps: [makeGap({ id: 'g1', status: 'closed' })],
+        targets: [makeTarget({ id: 't1', status: 'closed' })],
       });
       setupAndRender(
         {
@@ -488,7 +510,7 @@ describe('AiClosurePanel', () => {
     it('显示中止提示和重启按钮', () => {
       const closure = makeClosureSession({
         status: 'aborted',
-        gaps: [makeGap({ id: 'g1', status: 'failed', nodeName: 'cpu_core' })],
+        targets: [makeTarget({ id: 't1', status: 'failed', nodeName: 'cpu_core' })],
       });
       setupAndRender(
         {
@@ -507,17 +529,17 @@ describe('AiClosurePanel', () => {
     });
   });
 
-  describe('升级 Gap 摘要', () => {
-    it('已完成且有升级 Gap 时显示升级提示', () => {
+  describe('升级 Target 摘要', () => {
+    it('已完成且有升级 Target 时显示升级提示', () => {
       const closure = makeClosureSession({
         status: 'completed',
-        gaps: [
-          makeGap({ id: 'g1', status: 'closed', nodeName: 'cpu_core' }),
-          makeGap({
-            id: 'g2',
+        targets: [
+          makeTarget({ id: 't1', status: 'closed', nodeName: 'cpu_core' }),
+          makeTarget({
+            id: 't2',
             status: 'escalated',
             nodeName: 'mem_ctrl',
-            metric: 'toggle',
+            metrics: [{ metric: 'toggle' }],
             escalationReason: '连续 2 轮 overall delta < 1%',
           }),
         ],
@@ -529,7 +551,7 @@ describe('AiClosurePanel', () => {
 
       // 升级提示
       expect(
-        screen.getByText(/1 个 Gap 已升级至人工审查/),
+        screen.getByText(/1 个目标模块已升级至人工审查/),
       ).toBeInTheDocument();
     });
   });

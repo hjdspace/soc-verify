@@ -14,7 +14,7 @@
  *
  * 持久化布局（追加到 Closure Workspace）：
  *   <closureId>/
- *   ├── <gapId>/round_N/test_xxx.sv     # AI 生成的测试文件
+ *   ├── <targetId>/round_N/test_xxx.sv  # AI 生成的测试文件（模块级 ClosureTarget）
  *   └── promotion.json                   # Test Promotion 决策记录
  */
 
@@ -65,7 +65,7 @@ export class TestPromoter {
 
   /**
    * 扫描 Closure Workspace，收集所有生成的测试文件，构建审阅队列。
-   * 遍历每个 gap 的每个迭代轮次，从 generatedTests 字段获取文件名，
+   * 遍历每个 target 的每个迭代轮次，从 generatedTests 字段获取文件名，
    * 并验证文件在磁盘上存在。
    */
   async getPromotionQueue(closureId: string): Promise<PromotionQueueItem[]> {
@@ -81,13 +81,13 @@ export class TestPromoter {
     const rejectedSet = new Set(record?.rejected ?? []);
 
     const items: PromotionQueueItem[] = [];
-    for (const gap of session.gaps) {
-      for (const iter of gap.iterations) {
+    for (const target of session.targets) {
+      for (const iter of target.iterations) {
         for (const fileName of iter.generatedTests) {
-          const sourcePath = join(workspaceDir, gap.id, `round_${iter.round}`, fileName);
+          const sourcePath = join(workspaceDir, target.id, `round_${iter.round}`, fileName);
           // 文件不存在则跳过（可能是失败的轮次）
           if (!existsSync(sourcePath)) continue;
-          const id = this.makeItemId(gap.id, iter.round, fileName);
+          const id = this.makeItemId(target.id, iter.round, fileName);
           const status: PromotionQueueItem['status'] = acceptedSet.has(id)
             ? 'accepted'
             : rejectedSet.has(id)
@@ -96,7 +96,8 @@ export class TestPromoter {
           items.push({
             id,
             closureId,
-            gapId: gap.id,
+            // PromotionQueueItem.gapId 字段沿用 shared 类型，语义为所属 target 的 id
+            gapId: target.id,
             round: iter.round,
             sourcePath,
             relativePath: fileName,
@@ -186,7 +187,9 @@ export class TestPromoter {
 
   /**
    * 生成 Closure 闭环结果摘要。
-   * 展示每个 Gap 的最终状态、最后一轮 overall delta、提升/待审/拒绝计数。
+   * 展示每个 Target 的最终状态、最后一轮 overall delta、提升/待审/拒绝计数。
+   * ClosureSummaryGap.metric 为必填字段，多 metric target 取 deficit 最大的
+   * metric 作为代表（shared 类型保持不动，避免影响并行工单）。
    */
   async getClosureSummary(closureId: string): Promise<ClosureSummary> {
     const session = await this.closureManager.getClosure(closureId);
@@ -194,24 +197,26 @@ export class TestPromoter {
       throw new Error(`Closure ${closureId} not found`);
     }
 
-    const gaps: ClosureSummaryGap[] = session.gaps.map((g) => {
-      const lastIter = g.iterations[g.iterations.length - 1];
+    const gaps: ClosureSummaryGap[] = session.targets.map((t) => {
+      const lastIter = t.iterations[t.iterations.length - 1];
       const finalDelta =
         lastIter?.deltaBefore != null && lastIter?.deltaAfter != null
           ? lastIter.deltaAfter.overall - lastIter.deltaBefore.overall
           : null;
+      // 代表 metric：缺口最大的 metric
+      const worst = t.gaps.reduce((a, b) => (b.deficit > a.deficit ? b : a));
       return {
-        gapId: g.id,
-        moduleName: g.gap.nodeName,
-        metric: g.gap.metric,
-        status: g.status,
-        rounds: g.iterations.length,
+        gapId: t.id,
+        moduleName: t.module.name,
+        metric: worst.metric,
+        status: t.status,
+        rounds: t.iterations.length,
         finalDelta,
-        escalationReason: g.escalationReason,
+        escalationReason: t.escalationReason,
       };
     });
 
-    // totalDelta：所有有 finalDelta 的 gap 之和
+    // totalDelta：所有有 finalDelta 的 target 之和
     const deltas = gaps
       .map((g) => g.finalDelta)
       .filter((d): d is number => d != null);
@@ -241,9 +246,9 @@ export class TestPromoter {
     return join(this.projectRoot, DEFAULT_TESTBENCH_DIR);
   }
 
-  /** 生成 queue item 唯一标识：${gapId}__round_${round}__${fileName} */
-  private makeItemId(gapId: string, round: number, fileName: string): string {
-    return `${gapId}__round_${round}__${fileName}`;
+  /** 生成 queue item 唯一标识：${targetId}__round_${round}__${fileName} */
+  private makeItemId(targetId: string, round: number, fileName: string): string {
+    return `${targetId}__round_${round}__${fileName}`;
   }
 
   /** promotion.json 路径 */

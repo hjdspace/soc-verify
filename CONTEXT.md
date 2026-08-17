@@ -151,7 +151,7 @@ _Avoid_: coverage goal, coverage threshold
 _Avoid_: coverage hole, coverage miss
 
 **Coverage Delta**:
-两次 Merge Session 之间某个 metric 覆盖率的变化量，用于跟踪迭代改进效果。Delta > 0 表示有效，Delta = 0 表示 stimulus 未命中 gap。
+两次覆盖率数据快照之间某个 metric 覆盖率的变化量，快照来源可以是两次 Merge Session，也可以是 Closure 内两次 Coverage Recovery。用于跟踪迭代改进效果。Delta > 0 表示有效，Delta = 0 表示 stimulus 未命中 gap。
 _Avoid_: coverage change, coverage improvement
 
 **Coverage Triage**:
@@ -159,8 +159,16 @@ _Avoid_: coverage change, coverage improvement
 _Avoid_: gap analysis, coverage diagnosis
 
 **Coverage Closure**:
-迭代流程：识别 Gap → 生成定向测试 → 运行仿真 → 检查 Delta → 重复。每个 Gap 最多 5 轮，连续 2 轮 Delta < 1% 触发升级。Dead code 确认和 exclusion 审批需要人工介入。
+迭代流程：识别 Gap → 聚合为 Closure Target → 生成定向测试 → 运行仿真 → Coverage Recovery → 检查 Delta → 重复。每个 Closure Target 最多 5 轮，连续 2 轮 Delta < 1% 触发升级。Dead code 确认和 exclusion 审批需要人工介入。
 _Avoid_: coverage convergence, coverage completion
+
+**Closure Target**:
+Coverage Closure 的模块级工作项：用户选中的设计模块上所有未达标 metric 的聚合。一个 Closure Target 对应一个 AI Agent 会话和一套迭代历史，判定达标的标准是该模块全部 metric 达到 Coverage Target。取代早期的 per-gap（模块 × metric）工作项粒度。
+_Avoid_: closure gap, closure work item
+
+**Coverage Recovery**:
+平台（而非 AI）驱动的覆盖率回收流程：收集本轮仿真产生的 simv.vdb → 与基线 VDB 合并运行 urg 生成新报告 → 重新解析为 Coverage Tree → 计算 Coverage Delta。是 Closure 闭环中 Delta 可信的前提。
+_Avoid_: coverage refresh, re-merge
 
 **Closure Workspace**:
 AI Coverage Closure 闭环的临时工作区，路径 `.socverify/coverage/closure/<closureId>/`。AI 生成的测试代码写到此处，run_simulation 从此处执行，不污染正式项目目录。闭环结束后通过 Test Promotion 决定哪些测试提升到正式目录。
@@ -170,8 +178,8 @@ _Avoid_: closure sandbox, temp test dir
 Coverage Closure 结束后，用户通过 Diff Review 审阅 Closure Workspace 中的测试代码，决定哪些测试"提升"到正式项目目录的过程。接受的测试从临时目录复制到正式目录，拒绝的丢弃。
 _Avoid_: test merge, test adoption
 
-**Gap Scheduler**:
-Coverage Closure 中多 Gap 的并行调度策略。所有 Gap 同时开始处理，受 SessionManager 并发上限（10）限制。每个 Gap 独立跑仿真 + merge + report，精确计算单个 Gap 的 Delta。
+**Target Scheduler**:
+Coverage Closure 中多 Closure Target 的并行调度策略。所有 Target 同时开始处理，受 SessionManager 并发上限限制。每个 Target 独立跑仿真 + Coverage Recovery，精确计算单个 Target 的 Delta。
 _Avoid_: gap queue, closure coordinator
 
 **Delta Validation**:
@@ -179,15 +187,15 @@ _Avoid_: gap queue, closure coordinator
 _Avoid_: delta check, coverage verification
 
 **Coverage Exclusion**:
-建议排除的覆盖率项（如 dead code、unreachable ifdef 路径）。必须经人工审批后才能排除，不可自动排除。
+建议排除的覆盖率项（如 dead code、unreachable ifdef 路径）。完整链路：AI 在 Triage 升级时输出 exclusion 建议（含 reason）→ 人工审批 → 平台生成 exclusion 文件（urg -elfile 格式）→ 下次报告生成时应用。AI 不可自动排除。
 _Avoid_: coverage waiver, coverage filter
 
 **Coverage Preprocessing**:
-覆盖率数据从 EDA 原始格式到结构化数据的两步流水线：第一步平台根据 EDA Tool Configuration 运行命令生成文本报告；第二步 CoverageParserPlugin 解析文本报告为 Coverage Tree。两步分离使 EDA 工具命令执行和文本解析可独立演化。
+覆盖率数据从 EDA 原始格式到结构化数据的两步流水线：第一步平台根据 EDA Tool Configuration 运行命令生成报告（VCS urg 优先生成类型化 XML 报告，降级为文本报告）；第二步 CoverageParserPlugin 解析报告为 Coverage Tree。两步分离使 EDA 工具命令执行和报告解析可独立演化。
 _Avoid_: coverage conversion, coverage extraction
 
 **EDA Tool Configuration**:
-项目级配置，指定 EDA 工具类型（Cadence IMC / Synopsys VCS urg / Mentor Questa vcover）、cov_merge 默认路径、命令模板。用于 Coverage Preprocessing 第一步。
+项目级配置，指定 EDA 工具类型（Cadence IMC / Synopsys VCS urg / Mentor Questa vcover）、cov_merge 默认路径、命令模板、执行后端（direct / LSF）。用于 Coverage Preprocessing 第一步。
 _Avoid_: coverage settings, EDA config
 
 ### 时序违例域

@@ -1,0 +1,3 @@
+Instance                   Line     Branch   Toggle   Cond    FSM     Assert
+tb_top                     1.00     1.00     1.00     1.00    1.00    1.00
+|--u_core                  1.00     1.00     1.00     1.00    1.00    1.00

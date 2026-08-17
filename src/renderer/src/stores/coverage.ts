@@ -24,26 +24,35 @@ import type {
 // ─── Closure 相关类型（从主进程闭包包导入的等价类型） ────────────
 // 这些类型与 src/main/coverage/closure-manager.ts 中的定义保持一致，
 // 但因渲染进程无法直接导入主进程模块，这里重新声明（结构兼容）。
+// 工单 04（ADR 0025）：工作项从 per-gap 重构为模块级 ClosureTarget。
 
 type ClosureStatus = 'pending' | 'running' | 'completed' | 'failed' | 'aborted';
-type GapIterationStatus = 'pending' | 'running' | 'completed' | 'failed';
-type ClosureGapStatus = 'pending' | 'in_progress' | 'closed' | 'escalated' | 'failed';
+type TargetIterationStatus = 'pending' | 'running' | 'completed' | 'failed';
+type ClosureTargetStatus = 'pending' | 'in_progress' | 'closed' | 'escalated' | 'failed';
 
-type GapIteration = {
+type TargetIteration = {
   round: number;
   generatedTests: string[];
   deltaBefore?: CoverageSummary;
   deltaAfter?: CoverageSummary;
   deltas?: CoverageDelta[];
-  status: GapIterationStatus;
+  status: TargetIterationStatus;
   error?: string;
 };
 
-type ClosureGap = {
+/** 目标模块标识 */
+type TargetModule = {
+  path: string;
+  name: string;
+};
+
+/** 模块级闭环工作项：同模块全部未达标 metric 聚合为单 target */
+type ClosureTarget = {
   id: string;
-  gap: CoverageGap;
-  iterations: GapIteration[];
-  status: ClosureGapStatus;
+  module: TargetModule;
+  gaps: CoverageGap[];
+  iterations: TargetIteration[];
+  status: ClosureTargetStatus;
   escalationReason?: string;
 };
 
@@ -52,7 +61,7 @@ type ClosureSession = {
   sessionId: string;
   createdAt: number;
   status: ClosureStatus;
-  gaps: ClosureGap[];
+  targets: ClosureTarget[];
   maxRounds: number;
   escalationThreshold: number;
   workspaceDir: string;
@@ -62,8 +71,8 @@ type ClosureSession = {
 type ClosureLiveProgress = {
   /** 当前是否正在运行 */
   running: boolean;
-  /** 当前正在处理的 gapId 和 round（如有） */
-  activeGapId?: string;
+  /** 当前正在处理的 targetId 和 round（如有） */
+  activeTargetId?: string;
   activeRound?: number;
   /** 最近一次 agent 状态 */
   agentSessionId?: string;
@@ -204,11 +213,12 @@ interface CoverageStoreState {
   browseDirectory: (defaultPath?: string) => Promise<string | null>;
   setSessionId: (sessionId: string | null) => void;
 
-  // ─── Closure 操作（Slice 6b） ────────────────────────────────
+  // ─── Closure 操作（Slice 6b / 工单 04 模块级 Target） ─────────
   startClosure: (
     projectId: string,
     sessionId: string,
-    gaps?: CoverageGap[],
+    /** 选中的模块路径列表；缺省自动聚合全部有 gap 的模块 */
+    modules?: string[],
     maxRounds?: number,
   ) => Promise<string | null>;
   abortClosure: (projectId: string, closureId: string) => Promise<void>;
@@ -512,14 +522,14 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
     }
   },
 
-  // ─── Closure 实现（Slice 6b） ─────────────────────────────
+  // ─── Closure 实现（Slice 6b / 工单 04 模块级 Target） ─────────
 
-  startClosure: async (projectId, sessionId, gaps, maxRounds) => {
+  startClosure: async (projectId, sessionId, modules, maxRounds) => {
     try {
       const session = await trpc.coverage.startClosure.mutate({
         projectId,
         sessionId,
-        gaps,
+        modules,
         maxRounds,
       });
       set({
@@ -528,7 +538,7 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
         closureLive: { running: true },
         closures: [...get().closures, session],
       });
-      useToastStore.getState().success('AI Closure 已启动', `${session.gaps.length} 个 Gap`);
+      useToastStore.getState().success('AI Closure 已启动', `${session.targets.length} 个目标模块`);
       return session.id;
     } catch (err) {
       useToastStore.getState().error('启动 AI Closure 失败', err instanceof Error ? err.message : String(err));
@@ -609,7 +619,7 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
           live.running = true;
           break;
         case 'closure:gap_started':
-          live.activeGapId = typeof event.gapId === 'string' ? event.gapId : live.activeGapId;
+          live.activeTargetId = typeof event.targetId === 'string' ? event.targetId : live.activeTargetId;
           live.activeRound = typeof event.round === 'number' ? event.round : live.activeRound;
           live.agentPhase = undefined;
           break;
@@ -629,20 +639,20 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
           break;
         case 'closure:gap_closed':
         case 'closure:gap_escalated':
-          live.activeGapId = undefined;
+          live.activeTargetId = undefined;
           live.activeRound = undefined;
           live.agentPhase = undefined;
           break;
         case 'closure:gap_failed':
-          live.lastError = typeof event.error === 'string' ? event.error : 'Gap 失败';
-          live.activeGapId = undefined;
+          live.lastError = typeof event.error === 'string' ? event.error : 'Target 失败';
+          live.activeTargetId = undefined;
           live.activeRound = undefined;
           live.agentPhase = undefined;
           break;
         case 'closure:completed':
         case 'closure:aborted':
           live.running = false;
-          live.activeGapId = undefined;
+          live.activeTargetId = undefined;
           live.activeRound = undefined;
           live.agentPhase = undefined;
           break;
