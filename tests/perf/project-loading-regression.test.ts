@@ -7,8 +7,12 @@
  * After the fix: native fs.watch(root, { recursive: true }) is used, which
  * creates a single kernel handle for the entire subtree (~2ms startup).
  *
+ * After the lazy-loading fix: getFileTree only reads the root level (depth 0→1).
+ * Deeper directories are fetched on demand via getDirChildren().
+ * This follows the VS Code AsyncDataTree pattern.
+ *
  * This test locks in the performance characteristic: opening a project with
- * ~2400 files must complete in under 1 second, and file changes must still
+ * ~2400 files must complete in under 200ms (lazy), and file changes must still
  * be detected.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -81,8 +85,8 @@ describe('project loading performance regression', () => {
     await rm(fixtureRoot, { recursive: true, force: true });
   }, 60000);
 
-  it('opens a 2400-file project and loads the file tree in under 1 second', async () => {
-    // Real code path: openProject (starts watcher) + getFileTree (walks tree)
+  it('opens a 2400-file project and loads the root-level tree in under 200ms', async () => {
+    // Real code path: openProject (starts watcher) + getFileTree (reads root only)
     const t0 = performance.now();
     const info = await projectManager.openProject(fixtureRoot, 'regression-fixture');
     const tree = await projectManager.getFileTree(info.id);
@@ -100,9 +104,30 @@ describe('project loading performance regression', () => {
       `[REG] total=${totalMs.toFixed(0)}ms nodes=${nodes} files=${fileCount} jsonBytes=${JSON.stringify(tree).length}`,
     );
 
-    // After fix: should be well under 1 second
-    expect(totalMs).toBeLessThan(1000);
-    expect(nodes).toBeGreaterThan(2000); // sanity: tree actually has content
+    // With lazy loading, root + its direct children only.
+    // Root level has: 6 subsys dirs + .socverify dir + .gitignore file = 8 children.
+    expect(totalMs).toBeLessThan(200);
+    expect(nodes).toBe(9); // 1 root + 8 direct children
+  }, 120000);
+
+  it('lazy-loads directory children via getDirChildren', async () => {
+    const info = await projectManager.openProject(fixtureRoot, 'regression-fixture');
+    const tree = await projectManager.getFileTree(info.id);
+
+    // Find subsys_0 (not .socverify which sorts first)
+    const subsys0 = tree.children?.find((c) => c.name === 'subsys_0');
+    expect(subsys0).toBeDefined();
+    expect(subsys0?.type).toBe('directory');
+    expect(subsys0?.lazy).toBe(true);
+    expect(subsys0?.children).toEqual([]); // empty until expanded
+
+    // Load children of subsys_0
+    const children = await projectManager.getDirChildren(info.id, subsys0!.path);
+    expect(children.length).toBe(5); // 5 sub-directories (dir_0..dir_4)
+    // Each sub-directory should be marked lazy
+    const firstDir = children[0];
+    expect(firstDir.type).toBe('directory');
+    expect(firstDir.lazy).toBe(true);
   }, 120000);
 
   it('detects new file additions via the watcher (debounced)', async () => {
@@ -127,16 +152,20 @@ describe('project loading performance regression', () => {
     // Should have received at least one update (debounced)
     expect(updates.length).toBeGreaterThanOrEqual(1);
 
-    // Cache should be invalidated
-    // (Re-fetch should give us a tree containing the new file)
+    // Cache should be invalidated.
+    // With lazy loading, the new file is in a sub-directory that needs to be
+    // fetched via getDirChildren. The root-level tree won't contain it directly.
     const newTree = await projectManager.getFileTree(info.id);
-    let foundNewFile = false;
-    function search(n: { name?: string; children?: unknown[] }) {
-      if (n.name === 'new_file.sv') foundNewFile = true;
-      n.children?.forEach((c) => search(c as { name?: string; children?: unknown[] }));
-    }
-    search(newTree);
-    expect(foundNewFile).toBe(true);
+    const subsys0 = newTree.children?.find((c) => c.name === 'subsys_0');
+    expect(subsys0).toBeDefined();
+    const dirChildren = await projectManager.getDirChildren(info.id, subsys0!.path);
+    const dir0 = dirChildren.find((c) => c.name === 'dir_0');
+    expect(dir0).toBeDefined();
+    const dir0Children = await projectManager.getDirChildren(info.id, dir0!.path);
+    const nested0 = dir0Children.find((c) => c.name === 'nested_0');
+    expect(nested0).toBeDefined();
+    const nested0Children = await projectManager.getDirChildren(info.id, nested0!.path);
+    expect(nested0Children.some((c) => c.name === 'new_file.sv')).toBe(true);
   }, 120000);
 
   it('collapses burst of file changes into a single debounced update', async () => {
