@@ -11,7 +11,7 @@ import {
   Loader2, BarChart3, Upload, ChevronRight,
   Target as TargetIcon, AlertTriangle, ShieldBan, GitCompare, Trash2, Plus,
   Activity, Square, Download, FolderOpen, Bug, X,
-  Trophy, EyeOff, CheckCircle2, Clock,
+  Trophy, EyeOff, CheckCircle2, Clock, Zap,
 } from 'lucide-react';
 import { useCoverageStore } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
@@ -109,6 +109,17 @@ export function CoveragePanel() {
   const registerImportProgressListener = useCoverageStore((s) => s.registerImportProgressListener);
   const clearImportProgress = useCoverageStore((s) => s.clearImportProgress);
 
+  // ─── 按需详细解析状态 ────────────────────────────────────
+  const detailParsing = useCoverageStore((s) => s.detailParsing);
+  const detailParseProgress = useCoverageStore((s) => s.detailParseProgress);
+  const detailParseStep = useCoverageStore((s) => s.detailParseStep);
+  const detailParseStepLog = useCoverageStore((s) => s.detailParseStepLog);
+  const showDetailParseProgress = useCoverageStore((s) => s.showDetailParseProgress);
+  const detailParsed = useCoverageStore((s) => s.detailParsed);
+  const parseDetails = useCoverageStore((s) => s.parseDetails);
+  const registerDetailProgressListener = useCoverageStore((s) => s.registerDetailProgressListener);
+  const clearDetailParseProgress = useCoverageStore((s) => s.clearDetailParseProgress);
+
   // ─── Closure 相关（Slice 6b） ──────────────────────────────
   const currentClosure = useCoverageStore((s) => s.currentClosure);
   const closureLive = useCoverageStore((s) => s.closureLive);
@@ -142,6 +153,11 @@ export function CoveragePanel() {
   useEffect(() => {
     registerImportProgressListener();
   }, [registerImportProgressListener]);
+
+  // 注册 coverage:detail-progress IPC 监听器（幂等，全局一次）
+  useEffect(() => {
+    registerDetailProgressListener();
+  }, [registerDetailProgressListener]);
 
   useEffect(() => {
     if (currentProjectId && currentSessionId) {
@@ -182,6 +198,11 @@ export function CoveragePanel() {
     if (!currentProjectId || !currentSessionId) return;
     const ok = await deleteSession(currentProjectId, currentSessionId);
     if (ok) setConfirmDelete(false);
+  };
+
+  const handleParseDetails = async () => {
+    if (!currentProjectId || !currentSessionId) return;
+    await parseDetails(currentProjectId, currentSessionId);
   };
 
   if (loading && !tree) {
@@ -332,6 +353,47 @@ export function CoveragePanel() {
         </div>
       )}
 
+      {/* 详细解析进度面板 */}
+      {showDetailParseProgress && detailParsing && (
+        <div className="mb-3 rounded border border-primary/40 bg-primary/5 p-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="flex items-center gap-1.5 text-xs font-medium text-primary">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              {detailParseStep || '正在解析详细报告...'}
+            </span>
+            <span className="text-xs font-mono text-primary">{detailParseProgress}%</span>
+          </div>
+          {/* 进度条 */}
+          <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+            <div
+              className="h-full rounded-full bg-primary transition-all duration-300 ease-out"
+              style={{ width: `${detailParseProgress}%` }}
+            />
+          </div>
+          {/* 步骤日志 */}
+          {detailParseStepLog.length > 0 && (
+            <div className="mt-2 max-h-32 overflow-auto rounded bg-muted/50 p-2">
+              {detailParseStepLog.map((entry, i) => (
+                <div key={i} className="flex items-start gap-1.5 py-0.5 text-[10px]">
+                  {entry.step === 'done' ? (
+                    <CheckCircle2 className="mt-0.5 h-3 w-3 flex-shrink-0 text-primary" />
+                  ) : (
+                    <Clock className="mt-0.5 h-3 w-3 flex-shrink-0 text-muted-foreground" />
+                  )}
+                  <span className="text-muted-foreground">
+                    {new Date(entry.timestamp).toLocaleTimeString()}
+                  </span>
+                  <span className="flex-1 break-all">{entry.message}</span>
+                  {entry.durationMs !== undefined && (
+                    <span className="text-muted-foreground font-mono">{entry.durationMs}ms</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* 工具栏：Session 选择 + 导入 + 删除 */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <span className="text-[10px] text-muted-foreground">Session:</span>
@@ -373,6 +435,23 @@ export function CoveragePanel() {
             <Download className="h-3 w-3" />
             导出
           </button>
+        )}
+        {currentSessionId && tree && !detailParsed && !detailParsing && (
+          <button
+            onClick={handleParseDetails}
+            className="flex items-center gap-1 rounded border border-primary/50 bg-primary/10 px-2 py-1 text-xs text-primary hover:bg-primary/20"
+            data-testid="coverage-parse-details-button"
+            title="解析 detail/grade/bins/csv 等详细覆盖率报告"
+          >
+            <Zap className="h-3 w-3" />
+            解析详细报告
+          </button>
+        )}
+        {currentSessionId && detailParsed && (
+          <span className="flex items-center gap-1 text-[10px] text-primary">
+            <CheckCircle2 className="h-3 w-3" />
+            详细报告已解析
+          </span>
         )}
         {/* 右对齐组：Closure 状态 pill + EDA 配置 */}
         <div className="ml-auto flex items-center gap-2">
@@ -1248,7 +1327,7 @@ function GradeSection({
       <div className="rounded border border-border bg-card p-4 text-center text-xs text-muted-foreground">
         暂无测试用例贡献度数据。
         <br />
-        需要使用 <code className="font-mono">urg -grade testfile</code>（VCS）或 <code className="font-mono">imc report -test</code>（Cadence）生成报告。
+        需要使用 <code className="font-mono">urg -grade testfile</code>（VCS）或 <code className="font-mono">imc report -grading</code>（Cadence）生成报告。
       </div>
     );
   }
