@@ -25,101 +25,147 @@ import { rm, access, constants } from 'node:fs/promises';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
-// Pass through all CLI arguments to electron-builder.
-// In CI, the PUBLISH env var controls the publish strategy:
-//   - "always" (default if CI && not set): electron-builder uploads to GitHub directly
-//   - "never": skip publishing; artifacts are uploaded via gh CLI with retry in the workflow
-// Local runs always remain publish-free.
-const userArgs = process.argv.slice(2);
-const hasPublishArg = userArgs.some((a) => a.startsWith('--publish'));
-const publishMode = process.env.CI ? (process.env.PUBLISH ?? 'always') : null;
-const args = !hasPublishArg && publishMode
-  ? ['--publish', publishMode, ...userArgs]
-  : userArgs;
+const MAX_RETRIES = 5;
+const BASE_DELAY_SEC = 30;
 
 // ─── Pre-build cleanup ───────────────────────────────────────────────────────
 // Remove the dist directory before building. On Windows, leftover files from a
 // previous build can be locked by Explorer / antivirus / the previous electron
 // instance, causing EPERM on rename during electron-builder's extraction step.
-const distDir = join(ROOT, 'dist');
-try {
-  await access(distDir, constants.F_OK);
-  console.log('[electron-builder] Cleaning dist directory...');
-  await rm(distDir, { recursive: true, force: true });
-  console.log('[electron-builder] dist directory cleaned.');
-} catch {
-  // dist doesn't exist — nothing to clean
-}
-
-// Build the env with system CA support
-const env = { ...process.env };
-
-// Explicitly set ELECTRON_MIRROR so @electron/get uses the same download URL as
-// `npm install electron`, ensuring the cached zip is reused. Reading from
-// npm_config_electron_mirror (set by npm from .npmrc) avoids hardcoding the URL.
-// Falls back to npmmirror.com if neither is set, matching the project .npmrc.
-env.ELECTRON_MIRROR ??= env.npm_config_electron_mirror || 'https://npmmirror.com/mirrors/electron/';
-env.ELECTRON_BUILDER_BINARIES_MIRROR ??= env.npm_config_electron_builder_binaries_mirror || 'https://npmmirror.com/mirrors/electron-builder-binaries/';
-
-// In CI, use a project-local cache directory so it can be cached between runs.
-// Locally, don't override ELECTRON_CACHE — electron-builder will use the system
-// default (e.g. %LOCALAPPDATA%/electron/Cache on Windows), which is already
-// populated by `npm install electron`. Overriding it to an empty project-local
-// directory causes electron-builder to re-download Electron every time.
-if (process.env.CI) {
-  env.ELECTRON_CACHE ??= join(ROOT, '.cache', 'electron');
-  env.ELECTRON_BUILDER_CACHE ??= join(ROOT, '.cache', 'electron-builder');
-}
-
-// Add --use-system-ca and rename-retry patch to NODE_OPTIONS
-// --use-system-ca: makes Node.js use the OS CA certificate store,
-//   which includes any custom root CAs installed by corporate proxies.
-// --require rename-retry-patch: patches fs.rename to retry on EPERM,
-//   which happens on Windows when antivirus locks freshly extracted files.
-// Use forward slashes — NODE_OPTIONS parser strips backslashes on Windows
-const existingNodeOptions = env.NODE_OPTIONS ?? '';
-const renamePatchPath = join(ROOT, 'scripts', 'rename-retry-patch.cjs').replace(/\\/g, '/');
-const nodeOptionParts = [existingNodeOptions];
-if (!existingNodeOptions.includes('--use-system-ca')) {
-  nodeOptionParts.push('--use-system-ca');
-}
-if (!existingNodeOptions.includes('rename-retry-patch')) {
-  nodeOptionParts.push(`--require "${renamePatchPath}"`);
-}
-env.NODE_OPTIONS = nodeOptionParts.filter(Boolean).join(' ');
-
-// For Windows, also set ELECTRON_BUILDER_ENABLE_ADDR_SIZE_MISMATCH=1 to avoid
-// native module loading issues (not related but helps with overall packaging)
-
-console.log('[electron-builder] Using system CA certificates (--use-system-ca)');
-console.log('[electron-builder] NODE_OPTIONS:', env.NODE_OPTIONS);
-console.log('[electron-builder] ELECTRON_CACHE:', env.ELECTRON_CACHE);
-console.log('[electron-builder] ELECTRON_BUILDER_CACHE:', env.ELECTRON_BUILDER_CACHE);
-console.log('[electron-builder] ELECTRON_MIRROR:', env.ELECTRON_MIRROR);
-console.log('[electron-builder] ELECTRON_BUILDER_BINARIES_MIRROR:', env.ELECTRON_BUILDER_BINARIES_MIRROR);
-console.log('[electron-builder] Args:', args.join(' '));
-
-// Spawn electron-builder with the modified environment.
-// Resolve the JS entry directly to avoid spawning .cmd/.sh wrapper scripts.
-// This lets us pass args safely without shell:true, avoiding the Node.js
-// DEP0190 deprecation warning.
-const electronBuilderEntry = join(ROOT, 'node_modules', 'electron-builder', 'cli.js');
-
-const child = spawn(process.execPath, [electronBuilderEntry, ...args], {
-  cwd: ROOT,
-  stdio: 'inherit',
-  env,
-});
-
-child.on('error', (err) => {
-  console.error('[electron-builder] Failed to start:', err.message);
-  process.exit(1);
-});
-
-child.on('exit', (code, signal) => {
-  if (signal) {
-    console.error(`[electron-builder] Process killed by signal: ${signal}`);
-    process.exit(1);
+// Only run before the first attempt; on retry, keep the existing dist so
+// electron-builder can skip re-packaging and only retry the publish step.
+async function cleanDist(force) {
+  const distDir = join(ROOT, 'dist');
+  if (!force) return; // skip on retry
+  try {
+    await access(distDir, constants.F_OK);
+    console.log('[electron-builder] Cleaning dist directory...');
+    await rm(distDir, { recursive: true, force: true });
+    console.log('[electron-builder] dist directory cleaned.');
+  } catch {
+    // dist doesn't exist — nothing to clean
   }
-  process.exit(code ?? 0);
-});
+}
+
+async function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function runElectronBuilder() {
+  return new Promise((resolve, reject) => {
+    // Pass through all CLI arguments to electron-builder.
+    // In CI, default to --publish always so electron-builder uploads installer
+    // assets to the GitHub Release using GH_TOKEN. Local runs remain publish-free.
+    const userArgs = process.argv.slice(2);
+    const hasPublishArg = userArgs.some((a) => a.startsWith('--publish'));
+    const args = (process.env.CI && !hasPublishArg)
+      ? ['--publish', 'always', ...userArgs]
+      : userArgs;
+
+    // Build the env with system CA support
+    const env = { ...process.env };
+
+    // Explicitly set ELECTRON_MIRROR so @electron/get uses the same download URL as
+    // `npm install electron`, ensuring the cached zip is reused. Reading from
+    // npm_config_electron_mirror (set by npm from .npmrc) avoids hardcoding the URL.
+    // Falls back to npmmirror.com if neither is set, matching the project .npmrc.
+    env.ELECTRON_MIRROR ??= env.npm_config_electron_mirror || 'https://npmmirror.com/mirrors/electron/';
+    env.ELECTRON_BUILDER_BINARIES_MIRROR ??= env.npm_config_electron_builder_binaries_mirror || 'https://npmmirror.com/mirrors/electron-builder-binaries/';
+
+    // In CI, use a project-local cache directory so it can be cached between runs.
+    // Locally, don't override ELECTRON_CACHE — electron-builder will use the system
+    // default (e.g. %LOCALAPPDATA%/electron/Cache on Windows), which is already
+    // populated by `npm install electron`. Overriding it to an empty project-local
+    // directory causes electron-builder to re-download Electron every time.
+    if (process.env.CI) {
+      env.ELECTRON_CACHE ??= join(ROOT, '.cache', 'electron');
+      env.ELECTRON_BUILDER_CACHE ??= join(ROOT, '.cache', 'electron-builder');
+    }
+
+    // Add --use-system-ca and rename-retry patch to NODE_OPTIONS
+    // --use-system-ca: makes Node.js use the OS CA certificate store,
+    //   which includes any custom root CAs installed by corporate proxies.
+    // --require rename-retry-patch: patches fs.rename to retry on EPERM,
+    //   which happens on Windows when antivirus locks freshly extracted files.
+    // Use forward slashes — NODE_OPTIONS parser strips backslashes on Windows
+    const existingNodeOptions = env.NODE_OPTIONS ?? '';
+    const renamePatchPath = join(ROOT, 'scripts', 'rename-retry-patch.cjs').replace(/\\/g, '/');
+    const nodeOptionParts = [existingNodeOptions];
+    if (!existingNodeOptions.includes('--use-system-ca')) {
+      nodeOptionParts.push('--use-system-ca');
+    }
+    if (!existingNodeOptions.includes('rename-retry-patch')) {
+      nodeOptionParts.push(`--require "${renamePatchPath}"`);
+    }
+    env.NODE_OPTIONS = nodeOptionParts.filter(Boolean).join(' ');
+
+    console.log('[electron-builder] Using system CA certificates (--use-system-ca)');
+    console.log('[electron-builder] NODE_OPTIONS:', env.NODE_OPTIONS);
+    console.log('[electron-builder] ELECTRON_CACHE:', env.ELECTRON_CACHE);
+    console.log('[electron-builder] ELECTRON_BUILDER_CACHE:', env.ELECTRON_BUILDER_CACHE);
+    console.log('[electron-builder] ELECTRON_MIRROR:', env.ELECTRON_MIRROR);
+    console.log('[electron-builder] ELECTRON_BUILDER_BINARIES_MIRROR:', env.ELECTRON_BUILDER_BINARIES_MIRROR);
+    console.log('[electron-builder] Args:', args.join(' '));
+
+    // Spawn electron-builder with the modified environment.
+    // Resolve the JS entry directly to avoid spawning .cmd/.sh wrapper scripts.
+    // This lets us pass args safely without shell:true, avoiding the Node.js
+    // DEP0190 deprecation warning.
+    const electronBuilderEntry = join(ROOT, 'node_modules', 'electron-builder', 'cli.js');
+
+    const child = spawn(process.execPath, [electronBuilderEntry, ...args], {
+      cwd: ROOT,
+      stdio: 'inherit',
+      env,
+    });
+
+    child.on('error', (err) => {
+      console.error('[electron-builder] Failed to start:', err.message);
+      reject(err);
+    });
+
+    child.on('exit', (code, signal) => {
+      if (signal) {
+        console.error(`[electron-builder] Process killed by signal: ${signal}`);
+        reject(new Error(`Killed by signal: ${signal}`));
+        return;
+      }
+      resolve(code ?? 0);
+    });
+  });
+}
+
+// ─── Main: run with 503 retry ────────────────────────────────────────────────
+// electron-builder calls the GitHub API to create a release and upload
+// installer assets. If the API returns 503 (Service Unavailable), the entire
+// process exits non-zero. On retry, we skip the dist cleanup so
+// electron-builder detects existing build artifacts and only retries the
+// publish step, making retries fast.
+const isCI = !!process.env.CI;
+let attempt = 0;
+
+for (;;) {
+  attempt++;
+  const isFirstAttempt = attempt === 1;
+  await cleanDist(isFirstAttempt);
+
+  const code = await runElectronBuilder();
+
+  if (code === 0) {
+    process.exit(0);
+  }
+
+  // In non-CI (local), don't retry — just exit with the error code.
+  if (!isCI) {
+    process.exit(code);
+  }
+
+  if (attempt >= MAX_RETRIES) {
+    console.error(`[electron-builder] Failed after ${MAX_RETRIES} attempts (exit ${code}).`);
+    process.exit(code);
+  }
+
+  const delay = BASE_DELAY_SEC * Math.pow(2, attempt - 1);
+  console.warn(`[electron-builder] Attempt ${attempt}/${MAX_RETRIES} failed (exit ${code}), retrying in ${delay}s...`);
+  await sleep(delay * 1000);
+}
