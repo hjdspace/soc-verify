@@ -337,3 +337,23 @@ jobs:
 
           gh_retry gh release edit "${GITHUB_REF_NAME}" --draft=false --notes "${{ steps.release_notes.outputs.body }}"
           echo "Release published with release notes."
+
+      - name: Clean up workflow artifacts
+        # Release assets are now permanently stored on the GitHub Release.
+        # Remove the temporary CI artifacts to keep the storage tidy.
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          # List and delete artifacts from this workflow run.
+          # Public repos get free unlimited Actions storage, but cleaning up
+          # keeps the Actions UI tidy and avoids confusion.
+          ARTIFACTS=$(gh api \
+            "repos/${GH_REPO}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
+            --jq '.artifacts[].id' 2>/dev/null || true)
+          for id in $ARTIFACTS; do
+            gh api "repos/${GH_REPO}/actions/artifacts/$id" -X DELETE 2>/dev/null || true
+          done
+          echo "Cleaned up $(echo "$ARTIFACTS" | wc -w) artifacts."
