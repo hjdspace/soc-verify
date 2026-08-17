@@ -1,12 +1,13 @@
 /**
- * SysbaseEnvGen — 9-step wizard for generating SoC verification environment.
+ * SysbaseEnvGen — multi-step wizard for generating SoC verification environment.
  *
- * Layout: header + stepper + content area + footer navigation.
- * The wizard shell supports free navigation (prev/next) across all 9 steps,
+ * Supports two generation levels:
+ *   - subsys (9 steps): full subsys env gen with dut_spec, mini, ral, clk, mod_io
+ *   - top (6 steps): chip-level env gen with csv, ral (no dut_spec/mini/clk/mod_io)
+ *
+ * Layout: header (level selector + save/load) + stepper + content area + footer navigation.
+ * The wizard shell supports free navigation (prev/next) across all steps,
  * with the last step showing an "执行生成" button instead of "下一步".
- *
- * Header includes "保存配置" and "加载配置" buttons for config persistence.
- * Stepper pills follow the EnvWizard pattern: active / completed / pending.
  */
 
 import { useState, useCallback } from 'react';
@@ -20,15 +21,17 @@ import {
   FolderOpen,
   Loader2,
   X,
+  Layers,
 } from 'lucide-react';
 import { useSysbaseGenStore } from '@renderer/stores/sysbase-gen';
-import { SYSBASE_GEN_STEPS } from '@shared/types';
 import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
 import { StepSubsys } from './StepSubsys';
+import { StepTopInfo } from './StepTopInfo';
 import { StepRtl } from './StepRtl';
 import { StepDutSpec } from './StepDutSpec';
 import { StepMini } from './StepMini';
+import { StepCsv } from './StepCsv';
 import { StepRal } from './StepRal';
 import { StepClk } from './StepClk';
 import { StepModIo } from './StepModIo';
@@ -38,11 +41,13 @@ import { StepReview } from './StepReview';
 export function SysbaseEnvGen() {
   const step = useSysbaseGenStore((s) => s.step);
   const totalSteps = useSysbaseGenStore((s) => s.totalSteps);
+  const steps = useSysbaseGenStore((s) => s.steps);
   const nextStep = useSysbaseGenStore((s) => s.nextStep);
   const prevStep = useSysbaseGenStore((s) => s.prevStep);
   const canProceed = useSysbaseGenStore((s) => s.canProceed);
   const config = useSysbaseGenStore((s) => s.config);
   const scriptPath = useSysbaseGenStore((s) => s.scriptPath);
+  const setGenLevel = useSysbaseGenStore((s) => s.setGenLevel);
   const configSaving = useSysbaseGenStore((s) => s.configSaving);
   const setConfigSaving = useSysbaseGenStore((s) => s.setConfigSaving);
   const configLoading = useSysbaseGenStore((s) => s.configLoading);
@@ -52,9 +57,10 @@ export function SysbaseEnvGen() {
   const [showLoadDialog, setShowLoadDialog] = useState(false);
   const [savedConfigs, setSavedConfigs] = useState<{ subsys: string }[]>([]);
 
-  const currentStep = SYSBASE_GEN_STEPS[step];
+  const currentStep = steps[step];
   const isLastStep = step === totalSteps - 1;
   const isFirstStep = step === 0;
+  const isTopLevel = config.genLevel === 'top';
 
   // Save config
   const handleSaveConfig = useCallback(async () => {
@@ -102,6 +108,50 @@ export function SysbaseEnvGen() {
     }
   }, [setConfigLoading, loadConfigIntoStore]);
 
+  // Render step content based on genLevel and step key
+  const renderStepContent = () => {
+    const stepKey = currentStep?.key;
+
+    if (isTopLevel) {
+      switch (stepKey) {
+        case 'top-info':
+          return <StepTopInfo />;
+        case 'rtl':
+          return <StepRtl />;
+        case 'csv':
+          return <StepCsv />;
+        case 'ral':
+          return <StepRal />;
+        case 'optional':
+          return <StepOptional />;
+        default:
+          return <StepReview />;
+      }
+    }
+
+    // subsys level
+    switch (stepKey) {
+      case 'subsys':
+        return <StepSubsys />;
+      case 'rtl':
+        return <StepRtl />;
+      case 'dut-spec':
+        return <StepDutSpec />;
+      case 'mini':
+        return <StepMini />;
+      case 'ral':
+        return <StepRal />;
+      case 'clk':
+        return <StepClk />;
+      case 'mod-io':
+        return <StepModIo />;
+      case 'optional':
+        return <StepOptional />;
+      default:
+        return <StepReview />;
+    }
+  };
+
   return (
     <div className="flex h-full w-full flex-col bg-background">
       {/* ── Header ── */}
@@ -109,6 +159,35 @@ export function SysbaseEnvGen() {
         <Workflow className="h-4 w-4 text-primary" />
         <span className="text-sm font-semibold">验证环境生成器</span>
         <span className="text-xs text-muted-foreground">sysbase_gen.py</span>
+
+        {/* Gen Level Selector */}
+        <div className="ml-4 flex items-center gap-1 rounded-md border border-border p-0.5">
+          <button
+            onClick={() => setGenLevel('subsys')}
+            className={cn(
+              'flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium transition-colors',
+              !isTopLevel
+                ? 'bg-primary/15 text-primary'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <Layers className="h-3 w-3" />
+            Subsys
+          </button>
+          <button
+            onClick={() => setGenLevel('top')}
+            className={cn(
+              'flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-medium transition-colors',
+              isTopLevel
+                ? 'bg-primary/15 text-primary'
+                : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <Layers className="h-3 w-3" />
+            Top
+          </button>
+        </div>
+
         <div className="ml-auto flex items-center gap-1">
           <button
             onClick={() => void handleSaveConfig()}
@@ -139,7 +218,7 @@ export function SysbaseEnvGen() {
 
       {/* ── Stepper ── */}
       <div className="flex items-center gap-1 overflow-x-auto border-b px-4 py-2">
-        {SYSBASE_GEN_STEPS.map((s, i) => (
+        {steps.map((s, i) => (
           <div key={s.key} className="flex items-center gap-1">
             <div
               className={cn(
@@ -154,7 +233,7 @@ export function SysbaseEnvGen() {
               {i < step && <Check className="h-2.5 w-2.5" />}
               {s.label}
             </div>
-            {i < SYSBASE_GEN_STEPS.length - 1 && (
+            {i < steps.length - 1 && (
               <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
             )}
           </div>
@@ -164,31 +243,12 @@ export function SysbaseEnvGen() {
       {/* ── Content ── */}
       <div className="flex-1 overflow-y-auto p-6">
         <div className="mx-auto max-w-3xl">
-          <h2 className="mb-1 text-base font-semibold">{currentStep.label}</h2>
+          <h2 className="mb-1 text-base font-semibold">{currentStep?.label}</h2>
           <p className="mb-4 text-xs text-muted-foreground">
             步骤 {step + 1} / {totalSteps}
           </p>
 
-          {/* Step content */}
-          {step === 0 ? (
-            <StepSubsys />
-          ) : step === 1 ? (
-            <StepRtl />
-          ) : step === 2 ? (
-            <StepDutSpec />
-          ) : step === 3 ? (
-            <StepMini />
-          ) : step === 4 ? (
-            <StepRal />
-          ) : step === 5 ? (
-            <StepClk />
-          ) : step === 6 ? (
-            <StepModIo />
-          ) : step === 7 ? (
-            <StepOptional />
-          ) : (
-            <StepReview />
-          )}
+          {renderStepContent()}
         </div>
       </div>
 
@@ -197,7 +257,7 @@ export function SysbaseEnvGen() {
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span>步骤 {step + 1} / {totalSteps}</span>
           <span className="opacity-30">·</span>
-          <span>{currentStep.label}</span>
+          <span>{currentStep?.label}</span>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -209,12 +269,10 @@ export function SysbaseEnvGen() {
             上一步
           </button>
           {isLastStep ? (
-            <button
-              className="flex items-center gap-1 rounded bg-primary/10 px-3 py-1 text-xs text-primary transition-colors hover:bg-primary/20"
-            >
+            <span className="flex items-center gap-1 rounded bg-primary/10 px-3 py-1 text-xs text-primary">
               <Play className="h-3 w-3" />
-              执行生成
-            </button>
+              执行生成（见下方）
+            </span>
           ) : (
             <button
               onClick={nextStep}
