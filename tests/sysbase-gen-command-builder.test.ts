@@ -6,12 +6,14 @@ const DEFAULT_SCRIPT = '/pri/project/tools/sprd/dv/sysbase/r3p4/bin/sysbase_gen.
 
 function makeFullConfig(): SysbaseGenConfig {
   return {
+    genLevel: 'subsys',
     subsys: 'apcpu_sys',
     instanceName: 'u_sys_apcpu',
     rtlFile: '$PROJ_RTL/apcpu_sys/design/rtl/top/apcpu_top_pwr_wrap.v',
     moduleName: 'apcpu_top_pwr_wrap',
     dutSpecPath: './materials/apcpu_sys_dut_spec.xlsx',
     miniExcelPath: './materials/sysbase_mini_case_apcpu.xlsx',
+    csvPath: '',
     ralDirs: [
       '$PROJ_RTL/apcpu_sys/design/spec/autoreg',
       '$PROJ_RTL/apcpu_sys/design/rtl/slv_fw_apcpu',
@@ -20,6 +22,31 @@ function makeFullConfig(): SysbaseGenConfig {
     clk2Dir: '',
     modIoPath: './materials/getModIO.log',
     filelistPath: './filelist.f',
+    pinlistPath: '',
+    dmalistPath: '',
+    outputDir: './',
+  };
+}
+
+/** Create a top-level config for testing. */
+function makeTopConfig(): SysbaseGenConfig {
+  return {
+    genLevel: 'top',
+    subsys: 'top',
+    instanceName: 'dut',
+    rtlFile: '$PROJ_RTL/top/design/rtl/top/kunlunn02_top.v',
+    moduleName: 'kunlunn02_top',
+    dutSpecPath: '',
+    miniExcelPath: '',
+    csvPath: './materials/top.csv',
+    ralDirs: [
+      '$PROJ_RTL/top/design/rtl/lp_sys/dvfs',
+      '$PROJ_RTL/top/design/rtl/lp_sys/pmu/reg',
+    ],
+    clkDir: '',
+    clk2Dir: '',
+    modIoPath: '',
+    filelistPath: '',
     pinlistPath: '',
     dmalistPath: '',
     outputDir: './',
@@ -146,6 +173,70 @@ describe('buildSysbaseCommand', () => {
 
   it('places -o as the last flag', () => {
     const config = makeFullConfig();
+    const cmd = buildSysbaseCommand(config, DEFAULT_SCRIPT);
+    const lines = cmd.split('\n');
+    const lastLine = lines[lines.length - 1];
+    expect(lastLine).toContain('-o');
+    expect(lastLine).toContain(config.outputDir);
+  });
+});
+
+describe('buildSysbaseCommand — top level', () => {
+  it('builds top command with only 6 params (-rtl -n -i -c -ral -o)', () => {
+    const config = makeTopConfig();
+    const cmd = buildSysbaseCommand(config, DEFAULT_SCRIPT);
+
+    // First line: python script gen
+    expect(cmd).toContain(`python3 ${DEFAULT_SCRIPT} gen`);
+    // Required top flags present
+    expect(cmd).toContain('-rtl');
+    expect(cmd).toContain('-n');
+    expect(cmd).toContain('-i');
+    expect(cmd).toContain('-c');
+    expect(cmd).toContain('-ral');
+    expect(cmd).toContain('-o');
+    // Subsys-only flags absent
+    expect(cmd).not.toContain('-x');
+    expect(cmd).not.toContain('-mini');
+    expect(cmd).not.toContain('-clk');
+    expect(cmd).not.toContain('-mod_io');
+  });
+
+  it('top command uses -c with csvPath', () => {
+    const config = makeTopConfig();
+    config.csvPath = './materials/top.csv';
+    const cmd = buildSysbaseCommand(config, DEFAULT_SCRIPT);
+    expect(cmd).toContain('-c');
+    expect(cmd).toContain('./materials/top.csv');
+  });
+
+  it('top command uses default instance name dut', () => {
+    const config = makeTopConfig();
+    expect(config.instanceName).toBe('dut');
+    const cmd = buildSysbaseCommand(config, DEFAULT_SCRIPT);
+    expect(cmd).toContain('-i');
+    expect(cmd).toContain('dut');
+  });
+
+  it('top command joins multiple ralDirs with spaces', () => {
+    const config = makeTopConfig();
+    config.ralDirs = ['/path/to/ral1', '/path/to/ral2'];
+    const cmd = buildSysbaseCommand(config, DEFAULT_SCRIPT);
+    expect(cmd).toContain('/path/to/ral1 /path/to/ral2');
+  });
+
+  it('top command uses backslash line continuation', () => {
+    const config = makeTopConfig();
+    const cmd = buildSysbaseCommand(config, DEFAULT_SCRIPT);
+    const lines = cmd.split('\n');
+    expect(lines.length).toBeGreaterThan(1);
+    for (let i = 0; i < lines.length - 1; i++) {
+      expect(lines[i].trimEnd().endsWith('\\')).toBe(true);
+    }
+  });
+
+  it('top command places -o as the last flag', () => {
+    const config = makeTopConfig();
     const cmd = buildSysbaseCommand(config, DEFAULT_SCRIPT);
     const lines = cmd.split('\n');
     const lastLine = lines[lines.length - 1];
