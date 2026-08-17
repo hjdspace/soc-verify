@@ -34,8 +34,8 @@ type ConfigEntry = {
   required: boolean;
 };
 
-/** Build the list of config entries for the summary table. */
-function buildEntries(config: SysbaseGenConfig): ConfigEntry[] {
+/** Build the list of config entries for the subsys summary table. */
+function buildSubsysEntries(config: SysbaseGenConfig): ConfigEntry[] {
   return [
     { flag: '-rtl', value: config.rtlFile, required: true },
     { flag: '-n', value: config.subsys, required: true },
@@ -48,6 +48,18 @@ function buildEntries(config: SysbaseGenConfig): ConfigEntry[] {
     { flag: '-mod_io', value: config.modIoPath, required: true },
     { flag: '-pinlist', value: config.pinlistPath, required: false },
     { flag: '-dmalist', value: config.dmalistPath, required: false },
+    { flag: '-o', value: config.outputDir, required: true },
+  ];
+}
+
+/** Build the list of config entries for the top-level summary table. */
+function buildTopEntries(config: SysbaseGenConfig): ConfigEntry[] {
+  return [
+    { flag: '-rtl', value: config.rtlFile, required: true },
+    { flag: '-n', value: config.subsys, required: true },
+    { flag: '-i', value: config.instanceName, required: true },
+    { flag: '-c', value: config.csvPath, required: true },
+    { flag: '-ral', value: config.ralDirs.join(' '), required: true },
     { flag: '-o', value: config.outputDir, required: true },
   ];
 }
@@ -128,7 +140,9 @@ export function StepReview() {
   const [copied, setCopied] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
-  const entries = buildEntries(config);
+  const entries = config.genLevel === 'top'
+    ? buildTopEntries(config)
+    : buildSubsysEntries(config);
 
   // Fetch command preview via tRPC
   useEffect(() => {
