@@ -232,16 +232,16 @@ describe('StepReview (Step 9)', () => {
   });
 
   it('shows 未设置 for empty optional parameters', () => {
-    // clk2Dir, pinlistPath, dmalistPath are empty in mock config
+    // pinlistPath, dmalistPath are empty in mock config; clk2Dir is also empty
     render(<StepReview />);
     const unsetElements = screen.getAllByText('未设置');
     expect(unsetElements.length).toBeGreaterThanOrEqual(3);
   });
 
-  it('shows 可选 badge for optional parameters', () => {
+  it('shows 可选 badge for optional parameters (clk, clk2, pinlist, dmalist)', () => {
     render(<StepReview />);
     const optionalBadges = screen.getAllByText('可选');
-    expect(optionalBadges.length).toBeGreaterThanOrEqual(3);
+    expect(optionalBadges.length).toBeGreaterThanOrEqual(4);
   });
 });
 
