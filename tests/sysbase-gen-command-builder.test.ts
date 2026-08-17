@@ -76,12 +76,14 @@ describe('buildSysbaseCommand', () => {
     expect(cmd).not.toContain('-dmalist');
   });
 
-  it('includes optional -clk2 when clk2Dir is set', () => {
+  it('includes optional -clk2 when clk2Dir is set (and -clk also present)', () => {
     const config = makeFullConfig();
     config.clk2Dir = '$PROJ_RTL/apcpu_sys/design/rtl/clk2,clk2_prefix';
     const cmd = buildSysbaseCommand(config, DEFAULT_SCRIPT);
     expect(cmd).toContain('-clk2');
     expect(cmd).toContain('$PROJ_RTL/apcpu_sys/design/rtl/clk2,clk2_prefix');
+    // -clk should also be present since makeFullConfig sets clkDir
+    expect(cmd).toContain('-clk ');
   });
 
   it('includes optional -pinlist when pinlistPath is set', () => {
@@ -162,6 +164,24 @@ describe('buildSysbaseCommand', () => {
     expect(cmd).toContain('-clk2');
     expect(cmd).toContain('-pinlist');
     expect(cmd).toContain('-dmalist');
+  });
+
+  it('omits -clk when clkDir is empty (optional)', () => {
+    const config = makeFullConfig();
+    config.clkDir = '';
+    config.clk2Dir = '';
+    const cmd = buildSysbaseCommand(config, DEFAULT_SCRIPT);
+    // -clk flag should not appear (neither -clk nor -clk2)
+    expect(cmd).not.toContain('-clk');
+  });
+
+  it('includes -clk when clkDir is set', () => {
+    const config = makeFullConfig();
+    config.clkDir = '/path/to/clk';
+    config.clk2Dir = '';
+    const cmd = buildSysbaseCommand(config, DEFAULT_SCRIPT);
+    expect(cmd).toContain('-clk     /path/to/clk');
+    expect(cmd).not.toContain('-clk2');
   });
 
   it('handles single ralDir', () => {
