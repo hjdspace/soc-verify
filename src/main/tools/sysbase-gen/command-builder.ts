@@ -4,7 +4,9 @@
  * Serializes a `SysbaseGenConfig` into a formatted multi-line command string
  * with backslash line continuation and aligned flags.
  *
- * Format:
+ * Two modes depending on `config.genLevel`:
+ *
+ * subsys:
  *   python3 <scriptPath> gen \
  *       -rtl     <rtlFile> \
  *       -n       <subsys> \
@@ -18,6 +20,15 @@
  *       [-pinlist <pinlistPath>] \
  *       [-dmalist <dmalistPath>] \
  *       -o       <outputDir>
+ *
+ * top:
+ *   python3 <scriptPath> gen \
+ *       -rtl  <rtlFile> \
+ *       -n    <subsys> \
+ *       -i    <instanceName> \
+ *       -c    <csvPath> \
+ *       -ral  <ralDirs.join(' ')> \
+ *       -o    <outputDir>
  */
 
 import type { SysbaseGenConfig } from '../../../shared/types/sysbase-gen';
@@ -31,11 +42,38 @@ const FLAG_WIDTH = 8;
 /**
  * Build a formatted `sysbase_gen.py` command string from wizard config.
  *
- * @param config     Wizard configuration (all 14 fields)
+ * @param config     Wizard configuration (all fields)
  * @param scriptPath Path to `sysbase_gen.py`
  * @returns Multi-line command string with backslash continuation
  */
 export function buildSysbaseCommand(config: SysbaseGenConfig, scriptPath: string): string {
+  if (config.genLevel === 'top') {
+    return buildTopCommand(config, scriptPath);
+  }
+  return buildSubsysCommand(config, scriptPath);
+}
+
+/**
+ * Build the top-level gen command (6 params: -rtl -n -i -c -ral -o).
+ */
+function buildTopCommand(config: SysbaseGenConfig, scriptPath: string): string {
+  const lines: string[] = [];
+
+  lines.push(`${PYTHON_BIN} ${scriptPath} gen`);
+  lines.push(formatLine('-rtl', config.rtlFile));
+  lines.push(formatLine('-n', config.subsys));
+  lines.push(formatLine('-i', config.instanceName));
+  lines.push(formatLine('-c', config.csvPath));
+  lines.push(formatLine('-ral', config.ralDirs.join(' ')));
+  lines.push(formatLine('-o', config.outputDir));
+
+  return lines.map((line, i) => (i < lines.length - 1 ? `${line} \\` : line)).join('\n');
+}
+
+/**
+ * Build the subsys-level gen command (all 14 params).
+ */
+function buildSubsysCommand(config: SysbaseGenConfig, scriptPath: string): string {
   const lines: string[] = [];
 
   // Header line: python3 <script> gen
