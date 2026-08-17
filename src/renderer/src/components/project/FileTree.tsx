@@ -1,5 +1,5 @@
 import { useState, useCallback, memo, useEffect } from 'react';
-import { ChevronRight, ChevronDown, File, Folder, FolderOpen, FolderOpen as OpenIcon, Copy, CopyPlus, Plus } from 'lucide-react';
+import { ChevronRight, ChevronDown, File, Folder, FolderOpen, FolderOpen as OpenIcon, Copy, CopyPlus, Plus, Trash2 } from 'lucide-react';
 import type { FileTreeNode } from '@shared/types';
 import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
@@ -120,6 +120,48 @@ export function FileTree({ node, onSelectFile, selectedPath, projectRootPath }: 
     setContextMenu((s) => ({ ...s, visible: false }));
   }, [contextMenu.node, currentSessionId, addContextFile, toast]);
 
+  // ─── Delete file / directory ──────────────────────────
+  //
+  // 删除流程：右键点击 → 菜单中选「删除」→ 弹出确认弹窗 →
+  // 用户确认 → 调用 tRPC deleteNode → file watcher 自动刷新树
+  const [deleteConfirm, setDeleteConfirm] = useState<
+    { node: FileTreeNode } | null
+  >(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDeleteClick = useCallback(() => {
+    const targetNode = contextMenu.node;
+    if (!targetNode) return;
+    setContextMenu((s) => ({ ...s, visible: false }));
+    setDeleteConfirm({ node: targetNode });
+  }, [contextMenu.node]);
+
+  const handleDeleteConfirm = useCallback(async () => {
+    const targetNode = deleteConfirm?.node;
+    if (!targetNode || !projectId) return;
+    setDeleting(true);
+    try {
+      await trpc.project.deleteNode.mutate({
+        projectId,
+        path: targetNode.path,
+      });
+      useToastStore.getState().success(
+        '删除成功',
+        targetNode.type === 'directory'
+          ? `已删除文件夹「${targetNode.name}」`
+          : `已删除文件「${targetNode.name}」`,
+      );
+    } catch (err) {
+      useToastStore.getState().error(
+        '删除失败',
+        err instanceof Error ? err.message : String(err),
+      );
+    } finally {
+      setDeleting(false);
+      setDeleteConfirm(null);
+    }
+  }, [deleteConfirm, projectId]);
+
   return (
     <>
       <FileTreeNode
@@ -166,6 +208,56 @@ export function FileTree({ node, onSelectFile, selectedPath, projectRootPath }: 
             <Plus className="h-3 w-3 text-muted-foreground" />
             <span>添加到上下文</span>
           </button>
+          <div className="border-t border-border/50" />
+          <button
+            onClick={handleDeleteClick}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent hover:text-destructive"
+          >
+            <Trash2 className="h-3 w-3 text-muted-foreground" />
+            <span>删除</span>
+          </button>
+        </div>
+      )}
+
+      {/* ─── 删除确认弹窗 ────────────────────────────── */}
+      {deleteConfirm && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40"
+          onClick={() => !deleting && setDeleteConfirm(null)}
+        >
+          <div
+            className="w-80 rounded-lg border border-border bg-popover p-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-2 flex items-center gap-2">
+              <Trash2 className="h-4 w-4 text-destructive" />
+              <span className="text-sm font-semibold text-foreground">确认删除</span>
+            </div>
+            <p className="mb-4 text-xs text-muted-foreground">
+              {deleteConfirm.node.type === 'directory'
+                ? `将递归删除文件夹「${deleteConfirm.node.name}」及其所有内容，此操作不可撤销。`
+                : `将删除文件「${deleteConfirm.node.name}」，此操作不可撤销。`}
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                disabled={deleting}
+                className="rounded-md border border-border px-3 py-1 text-xs text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleDeleteConfirm}
+                disabled={deleting}
+                className="flex items-center gap-1.5 rounded-md bg-destructive px-3 py-1 text-xs text-destructive-foreground transition-colors hover:bg-destructive/90 disabled:opacity-50"
+              >
+                {deleting && (
+                  <span className="h-2.5 w-2.5 animate-spin rounded-full border border-current border-t-transparent" />
+                )}
+                删除
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </>
