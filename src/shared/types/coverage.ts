@@ -97,7 +97,7 @@ export type UncoveredItem = {
 
 /**
  * 测试用例覆盖率贡献度。
- * 来源于 urg -grade testfile（VCS）或 imc report -test（Cadence）。
+ * 来源于 urg -grade testfile（VCS）或 imc report -grading（Cadence）。
  * 用于 AI 分析哪些测试用例对覆盖率提升有效，辅助收敛决策。
  */
 export type TestContribution = {
@@ -107,7 +107,7 @@ export type TestContribution = {
   score?: number;
   /** 排名（1 = 贡献最大） */
   rank?: number;
-  /** 各 metric 的覆盖率百分比（IMC report -test 格式） */
+  /** 各 metric 的覆盖率百分比（IMC report -grading 格式） */
   coverage?: Partial<Record<CoverageMetric, number>>;
 };
 
@@ -128,7 +128,7 @@ export type EdaToolConfig = {
   metricsCommand?: string;
   /** CSV 格式覆盖率报告命令（urg -format csv），生成结构化数据供 AI 消费 */
   csvCommand?: string;
-  /** 测试用例贡献度分析命令（urg -grade testfile / imc report -test） */
+  /** 测试用例贡献度分析命令（urg -grade testfile / imc report -grading） */
   gradeCommand?: string;
   /** Covergroup bin 级覆盖详情命令（imc report -detail -metrics functional / urg -detail） */
   binsCommand?: string;
@@ -145,7 +145,7 @@ export type EdaToolConfig = {
  *
  * Cadence IMC 工具说明：
  *   - IMC 通过 TCL `report` 子命令生成文本报告，用 `-execcmd` 直接执行单条命令
- *   - `report -test` 生成按测试用例的覆盖率贡献分析（等效 urg -grade testfile）
+ *   - `report -grading` 生成按测试用例的覆盖率贡献分析（等效 urg -grade testfile）
  *   - `report -detail -metrics functional` 生成 covergroup bin 级覆盖详情
  *   - IMC 不支持 CSV 格式输出，csvCommand 为 undefined
  */
@@ -161,7 +161,7 @@ export const DEFAULT_EDA_COMMANDS: Readonly<Record<Exclude<EdaTool, 'unknown'>, 
       'imc -load {covMergeDir} -execcmd "report -metrics overall -out {reportDir}/metrics.txt"',
     // IMC 不支持 CSV 格式，不设 csvCommand
     gradeCommand:
-      'imc -load {covMergeDir} -execcmd "report -test -out {reportDir}/grade.txt"',
+      'imc -load {covMergeDir} -execcmd "report -grading -out {reportDir}/grade.txt"',
     binsCommand:
       'imc -load {covMergeDir} -execcmd "report -detail -metrics functional -all -out {reportDir}/bins.txt"',
   },
@@ -207,10 +207,16 @@ export type CoverageData = {
   uncovered?: Partial<Record<CoverageMetric, UncoveredItem[]>>;
   /** metrics 报告解析出的额外维度（密度/复杂度等）。 */
   metrics?: Record<string, number>;
-  /** 测试用例覆盖率贡献度（urg -grade testfile / imc report -test）。 */
+  /** 测试用例覆盖率贡献度（urg -grade testfile / imc report -grading）。 */
   testContributions?: TestContribution[];
   /** CSV 原始覆盖率数据（urg -format csv 生成的结构化数据）。 */
   csvData?: string;
+  /**
+   * 分层解析标记（ADR 0006 扩展）。
+   * true=仅解析了 summary 报告，detail/grade/bins/csv 未解析。
+   * 用户可通过 UI 触发按需详细解析来补充这些数据。
+   */
+  summaryOnly?: boolean;
 };
 
 // ─── Coverage Merge Session（ADR 0008） ─────────────────────────
