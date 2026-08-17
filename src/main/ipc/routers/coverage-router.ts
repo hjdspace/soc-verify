@@ -58,6 +58,17 @@ import {
 const orchestrators = new Map<string, ClosureOrchestrator>();
 
 /**
+ * 向所有 BrowserWindow 转发覆盖率详细解析进度事件。
+ */
+function emitCoverageDetailProgress(event: ImportProgressEvent): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('coverage:detail-progress', event);
+    }
+  }
+}
+
+/**
  * 向所有 BrowserWindow 转发覆盖率导入进度事件。
  */
 function emitCoverageImportProgress(event: ImportProgressEvent): void {
@@ -228,6 +239,38 @@ export const coverageRouter = t.router({
       const project = requireProject(input.projectId);
       const mgr = buildManager(project.rootPath);
       return mgr.getImportLog(input.sessionId);
+    }),
+
+  // ─── 按需详细解析（ADR 0006 扩展：分层解析第二步） ──────────
+
+  parseDetails: t.procedure
+    .input((raw): { projectId: string; sessionId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and sessionId are required' });
+      }
+      return { projectId: r.projectId, sessionId: r.sessionId };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      // 加载 EDA 配置以获取命令模板
+      let edaConfig = await loadEdaConfig(project.rootPath);
+      if (!edaConfig) {
+        // 回退到默认 imc 配置
+        edaConfig = normalizeConfig({ tool: 'imc', covMergeDir: '' });
+      }
+      const result = await mgr.parseDetails(
+        input.sessionId,
+        edaConfig,
+        emitCoverageDetailProgress,
+      );
+      const summary = summarizeCoverage(result.root);
+      return {
+        sessionId: result.sessionId,
+        summary,
+        summaryOnly: result.summaryOnly ?? false,
+      };
     }),
 
   // ─── Session 生命周期（ADR 0008） ─────────────────────────────
