@@ -145,6 +145,7 @@ const EDA_ENV_VARS = [
   'VERDI_HOME',
   'NOVAS_HOME',
   'VCS_HOME',
+  'XCELIUM_HOME',
   'XLM_ROOT',
   'CDS_INST_DIR',
   'SNPSLMD_LICENSE_FILE',
@@ -183,6 +184,14 @@ export function buildTraceweaveMcpConfig(): McpServerConfig | null {
     if (value) {
       env[key] = value;
     }
+  }
+
+  // XLM_ROOT fallback: if XLM_ROOT is not set but XCELIUM_HOME is,
+  // use XCELIUM_HOME as XLM_ROOT so TraceWeave can locate Xcelium.
+  // Many installations set XCELIUM_HOME (the standard variable name)
+  // rather than XLM_ROOT (which TraceWeave specifically reads).
+  if (!env.XLM_ROOT && env.XCELIUM_HOME) {
+    env.XLM_ROOT = env.XCELIUM_HOME;
   }
 
   // Always include PATH (even if not in process.env, TraceWeave needs it
