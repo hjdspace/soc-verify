@@ -3,8 +3,11 @@
  *
  * Provides:
  *   - Filelist file selection (browse button)
- *   - Module name read-only display (auto-filled from Step 2)
+ *   - Module name editable input (auto-filled from Step 2, but user can override)
+ *   - Optional -module_list file selection (target module list file)
+ *   - Optional -target_scope input (hierarchy path, e.g. tb_top.chip.dut.u_sys_cpu)
  *   - "生成 Module IO" button to trigger generateModIo
+ *   - Prominent progress banner when generation is running (process is slow)
  *   - Terminal area for streaming execution output
  *   - Output file path auto-fill on success
  *
@@ -12,7 +15,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { FolderOpen, Play, Info, AlertTriangle, Loader2, Cpu, FileText, Terminal } from 'lucide-react';
+import { FolderOpen, Play, Info, AlertTriangle, Loader2, Cpu, FileText, Terminal, Clock } from 'lucide-react';
 import { useSysbaseGenStore } from '@renderer/stores/sysbase-gen';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
@@ -82,6 +85,24 @@ export function StepModIo() {
     }
   };
 
+  // ── Module list browse ──
+  const handleBrowseModuleList = async () => {
+    try {
+      const result = await trpc.tools.selectFiles.mutate({
+        title: '选择 Module List 文件',
+        filters: [
+          { name: '文本文件', extensions: ['txt', 'list', 'f'] },
+          { name: '所有文件', extensions: ['*'] },
+        ],
+      });
+      if (result.paths.length > 0) {
+        updateConfig({ moduleListPath: result.paths[0] });
+      }
+    } catch {
+      // best-effort
+    }
+  };
+
   // ── Generate Module IO ──
   const handleGenerate = useCallback(async () => {
     if (!config.filelistPath || !config.moduleName) return;
@@ -95,6 +116,8 @@ export function StepModIo() {
       const result = await trpc.tools.sysbaseGen.generateModIo.mutate({
         filelist: config.filelistPath,
         moduleName: config.moduleName,
+        moduleList: config.moduleListPath || undefined,
+        targetScope: config.targetScope || undefined,
       });
 
       if (result.success) {
@@ -109,7 +132,7 @@ export function StepModIo() {
       setModIoError(msg);
       setGenStatus('failed');
     }
-  }, [config.filelistPath, config.moduleName, setModIoLoading, setModIoError, clearModIoLogs, updateConfig]);
+  }, [config.filelistPath, config.moduleName, config.moduleListPath, config.targetScope, setModIoLoading, setModIoError, clearModIoLogs, updateConfig]);
 
   const hasModule = config.moduleName.trim() !== '';
 
@@ -121,8 +144,26 @@ export function StepModIo() {
         <span>
           通过 Verdi 的 <code className="font-mono">getModIO_batch.p</code> 脚本从 filelist 中提取 Module IO 信息。
           需要配置 <code className="font-mono">VERDI_HOME</code> 环境变量。
+          此过程可能较慢，请耐心等待。
         </span>
       </div>
+
+      {/* ── Prominent progress banner when generating ── */}
+      {modIoLoading && (
+        <div className="flex items-center gap-3 rounded-md border border-primary/30 bg-primary/5 p-4">
+          <Loader2 className="h-5 w-5 shrink-0 animate-spin text-primary" />
+          <div className="flex-1">
+            <div className="text-sm font-medium text-primary">正在生成 Module IO...</div>
+            <div className="mt-0.5 text-xs text-muted-foreground">
+              正在执行 Verdi getModIO 脚本，该过程可能需要较长时间，请勿关闭窗口
+            </div>
+          </div>
+          <div className="flex items-center gap-1 rounded-full bg-primary/10 px-2.5 py-1 text-[10px] font-medium text-primary">
+            <Clock className="h-3 w-3" />
+            执行中
+          </div>
+        </div>
+      )}
 
       {/* Error */}
       {modIoError && (
@@ -160,12 +201,12 @@ export function StepModIo() {
         </div>
       </div>
 
-      {/* Module name (read-only from Step 2) */}
+      {/* Module name (editable, auto-filled from Step 2) */}
       <div className="space-y-1.5">
         <div className="flex items-center gap-1">
           <span className="text-xs font-medium">Module 名</span>
           <span className="ml-auto flex items-center gap-1">
-            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">从 Step 2</span>
+            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">从 Step 2 自动填充，可修改</span>
             <span className="rounded bg-info/10 px-1.5 py-0.5 text-[10px] font-mono text-info-foreground">-modules</span>
           </span>
         </div>
@@ -173,17 +214,72 @@ export function StepModIo() {
           <input
             type="text"
             value={config.moduleName}
-            readOnly
-            placeholder={hasModule ? '' : '请在 Step 2 中选择 RTL 文件以提取 module 名'}
+            onChange={(e) => updateConfig({ moduleName: e.target.value })}
+            placeholder={hasModule ? '' : '请在 Step 2 中选择 RTL 文件以提取 module 名，或手动输入'}
             className={cn(
-              'flex-1 rounded-md border border-border bg-muted/30 px-3 py-1.5 font-mono text-xs text-muted-foreground',
-              hasModule && 'text-foreground',
+              'flex-1 rounded-md border border-border bg-background px-3 py-1.5 font-mono text-xs text-foreground',
+              'focus:outline-none focus:ring-1 focus:ring-primary',
             )}
           />
           {!hasModule && (
             <span className="text-[10px] text-muted-foreground">未设置</span>
           )}
         </div>
+      </div>
+
+      {/* ── Optional: -module_list (Target Module List File) ── */}
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-1">
+          <span className="text-xs font-medium">Target Module List 文件</span>
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">可选</span>
+          <span className="ml-auto rounded bg-info/10 px-1.5 py-0.5 text-[10px] font-mono text-info-foreground">-module_list</span>
+        </div>
+        <div className="flex gap-1">
+          <input
+            type="text"
+            value={config.moduleListPath}
+            onChange={(e) => updateConfig({ moduleListPath: e.target.value })}
+            placeholder="选择或输入 module list 文件路径..."
+            className={cn(
+              'flex-1 rounded-md border border-border bg-background px-3 py-1.5 font-mono text-xs',
+              'focus:outline-none focus:ring-1 focus:ring-primary',
+            )}
+          />
+          <button
+            onClick={handleBrowseModuleList}
+            className="flex items-center gap-1 rounded-md border border-border px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <FolderOpen className="h-3.5 w-3.5" />
+            浏览
+          </button>
+        </div>
+        <p className="text-[10px] text-muted-foreground">
+          指定目标 Module 列表文件，脚本将仅生成列表中的 module IO
+        </p>
+      </div>
+
+      {/* ── Optional: -target_scope (Target Scope hierarchy path) ── */}
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-1">
+          <span className="text-xs font-medium">Target Scope</span>
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">可选</span>
+          <span className="ml-auto rounded bg-info/10 px-1.5 py-0.5 text-[10px] font-mono text-info-foreground">-target_scope</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="text"
+            value={config.targetScope}
+            onChange={(e) => updateConfig({ targetScope: e.target.value })}
+            placeholder="输入 hierarchy 层级路径，如 tb_top.chip.dut.u_sys_cpu"
+            className={cn(
+              'flex-1 rounded-md border border-border bg-background px-3 py-1.5 font-mono text-xs',
+              'focus:outline-none focus:ring-1 focus:ring-primary',
+            )}
+          />
+        </div>
+        <p className="text-[10px] text-muted-foreground">
+          指定目标层级路径（hierarchy path），用于限定 Module IO 生成的范围
+        </p>
       </div>
 
       {/* Generate button */}
