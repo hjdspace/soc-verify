@@ -173,20 +173,21 @@ export function StepRtl() {
         )}
       </div>
 
-      {/* Module name (auto-extracted) */}
+      {/* Module name (auto-extracted, editable) */}
       {config.rtlFile && (
         <div className="space-y-1.5">
           <div className="flex items-center gap-1">
-            <span className="text-xs font-medium">Module 名（自动提取）</span>
+            <span className="text-xs font-medium">Module 名（自动提取，可修改）</span>
           </div>
           <div className="flex items-center gap-2">
             <input
               type="text"
               value={config.moduleName}
-              readOnly
-              placeholder="未检测到 module 声明"
+              onChange={(e) => updateConfig({ moduleName: e.target.value })}
+              placeholder="未检测到 module 声明，可手动输入"
               className={cn(
-                'flex-1 rounded-md border border-border bg-background/50 px-3 py-1.5 font-mono text-xs opacity-70',
+                'flex-1 rounded-md border border-border bg-background px-3 py-1.5 font-mono text-xs',
+                'focus:outline-none focus:ring-1 focus:ring-primary',
               )}
             />
             {config.moduleName && (
@@ -196,7 +197,7 @@ export function StepRtl() {
             )}
           </div>
           <p className="text-[10px] text-muted-foreground">
-            选中文件: {selectedFileName}
+            选中文件: {selectedFileName}（可在 Step 7 Module IO 步骤中进一步修改）
           </p>
         </div>
       )}
