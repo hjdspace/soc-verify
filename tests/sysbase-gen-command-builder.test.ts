@@ -22,6 +22,8 @@ function makeFullConfig(): SysbaseGenConfig {
     clk2Dir: '',
     modIoPath: './materials/getModIO.log',
     filelistPath: './filelist.f',
+    moduleListPath: '',
+    targetScope: '',
     pinlistPath: '',
     dmalistPath: '',
     outputDir: './',
@@ -47,6 +49,8 @@ function makeTopConfig(): SysbaseGenConfig {
     clk2Dir: '',
     modIoPath: '',
     filelistPath: '',
+    moduleListPath: '',
+    targetScope: '',
     pinlistPath: '',
     dmalistPath: '',
     outputDir: './',
@@ -110,7 +114,7 @@ describe('buildSysbaseCommand', () => {
       '/path/to/ral3',
     ];
     const cmd = buildSysbaseCommand(config, DEFAULT_SCRIPT);
-    expect(cmd).toContain('-ral     /path/to/ral1 /path/to/ral2 /path/to/ral3');
+    expect(cmd).toContain('-ral          /path/to/ral1 /path/to/ral2 /path/to/ral3');
   });
 
   it('uses custom script path in the command', () => {
@@ -175,12 +179,37 @@ describe('buildSysbaseCommand', () => {
     expect(cmd).not.toContain('-clk');
   });
 
+  it('includes -module_list when moduleListPath is set', () => {
+    const config = makeFullConfig();
+    config.moduleListPath = '/path/to/module_list.txt';
+    const cmd = buildSysbaseCommand(config, DEFAULT_SCRIPT);
+    expect(cmd).toContain('-module_list');
+    expect(cmd).toContain('/path/to/module_list.txt');
+  });
+
+  it('includes -target_scope when targetScope is set', () => {
+    const config = makeFullConfig();
+    config.targetScope = 'tb_top.chip.dut.u_sys_cpu';
+    const cmd = buildSysbaseCommand(config, DEFAULT_SCRIPT);
+    expect(cmd).toContain('-target_scope');
+    expect(cmd).toContain('tb_top.chip.dut.u_sys_cpu');
+  });
+
+  it('omits -module_list and -target_scope when empty', () => {
+    const config = makeFullConfig();
+    config.moduleListPath = '';
+    config.targetScope = '';
+    const cmd = buildSysbaseCommand(config, DEFAULT_SCRIPT);
+    expect(cmd).not.toContain('-module_list');
+    expect(cmd).not.toContain('-target_scope');
+  });
+
   it('includes -clk when clkDir is set', () => {
     const config = makeFullConfig();
     config.clkDir = '/path/to/clk';
     config.clk2Dir = '';
     const cmd = buildSysbaseCommand(config, DEFAULT_SCRIPT);
-    expect(cmd).toContain('-clk     /path/to/clk');
+    expect(cmd).toContain('-clk          /path/to/clk');
     expect(cmd).not.toContain('-clk2');
   });
 
@@ -188,7 +217,7 @@ describe('buildSysbaseCommand', () => {
     const config = makeFullConfig();
     config.ralDirs = ['/single/ral/dir'];
     const cmd = buildSysbaseCommand(config, DEFAULT_SCRIPT);
-    expect(cmd).toContain('-ral     /single/ral/dir');
+    expect(cmd).toContain('-ral          /single/ral/dir');
   });
 
   it('places -o as the last flag', () => {
