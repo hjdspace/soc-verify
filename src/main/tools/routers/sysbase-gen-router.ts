@@ -226,6 +226,8 @@ export const sysbaseGenRouter = t.router({
       projectDir?: string;
       outputFile?: string;
       cwd?: string;
+      moduleList?: string;
+      targetScope?: string;
     } => {
       const r = raw as Record<string, unknown>;
       const filelist = reqString(r, 'filelist');
@@ -242,6 +244,8 @@ export const sysbaseGenRouter = t.router({
         projectDir: optStringUndef(r, 'projectDir'),
         outputFile: optStringUndef(r, 'outputFile'),
         cwd: optStringUndef(r, 'cwd'),
+        moduleList: optStringUndef(r, 'moduleList'),
+        targetScope: optStringUndef(r, 'targetScope'),
       };
     })
     .mutation(async ({ input }) => {
@@ -281,6 +285,8 @@ export const sysbaseGenRouter = t.router({
         outputFile,
         cwd,
         onEvent,
+        input.moduleList,
+        input.targetScope,
       );
 
       return {
