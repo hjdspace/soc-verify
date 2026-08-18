@@ -46,6 +46,8 @@ function buildSubsysEntries(config: SysbaseGenConfig): ConfigEntry[] {
     { flag: '-clk', value: config.clkDir, required: false },
     { flag: '-clk2', value: config.clk2Dir, required: false },
     { flag: '-mod_io', value: config.modIoPath, required: true },
+    { flag: '-module_list', value: config.moduleListPath, required: false },
+    { flag: '-target_scope', value: config.targetScope, required: false },
     { flag: '-pinlist', value: config.pinlistPath, required: false },
     { flag: '-dmalist', value: config.dmalistPath, required: false },
     { flag: '-o', value: config.outputDir, required: true },
