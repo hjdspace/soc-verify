@@ -286,35 +286,43 @@ describe('sysbase-gen-router', () => {
 
   describe('inferRalDirs', () => {
     it('finds directories containing both for_de and for_dv under spec/', async () => {
-      // Create: spec/ral_block/with for_de + for_dv
-      const ralBlockDir = join(projRtlDir, 'apcpu_sys', 'design', 'spec', 'ral_block');
+      // Create: spec/parent/ral_block/with for_de + for_dv
+      // Matched dir = ral_block, parent = parent (the -ral value)
+      const parentDir = join(projRtlDir, 'apcpu_sys', 'design', 'spec', 'parent');
+      const ralBlockDir = join(parentDir, 'ral_block');
       mkdirSync(join(ralBlockDir, 'for_de'), { recursive: true });
       mkdirSync(join(ralBlockDir, 'for_dv'), { recursive: true });
 
       const result = await caller.inferRalDirs({ subsys: 'apcpu_sys' });
 
-      expect(result.dirs).toContain(ralBlockDir);
+      // Should return the parent dir (dirname of ral_block)
+      expect(result.dirs).toContain(parentDir);
     });
 
     it('finds directories containing both for_de and for_dv under rtl/', async () => {
-      const ralInRtl = join(projRtlDir, 'apcpu_sys', 'design', 'rtl', 'sub_ral');
+      // Matched dir = sub_ral, parent = ral_parent (the -ral value)
+      const ralParent = join(projRtlDir, 'apcpu_sys', 'design', 'rtl', 'ral_parent');
+      const ralInRtl = join(ralParent, 'sub_ral');
       mkdirSync(join(ralInRtl, 'for_de'), { recursive: true });
       mkdirSync(join(ralInRtl, 'for_dv'), { recursive: true });
 
       const result = await caller.inferRalDirs({ subsys: 'apcpu_sys' });
 
-      expect(result.dirs).toContain(ralInRtl);
+      expect(result.dirs).toContain(ralParent);
     });
 
     it('finds nested directories up to max depth 5', async () => {
       // spec/a/b/c/ral_deep/with for_de + for_dv (depth 4 from spec)
+      // Matched dir = ral_deep, parent = c (the -ral value)
       const deepDir = join(projRtlDir, 'apcpu_sys', 'design', 'spec', 'a', 'b', 'c', 'ral_deep');
       mkdirSync(join(deepDir, 'for_de'), { recursive: true });
       mkdirSync(join(deepDir, 'for_dv'), { recursive: true });
 
       const result = await caller.inferRalDirs({ subsys: 'apcpu_sys' });
 
-      expect(result.dirs).toContain(deepDir);
+      // Should return the parent dir (c), not the matched dir (ral_deep)
+      const expectedParent = join(projRtlDir, 'apcpu_sys', 'design', 'spec', 'a', 'b', 'c');
+      expect(result.dirs).toContain(expectedParent);
     });
 
     it('does not include directories with only for_de', async () => {
@@ -382,8 +390,8 @@ describe('sysbase-gen-router', () => {
       expect(result.dirs).not.toContain(g1Dir);
     });
 
-    it('keeps single for_de/for_dv dir as-is (no collapse)', async () => {
-      // Only one subdir with for_de/for_dv — should NOT collapse to parent
+    it('keeps single for_de/for_dv dir as-is (returns parent)', async () => {
+      // Only one subdir with for_de/for_dv — parent is returned
       const parentDir = join(projRtlDir, 'apcpu_sys', 'design', 'spec', 'single_parent');
       const childDir = join(parentDir, 'only_child');
       mkdirSync(join(childDir, 'for_de'), { recursive: true });
@@ -391,8 +399,89 @@ describe('sysbase-gen-router', () => {
 
       const result = await caller.inferRalDirs({ subsys: 'apcpu_sys' });
 
-      expect(result.dirs).toContain(childDir);
-      expect(result.dirs).not.toContain(parentDir);
+      // Parent is returned (dirname of the matched dir)
+      expect(result.dirs).toContain(parentDir);
+      expect(result.dirs).not.toContain(childDir);
+    });
+
+    it('collapses three sibling reg dirs (reg_a_rf, reg_b_rf, reg_c_rf) to parent reg/', async () => {
+      // Simulate the user's scenario:
+      //   rtl/reg/reg_a_rf/for_de + for_dv
+      //   rtl/reg/reg_b_rf/for_de + for_dv
+      //   rtl/reg/reg_c_rf/for_de + for_dv
+      // Expected: collapse to rtl/reg/
+      const regParent = join(projRtlDir, 'apcpu_sys', 'design', 'rtl', 'reg');
+      const regA = join(regParent, 'reg_a_rf');
+      const regB = join(regParent, 'reg_b_rf');
+      const regC = join(regParent, 'reg_c_rf');
+      mkdirSync(join(regA, 'for_de'), { recursive: true });
+      mkdirSync(join(regA, 'for_dv'), { recursive: true });
+      mkdirSync(join(regB, 'for_de'), { recursive: true });
+      mkdirSync(join(regB, 'for_dv'), { recursive: true });
+      mkdirSync(join(regC, 'for_de'), { recursive: true });
+      mkdirSync(join(regC, 'for_dv'), { recursive: true });
+
+      const result = await caller.inferRalDirs({ subsys: 'apcpu_sys' });
+
+      // Should collapse to parent reg/ dir
+      expect(result.dirs).toContain(regParent);
+      expect(result.dirs).not.toContain(regA);
+      expect(result.dirs).not.toContain(regB);
+      expect(result.dirs).not.toContain(regC);
+    });
+
+    it('collapses multi-level nested reg dirs to parent (Set dedup)', async () => {
+      // Multiple sub-dirs under the same parent group_a
+      //   spec/regs/group_a/sub1/for_de + for_dv
+      //   spec/regs/group_a/sub2/for_de + for_dv
+      //   spec/regs/group_a/sub3/for_de + for_dv
+      // Matched dirs: sub1, sub2, sub3 — parents all = group_a
+      // Set dedup: { group_a }
+      const regsDir = join(projRtlDir, 'apcpu_sys', 'design', 'spec', 'regs');
+      const groupA = join(regsDir, 'group_a');
+      mkdirSync(join(groupA, 'sub1', 'for_de'), { recursive: true });
+      mkdirSync(join(groupA, 'sub1', 'for_dv'), { recursive: true });
+      mkdirSync(join(groupA, 'sub2', 'for_de'), { recursive: true });
+      mkdirSync(join(groupA, 'sub2', 'for_dv'), { recursive: true });
+      mkdirSync(join(groupA, 'sub3', 'for_de'), { recursive: true });
+      mkdirSync(join(groupA, 'sub3', 'for_dv'), { recursive: true });
+
+      const result = await caller.inferRalDirs({ subsys: 'apcpu_sys' });
+
+      // All sub-dirs' parent is group_a → Set dedup → { group_a }
+      expect(result.dirs).toContain(groupA);
+      expect(result.dirs).not.toContain(join(groupA, 'sub1'));
+      expect(result.dirs).not.toContain(join(groupA, 'sub2'));
+      expect(result.dirs).not.toContain(join(groupA, 'sub3'));
+    });
+
+    it('returns separate parents for groups under different parent dirs', async () => {
+      // Two separate groups under different parents:
+      //   spec/regs_a/g1/for_de + for_dv → parent = regs_a
+      //   spec/regs_a/g2/for_de + for_dv → parent = regs_a (dup)
+      //   spec/regs_b/g3/for_de + for_dv → parent = regs_b
+      //   spec/regs_b/g4/for_de + for_dv → parent = regs_b (dup)
+      // Set dedup: { regs_a, regs_b }
+      const regsA = join(projRtlDir, 'apcpu_sys', 'design', 'spec', 'regs_a');
+      const regsB = join(projRtlDir, 'apcpu_sys', 'design', 'spec', 'regs_b');
+      mkdirSync(join(regsA, 'g1', 'for_de'), { recursive: true });
+      mkdirSync(join(regsA, 'g1', 'for_dv'), { recursive: true });
+      mkdirSync(join(regsA, 'g2', 'for_de'), { recursive: true });
+      mkdirSync(join(regsA, 'g2', 'for_dv'), { recursive: true });
+      mkdirSync(join(regsB, 'g3', 'for_de'), { recursive: true });
+      mkdirSync(join(regsB, 'g3', 'for_dv'), { recursive: true });
+      mkdirSync(join(regsB, 'g4', 'for_de'), { recursive: true });
+      mkdirSync(join(regsB, 'g4', 'for_dv'), { recursive: true });
+
+      const result = await caller.inferRalDirs({ subsys: 'apcpu_sys' });
+
+      // Set dedup yields { regs_a, regs_b }
+      expect(result.dirs).toContain(regsA);
+      expect(result.dirs).toContain(regsB);
+      expect(result.dirs).not.toContain(join(regsA, 'g1'));
+      expect(result.dirs).not.toContain(join(regsA, 'g2'));
+      expect(result.dirs).not.toContain(join(regsB, 'g3'));
+      expect(result.dirs).not.toContain(join(regsB, 'g4'));
     });
   });
 
@@ -698,6 +787,8 @@ describe('sysbase-gen-router', () => {
         clk2Dir: '',
         modIoPath: '/path/to/modio.log',
         filelistPath: '/path/to/filelist.f',
+        moduleListPath: '',
+        targetScope: '',
         pinlistPath: '',
         dmalistPath: '',
         outputDir: './output',
@@ -737,6 +828,8 @@ describe('sysbase-gen-router', () => {
         clk2Dir: '',
         modIoPath: '',
         filelistPath: '',
+        moduleListPath: '',
+        targetScope: '',
         pinlistPath: '',
         dmalistPath: '',
         outputDir: './',
@@ -770,6 +863,8 @@ describe('sysbase-gen-router', () => {
         clk2Dir: '',
         modIoPath: '',
         filelistPath: '',
+        moduleListPath: '',
+        targetScope: '',
         pinlistPath: '',
         dmalistPath: '',
         outputDir: './',
@@ -798,6 +893,8 @@ describe('sysbase-gen-router', () => {
         clk2Dir: '/de/path,clk_prefix',
         modIoPath: '/path/to/modio.log',
         filelistPath: '/path/to/filelist.f',
+        moduleListPath: '',
+        targetScope: '',
         pinlistPath: '/path/to/pinlist.txt',
         dmalistPath: '/path/to/dmalist.txt',
         outputDir: './output',
@@ -851,12 +948,14 @@ describe('sysbase-gen-router', () => {
         genLevel: 'subsys', subsys: 'apcpu_sys', instanceName: 'u_sys_apcpu', rtlFile: '/a.v',
         moduleName: '', dutSpecPath: '', miniExcelPath: '', csvPath: '', ralDirs: [],
         clkDir: '', clk2Dir: '', modIoPath: '', filelistPath: '',
+        moduleListPath: '', targetScope: '',
         pinlistPath: '', dmalistPath: '', outputDir: './',
       };
       const config2: Record<string, unknown> = {
         genLevel: 'subsys', subsys: 'aon_sys', instanceName: 'u_sys_aon', rtlFile: '/b.v',
         moduleName: '', dutSpecPath: '', miniExcelPath: '', csvPath: '', ralDirs: [],
         clkDir: '', clk2Dir: '', modIoPath: '', filelistPath: '',
+        moduleListPath: '', targetScope: '',
         pinlistPath: '', dmalistPath: '', outputDir: './',
       };
 
@@ -885,6 +984,7 @@ describe('sysbase-gen-router', () => {
         genLevel: 'subsys', subsys: 'apcpu_sys', instanceName: 'u_sys_apcpu', rtlFile: '/a.v',
         moduleName: '', dutSpecPath: '', miniExcelPath: '', csvPath: '', ralDirs: [],
         clkDir: '', clk2Dir: '', modIoPath: '', filelistPath: '',
+        moduleListPath: '', targetScope: '',
         pinlistPath: '', dmalistPath: '', outputDir: './',
       };
       await caller.saveConfig({ config: config as never, scriptPath: '/s.py', projectDir: tmpDir });
