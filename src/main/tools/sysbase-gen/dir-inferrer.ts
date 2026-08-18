@@ -4,10 +4,9 @@
  * Provides:
  *   - inferRalDirs: scan spec/ and rtl/ root dirs for directories containing
  *     both `for_de` and `for_dv` subdirectories (recursive, max depth 5).
- *     Results are collapsed to the common parent when multiple sibling dirs
- *     each contain for_de/for_dv (e.g. /proj/regs_rtl/ANLG_PHY_G0/for_de +
- *     /proj/regs_rtl/ANLG_PHY_G1/for_de → return /proj/regs_rtl/ instead of
- *     each individual subdir).
+ *     For each matched directory, take its parent (the "reg 总目录") and
+ *     collect into a Set for deduplication. The sysbase_gen.py -ral flag
+ *     expects the parent directory that contains the reg blocks.
  *   - inferClkDirs: scan rtl/ for files with `clk_max_cfg` in the filename,
  *     return the containing directory paths
  */
@@ -69,57 +68,33 @@ function hasForDeAndForDv(dir: string): boolean {
 }
 
 /**
- * Collapse a list of RAL directories to their common parent when appropriate.
+ * Collect RAL parent directories from matched dirs.
  *
- * Problem: If /proj/regs_rtl/ANLG_PHY_G0 and /proj/regs_rtl/ANLG_PHY_G1 both
- * contain for_de/for_dv, we should return /proj/regs_rtl/ (the parent) instead
- * of listing every individual subdir. The sysbase_gen.py -ral flag expects
- * the parent directory that contains multiple reg blocks.
+ * Per the -ral spec: "由DE提供的所有reg目录所在的总目录".
+ * Each matched dir (containing for_de + for_dv) represents a reg block.
+ * The -ral flag expects the parent directory of these reg blocks.
  *
  * Algorithm:
- * 1. Group matched dirs by their parent directory.
- * 2. If 2+ sibling dirs under the same parent all contain for_de/for_dv,
- *    replace them with the parent dir.
- * 3. Single matches are kept as-is.
+ * 1. For each matched dir, take its parent directory (dirname).
+ * 2. Add the parent to a Set (deduplication).
+ *
+ * Example:
+ *   reg/reg_a_rf/sub1/for_de + for_dv → parent = reg/reg_a_rf
+ *   reg/reg_a_rf/sub2/for_de + for_dv → parent = reg/reg_a_rf (dup, Set dedup)
+ *   reg/reg_b_rf/sub3/for_de + for_dv → parent = reg/reg_b_rf
+ *   Result: { reg/reg_a_rf, reg/reg_b_rf }
+ *
+ * So the -ral output is: -ral reg/reg_a_rf reg/reg_b_rf
  *
  * @param dirs Array of directories that contain for_de + for_dv
- * @returns Collapsed array with parent dirs replacing sibling groups
+ * @returns Deduplicated array of parent directories
  */
-function collapseRalDirs(dirs: string[]): string[] {
-  if (dirs.length <= 1) return [...dirs];
-
-  // Group by parent directory
-  const byParent = new Map<string, string[]>();
+function collectRalParentDirs(dirs: string[]): string[] {
+  const parentSet = new Set<string>();
   for (const dir of dirs) {
-    const parent = dirname(dir);
-    const existing = byParent.get(parent);
-    if (existing) {
-      existing.push(dir);
-    } else {
-      byParent.set(parent, [dir]);
-    }
+    parentSet.add(dirname(dir));
   }
-
-  const result: string[] = [];
-  const seen = new Set<string>();
-
-  for (const [parent, children] of byParent) {
-    if (children.length >= 2 && !seen.has(parent)) {
-      // Multiple siblings under the same parent — collapse to parent
-      result.push(parent);
-      seen.add(parent);
-    } else {
-      // Single match — keep as-is
-      for (const child of children) {
-        if (!seen.has(child)) {
-          result.push(child);
-          seen.add(child);
-        }
-      }
-    }
-  }
-
-  return result.sort();
+  return [...parentSet].sort();
 }
 
 /**
@@ -128,6 +103,10 @@ function collapseRalDirs(dirs: string[]): string[] {
  * Scans `$PROJ_RTL/<subsys>/design/spec/` and `$PROJ_RTL/<subsys>/design/rtl/`
  * recursively (max depth 5), returning directories that contain both `for_de`
  * and `for_dv` subdirectories.
+ *
+ * Results are transformed by taking the parent directory of each matched dir
+ * and deduplicating via a Set. The -ral flag expects the parent directory
+ * ("总目录") that contains the reg blocks, not the individual reg dirs.
  *
  * @param subsys    Subsystem name
  * @param projectDir Optional project root for .socverify/env.json fallback
@@ -155,9 +134,11 @@ export function inferRalDirs(subsys: string, projectDir?: string): string[] {
     }
   }
 
-  // Collapse sibling matches to their common parent directory.
-  // E.g., /proj/regs_rtl/ANLG_PHY_G0 + /proj/regs_rtl/ANLG_PHY_G1 → /proj/regs_rtl/
-  return collapseRalDirs(result);
+  // Take parent directory of each matched dir and deduplicate via Set.
+  // E.g., reg/reg_a_rf/for_de+for_dv + reg/reg_b_rf/for_de+for_dv
+  // → parents: { reg/reg_a_rf, reg/reg_b_rf }
+  // → -ral reg/reg_a_rf reg/reg_b_rf
+  return collectRalParentDirs(result);
 }
 
 /**
