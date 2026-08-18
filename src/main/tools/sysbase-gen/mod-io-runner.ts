@@ -74,6 +74,8 @@ export function resolveVerdiHome(projectDir?: string): string | null {
  * @param filelist    Filelist file path
  * @param moduleName  Module name to extract IO from
  * @param outputFile  Output file path (defaults to getModIO.log)
+ * @param moduleList  Optional target module list file path (-module_list)
+ * @param targetScope Optional target scope hierarchy path (-target_scope)
  * @returns Formatted command string
  */
 export function buildModIoCommand(
@@ -81,10 +83,19 @@ export function buildModIoCommand(
   filelist: string,
   moduleName: string,
   outputFile?: string,
+  moduleList?: string,
+  targetScope?: string,
 ): string {
   const scriptPath = join(verdiHome, MODIO_SCRIPT_REL);
   const output = outputFile || DEFAULT_OUTPUT_FILE;
-  return `perl ${scriptPath} -f ${filelist} -modules "${moduleName}" -o ${output}`;
+  let cmd = `perl ${scriptPath} -f ${filelist} -modules "${moduleName}" -o ${output}`;
+  if (moduleList && moduleList.trim()) {
+    cmd += ` -module_list ${moduleList}`;
+  }
+  if (targetScope && targetScope.trim()) {
+    cmd += ` -target_scope ${targetScope}`;
+  }
+  return cmd;
 }
 
 /**
@@ -92,6 +103,7 @@ export function buildModIoCommand(
  *
  * Spawns `perl <VERDI_HOME>/.../getModIO_batch.p -f <filelist> -modules <moduleName> -o <outputFile>`
  * and collects stdout/stderr lines, emitting real-time events via `onEvent`.
+ * Optionally passes `-module_list <path>` and `-target_scope <scope>` flags.
  *
  * @param verdiHome   Resolved VERDI_HOME path
  * @param filelist    Filelist file path
@@ -99,6 +111,8 @@ export function buildModIoCommand(
  * @param outputFile  Output file path (defaults to getModIO.log)
  * @param cwd         Working directory for the process
  * @param onEvent     Optional callback for real-time event streaming
+ * @param moduleList  Optional target module list file path (-module_list)
+ * @param targetScope Optional target scope hierarchy path (-target_scope)
  * @returns Result with success status, collected logs, and output file path
  */
 export async function executeModIo(
@@ -108,9 +122,11 @@ export async function executeModIo(
   outputFile: string,
   cwd: string,
   onEvent?: ModIoEventCallback,
+  moduleList?: string,
+  targetScope?: string,
 ): Promise<ModIoResult> {
   const scriptPath = join(verdiHome, MODIO_SCRIPT_REL);
-  const command = buildModIoCommand(verdiHome, filelist, moduleName, outputFile);
+  const command = buildModIoCommand(verdiHome, filelist, moduleName, outputFile, moduleList, targetScope);
   const outputFilePath = resolve(cwd, outputFile);
 
   const logs: string[] = [];
@@ -122,15 +138,20 @@ export async function executeModIo(
   logs.push(...startLines);
   onEvent?.({ type: 'start', command, lines: startLines });
 
+  // Build spawn args, including optional flags
+  const args: string[] = [scriptPath, '-f', filelist, '-modules', moduleName, '-o', outputFile];
+  if (moduleList && moduleList.trim()) {
+    args.push('-module_list', moduleList);
+  }
+  if (targetScope && targetScope.trim()) {
+    args.push('-target_scope', targetScope);
+  }
+
   const result = await new Promise<ModIoResult>((resolvePromise) => {
-    const proc = spawn(
-      'perl',
-      [scriptPath, '-f', filelist, '-modules', moduleName, '-o', outputFile],
-      {
-        cwd,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      },
-    );
+    const proc = spawn('perl', args, {
+      cwd,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
 
     proc.stdout?.on('data', (data: Buffer) => {
       for (const line of data.toString().split('\n')) {
