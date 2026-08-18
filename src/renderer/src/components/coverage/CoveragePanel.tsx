@@ -119,6 +119,7 @@ export function CoveragePanel() {
   const detailParsed = useCoverageStore((s) => s.detailParsed);
   const parseDetails = useCoverageStore((s) => s.parseDetails);
   const registerDetailProgressListener = useCoverageStore((s) => s.registerDetailProgressListener);
+  const clearDetailParseProgress = useCoverageStore((s) => s.clearDetailParseProgress);
 
   // ─── Closure 相关（Slice 6b） ──────────────────────────────
   const currentClosure = useCoverageStore((s) => s.currentClosure);
@@ -354,11 +355,15 @@ export function CoveragePanel() {
       )}
 
       {/* 详细解析进度面板 */}
-      {showDetailParseProgress && detailParsing && (
+      {showDetailParseProgress && (
         <div className="mb-3 rounded border border-primary/40 bg-primary/5 p-3">
           <div className="flex items-center justify-between mb-2">
             <span className="flex items-center gap-1.5 text-xs font-medium text-primary">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              {detailParsing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <CheckCircle2 className="h-3.5 w-3.5" />
+              )}
               {detailParseStep || '正在解析详细报告...'}
             </span>
             <span className="text-xs font-mono text-primary">{detailParseProgress}%</span>
@@ -390,6 +395,16 @@ export function CoveragePanel() {
                 </div>
               ))}
             </div>
+          )}
+          {/* 关闭按钮 */}
+          {!detailParsing && (
+            <button
+              onClick={clearDetailParseProgress}
+              className="mt-1.5 flex items-center gap-1 rounded border border-border bg-card px-1.5 py-0.5 text-[10px] hover:bg-secondary"
+            >
+              <X className="h-2.5 w-2.5" />
+              关闭
+            </button>
           )}
         </div>
       )}
