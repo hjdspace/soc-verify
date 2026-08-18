@@ -19,7 +19,7 @@ export type SysbaseGenConfig = {
   instanceName: string;
   /** RTL top-level file path (Step 2, `-rtl`). */
   rtlFile: string;
-  /** Module name extracted from RTL file (Step 2, used by Step 7). */
+  /** Module name extracted from RTL file (Step 2, used by Step 7). Editable by user. */
   moduleName: string;
   /** DUT spec Excel path (Step 3, `-x`). Subsys only. */
   dutSpecPath: string;
@@ -37,6 +37,11 @@ export type SysbaseGenConfig = {
   modIoPath: string;
   /** Filelist path used for generating Module IO (Step 7). Subsys only. */
   filelistPath: string;
+  /** Optional target module list file path for Module IO generation (Step 7, `-module_list`). Subsys only. */
+  moduleListPath: string;
+  /** Optional target scope hierarchy path for Module IO generation (Step 7, `-target_scope`). Subsys only.
+   *  e.g. `tb_top.chip.dut.u_sys_cpu` */
+  targetScope: string;
   /** Optional pin list file path (Step 8, `-pinlist`). Subsys only. */
   pinlistPath: string;
   /** Optional DMA list file path (Step 8, `-dmalist`). Subsys only. */
@@ -64,6 +69,8 @@ export function createEmptySysbaseConfig(): SysbaseGenConfig {
     clk2Dir: '',
     modIoPath: '',
     filelistPath: '',
+    moduleListPath: '',
+    targetScope: '',
     pinlistPath: '',
     dmalistPath: '',
     outputDir: './',
