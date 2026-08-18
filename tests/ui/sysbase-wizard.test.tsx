@@ -45,6 +45,8 @@ const mockStoreState = {
     clk2Dir: '',
     modIoPath: '/path/to/modio.log',
     filelistPath: '/path/to/filelist.f',
+    moduleListPath: '',
+    targetScope: '',
     pinlistPath: '',
     dmalistPath: '',
     outputDir: './output',
