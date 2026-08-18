@@ -8,18 +8,20 @@
  *
  * subsys:
  *   python3 <scriptPath> gen \
- *       -rtl     <rtlFile> \
- *       -n       <subsys> \
- *       -i       <instanceName> \
- *       -x       <dutSpecPath> \
- *       -mini    <miniExcelPath> \
- *       -ral     <ralDirs.join(' ')> \
-*       [-clk    <clkDir>] \
-*       [-clk2   <clk2Dir>] \
- *       -mod_io  <modIoPath> \
- *       [-pinlist <pinlistPath>] \
- *       [-dmalist <dmalistPath>] \
- *       -o       <outputDir>
+ *       -rtl          <rtlFile> \
+ *       -n            <subsys> \
+ *       -i            <instanceName> \
+ *       -x            <dutSpecPath> \
+ *       -mini         <miniExcelPath> \
+ *       -ral          <ralDirs.join(' ')> \
+ *       [-clk         <clkDir>] \
+ *       [-clk2        <clk2Dir>] \
+ *       -mod_io       <modIoPath> \
+ *       [-module_list <moduleListPath>] \
+ *       [-target_scope <targetScope>] \
+ *       [-pinlist     <pinlistPath>] \
+ *       [-dmalist     <dmalistPath>] \
+ *       -o            <outputDir>
  *
  * top:
  *   python3 <scriptPath> gen \
@@ -36,8 +38,8 @@ import type { SysbaseGenConfig } from '../../../shared/types/sysbase-gen';
 /** Python interpreter used in the generated command. */
 const PYTHON_BIN = 'python3';
 
-/** Width for flag column alignment (longest flag is `-pinlist` = 8 chars). */
-const FLAG_WIDTH = 8;
+/** Width for flag column alignment (longest flag is `-target_scope` = 13 chars). */
+const FLAG_WIDTH = 13;
 
 /**
  * Build a formatted `sysbase_gen.py` command string from wizard config.
@@ -99,6 +101,16 @@ function buildSubsysCommand(config: SysbaseGenConfig, scriptPath: string): strin
 
   // Required: -mod_io
   lines.push(formatLine('-mod_io', config.modIoPath));
+
+  // Optional: -module_list (target module list file for Module IO generation)
+  if (config.moduleListPath.trim()) {
+    lines.push(formatLine('-module_list', config.moduleListPath));
+  }
+
+  // Optional: -target_scope (hierarchy path, e.g. tb_top.chip.dut.u_sys_cpu)
+  if (config.targetScope.trim()) {
+    lines.push(formatLine('-target_scope', config.targetScope));
+  }
 
   // Optional: -pinlist
   if (config.pinlistPath.trim()) {
