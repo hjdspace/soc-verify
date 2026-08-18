@@ -359,3 +359,21 @@ _Avoid_: convert tool
 **kb_search**:
 Host Tool。跨挂载知识库检索（KB Index 关键词 + `docs/` 全文匹配），返回匹配文档路径与摘要。
 _Avoid_: knowledge query, kb query
+
+### 多目录域
+
+**Extra Directory（额外目录）**:
+项目中除 rootPath 外挂接的目录，允许用户将多个文件系统目录纳入同一项目工作集。每个额外目录有独立的 ID、路径、分组类型和可选自定义标签。与 rootPath 共同构成项目的完整目录列表。存储于 `ProjectInfo.extraDirs: ExtraDirEntry[]`。
+_Avoid_: linked dir, mounted dir, external dir
+
+**Directory Group（目录分组）**:
+额外目录的分类标签，固定为 `verify`（验证）或 `design`（设计）两类。验证分组下的目录是验证环境项目目录（如 SoC 验证环境、IP2SOC 验证环境），设计分组下的目录是设计目录（如子系统 RTL、SoC RTL）。决定目录在侧边栏和 AI system prompt 中的归属。rootPath 隐式属于验证分组。
+_Avoid_: dir category, dir type, folder group
+
+**Working Directory（工作目录 / cwd）**:
+AI Agent session 的 `--cwd`，即 omp 子进程启动时的工作目录。可由用户在已添加目录中切换（默认为 rootPath）。切换工作目录会重建当前活跃 AI session（omp 的 cwd 在进程启动时固定）。非 cwd 目录的文件通过绝对路径访问，AI 由 system prompt 告知所有目录路径。
+_Avoid_: active dir, primary dir, main dir
+
+**ExtraDirEntry**:
+额外目录的数据结构实体，包含 `{ id, path, group: 'verify'|'design', label?, isCwd, order, createdAt }`。rootPath 不存入 `extraDirs`（隐式属于验证分组的第一项），`extraDirs` 只存储用户后续添加的目录。
+_Avoid_: dir entry, dir record
