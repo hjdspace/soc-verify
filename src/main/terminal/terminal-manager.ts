@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { userInfo } from 'node:os';
 import type * as NodePty from 'node-pty';
+import { getLoginShellEnv } from '../env/login-shell-env';
 
 /** Which PTY backend a terminal session is using. */
 export type TerminalBackend = 'node-pty' | 'fallback' | 'log-mode';
@@ -449,7 +450,13 @@ export class TerminalManager extends EventEmitter {
     const cwd = cwdResult.effective;
     const cols = opts.cols ?? 80;
     const rows = opts.rows ?? 24;
-    const env = { ...process.env, ...opts.env } as Record<string, string>;
+    // Use the login shell's full environment (which includes .bashrc / .cshrc /
+    // .profile / module init PATH extensions) instead of the minimal systemd
+    // environment that the Electron main process inherits. Without this,
+    // EDA tool paths (e.g. /tools/opensources/python/.../bin) are invisible
+    // inside the built-in terminal, and `which python` resolves to /bin/python.
+    const loginEnv = await getLoginShellEnv();
+    const env = { ...loginEnv, ...opts.env } as Record<string, string>;
     // Use caller-specified shell, or find one automatically
     const shell = opts.shell ?? findShell();
     const shellArgs = getInteractiveShellArgs(shell);
@@ -826,7 +833,11 @@ export class TerminalManager extends EventEmitter {
     // Validate cwd — prevent spawn ENOENT from non-existent working directory
     const cwdResult = validateCwd(opts.cwd ?? process.cwd());
     const cwd = cwdResult.effective;
-    const env = { ...process.env, ...opts.env } as Record<string, string>;
+    // Use the login shell environment so EDA tool paths and module init
+    // variables are visible to the spawned command, matching what the user
+    // would get in an external terminal.
+    const loginEnv = await getLoginShellEnv();
+    const env = { ...loginEnv, ...opts.env } as Record<string, string>;
 
     const session: TerminalSession = {
       id,
@@ -969,7 +980,7 @@ export class TerminalManager extends EventEmitter {
    *
    * @returns true if the external terminal was launched, false if none found
    */
-  runInExternalTerminal(opts: TerminalRunCommandOptions): boolean {
+  async runInExternalTerminal(opts: TerminalRunCommandOptions): Promise<boolean> {
     const extTerm = findExternalTerminal();
     if (!extTerm) {
       console.warn('[terminal] No external terminal emulator found (tried: gnome-terminal, konsole, xterm, xfce4-terminal, mate-terminal)');
@@ -979,7 +990,10 @@ export class TerminalManager extends EventEmitter {
     // Validate cwd
     const cwdResult = validateCwd(opts.cwd ?? process.cwd());
     const cwd = cwdResult.effective;
-    const env = { ...process.env, ...opts.env } as Record<string, string>;
+    // Use the login shell environment so the external terminal inherits the
+    // same EDA tool paths and module init variables as a regular terminal.
+    const loginEnv = await getLoginShellEnv();
+    const env = { ...loginEnv, ...opts.env } as Record<string, string>;
 
     // Build the full command: cd to cwd && run the command && keep terminal open
     // The `; exec bash` keeps the terminal open after the command finishes
