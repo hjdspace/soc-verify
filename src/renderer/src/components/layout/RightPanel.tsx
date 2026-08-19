@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
-import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon, Shield, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon, Shield, ShieldAlert, ShieldCheck, ChevronDown } from 'lucide-react';
 import { useSessionStore, type ChatMessage, type AvailableModel, type SelectedSkill, type ContextFile, type HistorySession, type SessionEntry } from '@renderer/stores/session';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
@@ -50,6 +50,9 @@ export function RightPanel({ width }: RightPanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const skillListRef = useRef<HTMLDivElement>(null);
   const fileListRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isPinnedToBottomRef = useRef(true);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingSessionName, setEditingSessionName] = useState('');
@@ -140,10 +143,62 @@ export function RightPanel({ width }: RightPanelProps) {
     await deleteHistorySession(sessionId, currentProjectId);
   };
 
-  // Auto-scroll to bottom
+  // ── Smart auto-scroll: only pin to bottom when user is already there ──
+  // During streaming output, every token update fires this effect. If the
+  // user has scrolled up to read history, we must NOT yank them back down.
+  // isPinnedToBottomRef tracks whether the viewport is near the bottom; we
+  // only auto-scroll when it's true. User-initiated "send" forces a re-pin.
   useEffect(() => {
+    if (!isPinnedToBottomRef.current) return;
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [currentSession?.messages]);
+
+  // Sync the button visibility whenever messages change (cheap state set).
+  useEffect(() => {
+    setShowScrollToBottom(!isPinnedToBottomRef.current);
+  }, [currentSession?.messages]);
+
+  // Scroll handler: detect whether user is near the bottom of the list.
+  const handleScroll = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    // 48 px threshold — roughly 3 lines of text — feels natural: minor
+    // jitter from smooth-scroll won't unpin, but a deliberate scroll-up will.
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    isPinnedToBottomRef.current = atBottom;
+    setShowScrollToBottom(!atBottom);
+  }, []);
+
+  // Reset pin state when switching sessions (new session = always start at bottom).
+  useEffect(() => {
+    isPinnedToBottomRef.current = true;
+    setShowScrollToBottom(false);
+    // Defer scroll to next tick so DOM has updated for the new session's messages.
+    requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    });
+  }, [currentSessionId]);
+
+  // When user sends a new message, force-scroll to bottom (re-pin).
+  const prevMessageCountRef = useRef(currentSession?.messages.length ?? 0);
+  useEffect(() => {
+    const count = currentSession?.messages.length ?? 0;
+    if (count > prevMessageCountRef.current) {
+      const lastMsg = currentSession?.messages[count - 1];
+      // A new user message means the user explicitly wants to see the latest.
+      if (lastMsg?.role === 'user') {
+        isPinnedToBottomRef.current = true;
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }
+    }
+    prevMessageCountRef.current = count;
+  }, [currentSession?.messages]);
+
+  const scrollToBottom = useCallback(() => {
+    isPinnedToBottomRef.current = true;
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    setShowScrollToBottom(false);
+  }, []);
 
   // Scroll highlighted skill into view
   useEffect(() => {
@@ -665,7 +720,11 @@ export function RightPanel({ width }: RightPanelProps) {
       <PluginViewHost location="right" />
 
       {/* ── 消息列表 / 历史会话 ────────────────────── */}
-      <div className="flex-1 overflow-y-auto px-2 py-2">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="relative flex-1 overflow-y-auto px-2 py-2"
+      >
         {showHistory ? (
           <HistoryView
             sessions={historySessions}
@@ -729,6 +788,20 @@ export function RightPanel({ width }: RightPanelProps) {
               ) && <WaitingDots />}
             <div ref={messagesEndRef} />
           </div>
+        )}
+        {/* Scroll-to-bottom floating button — shown when user has scrolled
+            up during streaming output. Positioned relative to the scroll
+            container so it stays pinned at the bottom-right. */}
+        {showScrollToBottom && (
+          <button
+            onClick={scrollToBottom}
+            title="回到底部"
+            aria-label="回到底部"
+            className="sticky bottom-2 ml-auto flex h-7 w-7 items-center justify-center rounded-full border border-border bg-background/90 text-muted-foreground shadow-md backdrop-blur transition-colors hover:text-foreground hover:shadow-lg"
+            style={{ marginLeft: 'auto', marginRight: '4px', marginBottom: '4px' }}
+          >
+            <ChevronDown className="h-4 w-4" />
+          </button>
         )}
       </div>
 
