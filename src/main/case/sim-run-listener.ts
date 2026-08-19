@@ -3,7 +3,7 @@
  * 将每次 run 的完整信息写入 simulation_runs 表。
  *
  * 参考 docs/adr/0017-case-database-architecture.md → 决策 4
- * 参考 docs/prd-case-database.md → 仿真历史持久化
+ * 参考 docs/prd/prd-case-database.md → 仿真历史持久化
  *
  * 设计要点：
  * - 写 DB 失败只记 warning 日志，不抛异常，不影响仿真流程

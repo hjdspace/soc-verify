@@ -1,10 +1,10 @@
 # Issues: officecli 集成 — Tracer Bullet Vertical Slices
 
-> **Parent PRD**: [docs/prd-officecli-integration.md](./prd-officecli-integration.md)
+> **Parent PRD**: [docs/prd/prd-officecli-integration.md](../prd/prd-officecli-integration.md)
 >
-> **Parent ADR**: [docs/adr/0015-officecli-integration.md](./adr/0015-officecli-integration.md)
+> **Parent ADR**: [docs/adr/0015-officecli-integration.md](../adr/0015-officecli-integration.md)
 >
-> **Glossary**: [docs/adr/glossary.md](./adr/glossary.md)
+> **Glossary**: [docs/adr/glossary.md](../adr/glossary.md)
 >
 > 8 个垂直切片（tracer bullet），每个切片贯穿所有集成层（二进制 → 主进程服务 → tRPC API → 渲染端 UI → 测试），完成后可独立演示。
 >
@@ -18,7 +18,7 @@
 
 ### Parent
 
-[PRD: officecli 集成](./prd-officecli-integration.md)
+[PRD: officecli 集成](../prd/prd-officecli-integration.md)
 
 ### Triage
 
@@ -58,7 +58,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: officecli 集成](./prd-officecli-integration.md)
+[PRD: officecli 集成](../prd/prd-officecli-integration.md)
 
 ### Triage
 
@@ -99,7 +99,7 @@ officecli 不可用时 procedure 返回明确的 `OfficeCLI not available` 错�
 
 ### Parent
 
-[PRD: officecli 集成](./prd-officecli-integration.md)
+[PRD: officecli 集成](../prd/prd-officecli-integration.md)
 
 ### Triage
 
@@ -146,7 +146,7 @@ officecli 不可用时（`document.checkInstalled` 返回 false）预览面板�
 
 ### Parent
 
-[PRD: officecli 集成](./prd-officecli-integration.md)
+[PRD: officecli 集成](../prd/prd-officecli-integration.md)
 
 ### Triage
 
@@ -189,7 +189,7 @@ PdfPreview 支持缩放（zoom in/out 按钮 + 适应宽度）、翻页（上一
 
 ### Parent
 
-[PRD: officecli 集成](./prd-officecli-integration.md)
+[PRD: officecli 集成](../prd/prd-officecli-integration.md)
 
 ### Triage
 
@@ -237,7 +237,7 @@ officecli 创建的 xlsx 可能包含特有样式/图表，exceljs 读取时尽�
 
 ### Parent
 
-[PRD: officecli 集成](./prd-officecli-integration.md)
+[PRD: officecli 集成](../prd/prd-officecli-integration.md)
 
 ### Triage
 
@@ -281,7 +281,7 @@ create_* 系列默认输出到 `<project>/docs/`，AI 可通过 outputPath 参�
 
 ### Parent
 
-[PRD: officecli 集成](./prd-officecli-integration.md)
+[PRD: officecli 集成](../prd/prd-officecli-integration.md)
 
 ### Triage
 
@@ -331,7 +331,7 @@ flush 机制：主进程维护 `documentEditors: Map<string, BrowserWindow>` 追
 
 ### Parent
 
-[PRD: officecli 集成](./prd-officecli-integration.md)
+[PRD: officecli 集成](../prd/prd-officecli-integration.md)
 
 ### Triage
 

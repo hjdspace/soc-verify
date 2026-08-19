@@ -310,7 +310,7 @@ coverage-closure 技能不再自己运行 `parse_coverage.py`，改为通过 Hos
 
 ### 与现有 PRD 的关系
 
-本 PRD 是 [PRD: SoC Verify M2-M7](docs/prd-m2-m7.md) 中 Issue #15（覆盖率分析）和 Issue #16（覆盖率可视化与导出）的扩展和深化。原 PRD 的 acceptance criteria 在本 PRD 中被用户故事覆盖，但粒度更细、范围更广（增加了预处理流水线、EDA 工具配置、AI 全流程覆盖收敛）。
+本 PRD 是 [PRD: SoC Verify M2-M7](prd-m2-m7.md) 中 Issue #15（覆盖率分析）和 Issue #16（覆盖率可视化与导出）的扩展和深化。原 PRD 的 acceptance criteria 在本 PRD 中被用户故事覆盖，但粒度更细、范围更广（增加了预处理流水线、EDA 工具配置、AI 全流程覆盖收敛）。
 
 ### 实现优先级建议
 

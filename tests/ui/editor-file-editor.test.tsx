@@ -352,6 +352,70 @@ describe('FileEditor — inline review', () => {
 
     await waitFor(() => expect(screen.getByTestId('codemirror-mock')).toBeTruthy());
   });
+
+  it('keeps review actions visible after switching to the next queued file', async () => {
+    const firstPath = '/rtl/first.sv';
+    const secondPath = '/rtl/second.sv';
+    const secondKey = normalizeReviewKey(secondPath);
+    const entry = (filePath: string, id: string) => ({
+      filePath,
+      fileName: filePath.split('/').pop()!,
+      toolCalls: [{
+        id,
+        toolName: 'edit',
+        filePath,
+        timestamp: 1,
+        oldText: 'before',
+        newText: 'after',
+        isNewFile: false,
+      }],
+      isNewFile: false,
+      reviewed: false,
+    });
+
+    trpc.project.readFile.query.mockResolvedValue('module second;\n');
+    act(() => {
+      useDiffReviewStore.setState({
+        queue: [entry(firstPath, 'tool-first'), entry(secondPath, 'tool-second')],
+        currentFilePath: secondPath,
+        currentReviewToolCallId: 'tool-second',
+        fileDiffs: {
+          [secondKey]: {
+            filePath: secondPath,
+            isNewFile: false,
+            lines: [
+              { type: 'del', content: 'before', oldLine: 1, hunkId: 1 },
+              { type: 'add', content: 'after', newLine: 1, hunkId: 1 },
+            ],
+            hunks: [{
+              id: 1,
+              toolCallId: 'tool-second',
+              toolName: 'edit',
+              overwritten: false,
+              startLineIndex: 0,
+              endLineIndex: 2,
+              addCount: 1,
+              delCount: 1,
+            }],
+            totalAdd: 1,
+            totalDel: 1,
+          },
+        },
+        hunkStates: { [secondKey]: { 1: 'pending' } },
+        loadingFiles: {},
+        loadErrors: {},
+      });
+    });
+
+    const view = render(
+      <FileEditor projectId="proj-1" filePath={secondPath} fileName="second.sv" />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('codemirror-mock')).toBeTruthy());
+    expect(screen.getByTitle('回滚此文件的全部 AI 改动')).toBeTruthy();
+    expect(screen.getByTitle('保留此文件的全部 AI 改动')).toBeTruthy();
+    view.unmount();
+  });
 });
 
 // ── 语法高亮 extension 测试 ────────────────────────────────────

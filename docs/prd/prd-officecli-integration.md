@@ -1,10 +1,10 @@
 # PRD: officecli 集成 — Office 文档预览、编辑与 AI 生成
 
-> **Parent ADR**: [ADR 0015: officecli 集成](./adr/0015-officecli-integration.md)
+> **Parent ADR**: [ADR 0015: officecli 集成](../adr/0015-officecli-integration.md)
 >
-> **Glossary**: [术语表](./adr/glossary.md)
+> **Glossary**: [术语表](../adr/glossary.md)
 >
-> **Issues**: [Issues: officecli 集成](./issues-officecli-integration.md)
+> **Issues**: [Issues: officecli 集成](../issues/issues-officecli-integration.md)
 
 ## Problem Statement
 

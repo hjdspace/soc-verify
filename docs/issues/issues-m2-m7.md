@@ -1,6 +1,6 @@
 # Issues: SoC Verify M2-M7 — Tracer Bullet Vertical Slices
 
-> **Parent PRD**: [docs/prd-m2-m7.md](./prd-m2-m7.md)
+> **Parent PRD**: [docs/prd/prd-m2-m7.md](../prd/prd-m2-m7.md)
 >
 > 23 个垂直切片（tracer bullet），每个切片贯穿所有集成层（tRPC API → 主进程 → 渲染端 UI → 测试），完成后可独立演示。
 >
@@ -12,7 +12,7 @@
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -41,7 +41,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -71,7 +71,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -100,7 +100,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -129,7 +129,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -156,7 +156,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -189,7 +189,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -218,7 +218,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -248,7 +248,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -276,7 +276,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -308,7 +308,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -338,7 +338,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -373,7 +373,7 @@ AI Agent 高级功能：图片发送（截图/波形图）、会话分支（bran
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -403,7 +403,7 @@ AI Agent 高级功能：图片发送（截图/波形图）、会话分支（bran
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -433,7 +433,7 @@ AI Agent 高级功能：图片发送（截图/波形图）、会话分支（bran
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -463,7 +463,7 @@ AI Agent 高级功能：图片发送（截图/波形图）、会话分支（bran
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -492,7 +492,7 @@ AI Agent 高级功能：图片发送（截图/波形图）、会话分支（bran
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -521,7 +521,7 @@ AI Agent 高级功能：图片发送（截图/波形图）、会话分支（bran
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -548,7 +548,7 @@ AI Agent 高级功能：图片发送（截图/波形图）、会话分支（bran
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -579,7 +579,7 @@ AI Agent 高级功能：图片发送（截图/波形图）、会话分支（bran
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -607,7 +607,7 @@ TO（Tape-Out）就绪检查清单：覆盖率门槛、回归通过率、签核�
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -636,7 +636,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 
@@ -665,7 +665,7 @@ omp skill 安装/卸载管理，MCP 服务器配置管理，项目级 AI 系统�
 
 ### Parent
 
-[PRD: SoC Verify M2-M7](./prd-m2-m7.md)
+[PRD: SoC Verify M2-M7](../prd/prd-m2-m7.md)
 
 ### What to build
 

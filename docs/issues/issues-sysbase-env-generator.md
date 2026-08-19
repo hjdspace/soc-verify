@@ -1,6 +1,6 @@
 # Issues: Unisoc SoC 验证环境自动生成 Flow
 
-> 来源 PRD：`docs/prd-sysbase-env-generator.md`
+> 来源 PRD：`docs/prd/prd-sysbase-env-generator.md`
 > 原型参考：`docs/prototypes/sysbase-env-gen-wizard.html`
 
 ---

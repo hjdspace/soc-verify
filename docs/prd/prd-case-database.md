@@ -34,7 +34,7 @@ SoC 验证工程师在使用 SoC Verify 平台时，从其他页面切换到左�
 
 **仿真阶段（Phase）**：扩展 `CaseParserPlugin` 返回可选 `phase` 字段（如 DVR1/DVR2/DVR3/DVS1/DVS2/POST），作为用例属性存储在 DB 中，Dashboard 可按阶段分组查询通过率。
 
-架构决策详见 [ADR 0017](./adr/0017-case-database-architecture.md)。
+架构决策详见 [ADR 0017](../adr/0017-case-database-architecture.md)。
 
 ## User Stories
 

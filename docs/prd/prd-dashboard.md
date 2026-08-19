@@ -1,10 +1,10 @@
 # PRD: Dashboard — 验证数据可视化面板
 
-> **Parent ADR**: [ADR 0019: Dashboard 架构](./adr/0019-dashboard-architecture.md)
+> **Parent ADR**: [ADR 0019: Dashboard 架构](../adr/0019-dashboard-architecture.md)
 >
 > **Glossary**: [术语表](./CONTEXT.md) → Dashboard 域
 >
-> **Prototype**: [docs/prototypes/dashboard.html](./prototypes/dashboard.html)
+> **Prototype**: [docs/prototypes/dashboard.html](../prototypes/dashboard.html)
 >
 > **Triage label**: `ready-for-agent`
 
@@ -30,9 +30,9 @@ SoC 验证工程师在项目推进过程中，无法快速了解整体验证进�
 
 完全重写 Dashboard，数据源切换为 Case Database（ADR 0017）的 `simulation_runs` + `cases` 表，使用 Apache ECharts 渲染图表，tRPC router 按图表细粒度拆分 procedure，前端以标签页分区展示 9 种图表视图。顶部工具栏提供全局时间范围选择器和全局子系统筛选下拉菜单，所有图表共享筛选状态。
 
-架构决策详见 [ADR 0019](./adr/0019-dashboard-architecture.md)。
+架构决策详见 [ADR 0019](../adr/0019-dashboard-architecture.md)。
 
-HTML 原型见 [docs/prototypes/dashboard.html](./prototypes/dashboard.html)。
+HTML 原型见 [docs/prototypes/dashboard.html](../prototypes/dashboard.html)。
 
 ## User Stories
 

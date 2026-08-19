@@ -1,10 +1,10 @@
 # PRD：代码编辑器优化 — UI 美化 · 布局增强 · Vim 模式
 
-> **Prototype**: [编辑器优化原型](./prototypes/editor-optimization.html)
+> **Prototype**: [编辑器优化原型](../prototypes/editor-optimization.html)
 >
-> **Glossary**: [术语表](./adr/glossary.md)
+> **Glossary**: [术语表](../adr/glossary.md)
 >
-> **Issues**: [Issues: 代码编辑器优化](./issues-editor-optimization.md)
+> **Issues**: [Issues: 代码编辑器优化](../issues/issues-editor-optimization.md)
 
 ## Problem Statement
 

@@ -508,15 +508,18 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
     const targetPath = entry?.filePath ?? filePath;
     const fileName = entry?.fileName ?? targetPath.replace(/\\/g, '/').split('/').pop() ?? targetPath;
 
-    // 始终在普通编辑器中打开；未审阅的文件同时加载 diff 供内联审阅展示
-    openFileDestination(useWorkbenchStore.getState().open, targetPath, fileName);
-
     if (!entry || entry.reviewed) return;
 
+    // 先设置当前 review entry，再切换编辑器。
+    // Workbench.open 会同步挂载 FileEditor；如果顺序相反，新的编辑器会在
+    // review 状态尚未就绪时初始化，导致 Review next file 页面缺少审阅控件。
     set({
       currentFilePath: entry.filePath,
       currentReviewToolCallId: entry.toolCalls[entry.toolCalls.length - 1]?.id ?? null,
     });
+
+    // 始终在普通编辑器中打开；未审阅的文件同时加载 diff 供内联审阅展示
+    openFileDestination(useWorkbenchStore.getState().open, targetPath, fileName);
     void get().ensureDiffLoaded(entry.filePath);
   },
 

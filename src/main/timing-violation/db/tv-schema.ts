@@ -2,7 +2,7 @@
  * 数据库 Schema 定义
  *
  * 参考 docs/timing-violation-handoff.md §4.3
- * 参考 docs/prd-timing-violation.md Implementation Decisions → Schema 设计
+ * 参考 docs/prd/prd-timing-violation.md Implementation Decisions → Schema 设计
  */
 
 /** 创建所有表 + 索引的 SQL */

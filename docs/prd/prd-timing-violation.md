@@ -402,10 +402,10 @@ CREATE TABLE IF NOT EXISTS violation_patterns (
 
 ### 关键 ADR
 
-- [ADR-0011](./adr/0011-timing-violation-module-architecture.md) — 模块架构决策
-- [ADR-0012](./adr/0012-better-sqlite3-for-timing-violation.md) — 数据存储决策
-- [ADR-0013](./adr/0013-worker-thread-for-violation-parsing.md) — Worker Thread 解析决策
-- [ADR-0014](./adr/0014-vertical-slice-phasing-for-timing-violation.md) — 垂直切片实现阶段
+- [ADR-0011](../adr/0011-timing-violation-module-architecture.md) — 模块架构决策
+- [ADR-0012](../adr/0012-better-sqlite3-for-timing-violation.md) — 数据存储决策
+- [ADR-0013](../adr/0013-worker-thread-for-violation-parsing.md) — Worker Thread 解析决策
+- [ADR-0014](../adr/0014-vertical-slice-phasing-for-timing-violation.md) — 垂直切片实现阶段
 
 ### 交付文档
 

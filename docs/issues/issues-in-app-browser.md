@@ -1,10 +1,10 @@
 # Issues：内置网页工作区与 WebContentsView 迁移
 
-> **Parent PRD**: [PRD: 内置网页工作区](./prd-in-app-browser.md)
+> **Parent PRD**: [PRD: 内置网页工作区](../prd/prd-in-app-browser.md)
 >
-> **Parent ADR**: [ADR 0016: WebContentsView Surface](./adr/0016-webcontentsview-surfaces.md)
+> **Parent ADR**: [ADR 0016: WebContentsView Surface](../adr/0016-webcontentsview-surfaces.md)
 >
-> **Glossary**: [术语表](./adr/glossary.md)
+> **Glossary**: [术语表](../adr/glossary.md)
 >
 > 以下 Issue 按依赖顺序排列，采用可独立验证的垂直切片。最终不得保留 `<webview>` 双轨实现。
 

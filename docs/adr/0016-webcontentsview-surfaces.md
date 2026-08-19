@@ -119,5 +119,5 @@ URL、标题、加载状态、重定向和失败状态以主进程 `webContents`
 ## 参考
 
 - [ADR 0015: officecli 集成](./0015-officecli-integration.md)
-- [PRD: 内置网页工作区](../prd-in-app-browser.md)
-- [Issues: 内置网页工作区](../issues-in-app-browser.md)
+- [PRD: 内置网页工作区](../prd/prd-in-app-browser.md)
+- [Issues: 内置网页工作区](../issues/issues-in-app-browser.md)

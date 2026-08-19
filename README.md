@@ -450,17 +450,17 @@ npm run package:linux  # Linux AppImage（含 drawio 内置二进制）
 
 ## 文档
 
-- [PRD (M2-M10)](./docs/prd-m2-m7.md) — 产品需求文档
-- [PRD (Case Database)](./docs/prd-case-database.md) — 用例数据库产品需求文档
-- [PRD (Coverage Analysis)](./docs/prd-coverage-analysis.md) — 覆盖率分析产品需求文档
-- [PRD (Dashboard)](./docs/prd-dashboard.md) — 仪表盘产品需求文档
-- [PRD (Timing Violation)](./docs/prd-timing-violation.md) — 时序违例产品需求文档
-- [PRD (AI Coverage Closure)](./docs/prd-ai-coverage-closure.md) — AI 覆盖率闭合产品需求文档
-- [PRD (In-app Browser)](./docs/prd-in-app-browser.md) — 浏览器产品需求文档
-- [PRD (Knowledge Base)](./docs/prd-knowledge-base.md) — 知识库产品需求文档
-- [PRD (Officecli Integration)](./docs/prd-officecli-integration.md) — officecli 集成产品需求文档
-- [PRD (Sysbase Env Generator)](./docs/prd-sysbase-env-generator.md) — 环境生成器产品需求文档
-- [Issues (M2-M10)](./docs/issues-m2-m7.md) — 垂直切片 Issue
+- [PRD (M2-M10)](./docs/prd/prd-m2-m7.md) — 产品需求文档
+- [PRD (Case Database)](./docs/prd/prd-case-database.md) — 用例数据库产品需求文档
+- [PRD (Coverage Analysis)](./docs/prd/prd-coverage-analysis.md) — 覆盖率分析产品需求文档
+- [PRD (Dashboard)](./docs/prd/prd-dashboard.md) — 仪表盘产品需求文档
+- [PRD (Timing Violation)](./docs/prd/prd-timing-violation.md) — 时序违例产品需求文档
+- [PRD (AI Coverage Closure)](./docs/prd/prd-ai-coverage-closure.md) — AI 覆盖率闭合产品需求文档
+- [PRD (In-app Browser)](./docs/prd/prd-in-app-browser.md) — 浏览器产品需求文档
+- [PRD (Knowledge Base)](./docs/prd/prd-knowledge-base.md) — 知识库产品需求文档
+- [PRD (Officecli Integration)](./docs/prd/prd-officecli-integration.md) — officecli 集成产品需求文档
+- [PRD (Sysbase Env Generator)](./docs/prd/prd-sysbase-env-generator.md) — 环境生成器产品需求文档
+- [Issues (M2-M10)](./docs/issues/issues-m2-m7.md) — 垂直切片 Issue
 - [Plugin Development Guide](./docs/plugin-development.md) — 插件开发指南
 - [TraceWeave Usage Manual](./docs/traceweave-usage-manual.md) — TraceWeave 使用手册
 - [CHANGELOG](./CHANGELOG.md) — 变更日志

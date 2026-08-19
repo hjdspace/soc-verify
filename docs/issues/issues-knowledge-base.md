@@ -1,12 +1,12 @@
 # Issues: 文档知识库 — Tracer Bullet Vertical Slices
 
-> **Parent PRD**: [docs/prd-knowledge-base.md](./prd-knowledge-base.md)
+> **Parent PRD**: [docs/prd/prd-knowledge-base.md](../prd/prd-knowledge-base.md)
 >
-> **Parent ADR**: [ADR 0021: anydoc 文档知识库](./adr/0021-anydoc-document-knowledge-base.md)
+> **Parent ADR**: [ADR 0021: anydoc 文档知识库](../adr/0021-anydoc-document-knowledge-base.md)
 >
 > **Glossary**: [术语表](../CONTEXT.md)（知识库域）
 >
-> **UI 原型**: [knowledge-base.html](./prototypes/knowledge-base.html)
+> **UI 原型**: [knowledge-base.html](../prototypes/knowledge-base.html)
 >
 > 7 个垂直切片（tracer bullet），每个切片贯穿所有集成层（转换引擎 → 主进程服务 → tRPC API / Host Tools → 渲染端 UI → 测试），完成后可独立演示。
 >
@@ -20,7 +20,7 @@
 
 ### Parent
 
-[PRD: 文档知识库](./prd-knowledge-base.md)
+[PRD: 文档知识库](../prd/prd-knowledge-base.md)
 
 ### Triage
 
@@ -57,7 +57,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: 文档知识库](./prd-knowledge-base.md)
+[PRD: 文档知识库](../prd/prd-knowledge-base.md)
 
 ### Triage
 
@@ -92,7 +92,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: 文档知识库](./prd-knowledge-base.md)
+[PRD: 文档知识库](../prd/prd-knowledge-base.md)
 
 ### Triage
 
@@ -134,7 +134,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: 文档知识库](./prd-knowledge-base.md)
+[PRD: 文档知识库](../prd/prd-knowledge-base.md)
 
 ### Triage
 
@@ -176,7 +176,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: 文档知识库](./prd-knowledge-base.md)
+[PRD: 文档知识库](../prd/prd-knowledge-base.md)
 
 ### Triage
 
@@ -221,7 +221,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: 文档知识库](./prd-knowledge-base.md)
+[PRD: 文档知识库](../prd/prd-knowledge-base.md)
 
 ### Triage
 
@@ -259,7 +259,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: 文档知识库](./prd-knowledge-base.md)
+[PRD: 文档知识库](../prd/prd-knowledge-base.md)
 
 ### Triage
 

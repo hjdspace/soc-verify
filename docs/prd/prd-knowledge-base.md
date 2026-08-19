@@ -1,12 +1,12 @@
 # PRD: 文档知识库 — anydoc 驱动的 Markdown 知识库与 Agent 接入
 
-> **Parent ADR**: [ADR 0021: anydoc 文档知识库](./adr/0021-anydoc-document-knowledge-base.md)
+> **Parent ADR**: [ADR 0021: anydoc 文档知识库](../adr/0021-anydoc-document-knowledge-base.md)
 >
 > **Glossary**: [术语表](../CONTEXT.md)（知识库域）
 >
-> **Issues**: [Issues: 文档知识库](./issues-knowledge-base.md)
+> **Issues**: [Issues: 文档知识库](../issues/issues-knowledge-base.md)
 >
-> **UI 原型**: [knowledge-base.html](./prototypes/knowledge-base.html)
+> **UI 原型**: [knowledge-base.html](../prototypes/knowledge-base.html)
 
 ## Problem Statement
 

@@ -2,7 +2,7 @@
  * Case Scanner — 调用 SubsysDiscoveryPlugin + CaseParserPlugin 全量扫描并写入 DB
  *
  * 参考 docs/adr/0017-case-database-architecture.md → 决策 2/3
- * 参考 docs/prd-case-database.md → Case Scanner
+ * 参考 docs/prd/prd-case-database.md → Case Scanner
  *
  * 项目打开时后台调用插件全量扫描，结果写入 DB。
  * 用户点「刷新」按钮时重新调用插件扫描并更新 DB。

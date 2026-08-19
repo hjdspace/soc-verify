@@ -1,10 +1,10 @@
 # PRD：内置网页工作区与 WebContentsView 统一承载
 
-> **Parent ADR**: [ADR 0016: 统一使用 WebContentsView 承载网页与文档 Surface](./adr/0016-webcontentsview-surfaces.md)
+> **Parent ADR**: [ADR 0016: 统一使用 WebContentsView 承载网页与文档 Surface](../adr/0016-webcontentsview-surfaces.md)
 >
-> **Glossary**: [术语表](./adr/glossary.md)
+> **Glossary**: [术语表](../adr/glossary.md)
 >
-> **Issues**: [Issues: 内置网页工作区](./issues-in-app-browser.md)
+> **Issues**: [Issues: 内置网页工作区](../issues/issues-in-app-browser.md)
 
 ## 1. 目标
 

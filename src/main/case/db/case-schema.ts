@@ -2,7 +2,7 @@
  * Case Database Schema 定义
  *
  * 参考 docs/adr/0017-case-database-architecture.md → DB Schema
- * 参考 docs/prd-case-database.md → DB Schema
+ * 参考 docs/prd/prd-case-database.md → DB Schema
  */
 
 /** 创建所有表 + 索引的 SQL */

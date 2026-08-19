@@ -1,6 +1,6 @@
 # Issues: 时序违例功能复刻 — Tracer Bullet Vertical Slices
 
-> **Parent PRD**: [docs/prd-timing-violation.md](./prd-timing-violation.md)
+> **Parent PRD**: [docs/prd/prd-timing-violation.md](../prd/prd-timing-violation.md)
 >
 > 10 个垂直切片（tracer bullet），每个切片贯穿所有集成层（DB → tRPC API → 渲染端 UI → 测试），完成后可独立演示。
 >
@@ -12,7 +12,7 @@
 
 ### Parent
 
-[PRD: 后仿时序违例处理](./prd-timing-violation.md)
+[PRD: 后仿时序违例处理](../prd/prd-timing-violation.md)
 
 ### What to build
 
@@ -52,7 +52,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: 后仿时序违例处理](./prd-timing-violation.md)
+[PRD: 后仿时序违例处理](../prd/prd-timing-violation.md)
 
 ### What to build
 
@@ -84,7 +84,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: 后仿时序违例处理](./prd-timing-violation.md)
+[PRD: 后仿时序违例处理](../prd/prd-timing-violation.md)
 
 ### What to build
 
@@ -114,7 +114,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: 后仿时序违例处理](./prd-timing-violation.md)
+[PRD: 后仿时序违例处理](../prd/prd-timing-violation.md)
 
 ### What to build
 
@@ -147,7 +147,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: 后仿时序违例处理](./prd-timing-violation.md)
+[PRD: 后仿时序违例处理](../prd/prd-timing-violation.md)
 
 ### What to build
 
@@ -181,7 +181,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: 后仿时序违例处理](./prd-timing-violation.md)
+[PRD: 后仿时序违例处理](../prd/prd-timing-violation.md)
 
 ### What to build
 
@@ -214,7 +214,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: 后仿时序违例处理](./prd-timing-violation.md)
+[PRD: 后仿时序违例处理](../prd/prd-timing-violation.md)
 
 ### What to build
 
@@ -252,7 +252,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: 后仿时序违例处理](./prd-timing-violation.md)
+[PRD: 后仿时序违例处理](../prd/prd-timing-violation.md)
 
 ### What to build
 
@@ -283,7 +283,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: 后仿时序违例处理](./prd-timing-violation.md)
+[PRD: 后仿时序违例处理](../prd/prd-timing-violation.md)
 
 ### What to build
 
@@ -317,7 +317,7 @@ None — can start immediately.
 
 ### Parent
 
-[PRD: 后仿时序违例处理](./prd-timing-violation.md)
+[PRD: 后仿时序违例处理](../prd/prd-timing-violation.md)
 
 ### What to build
 

@@ -6,8 +6,8 @@
 
 | 文档 | 路径 | 说明 |
 |------|------|------|
-| PRD | `docs/prd-timing-violation.md` | 产品需求文档，含 71 条用户故事和完整 Python 参考文件清单 |
-| Issues | `docs/issues-timing-violation.md` | 10 个垂直切片 issue，按依赖顺序排列 |
+| PRD | `docs/prd/prd-timing-violation.md` | 产品需求文档，含 71 条用户故事和完整 Python 参考文件清单 |
+| Issues | `docs/issues/issues-timing-violation.md` | 10 个垂直切片 issue，按依赖顺序排列 |
 | ADR-0011 | `docs/adr/0011-timing-violation-module-architecture.md` | 模块架构决策 |
 | ADR-0012 | `docs/adr/0012-better-sqlite3-for-timing-violation.md` | 数据存储决策 |
 | ADR-0013 | `docs/adr/0013-worker-thread-for-violation-parsing.md` | Worker Thread 解析决策 |

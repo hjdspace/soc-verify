@@ -4,7 +4,7 @@
 
 Implemented（8 个 Issue 全部交付）
 
-> 实施记录见 [docs/issues-officecli-integration.md](../issues-officecli-integration.md)，覆盖 Issue #1 ~ #8 的完整垂直切片。
+> 实施记录见 [docs/issues/issues-officecli-integration.md](../issues/issues-officecli-integration.md)，覆盖 Issue #1 ~ #8 的完整垂直切片。
 >
 > 已交付能力：
 > - **Issue #1**：二进制打包与下载脚本 + 路径解析（`scripts/download-officecli.mjs` + `src/main/officecli/binary.ts`）

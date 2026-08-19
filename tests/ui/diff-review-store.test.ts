@@ -428,6 +428,37 @@ describe('Diff Review flow', () => {
     expect(trpc.project.getFileDiff.query).toHaveBeenCalledTimes(1);
   });
 
+  it('sets the next review entry before switching the workbench file', () => {
+    const firstPath = 'D:\\project\\rtl\\first.sv';
+    const secondPath = 'D:\\project\\rtl\\second.sv';
+    const first = completedEdit(firstPath);
+    const second = { ...completedEdit(secondPath), id: 'tool-2', toolCallId: 'call-2' };
+    useSessionStore.setState({
+      sessions: [{
+        id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
+        messages: [first, second],
+        composer: { inputMessage: '', selectedSkills: [], contextFiles: [] }, createdAt: 1,
+      }],
+    });
+    vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue(emptyDiff(secondPath));
+
+    const openCalls: Array<{ currentFilePath: string | null; path: string }> = [];
+    const originalOpen = useWorkbenchStore.getState().open;
+    useWorkbenchStore.setState({
+      open: (destination) => {
+        if (destination.type === 'file') {
+          openCalls.push({ currentFilePath: useDiffReviewStore.getState().currentFilePath, path: destination.path });
+        }
+        originalOpen(destination);
+      },
+    });
+
+    useDiffReviewStore.getState().openFile(secondPath);
+
+    expect(openCalls).toEqual([{ currentFilePath: secondPath, path: secondPath }]);
+    useWorkbenchStore.setState({ open: originalOpen });
+  });
+
   it('opens an unreviewed file from another Windows path spelling in the editor', async () => {
     const queuedPath = 'D:\\Project\\rtl\\core.sv';
     vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue(emptyDiff(queuedPath));
