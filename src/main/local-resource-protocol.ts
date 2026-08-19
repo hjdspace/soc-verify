@@ -35,7 +35,7 @@ const MIME_MAP: Record<string, string> = {
 };
 
 /**
- * 安全检查：确保文件路径在某个已打开项目的根目录内。
+ * 安全检查：确保文件路径在某个已打开项目的根目录或额外目录内。
  * 返回 true 表示允许访问。
  *
  * 路径比较前统一将反斜杠转为正斜杠并转为小写（Windows 不区分大小写），
@@ -50,6 +50,14 @@ function isPathWithinAnyProject(filePath: string): boolean {
     if (normalizedFile === normalizedRoot) return true;
     // 路径在根目录下（以 rootPath + '/' 开头）
     if (normalizedFile.startsWith(normalizedRoot + '/')) return true;
+
+    // 检查额外目录（extraDirs）
+    const dirs = project.extraDirs ?? [];
+    for (const dir of dirs) {
+      const normalizedDir = dir.path.replace(/\\/g, '/').toLowerCase();
+      if (normalizedFile === normalizedDir) return true;
+      if (normalizedFile.startsWith(normalizedDir + '/')) return true;
+    }
   }
   return false;
 }
