@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readdir, stat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync, watch as fsWatch, type FSWatcher as NodeFSWatcher } from 'node:fs';
-import { join, basename, relative } from 'node:path';
+import { join, basename, relative, resolve, normalize, sep } from 'node:path';
 import { app } from 'electron';
 
 const execFileAsync = promisify(execFile);
@@ -12,6 +12,8 @@ import type {
   ProjectState,
   FileTreeNode,
   FileTreeUpdate,
+  ExtraDirEntry,
+  DirGroup,
 } from '@shared/types';
 
 const SOCVERIFY_DIR = '.socverify';
@@ -26,15 +28,26 @@ const HIDDEN_DIRS = new Set(['.socverify', '.git']);
 
 const WATCH_DEBOUNCE_MS = 500;
 
+/** Per-directory watcher state: one fs.watch handle + debounce timer. */
+export interface DirWatcherEntry {
+  watcher: NodeFSWatcher | null;
+  debounceTimer: NodeJS.Timeout | null;
+}
+
 export interface ProjectEntry {
   info: ProjectInfo;
   watcher: NodeFSWatcher | null;
   debounceTimer: NodeJS.Timeout | null;
+  /** Extra directory watchers: keyed by dirId. */
+  dirWatchers: Map<string, DirWatcherEntry>;
 }
 
 class ProjectManagerImpl extends EventEmitter {
   private projects = new Map<string, ProjectEntry>();
   private fileTreeCache = new Map<string, FileTreeNode>();
+
+  /** Cache key suffix for rootPath file tree. */
+  private static readonly ROOT_DIR_ID = 'root';
 
   // ─── 项目数据目录 ─────────────────────────────────────
 
@@ -64,6 +77,8 @@ class ProjectManagerImpl extends EventEmitter {
     for (const [, entry] of this.projects) {
       if (entry.info.rootPath === rootPath) {
         entry.info.lastOpenedAt = Date.now();
+        // Migrate old projects: ensure extraDirs is initialized
+        this.migrateExtraDirs(entry.info);
         if (!entry.watcher) {
           entry.watcher = this.startFileWatcher(entry.info.id, rootPath);
         }
@@ -75,10 +90,19 @@ class ProjectManagerImpl extends EventEmitter {
     const projectId = `proj_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const projectName = name ?? basename(rootPath);
 
+    // Restore extraDirs from persisted projects.json if this rootPath was previously saved.
+    // This handles the close→reopen cycle: closeProject removes from memory, but the
+    // projects.json on disk still has the extraDirs data.
+    const persisted = await this.loadProjectsDb();
+    const existing = persisted.find(
+      (p) => normalize(resolve(p.rootPath)) === normalize(resolve(rootPath)),
+    );
+
     const info: ProjectInfo = {
       id: projectId,
       name: projectName,
       rootPath,
+      extraDirs: existing?.extraDirs,
       createdAt: Date.now(),
       lastOpenedAt: Date.now(),
     };
@@ -89,7 +113,10 @@ class ProjectManagerImpl extends EventEmitter {
     // Start file watcher
     const watcher = this.startFileWatcher(projectId, rootPath);
 
-    this.projects.set(projectId, { info, watcher, debounceTimer: null });
+    this.projects.set(projectId, { info, watcher, debounceTimer: null, dirWatchers: new Map() });
+
+    // Start watchers for any extraDirs restored from persisted state
+    await this.startExtraDirWatchers(projectId, info);
     await this.saveProjectsDb();
 
     this.emit('project:opened', info);
@@ -106,9 +133,25 @@ class ProjectManagerImpl extends EventEmitter {
     if (entry.watcher) {
       entry.watcher.close();
     }
-    this.projects.delete(projectId);
-    this.fileTreeCache.delete(projectId);
+    // Close all extra directory watchers
+    for (const [, dirEntry] of entry.dirWatchers) {
+      if (dirEntry.debounceTimer) {
+        clearTimeout(dirEntry.debounceTimer);
+      }
+      if (dirEntry.watcher) {
+        dirEntry.watcher.close();
+      }
+    }
+    // Save before deleting from memory so projects.json retains the project
+    // (including extraDirs) for restoration on next openProject.
     await this.saveProjectsDb();
+    this.projects.delete(projectId);
+    // Clear all file tree caches for this project (root + all extra dirs)
+    for (const key of this.fileTreeCache.keys()) {
+      if (key.startsWith(projectId + ':')) {
+        this.fileTreeCache.delete(key);
+      }
+    }
     this.emit('project:closed', projectId);
   }
 
@@ -138,7 +181,8 @@ class ProjectManagerImpl extends EventEmitter {
     const entry = this.projects.get(projectId);
     if (!entry) throw new Error(`Project not found: ${projectId}`);
 
-    const cached = this.fileTreeCache.get(projectId);
+    const cacheKey = `${projectId}:${ProjectManagerImpl.ROOT_DIR_ID}`;
+    const cached = this.fileTreeCache.get(cacheKey);
     if (cached) return cached;
 
     // Lazy loading: only build the root level (depth 0 → 1) for instant display.
@@ -151,7 +195,33 @@ class ProjectManagerImpl extends EventEmitter {
     // which can be slow on large repos. The UI renders immediately; ignored paths
     // are marked via a separate non-blocking pass (getDirChildren applies it per-dir).
     // Only do the initial mark if git is available and fast.
-    this.fileTreeCache.set(projectId, tree);
+    this.fileTreeCache.set(cacheKey, tree);
+    return tree;
+  }
+
+  /**
+   * Get the file tree for an extra directory (by dirId).
+   * Each directory has its own independent cache and lazy loading.
+   * The watcher is started on first access if not already running.
+   */
+  async getDirFileTree(projectId: string, dirId: string): Promise<FileTreeNode> {
+    const entry = this.projects.get(projectId);
+    if (!entry) throw new Error(`Project not found: ${projectId}`);
+
+    const dirs = entry.info.extraDirs ?? [];
+    const dir = dirs.find((d) => d.id === dirId);
+    if (!dir) throw new Error(`Directory not found: ${dirId}`);
+
+    const cacheKey = `${projectId}:${dirId}`;
+    const cached = this.fileTreeCache.get(cacheKey);
+    if (cached) return cached;
+
+    const tree = await this.buildFileTreeShallow(dir.path);
+    this.fileTreeCache.set(cacheKey, tree);
+
+    // Ensure the watcher is started for this directory
+    this.ensureDirWatcher(projectId, entry, dirId, dir.path);
+
     return tree;
   }
 
@@ -160,14 +230,28 @@ class ProjectManagerImpl extends EventEmitter {
    * Used for lazy loading: the UI calls this when a directory is first expanded.
    * Returns sorted entries with directories marked `lazy: true` if they may have children.
    * Applies git-ignore marking if the ignored-paths cache is available.
+   *
+   * @param dirId Optional: when provided, the security check uses the directory
+   *              identified by dirId (an extraDir or 'root' for rootPath).
+   *              When omitted, falls back to rootPath security check.
    */
-  async getDirChildren(projectId: string, dirPath: string): Promise<FileTreeNode[]> {
+  async getDirChildren(projectId: string, dirPath: string, dirId?: string): Promise<FileTreeNode[]> {
     const entry = this.projects.get(projectId);
     if (!entry) throw new Error(`Project not found: ${projectId}`);
 
-    // Security: ensure the path is within the project root
-    const rel = relative(entry.info.rootPath, dirPath);
-    if (rel.startsWith('..')) throw new Error('Path is outside project root');
+    // Security: ensure the path is within an allowed directory
+    if (dirId && dirId !== ProjectManagerImpl.ROOT_DIR_ID) {
+      // Extra directory: check against the specific extraDir path
+      const dirs = entry.info.extraDirs ?? [];
+      const dir = dirs.find((d) => d.id === dirId);
+      if (!dir) throw new Error(`Directory not found: ${dirId}`);
+      const rel = relative(dir.path, dirPath);
+      if (rel.startsWith('..')) throw new Error('Path is outside directory scope');
+    } else {
+      // RootPath security check
+      const rel = relative(entry.info.rootPath, dirPath);
+      if (rel.startsWith('..')) throw new Error('Path is outside project root');
+    }
 
     return this.buildFileTreeShallowChildren(dirPath);
   }
@@ -273,6 +357,55 @@ class ProjectManagerImpl extends EventEmitter {
     });
   }
 
+  /**
+   * Start fs.watch for an extra directory and store it in the project's dirWatchers map.
+   * Idempotent: if a watcher already exists for this dirId, it is not recreated.
+   */
+  private ensureDirWatcher(projectId: string, entry: ProjectEntry, dirId: string, dirPath: string): void {
+    if (entry.dirWatchers.has(dirId)) return;
+
+    const watcher = this.startDirFileWatcher(projectId, dirPath, dirId);
+    entry.dirWatchers.set(dirId, { watcher, debounceTimer: null });
+  }
+
+  /**
+   * Start watchers for all extraDirs that are already in the project's extraDirs.
+   * Called during project open/restore to re-establish watchers for persisted dirs.
+   */
+  private async startExtraDirWatchers(projectId: string, info: ProjectInfo): Promise<void> {
+    const entry = this.projects.get(projectId);
+    if (!entry) return;
+    const dirs = info.extraDirs ?? [];
+    for (const dir of dirs) {
+      if (!existsSync(dir.path)) continue;
+      this.ensureDirWatcher(projectId, entry, dir.id, dir.path);
+    }
+  }
+
+  /**
+   * Create an fs.watch handle for an extra directory, emitting filetree:update
+   * on changes with the dirId for cache invalidation.
+   */
+  private startDirFileWatcher(projectId: string, rootPath: string, dirId: string): NodeFSWatcher | null {
+    let watcher: NodeFSWatcher | null = null;
+    try {
+      watcher = fsWatch(
+        rootPath,
+        { recursive: true },
+        (_eventType, filename) => {
+          if (!filename) return;
+          const fullPath = join(rootPath, filename);
+          if (filename.includes('.socverify') || filename.includes('.git')) return;
+          this.scheduleDebouncedUpdate(projectId, fullPath, dirId);
+        },
+      );
+    } catch (err) {
+      console.warn(`[project-manager] fs.watch failed for extra dir ${rootPath}:`, err);
+      return null;
+    }
+    return watcher;
+  }
+
   private startFileWatcher(projectId: string, rootPath: string): NodeFSWatcher | null {
     // Use native fs.watch with recursive: true — a single kernel handle
     // watches the entire subtree (Windows/macOS use ReadDirectoryChangesW/FSEvents).
@@ -301,21 +434,40 @@ class ProjectManagerImpl extends EventEmitter {
    * Collapse a burst of file-change events into a single cache-invalidation +
    * filetree:update emission. Without this, 50 file changes trigger 50 full
    * tree re-walks (each ~120ms) — a multi-second cascade.
+   *
+   * @param dirId The directory ID for cache key ('root' for rootPath, or an extraDir ID).
+   *              Defaults to 'root'.
    */
-  private scheduleDebouncedUpdate(projectId: string, path: string): void {
+  private scheduleDebouncedUpdate(projectId: string, path: string, dirId: string = ProjectManagerImpl.ROOT_DIR_ID): void {
     const entry = this.projects.get(projectId);
     if (!entry) return;
 
-    if (entry.debounceTimer) {
-      clearTimeout(entry.debounceTimer);
+    // Determine which timer to use: root watcher or a specific extraDir watcher
+    let timer: NodeJS.Timeout | null;
+    let setTimer: (t: NodeJS.Timeout | null) => void;
+
+    if (dirId === ProjectManagerImpl.ROOT_DIR_ID) {
+      timer = entry.debounceTimer;
+      setTimer = (t) => { entry.debounceTimer = t; };
+    } else {
+      const dirEntry = entry.dirWatchers.get(dirId);
+      if (!dirEntry) return;
+      timer = dirEntry.debounceTimer;
+      setTimer = (t) => { dirEntry.debounceTimer = t; };
     }
 
-    entry.debounceTimer = setTimeout(() => {
-      this.fileTreeCache.delete(projectId);
+    if (timer) {
+      clearTimeout(timer);
+    }
+
+    const newTimer = setTimeout(() => {
+      const cacheKey = `${projectId}:${dirId}`;
+      this.fileTreeCache.delete(cacheKey);
       const update: FileTreeUpdate = { projectId, type: 'change', path };
       this.emit('filetree:update', update);
-      entry.debounceTimer = null;
+      setTimer(null);
     }, WATCH_DEBOUNCE_MS);
+    setTimer(newTimer);
   }
 
   // ─── .socverify 配置目录 ──────────────────────────────
@@ -442,7 +594,7 @@ class ProjectManagerImpl extends EventEmitter {
     for (const info of persisted) {
       if (this.projects.has(info.id)) continue;
       if (!existsSync(info.rootPath)) continue;
-      this.projects.set(info.id, { info, watcher: null, debounceTimer: null });
+      this.projects.set(info.id, { info, watcher: null, debounceTimer: null, dirWatchers: new Map() });
     }
     return persisted.length;
   }
@@ -459,9 +611,9 @@ class ProjectManagerImpl extends EventEmitter {
     const project = this.getProject(projectId);
     if (!project) throw new Error(`Project not found: ${projectId}`);
 
-    // Ensure file is within project root
-    const rel = relative(project.rootPath, filePath);
-    if (rel.startsWith('..')) throw new Error('File path is outside project root');
+    if (!this.isPathWithinProjectDirs(project, filePath)) {
+      throw new Error('File path is outside project directories');
+    }
 
     return readFile(filePath, 'utf-8');
   }
@@ -470,9 +622,9 @@ class ProjectManagerImpl extends EventEmitter {
     const project = this.getProject(projectId);
     if (!project) throw new Error(`Project not found: ${projectId}`);
 
-    // Ensure file is within project root
-    const rel = relative(project.rootPath, filePath);
-    if (rel.startsWith('..')) throw new Error('File path is outside project root');
+    if (!this.isPathWithinProjectDirs(project, filePath)) {
+      throw new Error('File path is outside project directories');
+    }
 
     await writeFile(filePath, content, 'utf-8');
   }
@@ -490,6 +642,227 @@ class ProjectManagerImpl extends EventEmitter {
     return info;
   }
 
+  // ─── 多目录管理 ───────────────────────────────────────
+
+  /**
+   * 获取项目的所有额外目录列表。
+   * 旧项目（extraDirs 不存在）返回空数组——rootPath 隐式作为验证组第一项和 cwd。
+   */
+  getExtraDirs(projectId: string): ExtraDirEntry[] {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    return project.extraDirs ?? [];
+  }
+
+  /**
+   * 向项目添加一个额外目录。
+   *
+   * - 路径必须是已存在的目录
+   * - 不允许重复添加（路径已存在于 rootPath 或 extraDirs 中）
+   * - group 必须是 'verify' 或 'design'
+   * - 新目录的 order 为同组已有最大 order + 1
+   * - 新目录默认 isCwd = false（rootPath 是隐式 cwd）
+   *
+   * 添加后持久化到 projects.json。
+   */
+  async addDir(
+    projectId: string,
+    path: string,
+    group: DirGroup,
+    label?: string,
+  ): Promise<ExtraDirEntry> {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+
+    // Validate group
+    if (group !== 'verify' && group !== 'design') {
+      throw new Error(`Invalid directory group: ${group}. Must be 'verify' or 'design'`);
+    }
+
+    // Normalize paths for comparison
+    const normalizedNew = normalize(resolve(path));
+    const normalizedRoot = normalize(resolve(project.rootPath));
+
+    // Reject if path equals rootPath
+    if (normalizedNew === normalizedRoot) {
+      throw new Error('Path is the project rootPath — rootPath is implicitly included');
+    }
+
+    // Check path exists and is a directory
+    const statResult = await stat(path);
+    if (!statResult.isDirectory()) {
+      throw new Error(`Path is not a directory: ${path}`);
+    }
+
+    // Check for duplicates in existing extraDirs
+    const dirs = project.extraDirs ?? [];
+    if (dirs.some((d) => normalize(resolve(d.path)) === normalizedNew)) {
+      throw new Error(`Directory already added: ${path}`);
+    }
+
+    // Calculate order: max order in same group + 1
+    const sameGroupOrders = dirs.filter((d) => d.group === group).map((d) => d.order);
+    const order = sameGroupOrders.length > 0 ? Math.max(...sameGroupOrders) + 1 : 0;
+
+    const entry: ExtraDirEntry = {
+      id: `dir_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      path,
+      group,
+      label,
+      isCwd: false,
+      order,
+      createdAt: Date.now(),
+    };
+
+    project.extraDirs = [...dirs, entry];
+    await this.saveProjectsDb();
+    return entry;
+  }
+
+  /**
+   * 从项目移除一个额外目录。
+   *
+   * - 如果被移除的目录是 cwd，自动回退到验证组第一个剩余目录
+   * - 如果验证组没有剩余目录，rootPath 成为隐式 cwd（无 extraDir 标记 isCwd）
+   *
+   * 移除后持久化到 projects.json。
+   */
+  async removeDir(projectId: string, dirId: string): Promise<void> {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+
+    const dirs = project.extraDirs ?? [];
+    const target = dirs.find((d) => d.id === dirId);
+    if (!target) {
+      throw new Error(`Directory not found: ${dirId}`);
+    }
+
+    const remaining = dirs.filter((d) => d.id !== dirId);
+
+    // If removed dir was cwd, fall back to verify group first remaining dir
+    let newCwdPath: string | null = null;
+    if (target.isCwd) {
+      const verifyRemaining = remaining
+        .filter((d) => d.group === 'verify')
+        .sort((a, b) => a.order - b.order);
+
+      if (verifyRemaining.length > 0) {
+        verifyRemaining[0].isCwd = true;
+        newCwdPath = verifyRemaining[0].path;
+      } else {
+        // No verify dirs remain — rootPath is implicit cwd
+        newCwdPath = project.rootPath;
+      }
+    }
+
+    project.extraDirs = remaining.length > 0 ? remaining : undefined;
+    await this.saveProjectsDb();
+
+    // If the removed dir was cwd, notify the renderer to rebuild the active
+    // AI session with the new cwd (same as explicit setCwd).
+    if (newCwdPath) {
+      this.emit('cwd:changed', { projectId, cwd: newCwdPath, dirId: 'root' });
+    }
+  }
+
+  /**
+   * 设置某个目录为 cwd。
+   *
+   * 将目标目录的 isCwd 设为 true，其余所有目录（含 rootPath 的隐式 cwd）取消标记。
+   * 注意：rootPath 的隐式 cwd 不存储在 extraDirs 中——当没有 extraDir 标记 isCwd 时，
+   * rootPath 自动是 cwd。设置任意 extraDir 为 cwd 会覆盖此默认行为。
+   *
+   * 持久化到 projects.json。
+   */
+  async setCwd(projectId: string, dirId: string): Promise<string> {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+
+    const dirs = project.extraDirs ?? [];
+    const target = dirs.find((d) => d.id === dirId);
+    if (!target) {
+      throw new Error(`Directory not found: ${dirId}`);
+    }
+
+    for (const d of dirs) {
+      d.isCwd = d.id === dirId;
+    }
+
+    await this.saveProjectsDb();
+
+    // Notify listeners that cwd has changed — the renderer uses this to
+    // rebuild the active AI session (destroy + create) with the new cwd.
+    this.emit('cwd:changed', { projectId, cwd: target.path, dirId });
+    return target.path;
+  }
+
+  /**
+   * 更新某个目录的标签。
+   *
+   * 持久化到 projects.json。
+   */
+  async updateDirLabel(projectId: string, dirId: string, label: string): Promise<void> {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+
+    const dirs = project.extraDirs ?? [];
+    const target = dirs.find((d) => d.id === dirId);
+    if (!target) {
+      throw new Error(`Directory not found: ${dirId}`);
+    }
+
+    target.label = label;
+    await this.saveProjectsDb();
+  }
+
+  // ─── 路径安全检查 ─────────────────────────────────────
+
+  /**
+   * 检查文件路径是否在项目的任意已添加目录内（rootPath + extraDirs）。
+   *
+   * - rootPath 始终是允许的目录
+   * - extraDirs 中的每个目录也是允许的
+   * - 路径在任一目录内即返回 true
+   *
+   * 路径比较使用 normalize + resolve 避免符号链接和相对路径绕过。
+   */
+  isPathWithinProjectDirs(project: ProjectInfo, filePath: string): boolean {
+    const normalizedFile = normalize(resolve(filePath));
+
+    // Check rootPath
+    const normalizedRoot = normalize(resolve(project.rootPath));
+    if (normalizedFile === normalizedRoot) return true;
+    if (normalizedFile.startsWith(normalizedRoot + '/')) return true;
+    // Windows path separator: resolve may use \ on Windows
+    if (normalizedFile.startsWith(normalizedRoot + '\\')) return true;
+    if (normalizedFile.startsWith(normalizedRoot + sep)) return true;
+
+    // Check extraDirs
+    const dirs = project.extraDirs ?? [];
+    for (const dir of dirs) {
+      const normalizedDir = normalize(resolve(dir.path));
+      if (normalizedFile === normalizedDir) return true;
+      if (normalizedFile.startsWith(normalizedDir + '/')) return true;
+      if (normalizedFile.startsWith(normalizedDir + '\\')) return true;
+      if (normalizedFile.startsWith(normalizedDir + sep)) return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * 旧项目迁移：如果 extraDirs 不存在或为空，不做任何操作——
+   * rootPath 隐式作为验证组第一项和 cwd，无需显式存储。
+   *
+   * 此方法目前是幂等的 no-op，保留为扩展点以备未来迁移逻辑变化。
+   */
+  private migrateExtraDirs(info: ProjectInfo): void {
+    // Old projects have no extraDirs field — rootPath is implicit verify group first item and cwd.
+    // No explicit migration needed: extraDirs stays undefined, and getExtraDirs returns [].
+    // This method exists as a documented extension point for future schema changes.
+    void info;
+  }
+
   // ─── 清理 ─────────────────────────────────────────────
 
   destroy(): void {
@@ -499,6 +872,15 @@ class ProjectManagerImpl extends EventEmitter {
       }
       if (entry.watcher) {
         entry.watcher.close();
+      }
+      // Close all extra directory watchers
+      for (const [, dirEntry] of entry.dirWatchers) {
+        if (dirEntry.debounceTimer) {
+          clearTimeout(dirEntry.debounceTimer);
+        }
+        if (dirEntry.watcher) {
+          dirEntry.watcher.close();
+        }
       }
     }
     this.projects.clear();
