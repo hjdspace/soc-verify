@@ -1,5 +1,17 @@
 import type { PluginViewLocation } from '../plugin-types';
 
+export type DirGroup = 'verify' | 'design';
+
+export interface ExtraDirEntry {
+  id: string;
+  path: string;
+  group: DirGroup;
+  label?: string;
+  isCwd: boolean;
+  order: number;
+  createdAt: number;
+}
+
 export interface AppVersionInfo {
   app: string;
   version: string;
@@ -15,6 +27,8 @@ export interface ProjectInfo {
   id: string;
   name: string;
   rootPath: string;
+  /** 用户后续添加的额外目录。rootPath 不存入此处（隐式属于验证组第一项 = 默认 cwd）。 */
+  extraDirs?: ExtraDirEntry[];
   createdAt: number;
   lastOpenedAt: number;
 }
