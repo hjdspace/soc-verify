@@ -14,7 +14,7 @@ button {
 /* ── 字体管理 CSS 变量（由 useFontStore 动态设置） ─────────── */
 :root {
   --app-font-family-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --app-font-family-code: ui-monospace, "SF Mono", "Cascadia Code", "Fira Code", Consolas, "Courier New", monospace;
+  --app-font-family-code: "JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, "SF Mono", Consolas, "Courier New", monospace;
   --app-font-size-ui: 13px;
   --app-font-size-code: 12px;
 }
@@ -91,6 +91,7 @@ button {
   --secondary-foreground: oklch(0.32 0.012 75);
   --muted: oklch(0.93 0.008 75);
   --muted-foreground: oklch(0.50 0.012 75);
+  --fg-faint: oklch(0.70 0.008 75);
   --accent: oklch(0.91 0.014 285);
   --accent-foreground: oklch(0.32 0.012 75);
   --destructive: oklch(0.55 0.20 25);
@@ -132,6 +133,21 @@ button {
   --warning-foreground: oklch(0.32 0.08 75);
   --violet: oklch(0.88 0.05 295);
   --violet-foreground: oklch(0.32 0.10 295);
+
+  /* Vim 模式色 */
+  --vim-normal:  oklch(0.50 0.13 145);   /* 绿: NORMAL */
+  --vim-insert:  oklch(0.50 0.11 230);   /* 青: INSERT */
+  --vim-visual:  oklch(0.50 0.13 55);    /* 金: VISUAL */
+  --vim-command: oklch(0.50 0.13 285);   /* 紫: COMMAND */
+
+  /* 语法高亮语义色 */
+  --syn-keyword:    oklch(0.42 0.13 285);   /* 紫: module, input, output */
+  --syn-string:     oklch(0.50 0.13 145);   /* 绿: 字符串 */
+  --syn-number:     oklch(0.50 0.13 55);    /* 金: 数字 */
+  --syn-comment:    oklch(0.50 0.010 75);   /* 灰: 注释 */
+  --syn-function:   oklch(0.50 0.11 230);   /* 青: 函数名 */
+  --syn-type:       oklch(0.50 0.12 25);    /* 红: 类型 */
+  --syn-property:   oklch(0.45 0.10 55);    /* 暖金: 属性 */
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -152,6 +168,7 @@ button {
   --secondary-foreground: oklch(0.92 0.006 60);
   --muted: oklch(0.25 0.008 60);
   --muted-foreground: oklch(0.62 0.008 60);
+  --fg-faint: oklch(0.38 0.006 60);
   --accent: oklch(0.28 0.010 60);
   --accent-foreground: oklch(0.92 0.006 60);
   --destructive: oklch(0.65 0.20 25);
@@ -193,6 +210,21 @@ button {
   --warning-foreground: oklch(0.80 0.12 75);
   --violet: oklch(0.28 0.05 295);
   --violet-foreground: oklch(0.78 0.13 295);
+
+  /* Vim 模式色 */
+  --vim-normal:  oklch(0.78 0.15 145);   /* 绿: NORMAL */
+  --vim-insert:  oklch(0.72 0.13 195);   /* 青: INSERT */
+  --vim-visual:  oklch(0.78 0.15 55);    /* 金: VISUAL */
+  --vim-command: oklch(0.72 0.15 285);   /* 紫: COMMAND */
+
+  /* 语法高亮语义色 */
+  --syn-keyword:    oklch(0.72 0.15 285);   /* 紫: module, input, output */
+  --syn-string:     oklch(0.78 0.13 145);   /* 绿: 字符串 */
+  --syn-number:     oklch(0.78 0.15 55);    /* 金: 数字 */
+  --syn-comment:    oklch(0.52 0.010 60);   /* 灰: 注释 */
+  --syn-function:   oklch(0.78 0.13 195);   /* 青: 函数名 */
+  --syn-type:       oklch(0.72 0.12 25);    /* 红: 类型 */
+  --syn-property:   oklch(0.75 0.10 55);    /* 暖金: 属性 */
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -213,6 +245,7 @@ button {
   --secondary-foreground: oklch(0.92 0.004 220);
   --muted: oklch(0.27 0.006 220);
   --muted-foreground: oklch(0.62 0.006 220);
+  --fg-faint: oklch(0.40 0.004 220);
   --accent: oklch(0.30 0.008 220);
   --accent-foreground: oklch(0.92 0.004 220);
   --destructive: oklch(0.65 0.20 25);
@@ -254,6 +287,21 @@ button {
   --warning-foreground: oklch(0.78 0.12 75);
   --violet: oklch(0.28 0.05 295);
   --violet-foreground: oklch(0.76 0.13 295);
+
+  /* Vim 模式色 */
+  --vim-normal:  oklch(0.70 0.14 145);   /* 绿: NORMAL */
+  --vim-insert:  oklch(0.70 0.13 55);    /* 铜: INSERT */
+  --vim-visual:  oklch(0.70 0.13 285);   /* 紫: VISUAL */
+  --vim-command: oklch(0.70 0.12 220);   /* 冷蓝: COMMAND */
+
+  /* 语法高亮语义色 */
+  --syn-keyword:    oklch(0.70 0.13 55);    /* 铜: module, input, output */
+  --syn-string:     oklch(0.70 0.14 145);   /* 绿: 字符串 */
+  --syn-number:     oklch(0.70 0.13 285);   /* 紫: 数字 */
+  --syn-comment:    oklch(0.52 0.008 220);  /* 灰: 注释 */
+  --syn-function:   oklch(0.72 0.13 250);   /* 蓝: 函数名 */
+  --syn-type:       oklch(0.72 0.12 25);    /* 暖红: 类型 */
+  --syn-property:   oklch(0.68 0.10 55);    /* 暖金: 属性 */
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -274,6 +322,7 @@ button {
   --secondary-foreground: oklch(0.28 0.01 240);
   --muted: oklch(0.96 0.003 240);
   --muted-foreground: oklch(0.52 0.008 240);
+  --fg-faint: oklch(0.72 0.006 240);
   --accent: oklch(0.94 0.01 264);
   --accent-foreground: oklch(0.28 0.01 240);
   --destructive: oklch(0.54 0.20 25);
@@ -315,6 +364,21 @@ button {
   --warning-foreground: oklch(0.32 0.08 75);
   --violet: oklch(0.92 0.04 295);
   --violet-foreground: oklch(0.32 0.10 295);
+
+  /* Vim 模式色 */
+  --vim-normal:  oklch(0.52 0.13 145);   /* 绿: NORMAL */
+  --vim-insert:  oklch(0.50 0.15 264);   /* 靛蓝: INSERT */
+  --vim-visual:  oklch(0.55 0.13 65);    /* 金: VISUAL */
+  --vim-command: oklch(0.48 0.18 285);   /* 紫: COMMAND */
+
+  /* 语法高亮语义色 */
+  --syn-keyword:    oklch(0.48 0.18 285);   /* 紫: module, input, output */
+  --syn-string:     oklch(0.52 0.13 145);   /* 绿: 字符串 */
+  --syn-number:     oklch(0.55 0.13 65);    /* 金: 数字 */
+  --syn-comment:    oklch(0.52 0.008 240);  /* 灰: 注释 */
+  --syn-function:   oklch(0.50 0.15 264);   /* 靛蓝: 函数名 */
+  --syn-type:       oklch(0.54 0.20 25);    /* 红: 类型 */
+  --syn-property:   oklch(0.48 0.10 55);    /* 暖金: 属性 */
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -415,6 +479,9 @@ body {
   color: var(--foreground);
   font-size: var(--app-font-size-code);
   font-family: var(--app-font-family-code);
+  font-feature-settings: "liga" 1, "calt" 1, "zero" 1;
+  font-variant-ligatures: contextual;
+  letter-spacing: 0.01em;
 }
 
 .cm-editor .cm-content {
@@ -454,8 +521,9 @@ body {
 }
 
 .cm-editor .cm-matchingBracket {
-  background-color: color-mix(in oklch, var(--accent) 50%, transparent);
-  outline: 1px solid var(--border);
+  background-color: color-mix(in oklch, var(--primary) 25%, transparent);
+  outline: 1px solid var(--primary);
+  outline-offset: -1px;
 }
 
 .cm-editor .cm-tooltip {
@@ -467,6 +535,98 @@ body {
 .cm-editor .cm-tooltip-autocomplete ul li[aria-selected] {
   background-color: var(--accent);
   color: var(--accent-foreground);
+}
+
+/* ── 缩进指南线 ─────────────────────────────────────────────────── */
+
+.cm-editor .cm-indent-guide {
+  display: inline-block;
+  width: 1px;
+  height: 1.6em;
+  background-color: var(--border);
+  opacity: 0.5;
+  vertical-align: top;
+  pointer-events: none;
+}
+
+/* ── 搜索替换面板主题适配 ───────────────────────────────────────── */
+
+.cm-editor .cm-panel.cm-search {
+  background-color: var(--secondary);
+  border-bottom: 1px solid var(--border);
+  color: var(--foreground);
+  padding: 6px 8px;
+  font-size: var(--app-font-size-code);
+}
+
+.cm-editor .cm-panel.cm-search input {
+  background-color: var(--background);
+  border: 1px solid var(--border);
+  color: var(--foreground);
+  border-radius: 3px;
+  padding: 2px 4px;
+  outline: none;
+}
+
+.cm-editor .cm-panel.cm-search input:focus {
+  border-color: var(--primary);
+}
+
+.cm-editor .cm-panel.cm-search button {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: var(--app-font-size-code);
+}
+
+.cm-editor .cm-panel.cm-search button:hover {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.cm-editor .cm-panel.cm-search label {
+  color: var(--muted-foreground);
+  font-size: var(--app-font-size-code);
+}
+
+.cm-editor .cm-panel.cm-search .cm-button {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+/* ── Minimap 缩略图 ─────────────────────────────────────────────── */
+
+.cm-minimap-container {
+  width: 100px;
+  height: 100%;
+  background-color: color-mix(in oklch, var(--background) 85%, var(--secondary));
+  border-left: 1px solid var(--border);
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.cm-minimap-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.cm-minimap-viewport {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background-color: color-mix(in oklch, var(--primary) 15%, transparent);
+  border-top: 1px solid color-mix(in oklch, var(--primary) 40%, transparent);
+  border-bottom: 1px solid color-mix(in oklch, var(--primary) 40%, transparent);
+  pointer-events: none;
+  transition: top 0.05s linear, height 0.05s linear;
 }
 
 /* ── Markdown 文件预览样式 ─────────────────────────────────────── */
@@ -849,6 +1009,7 @@ body {
 .kb-markdown code {
   font-family: var(--app-font-family-code, ui-monospace, monospace);
   font-size: 0.88em;
+  font-feature-settings: "liga" 1, "calt" 1;
   background: var(--secondary);
   padding: 0.15em 0.35em;
   border-radius: 3px;
