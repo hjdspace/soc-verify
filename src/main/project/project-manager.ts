@@ -5,6 +5,7 @@ import { readdir, stat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync, watch as fsWatch, type FSWatcher as NodeFSWatcher } from 'node:fs';
 import { join, basename, relative, resolve, normalize, sep } from 'node:path';
 import { app } from 'electron';
+import { readFileSync } from 'node:fs';
 
 const execFileAsync = promisify(execFile);
 import type {
@@ -98,10 +99,14 @@ class ProjectManagerImpl extends EventEmitter {
       (p) => normalize(resolve(p.rootPath)) === normalize(resolve(rootPath)),
     );
 
+    // Resolve projectLabel: persisted > $PROJ_RTL env > null
+    const projectLabel = existing?.projectLabel ?? (await this.resolveProjectLabel(rootPath));
+
     const info: ProjectInfo = {
       id: projectId,
       name: projectName,
       rootPath,
+      projectLabel: projectLabel ?? undefined,
       extraDirs: existing?.extraDirs,
       createdAt: Date.now(),
       lastOpenedAt: Date.now(),
@@ -546,12 +551,143 @@ class ProjectManagerImpl extends EventEmitter {
   private async ensureProjectConfig(projectRoot: string): Promise<void> {
     const configPath = join(projectRoot, SOCVERIFY_DIR, 'config.json');
     if (!existsSync(configPath)) {
+      // Try to resolve projectLabel from $PROJ_RTL on first open
+      const projectLabel = await this.resolveProjectLabel(projectRoot);
       await writeFile(
         configPath,
-        JSON.stringify({ name: basename(projectRoot), createdAt: Date.now() }, null, 2),
+        JSON.stringify({ name: basename(projectRoot), createdAt: Date.now(), ...(projectLabel ? { projectLabel } : {}) }, null, 2),
         'utf-8',
       );
     }
+  }
+
+  // ─── 项目标记名（projectLabel）解析与修改 ────────────────
+
+  /**
+   * 解析项目标记名（projectLabel），优先级：
+   * 1. .socverify/config.json 中已保存的 projectLabel
+   * 2. $PROJ_RTL 环境变量路径中的项目名（/proj/<ProjectName>/xxx → 第二级目录）
+   * 3. null（无可用标记，UI 显示目录名）
+   *
+   * $PROJ_RTL 的解析顺序：process.env → .socverify/env.json
+   * 路径结构 /proj/<ProjectName>/xxx，取第二级目录作为项目名。
+   */
+  async resolveProjectLabel(rootPath: string): Promise<string | null> {
+    // 1. Try persisted config
+    const configLabel = this.readProjectConfigLabel(rootPath);
+    if (configLabel) return configLabel;
+
+    // 2. Try $PROJ_RTL
+    const projRtl = this.resolveProjRtl(rootPath);
+    if (projRtl) {
+      const parsed = this.parseProjectNameFromPath(projRtl);
+      if (parsed) return parsed;
+    }
+
+    // 3. No label available
+    return null;
+  }
+
+  /**
+   * 从 $PROJ_RTL 路径中解析项目名。
+   *
+   * 目录结构 /proj/<ProjectName>/xxx，取第二级目录名。
+   * 例如：/proj/kunlun/rtl → kunlun
+   *      /home/user/proj/chipA/de → chipA
+   *
+   * 如果路径不符合 /proj/<name>/ 结构，返回 null。
+   */
+  private parseProjectNameFromPath(projRtlPath: string): string | null {
+    const normalized = normalize(resolve(projRtlPath));
+    const parts = normalized.split(sep).filter(Boolean);
+
+    // Find 'proj' in the path, take the next segment as project name
+    const projIdx = parts.findIndex((p) => p.toLowerCase() === 'proj');
+    if (projIdx >= 0 && projIdx + 1 < parts.length) {
+      return parts[projIdx + 1];
+    }
+
+    return null;
+  }
+
+  /**
+   * Resolve $PROJ_RTL from process.env, falling back to .socverify/env.json.
+   * Matches the pattern used by git-manager and sysbase-gen tools.
+   */
+  private resolveProjRtl(projectDir: string): string | null {
+    const envVal = process.env.PROJ_RTL;
+    if (envVal && envVal.trim()) return envVal.trim();
+
+    try {
+      const configPath = join(projectDir, SOCVERIFY_DIR, 'env.json');
+      const config = JSON.parse(readFileSync(configPath, 'utf-8')) as {
+        envVars?: Record<string, string>;
+      };
+      const configured = config?.envVars?.PROJ_RTL;
+      if (typeof configured === 'string' && configured.trim()) {
+        return configured.trim();
+      }
+    } catch {
+      // Config file not found or invalid
+    }
+
+    return null;
+  }
+
+  /** Read the projectLabel from .socverify/config.json (if it exists). */
+  private readProjectConfigLabel(projectRoot: string): string | null {
+    try {
+      const configPath = join(projectRoot, SOCVERIFY_DIR, 'config.json');
+      const config = JSON.parse(readFileSync(configPath, 'utf-8')) as {
+        projectLabel?: string;
+      };
+      if (typeof config.projectLabel === 'string' && config.projectLabel.trim()) {
+        return config.projectLabel.trim();
+      }
+    } catch {
+      // Config not found or invalid
+    }
+    return null;
+  }
+
+  /**
+   * 修改项目标记名（projectLabel）。
+   *
+   * - 更新 ProjectInfo.projectLabel（内存 + projects.json）
+   * - 同步更新 .socverify/config.json 中的 projectLabel 字段
+   * - 发出 'project:renamed' 事件
+   */
+  async renameProject(projectId: string, newLabel: string): Promise<ProjectInfo> {
+    const project = this.getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+
+    const trimmed = newLabel.trim();
+    if (!trimmed) throw new Error('Project label cannot be empty');
+
+    project.projectLabel = trimmed;
+
+    // Sync to .socverify/config.json
+    await this.updateProjectConfigLabel(project.rootPath, trimmed);
+
+    // Persist to projects.json
+    await this.saveProjectsDb();
+
+    this.emit('project:renamed', project);
+    return project;
+  }
+
+  /** Update the projectLabel field in .socverify/config.json, preserving other fields. */
+  private async updateProjectConfigLabel(projectRoot: string, label: string): Promise<void> {
+    const configPath = join(projectRoot, SOCVERIFY_DIR, 'config.json');
+    let config: Record<string, unknown> = {};
+    try {
+      const content = await readFile(configPath, 'utf-8');
+      config = JSON.parse(content) as Record<string, unknown>;
+    } catch {
+      // File doesn't exist — will create
+    }
+    config.projectLabel = label;
+    await writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
   }
 
   // ─── 项目状态持久化 ───────────────────────────────────
@@ -779,6 +915,19 @@ class ProjectManagerImpl extends EventEmitter {
     if (!project) throw new Error(`Project not found: ${projectId}`);
 
     const dirs = project.extraDirs ?? [];
+
+    // Special case: switching cwd back to project rootPath.
+    // rootPath is the implicit cwd when no extraDir is marked isCwd —
+    // clear all extraDir isCwd flags so rootPath takes over.
+    if (dirId === ProjectManagerImpl.ROOT_DIR_ID) {
+      for (const d of dirs) {
+        d.isCwd = false;
+      }
+      await this.saveProjectsDb();
+      this.emit('cwd:changed', { projectId, cwd: project.rootPath, dirId });
+      return project.rootPath;
+    }
+
     const target = dirs.find((d) => d.id === dirId);
     if (!target) {
       throw new Error(`Directory not found: ${dirId}`);
