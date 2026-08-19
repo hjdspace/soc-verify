@@ -29,6 +29,8 @@ export interface WindowControlsAPI {
 
 // ── eventBridge 类型声明（IPC 事件转发）──────────────────────────
 export interface EventBridgeAPI {
+  // cwd 切换通知 — 渲染端需重建活跃 AI 会话
+  onCwdChanged: (callback: (data: { projectId: string; cwd: string; dirId: string }) => void) => () => void;
   onFileTreeUpdate: (callback: (update: {
     projectId: string;
     type: 'add' | 'unlink' | 'change';
