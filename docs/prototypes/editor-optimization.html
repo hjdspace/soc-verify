@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="bench">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SoC Verify · 代码编辑器优化方案原型</title>
+<style>
+/* ════════════════════════════════════════════════════════════
+   本原型展示 3 个核心改进方向：
+   1. 编辑器 UI 美化 — 主题感知语法高亮、minimap、缩进指南线
+   2. 编辑器布局优化 — 面包屑导航、标签页分组、底部状态栏
+   3. Vim 模式集成 — @replit/codemirror-vim 方案演示
+   ════════════════════════════════════════════════════════════ */
+
+:root {
+  --mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', Consolas, ui-monospace, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --fs-xs:   11px;
+  --fs-sm:   12px;
+  --fs-base: 13px;
+  --fs-md:   15px;
+  --fs-lg:   18px;
+  --fs-xl:   22px;
+}
+
+/* ─── Bench 主题（复用项目深色主题） ─── */
+[data-theme="bench"] {
+  --bg:           oklch(0.18 0.008 60);
+  --bg-surface:   oklch(0.21 0.008 60);
+  --bg-elevated:  oklch(0.24 0.009 60);
+  --bg-inset:     oklch(0.15 0.008 60);
+  --fg:           oklch(0.92 0.006 60);
+  --fg-dim:       oklch(0.65 0.010 60);
+  --fg-faint:     oklch(0.45 0.008 60);
+  --border:       oklch(0.27 0.008 60);
+  --border-strong:oklch(0.36 0.010 60);
+  --accent:       oklch(0.78 0.15 145);
+  --accent-fg:    oklch(0.18 0.008 60);
+  --accent-soft:  oklch(0.30 0.05 145);
+
+  --status-pass:    oklch(0.78 0.15 145);
+  --status-fail:    oklch(0.65 0.18 25);
+  --status-running: oklch(0.72 0.13 195);
+  --status-aborted: oklch(0.72 0.14 65);
+
+  /* 语法高亮语义色 */
+  --syn-keyword:    oklch(0.72 0.15 285);   /* 紫: module, input, output */
+  --syn-string:     oklch(0.78 0.13 145);   /* 绿: 字符串 */
+  --syn-number:     oklch(0.78 0.15 55);    /* 金: 数字 */
+  --syn-comment:    oklch(0.52 0.010 60);   /* 灰: 注释 */
+  --syn-function:   oklch(0.78 0.13 195);   /* 青: 函数名 */
+  --syn-type:       oklch(0.72 0.12 25);     /* 红: 类型 */
+  --syn-variable:   oklch(0.88 0.010 60);   /* 前景: 变量 */
+  --syn-operator:   oklch(0.62 0.008 60);   /* 暗灰: 运算符 */
+  --syn-property:   oklch(0.75 0.10 55);    /* 暖金: 属性 */
+
+  /* Vim 模式色 */
+  --vim-normal:     oklch(0.78 0.15 145);   /* 绿: NORMAL */
+  --vim-insert:     oklch(0.72 0.13 195);   /* 青: INSERT */
+  --vim-visual:     oklch(0.78 0.15 55);    /* 金: VISUAL */
+  --vim-command:    oklch(0.72 0.15 285);   /* 紫: COMMAND */
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--sans);
+  font-size: var(--fs-base);
+  background: var(--bg);
+  color: var(--fg);
+  line-height: 1.6;
+}
+
+/* ─── 原型容器 ─── */
+.prototype-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+/* ─── 方案标题 ─── */
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.section-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.section-badge.blueprint { background: oklch(0.30 0.05 230); color: oklch(0.78 0.13 230); }
+.section-badge.layout    { background: oklch(0.30 0.05 145); color: oklch(0.78 0.15 145); }
+.section-badge.vim       { background: oklch(0.30 0.05 285); color: oklch(0.78 0.15 285); }
+
+.section-title { font-size: var(--fs-lg); font-weight: 700; }
+
+.section-desc {
+  color: var(--fg-dim);
+  font-size: var(--fs-sm);
+  margin-top: 2px;
+}
+
+/* ════════════════════════════════════════════════════════════
+   模块 1：编辑器 UI 美化
+   ════════════════════════════════════════════════════════════ */
+
+.editor-mockup {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-inset);
+  box-shadow: 0 4px 16px oklch(0 0 0 / 0.2);
+}
+
+/* 面包屑导航 */
+.breadcrumb-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+}
+
+.breadcrumb-item {
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.breadcrumb-item:hover { background: var(--accent-soft); color: var(--fg); }
+.breadcrumb-item.active { color: var(--fg); font-weight: 500; }
+.breadcrumb-sep { color: var(--fg-faint); user-select: none; }
+
+/* 工具栏 */
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 8px; }
+
+.tool-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: var(--fs-xs);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tool-btn:hover { background: var(--accent-soft); color: var(--fg); }
+.tool-btn.active { background: var(--accent-soft); color: var(--accent); }
+.tool-btn.danger:hover { background: oklch(0.30 0.06 25); color: var(--status-fail); }
+
+.dirty-dot { color: var(--status-aborted); font-size: 10px; }
+
+/* 编辑器主体区域 */
+.editor-body {
+  display: flex;
+  overflow: hidden;
+  height: 380px;
+}
+
+/* 行号槽 */
+.gutter {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 8px 12px 12px;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border);
+  text-align: right;
+  user-select: none;
+  min-width: 48px;
+}
+
+.gutter-line {
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--fg-faint);
+  padding-right: 4px;
+}
+
+.gutter-line.active { color: var(--accent); font-weight: 600; }
+
+/* 代码区域 */
+.code-area {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+}
+
+.code-content {
+  flex: 1;
+  overflow: auto;
+  padding: 12px 16px;
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+
+.code-line {
+  display: flex;
+  white-space: pre;
+}
+
+.code-line.active {
+  background: oklch(0.24 0.009 60 / 0.5);
+  border-radius: 2px;
+  margin: 0 -16px;
+  padding: 0 16px;
+}
+
+/* 缩进指南线 */
+.indent-guide {
+  display: inline-block;
+  width: 1px;
+  height: 1.6em;
+  background: var(--border);
+  margin-left: 14px;
+  vertical-align: top;
+  opacity: 0.5;
+}
+
+/* 语法高亮 */
+.syn-keyword  { color: var(--syn-keyword); font-weight: 500; }
+.syn-string   { color: var(--syn-string); }
+.syn-number   { color: var(--syn-number); }
+.syn-comment  { color: var(--syn-comment); font-style: italic; }
+.syn-function { color: var(--syn-function); }
+.syn-type     { color: var(--syn-type); }
+.syn-operator { color: var(--syn-operator); }
+.syn-property { color: var(--syn-property); }
+
+/* 括号匹配高亮 */
+.bracket-match {
+  background: var(--accent-soft);
+  border-radius: 2px;
+  padding: 1px 2px;
+  margin: -1px -2px;
+  outline: 1px solid var(--accent);
+}
+
+/* Minimap */
+.minimap {
+  width: 60px;
+  padding: 12px 4px;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+  position: relative;
+}
+
+.minimap-line {
+  height: 2px;
+  margin: 0.5px 0;
+  background: var(--fg-faint);
+  opacity: 0.15;
+  border-radius: 1px;
+}
+
+.minimap-line.active { opacity: 0.5; background: var(--accent); }
+.minimap-viewport {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 12px;
+  height: 80px;
+  background: var(--fg);
+  opacity: 0.08;
+  border-radius: 2px;
+  border: 1px solid var(--accent);
+  pointer-events: none;
+}
+
+/* 底部状态栏 */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 4px 12px;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-xs);
+  color: var(--fg-dim);
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.status-item.right { margin-left: auto; }
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-pass);
+}
+
+.status-dot.warn { background: var(--status-aborted); }
+
+/* ════════════════════════════════════════════════════════════
+   模块 2：Vim 模式演示
+   ════════════════════════════════════════════════════════════ */
+
+.vim-demo {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg-inset);
+}
+
+.vim-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+}
+
+.vim-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 4px;
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+
+.vim-mode-badge.normal  { background: oklch(0.30 0.05 145); color: var(--vim-normal); }
+.vim-mode-badge.insert  { background: oklch(0.30 0.05 195); color: var(--vim-insert); }
+.vim-mode-badge.visual  { background: oklch(0.30 0.05 55); color: var(--vim-visual); }
+.vim-mode-badge.command { background: oklch(0.30 0.05 285); color: var(--vim-command); }
+
+.vim-cmd-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  outline: none;
+}
+
+.vim-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  background: var(--accent);
+  vertical-align: text-bottom;
+  animation: blink 1s steps(1) infinite;
+}
+
+@keyframes blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+/* ════════════════════════════════════════════════════════════
+   模块 3：对比卡片
+   ════════════════════════════════════════════════════════════ */
+
+.comparison-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-top: 24px;
+}
+
+.compare-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: var(--bg-surface);
+}
+
+.compare-card.current { border-color: oklch(0.40 0.02 60); }
+.compare-card.proposed { border-color: var(--accent); }
+
+.compare-label {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 12px;
+}
+
+.compare-label.current { color: var(--fg-dim); }
+.compare-label.proposed { color: var(--accent); }
+
+.compare-list { list-style: none; }
+
+.compare-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: var(--fs-sm);
+  color: var(--fg-dim);
+  border-bottom: 1px solid oklch(0.27 0.008 60 / 0.5);
+}
+
+.compare-list li:last-child { border-bottom: none; }
+
+.compare-list .icon { flex-shrink: 0; margin-top: 2px; }
+.compare-list .yes { color: var(--status-pass); }
+.compare-list .no  { color: var(--fg-faint); }
+.compare-list .add { color: var(--accent); }
+
+/* ════════════════════════════════════════════════════════════
+   实施步骤时间线
+   ════════════════════════════════════════════════════════════ */
+
+.timeline {
+  display: flex;
+  gap: 0;
+  margin-top: 32px;
+  overflow-x: auto;
+}
+
+.timeline-step {
+  flex: 1;
+  min-width: 200px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px 0 0 8px;
+  border-right: none;
+  background: var(--bg-surface);
+  position: relative;
+}
+
+.timeline-step:last-child { border-right: 1px solid var(--border); border-radius: 0 8px 8px 0; }
+
+.timeline-step::after {
+  content: '';
+  position: absolute;
+  right: -10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-top: 10px solid transparent;
+  border-bottom: 10px solid transparent;
+  border-left: 10px solid var(--border);
+  z-index: 1;
+}
+
+.timeline-step:last-child::after { display: none; }
+
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: var(--fs-xs);
+  margin-bottom: 8px;
+}
+
+.step-title { font-size: var(--fs-sm); font-weight: 600; margin-bottom: 4px; }
+.step-desc  { font-size: var(--fs-xs); color: var(--fg-dim); }
+.step-effort {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.step-effort.low  { background: oklch(0.30 0.05 145); color: var(--status-pass); }
+.step-effort.med  { background: oklch(0.30 0.05 55); color: var(--status-aborted); }
+.step-effort.high { background: oklch(0.30 0.05 25); color: var(--status-fail); }
+
+/* 间距 */
+.gap-2 { gap: 8px; }
+.mt-4 { margin-top: 16px; }
+.mt-6 { margin-top: 24px; }
+.mb-2 { margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="prototype-container">
+
+  <!-- ═══ 方案总览 ═══ -->
+  <div class="section-header">
+    <span class="section-badge blueprint">Blueprint</span>
+    <div>
+      <div class="section-title">代码编辑器优化方案</div>
+      <div class="section-desc">UI 美化 · 布局优化 · Vim 模式集成 — 基于 @uiw/react-codemirror 4.x + @replit/codemirror-vim 6.x</div>
+    </div>
+  </div>
+
+  <!-- ═══ 模块 1：编辑器 UI 美化（完整原型） ═══ -->
+  <div class="section-header mt-6">
+    <span class="section-badge layout">UI</span>
+    <div>
+      <div class="section-title">① 编辑器 UI 美化</div>
+      <div class="section-desc">面包屑导航 · 缩进指南线 · 括号匹配 · Minimap · 语法高亮增强 · 底部状态栏</div>
+    </div>
+  </div>
+
+  <div class="editor-mockup mt-4">
+    <!-- 面包屑 -->
+    <div class="breadcrumb-bar">
+      <span class="breadcrumb-item">my-chip</span>
+      <span class="breadcrumb-sep">›</span>
+      <span class="breadcrumb-item">rtl</span>
+      <span class="breadcrumb-sep">›</span>
+      <span class="breadcrumb-item">tb_subsys</span>
+      <span class="breadcrumb-sep">›</span>
+      <span class="breadcrumb-item active">alu_add.sv</span>
+    </div>
+
+    <!-- 工具栏 -->
+    <div class="editor-toolbar">
+      <div class="toolbar-left">
+        <button class="tool-btn active">编辑</button>
+        <button class="tool-btn">预览</button>
+      </div>
+      <div class="toolbar-right">
+        <span class="dirty-dot">● 已修改</span>
+        <button class="tool-btn">⌖ 格式化</button>
+        <button class="tool-btn">↹ Tab: 2</button>
+        <button class="tool-btn">UTF-8</button>
+        <button class="tool-btn">LF</button>
+        <button class="tool-btn danger">保存</button>
+      </div>
+    </div>
+
+    <!-- 编辑器主体 -->
+    <div class="editor-body">
+      <!-- 行号 -->
+      <div class="gutter">
+        <div class="gutter-line">1</div>
+        <div class="gutter-line">2</div>
+        <div class="gutter-line">3</div>
+        <div class="gutter-line">4</div>
+        <div class="gutter-line">5</div>
+        <div class="gutter-line active">6</div>
+        <div class="gutter-line">7</div>
+        <div class="gutter-line">8</div>
+        <div class="gutter-line">9</div>
+        <div class="gutter-line">10</div>
+        <div class="gutter-line">11</div>
+        <div class="gutter-line">12</div>
+        <div class="gutter-line">13</div>
+        <div class="gutter-line">14</div>
+        <div class="gutter-line">15</div>
+        <div class="gutter-line">16</div>
+        <div class="gutter-line">17</div>
+      </div>
+
+      <!-- 代码 -->
+      <div class="code-area">
+        <div class="code-content">
+          <div class="code-line"><span class="syn-comment">// ALU 加法单元 — 综合友好写法</span></div>
+          <div class="code-line"><span class="syn-keyword">module</span> <span class="syn-type">alu_add</span> <span class="bracket-match">(</span></div>
+          <div class="code-line">  <span class="syn-keyword">input</span>  <span class="syn-keyword">wire</span> <span class="bracket-match">[</span><span class="syn-number">31</span>:<span class="syn-number">0</span><span class="bracket-match">]</span> a, b,</div>
+          <div class="code-line">  <span class="syn-keyword">output</span> <span class="syn-keyword">reg</span>  <span class="syn-keyword">[</span><span class="syn-number">31</span>:<span class="syn-number">0</span><span class="syn-keyword">]</span> sum,</div>
+          <div class="code-line">  <span class="syn-keyword">output</span> <span class="syn-keyword">reg</span>        overflow</div>
+          <div class="code-line active">);</div>
+          <div class="code-line">  </div>
+          <div class="code-line">  <span class="syn-comment">// 组合逻辑：加法 + 溢出检测</span></div>
+          <div class="code-line">  <span class="syn-keyword">always</span> @<span class="bracket-match">(</span><span class="syn-keyword">*</span><span class="bracket-match">)</span> <span class="syn-keyword">begin</span></div>
+          <div class="code-line"><span class="indent-guide"></span>  <span class="syn-keyword">assign</span> <span class="syn-property">sum</span> = a + b;</div>
+          <div class="code-line"><span class="indent-guide"></span><span class="indent-guide"></span>  <span class="syn-keyword">assign</span> <span class="syn-property">overflow</span> = <span class="syn-bracket">(</span>a[<span class="syn-number">31</span>] == b[<span class="syn-number">31</span>]<span class="syn-bracket">)</span> <span class="syn-operator">&amp;&amp;</span></div>
+          <div class="code-line"><span class="indent-guide"></span><span class="indent-guide"></span>                <span class="syn-bracket">(</span><span class="syn-property">sum</span>[<span class="syn-number">31</span>] != a[<span class="syn-number">31</span>]<span class="syn-bracket">)</span>;</div>
+          <div class="code-line">  <span class="syn-keyword">end</span></div>
+          <div class="code-line"><span class="syn-keyword">endmodule</span></div>
+          <div class="code-line">  </div>
+          <div class="code-line"><span class="syn-comment">// testbench</span></div>
+          <div class="code-line"><span class="syn-keyword">module</span> <span class="syn-type">tb_alu_add</span>;</div>
+        </div>
+
+        <!-- Minimap -->
+        <div class="minimap">
+          <div class="minimap-line"></div>
+          <div class="minimap-line"></div>
+          <div class="minimap-line" style="width:60%"></div>
+          <div class="minimap-line" style="width:80%"></div>
+          <div class="minimap-line" style="width:70%"></div>
+          <div class="minimap-line active" style="width:30%"></div>
+          <div class="minimap-line"></div>
+          <div class="minimap-line" style="width:50%"></div>
+          <div class="minimap-line" style="width:90%"></div>
+          <div class="minimap-line" style="width:65%"></div>
+          <div class="minimap-line" style="width:75%"></div>
+          <div class="minimap-line" style="width:80%"></div>
+          <div class="minimap-line" style="width:55%"></div>
+          <div class="minimap-line" style="width:40%"></div>
+          <div class="minimap-line" style="width:30%"></div>
+          <div class="minimap-line"></div>
+          <div class="minimap-line" style="width:50%"></div>
+          <div class="minimap-line" style="width:35%"></div>
+          <div class="minimap-line" style="width:60%"></div>
+          <div class="minimap-line" style="width:70%"></div>
+          <div class="minimap-line" style="width:45%"></div>
+          <div class="minimap-line" style="width:85%"></div>
+          <div class="minimap-line" style="width:55%"></div>
+          <div class="minimap-line" style="width:60%"></div>
+          <div class="minimap-line" style="width:75%"></div>
+          <div class="minimap-line" style="width:40%"></div>
+          <div class="minimap-line" style="width:50%"></div>
+          <div class="minimap-line" style="width:35%"></div>
+          <div class="minimap-line" style="width:65%"></div>
+          <div class="minimap-line" style="width:55%"></div>
+          <div class="minimap-viewport"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 底部状态栏 -->
+    <div class="status-bar">
+      <div class="status-item">
+        <span class="status-dot"></span>
+        <span>已保存</span>
+      </div>
+      <div class="status-item">Ln 6, Col 1</div>
+      <div class="status-item">空格: 2</div>
+      <div class="status-item">SystemVerilog</div>
+      <div class="status-item right">UTF-8 · LF</div>
+    </div>
+  </div>
+
+  <!-- ═══ 模块 2：Vim 模式演示 ═══ -->
+  <div class="section-header mt-6">
+    <span class="section-badge vim">Vim</span>
+    <div>
+      <div class="section-title">② Vim 模式集成</div>
+      <div class="section-desc">基于 @replit/codemirror-vim 6.4.0 — 完整 Normal/Insert/Visual/Command 模式</div>
+    </div>
+  </div>
+
+  <div class="vim-demo mt-4">
+    <!-- Vim 状态栏 -->
+    <div class="vim-status-bar">
+      <span class="vim-mode-badge normal">NORMAL</span>
+      <span style="color: var(--fg-dim)">/alu_add.sv</span>
+      <input class="vim-cmd-input" value="" placeholder=":命令..." readonly />
+      <span style="color: var(--fg-faint)">6:1</span>
+    </div>
+
+    <!-- Vim 编辑区 -->
+    <div class="editor-body" style="height: 200px;">
+      <div class="gutter">
+        <div class="gutter-line">1</div>
+        <div class="gutter-line">2</div>
+        <div class="gutter-line">3</div>
+        <div class="gutter-line">4</div>
+        <div class="gutter-line active">5</div>
+        <div class="gutter-line">6</div>
+        <div class="gutter-line">7</div>
+        <div class="gutter-line">8</div>
+        <div class="gutter-line">9</div>
+      </div>
+      <div class="code-area">
+        <div class="code-content">
+          <div class="code-line"><span class="syn-keyword">module</span> <span class="syn-type">alu_add</span> (</div>
+          <div class="code-line">  <span class="syn-keyword">input</span>  <span class="syn-keyword">wire</span> [<span class="syn-number">31</span>:<span class="syn-number">0</span>] a, b,</div>
+          <div class="code-line">  <span class="syn-keyword">output</span> <span class="syn-keyword">reg</span>  [<span class="syn-number">31</span>:<span class="syn-number">0</span>] sum,</div>
+          <div class="code-line">  <span class="syn-keyword">output</span> <span class="syn-keyword">reg</span>        overflow</div>
+          <div class="code-line active">);<span class="vim-cursor"></span></div>
+          <div class="code-line">  </div>
+          <div class="code-line">  <span class="syn-comment">// 组合逻辑</span></div>
+          <div class="code-line">  <span class="syn-keyword">always</span> @(<span class="syn-keyword">*</span>) <span class="syn-keyword">begin</span></div>
+        </div>
+      </div>
+    </div>
+    <!-- Vim 键位提示 -->
+    <div style="padding: 8px 12px; background: var(--bg-surface); border-top: 1px solid var(--border); font-size: var(--fs-xs); color: var(--fg-dim); font-family: var(--mono);">
+      <strong style="color: var(--accent);">NORMAL</strong> 模式键位：
+      <code>i</code> 插入 · <code>o</code> 下行插入 · <code>dd</code> 删除行 · <code>yy</code> 复制行 · <code>p</code> 粘贴 ·
+      <code>w</code> 下一个词 · <code>b</code> 上一个词 · <code>0</code> 行首 · <code>$</code> 行尾 ·
+      <code>gg</code> 文件头 · <code>G</code> 文件尾 · <code>:</code> 命令模式 · <code>v</code> 可视模式
+    </div>
+  </div>
+
+  <!-- ═══ 模块 3：对比卡片 ═══ -->
+  <div class="comparison-grid">
+    <div class="compare-card current">
+      <div class="compare-label current">📋 当前状态</div>
+      <ul class="compare-list">
+        <li><span class="icon no">✗</span> CodeMirror basicSetup 仅启用基础功能</li>
+        <li><span class="icon no">✗</span> 主题仅 dark/light 二选一，无语法高亮定制</li>
+        <li><span class="icon no">✗</span> 无面包屑导航，仅工具栏显示完整路径</li>
+        <li><span class="icon no">✗</span> 无 minimap，大文件导航不便</li>
+        <li><span class="icon no">✗</span> 无缩进指南线</li>
+        <li><span class="icon no">✗</span> 无底部状态栏（行列/编码/语言）</li>
+        <li><span class="icon no">✗</span> 无 Vim 模式</li>
+        <li><span class="icon yes">✓</span> 已有行号、折叠、括号匹配、自动补全</li>
+        <li><span class="icon yes">✓</span> 已有字体/字号配置</li>
+        <li><span class="icon yes">✓</span> 已有 4 套主题</li>
+      </ul>
+    </div>
+    <div class="compare-card proposed">
+      <div class="compare-label proposed">🚀 优化方案</div>
+      <ul class="compare-list">
+        <li><span class="icon add">+</span> 自定义 CodeMirror 主题（per-theme 语法高亮色）</li>
+        <li><span class="icon add">+</span> 面包屑导航（从项目根逐级展开）</li>
+        <li><span class="icon add">+</span> Minimap 缩略图（大文件导航）</li>
+        <li><span class="icon add">+</span> 缩进指南线（indentGuides 扩展）</li>
+        <li><span class="icon add">+</span> 底部状态栏（行列/编码/语言/缩进）</li>
+        <li><span class="icon add">+</span> Vim 模式（@replit/codemirror-vim）</li>
+        <li><span class="icon add">+</span> 增强括号匹配高亮 + 多光标编辑</li>
+        <li><span class="icon add">+</span> 搜索替换面板（Ctrl+H）</li>
+        <li><span class="icon yes">✓</span> 保留已有全部功能</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══ 实施步骤时间线 ═══ -->
+  <div class="section-header mt-6">
+    <span class="section-badge blueprint">Roadmap</span>
+    <div>
+      <div class="section-title">③ 分阶段实施路线</div>
+      <div class="section-desc">4 个阶段，由低风险到高价值递进</div>
+    </div>
+  </div>
+
+  <div class="timeline mt-4">
+    <div class="timeline-step">
+      <div class="step-num">1</div>
+      <div class="step-title">Vim 模式集成</div>
+      <div class="step-desc">安装 @replit/codemirror-vim，在 FileEditor 中按需加载 vim() 扩展，设置中开关。</div>
+      <span class="step-effort low">低风险 · 0.5天</span>
+    </div>
+    <div class="timeline-step">
+      <div class="step-num">2</div>
+      <div class="step-title">语法高亮增强</div>
+      <div class="step-desc">用 EditorView.theme + @codemirror/language HighlightStyle 为 4 套主题各定制语法色。</div>
+      <span class="step-effort med">中风险 · 1天</span>
+    </div>
+    <div class="timeline-step">
+      <div class="step-num">3</div>
+      <div class="step-title">布局组件</div>
+      <div class="step-desc">面包屑导航 + 底部状态栏 + 缩进指南线 + 搜索面板，纯 React + CM6 扩展。</div>
+      <span class="step-effort med">中风险 · 1.5天</span>
+    </div>
+    <div class="timeline-step">
+      <div class="step-num">4</div>
+      <div class="step-title">Minimap</div>
+      <div class="step-desc">基于 @codemirror/view 自定义插件实现 minimap，或使用第三方包。</div>
+      <span class="step-effort high">高风险 · 1天</span>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
