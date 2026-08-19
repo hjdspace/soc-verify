@@ -108,6 +108,27 @@ function emptyDiff(filePath: string): FileDiffResult {
   return { filePath, isNewFile: false, lines: [], hunks: [], totalAdd: 0, totalDel: 0 };
 }
 
+function completedOmpWrite(
+  filePath: string,
+  beforeContent: string | undefined,
+  content: string,
+  fileExistedBefore = true,
+): ChatMessage {
+  return {
+    id: 'tool-write-overwrite',
+    role: 'tool',
+    content: '',
+    timestamp: 100,
+    toolName: 'write',
+    toolCallId: 'call-write-overwrite',
+    toolArgs: { path: filePath, content },
+    toolResult: {
+      ok: true,
+      details: { resolvedPath: filePath, fileExistedBefore, beforeContent },
+    },
+  };
+}
+
 function diffWithTwoHunks(filePath: string): FileDiffResult {
   return {
     filePath,
@@ -578,6 +599,50 @@ describe('Diff Review flow', () => {
     expect(useDiffReviewStore.getState().queue[0]?.reviewed).toBe(true);
     expect(useDiffReviewStore.getState().fileDiffs[key]).toBeUndefined();
     expect(useDiffReviewStore.getState().contentVersions[key]).toBeGreaterThanOrEqual(2);
+  });
+
+  it('does not mark a write overwrite as a new file or request deletion on reject all', async () => {
+    const filePath = 'D:\\project\\README.md';
+    const message = completedOmpWrite(filePath, 'body\n', '# SoC Verify\n\nbody\n');
+    useSessionStore.setState({
+      sessions: [{
+        id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
+        messages: [message], composer: { inputMessage: '', selectedSkills: [], contextFiles: [] }, createdAt: 1,
+      }],
+    });
+    const entry = useDiffReviewStore.getState().queue[0];
+    expect(entry.isNewFile).toBe(false);
+    vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue({
+      filePath, isNewFile: false,
+      lines: [
+        { type: 'del', content: 'body', oldLine: 1, hunkId: 1 },
+        { type: 'add', content: '# SoC Verify', newLine: 1, hunkId: 1 },
+      ],
+      hunks: [{ id: 1, toolCallId: message.id, toolName: 'write', overwritten: false,
+        startLineIndex: 0, endLineIndex: 2, addCount: 1, delCount: 1 }],
+      totalAdd: 1, totalDel: 1,
+    });
+    vi.mocked(trpc.project.applyDiffRejections.mutate).mockResolvedValue({ ok: true, appliedCount: 1, failures: [] });
+    expect(await useDiffReviewStore.getState().rejectAll(filePath)).toBe(true);
+    expect(trpc.project.applyDiffRejections.mutate).toHaveBeenCalledWith(expect.objectContaining({
+      rejections: [expect.objectContaining({ deleteFile: false })],
+    }));
+  });
+
+  it('marks a write observed against a missing path as a new file', () => {
+    const filePath = 'D:\\project\\generated.md';
+    useSessionStore.setState({
+      sessions: [{
+        id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
+        messages: [completedOmpWrite(filePath, undefined, 'generated\n', false)],
+        composer: { inputMessage: '', selectedSkills: [], contextFiles: [] }, createdAt: 1,
+      }],
+    });
+
+    expect(useDiffReviewStore.getState().queue[0]).toEqual(expect.objectContaining({
+      filePath,
+      isNewFile: true,
+    }));
   });
 
   it('settles two hunks independently before completing the file review', async () => {

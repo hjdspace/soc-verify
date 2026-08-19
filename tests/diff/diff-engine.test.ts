@@ -60,6 +60,43 @@ describe('Diff Review engine', () => {
     await expect(readFile(filePath, 'utf8')).resolves.toContain("assign ready = 1'b0;");
   });
 
+  it('restores an existing file overwritten by write instead of treating it as new', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'soc-verify-diff-'));
+    tempDirs.push(dir);
+    const filePath = join(dir, 'README.md');
+    await writeFile(filePath, '# SoC Verify\n\nbody\n', 'utf8');
+    const toolCall: DiffToolCall = {
+      id: 'write-overwrite',
+      toolName: 'write',
+      filePath,
+      timestamp: 1,
+      content: '# SoC Verify\n\nbody\n',
+      beforeContent: 'body\n',
+      isNewFile: false,
+    };
+
+    const diff = await getFileDiff(filePath, [toolCall]);
+    expect(diff.isNewFile).toBe(false);
+    expect(diff.lines).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'add', content: '# SoC Verify' }),
+    ]));
+
+    const result = await applyRejections(filePath, [{
+      hunkId: 1,
+      toolCallId: toolCall.id,
+      toolName: 'write',
+      startLine: 1,
+      oldLines: [],
+      newLines: ['# SoC Verify', ''],
+      beforeLine: null,
+      afterLine: null,
+      deleteFile: false,
+    }]);
+
+    expect(result.ok).toBe(true);
+    await expect(readFile(filePath, 'utf8')).resolves.toBe('body\n');
+  });
+
   it('builds reviewable hunks when the file uses CRLF and omp diff text uses LF', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'soc-verify-diff-'));
     tempDirs.push(dir);

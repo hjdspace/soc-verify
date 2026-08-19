@@ -74,6 +74,23 @@ export interface EventFrame {
   event: unknown;
 }
 
+// ─── Subagent 帧（runner → host stdout）────────────────────
+// 由 runner 订阅 omp SDK EventBus 的 task:subagent:* channel 转发而来。
+// lifecycle：subagent 启动/完成/失败/中止（低频）
+// progress：subagent 实时进度（~150ms 节流合并）
+
+export type SubagentFrame = {
+  type: 'subagent_lifecycle' | 'subagent_progress';
+  payload: unknown;
+};
+
+export function isSubagentFrame(value: unknown): value is SubagentFrame {
+  return (
+    isRecord(value) &&
+    (value.type === 'subagent_lifecycle' || value.type === 'subagent_progress')
+  );
+}
+
 // ─── Tool Call 帧（runner → host stdout）───────────────────
 
 export interface ToolCallFrame {

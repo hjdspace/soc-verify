@@ -15,6 +15,7 @@ import {
   isEventFrame,
   isReadyFrame,
   isResponseFrame,
+  isSubagentFrame,
   isToolCallFrame,
   isApprovalRequestFrame,
 } from './types';

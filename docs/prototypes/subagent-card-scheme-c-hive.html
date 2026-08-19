@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Subagent Card · 方案 C · 聚合磁贴 + 抽屉详情</title>
+<style>
+  :root {
+    --bg: oklch(0.14 0.006 250);
+    --bg-surface: oklch(0.18 0.006 250);
+    --bg-elevated: oklch(0.21 0.007 250);
+    --bg-inset: oklch(0.16 0.006 250);
+    --fg: oklch(0.94 0.004 250);
+    --fg-dim: oklch(0.62 0.008 250);
+    --fg-faint: oklch(0.42 0.006 250);
+    --border: oklch(0.25 0.007 250);
+    --c-a: oklch(0.68 0.14 250);
+    --c-b: oklch(0.72 0.15 35);
+    --c-c: oklch(0.68 0.13 185);
+    --pass: oklch(0.72 0.15 155);
+    --fail: oklch(0.65 0.2 25);
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--fg); font-family: var(--sans); padding: 40px 24px 100px; }
+  .container { max-width: 780px; margin: 0 auto; }
+  .proto-note {
+    font-size: 12px; color: var(--fg-faint); margin-bottom: 24px;
+    padding: 10px 14px; border: 1px dashed var(--border); border-radius: 8px;
+  }
+  h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { font-size: 13px; color: var(--fg-dim); margin-bottom: 24px; }
+
+  .chat-user {
+    background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 14px; max-width: 85%;
+  }
+  .chat-assistant { font-size: 13px; color: var(--fg-dim); margin-bottom: 10px; line-height: 1.6; }
+
+  .tool-card {
+    background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: 10px; overflow: hidden; margin-bottom: 14px;
+  }
+  .tool-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 12px; font-size: 12px; border-bottom: 1px solid var(--border);
+  }
+  .tool-name { font-family: var(--mono); font-weight: 600; }
+  .tool-summary { color: var(--fg-dim); }
+  .tool-time { margin-left: auto; color: var(--fg-faint); font-family: var(--mono); font-size: 11px; }
+
+  /* ── 磁贴网格 ── */
+  .hive { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 10px 12px; }
+  .tile {
+    background: var(--bg-inset); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px; cursor: pointer; position: relative; overflow: hidden;
+    transition: border-color 0.15s, transform 0.15s;
+  }
+  .tile:hover { border-color: var(--fg-faint); transform: translateY(-1px); }
+  .tile-top { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+  .tile-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--fg-faint); }
+  .tile-dot.running { background: var(--c-a); animation: pulse 1.2s ease-in-out infinite; }
+  .tile-dot.done { background: var(--pass); }
+  .tile-dot.error { background: var(--fail); }
+  @keyframes pulse { 50% { opacity: 0.5; box-shadow: 0 0 0 3px oklch(0.68 0.14 250 / 0.15); } }
+  .tile-role { font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--fg-dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tile-tool {
+    font-family: var(--mono); font-size: 11px; color: var(--fg);
+    height: 30px; display: flex; align-items: center;
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  }
+  .tile-tool.dim { color: var(--fg-faint); font-size: 10px; }
+  .tile-spark { display: flex; align-items: flex-end; gap: 1.5px; height: 16px; margin: 6px 0 4px; }
+  .tile-spark i { flex: 1; background: oklch(0.68 0.14 250 / 0.35); border-radius: 1px; min-height: 2px; }
+  .tile-foot { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9px; color: var(--fg-faint); }
+
+  /* ── 抽屉 ── */
+  .drawer-mask {
+    position: fixed; inset: 0; background: oklch(0 0 0 / 0.45);
+    opacity: 0; pointer-events: none; transition: opacity 0.2s; z-index: 90;
+  }
+  .drawer-mask.show { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed; top: 0; right: -460px; width: 440px; height: 100%;
+    background: var(--bg-surface); border-left: 1px solid var(--border);
+    z-index: 95; transition: right 0.25s ease; display: flex; flex-direction: column;
+  }
+  .drawer.show { right: 0; }
+  .drawer-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 12px;
+  }
+  .drawer-head .dr-role { font-family: var(--mono); font-weight: 700; }
+  .drawer-head .dr-status { font-size: 9px; font-family: var(--mono); text-transform: uppercase;
+    padding: 2px 8px; border-radius: 10px; }
+  .drawer-close { margin-left: auto; cursor: pointer; color: var(--fg-faint); font-size: 16px; }
+  .drawer-close:hover { color: var(--fg); }
+  .drawer-assign { font-size: 11px; color: var(--fg-dim); line-height: 1.55;
+    padding: 10px 16px; border-bottom: 1px solid var(--border); }
+  .drawer-body { flex: 1; overflow-y: auto; padding: 12px 16px; }
+  .dl { font-family: var(--mono); font-size: 10.5px; line-height: 1.9; }
+  .dl .ln { color: var(--fg-dim); white-space: pre-wrap; word-break: break-all; }
+  .dl .ln .t { color: var(--c-c); }
+  .dl .ln.say { color: var(--fg); font-family: var(--sans); font-size: 12px; }
+  .dl .ln.err { color: var(--fail); }
+  .cursor { display: inline-block; width: 6px; height: 12px; vertical-align: -2px;
+    background: var(--c-a); animation: blink 0.9s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .controls { display: flex; gap: 8px; margin-top: 20px; }
+  .controls button {
+    background: var(--bg-elevated); border: 1px solid var(--border); color: var(--fg-dim);
+    padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer;
+  }
+  .controls button:hover { color: var(--fg); border-color: var(--fg-faint); }
+
+  .switcher {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 4px;
+    background: oklch(0.25 0.01 250); border: 1px solid oklch(0.35 0.01 250);
+    border-radius: 999px; padding: 6px 10px; z-index: 99;
+    box-shadow: 0 8px 24px oklch(0 0 0 / 0.5); font-size: 12px;
+  }
+  .switcher a { color: var(--fg); text-decoration: none; padding: 4px 10px; border-radius: 999px; }
+  .switcher .nav { font-weight: 700; opacity: 0.8; }
+  .switcher .nav:hover { opacity: 1; background: oklch(0.32 0.01 250); }
+  .switcher .label { font-weight: 600; white-space: nowrap; padding: 4px 10px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="proto-note">PROTOTYPE · 方案 C · 聚合磁贴 + 抽屉 — 卡片本体极简（磁贴网格 + token 迷你柱状图），点击磁贴右侧抽屉展开完整实时流。强项：聊天流占用空间最小，适合长时间后台任务。</div>
+  <h1>方案 C · 聚合磁贴 + 抽屉详情</h1>
+  <div class="subtitle">结构：紧凑磁贴网格（状态点 + currentTool 滚动 + token sparkline）→ 点击弹出抽屉看完整日志流。双击磁贴试试。</div>
+
+  <div class="chat-user">帮我分析 UART 模块的覆盖率缺口，修复 tb_uart_rx 的失败用例，然后生成验证周报。</div>
+  <div class="chat-assistant">好的，我将并行派遣 3 个子代理处理这三项任务：</div>
+
+  <div class="tool-card">
+    <div class="tool-header">
+      <span>⚙</span><span class="tool-name">task</span>
+      <span class="tool-summary" id="hdrSummary">派遣 3 个子代理…</span>
+      <span class="tool-time" id="hdrTime">0s</span>
+    </div>
+    <div class="hive" id="hive"></div>
+  </div>
+
+  <div class="controls">
+    <button onclick="restart()">▶ 重播模拟</button>
+    <button onclick="finishNow()">⏭ 跳到最终态</button>
+  </div>
+</div>
+
+<div class="drawer-mask" id="mask" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer">
+  <div class="drawer-head">
+    <span class="dr-role" id="drRole"></span>
+    <span class="dr-status" id="drStatus"></span>
+    <span class="drawer-close" onclick="closeDrawer()">✕</span>
+  </div>
+  <div class="drawer-assign" id="drAssign"></div>
+  <div class="drawer-body"><div class="dl" id="drLog"></div></div>
+</div>
+
+<div class="switcher">
+  <a class="nav" href="subagent-card-scheme-b-accordion.html">←</a>
+  <span class="label">C · 磁贴+抽屉</span>
+  <a class="nav" href="subagent-card-scheme-a-swimlanes.html">→</a>
+</div>
+
+<script>
+const AGENTS = [
+  {
+    id: 'sa-1', role: 'coverage-analyzer',
+    assign: '读取 cov:///uart/latest 覆盖率数据库，找出未覆盖的 bins，按风险排序输出缺口清单。',
+    steps: [
+      { tool: 'Read', args: 'cov:///uart/latest', out: 'loaded 2.3k bins', say: '正在加载覆盖率数据库。' },
+      { tool: 'Bash', args: 'python cov_rank.py', out: 'ranked 47 uncovered bins', say: '47 个未覆盖 bins，按风险排序中。' },
+      { tool: 'Grep', args: 'assert.*fifo', out: '12 matches', say: '' },
+      { tool: 'Bash', args: 'cov_rank.py --deep', out: 'ERROR: cov db session expired', say: '', err: true },
+    ],
+    outcome: 'failed',
+  },
+  {
+    id: 'sa-2', role: 'test-fixer',
+    assign: '定位 tb_uart_rx 中 2 个失败用例的根因，修改 testbench 或 RTL 并回归验证。',
+    steps: [
+      { tool: 'Bash', args: 'make sim TEST=uart_rx', out: '2 failed', say: '复现：rx_timeout、rx_parity 失败。' },
+      { tool: 'Read', args: 'tb_uart_rx.sv L120-180', out: '60 lines', say: '' },
+      { tool: 'Grep', args: 'parity_check', out: '5 matches', say: '采样窗口偏移问题。' },
+      { tool: 'Edit', args: 'tb_uart_rx.sv', out: 'hunk @L142', say: '' },
+      { tool: 'Bash', args: 'make sim TEST=uart_rx', out: '28 passed', say: '回归通过。' },
+    ],
+    outcome: 'completed',
+  },
+  {
+    id: 'sa-3', role: 'doc-writer',
+    assign: '汇总本周用例执行与覆盖率趋势，产出 weekly-report.md。',
+    steps: [
+      { tool: 'Glob', args: 'reports/*.md', out: '5 files', say: '收集模板。' },
+      { tool: 'Read', args: 'reports/w12.md', out: '120 lines', say: '' },
+      { tool: 'Bash', args: 'case-stats --week', out: '214/220 pass', say: '通过率 97.3%。' },
+      { tool: 'Write', args: 'reports/w13.md', out: '88 lines', say: '周报已生成。' },
+    ],
+    outcome: 'completed',
+  },
+];
+
+const hiveEl = document.getElementById('hive');
+const state = { agents: [], t0: 0, timer: null, timeouts: [], drawerId: null };
+
+function initAgents() {
+  return AGENTS.map(a => ({
+    ...a, status: 'pending', toolCount: 0, tokens: 0, currentTool: null,
+    spark: [], log: [],
+  }));
+}
+
+function fmtTok(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : '' + n; }
+
+function render() {
+  hiveEl.innerHTML = '';
+  for (const a of state.agents) {
+    const t = document.createElement('div');
+    t.className = 'tile';
+    t.onclick = () => openDrawer(a.id);
+    const spark = a.spark.slice(-12).map(v =>
+      `<i style="height:${Math.max(8, Math.min(100, v / 40))}%"></i>`).join('');
+    t.innerHTML = `
+      <div class="tile-top">
+        <span class="tile-dot ${a.status === 'running' ? 'running' : a.status === 'completed' ? 'done' : a.status === 'failed' ? 'error' : ''}"></span>
+        <span class="tile-role">${a.role}</span>
+      </div>
+      <div class="tile-tool ${a.status === 'running' ? '' : 'dim'}">${
+        a.status === 'running' ? (a.currentTool || '…')
+        : a.status === 'completed' ? '✓ 完成'
+        : a.status === 'failed' ? '✗ 失败' : '· queued'
+      }</div>
+      <div class="tile-spark">${spark || '<i style="height:8%"></i>'}</div>
+      <div class="tile-foot"><span>${a.toolCount} tools</span><span>${fmtTok(a.tokens)} tok</span></div>`;
+    hiveEl.appendChild(t);
+  }
+  const finished = state.agents.filter(a => a.status !== 'running' && a.status !== 'pending').length;
+  const done = state.agents.filter(a => a.status === 'completed').length;
+  const failed = state.agents.filter(a => a.status === 'failed').length;
+  document.getElementById('hdrSummary').textContent = finished === AGENTS.length
+    ? `完成 · ${done} 成功 / ${failed} 失败`
+    : `3 个子代理并行 · 点击磁贴查看实时流`;
+  if (state.drawerId) renderDrawerLog();
+}
+
+function openDrawer(id) {
+  state.drawerId = id;
+  const a = state.agents.find(x => x.id === id);
+  document.getElementById('drRole').textContent = a.role;
+  const st = document.getElementById('drStatus');
+  const map = { pending: ['queued', 'var(--fg-faint)'], running: ['running', 'var(--c-a)'],
+    completed: ['done', 'var(--pass)'], failed: ['failed', 'var(--fail)'] };
+  st.textContent = map[a.status][0]; st.style.color = map[a.status][1];
+  document.getElementById('drAssign').textContent = a.assign;
+  renderDrawerLog();
+  document.getElementById('drawer').classList.add('show');
+  document.getElementById('mask').classList.add('show');
+}
+function closeDrawer() {
+  state.drawerId = null;
+  document.getElementById('drawer').classList.remove('show');
+  document.getElementById('mask').classList.remove('show');
+}
+function renderDrawerLog() {
+  const a = state.agents.find(x => x.id === state.drawerId);
+  if (!a) return;
+  const el = document.getElementById('drLog');
+  el.innerHTML = '';
+  for (const ln of a.log) {
+    const d = document.createElement('div');
+    d.className = 'ln' + (ln.err ? ' err' : '') + (ln.say ? ' say' : '');
+    d.innerHTML = ln.tool ? `<span class="t">[${ln.tool}]</span> ${ln.text}` : ln.text;
+    el.appendChild(d);
+  }
+  if (a.status === 'running') {
+    const c = document.createElement('span'); c.className = 'cursor';
+    el.appendChild(c); el.parentElement.scrollTop = el.parentElement.scrollHeight;
+  }
+}
+
+function scheduleAgent(a, delay) {
+  const T = (fn, ms) => state.timeouts.push(setTimeout(fn, ms));
+  T(() => { a.status = 'running'; render(); }, delay);
+  let t = delay + 400;
+  a.steps.forEach(s => {
+    T(() => {
+      a.currentTool = `${s.tool} ${s.args}`; a.toolCount++;
+      const inc = 500 + Math.floor(Math.random() * 700);
+      a.tokens += inc; a.spark.push(inc);
+      a.log.push({ tool: s.tool, text: s.args + ' → ' + s.out, err: s.err });
+      if (s.say) a.log.push({ say: true, text: s.say });
+      render();
+    }, t);
+    t += 1300 + Math.random() * 700;
+  });
+  T(() => {
+    a.status = a.outcome; a.currentTool = null;
+    a.log.push(a.outcome === 'completed'
+      ? { say: true, text: '✓ 任务完成' } : { err: true, text: '✗ 失败：会话过期' });
+    render();
+  }, t + 200);
+}
+
+function restart() {
+  state.timeouts.forEach(clearTimeout); clearInterval(state.timer);
+  state.agents = initAgents(); state.t0 = Date.now();
+  render();
+  state.timer = setInterval(() => {
+    document.getElementById('hdrTime').textContent = Math.round((Date.now() - state.t0) / 1000) + 's';
+  }, 500);
+  scheduleAgent(state.agents[0], 300);
+  scheduleAgent(state.agents[1], 800);
+  scheduleAgent(state.agents[2], 1400);
+}
+
+function finishNow() {
+  state.timeouts.forEach(clearTimeout); clearInterval(state.timer);
+  state.agents = initAgents();
+  for (const a of state.agents) {
+    a.status = a.outcome; a.toolCount = a.steps.length;
+    a.tokens = a.steps.length * 1000 + 300;
+    a.spark = a.steps.map((_, i) => 400 + i * 150);
+    a.steps.forEach(s => {
+      a.log.push({ tool: s.tool, text: s.args + ' → ' + s.out, err: s.err });
+      if (s.say) a.log.push({ say: true, text: s.say });
+    });
+    a.log.push(a.outcome === 'completed' ? { say: true, text: '✓ 任务完成' } : { err: true, text: '✗ 失败：会话过期' });
+  }
+  document.getElementById('hdrTime').textContent = '38s';
+  render();
+}
+
+restart();
+</script>
+</body>
+</html>

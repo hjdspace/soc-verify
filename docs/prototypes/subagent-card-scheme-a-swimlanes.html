@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Subagent Card · 方案 A · 泳道式并行监控</title>
+<style>
+  :root {
+    --bg: oklch(0.14 0.006 250);
+    --bg-surface: oklch(0.18 0.006 250);
+    --bg-elevated: oklch(0.21 0.007 250);
+    --bg-inset: oklch(0.16 0.006 250);
+    --fg: oklch(0.94 0.004 250);
+    --fg-dim: oklch(0.62 0.008 250);
+    --fg-faint: oklch(0.42 0.006 250);
+    --border: oklch(0.25 0.007 250);
+    --c-a: oklch(0.68 0.14 250);
+    --c-b: oklch(0.72 0.15 35);
+    --c-c: oklch(0.68 0.13 185);
+    --pass: oklch(0.72 0.15 155);
+    --fail: oklch(0.65 0.2 25);
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--sans);
+    padding: 40px 24px 100px;
+  }
+  .container { max-width: 780px; margin: 0 auto; }
+  .proto-note {
+    font-size: 12px; color: var(--fg-faint); margin-bottom: 24px;
+    padding: 10px 14px; border: 1px dashed var(--border); border-radius: 8px;
+  }
+  h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { font-size: 13px; color: var(--fg-dim); margin-bottom: 24px; }
+
+  /* ── 聊天上下文 ─────────────────────────── */
+  .chat-user {
+    background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 14px; font-size: 13px;
+    margin-bottom: 14px; max-width: 85%;
+  }
+  .chat-assistant {
+    font-size: 13px; color: var(--fg-dim); margin-bottom: 10px; line-height: 1.6;
+  }
+
+  /* ── Tool Card 外壳 ────────────────────── */
+  .tool-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 14px;
+  }
+  .tool-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 12px; font-size: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tool-name { font-family: var(--mono); font-weight: 600; }
+  .tool-summary { color: var(--fg-dim); }
+  .tool-time { margin-left: auto; color: var(--fg-faint); font-family: var(--mono); font-size: 11px; }
+
+  /* ── 汇总条 ─────────────────────────────── */
+  .agg-bar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 12px; background: var(--bg-inset);
+    border-bottom: 1px solid var(--border); font-size: 11px;
+  }
+  .agg-progress { flex: 1; height: 4px; border-radius: 2px; background: var(--bg-elevated); overflow: hidden; }
+  .agg-progress > div { height: 100%; width: 0%; border-radius: 2px;
+    background: linear-gradient(90deg, var(--c-a), var(--c-c)); transition: width 0.6s ease; }
+  .agg-stats { display: flex; gap: 10px; color: var(--fg-dim); font-family: var(--mono); white-space: nowrap; }
+  .agg-stats b { color: var(--fg); font-weight: 600; }
+
+  /* ── 泳道 ──────────────────────────────── */
+  .lane { border-bottom: 1px solid var(--border); }
+  .lane:last-child { border-bottom: 0; }
+  .lane-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; cursor: pointer; user-select: none;
+  }
+  .lane-row:hover { background: var(--bg-elevated); }
+  .lane-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+    background: var(--fg-faint);
+  }
+  .lane-dot.running { background: var(--c-a); animation: pulse 1.2s ease-in-out infinite; }
+  .lane-dot.done { background: var(--pass); }
+  .lane-dot.error { background: var(--fail); }
+  @keyframes pulse { 0%,100% { opacity: 1; box-shadow: 0 0 0 0 oklch(0.68 0.14 250 / 0.4);} 50% { opacity: 0.6; box-shadow: 0 0 0 4px oklch(0.68 0.14 250 / 0);} }
+
+  .lane-role {
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    padding: 1px 8px; border-radius: 4px; flex-shrink: 0; min-width: 130px;
+  }
+  .role-a { background: oklch(0.68 0.14 250 / 0.15); color: var(--c-a); }
+  .role-b { background: oklch(0.72 0.15 35 / 0.15); color: var(--c-b); }
+  .role-c { background: oklch(0.68 0.13 185 / 0.15); color: var(--c-c); }
+
+  .lane-desc { font-size: 12px; color: var(--fg); flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .lane-tool {
+    font-family: var(--mono); font-size: 10px; flex-shrink: 0;
+    padding: 2px 8px; border-radius: 4px;
+    background: var(--bg-elevated); color: var(--fg-dim);
+    max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .lane-tool.live { color: var(--c-a); }
+  .lane-tool.err { color: var(--fail); background: oklch(0.65 0.2 25 / 0.12); }
+
+  .lane-meta { font-family: var(--mono); font-size: 10px; color: var(--fg-faint); flex-shrink: 0; }
+  .lane-chevron { color: var(--fg-faint); font-size: 10px; flex-shrink: 0; transition: transform 0.2s; }
+  .lane.open .lane-chevron { transform: rotate(90deg); }
+
+  /* 泳道展开详情 */
+  .lane-detail { display: none; padding: 0 12px 10px 30px; }
+  .lane.open .lane-detail { display: block; }
+  .detail-assign {
+    font-size: 11px; color: var(--fg-dim); line-height: 1.5;
+    padding: 6px 10px; margin-bottom: 8px;
+    border-left: 2px solid var(--border); border-radius: 0 4px 4px 0;
+  }
+  .detail-log {
+    background: var(--bg-inset); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; font-family: var(--mono); font-size: 10.5px; line-height: 1.7;
+    max-height: 180px; overflow-y: auto;
+  }
+  .detail-log .ln { color: var(--fg-dim); white-space: pre-wrap; word-break: break-all; }
+  .detail-log .ln .t { color: var(--c-c); }
+  .detail-log .ln.err { color: var(--fail); }
+  .detail-log .ln.say { color: var(--fg); }
+  .detail-log .cursor {
+    display: inline-block; width: 6px; height: 12px; vertical-align: -2px;
+    background: var(--c-a); animation: blink 0.9s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .detail-footer { display: flex; gap: 12px; margin-top: 6px; font-size: 10px; color: var(--fg-faint); font-family: var(--mono); }
+
+  /* ── 控制条 & 切换器 ───────────────────── */
+  .controls { display: flex; gap: 8px; margin: 20px 0 0; }
+  .controls button {
+    background: var(--bg-elevated); border: 1px solid var(--border); color: var(--fg-dim);
+    padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer; font-family: var(--sans);
+  }
+  .controls button:hover { color: var(--fg); border-color: var(--fg-faint); }
+
+  .switcher {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 4px;
+    background: oklch(0.25 0.01 250); border: 1px solid oklch(0.35 0.01 250);
+    border-radius: 999px; padding: 6px 10px; z-index: 99;
+    box-shadow: 0 8px 24px oklch(0 0 0 / 0.5); font-size: 12px;
+  }
+  .switcher a, .switcher span {
+    color: var(--fg); text-decoration: none; padding: 4px 10px; border-radius: 999px;
+  }
+  .switcher .nav { font-weight: 700; opacity: 0.8; }
+  .switcher .nav:hover { opacity: 1; background: oklch(0.32 0.01 250); }
+  .switcher .label { font-weight: 600; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="proto-note">PROTOTYPE · 方案 A · 泳道式 — 每个 subagent 一条泳道，实时显示 currentTool / tokens / 工具数，点击泳道展开流式日志。对应 omp 的 <code>subagent_progress</code> 帧驱动。</div>
+  <h1>方案 A · 泳道式并行监控</h1>
+  <div class="subtitle">结构：卡片头 + 汇总进度条 + N 条 agent 泳道（可展开内联日志）。强项：多 subagent 并行时一眼看全，类似 CI pipeline。</div>
+
+  <div class="chat-user">帮我分析 UART 模块的覆盖率缺口，修复 tb_uart_rx 的失败用例，然后生成验证周报。</div>
+  <div class="chat-assistant">好的，我将并行派遣 3 个子代理处理这三项任务：</div>
+
+  <div class="tool-card" id="card">
+    <div class="tool-header">
+      <span>⚙</span>
+      <span class="tool-name">task</span>
+      <span class="tool-summary" id="hdrSummary">派遣 3 个子代理…</span>
+      <span class="tool-time" id="hdrTime">0s</span>
+    </div>
+    <div class="agg-bar">
+      <div class="agg-progress"><div id="aggFill"></div></div>
+      <div class="agg-stats">
+        <span><b id="aggDone">0</b>/3</span>
+        <span><b id="aggTools">0</b> tools</span>
+        <span><b id="aggTokens">0</b> tok</span>
+      </div>
+    </div>
+    <div id="lanes"></div>
+  </div>
+
+  <div class="controls">
+    <button onclick="restart()">▶ 重播模拟</button>
+    <button onclick="finishNow()">⏭ 跳到最终态</button>
+  </div>
+</div>
+
+<div class="switcher">
+  <a class="nav" href="subagent-card-scheme-c-hive.html">←</a>
+  <span class="label">A · 泳道式</span>
+  <a class="nav" href="subagent-card-scheme-b-accordion.html">→</a>
+</div>
+
+<script>
+// ── 模拟数据：对应真实场景 omp task 工具派遣 ──
+const AGENTS = [
+  {
+    id: 'sa-1', role: 'coverage-analyzer', roleCls: 'role-a',
+    desc: '分析 UART 模块覆盖率缺口',
+    assign: '读取 cov:///uart/latest 覆盖率数据库，找出未覆盖的 bins，按风险排序输出缺口清单。',
+    steps: [
+      { tool: 'Read',   args: 'cov:///uart/latest', out: 'loaded coverage.db (2.3k bins)', say: '正在加载覆盖率数据库…' },
+      { tool: 'Bash',   args: 'python cov_rank.py', out: 'ranked 47 uncovered bins', say: '发现 47 个未覆盖 bins，正在按风险排序。' },
+      { tool: 'Grep',   args: 'assert.*fifo', out: '12 matches in tb_uart_rx.sv', say: '' },
+      { tool: 'Bash',   args: 'python cov_rank.py --deep', out: 'ERROR: cov db session expired', say: '', err: true },
+    ],
+    outcome: 'failed', failMsg: '覆盖率数据库会话过期，无法完成深度分析（工具调用 4 次后失败）',
+  },
+  {
+    id: 'sa-2', role: 'test-fixer', roleCls: 'role-b',
+    desc: '修复 tb_uart_rx 失败用例',
+    assign: '定位 tb_uart_rx 中 2 个失败用例的根因，修改 testbench 或 RTL 并回归验证。',
+    steps: [
+      { tool: 'Bash',   args: 'make sim TEST=uart_rx', out: '2 tests failed: rx_timeout, rx_parity', say: '复现失败：rx_timeout 和 rx_parity 两个用例。' },
+      { tool: 'Read',   args: 'tb_uart_rx.sv#L120-180', out: 'read 60 lines', say: '' },
+      { tool: 'Grep',   args: 'parity_check', out: '5 matches', say: '疑似奇偶校验采样窗口错误。' },
+      { tool: 'Edit',   args: 'tb_uart_rx.sv', out: 'applied hunk @L142', say: '修正采样窗口偏移。' },
+      { tool: 'Bash',   args: 'make sim TEST=uart_rx', out: 'all 28 tests passed', say: '回归通过，全部 28 个用例 PASS。' },
+    ],
+    outcome: 'completed',
+  },
+  {
+    id: 'sa-3', role: 'doc-writer', roleCls: 'role-c',
+    desc: '生成验证周报 markdown',
+    assign: '汇总本周用例执行与覆盖率趋势，产出 weekly-report.md。',
+    steps: [
+      { tool: 'Glob',   args: 'reports/*.md', out: '5 files found', say: '收集上周报告作为模板。' },
+      { tool: 'Read',   args: 'reports/w12.md', out: 'read 120 lines', say: '' },
+      { tool: 'Bash',   args: 'case-stats --week', out: 'pass 214 / fail 6', say: '本周通过率 97.3%。' },
+      { tool: 'Write',  args: 'reports/w13.md', out: 'wrote 88 lines', say: '周报已生成。' },
+    ],
+    outcome: 'completed',
+  },
+];
+
+// ── 渲染 ──
+const lanesEl = document.getElementById('lanes');
+const state = { agents: [], t0: 0, timer: null, timeouts: [] };
+
+function fmtTok(n) { return n >= 1000 ? (n / 1000).toFixed(1) + 'k' : '' + n; }
+
+function initAgents() {
+  return AGENTS.map(a => ({
+    ...a, status: 'pending', toolCount: 0, tokens: 0, requests: 0,
+    currentTool: null, log: [], open: false, stepIdx: 0,
+  }));
+}
+
+function renderLanes() {
+  lanesEl.innerHTML = '';
+  for (const a of state.agents) {
+    const lane = document.createElement('div');
+    lane.className = 'lane' + (a.open ? ' open' : '');
+    lane.innerHTML = `
+      <div class="lane-row" onclick="toggleLane('${a.id}')">
+        <span class="lane-dot ${a.status === 'running' ? 'running' : a.status === 'completed' ? 'done' : a.status === 'failed' ? 'error' : ''}"></span>
+        <span class="lane-role ${a.roleCls}">${a.role}</span>
+        <span class="lane-desc">${a.status === 'failed' ? `<span style="color:var(--fail)">✗ ${a.failMsg.slice(0, 30)}…</span>` : a.desc}</span>
+        <span class="lane-tool ${a.status === 'running' ? 'live' : ''} ${a.status === 'failed' ? 'err' : ''}">${
+          a.status === 'running' ? '⟳ ' + a.currentTool :
+          a.status === 'completed' ? '✓ 完成' :
+          a.status === 'failed' ? '✗ 失败' : '· 等待'
+        }</span>
+        <span class="lane-meta">${a.toolCount}t · ${fmtTok(a.tokens)}</span>
+        <span class="lane-chevron">▶</span>
+      </div>
+      <div class="lane-detail">
+        <div class="detail-assign">${a.assign}</div>
+        <div class="detail-log" id="log-${a.id}"></div>
+        <div class="detail-footer">
+          <span>requests: ${a.requests}</span><span>tokens: ${a.tokens}</span><span>tools: ${a.toolCount}</span>
+        </div>
+      </div>`;
+    lanesEl.appendChild(lane);
+    const logEl = document.getElementById('log-' + a.id);
+    for (const ln of a.log) logEl.appendChild(logLine(ln));
+    if (a.status === 'running') {
+      const c = document.createElement('span'); c.className = 'cursor'; logEl.appendChild(c);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+  }
+  // 汇总
+  const done = state.agents.filter(a => a.status === 'completed').length;
+  const failed = state.agents.filter(a => a.status === 'failed').length;
+  const tools = state.agents.reduce((s, a) => s + a.toolCount, 0);
+  const toks = state.agents.reduce((s, a) => s + a.tokens, 0);
+  const finished = done + failed;
+  document.getElementById('aggDone').textContent = finished;
+  document.getElementById('aggFill').style.width = (finished / AGENTS.length * 100) + '%';
+  document.getElementById('aggTools').textContent = tools;
+  document.getElementById('aggTokens').textContent = fmtTok(toks);
+  const hs = document.getElementById('hdrSummary');
+  hs.textContent = finished === AGENTS.length
+    ? `完成 · ${done} 成功 / ${failed} 失败`
+    : `3 个子代理并行 · ${state.agents.filter(a => a.status === 'running').length} 运行中`;
+}
+
+function logLine(ln) {
+  const d = document.createElement('div');
+  d.className = 'ln' + (ln.err ? ' err' : '') + (ln.say ? ' say' : '');
+  if (ln.tool) d.innerHTML = `<span class="t">[${ln.tool}]</span> ${ln.text}`;
+  else d.textContent = ln.text;
+  return d;
+}
+
+function toggleLane(id) {
+  const a = state.agents.find(x => x.id === id);
+  a.open = !a.open; renderLanes();
+}
+
+// ── 模拟播放器：对应 subagent_lifecycle / subagent_progress / subagent_event 帧到达 ──
+function scheduleAgent(a, startDelay) {
+  const T = (fn, ms) => state.timeouts.push(setTimeout(fn, ms));
+  T(() => {
+    a.status = 'running'; a.requests = 1;
+    a.log.push({ say: true, text: '» 子代理启动 · ' + a.role });
+    renderLanes();
+    let t = 400;
+    a.steps.forEach((s, i) => {
+      T(() => {
+        a.currentTool = `${s.tool} ${s.args}`; a.toolCount++;
+        a.tokens += 600 + Math.floor(Math.random() * 900);
+        a.log.push({ tool: s.tool, text: s.args + ' → ' + s.out, err: s.err });
+        if (s.say) a.log.push({ say: true, text: s.say });
+        renderLanes();
+      }, t);
+      t += 1400 + Math.random() * 800;
+      if (i % 2 === 1) T(() => { a.requests++; renderLanes(); }, t - 600);
+    });
+    T(() => {
+      a.status = a.outcome; a.currentTool = null;
+      a.log.push(a.outcome === 'completed'
+        ? { say: true, text: '✓ 任务完成，结果已返回主代理' }
+        : { err: true, text: '✗ ' + a.failMsg });
+      renderLanes();
+    }, t + 300);
+  }, startDelay);
+}
+
+function restart() {
+  state.timeouts.forEach(clearTimeout); clearInterval(state.timer);
+  state.agents = initAgents(); state.t0 = Date.now();
+  renderLanes();
+  state.timer = setInterval(() => {
+    document.getElementById('hdrTime').textContent = Math.round((Date.now() - state.t0) / 1000) + 's';
+  }, 500);
+  scheduleAgent(state.agents[0], 300);
+  scheduleAgent(state.agents[1], 800);
+  scheduleAgent(state.agents[2], 1400);
+}
+
+function finishNow() {
+  state.timeouts.forEach(clearTimeout); clearInterval(state.timer);
+  state.agents = initAgents();
+  for (const a of state.agents) {
+    a.status = a.outcome; a.toolCount = a.steps.length;
+    a.tokens = a.steps.length * 1100 + 400; a.requests = Math.ceil(a.steps.length / 2);
+    a.log.push({ say: true, text: '» 子代理启动 · ' + a.role });
+    a.steps.forEach(s => {
+      a.log.push({ tool: s.tool, text: s.args + ' → ' + s.out, err: s.err });
+      if (s.say) a.log.push({ say: true, text: s.say });
+    });
+    a.log.push(a.outcome === 'completed'
+      ? { say: true, text: '✓ 任务完成，结果已返回主代理' }
+      : { err: true, text: '✗ ' + a.failMsg });
+  }
+  document.getElementById('hdrTime').textContent = '38s';
+  renderLanes();
+}
+
+restart();
+</script>
+</body>
+</html>

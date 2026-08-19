@@ -331,7 +331,14 @@ function extractToolCallsFromMessage(msg: ChatMessage): DiffToolCall[] {
 
   const content = typeof args.content === 'string' ? args.content : undefined;
 
-  const isNewFile = name === 'write' && content != null;
+  // Only a write that was observed against a missing path is a new file.
+  // Older persisted messages have no snapshot and are conservatively treated
+  // as overwrites so rejecting them can never unlink an existing file.
+  const fileExistedBefore = resultDetails?.fileExistedBefore;
+  const isNewFile = name === 'write' && content != null && fileExistedBefore === false;
+  const beforeContent = typeof resultDetails?.beforeContent === 'string'
+    ? resultDetails.beforeContent
+    : undefined;
 
   const ompEdits = extractOmpDiffEdits(msg.toolResult);
   if ((name === 'edit' || name === 'edit_file')
@@ -344,7 +351,7 @@ function extractToolCallsFromMessage(msg: ChatMessage): DiffToolCall[] {
     : [{ oldText: finalOldText, newText: finalNewText }];
 
   // 跳过无实际变更的编辑（oldText === newText 表示没有改动，会产生 +0 -0 的空 diff）
-  if (!isNewFile && edits.every((e) => e.oldText === e.newText)) {
+  if (name !== 'write' && !isNewFile && edits.every((e) => e.oldText === e.newText)) {
     return [];
   }
 
@@ -357,6 +364,7 @@ function extractToolCallsFromMessage(msg: ChatMessage): DiffToolCall[] {
     oldText: edit.oldText,
     newText: edit.newText,
     content,
+    beforeContent,
     isNewFile,
   }));
 }

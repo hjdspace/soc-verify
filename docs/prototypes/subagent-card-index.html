@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SoC Verify · Subagent Card · 方案对比</title>
+<style>
+  :root {
+    --bg: oklch(0.14 0.006 250);
+    --bg-surface: oklch(0.18 0.006 250);
+    --bg-elevated: oklch(0.21 0.007 250);
+    --fg: oklch(0.94 0.004 250);
+    --fg-dim: oklch(0.62 0.008 250);
+    --fg-faint: oklch(0.42 0.006 250);
+    --border: oklch(0.25 0.007 250);
+    --c-a: oklch(0.68 0.14 250);
+    --c-b: oklch(0.72 0.15 35);
+    --c-c: oklch(0.68 0.13 185);
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--fg); font-family: var(--sans); padding: 40px 24px; }
+  .container { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; }
+  .subtitle { font-size: 14px; color: var(--fg-dim); margin-bottom: 12px; line-height: 1.6; }
+
+  .mech {
+    background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px 20px; margin-bottom: 32px; font-size: 12.5px; line-height: 1.8; color: var(--fg-dim);
+  }
+  .mech b { color: var(--fg); }
+  .mech code { font-family: var(--mono); font-size: 11px; background: var(--bg-elevated);
+    padding: 1px 6px; border-radius: 4px; color: var(--c-c); }
+
+  .schemes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 32px; }
+  .scheme-card {
+    background: var(--bg-surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px; text-decoration: none; color: var(--fg); transition: all 0.2s;
+    display: flex; flex-direction: column;
+  }
+  .scheme-card:hover { border-color: var(--fg-faint); transform: translateY(-2px); }
+  .scheme-letter { font-size: 32px; font-weight: 800; margin-bottom: 8px; }
+  .la { color: var(--c-a); } .lb { color: var(--c-b); } .lc { color: var(--c-c); }
+  .scheme-name { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+  .scheme-desc { font-size: 12px; color: var(--fg-dim); line-height: 1.6; flex: 1; margin-bottom: 12px; }
+  .scheme-props { display: flex; flex-wrap: wrap; gap: 6px; }
+  .prop { font-size: 10px; padding: 2px 8px; border-radius: 10px;
+    background: var(--bg-elevated); color: var(--fg-faint); }
+  .prop.good { color: var(--c-c); }
+  .prop.bad { color: var(--c-b); }
+
+  .note { font-size: 12px; color: var(--fg-faint); line-height: 1.7; }
+  .note a { color: var(--c-a); }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Subagent Card · UI 方案对比</h1>
+  <div class="subtitle">当 LLM 通过 <code style="font-family:var(--mono)">task</code> 工具派遣 subagent 时，用专用卡片替换默认 TaskBody，并支持实时流式输出。三个方案均含动画模拟（▶ 重播 / ⏭ 跳到最终态），底部悬浮条可互相切换。</div>
+
+  <div class="mech">
+    <b>omp 派遣机制</b>（数据源已确认）：<code>task</code> 工具输入 <code>tasks[]</code>（id / description / role / assignment / isolated）；omp 通过三类 RPC 帧流式推送 —
+    <code>subagent_lifecycle</code>（started/completed/failed/aborted）、
+    <code>subagent_progress</code>（currentTool / recentOutput / toolCount / tokens，已节流合并）、
+    <code>subagent_event</code>（完整子会话事件流，含 message_update 流式文本）。
+    帧携带 <code>parentToolCallId</code> 可直接关联到对应 tool card。当前渲染端未消费这三类帧。
+  </div>
+
+  <div class="schemes">
+    <a class="scheme-card" href="subagent-card-scheme-a-swimlanes.html">
+      <div class="scheme-letter la">A</div>
+      <div class="scheme-name">泳道式并行监控</div>
+      <div class="scheme-desc">每个 subagent 一条泳道，实时显示 currentTool / tokens / 工具数；汇总进度条置顶；点击泳道展开内联流式日志。类似 CI pipeline 视图。</div>
+      <div class="scheme-props">
+        <span class="prop good">并行监控一目了然</span>
+        <span class="prop good">密度高</span>
+        <span class="prop bad">流式文本空间受限</span>
+      </div>
+    </a>
+    <a class="scheme-card" href="subagent-card-scheme-b-accordion.html">
+      <div class="scheme-letter lb">B</div>
+      <div class="scheme-name">嵌套手风琴迷你会话</div>
+      <div class="scheme-desc">每个 subagent 一个折叠区块，折叠时显示 lastIntent 单行；展开后是迷你会话 — 流式 assistant 文本（打字机效果）+ 工具调用行 + 结果块。</div>
+      <div class="scheme-props">
+        <span class="prop good">可见推理过程</span>
+        <span class="prop good">类 Cursor 体验</span>
+        <span class="prop bad">展开时占用聊天流高度</span>
+      </div>
+    </a>
+    <a class="scheme-card" href="subagent-card-scheme-c-hive.html">
+      <div class="scheme-letter lc">C</div>
+      <div class="scheme-name">聚合磁贴 + 抽屉详情</div>
+      <div class="scheme-desc">卡片本体极简：磁贴网格（状态点 + currentTool + token sparkline）；点击磁贴右侧抽屉弹出完整实时日志流。聊天流占用最小。</div>
+      <div class="scheme-props">
+        <span class="prop good">占用空间最小</span>
+        <span class="prop good">详情全屏流</span>
+        <span class="prop bad">多一步点击</span>
+      </div>
+    </a>
+  </div>
+
+  <div class="note">
+    实现提示：数据通路为 omp stdout 三类帧 → 主进程 <span style="font-family:var(--mono)">agent-client</span> 识别 →
+    <span style="font-family:var(--mono)">webContents.send</span> + eventBridge（tRPC subscription 不可用）→
+    渲染端 session store 按 <span style="font-family:var(--mono)">parentToolCallId</span> 聚合到 tool message →
+    新 SubagentCard 组件替换 <span style="font-family:var(--mono)">TaskBody</span>。
+    需向 omp 发送 <span style="font-family:var(--mono)">set_subagent_subscription</span> 开启事件订阅。
+  </div>
+</div>
+</body>
+</html>

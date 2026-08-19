@@ -29,6 +29,8 @@
  *   host → runner: { type: 'tool_result', id, result, isError? }
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 
 // The `Bun` global is provided by the bun-types package (installed in
@@ -177,9 +179,37 @@ function needsApproval(toolName: string, mode: ApprovalMode): boolean {
 
 /** 当前生效的审批模式（init 时设置，setApprovalMode 时动态更新） */
 let currentApprovalMode: ApprovalMode = "yolo";
+let currentCwd = process.cwd();
 
 /** 原始工具的快照——包装前保存，以便切换模式时从原始工具重新包装 */
 let originalTools: unknown[] | null = null;
+
+type WriteSnapshot = {
+	fileExistedBefore: boolean;
+	beforeContent?: string;
+};
+
+function captureWriteSnapshot(args: unknown): WriteSnapshot | null {
+	if (typeof args !== "object" || args === null) return null;
+	const path = (args as Record<string, unknown>).path;
+	if (typeof path !== "string" || !path) return null;
+	const filePath = resolve(currentCwd, path);
+	if (!existsSync(filePath)) return { fileExistedBefore: false };
+	try {
+		return { fileExistedBefore: true, beforeContent: readFileSync(filePath, "utf-8") };
+	} catch {
+		return { fileExistedBefore: true };
+	}
+}
+
+function attachWriteSnapshot(result: unknown, snapshot: WriteSnapshot | null): unknown {
+	if (!snapshot || typeof result !== "object" || result === null || Array.isArray(result)) return result;
+	const record = result as Record<string, unknown>;
+	const details = typeof record.details === "object" && record.details !== null && !Array.isArray(record.details)
+		? record.details as Record<string, unknown>
+		: {};
+	return { ...record, details: { ...details, ...snapshot } };
+}
 
 /**
  * 用当前审批模式包装工具并设置到 agent 上。
@@ -201,17 +231,12 @@ function applyApprovalMode(): void {
 				.filter((tool): tool is NonNullable<typeof tool> => tool != null);
 		}
 
-		if (currentApprovalMode === "yolo") {
-			// yolo 模式：恢复原始工具
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			session.agent.setTools(originalTools as any);
-			return;
-		}
-
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const wrappedTools = (originalTools as any[]).map((tool: any) => {
 			const toolName: string = tool.name;
-			if (!needsApproval(toolName, currentApprovalMode)) return tool;
+			const requiresApproval = needsApproval(toolName, currentApprovalMode);
+			const capturesWriteSnapshot = toolName === "write";
+			if (!requiresApproval && !capturesWriteSnapshot) return tool;
 
 			// 使用 Proxy 保留原型链，仅拦截 execute 方法
 			return new Proxy(tool, {
@@ -224,14 +249,15 @@ function applyApprovalMode(): void {
 						onUpdate: unknown,
 						ctx: unknown,
 					) => {
-						const approved = await requestApproval(toolName, args);
-						if (!approved) {
+						if (requiresApproval && !await requestApproval(toolName, args)) {
 							return {
 								content: [{ type: "text" as const, text: `[已拒绝] 用户拒绝了此工具调用的执行。` }],
 							};
 						}
+						const snapshot = capturesWriteSnapshot ? captureWriteSnapshot(args) : null;
 						// eslint-disable-next-line @typescript-eslint/no-explicit-any
-						return target.execute(toolCallId, args, signal as any, onUpdate as any, ctx as any);
+						const result = await target.execute(toolCallId, args, signal as any, onUpdate as any, ctx as any);
+						return attachWriteSnapshot(result, snapshot);
 					};
 				},
 			});
@@ -317,6 +343,7 @@ let unsubscribe: (() => void) | null = null;
 
 async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 	const config = cmd.config;
+	currentCwd = config.cwd;
 
 	// Apply environment variables
 	if (config.env) {
@@ -496,11 +523,29 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 	const result = await createAgentSession(sessionOptions);
 	session = result.session;
 
+	// Forward subagent lifecycle/progress frames to the host.
+	// The EventBus channels are emitted by the task executor for every
+	// dispatched subagent; progress frames are already coalesced (~150ms) and
+	// carry everything the UI needs (currentTool, recentOutput, tokens...).
+	// The high-frequency `task:subagent:event` channel is intentionally NOT
+	// forwarded — its message_update events would flood the JSONL pipe.
+	try {
+		const { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } = await import(
+			"../engine/oh-my-pi/packages/coding-agent/src/task/types"
+		);
+		result.eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, (payload: unknown) => {
+			send({ type: "subagent_lifecycle", payload });
+		});
+		result.eventBus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, (payload: unknown) => {
+			send({ type: "subagent_progress", payload });
+		});
+	} catch (err) {
+		console.error("[socverify-runner] failed to subscribe subagent channels:", err);
+	}
+
 	// Wrap built-in tools with approval proxy when approvalMode is set
 	currentApprovalMode = config.approvalMode ?? "yolo";
-	if (currentApprovalMode !== "yolo") {
-		applyApprovalMode();
-	}
+	applyApprovalMode();
 
 	// Subscribe to events and forward them to the host
 	unsubscribe = session.subscribe((event: unknown) => {

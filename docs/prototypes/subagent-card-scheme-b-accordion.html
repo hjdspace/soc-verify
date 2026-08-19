@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Subagent Card · 方案 B · 嵌套手风琴迷你会话</title>
+<style>
+  :root {
+    --bg: oklch(0.14 0.006 250);
+    --bg-surface: oklch(0.18 0.006 250);
+    --bg-elevated: oklch(0.21 0.007 250);
+    --bg-inset: oklch(0.16 0.006 250);
+    --fg: oklch(0.94 0.004 250);
+    --fg-dim: oklch(0.62 0.008 250);
+    --fg-faint: oklch(0.42 0.006 250);
+    --border: oklch(0.25 0.007 250);
+    --c-a: oklch(0.68 0.14 250);
+    --c-b: oklch(0.72 0.15 35);
+    --c-c: oklch(0.68 0.13 185);
+    --pass: oklch(0.72 0.15 155);
+    --fail: oklch(0.65 0.2 25);
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--fg); font-family: var(--sans); padding: 40px 24px 100px; }
+  .container { max-width: 780px; margin: 0 auto; }
+  .proto-note {
+    font-size: 12px; color: var(--fg-faint); margin-bottom: 24px;
+    padding: 10px 14px; border: 1px dashed var(--border); border-radius: 8px;
+  }
+  h1 { font-size: 20px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { font-size: 13px; color: var(--fg-dim); margin-bottom: 24px; }
+
+  .chat-user {
+    background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 14px; font-size: 13px; margin-bottom: 14px; max-width: 85%;
+  }
+  .chat-assistant { font-size: 13px; color: var(--fg-dim); margin-bottom: 10px; line-height: 1.6; }
+
+  .tool-card {
+    background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: 10px; overflow: hidden; margin-bottom: 14px;
+  }
+  .tool-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 12px; font-size: 12px; border-bottom: 1px solid var(--border);
+  }
+  .tool-name { font-family: var(--mono); font-weight: 600; }
+  .tool-summary { color: var(--fg-dim); }
+  .tool-time { margin-left: auto; color: var(--fg-faint); font-family: var(--mono); font-size: 11px; }
+
+  /* ── 手风琴 subagent 区块 ── */
+  .acc { border-bottom: 1px solid var(--border); }
+  .acc:last-child { border-bottom: 0; }
+  .acc-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; cursor: pointer; user-select: none;
+  }
+  .acc-head:hover { background: var(--bg-elevated); }
+  .acc-chevron { color: var(--fg-faint); font-size: 10px; transition: transform 0.2s; }
+  .acc.open .acc-chevron { transform: rotate(90deg); }
+
+  .agent-avatar {
+    width: 26px; height: 26px; border-radius: 7px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-family: var(--mono); font-weight: 700;
+  }
+  .av-a { background: oklch(0.68 0.14 250 / 0.18); color: var(--c-a); }
+  .av-b { background: oklch(0.72 0.15 35 / 0.18); color: var(--c-b); }
+  .av-c { background: oklch(0.68 0.13 185 / 0.18); color: var(--c-c); }
+
+  .acc-title { flex: 1; min-width: 0; }
+  .acc-role { font-family: var(--mono); font-size: 11.5px; font-weight: 600; }
+  .acc-intent {
+    font-size: 11px; color: var(--fg-dim); margin-top: 2px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .acc-status {
+    font-size: 9px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 10px; flex-shrink: 0; font-family: var(--mono);
+  }
+  .st-pending { background: var(--bg-elevated); color: var(--fg-faint); }
+  .st-running { background: oklch(0.68 0.14 250 / 0.15); color: var(--c-a); animation: breathe 1.6s ease-in-out infinite; }
+  .st-done { background: oklch(0.72 0.15 155 / 0.15); color: var(--pass); }
+  .st-fail { background: oklch(0.65 0.2 25 / 0.15); color: var(--fail); }
+  @keyframes breathe { 50% { opacity: 0.55; } }
+
+  /* ── 展开的迷你会话 ── */
+  .acc-body { display: none; padding: 2px 14px 14px 48px; }
+  .acc.open .acc-body { display: block; }
+  .transcript {
+    border-left: 2px solid var(--border); padding-left: 12px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .msg-say { font-size: 12px; line-height: 1.65; color: var(--fg); }
+  .msg-say.dim { color: var(--fg-dim); }
+  .msg-tool {
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 10.5px;
+    background: var(--bg-inset); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 10px; color: var(--fg-dim);
+  }
+  .msg-tool .tn { color: var(--c-c); font-weight: 600; }
+  .msg-tool .tv { color: var(--fg-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .msg-tool .tr { margin-left: auto; flex-shrink: 0; color: var(--pass); }
+  .msg-tool.err .tr { color: var(--fail); }
+  .msg-tool.err .tn { color: var(--fail); }
+  .msg-tool.running { border-color: oklch(0.68 0.14 250 / 0.4); }
+  .msg-result {
+    font-size: 11px; line-height: 1.6; padding: 8px 10px; border-radius: 6px;
+    background: oklch(0.72 0.15 155 / 0.08); border: 1px solid oklch(0.72 0.15 155 / 0.25);
+    color: var(--fg-dim); white-space: pre-wrap;
+  }
+  .msg-result.fail { background: oklch(0.65 0.2 25 / 0.08); border-color: oklch(0.65 0.2 25 / 0.3); }
+  .cursor { display: inline-block; width: 6px; height: 13px; vertical-align: -2px;
+    background: var(--c-a); animation: blink 0.9s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .typing-say { color: var(--fg); }
+
+  .controls { display: flex; gap: 8px; margin-top: 20px; }
+  .controls button {
+    background: var(--bg-elevated); border: 1px solid var(--border); color: var(--fg-dim);
+    padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer;
+  }
+  .controls button:hover { color: var(--fg); border-color: var(--fg-faint); }
+
+  .switcher {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 4px;
+    background: oklch(0.25 0.01 250); border: 1px solid oklch(0.35 0.01 250);
+    border-radius: 999px; padding: 6px 10px; z-index: 99;
+    box-shadow: 0 8px 24px oklch(0 0 0 / 0.5); font-size: 12px;
+  }
+  .switcher a { color: var(--fg); text-decoration: none; padding: 4px 10px; border-radius: 999px; }
+  .switcher .nav { font-weight: 700; opacity: 0.8; }
+  .switcher .nav:hover { opacity: 1; background: oklch(0.32 0.01 250); }
+  .switcher .label { font-weight: 600; white-space: nowrap; padding: 4px 10px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="proto-note">PROTOTYPE · 方案 B · 手风琴迷你会话 — 每个 subagent 一个折叠区块，展开后是"迷你聊天"：流式 assistant 文本（<code>subagent_event</code> 的 message_update）+ 工具调用行。强项：能看到子代理的推理过程。</div>
+  <h1>方案 B · 嵌套手风琴迷你会话</h1>
+  <div class="subtitle">结构：task 卡片内嵌 N 个折叠区块；折叠时显示 lastIntent 单行摘要，展开后显示完整会话流（逐字打字效果）。</div>
+
+  <div class="chat-user">帮我分析 UART 模块的覆盖率缺口，修复 tb_uart_rx 的失败用例，然后生成验证周报。</div>
+  <div class="chat-assistant">好的，我将并行派遣 3 个子代理处理这三项任务：</div>
+
+  <div class="tool-card">
+    <div class="tool-header">
+      <span>⚙</span><span class="tool-name">task</span>
+      <span class="tool-summary" id="hdrSummary">派遣 3 个子代理…</span>
+      <span class="tool-time" id="hdrTime">0s</span>
+    </div>
+    <div id="accs"></div>
+  </div>
+
+  <div class="controls">
+    <button onclick="restart()">▶ 重播模拟</button>
+    <button onclick="finishNow()">⏭ 跳到最终态</button>
+  </div>
+</div>
+
+<div class="switcher">
+  <a class="nav" href="subagent-card-scheme-a-swimlanes.html">←</a>
+  <span class="label">B · 手风琴</span>
+  <a class="nav" href="subagent-card-scheme-c-hive.html">→</a>
+</div>
+
+<script>
+const AGENTS = [
+  {
+    id: 'sa-1', role: 'coverage-analyzer', av: '📐', avCls: 'av-a',
+    steps: [
+      { say: '正在加载覆盖率数据库，检查 UART 模块的 bins 覆盖情况。' },
+      { tool: 'Read', args: 'cov:///uart/latest', res: '2.3k bins loaded' },
+      { say: '发现 47 个未覆盖 bins，其中 12 个与 FIFO 断言相关，正在按风险排序。' },
+      { tool: 'Grep', args: 'assert.*fifo  tb_uart_rx.sv', res: '12 matches' },
+      { tool: 'Bash', args: 'python cov_rank.py --deep', res: 'ERROR: session expired', err: true },
+    ],
+    outcome: 'failed', result: '✗ 覆盖率数据库会话过期，深度分析失败。已返回已完成的部分结果（47 个缺口）。建议重新生成覆盖率数据后重试。',
+  },
+  {
+    id: 'sa-2', role: 'test-fixer', av: '🔧', avCls: 'av-b',
+    steps: [
+      { say: '先复现失败，确认是哪两个用例挂了。' },
+      { tool: 'Bash', args: 'make sim TEST=uart_rx', res: '2 failed' },
+      { say: 'rx_timeout 和 rx_parity 失败。读取 testbench 相关段落定位根因。' },
+      { tool: 'Read', args: 'tb_uart_rx.sv L120-180', res: '60 lines' },
+      { say: '疑似奇偶校验采样窗口错误 — 采样点落在 stop bit 边沿。修正采样窗口偏移。' },
+      { tool: 'Edit', args: 'tb_uart_rx.sv', res: 'hunk @L142' },
+      { tool: 'Bash', args: 'make sim TEST=uart_rx', res: '28 passed' },
+    ],
+    outcome: 'completed', result: '✓ 修复采样窗口偏移（tb_uart_rx.sv L142），回归 28/28 全部通过。',
+  },
+  {
+    id: 'sa-3', role: 'doc-writer', av: '📝', avCls: 'av-c',
+    steps: [
+      { say: '收集上周报告作为模板，再拉取本周用例统计数据。' },
+      { tool: 'Glob', args: 'reports/*.md', res: '5 files' },
+      { tool: 'Bash', args: 'case-stats --week', res: '214/220 pass' },
+      { say: '本周通过率 97.3%，覆盖率提升 2.1pp。生成周报。' },
+      { tool: 'Write', args: 'reports/w13.md', res: '88 lines' },
+    ],
+    outcome: 'completed', result: '✓ 已生成 reports/w13.md（88 行），含用例统计、覆盖率趋势与下周计划。',
+  },
+];
+
+const accsEl = document.getElementById('accs');
+const state = { agents: [], t0: 0, timer: null, timeouts: [] };
+
+function initAgents() {
+  return AGENTS.map(a => ({
+    ...a, status: 'pending', intent: '等待调度…', transcript: [],
+    open: false, typing: null,
+  }));
+}
+
+function statusChip(s) {
+  const map = { pending: ['st-pending', 'queued'], running: ['st-running', 'running'],
+    completed: ['st-done', 'done'], failed: ['st-fail', 'failed'] };
+  const [cls, txt] = map[s];
+  return `<span class="acc-status ${cls}">${txt}</span>`;
+}
+
+function transcriptHTML(a) {
+  let html = '<div class="transcript">';
+  for (const m of a.transcript) {
+    if (m.kind === 'say') {
+      html += `<div class="msg-say ${m.live ? '' : 'dim'}">${m.text}${m.live ? '<span class="cursor"></span>' : ''}</div>`;
+    } else if (m.kind === 'tool') {
+      html += `<div class="msg-tool ${m.err ? 'err' : ''} ${m.live ? 'running' : ''}">
+        <span class="tn">${m.live ? '⟳' : m.err ? '✗' : '✓'} ${m.tool}</span>
+        <span class="tv">${m.args}</span>
+        ${m.live ? '' : `<span class="tr">${m.res}</span>`}
+      </div>`;
+    } else if (m.kind === 'result') {
+      html += `<div class="msg-result ${m.fail ? 'fail' : ''}">${m.text}</div>`;
+    }
+  }
+  html += '</div>';
+  return html;
+}
+
+function render() {
+  accsEl.innerHTML = '';
+  for (const a of state.agents) {
+    const d = document.createElement('div');
+    d.className = 'acc' + (a.open ? ' open' : '');
+    d.innerHTML = `
+      <div class="acc-head" onclick="toggleAcc('${a.id}')">
+        <span class="acc-chevron">▶</span>
+        <span class="agent-avatar ${a.avCls}">${a.av}</span>
+        <div class="acc-title">
+          <div class="acc-role">${a.role}</div>
+          <div class="acc-intent">${a.intent}</div>
+        </div>
+        ${statusChip(a.status)}
+      </div>
+      <div class="acc-body">${transcriptHTML(a)}</div>`;
+    accsEl.appendChild(d);
+  }
+  const running = state.agents.filter(a => a.status === 'running').length;
+  const done = state.agents.filter(a => a.status === 'completed').length;
+  const failed = state.agents.filter(a => a.status === 'failed').length;
+  const finished = done + failed;
+  document.getElementById('hdrSummary').textContent = finished === AGENTS.length
+    ? `完成 · ${done} 成功 / ${failed} 失败` : `3 个子代理并行 · ${running} 运行中`;
+}
+
+function toggleAcc(id) {
+  const a = state.agents.find(x => x.id === id);
+  a.open = !a.open; render();
+}
+
+/* 打字机效果：模拟 subagent_event message_update 增量 */
+function typeSay(a, fullText, onDone) {
+  a.typing = { text: '', live: true };
+  a.transcript.push(a.typing);
+  let i = 0;
+  const iv = setInterval(() => {
+    a.typing.text = fullText.slice(0, i += 2);
+    a.intent = fullText.slice(0, 40) + (fullText.length > 40 ? '…' : '');
+    render();
+    if (i >= fullText.length) {
+      clearInterval(iv);
+      a.typing.live = false; a.typing = null;
+      render(); onDone && onDone();
+    }
+  }, 28);
+  state.timeouts.push(iv);
+}
+
+function runTool(a, s, onDone) {
+  const m = { kind: 'tool', tool: s.tool, args: s.args, live: true };
+  a.transcript.push(m);
+  a.intent = `${s.tool} ${s.args}`;
+  render();
+  const t = setTimeout(() => {
+    m.live = false; m.res = s.res; m.err = !!s.err;
+    render(); onDone && onDone();
+  }, 900 + Math.random() * 500);
+  state.timeouts.push(t);
+}
+
+function scheduleAgent(a, delay) {
+  const T = (fn, ms) => state.timeouts.push(setTimeout(fn, ms));
+  T(() => { a.status = 'running'; render(); }, delay);
+  let p = Promise.resolve(delay + 200);
+  a.steps.forEach(s => {
+    p = p.then(() => new Promise(r => {
+      if (s.say) typeSay(a, s.say, r);
+      else runTool(a, s, r);
+    }));
+  });
+  p.then(() => {
+    a.status = a.outcome;
+    a.transcript.push({ kind: 'result', text: a.result, fail: a.outcome === 'failed' });
+    a.intent = a.outcome === 'completed' ? '任务完成' : '任务失败';
+    render();
+  });
+}
+
+function restart() {
+  state.timeouts.forEach(t => { clearTimeout(t); clearInterval(t); });
+  clearInterval(state.timer);
+  state.agents = initAgents(); state.t0 = Date.now();
+  render();
+  state.timer = setInterval(() => {
+    document.getElementById('hdrTime').textContent = Math.round((Date.now() - state.t0) / 1000) + 's';
+  }, 500);
+  scheduleAgent(state.agents[0], 300);
+  scheduleAgent(state.agents[1], 700);
+  scheduleAgent(state.agents[2], 1300);
+}
+
+function finishNow() {
+  restart();
+  state.timeouts.forEach(t => { clearTimeout(t); clearInterval(t); });
+  clearInterval(state.timer);
+  state.agents = initAgents();
+  for (const a of state.agents) {
+    a.status = a.outcome; a.open = false;
+    a.transcript = a.steps.map(s => s.say
+      ? { kind: 'say', text: s.say, live: false }
+      : { kind: 'tool', tool: s.tool, args: s.args, res: s.res, err: !!s.err, live: false });
+    a.transcript.push({ kind: 'result', text: a.result, fail: a.outcome === 'failed' });
+    a.intent = a.outcome === 'completed' ? '任务完成' : '任务失败';
+  }
+  document.getElementById('hdrTime').textContent = '38s';
+  render();
+}
+
+restart();
+</script>
+</body>
+</html>

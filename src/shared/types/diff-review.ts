@@ -16,6 +16,8 @@ export interface DiffToolCall {
   newText?: string;
   /** WRITE: 文件内容（全量新增） */
   content?: string;
+  /** WRITE: 写入前文件内容（覆盖已有文件时用于恢复） */
+  beforeContent?: string;
   /** 是否为创建新文件（WRITE 工具） */
   isNewFile: boolean;
 }

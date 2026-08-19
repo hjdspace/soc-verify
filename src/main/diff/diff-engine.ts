@@ -103,6 +103,14 @@ function reconstructBefore(
       continue;
     }
 
+    // A full-file write that overwrote an existing file carries a snapshot
+    // captured before execution. Without it, leave the content untouched so
+    // an old persisted review can never reconstruct to an empty file.
+    if (tc.toolName === 'write' && tc.beforeContent != null) {
+      content = normalizeLineEndings(tc.beforeContent);
+      continue;
+    }
+
     // EDIT: 在当前内容中找到 newText，替换回 oldText
     if (tc.newText != null && tc.oldText != null) {
       const newText = normalizeLineEndings(tc.newText);
