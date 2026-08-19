@@ -3,6 +3,7 @@ import { AppShell } from './components/layout/AppShell';
 import { ToastContainer } from './components/ToastContainer';
 import { useThemeStore } from './stores/theme';
 import { useFontStore } from './stores/font';
+import { useEditorStore } from './stores/editor';
 import { useToastStore } from './stores/toast';
 import { useSessionStore } from './stores/session';
 import { useSettingsStore } from './stores/settings';
@@ -21,6 +22,7 @@ function isToolWindow(): boolean {
 export default function App() {
   const initTheme = useThemeStore((s) => s.initTheme);
   const initFont = useFontStore((s) => s.initFont);
+  const initEditor = useEditorStore((s) => s.initEditor);
   const initLastModel = useSessionStore((s) => s.initLastModel);
   const registerSessionEventListeners = useSessionStore((s) => s.registerEventListeners);
   const loadContextWindow = useSettingsStore((s) => s.loadContextWindow);
@@ -34,12 +36,13 @@ export default function App() {
   useEffect(() => {
     initTheme();
     initFont();
+    initEditor();
     if (!toolMode) {
       void loadContextWindow();
       initLastModel();
       registerSessionEventListeners();
     }
-  }, [initTheme, initFont, initLastModel, loadContextWindow, registerSessionEventListeners, toolMode]);
+  }, [initTheme, initFont, initEditor, initLastModel, loadContextWindow, registerSessionEventListeners, toolMode]);
 
   // Restore the most recently opened project on startup (non-tool windows only).
   // This was previously in LeftRail, but LeftRail is conditionally mounted/unmounted
