@@ -482,7 +482,12 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, onUriC
             );
           },
           code: ({ className, children }) => {
-            const isInline = !className;
+            // react-markdown v9+ 移除了 inline prop，无法直接区分行内/块级代码。
+            // 无语言标记的 fenced code block（如 LLM 输出的目录树）同样没有
+            // className，但其内容包含换行——CommonMark 规定 inline code span
+            // 内的换行会被规范化为空格，据此区分是安全的。
+            const text = extractText(children);
+            const isInline = !className && !text.includes('\n');
             if (isInline) {
               return (
                 <code className="rounded bg-secondary px-1 py-0.5 text-[10px] font-mono">
@@ -492,9 +497,9 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, onUriC
             }
             const lang = className?.replace('language-', '') ?? '';
             if (lang === 'mermaid') {
-              return <MermaidDiagram code={String(children).trim()} />;
+              return <MermaidDiagram code={text.trim()} />;
             }
-            return <CodeBlock language={lang}>{String(children)}</CodeBlock>;
+            return <CodeBlock language={lang}>{text}</CodeBlock>;
           },
           pre: ({ children }) => <>{children}</>,
           table: ({ children }) => (
