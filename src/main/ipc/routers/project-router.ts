@@ -23,6 +23,7 @@ import type {
   ProjectState,
   DiffToolCall,
   DiffRejection,
+  DirGroup,
 } from '@shared/types';
 
 /**
@@ -197,17 +198,36 @@ export const projectRouter = t.router({
     }),
 
   /** Lazy-load the children of a directory (one level deep).
-   * The UI calls this when a user first expands a directory node. */
+   * The UI calls this when a user first expands a directory node.
+   * Optional dirId scopes the security check to an extra directory. */
   getDirChildren: t.procedure
-    .input((raw): { projectId: string; dirPath: string } => {
+    .input((raw): { projectId: string; dirPath: string; dirId?: string } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string' || typeof r.dirPath !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and dirPath are required' });
       }
-      return { projectId: r.projectId, dirPath: r.dirPath };
+      return {
+        projectId: r.projectId,
+        dirPath: r.dirPath,
+        dirId: typeof r.dirId === 'string' ? r.dirId : undefined,
+      };
     })
     .query(async ({ input }) => {
-      return projectManager.getDirChildren(input.projectId, input.dirPath);
+      return projectManager.getDirChildren(input.projectId, input.dirPath, input.dirId);
+    }),
+
+  /** Get the file tree for an extra directory (by dirId).
+   * Each directory has its own independent lazy-loaded tree and file watcher. */
+  getDirFileTree: t.procedure
+    .input((raw): { projectId: string; dirId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.dirId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and dirId are required' });
+      }
+      return { projectId: r.projectId, dirId: r.dirId };
+    })
+    .query(async ({ input }) => {
+      return projectManager.getDirFileTree(input.projectId, input.dirId);
     }),
 
   readFile: t.procedure
@@ -992,5 +1012,125 @@ export const projectRouter = t.router({
       });
 
       return { ok: true, wasDirectory: stats.isDirectory() };
+    }),
+
+  // ─── 多目录管理 ───────────────────────────────────────
+
+  addDir: t.procedure
+    .input((raw): { projectId: string; path: string; group: DirGroup; label?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.path !== 'string' || typeof r.group !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, path and group are required' });
+      }
+      if (r.group !== 'verify' && r.group !== 'design') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'group must be "verify" or "design"' });
+      }
+      return {
+        projectId: r.projectId,
+        path: r.path,
+        group: r.group as DirGroup,
+        label: typeof r.label === 'string' ? r.label : undefined,
+      };
+    })
+    .mutation(async ({ input }) => {
+      requireProject(input.projectId);
+      try {
+        return await projectManager.addDir(input.projectId, input.path, input.group, input.label);
+      } catch (err) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }),
+
+  removeDir: t.procedure
+    .input((raw): { projectId: string; dirId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.dirId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and dirId are required' });
+      }
+      return { projectId: r.projectId, dirId: r.dirId };
+    })
+    .mutation(async ({ input }) => {
+      requireProject(input.projectId);
+      try {
+        await projectManager.removeDir(input.projectId, input.dirId);
+        return { ok: true };
+      } catch (err) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }),
+
+  setCwd: t.procedure
+    .input((raw): { projectId: string; dirId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.dirId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and dirId are required' });
+      }
+      return { projectId: r.projectId, dirId: r.dirId };
+    })
+    .mutation(async ({ input }) => {
+      requireProject(input.projectId);
+      try {
+        const cwd = await projectManager.setCwd(input.projectId, input.dirId);
+        return { ok: true, cwd };
+      } catch (err) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }),
+
+  updateDirLabel: t.procedure
+    .input((raw): { projectId: string; dirId: string; label: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.dirId !== 'string' || typeof r.label !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, dirId and label are required' });
+      }
+      return { projectId: r.projectId, dirId: r.dirId, label: r.label };
+    })
+    .mutation(async ({ input }) => {
+      requireProject(input.projectId);
+      try {
+        await projectManager.updateDirLabel(input.projectId, input.dirId, input.label);
+        return { ok: true };
+      } catch (err) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }),
+
+  getExtraDirs: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .query(({ input }) => {
+      requireProject(input.projectId);
+      return projectManager.getExtraDirs(input.projectId);
+    }),
+
+  /** 弹出系统文件夹选择对话框，返回选择的目录路径。
+   *  用于侧边栏「+」按钮添加目录到指定分组。 */
+  pickDirDialog: t.procedure
+    .mutation(async () => {
+      const result = await dialog.showOpenDialog({
+        properties: ['openDirectory'],
+        title: '选择要添加的目录',
+      });
+      if (result.canceled || result.filePaths.length === 0) {
+        return { canceled: true as const };
+      }
+      return { canceled: false as const, path: result.filePaths[0] };
     }),
 });
