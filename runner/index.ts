@@ -31,6 +31,7 @@
 
 import { createInterface } from "node:readline";
 import { attachWriteSnapshot, attachWriteSnapshotToStartEvent, captureWriteSnapshot } from "./write-snapshot";
+import { needsApproval, type ApprovalMode } from "./approval-logic";
 
 // The `Bun` global is provided by the bun-types package (installed in
 // engine/oh-my-pi/node_modules) at compile time, and by the Bun runtime
@@ -69,11 +70,13 @@ process.stdout.write = ((data: unknown, ...args: unknown[]) => {
 	return process.stderr.write(str, ...(args as never[]));
 }) as typeof process.stdout.write;
 
+// Re-export for backward compatibility with any code that imports from runner
+export { needsApproval, type ApprovalMode, type ToolTier } from "./approval-logic";
+export { getToolTier } from "./approval-logic";
+
 // ─── Types ──────────────────────────────────────────────
 
-type ApprovalMode = "always-ask" | "write" | "yolo";
-
-interface InitConfig {
+type InitConfig = {
 	cwd: string;
 	apiKey?: string;
 	baseUrl?: string;
@@ -96,6 +99,15 @@ interface InitConfig {
 	additionalExtensionPaths?: string[];
 	/** 工具审批模式：always-ask（总询问）、write（自动编辑）、yolo（完全信任） */
 	approvalMode?: ApprovalMode;
+	/**
+	 * UI 存储的对话历史（user/assistant 文本），用于 omp 会话文件缺失或
+	 * 只覆盖尾部时重建引擎上下文（失忆恢复种子）。
+	 */
+	seedHistory?: Array<{
+		role: "user" | "assistant";
+		content: string;
+		timestamp: number;
+	}>;
 }
 
 type Command =
@@ -156,25 +168,9 @@ function requestApproval(toolName: string, args: unknown): Promise<boolean> {
 	});
 }
 
-// ─── 工具审批逻辑 ──────────────────────────────────────
-
-/** 工具能力层级 */
-const READ_TOOLS = new Set(["read", "grep", "glob", "ast_grep", "todo", "web_search", "ask", "inspect_image"]);
-const WRITE_TOOLS = new Set(["edit", "write", "ast_edit"]);
-
-function getToolTier(toolName: string): "read" | "write" | "exec" {
-	if (READ_TOOLS.has(toolName)) return "read";
-	if (WRITE_TOOLS.has(toolName)) return "write";
-	return "exec";
-}
-
-function needsApproval(toolName: string, mode: ApprovalMode): boolean {
-	if (mode === "yolo") return false;
-	const tier = getToolTier(toolName);
-	if (mode === "always-ask") return tier !== "read";
-	if (mode === "write") return tier === "exec";
-	return false;
-}
+// ─── 工具审批逻辑（从 approval-logic.ts 导入）──────────────
+// getToolTier 和 needsApproval 已提取到 approval-logic.ts 以支持单元测试。
+// applyApprovalMode 仍在此文件中，因为它操作 session 级别状态。
 
 /** 当前生效的审批模式（init 时设置，setApprovalMode 时动态更新） */
 let currentApprovalMode: ApprovalMode = "yolo";
@@ -197,10 +193,10 @@ function applyApprovalMode(): void {
 	try {
 		// 首次调用时保存原始工具快照
 		if (!originalTools) {
-			const activeNames = session.getActiveToolNames();
+			const activeNames = session.getActiveToolNames() as string[];
 			originalTools = activeNames
-				.map((name) => session.getToolByName(name))
-				.filter((tool): tool is NonNullable<typeof tool> => tool != null);
+				.map((name: string) => session.getToolByName(name))
+				.filter((tool: unknown) => tool != null);
 		}
 
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -313,6 +309,37 @@ let session: any = null;
  
 let unsubscribe: (() => void) | null = null;
 
+/**
+ * Extract the trimmed text of the first user message in an omp session's
+ * entry tree. Used to detect omp files that only cover a tail of the stored
+ * UI transcript (their first user message differs from the transcript's).
+ * Structurally typed — SessionManager is only available via dynamic import.
+ */
+function firstUserMessageText(
+	manager: { getEntries(): unknown[] },
+): string | undefined {
+	for (const entry of manager.getEntries()) {
+		const e = entry as { type?: string; message?: { role?: string; content?: unknown } };
+		if (e.type !== "message") continue;
+		const msg = e.message;
+		if (msg?.role !== "user") continue;
+		const content = msg.content;
+		if (typeof content === "string") return content.trim();
+		if (Array.isArray(content)) {
+			return content
+				.filter(
+					(b): b is { type: "text"; text: string } =>
+						typeof b === "object" && b !== null && (b as { type?: string }).type === "text",
+				)
+				.map((b) => b.text)
+				.join("\n")
+				.trim();
+		}
+		return undefined;
+	}
+	return undefined;
+}
+
 async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 	const config = cmd.config;
 	currentCwd = config.cwd;
@@ -334,15 +361,20 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 	// Uses relative path to the engine's coding-agent package source.
 	// This resolves both when running directly with Bun (engine present)
 	// and when compiled with `bun build --compile` (resolved at compile time).
-	const { createAgentSession, discoverAuthStorage } = await import(
-		"../engine/oh-my-pi/packages/coding-agent/src/sdk"
-	);
-	const { ModelRegistry } = await import(
-		"../engine/oh-my-pi/packages/coding-agent/src/config/model-registry"
-	);
-	const { SessionManager } = await import(
-		"../engine/oh-my-pi/packages/coding-agent/src/session/session-manager"
-	);
+	//
+	// Import paths are stored in variables so TypeScript does not follow the
+	// import graph into the engine submodule — the engine has its own tsconfig
+	// and uses Bun-specific features (e.g. `.md` imports) that produce spurious
+	// errors when checked from our project.
+	const sdkPath = "../engine/oh-my-pi/packages/coding-agent/src/sdk";
+	const modelRegistryPath = "../engine/oh-my-pi/packages/coding-agent/src/config/model-registry";
+	const sessionManagerPath = "../engine/oh-my-pi/packages/coding-agent/src/session/session-manager";
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const { createAgentSession, discoverAuthStorage } = await import(sdkPath) as any;
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const { ModelRegistry } = await import(modelRegistryPath) as any;
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const { SessionManager } = await import(sessionManagerPath) as any;
 
 	// Enable console logging for the omp engine so errors are visible on
 	// stderr (captured by the Electron main process as [agent:stderr]).
@@ -350,9 +382,9 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 	// temp runtime dir, which is deleted when the session ends — making
 	// debugging impossible, especially in packaged AppImage/NSIS builds.
 	try {
-		const { setTransports } = await import(
-			"../engine/oh-my-pi/packages/utils/src/logger"
-		);
+		const loggerPath = "../engine/oh-my-pi/packages/utils/src/logger";
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const { setTransports } = await import(loggerPath) as any;
 		setTransports({ console: true, file: true });
 	} catch {
 		// Best-effort: if the logger module path changes, don't block init.
@@ -401,20 +433,81 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 	// Resume an existing session if requested. List from the same sessionDir
 	// the host configures at creation time (<project>/.socverify/omp-sessions)
 	// so resume actually finds the persisted session file.
+	//
+	// When the host provides a seed history (the stored UI transcript), we
+	// validate that the omp file actually starts at the same first user
+	// message. A mismatch means the omp file only covers a TAIL of the
+	// conversation (e.g. it was minted by an earlier failed resume, or the
+	// session predates sessionDir persistence) — resuming it would silently
+	// drop the earlier turns, so we rebuild a fresh session seeded with the
+	// full stored transcript instead.
+	let resumed = false;
 	if (config.resumeSessionId) {
 		try {
 			const sessions = await SessionManager.list(config.cwd, config.sessionDir);
 			const target = sessions.find((s: { id: string }) => s.id === config.resumeSessionId);
 			if (target) {
-				sessionManager = await SessionManager.open(target.path);
+				const candidate = await SessionManager.open(target.path);
+				const seedFirstUser = config.seedHistory
+					?.find((m) => m.role === "user")
+					?.content.trim();
+				const ompFirstUser = firstUserMessageText(candidate);
+				if (seedFirstUser === undefined || ompFirstUser === seedFirstUser) {
+					sessionManager = candidate;
+					resumed = true;
+				} else {
+					console.error(
+						`[socverify-runner] omp session ${config.resumeSessionId} covers only a partial transcript (first user message mismatch) — rebuilding from stored UI history`,
+					);
+				}
 			} else {
 				console.error(
-					`[socverify-runner] resume session not found in ${config.sessionDir ?? "(omp default dir)"}: ${config.resumeSessionId} — starting a fresh session (history lost)`,
+					`[socverify-runner] resume session not found in ${config.sessionDir ?? "(omp default dir)"}: ${config.resumeSessionId} — rebuilding from stored UI history`,
 				);
 			}
 		} catch {
 			// Fall through to creating a new session
 		}
+	}
+
+	// Seed the fresh omp session with the stored UI transcript so the agent
+	// remembers earlier turns that were never persisted to the omp JSONL.
+	// Only runs when native resume did not happen (resumed omp files are the
+	// authoritative history, including tool calls).
+	if (!resumed && config.seedHistory && config.seedHistory.length > 0) {
+		const seededProvider = config.provider ?? "socverify-openai-compatible";
+		const seededModel = config.model ?? "unknown";
+		for (const msg of config.seedHistory) {
+			if (msg.role === "user") {
+				sessionManager.appendMessage({
+					role: "user",
+					content: [{ type: "text", text: msg.content }],
+					attribution: "user",
+					timestamp: msg.timestamp,
+				});
+			} else {
+				sessionManager.appendMessage({
+					role: "assistant",
+					content: [{ type: "text", text: msg.content }],
+					// api/provider/model are persisted bookkeeping metadata;
+					// the context builder only reads the content blocks.
+					api: "openai-completions",
+					provider: seededProvider,
+					model: seededModel,
+					stopReason: "stop",
+					timestamp: msg.timestamp,
+					// usage is required by the AssistantMessage type but the
+					// context builder ignores it for seeded messages.
+					usage: {
+						input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+					},
+				});
+			}
+		}
+		console.error(
+			`[socverify-runner] seeded ${config.seedHistory.length} messages from stored UI history into omp session`,
+		);
 	}
 
 	// Build custom tools that forward calls to the Electron host
@@ -508,9 +601,9 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 	// The high-frequency `task:subagent:event` channel is intentionally NOT
 	// forwarded — its message_update events would flood the JSONL pipe.
 	try {
-		const { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } = await import(
-			"../engine/oh-my-pi/packages/coding-agent/src/task/types"
-		);
+		const taskTypesPath = "../engine/oh-my-pi/packages/coding-agent/src/task/types";
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } = await import(taskTypesPath) as any;
 		result.eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, (payload: unknown) => {
 			send({ type: "subagent_lifecycle", payload });
 		});
@@ -623,9 +716,9 @@ async function handleGetMcpStatus(cmd: Command & { type: "getMcpStatus" }): Prom
 		// Access the MCPManager from the session. The SDK creates a singleton
 		// MCPManager.instance() that manages all MCP connections. We query it
 		// for all known servers and their connection status.
-		const { MCPManager } = await import(
-			"../engine/oh-my-pi/packages/coding-agent/src/mcp/manager"
-		);
+		const mcpManagerPath = "../engine/oh-my-pi/packages/coding-agent/src/mcp/manager";
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const { MCPManager } = await import(mcpManagerPath) as any;
 		const manager = MCPManager.instance();
 		if (!manager) {
 			sendResponse(cmd.id, true, { servers: {} });
@@ -659,9 +752,9 @@ async function handleGetMcpServerTools(cmd: Command & { type: "getMcpServerTools
 	if (!session) throw new Error("Session not initialized");
 
 	try {
-		const { MCPManager } = await import(
-			"../engine/oh-my-pi/packages/coding-agent/src/mcp/manager"
-		);
+		const mcpManagerPath = "../engine/oh-my-pi/packages/coding-agent/src/mcp/manager";
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const { MCPManager } = await import(mcpManagerPath) as any;
 		const manager = MCPManager.instance();
 		if (!manager) {
 			sendResponse(cmd.id, true, { tools: [] });
@@ -677,13 +770,13 @@ async function handleGetMcpServerTools(cmd: Command & { type: "getMcpServerTools
 		// Use cached tools if available; otherwise call listTools to fetch.
 		let tools = connection.tools;
 		if (!tools) {
-			const { listTools } = await import(
-				"../engine/oh-my-pi/packages/coding-agent/src/mcp/client"
-			);
+			const mcpClientPath = "../engine/oh-my-pi/packages/coding-agent/src/mcp/client";
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const { listTools } = await import(mcpClientPath) as any;
 			tools = await listTools(connection);
 		}
 
-		const toolList = (tools ?? []).map((t) => ({
+		const toolList = (tools ?? []).map((t: { name: string; description?: string; inputSchema?: unknown }) => ({
 			name: t.name,
 			description: t.description,
 			inputSchema: t.inputSchema,
@@ -702,9 +795,9 @@ async function handleReloadMcp(cmd: Command & { type: "reloadMcp" }): Promise<vo
 	if (!session) throw new Error("Session not initialized");
 
 	try {
-		const { MCPManager } = await import(
-			"../engine/oh-my-pi/packages/coding-agent/src/mcp/manager"
-		);
+		const mcpManagerPath = "../engine/oh-my-pi/packages/coding-agent/src/mcp/manager";
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const { MCPManager } = await import(mcpManagerPath) as any;
 		const manager = MCPManager.instance();
 		if (!manager) {
 			sendResponse(cmd.id, true, { ok: true, servers: {} });

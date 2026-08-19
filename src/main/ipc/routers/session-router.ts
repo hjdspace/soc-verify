@@ -517,6 +517,22 @@ export const sessionRouter = t.router({
       const persistedSessions = await loadSessions(project.rootPath);
       const persisted = persistedSessions.find((s) => s.sessionId === input.sessionId);
 
+      // Build a seed transcript from the stored UI messages. The runner uses
+      // it to rebuild engine context when the omp JSONL is missing or only
+      // covers a tail of the conversation (amnesia recovery).
+      const storedMessages = await loadStoredMessages(project.rootPath, input.sessionId);
+      const seedHistory = storedMessages
+        .filter((m): m is { role: 'user' | 'assistant'; content: string; timestamp: number } => {
+          const r = m as Record<string, unknown>;
+          return (
+            (r.role === 'user' || r.role === 'assistant') &&
+            typeof r.content === 'string' &&
+            r.content.trim().length > 0 &&
+            typeof r.timestamp === 'number'
+          );
+        })
+        .map((m) => ({ role: m.role, content: m.content, timestamp: m.timestamp }));
+
       const ctx = await createSessionContext({
         projectId: input.projectId,
         cwd: input.cwd,
@@ -525,6 +541,7 @@ export const sessionRouter = t.router({
         persistedModel: persisted?.model,
         // Use the omp sessionId for resume — this is what the runner matches against
         resumeSessionId: persisted?.ompSessionId ?? input.sessionId,
+        seedHistory,
         persistedSessionId: input.sessionId,
         includeCaseStats: true,
         approvalMode: input.approvalMode,

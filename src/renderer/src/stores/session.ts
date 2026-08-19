@@ -662,19 +662,21 @@ async function loadStoredSessionMessages(projectId: string, persistedSessionId: 
  * Compact agent notice text for display as a system chip.
  *
  * MCP mount notices arrive as multi-line noise like:
- *   "[notice] xd:///: mounted mcp_codegraph_callees, mcp_codegraph_callers, ..."
- * These are collapsed into a single-line summary (server names extracted from
- * the mcp_<server>_<tool> naming). Other notices are whitespace-collapsed as-is.
+ *   "xd:///: mounted mcp_codegraph_callees, mcp_codegraph_callers, ..."
+ * Tool tokens are extracted globally so any phrasing/separator works, then
+ * collapsed into a single-line summary (server names derived from the
+ * mcp_<server>_<tool> naming). Other notices are whitespace-collapsed as-is.
  */
 function formatNoticeText(text: string): string {
   const collapsed = text.replace(/\s+/g, ' ').trim();
-  const mounted = collapsed.match(/(?:\[[^\]]+\]\s*)?(.*?):\s*mounted\s+(.+)$/i);
-  if (mounted) {
-    const tools = mounted[2].split(',').map((s) => s.trim()).filter(Boolean);
-    if (tools.length > 0 && tools.every((t) => /^mcp_[\w.-]+$/i.test(t))) {
-      const servers = [...new Set(tools.map((t) => t.replace(/^mcp_/i, '').split('_')[0]))];
-      return `已挂载 MCP 工具 ${tools.length} 个（${servers.join('、')}）`;
-    }
+  const mcpTools = collapsed.match(/\bmcp_[A-Za-z0-9][\w.-]*/g) ?? [];
+  if (/mounted/i.test(collapsed) && mcpTools.length > 0) {
+    const servers = [
+      ...new Set(mcpTools.map((t) => t.replace(/^mcp_/i, '').split('_')[0])),
+    ].filter(Boolean);
+    return servers.length > 0
+      ? `已挂载 MCP 工具 ${mcpTools.length} 个（${servers.join('、')}）`
+      : `已挂载 MCP 工具 ${mcpTools.length} 个`;
   }
   return collapsed;
 }

@@ -25,7 +25,7 @@ import { injectKbContext } from '../kb/context-injector';
 import { buildMultiDirSystemPrompt } from './multi-dir-prompt';
 import { projectManager } from '../project/project-manager';
 import type { CaseStatsService } from '../case/case-stats-service';
-import type { ApprovalMode } from './types';
+import type { ApprovalMode, SeedHistoryMessage } from './types';
 
 /** Subset of persisted session model info used for credential/provider fallback. */
 export type PersistedModelRef = {
@@ -46,6 +46,12 @@ export type SessionContextOptions = {
   model?: string;
   /** Resume an existing omp conversation by ompSessionId. */
   resumeSessionId?: string;
+  /**
+   * UI 存储的对话历史（chat-messages/<sessionId>.json 的 user/assistant 文本）。
+   * 传给 runner 作为失忆恢复种子：omp 会话文件缺失或只覆盖尾部时，
+   * 用它重建引擎上下文；omp 文件完整时以 omp 原生 resume 为准。
+   */
+  seedHistory?: SeedHistoryMessage[];
   /** Link the runtime session to a persisted session ID. */
   persistedSessionId?: string;
   /** Inject CaseStatsService (only the main session needs this). Default: false. */
@@ -160,6 +166,7 @@ export async function createSessionContext(options: SessionContextOptions): Prom
     coverageManager: coverageManager ?? null,
     caseStatsService: caseStatsService ?? null,
     resumeSessionId: options.resumeSessionId,
+    seedHistory: options.seedHistory,
     persistedSessionId: options.persistedSessionId,
     env: credEnv,
     systemPrompt,

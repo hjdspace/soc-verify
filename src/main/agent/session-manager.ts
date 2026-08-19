@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { AgentClient, type ToolCallHandler } from './agent-client';
 import { resolveAgentRuntime, resolveBuiltInExtensionDir, resolveRunnerBinary, resolveRunnerScript, resolveBunPath, checkBunVersion } from './paths';
 import { ensureOfficecliOnPath } from './officecli-paths';
-import type { CustomToolDefinition, InitConfig, ApprovalMode } from './types';
+import type { CustomToolDefinition, InitConfig, ApprovalMode, SeedHistoryMessage } from './types';
 import {
   buildModelInputOverrideConfig,
   buildOpenAICompatibleModelsConfig,
@@ -137,6 +137,8 @@ export interface CreateSessionOptions {
   baseUrl?: string;
   sessionDir?: string;
   resumeSessionId?: string;
+  /** UI 存储对话历史，用于 omp 会话文件缺失/部分覆盖时的上下文种子 */
+  seedHistory?: SeedHistoryMessage[];
   persistedSessionId?: string;
   env?: Record<string, string>;
   enableMCP?: boolean;
@@ -457,6 +459,7 @@ export class SessionManagerImpl extends EventEmitter {
       env,
       enableMCP: options.enableMCP ?? true,
       resumeSessionId: options.resumeSessionId,
+      seedHistory: options.seedHistory,
       systemPrompt: options.systemPrompt,
       contextWindow,
       customToolDefinitions,

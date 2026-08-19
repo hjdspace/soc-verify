@@ -64,7 +64,7 @@ interface CoordinatorSessionEntry {
   command?: string;
 }
 
-class ErrorAnalysisCoordinatorImpl extends EventEmitter {
+export class ErrorAnalysisCoordinatorImpl extends EventEmitter {
   private sessions = new Map<string, CoordinatorSessionEntry>();
   /** caseName → retryCount, tracks retry attempts per case */
   private retryTracker = new Map<string, number>();

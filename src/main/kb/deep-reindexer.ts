@@ -18,6 +18,9 @@ import { readFile, writeFile, readdir, rename, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { ensureV1Prefix } from '../agent/openai-compatible';
 import { kbLayout } from './layout';
+import { sessionManager } from '../agent/session-manager';
+import { credentialManager } from '../credentials/credential-manager';
+import { pluginLoader } from '../plugins/loader';
 
 // ── 类型 ────────────────────────────────────────────────────────
 
@@ -242,10 +245,7 @@ export async function deepReindex(params: DeepReindexParams): Promise<DeepReinde
 
   let sessionId: string;
   try {
-    // 延迟导入以避免循环依赖和测试 mock 冲突
-    const { sessionManager } = await import('../agent/session-manager');
-    const { credentialManager } = await import('../credentials/credential-manager');
-    const { pluginLoader } = await import('../plugins/loader');
+    // 使用静态导入替代动态导入
     const { PluginBackedDiscovery } = await import('../plugin-adapters');
 
     const credEnv = await credentialManager.buildEnvForAgent();
@@ -279,7 +279,6 @@ export async function deepReindex(params: DeepReindexParams): Promise<DeepReinde
 
   // 6. 发送 prompt
   try {
-    const { sessionManager } = await import('../agent/session-manager');
     const client = sessionManager.getClient(sessionId);
     if (!client) {
       throw new Error('无法获取 Agent 客户端');
@@ -364,10 +363,9 @@ export async function deepReindex(params: DeepReindexParams): Promise<DeepReinde
     }
 
     return { ok: false, error: { code: 'reindexFailed', message: `重建失败: ${msg}` } };
-  } finally {
+    } finally {
     // 8. 销毁临时会话（无论成功还是失败）
     try {
-      const { sessionManager } = await import('../agent/session-manager');
       await sessionManager.destroySession(sessionId);
     } catch {
       // best-effort cleanup

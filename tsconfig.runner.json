@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "types": ["node", "bun"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "allowArbitraryExtensions": true,
+    "noEmit": true,
+    "typeRoots": [
+      "./node_modules/@types",
+      "./engine/oh-my-pi/node_modules/@types"
+    ],
+    "paths": {
+      "@main/*": ["./src/main/*"],
+      "@shared/*": ["./src/shared/*"],
+      "@renderer/*": ["./src/renderer/src/*"]
+    }
+  },
+  "include": [
+    "runner/**/*",
+    "scripts/**/*"
+  ],
+  "exclude": [
+    "engine/oh-my-pi/**/*"
+  ]
+}

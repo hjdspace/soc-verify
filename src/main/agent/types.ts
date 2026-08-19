@@ -15,6 +15,17 @@ export interface ReadyFrame {
 
 export type ApprovalMode = 'always-ask' | 'write' | 'yolo';
 
+/**
+ * UI 存储的对话历史消息（user/assistant 文本对）。
+ * 当 omp 会话 JSONL 缺失或只覆盖尾部时，runner 用它重建引擎上下文，
+ * 保证恢复的历史会话不失忆。
+ */
+export type SeedHistoryMessage = {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: number;
+};
+
 export interface InitConfig {
   cwd: string;
   apiKey?: string;
@@ -25,6 +36,8 @@ export interface InitConfig {
   env?: Record<string, string>;
   enableMCP?: boolean;
   resumeSessionId?: string;
+  /** UI 存储对话历史，用于 omp 会话文件缺失/部分覆盖时的上下文种子 */
+  seedHistory?: SeedHistoryMessage[];
   systemPrompt?: string;
   contextWindow: number;
   customToolDefinitions: CustomToolDefinition[];
