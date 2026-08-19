@@ -32,6 +32,31 @@ async function editedFile(): Promise<{ filePath: string; toolCall: DiffToolCall 
 }
 
 describe('Diff Review engine', () => {
+  it('builds one reviewable addition hunk for a newly generated file', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'soc-verify-diff-'));
+    tempDirs.push(dir);
+    const filePath = join(dir, 'generated.md');
+    await writeFile(filePath, '# Generated\n\nbody\n', 'utf8');
+
+    const diff = await getFileDiff(filePath, [{
+      id: 'write-new-file',
+      toolName: 'write',
+      filePath,
+      timestamp: 1,
+      content: '# Generated\n\nbody\n',
+      isNewFile: true,
+    }]);
+
+    expect(diff.isNewFile).toBe(true);
+    expect(diff.hunks).toHaveLength(1);
+    expect(diff.hunks[0]).toEqual(expect.objectContaining({
+      addCount: 3,
+      delCount: 0,
+      overwritten: false,
+    }));
+    expect(diff.lines.filter((line) => line.type === 'add')).toHaveLength(3);
+  });
+
   it('shows the before and after lines for an omp edit', async () => {
     const { filePath, toolCall } = await editedFile();
 

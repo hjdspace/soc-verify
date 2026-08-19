@@ -269,8 +269,16 @@ export async function getFileDiff(
     toolCalls,
   );
 
-  // 计算行级 diff
-  const rawDiff = computeLcsDiff(beforeContent, currentContent);
+  // 新文件没有 before 行，全部当前内容属于同一个纯新增 diff。
+  // 直接对空字符串做 LCS 会把 split('\n') 产生的空行当成旧内容，
+  // 从而在文件内的空行处分裂出多个 hunk。
+  const rawDiff = isNewFile
+    ? normalizeLineEndings(currentContent)
+      .replace(/\n$/, '')
+      .split('\n')
+      .filter((line, index, lines) => line !== '' || lines.length > 1 || index > 0)
+      .map((content, index): RawDiffLine => ({ type: 'add', content, newLine: index + 1 }))
+    : computeLcsDiff(beforeContent, currentContent);
 
   // 分组 hunks
   const { lines, hunks } = groupHunks(rawDiff, toolCalls, overwrittenToolCallIds);

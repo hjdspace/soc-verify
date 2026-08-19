@@ -190,6 +190,41 @@ describe('createInlineReviewExtension', () => {
     view.destroy();
   });
 
+  it('renders generated file content as additions with review actions', () => {
+    const onAccept = vi.fn();
+    const onReject = vi.fn();
+    const diff: FileDiffResult = {
+      filePath: '/generated.sv',
+      isNewFile: true,
+      lines: [
+        { type: 'add', content: 'module alu;', newLine: 1, hunkId: 1 },
+        { type: 'add', content: '  wire y;', newLine: 2, hunkId: 1 },
+        { type: 'add', content: 'endmodule', newLine: 3, hunkId: 1 },
+        { type: 'add', content: '// tail', newLine: 4, hunkId: 1 },
+      ],
+      hunks: [{
+        id: 1,
+        toolCallId: 'write-new-file',
+        toolName: 'write',
+        overwritten: false,
+        startLineIndex: 0,
+        endLineIndex: 4,
+        addCount: 4,
+        delCount: 0,
+      }],
+      totalAdd: 4,
+      totalDel: 0,
+    };
+    const view = mountView({ diff, hunkStates: {}, onAccept, onReject });
+
+    expect(document.querySelectorAll('.cm-line.cm-review-add')).toHaveLength(4);
+    expect(document.querySelectorAll('.cm-review-bar')).toHaveLength(1);
+    expect(document.querySelector('.cm-review-btn-accept')).toBeTruthy();
+    expect(document.querySelector('.cm-review-btn-reject')).toBeTruthy();
+
+    view.destroy();
+  });
+
   it('rebuilds decorations when reconfigured with a new spec', () => {
     const view = mountView({ diff: sampleDiff(), hunkStates: {}, onAccept: vi.fn(), onReject: vi.fn() });
     expect(document.querySelectorAll('.cm-review-bar')).toHaveLength(2);

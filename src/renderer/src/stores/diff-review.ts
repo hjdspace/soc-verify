@@ -334,11 +334,10 @@ function extractToolCallsFromMessage(msg: ChatMessage): DiffToolCall[] {
   // Only a write that was observed against a missing path is a new file.
   // Older persisted messages have no snapshot and are conservatively treated
   // as overwrites so rejecting them can never unlink an existing file.
-  const fileExistedBefore = resultDetails?.fileExistedBefore;
+  const fileExistedBefore = msg.toolFileExistedBefore ?? resultDetails?.fileExistedBefore;
   const isNewFile = name === 'write' && content != null && fileExistedBefore === false;
-  const beforeContent = typeof resultDetails?.beforeContent === 'string'
-    ? resultDetails.beforeContent
-    : undefined;
+  const beforeContent = msg.toolBeforeContent
+    ?? (typeof resultDetails?.beforeContent === 'string' ? resultDetails.beforeContent : undefined);
 
   const ompEdits = extractOmpDiffEdits(msg.toolResult);
   if ((name === 'edit' || name === 'edit_file')

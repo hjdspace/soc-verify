@@ -678,6 +678,30 @@ describe('Diff Review flow', () => {
     }));
   });
 
+  it('uses the tool-start snapshot to recognize a newly generated file', () => {
+    const filePath = 'D:\\project\\generated.md';
+    const message = completedOmpWrite(filePath, undefined, 'generated\n');
+    message.toolFileExistedBefore = false;
+    message.toolBeforeContent = undefined;
+    message.toolResult = {
+      ok: true,
+      details: { resolvedPath: filePath },
+    };
+    useSessionStore.setState({
+      sessions: [{
+        id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
+        messages: [message],
+        composer: { inputMessage: '', selectedSkills: [], contextFiles: [] }, createdAt: 1,
+      }],
+    });
+
+    expect(useDiffReviewStore.getState().queue[0]).toEqual(expect.objectContaining({
+      filePath,
+      isNewFile: true,
+      reviewed: false,
+    }));
+  });
+
   it('settles two hunks independently before completing the file review', async () => {
     const filePath = 'D:\\project\\README.md';
     const key = normalizeReviewKey(filePath);

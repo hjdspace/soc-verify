@@ -426,13 +426,19 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 		sessionManager = SessionManager.inMemory();
 	}
 
-	// Resume an existing session if requested
+	// Resume an existing session if requested. List from the same sessionDir
+	// the host configures at creation time (<project>/.socverify/omp-sessions)
+	// so resume actually finds the persisted session file.
 	if (config.resumeSessionId) {
 		try {
-			const sessions = await SessionManager.list(config.cwd);
+			const sessions = await SessionManager.list(config.cwd, config.sessionDir);
 			const target = sessions.find((s: { id: string }) => s.id === config.resumeSessionId);
 			if (target) {
 				sessionManager = await SessionManager.open(target.path);
+			} else {
+				console.error(
+					`[socverify-runner] resume session not found in ${config.sessionDir ?? "(omp default dir)"}: ${config.resumeSessionId} — starting a fresh session (history lost)`,
+				);
 			}
 		} catch {
 			// Fall through to creating a new session
@@ -549,10 +555,16 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 
 	// Subscribe to events and forward them to the host
 	unsubscribe = session.subscribe((event: unknown) => {
-		sendEvent(event);
 		const eventType = typeof event === "object" && event !== null && "type" in event
 			? String((event as { type: unknown }).type)
 			: "";
+		const eventRecord = typeof event === "object" && event !== null
+			? event as Record<string, unknown>
+			: null;
+		const snapshot = eventType === "tool_execution_start" && eventRecord?.toolName === "write"
+			? captureWriteSnapshot(eventRecord.args)
+			: null;
+		sendEvent(snapshot && eventRecord ? { ...eventRecord, ...snapshot } : event);
 		if (eventType === "agent_end" || eventType === "compaction_end" || eventType === "auto_compaction_end") {
 			sendContextUsage();
 		}

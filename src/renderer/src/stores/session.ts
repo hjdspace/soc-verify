@@ -28,7 +28,7 @@ export interface AskRequest {
 
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant' | 'tool';
+  role: 'user' | 'assistant' | 'tool' | 'system';
   content: string;
   timestamp: number;
   toolName?: string;
@@ -658,6 +658,27 @@ async function loadStoredSessionMessages(projectId: string, persistedSessionId: 
   }
 }
 
+/**
+ * Compact agent notice text for display as a system chip.
+ *
+ * MCP mount notices arrive as multi-line noise like:
+ *   "[notice] xd:///: mounted mcp_codegraph_callees, mcp_codegraph_callers, ..."
+ * These are collapsed into a single-line summary (server names extracted from
+ * the mcp_<server>_<tool> naming). Other notices are whitespace-collapsed as-is.
+ */
+function formatNoticeText(text: string): string {
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  const mounted = collapsed.match(/(?:\[[^\]]+\]\s*)?(.*?):\s*mounted\s+(.+)$/i);
+  if (mounted) {
+    const tools = mounted[2].split(',').map((s) => s.trim()).filter(Boolean);
+    if (tools.length > 0 && tools.every((t) => /^mcp_[\w.-]+$/i.test(t))) {
+      const servers = [...new Set(tools.map((t) => t.replace(/^mcp_/i, '').split('_')[0]))];
+      return `已挂载 MCP 工具 ${tools.length} 个（${servers.join('、')}）`;
+    }
+  }
+  return collapsed;
+}
+
 function normalizeStoredMessages(messages: unknown): ChatMessage[] {
   if (!Array.isArray(messages)) return [];
   return messages.filter((msg): msg is ChatMessage => {
@@ -665,7 +686,7 @@ function normalizeStoredMessages(messages: unknown): ChatMessage[] {
     const m = msg as Record<string, unknown>;
     return (
       typeof m.id === 'string' &&
-      (m.role === 'user' || m.role === 'assistant' || m.role === 'tool') &&
+      (m.role === 'user' || m.role === 'assistant' || m.role === 'tool' || m.role === 'system') &&
       typeof m.content === 'string' &&
       typeof m.timestamp === 'number'
     );
@@ -1714,15 +1735,25 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             };
 
           case 'notice': {
-            // Show agent notices (errors, warnings) in the assistant message
-            const noticeText = (evt.message as string) || (evt.text as string) || JSON.stringify(evt);
+            // Agent notices (MCP mounts, warnings) are rendered as standalone
+            // system messages. They must NOT be appended to the streaming
+            // assistant content — message_update snapshots replace that
+            // content wholesale, which made notices flash and disappear.
+            const rawNoticeText = (evt.message as string) || (evt.text as string);
+            if (!rawNoticeText) return sess;
+            const noticeText = formatNoticeText(rawNoticeText);
+            // Dedupe: repeated identical notices (e.g. MCP remount on reconnect)
+            const lastMsg = sess.messages[sess.messages.length - 1];
+            if (lastMsg?.role === 'system' && lastMsg.content === noticeText) return sess;
+            const noticeMsg: ChatMessage = {
+              id: `sys_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+              role: 'system',
+              content: noticeText,
+              timestamp: Date.now(),
+            };
             return {
               ...sess,
-              messages: sess.messages.map((m) =>
-                m.role === 'assistant' && m.isStreaming
-                  ? { ...m, content: m.content + `\n\n[${type}] ${noticeText}` }
-                  : m,
-              ),
+              messages: [...sess.messages, noticeMsg],
             };
           }
 
