@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* Electron on some Linux desktop environments reports `(hover: none)`
+   even when a mouse is available. Keep Tailwind hover feedback based on
+   the actual :hover state so Linux and Windows render the same affordances. */
+@custom-variant hover (&:hover);
+
 /* ── 跨平台 button appearance 重置 ─────────────────────────────── */
 /* Linux Chromium 严格遵循 UA 默认的 appearance: button，会压制自定义
    background-color（hover:bg-accent / bg-accent/60 等），导致目录树、
@@ -9,6 +14,17 @@
 button {
   appearance: none;
   -webkit-appearance: none;
+}
+
+/* The appearance reset removes the browser's native pressed state. Restore
+   a small, platform-independent press cue for every enabled button. */
+button:not(:disabled) {
+  transition: filter 75ms ease, transform 75ms ease;
+}
+
+button:not(:disabled):active {
+  filter: brightness(0.92);
+  transform: translateY(1px);
 }
 
 /* ── 字体管理 CSS 变量（由 useFontStore 动态设置） ─────────── */
