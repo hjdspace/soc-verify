@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 import type { SubagentActivity } from '@renderer/stores/session';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 /**
  * Subagent 专用卡片（方案 C：聚合磁贴 + 抽屉详情）。
@@ -147,9 +148,15 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
           </button>
         </header>
 
-        {(agent.description ?? agent.assignment) && (
-          <div className="border-b border-border/60 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-            {agent.assignment ?? agent.description}
+        {(agent.assignment ?? agent.description) && (
+          <div
+            className="max-h-40 overflow-y-auto border-b border-border/60 px-3 py-2"
+            data-testid="subagent-assignment"
+          >
+            <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/60">
+              任务指令
+            </div>
+            <MarkdownRenderer content={agent.assignment ?? agent.description ?? ''} />
           </div>
         )}
 
