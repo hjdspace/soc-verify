@@ -19,6 +19,7 @@
  * - fallback: generic JSON display
  */
 import { useState, useEffect, useMemo, useCallback, type ReactNode } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { Loader2, ChevronDown, Terminal } from 'lucide-react';
 import { openReviewAwareFile } from '@renderer/stores/diff-review';
 import { useProjectStore } from '@renderer/stores/project';
@@ -131,7 +132,9 @@ export function ToolCard({ message }: { message: ChatMessage }) {
   const resultText = extractResultText(message.toolResult);
 
   // task 工具：读取该 tool call 关联的 subagent 实时状态（subagent_* 帧驱动）
-  const taskAgents = useSessionStore((s) => {
+  // useShallow：selector 每次生成新数组，元素引用不变时返回缓存引用，
+  // 避免 useSyncExternalStore 因 snapshot 引用变化陷入无限重渲染
+  const taskAgents = useSessionStore(useShallow((s) => {
     if (message.toolName !== 'task' || !message.toolCallId) return NO_SUBAGENTS;
     const list: SubagentActivity[] = [];
     for (const sess of s.sessions) {
@@ -140,7 +143,7 @@ export function ToolCard({ message }: { message: ChatMessage }) {
       }
     }
     return list.length > 0 ? list : NO_SUBAGENTS;
-  });
+  }));
 
   // even after the file has been reviewed and removed from the queue.
   const toolName = message.toolName ?? '';
