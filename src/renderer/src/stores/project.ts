@@ -3,6 +3,8 @@ import type {
   ProjectInfo,
   FileTreeNode,
   PluginConfigEntry,
+  ExtraDirEntry,
+  DirGroup,
 } from '@shared/types';
 import { trpc } from '@renderer/lib/trpc';
 import { useSessionStore } from './session';
@@ -15,6 +17,12 @@ interface ProjectState {
   currentProjectId: string | null;
   fileTree: FileTreeNode | null;
   fileTreeLoading: boolean;
+  /** Extra directories for the current project. */
+  extraDirs: ExtraDirEntry[];
+  /** Per-directory file trees, keyed by dirId. */
+  dirFileTrees: Record<string, FileTreeNode>;
+  /** Per-directory loading state, keyed by dirId. */
+  dirFileTreeLoading: Record<string, boolean>;
   plugins: PluginConfigEntry[];
   pluginsLoading: boolean;
   selectedSubsys: string | null;
@@ -28,6 +36,11 @@ interface ProjectState {
   refreshProjects: () => Promise<void>;
   loadFileTree: (projectId: string) => Promise<void>;
   refreshFileTree: () => Promise<void>;
+  loadExtraDirs: (projectId: string) => Promise<void>;
+  loadDirFileTree: (projectId: string, dirId: string) => Promise<void>;
+  addDir: (path: string, group: DirGroup, label?: string) => Promise<void>;
+  removeDir: (dirId: string) => Promise<void>;
+  refreshAllFileTrees: () => Promise<void>;
   loadPlugins: (projectId: string) => Promise<void>;
   reloadPlugins: () => Promise<void>;
   togglePlugin: (pluginId: string, enabled: boolean) => Promise<void>;
@@ -82,6 +95,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   currentProjectId: null,
   fileTree: null,
   fileTreeLoading: false,
+  extraDirs: [],
+  dirFileTrees: {},
+  dirFileTreeLoading: {},
   plugins: [],
   pluginsLoading: false,
   selectedSubsys: null,
@@ -96,12 +112,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         currentProjectId: result.project.id,
         plugins: result.plugins as PluginConfigEntry[],
         fileTree: null,
+        extraDirs: [],
+        dirFileTrees: {},
+        dirFileTreeLoading: {},
         uiStateReady: false,
       }));
-      // Load file tree and restore UI state in parallel (no dependency between them).
-      // This shaves the UI-state fetch time (~50-100ms) off the critical path.
+      // Load file tree, extra dirs, and restore UI state in parallel.
       await Promise.all([
         get().loadFileTree(result.project.id),
+        get().loadExtraDirs(result.project.id),
         restoreProjectUiState(result.project.id),
       ]);
       set({ uiStateReady: true });
@@ -122,11 +141,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         currentProjectId: result.project.id,
         plugins: result.plugins as PluginConfigEntry[],
         fileTree: null,
+        extraDirs: [],
+        dirFileTrees: {},
+        dirFileTreeLoading: {},
         uiStateReady: false,
       }));
-      // Load file tree and restore UI state in parallel
+      // Load file tree, extra dirs, and restore UI state in parallel
       await Promise.all([
         get().loadFileTree(result.project.id),
+        get().loadExtraDirs(result.project.id),
         restoreProjectUiState(result.project.id),
       ]);
       set({ uiStateReady: true });
@@ -158,11 +181,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         currentProjectId: result.project.id,
         plugins: result.plugins as PluginConfigEntry[],
         fileTree: null,
+        extraDirs: [],
+        dirFileTrees: {},
+        dirFileTreeLoading: {},
         uiStateReady: false,
       }));
-      // Load file tree and restore UI state in parallel
+      // Load file tree, extra dirs, and restore UI state in parallel
       await Promise.all([
         get().loadFileTree(result.project.id),
+        get().loadExtraDirs(result.project.id),
         restoreProjectUiState(result.project.id),
       ]);
       set({ uiStateReady: true });
@@ -193,6 +220,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         projects: s.projects.filter((p) => p.id !== projectId),
         currentProjectId: s.currentProjectId === projectId ? null : s.currentProjectId,
         fileTree: s.currentProjectId === projectId ? null : s.fileTree,
+        extraDirs: s.currentProjectId === projectId ? [] : s.extraDirs,
+        dirFileTrees: s.currentProjectId === projectId ? {} : s.dirFileTrees,
         uiStateReady: s.currentProjectId === projectId ? false : s.uiStateReady,
       }));
     } catch (err) {
@@ -223,7 +252,72 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   refreshFileTree: async () => {
     const projectId = get().currentProjectId;
     if (!projectId) return;
-    await get().loadFileTree(projectId);
+    await Promise.all([
+      get().loadFileTree(projectId),
+      // Also refresh all extra dir file trees
+      ...Object.keys(get().dirFileTrees).map((dirId) => get().loadDirFileTree(projectId, dirId)),
+    ]);
+  },
+
+  loadExtraDirs: async (projectId) => {
+    try {
+      const dirs = await trpc.project.getExtraDirs.query({ projectId });
+      set({ extraDirs: dirs });
+    } catch (err) {
+      getToast().error('加载额外目录失败', tRPCError(err));
+    }
+  },
+
+  loadDirFileTree: async (projectId, dirId) => {
+    set((s) => ({ dirFileTreeLoading: { ...s.dirFileTreeLoading, [dirId]: true } }));
+    try {
+      const tree = await trpc.project.getDirFileTree.query({ projectId, dirId });
+      set((s) => ({
+        dirFileTrees: { ...s.dirFileTrees, [dirId]: tree },
+        dirFileTreeLoading: { ...s.dirFileTreeLoading, [dirId]: false },
+      }));
+    } catch (err) {
+      set((s) => ({ dirFileTreeLoading: { ...s.dirFileTreeLoading, [dirId]: false } }));
+      getToast().error('加载目录文件树失败', tRPCError(err));
+    }
+  },
+
+  addDir: async (path, group, label) => {
+    const projectId = get().currentProjectId;
+    if (!projectId) return;
+    try {
+      await trpc.project.addDir.mutate({ projectId, path, group, label });
+      // Reload extra dirs to reflect the newly added directory
+      await get().loadExtraDirs(projectId);
+      getToast().success(`已添加${group === 'verify' ? '验证' : '设计'}目录`);
+    } catch (err) {
+      getToast().error('添加目录失败', tRPCError(err));
+    }
+  },
+
+  removeDir: async (dirId) => {
+    const projectId = get().currentProjectId;
+    if (!projectId) return;
+    try {
+      await trpc.project.removeDir.mutate({ projectId, dirId });
+      // Remove the dir's cached file tree from local state
+      set((s) => {
+        const { [dirId]: _, ...restTrees } = s.dirFileTrees;
+        const { [dirId]: __, ...restLoading } = s.dirFileTreeLoading;
+        return { dirFileTrees: restTrees, dirFileTreeLoading: restLoading };
+      });
+      // Reload extra dirs to reflect the removal
+      await get().loadExtraDirs(projectId);
+      getToast().success('已移除目录');
+    } catch (err) {
+      getToast().error('移除目录失败', tRPCError(err));
+    }
+  },
+
+  refreshAllFileTrees: async () => {
+    const projectId = get().currentProjectId;
+    if (!projectId) return;
+    await get().refreshFileTree();
   },
 
   loadPlugins: async (projectId) => {
@@ -304,11 +398,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             currentProjectId: result.project.id,
             plugins: result.plugins as PluginConfigEntry[],
             fileTree: null,
+            extraDirs: [],
+            dirFileTrees: {},
+            dirFileTreeLoading: {},
             uiStateReady: false,
           }));
-          // Load file tree and restore UI state in parallel
+          // Load file tree, extra dirs, and restore UI state in parallel
           await Promise.all([
             get().loadFileTree(result.project.id),
+            get().loadExtraDirs(result.project.id),
             restoreProjectUiState(result.project.id),
           ]);
           set({ uiStateReady: true });
