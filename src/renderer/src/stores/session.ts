@@ -241,6 +241,59 @@ let lastPersistAt = 0;
 let flushPersistRef: (() => void) | null = null;
 const PERSIST_THROTTLE_MS = 1000;
 
+let cwdChangedListenerRegistered = false;
+
+function registerCwdChangedListener(get: () => SessionStoreState): void {
+  if (cwdChangedListenerRegistered || !window.eventBridge?.onCwdChanged) return;
+  cwdChangedListenerRegistered = true;
+  window.eventBridge.onCwdChanged((data: { projectId: string; cwd: string; dirId: string }) => {
+    const state = get();
+    // Only rebuild sessions for the currently active project
+    if (state.currentSessionId) {
+      const session = state.sessions.find((s) => sessionMatchesId(s, state.currentSessionId!));
+      if (!session || session.projectId !== data.projectId) return;
+
+      // Only rebuild the active (main) session — background sessions
+      // (error-analysis, coverage-closure) are not in the sessions array
+      // and should not be affected by cwd changes.
+      const runtimeSessionId = session.runtimeSessionId;
+      if (!runtimeSessionId) {
+        // No runtime session yet — just update cwd so the next create uses it
+        setSessionCwd(session.id, data.cwd);
+        return;
+      }
+
+      // Destroy the runtime session and clear the cached runtimeSessionId.
+      // The next message send will trigger ensureRuntimeSession to recreate
+      // the session with the new cwd (and updated multi-dir system prompt).
+      void trpc.session.destroy.mutate({ sessionId: runtimeSessionId }).catch(() => {
+        // Best-effort: if destroy fails, still clear the cached ID so
+        // the stale session isn't reused.
+      }).finally(() => {
+        setSessionCwdAndClearRuntime(session.id, data.cwd, get);
+      });
+    }
+  });
+}
+
+function setSessionCwd(sessionId: string, cwd: string): void {
+  useSessionStore.setState((s) => ({
+    sessions: s.sessions.map((sess) =>
+      sess.id === sessionId ? { ...sess, cwd } : sess,
+    ),
+  }));
+}
+
+function setSessionCwdAndClearRuntime(sessionId: string, cwd: string, _get: () => SessionStoreState): void {
+  useSessionStore.setState((s) => ({
+    sessions: s.sessions.map((sess) =>
+      sess.id === sessionId
+        ? { ...sess, cwd, runtimeSessionId: undefined }
+        : sess,
+    ),
+  }));
+}
+
 function registerSessionEventListener(get: () => SessionStoreState): void {
   if (eventListenerRegistered || !window.eventBridge) return;
   eventListenerRegistered = true;
@@ -722,6 +775,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
 
   registerEventListeners: () => {
     registerSessionEventListener(get);
+    registerCwdChangedListener(get);
     registerErrorAnalysisEventListener(get);
     registerApprovalRequestListener(get);
     registerAskRequestListener(get);
