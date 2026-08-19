@@ -100,6 +100,8 @@ const eventMappings: EventMapping[] = [
   { source: projectManager, event: 'filetree:update', channel: 'filetree:update' },
   { source: projectManager, event: 'project:opened', channel: 'project:opened' },
   { source: projectManager, event: 'project:closed', channel: 'project:closed' },
+  // cwd:changed — notify renderer to rebuild active AI session with new cwd
+  { source: projectManager, event: 'cwd:changed', channel: 'cwd:changed' },
 
   // sessionManager → channel rename (sessionEvent → session:event)
   { source: sessionManager, event: 'sessionEvent', channel: 'session:event' },
