@@ -58,6 +58,12 @@ process.once('loaded', async () => {
       ipcRenderer.on('project:closed', handler);
       return () => ipcRenderer.removeListener('project:closed', handler);
     },
+    // cwd:changed — notify renderer to rebuild active AI session with new cwd
+    onCwdChanged: (callback: (data: { projectId: string; cwd: string; dirId: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { projectId: string; cwd: string; dirId: string }) => callback(data);
+      ipcRenderer.on('cwd:changed', handler);
+      return () => ipcRenderer.removeListener('cwd:changed', handler);
+    },
     onSessionEvent: (callback: (data: { sessionId: string; event: unknown }) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, data: { sessionId: string; event: unknown }) => callback(data);
       ipcRenderer.on('session:event', handler);
