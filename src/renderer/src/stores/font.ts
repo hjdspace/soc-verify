@@ -79,8 +79,8 @@ export const CODE_FONTS: FontDefinition[] = [
   },
   {
     id: 'jetbrains-mono',
-    name: 'JetBrains Mono',
-    stack: '"JetBrains Mono", "Cascadia Code", Consolas, monospace',
+    name: 'JetBrains Mono (推荐)',
+    stack: '"JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, monospace',
   },
   {
     id: 'source-code-pro',
@@ -102,7 +102,7 @@ export const FONT_SIZES: FontSizeDefinition[] = [
 
 const STORAGE_KEY = 'socverify:font';
 const DEFAULT_UI_FONT = 'system-ui';
-const DEFAULT_CODE_FONT = 'system-mono';
+const DEFAULT_CODE_FONT = 'jetbrains-mono';
 const DEFAULT_SIZE: FontSizePreset = 'md';
 
 interface PersistedFont {
