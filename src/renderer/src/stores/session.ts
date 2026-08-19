@@ -68,7 +68,12 @@ export interface SubagentActivity {
   currentTool?: string;
   currentToolArgs?: string;
   lastIntent?: string;
-  /** 最近输出行（引擎侧截尾，[0] 为最新，倒序） */
+  /**
+   * 累积输出日志（正序，[length-1] 为最新）。
+   * omp 的 progress 帧只携带"当前轮 assistant 流式输出的尾部 8 行"预览窗口
+   * （倒序，且每轮 message_start 会被引擎清空），这里经滚动窗口合并成
+   * 完整运行日志，避免新一轮开始时旧内容被冲掉。
+   */
   recentOutput: string[];
   toolCount: number;
   tokens: number;
@@ -145,6 +150,39 @@ export interface SessionEntry {
   _pendingTitleGeneration?: boolean;
   /** task 工具派遣的 subagent 实时状态（key = subagent id，瞬态不持久化） */
   subagents?: Record<string, SubagentActivity>;
+}
+
+/** subagent 累积日志上限：引擎完整输出可达数千行，UI 只保留尾部即可 */
+const SUBAGENT_LOG_MAX_LINES = 500;
+
+/**
+ * 将 omp progress 帧的滚动输出窗口合并进累积日志。
+ *
+ * 引擎侧 recentOutput 是"当前轮流式输出的尾部 8 行"倒序窗口：
+ * - 每轮 message_start 会清空（新一轮开始）；
+ * - 同一轮内窗口向后滑动，新窗口头部与旧窗口尾部重叠。
+ * 合并策略：正序化窗口后，与累积日志尾部按最长重叠去重，只追加新行；
+ * 无重叠（新一轮输出）视为全部新行追加；空窗口（轮次切换瞬间）保留原日志。
+ */
+export function mergeSubagentOutputWindow(accumulated: string[], windowReversed: string[]): string[] {
+  if (windowReversed.length === 0) return accumulated;
+  const windowFwd = [...windowReversed].reverse();
+  if (accumulated.length === 0) return windowFwd;
+  const maxOverlap = Math.min(accumulated.length, windowFwd.length);
+  for (let k = maxOverlap; k >= 1; k--) {
+    let match = true;
+    for (let i = 0; i < k; i++) {
+      if (accumulated[accumulated.length - k + i] !== windowFwd[i]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) {
+      const added = windowFwd.slice(k);
+      return added.length > 0 ? [...accumulated, ...added] : accumulated;
+    }
+  }
+  return [...accumulated, ...windowFwd];
 }
 
 export interface HistorySession {
@@ -1454,8 +1492,13 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             const tokens = typeof prog?.tokens === 'number' ? prog.tokens : (prev?.tokens ?? 0);
             const delta = prev ? Math.max(0, tokens - prev.tokens) : tokens;
             const tokenHistory = [...(prev?.tokenHistory ?? []), delta].slice(-16);
-            const recentOutput = Array.isArray(prog?.recentOutput)
+            // 引擎窗口（倒序）→ 合并成累积日志（正序）。
+            // 空窗口 = 新一轮 message_start 清空瞬间：保留旧日志不回退。
+            const rawWindow = Array.isArray(prog?.recentOutput)
               ? prog.recentOutput.filter((l): l is string => typeof l === 'string')
+              : [];
+            const recentOutput = rawWindow.length > 0
+              ? mergeSubagentOutputWindow(prev?.recentOutput ?? [], rawWindow).slice(-SUBAGENT_LOG_MAX_LINES)
               : (prev?.recentOutput ?? []);
             const next: SubagentActivity = {
               id,

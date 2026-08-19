@@ -1030,3 +1030,60 @@ describe('SessionStore — event handling and state machine', () => {
     ]);
   });
 });
+
+describe('SessionStore — subagent activity (subagent_* frames)', () => {
+  let sessionId: string;
+
+  function progressFrame(id: string, recentOutput: string[], parentToolCallId = 'tc_task_1') {
+    return {
+      type: 'subagent_progress',
+      payload: {
+        id,
+        index: 0,
+        agent: 'analyzer',
+        parentToolCallId,
+        progress: { recentOutput, tokens: 100 },
+      },
+    };
+  }
+
+  function getSubagent(id: string) {
+    const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId);
+    return session?.subagents?.[id];
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    useSessionStore.setState({ sessions: [], currentSessionId: null });
+    mockCreate.mockResolvedValue({ sessionId: 'session_test_1' });
+    sessionId = (await useSessionStore.getState().createSession('proj_1', '/tmp/proj'))!;
+  });
+
+  it('accumulates engine scrolling windows into an ordered log (sliding overlap deduped)', () => {
+    const store = useSessionStore.getState();
+    // 引擎窗口为倒序（[0] 最新）：帧1 尾部 A,B,C；帧2 滑动到 B,C,D
+    store.handleSessionEvent(sessionId, progressFrame('sa-1', ['C', 'B', 'A']));
+    store.handleSessionEvent(sessionId, progressFrame('sa-1', ['D', 'C', 'B']));
+
+    expect(getSubagent('sa-1')?.recentOutput).toEqual(['A', 'B', 'C', 'D']);
+  });
+
+  it('keeps the accumulated log when the engine clears its window at a new turn', () => {
+    const store = useSessionStore.getState();
+    store.handleSessionEvent(sessionId, progressFrame('sa-1', ['B', 'A']));
+    // 新一轮 message_start：引擎窗口清空 → 空帧不得冲掉已累积日志
+    store.handleSessionEvent(sessionId, progressFrame('sa-1', []));
+
+    expect(getSubagent('sa-1')?.recentOutput).toEqual(['A', 'B']);
+  });
+
+  it('appends all lines of a fresh turn output after the window was cleared', () => {
+    const store = useSessionStore.getState();
+    store.handleSessionEvent(sessionId, progressFrame('sa-1', ['B', 'A']));
+    store.handleSessionEvent(sessionId, progressFrame('sa-1', []));
+    // 新一轮输出与旧日志尾部无重叠 → 全部追加
+    store.handleSessionEvent(sessionId, progressFrame('sa-1', ['Y', 'X']));
+
+    expect(getSubagent('sa-1')?.recentOutput).toEqual(['A', 'B', 'X', 'Y']);
+  });
+});

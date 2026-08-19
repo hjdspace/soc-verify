@@ -109,8 +109,8 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  // recentOutput 为倒序（[0] 最新），日志展示用正序
-  const lines = [...agent.recentOutput].reverse();
+  // store 侧已将引擎滚动窗口合并为正序累积日志，直接渲染
+  const lines = agent.recentOutput;
   const duration = (agent.endedAt ?? Date.now()) - agent.startedAt;
 
   return (
