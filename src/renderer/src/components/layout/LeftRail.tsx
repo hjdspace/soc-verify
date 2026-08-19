@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { FolderOpen, RefreshCw, Cpu, FileText, LayoutDashboard, ChevronDown, Plus, Folder, Puzzle, Star, Trash2, FolderInput } from 'lucide-react';
+import { FolderOpen, RefreshCw, Cpu, FileText, LayoutDashboard, ChevronDown, Plus, Folder, Puzzle, Star, Trash2, FolderInput, Pencil, Check, X } from 'lucide-react';
 import { useProjectStore } from '@renderer/stores/project';
 import { useOverviewStore } from '@renderer/stores/overview';
 import { openReviewAwareFile } from '@renderer/stores/diff-review';
@@ -30,7 +30,9 @@ export function LeftRail({ width }: LeftRailProps) {
   const openProjectDialog = useProjectStore((s) => s.openProjectDialog);
   const switchProject = useProjectStore((s) => s.switchProject);
   const closeProject = useProjectStore((s) => s.closeProject);
+  const renameProject = useProjectStore((s) => s.renameProject);
   const refreshFileTree = useProjectStore((s) => s.refreshFileTree);
+  const loadExtraDirs = useProjectStore((s) => s.loadExtraDirs);
   const plugins = useProjectStore((s) => s.plugins);
   const extraDirs = useProjectStore((s) => s.extraDirs);
   const dirFileTrees = useProjectStore((s) => s.dirFileTrees);
@@ -57,6 +59,44 @@ export function LeftRail({ width }: LeftRailProps) {
   const handleSelectProject = (projectId: string) => {
     setShowProjectList(false);
     void switchProject(projectId);
+  };
+
+  // ── 项目重命名 ──────────────────────────────────────
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+
+  /** 获取项目的显示名：优先 projectLabel，回退到 name（目录名）。 */
+  const displayLabel = (p: { projectLabel?: string; name: string }) => p.projectLabel ?? p.name;
+
+  const handleStartRename = (projectId: string, currentLabel: string) => {
+    setRenamingId(projectId);
+    setRenameValue(currentLabel);
+  };
+
+  const handleCancelRename = () => {
+    setRenamingId(null);
+    setRenameValue('');
+  };
+
+  const handleSubmitRename = async () => {
+    if (!renamingId) return;
+    const trimmed = renameValue.trim();
+    if (!trimmed) {
+      getToast().warning('项目标记名不能为空');
+      return;
+    }
+    await renameProject(renamingId, trimmed);
+    handleCancelRename();
+  };
+
+  const handleRenameKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      void handleSubmitRename();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      handleCancelRename();
+    }
   };
 
   // ── 多目录操作 ──────────────────────────────────────
@@ -108,11 +148,14 @@ export function LeftRail({ width }: LeftRailProps) {
     await addDir(droppedPath, group);
   };
 
-  /** 切换 cwd 到指定目录，后端会发送 cwd:changed 事件触发会话重建。 */
+  /** 切换 cwd 到指定目录，后端会发送 cwd:changed 事件触发会话重建。
+   *  成功后重新加载 extraDirs 刷新星标显示。 */
   const handleSetCwd = async (dirId: string) => {
     if (!currentProjectId) return;
     try {
       await trpc.project.setCwd.mutate({ projectId: currentProjectId, dirId });
+      // Reload extraDirs to refresh isCwd flags in the UI (star badge)
+      await loadExtraDirs(currentProjectId);
       getToast().success('已切换工作目录');
     } catch (err) {
       getToast().error('切换工作目录失败', tRPCError(err));
@@ -156,16 +199,52 @@ export function LeftRail({ width }: LeftRailProps) {
       <div className="flex items-center justify-between border-b border-border/50 px-2 py-1.5">
         {/* 自定义项目下拉 */}
         <div className="relative flex-1">
-          <button
-            onClick={() => setShowProjectList(!showProjectList)}
-            className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-xs text-sidebar-foreground transition-colors hover:bg-accent"
-          >
-            <Folder className="h-3.5 w-3.5 shrink-0 opacity-60" />
-            <span className="flex-1 truncate text-left">
-              {currentProject?.name ?? '未打开项目'}
-            </span>
-            <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
-          </button>
+          {renamingId === currentProjectId && currentProject ? (
+            /* Inline rename for current project header */
+            <div className="flex items-center gap-1">
+              <input
+                autoFocus
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={handleRenameKeyDown}
+                className="min-w-0 flex-1 rounded border border-primary bg-background px-1 py-0.5 text-xs text-foreground outline-none"
+                data-testid="header-rename-input"
+              />
+              <button
+                onClick={() => void handleSubmitRename()}
+                title="确认"
+                className="rounded p-0.5 text-primary hover:bg-accent"
+              >
+                <Check className="h-3 w-3" />
+              </button>
+              <button
+                onClick={handleCancelRename}
+                title="取消"
+                className="rounded p-0.5 text-muted-foreground hover:bg-accent"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowProjectList(!showProjectList)}
+              onDoubleClick={(e) => {
+                if (currentProject) {
+                  e.preventDefault();
+                  handleStartRename(currentProject.id, displayLabel(currentProject));
+                }
+              }}
+              title={currentProject ? '双击编辑项目标记名' : undefined}
+              className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-xs text-sidebar-foreground transition-colors hover:bg-accent"
+              data-testid="project-dropdown-btn"
+            >
+              <Folder className="h-3.5 w-3.5 shrink-0 opacity-60" />
+              <span className="flex-1 truncate text-left">
+                {currentProject ? displayLabel(currentProject) : '未打开项目'}
+              </span>
+              <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
+            </button>
+          )}
 
           {showProjectList && (
             <>
@@ -182,14 +261,57 @@ export function LeftRail({ width }: LeftRailProps) {
                   projects.map((p) => (
                     <div
                       key={p.id}
-                      onClick={() => handleSelectProject(p.id)}
                       className={cn(
-                        'flex items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-accent cursor-pointer',
+                        'group flex items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-accent cursor-pointer',
                         p.id === currentProjectId && 'bg-accent/50',
                       )}
                     >
-                      <Folder className="h-3 w-3 shrink-0 opacity-60" />
-                      <span className="flex-1 truncate">{p.name}</span>
+                      {renamingId === p.id ? (
+                        /* Inline rename input */
+                        <div className="flex flex-1 items-center gap-1">
+                          <input
+                            autoFocus
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={handleRenameKeyDown}
+                            onClick={(e) => e.stopPropagation()}
+                            className="min-w-0 flex-1 rounded border border-primary bg-background px-1.5 py-0.5 text-xs text-foreground outline-none"
+                            data-testid={`rename-input-${p.id}`}
+                          />
+                          <button
+                            onClick={(e) => { e.stopPropagation(); void handleSubmitRename(); }}
+                            title="确认"
+                            className="rounded p-0.5 text-primary hover:bg-accent"
+                          >
+                            <Check className="h-3 w-3" />
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleCancelRename(); }}
+                            title="取消"
+                            className="rounded p-0.5 text-muted-foreground hover:bg-accent"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          <Folder className="h-3 w-3 shrink-0 opacity-60" />
+                          <span
+                            className="flex-1 truncate"
+                            onClick={() => handleSelectProject(p.id)}
+                          >
+                            {displayLabel(p)}
+                          </span>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleStartRename(p.id, displayLabel(p)); }}
+                            title="重命名"
+                            className="rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover:opacity-100"
+                            data-testid={`rename-btn-${p.id}`}
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        </>
+                      )}
                     </div>
                   ))
                 )}
