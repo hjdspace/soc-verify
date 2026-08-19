@@ -508,7 +508,10 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
     const targetPath = entry?.filePath ?? filePath;
     const fileName = entry?.fileName ?? targetPath.replace(/\\/g, '/').split('/').pop() ?? targetPath;
 
-    if (!entry || entry.reviewed) return;
+    if (!entry || entry.reviewed) {
+      openFileDestination(useWorkbenchStore.getState().open, targetPath, fileName);
+      return;
+    }
 
     // 先设置当前 review entry，再切换编辑器。
     // Workbench.open 会同步挂载 FileEditor；如果顺序相反，新的编辑器会在

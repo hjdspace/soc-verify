@@ -16,6 +16,8 @@ import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { trpc } from '@renderer/lib/trpc';
 import type { FileDiffResult } from '@shared/types';
 
+const defaultWorkbenchOpen = useWorkbenchStore.getState().open;
+
 function completedEdit(filePath: string): ChatMessage {
   return {
     id: 'tool-1',
@@ -171,7 +173,7 @@ describe('Diff Review flow', () => {
       reviewedFiles: new Set(),
     });
     useProjectStore.setState({ currentProjectId: 'project-1', projects: [] });
-    useWorkbenchStore.setState({ tabs: [], activeTabId: null });
+    useWorkbenchStore.setState({ tabs: [], activeTabId: null, open: defaultWorkbenchOpen });
     vi.mocked(trpc.project.getFileDiff.query).mockReset();
     vi.mocked(trpc.project.applyDiffRejections.mutate).mockReset();
   });
@@ -443,7 +445,7 @@ describe('Diff Review flow', () => {
     vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue(emptyDiff(secondPath));
 
     const openCalls: Array<{ currentFilePath: string | null; path: string }> = [];
-    const originalOpen = useWorkbenchStore.getState().open;
+    const originalOpen = defaultWorkbenchOpen;
     useWorkbenchStore.setState({
       open: (destination) => {
         if (destination.type === 'file') {
