@@ -1,11 +1,39 @@
-import { useState, useCallback, memo, useEffect } from 'react';
-import { ChevronRight, ChevronDown, File, Folder, FolderOpen, FolderOpen as OpenIcon, Copy, CopyPlus, Plus, Trash2 } from 'lucide-react';
+import { useState, useCallback, memo, useEffect, useMemo } from 'react';
+import {
+  ChevronRight,
+  ChevronDown,
+  File,
+  Folder,
+  FolderOpen,
+  FolderOpen as OpenIcon,
+  Copy,
+  CopyPlus,
+  Plus,
+  Trash2,
+  Cpu,
+  CircuitBoard,
+  FileCode,
+  FileJson,
+  FileText,
+  FileType,
+  FileTerminal,
+  FileImage,
+  FileArchive,
+  Braces,
+  Binary,
+  Database,
+  Settings,
+  Terminal,
+  BookText,
+  type LucideIcon,
+} from 'lucide-react';
 import type { FileTreeNode } from '@shared/types';
 import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSessionStore } from '@renderer/stores/session';
 import { useToastStore } from '@renderer/stores/toast';
+import { useSourceControlStore } from '@renderer/stores/source-control';
 
 interface FileTreeProps {
   node: FileTreeNode;
@@ -35,6 +63,180 @@ function getRelativePath(rootPath: string, fullPath: string): string {
   return fullPath;
 }
 
+// ─── File-type icon mapping ────────────────────────────────
+//
+// Maps file extensions to appropriate lucide-react icons.
+// SoC verification files (.sv, .v, .svh, .vh) get a Cpu icon,
+// other code files get language-appropriate icons.
+
+type IconEntry = { icon: LucideIcon; className: string };
+
+const DEFAULT_FILE_ICON: IconEntry = { icon: File, className: 'text-muted-foreground' };
+
+const EXT_ICON_MAP: Record<string, IconEntry> = {
+  // SoC / HDL — chip icon
+  sv: { icon: Cpu, className: 'text-primary' },
+  svh: { icon: Cpu, className: 'text-primary' },
+  v: { icon: Cpu, className: 'text-primary' },
+  vh: { icon: Cpu, className: 'text-primary' },
+  systemverilog: { icon: Cpu, className: 'text-primary' },
+  verilog: { icon: Cpu, className: 'text-primary' },
+  vhd: { icon: CircuitBoard, className: 'text-primary' },
+  vhdl: { icon: CircuitBoard, className: 'text-primary' },
+  sdc: { icon: CircuitBoard, className: 'text-primary' },
+  xdc: { icon: CircuitBoard, className: 'text-primary' },
+  do: { icon: Terminal, className: 'text-primary' },
+  tcl: { icon: Terminal, className: 'text-primary' },
+  // TypeScript / JavaScript
+  ts: { icon: FileType, className: 'text-info-foreground' },
+  tsx: { icon: FileType, className: 'text-info-foreground' },
+  js: { icon: FileType, className: 'text-warning-foreground' },
+  jsx: { icon: FileType, className: 'text-warning-foreground' },
+  mjs: { icon: FileType, className: 'text-warning-foreground' },
+  cjs: { icon: FileType, className: 'text-warning-foreground' },
+  // Web
+  html: { icon: FileCode, className: 'text-primary' },
+  htm: { icon: FileCode, className: 'text-primary' },
+  vue: { icon: FileCode, className: 'text-primary' },
+  xml: { icon: FileCode, className: 'text-muted-foreground' },
+  css: { icon: FileCode, className: 'text-primary' },
+  scss: { icon: FileCode, className: 'text-primary' },
+  less: { icon: FileCode, className: 'text-primary' },
+  // Systems
+  c: { icon: FileCode, className: 'text-muted-foreground' },
+  h: { icon: FileCode, className: 'text-muted-foreground' },
+  cpp: { icon: FileCode, className: 'text-muted-foreground' },
+  cc: { icon: FileCode, className: 'text-muted-foreground' },
+  cxx: { icon: FileCode, className: 'text-muted-foreground' },
+  hpp: { icon: FileCode, className: 'text-muted-foreground' },
+  hxx: { icon: FileCode, className: 'text-muted-foreground' },
+  rs: { icon: FileCode, className: 'text-muted-foreground' },
+  rust: { icon: FileCode, className: 'text-muted-foreground' },
+  go: { icon: FileCode, className: 'text-muted-foreground' },
+  java: { icon: FileCode, className: 'text-muted-foreground' },
+  // Scripting
+  py: { icon: FileTerminal, className: 'text-info-foreground' },
+  pyw: { icon: FileTerminal, className: 'text-info-foreground' },
+  python: { icon: FileTerminal, className: 'text-info-foreground' },
+  sh: { icon: Terminal, className: 'text-muted-foreground' },
+  bash: { icon: Terminal, className: 'text-muted-foreground' },
+  zsh: { icon: Terminal, className: 'text-muted-foreground' },
+  shell: { icon: Terminal, className: 'text-muted-foreground' },
+  rb: { icon: FileCode, className: 'text-muted-foreground' },
+  ruby: { icon: FileCode, className: 'text-muted-foreground' },
+  php: { icon: FileCode, className: 'text-muted-foreground' },
+  // Data
+  json: { icon: Braces, className: 'text-warning-foreground' },
+  yaml: { icon: Braces, className: 'text-muted-foreground' },
+  yml: { icon: Braces, className: 'text-muted-foreground' },
+  toml: { icon: Settings, className: 'text-muted-foreground' },
+  ini: { icon: Settings, className: 'text-muted-foreground' },
+  cfg: { icon: Settings, className: 'text-muted-foreground' },
+  conf: { icon: Settings, className: 'text-muted-foreground' },
+  sql: { icon: Database, className: 'text-muted-foreground' },
+  // Docs
+  md: { icon: BookText, className: 'text-muted-foreground' },
+  markdown: { icon: BookText, className: 'text-muted-foreground' },
+  txt: { icon: FileText, className: 'text-muted-foreground' },
+  // Binary / misc
+  bin: { icon: Binary, className: 'text-muted-foreground' },
+  hex: { icon: Binary, className: 'text-muted-foreground' },
+  elf: { icon: Binary, className: 'text-muted-foreground' },
+  so: { icon: Binary, className: 'text-muted-foreground' },
+  dll: { icon: Binary, className: 'text-muted-foreground' },
+  o: { icon: Binary, className: 'text-muted-foreground' },
+  a: { icon: Binary, className: 'text-muted-foreground' },
+  // Archives
+  zip: { icon: FileArchive, className: 'text-muted-foreground' },
+  tar: { icon: FileArchive, className: 'text-muted-foreground' },
+  gz: { icon: FileArchive, className: 'text-muted-foreground' },
+  '7z': { icon: FileArchive, className: 'text-muted-foreground' },
+  rar: { icon: FileArchive, className: 'text-muted-foreground' },
+  // Images
+  png: { icon: FileImage, className: 'text-muted-foreground' },
+  jpg: { icon: FileImage, className: 'text-muted-foreground' },
+  jpeg: { icon: FileImage, className: 'text-muted-foreground' },
+  gif: { icon: FileImage, className: 'text-muted-foreground' },
+  svg: { icon: FileImage, className: 'text-muted-foreground' },
+  ico: { icon: FileImage, className: 'text-muted-foreground' },
+  bmp: { icon: FileImage, className: 'text-muted-foreground' },
+  // Build
+  mk: { icon: FileTerminal, className: 'text-muted-foreground' },
+  makefile: { icon: FileTerminal, className: 'text-muted-foreground' },
+  cmake: { icon: FileTerminal, className: 'text-muted-foreground' },
+};
+
+// Special filenames that get specific icons
+const NAME_ICON_MAP: Record<string, IconEntry> = {
+  makefile: { icon: FileTerminal, className: 'text-muted-foreground' },
+  cmakeLists: { icon: FileTerminal, className: 'text-muted-foreground' },
+  dockerfile: { icon: FileTerminal, className: 'text-muted-foreground' },
+  '.gitignore': { icon: FileCode, className: 'text-muted-foreground' },
+  '.gitattributes': { icon: FileCode, className: 'text-muted-foreground' },
+  '.env': { icon: Settings, className: 'text-muted-foreground' },
+  'package.json': { icon: FileJson, className: 'text-warning-foreground' },
+  'tsconfig.json': { icon: FileJson, className: 'text-info-foreground' },
+  'eslint.config': { icon: Settings, className: 'text-muted-foreground' },
+};
+
+/**
+ * Get the appropriate icon + color class for a file based on its name/extension.
+ * Falls back to a generic File icon for unknown types.
+ */
+function getFileIcon(fileName: string): IconEntry {
+  const lowerName = fileName.toLowerCase();
+
+  // Check special filename matches first
+  if (NAME_ICON_MAP[lowerName]) return NAME_ICON_MAP[lowerName];
+
+  // Extract extension (last segment after the final dot)
+  const lastDot = fileName.lastIndexOf('.');
+  if (lastDot === -1) return DEFAULT_FILE_ICON;
+  const ext = fileName.slice(lastDot + 1).toLowerCase();
+  return EXT_ICON_MAP[ext] ?? DEFAULT_FILE_ICON;
+}
+
+// ─── Git status badge helpers ──────────────────────────────
+//
+// VS Code-style git status indicators: M (modified, yellow),
+// A (added, green), D (deleted, red), U (untracked, blue).
+
+type GitBadge = { label: string; className: string; tooltip: string };
+
+function getGitBadge(
+  indexStatus: string,
+  workTreeStatus: string,
+): GitBadge | null {
+  // Untracked
+  if (indexStatus === '?' && workTreeStatus === '?') {
+    return { label: 'U', className: 'text-info-foreground', tooltip: '未跟踪' };
+  }
+  // Deleted
+  if (indexStatus === 'D' || workTreeStatus === 'D') {
+    return { label: 'D', className: 'text-status-fail-foreground', tooltip: '已删除' };
+  }
+  // Renamed
+  if (indexStatus === 'R' || workTreeStatus === 'R') {
+    return { label: 'R', className: 'text-violet-foreground', tooltip: '已重命名' };
+  }
+  // Added (staged new file)
+  if (indexStatus === 'A') {
+    return { label: 'A', className: 'text-status-pass-foreground', tooltip: '已新增' };
+  }
+  // Modified
+  if (indexStatus === 'M' || workTreeStatus === 'M') {
+    return { label: 'M', className: 'text-warning-foreground', tooltip: '已修改' };
+  }
+  // Other statuses (C=copied, etc.)
+  if (indexStatus || workTreeStatus) {
+    const label = (indexStatus || workTreeStatus).trim();
+    if (label) {
+      return { label, className: 'text-muted-foreground', tooltip: '变更' };
+    }
+  }
+  return null;
+}
+
 // ─── Root component ───────────────────────────────────────
 
 export function FileTree({ node, onSelectFile, selectedPath, projectRootPath }: FileTreeProps) {
@@ -49,6 +251,37 @@ export function FileTree({ node, onSelectFile, selectedPath, projectRootPath }: 
   const addContextFile = useSessionStore((s) => s.addContextFile);
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
   const toast = useToastStore.getState();
+
+  // ── Git status for file-tree badges ───────────────────
+  // Loads git status once per project and builds a path→badge map
+  // for O(1) lookup in each tree node. Refreshes when the SCM panel
+  // updates the store.
+  const scmStatus = useSourceControlStore((s) => s.status);
+  const loadScmStatus = useSourceControlStore((s) => s.loadStatus);
+
+  useEffect(() => {
+    if (projectId) {
+      void loadScmStatus(projectId);
+    }
+  }, [projectId, loadScmStatus]);
+
+  // Build a map of normalized file path → git badge.
+  // SCM status paths are relative to the project root; FileTreeNode paths
+  // are absolute. We normalise both sides to forward-slash absolute paths
+  // so lookup works regardless of OS path separators.
+  const gitBadgeMap = useMemo(() => {
+    const map = new Map<string, GitBadge>();
+    if (!scmStatus?.files || !projectRootPath) return map;
+    const root = projectRootPath.replace(/\\/g, '/').replace(/\/$/, '');
+    for (const f of scmStatus.files) {
+      const badge = getGitBadge(f.indexStatus, f.workTreeStatus);
+      if (!badge) continue;
+      // Normalise: git paths use forward slashes, join with root
+      const absPath = `${root}/${f.path.replace(/\\/g, '/')}`;
+      map.set(absPath, badge);
+    }
+    return map;
+  }, [scmStatus, projectRootPath]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, targetNode: FileTreeNode) => {
     e.preventDefault();
@@ -171,6 +404,7 @@ export function FileTree({ node, onSelectFile, selectedPath, projectRootPath }: 
         selectedPath={selectedPath}
         onContextMenu={handleContextMenu}
         projectId={projectId}
+        gitBadgeMap={gitBadgeMap}
       />
       {contextMenu.visible && contextMenu.node && (
         <div
@@ -274,9 +508,13 @@ interface FileTreeNodeProps {
   onContextMenu: (e: React.MouseEvent, node: FileTreeNode) => void;
   /** Project ID for lazy-loading directory children via tRPC. */
   projectId?: string;
+  /** Map of git-relative-path → badge for showing M/D/A/U indicators. */
+  gitBadgeMap?: Map<string, GitBadge>;
 }
 
-function FileTreeNode({ node, depth, onSelectFile, selectedPath, onContextMenu, projectId }: FileTreeNodeProps) {
+function FileTreeNode({ node, depth, onSelectFile, selectedPath, onContextMenu, projectId, gitBadgeMap }: FileTreeNodeProps) {
+  // Normalise node path to forward-slash absolute path for git badge lookup
+  const normalizedPath = node.path.replace(/\\/g, '/');
   if (node.type === 'file') {
     return (
       <FileTreeItem
@@ -285,6 +523,7 @@ function FileTreeNode({ node, depth, onSelectFile, selectedPath, onContextMenu, 
         onSelectFile={onSelectFile}
         selected={selectedPath === node.path}
         onContextMenu={onContextMenu}
+        gitBadge={gitBadgeMap?.get(normalizedPath) ?? null}
       />
     );
   }
@@ -297,6 +536,7 @@ function FileTreeNode({ node, depth, onSelectFile, selectedPath, onContextMenu, 
       selectedPath={selectedPath}
       onContextMenu={onContextMenu}
       projectId={projectId}
+      gitBadgeMap={gitBadgeMap}
     />
   );
 }
@@ -309,9 +549,11 @@ interface FileTreeItemProps {
   onSelectFile: (path: string, name: string) => void;
   selected: boolean;
   onContextMenu: (e: React.MouseEvent, node: FileTreeNode) => void;
+  /** Git status badge for this file (null = no change). */
+  gitBadge?: GitBadge | null;
 }
 
-const FileTreeItem = memo(function FileTreeItem({ node, depth, onSelectFile, selected, onContextMenu }: FileTreeItemProps) {
+const FileTreeItem = memo(function FileTreeItem({ node, depth, onSelectFile, selected, onContextMenu, gitBadge }: FileTreeItemProps) {
   const handleDragStart = useCallback((e: React.DragEvent) => {
     e.dataTransfer.setData('application/json', JSON.stringify({
       path: node.path,
@@ -320,6 +562,8 @@ const FileTreeItem = memo(function FileTreeItem({ node, depth, onSelectFile, sel
     }));
     e.dataTransfer.effectAllowed = 'copy';
   }, [node.path, node.name]);
+
+  const { icon: FileIcon, className: iconClassName } = getFileIcon(node.name);
 
   return (
     <button
@@ -338,8 +582,16 @@ const FileTreeItem = memo(function FileTreeItem({ node, depth, onSelectFile, sel
       )}
       style={{ paddingLeft: `${depth * 12 + 4}px` }}
     >
-      <File className={cn('h-3 w-3 shrink-0', node.gitIgnored ? 'opacity-50' : 'opacity-70')} />
+      <FileIcon className={cn('h-3 w-3 shrink-0', iconClassName, node.gitIgnored && 'opacity-50')} />
       <span className="truncate">{node.name}</span>
+      {gitBadge && (
+        <span
+          className={cn('ml-auto shrink-0 text-[9px] font-bold', gitBadge.className)}
+          title={gitBadge.tooltip}
+        >
+          {gitBadge.label}
+        </span>
+      )}
     </button>
   );
 });
@@ -354,6 +606,8 @@ interface FileTreeDirectoryProps {
   onContextMenu: (e: React.MouseEvent, node: FileTreeNode) => void;
   /** Project ID for lazy-loading directory children via tRPC. */
   projectId?: string;
+  /** Map of git-relative-path → badge for showing M/D/A/U indicators. */
+  gitBadgeMap?: Map<string, GitBadge>;
 }
 
 const FileTreeDirectory = memo(function FileTreeDirectory({
@@ -363,6 +617,7 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
   selectedPath,
   onContextMenu,
   projectId,
+  gitBadgeMap,
 }: FileTreeDirectoryProps) {
   // Root-level directories (depth 0) are expanded by default.
   // All other directories start collapsed.
@@ -447,6 +702,7 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
               selectedPath={selectedPath}
               onContextMenu={onContextMenu}
               projectId={projectId}
+              gitBadgeMap={gitBadgeMap}
             />
           ))}
         </div>
