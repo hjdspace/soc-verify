@@ -27,6 +27,10 @@ export interface ProjectInfo {
   id: string;
   name: string;
   rootPath: string;
+  /** 项目标记名：独立于目录名的用户可编辑项目标签。
+   *  默认从 $PROJ_RTL 路径解析（/proj/<ProjectName>/xxx → 第二级目录名）。
+   *  用户可通过 UI 修改，持久化到 .socverify/config.json。 */
+  projectLabel?: string;
   /** 用户后续添加的额外目录。rootPath 不存入此处（隐式属于验证组第一项 = 默认 cwd）。 */
   extraDirs?: ExtraDirEntry[];
   createdAt: number;
