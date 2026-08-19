@@ -22,6 +22,8 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 
+import './tls-self-heal.mjs';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TARGET_BASE = join(__dirname, '..', 'resources', 'binaries');
 const USER_AGENT = 'SoCVerify-Drawio-Downloader';

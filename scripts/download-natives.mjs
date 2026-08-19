@@ -47,6 +47,8 @@ import { fileURLToPath } from 'node:url';
 import { platform, arch, homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 
+import './tls-self-heal.mjs';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 

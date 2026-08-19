@@ -24,6 +24,8 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
+import './tls-self-heal.mjs';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TARGET_DIR = join(__dirname, '..', 'resources', 'binaries');
 const USER_AGENT = 'SoCVerify-OfficeCLI-Downloader';
