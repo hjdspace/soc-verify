@@ -84,7 +84,6 @@ export function CoveragePanel() {
   const loadSessions = useCoverageStore((s) => s.loadSessions);
   const loadTree = useCoverageStore((s) => s.loadTree);
   const loadEdaConfig = useCoverageStore((s) => s.loadEdaConfig);
-  const loadTargets = useCoverageStore((s) => s.loadTargets);
   const loadTrend = useCoverageStore((s) => s.loadTrend);
   const importCoverage = useCoverageStore((s) => s.importCoverage);
   const setSessionId = useCoverageStore((s) => s.setSessionId);
@@ -162,12 +161,12 @@ export function CoveragePanel() {
 
   useEffect(() => {
     if (currentProjectId && currentSessionId) {
+      // loadTree 内部使用 getFullView 批量端点，已返回 tree + overview + targets
       loadTree(currentProjectId, currentSessionId);
-      loadTargets(currentProjectId, currentSessionId);
     } else if (currentProjectId && sessions.length > 0 && !currentSessionId) {
       loadTree(currentProjectId);
     }
-  }, [currentProjectId, currentSessionId, loadTree, loadTargets, sessions.length]);
+  }, [currentProjectId, currentSessionId, loadTree, sessions.length]);
 
   // 仪表盘视图需要 trend 数据
   useEffect(() => {

@@ -440,15 +440,16 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
     const sid = sessionId ?? get().currentSessionId ?? undefined;
     set({ loading: true });
     try {
-      const tree = await trpc.coverage.getTree.query({ projectId, sessionId: sid });
-      const overview = await trpc.coverage.getOverview.query({ projectId, sessionId: sid });
+      // 批量端点：一次返回 tree + summary + targets，消除 getTree → getOverview 的顺序调用
+      const result = await trpc.coverage.getFullView.query({ projectId, sessionId: sid });
       set({
-        tree,
-        overview: overview.summary,
-        currentSessionId: overview.sessionId,
+        tree: result.tree,
+        overview: result.summary,
+        currentSessionId: result.sessionId,
+        targets: result.targets,
         loading: false,
         // 根据 summaryOnly 标记判断是否已解析详细报告
-        detailParsed: tree.summaryOnly === false,
+        detailParsed: result.tree.summaryOnly === false,
       });
     } catch (err) {
       set({ loading: false, tree: null, overview: null });

@@ -350,6 +350,36 @@ export const coverageRouter = t.router({
       return mgr.getTree(input.sessionId);
     }),
 
+  /**
+   * 批量端点：一次查询返回 tree + overview + targets，
+   * 消除 loadTree 中 getTree → getOverview 的顺序调用（两者内部都调用 resolveSession，
+   * 导致同一棵树被加载两次）以及独立的 getTargets 调用。
+   */
+  getFullView: t.procedure
+    .input((raw): { projectId: string; sessionId?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId, sessionId: typeof r.sessionId === 'string' ? r.sessionId : undefined };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      // getTree 内部调用 resolveSession 加载完整树；
+      // getOverview 再调一次 resolveSession 做 summarizeCoverage。
+      // 这里只加载一次树，就地计算 summary。
+      const tree = await mgr.getTree(input.sessionId);
+      const summary = summarizeCoverage(tree.root);
+      const targets = await mgr.getTargets(tree.sessionId);
+      return {
+        tree,
+        summary,
+        sessionId: tree.sessionId,
+        targets,
+      };
+    }),
+
   // ─── 覆盖率深度分析（urg -grade / imc functional detail / CSV） ─
 
   getUncovered: t.procedure
