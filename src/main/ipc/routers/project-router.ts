@@ -185,6 +185,27 @@ export const projectRouter = t.router({
     return projectManager.listProjects();
   }),
 
+  /** 重命名项目：更新 ProjectInfo.name 并同步到 .socverify/config.json。 */
+  renameProject: t.procedure
+    .input((raw): { projectId: string; name: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.name !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and name are required' });
+      }
+      return { projectId: r.projectId, name: r.name };
+    })
+    .mutation(async ({ input }) => {
+      try {
+        const info = await projectManager.renameProject(input.projectId, input.name);
+        return info;
+      } catch (err) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }),
+
   getFileTree: t.procedure
     .input((raw): { projectId: string } => {
       const r = raw as Record<string, unknown>;
