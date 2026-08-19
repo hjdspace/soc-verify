@@ -2,7 +2,8 @@
  * ChangeSummaryBar — 聊天输入框上方的代码改动摘要条。
  *
  * 展示当前未审阅的文件改动数量，提供"全部接受"和"全部拒绝"按钮。
- * 点击展开后显示文件列表，每行显示文件名和增删行数，点击文件可打开 diff-review。
+ * 点击展开后显示文件列表，每行显示文件名和增删行数，点击文件在编辑器中
+ * 打开并展示内联 code review 改动。
  * 所有文件处理完毕后该组件自动隐藏。
  */
 
@@ -73,7 +74,6 @@ export function ChangeSummaryBar() {
   const queue = useDiffReviewStore((s) => s.queue);
   const acceptAll = useDiffReviewStore((s) => s.acceptAll);
   const rejectAll = useDiffReviewStore((s) => s.rejectAll);
-  const applyRejections = useDiffReviewStore((s) => s.applyRejections);
   const openFile = useDiffReviewStore((s) => s.openFile);
   const currentFilePath = useDiffReviewStore((s) => s.currentFilePath);
 
@@ -103,7 +103,7 @@ export function ChangeSummaryBar() {
   );
 
   // 全部接受：直接调用 acceptAll，不需要先 openFile。
-  // acceptAll 现在即使 currentDiff 为 null（加载失败/未加载）也能标记为已审阅。
+  // acceptAll 即使 diff 未加载（加载失败/未加载）也能标记为已审阅。
   const handleAcceptAll = useCallback(async () => {
     setApplying(true);
     try {
@@ -116,37 +116,18 @@ export function ChangeSummaryBar() {
     }
   }, [pendingEntries, acceptAll]);
 
-  // 全部拒绝：先设置 hunk 状态为 rejected，然后尝试应用回滚。
-  // 如果 diff 不可用（文件不存在等），跳过回滚直接标记为已审阅。
+  // 全部拒绝：rejectAll 内部会加载 diff、应用回滚并标记为已审阅。
+  // diff 不可用（文件不存在等）时直接标记为已审阅。
   const handleRejectAll = useCallback(async () => {
     setApplying(true);
     try {
-      const entries = pendingEntries;
-      for (const entry of entries) {
-        // 先尝试打开文件加载 diff（用于 rejectAll 设置 hunk 状态）
-        // 如果加载失败，rejectAll 会跳过 hunk 状态设置，直接标记为已审阅
-        if (currentFilePath !== entry.filePath) {
-          openFile(entry.filePath);
-          // 等待 diff 加载，最多等 200ms
-          await new Promise((r) => setTimeout(r, 200));
-        }
-        rejectAll(entry.filePath);
-        await applyRejections(entry.filePath);
-        // applyRejections 在 diff 不可用时会直接 return，
-        // 但 markFileReviewed 仍需要被调用来标记已审阅。
-        // 检查文件是否仍为未审阅状态（说明 applyRejections 未触发 markFileReviewed）
-        const stillPending = useDiffReviewStore.getState().queue.find(
-          (e) => !e.reviewed && e.filePath === entry.filePath,
-        );
-        if (stillPending) {
-          // diff 不可用，直接标记为已审阅
-          acceptAll(entry.filePath);
-        }
+      for (const entry of pendingEntries) {
+        await rejectAll(entry.filePath);
       }
     } finally {
       setApplying(false);
     }
-  }, [pendingEntries, currentFilePath, openFile, rejectAll, applyRejections, acceptAll]);
+  }, [pendingEntries, rejectAll]);
 
   // Hide if no pending files
   if (pendingEntries.length === 0) return null;

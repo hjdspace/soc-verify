@@ -59,4 +59,77 @@ describe('Diff Review engine', () => {
     expect(result.ok).toBe(true);
     await expect(readFile(filePath, 'utf8')).resolves.toContain("assign ready = 1'b0;");
   });
+
+  it('builds reviewable hunks when the file uses CRLF and omp diff text uses LF', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'soc-verify-diff-'));
+    tempDirs.push(dir);
+    const filePath = join(dir, 'README.md');
+    await writeFile(filePath, 'title changed\r\nbody\r\n', 'utf8');
+
+    const diff = await getFileDiff(filePath, [{
+      id: 'edit-crlf',
+      toolName: 'edit',
+      filePath,
+      timestamp: 1,
+      oldText: 'title original\nbody',
+      newText: 'title changed\nbody',
+      isNewFile: false,
+    }]);
+
+    expect(diff.hunks).toHaveLength(1);
+    expect(diff.hunks[0].overwritten).toBe(false);
+  });
+
+  it('rejects only the selected hunk from a multi-hunk tool call', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'soc-verify-diff-'));
+    tempDirs.push(dir);
+    const filePath = join(dir, 'README.md');
+    await writeFile(filePath, 'first after\nmiddle\nlast after\n', 'utf8');
+
+    const result = await applyRejections(filePath, [{
+      hunkId: 1,
+      toolCallId: 'edit-many',
+      toolName: 'edit',
+      oldText: 'first before\nmiddle\nlast before',
+      newText: 'first after\nmiddle\nlast after',
+      startLine: 1,
+      oldLines: ['first before'],
+      newLines: ['first after'],
+      deleteFile: false,
+    }]);
+
+    expect(result.ok).toBe(true);
+    await expect(readFile(filePath, 'utf8')).resolves.toBe(
+      'first before\nmiddle\nlast after\n',
+    );
+  });
+
+  it('does not apply the same pure-deletion rejection twice', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'soc-verify-diff-'));
+    tempDirs.push(dir);
+    const filePath = join(dir, 'README.md');
+    await writeFile(filePath, 'body\n', 'utf8');
+    const rejection = {
+      hunkId: 1,
+      toolCallId: 'edit-heading',
+      toolName: 'edit',
+      oldText: '# SoC Verify\n\nbody',
+      newText: 'body',
+      startLine: 1,
+      oldLines: ['# SoC Verify', ''],
+      newLines: [],
+      beforeLine: null,
+      afterLine: 'body',
+      deleteFile: false,
+    };
+
+    const first = await applyRejections(filePath, [rejection]);
+    const contentAfterFirst = await readFile(filePath, 'utf8');
+    const second = await applyRejections(filePath, [rejection]);
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(false);
+    await expect(readFile(filePath, 'utf8')).resolves.toBe(contentAfterFirst);
+    expect(contentAfterFirst).toBe('# SoC Verify\n\nbody\n');
+  });
 });

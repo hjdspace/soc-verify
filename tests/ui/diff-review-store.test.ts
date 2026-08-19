@@ -10,10 +10,11 @@ vi.mock('@renderer/lib/trpc', () => ({
 }));
 
 import { useSessionStore, type ChatMessage } from '@renderer/stores/session';
-import { openReviewAwareFile, useDiffReviewStore } from '@renderer/stores/diff-review';
+import { openReviewAwareFile, useDiffReviewStore, normalizeReviewKey } from '@renderer/stores/diff-review';
 import { useProjectStore } from '@renderer/stores/project';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { trpc } from '@renderer/lib/trpc';
+import type { FileDiffResult } from '@shared/types';
 
 function completedEdit(filePath: string): ChatMessage {
   return {
@@ -80,6 +81,59 @@ function completedOmpEditWithDistantChanges(filePath: string): ChatMessage {
   return message;
 }
 
+function diffWithOneHunk(filePath: string): FileDiffResult {
+  return {
+    filePath,
+    isNewFile: false,
+    lines: [
+      { type: 'del', content: 'before', oldLine: 1, hunkId: 1 },
+      { type: 'add', content: 'after', newLine: 1, hunkId: 1 },
+    ],
+    hunks: [{
+      id: 1,
+      toolCallId: 'tool-1',
+      toolName: 'edit',
+      overwritten: false,
+      startLineIndex: 0,
+      endLineIndex: 2,
+      addCount: 1,
+      delCount: 1,
+    }],
+    totalAdd: 1,
+    totalDel: 1,
+  };
+}
+
+function emptyDiff(filePath: string): FileDiffResult {
+  return { filePath, isNewFile: false, lines: [], hunks: [], totalAdd: 0, totalDel: 0 };
+}
+
+function diffWithTwoHunks(filePath: string): FileDiffResult {
+  return {
+    filePath,
+    isNewFile: false,
+    lines: [
+      { type: 'del', content: 'first before', oldLine: 1, hunkId: 1 },
+      { type: 'add', content: 'first after', newLine: 1, hunkId: 1 },
+      { type: 'ctx', content: 'middle', oldLine: 2, newLine: 2 },
+      { type: 'del', content: 'last before', oldLine: 3, hunkId: 2 },
+      { type: 'add', content: 'last after', newLine: 3, hunkId: 2 },
+    ],
+    hunks: [
+      {
+        id: 1, toolCallId: 'tool-1', toolName: 'edit', overwritten: false,
+        startLineIndex: 0, endLineIndex: 2, addCount: 1, delCount: 1,
+      },
+      {
+        id: 2, toolCallId: 'tool-2', toolName: 'edit', overwritten: false,
+        startLineIndex: 3, endLineIndex: 5, addCount: 1, delCount: 1,
+      },
+    ],
+    totalAdd: 2,
+    totalDel: 2,
+  };
+}
+
 describe('Diff Review flow', () => {
   beforeEach(() => {
     useSessionStore.setState({ sessions: [] });
@@ -87,15 +141,18 @@ describe('Diff Review flow', () => {
       queue: [],
       currentFilePath: null,
       currentReviewToolCallId: null,
-      currentDiff: null,
+      fileDiffs: {},
+      diffSignatures: {},
+      loadingFiles: {},
+      loadErrors: {},
       hunkStates: {},
-      loading: false,
-      loadError: null,
+      contentVersions: {},
       reviewedFiles: new Set(),
     });
     useProjectStore.setState({ currentProjectId: 'project-1', projects: [] });
     useWorkbenchStore.setState({ tabs: [], activeTabId: null });
     vi.mocked(trpc.project.getFileDiff.query).mockReset();
+    vi.mocked(trpc.project.applyDiffRejections.mutate).mockReset();
   });
 
   it('automatically projects completed editing tool events into the global Review Queue', () => {
@@ -303,36 +360,21 @@ describe('Diff Review flow', () => {
         createdAt: 1,
       }],
     });
-    useDiffReviewStore.setState({ hunkStates: { [filePath]: { 1: 'rejected' } } });
+    const key = normalizeReviewKey(filePath);
+    useDiffReviewStore.setState({ hunkStates: { [key]: { 1: 'rejected' } } });
 
     useSessionStore.setState((state) => ({
       sessions: state.sessions.map((session) => ({ ...session, name: 'Renamed conversation' })),
     }));
 
     expect(useDiffReviewStore.getState().hunkStates).toEqual({
-      [filePath]: { 1: 'rejected' },
+      [key]: { 1: 'rejected' },
     });
   });
 
-  it('loads a file once and opens its typed Workbench destination', async () => {
+  it('loads a file once and opens a regular file tab with cached diff', async () => {
     const filePath = 'D:\\project\\rtl\\core.sv';
-    vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue({
-      filePath,
-      isNewFile: false,
-      lines: [{ type: 'add', content: 'after', newLine: 1, hunkId: 1 }],
-      hunks: [{
-        id: 1,
-        toolCallId: 'tool-1',
-        toolName: 'edit',
-        overwritten: false,
-        startLineIndex: 0,
-        endLineIndex: 1,
-        addCount: 1,
-        delCount: 0,
-      }],
-      totalAdd: 1,
-      totalDel: 0,
-    });
+    vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue(diffWithOneHunk(filePath));
     useSessionStore.setState({
       sessions: [{
         id: 'session-1',
@@ -346,27 +388,28 @@ describe('Diff Review flow', () => {
     });
 
     useDiffReviewStore.getState().openFile(filePath);
-    await vi.waitFor(() => expect(useDiffReviewStore.getState().loading).toBe(false));
+    const key = normalizeReviewKey(filePath);
+    await vi.waitFor(() => expect(useDiffReviewStore.getState().loadingFiles[key]).toBeFalsy());
 
     expect(trpc.project.getFileDiff.query).toHaveBeenCalledTimes(1);
-    expect(useDiffReviewStore.getState().hunkStates[filePath]).toEqual({ 1: 'pending' });
+    expect(useDiffReviewStore.getState().hunkStates[key]).toEqual({ 1: 'pending' });
+    expect(useDiffReviewStore.getState().fileDiffs[key]).toEqual(expect.objectContaining({ filePath }));
+    // diff 加载后通知编辑器重载内容（内联装饰行号与磁盘对齐）
+    expect(useDiffReviewStore.getState().contentVersions[key]).toBe(1);
     expect(useWorkbenchStore.getState().tabs[0]?.destination).toEqual({
-      type: 'diff-review',
-      filePath,
-      fileName: 'core.sv',
+      type: 'file',
+      path: filePath,
+      name: 'core.sv',
     });
+
+    // 再次 openFile 不重复加载（diff 签名未变）
+    useDiffReviewStore.getState().openFile(filePath);
+    expect(trpc.project.getFileDiff.query).toHaveBeenCalledTimes(1);
   });
 
-  it('opens an unreviewed file from another Windows path spelling in Diff Review', async () => {
+  it('opens an unreviewed file from another Windows path spelling in the editor', async () => {
     const queuedPath = 'D:\\Project\\rtl\\core.sv';
-    vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue({
-      filePath: queuedPath,
-      isNewFile: false,
-      lines: [],
-      hunks: [],
-      totalAdd: 0,
-      totalDel: 0,
-    });
+    vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue(emptyDiff(queuedPath));
     useSessionStore.setState({
       sessions: [{
         id: 'session-1',
@@ -380,20 +423,18 @@ describe('Diff Review flow', () => {
     });
 
     useDiffReviewStore.getState().openFile('d:/project/rtl/core.sv');
-    await vi.waitFor(() => expect(useDiffReviewStore.getState().loading).toBe(false));
+    await vi.waitFor(() => expect(useDiffReviewStore.getState().loadingFiles[normalizeReviewKey(queuedPath)]).toBeFalsy());
 
     expect(useWorkbenchStore.getState().tabs[0]?.destination).toEqual({
-      type: 'diff-review',
-      filePath: queuedPath,
-      fileName: 'core.sv',
+      type: 'file',
+      path: queuedPath,
+      name: 'core.sv',
     });
   });
 
-  it('routes the review-aware file helper to a Diff Review destination', async () => {
+  it('routes the review-aware file helper to a regular file tab', async () => {
     const filePath = 'D:\\project\\rtl\\core.sv';
-    vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue({
-      filePath, isNewFile: false, lines: [], hunks: [], totalAdd: 0, totalDel: 0,
-    });
+    vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue(emptyDiff(filePath));
     useSessionStore.setState({
       sessions: [{
         id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
@@ -402,9 +443,9 @@ describe('Diff Review flow', () => {
     });
 
     openReviewAwareFile(filePath, 'core.sv');
-    await vi.waitFor(() => expect(useDiffReviewStore.getState().loading).toBe(false));
+    await vi.waitFor(() => expect(useDiffReviewStore.getState().loadingFiles[normalizeReviewKey(filePath)]).toBeFalsy());
 
-    expect(useWorkbenchStore.getState().tabs[0]?.destination.type).toBe('diff-review');
+    expect(useWorkbenchStore.getState().tabs[0]?.destination.type).toBe('file');
   });
 
   it('resolves a relative path against the project root before opening a file tab', () => {
@@ -438,13 +479,14 @@ describe('Diff Review flow', () => {
     });
 
     openReviewAwareFile('rtl/core.sv', 'core.sv');
-    await vi.waitFor(() => expect(useDiffReviewStore.getState().loading).toBe(false));
+    await vi.waitFor(() => expect(useDiffReviewStore.getState().loadingFiles['d:/project/rtl/core.sv']).toBeFalsy());
 
-    expect(useWorkbenchStore.getState().tabs[0]?.destination.type).toBe('diff-review');
+    expect(useWorkbenchStore.getState().tabs[0]?.destination.type).toBe('file');
   });
 
-  it('keeps rejected hunks pending until their reversions are applied', () => {
+  it('setHunkState marks the hunk without completing the review', () => {
     const filePath = 'D:\\project\\rtl\\core.sv';
+    const key = normalizeReviewKey(filePath);
     useDiffReviewStore.setState({
       queue: [{
         filePath,
@@ -454,33 +496,19 @@ describe('Diff Review flow', () => {
         reviewed: false,
       }],
       currentFilePath: filePath,
-      currentDiff: {
-        filePath,
-        isNewFile: false,
-        lines: [],
-        hunks: [{
-          id: 1,
-          toolCallId: 'tool-1',
-          toolName: 'edit',
-          overwritten: false,
-          startLineIndex: 0,
-          endLineIndex: 1,
-          addCount: 1,
-          delCount: 1,
-        }],
-        totalAdd: 1,
-        totalDel: 1,
-      },
+      fileDiffs: { [key]: diffWithOneHunk(filePath) },
     });
 
     useDiffReviewStore.getState().setHunkState(filePath, 1, 'rejected');
 
+    expect(useDiffReviewStore.getState().hunkStates[key]).toEqual({ 1: 'rejected' });
     expect(useDiffReviewStore.getState().queue[0]?.reviewed).toBe(false);
     expect(useDiffReviewStore.getState().currentFilePath).toBe(filePath);
   });
 
-  it('keeps review open when applying rejected hunks fails', async () => {
+  it('restores pending state when applying a rejection fails', async () => {
     const filePath = 'D:\\project\\rtl\\core.sv';
+    const key = normalizeReviewKey(filePath);
     vi.mocked(trpc.project.applyDiffRejections.mutate).mockResolvedValue({
       ok: false,
       appliedCount: 0,
@@ -490,43 +518,151 @@ describe('Diff Review flow', () => {
       queue: [{
         filePath,
         fileName: 'core.sv',
-        toolCalls: [completedEdit(filePath)].map((message) => ({
-          id: message.id,
+        toolCalls: [{
+          id: 'tool-1',
           toolName: 'edit',
           filePath,
-          timestamp: message.timestamp,
+          timestamp: 100,
           oldText: 'before',
           newText: 'after',
           isNewFile: false,
-        })),
+        }],
         isNewFile: false,
         reviewed: false,
       }],
       currentFilePath: filePath,
-      currentDiff: {
-        filePath,
-        isNewFile: false,
-        lines: [],
-        hunks: [{
-          id: 1,
-          toolCallId: 'tool-1',
-          toolName: 'edit',
-          overwritten: false,
-          startLineIndex: 0,
-          endLineIndex: 1,
-          addCount: 1,
-          delCount: 1,
-        }],
-        totalAdd: 1,
-        totalDel: 1,
-      },
-      hunkStates: { [filePath]: { 1: 'rejected' } },
+      fileDiffs: { [key]: diffWithOneHunk(filePath) },
     });
 
-    await useDiffReviewStore.getState().applyRejections(filePath);
+    const applied = await useDiffReviewStore.getState().rejectHunk(filePath, 1);
 
+    expect(applied).toBe(false);
+    expect(useDiffReviewStore.getState().hunkStates[key]).toEqual({ 1: 'pending' });
     expect(useDiffReviewStore.getState().queue[0]?.reviewed).toBe(false);
     expect(useDiffReviewStore.getState().currentFilePath).toBe(filePath);
+  });
+
+  it('applies a hunk rejection immediately and completes review without rebuilding the diff', async () => {
+    const filePath = 'D:\\project\\rtl\\core.sv';
+    const key = normalizeReviewKey(filePath);
+    vi.mocked(trpc.project.applyDiffRejections.mutate).mockResolvedValue({
+      ok: true,
+      appliedCount: 1,
+      failures: [],
+    });
+    vi.mocked(trpc.project.getFileDiff.query)
+      .mockResolvedValueOnce(diffWithOneHunk(filePath))
+      .mockResolvedValueOnce(emptyDiff(filePath));
+    useSessionStore.setState({
+      sessions: [{
+        id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
+        messages: [completedEdit(filePath)], composer: { inputMessage: '', selectedSkills: [], contextFiles: [] }, createdAt: 1,
+      }],
+    });
+
+    useDiffReviewStore.getState().openFile(filePath);
+    await vi.waitFor(() => expect(useDiffReviewStore.getState().fileDiffs[key]).toBeTruthy());
+
+    const applied = await useDiffReviewStore.getState().rejectHunk(filePath, 1);
+
+    expect(applied).toBe(true);
+    expect(trpc.project.applyDiffRejections.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 'project-1',
+        filePath,
+        rejections: [expect.objectContaining({ hunkId: 1, toolCallId: 'tool-1' })],
+      }),
+    );
+    // 拒绝后在当前 diff 快照中完成审阅，不再用同一 tool call 重建 before。
+    expect(trpc.project.getFileDiff.query).toHaveBeenCalledTimes(1);
+    expect(useDiffReviewStore.getState().queue[0]?.reviewed).toBe(true);
+    expect(useDiffReviewStore.getState().fileDiffs[key]).toBeUndefined();
+    expect(useDiffReviewStore.getState().contentVersions[key]).toBeGreaterThanOrEqual(2);
+  });
+
+  it('settles two hunks independently before completing the file review', async () => {
+    const filePath = 'D:\\project\\README.md';
+    const key = normalizeReviewKey(filePath);
+    vi.mocked(trpc.project.applyDiffRejections.mutate).mockResolvedValue({
+      ok: true,
+      appliedCount: 1,
+      failures: [],
+    });
+    useDiffReviewStore.setState({
+      queue: [{
+        filePath,
+        fileName: 'README.md',
+        toolCalls: [
+          { id: 'tool-1', toolName: 'edit', filePath, timestamp: 1, isNewFile: false },
+          { id: 'tool-2', toolName: 'edit', filePath, timestamp: 2, isNewFile: false },
+        ],
+        isNewFile: false,
+        reviewed: false,
+      }],
+      currentFilePath: filePath,
+      currentReviewToolCallId: 'tool-2',
+      fileDiffs: { [key]: diffWithTwoHunks(filePath) },
+      hunkStates: { [key]: { 1: 'pending', 2: 'pending' } },
+    });
+
+    const rejected = await useDiffReviewStore.getState().rejectHunk(filePath, 1);
+
+    expect(rejected).toBe(true);
+    expect(useDiffReviewStore.getState().queue[0]?.reviewed).toBe(false);
+    expect(useDiffReviewStore.getState().hunkStates[key]).toEqual({
+      1: 'rejected',
+      2: 'pending',
+    });
+    expect(trpc.project.applyDiffRejections.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rejections: [expect.objectContaining({
+          hunkId: 1,
+          startLine: 1,
+          oldLines: ['first before'],
+          newLines: ['first after'],
+        })],
+      }),
+    );
+
+    useDiffReviewStore.getState().setHunkState(filePath, 2, 'accepted');
+
+    expect(useDiffReviewStore.getState().queue.some((entry) => !entry.reviewed)).toBe(false);
+    expect(useDiffReviewStore.getState().fileDiffs[key]).toBeUndefined();
+  });
+
+  it('rejects all hunks once and clears the review immediately', async () => {
+    const filePath = 'D:\\project\\README.md';
+    const key = normalizeReviewKey(filePath);
+    vi.mocked(trpc.project.applyDiffRejections.mutate).mockResolvedValue({
+      ok: true,
+      appliedCount: 2,
+      failures: [],
+    });
+    useDiffReviewStore.setState({
+      queue: [{
+        filePath,
+        fileName: 'README.md',
+        toolCalls: [
+          { id: 'tool-1', toolName: 'edit', filePath, timestamp: 1, isNewFile: false },
+          { id: 'tool-2', toolName: 'edit', filePath, timestamp: 2, isNewFile: false },
+        ],
+        isNewFile: false,
+        reviewed: false,
+      }],
+      currentFilePath: filePath,
+      currentReviewToolCallId: 'tool-2',
+      fileDiffs: { [key]: diffWithTwoHunks(filePath) },
+      hunkStates: { [key]: { 1: 'pending', 2: 'pending' } },
+    });
+
+    expect(await useDiffReviewStore.getState().rejectAll(filePath)).toBe(true);
+    expect(useDiffReviewStore.getState().queue.some((entry) => !entry.reviewed)).toBe(false);
+    expect(useDiffReviewStore.getState().fileDiffs[key]).toBeUndefined();
+    expect(trpc.project.applyDiffRejections.mutate).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(trpc.project.applyDiffRejections.mutate).mock.calls[0][0].rejections).toHaveLength(2);
+
+    expect(await useDiffReviewStore.getState().rejectAll(filePath)).toBe(true);
+    expect(trpc.project.applyDiffRejections.mutate).toHaveBeenCalledTimes(1);
   });
 
   it('keeps reviewed entries in queue with reviewed=true (not removed)', () => {
@@ -596,17 +732,7 @@ describe('Diff Review flow', () => {
     });
     useDiffReviewStore.setState({ currentFilePath: filePath, currentReviewToolCallId: 'tool-1' });
     useDiffReviewStore.setState({
-      currentDiff: {
-        filePath,
-        isNewFile: false,
-        lines: [],
-        hunks: [{
-          id: 1, toolCallId: 'tool-1', toolName: 'edit', overwritten: false,
-          startLineIndex: 0, endLineIndex: 1, addCount: 1, delCount: 1,
-        }],
-        totalAdd: 1,
-        totalDel: 1,
-      },
+      fileDiffs: { [normalizeReviewKey(filePath)]: diffWithOneHunk(filePath) },
     });
     useSessionStore.setState((state) => ({
       sessions: state.sessions.map((session) => ({ ...session, messages: [first, second] })),

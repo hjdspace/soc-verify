@@ -12,8 +12,7 @@ import { DashboardPanel } from '@renderer/components/dashboard/DashboardPanel';
 import { TOChecklistPanel } from '@renderer/components/to/TOChecklistPanel';
 import { SourceControlPanel } from '@renderer/components/scm/SourceControlPanel';
 import { FileEditor } from '@renderer/components/editor/FileEditor';
-import { DiffReviewView } from '@renderer/components/editor/DiffReviewView';
-import { openReviewAwareFile, useDiffReviewStore } from '@renderer/stores/diff-review';
+import { openReviewAwareFile, useDiffReviewStore, isSameFilePath } from '@renderer/stores/diff-review';
 import { RunningCasesPanel } from '@renderer/components/simulation/RunningCasesPanel';
 import { TERMINAL_TAB_MIME } from '@renderer/components/layout/BottomPanel';
 import { trpc } from '@renderer/lib/trpc';
@@ -91,10 +90,14 @@ export function CenterArea() {
 
   // Diff review queue — reactive subscription for the floating 'Review next file' button
   const diffReviewQueue = useDiffReviewStore((s) => s.queue);
-  const isViewingDiffReview = destination?.type === 'diff-review';
   // Only count unreviewed files for the pending review count
   const pendingReviewCount = diffReviewQueue.filter((e) => !e.reviewed).length;
   const nextReviewFile = diffReviewQueue.find((e) => !e.reviewed) ?? null;
+  // 当前活动 tab 是否就是下一个待审阅文件（是则隐藏浮动按钮，避免遮挡）
+  const activeFilePath = destination?.type === 'file' ? destination.path : null;
+  const isViewingNextReview = activeFilePath != null
+    && nextReviewFile != null
+    && isSameFilePath(activeFilePath, nextReviewFile.filePath);
 
   // Sync dropdown open state to UI store so AppShell can hide native views during overlays.
   useEffect(() => {
@@ -542,19 +545,6 @@ export function CenterArea() {
               </div>
             );
           })()
-        ) : destination?.type === 'diff-review' ? (
-          (() => {
-            const queue = useDiffReviewStore.getState().queue;
-            const target = queue.find((entry) => entry.filePath === destination.filePath);
-            if (!target) {
-              return (
-                <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
-                  无审阅中的文件
-                </div>
-              );
-            }
-            return <DiffReviewView key={target.filePath} entry={target} />;
-          })()
         ) : destination?.type === 'office-document' ? (
           <OfficeDocumentView
             key={destination.filePath}
@@ -630,7 +620,7 @@ export function CenterArea() {
         )}
         
         {/* ── Floating 'Review next file' button ─────────── */}
-        {pendingReviewCount > 0 && !isViewingDiffReview && nextReviewFile && (
+        {pendingReviewCount > 0 && !isViewingNextReview && nextReviewFile && (
           <button
             onClick={() => useDiffReviewStore.getState().openFile(nextReviewFile.filePath)}
             className="absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-lg border border-primary/30 bg-primary/10 px-4 py-2 text-xs text-primary shadow-lg backdrop-blur-sm transition-all hover:bg-primary/20 hover:shadow-xl"

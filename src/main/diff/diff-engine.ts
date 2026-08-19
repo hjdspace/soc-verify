@@ -22,6 +22,10 @@ type RawDiffLine = {
   newLine?: number;
 };
 
+function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n?/g, '\n');
+}
+
 function computeLcsDiff(oldText: string, newText: string): RawDiffLine[] {
   const oldLines = oldText.split('\n');
   const newLines = newText.split('\n');
@@ -85,7 +89,7 @@ function reconstructBefore(
   currentContent: string,
   toolCalls: DiffToolCall[],
 ): { beforeContent: string; overwrittenToolCallIds: Set<string> } {
-  let content = currentContent;
+  let content = normalizeLineEndings(currentContent);
   const overwritten = new Set<string>();
 
   // 逆序处理（最后执行的先撤销）
@@ -101,13 +105,15 @@ function reconstructBefore(
 
     // EDIT: 在当前内容中找到 newText，替换回 oldText
     if (tc.newText != null && tc.oldText != null) {
-      const idx = content.indexOf(tc.newText);
+      const newText = normalizeLineEndings(tc.newText);
+      const oldText = normalizeLineEndings(tc.oldText);
+      const idx = content.indexOf(newText);
       if (idx === -1) {
         // newText 未找到——被后续编辑覆盖
         overwritten.add(tc.id);
         continue;
       }
-      content = content.slice(0, idx) + tc.oldText + content.slice(idx + tc.newText.length);
+      content = content.slice(0, idx) + oldText + content.slice(idx + newText.length);
     }
   }
 
@@ -178,6 +184,11 @@ function groupHunks(
       .filter((l) => l.type === 'add')
       .map((l) => l.content)
       .join('\n');
+    const segDelContent = lines
+      .slice(seg.start, seg.end)
+      .filter((l) => l.type === 'del')
+      .map((l) => l.content)
+      .join('\n');
 
     // 尝试匹配 tool call
     let matchedTc: DiffToolCall | undefined;
@@ -187,8 +198,11 @@ function groupHunks(
       // 按 newText 匹配
       matchedTc = toolCalls.find((tc) => {
         if (tc.isNewFile) return false;
-        if (!tc.newText) return false;
-        return tc.newText.includes(segAddContent) || segAddContent.includes(tc.newText.trim());
+        const candidate = segAddContent.length > 0 ? tc.newText : tc.oldText;
+        const segment = segAddContent.length > 0 ? segAddContent : segDelContent;
+        if (!candidate || segment.length === 0) return false;
+        const normalized = normalizeLineEndings(candidate);
+        return normalized.includes(segment) || segment.includes(normalized.trim());
       });
       // 如果没匹配到，用位置近似（按时间排序的第 N 个）
       if (!matchedTc) {
@@ -238,7 +252,7 @@ export async function getFileDiff(
   // 读取当前文件内容（已含所有 AI 改动）
   let currentContent = '';
   if (existsSync(filePath)) {
-    currentContent = await readFile(filePath, 'utf-8');
+    currentContent = normalizeLineEndings(await readFile(filePath, 'utf-8'));
   }
 
   // 重建 before
@@ -304,32 +318,61 @@ export async function applyRejections(
     };
   }
 
-  let content = await readFile(filePath, 'utf-8');
+  const originalContent = await readFile(filePath, 'utf-8');
+  const eol = (originalContent.match(/\r\n/g)?.length ?? 0) > 0 ? '\r\n' : '\n';
+  const normalizedContent = normalizeLineEndings(originalContent);
+  const hasFinalNewline = normalizedContent.endsWith('\n');
+  const contentLines = normalizedContent.split('\n');
+  if (hasFinalNewline) contentLines.pop();
 
   // 逆序处理（最后执行的先撤销）
-  const sorted = [...rejections].sort((a, b) => {
-    // 按 hunkId 逆序（假设 hunkId 大 = 后执行）
-    return b.hunkId - a.hunkId;
-  });
+  const sorted = [...rejections].sort((a, b) =>
+    (b.startLine ?? b.hunkId) - (a.startLine ?? a.hunkId),
+  );
 
   for (const rej of sorted) {
+    if (rej.startLine != null && rej.oldLines && rej.newLines) {
+      const index = rej.startLine - 1;
+      const actual = contentLines.slice(index, index + rej.newLines.length);
+      const beforeLine = index > 0 ? contentLines[index - 1] : null;
+      const afterLine = contentLines[index + rej.newLines.length] ?? null;
+      const matchesLines = actual.length === rej.newLines.length
+        && actual.every((line, lineIndex) => line === rej.newLines?.[lineIndex]);
+      const matchesEmptyRange = rej.newLines.length > 0
+        || (beforeLine === (rej.beforeLine ?? null) && afterLine === (rej.afterLine ?? null));
+      if (index < 0 || index > contentLines.length || !matchesLines || !matchesEmptyRange) {
+        failures.push({ hunkId: rej.hunkId, reason: '文件内容已变化，无法定位 hunk' });
+        continue;
+      }
+      contentLines.splice(index, rej.newLines.length, ...rej.oldLines);
+      appliedCount++;
+      continue;
+    }
     if (!rej.newText || !rej.oldText) {
       failures.push({ hunkId: rej.hunkId, reason: '缺少 oldText/newText' });
       continue;
     }
-    const idx = content.indexOf(rej.newText);
+    const newText = normalizeLineEndings(rej.newText);
+    const oldText = normalizeLineEndings(rej.oldText);
+    const fallbackContent = contentLines.join('\n');
+    const idx = fallbackContent.indexOf(newText);
     if (idx === -1) {
       failures.push({ hunkId: rej.hunkId, reason: 'newText 在文件中未找到（可能已被覆盖）' });
       continue;
     }
-    content = content.slice(0, idx) + rej.oldText + content.slice(idx + rej.newText.length);
+    const replaced = fallbackContent.slice(0, idx) + oldText + fallbackContent.slice(idx + newText.length);
+    contentLines.splice(0, contentLines.length, ...replaced.split('\n'));
     appliedCount++;
   }
 
-  // 写回文件
+  // 原子应用：任一 hunk 校验失败时不写回，避免文件处于部分回滚状态。
+  if (failures.length > 0) {
+    return { ok: false, appliedCount: 0, failures };
+  }
   if (appliedCount > 0) {
+    const content = contentLines.join(eol) + (hasFinalNewline ? eol : '');
     await writeFile(filePath, content, 'utf-8');
   }
 
-  return { ok: failures.length === 0, appliedCount, failures };
+  return { ok: true, appliedCount, failures: [] };
 }

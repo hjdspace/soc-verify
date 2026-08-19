@@ -82,6 +82,16 @@ export interface DiffRejection {
   oldText?: string;
   /** newText（用于定位和替换） */
   newText?: string;
+  /** 当前文件中该 hunk 的起始行（1-based） */
+  startLine?: number;
+  /** 该 hunk 拒绝后应恢复的行 */
+  oldLines?: string[];
+  /** 当前文件中该 hunk 占用的行 */
+  newLines?: string[];
+  /** hunk 前一行上下文；null 表示文件开头 */
+  beforeLine?: string | null;
+  /** hunk 后一行上下文；null 表示文件结尾 */
+  afterLine?: string | null;
   /** 是否为删除整个文件（WRITE 拒绝） */
   deleteFile: boolean;
 }

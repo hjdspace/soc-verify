@@ -37,7 +37,6 @@ export type WorkbenchDestination =
   | { type: 'timing-violation' }
   | { type: 'ai-artifacts' }
   | { type: 'plugin-view'; pluginId: string; viewId: string; title: string }
-  | { type: 'diff-review'; filePath: string; fileName: string }
   | { type: 'kb' }
   | OfficeDocumentDestination
   | DatabaseDestination
@@ -73,8 +72,6 @@ function describeDestination(destination: WorkbenchDestination): Omit<WorkbenchT
       return { id: `simulation-errors:${destination.runId}`, title: `编译错误 ${destination.runId.slice(-6)}`, closable: true };
     case 'simulation-detail':
       return { id: `simulation-detail:${destination.runId}`, title: `运行详情 ${destination.runId.slice(-6)}`, closable: true };
-    case 'diff-review':
-      return { id: `diff-review:${destination.filePath}`, title: `Diff: ${destination.fileName}`, closable: true };
     case 'simulation-history':
       return { id: destination.type, title: '仿真历史', closable: true };
     case 'simulation-comparison':

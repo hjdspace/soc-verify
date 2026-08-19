@@ -18,17 +18,20 @@ import { tcl } from '@codemirror/legacy-modes/mode/tcl';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
-import { Save, Eye, Pencil, Loader2, AlertCircle, ExternalLink } from 'lucide-react';
+import { Save, Eye, Pencil, Loader2, AlertCircle, ExternalLink, Check, X, ArrowRight, GitCompare } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { useThemeStore } from '@renderer/stores/theme';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useToastStore } from '@renderer/stores/toast';
 import { useEditorStore } from '@renderer/stores/editor';
+import { useDiffReviewStore, normalizeReviewKey, isSameFilePath, type ReviewEntry } from '@renderer/stores/diff-review';
+import type { FileDiffResult } from '@shared/types';
 import { cn } from '@renderer/lib/utils';
 import { createVimExtensions, resetVimMode } from './vim-extension';
 import { VimStatusBar } from './VimStatusBar';
 import { createSyntaxHighlightExtension } from './syntax-highlight';
 import { createIndentGuidesExtension } from './indent-guides';
+import { createInlineReviewExtension } from './inline-review';
 import { search, searchKeymap, openSearchPanel } from '@codemirror/search';
 import { Breadcrumb } from './Breadcrumb';
 import { EditorStatusBar, type CursorPosition } from './EditorStatusBar';
@@ -158,6 +161,9 @@ function resolveRelativePath(baseFilePath: string, href: string): string {
   return parts.join(sep);
 }
 
+/** 稳定的空 hunk 状态引用，避免每次渲染创建新对象导致 useMemo 依赖变化 */
+const EMPTY_HUNK_STATES: Record<number, 'pending' | 'accepted' | 'rejected'> = {};
+
 /** 从路径中提取文件名 */
 function basename(filePath: string): string {
   const parts = filePath.split(/[/\\]/);
@@ -188,6 +194,28 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
   const openDestination = useWorkbenchStore((s) => s.open);
   const vimEnabled = useEditorStore((s) => s.vimEnabled);
   const minimapEnabled = useEditorStore((s) => s.minimapEnabled);
+
+  // ── 内联 code review 状态（Cursor / VSCode 风格） ─────────────
+  // 文件在审阅队列中时，编辑器叠加 diff 装饰并进入只读模式；
+  // 无论从目录树、工具卡片还是浮动按钮打开，都走同一套内联审阅逻辑。
+  const reviewQueue = useDiffReviewStore((s) => s.queue);
+  const fileDiffs = useDiffReviewStore((s) => s.fileDiffs);
+  const reviewHunkStates = useDiffReviewStore((s) => s.hunkStates);
+  const loadingReviewFiles = useDiffReviewStore((s) => s.loadingFiles);
+  const reviewLoadErrors = useDiffReviewStore((s) => s.loadErrors);
+  const contentVersions = useDiffReviewStore((s) => s.contentVersions);
+
+  const reviewEntry = useMemo(
+    () => reviewQueue.find((e) => isSameFilePath(e.filePath, filePath) && !e.reviewed) ?? null,
+    [reviewQueue, filePath],
+  );
+  const reviewKey = normalizeReviewKey(filePath);
+  const reviewDiff = reviewEntry ? (fileDiffs[reviewKey] ?? null) : null;
+  const reviewStates = reviewHunkStates[reviewKey] ?? EMPTY_HUNK_STATES;
+  const reviewLoading = reviewEntry ? (loadingReviewFiles[reviewKey] ?? false) : false;
+  const reviewError = reviewEntry ? (reviewLoadErrors[reviewKey] ?? null) : null;
+  const reviewActive = reviewEntry != null && reviewDiff != null;
+  const contentVersion = contentVersions[reviewKey] ?? 0;
 
   // EditorView ref，用于 Vim 扩展获取 CodeMirror 实例
   const editorViewRef = useRef<import('@codemirror/view').EditorView | null>(null);
@@ -291,6 +319,60 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
       });
     return () => { cancelled = true; };
   }, [projectId, filePath, isImage]);
+
+  // 文件在审阅队列中时确保 diff 已加载（覆盖目录树直开等不经 openFile 的入口）
+  useEffect(() => {
+    if (reviewEntry) {
+      void useDiffReviewStore.getState().ensureDiffLoaded(reviewEntry.filePath);
+    }
+  }, [reviewEntry]);
+
+  // 内容重载：diff 加载/拒绝回滚后 contentVersions 递增，从磁盘重读内容，
+  // 保证内联装饰的行号与磁盘上的最新内容对齐（覆盖"文件已打开时 AI 再编辑"的场景）
+  const lastContentVersionRef = useRef(contentVersion);
+  useEffect(() => {
+    if (contentVersion === lastContentVersionRef.current) return;
+    lastContentVersionRef.current = contentVersion;
+    if (contentVersion === 0) return;
+    let cancelled = false;
+    trpc.project.readFile.query({ projectId, filePath })
+      .then((data) => {
+        if (!cancelled) {
+          setContent(data);
+          setOriginalContent(data);
+        }
+      })
+      .catch(() => {
+        // 文件可能已被删除（拒绝新建文件的写入）——保留当前内容
+      });
+    return () => { cancelled = true; };
+  }, [contentVersion, projectId, filePath]);
+
+  // 内联审阅 extension：diff 数据或 hunk 状态变化时重建（@uiw 会触发 reconfigure）
+  const inlineReviewExtensions = useMemo<Extension[]>(() => {
+    if (!reviewEntry || !reviewDiff) return [];
+    return [createInlineReviewExtension({
+      diff: reviewDiff,
+      hunkStates: reviewStates,
+      onAccept: (hunkId) => {
+        useDiffReviewStore.getState().setHunkState(reviewEntry.filePath, hunkId, 'accepted');
+      },
+      onReject: (hunkId) => {
+        void useDiffReviewStore.getState().rejectHunk(reviewEntry.filePath, hunkId);
+      },
+    })];
+  }, [reviewEntry, reviewDiff, reviewStates]);
+
+  // 合并所有 extension（memoize 避免每次渲染触发 CodeMirror reconfigure）
+  const editorExtensions = useMemo<Extension[]>(() => [
+    ...languageExtension,
+    syntaxHighlightExtension,
+    cursorListenerExtension,
+    indentGuidesExtension,
+    ...searchExtension,
+    ...vimExtensions,
+    ...inlineReviewExtensions,
+  ], [languageExtension, syntaxHighlightExtension, cursorListenerExtension, indentGuidesExtension, searchExtension, vimExtensions, inlineReviewExtensions]);
 
   const isDirty = content !== originalContent;
 
@@ -428,7 +510,7 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
               保存失败
             </span>
           )}
-          {(isMd || isHtml) && (
+          {(isMd || isHtml) && !reviewEntry && (
             <button
               onClick={() => setPreviewMode(!previewMode)}
               className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
@@ -465,9 +547,19 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
         </div>
       </div>
 
+      {/* 内联审阅工具条：文件在审阅队列中时显示（Cursor / VSCode 风格） */}
+      {reviewEntry && (
+        <InlineReviewToolbar
+          entry={reviewEntry}
+          diff={reviewDiff}
+          loading={reviewLoading}
+          error={reviewError}
+        />
+      )}
+
       {/* 编辑器 / 预览 */}
       <div className="min-h-0 flex-1 overflow-hidden">
-        {isMd && previewMode ? (
+        {isMd && previewMode && !reviewEntry ? (
           <div className="markdown-preview h-full overflow-auto">
             <div className="mx-auto max-w-4xl px-8 py-6">
               <ReactMarkdown
@@ -530,7 +622,7 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
               </ReactMarkdown>
             </div>
           </div>
-        ) : isHtml && previewMode ? (
+        ) : isHtml && previewMode && !reviewEntry ? (
           <iframe
             srcDoc={content}
             className="h-full w-full border-0 bg-white"
@@ -542,7 +634,8 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
             <CodeMirror
               value={content}
               onChange={setContent}
-              extensions={[...languageExtension, syntaxHighlightExtension, cursorListenerExtension, indentGuidesExtension, ...searchExtension, ...vimExtensions]}
+              extensions={editorExtensions}
+              readOnly={reviewActive}
               theme={themeMode === 'dark' ? 'dark' : 'light'}
               height="100%"
               width="100%"
@@ -578,6 +671,91 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
         tabSize={2}
         lineEnding={lineEnding}
       />
+    </div>
+  );
+}
+
+// ── 内联审阅工具条 ───────────────────────────────────────────
+
+function InlineReviewToolbar({
+  entry,
+  diff,
+  loading,
+  error,
+}: {
+  entry: ReviewEntry;
+  diff: FileDiffResult | null;
+  loading: boolean;
+  error: string | null;
+}) {
+  const { current, total } = useDiffReviewStore.getState().getQueuePosition();
+  const nextFileName = useDiffReviewStore.getState().getNextFileName();
+
+  const stats = diff
+    ? { add: diff.totalAdd, del: diff.totalDel, hunks: diff.hunks.length }
+    : null;
+
+  return (
+    <div className="flex shrink-0 items-center gap-2.5 border-b border-primary/20 bg-primary/5 px-3 py-1.5">
+      <GitCompare className="h-3.5 w-3.5 shrink-0 text-primary" />
+      <span className="shrink-0 text-xs font-medium text-foreground">AI 改动待审阅</span>
+
+      {loading && (
+        <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          加载 diff...
+        </span>
+      )}
+
+      {!loading && error && (
+        <span className="flex min-w-0 items-center gap-1 text-[11px] text-status-fail-foreground" title={error}>
+          <AlertCircle className="h-3 w-3 shrink-0" />
+          <span className="truncate">diff 加载失败：{error}</span>
+        </span>
+      )}
+
+      {!loading && !error && stats && (
+        <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10px]">
+          <span className="text-status-pass-foreground">+{stats.add}</span>
+          <span className="text-destructive">−{stats.del}</span>
+          <span className="text-muted-foreground">{stats.hunks} 处改动</span>
+        </span>
+      )}
+
+      {total > 1 && (
+        <span className="shrink-0 text-[10px] text-muted-foreground">
+          {current}/{total} 文件
+        </span>
+      )}
+
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        <button
+          onClick={() => { void useDiffReviewStore.getState().rejectAll(entry.filePath); }}
+          className="flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          title="回滚此文件的全部 AI 改动"
+        >
+          <X className="h-2.5 w-2.5" />
+          全部拒绝
+        </button>
+        <button
+          onClick={() => useDiffReviewStore.getState().acceptAll(entry.filePath)}
+          className="flex items-center gap-1 rounded border border-status-pass/30 bg-status-pass/10 px-2 py-0.5 text-[10px] text-status-pass-foreground transition-colors hover:bg-status-pass/20"
+          title="保留此文件的全部 AI 改动"
+        >
+          <Check className="h-2.5 w-2.5" />
+          全部接受
+        </button>
+        {nextFileName && (
+          <button
+            onClick={() => useDiffReviewStore.getState().nextFile()}
+            className="flex items-center gap-1 rounded border border-primary/30 bg-primary/10 px-2 py-0.5 text-[10px] text-primary transition-colors hover:bg-primary/20"
+            title={`审阅下一个文件: ${nextFileName}`}
+          >
+            <ArrowRight className="h-2.5 w-2.5" />
+            <span className="max-w-[140px] truncate">{nextFileName}</span>
+          </button>
+        )}
+      </div>
     </div>
   );
 }

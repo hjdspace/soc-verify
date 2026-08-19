@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 // ── Mocks ──────────────────────────────────────────────────────
@@ -121,6 +121,7 @@ vi.mock('@renderer/stores/editor', () => ({
 
 // Import after mocks
 import { FileEditor } from '@renderer/components/editor/FileEditor';
+import { normalizeReviewKey, useDiffReviewStore } from '@renderer/stores/diff-review';
 
 describe('FileEditor — Vim integration', () => {
   beforeEach(() => {
@@ -273,6 +274,83 @@ describe('FileEditor — Vim integration', () => {
         content: 'edited content',
       });
     });
+  });
+});
+
+describe('FileEditor — inline review', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const filePath = '/docs/README.md';
+    const key = normalizeReviewKey(filePath);
+    trpc.project.readFile.query.mockResolvedValue('# SoC Verify\n\nUpdated body');
+    useDiffReviewStore.setState({
+      queue: [],
+      currentFilePath: null,
+      currentReviewToolCallId: null,
+      fileDiffs: {},
+      diffSignatures: {},
+      loadingFiles: {},
+      loadErrors: {},
+      hunkStates: {},
+      contentVersions: { [key]: 0 },
+      reviewedFiles: new Set(),
+    });
+  });
+
+  it('switches a Markdown preview back to the editor when inline review starts', async () => {
+    const filePath = '/docs/README.md';
+    const key = normalizeReviewKey(filePath);
+    render(<FileEditor projectId="proj-1" filePath={filePath} fileName="README.md" />);
+
+    await waitFor(() => expect(screen.getByTestId('codemirror-mock')).toBeTruthy());
+    fireEvent.click(screen.getByTitle('切换到预览模式'));
+    expect(screen.queryByTestId('codemirror-mock')).toBeNull();
+
+    act(() => {
+      useDiffReviewStore.setState({
+        queue: [{
+          filePath,
+          fileName: 'README.md',
+          toolCalls: [{
+            id: 'tool-1',
+            toolName: 'edit',
+            filePath,
+            timestamp: 1,
+            oldText: 'Original body',
+            newText: 'Updated body',
+            isNewFile: false,
+          }],
+          isNewFile: false,
+          reviewed: false,
+        }],
+        fileDiffs: {
+          [key]: {
+            filePath,
+            isNewFile: false,
+            lines: [
+              { type: 'del', content: 'Original body', oldLine: 3, hunkId: 1 },
+              { type: 'add', content: 'Updated body', newLine: 3, hunkId: 1 },
+            ],
+            hunks: [{
+              id: 1,
+              toolCallId: 'tool-1',
+              toolName: 'edit',
+              overwritten: false,
+              startLineIndex: 0,
+              endLineIndex: 2,
+              addCount: 1,
+              delCount: 1,
+            }],
+            totalAdd: 1,
+            totalDel: 1,
+          },
+        },
+        diffSignatures: { [key]: 'tool-1' },
+        hunkStates: { [key]: { 1: 'pending' } },
+      });
+    });
+
+    await waitFor(() => expect(screen.getByTestId('codemirror-mock')).toBeTruthy());
   });
 });
 

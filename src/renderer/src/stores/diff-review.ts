@@ -1,11 +1,14 @@
 /**
- * Diff Review Store — 全局 review queue + hunk 接受/拒绝状态管理。
+ * Diff Review Store — 全局 review queue + hunk 接受/拒绝状态管理（内联审阅模式）。
  *
  * 队列来源：从当前项目的会话 tool messages 中提取 WRITE/EDIT/apply_patch/ast_edit 工具调用，
- * 按文件路径聚合。hunk 状态在 store 中管理，「应用」时调用后端 API 批量撤销。
+ * 按文件路径聚合。文件在中栏普通编辑器（FileEditor）中打开，AI 改动以 CodeMirror
+ * 内联 diff 装饰展示；拒绝的 hunk 立即回滚到文件系统，随后刷新 diff 与编辑器内容。
  *
- * reviewed 文件保留在队列中（标记 reviewed=true），这样 ToolCard 路径始终可点击。
- * 点击已 reviewed 的路径会打开文件编辑器；未 reviewed 的路径会打开 diff-review。
+ * reviewed 文件保留在队列中（标记 reviewed=true），后续新 edit 会重新进入队列。
+ *
+ * 所有按文件索引的状态（fileDiffs / hunkStates / contentVersions 等）以规范化路径
+ * （normalizeReviewKey）为键，避免 Windows 路径大小写/分隔符差异导致查找失败。
  *
  * 持久化：reviewedFiles 按 projectId 存储在 localStorage，切换项目时恢复对应的
  * 审阅状态，避免重启后已审阅文件再次出现 "Review next file" 按钮。
@@ -21,7 +24,7 @@ import { extractResultText, hasResultWarning } from '@renderer/components/chat/t
 
 // ─── Types ──────────────────────────────────────────────────
 
-type HunkState = 'pending' | 'accepted' | 'rejected';
+export type HunkState = 'pending' | 'accepted' | 'rejected';
 export type HunkStates = Record<string, Record<number, HunkState>>;
 
 export interface ReviewEntry {
@@ -42,31 +45,38 @@ interface DiffReviewStoreState {
   queue: ReviewEntry[];
   /** 当前正在审阅的文件路径 */
   currentFilePath: string | null;
-  /** 打开当前 diff 时的最后一个 tool call */
+  /** 打开当前审阅文件时的最后一个 tool call（审阅前沿标记） */
   currentReviewToolCallId: string | null;
-  /** 当前文件的 diff 结果 */
-  currentDiff: FileDiffResult | null;
-  /** hunk 状态：key = `${filePath}:${hunkId}` */
+  /** 每个文件的 diff 结果缓存（key = 规范化路径；值为 null 表示加载失败） */
+  fileDiffs: Record<string, FileDiffResult | null>;
+  /** diff 已加载到的 tool call 前沿（key = 规范化路径），用于失效判断 */
+  diffSignatures: Record<string, string>;
+  /** 正在加载 diff 的文件 */
+  loadingFiles: Record<string, boolean>;
+  /** diff 加载失败的错误信息 */
+  loadErrors: Record<string, string | null>;
+  /** hunk 状态（key = 规范化路径） */
   hunkStates: HunkStates;
-  /** 是否正在加载 diff */
-  loading: boolean;
-  /** diff 加载失败的错误信息（null 表示无错误） */
-  loadError: string | null;
+  /** 文件内容版本号：拒绝回滚后递增，FileEditor 据此重载内容 */
+  contentVersions: Record<string, number>;
   /** 已审阅到的 tool call 标记集合 */
   reviewedFiles: Set<string>;
 
   // Actions
   refreshQueue: () => void;
+  /** 在普通编辑器中打开文件；未审阅时同时加载 diff */
   openFile: (filePath: string) => void;
+  /** 加载/刷新文件 diff（tool call 前沿变化时自动失效重载） */
+  ensureDiffLoaded: (filePath: string) => Promise<void>;
   setHunkState: (filePath: string, hunkId: number, state: HunkState) => void;
+  /** 拒绝单个 hunk：立即回滚并刷新 diff；返回是否成功 */
+  rejectHunk: (filePath: string, hunkId: number) => Promise<boolean>;
   acceptAll: (filePath: string) => void;
-  rejectAll: (filePath: string) => void;
-  applyRejections: (filePath: string) => Promise<void>;
+  /** 拒绝全部 hunk：立即回滚并刷新 diff；返回是否成功 */
+  rejectAll: (filePath: string) => Promise<boolean>;
   nextFile: () => void;
   getQueuePosition: () => { current: number; total: number };
   getNextFileName: () => string | null;
-  /** 关闭当前 diff review 视图，返回正常文件展示 */
-  closeReview: () => void;
 }
 
 // ─── Constants ─────────────────────────────────────────────
@@ -163,6 +173,16 @@ function normalizeFilePath(filePath: string): string {
   return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
+/** 规范化路径作为按文件索引状态的键 */
+export function normalizeReviewKey(filePath: string): string {
+  return normalizeFilePath(filePath);
+}
+
+/** 路径等价比较（Windows 大小写不敏感 + 分隔符归一） */
+export function isSameFilePath(left: string, right: string): boolean {
+  return normalizeFilePath(left) === normalizeFilePath(right);
+}
+
 // URI scheme 前缀（case://、local:// 等），不是文件系统路径，不指向项目内文件
 const FILE_URI_SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//;
 
@@ -198,10 +218,6 @@ function resolveInsideProject(rawPath: string, rootPath: string): string | null 
   if (lowerAbsolute === lowerRoot) return null;
   if (!lowerAbsolute.startsWith(`${lowerRoot}/`)) return null;
   return absolute;
-}
-
-function sameFilePath(left: string, right: string): boolean {
-  return normalizeFilePath(left) === normalizeFilePath(right);
 }
 
 function reviewMarker(filePath: string, toolCallId: string): string {
@@ -426,10 +442,12 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
   queue: [],
   currentFilePath: null,
   currentReviewToolCallId: null,
-  currentDiff: null,
+  fileDiffs: {},
+  diffSignatures: {},
+  loadingFiles: {},
+  loadErrors: {},
   hunkStates: {},
-  loading: false,
-  loadError: null,
+  contentVersions: {},
   reviewedFiles: loadReviewedFiles(useProjectStore.getState().currentProjectId),
 
   refreshQueue: () => {
@@ -447,181 +465,164 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
       }
 
       const newQueue = aggregateQueue(reviewedFiles);
-      // 保留已有 hunkStates 中仍在队列里的条目
-      const validPaths = new Set(newQueue.map((e) => e.filePath));
-      const cleanedHunkStates: HunkStates = {};
-      for (const [filePath, states] of Object.entries(s.hunkStates)) {
-        if (validPaths.has(filePath)) cleanedHunkStates[filePath] = states;
-      }
+      // 清理已不在队列中的文件的按文件状态
+      const validKeys = new Set(newQueue.map((e) => normalizeFilePath(e.filePath)));
+      const clean = <T>(map: Record<string, T>): Record<string, T> => {
+        const out: Record<string, T> = {};
+        for (const [k, v] of Object.entries(map)) {
+          if (validKeys.has(k)) out[k] = v;
+        }
+        return out;
+      };
       // 如果当前审阅的文件已不在队列中，清空
-      const currentFilePath = s.currentFilePath && validPaths.has(s.currentFilePath)
+      const currentFilePath = s.currentFilePath && validKeys.has(normalizeFilePath(s.currentFilePath))
         ? s.currentFilePath
         : null;
       // 不清理 reviewedFiles——保留所有标记，避免竞态条件导致标记丢失。
       // reviewedFiles 只增不减：markFileReviewed 添加标记，project 切换时整体替换。
       return {
         queue: newQueue,
-        hunkStates: cleanedHunkStates,
+        fileDiffs: clean(s.fileDiffs),
+        diffSignatures: clean(s.diffSignatures),
+        loadingFiles: clean(s.loadingFiles),
+        loadErrors: clean(s.loadErrors),
+        hunkStates: clean(s.hunkStates),
+        contentVersions: clean(s.contentVersions),
         currentFilePath,
         currentReviewToolCallId: currentFilePath ? s.currentReviewToolCallId : null,
-        currentDiff: currentFilePath ? s.currentDiff : null,
         reviewedFiles,
       };
     });
   },
 
   openFile: (filePath) => {
-    const entry = get().queue.find((e) => sameFilePath(e.filePath, filePath));
-    if (!entry) return;
+    const entry = get().queue.find((e) => isSameFilePath(e.filePath, filePath));
+    const targetPath = entry?.filePath ?? filePath;
+    const fileName = entry?.fileName ?? targetPath.replace(/\\/g, '/').split('/').pop() ?? targetPath;
 
-    // If already reviewed, open the file in the editor instead of diff-review
-    if (entry.reviewed) {
-      openFileDestination(useWorkbenchStore.getState().open, entry.filePath, entry.fileName);
-      return;
-    }
+    // 始终在普通编辑器中打开；未审阅的文件同时加载 diff 供内联审阅展示
+    openFileDestination(useWorkbenchStore.getState().open, targetPath, fileName);
+
+    if (!entry || entry.reviewed) return;
+
+    set({
+      currentFilePath: entry.filePath,
+      currentReviewToolCallId: entry.toolCalls[entry.toolCalls.length - 1]?.id ?? null,
+    });
+    void get().ensureDiffLoaded(entry.filePath);
+  },
+
+  ensureDiffLoaded: (filePath) => {
+    const entry = get().queue.find((e) => isSameFilePath(e.filePath, filePath) && !e.reviewed);
+    if (!entry) return Promise.resolve();
 
     const projectId = useProjectStore.getState().currentProjectId;
-    if (!projectId) return;
+    if (!projectId) return Promise.resolve();
 
-    const reviewPath = entry.filePath;
-    set({
-      currentFilePath: reviewPath,
-      currentReviewToolCallId: entry.toolCalls[entry.toolCalls.length - 1]?.id ?? null,
-      loading: true,
-      loadError: null,
-    });
+    const key = normalizeFilePath(entry.filePath);
+    const signature = entry.toolCalls[entry.toolCalls.length - 1]?.id ?? '';
+    if (get().diffSignatures[key] === signature) return Promise.resolve();
+    if (get().loadingFiles[key]) return Promise.resolve();
 
-    useWorkbenchStore.getState().open({
-      type: 'diff-review',
-      filePath: entry.filePath,
-      fileName: entry.fileName,
-    });
+    set((s) => ({
+      loadingFiles: { ...s.loadingFiles, [key]: true },
+      loadErrors: { ...s.loadErrors, [key]: null },
+    }));
 
-    trpc.project.getFileDiff.query({
+    return trpc.project.getFileDiff.query({
       projectId,
-      filePath: reviewPath,
+      filePath: entry.filePath,
       toolCalls: entry.toolCalls,
     })
       .then((diff) => {
-        set({ currentDiff: diff, loading: false, loadError: null });
-        // 初始化 hunkStates：overwritten hunks 默认 accepted，其余 pending
-        const states: HunkStates = { ...get().hunkStates };
-        const fileStates = { ...states[reviewPath] };
-        for (const hunk of diff.hunks) {
-          if (!(hunk.id in fileStates)) {
+        set((s) => {
+          // 重建 hunk 状态：diff 重算后 hunkId 会重新分配，旧状态不再可靠
+          const fileStates: Record<number, HunkState> = {};
+          for (const hunk of diff.hunks) {
             fileStates[hunk.id] = hunk.overwritten ? 'accepted' : 'pending';
           }
+          return {
+            fileDiffs: { ...s.fileDiffs, [key]: diff },
+            diffSignatures: { ...s.diffSignatures, [key]: signature },
+            loadingFiles: { ...s.loadingFiles, [key]: false },
+            loadErrors: { ...s.loadErrors, [key]: null },
+            hunkStates: { ...s.hunkStates, [key]: fileStates },
+            // diff 加载/刷新都意味着文件内容可能与编辑器展示的不一致（新 tool call
+            // 或拒绝回滚），始终通知编辑器重载内容，保证内联装饰行号与磁盘对齐
+            contentVersions: { ...s.contentVersions, [key]: (s.contentVersions[key] ?? 0) + 1 },
+          };
+        });
+        // diff 为空（全部回滚完成）或全部 overwritten 时，自动完成审阅
+        const allAccepted = diff.hunks.every((h) => h.overwritten);
+        if (allAccepted) {
+          markFileReviewed(entry.filePath);
         }
-        states[reviewPath] = fileStates;
-        set({ hunkStates: states });
       })
       .catch((err) => {
         const message = err instanceof Error ? err.message : String(err);
-        set({ loading: false, currentDiff: null, loadError: message });
+        set((s) => ({
+          loadingFiles: { ...s.loadingFiles, [key]: false },
+          fileDiffs: { ...s.fileDiffs, [key]: null },
+          loadErrors: { ...s.loadErrors, [key]: message },
+        }));
       });
   },
 
   setHunkState: (filePath, hunkId, state) => {
+    const key = normalizeFilePath(filePath);
     set((s) => ({
       hunkStates: {
         ...s.hunkStates,
-        [filePath]: { ...s.hunkStates[filePath], [hunkId]: state },
+        [key]: { ...s.hunkStates[key], [hunkId]: state },
       },
     }));
-    // 全部接受时可以直接完成；拒绝项必须等「应用」真正回滚后才能完成。
-    const { currentDiff, hunkStates } = get();
-    if (!currentDiff) return;
-    const allAccepted = currentDiff.hunks.every((h) => {
-      const st = hunkStates[filePath]?.[h.id];
-      return h.overwritten || st === 'accepted';
-    });
-    if (allAccepted) {
-      markFileReviewed(filePath);
-    }
+    if (state === 'accepted') finishReviewIfSettled(filePath);
   },
 
+  rejectHunk: (filePath, hunkId) => applyHunkRejections(filePath, [hunkId]),
+
   acceptAll: (filePath) => {
-    const diff = get().currentDiff;
+    const key = normalizeFilePath(filePath);
+    const diff = get().fileDiffs[key];
     // 即使 diff 未加载或加载失败，也要标记为已审阅——
     // 用户明确选择了「接受」，不应因 diff 不可用而阻止审阅完成。
     if (diff) {
       set((s) => {
-        const states = { ...s.hunkStates };
-        const fileStates = { ...states[filePath] };
+        const fileStates = { ...(s.hunkStates[key] ?? {}) };
         for (const hunk of diff.hunks) {
           if (!hunk.overwritten) {
             fileStates[hunk.id] = 'accepted';
           }
         }
-        states[filePath] = fileStates;
-        return { hunkStates: states };
+        return { hunkStates: { ...s.hunkStates, [key]: fileStates } };
       });
     }
     // 接受全部后，标记为已审阅
     markFileReviewed(filePath);
   },
 
-  rejectAll: (filePath) => {
-    const diff = get().currentDiff;
-    if (!diff) return;
-    set((s) => {
-      const states = { ...s.hunkStates };
-      const fileStates = { ...states[filePath] };
-      for (const hunk of diff.hunks) {
-        if (!hunk.overwritten) {
-          fileStates[hunk.id] = 'rejected';
-        }
-      }
-      states[filePath] = fileStates;
-      return { hunkStates: states };
-    });
-  },
-
-  applyRejections: async (filePath) => {
-    const { currentDiff, hunkStates } = get();
+  rejectAll: async (filePath) => {
+    const key = normalizeFilePath(filePath);
+    // diff 未加载时先加载（ChangeSummaryBar 的「全部拒绝」可能在文件未打开时触发）
+    if (get().fileDiffs[key] == null && !get().loadingFiles[key]) {
+      await get().ensureDiffLoaded(filePath);
+    }
+    const diff = get().fileDiffs[key];
     // diff 不可用（文件不存在、加载失败等）时，直接标记为已审阅。
     // 用户已明确选择「拒绝」，即使无法回滚也应完成审阅流程。
-    if (!currentDiff) {
+    if (!diff) {
       markFileReviewed(filePath);
-      return;
+      return true;
     }
-
-    const projectId = useProjectStore.getState().currentProjectId;
-    if (!projectId) return;
-
-    // 收集所有 rejected hunks
-    const rejections: DiffRejection[] = [];
-    for (const hunk of currentDiff.hunks) {
-      const state = hunkStates[filePath]?.[hunk.id];
-      if (state === 'rejected') {
-        // 找到对应的 tool call
-        const entry = get().queue.find((e) => e.filePath === filePath);
-        const tc = entry?.toolCalls.find((t) => t.id === hunk.toolCallId);
-        rejections.push({
-          hunkId: hunk.id,
-          toolCallId: hunk.toolCallId,
-          toolName: hunk.toolName,
-          oldText: tc?.oldText,
-          newText: tc?.newText,
-          deleteFile: entry?.isNewFile ?? false,
-        });
-      }
-    }
-
-    if (rejections.length === 0) return;
-
-    try {
-      const result = await trpc.project.applyDiffRejections.mutate({
-        projectId,
-        filePath,
-        rejections,
-      });
-      if (!result.ok) return;
-      // 应用拒绝后，标记为已审阅
+    const states = get().hunkStates[key] ?? {};
+    const ids = diff.hunks
+      .filter((h) => !h.overwritten && states[h.id] !== 'rejected')
+      .map((h) => h.id);
+    if (ids.length === 0) {
       markFileReviewed(filePath);
-    } catch {
-      // 错误处理留给 toast
+      return true;
     }
+    return applyHunkRejections(filePath, ids);
   },
 
   nextFile: () => {
@@ -658,20 +659,140 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
     }
     return null;
   },
-
-  closeReview: () => {
-    const { currentFilePath } = get();
-    if (currentFilePath) {
-      const tabId = `diff-review:${currentFilePath}`;
-      useWorkbenchStore.getState().close(tabId);
-    }
-    set({ currentFilePath: null, currentReviewToolCallId: null, currentDiff: null, loading: false, loadError: null });
-  },
 }));
+
+// ─── 拒绝应用 ────────────────────────────────────────────────
+
+/**
+ * 应用 hunk 拒绝：立即回滚到文件系统，失效 diff 缓存并刷新。
+ * 成功后若 diff 不再包含可审阅 hunk，自动标记文件为已审阅。
+ */
+async function applyHunkRejections(filePath: string, hunkIds: number[]): Promise<boolean> {
+  const key = normalizeFilePath(filePath);
+  const { fileDiffs, hunkStates, queue } = useDiffReviewStore.getState();
+  const diff = fileDiffs[key];
+  const entry = queue.find((e) => isSameFilePath(e.filePath, filePath));
+
+  // diff 不可用（文件不存在、加载失败等）时，直接标记为已审阅。
+  if (!diff || !entry) {
+    markFileReviewed(filePath);
+    return true;
+  }
+
+  const idSet = new Set(hunkIds);
+  const rejections: DiffRejection[] = [];
+  for (const hunk of diff.hunks) {
+    if (!idSet.has(hunk.id)) continue;
+    const patch = getHunkPatch(diff, hunk.id);
+    if (!patch) continue;
+    const priorDelta = diff.hunks.reduce((delta, candidate) => {
+      if (hunkStates[key]?.[candidate.id] !== 'rejected') return delta;
+      const priorPatch = getHunkPatch(diff, candidate.id);
+      if (!priorPatch || priorPatch.startLine >= patch.startLine) return delta;
+      return delta + priorPatch.oldLines.length - priorPatch.newLines.length;
+    }, 0);
+    rejections.push({
+      hunkId: hunk.id,
+      toolCallId: hunk.toolCallId,
+      toolName: hunk.toolName,
+      startLine: patch.startLine + priorDelta,
+      oldLines: patch.oldLines,
+      newLines: patch.newLines,
+      beforeLine: patch.beforeLine,
+      afterLine: patch.afterLine,
+      deleteFile: entry.isNewFile,
+    });
+  }
+
+  const projectId = useProjectStore.getState().currentProjectId;
+  if (!projectId || rejections.length === 0) return false;
+
+  try {
+    const result = await trpc.project.applyDiffRejections.mutate({
+      projectId,
+      filePath: entry.filePath,
+      rejections,
+    });
+    if (!result.ok || result.appliedCount === 0) {
+      setRejectedStates(key, hunkIds, 'pending');
+      return false;
+    }
+  } catch {
+    setRejectedStates(key, hunkIds, 'pending');
+    return false;
+  }
+
+  // 保持当前 diff 快照，避免已拒绝的 tool call 在 before reconstruction 中再次执行。
+  // 文件内容在全部 hunk 结算后统一重载，期间其余 hunk 的行号仍与当前编辑器一致。
+  setRejectedStates(key, hunkIds);
+  finishReviewIfSettled(entry.filePath);
+  return true;
+}
+
+type HunkPatch = {
+  startLine: number;
+  oldLines: string[];
+  newLines: string[];
+  beforeLine: string | null;
+  afterLine: string | null;
+};
+
+function getHunkPatch(diff: FileDiffResult, hunkId: number): HunkPatch | null {
+  const hunk = diff.hunks.find((candidate) => candidate.id === hunkId);
+  if (!hunk) return null;
+  const hunkLines = diff.lines.slice(hunk.startLineIndex, hunk.endLineIndex);
+  const oldLines = hunkLines.filter((line) => line.type === 'del').map((line) => line.content);
+  const newLineEntries = hunkLines.filter((line) => line.type === 'add' && line.newLine != null);
+  const newLines = newLineEntries.map((line) => line.content);
+  const before = [...diff.lines.slice(0, hunk.startLineIndex)]
+    .reverse()
+    .find((line) => line.newLine != null);
+  const after = diff.lines.slice(hunk.endLineIndex).find((line) => line.newLine != null);
+  const startLine = newLineEntries[0]?.newLine ?? after?.newLine ?? ((before?.newLine ?? 0) + 1);
+  return {
+    startLine,
+    oldLines,
+    newLines,
+    beforeLine: before?.content ?? null,
+    afterLine: after?.content ?? null,
+  };
+}
+
+function finishReviewIfSettled(filePath: string): boolean {
+  const store = useDiffReviewStore.getState();
+  const key = normalizeFilePath(filePath);
+  const diff = store.fileDiffs[key];
+  if (!diff) return false;
+  const states = store.hunkStates[key] ?? {};
+  const settled = diff.hunks.every((hunk) =>
+    hunk.overwritten || states[hunk.id] === 'accepted' || states[hunk.id] === 'rejected',
+  );
+  if (!settled) return false;
+  if (diff.hunks.some((hunk) => states[hunk.id] === 'rejected')) {
+    useDiffReviewStore.setState((state) => ({
+      contentVersions: {
+        ...state.contentVersions,
+        [key]: (state.contentVersions[key] ?? 0) + 1,
+      },
+    }));
+  }
+  markFileReviewed(filePath);
+  return true;
+}
+
+function setRejectedStates(key: string, hunkIds: number[], state: HunkState = 'rejected'): void {
+  useDiffReviewStore.setState((s) => {
+    const fileStates = { ...(s.hunkStates[key] ?? {}) };
+    for (const id of hunkIds) {
+      fileStates[id] = state;
+    }
+    return { hunkStates: { ...s.hunkStates, [key]: fileStates } };
+  });
+}
 
 // ─── Helpers ────────────────────────────────────────────────
 
-export function openReviewAwareFile(filePath: string, fileName: string): void {
+export function openReviewAwareFile(filePath: string, _fileName: string): void {
   // 工具卡片中的路径可能是相对路径（如 README.md、src-tauri/tauri.conf.json），
   // 先解析为项目根内的绝对路径，避免以相对路径打开文件导致后端校验失败。
   const currentProjectId = useProjectStore.getState().currentProjectId;
@@ -681,36 +802,31 @@ export function openReviewAwareFile(filePath: string, fileName: string): void {
   const rootPath = currentProject?.rootPath ?? null;
   const resolvedPath = rootPath ? resolveInsideProject(filePath, rootPath) ?? filePath : filePath;
 
-  const reviewStore = useDiffReviewStore.getState();
-  const pendingEntry = reviewStore.queue.find((entry) =>
-    !entry.reviewed && sameFilePath(entry.filePath, resolvedPath),
-  );
-  if (pendingEntry) {
-    reviewStore.openFile(pendingEntry.filePath);
-    return;
-  }
-  openFileDestination(useWorkbenchStore.getState().open, resolvedPath, fileName);
+  // 未审阅的文件由 openFile 打开编辑器并加载 diff；其余情况也统一走 openFile
+  // （openFile 内部对已审阅/不在队列的路径回退为普通文件打开）。
+  useDiffReviewStore.getState().openFile(resolvedPath);
 }
 
 /**
- * 标记文件为已审阅：在队列中标记 reviewed=true，关闭 diff-review tab，
- * 并刷新 store 状态。不自动打开文件编辑器——用户可以通过工具卡片路径
- * 或文件树手动打开已审阅的文件。
+ * 标记文件为已审阅：在队列中标记 reviewed=true，清除该文件的 diff 缓存与
+ * hunk 状态（内联审阅装饰随之消失，编辑器恢复可编辑），并刷新 store 状态。
  * 不自动打开下一个文件——用户可以通过浮动按钮或工具卡片路径手动打开。
  */
 function markFileReviewed(filePath: string): void {
   const store = useDiffReviewStore.getState();
-  const entry = store.queue.find((candidate) => sameFilePath(candidate.filePath, filePath));
+  const entry = store.queue.find((candidate) => isSameFilePath(candidate.filePath, filePath));
   if (!entry) return;
-  // 确定已审阅到哪个 tool call：优先用 currentReviewToolCallId，
-  // 回退到 entry 中最后一个 pending tool call 的 id。
-  // 如果 entry.toolCalls 为空（不应发生但防御性处理），也直接标记。
-  const reviewedToolCallId = store.currentReviewToolCallId
-    ?? entry.toolCalls[entry.toolCalls.length - 1]?.id;
+  // 确定已审阅到哪个 tool call：优先用 currentReviewToolCallId（仅当它属于该文件
+  // 的 tool calls，避免残留的其它文件前沿标记误伤），回退到 entry 中最后一个
+  // pending tool call 的 id。
+  const frontierId = store.currentReviewToolCallId != null
+    && entry.toolCalls.some((tc) => tc.id === store.currentReviewToolCallId)
+    ? store.currentReviewToolCallId
+    : entry.toolCalls[entry.toolCalls.length - 1]?.id;
   // 记录已审阅到哪个 tool call；后续新 edit 会重新进入 review queue。
   const newReviewed = new Set(store.reviewedFiles);
-  if (reviewedToolCallId) {
-    newReviewed.add(reviewMarker(entry.filePath, reviewedToolCallId));
+  if (frontierId) {
+    newReviewed.add(reviewMarker(entry.filePath, frontierId));
   } else {
     // 没有可用 tool call id 时，标记该文件所有 pending tool calls 为已审阅
     for (const tc of entry.toolCalls) {
@@ -721,21 +837,23 @@ function markFileReviewed(filePath: string): void {
   persistReviewedFiles(useProjectStore.getState().currentProjectId, newReviewed);
   // 在队列中标记为已审阅（不从队列中移除，保持 ToolCard 路径可点击）
   const newQueue = aggregateQueue(newReviewed);
-  const newHunkStates = { ...store.hunkStates };
-  delete newHunkStates[filePath];
-  // 关闭 diff-review tab
-  const tabId = `diff-review:${filePath}`;
-  useWorkbenchStore.getState().close(tabId);
-  // 更新 store 状态
+  // 清除该文件的审阅状态（装饰消失、编辑器恢复可编辑）
+  const key = normalizeFilePath(entry.filePath);
+  const pickRest = <T>(map: Record<string, T>): Record<string, T> => {
+    const out: Record<string, T> = {};
+    for (const [k, v] of Object.entries(map)) {
+      if (k !== key) out[k] = v;
+    }
+    return out;
+  };
   useDiffReviewStore.setState({
     reviewedFiles: newReviewed,
     queue: newQueue,
-    hunkStates: newHunkStates,
-    currentFilePath: null,
-    currentReviewToolCallId: null,
-    currentDiff: null,
-    loading: false,
-    loadError: null,
+    hunkStates: pickRest(store.hunkStates),
+    fileDiffs: pickRest(store.fileDiffs),
+    diffSignatures: pickRest(store.diffSignatures),
+    loadingFiles: pickRest(store.loadingFiles),
+    loadErrors: pickRest(store.loadErrors),
   });
 }
 
@@ -759,10 +877,12 @@ useProjectStore.subscribe((state) => {
     reviewedFiles: restoredReviewed,
     currentFilePath: null,
     currentReviewToolCallId: null,
-    currentDiff: null,
-    loading: false,
-    loadError: null,
+    fileDiffs: {},
+    diffSignatures: {},
+    loadingFiles: {},
+    loadErrors: {},
     hunkStates: {},
+    contentVersions: {},
   });
   useDiffReviewStore.getState().refreshQueue();
 });
