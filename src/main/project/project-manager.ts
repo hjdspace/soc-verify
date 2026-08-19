@@ -29,6 +29,10 @@ const HIDDEN_DIRS = new Set(['.socverify', '.git']);
 
 const WATCH_DEBOUNCE_MS = 500;
 
+export function shouldUseRecursiveFileWatcher(platform: NodeJS.Platform): boolean {
+  return platform === 'win32' || platform === 'darwin';
+}
+
 /** Per-directory watcher state: one fs.watch handle + debounce timer. */
 export interface DirWatcherEntry {
   watcher: NodeFSWatcher | null;
@@ -396,7 +400,7 @@ class ProjectManagerImpl extends EventEmitter {
     try {
       watcher = fsWatch(
         rootPath,
-        { recursive: true },
+        { recursive: shouldUseRecursiveFileWatcher(process.platform) },
         (_eventType, filename) => {
           if (!filename) return;
           const fullPath = join(rootPath, filename);
@@ -412,14 +416,14 @@ class ProjectManagerImpl extends EventEmitter {
   }
 
   private startFileWatcher(projectId: string, rootPath: string): NodeFSWatcher | null {
-    // Use native fs.watch with recursive: true — a single kernel handle
-    // watches the entire subtree (Windows/macOS use ReadDirectoryChangesW/FSEvents).
-    // This is ~1500x faster than chokidar's per-directory handles on deep trees.
+    // Windows/macOS provide native recursive watching. On Linux, Node emulates it
+    // by synchronously walking the entire tree and watching every entry, which
+    // blocks project opening on large or network-mounted repositories.
     let watcher: NodeFSWatcher | null = null;
     try {
       watcher = fsWatch(
         rootPath,
-        { recursive: true },
+        { recursive: shouldUseRecursiveFileWatcher(process.platform) },
         (_eventType, filename) => {
           if (!filename) return;
           const fullPath = join(rootPath, filename);
