@@ -11,7 +11,7 @@
  * - 持久化到 projects.json
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -253,6 +253,44 @@ describe('multi-directory: setCwd', () => {
       /not.*found|exist/i,
     );
   });
+
+  it('setCwd with dirId="root" switches cwd back to project rootPath', async () => {
+    const info = await projectManager.openProject(projectRoot, 'test-setcwd-root');
+
+    const d1 = await projectManager.addDir(info.id, dir1, 'verify');
+
+    // Set d1 as cwd — rootPath is no longer implicit cwd
+    await projectManager.setCwd(info.id, d1.id);
+    expect(projectManager.getExtraDirs(info.id).find((d) => d.id === d1.id)?.isCwd).toBe(true);
+
+    // Switch back to root — all extraDirs isCwd should be false
+    const cwdPath = await projectManager.setCwd(info.id, 'root');
+
+    expect(cwdPath).toBe(projectRoot);
+    const dirs = projectManager.getExtraDirs(info.id);
+    expect(dirs.every((d) => !d.isCwd)).toBe(true);
+  });
+
+  it('setCwd("root") emits cwd:changed event with rootPath and dirId="root"', async () => {
+    const info = await projectManager.openProject(projectRoot, 'test-setcwd-root-event');
+    const d1 = await projectManager.addDir(info.id, dir1, 'verify');
+    await projectManager.setCwd(info.id, d1.id);
+
+    const events: Array<{ projectId: string; cwd: string; dirId: string }> = [];
+    const handler = (e: { projectId: string; cwd: string; dirId: string }) => events.push(e);
+    projectManager.on('cwd:changed', handler);
+
+    try {
+      await projectManager.setCwd(info.id, 'root');
+
+      expect(events).toHaveLength(1);
+      expect(events[0].projectId).toBe(info.id);
+      expect(events[0].cwd).toBe(projectRoot);
+      expect(events[0].dirId).toBe('root');
+    } finally {
+      projectManager.off('cwd:changed', handler);
+    }
+  });
 });
 
 describe('multi-directory: updateDirLabel', () => {
@@ -469,3 +507,205 @@ describe('multi-directory: addDir validation', () => {
     }
   });
 });
+
+// ── 项目标记名（projectLabel）解析与修改 ───────────────────────
+
+describe('project label resolution: resolveProjectLabel', () => {
+  let projectRoot: string;
+
+  beforeEach(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'socverify-label-1-'));
+  });
+
+  afterEach(async () => {
+    await projectManager.closeAllProjects();
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it('returns null when no config and no PROJ_RTL', async () => {
+    const original = process.env.PROJ_RTL;
+    delete process.env.PROJ_RTL;
+    try {
+      const label = await projectManager.resolveProjectLabel(projectRoot);
+      expect(label).toBeNull();
+    } finally {
+      if (original) process.env.PROJ_RTL = original;
+    }
+  });
+
+  it('parses project label from $PROJ_RTL path (/proj/<name>/xxx)', async () => {
+    const original = process.env.PROJ_RTL;
+    process.env.PROJ_RTL = join('/proj', 'kunlun', 'rtl', 'de');
+    try {
+      const label = await projectManager.resolveProjectLabel(projectRoot);
+      expect(label).toBe('kunlun');
+    } finally {
+      if (original) process.env.PROJ_RTL = original;
+      else delete process.env.PROJ_RTL;
+    }
+  });
+
+  it('reads projectLabel from .socverify/config.json when it exists', async () => {
+    const configDir = join(projectRoot, '.socverify');
+    await mkdir(configDir, { recursive: true });
+    await writeFile(join(configDir, 'config.json'), JSON.stringify({ projectLabel: 'MyChipProject' }), 'utf-8');
+
+    const label = await projectManager.resolveProjectLabel(projectRoot);
+    expect(label).toBe('MyChipProject');
+  });
+
+  it('config.json projectLabel takes priority over $PROJ_RTL', async () => {
+    const configDir = join(projectRoot, '.socverify');
+    await mkdir(configDir, { recursive: true });
+    await writeFile(join(configDir, 'config.json'), JSON.stringify({ projectLabel: 'ConfigLabel' }), 'utf-8');
+
+    const original = process.env.PROJ_RTL;
+    process.env.PROJ_RTL = '/proj/EnvName/rtl';
+    try {
+      const label = await projectManager.resolveProjectLabel(projectRoot);
+      expect(label).toBe('ConfigLabel');
+    } finally {
+      if (original) process.env.PROJ_RTL = original;
+      else delete process.env.PROJ_RTL;
+    }
+  });
+
+  it('reads PROJ_RTL from .socverify/env.json when process.env is not set', async () => {
+    const original = process.env.PROJ_RTL;
+    delete process.env.PROJ_RTL;
+    const configDir = join(projectRoot, '.socverify');
+    await mkdir(configDir, { recursive: true });
+    await writeFile(
+      join(configDir, 'env.json'),
+      JSON.stringify({ envVars: { PROJ_RTL: '/proj/ChipB/de' } }),
+      'utf-8',
+    );
+    try {
+      const label = await projectManager.resolveProjectLabel(projectRoot);
+      expect(label).toBe('ChipB');
+    } finally {
+      if (original) process.env.PROJ_RTL = original;
+    }
+  });
+
+  it('returns null for non-/proj/ paths', async () => {
+    const original = process.env.PROJ_RTL;
+    process.env.PROJ_RTL = '/home/user/work/rtl';
+    try {
+      const label = await projectManager.resolveProjectLabel(projectRoot);
+      expect(label).toBeNull();
+    } finally {
+      if (original) process.env.PROJ_RTL = original;
+      else delete process.env.PROJ_RTL;
+    }
+  });
+});
+
+describe('project label: openProject sets projectLabel', () => {
+  let projectRoot: string;
+
+  beforeEach(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'socverify-label-open-'));
+  });
+
+  afterEach(async () => {
+    await projectManager.closeAllProjects();
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it('sets projectLabel from $PROJ_RTL on openProject', async () => {
+    const original = process.env.PROJ_RTL;
+    process.env.PROJ_RTL = '/proj/kunlun/rtl/de';
+    try {
+      const info = await projectManager.openProject(projectRoot);
+      expect(info.projectLabel).toBe('kunlun');
+      // name should still be the directory basename
+      expect(info.name).toBe(projectRoot.split(/[/\\]/).pop());
+    } finally {
+      if (original) process.env.PROJ_RTL = original;
+      else delete process.env.PROJ_RTL;
+    }
+  });
+
+  it('projectLabel is undefined when no PROJ_RTL and no config', async () => {
+    const original = process.env.PROJ_RTL;
+    delete process.env.PROJ_RTL;
+    try {
+      const info = await projectManager.openProject(projectRoot);
+      expect(info.projectLabel).toBeUndefined();
+    } finally {
+      if (original) process.env.PROJ_RTL = original;
+    }
+  });
+});
+
+describe('project label: renameProject', () => {
+  let projectRoot: string;
+
+  beforeEach(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'socverify-label-rename-'));
+  });
+
+  afterEach(async () => {
+    await projectManager.closeAllProjects();
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it('sets projectLabel in memory', async () => {
+    const info = await projectManager.openProject(projectRoot, 'original-name');
+    const renamed = await projectManager.renameProject(info.id, 'MyChip');
+
+    expect(renamed.projectLabel).toBe('MyChip');
+    expect(projectManager.getProject(info.id)?.projectLabel).toBe('MyChip');
+    // name should NOT change
+    expect(renamed.name).toBe('original-name');
+  });
+
+  it('persists projectLabel to projects.json', async () => {
+    const info = await projectManager.openProject(projectRoot, 'persist-label');
+    await projectManager.renameProject(info.id, 'PersistedLabel');
+
+    const projects = projectManager.listProjects();
+    const found = projects.find((p) => p.id === info.id);
+    expect(found?.projectLabel).toBe('PersistedLabel');
+  });
+
+  it('syncs projectLabel to .socverify/config.json', async () => {
+    const info = await projectManager.openProject(projectRoot, 'sync-label');
+    await projectManager.renameProject(info.id, 'SyncedLabel');
+
+    const configPath = join(projectRoot, '.socverify', 'config.json');
+    const config = JSON.parse(await readFile(configPath, 'utf-8')) as { projectLabel?: string };
+    expect(config.projectLabel).toBe('SyncedLabel');
+  });
+
+  it('rejects empty label', async () => {
+    const info = await projectManager.openProject(projectRoot, 'empty-label');
+    await expect(projectManager.renameProject(info.id, '   ')).rejects.toThrow(/empty/i);
+  });
+
+  it('rejects rename on non-existent projectId', async () => {
+    await expect(projectManager.renameProject('proj_nonexistent', 'test')).rejects.toThrow(
+      /not.*found/i,
+    );
+  });
+
+  it('trims whitespace from label', async () => {
+    const info = await projectManager.openProject(projectRoot, 'trim-label');
+    const renamed = await projectManager.renameProject(info.id, '  TrimmedLabel  ');
+
+    expect(renamed.projectLabel).toBe('TrimmedLabel');
+  });
+
+  it('survives close and reopen with projectLabel', async () => {
+    const info = await projectManager.openProject(projectRoot, 'reopen-label');
+    await projectManager.renameProject(info.id, 'ReopenedLabel');
+
+    await projectManager.closeProject(info.id);
+    const reopened = await projectManager.openProject(projectRoot);
+
+    // Should read projectLabel from .socverify/config.json
+    expect(reopened.projectLabel).toBe('ReopenedLabel');
+  });
+});
+
