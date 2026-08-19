@@ -146,7 +146,7 @@ export class AgentClient {
     //
     // On Linux AppImage, this is the primary failure mode when the
     // socverify-runner binary can't execute (missing system libs, wrong
-    // architecture, or the binary simply wasn't packaged for this platform).
+    // architecture, or the binary simply wasn't packaged for thi platform).
     child.on('error', (err: Error) => {
       const diagnostic = diagnoseSpawnFailure(spawnCmd, err);
       const enriched = new Error(
