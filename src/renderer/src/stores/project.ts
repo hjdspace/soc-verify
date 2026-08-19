@@ -33,6 +33,7 @@ interface ProjectState {
   openProjectDialog: () => Promise<void>;
   switchProject: (projectId: string) => Promise<void>;
   closeProject: (projectId: string) => Promise<void>;
+  renameProject: (projectId: string, name: string) => Promise<void>;
   refreshProjects: () => Promise<void>;
   loadFileTree: (projectId: string) => Promise<void>;
   refreshFileTree: () => Promise<void>;
@@ -226,6 +227,18 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }));
     } catch (err) {
       getToast().error('关闭项目失败', tRPCError(err));
+    }
+  },
+
+  renameProject: async (projectId, name) => {
+    try {
+      const updated = await trpc.project.renameProject.mutate({ projectId, name });
+      set((s) => ({
+        projects: s.projects.map((p) => (p.id === projectId ? updated : p)),
+      }));
+      getToast().success(`项目已重命名为: ${updated.name}`);
+    } catch (err) {
+      getToast().error('重命名项目失败', tRPCError(err));
     }
   },
 
