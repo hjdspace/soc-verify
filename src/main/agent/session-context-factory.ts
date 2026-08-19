@@ -21,6 +21,8 @@ import { simulationRegistry } from '../simulation/simulation-registry';
 import { credentialManager } from '../credentials/credential-manager';
 import { sessionManager } from './session-manager';
 import { injectKbContext } from '../kb/context-injector';
+import { buildMultiDirSystemPrompt } from './multi-dir-prompt';
+import { projectManager } from '../project/project-manager';
 import type { CaseStatsService } from '../case/case-stats-service';
 import type { ApprovalMode } from './types';
 
@@ -124,8 +126,18 @@ export async function createSessionContext(options: SessionContextOptions): Prom
   const apiKey = cred?.apiKey;
   const baseUrl = cred?.baseUrl;
 
-  // 6. Inject KB index context into system prompt (if a KB is mounted)
-  const systemPrompt = await injectKbContext(options.systemPrompt, cwd);
+  // 6. Inject multi-dir context + KB index context into system prompt.
+  //    Multi-dir: if the project has extraDirs, append a directory listing
+  //    (paths, groups, cwd mark) to the system prompt so the AI knows which
+  //    directories are available and that it should use absolute paths for
+  //    non-cwd directories.
+  //    KB: if a knowledge base is mounted, append KB index context.
+  const project = projectManager.getProject(projectId);
+  const multiDirPrompt = project
+    ? buildMultiDirSystemPrompt(project, options.systemPrompt ?? '')
+    : null;
+  const basePrompt = multiDirPrompt ?? options.systemPrompt;
+  const systemPrompt = await injectKbContext(basePrompt, cwd);
 
   // 7. Create the runtime session
   const sessionId = await sessionManager.createSession({
