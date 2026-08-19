@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
-import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon, Shield, ShieldAlert, ShieldCheck, ChevronDown } from 'lucide-react';
+import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon, Shield, ShieldAlert, ShieldCheck, ChevronDown, Info } from 'lucide-react';
 import { useSessionStore, type ChatMessage, type AvailableModel, type SelectedSkill, type ContextFile, type HistorySession, type SessionEntry } from '@renderer/stores/session';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
@@ -1235,6 +1235,22 @@ function MessageBubble({ message, session }: { message: ChatMessage; session?: S
 
   if (message.role === 'tool') {
     return <ToolCard message={message} />;
+  }
+
+  // System notices (MCP mounts, engine warnings): subtle centered chip that
+  // stays in the transcript — never mixed into the assistant's reply text.
+  if (message.role === 'system') {
+    return (
+      <div className="flex justify-center py-0.5">
+        <span
+          className="inline-flex max-w-[80%] items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground"
+          title={message.content}
+        >
+          <Info className="h-2.5 w-2.5 shrink-0" />
+          <span className="truncate">{message.content}</span>
+        </span>
+      </div>
+    );
   }
 
   const isUser = message.role === 'user';

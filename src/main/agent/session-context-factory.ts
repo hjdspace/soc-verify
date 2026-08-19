@@ -12,6 +12,7 @@
  * wiring, credential resolution, session creation).
  */
 
+import { join } from 'node:path';
 import { ensurePluginsLoaded } from '../services/project-service';
 import { pluginLoader } from '../plugins/loader';
 import { PluginBackedDiscovery, PluginBackedSimulation, PluginBackedCoverage } from '../plugin-adapters';
@@ -143,6 +144,12 @@ export async function createSessionContext(options: SessionContextOptions): Prom
   const sessionId = await sessionManager.createSession({
     projectId,
     cwd,
+    // Persist omp session JSONL files into the project's .socverify dir so
+    // conversations survive app restarts — session.restore resumes them by
+    // ompSessionId from this same directory (runner: SessionManager.list).
+    // Without this the runner falls back to SessionManager.inMemory() and
+    // restored sessions silently start with empty history (amnesia bug).
+    sessionDir: join(project?.rootPath ?? cwd, '.socverify', 'omp-sessions'),
     provider,
     model: options.model,
     apiKey,

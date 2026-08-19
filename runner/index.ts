@@ -29,9 +29,8 @@
  *   host → runner: { type: 'tool_result', id, result, isError? }
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { createInterface } from "node:readline";
+import { attachWriteSnapshot, attachWriteSnapshotToStartEvent, captureWriteSnapshot } from "./write-snapshot";
 
 // The `Bun` global is provided by the bun-types package (installed in
 // engine/oh-my-pi/node_modules) at compile time, and by the Bun runtime
@@ -184,33 +183,6 @@ let currentCwd = process.cwd();
 /** 原始工具的快照——包装前保存，以便切换模式时从原始工具重新包装 */
 let originalTools: unknown[] | null = null;
 
-type WriteSnapshot = {
-	fileExistedBefore: boolean;
-	beforeContent?: string;
-};
-
-function captureWriteSnapshot(args: unknown): WriteSnapshot | null {
-	if (typeof args !== "object" || args === null) return null;
-	const path = (args as Record<string, unknown>).path;
-	if (typeof path !== "string" || !path) return null;
-	const filePath = resolve(currentCwd, path);
-	if (!existsSync(filePath)) return { fileExistedBefore: false };
-	try {
-		return { fileExistedBefore: true, beforeContent: readFileSync(filePath, "utf-8") };
-	} catch {
-		return { fileExistedBefore: true };
-	}
-}
-
-function attachWriteSnapshot(result: unknown, snapshot: WriteSnapshot | null): unknown {
-	if (!snapshot || typeof result !== "object" || result === null || Array.isArray(result)) return result;
-	const record = result as Record<string, unknown>;
-	const details = typeof record.details === "object" && record.details !== null && !Array.isArray(record.details)
-		? record.details as Record<string, unknown>
-		: {};
-	return { ...record, details: { ...details, ...snapshot } };
-}
-
 /**
  * 用当前审批模式包装工具并设置到 agent 上。
  * - yolo 模式下恢复原始工具（无包装）
@@ -254,7 +226,7 @@ function applyApprovalMode(): void {
 								content: [{ type: "text" as const, text: `[已拒绝] 用户拒绝了此工具调用的执行。` }],
 							};
 						}
-						const snapshot = capturesWriteSnapshot ? captureWriteSnapshot(args) : null;
+						const snapshot = capturesWriteSnapshot ? captureWriteSnapshot(args, currentCwd) : null;
 						// eslint-disable-next-line @typescript-eslint/no-explicit-any
 						const result = await target.execute(toolCallId, args, signal as any, onUpdate as any, ctx as any);
 						return attachWriteSnapshot(result, snapshot);
@@ -558,13 +530,7 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 		const eventType = typeof event === "object" && event !== null && "type" in event
 			? String((event as { type: unknown }).type)
 			: "";
-		const eventRecord = typeof event === "object" && event !== null
-			? event as Record<string, unknown>
-			: null;
-		const snapshot = eventType === "tool_execution_start" && eventRecord?.toolName === "write"
-			? captureWriteSnapshot(eventRecord.args)
-			: null;
-		sendEvent(snapshot && eventRecord ? { ...eventRecord, ...snapshot } : event);
+		sendEvent(attachWriteSnapshotToStartEvent(event, currentCwd));
 		if (eventType === "agent_end" || eventType === "compaction_end" || eventType === "auto_compaction_end") {
 			sendContextUsage();
 		}

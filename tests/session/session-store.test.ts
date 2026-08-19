@@ -555,6 +555,31 @@ describe('SessionStore — event handling and state machine', () => {
     expect(toolMsg!.toolResult).toBeUndefined();
   });
 
+  it('preserves the write snapshot from tool_execution_start', async () => {
+    const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+
+    useSessionStore.getState().handleSessionEvent(id!, {
+      type: 'tool_execution_start',
+      toolCallId: 'write-new-file',
+      toolName: 'write',
+      args: { path: '/tmp/generated.md', content: 'generated' },
+      fileExistedBefore: false,
+    });
+
+    useSessionStore.getState().handleSessionEvent(id!, {
+      type: 'tool_execution_end',
+      toolCallId: 'write-new-file',
+      toolName: 'write',
+      result: { details: { resolvedPath: '/tmp/generated.md' } },
+    });
+
+    const toolMsg = useSessionStore.getState().sessions[0].messages.find((m) => m.role === 'tool');
+    expect(toolMsg).toEqual(expect.objectContaining({
+      toolFileExistedBefore: false,
+      toolBeforeContent: undefined,
+    }));
+  });
+
   it('handles tool_execution_end by updating the tool message with result', async () => {
     const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
 
