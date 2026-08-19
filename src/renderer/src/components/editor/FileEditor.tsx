@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import CodeMirror from '@uiw/react-codemirror';
 import { StreamLanguage } from '@codemirror/language';
+import { EditorView, type ViewUpdate, keymap } from '@codemirror/view';
+import type { Extension } from '@codemirror/state';
 import { javascript } from '@codemirror/lang-javascript';
 import { python } from '@codemirror/lang-python';
 import { cpp } from '@codemirror/lang-cpp';
@@ -21,7 +23,16 @@ import { trpc } from '@renderer/lib/trpc';
 import { useThemeStore } from '@renderer/stores/theme';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useToastStore } from '@renderer/stores/toast';
+import { useEditorStore } from '@renderer/stores/editor';
 import { cn } from '@renderer/lib/utils';
+import { createVimExtensions, resetVimMode } from './vim-extension';
+import { VimStatusBar } from './VimStatusBar';
+import { createSyntaxHighlightExtension } from './syntax-highlight';
+import { createIndentGuidesExtension } from './indent-guides';
+import { search, searchKeymap, openSearchPanel } from '@codemirror/search';
+import { Breadcrumb } from './Breadcrumb';
+import { EditorStatusBar, type CursorPosition } from './EditorStatusBar';
+import { Minimap } from './Minimap';
 
 // ── 语言扩展映射 ──────────────────────────────────────────────
 
@@ -169,11 +180,17 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [previewMode, setPreviewMode] = useState(false);
   const [imgZoom, setImgZoom] = useState(1);
+  const [cursorPos, setCursorPos] = useState<CursorPosition>({ line: 1, col: 1 });
 
   const currentTheme = useThemeStore((s) => s.currentTheme);
   const themes = useThemeStore((s) => s.themes);
   const themeMode = themes.find((t) => t.id === currentTheme)?.mode ?? 'dark';
   const openDestination = useWorkbenchStore((s) => s.open);
+  const vimEnabled = useEditorStore((s) => s.vimEnabled);
+  const minimapEnabled = useEditorStore((s) => s.minimapEnabled);
+
+  // EditorView ref，用于 Vim 扩展获取 CodeMirror 实例
+  const editorViewRef = useRef<import('@codemirror/view').EditorView | null>(null);
 
   const isMd = isMarkdownFile(fileName);
   const isHtml = isHtmlFile(fileName);
@@ -184,7 +201,66 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
     return ext ? [ext] : [];
   }, [fileName]);
 
-  // 加载文件内容（图片文件跳过文本读取，直接使用 local-resource URL 预览）
+  // Vim 扩展集，仅在 vimEnabled 时包含 vim() 扩展
+  const vimExtensions = useMemo(() => {
+    if (!vimEnabled) return [];
+    return createVimExtensions(
+      () => editorViewRef.current,
+      () => { void handleSave(); },
+    );
+  }, [vimEnabled]); // eslint-disable-line react-hooks/exhaustive-deps -- handleSave 依赖 content 等，不需要每次变化都重建 vim 扩展
+
+  // 语法高亮扩展，引用 CSS 变量，随主题联动
+  const syntaxHighlightExtension = useMemo(() => createSyntaxHighlightExtension(), []);
+
+  // 缩进指南线扩展，使用 --border CSS 变量，随主题变化
+  const indentGuidesExtension = useMemo(() => createIndentGuidesExtension(), []);
+
+  // 搜索替换面板扩展，绑定 searchKeymap（Ctrl+F 搜索）+ Ctrl+H 替换
+  const searchExtension = useMemo<Extension[]>(() => [
+    search({ top: true }),
+    EditorView.domEventHandlers({
+      keydown(event: KeyboardEvent) {
+        // Ctrl+H / Cmd+H 打开搜索面板（替换模式）
+        if ((event.ctrlKey || event.metaKey) && event.key === 'h') {
+          event.preventDefault();
+          const view = editorViewRef.current;
+          if (view) {
+            openSearchPanel(view);
+          }
+          return true;
+        }
+        return false;
+      },
+    }) as Extension,
+    keymap.of(searchKeymap),
+  ], []);
+
+  // 光标位置监听 extension，通过 updateListener 实时更新行列号
+  const cursorListenerExtension = useMemo(
+    () =>
+      EditorView.updateListener.of((update: ViewUpdate) => {
+        if (update.selectionSet || update.docChanged) {
+          const head = update.state.selection.main.head;
+          const line = update.state.doc.lineAt(head);
+          setCursorPos({ line: line.number, col: head - line.from + 1 });
+        }
+      }),
+    [],
+  );
+
+  // 换行符检测：从原始内容判断 LF/CRLF
+  const lineEnding = useMemo<'LF' | 'CRLF'>(() => {
+    if (originalContent.includes('\r\n')) return 'CRLF';
+    return 'LF';
+  }, [originalContent]);
+
+  // Vim 关闭时重置内部模式状态
+  useEffect(() => {
+    if (!vimEnabled) {
+      resetVimMode();
+    }
+  }, [vimEnabled]);
   useEffect(() => {
     if (isImage) {
       setLoading(false);
@@ -336,9 +412,12 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
     <div className="flex h-full flex-1 flex-col overflow-hidden">
       {/* 工具栏 */}
       <div className="flex items-center justify-between border-b bg-secondary/20 px-3 py-1">
-        <span className="truncate text-xs text-muted-foreground" title={filePath}>
-          {filePath}
-        </span>
+        <Breadcrumb filePath={filePath} onNavigate={(dirPath) => {
+          // 导航到父目录 — 在文件树中定位
+          const parts = dirPath.split(/[/\\]/).filter((p) => p.length > 0);
+          const dirName = parts[parts.length - 1] ?? dirPath;
+          openDestination({ type: 'file', path: dirPath, name: dirName });
+        }} />
         <div className="flex items-center gap-2">
           {isDirty && (
             <span className="text-[10px] text-status-aborted-foreground">● 已修改</span>
@@ -459,28 +538,46 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
             sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
           />
         ) : (
-          <CodeMirror
-            value={content}
-            onChange={setContent}
-            extensions={languageExtension}
-            theme={themeMode === 'dark' ? 'dark' : 'light'}
-            height="100%"
-            width="100%"
-            className="h-full w-full overflow-hidden"
-            basicSetup={{
-              lineNumbers: true,
-              highlightActiveLine: true,
-              highlightActiveLineGutter: true,
-              foldGutter: true,
-              bracketMatching: true,
-              closeBrackets: true,
-              autocompletion: true,
-              indentOnInput: true,
-              tabSize: 2,
-            }}
-          />
+          <div className="flex h-full w-full overflow-hidden">
+            <CodeMirror
+              value={content}
+              onChange={setContent}
+              extensions={[...languageExtension, syntaxHighlightExtension, cursorListenerExtension, indentGuidesExtension, ...searchExtension, ...vimExtensions]}
+              theme={themeMode === 'dark' ? 'dark' : 'light'}
+              height="100%"
+              width="100%"
+              className="h-full min-w-0 flex-1 overflow-hidden"
+              onCreateEditor={(view) => {
+                editorViewRef.current = view;
+              }}
+              basicSetup={{
+                lineNumbers: true,
+                highlightActiveLine: true,
+                highlightActiveLineGutter: true,
+                foldGutter: true,
+                bracketMatching: true,
+                closeBrackets: true,
+                autocompletion: true,
+                indentOnInput: true,
+                tabSize: 2,
+              }}
+            />
+            {minimapEnabled && (
+              <Minimap getView={() => editorViewRef.current} />
+            )}
+          </div>
         )}
       </div>
+      {/* Vim 状态栏（仅 Vim 模式开启时显示） */}
+      <VimStatusBar visible={vimEnabled && !isMd && !isHtml && !isImage} />
+      {/* 底部状态栏 — 行列号、语言、编码等 */}
+      <EditorStatusBar
+        fileName={fileName}
+        isDirty={isDirty}
+        cursorPos={cursorPos}
+        tabSize={2}
+        lineEnding={lineEnding}
+      />
     </div>
   );
 }
