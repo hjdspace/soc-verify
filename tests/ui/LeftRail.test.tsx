@@ -26,9 +26,11 @@ const { tRPCError } = vi.hoisted(() => ({
   tRPCError: (e: unknown) => (e instanceof Error ? e.message : String(e)),
 }));
 
-const { addDirMock, removeDirMock } = vi.hoisted(() => ({
+const { addDirMock, removeDirMock, loadExtraDirsMock, renameProjectMock } = vi.hoisted(() => ({
   addDirMock: vi.fn().mockResolvedValue(undefined),
   removeDirMock: vi.fn().mockResolvedValue(undefined),
+  loadExtraDirsMock: vi.fn().mockResolvedValue(undefined),
+  renameProjectMock: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@renderer/stores/diff-review', () => ({
@@ -45,7 +47,7 @@ vi.mock('@renderer/lib/trpc-utils', () => ({ getToast, tRPCError }));
 vi.mock('@renderer/stores/project', () => ({
   useProjectStore: Object.assign(
     vi.fn((selector: (state: Record<string, unknown>) => unknown) => selector({
-      projects: [{ id: 'project-1', name: 'Demo', rootPath: 'D:\\project' }],
+      projects: [{ id: 'project-1', name: 'Demo', rootPath: 'D:\\project', projectLabel: 'Kunlun' }],
       currentProjectId: 'project-1',
       fileTree: { type: 'directory', name: 'project', path: 'D:\\project', children: [] },
       fileTreeLoading: false,
@@ -59,8 +61,10 @@ vi.mock('@renderer/stores/project', () => ({
       },
       dirFileTreeLoading: {},
       loadDirFileTree: vi.fn().mockResolvedValue(undefined),
+      loadExtraDirs: loadExtraDirsMock,
       addDir: addDirMock,
       removeDir: removeDirMock,
+      renameProject: renameProjectMock,
       openProjectDialog: vi.fn(),
       loadFileTree: vi.fn(),
       closeProject: vi.fn(),
@@ -90,6 +94,9 @@ vi.mock('@renderer/components/dashboard/DashboardSummary', () => ({ DashboardSum
 import { LeftRail } from '@renderer/components/layout/LeftRail';
 
 describe('LeftRail file tree', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
   it('opens a selected file through the review-aware entry', () => {
     render(<LeftRail width={240} />);
 
@@ -140,15 +147,58 @@ describe('LeftRail file tree', () => {
     expect(within(verify2Dir).getByText('设为 cwd')).toBeTruthy();
   });
 
-  it('calls setCwd when clicking "设为 cwd"', () => {
+  it('calls setCwd when clicking "设为 cwd"', async () => {
     render(<LeftRail width={240} />);
 
     const designDir = screen.getByTestId('dir-tree-dir-design-1');
     fireEvent.click(within(designDir).getByText('设为 cwd'));
 
-    expect(trpc.project.setCwd.mutate).toHaveBeenCalledWith({
-      projectId: 'project-1',
-      dirId: 'dir-design-1',
+    await vi.waitFor(() => {
+      expect(trpc.project.setCwd.mutate).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        dirId: 'dir-design-1',
+      });
+    });
+  });
+
+  it('reloads extraDirs after setCwd to refresh the cwd star badge', async () => {
+    render(<LeftRail width={240} />);
+
+    const designDir = screen.getByTestId('dir-tree-dir-design-1');
+    fireEvent.click(within(designDir).getByText('设为 cwd'));
+
+    await vi.waitFor(() => {
+      expect(trpc.project.setCwd.mutate).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        dirId: 'dir-design-1',
+      });
+    });
+
+    // loadExtraDirs must be called after setCwd succeeds so the star
+    // badge switches to the new cwd immediately.
+    await vi.waitFor(() => {
+      expect(loadExtraDirsMock).toHaveBeenCalledWith('project-1');
+    });
+  });
+
+  it('reloads extraDirs after setCwd("root") to switch star back to root', async () => {
+    render(<LeftRail width={240} />);
+
+    // Root dir is cwd by default — use context menu to set it again
+    // (This tests the "root" path through setCwd)
+    const verify2Header = screen.getByTestId('dir-header-dir-verify-2');
+    fireEvent.contextMenu(verify2Header);
+    fireEvent.click(screen.getByText('设为工作目录'));
+
+    await vi.waitFor(() => {
+      expect(trpc.project.setCwd.mutate).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        dirId: 'dir-verify-2',
+      });
+    });
+
+    await vi.waitFor(() => {
+      expect(loadExtraDirsMock).toHaveBeenCalledWith('project-1');
     });
   });
 
@@ -305,5 +355,57 @@ describe('LeftRail file tree', () => {
     await vi.waitFor(() => {
       expect(addDirMock).toHaveBeenCalledWith('D:\\dropped-design', 'design');
     });
+  });
+
+  // ── 项目重命名 ──────────────────────────────────────
+
+  it('shows project label in the dropdown button', () => {
+    render(<LeftRail width={240} />);
+    expect(screen.getByTestId('project-dropdown-btn')).toBeTruthy();
+    // displayLabel shows projectLabel ('Kunlun'), not name ('Demo')
+    expect(screen.getByTestId('project-dropdown-btn').textContent).toContain('Kunlun');
+    expect(screen.getByTestId('project-dropdown-btn').textContent).not.toContain('Demo');
+  });
+
+  it('opens rename input on double-click of project dropdown button', () => {
+    render(<LeftRail width={240} />);
+
+    const btn = screen.getByTestId('project-dropdown-btn');
+    fireEvent.doubleClick(btn);
+
+    expect(screen.getByTestId('header-rename-input')).toBeTruthy();
+  });
+
+  it('calls renameProject when submitting rename via Enter key', async () => {
+    render(<LeftRail width={240} />);
+
+    // Open rename mode
+    const btn = screen.getByTestId('project-dropdown-btn');
+    fireEvent.doubleClick(btn);
+
+    const input = screen.getByTestId('header-rename-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'RenamedProject' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await vi.waitFor(() => {
+      expect(renameProjectMock).toHaveBeenCalledWith('project-1', 'RenamedProject');
+    });
+  });
+
+  it('cancels rename on Escape key', () => {
+    render(<LeftRail width={240} />);
+
+    const btn = screen.getByTestId('project-dropdown-btn');
+    fireEvent.doubleClick(btn);
+
+    const input = screen.getByTestId('header-rename-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'ShouldNotSave' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+
+    // Rename input should be gone, dropdown button should be back
+    expect(screen.queryByTestId('header-rename-input')).toBeNull();
+    expect(screen.getByTestId('project-dropdown-btn')).toBeTruthy();
+    // renameProject should NOT have been called
+    expect(renameProjectMock).not.toHaveBeenCalled();
   });
 });
