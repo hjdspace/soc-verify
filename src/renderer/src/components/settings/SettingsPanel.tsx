@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { X, Key, Package, Server, FileText, Plus, Trash2, Save, Palette, Check, Cpu, RefreshCw, Zap, Info, BookOpen, Folder, ChevronDown, ChevronRight, Pencil, Terminal, Globe, Power, Loader2, Wrench, Type, Clock, CircleGauge, Puzzle } from 'lucide-react';
+import { X, Key, Package, Server, FileText, Plus, Trash2, Save, Palette, Check, Cpu, RefreshCw, Zap, Info, BookOpen, Folder, ChevronDown, ChevronRight, Pencil, Terminal, Globe, Power, Loader2, Wrench, Type, Clock, CircleGauge, Puzzle, Keyboard } from 'lucide-react';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { useUiStore } from '@renderer/stores/ui';
 import { useThemeStore } from '@renderer/stores/theme';
 import { useFontStore } from '@renderer/stores/font';
+import { useEditorStore } from '@renderer/stores/editor';
 import { useSessionStore } from '@renderer/stores/session';
 import { useTimingViolationStore } from '@renderer/stores/timing-violation';
 import { cn } from '@renderer/lib/utils';
@@ -142,6 +143,11 @@ function AppearanceTab() {
   const setCodeFont = useFontStore((s) => s.setCodeFont);
   const setSizePreset = useFontStore((s) => s.setSizePreset);
 
+  const vimEnabled = useEditorStore((s) => s.vimEnabled);
+  const setVimEnabled = useEditorStore((s) => s.setVimEnabled);
+  const minimapEnabled = useEditorStore((s) => s.minimapEnabled);
+  const setMinimapEnabled = useEditorStore((s) => s.setMinimapEnabled);
+
   return (
     <div className="space-y-4">
       {/* 主题选择 */}
@@ -267,6 +273,71 @@ function AppearanceTab() {
   assign sum = a + b;
 endmodule`}
           </pre>
+        </div>
+      </div>
+
+      {/* Vim 模式 */}
+      <div className="space-y-3 border-t border-border/50 pt-3">
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase text-muted-foreground">
+          <Keyboard className="h-3 w-3" />
+          编辑器
+        </div>
+        <div className="flex items-center justify-between rounded-md border border-border/50 bg-secondary/20 px-3 py-2.5">
+          <div className="flex items-center gap-2.5">
+            <div className="min-w-0">
+              <div className="text-xs font-medium text-foreground">Vim 模式</div>
+              <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+                启用后编辑器使用 Vim 键位（Normal/Insert/Visual/Command），:w 保存文件
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setVimEnabled(!vimEnabled)}
+            className={cn(
+              'relative h-5 w-9 shrink-0 rounded-full transition-colors',
+              vimEnabled ? 'bg-primary' : 'bg-muted',
+            )}
+            role="switch"
+            aria-checked={vimEnabled}
+            aria-label="Vim 模式开关"
+            title={vimEnabled ? '关闭 Vim 模式' : '启用 Vim 模式'}
+          >
+            <span
+              className={cn(
+                'absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-background transition-transform',
+                vimEnabled ? 'translate-x-4' : 'translate-x-0',
+              )}
+            />
+          </button>
+        </div>
+        {/* Minimap 开关 */}
+        <div className="flex items-center justify-between rounded-md border border-border/50 bg-secondary/20 px-3 py-2.5">
+          <div className="flex items-center gap-2.5">
+            <div className="min-w-0">
+              <div className="text-xs font-medium text-foreground">Minimap 缩略图</div>
+              <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+                在编辑器右侧显示代码缩略图，点击或拖拽快速跳转
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setMinimapEnabled(!minimapEnabled)}
+            className={cn(
+              'relative h-5 w-9 shrink-0 rounded-full transition-colors',
+              minimapEnabled ? 'bg-primary' : 'bg-muted',
+            )}
+            role="switch"
+            aria-checked={minimapEnabled}
+            aria-label="Minimap 缩略图开关"
+            title={minimapEnabled ? '关闭 Minimap' : '启用 Minimap'}
+          >
+            <span
+              className={cn(
+                'absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-background transition-transform',
+                minimapEnabled ? 'translate-x-4' : 'translate-x-0',
+              )}
+            />
+          </button>
         </div>
       </div>
     </div>
@@ -1963,14 +2034,14 @@ function TimingViolationConfigTab() {
         <button
           onClick={() => setAutoBackup(!autoBackup)}
           className={cn(
-            'relative h-5 w-9 rounded-full transition-colors',
+            'relative h-5 w-9 shrink-0 rounded-full transition-colors',
             autoBackup ? 'bg-primary' : 'bg-muted',
           )}
         >
           <span
             className={cn(
-              'absolute top-0.5 h-4 w-4 rounded-full bg-background transition-transform',
-              autoBackup ? 'translate-x-4' : 'translate-x-0.5',
+              'absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-background transition-transform',
+              autoBackup ? 'translate-x-4' : 'translate-x-0',
             )}
           />
         </button>
