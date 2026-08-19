@@ -18,6 +18,7 @@ const {
   mockDeleteHistorySession,
   mockRename,
   mockCompact,
+  mockGenerateTitle,
   mockToastSuccess,
 } = vi.hoisted(() => ({
   mockSend: vi.fn().mockResolvedValue(undefined),
@@ -44,6 +45,7 @@ const {
       messagesTokens: 8000,
     },
   }),
+  mockGenerateTitle: vi.fn().mockResolvedValue({ title: null }),
   mockToastSuccess: vi.fn(),
 }));
 
@@ -65,6 +67,7 @@ vi.mock('@renderer/lib/trpc', () => ({
       deleteHistorySession: { mutate: mockDeleteHistorySession },
       rename: { mutate: mockRename },
       compact: { mutate: mockCompact },
+      generateTitle: { mutate: mockGenerateTitle },
     },
   },
 }));
@@ -524,6 +527,64 @@ describe('SessionStore — event handling and state machine', () => {
     // All streaming messages should have isStreaming=false
     const streaming = state.sessions[0].messages.filter((m) => m.isStreaming);
     expect(streaming).toHaveLength(0);
+  });
+
+  it('sets _pendingTitleGeneration on first message and clears it on agent_end', async () => {
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    await useSessionStore.getState().sendMessage('Hello AI');
+
+    // First message should flag the session for AI title generation
+    const stateAfterSend = useSessionStore.getState();
+    expect(stateAfterSend.sessions[0]._pendingTitleGeneration).toBe(true);
+
+    // agent_end should clear the flag
+    useSessionStore.getState().handleSessionEvent('session_test_1', { type: 'agent_end' });
+    expect(useSessionStore.getState().sessions[0]._pendingTitleGeneration).toBe(false);
+  });
+
+  it('calls generateTitle after agent_end when _pendingTitleGeneration is true', async () => {
+    mockGenerateTitle.mockResolvedValueOnce({ title: 'AI生成的标题' });
+
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    await useSessionStore.getState().sendMessage('帮我分析覆盖率');
+
+    // Simulate assistant response before agent_end
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: '覆盖率分析完成' }] },
+    });
+    useSessionStore.getState().handleSessionEvent('session_test_1', { type: 'agent_end' });
+
+    // Wait for the async title generation to complete
+    await vi.waitFor(() => {
+      expect(mockGenerateTitle).toHaveBeenCalled();
+    });
+
+    // The session should be renamed with the AI-generated title
+    await vi.waitFor(() => {
+      expect(mockRename).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'AI生成的标题' }),
+      );
+    });
+  });
+
+  it('does not overwrite a non-placeholder name with backend placeholder in ensureRuntimeSession', async () => {
+    // Simulate a session that was already renamed (non-placeholder name)
+    mockCreate.mockResolvedValueOnce({ sessionId: 'session_custom_1', name: '新会话' });
+
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    const sessionId = useSessionStore.getState().currentSessionId!;
+
+    // Manually rename the session to a non-placeholder name
+    await useSessionStore.getState().renameSession(sessionId, 'proj_1', '我的自定义名称');
+    expect(useSessionStore.getState().sessions[0].name).toBe('我的自定义名称');
+
+    // Send a message — this triggers ensureRuntimeSession which calls the backend
+    await useSessionStore.getState().sendMessage('Hello');
+
+    // The backend returned name='新会话' (placeholder), but the session's name
+    // should NOT be overwritten because it's already a non-placeholder name.
+    expect(useSessionStore.getState().sessions[0].name).toBe('我的自定义名称');
   });
 
   it('aborts the current session and resets state', async () => {

@@ -28,6 +28,7 @@ import {
   type PersistedSession,
 } from '../../agent/session-persistence';
 import { discoverSkills, readSkillContent } from '../../agent/skill-discovery';
+import { generateSessionTitle } from '../../agent/title-generator';
 import { errorAnalysisCoordinator } from '../../simulation/error-analysis-coordinator';
 import type { ErrorType } from '@shared/types';
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
@@ -774,5 +775,36 @@ export const sessionRouter = t.router({
         // Session not running — mode will be applied on next session create/restore.
       }
       return { ok: true };
+    }),
+
+  // ── AI 会话标题生成 ──────────────────────────────────
+  /**
+   * Generate a concise session title from the first user-assistant exchange.
+   *
+   * Uses the OpenAI-compatible chat completions API (separate from the omp
+   * agent process) to avoid the overhead of a full agent turn just for naming.
+   * Falls back gracefully — returns { title: null } when generation fails.
+   */
+  generateTitle: t.procedure
+    .input((raw): { userMessage: string; assistantMessage: string; providerId?: string; modelId?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.userMessage !== 'string' || typeof r.assistantMessage !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'userMessage and assistantMessage are required' });
+      }
+      return {
+        userMessage: r.userMessage,
+        assistantMessage: r.assistantMessage,
+        providerId: typeof r.providerId === 'string' ? r.providerId : undefined,
+        modelId: typeof r.modelId === 'string' ? r.modelId : undefined,
+      };
+    })
+    .mutation(async ({ input }) => {
+      const title = await generateSessionTitle(
+        input.userMessage,
+        input.assistantMessage,
+        input.providerId,
+        input.modelId,
+      );
+      return { title };
     }),
 });

@@ -35,6 +35,9 @@ export interface ChatMessage {
   toolCallId?: string;
   toolArgs?: unknown;
   toolResult?: unknown;
+  /** Snapshot captured before a file-writing tool starts. */
+  toolFileExistedBefore?: boolean;
+  toolBeforeContent?: string;
   toolStartTime?: number;
   toolEndTime?: number;
   images?: string[];
@@ -107,6 +110,8 @@ export interface SessionEntry {
   tvViolationId?: number;
   /** 工具审批模式 */
   approvalMode?: ApprovalMode;
+  /** Internal flag: this session's next agent_end should trigger AI title generation. */
+  _pendingTitleGeneration?: boolean;
 }
 
 export interface HistorySession {
@@ -443,6 +448,47 @@ function extractTextFromMessage(message: unknown): ExtractedContent {
 }
 
 /**
+ * Extract tool-call blocks from an agent message's content array.
+ *
+ * When the LLM decides to call a tool, the assistant message's `content`
+ * array includes `ToolCallContent` blocks (`{ type: "toolCall", id, name, arguments }`).
+ * These appear during `message_update` (streaming) and are finalized in
+ * `message_end` — BEFORE the omp engine actually executes the tool and emits
+ * `tool_execution_start`.
+ *
+ * By extracting these blocks here, we can show tool cards with a loading
+ * state immediately while the LLM is still generating arguments or waiting
+ * for the engine to start execution, rather than waiting for
+ * `tool_execution_start` which only fires after the entire assistant
+ * message is complete.
+ */
+interface PendingToolCall {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+}
+
+function extractToolCallsFromMessage(message: unknown): PendingToolCall[] {
+  if (typeof message !== 'object' || message === null) return [];
+  const msg = message as Record<string, unknown>;
+  const content = msg.content;
+  if (!Array.isArray(content)) return [];
+
+  const calls: PendingToolCall[] = [];
+  for (const block of content) {
+    if (typeof block !== 'object' || block === null) continue;
+    const b = block as Record<string, unknown>;
+    if (b.type !== 'toolCall') continue;
+    if (typeof b.id !== 'string' || typeof b.name !== 'string') continue;
+    const args = typeof b.arguments === 'object' && b.arguments !== null
+      ? b.arguments as Record<string, unknown>
+      : {};
+    calls.push({ id: b.id, name: b.name, args });
+  }
+  return calls;
+}
+
+/**
  * Check if a message object represents an error response.
  * Returns the error message if found, null otherwise.
  * Provides user-friendly messages for common API errors.
@@ -474,6 +520,7 @@ function extractErrorFromMessage(message: Record<string, unknown>): string | nul
 /**
  * Generate a meaningful session name from the user's first message.
  * Takes the first non-empty line, truncated to 40 characters.
+ * Used as an immediate placeholder before the AI-generated title arrives.
  */
 function generateSessionName(message: string): string {
   const firstLine = message.trim().split('\n')[0].trim();
@@ -481,6 +528,21 @@ function generateSessionName(message: string): string {
   if (firstLine.length <= 40) return firstLine;
   return firstLine.slice(0, 40) + '...';
 }
+
+/**
+ * Check if a session name is an auto-generated placeholder
+ * (e.g. "新会话" or "Session <random>").
+ * Used to decide whether to overwrite the name with a backend-returned value.
+ */
+function isPlaceholderName(name: string): boolean {
+  return name === '新会话' || /^Session [A-Za-z0-9_-]+$/.test(name);
+}
+
+/**
+ * Track which sessions have already been sent for AI title generation.
+ * Prevents duplicate title generation when multiple agent_end events fire.
+ */
+const titleGenerationPending = new Set<string>();
 
 async function loadStoredSessionMessages(projectId: string, persistedSessionId: string): Promise<ChatMessage[]> {
   try {
@@ -644,6 +706,60 @@ function registerVisibilityListener(): void {
   });
 }
 
+/**
+ * Trigger AI title generation for a session after agent_end.
+ *
+ * Reads the first user message and the first assistant response from the
+ * store, sends them to the backend generateTitle procedure, and renames
+ * the session if a title is returned. Guards against duplicate generation
+ * via the titleGenerationPending set.
+ *
+ * This function is fire-and-forget — failures are silently ignored, and the
+ * session keeps its immediate placeholder name (generated from the first
+ * message line).
+ */
+async function triggerAiTitleGeneration(
+  sessionId: string,
+  get: () => SessionStoreState,
+): Promise<void> {
+  // Find the session by matching against all possible IDs
+  const session = get().sessions.find((s) => sessionMatchesId(s, sessionId));
+  if (!session) return;
+
+  // Note: _pendingTitleGeneration was already checked by the caller before
+  // the set() cleared it. No need to re-check here.
+
+  // Prevent duplicate generation
+  if (titleGenerationPending.has(session.id)) return;
+  titleGenerationPending.add(session.id);
+
+  try {
+    // Extract the first user message and first assistant response
+    const firstUserMsg = session.messages.find((m) => m.role === 'user');
+    const firstAssistantMsg = session.messages.find((m) => m.role === 'assistant' && !m.isStreaming);
+    if (!firstUserMsg?.content || !firstAssistantMsg?.content) return;
+
+    const result = await trpc.session.generateTitle.mutate({
+      userMessage: firstUserMsg.content,
+      assistantMessage: firstAssistantMsg.content,
+      providerId: session.model?.providerId,
+      modelId: session.model?.id,
+    });
+
+    if (result.title) {
+      // Only rename if the session still exists and hasn't been manually renamed
+      const current = get().sessions.find((s) => s.id === session.id);
+      if (current && (isPlaceholderName(current.name) || current.name === generateSessionName(firstUserMsg.content))) {
+        await get().renameSession(session.id, current.projectId, result.title);
+      }
+    }
+  } catch (err) {
+    console.warn('[session:title-generation] failed:', err instanceof Error ? err.message : String(err));
+  } finally {
+    titleGenerationPending.delete(session.id);
+  }
+}
+
 async function ensureRuntimeSession(
   sessionId: string,
   set: SessionStoreSet,
@@ -695,7 +811,13 @@ async function ensureRuntimeSession(
               ...sess,
               runtimeSessionId,
               persistedSessionId,
-              name: sess.name === '新会话' ? ((result as { name?: string }).name ?? sess.name) : sess.name,
+              // Only overwrite the name if the backend returned a non-placeholder
+              // name AND the current name is also a placeholder. This prevents
+              // the backend's default "新会话" from clobbering a name that was
+              // already set (e.g. by a previous renameSession or restore).
+              name: isPlaceholderName(sess.name) && (result as { name?: string }).name && !isPlaceholderName((result as { name?: string }).name!)
+                ? (result as { name?: string }).name!
+                : sess.name,
               model: (result as { model?: SessionModel }).model ?? sess.model,
             }
           : sess,
@@ -901,6 +1023,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     // Check if this is the first message (for auto-naming)
     const sessionBeforeSend = get().sessions.find((s) => s.id === sessionId);
     const isFirstMessage = sessionBeforeSend && sessionBeforeSend.messages.length === 0;
+    const firstMessageText = message; // Capture for AI title generation later
 
     // Build the full message with skill and context prefixes
     const composer = sessionComposer(sessionBeforeSend);
@@ -983,10 +1106,24 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         }
       }
 
-      // Auto-rename session based on the first user message
+      // Auto-rename session based on the first user message — immediate placeholder.
+      // The AI-generated title will replace this once the agent responds.
+      // Only overwrite if the current name is still a placeholder ("新会话"),
+      // so we don't clobber a name the user manually set before sending.
       if (isFirstMessage && sessionBeforeSend) {
-        const autoName = generateSessionName(message);
-        void get().renameSession(sessionId, sessionBeforeSend.projectId, autoName);
+        if (isPlaceholderName(sessionBeforeSend.name)) {
+          const autoName = generateSessionName(firstMessageText);
+          void get().renameSession(sessionId, sessionBeforeSend.projectId, autoName);
+        }
+        // Mark this session for AI title generation on the first agent_end.
+        // The handleSessionEvent 'agent_end' handler will check this flag.
+        set((s) => ({
+          sessions: s.sessions.map((sess) =>
+            sess.id === sessionId
+              ? { ...sess, _pendingTitleGeneration: true }
+              : sess,
+          ),
+        }));
       }
     } catch (err) {
       const errMsg = tRPCError(err);
@@ -1150,6 +1287,12 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     const evt = event as Record<string, unknown>;
     const type = evt.type as string;
 
+    // Capture whether this session is awaiting AI title generation BEFORE
+    // the set() below clears the flag (only relevant for agent_end events).
+    const wasPendingTitle = type === 'agent_end'
+      ? get().sessions.find((sess) => sessionMatchesId(sess, sessionId))?._pendingTitleGeneration
+      : false;
+
     // Error-analysis sessions are created in the main process. Their first
     // agent events can arrive before the separate `started` notification, so
     // retain those events until the renderer creates the matching tab.
@@ -1252,25 +1395,83 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             if (msg?.role && msg.role !== 'assistant') return sess;
             const { text: endText, thinking: endThinking } = extractTextFromMessage(msg);
             const errMsg = msg ? extractErrorFromMessage(msg) : null;
+            // Extract tool calls from the final message content so we can show
+            // pending tool cards BEFORE the engine emits tool_execution_start.
+            const endToolCalls = extractToolCallsFromMessage(msg);
             // Do NOT set status to 'idle' here — the agent may still be working
             // (e.g. multiple messages, tool calls). Only 'agent_end' sets idle.
             return {
               ...sess,
               status: 'streaming',
-              messages: sess.messages.map((m) => {
-                if (m.role !== 'assistant' || !m.isStreaming) return m;
-                return {
-                  ...m,
-                  isStreaming: false,
-                  content: errMsg ? `[错误] ${errMsg}` : (endText || m.content),
-                  thinking: endThinking || m.thinking,
-                };
-              }),
+              messages: (() => {
+                // First, finalize the streaming assistant message
+                let updated = sess.messages.map((m) => {
+                  if (m.role !== 'assistant' || !m.isStreaming) return m;
+                  return {
+                    ...m,
+                    isStreaming: false,
+                    content: errMsg ? `[错误] ${errMsg}` : (endText || m.content),
+                    thinking: endThinking || m.thinking,
+                  };
+                });
+                // Then, ensure each tool call has a pending tool card
+                for (const tc of endToolCalls) {
+                  const existingIdx = updated.findIndex(
+                    (m) => m.role === 'tool' && m.toolCallId === tc.id,
+                  );
+                  if (existingIdx >= 0) {
+                    // Update the existing pending tool card's name/args
+                    updated = updated.map((m, i) =>
+                      i === existingIdx
+                        ? { ...m, toolName: tc.name, toolArgs: tc.args }
+                        : m,
+                    );
+                  } else {
+                    // Create a new pending tool card
+                    const toolMsg: ChatMessage = {
+                      id: `tool_${tc.id}`,
+                      role: 'tool',
+                      content: '',
+                      timestamp: Date.now(),
+                      toolName: tc.name,
+                      toolCallId: tc.id,
+                      toolArgs: tc.args,
+                      toolStartTime: Date.now(),
+                    };
+                    updated = [...updated, toolMsg];
+                  }
+                }
+                return updated;
+              })(),
             };
           }
 
-          case 'tool_execution_start': {
+                    case 'tool_execution_start': {
             const toolCallId = (evt.toolCallId as string) ?? `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            // Check if a pending tool card was already created from message_end
+            // tool-call blocks. If so, update it with the authoritative args and
+            // snapshot data; otherwise create a new tool message.
+            const hasPendingTool = sess.messages.some(
+              (m) => m.role === 'tool' && m.toolCallId === toolCallId,
+            );
+            if (hasPendingTool) {
+              return {
+                ...sess,
+                status: 'tool_executing',
+                messages: sess.messages.map((m) =>
+                  m.role === 'tool' && m.toolCallId === toolCallId && !m.toolResult
+                    ? {
+                        ...m,
+                        toolName: evt.toolName as string,
+                        toolArgs: evt.args,
+                        toolFileExistedBefore: evt.fileExistedBefore as boolean | undefined,
+                        toolBeforeContent: evt.beforeContent as string | undefined,
+                        toolStartTime: m.toolStartTime ?? Date.now(),
+                      }
+                    : m,
+                ),
+              };
+            }
             const toolMsg: ChatMessage = {
               id: `tool_${toolCallId}`,
               role: 'tool',
@@ -1279,6 +1480,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
               toolName: evt.toolName as string,
               toolCallId,
               toolArgs: evt.args,
+              toolFileExistedBefore: evt.fileExistedBefore as boolean | undefined,
+              toolBeforeContent: evt.beforeContent as string | undefined,
               toolStartTime: Date.now(),
             };
             return {
@@ -1346,6 +1549,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
               messages: sess.messages.map((m) =>
                 m.isStreaming ? { ...m, isStreaming: false } : m,
               ),
+              _pendingTitleGeneration: false,
             };
 
           case 'notice': {
@@ -1413,6 +1617,15 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
     }
     if (type === 'message_end' || type === 'tool_execution_end' || type === 'agent_end') {
       flushPersist(get);
+    }
+
+    // ── AI 标题生成 ────────────────────────────────────────
+    // 当 agent_end 事件到达且该会话之前标记为待生成标题时，异步调用后端
+    // generateTitle procedure，用 OpenAI-compatible API 生成一个简洁的
+    // 会话标题。生成成功后通过 renameSession 持久化到 sessions.json。
+    // 失败时静默降级——保留之前的即时截断名称。
+    if (wasPendingTitle) {
+      void triggerAiTitleGeneration(sessionId, get);
     }
   },
 
