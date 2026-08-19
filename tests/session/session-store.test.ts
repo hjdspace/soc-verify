@@ -271,6 +271,95 @@ describe('SessionStore — event handling and state machine', () => {
     expect(assistantMsg.content).toBe('Hello world!');
   });
 
+  it('creates a pending file tool card from a streaming tool-call snapshot', async () => {
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    await useSessionStore.getState().sendMessage('Create src/demo.ts');
+
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_update',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'toolCall',
+            id: 'tc_write_streaming',
+            name: 'write',
+            arguments: { path: 'src/demo.ts' },
+          },
+        ],
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 60));
+
+    const toolMsg = useSessionStore.getState().sessions[0].messages.find(
+      (message) => message.role === 'tool' && message.toolCallId === 'tc_write_streaming',
+    );
+    expect(toolMsg).toMatchObject({
+      toolName: 'write',
+      toolArgs: { path: 'src/demo.ts' },
+    });
+    expect(toolMsg?.toolResult).toBeUndefined();
+    expect(toolMsg?.toolStartTime).toBeDefined();
+
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_update',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'toolCall',
+            id: 'tc_write_streaming',
+            name: 'write',
+            arguments: { path: 'src/demo.ts', content: 'const value = 1;' },
+          },
+        ],
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 60));
+
+    const toolMessages = useSessionStore.getState().sessions[0].messages.filter(
+      (message) => message.role === 'tool' && message.toolCallId === 'tc_write_streaming',
+    );
+    expect(toolMessages).toHaveLength(1);
+    expect(toolMessages[0].toolArgs).toEqual({
+      path: 'src/demo.ts',
+      content: 'const value = 1;',
+    });
+  });
+
+  it('creates a pending edit card from a streaming tool-call snapshot', async () => {
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    await useSessionStore.getState().sendMessage('Edit src/demo.ts');
+
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_update',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'toolCall',
+            id: 'tc_edit_streaming',
+            name: 'edit',
+            arguments: { path: 'src/demo.ts' },
+          },
+        ],
+      },
+    });
+
+    await new Promise((r) => setTimeout(r, 60));
+
+    const toolMsg = useSessionStore.getState().sessions[0].messages.find(
+      (message) => message.role === 'tool' && message.toolCallId === 'tc_edit_streaming',
+    );
+    expect(toolMsg).toMatchObject({
+      toolName: 'edit',
+      toolArgs: { path: 'src/demo.ts' },
+    });
+    expect(toolMsg?.toolResult).toBeUndefined();
+  });
+
   it('handles message_end event by extracting final content and stopping streaming', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
     await useSessionStore.getState().sendMessage('Hello');

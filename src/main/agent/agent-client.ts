@@ -485,6 +485,13 @@ export class AgentClient {
       return;
     }
 
+    // Subagent frames (lifecycle/progress) are forwarded to event listeners
+    // as-is; session-manager relays them to the renderer via 'sessionEvent'.
+    if (isSubagentFrame(data)) {
+      for (const listener of this.eventListeners) listener(data);
+      return;
+    }
+
     // Catch-all: forward unknown frames as events
     const dataType = (data as Record<string, unknown>)?.type;
     console.log(`[agent:rpc] unhandled frame type="${dataType}" — forwarding as event`);

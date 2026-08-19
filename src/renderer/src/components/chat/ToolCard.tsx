@@ -23,11 +23,12 @@ import { Loader2, ChevronDown, Terminal } from 'lucide-react';
 import { openReviewAwareFile } from '@renderer/stores/diff-review';
 import { useProjectStore } from '@renderer/stores/project';
 import { useTerminalStore } from '@renderer/stores/terminal';
+import { useSessionStore, type ChatMessage, type SubagentActivity } from '@renderer/stores/session';
+import { SubagentCard } from './SubagentCard';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from '@renderer/stores/toast';
 import hljs from 'highlight.js';
 import { cn } from '@renderer/lib/utils';
-import type { ChatMessage } from '@renderer/stores/session';
 import {
   getToolMeta,
   isMCPTool,
@@ -120,11 +121,26 @@ function ClickablePathHeader({ filePath }: { filePath: string }) {
 
 const FILE_TOOLS = new Set(['read', 'read_file', 'write', 'write_file', 'edit', 'edit_file', 'apply_patch', 'ast_edit']);
 
+/** 模块级空数组常量：非 task 工具的 selector 返回稳定引用，避免无关重渲染 */
+const NO_SUBAGENTS: SubagentActivity[] = [];
+
 export function ToolCard({ message }: { message: ChatMessage }) {
   const [expanded, setExpanded] = useState(false);
   const isExecuting = !message.toolResult;
   const meta = getToolMeta(message.toolName);
   const resultText = extractResultText(message.toolResult);
+
+  // task 工具：读取该 tool call 关联的 subagent 实时状态（subagent_* 帧驱动）
+  const taskAgents = useSessionStore((s) => {
+    if (message.toolName !== 'task' || !message.toolCallId) return NO_SUBAGENTS;
+    const list: SubagentActivity[] = [];
+    for (const sess of s.sessions) {
+      for (const a of Object.values(sess.subagents ?? {})) {
+        if (a.parentToolCallId === message.toolCallId) list.push(a);
+      }
+    }
+    return list.length > 0 ? list : NO_SUBAGENTS;
+  });
 
   // even after the file has been reviewed and removed from the queue.
   const toolName = message.toolName ?? '';
@@ -151,11 +167,12 @@ export function ToolCard({ message }: { message: ChatMessage }) {
       ? Date.now() - message.toolStartTime
       : null;
 
-  const summary = buildSummary(message);
+  const summary = buildSummary(message, taskAgents);
   const isError = typeof message.toolResult === 'object' && message.toolResult !== null
     && 'isError' in message.toolResult
     && (message.toolResult as { isError: boolean }).isError;
   const hasWarning = !isError && !isExecuting && hasResultWarning(resultText);
+  const diffStats = !isError && !isExecuting ? getFileDiffStats(message) : null;
 
   const statusDotClass = isExecuting
     ? ''
@@ -197,6 +214,12 @@ export function ToolCard({ message }: { message: ChatMessage }) {
             {summary}
           </span>
         )}
+        {diffStats && (
+          <span className="flex shrink-0 items-center gap-1 text-[10px] tabular-nums">
+            <span className="text-status-pass-foreground">+{diffStats.added}</span>
+            <span className="text-destructive">-{diffStats.deleted}</span>
+          </span>
+        )}
         {duration != null && (
           <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70">
             {duration > 1000 ? `${(duration / 1000).toFixed(1)}s` : `${duration}ms`}
@@ -218,7 +241,7 @@ export function ToolCard({ message }: { message: ChatMessage }) {
 
       {expanded && (
         <div className="border-t border-border/40">
-          <ToolBody message={message} isExecuting={isExecuting} />
+          <ToolBody message={message} isExecuting={isExecuting} taskAgents={taskAgents} />
         </div>
       )}
     </div>
@@ -227,7 +250,7 @@ export function ToolCard({ message }: { message: ChatMessage }) {
 
 // ── Summary ─────────────────────────────────────────────
 
-function buildSummary(message: ChatMessage): ReactNode {
+function buildSummary(message: ChatMessage, taskAgents: SubagentActivity[]): ReactNode {
   const name = message.toolName ?? '';
   const args = message.toolArgs;
   const resultText = extractResultText(message.toolResult);
@@ -255,7 +278,7 @@ function buildSummary(message: ChatMessage): ReactNode {
     case 'write_file': {
       const path = argStr(args, 'path', 'file_path') ?? '';
       const lines = (argStr(args, 'content') ?? '').split('\n').length;
-      return <><span className="text-foreground">{shortenPath(path)}</span> {' \u00b7 '} new file, {lines} lines</>;
+      return <><span className="text-foreground">{shortenPath(path)}</span> {' \u00b7 '} {isExecuting ? 'writing...' : `wrote ${lines} lines`}</>;
     }
     case 'edit':
     case 'edit_file':
@@ -291,6 +314,16 @@ function buildSummary(message: ChatMessage): ReactNode {
       return <><span className="text-foreground">{pattern}</span> {' \u00b7 '} {isExecuting ? 'finding...' : `${fileCount} files`}</>;
     }
     case 'task': {
+      // 优先使用 subagent 实时状态（subagent_* 帧驱动），无数据时回退到结果文本解析
+      if (taskAgents.length > 0) {
+        const running = taskAgents.filter((a) => a.status === 'running').length;
+        if (running > 0) {
+          return <>{taskAgents.length} 个子代理 {' \u00b7 '}{running} 运行中</>;
+        }
+        const done = taskAgents.filter((a) => a.status === 'completed').length;
+        const failed = taskAgents.filter((a) => a.status === 'failed').length;
+        return <>{taskAgents.length} 个子代理 {' \u00b7 '}{done} 成功{failed > 0 ? ` / ${failed} 失败` : ''}</>;
+      }
       const tasks = parseTaskItems(resultText);
       if (isExecuting) return <>dispatching sub-agents...</>;
       const done = tasks.filter((t) => t.status === 'done').length;
@@ -374,11 +407,125 @@ function buildSummary(message: ChatMessage): ReactNode {
   }
 }
 
+type FileDiffStats = { added: number; deleted: number };
+
+function contentLineCount(content: string): number {
+  if (!content) return 0;
+  return content.replace(/\r?\n$/, '').split(/\r?\n/).length;
+}
+
+function computeDiffStats(oldText: string, newText: string): FileDiffStats {
+  if (!oldText) return { added: contentLineCount(newText), deleted: 0 };
+  if (!newText) return { added: 0, deleted: contentLineCount(oldText) };
+  const diff = computeSimpleDiff(oldText, newText);
+  return {
+    added: diff.filter((line) => line.type === 'add').length,
+    deleted: diff.filter((line) => line.type === 'del').length,
+  };
+}
+
+function resultDetails(result: unknown): Record<string, unknown> | null {
+  if (typeof result !== 'object' || result === null) return null;
+  const details = (result as Record<string, unknown>).details;
+  return typeof details === 'object' && details !== null
+    ? details as Record<string, unknown>
+    : null;
+}
+
+function statsFromResultDiff(diff: string): FileDiffStats | null {
+  let added = 0;
+  let deleted = 0;
+  for (const line of diff.split('\n')) {
+    if (/^\+\s*\d+\|/.test(line)) added++;
+    else if (/^-\s*\d+\|/.test(line)) deleted++;
+  }
+  return added > 0 || deleted > 0 ? { added, deleted } : null;
+}
+
+function statsFromPatch(patch: string): FileDiffStats | null {
+  let added = 0;
+  let deleted = 0;
+  for (const line of patch.split('\n')) {
+    if (line.startsWith('+') && !line.startsWith('+++')) added++;
+    else if (line.startsWith('-') && !line.startsWith('---')) deleted++;
+  }
+  return added > 0 || deleted > 0 ? { added, deleted } : null;
+}
+
+function statsFromEditArgs(args: unknown): FileDiffStats | null {
+  const oldText = argStr(args, 'oldText', 'old_string', 'old_text', 'find');
+  const newText = argStr(args, 'newText', 'new_string', 'new_text', 'replace');
+  if (oldText != null && newText != null) return computeDiffStats(oldText, newText);
+
+  const edits = argVal(args, 'edits');
+  if (Array.isArray(edits)) {
+    let added = 0;
+    let deleted = 0;
+    let found = false;
+    for (const edit of edits) {
+      if (typeof edit !== 'object' || edit === null) continue;
+      const record = edit as Record<string, unknown>;
+      const oldValue = record.old_text ?? record.oldText ?? record.old_string;
+      const newValue = record.new_text ?? record.newText ?? record.new_string;
+      if (typeof oldValue !== 'string' || typeof newValue !== 'string') continue;
+      const stats = computeDiffStats(oldValue, newValue);
+      added += stats.added;
+      deleted += stats.deleted;
+      found = true;
+    }
+    if (found) return { added, deleted };
+  }
+
+  const patch = argStr(args, 'input', 'patch', 'diff');
+  return patch ? statsFromPatch(patch) : null;
+}
+
+function getFileDiffStats(message: ChatMessage): FileDiffStats | null {
+  const toolName = message.toolName ?? '';
+  const details = resultDetails(message.toolResult);
+
+  if (toolName === 'write' || toolName === 'write_file') {
+    const content = argStr(message.toolArgs, 'content');
+    if (content == null) return null;
+    const beforeContent = message.toolBeforeContent
+      ?? (typeof details?.beforeContent === 'string' ? details.beforeContent : undefined);
+    return beforeContent == null
+      ? { added: contentLineCount(content), deleted: 0 }
+      : computeDiffStats(beforeContent, content);
+  }
+
+  if (toolName === 'edit' || toolName === 'edit_file' || toolName === 'apply_patch' || toolName === 'ast_edit') {
+    if (typeof details?.diff === 'string') {
+      const stats = statsFromResultDiff(details.diff);
+      if (stats) return stats;
+    }
+    if (typeof details?.oldText === 'string' && typeof details.newText === 'string') {
+      return computeDiffStats(details.oldText, details.newText);
+    }
+    return statsFromEditArgs(message.toolArgs);
+  }
+
+  return null;
+}
+
 // ── Tool body dispatcher ────────────────────────────────
 
-function ToolBody({ message, isExecuting }: { message: ChatMessage; isExecuting: boolean }) {
+function ToolBody({
+  message,
+  isExecuting,
+  taskAgents,
+}: {
+  message: ChatMessage;
+  isExecuting: boolean;
+  taskAgents: SubagentActivity[];
+}) {
   const name = message.toolName ?? '';
   const resultText = extractResultText(message.toolResult);
+
+  // task 工具：有 subagent 实时数据时用磁贴卡片（执行中也展示实时进度）
+  if (name === 'task' && taskAgents.length > 0) {
+    return <SubagentCard agents={taskAgents} />;
+  }
 
   if (isExecuting) {
     return (

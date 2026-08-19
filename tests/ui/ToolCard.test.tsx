@@ -1,10 +1,24 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import type { ChatMessage } from '@renderer/stores/session';
+import type { ChatMessage, SubagentActivity } from '@renderer/stores/session';
 
 vi.mock('@renderer/stores/diff-review', () => ({
   openReviewAwareFile: vi.fn(),
+}));
+
+// Session store mock — ToolCard 读取 subagent 实时状态（task 工具）
+const { mockSessionState } = vi.hoisted(() => ({
+  mockSessionState: {
+    sessions: [] as Array<{ subagents?: Record<string, unknown> }>,
+  },
+}));
+
+vi.mock('@renderer/stores/session', () => ({
+  useSessionStore: Object.assign(
+    vi.fn((selector: (state: typeof mockSessionState) => unknown) => selector(mockSessionState)),
+    { getState: () => mockSessionState },
+  ),
 }));
 
 vi.mock('@renderer/stores/workbench', () => ({
@@ -61,7 +75,31 @@ function completedMessage(toolName: string, toolArgs: unknown, result: unknown):
   };
 }
 
+function pendingMessage(toolName: string, toolArgs: unknown): ChatMessage {
+  return {
+    id: `tool-${toolName}`,
+    role: 'tool',
+    content: '',
+    timestamp: Date.now(),
+    toolName,
+    toolArgs,
+    toolStartTime: Date.now(),
+  };
+}
+
 describe('ToolCard file tools', () => {
+  it('shows a spinner and writing state before write arguments finish streaming', () => {
+    render(<ToolCard message={pendingMessage(
+      'write',
+      { path: 'src/demo.ts' },
+    )} />);
+
+    const card = screen.getByTestId('tool-card');
+    expect(card.querySelector('.animate-spin')).not.toBeNull();
+    expect(card.textContent).toContain('writing...');
+    expect(screen.queryByText(/^\+\d+$/)).not.toBeInTheDocument();
+  });
+
   it('renders read_file path in the summary and file content when expanded', () => {
     render(<ToolCard message={completedMessage(
       'read_file',
@@ -86,6 +124,80 @@ describe('ToolCard file tools', () => {
     fireEvent.click(screen.getByTitle('展开'));
     expect(screen.getByTestId('tool-card').textContent).toContain('const value = 1;');
     expect(screen.getByText('+')).toBeInTheDocument();
+  });
+
+  it('shows write diff statistics after completion', () => {
+    render(<ToolCard message={completedMessage(
+      'write',
+      { path: 'src/demo.ts', content: 'const first = 1;\nconst second = 2;' },
+      {
+        content: [{ type: 'text', text: 'File written' }],
+        details: { fileExistedBefore: false },
+      },
+    )} />);
+
+    expect(screen.getByText('+2')).toHaveClass('text-status-pass-foreground');
+    expect(screen.getByText('-0')).toHaveClass('text-destructive');
+  });
+
+  it('shows edit diff statistics after completion', () => {
+    render(<ToolCard message={completedMessage(
+      'edit',
+      {
+        path: 'src/demo.ts',
+        oldText: 'const first = 1;\nconst second = 2;',
+        newText: 'const first = 1;\nconst second = 3;\nconst third = 4;',
+      },
+      'Edit applied',
+    )} />);
+
+    expect(screen.getByText('+2')).toHaveClass('text-status-pass-foreground');
+    expect(screen.getByText('-1')).toHaveClass('text-destructive');
+  });
+
+  it('shows overwrite statistics from the write result snapshot', () => {
+    render(<ToolCard message={completedMessage(
+      'write',
+      { path: 'src/demo.ts', content: 'const first = 2;\nconst second = 2;\nconst third = 3;' },
+      {
+        content: [{ type: 'text', text: 'File written' }],
+        details: { beforeContent: 'const first = 1;\nconst second = 2;' },
+      },
+    )} />);
+
+    expect(screen.getByText('+2')).toHaveClass('text-status-pass-foreground');
+    expect(screen.getByText('-1')).toHaveClass('text-destructive');
+  });
+
+  it('shows omp edit statistics from result details', () => {
+    render(<ToolCard message={completedMessage(
+      'edit',
+      { path: 'src/demo.ts', input: '[src/demo.ts#TAG]\nSET 2: updated' },
+      {
+        content: [{ type: 'text', text: 'Edit applied' }],
+        details: { diff: ' 1|unchanged\n-2|old\n+2|new\n+3|added' },
+      },
+    )} />);
+
+    expect(screen.getByText('+2')).toHaveClass('text-status-pass-foreground');
+    expect(screen.getByText('-1')).toHaveClass('text-destructive');
+  });
+
+  it('aggregates statistics across all edits in one tool call', () => {
+    render(<ToolCard message={completedMessage(
+      'edit',
+      {
+        path: 'src/demo.ts',
+        edits: [
+          { old_text: 'const first = 1;', new_text: 'const first = 2;' },
+          { old_text: 'const second = 2;', new_text: 'const second = 2;\nconst third = 3;' },
+        ],
+      },
+      'Edit applied',
+    )} />);
+
+    expect(screen.getByText('+2')).toHaveClass('text-status-pass-foreground');
+    expect(screen.getByText('-1')).toHaveClass('text-destructive');
   });
 
   it('renders apply_patch input as a file path and diff', () => {
@@ -214,5 +326,90 @@ describe('ToolCard file tools', () => {
     fireEvent.click(screen.getByTitle('展开'));
     fireEvent.click(screen.getByText('D:\\project\\src\\demo.ts'));
     expect(openReviewAwareFile).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('ToolCard task tool — subagent tiles', () => {
+  function agent(partial: Partial<SubagentActivity> & { id: string }): SubagentActivity {
+    return {
+      index: 0,
+      agent: 'test-agent',
+      status: 'running',
+      recentOutput: [],
+      toolCount: 0,
+      tokens: 0,
+      requests: 0,
+      tokenHistory: [],
+      startedAt: Date.now(),
+      ...partial,
+    };
+  }
+
+  function setStoreSubagents(subagents: Record<string, SubagentActivity>): void {
+    mockSessionState.sessions = [{ subagents }];
+  }
+
+  function taskMessage(): ChatMessage {
+    return {
+      id: 'tool-task-1',
+      role: 'tool',
+      content: '',
+      timestamp: Date.now(),
+      toolName: 'task',
+      toolCallId: 'tc_task_1',
+      toolArgs: { tasks: [{ assignment: 'do stuff' }] },
+      toolStartTime: Date.now() - 1000,
+    };
+  }
+
+  it('shows live subagent summary with running count while executing', () => {
+    setStoreSubagents({
+      'sa-1': agent({ id: 'sa-1', parentToolCallId: 'tc_task_1', status: 'running' }),
+      'sa-2': agent({ id: 'sa-2', parentToolCallId: 'tc_task_1', status: 'completed' }),
+    });
+
+    render(<ToolCard message={taskMessage()} />);
+
+    expect(screen.getByTestId('tool-card').textContent).toContain('2 个子代理');
+    expect(screen.getByTestId('tool-card').textContent).toContain('1 运行中');
+  });
+
+  it('renders SubagentCard tiles instead of TaskBody when live data exists', () => {
+    setStoreSubagents({
+      'sa-1': agent({
+        id: 'sa-1',
+        parentToolCallId: 'tc_task_1',
+        agent: 'coverage-analyzer',
+        currentTool: 'Read cov:///uart',
+      }),
+    });
+
+    render(<ToolCard message={taskMessage()} />);
+    fireEvent.click(screen.getByTitle('展开'));
+
+    expect(screen.getByTestId('subagent-card')).toBeInTheDocument();
+    expect(screen.getByTestId('subagent-tile-sa-1')).toBeInTheDocument();
+    expect(screen.getByTestId('subagent-tile-sa-1').textContent).toContain('coverage-analyzer');
+    expect(screen.getByTestId('subagent-tile-sa-1').textContent).toContain('Read cov:///uart');
+  });
+
+  it('falls back to TaskBody when no live subagent data (history restore)', () => {
+    setStoreSubagents({});
+
+    render(<ToolCard message={taskMessage()} />);
+
+    // 无实时数据：执行中显示默认 dispatching 摘要，不渲染磁贴
+    expect(screen.getByTestId('tool-card').textContent).toContain('dispatching sub-agents');
+    expect(screen.queryByTestId('subagent-card')).not.toBeInTheDocument();
+  });
+
+  it('ignores subagents belonging to other tool calls', () => {
+    setStoreSubagents({
+      'sa-other': agent({ id: 'sa-other', parentToolCallId: 'tc_other' }),
+    });
+
+    render(<ToolCard message={taskMessage()} />);
+
+    expect(screen.queryByTestId('subagent-card')).not.toBeInTheDocument();
   });
 });

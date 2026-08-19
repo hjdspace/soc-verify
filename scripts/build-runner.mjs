@@ -313,6 +313,16 @@ function checkRunnerSource() {
 
 // ─── Build ───────────────────────────────────────────────
 
+/**
+ * Path to the Bun build script that uses `Bun.build()` with the engine's
+ * `createLegacyPiVirtualModulePlugin()` plugin. This is required because
+ * omp engine v17+ references a virtual `omp-legacy-pi-modules` specifier
+ * (in `legacy-pi-compat.ts` when `IS_COMPILED_BINARY` is true) that can
+ * only be resolved through the Bun plugin system, not via the bare
+ * `bun build --compile` command line.
+ */
+const COMPILE_SCRIPT = join(ROOT, 'scripts', 'compile-runner.ts');
+
 function buildRunner(bunPath) {
   if (!existsSync(OUTPUT_DIR)) {
     mkdirSync(OUTPUT_DIR, { recursive: true });
@@ -327,10 +337,11 @@ function buildRunner(bunPath) {
     env.TMP = safeTemp;
   }
 
-  // Run from the engine's coding-agent package directory so that
-  // workspace packages (@oh-my-pi/pi-coding-agent and its deps) resolve.
-  // Use the absolute path to bun and the entry file for reliability.
-  const cmd = `"${bunPath}" build --compile "${RUNNER_SRC}" --outfile "${OUTPUT_PATH}"`;
+  // Run the Bun build script from the engine's coding-agent package
+  // directory so that workspace packages (@oh-my-pi/pi-coding-agent and
+  // its deps) resolve correctly. The script uses Bun.build() with the
+  // engine's virtual module plugin to resolve omp-legacy-pi-modules.
+  const cmd = `"${bunPath}" "${COMPILE_SCRIPT}" --outfile "${OUTPUT_PATH}"`;
   console.log(`[build-runner] Running: ${cmd}`);
   console.log(`[build-runner] CWD: ${ENGINE_CODING_AGENT}`);
 

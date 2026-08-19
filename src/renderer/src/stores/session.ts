@@ -48,6 +48,37 @@ export interface ChatMessage {
   skills?: SelectedSkill[];
 }
 
+/**
+ * task 工具派遣的 subagent 实时状态（瞬态，不持久化）。
+ * 由 omp 引擎经 runner → 主进程 → session:event 转发的
+ * subagent_lifecycle / subagent_progress 帧驱动更新。
+ */
+export interface SubagentActivity {
+  /** subagent registry id */
+  id: string;
+  index: number;
+  /** 角色（agent 定义名，如 coverage-analyzer） */
+  agent: string;
+  description?: string;
+  /** 完整工作指令（progress 帧携带） */
+  assignment?: string;
+  status: 'running' | 'completed' | 'failed' | 'aborted';
+  /** 关联的 task 工具调用 id — 用于挂载到对应 tool card */
+  parentToolCallId?: string;
+  currentTool?: string;
+  currentToolArgs?: string;
+  lastIntent?: string;
+  /** 最近输出行（引擎侧截尾，[0] 为最新，倒序） */
+  recentOutput: string[];
+  toolCount: number;
+  tokens: number;
+  requests: number;
+  /** token 增量历史（sparkline 用，保留尾部若干个） */
+  tokenHistory: number[];
+  startedAt: number;
+  endedAt?: number;
+}
+
 export interface AvailableModel {
   provider: string;
   id: string;
@@ -112,6 +143,8 @@ export interface SessionEntry {
   approvalMode?: ApprovalMode;
   /** Internal flag: this session's next agent_end should trigger AI title generation. */
   _pendingTitleGeneration?: boolean;
+  /** task 工具派遣的 subagent 实时状态（key = subagent id，瞬态不持久化） */
+  subagents?: Record<string, SubagentActivity>;
 }
 
 export interface HistorySession {
@@ -488,6 +521,37 @@ function extractToolCallsFromMessage(message: unknown): PendingToolCall[] {
   return calls;
 }
 
+function upsertPendingToolMessages(
+  messages: ChatMessage[],
+  toolCalls: PendingToolCall[],
+): ChatMessage[] {
+  let updated = messages;
+  for (const toolCall of toolCalls) {
+    const existingIdx = updated.findIndex(
+      (message) => message.role === 'tool' && message.toolCallId === toolCall.id,
+    );
+    if (existingIdx >= 0) {
+      updated = updated.map((message, index) =>
+        index === existingIdx && !message.toolResult
+          ? { ...message, toolName: toolCall.name, toolArgs: toolCall.args }
+          : message,
+      );
+      continue;
+    }
+    updated = [...updated, {
+      id: `tool_${toolCall.id}`,
+      role: 'tool',
+      content: '',
+      timestamp: Date.now(),
+      toolName: toolCall.name,
+      toolCallId: toolCall.id,
+      toolArgs: toolCall.args,
+      toolStartTime: Date.now(),
+    }];
+  }
+  return updated;
+}
+
 /**
  * Check if a message object represents an error response.
  * Returns the error message if found, null otherwise.
@@ -619,7 +683,8 @@ function applyMessageUpdateSnapshot(
   const msg = message as Record<string, unknown> | undefined;
   if (msg?.role && msg.role !== 'assistant') return;
   const { text: updateText, thinking: updateThinking } = extractTextFromMessage(msg);
-  if (!updateText && !updateThinking) return;
+  const toolCalls = extractToolCallsFromMessage(msg);
+  if (!updateText && !updateThinking && toolCalls.length === 0) return;
   set((s) => ({
     sessions: s.sessions.map((sess) => {
       if (!sessionMatchesId(sess, sessionId)) return sess;
@@ -631,14 +696,22 @@ function applyMessageUpdateSnapshot(
           break;
         }
       }
-      if (lastAssistantIdx === -1) return sess;
+      let messages = sess.messages;
+      if (lastAssistantIdx !== -1 && (updateText || updateThinking)) {
+        messages = messages.map((message, index) =>
+          index === lastAssistantIdx
+            ? {
+                ...message,
+                content: updateText || message.content,
+                thinking: updateThinking || message.thinking,
+              }
+            : message,
+        );
+      }
+      messages = upsertPendingToolMessages(messages, toolCalls);
       return {
         ...sess,
-        messages: sess.messages.map((m, i) =>
-          i === lastAssistantIdx
-            ? { ...m, content: updateText, thinking: updateThinking || m.thinking }
-            : m,
-        ),
+        messages,
       };
     }),
   }));
@@ -1335,6 +1408,78 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         if (!sessionMatchesId(sess, sessionId)) return sess;
 
         switch (type) {
+          case 'subagent_lifecycle': {
+            // task 工具派遣的 subagent 生命周期帧（started/completed/failed/aborted）
+            const p = evt.payload as Record<string, unknown> | undefined;
+            const id = typeof p?.id === 'string' ? p.id : '';
+            if (!p || !id) return sess;
+            const rawStatus = p.status;
+            const status: SubagentActivity['status'] =
+              rawStatus === 'completed' || rawStatus === 'failed' || rawStatus === 'aborted'
+                ? rawStatus
+                : 'running';
+            const prev = sess.subagents?.[id];
+            const next: SubagentActivity = {
+              id,
+              index: typeof p.index === 'number' ? p.index : (prev?.index ?? 0),
+              agent: typeof p.agent === 'string' ? p.agent : (prev?.agent ?? 'subagent'),
+              description: typeof p.description === 'string' ? p.description : prev?.description,
+              assignment: prev?.assignment,
+              status,
+              parentToolCallId:
+                typeof p.parentToolCallId === 'string' ? p.parentToolCallId : prev?.parentToolCallId,
+              currentTool: status === 'running' ? prev?.currentTool : undefined,
+              currentToolArgs: status === 'running' ? prev?.currentToolArgs : undefined,
+              lastIntent: prev?.lastIntent,
+              recentOutput: prev?.recentOutput ?? [],
+              toolCount: prev?.toolCount ?? 0,
+              tokens: prev?.tokens ?? 0,
+              requests: prev?.requests ?? 0,
+              tokenHistory: prev?.tokenHistory ?? [],
+              startedAt: prev?.startedAt ?? Date.now(),
+              endedAt: status !== 'running' ? Date.now() : undefined,
+            };
+            return { ...sess, subagents: { ...sess.subagents, [id]: next } };
+          }
+
+          case 'subagent_progress': {
+            // subagent 实时进度帧（~150ms 节流合并，含 currentTool/recentOutput/tokens）
+            const p = evt.payload as Record<string, unknown> | undefined;
+            const prog = p?.progress as Record<string, unknown> | undefined;
+            const id = typeof p?.id === 'string' ? p.id : (typeof prog?.id === 'string' ? prog.id : '');
+            if (!p || !id) return sess;
+            const prev = sess.subagents?.[id];
+            // 终态不回退：lifecycle 已判定完成后忽略残余 progress 帧
+            if (prev && prev.status !== 'running') return sess;
+            const tokens = typeof prog?.tokens === 'number' ? prog.tokens : (prev?.tokens ?? 0);
+            const delta = prev ? Math.max(0, tokens - prev.tokens) : tokens;
+            const tokenHistory = [...(prev?.tokenHistory ?? []), delta].slice(-16);
+            const recentOutput = Array.isArray(prog?.recentOutput)
+              ? prog.recentOutput.filter((l): l is string => typeof l === 'string')
+              : (prev?.recentOutput ?? []);
+            const next: SubagentActivity = {
+              id,
+              index: typeof p.index === 'number' ? p.index : (prev?.index ?? 0),
+              agent: typeof p.agent === 'string' ? p.agent : (prev?.agent ?? 'subagent'),
+              description: prev?.description,
+              assignment: typeof p.assignment === 'string' ? p.assignment : prev?.assignment,
+              status: 'running',
+              parentToolCallId:
+                typeof p.parentToolCallId === 'string' ? p.parentToolCallId : prev?.parentToolCallId,
+              currentTool: typeof prog?.currentTool === 'string' ? prog.currentTool : prev?.currentTool,
+              currentToolArgs:
+                typeof prog?.currentToolArgs === 'string' ? prog.currentToolArgs : prev?.currentToolArgs,
+              lastIntent: typeof prog?.lastIntent === 'string' ? prog.lastIntent : prev?.lastIntent,
+              recentOutput,
+              toolCount: typeof prog?.toolCount === 'number' ? prog.toolCount : (prev?.toolCount ?? 0),
+              tokens,
+              requests: typeof prog?.requests === 'number' ? prog.requests : (prev?.requests ?? 0),
+              tokenHistory,
+              startedAt: prev?.startedAt ?? Date.now(),
+            };
+            return { ...sess, subagents: { ...sess.subagents, [id]: next } };
+          }
+
           case 'context_usage':
             return {
               ...sess,
@@ -1405,7 +1550,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
               status: 'streaming',
               messages: (() => {
                 // First, finalize the streaming assistant message
-                let updated = sess.messages.map((m) => {
+                const updated = sess.messages.map((m) => {
                   if (m.role !== 'assistant' || !m.isStreaming) return m;
                   return {
                     ...m,
@@ -1414,34 +1559,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
                     thinking: endThinking || m.thinking,
                   };
                 });
-                // Then, ensure each tool call has a pending tool card
-                for (const tc of endToolCalls) {
-                  const existingIdx = updated.findIndex(
-                    (m) => m.role === 'tool' && m.toolCallId === tc.id,
-                  );
-                  if (existingIdx >= 0) {
-                    // Update the existing pending tool card's name/args
-                    updated = updated.map((m, i) =>
-                      i === existingIdx
-                        ? { ...m, toolName: tc.name, toolArgs: tc.args }
-                        : m,
-                    );
-                  } else {
-                    // Create a new pending tool card
-                    const toolMsg: ChatMessage = {
-                      id: `tool_${tc.id}`,
-                      role: 'tool',
-                      content: '',
-                      timestamp: Date.now(),
-                      toolName: tc.name,
-                      toolCallId: tc.id,
-                      toolArgs: tc.args,
-                      toolStartTime: Date.now(),
-                    };
-                    updated = [...updated, toolMsg];
-                  }
-                }
-                return updated;
+                return upsertPendingToolMessages(updated, endToolCalls);
               })(),
             };
           }
