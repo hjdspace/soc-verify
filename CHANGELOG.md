@@ -6,6 +6,36 @@
 
 ---
 
+## [0.3.2](https://github.com/hjdspace/soc-verify/compare/v0.3.1...v0.3.2) (2026-08-20)
+
+### Features
+
+* **chat:** 智能消息列表滚动：支持固定底部与滚动到底部按钮
+* **chat:** 用 Markdown 渲染子代理任务指令内容
+* **diff:** 优化新文件 diff 计算及代理通知消息处理
+* **diff-review:** 重构为内联编辑器模式，增强 diff 引擎稳定性
+* **editor:** 实现 Vim 模式、Minimap、缩进指引、语法高亮、面包屑导航、状态栏及编辑器持久化
+* **prototype:** 新增 subagent 卡片 UI 方案原型及数据通路适配
+* **scripts:** 新增 TLS 证书自愈模块，解决本地代理导致的证书验证失败
+* **session:** AI 自动总结会话标题，修复重启后会话名丢失
+* **project:** 实现项目内联重命名功能
+
+### Bug Fixes
+
+* **chat:** 修复 useShallow 避免 useSessionStore 订阅导致无限重渲染
+* **chat:** 修复无语言标记的 fenced code block 被错误渲染为行内代码的问题
+* **diff-review:** 修复已审查或缺失条目时无法打开文件路径的问题
+* **project:** 修复 Linux 上项目文件监视器递归导致阻塞的问题
+* **subagent:** 修复 subagent 日志累积丢失问题，改为正序累积日志
+* **ui:** 修复 Linux 上 hover 样式丢失并添加按钮按下反馈
+
+### Refactor
+
+* **coverage:** 合并覆盖率数据的批量加载，消除重复的 resolveSession 调用
+* **docs:** 将 PRD 和 Issues 文档按目录分类整理
+* **runner:** 提取审批逻辑并支持对话历史种子恢复
+* **runner:** 提取 write snapshot 模块并支持自定义工作目录
+
 ## [0.3.1](https://github.com/hjdspace/soc-verify/compare/v0.3.0...v0.3.1) (2026-08-18)
 
 ### Features
