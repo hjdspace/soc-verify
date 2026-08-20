@@ -146,8 +146,6 @@ export interface SessionEntry {
   tvViolationId?: number;
   /** 工具审批模式 */
   approvalMode?: ApprovalMode;
-  /** Internal flag: this session's next agent_end should trigger AI title generation. */
-  _pendingTitleGeneration?: boolean;
   /** task 工具派遣的 subagent 实时状态（key = subagent id，瞬态不持久化） */
   subagents?: Record<string, SubagentActivity>;
 }
@@ -841,12 +839,12 @@ function registerVisibilityListener(): void {
 }
 
 /**
- * Trigger AI title generation for a session after agent_end.
+ * Trigger AI title generation for a session based on the first user message.
  *
- * Reads the first user message and the first assistant response from the
- * store, sends them to the backend generateTitle procedure, and renames
- * the session if a title is returned. Guards against duplicate generation
- * via the titleGenerationPending set.
+ * Sends the user's first message to the backend generateTitle procedure,
+ * which generates a concise title without waiting for the assistant's
+ * response. Guards against duplicate generation via the
+ * titleGenerationPending set.
  *
  * This function is fire-and-forget — failures are silently ignored, and the
  * session keeps its immediate placeholder name (generated from the first
@@ -854,37 +852,52 @@ function registerVisibilityListener(): void {
  */
 async function triggerAiTitleGeneration(
   sessionId: string,
+  userMessage: string,
   get: () => SessionStoreState,
 ): Promise<void> {
   // Find the session by matching against all possible IDs
   const session = get().sessions.find((s) => sessionMatchesId(s, sessionId));
-  if (!session) return;
-
-  // Note: _pendingTitleGeneration was already checked by the caller before
-  // the set() cleared it. No need to re-check here.
+  if (!session) {
+    console.warn('[session:title-generation] session not found, skipping', { sessionId });
+    return;
+  }
 
   // Prevent duplicate generation
-  if (titleGenerationPending.has(session.id)) return;
+  if (titleGenerationPending.has(session.id)) {
+    console.log('[session:title-generation] already pending, skipping', { sessionId: session.id });
+    return;
+  }
   titleGenerationPending.add(session.id);
 
-  try {
-    // Extract the first user message and first assistant response
-    const firstUserMsg = session.messages.find((m) => m.role === 'user');
-    const firstAssistantMsg = session.messages.find((m) => m.role === 'assistant' && !m.isStreaming);
-    if (!firstUserMsg?.content || !firstAssistantMsg?.content) return;
+  console.log('[session:title-generation] requesting AI title', {
+    sessionId: session.id,
+    messagePreview: userMessage.slice(0, 60),
+  });
 
+  try {
     const result = await trpc.session.generateTitle.mutate({
-      userMessage: firstUserMsg.content,
-      assistantMessage: firstAssistantMsg.content,
-      providerId: session.model?.providerId,
-      modelId: session.model?.id,
+      userMessage,
+    });
+
+    console.log('[session:title-generation] response', {
+      sessionId: session.id,
+      hasTitle: !!result.title,
+      title: result.title,
     });
 
     if (result.title) {
       // Only rename if the session still exists and hasn't been manually renamed
       const current = get().sessions.find((s) => s.id === session.id);
-      if (current && (isPlaceholderName(current.name) || current.name === generateSessionName(firstUserMsg.content))) {
+      if (!current) {
+        console.warn('[session:title-generation] session gone after response', { sessionId: session.id });
+      } else if (isPlaceholderName(current.name) || current.name === generateSessionName(userMessage)) {
         await get().renameSession(session.id, current.projectId, result.title);
+        console.log('[session:title-generation] renamed', { sessionId: session.id, title: result.title });
+      } else {
+        console.log('[session:title-generation] skipping rename (name changed)', {
+          sessionId: session.id,
+          currentName: current.name,
+        });
       }
     }
   } catch (err) {
@@ -1241,23 +1254,22 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       }
 
       // Auto-rename session based on the first user message — immediate placeholder.
-      // The AI-generated title will replace this once the agent responds.
       // Only overwrite if the current name is still a placeholder ("新会话"),
       // so we don't clobber a name the user manually set before sending.
+      //
+      // The AI title generation is triggered for ALL non-low-signal first
+      // messages (mirrors omp's behavior: only greetings/acks/empty are
+      // skipped). Even a short but substantive message like "启动三个
+      // subagent 分析当前项目" benefits from an AI-summarized title.
       if (isFirstMessage && sessionBeforeSend) {
         if (isPlaceholderName(sessionBeforeSend.name)) {
           const autoName = generateSessionName(firstMessageText);
           void get().renameSession(sessionId, sessionBeforeSend.projectId, autoName);
         }
-        // Mark this session for AI title generation on the first agent_end.
-        // The handleSessionEvent 'agent_end' handler will check this flag.
-        set((s) => ({
-          sessions: s.sessions.map((sess) =>
-            sess.id === sessionId
-              ? { ...sess, _pendingTitleGeneration: true }
-              : sess,
-          ),
-        }));
+
+        // Fire-and-forget AI title generation from the first user message
+        // alone — no need to wait for the assistant's response.
+        void triggerAiTitleGeneration(sessionId, firstMessageText, get);
       }
     } catch (err) {
       const errMsg = tRPCError(err);
@@ -1420,12 +1432,6 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
   handleSessionEvent: (sessionId, event) => {
     const evt = event as Record<string, unknown>;
     const type = evt.type as string;
-
-    // Capture whether this session is awaiting AI title generation BEFORE
-    // the set() below clears the flag (only relevant for agent_end events).
-    const wasPendingTitle = type === 'agent_end'
-      ? get().sessions.find((sess) => sessionMatchesId(sess, sessionId))?._pendingTitleGeneration
-      : false;
 
     // Error-analysis sessions are created in the main process. Their first
     // agent events can arrive before the separate `started` notification, so
@@ -1733,7 +1739,6 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
               messages: sess.messages.map((m) =>
                 m.isStreaming ? { ...m, isStreaming: false } : m,
               ),
-              _pendingTitleGeneration: false,
             };
 
           case 'notice': {
@@ -1813,14 +1818,6 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       flushPersist(get);
     }
 
-    // ── AI 标题生成 ────────────────────────────────────────
-    // 当 agent_end 事件到达且该会话之前标记为待生成标题时，异步调用后端
-    // generateTitle procedure，用 OpenAI-compatible API 生成一个简洁的
-    // 会话标题。生成成功后通过 renameSession 持久化到 sessions.json。
-    // 失败时静默降级——保留之前的即时截断名称。
-    if (wasPendingTitle) {
-      void triggerAiTitleGeneration(sessionId, get);
-    }
   },
 
   restoreSessions: async (projectId, cwd, lastSessionIds) => {
