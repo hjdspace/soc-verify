@@ -796,32 +796,29 @@ export const sessionRouter = t.router({
 
   // ── AI 会话标题生成 ──────────────────────────────────
   /**
-   * Generate a concise session title from the first user-assistant exchange.
+   * Generate a concise session title from the first user message.
    *
-   * Uses the OpenAI-compatible chat completions API (separate from the omp
-   * agent process) to avoid the overhead of a full agent turn just for naming.
-   * Falls back gracefully — returns { title: null } when generation fails.
+   * Only the user's first message is used — the assistant's response is NOT
+   * needed.  Low-signal input (greetings, acknowledgements, etc.) is skipped.
+   *
+   * Resolves credentials via the KB LLM config chain (KB settings → credential
+   * model → Agent session model → API-fetched → provider default), supporting
+   * built-in providers (openai, anthropic, google) and custom OpenAI-compatible
+   * gateways. Falls back gracefully — returns { title: null } when generation
+   * fails.
    */
   generateTitle: t.procedure
-    .input((raw): { userMessage: string; assistantMessage: string; providerId?: string; modelId?: string } => {
+    .input((raw): { userMessage: string } => {
       const r = raw as Record<string, unknown>;
-      if (typeof r.userMessage !== 'string' || typeof r.assistantMessage !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'userMessage and assistantMessage are required' });
+      if (typeof r.userMessage !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'userMessage is required' });
       }
       return {
         userMessage: r.userMessage,
-        assistantMessage: r.assistantMessage,
-        providerId: typeof r.providerId === 'string' ? r.providerId : undefined,
-        modelId: typeof r.modelId === 'string' ? r.modelId : undefined,
       };
     })
     .mutation(async ({ input }) => {
-      const title = await generateSessionTitle(
-        input.userMessage,
-        input.assistantMessage,
-        input.providerId,
-        input.modelId,
-      );
+      const title = await generateSessionTitle(input.userMessage);
       return { title };
     }),
 });
