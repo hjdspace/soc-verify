@@ -643,33 +643,41 @@ describe('SessionStore — event handling and state machine', () => {
     expect(streaming).toHaveLength(0);
   });
 
-  it('sets _pendingTitleGeneration on first message and clears it on agent_end', async () => {
+  it('triggers AI title generation immediately on long first message (no agent_end needed)', async () => {
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    // Long input (> 40 chars) should trigger AI title generation immediately
+    await useSessionStore.getState().sendMessage('请帮我分析一下这个模块的覆盖率报告，找出未覆盖的代码行并给出修复建议，需要包含详细的分析过程和具体的代码修改方案');
+
+    // generateTitle should be called right away — no need to wait for agent_end
+    await vi.waitFor(() => {
+      expect(mockGenerateTitle).toHaveBeenCalledWith({
+        userMessage: '请帮我分析一下这个模块的覆盖率报告，找出未覆盖的代码行并给出修复建议，需要包含详细的分析过程和具体的代码修改方案',
+      });
+    });
+  });
+
+  it('triggers AI title generation for short substantive first message', async () => {
+    // Even short messages like "启动三个subagent分析当前项目" benefit from
+    // AI-summarized titles — only low-signal input (greetings, acks) is
+    // skipped (by the backend, not the frontend).
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
     await useSessionStore.getState().sendMessage('Hello AI');
 
-    // First message should flag the session for AI title generation
-    const stateAfterSend = useSessionStore.getState();
-    expect(stateAfterSend.sessions[0]._pendingTitleGeneration).toBe(true);
-
-    // agent_end should clear the flag
-    useSessionStore.getState().handleSessionEvent('session_test_1', { type: 'agent_end' });
-    expect(useSessionStore.getState().sessions[0]._pendingTitleGeneration).toBe(false);
+    await vi.waitFor(() => {
+      expect(mockGenerateTitle).toHaveBeenCalledWith({
+        userMessage: 'Hello AI',
+      });
+    });
   });
 
-  it('calls generateTitle after agent_end when _pendingTitleGeneration is true', async () => {
+  it('renames session with AI-generated title after first message', async () => {
     mockGenerateTitle.mockResolvedValueOnce({ title: 'AI生成的标题' });
 
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('帮我分析覆盖率');
+    // Any substantive first message triggers AI title generation
+    await useSessionStore.getState().sendMessage('请帮我分析一下这个模块的覆盖率报告，找出未覆盖的代码行并给出修复建议，需要包含详细的分析过程和具体的代码修改方案');
 
-    // Simulate assistant response before agent_end
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
-      type: 'message_end',
-      message: { role: 'assistant', content: [{ type: 'text', text: '覆盖率分析完成' }] },
-    });
-    useSessionStore.getState().handleSessionEvent('session_test_1', { type: 'agent_end' });
-
-    // Wait for the async title generation to complete
+    // Wait for the async title generation to complete — no agent_end needed
     await vi.waitFor(() => {
       expect(mockGenerateTitle).toHaveBeenCalled();
     });
