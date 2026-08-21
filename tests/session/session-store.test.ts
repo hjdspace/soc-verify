@@ -1068,14 +1068,18 @@ describe('SessionStore — subagent activity (subagent_* frames)', () => {
   let sessionId: string;
 
   function progressFrame(id: string, recentOutput: string[], parentToolCallId = 'tc_task_1') {
+    // 匹配引擎 SubagentProgressPayload 结构：id 在 progress 对象内，
+    // payload 顶层没有 id。见 engine/.../task/types.ts + executor.ts emitProgressNow。
     return {
       type: 'subagent_progress',
       payload: {
-        id,
         index: 0,
         agent: 'analyzer',
+        agentSource: 'bundled',
+        task: 'analyze coverage',
         parentToolCallId,
-        progress: { recentOutput, tokens: 100 },
+        assignment: 'do stuff',
+        progress: { id, index: 0, agent: 'analyzer', recentOutput, tokens: 100, status: 'running', task: 'analyze coverage', toolCount: 0, requests: 0, recentTools: [], durationMs: 0, cost: 0 },
       },
     };
   }
