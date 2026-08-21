@@ -43,6 +43,7 @@ const { MockAgentClient } = vi.hoisted(() => {
 
   class MockAgentClient extends EventEmitter {
     started = false;
+    stopped = false;
     destroyed = false;
     initResult = { sessionId: 'omp-session-test' };
     eventListeners: Array<(event: unknown) => void> = [];
@@ -62,7 +63,7 @@ const { MockAgentClient } = vi.hoisted(() => {
     async start() { this.started = true; }
     async init(_config: unknown) { return this.initResult; }
     async prompt(message: string, images?: unknown) { this.lastPrompt = message; this.lastImages = images; }
-    async abort() {}
+    async abort() { this.stop(); }
     async steer(_message: string) {}
     async setModel(_provider: string, _modelId: string) {}
     async setApprovalMode(_mode: string) {}
@@ -72,8 +73,8 @@ const { MockAgentClient } = vi.hoisted(() => {
     async getMcpStatus() { return {}; }
     async getMcpServerTools(_name: string) { return []; }
     async reloadMcp() { return {}; }
-    stop() { this.started = false; }
-    async destroy() { this.destroyed = true; }
+    stop() { this.started = false; this.stopped = true; }
+    async destroy() { this.stop(); this.destroyed = true; }
   }
 
   return { MockAgentClient };
