@@ -16,6 +16,10 @@ import { setupLinuxPlatform } from './platform-setup';
 import { createTray } from './tray-manager';
 import { createWindow, registerWindowControls } from './window-factory';
 import { registerLocalResourceProtocol, LOCAL_RESOURCE_SCHEME } from './local-resource-protocol';
+import { installGlobalErrorHandlers } from './global-error-handler';
+
+// ── 全局异常处理（必须在最早安装，确保后续所有路径都被捕获）─────────
+installGlobalErrorHandlers();
 
 // ── Linux 平台环境设置（IME + D-Bus）─────────────────────────────
 setupLinuxPlatform();
