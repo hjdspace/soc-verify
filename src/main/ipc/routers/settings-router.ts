@@ -24,6 +24,7 @@ import { evictTvDb } from '../../timing-violation/db/tv-db-cache';
 import { contextSettings } from '../../agent/context-settings';
 import { toolSettings } from '../../agent/tool-settings';
 import { HOST_TOOL_NAMES, HOST_TOOL_GROUPS } from '../../host/tool-catalog';
+import { BUILTIN_TOOL_CATALOG, getBuiltinLabel, getBuiltinDescription } from '../../host/builtin-tool-catalog';
 import { themeSettings } from '../../agent/theme-settings';
 import type { TvConfig } from '../../timing-violation/types';
 import type { CredentialInput, CredentialUpdateInput, CreateSkillInput, McpConfigFile, McpToolInfo } from '@shared/types';
@@ -77,10 +78,25 @@ export const settingsRouter = t.router({
       const tools = await sessionManager.listAgentTools(id);
       if (tools && tools.length > 0) {
         const hostNames = new Set(HOST_TOOL_NAMES);
-        builtinTools = tools.filter((t) => !hostNames.has(t.name) && t.name !== 'ask');
+        builtinTools = tools
+          .filter((t) => !hostNames.has(t.name) && t.name !== 'ask')
+          .map((t) => ({
+            name: t.name,
+            label: getBuiltinLabel(t.name),
+            description: t.description || getBuiltinDescription(t.name),
+          }));
         await toolSettings.saveBuiltinCatalog(builtinTools);
         break;
       }
+    }
+
+    // 无活跃会话或枚举失败时，使用静态内置工具目录作为默认展示
+    if (builtinTools.length === 0) {
+      builtinTools = BUILTIN_TOOL_CATALOG.map((t) => ({
+        name: t.name,
+        label: t.label,
+        description: t.description,
+      }));
     }
 
     return { disabledTools, hostGroups: HOST_TOOL_GROUPS, builtinTools };
