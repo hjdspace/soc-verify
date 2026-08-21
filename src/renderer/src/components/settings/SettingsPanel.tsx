@@ -12,9 +12,10 @@ import { cn } from '@renderer/lib/utils';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
 import { PluginsTab } from './PluginsTab';
 import { KbSettingsTab } from './KbSettingsTab';
+import { AgentToolsTab } from './AgentToolsTab';
 import type { CredentialEntry, SkillInfo, CreateSkillInput, McpConfigFile, McpServerConfig, McpTransportType, McpServerInfo } from '@shared/types';
 
-type SettingsTab = 'credentials' | 'kb' | 'plugins' | 'skills' | 'mcp' | 'prompt' | 'appearance' | 'timing-violation';
+type SettingsTab = 'credentials' | 'kb' | 'plugins' | 'skills' | 'mcp' | 'prompt' | 'agent-tools' | 'appearance' | 'timing-violation';
 
 export function SettingsPanel() {
   const settingsOpen = useUiStore((s) => s.settingsOpen);
@@ -34,6 +35,7 @@ export function SettingsPanel() {
         { id: 'credentials', label: '模型配置', icon: Cpu },
         { id: 'kb', label: '知识库', icon: BookOpen },
         { id: 'prompt', label: '系统提示词', icon: FileText },
+        { id: 'agent-tools', label: 'Agent 工具', icon: Wrench },
       ],
     },
     {
@@ -118,6 +120,7 @@ export function SettingsPanel() {
             {tab === 'skills' && <SkillsTab />}
             {tab === 'mcp' && <McpTab />}
             {tab === 'prompt' && <PromptTab />}
+            {tab === 'agent-tools' && <AgentToolsTab />}
             {tab === 'timing-violation' && <TimingViolationConfigTab />}
           </div>
         </div>
