@@ -6,9 +6,12 @@
  *
  * 项目打开时后台调用插件全量扫描，结果写入 DB。
  * 用户点「刷新」按钮时重新调用插件扫描并更新 DB。
+ * RTL 目录变更时通过 fs.watch 自动触发增量扫描。
  */
 
 import type Database from 'better-sqlite3';
+import { existsSync } from 'node:fs';
+import { watch, type FSWatcher } from 'node:fs';
 import type { PluginRegistry } from '@shared/plugin-types';
 import {
   insertSubsystems,
@@ -33,10 +36,21 @@ export type ScanOptions = {
   sync?: boolean;
 };
 
+/** fs.watch debounce 时间（ms），避免短时间内多次触发扫描 */
+const WATCH_DEBOUNCE_MS = 1000;
+
+/** 判断当前平台是否支持原生递归 watch */
+function supportsRecursiveWatch(platform: NodeJS.Platform): boolean {
+  return platform === 'win32' || platform === 'darwin';
+}
+
 export class CaseScanner {
   private projectRoot: string;
   private registry: PluginRegistry;
   private db: Database.Database;
+  private watcher: FSWatcher | null = null;
+  private debounceTimer: NodeJS.Timeout | null = null;
+  private watchActive = false;
 
   constructor(projectRoot: string, registry: PluginRegistry, db: Database.Database) {
     this.projectRoot = projectRoot;
@@ -145,4 +159,90 @@ export class CaseScanner {
     tx();
   }
 
+  // ── fs.watch 文件监控 ────────────────────────────────
+
+  /**
+   * 开始监听 RTL 目录变更，自动触发增量扫描。
+   *
+   * 设计要点：
+   * - 使用 fs.watch recursive 模式（Win/macOS 原生支持）
+   * - debounce 1000ms，避免连续文件变更触发频繁扫描
+   * - 过滤 .socverify / .git 目录变更
+   * - 监听失败不抛异常，降级为手动刷新（console.warn）
+   * - 重复调用安全：先 stop 再 start
+   *
+   * @param rtlDir  $PROJ_RTL 目录绝对路径
+   */
+  startWatch(rtlDir: string): void {
+    // 先停止旧监听
+    this.stopWatch();
+
+    if (!existsSync(rtlDir)) {
+      console.warn(`[case-scanner] Cannot watch: directory does not exist: ${rtlDir}`);
+      return;
+    }
+
+    const recursive = supportsRecursiveWatch(process.platform);
+
+    try {
+      this.watcher = watch(
+        rtlDir,
+        { recursive, persistent: false },
+        (_eventType, filename) => {
+          if (!filename) return;
+          // 过滤应用内部目录变更
+          if (filename.includes('.socverify') || filename.includes('.git')) return;
+          this.scheduleDebouncedScan();
+        },
+      );
+
+      this.watcher.on('error', (err) => {
+        console.warn(`[case-scanner] fs.watch error for ${rtlDir}:`, err);
+      });
+
+      this.watchActive = true;
+      console.log(`[case-scanner] Started watching ${rtlDir} (recursive=${recursive})`);
+    } catch (err) {
+      console.warn(`[case-scanner] fs.watch failed for ${rtlDir}:`, err);
+      this.watcher = null;
+      this.watchActive = false;
+    }
+  }
+
+  /**
+   * 停止文件监控。
+   */
+  stopWatch(): void {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
+    if (this.watcher) {
+      this.watcher.close();
+      this.watcher = null;
+    }
+    this.watchActive = false;
+  }
+
+  /** watch 是否处于活跃状态 */
+  get isWatching(): boolean {
+    return this.watchActive;
+  }
+
+  /**
+   * debounce 后触发增量扫描。
+   * 多次文件变更只在最后一次变更后 1s 触发一次扫描。
+   */
+  private scheduleDebouncedScan(): void {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+    }
+    this.debounceTimer = setTimeout(() => {
+      this.debounceTimer = null;
+      // 增量扫描（sync=false），只更新不删除
+      void this.fullScan().catch((err) => {
+        console.warn('[case-scanner] Incremental scan failed:', err);
+      });
+    }, WATCH_DEBOUNCE_MS);
+  }
 }
