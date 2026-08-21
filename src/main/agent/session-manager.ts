@@ -670,6 +670,16 @@ export class SessionManagerImpl extends EventEmitter {
     }
     this.projectSessions.get(options.projectId)!.add(sessionId);
 
+    // 将已禁用的内置工具同步到新会话（host 工具已在 initConfig 中过滤）
+    const disabledArray = Array.from(disabledToolSet);
+    if (disabledArray.length > 0) {
+      try {
+        await client.setToolFilter(disabledArray);
+      } catch (err) {
+        console.warn(`[agent:session:${sessionId}] failed to apply tool filter on new session: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
     this.scheduleIdleRetirement(sessionId);
 
     return sessionId;
