@@ -23,6 +23,7 @@ import { HostUriRouter } from '../host/host-uris';
 import type { CoverageManager } from '../coverage/coverage-manager';
 import type { CaseStatsService } from '../case/case-stats-service';
 import { contextSettings } from './context-settings';
+import { toolSettings } from './tool-settings';
 import { ensureBuiltinMcpServers } from '../mcp/mcp-config';
 import { ensureTraceweaveDefaultMcp } from '../mcp/traceweave-paths';
 import type { AskAnswer, AskQuestion } from '@shared/ask-types';
@@ -229,8 +230,14 @@ export class SessionManagerImpl extends EventEmitter {
     if (options.coverageManager) hostTools.setCoverageManager(options.coverageManager);
     if (options.caseStatsService) hostTools.setCaseStatsService(options.caseStatsService);
 
+    // 用户在设置页禁用的工具不暴露给 LLM（`ask` 是交互问答通道，始终保留）
+    const disabledToolSet = new Set(await toolSettings.getDisabledTools());
+    disabledToolSet.delete('ask');
+
     // Build custom tool definitions for the runner
-    const customToolDefinitions: CustomToolDefinition[] = hostTools.getDefinitions().map((def) => ({
+    const customToolDefinitions: CustomToolDefinition[] = hostTools.getDefinitions()
+      .filter((def) => !disabledToolSet.has(def.name))
+      .map((def) => ({
       name: def.name,
       label: def.label,
       description: def.description,
@@ -533,6 +540,12 @@ export class SessionManagerImpl extends EventEmitter {
             }
           }
         }
+        // Diagnostic: log subagent frames to trace data flow
+        if (evtType === 'subagent_lifecycle' || evtType === 'subagent_progress') {
+          const payload = (event as Record<string, unknown>)?.payload as Record<string, unknown> | undefined;
+          const subId = payload?.id ?? (payload?.progress as Record<string, unknown> | undefined)?.id ?? '??';
+          console.log(`[agent:session:${sessionId}] SUBAGENT ${evtType} id=${subId} — forwarding to renderer`);
+        }
         this.emit('sessionEvent', { sessionId, event } satisfies SessionEventData);
       });
     };
@@ -708,6 +721,34 @@ export class SessionManagerImpl extends EventEmitter {
     this.touchActivity(sessionId);
   }
 
+  /**
+   * 将工具开关设置推送到所有活跃会话（设置页切换开关时调用）。
+   * 新会话在 createSession 时通过 InitConfig.disabledTools 获取同样设置。
+   */
+  async applyToolFilterToActiveSessions(disabledTools: string[]): Promise<void> {
+    for (const { client } of this.sessions.values()) {
+      try {
+        await client.setToolFilter(disabledTools);
+      } catch (err) {
+        console.warn(`[agent:session-manager] failed to apply tool filter: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
+  /**
+   * 枚举某个会话当前可用的工具（名称 + 描述，含被禁用工具）。
+   * 会话不存在时返回 undefined。
+   */
+  async listAgentTools(sessionId: string): Promise<Array<{ name: string; description: string }> | undefined> {
+    const client = this.sessions.get(sessionId)?.client;
+    if (!client) return undefined;
+    try {
+      return await client.listAgentTools();
+    } catch {
+      return undefined;
+    }
+  }
+
   async getAvailableModels(_sessionId: string): Promise<unknown[]> {
     // The SDK discovers models via the ModelRegistry.
     // Model selection is handled via the settings.fetchModels API
@@ -784,6 +825,9 @@ export class SessionManagerImpl extends EventEmitter {
     } catch {
       // best-effort cleanup
     } finally {
+      // Ensure the process is dead even if destroy() threw before
+      // reaching stop(). The stop() call is idempotent.
+      entry.client.stop();
       if (entry.runtimeDir) {
         await rm(entry.runtimeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
       }
