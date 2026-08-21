@@ -412,4 +412,157 @@ describe('ToolCard task tool — subagent tiles', () => {
 
     expect(screen.queryByTestId('subagent-card')).not.toBeInTheDocument();
   });
+
+  it('renders recentOutput lines in drawer when tile is clicked', () => {
+    setStoreSubagents({
+      'sa-1': agent({
+        id: 'sa-1',
+        parentToolCallId: 'tc_task_1',
+        agent: 'coverage-analyzer',
+        status: 'running',
+        recentOutput: ['Analyzing coverage...', 'Found 3 gaps'],
+        assignment: 'Analyze coverage for UART module',
+      }),
+    });
+
+    render(<ToolCard message={taskMessage()} />);
+    fireEvent.click(screen.getByTitle('展开'));
+
+    // Click the tile to open the drawer
+    fireEvent.click(screen.getByTestId('subagent-tile-sa-1'));
+
+    // Drawer should be open
+    expect(screen.getByTestId('subagent-drawer')).toBeInTheDocument();
+
+    // Drawer should show the assignment
+    expect(screen.getByTestId('subagent-assignment').textContent).toContain('Analyze coverage for UART module');
+
+    // Drawer should show the recentOutput lines
+    const log = screen.getByTestId('subagent-log');
+    expect(log.textContent).toContain('Analyzing coverage...');
+    expect(log.textContent).toContain('Found 3 gaps');
+  });
+});
+
+describe('ToolCard task tool — async running fallback', () => {
+  function setStoreSubagents(subagents: Record<string, SubagentActivity>): void {
+    mockSessionState.sessions = [{ subagents }];
+  }
+
+  /**
+   * Real task tool result from session_1787196130609:
+   * - content[0].text: "Spawned 3 background agents..." (descriptive text, NOT JSON)
+   * - details.progress: 3 sub-tasks with status 'pending'
+   * - details.async: { state: 'running', jobId: 'ArchAnalysis', type: 'task' }
+   */
+  function asyncRunningTaskResult(): unknown {
+    return {
+      content: [{
+        type: 'text',
+        text: 'Spawned 3 background agents using task. Each result will be delivered when that agent yields.\n- `ArchAnalysis` (job `ArchAnalysis`) — Source code & architecture analysis\n- `PluginAnalysis` (job `PluginAnalysis`) — Plugins & extensibility analysis\n- `DevOpsAnalysis` (job `DevOpsAnalysis`) — DevOps & CI/CD analysis',
+      }],
+      details: {
+        projectAgentsDir: null,
+        results: [],
+        totalDurationMs: 0,
+        progress: [
+          { index: 0, id: 'ArchAnalysis', agent: 'task', agentSource: 'bundled', status: 'pending', task: '...', assignment: '...', description: 'Source code & architecture analysis', recentTools: [], recentOutput: [], toolCount: 0, requests: 0, tokens: 0, cost: 0, durationMs: 0 },
+          { index: 1, id: 'PluginAnalysis', agent: 'task', agentSource: 'bundled', status: 'pending', task: '...', assignment: '...', description: 'Plugins & extensibility analysis', recentTools: [], recentOutput: [], toolCount: 0, requests: 0, tokens: 0, cost: 0, durationMs: 0 },
+          { index: 2, id: 'DevOpsAnalysis', agent: 'task', agentSource: 'bundled', status: 'pending', task: '...', assignment: '...', description: 'DevOps & CI/CD analysis', recentTools: [], recentOutput: [], toolCount: 0, requests: 0, tokens: 0, cost: 0, durationMs: 0 },
+        ],
+        async: { state: 'running', jobId: 'ArchAnalysis', type: 'task' },
+      },
+    };
+  }
+
+  function taskMessageWithResult(): ChatMessage {
+    return {
+      id: 'tool-task-async',
+      role: 'tool',
+      content: '',
+      timestamp: Date.now(),
+      toolName: 'task',
+      toolCallId: 'tc_task_async',
+      toolArgs: { tasks: [{ assignment: 'do stuff' }] },
+      toolResult: asyncRunningTaskResult(),
+      toolStartTime: Date.now() - 5000,
+      toolEndTime: Date.now(),
+    };
+  }
+
+  it('shows running summary (not done) when details.async.state is running', () => {
+    setStoreSubagents({});  // No live subagent data — forces fallback path
+
+    render(<ToolCard message={taskMessageWithResult()} />);
+
+    // Should show "3 个子代理 · 3 运行中", NOT "3/3 done"
+    const card = screen.getByTestId('tool-card');
+    expect(card.textContent).toContain('3 个子代理');
+    expect(card.textContent).toContain('运行中');
+    expect(card.textContent).not.toContain('done');
+  });
+
+  it('renders SubagentCard tiles from details.progress in expanded body', () => {
+    setStoreSubagents({});
+
+    render(<ToolCard message={taskMessageWithResult()} />);
+    fireEvent.click(screen.getByTitle('展开'));
+
+    // Should render SubagentCard (tile grid), NOT TaskBody (list)
+    expect(screen.getByTestId('subagent-card')).toBeInTheDocument();
+    // 3 tiles should be rendered
+    const tiles = screen.getAllByTestId(/^subagent-tile-/);
+    expect(tiles.length).toBe(3);
+    // Tile tooltip should contain the description
+    expect(tiles[0].getAttribute('title')).toContain('Source code & architecture analysis');
+    expect(tiles[1].getAttribute('title')).toContain('Plugins & extensibility analysis');
+    expect(tiles[2].getAttribute('title')).toContain('DevOps & CI/CD analysis');
+  });
+
+  it('opens drawer on tile click when using static data from details.progress', () => {
+    setStoreSubagents({});
+
+    render(<ToolCard message={taskMessageWithResult()} />);
+    fireEvent.click(screen.getByTitle('展开'));
+
+    // Click the first tile
+    const tiles = screen.getAllByTestId(/^subagent-tile-/);
+    expect(tiles.length).toBe(3);
+    fireEvent.click(tiles[0]);
+
+    // Drawer should open
+    expect(screen.getByTestId('subagent-drawer')).toBeInTheDocument();
+  });
+
+  it('falls back to text parsing with pending (not done) for dispatch lines', () => {
+    setStoreSubagents({});
+
+    // Task result with only content text (no details.progress) — simulates
+    // older omp versions or incomplete result objects
+    const message: ChatMessage = {
+      id: 'tool-task-text-only',
+      role: 'tool',
+      content: '',
+      timestamp: Date.now(),
+      toolName: 'task',
+      toolCallId: 'tc_text_only',
+      toolArgs: {},
+      toolResult: {
+        content: [{
+          type: 'text',
+          text: 'Spawned 2 background agents.\n- `Agent1` (job `Agent1`) — Task one\n- `Agent2` (job `Agent2`) — Task two',
+        }],
+      },
+      toolStartTime: Date.now() - 1000,
+      toolEndTime: Date.now(),
+    };
+
+    render(<ToolCard message={message} />);
+
+    // Summary should NOT say "done" — dispatch lines should be pending (not done)
+    const card = screen.getByTestId('tool-card');
+    expect(card.textContent).toContain('子代理');
+    expect(card.textContent).not.toContain('2/2 done');
+    expect(card.textContent).not.toContain('2 成功');
+  });
 });
