@@ -340,10 +340,153 @@ export function parseTaskItems(resultText: string): TaskItemData[] {
     } else if (trimmed.startsWith('\u27f3') || /^\[running\]/i.test(trimmed)) {
       items.push({ title: trimmed.replace(/^[\u27f3[]+(running)?\]?\s*/i, '').trim(), status: 'running' });
     } else if (/^[-*]\s/.test(trimmed)) {
-      items.push({ title: trimmed.replace(/^[-*]\s/, ''), status: 'done' });
+      // "- `task_id` (job `task_id`) — description" 行来自 omp task 工具的派遣文本。
+      // 旧逻辑默认为 'done'，但实际这些子代理可能仍在运行——必须结合
+      // details.async.state 判断（见 parseTaskItemsFromResult / isTaskAsyncRunning）。
+      // 仅在此无法确定运行状态，保守用 'pending' 而非 'done'。
+      items.push({ title: trimmed.replace(/^[-*]\s/, ''), status: 'pending' });
     }
   }
   return items;
+}
+
+/**
+ * 检查 task 工具结果是否表明子代理仍在异步运行中。
+ *
+ * omp task 工具返回 `details.async = { state: 'running', jobId, type }` 
+ * 表示子代理已被派遣但尚未全部完成。此时 toolResult 虽然已存在
+ * （派遣确认文本），但子代理实际仍在后台运行。
+ */
+export function isTaskAsyncRunning(result: unknown): boolean {
+  if (typeof result !== 'object' || result === null) return false;
+  const obj = result as Record<string, unknown>;
+  const details = obj.details;
+  if (typeof details !== 'object' || details === null) return false;
+  const asyncInfo = (details as Record<string, unknown>).async;
+  if (typeof asyncInfo !== 'object' || asyncInfo === null) return false;
+  return (asyncInfo as Record<string, unknown>).state === 'running';
+}
+
+/**
+ * 从完整的 toolResult 对象解析 task 子项，优先使用 details.progress
+ * 数组（包含准确的 status/index/id/description/agent/durationMs/tokens），
+ * 仅在 details.progress 不存在时回退到 parseTaskItems(resultText)。
+ *
+ * 当 details.async.state === 'running' 且 progress 中子项状态为 'pending' 时，
+ * 这些子代理实际仍在运行中，不应显示为已完成。
+ */
+export function parseTaskItemsFromResult(result: unknown): TaskItemData[] {
+  if (typeof result !== 'object' || result === null) {
+    return parseTaskItems(extractResultText(result));
+  }
+  const obj = result as Record<string, unknown>;
+  const details = typeof obj.details === 'object' && obj.details !== null
+    ? obj.details as Record<string, unknown>
+    : null;
+
+  // 优先从 details.progress 解析（包含准确的 status 字段）
+  if (details && Array.isArray(details.progress)) {
+    const asyncRunning = isTaskAsyncRunning(result);
+    const items = (details.progress as Array<Record<string, unknown>>).map((p) => {
+      const rawStatus = typeof p.status === 'string' ? p.status : 'pending';
+      // 若 async.state === 'running'，pending 子代理实际处于运行中
+      const status: TaskItemData['status'] = rawStatus === 'completed' ? 'done'
+        : rawStatus === 'failed' || rawStatus === 'error' ? 'error'
+        : rawStatus === 'running' ? 'running'
+        : asyncRunning ? 'running'  // pending + async running → running
+        : 'pending';
+      const metaParts: string[] = [];
+      if (typeof p.agent === 'string') metaParts.push(`agent: ${p.agent}`);
+      const durationMs = typeof p.durationMs === 'number' ? p.durationMs : undefined;
+      if (durationMs !== undefined && durationMs > 0) metaParts.push(`${durationMs}ms`);
+      const tokens = typeof p.tokens === 'number' ? p.tokens : undefined;
+      if (tokens !== undefined && tokens > 0) metaParts.push(`${tokens} tokens`);
+      return {
+        title: String(p.description ?? p.id ?? p.name ?? 'task'),
+        status,
+        meta: metaParts.length > 0 ? metaParts.join(' \u00b7 ') : undefined,
+      };
+    });
+    if (items.length > 0) return items;
+  }
+
+  // Fallback: 从 resultText 解析
+  return parseTaskItems(extractResultText(result));
+}
+
+/**
+ * 从 task 工具结果的 details.progress 数组构建 SubagentActivity 兼容对象列表。
+ * 当没有实时 subagent 事件数据（sess.subagents 为空）时，用此函数从
+ * toolResult 中提取静态快照数据，驱动 SubagentCard 磁贴渲染。
+ *
+ * 返回的对象结构与 SubagentActivity 接口兼容，可直接传给 SubagentCard。
+ */
+export type StaticSubagent = {
+  id: string;
+  index: number;
+  agent: string;
+  description?: string;
+  assignment?: string;
+  status: 'running' | 'completed' | 'failed' | 'aborted';
+  parentToolCallId?: string;
+  currentTool?: string;
+  lastIntent?: string;
+  recentOutput: string[];
+  toolCount: number;
+  tokens: number;
+  requests: number;
+  tokenHistory: number[];
+  startedAt: number;
+  endedAt?: number;
+};
+
+export function buildSubagentsFromResult(
+  result: unknown,
+  parentToolCallId: string | undefined,
+): StaticSubagent[] {
+  if (typeof result !== 'object' || result === null) return [];
+  const obj = result as Record<string, unknown>;
+  const details = typeof obj.details === 'object' && obj.details !== null
+    ? obj.details as Record<string, unknown>
+    : null;
+  if (!details || !Array.isArray(details.progress)) return [];
+
+  const asyncRunning = isTaskAsyncRunning(result);
+  const now = Date.now();
+
+  return (details.progress as Array<Record<string, unknown>>).map((p) => {
+    const rawStatus = typeof p.status === 'string' ? p.status : 'pending';
+    const status: StaticSubagent['status'] =
+      rawStatus === 'completed' ? 'completed'
+      : rawStatus === 'failed' || rawStatus === 'error' ? 'failed'
+      : rawStatus === 'aborted' ? 'aborted'
+      : asyncRunning ? 'running'  // pending + async running → running
+      : 'aborted';                  // pending + not running → aborted (stale)
+
+    const id = typeof p.id === 'string' ? p.id : `sa-${Math.random().toString(36).slice(2, 8)}`;
+    const recentOutput = Array.isArray(p.recentOutput)
+      ? (p.recentOutput as unknown[]).filter((l): l is string => typeof l === 'string')
+      : [];
+
+    return {
+      id,
+      index: typeof p.index === 'number' ? p.index : 0,
+      agent: typeof p.agent === 'string' ? p.agent : 'subagent',
+      description: typeof p.description === 'string' ? p.description : undefined,
+      assignment: typeof p.assignment === 'string' ? p.assignment : undefined,
+      status,
+      parentToolCallId,
+      currentTool: typeof p.currentTool === 'string' ? p.currentTool : undefined,
+      lastIntent: typeof p.lastIntent === 'string' ? p.lastIntent : undefined,
+      recentOutput,
+      toolCount: typeof p.toolCount === 'number' ? p.toolCount : 0,
+      tokens: typeof p.tokens === 'number' ? p.tokens : 0,
+      requests: typeof p.requests === 'number' ? p.requests : 0,
+      tokenHistory: [],
+      startedAt: now,
+      endedAt: status !== 'running' ? now : undefined,
+    };
+  });
 }
 
 export type JobItemData = {
