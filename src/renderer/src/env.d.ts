@@ -177,6 +177,15 @@ export interface EventBridgeAPI {
       error?: string;
     }) => void,
   ) => () => void;
+  // 全局错误事件（主进程 uncaughtException / unhandledRejection）
+  onGlobalError: (
+    callback: (data: {
+      type: 'uncaughtException' | 'unhandledRejection';
+      message: string;
+      stack?: string;
+      timestamp: string;
+    }) => void,
+  ) => () => void;
 }
 
 declare global {
