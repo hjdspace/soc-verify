@@ -153,8 +153,22 @@ export const sessionRouter = t.router({
       return { sessionId: r.sessionId };
     })
     .mutation(async ({ input }) => {
-      const client = requireSession(input.sessionId);
-      await client.abort();
+      const entry = sessionManager.getSession(input.sessionId);
+      if (!entry) {
+        // Session may have already been destroyed (e.g. idle timeout).
+        // Treat as already aborted.
+        return { ok: true };
+      }
+      // abort() sends a fire-and-forget abort command to the runner,
+      // then hard-kills the entire process tree. The process is dead
+      // by the time this returns — the frontend should reset the UI
+      // state and clear any streaming messages.
+      try {
+        await entry.client.abort();
+      } catch {
+        // If abort throws (e.g. process already dead), force-stop as safety net.
+        entry.client.stop();
+      }
       return { ok: true };
     }),
 
