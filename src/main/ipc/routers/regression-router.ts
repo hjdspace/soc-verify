@@ -25,6 +25,7 @@ import {
 } from '../../regression/regression-discovery';
 import { RegressionRunner } from '../../regression/regression-runner';
 import type { RegressionRunOptions } from '@shared/types/regression';
+import { caseStatsRegistry } from '../../case/case-stats-registry';
 
 // ── Discovery cache ───────────────────────────────────
 
@@ -150,7 +151,8 @@ export const regressionRouter = t.router({
         throw new TRPCError({ code: 'BAD_REQUEST', message: '-merge 选项需要同时启用 -cov' });
       }
 
-      const runner = new RegressionRunner(project.rootPath);
+      const db = caseStatsRegistry.getDb(project.rootPath);
+      const runner = new RegressionRunner(project.rootPath, db);
       const result = await runner.run(
         input.filePath,
         input.subsys,
@@ -174,7 +176,8 @@ export const regressionRouter = t.router({
     })
     .mutation(({ input }) => {
       const project = requireProject(input.projectId);
-      const runner = new RegressionRunner(project.rootPath);
+      const db = caseStatsRegistry.getDb(project.rootPath);
+      const runner = new RegressionRunner(project.rootPath, db);
       const ok = runner.abort(input.runId);
       return { ok };
     }),
