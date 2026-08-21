@@ -589,13 +589,56 @@ function upsertPendingToolMessages(
 }
 
 /**
+ * Check if an error message represents a transient MCP transport-layer error.
+ *
+ * When a stdio or SSE MCP server's transport closes mid-session (process exit,
+ * network interruption, legacy SSE stream end), the omp engine surfaces the
+ * error via `message_end.errorMessage`. The MCPManager automatically reconnects
+ * the server, so these errors are transient — the agent turn continues and a
+ * normal LLM response typically follows.
+ *
+ * Treating them as terminal would flash a spurious "[错误] Transport closed"
+ * in the UI before the real response arrives (see session record
+ * `session_1787275231446_nt8ek7.json`). Suppress them here and keep the
+ * streaming placeholder alive so the subsequent `message_start`/`message_end`
+ * pair renders normally.
+ *
+ * Matches the same patterns the omp engine's `isRetriableConnectionError`
+ * considers retriable (see `mcp-reconnect.test.ts`).
+ */
+const TRANSIENT_ERROR_PATTERNS: readonly RegExp[] = [
+  /Transport closed/i,
+  /ECONNREFUSED/i,
+  /ECONNRESET/i,
+  /EPIPE/i,
+  /ENETUNREACH/i,
+  /EHOSTUNREACH/i,
+  /fetch failed/i,
+  /Transport not connected/i,
+  /network error/i,
+  /Legacy SSE stream closed/i,
+  /Stream closed/i,
+];
+
+function isTransientTransportError(errMsg: string): boolean {
+  return TRANSIENT_ERROR_PATTERNS.some((pattern) => pattern.test(errMsg));
+}
+
+/**
  * Check if a message object represents an error response.
  * Returns the error message if found, null otherwise.
  * Provides user-friendly messages for common API errors.
+ *
+ * Transient MCP transport-layer errors (Transport closed, ECONNRESET, etc.)
+ * are suppressed (returned as null) because the MCPManager auto-reconnects
+ * and the agent turn continues. Rendering them would flash a false error
+ * before the real LLM response arrives.
  */
 function extractErrorFromMessage(message: Record<string, unknown>): string | null {
   if (typeof message.errorMessage === 'string' && message.errorMessage) {
     const errMsg = message.errorMessage;
+    // Suppress transient transport-layer errors — MCPManager auto-reconnects
+    if (isTransientTransportError(errMsg)) return null;
     // Parse common API errors and provide actionable guidance
     if (errMsg.includes('403') || /forbidden/i.test(errMsg)) {
       return `API 返回 403 Forbidden：${errMsg}\n\n可能原因：\n1. API Key 无权限访问该模型\n2. 当前模型不支持工具调用（Agent 功能需要支持 function calling 的模型，如 GPT-4o、Claude 3.5 Sonnet）\n3. API 端点（Base URL）不支持工具调用请求\n4. API 代理/网关限制了请求类型\n\n请检查设置中的凭据和模型配置。`;
@@ -1619,6 +1662,22 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             const endToolCalls = extractToolCallsFromMessage(msg);
             // Do NOT set status to 'idle' here — the agent may still be working
             // (e.g. multiple messages, tool calls). Only 'agent_end' sets idle.
+            //
+            // Transient transport errors (Transport closed, ECONNRESET, etc.)
+            // are already filtered out by extractErrorFromMessage → errMsg is
+            // null for them. When that happens AND there's no text content, the
+            // message_end likely represents a transport glitch, not a real
+            // assistant response. Keep the placeholder streaming so the next
+            // message_start/message_end pair (the real response) renders
+            // naturally instead of creating a second assistant bubble.
+            const isTransientGlitch = errMsg === null && !endText && !endThinking && endToolCalls.length === 0
+              && msg?.errorMessage != null && typeof msg.errorMessage === 'string'
+              && isTransientTransportError(msg.errorMessage as string);
+            if (isTransientGlitch) {
+              // Keep the streaming placeholder alive — MCPManager will reconnect
+              // and the agent turn continues with a real response.
+              return sess;
+            }
             return {
               ...sess,
               status: 'streaming',
@@ -1784,6 +1843,8 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             const isErr = type === 'error' || type?.includes('error') || evt.error;
             if (isErr) {
               const errText = (evt.error as string) || (evt.message as string) || JSON.stringify(evt);
+              // Suppress transient transport-layer errors in the default handler too
+              if (isTransientTransportError(errText)) return sess;
               return {
                 ...sess,
                 status: 'error' as SessionStatus,
