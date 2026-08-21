@@ -6,6 +6,8 @@ const SETTINGS_FILE = 'agent-tools.json';
 
 export type BuiltinToolInfo = {
   name: string;
+  /** 中文标签（来自静态目录，设置页展示用） */
+  label?: string;
   description: string;
 };
 
