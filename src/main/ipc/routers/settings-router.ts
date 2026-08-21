@@ -22,6 +22,8 @@ import { getCombinedDefaultSystemPrompt } from '../../agent/default-system-promp
 import { loadTvConfig, saveTvConfig } from '../../timing-violation/tv-config';
 import { evictTvDb } from '../../timing-violation/db/tv-db-cache';
 import { contextSettings } from '../../agent/context-settings';
+import { toolSettings } from '../../agent/tool-settings';
+import { HOST_TOOL_NAMES, HOST_TOOL_GROUPS } from '../../host/tool-catalog';
 import { themeSettings } from '../../agent/theme-settings';
 import type { TvConfig } from '../../timing-violation/types';
 import type { CredentialInput, CredentialUpdateInput, CreateSkillInput, McpConfigFile, McpToolInfo } from '@shared/types';
@@ -62,6 +64,42 @@ export const settingsRouter = t.router({
     .mutation(async ({ input }) => {
       await themeSettings.setTheme(input.theme);
       return { ok: true };
+    }),
+
+  // ── Agent 工具开关（每个工具是否暴露给 LLM）───────────────
+  getAgentToolSettings: t.procedure.query(async () => {
+    const disabledTools = await toolSettings.getDisabledTools();
+
+    // 有活跃会话时从 runner 枚举当前工具集（含被禁用的），
+    // 过滤掉 host 自定义工具和 ask 后即 omp 内置工具，并缓存供无会话时展示。
+    let builtinTools = await toolSettings.getBuiltinCatalog();
+    for (const { id } of sessionManager.listSessions()) {
+      const tools = await sessionManager.listAgentTools(id);
+      if (tools && tools.length > 0) {
+        const hostNames = new Set(HOST_TOOL_NAMES);
+        builtinTools = tools.filter((t) => !hostNames.has(t.name) && t.name !== 'ask');
+        await toolSettings.saveBuiltinCatalog(builtinTools);
+        break;
+      }
+    }
+
+    return { disabledTools, hostGroups: HOST_TOOL_GROUPS, builtinTools };
+  }),
+
+  setAgentToolSettings: t.procedure
+    .input((raw): { disabledTools: string[] } => {
+      const r = raw as Record<string, unknown>;
+      if (!Array.isArray(r.disabledTools) || !r.disabledTools.every((n) => typeof n === 'string')) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'disabledTools must be a string array' });
+      }
+      return { disabledTools: r.disabledTools as string[] };
+    })
+    .mutation(async ({ input }) => {
+      // `ask` 是交互问答通道，不允许禁用
+      const disabledTools = input.disabledTools.filter((n) => n !== 'ask');
+      await toolSettings.setDisabledTools(disabledTools);
+      await sessionManager.applyToolFilterToActiveSessions(disabledTools);
+      return { ok: true, disabledTools };
     }),
 
   getCredentials: t.procedure.query(() => {
