@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { exposeElectronTRPC } from 'electron-trpc/main';
 import type { SurfaceDeclaration } from '@shared/surface-types';
+import { GLOBAL_ERROR_CHANNEL } from '@shared/ipc-channels';
 
 // electron-trpc 要求在 'loaded' 事件后暴露桥接
 process.once('loaded', async () => {
@@ -436,6 +437,29 @@ process.once('loaded', async () => {
       ) => callback(data);
       ipcRenderer.on('kb:deepReindex', handler);
       return () => ipcRenderer.removeListener('kb:deepReindex', handler);
+    },
+
+    // ── 全局错误事件（主进程 uncaughtException / unhandledRejection）──
+    // global:error —— 主进程推送全局未捕获异常
+    onGlobalError: (
+      callback: (data: {
+        type: 'uncaughtException' | 'unhandledRejection';
+        message: string;
+        stack?: string;
+        timestamp: string;
+      }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: {
+          type: 'uncaughtException' | 'unhandledRejection';
+          message: string;
+          stack?: string;
+          timestamp: string;
+        },
+      ) => callback(data);
+      ipcRenderer.on(GLOBAL_ERROR_CHANNEL, handler);
+      return () => ipcRenderer.removeListener(GLOBAL_ERROR_CHANNEL, handler);
     },
   });
 });
