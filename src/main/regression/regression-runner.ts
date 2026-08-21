@@ -8,12 +8,16 @@
  *   2. Execute via terminalManager.runCommand() (stream output to terminal panel)
  *   3. Listen for terminal exit → update history record with status + exitCode
  *   4. Persist history to .socverify/regressions/regr_<timestamp>.json
+ *   5. Sync to simulation_runs table (if CaseDatabase available) — enables
+ *      Dashboard regression tab + AI Agent historical regression awareness
  */
 
 import { writeFile, readFile, readdir, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { terminalManager, findSimShell } from '../terminal/terminal-manager';
 import type { RegressionRunOptions, RegressionHistoryEntry } from '@shared/types/regression';
+import type { CaseDatabase } from '../case/db/case-database';
+import { insertSimulationRun, type SimulationRunRow } from '../case/db/case-repository';
 
 const SOCVERIFY_DIR = '.socverify';
 const REGRESSION_DIR = 'regressions';
@@ -76,9 +80,11 @@ export class RegressionRunner {
   private projectRoot: string;
   private activeRuns = new Map<string, ActiveRun>();
   private exitListenerInstalled = false;
+  private db: CaseDatabase | null;
 
-  constructor(projectRoot: string) {
+  constructor(projectRoot: string, db?: CaseDatabase | null) {
     this.projectRoot = projectRoot;
+    this.db = db ?? null;
     this.installExitListener();
   }
 
@@ -225,11 +231,55 @@ export class RegressionRunner {
     });
   }
 
-  /** Persist a history entry to JSON file. */
+  /** Persist a history entry to JSON file + sync to simulation_runs table. */
   private async saveHistory(entry: RegressionHistoryEntry): Promise<void> {
     const dir = join(this.projectRoot, SOCVERIFY_DIR, REGRESSION_DIR);
     await mkdir(dir, { recursive: true });
     const filePath = join(dir, `${entry.runId}.json`);
     await writeFile(filePath, JSON.stringify(entry, null, 2), 'utf-8');
+
+    // Sync to simulation_runs table (enables Dashboard + AI Agent awareness)
+    this.syncToCaseDb(entry);
+  }
+
+  /**
+   * 将回归历史条目写入 simulation_runs 表。
+   * 写 DB 失败只记 warning 日志，不抛异常，不影响回归流程。
+   *
+   * status 映射：running→running, completed→pass, failed→fail, aborted→aborted
+   * case_name 使用回归文件名（basename of filePath）。
+   */
+  private syncToCaseDb(entry: RegressionHistoryEntry): void {
+    if (!this.db) return;
+
+    try {
+      const statusMap: Record<RegressionHistoryEntry['status'], string> = {
+        running: 'running',
+        completed: 'pass',
+        failed: 'fail',
+        aborted: 'aborted',
+      };
+
+      const startTime = new Date(entry.submittedAt).toISOString();
+      const endTime = entry.status !== 'running'
+        ? new Date(entry.submittedAt).toISOString()
+        : undefined;
+
+      const row: SimulationRunRow = {
+        caseName: basename(entry.filePath),
+        subsys: entry.subsys,
+        status: statusMap[entry.status],
+        startTime,
+        endTime,
+        corner: undefined,
+        seed: undefined,
+        optionsJson: JSON.stringify(entry.options),
+      };
+
+      insertSimulationRun(this.db, row);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[regression-runner] Failed to sync to simulation_runs: ${msg}`);
+    }
   }
 }
