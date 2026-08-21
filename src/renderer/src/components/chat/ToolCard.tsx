@@ -44,7 +44,9 @@ import {
   countGrepMatches,
   countLines,
   numFromObj,
-  parseTaskItems,
+  parseTaskItemsFromResult,
+  isTaskAsyncRunning,
+  buildSubagentsFromResult,
   parseJobItems,
   parseTodoItems,
   computeSimpleDiff,
@@ -317,7 +319,7 @@ function buildSummary(message: ChatMessage, taskAgents: SubagentActivity[]): Rea
       return <><span className="text-foreground">{pattern}</span> {' \u00b7 '} {isExecuting ? 'finding...' : `${fileCount} files`}</>;
     }
     case 'task': {
-      // 优先使用 subagent 实时状态（subagent_* 帧驱动），无数据时回退到结果文本解析
+      // 优先使用 subagent 实时状态（subagent_* 帧驱动），无数据时回退到结果解析
       if (taskAgents.length > 0) {
         const running = taskAgents.filter((a) => a.status === 'running').length;
         if (running > 0) {
@@ -327,10 +329,17 @@ function buildSummary(message: ChatMessage, taskAgents: SubagentActivity[]): Rea
         const failed = taskAgents.filter((a) => a.status === 'failed').length;
         return <>{taskAgents.length} 个子代理 {' \u00b7 '}{done} 成功{failed > 0 ? ` / ${failed} 失败` : ''}</>;
       }
-      const tasks = parseTaskItems(resultText);
+      // 无实时 subagent 数据时，从完整 toolResult 解析（含 details.progress/details.async）
+      const taskItems = parseTaskItemsFromResult(message.toolResult);
       if (isExecuting) return <>dispatching sub-agents...</>;
-      const done = tasks.filter((t) => t.status === 'done').length;
-      return <>{tasks.length} sub-agents {' \u00b7 '} {done}/{tasks.length} done</>;
+      // async 仍在运行时显示运行中状态
+      if (isTaskAsyncRunning(message.toolResult)) {
+        const running = taskItems.filter((t) => t.status === 'running').length;
+        return <>{taskItems.length} 个子代理 {' \u00b7 '}{running} 运行中</>;
+      }
+      const done = taskItems.filter((t) => t.status === 'done').length;
+      const failed = taskItems.filter((t) => t.status === 'error').length;
+      return <>{taskItems.length} 个子代理 {' \u00b7 '}{done} 成功{failed > 0 ? ` / ${failed} 失败` : ''}</>;
     }
     case 'job': {
       const jobs = parseJobItems(resultText);
@@ -530,6 +539,15 @@ function ToolBody({
     return <SubagentCard agents={taskAgents} />;
   }
 
+  // task 工具：无实时数据但 toolResult.details.progress 存在时，
+  // 从静态快照构建磁贴卡片（历史恢复 / subagent 事件未到达场景）
+  if (name === 'task' && !isExecuting && message.toolResult) {
+    const staticAgents = buildSubagentsFromResult(message.toolResult, message.toolCallId);
+    if (staticAgents.length > 0) {
+      return <SubagentCard agents={staticAgents as SubagentActivity[]} />;
+    }
+  }
+
   if (isExecuting) {
     return (
       <div className="flex items-center gap-1.5 px-2.5 py-2 text-[11px] text-muted-foreground">
@@ -570,7 +588,7 @@ function ToolBody({
     case 'find':
       return <GlobBody args={message.toolArgs} resultText={resultText} />;
     case 'task':
-      return <TaskBody resultText={resultText} />;
+      return <TaskBody result={message.toolResult} resultText={resultText} />;
     case 'job':
       return <JobBody resultText={resultText} />;
     case 'todo':
@@ -969,8 +987,8 @@ function GlobBody({ args, resultText }: { args: unknown; resultText: string }) {
 
 // ── Task ────────────────────────────────────────────────
 
-function TaskBody({ resultText }: { resultText: string }) {
-  const items = parseTaskItems(resultText);
+function TaskBody({ result, resultText }: { result: unknown; resultText: string }) {
+  const items = parseTaskItemsFromResult(result);
   if (items.length === 0) {
     return <pre className="max-h-72 overflow-auto px-2.5 py-1.5 text-[11px] text-muted-foreground">{resultText || '\u00A0'}</pre>;
   }
