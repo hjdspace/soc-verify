@@ -45,6 +45,8 @@ export interface InitConfig {
   additionalExtensionPaths?: string[];
   /** 工具审批模式：always-ask（总询问）、write（自动编辑）、yolo（完全信任） */
   approvalMode?: ApprovalMode;
+  /** 被禁用的工具名列表（host 工具 + omp 内置工具），会话创建时不暴露给 LLM */
+  disabledTools?: string[];
 }
 
 export interface CustomToolDefinition {
@@ -62,6 +64,8 @@ export type Command =
   | { id: string; type: 'steer'; message: string }
   | { id: string; type: 'setModel'; provider: string; modelId: string }
   | { id: string; type: 'setApprovalMode'; approvalMode: ApprovalMode }
+  | { id: string; type: 'setToolFilter'; disabledTools: string[] }
+  | { id: string; type: 'listAgentTools' }
   | { id: string; type: 'getMessages' }
   | { id: string; type: 'getState' }
   | { id: string; type: 'compact' }
