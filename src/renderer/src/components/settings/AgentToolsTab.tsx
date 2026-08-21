@@ -8,14 +8,14 @@ import { cn } from '@renderer/lib/utils';
  *
  * 分两组展示：
  *  - SoC Verify 工具：静态目录（host-tools 注册的验证/覆盖率/文档等工具）
- *  - omp 引擎内置工具：从活跃会话枚举（无会话时展示最近一次缓存的清单）
+ *  - omp 引擎内置工具：优先从活跃会话枚举，无会话时使用静态内置目录
  *
  * 开关即时保存并推送到所有活跃会话；新会话创建时自动应用。
  */
 
 type HostToolMeta = { name: string; label: string };
 type HostToolGroup = { id: string; label: string; tools: HostToolMeta[] };
-type BuiltinToolInfo = { name: string; description: string };
+type BuiltinToolInfo = { name: string; label?: string; description: string };
 
 type AgentToolSettings = {
   disabledTools: string[];
@@ -79,6 +79,7 @@ export function AgentToolsTab() {
   }
 
   const disabled = new Set(settings?.disabledTools ?? []);
+  const hostGroups = settings?.hostGroups ?? [];
   const builtinTools = settings?.builtinTools ?? [];
 
   return (
@@ -104,7 +105,7 @@ export function AgentToolsTab() {
 
       {error && <p className="text-xs text-destructive">{error}</p>}
 
-      {(settings?.hostGroups ?? []).map((group) => (
+      {hostGroups.map((group) => (
         <section key={group.id} className="space-y-2">
           <h4 className="text-xs font-semibold text-foreground">{group.label}</h4>
           <div className="grid grid-cols-2 gap-1.5">
@@ -123,24 +124,18 @@ export function AgentToolsTab() {
 
       <section className="space-y-2">
         <h4 className="text-xs font-semibold text-foreground">omp 引擎内置工具</h4>
-        {builtinTools.length === 0 ? (
-          <p className="text-xs text-muted-foreground">
-            暂无内置工具清单——创建一个 Agent 会话后回到此页即可枚举并配置。
-          </p>
-        ) : (
-          <div className="grid grid-cols-2 gap-1.5">
-            {builtinTools.map((tool) => (
-              <ToolToggle
-                key={tool.name}
-                name={tool.name}
-                label={tool.name}
-                description={tool.description}
-                checked={!disabled.has(tool.name)}
-                onToggle={(v) => void toggle(tool.name, !v)}
-              />
-            ))}
-          </div>
-        )}
+        <div className="grid grid-cols-2 gap-1.5">
+          {builtinTools.map((tool) => (
+            <ToolToggle
+              key={tool.name}
+              name={tool.name}
+              label={tool.label ?? tool.name}
+              description={tool.description}
+              checked={!disabled.has(tool.name)}
+              onToggle={(v) => void toggle(tool.name, !v)}
+            />
+          ))}
+        </div>
       </section>
     </div>
   );
@@ -167,15 +162,30 @@ function ToolToggle({
       )}
       title={description ?? name}
     >
-      <span className="min-w-0 truncate text-xs" title={label}>
+      <span className="min-w-0 truncate text-xs" title={`${label} (${name})`}>
         {label}
+        <span className="ml-1 text-[10px] text-muted-foreground">({name})</span>
       </span>
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onToggle(e.target.checked)}
-        className="h-3.5 w-3.5 shrink-0 accent-[hsl(var(--primary))]"
-      />
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={(e) => {
+          e.preventDefault();
+          onToggle(!checked);
+        }}
+        className={cn(
+          'relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+          checked ? 'bg-primary' : 'bg-muted',
+        )}
+      >
+        <span
+          className={cn(
+            'pointer-events-none inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform',
+            checked ? 'translate-x-[18px]' : 'translate-x-[1px]',
+          )}
+        />
+      </button>
     </label>
   );
 }
