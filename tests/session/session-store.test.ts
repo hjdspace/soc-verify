@@ -454,6 +454,62 @@ describe('SessionStore — event handling and state machine', () => {
     expect(assistantMsg.content).toContain('API key invalid');
   });
 
+  it('suppresses transient MCP transport errors and keeps streaming placeholder alive', async () => {
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    await useSessionStore.getState().sendMessage('Hello');
+
+    // MCP transport glitch: message_end with only errorMessage, no content
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_end',
+      message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'Transport closed' },
+    });
+
+    // The streaming placeholder must survive — MCPManager auto-reconnects
+    const session = useSessionStore.getState().sessions[0];
+    const assistantMsg = session.messages[1];
+    expect(assistantMsg.isStreaming).toBe(true);
+    expect(assistantMsg.content).toBe('');
+
+    // The real response arrives via message_start / message_end
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_start',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Hello!' }] },
+    });
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'message_end',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Hello!' }], stopReason: 'stop' },
+    });
+
+    const updated = useSessionStore.getState().sessions[0];
+    expect(updated.messages[1].isStreaming).toBe(false);
+    expect(updated.messages[1].content).toBe('Hello!');
+  });
+
+  it('suppresses ECONNRESET and other transient transport errors', async () => {
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+    await useSessionStore.getState().sendMessage('Hello');
+
+    for (const transientError of ['ECONNRESET', 'EPIPE', 'fetch failed', 'network error']) {
+      useSessionStore.getState().handleSessionEvent('session_test_1', {
+        type: 'message_end',
+        message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: transientError },
+      });
+
+      const assistantMsg = useSessionStore.getState().sessions[0].messages[1];
+      expect(assistantMsg.isStreaming).toBe(true);
+      expect(assistantMsg.content).toBe('');
+    }
+
+    // Also test the default error handler suppresses transient errors
+    useSessionStore.getState().handleSessionEvent('session_test_1', {
+      type: 'transport_error',
+      error: 'Transport closed',
+    });
+
+    const session = useSessionStore.getState().sessions[0];
+    expect(session.status).not.toBe('error');
+  });
+
   it('separates thinking content from text content in message events', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
     await useSessionStore.getState().sendMessage('What model are you?');
