@@ -12,6 +12,7 @@ import { CaseStatsService } from './case-stats-service';
 import { initDatabase, closeDatabase, getDbPath, type CaseDatabase } from './db/case-database';
 import { CaseScanner } from './case-scanner';
 import { SimulationRunListener } from './sim-run-listener';
+import { loadEnvConfig } from '../env/env-manager';
 
 class CaseStatsRegistryImpl {
   private services = new Map<string, CaseStatsService>();
@@ -122,9 +123,28 @@ class CaseStatsRegistryImpl {
     return this.dbs.get(projectRoot) ?? null;
   }
 
-  /** 获取指定项目的 Scanner 实例（若已创建）。 */
+  /** 获取或创建指定项目的 Scanner 实例（若已创建）。 */
   getScanner(projectRoot: string): CaseScanner | null {
     return this.scanners.get(projectRoot) ?? null;
+  }
+
+  /**
+   * 启动指定项目的 RTL 目录文件监控。
+   * 从 env.json 读取 PROJ_RTL，调用 scanner.startWatch()。
+   * 监听失败不阻断功能（降级为手动刷新）。
+   */
+  async startScannerWatch(projectRoot: string): Promise<void> {
+    const scanner = this.scanners.get(projectRoot);
+    if (!scanner) return;
+
+    const envConfig = await loadEnvConfig(projectRoot);
+    const projRtl = envConfig?.envVars?.PROJ_RTL;
+    if (!projRtl) {
+      console.warn('[case-stats-registry] PROJ_RTL not configured, skip RTL directory watch');
+      return;
+    }
+
+    scanner.startWatch(projRtl);
   }
 
   /** No-op（ADR 0017 — DB 是 source of truth，无 discovery 缓存可清除）。
@@ -137,6 +157,11 @@ class CaseStatsRegistryImpl {
   remove(projectRoot: string): void {
     // Stop simulation run listener
     this.detachListener(projectRoot);
+    // Stop scanner file watcher
+    const scanner = this.scanners.get(projectRoot);
+    if (scanner) {
+      scanner.stopWatch();
+    }
     // Close DB connection
     const db = this.dbs.get(projectRoot);
     if (db) {
@@ -153,6 +178,10 @@ class CaseStatsRegistryImpl {
       listener.stop();
     }
     this.listeners.clear();
+    // Stop all scanner watchers
+    for (const scanner of this.scanners.values()) {
+      scanner.stopWatch();
+    }
     // Close all DB connections
     for (const db of this.dbs.values()) {
       closeDatabase(db);
