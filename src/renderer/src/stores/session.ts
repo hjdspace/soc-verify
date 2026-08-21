@@ -1479,6 +1479,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             // task 工具派遣的 subagent 生命周期帧（started/completed/failed/aborted）
             const p = evt.payload as Record<string, unknown> | undefined;
             const id = typeof p?.id === 'string' ? p.id : '';
+            console.log(`[store] subagent_lifecycle id=${id} status=${p?.status} parentToolCallId=${p?.parentToolCallId}`);
             if (!p || !id) return sess;
             const rawStatus = p.status;
             const status: SubagentActivity['status'] =
@@ -1514,6 +1515,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
             const p = evt.payload as Record<string, unknown> | undefined;
             const prog = p?.progress as Record<string, unknown> | undefined;
             const id = typeof p?.id === 'string' ? p.id : (typeof prog?.id === 'string' ? prog.id : '');
+            console.log(`[store] subagent_progress id=${id} tokens=${prog?.tokens} tool=${prog?.currentTool} parentToolCallId=${p?.parentToolCallId}`);
             if (!p || !id) return sess;
             const prev = sess.subagents?.[id];
             // 终态不回退：lifecycle 已判定完成后忽略残余 progress 帧
