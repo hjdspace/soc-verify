@@ -73,6 +73,8 @@ function triggerBackgroundScan(projectId: string, projectRoot: string): void {
           `[router:triggerBackgroundScan] project=${projectId}, ` +
           `scanned ${result.subsysCount} subsystems, ${result.caseCount} cases`,
         );
+        // Start RTL directory file watch for incremental auto-scan
+        void caseStatsRegistry.startScannerWatch(projectRoot);
       });
     })
     .catch((err) => {
