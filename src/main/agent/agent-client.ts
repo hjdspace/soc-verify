@@ -1,7 +1,7 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, spawn, execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { existsSync, statSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { platform } from 'node:os';
 import type {
   AgentClientOptions,
   Command,
@@ -93,6 +93,8 @@ function diagnoseSpawnFailure(binaryPath: string, err: Error): string {
 
 export class AgentClient {
   private process: ChildProcess | null = null;
+  /** The PID captured at spawn time, used for process-tree kill on Windows. */
+  private processPid: number | null = null;
   private requestId = 0;
   private pendingRequests = new Map<
     string,
@@ -104,6 +106,8 @@ export class AgentClient {
   private eventListeners: EventListener[] = [];
   private stderrBuffer = '';
   private readyTimeoutMs: number;
+  /** Guards against double-kill: once stop() runs, subsequent calls are no-ops. */
+  private stopping = false;
 
   constructor(private options: AgentClientOptions) {
     this.readyTimeoutMs = options.readyTimeoutMs ?? 30000;
@@ -134,8 +138,13 @@ export class AgentClient {
       cwd: this.options.cwd,
       env: { ...process.env, ...this.options.env },
       stdio: ['pipe', 'pipe', 'pipe'],
+      // On non-Windows platforms, start a new process group so we can
+      // signal the entire tree (omp may spawn subagents). Windows uses
+      // `killProcessTree()` which shells out to `taskkill /T /PID`.
+      ...(platform() !== 'win32' ? { detached: true } : {}),
     });
     this.process = child;
+    this.processPid = child.pid ?? null;
 
     const { promise: readyPromise, resolve: readyResolve, reject: readyReject } = Promise.withResolvers<void>();
     let readySettled = false;
@@ -228,22 +237,44 @@ export class AgentClient {
     try {
       await readyPromise;
     } catch (err) {
-      try {
-        child.kill();
-      } catch {
-        // best-effort cleanup
-      }
-      this.process = null;
+      // Kill the process tree (not just the leader) for proper cleanup.
+      this.stop();
       throw err;
     } finally {
       clearTimeout(readyTimeout);
     }
   }
 
+  /**
+   * Hard-kill the agent process and its entire process tree.
+   *
+   * On POSIX (Linux/macOS): sends SIGTERM to the process group (negative
+   * PID), then escalates to SIGKILL after a 1s grace period. This catches
+   * subagents spawned by the omp engine that would otherwise survive.
+   *
+   * On Windows: uses `taskkill /F /T /PID` which recursively terminates
+   * all child processes. Windows has no process groups in the POSIX sense,
+   * so this is the only reliable way to kill a process tree.
+   *
+   * After calling stop(), the AgentClient cannot be reused — a new process
+   * must be spawned via start().
+   */
   stop(): void {
-    if (!this.process) return;
-    this.process.kill();
+    if (this.stopping) return;
+    this.stopping = true;
+
+    if (!this.process) {
+      this.processPid = null;
+      return;
+    }
+
+    const pid = this.processPid ?? this.process.pid;
     this.process = null;
+    this.processPid = null;
+
+    if (pid) {
+      this.killProcessTree(pid);
+    }
 
     for (const [, pending] of this.pendingRequests) {
       clearTimeout(pending.timeoutId);
@@ -257,12 +288,54 @@ export class AgentClient {
     this.pendingToolCalls.clear();
   }
 
+  /**
+   * Kill an entire process tree.
+   *
+   * POSIX: signal the process group (killpg via negative PID), escalating
+   * SIGTERM → SIGKILL.
+   *
+   * Windows: `taskkill /F /T /PID` recursively kills all descendants.
+   */
+  private killProcessTree(pid: number): void {
+    if (platform() === 'win32') {
+      // Windows: taskkill /F (force) /T (tree) /PID
+      try {
+        execFileSync('taskkill', ['/F', '/T', '/PID', String(pid)], {
+          stdio: ['pipe', 'pipe', 'pipe'],
+          timeout: 5000,
+        });
+      } catch {
+        // Process may have already exited — best-effort.
+      }
+      return;
+    }
+
+    // POSIX: signal the process group via negative PID.
+    // `detached: true` at spawn ensures the child leads its own group.
+    try {
+      process.kill(-pid, 'SIGTERM');
+    } catch {
+      // ESRCH: process already exited — nothing to kill.
+      return;
+    }
+
+    // Escalate to SIGKILL after 1 second if the process is still alive.
+    const killTimer = setTimeout(() => {
+      try {
+        process.kill(-pid, 'SIGKILL');
+      } catch {
+        // Already gone — no-op.
+      }
+    }, 1000);
+    killTimer.unref();
+  }
+
   getStderr(): string {
     return this.stderrBuffer;
   }
 
   isRunning(): boolean {
-    return this.process !== null && !this.process.killed;
+    return this.process !== null && !this.stopping && !this.process.killed;
   }
 
   // ─── 事件订阅 ─────────────────────────────────────────
@@ -320,8 +393,30 @@ export class AgentClient {
     this.sendFireAndForget({ type: 'steer', message });
   }
 
+  /**
+   * Abort the current agent turn.
+   *
+   * Sends an `abort` command to the runner as fire-and-forget (the runner
+   * may take a long time to respond or never respond if the SDK abort is
+   * stuck). Immediately after sending, calls `stop()` to hard-kill the
+   * process tree — this ensures the LLM and any subagents are terminated,
+   * not just "asked to stop".
+   *
+   * The caller should NOT await this method expecting the agent to finish
+   * gracefully; the process is dead by the time this returns.
+   */
   async abort(): Promise<void> {
-    await this.send({ type: 'abort' });
+    // Send abort as fire-and-forget — we don't need (or want to wait for)
+    // the runner's response. The runner may be stuck in a long-running
+    // tool call or SDK abort that never resolves.
+    try {
+      this.sendFireAndForget({ type: 'abort' });
+    } catch {
+      // If stdin is already closed, the process is likely dead — proceed
+      // to stop() anyway for cleanup.
+    }
+    // Hard-kill the process tree immediately.
+    this.stop();
   }
 
   async setModel(provider: string, modelId: string): Promise<void> {
@@ -330,6 +425,18 @@ export class AgentClient {
 
   async setApprovalMode(approvalMode: import('./types').ApprovalMode): Promise<void> {
     await this.send({ type: 'setApprovalMode', approvalMode });
+  }
+
+  /** 动态更新会话的工具开关（被禁用的工具立即从 LLM 工具集中移除/恢复）。 */
+  async setToolFilter(disabledTools: string[]): Promise<void> {
+    await this.send({ type: 'setToolFilter', disabledTools });
+  }
+
+  /** 枚举会话当前激活的全部工具（含 omp 内置与 host 自定义）。 */
+  async listAgentTools(): Promise<Array<{ name: string; description: string }>> {
+    const response = await this.send({ type: 'listAgentTools' });
+    const data = this.getData<{ tools: Array<{ name: string; description: string }> }>(response);
+    return data.tools ?? [];
   }
 
   async getMessages(): Promise<unknown[]> {
@@ -392,11 +499,14 @@ export class AgentClient {
   }
 
   async destroy(): Promise<void> {
+    // Send destroy as fire-and-forget — we don't need to wait for the
+    // runner's response before killing the process.
     try {
-      await this.send({ type: 'destroy' });
-    } finally {
-      this.stop();
+      this.sendFireAndForget({ type: 'destroy' });
+    } catch {
+      // If stdin is already closed, the process may already be dead.
     }
+    this.stop();
   }
 
   // ─── 内部方法 ─────────────────────────────────────────
@@ -488,6 +598,7 @@ export class AgentClient {
     // Subagent frames (lifecycle/progress) are forwarded to event listeners
     // as-is; session-manager relays them to the renderer via 'sessionEvent'.
     if (isSubagentFrame(data)) {
+      console.log(`[agent:client] SUBAGENT_FRAME received: type=${(data as Record<string, unknown>).type}`);
       for (const listener of this.eventListeners) listener(data);
       return;
     }
