@@ -99,6 +99,8 @@ type InitConfig = {
 	additionalExtensionPaths?: string[];
 	/** 工具审批模式：always-ask（总询问）、write（自动编辑）、yolo（完全信任） */
 	approvalMode?: ApprovalMode;
+	/** 被禁用的工具名列表（host 工具 + omp 内置工具），会话创建时不暴露给 LLM */
+	disabledTools?: string[];
 	/**
 	 * UI 存储的对话历史（user/assistant 文本），用于 omp 会话文件缺失或
 	 * 只覆盖尾部时重建引擎上下文（失忆恢复种子）。
@@ -117,6 +119,8 @@ type Command =
 	| { id: string; type: "steer"; message: string }
 	| { id: string; type: "setModel"; provider: string; modelId: string }
 	| { id: string; type: "setApprovalMode"; approvalMode: ApprovalMode }
+	| { id: string; type: "setToolFilter"; disabledTools: string[] }
+	| { id: string; type: "listAgentTools" }
 	| { id: string; type: "getMessages" }
 	| { id: string; type: "getState" }
 	| { id: string; type: "compact" }
@@ -176,12 +180,15 @@ function requestApproval(toolName: string, args: unknown): Promise<boolean> {
 let currentApprovalMode: ApprovalMode = "yolo";
 let currentCwd = process.cwd();
 
+/** 当前被禁用的工具名（init 时设置，setToolFilter 时动态更新） */
+let currentDisabledTools: Set<string> = new Set();
+
 /** 原始工具的快照——包装前保存，以便切换模式时从原始工具重新包装 */
 let originalTools: unknown[] | null = null;
 
 /**
- * 用当前审批模式包装工具并设置到 agent 上。
- * - yolo 模式下恢复原始工具（无包装）
+ * 重建 agent 工具集：按 currentDisabledTools 过滤 + 按当前审批模式包装。
+ * - yolo 模式下不做审批包装（但仍应用工具开关过滤）
  * - 其他模式下对需要审批的工具插入 requestApproval 代理
  *
  * 使用 Proxy 包装而非对象展开（{ ...tool }），以保留原型链上的方法和属性。
@@ -200,7 +207,10 @@ function applyApprovalMode(): void {
 		}
 
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const wrappedTools = (originalTools as any[]).map((tool: any) => {
+		const wrappedTools = (originalTools as any[])
+			.filter((tool) => !currentDisabledTools.has((tool as { name: string }).name))
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			.map((tool: any) => {
 			const toolName: string = tool.name;
 			const requiresApproval = needsApproval(toolName, currentApprovalMode);
 			const capturesWriteSnapshot = toolName === "write";
@@ -362,19 +372,18 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 	// This resolves both when running directly with Bun (engine present)
 	// and when compiled with `bun build --compile` (resolved at compile time).
 	//
-	// Import paths are stored in variables so TypeScript does not follow the
-	// import graph into the engine submodule — the engine has its own tsconfig
-	// and uses Bun-specific features (e.g. `.md` imports) that produce spurious
-	// errors when checked from our project.
-	const sdkPath = "../engine/oh-my-pi/packages/coding-agent/src/sdk";
-	const modelRegistryPath = "../engine/oh-my-pi/packages/coding-agent/src/config/model-registry";
-	const sessionManagerPath = "../engine/oh-my-pi/packages/coding-agent/src/session/session-manager";
+	// Import paths MUST be string literals (not variables) so that Bun's
+	// `--compile` mode can statically analyze them and bundle the engine code
+	// into the standalone binary. TypeScript tracking into the engine submodule
+	// is blocked via ambient module declarations in runner/engine-modules.d.ts
+	// (the engine uses Bun-specific features like `.md` imports that produce
+	// spurious TS errors from our project).
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const { createAgentSession, discoverAuthStorage } = await import(sdkPath) as any;
+	const { createAgentSession, discoverAuthStorage } = await import("../engine/oh-my-pi/packages/coding-agent/src/sdk") as any;
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const { ModelRegistry } = await import(modelRegistryPath) as any;
+	const { ModelRegistry } = await import("../engine/oh-my-pi/packages/coding-agent/src/config/model-registry") as any;
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const { SessionManager } = await import(sessionManagerPath) as any;
+	const { SessionManager } = await import("../engine/oh-my-pi/packages/coding-agent/src/session/session-manager") as any;
 
 	// Enable console logging for the omp engine so errors are visible on
 	// stderr (captured by the Electron main process as [agent:stderr]).
@@ -382,9 +391,8 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 	// temp runtime dir, which is deleted when the session ends — making
 	// debugging impossible, especially in packaged AppImage/NSIS builds.
 	try {
-		const loggerPath = "../engine/oh-my-pi/packages/utils/src/logger";
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const { setTransports } = await import(loggerPath) as any;
+		const { setTransports } = await import("../engine/oh-my-pi/packages/utils/src/logger") as any;
 		setTransports({ console: true, file: true });
 	} catch {
 		// Best-effort: if the logger module path changes, don't block init.
@@ -600,22 +608,32 @@ async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
 	// carry everything the UI needs (currentTool, recentOutput, tokens...).
 	// The high-frequency `task:subagent:event` channel is intentionally NOT
 	// forwarded — its message_update events would flood the JSONL pipe.
+	//
+	// Channel names are hardcoded (not dynamically imported from the engine)
+	// because the runner may be compiled into a standalone binary via
+	// `bun build --compile`, at which point the relative import path to the
+	// engine submodule no longer resolves. The string values must stay in sync
+	// with TASK_SUBAGENT_LIFECYCLE_CHANNEL / TASK_SUBAGENT_PROGRESS_CHANNEL in
+	// engine/oh-my-pi/packages/coding-agent/src/task/types.ts.
 	try {
-		const taskTypesPath = "../engine/oh-my-pi/packages/coding-agent/src/task/types";
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } = await import(taskTypesPath) as any;
-		result.eventBus.on(TASK_SUBAGENT_LIFECYCLE_CHANNEL, (payload: unknown) => {
+		result.eventBus.on("task:subagent:lifecycle", (payload: unknown) => {
+			console.error(`[socverify-runner] SUBAGENT_LIFECYCLE fired — sending frame`);
 			send({ type: "subagent_lifecycle", payload });
 		});
-		result.eventBus.on(TASK_SUBAGENT_PROGRESS_CHANNEL, (payload: unknown) => {
+		result.eventBus.on("task:subagent:progress", (payload: unknown) => {
+			console.error(`[socverify-runner] SUBAGENT_PROGRESS fired — sending frame`);
 			send({ type: "subagent_progress", payload });
 		});
+		console.error("[socverify-runner] subagent EventBus subscriptions registered OK");
 	} catch (err) {
 		console.error("[socverify-runner] failed to subscribe subagent channels:", err);
 	}
 
-	// Wrap built-in tools with approval proxy when approvalMode is set
+	// Wrap built-in tools with approval proxy when approvalMode is set,
+	// and apply the tool-disable filter from settings.
 	currentApprovalMode = config.approvalMode ?? "yolo";
+	currentDisabledTools = new Set(config.disabledTools ?? []);
+	currentDisabledTools.delete("ask");
 	applyApprovalMode();
 
 	// Subscribe to events and forward them to the host
@@ -681,6 +699,31 @@ async function handleSetApprovalMode(cmd: Command & { type: "setApprovalMode" })
 	sendResponse(cmd.id, true, { ok: true, approvalMode: currentApprovalMode });
 }
 
+async function handleSetToolFilter(cmd: Command & { type: "setToolFilter" }): Promise<void> {
+	if (!session) throw new Error("Session not initialized");
+	currentDisabledTools = new Set(cmd.disabledTools);
+	// `ask` 是宿主交互问答通道，禁用会导致 agent 无法向用户提问，强制保留
+	currentDisabledTools.delete("ask");
+	applyApprovalMode();
+	sendResponse(cmd.id, true, { ok: true, disabledCount: currentDisabledTools.size });
+}
+
+async function handleListAgentTools(cmd: Command & { type: "listAgentTools" }): Promise<void> {
+	if (!session) throw new Error("Session not initialized");
+	// 优先用原始快照（含被禁用工具，供设置页展示完整目录）；
+	// 会话刚创建尚未重建工具集时回退到当前激活工具。
+	const source =
+		originalTools ??
+		(session.getActiveToolNames() as string[])
+			.map((name: string) => session.getToolByName(name))
+			.filter((tool: unknown) => tool != null);
+	const tools = (source as Array<{ name: string; description?: string }>).map((tool) => ({
+		name: tool.name,
+		description: typeof tool.description === "string" ? tool.description : "",
+	}));
+	sendResponse(cmd.id, true, { tools });
+}
+
 async function handleGetMessages(cmd: Command & { type: "getMessages" }): Promise<void> {
 	if (!session) throw new Error("Session not initialized");
 	const messages = session.messages;
@@ -716,9 +759,8 @@ async function handleGetMcpStatus(cmd: Command & { type: "getMcpStatus" }): Prom
 		// Access the MCPManager from the session. The SDK creates a singleton
 		// MCPManager.instance() that manages all MCP connections. We query it
 		// for all known servers and their connection status.
-		const mcpManagerPath = "../engine/oh-my-pi/packages/coding-agent/src/mcp/manager";
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const { MCPManager } = await import(mcpManagerPath) as any;
+		const { MCPManager } = await import("../engine/oh-my-pi/packages/coding-agent/src/mcp/manager") as any;
 		const manager = MCPManager.instance();
 		if (!manager) {
 			sendResponse(cmd.id, true, { servers: {} });
@@ -752,9 +794,8 @@ async function handleGetMcpServerTools(cmd: Command & { type: "getMcpServerTools
 	if (!session) throw new Error("Session not initialized");
 
 	try {
-		const mcpManagerPath = "../engine/oh-my-pi/packages/coding-agent/src/mcp/manager";
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const { MCPManager } = await import(mcpManagerPath) as any;
+		const { MCPManager } = await import("../engine/oh-my-pi/packages/coding-agent/src/mcp/manager") as any;
 		const manager = MCPManager.instance();
 		if (!manager) {
 			sendResponse(cmd.id, true, { tools: [] });
@@ -770,9 +811,8 @@ async function handleGetMcpServerTools(cmd: Command & { type: "getMcpServerTools
 		// Use cached tools if available; otherwise call listTools to fetch.
 		let tools = connection.tools;
 		if (!tools) {
-			const mcpClientPath = "../engine/oh-my-pi/packages/coding-agent/src/mcp/client";
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			const { listTools } = await import(mcpClientPath) as any;
+			const { listTools } = await import("../engine/oh-my-pi/packages/coding-agent/src/mcp/client") as any;
 			tools = await listTools(connection);
 		}
 
@@ -795,9 +835,8 @@ async function handleReloadMcp(cmd: Command & { type: "reloadMcp" }): Promise<vo
 	if (!session) throw new Error("Session not initialized");
 
 	try {
-		const mcpManagerPath = "../engine/oh-my-pi/packages/coding-agent/src/mcp/manager";
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const { MCPManager } = await import(mcpManagerPath) as any;
+		const { MCPManager } = await import("../engine/oh-my-pi/packages/coding-agent/src/mcp/manager") as any;
 		const manager = MCPManager.instance();
 		if (!manager) {
 			sendResponse(cmd.id, true, { ok: true, servers: {} });
@@ -876,6 +915,12 @@ async function handleCommand(cmd: Command): Promise<void> {
 				break;
 			case "setApprovalMode":
 				await handleSetApprovalMode(cmd);
+				break;
+			case "setToolFilter":
+				await handleSetToolFilter(cmd);
+				break;
+			case "listAgentTools":
+				await handleListAgentTools(cmd);
 				break;
 			case "getMessages":
 				await handleGetMessages(cmd);
