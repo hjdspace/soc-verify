@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react';
 import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import CodeMirror from '@uiw/react-codemirror';
 import { StreamLanguage } from '@codemirror/language';
@@ -36,6 +36,24 @@ import { search, searchKeymap, openSearchPanel } from '@codemirror/search';
 import { Breadcrumb } from './Breadcrumb';
 import { EditorStatusBar, type CursorPosition } from './EditorStatusBar';
 import { Minimap } from './Minimap';
+import { MermaidDiagram } from '@renderer/components/chat/MermaidDiagram';
+
+// ── Markdown 预览辅助 ──────────────────────────────────────────
+
+/**
+ * Extract raw text content from React children (strings, arrays, elements).
+ * Used to extract the source code from react-markdown's <code> children.
+ */
+function extractText(children: ReactNode): string {
+  if (typeof children === 'string') return children;
+  if (typeof children === 'number') return String(children);
+  if (Array.isArray(children)) return children.map(extractText).join('');
+  if (children && typeof children === 'object' && 'props' in children) {
+    const props = (children as { props?: { children?: ReactNode } }).props;
+    if (props?.children) return extractText(props.children);
+  }
+  return '';
+}
 
 // ── 语言扩展映射 ──────────────────────────────────────────────
 
@@ -598,6 +616,21 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
                   img: ({ src, alt }) => (
                     <img src={resolveImageSrc(filePath, src)} alt={alt} loading="lazy" className="max-w-full" />
                   ),
+                  // Mermaid 代码块渲染为图表，其余代码块正常显示
+                  code: ({ className, children }) => {
+                    const text = extractText(children);
+                    const lang = className?.replace('language-', '') ?? '';
+                    if (lang === 'mermaid') {
+                      return <MermaidDiagram code={text.trim()} />;
+                    }
+                    return (
+                      <code className={className}>
+                        {children}
+                      </code>
+                    );
+                  },
+                  // 透传 pre children，避免 mermaid 图表被 <pre> 包裹
+                  pre: ({ children }) => <>{children}</>,
                 }}
               >
                 {content}

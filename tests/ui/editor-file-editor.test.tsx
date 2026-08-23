@@ -48,11 +48,54 @@ vi.mock('@renderer/lib/trpc', () => ({ trpc }));
 vi.mock('@uiw/react-codemirror', () => ({
   default: mockCodeMirror,
 }));
-vi.mock('react-markdown', () => ({
-  default: ({ children }: { children: string }) => <div>{children}</div>,
+// Enhanced react-markdown mock: renders children, but also invokes the
+// `components.code` override when a fenced code block is encountered.
+// This lets us verify that FileEditor routes mermaid blocks to MermaidDiagram.
+const { mockReactMarkdown } = vi.hoisted(() => ({
+  mockReactMarkdown: vi.fn(({ children, components }: {
+    children: string;
+    components?: Record<string, React.ComponentType<Record<string, unknown>>>;
+  }) => {
+    // If no components override, just render children (backward compat)
+    if (!components?.code) {
+      return <div>{children}</div>;
+    }
+    // Parse fenced code blocks from the markdown source and invoke the
+    // code component for each, mimicking react-markdown's behavior.
+    const CodeComponent = components.code;
+    const blocks: Array<{ lang: string; text: string }> = [];
+    const fenceRe = /```(\w*)\n([\s\S]*?)```/g;
+    let m: RegExpExecArray | null;
+    while ((m = fenceRe.exec(children)) !== null) {
+      blocks.push({ lang: m[1] ?? '', text: m[2] ?? '' });
+    }
+    if (blocks.length === 0) {
+      return <div>{children}</div>;
+    }
+    return (
+      <div>
+        {blocks.map((b, i) => (
+          <CodeComponent key={i} className={`language-${b.lang}`} node={{}}>
+            {b.text}
+          </CodeComponent>
+        ))}
+      </div>
+    );
+  }),
 }));
+vi.mock('react-markdown', () => ({ default: mockReactMarkdown }));
 vi.mock('remark-gfm', () => ({ default: () => ({}) }));
 vi.mock('rehype-raw', () => ({ default: () => ({}) }));
+
+// Mock MermaidDiagram so we can verify it gets rendered for mermaid blocks
+const { mermaidStub } = vi.hoisted(() => ({
+  mermaidStub: ({ code }: { code: string }) => (
+    <div data-testid="mermaid-diagram-stub">{code}</div>
+  ),
+}));
+vi.mock('@renderer/components/chat/MermaidDiagram', () => ({
+  MermaidDiagram: mermaidStub,
+}));
 
 vi.mock('@renderer/stores/theme', () => ({
   useThemeStore: Object.assign(
@@ -815,5 +858,95 @@ describe('FileEditor — Minimap', () => {
     await waitFor(() => {
       expect(screen.getByTestId('minimap-container')).toBeTruthy();
     });
+  });
+});
+
+// ── Markdown 预览中的 Mermaid 图表渲染 ───────────────────────────
+
+describe('FileEditor — Markdown preview mermaid support', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedExtensions = [];
+    mockVimEnabled = false;
+    mockMinimapEnabled = false;
+  });
+
+  it('renders MermaidDiagram for mermaid code blocks in markdown preview', async () => {
+    const mdContent = [
+      '# Architecture',
+      '',
+      '```mermaid',
+      'flowchart LR',
+      '  A --> B',
+      '```',
+    ].join('\n');
+    trpc.project.readFile.query.mockResolvedValue(mdContent);
+
+    render(
+      <FileEditor projectId="proj-1" filePath="/docs/arch.md" fileName="arch.md" />,
+    );
+
+    // Wait for editor to load, then switch to preview mode
+    await waitFor(() => {
+      expect(screen.getByTestId('codemirror-mock')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTitle('切换到预览模式'));
+
+    // MermaidDiagram stub should be rendered with the diagram source code
+    await waitFor(() => {
+      expect(screen.getByTestId('mermaid-diagram-stub')).toBeTruthy();
+    });
+    expect(screen.getByTestId('mermaid-diagram-stub').textContent).toContain('flowchart LR');
+  });
+
+  it('renders MermaidDiagram for multiple mermaid blocks', async () => {
+    const mdContent = [
+      '```mermaid',
+      'flowchart LR',
+      '  A --> B',
+      '```',
+      '',
+      'Some text between.',
+      '',
+      '```mermaid',
+      'sequenceDiagram',
+      '  A->>B: ping',
+      '```',
+    ].join('\n');
+    trpc.project.readFile.query.mockResolvedValue(mdContent);
+
+    render(
+      <FileEditor projectId="proj-1" filePath="/docs/diagrams.md" fileName="diagrams.md" />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('codemirror-mock')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTitle('切换到预览模式'));
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId('mermaid-diagram-stub')).toHaveLength(2);
+    });
+  });
+
+  it('does not render MermaidDiagram for non-mermaid code blocks', async () => {
+    const mdContent = [
+      '```python',
+      'print("hello")',
+      '```',
+    ].join('\n');
+    trpc.project.readFile.query.mockResolvedValue(mdContent);
+
+    render(
+      <FileEditor projectId="proj-1" filePath="/docs/code.md" fileName="code.md" />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('codemirror-mock')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTitle('切换到预览模式'));
+
+    // No mermaid diagram should be rendered
+    expect(screen.queryByTestId('mermaid-diagram-stub')).toBeNull();
   });
 });
