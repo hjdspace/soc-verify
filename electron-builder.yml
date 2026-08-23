@@ -1,9 +1,14 @@
 appId: com.socverify.app
 productName: SoC Verify
-compression: store
+compression: normal
 npmRebuild: false
 nodeGypRebuild: false
 buildDependenciesFromSource: false
+afterPack: ./scripts/electron-builder-afterpack.cjs
+# 只保留中英文 Chromium 语言包，裁剪 locales/*.pak（约 -40MB）
+electronLanguages:
+  - zh-CN
+  - en-US
 directories:
   output: dist
   buildResources: build
@@ -20,7 +25,8 @@ extraResources:
     filter: ["**/*"]
   - from: resources/binaries
     to: binaries
-    filter: ["**/*", "!README.md"]
+    # 排除 officecli 自更新中断残留的 .update.partial 临时文件（非有效载荷）
+    filter: ["**/*", "!README.md", "!**/*.update.partial"]
   - from: resources/built-in-extension
     to: built-in-extension
     filter: ["**/*"]
