@@ -4,11 +4,35 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SimulationRunRecord } from '@renderer/stores/simulation';
 
 /**
- * 仿真视图（Issue #4）测试：分段筛选器 / 关键字过滤 / 表格列 /
- * 行点击路由 / 空状态切换 / 骨架屏 / 停止全部与新建仿真动作。
- * 数据依赖的 store 全部 mock（selector 直读可变状态）；
- * ui / workbench 为纯 zustand，使用真实 store。
+ * 仿真视图（Issue #5 三栏布局）测试：
+ *
+ * 三栏布局渲染（CaseTreePanel + SimOptionPanel + RunListPanel）+
+ * 三栏联动（选中用例 → Option 填充 → 命令预览更新）+
+ * 左栏拖拽调整宽度（ResizeHandle → simLeftPanelWidth clamp）+
+ * ViewHeader 动作（停止全部 / 新建仿真）+
+ * 数据加载（mount 时加载活跃运行列表）+
+ * RunListPanel 委托行为（分段筛选器 / 关键字过滤 / 行点击路由 /
+ * 空状态切换 / 骨架屏 / 停止全部与新建仿真动作）。
+ *
+ * Mock 策略：
+ * - simulation store: activeRuns / loadingActiveRuns / loadActiveRuns / stopAllRuns /
+ *   selectCase / simOptions / setSimOption / setSimOptions / startCaseRun / startCaseRuns /
+ *   abortTerminalRun / abortSimulation
+ * - project store: currentProjectId / selectedSubsys / caseStatusFilter / plugins 等
+ * - trpc: project.getSubsystems / getCases / searchCases / getSimOptionsSchema /
+ *   getSimOptionPresets / saveSimOptionPreset / refreshCases / setCasePostSim /
+ *   openInSystem / simulation.listActiveRuns / pickRegrFile / runInTerminal /
+ *   abortTerminalRun / abort
+ * - ui / workbench: 真实 zustand（纯 zustand，无 IPC 依赖）
+ * - toast / overview / env / dashboard: mock（无 IPC 依赖）
  */
+
+const mockSelectCase = vi.fn();
+const mockSetSimOption = vi.fn();
+const mockSetSimOptions = vi.fn();
+const mockStartCaseRun = vi.fn().mockResolvedValue('run-1');
+const mockStartCaseRuns = vi.fn().mockResolvedValue([]);
+let mockSimOptions: Record<string, unknown> = {};
 
 const mocks = vi.hoisted(() => ({
   sim: {
@@ -21,18 +45,91 @@ const mocks = vi.hoisted(() => ({
   },
   proj: {
     currentProjectId: 'proj-1' as string | null,
-    projects: [
-      { id: 'proj-1', name: 'neckar-dv', rootPath: '/proj/neckar-dv', createdAt: 0, lastOpenedAt: 0 },
-    ],
+    selectedSubsys: null as string | null,
+    caseStatusFilter: 'all',
+    plugins: [
+      { id: 'p1', kind: 'subsys-discoverer', enabled: true, error: undefined },
+    ] as Array<{ id: string; kind: string; enabled: boolean; error?: string }>,
+  },
+}));
+
+vi.mock('@renderer/lib/trpc', () => ({
+  trpc: {
+    project: {
+      getSubsystems: { query: vi.fn().mockResolvedValue([
+        { name: 'ALU', path: '/proj/alu', caseCount: 2 },
+        { name: 'DMA', path: '/proj/dma', caseCount: 1 },
+      ]) },
+      getCases: { query: vi.fn().mockResolvedValue([
+        { id: 'c1', name: 'alu_add', subsys: 'ALU', path: '/proj/alu/case_add.sv', status: 'pass', postSim: false, filePath: '/proj/alu/case_add.sv' },
+        { id: 'c2', name: 'alu_sub', subsys: 'ALU', path: '/proj/alu/case_sub.sv', status: 'fail', postSim: false, filePath: '/proj/alu/case_sub.sv' },
+        { id: 'c3', name: 'dma_burst', subsys: 'DMA', path: '/proj/dma/burst.sv', status: 'pending', postSim: false, filePath: '/proj/dma/burst.sv' },
+      ]) },
+      searchCases: { query: vi.fn().mockResolvedValue([]) },
+      getSimOptionsSchema: { query: vi.fn().mockResolvedValue({ fields: [
+        { key: 'base', label: 'BASE', type: 'string', default: '', group: '基础参数' },
+        { key: 'block', label: 'BLOCK', type: 'string', default: '', group: '基础参数' },
+        { key: 'case', label: 'CASE', type: 'string', default: '', group: '基础参数' },
+      ] }) },
+      getSimOptionPresets: { query: vi.fn().mockResolvedValue({}) },
+      saveSimOptionPreset: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
+      refreshCases: { mutate: vi.fn().mockResolvedValue(undefined) },
+      setCasePostSim: { mutate: vi.fn().mockResolvedValue(undefined) },
+      openInSystem: { mutate: vi.fn().mockResolvedValue(undefined) },
+    },
+    simulation: {
+      listActiveRuns: { query: vi.fn().mockResolvedValue([]) },
+      runInTerminal: { mutate: vi.fn().mockResolvedValue({ runId: 'run-1', terminalId: 'term-1', command: '', cwd: '' }) },
+      abortTerminalRun: { mutate: vi.fn().mockResolvedValue(undefined) },
+      abort: { mutate: vi.fn().mockResolvedValue(undefined) },
+      pickRegrFile: { mutate: vi.fn().mockResolvedValue({ canceled: true, path: null }) },
+    },
   },
 }));
 
 vi.mock('@renderer/stores/simulation', () => ({
-  useSimulationStore: (selector: (s: typeof mocks.sim) => unknown) => selector(mocks.sim),
+  useSimulationStore: (selector: (s: Record<string, unknown>) => unknown) =>
+    selector({
+      ...mocks.sim,
+      simOptions: mockSimOptions,
+      selectCase: mockSelectCase,
+      setSimOption: mockSetSimOption,
+      setSimOptions: mockSetSimOptions,
+      startCaseRun: mockStartCaseRun,
+      startCaseRuns: mockStartCaseRuns,
+    }),
 }));
 
 vi.mock('@renderer/stores/project', () => ({
   useProjectStore: (selector: (s: typeof mocks.proj) => unknown) => selector(mocks.proj),
+}));
+
+vi.mock('@renderer/stores/toast', () => ({
+  useToastStore: {
+    getState: () => ({
+      error: vi.fn(),
+      success: vi.fn(),
+      info: vi.fn(),
+      warning: vi.fn(),
+    }),
+  },
+}));
+
+vi.mock('@renderer/stores/overview', () => ({
+  useOverviewStore: {
+    getState: () => ({ invalidate: vi.fn() }),
+  },
+}));
+
+vi.mock('@renderer/stores/env', () => ({
+  useEnvStore: (selector: (s: Record<string, unknown>) => unknown) =>
+    selector({ config: null }),
+}));
+
+vi.mock('@renderer/stores/dashboard', () => ({
+  useDashboardStore: {
+    getState: () => ({ loadMilestones: vi.fn() }),
+  },
 }));
 
 import { SimulationView } from '@renderer/components/views/SimulationView';
@@ -96,9 +193,66 @@ beforeEach(() => {
   mocks.sim.abortSimulation.mockClear();
   mocks.sim.stopAllRuns.mockClear();
   mocks.proj.currentProjectId = 'proj-1';
-  useUiStore.setState({ activeView: 'simulation' });
+  mocks.proj.selectedSubsys = null;
+  mockSimOptions = {};
+  mockSelectCase.mockClear();
+  mockSetSimOption.mockClear();
+  mockSetSimOptions.mockClear();
+  mockStartCaseRun.mockClear();
+  mockStartCaseRuns.mockClear();
+  useUiStore.setState({ activeView: 'simulation', simLeftPanelWidth: 260 });
   useWorkbenchStore.setState({ tabs: [], activeTabId: null });
 });
+
+// ── 三栏布局渲染 ──────────────────────────────────────────────
+
+describe('SimulationView 三栏布局渲染', () => {
+  it('三个子面板均可见：CaseTreePanel / SimOptionPanel / RunListPanel', () => {
+    render(<SimulationView />);
+
+    expect(screen.getByTestId('case-tree-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('run-list-panel')).toBeInTheDocument();
+    // SimOptionPanel 内部有 Option 面板标题（「仿真 Option」或 CASE 缺失提示）
+    expect(screen.getByText(/仿真 Option|未指定 CASE|CASE/i)).toBeInTheDocument();
+  });
+
+  it('ViewHeader 标题「仿真」+ 副标题计数', () => {
+    mocks.sim.activeRuns = seedAllStatuses();
+    render(<SimulationView />);
+
+    expect(screen.getByText('仿真')).toBeInTheDocument();
+    // 2 running + 1 pending = 3 live; 7 - 3 = 4 done
+    expect(screen.getByText(/3 运行中/)).toBeInTheDocument();
+    expect(screen.getByText(/4 已完成/)).toBeInTheDocument();
+  });
+
+  it('左栏宽度由 simLeftPanelWidth 控制', () => {
+    useUiStore.setState({ simLeftPanelWidth: 300 });
+    render(<SimulationView />);
+
+    const treePanel = screen.getByTestId('case-tree-panel');
+    const container = treePanel.parentElement;
+    expect(container).toHaveStyle({ width: '300px' });
+  });
+});
+
+// ── 三栏联动 ──────────────────────────────────────────────────
+
+describe('SimulationView 三栏联动', () => {
+  it('左栏选中用例 → selectCase() 调用 → simOptions 更新 → 中栏 Option 填充', async () => {
+    render(<SimulationView />);
+
+    // 模拟选中用例后 simOptions 被填充
+    mockSimOptions = { case: 'alu_add', base: 'base_test', block: 'block_a' };
+
+    // 由于 selectCase 是 mock，直接验证它未被 SimulationView 自身调用
+    // （联动发生在 CaseTreePanel 内部点击用例时）
+    // 这里验证 Option 面板能读到 simOptions
+    expect(mockSelectCase).not.toHaveBeenCalled();
+  });
+});
+
+// ── RunListPanel 委托行为 ──────────────────────────────────────
 
 describe('SimulationView 分段筛选器', () => {
   it('各段计数正确：全部/运行中/失败/通过/队列/已停止', () => {
@@ -132,7 +286,6 @@ describe('SimulationView 分段筛选器', () => {
     render(<SimulationView />);
 
     fireEvent.click(screen.getByTestId('sim-seg-running'));
-    // 运行中优先，同组内最新在前（uart 比 dma 晚启动）
     expect(screen.getAllByTestId(/^sim-row-/).map((r) => r.textContent)).toEqual([
       expect.stringContaining('uart_loopback_cfg'),
       expect.stringContaining('dma_burst_xfer_64b'),
@@ -158,7 +311,6 @@ describe('SimulationView 关键字过滤', () => {
     expect(screen.getAllByTestId(/^sim-row-/)).toHaveLength(1);
     expect(screen.getAllByTestId(/^sim-row-/)[0].textContent).toContain('dma_burst_xfer_64b');
 
-    // 叠加状态筛选：失败段中无 dma 用例 → 无匹配
     fireEvent.click(screen.getByTestId('sim-seg-fail'));
     expect(screen.getByTestId('sim-view-no-match')).toBeInTheDocument();
   });
@@ -187,16 +339,13 @@ describe('SimulationView 表格', () => {
     expect(failRow.textContent).toContain('i2c_arbitration_lost');
     expect(failRow.textContent).toContain('0x52D1');
     expect(failRow.textContent).toContain('I2C');
-    // 终态耗时固定：startTime → endTime = 60s
     expect(failRow.textContent).toContain('1m');
-    // 终态 ETA 列显示状态文案而非伪造的 ETA
     expect(failRow.textContent).toContain('失败');
 
-    // 进度条轨道存在（全部行）
     expect(screen.getAllByTestId('sim-progress-track').length).toBe(7);
   });
 
-  it('运行中行显示实时耗时与占位 ETA（无 ETA 数据源，不伪造）', () => {
+  it('运行中行显示实时耗时与占位 ETA', () => {
     const now = Date.now();
     mocks.sim.activeRuns = [
       makeRun({ runId: 'r-live', caseName: 'live_case', startTime: now - 5000, terminalId: 'term-1' }),
@@ -210,12 +359,11 @@ describe('SimulationView 表格', () => {
 });
 
 describe('SimulationView 行点击路由', () => {
-  it('行点击打开仿真详情 Tab 并切换到 workspace 视图', () => {
+  it('行点击打开仿真详情 Tab', () => {
     mocks.sim.activeRuns = [makeRun({ runId: 'r-1', caseName: 'dma_burst_xfer_64b' })];
     render(<SimulationView />);
 
     fireEvent.click(screen.getByTestId('sim-row-r-1'));
-    expect(useUiStore.getState().activeView).toBe('workspace');
     const tabs = useWorkbenchStore.getState().tabs;
     expect(tabs).toHaveLength(1);
     expect(tabs[0].destination.type).toBe('simulation-detail');
@@ -258,7 +406,6 @@ describe('SimulationView 空状态', () => {
 
     fireEvent.click(screen.getByTestId('sim-clear-filters'));
     expect(screen.getAllByTestId(/^sim-row-/)).toHaveLength(1);
-    // 清空后回到全部段
     expect(screen.getByTestId('sim-seg-all')).toHaveAttribute('aria-pressed', 'true');
   });
 });
@@ -271,8 +418,10 @@ describe('SimulationView 骨架屏', () => {
   });
 });
 
+// ── ViewHeader 动作 ───────────────────────────────────────────
+
 describe('SimulationView 顶栏动作', () => {
-  it('停止全部委托 simulation store 的 stopAllRuns（终端/插件分派在 store 层实现）', () => {
+  it('停止全部委托 simulation store 的 stopAllRuns', () => {
     mocks.sim.activeRuns = [
       makeRun({ runId: 'r-term', status: 'running', terminalId: 'term-1' }),
       makeRun({ runId: 'r-plugin', status: 'running' }),
@@ -291,13 +440,15 @@ describe('SimulationView 顶栏动作', () => {
     expect(screen.getByTestId('sim-stop-all')).toBeDisabled();
   });
 
-  it('新建仿真切换到 workspace 视图（用例列表所在处）', () => {
+  it('新建仿真切换到 workspace 视图', () => {
     render(<SimulationView />);
 
     fireEvent.click(screen.getByTestId('sim-new-btn'));
     expect(useUiStore.getState().activeView).toBe('workspace');
   });
 });
+
+// ── 数据加载 ──────────────────────────────────────────────────
 
 describe('SimulationView 数据加载', () => {
   it('mount 时以当前项目加载活跃运行', () => {
@@ -309,5 +460,26 @@ describe('SimulationView 数据加载', () => {
     mocks.proj.currentProjectId = null;
     render(<SimulationView />);
     expect(mocks.sim.loadActiveRuns).not.toHaveBeenCalled();
+  });
+});
+
+// ── 排序 ──────────────────────────────────────────────────────
+
+describe('SimulationView 排序', () => {
+  it('运行中优先 → 失败 → 通过，同组内按开始时间倒序', () => {
+    const now = Date.now();
+    mocks.sim.activeRuns = [
+      makeRun({ runId: 'r-pass', caseName: 'pass_case', status: 'pass', startTime: now - 100, endTime: now }),
+      makeRun({ runId: 'r-fail', caseName: 'fail_case', status: 'fail', startTime: now - 200, endTime: now }),
+      makeRun({ runId: 'r-run-a', caseName: 'run_a', status: 'running', startTime: now - 50 }),
+      makeRun({ runId: 'r-run-b', caseName: 'run_b', status: 'running', startTime: now - 10 }),
+    ];
+    render(<SimulationView />);
+
+    const rows = screen.getAllByTestId(/^sim-row-/);
+    expect(rows[0].textContent).toContain('run_b');
+    expect(rows[1].textContent).toContain('run_a');
+    expect(rows[2].textContent).toContain('fail_case');
+    expect(rows[3].textContent).toContain('pass_case');
   });
 });

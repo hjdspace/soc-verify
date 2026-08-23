@@ -242,7 +242,7 @@ describe('RunListPanel 停止全部', () => {
     ];
     render(<RunListPanel />);
 
-    fireEvent.click(screen.getByTestId('sim-stop-all'));
+    fireEvent.click(screen.getByTestId('run-list-stop-all'));
     expect(mocks.sim.stopAllRuns).toHaveBeenCalledTimes(1);
   });
 
@@ -250,7 +250,7 @@ describe('RunListPanel 停止全部', () => {
     mocks.sim.activeRuns = [makeRun({ runId: 'r-done', status: 'pass', endTime: Date.now() })];
     render(<RunListPanel />);
 
-    expect(screen.getByTestId('sim-stop-all')).toBeDisabled();
+    expect(screen.getByTestId('run-list-stop-all')).toBeDisabled();
   });
 });
 

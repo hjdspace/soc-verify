@@ -216,7 +216,7 @@ export function RunListPanel() {
             className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-3.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-border/80 hover:bg-card hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
             onClick={() => void stopAllRuns()}
             disabled={!hasLive}
-            data-testid="sim-stop-all"
+            data-testid="run-list-stop-all"
             title="停止全部运行中/队列中的仿真"
           >
             <Square className="size-2.5" fill="currentColor" />
