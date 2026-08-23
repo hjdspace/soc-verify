@@ -55,8 +55,8 @@ interface PaletteGroup {
 const NAV_VIEWS: ReadonlyArray<{ view: ActiveView; label: string; hint?: string; icon: LucideIcon }> = [
   { view: 'dashboard', label: '前往 总览', hint: 'Ctrl 1', icon: LayoutDashboard },
   { view: 'simulation', label: '前往 仿真', hint: 'Ctrl 2', icon: Play },
-  { view: 'coverage', label: '前往 覆盖率', hint: 'Ctrl 3', icon: BarChart3 },
-  { view: 'regression', label: '前往 回归', hint: 'Ctrl 4', icon: GitBranch },
+  { view: 'regression', label: '前往 回归', hint: 'Ctrl 3', icon: GitBranch },
+  { view: 'coverage', label: '前往 覆盖率', hint: 'Ctrl 4', icon: BarChart3 },
   { view: 'workspace', label: '前往 工作区', icon: Layers },
 ];
 

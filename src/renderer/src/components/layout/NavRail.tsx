@@ -20,17 +20,17 @@ type NavItem = {
   icon: typeof Play;
 };
 
-/** 五个视图按钮：总览 / 仿真 / 覆盖率 / 回归 / 工作区（tooltip 含 Ctrl+N 快捷键） */
+/** 五个视图按钮：总览 / 仿真 / 回归 / 覆盖率 / 工作区（tooltip 含 Ctrl+N 快捷键） */
 const VIEW_ITEMS: NavItem[] = [
   { view: 'dashboard', label: '总览 · Ctrl 1', icon: LayoutDashboard },
   { view: 'simulation', label: '仿真 · Ctrl 2', icon: Play },
-  { view: 'coverage', label: '覆盖率 · Ctrl 3', icon: Target },
-  { view: 'regression', label: '回归 · Ctrl 4', icon: Repeat },
+  { view: 'regression', label: '回归 · Ctrl 3', icon: Repeat },
+  { view: 'coverage', label: '覆盖率 · Ctrl 4', icon: Target },
   { view: 'workspace', label: '工作区', icon: Layers },
 ];
 
 /** Ctrl+1..4 快捷键覆盖的四大主视图（工作区不占数字键位） */
-const SHORTCUT_VIEWS: readonly ActiveView[] = ['dashboard', 'simulation', 'coverage', 'regression'];
+const SHORTCUT_VIEWS: readonly ActiveView[] = ['dashboard', 'simulation', 'regression', 'coverage'];
 
 /** 按钮结构样式（结构 / 颜色分离，激活态按需组合） */
 const NAV_BUTTON_BASE =

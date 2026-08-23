@@ -74,8 +74,8 @@ describe('NavRail Ctrl+1..4 快捷键', () => {
     const keyToView: Array<[string, string]> = [
       ['1', 'dashboard'],
       ['2', 'simulation'],
-      ['3', 'coverage'],
-      ['4', 'regression'],
+      ['3', 'regression'],
+      ['4', 'coverage'],
     ];
     for (const [key, view] of keyToView) {
       fireEvent.keyDown(window, { key, ctrlKey: true });

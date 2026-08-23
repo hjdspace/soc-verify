@@ -7,6 +7,12 @@
  * 进度条/耗时/ETA）、骨架屏、空状态、无匹配状态、停止全部按钮。
  * 行点击跳转到运行详情 Tab（workbench.open）。
  * 运行中仿真秒级刷新实时耗时。
+ *
+ * 布局对齐原型 sim-page-01-left-tree-right-options.html：
+ *   .rla（flex-1 flex-col overflow-hidden）
+ *     .lh → 筛选栏（标题 + 分段 + 搜索 + 停止全部）
+ *     .rh → 表头行（sticky 不可滚动）
+ *     .table → 行体（flex-1 overflow-y-auto）
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -59,7 +65,7 @@ function formatDuration(ms: number): string {
   return `${Math.floor(m / 60)}h${m % 60}m`;
 }
 
-const ROW_GRID = 'grid-cols-[18px_1.4fr_110px_1fr_100px_90px]';
+const ROW_GRID = 'grid-cols-[18px_1.4fr_100px_1fr_80px_70px]';
 
 function RunRow({ run, now, onOpen }: {
   run: SimulationRunRecord;
@@ -78,7 +84,7 @@ function RunRow({ run, now, onOpen }: {
     <div
       role="button"
       tabIndex={0}
-      className={cn(ROW_GRID, 'cursor-pointer items-center gap-2.5 border-b border-border px-3.5 py-2 transition-colors last:border-b-0 hover:bg-accent')}
+      className={cn(ROW_GRID, 'cursor-pointer items-center gap-2 border-b border-border px-3 py-1.5 transition-colors last:border-b-0 hover:bg-accent')}
       data-testid={`sim-row-${run.runId}`}
       onClick={onOpen}
       onKeyDown={(e) => {
@@ -87,7 +93,7 @@ function RunRow({ run, now, onOpen }: {
     >
       <span className={cn('size-2 shrink-0 rounded-full', dotClass(run.status))} />
       <div className="min-w-0 overflow-hidden">
-        <span className="block truncate font-mono text-xs text-foreground">
+        <span className="block truncate font-mono text-[11px] text-foreground">
           {run.caseName ?? run.caseId}
         </span>
         {run.seed && (
@@ -96,7 +102,7 @@ function RunRow({ run, now, onOpen }: {
           </span>
         )}
       </div>
-      <span className="truncate text-[11px] text-muted-foreground">{run.subsys}</span>
+      <span className="truncate text-[10px] text-muted-foreground">{run.subsys}</span>
       <div className="h-1 overflow-hidden rounded-sm bg-background" data-testid="sim-progress-track">
         {run.status === 'running' && (
           <div className="h-full w-1/3 animate-pulse rounded-sm bg-status-running" />
@@ -108,10 +114,10 @@ function RunRow({ run, now, onOpen }: {
         )}
         {run.status === 'aborted' && <div className="h-full w-full rounded-sm bg-status-aborted" />}
       </div>
-      <span className="text-right font-mono text-[11px] text-muted-foreground">
+      <span className="text-right font-mono text-[10px] text-muted-foreground">
         {formatDuration(duration)}
       </span>
-      <span className={cn('text-right font-mono text-[11px]', eta.className)}>{eta.label}</span>
+      <span className={cn('text-right font-mono text-[10px]', eta.className)}>{eta.label}</span>
     </div>
   );
 }
@@ -171,20 +177,23 @@ export function RunListPanel() {
   };
 
   return (
-    <div className="flex flex-col" data-testid="run-list-panel">
+    <div className="flex flex-1 flex-col overflow-hidden" data-testid="run-list-panel">
       {/* ── Filter bar: segments + keyword + stop-all ─────────── */}
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="flex rounded-lg border border-border bg-background p-0.5" data-testid="sim-seg">
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2">
+        <div className="flex items-center gap-2">
+          <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">运行列表</h3>
+        </div>
+        <div className="flex items-center gap-0.5" data-testid="sim-seg">
           {SEGMENTS.map((s) => (
             <button
               key={s.key}
               data-testid={`sim-seg-${s.key}`}
               aria-pressed={seg === s.key}
               className={cn(
-                'cursor-pointer rounded-md px-3 py-1 text-xs transition-colors',
+                'cursor-pointer rounded px-2 py-1 text-[11px] transition-colors',
                 seg === s.key
                   ? 'bg-accent font-medium text-foreground'
-                  : 'text-muted-foreground hover:text-foreground',
+                  : 'text-muted-foreground hover:bg-accent hover:text-foreground',
               )}
               onClick={() => setSeg(s.key)}
             >
@@ -201,7 +210,7 @@ export function RunListPanel() {
           ))}
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 text-muted-foreground">
+          <div className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-muted-foreground">
             <Search className="size-3 shrink-0" />
             <input
               data-testid="sim-filter-input"
@@ -209,11 +218,11 @@ export function RunListPanel() {
               onChange={(e) => setKeyword(e.target.value)}
               placeholder="过滤用例名 / seed…"
               autoComplete="off"
-              className="w-44 border-none bg-transparent font-sans text-xs text-foreground outline-none placeholder:text-muted-foreground/50"
+              className="w-32 border-none bg-transparent font-sans text-xs text-foreground outline-none placeholder:text-muted-foreground/50"
             />
           </div>
           <button
-            className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-3.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-border/80 hover:bg-card hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            className="inline-flex cursor-pointer items-center gap-1 rounded px-2 py-1 text-[11px] text-status-fail-foreground transition-colors hover:bg-status-fail/15 disabled:cursor-not-allowed disabled:opacity-40"
             onClick={() => void stopAllRuns()}
             disabled={!hasLive}
             data-testid="run-list-stop-all"
@@ -225,28 +234,29 @@ export function RunListPanel() {
         </div>
       </div>
 
-      {/* ── Run table ──────────────────────────────────────────── */}
-      <div className="overflow-hidden rounded-xl border border-border bg-card">
-        <div
-          className={cn(ROW_GRID, 'gap-2.5 border-b border-border px-3.5 py-2 text-[10.5px] uppercase tracking-wider text-muted-foreground/70')}
-        >
-          <span />
-          <span>用例</span>
-          <span>子系统</span>
-          <span>进度</span>
-          <span>耗时</span>
-          <span className="text-right">ETA</span>
-        </div>
+      {/* ── Table header (sticky, not scrollable) ────────────── */}
+      <div
+        className={cn(ROW_GRID, 'gap-2 border-b border-border px-3 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground/60')}
+      >
+        <span />
+        <span>用例</span>
+        <span>子系统</span>
+        <span>进度</span>
+        <span>耗时</span>
+        <span className="text-right">ETA</span>
+      </div>
 
+      {/* ── Table body (scrollable) ────────────────────────────── */}
+      <div className="flex-1 overflow-y-auto">
         {loading && activeRuns.length === 0 ? (
-          <div className="flex flex-col gap-2 p-4" data-testid="sim-view-skeleton">
+          <div className="flex flex-col gap-2 p-3" data-testid="sim-view-skeleton">
             {Array.from({ length: 5 }, (_, i) => (
-              <div key={i} className="h-8 w-full animate-pulse rounded bg-muted" />
+              <div key={i} className="h-7 w-full animate-pulse rounded bg-muted" />
             ))}
           </div>
         ) : activeRuns.length === 0 ? (
           <div
-            className="flex flex-col items-center gap-2 px-3.5 py-12 text-muted-foreground"
+            className="flex flex-col items-center gap-2 px-3 py-12 text-muted-foreground"
             data-testid="sim-view-empty"
           >
             <span className="text-xs">暂无仿真运行</span>
@@ -254,13 +264,13 @@ export function RunListPanel() {
           </div>
         ) : filtered.length === 0 ? (
           <div
-            className="flex flex-col items-center gap-2 px-3.5 py-12 text-muted-foreground"
+            className="flex flex-col items-center gap-2 px-3 py-12 text-muted-foreground"
             data-testid="sim-view-no-match"
           >
             <Search className="size-6 opacity-30" />
             <span className="text-xs">无匹配的仿真运行</span>
             <button
-              className="cursor-pointer rounded-lg border border-border px-3 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              className="cursor-pointer rounded border border-border px-3 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               onClick={clearFilters}
               data-testid="sim-clear-filters"
             >

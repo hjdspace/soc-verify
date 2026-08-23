@@ -95,13 +95,13 @@ export function SimulationView() {
 
         {/* 中栏：Option 面板（上） + 运行列表（中） + 命令栏（底） */}
         <div className="flex min-w-0 flex-1 flex-col gap-3">
-          {/* 中上：Option 面板 */}
-          <div className="max-h-80 shrink-0 overflow-y-auto">
+          {/* 中上：Option 面板（SimOptionPanel 内部自管 overflow-y-auto，外层不再嵌套滚动） */}
+          <div className="shrink-0">
             <SimOptionPanel />
           </div>
 
-          {/* 中中：运行列表 */}
-          <div className="flex min-h-0 flex-1 flex-col">
+          {/* 中中：运行列表（flex-1，内部表体自管 overflow-y-auto） */}
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card">
             <RunListPanel />
           </div>
 
