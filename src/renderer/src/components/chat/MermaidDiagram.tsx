@@ -144,7 +144,7 @@ function resolveThemeColors(dark: boolean): ThemeColors {
 
 /**
  * Renders a mermaid diagram from source code.
- * - Debounces rendering during streaming to avoid repeated failed renders
+ * - Debounces rendering while a Mermaid block itself is still streaming
  * - Shows a preview that fills the chat panel width (responsive SVG)
  * - Click to open a fullscreen modal with width-based zoom
  * - Supports mouse-wheel zoom and drag-to-pan in the modal

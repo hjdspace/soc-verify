@@ -1,4 +1,4 @@
-import { memo, useState, useMemo, type ReactNode } from 'react';
+import { memo, useState, useMemo, type ComponentProps, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import hljs from 'highlight.js';
@@ -10,6 +10,8 @@ interface MarkdownRendererProps {
   content: string;
   onUriClick?: (uri: string) => void;
 }
+
+type MarkdownComponents = NonNullable<ComponentProps<typeof ReactMarkdown>['components']>;
 
 /**
  * Maps markdown code-fence language labels to highlight.js language names.
@@ -450,98 +452,100 @@ function extractText(children: ReactNode): string {
  * Provides syntax highlighting for code blocks and clickable file paths.
  */
 export const MarkdownRenderer = memo(function MarkdownRenderer({ content, onUriClick }: MarkdownRendererProps) {
+  const components = useMemo<MarkdownComponents>(() => ({
+    a: ({ href, children }) => {
+      if (!href) return <span>{children}</span>;
+      const isHostUri = href.startsWith('case:///') || href.startsWith('log:///') || href.startsWith('cov:///');
+      if (isHostUri) {
+        return (
+          <button
+            onClick={() => onUriClick?.(href)}
+            className="inline-flex items-center gap-0.5 rounded bg-primary/10 px-1 py-0.5 text-[10px] text-primary hover:bg-primary/20"
+          >
+            {children}
+          </button>
+        );
+      }
+      return (
+        <a
+          href={href}
+          onClick={(e) => {
+            e.preventDefault();
+            void trpc.system.openExternal.mutate(href);
+          }}
+          className="text-primary underline"
+        >
+          {children}
+        </a>
+      );
+    },
+    code: ({ className, children }) => {
+      // react-markdown v9+ 移除了 inline prop，无法直接区分行内/块级代码。
+      // 无语言标记的 fenced code block（如 LLM 输出的目录树）同样没有
+      // className，但其内容包含换行——CommonMark 规定 inline code span
+      // 内的换行会被规范化为空格，据此区分是安全的。
+      const text = extractText(children);
+      const isInline = !className && !text.includes('\n');
+      if (isInline) {
+        return (
+          <code className="rounded bg-secondary px-1 py-0.5 text-[10px] font-mono">
+            {children}
+          </code>
+        );
+      }
+      const lang = className?.replace('language-', '') ?? '';
+      if (lang === 'mermaid') {
+        return <MermaidDiagram code={text.trim()} />;
+      }
+      return <CodeBlock language={lang}>{text}</CodeBlock>;
+    },
+    pre: ({ children }) => <>{children}</>,
+    table: ({ children }) => (
+      <div className="my-3 overflow-x-auto">
+        <table className="w-full border-collapse text-[11px]">{children}</table>
+      </div>
+    ),
+    th: ({ children }) => (
+      <th className="border border-border/50 bg-secondary/50 px-2 py-1.5 text-left font-semibold leading-[1.5]">
+        {children}
+      </th>
+    ),
+    td: ({ children }) => (
+      <td className="border border-border/50 px-2 py-1.5 leading-[1.5]">{children}</td>
+    ),
+    ul: ({ children }) => <ul className="ml-4 list-disc space-y-1">{children}</ul>,
+    ol: ({ children }) => <ol className="ml-4 list-decimal space-y-1">{children}</ol>,
+    li: ({ children }) => <li className="leading-[1.6]">{children}</li>,
+    p: ({ children }) => {
+      // Detect tree-view / ASCII-art paragraphs and render as <pre>
+      // to preserve whitespace alignment.
+      const rawText = extractText(children);
+      if (isTreeViewText(rawText)) {
+        const treeText = reconstructTreeLines(rawText);
+        return (
+          <pre className="my-2.5 overflow-x-auto rounded-md border border-border/40 bg-secondary/30 p-2 text-[10px] leading-[1.5] font-mono">
+            <code>{treeText}</code>
+          </pre>
+        );
+      }
+      return <p className="mb-2 last:mb-0 leading-[1.7]"><FileRefTextWrapper>{children}</FileRefTextWrapper></p>;
+    },
+    h1: ({ children }) => <h1 className="mb-2 mt-4 text-sm font-bold leading-snug">{children}</h1>,
+    h2: ({ children }) => <h2 className="mb-2 mt-3.5 text-sm font-bold leading-snug">{children}</h2>,
+    h3: ({ children }) => <h3 className="mb-1.5 mt-3 text-[13px] font-bold leading-snug">{children}</h3>,
+    blockquote: ({ children }) => (
+      <blockquote className="my-2 border-l-2 border-primary/40 bg-secondary/20 py-1.5 pl-3 text-muted-foreground leading-[1.6]">
+        {children}
+      </blockquote>
+    ),
+    hr: () => <hr className="my-3 border-border/50" />,
+  }), [onUriClick]);
+
   return (
     <div className="markdown-body text-xs leading-[1.7]">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        components={{
-          a: ({ href, children }) => {
-            if (!href) return <span>{children}</span>;
-            const isHostUri = href.startsWith('case:///') || href.startsWith('log:///') || href.startsWith('cov:///');
-            if (isHostUri) {
-              return (
-                <button
-                  onClick={() => onUriClick?.(href)}
-                  className="inline-flex items-center gap-0.5 rounded bg-primary/10 px-1 py-0.5 text-[10px] text-primary hover:bg-primary/20"
-                >
-                  {children}
-                </button>
-              );
-            }
-            return (
-              <a
-                href={href}
-                onClick={(e) => {
-                  e.preventDefault();
-                  void trpc.system.openExternal.mutate(href);
-                }}
-                className="text-primary underline"
-              >
-                {children}
-              </a>
-            );
-          },
-          code: ({ className, children }) => {
-            // react-markdown v9+ 移除了 inline prop，无法直接区分行内/块级代码。
-            // 无语言标记的 fenced code block（如 LLM 输出的目录树）同样没有
-            // className，但其内容包含换行——CommonMark 规定 inline code span
-            // 内的换行会被规范化为空格，据此区分是安全的。
-            const text = extractText(children);
-            const isInline = !className && !text.includes('\n');
-            if (isInline) {
-              return (
-                <code className="rounded bg-secondary px-1 py-0.5 text-[10px] font-mono">
-                  {children}
-                </code>
-              );
-            }
-            const lang = className?.replace('language-', '') ?? '';
-            if (lang === 'mermaid') {
-              return <MermaidDiagram code={text.trim()} />;
-            }
-            return <CodeBlock language={lang}>{text}</CodeBlock>;
-          },
-          pre: ({ children }) => <>{children}</>,
-          table: ({ children }) => (
-            <div className="my-3 overflow-x-auto">
-              <table className="w-full border-collapse text-[11px]">{children}</table>
-            </div>
-          ),
-          th: ({ children }) => (
-            <th className="border border-border/50 bg-secondary/50 px-2 py-1.5 text-left font-semibold leading-[1.5]">
-              {children}
-            </th>
-          ),
-          td: ({ children }) => (
-            <td className="border border-border/50 px-2 py-1.5 leading-[1.5]">{children}</td>
-          ),
-          ul: ({ children }) => <ul className="ml-4 list-disc space-y-1">{children}</ul>,
-          ol: ({ children }) => <ol className="ml-4 list-decimal space-y-1">{children}</ol>,
-          li: ({ children }) => <li className="leading-[1.6]">{children}</li>,
-          p: ({ children }) => {
-            // Detect tree-view / ASCII-art paragraphs and render as <pre>
-            // to preserve whitespace alignment.
-            const rawText = extractText(children);
-            if (isTreeViewText(rawText)) {
-              const treeText = reconstructTreeLines(rawText);
-              return (
-                <pre className="my-2.5 overflow-x-auto rounded-md border border-border/40 bg-secondary/30 p-2 text-[10px] leading-[1.5] font-mono">
-                  <code>{treeText}</code>
-                </pre>
-              );
-            }
-            return <p className="mb-2 last:mb-0 leading-[1.7]"><FileRefTextWrapper>{children}</FileRefTextWrapper></p>;
-          },
-          h1: ({ children }) => <h1 className="mb-2 mt-4 text-sm font-bold leading-snug">{children}</h1>,
-          h2: ({ children }) => <h2 className="mb-2 mt-3.5 text-sm font-bold leading-snug">{children}</h2>,
-          h3: ({ children }) => <h3 className="mb-1.5 mt-3 text-[13px] font-bold leading-snug">{children}</h3>,
-          blockquote: ({ children }) => (
-            <blockquote className="my-2 border-l-2 border-primary/40 bg-secondary/20 py-1.5 pl-3 text-muted-foreground leading-[1.6]">
-              {children}
-            </blockquote>
-          ),
-          hr: () => <hr className="my-3 border-border/50" />,
-        }}
+        components={components}
       >
         {content}
       </ReactMarkdown>

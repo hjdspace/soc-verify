@@ -66,6 +66,7 @@ describe('MermaidDiagram', () => {
 
     expect(screen.queryByText('Mermaid 渲染失败')).not.toBeInTheDocument();
     expect(initializeMock).toHaveBeenCalledWith(expect.objectContaining({
+      suppressErrorRendering: true,
       themeVariables: expect.objectContaining({
         primaryColor: '#334155',
         primaryTextColor: '#334155',

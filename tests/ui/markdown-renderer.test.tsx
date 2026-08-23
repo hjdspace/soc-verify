@@ -15,7 +15,7 @@ vi.mock('@renderer/stores/diff-review', () => ({
 }));
 
 vi.mock('@renderer/components/chat/MermaidDiagram', () => ({
-  MermaidDiagram: () => <div data-testid="mermaid-stub" />,
+  MermaidDiagram: ({ code }: { code: string }) => <div data-testid="mermaid-stub">{code}</div>,
 }));
 
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
@@ -37,6 +37,28 @@ const TREE_BLOCK = [
 ].join('\n');
 
 describe('MarkdownRenderer 代码块换行', () => {
+  it('流式追加图表后的文本时保持多个已完成 Mermaid 组件挂载', () => {
+    const diagrams = [
+      '```mermaid',
+      'flowchart LR',
+      'A --> B',
+      '```',
+      '',
+      '```mermaid',
+      'sequenceDiagram',
+      'A->>B: ping',
+      '```',
+    ].join('\n');
+    const { rerender, getAllByTestId } = render(<MarkdownRenderer content={diagrams} />);
+    const renderedDiagrams = getAllByTestId('mermaid-stub');
+
+    rerender(<MarkdownRenderer content={`${diagrams}\n\n后续回复仍在流式生成`} />);
+
+    getAllByTestId('mermaid-stub').forEach((diagram, index) => {
+      expect(diagram).toBe(renderedDiagrams[index]);
+    });
+  });
+
   it('无语言标记的 fenced code block 应渲染为 pre 块并保留换行', () => {
     const { container } = render(<MarkdownRenderer content={TREE_BLOCK} />);
 
