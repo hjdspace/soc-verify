@@ -168,11 +168,11 @@ export const MermaidDiagram = memo(function MermaidDiagram({ code }: MermaidDiag
   useEffect(() => {
     let cancelled = false;
     const debounceTimer = setTimeout(async () => {
+      const renderId = `${instanceIdRef.current}-${Date.now()}`;
       try {
         const dark = themeMode === 'dark';
         const themeColors = resolveThemeColors(dark);
 
-        const renderId = `${instanceIdRef.current}-${Date.now()}`;
         mermaid.initialize({
           startOnLoad: false,
           // 解析失败时阻止 mermaid 向 document.body 注入"炸弹"错误 SVG。
@@ -227,10 +227,14 @@ export const MermaidDiagram = memo(function MermaidDiagram({ code }: MermaidDiag
           setSvg('');
           setLoading(false);
         }
-        // 兜底：清理 mermaid 渲染失败后可能遗留在 body 中的临时/错误节点
-        document.body
-          .querySelectorAll('[id^="mermaid-diagram-"], [id^="dmermaid-diagram-"]')
-          .forEach((node) => node.remove());
+      } finally {
+        // 只清理本次渲染自己的临时节点（mermaid 正常路径会自删，此处兜底异常路径）。
+        // 注意：绝不能按 id 前缀做 body 级全局清理——所有图表实例共享
+        // "mermaid-diagram-" 前缀，全局清理会误删其他实例正在渲染中的
+        // 临时节点，导致流式输出期间所有图表卡在 loading 直到流结束。
+        for (const tempId of [`d${renderId}`, `i${renderId}`, renderId]) {
+          document.getElementById(tempId)?.remove();
+        }
       }
     }, 300);
 
