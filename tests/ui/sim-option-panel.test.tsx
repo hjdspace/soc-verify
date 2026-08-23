@@ -5,9 +5,11 @@ import type { SimOptionField } from '@shared/plugin-types';
 
 /**
  * SimOptionPanel（Issue #3）测试：
- * schema 加载与分组卡片渲染、字段值编辑联动、命令预览语法高亮 token、
- * 复制按钮反馈、运行仿真调用 startCaseRun、CASE 缺失警告与按钮禁用、
+ * schema 加载与分组卡片渲染、字段值编辑联动、
  * 预设加载下拉与保存、解析回归指令对话框、回归列表文件浏览。
+ *
+ * 命令预览 / 复制 / 运行仿真 / CASE 缺失警告 已移至 SimCommandBar
+ * 组件（位于 SimulationView 中栏底部），相关测试见下方独立 describe。
  *
  * Mock 策略与 OptionDock.test.tsx 一致：
  * - trpc: project.getSimOptionsSchema / getSimOptionPresets / saveSimOptionPreset / simulation.pickRegrFile
@@ -68,6 +70,7 @@ vi.mock('@renderer/lib/trpc', () => ({
 
 // Import after mocks
 import { SimOptionPanel } from '@renderer/components/simulation/SimOptionPanel';
+import { SimCommandBar } from '@renderer/components/simulation/SimCommandBar';
 import { trpc } from '@renderer/lib/trpc';
 
 // ── Test fixtures ──────────────────────────────────────────────
@@ -220,22 +223,18 @@ describe('SimOptionPanel 字段渲染与编辑', () => {
   });
 });
 
-describe('SimOptionPanel 命令预览', () => {
-  it('渲染 runsim 命令预览', async () => {
-    render(<SimOptionPanel />);
-
-    await screen.findByText('BASE');
+describe('SimCommandBar 命令预览', () => {
+  it('渲染 runsim 命令预览', () => {
+    render(<SimCommandBar />);
 
     const cmdPreview = screen.getByTestId('sim-option-cmd-preview');
     expect(cmdPreview.textContent).toContain('runsim');
   });
 
-  it('命令预览随 simOptions 变化（含 base/block/case）', async () => {
+  it('命令预览随 simOptions 变化（含 base/block/case）', () => {
     mockSimOptions = { base: 'top', block: 'usvp', case: 'test_001' };
 
-    render(<SimOptionPanel />);
-
-    await screen.findByText('BASE');
+    render(<SimCommandBar />);
 
     const cmdPreview = screen.getByTestId('sim-option-cmd-preview');
     expect(cmdPreview.textContent).toContain('runsim');
@@ -247,12 +246,10 @@ describe('SimOptionPanel 命令预览', () => {
     expect(cmdPreview.textContent).toContain('test_001');
   });
 
-  it('命令预览 token 分色：base/flag/value 三色 span', async () => {
+  it('命令预览 token 分色：base/flag/value 三色 span', () => {
     mockSimOptions = { base: 'top' };
 
-    render(<SimOptionPanel />);
-
-    await screen.findByText('BASE');
+    render(<SimCommandBar />);
 
     const cmdPreview = screen.getByTestId('sim-option-cmd-preview');
     // The runsim base token should have the base color class
@@ -270,14 +267,12 @@ describe('SimOptionPanel 命令预览', () => {
   });
 });
 
-describe('SimOptionPanel 复制命令', () => {
+describe('SimCommandBar 复制命令', () => {
   it('复制按钮点击后写入剪贴板并显示"已复制"', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
 
-    render(<SimOptionPanel />);
-
-    await screen.findByText('BASE');
+    render(<SimCommandBar />);
 
     const copyBtn = screen.getByTestId('sim-option-copy');
     fireEvent.click(copyBtn);
@@ -289,28 +284,22 @@ describe('SimOptionPanel 复制命令', () => {
   });
 });
 
-describe('SimOptionPanel 运行仿真', () => {
-  it('渲染运行仿真按钮', async () => {
-    render(<SimOptionPanel />);
-
-    await screen.findByText('BASE');
+describe('SimCommandBar 运行仿真', () => {
+  it('渲染运行仿真按钮', () => {
+    render(<SimCommandBar />);
 
     expect(screen.getByTestId('sim-option-run')).toBeInTheDocument();
     expect(screen.getByText('运行仿真')).toBeInTheDocument();
   });
 
-  it('未指定 CASE 时运行按钮禁用', async () => {
-    render(<SimOptionPanel />);
-
-    await screen.findByText('BASE');
+  it('未指定 CASE 时运行按钮禁用', () => {
+    render(<SimCommandBar />);
 
     expect(screen.getByTestId('sim-option-run')).toBeDisabled();
   });
 
-  it('未指定 CASE 时显示警告提示', async () => {
-    render(<SimOptionPanel />);
-
-    await screen.findByText('BASE');
+  it('未指定 CASE 时显示警告提示', () => {
+    render(<SimCommandBar />);
 
     expect(screen.getByTestId('sim-option-no-case-hint')).toBeInTheDocument();
     expect(screen.getByText(/未指定 CASE 名称/)).toBeInTheDocument();
@@ -319,9 +308,7 @@ describe('SimOptionPanel 运行仿真', () => {
   it('指定 CASE 后运行按钮启用，点击调用 startCaseRun', async () => {
     mockSimOptions = { case: 'test_001', base: 'top', block: 'usvp' };
 
-    render(<SimOptionPanel />);
-
-    await screen.findByText('BASE');
+    render(<SimCommandBar />);
 
     const runBtn = screen.getByTestId('sim-option-run');
     expect(runBtn).not.toBeDisabled();
@@ -337,12 +324,10 @@ describe('SimOptionPanel 运行仿真', () => {
     );
   });
 
-  it('指定 CASE 时不显示警告提示', async () => {
+  it('指定 CASE 时不显示警告提示', () => {
     mockSimOptions = { case: 'test_001' };
 
-    render(<SimOptionPanel />);
-
-    await screen.findByText('BASE');
+    render(<SimCommandBar />);
 
     expect(screen.queryByTestId('sim-option-no-case-hint')).not.toBeInTheDocument();
   });

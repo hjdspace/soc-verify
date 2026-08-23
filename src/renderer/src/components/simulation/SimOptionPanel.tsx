@@ -4,29 +4,24 @@
  * 从 OptionDock 提取核心逻辑，作为仿真视图中间区域的上半部分。
  * 不包含全局浮窗 toggle 机制，Option 卡片始终可见。
  * 面板标题动态显示当前选中用例名（`仿真 Option · {caseName}`）。
+ *
+ * 命令预览栏 + 运行按钮已提取到 SimCommandBar 组件，放置在
+ * SimulationView 中栏底部，避免用户滚动 Option 面板才能触达。
  */
 
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   Save,
   FolderOpen,
-  Play,
-  Copy,
-  AlertCircle,
   Wand2,
   X,
   Terminal,
 } from 'lucide-react';
 import { useProjectStore } from '@renderer/stores/project';
-import { useSimulationStore, type SimulationCase } from '@renderer/stores/simulation';
+import { useSimulationStore } from '@renderer/stores/simulation';
 import { useToastStore } from '@renderer/stores/toast';
 import { trpc } from '@renderer/lib/trpc';
-import { cn } from '@renderer/lib/utils';
-import {
-  generateRunsimCommand,
-  tokenizeRunsimCommand,
-  parseRunsimCommand,
-} from '@renderer/lib/runsim-command';
+import { parseRunsimCommand } from '@renderer/lib/runsim-command';
 import type { SimOptionField } from '@shared/plugin-types';
 import {
   OptionCard,
@@ -42,13 +37,10 @@ export function SimOptionPanel() {
   const simOptions = useSimulationStore((s) => s.simOptions);
   const setSimOption = useSimulationStore((s) => s.setSimOption);
   const setSimOptions = useSimulationStore((s) => s.setSimOptions);
-  const startCaseRun = useSimulationStore((s) => s.startCaseRun);
   const [presets, setPresets] = useState<Record<string, Record<string, unknown>>>({});
   const [showPresetMenu, setShowPresetMenu] = useState(false);
   const [savingPreset, setSavingPreset] = useState(false);
   const [presetName, setPresetName] = useState('');
-  const [running, setRunning] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [showParseDialog, setShowParseDialog] = useState(false);
   const [parseCommandText, setParseCommandText] = useState('');
 
@@ -141,15 +133,6 @@ export function SimOptionPanel() {
     [labelMap],
   );
 
-  // Generate command preview
-  const commandPreview = useMemo(() => {
-    return generateRunsimCommand(simOptions);
-  }, [simOptions]);
-
-  const commandTokens = useMemo(() => {
-    return tokenizeRunsimCommand(commandPreview);
-  }, [commandPreview]);
-
   const handleSavePreset = async () => {
     if (!currentProjectId) {
       useToastStore.getState().error('保存预设失败', '请先打开项目');
@@ -178,37 +161,6 @@ export function SimOptionPanel() {
     const preset = presets[name];
     if (preset) setSimOptions(preset);
     setShowPresetMenu(false);
-  };
-
-  const handleRunSim = async () => {
-    if (!currentProjectId) {
-      useToastStore.getState().error('运行仿真失败', '请先打开项目');
-      return;
-    }
-    const caseName = typeof simOptions.case === 'string' ? simOptions.case.trim() : '';
-    if (!caseName) {
-      useToastStore.getState().error('运行仿真失败', '请先指定 CASE 名称');
-      return;
-    }
-    setRunning(true);
-    const simCase: SimulationCase = {
-      name: caseName,
-      subsys: selectedSubsys ?? '',
-      base: typeof simOptions.base === 'string' ? simOptions.base : undefined,
-      block: typeof simOptions.block === 'string' ? simOptions.block : undefined,
-    };
-    await startCaseRun(currentProjectId, simCase);
-    setRunning(false);
-  };
-
-  const handleCopyCommand = async () => {
-    try {
-      await navigator.clipboard.writeText(commandPreview);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      useToastStore.getState().error('复制失败', '无法访问剪贴板');
-    }
   };
 
   // ── 回归列表文件浏览 ──────────────────────────────────────
@@ -365,78 +317,6 @@ export function SimOptionPanel() {
           </div>
         )}
       </div>
-
-      {/* ── Command preview bar + Run button ─────────────────── */}
-      <div className="flex items-stretch border-t border-border bg-background/50">
-        {/* Command prefix */}
-        <div className="flex items-center px-2.5 font-mono text-xs font-semibold text-status-pass-foreground">
-          $
-        </div>
-        {/* Command text */}
-        <div className="flex min-w-0 flex-1 items-center gap-1.5 py-1.5">
-          <div className="min-w-0 flex-1 overflow-x-auto" data-testid="sim-option-cmd-preview">
-            <code className="whitespace-nowrap font-mono text-[11px] leading-relaxed">
-              {commandTokens.map((token, i) => (
-                <span
-                  key={i}
-                  className={cn(
-                    token.type === 'base' && 'font-semibold text-status-pass-foreground',
-                    token.type === 'flag' && 'text-primary',
-                    token.type === 'value' && 'text-violet-foreground',
-                  )}
-                >
-                  {token.text}
-                  {i < commandTokens.length - 1 ? ' ' : ''}
-                </span>
-              ))}
-            </code>
-          </div>
-          {/* Copy button */}
-          <button
-            onClick={handleCopyCommand}
-            className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            title="复制命令"
-            data-testid="sim-option-copy"
-          >
-            {copied ? (
-              <span className="text-status-pass-foreground">已复制</span>
-            ) : (
-              <Copy className="h-3 w-3" />
-            )}
-          </button>
-        </div>
-        {/* Run button */}
-        <button
-          onClick={handleRunSim}
-          disabled={running || !currentProjectId || !hasCase}
-          className="flex items-center gap-1.5 bg-status-pass px-4 text-xs font-bold text-white transition-all hover:brightness-110 active:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
-          title={!hasCase ? '请先指定 CASE 名称' : !currentProjectId ? '请先打开项目' : '运行仿真'}
-          data-testid="sim-option-run"
-        >
-          {running ? (
-            <>
-              <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              运行中
-            </>
-          ) : (
-            <>
-              <Play className="h-3.5 w-3.5" fill="currentColor" />
-              运行仿真
-            </>
-          )}
-        </button>
-      </div>
-
-      {/* ── Missing CASE hint ─────────────────────────────────── */}
-      {!hasCase && schema.length > 0 && currentProjectId && (
-        <div
-          className="flex items-center gap-1.5 border-t border-border/50 bg-warning/5 px-3 py-1 text-[10px] text-warning-foreground"
-          data-testid="sim-option-no-case-hint"
-        >
-          <AlertCircle className="h-3 w-3" />
-          未指定 CASE 名称，请填写 CASE 字段后才能运行仿真
-        </div>
-      )}
 
       {/* ── Parse Regression Command Dialog ──────────────────── */}
       {showParseDialog && (

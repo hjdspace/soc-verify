@@ -3,7 +3,7 @@ import { cn } from '@renderer/lib/utils';
 import type { SimOptionField } from '@shared/plugin-types';
 
 // ─── 分组顺序定义 ──────────────────────────────────────────────
-export const GROUP_ORDER = ['基础参数', '波形配置', '仿真参数', '执行模式', '回归测试'];
+export const GROUP_ORDER = ['基础参数', '波形配置', '仿真参数', '回归测试'];
 export const DEFAULT_GROUP = '其他';
 
 // ─── 分组颜色映射 ──────────────────────────────────────────────
@@ -11,7 +11,6 @@ export const GROUP_COLORS: Record<string, string> = {
   '基础参数': 'bg-blue-500',
   '波形配置': 'bg-violet-500',
   '仿真参数': 'bg-green-500',
-  '执行模式': 'bg-amber-500',
   '回归测试': 'bg-red-500',
   [DEFAULT_GROUP]: 'bg-zinc-500',
 };

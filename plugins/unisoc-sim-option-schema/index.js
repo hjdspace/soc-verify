@@ -9,9 +9,8 @@
  * 选项分类参考 Python runsim_r3p0 项目的 config_panel.py 和 command_generator.py：
  *   1. 基础参数（base / block / case / rundir / bq / seed / other_options）
  *   2. 波形配置（fsdb / vwdb / dump_level / cl / dump_sva / cov / upf / dump_mem / wdd）
- *   3. 仿真参数（simarg / cfg_def / post）
- *   4. 执行模式（sim_only / compile_only）
- *   5. 回归测试（regr_file / fm / regr_work / tag / nt / dashboard）
+ *   3. 仿真参数（simarg / cfg_def / post / sim_only / compile_only）
+ *   4. 回归测试（regr_file / fm / regr_work / tag / nt / dashboard）
  */
 
 const MANIFEST = {
@@ -28,7 +27,7 @@ const MANIFEST = {
 const GROUP_BASIC = '基础参数';
 const GROUP_WAVE = '波形配置';
 const GROUP_SIM = '仿真参数';
-const GROUP_MODE = '执行模式';
+
 const GROUP_REGR = '回归测试';
 
 // ─── 后仿 SDF 选项枚举 ───────────────────────────────────────
@@ -224,13 +223,14 @@ const SIM_OPTION_FIELDS = [
     description: 'runsim -post 参数，后仿 SDF 配置（如 sdf=fake / sdf=npg_f1_ssg）',
   },
 
-  // ── 执行模式 ──────────────────────────────────────────────
+  // ── 执行模式（合并到仿真参数分组） ────────────────────────
+  // sim_only / compile_only 原属「执行模式」分组，现合并到「仿真参数」
   {
     key: 'sim_only',
     label: '仅仿真 (-R)',
     type: 'boolean',
     default: false,
-    group: GROUP_MODE,
+    group: GROUP_SIM,
     description: 'runsim -R 参数，跳过编译直接执行仿真（与 -C 互斥）',
   },
   {
@@ -238,7 +238,7 @@ const SIM_OPTION_FIELDS = [
     label: '仅编译 (-C)',
     type: 'boolean',
     default: false,
-    group: GROUP_MODE,
+    group: GROUP_SIM,
     description: 'runsim -C 参数，仅执行编译不运行仿真（与 -R 互斥）',
   },
 

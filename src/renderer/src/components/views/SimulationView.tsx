@@ -3,8 +3,9 @@
  *
  * 从单一运行列表表格重构为 IDE 三栏布局容器：
  *   左栏 CaseTreePanel（子系统/用例树，宽度 simLeftPanelWidth，可拖拽）
- *   中栏 SimOptionPanel（Option 面板 + 命令预览栏，max-h-280px 可滚动）
- *   中下 RunListPanel（运行列表，flex-1 可滚动）
+ *   中上 SimOptionPanel（Option 面板，max-h-280px 可滚动）
+ *   中中 RunListPanel（运行列表，flex-1 可滚动）
+ *   中底 SimCommandBar（命令预览 + 复制 + 运行按钮，shrink-0）
  *
  * 切换到仿真视图时自动加载子系统列表（由 CaseTreePanel 内部 effect 驱动）
  * 和活跃运行列表。保留 ViewHeader（标题 + 副标题 + 停止全部/新建仿真）。
@@ -18,6 +19,7 @@ import { ResizeHandle } from '@renderer/components/layout/ResizeHandle';
 import { CaseTreePanel } from '@renderer/components/simulation/CaseTreePanel';
 import { SimOptionPanel } from '@renderer/components/simulation/SimOptionPanel';
 import { RunListPanel } from '@renderer/components/simulation/RunListPanel';
+import { SimCommandBar } from '@renderer/components/simulation/SimCommandBar';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useProjectStore } from '@renderer/stores/project';
 import { useUiStore } from '@renderer/stores/ui';
@@ -91,17 +93,20 @@ export function SimulationView() {
           onResize={setSimLeftPanelWidth}
         />
 
-        {/* 中栏：Option 面板（上） + 运行列表（下） */}
+        {/* 中栏：Option 面板（上） + 运行列表（中） + 命令栏（底） */}
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           {/* 中上：Option 面板 */}
           <div className="max-h-80 shrink-0 overflow-y-auto">
             <SimOptionPanel />
           </div>
 
-          {/* 中下：运行列表 */}
+          {/* 中中：运行列表 */}
           <div className="flex min-h-0 flex-1 flex-col">
             <RunListPanel />
           </div>
+
+          {/* 中底：命令预览 + 运行按钮 */}
+          <SimCommandBar />
         </div>
       </div>
     </div>
