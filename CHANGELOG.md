@@ -6,6 +6,45 @@
 
 ---
 
+## [0.4.0](https://github.com/hjdspace/soc-verify/compare/v0.3.2...v0.4.0) (2026-08-23)
+
+### Features
+
+* **sim-run:** 持久化仿真运行记录并支持跨重启恢复列表
+* **simulation:** 仿真视图三栏布局整合 — CaseTreePanel + SimOptionPanel + RunListPanel（Issues #3 #4 #5 #6）
+* **sim-option-panel:** 新增 SimOptionPanel 组件，支持仿真视图内选项配置
+* **agent-tools:** 新增 AgentToolsTab 组件与工具管理设置面板，支持启用/禁用 agent 工具
+* **tool-settings:** 新增工具目录元数据、静态工具目录与工具过滤应用方法
+* **error-handling:** 新增全局错误处理机制——ErrorBoundary 组件、全局错误事件处理与未捕获异常处理器
+* **regression:** 增强 RegressionRunner，支持数据库同步功能
+* **case-scanner:** 实现 CaseStatsRegistry 扫描监视功能
+* **project:** RTL 目录文件监视与防抖
+* **session:** 会话中止处理改进与瞬态传输错误处理
+* **codex-engine:** 新增 Codex 引擎集成 SDK 桩模块——SessionManager、MCPManager、ModelRegistry、logger、mcp-client、ambient module 声明
+* **ipc:** 新增 ipc-channels.ts IPC 通道常量定义
+* **subagent:** 新增子代理生命周期与进度事件日志
+
+### Bug Fixes
+
+* **sim-run:** 限制运行中仿真列表高度并加载总览活跃数据
+* **sim-view:** 优化导航栏顺序、修复仿真页面双滚动条和运行列表格式
+* **test:** 用 getByTestId 替换 getByText 避免多元素匹配
+
+### Refactor
+
+* **sim-view:** 提取 SimCommandBar 并合并执行模式分组
+* **sim-view:** 将子系统用例入口移入仿真视图并精简文件抽屉
+* **sim-view:** 提取共享组件并新增 simLeftPanelWidth 到 UI store
+* **agent-tools:** 重构 AgentToolsTab 优化工具管理
+* **task:** 重构 TaskBody 使用 result 替代 resultText，重构任务状态处理与解析函数
+* **title-gen:** 重构 AI 标题生成机制——简化为仅使用用户消息触发
+* **agent:** 改进 AgentClient 进程终止与处理
+* **session:** 重构会话标题生成测试
+
+### Build
+
+* **tsconfig:** 更新 tsconfig.runner.json lib 配置
+
 ## [0.3.2](https://github.com/hjdspace/soc-verify/compare/v0.3.1...v0.3.2) (2026-08-20)
 
 ### Features
