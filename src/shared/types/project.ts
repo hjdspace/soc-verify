@@ -47,6 +47,8 @@ export interface ProjectState {
     activeView?: string;
     /** AI 面板呈现模式（drawer | docked）；旧持久化状态可能缺失 */
     aiPanelMode?: string;
+    /** 仿真视图左栏宽度（可拖拽调整）；旧持久化状态可能缺失 */
+    simLeftPanelWidth?: number;
   };
   lastSessionIds: string[];
 }

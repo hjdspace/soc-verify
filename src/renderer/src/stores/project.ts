@@ -408,6 +408,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             pluginViews: useUiStore.getState().pluginViewLayouts,
             activeView: useUiStore.getState().activeView,
             aiPanelMode: useUiStore.getState().aiPanelMode,
+            simLeftPanelWidth: useUiStore.getState().simLeftPanelWidth,
           },
           lastSessionIds: useSessionStore.getState().sessions
             .map((s) => s.persistedSessionId ?? s.id)

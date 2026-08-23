@@ -45,6 +45,8 @@ interface UiState {
   rightPanelWidth: number;
   bottomPanelCollapsed: boolean;
   bottomPanelHeight: number;
+  /** 仿真视图左栏宽度（可拖拽调整，持久化到布局状态） */
+  simLeftPanelWidth: number;
   pluginViewLayouts: PluginViewLayouts;
   setActiveView: (view: ActiveView) => void;
   toggleLeftDrawer: () => void;
@@ -64,6 +66,7 @@ interface UiState {
   setRightPanelWidth: (width: number) => void;
   setBottomPanelCollapsed: (collapsed: boolean) => void;
   setBottomPanelHeight: (height: number) => void;
+  setSimLeftPanelWidth: (width: number) => void;
   setPluginViewActive: (location: PluginViewLocation, viewId: string) => void;
   setPluginViewCollapsed: (location: PluginViewLocation, collapsed: boolean) => void;
   hydratePluginViewLayouts: (layouts?: Partial<PluginViewLayouts>) => void;
@@ -73,6 +76,7 @@ interface UiState {
     optionDockExpanded?: boolean;
     pluginViews?: Partial<PluginViewLayouts>;
     aiPanelMode?: string;
+    simLeftPanelWidth?: number;
   }) => void;
 }
 
@@ -80,6 +84,8 @@ const RIGHT_MIN = 280;
 const RIGHT_MAX = 600;
 const BOTTOM_MIN = 120;
 const BOTTOM_MAX = 600;
+const SIM_LEFT_MIN = 200;
+const SIM_LEFT_MAX = 400;
 
 export const useUiStore = create<UiState>((set) => ({
   activeView: 'dashboard',
@@ -96,6 +102,7 @@ export const useUiStore = create<UiState>((set) => ({
   rightPanelWidth: 384,
   bottomPanelCollapsed: true,
   bottomPanelHeight: 240,
+  simLeftPanelWidth: 260,
   pluginViewLayouts: DEFAULT_PLUGIN_VIEW_LAYOUTS,
   // 切换视图时自动关闭所有抽屉（原型 §2.1-3：mission-control 行为闭环）
   setActiveView: (view) =>
@@ -117,6 +124,7 @@ export const useUiStore = create<UiState>((set) => ({
   setRightPanelWidth: (width) => set({ rightPanelWidth: Math.max(RIGHT_MIN, Math.min(RIGHT_MAX, width)) }),
   setBottomPanelCollapsed: (collapsed) => set({ bottomPanelCollapsed: collapsed }),
   setBottomPanelHeight: (height) => set({ bottomPanelHeight: Math.max(BOTTOM_MIN, Math.min(BOTTOM_MAX, height)) }),
+  setSimLeftPanelWidth: (width) => set({ simLeftPanelWidth: Math.max(SIM_LEFT_MIN, Math.min(SIM_LEFT_MAX, width)) }),
   setPluginViewActive: (location, viewId) => set((state) => ({
     pluginViewLayouts: {
       ...state.pluginViewLayouts,
@@ -141,6 +149,10 @@ export const useUiStore = create<UiState>((set) => ({
     rightPanelCollapsed: layout?.rightPanelCollapsed ?? state.rightPanelCollapsed,
     optionDockExpanded: layout?.optionDockExpanded ?? state.optionDockExpanded,
     aiPanelMode: isAiPanelMode(layout?.aiPanelMode) ? layout.aiPanelMode : state.aiPanelMode,
+    simLeftPanelWidth:
+      typeof layout?.simLeftPanelWidth === 'number'
+        ? Math.max(SIM_LEFT_MIN, Math.min(SIM_LEFT_MAX, layout.simLeftPanelWidth))
+        : state.simLeftPanelWidth,
     pluginViewLayouts: {
       ...DEFAULT_PLUGIN_VIEW_LAYOUTS,
       ...(layout?.pluginViews ?? {}),

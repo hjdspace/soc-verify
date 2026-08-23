@@ -29,6 +29,7 @@ export function AppShell() {
   const closeDrawers = useUiStore((s) => s.closeDrawers);
   const rightCollapsed = useUiStore((s) => s.rightPanelCollapsed);
   const optionDockExpanded = useUiStore((s) => s.optionDockExpanded);
+  const simLeftPanelWidth = useUiStore((s) => s.simLeftPanelWidth);
   const pluginViewLayouts = useUiStore((s) => s.pluginViewLayouts);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const uiStateReady = useProjectStore((s) => s.uiStateReady);
@@ -59,7 +60,7 @@ export function AppShell() {
       void saveProjectState();
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [currentProjectId, uiStateReady, activeView, aiPanelMode, rightCollapsed, optionDockExpanded, pluginViewLayouts, sessionIds, saveProjectState]);
+  }, [currentProjectId, uiStateReady, activeView, aiPanelMode, rightCollapsed, optionDockExpanded, simLeftPanelWidth, pluginViewLayouts, sessionIds, saveProjectState]);
 
   // Save state before the window unloads so lastSessionIds is up-to-date.
   useEffect(() => {
