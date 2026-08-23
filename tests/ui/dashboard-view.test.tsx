@@ -16,6 +16,7 @@ import type { SummaryData, RecentFailuresData } from '@renderer/stores/dashboard
 const mocks = vi.hoisted(() => ({
   sim: {
     activeRuns: [] as SimulationRunRecord[],
+    loadActiveRuns: vi.fn().mockResolvedValue(undefined),
   },
   cov: {
     overview: null as CoverageSummary | null,
@@ -106,6 +107,7 @@ function makeSession(partial: Partial<SessionEntry> & { id: string }): SessionEn
 
 beforeEach(() => {
   mocks.sim.activeRuns = [];
+  mocks.sim.loadActiveRuns.mockClear();
   mocks.cov.overview = null;
   mocks.cov.loading = false;
   mocks.cov.loadSessions.mockClear();
@@ -278,6 +280,18 @@ describe('DashboardView 运行中仿真流', () => {
     render(<DashboardView />);
     expect(screen.getByTestId('run-stream-empty')).toBeInTheDocument();
   });
+
+  it('列表区有固定高度容器（max-h + overflow），防止撑高挤压下方面板', () => {
+    const now = Date.now();
+    mocks.sim.activeRuns = Array.from({ length: 10 }, (_, i) =>
+      makeRun({ runId: `run-${i}`, caseName: `case-${i}`, startTime: now - i * 1000 }),
+    );
+    render(<DashboardView />);
+
+    const list = screen.getByTestId('run-stream-list');
+    expect(list.className).toContain('max-h-');
+    expect(list.className).toContain('overflow-y-auto');
+  });
 });
 
 describe('DashboardView 覆盖率环', () => {
@@ -419,6 +433,11 @@ describe('DashboardView 视图头与数据加载', () => {
     expect(mocks.cov.loadSessions).toHaveBeenCalledWith('proj-1');
     // loadTree 在 loadSessions 的 promise 链中，等待微任务刷新
     await vi.waitFor(() => expect(mocks.cov.loadTree).toHaveBeenCalledWith('proj-1'));
+  });
+
+  it('mount 时加载活跃仿真运行（loadActiveRuns），避免首次进入总览时运行中仿真列表为空', () => {
+    render(<DashboardView />);
+    expect(mocks.sim.loadActiveRuns).toHaveBeenCalledWith('proj-1');
   });
 
   it('覆盖率已有数据时不重复加载', () => {

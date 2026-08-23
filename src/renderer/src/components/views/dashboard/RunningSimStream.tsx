@@ -100,7 +100,7 @@ export function RunningSimStream() {
 
   return (
     <div className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card">
-      <div className="flex items-center gap-2 border-b border-border px-3.5 py-2.5 text-xs font-semibold text-foreground">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3.5 py-2.5 text-xs font-semibold text-foreground">
         运行中仿真
         <span className="rounded-full bg-primary/15 px-[7px] font-mono text-[10px] font-normal text-primary">
           {runningCount}
@@ -112,25 +112,28 @@ export function RunningSimStream() {
           查看全部 →
         </button>
       </div>
-      {sorted.length === 0 ? (
-        <div className="px-3.5 py-6 text-center text-xs text-muted-foreground/70" data-testid="run-stream-empty">
-          暂无仿真运行 — 从工作区启动仿真后此处实时展示
-        </div>
-      ) : (
-        sorted.map((run) => (
-          <div
-            key={run.runId}
-            role="button"
-            tabIndex={0}
-            onClick={() => open({ type: 'simulation-detail', runId: run.runId })}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') open({ type: 'simulation-detail', runId: run.runId });
-            }}
-          >
-            <RunRow run={run} now={now} />
+      {/* 列表区固定高度（~5 条可见），超出内部滚动，避免面板撑高挤压下方 grid */}
+      <div className="max-h-[240px] overflow-y-auto" data-testid="run-stream-list">
+        {sorted.length === 0 ? (
+          <div className="px-3.5 py-6 text-center text-xs text-muted-foreground/70" data-testid="run-stream-empty">
+            暂无仿真运行 — 从工作区启动仿真后此处实时展示
           </div>
-        ))
-      )}
+        ) : (
+          sorted.map((run) => (
+            <div
+              key={run.runId}
+              role="button"
+              tabIndex={0}
+              onClick={() => open({ type: 'simulation-detail', runId: run.runId })}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') open({ type: 'simulation-detail', runId: run.runId });
+              }}
+            >
+              <RunRow run={run} now={now} />
+            </div>
+          ))
+        )}
+      </div>
     </div>
   );
 }

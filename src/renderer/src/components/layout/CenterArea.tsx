@@ -567,45 +567,47 @@ export function CenterArea() {
         ) : destination?.type === 'kb' ? (
           <KbView />
         ) : (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
-            {/* Active simulations */}
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 overflow-hidden text-sm text-muted-foreground">
+            {/* Active simulations — capped height with internal scroll */}
             {activeRuns.length > 0 && (
               <div className="w-full max-w-md">
                 <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                   正在运行的仿真
                 </div>
-                {activeRuns.map((run) => (
-                  <div
-                    key={run.runId}
-                    className="flex items-center gap-2 rounded-md border border-border/50 bg-secondary/30 px-3 py-1.5"
-                  >
-                    <span className={cn(
-                      'size-[7px] shrink-0 rounded-full',
-                      STATUS_BADGE_STYLES[run.status]?.dot ?? 'bg-muted-foreground',
-                    )} />
-                    <span className="flex-1 truncate text-xs">{run.caseName ?? run.caseId}</span>
-                    <span className="text-[10px] text-muted-foreground">{run.status}</span>
-                    {run.status === 'running' || run.status === 'pending' ? (
-                      <button
-                        onClick={() => currentProjectId && abortSimulation(currentProjectId, run.runId)}
-                        className="rounded bg-status-fail/10 px-1.5 py-0.5 text-[10px] text-status-fail-foreground hover:bg-status-fail/20"
-                      >
-                        中止
-                      </button>
-                    ) : run.compileErrors && run.compileErrors.length > 0 ? (
-                      <button
-                        onClick={() => openSimErrors(run.runId)}
-                        className="rounded bg-status-fail/10 px-1.5 py-0.5 text-[10px] text-status-fail-foreground hover:bg-status-fail/20"
-                      >
-                        查看错误
-                      </button>
-                    ) : null}
-                  </div>
-                ))}
+                <div className="max-h-[240px] overflow-y-auto" data-testid="workspace-active-runs-list">
+                  {activeRuns.map((run) => (
+                    <div
+                      key={run.runId}
+                      className="flex items-center gap-2 rounded-md border border-border/50 bg-secondary/30 px-3 py-1.5"
+                    >
+                      <span className={cn(
+                        'size-[7px] shrink-0 rounded-full',
+                        STATUS_BADGE_STYLES[run.status]?.dot ?? 'bg-muted-foreground',
+                      )} />
+                      <span className="flex-1 truncate text-xs">{run.caseName ?? run.caseId}</span>
+                      <span className="text-[10px] text-muted-foreground">{run.status}</span>
+                      {run.status === 'running' || run.status === 'pending' ? (
+                        <button
+                          onClick={() => currentProjectId && abortSimulation(currentProjectId, run.runId)}
+                          className="rounded bg-status-fail/10 px-1.5 py-0.5 text-[10px] text-status-fail-foreground hover:bg-status-fail/20"
+                        >
+                          中止
+                        </button>
+                      ) : run.compileErrors && run.compileErrors.length > 0 ? (
+                        <button
+                          onClick={() => openSimErrors(run.runId)}
+                          className="rounded bg-status-fail/10 px-1.5 py-0.5 text-[10px] text-status-fail-foreground hover:bg-status-fail/20"
+                        >
+                          查看错误
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
-            <div className="flex gap-2">
+            <div className="flex shrink-0 gap-2">
               <button
                 onClick={() => createTerminal(currentProjectId ?? undefined)}
                 className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs transition-colors hover:bg-accent"
@@ -621,7 +623,7 @@ export function CenterArea() {
                 AI 产物
               </button>
             </div>
-            <p className="text-[11px]">
+            <p className="shrink-0 text-[11px]">
               {activeTab ? `活动页签：${activeTab.title}` : '从左栏选择文件或在右栏与 AI 对话'}
             </p>
           </div>

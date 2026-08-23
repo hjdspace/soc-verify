@@ -20,6 +20,7 @@ import { FailureFocusPanel } from './dashboard/FailureFocusPanel';
 import { useProjectStore } from '@renderer/stores/project';
 import { useDashboardStore } from '@renderer/stores/dashboard';
 import { useCoverageStore } from '@renderer/stores/coverage';
+import { useSimulationStore } from '@renderer/stores/simulation';
 import { useUiStore } from '@renderer/stores/ui';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { computeMilestoneStatuses, type MilestoneNode } from '@shared/types/milestone';
@@ -97,12 +98,16 @@ export function DashboardView() {
   const openWorkbench = useWorkbenchStore((s) => s.open);
 
   // ─── 数据加载：overview 汇总 + 失败列表（dashboard store 现有查询） ───
+  // 同时拉取活跃仿真运行（RunningSimStream 直接复用 simulation store，
+  // 不加载则首次进入总览时列表为空，只有切换到仿真视图再切回才有数据）
+  const loadActiveRuns = useSimulationStore((s) => s.loadActiveRuns);
   useEffect(() => {
     if (!currentProjectId) return;
     if (!tabLoaded.overview) void loadTabData('overview', currentProjectId);
     if (!tabLoaded.failures) void loadTabData('failures', currentProjectId);
     void loadMilestones(currentProjectId);
-  }, [currentProjectId, tabLoaded.overview, tabLoaded.failures, loadTabData, loadMilestones]);
+    void loadActiveRuns(currentProjectId);
+  }, [currentProjectId, tabLoaded.overview, tabLoaded.failures, loadTabData, loadMilestones, loadActiveRuns]);
 
   // ─── 覆盖率汇总（coverage store 现有查询，已加载则跳过；每项目只请求一次，
   //     失败靠 coverage store 的 toast 报错，此处不无限重试） ───
