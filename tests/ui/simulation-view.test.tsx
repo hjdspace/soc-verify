@@ -217,8 +217,9 @@ describe('SimulationView 三栏布局渲染', () => {
 
     expect(screen.getByTestId('case-tree-panel')).toBeInTheDocument();
     expect(screen.getByTestId('run-list-panel')).toBeInTheDocument();
-    // SimOptionPanel 内部有 Option 面板标题（「仿真 Option」或 CASE 缺失提示）
-    expect(screen.getByText(/仿真 Option|未指定 CASE|CASE/i)).toBeInTheDocument();
+    // SimOptionPanel 面板标题 + SimCommandBar 命令栏均可见
+    expect(screen.getByTestId('sim-option-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('sim-command-bar')).toBeInTheDocument();
   });
 
   it('ViewHeader 标题「仿真」+ 副标题计数', () => {
