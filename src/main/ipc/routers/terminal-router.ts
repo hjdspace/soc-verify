@@ -5,6 +5,7 @@
 import { t, TRPCError } from '../router-context';
 import { terminalManager } from '../../terminal/terminal-manager';
 import { projectManager } from '../../project/project-manager';
+import { buildEnvFromConfig, loadEnvConfig } from '../../env/env-manager';
 
 export const terminalRouter = t.router({
   create: t.procedure
@@ -19,14 +20,20 @@ export const terminalRouter = t.router({
     })
     .mutation(async ({ input }) => {
       let cwd = input.cwd;
-      if (!cwd && input.projectId) {
+      let env: Record<string, string> | undefined;
+      if (input.projectId) {
         const project = projectManager.getProject(input.projectId);
-        cwd = project?.rootPath;
+        if (project) {
+          if (!cwd) cwd = project.rootPath;
+          const config = await loadEnvConfig(project.rootPath);
+          if (config) env = buildEnvFromConfig(config);
+        }
       }
       const session = await terminalManager.create({
         cwd,
         cols: input.cols,
         rows: input.rows,
+        env,
       });
       return session;
     }),

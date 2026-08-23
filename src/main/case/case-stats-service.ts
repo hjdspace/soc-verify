@@ -12,7 +12,7 @@
 import type { CaseInfo, CaseStatus, SubsysInfo } from '../host/discovery';
 import type { SimulationManager } from '../simulation/simulation-manager';
 import type { SimulationStatus } from '@shared/types';
-import { type CaseRow, getCases, getLatestStatusBySubsys, searchCases, getSubsysWithCaseCount, getCaseNameToSubsysMap, getAllLatestStatuses } from './db/case-repository';
+import { type CaseRow, getCases, getLatestStatusBySubsys, searchCases, getSubsysWithCaseCount, getCaseNameToSubsysMap, getAllLatestStatuses, setCasePostSim as setCasePostSimInDb, getPostSimCases } from './db/case-repository';
 import type { CaseDatabase } from './db/case-database';
 
 // ─── 公共类型 ───────────────────────────────────────────────
@@ -212,6 +212,21 @@ export class CaseStatsService {
     limit = 200,
   ): Promise<CaseInfo[]> {
     const rows = searchCases(this.db, query, subsys, limit);
+    return rows.map((r) => caseRowToInfo(r, undefined));
+  }
+
+  /**
+   * 设置用例的后仿标记（仅用户操作触发）。
+   */
+  async setCasePostSim(caseName: string, subsys: string, postSim: boolean): Promise<{ updated: number }> {
+    return setCasePostSimInDb(this.db, caseName, subsys, postSim);
+  }
+
+  /**
+   * 列出所有被标记为需要跑后仿的用例（后仿用例挑选）。
+   */
+  async listPostSimCases(): Promise<CaseInfo[]> {
+    const rows = getPostSimCases(this.db);
     return rows.map((r) => caseRowToInfo(r, undefined));
   }
 
@@ -427,5 +442,6 @@ function caseRowToInfo(
     base: row.base,
     block: row.block,
     phase: row.phase,
+    postSim: row.postSim ?? false,
   };
 }

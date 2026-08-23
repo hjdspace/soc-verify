@@ -148,6 +148,22 @@ describe('SourceControlPanel', () => {
     });
   });
 
+  it('puts the generated body into the commit textarea', async () => {
+    vi.mocked(trpc.scm.generateCommitMessage.mutate).mockResolvedValueOnce({
+      message: 'feat: add scm panel\n\n- 添加提交正文说明',
+    });
+    render(<SourceControlPanel />);
+
+    await screen.findByText('src/main.ts');
+    fireEvent.click(screen.getByText('AI 生成'));
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('提交信息（支持 Conventional Commits 格式）')).toHaveValue(
+        'feat: add scm panel\n\n- 添加提交正文说明',
+      );
+    });
+  });
+
   it('stages a file when the plus button is clicked', async () => {
     render(<SourceControlPanel />);
 

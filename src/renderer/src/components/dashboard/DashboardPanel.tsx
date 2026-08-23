@@ -29,7 +29,7 @@ const TIME_RANGE_OPTIONS: { value: 'all' | '7d' | '30d'; label: string }[] = [
   { value: '30d', label: '最近30天' },
 ];
 
-export function DashboardPanel() {
+export function DashboardPanel({ initialTab }: { initialTab?: DashboardTab }) {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
 
   const activeTab = useDashboardStore((s) => s.activeTab);
@@ -59,6 +59,15 @@ export function DashboardPanel() {
   const refresh = useDashboardStore((s) => s.refresh);
   const loadLayout = useDashboardStore((s) => s.loadLayout);
   const saveLayout = useDashboardStore((s) => s.saveLayout);
+
+  // ─── 外部指定初始标签页（如从总览「分析面板」入口打开） ───
+  // 仅在 mount 时应用 initialTab，不依赖 activeTab，避免用户切换标签页后被重置。
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ─── Mount: 启动 ECharts 主题监听 + 加载布局 + 加载子系统列表 ───
   useEffect(() => {

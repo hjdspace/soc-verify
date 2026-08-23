@@ -40,10 +40,13 @@ export interface ProjectInfo {
 export interface ProjectState {
   projectId: string;
   uiLayout: {
-    leftRailCollapsed: boolean;
     rightPanelCollapsed: boolean;
     optionDockExpanded: boolean;
     pluginViews?: Partial<Record<PluginViewLocation, PluginViewLayoutState>>;
+    /** App Shell 活动视图（mission-control 布局）；旧持久化状态可能缺失 */
+    activeView?: string;
+    /** AI 面板呈现模式（drawer | docked）；旧持久化状态可能缺失 */
+    aiPanelMode?: string;
   };
   lastSessionIds: string[];
 }

@@ -89,11 +89,12 @@ vi.mock('../src/main/agent/session-persistence', () => ({
 }));
 
 // Mock session manager
-const { mockCreateSession, mockDestroySession, mockGetSession, mockGetClient } = vi.hoisted(() => ({
+const { mockCreateSession, mockDestroySession, mockGetSession, mockGetClient, mockPromptFireAndForget } = vi.hoisted(() => ({
   mockCreateSession: vi.fn() as ReturnType<typeof vi.fn>,
   mockDestroySession: vi.fn() as ReturnType<typeof vi.fn>,
   mockGetSession: vi.fn() as ReturnType<typeof vi.fn>,
   mockGetClient: vi.fn() as ReturnType<typeof vi.fn>,
+  mockPromptFireAndForget: vi.fn() as ReturnType<typeof vi.fn>,
 }));
 
 vi.mock('../src/main/agent/session-manager', () => ({
@@ -102,6 +103,7 @@ vi.mock('../src/main/agent/session-manager', () => ({
     destroySession: mockDestroySession,
     getSession: mockGetSession,
     getClient: mockGetClient,
+    promptFireAndForget: mockPromptFireAndForget,
   },
   SessionManagerImpl: vi.fn(),
 }));
@@ -186,6 +188,7 @@ describe('deepReindex', () => {
     mockDestroySession.mockReset();
     mockGetSession.mockReset();
     mockGetClient.mockReset();
+    mockPromptFireAndForget.mockReset();
   });
 
   afterEach(() => {
@@ -202,15 +205,15 @@ describe('deepReindex', () => {
     const kbDir = makeKbDir('trigger-kb');
     mockCreateSession.mockResolvedValue('temp-session-1');
     // Agent prompt mock: 模拟 Agent 写入 .index.md.new
-    const mockPrompt = vi.fn().mockImplementation(async () => {
+    mockPromptFireAndForget.mockImplementation(async () => {
       const newIndexPath = join(kbDir, '.index.md.new');
       writeFileSync(newIndexPath, '# 知识库索引\n\n## 协议手册\n\n### DDR5\n- **路径**: `协议手册/DDR5.md`\n- **摘要**: DDR5 协议规范\n\n### AXI\n- **路径**: `协议手册/AXI.md`\n- **摘要**: AXI 总线协议\n', 'utf-8');
     });
     mockGetSession.mockReturnValue({
-      client: { prompt: mockPrompt, onEvent: vi.fn() },
+      client: { prompt: vi.fn(), onEvent: vi.fn() },
       hostTools: { registerCustom: vi.fn() },
     });
-    mockGetClient.mockReturnValue({ prompt: mockPrompt, onEvent: vi.fn() });
+    mockGetClient.mockReturnValue({ prompt: vi.fn(), onEvent: vi.fn() });
 
     const result = await deepReindex({
       kbPath: kbDir,
@@ -232,18 +235,18 @@ describe('deepReindex', () => {
 
     mockCreateSession.mockResolvedValue('temp-session-2');
     // Agent prompt mock: 写入 .index.md.new
-    const mockPrompt = vi.fn().mockImplementation(async () => {
+    mockPromptFireAndForget.mockImplementation(async () => {
       const newIndexPath = join(kbDir, '.index.md.new');
       writeFileSync(newIndexPath, '# 知识库索引\n\n## 协议手册\n\n### DDR5\n- **路径**: `协议手册/DDR5.md`\n- **摘要**: 深度重建的 DDR5 摘要\n\n### AXI\n- **路径**: `协议手册/AXI.md`\n- **摘要**: 深度重建的 AXI 摘要\n', 'utf-8');
     });
     mockGetSession.mockReturnValue({
       client: {
-        prompt: mockPrompt,
+        prompt: vi.fn(),
         onEvent: vi.fn(),
       },
       hostTools: { registerCustom: vi.fn() },
     });
-    mockGetClient.mockReturnValue({ prompt: mockPrompt, onEvent: vi.fn() });
+    mockGetClient.mockReturnValue({ prompt: vi.fn(), onEvent: vi.fn() });
 
     const result = await deepReindex({
       kbPath: kbDir,
@@ -297,12 +300,12 @@ describe('deepReindex', () => {
     const originalContent = readFileSync(join(kbDir, 'index.md'), 'utf-8');
 
     mockCreateSession.mockResolvedValue('temp-session-3');
-    const mockPrompt = vi.fn().mockRejectedValue(new Error('prompt timeout'));
+    mockPromptFireAndForget.mockRejectedValue(new Error('prompt timeout'));
     mockGetSession.mockReturnValue({
-      client: { prompt: mockPrompt, onEvent: vi.fn() },
+      client: { prompt: vi.fn().mockRejectedValue(new Error('prompt timeout')), onEvent: vi.fn() },
       hostTools: { registerCustom: vi.fn() },
     });
-    mockGetClient.mockReturnValue({ prompt: mockPrompt, onEvent: vi.fn() });
+    mockGetClient.mockReturnValue({ prompt: vi.fn().mockRejectedValue(new Error('prompt timeout')), onEvent: vi.fn() });
 
     const result = await deepReindex({
       kbPath: kbDir,
@@ -325,14 +328,14 @@ describe('deepReindex', () => {
     const events: Array<{ phase: string; current?: number; total?: number }> = [];
 
     mockCreateSession.mockResolvedValue('temp-session-4');
-    const mockPrompt = vi.fn().mockImplementation(async () => {
+    mockPromptFireAndForget.mockImplementation(async () => {
       writeFileSync(join(kbDir, '.index.md.new'), '# 新索引\n', 'utf-8');
     });
     mockGetSession.mockReturnValue({
-      client: { prompt: mockPrompt, onEvent: vi.fn() },
+      client: { prompt: vi.fn(), onEvent: vi.fn() },
       hostTools: { registerCustom: vi.fn() },
     });
-    mockGetClient.mockReturnValue({ prompt: mockPrompt, onEvent: vi.fn() });
+    mockGetClient.mockReturnValue({ prompt: vi.fn(), onEvent: vi.fn() });
 
     await deepReindex({
       kbPath: kbDir,
@@ -353,14 +356,14 @@ describe('deepReindex', () => {
   it('完成后会话被正确销毁', async () => {
     const kbDir = makeKbDir('cleanup-kb');
     mockCreateSession.mockResolvedValue('temp-session-5');
-    const mockPrompt = vi.fn().mockImplementation(async () => {
+    mockPromptFireAndForget.mockImplementation(async () => {
       writeFileSync(join(kbDir, '.index.md.new'), '# 新索引\n', 'utf-8');
     });
     mockGetSession.mockReturnValue({
-      client: { prompt: mockPrompt, onEvent: vi.fn() },
+      client: { prompt: vi.fn(), onEvent: vi.fn() },
       hostTools: { registerCustom: vi.fn() },
     });
-    mockGetClient.mockReturnValue({ prompt: mockPrompt, onEvent: vi.fn() });
+    mockGetClient.mockReturnValue({ prompt: vi.fn(), onEvent: vi.fn() });
 
     await deepReindex({
       kbPath: kbDir,
@@ -377,12 +380,12 @@ describe('deepReindex', () => {
   it('失败后会话也被销毁', async () => {
     const kbDir = makeKbDir('fail-cleanup-kb');
     mockCreateSession.mockResolvedValue('temp-session-6');
-    const mockPrompt = vi.fn().mockRejectedValue(new Error('network error'));
+    mockPromptFireAndForget.mockRejectedValue(new Error('network error'));
     mockGetSession.mockReturnValue({
-      client: { prompt: mockPrompt, onEvent: vi.fn() },
+      client: { prompt: vi.fn().mockRejectedValue(new Error('network error')), onEvent: vi.fn() },
       hostTools: { registerCustom: vi.fn() },
     });
-    mockGetClient.mockReturnValue({ prompt: mockPrompt, onEvent: vi.fn() });
+    mockGetClient.mockReturnValue({ prompt: vi.fn().mockRejectedValue(new Error('network error')), onEvent: vi.fn() });
 
     await deepReindex({
       kbPath: kbDir,

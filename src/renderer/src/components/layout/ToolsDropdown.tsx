@@ -7,12 +7,13 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { ChevronDown, Wrench } from 'lucide-react';
+import { ChevronDown, Wrench, Workflow } from 'lucide-react';
 import { ALL_TOOLS, TOOL_CATEGORY_LABELS, type ToolCategory } from '@shared/tool-types';
 import { trpc } from '@renderer/lib/trpc';
 import { useProjectStore } from '@renderer/stores/project';
 import { useToastStore } from '@renderer/stores/toast';
 import { cn } from '@renderer/lib/utils';
+import { useWorkbenchStore } from '@renderer/stores/workbench';
 import * as Icons from 'lucide-react';
 import type { ComponentType, SVGProps } from 'react';
 
@@ -51,6 +52,7 @@ export function ToolsDropdown() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const projects = useProjectStore((s) => s.projects);
   const errorToast = useToastStore((s) => s.error);
+  const openDestination = useWorkbenchStore((s) => s.open);
 
   const projectRoot = projects.find((p) => p.id === currentProjectId)?.rootPath ?? undefined;
 
@@ -98,6 +100,23 @@ export function ToolsDropdown() {
 
       {open && (
         <div className="absolute right-0 top-full z-50 mt-1 max-h-[70vh] w-64 overflow-auto rounded-md border border-border bg-popover shadow-lg">
+          <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            工作区工具
+          </div>
+          <button
+            type="button"
+            data-testid="tool-open-sysbase-env-gen"
+            onClick={() => {
+              setOpen(false);
+              openDestination({ type: 'sysbase-env-gen' });
+            }}
+            title="配置并生成 SoC 验证环境"
+            className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-xs transition-colors hover:bg-accent"
+          >
+            <Workflow className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">验证环境生成器</span>
+          </button>
+          <div className="border-t border-border/50" />
           {CATEGORY_ORDER.map((cat) => {
             const tools = groups[cat];
             if (!tools || tools.length === 0) return null;

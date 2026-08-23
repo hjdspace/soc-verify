@@ -100,6 +100,20 @@ process.once('loaded', async () => {
       ipcRenderer.on('terminal:data', handler);
       return () => ipcRenderer.removeListener('terminal:data', handler);
     },
+
+    // ── Issue #8: TitleBar 回归徽章 + 通知中心 ──────────────────
+    // regression:event —— 运行中回归的 started / progress / finished 推送
+    onRegressionEvent: (callback: (event: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: unknown) => callback(data);
+      ipcRenderer.on('regression:event', handler);
+      return () => ipcRenderer.removeListener('regression:event', handler);
+    },
+    // notification:event —— 通知列表任意变更后的全量同步
+    onNotificationEvent: (callback: (event: unknown) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: unknown) => callback(data);
+      ipcRenderer.on('notification:event', handler);
+      return () => ipcRenderer.removeListener('notification:event', handler);
+    },
     onTerminalExit: (callback: (data: { id: string; exitCode: number }) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, data: { id: string; exitCode: number }) => callback(data);
       ipcRenderer.on('terminal:exit', handler);

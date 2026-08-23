@@ -128,7 +128,8 @@ export const sessionRouter = t.router({
       };
     })
     .mutation(async ({ input }) => {
-      const client = requireSession(input.sessionId);
+      // Validate session exists (throws NOT_FOUND if missing)
+      requireSession(input.sessionId);
       sessionManager.touchActivity(input.sessionId);
       console.log(`[router:session.send] sessionId=${input.sessionId}, message=${input.message.slice(0, 80)}${input.message.length > 80 ? '...' : ''}${input.images ? `, images=${input.images.length}` : ''}`);
       // Update persisted lastActivityAt
@@ -139,7 +140,7 @@ export const sessionRouter = t.router({
           void updateSessionActivity(sendProject.rootPath, sendSessionEntry.persistedSessionId ?? input.sessionId);
         }
       }
-      await client.prompt(input.message, input.images);
+      await sessionManager.promptFireAndForget(input.sessionId, input.message, input.images);
       console.log(`[router:session.send] prompt acknowledged by agent`);
       return { ok: true };
     }),
@@ -164,7 +165,7 @@ export const sessionRouter = t.router({
       // by the time this returns — the frontend should reset the UI
       // state and clear any streaming messages.
       try {
-        await entry.client.abort();
+        await sessionManager.abortSession(input.sessionId);
       } catch {
         // If abort throws (e.g. process already dead), force-stop as safety net.
         entry.client.stop();
@@ -471,6 +472,9 @@ export const sessionRouter = t.router({
       return { sessionId: r.sessionId, message: r.message };
     })
     .mutation(async ({ input }) => {
+      // steer is a fire-and-forget command — the agent processes it mid-turn.
+      // Use the session's client directly via requireSession for steer, as
+      // promptFireAndForget sends a 'prompt' not a 'steer' command.
       const client = requireSession(input.sessionId);
       sessionManager.touchActivity(input.sessionId);
       await client.steer(input.message);

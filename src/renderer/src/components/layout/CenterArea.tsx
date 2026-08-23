@@ -268,7 +268,9 @@ export function CenterArea() {
                 {tab.destination.type === 'simulation-comparison' && <GitCompare className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'running-simulations' && <CircleDot className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'coverage' && <BarChart3 className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'coverage-detail' && <BarChart3 className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'regression' && <GitBranch className="h-3 w-3 opacity-50" />}
+                {tab.destination.type === 'regression-detail' && <GitBranch className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'dashboard' && <LayoutDashboard className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'to-checklist' && <ListChecks className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'source-control' && <GitCommitHorizontal className="h-3 w-3 opacity-50" />}
@@ -520,10 +522,16 @@ export function CenterArea() {
           <RunningCasesPanel />
         ) : destination?.type === 'coverage' ? (
           <CoveragePanel />
+        ) : destination?.type === 'coverage-detail' ? (
+          <CoveragePanel />
         ) : destination?.type === 'regression' ? (
+          <RegressionPanel />
+        ) : destination?.type === 'regression-detail' ? (
           <RegressionPanel />
         ) : destination?.type === 'dashboard' ? (
           <DashboardPanel />
+        ) : destination?.type === 'dashboard-tab' ? (
+          <DashboardPanel key={destination.tab} initialTab={destination.tab} />
         ) : destination?.type === 'sysbase-env-gen' ? (
           <SysbaseEnvGen />
         ) : destination?.type === 'to-checklist' ? (

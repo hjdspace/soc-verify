@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
-import { ChevronRight, ChevronDown, Cpu, CircleDot, Play, X, RefreshCw, Settings, FileText, Copy, ChevronsDownUp, ChevronsUpDown, FolderOpen, Search, Loader2 } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ChevronRight, ChevronDown, Cpu, CircleDot, Play, X, RefreshCw, Settings, FileText, Copy, ChevronsDownUp, ChevronsUpDown, FolderOpen, Search, Loader2, Zap } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import { useProjectStore } from '@renderer/stores/project';
@@ -7,6 +8,7 @@ import { useOverviewStore } from '@renderer/stores/overview';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useEnvStore } from '@renderer/stores/env';
 import { useToastStore } from '@renderer/stores/toast';
+import { useDashboardStore } from '@renderer/stores/dashboard';
 
 interface SubsysData {
   name: string;
@@ -27,6 +29,7 @@ interface CaseData {
   filePath?: string;
   base?: string;
   block?: string;
+  postSim?: boolean;
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -44,6 +47,7 @@ const STATUS_FILTERS = [
   { value: 'fail', label: '失败' },
   { value: 'running', label: '运行中' },
   { value: 'pending', label: '待运行' },
+  { value: 'postSim', label: '后仿' },
 ];
 
 interface ContextMenuState {
@@ -314,6 +318,11 @@ function CaseTreeItem({
           className={cn('h-2.5 w-2.5 shrink-0', STATUS_COLORS[node.caseData?.status ?? 'pending'])}
         />
         <span className="truncate">{node.name}</span>
+        {node.caseData?.postSim && (
+          <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[9px] font-medium text-amber-600 dark:text-amber-400">
+            后仿
+          </span>
+        )}
         {node.caseData?.baseCase && (
           <span
             className={cn(
@@ -469,7 +478,11 @@ export function SubsysList() {
       const data = await trpc.project.getCases.query({
         projectId: currentProjectId,
         subsys: subsysName,
-        status: effectiveStatus === 'all' ? undefined : effectiveStatus,
+        // postSim 筛选：只返回已标记后仿的用例，忽略 status 过滤
+        postSim: effectiveStatus === 'postSim' ? true : undefined,
+        status: effectiveStatus === 'all' || effectiveStatus === 'postSim'
+          ? undefined
+          : effectiveStatus,
       });
       setCasesBySubsys((prev) => {
         const next = new Map(prev);
@@ -638,6 +651,29 @@ export function SubsysList() {
   const handleRunCase = async (caseData: CaseData) => {
     if (!currentProjectId) return;
     await startCaseRun(currentProjectId, caseData);
+  };
+
+  /**
+   * 切换用例的后仿标记（用户挑选需要跑后仿的用例）。
+   * 更新 DB 后刷新当前子系统用例列表，并联动刷新总览里程碑（后仿验证节点）。
+   */
+  const handleTogglePostSim = async (caseData: CaseData) => {
+    if (!currentProjectId) return;
+    try {
+      await trpc.project.setCasePostSim.mutate({
+        projectId: currentProjectId,
+        caseName: caseData.name,
+        subsys: caseData.subsys,
+        postSim: !caseData.postSim,
+      });
+      // 刷新当前子系统的用例（含后仿标记）
+      await loadSubsysCases(caseData.subsys);
+      // 联动刷新总览里程碑（后仿验证节点 count 变化）
+      useDashboardStore.getState().loadMilestones(currentProjectId);
+      useToastStore.getState().success(caseData.postSim ? '已取消后仿标记' : '已标记需要后仿');
+    } catch (err) {
+      useToastStore.getState().error('后仿标记更新失败', err instanceof Error ? err.message : String(err));
+    }
   };
 
   /**
@@ -1211,10 +1247,10 @@ export function SubsysList() {
         </>
       )}
 
-      {/* Context menu — case node */}
-      {contextMenu.visible && contextMenu.caseData && (
+      {/* Context menu — case node (portal to body to escape Drawer transform) */}
+      {contextMenu.visible && contextMenu.caseData && createPortal(
         <div
-          className="fixed z-50 min-w-40 overflow-hidden rounded-md border border-border bg-popover shadow-xl"
+          className="fixed z-[9999] min-w-40 overflow-hidden rounded-md border border-border bg-popover shadow-xl"
           style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -1228,13 +1264,26 @@ export function SubsysList() {
             <Play className="h-3 w-3 text-primary" />
             运行仿真
           </button>
-        </div>
+          <div className="border-t border-border/50" />
+          <button
+            onClick={() => {
+              void handleTogglePostSim(contextMenu.caseData!);
+              setContextMenu((s) => ({ ...s, visible: false }));
+            }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-accent"
+            data-testid="case-menu-toggle-postsim"
+          >
+            <Zap className="h-3 w-3 text-amber-500" />
+            {contextMenu.caseData.postSim ? '取消后仿标记' : '标记需要后仿'}
+          </button>
+        </div>,
+        document.body,
       )}
 
-      {/* Context menu — file node (case cfg) */}
-      {contextMenu.visible && contextMenu.fileNode && (
+      {/* Context menu — file node (case cfg, portal to body to escape Drawer transform) */}
+      {contextMenu.visible && contextMenu.fileNode && createPortal(
         <div
-          className="fixed z-50 min-w-44 overflow-hidden rounded-md border border-border bg-popover shadow-xl"
+          className="fixed z-[9999] min-w-44 overflow-hidden rounded-md border border-border bg-popover shadow-xl"
           style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -1293,7 +1342,8 @@ export function SubsysList() {
             <ChevronsDownUp className="h-3 w-3 text-muted-foreground" />
             <span>折叠全部</span>
           </button>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

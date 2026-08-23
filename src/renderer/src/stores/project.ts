@@ -11,6 +11,16 @@ import { useSessionStore } from './session';
 import { useUiStore } from './ui';
 import { tRPCError, getToast } from '@renderer/lib/trpc-utils';
 
+/** 「最近打开」条目（左抽屉底部列表；会话内存态，重启不保留） */
+export type RecentFileEntry = {
+  path: string;
+  name: string;
+  openedAt: number;
+};
+
+/** 最近打开列表上限（原型展示 4 条，留余量） */
+const RECENT_FILES_MAX = 8;
+
 interface ProjectState {
   // ── 状态 ──────────────────────────────────────────────
   projects: ProjectInfo[];
@@ -28,6 +38,8 @@ interface ProjectState {
   selectedSubsys: string | null;
   caseStatusFilter: string;
   uiStateReady: boolean;
+  /** 最近打开的文件（新→旧，去重，上限 RECENT_FILES_MAX） */
+  recentFiles: RecentFileEntry[];
   // ── 动作 ──────────────────────────────────────────────
   openProject: (rootPath: string, name?: string) => Promise<void>;
   openProjectDialog: () => Promise<void>;
@@ -47,6 +59,8 @@ interface ProjectState {
   togglePlugin: (pluginId: string, enabled: boolean) => Promise<void>;
   setSelectedSubsys: (subsys: string | null) => void;
   setCaseStatusFilter: (filter: string) => void;
+  /** 记录最近打开的文件：去重后置顶，超出上限截断 */
+  pushRecentFile: (entry: { path: string; name: string }) => void;
   saveState: () => Promise<void>;
   restoreState: () => Promise<void>;
 }
@@ -104,6 +118,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   selectedSubsys: null,
   caseStatusFilter: 'all',
   uiStateReady: false,
+  recentFiles: [],
 
   openProject: async (rootPath, name) => {
     try {
@@ -373,6 +388,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   setCaseStatusFilter: (filter) => set({ caseStatusFilter: filter }),
 
+  pushRecentFile: (entry) => set((s) => ({
+    recentFiles: [
+      { ...entry, openedAt: Date.now() },
+      ...s.recentFiles.filter((f) => f.path !== entry.path),
+    ].slice(0, RECENT_FILES_MAX),
+  })),
+
   saveState: async () => {
     const { currentProjectId } = get();
     if (!currentProjectId) return;
@@ -381,10 +403,11 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         state: {
           projectId: currentProjectId,
           uiLayout: {
-            leftRailCollapsed: useUiStore.getState().leftRailCollapsed,
             rightPanelCollapsed: useUiStore.getState().rightPanelCollapsed,
             optionDockExpanded: useUiStore.getState().optionDockExpanded,
             pluginViews: useUiStore.getState().pluginViewLayouts,
+            activeView: useUiStore.getState().activeView,
+            aiPanelMode: useUiStore.getState().aiPanelMode,
           },
           lastSessionIds: useSessionStore.getState().sessions
             .map((s) => s.persistedSessionId ?? s.id)

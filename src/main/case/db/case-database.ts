@@ -8,12 +8,26 @@
 import Database from 'better-sqlite3';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { SCHEMA_SQL, PRAGMA_SQL } from './case-schema';
+import { SCHEMA_SQL, PRAGMA_SQL, COLUMN_MIGRATIONS } from './case-schema';
 
 export type CaseDatabase = Database.Database;
 
 /** 默认数据目录（相对于项目根目录） */
 const DEFAULT_DATA_DIR = '.socverify';
+
+/**
+ * 执行增量列迁移：旧库通过 PRAGMA table_info 检测缺失列并 ALTER TABLE 补齐。
+ * 幂等 — 新库（SCHEMA_SQL 已含全部列）不会触发任何 ALTER。
+ */
+export function runMigrations(db: CaseDatabase): void {
+  for (const { table, column, ddl } of COLUMN_MIGRATIONS) {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    const hasColumn = rows.some((r) => r.name === column);
+    if (!hasColumn) {
+      db.exec(ddl);
+    }
+  }
+}
 
 /**
  * 获取数据库文件路径（位于项目 .socverify/ 目录下）。
@@ -48,6 +62,9 @@ export function initDatabase(dbFullPath: string): CaseDatabase {
   // 创建表和索引
   db.exec(SCHEMA_SQL);
 
+  // 旧库增量列迁移（如 post_sim）
+  runMigrations(db);
+
   return db;
 }
 
@@ -72,5 +89,6 @@ export function createMemoryDatabase(): CaseDatabase {
     PRAGMA temp_store = MEMORY;
   `);
   db.exec(SCHEMA_SQL);
+  runMigrations(db);
   return db;
 }

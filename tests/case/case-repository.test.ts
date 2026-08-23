@@ -16,6 +16,9 @@ import {
   setScanMetadata,
   clearAllCases,
   getSubsysList,
+  setCasePostSim,
+  getPostSimCases,
+  getFirstPassRun,
   type SubsysRow,
   type CaseRow,
   type SimulationRunRow,
@@ -611,6 +614,81 @@ describe('Case Database Repository', () => {
 
       expect(getCases(db)).toEqual([]);
       expect(getSubsystems(db)).toHaveLength(1);
+    });
+  });
+
+  // ─── 后仿标记（post_sim） ───────────────────────────────
+
+  describe('setCasePostSim / getPostSimCases', () => {
+    it('sets and reads the post-sim flag', () => {
+      insertSubsystems(db, [makeSubsys({ name: 'cpu' })]);
+      insertCases(db, [makeCase({ name: 't1', subsys: 'cpu' })]);
+
+      expect(getCases(db)[0].postSim).toBe(false);
+
+      const res = setCasePostSim(db, 't1', 'cpu', true);
+      expect(res.updated).toBe(1);
+      expect(getCases(db)[0].postSim).toBe(true);
+      expect(getPostSimCases(db)).toHaveLength(1);
+    });
+
+    it('returns updated=0 for a non-existent case', () => {
+      const res = setCasePostSim(db, 'ghost', 'cpu', true);
+      expect(res.updated).toBe(0);
+      expect(getPostSimCases(db)).toEqual([]);
+    });
+
+    it('unmarks a case when postSim is false', () => {
+      insertSubsystems(db, [makeSubsys({ name: 'cpu' })]);
+      insertCases(db, [makeCase({ name: 't1', subsys: 'cpu' })]);
+      setCasePostSim(db, 't1', 'cpu', true);
+      setCasePostSim(db, 't1', 'cpu', false);
+
+      expect(getCases(db)[0].postSim).toBe(false);
+      expect(getPostSimCases(db)).toEqual([]);
+    });
+  });
+
+  // ─── UPSERT 保留用户标记 ────────────────────────────────
+
+  describe('insertCases (UPSERT) preserves post_sim', () => {
+    it('does not reset post_sim on re-scan of the same case', () => {
+      insertSubsystems(db, [makeSubsys({ name: 'cpu' })]);
+      insertCases(db, [makeCase({ name: 't1', subsys: 'cpu' })]);
+      setCasePostSim(db, 't1', 'cpu', true);
+
+      // 模拟增量扫描重写同一用例（不含 postSim 字段）
+      insertCases(db, [makeCase({ name: 't1', subsys: 'cpu', base: 'base1' })]);
+
+      expect(getCases(db)[0].postSim).toBe(true);
+      expect(getCases(db)[0].base).toBe('base1');
+    });
+  });
+
+  // ─── 冒烟测试信号：首条 pass ────────────────────────────
+
+  describe('getFirstPassRun', () => {
+    it('returns null when there are no pass runs', () => {
+      expect(getFirstPassRun(db)).toBeNull();
+    });
+
+    it('returns the earliest pass run', () => {
+      insertSimulationRun(db, {
+        caseName: 't1', subsys: 'cpu', status: 'fail',
+        startTime: '2026-01-01T10:00:00.000Z',
+      });
+      insertSimulationRun(db, {
+        caseName: 't2', subsys: 'cpu', status: 'pass',
+        startTime: '2026-01-02T10:00:00.000Z',
+      });
+      insertSimulationRun(db, {
+        caseName: 't3', subsys: 'cpu', status: 'pass',
+        startTime: '2026-01-03T10:00:00.000Z',
+      });
+
+      const first = getFirstPassRun(db);
+      expect(first).not.toBeNull();
+      expect(first!.caseName).toBe('t2');
     });
   });
 });

@@ -1,9 +1,23 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   getInteractiveShellArgs,
+  mergeTerminalEnvs,
   resolveInteractiveShell,
   TerminalManager,
 } from '../../src/main/terminal/terminal-manager';
+
+describe('mergeTerminalEnvs', () => {
+  it('preserves project variables and prepends configured tool paths', () => {
+    const separator = process.platform === 'win32' ? ';' : ':';
+    const env = mergeTerminalEnvs(
+      { PROJ_RTL: '/shell/rtl', PATH: ['/proj/python/bin', '/usr/bin'].join(separator) },
+      { PROJ_RTL: '/config/rtl', PATH: ['/config/tools', '/proj/python/bin'].join(separator) },
+    );
+
+    expect(env.PROJ_RTL).toBe('/config/rtl');
+    expect(env.PATH).toBe(['/config/tools', '/proj/python/bin', '/usr/bin'].join(separator));
+  });
+});
 
 describe('resolveInteractiveShell', () => {
   const available = new Set(['/bin/bash', '/bin/zsh', '/bin/sh']);

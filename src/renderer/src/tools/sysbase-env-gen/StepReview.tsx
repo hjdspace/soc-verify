@@ -23,6 +23,7 @@ import {
   Circle,
 } from 'lucide-react';
 import { useSysbaseGenStore } from '@renderer/stores/sysbase-gen';
+import { useProjectStore } from '@renderer/stores/project';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import type { SysbaseGenConfig } from '@shared/types';
@@ -127,6 +128,9 @@ function renderHighlightedCommand(command: string): React.ReactNode {
 export function StepReview() {
   const config = useSysbaseGenStore((s) => s.config);
   const scriptPath = useSysbaseGenStore((s) => s.scriptPath);
+  const currentProjectId = useProjectStore((s) => s.currentProjectId);
+  const projects = useProjectStore((s) => s.projects);
+  const projectRoot = projects.find((p) => p.id === currentProjectId)?.rootPath;
   const runGenLoading = useSysbaseGenStore((s) => s.runGenLoading);
   const runGenError = useSysbaseGenStore((s) => s.runGenError);
   const runGenLogs = useSysbaseGenStore((s) => s.runGenLogs);
@@ -217,6 +221,11 @@ export function StepReview() {
     try {
       const result = await trpc.tools.sysbaseGen.runGen.mutate({
         command,
+        // 传入项目上下文供主进程记录生成历史（总览「环境生成」里程碑判定依据）
+        projectDir: projectRoot,
+        genLevel: config.genLevel,
+        subsys: config.subsys,
+        outputDir: config.outputDir,
       });
 
       if (result.success) {
@@ -230,7 +239,7 @@ export function StepReview() {
       setRunGenError(msg);
       setRunGenStatus('failed');
     }
-  }, [command, setRunGenLoading, setRunGenError, clearRunGenLogs, setRunGenStatus]);
+  }, [command, projectRoot, config.genLevel, config.subsys, config.outputDir, setRunGenLoading, setRunGenError, clearRunGenLogs, setRunGenStatus]);
 
   const statusBadge = {
     idle: { label: '待执行', color: 'bg-muted text-muted-foreground', icon: Circle },

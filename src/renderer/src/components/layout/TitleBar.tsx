@@ -1,55 +1,45 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Minus, Square, X, Copy, PanelLeft, PanelRight, PanelBottom, Settings, Search, ChevronRight, GitCommitHorizontal, SlidersHorizontal } from 'lucide-react';
+import { Minus, Square, X, Copy, Search, SlidersHorizontal } from 'lucide-react';
 import { useUiStore } from '@renderer/stores/ui';
-import { useProjectStore } from '@renderer/stores/project';
 import { useEnvStore } from '@renderer/stores/env';
-import { useSimulationStore } from '@renderer/stores/simulation';
-import { useTerminalStore } from '@renderer/stores/terminal';
+import { useRegressionStore } from '@renderer/stores/regression';
 import { cn } from '@renderer/lib/utils';
 import { ToolsDropdown } from './ToolsDropdown';
+import { ProjectSelector } from './ProjectSelector';
+import { NotificationCenter } from './NotificationCenter';
 
 /**
- * 自定义无边框窗口 TitleBar。
+ * 自定义无边框窗口 TitleBar（mission-control 重构，Issue #8）。
  *
- * 布局：
- *  [Logo]  [左栏折叠] [面包屑: 项目 › 子系统]      [运行徽章] [右栏折叠] [命令面板] [设置]  [窗口控制]
+ * 布局（原型 .titlebar）：
+ *  [Logo] [项目选择器] [全局搜索触发框]  ···spacer···  [回归徽章] [通知铃铛] [环境变量] [工具] [窗口控制]
+ *
+ * 迁移说明（Plan §3.3 功能保全）：
+ *   - 旧面包屑 → 项目选择器（下拉切换已打开项目）
+ *   - 旧运行徽章 → 回归运行徽章（x/y 进度，点击跳回归视图）
+ *   - 设置 / 源代码管理 → 导航栏图标（Issue #2）
+ *   - 底部面板开关 → 状态栏（Issue #8）
+ *   - ToolsDropdown 保留；环境变量管理无新归宿，保留为右侧图标按钮
  *
  * 整个 TitleBar 可拖拽（-webkit-app-region: drag），
  * 按钮区域设置 no-drag 以保证可点击。
- *
- * 设计：以间距分组替代分隔线，避免视觉噪声；面包屑提供上下文，运行徽章提供状态。
  */
 export function TitleBar() {
-  const leftCollapsed = useUiStore((s) => s.leftRailCollapsed);
-  const rightCollapsed = useUiStore((s) => s.rightPanelCollapsed);
-  const bottomPanelCollapsed = useUiStore((s) => s.bottomPanelCollapsed);
-  const toggleLeftRail = useUiStore((s) => s.toggleLeftRail);
-  const toggleRightPanel = useUiStore((s) => s.toggleRightPanel);
-  const setBottomPanelCollapsed = useUiStore((s) => s.setBottomPanelCollapsed);
-  const settingsOpen = useUiStore((s) => s.settingsOpen);
-  const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
   const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
-  const sourceControlOpen = useUiStore((s) => s.sourceControlOpen);
-  const setSourceControlOpen = useUiStore((s) => s.setSourceControlOpen);
+  const setActiveView = useUiStore((s) => s.setActiveView);
 
   const managerOpen = useEnvStore((s) => s.managerOpen);
   const setManagerOpen = useEnvStore((s) => s.setManagerOpen);
 
-  const terminalTabs = useTerminalStore((s) => s.tabs);
-  const createTerminal = useTerminalStore((s) => s.createTerminal);
-  const bottomTabs = terminalTabs.filter((t) => t.location === 'bottom');
-
-  const currentProjectId = useProjectStore((s) => s.currentProjectId);
-  const projects = useProjectStore((s) => s.projects);
-  const selectedSubsys = useProjectStore((s) => s.selectedSubsys);
-  const activeRuns = useSimulationStore((s) => s.activeRuns);
-  const simOptions = useSimulationStore((s) => s.simOptions);
-
-  const projectName = projects.find((p) => p.id === currentProjectId)?.name;
-  const selectedCase = typeof simOptions.case === 'string' ? simOptions.case : null;
-  const runningCount = activeRuns.filter((r) => r.status === 'running' || r.status === 'pending').length;
+  const activeRegressions = useRegressionStore((s) => s.activeRegressions);
+  const initActiveRuns = useRegressionStore((s) => s.initActiveRuns);
 
   const [isMaximized, setIsMaximized] = useState(false);
+
+  // ── 回归徽章数据源：拉取运行中回归 + 订阅 regression:event ────
+  useEffect(() => {
+    initActiveRuns();
+  }, [initActiveRuns]);
 
   // ── 监听窗口最大化状态 ──────────────────────────────────────
   useEffect(() => {
@@ -66,128 +56,94 @@ export function TitleBar() {
   const handleMaximize = useCallback(() => window.windowControls?.toggleMaximize(), []);
   const handleClose = useCallback(() => window.windowControls?.close(), []);
 
-  // ── 底部面板切换（VSCode 风格） ──────────────────────
-  // 点击时：如果面板已折叠且无底部终端，创建一个；否则仅切换折叠状态。
-  // 折叠不销毁终端会话，再次展开后历史输出保留。
-  const handleToggleBottomPanel = useCallback(() => {
-    if (bottomPanelCollapsed && bottomTabs.length === 0) {
-      // No bottom terminals yet — create one and expand the panel
-      void createTerminal(currentProjectId ?? undefined, undefined, 'bottom');
-    } else {
-      setBottomPanelCollapsed(!bottomPanelCollapsed);
-    }
-  }, [bottomPanelCollapsed, bottomTabs.length, createTerminal, currentProjectId, setBottomPanelCollapsed]);
+  // ── 回归徽章：单条显示 x/y 进度，多条显示计数 ────────────────
+  const latestRegression =
+    activeRegressions.length > 0
+      ? activeRegressions.reduce((a, b) => (a.submittedAt >= b.submittedAt ? a : b))
+      : null;
+  const hasProgress =
+    latestRegression?.completed !== undefined && latestRegression?.total !== undefined;
 
   return (
     <header
       className={cn(
         'titlebar-drag',
-        'flex h-9 shrink-0 items-center justify-between border-b border-titlebar-border bg-titlebar text-titlebar-foreground select-none',
+        'flex h-9 shrink-0 items-center gap-2 border-b border-titlebar-border bg-titlebar pl-3 pr-1 text-titlebar-foreground select-none',
       )}
     >
-      {/* ── 左侧：Logo + 左栏折叠 ─────────────────────────────── */}
-      <div className="flex items-center gap-3 pl-3">
-        {/* Logo */}
-        <div className="flex items-center gap-2">
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="opacity-70"
-          >
-            <rect x="4" y="4" width="16" height="16" rx="2" />
-            <rect x="9" y="9" width="6" height="6" />
-            <path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2" />
-          </svg>
-          <span className="text-xs font-semibold tracking-wide">SoC Verify</span>
-        </div>
-
-        {/* 左栏折叠按钮 */}
-        <TitleBarButton
-          onClick={toggleLeftRail}
-          title={leftCollapsed ? '展开左栏' : '收起左栏'}
-          active={!leftCollapsed}
+      {/* ── Logo ─────────────────────────────────────────────────── */}
+      <div className="flex items-center gap-2">
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="opacity-70"
         >
-          <PanelLeft className="h-3.5 w-3.5" />
-        </TitleBarButton>
-
+          <rect x="4" y="4" width="16" height="16" rx="2" />
+          <rect x="9" y="9" width="6" height="6" />
+          <path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2" />
+        </svg>
+        <span className="text-xs font-semibold tracking-wide">SoC Verify</span>
       </div>
 
-      {/* ── 中间：项目 › 子系统 › 用例 ───────────────────────── */}
-      <nav className="flex min-w-0 flex-1 items-center gap-1 px-4 text-xs text-muted-foreground">
-        {projectName && (
-          <>
-            <span className="max-w-[160px] truncate text-titlebar-foreground/80">{projectName}</span>
-            {selectedSubsys && (
-              <>
-                <ChevronRight className="h-3 w-3 shrink-0 opacity-50" />
-                <span className="max-w-[160px] truncate text-titlebar-foreground/80">{selectedSubsys}</span>
-              </>
-            )}
-            {selectedCase && (
-              <>
-                <ChevronRight className="h-3 w-3 shrink-0 opacity-50" />
-                <span className="max-w-[200px] truncate text-titlebar-foreground">{selectedCase}</span>
-              </>
-            )}
-          </>
-        )}
-      </nav>
+      {/* ── 项目选择器（下拉切换已打开项目） ─────────────────────── */}
+      <ProjectSelector />
 
-      {/* ── 右侧：运行徽章 + 右栏折叠 + 命令面板 + 设置 + 窗口控制 ── */}
-      <div className="flex items-center gap-3 pr-1">
-        {/* 运行中徽章 */}
-        {runningCount > 0 && (
-          <div className="titlebar-no-drag flex items-center gap-1.5 rounded-full bg-status-running px-2 py-0.5 text-[11px] font-medium text-background">
-            <span className="relative flex h-1.5 w-1.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-background opacity-60" />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-background" />
+      {/* ── 全局搜索触发框（只读；Ctrl K / Ctrl P 呼出命令面板） ── */}
+      <button
+        type="button"
+        onClick={() => setCommandPaletteOpen(true)}
+        title="全局搜索（Ctrl+K / Ctrl+P）"
+        className={cn(
+          'titlebar-no-drag',
+          'ml-1 flex h-7 min-w-0 max-w-[320px] flex-1 items-center gap-2 rounded-md border border-border/60 bg-background/40 px-2.5 text-xs text-muted-foreground transition-colors hover:border-border hover:text-foreground',
+        )}
+      >
+        <Search className="size-3 shrink-0 opacity-70" />
+        <span className="truncate">搜索用例、文件、命令…</span>
+        <kbd className="ml-auto hidden shrink-0 rounded border border-border bg-accent/40 px-1.5 py-px font-mono text-[10px] text-muted-foreground sm:inline">
+          Ctrl K
+        </kbd>
+      </button>
+
+      {/* ── 右侧：回归徽章 + 通知 + 工具 + 窗口控制 ─────────────── */}
+      <div className="ml-auto flex items-center gap-1.5">
+        {/* 回归运行徽章：点击跳回归视图；无运行时隐藏 */}
+        {latestRegression && (
+          <button
+            type="button"
+            data-testid="regression-badge"
+            onClick={() => setActiveView('regression')}
+            title="查看回归视图"
+            className={cn(
+              'titlebar-no-drag',
+              'flex h-6 items-center gap-1.5 rounded-full bg-status-running/15 px-2.5 text-[11px] font-medium text-status-running transition-colors hover:bg-status-running/25',
+            )}
+          >
+            <span className="relative flex size-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-status-running opacity-60" />
+              <span className="relative inline-flex size-1.5 rounded-full bg-status-running" />
             </span>
-            <span>REG · {runningCount} RUNNING</span>
-          </div>
+            {activeRegressions.length > 1 ? (
+              <span>回归 ×{activeRegressions.length} 运行中</span>
+            ) : (
+              <span className="tabular-nums">
+                回归 #{latestRegression.runId.slice(-6)} 运行中
+                {hasProgress && ` · ${latestRegression.completed}/${latestRegression.total}`}
+              </span>
+            )}
+          </button>
         )}
 
-        {/* 右栏折叠按钮 */}
-        <TitleBarButton
-          onClick={toggleRightPanel}
-          title={rightCollapsed ? '展开右栏' : '收起右栏'}
-          active={!rightCollapsed}
-        >
-          <PanelRight className="h-3.5 w-3.5" />
-        </TitleBarButton>
+        {/* 通知中心（铃铛 + 下拉面板） */}
+        <NotificationCenter />
 
-        {/* 底部面板切换按钮（终端） */}
-        <TitleBarButton
-          onClick={handleToggleBottomPanel}
-          title={bottomPanelCollapsed ? '展开底部终端' : '折叠底部终端'}
-          active={!bottomPanelCollapsed}
-        >
-          <PanelBottom className="h-3.5 w-3.5" />
-        </TitleBarButton>
-
-        {/* 命令面板按钮 */}
-        <TitleBarButton
-          onClick={() => setCommandPaletteOpen(true)}
-          title="命令面板 (Ctrl+P)"
-        >
-          <Search className="h-3.5 w-3.5" />
-        </TitleBarButton>
-
-        {/* 源代码管理按钮 */}
-        <TitleBarButton
-          onClick={() => setSourceControlOpen(!sourceControlOpen)}
-          title="源代码管理"
-          active={sourceControlOpen}
-        >
-          <GitCommitHorizontal className="h-3.5 w-3.5" />
-        </TitleBarButton>
-
-        {/* 环境变量管理按钮 */}
+        {/* 环境变量管理 */}
         <TitleBarButton
           onClick={() => setManagerOpen(!managerOpen)}
           title="环境变量管理"
@@ -198,15 +154,6 @@ export function TitleBar() {
 
         {/* 工具下拉菜单 */}
         <ToolsDropdown />
-
-        {/* 设置按钮 */}
-        <TitleBarButton
-          onClick={() => setSettingsOpen(!settingsOpen)}
-          title="设置"
-          active={settingsOpen}
-        >
-          <Settings className="h-3.5 w-3.5" />
-        </TitleBarButton>
 
         {/* 窗口控制按钮组 */}
         <div className="flex items-center">

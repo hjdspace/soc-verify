@@ -1,0 +1,831 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>方案 C · Dense Pro — SoC Verify</title>
+<style>
+/* ══════════════════════════════════════════════════════════
+   方案 C：Dense Pro（专业密集 EDA 风）
+   轴线：信息密度与专业工具感最大化 —— 琥珀磷光终端美学，
+   等宽字体主导，菜单栏 + 多面板并列 + 键盘驱动。
+   参照 Verdi/JasperGold 的专业密度 + 老式琥珀终端的视觉记忆。
+   ══════════════════════════════════════════════════════════ */
+:root {
+  --bg: oklch(0.16 0.006 60);
+  --bg-deep: oklch(0.13 0.006 60);
+  --bg-panel: oklch(0.18 0.007 60);
+  --bg-hi: oklch(0.22 0.008 60);
+  --border: oklch(0.26 0.008 60);
+  --border-hi: oklch(0.33 0.010 60);
+  --fg: oklch(0.90 0.006 60);
+  --fg-dim: oklch(0.60 0.008 60);
+  --fg-faint: oklch(0.44 0.008 60);
+  --amber: oklch(0.78 0.13 75);          /* 琥珀磷光 */
+  --amber-dim: oklch(0.78 0.13 75 / 0.13);
+  --green: oklch(0.75 0.14 145);
+  --red: oklch(0.66 0.17 25);
+  --cyan: oklch(0.72 0.11 220);
+  --violet: oklch(0.70 0.13 295);
+  --mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg);
+  color: var(--fg);
+  display: flex;
+  flex-direction: column;
+  font-variant-numeric: tabular-nums;
+}
+button { font-family: inherit; background: none; border: none; cursor: pointer; color: inherit; font-size: 12px; }
+::selection { background: var(--amber-dim); }
+
+/* ── 菜单栏（替代图标 TitleBar） ──────────────────── */
+.menubar {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  background: var(--bg-deep);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+  gap: 2px;
+}
+.menubar .logo { color: var(--amber); margin-right: 8px; display: flex; align-items: center; gap: 6px; }
+.menubar .logo span { font-weight: 700; letter-spacing: 0.06em; font-size: 11px; }
+.menu-item {
+  padding: 3px 9px;
+  border-radius: 4px;
+  color: var(--fg-dim);
+  font-size: 12px;
+  -webkit-app-region: no-drag;
+  transition: background 100ms ease-out, color 100ms ease-out;
+}
+.menu-item:hover, .menu-item.open { background: var(--bg-hi); color: var(--fg); }
+.menubar .spacer { flex: 1; }
+.menubar .proj {
+  font-size: 11px;
+  color: var(--fg-dim);
+  -webkit-app-region: no-drag;
+}
+.menubar .proj b { color: var(--amber); font-weight: 600; }
+.win-controls { display: flex; -webkit-app-region: no-drag; margin-left: 8px; }
+.win-controls button {
+  width: 32px; height: 22px;
+  display: grid; place-items: center;
+  color: var(--fg-dim);
+  border-radius: 4px;
+  transition: background 100ms ease-out;
+}
+.win-controls button:hover { background: var(--bg-hi); color: var(--fg); }
+.win-controls button.close:hover { background: var(--red); color: white; }
+
+/* ── 工具栏 ───────────────────────────────────────── */
+.toolbar {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.tb-btn {
+  height: 24px;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  transition: all 120ms ease-out;
+}
+.tb-btn:hover { border-color: var(--border-hi); color: var(--fg); }
+.tb-btn:active { transform: translateY(1px); }
+.tb-btn.run { border-color: oklch(0.78 0.13 75 / 0.4); color: var(--amber); }
+.tb-btn.run:hover { background: var(--amber-dim); }
+.tb-btn.stop { color: var(--red); border-color: oklch(0.66 0.17 25 / 0.4); }
+.tb-group { display: flex; gap: 4px; align-items: center; }
+.tb-sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }
+.tb-select {
+  height: 24px;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  cursor: pointer;
+}
+.tb-select:hover { border-color: var(--border-hi); color: var(--fg); }
+.tb-select b { color: var(--fg); font-weight: 600; }
+.tb-status {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 10px;
+  font-size: 10.5px;
+  color: var(--fg-dim);
+}
+.tb-status .live { color: var(--amber); display: flex; align-items: center; gap: 5px; }
+.tb-status .live::before {
+  content: '';
+  width: 6px; height: 6px;
+  background: var(--amber);
+  border-radius: 1px;
+  animation: blink 1.2s steps(2) infinite;
+}
+@keyframes blink { 50% { opacity: 0.25; } }
+
+/* ── 主体三栏 ─────────────────────────────────────── */
+.main { flex: 1; display: flex; overflow: hidden; }
+
+/* 左：文件 + 用例树 */
+.left-panel {
+  width: 250px;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.panel-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.panel-tab {
+  flex: 1;
+  padding: 6px 0;
+  text-align: center;
+  font-size: 11px;
+  color: var(--fg-dim);
+  border-bottom: 2px solid transparent;
+  transition: color 120ms ease-out;
+}
+.panel-tab:hover { color: var(--fg); }
+.panel-tab.active { color: var(--amber); border-bottom-color: var(--amber); }
+.tree { flex: 1; overflow-y: auto; padding: 4px 0; }
+.tree::-webkit-scrollbar { width: 8px; }
+.tree::-webkit-scrollbar-thumb { background: var(--border); }
+.tree-row {
+  display: flex; align-items: center; gap: 5px;
+  padding: 2px 8px 2px 6px;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 80ms ease-out;
+}
+.tree-row:hover { background: var(--bg-hi); color: var(--fg); }
+.tree-row.active { background: var(--amber-dim); color: var(--amber); }
+.tree-row .caret {
+  width: 10px; height: 10px;
+  display: grid; place-items: center;
+  color: var(--fg-faint);
+  flex-shrink: 0;
+  transition: transform 150ms ease-out;
+}
+.tree-row.expanded .caret { transform: rotate(90deg); }
+.tree-row .icon { flex-shrink: 0; opacity: 0.6; }
+.tree-row.active .icon { opacity: 1; }
+.tree-row .label { overflow: hidden; text-overflow: ellipsis; }
+.tree-row .meta {
+  margin-left: auto;
+  font-size: 9.5px;
+  color: var(--fg-faint);
+  padding-right: 4px;
+}
+.tree-row .meta.pass { color: var(--green); }
+.tree-row .meta.fail { color: var(--red); }
+.tree-row .meta.run { color: var(--amber); }
+.tree-children { display: none; }
+.tree-children.expanded { display: block; }
+.tree-children .tree-row { padding-left: 26px; }
+.tree-children .tree-children .tree-row { padding-left: 44px; }
+
+/* 中：编辑器 + 底部日志 */
+.center-panel {
+  flex: 1;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+.editor-tabs {
+  display: flex;
+  height: 30px;
+  background: var(--bg-deep);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.editor-tabs::-webkit-scrollbar { height: 0; }
+.etab {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 12px;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 100ms ease-out, color 100ms ease-out;
+  position: relative;
+}
+.etab:hover { color: var(--fg); background: var(--bg-panel); }
+.etab.active { color: var(--amber); background: var(--bg); }
+.etab.active::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--amber);
+}
+.etab .dirty { color: var(--amber); font-size: 14px; line-height: 1; }
+.etab .x { opacity: 0.4; font-size: 12px; }
+.etab .x:hover { opacity: 1; color: var(--red); }
+.breadcrumb {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 12px;
+  font-size: 10.5px;
+  color: var(--fg-faint);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.breadcrumb b { color: var(--fg-dim); font-weight: 500; }
+
+/* 编辑器 */
+.editor {
+  flex: 1.2;
+  overflow: auto;
+  background: var(--bg);
+  position: relative;
+  min-height: 120px;
+}
+.editor::-webkit-scrollbar { width: 10px; }
+.editor::-webkit-scrollbar-thumb { background: var(--border); }
+.code {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.65;
+  padding: 8px 0;
+  min-width: max-content;
+}
+.cl {
+  display: flex;
+  height: 20px;
+  align-items: center;
+}
+.cl .no {
+  width: 46px;
+  text-align: right;
+  padding-right: 14px;
+  color: var(--fg-faint);
+  user-select: none;
+  flex-shrink: 0;
+  font-size: 10.5px;
+}
+.cl:hover { background: oklch(0.20 0.008 60); }
+.cl.current { background: oklch(0.24 0.012 60 / 0.6); }
+.cl.current .no { color: var(--amber); }
+.cl.error-line { background: oklch(0.66 0.17 25 / 0.10); }
+.cl.error-line .no { color: var(--red); }
+.cl .tx { white-space: pre; }
+.kw { color: var(--violet); }
+.str { color: var(--green); }
+.num { color: var(--amber); }
+.cmt { color: var(--fg-faint); font-style: italic; }
+.fn { color: var(--cyan); }
+.typ { color: var(--red); }
+.err-underline {
+  border-bottom: 1.5px wavy oklch(0.66 0.17 25 / 0.8);
+  cursor: pointer;
+}
+.gutter-flag {
+  color: var(--red);
+  margin-left: 6px;
+  font-size: 10px;
+}
+
+/* 分割条 */
+.splitter {
+  height: 4px;
+  background: var(--bg-deep);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  cursor: row-resize;
+  flex-shrink: 0;
+  transition: background 120ms ease-out;
+}
+.splitter:hover { background: var(--amber-dim); }
+
+/* 底部：日志面板 */
+.bottom-panel {
+  flex: 1;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  min-height: 100px;
+  background: var(--bg-deep);
+}
+.bp-tabs {
+  display: flex;
+  height: 26px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.bp-tab {
+  padding: 0 14px;
+  font-size: 10.5px;
+  color: var(--fg-dim);
+  display: flex; align-items: center; gap: 5px;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  transition: color 100ms ease-out;
+}
+.bp-tab:hover { color: var(--fg); }
+.bp-tab.active { color: var(--amber); box-shadow: inset 0 -2px 0 var(--amber); }
+.bp-tab .cnt {
+  font-size: 9px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: oklch(0.66 0.17 25 / 0.2);
+  color: var(--red);
+}
+.log {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+  font-size: 11px;
+  line-height: 1.7;
+}
+.log::-webkit-scrollbar { width: 8px; }
+.log::-webkit-scrollbar-thumb { background: var(--border); }
+.log-line {
+  display: flex;
+  gap: 10px;
+  padding: 0 12px;
+  white-space: pre;
+}
+.log-line:hover { background: var(--bg-panel); }
+.log-line .t { color: var(--fg-faint); flex-shrink: 0; }
+.log-line .lv { flex-shrink: 0; width: 42px; font-weight: 600; }
+.log-line .lv.info { color: var(--fg-dim); }
+.log-line .lv.warn { color: var(--amber); }
+.log-line .lv.error { color: var(--red); }
+.log-line .lv.ok { color: var(--green); }
+.log-line .src { color: var(--fg-faint); }
+.log-line .msg { color: oklch(0.78 0.006 60); }
+.log-line .msg .hl { color: var(--amber); }
+.log-line .msg .path { color: var(--cyan); text-decoration: underline dotted; cursor: pointer; }
+
+/* 右：覆盖率详情 */
+.right-panel {
+  width: 300px;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.right-head {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--fg-dim);
+  display: flex; align-items: center; gap: 6px;
+  flex-shrink: 0;
+}
+.right-head b { color: var(--fg); font-weight: 600; }
+.right-head .mode { margin-left: auto; color: var(--amber); font-size: 10px; }
+.right-body { flex: 1; overflow-y: auto; }
+.right-body::-webkit-scrollbar { width: 8px; }
+.right-body::-webkit-scrollbar-thumb { background: var(--border); }
+.sec-title {
+  padding: 8px 12px 4px;
+  font-size: 10px;
+  color: var(--fg-faint);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.cov-block { padding: 4px 12px 10px; }
+.cov-row {
+  display: grid;
+  grid-template-columns: 1fr 44px 40px;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 11px;
+}
+.cov-row .nm { color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cov-row .nm b { color: var(--fg); font-weight: 500; }
+.cov-row .bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-deep);
+  overflow: hidden;
+}
+.cov-row .bar i { display: block; height: 100%; border-radius: 2px; }
+.cov-row .pc { text-align: right; color: var(--fg); font-size: 10.5px; }
+
+/* 覆盖率 bins 表 */
+.bins-table { padding: 0 12px 12px; }
+.bin-row {
+  display: grid;
+  grid-template-columns: 1fr 30px 44px;
+  gap: 8px;
+  padding: 3px 4px;
+  font-size: 10.5px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 80ms ease-out;
+}
+.bin-row:hover { background: var(--bg-hi); }
+.bin-row .bn { color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bin-row .hit { text-align: center; }
+.bin-row .hit.y { color: var(--green); }
+.bin-row .hit.n { color: var(--fg-faint); }
+.bin-row .cnt { text-align: right; color: var(--fg-faint); }
+
+/* 快捷键栏 */
+.shortcuts {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--fg-faint);
+  line-height: 2;
+  flex-shrink: 0;
+}
+.shortcuts kbd {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg-deep);
+  color: var(--fg-dim);
+  font-family: inherit;
+  font-size: 9.5px;
+  margin-right: 4px;
+}
+
+/* ── 状态栏 ───────────────────────────────────────── */
+.statusbar {
+  height: 24px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  background: var(--bg-deep);
+  border-top: 1px solid var(--border);
+  font-size: 10.5px;
+  color: var(--fg-dim);
+  gap: 14px;
+  flex-shrink: 0;
+}
+.statusbar .seg { display: flex; align-items: center; gap: 5px; }
+.statusbar .seg svg { opacity: 0.6; }
+.statusbar .seg.ok { color: var(--green); }
+.statusbar .seg.warn { color: var(--amber); }
+.statusbar .right { margin-left: auto; display: flex; gap: 14px; }
+.statusbar .mode-vim {
+  padding: 0 8px;
+  height: 16px;
+  display: flex; align-items: center;
+  background: var(--amber-dim);
+  color: var(--amber);
+  border-radius: 3px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+/* reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- ═══ 菜单栏 ═══ -->
+<header class="menubar">
+  <div class="logo">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/>
+      <path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/>
+    </svg>
+    <span>SOCV</span>
+  </div>
+  <button class="menu-item">文件</button>
+  <button class="menu-item">编辑</button>
+  <button class="menu-item">视图</button>
+  <button class="menu-item">仿真</button>
+  <button class="menu-item">回归</button>
+  <button class="menu-item">工具</button>
+  <button class="menu-item">帮助</button>
+  <div class="spacer"></div>
+  <div class="proj">项目 <b>aurora7_a55</b> · 工具链 <b>VCS 2023.12</b></div>
+  <div class="win-controls">
+    <button title="最小化"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 12h14"/></svg></button>
+    <button title="最大化"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="5" width="14" height="14" rx="1"/></svg></button>
+    <button class="close" title="关闭"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+  </div>
+</header>
+
+<!-- ═══ 工具栏 ═══ -->
+<div class="toolbar">
+  <div class="tb-group">
+    <button class="tb-btn run">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      编译+运行 <span style="color: var(--fg-faint);">F5</span>
+    </button>
+    <button class="tb-btn">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+      波形 <span style="color: var(--fg-faint);">F6</span>
+    </button>
+    <button class="tb-btn stop">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+      停止
+    </button>
+  </div>
+  <div class="tb-sep"></div>
+  <div class="tb-group">
+    <div class="tb-select">回归 <b>nightly_R2P1</b> <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+    <div class="tb-select">种子 <b>random</b> <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+    <div class="tb-select">Verdi <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></div>
+  </div>
+  <div class="tb-status">
+    <span class="live">SIM RUNNING · 41:26</span>
+    <span>3 jobs</span>
+    <span>负载 62%</span>
+  </div>
+</div>
+
+<!-- ═══ 主体 ═══ -->
+<div class="main">
+  <!-- 左：文件/用例树 -->
+  <aside class="left-panel">
+    <div class="panel-tabs">
+      <button class="panel-tab active">文件</button>
+      <button class="panel-tab">用例</button>
+      <button class="panel-tab">子系统</button>
+    </div>
+    <div class="tree">
+      <div class="tree-row expanded" onclick="toggleTree(this)">
+        <span class="caret"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 18 6-6-6-6"/></svg></span>
+        <span class="icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg></span>
+        <span class="label">tb/</span>
+      </div>
+      <div class="tree-children expanded">
+        <div class="tree-row active">
+          <span class="icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg></span>
+          <span class="label">ddr_ctrl_arbiter.sv</span>
+          <span class="meta fail">M</span>
+        </div>
+        <div class="tree-row">
+          <span class="icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg></span>
+          <span class="label">ddr_base_test.sv</span>
+        </div>
+        <div class="tree-row">
+          <span class="icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg></span>
+          <span class="label">ddr_env.sv</span>
+        </div>
+      </div>
+      <div class="tree-row expanded" onclick="toggleTree(this)">
+        <span class="caret"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 18 6-6-6-6"/></svg></span>
+        <span class="icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg></span>
+        <span class="label">rtl/</span>
+      </div>
+      <div class="tree-children expanded">
+        <div class="tree-row">
+          <span class="icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg></span>
+          <span class="label">ddr_ctrl.sv</span>
+        </div>
+        <div class="tree-row">
+          <span class="icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg></span>
+          <span class="label">axi_arbiter.sv</span>
+        </div>
+        <div class="tree-row">
+          <span class="icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg></span>
+          <span class="label">refresh_sched.sv</span>
+        </div>
+      </div>
+      <div class="tree-row" onclick="toggleTree(this)">
+        <span class="caret"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 18 6-6-6-6"/></svg></span>
+        <span class="icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg></span>
+        <span class="label">cov/</span>
+        <span class="meta run">87%</span>
+      </div>
+      <div class="tree-row" onclick="toggleTree(this)">
+        <span class="caret"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 18 6-6-6-6"/></svg></span>
+        <span class="icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg></span>
+        <span class="label">logs/</span>
+      </div>
+      <div class="tree-row" onclick="toggleTree(this)">
+        <span class="caret"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="m9 18 6-6-6-6"/></svg></span>
+        <span class="icon"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/></svg></span>
+        <span class="label">scripts/</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- 中：编辑器 + 日志 -->
+  <div class="center-panel">
+    <div class="editor-tabs">
+      <div class="etab active">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>
+        ddr_ctrl_arbiter.sv
+        <span class="x">×</span>
+      </div>
+      <div class="etab">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>
+        ddr_base_test.sv
+        <span class="dirty">●</span>
+        <span class="x">×</span>
+      </div>
+      <div class="etab">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>
+        sim.log
+        <span class="x">×</span>
+      </div>
+      <div class="etab">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 9h20"/></svg>
+        波形 · ddr_ctrl.vcd
+        <span class="x">×</span>
+      </div>
+    </div>
+    <div class="breadcrumb">
+      aurora7_a55 <b>›</b> tb <b>›</b> ddr_ctrl_arbiter.sv <b>›</b> <span style="color: var(--amber);">module ddr_ctrl_arbiter</span>
+    </div>
+
+    <!-- 编辑器 -->
+    <div class="editor">
+      <div class="code">
+        <div class="cl"><span class="no">200</span><span class="tx"><span class="cmt">//----------------------------------------------------------------------</span></span></div>
+        <div class="cl"><span class="no">201</span><span class="tx"><span class="cmt">// 仲裁器：刷新请求 vs 读/写命令优先级选择</span></span></div>
+        <div class="cl"><span class="no">202</span><span class="tx"><span class="cmt">//----------------------------------------------------------------------</span></span></div>
+        <div class="cl"><span class="no">203</span><span class="tx"><span class="kw">module</span> <span class="typ">ddr_ctrl_arbiter</span> #(</span></div>
+        <div class="cl"><span class="no">204</span><span class="tx">  <span class="kw">parameter</span> <span class="typ">int</span> <span class="kw">unsigned</span> N_REQ = <span class="num">4</span>,</span></div>
+        <div class="cl"><span class="no">205</span><span class="tx">  <span class="kw">parameter</span> <span class="typ">t_refi_t</span> T_REFI = <span class="num">7800</span> <span class="cmt">// ns, DDR5-5600</span></span></div>
+        <div class="cl"><span class="no">206</span><span class="tx">) (</span></div>
+        <div class="cl"><span class="no">207</span><span class="tx">  <span class="kw">input</span>  <span class="kw">logic</span>              clk,</span></div>
+        <div class="cl"><span class="no">208</span><span class="tx">  <span class="kw">input</span>  <span class="kw">logic</span>              rst_n,</span></div>
+        <div class="cl"><span class="no">209</span><span class="tx">  <span class="kw">input</span>  <span class="kw">logic</span>              refresh_pending,</span></div>
+        <div class="cl"><span class="no">210</span><span class="tx">  <span class="kw">input</span>  <span class="typ">req_t</span>               reqs [N_REQ],</span></div>
+        <div class="cl"><span class="no">211</span><span class="tx">  <span class="kw">output</span> <span class="typ">grant_t</span>             grant</span></div>
+        <div class="cl"><span class="no">212</span><span class="tx">);</span></div>
+        <div class="cl"><span class="no">213</span><span class="tx"></span></div>
+        <div class="cl current"><span class="no">214</span><span class="tx">  <span class="kw">always_comb</span> <span class="kw">begin</span> <span class="gutter-flag">●</span></span></div>
+        <div class="cl error-line"><span class="no">215</span><span class="tx">    <span class="kw">if</span> (refresh_pending &amp;&amp; <span class="fn">is_active_row</span>(reqs[i].addr))</span></div>
+        <div class="cl error-line"><span class="no">216</span><span class="tx">      grant = <span class="err-underline">GRANT_NONE</span>;  <span class="cmt">// E1: 读命令在刷新窗口内被错误接受</span></span></div>
+        <div class="cl"><span class="no">217</span><span class="tx">    <span class="kw">else</span></span></div>
+        <div class="cl"><span class="no">218</span><span class="tx">      grant = <span class="fn">priority_select</span>(reqs, N_REQ);</span></div>
+        <div class="cl"><span class="no">219</span><span class="tx">  <span class="kw">end</span></span></div>
+        <div class="cl"><span class="no">220</span><span class="tx"></span></div>
+        <div class="cl"><span class="no">221</span><span class="tx">  <span class="cmt">// 断言：刷新窗口内不允许接受新读命令</span></span></div>
+        <div class="cl"><span class="no">222</span><span class="tx">  <span class="kw">property</span> p_no_rd_during_refi;</span></div>
+        <div class="cl"><span class="no">223</span><span class="tx">    <span class="fn">$assert</span>(<span class="kw">!</span>(refresh_pending &amp;&amp; grant == GRANT_RD),</span></div>
+        <div class="cl"><span class="no">224</span><span class="tx">              clk, <span class="num">$rose</span>(refresh_pending));</span></div>
+        <div class="cl"><span class="no">225</span><span class="tx">  <span class="kw">endproperty</span></span></div>
+        <div class="cl"><span class="no">226</span><span class="tx"></span></div>
+        <div class="cl"><span class="no">227</span><span class="tx"><span class="kw">endmodule</span></span></div>
+      </div>
+    </div>
+
+    <div class="splitter" title="拖拽调整高度"></div>
+
+    <!-- 日志面板 -->
+    <div class="bottom-panel">
+      <div class="bp-tabs">
+        <button class="bp-tab active">仿真输出</button>
+        <button class="bp-tab">编译错误 <span class="cnt">1</span></button>
+        <button class="bp-tab">覆盖率</button>
+        <button class="bp-tab">终端</button>
+        <button class="bp-tab">AI 输出</button>
+      </div>
+      <div class="log">
+        <div class="log-line"><span class="t">14:02:11</span><span class="lv info">INFO</span><span class="src">vcs</span><span class="msg">Compiling <span class="path">tb/ddr_ctrl_arbiter.sv</span> (2.1s)</span></div>
+        <div class="log-line"><span class="t">14:02:13</span><span class="lv info">INFO</span><span class="src">vcs</span><span class="msg">Elaborating top <span class="hl">ddr_base_test</span> (14 modules, 3 bind)</span></div>
+        <div class="log-line"><span class="t">14:02:14</span><span class="lv ok">OK</span><span class="src">vcs</span><span class="msg">Build simv · 3 warnings suppressed</span></div>
+        <div class="log-line"><span class="t">14:02:15</span><span class="lv info">INFO</span><span class="src">uvm</span><span class="msg">UVM_INFO verif/tb/ddr_base_test.sv(87) @ 0ns: [ddr_base_test] random seed = <span class="hl">0x8F3A21</span></span></div>
+        <div class="log-line"><span class="t">14:02:16</span><span class="lv warn">WARN</span><span class="src">arbiter</span><span class="msg">UVM_WARNING @ 38211ns: [precharge] late by 1 cycle (tolerance 2)</span></div>
+        <div class="log-line"><span class="t">14:02:41</span><span class="lv error">ERROR</span><span class="src">scoreboard</span><span class="msg">Mismatch @ 41280ns: expected <span class="hl">ACT_NOP</span>, got <span class="hl">ACT_RD</span> · <span class="path">tb/ddr_ctrl_arbiter.sv:216</span></span></div>
+        <div class="log-line"><span class="t">14:02:41</span><span class="lv error">ERROR</span><span class="src">assert</span><span class="msg">p_no_rd_during_refi FAILED @ 41280ns · 1 occurrence</span></div>
+        <div class="log-line"><span class="t">14:02:42</span><span class="lv info">INFO</span><span class="src">uvm</span><span class="msg">UVM_ERROR : 1 · UVM_WARNING : 2 · func cov <span class="hl">89.2%</span></span></div>
+        <div class="log-line"><span class="t">14:02:42</span><span class="lv info">INFO</span><span class="src">agent</span><span class="msg">验证 Agent 已定位根因，修复补丁待审批 → 右键查看建议</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右：覆盖率详情 -->
+  <aside class="right-panel">
+    <div class="right-head">
+      覆盖率 · <b>ddr_ctrl_arbiter</b>
+      <span class="mode">LIVE</span>
+    </div>
+    <div class="right-body">
+      <div class="sec-title">模块汇总</div>
+      <div class="cov-block">
+        <div class="cov-row">
+          <span class="nm"><b>功能覆盖</b> cg_ddr_arb</span>
+          <span class="bar"><i style="width: 87.3%; background: var(--amber);"></i></span>
+          <span class="pc">87.3%</span>
+        </div>
+        <div class="cov-row">
+          <span class="nm"><b>语句</b> statement</span>
+          <span class="bar"><i style="width: 94.2%; background: var(--green);"></i></span>
+          <span class="pc">94.2%</span>
+        </div>
+        <div class="cov-row">
+          <span class="nm"><b>分支</b> branch</span>
+          <span class="bar"><i style="width: 91.8%; background: var(--green);"></i></span>
+          <span class="pc">91.8%</span>
+        </div>
+        <div class="cov-row">
+          <span class="nm"><b>翻转</b> toggle</span>
+          <span class="bar"><i style="width: 88.6%; background: var(--green);"></i></span>
+          <span class="pc">88.6%</span>
+        </div>
+        <div class="cov-row">
+          <span class="nm"><b>断言</b> assert</span>
+          <span class="bar"><i style="width: 74.6%; background: var(--cyan);"></i></span>
+          <span class="pc">74.6%</span>
+        </div>
+      </div>
+
+      <div class="sec-title">未命中交叉项 · cp_row_vs_cmd</div>
+      <div class="bins-table">
+        <div class="bin-row"><span class="bn">row_open × cmd_rd</span><span class="hit n">·</span><span class="cnt">0/12</span></div>
+        <div class="bin-row"><span class="bn">row_open × cmd_wr</span><span class="hit n">·</span><span class="cnt">0/12</span></div>
+        <div class="bin-row"><span class="bn">refi_win × cmd_rd</span><span class="hit y">✓</span><span class="cnt">3/6</span></div>
+        <div class="bin-row"><span class="bn">refi_win × cmd_wr</span><span class="hit y">✓</span><span class="cnt">2/6</span></div>
+        <div class="bin-row"><span class="bn">row_miss × precharge</span><span class="hit y">✓</span><span class="cnt">11/12</span></div>
+        <div class="bin-row"><span class="bn">4k_boundary × burst8</span><span class="hit y">✓</span><span class="cnt">9/12</span></div>
+      </div>
+
+      <div class="sec-title">断言状态</div>
+      <div class="bins-table">
+        <div class="bin-row"><span class="bn" style="color: var(--red);">p_no_rd_during_refi</span><span class="hit n">FAIL</span><span class="cnt">1 hit</span></div>
+        <div class="bin-row"><span class="bn" style="color: var(--green);">p_addr_stable</span><span class="hit y">PASS</span><span class="cnt">18 hits</span></div>
+        <div class="bin-row"><span class="bn" style="color: var(--green);">p_grant_onehot</span><span class="hit y">PASS</span><span class="cnt">4096 hits</span></div>
+      </div>
+    </div>
+    <div class="shortcuts">
+      <kbd>F5</kbd>编译运行&nbsp;&nbsp;<kbd>F6</kbd>波形&nbsp;&nbsp;<kbd>F9</kbd>断点<br>
+      <kbd>Ctrl+P</kbd>命令&nbsp;&nbsp;<kbd>Ctrl+G</kbd>跳转行&nbsp;&nbsp;<kbd>Space</kbd>预览
+    </div>
+  </aside>
+</div>
+
+<!-- ═══ 状态栏 ═══ -->
+<footer class="statusbar">
+  <span class="seg"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg> sim running · seed 0x8F3A21</span>
+  <span class="seg warn">1 assertion failed</span>
+  <span class="seg ok">cov 87.3%</span>
+  <div class="right">
+    <span class="seg">Ln 214, Col 28</span>
+    <span class="seg">Spaces: 2</span>
+    <span class="seg">UTF-8</span>
+    <span class="seg">SystemVerilog</span>
+    <span class="mode-vim">INSERT</span>
+  </div>
+</footer>
+
+<script>
+// 树展开/折叠
+function toggleTree(row) {
+  const children = row.nextElementSibling;
+  if (!children || !children.classList.contains('tree-children')) return;
+  row.classList.toggle('expanded');
+  children.classList.toggle('expanded');
+}
+// tab 切换
+document.querySelectorAll('.etab').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.etab').forEach((t) => t.classList.remove('active'));
+    tab.classList.add('active');
+  });
+});
+document.querySelectorAll('.panel-tab').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.panel-tab').forEach((t) => t.classList.remove('active'));
+    tab.classList.add('active');
+  });
+});
+document.querySelectorAll('.bp-tab').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.bp-tab').forEach((t) => t.classList.remove('active'));
+    tab.classList.add('active');
+  });
+});
+// 编辑器行点击
+document.querySelectorAll('.cl').forEach((line) => {
+  line.addEventListener('click', () => {
+    document.querySelectorAll('.cl').forEach((l) => l.classList.remove('current'));
+    line.classList.add('current');
+  });
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>仿真页面重构 — 布局原型索引 — SoC Verify</title>
+<style>
+:root {
+  --bg: oklch(0.17 0.008 60); --surface: oklch(0.20 0.008 60);
+  --border: oklch(0.27 0.010 60); --fg: oklch(0.93 0.006 60); --fg-dim: oklch(0.66 0.008 60);
+  --accent: oklch(0.80 0.16 145); --blue: oklch(0.72 0.12 230); --amber: oklch(0.80 0.13 80); --red: oklch(0.68 0.18 25); --violet: oklch(0.72 0.14 295);
+  --sans: 'Segoe UI', -apple-system, sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: var(--sans); background: var(--bg); color: var(--fg); min-height: 100vh; display: flex; flex-direction: column; align-items: center; gap: 32px; padding: 48px 24px; }
+h1 { font-size: 22px; font-weight: 600; }
+p.sub { color: var(--fg-dim); font-size: 14px; max-width: 640px; text-align: center; line-height: 1.6; }
+.grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; max-width: 960px; width: 100%; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; text-decoration: none; color: inherit; transition: border-color 200ms, transform 200ms; }
+.card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.card .num { font-size: 12px; font-weight: 600; color: var(--accent); margin-bottom: 8px; }
+.card .title { font-size: 16px; font-weight: 600; margin-bottom: 6px; }
+.card .desc { font-size: 12px; color: var(--fg-dim); line-height: 1.5; }
+.card .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.card .tag { font-size: 10px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--fg-dim); }
+</style>
+</head>
+<body>
+  <h1>仿真页面布局原型</h1>
+  <p class="sub">
+    当前问题：子系统/用例在左侧 FileDrawer 的 Tab 里（330px 宽、树很深），仿真 Option 在底部全局浮窗。
+    用户需要在左抽屉选用例 → 回到仿真页 → 展开 OptionDock → 运行，跨了三个空间。
+    以下 4 种布局将「用例选择 + 仿真选项 + 运行列表」整合到仿真页面，供挑选。
+  </p>
+  <div class="grid">
+    <a class="card" href="sim-page-01-left-tree-right-options.html">
+      <div class="num">方案 1</div>
+      <div class="title">左树 + 右选项面板</div>
+      <div class="desc">左侧用例树常驻（可折叠），右侧上方仿真选项卡片，下方运行列表。经典 IDE 三栏布局。</div>
+      <div class="tags"><span class="tag">三栏</span><span class="tag">IDE 风格</span><span class="tag">用例树常驻</span></div>
+    </a>
+    <a class="card" href="sim-page-02-master-detail.html">
+      <div class="num">方案 2</div>
+      <div class="title">Master-Detail 上下分区</div>
+      <div class="desc">上半区：子系统→用例水平浏览条 + 选中用例的选项卡片；下半区：运行列表。宽度自适应。</div>
+      <div class="tags"><span class="tag">上下分区</span><span class="tag">水平用例条</span><span class="tag">紧凑</span></div>
+    </a>
+    <a class="card" href="sim-page-03-dock-panel.html">
+      <div class="num">方案 3</div>
+      <div class="title">左用例 Dock + 底部 Option Dock</div>
+      <div class="desc">左侧 dock 用例树面板（可收起为图标列），底部保留 Option Dock 但嵌入仿真页内部。最接近当前布局。</div>
+      <div class="tags"><span class="tag">渐进改造</span><span class="tag">Dock 面板</span><span class="tag">低风险</span></div>
+    </a>
+    <a class="card" href="sim-page-04-wizard-flow.html">
+      <div class="num">方案 4</div>
+      <div class="title">向导式三步流</div>
+      <div class="desc">Step1 选子系统→用例，Step2 配置选项，Step3 运行+监控。步骤条引导，左侧始终显示运行状态。</div>
+      <div class="tags"><span class="tag">向导</span><span class="tag">步骤引导</span><span class="tag">新手友好</span></div>
+    </a>
+  </div>
+  <p style="font-size: 11px; color: var(--fg-dim); margin-top: 16px;">
+    PROTOTYPE — 抛掷型代码，仅用于回答布局问题。选定后移入正式代码。
+  </p>
+</body>
+</html>

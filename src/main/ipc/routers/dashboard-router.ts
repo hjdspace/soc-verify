@@ -12,6 +12,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { t, TRPCError } from '../router-context';
 import { requireProject } from '../../services/project-service';
 import { caseStatsRegistry } from '../../case/case-stats-registry';
+import { computeMilestones } from '../../case/milestone-service';
 import { getSubsysList, getDashboardSummary, getDashboardTrend, getSubsysStatus, getSubsysHeatmap, getRecentFailures, getRegressionProgress, getDurationHistogram, getUnstableCases, getPhasePassRate, getDebugDifficulty, getSlowestCases, getRegressionBySubsys } from '../../case/db/case-repository';
 
 // ─── 共享筛选参数验证 ───────────────────────────────────────
@@ -45,6 +46,23 @@ function validateFilter(raw: unknown): DashboardFilter {
 }
 
 export const dashboardRouter = t.router({
+  // ─── 里程碑（总览视图流程节点，真实数据驱动） ────────────
+  // 完成条件见 src/main/case/milestone-service.ts 头部注释。
+  // coverage 节点由渲染端用 coverage store 的实时 overview 覆盖后重算 status。
+  getMilestones: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
+      return computeMilestones(db, project.rootPath);
+    }),
+
   // ─── 概览汇总（左栏缩略 + 概览标签页） ────────────────────
   getSummary: t.procedure
     .input((raw): { projectId: string; subsys?: string; timeRange?: 'all' | '7d' | '30d' | { start: string; end: string } } => {

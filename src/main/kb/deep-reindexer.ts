@@ -279,17 +279,11 @@ export async function deepReindex(params: DeepReindexParams): Promise<DeepReinde
 
   // 6. 发送 prompt
   try {
-    const client = sessionManager.getClient(sessionId);
-    if (!client) {
-      throw new Error('无法获取 Agent 客户端');
-    }
-
     notify({ phase: 'processing', current: 0, total, message: `Agent 正在深度阅读 ${total} 篇文档...` });
 
-    // 发送 prompt 并等待完成
-    // Agent 的响应通过事件流返回，prompt 调用是 fire-and-forget
-    // 我们需要等待 Agent 完成（通过 agent_end 事件或 prompt 返回）
-    await client.prompt(prompt);
+    // Fire-and-forget: Agent 产出通过事件流 / write_file 工具完成。
+    // 下面会检查文件系统产出，不需要等待 agent_end。
+    await sessionManager.promptFireAndForget(sessionId, prompt);
 
     notify({ phase: 'processing', current: total, total, message: 'Agent 完成，正在写入新索引...' });
 

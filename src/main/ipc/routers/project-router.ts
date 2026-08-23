@@ -308,7 +308,7 @@ export const projectRouter = t.router({
     }),
 
   getCases: t.procedure
-    .input((raw): { projectId: string; subsys?: string; status?: string } => {
+    .input((raw): { projectId: string; subsys?: string; status?: string; postSim?: boolean } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
@@ -317,6 +317,7 @@ export const projectRouter = t.router({
         projectId: r.projectId,
         subsys: typeof r.subsys === 'string' ? r.subsys : undefined,
         status: typeof r.status === 'string' ? r.status : undefined,
+        postSim: typeof r.postSim === 'boolean' ? r.postSim : undefined,
       };
     })
     .query(async ({ input }) => {
@@ -329,10 +330,28 @@ export const projectRouter = t.router({
       const statsService = await getCaseStatsService(input.projectId);
       const cases = await statsService.listCasesWithStatus(input.subsys);
       const status = input.status as CaseStatus | undefined;
+      // 后仿筛选：postSim 为 true 时只返回已标记后仿的用例，忽略 status 过滤
+      if (input.postSim) {
+        return cases.filter((c) => c.postSim === true);
+      }
       if (status && status !== 'all') {
         return cases.filter((c) => c.status === status);
       }
       return cases;
+    }),
+
+  /** 设置用例的后仿标记（用户挑选后仿用例）。 */
+  setCasePostSim: t.procedure
+    .input((raw): { projectId: string; caseName: string; subsys: string; postSim: boolean } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.caseName !== 'string' || typeof r.subsys !== 'string' || typeof r.postSim !== 'boolean') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, caseName, subsys and postSim are required' });
+      }
+      return { projectId: r.projectId, caseName: r.caseName, subsys: r.subsys, postSim: r.postSim };
+    })
+    .mutation(async ({ input }) => {
+      const statsService = await getCaseStatsService(input.projectId);
+      return statsService.setCasePostSim(input.caseName, input.subsys, input.postSim);
     }),
 
   searchCases: t.procedure
@@ -902,9 +921,8 @@ export const projectRouter = t.router({
     })
     .query(async ({ input }) => {
       const project = requireProject(input.projectId);
-      const rel = relative(project.rootPath, input.filePath);
-      if (rel.startsWith('..')) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'File path is outside project root' });
+      if (!projectManager.isPathWithinProjectDirs(project, input.filePath)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'File path is outside project directories' });
       }
       return getFileDiff(input.filePath, input.toolCalls);
     }),
@@ -923,9 +941,8 @@ export const projectRouter = t.router({
     })
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
-      const rel = relative(project.rootPath, input.filePath);
-      if (rel.startsWith('..')) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'File path is outside project root' });
+      if (!projectManager.isPathWithinProjectDirs(project, input.filePath)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'File path is outside project directories' });
       }
       return applyRejections(input.filePath, input.rejections);
     }),

@@ -135,8 +135,8 @@ function mergeEnvs(
   return merged;
 }
 
-/** Cached login shell env (null = not yet captured, undefined = capture failed). */
-let cachedLoginShellEnv: Record<string, string> | null = null;
+/** Cached login shell environments, keyed by the shell binary path. */
+const cachedLoginShellEnvs = new Map<string, Record<string, string>>();
 
 /**
  * Capture the login shell's full environment by spawning `<shell> -l -c 'env'`.
@@ -151,16 +151,18 @@ let cachedLoginShellEnv: Record<string, string> | null = null;
  * @returns The merged environment (login shell env ∪ process.env).
  *          If shell capture fails, falls back to `process.env`.
  */
-export async function getLoginShellEnv(): Promise<Record<string, string>> {
+export async function getLoginShellEnv(shellOverride?: string): Promise<Record<string, string>> {
   // Windows: no login shell concept, just use process.env
   if (process.platform === 'win32') {
     return { ...process.env } as Record<string, string>;
   }
 
-  // Return cached result if available
-  if (cachedLoginShellEnv) return cachedLoginShellEnv;
+  const shell = shellOverride && existsSync(shellOverride)
+    ? shellOverride
+    : resolveLoginShell(EDA_SHELL_PREFERENCES);
 
-  const shell = resolveLoginShell(EDA_SHELL_PREFERENCES);
+  const cached = cachedLoginShellEnvs.get(shell);
+  if (cached) return cached;
 
   try {
     // Build the command to capture the login shell environment.
@@ -191,7 +193,7 @@ export async function getLoginShellEnv(): Promise<Record<string, string>> {
       loginEnv,
     );
 
-    cachedLoginShellEnv = merged;
+    cachedLoginShellEnvs.set(shell, merged);
     console.log(
       `[login-shell-env] captured ${Object.keys(loginEnv).length} vars from ${shell}` +
       ` (PATH entries: ${(merged.PATH ?? '').split(PATH_SEP).length})`,
@@ -220,7 +222,7 @@ export async function getLoginShellEnv(): Promise<Record<string, string>> {
           process.env as Record<string, string>,
           loginEnv,
         );
-        cachedLoginShellEnv = merged;
+        cachedLoginShellEnvs.set('bash', merged);
         console.log(
           `[login-shell-env] captured ${Object.keys(loginEnv).length} vars from bash fallback`,
         );
@@ -232,8 +234,9 @@ export async function getLoginShellEnv(): Promise<Record<string, string>> {
     }
 
     // Last resort: just use process.env
-    cachedLoginShellEnv = { ...process.env } as Record<string, string>;
-    return cachedLoginShellEnv;
+    const fallbackEnv = { ...process.env } as Record<string, string>;
+    cachedLoginShellEnvs.set(shell, fallbackEnv);
+    return fallbackEnv;
   }
 }
 
@@ -244,7 +247,7 @@ export async function getLoginShellEnv(): Promise<Record<string, string>> {
  * Called when the user clicks the "detect" button to ensure fresh results.
  */
 export function refreshLoginShellEnv(): void {
-  cachedLoginShellEnv = null;
+  cachedLoginShellEnvs.clear();
 }
 
 /**

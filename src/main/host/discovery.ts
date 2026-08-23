@@ -32,6 +32,8 @@ export interface CaseInfo {
   block?: string;
   /** Verification phase (e.g. DVR1/DVR2/DVR3/DVS1/DVS2/POST) — optional, parsed by plugin from case_cfg */
   phase?: string;
+  /** 后仿标记（true = 用户标记该用例需要跑后仿），仅由用户设置 */
+  postSim?: boolean;
 }
 
 export interface SimOptionsSchema {

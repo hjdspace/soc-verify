@@ -24,7 +24,7 @@ import { useThemeStore } from '@renderer/stores/theme';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useToastStore } from '@renderer/stores/toast';
 import { useEditorStore } from '@renderer/stores/editor';
-import { useDiffReviewStore, normalizeReviewKey, isSameFilePath, type ReviewEntry } from '@renderer/stores/diff-review';
+import { useDiffReviewStore, useReviewSnapshot, type ReviewEntry } from '@renderer/stores/diff-review';
 import type { FileDiffResult } from '@shared/types';
 import { cn } from '@renderer/lib/utils';
 import { createVimExtensions, resetVimMode } from './vim-extension';
@@ -161,9 +161,6 @@ function resolveRelativePath(baseFilePath: string, href: string): string {
   return parts.join(sep);
 }
 
-/** 稳定的空 hunk 状态引用，避免每次渲染创建新对象导致 useMemo 依赖变化 */
-const EMPTY_HUNK_STATES: Record<number, 'pending' | 'accepted' | 'rejected'> = {};
-
 /** 从路径中提取文件名 */
 function basename(filePath: string): string {
   const parts = filePath.split(/[/\\]/);
@@ -198,24 +195,9 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
   // ── 内联 code review 状态（Cursor / VSCode 风格） ─────────────
   // 文件在审阅队列中时，编辑器叠加 diff 装饰并进入只读模式；
   // 无论从目录树、工具卡片还是浮动按钮打开，都走同一套内联审阅逻辑。
-  const reviewQueue = useDiffReviewStore((s) => s.queue);
-  const fileDiffs = useDiffReviewStore((s) => s.fileDiffs);
-  const reviewHunkStates = useDiffReviewStore((s) => s.hunkStates);
-  const loadingReviewFiles = useDiffReviewStore((s) => s.loadingFiles);
-  const reviewLoadErrors = useDiffReviewStore((s) => s.loadErrors);
-  const contentVersions = useDiffReviewStore((s) => s.contentVersions);
-
-  const reviewEntry = useMemo(
-    () => reviewQueue.find((e) => isSameFilePath(e.filePath, filePath) && !e.reviewed) ?? null,
-    [reviewQueue, filePath],
-  );
-  const reviewKey = normalizeReviewKey(filePath);
-  const reviewDiff = reviewEntry ? (fileDiffs[reviewKey] ?? null) : null;
-  const reviewStates = reviewHunkStates[reviewKey] ?? EMPTY_HUNK_STATES;
-  const reviewLoading = reviewEntry ? (loadingReviewFiles[reviewKey] ?? false) : false;
-  const reviewError = reviewEntry ? (reviewLoadErrors[reviewKey] ?? null) : null;
-  const reviewActive = reviewEntry != null && reviewDiff != null;
-  const contentVersion = contentVersions[reviewKey] ?? 0;
+  // 通过 useReviewSnapshot 获取 per-file 审阅快照，不再直接访问 store 的内部 map。
+  const reviewSnapshot = useReviewSnapshot(filePath);
+  const { entry: reviewEntry, diff: reviewDiff, hunkStates: reviewStates, loading: reviewLoading, error: reviewError, active: reviewActive, contentVersion } = reviewSnapshot;
 
   // EditorView ref，用于 Vim 扩展获取 CodeMirror 实例
   const editorViewRef = useRef<import('@codemirror/view').EditorView | null>(null);

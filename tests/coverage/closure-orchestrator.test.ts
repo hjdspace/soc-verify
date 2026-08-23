@@ -118,6 +118,8 @@ function createMockSessionManager(
     createSession: vi.fn(),
     getClient: vi.fn(),
     destroySession: vi.fn(),
+    promptFireAndForget: vi.fn(),
+    sendPromptAndWait: vi.fn(),
   }) as unknown as SessionManagerImpl;
 
   let counter = 0;
@@ -147,6 +149,67 @@ function createMockSessionManager(
 
   (mgr as unknown as { destroySession: ReturnType<typeof vi.fn> }).destroySession =
     vi.fn().mockResolvedValue(undefined);
+
+  // Deep Agent Turn interface: fire-and-forget prompt (matches real SessionManager)
+  (mgr as unknown as { promptFireAndForget: ReturnType<typeof vi.fn> }).promptFireAndForget =
+    vi.fn(async () => {});
+
+  // Deep Agent Turn interface: send prompt + wait for agent_end + capture assistant text
+  // Simulates the real SessionManager.sendPromptAndWait by emitting events after delay.
+  (mgr as unknown as { sendPromptAndWait: ReturnType<typeof vi.fn> }).sendPromptAndWait =
+    vi.fn(async (
+      _sessionId: string,
+      _message: string,
+      _images: string[] | undefined,
+      opts?: { timeoutMs?: number; signal?: AbortSignal },
+    ): Promise<string> => {
+      return new Promise<string>((resolve, reject) => {
+        const sid = _sessionId; // use the actual sessionId passed by the caller
+        let lastText = '';
+        const cleanup = (): void => {
+          clearTimeout(timer);
+          opts?.signal?.removeEventListener('abort', onAbort);
+          mgr.removeListener('sessionEvent', onEvent);
+        };
+        const timer = setTimeout(() => {
+          cleanup();
+          reject(new Error('Agent timed out'));
+        }, opts?.timeoutMs ?? 600000);
+        timer.unref?.();
+        const onAbort = (): void => {
+          cleanup();
+          reject(new Error('Aborted'));
+        };
+        if (opts?.signal) {
+          if (opts.signal.aborted) { cleanup(); reject(new Error('Aborted')); return; }
+          opts.signal.addEventListener('abort', onAbort, { once: true });
+        }
+        const onEvent = (data: { sessionId: string; event: unknown }): void => {
+          if (data.sessionId !== sid) return;
+          const evt = data.event as Record<string, unknown> | null;
+          if (!evt || typeof evt.type !== 'string') return;
+          if (evt.type === 'message_end') {
+            const msg = evt.message as Record<string, unknown> | undefined;
+            if (msg?.role === 'assistant') {
+              if (typeof msg.content === 'string') lastText = msg.content;
+              else if (Array.isArray(msg.content)) {
+                for (const b of msg.content) {
+                  if (typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'text')
+                    lastText += (b as Record<string, unknown>).text as string;
+                }
+              }
+            }
+          } else if (evt.type === 'agent_end') {
+            cleanup();
+            resolve(lastText);
+          } else if (evt.type === 'error') {
+            cleanup();
+            reject(new Error(String(evt.message ?? evt.error ?? 'Agent error')));
+          }
+        };
+        mgr.on('sessionEvent', onEvent);
+      });
+    });
 
   return mgr;
 }

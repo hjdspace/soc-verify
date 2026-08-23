@@ -85,11 +85,7 @@ class TVAIAdvisorImpl {
     const promptMessage = buildSuggestPrompt(context);
 
     // 发送 prompt（fire-and-forget — 响应通过 sessionEvent 流式推送）
-    const client = sessionManager.getClient(sessionId);
-    if (!client) {
-      throw new Error(`AI session client not found: ${sessionId}`);
-    }
-    await client.prompt(promptMessage);
+    await sessionManager.promptFireAndForget(sessionId, promptMessage);
 
     return { sessionId, promptMessage };
   }
@@ -312,70 +308,13 @@ class TVAIAdvisorImpl {
   /**
    * 发送 prompt 并等待 AI 响应。
    *
-   * 由于 client.prompt() 是 fire-and-forget，需要通过 sessionEvent 事件捕获响应。
+   * 通过 SessionManager 的深层 Agent Turn 接口完成 fire-and-forget 发送 +
+   * 事件完成 + assistant 文本提取 + 超时，不再直接监听 sessionEvent。
    */
   private async sendPromptAndWait(sessionId: string, message: string): Promise<string> {
-    const client = sessionManager.getClient(sessionId);
-    if (!client) {
-      throw new Error(`AI session client not found: ${sessionId}`);
-    }
-
-    // 设置事件监听器，等待 assistant 的 message_end 事件
-    const responsePromise = new Promise<string>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        sessionManager.removeListener('sessionEvent', handler);
-        reject(new Error('AI 响应超时'));
-      }, AI_RESPONSE_TIMEOUT_MS);
-
-      const handler = (data: { sessionId: string; event: unknown }) => {
-        if (data.sessionId !== sessionId) return;
-
-        const evt = data.event as Record<string, unknown>;
-        if (evt.type !== 'message_end') return;
-
-        const msg = evt.message as Record<string, unknown> | undefined;
-        if (!msg || msg.role !== 'assistant') return;
-
-        // 提取文本内容
-        let text = '';
-        const content = msg.content;
-        if (typeof content === 'string') {
-          text = content;
-        } else if (Array.isArray(content)) {
-          for (const block of content) {
-            if (typeof block === 'object' && block !== null) {
-              const b = block as Record<string, unknown>;
-              if (b.type === 'text' && typeof b.text === 'string') {
-                text += b.text;
-              }
-            }
-          }
-        }
-
-        // 检查错误
-        const errMsg = typeof msg.errorMessage === 'string' ? msg.errorMessage : '';
-        if (errMsg) {
-          clearTimeout(timeout);
-          sessionManager.removeListener('sessionEvent', handler);
-          reject(new Error(`AI 响应错误: ${errMsg}`));
-          return;
-        }
-
-        if (text) {
-          clearTimeout(timeout);
-          sessionManager.removeListener('sessionEvent', handler);
-          resolve(text);
-        }
-      };
-
-      sessionManager.on('sessionEvent', handler);
+    return sessionManager.sendPromptAndWait(sessionId, message, undefined, {
+      timeoutMs: AI_RESPONSE_TIMEOUT_MS,
     });
-
-    // 发送 prompt（fire-and-forget）
-    await client.prompt(message);
-
-    // 等待响应
-    return responsePromise;
   }
 
   /**

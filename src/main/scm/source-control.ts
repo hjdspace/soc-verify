@@ -45,7 +45,13 @@ type GitResult = {
   stderr: string;
 };
 
-const MAX_DIFF_CHARS = 12000;
+const MAX_DIFF_CHARS = 16000;
+const MAX_RECENT_COMMITS = 10;
+const COMMIT_TYPE_PATTERN = '(?:feat|fix|docs|style|refactor|perf|test|chore|build|ci)';
+const COMMIT_TITLE_RE = new RegExp(
+  COMMIT_TYPE_PATTERN + '(?:\\([^)\\r\\n]+\\))?\\s*:\\s*[^\\r\\n`"“”‘’「」]+',
+  'g',
+);
 const PROJECT_SOURCE_PATHSPEC = ['--', '.', ':(exclude).socverify'];
 const IGNORED_PREFIX = '.socverify';
 
@@ -103,7 +109,12 @@ export function parseGitStatus(output: string): SourceControlStatus {
 }
 
 export function sanitizeCommitMessage(message: string): string {
-  let result = message.trim();
+  let result = message.replace(/\r\n/g, '\n').trim();
+
+  // Prefer an explicitly delimited final answer when a thinking model emits
+  // analysis before or after the commit message.
+  const taggedMessage = result.match(/<commit-message>\s*([\s\S]*?)\s*<\/commit-message>/i);
+  if (taggedMessage) result = taggedMessage[1].trim();
 
   // Strip markdown code fences (```text ... ``` or ``` ... ```)
   result = result.replace(/^```[a-zA-Z]*\n?/m, '').replace(/\n?```$/m, '');
@@ -112,15 +123,85 @@ export function sanitizeCommitMessage(message: string): string {
   // Strip wrapping quotes
   result = result.replace(/^["']+|["']+$/g, '').trim();
 
-  // Some models prepend conversational filler like "Here is the commit message:"
-  // or "以下是提交信息：".  If the text contains a Conventional Commits type
-  // prefix somewhere, keep from that point onward.
-  const ccMatch = result.match(/((?:feat|fix|docs|style|refactor|perf|test|chore|build|ci)(?:\([^)]+\))?:\s.*)/s);
-  if (ccMatch) {
-    result = ccMatch[1].trim();
+  // Models sometimes include several candidate titles in their reasoning.
+  // Prefer a title at the start of a line (the normal format); otherwise use
+  // the last inline candidate, which is usually the model's final choice.
+  const lines = result.split('\n');
+  const candidates: Array<{ title: string; lineIndex: number; lineStart: boolean }> = [];
+  lines.forEach((line, lineIndex) => {
+    for (const match of line.matchAll(COMMIT_TITLE_RE)) {
+      const prefix = line.slice(0, match.index ?? 0).trim();
+      const lineStart = prefix === '' || /^[-*]\s+$/.test(line.slice(0, match.index ?? 0))
+        || /^\d+[.)]\s+$/.test(line.slice(0, match.index ?? 0));
+      candidates.push({ title: cleanCommitTitle(match[0]), lineIndex, lineStart });
+    }
+  });
+
+  const lineCandidate = [...candidates].reverse().find((candidate) => candidate.lineStart);
+  const selected = lineCandidate ?? candidates[candidates.length - 1];
+  if (selected?.title) {
+    const titleLine = selected.title;
+
+    // Inline candidates are embedded in prose; keep only the title. For a
+    // normal line-start title, preserve valid list-style body lines below it.
+    if (!selected.lineStart) return titleLine;
+
+    const afterTitle = lines.slice(selected.lineIndex + 1).join('\n');
+
+    // Collect body lines after the required title/body separator. Models may
+    // return a normal paragraph instead of a Markdown list, so accept both
+    // forms while stopping at common reasoning prose.
+    const bodyLines: string[] = [];
+    let seenBody = false;
+    let separatorSeen = false;
+    for (const line of afterTitle.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed === '') {
+        if (seenBody) bodyLines.push('');
+        else separatorSeen = true;
+        continue;
+      }
+      const isListItem = /^[-*+]\s+/.test(trimmed) || /^\d+[.)]\s+/.test(trimmed);
+      if (isListItem || (separatorSeen && !isLikelyReasoningLine(trimmed))) {
+        seenBody = true;
+        bodyLines.push(line);
+        continue;
+      }
+      break;
+    }
+
+    // Trim trailing blank lines from body
+    while (bodyLines.length > 0 && bodyLines[bodyLines.length - 1] === '') {
+      bodyLines.pop();
+    }
+
+    return bodyLines.length > 0
+      ? `${titleLine}\n\n${bodyLines.join('\n')}`
+      : titleLine;
   }
 
   return result;
+}
+
+function cleanCommitTitle(title: string): string {
+  return title
+    .trim()
+    .replace(/^[-*]\s+|^\d+[.)]\s+/, '')
+    .replace(/[\s`"'“”‘’「」]+$/g, '')
+    .replace(/[。．.!！?？；;，,、]+$/g, '')
+    .trim();
+}
+
+function isLikelyReasoningLine(line: string): boolean {
+  return /^(?:我们需要|需要先|让我们|首先|其次|然后|也许|可以考虑|考虑到|因此|所以|可能|但(?:[，,：:「"“\s]|$)|或者|我认为|应该|不妨|按照要求|题目|分析|总结|we need|let's|maybe|consider|therefore)/iu.test(line);
+}
+
+function isCommitMessageTitle(message: string): boolean {
+  return new RegExp(`^${COMMIT_TYPE_PATTERN}(?:\\([^)]+\\))?\\s*:\\s*\\S+`).test(message.trim());
+}
+
+function hasCommitMessageBody(message: string): boolean {
+  return message.split('\n').slice(1).some((line) => line.trim().length > 0);
 }
 
 export class SourceControlService {
@@ -292,36 +373,94 @@ export class SourceControlService {
     const useStagedOnly = hasStaged;
 
     const model = modelId ?? await this.resolveModel(credential);
-    const diffContext = await this.buildStagedDiffContext(projectRoot, useStagedOnly);
+
+    // Gather diff context, recent commit messages (for style reference),
+    // and a high-level file change summary — in parallel for lower latency.
+    const [diffContext, recentCommits, fileSummary] = await Promise.all([
+      this.buildStagedDiffContext(projectRoot, useStagedOnly),
+      this.getRecentCommitSubjects(projectRoot, MAX_RECENT_COMMITS),
+      this.buildFileSummary(status, useStagedOnly),
+    ]);
+
     const url = this.chatCompletionsUrl(credential.baseUrl);
 
     const systemPrompt = [
-      '你是一位资深的软件工程师，擅长编写清晰、规范的 Git 提交信息。',
-      '遵循 Conventional Commits 规范：<type>(<可选 scope>): <简述>',
+      '资深发布工程师，擅长编写精准、规范的 Git 提交信息。',
       '',
-      'Type 必须是以下之一：feat, fix, docs, style, refactor, perf, test, chore, build, ci',
+      '## 格式',
+      '遵循 Conventional Commits：`<type>(<scope>): <简述>`',
+      'Type: feat | fix | refactor | perf | docs | test | build | ci | chore | style',
+      '全部用中文撰写（type 和 scope 保持英文）。',
       '',
-      '规则：',
-      '- 提交信息必须全部用中文撰写（type 和 scope 保持英文）。',
-      '- 标题行简洁明了地描述本次变更，不超过 72 个字符。',
-      '- 标题行之后必须空一行，然后写 body 正文。',
-      '- body 正文必须详细说明 *改了什么* 以及 *为什么改*，不要只是重复 diff 内容。',
-      '- body 正文使用中文，可以使用无序列表（- 开头）分条列举要点。',
-      '- 只返回提交信息文本，不要加引号、markdown 代码块标记或任何前言。',
+      '## 标题行',
+      '- 以中文动词开头，描述具体行为（如"添加""修复""重构""移除"）',
+      '- 不超过 72 个字符，末尾不加句号',
+      '- 标题后必须空一行，并写至少 1 条 body；禁止只输出标题',
+      '',
+      '## Scope 判定',
+      '- 60% 以上行变更集中在同一模块/组件时才加 scope，否则省略',
+      '- scope 用小写英文，限 1-2 段，只用字母/数字/连字符',
+      '- 禁用泛化 scope：src, lib, tests, project, app, main, all, misc',
+      '',
+      '## Body 正文',
+      '- 必须输出 1-6 条，每条以 `-` 开头，每条不超过 120 个字符',
+      '- 每条以动词开头，说明做了什么 + 为什么（不重复 diff 字面内容）',
+      '- 优先级：用户可见行为 → 性能/安全 → 架构 → 内部实现',
+      '- 排除琐碎项：import 顺序、空白、格式化、纯重命名、注释微调',
+      '- 3 条以上同类变更合并：如"更新 5 个测试文件以适配新接口"',
+      '',
+      '## 禁止',
+      '- 禁用填充词：全面的、各种、若干、改进的、增强的、更好的、简单地、基本上',
+      '- 禁用元描述：本次提交、本次变更、修改了代码、更新了文件',
+      '- 你可以在内部分析，但禁止输出思考过程、备选方案或理由推导',
+      '- 禁止输出前言（"以下是提交信息"）、解释、代码块标记、引号',
+      '- 最终结果必须包在 `<commit-message>` 和 `</commit-message>` 中，标签外不要输出任何文字',
+      '',
+      '## 正面示例',
+      'feat(auth): 添加令牌过期自动刷新',
+      '',
+      '- 新增 TokenRefreshGuard 防止并发刷新',
+      '- 集成 429 重试中间件',
+      '',
+      '## 反面示例（不要这样写）',
+      'feat: 全面的改进和增强 ← 使用了禁用词',
+      'fix: 本次提交修复了空指针 ← 使用了元描述',
+      'refactor: 各种重构 ← scope 和描述都太泛',
     ].join('\n');
 
-    const userPrompt = [
-      `分析以下${useStagedOnly ? '已暂存' : '所有'}变更，并生成符合 Conventional Commits 规范的中文提交信息（包含标题和 body 正文）。`,
-      '',
-      '直接输出提交信息，不要包含任何解释、前缀或说明文字。',
-      '',
+    // Build user prompt sections — each part is optional so we don't
+    // include empty headers that confuse the model.
+    const userSections: string[] = [];
+
+    if (recentCommits) {
+      userSections.push(
+        `## 最近提交记录（用于风格参考，不要复制内容）`,
+        recentCommits,
+      );
+    }
+
+    if (fileSummary) {
+      userSections.push(
+        `## 变更文件概览`,
+        fileSummary,
+      );
+    }
+
+    userSections.push(
+      `## ${useStagedOnly ? '已暂存' : '所有'}变更 Diff`,
       diffContext,
+    );
+
+    const userPrompt = [
+      `以下是${useStagedOnly ? '已暂存' : '所有'}变更，请生成包含标题和至少 1 条 body 的提交信息。不得只输出标题。`,
+      '',
+      ...userSections,
     ].join('\n');
 
     const requestBody = JSON.stringify({
       model,
-      temperature: 0.3,
-      max_tokens: 1024,
+      temperature: 0.2,
+      max_tokens: 800,
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
@@ -339,40 +478,63 @@ export class SourceControlService {
 
     if (!response.ok) {
       const details = (await response.text()).slice(0, 300);
-      throw new Error(`AI request failed (${response.status}): ${details}`);
+      throw this.classifyApiError(response.status, details);
     }
 
     const payload = await response.json() as Record<string, unknown>;
     const message = this.extractMessage(payload);
 
+    let titleOnlyFallback: string | null = null;
     if (message) {
-      return sanitizeCommitMessage(message);
+      const cleanMessage = sanitizeCommitMessage(message);
+      if (isCommitMessageTitle(cleanMessage)) {
+        if (hasCommitMessageBody(cleanMessage)) return cleanMessage;
+        titleOnlyFallback = cleanMessage;
+      }
     }
 
     // ── Retry once with an even stricter prompt ──────────────────────
     // Some models ignore the system prompt and wrap the answer in prose.
     // A second call with an explicit example usually recovers a usable message.
+    const retryUserSections: string[] = [];
+
+    if (recentCommits) {
+      retryUserSections.push('## 最近提交记录', recentCommits);
+    }
+    if (fileSummary) {
+      retryUserSections.push('## 变更文件概览', fileSummary);
+    }
+    retryUserSections.push(
+      '## 变更 Diff',
+      diffContext.slice(0, MAX_DIFF_CHARS),
+    );
+
     const retryBody = JSON.stringify({
       model,
-      temperature: 0.2,
-      max_tokens: 256,
+      temperature: 0.15,
+      max_tokens: 800,
       messages: [
         {
           role: 'system',
-          content: '只输出 Git 提交信息，不要包含任何其他文字。',
+          content: [
+            '只输出 Git 提交信息，不要包含任何其他文字。',
+            '格式：<type>(<scope>): <简述>，空行后必须有至少 1 条以 - 开头的 body；不得只输出标题。',
+            '禁用词：全面的、各种、若干、改进的、增强的、本次提交、本次变更',
+            '最终结果必须包在 <commit-message> 和 </commit-message> 中，标签外不要输出任何文字。',
+          ].join('\n'),
         },
         {
           role: 'user',
           content: [
-            '根据以下代码变更生成一条 Conventional Commits 格式的中文提交信息。',
-            '示例输出：',
-            'feat: 添加用户登录功能',
+            '根据以下变更生成包含标题和至少 1 条 body 的中文提交信息，不得只输出标题。',
             '',
-            '- 新增 /login 路由和登录表单组件',
-            '- 集成 JWT 认证中间件',
+            '示例：',
+            'feat(auth): 添加令牌过期自动刷新',
             '',
-            '请直接输出提交信息，不要加任何前缀说明：',
-            diffContext.slice(0, MAX_DIFF_CHARS),
+            '- 新增 TokenRefreshGuard 防止并发刷新',
+            '- 集成 429 重试中间件',
+            '',
+            ...retryUserSections,
           ].join('\n'),
         },
       ],
@@ -391,11 +553,56 @@ export class SourceControlService {
       const retryPayload = await retryResponse.json() as Record<string, unknown>;
       const retryMessage = this.extractMessage(retryPayload);
       if (retryMessage) {
-        return sanitizeCommitMessage(retryMessage);
+        const cleanMessage = sanitizeCommitMessage(retryMessage);
+        if (isCommitMessageTitle(cleanMessage)) {
+          if (hasCommitMessageBody(cleanMessage)) return cleanMessage;
+          titleOnlyFallback ??= cleanMessage;
+        }
       }
     }
 
+    if (titleOnlyFallback) return titleOnlyFallback;
     throw new Error('AI response did not include a commit message');
+  }
+
+  /**
+   * Fetch recent commit subjects for style reference.
+   * Returns a newline-separated list of subjects, or an empty string if
+   * the repository has no commits yet (or git log fails).
+   */
+  private async getRecentCommitSubjects(projectRoot: string, count: number): Promise<string> {
+    try {
+      const result = await this.runGit(projectRoot, [
+        'log', `--max-count=${count}`, '--pretty=format:%s', '--no-color',
+      ]);
+      const text = result.stdout.trim();
+      return text || '';
+    } catch {
+      // New repo with no commits yet, or git log failed — not critical
+      return '';
+    }
+  }
+
+  /**
+   * Build a high-level file change summary from the status object.
+   * This gives the AI a compact overview of what changed at the file level,
+   * complementing the detailed diff below.
+   *
+   * When `stagedOnly` is true, only staged files are included.
+   */
+  private buildFileSummary(status: SourceControlStatus, stagedOnly: boolean): string {
+    const files = stagedOnly
+      ? status.files.filter((f) => f.staged)
+      : status.files;
+
+    if (files.length === 0) return '';
+
+    const lines: string[] = [];
+    for (const file of files) {
+      const staged = file.staged ? '已暂存' : '未暂存';
+      lines.push(`  ${file.indexStatus}${file.workTreeStatus} ${staged} ${file.path}`);
+    }
+    return lines.join('\n');
   }
 
   /**
@@ -466,6 +673,24 @@ export class SourceControlService {
     return context.length > MAX_DIFF_CHARS
       ? `${context.slice(0, MAX_DIFF_CHARS)}\n\n[diff truncated]`
       : context;
+  }
+
+  /**
+   * Classify HTTP error responses from the AI API into user-friendly
+   * messages. Common error codes (401, 403, 429, 5xx) get specific hints;
+   * everything else falls through to a generic message with the raw body.
+   */
+  private classifyApiError(status: number, details: string): Error {
+    if (status === 401 || status === 403) {
+      return new Error('AI 认证失败：API Key 无效或权限不足，请在设置中检查凭证配置。');
+    }
+    if (status === 429) {
+      return new Error('AI 请求频率超限（429），请稍后重试或降低请求频率。');
+    }
+    if (status >= 500) {
+      return new Error(`AI 服务端错误（${status}），请稍后重试。详情：${details.slice(0, 150)}`);
+    }
+    return new Error(`AI 请求失败（${status}）：${details.slice(0, 200)}`);
   }
 
   private async resolveModel(credential: AiCredential): Promise<string> {

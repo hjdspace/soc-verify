@@ -134,10 +134,9 @@ export class ErrorAnalysisSessionFactory {
 
     onPrompt?.(promptMessage, sessionId);
 
-    const client = this.deps.sessionManager.getClient(sessionId);
-    if (client) {
-      await client.prompt(promptMessage);
-    }
+    // Fire-and-forget: the agent's response arrives via sessionEvent stream,
+    // consumed by the ErrorAnalysisCoordinator (event listener) and the UI.
+    await this.deps.sessionManager.promptFireAndForget(sessionId, promptMessage);
 
     return sessionId;
   }

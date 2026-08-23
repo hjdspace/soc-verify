@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS cases (
     base TEXT,
     block TEXT,
     phase TEXT,
+    -- 后仿标记：1 = 需要跑后仿（gate-level / post-sim），用于后仿用例挑选（ADR 0017 扩展）
+    post_sim INTEGER NOT NULL DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT DEFAULT (datetime('now', 'localtime')),
     UNIQUE(name, subsys),
@@ -73,3 +75,11 @@ PRAGMA cache_size = 10000;
 PRAGMA temp_store = MEMORY;
 PRAGMA mmap_size = 268435456;
 `;
+
+/**
+ * 增量列迁移：CREATE TABLE IF NOT EXISTS 不会给已存在的表补充新列，
+ * 旧库需通过 ALTER TABLE 补齐。每项在列缺失时执行。
+ */
+export const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string }[] = [
+  { table: 'cases', column: 'post_sim', ddl: 'ALTER TABLE cases ADD COLUMN post_sim INTEGER NOT NULL DEFAULT 0' },
+];

@@ -1,4 +1,13 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+/* workbench 记录最近打开文件时会调用 project store（含 tRPC），mock 隔离 IPC 依赖 */
+vi.mock('@renderer/stores/project', () => ({
+  useProjectStore: {
+    getState: () => ({ pushRecentFile: vi.fn() }),
+    subscribe: vi.fn(() => vi.fn()),
+  },
+}));
+
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 
 describe('Workbench navigation', () => {
@@ -26,14 +35,15 @@ describe('Workbench navigation', () => {
 
   it('activates the most recently opened remaining destination when closing the active tab', () => {
     const workbench = useWorkbenchStore.getState();
-    workbench.open({ type: 'dashboard' });
+    // dashboard/coverage 等视图型目的地已分流到视图路由（Issue #2），此处用 Tab 型目的地
+    workbench.open({ type: 'to-checklist' });
     workbench.open({ type: 'simulation-history' });
 
     useWorkbenchStore.getState().closeActive();
 
     const state = useWorkbenchStore.getState();
-    expect(state.tabs.map((tab) => tab.destination.type)).toEqual(['dashboard']);
-    expect(state.activeTabId).toBe('dashboard');
+    expect(state.tabs.map((tab) => tab.destination.type)).toEqual(['to-checklist']);
+    expect(state.activeTabId).toBe('to-checklist');
   });
 
   it('updates terminal metadata without exposing tab identity rules to callers', () => {

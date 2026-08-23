@@ -1,6 +1,8 @@
 /// <reference types="vite/client" />
 
 import type { SurfaceDeclaration, SurfaceEvent } from '@shared/surface-types';
+import type { NotificationSyncEvent } from '@shared/types/notification';
+import type { RegressionEvent } from '@shared/types/regression';
 
 export interface SurfaceBridgeAPI {
   sync: (declaration: SurfaceDeclaration) => Promise<void>;
@@ -52,6 +54,10 @@ export interface EventBridgeAPI {
   onClosureEvent: (callback: (data: { type: string; [key: string]: unknown }) => void) => () => void;
   onTerminalData: (callback: (data: { id: string; data: string }) => void) => () => void;
   onTerminalExit: (callback: (data: { id: string; exitCode: number }) => void) => () => void;
+  // Issue #8: 运行中回归事件（started / progress / finished）
+  onRegressionEvent: (callback: (event: RegressionEvent) => void) => () => void;
+  // Issue #8: 通知列表全量同步事件
+  onNotificationEvent: (callback: (event: NotificationSyncEvent) => void) => () => void;
   // officecli 文档事件（Issue #7 / #8）
   onDocumentFlushRequest: (callback: (filePath: string) => void) => () => void;
   onDocumentFileChanged: (callback: (filePath: string) => void) => () => void;

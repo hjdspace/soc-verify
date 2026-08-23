@@ -15,7 +15,7 @@ import { KbSettingsTab } from './KbSettingsTab';
 import { AgentToolsTab } from './AgentToolsTab';
 import type { CredentialEntry, SkillInfo, CreateSkillInput, McpConfigFile, McpServerConfig, McpTransportType, McpServerInfo } from '@shared/types';
 
-type SettingsTab = 'credentials' | 'kb' | 'plugins' | 'skills' | 'mcp' | 'prompt' | 'agent-tools' | 'appearance' | 'timing-violation';
+type SettingsTab = 'credentials' | 'kb' | 'plugins' | 'skills' | 'mcp' | 'prompt' | 'agent-tools' | 'appearance' | 'shortcuts' | 'timing-violation';
 
 export function SettingsPanel() {
   const settingsOpen = useUiStore((s) => s.settingsOpen);
@@ -50,6 +50,7 @@ export function SettingsPanel() {
       label: '环境',
       items: [
         { id: 'appearance', label: '外观', icon: Palette },
+        { id: 'shortcuts', label: '快捷键', icon: Keyboard },
         { id: 'timing-violation', label: '时序违例', icon: Clock },
       ],
     },
@@ -114,6 +115,7 @@ export function SettingsPanel() {
           {/* Content */}
           <div key={tab} className="min-w-0 flex-1 animate-in fade-in slide-in-from-bottom-1 duration-200 overflow-y-auto p-6">
             {tab === 'appearance' && <AppearanceTab />}
+            {tab === 'shortcuts' && <ShortcutsTab />}
             {tab === 'credentials' && <CredentialsTab />}
             {tab === 'kb' && <KbSettingsTab />}
             {tab === 'plugins' && <PluginsTab />}
@@ -125,6 +127,87 @@ export function SettingsPanel() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Shortcuts Tab ────────────────────────────────────────
+
+/** 快捷键地图（Issue #9：与实现保持同步——CommandPalette / NavRail / FileEditor / SubsysList） */
+const SHORTCUT_GROUPS: ReadonlyArray<{
+  label: string;
+  items: ReadonlyArray<{ keys: string[]; action: string; context?: string }>;
+}> = [
+  {
+    label: '全局',
+    items: [
+      { keys: ['Ctrl', 'K'], action: '命令面板（Ctrl+P 同效）' },
+      { keys: ['Ctrl', 'P'], action: '命令面板' },
+      { keys: ['Ctrl', '1'], action: '前往 总览视图' },
+      { keys: ['Ctrl', '2'], action: '前往 仿真视图' },
+      { keys: ['Ctrl', '3'], action: '前往 覆盖率视图' },
+      { keys: ['Ctrl', '4'], action: '前往 回归视图' },
+      { keys: ['Esc'], action: '关闭命令面板 / 抽屉 / 对话框' },
+    ],
+  },
+  {
+    label: '编辑器',
+    items: [
+      { keys: ['Ctrl', 'S'], action: '保存文件', context: '文件编辑器' },
+      { keys: ['Ctrl', 'H'], action: '查找替换', context: '文件编辑器' },
+    ],
+  },
+  {
+    label: '其他',
+    items: [
+      { keys: ['Ctrl', 'F'], action: '聚焦搜索框', context: '子系统列表' },
+    ],
+  },
+];
+
+function ShortcutsTab() {
+  return (
+    <div className="space-y-5" data-testid="shortcuts-tab">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground">快捷键</h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          全局快捷键地图。命令面板（Ctrl+K）中可执行导航、动作与面板命令。
+        </p>
+      </div>
+      {SHORTCUT_GROUPS.map((group) => (
+        <div key={group.label}>
+          <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+            <Keyboard className="h-3 w-3" />
+            {group.label}
+          </div>
+          <div className="overflow-hidden rounded-md border border-border/60">
+            {group.items.map((item, i) => (
+              <div
+                key={`${item.action}-${i}`}
+                className={cn(
+                  'flex items-center gap-3 px-3 py-2 text-xs',
+                  i % 2 === 0 ? 'bg-secondary/20' : 'bg-transparent',
+                )}
+              >
+                <span className="flex w-36 shrink-0 items-center gap-1">
+                  {item.keys.map((k) => (
+                    <kbd
+                      key={k}
+                      className="rounded border border-border bg-accent/40 px-1.5 py-px font-mono text-[10px] text-muted-foreground"
+                    >
+                      {k}
+                    </kbd>
+                  ))}
+                </span>
+                <span className="flex-1 text-foreground">{item.action}</span>
+                {item.context && (
+                  <span className="shrink-0 text-[10px] text-muted-foreground/70">{item.context}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -150,6 +233,9 @@ function AppearanceTab() {
   const setVimEnabled = useEditorStore((s) => s.setVimEnabled);
   const minimapEnabled = useEditorStore((s) => s.minimapEnabled);
   const setMinimapEnabled = useEditorStore((s) => s.setMinimapEnabled);
+
+  const aiPanelMode = useUiStore((s) => s.aiPanelMode);
+  const setAiPanelMode = useUiStore((s) => s.setAiPanelMode);
 
   return (
     <div className="space-y-4">
@@ -340,6 +426,44 @@ endmodule`}
                 minimapEnabled ? 'translate-x-4' : 'translate-x-0',
               )}
             />
+          </button>
+        </div>
+      </div>
+
+      {/* AI 面板布局 */}
+      <div className="space-y-3 border-t border-border/50 pt-3">
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase text-muted-foreground">
+          <Zap className="h-3 w-3" />
+          AI 面板
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={() => setAiPanelMode('drawer')}
+            className={cn(
+              'rounded-md border p-2.5 text-left transition-colors',
+              aiPanelMode === 'drawer'
+                ? 'border-primary bg-primary/5'
+                : 'border-border hover:bg-accent',
+            )}
+          >
+            <div className="text-xs font-medium text-foreground">抽屉模式</div>
+            <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+              点击导航栏 AI 按钮临时展开，不占用主视图空间
+            </p>
+          </button>
+          <button
+            onClick={() => setAiPanelMode('docked')}
+            className={cn(
+              'rounded-md border p-2.5 text-left transition-colors',
+              aiPanelMode === 'docked'
+                ? 'border-primary bg-primary/5'
+                : 'border-border hover:bg-accent',
+            )}
+          >
+            <div className="text-xs font-medium text-foreground">固定侧栏模式</div>
+            <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
+              AI 会话面板常驻右侧，与主视图并排显示
+            </p>
           </button>
         </div>
       </div>

@@ -26,6 +26,8 @@ export type CaseRow = {
   base?: string;
   block?: string;
   phase?: string;
+  /** 后仿标记（true = 需要跑后仿），仅由用户设置，扫描不覆盖 */
+  postSim?: boolean;
 };
 
 export type SimulationRunRow = {
@@ -115,7 +117,11 @@ export function getSubsysList(db: Database.Database): string[] {
 // ─── cases ───────────────────────────────────────────────
 
 /**
- * 批量插入用例（INSERT OR REPLACE，按 (name, subsys) 去重）。
+ * 批量插入用例（UPSERT，按 (name, subsys) 去重）。
+ *
+ * 使用 ON CONFLICT DO UPDATE 而非 INSERT OR REPLACE：
+ * REPLACE 会整行删除重插，导致 post_sim 等用户设置字段被重置为默认值；
+ * UPSERT 只更新扫描来源的字段，保留用户标记（后仿标记等）。
  * 使用 transaction + prepared statement 实现批量插入。
  */
 export function insertCases(
@@ -125,8 +131,16 @@ export function insertCases(
   if (cases.length === 0) return { inserted: 0 };
 
   const stmt = db.prepare(`
-    INSERT OR REPLACE INTO cases (name, subsys, path, file_path, base_case, base, block, phase, updated_at)
+    INSERT INTO cases (name, subsys, path, file_path, base_case, base, block, phase, updated_at)
     VALUES (@name, @subsys, @path, @filePath, @baseCase, @base, @block, @phase, datetime('now', 'localtime'))
+    ON CONFLICT(name, subsys) DO UPDATE SET
+      path = excluded.path,
+      file_path = excluded.file_path,
+      base_case = excluded.base_case,
+      base = excluded.base,
+      block = excluded.block,
+      phase = excluded.phase,
+      updated_at = excluded.updated_at
   `);
 
   let inserted = 0;
@@ -158,13 +172,13 @@ export function getCases(
 ): CaseRow[] {
   if (subsys) {
     const rows = db.prepare(`
-      SELECT name, subsys, path, file_path, base_case, base, block, phase
+      SELECT name, subsys, path, file_path, base_case, base, block, phase, post_sim
       FROM cases WHERE subsys = @subsys ORDER BY name
     `).all({ subsys }) as Record<string, unknown>[];
     return rows.map(rowToCaseRow);
   }
   const rows = db.prepare(`
-    SELECT name, subsys, path, file_path, base_case, base, block, phase
+    SELECT name, subsys, path, file_path, base_case, base, block, phase, post_sim
     FROM cases ORDER BY name
   `).all() as Record<string, unknown>[];
   return rows.map(rowToCaseRow);
@@ -231,12 +245,60 @@ export function searchCases(
   }
 
   const rows = db.prepare(`
-    SELECT name, subsys, path, file_path, base_case, base, block, phase
+    SELECT name, subsys, path, file_path, base_case, base, block, phase, post_sim
     FROM cases WHERE ${conditions.join(' AND ')}
     ORDER BY name LIMIT @limit
   `).all({ ...params, limit }) as Record<string, unknown>[];
 
   return rows.map(rowToCaseRow);
+}
+
+// ─── 后仿标记 ────────────────────────────────────────────
+
+/**
+ * 设置用例的后仿标记（UPDATE，仅用户操作触发）。
+ *
+ * @returns 更新行数（0 = 用例不存在）
+ */
+export function setCasePostSim(
+  db: Database.Database,
+  caseName: string,
+  subsys: string,
+  postSim: boolean,
+): { updated: number } {
+  const result = db.prepare(`
+    UPDATE cases SET post_sim = @postSim, updated_at = datetime('now', 'localtime')
+    WHERE name = @caseName AND subsys = @subsys
+  `).run({ caseName, subsys, postSim: postSim ? 1 : 0 });
+  return { updated: result.changes };
+}
+
+/**
+ * 获取所有被标记为需要跑后仿的用例（后仿用例挑选结果）。
+ */
+export function getPostSimCases(db: Database.Database): CaseRow[] {
+  const rows = db.prepare(`
+    SELECT name, subsys, path, file_path, base_case, base, block, phase, post_sim
+    FROM cases WHERE post_sim = 1 ORDER BY subsys, name
+  `).all() as Record<string, unknown>[];
+  return rows.map(rowToCaseRow);
+}
+
+/**
+ * 获取最早一次 pass 的仿真运行（冒烟测试完成信号：用户成功调通的第一条用例）。
+ *
+ * @returns { caseName, subsys, startTime } | null（无 pass 记录时）
+ */
+export function getFirstPassRun(
+  db: Database.Database,
+): { caseName: string; subsys: string; startTime: string } | null {
+  const row = db.prepare(`
+    SELECT case_name, subsys, start_time FROM simulation_runs
+    WHERE status = 'pass'
+    ORDER BY start_time ASC LIMIT 1
+  `).get() as { case_name: string; subsys: string; start_time: string } | undefined;
+  if (!row) return null;
+  return { caseName: row.case_name, subsys: row.subsys, startTime: row.start_time };
 }
 
 // ─── simulation_runs ────────────────────────────────────
@@ -1312,5 +1374,6 @@ function rowToCaseRow(row: Record<string, unknown>): CaseRow {
     base: (row['base'] as string | null) ?? undefined,
     block: (row['block'] as string | null) ?? undefined,
     phase: (row['phase'] as string | null) ?? undefined,
+    postSim: row['post_sim'] === 1,
   };
 }

@@ -25,7 +25,6 @@ import { COVERAGE_METRICS, DEFAULT_COVERAGE_TARGETS } from '@shared/types';
 import { CoverageTreeTable } from './CoverageTreeTable';
 import { CoverageDashboard } from './CoverageDashboard';
 import { ClosureDetailPage } from './ClosureDetailPage';
-import { ExportDialog } from './ExportDialog';
 
 const EDA_TOOL_OPTIONS: Array<{ value: EdaTool; label: string }> = [
   { value: 'imc', label: 'Cadence IMC' },
@@ -673,8 +672,7 @@ export function CoveragePanel() {
         </>
       )}
 
-      {/* 报告导出对话框（Slice 7） */}
-      <ExportDialog />
+      {/* 报告导出对话框已全局化到 AppShell（Issue #9：任意视图可呼出） */}
     </div>
   );
 }

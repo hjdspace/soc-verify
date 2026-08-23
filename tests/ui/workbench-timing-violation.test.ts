@@ -1,4 +1,13 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+/* workbench 记录最近打开文件时会调用 project store（含 tRPC），mock 隔离 IPC 依赖 */
+vi.mock('@renderer/stores/project', () => ({
+  useProjectStore: {
+    getState: () => ({ pushRecentFile: vi.fn() }),
+    subscribe: vi.fn(() => vi.fn()),
+  },
+}));
+
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 
 describe('Workbench timing-violation destination', () => {
@@ -29,13 +38,14 @@ describe('Workbench timing-violation destination', () => {
 
   it('closes timing-violation tab correctly', () => {
     useWorkbenchStore.getState().open({ type: 'timing-violation' });
-    useWorkbenchStore.getState().open({ type: 'dashboard' });
+    // dashboard 等视图型目的地已分流到视图路由（Issue #2），此处用 Tab 型目的地
+    useWorkbenchStore.getState().open({ type: 'kb' });
 
     useWorkbenchStore.getState().close('timing-violation');
 
     const state = useWorkbenchStore.getState();
     expect(state.tabs).toHaveLength(1);
-    expect(state.tabs[0].destination.type).toBe('dashboard');
-    expect(state.activeTabId).toBe('dashboard');
+    expect(state.tabs[0].destination.type).toBe('kb');
+    expect(state.activeTabId).toBe('kb');
   });
 });

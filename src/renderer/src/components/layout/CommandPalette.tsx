@@ -1,32 +1,84 @@
-import { useEffect, useState, useRef } from 'react';
-import { Search, Terminal as TerminalIcon, LayoutDashboard, BarChart3, ListChecks, GitBranch, Settings, FileText } from 'lucide-react';
-import { useUiStore } from '@renderer/stores/ui';
+import { useEffect, useState, useRef, useMemo } from 'react';
+import {
+  Search,
+  Terminal as TerminalIcon,
+  LayoutDashboard,
+  BarChart3,
+  ListChecks,
+  GitBranch,
+  Settings,
+  FileText,
+  Play,
+  Square,
+  RotateCcw,
+  Download,
+  Layers,
+  Folder,
+  Sparkles,
+  Workflow,
+  type LucideIcon,
+} from 'lucide-react';
+import { useUiStore, type ActiveView } from '@renderer/stores/ui';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useProjectStore } from '@renderer/stores/project';
 import { useTerminalStore } from '@renderer/stores/terminal';
+import { useSimulationStore } from '@renderer/stores/simulation';
+import { useRegressionStore } from '@renderer/stores/regression';
+import { useCoverageStore } from '@renderer/stores/coverage';
+import { useToastStore } from '@renderer/stores/toast';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 
+/** 全局搜索结果（trpc.search.global） */
 interface SearchResult {
   type: string;
   label: string;
   detail: string;
 }
 
-interface CommandItem {
-  id: string;
+/** 面板条目：label 过滤 + hint（快捷键/计数）+ 执行动作 */
+interface PaletteItem {
+  key: string;
   label: string;
-  detail?: string;
-  icon: typeof Search;
+  hint?: string;
+  icon: LucideIcon;
   action: () => void;
 }
+
+interface PaletteGroup {
+  id: string;
+  label: string;
+  items: PaletteItem[];
+}
+
+/** 导航组：五视图切换（hint = NavRail Ctrl+1..4 快捷键） */
+const NAV_VIEWS: ReadonlyArray<{ view: ActiveView; label: string; hint?: string; icon: LucideIcon }> = [
+  { view: 'dashboard', label: '前往 总览', hint: 'Ctrl 1', icon: LayoutDashboard },
+  { view: 'simulation', label: '前往 仿真', hint: 'Ctrl 2', icon: Play },
+  { view: 'coverage', label: '前往 覆盖率', hint: 'Ctrl 3', icon: BarChart3 },
+  { view: 'regression', label: '前往 回归', hint: 'Ctrl 4', icon: GitBranch },
+  { view: 'workspace', label: '前往 工作区', icon: Layers },
+];
 
 export function CommandPalette() {
   const commandPaletteOpen = useUiStore((s) => s.commandPaletteOpen);
   const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
-  const openDestination = useWorkbenchStore((s) => s.open);
+  const setActiveView = useUiStore((s) => s.setActiveView);
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
+  const aiPanelMode = useUiStore((s) => s.aiPanelMode);
+
+  const openDestination = useWorkbenchStore((s) => s.open);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
+
+  const activeRuns = useSimulationStore((s) => s.activeRuns);
+  const stopAllRuns = useSimulationStore((s) => s.stopAllRuns);
+  const rerunRun = useSimulationStore((s) => s.rerunRun);
+
+  const regressionHistory = useRegressionStore((s) => s.history);
+  const runRegression = useRegressionStore((s) => s.runRegression);
+  const loadRegressionHistory = useRegressionStore((s) => s.loadHistory);
+
+  const openExportDialog = useCoverageStore((s) => s.openExportDialog);
 
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -34,19 +86,23 @@ export function CommandPalette() {
   const [searching, setSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // 打开时复位；历史未加载则拉取（启动回归动作的数据源）
   useEffect(() => {
     if (commandPaletteOpen) {
       setQuery('');
       setSelectedIndex(0);
       setSearchResults([]);
       setTimeout(() => inputRef.current?.focus(), 0);
+      if (currentProjectId && useRegressionStore.getState().history.length === 0) {
+        void loadRegressionHistory(currentProjectId);
+      }
     }
-  }, [commandPaletteOpen]);
+  }, [commandPaletteOpen, currentProjectId, loadRegressionHistory]);
 
-  // Global shortcut: Ctrl+P / Cmd+P
+  // 全局快捷键：Ctrl+K / Ctrl+P 呼出，Esc 关闭
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'p')) {
         e.preventDefault();
         setCommandPaletteOpen(!useUiStore.getState().commandPaletteOpen);
       }
@@ -58,7 +114,7 @@ export function CommandPalette() {
     return () => window.removeEventListener('keydown', handler);
   }, [setCommandPaletteOpen]);
 
-  // Debounced search
+  // Debounced 全局搜索（保留原有能力）
   useEffect(() => {
     if (!query.trim() || !currentProjectId) {
       setSearchResults([]);
@@ -79,119 +135,315 @@ export function CommandPalette() {
     return () => clearTimeout(timer);
   }, [query, currentProjectId]);
 
-  const commands: CommandItem[] = [
-    { id: 'cmd-terminal', label: '新建终端', icon: TerminalIcon, action: () => {
-      useTerminalStore.getState().createTerminal(currentProjectId ?? undefined);
-      setCommandPaletteOpen(false);
-    }},
-    { id: 'cmd-dashboard', label: '打开仪表盘', icon: LayoutDashboard, action: () => {
-      openDestination({ type: 'dashboard' });
-      setCommandPaletteOpen(false);
-    }},
-    { id: 'cmd-coverage', label: '覆盖率分析', icon: BarChart3, action: () => {
-      openDestination({ type: 'coverage' });
-      setCommandPaletteOpen(false);
-    }},
-    { id: 'cmd-regression', label: '回归套件管理', icon: GitBranch, action: () => {
-      openDestination({ type: 'regression' });
-      setCommandPaletteOpen(false);
-    }},
-    { id: 'cmd-to', label: 'TO 检查清单', icon: ListChecks, action: () => {
-      openDestination({ type: 'to-checklist' });
-      setCommandPaletteOpen(false);
-    }},
-    { id: 'cmd-settings', label: '打开设置', icon: Settings, action: () => {
-      setSettingsOpen(true);
-      setCommandPaletteOpen(false);
-    }},
+  const close = () => setCommandPaletteOpen(false);
+
+  // ── 动作组数据 hints ──────────────────────────────────────────
+  const liveCount = activeRuns.filter((r) => r.status === 'running' || r.status === 'pending').length;
+  const failedRuns = activeRuns.filter(
+    (r) => (r.status === 'fail' || r.status === 'error') && r.command,
+  );
+  const latestRegression = useMemo(
+    () => [...regressionHistory].sort((a, b) => b.submittedAt - a.submittedAt)[0] ?? null,
+    [regressionHistory],
+  );
+
+  // ── 动作组：启动回归（最近一次参数重提；无历史则前往回归视图） ──
+  const handleRunRegression = () => {
+    if (currentProjectId && latestRegression) {
+      void runRegression(
+        currentProjectId,
+        latestRegression.filePath,
+        latestRegression.subsys,
+        latestRegression.options,
+      );
+    } else {
+      setActiveView('regression');
+      useToastStore.getState().info('暂无回归历史', '请在回归视图选择回归列表启动');
+    }
+  };
+
+  // ── 动作组：重跑失败用例（有可重放命令的失败运行逐个重跑） ──
+  const handleRerunFailed = async () => {
+    if (failedRuns.length === 0) {
+      useToastStore.getState().info('没有可重跑的失败用例');
+      return;
+    }
+    for (const run of failedRuns) {
+      const tabId = await rerunRun(run);
+      if (tabId) {
+        openDestination({
+          type: 'terminal',
+          terminalTabId: tabId,
+          title: `sim: ${run.caseName ?? run.caseId}`,
+        });
+      }
+    }
+  };
+
+  // ── 面板组：打开 AI 会话（drawer 模式开右抽屉；docked 模式展开固定右栏） ──
+  const handleOpenAi = () => {
+    if (aiPanelMode === 'drawer') {
+      useUiStore.setState({ rightDrawerOpen: true });
+    } else {
+      useUiStore.setState({ rightPanelCollapsed: false });
+      setActiveView('workspace');
+    }
+  };
+
+  // ── 分组与条目（原型：导航 / 动作 / 面板 + 搜索结果） ─────────
+  const groups: PaletteGroup[] = [
+    {
+      id: 'nav',
+      label: '导航',
+      items: NAV_VIEWS.map(({ view, label, hint, icon }) => ({
+        key: `nav-${view}`,
+        label,
+        hint,
+        icon,
+        action: () => {
+          setActiveView(view);
+          close();
+        },
+      })),
+    },
+    {
+      id: 'actions',
+      label: '动作',
+      items: [
+        {
+          key: 'action-run-regression',
+          label: '启动回归',
+          hint: latestRegression ? `重跑 ${latestRegression.subsys} 最近回归` : '前往回归视图选择',
+          icon: Play,
+          action: () => {
+            handleRunRegression();
+            close();
+          },
+        },
+        {
+          key: 'action-stop-sims',
+          label: '停止全部仿真',
+          hint: liveCount > 0 ? `${liveCount} 个运行中` : '无运行中',
+          icon: Square,
+          action: () => {
+            void stopAllRuns();
+            close();
+          },
+        },
+        {
+          key: 'action-rerun-fails',
+          label: '重跑失败用例',
+          hint: failedRuns.length > 0 ? `${failedRuns.length} 个失败` : '无失败运行',
+          icon: RotateCcw,
+          action: () => {
+            void handleRerunFailed();
+            close();
+          },
+        },
+        {
+          key: 'action-cov-report',
+          label: '生成覆盖率报告',
+          icon: Download,
+          action: () => {
+            openExportDialog();
+            close();
+          },
+        },
+      ],
+    },
+    {
+      id: 'panels',
+      label: '面板',
+      items: [
+        {
+          key: 'panel-terminal',
+          label: '新建终端',
+          icon: TerminalIcon,
+          action: () => {
+            useTerminalStore.getState().createTerminal(currentProjectId ?? undefined);
+            close();
+          },
+        },
+        {
+          key: 'panel-file-drawer',
+          label: '打开文件树',
+          icon: Folder,
+          action: () => {
+            useUiStore.setState({ leftDrawerOpen: true });
+            close();
+          },
+        },
+        {
+          key: 'panel-ai-drawer',
+          label: '打开 AI 会话',
+          icon: Sparkles,
+          action: () => {
+            handleOpenAi();
+            close();
+          },
+        },
+        {
+          key: 'panel-to-checklist',
+          label: 'TO 检查清单',
+          icon: ListChecks,
+          action: () => {
+            openDestination({ type: 'to-checklist' });
+            close();
+          },
+        },
+        {
+          key: 'panel-sysbase-env-gen',
+          label: '验证环境生成器',
+          icon: Workflow,
+          action: () => {
+            openDestination({ type: 'sysbase-env-gen' });
+            close();
+          },
+        },
+        {
+          key: 'panel-settings',
+          label: '打开设置',
+          icon: Settings,
+          action: () => {
+            setSettingsOpen(true);
+            close();
+          },
+        },
+      ],
+    },
   ];
 
-  const filteredCommands = query.trim()
-    ? commands.filter((c) => c.label.toLowerCase().includes(query.toLowerCase()))
-    : commands;
+  // 输入过滤（label 包含匹配，大小写不敏感；搜索结果组不做本地过滤）
+  const kw = query.trim().toLowerCase();
+  const filteredGroups: PaletteGroup[] = kw
+    ? groups.map((g) => ({
+        ...g,
+        items: g.items.filter((item) => item.label.toLowerCase().includes(kw)),
+      }))
+    : groups;
 
-  const allItems: Array<{ key: string; label: string; detail?: string; icon: typeof Search; action: () => void }> = [
-    ...filteredCommands.map((c) => ({ key: c.id, label: c.label, detail: c.detail, icon: c.icon, action: c.action })),
-    ...searchResults.map((r) => ({
-      key: `search-${r.type}-${r.label}`,
-      label: r.label,
-      detail: r.detail,
-      icon: FileText,
-      action: () => {
-        if (r.type === 'simulation') {
-          openDestination({ type: 'simulation-history' });
-        } else if (r.type === 'regression') {
-          openDestination({ type: 'regression' });
-        }
-        setCommandPaletteOpen(false);
-      },
-    })),
-  ];
+  const searchItems: PaletteItem[] = searchResults.map((r) => ({
+    key: `search-${r.type}-${r.label}`,
+    label: r.label,
+    hint: r.detail,
+    icon: FileText,
+    action: () => {
+      if (r.type === 'simulation') {
+        openDestination({ type: 'simulation-history' });
+      } else if (r.type === 'regression') {
+        openDestination({ type: 'regression' });
+      }
+      close();
+    },
+  }));
+
+  // 搜索结果组（仅有结果时渲染）
+  if (searchItems.length > 0) {
+    filteredGroups.push({ id: 'search', label: '搜索结果', items: searchItems });
+  }
+
+  // 扁平化用于键盘导航
+  const flatItems = filteredGroups.flatMap((g) => g.items);
+
+  useEffect(() => {
+    if (selectedIndex >= flatItems.length) setSelectedIndex(0);
+  }, [flatItems.length, selectedIndex]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setSelectedIndex((i) => Math.min(i + 1, allItems.length - 1));
+      setSelectedIndex((i) => Math.min(i + 1, flatItems.length - 1));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       setSelectedIndex((i) => Math.max(i - 1, 0));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      allItems[selectedIndex]?.action();
+      flatItems[selectedIndex]?.action();
     }
   };
 
   if (!commandPaletteOpen) return null;
 
+  let flatIndex = -1;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/30 pt-20" onClick={() => setCommandPaletteOpen(false)}>
+    <div
+      className="fixed inset-0 z-[80] flex items-start justify-center bg-black/40 pt-[12vh]"
+      onClick={() => setCommandPaletteOpen(false)}
+      data-testid="command-palette-overlay"
+    >
       <div
-        className="w-[480px] overflow-hidden rounded-lg border border-border bg-popover shadow-2xl"
+        className="w-[560px] max-w-[calc(100vw-48px)] overflow-hidden rounded-xl border border-border bg-popover shadow-2xl"
         onClick={(e) => e.stopPropagation()}
+        data-testid="command-palette"
       >
-        {/* Search input */}
-        <div className="flex items-center gap-2 border-b px-3 py-2">
-          <Search className="h-4 w-4 text-muted-foreground" />
+        {/* 输入区 */}
+        <div className="flex items-center gap-2.5 border-b border-border px-4 py-3">
+          <Search className="size-3.5 shrink-0 text-muted-foreground/60" />
           <input
             ref={inputRef}
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="搜索或输入命令... (Ctrl+P)"
-            className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            placeholder="输入命令或搜索…"
+            className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/60"
+            data-testid="command-palette-input"
           />
-          {searching && <span className="text-[10px] text-muted-foreground">搜索中...</span>}
+          {searching && <span className="text-[10px] text-muted-foreground">搜索中…</span>}
+          <kbd className="shrink-0 rounded border border-border px-1.5 py-px font-mono text-[10px] text-muted-foreground/70">
+            Esc
+          </kbd>
         </div>
 
-        {/* Results */}
-        <div className="max-h-72 overflow-y-auto p-1">
-          {allItems.length === 0 ? (
-            <div className="py-4 text-center text-xs text-muted-foreground">
-              {query.trim() ? '无匹配结果' : '开始输入以搜索...'}
+        {/* 分组列表 */}
+        <div className="max-h-[380px] overflow-y-auto p-2">
+          {flatItems.length === 0 ? (
+            <div className="py-6 text-center text-xs text-muted-foreground/70" data-testid="command-palette-empty">
+              没有匹配的命令
             </div>
           ) : (
-            allItems.map((item, idx) => (
-              <button
-                key={item.key}
-                onClick={item.action}
-                className={cn(
-                  'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs transition-colors',
-                  idx === selectedIndex ? 'bg-accent text-foreground' : 'text-muted-foreground hover:bg-accent/50',
-                )}
-              >
-                <item.icon className="h-3.5 w-3.5 shrink-0 opacity-60" />
-                <div className="flex-1 min-w-0">
-                  <div className="truncate">{item.label}</div>
-                  {item.detail && <div className="truncate text-[10px] text-muted-foreground/70">{item.detail}</div>}
+            filteredGroups.map((group) => (
+              <div key={group.id}>
+                <div className="px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+                  {group.label}
                 </div>
-              </button>
+                {group.items.map((item) => {
+                  flatIndex += 1;
+                  const selected = flatIndex === selectedIndex;
+                  return (
+                    <button
+                      key={item.key}
+                      onClick={item.action}
+                      onMouseEnter={() => setSelectedIndex(flatIndex)}
+                      className={cn(
+                        'flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
+                        selected
+                          ? 'bg-accent text-foreground'
+                          : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+                      )}
+                      data-testid={`palette-item-${item.key}`}
+                    >
+                      <item.icon
+                        className={cn('size-3.5 shrink-0', selected ? 'text-primary' : 'opacity-60')}
+                        strokeWidth={1.8}
+                      />
+                      <span className="flex-1 truncate">{item.label}</span>
+                      {item.hint && (
+                        <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60">
+                          {item.hint}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
             ))
           )}
         </div>
 
-        {/* Footer */}
-        <div className="border-t px-3 py-1.5 text-[10px] text-muted-foreground">
+        {/* 底部键位提示 */}
+        <div className="border-t border-border px-4 py-1.5 text-[10px] text-muted-foreground">
           ↑↓ 导航 · Enter 选择 · Esc 关闭
         </div>
       </div>

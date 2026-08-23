@@ -12,6 +12,8 @@ export interface SimulationRunRecord {
   caseId: string;
   caseName?: string;
   subsys: string;
+  /** 仿真种子（simOptions.seed，runsim -seed 参数；未设置时缺省） */
+  seed?: string;
   status: SimulationStatus;
   startTime: number;
   endTime?: number;
@@ -51,12 +53,18 @@ interface SimulationStoreState {
   compareRunIdA: string | null;
   compareRunIdB: string | null;
   loadingHistory: boolean;
+  /** listActiveRuns 拉取进行中（仿真视图骨架屏） */
+  loadingActiveRuns: boolean;
   simOptions: Record<string, unknown>;
 
   startCaseRun: (projectId: string, simulationCase: SimulationCase) => Promise<string | null>;
   startCaseRuns: (projectId: string, simulationCases: SimulationCase[]) => Promise<string[]>;
   abortSimulation: (projectId: string, runId: string) => Promise<void>;
   abortTerminalRun: (terminalId: string) => Promise<void>;
+  /** 停止全部运行中/队列中的仿真（终端运行走 terminalId，插件运行走 runId） */
+  stopAllRuns: () => Promise<void>;
+  /** 按运行记录重放其命令（rerunWithCommand + 终端 Tab + activeRuns upsert）；成功返回终端 tabId，失败返回 null */
+  rerunRun: (run: SimulationRunRecord) => Promise<string | null>;
   loadHistory: (projectId: string) => Promise<void>;
   loadActiveRuns: (projectId: string) => Promise<void>;
   getRunDetail: (projectId: string, runId: string) => Promise<SimulationHistoryEntry | null>;
@@ -75,6 +83,22 @@ interface SimulationStoreState {
 
 let eventListenerRegistered = false;
 
+/**
+ * 从运行 options 提取 seed。两种来源结构不同：
+ * - 终端运行（simTerminalLinker）：options 即 simOptions 本体，seed 在顶层；
+ * - 插件运行（SimulationManager）：options 为 SimulationRunOptions，seed 在内层 options。
+ */
+function extractSeed(options: unknown): string | undefined {
+  if (typeof options !== 'object' || options === null) return undefined;
+  const o = options as { seed?: unknown; options?: unknown };
+  if (typeof o.seed === 'string' && o.seed) return o.seed;
+  if (typeof o.options === 'object' && o.options !== null) {
+    const innerSeed = (o.options as { seed?: unknown }).seed;
+    if (typeof innerSeed === 'string' && innerSeed) return innerSeed;
+  }
+  return undefined;
+}
+
 export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
   activeRuns: [],
   history: [],
@@ -85,6 +109,7 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
   compareRunIdA: null,
   compareRunIdB: null,
   loadingHistory: false,
+  loadingActiveRuns: false,
   compareResult: null,
   simOptions: {},
 
@@ -111,6 +136,7 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
         caseId: simulationCase.name,
         caseName: simulationCase.name,
         subsys: simulationCase.subsys,
+        seed: extractSeed(options),
         status: 'running',
         startTime: Date.now(),
         terminalId: result.terminalId,
@@ -216,6 +242,92 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
     }
   },
 
+  stopAllRuns: async () => {
+    const live = get().activeRuns.filter((r) => r.status === 'running' || r.status === 'pending');
+    if (live.length === 0) {
+      useToastStore.getState().info('没有运行中的仿真');
+      return;
+    }
+    // 与 SimulationView 停止全部一致：终端运行走 terminalId，插件运行走 runId
+    for (const run of live) {
+      if (run.terminalId) await get().abortTerminalRun(run.terminalId);
+      else await get().abortSimulation(run.projectId, run.runId);
+    }
+  },
+
+  rerunRun: async (run) => {
+    if (!run.command) {
+      useToastStore.getState().error('无法重跑', '该运行没有可重放的命令');
+      return null;
+    }
+    try {
+      const result = await trpc.simulation.rerunWithCommand.mutate({
+        projectId: run.projectId,
+        command: run.command,
+        cwd: run.cwd ?? '',
+        caseId: run.caseId,
+        caseName: run.caseName,
+        subsys: run.subsys,
+      });
+      const terminal = useTerminalStore.getState();
+      const tabId = terminal.createTabForSession(
+        result.terminalId,
+        `sim: ${run.caseName ?? run.caseId}`,
+        run.cwd,
+        (result as { backend?: string }).backend === 'log-mode',
+        (result as { warning?: string | null }).warning ?? null,
+      );
+      terminal.setActiveTab(tabId);
+      const displayCommand = result.command ?? run.command;
+      // upsert：IPC run:started 事件可能先于 mutate 返回到达
+      set((s) => {
+        const existing = s.activeRuns.find((r) => r.runId === result.runId);
+        if (existing) {
+          return {
+            activeRuns: s.activeRuns.map((r) =>
+              r.runId === result.runId
+                ? {
+                    ...r,
+                    terminalId: r.terminalId ?? result.terminalId,
+                    command: r.command ?? displayCommand,
+                    cwd: r.cwd ?? run.cwd,
+                    status: 'running' as SimulationStatus,
+                    backend: (result as { backend?: string }).backend,
+                    warning: (result as { warning?: string | null }).warning,
+                  }
+                : r,
+            ),
+          };
+        }
+        return {
+          activeRuns: [
+            ...s.activeRuns,
+            {
+              runId: result.runId,
+              projectId: run.projectId,
+              caseId: run.caseId,
+              caseName: run.caseName,
+              subsys: run.subsys,
+              seed: run.seed,
+              status: 'running' as SimulationStatus,
+              startTime: Date.now(),
+              terminalId: result.terminalId,
+              command: displayCommand,
+              cwd: run.cwd,
+              backend: (result as { backend?: string }).backend,
+              warning: (result as { warning?: string | null }).warning,
+            },
+          ],
+        };
+      });
+      useToastStore.getState().info(`重新执行仿真: ${run.caseName ?? run.caseId}`);
+      return tabId;
+    } catch (err) {
+      useToastStore.getState().error('重新执行仿真失败', tRPCError(err));
+      return null;
+    }
+  },
+
   loadHistory: async (projectId) => {
     set({ loadingHistory: true });
     try {
@@ -228,23 +340,46 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
   },
 
   loadActiveRuns: async (projectId) => {
+    set({ loadingActiveRuns: true });
     try {
       const runs = await trpc.simulation.listActiveRuns.query({ projectId });
-      set({
-        activeRuns: runs.map((r) => ({
-          runId: r.runId,
-          projectId: r.projectId,
-          caseId: r.options.caseId,
-          caseName: r.options.caseName,
-          subsys: r.options.subsys,
-          status: r.status.status as SimulationStatus,
-          startTime: r.startTime,
-          endTime: r.endTime,
-          compileErrors: r.compileErrors,
-        })),
+      set((s) => {
+        // 按 runId 合并而非整表替换：SimulationManager 只跟踪插件运行，
+        // 终端运行仅存在于本地 store（IPC 事件驱动），整表替换会丢失它们。
+        const byId = new Map(s.activeRuns.map((r) => [r.runId, r]));
+        for (const r of runs) {
+          const incoming: SimulationRunRecord = {
+            runId: r.runId,
+            projectId: r.projectId,
+            caseId: r.options.caseId,
+            caseName: r.options.caseName,
+            subsys: r.options.subsys,
+            seed: extractSeed(r.options),
+            status: r.status.status as SimulationStatus,
+            startTime: r.startTime,
+            endTime: r.endTime,
+            compileErrors: r.compileErrors,
+          };
+          const existing = byId.get(r.runId);
+          byId.set(
+            r.runId,
+            existing
+              ? {
+                  ...existing,
+                  status: incoming.status,
+                  endTime: incoming.endTime,
+                  compileErrors: incoming.compileErrors,
+                  seed: incoming.seed ?? existing.seed,
+                }
+              : incoming,
+          );
+        }
+        return { activeRuns: Array.from(byId.values()) };
       });
     } catch {
       // best-effort
+    } finally {
+      set({ loadingActiveRuns: false });
     }
   },
 
@@ -276,7 +411,7 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
       caseId?: string;
       caseName?: string;
       subsys?: string;
-      options?: { caseId?: string; caseName?: string; subsys?: string };
+      options?: { caseId?: string; caseName?: string; subsys?: string; seed?: unknown; options?: { seed?: unknown } };
       status: PluginRunStatus | string;
       startTime: number;
       endTime?: number;
@@ -318,6 +453,7 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
             caseId: ipcRecord.caseId ?? ipcRecord.options?.caseId ?? '',
             caseName: ipcRecord.caseName ?? ipcRecord.options?.caseName,
             subsys: ipcRecord.subsys ?? ipcRecord.options?.subsys ?? '',
+            seed: extractSeed(ipcRecord.options),
             status: statusStr,
             startTime: ipcRecord.startTime,
             endTime: ipcRecord.endTime,

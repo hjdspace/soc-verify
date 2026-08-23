@@ -24,6 +24,7 @@ import {
   resolveGroupRefs,
 } from '../../regression/regression-discovery';
 import { RegressionRunner } from '../../regression/regression-runner';
+import { regressionRunTracker } from '../../regression/regression-run-tracker';
 import type { RegressionRunOptions } from '@shared/types/regression';
 import { caseStatsRegistry } from '../../case/case-stats-registry';
 
@@ -160,6 +161,15 @@ export const regressionRouter = t.router({
         project.rootPath,
       );
 
+      // 登记运行中回归（TitleBar 徽章 / 回归终态通知 / regression:event 数据源）
+      regressionRunTracker.track({
+        runId: result.runId,
+        terminalId: result.terminalId,
+        projectId: input.projectId,
+        subsys: input.subsys,
+        filePath: input.filePath,
+      });
+
       return result;
     }),
 
@@ -176,11 +186,25 @@ export const regressionRouter = t.router({
     })
     .mutation(({ input }) => {
       const project = requireProject(input.projectId);
+      // 优先走单例 tracker（运行中的回归都登记在此；销毁终端后 exit 监听统一落终态），
+      // 兜底走 runner（tracker 未覆盖到的历史路径）
+      const ok = regressionRunTracker.abort(input.runId);
+      if (ok) return { ok };
       const db = caseStatsRegistry.getDb(project.rootPath);
       const runner = new RegressionRunner(project.rootPath, db);
-      const ok = runner.abort(input.runId);
-      return { ok };
+      return { ok: runner.abort(input.runId) };
     }),
+
+  /**
+   * List active regression runs (TitleBar 回归徽章数据源；
+   * 启动时拉取，此后经 regression:event 事件流同步).
+   */
+  getActiveRuns: t.procedure
+    .input((raw): { projectId?: string } => {
+      const r = raw as Record<string, unknown>;
+      return { projectId: typeof r.projectId === 'string' ? r.projectId : undefined };
+    })
+    .query(({ input }) => regressionRunTracker.getActive(input.projectId)),
 
   /**
    * Get regression history (past runs).

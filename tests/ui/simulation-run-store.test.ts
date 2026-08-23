@@ -3,12 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   runInTerminal: vi.fn(),
+  abort: vi.fn(),
+  abortTerminalRun: vi.fn(),
 }));
 
 vi.mock('@renderer/lib/trpc', () => ({
   trpc: {
     simulation: {
       runInTerminal: { mutate: mocks.runInTerminal },
+      abort: { mutate: mocks.abort },
+      abortTerminalRun: { mutate: mocks.abortTerminalRun },
     },
   },
 }));
@@ -135,5 +139,28 @@ describe('Terminal Simulation Run launch', () => {
     expect(useSimulationStore.getState().simOptions).toEqual({
       seed: '7', post: true, base: 'base_b', block: 'core_top', case: 'case_b',
     });
+  });
+
+  it('stopAllRuns：终端运行走 abortTerminalRun，插件运行走 abort，跳过已结束运行（Issue #9）', async () => {
+    const now = Date.now();
+    useSimulationStore.setState({
+      activeRuns: [
+        { runId: 'r-term', projectId: 'project-1', caseId: 'c1', subsys: 'core', status: 'running', startTime: now, terminalId: 'term-1' },
+        { runId: 'r-plugin', projectId: 'project-1', caseId: 'c2', subsys: 'core', status: 'running', startTime: now },
+        { runId: 'r-queued', projectId: 'project-1', caseId: 'c3', subsys: 'core', status: 'pending', startTime: now, terminalId: 'term-3' },
+        { runId: 'r-done', projectId: 'project-1', caseId: 'c4', subsys: 'core', status: 'pass', startTime: now, endTime: now, terminalId: 'term-2' },
+      ],
+    });
+    mocks.abort.mockResolvedValue(undefined);
+    mocks.abortTerminalRun.mockResolvedValue(undefined);
+
+    await useSimulationStore.getState().stopAllRuns();
+
+    // 终端运行（含队列中）走 abortTerminalRun，插件运行走 abort mutation，已结束的跳过
+    expect(mocks.abortTerminalRun).toHaveBeenCalledTimes(2);
+    expect(mocks.abortTerminalRun).toHaveBeenCalledWith({ terminalId: 'term-1' });
+    expect(mocks.abortTerminalRun).toHaveBeenCalledWith({ terminalId: 'term-3' });
+    expect(mocks.abort).toHaveBeenCalledTimes(1);
+    expect(mocks.abort).toHaveBeenCalledWith({ projectId: 'project-1', runId: 'r-plugin' });
   });
 });

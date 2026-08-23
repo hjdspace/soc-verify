@@ -30,6 +30,7 @@ import {
 } from '../../coverage/coverage-exporter';
 import { sessionManager } from '../../agent/session-manager';
 import { credentialManager } from '../../credentials/credential-manager';
+import { notificationManager } from '../../notifications/notification-manager';
 import { pluginLoader } from '../../plugins/loader';
 import { PluginBackedCoverage, PluginBackedDiscovery, PluginBackedSimulation } from '../../plugin-adapters';
 import {
@@ -94,6 +95,30 @@ function emitClosureEvent(event: ClosureEvent): void {
       win.webContents.send('closure:event', event);
     }
   }
+}
+
+/** mission-control 总覆盖目标（原型 90% 目标线，Issue #5 趋势图同值） */
+const COVERAGE_GOAL = 90;
+
+/**
+ * 覆盖率导入完成 → 通知中心入库。
+ * 达标（≥90%）记 success，否则记 coverage（蓝色）并标注距目标差值——真实数据，不造假。
+ */
+function notifyCoverageImported(summary: CoverageSummary): void {
+  const overall = summary.overall;
+  if (overall >= COVERAGE_GOAL) {
+    void notificationManager.add({
+      type: 'success',
+      title: `覆盖率达标 · 总覆盖 ${overall.toFixed(1)}%`,
+      detail: `覆盖率导入完成（目标 ${COVERAGE_GOAL}%）`,
+    });
+    return;
+  }
+  void notificationManager.add({
+    type: 'coverage',
+    title: `覆盖率 ${overall.toFixed(1)}%，距目标还差 ${(COVERAGE_GOAL - overall).toFixed(1)}%`,
+    detail: '覆盖率导入完成',
+  });
 }
 
 function buildManager(projectRoot: string): CoverageManager {
@@ -234,9 +259,14 @@ export const coverageRouter = t.router({
         input.covMergeDir, edaConfig, targets,
         emitCoverageImportProgress,
       );
+      const summary = (await mgr.getOverview(result.sessionId)).summary;
+
+      // 覆盖率事件补发：导入完成后通知中心入库（mission-control 通知数据源之一）
+      notifyCoverageImported(summary);
+
       return {
         sessionId: result.sessionId,
-        summary: (await mgr.getOverview(result.sessionId)).summary,
+        summary,
         warnings: result.warnings,
         reportDir: result.reportDir,
         edaAllFailed: result.edaAllFailed,

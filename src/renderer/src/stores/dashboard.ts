@@ -10,6 +10,7 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
+import type { MilestoneNode } from '@shared/types/milestone';
 
 // ─── 类型定义 ───────────────────────────────────────────────
 
@@ -132,6 +133,9 @@ export type DebugDifficultyData = {
   failCountBeforePass: number;
 }[];
 
+// 里程碑节点类型复用 @shared/types/milestone（getMilestones 返回结构）
+export type { MilestoneNode } from '@shared/types/milestone';
+
 /** 标签页列表（固定顺序，不支持重排） */
 export const DASHBOARD_TABS: { id: DashboardTab; label: string }[] = [
   { id: 'overview', label: '概览' },
@@ -182,6 +186,8 @@ interface DashboardStoreState {
   unstableCases: UnstableCasesData | null;
   phasePassRate: PhasePassRateData | null;
   debugDifficulty: DebugDifficultyData | null;
+  milestones: MilestoneNode[] | null;
+  milestonesLoading: boolean;
   tabLoaded: Partial<Record<DashboardTab, boolean>>;
   tabError: Partial<Record<DashboardTab, string>>;
 
@@ -198,6 +204,7 @@ interface DashboardStoreState {
   setTrendGranularity: (granularity: TrendGranularity) => void;
   clearCache: () => void;
   loadSubsysList: (projectId: string) => Promise<void>;
+  loadMilestones: (projectId: string) => Promise<void>;
   loadTabData: (tab: DashboardTab, projectId: string) => Promise<void>;
   refresh: (projectId: string) => Promise<void>;
   loadLayout: (projectId: string) => Promise<void>;
@@ -241,6 +248,8 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
   unstableCases: null,
   phasePassRate: null,
   debugDifficulty: null,
+  milestones: null,
+  milestonesLoading: false,
   tabLoaded: {},
   tabError: {},
   loadingTab: null,
@@ -315,6 +324,7 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
     unstableCases: null,
     phasePassRate: null,
     debugDifficulty: null,
+    milestones: null,
     tabLoaded: {},
     tabError: {},
   }),
@@ -329,6 +339,22 @@ export const useDashboardStore = create<DashboardStoreState>((set, get) => ({
       set({ subsysListLoading: false });
       useToastStore.getState().error(
         '加载子系统列表失败',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  },
+
+  // ─── 加载里程碑（总览视图流程节点，真实数据驱动） ────────
+  loadMilestones: async (projectId) => {
+    if (get().milestonesLoading) return;
+    set({ milestonesLoading: true });
+    try {
+      const result = await trpc.dashboard.getMilestones.query({ projectId });
+      set({ milestones: result, milestonesLoading: false });
+    } catch (err) {
+      set({ milestonesLoading: false });
+      useToastStore.getState().error(
+        '加载里程碑失败',
         err instanceof Error ? err.message : String(err),
       );
     }

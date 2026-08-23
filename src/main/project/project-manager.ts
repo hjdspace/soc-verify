@@ -28,6 +28,14 @@ const PLUGIN_CONFIG_FILE = 'plugins.json';
 const HIDDEN_DIRS = new Set(['.socverify', '.git']);
 
 const WATCH_DEBOUNCE_MS = 500;
+const DIRECTORY_CACHE_TTL_MS = 60_000;
+const PREFETCH_CONCURRENCY = 2;
+const PREFETCH_DIRECTORY_LIMIT = 500;
+
+type DirectoryChildrenCacheEntry = {
+  children: FileTreeNode[];
+  expiresAt: number;
+};
 
 export function shouldUseRecursiveFileWatcher(platform: NodeJS.Platform): boolean {
   return platform === 'win32' || platform === 'darwin';
@@ -50,6 +58,9 @@ export interface ProjectEntry {
 class ProjectManagerImpl extends EventEmitter {
   private projects = new Map<string, ProjectEntry>();
   private fileTreeCache = new Map<string, FileTreeNode>();
+  private directoryChildrenCache = new Map<string, DirectoryChildrenCacheEntry>();
+  private directoryChildrenRequests = new Map<string, Promise<FileTreeNode[]>>();
+  private fileTreeCacheGenerations = new Map<string, number>();
 
   /** Cache key suffix for rootPath file tree. */
   private static readonly ROOT_DIR_ID = 'root';
@@ -161,6 +172,21 @@ class ProjectManagerImpl extends EventEmitter {
         this.fileTreeCache.delete(key);
       }
     }
+    for (const key of this.directoryChildrenCache.keys()) {
+      if (key.startsWith(projectId + ':')) {
+        this.directoryChildrenCache.delete(key);
+      }
+    }
+    for (const key of this.directoryChildrenRequests.keys()) {
+      if (key.startsWith(projectId + ':')) {
+        this.directoryChildrenRequests.delete(key);
+      }
+    }
+    for (const [scopeKey, generation] of this.fileTreeCacheGenerations) {
+      if (scopeKey.startsWith(projectId + ':')) {
+        this.fileTreeCacheGenerations.set(scopeKey, generation + 1);
+      }
+    }
     this.emit('project:closed', projectId);
   }
 
@@ -205,6 +231,7 @@ class ProjectManagerImpl extends EventEmitter {
     // are marked via a separate non-blocking pass (getDirChildren applies it per-dir).
     // Only do the initial mark if git is available and fast.
     this.fileTreeCache.set(cacheKey, tree);
+    this.scheduleDirectoryPrefetch(projectId, ProjectManagerImpl.ROOT_DIR_ID, tree.children ?? []);
     return tree;
   }
 
@@ -227,6 +254,7 @@ class ProjectManagerImpl extends EventEmitter {
 
     const tree = await this.buildFileTreeShallow(dir.path);
     this.fileTreeCache.set(cacheKey, tree);
+    this.scheduleDirectoryPrefetch(projectId, dirId, tree.children ?? []);
 
     // Ensure the watcher is started for this directory
     this.ensureDirWatcher(projectId, entry, dirId, dir.path);
@@ -262,7 +290,115 @@ class ProjectManagerImpl extends EventEmitter {
       if (rel.startsWith('..')) throw new Error('Path is outside project root');
     }
 
-    return this.buildFileTreeShallowChildren(dirPath);
+    return this.loadDirectoryChildren(projectId, dirId ?? ProjectManagerImpl.ROOT_DIR_ID, dirPath);
+  }
+
+  private scheduleDirectoryPrefetch(projectId: string, dirId: string, rootChildren: FileTreeNode[]): void {
+    const scopeKey = this.fileTreeScopeKey(projectId, dirId);
+    const generation = this.fileTreeCacheGenerations.get(scopeKey) ?? 0;
+
+    setTimeout(() => {
+      if (!this.projects.has(projectId)) return;
+      void this.prefetchDirectories(projectId, dirId, rootChildren, generation);
+    }, 0);
+  }
+
+  private async prefetchDirectories(
+    projectId: string,
+    dirId: string,
+    rootChildren: FileTreeNode[],
+    generation: number,
+  ): Promise<void> {
+    const scopeKey = this.fileTreeScopeKey(projectId, dirId);
+    const queue = rootChildren.filter(
+      (child) => child.type === 'directory' && !HIDDEN_DIRS.has(child.name),
+    );
+    let nextIndex = 0;
+    let visited = 0;
+
+    const worker = async (): Promise<void> => {
+      while (
+        nextIndex < queue.length
+        && visited < PREFETCH_DIRECTORY_LIMIT
+        && this.projects.has(projectId)
+        && (this.fileTreeCacheGenerations.get(scopeKey) ?? 0) === generation
+      ) {
+        const directory = queue[nextIndex++];
+        visited++;
+
+        try {
+          const children = await this.loadDirectoryChildren(projectId, dirId, directory.path);
+          for (const child of children) {
+            if (child.type === 'directory' && !HIDDEN_DIRS.has(child.name)) {
+              queue.push(child);
+            }
+          }
+        } catch {
+          // Background prefetch is best-effort; foreground expansion reports its own result.
+        }
+      }
+    };
+
+    await Promise.all(Array.from({ length: PREFETCH_CONCURRENCY }, () => worker()));
+  }
+
+  private async loadDirectoryChildren(
+    projectId: string,
+    dirId: string,
+    dirPath: string,
+  ): Promise<FileTreeNode[]> {
+    const scopeKey = this.fileTreeScopeKey(projectId, dirId);
+    const cacheKey = `${scopeKey}:${normalize(resolve(dirPath))}`;
+    const cached = this.directoryChildrenCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.children;
+    if (cached) this.directoryChildrenCache.delete(cacheKey);
+
+    const pending = this.directoryChildrenRequests.get(cacheKey);
+    if (pending) return pending;
+
+    const generation = this.fileTreeCacheGenerations.get(scopeKey) ?? 0;
+    const request = this.buildFileTreeShallowChildren(dirPath)
+      .then((children) => {
+        if (
+          this.projects.has(projectId)
+          && (this.fileTreeCacheGenerations.get(scopeKey) ?? 0) === generation
+        ) {
+          this.directoryChildrenCache.set(cacheKey, {
+            children,
+            expiresAt: Date.now() + DIRECTORY_CACHE_TTL_MS,
+          });
+        }
+        return children;
+      })
+      .finally(() => {
+        if (this.directoryChildrenRequests.get(cacheKey) === request) {
+          this.directoryChildrenRequests.delete(cacheKey);
+        }
+      });
+
+    this.directoryChildrenRequests.set(cacheKey, request);
+    return request;
+  }
+
+  private fileTreeScopeKey(projectId: string, dirId: string): string {
+    return `${projectId}:${dirId}`;
+  }
+
+  private invalidateFileTreeScope(projectId: string, dirId: string): void {
+    const scopeKey = this.fileTreeScopeKey(projectId, dirId);
+    this.fileTreeCache.delete(scopeKey);
+    this.fileTreeCacheGenerations.set(
+      scopeKey,
+      (this.fileTreeCacheGenerations.get(scopeKey) ?? 0) + 1,
+    );
+
+    const prefix = `${scopeKey}:`;
+    for (const key of this.directoryChildrenCache.keys()) {
+      if (key.startsWith(prefix)) this.directoryChildrenCache.delete(key);
+    }
+    for (const key of this.directoryChildrenRequests.keys()) {
+      if (key.startsWith(prefix)) this.directoryChildrenRequests.delete(key);
+    }
   }
 
   /**
@@ -470,8 +606,7 @@ class ProjectManagerImpl extends EventEmitter {
     }
 
     const newTimer = setTimeout(() => {
-      const cacheKey = `${projectId}:${dirId}`;
-      this.fileTreeCache.delete(cacheKey);
+      this.invalidateFileTreeScope(projectId, dirId);
       const update: FileTreeUpdate = { projectId, type: 'change', path };
       this.emit('filetree:update', update);
       setTimer(null);
@@ -897,6 +1032,7 @@ class ProjectManagerImpl extends EventEmitter {
 
     project.extraDirs = remaining.length > 0 ? remaining : undefined;
     await this.saveProjectsDb();
+    this.invalidateFileTreeScope(projectId, dirId);
 
     // If the removed dir was cwd, notify the renderer to rebuild the active
     // AI session with the new cwd (same as explicit setCwd).
@@ -1038,6 +1174,9 @@ class ProjectManagerImpl extends EventEmitter {
     }
     this.projects.clear();
     this.fileTreeCache.clear();
+    this.directoryChildrenCache.clear();
+    this.directoryChildrenRequests.clear();
+    this.fileTreeCacheGenerations.clear();
   }
 }
 

@@ -18,6 +18,8 @@ function createMockSessionManager() {
     getClient: vi.fn(() => ({
       prompt: vi.fn(async () => {}),
     })),
+    promptFireAndForget: vi.fn(async () => {}),
+    touchActivity: vi.fn(),
     _sessions: sessions,
   };
 }
@@ -152,8 +154,7 @@ describe('ErrorAnalysisSessionFactory', () => {
   });
 
   it('sends initial prompt message to the agent', async () => {
-    const mockPrompt = vi.fn(async (_msg: string) => {});
-    mockSessionManager.getClient.mockReturnValue({ prompt: mockPrompt } as never);
+    mockSessionManager.getClient.mockReturnValue({ prompt: vi.fn(async () => {}) } as never);
 
     await factory.createSession({
       projectId: 'proj1',
@@ -164,8 +165,9 @@ describe('ErrorAnalysisSessionFactory', () => {
       maxRetries: 3,
     });
 
-    expect(mockPrompt).toHaveBeenCalledOnce();
-    const promptText = mockPrompt.mock.calls[0][0] as unknown as string;
+    expect(mockSessionManager.promptFireAndForget).toHaveBeenCalledOnce();
+    const calls = mockSessionManager.promptFireAndForget.mock.calls as unknown as Array<unknown[]>;
+    const promptText = calls[0][1] as string;
     expect(promptText).toContain('test_uart');
     expect(promptText).toContain('Error details here');
   });

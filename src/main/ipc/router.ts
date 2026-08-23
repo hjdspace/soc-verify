@@ -16,6 +16,7 @@ import { terminalRouter } from './routers/terminal-router';
 import { envRouter } from './routers/env-router';
 import { coverageRouter } from './routers/coverage-router';
 import { regressionRouter } from './routers/regression-router';
+import { notificationRouter } from './routers/notification-router';
 import { dashboardRouter } from './routers/dashboard-router';
 import { toRouter } from './routers/to-router';
 import { settingsRouter } from './routers/settings-router';
@@ -45,6 +46,7 @@ export const router = t.router({
   env: envRouter,
   coverage: coverageRouter,
   regression: regressionRouter,
+  notifications: notificationRouter,
   dashboard: dashboardRouter,
   to: toRouter,
   settings: settingsRouter,

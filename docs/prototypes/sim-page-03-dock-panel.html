@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-variant="3">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>方案3 · 左 Dock + 底部 Option Dock — 仿真页面原型</title>
+<style>
+:root {
+  --bg: oklch(0.17 0.008 60); --bg-deep: oklch(0.14 0.008 60);
+  --surface: oklch(0.20 0.008 60); --surface-hi: oklch(0.24 0.010 60);
+  --border: oklch(0.27 0.010 60); --border-hi: oklch(0.34 0.012 60);
+  --fg: oklch(0.93 0.006 60); --fg-dim: oklch(0.66 0.008 60); --fg-faint: oklch(0.48 0.008 60);
+  --accent: oklch(0.80 0.16 145); --accent-dim: oklch(0.80 0.16 145 / 0.14);
+  --blue: oklch(0.72 0.12 230); --blue-dim: oklch(0.72 0.12 230 / 0.15);
+  --amber: oklch(0.80 0.13 80); --amber-dim: oklch(0.80 0.13 80 / 0.15);
+  --red: oklch(0.68 0.18 25); --red-dim: oklch(0.68 0.18 25 / 0.15);
+  --violet: oklch(0.72 0.14 295); --violet-dim: oklch(0.72 0.14 295 / 0.15);
+  --mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  --sans: 'Segoe UI', -apple-system, sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body { font-family: var(--sans); font-size: 13px; background: var(--bg); color: var(--fg); display: flex; flex-direction: column; font-variant-numeric: tabular-nums; }
+button { font-family: inherit; background: none; border: none; cursor: pointer; color: inherit; font-size: 13px; }
+input, select { font-family: inherit; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; font-size: 11px; outline: none; }
+input:focus, select:focus { border-color: var(--accent); }
+svg { display: inline-block; vertical-align: middle; }
+.toggle { position: relative; width: 28px; height: 16px; border-radius: 999px; background: var(--border); cursor: pointer; transition: background 200ms; flex-shrink: 0; }
+.toggle.on { background: var(--accent); }
+.toggle .knob { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--fg); transition: transform 200ms; }
+.toggle.on .knob { transform: translateX(12px); }
+@keyframes pd { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+.titlebar { height: 36px; display: flex; align-items: center; gap: 12px; padding: 0 12px; background: var(--bg-deep); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.titlebar .logo-name { font-size: 12px; font-weight: 600; }
+.titlebar .proj { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-dim); }
+.titlebar .proj .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.titlebar .spacer { flex: 1; }
+
+.navrail { width: 48px; display: flex; flex-direction: column; gap: 4px; padding: 8px 0; background: var(--bg-deep); border-right: 1px solid var(--border); flex-shrink: 0; }
+.navrail .nav-item { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; margin: 0 auto; border-radius: 8px; color: var(--fg-dim); transition: all 150ms; }
+.navrail .nav-item:hover { background: var(--surface-hi); color: var(--fg); }
+.navrail .nav-item.active { background: var(--accent-dim); color: var(--accent); }
+
+.main { flex: 1; display: flex; overflow: hidden; }
+.sim-page { flex: 1; display: flex; overflow: hidden; }
+
+/* ── 左侧 Dock 面板（可折叠为图标列） ── */
+.left-dock { width: 260px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--surface); border-right: 1px solid var(--border); transition: width 200ms; }
+.left-dock .dock-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.left-dock .dock-header h3 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); }
+.left-dock .dock-header .acts { display: flex; gap: 4px; }
+.left-dock .dock-header .acts button { padding: 2px; border-radius: 4px; color: var(--fg-dim); }
+.left-dock .dock-header .acts button:hover { background: var(--surface-hi); color: var(--fg); }
+.left-dock .sb { position: relative; padding: 8px 12px; }
+.left-dock .sb input { width: 100%; padding-left: 24px; }
+.left-dock .sb svg { position: absolute; left: 20px; top: 50%; transform: translateY(-50%); width: 12px; height: 12px; color: var(--fg-faint); }
+.left-dock .sf { display: flex; gap: 2px; padding: 0 12px 8px; flex-wrap: wrap; }
+.left-dock .sf button { font-size: 10px; padding: 2px 6px; border-radius: 4px; color: var(--fg-dim); transition: all 150ms; }
+.left-dock .sf button:hover { background: var(--surface-hi); color: var(--fg); }
+.left-dock .sf button.active { background: var(--accent-dim); color: var(--accent); }
+.left-dock .tree { flex: 1; overflow-y: auto; padding: 2px 8px; }
+
+.tree-node { display: flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: 4px; font-size: 12px; cursor: pointer; transition: background 100ms; }
+.tree-node:hover { background: var(--surface-hi); }
+.tree-node.subsys { font-weight: 600; color: var(--fg); }
+.tree-node.case { color: var(--fg-dim); padding-left: 20px; }
+.tree-node.case.selected { background: var(--accent-dim); color: var(--accent); }
+.tree-node .sd { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.tree-node .sd.pass{background:var(--accent)} .tree-node .sd.fail{background:var(--red)}
+.tree-node .sd.running{background:var(--blue);animation:pd 1.5s ease-out infinite} .tree-node .sd.pending{background:var(--fg-faint)}
+.tree-node .chevron { width: 10px; height: 10px; opacity: 0.4; flex-shrink: 0; }
+.tree-node .icon { width: 12px; height: 12px; flex-shrink: 0; opacity: 0.6; }
+.tree-node .count { margin-left: auto; font-size: 10px; color: var(--fg-faint); }
+
+/* ── 中栏：运行列表占满 ── */
+.center-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.center-area .view-header { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--border); }
+.center-area .view-header h2 { font-size: 14px; font-weight: 600; }
+.center-area .view-header .lc { font-size: 11px; color: var(--fg-dim); }
+.center-area .view-header .segs { display: flex; gap: 2px; }
+.center-area .view-header .seg { font-size: 11px; padding: 3px 8px; border-radius: 4px; color: var(--fg-dim); transition: all 150ms; }
+.center-area .view-header .seg:hover { background: var(--surface-hi); color: var(--fg); }
+.center-area .view-header .seg.active { background: var(--surface-hi); color: var(--fg); font-weight: 600; }
+.center-area .view-header .seg .cnt { font-size: 10px; color: var(--fg-faint); }
+.center-area .view-header .search { display: flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 6px; padding: 3px 12px; margin-left: auto; }
+.center-area .view-header .search input { border: none; background: transparent; padding: 0; width: 120px; }
+.center-area .view-header .sa { font-size: 11px; color: var(--red); display: flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 4px; }
+.center-area .view-header .sa:hover { background: var(--red-dim); }
+.center-area .rh { display: grid; grid-template-columns: 18px 1.4fr 100px 1fr 80px 70px; gap: 8px; padding: 6px 16px; border-bottom: 1px solid var(--border); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-faint); }
+.center-area .table { flex: 1; overflow-y: auto; }
+.center-area .row { display: grid; grid-template-columns: 18px 1.4fr 100px 1fr 80px 70px; align-items: center; gap: 8px; padding: 6px 16px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 100ms; }
+.center-area .row:hover { background: var(--surface-hi); }
+.center-area .row .dot { width: 8px; height: 8px; border-radius: 50%; }
+.center-area .row .dot.pass{background:var(--accent)} .center-area .row .dot.fail{background:var(--red)}
+.center-area .row .dot.running{background:var(--blue);animation:pd 1.5s ease-out infinite}
+.center-area .row .dot.pending{background:var(--fg-faint)} .center-area .row .dot.aborted{background:var(--amber)}
+.center-area .row .case { font-family: var(--mono); font-size: 11px; }
+.center-area .row .sub { font-size: 10px; color: var(--fg-dim); }
+.center-area .row .prog { height: 4px; background: var(--bg-deep); border-radius: 2px; overflow: hidden; }
+.center-area .row .prog .bar { height: 100%; border-radius: 2px; }
+.center-area .row .prog .bar.running{width:33%;background:var(--blue);animation:pd 1.5s ease-out infinite}
+.center-area .row .prog .bar.pass{width:100%;background:var(--accent)} .center-area .row .prog .bar.fail{width:100%;background:var(--red)}
+.center-area .row .dur { font-family: var(--mono); font-size: 10px; text-align: right; color: var(--fg-dim); }
+.center-area .row .eta { font-family: var(--mono); font-size: 10px; text-align: right; }
+.center-area .row .eta.pass{color:var(--accent)} .center-area .row .eta.fail{color:var(--red)} .center-area .row .eta.pending{color:var(--fg-faint)}
+
+/* ── 底部 Option Dock（嵌入仿真页内部，非全局浮窗） ── */
+.option-dock { flex-shrink: 0; border-top: 1px solid var(--border); background: var(--surface); }
+.option-dock .od-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; border-bottom: 1px solid var(--border); }
+.option-dock .od-header .od-title { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); }
+.option-dock .od-header .od-title .badge { font-size: 10px; background: var(--accent-dim); color: var(--accent); padding: 1px 6px; border-radius: 4px; }
+.option-dock .od-header .od-title .case-name { font-family: var(--mono); color: var(--accent); text-transform: none; letter-spacing: 0; font-weight: 400; }
+.option-dock .od-header .ha { display: flex; align-items: center; gap: 8px; }
+.option-dock .od-header .ha .pb { font-size: 10px; color: var(--fg-dim); display: flex; align-items: center; gap: 4px; }
+.option-dock .od-header .ha .pi { width: 80px; font-size: 10px; }
+.option-dock .od-body { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; padding: 12px 16px; max-height: 180px; overflow-y: auto; }
+
+.opt-card { border: 1px solid var(--border); border-radius: 6px; background: var(--surface-hi); overflow: hidden; }
+.opt-card .ch { display: flex; align-items: center; gap: 6px; padding: 6px 12px; }
+.opt-card .ch .dot { width: 6px; height: 6px; border-radius: 50%; }
+.opt-card .ch .dot.blue{background:var(--blue)} .opt-card .ch .dot.violet{background:var(--violet)}
+.opt-card .ch .dot.accent{background:var(--accent)} .opt-card .ch .dot.amber{background:var(--amber)} .opt-card .ch .dot.red{background:var(--red)}
+.opt-card .ch .name { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-dim); }
+.opt-card .ch .cnt { font-size: 9px; color: var(--fg-faint); }
+.opt-card .cb { padding: 0 12px 8px; display: flex; flex-direction: column; gap: 4px; }
+.opt-card .field { display: flex; align-items: center; gap: 6px; }
+.opt-card .field label { font-size: 10px; font-weight: 500; color: var(--fg-dim); white-space: nowrap; }
+.opt-card .field input, .opt-card .field select { flex: 1; min-width: 0; }
+
+.cmd-bar { display: flex; align-items: stretch; border-top: 1px solid var(--border); background: var(--bg-deep); }
+.cmd-bar .prefix { display: flex; align-items: center; padding: 0 12px; font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--accent); }
+.cmd-bar .ct { flex: 1; min-width: 0; display: flex; align-items: center; padding: 6px 0; overflow-x: auto; }
+.cmd-bar .ct code { white-space: nowrap; font-family: var(--mono); font-size: 11px; }
+.cmd-bar .tb{font-weight:700;color:var(--accent)} .cmd-bar .tf{color:var(--blue)} .cmd-bar .tv{color:var(--violet)}
+.cmd-bar .cp { padding: 0 8px; font-size: 10px; color: var(--fg-dim); }
+.cmd-bar .cp:hover { color: var(--fg); }
+.cmd-bar .rb { display: flex; align-items: center; gap: 6px; padding: 0 16px; background: var(--accent); color: var(--bg-deep); font-weight: 700; font-size: 12px; transition: filter 100ms; }
+.cmd-bar .rb:hover { filter: brightness(1.1); }
+
+.statusbar { height: 24px; display: flex; align-items: center; gap: 12px; padding: 0 12px; background: var(--bg-deep); border-top: 1px solid var(--border); font-size: 11px; color: var(--fg-dim); flex-shrink: 0; }
+
+.switcher { position: fixed; bottom: 36px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; padding: 6px 16px; border-radius: 999px; background: var(--surface-hi); border: 1px solid var(--border-hi); box-shadow: 0 4px 20px rgba(0,0,0,0.4); z-index: 9999; }
+.switcher .arrow { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; color: var(--fg-dim); transition: all 150ms; }
+.switcher .arrow:hover { background: var(--surface); color: var(--fg); }
+.switcher .label { font-size: 12px; font-weight: 600; color: var(--fg); white-space: nowrap; }
+.switcher .vk { color: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="titlebar"><span class="logo-name">SoC Verify</span><div class="proj"><span class="dot"></span> myChip / verif</div><div class="spacer"></div></div>
+  <div class="main">
+    <nav class="navrail">
+      <div class="nav-item"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></div>
+      <div class="nav-item active"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg></div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg></div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M6 9v6"/><path d="M18 15V9"/></svg></div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 7v13h20V7"/><path d="M2 7l10-5 10 5"/></svg></div>
+    </nav>
+    <div class="sim-page">
+      <!-- 左侧 Dock：用例树 -->
+      <aside class="left-dock">
+        <div class="dock-header"><h3>子系统 / 用例</h3><div class="acts"><button title="刷新"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-3.5-7.1L21 8M21 3v5h-5"/></svg></button><button title="折叠"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg></button></div></div>
+        <div class="sb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg><input placeholder="搜索用例..." /></div>
+        <div class="sf"><button class="active">全部</button><button>通过</button><button>失败</button><button>运行中</button><button>待运行</button><button>后仿</button></div>
+        <div class="tree">
+          <div class="tree-node subsys"><svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg><span>apcpu_subsys</span><span class="count">42</span></div>
+          <div class="tree-node case"><span class="sd pass"></span><span>apcpu_hello_world</span></div>
+          <div class="tree-node case selected"><span class="sd pass"></span><span>apcpu_basic_read</span></div>
+          <div class="tree-node case"><span class="sd fail"></span><span>apcpu_dma_test</span></div>
+          <div class="tree-node case"><span class="sd running"></span><span>apcpu_interrupt</span></div>
+          <div class="tree-node subsys"><svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg><span>ddrc_subsys</span><span class="count">28</span></div>
+          <div class="tree-node subsys"><svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><line x1="9" y1="9" x2="15" y2="9"/><line x1="9" y1="13" x2="15" y2="13"/></svg><span>pcie_subsys</span><span class="count">15</span></div>
+        </div>
+      </aside>
+
+      <!-- 中栏：运行列表 + 底部 Option Dock -->
+      <div class="center-area">
+        <div class="view-header">
+          <h2>仿真运行</h2><span class="lc">1 运行中 · 3 已完成</span>
+          <div class="segs"><button class="seg active">全部 <span class="cnt">4</span></button><button class="seg">运行中 <span class="cnt">1</span></button><button class="seg">失败 <span class="cnt">1</span></button><button class="seg">通过 <span class="cnt">2</span></button></div>
+          <div class="search"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg><input placeholder="过滤..." /></div>
+          <button class="sa"><svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg> 停止全部</button>
+        </div>
+        <div class="rh"><span></span><span>用例</span><span>子系统</span><span>进度</span><span>耗时</span><span style="text-align:right">ETA</span></div>
+        <div class="table">
+          <div class="row"><span class="dot running"></span><span class="case">apcpu_interrupt</span><span class="sub">apcpu_subsys</span><div class="prog"><div class="bar running"></div></div><span class="dur">2m 14s</span><span class="eta pending">—</span></div>
+          <div class="row"><span class="dot pass"></span><span class="case">apcpu_basic_read</span><span class="sub">apcpu_subsys</span><div class="prog"><div class="bar pass"></div></div><span class="dur">45s</span><span class="eta pass">通过</span></div>
+          <div class="row"><span class="dot fail"></span><span class="case">apcpu_dma_test</span><span class="sub">apcpu_subsys</span><div class="prog"><div class="bar fail"></div></div><span class="dur">1m 02s</span><span class="eta fail">失败</span></div>
+          <div class="row"><span class="dot pass"></span><span class="case">apcpu_hello_world</span><span class="sub">apcpu_subsys</span><div class="prog"><div class="bar pass"></div></div><span class="dur">12s</span><span class="eta pass">通过</span></div>
+        </div>
+        <!-- 底部 Option Dock -->
+        <div class="option-dock">
+          <div class="od-header"><div class="od-title">仿真 Option <span class="badge">10</span> <span class="case-name">apcpu_basic_read</span></div><div class="ha"><button class="pb"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg> 预设</button><input class="pi" placeholder="预设名称" /><button title="保存"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg></button></div></div>
+          <div class="od-body">
+            <div class="opt-card"><div class="ch"><span class="dot blue"></span><span class="name">基础参数</span><span class="cnt">(3)</span></div><div class="cb"><div class="field"><label>BASE</label><input value="top" /></div><div class="field"><label>BLOCK</label><input value="udtb/usvp" /></div><div class="field"><label>CASE</label><input value="apcpu_basic_read" /></div></div></div>
+            <div class="opt-card"><div class="ch"><span class="dot violet"></span><span class="name">波形配置</span><span class="cnt">(2)</span></div><div class="cb"><div class="field"><label>WAVE</label><div class="toggle on"><div class="knob"></div></div></div><div class="field"><label>FSDB</label><select><option>on</option><option>off</option></select></div></div></div>
+            <div class="opt-card"><div class="ch"><span class="dot accent"></span><span class="name">仿真参数</span><span class="cnt">(3)</span></div><div class="cb"><div class="field"><label>SEED</label><input value="random" /></div><div class="field"><label>TIMEOUT</label><input value="100ms" /></div><div class="field"><label>SIMARG</label><input placeholder="+UVM_VERB=HIGH" /></div></div></div>
+            <div class="opt-card"><div class="ch"><span class="dot amber"></span><span class="name">执行模式</span><span class="cnt">(2)</span></div><div class="cb"><div class="field"><label>GUI</label><div class="toggle"><div class="knob"></div></div></div><div class="field"><label>DEBUG</label><div class="toggle"><div class="knob"></div></div></div></div></div>
+          </div>
+          <div class="cmd-bar"><div class="prefix">$</div><div class="ct"><code><span class="tb">runsim</span> <span class="tf">-base</span> <span class="tv">top</span> <span class="tf">-block</span> <span class="tv">udtb/usvp</span> <span class="tf">-case</span> <span class="tv">apcpu_basic_read</span> <span class="tf">-wave</span> <span class="tf">-seed</span> <span class="tv">random</span></code></div><button class="cp">复制</button><button class="rb"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg> 运行仿真</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar"><div class="item"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span> 就绪</div><div class="item">PROJ_RTL: /home/user/myChip/rtl</div></div>
+  <div class="switcher">
+    <a class="arrow" href="sim-page-02-master-detail.html"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg></a>
+    <span class="label"><span class="vk">3</span> — 左 Dock + 底部 Option Dock（渐进改造）</span>
+    <a class="arrow" href="sim-page-04-wizard-flow.html"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></a>
+  </div>
+</body>
+</html>

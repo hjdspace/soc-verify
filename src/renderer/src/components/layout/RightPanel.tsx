@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
-import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon, Shield, ShieldAlert, ShieldCheck, ChevronDown, Info } from 'lucide-react';
+import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon, Shield, ShieldAlert, ShieldCheck, ChevronDown, Info, PanelLeftClose } from 'lucide-react';
 import { useSessionStore, type ChatMessage, type AvailableModel, type SelectedSkill, type ContextFile, type HistorySession, type SessionEntry } from '@renderer/stores/session';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
@@ -18,12 +18,17 @@ import { ChangeSummaryBar } from '@renderer/components/chat/ChangeSummaryBar';
 import { getLatestTodoState } from '@renderer/components/chat/tool-helpers';
 import { useTodoPanelStore } from '@renderer/stores/todo-panel';
 import { ComposerEditor, type ChipData, type ComposerEditorApi } from './ComposerEditor';
+import { useUiStore } from '@renderer/stores/ui';
 
 interface RightPanelProps {
   width: number;
 }
 
-export function RightPanel({ width }: RightPanelProps) {
+/**
+ * AI 会话面板内容（消息流 + 会话标签 + composer + 审批卡等）。
+ * 外壳无关：docked 模式由 RightPanel 包固定侧栏，drawer 模式由 AiDrawer 包右抽屉。
+ */
+export function RightPanelContent() {
   const sessions = useSessionStore((s) => s.sessions);
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
   const currentSession = sessions.find((session) => session.id === currentSessionId);
@@ -613,10 +618,7 @@ export function RightPanel({ width }: RightPanelProps) {
   };
 
   return (
-    <aside
-      className="flex shrink-0 flex-col border-l bg-sidebar"
-      style={{ width: `${width}px` }}
-    >
+    <div className="flex min-h-0 flex-1 flex-col bg-sidebar">
       {/* ── 会话标签栏 ──────────────────────────────── */}
       <div className="flex items-center border-b">
         {/* Tabs — horizontally scrollable */}
@@ -1179,6 +1181,46 @@ export function RightPanel({ width }: RightPanelProps) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * AI 会话固定右栏（docked 模式外壳）：宽度可调，渲染在 workspace 视图右侧。
+ * 内容复用 RightPanelContent。
+ * 顶部提供「解除固定」按钮，切换回抽屉浮窗模式。
+ */
+export function RightPanel({ width }: RightPanelProps) {
+  const setAiPanelMode = useUiStore((s) => s.setAiPanelMode);
+  const toggleRightDrawer = useUiStore((s) => s.toggleRightDrawer);
+
+  /** 解除固定：切回抽屉模式并自动打开右抽屉，保持 AI 面板内容不中断。 */
+  const handleUnpin = () => {
+    setAiPanelMode('drawer');
+    // 延迟一帧打开抽屉，确保 mode 切换后 AiDrawer 已挂载
+    requestAnimationFrame(() => toggleRightDrawer());
+  };
+
+  return (
+    <aside
+      className="flex shrink-0 flex-col border-l bg-sidebar"
+      style={{ width: `${width}px` }}
+    >
+      {/* 解除固定栏 */}
+      <div className="flex items-center justify-between border-b border-border/50 px-3 py-1.5">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">AI 验证助手</span>
+        <button
+          type="button"
+          onClick={handleUnpin}
+          className="flex items-center gap-1 rounded-md px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          title="解除固定，切换为侧滑浮窗模式"
+          data-testid="ai-docked-unpin"
+        >
+          <PanelLeftClose className="size-3" />
+          解除固定
+        </button>
+      </div>
+      <RightPanelContent />
     </aside>
   );
 }

@@ -20,6 +20,8 @@ import {
   setScanMetadata,
   clearAllCases,
   clearAllSubsystems,
+  getPostSimCases,
+  setCasePostSim,
   type SubsysRow,
   type CaseRow,
 } from './db/case-repository';
@@ -113,6 +115,10 @@ export class CaseScanner {
 
     // Use transaction for atomic write
     const tx = this.db.transaction(() => {
+      // sync 模式清除前的用户后仿标记快照（后仿标记是用户数据，不由扫描产生，
+      // 全量重扫后按 (name, subsys) 恢复；用例已不存在的标记自然丢弃）
+      const postSimMarks = sync ? getPostSimCases(this.db) : [];
+
       if (sync) {
         // In sync mode, clear all old subsystems and cases before inserting
         // new scan results. This ensures subsystems that no longer exist
@@ -124,6 +130,10 @@ export class CaseScanner {
 
       insertSubsystems(this.db, subsysRows);
       insertCases(this.db, caseRows);
+
+      for (const mark of postSimMarks) {
+        setCasePostSim(this.db, mark.name, mark.subsys, true);
+      }
     });
     tx();
 

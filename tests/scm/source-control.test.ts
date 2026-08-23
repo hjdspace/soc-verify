@@ -57,6 +57,75 @@ describe('source control service', () => {
     expect(sanitizeCommitMessage(msg)).toBe('feat: add feature\n\n- detail line');
   });
 
+  it('strips reasoning process leaked after commit message', () => {
+    // Thinking models sometimes leak their reasoning into the output
+    const msg = [
+      'feat(scm): 优化提交信息生成的提示词与参数',
+      '',
+      '- 重写 system prompt 加入禁用词和示例',
+      '- 调整 temperature 和 max_tokens',
+      '',
+      '但 "优化" 可能有点泛，我们可以更具体："feat(scm): 增强提交信息生成规则与提示词"。',
+      '或者考虑到核心是改进提示词的格式和约束，可以写："feat(scm): 完善提交信息生成提示词并调整模型参数"。',
+      '我们需要简洁。我认为："feat(scm): 完善提交信息生成的提示词与重试逻辑" 比较好。',
+    ].join('\n');
+    expect(sanitizeCommitMessage(msg)).toBe(
+      'feat(scm): 优化提交信息生成的提示词与参数\n\n- 重写 system prompt 加入禁用词和示例\n- 调整 temperature 和 max_tokens',
+    );
+  });
+
+  it('strips reasoning process when no body is present', () => {
+    const msg = [
+      'feat: 添加用户登录功能',
+      '',
+      '我们需要考虑安全性。',
+      '也许应该用 OAuth？',
+    ].join('\n');
+    expect(sanitizeCommitMessage(msg)).toBe('feat: 添加用户登录功能');
+  });
+
+  it('extracts the final inline candidate from a reasoning response', () => {
+    const msg = [
+      '我们需要分析变更内容并判断 type 和 scope。',
+      '标题可以考虑：`feat(scm): 生成提交信息时引入最近提交与文件摘要并优化解析`。',
+      '也许更准确：`feat(scm): 增强提交信息生成的上下文与健壮性`？',
+      '最终建议使用：`feat(scm): 添加最近提交参考与输出解析`。',
+    ].join('\n');
+    expect(sanitizeCommitMessage(msg)).toBe('feat(scm): 添加最近提交参考与输出解析');
+  });
+
+  it('prefers the explicitly delimited final answer', () => {
+    const msg = [
+      '分析过程不应出现在提交信息中。',
+      '<commit-message>feat(scm): 清理 AI 提交信息输出</commit-message>',
+      '后续解释也不应保留。',
+    ].join('\n');
+    expect(sanitizeCommitMessage(msg)).toBe('feat(scm): 清理 AI 提交信息输出');
+  });
+
+  it('preserves body with blank lines between dash items', () => {
+    // Body lines starting with - should be preserved even if separated by blank lines
+    const msg = [
+      'feat: 添加新功能',
+      '',
+      '- 第一点',
+      '',
+      '- 第二点',
+    ].join('\n');
+    // Note: current implementation treats blank lines after body started as preserved
+    expect(sanitizeCommitMessage(msg)).toBe('feat: 添加新功能\n\n- 第一点\n\n- 第二点');
+  });
+
+  it('preserves a paragraph body returned without list markers', () => {
+    const msg = [
+      'feat: 添加提交信息生成',
+      '',
+      '根据变更文件生成符合规范的提交信息。',
+      '通过最近提交记录保持项目现有风格。',
+    ].join('\n');
+    expect(sanitizeCommitMessage(msg)).toBe(msg);
+  });
+
   it('generates commit messages through an OpenAI-compatible endpoint', async () => {
     let requestBody = '';
     const execFileFn = vi.fn((file, args, _options, callback) => {
@@ -67,6 +136,10 @@ describe('source control service', () => {
       }
       if (gitArgs[0] === 'status') {
         callback(null, '## main\0 M src/a.ts\0', '');
+        return;
+      }
+      if (gitArgs[0] === 'log') {
+        callback(null, 'feat: initial commit\nfix: bug fix\n', '');
         return;
       }
       callback(null, 'M\tsrc/a.ts\n', '');
@@ -88,6 +161,13 @@ describe('source control service', () => {
     expect(message).toBe('feat: add source control workflow');
     expect(requestBody).toContain('test-model');
     expect(requestBody).toContain('src/a.ts');
+    // Recent commits should be included for style reference
+    expect(requestBody).toContain('最近提交记录');
+    expect(requestBody).toContain('feat: initial commit');
+    // File summary should be included
+    expect(requestBody).toContain('变更文件概览');
+    expect(requestBody).toContain('至少 1 条 body');
+    expect(requestBody).toContain('不得只输出标题');
   });
 
   it('generates commit messages using staged diff when files are staged', async () => {
@@ -111,6 +191,10 @@ describe('source control service', () => {
       // For unstaged diff commands, return unstaged file
       if (gitArgs[0] === 'diff') {
         callback(null, 'M\tsrc/unstaged.ts\n', '');
+        return;
+      }
+      if (gitArgs[0] === 'log') {
+        callback(null, 'feat: previous staged commit\n', '');
         return;
       }
       callback(null, '', '');
@@ -145,6 +229,10 @@ describe('source control service', () => {
     }
     if (gitArgs[0] === 'status') {
       callback(null, '## main\0M  src/a.ts\0', '');
+      return;
+    }
+    if (gitArgs[0] === 'log') {
+      callback(null, 'feat: previous commit\n', '');
       return;
     }
     callback(null, 'M\tsrc/a.ts\n', '');
@@ -233,6 +321,46 @@ describe('source control service', () => {
     expect(callCount).toBe(2);
   });
 
+  it('retries when the response only contains reasoning text', async () => {
+    let callCount = 0;
+    const fetchFn = vi.fn((async () => {
+      callCount += 1;
+      const content = callCount === 1
+        ? '我们需要分析 diff，然后选择合适的 type 和 scope。'
+        : '<commit-message>fix: recovered after reasoning</commit-message>';
+      return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+    }) as typeof fetch);
+    const service = new SourceControlService({ execFileFn: fakeExecFileFn, fetchFn });
+    await expect(
+      service.generateCommitMessage(
+        'D:\\repo',
+        { providerId: 'openai-compatible', apiKey: 'test-key', baseUrl: 'https://example.test/v1' },
+        'test-model',
+      ),
+    ).resolves.toBe('fix: recovered after reasoning');
+    expect(callCount).toBe(2);
+  });
+
+  it('retries when the first response has only a title', async () => {
+    let callCount = 0;
+    const fetchFn = vi.fn((async () => {
+      callCount += 1;
+      const content = callCount === 1
+        ? 'feat: title without body'
+        : 'feat: title with body\n\n- 说明变更目的';
+      return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+    }) as typeof fetch);
+    const service = new SourceControlService({ execFileFn: fakeExecFileFn, fetchFn });
+    await expect(
+      service.generateCommitMessage(
+        'D:\\repo',
+        { providerId: 'openai-compatible', apiKey: 'test-key', baseUrl: 'https://example.test/v1' },
+        'test-model',
+      ),
+    ).resolves.toBe('feat: title with body\n\n- 说明变更目的');
+    expect(callCount).toBe(2);
+  });
+
   it('throws when both first and retry responses are empty', async () => {
     const fetchFn = vi.fn((async () => {
       return new Response(JSON.stringify({
@@ -247,6 +375,67 @@ describe('source control service', () => {
         'test-model',
       ),
     ).rejects.toThrow('AI response did not include a commit message');
+  });
+
+  it('classifies 401 error as authentication failure', async () => {
+    const fetchFn = vi.fn((async () => {
+      return new Response('Unauthorized', { status: 401 });
+    }) as typeof fetch);
+    const service = new SourceControlService({ execFileFn: fakeExecFileFn, fetchFn });
+    await expect(
+      service.generateCommitMessage(
+        'D:\\repo',
+        { providerId: 'openai-compatible', apiKey: 'bad-key', baseUrl: 'https://example.test/v1' },
+        'test-model',
+      ),
+    ).rejects.toThrow('AI 认证失败');
+  });
+
+  it('classifies 429 error as rate limit', async () => {
+    const fetchFn = vi.fn((async () => {
+      return new Response('Too Many Requests', { status: 429 });
+    }) as typeof fetch);
+    const service = new SourceControlService({ execFileFn: fakeExecFileFn, fetchFn });
+    await expect(
+      service.generateCommitMessage(
+        'D:\\repo',
+        { providerId: 'openai-compatible', apiKey: 'test-key', baseUrl: 'https://example.test/v1' },
+        'test-model',
+      ),
+    ).rejects.toThrow('AI 请求频率超限');
+  });
+
+  it('handles new repo with no commit history', async () => {
+    // git log fails on a new repo — should not block generation
+    const execFileFn = vi.fn((file, args, _options, callback) => {
+      const gitArgs = args.slice(2);
+      if (file !== 'git') {
+        callback(new Error('unexpected binary'), '', '');
+        return;
+      }
+      if (gitArgs[0] === 'status') {
+        callback(null, '## main\0M  src/a.ts\0', '');
+        return;
+      }
+      if (gitArgs[0] === 'log') {
+        // New repo — git log exits with non-zero
+        callback(new Error('no commits yet'), '', 'fatal: your current branch does not have any commits yet');
+        return;
+      }
+      callback(null, 'M\tsrc/a.ts\n', '');
+    });
+    const fetchFn = vi.fn((async () => {
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'feat: initial commit' } }],
+      }), { status: 200 });
+    }) as typeof fetch);
+    const service = new SourceControlService({ execFileFn, fetchFn });
+    const message = await service.generateCommitMessage(
+      'D:\\repo',
+      { providerId: 'openai-compatible', apiKey: 'test-key', baseUrl: 'https://example.test/v1' },
+      'test-model',
+    );
+    expect(message).toBe('feat: initial commit');
   });
 
   it('commits all changes in a Git repository', { timeout: 15000 }, async () => {

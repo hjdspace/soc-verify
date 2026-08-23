@@ -22,6 +22,19 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { performance } from 'node:perf_hooks';
 
+const { readdirPaths } = vi.hoisted(() => ({ readdirPaths: [] as string[] }));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    readdir: async (...args: Parameters<typeof actual.readdir>) => {
+      readdirPaths.push(String(args[0]));
+      return actual.readdir(...args);
+    },
+  };
+});
+
 vi.mock('electron', () => {
   let userDataDir: string | null = null;
   return {
@@ -88,6 +101,7 @@ describe('project loading performance regression', () => {
   let fileCount: number;
 
   beforeEach(async () => {
+    readdirPaths.length = 0;
     fixtureRoot = await mkdtemp(join(tmpdir(), 'socverify-reg-'));
     fileCount = await buildFixture(fixtureRoot);
   }, 60000);
@@ -140,6 +154,25 @@ describe('project loading performance regression', () => {
     const firstDir = children[0];
     expect(firstDir.type).toBe('directory');
     expect(firstDir.lazy).toBe(true);
+  }, 120000);
+
+  it('starts prefetching nested directories after returning the root level', async () => {
+    const info = await projectManager.openProject(fixtureRoot, 'regression-fixture');
+    const tree = await projectManager.getFileTree(info.id);
+    const subsys0 = tree.children?.find((child) => child.name === 'subsys_0');
+
+    expect(subsys0).toBeDefined();
+    expect(readdirPaths).toEqual([fixtureRoot]);
+
+    await vi.waitFor(() => {
+      expect(readdirPaths).toContain(subsys0!.path);
+    });
+
+    const readsBeforeExpand = readdirPaths.filter((path) => path === subsys0!.path).length;
+    await projectManager.getDirChildren(info.id, subsys0!.path);
+    const readsAfterExpand = readdirPaths.filter((path) => path === subsys0!.path).length;
+
+    expect(readsAfterExpand).toBe(readsBeforeExpand);
   }, 120000);
 
   it('detects root-level file additions via the watcher (debounced)', async () => {

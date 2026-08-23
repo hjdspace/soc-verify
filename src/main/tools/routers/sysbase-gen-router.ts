@@ -55,6 +55,7 @@ import {
   executeGen,
   type RunGenEvent,
 } from '../sysbase-gen/gen-runner';
+import { appendGenHistory } from '../sysbase-gen/gen-history';
 
 export const sysbaseGenRouter = t.router({
   /** Build the formatted sysbase_gen.py command string (Issue 6). */
@@ -297,9 +298,10 @@ export const sysbaseGenRouter = t.router({
       };
     }),
 
-  /** Execute sysbase_gen.py command with streaming output (Issue 6). */
+  /** Execute sysbase_gen.py command with streaming output (Issue 6).
+   * 传入 projectDir 时记录执行历史（供总览里程碑「环境生成」节点判定）。 */
   runGen: t.procedure
-    .input((raw): { command: string; cwd?: string } => {
+    .input((raw): { command: string; cwd?: string; projectDir?: string; genLevel?: string; subsys?: string; outputDir?: string } => {
       const r = raw as Record<string, unknown>;
       const command = reqString(r, 'command');
       if (!command.trim()) {
@@ -308,6 +310,10 @@ export const sysbaseGenRouter = t.router({
       return {
         command,
         cwd: optStringUndef(r, 'cwd'),
+        projectDir: optStringUndef(r, 'projectDir'),
+        genLevel: optStringUndef(r, 'genLevel'),
+        subsys: optStringUndef(r, 'subsys'),
+        outputDir: optStringUndef(r, 'outputDir'),
       };
     })
     .mutation(async ({ input }) => {
@@ -323,6 +329,22 @@ export const sysbaseGenRouter = t.router({
       };
 
       const result = await executeGen(input.command, cwd, onEvent);
+
+      // 记录执行历史（失败也记录，里程碑只看 success 记录）
+      if (input.projectDir) {
+        try {
+          await appendGenHistory(input.projectDir, {
+            genLevel: input.genLevel ?? 'subsys',
+            subsys: input.subsys ?? '',
+            outputDir: input.outputDir ?? '',
+            success: result.success,
+            exitCode: result.exitCode,
+            timestamp: new Date().toISOString(),
+          });
+        } catch {
+          // 历史记录写入失败不影响执行结果
+        }
+      }
 
       return {
         success: result.success,

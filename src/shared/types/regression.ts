@@ -68,3 +68,28 @@ export type RegressionHistoryEntry = {
   exitCode: number | null;
   stdoutTail: string;        // last N lines of stdout
 };
+
+// ── 运行中回归跟踪（RegressionRunTracker，TitleBar 回归徽章数据源）──
+
+/** 运行中回归：runsim -regr 提交后由主进程单例跟踪 */
+export type ActiveRegressionRun = {
+  runId: string;
+  subsys: string;
+  filePath: string;
+  submittedAt: number;
+  /** 从终端输出解析出的进度 x（已完成用例数）；未解析到时缺省，UI 降级不显示 */
+  completed?: number;
+  /** 从终端输出解析出的进度 y（总用例数） */
+  total?: number;
+};
+
+/** 回归终态（terminal exitCode 映射：0→completed、null→aborted、其余→failed） */
+export type RegressionRunFinalStatus = 'completed' | 'failed' | 'aborted';
+
+/** regression:event 载荷（主进程 → 渲染进程，经 preload eventBridge） */
+export type RegressionEvent = {
+  type: 'started' | 'progress' | 'finished';
+  run: ActiveRegressionRun;
+  /** type === 'finished' 时的终态 */
+  status?: RegressionRunFinalStatus;
+};

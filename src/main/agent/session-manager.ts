@@ -129,6 +129,33 @@ function formatSingleAnswer(question: AskQuestion, answers: AskAnswer[]): string
   return 'User cancelled the selection';
 }
 
+/**
+ * Extract assistant text from a `message_end` event's `message` payload.
+ *
+ * Content may be a string or an array of content blocks. Non-assistant
+ * messages return null. This is the single canonical implementation that
+ * replaces the duplicated text-extraction logic previously found in
+ * `tv-ai-advisor.ts`, `closure-orchestrator.ts`, and the `summarizeEvent`
+ * debug helper above (which remains for terminal logging).
+ */
+function extractAssistantTextFromEvent(message: unknown): string | null {
+  if (!message || typeof message !== 'object') return null;
+  const msg = message as Record<string, unknown>;
+  if (msg.role !== 'assistant') return null;
+  if (typeof msg.content === 'string') return msg.content;
+  if (Array.isArray(msg.content)) {
+    let text = '';
+    for (const block of msg.content) {
+      if (block && typeof block === 'object') {
+        const b = block as Record<string, unknown>;
+        if (b.type === 'text' && typeof b.text === 'string') text += b.text;
+      }
+    }
+    return text;
+  }
+  return null;
+}
+
 export interface CreateSessionOptions {
   projectId: string;
   cwd: string;
@@ -701,6 +728,150 @@ export class SessionManagerImpl extends EventEmitter {
 
   getClient(sessionId: string): AgentClient | null {
     return this.sessions.get(sessionId)?.client ?? null;
+  }
+
+  /** Default timeout for sendPromptAndWait (10 minutes, matching closure orchestrator). */
+  private static readonly DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000;
+
+  /**
+   * Deep Agent Turn interface — sends a prompt and waits for the agent to
+   * finish processing, returning the final assistant text.
+   *
+   * This method encapsulates the complete agent turn lifecycle that was
+   * previously leaked across four domains (TV AI Advisor, Coverage Closure,
+   * Deep Reindexer, Error Analysis):
+   *   - Fire-and-forget prompt dispatch (omp's prompt() is async-but-completes-on-agent_end)
+   *   - Completion detection via `agent_end` event
+   *   - Final assistant text extraction from `message_end` events
+   *   - Error detection via `error` events
+   *   - Configurable timeout with sensible default
+   *   - Optional cancellation via AbortSignal
+   *
+   * Callers should NOT call `getClient()` + `client.prompt()` + listen to
+   * `sessionEvent` themselves — everything goes through this seam.
+   *
+   * @param sessionId Target session ID
+   * @param message   Prompt text to send
+   * @param images    Optional image attachments (base64 data URLs)
+   * @param opts.timeoutMs  Override the default 10-minute timeout
+   * @param opts.signal     Optional AbortSignal for cancellation
+   * @returns The final assistant response text (empty string if no text was produced)
+   * @throws if the session doesn't exist, times out, is aborted, or the agent reports an error
+   */
+  async sendPromptAndWait(
+    sessionId: string,
+    message: string,
+    images: string[] | undefined,
+    opts: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<string> {
+    const client = this.sessions.get(sessionId)?.client;
+    if (!client) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    const timeoutMs = opts.timeoutMs ?? SessionManagerImpl.DEFAULT_TURN_TIMEOUT_MS;
+    let lastAssistantText = '';
+    let settled = false;
+
+    return new Promise<string>((resolve, reject) => {
+      const cleanup = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        opts.signal?.removeEventListener('abort', onAbort);
+        this.removeListener('sessionEvent', onSessionEvent);
+      };
+
+      const timeoutId = setTimeout(() => {
+        cleanup();
+        reject(new Error(`Agent timed out after ${timeoutMs / 1000}s`));
+      }, timeoutMs);
+      timeoutId.unref();
+
+      const onAbort = (): void => {
+        cleanup();
+        reject(new Error('Aborted'));
+      };
+      if (opts.signal) {
+        if (opts.signal.aborted) {
+          cleanup();
+          reject(new Error('Aborted'));
+          return;
+        }
+        opts.signal.addEventListener('abort', onAbort, { once: true });
+      }
+
+      const onSessionEvent = (data: SessionEventData): void => {
+        if (data.sessionId !== sessionId) return;
+        const evt = data.event as Record<string, unknown> | null;
+        if (!evt || typeof evt.type !== 'string') return;
+
+        if (evt.type === 'message_end') {
+          const text = extractAssistantTextFromEvent(evt.message);
+          if (text !== null) lastAssistantText = text;
+        } else if (evt.type === 'agent_end') {
+          cleanup();
+          resolve(lastAssistantText);
+        } else if (evt.type === 'error') {
+          cleanup();
+          const errMsg = typeof evt.message === 'string'
+            ? evt.message
+            : typeof evt.error === 'string'
+              ? evt.error
+              : 'Agent reported an error';
+          reject(new Error(errMsg));
+        }
+      };
+
+      this.on('sessionEvent', onSessionEvent);
+
+      // Fire-and-forget: prompt() resolves immediately; the actual response
+      // arrives via event frames.
+      void client.prompt(message, images).catch((err) => {
+        cleanup();
+        reject(err instanceof Error ? err : new Error(String(err)));
+      });
+    });
+  }
+
+  /**
+   * Fire-and-forget prompt — sends a prompt without waiting for completion.
+   *
+   * Use this when the caller streams events to the UI (e.g. RightPanel) and
+   * doesn't need the final text. The agent's response arrives via the
+   * `sessionEvent` EventEmitter stream.
+   *
+   * This replaces the pattern of `getClient(sessionId)?.prompt(message)`
+   * that was duplicated across Deep Reindexer and Error Analysis.
+   *
+   * @throws if the session doesn't exist
+   */
+  async promptFireAndForget(
+    sessionId: string,
+    message: string,
+    images?: string[],
+  ): Promise<void> {
+    const client = this.sessions.get(sessionId)?.client;
+    if (!client) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+    await client.prompt(message, images);
+    this.touchActivity(sessionId);
+  }
+
+  /**
+   * Abort the current agent turn for a session.
+   *
+   * Sends an `abort` command to the runner and hard-kills the process tree.
+   * The session can be reused after a new prompt() call.
+   *
+   * This replaces the pattern of `getClient(sessionId)?.abort()` that was
+   * scattered across multiple callers.
+   */
+  async abortSession(sessionId: string): Promise<void> {
+    const client = this.sessions.get(sessionId)?.client;
+    if (!client) return;
+    await client.abort();
   }
 
   listSessions(): Array<{ id: string; persistedSessionId?: string; projectId: string; createdAt: number; lastActivityAt: number }> {

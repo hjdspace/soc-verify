@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-variant="4">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>方案4 · 向导式三步流 — 仿真页面原型</title>
+<style>
+:root {
+  --bg: oklch(0.17 0.008 60); --bg-deep: oklch(0.14 0.008 60);
+  --surface: oklch(0.20 0.008 60); --surface-hi: oklch(0.24 0.010 60);
+  --border: oklch(0.27 0.010 60); --border-hi: oklch(0.34 0.012 60);
+  --fg: oklch(0.93 0.006 60); --fg-dim: oklch(0.66 0.008 60); --fg-faint: oklch(0.48 0.008 60);
+  --accent: oklch(0.80 0.16 145); --accent-dim: oklch(0.80 0.16 145 / 0.14);
+  --blue: oklch(0.72 0.12 230); --blue-dim: oklch(0.72 0.12 230 / 0.15);
+  --amber: oklch(0.80 0.13 80); --amber-dim: oklch(0.80 0.13 80 / 0.15);
+  --red: oklch(0.68 0.18 25); --red-dim: oklch(0.68 0.18 25 / 0.15);
+  --violet: oklch(0.72 0.14 295); --violet-dim: oklch(0.72 0.14 295 / 0.15);
+  --mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  --sans: 'Segoe UI', -apple-system, sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body { font-family: var(--sans); font-size: 13px; background: var(--bg); color: var(--fg); display: flex; flex-direction: column; font-variant-numeric: tabular-nums; }
+button { font-family: inherit; background: none; border: none; cursor: pointer; color: inherit; font-size: 13px; }
+input, select { font-family: inherit; background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; font-size: 11px; outline: none; }
+input:focus, select:focus { border-color: var(--accent); }
+svg { display: inline-block; vertical-align: middle; }
+.toggle { position: relative; width: 28px; height: 16px; border-radius: 999px; background: var(--border); cursor: pointer; transition: background 200ms; flex-shrink: 0; }
+.toggle.on { background: var(--accent); }
+.toggle .knob { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--fg); transition: transform 200ms; }
+.toggle.on .knob { transform: translateX(12px); }
+@keyframes pd { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+.titlebar { height: 36px; display: flex; align-items: center; gap: 12px; padding: 0 12px; background: var(--bg-deep); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.titlebar .logo-name { font-size: 12px; font-weight: 600; }
+.titlebar .proj { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-dim); }
+.titlebar .proj .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.titlebar .spacer { flex: 1; }
+
+.navrail { width: 48px; display: flex; flex-direction: column; gap: 4px; padding: 8px 0; background: var(--bg-deep); border-right: 1px solid var(--border); flex-shrink: 0; }
+.navrail .nav-item { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; margin: 0 auto; border-radius: 8px; color: var(--fg-dim); transition: all 150ms; }
+.navrail .nav-item:hover { background: var(--surface-hi); color: var(--fg); }
+.navrail .nav-item.active { background: var(--accent-dim); color: var(--accent); }
+
+.main { flex: 1; display: flex; overflow: hidden; }
+.sim-page { flex: 1; display: flex; overflow: hidden; }
+
+/* ── 左侧：运行状态边栏 ── */
+.run-sidebar { width: 220px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--surface); border-right: 1px solid var(--border); }
+.run-sidebar .rs-header { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.run-sidebar .rs-header h3 { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fg-dim); }
+.run-sidebar .rs-summary { padding: 8px 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.run-sidebar .rs-stat { text-align: center; padding: 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-hi); }
+.run-sidebar .rs-stat .num { font-size: 16px; font-weight: 700; font-family: var(--mono); }
+.run-sidebar .rs-stat .label { font-size: 9px; text-transform: uppercase; color: var(--fg-faint); }
+.run-sidebar .rs-stat.pass .num { color: var(--accent); }
+.run-sidebar .rs-stat.fail .num { color: var(--red); }
+.run-sidebar .rs-stat.running .num { color: var(--blue); }
+.run-sidebar .rs-stat.pending .num { color: var(--fg-faint); }
+.run-sidebar .rs-list { flex: 1; overflow-y: auto; padding: 4px; }
+.run-sidebar .rs-item { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; transition: background 100ms; }
+.run-sidebar .rs-item:hover { background: var(--surface-hi); }
+.run-sidebar .rs-item .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.run-sidebar .rs-item .dot.pass{background:var(--accent)} .run-sidebar .rs-item .dot.fail{background:var(--red)}
+.run-sidebar .rs-item .dot.running{background:var(--blue);animation:pd 1.5s ease-out infinite} .run-sidebar .rs-item .dot.pending{background:var(--fg-faint)}
+.run-sidebar .rs-item .name { flex: 1; truncate; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 10px; }
+.run-sidebar .rs-item .dur { font-family: var(--mono); font-size: 9px; color: var(--fg-faint); }
+.run-sidebar .rs-stop { padding: 8px 12px; border-top: 1px solid var(--border); }
+.run-sidebar .rs-stop button { width: 100%; font-size: 11px; color: var(--red); padding: 4px; border-radius: 4px; display: flex; align-items: center; justify-content: center; gap: 4px; }
+.run-sidebar .rs-stop button:hover { background: var(--red-dim); }
+
+/* ── 右侧：向导区 ── */
+.wizard-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+/* 步骤条 */
+.step-bar { display: flex; align-items: center; padding: 12px 24px; border-bottom: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
+.step-bar .step { display: flex; align-items: center; gap: 8px; }
+.step-bar .step .num { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; font-size: 12px; font-weight: 700; border: 2px solid var(--border); color: var(--fg-faint); transition: all 200ms; }
+.step-bar .step.active .num { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.step-bar .step.done .num { border-color: var(--accent); background: var(--accent); color: var(--bg-deep); }
+.step-bar .step .label { font-size: 12px; font-weight: 600; color: var(--fg-faint); }
+.step-bar .step.active .label { color: var(--fg); }
+.step-bar .step.done .label { color: var(--fg-dim); }
+.step-bar .connector { flex: 1; height: 2px; background: var(--border); margin: 0 12px; }
+.step-bar .connector.done { background: var(--accent); }
+
+/* 步骤内容 */
+.step-content { flex: 1; overflow-y: auto; padding: 24px; }
+.step-content .step-title { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+.step-content .step-desc { font-size: 12px; color: var(--fg-dim); margin-bottom: 24px; }
+
+/* Step 1: 选子系统+用例 */
+.s1-layout { display: flex; gap: 16px; }
+.s1-subsys-list { width: 200px; flex-shrink: 0; }
+.s1-subsys-list h4 { font-size: 10px; font-weight: 600; text-transform: uppercase; color: var(--fg-dim); margin-bottom: 8px; }
+.s1-subsys { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 6px; cursor: pointer; transition: background 100ms; border: 1px solid transparent; margin-bottom: 4px; }
+.s1-subsys:hover { background: var(--surface-hi); }
+.s1-subsys.selected { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+.s1-subsys .icon { width: 14px; height: 14px; }
+.s1-subsys .cnt { margin-left: auto; font-size: 10px; color: var(--fg-faint); }
+.s1-cases { flex: 1; }
+.s1-cases h4 { font-size: 10px; font-weight: 600; text-transform: uppercase; color: var(--fg-dim); margin-bottom: 8px; }
+.s1-cases .search { position: relative; margin-bottom: 8px; }
+.s1-cases .search input { width: 100%; padding-left: 22px; }
+.s1-cases .search svg { position: absolute; left: 6px; top: 50%; transform: translateY(-50%); width: 12px; height: 12px; color: var(--fg-faint); }
+.s1-case-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 4px; }
+.s1-case { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; transition: all 100ms; border: 1px solid var(--border); }
+.s1-case:hover { border-color: var(--border-hi); background: var(--surface-hi); }
+.s1-case.selected { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+.s1-case .sd { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.s1-case .sd.pass{background:var(--accent)} .s1-case .sd.fail{background:var(--red)}
+.s1-case .sd.running{background:var(--blue);animation:pd 1.5s ease-out infinite} .s1-case .sd.pending{background:var(--fg-faint)}
+.s1-case .name { flex: 1; truncate; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 10px; }
+.s1-case .badge { font-size: 9px; padding: 1px 4px; border-radius: 3px; background: var(--amber-dim); color: var(--amber); }
+
+/* Step 2: 选项配置 */
+.s2-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; }
+.opt-card { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); overflow: hidden; }
+.opt-card .ch { display: flex; align-items: center; gap: 6px; padding: 6px 12px; }
+.opt-card .ch .dot { width: 6px; height: 6px; border-radius: 50%; }
+.opt-card .ch .dot.blue{background:var(--blue)} .opt-card .ch .dot.violet{background:var(--violet)}
+.opt-card .ch .dot.accent{background:var(--accent)} .opt-card .ch .dot.amber{background:var(--amber)} .opt-card .ch .dot.red{background:var(--red)}
+.opt-card .ch .name { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-dim); }
+.opt-card .ch .cnt { font-size: 9px; color: var(--fg-faint); }
+.opt-card .cb { padding: 0 12px 8px; display: flex; flex-direction: column; gap: 4px; }
+.opt-card .field { display: flex; align-items: center; gap: 6px; }
+.opt-card .field label { font-size: 10px; font-weight: 500; color: var(--fg-dim); white-space: nowrap; }
+.opt-card .field input, .opt-card .field select { flex: 1; min-width: 0; }
+
+.s2-cmd { margin-top: 16px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-deep); padding: 8px 12px; }
+.s2-cmd .label { font-size: 10px; text-transform: uppercase; color: var(--fg-faint); margin-bottom: 4px; }
+.s2-cmd code { font-family: var(--mono); font-size: 11px; }
+.s2-cmd .tb{font-weight:700;color:var(--accent)} .s2-cmd .tf{color:var(--blue)} .s2-cmd .tv{color:var(--violet)}
+
+/* Step 3: 运行+监控 */
+.s3-layout { display: flex; flex-direction: column; gap: 16px; }
+.s3-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.s3-stat { padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); text-align: center; }
+.s3-stat .num { font-size: 20px; font-weight: 700; font-family: var(--mono); }
+.s3-stat .lbl { font-size: 10px; text-transform: uppercase; color: var(--fg-faint); }
+.s3-stat.pass .num{color:var(--accent)} .s3-stat.fail .num{color:var(--red)}
+.s3-stat.running .num{color:var(--blue)} .s3-stat.pending .num{color:var(--fg-faint)}
+.s3-runs { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.s3-runs .head { display: grid; grid-template-columns: 18px 1.4fr 100px 1fr 80px 70px; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--fg-faint); background: var(--surface); }
+.s3-runs .row { display: grid; grid-template-columns: 18px 1.4fr 100px 1fr 80px 70px; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); cursor: pointer; transition: background 100ms; }
+.s3-runs .row:hover { background: var(--surface-hi); }
+.s3-runs .row .dot { width: 8px; height: 8px; border-radius: 50%; }
+.s3-runs .row .dot.pass{background:var(--accent)} .s3-runs .row .dot.fail{background:var(--red)}
+.s3-runs .row .dot.running{background:var(--blue);animation:pd 1.5s ease-out infinite}
+.s3-runs .row .dot.pending{background:var(--fg-faint)} .s3-runs .row .dot.aborted{background:var(--amber)}
+.s3-runs .row .case { font-family: var(--mono); font-size: 11px; }
+.s3-runs .row .sub { font-size: 10px; color: var(--fg-dim); }
+.s3-runs .row .prog { height: 4px; background: var(--bg-deep); border-radius: 2px; overflow: hidden; }
+.s3-runs .row .prog .bar { height: 100%; border-radius: 2px; }
+.s3-runs .row .prog .bar.running{width:33%;background:var(--blue);animation:pd 1.5s ease-out infinite}
+.s3-runs .row .prog .bar.pass{width:100%;background:var(--accent)} .s3-runs .row .prog .bar.fail{width:100%;background:var(--red)}
+.s3-runs .row .dur { font-family: var(--mono); font-size: 10px; text-align: right; color: var(--fg-dim); }
+.s3-runs .row .eta { font-family: var(--mono); font-size: 10px; text-align: right; }
+.s3-runs .row .eta.pass{color:var(--accent)} .s3-runs .row .eta.fail{color:var(--red)} .s3-runs .row .eta.pending{color:var(--fg-faint)}
+
+/* 底部导航 */
+.step-nav { display: flex; align-items: center; justify-content: space-between; padding: 8px 24px; border-top: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
+.step-nav .back { font-size: 12px; color: var(--fg-dim); display: flex; align-items: center; gap: 4px; }
+.step-nav .back:hover { color: var(--fg); }
+.step-nav .next { display: flex; align-items: center; gap: 6px; padding: 6px 16px; background: var(--accent); color: var(--bg-deep); font-weight: 700; font-size: 12px; border-radius: 6px; transition: filter 100ms; }
+.step-nav .next:hover { filter: brightness(1.1); }
+
+.statusbar { height: 24px; display: flex; align-items: center; gap: 12px; padding: 0 12px; background: var(--bg-deep); border-top: 1px solid var(--border); font-size: 11px; color: var(--fg-dim); flex-shrink: 0; }
+
+.switcher { position: fixed; bottom: 36px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; padding: 6px 16px; border-radius: 999px; background: var(--surface-hi); border: 1px solid var(--border-hi); box-shadow: 0 4px 20px rgba(0,0,0,0.4); z-index: 9999; }
+.switcher .arrow { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; color: var(--fg-dim); transition: all 150ms; }
+.switcher .arrow:hover { background: var(--surface); color: var(--fg); }
+.switcher .label { font-size: 12px; font-weight: 600; color: var(--fg); white-space: nowrap; }
+.switcher .vk { color: var(--accent); }
+</style>
+</head>
+<body>
+  <div class="titlebar"><span class="logo-name">SoC Verify</span><div class="proj"><span class="dot"></span> myChip / verif</div><div class="spacer"></div></div>
+  <div class="main">
+    <nav class="navrail">
+      <div class="nav-item"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></div>
+      <div class="nav-item active"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg></div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg></div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M6 9v6"/><path d="M18 15V9"/></svg></div>
+      <div class="nav-item"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 7v13h20V7"/><path d="M2 7l10-5 10 5"/></svg></div>
+    </nav>
+    <div class="sim-page">
+      <!-- 左侧：运行状态边栏 -->
+      <aside class="run-sidebar">
+        <div class="rs-header"><h3>运行状态</h3></div>
+        <div class="rs-summary">
+          <div class="rs-stat pass"><div class="num">2</div><div class="label">通过</div></div>
+          <div class="rs-stat fail"><div class="num">1</div><div class="label">失败</div></div>
+          <div class="rs-stat running"><div class="num">1</div><div class="label">运行中</div></div>
+          <div class="rs-stat pending"><div class="num">0</div><div class="label">待运行</div></div>
+        </div>
+        <div class="rs-list">
+          <div class="rs-item"><span class="dot running"></span><span class="name">apcpu_interrupt</span><span class="dur">2m14s</span></div>
+          <div class="rs-item"><span class="dot pass"></span><span class="name">apcpu_basic_read</span><span class="dur">45s</span></div>
+          <div class="rs-item"><span class="dot fail"></span><span class="name">apcpu_dma_test</span><span class="dur">1m02s</span></div>
+          <div class="rs-item"><span class="dot pass"></span><span class="name">apcpu_hello</span><span class="dur">12s</span></div>
+        </div>
+        <div class="rs-stop"><button><svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"/></svg> 停止全部</button></div>
+      </aside>
+
+      <!-- 右侧：向导区（当前展示 Step 2 — 配置选项） -->
+      <div class="wizard-area">
+        <div class="step-bar">
+          <div class="step done"><div class="num"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></div><span class="label">1. 选子系统 / 用例</span></div>
+          <div class="connector done"></div>
+          <div class="step active"><div class="num">2</div><span class="label">2. 配置仿真选项</span></div>
+          <div class="connector"></div>
+          <div class="step"><div class="num">3</div><span class="label">3. 运行 & 监控</span></div>
+        </div>
+
+        <div class="step-content">
+          <div class="step-title">配置仿真选项</div>
+          <div class="step-desc">已选用例：apcpu_subsys / apcpu_basic_read — 调整参数后进入下一步运行</div>
+
+          <div class="s2-cards">
+            <div class="opt-card"><div class="ch"><span class="dot blue"></span><span class="name">基础参数</span><span class="cnt">(3)</span></div><div class="cb"><div class="field"><label>BASE</label><input value="top" /></div><div class="field"><label>BLOCK</label><input value="udtb/usvp" /></div><div class="field"><label>CASE</label><input value="apcpu_basic_read" /></div></div></div>
+            <div class="opt-card"><div class="ch"><span class="dot violet"></span><span class="name">波形配置</span><span class="cnt">(2)</span></div><div class="cb"><div class="field"><label>WAVE</label><div class="toggle on"><div class="knob"></div></div></div><div class="field"><label>FSDB</label><select><option>on</option><option>off</option></select></div></div></div>
+            <div class="opt-card"><div class="ch"><span class="dot accent"></span><span class="name">仿真参数</span><span class="cnt">(3)</span></div><div class="cb"><div class="field"><label>SEED</label><input value="random" /></div><div class="field"><label>TIMEOUT</label><input value="100ms" /></div><div class="field"><label>SIMARG</label><input placeholder="+UVM_VERB=HIGH" /></div></div></div>
+            <div class="opt-card"><div class="ch"><span class="dot amber"></span><span class="name">执行模式</span><span class="cnt">(2)</span></div><div class="cb"><div class="field"><label>GUI</label><div class="toggle"><div class="knob"></div></div></div><div class="field"><label>DEBUG</label><div class="toggle"><div class="knob"></div></div></div></div></div>
+          </div>
+
+          <div class="s2-cmd">
+            <div class="label">命令预览</div>
+            <code><span class="tb">runsim</span> <span class="tf">-base</span> <span class="tv">top</span> <span class="tf">-block</span> <span class="tv">udtb/usvp</span> <span class="tf">-case</span> <span class="tv">apcpu_basic_read</span> <span class="tf">-wave</span> <span class="tf">-seed</span> <span class="tv">random</span></code>
+          </div>
+        </div>
+
+        <div class="step-nav">
+          <button class="back"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg> 上一步</button>
+          <button class="next">运行仿真 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar"><div class="item"><span style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span> 就绪</div><div class="item">PROJ_RTL: /home/user/myChip/rtl</div></div>
+  <div class="switcher">
+    <a class="arrow" href="sim-page-03-dock-panel.html"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg></a>
+    <span class="label"><span class="vk">4</span> — 向导式三步流</span>
+    <a class="arrow" href="sim-page-01-left-tree-right-options.html"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></a>
+  </div>
+</body>
+</html>

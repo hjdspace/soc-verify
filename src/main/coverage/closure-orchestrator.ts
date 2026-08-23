@@ -345,7 +345,9 @@ export class ClosureOrchestrator {
         return;
       }
 
-      // 3. 发送 prompt（fire-and-forget）
+      // 3-4. 发送 prompt 并等待 agent 完成（fire-and-forget + 事件完成 + assistant 文本提取）
+      //     原来分散在两步：promptFireAndForget + waitForAgentEnd
+      //     现在统一通过 SessionManager 的深层 Agent Turn 接口完成。
       this.emit({
         type: 'closure:agent_prompting',
         closureId: session.id,
@@ -355,29 +357,11 @@ export class ClosureOrchestrator {
       });
 
       try {
-        const client = this.opts.sessionManager.getClient(agentSessionId);
-        if (!client) {
-          throw new Error('Agent client not available after session creation');
-        }
         const prompt = this.buildClosurePrompt(session, currentTarget, round);
-        await client.prompt(prompt);
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        await closureManager.failIteration(session.id, target.id, `prompt failed: ${errorMsg}`);
-        await closureManager.failTarget(session.id, target.id, `prompt failed: ${errorMsg}`);
-        await this.safeDestroySession(agentSessionId);
-        this.emit({
-          type: 'closure:gap_failed',
-          closureId: session.id,
-          targetId: target.id,
-          error: errorMsg,
-        });
-        return;
-      }
-
-      // 4. 等待 agent_end 事件（同时捕获 AI 最后一条 assistant 回复文本）
-      try {
-        const agentText = await this.waitForAgentEnd(agentSessionId, controller);
+        const agentText = await this.opts.sessionManager.sendPromptAndWait(
+          agentSessionId, prompt, undefined,
+          { timeoutMs: AGENT_END_TIMEOUT_MS, signal: controller.signal },
+        );
         this.emit({
           type: 'closure:agent_ended',
           closureId: session.id,
@@ -574,67 +558,6 @@ export class ClosureOrchestrator {
       simulationAdapter: this.opts.simulationAdapter,
       coverageAdapter: this.opts.coverageAdapter,
       coverageManager: this.opts.coverageManager,
-    });
-  }
-
-  /**
-   * 等待 agent_end 事件或超时，并捕获本轮 AI 最后一条 assistant 回复文本。
-   *
-   * 监听 sessionManager 的 'sessionEvent' 事件，过滤 sessionId === agentSessionId：
-   *   - event.type === 'message_end' 且 message.role === 'assistant' → 记录文本
-   *     （供 parseExclusionSuggestions 解析 dead_code 豁免建议，工单 07）
-   *   - event.type === 'agent_end' → resolve（返回最后捕获的 assistant 文本）
-   *   - event.type === 'error' → reject
-   *   - 超时（10 分钟）→ reject
-   *   - abort signal → reject
-   */
-  private waitForAgentEnd(
-    agentSessionId: string,
-    controller: AbortController,
-  ): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-      let lastAssistantText = '';
-      const timeoutId = setTimeout(() => {
-        cleanup();
-        reject(new Error(`Agent timed out after ${AGENT_END_TIMEOUT_MS / 60000} minutes`));
-      }, AGENT_END_TIMEOUT_MS);
-      timeoutId.unref();
-
-      const onAbort = (): void => {
-        cleanup();
-        reject(new Error('Aborted'));
-      };
-      controller.signal.addEventListener('abort', onAbort, { once: true });
-
-      const onSessionEvent = ({ sessionId, event }: { sessionId: string; event: unknown }): void => {
-        if (sessionId !== agentSessionId) return;
-        const evt = event as Record<string, unknown> | null;
-        if (!evt || typeof evt.type !== 'string') return;
-
-        if (evt.type === 'message_end') {
-          const text = extractAssistantText(evt.message);
-          if (text !== null) lastAssistantText = text;
-        } else if (evt.type === 'agent_end') {
-          cleanup();
-          resolve(lastAssistantText);
-        } else if (evt.type === 'error') {
-          cleanup();
-          const errMsg = typeof evt.message === 'string'
-            ? evt.message
-            : typeof evt.error === 'string'
-              ? evt.error
-              : 'Agent reported an error';
-          reject(new Error(errMsg));
-        }
-      };
-
-      const cleanup = (): void => {
-        clearTimeout(timeoutId);
-        controller.signal.removeEventListener('abort', onAbort);
-        this.opts.sessionManager.off('sessionEvent', onSessionEvent);
-      };
-
-      this.opts.sessionManager.on('sessionEvent', onSessionEvent);
     });
   }
 
@@ -969,24 +892,4 @@ function findNodeByPath(node: CoverageNode, path: string): CoverageNode | null {
   return null;
 }
 
-/**
- * 从 message_end 事件的 message 中提取 assistant 文本（工单 07）。
- * content 为字符串或 {type:'text', text} 块数组；非 assistant 消息返回 null。
- */
-function extractAssistantText(message: unknown): string | null {
-  if (!message || typeof message !== 'object') return null;
-  const msg = message as Record<string, unknown>;
-  if (msg.role !== 'assistant') return null;
-  if (typeof msg.content === 'string') return msg.content;
-  if (Array.isArray(msg.content)) {
-    let text = '';
-    for (const block of msg.content) {
-      if (block && typeof block === 'object') {
-        const b = block as Record<string, unknown>;
-        if (b.type === 'text' && typeof b.text === 'string') text += b.text;
-      }
-    }
-    return text;
-  }
-  return null;
-}
+

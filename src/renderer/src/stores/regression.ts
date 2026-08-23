@@ -8,6 +8,8 @@ import type {
   RegressionRunOptions,
   RegressionHistoryEntry,
   RegressionEntry,
+  ActiveRegressionRun,
+  RegressionEvent,
 } from '@shared/types';
 
 interface RegressionStoreState {
@@ -27,6 +29,11 @@ interface RegressionStoreState {
   history: RegressionHistoryEntry[];
   historyLoading: boolean;
 
+  // ── Active runs（TitleBar 回归徽章；主进程 regressionRunTracker 经事件同步）──
+  activeRegressions: ActiveRegressionRun[];
+  /** initActiveRuns 已执行（幂等保护） */
+  activeRunsInitialized: boolean;
+
   // ── Actions ──
   discover: (projectId: string, refresh?: boolean) => Promise<void>;
   parseList: (filePath: string) => Promise<void>;
@@ -34,6 +41,8 @@ interface RegressionStoreState {
   runRegression: (projectId: string, filePath: string, subsys: string, options: RegressionRunOptions) => Promise<void>;
   abortRegression: (projectId: string, runId: string) => Promise<void>;
   loadHistory: (projectId: string) => Promise<void>;
+  /** 拉取运行中回归 + 订阅 regression:event（TitleBar 徽章数据源） */
+  initActiveRuns: () => void;
 }
 
 export const useRegressionStore = create<RegressionStoreState>((set, get) => ({
@@ -45,6 +54,8 @@ export const useRegressionStore = create<RegressionStoreState>((set, get) => ({
   parsedGroups: new Map(),
   history: [],
   historyLoading: false,
+  activeRegressions: [],
+  activeRunsInitialized: false,
 
   discover: async (projectId, refresh) => {
     set({ discoveryLoading: true, discoveryError: null });
@@ -124,5 +135,40 @@ export const useRegressionStore = create<RegressionStoreState>((set, get) => ({
       set({ historyLoading: false });
       useToastStore.getState().error('加载回归历史失败', err instanceof Error ? err.message : String(err));
     }
+  },
+
+  initActiveRuns: () => {
+    if (get().activeRunsInitialized) return;
+    set({ activeRunsInitialized: true });
+
+    // 拉取当前运行中回归（应用启动/重启后 tracker 单例里的存量）
+    void trpc.regression.getActiveRuns.query({}).then((runs) => {
+      set({ activeRegressions: runs });
+    }).catch(() => {
+      // 静默失败：事件流会随后校正（submit 时 started 事件全量登记）
+      set({ activeRunsInitialized: false });
+    });
+
+    // regression:event → started 登记 / progress 更新 / finished 移除
+    window.eventBridge?.onRegressionEvent((event: RegressionEvent) => {
+      set((s) => {
+        switch (event.type) {
+          case 'started':
+            return {
+              activeRegressions: [...s.activeRegressions.filter((r) => r.runId !== event.run.runId), event.run],
+            };
+          case 'progress':
+            return {
+              activeRegressions: s.activeRegressions.map((r) =>
+                r.runId === event.run.runId ? event.run : r,
+              ),
+            };
+          case 'finished':
+            return {
+              activeRegressions: s.activeRegressions.filter((r) => r.runId !== event.run.runId),
+            };
+        }
+      });
+    });
   },
 }));

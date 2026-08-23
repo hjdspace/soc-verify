@@ -6,6 +6,7 @@ import { projectManager } from './project/project-manager';
 import { sessionManager } from './agent/session-manager';
 import { pluginLoader } from './plugins/loader';
 import { errorAnalysisCoordinator } from './simulation/error-analysis-coordinator';
+import { notificationManager, wireNotificationSources } from './notifications/notification-manager';
 import { terminalManager } from './terminal/terminal-manager';
 import { registerDocumentIpcHandlers, cleanupEditorRegistry } from './document/editor-registry';
 import { cleanupOfficeCli } from './officecli/service';
@@ -94,6 +95,10 @@ app.whenReady().then(async () => {
 
   // Register error analysis coordinator to listen for simulation completions
   errorAnalysisCoordinator.registerListeners();
+
+  // 通知中心：加载持久化通知 + 订阅仿真失败 / 回归终态 / 覆盖率导入事件（Issue #8）
+  await notificationManager.init();
+  wireNotificationSources();
 
   const agentRuntime = resolveAgentRuntime();
   if (agentRuntime) {

@@ -1,0 +1,1839 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>方案 A v2 · Mission Control 细化 — SoC Verify</title>
+<style>
+/* ══════════════════════════════════════════════════════════
+   方案 A v2：Mission Control 细化版
+   空间论点：主阅读路径 = KPI 状态行 → 运行流/覆盖率 → 失败与 AI 钻取；
+   分组靠邻近性；密度 = operate 模式（结构稳定、行内紧凑、区块间宽松）；
+   间距刻度 --s1..--s5 = 4/8/12/16/24；z-index 刻度 backdrop40/drawer50/dropdown70/palette80/toast100
+   相对 v1 新增：覆盖率视图（趋势+排序表+bin）、回归视图（套件+历史+聚类）、
+   文件抽屉、AI 会话抽屉、命令面板、通知中心、里程碑、骨架屏、空状态、状态栏
+   ══════════════════════════════════════════════════════════ */
+:root {
+  --bg: oklch(0.17 0.008 60); --bg-deep: oklch(0.14 0.008 60);
+  --surface: oklch(0.20 0.008 60); --surface-hi: oklch(0.24 0.010 60);
+  --border: oklch(0.27 0.010 60); --border-hi: oklch(0.34 0.012 60);
+  --fg: oklch(0.93 0.006 60); --fg-dim: oklch(0.66 0.008 60); --fg-faint: oklch(0.48 0.008 60);
+  --accent: oklch(0.80 0.16 145); --accent-dim: oklch(0.80 0.16 145 / 0.14);
+  --blue: oklch(0.72 0.12 230); --blue-dim: oklch(0.72 0.12 230 / 0.15);
+  --amber: oklch(0.80 0.13 80); --amber-dim: oklch(0.80 0.13 80 / 0.15);
+  --red: oklch(0.68 0.18 25); --red-dim: oklch(0.68 0.18 25 / 0.15);
+  --violet: oklch(0.72 0.14 295);
+  --mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+  --sans: 'Segoe UI', -apple-system, sans-serif;
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px;
+  --z-backdrop: 40; --z-drawer: 50; --z-dropdown: 70; --z-palette: 80; --z-toast: 100;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: var(--sans); font-size: 13px;
+  background: var(--bg); color: var(--fg);
+  display: flex; flex-direction: column;
+  font-variant-numeric: tabular-nums;
+}
+button { font-family: inherit; background: none; border: none; cursor: pointer; color: inherit; font-size: 13px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+::selection { background: var(--accent-dim); }
+
+/* ── TitleBar ── */
+.titlebar {
+  height: 40px; display: flex; align-items: center; gap: var(--s3);
+  padding: 0 var(--s3); background: var(--bg-deep);
+  border-bottom: 1px solid var(--border); -webkit-app-region: drag; flex-shrink: 0;
+}
+.logo { display: flex; align-items: center; gap: var(--s2); }
+.logo-mark { width: 20px; height: 20px; color: var(--accent); }
+.logo-name { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; }
+.proj-selector, .global-search {
+  display: flex; align-items: center; gap: var(--s2);
+  border-radius: 6px; font-size: 12px; -webkit-app-region: no-drag;
+  transition: border-color 150ms ease-out;
+}
+.proj-selector { padding: 4px var(--s3); border: 1px solid var(--border); background: var(--surface); }
+.proj-selector:hover { border-color: var(--border-hi); }
+.proj-selector .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.proj-selector svg { opacity: 0.5; }
+.global-search {
+  flex: 1; max-width: 400px; padding: 4px var(--s3);
+  border: 1px solid transparent; background: var(--surface); color: var(--fg-faint);
+}
+.global-search:hover { border-color: var(--border); }
+.global-search kbd {
+  margin-left: auto; font-family: var(--mono); font-size: 10px;
+  padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border); color: var(--fg-dim);
+}
+.titlebar .spacer { flex: 1; }
+.reg-badge {
+  display: flex; align-items: center; gap: 6px; padding: 3px 10px;
+  border-radius: 999px; background: var(--accent-dim); color: var(--accent);
+  font-size: 11px; font-weight: 500;
+}
+.reg-badge .pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 2s ease-out infinite; }
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 oklch(0.80 0.16 145 / 0.5); }
+  70% { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.notif-wrap { position: relative; -webkit-app-region: no-drag; }
+.notif-btn {
+  position: relative; width: 28px; height: 28px; display: grid; place-items: center;
+  border-radius: 6px; color: var(--fg-dim); transition: background 120ms ease-out, color 120ms ease-out;
+}
+.notif-btn:hover { background: var(--surface-hi); color: var(--fg); }
+.notif-btn .badge {
+  position: absolute; top: 3px; right: 3px; min-width: 13px; height: 13px;
+  padding: 0 3px; border-radius: 7px; background: var(--red); color: white;
+  font-size: 9px; font-weight: 600; display: grid; place-items: center;
+}
+.notif-btn .badge.hidden { display: none; }
+.notif-dropdown {
+  position: absolute; top: 34px; right: 0; width: 340px;
+  background: var(--surface-hi); border: 1px solid var(--border-hi);
+  border-radius: 12px; box-shadow: 0 12px 32px oklch(0 0 0 / 0.45);
+  z-index: var(--z-dropdown); display: none; overflow: hidden;
+}
+.notif-dropdown.open { display: block; }
+.notif-head { display: flex; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; }
+.notif-head button { margin-left: auto; font-size: 11px; color: var(--fg-dim); font-weight: 400; }
+.notif-head button:hover { color: var(--accent); }
+.notif-item { display: flex; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 12px; transition: background 120ms ease-out; }
+.notif-item:last-child { border-bottom: none; }
+.notif-item:hover { background: var(--surface); }
+.notif-item .nicon { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; flex-shrink: 0; }
+.notif-item .nbody { line-height: 1.5; }
+.notif-item.unread .ntitle { font-weight: 600; }
+.notif-item .ntime { font-size: 10.5px; color: var(--fg-faint); margin-top: 2px; }
+.notif-item .undot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); margin: 6px 0 0 auto; flex-shrink: 0; }
+.notif-item:not(.unread) .undot { background: transparent; }
+.win-controls { display: flex; -webkit-app-region: no-drag; }
+.win-controls button {
+  width: 36px; height: 28px; display: grid; place-items: center;
+  color: var(--fg-dim); border-radius: 6px; transition: background 120ms ease-out, color 120ms ease-out;
+}
+.win-controls button:hover { background: var(--surface-hi); color: var(--fg); }
+.win-controls button.close:hover { background: var(--red); color: white; }
+
+/* ── 主区域 ── */
+.main { flex: 1; display: flex; overflow: hidden; }
+.nav-rail {
+  width: 60px; display: flex; flex-direction: column; align-items: center;
+  gap: var(--s1); padding: var(--s3) 0; background: var(--bg-deep);
+  border-right: 1px solid var(--border); flex-shrink: 0;
+}
+.nav-btn {
+  position: relative; width: 42px; height: 42px; display: grid; place-items: center;
+  border-radius: 10px; color: var(--fg-faint); transition: color 150ms ease-out, background 150ms ease-out;
+}
+.nav-btn:hover { color: var(--fg); background: var(--surface-hi); }
+.nav-btn.active { color: var(--accent); background: var(--accent-dim); }
+.nav-btn .badge {
+  position: absolute; top: 5px; right: 5px; min-width: 14px; height: 14px;
+  padding: 0 3px; border-radius: 7px; background: var(--red); color: white;
+  font-size: 9px; font-weight: 600; display: grid; place-items: center;
+}
+.nav-btn .tooltip {
+  position: absolute; left: 52px; top: 50%; transform: translateY(-50%);
+  padding: 4px 10px; background: var(--surface-hi); border: 1px solid var(--border-hi);
+  border-radius: 6px; font-size: 11px; white-space: nowrap;
+  opacity: 0; pointer-events: none; transition: opacity 120ms ease-out; z-index: 10;
+}
+.nav-btn:hover .tooltip { opacity: 1; }
+.nav-rail .divider { width: 28px; height: 1px; background: var(--border); margin: var(--s2) 0; }
+.nav-rail .bottom { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: var(--s1); }
+
+.content { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.view { flex: 1; overflow-y: auto; padding: var(--s5); display: none; }
+.view.active { display: block; }
+.view::-webkit-scrollbar { width: 8px; }
+.view::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.view-header { display: flex; align-items: center; gap: var(--s3); margin-bottom: var(--s4); flex-wrap: wrap; }
+.view-header h1 { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; text-wrap: balance; }
+.view-header .sub { font-size: 12px; color: var(--fg-dim); }
+.view-header .actions { margin-left: auto; display: flex; gap: var(--s2); align-items: center; }
+
+.seg { display: flex; padding: 3px; border-radius: 8px; background: var(--bg-deep); border: 1px solid var(--border); }
+.seg button { padding: 4px 12px; border-radius: 6px; font-size: 12px; color: var(--fg-dim); transition: all 150ms ease-out; }
+.seg button.active { background: var(--surface-hi); color: var(--fg); }
+.seg button:not(.active):hover { color: var(--fg); }
+.seg button .cnt { font-size: 10px; color: var(--fg-faint); margin-left: 3px; }
+.seg button.active .cnt { color: var(--accent); }
+.auto-pill {
+  display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--border); font-size: 11px; color: var(--fg-dim); transition: all 150ms ease-out;
+}
+.auto-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-faint); }
+.auto-pill.on { border-color: oklch(0.80 0.16 145 / 0.4); color: var(--accent); }
+.auto-pill.on .dot { background: var(--accent); animation: pulse 2s ease-out infinite; }
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 14px; border-radius: 7px;
+  font-size: 12px; font-weight: 500; border: 1px solid var(--border); color: var(--fg-dim);
+  transition: all 150ms ease-out;
+}
+.btn:hover { border-color: var(--border-hi); color: var(--fg); background: var(--surface); }
+.btn.primary { background: var(--accent); color: oklch(0.15 0.01 145); border-color: transparent; font-weight: 600; }
+.btn.primary:hover { background: oklch(0.85 0.16 145); }
+.btn:active { transform: translateY(1px); }
+
+/* ── 里程碑 ── */
+.milestones {
+  display: flex; align-items: center; padding: var(--s3) var(--s4);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  margin-bottom: var(--s3); overflow-x: auto;
+}
+.milestones::-webkit-scrollbar { height: 0; }
+.ms-step { display: flex; align-items: center; gap: var(--s2); flex-shrink: 0; }
+.ms-dot {
+  width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
+  border: 2px solid var(--border-hi); color: var(--fg-faint); font-size: 10px; font-weight: 600; flex-shrink: 0;
+}
+.ms-step.done .ms-dot { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+.ms-step.current .ms-dot { border-color: var(--accent); color: var(--accent); animation: pulse 2s ease-out infinite; }
+.ms-label { font-size: 11.5px; color: var(--fg-dim); line-height: 1.3; }
+.ms-step.done .ms-label, .ms-step.current .ms-label { color: var(--fg); }
+.ms-step.current .ms-label { font-weight: 600; }
+.ms-label .val { display: block; font-size: 10px; color: var(--fg-faint); }
+.ms-step.current .ms-label .val { color: var(--accent); }
+.ms-line { width: 36px; height: 1px; background: var(--border-hi); margin: 0 var(--s2); flex-shrink: 0; }
+.ms-line.done { background: var(--accent); }
+
+/* ── KPI ── */
+.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s3); margin-bottom: var(--s3); }
+.kpi-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px var(--s4); transition: border-color 150ms ease-out, transform 150ms ease-out;
+}
+.kpi-card:hover { border-color: var(--border-hi); transform: translateY(-1px); }
+.kpi-label { font-size: 11px; color: var(--fg-dim); margin-bottom: var(--s2); display: flex; align-items: center; gap: 6px; }
+.kpi-value { font-family: var(--mono); font-size: 26px; font-weight: 600; line-height: 1; margin-bottom: var(--s2); }
+.kpi-value .unit { font-size: 13px; color: var(--fg-dim); font-weight: 400; }
+.kpi-trend { display: flex; align-items: center; gap: var(--s1); font-size: 11px; }
+.kpi-trend.up { color: var(--accent); }
+.kpi-trend.down { color: var(--red); }
+.kpi-trend.flat { color: var(--fg-dim); }
+.kpi-spark { margin-left: auto; }
+
+/* ── 面板 ── */
+.mid-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: var(--s3); margin-bottom: var(--s3); }
+.bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s3); }
+.panel {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  overflow: hidden; display: flex; flex-direction: column; min-width: 0;
+}
+.panel-head { display: flex; align-items: center; gap: var(--s2); padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; }
+.panel-head .count { font-family: var(--mono); font-size: 10px; padding: 1px 7px; border-radius: 999px; background: var(--accent-dim); color: var(--accent); }
+.panel-head .count.fail { background: var(--red-dim); color: var(--red); }
+.panel-head .link { margin-left: auto; font-size: 11px; font-weight: 400; color: var(--fg-dim); cursor: pointer; }
+.panel-head .link:hover { color: var(--fg); }
+.run-row {
+  display: grid; grid-template-columns: 18px 1fr 110px 130px 90px;
+  align-items: center; gap: 10px; padding: 9px 14px;
+  border-bottom: 1px solid var(--border); transition: background 120ms ease-out; cursor: pointer;
+}
+.run-row:last-child { border-bottom: none; }
+.run-row:hover { background: var(--surface-hi); }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; }
+.status-dot.running { background: var(--accent); animation: blink 1.6s ease-in-out infinite; }
+.status-dot.pass { background: var(--blue); }
+.status-dot.fail { background: var(--red); }
+.status-dot.queued { background: var(--fg-faint); }
+@keyframes blink { 50% { opacity: 0.35; } }
+.run-case { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-case .seed { display: block; font-size: 10px; color: var(--fg-faint); }
+.run-subsys { font-size: 11px; color: var(--fg-dim); }
+.progress-track { height: 4px; border-radius: 2px; background: var(--bg-deep); overflow: hidden; }
+.progress-fill { height: 100%; border-radius: 2px; background: var(--accent); }
+.progress-fill.fail { background: var(--red); }
+.progress-fill.pass { background: var(--blue); }
+.run-eta { font-family: var(--mono); font-size: 11px; color: var(--fg-dim); text-align: right; }
+.cov-panel { padding: var(--s4); display: flex; align-items: center; gap: 18px; }
+.cov-ring { position: relative; width: 128px; height: 128px; flex-shrink: 0; }
+.cov-ring svg { transform: rotate(-90deg); }
+.cov-ring .center { position: absolute; inset: 0; display: grid; place-items: center; }
+.cov-ring .center .num { font-family: var(--mono); font-size: 24px; font-weight: 600; }
+.cov-ring .center .lbl { font-size: 10px; color: var(--fg-dim); }
+.cov-legend { flex: 1; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.cov-item { display: flex; align-items: center; gap: var(--s2); font-size: 12px; }
+.cov-item .swatch { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.cov-item .name { color: var(--fg-dim); }
+.cov-item .val { margin-left: auto; font-family: var(--mono); font-size: 12px; }
+.cov-bar { height: 3px; border-radius: 2px; background: var(--bg-deep); margin-top: var(--s1); overflow: hidden; }
+.cov-bar i { display: block; height: 100%; border-radius: 2px; }
+.agent-msg { display: flex; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 12px; line-height: 1.5; }
+.agent-msg:last-child { border-bottom: none; }
+.agent-avatar { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; flex-shrink: 0; margin-top: 1px; }
+.agent-avatar.main { background: var(--accent-dim); color: var(--accent); }
+.agent-avatar.sub { background: var(--blue-dim); color: var(--blue); }
+.agent-msg .who { font-weight: 600; margin-bottom: 2px; }
+.agent-msg .who .time { font-weight: 400; font-family: var(--mono); font-size: 10px; color: var(--fg-faint); margin-left: 6px; }
+.agent-msg .body { color: var(--fg-dim); }
+.agent-msg .body code { font-family: var(--mono); font-size: 11px; background: var(--bg-deep); padding: 1px 5px; border-radius: 4px; color: var(--fg); }
+.fail-row {
+  display: grid; grid-template-columns: 1fr 130px 80px 80px; align-items: center; gap: 10px;
+  padding: 8px 14px; border-bottom: 1px solid var(--border); font-size: 12px;
+  cursor: pointer; transition: background 120ms ease-out;
+}
+.fail-row:last-child { border-bottom: none; }
+.fail-row:hover { background: var(--surface-hi); }
+.fail-name { font-family: var(--mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fail-cause { font-size: 11px; color: var(--fg-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill { display: inline-block; padding: 2px 8px; border-radius: 5px; font-size: 10px; font-weight: 500; }
+.pill.fail { background: var(--red-dim); color: oklch(0.72 0.16 25); }
+.pill.rca { background: var(--amber-dim); color: var(--amber); }
+.pill.fixed { background: var(--accent-dim); color: var(--accent); }
+
+/* ── 仿真视图 ── */
+.sim-toolbar { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s3); flex-wrap: wrap; }
+.sim-search {
+  display: flex; align-items: center; gap: var(--s2); padding: 5px 12px;
+  border-radius: 8px; border: 1px solid var(--border); background: var(--surface);
+  color: var(--fg-faint); margin-left: auto;
+}
+.sim-search input { border: none; outline: none; background: none; color: var(--fg); font-family: inherit; font-size: 12px; width: 160px; }
+.table-head {
+  display: grid; grid-template-columns: 18px 1.4fr 110px 100px 1fr 90px 80px;
+  gap: 10px; padding: 8px 14px; font-size: 10.5px; color: var(--fg-faint);
+  text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border);
+}
+.sim-table .run-row { grid-template-columns: 18px 1.4fr 110px 100px 1fr 90px 80px; }
+.sim-row-cell { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sim-row-cell.dim { color: var(--fg-dim); font-size: 11px; }
+.sim-row-cell.mono { font-family: var(--mono); }
+.st-running { color: var(--accent); } .st-pass { color: var(--blue); }
+.st-fail { color: var(--red); } .st-queued { color: var(--fg-faint); }
+.empty-inline { padding: 24px 14px; text-align: center; font-size: 12px; color: var(--fg-faint); }
+
+/* ── 覆盖率视图 ── */
+.cov-tabs { display: flex; gap: var(--s1); }
+.cov-tab {
+  padding: 5px 14px; border-radius: 8px; font-size: 12px; color: var(--fg-dim);
+  border: 1px solid transparent; transition: all 150ms ease-out;
+}
+.cov-tab:hover { color: var(--fg); }
+.cov-tab.active { color: var(--accent); background: var(--accent-dim); }
+.cov-top { display: grid; grid-template-columns: 1.5fr 1fr; gap: var(--s3); margin-bottom: var(--s3); }
+.chart-wrap { padding: var(--s4); }
+.legend { display: flex; gap: var(--s3); margin-left: auto; font-size: 11px; font-weight: 400; }
+.legend span { display: flex; align-items: center; gap: 5px; }
+.legend i { width: 10px; height: 3px; border-radius: 2px; display: inline-block; }
+#cov-chart { width: 100%; height: auto; display: block; }
+.cov-summary { display: flex; flex-direction: column; gap: var(--s3); padding: var(--s4); }
+.cs-row { display: flex; align-items: center; gap: var(--s3); }
+.cs-row .bar { flex: 1; height: 6px; border-radius: 3px; background: var(--bg-deep); overflow: hidden; }
+.cs-row .bar i { display: block; height: 100%; border-radius: 3px; }
+.cs-row .nm { width: 64px; font-size: 12px; color: var(--fg-dim); flex-shrink: 0; }
+.cs-row .pv { width: 52px; text-align: right; font-family: var(--mono); font-size: 13px; font-weight: 600; flex-shrink: 0; }
+.cs-row .delta { width: 44px; font-size: 10.5px; text-align: right; flex-shrink: 0; }
+.cov-table-head {
+  display: grid; grid-template-columns: 1.2fr 110px 70px 70px 70px 70px 64px;
+  gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--border);
+}
+.cov-table-head button, .cov-table-head span {
+  font-size: 10.5px; color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.05em;
+}
+.cov-table-head button { display: flex; align-items: center; gap: 4px; transition: color 120ms ease-out; }
+.cov-table-head button:hover { color: var(--fg); }
+.cov-table-head button.sorted { color: var(--accent); }
+.cov-table-head button .arrow { font-size: 9px; }
+.cov-mod-row {
+  display: grid; grid-template-columns: 1.2fr 110px 70px 70px 70px 70px 64px;
+  gap: 10px; align-items: center; padding: 7px 14px;
+  border-bottom: 1px solid var(--border); font-size: 12px;
+  cursor: pointer; transition: background 120ms ease-out;
+}
+.cov-mod-row:last-child { border-bottom: none; }
+.cov-mod-row:hover { background: var(--surface-hi); }
+.cov-mod-name { font-family: var(--mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cov-mod-name .sys { display: block; font-size: 10px; color: var(--fg-faint); font-family: var(--sans); }
+.cov-mod-bar { height: 4px; border-radius: 2px; background: var(--bg-deep); overflow: hidden; }
+.cov-mod-bar i { display: block; height: 100%; border-radius: 2px; }
+.cov-num { font-family: var(--mono); font-size: 11.5px; text-align: right; }
+.cov-num.low { color: var(--amber); }
+.cov-num.verylow { color: var(--red); }
+.cov-delta { font-size: 10.5px; text-align: right; }
+.cov-delta.up { color: var(--accent); } .cov-delta.down { color: var(--red); } .cov-delta.flat { color: var(--fg-faint); }
+.bin-row {
+  display: grid; grid-template-columns: 1fr 90px 60px 90px; gap: 10px; align-items: center;
+  padding: 7px 14px; border-bottom: 1px solid var(--border); font-size: 12px;
+  cursor: pointer; transition: background 120ms ease-out;
+}
+.bin-row:last-child { border-bottom: none; }
+.bin-row:hover { background: var(--surface-hi); }
+.bin-name { font-family: var(--mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bin-name .cg { display: block; font-size: 10px; color: var(--fg-faint); font-family: var(--sans); }
+.bin-hit { font-family: var(--mono); font-size: 11px; color: var(--fg-dim); }
+.empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 64px var(--s4); text-align: center; }
+.empty-state .icon { width: 48px; height: 48px; border-radius: 14px; background: var(--surface-hi); display: grid; place-items: center; color: var(--fg-faint); margin-bottom: var(--s4); }
+.empty-state h3 { font-size: 14px; font-weight: 600; margin-bottom: var(--s2); }
+.empty-state p { font-size: 12px; color: var(--fg-dim); line-height: 1.6; margin-bottom: var(--s4); max-width: 380px; }
+.skeleton-block { border-radius: 12px; border: 1px solid var(--border); background: var(--surface); overflow: hidden; }
+.sk-head { height: 37px; border-bottom: 1px solid var(--border); }
+.sk-body { padding: var(--s3); display: flex; flex-direction: column; gap: var(--s2); }
+.sk-line {
+  height: 12px; border-radius: 6px;
+  background: linear-gradient(90deg, var(--surface-hi) 25%, oklch(0.28 0.01 60) 50%, var(--surface-hi) 75%);
+  background-size: 200% 100%; animation: shimmer 1.2s ease-in-out infinite;
+}
+.sk-line.w60 { width: 60%; } .sk-line.w80 { width: 80%; }
+.sk-line.w40 { width: 40%; } .sk-line.h40 { height: 40px; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+/* ── 回归视图 ── */
+.suite-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s3); margin-bottom: var(--s3); }
+.suite-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: var(--s3) var(--s4); cursor: pointer;
+  transition: border-color 150ms ease-out, transform 150ms ease-out;
+}
+.suite-card:hover { border-color: var(--border-hi); transform: translateY(-1px); }
+.suite-head { display: flex; align-items: center; gap: var(--s2); margin-bottom: var(--s2); }
+.suite-head .name { font-size: 12.5px; font-weight: 600; font-family: var(--mono); }
+.suite-rate { font-family: var(--mono); font-size: 20px; font-weight: 600; margin-bottom: 2px; }
+.suite-rate.good { color: var(--accent); } .suite-rate.warn { color: var(--amber); } .suite-rate.bad { color: var(--red); }
+.suite-meta { font-size: 10.5px; color: var(--fg-faint); line-height: 1.6; }
+.suite-state { margin-left: auto; display: flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 500; }
+.suite-state.running { color: var(--accent); } .suite-state.scheduled { color: var(--blue); }
+.suite-state.pass { color: var(--blue); } .suite-state.fail { color: var(--red); }
+.reg-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: var(--s3); align-items: start; }
+.hist-row {
+  display: grid; grid-template-columns: 130px 90px 1fr 90px 80px 70px;
+  gap: 10px; align-items: center; padding: 8px 14px;
+  border-bottom: 1px solid var(--border); font-size: 12px;
+  cursor: pointer; transition: background 120ms ease-out;
+}
+.hist-row:last-child { border-bottom: none; }
+.hist-row:hover { background: var(--surface-hi); }
+.hist-id { font-family: var(--mono); font-size: 11px; }
+.hist-time { font-size: 11px; color: var(--fg-dim); }
+.hist-cases { font-size: 11px; color: var(--fg-dim); font-family: var(--mono); }
+.hist-cases .p { color: var(--blue); } .hist-cases .f { color: var(--red); }
+.hist-rate { font-family: var(--mono); font-size: 11.5px; text-align: right; }
+.hist-dur { font-family: var(--mono); font-size: 11px; color: var(--fg-dim); text-align: right; }
+.hist-diff { font-size: 10.5px; text-align: right; }
+.hist-diff.bad { color: var(--red); } .hist-diff.good { color: var(--accent); } .hist-diff.flat { color: var(--fg-faint); }
+.cluster-chip {
+  display: flex; align-items: center; gap: var(--s2); padding: 8px 12px; margin: 0 14px 6px;
+  border: 1px solid var(--border); border-radius: 9px; cursor: pointer;
+  transition: border-color 150ms ease-out, background 150ms ease-out;
+}
+.cluster-chip:hover { border-color: var(--border-hi); background: var(--surface-hi); }
+.cluster-chip .cn { font-size: 12px; font-weight: 550; }
+.cluster-chip .cd { font-size: 10.5px; color: var(--fg-dim); }
+.cluster-chip .cc { margin-left: auto; font-family: var(--mono); font-size: 11px; padding: 1px 8px; border-radius: 999px; background: var(--red-dim); color: oklch(0.72 0.16 25); }
+.cluster-hint { padding: 8px 14px 12px; }
+
+/* ── 抽屉 ── */
+/* 只遮内容区：避开 TitleBar(40px) / 导航栏(61px) / 状态栏(24px)，抽屉打开时框架仍可交互 */
+.backdrop {
+  position: fixed; top: 40px; bottom: 24px; left: 61px; right: 0;
+  background: oklch(0.10 0.008 60 / 0.5);
+  z-index: var(--z-backdrop); opacity: 0; pointer-events: none; transition: opacity 200ms ease-out;
+}
+.backdrop.show { opacity: 1; pointer-events: auto; }
+.drawer {
+  position: fixed; top: 40px; bottom: 24px; width: 330px;
+  background: var(--surface); border: 1px solid var(--border-hi);
+  z-index: var(--z-drawer); display: flex; flex-direction: column;
+  transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  box-shadow: 0 12px 32px oklch(0 0 0 / 0.35);
+}
+/* left:68 + width:330 = 右缘 398px，位移须 ≥398 才完全离屏，否则残留面板盖住导航栏 */
+.drawer.left { left: 68px; border-radius: 0 14px 14px 0; transform: translateX(-400px); }
+.drawer.right { right: 0; border-radius: 14px 0 0 0; transform: translateX(380px); width: 360px; }
+.drawer.open { transform: translateX(0); }
+.drawer-head { display: flex; align-items: center; gap: var(--s2); padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 12.5px; font-weight: 600; }
+.drawer-head .close-btn { margin-left: auto; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px; color: var(--fg-dim); }
+.drawer-head .close-btn:hover { background: var(--surface-hi); color: var(--fg); }
+.drawer-body { flex: 1; overflow-y: auto; padding: var(--s2); }
+.drawer-body::-webkit-scrollbar { width: 8px; }
+.drawer-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.ftree-row {
+  display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 7px;
+  font-size: 12px; color: var(--fg-dim); cursor: pointer; white-space: nowrap;
+  transition: background 100ms ease-out, color 100ms ease-out;
+}
+.ftree-row:hover { background: var(--surface-hi); color: var(--fg); }
+.ftree-row.active { background: var(--accent-dim); color: var(--accent); }
+.ftree-row .caret { width: 10px; display: grid; place-items: center; color: var(--fg-faint); transition: transform 150ms ease-out; }
+.ftree-row.expanded .caret { transform: rotate(90deg); }
+.ftree-row .meta { margin-left: auto; font-size: 9.5px; color: var(--fg-faint); padding-right: 4px; }
+.ftree-row .meta.fail { color: var(--red); }
+.ftree-children { display: none; }
+.ftree-children.expanded { display: block; }
+.ftree-children .ftree-row { padding-left: 28px; }
+.drawer-label { font-size: 10px; color: var(--fg-faint); letter-spacing: 0.06em; padding: 10px 10px 4px; }
+.recent-file {
+  display: flex; align-items: center; gap: var(--s2); padding: 5px 10px; margin: 1px var(--s2);
+  border-radius: 7px; font-family: var(--mono); font-size: 11.5px; color: var(--fg-dim);
+  cursor: pointer; transition: background 100ms ease-out;
+}
+.recent-file:hover { background: var(--surface-hi); color: var(--fg); }
+.recent-file .t { margin-left: auto; font-size: 10px; color: var(--fg-faint); font-family: var(--sans); }
+.ai-status { display: flex; align-items: center; gap: var(--s2); padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--fg-dim); }
+.ai-status .live { color: var(--accent); display: flex; align-items: center; gap: 5px; font-weight: 550; }
+.ai-status .live::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: blink 1.4s ease-in-out infinite; }
+.ai-msg { padding: 10px 16px; font-size: 12.5px; line-height: 1.6; }
+.ai-msg .who { font-size: 11px; font-weight: 600; color: var(--fg-dim); margin-bottom: 3px; display: flex; gap: 6px; align-items: center; }
+.ai-msg .who .t { font-weight: 400; font-family: var(--mono); font-size: 10px; color: var(--fg-faint); }
+.ai-msg .bd { color: oklch(0.82 0.006 60); }
+.ai-msg .bd code { font-family: var(--mono); font-size: 11px; background: var(--bg-deep); padding: 1px 5px; border-radius: 4px; color: var(--fg); }
+.mini-approval { margin: 6px 16px 10px; border: 1px solid oklch(0.80 0.13 80 / 0.35); border-radius: 10px; padding: 10px var(--s3); background: oklch(0.24 0.02 60); }
+.mini-approval .ttl { font-size: 12px; font-weight: 600; color: var(--amber); margin-bottom: 4px; }
+.mini-approval .dsc { font-size: 11.5px; color: var(--fg-dim); line-height: 1.5; margin-bottom: 8px; }
+.mini-approval .acts { display: flex; gap: var(--s2); }
+.mini-approval .acts .btn { padding: 4px 12px; font-size: 11.5px; }
+.subagent-mini { display: flex; align-items: center; gap: var(--s2); padding: 8px 16px; font-size: 11.5px; color: var(--fg-dim); border-bottom: 1px solid var(--border); }
+.subagent-mini .spinner {
+  width: 11px; height: 11px; border: 2px solid var(--border-hi);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin 0.9s linear infinite; flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.subagent-mini .nm { font-weight: 600; color: var(--fg); }
+.subagent-mini .tk { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--fg-faint); }
+.ai-composer { padding: 12px 16px; border-top: 1px solid var(--border); }
+.ai-composer .box { display: flex; align-items: center; gap: var(--s2); border: 1px solid var(--border-hi); border-radius: 10px; padding: 7px 12px; transition: border-color 150ms ease-out; }
+.ai-composer .box:focus-within { border-color: var(--accent); }
+.ai-composer input { flex: 1; border: none; outline: none; background: none; color: var(--fg); font-family: inherit; font-size: 12.5px; }
+.ai-composer input::placeholder { color: var(--fg-faint); }
+.ai-composer .send {
+  width: 26px; height: 26px; border-radius: 7px; background: var(--accent);
+  color: oklch(0.15 0.01 145); display: grid; place-items: center;
+  transition: background 150ms ease-out, transform 100ms ease-out;
+}
+.ai-composer .send:hover { background: oklch(0.85 0.16 145); }
+.ai-composer .send:active { transform: scale(0.94); }
+.ai-composer .full-link { margin-top: 8px; text-align: center; font-size: 11px; color: var(--fg-faint); cursor: pointer; }
+.ai-composer .full-link:hover { color: var(--accent); }
+
+/* ── 命令面板 ── */
+.palette-overlay {
+  position: fixed; inset: 0; background: oklch(0.10 0.008 60 / 0.45);
+  z-index: var(--z-palette); display: none; align-items: flex-start;
+  justify-content: center; padding-top: 12vh;
+}
+.palette-overlay.open { display: flex; }
+.palette {
+  width: 560px; max-width: calc(100vw - 48px);
+  background: var(--surface-hi); border: 1px solid var(--border-hi);
+  border-radius: 14px; box-shadow: 0 20px 48px oklch(0 0 0 / 0.5);
+  overflow: hidden; animation: palette-in 180ms ease-out;
+}
+@keyframes palette-in { from { opacity: 0; transform: translateY(-8px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+.palette-input { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.palette-input input { flex: 1; border: none; outline: none; background: none; color: var(--fg); font-family: inherit; font-size: 14px; }
+.palette-input input::placeholder { color: var(--fg-faint); }
+.palette-input kbd { font-family: var(--mono); font-size: 10px; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--border); color: var(--fg-faint); }
+.palette-list { max-height: 380px; overflow-y: auto; padding: var(--s2); }
+.palette-list::-webkit-scrollbar { width: 8px; }
+.palette-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.palette-group { font-size: 10px; color: var(--fg-faint); letter-spacing: 0.06em; padding: 8px 10px 4px; }
+.palette-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; font-size: 13px; color: var(--fg-dim); cursor: pointer; }
+.palette-item .pi-icon { width: 16px; display: grid; place-items: center; opacity: 0.7; }
+.palette-item .hint { margin-left: auto; font-size: 10.5px; color: var(--fg-faint); font-family: var(--mono); }
+.palette-item.selected { background: var(--accent-dim); color: var(--fg); }
+.palette-item.selected .pi-icon { opacity: 1; color: var(--accent); }
+.palette-empty { padding: 24px; text-align: center; font-size: 12px; color: var(--fg-faint); }
+
+/* ── 状态栏 / Toast ── */
+.statusbar {
+  height: 24px; display: flex; align-items: center; padding: 0 12px;
+  background: var(--bg-deep); border-top: 1px solid var(--border);
+  font-size: 10.5px; color: var(--fg-dim); gap: 14px; flex-shrink: 0;
+}
+.statusbar .seg { display: flex; align-items: center; gap: 5px; }
+.statusbar .seg.ok { color: var(--accent); }
+.statusbar .seg.warn { color: var(--amber); }
+.statusbar .right { margin-left: auto; display: flex; gap: 14px; }
+.toast {
+  position: fixed; bottom: 36px; right: 20px; display: flex; align-items: center; gap: var(--s2);
+  padding: 10px 16px; background: var(--surface-hi); border: 1px solid var(--border-hi);
+  border-radius: 10px; font-size: 12px; box-shadow: 0 8px 24px oklch(0 0 0 / 0.4);
+  opacity: 0; transform: translateY(8px);
+  transition: opacity 200ms ease-out, transform 200ms ease-out;
+  pointer-events: none; z-index: var(--z-toast);
+}
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast svg { color: var(--accent); flex-shrink: 0; }
+
+/* ── 可切换面板（覆盖率 tab 等） ── */
+.cov-pane { display: none; }
+.cov-pane.active { display: block; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+<!-- ═══════════ TitleBar ═══════════ -->
+<header class="titlebar">
+  <div class="logo">
+    <svg class="logo-mark" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>
+    <span class="logo-name">SoC VERIFY</span>
+  </div>
+  <button class="proj-selector">
+    <span class="dot"></span>
+    neckar-dv
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+  </button>
+  <button class="global-search" id="search-trigger">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+    <span>搜索用例、文件、命令…</span>
+    <kbd>Ctrl K</kbd>
+  </button>
+  <div class="spacer"></div>
+  <button class="reg-badge" data-goto="regression">
+    <span class="pulse"></span>
+    回归 #142 运行中 · 312/480
+  </button>
+  <div class="notif-wrap">
+    <button class="notif-btn" id="notif-btn" title="通知">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+      <span class="badge" id="notif-badge">3</span>
+    </button>
+    <div class="notif-dropdown" id="notif-dropdown">
+      <div class="notif-head">通知<button id="mark-read">全部标为已读</button></div>
+      <div class="notif-item unread">
+        <div class="nicon" style="background:var(--red-dim);color:var(--red)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div>
+        <div class="nbody">
+          <div class="ntitle">i2c_arbitration_lost 第 3 次失败</div>
+          <div class="ntime">AI 已开始波形分析 · 2 分钟前</div>
+        </div>
+        <span class="undot"></span>
+      </div>
+      <div class="notif-item unread">
+        <div class="nicon" style="background:var(--blue-dim);color:var(--blue)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/></svg></div>
+        <div class="nbody">
+          <div class="ntitle">覆盖率 87.3%，距目标还差 2.7%</div>
+          <div class="ntime">axi_lite 有 3 个 bin 未命中 · 26 分钟前</div>
+        </div>
+      </div>
+      <div class="notif-item unread">
+        <div class="nicon" style="background:var(--amber-dim);color:var(--amber)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+        <div class="nbody">
+          <div class="ntitle">用例评审：uart_parity_err_inj 待确认</div>
+          <div class="ntime">张工提交了检查意见 · 1 小时前</div>
+        </div>
+      </div>
+      <div class="notif-item">
+        <div class="nicon" style="background:var(--accent-dim);color:var(--accent)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></div>
+        <div class="nbody">
+          <div class="ntitle">冒烟套件 96/96 全部通过</div>
+          <div class="ntime">回归 #141 完成 · 09:14</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="win-controls">
+    <button title="最小化"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+    <button title="最大化"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="5" width="14" height="14" rx="1"/></svg></button>
+    <button class="close" title="关闭"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg></button>
+  </div>
+</header>
+
+<div class="main">
+  <!-- ═══════════ 导航栏 ═══════════ -->
+  <nav class="nav-rail">
+    <button class="nav-btn active" data-view="dashboard">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      <span class="tooltip">总览</span>
+    </button>
+    <button class="nav-btn" data-view="simulation">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+      <span class="badge">4</span>
+      <span class="tooltip">仿真</span>
+    </button>
+    <button class="nav-btn" data-view="coverage">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+      <span class="tooltip">覆盖率</span>
+    </button>
+    <button class="nav-btn" data-view="regression">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
+      <span class="tooltip">回归</span>
+    </button>
+    <div class="divider"></div>
+    <button class="nav-btn" data-drawer="file-drawer">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+      <span class="tooltip">文件</span>
+    </button>
+    <button class="nav-btn">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+      <span class="tooltip">版本控制</span>
+    </button>
+    <button class="nav-btn" data-drawer="ai-drawer">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m12 3 1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/></svg>
+      <span class="tooltip">AI 助手</span>
+    </button>
+    <div class="bottom">
+      <button class="nav-btn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+        <span class="tooltip">设置</span>
+      </button>
+    </div>
+  </nav>
+
+  <div class="content">
+    <!-- ═══════════ 视图：总览 ═══════════ -->
+    <section class="view active" id="view-dashboard">
+      <div class="view-header">
+        <h1>验证总览</h1>
+        <span class="sub">neckar-dv · nightly 计划 · 08-21 14:32</span>
+        <div class="actions">
+          <button class="auto-pill on" id="auto-pill"><span class="dot"></span>失败自动重跑</button>
+          <button class="btn">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            导出报告
+          </button>
+          <button class="btn primary" id="run-reg-btn">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+            启动回归
+          </button>
+        </div>
+      </div>
+
+      <div class="milestones">
+        <div class="ms-step done"><span class="ms-dot"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span><div class="ms-label">需求导入<span class="val">32 条规格</span></div></div>
+        <div class="ms-line done"></div>
+        <div class="ms-step done"><span class="ms-dot"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span><div class="ms-label">用例开发<span class="val">480 用例</span></div></div>
+        <div class="ms-line done"></div>
+        <div class="ms-step done"><span class="ms-dot"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span><div class="ms-label">冒烟测试<span class="val">96/96 通过</span></div></div>
+        <div class="ms-line done"></div>
+        <div class="ms-step current"><span class="ms-dot">4</span><div class="ms-label">功能验证<span class="val">89.6% · 进行中</span></div></div>
+        <div class="ms-line"></div>
+        <div class="ms-step"><span class="ms-dot">5</span><div class="ms-label">覆盖率收敛<span class="val">目标 ≥ 90%</span></div></div>
+        <div class="ms-line"></div>
+        <div class="ms-step"><span class="ms-dot">6</span><div class="ms-label">回归签核<span class="val">冻结前 3 轮</span></div></div>
+      </div>
+
+      <div class="kpi-row">
+        <div class="kpi-card">
+          <div class="kpi-label">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 10 10"/></svg>
+            功能覆盖率
+          </div>
+          <div class="kpi-value">87.3<span class="unit">%</span></div>
+          <div class="kpi-trend up">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17 17 7"/><path d="M17 7H8M17 7v9"/></svg>
+            +1.4% vs 昨日
+            <svg class="kpi-spark" width="64" height="20" viewBox="0 0 64 20"><polyline points="0,14 9,12 18,13 27,9 36,10 45,6 54,7 64,4" fill="none" stroke="oklch(0.80 0.16 145)" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+            代码覆盖率
+          </div>
+          <div class="kpi-value">92.1<span class="unit">%</span></div>
+          <div class="kpi-trend up">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 17 17 7"/><path d="M17 7H8M17 7v9"/></svg>
+            +0.6% vs 昨日
+            <svg class="kpi-spark" width="64" height="20" viewBox="0 0 64 20"><polyline points="0,10 9,11 18,8 27,9 36,7 45,7 54,5 64,4" fill="none" stroke="oklch(0.80 0.16 145)" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            用例通过率
+          </div>
+          <div class="kpi-value">89.6<span class="unit">%</span></div>
+          <div class="kpi-trend down">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 7l10 10"/><path d="M17 17H8M17 17V8"/></svg>
+            -0.8% vs 昨日
+            <svg class="kpi-spark" width="64" height="20" viewBox="0 0 64 20"><polyline points="0,5 9,6 18,5 27,7 36,8 45,7 54,10 64,12" fill="none" stroke="oklch(0.68 0.18 25)" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            活跃失败
+          </div>
+          <div class="kpi-value">12</div>
+          <div class="kpi-trend up">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 7l10 10"/><path d="M17 17H8M17 17V8"/></svg>
+            -3 vs 昨日
+            <svg class="kpi-spark" width="64" height="20" viewBox="0 0 64 20"><polyline points="0,12 9,10 18,11 27,8 36,9 45,6 54,7 64,5" fill="none" stroke="oklch(0.80 0.16 145)" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="mid-grid">
+        <div class="panel">
+          <div class="panel-head">
+            运行中仿真 <span class="count">4</span>
+            <span class="link" data-goto="simulation">查看全部 →</span>
+          </div>
+          <div class="run-row">
+            <span class="status-dot running"></span>
+            <div class="run-case">dma_burst_xfer_64b<span class="seed">seed 0x3F21 · vcs</span></div>
+            <span class="run-subsys">AXI-DMA</span>
+            <div class="progress-track"><div class="progress-fill" style="width:78%"></div></div>
+            <span class="run-eta">78% · 12m</span>
+          </div>
+          <div class="run-row">
+            <span class="status-dot running"></span>
+            <div class="run-case">uart_loopback_cfg<span class="seed">seed 0x9A04 · vcs</span></div>
+            <span class="run-subsys">UART</span>
+            <div class="progress-track"><div class="progress-fill" style="width:45%"></div></div>
+            <span class="run-eta">45% · 18m</span>
+          </div>
+          <div class="run-row">
+            <span class="status-dot running"></span>
+            <div class="run-case">pcie_ltssm_l0s_entry<span class="seed">seed 0x11C8 · xrun</span></div>
+            <span class="run-subsys">PCIe PHY</span>
+            <div class="progress-track"><div class="progress-fill" style="width:22%"></div></div>
+            <span class="run-eta">22% · 34m</span>
+          </div>
+          <div class="run-row">
+            <span class="status-dot running"></span>
+            <div class="run-case">spi_quad_tx_rx<span class="seed">seed 0x7B33 · vcs</span></div>
+            <span class="run-subsys">QSPI</span>
+            <div class="progress-track"><div class="progress-fill" style="width:91%"></div></div>
+            <span class="run-eta">91% · 2m</span>
+          </div>
+          <div class="run-row">
+            <span class="status-dot fail"></span>
+            <div class="run-case">i2c_arbitration_lost<span class="seed">seed 0x52D1 · vcs</span></div>
+            <span class="run-subsys">I2C</span>
+            <div class="progress-track"><div class="progress-fill fail" style="width:64%"></div></div>
+            <span class="run-eta">失败 @ 64%</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            覆盖率
+            <span class="link" data-goto="coverage">详情 →</span>
+          </div>
+          <div class="cov-panel">
+            <div class="cov-ring">
+              <svg width="128" height="128" viewBox="0 0 128 128">
+                <circle cx="64" cy="64" r="56" fill="none" stroke="var(--bg-deep)" stroke-width="10"/>
+                <circle cx="64" cy="64" r="56" fill="none" stroke="var(--accent)" stroke-width="10" stroke-linecap="round" stroke-dasharray="351.86" stroke-dashoffset="44.7"/>
+              </svg>
+              <div class="center"><div><div class="num">87.3<span style="font-size:12px">%</span></div><div class="lbl">功能覆盖</div></div></div>
+            </div>
+            <div class="cov-legend">
+              <div class="cov-item">
+                <span class="swatch" style="background:var(--accent)"></span>
+                <span class="name">功能覆盖</span>
+                <span class="val">87.3%</span>
+              </div>
+              <div><div class="cov-bar"><i style="width:87.3%;background:var(--accent)"></i></div></div>
+              <div class="cov-item">
+                <span class="swatch" style="background:var(--blue)"></span>
+                <span class="name">代码语句</span>
+                <span class="val">92.1%</span>
+              </div>
+              <div><div class="cov-bar"><i style="width:92.1%;background:var(--blue)"></i></div></div>
+              <div class="cov-item">
+                <span class="swatch" style="background:var(--violet)"></span>
+                <span class="name">分支覆盖</span>
+                <span class="val">84.6%</span>
+              </div>
+              <div><div class="cov-bar"><i style="width:84.6%;background:var(--violet)"></i></div></div>
+              <div class="cov-item">
+                <span class="swatch" style="background:var(--amber)"></span>
+                <span class="name">SVA 断言</span>
+                <span class="val">78.9%</span>
+              </div>
+              <div><div class="cov-bar"><i style="width:78.9%;background:var(--amber)"></i></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="bottom-grid">
+        <div class="panel">
+          <div class="panel-head">
+            AI Agent 活动 <span class="count">2</span>
+            <span class="link" data-drawer="ai-drawer">打开会话 →</span>
+          </div>
+          <div class="agent-msg">
+            <div class="agent-avatar main">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3 1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/></svg>
+            </div>
+            <div>
+              <div class="who">验证 Agent<span class="time">14:29</span></div>
+              <div class="body">发现 <code>i2c_arbitration_lost</code> 连续 3 次在同一 seed 失败，正在拉取波形并对比上一次通过版本…</div>
+            </div>
+          </div>
+          <div class="agent-msg">
+            <div class="agent-avatar sub">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4M8 4h8"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/></svg>
+            </div>
+            <div>
+              <div class="who">覆盖率分析 · 子代理<span class="time">14:25</span></div>
+              <div class="body"><code>axi_lite_regs</code> 的 <code>rw_collision</code> bin 未命中，已生成 2 条定向用例建议，等待确认。</div>
+            </div>
+          </div>
+          <div class="agent-msg">
+            <div class="agent-avatar main">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3 1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/></svg>
+            </div>
+            <div>
+              <div class="who">验证 Agent<span class="time">14:18</span></div>
+              <div class="body">回归 #142 第 4 批次已调度至 farm-03，预计 18:40 完成全部 480 用例。</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            失败聚焦 <span class="count fail">12</span>
+            <span class="link" data-goto="simulation">全部失败 →</span>
+          </div>
+          <div class="fail-row">
+            <span class="fail-name">i2c_arbitration_lost</span>
+            <span class="fail-cause">总线仲裁丢失 @ 2.3μs</span>
+            <span class="pill fail">×3</span>
+            <span class="pill rca">AI 分析中</span>
+          </div>
+          <div class="fail-row">
+            <span class="fail-name">pcie_ltssm_l0s_exit</span>
+            <span class="fail-cause">L0s 退出超时 500ns</span>
+            <span class="pill fail">×2</span>
+            <span class="pill fixed">已修复</span>
+          </div>
+          <div class="fail-row">
+            <span class="fail-name">dma_sg_chain_wrap</span>
+            <span class="fail-cause">散列链表回绕越界</span>
+            <span class="pill fail">×2</span>
+            <span class="pill rca">待复核</span>
+          </div>
+          <div class="fail-row">
+            <span class="fail-name">uart_parity_inject</span>
+            <span class="fail-cause">校验位注入未生效</span>
+            <span class="pill fail">×1</span>
+            <span></span>
+          </div>
+        </div>
+      </div>
+    </section>
+    <!-- ═══════════ 视图：仿真 ═══════════ -->
+    <section class="view" id="view-simulation">
+      <div class="view-header">
+        <h1>仿真</h1>
+        <span class="sub">4 并发 · farm-02 / farm-03 · vcs + xrun 混跑</span>
+        <div class="actions">
+          <button class="btn" id="stop-all-btn">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+            停止全部
+          </button>
+          <button class="btn primary">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+            新建仿真
+          </button>
+        </div>
+      </div>
+
+      <div class="sim-toolbar">
+        <div class="seg" id="sim-seg">
+          <button class="active" data-filter="all">全部<span class="cnt">9</span></button>
+          <button data-filter="running">运行中<span class="cnt">4</span></button>
+          <button data-filter="fail">失败<span class="cnt">2</span></button>
+          <button data-filter="pass">通过<span class="cnt">2</span></button>
+          <button data-filter="queued">队列<span class="cnt">1</span></button>
+          <button data-filter="stopped">已停止<span class="cnt">0</span></button>
+        </div>
+        <div class="sim-search">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+          <input id="sim-filter" placeholder="过滤用例名 / seed…" autocomplete="off">
+        </div>
+      </div>
+
+      <div class="panel sim-table" id="sim-table">
+        <div class="table-head">
+          <span></span><span>用例</span><span>子系统</span><span>Seed</span><span>进度</span><span>耗时</span><span style="text-align:right">ETA</span>
+        </div>
+        <div class="run-row" data-status="running">
+          <span class="status-dot running"></span>
+          <div class="run-case">dma_burst_xfer_64b<span class="seed">vcs · farm-02 · 优先级 P1</span></div>
+          <span class="sim-row-cell dim">AXI-DMA</span>
+          <span class="sim-row-cell mono dim">0x3F21</span>
+          <div class="progress-track"><div class="progress-fill" style="width:78%"></div></div>
+          <span class="sim-row-cell mono dim">14m 20s</span>
+          <span class="sim-row-cell mono st-running" style="text-align:right">12m</span>
+        </div>
+        <div class="run-row" data-status="running">
+          <span class="status-dot running"></span>
+          <div class="run-case">uart_loopback_cfg<span class="seed">vcs · farm-02</span></div>
+          <span class="sim-row-cell dim">UART</span>
+          <span class="sim-row-cell mono dim">0x9A04</span>
+          <div class="progress-track"><div class="progress-fill" style="width:45%"></div></div>
+          <span class="sim-row-cell mono dim">08m 12s</span>
+          <span class="sim-row-cell mono st-running" style="text-align:right">18m</span>
+        </div>
+        <div class="run-row" data-status="running">
+          <span class="status-dot running"></span>
+          <div class="run-case">pcie_ltssm_l0s_entry<span class="seed">xrun · farm-03</span></div>
+          <span class="sim-row-cell dim">PCIe PHY</span>
+          <span class="sim-row-cell mono dim">0x11C8</span>
+          <div class="progress-track"><div class="progress-fill" style="width:22%"></div></div>
+          <span class="sim-row-cell mono dim">41m 05s</span>
+          <span class="sim-row-cell mono st-running" style="text-align:right">34m</span>
+        </div>
+        <div class="run-row" data-status="running">
+          <span class="status-dot running"></span>
+          <div class="run-case">spi_quad_tx_rx<span class="seed">vcs · farm-02</span></div>
+          <span class="sim-row-cell dim">QSPI</span>
+          <span class="sim-row-cell mono dim">0x7B33</span>
+          <div class="progress-track"><div class="progress-fill" style="width:91%"></div></div>
+          <span class="sim-row-cell mono dim">01m 48s</span>
+          <span class="sim-row-cell mono st-running" style="text-align:right">2m</span>
+        </div>
+        <div class="run-row" data-status="fail">
+          <span class="status-dot fail"></span>
+          <div class="run-case">i2c_arbitration_lost<span class="seed">vcs · farm-02 · 连续第 3 次</span></div>
+          <span class="sim-row-cell dim">I2C</span>
+          <span class="sim-row-cell mono dim">0x52D1</span>
+          <div class="progress-track"><div class="progress-fill fail" style="width:64%"></div></div>
+          <span class="sim-row-cell mono dim">09m 03s</span>
+          <span class="sim-row-cell mono st-fail" style="text-align:right">失败</span>
+        </div>
+        <div class="run-row" data-status="fail">
+          <span class="status-dot fail"></span>
+          <div class="run-case">dma_sg_chain_wrap<span class="seed">vcs · farm-03</span></div>
+          <span class="sim-row-cell dim">AXI-DMA</span>
+          <span class="sim-row-cell mono dim">0x88E0</span>
+          <div class="progress-track"><div class="progress-fill fail" style="width:37%"></div></div>
+          <span class="sim-row-cell mono dim">05m 51s</span>
+          <span class="sim-row-cell mono st-fail" style="text-align:right">失败</span>
+        </div>
+        <div class="run-row" data-status="pass">
+          <span class="status-dot pass"></span>
+          <div class="run-case">spi_dual_mode_rd<span class="seed">vcs · farm-02</span></div>
+          <span class="sim-row-cell dim">SPI</span>
+          <span class="sim-row-cell mono dim">0x7B30</span>
+          <div class="progress-track"><div class="progress-fill pass" style="width:100%"></div></div>
+          <span class="sim-row-cell mono dim">06m 44s</span>
+          <span class="sim-row-cell mono st-pass" style="text-align:right">完成</span>
+        </div>
+        <div class="run-row" data-status="pass">
+          <span class="status-dot pass"></span>
+          <div class="run-case">apb_bridge_smoke<span class="seed">vcs · farm-02</span></div>
+          <span class="sim-row-cell dim">APB</span>
+          <span class="sim-row-cell mono dim">0x00A1</span>
+          <div class="progress-track"><div class="progress-fill pass" style="width:100%"></div></div>
+          <span class="sim-row-cell mono dim">02m 10s</span>
+          <span class="sim-row-cell mono st-pass" style="text-align:right">完成</span>
+        </div>
+        <div class="run-row" data-status="queued">
+          <span class="status-dot queued"></span>
+          <div class="run-case">usb3_link_train<span class="seed">vcs · 等待 license</span></div>
+          <span class="sim-row-cell dim">USB3</span>
+          <span class="sim-row-cell mono dim">0x44F2</span>
+          <div class="progress-track"><div class="progress-fill" style="width:0%"></div></div>
+          <span class="sim-row-cell mono dim">—</span>
+          <span class="sim-row-cell mono st-queued" style="text-align:right">排队中</span>
+        </div>
+        <div class="empty-state" id="sim-empty" style="display:none">
+          <div class="icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="6 3 20 12 6 21 6 3"/><line x1="2" y1="2" x2="22" y2="22"/></svg>
+          </div>
+          <h3>没有匹配的仿真</h3>
+          <p>当前筛选条件下没有结果。切换到「全部」，或清空过滤条件后重试。</p>
+          <button class="btn" id="sim-clear">清空筛选</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════ 视图：覆盖率 ═══════════ -->
+    <section class="view" id="view-coverage">
+      <div class="view-header">
+        <h1>覆盖率</h1>
+        <span class="sub">merge 自 回归 #142 · 08-21 12:00</span>
+        <div class="actions">
+          <div class="cov-tabs">
+            <button class="cov-tab active" data-tab="module">模块排序</button>
+            <button class="cov-tab" data-tab="bin">Bin 明细</button>
+          </div>
+          <button class="btn" id="cov-refresh">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg>
+            重新合并
+          </button>
+          <button class="btn primary">导出报告</button>
+        </div>
+      </div>
+
+      <div class="cov-top">
+        <div class="panel">
+          <div class="panel-head">
+            7 日趋势
+            <div class="legend">
+              <span><i style="background:var(--accent)"></i>功能</span>
+              <span><i style="background:var(--blue)"></i>代码</span>
+            </div>
+          </div>
+          <div class="chart-wrap">
+            <svg id="cov-chart" viewBox="0 0 560 210">
+              <line x1="40" y1="179" x2="530" y2="179" stroke="var(--border)" stroke-dasharray="3 4"/>
+              <line x1="40" y1="123" x2="530" y2="123" stroke="var(--border)" stroke-dasharray="3 4"/>
+              <line x1="40" y1="67" x2="530" y2="67" stroke="var(--amber)" stroke-dasharray="5 4" opacity="0.55"/>
+              <text x="36" y="182" font-size="10" fill="var(--fg-faint)" text-anchor="end">80</text>
+              <text x="36" y="126" font-size="10" fill="var(--fg-faint)" text-anchor="end">85</text>
+              <text x="36" y="70" font-size="10" fill="var(--amber)" text-anchor="end" opacity="0.8">目标 90</text>
+              <polygon points="40,135 120,128 200,121 280,113 360,107 440,101 520,85 520,185 40,185" fill="oklch(0.80 0.16 145 / 0.08)"/>
+              <polyline points="40,135 120,128 200,121 280,113 360,107 440,101 520,85" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
+              <polyline points="40,56 120,54 200,50 280,44 360,41 440,37 520,30" fill="none" stroke="var(--blue)" stroke-width="2" stroke-linecap="round"/>
+              <circle cx="520" cy="85" r="3.5" fill="var(--accent)"/>
+              <circle cx="520" cy="30" r="3.5" fill="var(--blue)"/>
+              <text x="40" y="205" font-size="10" fill="var(--fg-faint)" text-anchor="middle">08-15</text>
+              <text x="120" y="205" font-size="10" fill="var(--fg-faint)" text-anchor="middle">08-16</text>
+              <text x="200" y="205" font-size="10" fill="var(--fg-faint)" text-anchor="middle">08-17</text>
+              <text x="280" y="205" font-size="10" fill="var(--fg-faint)" text-anchor="middle">08-18</text>
+              <text x="360" y="205" font-size="10" fill="var(--fg-faint)" text-anchor="middle">08-19</text>
+              <text x="440" y="205" font-size="10" fill="var(--fg-faint)" text-anchor="middle">08-20</text>
+              <text x="520" y="205" font-size="10" fill="var(--fg-dim)" text-anchor="middle">08-21</text>
+            </svg>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">汇总</div>
+          <div class="cov-summary">
+            <div class="cs-row">
+              <span class="nm">功能</span>
+              <div class="bar"><i style="width:87.3%;background:var(--accent)"></i></div>
+              <span class="pv">87.3%</span>
+              <span class="cov-delta up">+1.4</span>
+            </div>
+            <div class="cs-row">
+              <span class="nm">语句</span>
+              <div class="bar"><i style="width:92.1%;background:var(--blue)"></i></div>
+              <span class="pv">92.1%</span>
+              <span class="cov-delta up">+0.6</span>
+            </div>
+            <div class="cs-row">
+              <span class="nm">分支</span>
+              <div class="bar"><i style="width:84.6%;background:var(--violet)"></i></div>
+              <span class="pv">84.6%</span>
+              <span class="cov-delta up">+0.9</span>
+            </div>
+            <div class="cs-row">
+              <span class="nm">断言</span>
+              <div class="bar"><i style="width:78.9%;background:var(--amber)"></i></div>
+              <span class="pv">78.9%</span>
+              <span class="cov-delta up">+2.1</span>
+            </div>
+            <div style="font-size:11px;color:var(--fg-dim);line-height:1.6;padding-top:4px">
+              距 90% 目标还差 <b style="color:var(--accent)">2.7pp</b>；按近 3 日收敛速度，预计 <b style="color:var(--accent)">2 天</b>内达成。
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="cov-pane active" id="cov-pane-module">
+        <div class="panel">
+          <div class="panel-head">
+            模块覆盖率排序 <span class="count">184 模块</span>
+            <span class="link">在 IMC 中打开 →</span>
+          </div>
+          <div class="cov-table-head">
+            <button class="sorted">模块<span class="arrow">↓</span></button>
+            <span>覆盖率</span>
+            <button>功能</button>
+            <button>语句</button>
+            <button>分支</button>
+            <button>断言</button>
+            <button>24h Δ</button>
+          </div>
+          <div class="cov-mod-row">
+            <div class="cov-mod-name">qspi_ctrl.sv<span class="sys">QSPI 控制器</span></div>
+            <div class="cov-mod-bar"><i style="width:95.1%;background:var(--accent)"></i></div>
+            <span class="cov-num">95.1</span>
+            <span class="cov-num">97.8</span>
+            <span class="cov-num">92.3</span>
+            <span class="cov-num">90.6</span>
+            <span class="cov-delta up">+0.5</span>
+          </div>
+          <div class="cov-mod-row">
+            <div class="cov-mod-name">uart_ctrl.sv<span class="sys">UART 控制器</span></div>
+            <div class="cov-mod-bar"><i style="width:91.6%;background:var(--accent)"></i></div>
+            <span class="cov-num">91.6</span>
+            <span class="cov-num">95.2</span>
+            <span class="cov-num">88.7</span>
+            <span class="cov-num">84.0</span>
+            <span class="cov-delta up">+1.2</span>
+          </div>
+          <div class="cov-mod-row">
+            <div class="cov-mod-name">axi_dma.sv<span class="sys">AXI DMA 引擎</span></div>
+            <div class="cov-mod-bar"><i style="width:84.2%;background:var(--blue)"></i></div>
+            <span class="cov-num">84.2</span>
+            <span class="cov-num">91.3</span>
+            <span class="cov-num">80.1</span>
+            <span class="cov-num">76.4</span>
+            <span class="cov-delta up">+0.8</span>
+          </div>
+          <div class="cov-mod-row">
+            <div class="cov-mod-name">pcie_phy_rc.sv<span class="sys">PCIe PHY 接收</span></div>
+            <div class="cov-mod-bar"><i style="width:72.8%;background:var(--amber)"></i></div>
+            <span class="cov-num low">72.8</span>
+            <span class="cov-num">81.5</span>
+            <span class="cov-num low">66.2</span>
+            <span class="cov-num low">61.9</span>
+            <span class="cov-delta up">+0.4</span>
+          </div>
+          <div class="cov-mod-row">
+            <div class="cov-mod-name">i2c_master.sv<span class="sys">I2C 主控制器</span></div>
+            <div class="cov-mod-bar"><i style="width:68.3%;background:var(--red)"></i></div>
+            <span class="cov-num verylow">68.3</span>
+            <span class="cov-num">79.0</span>
+            <span class="cov-num verylow">60.4</span>
+            <span class="cov-num verylow">55.2</span>
+            <span class="cov-delta down">-1.1</span>
+          </div>
+          <div class="cov-mod-row">
+            <div class="cov-mod-name">apb_bridge.sv<span class="sys">APB 桥</span></div>
+            <div class="cov-mod-bar"><i style="width:98.4%;background:var(--accent)"></i></div>
+            <span class="cov-num">98.4</span>
+            <span class="cov-num">99.1</span>
+            <span class="cov-num">96.8</span>
+            <span class="cov-num">94.2</span>
+            <span class="cov-delta up">+0.1</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="cov-pane" id="cov-pane-bin">
+        <div class="panel">
+          <div class="panel-head">
+            未命中 Bin · axi_lite_regs <span class="count fail">3</span>
+            <span class="link" id="gen-cases-link">生成定向用例 →</span>
+          </div>
+          <div id="bin-skeleton">
+            <div class="sk-head"></div>
+            <div class="sk-body">
+              <div class="sk-line w80"></div>
+              <div class="sk-line w60"></div>
+              <div class="sk-line"></div>
+              <div class="sk-line w60"></div>
+            </div>
+          </div>
+          <div id="bin-rows" style="display:none">
+            <div class="bin-row">
+              <div class="bin-name">rw_collision[1]<span class="cg">cp_axi_lite_regs · 读写冲突场景</span></div>
+              <span class="bin-hit">0 / 1</span>
+              <span class="pill fail">未命中</span>
+              <span class="cov-delta up">+2 条建议</span>
+            </div>
+            <div class="bin-row">
+              <div class="bin-name">addr_phase_gap[4]<span class="cg">cp_axi_lite_regs · 地址相位间隙</span></div>
+              <span class="bin-hit">0 / 4</span>
+              <span class="pill fail">未命中</span>
+              <span class="cov-delta up">+1 条建议</span>
+            </div>
+            <div class="bin-row">
+              <div class="bin-name">wstrb_combos[16]<span class="cg">cp_axi_lite_regs · 写选通组合</span></div>
+              <span class="bin-hit">12 / 16</span>
+              <span class="pill rca">部分命中</span>
+              <span class="cov-delta flat">—</span>
+            </div>
+            <div class="bin-row">
+              <div class="bin-name">back2back[2]<span class="cg">cp_axi_lite_regs · 背靠背事务</span></div>
+              <span class="bin-hit">2 / 2</span>
+              <span class="pill fixed">命中</span>
+              <span class="cov-delta flat">—</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <!-- ═══════════ 视图：回归 ═══════════ -->
+    <section class="view" id="view-regression">
+      <div class="view-header">
+        <h1>回归</h1>
+        <span class="sub">#136 → #142 · nightly 定时触发 · farm-02/03</span>
+        <div class="actions">
+          <button class="btn">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            新建套件
+          </button>
+          <button class="btn primary">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+            立即运行
+          </button>
+        </div>
+      </div>
+
+      <div class="suite-grid">
+        <div class="suite-card">
+          <div class="suite-head">
+            <span class="name">smoke</span>
+            <span class="suite-state pass">已完成</span>
+          </div>
+          <div class="suite-rate good">100%</div>
+          <div class="suite-meta">96/96 通过 · 12m<br>08-21 09:14 · farm-02</div>
+        </div>
+        <div class="suite-card">
+          <div class="suite-head">
+            <span class="name">nightly</span>
+            <span class="suite-state running">运行中 65%</span>
+          </div>
+          <div class="suite-rate warn">89.6%</div>
+          <div class="suite-meta">312/480 · 12 失败<br>ETA 18:40 · farm-02/03</div>
+        </div>
+        <div class="suite-card">
+          <div class="suite-head">
+            <span class="name">feature_full</span>
+            <span class="suite-state scheduled">已排队</span>
+          </div>
+          <div class="suite-rate" style="color:var(--fg-dim)">—</div>
+          <div class="suite-meta">480 用例 · 8 并发<br>今晚 22:00 触发</div>
+        </div>
+        <div class="suite-card">
+          <div class="suite-head">
+            <span class="name">cov_closure</span>
+            <span class="suite-state fail">19 失败待分类</span>
+          </div>
+          <div class="suite-rate bad">76.2%</div>
+          <div class="suite-meta">61/80 · 需重跑<br>上轮 08-20 22:00</div>
+        </div>
+      </div>
+
+      <div class="reg-grid">
+        <div class="panel">
+          <div class="panel-head">
+            历史趋势 <span class="count">7 次</span>
+            <span class="link">导出 CSV →</span>
+          </div>
+          <div class="hist-row">
+            <span class="hist-id">#142</span>
+            <span class="hist-time">今天 06:00</span>
+            <span class="hist-cases"><span class="p">312p</span> · <span class="f">12f</span> · 156 待</span>
+            <span class="hist-rate" style="color:var(--accent)">89.6%</span>
+            <span class="hist-dur">进行中</span>
+            <span class="hist-diff flat">—</span>
+          </div>
+          <div class="hist-row">
+            <span class="hist-id">#141</span>
+            <span class="hist-time">08-20 22:00</span>
+            <span class="hist-cases"><span class="p">468p</span> · <span class="f">12f</span></span>
+            <span class="hist-rate">97.5%</span>
+            <span class="hist-dur">4h 12m</span>
+            <span class="hist-diff good">+0.2</span>
+          </div>
+          <div class="hist-row">
+            <span class="hist-id">#140</span>
+            <span class="hist-time">08-19 22:00</span>
+            <span class="hist-cases"><span class="p">465p</span> · <span class="f">15f</span></span>
+            <span class="hist-rate">96.9%</span>
+            <span class="hist-dur">4h 30m</span>
+            <span class="hist-diff bad">-0.4</span>
+          </div>
+          <div class="hist-row">
+            <span class="hist-id">#139</span>
+            <span class="hist-time">08-18 22:00</span>
+            <span class="hist-cases"><span class="p">462p</span> · <span class="f">18f</span></span>
+            <span class="hist-rate">96.3%</span>
+            <span class="hist-dur">4h 28m</span>
+            <span class="hist-diff good">+1.1</span>
+          </div>
+          <div class="hist-row">
+            <span class="hist-id">#138</span>
+            <span class="hist-time">08-17 22:00</span>
+            <span class="hist-cases"><span class="p">458p</span> · <span class="f">22f</span></span>
+            <span class="hist-rate">95.4%</span>
+            <span class="hist-dur">4h 41m</span>
+            <span class="hist-diff good">+0.3</span>
+          </div>
+          <div class="hist-row">
+            <span class="hist-id">#137</span>
+            <span class="hist-time">08-16 22:00</span>
+            <span class="hist-cases"><span class="p">455p</span> · <span class="f">25f</span></span>
+            <span class="hist-rate">94.8%</span>
+            <span class="hist-dur">4h 38m</span>
+            <span class="hist-diff good">+0.9</span>
+          </div>
+          <div class="hist-row">
+            <span class="hist-id">#136</span>
+            <span class="hist-time">08-15 22:00</span>
+            <span class="hist-cases"><span class="p">450p</span> · <span class="f">30f</span></span>
+            <span class="hist-rate">93.8%</span>
+            <span class="hist-dur">4h 52m</span>
+            <span class="hist-diff good">+1.6</span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            失败聚类 <span class="count fail">12</span>
+            <span class="link">查看波形 →</span>
+          </div>
+          <div class="cluster-chip">
+            <div>
+              <div class="cn">总线仲裁丢失</div>
+              <div class="cd">i2c_arbitration_lost · 波形相似度 0.93</div>
+            </div>
+            <span class="cc">3</span>
+          </div>
+          <div class="cluster-chip">
+            <div>
+              <div class="cn">链表回绕越界</div>
+              <div class="cd">dma_sg_chain_wrap · 相似度 0.88</div>
+            </div>
+            <span class="cc">2</span>
+          </div>
+          <div class="cluster-chip">
+            <div>
+              <div class="cn">L0s 退出超时</div>
+              <div class="cd">pcie_ltssm_l0s_exit · 相似度 0.81</div>
+            </div>
+            <span class="cc">2</span>
+          </div>
+          <div class="cluster-hint">
+            <span style="font-size:11px;color:var(--fg-dim);line-height:1.7">
+              聚类由 AI 依据波形特征与日志模式自动生成；剩余 <b style="color:var(--fg)">5 例</b>待分类。
+              点击聚类可批量重跑或交给 Agent 归因。
+            </span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- ═══════════ 文件抽屉 ═══════════ -->
+<aside class="drawer left" id="file-drawer">
+  <div class="drawer-head">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+    文件
+    <button class="close-btn" title="关闭">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>
+    </button>
+  </div>
+  <div class="drawer-body">
+    <div class="ftree-row expanded" data-toggle="ft-work">
+      <span class="caret"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 6 15 12 9 18"/></svg></span>
+      tb / work
+    </div>
+    <div class="ftree-children expanded" id="ft-work">
+      <div class="ftree-row expanded" data-toggle="ft-dma">
+        <span class="caret"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 6 15 12 9 18"/></svg></span>
+        axi_dma
+      </div>
+      <div class="ftree-children expanded" id="ft-dma">
+        <div class="ftree-row">axi_dma.sv<span class="meta">62%</span></div>
+        <div class="ftree-row">axi_dma_pkg.sv</div>
+        <div class="ftree-row">tb_axi_dma.sv<span class="meta fail">×2</span></div>
+        <div class="ftree-row">dma_seqs.sv</div>
+      </div>
+      <div class="ftree-row" data-toggle="ft-uart">
+        <span class="caret"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 6 15 12 9 18"/></svg></span>
+        uart
+      </div>
+      <div class="ftree-children" id="ft-uart">
+        <div class="ftree-row">uart_ctrl.sv<span class="meta">92%</span></div>
+        <div class="ftree-row">tb_uart.sv</div>
+      </div>
+      <div class="ftree-row" data-toggle="ft-i2c">
+        <span class="caret"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 6 15 12 9 18"/></svg></span>
+        i2c
+      </div>
+      <div class="ftree-children" id="ft-i2c">
+        <div class="ftree-row">i2c_master.sv<span class="meta fail">×3</span></div>
+        <div class="ftree-row">tb_i2c.sv</div>
+      </div>
+      <div class="ftree-row" data-toggle="ft-cov">
+        <span class="caret"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="9 6 15 12 9 18"/></svg></span>
+        cov
+      </div>
+      <div class="ftree-children" id="ft-cov">
+        <div class="ftree-row active">cp_axi_lite.sv</div>
+        <div class="ftree-row">cp_uart.sv</div>
+      </div>
+    </div>
+    <div class="drawer-label">最近打开</div>
+    <div class="recent-file">tb_axi_dma.sv<span class="t">14:20</span></div>
+    <div class="recent-file">cp_axi_lite.sv<span class="t">14:11</span></div>
+    <div class="recent-file">i2c_master.sv<span class="t">13:58</span></div>
+    <div class="recent-file">neckar_dv.fst<span class="t">13:40</span></div>
+  </div>
+</aside>
+
+<!-- ═══════════ AI 会话抽屉 ═══════════ -->
+<aside class="drawer right" id="ai-drawer">
+  <div class="drawer-head">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m12 3 1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/></svg>
+    AI 验证助手
+    <button class="close-btn" title="关闭">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>
+    </button>
+  </div>
+  <div class="ai-status">
+    <span class="live">会话进行中</span>
+    · omp-4.1 · 上下文 32%
+  </div>
+  <div class="subagent-mini">
+    <span class="spinner"></span>
+    <span class="nm">波形对比</span>
+    <span class="tk">2.4k tok</span>
+  </div>
+  <div class="drawer-body">
+    <div class="ai-msg">
+      <div class="who">你<span class="t">14:26</span></div>
+      <div class="bd">帮我看下 <code>i2c_arbitration_lost</code> 为什么连续三次失败，是不是 DUT 的问题？</div>
+    </div>
+    <div class="ai-msg">
+      <div class="who">验证 Agent<span class="t">14:29</span></div>
+      <div class="bd">
+        对比了 #139–#141 三轮波形：失败点均在 2.3μs 处，<code>sda</code> 在仲裁期间被意外拉低。
+        初步判断是 <code>tb_i2c.sv</code> 中主机模型的 <code>arbit_lost_chk</code> 约束过紧，
+        与 DUT 行为无关。建议如下修改：
+      </div>
+    </div>
+    <div class="mini-approval">
+      <div class="ttl">建议修改 tb_i2c.sv</div>
+      <div class="dsc">将 arbitration window 从 2 个时钟放宽到 3 个时钟，并补充一条「从机延迟应答」的定向场景。</div>
+      <div class="acts">
+        <button class="btn">查看 Diff</button>
+        <button class="btn primary" id="approve-btn">批准执行</button>
+      </div>
+    </div>
+    <div class="ai-msg">
+      <div class="who">波形对比 · 子代理<span class="t">14:31</span></div>
+      <div class="bd">已提取三轮 <code>i2c_arbitration_lost</code> 的波形差异报告，重叠率 96%，确认非随机抖动导致。</div>
+    </div>
+  </div>
+  <div class="ai-composer">
+    <div class="box">
+      <input placeholder="给验证助手下指令… Ctrl+Enter 发送" id="ai-input">
+      <button class="send" title="发送">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+      </button>
+    </div>
+    <div class="full-link">展开为完整工作区 →</div>
+  </div>
+</aside>
+
+<div class="backdrop" id="backdrop"></div>
+
+<!-- ═══════════ 命令面板 ═══════════ -->
+<div class="palette-overlay" id="palette">
+  <div class="palette">
+    <div class="palette-input">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--fg-faint)"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>
+      <input id="palette-input" placeholder="输入命令或搜索…" autocomplete="off">
+      <kbd>Esc</kbd>
+    </div>
+    <div class="palette-list" id="palette-list">
+      <div class="palette-group">导航</div>
+      <div class="palette-item selected" data-action="goto:dashboard">
+        <span class="pi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>
+        前往 总览<span class="hint">Ctrl 1</span>
+      </div>
+      <div class="palette-item" data-action="goto:simulation">
+        <span class="pi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="6 3 20 12 6 21 6 3"/></svg></span>
+        前往 仿真<span class="hint">Ctrl 2</span>
+      </div>
+      <div class="palette-item" data-action="goto:coverage">
+        <span class="pi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg></span>
+        前往 覆盖率<span class="hint">Ctrl 3</span>
+      </div>
+      <div class="palette-item" data-action="goto:regression">
+        <span class="pi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg></span>
+        前往 回归<span class="hint">Ctrl 4</span>
+      </div>
+      <div class="palette-group">动作</div>
+      <div class="palette-item" data-action="run-regression">
+        <span class="pi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="6 3 20 12 6 21 6 3"/></svg></span>
+        启动夜间回归<span class="hint">480 用例</span>
+      </div>
+      <div class="palette-item" data-action="stop-sims">
+        <span class="pi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="5" width="14" height="14" rx="2"/></svg></span>
+        停止全部仿真<span class="hint">4 个运行中</span>
+      </div>
+      <div class="palette-item" data-action="rerun-fails">
+        <span class="pi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg></span>
+        重跑全部失败用例<span class="hint">12 个</span>
+      </div>
+      <div class="palette-item" data-action="cov-report">
+        <span class="pi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></span>
+        生成覆盖率报告
+      </div>
+      <div class="palette-group">面板</div>
+      <div class="palette-item" data-action="open:file-drawer">
+        <span class="pi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+        打开文件树
+      </div>
+      <div class="palette-item" data-action="open:ai-drawer">
+        <span class="pi-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m12 3 1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/></svg></span>
+        打开 AI 会话
+      </div>
+      <div class="palette-empty" id="palette-empty" style="display:none">没有匹配的命令</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ 状态栏 ═══════════ -->
+<footer class="statusbar">
+  <span class="seg ok">
+    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+    omp 已连接
+  </span>
+  <span class="seg">引擎 v4.1.2</span>
+  <span class="seg">仿真 4 运行</span>
+  <span class="seg">覆盖率 87.3%</span>
+  <span class="seg warn">
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+    license 2/8
+  </span>
+  <div class="right">
+    <span class="seg">farm-02 · 3 任务</span>
+    <span class="seg" id="clock">14:32:05</span>
+  </div>
+</footer>
+
+<div class="toast" id="toast">
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="20 6 9 17 4 12"/></svg>
+  <span id="toast-msg">就绪</span>
+</div>
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+
+/* ── Toast ── */
+let toastTimer;
+function toast(msg) {
+  const el = $('#toast');
+  $('#toast-msg').textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+/* ── 视图切换 ── */
+function switchView(name) {
+  closeDrawers();
+  $$('.nav-btn[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+  $$('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
+}
+$$('.nav-btn[data-view]').forEach(b => b.addEventListener('click', () => switchView(b.dataset.view)));
+$$('[data-goto]').forEach(el => el.addEventListener('click', (e) => {
+  e.stopPropagation();
+  switchView(el.dataset.goto);
+}));
+
+/* ── 通知中心 ── */
+const notifDd = $('#notif-dropdown');
+$('#notif-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  notifDd.classList.toggle('open');
+});
+document.addEventListener('click', (e) => {
+  if (!notifDd.contains(e.target)) notifDd.classList.remove('open');
+});
+$('#mark-read').addEventListener('click', () => {
+  $$('.notif-item.unread').forEach(n => n.classList.remove('unread'));
+  $('#notif-badge').classList.add('hidden');
+});
+
+/* ── 抽屉 ── */
+const backdrop = $('#backdrop');
+function closeDrawers() {
+  $$('.drawer').forEach(d => d.classList.remove('open'));
+  backdrop.classList.remove('show');
+}
+function openDrawer(id) {
+  closeDrawers();
+  $('#' + id).classList.add('open');
+  backdrop.classList.add('show');
+}
+$$('[data-drawer]').forEach(el => el.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const drawer = $('#' + el.dataset.drawer);
+  if (drawer.classList.contains('open')) closeDrawers();
+  else openDrawer(el.dataset.drawer);
+}));
+$$('.drawer .close-btn').forEach(b => b.addEventListener('click', closeDrawers));
+backdrop.addEventListener('click', closeDrawers);
+
+/* ── 文件树 ── */
+$$('.ftree-row[data-toggle]').forEach(row => row.addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('#' + row.dataset.toggle).classList.toggle('expanded');
+  row.classList.toggle('expanded');
+}));
+$$('.ftree-row:not([data-toggle])').forEach(r => r.addEventListener('click', (e) => {
+  e.stopPropagation();
+  $$('.ftree-row').forEach(x => x.classList.remove('active'));
+  r.classList.add('active');
+}));
+
+/* ── 覆盖率 tabs + 骨架屏 ── */
+const binSkeleton = $('#bin-skeleton'), binRows = $('#bin-rows');
+let binLoaded = false, binTimer;
+function loadBins(delay = 700) {
+  binLoaded = false;
+  clearTimeout(binTimer);
+  binSkeleton.style.display = '';
+  binRows.style.display = 'none';
+  binTimer = setTimeout(() => {
+    binSkeleton.style.display = 'none';
+    binRows.style.display = '';
+    binLoaded = true;
+  }, delay);
+}
+$$('.cov-tab').forEach(t => t.addEventListener('click', () => {
+  $$('.cov-tab').forEach(x => x.classList.remove('active'));
+  t.classList.add('active');
+  $$('.cov-pane').forEach(p => p.classList.toggle('active', p.id === 'cov-pane-' + t.dataset.tab));
+  if (t.dataset.tab === 'bin' && !binLoaded) loadBins();
+}));
+$('#cov-refresh').addEventListener('click', () => {
+  toast('正在重新合并覆盖率数据库…');
+  if ($('#cov-pane-bin').classList.contains('active')) loadBins(1200);
+});
+$('#gen-cases-link').addEventListener('click', (e) => {
+  e.stopPropagation();
+  toast('已生成 2 条定向用例（草稿）');
+});
+$$('.cov-table-head button').forEach(b => b.addEventListener('click', () => {
+  $$('.cov-table-head button').forEach(x => { if (x !== b) x.classList.remove('sorted'); });
+  b.classList.add('sorted');
+  const arrow = b.querySelector('.arrow');
+  if (!arrow) b.insertAdjacentHTML('beforeend', '<span class="arrow">↓</span>');
+  else arrow.textContent = arrow.textContent === '↓' ? '↑' : '↓';
+}));
+
+/* ── 仿真筛选 ── */
+const simRows = $$('#sim-table .run-row');
+const simEmpty = $('#sim-empty');
+let simFilter = 'all';
+function applySimFilter() {
+  const q = $('#sim-filter').value.trim().toLowerCase();
+  let visible = 0;
+  simRows.forEach(r => {
+    const okStatus = simFilter === 'all' || r.dataset.status === simFilter;
+    const okText = !q || r.textContent.toLowerCase().includes(q);
+    const show = okStatus && okText;
+    r.style.display = show ? '' : 'none';
+    if (show) visible++;
+  });
+  simEmpty.style.display = visible === 0 ? '' : 'none';
+}
+$$('#sim-seg button').forEach(b => b.addEventListener('click', () => {
+  $$('#sim-seg button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  simFilter = b.dataset.filter;
+  applySimFilter();
+}));
+$('#sim-filter').addEventListener('input', applySimFilter);
+$('#sim-clear').addEventListener('click', () => {
+  $('#sim-filter').value = '';
+  $$('#sim-seg button').forEach(x => x.classList.toggle('active', x.dataset.filter === 'all'));
+  simFilter = 'all';
+  applySimFilter();
+});
+
+/* ── 命令面板 ── */
+const palette = $('#palette'), paletteInput = $('#palette-input');
+let selIdx = 0;
+const paletteItems = () => $$('.palette-item').filter(i => i.style.display !== 'none');
+function renderPaletteSel() {
+  paletteItems().forEach((it, i) => it.classList.toggle('selected', i === selIdx));
+}
+function filterPalette() {
+  const q = paletteInput.value.trim().toLowerCase();
+  let visible = 0;
+  $$('.palette-item').forEach(it => {
+    const hit = !q || it.textContent.toLowerCase().includes(q);
+    it.style.display = hit ? '' : 'none';
+    if (hit) visible++;
+  });
+  $('#palette-empty').style.display = visible === 0 ? '' : 'none';
+  selIdx = 0;
+  renderPaletteSel();
+}
+function openPalette() {
+  palette.classList.add('open');
+  paletteInput.value = '';
+  filterPalette();
+  setTimeout(() => paletteInput.focus(), 30);
+}
+function closePalette() { palette.classList.remove('open'); }
+$('#search-trigger').addEventListener('click', openPalette);
+palette.addEventListener('click', (e) => { if (e.target === palette) closePalette(); });
+paletteInput.addEventListener('input', filterPalette);
+
+const paletteActions = {
+  'run-regression': () => toast('回归 #143 已加入队列'),
+  'stop-sims': () => toast('已停止 4 个运行中的仿真'),
+  'rerun-fails': () => toast('12 个失败用例已重新入队'),
+  'cov-report': () => toast('覆盖率报告生成中…'),
+};
+function execAction(action) {
+  if (action.startsWith('goto:')) switchView(action.slice(5));
+  else if (action.startsWith('open:')) openDrawer(action.slice(5) + '-drawer');
+  else if (paletteActions[action]) paletteActions[action]();
+}
+$$('.palette-item[data-action]').forEach(item => item.addEventListener('click', () => {
+  execAction(item.dataset.action);
+  closePalette();
+}));
+
+/* ── 快捷键 ── */
+document.addEventListener('keydown', (e) => {
+  const inPalette = palette.classList.contains('open');
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    inPalette ? closePalette() : openPalette();
+    return;
+  }
+  if (inPalette) {
+    if (e.key === 'Escape') { e.preventDefault(); closePalette(); }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const items = paletteItems();
+      if (!items.length) return;
+      selIdx = e.key === 'ArrowDown' ? (selIdx + 1) % items.length : (selIdx - 1 + items.length) % items.length;
+      renderPaletteSel();
+      items[selIdx].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const items = paletteItems();
+      if (items[selIdx]) { execAction(items[selIdx].dataset.action); closePalette(); }
+    }
+    return;
+  }
+  if (e.ctrlKey && ['1', '2', '3', '4'].includes(e.key)) {
+    e.preventDefault();
+    switchView(['dashboard', 'simulation', 'coverage', 'regression'][+e.key - 1]);
+  }
+  if (e.key === 'Escape') { closeDrawers(); notifDd.classList.remove('open'); }
+});
+
+/* ── 动作按钮 ── */
+$('#run-reg-btn').addEventListener('click', () => toast('回归 #143 已加入队列'));
+$('#stop-all-btn').addEventListener('click', () => toast('已停止 4 个运行中的仿真'));
+$('#approve-btn').addEventListener('click', () => toast('已批准修改 tb_i2c.sv，Agent 开始执行'));
+$('#auto-pill').addEventListener('click', () => {
+  const on = $('#auto-pill').classList.toggle('on');
+  toast(on ? '失败自动重跑已开启' : '失败自动重跑已关闭');
+});
+const sendAi = () => {
+  const v = $('#ai-input').value.trim();
+  toast(v ? '指令已发送给验证助手' : '请输入指令内容');
+  if (v) $('#ai-input').value = '';
+};
+$('#ai-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendAi(); } });
+$('.ai-composer .send').addEventListener('click', sendAi);
+
+/* ── 时钟 ── */
+function tick() {
+  const n = new Date();
+  const p = (x) => String(x).padStart(2, '0');
+  $('#clock').textContent = `${p(n.getHours())}:${p(n.getMinutes())}:${p(n.getSeconds())}`;
+}
+tick();
+setInterval(tick, 1000);
+
+/* ── 开场提示 ── */
+setTimeout(() => toast('回归 #142 运行中 · 312/480 · 12 失败'), 900);
+</script>
+</body>
+</html>

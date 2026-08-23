@@ -1,4 +1,8 @@
 import { create } from 'zustand';
+import { useUiStore, type ActiveView } from './ui';
+import { useProjectStore } from './project';
+
+import type { DashboardTab } from '@renderer/stores/dashboard';
 
 export type OfficePreviewMode = 'html' | 'screenshots' | 'watch';
 
@@ -29,8 +33,11 @@ export type WorkbenchDestination =
   | { type: 'simulation-comparison' }
   | { type: 'running-simulations' }
   | { type: 'coverage' }
+  | { type: 'coverage-detail' }
   | { type: 'regression' }
+  | { type: 'regression-detail' }
   | { type: 'dashboard' }
+  | { type: 'dashboard-tab'; tab: DashboardTab }
   | { type: 'sysbase-env-gen' }
   | { type: 'to-checklist' }
   | { type: 'source-control' }
@@ -80,10 +87,18 @@ function describeDestination(destination: WorkbenchDestination): Omit<WorkbenchT
       return { id: destination.type, title: '运行概览', closable: true };
     case 'coverage':
       return { id: destination.type, title: '覆盖率分析', closable: true };
+    case 'coverage-detail':
+      return { id: destination.type, title: '覆盖率分析', closable: true };
     case 'regression':
       return { id: destination.type, title: '回归套件', closable: true };
+    case 'regression-detail':
+      return { id: destination.type, title: '回归测试', closable: true };
     case 'dashboard':
       return { id: destination.type, title: '仪表盘', closable: true };
+    case 'dashboard-tab': {
+      const tabLabel = DASHBOARD_TAB_LABELS[destination.tab] ?? destination.tab;
+      return { id: `dashboard-tab:${destination.tab}`, title: tabLabel, closable: true };
+    }
     case 'sysbase-env-gen':
       return { id: destination.type, title: '验证环境生成器', closable: true };
     case 'to-checklist':
@@ -165,12 +180,54 @@ export function openFileDestination(
   open({ type: 'file', path, name });
 }
 
+/** DashboardTab → 中文标签（用于 Tab 标题） */
+const DASHBOARD_TAB_LABELS: Record<DashboardTab, string> = {
+  overview: '概览',
+  trend: '趋势',
+  subsys: '子系统',
+  failures: '失败',
+  regression: '回归进度',
+  duration: '耗时分布',
+  unstable: '不稳定',
+  phase: '阶段',
+  debug: '调试难度',
+};
+
+/**
+ * 目的地 → 视图重定向（mission-control 视图路由）：
+ * 这四类目的地不再开 Tab，而是切换到对应的 App Shell 视图。
+ * 注意：通过 getState() 访问 ui store，避免 store 间循环依赖。
+ */
+const DESTINATION_VIEW_ROUTES: Partial<Record<WorkbenchDestination['type'], ActiveView>> = {
+  dashboard: 'dashboard',
+  coverage: 'coverage',
+  regression: 'regression',
+  'running-simulations': 'simulation',
+};
+
 export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
   tabs: [],
   activeTabId: null,
 
   open: (destination) => {
+    // 视图型目的地 → 切换视图，不开 Tab
+    const routedView = DESTINATION_VIEW_ROUTES[destination.type];
+    if (routedView) {
+      useUiStore.getState().setActiveView(routedView);
+      return;
+    }
+    // 其余目的地照旧开 Tab，并自动切到 workspace 视图
     const descriptor = describeDestination(destination);
+    // 文件型目的地 → 记录「最近打开」（左抽屉底部列表）
+    if (
+      destination.type === 'file' ||
+      destination.type === 'office-document' ||
+      destination.type === 'database' ||
+      destination.type === 'drawio-diagram'
+    ) {
+      const filePath = destination.type === 'file' ? destination.path : destination.filePath;
+      useProjectStore.getState().pushRecentFile({ path: filePath, name: descriptor.title });
+    }
     set((state) => {
       const existingIndex = state.tabs.findIndex((tab) => tab.id === descriptor.id);
       const tab = { ...descriptor, destination };
@@ -179,6 +236,7 @@ export const useWorkbenchStore = create<WorkbenchState>((set, get) => ({
         : state.tabs.map((existing, index) => index === existingIndex ? tab : existing);
       return { tabs, activeTabId: descriptor.id };
     });
+    useUiStore.getState().setActiveView('workspace');
   },
 
   activate: (tabId) => {

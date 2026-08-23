@@ -50,6 +50,28 @@ export interface PtyLoadResult {
   error: Error | null;
 }
 
+/** Merge terminal-specific environment values without discarding login-shell PATH entries. */
+export function mergeTerminalEnvs(
+  base: Record<string, string>,
+  overrides?: Record<string, string>,
+): Record<string, string> {
+  if (!overrides) return { ...base };
+
+  const merged = { ...base, ...overrides };
+  const pathSeparator = process.platform === 'win32' ? ';' : ':';
+  for (const key of ['PATH', 'LD_LIBRARY_PATH']) {
+    const overrideValue = overrides[key];
+    const baseValue = base[key];
+    if (!overrideValue || !baseValue) continue;
+
+    const seen = new Set<string>();
+    merged[key] = [...overrideValue.split(pathSeparator), ...baseValue.split(pathSeparator)]
+      .filter((entry) => entry.length > 0 && !seen.has(entry) && seen.add(entry))
+      .join(pathSeparator);
+  }
+  return merged;
+}
+
 let ptyLoadResult: PtyLoadResult = { module: null, error: null };
 let ptyLoadAttempted = false;
 
@@ -455,10 +477,10 @@ export class TerminalManager extends EventEmitter {
     // environment that the Electron main process inherits. Without this,
     // EDA tool paths (e.g. /tools/opensources/python/.../bin) are invisible
     // inside the built-in terminal, and `which python` resolves to /bin/python.
-    const loginEnv = await getLoginShellEnv();
-    const env = { ...loginEnv, ...opts.env } as Record<string, string>;
     // Use caller-specified shell, or find one automatically
     const shell = opts.shell ?? findShell();
+    const loginEnv = await getLoginShellEnv(shell);
+    const env = mergeTerminalEnvs(loginEnv, opts.env);
     const shellArgs = getInteractiveShellArgs(shell);
 
     const session: TerminalSession = {
@@ -836,8 +858,10 @@ export class TerminalManager extends EventEmitter {
     // Use the login shell environment so EDA tool paths and module init
     // variables are visible to the spawned command, matching what the user
     // would get in an external terminal.
-    const loginEnv = await getLoginShellEnv();
-    const env = { ...loginEnv, ...opts.env } as Record<string, string>;
+    // Use the same shell for environment capture and command execution.
+    const shell = opts.shell ?? findSimShell();
+    const loginEnv = await getLoginShellEnv(shell);
+    const env = mergeTerminalEnvs(loginEnv, opts.env);
 
     const session: TerminalSession = {
       id,
@@ -898,7 +922,6 @@ export class TerminalManager extends EventEmitter {
     entry.pendingSize += cmdEcho.length;
 
     // Use caller-specified shell, or find one suitable for simulation (csh on Linux)
-    const shell = opts.shell ?? findSimShell();
     const isWin = process.platform === 'win32';
     // On Windows, use `powershell -Command "..."`; on Unix, `shell -c "..."`
     const shellArgs = isWin ? ['-NoProfile', '-Command', opts.command] : ['-c', opts.command];

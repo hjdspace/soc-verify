@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>桌面 Shell 重设计原型索引 · SoC Verify</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: oklch(0.14 0.006 60);
+  color: oklch(0.90 0.006 60);
+  font-size: 14px;
+  padding: 36px 32px;
+  min-height: 100vh;
+}
+.container { max-width: 1060px; margin: 0 auto; }
+h1 { font-size: 23px; font-weight: 700; margin-bottom: 8px; letter-spacing: -0.01em; }
+.subtitle { font-size: 13.5px; color: oklch(0.60 0.008 60); margin-bottom: 8px; line-height: 1.6; }
+.note {
+  font-size: 12.5px;
+  color: oklch(0.55 0.008 60);
+  padding: 10px 14px;
+  border-left: 3px solid oklch(0.78 0.13 75);
+  background: oklch(0.18 0.007 60);
+  border-radius: 0 8px 8px 0;
+  margin-bottom: 32px;
+  line-height: 1.7;
+}
+.prototype-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+.prototype-card {
+  background: oklch(0.18 0.007 60);
+  border: 1px solid oklch(0.26 0.008 60);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: border-color 200ms ease-out, transform 200ms ease-out;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+.prototype-card:hover { border-color: oklch(0.78 0.13 75); transform: translateY(-3px); }
+.preview { height: 150px; border-bottom: 1px solid oklch(0.26 0.008 60); position: relative; overflow: hidden; }
+
+/* ── Mini mock A：控制中心 ── */
+.mock-a { background: oklch(0.17 0.008 60); padding: 8px; display: flex; gap: 5px; }
+.mock-a .rail { width: 16px; background: oklch(0.13 0.008 60); border-radius: 4px; display: flex; flex-direction: column; align-items: center; gap: 5px; padding-top: 6px; }
+.mock-a .rail i { width: 8px; height: 8px; border-radius: 3px; background: oklch(0.30 0.01 60); }
+.mock-a .rail i.on { background: oklch(0.80 0.16 145); }
+.mock-a .body { flex: 1; display: flex; flex-direction: column; gap: 5px; }
+.mock-a .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.mock-a .kpis i { height: 26px; background: oklch(0.21 0.008 60); border-radius: 5px; position: relative; }
+.mock-a .kpis i::after { content: ''; position: absolute; left: 6px; bottom: 5px; width: 14px; height: 4px; border-radius: 2px; background: oklch(0.80 0.16 145); }
+.mock-a .mid { display: flex; gap: 5px; flex: 1; }
+.mock-a .mid .col { border-radius: 5px; background: oklch(0.21 0.008 60); }
+.mock-a .mid .c1 { flex: 1.6; }
+.mock-a .mid .c2 { flex: 1; position: relative; }
+.mock-a .mid .c2::after {
+  content: '';
+  position: absolute; right: 8px; top: 50%;
+  width: 42px; height: 42px;
+  border-radius: 50%;
+  border: 5px solid oklch(0.80 0.16 145);
+  border-top-color: transparent;
+  border-right-color: oklch(0.72 0.12 230);
+}
+.mock-a .mid .c1 .bar { height: 4px; margin: 7px 8px 0; border-radius: 2px; background: oklch(0.28 0.01 60); position: relative; }
+.mock-a .mid .c1 .bar::after { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 62%; border-radius: 2px; background: oklch(0.80 0.16 145); }
+
+/* ── Mini mock B：AI 工作台 ── */
+.mock-b { background: oklch(0.97 0.006 75); padding: 8px; display: flex; gap: 5px; }
+.mock-b .side { width: 44px; background: oklch(0.93 0.008 75); border-radius: 5px; padding: 6px 5px; display: flex; flex-direction: column; gap: 5px; }
+.mock-b .side i { height: 7px; border-radius: 3px; background: oklch(0.88 0.008 75); }
+.mock-b .side i.on { background: oklch(0.93 0.02 285); }
+.mock-b .chat { flex: 1; display: flex; flex-direction: column; gap: 6px; padding: 2px; }
+.mock-b .bubble-u { align-self: flex-end; width: 60%; height: 12px; border-radius: 7px 7px 2px 7px; background: oklch(0.99 0.004 75); border: 1px solid oklch(0.90 0.008 75); }
+.mock-b .bubble-a { width: 82%; height: 12px; border-radius: 7px; background: oklch(0.95 0.008 75); }
+.mock-b .artifact { width: 82%; height: 30px; border-radius: 7px; border: 1px solid oklch(0.90 0.008 75); background: oklch(0.99 0.004 75); position: relative; overflow: hidden; }
+.mock-b .artifact::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 7px; background: oklch(0.95 0.008 75); }
+.mock-b .artifact::after { content: ''; position: absolute; left: 6px; top: 12px; width: 46%; height: 4px; border-radius: 2px; background: oklch(0.42 0.13 285 / 0.3); }
+.mock-b .composer { margin-top: auto; height: 20px; border-radius: 8px; border: 1.5px solid oklch(0.42 0.13 285 / 0.5); background: oklch(0.99 0.004 75); }
+.mock-b .agent { width: 40px; background: oklch(0.99 0.004 75); border-radius: 5px; border: 1px solid oklch(0.90 0.008 75); padding: 5px 4px; display: flex; flex-direction: column; gap: 5px; }
+.mock-b .agent i { height: 6px; border-radius: 3px; background: oklch(0.93 0.008 75); }
+.mock-b .agent i.on { background: oklch(0.42 0.13 285 / 0.35); }
+
+/* ── Mini mock C：密集专业 ── */
+.mock-c { background: oklch(0.16 0.006 60); padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+.mock-c .menu { height: 8px; border-radius: 3px; background: oklch(0.13 0.006 60); display: flex; gap: 4px; align-items: center; padding: 0 4px; }
+.mock-c .menu i { width: 12px; height: 3px; border-radius: 2px; background: oklch(0.30 0.008 60); }
+.mock-c .cols { flex: 1; display: flex; gap: 4px; }
+.mock-c .tree { width: 40px; background: oklch(0.18 0.007 60); border-radius: 4px; padding: 5px 4px; display: flex; flex-direction: column; gap: 3px; }
+.mock-c .tree i { height: 3px; border-radius: 2px; background: oklch(0.26 0.008 60); }
+.mock-c .tree i.on { background: oklch(0.78 0.13 75 / 0.5); }
+.mock-c .edit { flex: 1; background: oklch(0.16 0.006 60); border-radius: 4px; border: 1px solid oklch(0.26 0.008 60); display: flex; flex-direction: column; }
+.mock-c .edit .tabs { height: 7px; border-bottom: 1px solid oklch(0.26 0.008 60); display: flex; }
+.mock-c .edit .tabs i { width: 30%; border-right: 1px solid oklch(0.26 0.008 60); }
+.mock-c .edit .tabs i.on { background: oklch(0.78 0.13 75 / 0.12); border-top: 2px solid oklch(0.78 0.13 75); }
+.mock-c .edit .lines { flex: 1; padding: 4px; display: flex; flex-direction: column; gap: 3px; }
+.mock-c .edit .lines i { height: 3px; border-radius: 2px; background: oklch(0.28 0.008 60); }
+.mock-c .edit .lines i:nth-child(3) { background: oklch(0.66 0.17 25 / 0.5); }
+.mock-c .edit .lines i:nth-child(4) { background: oklch(0.78 0.13 75 / 0.5); }
+.mock-c .edit .logs { height: 26px; border-top: 1px solid oklch(0.26 0.008 60); padding: 4px; display: flex; flex-direction: column; gap: 3px; }
+.mock-c .edit .logs i { height: 2.5px; border-radius: 2px; background: oklch(0.24 0.008 60); }
+.mock-c .edit .logs i:nth-child(2) { background: oklch(0.66 0.17 25 / 0.6); }
+.mock-c .cov { width: 44px; background: oklch(0.18 0.007 60); border-radius: 4px; padding: 5px 4px; display: flex; flex-direction: column; gap: 4px; }
+.mock-c .cov i { height: 4px; border-radius: 2px; background: oklch(0.24 0.008 60); position: relative; overflow: hidden; }
+.mock-c .cov i::after { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 70%; background: oklch(0.78 0.13 75); }
+.mock-c .status { height: 7px; border-radius: 3px; background: oklch(0.13 0.006 60); }
+
+.proto-info { padding: 16px 18px 18px; }
+.proto-name { font-size: 15.5px; font-weight: 650; margin-bottom: 3px; display: flex; align-items: center; gap: 8px; }
+.proto-axis {
+  font-size: 10px; font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+.axis-a { background: oklch(0.80 0.16 145 / 0.15); color: oklch(0.80 0.16 145); }
+.axis-b { background: oklch(0.62 0.14 285 / 0.18); color: oklch(0.72 0.13 285); }
+.axis-c { background: oklch(0.78 0.13 75 / 0.15); color: oklch(0.80 0.13 75); }
+.proto-desc { font-size: 12px; color: oklch(0.62 0.008 60); line-height: 1.7; margin-bottom: 12px; }
+.proto-pros { font-size: 11.5px; line-height: 1.7; }
+.proto-pros .row { display: flex; gap: 6px; }
+.proto-pros .row .k { width: 30px; flex-shrink: 0; font-weight: 600; }
+.proto-pros .row .k.win { color: oklch(0.75 0.14 145); }
+.proto-pros .row .k.cost { color: oklch(0.70 0.13 75); }
+.proto-pros .row .v { color: oklch(0.62 0.008 60); }
+.footer { margin-top: 28px; font-size: 12px; color: oklch(0.48 0.008 60); line-height: 1.8; }
+.footer a { color: oklch(0.72 0.13 285); }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>桌面 Shell 重设计 · 3 种方向</h1>
+  <p class="subtitle">当前 UI 是经典 VSCode 式 IDE 布局（TitleBar + 文件树左栏 + 多 Tab 中区 + AI 聊天右栏 + 底部终端）。以下 3 个原型各自探索一个真正不同的设计轴，点击卡片打开可交互原型。</p>
+  <div class="note">
+    <b>当前痛点分析：</b>① 信息架构以「文件树」为中心，但产品定位是验证管理平台，用户核心关注的是「验证状态与进度」；② TitleBar 右侧堆叠 7+ 个功能按钮，视觉拥挤；③ AI 聊天作为右栏附属，与「AI Agent 驱动」的产品定位不匹配；④ 状态信息（运行徽章、任务面板、仿真结果）散落多处。
+  </div>
+
+  <div class="prototype-grid">
+    <!-- 方案 A -->
+    <a class="prototype-card" href="app-shell-redesign-a-mission-control.html">
+      <div class="preview mock-a">
+        <div class="rail"><i class="on"></i><i></i><i></i><i></i><i></i></div>
+        <div class="body">
+          <div class="kpis"><i></i><i></i><i></i></div>
+          <div class="mid">
+            <div class="col c1"><div class="bar"></div><div class="bar" style="width: 70%; margin-left: 8px;"></div></div>
+            <div class="col c2"></div>
+          </div>
+        </div>
+      </div>
+      <div class="proto-info">
+        <div class="proto-name">A · Mission Control <span class="proto-axis axis-a">轴线：状态导向</span></div>
+        <div class="proto-desc">打开即见全局仪表盘：覆盖率、回归进度、运行中仿真流、AI Agent 活动。文件树降级为可呼出抽屉，左侧为窄图标导航。</div>
+        <div class="proto-pros">
+          <div class="row"><span class="k win">胜在</span><span class="v">验证经理/开工第一眼；大屏监控 8 小时回归</span></div>
+          <div class="row"><span class="k cost">代价</span><span class="v">写代码/编辑文件路径变深，需抽屉跳转</span></div>
+        </div>
+      </div>
+    </a>
+
+    <!-- 方案 B -->
+    <a class="prototype-card" href="app-shell-redesign-b-ai-workbench.html">
+      <div class="preview mock-b">
+        <div class="side"><i class="on"></i><i></i><i></i><i></i><i></i></div>
+        <div class="chat">
+          <div class="bubble-u"></div>
+          <div class="bubble-a"></div>
+          <div class="artifact"></div>
+          <div class="composer"></div>
+        </div>
+        <div class="agent"><i class="on"></i><i class="on"></i><i></i></div>
+      </div>
+      <div class="proto-info">
+        <div class="proto-name">B · AI Workbench <span class="proto-axis axis-b">轴线：对话驱动</span></div>
+        <div class="proto-desc">AI 会话即主界面。代码、仿真结果、覆盖率以嵌入式工件出现在对话流中；左侧会话与上下文，右侧 Agent 计划/子代理/审批。暖纸白 + 紫梅。</div>
+        <div class="proto-pros">
+          <div class="row"><span class="k win">胜在</span><span class="v">与「AI Agent 驱动」定位一致；审批流天然融入</span></div>
+          <div class="row"><span class="k cost">代价</span><span class="v">并行浏览多个文件/表格的效率低于 IDE 式布局</span></div>
+        </div>
+      </div>
+    </a>
+
+    <!-- 方案 C -->
+    <a class="prototype-card" href="app-shell-redesign-c-dense-pro.html">
+      <div class="preview mock-c">
+        <div class="menu"><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="cols">
+          <div class="tree"><i class="on"></i><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="edit">
+            <div class="tabs"><i class="on"></i><i></i><i></i></div>
+            <div class="lines"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="logs"><i></i><i></i><i></i></div>
+          </div>
+          <div class="cov"><i></i><i></i><i></i><i></i></div>
+        </div>
+        <div class="status"></div>
+      </div>
+      <div class="proto-info">
+        <div class="proto-name">C · Dense Pro <span class="proto-axis axis-c">轴线：密度专业</span></div>
+        <div class="proto-desc">琥珀磷光终端美学：菜单栏 + 等宽字体主导 + 多面板并列（文件树/编辑器/日志/覆盖率表格）。键盘驱动，参照 Verdi/JasperGold 专业密度。</div>
+        <div class="proto-pros">
+          <div class="row"><span class="k win">胜在</span><span class="v">资深验证工程师日常深度工作；信息密度最高</span></div>
+          <div class="row"><span class="k cost">代价</span><span class="v">学习成本高；AI 能力视觉上退居次要</span></div>
+        </div>
+      </div>
+    </a>
+  </div>
+
+  <div class="note" style="border-left-color: oklch(0.80 0.16 145); margin-top: 28px;">
+    <b>已选方向 → <a href="app-shell-redesign-a2-mission-control-refined.html" style="color: oklch(0.80 0.16 145);">A v2 · Mission Control 细化版</a></b><br>
+    在方案 A 基础上细化：总览 / 仿真 / 覆盖率 / 回归 四大视图 + 里程碑进度、通知中心、命令面板（Ctrl+K）、文件树与 AI 会话抽屉、骨架屏 / 空状态、状态栏 —— 全部可交互。
+  </div>
+
+  <div class="footer">
+    三种方向互斥但可组合：例如以 A 的仪表盘作为启动页 + B 的对话工作台作为主工作流。选定方向后可再运行一轮 riff，在其基础上细化。<br>
+    原型均为静态自包含 HTML，含基础交互（tab 切换、树展开、工件折叠）。数据为演示用真实语境内容。
+  </div>
+</div>
+</body>
+</html>

@@ -438,6 +438,11 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
 
   loadTree: async (projectId, sessionId) => {
     const sid = sessionId ?? get().currentSessionId ?? undefined;
+    // 无 session 时静默返回，不请求后端（避免 "No coverage session available" toast 报错）
+    if (!sid && get().sessions.length === 0) {
+      set({ loading: false, tree: null, overview: null });
+      return;
+    }
     set({ loading: true });
     try {
       // 批量端点：一次返回 tree + summary + targets，消除 getTree → getOverview 的顺序调用
@@ -453,7 +458,10 @@ export const useCoverageStore = create<CoverageStoreState>((set, get) => ({
       });
     } catch (err) {
       set({ loading: false, tree: null, overview: null });
-      useToastStore.getState().error('加载覆盖率数据失败', err instanceof Error ? err.message : String(err));
+      // "No coverage session available" 属于正常无数据场景，不弹 toast
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/no.*coverage.*session/i.test(msg)) return;
+      useToastStore.getState().error('加载覆盖率数据失败', msg);
     }
   },
 

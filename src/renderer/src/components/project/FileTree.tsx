@@ -1,4 +1,5 @@
 import { useState, useCallback, memo, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ChevronRight,
   ChevronDown,
@@ -201,39 +202,93 @@ function getFileIcon(fileName: string): IconEntry {
 // VS Code-style git status indicators: M (modified, yellow),
 // A (added, green), D (deleted, red), U (untracked, blue).
 
-type GitBadge = { label: string; className: string; tooltip: string };
+// GitBadge 携带标记文字、tooltip，以及一组语义色 class —— badge 颜色和
+// 文件名颜色共用同一语义变量，确保标记与文件名在视觉上联动。
+type GitBadge = { label: string; className: string; nameClassName: string; tooltip: string };
 
 function getGitBadge(
   indexStatus: string,
   workTreeStatus: string,
 ): GitBadge | null {
-  // Untracked
+  // Untracked —— 绿色（VS Code 风格）
   if (indexStatus === '?' && workTreeStatus === '?') {
-    return { label: 'U', className: 'text-info-foreground', tooltip: '未跟踪' };
+    return {
+      label: 'U',
+      className: 'text-status-pass-foreground',
+      nameClassName: 'text-status-pass-foreground',
+      tooltip: '未跟踪',
+    };
   }
-  // Deleted
+  // Deleted —— 红色
   if (indexStatus === 'D' || workTreeStatus === 'D') {
-    return { label: 'D', className: 'text-status-fail-foreground', tooltip: '已删除' };
+    return {
+      label: 'D',
+      className: 'text-status-fail-foreground',
+      nameClassName: 'text-status-fail-foreground',
+      tooltip: '已删除',
+    };
   }
-  // Renamed
+  // Renamed —— 紫色
   if (indexStatus === 'R' || workTreeStatus === 'R') {
-    return { label: 'R', className: 'text-violet-foreground', tooltip: '已重命名' };
+    return {
+      label: 'R',
+      className: 'text-violet-foreground',
+      nameClassName: 'text-violet-foreground',
+      tooltip: '已重命名',
+    };
   }
-  // Added (staged new file)
+  // Added (staged new file) —— 绿色
   if (indexStatus === 'A') {
-    return { label: 'A', className: 'text-status-pass-foreground', tooltip: '已新增' };
+    return {
+      label: 'A',
+      className: 'text-status-pass-foreground',
+      nameClassName: 'text-status-pass-foreground',
+      tooltip: '已新增',
+    };
   }
-  // Modified
+  // Modified —— 黄色
   if (indexStatus === 'M' || workTreeStatus === 'M') {
-    return { label: 'M', className: 'text-warning-foreground', tooltip: '已修改' };
+    return {
+      label: 'M',
+      className: 'text-warning-foreground',
+      nameClassName: 'text-warning-foreground',
+      tooltip: '已修改',
+    };
   }
   // Other statuses (C=copied, etc.)
   if (indexStatus || workTreeStatus) {
     const label = (indexStatus || workTreeStatus).trim();
     if (label) {
-      return { label, className: 'text-muted-foreground', tooltip: '变更' };
+      return {
+        label,
+        className: 'text-muted-foreground',
+        nameClassName: 'text-muted-foreground',
+        tooltip: '变更',
+      };
     }
   }
+  return null;
+}
+
+// ─── Git directory status helpers ─────────────────────────
+//
+// VS Code-style folder decorations: 目录下包含修改文件（M/D/R…）→ 黄色，
+// 目录下仅有新增文件（A/U）→ 绿色。两者同时存在时黄色（修改）优先。
+
+type GitDirStatus = 'modified' | 'added';
+
+function getGitDirStatusKind(
+  indexStatus: string,
+  workTreeStatus: string,
+): GitDirStatus | null {
+  // 新增：untracked / staged-added
+  if (indexStatus === '?' && workTreeStatus === '?') return 'added';
+  if (indexStatus === 'A') return 'added';
+  // 修改：deleted / renamed / modified / copied 等
+  if (indexStatus === 'D' || workTreeStatus === 'D') return 'modified';
+  if (indexStatus === 'R' || workTreeStatus === 'R') return 'modified';
+  if (indexStatus === 'M' || workTreeStatus === 'M') return 'modified';
+  if (indexStatus.trim() || workTreeStatus.trim()) return 'modified';
   return null;
 }
 
@@ -279,6 +334,30 @@ export function FileTree({ node, onSelectFile, selectedPath, projectRootPath }: 
       // Normalise: git paths use forward slashes, join with root
       const absPath = `${root}/${f.path.replace(/\\/g, '/')}`;
       map.set(absPath, badge);
+    }
+    return map;
+  }, [scmStatus, projectRootPath]);
+
+  // Build a map of directory path → aggregated git status (VS Code-style
+  // folder decorations). Each changed file bubbles its status up through
+  // every ancestor directory (stopping below the project root);
+  // 'modified' (黄) outranks 'added' (绿) when a folder contains both.
+  const gitDirStatusMap = useMemo(() => {
+    const map = new Map<string, GitDirStatus>();
+    if (!scmStatus?.files || !projectRootPath) return map;
+    const root = projectRootPath.replace(/\\/g, '/').replace(/\/$/, '');
+    for (const f of scmStatus.files) {
+      const kind = getGitDirStatusKind(f.indexStatus, f.workTreeStatus);
+      if (!kind) continue;
+      const absPath = `${root}/${f.path.replace(/\\/g, '/')}`;
+      let dir = absPath.slice(0, absPath.lastIndexOf('/'));
+      while (dir.length > root.length) {
+        const existing = map.get(dir);
+        // Same or higher status already set — ancestors already carry it too.
+        if (existing === kind || (kind === 'added' && existing === 'modified')) break;
+        map.set(dir, kind);
+        dir = dir.slice(0, dir.lastIndexOf('/'));
+      }
     }
     return map;
   }, [scmStatus, projectRootPath]);
@@ -405,10 +484,11 @@ export function FileTree({ node, onSelectFile, selectedPath, projectRootPath }: 
         onContextMenu={handleContextMenu}
         projectId={projectId}
         gitBadgeMap={gitBadgeMap}
+        gitDirStatusMap={gitDirStatusMap}
       />
-      {contextMenu.visible && contextMenu.node && (
+      {contextMenu.visible && contextMenu.node && createPortal(
         <div
-          className="fixed z-50 min-w-44 overflow-hidden rounded-md border border-border bg-popover shadow-xl"
+          className="fixed z-[9999] min-w-44 overflow-hidden rounded-md border border-border bg-popover shadow-xl"
           style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -450,13 +530,14 @@ export function FileTree({ node, onSelectFile, selectedPath, projectRootPath }: 
             <Trash2 className="h-3 w-3 text-muted-foreground" />
             <span>删除</span>
           </button>
-        </div>
+        </div>,
+        document.body,
       )}
 
-      {/* ─── 删除确认弹窗 ────────────────────────────── */}
-      {deleteConfirm && (
+      {/* ─── 删除确认弹窗（portal to body to escape Drawer transform） ────────────────────────────── */}
+      {deleteConfirm && createPortal(
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40"
+          className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/40"
           onClick={() => !deleting && setDeleteConfirm(null)}
         >
           <div
@@ -492,7 +573,8 @@ export function FileTree({ node, onSelectFile, selectedPath, projectRootPath }: 
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
@@ -510,9 +592,11 @@ interface FileTreeNodeProps {
   projectId?: string;
   /** Map of git-relative-path → badge for showing M/D/A/U indicators. */
   gitBadgeMap?: Map<string, GitBadge>;
+  /** Map of directory path → aggregated status for VS Code-style folder markers. */
+  gitDirStatusMap?: Map<string, GitDirStatus>;
 }
 
-function FileTreeNode({ node, depth, onSelectFile, selectedPath, onContextMenu, projectId, gitBadgeMap }: FileTreeNodeProps) {
+function FileTreeNode({ node, depth, onSelectFile, selectedPath, onContextMenu, projectId, gitBadgeMap, gitDirStatusMap }: FileTreeNodeProps) {
   // Normalise node path to forward-slash absolute path for git badge lookup
   const normalizedPath = node.path.replace(/\\/g, '/');
   if (node.type === 'file') {
@@ -537,6 +621,7 @@ function FileTreeNode({ node, depth, onSelectFile, selectedPath, onContextMenu, 
       onContextMenu={onContextMenu}
       projectId={projectId}
       gitBadgeMap={gitBadgeMap}
+      gitDirStatusMap={gitDirStatusMap}
     />
   );
 }
@@ -578,15 +663,27 @@ const FileTreeItem = memo(function FileTreeItem({ node, depth, onSelectFile, sel
           ? 'bg-accent/60 text-accent-foreground'
           : node.gitIgnored
             ? 'text-muted-foreground'
-            : 'text-foreground',
+            : gitBadge?.nameClassName ?? 'text-foreground',
       )}
       style={{ paddingLeft: `${depth * 12 + 4}px` }}
     >
       <FileIcon className={cn('h-3 w-3 shrink-0', iconClassName, node.gitIgnored && 'opacity-50')} />
-      <span className="truncate">{node.name}</span>
+      <span
+        className={cn(
+          'truncate',
+          // 选中状态下不覆盖前景色（由 button 级 text-accent-foreground 控制）
+          !selected && gitBadge?.nameClassName,
+        )}
+      >
+        {node.name}
+      </span>
       {gitBadge && (
         <span
-          className={cn('ml-auto shrink-0 text-[9px] font-bold', gitBadge.className)}
+          className={cn(
+            'ml-auto shrink-0 text-[9px] font-bold',
+            // 选中状态下 badge 用 accent-foreground 保持可读性
+            selected ? 'text-accent-foreground' : gitBadge.className,
+          )}
           title={gitBadge.tooltip}
         >
           {gitBadge.label}
@@ -608,6 +705,8 @@ interface FileTreeDirectoryProps {
   projectId?: string;
   /** Map of git-relative-path → badge for showing M/D/A/U indicators. */
   gitBadgeMap?: Map<string, GitBadge>;
+  /** Map of directory path → aggregated status for VS Code-style folder markers. */
+  gitDirStatusMap?: Map<string, GitDirStatus>;
 }
 
 const FileTreeDirectory = memo(function FileTreeDirectory({
@@ -618,6 +717,7 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
   onContextMenu,
   projectId,
   gitBadgeMap,
+  gitDirStatusMap,
 }: FileTreeDirectoryProps) {
   // Root-level directories (depth 0) are expanded by default.
   // All other directories start collapsed.
@@ -663,6 +763,11 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
   // For lazy nodes that haven't been expanded yet, children is empty (from server).
   const displayChildren = lazyChildren ?? node.children;
 
+  // Aggregated git status for this directory (VS Code-style folder marker):
+  // 'modified' → 黄色（含 M/D/R… 文件），'added' → 绿色（仅含新增 A/U 文件）
+  const normalizedPath = node.path.replace(/\\/g, '/');
+  const dirStatus = gitDirStatusMap?.get(normalizedPath) ?? null;
+
   return (
     <div>
       <button
@@ -686,9 +791,26 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
         ) : (
           <Folder className="h-3 w-3 shrink-0 text-primary/70" />
         )}
-        <span className="truncate font-medium">{node.name}</span>
+        <span
+          className={cn(
+            'truncate font-medium',
+            dirStatus === 'modified' && 'text-warning-foreground',
+            dirStatus === 'added' && 'text-status-pass-foreground',
+          )}
+        >
+          {node.name}
+        </span>
         {loadingChildren && (
           <span className="ml-1 h-2.5 w-2.5 shrink-0 animate-spin rounded-full border border-current border-t-transparent opacity-50" />
+        )}
+        {dirStatus && (
+          <span
+            className={cn(
+              'ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-current',
+              dirStatus === 'modified' ? 'text-warning-foreground' : 'text-status-pass-foreground',
+            )}
+            title={dirStatus === 'modified' ? '包含修改的文件' : '包含新增的文件'}
+          />
         )}
       </button>
       {expanded && displayChildren && (
@@ -703,6 +825,7 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
               onContextMenu={onContextMenu}
               projectId={projectId}
               gitBadgeMap={gitBadgeMap}
+              gitDirStatusMap={gitDirStatusMap}
             />
           ))}
         </div>
