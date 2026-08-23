@@ -175,6 +175,9 @@ export const MermaidDiagram = memo(function MermaidDiagram({ code }: MermaidDiag
         const renderId = `${instanceIdRef.current}-${Date.now()}`;
         mermaid.initialize({
           startOnLoad: false,
+          // 解析失败时阻止 mermaid 向 document.body 注入"炸弹"错误 SVG。
+          // 该元素游离于 React 树之外，会覆盖整个 GUI 且无法关闭。
+          suppressErrorRendering: true,
           theme: dark ? 'dark' : 'default',
           securityLevel: 'loose',
           fontFamily: 'inherit',
@@ -224,6 +227,10 @@ export const MermaidDiagram = memo(function MermaidDiagram({ code }: MermaidDiag
           setSvg('');
           setLoading(false);
         }
+        // 兜底：清理 mermaid 渲染失败后可能遗留在 body 中的临时/错误节点
+        document.body
+          .querySelectorAll('[id^="mermaid-diagram-"], [id^="dmermaid-diagram-"]')
+          .forEach((node) => node.remove());
       }
     }, 300);
 
