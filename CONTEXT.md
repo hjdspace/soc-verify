@@ -377,3 +377,45 @@ _Avoid_: active dir, primary dir, main dir
 **ExtraDirEntry**:
 额外目录的数据结构实体，包含 `{ id, path, group: 'verify'|'design', label?, isCwd, order, createdAt }`。rootPath 不存入 `extraDirs`（隐式属于验证分组的第一项），`extraDirs` 只存储用户后续添加的目录。
 _Avoid_: dir entry, dir record
+
+### AI 引擎域
+
+**AI Engine（AI 引擎）**:
+驱动 AI Agent 会话的底层引擎。当前支持两种：omp（oh-my-pi）和 Codex。通过全局设置切换，所有新创建的会话使用选定引擎。已存在的会话保持原引擎。
+_Avoid_: agent backend, model provider
+
+**IAgentClient**:
+引擎抽象接口，定义了 AI 引擎客户端的统一契约（`init` / `prompt` / `abort` / `steer` / `setModel` / `compact` / `destroy` / `onEvent` / `setToolCallHandler` / `setApprovalHandler`）。`OmpAgentClient` 和 `CodexAgentClient` 分别实现此接口。SessionManager 依赖此接口而非具体实现。
+_Avoid_: engine adapter, agent bridge
+
+**OmpAgentClient**:
+omp 引擎的 IAgentClient 实现。通过自定义 JSONL 协议与 `socverify-runner` 子进程通信（stdin 命令 / stdout 响应+事件+工具调用）。当前 AgentClient 的重命名。
+_Avoid_: AgentClient, omp client
+
+**CodexAgentClient**:
+Codex 引擎的 IAgentClient 实现。通过 JSON-RPC 2.0 over stdio 与 Codex App Server 子进程通信。将 `initialize` / `thread/start` / `turn/start` / `turn/interrupt` 等 JSON-RPC 方法映射到 IAgentClient 接口。转发 Codex 的 Thread/Turn/Item 事件到渲染进程（携带 `_engine: 'codex'` 标识）。
+_Avoid_: codex client, app server client
+
+**Codex App Server**:
+OpenAI 开源（Apache-2.0）的有状态长生命周期进程，通过 JSON-RPC 2.0 暴露 Codex 的 Agent 能力。一个进程管理多个 Thread（会话），协议完全双向——客户端发请求，服务器也能主动发审批请求。预编译二进制从 GitHub Release 下载到 `resources/binaries/`。
+_Avoid_: codex harness, codex core
+
+**Thread（Codex 线程）**:
+Codex 的持久会话容器，对应一次完整的 Agent 对话。可创建、恢复、分叉、归档。历史持久化到 `~/.codex/sessions/`。在 SoC Verify 中，Codex 的 threadId 映射到 PersistedSession 的 `ompSessionId` 字段。
+_Avoid_: codex session, conversation
+
+**Turn（Codex 轮次）**:
+Codex 的单次工作单元，由用户输入触发。包含多个 Item（步骤）。生命周期：`turn/started` → 多个 Item 事件 → `turn/completed`。对应 omp 的 `agent_start` → 工作过程 → `agent_end`。
+_Avoid_: codex prompt, codex turn
+
+**Item（Codex 项）**:
+Codex 的原子输入/输出单元。类型包括 `userMessage`、`agentMessage`、`commandExecution`、`fileChange`、`reasoning` 等。每个 Item 有明确生命周期：`item/started` → 可选 `item/*/delta`（流式）→ `item/completed`。
+_Avoid_: codex event, codex step
+
+**dynamicTools**:
+Codex App Server 的实验性功能（需 `capabilities.experimentalApi = true`），允许在 `thread/start` 时动态注册自定义工具。SoC Verify 使用此机制将 Host Tools 暴露给 Codex Agent。与 omp 的 `customToolDefinitions` 概念对齐。
+_Avoid_: codex custom tools, dynamic tool registration
+
+**Engine Tag（引擎标识）**:
+事件 payload 中的 `_engine` 字段（值为 `'omp'` 或 `'codex'`），用于渲染进程区分事件来源引擎。CodexAgentClient 转发事件时添加此字段；omp 事件不添加（默认视为 omp）。渲染进程的 `handleSessionEvent` 据此路由到对应引擎的事件处理分支。
+_Avoid_: engine flag, source tag
