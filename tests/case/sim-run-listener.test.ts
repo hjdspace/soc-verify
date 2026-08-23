@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { createMemoryDatabase, closeDatabase, type CaseDatabase } from '../../src/main/case/db/case-database';
 import { SimulationRunListener } from '../../src/main/case/sim-run-listener';
+import { TerminalSimulationRunListener } from '../../src/main/case/sim-run-listener';
+import type { TerminalSimRun } from '../../src/main/simulation/sim-terminal-linker';
 import type { SimulationRunRecord } from '../../src/main/simulation/simulation-manager';
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -214,5 +216,60 @@ describe('SimulationRunListener', () => {
 
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
+  });
+});
+
+describe('TerminalSimulationRunListener', () => {
+  let db: CaseDatabase;
+  let linker: EventEmitter;
+
+  beforeEach(() => {
+    db = createMemoryDatabase();
+    linker = new EventEmitter();
+  });
+
+  afterEach(() => {
+    closeDatabase(db);
+    linker.removeAllListeners();
+  });
+
+  it('persists terminal completion and keeps the stable run id', () => {
+    const listener = new TerminalSimulationRunListener(linker, db, 'proj-1');
+    listener.start();
+    const record: TerminalSimRun = {
+      runId: 'terminal-run-1',
+      projectId: 'proj-1',
+      terminalId: 'term-1',
+      command: 'runsim smoke',
+      cwd: 'D:/project',
+      caseId: 'smoke',
+      caseName: 'smoke',
+      subsys: 'cpu',
+      options: { seed: '7' },
+      status: 'pass',
+      startTime: 1700000000000,
+      endTime: 1700000005000,
+      logMode: false,
+    };
+
+    linker.emit('run:completed', record);
+
+    const row = db.prepare('SELECT run_id, status, seed, duration_ms FROM simulation_runs').get() as Record<string, unknown>;
+    expect(row.run_id).toBe('terminal-run-1');
+    expect(row.status).toBe('pass');
+    expect(row.seed).toBe('7');
+    expect(row.duration_ms).toBe(5000);
+  });
+
+  it('ignores terminal events from another project', () => {
+    const listener = new TerminalSimulationRunListener(linker, db, 'proj-1');
+    listener.start();
+    linker.emit('run:completed', {
+      runId: 'other-run', projectId: 'proj-2', terminalId: 'term-2', command: '', cwd: '',
+      caseId: 'case', subsys: 'cpu', options: {}, status: 'fail', startTime: 1700000000000,
+      logMode: false,
+    } satisfies TerminalSimRun);
+
+    expect(db.prepare('SELECT COUNT(*) AS count FROM simulation_runs').get()).toEqual({ count: 0 });
   });
 });

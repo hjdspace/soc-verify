@@ -61,11 +61,11 @@ function formatDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  return `${Math.floor(m / 60)}h${m % 60}m`;
+  if (m < 60) return `${m}m ${s % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m ${s % 60}s`;
 }
 
-const ROW_GRID = 'grid-cols-[18px_1.4fr_100px_1fr_80px_70px]';
+const ROW_GRID = 'grid grid-cols-[18px_1.4fr_100px_1fr_80px_70px]';
 
 function RunRow({ run, now, onOpen }: {
   run: SimulationRunRecord;
@@ -122,11 +122,20 @@ function RunRow({ run, now, onOpen }: {
   );
 }
 
-export function RunListPanel() {
+export function RunListPanel({ projectId }: { projectId?: string } = {}) {
   const activeRuns = useSimulationStore((s) => s.activeRuns);
   const loading = useSimulationStore((s) => s.loadingActiveRuns);
+  const loadActiveRuns = useSimulationStore((s) => s.loadActiveRuns);
   const stopAllRuns = useSimulationStore((s) => s.stopAllRuns);
   const open = useWorkbenchStore((s) => s.open);
+
+  // The workspace running-simulations destination can be opened directly,
+  // without mounting SimulationView first, so it must load persisted runs too.
+  useEffect(() => {
+    if (projectId && typeof loadActiveRuns === 'function') {
+      void loadActiveRuns(projectId);
+    }
+  }, [projectId, loadActiveRuns]);
 
   const [seg, setSeg] = useState<SegKey>('all');
   const [keyword, setKeyword] = useState('');

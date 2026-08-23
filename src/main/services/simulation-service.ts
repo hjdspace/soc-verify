@@ -24,6 +24,7 @@ export function getSimulationManager(projectId: string) {
   const registry = pluginLoader.getRegistry(project.rootPath);
   const adapter = new PluginBackedSimulation(registry);
   const manager = simulationRegistry.getOrCreate(project.rootPath, projectId, adapter);
+  caseStatsRegistry.ensureTerminalListener(project.rootPath, projectId);
   // 同步注入到 CaseStatsService（若 service 已存在则更新其 simulationManager 引用）
   caseStatsRegistry.setSimulationManager(project.rootPath, manager);
   return manager;

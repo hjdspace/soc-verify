@@ -8,6 +8,7 @@ import {
   getSubsysWithCaseCount,
   searchCases,
   insertSimulationRun,
+  getRecentSimulationRuns,
   getLatestRunStatus,
   getLatestStatusBySubsys,
   getAllLatestStatuses,
@@ -383,6 +384,39 @@ describe('Case Database Repository', () => {
       const parsed = JSON.parse(row['options_json'] as string);
       expect(parsed).toEqual(opts);
       expect(parsed.extra.nested).toBe(true);
+    });
+  });
+
+  describe('getRecentSimulationRuns', () => {
+    it('returns persisted runs in newest-first order with stable ids', () => {
+      insertSimulationRun(db, {
+        runId: 'run-old', caseName: 'old_case', subsys: 'cpu', status: 'pass',
+        startTime: '2024-01-01T10:00:00.000Z',
+      });
+      insertSimulationRun(db, {
+        runId: 'run-new', caseName: 'new_case', subsys: 'cpu', status: 'fail',
+        startTime: '2024-01-02T10:00:00.000Z', endTime: '2024-01-02T10:01:00.000Z', durationMs: 60_000,
+      });
+
+      expect(getRecentSimulationRuns(db)).toEqual([
+        expect.objectContaining({ runId: 'run-new', caseName: 'new_case', durationMs: 60_000 }),
+        expect.objectContaining({ runId: 'run-old', caseName: 'old_case' }),
+      ]);
+    });
+
+    it('keeps only the latest run for a case and subsystem', () => {
+      insertSimulationRun(db, {
+        runId: 'run-fail', caseName: 'same_case', subsys: 'cpu', status: 'fail',
+        startTime: '2024-01-02T10:00:00.000Z',
+      });
+      insertSimulationRun(db, {
+        runId: 'run-pass', caseName: 'same_case', subsys: 'cpu', status: 'pass',
+        startTime: '2024-01-03T10:00:00.000Z',
+      });
+
+      expect(getRecentSimulationRuns(db)).toEqual([
+        expect.objectContaining({ runId: 'run-pass', status: 'pass' }),
+      ]);
     });
   });
 

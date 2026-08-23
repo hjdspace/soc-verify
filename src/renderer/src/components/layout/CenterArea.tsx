@@ -13,7 +13,7 @@ import { TOChecklistPanel } from '@renderer/components/to/TOChecklistPanel';
 import { SourceControlPanel } from '@renderer/components/scm/SourceControlPanel';
 import { FileEditor } from '@renderer/components/editor/FileEditor';
 import { openReviewAwareFile, useDiffReviewStore, isSameFilePath } from '@renderer/stores/diff-review';
-import { RunningCasesPanel } from '@renderer/components/simulation/RunningCasesPanel';
+import { RunListPanel } from '@renderer/components/simulation/RunListPanel';
 import { TERMINAL_TAB_MIME } from '@renderer/components/layout/BottomPanel';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from '@renderer/stores/toast';
@@ -519,7 +519,7 @@ export function CenterArea() {
         ) : destination?.type === 'simulation-comparison' ? (
           <ComparisonView result={compareResult} />
         ) : destination?.type === 'running-simulations' ? (
-          <RunningCasesPanel />
+          <RunListPanel projectId={currentProjectId ?? undefined} />
         ) : destination?.type === 'coverage' ? (
           <CoveragePanel />
         ) : destination?.type === 'coverage-detail' ? (

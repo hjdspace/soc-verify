@@ -18,6 +18,7 @@ import type { CaseDatabase } from './db/case-database';
 import type { SimulationRunRecord } from '../simulation/simulation-manager';
 import type { SimulationRunRow } from './db/case-repository';
 import { insertSimulationRun } from './db/case-repository';
+import type { TerminalSimRun } from '../simulation/sim-terminal-linker';
 
 /**
  * 将 SimulationRunRecord 转换为 SimulationRunRow（DB 行类型）。
@@ -42,6 +43,7 @@ function toRunRow(record: SimulationRunRecord): SimulationRunRow {
   const seed = typeof opts['seed'] === 'string' ? opts['seed'] as string : undefined;
 
   return {
+    runId: record.runId,
     caseName: record.options.caseName ?? record.options.caseId,
     subsys: record.options.subsys,
     status: record.status.status,
@@ -54,6 +56,22 @@ function toRunRow(record: SimulationRunRecord): SimulationRunRow {
   };
 }
 
+function toTerminalRunRow(record: TerminalSimRun): SimulationRunRow {
+  const startTime = new Date(record.startTime).toISOString();
+  const endTime = record.endTime != null ? new Date(record.endTime).toISOString() : undefined;
+  return {
+    runId: record.runId,
+    caseName: record.caseName ?? record.caseId,
+    subsys: record.subsys,
+    status: record.status,
+    startTime,
+    endTime,
+    durationMs: record.endTime != null ? record.endTime - record.startTime : undefined,
+    seed: typeof record.options.seed === 'string' ? record.options.seed : undefined,
+    optionsJson: JSON.stringify(record.options),
+  };
+}
+
 /**
  * 监听 SimulationManager 的 run:completed 事件，
  * 将仿真运行记录持久化到 simulation_runs 表。
@@ -62,6 +80,7 @@ export class SimulationRunListener {
   private readonly simManager: EventEmitter;
   private readonly db: Database.Database;
   private boundHandler: ((record: SimulationRunRecord) => void) | null = null;
+  private boundAborted: ((record: SimulationRunRecord) => void) | null = null;
 
   constructor(simManager: EventEmitter, db: CaseDatabase) {
     this.simManager = simManager;
@@ -80,8 +99,12 @@ export class SimulationRunListener {
     this.boundHandler = (record: SimulationRunRecord) => {
       this.handleRunCompleted(record);
     };
+    this.boundAborted = (record: SimulationRunRecord) => {
+      this.handleRunCompleted(record);
+    };
 
     this.simManager.on('run:completed', this.boundHandler);
+    this.simManager.on('run:aborted', this.boundAborted);
   }
 
   /**
@@ -91,6 +114,10 @@ export class SimulationRunListener {
     if (this.boundHandler) {
       this.simManager.off('run:completed', this.boundHandler);
       this.boundHandler = null;
+    }
+    if (this.boundAborted) {
+      this.simManager.off('run:aborted', this.boundAborted);
+      this.boundAborted = null;
     }
   }
 
@@ -107,6 +134,46 @@ export class SimulationRunListener {
       console.warn(
         `[sim-run-listener] Failed to persist simulation run to DB: ${msg}`,
       );
+    }
+  }
+}
+
+/** 持久化终端仿真完成/中止事件。 */
+export class TerminalSimulationRunListener {
+  private readonly simTerminalLinker: EventEmitter;
+  private readonly db: Database.Database;
+  private readonly projectId: string;
+  private boundCompleted: ((record: TerminalSimRun) => void) | null = null;
+  private boundAborted: ((record: TerminalSimRun) => void) | null = null;
+
+  constructor(simTerminalLinker: EventEmitter, db: CaseDatabase, projectId: string) {
+    this.simTerminalLinker = simTerminalLinker;
+    this.db = db;
+    this.projectId = projectId;
+  }
+
+  start(): void {
+    this.stop();
+    this.boundCompleted = (record) => this.persist(record);
+    this.boundAborted = (record) => this.persist(record);
+    this.simTerminalLinker.on('run:completed', this.boundCompleted);
+    this.simTerminalLinker.on('run:aborted', this.boundAborted);
+  }
+
+  stop(): void {
+    if (this.boundCompleted) this.simTerminalLinker.off('run:completed', this.boundCompleted);
+    if (this.boundAborted) this.simTerminalLinker.off('run:aborted', this.boundAborted);
+    this.boundCompleted = null;
+    this.boundAborted = null;
+  }
+
+  private persist(record: TerminalSimRun): void {
+    if (record.projectId !== this.projectId) return;
+    try {
+      insertSimulationRun(this.db, toTerminalRunRow(record));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[sim-run-listener] Failed to persist terminal simulation run to DB: ${msg}`);
     }
   }
 }

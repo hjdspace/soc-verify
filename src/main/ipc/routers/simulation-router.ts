@@ -14,7 +14,20 @@ import { getSimulationManager } from '../../services/simulation-service';
 import { pluginLoader } from '../../plugins/loader';
 import { terminalManager, findSimShell } from '../../terminal/terminal-manager';
 import { simTerminalLinker } from '../../simulation/sim-terminal-linker';
+import { caseStatsRegistry } from '../../case/case-stats-registry';
+import { getRecentSimulationRuns } from '../../case/db/case-repository';
 import type { SimulationRunOptions } from '@shared/plugin-types';
+import type { SimulationRunRecord } from '../../simulation/simulation-manager';
+
+type ListedRun = {
+  runId: string;
+  projectId: string;
+  options: { caseId: string; caseName: string; subsys: string; options: Record<string, unknown> };
+  status: { runId: string; status: string; startTime: number; endTime?: number };
+  startTime: number;
+  endTime?: number;
+  compileErrors?: SimulationRunRecord['compileErrors'];
+};
 
 export const simulationRouter = t.router({
   run: t.procedure
@@ -87,8 +100,74 @@ export const simulationRouter = t.router({
       return { projectId: r.projectId };
     })
     .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
       const manager = getSimulationManager(input.projectId);
-      return manager.getActiveRuns();
+      caseStatsRegistry.ensureTerminalListener(project.rootPath, input.projectId);
+      const activeRuns: ListedRun[] = manager.getActiveRuns().map((run) => ({
+        runId: run.runId,
+        projectId: run.projectId,
+        options: {
+          caseId: run.options.caseId,
+          caseName: run.options.caseName ?? run.options.caseId,
+          subsys: run.options.subsys,
+          options: run.options.options ?? {},
+        },
+        status: {
+          runId: run.runId,
+          status: run.status.status,
+          startTime: run.status.startTime ?? run.startTime,
+          endTime: run.status.endTime,
+        },
+        startTime: run.startTime,
+        endTime: run.endTime,
+        compileErrors: run.compileErrors,
+      }));
+      const terminalRuns: ListedRun[] = simTerminalLinker.getActiveRuns(input.projectId).map((run) => ({
+        runId: run.runId,
+        projectId: run.projectId,
+        options: {
+          caseId: run.caseId,
+          caseName: run.caseName ?? run.caseId,
+          subsys: run.subsys,
+          options: run.options,
+        },
+        status: {
+          runId: run.runId,
+          status: run.status,
+          startTime: run.startTime,
+          endTime: run.endTime,
+        },
+        startTime: run.startTime,
+        endTime: run.endTime,
+        compileErrors: undefined,
+      }));
+      const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
+      const persistedRuns: ListedRun[] = getRecentSimulationRuns(db).map((run) => ({
+        runId: run.runId ?? `persisted-${run.id}`,
+        projectId: input.projectId,
+        options: {
+          caseId: run.caseName,
+          caseName: run.caseName,
+          subsys: run.subsys,
+          options: run.optionsJson ? JSON.parse(run.optionsJson) as Record<string, unknown> : {},
+        },
+        status: {
+          runId: run.runId ?? `persisted-${run.id}`,
+          status: run.status,
+          startTime: Date.parse(run.startTime),
+          endTime: run.endTime ? Date.parse(run.endTime) : undefined,
+        },
+        startTime: Date.parse(run.startTime),
+        endTime: run.endTime ? Date.parse(run.endTime) : undefined,
+        compileErrors: undefined,
+      }));
+      // The DB stores every execution, but the run list represents each case's
+      // latest state. Live records are appended last so they override history.
+      const byCase = new Map<string, ListedRun>();
+      for (const run of [...persistedRuns, ...activeRuns, ...terminalRuns]) {
+        byCase.set(`${run.options.caseId}\u0000${run.options.subsys}`, run);
+      }
+      return Array.from(byCase.values()).sort((a, b) => b.startTime - a.startTime);
     }),
 
   getHistory: t.procedure
@@ -249,6 +328,7 @@ export const simulationRouter = t.router({
       // logMode=true 时，linker 在进程退出后扫描输出中的 pass/fail 标记，
       // 而非直接使用 exit code（避免 LSF 提交成功被误判为仿真 PASS）
       const logMode = session.backend === 'log-mode';
+      caseStatsRegistry.ensureTerminalListener(project.rootPath, input.projectId);
       const run = simTerminalLinker.register(
         input.projectId,
         session.id,

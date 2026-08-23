@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS cases (
 -- simulation_runs 表
 CREATE TABLE IF NOT EXISTS simulation_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT,
     case_name TEXT NOT NULL,
     subsys TEXT NOT NULL,
     status TEXT NOT NULL,
@@ -82,4 +83,5 @@ PRAGMA mmap_size = 268435456;
  */
 export const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string }[] = [
   { table: 'cases', column: 'post_sim', ddl: 'ALTER TABLE cases ADD COLUMN post_sim INTEGER NOT NULL DEFAULT 0' },
+  { table: 'simulation_runs', column: 'run_id', ddl: 'ALTER TABLE simulation_runs ADD COLUMN run_id TEXT' },
 ];

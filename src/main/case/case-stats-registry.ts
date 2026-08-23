@@ -11,7 +11,8 @@ import type { SimulationManager } from '../simulation/simulation-manager';
 import { CaseStatsService } from './case-stats-service';
 import { initDatabase, closeDatabase, getDbPath, type CaseDatabase } from './db/case-database';
 import { CaseScanner } from './case-scanner';
-import { SimulationRunListener } from './sim-run-listener';
+import { SimulationRunListener, TerminalSimulationRunListener } from './sim-run-listener';
+import { simTerminalLinker } from '../simulation/sim-terminal-linker';
 import { loadEnvConfig } from '../env/env-manager';
 
 class CaseStatsRegistryImpl {
@@ -19,6 +20,7 @@ class CaseStatsRegistryImpl {
   private dbs = new Map<string, CaseDatabase>();
   private scanners = new Map<string, CaseScanner>();
   private listeners = new Map<string, SimulationRunListener>();
+  private terminalListeners = new Map<string, TerminalSimulationRunListener>();
 
   /**
    * 获取或创建指定项目的 DB 连接（懒创建）。
@@ -32,6 +34,17 @@ class CaseStatsRegistryImpl {
       this.dbs.set(projectRoot, db);
     }
     return db;
+  }
+
+  ensureTerminalListener(projectRoot: string, projectId: string): void {
+    if (this.terminalListeners.has(projectRoot)) return;
+    const listener = new TerminalSimulationRunListener(
+      simTerminalLinker,
+      this.getOrCreateDb(projectRoot),
+      projectId,
+    );
+    listener.start();
+    this.terminalListeners.set(projectRoot, listener);
   }
 
   /**
@@ -157,6 +170,11 @@ class CaseStatsRegistryImpl {
   remove(projectRoot: string): void {
     // Stop simulation run listener
     this.detachListener(projectRoot);
+    const terminalListener = this.terminalListeners.get(projectRoot);
+    if (terminalListener) {
+      terminalListener.stop();
+      this.terminalListeners.delete(projectRoot);
+    }
     // Stop scanner file watcher
     const scanner = this.scanners.get(projectRoot);
     if (scanner) {
@@ -178,6 +196,8 @@ class CaseStatsRegistryImpl {
       listener.stop();
     }
     this.listeners.clear();
+    for (const listener of this.terminalListeners.values()) listener.stop();
+    this.terminalListeners.clear();
     // Stop all scanner watchers
     for (const scanner of this.scanners.values()) {
       scanner.stopWatch();

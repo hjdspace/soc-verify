@@ -31,6 +31,7 @@ export type CaseRow = {
 };
 
 export type SimulationRunRow = {
+  runId?: string;
   caseName: string;
   subsys: string;
   status: string;
@@ -312,9 +313,10 @@ export function insertSimulationRun(
 ): { inserted: number } {
   const result = db.prepare(`
     INSERT INTO simulation_runs
-    (case_name, subsys, status, start_time, end_time, duration_ms, corner, seed, options_json)
-    VALUES (@caseName, @subsys, @status, @startTime, @endTime, @durationMs, @corner, @seed, @optionsJson)
+    (run_id, case_name, subsys, status, start_time, end_time, duration_ms, corner, seed, options_json)
+    VALUES (@runId, @caseName, @subsys, @status, @startTime, @endTime, @durationMs, @corner, @seed, @optionsJson)
   `).run({
+    runId: run.runId ?? null,
     caseName: run.caseName,
     subsys: run.subsys,
     status: run.status,
@@ -326,6 +328,66 @@ export function insertSimulationRun(
     optionsJson: run.optionsJson ?? null,
   });
   return { inserted: result.changes };
+}
+
+export type RecentSimulationRunRow = {
+  id: number;
+  runId: string | null;
+  caseName: string;
+  subsys: string;
+  status: string;
+  startTime: string;
+  endTime: string | null;
+  durationMs: number | null;
+  seed: string | null;
+  optionsJson: string | null;
+};
+
+/** 获取最近的仿真运行记录，供仿真页跨重启恢复运行列表。 */
+export function getRecentSimulationRuns(
+  db: Database.Database,
+  limit = 200,
+): RecentSimulationRunRow[] {
+  const rows = db.prepare(`
+    SELECT id, run_id, case_name, subsys, status, start_time, end_time,
+      duration_ms, seed, options_json
+    FROM (
+      SELECT id, run_id, case_name, subsys, status, start_time, end_time,
+        duration_ms, seed, options_json,
+        ROW_NUMBER() OVER (
+          PARTITION BY case_name, subsys
+          ORDER BY start_time DESC, id DESC
+        ) AS row_num
+      FROM simulation_runs
+    )
+    WHERE row_num = 1
+    ORDER BY start_time DESC, id DESC
+    LIMIT @limit
+  `).all({ limit: Math.max(1, Math.floor(limit)) }) as Array<{
+    id: number;
+    run_id: string | null;
+    case_name: string;
+    subsys: string;
+    status: string;
+    start_time: string;
+    end_time: string | null;
+    duration_ms: number | null;
+    seed: string | null;
+    options_json: string | null;
+  }>;
+
+  return rows.map((row) => ({
+    id: row.id,
+    runId: row.run_id,
+    caseName: row.case_name,
+    subsys: row.subsys,
+    status: row.status,
+    startTime: row.start_time,
+    endTime: row.end_time,
+    durationMs: row.duration_ms,
+    seed: row.seed,
+    optionsJson: row.options_json,
+  }));
 }
 
 /**
