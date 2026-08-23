@@ -31,8 +31,6 @@ interface UiState {
   activeView: ActiveView;
   /** 左侧文件抽屉（NavRail「文件」按钮 toggle；切换视图自动关闭） */
   leftDrawerOpen: boolean;
-  /** 左侧文件抽屉当前 Tab（files = 文件树 / subsystems = 子系统用例），供跨组件打开子系统 Tab */
-  leftDrawerTab: 'files' | 'subsystems';
   /** 右侧 AI 抽屉（仅 aiPanelMode === 'drawer' 时有效） */
   rightDrawerOpen: boolean;
   aiPanelMode: AiPanelMode;
@@ -50,8 +48,7 @@ interface UiState {
   pluginViewLayouts: PluginViewLayouts;
   setActiveView: (view: ActiveView) => void;
   toggleLeftDrawer: () => void;
-  setLeftDrawerTab: (tab: 'files' | 'subsystems') => void;
-  /** 打开左侧抽屉并切到子系统用例 Tab（供总览里程碑「后仿用例调试」等入口调用） */
+  /** 切换到仿真视图（子系统/用例树已内嵌在仿真页面，供总览里程碑「后仿用例调试」等入口调用） */
   openSubsystemCases: () => void;
   toggleRightDrawer: () => void;
   closeDrawers: () => void;
@@ -90,7 +87,6 @@ const SIM_LEFT_MAX = 400;
 export const useUiStore = create<UiState>((set) => ({
   activeView: 'dashboard',
   leftDrawerOpen: false,
-  leftDrawerTab: 'files',
   rightDrawerOpen: false,
   aiPanelMode: 'drawer',
   rightPanelCollapsed: false,
@@ -108,8 +104,7 @@ export const useUiStore = create<UiState>((set) => ({
   setActiveView: (view) =>
     set({ activeView: view, leftDrawerOpen: false, rightDrawerOpen: false }),
   toggleLeftDrawer: () => set((s) => ({ leftDrawerOpen: !s.leftDrawerOpen })),
-  setLeftDrawerTab: (tab) => set({ leftDrawerTab: tab }),
-  openSubsystemCases: () => set({ leftDrawerOpen: true, leftDrawerTab: 'subsystems' }),
+  openSubsystemCases: () => set({ activeView: 'simulation', leftDrawerOpen: false, rightDrawerOpen: false }),
   toggleRightDrawer: () => set((s) => ({ rightDrawerOpen: !s.rightDrawerOpen })),
   closeDrawers: () => set({ leftDrawerOpen: false, rightDrawerOpen: false }),
   // 切回固定侧栏模式时收起抽屉，避免再次切回抽屉模式时意外弹开

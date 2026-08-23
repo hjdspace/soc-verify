@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
     ],
     currentProjectId: 'project-1' as string | null,
     switchProject: vi.fn<(projectId: string) => Promise<void>>().mockResolvedValue(undefined),
+    openProjectDialog: vi.fn().mockResolvedValue(undefined),
   },
   // 回归徽章数据面
   reg: {
@@ -76,6 +77,7 @@ import { useUiStore } from '@renderer/stores/ui';
 beforeEach(() => {
   mocks.proj.currentProjectId = 'project-1';
   mocks.proj.switchProject.mockClear();
+  mocks.proj.openProjectDialog.mockClear();
   mocks.reg.activeRegressions = [];
   mocks.reg.initActiveRuns.mockClear();
   mocks.env.managerOpen = false;
@@ -127,6 +129,17 @@ describe('TitleBar 原型布局', () => {
     fireEvent.click(screen.getByRole('button', { name: '切换项目' }));
     fireEvent.click(screen.getByRole('button', { name: /chipnorth/ }));
     expect(mocks.proj.switchProject).not.toHaveBeenCalled();
+  });
+
+  it('项目选择器下拉含「打开项目目录」按钮，点击调用 openProjectDialog', () => {
+    render(<TitleBar />);
+    fireEvent.click(screen.getByRole('button', { name: '切换项目' }));
+
+    const openBtn = screen.getByText('打开项目目录');
+    expect(openBtn).toBeInTheDocument();
+
+    fireEvent.click(openBtn);
+    expect(mocks.proj.openProjectDialog).toHaveBeenCalledTimes(1);
   });
 });
 

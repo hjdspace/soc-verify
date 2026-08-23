@@ -3,8 +3,6 @@ import { createPortal } from 'react-dom';
 import {
   FolderOpen,
   RefreshCw,
-  Cpu,
-  FileText,
   ChevronDown,
   Plus,
   Folder,
@@ -21,14 +19,11 @@ import { useUiStore } from '@renderer/stores/ui';
 import { openReviewAwareFile } from '@renderer/stores/diff-review';
 import { useDiffReviewStore } from '@renderer/stores/diff-review';
 import { FileTree } from '../project/FileTree';
-import { SubsysList } from '../project/SubsysList';
 import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
 import { tRPCError, getToast } from '@renderer/lib/trpc-utils';
 import type { DirGroup, ExtraDirEntry, FileTreeNode, ProjectInfo } from '@shared/types';
 import { Drawer } from './Drawer';
-
-type Tab = 'files' | 'subsystems';
 
 /** 原型：文件抽屉宽 330px */
 const FILE_DRAWER_WIDTH = 330;
@@ -48,8 +43,6 @@ function formatTime(ts: number): string {
 export function FileDrawer() {
   const open = useUiStore((s) => s.leftDrawerOpen);
   const closeDrawers = useUiStore((s) => s.closeDrawers);
-  const leftDrawerTab = useUiStore((s) => s.leftDrawerTab);
-  const setLeftDrawerTab = useUiStore((s) => s.setLeftDrawerTab);
   const [showProjectList, setShowProjectList] = useState(false);
 
   const projects = useProjectStore((s) => s.projects);
@@ -209,11 +202,6 @@ export function FileDrawer() {
     // 如果移除的是 cwd 目录，后端会自动回退到验证组第一个剩余目录并发送 cwd:changed 事件
   };
 
-  const tabs: Array<{ id: Tab; label: string; icon: typeof FileText }> = [
-    { id: 'files', label: '文件', icon: FileText },
-    { id: 'subsystems', label: '子系统', icon: Cpu },
-  ];
-
   return (
     <Drawer side="left" open={open} onClose={closeDrawers} title="文件" width={FILE_DRAWER_WIDTH} flush>
       <div className="flex min-h-0 flex-1 flex-col">
@@ -363,26 +351,6 @@ export function FileDrawer() {
           </button>
         </div>
 
-        {/* ── Tab 切换 ────────────────────────────────── */}
-        <div className="flex border-b border-border/50">
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setLeftDrawerTab(t.id)}
-              data-testid={`file-drawer-tab-${t.id}`}
-              className={cn(
-                'flex flex-1 items-center justify-center gap-1 py-1.5 text-[10px] font-medium transition-colors',
-                leftDrawerTab === t.id
-                  ? 'border-b border-primary text-primary'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-            >
-              <t.icon className="h-3 w-3" />
-              {t.label}
-            </button>
-          ))}
-        </div>
-
         {/* ── 内容区 ──────────────────────────────────── */}
         <div className="flex-1 overflow-y-auto px-1.5 py-1">
           {!currentProject ? (
@@ -395,7 +363,7 @@ export function FileDrawer() {
                 打开项目目录
               </button>
             </div>
-          ) : leftDrawerTab === 'files' ? (
+          ) : (
             <FileTreeSection
               currentProject={currentProject}
               fileTree={fileTree}
@@ -412,13 +380,6 @@ export function FileDrawer() {
               onSetCwd={handleSetCwd}
               onRemoveDir={handleRemoveDir}
             />
-          ) : (
-            <div className="flex flex-col gap-0.5">
-              <span className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                子系统 / 用例
-              </span>
-              <SubsysList />
-            </div>
           )}
         </div>
 

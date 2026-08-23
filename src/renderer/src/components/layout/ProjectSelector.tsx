@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, FolderOpen } from 'lucide-react';
+import { ChevronDown, FolderOpen, Plus } from 'lucide-react';
 import { useProjectStore } from '@renderer/stores/project';
 import { cn } from '@renderer/lib/utils';
 
@@ -17,6 +17,7 @@ export function ProjectSelector() {
   const projects = useProjectStore((s) => s.projects);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const switchProject = useProjectStore((s) => s.switchProject);
+  const openProjectDialog = useProjectStore((s) => s.openProjectDialog);
 
   const current = projects.find((p) => p.id === currentProjectId);
 
@@ -86,6 +87,19 @@ export function ProjectSelector() {
               </button>
             ))
           )}
+          <div className="border-t border-border p-1">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                void openProjectDialog();
+              }}
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-primary transition-colors hover:bg-accent"
+            >
+              <Plus className="size-3.5 shrink-0" />
+              <span>打开项目目录</span>
+            </button>
+          </div>
         </div>
       )}
     </div>

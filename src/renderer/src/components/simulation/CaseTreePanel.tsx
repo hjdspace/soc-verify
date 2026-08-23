@@ -167,11 +167,25 @@ export function CaseTreePanel() {
               ? undefined
               : effectiveStatus,
         });
+        const cases = data as CaseData[];
         setCasesBySubsys((prev) => {
           const next = new Map(prev);
-          next.set(subsysName, data as CaseData[]);
+          next.set(subsysName, cases);
           return next;
         });
+        // 自动展开新加载的文件节点，让用例直接可见
+        const filePaths = new Set<string>();
+        for (const c of cases) {
+          const fp = c.filePath ?? c.path;
+          if (fp) filePaths.add(fp);
+        }
+        if (filePaths.size > 0) {
+          setExpandedFiles((prev) => {
+            const next = new Set(prev);
+            for (const fp of filePaths) next.add(fp);
+            return next;
+          });
+        }
       } catch {
         setCasesBySubsys((prev) => {
           const next = new Map(prev);

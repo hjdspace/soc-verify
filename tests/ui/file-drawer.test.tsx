@@ -62,10 +62,6 @@ vi.mock('@renderer/components/project/FileTree', () => ({
   FileTree: () => <div data-testid="file-tree-mock" />,
 }));
 
-vi.mock('@renderer/components/project/SubsysList', () => ({
-  SubsysList: () => <div data-testid="subsys-list-mock" />,
-}));
-
 import { FileDrawer } from '@renderer/components/layout/FileDrawer';
 import { useUiStore } from '@renderer/stores/ui';
 
@@ -74,7 +70,6 @@ beforeEach(() => {
   useUiStore.setState({
     leftDrawerOpen: true,
     rightDrawerOpen: false,
-    leftDrawerTab: 'files',
   });
   projectState.recentFiles = [];
   projectState.extraDirs = [];
@@ -83,11 +78,9 @@ beforeEach(() => {
 });
 
 describe('FileDrawer 基础渲染', () => {
-  it('打开时渲染标题与文件/子系统双 Tab，默认文件 Tab', () => {
+  it('打开时渲染标题与文件树内容', () => {
     render(<FileDrawer />);
     expect(screen.getByRole('dialog', { name: '文件' })).toBeInTheDocument();
-    expect(screen.getByTestId('file-drawer-tab-files')).toBeInTheDocument();
-    expect(screen.getByTestId('file-drawer-tab-subsystems')).toBeInTheDocument();
     expect(screen.getByTestId('file-tree-mock')).toBeInTheDocument();
   });
 
@@ -97,13 +90,6 @@ describe('FileDrawer 基础渲染', () => {
     /* inert 属性使抽屉从 accessibility tree 排除，getByRole 查不到，改用 testid */
     const drawer = screen.getByTestId('drawer-left');
     expect(drawer.getAttribute('aria-hidden')).toBe('true');
-  });
-
-  it('点击子系统 Tab 切换内容', () => {
-    render(<FileDrawer />);
-    fireEvent.click(screen.getByTestId('file-drawer-tab-subsystems'));
-    expect(screen.getByTestId('subsys-list-mock')).toBeInTheDocument();
-    expect(screen.queryByTestId('file-tree-mock')).toBeNull();
   });
 
   it('无项目时显示空态引导', () => {
