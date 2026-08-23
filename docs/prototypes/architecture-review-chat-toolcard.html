@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Architecture review — SoC Verify / Chat ToolCard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose" });
+    </script>
+    <style>
+      .seam { stroke-dasharray: 4 4; }
+      .leak { stroke: #dc2626; }
+      .deep { background: linear-gradient(135deg, #0f172a, #1e293b); }
+      .shallow-bg { background: linear-gradient(135deg, #fef3c7, #fde68a); }
+      .mass-interface { fill: #fbbf24; opacity: 0.8; }
+      .mass-impl { fill: #64748b; opacity: 0.6; }
+      .mass-interface-deep { fill: #34d399; opacity: 0.8; }
+      .mass-impl-deep { fill: #1e293b; opacity: 0.85; }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 font-sans">
+    <main class="max-w-5xl mx-auto px-6 py-12 space-y-12">
+
+      <!-- ── Header ─────────────────────────────────────── -->
+      <header class="space-y-4">
+        <div class="flex items-baseline justify-between">
+          <h1 class="text-3xl font-serif font-bold tracking-tight">Architecture Review</h1>
+          <span class="text-sm text-slate-500">SoC Verify · Chat ToolCard Module</span>
+        </div>
+        <div class="text-xs text-slate-400">
+          2026-08-23 · Target: <code class="font-mono">ToolCard.tsx</code> (1,653 lines) + <code class="font-mono">tool-helpers.ts</code> (854 lines)
+        </div>
+        <div class="flex flex-wrap gap-4 text-xs text-slate-500 border-t border-slate-200 pt-3">
+          <span class="flex items-center gap-1.5"><span class="inline-block w-4 h-3 border-2 border-slate-700 rounded-sm"></span> module</span>
+          <span class="flex items-center gap-1.5"><span class="inline-block w-6 border-t-2 border-dashed border-slate-500"></span> seam</span>
+          <span class="flex items-center gap-1.5"><span class="inline-block w-4 h-3 border-2 border-red-600 rounded-sm"></span> leakage</span>
+          <span class="flex items-center gap-1.5"><span class="inline-block w-4 h-3 rounded-sm deep"></span> deep module</span>
+        </div>
+      </header>
+
+      <!-- ── Candidate 1 ───────────────────────────────── -->
+      <article id="candidate-1" class="space-y-4">
+        <div class="flex items-baseline justify-between">
+          <h2 class="text-xl font-serif font-bold">1. Split the ToolCard monolith into per-category body modules</h2>
+          <div class="flex gap-2">
+            <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">Strong</span>
+            <span class="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">in-process</span>
+          </div>
+        </div>
+
+        <div class="font-mono text-sm text-slate-600 space-y-0.5">
+          <div><code>ToolCard.tsx</code> <span class="text-slate-400">(1,653 lines)</span></div>
+          <div class="pl-4 text-slate-400">├─ ToolCard (header + expand state)</div>
+          <div class="pl-4 text-slate-400">├─ buildSummary() — 20+ tool branches</div>
+          <div class="pl-4 text-slate-400">├─ ToolBody dispatcher — 20+ switch cases</div>
+          <div class="pl-4 text-slate-400">├─ ReadBody, WriteBody, EditBody, OmpEditResultView (~350 lines)</div>
+          <div class="pl-4 text-slate-400">├─ BashBody, EvalBody, GrepBody, GlobBody (~180 lines)</div>
+          <div class="pl-4 text-slate-400">├─ TaskBody, JobBody, TodoBody (~150 lines)</div>
+          <div class="pl-4 text-slate-400">├─ AskBody (140 lines)</div>
+          <div class="pl-4 text-slate-400">├─ SimRunBody, CoverageBody, CompileErrorsBody... (~280 lines)</div>
+          <div class="pl-4 text-slate-400">└─ GenericBody, McpBody, HostTableBody (~120 lines)</div>
+          <div><code>tool-helpers.ts</code> <span class="text-slate-400">(854 lines)</span></div>
+          <div><code>RightPanel.tsx</code> <span class="text-slate-400">(sole consumer: MessageBubble → ToolCard)</span></div>
+        </div>
+
+        <!-- Before / After -->
+        <div class="grid grid-cols-2 gap-4">
+          <!-- BEFORE -->
+          <div class="rounded-lg border border-slate-200 bg-white p-4">
+            <div class="text-xs uppercase tracking-wider text-slate-400 mb-2 font-semibold">Before</div>
+            <div class="space-y-2">
+              <div class="border-2 border-amber-400 rounded-md p-2 bg-amber-50">
+                <div class="text-[10px] font-mono font-bold text-amber-700">ToolCard.tsx — 1,653 lines</div>
+                <div class="text-[10px] text-amber-600 mt-1">Interface ≈ Implementation (shallow)</div>
+                <div class="mt-2 space-y-1">
+                  <div class="text-[9px] font-mono text-slate-500 bg-white/60 rounded px-1.5 py-0.5">export ToolCard({ message })</div>
+                  <div class="text-[9px] text-slate-400 pl-2">↳ buildSummary() — 20+ branches</div>
+                  <div class="text-[9px] text-slate-400 pl-2">↳ ToolBody — 20+ switch cases</div>
+                  <div class="text-[9px] text-slate-400 pl-2">↳ 15+ Body components inline</div>
+                  <div class="text-[9px] text-slate-400 pl-2">↳ 5+ diff-stats functions</div>
+                  <div class="text-[9px] text-slate-400 pl-2">↳ CodeHighlight, ClickablePathHeader…</div>
+                </div>
+              </div>
+              <div class="text-center text-[10px] text-slate-400">Mass: interface surface ≈ implementation surface</div>
+              <svg viewBox="0 0 200 60" class="w-full h-16">
+                <rect x="10" y="5" width="180" height="20" rx="3" class="mass-interface"/>
+                <text x="100" y="18" text-anchor="middle" font-size="8" fill="#78350f">Interface: 1 export + 20 tool branches</text>
+                <rect x="10" y="30" width="180" height="25" rx="3" class="mass-impl"/>
+                <text x="100" y="45" text-anchor="middle" font-size="8" fill="#fff">Impl: 1,653 lines, 15+ components</text>
+              </svg>
+            </div>
+          </div>
+
+          <!-- AFTER -->
+          <div class="rounded-lg border border-emerald-200 bg-white p-4">
+            <div class="text-xs uppercase tracking-wider text-emerald-500 mb-2 font-semibold">After</div>
+            <div class="space-y-2">
+              <div class="border-2 border-emerald-600 rounded-md p-2 deep text-white">
+                <div class="text-[10px] font-mono font-bold text-emerald-300">ToolCard.tsx — ~120 lines</div>
+                <div class="text-[10px] text-emerald-400 mt-1">Header + expand state + dispatch (deep)</div>
+                <div class="mt-2 space-y-1">
+                  <div class="text-[9px] font-mono text-emerald-300 bg-white/10 rounded px-1.5 py-0.5">export ToolCard({ message })</div>
+                </div>
+              </div>
+              <div class="text-[9px] text-slate-400 text-center">↓ delegates to</div>
+              <div class="grid grid-cols-2 gap-1">
+                <div class="border border-slate-300 rounded px-1.5 py-1 text-[9px] font-mono text-slate-600 bg-white">file-tool-bodies/<br/><span class="text-slate-400">ReadBody, WriteBody,<br/>EditBody, DiffLineView</span></div>
+                <div class="border border-slate-300 rounded px-1.5 py-1 text-[9px] font-mono text-slate-600 bg-white">exec-tool-bodies/<br/><span class="text-slate-400">BashBody, EvalBody,<br/>GrepBody, GlobBody</span></div>
+                <div class="border border-slate-300 rounded px-1.5 py-1 text-[9px] font-mono text-slate-600 bg-white">agent-tool-bodies/<br/><span class="text-slate-400">TaskBody, JobBody,<br/>TodoBody</span></div>
+                <div class="border border-slate-300 rounded px-1.5 py-1 text-[9px] font-mono text-slate-600 bg-white">host-tool-bodies/<br/><span class="text-slate-400">SimRunBody, CoverageBody,<br/>CompileErrorsBody…</span></div>
+                <div class="border border-slate-300 rounded px-1.5 py-1 text-[9px] font-mono text-slate-600 bg-white">interactive-bodies/<br/><span class="text-slate-400">AskBody</span></div>
+                <div class="border border-slate-300 rounded px-1.5 py-1 text-[9px] font-mono text-slate-600 bg-white">shared/<br/><span class="text-slate-400">GenericBody, McpBody,<br/>HostTableBody, StatusBadge,<br/>CodeHighlight, ClickablePathHeader</span></div>
+              </div>
+              <div class="text-center text-[10px] text-slate-400">Mass: small interface, distributed implementation</div>
+              <svg viewBox="0 0 200 60" class="w-full h-16">
+                <rect x="60" y="5" width="80" height="12" rx="3" class="mass-interface-deep"/>
+                <text x="100" y="14" text-anchor="middle" font-size="7" fill="#064e3b">Interface: 1 export</text>
+                <rect x="20" y="22" width="160" height="35" rx="3" class="mass-impl-deep"/>
+                <text x="100" y="42" text-anchor="middle" font-size="7" fill="#fff">Impl: 6 modules, each 80-300 lines</text>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="space-y-1.5 text-sm">
+          <p><strong class="text-slate-700">Problem:</strong> ToolCard.tsx is a 1,653-line monolith — every tool's summary logic, body renderer, diff-stats computation, and shared UI primitive lives in one file. Adding or modifying a single tool body forces reading the entire file. The switch statements in <code>buildSummary()</code> and <code>ToolBody</code> are duplicated dispatch tables that must stay in sync.</p>
+          <p><strong class="text-slate-700">Solution:</strong> Extract each category of tool bodies into its own module under <code>chat/tool-bodies/</code>. ToolCard keeps only the header, expand state, and a single dispatch table that maps tool name to body component + summary builder.</p>
+        </div>
+
+        <ul class="text-sm space-y-1 text-slate-600">
+          <li class="flex gap-2"><span class="text-emerald-600 font-bold">▸</span> <strong>Locality:</strong> adding a new tool body touches one file, not 1,653 lines</li>
+          <li class="flex gap-2"><span class="text-emerald-600 font-bold">▸</span> <strong>Leverage:</strong> ToolCard's interface stays <code>{ message }</code> — callers unchanged</li>
+          <li class="flex gap-2"><span class="text-emerald-600 font-bold">▸</span> <strong>Tests:</strong> each body module tested through its own props, not via ToolCard orchestration</li>
+          <li class="flex gap-2"><span class="text-emerald-600 font-bold">▸</span> <strong>AI-navigability:</strong> searching for "SimRunBody" lands in an 80-line file, not a 1,653-line file</li>
+          <li class="flex gap-2"><span class="text-emerald-600 font-bold">▸</span> <strong>Deletion test:</strong> deleting ToolCard concentrates complexity into RightPanel — it earns its keep as the dispatch shell</li>
+        </ul>
+      </article>
+
+      <!-- ── Candidate 2 ───────────────────────────────── -->
+      <article id="candidate-2" class="space-y-4">
+        <div class="flex items-baseline justify-between">
+          <h2 class="text-xl font-serif font-bold">2. Unify the duplicated summary/body dispatch into a single registry</h2>
+          <div class="flex gap-2">
+            <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">Worth exploring</span>
+            <span class="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">in-process</span>
+          </div>
+        </div>
+
+        <div class="font-mono text-sm text-slate-600 space-y-0.5">
+          <div><code>ToolCard.tsx</code> → <code>buildSummary()</code> (lines 258-420)</div>
+          <div><code>ToolCard.tsx</code> → <code>ToolBody</code> dispatcher (lines 525-625)</div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4">
+          <!-- BEFORE -->
+          <div class="rounded-lg border border-slate-200 bg-white p-4">
+            <div class="text-xs uppercase tracking-wider text-slate-400 mb-2 font-semibold">Before</div>
+            <div class="text-[10px] text-slate-500 mb-2">Two parallel switch statements that must stay in sync</div>
+            <pre class="mermaid text-[10px]">
+flowchart TD
+  TC["ToolCard"] --> BS["buildSummary()
+  switch(name) {20+ cases}"]
+  TC --> TB["ToolBody
+  switch(name) {20+ cases}"]
+  BS -.duplicated dispatch.-> TB
+  style BS fill:#fef3c7,stroke:#f59e0b
+  style TB fill:#fef3c7,stroke:#f59e0b
+            </pre>
+          </div>
+          <!-- AFTER -->
+          <div class="rounded-lg border border-emerald-200 bg-white p-4">
+            <div class="text-xs uppercase tracking-wider text-emerald-500 mb-2 font-semibold">After</div>
+            <div class="text-[10px] text-slate-500 mb-2">Single registry: one entry per tool, summary + body together</div>
+            <pre class="mermaid text-[10px]">
+flowchart TD
+  TC["ToolCard"] --> REG["TOOL_REGISTRY
+  { read: {summary, Body} }
+  { bash: {summary, Body} }
+  { ask: {summary, Body} }"]
+  REG --> S["summary()
+  per-tool"]
+  REG --> B["Body component
+  per-tool"]
+  style REG fill:#d1fae5,stroke:#10b981
+            </pre>
+          </div>
+        </div>
+
+        <div class="space-y-1.5 text-sm">
+          <p><strong class="text-slate-700">Problem:</strong> <code>buildSummary()</code> and <code>ToolBody</code> are two switch statements over the same tool-name keys. Adding a new tool means editing both — and if you forget one, the card silently shows the wrong summary or falls back to <code>GenericBody</code>. The duplication is a seam with no leverage.</p>
+          <p><strong class="text-slate-700">Solution:</strong> Replace both switches with a single <code>TOOL_REGISTRY</code> map: <code>{ [toolName]: { summary, Body } }</code>. ToolCard does one lookup, gets both summary and body.</p>
+        </div>
+
+        <ul class="text-sm space-y-1 text-slate-600">
+          <li class="flex gap-2"><span class="text-amber-600 font-bold">▸</span> <strong>Locality:</strong> one place to register a tool — bugs can't hide in dispatch mismatch</li>
+          <li class="flex gap-2"><span class="text-amber-600 font-bold">▸</span> <strong>Deletion test:</strong> deleting the registry forces both switches back — it earns its keep</li>
+          <li class="flex gap-2"><span class="text-amber-600 font-bold">▸</span> <strong>Tests:</strong> registry entries are plain data — testable without rendering</li>
+        </ul>
+      </article>
+
+      <!-- ── Candidate 3 ───────────────────────────────── -->
+      <article id="candidate-3" class="space-y-4">
+        <div class="flex items-baseline justify-between">
+          <h2 class="text-xl font-serif font-bold">3. Split tool-helpers.ts into domain-focused modules</h2>
+          <div class="flex gap-2">
+            <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700">Strong</span>
+            <span class="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">in-process</span>
+          </div>
+        </div>
+
+        <div class="font-mono text-sm text-slate-600 space-y-0.5">
+          <div><code>tool-helpers.ts</code> <span class="text-slate-400">(854 lines)</span></div>
+          <div class="pl-4 text-slate-400">├─ Tool meta + classification (70 lines)</div>
+          <div class="pl-4 text-slate-400">├─ Arg/result parsing primitives (90 lines)</div>
+          <div class="pl-4 text-slate-400">├─ omp edit path/result parsing (110 lines)</div>
+          <div class="pl-4 text-slate-400">├─ Diff engine: computeSimpleDiff (60 lines)</div>
+          <div class="pl-4 text-slate-400">├─ Task/subagent parsing (190 lines)</div>
+          <div class="pl-4 text-slate-400">├─ Todo parsing + panel state (280 lines)</div>
+          <div class="pl-4 text-slate-400">└─ Job/items parsing (55 lines)</div>
+        </div>
+
+        <!-- Before/After: Cross-section -->
+        <div class="grid grid-cols-2 gap-4">
+          <!-- BEFORE -->
+          <div class="rounded-lg border border-slate-200 bg-white p-4">
+            <div class="text-xs uppercase tracking-wider text-slate-400 mb-2 font-semibold">Before</div>
+            <div class="text-[10px] text-slate-500 mb-2">6 unrelated domains in one 854-line file</div>
+            <div class="space-y-1">
+              <div class="h-8 border-l-4 border-red-400 bg-red-50 px-2 flex items-center text-[9px] font-mono text-red-700">tool-meta (70 lines)</div>
+              <div class="h-8 border-l-4 border-amber-400 bg-amber-50 px-2 flex items-center text-[9px] font-mono text-amber-700">arg/result primitives (90 lines)</div>
+              <div class="h-8 border-l-4 border-violet-400 bg-violet-50 px-2 flex items-center text-[9px] font-mono text-violet-700">omp edit parsing (110 lines)</div>
+              <div class="h-8 border-l-4 border-blue-400 bg-blue-50 px-2 flex items-center text-[9px] font-mono text-blue-700">diff engine (60 lines)</div>
+              <div class="h-8 border-l-4 border-emerald-400 bg-emerald-50 px-2 flex items-center text-[9px] font-mono text-emerald-700">task/subagent parsing (190 lines)</div>
+              <div class="h-8 border-l-4 border-pink-400 bg-pink-50 px-2 flex items-center text-[9px] font-mono text-pink-700">todo parsing (280 lines)</div>
+            </div>
+            <div class="text-[10px] text-slate-400 mt-2 text-center">All consumers import from one barrel</div>
+          </div>
+          <!-- AFTER -->
+          <div class="rounded-lg border border-emerald-200 bg-white p-4">
+            <div class="text-xs uppercase tracking-wider text-emerald-500 mb-2 font-semibold">After</div>
+            <div class="text-[10px] text-slate-500 mb-2">6 focused modules, each independently importable</div>
+            <div class="space-y-1">
+              <div class="h-8 border-l-4 border-red-400 bg-red-50 px-2 flex items-center text-[9px] font-mono text-red-700">tool-meta.ts (70 lines)</div>
+              <div class="h-8 border-l-4 border-amber-400 bg-amber-50 px-2 flex items-center text-[9px] font-mono text-amber-700">tool-args.ts (90 lines)</div>
+              <div class="h-8 border-l-4 border-violet-400 bg-violet-50 px-2 flex items-center text-[9px] font-mono text-violet-700">omp-edit-parser.ts (110 lines)</div>
+              <div class="h-8 border-l-4 border-blue-400 bg-blue-50 px-2 flex items-center text-[9px] font-mono text-blue-700">diff-engine.ts (60 lines)</div>
+              <div class="h-8 border-l-4 border-emerald-400 bg-emerald-50 px-2 flex items-center text-[9px] font-mono text-emerald-700">task-parser.ts (190 lines)</div>
+              <div class="h-8 border-l-4 border-pink-400 bg-pink-50 px-2 flex items-center text-[9px] font-mono text-pink-700">todo-parser.ts (280 lines)</div>
+            </div>
+            <div class="text-[10px] text-slate-400 mt-2 text-center">Consumers import only what they need</div>
+          </div>
+        </div>
+
+        <div class="space-y-1.5 text-sm">
+          <p><strong class="text-slate-700">Problem:</strong> <code>tool-helpers.ts</code> is a grab-bag of 6 unrelated domains. The todo parser (280 lines, including <code>getLatestTodoState</code>) is consumed by <code>TodoPanel.tsx</code>, not by ToolCard — yet it lives in ToolCard's helper file. The diff engine (<code>computeSimpleDiff</code>) is a general algorithm that could serve <code>DiffReviewView</code> too, but is locked inside the chat helpers barrel.</p>
+          <p><strong class="text-slate-700">Solution:</strong> Split by domain. Each module has a focused interface and can be tested independently. <code>TodoPanel.tsx</code> imports from <code>todo-parser.ts</code> directly.</p>
+        </div>
+
+        <ul class="text-sm space-y-1 text-slate-600">
+          <li class="flex gap-2"><span class="text-emerald-600 font-bold">▸</span> <strong>Locality:</strong> todo parsing bugs concentrate in <code>todo-parser.ts</code>, not an 854-line grab-bag</li>
+          <li class="flex gap-2"><span class="text-emerald-600 font-bold">▸</span> <strong>Leverage:</strong> <code>diff-engine.ts</code> is reusable beyond ToolCard (e.g. DiffReviewView)</li>
+          <li class="flex gap-2"><span class="text-emerald-600 font-bold">▸</span> <strong>Tests:</strong> each parser tested through its own narrow interface</li>
+          <li class="flex gap-2"><span class="text-emerald-600 font-bold">▸</span> <strong>Deletion test:</strong> deleting the barrel concentrates imports — each domain earns its own file</li>
+        </ul>
+      </article>
+
+      <!-- ── Candidate 4 ───────────────────────────────── -->
+      <article id="candidate-4" class="space-y-4">
+        <div class="flex items-baseline justify-between">
+          <h2 class="text-xl font-serif font-bold">4. Extract file-diff-stats computation into a focused module</h2>
+          <div class="flex gap-2">
+            <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">Speculative</span>
+            <span class="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">in-process</span>
+          </div>
+        </div>
+
+        <div class="font-mono text-sm text-slate-600">
+          <div><code>ToolCard.tsx</code> lines 422-521: <code>FileDiffStats</code>, <code>contentLineCount</code>, <code>computeDiffStats</code>, <code>resultDetails</code>, <code>statsFromResultDiff</code>, <code>statsFromPatch</code>, <code>statsFromEditArgs</code>, <code>getFileDiffStats</code></div>
+        </div>
+
+        <!-- Call-graph collapse -->
+        <div class="grid grid-cols-2 gap-4">
+          <!-- BEFORE -->
+          <div class="rounded-lg border border-slate-200 bg-white p-4">
+            <div class="text-xs uppercase tracking-wider text-slate-400 mb-2 font-semibold">Before</div>
+            <div class="text-[10px] text-slate-500 mb-2">6 diff-stats functions in ToolCard, coupled to ChatMessage</div>
+            <div class="space-y-1 text-[10px] font-mono text-slate-500">
+              <div class="border border-slate-300 rounded px-2 py-1">getFileDiffStats(message)</div>
+              <div class="pl-4">├─ resultDetails(result)</div>
+              <div class="pl-4">├─ statsFromResultDiff(diff)</div>
+              <div class="pl-4">├─ statsFromPatch(patch)</div>
+              <div class="pl-4">├─ statsFromEditArgs(args)</div>
+              <div class="pl-4">└─ computeDiffStats(old, new)</div>
+              <div class="pl-8">└─ computeSimpleDiff() ← from tool-helpers</div>
+            </div>
+          </div>
+          <!-- AFTER -->
+          <div class="rounded-lg border border-emerald-200 bg-white p-4">
+            <div class="text-xs uppercase tracking-wider text-emerald-500 mb-2 font-semibold">After</div>
+            <div class="text-[10px] text-slate-500 mb-2">One module: diff-stats.ts, interface = 1 function</div>
+            <div class="border-2 border-emerald-600 rounded-md p-2 deep text-white space-y-1">
+              <div class="text-[10px] font-mono font-bold text-emerald-300">diff-stats.ts</div>
+              <div class="text-[9px] font-mono text-emerald-400">export computeFileDiffStats(message): FileDiffStats</div>
+              <div class="text-[9px] text-slate-400 pl-4">↳ internal: 5 private helpers</div>
+              <div class="text-[9px] text-slate-400 pl-4">↳ uses diff-engine.ts</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="space-y-1.5 text-sm">
+          <p><strong class="text-slate-700">Problem:</strong> 100 lines of diff-stats computation live inside ToolCard, tightly coupled to the <code>ChatMessage</code> type. These are pure functions with no rendering concern — they don't belong in a React component file.</p>
+          <p><strong class="text-slate-700">Solution:</strong> Move to <code>diff-stats.ts</code> with a single exported <code>computeFileDiffStats(message)</code>. Internal helpers become private to the module.</p>
+        </div>
+
+        <ul class="text-sm space-y-1 text-slate-600">
+          <li class="flex gap-2"><span class="text-slate-600 font-bold">▸</span> <strong>Locality:</strong> diff-stats logic concentrates in one testable module</li>
+          <li class="flex gap-2"><span class="text-slate-600 font-bold">▸</span> <strong>Leverage:</strong> could be reused by ChangeSummaryBar or DiffReviewView</li>
+          <li class="flex gap-2"><span class="text-slate-600 font-bold">▸</span> <strong>Tests:</strong> pure functions — no React rendering needed</li>
+        </ul>
+
+        <div class="text-xs text-slate-400 italic mt-2">Naturally subsumed by Candidate 1 if the file-tool-bodies module absorbs these. Stands alone only if ToolCard is otherwise kept intact.</div>
+      </article>
+
+      <!-- ── Candidate 5 ───────────────────────────────── -->
+      <article id="candidate-5" class="space-y-4">
+        <div class="flex items-baseline justify-between">
+          <h2 class="text-xl font-serif font-bold">5. MarkdownRenderer — 572 lines, mixed concerns</h2>
+          <div class="flex gap-2">
+            <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-700">Worth exploring</span>
+            <span class="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600">in-process</span>
+          </div>
+        </div>
+
+        <div class="font-mono text-sm text-slate-600">
+          <div><code>MarkdownRenderer.tsx</code> (572 lines) — markdown-to-React rendering with syntax highlighting, mermaid integration, inline tool-link parsing, and image lightbox all in one module</div>
+        </div>
+
+        <!-- Mass diagram -->
+        <div class="grid grid-cols-2 gap-4">
+          <!-- BEFORE -->
+          <div class="rounded-lg border border-slate-200 bg-white p-4">
+            <div class="text-xs uppercase tracking-wider text-slate-400 mb-2 font-semibold">Before</div>
+            <svg viewBox="0 0 200 80" class="w-full h-24">
+              <rect x="10" y="5" width="160" height="20" rx="3" class="mass-interface"/>
+              <text x="90" y="18" text-anchor="middle" font-size="8" fill="#78350f">Interface: MarkdownRenderer({ content })</text>
+              <rect x="10" y="30" width="180" height="45" rx="3" class="mass-impl"/>
+              <text x="100" y="48" text-anchor="middle" font-size="7" fill="#fff">markdown plugins + mermaid +</text>
+              <text x="100" y="58" text-anchor="middle" font-size="7" fill="#fff">tool-link parsing + lightbox +</text>
+              <text x="100" y="68" text-anchor="middle" font-size="7" fill="#fff">syntax highlight config</text>
+            </svg>
+          </div>
+          <!-- AFTER -->
+          <div class="rounded-lg border border-emerald-200 bg-white p-4">
+            <div class="text-xs uppercase tracking-wider text-emerald-500 mb-2 font-semibold">After</div>
+            <svg viewBox="0 0 200 80" class="w-full h-24">
+              <rect x="50" y="5" width="100" height="12" rx="3" class="mass-interface-deep"/>
+              <text x="100" y="14" text-anchor="middle" font-size="7" fill="#064e3b">Interface: same, 1 export</text>
+              <rect x="20" y="22" width="160" height="52" rx="3" class="mass-impl-deep"/>
+              <text x="100" y="35" text-anchor="middle" font-size="7" fill="#fff">markdown-plugins.ts (rehype config)</text>
+              <text x="100" y="47" text-anchor="middle" font-size="7" fill="#fff">mermaid-block.tsx</text>
+              <text x="100" y="59" text-anchor="middle" font-size="7" fill="#fff">tool-link-parser.ts</text>
+              <text x="100" y="69" text-anchor="middle" font-size="7" fill="#fff">image-lightbox.tsx</text>
+            </svg>
+          </div>
+        </div>
+
+        <div class="space-y-1.5 text-sm">
+          <p><strong class="text-slate-700">Problem:</strong> MarkdownRenderer mixes 4 concerns: rehype/remark plugin configuration, mermaid code-block interception, inline <code>case:///</code> tool-link parsing, and image lightbox state. Each is a distinct responsibility that changes independently.</p>
+          <p><strong class="text-slate-700">Solution:</strong> Extract each concern into its own module. MarkdownRenderer becomes a thin orchestrator that wires the plugins together.</p>
+        </div>
+
+        <ul class="text-sm space-y-1 text-slate-600">
+          <li class="flex gap-2"><span class="text-amber-600 font-bold">▸</span> <strong>Locality:</strong> mermaid rendering bugs concentrate in <code>mermaid-block.tsx</code></li>
+          <li class="flex gap-2"><span class="text-amber-600 font-bold">▸</span> <strong>Leverage:</strong> <code>tool-link-parser.ts</code> could be reused by chat input or other renderers</li>
+          <li class="flex gap-2"><span class="text-amber-600 font-bold">▸</span> <strong>Tests:</strong> each concern tested through its own interface, not via full markdown render</li>
+        </ul>
+      </article>
+
+      <!-- ── Top Recommendation ────────────────────────── -->
+      <section id="top-recommendation" class="border-t border-slate-200 pt-8">
+        <div class="rounded-xl border-2 border-emerald-500 bg-emerald-50 p-6 space-y-3">
+          <div class="flex items-baseline gap-3">
+            <span class="text-xs font-bold uppercase tracking-wider text-emerald-600">Top recommendation</span>
+          </div>
+          <h3 class="text-2xl font-serif font-bold text-slate-800">
+            <a href="#candidate-1" class="hover:underline">Candidate 1: Split the ToolCard monolith into per-category body modules</a>
+          </h3>
+          <p class="text-sm text-slate-600 max-w-3xl">
+            ToolCard.tsx at 1,653 lines is the single largest file in the chat module — 3× larger than the next biggest component. It's the hottest file in the commit history (13 commits in recent history, touching everything from subagent tiles to ask-question formatting). Every new tool type forces a change to this one file, and every change risks breaking unrelated tool bodies. Splitting by category gives each tool body its own module with a focused interface, while ToolCard stays as the thin dispatch shell. This is the refactor with the highest locality payoff and the lowest risk of behavioral change.
+          </p>
+          <p class="text-sm text-slate-500">
+            Candidates 2 (registry unification) and 3 (tool-helpers split) are natural follow-ups once the bodies are extracted — the registry becomes trivial when bodies are already separate modules, and tool-helpers split is independent but lower urgency.
+          </p>
+        </div>
+      </section>
+
+    </main>
+  </body>
+</html>

@@ -4,7 +4,6 @@ import { NavRail } from './NavRail';
 import { ViewContainer } from './ViewContainer';
 import { BottomPanel } from './BottomPanel';
 import { StatusBar } from './StatusBar';
-import { OptionDock } from './OptionDock';
 import { TaskPanel } from './TaskPanel';
 import { CommandPalette } from './CommandPalette';
 import { Backdrop } from './Backdrop';
@@ -28,7 +27,6 @@ export function AppShell() {
   const rightDrawerOpen = useUiStore((s) => s.rightDrawerOpen);
   const closeDrawers = useUiStore((s) => s.closeDrawers);
   const rightCollapsed = useUiStore((s) => s.rightPanelCollapsed);
-  const optionDockExpanded = useUiStore((s) => s.optionDockExpanded);
   const simLeftPanelWidth = useUiStore((s) => s.simLeftPanelWidth);
   const pluginViewLayouts = useUiStore((s) => s.pluginViewLayouts);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
@@ -60,7 +58,7 @@ export function AppShell() {
       void saveProjectState();
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [currentProjectId, uiStateReady, activeView, aiPanelMode, rightCollapsed, optionDockExpanded, simLeftPanelWidth, pluginViewLayouts, sessionIds, saveProjectState]);
+  }, [currentProjectId, uiStateReady, activeView, aiPanelMode, rightCollapsed, simLeftPanelWidth, pluginViewLayouts, sessionIds, saveProjectState]);
 
   // Save state before the window unloads so lastSessionIds is up-to-date.
   useEffect(() => {
@@ -95,9 +93,6 @@ export function AppShell() {
 
       {/* ── 全局状态栏 ───────────────────────────────────── */}
       <StatusBar />
-
-      {/* ── 底部仿真选项浮窗（仿真视图激活时隐藏，由内嵌 SimOptionPanel 替代） ── */}
-      {activeView !== 'simulation' && <OptionDock />}
 
       {/* ── 环境搭建向导 ─────────────────────────────────── */}
       <EnvWizard />

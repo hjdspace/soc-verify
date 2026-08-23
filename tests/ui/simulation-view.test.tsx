@@ -490,11 +490,12 @@ describe('SimulationView 排序', () => {
   });
 });
 
-// ── Issue #6: OptionDock 仿真视图隐藏 ───────────────────────
+// ── Issue #6: OptionDock 全局移除 ───────────────────────────
 
 /**
- * Mock AppShell 的非 OptionDock 子组件为空占位，避免渲染复杂子树。
- * OptionDock 保持真实导入以验证条件渲染。
+ * 仿真 Option 已内嵌到 SimulationView 的 SimOptionPanel，
+ * AppShell 不再渲染 OptionDock 浮窗（任何视图均不显示）。
+ * Mock AppShell 的子组件为空占位，避免渲染复杂子树。
  */
 vi.mock('@renderer/components/layout/TitleBar', () => ({
   TitleBar: () => <div data-testid="mock-titlebar" />,
@@ -547,7 +548,7 @@ vi.mock('@renderer/stores/session', () => ({
   useSessionStore: (selector: (s: { sessions: never[] }) => unknown) => selector({ sessions: [] }),
 }));
 
-describe('Issue #6: OptionDock 仿真视图隐藏', () => {
+describe('Issue #6: OptionDock 全局移除', () => {
   it('仿真视图激活时 OptionDock 不在 DOM 中', () => {
     useUiStore.setState({ activeView: 'simulation' });
     render(<AppShell />);
@@ -555,17 +556,17 @@ describe('Issue #6: OptionDock 仿真视图隐藏', () => {
     expect(screen.queryByText('仿真 Option')).not.toBeInTheDocument();
   });
 
-  it('切换到工作区视图时 OptionDock 恢复渲染', async () => {
+  it('工作区视图激活时 OptionDock 也不在 DOM 中', () => {
     useUiStore.setState({ activeView: 'workspace', optionDockExpanded: true });
     render(<AppShell />);
 
-    expect(await screen.findByText('仿真 Option')).toBeInTheDocument();
+    expect(screen.queryByText('仿真 Option')).not.toBeInTheDocument();
   });
 
-  it('切换到总览视图时 OptionDock 正常渲染', async () => {
+  it('总览视图激活时 OptionDock 也不在 DOM 中', () => {
     useUiStore.setState({ activeView: 'dashboard', optionDockExpanded: true });
     render(<AppShell />);
 
-    expect(await screen.findByText('仿真 Option')).toBeInTheDocument();
+    expect(screen.queryByText('仿真 Option')).not.toBeInTheDocument();
   });
 });
