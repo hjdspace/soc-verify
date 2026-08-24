@@ -1187,3 +1187,40 @@ describe('SessionStore — subagent activity (subagent_* frames)', () => {
     expect(getSubagent('sa-1')?.recentOutput).toEqual(['A', 'B', 'X', 'Y']);
   });
 });
+
+describe('SessionStore — MCP mount notice suppression', () => {
+  let sessionId: string;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    useSessionStore.setState({ sessions: [], currentSessionId: null });
+    mockCreate.mockResolvedValue({ sessionId: 'session_test_1' });
+    sessionId = (await useSessionStore.getState().createSession('proj_1', '/tmp/proj'))!;
+  });
+
+  it('suppresses MCP mount notice events (type=notice)', async () => {
+    await useSessionMessagesStore.getState().sendMessage('Hello');
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
+      type: 'notice',
+      message: 'xd://: mounted mcp__codegraph_callees, mcp__codegraph',
+    });
+
+    const session = useSessionStore.getState().sessions[0];
+    const systemMsgs = session.messages.filter((m) => m.role === 'system');
+    expect(systemMsgs).toHaveLength(0);
+  });
+
+  it('suppresses MCP mount text arriving via irc_message events', async () => {
+    await useSessionMessagesStore.getState().sendMessage('Hello');
+    // omp engine may send MCP mount text as an irc_message frame which gets
+    // appended directly to the streaming assistant content.
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
+      type: 'irc_message',
+      message: 'xd://: mounted mcp__codegraph_callees, mcp__codegraph',
+    });
+
+    const session = useSessionStore.getState().sessions[0];
+    const assistantMsg = session.messages.find((m) => m.role === 'assistant');
+    expect(assistantMsg?.content).toBe('');
+  });
+});

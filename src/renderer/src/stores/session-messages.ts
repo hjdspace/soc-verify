@@ -250,19 +250,14 @@ async function triggerAiTitleGeneration(
   }
 }
 
-// ─── MCP notice 格式化 ────────────────────────────────────
-function formatNoticeText(text: string): string {
+// ─── MCP notice 检测 ──────────────────────────────────────
+// MCP 工具挂载消息静默处理，不在聊天中显示。
+// omp 引擎发送的工具名格式为 mcp__<server>__<tool>（双下划线），
+// 因此正则用 \w（含下划线）匹配 mcp_ 前缀后的任意字符。
+function isMcpMountNotice(text: string): boolean {
   const collapsed = text.replace(/\s+/g, ' ').trim();
-  const mcpTools = collapsed.match(/\bmcp_[A-Za-z0-9][\w.-]*/g) ?? [];
-  if (/mounted/i.test(collapsed) && mcpTools.length > 0) {
-    const servers = [
-      ...new Set(mcpTools.map((t) => t.replace(/^mcp_/i, '').split('_')[0])),
-    ].filter(Boolean);
-    return servers.length > 0
-      ? `已挂载 MCP 工具 ${mcpTools.length} 个（${servers.join('、')}）`
-      : `已挂载 MCP 工具 ${mcpTools.length} 个`;
-  }
-  return collapsed;
+  const mcpTools = collapsed.match(/\bmcp_\w+/g) ?? [];
+  return /mounted/i.test(collapsed) && mcpTools.length > 0;
 }
 
 // ─── 持久化 ────────────────────────────────────────────────
@@ -963,7 +958,9 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
           case 'notice': {
             const rawNoticeText = (evt.message as string) || (evt.text as string);
             if (!rawNoticeText) return sess;
-            const noticeText = formatNoticeText(rawNoticeText);
+            // MCP 挂载消息静默跳过，不显示在聊天中
+            if (isMcpMountNotice(rawNoticeText)) return sess;
+            const noticeText = rawNoticeText.replace(/\s+/g, ' ').trim();
             const lastMsg = sess.messages[sess.messages.length - 1];
             if (lastMsg?.role === 'system' && lastMsg.content === noticeText) return sess;
             const noticeMsg: ChatMessage = {
@@ -981,6 +978,8 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
           case 'irc_message': {
             const ircText = (evt.message as string) || (evt.text as string) || '';
             if (!ircText) return sess;
+            // MCP 挂载消息静默跳过，不追加到 assistant 内容
+            if (isMcpMountNotice(ircText)) return sess;
             return {
               ...sess,
               messages: sess.messages.map((m) =>
