@@ -8,7 +8,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, Loader2, AlertCircle, FileText, Trash2, Zap, CheckSquare, XCircle, History, ListChecks, Download, Upload, ChevronDown, ChevronRight, FileSpreadsheet, Database, Settings, Edit3, RefreshCw } from 'lucide-react';
-import { useTimingViolationStore } from '@renderer/stores/timing-violation';
+import { useTvDataStore, useTvConfirmationsStore, useTvPatternsStore, useTvScanStore, exportViolations, exportPatterns, importPatterns } from '@renderer/stores/timing-violation';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSessionCoreStore } from '@renderer/stores/session-core';
 import { useUiStore } from '@renderer/stores/ui';
@@ -25,95 +25,90 @@ import { cn } from '@renderer/lib/utils';
 export function TVDashboard() {
   const projectId = useProjectStore((s) => s.currentProjectId);
 
-  // Store state
-  const violations = useTimingViolationStore((s) => s.violations);
-  const total = useTimingViolationStore((s) => s.total);
-  const statistics = useTimingViolationStore((s) => s.statistics);
-  const metadata = useTimingViolationStore((s) => s.metadata);
-  const parsing = useTimingViolationStore((s) => s.parsing);
-  const parseResult = useTimingViolationStore((s) => s.parseResult);
-  const parseProgress = useTimingViolationStore((s) => s.parseProgress);
-  const setParseProgress = useTimingViolationStore((s) => s.setParseProgress);
-  const loadingViolations = useTimingViolationStore((s) => s.loadingViolations);
-  const loadingStatistics = useTimingViolationStore((s) => s.loadingStatistics);
-  const confirming = useTimingViolationStore((s) => s.confirming);
-  const selectedViolationIds = useTimingViolationStore((s) => s.selectedViolationIds);
-  const showConfirmDialog = useTimingViolationStore((s) => s.showConfirmDialog);
-  const confirmDialogViolation = useTimingViolationStore((s) => s.confirmDialogViolation);
-  const showPatternManager = useTimingViolationStore((s) => s.showPatternManager);
-  const showScanDialog = useTimingViolationStore((s) => s.showScanDialog);
+  // ── tv-data store ──────────────────────────────────────
+  const violations = useTvDataStore((s) => s.violations);
+  const total = useTvDataStore((s) => s.total);
+  const statistics = useTvDataStore((s) => s.statistics);
+  const metadata = useTvDataStore((s) => s.metadata);
+  const parsing = useTvDataStore((s) => s.parsing);
+  const parseResult = useTvDataStore((s) => s.parseResult);
+  const parseProgress = useTvDataStore((s) => s.parseProgress);
+  const setParseProgress = useTvDataStore((s) => s.setParseProgress);
+  const loadingViolations = useTvDataStore((s) => s.loadingViolations);
+  const loadingStatistics = useTvDataStore((s) => s.loadingStatistics);
+  const selectedViolationIds = useTvDataStore((s) => s.selectedViolationIds);
 
   // Filter/sort state
-  const filterCaseName = useTimingViolationStore((s) => s.filterCaseName);
-  const filterCorner = useTimingViolationStore((s) => s.filterCorner);
-  const filterStatus = useTimingViolationStore((s) => s.filterStatus);
-  const filterSubsys = useTimingViolationStore((s) => s.filterSubsys);
-  const searchText = useTimingViolationStore((s) => s.searchText);
-  const sortField = useTimingViolationStore((s) => s.sortField);
-  const sortOrder = useTimingViolationStore((s) => s.sortOrder);
-  const page = useTimingViolationStore((s) => s.page);
-  const pageSize = useTimingViolationStore((s) => s.pageSize);
+  const filterCaseName = useTvDataStore((s) => s.filterCaseName);
+  const filterCorner = useTvDataStore((s) => s.filterCorner);
+  const filterStatus = useTvDataStore((s) => s.filterStatus);
+  const filterSubsys = useTvDataStore((s) => s.filterSubsys);
+  const searchText = useTvDataStore((s) => s.searchText);
+  const sortField = useTvDataStore((s) => s.sortField);
+  const sortOrder = useTvDataStore((s) => s.sortOrder);
+  const page = useTvDataStore((s) => s.page);
+  const pageSize = useTvDataStore((s) => s.pageSize);
 
-  // Actions
-  const pickAndParse = useTimingViolationStore((s) => s.pickAndParse);
-  const loadViolations = useTimingViolationStore((s) => s.loadViolations);
-  const loadStatistics = useTimingViolationStore((s) => s.loadStatistics);
-  const loadMetadata = useTimingViolationStore((s) => s.loadMetadata);
-  const setFilterCaseName = useTimingViolationStore((s) => s.setFilterCaseName);
-  const setFilterCorner = useTimingViolationStore((s) => s.setFilterCorner);
-  const setFilterStatus = useTimingViolationStore((s) => s.setFilterStatus);
-  const setFilterSubsys = useTimingViolationStore((s) => s.setFilterSubsys);
-  const setSearchText = useTimingViolationStore((s) => s.setSearchText);
-  const setSort = useTimingViolationStore((s) => s.setSort);
-  const setPage = useTimingViolationStore((s) => s.setPage);
-  const resetFilters = useTimingViolationStore((s) => s.resetFilters);
-  const clearAllData = useTimingViolationStore((s) => s.clearAllData);
+  // tv-data Actions
+  const pickAndParse = useTvDataStore((s) => s.pickAndParse);
+  const loadViolations = useTvDataStore((s) => s.loadViolations);
+  const loadStatistics = useTvDataStore((s) => s.loadStatistics);
+  const loadMetadata = useTvDataStore((s) => s.loadMetadata);
+  const setFilterCaseName = useTvDataStore((s) => s.setFilterCaseName);
+  const setFilterCorner = useTvDataStore((s) => s.setFilterCorner);
+  const setFilterStatus = useTvDataStore((s) => s.setFilterStatus);
+  const setFilterSubsys = useTvDataStore((s) => s.setFilterSubsys);
+  const setSearchText = useTvDataStore((s) => s.setSearchText);
+  const setSort = useTvDataStore((s) => s.setSort);
+  const setPage = useTvDataStore((s) => s.setPage);
+  const resetFilters = useTvDataStore((s) => s.resetFilters);
+  const clearAllData = useTvDataStore((s) => s.clearAllData);
+  const clearCaseData = useTvDataStore((s) => s.clearCaseData);
+  const updateCorner = useTvDataStore((s) => s.updateCorner);
+  const managingData = useTvDataStore((s) => s.managingData);
+  const caseCorners = useTvDataStore((s) => s.caseCorners);
+  const loadingCaseCorners = useTvDataStore((s) => s.loadingCaseCorners);
+  const loadCaseCorners = useTvDataStore((s) => s.loadCaseCorners);
+  const refreshSubsys = useTvDataStore((s) => s.refreshSubsys);
+  const refreshingSubsys = useTvDataStore((s) => s.refreshingSubsys);
+  const allCaseCorners = useTvDataStore((s) => s.allCaseCorners);
+  const loadAllCaseCorners = useTvDataStore((s) => s.loadAllCaseCorners);
+  const tvConfig = useTvDataStore((s) => s.tvConfig);
+  const loadTvConfig = useTvDataStore((s) => s.loadTvConfig);
+  const saveTvConfig = useTvDataStore((s) => s.saveTvConfig);
+  const toggleViolationSelection = useTvDataStore((s) => s.toggleViolationSelection);
+  const selectAllVisibleViolations = useTvDataStore((s) => s.selectAllVisibleViolations);
+  const clearSelection = useTvDataStore((s) => s.clearSelection);
 
-  // 确认相关 Actions
-  const autoConfirmByInterval = useTimingViolationStore((s) => s.autoConfirmByInterval);
-  const updateConfirmation = useTimingViolationStore((s) => s.updateConfirmation);
-  const batchUpdateConfirmations = useTimingViolationStore((s) => s.batchUpdateConfirmations);
-  const toggleViolationSelection = useTimingViolationStore((s) => s.toggleViolationSelection);
-  const selectAllVisibleViolations = useTimingViolationStore((s) => s.selectAllVisibleViolations);
-  const clearSelection = useTimingViolationStore((s) => s.clearSelection);
-const openConfirmDialog = useTimingViolationStore((s) => s.openConfirmDialog);
-const closeConfirmDialog = useTimingViolationStore((s) => s.closeConfirmDialog);
+  // ── tv-confirmations store ─────────────────────────────
+  const confirming = useTvConfirmationsStore((s) => s.confirming);
+  const showConfirmDialog = useTvConfirmationsStore((s) => s.showConfirmDialog);
+  const confirmDialogViolation = useTvConfirmationsStore((s) => s.confirmDialogViolation);
+  const aiSuggesting = useTvConfirmationsStore((s) => s.aiSuggesting);
+  const aiSuggestion = useTvConfirmationsStore((s) => s.aiSuggestion);
+  const aiSuggestionViolationId = useTvConfirmationsStore((s) => s.aiSuggestionViolationId);
+  const autoConfirmByInterval = useTvConfirmationsStore((s) => s.autoConfirmByInterval);
+  const updateConfirmation = useTvConfirmationsStore((s) => s.updateConfirmation);
+  const batchUpdateConfirmations = useTvConfirmationsStore((s) => s.batchUpdateConfirmations);
+  const openConfirmDialog = useTvConfirmationsStore((s) => s.openConfirmDialog);
+  const closeConfirmDialog = useTvConfirmationsStore((s) => s.closeConfirmDialog);
+  const startAISuggestion = useTvConfirmationsStore((s) => s.startAISuggestion);
+  const parseAISuggestionResponse = useTvConfirmationsStore((s) => s.parseAISuggestionResponse);
+  const clearAISuggestion = useTvConfirmationsStore((s) => s.clearAISuggestion);
+  const applyAISuggestion = useTvConfirmationsStore((s) => s.applyAISuggestion);
+  const applyHistoricalConfirmations = useTvConfirmationsStore((s) => s.applyHistoricalConfirmations);
 
-// AI 建议相关
-const startAISuggestion = useTimingViolationStore((s) => s.startAISuggestion);
-const parseAISuggestionResponse = useTimingViolationStore((s) => s.parseAISuggestionResponse);
-const clearAISuggestion = useTimingViolationStore((s) => s.clearAISuggestion);
-const applyAISuggestion = useTimingViolationStore((s) => s.applyAISuggestion);
-const aiSuggesting = useTimingViolationStore((s) => s.aiSuggesting);
-const aiSuggestion = useTimingViolationStore((s) => s.aiSuggestion);
-const aiSuggestionViolationId = useTimingViolationStore((s) => s.aiSuggestionViolationId);
-  const setShowPatternManager = useTimingViolationStore((s) => s.setShowPatternManager);
-  const applyHistoricalConfirmations = useTimingViolationStore((s) => s.applyHistoricalConfirmations);
-  const setShowScanDialog = useTimingViolationStore((s) => s.setShowScanDialog);
+  // ── tv-patterns store ──────────────────────────────────
+  const showPatternManager = useTvPatternsStore((s) => s.showPatternManager);
+  const setShowPatternManager = useTvPatternsStore((s) => s.setShowPatternManager);
 
-  // 导出/导入 Actions
-  const exportViolations = useTimingViolationStore((s) => s.exportViolations);
-  const exportPatterns = useTimingViolationStore((s) => s.exportPatterns);
-  const importPatterns = useTimingViolationStore((s) => s.importPatterns);
-  const exporting = useTimingViolationStore((s) => s.exporting);
-  const importing = useTimingViolationStore((s) => s.importing);
+  // ── tv-scan store ──────────────────────────────────────
+  const showScanDialog = useTvScanStore((s) => s.showScanDialog);
+  const setShowScanDialog = useTvScanStore((s) => s.setShowScanDialog);
 
-  // 配置状态
-  const tvConfig = useTimingViolationStore((s) => s.tvConfig);
-  const loadTvConfig = useTimingViolationStore((s) => s.loadTvConfig);
-  const saveTvConfig = useTimingViolationStore((s) => s.saveTvConfig);
-
-  // 数据管理 Actions
-  const clearCaseData = useTimingViolationStore((s) => s.clearCaseData);
-  const updateCorner = useTimingViolationStore((s) => s.updateCorner);
-  const managingData = useTimingViolationStore((s) => s.managingData);
-  const caseCorners = useTimingViolationStore((s) => s.caseCorners);
-  const loadingCaseCorners = useTimingViolationStore((s) => s.loadingCaseCorners);
-  const loadCaseCorners = useTimingViolationStore((s) => s.loadCaseCorners);
-  const refreshSubsys = useTimingViolationStore((s) => s.refreshSubsys);
-  const refreshingSubsys = useTimingViolationStore((s) => s.refreshingSubsys);
-  const allCaseCorners = useTimingViolationStore((s) => s.allCaseCorners);
-  const loadAllCaseCorners = useTimingViolationStore((s) => s.loadAllCaseCorners);
+  // 导出/导入 loading 状态（纯函数代理，本地管理）
+  const [exporting, setExporting] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   // 本地 UI 状态
   const [showAutoConfirm, setShowAutoConfirm] = useState(false);
@@ -320,14 +315,14 @@ const aiSuggestionViolationId = useTimingViolationStore((s) => s.aiSuggestionVio
                 <div className="absolute right-0 top-full z-20 mt-1 w-48 rounded-md border border-border bg-background shadow-lg">
                   <div className="px-2 py-1 text-[10px] font-semibold uppercase text-muted-foreground">导出违例数据</div>
                   <button
-                    onClick={() => { setShowExportMenu(false); void exportViolations(projectId, 'excel', filterCaseName ?? undefined, filterCorner ?? undefined); }}
+                    onClick={() => { setShowExportMenu(false); void (async () => { setExporting(true); await exportViolations(projectId, 'excel', filterCaseName ?? undefined, filterCorner ?? undefined); setExporting(false); })(); }}
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
                   >
                     <FileSpreadsheet className="h-3.5 w-3.5" />
                     Excel (.xlsx)
                   </button>
                   <button
-                    onClick={() => { setShowExportMenu(false); void exportViolations(projectId, 'csv', filterCaseName ?? undefined, filterCorner ?? undefined); }}
+                    onClick={() => { setShowExportMenu(false); void (async () => { setExporting(true); await exportViolations(projectId, 'csv', filterCaseName ?? undefined, filterCorner ?? undefined); setExporting(false); })(); }}
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
                   >
                     <FileText className="h-3.5 w-3.5" />
@@ -336,21 +331,21 @@ const aiSuggestionViolationId = useTimingViolationStore((s) => s.aiSuggestionVio
                   <div className="my-1 border-t border-border" />
                   <div className="px-2 py-1 text-[10px] font-semibold uppercase text-muted-foreground">导出 Pattern</div>
                   <button
-                    onClick={() => { setShowExportMenu(false); void exportPatterns(projectId, 'excel'); }}
+                    onClick={() => { setShowExportMenu(false); void (async () => { setExporting(true); await exportPatterns(projectId, 'excel'); setExporting(false); })(); }}
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
                   >
                     <FileSpreadsheet className="h-3.5 w-3.5" />
                     Pattern Excel
                   </button>
                   <button
-                    onClick={() => { setShowExportMenu(false); void exportPatterns(projectId, 'csv'); }}
+                    onClick={() => { setShowExportMenu(false); void (async () => { setExporting(true); await exportPatterns(projectId, 'csv'); setExporting(false); })(); }}
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
                   >
                     <FileText className="h-3.5 w-3.5" />
                     Pattern CSV
                   </button>
                   <button
-                    onClick={() => { setShowExportMenu(false); void exportPatterns(projectId, 'db'); }}
+                    onClick={() => { setShowExportMenu(false); void (async () => { setExporting(true); await exportPatterns(projectId, 'db'); setExporting(false); })(); }}
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
                   >
                     <Database className="h-3.5 w-3.5" />
@@ -358,7 +353,7 @@ const aiSuggestionViolationId = useTimingViolationStore((s) => s.aiSuggestionVio
                   </button>
                   <div className="my-1 border-t border-border" />
                   <button
-                    onClick={() => { setShowExportMenu(false); void importPatterns(projectId); }}
+                    onClick={() => { setShowExportMenu(false); void (async () => { setImporting(true); await importPatterns(projectId); setImporting(false); })(); }}
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-xs hover:bg-accent"
                   >
                     <Upload className="h-3.5 w-3.5" />
@@ -593,10 +588,10 @@ const aiSuggestionViolationId = useTimingViolationStore((s) => s.aiSuggestionVio
             <TVDistributionCharts
               statistics={statistics}
               loading={loadingStatistics}
-              onSubsysClick={(subsys) => useTimingViolationStore.getState().setFilterSubsys(subsys)}
-              onCornerClick={(corner) => useTimingViolationStore.getState().setFilterCorner(corner)}
-              onCaseClick={(caseName) => useTimingViolationStore.getState().setFilterCaseName(caseName)}
-              onStatusClick={(status) => useTimingViolationStore.getState().setFilterStatus(status)}
+              onSubsysClick={(subsys) => useTvDataStore.getState().setFilterSubsys(subsys)}
+              onCornerClick={(corner) => useTvDataStore.getState().setFilterCorner(corner)}
+              onCaseClick={(caseName) => useTvDataStore.getState().setFilterCaseName(caseName)}
+              onStatusClick={(status) => useTvDataStore.getState().setFilterStatus(status)}
             />
           )}
         </div>
@@ -714,7 +709,7 @@ onRowAISuggest={(v) => {
           if (responseText) {
             void parseAISuggestionResponse(responseText);
           } else {
-            useTimingViolationStore.setState({ aiSuggesting: false });
+            useTvConfirmationsStore.setState({ aiSuggesting: false });
           }
         }
       });

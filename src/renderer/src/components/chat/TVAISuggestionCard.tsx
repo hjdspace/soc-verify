@@ -11,7 +11,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Sparkles, Check, XCircle, Loader2, RefreshCw, CheckCheck } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
-import { useTimingViolationStore, type AISuggestion } from '@renderer/stores/timing-violation';
+import { useTvDataStore, useTvConfirmationsStore, type AISuggestion } from '@renderer/stores/timing-violation';
 import { useProjectStore } from '@renderer/stores/project';
 import { formatTimeDisplay } from '@renderer/lib/tv-utils';
 
@@ -78,10 +78,10 @@ function normalizeSuggestion(parsed: unknown): AISuggestion | null {
 
 export function TVAISuggestionCard({ content, violationId }: TVAISuggestionCardProps) {
   const projectId = useProjectStore((s) => s.currentProjectId);
-  const violations = useTimingViolationStore((s) => s.violations);
-  const applyAISuggestion = useTimingViolationStore((s) => s.applyAISuggestion);
-  const clearAISuggestion = useTimingViolationStore((s) => s.clearAISuggestion);
-  const startAISuggestion = useTimingViolationStore((s) => s.startAISuggestion);
+  const violations = useTvDataStore((s) => s.violations);
+  const applyAISuggestion = useTvConfirmationsStore((s) => s.applyAISuggestion);
+  const clearAISuggestion = useTvConfirmationsStore((s) => s.clearAISuggestion);
+  const startAISuggestion = useTvConfirmationsStore((s) => s.startAISuggestion);
 
   const [actionLoading, setActionLoading] = useState(false);
   const [applied, setApplied] = useState(false);

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Loader2, Plus, RefreshCw, Save, X } from 'lucide-react';
 import { useProjectStore } from '@renderer/stores/project';
-import { useTimingViolationStore } from '@renderer/stores/timing-violation';
+import { useTvDataStore } from '@renderer/stores/timing-violation';
 import { cn } from '@renderer/lib/utils';
 
 /**
@@ -10,11 +10,11 @@ import { cn } from '@renderer/lib/utils';
 
 export function TimingViolationConfigTab() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
-  const tvConfig = useTimingViolationStore((s) => s.tvConfig);
-  const loadingConfig = useTimingViolationStore((s) => s.loadingConfig);
-  const savingConfig = useTimingViolationStore((s) => s.savingConfig);
-  const loadTvConfig = useTimingViolationStore((s) => s.loadTvConfig);
-  const saveTvConfig = useTimingViolationStore((s) => s.saveTvConfig);
+  const tvConfig = useTvDataStore((s) => s.tvConfig);
+  const loadingConfig = useTvDataStore((s) => s.loadingConfig);
+  const savingConfig = useTvDataStore((s) => s.savingConfig);
+  const loadTvConfig = useTvDataStore((s) => s.loadTvConfig);
+  const saveTvConfig = useTvDataStore((s) => s.saveTvConfig);
 
   // Local editing state
   const [dataDir, setDataDir] = useState('');
