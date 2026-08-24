@@ -16,7 +16,7 @@
 import { readFile } from 'node:fs/promises';
 import { t, TRPCError } from '../router-context';
 import { requireProject } from '../../services/project-service';
-import { loadEnvConfig } from '../../env/env-manager';
+import { resolveProjEnv } from '../../env/env-manager';
 import {
   discoverRegressions,
   parseRegressionList,
@@ -58,8 +58,8 @@ export const regressionRouter = t.router({
         return discoveryCache.get(input.projectId);
       }
 
-      const envConfig = await loadEnvConfig(project.rootPath);
-      const projEnv = envConfig?.envVars?.PROJ_ENV;
+      // 优先从系统环境变量解析 PROJ_ENV（终端启动场景），其次回退到 .socverify/env.json
+      const projEnv = await resolveProjEnv(project.rootPath);
       if (!projEnv) {
         throw new TRPCError({
           code: 'PRECONDITION_FAILED',
