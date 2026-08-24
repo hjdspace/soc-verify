@@ -129,7 +129,15 @@ export const sessionRouter = t.router({
     })
     .mutation(async ({ input }) => {
       // Validate session exists (throws NOT_FOUND if missing)
-      requireSession(input.sessionId);
+      const client = requireSession(input.sessionId);
+      // If the agent process died (e.g. after abort() called stop()), the
+      // session entry is stale — destroy it and throw NOT_FOUND so the
+      // renderer can rebuild the session via ensureRuntimeSession.
+      if (!client.isRunning()) {
+        console.warn(`[router:session.send] agent process not running for ${input.sessionId} — destroying stale session`);
+        await sessionManager.destroySession(input.sessionId);
+        throw new TRPCError({ code: 'NOT_FOUND', message: `Session process not running: ${input.sessionId}` });
+      }
       sessionManager.touchActivity(input.sessionId);
       console.log(`[router:session.send] sessionId=${input.sessionId}, message=${input.message.slice(0, 80)}${input.message.length > 80 ? '...' : ''}${input.images ? `, images=${input.images.length}` : ''}`);
       // Update persisted lastActivityAt

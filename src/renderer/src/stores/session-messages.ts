@@ -494,7 +494,10 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
         await trpc.session.send.mutate({ sessionId: runtimeSessionId, message: fullMessage, images });
       } catch (sendErr) {
         const sendErrMsg = sendErr instanceof Error ? sendErr.message : String(sendErr);
-        if (/Session not found/i.test(sendErrMsg)) {
+        // Session not found OR agent process died (e.g. after abort, idle
+        // timeout, or crash) — clear the stale runtimeSessionId and retry
+        // with a fresh session created via ensureRuntimeSession.
+        if (/Session not found|Client not started|not running/i.test(sendErrMsg)) {
           coreSet((s) => ({
             sessions: s.sessions.map((sess) =>
               sess.id === sessionId
@@ -580,9 +583,14 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
       }
       useToastStore.getState().error('中止会话失败', errMsg);
     }
+    // abort() kills the agent process (stop() sets process=null). The session
+    // entry on the backend is now stale — clear runtimeSessionId so the next
+    // sendMessage triggers ensureRuntimeSession to create a fresh session.
     coreSet((s) => ({
       sessions: s.sessions.map((sess) =>
-        sessionMatchesId(sess, sessionId) ? { ...sess, status: 'idle' } : sess,
+        sessionMatchesId(sess, sessionId)
+          ? { ...sess, status: 'idle', runtimeSessionId: undefined }
+          : sess,
       ),
     }));
     coreSet((s) => ({

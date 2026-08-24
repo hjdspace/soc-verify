@@ -72,7 +72,6 @@ declare module 'engine/oh-my-pi/packages/coding-agent/src/sdk' {
 }
 
 declare module 'engine/oh-my-pi/packages/coding-agent/src/config/model-registry' {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   export class ModelRegistry {
     constructor(authStorage: unknown);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -81,7 +80,6 @@ declare module 'engine/oh-my-pi/packages/coding-agent/src/config/model-registry'
 }
 
 declare module 'engine/oh-my-pi/packages/coding-agent/src/session/session-manager' {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   export class SessionManager {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     static create(cwd: string, sessionDir: string): any;
