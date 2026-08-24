@@ -915,11 +915,11 @@ describe('FileEditor — Markdown preview mermaid support', () => {
     });
     fireEvent.click(screen.getByTitle('切换到预览模式'));
 
-    // MermaidDiagram stub should be rendered with the diagram source code
-    await waitFor(() => {
-      expect(screen.getByTestId('mermaid-diagram-stub')).toBeTruthy();
-    });
-    expect(screen.getByTestId('mermaid-diagram-stub').textContent).toContain('flowchart LR');
+    // MermaidDiagram stub should be rendered with the diagram source code.
+    // Use findByTestId (async) instead of getByTestId (sync) to avoid
+    // race conditions when ReactMarkdown hasn't flushed to DOM yet.
+    const stub = await screen.findByTestId('mermaid-diagram-stub', {}, { timeout: 3000 });
+    expect(stub.textContent).toContain('flowchart LR');
   });
 
   it('renders MermaidDiagram for multiple mermaid blocks', async () => {
@@ -947,9 +947,9 @@ describe('FileEditor — Markdown preview mermaid support', () => {
     });
     fireEvent.click(screen.getByTitle('切换到预览模式'));
 
-    await waitFor(() => {
-      expect(screen.getAllByTestId('mermaid-diagram-stub')).toHaveLength(2);
-    });
+    // Use findAllByTestId (async) to wait for both stubs to render.
+    const stubs = await screen.findAllByTestId('mermaid-diagram-stub', {}, { timeout: 3000 });
+    expect(stubs).toHaveLength(2);
   });
 
   it('does not render MermaidDiagram for non-mermaid code blocks', async () => {
@@ -969,7 +969,10 @@ describe('FileEditor — Markdown preview mermaid support', () => {
     });
     fireEvent.click(screen.getByTitle('切换到预览模式'));
 
-    // No mermaid diagram should be rendered
-    expect(screen.queryByTestId('mermaid-diagram-stub')).toBeNull();
+    // Wait for ReactMarkdown to finish rendering the preview, then
+    // assert no mermaid stub appeared.
+    await waitFor(() => {
+      expect(screen.queryByTestId('mermaid-diagram-stub')).toBeNull();
+    });
   });
 });
