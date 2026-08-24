@@ -7,8 +7,9 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync, statSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { resolveProjectEnvVarSync } from '../env/env-manager';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -63,55 +64,20 @@ const MAX_WORKERS = 8;
 
 // ── Env var resolution ─────────────────────────────────────────────
 
-const SOCVERIFY_DIR = '.socverify';
-const ENV_CONFIG_FILE = 'env.json';
-
 /**
  * Resolve $PROJ_RTL from process.env, falling back to .socverify/env.json.
- * Matches the pattern used by unisoc-subsys-discoverer plugin.
+ * Delegates to the shared helper in env-manager.ts (sync variant).
  */
 function resolveProjRtl(projectDir: string): string | null {
-  const envVal = process.env.PROJ_RTL;
-  if (envVal && envVal.trim()) return envVal.trim();
-
-  try {
-    const configPath = join(projectDir, SOCVERIFY_DIR, ENV_CONFIG_FILE);
-    const config = JSON.parse(readFileSync(configPath, 'utf-8')) as {
-      envVars?: Record<string, string>;
-    };
-    const configured = config?.envVars?.PROJ_RTL;
-    if (typeof configured === 'string' && configured.trim()) {
-      return configured.trim();
-    }
-  } catch {
-    // Config file not found or invalid
-  }
-
-  return null;
+  return resolveProjectEnvVarSync('PROJ_RTL', projectDir);
 }
 
 /**
  * Resolve $PROJ_ENV from process.env, falling back to .socverify/env.json.
- * Matches the pattern used by unisoc-subsys-discoverer plugin.
+ * Delegates to the shared helper in env-manager.ts (sync variant).
  */
 function resolveProjEnv(projectDir: string): string | null {
-  const envVal = process.env.PROJ_ENV;
-  if (envVal && envVal.trim()) return envVal.trim();
-
-  try {
-    const configPath = join(projectDir, SOCVERIFY_DIR, ENV_CONFIG_FILE);
-    const config = JSON.parse(readFileSync(configPath, 'utf-8')) as {
-      envVars?: Record<string, string>;
-    };
-    const configured = config?.envVars?.PROJ_ENV;
-    if (typeof configured === 'string' && configured.trim()) {
-      return configured.trim();
-    }
-  } catch {
-    // Config file not found or invalid
-  }
-
-  return null;
+  return resolveProjectEnvVarSync('PROJ_ENV', projectDir);
 }
 
 // ── Repo scanning (no git commands, just .git dir check) ────────────
