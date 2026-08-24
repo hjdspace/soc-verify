@@ -73,8 +73,11 @@ export const useEnvStore = create<EnvStoreState>((set, _get) => ({
 
   saveConfig: async (projectId, config) => {
     try {
-      await trpc.env.saveConfig.mutate({ projectId, config });
-      set({ config });
+      // Backend merges in current system env vars before persisting, so the
+      // returned config may have more entries than what the user edited.
+      // Use it as the source of truth for the in-memory state.
+      const result = await trpc.env.saveConfig.mutate({ projectId, config });
+      set({ config: result.config });
       useToastStore.getState().success('环境配置已保存');
     } catch (err) {
       useToastStore.getState().error('保存环境配置失败', err instanceof Error ? err.message : String(err));
