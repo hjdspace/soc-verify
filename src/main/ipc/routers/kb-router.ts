@@ -525,7 +525,7 @@ export const kbRouter = t.router({
     .input((raw): { convertEngine: string; llm: { providerId?: string; model?: string } } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.convertEngine !== 'string' || !ENGINE_IDS.has(r.convertEngine)) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'convertEngine must be anydoc or markitdown' });
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'convertEngine must be anydoc' });
       }
       const llmRaw = (r.llm ?? {}) as Record<string, unknown>;
       if (

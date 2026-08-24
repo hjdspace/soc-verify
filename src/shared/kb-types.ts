@@ -7,13 +7,12 @@
  * 沿用 src/shared/ask-types.ts、browser-types.ts 的跨进程类型惯例。
  *
  * @see ADR 0021 — anydoc 文档知识库
- * @see ADR 0022 — 双转换引擎 + KB AI 模型配置
  */
 
 // ── 转换引擎 ──────────────────────────────────────────────────────
 
 /** 引擎 ID（设置页可切换） */
-export type ConvertEngineId = 'anydoc' | 'markitdown';
+export type ConvertEngineId = 'anydoc';
 
 /** 引擎元信息（tRPC 输出，剥离 convert 函数） */
 export type ConvertEngineInfo = {

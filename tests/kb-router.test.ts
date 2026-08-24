@@ -445,11 +445,9 @@ describe('kb-router', () => {
       ).rejects.toThrow();
     });
 
-    it('markitdown 引擎下挂载扫描不吞知识库自身的 index.md', async () => {
+    it('挂载扫描不吞知识库自身的 index.md', async () => {
       const kbDir = makeExistingKbDir('self-ingest-kb');
       const regResult = await caller.register({ name: '自吞检查库', path: kbDir });
-      // 切到 markitdown 引擎（支持 .md，扫描窗口更大）
-      await caller.updateSettings({ convertEngine: 'markitdown', llm: {} });
 
       try {
         await caller.mount({ kbId: regId(regResult) });
@@ -1343,12 +1341,12 @@ describe('kb-router', () => {
   // ─── kb.getSettings / kb.updateSettings ─────────────────────
 
   describe('kb.getSettings', () => {
-    it('默认返回 anydoc 引擎 + 空 LLM 配置 + 两个引擎元信息', async () => {
+    it('默认返回 anydoc 引擎 + 空 LLM 配置 + 引擎元信息', async () => {
       const result = await caller.getSettings({});
 
       expect(result.settings.convertEngine).toBe('anydoc');
       expect(result.settings.llm).toEqual({});
-      expect(result.engines.map((e) => e.id).sort()).toEqual(['anydoc', 'markitdown']);
+      expect(result.engines.map((e) => e.id)).toEqual(['anydoc']);
       for (const engine of result.engines) {
         expect(engine.label).toBeTruthy();
         expect(engine.supportedExtensions.length).toBeGreaterThan(0);
@@ -1359,14 +1357,14 @@ describe('kb-router', () => {
   describe('kb.updateSettings', () => {
     it('保存引擎与 LLM 显式配置并持久化（重新读取生效）', async () => {
       await caller.updateSettings({
-        convertEngine: 'markitdown',
+        convertEngine: 'anydoc',
         llm: { providerId: 'relay-cred', model: 'glm-4.7' },
       });
 
       // 清缓存模拟重启
       kbSettingsManager.resetCache();
       const result = await caller.getSettings({});
-      expect(result.settings.convertEngine).toBe('markitdown');
+      expect(result.settings.convertEngine).toBe('anydoc');
       expect(result.settings.llm.providerId).toBe('relay-cred');
       expect(result.settings.llm.model).toBe('glm-4.7');
     });
@@ -1393,7 +1391,7 @@ describe('kb-router', () => {
     it('llm 字段类型错误抛出 BAD_REQUEST', async () => {
       await expect(
         caller.updateSettings({
-          convertEngine: 'markitdown',
+          convertEngine: 'anydoc',
           llm: { providerId: 123 },
         } as unknown as { convertEngine: string; llm: { providerId?: string; model?: string } }),
       ).rejects.toThrow();

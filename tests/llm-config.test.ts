@@ -95,7 +95,7 @@ async function writeKbSettings(settings: {
   llm?: { providerId?: string; model?: string };
 }): Promise<void> {
   await kbSettingsManager.save({
-    convertEngine: (settings.convertEngine ?? 'anydoc') as 'anydoc' | 'markitdown',
+    convertEngine: (settings.convertEngine ?? 'anydoc') as 'anydoc',
     llm: settings.llm ?? {},
   });
 }

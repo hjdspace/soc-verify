@@ -2,13 +2,13 @@
  * KB Settings — 知识库应用级设置（app-global）。
  *
  * 与凭证同一存储族（<userData>/socverify-data/*.json），管理：
- *  - convertEngine：文档转换引擎（anydoc / markitdown）
+ *  - convertEngine：文档转换引擎（anydoc）
  *  - llm：AI 分类模型显式配置（providerId + model；均空 = 自动跟随
  *    AI Agent 面板，保持既有默认逻辑不变）
  *
  * 读取失败回退默认值（不缓存脏值），保存时全量覆写。
  *
- * @see ADR 0022 — 双转换引擎（anydoc / markitdown）
+ * @see ADR 0021 — anydoc 文档知识库
  */
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
@@ -23,7 +23,7 @@ export type { KbLlmSettings, KbSettings } from '@shared/kb-types';
 const SETTINGS_FILE = 'kb-settings.json';
 
 /** 合法的引擎 ID 集合（router 校验与默认值共用，新增引擎只改这里） */
-export const ENGINE_IDS: ReadonlySet<string> = new Set(['anydoc', 'markitdown']);
+export const ENGINE_IDS: ReadonlySet<string> = new Set(['anydoc']);
 
 export const DEFAULT_KB_SETTINGS: KbSettings = {
   convertEngine: 'anydoc',

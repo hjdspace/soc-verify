@@ -43,7 +43,6 @@
     "exceljs": "^4.4.0",
     "jszip": "^3.10.1",
     "node-pty": "^1.1.0",
-    "pdfjs-dist": "^5.4.296",
     "xlsx": "^0.18.5"
   },
   "optionalDependencies": {
@@ -98,6 +97,7 @@
     "lucide-react": "^1.24.0",
     "mermaid": "^11.16.1",
     "pathe": "^2.0.3",
+    "pdfjs-dist": "^5.4.296",
     "png-to-ico": "^3.0.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",

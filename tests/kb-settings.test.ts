@@ -36,18 +36,18 @@ describe('kb-settings', () => {
   });
 
   it('save → load round-trip 持久化', async () => {
-    await kbSettingsManager.save({ convertEngine: 'markitdown', llm: { providerId: 'openai', model: 'glm-4.7' } });
+    await kbSettingsManager.save({ convertEngine: 'anydoc', llm: { providerId: 'openai', model: 'glm-4.7' } });
 
     // 清缓存模拟重启
     kbSettingsManager.resetCache();
     const settings = await kbSettingsManager.load();
-    expect(settings.convertEngine).toBe('markitdown');
+    expect(settings.convertEngine).toBe('anydoc');
     expect(settings.llm.providerId).toBe('openai');
     expect(settings.llm.model).toBe('glm-4.7');
 
     // 文件确实落盘
     const raw = JSON.parse(readFileSync(settingsPath, 'utf-8'));
-    expect(raw.convertEngine).toBe('markitdown');
+    expect(raw.convertEngine).toBe('anydoc');
   });
 
   it('save 规范化：未知引擎回退 anydoc、字符串 trim、空串清除字段', async () => {
@@ -66,16 +66,16 @@ describe('kb-settings', () => {
     expect(await kbSettingsManager.load()).toEqual({ convertEngine: 'anydoc', llm: {} });
 
     // save 后能正常读回
-    await kbSettingsManager.save({ convertEngine: 'markitdown', llm: {} });
+    await kbSettingsManager.save({ convertEngine: 'anydoc', llm: {} });
     kbSettingsManager.resetCache();
-    expect((await kbSettingsManager.load()).convertEngine).toBe('markitdown');
+    expect((await kbSettingsManager.load()).convertEngine).toBe('anydoc');
   });
 
   it('load 后缓存生效（文件被外部删除仍返回缓存值）', async () => {
-    await kbSettingsManager.save({ convertEngine: 'markitdown', llm: { model: 'm1' } });
+    await kbSettingsManager.save({ convertEngine: 'anydoc', llm: { model: 'm1' } });
     rmSync(settingsPath, { force: true });
     const settings = await kbSettingsManager.load();
-    expect(settings.convertEngine).toBe('markitdown');
+    expect(settings.convertEngine).toBe('anydoc');
     expect(existsSync(settingsPath)).toBe(false);
   });
 });

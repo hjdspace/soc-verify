@@ -3,21 +3,20 @@ import {
   BookOpen,
   Check,
   Cpu,
-  FileOutput,
   Info,
   Loader2,
   RefreshCw,
   Save,
 } from 'lucide-react';
-import { useKbStore, type KbConvertEngineId, type KbSettings } from '@renderer/stores/kb';
+import { useKbStore, type KbSettings } from '@renderer/stores/kb';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { cn } from '@renderer/lib/utils';
 
 /**
- * 知识库设置 Tab — 转换引擎切换 + AI 分类模型显式配置。
+ * 知识库设置 Tab — AI 分类模型显式配置。
  *
- * 两类配置均带「自动」默认值，不改动既有自动推导逻辑：
- *  - 引擎默认 anydoc；切换后仅影响后续新上传文档的转换
+ * 转换引擎已固定为 anydoc（MarkItDown 引擎已移除），
+ * 此处仅保留 AI 分类模型的显式配置：
  *  - AI 模型默认自动（跟随 AI Agent 面板的凭证与模型选择）
  */
 
@@ -26,7 +25,6 @@ const INPUT_CLASS =
 
 export function KbSettingsTab() {
   const kbSettings = useKbStore((s) => s.kbSettings);
-  const kbEngines = useKbStore((s) => s.kbEngines);
   const kbSettingsLoading = useKbStore((s) => s.kbSettingsLoading);
   const loadKbSettings = useKbStore((s) => s.loadKbSettings);
   const updateKbSettings = useKbStore((s) => s.updateKbSettings);
@@ -48,7 +46,7 @@ export function KbSettingsTab() {
 
   useEffect(() => {
     if (kbSettings && !draft) {
-      setDraft({ convertEngine: kbSettings.convertEngine, llm: { ...kbSettings.llm } });
+      setDraft({ convertEngine: 'anydoc', llm: { ...kbSettings.llm } });
     }
   }, [kbSettings, draft]);
 
@@ -63,8 +61,7 @@ export function KbSettingsTab() {
   const dirty = useMemo(() => {
     if (!kbSettings || !draft) return false;
     return (
-      kbSettings.convertEngine !== draft.convertEngine
-      || (kbSettings.llm.providerId ?? '') !== (draft.llm.providerId ?? '')
+      (kbSettings.llm.providerId ?? '') !== (draft.llm.providerId ?? '')
       || (kbSettings.llm.model ?? '') !== (draft.llm.model ?? '')
     );
   }, [kbSettings, draft]);
@@ -101,63 +98,6 @@ export function KbSettingsTab() {
 
   return (
     <div className="space-y-5">
-      {/* ── 转换引擎 ── */}
-      <section>
-        <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase text-muted-foreground">
-          <FileOutput className="h-3 w-3" />
-          文档转换引擎
-        </div>
-        <div className="grid grid-cols-1 gap-2">
-          {kbEngines.map((engine) => {
-            const active = draft.convertEngine === engine.id;
-            return (
-              <button
-                key={engine.id}
-                type="button"
-                onClick={() => setDraft({ ...draft, convertEngine: engine.id as KbConvertEngineId })}
-                className={cn(
-                  'rounded-md border p-2.5 text-left transition-colors',
-                  active ? 'border-primary bg-primary/5' : 'border-border hover:bg-accent',
-                )}
-              >
-                <div className="flex items-center gap-2">
-                  <span
-                    className={cn(
-                      'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border',
-                      active ? 'border-primary' : 'border-muted-foreground/40',
-                    )}
-                  >
-                    {active && <span className="h-1.5 w-1.5 rounded-full bg-primary" />}
-                  </span>
-                  <span className="text-xs font-medium">{engine.label}</span>
-                  {active && (
-                    <span className="rounded border border-primary/25 bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium text-primary">
-                      当前
-                    </span>
-                  )}
-                </div>
-                <p className="mt-1 pl-5.5 text-[11px] leading-relaxed text-muted-foreground">
-                  {engine.description}
-                </p>
-                <div className="mt-1.5 flex flex-wrap gap-1 pl-5.5">
-                  {engine.supportedExtensions.map((ext) => (
-                    <span
-                      key={ext}
-                      className="rounded border border-border bg-secondary/40 px-1 py-px font-mono text-[9px] text-muted-foreground"
-                    >
-                      {ext}
-                    </span>
-                  ))}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-        <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground">
-          切换引擎只影响之后新上传的文档；已转换文档不变，可通过重试/重新上传用新引擎重转。
-        </p>
-      </section>
-
       {/* ── AI 分类模型 ── */}
       <section>
         <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase text-muted-foreground">

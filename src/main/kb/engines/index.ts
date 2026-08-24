@@ -4,11 +4,10 @@
  * 深模块 seam：converter.ts / kb-router 通过本模块获取引擎，
  * 不直接依赖具体引擎实现。当前引擎选择来自 kb-settings（用户可配）。
  *
- * @see ADR 0022 — 双转换引擎（anydoc / markitdown）
+ * @see ADR 0021 — anydoc 文档知识库
  */
 
 import { anydocEngine } from './anydoc-engine';
-import { markitdownEngine } from './markitdown-engine';
 import { kbSettingsManager } from '../kb-settings';
 import type { ConvertEngine, ConvertEngineId, ConvertEngineInfo } from './types';
 
@@ -16,7 +15,6 @@ export type { ConvertEngineId, ConvertEngineInfo } from './types';
 
 const ENGINES: Record<ConvertEngineId, ConvertEngine> = {
   anydoc: anydocEngine,
-  markitdown: markitdownEngine,
 };
 
 /** 全部引擎元信息（设置页展示用） */

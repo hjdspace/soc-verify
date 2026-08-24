@@ -124,7 +124,6 @@ vi.mock('@renderer/lib/trpc', () => ({
           settings: { convertEngine: 'anydoc', llm: {} },
           engines: [
             { id: 'anydoc', label: 'anydoc（默认）', description: 'Rust 原生引擎', supportedExtensions: ['.docx', '.pdf'] },
-            { id: 'markitdown', label: 'MarkItDown 兼容（纯 JS）', description: '纯本地转换', supportedExtensions: ['.docx', '.csv'] },
           ],
         }),
       },
@@ -850,7 +849,7 @@ describe('KbStore', () => {
       const { trpc } = await import('@renderer/lib/trpc');
       expect(vi.mocked(trpc.kb.getSettings.query)).toHaveBeenCalledWith({});
       expect(useKbStore.getState().kbSettings).toEqual({ convertEngine: 'anydoc', llm: {} });
-      expect(useKbStore.getState().kbEngines).toHaveLength(2);
+      expect(useKbStore.getState().kbEngines).toHaveLength(1);
       expect(useKbStore.getState().kbSettingsLoading).toBe(false);
     });
 
@@ -867,18 +866,18 @@ describe('KbStore', () => {
   describe('updateKbSettings', () => {
     it('保存设置并更新 state + 成功提示', async () => {
       const ok = await useKbStore.getState().updateKbSettings({
-        convertEngine: 'markitdown',
+        convertEngine: 'anydoc',
         llm: { providerId: 'relay', model: 'glm-4.7' },
       });
 
       const { trpc } = await import('@renderer/lib/trpc');
       expect(ok).toBe(true);
       expect(vi.mocked(trpc.kb.updateSettings.mutate)).toHaveBeenCalledWith({
-        convertEngine: 'markitdown',
+        convertEngine: 'anydoc',
         llm: { providerId: 'relay', model: 'glm-4.7' },
       });
       expect(useKbStore.getState().kbSettings).toEqual({
-        convertEngine: 'markitdown',
+        convertEngine: 'anydoc',
         llm: { providerId: 'relay', model: 'glm-4.7' },
       });
       expect(toastMocks.success).toHaveBeenCalledWith('知识库设置已保存');

@@ -63,7 +63,7 @@ export async function autoScanDocuments(
     const entries = await readdir(kbPath, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isFile()) continue;
-      // 知识库自身的索引文件不可作为文档自吞（markitdown 引擎支持 .md）
+      // 知识库自身的索引文件不可作为文档自吞
       if (entry.name.toLowerCase() === 'index.md') continue;
       const ext = entry.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? '';
       if (!supportedExtensions.includes(ext)) continue;

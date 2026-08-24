@@ -14,10 +14,7 @@ export default defineConfig({
         // gets inlined into the CJS output and fails at runtime because the
         // native binary path resolution breaks.
         // better-sqlite3 is also a native module — same treatment.
-        // pdfjs-dist is an ESM-only package used in the main process (KB
-        // markitdown engine, PDF text extraction) via a dynamic import of its
-        // legacy build — external keeps it in node_modules at runtime.
-        external: ['node-pty', 'better-sqlite3', 'pdfjs-dist'],
+        external: ['node-pty', 'better-sqlite3'],
       }
     },
     resolve: {

@@ -2,7 +2,7 @@
  * Knowledge Base Converter — 转换编排层。
  *
  * 引擎只产出「Markdown + 按引用顺序的图片字节」；本模块负责：
- *  1. 读取 kb-settings 选定引擎（anydoc / markitdown）
+ *  1. 读取 kb-settings 选定引擎（anydoc）
  *  2. 读取源文件字节，调用引擎转换
  *  3. 清理旧产物（同名覆盖）
  *  4. Assets 按序落盘到 docs/assets/<文档名>/image-NNN.<ext>
@@ -10,7 +10,6 @@
  *  6. Markdown 落盘到 docs/<文档名>.md
  *
  * @see ADR 0021 — anydoc 文档知识库
- * @see ADR 0022 — 双转换引擎（anydoc / markitdown）
  */
 
 import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';

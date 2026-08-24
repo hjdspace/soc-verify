@@ -10,7 +10,7 @@
  * 错误码沿用 anydoc 的联合（下游 UI / 测试已按此分支），非 anydoc
  * 引擎将自己的错误映射到同一联合。
  *
- * @see ADR 0022 — 双转换引擎（anydoc / markitdown）
+ * @see ADR 0021 — anydoc 文档知识库
  */
 
 /** 引擎 ID（设置页可切换） — 跨进程共享，从 @shared/kb-types 导入 */
