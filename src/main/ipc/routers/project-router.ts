@@ -11,6 +11,7 @@ import { t, TRPCError } from '../router-context';
 import { requireProject, ensurePluginsLoaded } from '../../services/project-service';
 import { projectManager } from '../../project/project-manager';
 import { pluginLoader } from '../../plugins/loader';
+import { syncEnvFromSystem } from '../../env/env-manager';
 import type { CaseStatus } from '../../host/discovery';
 import { getFileDiff, applyRejections } from '../../diff/diff-engine';
 import { caseStatsRegistry } from '../../case/case-stats-registry';
@@ -97,6 +98,18 @@ export const projectRouter = t.router({
     .mutation(async ({ input }) => {
       const info = await projectManager.openProject(input.rootPath, input.name);
 
+      // Auto-sync system env vars into .socverify/env.json on project open:
+      // picks up PROJ_ENV / PROJ_RTL / VCS_HOME etc. from the launching
+      // terminal environment without overwriting user-set values.  Fire-and-
+      // forget — errors here don't block project open.
+      void syncEnvFromSystem(info.rootPath).then(({ detectedCount }) => {
+        if (detectedCount > 0) {
+          console.log(`[project:open] synced ${detectedCount} env vars from system for ${info.rootPath}`);
+        }
+      }).catch((err) => {
+        console.warn(`[project:open] env sync failed for ${info.rootPath}:`, err);
+      });
+
       // Load plugins for this project
       const loadResults = await pluginLoader.loadPlugins(info.rootPath);
       await pluginLoader.activateForEvent(info.rootPath, 'onProjectOpen');
@@ -137,6 +150,15 @@ export const projectRouter = t.router({
       }
       const rootPath = result.filePaths[0];
       const info = await projectManager.openProject(rootPath);
+
+      // Auto-sync system env vars into .socverify/env.json (see `open` above).
+      void syncEnvFromSystem(info.rootPath).then(({ detectedCount }) => {
+        if (detectedCount > 0) {
+          console.log(`[project:openDialog] synced ${detectedCount} env vars from system for ${info.rootPath}`);
+        }
+      }).catch((err) => {
+        console.warn(`[project:openDialog] env sync failed for ${info.rootPath}:`, err);
+      });
 
       // Load plugins
       const loadResults = await pluginLoader.loadPlugins(info.rootPath);
