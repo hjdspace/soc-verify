@@ -6,6 +6,52 @@
 
 ---
 
+## [0.4.1](https://github.com/hjdspace/soc-verify/compare/v0.4.0...v0.4.1) (2026-08-25)
+
+### Features
+
+* **model-config:** 模型配置重构——按 provider 独立模型列表与独立上下文窗口
+* **breadcrumb:** 为目录段添加下拉导航并禁用 EISDIR 路径点击
+* **editor:** Markdown 预览新增 Mermaid 图表渲染支持
+* **settings:** 新增多类设置标签页组件
+* **tools:** 新增多类工具展示组件并移除全局 OptionDock
+* **codex:** 添加 Codex 引擎集成相关文档和 ADR
+
+### Bug Fixes
+
+* **test:** 修复 5 个失败测试用例——llm-config cred.models 可选链 + searchCases file_path 匹配 + electronTRPC 全局 mock + session-core mock 路径
+* **test:** 启用测试并行化并修复 Mermaid 不稳定测试
+* **build:** 修正 electron 镜像配置变量名使用连字符
+* **session:** 处理会话进程死亡后清理会话状态并增强错误处理
+* **test:** CaseTreePanel 测试断言修正——使用 accessible name 而非 title
+* **session-messages:** 静默跳过 MCP 挂载通知避免误显示
+* **agent:** 修复运行器可执行权限丢失并扩展生成失败诊断
+* **chat/mermaid:** 修复全局清理 mermaid 临时节点导致的图表渲染冲突
+* **chat/mermaid:** 阻止错误渲染并清理残留节点
+
+### Refactor
+
+* **kb:** 移除 MarkItDown 引擎，回归 anydoc 单引擎
+* **diff-review:** 从 diff-review store 提取纯函数到 diff-review-ops.ts
+* **runner:** 从 992 行 index.ts 提取命令处理器到独立模块
+* **timing-violation:** 拆分 timing-violation store 为 4 个领域 store
+* **sim-view:** 从 CenterArea 提取内联仿真视图
+* **coverage:** 拆分 Coverage Store 为 4 个聚焦子 store（core/gaps/closure/export）
+* **session:** 拆分 Session Store 为三个子 store（core/messages/approval），2281 行 session.ts 拆分为四个文件
+* **terminal:** 移除预捕获登录 shell 环境以避免重复初始化
+* **markdown-renderer:** 重构组件以优化流式渲染与组件复用
+* **app-shell:** 移除 OptionDock，重构 AppShell 布局与 RightPanel 集成
+* **project:** 重构项目类型并新增接口，环境变量解析与同步逻辑优化
+* **sim-store:** 重构活跃运行合并逻辑与仿真 store 状态管理
+
+### Performance
+
+* **sim:** RunListPanel 虚拟滚动优化——引入手写虚拟滚动与 RunRow memo
+
+### Build
+
+* 优化打包配置，裁剪包体积并优化构建流程
+
 ## [0.4.0](https://github.com/hjdspace/soc-verify/compare/v0.3.2...v0.4.0) (2026-08-23)
 
 ### Features
