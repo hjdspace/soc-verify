@@ -51,7 +51,10 @@ vi.mock('@renderer/stores/simulation', () => ({
 }));
 
 vi.mock('@renderer/stores/coverage', () => ({
-  useCoverageStore: (selector: (s: typeof mocks.cov) => unknown) => selector(mocks.cov),
+  useCoverageCoreStore: (selector: (s: typeof mocks.cov) => unknown) => selector(mocks.cov),
+  useCoverageGapsStore: (selector: (s: typeof mocks.cov) => unknown) => selector(mocks.cov),
+  useCoverageClosureStore: (selector: (s: typeof mocks.cov) => unknown) => selector(mocks.cov),
+  useCoverageExportStore: (selector: (s: typeof mocks.cov) => unknown) => selector(mocks.cov),
 }));
 
 vi.mock('@renderer/stores/dashboard', () => ({

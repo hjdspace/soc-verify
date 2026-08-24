@@ -13,7 +13,12 @@ import {
   Activity, Square, Download, FolderOpen, Bug, X,
   Trophy, EyeOff, CheckCircle2, Clock, Zap,
 } from 'lucide-react';
-import { useCoverageStore } from '@renderer/stores/coverage';
+import {
+  useCoverageCoreStore,
+  useCoverageGapsStore,
+  useCoverageClosureStore,
+  useCoverageExportStore,
+} from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
 import { cn } from '@renderer/lib/utils';
 import type {
@@ -70,61 +75,66 @@ const TABS: Array<{ id: Tab; label: string; icon: typeof BarChart3 }> = [
 ];
 
 export function CoveragePanel() {
-  const sessions = useCoverageStore((s) => s.sessions);
-  const currentSessionId = useCoverageStore((s) => s.currentSessionId);
-  const tree = useCoverageStore((s) => s.tree);
-  const overview = useCoverageStore((s) => s.overview);
-  const loading = useCoverageStore((s) => s.loading);
-  const importing = useCoverageStore((s) => s.importing);
-  const edaConfig = useCoverageStore((s) => s.edaConfig);
-  const targets = useCoverageStore((s) => s.targets);
-  const trend = useCoverageStore((s) => s.trend);
-  const view = useCoverageStore((s) => s.view);
-  const loadSessions = useCoverageStore((s) => s.loadSessions);
-  const loadTree = useCoverageStore((s) => s.loadTree);
-  const loadEdaConfig = useCoverageStore((s) => s.loadEdaConfig);
-  const loadTrend = useCoverageStore((s) => s.loadTrend);
-  const importCoverage = useCoverageStore((s) => s.importCoverage);
-  const setSessionId = useCoverageStore((s) => s.setSessionId);
-  const deleteSession = useCoverageStore((s) => s.deleteSession);
-  const setView = useCoverageStore((s) => s.setView);
-  const openExportDialog = useCoverageStore((s) => s.openExportDialog);
-  const browseDirectory = useCoverageStore((s) => s.browseDirectory);
+  // ─── core store selectors ──────────────────────────────
+  const sessions = useCoverageCoreStore((s) => s.sessions);
+  const currentSessionId = useCoverageCoreStore((s) => s.currentSessionId);
+  const tree = useCoverageCoreStore((s) => s.tree);
+  const overview = useCoverageCoreStore((s) => s.overview);
+  const loading = useCoverageCoreStore((s) => s.loading);
+  const importing = useCoverageCoreStore((s) => s.importing);
+  const edaConfig = useCoverageCoreStore((s) => s.edaConfig);
+  const view = useCoverageCoreStore((s) => s.view);
+  const loadSessions = useCoverageCoreStore((s) => s.loadSessions);
+  const loadTree = useCoverageCoreStore((s) => s.loadTree);
+  const loadEdaConfig = useCoverageCoreStore((s) => s.loadEdaConfig);
+  const importCoverage = useCoverageCoreStore((s) => s.importCoverage);
+  const setSessionId = useCoverageCoreStore((s) => s.setSessionId);
+  const deleteSession = useCoverageCoreStore((s) => s.deleteSession);
+  const setView = useCoverageCoreStore((s) => s.setView);
+  const browseDirectory = useCoverageCoreStore((s) => s.browseDirectory);
 
-  // ─── Debug 信息 ────────────────────────────────────────────
-  const importWarnings = useCoverageStore((s) => s.importWarnings);
-  const importReportDir = useCoverageStore((s) => s.importReportDir);
-  const importLog = useCoverageStore((s) => s.importLog);
-  const showDebugPanel = useCoverageStore((s) => s.showDebugPanel);
-  const loadImportLog = useCoverageStore((s) => s.loadImportLog);
-  const toggleDebugPanel = useCoverageStore((s) => s.toggleDebugPanel);
-  const clearImportWarnings = useCoverageStore((s) => s.clearImportWarnings);
+  // ─── gaps store selectors ──────────────────────────────
+  const targets = useCoverageGapsStore((s) => s.targets);
+  const trend = useCoverageGapsStore((s) => s.trend);
+  const loadTrend = useCoverageGapsStore((s) => s.loadTrend);
 
-  // ─── 导入进度 ────────────────────────────────────────────
-  const importProgress = useCoverageStore((s) => s.importProgress);
-  const importStep = useCoverageStore((s) => s.importStep);
-  const importStepLog = useCoverageStore((s) => s.importStepLog);
-  const showImportProgress = useCoverageStore((s) => s.showImportProgress);
-  const registerImportProgressListener = useCoverageStore((s) => s.registerImportProgressListener);
-  const clearImportProgress = useCoverageStore((s) => s.clearImportProgress);
+  // ─── export store selectors ──────────────────────────────
+  const openExportDialog = useCoverageExportStore((s) => s.openExportDialog);
 
-  // ─── 按需详细解析状态 ────────────────────────────────────
-  const detailParsing = useCoverageStore((s) => s.detailParsing);
-  const detailParseProgress = useCoverageStore((s) => s.detailParseProgress);
-  const detailParseStep = useCoverageStore((s) => s.detailParseStep);
-  const detailParseStepLog = useCoverageStore((s) => s.detailParseStepLog);
-  const showDetailParseProgress = useCoverageStore((s) => s.showDetailParseProgress);
-  const detailParsed = useCoverageStore((s) => s.detailParsed);
-  const parseDetails = useCoverageStore((s) => s.parseDetails);
-  const registerDetailProgressListener = useCoverageStore((s) => s.registerDetailProgressListener);
-  const clearDetailParseProgress = useCoverageStore((s) => s.clearDetailParseProgress);
+  // ─── Debug 信息（core store） ────────────────────────────
+  const importWarnings = useCoverageCoreStore((s) => s.importWarnings);
+  const importReportDir = useCoverageCoreStore((s) => s.importReportDir);
+  const importLog = useCoverageCoreStore((s) => s.importLog);
+  const showDebugPanel = useCoverageCoreStore((s) => s.showDebugPanel);
+  const loadImportLog = useCoverageCoreStore((s) => s.loadImportLog);
+  const toggleDebugPanel = useCoverageCoreStore((s) => s.toggleDebugPanel);
+  const clearImportWarnings = useCoverageCoreStore((s) => s.clearImportWarnings);
 
-  // ─── Closure 相关（Slice 6b） ──────────────────────────────
-  const currentClosure = useCoverageStore((s) => s.currentClosure);
-  const closureLive = useCoverageStore((s) => s.closureLive);
-  const registerClosureEventListener = useCoverageStore((s) => s.registerClosureEventListener);
-  const loadClosures = useCoverageStore((s) => s.loadClosures);
-  const abortClosure = useCoverageStore((s) => s.abortClosure);
+  // ─── 导入进度（core store） ────────────────────────────
+  const importProgress = useCoverageCoreStore((s) => s.importProgress);
+  const importStep = useCoverageCoreStore((s) => s.importStep);
+  const importStepLog = useCoverageCoreStore((s) => s.importStepLog);
+  const showImportProgress = useCoverageCoreStore((s) => s.showImportProgress);
+  const registerImportProgressListener = useCoverageCoreStore((s) => s.registerImportProgressListener);
+  const clearImportProgress = useCoverageCoreStore((s) => s.clearImportProgress);
+
+  // ─── 按需详细解析状态（core store） ────────────────────
+  const detailParsing = useCoverageCoreStore((s) => s.detailParsing);
+  const detailParseProgress = useCoverageCoreStore((s) => s.detailParseProgress);
+  const detailParseStep = useCoverageCoreStore((s) => s.detailParseStep);
+  const detailParseStepLog = useCoverageCoreStore((s) => s.detailParseStepLog);
+  const showDetailParseProgress = useCoverageCoreStore((s) => s.showDetailParseProgress);
+  const detailParsed = useCoverageCoreStore((s) => s.detailParsed);
+  const parseDetails = useCoverageCoreStore((s) => s.parseDetails);
+  const registerDetailProgressListener = useCoverageCoreStore((s) => s.registerDetailProgressListener);
+  const clearDetailParseProgress = useCoverageCoreStore((s) => s.clearDetailParseProgress);
+
+  // ─── Closure 相关（closure store） ──────────────────────
+  const currentClosure = useCoverageClosureStore((s) => s.currentClosure);
+  const closureLive = useCoverageClosureStore((s) => s.closureLive);
+  const registerClosureEventListener = useCoverageClosureStore((s) => s.registerClosureEventListener);
+  const loadClosures = useCoverageClosureStore((s) => s.loadClosures);
+  const abortClosure = useCoverageClosureStore((s) => s.abortClosure);
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
 
@@ -686,9 +696,9 @@ function TargetsSection({
   currentProjectId: string | null;
   currentSessionId: string | null;
 }) {
-  const targets = useCoverageStore((s) => s.targets);
-  const loadTargets = useCoverageStore((s) => s.loadTargets);
-  const setTargets = useCoverageStore((s) => s.setTargets);
+const targets = useCoverageGapsStore((s) => s.targets);
+const loadTargets = useCoverageGapsStore((s) => s.loadTargets);
+const setTargets = useCoverageGapsStore((s) => s.setTargets);
   const [draft, setDraft] = useState<Partial<Record<CoverageMetric, number>>>({});
   const [saving, setSaving] = useState(false);
 
@@ -779,12 +789,12 @@ function GapsSection({
   currentProjectId: string | null;
   currentSessionId: string | null;
 }) {
-  const gaps = useCoverageStore((s) => s.gaps);
-  const triages = useCoverageStore((s) => s.triages);
-  const loadGaps = useCoverageStore((s) => s.loadGaps);
-  const loadTriages = useCoverageStore((s) => s.loadTriages);
-  const addTriage = useCoverageStore((s) => s.addTriage);
-  const deleteTriage = useCoverageStore((s) => s.deleteTriage);
+const gaps = useCoverageGapsStore((s) => s.gaps);
+const triages = useCoverageGapsStore((s) => s.triages);
+const loadGaps = useCoverageGapsStore((s) => s.loadGaps);
+const loadTriages = useCoverageGapsStore((s) => s.loadTriages);
+const addTriage = useCoverageGapsStore((s) => s.addTriage);
+const deleteTriage = useCoverageGapsStore((s) => s.deleteTriage);
   const [triagingGap, setTriagingGap] = useState<CoverageGap | null>(null);
 
   useEffect(() => {
@@ -997,13 +1007,13 @@ function ExclusionsSection({
   currentProjectId: string | null;
   currentSessionId: string | null;
 }) {
-  const exclusions = useCoverageStore((s) => s.exclusions);
-  const gaps = useCoverageStore((s) => s.gaps);
-  const loadExclusions = useCoverageStore((s) => s.loadExclusions);
-  const loadGaps = useCoverageStore((s) => s.loadGaps);
-  const requestExclusion = useCoverageStore((s) => s.requestExclusion);
-  const approveExclusion = useCoverageStore((s) => s.approveExclusion);
-  const rejectExclusion = useCoverageStore((s) => s.rejectExclusion);
+const exclusions = useCoverageGapsStore((s) => s.exclusions);
+const gaps = useCoverageGapsStore((s) => s.gaps);
+const loadExclusions = useCoverageGapsStore((s) => s.loadExclusions);
+const loadGaps = useCoverageGapsStore((s) => s.loadGaps);
+const requestExclusion = useCoverageGapsStore((s) => s.requestExclusion);
+const approveExclusion = useCoverageGapsStore((s) => s.approveExclusion);
+const rejectExclusion = useCoverageGapsStore((s) => s.rejectExclusion);
   const [showRequest, setShowRequest] = useState(false);
   const [selectedGap, setSelectedGap] = useState<CoverageGap | null>(null);
   const [reason, setReason] = useState('');
@@ -1231,10 +1241,10 @@ function DeltaSection({
   sessions,
 }: {
   currentProjectId: string | null;
-  sessions: ReturnType<typeof useCoverageStore.getState>['sessions'];
+  sessions: ReturnType<typeof useCoverageCoreStore.getState>['sessions'];
 }) {
-  const delta = useCoverageStore((s) => s.delta);
-  const loadDelta = useCoverageStore((s) => s.loadDelta);
+const delta = useCoverageGapsStore((s) => s.delta);
+const loadDelta = useCoverageGapsStore((s) => s.loadDelta);
   const [before, setBefore] = useState('');
   const [after, setAfter] = useState('');
 
@@ -1328,8 +1338,8 @@ function GradeSection({
   currentProjectId: string | null;
   currentSessionId: string | null;
 }) {
-  const contributions = useCoverageStore((s) => s.testContributions);
-  const loadTestContributions = useCoverageStore((s) => s.loadTestContributions);
+const contributions = useCoverageCoreStore((s) => s.testContributions);
+const loadTestContributions = useCoverageCoreStore((s) => s.loadTestContributions);
 
   useEffect(() => {
     if (currentProjectId) {
@@ -1400,8 +1410,8 @@ function UncoveredSection({
   currentProjectId: string | null;
   currentSessionId: string | null;
 }) {
-  const uncoveredItems = useCoverageStore((s) => s.uncoveredItems);
-  const loadUncovered = useCoverageStore((s) => s.loadUncovered);
+const uncoveredItems = useCoverageCoreStore((s) => s.uncoveredItems);
+const loadUncovered = useCoverageCoreStore((s) => s.loadUncovered);
   const [selectedMetric, setSelectedMetric] = useState<CoverageMetric | 'all'>('all');
 
   useEffect(() => {

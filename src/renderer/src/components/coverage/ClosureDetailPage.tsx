@@ -16,7 +16,8 @@ import {
   Activity, FileCode, ShieldAlert, AlertTriangle,
 } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
-import { useCoverageStore } from '@renderer/stores/coverage';
+import { useCoverageCoreStore, useCoverageClosureStore } from '@renderer/stores/coverage';
+import type { ClosureTarget } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
 import { ExclusionApprovalPanel } from './ExclusionApprovalPanel';
 import { TestPromotionPanel } from './TestPromotionPanel';
@@ -78,15 +79,15 @@ function agentPhaseLabel(phase: string | undefined): string {
 
 export function ClosureDetailPage() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
-  const closures = useCoverageStore((s) => s.closures);
-  const currentClosureId = useCoverageStore((s) => s.currentClosureId);
-  const currentClosure = useCoverageStore((s) => s.currentClosure);
-  const closureLive = useCoverageStore((s) => s.closureLive);
-  const setView = useCoverageStore((s) => s.setView);
-  const loadClosures = useCoverageStore((s) => s.loadClosures);
-  const loadClosure = useCoverageStore((s) => s.loadClosure);
-  const abortClosure = useCoverageStore((s) => s.abortClosure);
-  const abortClosureTarget = useCoverageStore((s) => s.abortClosureTarget);
+const closures = useCoverageClosureStore((s) => s.closures);
+const currentClosureId = useCoverageClosureStore((s) => s.currentClosureId);
+const currentClosure = useCoverageClosureStore((s) => s.currentClosure);
+const closureLive = useCoverageClosureStore((s) => s.closureLive);
+const setView = useCoverageCoreStore((s) => s.setView);
+const loadClosures = useCoverageClosureStore((s) => s.loadClosures);
+const loadClosure = useCoverageClosureStore((s) => s.loadClosure);
+const abortClosure = useCoverageClosureStore((s) => s.abortClosure);
+const abortClosureTarget = useCoverageClosureStore((s) => s.abortClosureTarget);
 
   /** 展开迭代历史的 targetId 集合 */
   const [expandedTargets, setExpandedTargets] = useState<Set<string>>(new Set());
@@ -263,7 +264,7 @@ export function ClosureDetailPage() {
 // ─── Target 卡片子组件 ───────────────────────────────────────────
 
 type TargetCardProps = {
-  target: NonNullable<ReturnType<typeof useCoverageStore.getState>['currentClosure']>['targets'][number];
+  target: ClosureTarget;
   isLiveTarget: boolean;
   livePhase: string | undefined;
   expanded: boolean;

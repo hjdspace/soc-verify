@@ -13,7 +13,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { FileDown, PieChart, Upload } from 'lucide-react';
 import { ViewHeader } from '@renderer/components/layout/ViewHeader';
 import { CoverageImportDialog } from '@renderer/components/coverage/CoverageImportDialog';
-import { useCoverageStore } from '@renderer/stores/coverage';
+import { useCoverageCoreStore, useCoverageGapsStore, useCoverageExportStore } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { cn } from '@renderer/lib/utils';
@@ -661,19 +661,21 @@ function BinPanel({ state, items }: { state: 'idle' | 'loading' | 'loaded'; item
 
 export function CoverageView() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
-  const sessions = useCoverageStore((s) => s.sessions);
-  const currentSessionId = useCoverageStore((s) => s.currentSessionId);
-  const tree = useCoverageStore((s) => s.tree);
-  const overview = useCoverageStore((s) => s.overview);
-  const targets = useCoverageStore((s) => s.targets);
-  const trend = useCoverageStore((s) => s.trend);
-  const uncoveredItems = useCoverageStore((s) => s.uncoveredItems);
-  const loading = useCoverageStore((s) => s.loading);
-  const loadSessions = useCoverageStore((s) => s.loadSessions);
-  const loadTree = useCoverageStore((s) => s.loadTree);
-  const loadTrend = useCoverageStore((s) => s.loadTrend);
-  const loadUncovered = useCoverageStore((s) => s.loadUncovered);
-  const openExportDialog = useCoverageStore((s) => s.openExportDialog);
+const sessions = useCoverageCoreStore((s) => s.sessions);
+const currentSessionId = useCoverageCoreStore((s) => s.currentSessionId);
+const tree = useCoverageCoreStore((s) => s.tree);
+const overview = useCoverageCoreStore((s) => s.overview);
+const loading = useCoverageCoreStore((s) => s.loading);
+const loadSessions = useCoverageCoreStore((s) => s.loadSessions);
+const loadTree = useCoverageCoreStore((s) => s.loadTree);
+const loadUncovered = useCoverageCoreStore((s) => s.loadUncovered);
+const openExportDialog = useCoverageExportStore((s) => s.openExportDialog);
+
+  // gaps store
+const targets = useCoverageGapsStore((s) => s.targets);
+const trend = useCoverageGapsStore((s) => s.trend);
+const loadTrend = useCoverageGapsStore((s) => s.loadTrend);
+const uncoveredItems = useCoverageCoreStore((s) => s.uncoveredItems);
   const open = useWorkbenchStore((s) => s.open);
 
   const [tab, setTab] = useState<'module' | 'bin'>('module');

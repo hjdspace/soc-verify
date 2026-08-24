@@ -16,7 +16,7 @@ import {
   Loader2, Square, RefreshCw, ArrowUpCircle,
 } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
-import { useCoverageStore } from '@renderer/stores/coverage';
+import { useCoverageCoreStore, useCoverageClosureStore } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
 import { TestPromotionPanel } from './TestPromotionPanel';
 import type {
@@ -725,12 +725,12 @@ const CLOSURE_STATUS_LABEL: Record<string, string> = {
 };
 
 function AiClosurePanel({ overview }: { overview: CoverageSummary | null }) {
-  const currentClosure = useCoverageStore((s) => s.currentClosure);
-  const closureLive = useCoverageStore((s) => s.closureLive);
-  const startClosure = useCoverageStore((s) => s.startClosure);
-  const abortClosure = useCoverageStore((s) => s.abortClosure);
+const currentClosure = useCoverageClosureStore((s) => s.currentClosure);
+const closureLive = useCoverageClosureStore((s) => s.closureLive);
+const startClosure = useCoverageClosureStore((s) => s.startClosure);
+const abortClosure = useCoverageClosureStore((s) => s.abortClosure);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
-  const currentSessionId = useCoverageStore((s) => s.currentSessionId);
+  const currentSessionId = useCoverageCoreStore((s) => s.currentSessionId);
   // Slice 8：终态后切换「闭环进度」与「Test Promotion」视图
   const [showPromotion, setShowPromotion] = useState(false);
 

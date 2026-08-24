@@ -5,14 +5,24 @@ import { render, screen, fireEvent } from '@testing-library/react';
 // Mock stores：AiClosurePanel（CoverageDashboard 内部组件）依赖 useCoverageStore / useProjectStore。
 // 不 mock 会导致真实 store 导入 trpc.ts，而 trpc.ts 需要 electronTRPC 全局变量（测试环境不存在）。
 vi.mock('@renderer/stores/coverage', () => ({
-  useCoverageStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
+  useCoverageCoreStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
+    selector({
+      currentSessionId: null,
+    }),
+  ),
+  useCoverageGapsStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
+    selector({}),
+  ),
+  useCoverageClosureStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
     selector({
       currentClosure: null,
       closureLive: { running: false },
       startClosure: vi.fn(),
       abortClosure: vi.fn(),
-      currentSessionId: null,
     }),
+  ),
+  useCoverageExportStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
+    selector({}),
   ),
 }));
 

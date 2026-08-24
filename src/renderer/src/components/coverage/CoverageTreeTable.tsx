@@ -22,7 +22,7 @@ import {
   ChevronRight, ChevronDown, Check, AlertTriangle, X, Minus, Sparkles,
 } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
-import { useCoverageStore } from '@renderer/stores/coverage';
+import { useCoverageCoreStore, useCoverageClosureStore } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
 import type {
   CoverageData, CoverageMetric, CoverageNode, CoverageTriplet,
@@ -224,9 +224,9 @@ export function CoverageTreeTable({ data, targets }: CoverageTreeTableProps) {
   const { root } = data;
 
   // ─── AI 收敛入口（Issue 06）：模块多选 → startClosure ──────
-  const startClosure = useCoverageStore((s) => s.startClosure);
-  const setView = useCoverageStore((s) => s.setView);
-  const currentSessionId = useCoverageStore((s) => s.currentSessionId);
+const startClosure = useCoverageClosureStore((s) => s.startClosure);
+const setView = useCoverageCoreStore((s) => s.setView);
+const currentSessionId = useCoverageCoreStore((s) => s.currentSessionId);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const [selectedModules, setSelectedModules] = useState<Set<string>>(new Set());
   const [startingClosure, setStartingClosure] = useState(false);

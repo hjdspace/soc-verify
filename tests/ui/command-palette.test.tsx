@@ -34,7 +34,10 @@ vi.mock('@renderer/stores/regression', () => ({
   ),
 }));
 vi.mock('@renderer/stores/coverage', () => ({
-  useCoverageStore: (sel: (s: typeof covState) => unknown) => sel(covState),
+  useCoverageCoreStore: (sel: (s: typeof covState) => unknown) => sel(covState),
+  useCoverageGapsStore: (sel: (s: typeof covState) => unknown) => sel(covState),
+  useCoverageClosureStore: (sel: (s: typeof covState) => unknown) => sel(covState),
+  useCoverageExportStore: (sel: (s: typeof covState) => unknown) => sel(covState),
 }));
 vi.mock('@renderer/stores/terminal', () => ({
   useTerminalStore: Object.assign(() => undefined, { getState: () => termState }),

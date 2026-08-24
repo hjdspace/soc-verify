@@ -12,7 +12,7 @@ import {
   Check, X, Trash2, Loader2, FileCode, ArrowUpCircle, AlertTriangle,
 } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
-import { useCoverageStore } from '@renderer/stores/coverage';
+import { useCoverageClosureStore } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
 import type { PromotionQueueItem, ClosureSummary } from '@shared/types';
 
@@ -55,13 +55,13 @@ export type TestPromotionPanelProps = {
 
 export function TestPromotionPanel({ closureId }: TestPromotionPanelProps) {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
-  const promotionQueue = useCoverageStore((s) => s.promotionQueue);
-  const closureSummary = useCoverageStore((s) => s.closureSummary);
-  const promoting = useCoverageStore((s) => s.promoting);
-  const loadPromotionQueue = useCoverageStore((s) => s.loadPromotionQueue);
-  const promoteTests = useCoverageStore((s) => s.promoteTests);
-  const loadClosureSummary = useCoverageStore((s) => s.loadClosureSummary);
-  const cleanupClosure = useCoverageStore((s) => s.cleanupClosure);
+const promotionQueue = useCoverageClosureStore((s) => s.promotionQueue);
+const closureSummary = useCoverageClosureStore((s) => s.closureSummary);
+const promoting = useCoverageClosureStore((s) => s.promoting);
+const loadPromotionQueue = useCoverageClosureStore((s) => s.loadPromotionQueue);
+const promoteTests = useCoverageClosureStore((s) => s.promoteTests);
+const loadClosureSummary = useCoverageClosureStore((s) => s.loadClosureSummary);
+const cleanupClosure = useCoverageClosureStore((s) => s.cleanupClosure);
 
   // 客户端审阅决策：itemId → 'accepted' | 'rejected' | 'pending'
   // 初始化自后端队列项的 status（已提升的显示为 accepted）

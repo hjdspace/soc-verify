@@ -24,7 +24,7 @@ import { useProjectStore } from '@renderer/stores/project';
 import { useTerminalStore } from '@renderer/stores/terminal';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useRegressionStore } from '@renderer/stores/regression';
-import { useCoverageStore } from '@renderer/stores/coverage';
+import { useCoverageExportStore } from '@renderer/stores/coverage';
 import { useToastStore } from '@renderer/stores/toast';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
@@ -78,7 +78,7 @@ export function CommandPalette() {
   const runRegression = useRegressionStore((s) => s.runRegression);
   const loadRegressionHistory = useRegressionStore((s) => s.loadHistory);
 
-  const openExportDialog = useCoverageStore((s) => s.openExportDialog);
+  const openExportDialog = useCoverageExportStore((s) => s.openExportDialog);
 
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);

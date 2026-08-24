@@ -10,7 +10,7 @@
  * - 非当前 closure 的事件被忽略
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { useCoverageStore } from '@renderer/stores/coverage';
+import { useCoverageClosureStore } from '@renderer/stores/coverage';
 
 // ─── 依赖 mock ───────────────────────────────────────────────────
 
@@ -57,7 +57,7 @@ describe('coverage store handleClosureEvent（closure 事件缝）', () => {
       escalationThreshold: 2,
       workspaceDir: '/tmp/c1',
     });
-    useCoverageStore.setState({
+    useCoverageClosureStore.setState({
       currentClosureId: 'c1',
       currentClosure: null,
       closureLive: { running: false },
@@ -65,7 +65,7 @@ describe('coverage store handleClosureEvent（closure 事件缝）', () => {
   });
 
   it('agent_prompting → agentPhase=prompting 且 running=true', () => {
-    useCoverageStore.getState().handleClosureEvent({
+    useCoverageClosureStore.getState().handleClosureEvent({
       type: 'closure:agent_prompting',
       closureId: 'c1',
       targetId: 't1',
@@ -73,35 +73,35 @@ describe('coverage store handleClosureEvent（closure 事件缝）', () => {
       sessionId: 'agent-1',
     });
 
-    const live = useCoverageStore.getState().closureLive;
+    const live = useCoverageClosureStore.getState().closureLive;
     expect(live.running).toBe(true);
     expect(live.agentPhase).toBe('prompting');
   });
 
   it('recovery_started → agentPhase=recovering；recovery_done → 记录 lastDeltaOverall 并清空 phase', () => {
-    const store = useCoverageStore.getState();
+    const store = useCoverageClosureStore.getState();
     store.handleClosureEvent({ type: 'closure:recovery_started', closureId: 'c1', targetId: 't1', round: 1 });
-    expect(useCoverageStore.getState().closureLive.agentPhase).toBe('recovering');
+    expect(useCoverageClosureStore.getState().closureLive.agentPhase).toBe('recovering');
 
     store.handleClosureEvent({ type: 'closure:recovery_done', closureId: 'c1', targetId: 't1', round: 1, deltaOverall: 2.5 });
-    const live = useCoverageStore.getState().closureLive;
+    const live = useCoverageClosureStore.getState().closureLive;
     expect(live.agentPhase).toBeUndefined();
     expect(live.lastDeltaOverall).toBe(2.5);
   });
 
   it('gap_escalated → 记录 lastEscalation 并清空活跃 target（详情页升级原因数据源）', () => {
-    useCoverageStore.setState({
+    useCoverageClosureStore.setState({
       closureLive: { running: true, activeTargetId: 't1', activeRound: 2, agentPhase: 'prompting' },
     });
 
-    useCoverageStore.getState().handleClosureEvent({
+    useCoverageClosureStore.getState().handleClosureEvent({
       type: 'closure:gap_escalated',
       closureId: 'c1',
       targetId: 't1',
       reason: '连续 2 轮 overall delta < 1%',
     });
 
-    const live = useCoverageStore.getState().closureLive;
+    const live = useCoverageClosureStore.getState().closureLive;
     expect(live.lastEscalation).toEqual({ targetId: 't1', reason: '连续 2 轮 overall delta < 1%' });
     expect(live.activeTargetId).toBeUndefined();
     expect(live.activeRound).toBeUndefined();
@@ -110,9 +110,9 @@ describe('coverage store handleClosureEvent（closure 事件缝）', () => {
 
   it('exclusion_suggested → live 状态无变化，loadClosure 兜底刷新（工单 07 缝）', async () => {
     const before = { running: true, activeTargetId: 't1', activeRound: 1, agentPhase: 'ended' as const };
-    useCoverageStore.setState({ closureLive: { ...before } });
+    useCoverageClosureStore.setState({ closureLive: { ...before } });
 
-    useCoverageStore.getState().handleClosureEvent({
+    useCoverageClosureStore.getState().handleClosureEvent({
       type: 'closure:exclusion_suggested',
       closureId: 'c1',
       targetId: 't1',
@@ -121,7 +121,7 @@ describe('coverage store handleClosureEvent（closure 事件缝）', () => {
     });
 
     // live 状态不变（审批面板自行拉取建议数据）
-    expect(useCoverageStore.getState().closureLive).toEqual(before);
+    expect(useCoverageClosureStore.getState().closureLive).toEqual(before);
 
     // 兜底 loadClosure 被触发
     await flushAsync();
@@ -129,25 +129,25 @@ describe('coverage store handleClosureEvent（closure 事件缝）', () => {
   });
 
   it('completed → running=false 且活跃 target 清空', () => {
-    useCoverageStore.setState({
+    useCoverageClosureStore.setState({
       closureLive: { running: true, activeTargetId: 't1', activeRound: 3, agentPhase: 'ended' },
     });
 
-    useCoverageStore.getState().handleClosureEvent({
+    useCoverageClosureStore.getState().handleClosureEvent({
       type: 'closure:completed',
       closureId: 'c1',
     });
 
-    const live = useCoverageStore.getState().closureLive;
+    const live = useCoverageClosureStore.getState().closureLive;
     expect(live.running).toBe(false);
     expect(live.activeTargetId).toBeUndefined();
     expect(live.activeRound).toBeUndefined();
   });
 
   it('非当前 closure 的事件被忽略（不更新 live、不触发刷新）', async () => {
-    useCoverageStore.setState({ closureLive: { running: false } });
+    useCoverageClosureStore.setState({ closureLive: { running: false } });
 
-    useCoverageStore.getState().handleClosureEvent({
+    useCoverageClosureStore.getState().handleClosureEvent({
       type: 'closure:agent_prompting',
       closureId: 'other-closure',
       targetId: 't9',
@@ -155,20 +155,20 @@ describe('coverage store handleClosureEvent（closure 事件缝）', () => {
       sessionId: 'agent-9',
     });
 
-    expect(useCoverageStore.getState().closureLive.running).toBe(false);
+    expect(useCoverageClosureStore.getState().closureLive.running).toBe(false);
 
     await flushAsync();
     expect(getClosureQuery).not.toHaveBeenCalled();
   });
 
   it('缺 closureId 的事件直接忽略', () => {
-    useCoverageStore.setState({ closureLive: { running: false } });
+    useCoverageClosureStore.setState({ closureLive: { running: false } });
 
-    useCoverageStore.getState().handleClosureEvent({
+    useCoverageClosureStore.getState().handleClosureEvent({
       type: 'closure:agent_prompting',
       targetId: 't1',
     });
 
-    expect(useCoverageStore.getState().closureLive.running).toBe(false);
+    expect(useCoverageClosureStore.getState().closureLive.running).toBe(false);
   });
 });

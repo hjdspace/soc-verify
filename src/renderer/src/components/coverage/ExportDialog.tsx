@@ -11,27 +11,27 @@
  * 使用语义色 class（bg-card / text-foreground / border-border / bg-primary 等）。
  */
 import { Download, FileCode, FileJson, FolderOpen, Loader2 } from 'lucide-react';
-import { useCoverageStore } from '@renderer/stores/coverage';
+import { useCoverageCoreStore, useCoverageExportStore } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
 import { cn } from '@renderer/lib/utils';
 
 export function ExportDialog() {
-  const open = useCoverageStore((s) => s.exportDialogOpen);
-  const format = useCoverageStore((s) => s.exportFormat);
-  const scope = useCoverageStore((s) => s.exportScope);
-  const compareSessionId = useCoverageStore((s) => s.exportCompareSessionId);
-  const outputPath = useCoverageStore((s) => s.exportOutputPath);
-  const exporting = useCoverageStore((s) => s.exporting);
-  const sessions = useCoverageStore((s) => s.sessions);
-  const currentSessionId = useCoverageStore((s) => s.currentSessionId);
+  const open = useCoverageExportStore((s) => s.exportDialogOpen);
+  const format = useCoverageExportStore((s) => s.exportFormat);
+  const scope = useCoverageExportStore((s) => s.exportScope);
+  const compareSessionId = useCoverageExportStore((s) => s.exportCompareSessionId);
+  const outputPath = useCoverageExportStore((s) => s.exportOutputPath);
+  const exporting = useCoverageExportStore((s) => s.exporting);
+  const sessions = useCoverageCoreStore((s) => s.sessions);
+  const currentSessionId = useCoverageCoreStore((s) => s.currentSessionId);
 
-  const closeExportDialog = useCoverageStore((s) => s.closeExportDialog);
-  const setExportFormat = useCoverageStore((s) => s.setExportFormat);
-  const setExportScope = useCoverageStore((s) => s.setExportScope);
-  const setExportCompareSessionId = useCoverageStore((s) => s.setExportCompareSessionId);
-  const setExportOutputPath = useCoverageStore((s) => s.setExportOutputPath);
-  const pickExportPath = useCoverageStore((s) => s.pickExportPath);
-  const runExport = useCoverageStore((s) => s.runExport);
+  const closeExportDialog = useCoverageExportStore((s) => s.closeExportDialog);
+  const setExportFormat = useCoverageExportStore((s) => s.setExportFormat);
+  const setExportScope = useCoverageExportStore((s) => s.setExportScope);
+  const setExportCompareSessionId = useCoverageExportStore((s) => s.setExportCompareSessionId);
+  const setExportOutputPath = useCoverageExportStore((s) => s.setExportOutputPath);
+  const pickExportPath = useCoverageExportStore((s) => s.pickExportPath);
+  const runExport = useCoverageExportStore((s) => s.runExport);
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
 

@@ -1,4 +1,4 @@
-import { useCoverageStore } from '@renderer/stores/coverage';
+import { useCoverageCoreStore } from '@renderer/stores/coverage';
 import { useUiStore } from '@renderer/stores/ui';
 import { cn } from '@renderer/lib/utils';
 
@@ -15,8 +15,8 @@ const RING_CIRC = 2 * Math.PI * RING_R;
 
 /** 覆盖率环 + 四类图例条。数据：coverage store 汇总（overview），只读复用。 */
 export function CoverageRingPanel() {
-  const overview = useCoverageStore((s) => s.overview);
-  const loading = useCoverageStore((s) => s.loading);
+const overview = useCoverageCoreStore((s) => s.overview);
+const loading = useCoverageCoreStore((s) => s.loading);
   const setActiveView = useUiStore((s) => s.setActiveView);
 
   const functional = overview?.functional ?? null;

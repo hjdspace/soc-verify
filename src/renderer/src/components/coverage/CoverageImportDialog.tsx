@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from 'react';
 import { Upload, FolderOpen, Loader2, X, CheckCircle2, Clock } from 'lucide-react';
-import { useCoverageStore } from '@renderer/stores/coverage';
+import { useCoverageCoreStore } from '@renderer/stores/coverage';
 import { useProjectStore } from '@renderer/stores/project';
 import { cn } from '@renderer/lib/utils';
 import type { EdaTool } from '@shared/types';
@@ -27,17 +27,17 @@ type CoverageImportDialogProps = {
 
 export function CoverageImportDialog({ open, onClose }: CoverageImportDialogProps) {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
-  const importCoverage = useCoverageStore((s) => s.importCoverage);
-  const browseDirectory = useCoverageStore((s) => s.browseDirectory);
-  const importing = useCoverageStore((s) => s.importing);
+const importCoverage = useCoverageCoreStore((s) => s.importCoverage);
+const browseDirectory = useCoverageCoreStore((s) => s.browseDirectory);
+const importing = useCoverageCoreStore((s) => s.importing);
 
   // 导入进度
-  const importProgress = useCoverageStore((s) => s.importProgress);
-  const importStep = useCoverageStore((s) => s.importStep);
-  const importStepLog = useCoverageStore((s) => s.importStepLog);
-  const showImportProgress = useCoverageStore((s) => s.showImportProgress);
-  const registerImportProgressListener = useCoverageStore((s) => s.registerImportProgressListener);
-  const clearImportProgress = useCoverageStore((s) => s.clearImportProgress);
+const importProgress = useCoverageCoreStore((s) => s.importProgress);
+const importStep = useCoverageCoreStore((s) => s.importStep);
+const importStepLog = useCoverageCoreStore((s) => s.importStepLog);
+const showImportProgress = useCoverageCoreStore((s) => s.showImportProgress);
+const registerImportProgressListener = useCoverageCoreStore((s) => s.registerImportProgressListener);
+const clearImportProgress = useCoverageCoreStore((s) => s.clearImportProgress);
 
   const [covMergeDir, setCovMergeDir] = useState('');
   const [edaTool, setEdaTool] = useState<EdaTool>('imc');

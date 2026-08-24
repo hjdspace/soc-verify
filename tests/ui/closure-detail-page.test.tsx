@@ -103,7 +103,16 @@ let coverageState: CoverageStoreMockState;
 let projectState: ProjectStoreMockState;
 
 vi.mock('@renderer/stores/coverage', () => ({
-  useCoverageStore: vi.fn((selector: (s: CoverageStoreMockState) => unknown) =>
+  useCoverageCoreStore: vi.fn((selector: (s: CoverageStoreMockState) => unknown) =>
+    selector(coverageState),
+  ),
+  useCoverageGapsStore: vi.fn((selector: (s: CoverageStoreMockState) => unknown) =>
+    selector(coverageState),
+  ),
+  useCoverageClosureStore: vi.fn((selector: (s: CoverageStoreMockState) => unknown) =>
+    selector(coverageState),
+  ),
+  useCoverageExportStore: vi.fn((selector: (s: CoverageStoreMockState) => unknown) =>
     selector(coverageState),
   ),
 }));

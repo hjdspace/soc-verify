@@ -1189,13 +1189,11 @@ describe('SessionStore — subagent activity (subagent_* frames)', () => {
 });
 
 describe('SessionStore — MCP mount notice suppression', () => {
-  let sessionId: string;
-
   beforeEach(async () => {
     vi.clearAllMocks();
     useSessionStore.setState({ sessions: [], currentSessionId: null });
     mockCreate.mockResolvedValue({ sessionId: 'session_test_1' });
-    sessionId = (await useSessionStore.getState().createSession('proj_1', '/tmp/proj'))!;
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
   });
 
   it('suppresses MCP mount notice events (type=notice)', async () => {

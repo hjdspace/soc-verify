@@ -19,7 +19,7 @@ import { AgentActivityPanel } from './dashboard/AgentActivityPanel';
 import { FailureFocusPanel } from './dashboard/FailureFocusPanel';
 import { useProjectStore } from '@renderer/stores/project';
 import { useDashboardStore } from '@renderer/stores/dashboard';
-import { useCoverageStore } from '@renderer/stores/coverage';
+import { useCoverageCoreStore, useCoverageExportStore } from '@renderer/stores/coverage';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useUiStore } from '@renderer/stores/ui';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
@@ -88,11 +88,11 @@ export function DashboardView() {
   const milestoneNodes = useDashboardStore((s) => s.milestones);
   const loadMilestones = useDashboardStore((s) => s.loadMilestones);
 
-  const coverageOverview = useCoverageStore((s) => s.overview);
-  const coverageLoading = useCoverageStore((s) => s.loading);
-  const loadSessions = useCoverageStore((s) => s.loadSessions);
-  const loadTree = useCoverageStore((s) => s.loadTree);
-  const openExportDialog = useCoverageStore((s) => s.openExportDialog);
+const coverageOverview = useCoverageCoreStore((s) => s.overview);
+const coverageLoading = useCoverageCoreStore((s) => s.loading);
+const loadSessions = useCoverageCoreStore((s) => s.loadSessions);
+const loadTree = useCoverageCoreStore((s) => s.loadTree);
+const openExportDialog = useCoverageExportStore((s) => s.openExportDialog);
   const setActiveView = useUiStore((s) => s.setActiveView);
   const openSubsystemCases = useUiStore((s) => s.openSubsystemCases);
   const openWorkbench = useWorkbenchStore((s) => s.open);
