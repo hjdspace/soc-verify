@@ -1,95 +1,73 @@
-// ── Regression domain types ────────────────────────────
-// See ADR 0020 for design rationale.
+import type { PluginViewLocation } from '../plugin-types';
 
-/** One row in a `.lst` regression list file. */
-export type RegressionEntry = {
-  enabled: boolean;          // ON / OFF
-  block: string;
-  caseName: string;
-  seed: string;              // rand | [1,2,3] | [1:100] | [1:100:2] | 12345
-  iterative: string;         // number | "all"
-  tags: string[];            // [RTL0.1, mini, cq]
-  priority: 'H' | 'M' | 'L' | '';
-  config: string;            // config file name
-  cfgDef: string;            // default | DEF1 | [DEF1,DEF2]
-  envBase: string;           // env/base parameter
-  plusargs: string;          // raw plusargs string
-};
+export type DirGroup = 'verify' | 'design';
 
-/** A regression list file (`.lst`) — contains case entries. */
-export type RegressionList = {
-  type: 'list';
-  filePath: string;          // absolute path
-  subsys: string;
-  block: string;             // inferred from directory path
-  entries: RegressionEntry[];
-  tagSet: string[];          // deduplicated tags across all entries
-  onCount: number;
-  offCount: number;
-};
+export interface ExtraDirEntry {
+  id: string;
+  path: string;
+  group: DirGroup;
+  label?: string;
+  isCwd: boolean;
+  order: number;
+  createdAt: number;
+}
 
-/** A regression group file (`.grp`) — contains file path references. */
-export type RegressionGroup = {
-  type: 'group';
-  filePath: string;          // absolute path
-  subsys: string;
-  block: string;
-  refPaths: string[];        // referenced file paths (raw, unexpanded)
-};
+export interface AppVersionInfo {
+  app: string;
+  version: string;
+  stage: string;
+}
 
-/** Union of list and group items. */
-export type RegressionItem = RegressionList | RegressionGroup;
+export interface PluginViewLayoutState {
+  activeViewId?: string;
+  collapsed?: boolean;
+}
 
-/** Result of `discover` — regression items grouped by subsystem. */
-export type RegressionDiscoveryResult = {
-  subsys: string;
-  items: RegressionItem[];
-}[];
+export interface ProjectInfo {
+  id: string;
+  name: string;
+  rootPath: string;
+  /** 项目标记名：独立于目录名的用户可编辑项目标签。
+   *  默认从 $PROJ_RTL 路径解析（/proj/<ProjectName>/xxx → 第二级目录名）。
+   *  用户可通过 UI 修改，持久化到 .socverify/config.json。 */
+  projectLabel?: string;
+  /** 用户后续添加的额外目录。rootPath 不存入此处（隐式属于验证组第一项 = 默认 cwd）。 */
+  extraDirs?: ExtraDirEntry[];
+  createdAt: number;
+  lastOpenedAt: number;
+}
 
-/** Options passed to `runsim -regr` during a regression run. */
-export type RegressionRunOptions = {
-  tags?: string[];           // -tag
-  nonTags?: string[];        // -nt (non-tag: exclude these tags)
-  failMode?: boolean;        // -fm (fail mode: only failed cases)
-  coverage?: boolean;        // -cov
-  regrWork?: string;         // -regr_work
-  merge?: boolean;           // -merge (requires coverage=true)
-};
+export interface ProjectState {
+  projectId: string;
+  uiLayout: {
+    rightPanelCollapsed: boolean;
+    /** @deprecated UI store 已移除此字段；仅用于读取旧持久化状态。 */
+    optionDockExpanded?: boolean;
+    pluginViews?: Partial<Record<PluginViewLocation, PluginViewLayoutState>>;
+    /** App Shell 活动视图（mission-control 布局）；旧持久化状态可能缺失 */
+    activeView?: string;
+    /** AI 面板呈现模式（drawer | docked）；旧持久化状态可能缺失 */
+    aiPanelMode?: string;
+    /** 仿真视图左栏宽度（可拖拽调整）；旧持久化状态可能缺失 */
+    simLeftPanelWidth?: number;
+  };
+  lastSessionIds: string[];
+}
 
-/** A persisted regression execution record. */
-export type RegressionHistoryEntry = {
-  runId: string;
-  filePath: string;
-  subsys: string;
-  command: string;
-  options: RegressionRunOptions;
-  submittedAt: number;
-  status: 'running' | 'completed' | 'aborted' | 'failed';
-  exitCode: number | null;
-  stdoutTail: string;        // last N lines of stdout
-};
+export interface FileTreeNode {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  children?: FileTreeNode[];
+  /** True when this file/directory is ignored by .gitignore (dimmed in the tree). */
+  gitIgnored?: boolean;
+  /** True when this directory's children have not been loaded yet (lazy loading).
+   * The UI shows an expand arrow; children are fetched on first expand. */
+  lazy?: boolean;
+}
 
-// ── 运行中回归跟踪（RegressionRunTracker，TitleBar 回归徽章数据源）──
-
-/** 运行中回归：runsim -regr 提交后由主进程单例跟踪 */
-export type ActiveRegressionRun = {
-  runId: string;
-  subsys: string;
-  filePath: string;
-  submittedAt: number;
-  /** 从终端输出解析出的进度 x（已完成用例数）；未解析到时缺省，UI 降级不显示 */
-  completed?: number;
-  /** 从终端输出解析出的进度 y（总用例数） */
-  total?: number;
-};
-
-/** 回归终态（terminal exitCode 映射：0→completed、null→aborted、其余→failed） */
-export type RegressionRunFinalStatus = 'completed' | 'failed' | 'aborted';
-
-/** regression:event 载荷（主进程 → 渲染进程，经 preload eventBridge） */
-export type RegressionEvent = {
-  type: 'started' | 'progress' | 'finished';
-  run: ActiveRegressionRun;
-  /** type === 'finished' 时的终态 */
-  status?: RegressionRunFinalStatus;
-};
+export interface FileTreeUpdate {
+  projectId: string;
+  type: 'add' | 'unlink' | 'change';
+  path: string;
+}
