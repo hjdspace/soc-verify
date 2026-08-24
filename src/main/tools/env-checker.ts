@@ -7,10 +7,10 @@
  */
 
 import { readFile, writeFile, readdir, mkdir } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { resolveProjectEnvVarSync } from '../env/env-manager';
 
 // ── Regex patterns (ported from Python) ────────────────────────────
 
@@ -467,31 +467,13 @@ export async function readFileWithContext(
 
 // ── $PROJ_ENV resolution ───────────────────────────────────────────
 
-const SOCVERIFY_DIR = '.socverify';
-const ENV_CONFIG_FILE = 'env.json';
-
 /**
  * Resolve $PROJ_ENV from process.env, falling back to .socverify/env.json.
- * Matches the pattern used by git-quick-pull and git-manager.
+ * Delegates to the shared helper in env-manager.ts (sync variant — no login
+ * shell spawn, since this is called from synchronous IPC procedures).
  */
 export function resolveProjEnv(projectDir: string): string | null {
-  const envVal = process.env.PROJ_ENV;
-  if (envVal && envVal.trim()) return envVal.trim();
-
-  try {
-    const configPath = join(projectDir, SOCVERIFY_DIR, ENV_CONFIG_FILE);
-    const config = JSON.parse(readFileSync(configPath, 'utf-8')) as {
-      envVars?: Record<string, string>;
-    };
-    const configured = config?.envVars?.PROJ_ENV;
-    if (typeof configured === 'string' && configured.trim()) {
-      return configured.trim();
-    }
-  } catch {
-    // Config file not found or invalid
-  }
-
-  return null;
+  return resolveProjectEnvVarSync('PROJ_ENV', projectDir);
 }
 
 /**
