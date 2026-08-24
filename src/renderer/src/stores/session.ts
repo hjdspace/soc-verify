@@ -253,7 +253,21 @@ const historySessionLoads = new Map<string, Promise<void>>();
 const runtimeSessionStarts = new Map<string, Promise<string>>();
 const pendingSessionEvents = new Map<string, unknown[]>();
 
-function emptyContextUsage(): ContextUsage {
+function emptyContextUsage(sessionModel?: SessionModel): ContextUsage {
+  // Try to resolve the contextWindow from the session's model credential.
+  // Each model can have its own contextWindow — when the user has configured
+  // models in settings, use the selected model's contextWindow.
+  if (sessionModel?.providerId && sessionModel?.id) {
+    const creds = useSettingsStore.getState().credentials;
+    const cred = creds.find((c) => c.providerId === sessionModel.providerId);
+    if (cred) {
+      const model = cred.models.find((m) => m.id === sessionModel.id);
+      if (model && model.contextWindow > 0) {
+        return { tokens: 0, contextWindow: model.contextWindow, percent: 0 };
+      }
+    }
+  }
+  // Fallback to the global setting
   const configured = useSettingsStore.getState().contextWindow;
   const contextWindow = Number.isFinite(configured) && configured > 0
     ? configured
@@ -1039,7 +1053,7 @@ async function ensureRuntimeSession(
             sess.id === latest.id
               ? {
                   ...sess,
-                  contextUsage: readContextUsage(usage, sess.contextUsage ?? emptyContextUsage()),
+                  contextUsage: readContextUsage(usage, sess.contextUsage ?? emptyContextUsage(sess.model)),
                   autoCompactionEnabled: stateObj.autoCompactionEnabled !== false,
                 }
               : sess,
@@ -1121,7 +1135,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       composer: emptyComposer(),
       createdAt: Date.now(),
       model: get().lastModel ?? undefined,
-      contextUsage: emptyContextUsage(),
+      contextUsage: emptyContextUsage(get().lastModel ?? undefined),
     };
 
     set((state) => ({
@@ -1164,7 +1178,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       composer: emptyComposer(),
       createdAt: Date.now(),
       model: lastModel ?? undefined,
-      contextUsage: emptyContextUsage(),
+      contextUsage: emptyContextUsage(lastModel ?? undefined),
       approvalMode: storedApprovalMode ?? 'yolo',
     };
     set((s) => ({
@@ -1429,7 +1443,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
                 ...candidate,
                 isCompacting: false,
                 contextCompacted: true,
-                contextUsage: readContextUsage(result.contextUsage, candidate.contextUsage ?? emptyContextUsage()),
+                contextUsage: readContextUsage(result.contextUsage, candidate.contextUsage ?? emptyContextUsage(candidate.model)),
                 contextBreakdown: readContextBreakdown(result.contextBreakdown, candidate.contextBreakdown),
               }
             : candidate,
@@ -1600,7 +1614,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
           case 'context_usage':
             return {
               ...sess,
-              contextUsage: readContextUsage(evt.contextUsage, sess.contextUsage ?? emptyContextUsage()),
+              contextUsage: readContextUsage(evt.contextUsage, sess.contextUsage ?? emptyContextUsage(sess.model)),
               contextBreakdown: readContextBreakdown(evt.contextBreakdown, sess.contextBreakdown),
               isCompacting: evt.isCompacting === true,
               autoCompactionEnabled: evt.autoCompactionEnabled !== false,
@@ -1929,7 +1943,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
         composer: emptyComposer(),
         createdAt: p.createdAt,
         model: p.model,
-        contextUsage: p.contextUsage ?? emptyContextUsage(),
+        contextUsage: p.contextUsage ?? emptyContextUsage(p.model),
         contextBreakdown: p.contextBreakdown,
       }));
 
@@ -1979,7 +1993,12 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
       lastModel: model,
       sessions: s.sessions.map((sess) =>
         sessionMatchesId(sess, sessionId)
-          ? { ...sess, model }
+          ? {
+              ...sess,
+              model,
+              // Update contextUsage with the new model's contextWindow if available
+              contextUsage: emptyContextUsage(model),
+            }
           : sess,
       ),
     }));
@@ -2167,7 +2186,7 @@ export const useSessionStore = create<SessionStoreState>((set, get) => ({
           composer: emptyComposer(),
           createdAt: historySession.createdAt,
           model: historySession.model,
-          contextUsage: historySession.contextUsage ?? emptyContextUsage(),
+          contextUsage: historySession.contextUsage ?? emptyContextUsage(historySession.model),
           contextBreakdown: historySession.contextBreakdown,
         };
         set((s) => ({

@@ -118,7 +118,7 @@ describe('CredentialManager — CRUD operations', () => {
       label: 'OpenAI',
       apiKey: 'sk-original',
       baseUrl: 'https://api.openai.com/v1',
-      model: 'gpt-4',
+      models: [{ id: 'gpt-4', name: 'gpt-4', contextWindow: 128_000 }],
     });
 
     // Update only the label
@@ -129,7 +129,7 @@ describe('CredentialManager — CRUD operations', () => {
 
     expect(updated.label).toBe('My OpenAI');
     expect(updated.baseUrl).toBe('https://api.openai.com/v1');
-    expect(updated.model).toBe('gpt-4');
+    expect(updated.models[0]?.id).toBe('gpt-4');
 
     // API key should be preserved
     const raw = await credentialManager.get('openai');

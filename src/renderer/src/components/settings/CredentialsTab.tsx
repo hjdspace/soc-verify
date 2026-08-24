@@ -1,13 +1,27 @@
-import { useEffect, useState } from 'react';
-import { Check, CircleGauge, Key, Pencil, RefreshCw, Save, Trash2, X, Zap } from 'lucide-react';
-import { useSettingsStore } from '@renderer/stores/settings';
-import { useSessionStore } from '@renderer/stores/session';
+import { useEffect, useState, useCallback } from 'react';
+import { Check, Key, Loader2, Pencil, Plus, RefreshCw, Save, Search, Trash2, X } from 'lucide-react';
+import { useSettingsStore, type ApiModel } from '@renderer/stores/settings';
 import { cn } from '@renderer/lib/utils';
-import type { CredentialEntry } from '@shared/types';
+import type { CredentialEntry, ConfiguredModel } from '@shared/types';
+import { DEFAULT_CONTEXT_WINDOW } from '@shared/context-management';
 
 /**
- * 模型配置 Tab — 凭据管理（增删改 + 应用到当前会话）+ 上下文窗口设置。
+ * 模型配置 Tab — 凭据管理（增删改）+ 每个凭据下的模型列表配置。
+ *
+ * 每个模型有独立的 contextWindow，不再使用全局上下文窗口。
+ * 添加模型时可以从 API 获取模型列表供用户选择。
  */
+
+// ── Context window preset options ──────────────────────
+const CONTEXT_WINDOW_OPTIONS = [
+  { value: 32_000, label: '32k' },
+  { value: 64_000, label: '64k' },
+  { value: 128_000, label: '128k' },
+  { value: 200_000, label: '200k' },
+  { value: 256_000, label: '256k' },
+  { value: 512_000, label: '512k' },
+  { value: 1_000_000, label: '1M' },
+];
 
 // ── useCredentialForm hook ────────────────────────────────
 
@@ -16,7 +30,7 @@ type CredentialFormState = {
   label: string;
   apiKey: string;
   baseUrl: string;
-  model: string;
+  models: ConfiguredModel[];
 };
 
 const EMPTY_FORM: CredentialFormState = {
@@ -24,24 +38,24 @@ const EMPTY_FORM: CredentialFormState = {
   label: '',
   apiKey: '',
   baseUrl: '',
-  model: '',
+  models: [],
 };
 
 /**
- * 凭据表单状态 + 操作 — 管理表单字段、编辑态、保存/应用/删除。
- *
- * 返回 `form` 对象 + `update(patch)` 统一更新接口，避免散落的 setter。
+ * 凭据表单状态 + 操作 — 管理表单字段、编辑态、保存/删除。
  */
 function useCredentialForm() {
   const setCredential = useSettingsStore((s) => s.setCredential);
   const updateCredential = useSettingsStore((s) => s.updateCredential);
   const deleteCredential = useSettingsStore((s) => s.deleteCredential);
-  const applyCredential = useSessionStore((s) => s.applyCredential);
-  const currentSessionId = useSessionStore((s) => s.currentSessionId);
+  const fetchModelsFromApi = useSettingsStore((s) => s.fetchModels);
 
   const [form, setForm] = useState<CredentialFormState>(EMPTY_FORM);
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
-  const [applyingProviderId, setApplyingProviderId] = useState<string | null>(null);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [showModelPicker, setShowModelPicker] = useState(false);
+  const [modelSearch, setModelSearch] = useState('');
+  const [fetchedModels, setFetchedModels] = useState<ApiModel[]>([]);
 
   const isEditing = editingProviderId !== null;
   // In add mode: providerId + apiKey are required.
@@ -57,6 +71,9 @@ function useCredentialForm() {
   const reset = () => {
     setForm(EMPTY_FORM);
     setEditingProviderId(null);
+    setShowModelPicker(false);
+    setFetchedModels([]);
+    setModelSearch('');
   };
 
   const save = async () => {
@@ -67,7 +84,7 @@ function useCredentialForm() {
         label: form.label.trim(),
         apiKey: form.apiKey.trim() || undefined,
         baseUrl: form.baseUrl.trim() || undefined,
-        model: form.model.trim() || undefined,
+        models: form.models,
       });
     } else {
       await setCredential({
@@ -75,7 +92,7 @@ function useCredentialForm() {
         label: form.label.trim() || form.providerId.trim(),
         apiKey: form.apiKey.trim(),
         baseUrl: form.baseUrl.trim() || undefined,
-        model: form.model.trim() || undefined,
+        models: form.models,
       });
     }
     reset();
@@ -88,7 +105,7 @@ function useCredentialForm() {
       label: c.label,
       apiKey: '',
       baseUrl: c.baseUrl ?? '',
-      model: c.model ?? '',
+      models: c.models ?? [],
     });
   };
 
@@ -96,197 +113,169 @@ function useCredentialForm() {
     reset();
   };
 
-  const apply = async (providerIdToApply: string) => {
-    if (!currentSessionId) {
-      console.warn('[CredentialsTab] apply: no currentSessionId — button should have been disabled');
-      return;
-    }
-    if (applyingProviderId) {
-      console.warn(`[CredentialsTab] apply: already applying "${applyingProviderId}", ignoring click`);
-      return;
-    }
-    console.log(`[CredentialsTab] applyCredential: sessionId=${currentSessionId}, providerId=${providerIdToApply}`);
-    setApplyingProviderId(providerIdToApply);
-    try {
-      await applyCredential(currentSessionId, providerIdToApply);
-      console.log(`[CredentialsTab] applyCredential succeeded: providerId=${providerIdToApply}`);
-    } catch (err) {
-      console.error(`[CredentialsTab] applyCredential failed:`, err);
-    } finally {
-      setApplyingProviderId(null);
-    }
-  };
-
   const remove = (providerIdToDelete: string, e: React.MouseEvent) => {
     e.stopPropagation();
     void deleteCredential(providerIdToDelete);
   };
+
+  // ── Model management within the form ──
+
+  const addModel = (model: ConfiguredModel) => {
+    // Avoid duplicates
+    if (form.models.some((m) => m.id === model.id)) return;
+    setForm((prev) => ({ ...prev, models: [...prev.models, model] }));
+  };
+
+  const removeModel = (modelId: string) => {
+    setForm((prev) => ({ ...prev, models: prev.models.filter((m) => m.id !== modelId) }));
+  };
+
+  const updateModelContextWindow = (modelId: string, contextWindow: number) => {
+    setForm((prev) => ({
+      ...prev,
+      models: prev.models.map((m) => m.id === modelId ? { ...m, contextWindow } : m),
+    }));
+  };
+
+  const fetchModels = useCallback(async () => {
+    if (!form.providerId.trim() || (!form.apiKey.trim() && !isEditing)) return;
+    setFetchingModels(true);
+    try {
+      // For edit mode with empty apiKey, the backend uses stored credentials
+      const apiKey = form.apiKey.trim() || undefined;
+      const baseUrl = form.baseUrl.trim() || undefined;
+      const models = await fetchModelsFromApi(form.providerId.trim(), apiKey, baseUrl);
+      setFetchedModels(models);
+      setShowModelPicker(true);
+    } finally {
+      setFetchingModels(false);
+    }
+  }, [form.providerId, form.apiKey, form.baseUrl, isEditing, fetchModelsFromApi]);
+
+  const filteredFetchedModels = fetchedModels.filter((m) =>
+    m.id.toLowerCase().includes(modelSearch.toLowerCase()) ||
+    m.name.toLowerCase().includes(modelSearch.toLowerCase()),
+  );
 
   return {
     form,
     update,
     isEditing,
     canSave,
-    applyingProviderId,
-    currentSessionId,
+    fetchingModels,
+    showModelPicker,
+    modelSearch,
+    fetchedModels: filteredFetchedModels,
     save,
     edit,
     cancelEdit,
-    apply,
     remove,
+    addModel,
+    removeModel,
+    updateModelContextWindow,
+    fetchModels,
+    setShowModelPicker,
+    setModelSearch,
   };
 }
 
 // ── CredentialsTab component ──────────────────────────────
 
 export function CredentialsTab() {
-  const contextWindow = useSettingsStore((s) => s.contextWindow);
-  const loadContextWindow = useSettingsStore((s) => s.loadContextWindow);
-  const setContextWindow = useSettingsStore((s) => s.setContextWindow);
   const credentials = useSettingsStore((s) => s.credentials);
   const loadCredentials = useSettingsStore((s) => s.loadCredentials);
-
-  const sessions = useSessionStore((s) => s.sessions);
-  const currentSessionId = useSessionStore((s) => s.currentSessionId);
-  const currentSession = sessions.find((s) => s.id === currentSessionId);
 
   const {
     form,
     update,
     isEditing,
     canSave,
-    applyingProviderId,
-    currentSessionId: hookSessionId,
+    fetchingModels,
+    showModelPicker,
+    modelSearch,
+    fetchedModels,
     save,
     edit,
     cancelEdit,
-    apply,
     remove,
+    addModel,
+    removeModel,
+    updateModelContextWindow,
+    fetchModels,
+    setShowModelPicker,
+    setModelSearch,
   } = useCredentialForm();
 
   useEffect(() => {
     loadCredentials();
-    void loadContextWindow();
-  }, [loadContextWindow, loadCredentials]);
+  }, [loadCredentials]);
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-3 rounded-md border border-border/60 bg-secondary/15 px-3 py-2.5">
-        <CircleGauge className="h-4 w-4 shrink-0 text-primary" />
-        <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-foreground">模型上下文窗口</div>
-          <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">
-            应与模型实际支持值一致，新建或重新加载 AI 会话后生效。
-          </p>
-        </div>
-        <select
-          aria-label="模型上下文窗口"
-          value={contextWindow}
-          onChange={(event) => void setContextWindow(Number(event.target.value))}
-          className="h-7 rounded border border-input bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary"
-        >
-          <option value={32_000}>32k</option>
-          <option value={64_000}>64k</option>
-          <option value={128_000}>128k</option>
-          <option value={200_000}>200k（默认）</option>
-          <option value={256_000}>256k</option>
-          <option value={1_000_000}>1M</option>
-        </select>
-      </div>
-
-      {/* Existing credentials — click a card to apply the whole config */}
+      {/* Existing credentials */}
       <div>
         <div className="mb-1.5 text-[10px] font-semibold uppercase text-muted-foreground">已存储凭据</div>
         {credentials.length === 0 ? (
           <p className="text-xs text-muted-foreground">暂无凭据，请先配置 API Key</p>
         ) : (
           <div className="space-y-1">
-            {credentials.map((c: CredentialEntry) => {
-              const isCurrent = currentSession?.model?.providerId === c.providerId;
-              const isApplying = applyingProviderId === c.providerId;
-              const disabled = !hookSessionId || !!applyingProviderId;
-              return (
-                <div
-                  key={c.providerId}
-                  className={cn(
-                    'flex items-center gap-2 rounded border bg-secondary/20 px-2 py-1.5 transition-colors',
-                    isCurrent ? 'border-primary/40 bg-primary/5' : 'border-border/50',
-                    !disabled && !isCurrent && 'hover:bg-accent/30',
+            {credentials.map((c: CredentialEntry) => (
+              <div
+                key={c.providerId}
+                className={cn(
+                  'flex items-center gap-2 rounded border bg-secondary/20 px-2 py-1.5 transition-colors',
+                  'border-border/50 hover:bg-accent/30',
+                )}
+              >
+                <Key className="h-3 w-3 shrink-0 text-muted-foreground" />
+                <div className="flex-1 min-w-0">
+                  <span className="text-xs font-medium">{c.label}</span>
+                  <span className="ml-2 text-[10px] text-muted-foreground font-mono">{c.apiKeyMasked}</span>
+                  {c.baseUrl && (
+                    <span className="ml-2 text-[10px] text-muted-foreground/70 truncate">{c.baseUrl}</span>
                   )}
-                >
-                  <Key className="h-3 w-3 shrink-0 text-muted-foreground" />
-                  <div className="flex-1 min-w-0">
-                    <span className="text-xs font-medium">{c.label}</span>
-                    <span className="ml-2 text-[10px] text-muted-foreground font-mono">{c.apiKeyMasked}</span>
-                    {c.baseUrl && (
-                      <span className="ml-2 text-[10px] text-muted-foreground/70 truncate">{c.baseUrl}</span>
-                    )}
-                  </div>
-                  {isCurrent ? (
-                    <span className="flex shrink-0 items-center gap-0.5 rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-medium text-primary">
-                      <Check className="h-2.5 w-2.5" />
-                      当前
-                    </span>
-                  ) : (
-                    <button
-                      onClick={() => apply(c.providerId)}
-                      disabled={disabled}
-                      title={disabled ? (hookSessionId ? '正在切换...' : '请先创建 AI 会话') : '整体应用到当前会话'}
-                      className={cn(
-                        'flex shrink-0 items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors',
-                        disabled
-                          ? 'cursor-not-allowed bg-muted text-muted-foreground'
-                          : 'bg-primary/10 text-primary hover:bg-primary/20',
-                      )}
-                    >
-                      {isApplying ? <RefreshCw className="h-2.5 w-2.5 animate-spin" /> : <Zap className="h-2.5 w-2.5" />}
-                      {isApplying ? '切换中' : '应用'}
-                    </button>
+                  {c.models.length > 0 && (
+                    <span className="ml-2 text-[10px] text-primary/70">{c.models.length} 个模型</span>
                   )}
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) => {
+                </div>
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    edit(c);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
                       e.stopPropagation();
                       edit(c);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        edit(c);
-                      }
-                    }}
-                    title="编辑凭据"
-                    className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                  >
-                    <Pencil className="h-3 w-3" />
-                  </span>
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) => remove(c.providerId, e)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        remove(c.providerId, e as unknown as React.MouseEvent);
-                      }
-                    }}
-                    title="删除凭据"
-                    className="shrink-0 rounded p-0.5 text-destructive hover:bg-destructive/10"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </span>
-                </div>
-              );
-            })}
+                    }
+                  }}
+                  title="编辑凭据"
+                  className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  <Pencil className="h-3 w-3" />
+                </span>
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={(e) => remove(c.providerId, e)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      remove(c.providerId, e as unknown as React.MouseEvent);
+                    }
+                  }}
+                  title="删除凭据"
+                  className="shrink-0 rounded p-0.5 text-destructive hover:bg-destructive/10"
+                >
+                  <Trash2 className="h-3 w-3" />
+                </span>
+              </div>
+            ))}
           </div>
-        )}
-        {!hookSessionId && credentials.length > 0 && (
-          <p className="mt-1 text-[9px] text-muted-foreground/70">
-            请先创建 AI 会话后再应用凭据
-          </p>
         )}
       </div>
 
@@ -339,14 +328,145 @@ export function CredentialsTab() {
             placeholder="Base URL（可选）"
             className="rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
           />
-          <input
-            type="text"
-            value={form.model}
-            onChange={(e) => update({ model: e.target.value })}
-            placeholder="模型名（可选，如 gpt-4o-mini）"
-            className="rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
-          />
         </div>
+
+        {/* Model list configuration */}
+        <div className="mt-2 rounded border border-border/40 bg-background/40 p-2">
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-[10px] font-semibold uppercase text-muted-foreground">
+              模型列表 ({form.models.length})
+            </span>
+            <button
+              onClick={fetchModels}
+              disabled={fetchingModels || (!form.providerId.trim()) || (!form.apiKey.trim() && !isEditing)}
+              title="从 API 获取模型列表"
+              className={cn(
+                'flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] font-medium transition-colors',
+                (fetchingModels || !form.providerId.trim() || (!form.apiKey.trim() && !isEditing))
+                  ? 'cursor-not-allowed bg-muted text-muted-foreground'
+                  : 'bg-primary/10 text-primary hover:bg-primary/20',
+              )}
+            >
+              {fetchingModels ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <RefreshCw className="h-2.5 w-2.5" />}
+              从 API 获取
+            </button>
+          </div>
+
+          {/* Model picker dropdown */}
+          {showModelPicker && fetchedModels.length > 0 && (
+            <div className="mb-2 rounded border border-border bg-popover shadow-sm">
+              <div className="flex items-center gap-1 border-b border-border/50 px-2 py-1">
+                <Search className="h-3 w-3 text-muted-foreground" />
+                <input
+                  type="text"
+                  value={modelSearch}
+                  onChange={(e) => setModelSearch(e.target.value)}
+                  placeholder="搜索模型..."
+                  className="flex-1 bg-transparent text-[10px] outline-none"
+                  autoFocus
+                />
+                <button
+                  onClick={() => setShowModelPicker(false)}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+              <div className="max-h-32 overflow-y-auto">
+                {fetchedModels.map((m) => {
+                  const alreadyAdded = form.models.some((fm) => fm.id === m.id);
+                  return (
+                    <button
+                      key={m.id}
+                      onClick={() => {
+                        if (!alreadyAdded) {
+                          addModel({
+                            id: m.id,
+                            name: m.name,
+                            contextWindow: DEFAULT_CONTEXT_WINDOW,
+                          });
+                        }
+                      }}
+                      disabled={alreadyAdded}
+                      className={cn(
+                        'flex w-full items-center gap-1.5 px-2 py-1 text-left text-[10px] hover:bg-accent',
+                        alreadyAdded && 'cursor-not-allowed opacity-50',
+                      )}
+                    >
+                      {alreadyAdded ? (
+                        <Check className="h-2.5 w-2.5 text-muted-foreground" />
+                      ) : (
+                        <Plus className="h-2.5 w-2.5 text-primary" />
+                      )}
+                      <span className="font-medium text-foreground">{m.name}</span>
+                      <span className="text-muted-foreground">{m.id}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Configured models list */}
+          {form.models.length === 0 ? (
+            <p className="text-[10px] text-muted-foreground/70">
+              暂未配置模型。点击"从 API 获取"选择模型，或手动添加。
+            </p>
+          ) : (
+            <div className="space-y-1">
+              {form.models.map((m) => (
+                <div
+                  key={m.id}
+                  className="flex items-center gap-1.5 rounded border border-border/40 bg-secondary/10 px-1.5 py-1"
+                >
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[10px] font-medium text-foreground">{m.name}</span>
+                    <span className="ml-1.5 text-[9px] text-muted-foreground font-mono">{m.id}</span>
+                  </div>
+                  <select
+                    aria-label="上下文窗口"
+                    value={m.contextWindow}
+                    onChange={(e) => updateModelContextWindow(m.id, Number(e.target.value))}
+                    className="h-5 rounded border border-input bg-background px-1 text-[9px] text-foreground outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    {CONTEXT_WINDOW_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                    {/* Include the current value if it's not in the preset list */}
+                    {!CONTEXT_WINDOW_OPTIONS.some((opt) => opt.value === m.contextWindow) && (
+                      <option value={m.contextWindow}>{(m.contextWindow / 1000).toFixed(0)}k</option>
+                    )}
+                  </select>
+                  <button
+                    onClick={() => removeModel(m.id)}
+                    title="移除模型"
+                    className="shrink-0 rounded p-0.5 text-destructive hover:bg-destructive/10"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Manual model add (without API fetch) */}
+          <button
+            onClick={() => {
+              const id = prompt('输入模型 ID（如 gpt-4o-mini）');
+              if (!id) return;
+              addModel({
+                id,
+                name: id,
+                contextWindow: DEFAULT_CONTEXT_WINDOW,
+              });
+            }}
+            className="mt-1.5 flex items-center gap-1 text-[9px] text-muted-foreground hover:text-foreground"
+          >
+            <Plus className="h-2.5 w-2.5" />
+            手动添加模型
+          </button>
+        </div>
+
         <div className="mt-1.5 flex justify-end gap-1">
           {isEditing && (
             <button

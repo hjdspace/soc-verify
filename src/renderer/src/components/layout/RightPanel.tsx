@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
-import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon, Shield, ShieldAlert, ShieldCheck, ChevronDown, Info, PanelLeftClose } from 'lucide-react';
-import { useSessionStore, type ChatMessage, type AvailableModel, type SelectedSkill, type ContextFile, type HistorySession, type SessionEntry } from '@renderer/stores/session';
+import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon, Shield, ShieldAlert, ShieldCheck, ChevronDown, ChevronRight, Info, PanelLeftClose, Key } from 'lucide-react';
+import { useSessionStore, type ChatMessage, type SelectedSkill, type ContextFile, type HistorySession, type SessionEntry } from '@renderer/stores/session';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
@@ -63,8 +63,7 @@ export function RightPanelContent() {
   const [editingSessionName, setEditingSessionName] = useState('');
   const [attachedImages, setAttachedImages] = useState<string[]>([]);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
-  const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
+  const [expandedProviders, setExpandedProviders] = useState<Set<string>>(new Set());
   const [steerText, setSteerText] = useState('');
   const [showSteerInput, setShowSteerInput] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -93,7 +92,8 @@ export function RightPanelContent() {
 
   const steerSession = useSessionStore((s) => s.steerSession);
   const setModel = useSessionStore((s) => s.setModel);
-  const fetchModelsFromApi = useSettingsStore((s) => s.fetchModels);
+  const credentials = useSettingsStore((s) => s.credentials);
+  const loadCredentials = useSettingsStore((s) => s.loadCredentials);
   const setApprovalMode = useSessionStore((s) => s.setApprovalMode);
   const resolveApproval = useSessionStore((s) => s.resolveApproval);
   const approvalRequests = useSessionStore((s) => s.approvalRequests);
@@ -127,6 +127,11 @@ export function RightPanelContent() {
       fetchHistorySessions(currentProjectId);
     }
   }, [showHistory, currentProjectId, fetchHistorySessions]);
+
+  // Load credentials on mount so the model dropdown has provider/model data
+  useEffect(() => {
+    void loadCredentials();
+  }, [loadCredentials]);
 
   const handleOpenHistory = () => {
     setShowHistory(true);
@@ -449,32 +454,25 @@ export function RightPanelContent() {
     }
   };
 
-  const handleLoadModels = useCallback(async () => {
-    setModelsLoading(true);
-    try {
-      // Fetch models for the current session's credential (providerId) so the
-      // list reflects the credential the session is actually using. Fall back
-      // to the default (no providerId) when the session has no credential bound.
-      const providerId = currentSession?.model?.providerId;
-      const models = await fetchModelsFromApi(providerId);
-      setAvailableModels(models.map((m) => ({
-        provider: m.provider,
-        id: m.id,
-        name: m.name,
-        description: m.description,
-      })));
-      setShowModelDropdown(true);
-    } finally {
-      setModelsLoading(false);
+  const toggleModelDropdown = useCallback(() => {
+    setShowModelDropdown((prev) => !prev);
+    // Auto-expand the current session's provider
+    if (!showModelDropdown && currentSession?.model?.providerId) {
+      setExpandedProviders(new Set([currentSession.model.providerId]));
     }
-  }, [fetchModelsFromApi, currentSession?.model?.providerId]);
+  }, [showModelDropdown, currentSession?.model?.providerId]);
 
-  const handleSetModel = async (provider: string, modelId: string, modelName?: string) => {
+  const toggleProvider = useCallback((providerId: string) => {
+    setExpandedProviders((prev) => {
+      const next = new Set(prev);
+      if (next.has(providerId)) next.delete(providerId);
+      else next.add(providerId);
+      return next;
+    });
+  }, []);
+
+  const handleSetModel = async (provider: string, modelId: string, modelName?: string, providerId?: string) => {
     if (!currentSessionId) return;
-    // Switching model within the same provider — pass providerId so the backend
-    // keeps using the same credential (apiKey/baseUrl) and only swaps the model id
-    // via the omp engine's set_model RPC (no session destroy/recreate needed).
-    const providerId = currentSession?.model?.providerId;
     await setModel(currentSessionId, provider, modelId, modelName, providerId);
     setShowModelDropdown(false);
   };
@@ -1106,38 +1104,90 @@ export function RightPanelContent() {
               {/* 模型选择器 */}
               <div className="relative">
                 <button
-                  onClick={handleLoadModels}
+                  onClick={toggleModelDropdown}
                   title="切换模型"
                   className="flex items-center gap-0.5 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 >
-                  {modelsLoading ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <span className="max-w-[100px] truncate text-[10px] font-medium text-foreground/80">
-                      {currentSession?.model?.name ?? '选择模型'}
-                    </span>
-                  )}
+                  <span className="max-w-[100px] truncate text-[10px] font-medium text-foreground/80">
+                    {currentSession?.model?.name ?? '选择模型'}
+                  </span>
+                  <ChevronDown className="h-2.5 w-2.5" />
                 </button>
-                {showModelDropdown && availableModels.length > 0 && (
+                {showModelDropdown && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowModelDropdown(false)} />
-                    <div className="absolute bottom-7 left-0 z-50 max-h-48 w-56 overflow-y-auto rounded-md border border-border bg-popover shadow-xl">
-                      {availableModels.map((m) => (
-                        <button
-                          key={`${m.provider}:${m.id}`}
-                          onClick={() => handleSetModel(m.provider, m.id, m.name)}
-                          className={cn(
-                            'flex w-full flex-col items-start gap-0.5 px-2 py-1.5 text-left text-xs hover:bg-accent',
-                            currentSession?.model?.id === m.id && currentSession?.model?.provider === m.provider && 'bg-accent/50',
-                          )}
-                        >
-                          <span className="font-medium text-foreground">{m.name}</span>
-                          <span className="text-[9px] text-muted-foreground">{m.provider} · {m.id}</span>
-                          {m.description && (
-                            <span className="text-[9px] text-muted-foreground/70">{m.description}</span>
-                          )}
-                        </button>
-                      ))}
+                    <div className="absolute bottom-7 left-0 z-50 max-h-64 w-64 overflow-y-auto rounded-md border border-border bg-popover shadow-xl">
+                      {credentials.length === 0 ? (
+                        <div className="px-2 py-3 text-center text-[10px] text-muted-foreground">
+                          暂无已配置凭据<br />
+                          请在设置中添加 Provider 和模型
+                        </div>
+                      ) : (
+                        credentials.map((cred) => {
+                          const isExpanded = expandedProviders.has(cred.providerId);
+                          const isCurrentProvider = currentSession?.model?.providerId === cred.providerId;
+                          return (
+                            <div key={cred.providerId}>
+                              <button
+                                onClick={() => toggleProvider(cred.providerId)}
+                                className={cn(
+                                  'flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-xs hover:bg-accent',
+                                  isCurrentProvider && 'bg-accent/30',
+                                )}
+                              >
+                                {isExpanded ? (
+                                  <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                ) : (
+                                  <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                )}
+                                <Key className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                <span className="flex-1 truncate font-medium text-foreground">{cred.label}</span>
+                                {cred.models.length > 0 && (
+                                  <span className="text-[9px] text-muted-foreground">{cred.models.length}</span>
+                                )}
+                              </button>
+                              {isExpanded && (
+                                <div className="border-l border-border/30 ml-3">
+                                  {cred.models.length === 0 ? (
+                                    <div className="px-2 py-1 text-[9px] text-muted-foreground/70">
+                                      未配置模型
+                                    </div>
+                                  ) : (
+                                    cred.models.map((m) => {
+                                      const isCurrentModel = isCurrentProvider &&
+                                        currentSession?.model?.id === m.id;
+                                      return (
+                                        <button
+                                          key={`${cred.providerId}:${m.id}`}
+                                          onClick={() => handleSetModel(
+                                            cred.providerId,
+                                            m.id,
+                                            m.name,
+                                            cred.providerId,
+                                          )}
+                                          className={cn(
+                                            'flex w-full flex-col items-start gap-0.5 px-2 py-1.5 text-left text-xs hover:bg-accent',
+                                            isCurrentModel && 'bg-accent/50',
+                                          )}
+                                        >
+                                          <div className="flex items-center gap-1">
+                                            {isCurrentModel && <Check className="h-2.5 w-2.5 text-primary" />}
+                                            <span className="font-medium text-foreground">{m.name}</span>
+                                          </div>
+                                          <span className="text-[9px] text-muted-foreground">{m.id}</span>
+                                          <span className="text-[9px] text-muted-foreground/70">
+                                            上下文 {(m.contextWindow / 1000).toFixed(0)}k
+                                          </span>
+                                        </button>
+                                      );
+                                    })
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })
+                      )}
                     </div>
                   </>
                 )}

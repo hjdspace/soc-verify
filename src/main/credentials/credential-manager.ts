@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { app } from 'electron';
-import type { CredentialEntry, CredentialInput, CredentialUpdateInput } from '@shared/types';
+import type { CredentialEntry, CredentialInput, CredentialUpdateInput, ConfiguredModel } from '@shared/types';
 
 const CREDENTIALS_FILE = 'credentials.json';
 
@@ -11,7 +11,7 @@ interface StoredCredential {
   label: string;
   apiKey: string;
   baseUrl?: string;
-  model?: string;
+  models: ConfiguredModel[];
   createdAt: number;
 }
 
@@ -27,7 +27,12 @@ class CredentialManagerImpl {
   async loadAll(): Promise<StoredCredential[]> {
     try {
       const content = await readFile(this.credentialsPath, 'utf-8');
-      return JSON.parse(content) as StoredCredential[];
+      const parsed = JSON.parse(content) as StoredCredential[];
+      // Migration: ensure all entries have a models array (old entries may not).
+      return parsed.map((c) => ({
+        ...c,
+        models: Array.isArray(c.models) ? c.models : [],
+      }));
     } catch {
       return [];
     }
@@ -47,7 +52,7 @@ class CredentialManagerImpl {
       label: input.label || input.providerId,
       apiKey: input.apiKey,
       baseUrl: input.baseUrl,
-      model: input.model,
+      models: input.models ?? [],
       createdAt: idx >= 0 ? all[idx].createdAt : Date.now(),
     };
 
@@ -59,20 +64,14 @@ class CredentialManagerImpl {
 
     await this.persist(all);
 
-    return {
-      providerId: stored.providerId,
-      label: stored.label,
-      apiKeyMasked: stored.apiKey.slice(0, 4) + '***',
-      baseUrl: stored.baseUrl,
-      model: stored.model,
-      createdAt: stored.createdAt,
-    };
+    return this.toMasked(stored);
   }
 
   /**
    * Partially update an existing credential.
    * Only the provided fields are changed; omitted fields keep their current value.
    * `apiKey` is optional — when omitted, the existing key is preserved.
+   * `models` is optional — when omitted, the existing models are preserved.
    * Throws if the credential does not exist.
    */
   async update(input: CredentialUpdateInput): Promise<CredentialEntry> {
@@ -88,20 +87,13 @@ class CredentialManagerImpl {
       label: input.label !== undefined ? (input.label || existing.providerId) : existing.label,
       apiKey: input.apiKey !== undefined && input.apiKey !== '' ? input.apiKey : existing.apiKey,
       baseUrl: input.baseUrl !== undefined ? (input.baseUrl || undefined) : existing.baseUrl,
-      model: input.model !== undefined ? (input.model || undefined) : existing.model,
+      models: input.models !== undefined ? input.models : existing.models,
       createdAt: existing.createdAt,
     };
     all[idx] = updated;
     await this.persist(all);
 
-    return {
-      providerId: updated.providerId,
-      label: updated.label,
-      apiKeyMasked: updated.apiKey.slice(0, 4) + '***',
-      baseUrl: updated.baseUrl,
-      model: updated.model,
-      createdAt: updated.createdAt,
-    };
+    return this.toMasked(updated);
   }
 
   async delete(providerId: string): Promise<void> {
@@ -113,14 +105,7 @@ class CredentialManagerImpl {
   /** Return masked entries for UI display */
   async listMasked(): Promise<CredentialEntry[]> {
     const all = await this.loadAll();
-    return all.map((c) => ({
-      providerId: c.providerId,
-      label: c.label,
-      apiKeyMasked: c.apiKey.slice(0, 4) + '***',
-      baseUrl: c.baseUrl,
-      model: c.model,
-      createdAt: c.createdAt,
-    }));
+    return all.map((c) => this.toMasked(c));
   }
 
   /** Return raw credentials for internal use (passing to agent runner etc.) */
@@ -176,6 +161,29 @@ class CredentialManagerImpl {
     }
 
     return env;
+  }
+
+  /**
+   * Find a specific model's context window from stored credentials.
+   * Returns the configured contextWindow for the given providerId + modelId,
+   * or undefined if not found.
+   */
+  async getModelContextWindow(providerId: string, modelId: string): Promise<number | undefined> {
+    const cred = await this.get(providerId);
+    if (!cred) return undefined;
+    const model = cred.models.find((m) => m.id === modelId);
+    return model?.contextWindow;
+  }
+
+  private toMasked(c: StoredCredential): CredentialEntry {
+    return {
+      providerId: c.providerId,
+      label: c.label,
+      apiKeyMasked: c.apiKey.slice(0, 4) + '***',
+      baseUrl: c.baseUrl,
+      models: c.models,
+      createdAt: c.createdAt,
+    };
   }
 
   private async persist(credentials: StoredCredential[]): Promise<void> {

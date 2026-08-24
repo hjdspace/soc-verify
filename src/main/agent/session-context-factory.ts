@@ -26,6 +26,7 @@ import { buildMultiDirSystemPrompt } from './multi-dir-prompt';
 import { projectManager } from '../project/project-manager';
 import type { CaseStatsService } from '../case/case-stats-service';
 import type { ApprovalMode, SeedHistoryMessage } from './types';
+import type { ConfiguredModel } from '@shared/types';
 
 /** Subset of persisted session model info used for credential/provider fallback. */
 export type PersistedModelRef = {
@@ -64,6 +65,9 @@ export type SessionContextOptions = {
   systemPrompt?: string;
   /** Persisted model info — used for credential/provider/model fallback. */
   persistedModel?: PersistedModelRef;
+  /** Configured models for this provider (from settings). When provided,
+   *  createSession uses these instead of fetching from the API. */
+  configuredModels?: ConfiguredModel[];
   /** 工具审批模式 */
   approvalMode?: ApprovalMode;
 };
@@ -147,6 +151,13 @@ export async function createSessionContext(options: SessionContextOptions): Prom
   const systemPrompt = await injectKbContext(basePrompt, cwd);
 
   // 7. Create the runtime session
+  const configuredModels = cred?.models;
+  // Resolve the contextWindow for the specific model being used.
+  // Each model can have its own contextWindow — fall back to the global setting.
+  const modelContextWindow = configuredModels && options.model
+    ? configuredModels.find((m) => m.id === options.model)?.contextWindow
+    : undefined;
+
   const sessionId = await sessionManager.createSession({
     projectId,
     cwd,
@@ -171,6 +182,8 @@ export async function createSessionContext(options: SessionContextOptions): Prom
     env: credEnv,
     systemPrompt,
     approvalMode: options.approvalMode,
+    configuredModels,
+    contextWindow: modelContextWindow,
   });
 
   // 8. Read back the resolved model (may differ from input when createSession

@@ -1,4 +1,5 @@
 import { DEFAULT_CONTEXT_WINDOW } from '@shared/context-management';
+import type { ConfiguredModel } from '@shared/types';
 
 export const OPENAI_COMPATIBLE_PROVIDER = 'socverify-openai-compatible';
 export const OPENAI_COMPATIBLE_API_KEY_ENV = 'SOCVERIFY_AGENT_API_KEY';
@@ -119,6 +120,41 @@ export function buildOpenAICompatibleModelsConfig({
           // list, omp silently replaces images with a placeholder text
           // ("[image omitted: model does not support vision]"), causing the
           // LLM to respond as if no image was attached.
+          input: ['text', 'image'],
+        })),
+      },
+    },
+  } as const;
+}
+
+/**
+ * Build a models.json config where each model has its own contextWindow.
+ * Used when the user has configured models with individual context window sizes
+ * in the settings UI — no global contextWindow is applied.
+ */
+export function buildOpenAICompatibleModelsWithPerModelContext({
+  baseUrl,
+  models,
+  apiKeyEnvVar,
+}: {
+  baseUrl: string;
+  models: ConfiguredModel[];
+  apiKeyEnvVar: string;
+}) {
+  return {
+    providers: {
+      [OPENAI_COMPATIBLE_PROVIDER]: {
+        baseUrl: ensureV1Prefix(baseUrl),
+        api: 'openai-completions',
+        apiKey: apiKeyEnvVar,
+        authHeader: true,
+        disableStrictTools: true,
+        models: models.map((m) => ({
+          id: m.id,
+          name: m.name,
+          supportsTools: true,
+          contextWindow: m.contextWindow,
+          maxTokens: 8192,
           input: ['text', 'image'],
         })),
       },

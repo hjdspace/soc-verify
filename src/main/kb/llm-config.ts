@@ -173,7 +173,7 @@ export async function resolveKbLlmConfig(): Promise<LlmConfig | null> {
     if (cred?.baseUrl && cred.apiKey) {
       const baseUrl = baseUrlForCredential(cred);
       const model = kbSettings.llm.model?.trim()
-        || cred.model?.trim()
+        || cred.models[0]?.id.trim()
         || await firstAvailableModel(cred, baseUrl);
       return { baseUrl, apiKey: cred.apiKey, model, providerId: cred.providerId };
     }

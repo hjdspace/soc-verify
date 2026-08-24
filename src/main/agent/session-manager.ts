@@ -10,12 +10,14 @@ import type { CustomToolDefinition, InitConfig, ApprovalMode, SeedHistoryMessage
 import {
   buildModelInputOverrideConfig,
   buildOpenAICompatibleModelsConfig,
+  buildOpenAICompatibleModelsWithPerModelContext,
   ensureV1Prefix,
   fetchOpenAICompatibleModels,
   OPENAI_COMPATIBLE_API_KEY_ENV,
   OPENAI_COMPATIBLE_PROVIDER,
   type OpenAICompatibleModel,
 } from './openai-compatible';
+import type { ConfiguredModel } from '@shared/types';
 import type { SubsysDiscovery } from '../host/discovery';
 import type { PluginBackedSimulation, PluginBackedCoverage } from '../plugin-adapters';
 import { HostToolsRegistry } from '../host/host-tools';
@@ -173,6 +175,9 @@ export interface CreateSessionOptions {
   systemPrompt?: string;
   /** Model context window advertised to omp. Falls back to the global setting. */
   contextWindow?: number;
+  /** User-configured models for this provider. When provided, createSession
+   *  uses these instead of fetching from the API. Each model has its own contextWindow. */
+  configuredModels?: ConfiguredModel[];
   discovery?: SubsysDiscovery;
   simulationAdapter?: PluginBackedSimulation | null;
   coverageAdapter?: PluginBackedCoverage | null;
@@ -338,21 +343,45 @@ export class SessionManagerImpl extends EventEmitter {
     let model = options.model;
     let runtimeDir: string | undefined;
     const env = { ...options.env };
+    // Per-model contextWindow — resolved when configuredModels is available;
+    // falls back to the global contextWindow. Declared at function scope so
+    // the InitConfig below can reference it.
+    let modelContextWindow: number | undefined;
 
     if (options.baseUrl && options.apiKey) {
-      // Fetch ALL models from the API so we can write the complete list to
-      // models.json. This is essential for runtime model switching via the
-      // omp engine's `set_model` RPC — if a model isn't in models.json,
-      // `set_model` silently fails and messages are still sent with the old
-      // model (causing 503 errors when the user switches models in RightPanel).
+      const baseUrlValue = options.baseUrl;
+      const apiKeyValue = options.apiKey;
+      // Use user-configured models when available; otherwise fetch from the API.
+      // Each configured model has its own contextWindow — we write them all to
+      // models.json so the omp engine's `set_model` RPC can switch to any of
+      // them at runtime with the correct context window.
       let allModels: OpenAICompatibleModel[] = [];
-      try {
-        allModels = await fetchOpenAICompatibleModels({
-          baseUrl: options.baseUrl,
-          apiKey: options.apiKey,
-        });
-      } catch (err) {
-        console.warn(`[agent:session:${sessionId}] failed to fetch model list: ${err instanceof Error ? err.message : String(err)}`);
+      modelContextWindow = contextWindow;
+
+      if (options.configuredModels && options.configuredModels.length > 0) {
+        // Convert ConfiguredModel[] to OpenAICompatibleModel[] for models.json
+        allModels = options.configuredModels.map((m) => ({ id: m.id, name: m.name }));
+        // Use the selected model's contextWindow if available
+        if (model) {
+          const configured = options.configuredModels.find((m) => m.id === model);
+          if (configured) {
+            modelContextWindow = configured.contextWindow;
+          }
+        }
+      } else {
+        // Fallback: fetch ALL models from the API so we can write the complete
+        // list to models.json. This is essential for runtime model switching via
+        // the omp engine's `set_model` RPC — if a model isn't in models.json,
+        // `set_model` silently fails and messages are still sent with the old
+        // model (causing 503 errors when the user switches models in RightPanel).
+        try {
+          allModels = await fetchOpenAICompatibleModels({
+            baseUrl: baseUrlValue,
+            apiKey: apiKeyValue,
+          });
+        } catch (err) {
+          console.warn(`[agent:session:${sessionId}] failed to fetch model list: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
       if (!model) {
         model = allModels[0]?.id;
@@ -365,13 +394,20 @@ export class SessionManagerImpl extends EventEmitter {
       }
 
       runtimeDir = await mkdtemp(join(tmpdir(), 'socverify-agent-'));
-      const modelsConfig = buildOpenAICompatibleModelsConfig({
-        baseUrl: options.baseUrl,
-        modelId: model,
-        models: allModels,
-        apiKeyEnvVar: OPENAI_COMPATIBLE_API_KEY_ENV,
-        contextWindow,
-      });
+      // Build models config with per-model contextWindow when configuredModels is available
+      const modelsConfig = options.configuredModels && options.configuredModels.length > 0
+        ? buildOpenAICompatibleModelsWithPerModelContext({
+            baseUrl: baseUrlValue,
+            models: options.configuredModels,
+            apiKeyEnvVar: OPENAI_COMPATIBLE_API_KEY_ENV,
+          })
+        : buildOpenAICompatibleModelsConfig({
+            baseUrl: baseUrlValue,
+            modelId: model,
+            models: allModels,
+            apiKeyEnvVar: OPENAI_COMPATIBLE_API_KEY_ENV,
+            contextWindow: modelContextWindow,
+          });
       const modelsJson = JSON.stringify(modelsConfig);
       // Write both models.json (legacy) and models.yml (preferred by ConfigFile).
       // JSON is valid YAML (YAML is a superset of JSON), so the ConfigFile's
@@ -382,14 +418,14 @@ export class SessionManagerImpl extends EventEmitter {
       console.log(`[agent:session:${sessionId}] runtimeDir: ${runtimeDir}`);
       env.PI_CODING_AGENT_DIR = runtimeDir;
       env.XDG_STATE_HOME = join(runtimeDir, 'state');
-      env[OPENAI_COMPATIBLE_API_KEY_ENV] = options.apiKey;
+      env[OPENAI_COMPATIBLE_API_KEY_ENV] = apiKeyValue;
       // Also set OPENAI_API_KEY / OPENAI_BASE_URL so the omp engine's
       // openai-completions provider can resolve the key via $env fallback
       // (resolveOpenAIRequestSetup checks options.apiKey, then $env.OPENAI_API_KEY).
       // This is critical for packaged builds where the env var might not be
       // propagated through other paths.
-      if (!env.OPENAI_API_KEY) env.OPENAI_API_KEY = options.apiKey;
-      if (options.baseUrl && !env.OPENAI_BASE_URL) env.OPENAI_BASE_URL = ensureV1Prefix(options.baseUrl);
+      if (!env.OPENAI_API_KEY) env.OPENAI_API_KEY = apiKeyValue;
+      if (baseUrlValue && !env.OPENAI_BASE_URL) env.OPENAI_BASE_URL = ensureV1Prefix(baseUrlValue);
       provider = OPENAI_COMPATIBLE_PROVIDER;
     } else if (provider && model) {
       // Built-in provider path (e.g. user supplied only an API key, no baseUrl).
@@ -495,7 +531,7 @@ export class SessionManagerImpl extends EventEmitter {
       resumeSessionId: options.resumeSessionId,
       seedHistory: options.seedHistory,
       systemPrompt: options.systemPrompt,
-      contextWindow,
+      contextWindow: modelContextWindow ?? contextWindow,
       customToolDefinitions,
       additionalExtensionPaths,
       approvalMode: options.approvalMode,

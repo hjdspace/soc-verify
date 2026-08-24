@@ -27,8 +27,20 @@ import { HOST_TOOL_NAMES, HOST_TOOL_GROUPS } from '../../host/tool-catalog';
 import { BUILTIN_TOOL_CATALOG, getBuiltinLabel, getBuiltinDescription } from '../../host/builtin-tool-catalog';
 import { themeSettings } from '../../agent/theme-settings';
 import type { TvConfig } from '../../timing-violation/types';
-import type { CredentialInput, CredentialUpdateInput, CreateSkillInput, McpConfigFile, McpToolInfo } from '@shared/types';
+import type { CredentialInput, CredentialUpdateInput, ConfiguredModel, CreateSkillInput, McpConfigFile, McpToolInfo } from '@shared/types';
 import { MAX_CONTEXT_WINDOW, MIN_CONTEXT_WINDOW } from '@shared/context-management';
+
+/** Type guard: validate a ConfiguredModel object from raw input. */
+function isValidConfiguredModel(value: unknown): value is ConfiguredModel {
+  if (typeof value !== 'object' || value === null) return false;
+  const m = value as Record<string, unknown>;
+  return (
+    typeof m.id === 'string' && m.id.length > 0 &&
+    typeof m.name === 'string' &&
+    typeof m.contextWindow === 'number' && Number.isInteger(m.contextWindow) &&
+    m.contextWindow >= MIN_CONTEXT_WINDOW && m.contextWindow <= MAX_CONTEXT_WINDOW
+  );
+}
 
 export const settingsRouter = t.router({
   getContextWindow: t.procedure.query(() => contextSettings.getContextWindow()),
@@ -125,11 +137,18 @@ export const settingsRouter = t.router({
   setCredential: t.procedure
     .input((raw): { input: CredentialInput } => {
       const r = raw as Record<string, unknown>;
-      const inp = r.input as CredentialInput;
+      const inp = r.input as Partial<CredentialInput>;
       if (!inp || typeof inp.providerId !== 'string' || typeof inp.apiKey !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid credential input' });
       }
-      return { input: inp };
+      const result: CredentialInput = {
+        providerId: inp.providerId,
+        label: typeof inp.label === 'string' ? inp.label : '',
+        apiKey: inp.apiKey,
+        baseUrl: typeof inp.baseUrl === 'string' ? inp.baseUrl : undefined,
+        models: Array.isArray(inp.models) ? inp.models.filter(isValidConfiguredModel) : undefined,
+      };
+      return { input: result };
     })
     .mutation(async ({ input }) => {
       return credentialManager.save(input.input);
@@ -147,6 +166,7 @@ export const settingsRouter = t.router({
         label: typeof inp.label === 'string' ? inp.label : undefined,
         apiKey: typeof inp.apiKey === 'string' && inp.apiKey !== '' ? inp.apiKey : undefined,
         baseUrl: typeof inp.baseUrl === 'string' ? inp.baseUrl : undefined,
+        models: Array.isArray(inp.models) ? inp.models.filter(isValidConfiguredModel) : undefined,
       };
       return { input: result };
     })
