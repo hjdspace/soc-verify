@@ -224,9 +224,14 @@ export function getSubsysWithCaseCount(
 // ─── 搜索 ────────────────────────────────────────────────
 
 /**
- * 搜索用例（LIKE 子串匹配）。
+ * 搜索用例（LIKE 子串匹配，对 name / path / file_path 三字段做 OR 查询）。
  *
- * SELECT * FROM cases WHERE name LIKE '%query%' [AND subsys=?] LIMIT ?
+ * SELECT … FROM cases
+ *   WHERE (name LIKE '%q%' OR path LIKE '%q%' OR file_path LIKE '%q%')
+ *   [AND subsys = ?] LIMIT ?
+ *
+ * 这样用户输入 "mini" 时，除了 case name 中包含 "mini" 的用例，
+ * 路径中包含 "mini" 的 .cfg 文件所定义的全部用例也会被返回。
  */
 export function searchCases(
   db: Database.Database,
@@ -237,8 +242,9 @@ export function searchCases(
   const q = query.trim();
   if (!q) return [];
 
-  const conditions = ['name LIKE @query'];
-  const params: Record<string, unknown> = { query: `%${q}%` };
+  const likeParam = `%${q}%`;
+  const conditions = ['(name LIKE @query OR path LIKE @query OR file_path LIKE @query)'];
+  const params: Record<string, unknown> = { query: likeParam };
 
   if (subsys) {
     conditions.push('subsys = @subsys');
