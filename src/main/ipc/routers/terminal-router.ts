@@ -26,7 +26,15 @@ export const terminalRouter = t.router({
         if (project) {
           if (!cwd) cwd = project.rootPath;
           const config = await loadEnvConfig(project.rootPath);
-          if (config) env = buildEnvFromConfig(config);
+          if (config) {
+            const configuredEnv = buildEnvFromConfig(config);
+            // PATH and LD_LIBRARY_PATH are login-shell/module state. A saved
+            // snapshot can be stale and would override the cshrc setup that
+            // selects the user's Python and EDA tool versions.
+            delete configuredEnv.PATH;
+            delete configuredEnv.LD_LIBRARY_PATH;
+            env = configuredEnv;
+          }
         }
       }
       const session = await terminalManager.create({

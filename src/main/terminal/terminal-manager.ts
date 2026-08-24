@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { userInfo } from 'node:os';
 import type * as NodePty from 'node-pty';
-import { getLoginShellEnv } from '../env/login-shell-env';
 
 /** Which PTY backend a terminal session is using. */
 export type TerminalBackend = 'node-pty' | 'fallback' | 'log-mode';
@@ -472,15 +471,13 @@ export class TerminalManager extends EventEmitter {
     const cwd = cwdResult.effective;
     const cols = opts.cols ?? 80;
     const rows = opts.rows ?? 24;
-    // Use the login shell's full environment (which includes .bashrc / .cshrc /
-    // .profile / module init PATH extensions) instead of the minimal systemd
-    // environment that the Electron main process inherits. Without this,
-    // EDA tool paths (e.g. /tools/opensources/python/.../bin) are invisible
-    // inside the built-in terminal, and `which python` resolves to /bin/python.
-    // Use caller-specified shell, or find one automatically
+    // Let the PTY shell initialize itself exactly once. Pre-capturing a login
+    // shell with getLoginShellEnv() and passing that result into another csh
+    // would carry LOADEDMODULES/MODULEPATH into the second .cshrc, causing
+    // module conflicts and falling back to system tools such as /bin/python.
+    // Project values are supplied by opts.env; shell startup owns PATH setup.
     const shell = opts.shell ?? findShell();
-    const loginEnv = await getLoginShellEnv(shell);
-    const env = mergeTerminalEnvs(loginEnv, opts.env);
+    const env = mergeTerminalEnvs(process.env as Record<string, string>, opts.env);
     const shellArgs = getInteractiveShellArgs(shell);
 
     const session: TerminalSession = {
@@ -855,13 +852,11 @@ export class TerminalManager extends EventEmitter {
     // Validate cwd — prevent spawn ENOENT from non-existent working directory
     const cwdResult = validateCwd(opts.cwd ?? process.cwd());
     const cwd = cwdResult.effective;
-    // Use the login shell environment so EDA tool paths and module init
-    // variables are visible to the spawned command, matching what the user
-    // would get in an external terminal.
-    // Use the same shell for environment capture and command execution.
+    // Do not pre-capture and reuse a login shell environment here. For csh,
+    // that would initialize modules once during capture and again when this
+    // command shell sources .cshrc. Let the login shell initialize once.
     const shell = opts.shell ?? findSimShell();
-    const loginEnv = await getLoginShellEnv(shell);
-    const env = mergeTerminalEnvs(loginEnv, opts.env);
+    const env = mergeTerminalEnvs(process.env as Record<string, string>, opts.env);
 
     const session: TerminalSession = {
       id,
@@ -924,7 +919,7 @@ export class TerminalManager extends EventEmitter {
     // Use caller-specified shell, or find one suitable for simulation (csh on Linux)
     const isWin = process.platform === 'win32';
     // On Windows, use `powershell -Command "..."`; on Unix, `shell -c "..."`
-    const shellArgs = isWin ? ['-NoProfile', '-Command', opts.command] : ['-c', opts.command];
+    const shellArgs = isWin ? ['-NoProfile', '-Command', opts.command] : ['-l', '-c', opts.command];
 
     let child: ChildProcess;
     try {
@@ -1013,10 +1008,9 @@ export class TerminalManager extends EventEmitter {
     // Validate cwd
     const cwdResult = validateCwd(opts.cwd ?? process.cwd());
     const cwd = cwdResult.effective;
-    // Use the login shell environment so the external terminal inherits the
-    // same EDA tool paths and module init variables as a regular terminal.
-    const loginEnv = await getLoginShellEnv();
-    const env = { ...loginEnv, ...opts.env } as Record<string, string>;
+    // The external terminal performs its own login initialization. Passing a
+    // pre-captured csh environment here would repeat module setup as well.
+    const env = mergeTerminalEnvs(process.env as Record<string, string>, opts.env);
 
     // Build the full command: cd to cwd && run the command && keep terminal open
     // The `; exec bash` keeps the terminal open after the command finishes
