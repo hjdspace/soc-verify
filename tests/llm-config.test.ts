@@ -153,7 +153,7 @@ describe('resolveKbLlmConfig', () => {
       providerId: 'kb-cred',
       apiKey: 'sk-kb',
       baseUrl: 'http://kb.example:3000',
-      model: 'cred-model',
+      models: [{ id: 'cred-model', name: 'cred-model', contextWindow: 0 }],
     });
 
     const config = await resolveKbLlmConfig();
@@ -430,7 +430,7 @@ describe('resolveKbLlmConfig', () => {
       providerId: 'kb-cred',
       apiKey: 'sk-kb',
       baseUrl: 'http://kb.example:3000',
-      model: '',
+      models: [],
     });
 
     const fetchMock = vi.fn(async (url: string | URL | Request): Promise<Response> => {

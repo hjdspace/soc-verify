@@ -16,6 +16,7 @@
 import { credentialManager } from '../credentials/credential-manager';
 import { kbSettingsManager } from './kb-settings';
 import { ensureV1Prefix, fetchOpenAICompatibleModels } from '../agent/openai-compatible';
+import type { ConfiguredModel } from '@shared/types';
 import { loadSessions } from '../agent/session-persistence';
 import { projectManager } from '../project/project-manager';
 
@@ -37,6 +38,7 @@ type ActiveCredential = {
   apiKey: string;
   baseUrl?: string;
   model?: string;
+  models?: ConfiguredModel[];
 };
 
 /** resolveActiveCredential 结果：生效凭证 + Agent 面板实际使用的模型 ID */
@@ -173,7 +175,7 @@ export async function resolveKbLlmConfig(): Promise<LlmConfig | null> {
     if (cred?.baseUrl && cred.apiKey) {
       const baseUrl = baseUrlForCredential(cred);
       const model = kbSettings.llm.model?.trim()
-        || cred.models[0]?.id.trim()
+        || cred.models?.[0]?.id.trim()
         || await firstAvailableModel(cred, baseUrl);
       return { baseUrl, apiKey: cred.apiKey, model, providerId: cred.providerId };
     }

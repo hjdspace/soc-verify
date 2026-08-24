@@ -289,10 +289,13 @@ describe('CaseStatsService — DB-backed (ADR 0017 Issue #4)', () => {
       seedDb(db);
       const service = new CaseStatsService({ db });
 
+      // searchCases matches name, path, and file_path — all three cpu_alu_*
+      // and cpu_reg_write share file_path '/tests/alu_tests.cfg' which contains 'alu'
       const result = await service.searchCases('alu');
-      expect(result).toHaveLength(2);
+      expect(result).toHaveLength(3);
       expect(result.some((c) => c.name === 'cpu_alu_basic')).toBe(true);
       expect(result.some((c) => c.name === 'cpu_alu_overflow')).toBe(true);
+      expect(result.some((c) => c.name === 'cpu_reg_write')).toBe(true);
     });
 
     it('returns empty for no match', async () => {

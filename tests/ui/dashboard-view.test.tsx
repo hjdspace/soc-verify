@@ -61,8 +61,8 @@ vi.mock('@renderer/stores/dashboard', () => ({
   useDashboardStore: (selector: (s: typeof mocks.dash) => unknown) => selector(mocks.dash),
 }));
 
-vi.mock('@renderer/stores/session', () => ({
-  useSessionStore: (selector: (s: typeof mocks.sess) => unknown) => selector(mocks.sess),
+vi.mock('@renderer/stores/session-core', () => ({
+  useSessionCoreStore: (selector: (s: typeof mocks.sess) => unknown) => selector(mocks.sess),
 }));
 
 vi.mock('@renderer/stores/project', () => ({
