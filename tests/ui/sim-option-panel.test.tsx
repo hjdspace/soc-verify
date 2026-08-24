@@ -11,7 +11,7 @@ import type { SimOptionField } from '@shared/plugin-types';
  * 命令预览 / 复制 / 运行仿真 / CASE 缺失警告 已移至 SimCommandBar
  * 组件（位于 SimulationView 中栏底部），相关测试见下方独立 describe。
  *
- * Mock 策略与 OptionDock.test.tsx 一致：
+ * Mock 策略：
  * - trpc: project.getSimOptionsSchema / getSimOptionPresets / saveSimOptionPreset / simulation.pickRegrFile
  * - stores: ui / project / simulation / toast
  */
