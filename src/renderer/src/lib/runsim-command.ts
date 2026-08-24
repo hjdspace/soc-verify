@@ -2,19 +2,19 @@
  * runsim 命令生成工具（前端预览用）+ 命令解析和修改工具
  *
  * 此模块包含两部分：
- * 1. 命令生成（generateRunsimCommand）— 复刻插件逻辑，用于 OptionDock 预览
+ * 1. 命令生成（generateRunsimCommand）— 复刻插件逻辑，用于 SimOptionPanel 预览
  * 2. 命令解析和修改（parseRunsimCommand, modifyCommandOptions 等）— 用于 SimControlToolbar
  *
  * 第二部分参考 Python GUI 的 `utils/command_generator.py` CommandParser 类。
  */
 
 // ═══════════════════════════════════════════════════════════════════════
-// Part 1: 命令生成（原始实现，供 OptionDock 使用）
+// Part 1: 命令生成（原始实现，供 SimOptionPanel 使用）
 // ═══════════════════════════════════════════════════════════════════════
 
 /**
  * 此函数复刻 `unisoc-simulation-runner` 插件的 `generateRunsimCommand()` 逻辑，
- * 用于在 OptionDock 底部命令预览栏实时展示将要执行的 runsim 命令。
+ * 用于在 SimOptionPanel 命令预览栏实时展示将要执行的 runsim 命令。
  *
  * 注意：此函数仅用于预览，实际执行的命令由后端插件生成。
  * 若两者不一致，以插件为准。
