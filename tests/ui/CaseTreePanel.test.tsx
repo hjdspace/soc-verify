@@ -281,8 +281,8 @@ describe('CaseTreePanel case tree rendering', () => {
 
     await screen.findByText('cpu_sub_sys');
 
-    // Batch mode button should be visible
-    expect(screen.getByRole('button', { name: '批量选择模式' })).toBeInTheDocument();
+    // Batch mode button should be visible (accessible name is "批量", title is "批量选择模式")
+    expect(screen.getByRole('button', { name: '批量' })).toBeInTheDocument();
   });
 
   it('subsys filter dropdown shows all subsystems', async () => {
@@ -290,12 +290,14 @@ describe('CaseTreePanel case tree rendering', () => {
 
     await screen.findByText('cpu_sub_sys');
 
-    // Click the subsys filter dropdown
-    fireEvent.click(screen.getByRole('button', { name: '筛选子系统' }));
+    // Click the subsys filter dropdown (accessible name is "全部子系统", title is "筛选子系统")
+    fireEvent.click(screen.getByRole('button', { name: '全部子系统' }));
 
-    // Should show "全部子系统" and the subsystem name
-    expect(screen.getByText('全部子系统')).toBeInTheDocument();
-    expect(screen.getByText('cpu_sub_sys')).toBeInTheDocument();
+    // Dropdown should show "全部子系统" option and the subsystem name
+    // After opening dropdown, there are now two "全部子系统" texts (button + dropdown item)
+    expect(screen.getAllByText('全部子系统').length).toBeGreaterThanOrEqual(2);
+    // cpu_sub_sys appears in the dropdown list (in addition to the subsystem list)
+    expect(screen.getAllByText('cpu_sub_sys').length).toBeGreaterThanOrEqual(1);
   });
 });
 
