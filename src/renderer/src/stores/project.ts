@@ -404,7 +404,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           projectId: currentProjectId,
           uiLayout: {
             rightPanelCollapsed: useUiStore.getState().rightPanelCollapsed,
-            optionDockExpanded: useUiStore.getState().optionDockExpanded,
             pluginViews: useUiStore.getState().pluginViewLayouts,
             activeView: useUiStore.getState().activeView,
             aiPanelMode: useUiStore.getState().aiPanelMode,
