@@ -494,12 +494,7 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
     <div className="flex h-full flex-1 flex-col overflow-hidden">
       {/* 工具栏 */}
       <div className="flex items-center justify-between border-b bg-secondary/20 px-3 py-1">
-        <Breadcrumb filePath={filePath} onNavigate={(dirPath) => {
-          // 导航到父目录 — 在文件树中定位
-          const parts = dirPath.split(/[/\\]/).filter((p) => p.length > 0);
-          const dirName = parts[parts.length - 1] ?? dirPath;
-          openDestination({ type: 'file', path: dirPath, name: dirName });
-        }} />
+        <Breadcrumb filePath={filePath} />
         <div className="flex items-center gap-2">
           {isDirty && (
             <span className="text-[10px] text-status-aborted-foreground">● 已修改</span>

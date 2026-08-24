@@ -12,6 +12,9 @@ const { trpc } = vi.hoisted(() => ({
       },
       writeFile: { mutate: vi.fn().mockResolvedValue(undefined) },
       openInExternalBrowser: { mutate: vi.fn().mockResolvedValue(undefined) },
+      getDirChildren: { query: vi.fn().mockResolvedValue([]) },
+      getFileDiff: { query: vi.fn().mockResolvedValue({ lines: [], hunks: [], totalAdd: 0, totalDel: 0, filePath: '', isNewFile: false }) },
+      applyDiffRejections: { mutate: vi.fn().mockResolvedValue(undefined) },
     },
     system: {
       openExternal: { mutate: vi.fn().mockResolvedValue(undefined) },
@@ -115,6 +118,16 @@ vi.mock('@renderer/stores/theme', () => ({
 vi.mock('@renderer/stores/workbench', () => ({
   useWorkbenchStore: vi.fn((selector: (state: Record<string, unknown>) => unknown) =>
     selector({ open: vi.fn() }),
+  ),
+  openFileDestination: vi.fn(),
+}));
+
+vi.mock('@renderer/stores/project', () => ({
+  useProjectStore: Object.assign(
+    vi.fn((selector: (state: Record<string, unknown>) => unknown) =>
+      selector({ currentProjectId: 'proj-1', extraDirs: [] }),
+    ),
+    { getState: () => ({ currentProjectId: 'proj-1', extraDirs: [] }), subscribe: vi.fn() },
   ),
 }));
 
@@ -584,10 +597,14 @@ describe('FileEditor — Breadcrumb navigation', () => {
     expect(screen.getByTestId('breadcrumb-active').textContent).toBe('alu_add.sv');
   });
 
-  it('calls workbench open when clicking a non-active breadcrumb segment', async () => {
-    const { useWorkbenchStore } = await import('@renderer/stores/workbench');
-    const mockOpen = vi.fn();
-    vi.mocked(useWorkbenchStore).mockReturnValue(mockOpen);
+  it('opens a dropdown listing sibling items when clicking a non-active breadcrumb segment', async () => {
+    // Mock getDirChildren to return sibling items of /my-chip/rtl
+    trpc.project.getDirChildren.query.mockResolvedValue([
+      { name: 'rtl', path: '/my-chip/rtl', type: 'directory', children: [], lazy: true },
+      { name: 'tb', path: '/my-chip/tb', type: 'directory', children: [], lazy: true },
+      { name: 'docs', path: '/my-chip/docs', type: 'directory', children: [], lazy: true },
+      { name: 'Makefile', path: '/my-chip/Makefile', type: 'file' },
+    ]);
 
     render(
       <FileEditor projectId="proj-1" filePath="/my-chip/rtl/alu_add.sv" fileName="alu_add.sv" />,
@@ -597,13 +614,19 @@ describe('FileEditor — Breadcrumb navigation', () => {
       expect(screen.getByTestId('codemirror-mock')).toBeTruthy();
     });
 
-    // Click 'rtl' segment
+    // Click 'rtl' segment — should open a dropdown
     fireEvent.click(screen.getByText('rtl'));
 
-    expect(mockOpen).toHaveBeenCalled();
-    const callArg = mockOpen.mock.calls[0][0];
-    expect(callArg.type).toBe('file');
-    expect(callArg.path).toBe('/my-chip/rtl');
+    // The dropdown should appear with sibling items
+    await waitFor(() => {
+      expect(screen.getByTestId('breadcrumb-dropdown')).toBeTruthy();
+    });
+
+    // Should list sibling directories and files from the parent (/my-chip)
+    expect(trpc.project.getDirChildren.query).toHaveBeenCalledWith({
+      projectId: 'proj-1',
+      dirPath: '/my-chip',
+    });
   });
 });
 

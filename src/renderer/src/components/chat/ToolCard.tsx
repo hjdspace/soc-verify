@@ -394,6 +394,10 @@ export function ToolCard({ message }: { message: ChatMessage }) {
   const toolName = message.toolName ?? '';
   const isFileTool = !isExecuting && FILE_TOOLS.has(toolName);
   const filePath = isFileTool ? extractEditFilePath(message.toolArgs, resultText) : '';
+  // 当 AI 读取的是一个目录时（EISDIR 错误），路径不应可点击——
+  // 点击会尝试在编辑器中打开目录，导致同样的 EISDIR 报错。
+  const isDirError = !isExecuting && /EISDIR/i.test(resultText);
+  const isClickablePath = isFileTool && filePath && !isDirError;
 
   const handlePathClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -458,7 +462,7 @@ export function ToolCard({ message }: { message: ChatMessage }) {
         <span className={cn('shrink-0 text-[11px] font-semibold', meta.color)}>
           {meta.label}
         </span>
-        {isFileTool && filePath ? (
+        {isClickablePath ? (
           <span
             onClick={handlePathClick}
             className="flex-1 min-w-0 truncate text-[11px] cursor-pointer text-status-running-foreground hover:underline"
