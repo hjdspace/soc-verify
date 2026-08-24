@@ -18,6 +18,7 @@ import { caseStatsRegistry } from '../../case/case-stats-registry';
 import { getRecentSimulationRuns } from '../../case/db/case-repository';
 import type { SimulationRunOptions } from '@shared/plugin-types';
 import type { SimulationRunRecord } from '../../simulation/simulation-manager';
+import type { SimulationStatus } from '@shared/types';
 
 type ListedRun = {
   runId: string;
@@ -193,11 +194,62 @@ export const simulationRouter = t.router({
     })
     .query(async ({ input }) => {
       const manager = getSimulationManager(input.projectId);
-      const detail = manager.getRunDetail(input.runId);
-      if (!detail) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: `Run not found: ${input.runId}` });
+
+      // 1. SimulationManager.history（后台仿真的 JSON 历史）
+      const fromHistory = manager.getRunDetail(input.runId);
+      if (fromHistory) return fromHistory;
+
+      // 2. simTerminalLinker（活跃的终端仿真运行）
+      const terminalRun = simTerminalLinker.getRun(input.runId);
+      if (terminalRun) {
+        return {
+          runId: terminalRun.runId,
+          caseId: terminalRun.caseId,
+          caseName: terminalRun.caseName ?? terminalRun.caseId,
+          subsys: terminalRun.subsys,
+          options: terminalRun.options,
+          status: terminalRun.status,
+          startTime: terminalRun.startTime,
+          endTime: terminalRun.endTime ?? 0,
+          duration: terminalRun.endTime != null
+            ? terminalRun.endTime - terminalRun.startTime
+            : Date.now() - terminalRun.startTime,
+        };
       }
-      return detail;
+
+      // 3. DB simulation_runs 表（已持久化的终端仿真和后台仿真）
+      const project = requireProject(input.projectId);
+      const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
+      const row = db.prepare(`
+        SELECT run_id, case_name, subsys, status, start_time, end_time,
+          duration_ms, options_json
+        FROM simulation_runs WHERE run_id = ?
+      `).get(input.runId) as {
+        run_id: string | null;
+        case_name: string;
+        subsys: string;
+        status: string;
+        start_time: string;
+        end_time: string | null;
+        duration_ms: number | null;
+        options_json: string | null;
+      } | undefined;
+
+      if (row) {
+        return {
+          runId: input.runId,
+          caseId: row.case_name,
+          caseName: row.case_name,
+          subsys: row.subsys,
+          options: row.options_json ? JSON.parse(row.options_json) as Record<string, unknown> : {},
+          status: row.status as SimulationStatus,
+          startTime: Date.parse(row.start_time),
+          endTime: row.end_time ? Date.parse(row.end_time) : 0,
+          duration: row.duration_ms ?? 0,
+        };
+      }
+
+      throw new TRPCError({ code: 'NOT_FOUND', message: `Run not found: ${input.runId}` });
     }),
 
   compareRuns: t.procedure
