@@ -1,28 +1,24 @@
 /**
- * SoC Verify Agent Runner
+ * SoC Verify Agent Runner — main loop
  *
  * A lightweight Bun entry point that uses the pi-coding-agent SDK directly
  * (not the RPC mode). Communicates with the Electron main process via JSONL
  * on stdin/stdout.
  *
- * This file lives in the main repository (not inside the engine submodule).
- * It can be:
- *   1. Pre-compiled into a standalone binary via `bun build --compile`
- *   2. Run directly by Bun when the engine submodule is present
+ * This file is the entry point for `bun build --compile`. It owns:
+ *   1. The readline main loop (stdin → command dispatch)
+ *   2. The handleCommand router (switch/case → handler modules)
+ *   3. The pendingToolCalls / pendingApprovalRequests maps (runner ↔ host)
+ *   4. The RunnerContext object (shared mutable state passed to handlers)
+ *
+ * All command handlers are extracted to runner/handlers/*.ts.
+ * Protocol layer (send, sendResponse, stdout guard, types) is in runner/protocol.ts.
+ * Pure utility functions (approval-logic, write-snapshot) remain in their
+ * respective modules.
  *
  * Protocol:
  *   host → runner (stdin):  JSONL commands (init, prompt, abort, steer, ...)
  *   runner → host (stdout): JSONL responses + events + tool_call requests
- *
- * Supported commands:
- *   { id, type: 'init', config: InitConfig }
- *   { id, type: 'prompt', message, images? }
- *   { id, type: 'abort' }
- *   { id, type: 'steer', message }
- *   { id, type: 'setModel', provider, modelId }
- *   { id, type: 'getMessages' }
- *   { id, type: 'getState' }
- *   { id, type: 'destroy' }
  *
  * Tool call protocol (runner → host → runner):
  *   runner → host: { type: 'tool_call', id, toolName, args }
@@ -30,253 +26,31 @@
  */
 
 import { createInterface } from "node:readline";
-import { attachWriteSnapshot, attachWriteSnapshotToStartEvent, captureWriteSnapshot } from "./write-snapshot";
-import { needsApproval, type ApprovalMode } from "./approval-logic";
+
+// Protocol layer: stdout guard, types, send/sendResponse/sendEvent — all
+// imported here so the guard is installed before any output is produced.
+import {
+	type Command,
+	type ToolResultMessage,
+	type ApprovalResponseMessage,
+	send,
+	sendResponse,
+	sendToolCall,
+} from "./protocol";
+import type { RunnerContext } from "./types";
+
+// Handler modules
+import { handleInit } from "./handlers/init";
+import { handlePrompt, handleAbort, handleSteer, handleSetModel, handleGetMessages, handleGetState, handleCompact, handleDestroy } from "./handlers/session";
+import { handleGetMcpStatus, handleGetMcpServerTools, handleReloadMcp } from "./handlers/mcp";
+import { handleSetApprovalMode, handleSetToolFilter, handleListAgentTools } from "./handlers/tools";
 
 // The `Bun` global is provided by the bun-types package (installed in
 // engine/oh-my-pi/node_modules) at compile time, and by the Bun runtime
 // at execution time. No manual `declare global` is needed — adding one
 // conflicts with bun-types' own declaration (TS2451).
 
-// ─── stdout JSONL guard ─────────────────────────────────
-// The omp engine's winston Console transport (enabled via setTransports
-// below) writes structured JSON log entries to **stdout** by default.
-// This corrupts the JSONL protocol between the runner and the Electron
-// host: the host's readline handler tries to parse each log line as a
-// JSONL frame, and lines without a `type` field surface as
-// `[agent:rpc] unhandled frame type="undefined"`.
-//
-// Fix: intercept process.stdout.write. Lines that parse as JSON and
-// contain a `type` field (the JSONL frame discriminator) pass through
-// to stdout unchanged. Everything else (winston logs, console.log
-// output from dependencies, etc.) is redirected to stderr, where the
-// host captures it as [agent:stderr].
-const _origStdoutWrite = process.stdout.write.bind(process.stdout);
-process.stdout.write = ((data: unknown, ...args: unknown[]) => {
-	const str = typeof data === "string" ? data : String(data);
-	const line = str.trim();
-	if (line) {
-		try {
-			const parsed = JSON.parse(line);
-			if (typeof parsed === "object" && parsed !== null && "type" in parsed) {
-				// Valid JSONL frame — pass through to stdout
-				return _origStdoutWrite(data as string, ...(args as never[]));
-			}
-		} catch {
-			// Not valid JSON — redirect to stderr
-		}
-	}
-	// Non-JSONL output — redirect to stderr so it doesn't corrupt the protocol
-	return process.stderr.write(str, ...(args as never[]));
-}) as typeof process.stdout.write;
-
-// Re-export for backward compatibility with any code that imports from runner
-export { needsApproval, type ApprovalMode, type ToolTier } from "./approval-logic";
-export { getToolTier } from "./approval-logic";
-
-// ─── Types ──────────────────────────────────────────────
-
-type InitConfig = {
-	cwd: string;
-	apiKey?: string;
-	baseUrl?: string;
-	provider?: string;
-	model?: string;
-	sessionDir?: string;
-	env?: Record<string, string>;
-	enableMCP?: boolean;
-	resumeSessionId?: string;
-	systemPrompt?: string;
-	contextWindow: number;
-	customToolDefinitions?: Array<{
-		name: string;
-		label?: string;
-		description: string;
-		parameters: Record<string, unknown>;
-		approval?: string;
-	}>;
-	/** 额外的 extension 包路径（每个包的 skills/ 和 agents/ 子目录会被 omp 扫描） */
-	additionalExtensionPaths?: string[];
-	/** 工具审批模式：always-ask（总询问）、write（自动编辑）、yolo（完全信任） */
-	approvalMode?: ApprovalMode;
-	/** 被禁用的工具名列表（host 工具 + omp 内置工具），会话创建时不暴露给 LLM */
-	disabledTools?: string[];
-	/**
-	 * UI 存储的对话历史（user/assistant 文本），用于 omp 会话文件缺失或
-	 * 只覆盖尾部时重建引擎上下文（失忆恢复种子）。
-	 */
-	seedHistory?: Array<{
-		role: "user" | "assistant";
-		content: string;
-		timestamp: number;
-	}>;
-}
-
-type Command =
-	| { id: string; type: "init"; config: InitConfig }
-	| { id: string; type: "prompt"; message: string; images?: string[] }
-	| { id: string; type: "abort" }
-	| { id: string; type: "steer"; message: string }
-	| { id: string; type: "setModel"; provider: string; modelId: string }
-	| { id: string; type: "setApprovalMode"; approvalMode: ApprovalMode }
-	| { id: string; type: "setToolFilter"; disabledTools: string[] }
-	| { id: string; type: "listAgentTools" }
-	| { id: string; type: "getMessages" }
-	| { id: string; type: "getState" }
-	| { id: string; type: "compact" }
-	| { id: string; type: "getMcpStatus" }
-	| { id: string; type: "getMcpServerTools"; serverName: string }
-	| { id: string; type: "reloadMcp" }
-	| { id: string; type: "destroy" };
-
-interface ToolResultMessage {
-	type: "tool_result";
-	id: string;
-	result: unknown;
-	isError?: boolean;
-}
-
-// ─── 审批请求/响应 ──────────────────────────────────────
-
-interface ApprovalResponseMessage {
-	type: "approval_response";
-	id: string;
-	approved: boolean;
-}
-
-const pendingApprovalRequests = new Map<
-	string,
-	{ resolve: (approved: boolean) => void; reject: (error: Error) => void }
->();
-
-function handleApprovalResponse(msg: ApprovalResponseMessage): void {
-	const pending = pendingApprovalRequests.get(msg.id);
-	if (!pending) return;
-	pendingApprovalRequests.delete(msg.id);
-	pending.resolve(msg.approved);
-}
-
-function requestApproval(toolName: string, args: unknown): Promise<boolean> {
-	const id = `approval_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-	return new Promise((resolve, reject) => {
-		pendingApprovalRequests.set(id, { resolve, reject });
-		send({ type: "approval_request", id, toolName, args });
-		// Timeout after 5 minutes — user might be away
-		const timeout = setTimeout(() => {
-			if (pendingApprovalRequests.has(id)) {
-				pendingApprovalRequests.delete(id);
-				reject(new Error("Approval request timed out"));
-			}
-		}, 300_000);
-		timeout.unref?.();
-	});
-}
-
-// ─── 工具审批逻辑（从 approval-logic.ts 导入）──────────────
-// getToolTier 和 needsApproval 已提取到 approval-logic.ts 以支持单元测试。
-// applyApprovalMode 仍在此文件中，因为它操作 session 级别状态。
-
-/** 当前生效的审批模式（init 时设置，setApprovalMode 时动态更新） */
-let currentApprovalMode: ApprovalMode = "yolo";
-let currentCwd = process.cwd();
-
-/** 当前被禁用的工具名（init 时设置，setToolFilter 时动态更新） */
-let currentDisabledTools: Set<string> = new Set();
-
-/** 原始工具的快照——包装前保存，以便切换模式时从原始工具重新包装 */
-let originalTools: unknown[] | null = null;
-
-/**
- * 重建 agent 工具集：按 currentDisabledTools 过滤 + 按当前审批模式包装。
- * - yolo 模式下不做审批包装（但仍应用工具开关过滤）
- * - 其他模式下对需要审批的工具插入 requestApproval 代理
- *
- * 使用 Proxy 包装而非对象展开（{ ...tool }），以保留原型链上的方法和属性。
- * omp 引擎的工具 execute 签名为 (toolCallId, args, signal, onUpdate, ctx)，
- * wrapper 必须匹配此签名并透传所有参数。
- */
-function applyApprovalMode(): void {
-	if (!session) return;
-	try {
-		// 首次调用时保存原始工具快照
-		if (!originalTools) {
-			const activeNames = session.getActiveToolNames() as string[];
-			originalTools = activeNames
-				.map((name: string) => session.getToolByName(name))
-				.filter((tool: unknown) => tool != null);
-		}
-
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const wrappedTools = (originalTools as any[])
-			.filter((tool) => !currentDisabledTools.has((tool as { name: string }).name))
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			.map((tool: any) => {
-			const toolName: string = tool.name;
-			const requiresApproval = needsApproval(toolName, currentApprovalMode);
-			const capturesWriteSnapshot = toolName === "write";
-			if (!requiresApproval && !capturesWriteSnapshot) return tool;
-
-			// 使用 Proxy 保留原型链，仅拦截 execute 方法
-			return new Proxy(tool, {
-				get(target, prop, receiver) {
-					if (prop !== "execute") return Reflect.get(target, prop, receiver);
-					return async (
-						toolCallId: string,
-						args: unknown,
-						signal: unknown,
-						onUpdate: unknown,
-						ctx: unknown,
-					) => {
-						if (requiresApproval && !await requestApproval(toolName, args)) {
-							return {
-								content: [{ type: "text" as const, text: `[已拒绝] 用户拒绝了此工具调用的执行。` }],
-							};
-						}
-						const snapshot = capturesWriteSnapshot ? captureWriteSnapshot(args, currentCwd) : null;
-						// eslint-disable-next-line @typescript-eslint/no-explicit-any
-						const result = await target.execute(toolCallId, args, signal as any, onUpdate as any, ctx as any);
-						return attachWriteSnapshot(result, snapshot);
-					};
-				},
-			});
-		});
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		session.agent.setTools(wrappedTools as any);
-	} catch (wrapErr) {
-		console.error("[socverify-runner] failed to apply approval mode:", wrapErr);
-	}
-}
-
-// ─── JSONL Helpers ──────────────────────────────────────
-
-function send(frame: unknown): void {
-	process.stdout.write(`${JSON.stringify(frame)}\n`);
-}
-
-function sendResponse(id: string, success: boolean, data?: unknown, error?: string): void {
-	send({ id, type: "response", success, data, error });
-}
-
-function sendEvent(event: unknown): void {
-	send({ type: "event", event });
-}
-
-function sendContextUsage(): void {
-	if (!session) return;
-	sendEvent({
-		type: "context_usage",
-		contextUsage: session.getContextUsage?.(),
-		contextBreakdown: session.getContextBreakdown?.(),
-		isCompacting: session.isCompacting === true,
-		autoCompactionEnabled: session.autoCompactionEnabled !== false,
-	});
-}
-
-function sendToolCall(id: string, toolName: string, args: unknown): void {
-	send({ type: "tool_call", id, toolName, args });
-}
-
-// ─── Pending Tool Calls ─────────────────────────────────
+// ─── Pending Tool Calls (runner ↔ host bridge) ─────────
 
 const pendingToolCalls = new Map<
 	string,
@@ -310,638 +84,98 @@ function callHostTool(toolName: string, args: unknown): Promise<unknown> {
 	});
 }
 
-// ─── Session Management ─────────────────────────────────
+// ─── Pending Approval Requests (runner ↔ host bridge) ─────
 
-// We use dynamic import to avoid loading the SDK until init is called.
-// This allows the runner to start quickly and respond to the ready signal.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let session: any = null;
- 
-let unsubscribe: (() => void) | null = null;
+const pendingApprovalRequests = new Map<
+	string,
+	{ resolve: (approved: boolean) => void; reject: (error: Error) => void }
+>();
 
-/**
- * Extract the trimmed text of the first user message in an omp session's
- * entry tree. Used to detect omp files that only cover a tail of the stored
- * UI transcript (their first user message differs from the transcript's).
- * Structurally typed — SessionManager is only available via dynamic import.
- */
-function firstUserMessageText(
-	manager: { getEntries(): unknown[] },
-): string | undefined {
-	for (const entry of manager.getEntries()) {
-		const e = entry as { type?: string; message?: { role?: string; content?: unknown } };
-		if (e.type !== "message") continue;
-		const msg = e.message;
-		if (msg?.role !== "user") continue;
-		const content = msg.content;
-		if (typeof content === "string") return content.trim();
-		if (Array.isArray(content)) {
-			return content
-				.filter(
-					(b): b is { type: "text"; text: string } =>
-						typeof b === "object" && b !== null && (b as { type?: string }).type === "text",
-				)
-				.map((b) => b.text)
-				.join("\n")
-				.trim();
-		}
-		return undefined;
-	}
-	return undefined;
+function handleApprovalResponse(msg: ApprovalResponseMessage): void {
+	const pending = pendingApprovalRequests.get(msg.id);
+	if (!pending) return;
+	pendingApprovalRequests.delete(msg.id);
+	pending.resolve(msg.approved);
 }
 
-async function handleInit(cmd: Command & { type: "init" }): Promise<void> {
-	const config = cmd.config;
-	currentCwd = config.cwd;
-
-	// Apply environment variables
-	if (config.env) {
-		for (const [key, value] of Object.entries(config.env)) {
-			// Set both process.env and Bun.env (if available)
-			process.env[key] = value;
-			// Bun.env is available when running under Bun or as a compiled binary
-			if (typeof Bun !== "undefined") {
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
-				(Bun.env as any)[key] = value;
+function requestApproval(toolName: string, args: unknown): Promise<boolean> {
+	const id = `approval_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+	return new Promise((resolve, reject) => {
+		pendingApprovalRequests.set(id, { resolve, reject });
+		send({ type: "approval_request", id, toolName, args });
+		// Timeout after 5 minutes — user might be away
+		const timeout = setTimeout(() => {
+			if (pendingApprovalRequests.has(id)) {
+				pendingApprovalRequests.delete(id);
+				reject(new Error("Approval request timed out"));
 			}
-		}
-	}
-
-	// Dynamic import of the SDK
-	// Uses relative path to the engine's coding-agent package source.
-	// This resolves both when running directly with Bun (engine present)
-	// and when compiled with `bun build --compile` (resolved at compile time).
-	//
-	// Import paths MUST be string literals (not variables) so that Bun's
-	// `--compile` mode can statically analyze them and bundle the engine code
-	// into the standalone binary. TypeScript tracking into the engine submodule
-	// is blocked via ambient module declarations in runner/engine-modules.d.ts
-	// (the engine uses Bun-specific features like `.md` imports that produce
-	// spurious TS errors from our project).
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const { createAgentSession, discoverAuthStorage } = await import("../engine/oh-my-pi/packages/coding-agent/src/sdk") as any;
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const { ModelRegistry } = await import("../engine/oh-my-pi/packages/coding-agent/src/config/model-registry") as any;
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const { SessionManager } = await import("../engine/oh-my-pi/packages/coding-agent/src/session/session-manager") as any;
-
-	// Enable console logging for the omp engine so errors are visible on
-	// stderr (captured by the Electron main process as [agent:stderr]).
-	// By default the omp engine only writes to a rotating file inside the
-	// temp runtime dir, which is deleted when the session ends — making
-	// debugging impossible, especially in packaged AppImage/NSIS builds.
-	try {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const { setTransports } = await import("../engine/oh-my-pi/packages/utils/src/logger") as any;
-		setTransports({ console: true, file: true });
-	} catch {
-		// Best-effort: if the logger module path changes, don't block init.
-	}
-
-	// Set up auth storage
-	const authStorage = await discoverAuthStorage();
-	const modelRegistry = new ModelRegistry(authStorage);
-
-	// Set runtime API key if provided
-	if (config.apiKey && config.provider) {
-		const provider = config.provider.toLowerCase();
-		authStorage.setRuntimeApiKey(provider, config.apiKey);
-
-		// Also set env vars for providers that read them.
-		// Include "socverify-openai-compatible" (the custom provider used by
-		// this app) so that OPENAI_API_KEY / OPENAI_BASE_URL are propagated
-		// for all OpenAI-compatible provider variants.
-		const isOpenAiCompat =
-			provider === "openai" ||
-			provider === "openai-compatible" ||
-			provider.startsWith("socverify-openai") ||
-			provider.includes("openai-compat");
-		if (isOpenAiCompat) {
-			process.env.OPENAI_API_KEY = config.apiKey;
-			if (typeof Bun !== "undefined") {
-				(Bun.env as { OPENAI_API_KEY?: string }).OPENAI_API_KEY = config.apiKey;
-			}
-			if (config.baseUrl) {
-				process.env.OPENAI_BASE_URL = config.baseUrl;
-				if (typeof Bun !== "undefined") {
-					(Bun.env as { OPENAI_BASE_URL?: string }).OPENAI_BASE_URL = config.baseUrl;
-				}
-			}
-		}
-	}
-
-	// Build session manager
-	let sessionManager;
-	if (config.sessionDir) {
-		sessionManager = SessionManager.create(config.cwd, config.sessionDir);
-	} else {
-		sessionManager = SessionManager.inMemory();
-	}
-
-	// Resume an existing session if requested. List from the same sessionDir
-	// the host configures at creation time (<project>/.socverify/omp-sessions)
-	// so resume actually finds the persisted session file.
-	//
-	// When the host provides a seed history (the stored UI transcript), we
-	// validate that the omp file actually starts at the same first user
-	// message. A mismatch means the omp file only covers a TAIL of the
-	// conversation (e.g. it was minted by an earlier failed resume, or the
-	// session predates sessionDir persistence) — resuming it would silently
-	// drop the earlier turns, so we rebuild a fresh session seeded with the
-	// full stored transcript instead.
-	let resumed = false;
-	if (config.resumeSessionId) {
-		try {
-			const sessions = await SessionManager.list(config.cwd, config.sessionDir);
-			const target = sessions.find((s: { id: string }) => s.id === config.resumeSessionId);
-			if (target) {
-				const candidate = await SessionManager.open(target.path);
-				const seedFirstUser = config.seedHistory
-					?.find((m) => m.role === "user")
-					?.content.trim();
-				const ompFirstUser = firstUserMessageText(candidate);
-				if (seedFirstUser === undefined || ompFirstUser === seedFirstUser) {
-					sessionManager = candidate;
-					resumed = true;
-				} else {
-					console.error(
-						`[socverify-runner] omp session ${config.resumeSessionId} covers only a partial transcript (first user message mismatch) — rebuilding from stored UI history`,
-					);
-				}
-			} else {
-				console.error(
-					`[socverify-runner] resume session not found in ${config.sessionDir ?? "(omp default dir)"}: ${config.resumeSessionId} — rebuilding from stored UI history`,
-				);
-			}
-		} catch {
-			// Fall through to creating a new session
-		}
-	}
-
-	// Seed the fresh omp session with the stored UI transcript so the agent
-	// remembers earlier turns that were never persisted to the omp JSONL.
-	// Only runs when native resume did not happen (resumed omp files are the
-	// authoritative history, including tool calls).
-	if (!resumed && config.seedHistory && config.seedHistory.length > 0) {
-		const seededProvider = config.provider ?? "socverify-openai-compatible";
-		const seededModel = config.model ?? "unknown";
-		for (const msg of config.seedHistory) {
-			if (msg.role === "user") {
-				sessionManager.appendMessage({
-					role: "user",
-					content: [{ type: "text", text: msg.content }],
-					attribution: "user",
-					timestamp: msg.timestamp,
-				});
-			} else {
-				sessionManager.appendMessage({
-					role: "assistant",
-					content: [{ type: "text", text: msg.content }],
-					// api/provider/model are persisted bookkeeping metadata;
-					// the context builder only reads the content blocks.
-					api: "openai-completions",
-					provider: seededProvider,
-					model: seededModel,
-					stopReason: "stop",
-					timestamp: msg.timestamp,
-					// usage is required by the AssistantMessage type but the
-					// context builder ignores it for seeded messages.
-					usage: {
-						input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
-						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-					},
-				});
-			}
-		}
-		console.error(
-			`[socverify-runner] seeded ${config.seedHistory.length} messages from stored UI history into omp session`,
-		);
-	}
-
-	// Build custom tools that forward calls to the Electron host
-	const customTools = (config.customToolDefinitions ?? []).map((def) => ({
-		name: def.name,
-		label: def.label ?? def.name,
-		description: def.description,
-		parameters: def.parameters,
-		approval: (def.approval ?? "read") as "read" | "write" | "exec",
-		async execute(
-			_toolCallId: string,
-			params: unknown,
-			_onUpdate: unknown,
-			_ctx: unknown,
-			signal?: AbortSignal,
-		): Promise<unknown> {
-			if (signal?.aborted) {
-				return {
-					content: [{ type: "text", text: "Tool call was aborted" }],
-					isError: true,
-				};
-			}
-			try {
-				const result = await callHostTool(def.name, params);
-				if (typeof result === "string") {
-					return { content: [{ type: "text", text: result }] };
-				}
-				return result;
-			} catch (err) {
-				return {
-					content: [
-						{ type: "text", text: err instanceof Error ? err.message : String(err) },
-					],
-					isError: true,
-				};
-			}
-		},
-	}));
-
-	// Build createAgentSession options
-	// The SDK internally creates a ModelRegistry from authStorage if not provided.
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
-	const sessionOptions: any = {
-		cwd: config.cwd,
-		authStorage,
-		modelRegistry,
-		sessionManager,
-		customTools,
-		enableMCP: config.enableMCP ?? true,
-		autoApprove: true,
-		hasUI: false,
-		// Inject built-in extension packages (skills/ and agents/ subdirectories
-		// are auto-discovered by the omp-plugins provider).
-		additionalExtensionPaths: config.additionalExtensionPaths ?? [],
-		// 追加到默认系统提示词末尾，引导 AI 优先使用 edit 工具修改已有文件
-		appendSystemPrompt: [
-			"## 文件编辑规则",
-			"- 修改已有文件时，**必须**优先使用 `edit` 工具（而非 `write`），以便用户可以逐一审查修改差异",
-			"- 仅在创建全新文件时才使用 `write` 工具",
-			"- `write` 会覆盖整个文件，导致 diff 全部显示为新增（绿色），无法逐项确认修改",
-		].join("\n"),
-	};
-
-	// Set model pattern if provided
-	if (config.provider && config.model) {
-		const advertisedModel = modelRegistry.find(config.provider, config.model);
-		if (advertisedModel) {
-			const advertisedWindow = advertisedModel.contextWindow ?? 0;
-			const effectiveWindow = advertisedWindow > 0
-				? Math.min(config.contextWindow, advertisedWindow)
-				: config.contextWindow;
-			sessionOptions.model = { ...advertisedModel, contextWindow: effectiveWindow };
-		} else {
-			sessionOptions.modelPattern = `${config.provider}/${config.model}`;
-		}
-	}
-
-	// Set system prompt if provided
-	if (config.systemPrompt) {
-		sessionOptions.systemPrompt = config.systemPrompt;
-	}
-
-	// Create the session
-	const result = await createAgentSession(sessionOptions);
-	session = result.session;
-
-	// Forward subagent lifecycle/progress frames to the host.
-	// The EventBus channels are emitted by the task executor for every
-	// dispatched subagent; progress frames are already coalesced (~150ms) and
-	// carry everything the UI needs (currentTool, recentOutput, tokens...).
-	// The high-frequency `task:subagent:event` channel is intentionally NOT
-	// forwarded — its message_update events would flood the JSONL pipe.
-	//
-	// Channel names are hardcoded (not dynamically imported from the engine)
-	// because the runner may be compiled into a standalone binary via
-	// `bun build --compile`, at which point the relative import path to the
-	// engine submodule no longer resolves. The string values must stay in sync
-	// with TASK_SUBAGENT_LIFECYCLE_CHANNEL / TASK_SUBAGENT_PROGRESS_CHANNEL in
-	// engine/oh-my-pi/packages/coding-agent/src/task/types.ts.
-	try {
-		result.eventBus.on("task:subagent:lifecycle", (payload: unknown) => {
-			console.error(`[socverify-runner] SUBAGENT_LIFECYCLE fired — sending frame`);
-			send({ type: "subagent_lifecycle", payload });
-		});
-		result.eventBus.on("task:subagent:progress", (payload: unknown) => {
-			console.error(`[socverify-runner] SUBAGENT_PROGRESS fired — sending frame`);
-			send({ type: "subagent_progress", payload });
-		});
-		console.error("[socverify-runner] subagent EventBus subscriptions registered OK");
-	} catch (err) {
-		console.error("[socverify-runner] failed to subscribe subagent channels:", err);
-	}
-
-	// Wrap built-in tools with approval proxy when approvalMode is set,
-	// and apply the tool-disable filter from settings.
-	currentApprovalMode = config.approvalMode ?? "yolo";
-	currentDisabledTools = new Set(config.disabledTools ?? []);
-	currentDisabledTools.delete("ask");
-	applyApprovalMode();
-
-	// Subscribe to events and forward them to the host
-	unsubscribe = session.subscribe((event: unknown) => {
-		const eventType = typeof event === "object" && event !== null && "type" in event
-			? String((event as { type: unknown }).type)
-			: "";
-		sendEvent(attachWriteSnapshotToStartEvent(event, currentCwd));
-		if (eventType === "agent_end" || eventType === "compaction_end" || eventType === "auto_compaction_end") {
-			sendContextUsage();
-		}
+		}, 300_000);
+		timeout.unref?.();
 	});
-	sendContextUsage();
-
-	sendResponse(cmd.id, true, { sessionId: session.sessionId });
 }
 
-async function handlePrompt(cmd: Command & { type: "prompt" }): Promise<void> {
-	if (!session) throw new Error("Session not initialized");
+// ─── Runner Context ─────────────────────────────────────
 
-	// Convert image strings to ImageContent objects expected by the SDK.
-	// Images arrive as full data URLs (data:image/png;base64,...) so we can
-	// recover the MIME type.  Raw base64 strings fall back to image/png.
-	let images: Array<{ type: "image"; data: string; mimeType: string }> | undefined;
-	if (cmd.images?.length) {
-		images = cmd.images.map((img) => {
-			const match = img.match(/^data:([^;]+);base64,(.+)$/);
-			if (match) {
-				return { type: "image" as const, data: match[2], mimeType: match[1] };
-			}
-			return { type: "image" as const, data: img, mimeType: "image/png" };
-		});
-	}
+const ctx: RunnerContext = {
+	session: null,
+	unsubscribe: null,
+	currentCwd: process.cwd(),
+	currentApprovalMode: "yolo",
+	currentDisabledTools: new Set(),
+	originalTools: null,
+	callHostTool,
+	requestApproval,
+};
 
-	await session.prompt(cmd.message, images ? { images } : undefined);
-	sendResponse(cmd.id, true, { ok: true });
-}
-
-async function handleAbort(cmd: Command & { type: "abort" }): Promise<void> {
-	if (!session) throw new Error("Session not initialized");
-	await session.abort();
-	sendResponse(cmd.id, true, { ok: true });
-}
-
-async function handleSteer(cmd: Command & { type: "steer" }): Promise<void> {
-	if (!session) throw new Error("Session not initialized");
-	await session.steer(cmd.message);
-	sendResponse(cmd.id, true, { ok: true });
-}
-
-async function handleSetModel(cmd: Command & { type: "setModel" }): Promise<void> {
-	if (!session) throw new Error("Session not initialized");
-	// The SDK's AgentSession doesn't have a direct setModel method like the RPC mode.
-	// Model switching requires recreating the session or using the agent's internal API.
-	// For now, we just acknowledge the request.
-	sendResponse(cmd.id, true, { ok: true, note: "Model switching via SDK is not yet supported" });
-}
-
-async function handleSetApprovalMode(cmd: Command & { type: "setApprovalMode" }): Promise<void> {
-	if (!session) throw new Error("Session not initialized");
-	currentApprovalMode = cmd.approvalMode;
-	applyApprovalMode();
-	sendResponse(cmd.id, true, { ok: true, approvalMode: currentApprovalMode });
-}
-
-async function handleSetToolFilter(cmd: Command & { type: "setToolFilter" }): Promise<void> {
-	if (!session) throw new Error("Session not initialized");
-	currentDisabledTools = new Set(cmd.disabledTools);
-	// `ask` 是宿主交互问答通道，禁用会导致 agent 无法向用户提问，强制保留
-	currentDisabledTools.delete("ask");
-	applyApprovalMode();
-	sendResponse(cmd.id, true, { ok: true, disabledCount: currentDisabledTools.size });
-}
-
-async function handleListAgentTools(cmd: Command & { type: "listAgentTools" }): Promise<void> {
-	if (!session) throw new Error("Session not initialized");
-	// 优先用原始快照（含被禁用工具，供设置页展示完整目录）；
-	// 会话刚创建尚未重建工具集时回退到当前激活工具。
-	const source =
-		originalTools ??
-		(session.getActiveToolNames() as string[])
-			.map((name: string) => session.getToolByName(name))
-			.filter((tool: unknown) => tool != null);
-	const tools = (source as Array<{ name: string; description?: string }>).map((tool) => ({
-		name: tool.name,
-		description: typeof tool.description === "string" ? tool.description : "",
-	}));
-	sendResponse(cmd.id, true, { tools });
-}
-
-async function handleGetMessages(cmd: Command & { type: "getMessages" }): Promise<void> {
-	if (!session) throw new Error("Session not initialized");
-	const messages = session.messages;
-	sendResponse(cmd.id, true, { messages });
-}
-
-async function handleGetState(cmd: Command & { type: "getState" }): Promise<void> {
-	if (!session) throw new Error("Session not initialized");
-	const state = {
-		...session.state,
-		model: session.model,
-		contextUsage: session.getContextUsage?.(),
-		contextBreakdown: session.getContextBreakdown?.(),
-		isCompacting: session.isCompacting === true,
-		autoCompactionEnabled: session.autoCompactionEnabled !== false,
-	};
-	sendResponse(cmd.id, true, { state });
-}
-
-async function handleCompact(cmd: Command & { type: "compact" }): Promise<void> {
-	if (!session) throw new Error("Session not initialized");
-	const result = await session.compact();
-	const contextUsage = session.getContextUsage?.();
-	const contextBreakdown = session.getContextBreakdown?.();
-	sendResponse(cmd.id, true, { result, contextUsage, contextBreakdown });
-	sendContextUsage();
-}
-
-async function handleGetMcpStatus(cmd: Command & { type: "getMcpStatus" }): Promise<void> {
-	if (!session) throw new Error("Session not initialized");
-
-	try {
-		// Access the MCPManager from the session. The SDK creates a singleton
-		// MCPManager.instance() that manages all MCP connections. We query it
-		// for all known servers and their connection status.
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const { MCPManager } = await import("../engine/oh-my-pi/packages/coding-agent/src/mcp/manager") as any;
-		const manager = MCPManager.instance();
-		if (!manager) {
-			sendResponse(cmd.id, true, { servers: {} });
-			return;
-		}
-		const allNames = manager.getAllServerNames();
-
-		const statusMap: Record<string, { status: string; toolCount: number }> = {};
-		for (const name of allNames) {
-			const status = manager.getConnectionStatus(name);
-			let toolCount = 0;
-			if (status === "connected") {
-				try {
-					const conn = manager.getConnection(name);
-					toolCount = conn?.tools?.length ?? 0;
-				} catch {
-					// best-effort
-				}
-			}
-			statusMap[name] = { status, toolCount };
-		}
-
-		sendResponse(cmd.id, true, { servers: statusMap });
-	} catch (_err) {
-		// If MCPManager is not available (e.g. enableMCP was false), return empty.
-		sendResponse(cmd.id, true, { servers: {} });
-	}
-}
-
-async function handleGetMcpServerTools(cmd: Command & { type: "getMcpServerTools"; serverName: string }): Promise<void> {
-	if (!session) throw new Error("Session not initialized");
-
-	try {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const { MCPManager } = await import("../engine/oh-my-pi/packages/coding-agent/src/mcp/manager") as any;
-		const manager = MCPManager.instance();
-		if (!manager) {
-			sendResponse(cmd.id, true, { tools: [] });
-			return;
-		}
-
-		const connection = manager.getConnection(cmd.serverName);
-		if (!connection) {
-			sendResponse(cmd.id, true, { tools: [] });
-			return;
-		}
-
-		// Use cached tools if available; otherwise call listTools to fetch.
-		let tools = connection.tools;
-		if (!tools) {
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
-			const { listTools } = await import("../engine/oh-my-pi/packages/coding-agent/src/mcp/client") as any;
-			tools = await listTools(connection);
-		}
-
-		const toolList = (tools ?? []).map((t: { name: string; description?: string; inputSchema?: unknown }) => ({
-			name: t.name,
-			description: t.description,
-			inputSchema: t.inputSchema,
-		}));
-
-		sendResponse(cmd.id, true, { tools: toolList });
-	} catch (err) {
-		// On any error, return empty tool list rather than failing the RPC.
-		const msg = err instanceof Error ? err.message : String(err);
-		console.error(`[socverify-runner] getMcpServerTools error: ${msg}`);
-		sendResponse(cmd.id, true, { tools: [] });
-	}
-}
-
-async function handleReloadMcp(cmd: Command & { type: "reloadMcp" }): Promise<void> {
-	if (!session) throw new Error("Session not initialized");
-
-	try {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		const { MCPManager } = await import("../engine/oh-my-pi/packages/coding-agent/src/mcp/manager") as any;
-		const manager = MCPManager.instance();
-		if (!manager) {
-			sendResponse(cmd.id, true, { ok: true, servers: {} });
-			return;
-		}
-
-		// Disconnect all existing connections, then re-discover and connect.
-		// This picks up changes made to .mcp.json since the session started.
-		manager.disconnectAll();
-		await manager.discoverAndConnect();
-
-		// Refresh the agent's tool list so newly connected MCP tools are
-		// immediately available to the LLM.
-		const mcpTools = manager.getTools();
-		if (typeof session.refreshMCPTools === "function") {
-			await session.refreshMCPTools(mcpTools, { activateAll: true });
-		}
-
-		// Build status map to return
-		const allNames = manager.getAllServerNames();
-		const statusMap: Record<string, { status: string; toolCount: number }> = {};
-		for (const name of allNames) {
-			const status = manager.getConnectionStatus(name);
-			let toolCount = 0;
-			if (status === "connected") {
-				try {
-					const conn = manager.getConnection(name);
-					toolCount = conn?.tools?.length ?? 0;
-				} catch {
-					// best-effort
-				}
-			}
-			statusMap[name] = { status, toolCount };
-		}
-
-		sendResponse(cmd.id, true, { ok: true, servers: statusMap });
-	} catch (err) {
-		const msg = err instanceof Error ? err.message : String(err);
-		console.error(`[socverify-runner] reloadMcp error: ${msg}`);
-		sendResponse(cmd.id, false, undefined, `Failed to reload MCP: ${msg}`);
-	}
-}
-
-async function handleDestroy(cmd: Command & { type: "destroy" }): Promise<void> {
-	if (unsubscribe) {
-		unsubscribe();
-		unsubscribe = null;
-	}
-	if (session) {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		await (session as any).dispose?.();
-		session = null;
-	}
-	sendResponse(cmd.id, true, { ok: true });
-}
-
-// ─── Main Loop ──────────────────────────────────────────
+// ─── Command Router ─────────────────────────────────────
 
 async function handleCommand(cmd: Command): Promise<void> {
 	try {
 		switch (cmd.type) {
 			case "init":
-				await handleInit(cmd);
+				await handleInit(cmd, ctx);
 				break;
 			case "prompt":
-				await handlePrompt(cmd);
+				await handlePrompt(cmd, ctx);
 				break;
 			case "abort":
-				await handleAbort(cmd);
+				await handleAbort(cmd, ctx);
 				break;
 			case "steer":
-				await handleSteer(cmd);
+				await handleSteer(cmd, ctx);
 				break;
 			case "setModel":
-				await handleSetModel(cmd);
+				await handleSetModel(cmd, ctx);
 				break;
 			case "setApprovalMode":
-				await handleSetApprovalMode(cmd);
+				await handleSetApprovalMode(cmd, ctx);
 				break;
 			case "setToolFilter":
-				await handleSetToolFilter(cmd);
+				await handleSetToolFilter(cmd, ctx);
 				break;
 			case "listAgentTools":
-				await handleListAgentTools(cmd);
+				await handleListAgentTools(cmd, ctx);
 				break;
 			case "getMessages":
-				await handleGetMessages(cmd);
+				await handleGetMessages(cmd, ctx);
 				break;
 			case "getState":
-				await handleGetState(cmd);
+				await handleGetState(cmd, ctx);
 				break;
 			case "compact":
-				await handleCompact(cmd);
+				await handleCompact(cmd, ctx);
 				break;
 			case "getMcpStatus":
-				await handleGetMcpStatus(cmd);
+				await handleGetMcpStatus(cmd, ctx);
 				break;
 			case "getMcpServerTools":
-				await handleGetMcpServerTools(cmd);
+				await handleGetMcpServerTools(cmd, ctx);
 				break;
 			case "reloadMcp":
-				await handleReloadMcp(cmd);
+				await handleReloadMcp(cmd, ctx);
 				break;
 			case "destroy":
-				await handleDestroy(cmd);
+				await handleDestroy(cmd, ctx);
 				break;
 			default:
 				sendResponse((cmd as { id: string }).id, false, undefined, `Unknown command type: ${(cmd as { type: string }).type}`);
@@ -952,6 +186,8 @@ async function handleCommand(cmd: Command): Promise<void> {
 		sendResponse(cmd.id, false, undefined, message);
 	}
 }
+
+// ─── Main Loop ──────────────────────────────────────────
 
 // Send ready signal
 send({ type: "ready" });
