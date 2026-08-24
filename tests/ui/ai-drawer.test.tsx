@@ -37,13 +37,14 @@ describe('AiDrawer 基础渲染', () => {
 });
 
 describe('AiDrawer 模式切换', () => {
-  it('点击切换按钮 → docked 模式并跳转工作区', () => {
+  it('点击切换按钮 → docked 模式，不切换视图（全局可见）', () => {
     useUiStore.setState({ activeView: 'dashboard' });
     render(<AiDrawer />);
 
     fireEvent.click(screen.getByTestId('ai-drawer-dock-switch'));
     expect(useUiStore.getState().aiPanelMode).toBe('docked');
-    expect(useUiStore.getState().activeView).toBe('workspace');
+    // docked 面板全局可见，不再需要切换到 workspace 视图
+    expect(useUiStore.getState().activeView).toBe('dashboard');
     expect(useUiStore.getState().rightDrawerOpen).toBe(false);
   });
 });

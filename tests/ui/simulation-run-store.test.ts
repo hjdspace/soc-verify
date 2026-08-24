@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   runInTerminal: vi.fn(),
   abort: vi.fn(),
   abortTerminalRun: vi.fn(),
+  listActiveRuns: vi.fn(),
+  getRunDetail: vi.fn(),
 }));
 
 vi.mock('@renderer/lib/trpc', () => ({
@@ -13,6 +15,8 @@ vi.mock('@renderer/lib/trpc', () => ({
       runInTerminal: { mutate: mocks.runInTerminal },
       abort: { mutate: mocks.abort },
       abortTerminalRun: { mutate: mocks.abortTerminalRun },
+      listActiveRuns: { query: mocks.listActiveRuns },
+      getRunDetail: { query: mocks.getRunDetail },
     },
   },
 }));
@@ -139,6 +143,128 @@ describe('Terminal Simulation Run launch', () => {
     expect(useSimulationStore.getState().simOptions).toEqual({
       seed: '7', post: true, base: 'base_b', block: 'core_top', case: 'case_b',
     });
+  });
+
+  it('loadActiveRuns：后端 byCase 去重后只返回最新记录，前端应替换旧终态记录而非叠加', async () => {
+    // 场景：同一用例 test_top_ap_mini 先 FAIL（runId=old-run），
+    // 重新仿真后 PASS（runId=new-run）。后端 listActiveRuns 按 case
+    // 去重后只返回最新的 pass 记录。前端不应保留旧的 fail 记录。
+    const now = Date.now();
+    useSimulationStore.setState({
+      activeRuns: [
+        {
+          runId: 'old-run',
+          projectId: 'project-1',
+          caseId: 'test_top_ap_mini',
+          caseName: 'test_top_ap_mini',
+          subsys: 'ap',
+          status: 'fail' as const,
+          startTime: now - 10_000,
+          endTime: now - 5_000,
+          terminalId: 'term-old',
+        },
+      ],
+    });
+
+    mocks.listActiveRuns.mockResolvedValue([
+      {
+        runId: 'new-run',
+        projectId: 'project-1',
+        options: {
+          caseId: 'test_top_ap_mini',
+          caseName: 'test_top_ap_mini',
+          subsys: 'ap',
+          options: {},
+        },
+        status: { runId: 'new-run', status: 'pass', startTime: now, endTime: now + 1000 },
+        startTime: now,
+        endTime: now + 1000,
+        compileErrors: undefined,
+      },
+    ]);
+
+    await useSimulationStore.getState().loadActiveRuns('project-1');
+
+    const runs = useSimulationStore.getState().activeRuns;
+    // 旧的 fail 记录应被移除，只保留新的 pass 记录
+    expect(runs).toHaveLength(1);
+    expect(runs[0].runId).toBe('new-run');
+    expect(runs[0].status).toBe('pass');
+  });
+
+  it('loadActiveRuns：保留本地 running/pending 但后端尚未返回的记录', async () => {
+    // 场景：刚通过 IPC started 事件添加了一条 running 记录，
+    // 但后端 listActiveRuns 尚未轮询到该记录。前端应保留该记录。
+    const now = Date.now();
+    useSimulationStore.setState({
+      activeRuns: [
+        {
+          runId: 'local-running',
+          projectId: 'project-1',
+          caseId: 'case_x',
+          caseName: 'case_x',
+          subsys: 'core',
+          status: 'running' as const,
+          startTime: now,
+          terminalId: 'term-1',
+        },
+      ],
+    });
+
+    // 后端返回不同的记录
+    mocks.listActiveRuns.mockResolvedValue([
+      {
+        runId: 'backend-run',
+        projectId: 'project-1',
+        options: {
+          caseId: 'case_y',
+          caseName: 'case_y',
+          subsys: 'core',
+          options: {},
+        },
+        status: { runId: 'backend-run', status: 'pass', startTime: now - 1000, endTime: now },
+        startTime: now - 1000,
+        endTime: now,
+        compileErrors: undefined,
+      },
+    ]);
+
+    await useSimulationStore.getState().loadActiveRuns('project-1');
+
+    const runs = useSimulationStore.getState().activeRuns;
+    // 本地 running 记录应被保留，后端记录也应存在
+    expect(runs).toHaveLength(2);
+    const runIds = runs.map((r) => r.runId);
+    expect(runIds).toContain('local-running');
+    expect(runIds).toContain('backend-run');
+  });
+
+  it('loadActiveRuns：丢弃本地已终态且后端不再返回的记录', async () => {
+    // 场景：本地有一条旧的 pass 记录（已终态），后端不再返回该 runId，
+    // 前端应丢弃该记录。
+    const now = Date.now();
+    useSimulationStore.setState({
+      activeRuns: [
+        {
+          runId: 'stale-pass',
+          projectId: 'project-1',
+          caseId: 'case_a',
+          caseName: 'case_a',
+          subsys: 'core',
+          status: 'pass' as const,
+          startTime: now - 10_000,
+          endTime: now - 5_000,
+        },
+      ],
+    });
+
+    // 后端返回空列表
+    mocks.listActiveRuns.mockResolvedValue([]);
+
+    await useSimulationStore.getState().loadActiveRuns('project-1');
+
+    const runs = useSimulationStore.getState().activeRuns;
+    expect(runs).toHaveLength(0);
   });
 
   it('stopAllRuns：终端运行走 abortTerminalRun，插件运行走 abort，跳过已结束运行（Issue #9）', async () => {

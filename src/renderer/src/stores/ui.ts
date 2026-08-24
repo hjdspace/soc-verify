@@ -35,7 +35,6 @@ interface UiState {
   rightDrawerOpen: boolean;
   aiPanelMode: AiPanelMode;
   rightPanelCollapsed: boolean;
-  optionDockExpanded: boolean;
   settingsOpen: boolean;
   commandPaletteOpen: boolean;
   sourceControlOpen: boolean;
@@ -54,7 +53,6 @@ interface UiState {
   closeDrawers: () => void;
   setAiPanelMode: (mode: AiPanelMode) => void;
   toggleRightPanel: () => void;
-  toggleOptionDock: () => void;
   toggleBottomPanel: () => void;
   setSettingsOpen: (open: boolean) => void;
   setCommandPaletteOpen: (open: boolean) => void;
@@ -70,7 +68,6 @@ interface UiState {
   hydrateLayout: (layout?: {
     activeView?: string;
     rightPanelCollapsed?: boolean;
-    optionDockExpanded?: boolean;
     pluginViews?: Partial<PluginViewLayouts>;
     aiPanelMode?: string;
     simLeftPanelWidth?: number;
@@ -90,7 +87,6 @@ export const useUiStore = create<UiState>((set) => ({
   rightDrawerOpen: false,
   aiPanelMode: 'drawer',
   rightPanelCollapsed: false,
-  optionDockExpanded: false,
   settingsOpen: false,
   commandPaletteOpen: false,
   sourceControlOpen: false,
@@ -110,7 +106,6 @@ export const useUiStore = create<UiState>((set) => ({
   // 切回固定侧栏模式时收起抽屉，避免再次切回抽屉模式时意外弹开
   setAiPanelMode: (mode) => set({ aiPanelMode: mode, rightDrawerOpen: false }),
   toggleRightPanel: () => set((s) => ({ rightPanelCollapsed: !s.rightPanelCollapsed })),
-  toggleOptionDock: () => set((s) => ({ optionDockExpanded: !s.optionDockExpanded })),
   toggleBottomPanel: () => set((s) => ({ bottomPanelCollapsed: !s.bottomPanelCollapsed })),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
@@ -142,7 +137,6 @@ export const useUiStore = create<UiState>((set) => ({
   hydrateLayout: (layout) => set((state) => ({
     activeView: isActiveView(layout?.activeView) ? layout.activeView : state.activeView,
     rightPanelCollapsed: layout?.rightPanelCollapsed ?? state.rightPanelCollapsed,
-    optionDockExpanded: layout?.optionDockExpanded ?? state.optionDockExpanded,
     aiPanelMode: isAiPanelMode(layout?.aiPanelMode) ? layout.aiPanelMode : state.aiPanelMode,
     simLeftPanelWidth:
       typeof layout?.simLeftPanelWidth === 'number'

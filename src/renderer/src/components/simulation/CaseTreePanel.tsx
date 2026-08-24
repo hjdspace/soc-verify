@@ -3,14 +3,14 @@
  *
  * 复用共享的 buildCaseTree / CaseTreeItem，内嵌子系统列表（展开/折叠 +
  * 用例计数）、用例树（文件分组 + baseCase 层级 + 状态点 + 后仿标记）、
- * 状态筛选器（全部/通过/失败/运行中/待运行/后仿）、搜索框（防抖 + 全局跨
- * 子系统）、批量模式（勾选用例 + 一键运行）、右键菜单（运行仿真/标记后仿）、
+ * 状态筛选器（全部/通过/失败/运行中/待运行/后仿）、搜索框（防抖 +
+ * 受子系统筛选约束：选中子系统时仅搜索该子系统，全部子系统时全局搜索）、批量模式（勾选用例 + 一键运行）、右键菜单（运行仿真/标记后仿）、
  * 刷新（全局 + 单子系统）。用例选中时调用 simulation.selectCase() 联动
  * Option 面板填充 base/block/case。用例树行内运行按钮直接启动仿真。
  * 面板宽度由 simLeftPanelWidth 控制，内容区域可滚动。
  *
- * 与 SubsysList 的差异：去掉搜索范围下拉、全局刷新改为顶部按钮，
- * 不使用外层 Drawer padding。
+ * 与 SubsysList 的差异：子系统筛选移至搜索框右侧（搜索时可见）、
+ * 全局刷新改为顶部按钮，不使用外层 Drawer padding。
  */
 
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react';
@@ -102,6 +102,8 @@ export function CaseTreePanel() {
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshingSubsys, setRefreshingSubsys] = useState<string | null>(null);
+  const [subsysFilter, setSubsysFilter] = useState<string | null>(null);
+  const [showSubsysFilter, setShowSubsysFilter] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // ── Search state ────────────────────────────────────
@@ -203,7 +205,7 @@ export function CaseTreePanel() {
     [currentProjectId, caseStatusFilter],
   );
 
-  // ── Search: debounced query (global, cross-subsystem) ──
+  // ── Search: debounced query (respects subsys filter) ──
   useEffect(() => {
     const trimmed = searchQuery.trim();
     if (!trimmed) {
@@ -219,6 +221,7 @@ export function CaseTreePanel() {
         .query({
           projectId: currentProjectId,
           query: trimmed,
+          subsys: subsysFilter ?? undefined,
           limit: 200,
         })
         .then((data: CaseData[]) => {
@@ -233,7 +236,7 @@ export function CaseTreePanel() {
     }, 250);
 
     return () => clearTimeout(timer);
-  }, [searchQuery, currentProjectId]);
+  }, [searchQuery, currentProjectId, subsysFilter]);
 
   // Close context menu on outside click
   useEffect(() => {
@@ -485,6 +488,32 @@ export function CaseTreePanel() {
 
   const isSearching = searchQuery.trim().length > 0;
 
+  // 当 subsystems 列表变化时，如果当前筛选的子系统已不存在，重置筛选
+  useEffect(() => {
+    if (subsysFilter && !subsystems.some((s) => s.name === subsysFilter)) {
+      setSubsysFilter(null);
+    }
+  }, [subsystems, subsysFilter]);
+
+  // 选中子系统筛选时，自动展开该子系统并加载用例
+  useEffect(() => {
+    if (!subsysFilter) return;
+    if (!expandedSubsys.has(subsysFilter)) {
+      setExpandedSubsys((prev) => {
+        const next = new Set(prev);
+        next.add(subsysFilter);
+        return next;
+      });
+      void loadSubsysCases(subsysFilter);
+    }
+  }, [subsysFilter, expandedSubsys, loadSubsysCases]);
+
+  // 筛选后的子系统列表
+  const filteredSubsystems = useMemo(
+    () => subsysFilter ? subsystems.filter((s) => s.name === subsysFilter) : subsystems,
+    [subsystems, subsysFilter],
+  );
+
   return (
     <div
       className="flex h-full flex-col"
@@ -540,34 +569,99 @@ export function CaseTreePanel() {
         </div>
       </div>
 
-      {/* ── Search input ─────────────────────────────── */}
-      <div className="relative px-2 py-1.5">
-        <Search className="pointer-events-none absolute left-4 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-        <input
-          ref={searchInputRef}
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="搜索用例..."
-          className="w-full rounded border border-border/50 bg-background/60 py-1 pl-7 pr-6 text-[11px] text-foreground placeholder:text-muted-foreground focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/30"
-        />
-        {searching && (
-          <Loader2 className="absolute right-4 top-1/2 h-3 w-3 -translate-y-1/2 animate-spin text-muted-foreground" />
-        )}
-        {!searching && searchQuery && (
+      {/* ── Search input + Subsys filter ─────────────────── */}
+      <div className='flex items-center gap-1 px-2 py-1.5'>
+        <div className='relative flex-1'>
+          <Search className='pointer-events-none absolute left-3 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground' />
+          <input
+            ref={searchInputRef}
+            type='text'
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder='搜索用例...'
+            className='w-full rounded border border-border/50 bg-background/60 py-1 pl-7 pr-6 text-[11px] text-foreground placeholder:text-muted-foreground focus:border-primary/50 focus:outline-none focus:ring-1 focus:ring-primary/30'
+          />
+          {searching && (
+            <Loader2 className='absolute right-3 top-1/2 h-3 w-3 -translate-y-1/2 animate-spin text-muted-foreground' />
+          )}
+          {!searching && searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className='absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground'
+              title='清除搜索'
+            >
+              <X className='h-3 w-3' />
+            </button>
+          )}
+        </div>
+        {/* Subsys filter dropdown (always visible, including search mode) */}
+        <div className='relative shrink-0'>
           <button
-            onClick={() => setSearchQuery('')}
-            className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            title="清除搜索"
+            onClick={() => setShowSubsysFilter(!showSubsysFilter)}
+            className={cn(
+              'flex items-center gap-0.5 rounded px-1.5 py-1 text-[10px] transition-colors',
+              subsysFilter
+                ? 'bg-primary/15 text-primary'
+                : 'text-muted-foreground hover:bg-accent',
+            )}
+            title='筛选子系统'
           >
-            <X className="h-3 w-3" />
+            <Cpu className='h-2.5 w-2.5 shrink-0' />
+            <span className='max-w-20 truncate'>
+              {subsysFilter ?? '全部子系统'}
+            </span>
+            <ChevronDown className='h-2 w-2 shrink-0 opacity-50' />
           </button>
-        )}
+          {showSubsysFilter && (
+            <>
+              <div
+                className='fixed inset-0 z-40'
+                onClick={() => setShowSubsysFilter(false)}
+              />
+              <div className='absolute right-0 top-7 z-50 max-h-56 w-44 overflow-y-auto rounded-md border border-border bg-popover shadow-xl'>
+                <button
+                  onClick={() => {
+                    setSubsysFilter(null);
+                    setShowSubsysFilter(false);
+                  }}
+                  className={cn(
+                    'flex w-full items-center gap-1 px-2 py-1 text-[11px] transition-colors hover:bg-accent',
+                    !subsysFilter && 'bg-accent/50 text-primary',
+                  )}
+                >
+                  <Cpu className='h-2.5 w-2.5 shrink-0 opacity-50' />
+                  全部子系统
+                </button>
+                {subsystems.map((s) => (
+                  <button
+                    key={s.name}
+                    onClick={() => {
+                      setSubsysFilter(s.name);
+                      setShowSubsysFilter(false);
+                    }}
+                    className={cn(
+                      'flex w-full items-center gap-1 px-2 py-1 text-[11px] transition-colors hover:bg-accent',
+                      subsysFilter === s.name && 'bg-accent/50 text-primary',
+                    )}
+                  >
+                    <Cpu className='h-2.5 w-2.5 shrink-0 opacity-50' />
+                    <span className='truncate'>{s.name}</span>
+                    {s.caseCount !== undefined && s.caseCount > 0 && (
+                      <span className='ml-auto shrink-0 text-[9px] text-muted-foreground'>
+                        {s.caseCount}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* ── Status filters (hidden in search mode) ─────── */}
       {!isSearching && (
-        <div className="flex gap-0.5 px-2 pb-1.5">
+        <div className='flex items-center gap-0.5 px-2 pb-1.5'>
           {STATUS_FILTERS.map((f) => (
             <button
               key={f.value}
@@ -578,7 +672,7 @@ export function CaseTreePanel() {
                 }
               }}
               className={cn(
-                'rounded px-1.5 py-0.5 text-[10px] transition-colors',
+                'shrink-0 rounded px-1.5 py-0.5 text-[10px] transition-colors',
                 caseStatusFilter === f.value
                   ? 'bg-primary/15 text-primary'
                   : 'text-muted-foreground hover:bg-accent',
@@ -678,9 +772,9 @@ export function CaseTreePanel() {
                         <span className="shrink-0 text-[10px] text-muted-foreground">{caseCount}</span>
                       </button>
                       {!subsysCollapsed &&
-                        tree.map((node) => (
+                        tree.map((node, idx) => (
                           <CaseTreeItem
-                            key={node.path || node.name}
+                            key={`${node.path}::${node.name}::${idx}`}
                             node={node}
                             level={0}
                             expandedFiles={searchEffectiveExpandedFiles}
@@ -705,7 +799,7 @@ export function CaseTreePanel() {
           </div>
         ) : (
           <div className="flex flex-col gap-0.5">
-            {subsystems.map((subsys) => {
+            {filteredSubsystems.map((subsys) => {
               const isExpanded = expandedSubsys.has(subsys.name);
               const subsysCases = casesBySubsys.get(subsys.name);
               const subsysTree = caseTreeBySubsys.get(subsys.name) ?? [];
@@ -759,9 +853,9 @@ export function CaseTreePanel() {
                         <div className="px-4 py-1 text-[10px] text-muted-foreground">无用例</div>
                       ) : (
                         <div>
-                          {subsysTree.map((node) => (
+                          {subsysTree.map((node, idx) => (
                             <CaseTreeItem
-                              key={node.path || node.name}
+                              key={`${node.path}::${node.name}::${idx}`}
                               node={node}
                               level={0}
                               expandedFiles={expandedFiles}

@@ -1,4 +1,5 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -100,6 +101,63 @@ export async function saveEnvConfig(projectRoot: string, config: EnvConfig): Pro
 }
 
 /**
+ * Resolve a project env var (e.g. PROJ_ENV / PROJ_RTL) with system-first fallback.
+ *
+ * Priority:
+ * 1. `process.env[name]` — inherited from the launching shell (terminal-launch case)
+ * 2. Login shell env (captures `.bashrc` / `.profile` / `module init` for desktop launches)
+ * 3. `.socverify/env.json` `envVars[name]` — persisted user configuration
+ *
+ * This is the single source of truth for resolving project env vars; routers and
+ * tools should use this instead of re-implementing the lookup. Returns the trimmed
+ * value or `null` when unset everywhere.
+ */
+export async function resolveProjectEnvVar(name: string, projectRoot: string): Promise<string | null> {
+  const fromProcess = process.env[name];
+  if (fromProcess && fromProcess.trim()) return fromProcess.trim();
+
+  try {
+    const loginEnv = await getLoginShellEnv();
+    const fromLogin = loginEnv[name];
+    if (fromLogin && fromLogin.trim()) return fromLogin.trim();
+  } catch {
+    // Login shell capture failed — fall through to env.json
+  }
+
+  const config = await loadEnvConfig(projectRoot);
+  const fromConfig = config?.envVars?.[name];
+  if (typeof fromConfig === 'string' && fromConfig.trim()) return fromConfig.trim();
+
+  return null;
+}
+
+/** Synchronous variant of {@link resolveProjectEnvVar} — skips the login shell fallback. */
+export function resolveProjectEnvVarSync(name: string, projectRoot: string): string | null {
+  const fromProcess = process.env[name];
+  if (fromProcess && fromProcess.trim()) return fromProcess.trim();
+
+  try {
+    const configPath = join(projectRoot, SOCVERIFY_DIR, ENV_CONFIG_FILE);
+    const config = JSON.parse(readFileSync(configPath, 'utf-8')) as { envVars?: Record<string, string> };
+    const fromConfig = config?.envVars?.[name];
+    if (typeof fromConfig === 'string' && fromConfig.trim()) return fromConfig.trim();
+  } catch {
+    // Config file not found or invalid
+  }
+  return null;
+}
+
+/** Convenience wrapper for resolving `$PROJ_ENV` (async, with login shell fallback). */
+export function resolveProjEnv(projectRoot: string): Promise<string | null> {
+  return resolveProjectEnvVar('PROJ_ENV', projectRoot);
+}
+
+/** Convenience wrapper for resolving `$PROJ_RTL` (async, with login shell fallback). */
+export function resolveProjRtl(projectRoot: string): Promise<string | null> {
+  return resolveProjectEnvVar('PROJ_RTL', projectRoot);
+}
+
+/**
  * Get the list of known EDA env var names.
  */
 export function getKnownEnvVarNames(): string[] {
@@ -159,6 +217,34 @@ export async function mergeSystemEnvVars(
     }
   }
   return merged;
+}
+
+/**
+ * Sync system env vars into the project's `.socverify/env.json`.
+ *
+ * Loads the existing config, fills in any missing known env vars from the
+ * system (terminal / login shell) environment without overwriting user-set
+ * values, and persists the result.  Returns the merged config and the number
+ * of newly-detected vars.
+ *
+ * Designed to be called on project open so the persisted env config stays in
+ * sync with the launching terminal environment.  Failures during detection
+ * fall through to a no-op (existing config preserved).
+ */
+export async function syncEnvFromSystem(
+  projectRoot: string,
+  refresh = true,
+): Promise<{ config: EnvConfig; detectedCount: number }> {
+  const existing = await loadEnvConfig(projectRoot);
+  const currentEnvVars = existing?.envVars ?? {};
+  const mergedEnvVars = await mergeSystemEnvVars(currentEnvVars, refresh);
+  const config: EnvConfig = {
+    tools: existing?.tools ?? [],
+    envVars: mergedEnvVars,
+  };
+  await saveEnvConfig(projectRoot, config);
+  const detectedCount = Object.keys(mergedEnvVars).length - Object.keys(currentEnvVars).length;
+  return { config, detectedCount: Math.max(0, detectedCount) };
 }
 
 /**

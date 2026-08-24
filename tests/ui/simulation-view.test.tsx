@@ -25,10 +25,6 @@ import type { SimulationRunRecord } from '@renderer/stores/simulation';
  *   abortTerminalRun / abort
  * - ui / workbench: 真实 zustand（纯 zustand，无 IPC 依赖）
  * - toast / overview / env / dashboard: mock（无 IPC 依赖）
- *
- * Issue #6 — OptionDock 仿真视图隐藏：
- * AppShell 中 OptionDock 渲染条件 activeView !== 'simulation'。
- * 仿真视图激活时 OptionDock 不在 DOM 中，切回其他视图恢复。
  */
 
 const mockSelectCase = vi.fn();
@@ -137,7 +133,6 @@ vi.mock('@renderer/stores/dashboard', () => ({
 }));
 
 import { SimulationView } from '@renderer/components/views/SimulationView';
-import { AppShell } from '@renderer/components/layout/AppShell';
 import { useUiStore } from '@renderer/stores/ui';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 
@@ -487,86 +482,5 @@ describe('SimulationView 排序', () => {
     expect(rows[1].textContent).toContain('run_a');
     expect(rows[2].textContent).toContain('fail_case');
     expect(rows[3].textContent).toContain('pass_case');
-  });
-});
-
-// ── Issue #6: OptionDock 全局移除 ───────────────────────────
-
-/**
- * 仿真 Option 已内嵌到 SimulationView 的 SimOptionPanel，
- * AppShell 不再渲染 OptionDock 浮窗（任何视图均不显示）。
- * Mock AppShell 的子组件为空占位，避免渲染复杂子树。
- */
-vi.mock('@renderer/components/layout/TitleBar', () => ({
-  TitleBar: () => <div data-testid="mock-titlebar" />,
-}));
-vi.mock('@renderer/components/layout/NavRail', () => ({
-  NavRail: () => <div data-testid="mock-navrail" />,
-}));
-vi.mock('@renderer/components/layout/ViewContainer', () => ({
-  ViewContainer: () => <div data-testid="mock-viewcontainer" />,
-}));
-vi.mock('@renderer/components/layout/BottomPanel', () => ({
-  BottomPanel: () => <div data-testid="mock-bottompanel" />,
-}));
-vi.mock('@renderer/components/layout/StatusBar', () => ({
-  StatusBar: () => <div data-testid="mock-statusbar" />,
-}));
-vi.mock('@renderer/components/layout/TaskPanel', () => ({
-  TaskPanel: () => null,
-}));
-vi.mock('@renderer/components/layout/CommandPalette', () => ({
-  CommandPalette: () => null,
-}));
-vi.mock('@renderer/components/layout/Backdrop', () => ({
-  Backdrop: () => null,
-}));
-vi.mock('@renderer/components/layout/FileDrawer', () => ({
-  FileDrawer: () => null,
-}));
-vi.mock('@renderer/components/layout/AiDrawer', () => ({
-  AiDrawer: () => null,
-}));
-vi.mock('@renderer/components/env/EnvWizard', () => ({
-  EnvWizard: () => null,
-}));
-vi.mock('@renderer/components/env/EnvManagerDialog', () => ({
-  EnvManagerDialog: () => null,
-}));
-vi.mock('@renderer/components/settings/SettingsPanel', () => ({
-  SettingsPanel: () => null,
-}));
-vi.mock('@renderer/components/scm/SourceControlDialog', () => ({
-  SourceControlDialog: () => null,
-}));
-vi.mock('@renderer/components/coverage/ExportDialog', () => ({
-  ExportDialog: () => null,
-}));
-
-// session store mock（AppShell 依赖 sessionIds）
-vi.mock('@renderer/stores/session', () => ({
-  useSessionStore: (selector: (s: { sessions: never[] }) => unknown) => selector({ sessions: [] }),
-}));
-
-describe('Issue #6: OptionDock 全局移除', () => {
-  it('仿真视图激活时 OptionDock 不在 DOM 中', () => {
-    useUiStore.setState({ activeView: 'simulation' });
-    render(<AppShell />);
-
-    expect(screen.queryByText('仿真 Option')).not.toBeInTheDocument();
-  });
-
-  it('工作区视图激活时 OptionDock 也不在 DOM 中', () => {
-    useUiStore.setState({ activeView: 'workspace', optionDockExpanded: true });
-    render(<AppShell />);
-
-    expect(screen.queryByText('仿真 Option')).not.toBeInTheDocument();
-  });
-
-  it('总览视图激活时 OptionDock 也不在 DOM 中', () => {
-    useUiStore.setState({ activeView: 'dashboard', optionDockExpanded: true });
-    render(<AppShell />);
-
-    expect(screen.queryByText('仿真 Option')).not.toBeInTheDocument();
   });
 });

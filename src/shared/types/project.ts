@@ -41,7 +41,8 @@ export interface ProjectState {
   projectId: string;
   uiLayout: {
     rightPanelCollapsed: boolean;
-    optionDockExpanded: boolean;
+    /** @deprecated UI store 已移除此字段；仅用于读取旧持久化状态。 */
+    optionDockExpanded?: boolean;
     pluginViews?: Partial<Record<PluginViewLocation, PluginViewLayoutState>>;
     /** App Shell 活动视图（mission-control 布局）；旧持久化状态可能缺失 */
     activeView?: string;

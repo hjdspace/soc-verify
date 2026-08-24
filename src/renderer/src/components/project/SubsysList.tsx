@@ -303,7 +303,7 @@ export function SubsysList() {
   /**
    * Handle case selection (clicking on a case in the tree, not the run button).
    *
-   * Auto-fills base/block/case into the simulation options (OptionDock),
+   * Auto-fills base/block/case into the simulation options (SimOptionPanel),
    * matching the behavior of Python runsim_r3p0's `on_case_selected`:
    *   1. Set case name
    *   2. Fill base/block from case data (parsed by case-parser plugin)
@@ -718,9 +718,9 @@ export function SubsysList() {
                     </span>
                   </button>
                   {/* File groups — collapsible, show only matching cases */}
-                  {!subsysCollapsed && tree.map((node) => (
+                  {!subsysCollapsed && tree.map((node, idx) => (
                     <CaseTreeItem
-                      key={node.path || node.name}
+                      key={`${node.path}::${node.name}::${idx}`}
                       node={node}
                       level={0}
                       expandedFiles={searchEffectiveExpandedFiles}
@@ -885,9 +885,9 @@ export function SubsysList() {
                 <div className="px-4 py-1 text-[10px] text-muted-foreground">无用例</div>
               ) : (
                 <div>
-                  {subsysTree.map((node) => (
+                  {subsysTree.map((node, idx) => (
                     <CaseTreeItem
-                      key={node.path || node.name}
+                      key={`${node.path}::${node.name}::${idx}`}
                       node={node}
                       level={0}
                       expandedFiles={expandedFiles}

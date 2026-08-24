@@ -214,9 +214,9 @@ export function CaseTreeItem({
           <span className="ml-auto shrink-0 text-[9px] opacity-50">{node.children.length}</span>
         </button>
         {isExpanded &&
-          node.children.map((child) => (
+          node.children.map((child, idx) => (
             <CaseTreeItem
-              key={child.caseData?.id || child.path || child.name}
+              key={child.caseData ? getCaseId(child.caseData) : `${child.path}::${child.name}::${idx}`}
               node={child}
               level={level + 1}
               expandedFiles={expandedFiles}
@@ -328,9 +328,9 @@ export function CaseTreeItem({
       </div>
       {hasChildren &&
         isExpanded &&
-        node.children.map((child) => (
+        node.children.map((child, idx) => (
           <CaseTreeItem
-            key={child.caseData?.id || child.path || child.name}
+            key={child.caseData ? getCaseId(child.caseData) : `${child.path}::${child.name}::${idx}`}
             node={child}
             level={level + 1}
             expandedFiles={expandedFiles}

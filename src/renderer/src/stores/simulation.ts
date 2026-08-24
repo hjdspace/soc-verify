@@ -344,10 +344,18 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
     try {
       const runs = await trpc.simulation.listActiveRuns.query({ projectId });
       set((s) => {
-        // 按 runId 合并而非整表替换：SimulationManager 只跟踪插件运行，
-        // 终端运行仅存在于本地 store（IPC 事件驱动），整表替换会丢失它们。
-        const byId = new Map(s.activeRuns.map((r) => [r.runId, r]));
-        for (const r of runs) {
+        // 后端 listActiveRuns 已合并三个数据源（DB persistedRuns +
+        // SimulationManager activeRuns + simTerminalLinker terminalRuns）
+        // 并按 caseId×subsys 去重，返回每个 case 最新一条。
+        //
+        // 前端以"后端返回的 runId 集合"为基准重建列表：
+        // 1. 后端返回的记录 → 直接使用（保留本地 terminalId/command 等字段）
+        // 2. 本地 running/pending 且不在后端列表中的记录 → 保留（安全网：
+        //    刚通过 IPC started 事件添加但后端尚未返回的终端仿真）
+        // 3. 本地已终态且不在后端列表中的记录 → 丢弃（同 case 旧记录已被
+        //    后端新记录覆盖，不应再显示，避免同一用例出现重复条目）
+        const backendRunIds = new Set(runs.map((r) => r.runId));
+        const backendRuns: SimulationRunRecord[] = runs.map((r) => {
           const incoming: SimulationRunRecord = {
             runId: r.runId,
             projectId: r.projectId,
@@ -360,21 +368,24 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
             endTime: r.endTime,
             compileErrors: r.compileErrors,
           };
-          const existing = byId.get(r.runId);
-          byId.set(
-            r.runId,
-            existing
-              ? {
-                  ...existing,
-                  status: incoming.status,
-                  endTime: incoming.endTime,
-                  compileErrors: incoming.compileErrors,
-                  seed: incoming.seed ?? existing.seed,
-                }
-              : incoming,
-          );
-        }
-        return { activeRuns: Array.from(byId.values()) };
+          const existing = s.activeRuns.find((old) => old.runId === r.runId);
+          return existing
+            ? {
+                ...existing,
+                status: incoming.status,
+                endTime: incoming.endTime,
+                compileErrors: incoming.compileErrors,
+                seed: incoming.seed ?? existing.seed,
+              }
+            : incoming;
+        });
+        // 保留本地 running/pending 但后端尚未返回的记录
+        const localOnlyLive = s.activeRuns.filter(
+          (r) =>
+            !backendRunIds.has(r.runId) &&
+            (r.status === 'running' || r.status === 'pending'),
+        );
+        return { activeRuns: [...backendRuns, ...localOnlyLive] };
       });
     } catch {
       // best-effort

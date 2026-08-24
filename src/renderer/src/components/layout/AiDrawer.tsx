@@ -15,12 +15,10 @@ export function AiDrawer() {
   const open = useUiStore((s) => s.rightDrawerOpen);
   const closeDrawers = useUiStore((s) => s.closeDrawers);
   const setAiPanelMode = useUiStore((s) => s.setAiPanelMode);
-  const setActiveView = useUiStore((s) => s.setActiveView);
 
-  /** 切换回固定侧栏模式：偏好写入布局持久化，并切到 workspace 让用户看到面板。 */
+  /** 切换回固定侧栏模式：docked 面板全局可见，无需切换视图。 */
   const handleSwitchToDocked = () => {
     setAiPanelMode('docked');
-    setActiveView('workspace');
   };
 
   return (

@@ -63,6 +63,11 @@ import {
   getEnvVarCatalog,
   detectSystemEnvVars,
   mergeSystemEnvVars,
+  resolveProjectEnvVar,
+  resolveProjectEnvVarSync,
+  resolveProjEnv,
+  resolveProjRtl,
+  syncEnvFromSystem,
 } from '../../src/main/env/env-manager';
 
 // ─── Helper: configure execFileMock for a set of tools ──────
@@ -422,6 +427,237 @@ describe('env-manager', () => {
       const current = { MY_CUSTOM_VAR: 'custom-value' };
       const merged = await mergeSystemEnvVars(current);
       expect(merged['MY_CUSTOM_VAR']).toBe('custom-value');
+    });
+  });
+
+  describe('resolveProjectEnvVar / resolveProjEnv / resolveProjRtl', () => {
+    it('resolves from process.env first', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'env-resolve-'));
+      try {
+        process.env.PROJ_ENV = '/from/process/env';
+        try {
+          const result = await resolveProjEnv(tmpDir);
+          expect(result).toBe('/from/process/env');
+        } finally {
+          delete process.env.PROJ_ENV;
+        }
+      } finally {
+        rmSync(tmpDir, { recursive: true });
+      }
+    });
+
+    it('falls back to login shell env when process.env is unset', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'env-resolve-'));
+      try {
+        const original = process.env.PROJ_ENV;
+        delete process.env.PROJ_ENV;
+        mockLoginShellEnv['PROJ_ENV'] = '/from/login/shell';
+        try {
+          const result = await resolveProjEnv(tmpDir);
+          expect(result).toBe('/from/login/shell');
+        } finally {
+          if (original !== undefined) process.env.PROJ_ENV = original;
+          delete mockLoginShellEnv['PROJ_ENV'];
+        }
+      } finally {
+        rmSync(tmpDir, { recursive: true });
+      }
+    });
+
+    it('falls back to .socverify/env.json when process.env and login shell are unset', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'env-resolve-'));
+      const socverifyDir = join(tmpDir, '.socverify');
+      mkdirSync(socverifyDir, { recursive: true });
+      writeFileSync(
+        join(socverifyDir, 'env.json'),
+        JSON.stringify({ tools: [], envVars: { PROJ_ENV: '/from/env.json' } }),
+      );
+      try {
+        const original = process.env.PROJ_ENV;
+        delete process.env.PROJ_ENV;
+        try {
+          const result = await resolveProjEnv(tmpDir);
+          expect(result).toBe('/from/env.json');
+        } finally {
+          if (original !== undefined) process.env.PROJ_ENV = original;
+        }
+      } finally {
+        rmSync(tmpDir, { recursive: true });
+      }
+    });
+
+    it('returns null when var is unset everywhere', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'env-resolve-'));
+      try {
+        const original = process.env.PROJ_ENV;
+        delete process.env.PROJ_ENV;
+        try {
+          const result = await resolveProjEnv(tmpDir);
+          expect(result).toBeNull();
+        } finally {
+          if (original !== undefined) process.env.PROJ_ENV = original;
+        }
+      } finally {
+        rmSync(tmpDir, { recursive: true });
+      }
+    });
+
+    it('resolveProjRtl resolves PROJ_RTL from process.env', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'env-resolve-'));
+      try {
+        process.env.PROJ_RTL = '/rtl/from/process';
+        try {
+          const result = await resolveProjRtl(tmpDir);
+          expect(result).toBe('/rtl/from/process');
+        } finally {
+          delete process.env.PROJ_RTL;
+        }
+      } finally {
+        rmSync(tmpDir, { recursive: true });
+      }
+    });
+
+    it('resolveProjectEnvVar works for arbitrary var names', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'env-resolve-'));
+      try {
+        process.env.VCS_HOME = '/tools/vcs';
+        try {
+          const result = await resolveProjectEnvVar('VCS_HOME', tmpDir);
+          expect(result).toBe('/tools/vcs');
+        } finally {
+          delete process.env.VCS_HOME;
+        }
+      } finally {
+        rmSync(tmpDir, { recursive: true });
+      }
+    });
+
+    it('resolveProjectEnvVarSync reads process.env without login shell fallback', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'env-sync-resolve-'));
+      try {
+        process.env.PROJ_ENV = '/sync/from/process';
+        try {
+          const result = resolveProjectEnvVarSync('PROJ_ENV', tmpDir);
+          expect(result).toBe('/sync/from/process');
+        } finally {
+          delete process.env.PROJ_ENV;
+        }
+      } finally {
+        rmSync(tmpDir, { recursive: true });
+      }
+    });
+
+    it('resolveProjectEnvVarSync falls back to .socverify/env.json', () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'env-sync-resolve-'));
+      const socverifyDir = join(tmpDir, '.socverify');
+      mkdirSync(socverifyDir, { recursive: true });
+      writeFileSync(
+        join(socverifyDir, 'env.json'),
+        JSON.stringify({ tools: [], envVars: { PROJ_RTL: '/rtl/from/env.json' } }),
+      );
+      try {
+        const original = process.env.PROJ_RTL;
+        delete process.env.PROJ_RTL;
+        try {
+          const result = resolveProjectEnvVarSync('PROJ_RTL', tmpDir);
+          expect(result).toBe('/rtl/from/env.json');
+        } finally {
+          if (original !== undefined) process.env.PROJ_RTL = original;
+        }
+      } finally {
+        rmSync(tmpDir, { recursive: true });
+      }
+    });
+  });
+
+  describe('syncEnvFromSystem', () => {
+    it('merges system env vars into env.json without overwriting user-set values', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'env-sync-'));
+      const socverifyDir = join(tmpDir, '.socverify');
+      mkdirSync(socverifyDir, { recursive: true });
+      writeFileSync(
+        join(socverifyDir, 'env.json'),
+        JSON.stringify({
+          tools: [{ name: 'VCS', path: '/usr/bin/vcs', detected: true }],
+          envVars: { PROJ_ENV: '/user/set/proj-env' },
+        }),
+      );
+      try {
+        mockLoginShellEnv['PROJ_RTL'] = '/system/proj/rtl';
+        mockLoginShellEnv['VCS_HOME'] = '/tools/synopsys/vcs';
+
+        const { config, detectedCount } = await syncEnvFromSystem(tmpDir);
+        expect(config.envVars['PROJ_ENV']).toBe('/user/set/proj-env');
+        expect(config.envVars['PROJ_RTL']).toBe('/system/proj/rtl');
+        expect(config.envVars['VCS_HOME']).toBe('/tools/synopsys/vcs');
+        expect(config.tools).toHaveLength(1);
+        // At least the two vars we set in mockLoginShellEnv were detected
+        // (PATH may also be detected from process.env, so use >=).
+        expect(detectedCount).toBeGreaterThanOrEqual(2);
+
+        // Verify persistence
+        const reloaded = await loadEnvConfig(tmpDir);
+        expect(reloaded?.envVars['PROJ_RTL']).toBe('/system/proj/rtl');
+        expect(reloaded?.envVars['PROJ_ENV']).toBe('/user/set/proj-env');
+      } finally {
+        rmSync(tmpDir, { recursive: true });
+      }
+    });
+
+    it('preserves existing tools array when syncing env vars', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'env-sync-'));
+      const socverifyDir = join(tmpDir, '.socverify');
+      mkdirSync(socverifyDir, { recursive: true });
+      const originalTools = [{ name: 'VCS', path: '/usr/bin/vcs', detected: true }];
+      writeFileSync(
+        join(socverifyDir, 'env.json'),
+        JSON.stringify({ tools: originalTools, envVars: {} }),
+      );
+      try {
+        const { config } = await syncEnvFromSystem(tmpDir);
+        expect(config.tools).toEqual(originalTools);
+      } finally {
+        rmSync(tmpDir, { recursive: true });
+      }
+    });
+
+    it('returns detectedCount=0 when no new system vars are found', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'env-sync-'));
+      const socverifyDir = join(tmpDir, '.socverify');
+      mkdirSync(socverifyDir, { recursive: true });
+      // Pre-populate with all known system vars so nothing new can be detected.
+      const allKnown: Record<string, string> = {};
+      for (const name of getKnownEnvVarNames()) {
+        allKnown[name] = '/preset';
+      }
+      writeFileSync(
+        join(socverifyDir, 'env.json'),
+        JSON.stringify({ tools: [], envVars: allKnown }),
+      );
+      try {
+        const { detectedCount } = await syncEnvFromSystem(tmpDir);
+        expect(detectedCount).toBe(0);
+      } finally {
+        rmSync(tmpDir, { recursive: true });
+      }
+    });
+
+    it('creates env.json if it does not exist', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'env-sync-'));
+      try {
+        mockLoginShellEnv['PROJ_ENV'] = '/system/proj-env';
+
+        const { config, detectedCount } = await syncEnvFromSystem(tmpDir);
+        expect(config.envVars['PROJ_ENV']).toBe('/system/proj-env');
+        expect(detectedCount).toBeGreaterThanOrEqual(1);
+
+        // File should now exist on disk
+        const reloaded = await loadEnvConfig(tmpDir);
+        expect(reloaded).not.toBeNull();
+        expect(reloaded?.envVars['PROJ_ENV']).toBe('/system/proj-env');
+      } finally {
+        rmSync(tmpDir, { recursive: true });
+      }
     });
   });
 });
