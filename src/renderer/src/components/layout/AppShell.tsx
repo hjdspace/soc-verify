@@ -9,6 +9,8 @@ import { CommandPalette } from './CommandPalette';
 import { Backdrop } from './Backdrop';
 import { FileDrawer } from './FileDrawer';
 import { AiDrawer } from './AiDrawer';
+import { RightPanel } from './RightPanel';
+import { ResizeHandle } from './ResizeHandle';
 import { EnvWizard } from '@renderer/components/env/EnvWizard';
 import { EnvManagerDialog } from '@renderer/components/env/EnvManagerDialog';
 import { SettingsPanel } from '@renderer/components/settings/SettingsPanel';
@@ -27,6 +29,8 @@ export function AppShell() {
   const rightDrawerOpen = useUiStore((s) => s.rightDrawerOpen);
   const closeDrawers = useUiStore((s) => s.closeDrawers);
   const rightCollapsed = useUiStore((s) => s.rightPanelCollapsed);
+  const rightPanelWidth = useUiStore((s) => s.rightPanelWidth);
+  const setRightPanelWidth = useUiStore((s) => s.setRightPanelWidth);
   const simLeftPanelWidth = useUiStore((s) => s.simLeftPanelWidth);
   const pluginViewLayouts = useUiStore((s) => s.pluginViewLayouts);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
@@ -58,7 +62,7 @@ export function AppShell() {
       void saveProjectState();
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [currentProjectId, uiStateReady, activeView, aiPanelMode, rightCollapsed, simLeftPanelWidth, pluginViewLayouts, sessionIds, saveProjectState]);
+  }, [currentProjectId, uiStateReady, activeView, aiPanelMode, rightCollapsed, rightPanelWidth, simLeftPanelWidth, pluginViewLayouts, sessionIds, saveProjectState]);
 
   // Save state before the window unloads so lastSessionIds is up-to-date.
   useEffect(() => {
@@ -77,9 +81,19 @@ export function AppShell() {
       {/* ── 主区域：NavRail | (ViewContainer + BottomPanel) ── */}
       <div className="relative flex flex-1 overflow-hidden">
         <NavRail />
-        <div className="flex flex-1 flex-col overflow-hidden">
-          <ViewContainer />
-          <BottomPanel />
+        <div className="flex flex-1 overflow-hidden">
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <ViewContainer />
+            <BottomPanel />
+          </div>
+
+          {/* ── 固定侧栏 AI 面板（docked 模式，所有视图全局可见） ── */}
+          {aiPanelMode === 'docked' && !rightCollapsed && (
+            <>
+              <ResizeHandle side="right" width={rightPanelWidth} onResize={setRightPanelWidth} />
+              <RightPanel width={rightPanelWidth} />
+            </>
+          )}
         </div>
 
         {/* ── 后台任务面板（浮动在右下角） ──────────────────── */}
