@@ -223,13 +223,13 @@ describe('Case Database Repository', () => {
     beforeEach(() => {
       insertSubsystems(db, [makeSubsys({ name: 'cpu' })]);
       insertCases(db, [
-        makeCase({ name: 'test_basic', subsys: 'cpu' }),
-        makeCase({ name: 'test_advanced', subsys: 'cpu' }),
-        makeCase({ name: 'smoke_test', subsys: 'cpu' }),
+        makeCase({ name: 'test_basic', subsys: 'cpu', path: '/proj/cpu/test_basic' }),
+        makeCase({ name: 'test_advanced', subsys: 'cpu', path: '/proj/cpu/test_advanced' }),
+        makeCase({ name: 'smoke_test', subsys: 'cpu', path: '/proj/cpu/smoke_test' }),
       ]);
     });
 
-    it('finds cases by substring match', () => {
+    it('finds cases by name substring match', () => {
       const results = searchCases(db, 'basic');
       expect(results).toHaveLength(1);
       expect(results[0].name).toBe('test_basic');
@@ -239,7 +239,7 @@ describe('Case Database Repository', () => {
       expect(searchCases(db, 'nonexistent')).toEqual([]);
     });
 
-    it('finds multiple matches', () => {
+    it('finds multiple matches by name', () => {
       const results = searchCases(db, 'test');
       expect(results).toHaveLength(3);
     });
@@ -256,6 +256,43 @@ describe('Case Database Repository', () => {
 
     it('returns empty on empty query', () => {
       expect(searchCases(db, '')).toEqual([]);
+    });
+
+    it('finds cases by path substring', () => {
+      insertSubsystems(db, [makeSubsys({ name: 'gpu' })]);
+      insertCases(db, [
+        makeCase({ name: 'case_a', subsys: 'gpu', path: '/proj/gpu/mini_flow/tc_a' }),
+        makeCase({ name: 'case_b', subsys: 'gpu', path: '/proj/gpu/mini_flow/tc_b' }),
+        makeCase({ name: 'case_c', subsys: 'gpu', path: '/proj/gpu/full_flow/tc_c' }),
+      ]);
+      const results = searchCases(db, 'mini_flow');
+      expect(results).toHaveLength(2);
+      expect(results.map((r) => r.name).sort()).toEqual(['case_a', 'case_b']);
+    });
+
+    it('finds cases by file_path substring', () => {
+      insertSubsystems(db, [makeSubsys({ name: 'dsp' })]);
+      insertCases(db, [
+        makeCase({ name: 'case_x', subsys: 'dsp', filePath: '/proj/dsp/bin/case_cfg/mini_top.cfg' }),
+        makeCase({ name: 'case_y', subsys: 'dsp', filePath: '/proj/dsp/bin/case_cfg/mini_top.cfg' }),
+        makeCase({ name: 'case_z', subsys: 'dsp', filePath: '/proj/dsp/bin/case_cfg/full_top.cfg' }),
+      ]);
+      const results = searchCases(db, 'mini_top');
+      expect(results).toHaveLength(2);
+      expect(results.map((r) => r.name).sort()).toEqual(['case_x', 'case_y']);
+    });
+
+    it('returns all cases from a matching cfg file when searching by file_path segment', () => {
+      insertSubsystems(db, [makeSubsys({ name: 'top' })]);
+      insertCases(db, [
+        makeCase({ name: 'mini_case_1', subsys: 'top', filePath: '/env/top/bin/case_cfg/mini_case.cfg' }),
+        makeCase({ name: 'mini_case_2', subsys: 'top', filePath: '/env/top/bin/case_cfg/mini_case.cfg' }),
+        makeCase({ name: 'other_case', subsys: 'top', filePath: '/env/top/bin/case_cfg/other.cfg' }),
+      ]);
+      // 搜索 "mini" 应该同时匹配 name 包含 mini 的用例和 file_path 包含 mini 的用例
+      const results = searchCases(db, 'mini');
+      expect(results).toHaveLength(2);
+      expect(results.map((r) => r.name).sort()).toEqual(['mini_case_1', 'mini_case_2']);
     });
   });
 
