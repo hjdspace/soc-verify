@@ -4,10 +4,10 @@ import { cn } from '@renderer/lib/utils';
 /**
  * 快捷键地图 Tab — 展示全局快捷键。
  *
- * 数据来源：SHORTCUT_GROUPS 静态常量，需与 CommandPalette / NavRail / FileEditor / SubsysList 实现保持同步。
+ * 数据来源：SHORTCUT_GROUPS 静态常量，需与 CommandPalette / NavRail / FileEditor 实现保持同步。
  */
 
-/** 快捷键地图（Issue #9：与实现保持同步——CommandPalette / NavRail / FileEditor / SubsysList） */
+/** 快捷键地图（Issue #9：与实现保持同步——CommandPalette / NavRail / FileEditor） */
 const SHORTCUT_GROUPS: ReadonlyArray<{
   label: string;
   items: ReadonlyArray<{ keys: string[]; action: string; context?: string }>;
@@ -34,7 +34,7 @@ const SHORTCUT_GROUPS: ReadonlyArray<{
   {
     label: '其他',
     items: [
-      { keys: ['Ctrl', 'F'], action: '聚焦搜索框', context: '子系统列表' },
+      { keys: ['Ctrl', 'F'], action: '聚焦搜索框', context: '用例树' },
     ],
   },
 ];

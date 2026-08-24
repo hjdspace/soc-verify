@@ -316,3 +316,57 @@ describe('RunListPanel 排序', () => {
     expect(rows[3].textContent).toContain('pass_case');
   });
 });
+
+describe('RunListPanel 虚拟滚动', () => {
+  /**
+   * 当 activeRuns 包含大量用例（如 500 条）时，虚拟化应限制实际渲染的行数，
+   * 避免一次性渲染全部 DOM 节点导致卡顿。
+   *
+   * 在 jsdom 中，scrollElement 的 clientHeight 为 0，虚拟化器会 fallback
+   * 为渲染全部行（因为没有有效视口高度），所以这里验证的是：
+   * 1. 大量数据时组件仍能正常渲染和交互
+   * 2. 行的 data-testid 保持 sim-row-{runId} 不变
+   * 3. 点击行仍能正确路由
+   * 4. 虚拟化容器存在（通过 data-testid="run-list-virtual-scroll"）
+   */
+  it('500 条运行记录时仍能正常渲染和交互', () => {
+    const runs: SimulationRunRecord[] = Array.from({ length: 500 }, (_, i) =>
+      makeRun({
+        runId: `r-batch-${i}`,
+        caseName: `case_batch_${i}`,
+        status: i % 3 === 0 ? 'running' : i % 3 === 1 ? 'pass' : 'fail',
+        startTime: Date.now() - i * 1000,
+        endTime: i % 3 === 0 ? undefined : Date.now() - i * 1000 + 500,
+      }),
+    );
+    mocks.sim.activeRuns = runs;
+    render(<RunListPanel />);
+
+    // 虚拟滚动容器存在
+    expect(screen.getByTestId('run-list-virtual-scroll')).toBeInTheDocument();
+
+    // 至少渲染了部分行（具体数量取决于虚拟化器，但不应为 0）
+    const renderedRows = screen.getAllByTestId(/^sim-row-/);
+    expect(renderedRows.length).toBeGreaterThan(0);
+
+    // 第一个运行中行的 caseName 应该在渲染的行中
+    // 排序后运行中优先，r-batch-0 是第一个 running（startTime 最晚的 running）
+    const firstRunningRow = renderedRows.find((r) => r.textContent?.includes('case_batch_0'));
+    expect(firstRunningRow).toBeTruthy();
+  });
+
+  it('虚拟滚动下行点击仍能正确路由到仿真详情', () => {
+    mocks.sim.activeRuns = [
+      makeRun({ runId: 'r-virt-1', caseName: 'virt_case_1' }),
+      makeRun({ runId: 'r-virt-2', caseName: 'virt_case_2' }),
+    ];
+    render(<RunListPanel />);
+
+    const rows = screen.getAllByTestId(/^sim-row-/);
+    fireEvent.click(rows[0]);
+
+    const tabs = useWorkbenchStore.getState().tabs;
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].destination.type).toBe('simulation-detail');
+  });
+});

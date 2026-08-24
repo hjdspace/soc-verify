@@ -8,14 +8,18 @@
  * 行点击跳转到运行详情 Tab（workbench.open）。
  * 运行中仿真秒级刷新实时耗时。
  *
+ * 性能优化：
+ *   - 虚拟滚动：仅渲染可见区域内的行，支持万级用例流畅滚动
+ *   - React.memo：RunRow 缓存，避免 now 秒级刷新导致全部行重渲染
+ *
  * 布局对齐原型 sim-page-01-left-tree-right-options.html：
  *   .rla（flex-1 flex-col overflow-hidden）
  *     .lh → 筛选栏（标题 + 分段 + 搜索 + 停止全部）
  *     .rh → 表头行（sticky 不可滚动）
- *     .table → 行体（flex-1 overflow-y-auto）
+ *     .table → 行体（flex-1 overflow-y-auto，虚拟滚动）
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback, memo } from 'react';
 import { Search, Square } from 'lucide-react';
 import { useSimulationStore, type SimulationRunRecord } from '@renderer/stores/simulation';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
@@ -67,7 +71,12 @@ function formatDuration(ms: number): string {
 
 const ROW_GRID = 'grid grid-cols-[18px_1.4fr_100px_1fr_80px_70px]';
 
-function RunRow({ run, now, onOpen }: {
+// ─── 虚拟滚动常量 ────────────────────────────────────────────────
+
+const ROW_HEIGHT = 40; // px — RunRow 的预估高度（px-3 py-1.5 + 内容）
+const OVERSCAN = 8;   // 额外渲染的行数（上下各 overscan）
+
+const RunRow = memo(function RunRow({ run, now, onOpen }: {
   run: SimulationRunRecord;
   now: number;
   onOpen: () => void;
@@ -80,6 +89,10 @@ function RunRow({ run, now, onOpen }: {
       : 0;
   const eta = etaCell(run.status);
 
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') onOpen();
+  }, [onOpen]);
+
   return (
     <div
       role="button"
@@ -87,9 +100,7 @@ function RunRow({ run, now, onOpen }: {
       className={cn(ROW_GRID, 'cursor-pointer items-center gap-2 border-b border-border px-3 py-1.5 transition-colors last:border-b-0 hover:bg-accent')}
       data-testid={`sim-row-${run.runId}`}
       onClick={onOpen}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') onOpen();
-      }}
+      onKeyDown={handleKeyDown}
     >
       <span className={cn('size-2 shrink-0 rounded-full', dotClass(run.status))} />
       <div className="min-w-0 overflow-hidden">
@@ -120,7 +131,7 @@ function RunRow({ run, now, onOpen }: {
       <span className={cn('text-right font-mono text-[10px]', eta.className)}>{eta.label}</span>
     </div>
   );
-}
+});
 
 export function RunListPanel({ projectId }: { projectId?: string } = {}) {
   const activeRuns = useSimulationStore((s) => s.activeRuns);
@@ -184,6 +195,43 @@ export function RunListPanel({ projectId }: { projectId?: string } = {}) {
     setSeg('all');
     setKeyword('');
   };
+
+  // ─── 虚拟滚动 ──────────────────────────────────────────────
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(600);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    // 初始读取视口高度
+    setViewportHeight(el.clientHeight || 600);
+    const onScroll = () => setScrollTop(el.scrollTop);
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // 监听容器大小变化（窗口 resize 等）
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      setViewportHeight(el.clientHeight || 600);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const totalRows = filtered.length;
+  const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+  const endIndex = Math.min(
+    totalRows,
+    Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN,
+  );
+  const visibleSlice = filtered.slice(startIndex, endIndex);
+  const topSpacer = startIndex * ROW_HEIGHT;
+  const bottomSpacer = (totalRows - endIndex) * ROW_HEIGHT;
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden" data-testid="run-list-panel">
@@ -255,8 +303,12 @@ export function RunListPanel({ projectId }: { projectId?: string } = {}) {
         <span className="text-right">ETA</span>
       </div>
 
-      {/* ── Table body (scrollable) ────────────────────────────── */}
-      <div className="flex-1 overflow-y-auto">
+      {/* ── Table body (virtual scrollable) ────────────────────── */}
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto"
+        data-testid="run-list-virtual-scroll"
+      >
         {loading && activeRuns.length === 0 ? (
           <div className="flex flex-col gap-2 p-3" data-testid="sim-view-skeleton">
             {Array.from({ length: 5 }, (_, i) => (
@@ -287,14 +339,24 @@ export function RunListPanel({ projectId }: { projectId?: string } = {}) {
             </button>
           </div>
         ) : (
-          filtered.map((run) => (
-            <RunRow
-              key={run.runId}
-              run={run}
-              now={now}
-              onOpen={() => open({ type: 'simulation-detail', runId: run.runId })}
-            />
-          ))
+          <>
+            {/* 顶部空间 — 撑起虚拟滚动上方区域 */}
+            {topSpacer > 0 && (
+              <div style={{ height: topSpacer }} aria-hidden="true" />
+            )}
+            {visibleSlice.map((run) => (
+              <RunRow
+                key={run.runId}
+                run={run}
+                now={now}
+                onOpen={() => open({ type: 'simulation-detail', runId: run.runId })}
+              />
+            ))}
+            {/* 底部空间 — 撑起虚拟滚动下方区域 */}
+            {bottomSpacer > 0 && (
+              <div style={{ height: bottomSpacer }} aria-hidden="true" />
+            )}
+          </>
         )}
       </div>
     </div>
