@@ -12,6 +12,7 @@ import {
   getEnvVarCatalog,
   detectSystemEnvVars,
   mergeSystemEnvVars,
+  syncEnvFromSystem,
 } from '../../env/env-manager';
 import { pluginLoader } from '../../plugins/loader';
 import { caseStatsRegistry } from '../../case/case-stats-registry';
@@ -52,7 +53,13 @@ export const envRouter = t.router({
     })
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
-      await saveEnvConfig(project.rootPath, input.config);
+      // Sync system env vars into the user-supplied config before saving:
+      // fills in any known vars present in the terminal environment but not
+      // set in the UI, without overwriting user-set values.  Keeps env.json
+      // in sync with the launching terminal environment.
+      const mergedEnvVars = await mergeSystemEnvVars(input.config.envVars, true);
+      const mergedConfig: EnvConfig = { ...input.config, envVars: mergedEnvVars };
+      await saveEnvConfig(project.rootPath, mergedConfig);
 
       // After saving env config (e.g. PROJ_RTL / PROJ_ENV), trigger a full
       // rescan so the case database is re-populated with the new env vars.
@@ -77,7 +84,7 @@ export const envRouter = t.router({
         console.error(`[env:saveConfig] background rescan failed:`, err);
       }
 
-      return { ok: true, scanResult };
+      return { ok: true, scanResult, config: mergedConfig };
     }),
 
   getKnownEnvVars: t.procedure.query(() => {
@@ -105,14 +112,7 @@ export const envRouter = t.router({
     })
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
-      const existing = await loadEnvConfig(project.rootPath);
-      const currentEnvVars = existing?.envVars ?? {};
-      const mergedEnvVars = await mergeSystemEnvVars(currentEnvVars, true);
-      const config: EnvConfig = {
-        tools: existing?.tools ?? [],
-        envVars: mergedEnvVars,
-      };
-      await saveEnvConfig(project.rootPath, config);
-      return { config, detectedCount: Object.keys(mergedEnvVars).length - Object.keys(currentEnvVars).length };
+      const { config, detectedCount } = await syncEnvFromSystem(project.rootPath);
+      return { config, detectedCount };
     }),
 });
