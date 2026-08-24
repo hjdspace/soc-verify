@@ -28,7 +28,7 @@
  */
 
 const { join } = require('node:path');
-const { existsSync, readdirSync, rmSync } = require('node:fs');
+const { chmodSync, existsSync, readdirSync, rmSync } = require('node:fs');
 
 // Prebuilds whose name starts with one of these prefixes are kept.
 // `linux` also matches `linuxmusl-*`. Same-OS other-arch builds are kept so a
@@ -48,6 +48,15 @@ function rmrf(p) {
 }
 
 module.exports = async function afterPack(context) {
+  // Keep extraResources directly executable. Archive/artifact transfers may
+  // restore 0644 even when the source binary was built with 0755.
+  if (context.electronPlatformName === 'linux') {
+    const runner = join(context.appOutDir, 'resources', 'binaries', 'socverify-runner');
+    if (existsSync(runner)) {
+      try { chmodSync(runner, 0o755); } catch { /* best effort */ }
+    }
+  }
+
   const nmDir = join(context.appOutDir, 'resources', 'app.asar.unpacked', 'node_modules');
   if (!existsSync(nmDir)) return;
 

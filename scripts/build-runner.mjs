@@ -18,7 +18,7 @@
  */
 
 import { execSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, copyFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, copyFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, tmpdir, platform, arch } from 'node:os';
@@ -362,6 +362,10 @@ function buildRunner(bunPath) {
     console.error(`[build-runner] ERROR: Output binary not found at ${OUTPUT_PATH}`);
     process.exit(1);
   }
+
+  // Preserve direct execution when electron-builder copies the binary into
+  // extraResources for the Linux AppImage.
+  if (!IS_WIN) chmodSync(OUTPUT_PATH, 0o755);
 
   console.log(`[build-runner] Built successfully: ${OUTPUT_PATH}`);
 }

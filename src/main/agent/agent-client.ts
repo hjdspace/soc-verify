@@ -44,11 +44,13 @@ export type ApprovalHandler = (
  * fails to find a required `.so` file, and the kernel translates this to
  * ENOENT. This function runs `ldd` to detect missing libraries.
  */
-function diagnoseSpawnFailure(binaryPath: string, err: Error): string {
+export function diagnoseSpawnFailure(binaryPath: string, err: Error): string {
   const errStr = err.message || String(err);
 
-  // Only diagnose ENOENT errors for binary mode (absolute paths)
-  if (!errStr.includes('ENOENT')) return '';
+  // Diagnose common binary execution failures. EACCES means the executable
+  // bit was lost; ENOEXEC usually means an incompatible ELF/architecture;
+  // ENOENT can mean a missing ELF loader or shared library when the path exists.
+  if (!errStr.includes('ENOENT') && !errStr.includes('EACCES') && !errStr.includes('ENOEXEC')) return '';
   if (!existsSync(binaryPath)) {
     return `\n  Binary not found at: ${binaryPath}`;
   }
@@ -63,8 +65,9 @@ function diagnoseSpawnFailure(binaryPath: string, err: Error): string {
     parts.push('  Executable permission: NO — run `chmod +x` on the binary');
   }
 
-  // On Linux, run ldd to check for missing shared libraries
-  if (process.platform === 'linux') {
+  // On Linux, run ldd to check for missing shared libraries. EACCES is a
+  // permission problem and does not need ELF dependency probing.
+  if (process.platform === 'linux' && !errStr.includes('EACCES')) {
     try {
       const lddOutput = execFileSync('ldd', [binaryPath], {
         encoding: 'utf-8',

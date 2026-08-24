@@ -140,6 +140,10 @@ async function main() {
   if (existsSync(BINARY_PATH)) {
     const stats = statSync(BINARY_PATH);
     const sizeMB = (stats.size / (1024 * 1024)).toFixed(1);
+    if (platform() !== 'win32') {
+      const { chmodSync } = await import('node:fs');
+      chmodSync(BINARY_PATH, 0o755);
+    }
     console.log(`[setup-agent] Binary found: ${BINARY_PATH} (${sizeMB} MB)`);
     return;
   }
