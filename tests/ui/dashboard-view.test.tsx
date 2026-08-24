@@ -2,7 +2,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SimulationRunRecord } from '@renderer/stores/simulation';
-import type { ChatMessage, SessionEntry } from '@renderer/stores/session';
+import type { ChatMessage, SessionEntry } from '@renderer/stores/session-types';
 import type { CoverageSummary } from '@shared/types/coverage';
 import type { SummaryData, RecentFailuresData } from '@renderer/stores/dashboard';
 

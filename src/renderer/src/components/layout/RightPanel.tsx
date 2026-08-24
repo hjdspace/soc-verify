@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
 import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon, Shield, ShieldAlert, ShieldCheck, ChevronDown, ChevronRight, Info, PanelLeftClose, Key } from 'lucide-react';
-import { useSessionStore, type ChatMessage, type SelectedSkill, type ContextFile, type HistorySession, type SessionEntry } from '@renderer/stores/session';
+import { useSessionCoreStore } from '@renderer/stores/session-core';
+import { useSessionMessagesStore } from '@renderer/stores/session-messages';
+import { useSessionApprovalStore } from '@renderer/stores/session-approval';
+import type { ChatMessage, SelectedSkill, ContextFile, HistorySession, SessionEntry } from '@renderer/stores/session-types';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
@@ -29,20 +32,20 @@ interface RightPanelProps {
  * 外壳无关：docked 模式由 RightPanel 包固定侧栏，drawer 模式由 AiDrawer 包右抽屉。
  */
 export function RightPanelContent() {
-  const sessions = useSessionStore((s) => s.sessions);
-  const currentSessionId = useSessionStore((s) => s.currentSessionId);
+const sessions = useSessionCoreStore((s) => s.sessions);
+const currentSessionId = useSessionCoreStore((s) => s.currentSessionId);
   const currentSession = sessions.find((session) => session.id === currentSessionId);
   const inputMessage = currentSession?.composer?.inputMessage ?? '';
   const selectedSkills = currentSession?.composer?.selectedSkills ?? [];
   const contextFiles = currentSession?.composer?.contextFiles ?? [];
   const isSending = currentSession?.status === 'streaming' || currentSession?.status === 'tool_executing';
-  const createSession = useSessionStore((s) => s.createSession);
-  const closeSession = useSessionStore((s) => s.closeSession);
-  const switchSession = useSessionStore((s) => s.switchSession);
-  const setInputMessage = useSessionStore((s) => s.setInputMessage);
-  const sendMessage = useSessionStore((s) => s.sendMessage);
-  const abortSession = useSessionStore((s) => s.abortSession);
-  const compactSession = useSessionStore((s) => s.compactSession);
+const createSession = useSessionCoreStore((s) => s.createSession);
+const closeSession = useSessionCoreStore((s) => s.closeSession);
+const switchSession = useSessionCoreStore((s) => s.switchSession);
+const setInputMessage = useSessionCoreStore((s) => s.setInputMessage);
+const sendMessage = useSessionMessagesStore((s) => s.sendMessage);
+const abortSession = useSessionMessagesStore((s) => s.abortSession);
+const compactSession = useSessionMessagesStore((s) => s.compactSession);
 
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const currentProject = useProjectStore((s) =>
@@ -83,22 +86,22 @@ export function RightPanelContent() {
   const [showFileDropdown, setShowFileDropdown] = useState(false);
   const [fileHighlightIdx, setFileHighlightIdx] = useState(0);
 
-  const addSkill = useSessionStore((s) => s.addSkill);
-  const removeSkill = useSessionStore((s) => s.removeSkill);
-  const addContextFile = useSessionStore((s) => s.addContextFile);
-  const removeContextFile = useSessionStore((s) => s.removeContextFile);
+const addSkill = useSessionCoreStore((s) => s.addSkill);
+const removeSkill = useSessionCoreStore((s) => s.removeSkill);
+const addContextFile = useSessionCoreStore((s) => s.addContextFile);
+const removeContextFile = useSessionCoreStore((s) => s.removeContextFile);
 
   const editorApiRef = useRef<ComposerEditorApi | null>(null);
 
-  const steerSession = useSessionStore((s) => s.steerSession);
-  const setModel = useSessionStore((s) => s.setModel);
+const steerSession = useSessionMessagesStore((s) => s.steerSession);
+const setModel = useSessionCoreStore((s) => s.setModel);
   const credentials = useSettingsStore((s) => s.credentials);
   const loadCredentials = useSettingsStore((s) => s.loadCredentials);
-  const setApprovalMode = useSessionStore((s) => s.setApprovalMode);
-  const resolveApproval = useSessionStore((s) => s.resolveApproval);
-  const approvalRequests = useSessionStore((s) => s.approvalRequests);
-  const askRequests = useSessionStore((s) => s.askRequests);
-  const resolveAsk = useSessionStore((s) => s.resolveAsk);
+const setApprovalMode = useSessionApprovalStore((s) => s.setApprovalMode);
+const resolveApproval = useSessionApprovalStore((s) => s.resolveApproval);
+const approvalRequests = useSessionApprovalStore((s) => s.approvalRequests);
+const askRequests = useSessionApprovalStore((s) => s.askRequests);
+const resolveAsk = useSessionApprovalStore((s) => s.resolveAsk);
 
   const isCurrentSessionCreating = currentSession?.status === 'creating';
 
@@ -113,12 +116,12 @@ export function RightPanelContent() {
   );
   const toggleTodoCollapse = useTodoPanelStore((s) => s.toggleCollapse);
 
-  const renameSession = useSessionStore((s) => s.renameSession);
-  const historySessions = useSessionStore((s) => s.historySessions);
-  const historyLoading = useSessionStore((s) => s.historyLoading);
-  const fetchHistorySessions = useSessionStore((s) => s.fetchHistorySessions);
-  const loadHistorySession = useSessionStore((s) => s.loadHistorySession);
-  const deleteHistorySession = useSessionStore((s) => s.deleteHistorySession);
+const renameSession = useSessionCoreStore((s) => s.renameSession);
+const historySessions = useSessionCoreStore((s) => s.historySessions);
+const historyLoading = useSessionCoreStore((s) => s.historyLoading);
+const fetchHistorySessions = useSessionCoreStore((s) => s.fetchHistorySessions);
+const loadHistorySession = useSessionCoreStore((s) => s.loadHistorySession);
+const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
   const currentHistorySessionId = currentSession?.persistedSessionId ?? currentSessionId;
 
   // Load history sessions when history view is opened
@@ -590,7 +593,7 @@ export function RightPanelContent() {
       editorApiRef.current?.clear();
       return;
     }
-    const sess = useSessionStore.getState().sessions.find((s) => s.id === currentSessionId);
+    const sess = useSessionCoreStore.getState().sessions.find((s) => s.id === currentSessionId);
     const composer = sess?.composer;
     const fallbackChips: ChipData[] = [
       ...(composer?.selectedSkills ?? []).map((s): ChipData => ({ kind: 'skill', label: s.name, name: s.name })),

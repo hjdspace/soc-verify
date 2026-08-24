@@ -2,7 +2,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ContextUsageIndicator } from '@renderer/components/chat/ContextUsageIndicator';
-import type { SessionEntry } from '@renderer/stores/session';
+import type { SessionEntry } from '@renderer/stores/session-types';
 
 function session(): SessionEntry {
   return {

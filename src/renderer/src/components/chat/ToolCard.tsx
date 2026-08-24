@@ -9,7 +9,8 @@ import { useState, useEffect, useCallback, type ReactNode, type ComponentType } 
 import { useShallow } from 'zustand/react/shallow';
 import { Loader2, ChevronDown } from 'lucide-react';
 import { openReviewAwareFile } from '@renderer/stores/diff-review';
-import { useSessionStore, type ChatMessage, type SubagentActivity } from '@renderer/stores/session';
+import { useSessionCoreStore } from '@renderer/stores/session-core';
+import type { ChatMessage, SubagentActivity } from '@renderer/stores/session-types';
 import { SubagentCard } from './SubagentCard';
 import { cn } from '@renderer/lib/utils';
 import {
@@ -380,7 +381,7 @@ export function ToolCard({ message }: { message: ChatMessage }) {
   const resultText = extractResultText(message.toolResult);
 
   // task 工具：读取该 tool call 关联的 subagent 实时状态
-  const taskAgents = useSessionStore(useShallow((s) => {
+  const taskAgents = useSessionCoreStore(useShallow((s) => {
     if (message.toolName !== 'task' || !message.toolCallId) return NO_SUBAGENTS;
     const list: SubagentActivity[] = [];
     for (const sess of s.sessions) {

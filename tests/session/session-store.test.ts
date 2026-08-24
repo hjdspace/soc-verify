@@ -83,7 +83,14 @@ vi.mock('@renderer/stores/toast', () => ({
   },
 }));
 
-import { useSessionStore } from '@renderer/stores/session';
+import { useSessionCoreStore } from '@renderer/stores/session-core';
+import { useSessionMessagesStore } from '@renderer/stores/session-messages';
+
+// Backward-compatible alias: tests use useSessionStore.setState for sessions/currentSessionId
+// which now lives in session-core. Message-related operations (handleSessionEvent, sendMessage,
+// abortSession, compactSession, steerSession) live in session-messages.
+// Approval-related operations (setApprovalMode, resolveApproval, resolveAsk) live in session-approval.
+const useSessionStore = useSessionCoreStore;
 
 describe('SessionStore — event handling and state machine', () => {
   beforeEach(() => {
@@ -176,7 +183,7 @@ describe('SessionStore — event handling and state machine', () => {
   it('sends a message and transitions to streaming state', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
 
-    await useSessionStore.getState().sendMessage('Hello AI');
+    await useSessionMessagesStore.getState().sendMessage('Hello AI');
 
     const state = useSessionStore.getState();
     expect(mockCreate).toHaveBeenCalledWith({
@@ -205,19 +212,19 @@ describe('SessionStore — event handling and state machine', () => {
 
   it('handles message_start event by setting status to streaming', async () => {
     const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    useSessionStore.getState().handleSessionEvent(id!, { type: 'message_start' });
+    useSessionMessagesStore.getState().handleSessionEvent(id!, { type: 'message_start' });
     expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
   });
 
   it('does not render echoed user message events as assistant content', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('What model are you?');
+    await useSessionMessagesStore.getState().sendMessage('What model are you?');
 
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_start',
       message: { role: 'user', content: [{ type: 'text', text: 'What model are you?' }] },
     });
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_end',
       message: { role: 'user', content: [{ type: 'text', text: 'What model are you?' }] },
     });
@@ -230,9 +237,9 @@ describe('SessionStore — event handling and state machine', () => {
 
   it('handles message_update event by extracting text from message content', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('Hello');
+    await useSessionMessagesStore.getState().sendMessage('Hello');
 
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_update',
       message: { role: 'assistant', content: [{ type: 'text', text: 'World' }] },
     });
@@ -248,18 +255,18 @@ describe('SessionStore — event handling and state machine', () => {
 
   it('handles multiple message_update events to build full response', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('Hello');
+    await useSessionMessagesStore.getState().sendMessage('Hello');
 
     // Each message_update contains a full snapshot (not a delta), so later ones replace earlier ones
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_update',
       message: { role: 'assistant', content: [{ type: 'text', text: 'Hello ' }] },
     });
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_update',
       message: { role: 'assistant', content: [{ type: 'text', text: 'Hello world' }] },
     });
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_update',
       message: { role: 'assistant', content: [{ type: 'text', text: 'Hello world!' }] },
     });
@@ -273,9 +280,9 @@ describe('SessionStore — event handling and state machine', () => {
 
   it('creates a pending file tool card from a streaming tool-call snapshot', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('Create src/demo.ts');
+    await useSessionMessagesStore.getState().sendMessage('Create src/demo.ts');
 
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_update',
       message: {
         role: 'assistant',
@@ -302,7 +309,7 @@ describe('SessionStore — event handling and state machine', () => {
     expect(toolMsg?.toolResult).toBeUndefined();
     expect(toolMsg?.toolStartTime).toBeDefined();
 
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_update',
       message: {
         role: 'assistant',
@@ -331,9 +338,9 @@ describe('SessionStore — event handling and state machine', () => {
 
   it('creates a pending edit card from a streaming tool-call snapshot', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('Edit src/demo.ts');
+    await useSessionMessagesStore.getState().sendMessage('Edit src/demo.ts');
 
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_update',
       message: {
         role: 'assistant',
@@ -362,15 +369,15 @@ describe('SessionStore — event handling and state machine', () => {
 
   it('handles message_end event by extracting final content and stopping streaming', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('Hello');
+    await useSessionMessagesStore.getState().sendMessage('Hello');
 
     // message_update with partial content
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_update',
       message: { role: 'assistant', content: [{ type: 'text', text: 'Partial' }] },
     });
     // message_end with final content
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_end',
       message: { role: 'assistant', content: [{ type: 'text', text: 'Final Response' }], stopReason: 'stop' },
     });
@@ -386,30 +393,30 @@ describe('SessionStore — event handling and state machine', () => {
 
   it('handles multiple message_start/message_end pairs within one agent turn', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('Hello');
+    await useSessionMessagesStore.getState().sendMessage('Hello');
 
     // First message
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_start',
       message: { role: 'assistant', content: [{ type: 'text', text: 'First' }] },
     });
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_end',
       message: { role: 'assistant', content: [{ type: 'text', text: 'First response' }], stopReason: 'stop' },
     });
 
     // Second message (no streaming assistant exists — should create a new one)
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_start',
       message: { role: 'assistant', content: [{ type: 'text', text: 'Second' }] },
     });
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_end',
       message: { role: 'assistant', content: [{ type: 'text', text: 'Second response' }], stopReason: 'stop' },
     });
 
     // Agent ends
-    useSessionStore.getState().handleSessionEvent('session_test_1', { type: 'agent_end' });
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', { type: 'agent_end' });
 
     const session = useSessionStore.getState().sessions[0];
     // Messages: user + first assistant + second assistant
@@ -426,10 +433,10 @@ describe('SessionStore — event handling and state machine', () => {
 
   it('handles message_end with no prior message_update by extracting content from message_end', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('Hello');
+    await useSessionMessagesStore.getState().sendMessage('Hello');
 
     // No message_update events — content comes directly from message_end
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_end',
       message: { role: 'assistant', content: [{ type: 'text', text: 'Direct response' }], stopReason: 'stop' },
     });
@@ -442,9 +449,9 @@ describe('SessionStore — event handling and state machine', () => {
 
   it('handles message_end with error stopReason', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('Hello');
+    await useSessionMessagesStore.getState().sendMessage('Hello');
 
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_end',
       message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'API key invalid' },
     });
@@ -456,10 +463,10 @@ describe('SessionStore — event handling and state machine', () => {
 
   it('suppresses transient MCP transport errors and keeps streaming placeholder alive', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('Hello');
+    await useSessionMessagesStore.getState().sendMessage('Hello');
 
     // MCP transport glitch: message_end with only errorMessage, no content
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_end',
       message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: 'Transport closed' },
     });
@@ -471,11 +478,11 @@ describe('SessionStore — event handling and state machine', () => {
     expect(assistantMsg.content).toBe('');
 
     // The real response arrives via message_start / message_end
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_start',
       message: { role: 'assistant', content: [{ type: 'text', text: 'Hello!' }] },
     });
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_end',
       message: { role: 'assistant', content: [{ type: 'text', text: 'Hello!' }], stopReason: 'stop' },
     });
@@ -487,10 +494,10 @@ describe('SessionStore — event handling and state machine', () => {
 
   it('suppresses ECONNRESET and other transient transport errors', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('Hello');
+    await useSessionMessagesStore.getState().sendMessage('Hello');
 
     for (const transientError of ['ECONNRESET', 'EPIPE', 'fetch failed', 'network error']) {
-      useSessionStore.getState().handleSessionEvent('session_test_1', {
+      useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
         type: 'message_end',
         message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: transientError },
       });
@@ -501,7 +508,7 @@ describe('SessionStore — event handling and state machine', () => {
     }
 
     // Also test the default error handler suppresses transient errors
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'transport_error',
       error: 'Transport closed',
     });
@@ -512,10 +519,10 @@ describe('SessionStore — event handling and state machine', () => {
 
   it('separates thinking content from text content in message events', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('What model are you?');
+    await useSessionMessagesStore.getState().sendMessage('What model are you?');
 
     // message_start with thinking content only
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_start',
       message: {
         role: 'assistant',
@@ -530,7 +537,7 @@ describe('SessionStore — event handling and state machine', () => {
     expect(assistantMsg.isStreaming).toBe(true);
 
     // message_update with both thinking and text
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_update',
       message: {
         role: 'assistant',
@@ -550,7 +557,7 @@ describe('SessionStore — event handling and state machine', () => {
     expect(assistantMsg.content).toBe('I am');
 
     // message_end with final content
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_end',
       message: {
         role: 'assistant',
@@ -571,9 +578,9 @@ describe('SessionStore — event handling and state machine', () => {
 
   it('does not include [思考] prefix in content when thinking blocks are present', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('Hello');
+    await useSessionMessagesStore.getState().sendMessage('Hello');
 
-    useSessionStore.getState().handleSessionEvent('session_test_1', {
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', {
       type: 'message_end',
       message: {
         role: 'assistant',
@@ -595,7 +602,7 @@ describe('SessionStore — event handling and state machine', () => {
   it('handles tool_execution_start by adding a tool message', async () => {
     const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
 
-    useSessionStore.getState().handleSessionEvent(id!, {
+    useSessionMessagesStore.getState().handleSessionEvent(id!, {
       type: 'tool_execution_start',
       toolName: 'list_subsys',
       args: { filter: '' },
@@ -614,7 +621,7 @@ describe('SessionStore — event handling and state machine', () => {
   it('preserves the write snapshot from tool_execution_start', async () => {
     const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
 
-    useSessionStore.getState().handleSessionEvent(id!, {
+    useSessionMessagesStore.getState().handleSessionEvent(id!, {
       type: 'tool_execution_start',
       toolCallId: 'write-new-file',
       toolName: 'write',
@@ -622,7 +629,7 @@ describe('SessionStore — event handling and state machine', () => {
       fileExistedBefore: false,
     });
 
-    useSessionStore.getState().handleSessionEvent(id!, {
+    useSessionMessagesStore.getState().handleSessionEvent(id!, {
       type: 'tool_execution_end',
       toolCallId: 'write-new-file',
       toolName: 'write',
@@ -639,13 +646,13 @@ describe('SessionStore — event handling and state machine', () => {
   it('handles tool_execution_end by updating the tool message with result', async () => {
     const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
 
-    useSessionStore.getState().handleSessionEvent(id!, {
+    useSessionMessagesStore.getState().handleSessionEvent(id!, {
       type: 'tool_execution_start',
       toolName: 'list_subsys',
       args: {},
     });
 
-    useSessionStore.getState().handleSessionEvent(id!, {
+    useSessionMessagesStore.getState().handleSessionEvent(id!, {
       type: 'tool_execution_end',
       toolName: 'list_subsys',
       result: [{ name: 'subsys_a' }],
@@ -662,7 +669,7 @@ describe('SessionStore — event handling and state machine', () => {
     const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
 
     // Send tool_execution_end WITHOUT a preceding tool_execution_start
-    useSessionStore.getState().handleSessionEvent(id!, {
+    useSessionMessagesStore.getState().handleSessionEvent(id!, {
       type: 'tool_execution_end',
       toolCallId: 'tc_missed_1',
       toolName: 'write',
@@ -682,15 +689,15 @@ describe('SessionStore — event handling and state machine', () => {
 
   it('handles agent_start by setting status to streaming', async () => {
     const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    useSessionStore.getState().handleSessionEvent(id!, { type: 'agent_start' });
+    useSessionMessagesStore.getState().handleSessionEvent(id!, { type: 'agent_start' });
     expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
   });
 
   it('handles agent_end by setting the matching Agent Conversation to idle', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('Hello');
+    await useSessionMessagesStore.getState().sendMessage('Hello');
 
-    useSessionStore.getState().handleSessionEvent('session_test_1', { type: 'agent_end' });
+    useSessionMessagesStore.getState().handleSessionEvent('session_test_1', { type: 'agent_end' });
 
     const state = useSessionStore.getState();
     expect(state.sessions[0].status).toBe('idle');
@@ -702,7 +709,7 @@ describe('SessionStore — event handling and state machine', () => {
   it('triggers AI title generation immediately on long first message (no agent_end needed)', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
     // Long input (> 40 chars) should trigger AI title generation immediately
-    await useSessionStore.getState().sendMessage('请帮我分析一下这个模块的覆盖率报告，找出未覆盖的代码行并给出修复建议，需要包含详细的分析过程和具体的代码修改方案');
+    await useSessionMessagesStore.getState().sendMessage('请帮我分析一下这个模块的覆盖率报告，找出未覆盖的代码行并给出修复建议，需要包含详细的分析过程和具体的代码修改方案');
 
     // generateTitle should be called right away — no need to wait for agent_end
     await vi.waitFor(() => {
@@ -717,7 +724,7 @@ describe('SessionStore — event handling and state machine', () => {
     // AI-summarized titles — only low-signal input (greetings, acks) is
     // skipped (by the backend, not the frontend).
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('Hello AI');
+    await useSessionMessagesStore.getState().sendMessage('Hello AI');
 
     await vi.waitFor(() => {
       expect(mockGenerateTitle).toHaveBeenCalledWith({
@@ -731,7 +738,7 @@ describe('SessionStore — event handling and state machine', () => {
 
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
     // Any substantive first message triggers AI title generation
-    await useSessionStore.getState().sendMessage('请帮我分析一下这个模块的覆盖率报告，找出未覆盖的代码行并给出修复建议，需要包含详细的分析过程和具体的代码修改方案');
+    await useSessionMessagesStore.getState().sendMessage('请帮我分析一下这个模块的覆盖率报告，找出未覆盖的代码行并给出修复建议，需要包含详细的分析过程和具体的代码修改方案');
 
     // Wait for the async title generation to complete — no agent_end needed
     await vi.waitFor(() => {
@@ -758,7 +765,7 @@ describe('SessionStore — event handling and state machine', () => {
     expect(useSessionStore.getState().sessions[0].name).toBe('我的自定义名称');
 
     // Send a message — this triggers ensureRuntimeSession which calls the backend
-    await useSessionStore.getState().sendMessage('Hello');
+    await useSessionMessagesStore.getState().sendMessage('Hello');
 
     // The backend returned name='新会话' (placeholder), but the session's name
     // should NOT be overwritten because it's already a non-placeholder name.
@@ -767,9 +774,9 @@ describe('SessionStore — event handling and state machine', () => {
 
   it('aborts the current session and resets state', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    await useSessionStore.getState().sendMessage('Hello');
+    await useSessionMessagesStore.getState().sendMessage('Hello');
 
-    await useSessionStore.getState().abortSession();
+    await useSessionMessagesStore.getState().abortSession();
 
     expect(mockAbort).toHaveBeenCalledWith({ sessionId: 'session_test_1' });
     expect(useSessionStore.getState().sessions[0].status).toBe('idle');
@@ -780,14 +787,14 @@ describe('SessionStore — event handling and state machine', () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
 
     // This should not throw or modify state
-    useSessionStore.getState().handleSessionEvent('unknown_session', { type: 'message_start' });
+    useSessionMessagesStore.getState().handleSessionEvent('unknown_session', { type: 'message_start' });
 
     expect(useSessionStore.getState().sessions[0].status).toBe('idle');
   });
 
   it('tracks context usage and its estimated breakdown from runner events', async () => {
     const id = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
-    useSessionStore.getState().handleSessionEvent(id!, {
+    useSessionMessagesStore.getState().handleSessionEvent(id!, {
       type: 'context_usage',
       contextUsage: { tokens: 50000, contextWindow: 200000, percent: 25 },
       contextBreakdown: {
@@ -817,7 +824,7 @@ describe('SessionStore — event handling and state machine', () => {
       })),
     }));
 
-    const succeeded = await useSessionStore.getState().compactSession();
+    const succeeded = await useSessionMessagesStore.getState().compactSession();
 
     expect(succeeded).toBe(true);
     expect(mockCompact).toHaveBeenCalledWith({ sessionId: 'session_test_1' });
@@ -826,10 +833,10 @@ describe('SessionStore — event handling and state machine', () => {
       contextUsage: { tokens: 12000, contextWindow: 200000, percent: 6 },
     });
 
-    expect(await useSessionStore.getState().compactSession()).toBe(false);
+    expect(await useSessionMessagesStore.getState().compactSession()).toBe(false);
     expect(mockCompact).toHaveBeenCalledOnce();
 
-    await useSessionStore.getState().sendMessage('Continue after compaction');
+    await useSessionMessagesStore.getState().sendMessage('Continue after compaction');
     expect(useSessionStore.getState().sessions.find((session) => session.id === id)?.contextCompacted)
       .toBe(false);
   });
@@ -858,7 +865,7 @@ describe('SessionStore — event handling and state machine', () => {
   });
 
   it('replays agent events that arrive before the analysis session is announced', () => {
-    useSessionStore.getState().handleSessionEvent('session_error_2', { type: 'message_start' });
+    useSessionMessagesStore.getState().handleSessionEvent('session_error_2', { type: 'message_start' });
     useSessionStore.getState().addErrorAnalysisSession({
       sessionId: 'session_error_2',
       projectId: 'proj_1',
@@ -961,7 +968,7 @@ describe('SessionStore — event handling and state machine', () => {
 
     expect(mockRestore).not.toHaveBeenCalled();
 
-    await useSessionStore.getState().sendMessage('Continue debugging');
+    await useSessionMessagesStore.getState().sendMessage('Continue debugging');
 
     expect(mockRestore).toHaveBeenCalledWith({
       projectId: 'proj_1',
@@ -1153,7 +1160,7 @@ describe('SessionStore — subagent activity (subagent_* frames)', () => {
   });
 
   it('accumulates engine scrolling windows into an ordered log (sliding overlap deduped)', () => {
-    const store = useSessionStore.getState();
+    const store = useSessionMessagesStore.getState();
     // 引擎窗口为倒序（[0] 最新）：帧1 尾部 A,B,C；帧2 滑动到 B,C,D
     store.handleSessionEvent(sessionId, progressFrame('sa-1', ['C', 'B', 'A']));
     store.handleSessionEvent(sessionId, progressFrame('sa-1', ['D', 'C', 'B']));
@@ -1162,7 +1169,7 @@ describe('SessionStore — subagent activity (subagent_* frames)', () => {
   });
 
   it('keeps the accumulated log when the engine clears its window at a new turn', () => {
-    const store = useSessionStore.getState();
+    const store = useSessionMessagesStore.getState();
     store.handleSessionEvent(sessionId, progressFrame('sa-1', ['B', 'A']));
     // 新一轮 message_start：引擎窗口清空 → 空帧不得冲掉已累积日志
     store.handleSessionEvent(sessionId, progressFrame('sa-1', []));
@@ -1171,7 +1178,7 @@ describe('SessionStore — subagent activity (subagent_* frames)', () => {
   });
 
   it('appends all lines of a fresh turn output after the window was cleared', () => {
-    const store = useSessionStore.getState();
+    const store = useSessionMessagesStore.getState();
     store.handleSessionEvent(sessionId, progressFrame('sa-1', ['B', 'A']));
     store.handleSessionEvent(sessionId, progressFrame('sa-1', []));
     // 新一轮输出与旧日志尾部无重叠 → 全部追加

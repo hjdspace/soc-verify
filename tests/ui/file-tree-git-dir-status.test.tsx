@@ -22,8 +22,8 @@ vi.mock('@renderer/stores/project', () => ({
   useProjectStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
     selector({ currentProjectId: 'project-1' })),
 }));
-vi.mock('@renderer/stores/session', () => ({
-  useSessionStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
+vi.mock('@renderer/stores/session-core', () => ({
+  useSessionCoreStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
     selector({ addContextFile: vi.fn(), currentSessionId: null })),
 }));
 vi.mock('@renderer/stores/toast', () => ({

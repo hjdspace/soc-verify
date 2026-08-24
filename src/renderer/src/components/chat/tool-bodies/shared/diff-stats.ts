@@ -1,4 +1,4 @@
-import type { ChatMessage } from '@renderer/stores/session';
+import type { ChatMessage } from '@renderer/stores/session-types';
 import {
   argStr,
   argVal,

@@ -9,7 +9,8 @@ vi.mock('@renderer/lib/trpc', () => ({
   },
 }));
 
-import { useSessionStore, type ChatMessage } from '@renderer/stores/session';
+import { useSessionCoreStore } from '@renderer/stores/session-core';
+import type { ChatMessage } from '@renderer/stores/session-types';
 import { openReviewAwareFile, useDiffReviewStore, normalizeReviewKey } from '@renderer/stores/diff-review';
 import { useProjectStore } from '@renderer/stores/project';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
@@ -159,7 +160,7 @@ function diffWithTwoHunks(filePath: string): FileDiffResult {
 
 describe('Diff Review flow', () => {
   beforeEach(() => {
-    useSessionStore.setState({ sessions: [] });
+    useSessionCoreStore.setState({ sessions: [] });
     useDiffReviewStore.setState({
       queue: [],
       currentFilePath: null,
@@ -179,7 +180,7 @@ describe('Diff Review flow', () => {
   });
 
   it('automatically projects completed editing tool events into the global Review Queue', () => {
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1',
         projectId: 'project-1',
@@ -202,7 +203,7 @@ describe('Diff Review flow', () => {
 
   it('projects omp edit format tool calls (path extracted from result text)', () => {
     const filePath = 'D:\\project\\test.ts';
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1',
         projectId: 'project-1',
@@ -222,7 +223,7 @@ describe('Diff Review flow', () => {
 
   it('extracts reversible changes from a completed omp edit result', () => {
     const filePath = 'D:\\project\\rtl\\core.sv';
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1',
         projectId: 'project-1',
@@ -245,7 +246,7 @@ describe('Diff Review flow', () => {
 
   it('uses the absolute result path and splits distant omp diff blocks', () => {
     const filePath = 'D:\\project\\rtl\\core.sv';
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1',
         projectId: 'project-1',
@@ -270,7 +271,7 @@ describe('Diff Review flow', () => {
     const message = completedOmpEditWithDistantChanges(filePath);
     const details = (message.toolResult as { details: { diff: string } }).details;
     details.diff = '-1|first before\n+1|first after\n 2|middle\n-3|last before\n+3|last after';
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
         messages: [message], composer: { inputMessage: '', selectedSkills: [], contextFiles: [] }, createdAt: 1,
@@ -284,7 +285,7 @@ describe('Diff Review flow', () => {
   });
 
   it('does not queue an omp edit attempt that produced no file change', () => {
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1',
         projectId: 'project-1',
@@ -300,7 +301,7 @@ describe('Diff Review flow', () => {
   });
 
   it('does not queue a failed omp write (EISDIR, no resolvedPath)', () => {
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1',
         projectId: 'project-1',
@@ -332,7 +333,7 @@ describe('Diff Review flow', () => {
       currentProjectId: 'project-1',
       projects: [{ id: 'project-1', name: 'Project', rootPath: 'D:\\project', createdAt: 1, lastOpenedAt: 1 }],
     });
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1',
         projectId: 'project-1',
@@ -354,7 +355,7 @@ describe('Diff Review flow', () => {
       currentProjectId: 'project-1',
       projects: [{ id: 'project-1', name: 'Project', rootPath: 'D:\\project', createdAt: 1, lastOpenedAt: 1 }],
     });
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1',
         projectId: 'project-1',
@@ -372,7 +373,7 @@ describe('Diff Review flow', () => {
   it('retains hunk decisions for Windows file paths when the Review Queue refreshes', () => {
     const filePath = 'D:\\project\\rtl\\core.sv';
     const message = completedEdit(filePath);
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1',
         projectId: 'project-1',
@@ -386,7 +387,7 @@ describe('Diff Review flow', () => {
     const key = normalizeReviewKey(filePath);
     useDiffReviewStore.setState({ hunkStates: { [key]: { 1: 'rejected' } } });
 
-    useSessionStore.setState((state) => ({
+    useSessionCoreStore.setState((state) => ({
       sessions: state.sessions.map((session) => ({ ...session, name: 'Renamed conversation' })),
     }));
 
@@ -398,7 +399,7 @@ describe('Diff Review flow', () => {
   it('loads a file once and opens a regular file tab with cached diff', async () => {
     const filePath = 'D:\\project\\rtl\\core.sv';
     vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue(diffWithOneHunk(filePath));
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1',
         projectId: 'project-1',
@@ -435,7 +436,7 @@ describe('Diff Review flow', () => {
     const secondPath = 'D:\\project\\rtl\\second.sv';
     const first = completedEdit(firstPath);
     const second = { ...completedEdit(secondPath), id: 'tool-2', toolCallId: 'call-2' };
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
         messages: [first, second],
@@ -464,7 +465,7 @@ describe('Diff Review flow', () => {
   it('opens an unreviewed file from another Windows path spelling in the editor', async () => {
     const queuedPath = 'D:\\Project\\rtl\\core.sv';
     vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue(emptyDiff(queuedPath));
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1',
         projectId: 'project-1',
@@ -489,7 +490,7 @@ describe('Diff Review flow', () => {
   it('routes the review-aware file helper to a regular file tab', async () => {
     const filePath = 'D:\\project\\rtl\\core.sv';
     vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue(emptyDiff(filePath));
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
         messages: [completedEdit(filePath)], composer: { inputMessage: '', selectedSkills: [], contextFiles: [] }, createdAt: 1,
@@ -525,7 +526,7 @@ describe('Diff Review flow', () => {
       currentProjectId: 'project-1',
       projects: [{ id: 'project-1', name: 'Project', rootPath: 'D:\\project', createdAt: 1, lastOpenedAt: 1 }],
     });
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
         messages: [completedEdit('rtl/core.sv')], composer: { inputMessage: '', selectedSkills: [], contextFiles: [] }, createdAt: 1,
@@ -607,7 +608,7 @@ describe('Diff Review flow', () => {
     vi.mocked(trpc.project.getFileDiff.query)
       .mockResolvedValueOnce(diffWithOneHunk(filePath))
       .mockResolvedValueOnce(emptyDiff(filePath));
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
         messages: [completedEdit(filePath)], composer: { inputMessage: '', selectedSkills: [], contextFiles: [] }, createdAt: 1,
@@ -637,7 +638,7 @@ describe('Diff Review flow', () => {
   it('does not mark a write overwrite as a new file or request deletion on reject all', async () => {
     const filePath = 'D:\\project\\README.md';
     const message = completedOmpWrite(filePath, 'body\n', '# SoC Verify\n\nbody\n');
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
         messages: [message], composer: { inputMessage: '', selectedSkills: [], contextFiles: [] }, createdAt: 1,
@@ -664,7 +665,7 @@ describe('Diff Review flow', () => {
 
   it('marks a write observed against a missing path as a new file', () => {
     const filePath = 'D:\\project\\generated.md';
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
         messages: [completedOmpWrite(filePath, undefined, 'generated\n', false)],
@@ -687,7 +688,7 @@ describe('Diff Review flow', () => {
       ok: true,
       details: { resolvedPath: filePath },
     };
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
         messages: [message],
@@ -789,7 +790,7 @@ describe('Diff Review flow', () => {
 
   it('keeps reviewed entries in queue with reviewed=true (not removed)', () => {
     const filePath = 'D:\\project\\rtl\\core.sv';
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1',
         projectId: 'project-1',
@@ -817,7 +818,7 @@ describe('Diff Review flow', () => {
     const filePath = 'D:\\project\\rtl\\core.sv';
     const first = completedEdit(filePath);
     const second = { ...completedEdit(filePath), id: 'tool-2', timestamp: 200 };
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1',
         projectId: 'project-1',
@@ -832,7 +833,7 @@ describe('Diff Review flow', () => {
       reviewedFiles: new Set([`${filePath.toLowerCase().replace(/\\/g, '/')}\ntool-1`]),
     });
 
-    useSessionStore.setState((state) => ({
+    useSessionCoreStore.setState((state) => ({
       sessions: state.sessions.map((session) => ({ ...session, messages: [first, second] })),
     }));
 
@@ -846,7 +847,7 @@ describe('Diff Review flow', () => {
     const filePath = 'D:\\project\\rtl\\core.sv';
     const first = completedEdit(filePath);
     const second = { ...completedEdit(filePath), id: 'tool-2', timestamp: 200 };
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
         messages: [first], composer: { inputMessage: '', selectedSkills: [], contextFiles: [] }, createdAt: 1,
@@ -856,7 +857,7 @@ describe('Diff Review flow', () => {
     useDiffReviewStore.setState({
       fileDiffs: { [normalizeReviewKey(filePath)]: diffWithOneHunk(filePath) },
     });
-    useSessionStore.setState((state) => ({
+    useSessionCoreStore.setState((state) => ({
       sessions: state.sessions.map((session) => ({ ...session, messages: [first, second] })),
     }));
     vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue({
@@ -880,14 +881,14 @@ describe('Diff Review flow', () => {
 
     // Step 1: reviewedFiles loaded from localStorage, sessions empty
     useDiffReviewStore.setState({ reviewedFiles: new Set([marker]) });
-    useSessionStore.setState({ sessions: [] });
+    useSessionCoreStore.setState({ sessions: [] });
     useDiffReviewStore.getState().refreshQueue();
 
     // reviewedFiles must not be cleared
     expect(useDiffReviewStore.getState().reviewedFiles.has(marker)).toBe(true);
 
     // Step 2: session created with empty messages (before async message load)
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 'session-1', projectId: 'project-1', name: 'Agent conversation', status: 'idle',
         messages: [], composer: { inputMessage: '', selectedSkills: [], contextFiles: [] }, createdAt: 1,
@@ -898,7 +899,7 @@ describe('Diff Review flow', () => {
     expect(useDiffReviewStore.getState().reviewedFiles.has(marker)).toBe(true);
 
     // Step 3: messages loaded asynchronously — now the file appears in the queue
-    useSessionStore.setState((state) => ({
+    useSessionCoreStore.setState((state) => ({
       sessions: state.sessions.map((session) => ({
         ...session,
         messages: [completedEdit(filePath)],

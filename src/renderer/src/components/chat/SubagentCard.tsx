@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
-import type { SubagentActivity } from '@renderer/stores/session';
+import type { SubagentActivity } from '@renderer/stores/session-types';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 /**

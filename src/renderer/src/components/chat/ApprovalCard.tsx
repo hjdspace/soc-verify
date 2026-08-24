@@ -1,7 +1,7 @@
 import { memo, useState } from 'react';
 import { ShieldCheck, ShieldAlert, ShieldX, Check, X, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
-import type { ApprovalRequest } from '@renderer/stores/session';
+import type { ApprovalRequest } from '@renderer/stores/session-types';
 
 interface ApprovalCardProps {
   request: ApprovalRequest;

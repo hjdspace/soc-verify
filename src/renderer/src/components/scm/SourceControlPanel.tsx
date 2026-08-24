@@ -13,7 +13,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { useProjectStore } from '@renderer/stores/project';
-import { useSessionStore } from '@renderer/stores/session';
+import { useSessionCoreStore } from '@renderer/stores/session-core';
 import { useSourceControlStore } from '@renderer/stores/source-control';
 import { cn } from '@renderer/lib/utils';
 import type { SourceControlFileStatus } from '@shared/types';
@@ -162,7 +162,7 @@ function Section({ title, count, collapsed, onToggle, actionLabel, onAction, act
 export function SourceControlPanel() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const currentProject = useProjectStore((s) => s.projects.find((p) => p.id === s.currentProjectId));
-  const lastModel = useSessionStore((s) => s.lastModel);
+  const lastModel = useSessionCoreStore((s) => s.lastModel);
   const status = useSourceControlStore((s) => s.status);
   const commitMessage = useSourceControlStore((s) => s.commitMessage);
   const loading = useSourceControlStore((s) => s.loading);

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import type { ChatMessage, SubagentActivity } from '@renderer/stores/session';
+import type { ChatMessage, SubagentActivity } from '@renderer/stores/session-types';
 
 vi.mock('@renderer/stores/diff-review', () => ({
   openReviewAwareFile: vi.fn(),
@@ -14,8 +14,8 @@ const { mockSessionState } = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@renderer/stores/session', () => ({
-  useSessionStore: Object.assign(
+vi.mock('@renderer/stores/session-core', () => ({
+  useSessionCoreStore: Object.assign(
     vi.fn((selector: (state: typeof mockSessionState) => unknown) => selector(mockSessionState)),
     { getState: () => mockSessionState },
   ),

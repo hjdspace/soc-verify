@@ -1,5 +1,5 @@
-import type { ChatMessage, SessionEntry, SubagentActivity } from '@renderer/stores/session';
-import { useSessionStore } from '@renderer/stores/session';
+import type { ChatMessage, SessionEntry, SubagentActivity } from '@renderer/stores/session-types';
+import { useSessionCoreStore } from '@renderer/stores/session-core';
 import { cn } from '@renderer/lib/utils';
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -34,8 +34,8 @@ function subagentActivity(sub: SubagentActivity): AgentActivity {
  * 数据只读复用 session store，时间倒序展示。
  */
 export function AgentActivityPanel() {
-  const sessions = useSessionStore((s) => s.sessions);
-  const currentSessionId = useSessionStore((s) => s.currentSessionId);
+  const sessions = useSessionCoreStore((s) => s.sessions);
+  const currentSessionId = useSessionCoreStore((s) => s.currentSessionId);
 
   const session =
     sessions.find((s) => s.id === currentSessionId) ??

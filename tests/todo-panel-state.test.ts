@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { getLatestTodoState } from '@renderer/components/chat/tool-helpers';
-import type { ChatMessage } from '@renderer/stores/session';
+import type { ChatMessage } from '@renderer/stores/session-types';
 
 // ── Helpers ────────────────────────────────────────────────
 

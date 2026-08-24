@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, Loader2, AlertCircle, FileText, Trash2, Zap, CheckSquare, XCircle, History, ListChecks, Download, Upload, ChevronDown, ChevronRight, FileSpreadsheet, Database, Settings, Edit3, RefreshCw } from 'lucide-react';
 import { useTimingViolationStore } from '@renderer/stores/timing-violation';
 import { useProjectStore } from '@renderer/stores/project';
-import { useSessionStore } from '@renderer/stores/session';
+import { useSessionCoreStore } from '@renderer/stores/session-core';
 import { useUiStore } from '@renderer/stores/ui';
 import { TVStatsCards } from './TVStatsCards';
 import { TVDistributionCharts } from './TVDistributionCharts';
@@ -640,7 +640,7 @@ onRowAISuggest={(v) => {
     if (!result) return;
 
     // 在右侧 AI 面板创建新会话标签
-    const sessionStore = useSessionStore.getState();
+    const sessionStore = useSessionCoreStore.getState();
     const sessionId = `tv_ai_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const userMessage = {
       id: `msg_${sessionId}_user`,
@@ -669,7 +669,7 @@ onRowAISuggest={(v) => {
       tvViolationId: v.id,
     };
 
-    useSessionStore.setState((s) => ({
+    useSessionCoreStore.setState((s) => ({
       sessions: [...s.sessions, newSession],
       currentSessionId: sessionId,
     }));

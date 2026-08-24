@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { X, Key, Cpu, BookOpen, FileText, Wrench, Puzzle, Package, Server, Palette, Keyboard, Clock } from 'lucide-react';
 import { useUiStore } from '@renderer/stores/ui';
-import { useSessionStore } from '@renderer/stores/session';
+import { useSessionCoreStore } from '@renderer/stores/session-core';
 import { cn } from '@renderer/lib/utils';
 import { PluginsTab } from './PluginsTab';
 import { KbSettingsTab } from './KbSettingsTab';
@@ -20,8 +20,8 @@ export function SettingsPanel() {
   const settingsOpen = useUiStore((s) => s.settingsOpen);
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
   const [tab, setTab] = useState<SettingsTab>('credentials');
-  const sessions = useSessionStore((s) => s.sessions);
-  const currentSessionId = useSessionStore((s) => s.currentSessionId);
+const sessions = useSessionCoreStore((s) => s.sessions);
+const currentSessionId = useSessionCoreStore((s) => s.currentSessionId);
   const currentSession = sessions.find((s) => s.id === currentSessionId);
   const currentModel = currentSession?.model;
 

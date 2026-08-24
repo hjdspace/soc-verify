@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Loader2, Minimize2 } from 'lucide-react';
 import { DEFAULT_CONTEXT_WINDOW } from '@shared/context-management';
-import type { SessionEntry } from '@renderer/stores/session';
+import type { SessionEntry } from '@renderer/stores/session-types';
 import { cn } from '@renderer/lib/utils';
 
 type ContextUsageIndicatorProps = {

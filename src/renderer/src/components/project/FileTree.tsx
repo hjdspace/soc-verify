@@ -32,7 +32,7 @@ import type { FileTreeNode } from '@shared/types';
 import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
 import { useProjectStore } from '@renderer/stores/project';
-import { useSessionStore } from '@renderer/stores/session';
+import { useSessionCoreStore } from '@renderer/stores/session-core';
 import { useToastStore } from '@renderer/stores/toast';
 import { useSourceControlStore } from '@renderer/stores/source-control';
 
@@ -303,8 +303,8 @@ export function FileTree({ node, onSelectFile, selectedPath, projectRootPath }: 
   });
   const projectId = useProjectStore((s) => s.currentProjectId) ?? undefined;
 
-  const addContextFile = useSessionStore((s) => s.addContextFile);
-  const currentSessionId = useSessionStore((s) => s.currentSessionId);
+const addContextFile = useSessionCoreStore((s) => s.addContextFile);
+const currentSessionId = useSessionCoreStore((s) => s.currentSessionId);
   const toast = useToastStore.getState();
 
   // ── Git status for file-tree badges ───────────────────

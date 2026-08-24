@@ -94,8 +94,8 @@ vi.mock('@renderer/stores/project', () => ({
   })),
 }));
 
-vi.mock('@renderer/stores/session', () => ({
-  useSessionStore: vi.fn((selector: (s: { lastModel: { id: string; providerId?: string } }) => unknown) => selector({
+vi.mock('@renderer/stores/session-core', () => ({
+  useSessionCoreStore: vi.fn((selector: (s: { lastModel: { id: string; providerId?: string } }) => unknown) => selector({
     lastModel: { id: 'test-model', providerId: 'test-provider' },
   })),
 }));

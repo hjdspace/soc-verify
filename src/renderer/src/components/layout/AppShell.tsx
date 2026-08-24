@@ -18,7 +18,7 @@ import { SourceControlDialog } from '@renderer/components/scm/SourceControlDialo
 import { ExportDialog } from '@renderer/components/coverage/ExportDialog';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
-import { useSessionStore } from '@renderer/stores/session';
+import { useSessionCoreStore } from '@renderer/stores/session-core';
 import { useEnvStore } from '@renderer/stores/env';
 
 export function AppShell() {
@@ -37,7 +37,7 @@ export function AppShell() {
   const uiStateReady = useProjectStore((s) => s.uiStateReady);
   const saveProjectState = useProjectStore((s) => s.saveState);
   // Track session tab changes so that lastSessionIds is persisted.
-  const sessionIds = useSessionStore((s) =>
+  const sessionIds = useSessionCoreStore((s) =>
     s.sessions.map((sess) => sess.persistedSessionId ?? sess.id).join(','),
   );
   const saveProjectStateRef = useRef(saveProjectState);

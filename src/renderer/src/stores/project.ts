@@ -7,7 +7,7 @@ import type {
   DirGroup,
 } from '@shared/types';
 import { trpc } from '@renderer/lib/trpc';
-import { useSessionStore } from './session';
+import { useSessionCoreStore } from './session-core';
 import { useUiStore } from './ui';
 import { tRPCError, getToast } from '@renderer/lib/trpc-utils';
 
@@ -69,7 +69,7 @@ interface ProjectState {
  *  If no tabs were open (first launch or all were closed last time), create
  *  a fresh session so the user can start chatting immediately. */
 async function restoreOrCreateSession(projectId: string, cwd: string): Promise<void> {
-  const sessionStore = useSessionStore.getState();
+  const sessionStore = useSessionCoreStore.getState();
   // If sessions already exist for this project (e.g. user switched back), do nothing
   const existing = sessionStore.sessions.some((s) => s.projectId === projectId);
   if (existing) return;
@@ -214,7 +214,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       // Switch to a session belonging to the new project.
       // restoreOrCreateSession may have created or restored sessions, but
       // currentSessionId could still point to the old project's session.
-      const sessionStore = useSessionStore.getState();
+      const sessionStore = useSessionCoreStore.getState();
       const projectSessions = sessionStore.sessions.filter((s) => s.projectId === result.project.id);
       if (projectSessions.length > 0) {
         const current = sessionStore.sessions.find((s) => s.id === sessionStore.currentSessionId);
@@ -409,7 +409,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             aiPanelMode: useUiStore.getState().aiPanelMode,
             simLeftPanelWidth: useUiStore.getState().simLeftPanelWidth,
           },
-          lastSessionIds: useSessionStore.getState().sessions
+          lastSessionIds: useSessionCoreStore.getState().sessions
             .map((s) => s.persistedSessionId ?? s.id)
             .filter((id): id is string => Boolean(id)),
         },

@@ -5,7 +5,9 @@ import { useThemeStore } from './stores/theme';
 import { useFontStore } from './stores/font';
 import { useEditorStore } from './stores/editor';
 import { useToastStore } from './stores/toast';
-import { useSessionStore } from './stores/session';
+import { useSessionCoreStore } from './stores/session-core';
+import { useSessionMessagesStore } from './stores/session-messages';
+import { useSessionApprovalStore } from './stores/session-approval';
 import { useSettingsStore } from './stores/settings';
 import { useProjectStore } from './stores/project';
 import { trpc } from './lib/trpc';
@@ -23,8 +25,10 @@ export default function App() {
   const initTheme = useThemeStore((s) => s.initTheme);
   const initFont = useFontStore((s) => s.initFont);
   const initEditor = useEditorStore((s) => s.initEditor);
-  const initLastModel = useSessionStore((s) => s.initLastModel);
-  const registerSessionEventListeners = useSessionStore((s) => s.registerEventListeners);
+  const initLastModel = useSessionCoreStore((s) => s.initLastModel);
+  const registerCoreEventListeners = useSessionCoreStore((s) => s.registerCoreEventListeners);
+  const registerMessagesEventListeners = useSessionMessagesStore((s) => s.registerMessagesEventListeners);
+  const registerApprovalEventListeners = useSessionApprovalStore((s) => s.registerApprovalEventListeners);
   const loadContextWindow = useSettingsStore((s) => s.loadContextWindow);
   const errorToast = useToastStore((s) => s.error);
   const healthCheckDone = useRef(false);
@@ -40,9 +44,11 @@ export default function App() {
     if (!toolMode) {
       void loadContextWindow();
       initLastModel();
-      registerSessionEventListeners();
+      registerCoreEventListeners();
+      registerMessagesEventListeners();
+      registerApprovalEventListeners();
     }
-  }, [initTheme, initFont, initEditor, initLastModel, loadContextWindow, registerSessionEventListeners, toolMode]);
+  }, [initTheme, initFont, initEditor, initLastModel, loadContextWindow, registerCoreEventListeners, registerMessagesEventListeners, registerApprovalEventListeners, toolMode]);
 
   // Restore the most recently opened project on startup (non-tool windows only).
   // This was previously in LeftRail, but LeftRail is conditionally mounted/unmounted

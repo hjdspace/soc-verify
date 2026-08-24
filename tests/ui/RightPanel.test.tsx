@@ -31,7 +31,9 @@ vi.mock('@renderer/stores/toast', () => ({
   },
 }));
 
-import { useSessionStore, type ChatMessage } from '@renderer/stores/session';
+import { useSessionCoreStore } from '@renderer/stores/session-core';
+import { useSessionMessagesStore } from '@renderer/stores/session-messages';
+import type { ChatMessage } from '@renderer/stores/session-types';
 import { useProjectStore } from '@renderer/stores/project';
 import { RightPanel } from '@renderer/components/layout/RightPanel';
 
@@ -56,7 +58,7 @@ function TestMessageBubble({ message }: { message: ChatMessage }) {
 describe('RightPanel message rendering', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [],
       currentSessionId: null,
     });
@@ -134,7 +136,7 @@ describe('RightPanel input interaction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Set up a session
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 's1',
         projectId: 'p1',
@@ -149,21 +151,22 @@ describe('RightPanel input interaction', () => {
   });
 
   it('updates input message in store when typing', async () => {
-    const { useSessionStore: store } = await import('@renderer/stores/session');
+    const { useSessionCoreStore: store } = await import('@renderer/stores/session-core');
     store.getState().setInputMessage('test message');
     expect(store.getState().sessions[0].composer.inputMessage).toBe('test message');
   });
 
   it('sends message and clears input', async () => {
-    const sessionStore = useSessionStore.getState();
-    sessionStore.setInputMessage('Hello AI');
-    await sessionStore.sendMessage('Hello AI');
+    const coreStore = useSessionCoreStore.getState();
+    const msgStore = useSessionMessagesStore.getState();
+    coreStore.setInputMessage('Hello AI');
+    await msgStore.sendMessage('Hello AI');
 
     // Input should be cleared
-    expect(useSessionStore.getState().sessions[0].composer.inputMessage).toBe('');
-    expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
+    expect(useSessionCoreStore.getState().sessions[0].composer.inputMessage).toBe('');
+    expect(useSessionCoreStore.getState().sessions[0].status).toBe('streaming');
     // Messages should have user + assistant (streaming)
-    const messages = useSessionStore.getState().sessions[0].messages;
+    const messages = useSessionCoreStore.getState().sessions[0].messages;
     expect(messages).toHaveLength(2);
     expect(messages[0].role).toBe('user');
     expect(messages[0].content).toBe('Hello AI');
@@ -172,12 +175,12 @@ describe('RightPanel input interaction', () => {
   });
 
   it('aborts the current Agent Conversation', async () => {
-    const sessionStore = useSessionStore.getState();
-    await sessionStore.sendMessage('Hello');
-    expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
+    const msgStore = useSessionMessagesStore.getState();
+    await msgStore.sendMessage('Hello');
+    expect(useSessionCoreStore.getState().sessions[0].status).toBe('streaming');
 
-    await sessionStore.abortSession();
-    expect(useSessionStore.getState().sessions[0].status).toBe('idle');
+    await msgStore.abortSession();
+    expect(useSessionCoreStore.getState().sessions[0].status).toBe('idle');
   });
 });
 
@@ -199,7 +202,7 @@ describe('RightPanel session tabs', () => {
       selectedSubsys: null,
       caseStatusFilter: 'all',
     });
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [
         {
           id: 'running',
@@ -240,7 +243,7 @@ describe('RightPanel session tabs', () => {
 describe('SessionStore state machine transitions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    useSessionStore.setState({
+    useSessionCoreStore.setState({
       sessions: [{
         id: 's1',
         projectId: 'p1',
@@ -255,84 +258,84 @@ describe('SessionStore state machine transitions', () => {
   });
 
   it('transitions idle → streaming on message_start', () => {
-    useSessionStore.getState().handleSessionEvent('s1', { type: 'message_start' });
-    expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
+    useSessionMessagesStore.getState().handleSessionEvent('s1', { type: 'message_start' });
+    expect(useSessionCoreStore.getState().sessions[0].status).toBe('streaming');
   });
 
   it('transitions streaming → tool_executing on tool_execution_start', () => {
-    useSessionStore.getState().handleSessionEvent('s1', { type: 'message_start' });
-    useSessionStore.getState().handleSessionEvent('s1', {
+    useSessionMessagesStore.getState().handleSessionEvent('s1', { type: 'message_start' });
+    useSessionMessagesStore.getState().handleSessionEvent('s1', {
       type: 'tool_execution_start',
       toolName: 'list_subsys',
       args: {},
     });
-    expect(useSessionStore.getState().sessions[0].status).toBe('tool_executing');
+    expect(useSessionCoreStore.getState().sessions[0].status).toBe('tool_executing');
   });
 
   it('transitions tool_executing → streaming on tool_execution_end', () => {
-    useSessionStore.getState().handleSessionEvent('s1', { type: 'message_start' });
-    useSessionStore.getState().handleSessionEvent('s1', {
+    useSessionMessagesStore.getState().handleSessionEvent('s1', { type: 'message_start' });
+    useSessionMessagesStore.getState().handleSessionEvent('s1', {
       type: 'tool_execution_start',
       toolName: 'list_subsys',
       args: {},
     });
-    useSessionStore.getState().handleSessionEvent('s1', {
+    useSessionMessagesStore.getState().handleSessionEvent('s1', {
       type: 'tool_execution_end',
       toolName: 'list_subsys',
       result: 'done',
     });
-    expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
+    expect(useSessionCoreStore.getState().sessions[0].status).toBe('streaming');
   });
 
   it('transitions streaming → idle on agent_end', () => {
-    useSessionStore.getState().handleSessionEvent('s1', { type: 'message_start' });
-    expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
+    useSessionMessagesStore.getState().handleSessionEvent('s1', { type: 'message_start' });
+    expect(useSessionCoreStore.getState().sessions[0].status).toBe('streaming');
 
-    useSessionStore.getState().handleSessionEvent('s1', { type: 'agent_end' });
-    expect(useSessionStore.getState().sessions[0].status).toBe('idle');
+    useSessionMessagesStore.getState().handleSessionEvent('s1', { type: 'agent_end' });
+    expect(useSessionCoreStore.getState().sessions[0].status).toBe('idle');
   });
 
   it('full lifecycle: send → stream → tool → stream → end', async () => {
     // 1. User sends message
-    await useSessionStore.getState().sendMessage('Run simulation');
-    expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
+    await useSessionMessagesStore.getState().sendMessage('Run simulation');
+    expect(useSessionCoreStore.getState().sessions[0].status).toBe('streaming');
 
     // 2. AI starts responding
-    useSessionStore.getState().handleSessionEvent('s1', { type: 'message_start' });
-    useSessionStore.getState().handleSessionEvent('s1', {
+    useSessionMessagesStore.getState().handleSessionEvent('s1', { type: 'message_start' });
+    useSessionMessagesStore.getState().handleSessionEvent('s1', {
       type: 'message_update',
       message: { role: 'assistant', content: [{ type: 'text', text: 'I will run' }] },
     });
 
     // 3. Tool execution
-    useSessionStore.getState().handleSessionEvent('s1', {
+    useSessionMessagesStore.getState().handleSessionEvent('s1', {
       type: 'tool_execution_start',
       toolName: 'run_simulation',
       args: { caseId: 'c1' },
     });
-    expect(useSessionStore.getState().sessions[0].status).toBe('tool_executing');
+    expect(useSessionCoreStore.getState().sessions[0].status).toBe('tool_executing');
 
-    useSessionStore.getState().handleSessionEvent('s1', {
+    useSessionMessagesStore.getState().handleSessionEvent('s1', {
       type: 'tool_execution_end',
       toolName: 'run_simulation',
       result: { runId: 'r1', status: 'pass' },
     });
-    expect(useSessionStore.getState().sessions[0].status).toBe('streaming');
+    expect(useSessionCoreStore.getState().sessions[0].status).toBe('streaming');
 
     // 4. AI continues
-    useSessionStore.getState().handleSessionEvent('s1', {
+    useSessionMessagesStore.getState().handleSessionEvent('s1', {
       type: 'message_update',
       message: { role: 'assistant', content: [{ type: 'text', text: 'I will run the simulation.' }] },
     });
-    useSessionStore.getState().handleSessionEvent('s1', {
+    useSessionMessagesStore.getState().handleSessionEvent('s1', {
       type: 'message_end',
       message: { role: 'assistant', content: [{ type: 'text', text: 'I will run the simulation.' }], stopReason: 'stop' },
     });
 
     // 5. Agent ends
-    useSessionStore.getState().handleSessionEvent('s1', { type: 'agent_end' });
+    useSessionMessagesStore.getState().handleSessionEvent('s1', { type: 'agent_end' });
 
-    const session = useSessionStore.getState().sessions[0];
+    const session = useSessionCoreStore.getState().sessions[0];
     expect(session.status).toBe('idle');
 
     // Check messages: user + assistant + tool

@@ -1,5 +1,5 @@
-import type { SessionEntry } from '@renderer/stores/session';
-import { useSessionStore } from '@renderer/stores/session';
+import type { SessionEntry } from '@renderer/stores/session-types';
+import { useSessionCoreStore } from '@renderer/stores/session-core';
 import { useDashboardStore } from '@renderer/stores/dashboard';
 import { useUiStore } from '@renderer/stores/ui';
 import { cn } from '@renderer/lib/utils';
@@ -25,7 +25,7 @@ export function FailureFocusPanel() {
   const recentFailures = useDashboardStore((s) => s.recentFailures);
   const loadingTab = useDashboardStore((s) => s.loadingTab);
   const tabLoaded = useDashboardStore((s) => s.tabLoaded);
-  const sessions = useSessionStore((s) => s.sessions);
+  const sessions = useSessionCoreStore((s) => s.sessions);
   const setActiveView = useUiStore((s) => s.setActiveView);
 
   const loading = loadingTab === 'failures' && !tabLoaded.failures;

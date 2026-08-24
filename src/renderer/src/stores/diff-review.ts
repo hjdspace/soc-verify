@@ -17,7 +17,8 @@
 import { create } from 'zustand';
 import { useMemo } from 'react';
 import { trpc } from '@renderer/lib/trpc';
-import { useSessionStore, type ChatMessage } from './session';
+import { useSessionCoreStore } from './session-core';
+import type { ChatMessage } from './session-types';
 import { useWorkbenchStore, openFileDestination } from './workbench';
 import { useProjectStore } from './project';
 import type { DiffToolCall, DiffRejection, FileDiffResult } from '@shared/types';
@@ -416,7 +417,7 @@ function aggregateQueue(reviewedFiles: Set<string>): ReviewEntry[] {
   // 从 Project store 获取所有有效目录路径（rootPath + extraDirs），
   // 确保 Diff Review 的路径策略与 Project 模块一致（ADR 0027）。
   const extraDirPaths = useProjectStore.getState().extraDirs.map((d) => d.path);
-  const sessions = useSessionStore.getState().sessions;
+  const sessions = useSessionCoreStore.getState().sessions;
   const relevantSessions = currentProjectId
     ? sessions.filter((s) => s.projectId === currentProjectId)
     : sessions;
@@ -932,8 +933,8 @@ function markFileReviewed(filePath: string): void {
   });
 }
 
-let projectedSessions = useSessionStore.getState().sessions;
-useSessionStore.subscribe((state) => {
+let projectedSessions = useSessionCoreStore.getState().sessions;
+useSessionCoreStore.subscribe((state) => {
   if (state.sessions === projectedSessions) return;
   projectedSessions = state.sessions;
   useDiffReviewStore.getState().refreshQueue();
