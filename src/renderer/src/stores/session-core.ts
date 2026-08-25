@@ -520,46 +520,44 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
       ),
     }));
 
-    void (async () => {
-      try {
-        const runtimeSessionId = await get().ensureRuntimeSession(sessionId);
-        const result = await trpc.session.setModel.mutate({
-          sessionId: runtimeSessionId,
-          provider,
-          modelId,
-          modelName,
-          providerId,
-        });
-        if (result.sessionId && result.sessionId !== runtimeSessionId) {
-          set((s) => ({
-            sessions: s.sessions.map((sess) =>
-              sessionMatchesId(sess, sessionId)
-                ? { ...sess, runtimeSessionId: result.sessionId }
-                : sess,
-            ),
-          }));
-        }
-        if (result.model) {
-          const resolved: SessionModel = {
-            provider: result.model.provider,
-            id: result.model.id ?? '',
-            name: result.model.name ?? result.model.id ?? '',
-            providerId: result.model.providerId,
-          };
-          localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(resolved));
-          set((s) => ({
-            lastModel: resolved,
-            sessions: s.sessions.map((sess) =>
-              sessionMatchesId(sess, sessionId)
-                ? { ...sess, model: resolved }
-                : sess,
-            ),
-          }));
-        }
-      } catch (err) {
-        useToastStore.getState().error('切换模型失败', tRPCError(err));
+    try {
+      const runtimeSessionId = await get().ensureRuntimeSession(sessionId);
+      const result = await trpc.session.setModel.mutate({
+        sessionId: runtimeSessionId,
+        provider,
+        modelId,
+        modelName,
+        providerId,
+      });
+      if (result.sessionId && result.sessionId !== runtimeSessionId) {
+        set((s) => ({
+          sessions: s.sessions.map((sess) =>
+            sessionMatchesId(sess, sessionId)
+              ? { ...sess, runtimeSessionId: result.sessionId }
+              : sess,
+          ),
+        }));
       }
-    })();
+      if (result.model) {
+        const resolved: SessionModel = {
+          provider: result.model.provider,
+          id: result.model.id ?? '',
+          name: result.model.name ?? result.model.id ?? '',
+          providerId: result.model.providerId,
+        };
+        localStorage.setItem(MODEL_STORAGE_KEY, JSON.stringify(resolved));
+        set((s) => ({
+          lastModel: resolved,
+          sessions: s.sessions.map((sess) =>
+            sessionMatchesId(sess, sessionId)
+              ? { ...sess, model: resolved }
+              : sess,
+          ),
+        }));
+      }
+    } catch (err) {
+      useToastStore.getState().error('切换模型失败', tRPCError(err));
+    }
   },
 
   applyCredential: async (sessionId, providerId) => {
