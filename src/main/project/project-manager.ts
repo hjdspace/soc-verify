@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readdir, stat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync, watch as fsWatch, type FSWatcher as NodeFSWatcher } from 'node:fs';
-import { join, basename, relative, resolve, normalize, sep } from 'node:path';
+import { join, basename, resolve, normalize, sep } from 'node:path';
 import { app } from 'electron';
 import { readFileSync } from 'node:fs';
 
@@ -266,11 +266,19 @@ class ProjectManagerImpl extends EventEmitter {
    * Get the direct children of a directory (one level deep).
    * Used for lazy loading: the UI calls this when a directory is first expanded.
    * Returns sorted entries with directories marked `lazy: true` if they may have children.
-   * Applies git-ignore marking if the ignored-paths cache is available.
+   *
+   * Scope resolution:
+   * - Explicit dirId ('root' or an extra-dir ID): the path must lie inside that
+   *   specific directory.
+   * - Omitted dirId: the scope is resolved automatically — rootPath first, then
+   *   each extraDir (same multi-directory semantics as readFile/writeFile). This
+   *   lets callers that don't know the owning directory (e.g. editor breadcrumb)
+   *   list children of any opened directory, including verify/design dirs outside
+   *   the project root. The resolved scope also determines the cache key, so each
+   *   directory's watcher invalidates exactly its own cached entries.
    *
    * @param dirId Optional: when provided, the security check uses the directory
    *              identified by dirId (an extraDir or 'root' for rootPath).
-   *              When omitted, falls back to rootPath security check.
    */
   async getDirChildren(projectId: string, dirPath: string, dirId?: string): Promise<FileTreeNode[]> {
     const entry = this.projects.get(projectId);
@@ -282,15 +290,29 @@ class ProjectManagerImpl extends EventEmitter {
       const dirs = entry.info.extraDirs ?? [];
       const dir = dirs.find((d) => d.id === dirId);
       if (!dir) throw new Error(`Directory not found: ${dirId}`);
-      const rel = relative(dir.path, dirPath);
-      if (rel.startsWith('..')) throw new Error('Path is outside directory scope');
-    } else {
-      // RootPath security check
-      const rel = relative(entry.info.rootPath, dirPath);
-      if (rel.startsWith('..')) throw new Error('Path is outside project root');
+      if (!this.isPathWithinDir(dir.path, dirPath)) {
+        throw new Error('Path is outside directory scope');
+      }
+      return this.loadDirectoryChildren(projectId, dirId, dirPath);
     }
 
-    return this.loadDirectoryChildren(projectId, dirId ?? ProjectManagerImpl.ROOT_DIR_ID, dirPath);
+    // Resolve the scope containing dirPath: rootPath first, then extraDirs.
+    if (this.isPathWithinDir(entry.info.rootPath, dirPath)) {
+      return this.loadDirectoryChildren(projectId, ProjectManagerImpl.ROOT_DIR_ID, dirPath);
+    }
+    for (const dir of entry.info.extraDirs ?? []) {
+      if (this.isPathWithinDir(dir.path, dirPath)) {
+        return this.loadDirectoryChildren(projectId, dir.id, dirPath);
+      }
+    }
+    throw new Error('Path is outside project root');
+  }
+
+  /** Containment check on normalized absolute paths (separator-agnostic). */
+  private isPathWithinDir(dirPath: string, targetPath: string): boolean {
+    const normalizedDir = normalize(resolve(dirPath));
+    const normalizedTarget = normalize(resolve(targetPath));
+    return normalizedTarget === normalizedDir || normalizedTarget.startsWith(normalizedDir + sep);
   }
 
   private scheduleDirectoryPrefetch(projectId: string, dirId: string, rootChildren: FileTreeNode[]): void {
