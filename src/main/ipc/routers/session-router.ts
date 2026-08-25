@@ -12,7 +12,7 @@ import {
   loadStoredMessages,
   filterEmptyPlaceholderSessions,
 } from '../../services/session-service';
-import { sessionManager } from '../../agent/session-manager';
+import { sessionManager, credentialSnapshot } from '../../agent/session-manager';
 import { createSessionContext } from '../../agent/session-context-factory';
 import { projectManager } from '../../project/project-manager';
 import { pluginLoader } from '../../plugins/loader';
@@ -33,6 +33,159 @@ import { errorAnalysisCoordinator } from '../../simulation/error-analysis-coordi
 import type { ErrorType } from '@shared/types';
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
 import type { AskAnswer } from '@shared/ask-types';
+
+/**
+ * In-flight holistic model swaps keyed by the ORIGINAL runtime session ID.
+ *
+ * setModel's holistic swap destroys the old omp process and recreates it —
+ * a send() that lands in between would be delivered to the doomed process
+ * and silently lost (symptom: "message sent, no LLM response ever arrives").
+ * send() consults this map, waits for the swap to settle, and retargets the
+ * prompt at the recreated session.
+ */
+type HolisticSwapResult = {
+  ok: true;
+  sessionId: string;
+  swapped: boolean;
+  model: { provider: string; id?: string; name?: string; providerId?: string };
+};
+const inFlightSwaps = new Map<string, Promise<HolisticSwapResult>>();
+
+/**
+ * Holistic config/model switch: destroy the runtime session and recreate it
+ * with the target credential's config (the omp engine cannot update
+ * apiKey/baseUrl on a live process). The conversation resumes via the omp
+ * session ID so messages are preserved.
+ */
+async function performHolisticSwap(input: {
+  sessionId: string;
+  provider?: string;
+  modelId?: string;
+  modelName?: string;
+  providerId: string;
+}): Promise<HolisticSwapResult> {
+  console.log(`[router:session.setModel] holistic swap: sessionId=${input.sessionId}, providerId=${input.providerId}, modelId=${input.modelId ?? '(auto)'}`);
+  const cred = await credentialManager.get(input.providerId);
+  if (!cred) {
+    console.error(`[router:session.setModel] credential not found: ${input.providerId}`);
+    throw new TRPCError({ code: 'NOT_FOUND', message: `Credential not found: ${input.providerId}` });
+  }
+
+  const existing = sessionManager.getSession(input.sessionId);
+  if (!existing) {
+    // The frontend always calls ensureRuntimeSession before setModel,
+    // so the runtime session should exist. If it doesn't (e.g. idle
+    // timeout), the model choice is already persisted in the frontend
+    // state and will be applied when the session is next restored.
+    console.error(`[router:session.setModel] runtime session not found: ${input.sessionId}`);
+    throw new TRPCError({
+      code: 'NOT_FOUND',
+      message: `Runtime session not found: ${input.sessionId}. The session may have been retired — please send a message first to restart it.`,
+    });
+  }
+
+  // No-op guard: if the runtime session was created with this exact
+  // credential config AND already runs the requested model, destroying and
+  // recreating would be pure waste — worse, it opens a window where a
+  // concurrent send is delivered to the doomed process (message lost,
+  // "no LLM response"). This happens routinely: picking a model in the
+  // dropdown triggers ensureRuntimeSession (which creates the session with
+  // that model) followed by setModel requesting the very same model.
+  const currentModel = existing.model;
+  if (
+    existing.providerId === input.providerId &&
+    existing.credentialSnapshot === credentialSnapshot(input.providerId, cred.apiKey, cred.baseUrl) &&
+    (!input.modelId || input.modelId === currentModel)
+  ) {
+    console.log(`[router:session.setModel] no-op: session ${input.sessionId} already runs ${input.providerId}/${currentModel ?? '(auto)'}`);
+    return {
+      ok: true,
+      sessionId: input.sessionId,
+      swapped: false,
+      model: {
+        provider: input.provider ?? '',
+        id: currentModel ?? input.modelId ?? '',
+        name: input.modelName ?? input.modelId ?? currentModel ?? '',
+        providerId: input.providerId,
+      },
+    };
+  }
+
+  const project = projectManager.getProject(existing.projectId);
+  if (!project) {
+    console.error(`[router:session.setModel] project not found: ${existing.projectId}`);
+    throw new TRPCError({ code: 'NOT_FOUND', message: `Project not found: ${existing.projectId}` });
+  }
+
+  // If the agent is currently processing (between agent_start and
+  // agent_end), abort the current turn before destroying the session.
+  // Without this, a prompt that was just sent will have its response
+  // lost when the runner process is killed.
+  // Re-fetch: the awaits above leave a window where activity may have started.
+  const currentEntry = sessionManager.getSession(input.sessionId);
+  if (currentEntry?.isActive) {
+    console.log(`[router:session.setModel] session is active, aborting current turn before swap`);
+    try {
+      await sessionManager.abortSession(input.sessionId);
+    } catch {
+      // best-effort — proceed with destroy regardless
+    }
+  }
+
+  // Capture the omp session ID for resume, then destroy the runtime session
+  const ompSessionId = sessionManager.getOmpSessionId(input.sessionId);
+  const persistedSessionId = existing.persistedSessionId ?? input.sessionId;
+
+  console.log(`[router:session.setModel] destroying session ${input.sessionId} (ompSessionId=${ompSessionId ?? 'none'})`);
+  await sessionManager.destroySession(input.sessionId);
+
+  // Recreate with the new credential's config, resuming the conversation.
+  // If modelId is not supplied, createSession will auto-fetch the
+  // credential's model list and pick the first one.
+  console.log(`[router:session.setModel] recreating session with providerId=${input.providerId}, model=${input.modelId ?? '(auto)'}`);
+  const ctx = await createSessionContext({
+    projectId: existing.projectId,
+    cwd: project.rootPath,
+    providerId: input.providerId,
+    model: input.modelId,
+    resumeSessionId: ompSessionId,
+    persistedSessionId,
+    includeCaseStats: true,
+  });
+
+  const { sessionId: newSessionId, provider, model: resolvedModel } = ctx;
+
+  // Persist model info (with providerId) + updated ompSessionId
+  const newOmpSessionId = sessionManager.getOmpSessionId(newSessionId);
+  const sessions = await loadSessions(project.rootPath);
+  const idx = sessions.findIndex((s) => s.sessionId === persistedSessionId);
+  if (idx >= 0) {
+    sessions[idx] = {
+      ...sessions[idx],
+      ompSessionId: newOmpSessionId,
+      lastActivityAt: Date.now(),
+      model: {
+        provider: provider ?? '',
+        id: resolvedModel ?? input.modelId ?? '',
+        name: input.modelName ?? input.modelId ?? resolvedModel ?? '',
+        providerId: input.providerId,
+      },
+    };
+    await saveSessions(project.rootPath, sessions);
+  }
+
+  return {
+    ok: true,
+    sessionId: newSessionId,
+    swapped: true,
+    model: {
+      provider: provider ?? '',
+      id: resolvedModel ?? input.modelId,
+      name: input.modelName ?? input.modelId ?? resolvedModel,
+      providerId: input.providerId,
+    },
+  };
+}
 
 export const sessionRouter = t.router({
   create: t.procedure
@@ -128,27 +281,43 @@ export const sessionRouter = t.router({
       };
     })
     .mutation(async ({ input }) => {
+      // A holistic setModel (destroy + recreate) may be in flight for this
+      // session. Sending to the doomed old process would silently lose the
+      // message — wait for the swap to settle and deliver the prompt to the
+      // recreated session instead.
+      let targetSessionId = input.sessionId;
+      const swap = inFlightSwaps.get(input.sessionId);
+      if (swap) {
+        console.log(`[router:session.send] swap in flight for ${input.sessionId} — waiting and retargeting`);
+        try {
+          targetSessionId = (await swap).sessionId;
+        } catch {
+          // Swap failed — proceed with the original sessionId; the normal
+          // NOT_FOUND recovery path in the renderer handles a dead session.
+        }
+      }
+
       // Validate session exists (throws NOT_FOUND if missing)
-      const client = requireSession(input.sessionId);
+      const client = requireSession(targetSessionId);
       // If the agent process died (e.g. after abort() called stop()), the
       // session entry is stale — destroy it and throw NOT_FOUND so the
       // renderer can rebuild the session via ensureRuntimeSession.
       if (!client.isRunning()) {
-        console.warn(`[router:session.send] agent process not running for ${input.sessionId} — destroying stale session`);
-        await sessionManager.destroySession(input.sessionId);
-        throw new TRPCError({ code: 'NOT_FOUND', message: `Session process not running: ${input.sessionId}` });
+        console.warn(`[router:session.send] agent process not running for ${targetSessionId} — destroying stale session`);
+        await sessionManager.destroySession(targetSessionId);
+        throw new TRPCError({ code: 'NOT_FOUND', message: `Session process not running: ${targetSessionId}` });
       }
-      sessionManager.touchActivity(input.sessionId);
-      console.log(`[router:session.send] sessionId=${input.sessionId}, message=${input.message.slice(0, 80)}${input.message.length > 80 ? '...' : ''}${input.images ? `, images=${input.images.length}` : ''}`);
+      sessionManager.touchActivity(targetSessionId);
+      console.log(`[router:session.send] sessionId=${targetSessionId}, message=${input.message.slice(0, 80)}${input.message.length > 80 ? '...' : ''}${input.images ? `, images=${input.images.length}` : ''}`);
       // Update persisted lastActivityAt
-      const sendSessionEntry = sessionManager.getSession(input.sessionId);
+      const sendSessionEntry = sessionManager.getSession(targetSessionId);
       if (sendSessionEntry) {
         const sendProject = projectManager.getProject(sendSessionEntry.projectId);
         if (sendProject) {
-          void updateSessionActivity(sendProject.rootPath, sendSessionEntry.persistedSessionId ?? input.sessionId);
+          void updateSessionActivity(sendProject.rootPath, sendSessionEntry.persistedSessionId ?? targetSessionId);
         }
       }
-      await sessionManager.promptFireAndForget(input.sessionId, input.message, input.images);
+      await sessionManager.promptFireAndForget(targetSessionId, input.message, input.images);
       console.log(`[router:session.send] prompt acknowledged by agent`);
       return { ok: true };
     }),
@@ -348,85 +517,18 @@ export const sessionRouter = t.router({
       // session and recreate it with the new credential's config, resuming the
       // conversation via the omp session ID so messages are preserved.
       if (input.providerId) {
-        console.log(`[router:session.setModel] holistic swap: sessionId=${input.sessionId}, providerId=${input.providerId}, modelId=${input.modelId ?? '(auto)'}`);
-        const cred = await credentialManager.get(input.providerId);
-        if (!cred) {
-          console.error(`[router:session.setModel] credential not found: ${input.providerId}`);
-          throw new TRPCError({ code: 'NOT_FOUND', message: `Credential not found: ${input.providerId}` });
+        const existingSwap = inFlightSwaps.get(input.sessionId);
+        if (existingSwap) {
+          console.log(`[router:session.setModel] swap already in flight for ${input.sessionId} — joining in-flight swap`);
+          return existingSwap;
         }
-
-        const existing = sessionManager.getSession(input.sessionId);
-        if (!existing) {
-          // The frontend always calls ensureRuntimeSession before setModel,
-          // so the runtime session should exist. If it doesn't (e.g. idle
-          // timeout), the model choice is already persisted in the frontend
-          // state and will be applied when the session is next restored.
-          console.error(`[router:session.setModel] runtime session not found: ${input.sessionId}`);
-          throw new TRPCError({
-            code: 'NOT_FOUND',
-            message: `Runtime session not found: ${input.sessionId}. The session may have been retired — please send a message first to restart it.`,
-          });
+        const swap = performHolisticSwap({ ...input, providerId: input.providerId });
+        inFlightSwaps.set(input.sessionId, swap);
+        try {
+          return await swap;
+        } finally {
+          inFlightSwaps.delete(input.sessionId);
         }
-
-        const project = projectManager.getProject(existing.projectId);
-        if (!project) {
-          console.error(`[router:session.setModel] project not found: ${existing.projectId}`);
-          throw new TRPCError({ code: 'NOT_FOUND', message: `Project not found: ${existing.projectId}` });
-        }
-
-        // Capture the omp session ID for resume, then destroy the runtime session
-        const ompSessionId = sessionManager.getOmpSessionId(input.sessionId);
-        const persistedSessionId = existing.persistedSessionId ?? input.sessionId;
-
-        console.log(`[router:session.setModel] destroying session ${input.sessionId} (ompSessionId=${ompSessionId ?? 'none'})`);
-        await sessionManager.destroySession(input.sessionId);
-
-        // Recreate with the new credential's config, resuming the conversation.
-        // If modelId is not supplied, createSession will auto-fetch the
-        // credential's model list and pick the first one.
-        console.log(`[router:session.setModel] recreating session with providerId=${input.providerId}, model=${input.modelId ?? '(auto)'}`);
-        const ctx = await createSessionContext({
-          projectId: existing.projectId,
-          cwd: project.rootPath,
-          providerId: input.providerId,
-          model: input.modelId,
-          resumeSessionId: ompSessionId,
-          persistedSessionId,
-          includeCaseStats: true,
-        });
-
-        const { sessionId: newSessionId, provider, model: resolvedModel } = ctx;
-
-        // Persist model info (with providerId) + updated ompSessionId
-        const newOmpSessionId = sessionManager.getOmpSessionId(newSessionId);
-        const sessions = await loadSessions(project.rootPath);
-        const idx = sessions.findIndex((s) => s.sessionId === persistedSessionId);
-        if (idx >= 0) {
-          sessions[idx] = {
-            ...sessions[idx],
-            ompSessionId: newOmpSessionId,
-            lastActivityAt: Date.now(),
-            model: {
-              provider: provider ?? '',
-              id: resolvedModel ?? input.modelId ?? '',
-              name: input.modelName ?? input.modelId ?? resolvedModel ?? '',
-              providerId: input.providerId,
-            },
-          };
-          await saveSessions(project.rootPath, sessions);
-        }
-
-        return {
-          ok: true,
-          sessionId: newSessionId,
-          swapped: true,
-          model: {
-            provider: provider ?? '',
-            id: resolvedModel ?? input.modelId,
-            name: input.modelName ?? input.modelId ?? resolvedModel,
-            providerId: input.providerId,
-          },
-        };
       }
 
       // No providerId — legacy path: just switch the model ID via the engine RPC.
