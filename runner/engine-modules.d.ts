@@ -93,7 +93,15 @@ declare module 'engine/oh-my-pi/packages/coding-agent/src/session/session-manage
 }
 
 declare module 'engine/oh-my-pi/packages/utils/src/logger' {
-  export function setTransports(options: { console?: boolean; file?: boolean }): void;
+  export interface LogEvent {
+    readonly level: 'error' | 'warn' | 'info' | 'debug';
+    readonly message: string;
+    readonly context: Record<string, unknown> | undefined;
+    readonly timestamp: Date;
+  }
+  export type LogSink = (event: LogEvent) => void;
+  /** Register an out-of-band log sink and return a disposer. */
+  export function registerLogSink(sink: LogSink): () => void;
 }
 
 declare module 'engine/oh-my-pi/packages/coding-agent/src/mcp/manager' {
