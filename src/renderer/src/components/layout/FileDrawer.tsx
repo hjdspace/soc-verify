@@ -703,6 +703,7 @@ function DirTreeEntry({
             node={fileTree}
             onSelectFile={onSelectFile}
             projectRootPath={currentProject?.rootPath}
+            dirId="root"
           />
         ) : (
           <div className="px-2 py-1 text-xs text-muted-foreground">
@@ -714,6 +715,7 @@ function DirTreeEntry({
           node={dirFileTrees[dir.dirId]}
           onSelectFile={onSelectFile}
           projectRootPath={dir.path}
+          dirId={dir.dirId}
         />
       ) : (
         <DirFileTreeLoader
