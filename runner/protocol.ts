@@ -13,34 +13,41 @@
  */
 
 // ─── stdout JSONL guard ─────────────────────────────────
-// The omp engine's winston Console transport (enabled via setTransports
-// below) writes structured JSON log entries to **stdout** by default.
-// This corrupts the JSONL protocol between the runner and the Electron
+// The omp engine (and any other dependency) may write structured log
+// entries to **stdout** via console.log and similar. This corrupts the
+// JSONL protocol between the runner and the Electron
 // host: the host's readline handler tries to parse each log line as a
 // JSONL frame, and lines without a `type` field surface as
 // `[agent:rpc] unhandled frame type="undefined"`.
 //
-// Fix: intercept process.stdout.write. Lines that parse as JSON and
-// contain a `type` field (the JSONL frame discriminator) pass through
-// to stdout unchanged. Everything else (winston logs, console.log
-// output from dependencies, etc.) is redirected to stderr, where the
-// host captures it as [agent:stderr].
+// Lines that parse as JSON and contain a `type` field (the JSONL frame
+// discriminator) pass through to stdout unchanged. Everything else is
+// redirected to stderr, where the host captures it as [agent:stderr].
+//
+// Note: the omp engine's logger can also write to stdout via raw
+// `fs.writeSync(1, ...)` when its console transport is enabled. Under Bun
+// >= 1.3 the ESM namespace object is immutable (assigning to it crashes),
+// and a CJS-require patch is invisible to the engine's ESM binding — so the
+// fs.writeSync monkey-patch approach is impossible there. Instead, the
+// runner keeps that transport disabled and forwards log events to stderr via
+// the engine's public `registerLogSink` API (see handlers/init.ts).
+function _shouldPassToStdout(str: string): boolean {
+	const line = str.trim();
+	if (!line) return false;
+	try {
+		const parsed = JSON.parse(line);
+		return typeof parsed === "object" && parsed !== null && "type" in parsed;
+	} catch {
+		return false;
+	}
+}
+
 const _origStdoutWrite = process.stdout.write.bind(process.stdout);
 process.stdout.write = ((data: unknown, ...args: unknown[]) => {
 	const str = typeof data === "string" ? data : String(data);
-	const line = str.trim();
-	if (line) {
-		try {
-			const parsed = JSON.parse(line);
-			if (typeof parsed === "object" && parsed !== null && "type" in parsed) {
-				// Valid JSONL frame — pass through to stdout
-				return _origStdoutWrite(data as string, ...(args as never[]));
-			}
-		} catch {
-			// Not valid JSON — redirect to stderr
-		}
+	if (_shouldPassToStdout(str)) {
+		return _origStdoutWrite(data as string, ...(args as never[]));
 	}
-	// Non-JSONL output — redirect to stderr so it doesn't corrupt the protocol
 	return process.stderr.write(str, ...(args as never[]));
 }) as typeof process.stdout.write;
 
