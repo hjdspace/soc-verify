@@ -59,7 +59,9 @@ vi.mock('@renderer/lib/trpc-utils', () => ({
 }));
 
 vi.mock('@renderer/components/project/FileTree', () => ({
-  FileTree: () => <div data-testid="file-tree-mock" />,
+  FileTree: (props: { dirId?: string }) => (
+    <div data-testid="file-tree-mock" data-dir-id={props.dirId ?? ''} />
+  ),
 }));
 
 import { FileDrawer } from '@renderer/components/layout/FileDrawer';
@@ -260,6 +262,27 @@ describe('FileDrawer 多目录分组渲染', () => {
     /* dir_v1 不是 cwd，应显示「设为 cwd」按钮 */
     const setCwdButtons = screen.getAllByText('设为 cwd');
     expect(setCwdButtons.length).toBeGreaterThan(0);
+
+    restore();
+  });
+
+  it('每个 FileTree 实例携带所属目录的 dirId（懒加载作用域）', () => {
+    const restore = saveExtraDirsState();
+    projectState.extraDirs = [
+      { id: 'dir_v1', path: 'D:/proj/ip2soc', group: 'verify', isCwd: false, order: 0, createdAt: Date.now() },
+      { id: 'dir_d1', path: 'D:/proj/soc-rtl', group: 'design', isCwd: false, order: 0, createdAt: Date.now() },
+    ];
+    projectState.dirFileTrees = {
+      dir_v1: { name: 'ip2soc', path: 'D:/proj/ip2soc', type: 'directory' as const, children: [] },
+      dir_d1: { name: 'soc-rtl', path: 'D:/proj/soc-rtl', type: 'directory' as const, children: [] },
+    };
+    render(<FileDrawer />);
+
+    /* root 树的 dirId 固定为 'root'；额外目录树用各自的 dirId，
+       懒加载展开时才能按目录作用域请求 getDirChildren（目录在项目根外也能展开）。 */
+    expect(screen.getByTestId('dir-tree-root').querySelector('[data-dir-id="root"]')).toBeTruthy();
+    expect(screen.getByTestId('dir-tree-dir_v1').querySelector('[data-dir-id="dir_v1"]')).toBeTruthy();
+    expect(screen.getByTestId('dir-tree-dir_d1').querySelector('[data-dir-id="dir_d1"]')).toBeTruthy();
 
     restore();
   });
