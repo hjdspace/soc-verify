@@ -179,6 +179,7 @@ export async function createSessionContext(options: SessionContextOptions): Prom
     resumeSessionId: options.resumeSessionId,
     seedHistory: options.seedHistory,
     persistedSessionId: options.persistedSessionId,
+    providerId: resolvedProviderId ?? cred?.providerId,
     env: credEnv,
     systemPrompt,
     approvalMode: options.approvalMode,
