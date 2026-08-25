@@ -51,9 +51,12 @@ const { MockAgentClient } = vi.hoisted(() => {
     approvalHandler: unknown = null;
     lastPrompt: string | undefined;
     lastImages: unknown = undefined;
+    /** Captures the env passed to the constructor so tests can assert on it. */
+    capturedEnv: Record<string, string> | undefined;
 
-    constructor(_opts: unknown) {
+    constructor(opts: unknown) {
       super();
+      this.capturedEnv = (opts as { env?: Record<string, string> })?.env;
     }
 
     setToolCallHandler(handler: unknown) { this.toolCallHandler = handler; }
@@ -656,5 +659,107 @@ describe('SessionManager — MCP delegation', () => {
     const id = await createTestSession(manager);
     const models = await manager.getAvailableModels(id);
     expect(models).toEqual([]);
+  });
+});
+
+describe('SessionManager — env var propagation for OpenAI-compatible provider', () => {
+  let manager: InstanceType<typeof SessionManagerImpl>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    manager = new SessionManagerImpl(60_000);
+  });
+
+  afterEach(async () => {
+    await manager.destroyAll();
+  });
+
+  it('sets OPENAI_API_KEY and OPENAI_BASE_URL to match the provided credential', async () => {
+    const id = await manager.createSession({
+      projectId: 'proj_env',
+      cwd: '/tmp/test',
+      apiKey: 'sk-target-key',
+      baseUrl: 'https://api.target.example/v1',
+      model: 'target-model',
+      enableMCP: false,
+    });
+
+    const entry = manager.getSession(id)!;
+    const env = (entry.client as unknown as { capturedEnv: Record<string, string> }).capturedEnv;
+
+    expect(env.SOCVERIFY_AGENT_API_KEY).toBe('sk-target-key');
+    expect(env.OPENAI_API_KEY).toBe('sk-target-key');
+    expect(env.OPENAI_BASE_URL).toBe('https://api.target.example/v1');
+  });
+
+  it('overwrites stale OPENAI_API_KEY and OPENAI_BASE_URL from buildEnvForAgent when a different credential is used', async () => {
+    // Simulate the scenario where buildEnvForAgent set OPENAI_API_KEY
+    // and OPENAI_BASE_URL from the FIRST credential (cred A), but the
+    // session is being created with a DIFFERENT credential (cred B).
+    // The session's apiKey/baseUrl must win — not the stale env values.
+    const staleEnv: Record<string, string> = {
+      OPENAI_API_KEY: 'sk-stale-from-cred-a',
+      OPENAI_BASE_URL: 'https://api.stale.example/v1',
+      API_KEY: 'sk-stale-from-cred-a',
+      API_BASE_URL: 'https://api.stale.example/v1',
+    };
+
+    const id = await manager.createSession({
+      projectId: 'proj_env_stale',
+      cwd: '/tmp/test',
+      apiKey: 'sk-fresh-from-cred-b',
+      baseUrl: 'https://api.fresh.example/v1',
+      model: 'fresh-model',
+      env: staleEnv,
+      enableMCP: false,
+    });
+
+    const entry = manager.getSession(id)!;
+    const env = (entry.client as unknown as { capturedEnv: Record<string, string> }).capturedEnv;
+
+    // The session's credential must override any stale values from buildEnvForAgent
+    expect(env.OPENAI_API_KEY).toBe('sk-fresh-from-cred-b');
+    expect(env.OPENAI_BASE_URL).toBe('https://api.fresh.example/v1');
+    expect(env.SOCVERIFY_AGENT_API_KEY).toBe('sk-fresh-from-cred-b');
+  });
+});
+
+describe('SessionManager — credential tracking for holistic-swap no-op detection', () => {
+  let manager: InstanceType<typeof SessionManagerImpl>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    manager = new SessionManagerImpl(60_000);
+  });
+
+  afterEach(async () => {
+    await manager.destroyAll();
+  });
+
+  it('stores providerId and credentialSnapshot on the session entry', async () => {
+    const id = await manager.createSession({
+      projectId: 'proj_cred',
+      cwd: '/tmp/test',
+      providerId: 'unisoc',
+      apiKey: 'sk-unisoc',
+      baseUrl: 'http://maas.unisoc.com/v1',
+      model: 'deepseek-v4-flash',
+      enableMCP: false,
+    });
+
+    const entry = manager.getSession(id)!;
+    expect(entry.providerId).toBe('unisoc');
+    expect(entry.credentialSnapshot).toBe('unisoc|sk-unisoc|http://maas.unisoc.com/v1');
+  });
+
+  it('credentialSnapshot changes when the credential is edited (same providerId)', async () => {
+    const { credentialSnapshot } = await import('../../src/main/agent/session-manager');
+
+    const before = credentialSnapshot('unisoc', 'sk-old-key', 'http://maas.unisoc.com/v1');
+    const after = credentialSnapshot('unisoc', 'sk-new-key', 'http://maas.unisoc.com/v1');
+
+    // Same providerId but a rotated API key must produce a different
+    // fingerprint so setModel still performs a real destroy/recreate.
+    expect(before).not.toBe(after);
   });
 });
