@@ -158,6 +158,20 @@ function extractAssistantTextFromEvent(message: unknown): string | null {
   return null;
 }
 
+/**
+ * Stable fingerprint of the credential config a runtime session was created
+ * with. session.setModel compares this against the requested credential to
+ * skip redundant destroy/recreate swaps (same provider + same key + same
+ * endpoint → the running session is already correct).
+ */
+export function credentialSnapshot(
+  providerId: string | undefined,
+  apiKey: string | undefined,
+  baseUrl: string | undefined,
+): string {
+  return `${providerId ?? ''}|${apiKey ?? ''}|${baseUrl ?? ''}`;
+}
+
 export interface CreateSessionOptions {
   projectId: string;
   cwd: string;
@@ -170,6 +184,8 @@ export interface CreateSessionOptions {
   /** UI 存储对话历史，用于 omp 会话文件缺失/部分覆盖时的上下文种子 */
   seedHistory?: SeedHistoryMessage[];
   persistedSessionId?: string;
+  /** 凭据 ID —— 记录会话由哪个凭据创建（setModel 冗余 swap 判定用） */
+  providerId?: string;
   env?: Record<string, string>;
   enableMCP?: boolean;
   systemPrompt?: string;
@@ -206,6 +222,13 @@ export interface SessionEntry {
    *  (may differ from the requested model when createSession auto-fetched
    *  the first model from the API). */
   model?: string;
+  /** The credential (providerId) this session was created with — used by
+   *  session.setModel to detect redundant holistic swaps (same provider +
+   *  same model → skip the destructive destroy/recreate cycle). */
+  providerId?: string;
+  /** Fingerprint of apiKey+baseUrl at creation time — detects edits to a
+   *  credential that require an actual destroy/recreate to take effect. */
+  credentialSnapshot?: string;
   /** Whether the agent is currently processing (between agent_start and agent_end).
    *  When true, the idle retirement timer is NOT scheduled — the session
    *  is actively working and must not be destroyed regardless of elapsed time. */
@@ -424,8 +447,15 @@ export class SessionManagerImpl extends EventEmitter {
       // (resolveOpenAIRequestSetup checks options.apiKey, then $env.OPENAI_API_KEY).
       // This is critical for packaged builds where the env var might not be
       // propagated through other paths.
-      if (!env.OPENAI_API_KEY) env.OPENAI_API_KEY = apiKeyValue;
-      if (baseUrlValue && !env.OPENAI_BASE_URL) env.OPENAI_BASE_URL = ensureV1Prefix(baseUrlValue);
+      //
+      // FORCE overwrite: buildEnvForAgent() may have set these from the FIRST
+      // credential in the list, but this session uses a SPECIFIC credential
+      // (e.g. the user switched providers via setModel). If we don't overwrite,
+      // the omp engine may resolve a stale key/baseUrl from a different provider,
+      // causing silent failures (requests go to the wrong endpoint with the
+      // wrong API key).
+      env.OPENAI_API_KEY = apiKeyValue;
+      if (baseUrlValue) env.OPENAI_BASE_URL = ensureV1Prefix(baseUrlValue);
       provider = OPENAI_COMPATIBLE_PROVIDER;
     } else if (provider && model) {
       // Built-in provider path (e.g. user supplied only an API key, no baseUrl).
@@ -723,6 +753,8 @@ export class SessionManagerImpl extends EventEmitter {
       idleTimer: null,
       runtimeDir,
       model,
+      providerId: options.providerId,
+      credentialSnapshot: credentialSnapshot(options.providerId, options.apiKey, options.baseUrl),
       isActive: false,
     };
 
