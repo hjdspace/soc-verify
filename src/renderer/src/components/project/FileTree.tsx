@@ -41,6 +41,10 @@ interface FileTreeProps {
   onSelectFile: (path: string, name: string) => void;
   selectedPath?: string;
   projectRootPath?: string;
+  /** 所属目录 ID：'root' 表示项目根目录，其余为额外目录（验证/设计分组）的 dirId。
+   *  懒加载展开时按此作用域请求 getDirChildren——目录位于项目根之外时必须携带，
+   *  否则后端按项目根做安全校验会拒绝（表现为展开后无子项）。 */
+  dirId?: string;
 }
 
 // ─── Context menu state ───────────────────────────────────
@@ -294,7 +298,7 @@ function getGitDirStatusKind(
 
 // ─── Root component ───────────────────────────────────────
 
-export function FileTree({ node, onSelectFile, selectedPath, projectRootPath }: FileTreeProps) {
+export function FileTree({ node, onSelectFile, selectedPath, projectRootPath, dirId }: FileTreeProps) {
   const [contextMenu, setContextMenu] = useState<FileContextMenuState>({
     visible: false,
     x: 0,
@@ -483,6 +487,7 @@ const currentSessionId = useSessionCoreStore((s) => s.currentSessionId);
         selectedPath={selectedPath}
         onContextMenu={handleContextMenu}
         projectId={projectId}
+        dirId={dirId}
         gitBadgeMap={gitBadgeMap}
         gitDirStatusMap={gitDirStatusMap}
       />
@@ -590,13 +595,15 @@ interface FileTreeNodeProps {
   onContextMenu: (e: React.MouseEvent, node: FileTreeNode) => void;
   /** Project ID for lazy-loading directory children via tRPC. */
   projectId?: string;
+  /** Owning directory scope for lazy loading ('root' or an extra-dir ID). */
+  dirId?: string;
   /** Map of git-relative-path → badge for showing M/D/A/U indicators. */
   gitBadgeMap?: Map<string, GitBadge>;
   /** Map of directory path → aggregated status for VS Code-style folder markers. */
   gitDirStatusMap?: Map<string, GitDirStatus>;
 }
 
-function FileTreeNode({ node, depth, onSelectFile, selectedPath, onContextMenu, projectId, gitBadgeMap, gitDirStatusMap }: FileTreeNodeProps) {
+function FileTreeNode({ node, depth, onSelectFile, selectedPath, onContextMenu, projectId, dirId, gitBadgeMap, gitDirStatusMap }: FileTreeNodeProps) {
   // Normalise node path to forward-slash absolute path for git badge lookup
   const normalizedPath = node.path.replace(/\\/g, '/');
   if (node.type === 'file') {
@@ -620,6 +627,7 @@ function FileTreeNode({ node, depth, onSelectFile, selectedPath, onContextMenu, 
       selectedPath={selectedPath}
       onContextMenu={onContextMenu}
       projectId={projectId}
+      dirId={dirId}
       gitBadgeMap={gitBadgeMap}
       gitDirStatusMap={gitDirStatusMap}
     />
@@ -703,6 +711,8 @@ interface FileTreeDirectoryProps {
   onContextMenu: (e: React.MouseEvent, node: FileTreeNode) => void;
   /** Project ID for lazy-loading directory children via tRPC. */
   projectId?: string;
+  /** Owning directory scope for lazy loading ('root' or an extra-dir ID). */
+  dirId?: string;
   /** Map of git-relative-path → badge for showing M/D/A/U indicators. */
   gitBadgeMap?: Map<string, GitBadge>;
   /** Map of directory path → aggregated status for VS Code-style folder markers. */
@@ -716,6 +726,7 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
   selectedPath,
   onContextMenu,
   projectId,
+  dirId,
   gitBadgeMap,
   gitDirStatusMap,
 }: FileTreeDirectoryProps) {
@@ -735,12 +746,15 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
       if (next && node.lazy && !lazyChildren && projectId && !loadingChildren) {
         setLoadingChildren(true);
         trpc.project.getDirChildren
-          .query({ projectId, dirPath: node.path })
+          .query({ projectId, dirPath: node.path, dirId })
           .then((children: FileTreeNode[]) => {
             setLazyChildren(children);
           })
-          .catch(() => {
-            setLazyChildren([]);
+          .catch((err: unknown) => {
+            // 加载失败不能静默吞掉——否则目录会永远显示为空且无法重试。
+            // 重置 lazyChildren 以便下次展开时重新请求。
+            console.warn(`[FileTree] failed to load children of ${node.path}:`, err);
+            setLazyChildren(null);
           })
           .finally(() => {
             setLoadingChildren(false);
@@ -748,7 +762,7 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
       }
       return next;
     });
-  }, [node.lazy, node.path, lazyChildren, projectId, loadingChildren]);
+  }, [node.lazy, node.path, lazyChildren, projectId, dirId, loadingChildren]);
 
   const handleDragStart = useCallback((e: React.DragEvent) => {
     e.dataTransfer.setData('application/json', JSON.stringify({
@@ -824,6 +838,7 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
               selectedPath={selectedPath}
               onContextMenu={onContextMenu}
               projectId={projectId}
+              dirId={dirId}
               gitBadgeMap={gitBadgeMap}
               gitDirStatusMap={gitDirStatusMap}
             />
