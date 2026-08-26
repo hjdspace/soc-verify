@@ -336,7 +336,7 @@ function FileRefText({ text }: { text: string }) {
           <button
             key={idx}
             onClick={() => handleClick(seg.path, seg.line)}
-            className="inline-flex items-center gap-0.5 rounded bg-primary/10 px-1 py-0.5 font-mono text-[10px] text-primary hover:bg-primary/20"
+            className="ap-chip font-mono"
             title={`点击打开: ${seg.path}${seg.line ? `:${seg.line}` : ''}`}
           >
             {seg.display}
@@ -452,6 +452,8 @@ function extractText(children: ReactNode): string {
  * Provides syntax highlighting for code blocks and clickable file paths.
  */
 export const MarkdownRenderer = memo(function MarkdownRenderer({ content, onUriClick }: MarkdownRendererProps) {
+  // 排版细节（字号/间距/颜色）由 ai-panel.css 的 .ai-panel .markdown-body 规则承载；
+  // 此处只保留结构与交互行为（树视图检测、URI 白名单、高亮代码块）。
   const components = useMemo<MarkdownComponents>(() => ({
     a: ({ href, children }) => {
       if (!href) return <span>{children}</span>;
@@ -460,7 +462,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, onUriC
         return (
           <button
             onClick={() => onUriClick?.(href)}
-            className="inline-flex items-center gap-0.5 rounded bg-primary/10 px-1 py-0.5 text-[10px] text-primary hover:bg-primary/20"
+            className="ap-chip"
           >
             {children}
           </button>
@@ -473,7 +475,6 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, onUriC
             e.preventDefault();
             void trpc.system.openExternal.mutate(href);
           }}
-          className="text-primary underline"
         >
           {children}
         </a>
@@ -487,11 +488,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, onUriC
       const text = extractText(children);
       const isInline = !className && !text.includes('\n');
       if (isInline) {
-        return (
-          <code className="rounded bg-secondary px-1 py-0.5 text-[10px] font-mono">
-            {children}
-          </code>
-        );
+        return <code className="ap-icode">{children}</code>;
       }
       const lang = className?.replace('language-', '') ?? '';
       if (lang === 'mermaid') {
@@ -501,21 +498,12 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, onUriC
     },
     pre: ({ children }) => <>{children}</>,
     table: ({ children }) => (
-      <div className="my-3 overflow-x-auto">
-        <table className="w-full border-collapse text-[11px]">{children}</table>
+      <div className="ap-tblwrap">
+        <table>{children}</table>
       </div>
     ),
-    th: ({ children }) => (
-      <th className="border border-border/50 bg-secondary/50 px-2 py-1.5 text-left font-semibold leading-[1.5]">
-        {children}
-      </th>
-    ),
-    td: ({ children }) => (
-      <td className="border border-border/50 px-2 py-1.5 leading-[1.5]">{children}</td>
-    ),
-    ul: ({ children }) => <ul className="ml-4 list-disc space-y-1">{children}</ul>,
-    ol: ({ children }) => <ol className="ml-4 list-decimal space-y-1">{children}</ol>,
-    li: ({ children }) => <li className="leading-[1.6]">{children}</li>,
+    ul: ({ children }) => <ul>{children}</ul>,
+    ol: ({ children }) => <ol>{children}</ol>,
     p: ({ children }) => {
       // Detect tree-view / ASCII-art paragraphs and render as <pre>
       // to preserve whitespace alignment.
@@ -523,26 +511,17 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, onUriC
       if (isTreeViewText(rawText)) {
         const treeText = reconstructTreeLines(rawText);
         return (
-          <pre className="my-2.5 overflow-x-auto rounded-md border border-border/40 bg-secondary/30 p-2 text-[10px] leading-[1.5] font-mono">
+          <pre className="ap-treeview">
             <code>{treeText}</code>
           </pre>
         );
       }
-      return <p className="mb-2 last:mb-0 leading-[1.7]"><FileRefTextWrapper>{children}</FileRefTextWrapper></p>;
+      return <p><FileRefTextWrapper>{children}</FileRefTextWrapper></p>;
     },
-    h1: ({ children }) => <h1 className="mb-2 mt-4 text-sm font-bold leading-snug">{children}</h1>,
-    h2: ({ children }) => <h2 className="mb-2 mt-3.5 text-sm font-bold leading-snug">{children}</h2>,
-    h3: ({ children }) => <h3 className="mb-1.5 mt-3 text-[13px] font-bold leading-snug">{children}</h3>,
-    blockquote: ({ children }) => (
-      <blockquote className="my-2 border-l-2 border-primary/40 bg-secondary/20 py-1.5 pl-3 text-muted-foreground leading-[1.6]">
-        {children}
-      </blockquote>
-    ),
-    hr: () => <hr className="my-3 border-border/50" />,
   }), [onUriClick]);
 
   return (
-    <div className="markdown-body text-xs leading-[1.7]">
+    <div className="markdown-body">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={components}
@@ -567,7 +546,8 @@ function CodeBlock({ language, children }: { language: string; children: ReactNo
   const handleCopy = () => {
     void navigator.clipboard.writeText(codeText).then(() => {
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      // DSH 规范：复制反馈 1000ms 后复原
+      setTimeout(() => setCopied(false), 1000);
     });
   };
 
@@ -577,23 +557,19 @@ function CodeBlock({ language, children }: { language: string; children: ReactNo
     : 'code';
 
   return (
-    <div className="group relative my-2.5 overflow-hidden rounded-md border border-border/40 bg-secondary/30">
-      <div className="flex items-center justify-between border-b border-border/30 bg-secondary/20 px-2 py-0.5">
-        <span className="text-[9px] font-medium uppercase text-muted-foreground">
-          {langLabel}
-        </span>
-        <button
-          onClick={handleCopy}
-          className="text-[9px] text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
-        >
+    <div className="my-2.5 overflow-hidden rounded-[10px] border border-[var(--dsw-border-l1)] bg-[var(--dsw-code-block)]">
+      <div className="ap-banner">
+        <span className="truncate">{langLabel}</span>
+        <button onClick={handleCopy} className="ap-copybtn">
           {copied ? '已复制' : '复制'}
         </button>
       </div>
-      <pre className="overflow-x-auto p-2">
-        <code
-          className="hljs text-[10px] font-mono"
-          dangerouslySetInnerHTML={{ __html: highlightedHtml }}
-        />
+      {/* DSH：围栏代码折行（pre-wrap + break-all），与工具卡横滚相反 */}
+      <pre
+        className="overflow-x-auto p-2.5 font-mono text-[11px] leading-[17px] text-[var(--dsw-label-primary)]"
+        style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
+      >
+        <code className="hljs" dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
       </pre>
     </div>
   );
