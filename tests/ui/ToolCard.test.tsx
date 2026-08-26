@@ -95,7 +95,7 @@ describe('ToolCard file tools', () => {
     )} />);
 
     const card = screen.getByTestId('tool-card');
-    expect(card.querySelector('.animate-spin')).not.toBeNull();
+    expect(card.querySelector('[data-status="running"]')).not.toBeNull();
     expect(card.textContent).toContain('writing...');
     expect(screen.queryByText(/^\+\d+$/)).not.toBeInTheDocument();
   });
@@ -236,8 +236,8 @@ describe('ToolCard file tools', () => {
       '[src/demo.ts#TAG]\n1:old\n2:new\n\nWarnings:\nPath "demo.ts" does not exist; matched its filename.',
     )} />);
 
-    // The status dot should have the warning color class
-    const dot = screen.getByTestId('tool-card').querySelector('.bg-warning-foreground');
+    // The status dot should have the warning color state
+    const dot = screen.getByTestId('tool-card').querySelector('[data-status="warn"]');
     expect(dot).not.toBeNull();
   });
 
@@ -248,7 +248,7 @@ describe('ToolCard file tools', () => {
       'Edit applied',
     )} />);
 
-    const dot = screen.getByTestId('tool-card').querySelector('.bg-status-pass-foreground');
+    const dot = screen.getByTestId('tool-card').querySelector('[data-status="ok"]');
     expect(dot).not.toBeNull();
   });
 
@@ -311,6 +311,22 @@ describe('ToolCard file tools', () => {
     const header = Array.from(clickable).find((el) => el.textContent === 'src/demo.ts');
     expect(header).not.toBeUndefined();
     expect(header?.getAttribute('title')).toContain('点击打开文件');
+  });
+
+  it('disables read path click when result is a directory listing', () => {
+    render(<ToolCard message={completedMessage(
+      'read',
+      { path: 'src' },
+      { content: [{ type: 'text', text: 'src/\n  a.ts\n  b.ts' }], details: { isDirectory: true } },
+    )} />);
+
+    // 折叠态：omp read 读目录成功返回目录树（不报错），路径不可点击
+    expect(screen.queryByTitle(/点击打开文件/)).toBeNull();
+
+    // 展开态：路径头渲染为纯文本（title 即路径本身）
+    fireEvent.click(screen.getByTitle('展开'));
+    expect(screen.queryByTitle(/点击打开文件/)).toBeNull();
+    expect(screen.getByTitle('src')).not.toBeNull();
   });
 
   it('opens an edit through the review-aware file entry from summary and expanded path', () => {
