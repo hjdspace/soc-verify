@@ -86,7 +86,13 @@ beforeEach(() => {
   mocks.notif.init.mockClear();
   mocks.notif.markRead.mockClear();
   mocks.notif.markAllRead.mockClear();
-  useUiStore.setState({ activeView: 'dashboard', commandPaletteOpen: false });
+  useUiStore.setState({
+    activeView: 'dashboard',
+    commandPaletteOpen: false,
+    aiPanelMode: 'drawer',
+    rightDrawerOpen: false,
+    rightPanelCollapsed: false,
+  });
 });
 
 describe('TitleBar 原型布局', () => {
@@ -184,5 +190,66 @@ describe('TitleBar 回归运行徽章', () => {
     mocks.reg.activeRegressions = [];
     render(<TitleBar />);
     expect(screen.queryByTestId('regression-badge')).not.toBeInTheDocument();
+  });
+});
+
+describe('TitleBar AI 面板折叠按钮', () => {
+  it('drawer 模式初始折叠状态显示「展开 AI 面板」按钮', () => {
+    useUiStore.setState({ aiPanelMode: 'drawer', rightDrawerOpen: false });
+    render(<TitleBar />);
+    const btn = screen.getByTitle('展开 AI 面板');
+    expect(btn).toBeInTheDocument();
+  });
+
+  it('drawer 模式点击按钮打开右抽屉', () => {
+    useUiStore.setState({ aiPanelMode: 'drawer', rightDrawerOpen: false });
+    render(<TitleBar />);
+    fireEvent.click(screen.getByTitle('展开 AI 面板'));
+    expect(useUiStore.getState().rightDrawerOpen).toBe(true);
+  });
+
+  it('drawer 模式已展开时按钮显示「折叠 AI 面板」', () => {
+    useUiStore.setState({ aiPanelMode: 'drawer', rightDrawerOpen: true });
+    render(<TitleBar />);
+    expect(screen.getByTitle('折叠 AI 面板')).toBeInTheDocument();
+  });
+
+  it('drawer 模式点击按钮关闭右抽屉', () => {
+    useUiStore.setState({ aiPanelMode: 'drawer', rightDrawerOpen: true });
+    render(<TitleBar />);
+    fireEvent.click(screen.getByTitle('折叠 AI 面板'));
+    expect(useUiStore.getState().rightDrawerOpen).toBe(false);
+  });
+
+  it('docked 模式面板可见时按钮显示「折叠 AI 面板」', () => {
+    useUiStore.setState({ aiPanelMode: 'docked', rightPanelCollapsed: false });
+    render(<TitleBar />);
+    expect(screen.getByTitle('折叠 AI 面板')).toBeInTheDocument();
+  });
+
+  it('docked 模式点击按钮折叠固定侧栏，不切换视图', () => {
+    useUiStore.setState({
+      aiPanelMode: 'docked',
+      rightPanelCollapsed: false,
+      activeView: 'dashboard',
+    });
+    render(<TitleBar />);
+    fireEvent.click(screen.getByTitle('折叠 AI 面板'));
+    expect(useUiStore.getState().rightPanelCollapsed).toBe(true);
+    // 不切换视图
+    expect(useUiStore.getState().activeView).toBe('dashboard');
+  });
+
+  it('docked 模式折叠后按钮显示「展开 AI 面板」', () => {
+    useUiStore.setState({ aiPanelMode: 'docked', rightPanelCollapsed: true });
+    render(<TitleBar />);
+    expect(screen.getByTitle('展开 AI 面板')).toBeInTheDocument();
+  });
+
+  it('docked 模式点击按钮展开固定侧栏', () => {
+    useUiStore.setState({ aiPanelMode: 'docked', rightPanelCollapsed: true });
+    render(<TitleBar />);
+    fireEvent.click(screen.getByTitle('展开 AI 面板'));
+    expect(useUiStore.getState().rightPanelCollapsed).toBe(false);
   });
 });

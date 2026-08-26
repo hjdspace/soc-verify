@@ -144,7 +144,7 @@ export function AppearanceTab() {
             SoC Verify — 界面字体预览 The quick brown fox
           </p>
           <pre
-            className="mt-1.5 text-[11px] leading-relaxed"
+            className="mt-1.5 text-[11px] leading-[1.35]"
             style={{
               fontFamily: 'var(--app-font-family-code)',
               fontSize: 'var(--app-font-size-code)',

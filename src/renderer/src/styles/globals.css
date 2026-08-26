@@ -480,7 +480,14 @@ body {
   }
 }
 
-/* ── CodeMirror 编辑器样式 ─────────────────────────────────────── */
+/* ── CodeMirror 编辑器样式（排版对标 VSCode） ────────────────────
+   参数来源（vscode github 源码）：
+   - 行高 GOLDEN_LINE_HEIGHT_RATIO = 1.35（Windows/Linux，非 macOS 的 1.5）
+   - letterSpacing = 0、fontLigatures 默认关闭
+   - 行号 tabular-nums 右对齐，与编辑器同底色、无分隔线
+   - 当前行无背景高亮（Dark+ 未定义 lineHighlightBackground），仅行号变亮
+   - 光标 2px、非强调色（Dark+ #AEAFAD / Light+ #000000）
+   - 选区为不透明色块（Dark+ #264F78 / Light+ #ADD6FF） */
 
 .cm-theme,
 .cm-theme-dark,
@@ -495,39 +502,64 @@ body {
   color: var(--foreground);
   font-size: var(--app-font-size-code);
   font-family: var(--app-font-family-code);
-  font-feature-settings: "liga" 1, "calt" 1, "zero" 1;
-  font-variant-ligatures: contextual;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
+  /* VSCode 默认关闭连字（fontLigatures: false），显式禁用 "calt"/"liga" 以覆盖 JetBrains Mono 等字体的默认连字 */
+  font-feature-settings: "liga" 0, "calt" 0;
+  font-variant-ligatures: none;
+}
+
+/* CodeMirror baseTheme 在 .cm-scroller 强制 monospace + line-height 1.4，
+   优先级高于 .cm-editor，必须在此层级覆盖，字体设置才能真正生效 */
+.cm-editor .cm-scroller {
+  font-family: var(--app-font-family-code);
+  /* VSCode：lineHeight = round(1.35 × fontSize) */
+  line-height: 1.35;
 }
 
 .cm-editor .cm-content {
-  caret-color: var(--primary);
+  caret-color: var(--foreground);
 }
 
+/* VSCode：行号区与编辑器同底色、无边框分隔 */
 .cm-editor .cm-gutters {
-  background-color: color-mix(in oklch, var(--secondary) 30%, transparent);
+  background-color: transparent;
   color: var(--muted-foreground);
-  border-right: 1px solid var(--border);
+  border-right: none;
+  font-variant-numeric: tabular-nums;
 }
 
+/* VSCode lineNumbersMinChars = 5：行号右对齐并预留足够数字-代码间距 */
+.cm-editor .cm-lineNumbers .cm-gutterElement {
+  padding: 0 20px 0 5px;
+  min-width: 24px;
+}
+
+/* VSCode：当前行内容无背景高亮 */
 .cm-editor .cm-activeLine {
-  background-color: color-mix(in oklch, var(--accent) 30%, transparent);
+  background-color: transparent;
 }
 
+/* VSCode：当前行仅行号变亮（activeLineNumber），无背景块 */
 .cm-editor .cm-activeLineGutter {
-  background-color: color-mix(in oklch, var(--accent) 30%, transparent);
+  background-color: transparent;
+  color: var(--foreground);
 }
 
 .cm-editor.cm-focused {
   outline: none;
 }
 
-.cm-editor .cm-selectionBackground {
-  background-color: color-mix(in oklch, var(--primary) 20%, transparent);
+/* VSCode：不透明选区色块。
+   第二个选择器用于压过 CodeMirror baseTheme 对聚焦编辑器选区的高优先级规则 */
+.cm-editor .cm-selectionBackground,
+.cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground {
+  background-color: color-mix(in oklch, var(--primary) 30%, var(--background));
 }
 
+/* VSCode：2px 宽光标，颜色接近前景色而非强调色 */
 .cm-editor .cm-cursor {
-  border-left-color: var(--primary);
+  border-left: 2px solid var(--foreground);
+  margin-left: -1px;
 }
 
 .cm-editor .cm-foldPlaceholder {
@@ -558,7 +590,8 @@ body {
 .cm-editor .cm-indent-guide {
   display: inline-block;
   width: 1px;
-  height: 1.6em;
+  /* 与编辑器行高一致（VSCode GOLDEN_LINE_HEIGHT_RATIO = 1.35），否则参考线跨行 */
+  height: 1.35em;
   background-color: var(--border);
   opacity: 0.5;
   vertical-align: top;
@@ -668,7 +701,8 @@ body {
   padding: 0 4px 0 0;
   font-family: var(--app-font-family-code);
   font-size: var(--app-font-size-code);
-  line-height: 1.55;
+  /* 与编辑器行高一致（1.35），diff 块与代码行对齐 */
+  line-height: 1.35;
   white-space: pre-wrap;
   word-break: break-all;
   user-select: none;
@@ -676,7 +710,7 @@ body {
 
 .cm-editor .cm-review-del-line {
   display: flex;
-  min-height: 1.55em;
+  min-height: 1.35em;
   align-items: center;
 }
 

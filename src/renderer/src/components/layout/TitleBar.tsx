@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Minus, Square, X, Copy, Search, SlidersHorizontal } from 'lucide-react';
+import { Minus, Square, X, Copy, Search, SlidersHorizontal, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useUiStore } from '@renderer/stores/ui';
 import { useEnvStore } from '@renderer/stores/env';
 import { useRegressionStore } from '@renderer/stores/regression';
@@ -27,6 +27,26 @@ import { NotificationCenter } from './NotificationCenter';
 export function TitleBar() {
   const setCommandPaletteOpen = useUiStore((s) => s.setCommandPaletteOpen);
   const setActiveView = useUiStore((s) => s.setActiveView);
+
+  // ── AI 面板折叠/展开：drawer 模式 toggle 右抽屉；docked 模式 toggle 固定栏收起态 ──
+  const aiPanelMode = useUiStore((s) => s.aiPanelMode);
+  const rightDrawerOpen = useUiStore((s) => s.rightDrawerOpen);
+  const toggleRightDrawer = useUiStore((s) => s.toggleRightDrawer);
+  const rightPanelCollapsed = useUiStore((s) => s.rightPanelCollapsed);
+  const toggleRightPanel = useUiStore((s) => s.toggleRightPanel);
+
+  /** AI 面板是否可见（drawer 模式看 rightDrawerOpen；docked 模式看 !rightPanelCollapsed） */
+  const aiPanelVisible =
+    aiPanelMode === 'drawer' ? rightDrawerOpen : !rightPanelCollapsed;
+
+  /** toggle AI 面板可见性，不切换视图 */
+  const handleToggleAiPanel = useCallback(() => {
+    if (aiPanelMode === 'drawer') {
+      toggleRightDrawer();
+    } else {
+      toggleRightPanel();
+    }
+  }, [aiPanelMode, toggleRightDrawer, toggleRightPanel]);
 
   const managerOpen = useEnvStore((s) => s.managerOpen);
   const setManagerOpen = useEnvStore((s) => s.setManagerOpen);
@@ -154,6 +174,19 @@ export function TitleBar() {
 
         {/* 工具下拉菜单 */}
         <ToolsDropdown />
+
+        {/* AI 面板折叠/展开按钮：drawer 模式 toggle 抽屉；docked 模式 toggle 固定栏收起 */}
+        <TitleBarButton
+          onClick={handleToggleAiPanel}
+          title={aiPanelVisible ? '折叠 AI 面板' : '展开 AI 面板'}
+          active={aiPanelVisible}
+        >
+          {aiPanelVisible ? (
+            <PanelRightClose className="h-3.5 w-3.5" />
+          ) : (
+            <PanelRightOpen className="h-3.5 w-3.5" />
+          )}
+        </TitleBarButton>
 
         {/* 窗口控制按钮组 */}
         <div className="flex items-center">
