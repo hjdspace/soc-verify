@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import './styles/globals.css';
+import './styles/ai-panel.css';
 
 // ── Anti-flash: apply persisted theme before first render ───────────
 // Reading localStorage and setting data-theme here (in the entry module)
@@ -12,14 +13,16 @@ import './styles/globals.css';
   const THEME_KEY = 'socverify:theme';
   const LIGHT_THEMES = new Set(['drafting', 'daylight']);
   const saved = localStorage.getItem(THEME_KEY);
+  const root = document.documentElement;
   if (saved) {
-    const root = document.documentElement;
     root.dataset.theme = saved;
-    root.style.colorScheme = LIGHT_THEMES.has(saved) ? 'light' : 'dark';
+    const shade = LIGHT_THEMES.has(saved) ? 'light' : 'dark';
+    root.dataset.shade = shade;
+    root.style.colorScheme = shade;
   } else {
     // Default theme: bench (dark)
-    const root = document.documentElement;
     root.dataset.theme = 'bench';
+    root.dataset.shade = 'dark';
     root.style.colorScheme = 'dark';
   }
 }
