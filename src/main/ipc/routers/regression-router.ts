@@ -141,6 +141,7 @@ export const regressionRouter = t.router({
         coverage: typeof opts.coverage === 'boolean' ? opts.coverage : undefined,
         regrWork: typeof opts.regrWork === 'string' ? opts.regrWork : undefined,
         merge: typeof opts.merge === 'boolean' ? opts.merge : undefined,
+        dashboard: typeof opts.dashboard === 'string' ? opts.dashboard : undefined,
       };
       return { projectId: r.projectId, filePath: r.filePath, subsys: r.subsys, options };
     })
@@ -205,6 +206,20 @@ export const regressionRouter = t.router({
       return { projectId: typeof r.projectId === 'string' ? r.projectId : undefined };
     })
     .query(({ input }) => regressionRunTracker.getActive(input.projectId)),
+
+  /**
+   * 按需获取运行中回归的终端会话 ID（回归页卡片「打开终端」按钮，ADR 0029 决策 4）。
+   * run 已结束或不存在时返回 null。
+   */
+  getRunTerminal: t.procedure
+    .input((raw): { runId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.runId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'runId is required' });
+      }
+      return { runId: r.runId };
+    })
+    .query(({ input }) => ({ terminalId: regressionRunTracker.getTerminalId(input.runId) })),
 
   /**
    * Get regression history (past runs).
