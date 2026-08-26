@@ -637,7 +637,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                 data-session-tab
                 onClick={() => !isEditing && switchSession(sess.id)}
                 className={cn(
-                  'relative flex select-none items-center gap-1 px-0.5 text-xs cursor-pointer transition-colors max-w-[160px] shrink-0',
+                  'group relative flex select-none items-center gap-1 px-0.5 text-xs cursor-pointer transition-colors max-w-[160px] shrink-0',
                   isActive
                     ? 'font-medium text-primary'
                     : 'text-muted-foreground hover:text-foreground/80',
@@ -687,7 +687,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                         e.stopPropagation();
                         closeSession(sess.id);
                       }}
-                      className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-60"
+                      className="shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-destructive/10 hover:opacity-100 group-hover:opacity-70 hover:text-destructive text-muted-foreground"
                       title="关闭会话"
                     >
                       <X className="h-2.5 w-2.5" />
