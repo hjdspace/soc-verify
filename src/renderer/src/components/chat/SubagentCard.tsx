@@ -1,15 +1,15 @@
 import { useEffect, useState } from 'react';
-import { Loader2, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 import type { SubagentActivity } from '@renderer/stores/session-types';
 import { MarkdownRenderer } from './MarkdownRenderer';
 
 /**
- * Subagent 专用卡片（方案 C：聚合磁贴 + 抽屉详情）。
+ * Subagent 树形行卡片（DSH §7 形态：缩进树形行，无独立磁贴网格）。
  *
  * task 工具派遣 subagent 后替换默认 TaskBody 渲染：
- * - 磁贴网格：每个 subagent 一个磁贴（状态点 + currentTool + token sparkline）
- * - 点击磁贴：右侧抽屉展示完整实时日志流（recentOutput 正序）
+ * - 每个 subagent 一行：状态点（running=追逐点阵）+ 名称 + 活动摘要 + tabular 指标
+ * - 点击行：右侧抽屉展示完整实时日志流（recentOutput 正序）
  *
  * 数据由 session store 的 subagent_lifecycle / subagent_progress 帧驱动，
  * 经 parentToolCallId 过滤后传入。
@@ -25,75 +25,72 @@ function fmtDuration(ms: number): string {
   return `${Math.floor(s / 60)}m${s % 60}s`;
 }
 
-/** 状态点样式：running 脉冲 / completed 绿 / failed 红 / aborted 灰 */
-function statusDotClass(status: SubagentActivity['status']): string {
-  switch (status) {
-    case 'running': return 'bg-primary animate-pulse';
-    case 'completed': return 'bg-status-pass-foreground';
-    case 'failed': return 'bg-status-fail-foreground';
-    default: return 'bg-muted-foreground/40';
+/** 状态点样式：running 追逐点阵 / completed 绿 / failed 红 / aborted 灰 */
+function statusDotEl(status: SubagentActivity['status']) {
+  if (status === 'running') {
+    return (
+      <span className="ap-chase" aria-hidden>
+        <i /><i /><i /><i /><i /><i /><i /><i />
+      </span>
+    );
   }
+  const cls = status === 'completed' ? 'bg-status-pass-foreground'
+    : status === 'failed' ? 'bg-status-fail-foreground'
+    : 'bg-muted-foreground/40';
+  return <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', cls)} />;
 }
 
 function statusLabel(status: SubagentActivity['status']): string {
   switch (status) {
-    case 'running': return 'running';
-    case 'completed': return 'done';
-    case 'failed': return 'failed';
-    default: return 'aborted';
+    case 'running': return '运行中';
+    case 'completed': return '已完成';
+    case 'failed': return '失败';
+    default: return '已中止';
   }
 }
 
-/** token 增量迷你柱状图 */
-function Sparkline({ history }: { history: number[] }) {
-  const bars = history.slice(-12);
-  const max = Math.max(1, ...bars);
-  return (
-    <div className="flex h-3 items-end gap-px" data-testid="subagent-sparkline">
-      {bars.length === 0 && <span className="h-0.5 w-full rounded-sm bg-border" />}
-      {bars.map((v, i) => (
-        <span
-          key={i}
-          className="min-h-0.5 flex-1 rounded-sm bg-primary/40"
-          style={{ height: `${Math.max(12, (v / max) * 100)}%` }}
-        />
-      ))}
-    </div>
-  );
-}
-
-/** 单个磁贴 */
-function Tile({ agent, onClick }: { agent: SubagentActivity; onClick: () => void }) {
+/** 单个树形行 */
+function AgentRow({ agent, onClick }: { agent: SubagentActivity; onClick: () => void }) {
   const running = agent.status === 'running';
+  const duration = (agent.endedAt ?? Date.now()) - agent.startedAt;
   return (
     <button
       type="button"
       onClick={onClick}
       data-testid={`subagent-tile-${agent.id}`}
-      className="flex flex-col gap-1 rounded-md border border-border/60 bg-background/40 px-2 py-1.5 text-left transition-colors hover:border-border hover:bg-secondary/40"
+      className="ml-2 flex w-[calc(100%-0.5rem)] flex-col gap-px rounded-r-lg border-l border-[var(--dsw-border-l2)] px-1.5 py-1 text-left transition-colors hover:bg-[var(--dsw-hover-bg)]"
       title={agent.description ?? agent.agent}
     >
       <div className="flex items-center gap-1.5">
-        <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', statusDotClass(agent.status))} />
-        <span className="truncate text-[10px] font-semibold text-foreground/80">{agent.agent}</span>
-        {running && <Loader2 className="ml-auto h-2 w-2 shrink-0 animate-spin text-primary/70" />}
+        {statusDotEl(agent.status)}
+        <span className="truncate text-[11px] font-medium text-foreground">{agent.agent}</span>
+        <span className={cn(
+          'shrink-0 text-[9px]',
+          running && 'text-primary',
+          !running && agent.status !== 'aborted' ? (
+            agent.status === 'completed' ? 'text-status-pass-foreground' : 'text-destructive'
+          ) : undefined,
+          agent.status === 'aborted' && 'text-muted-foreground',
+        )}>
+          {statusLabel(agent.status)}
+        </span>
       </div>
-      <div
-        className={cn(
-          'h-4 truncate text-[10px]',
-          running ? 'text-muted-foreground' : 'text-muted-foreground/50',
-        )}
-      >
-        {running
-          ? (agent.currentTool ?? agent.lastIntent ?? '…')
-          : agent.status === 'completed' ? '\u2713 完成'
-          : agent.status === 'failed' ? '\u2717 失败'
-          : '\u2013 已中止'}
-      </div>
-      <Sparkline history={agent.tokenHistory} />
-      <div className="flex justify-between text-[9px] tabular-nums text-muted-foreground/60">
-        <span>{agent.toolCount} tools</span>
-        <span>{fmtTokens(agent.tokens)} tok</span>
+      <div className="flex items-center gap-2 pl-4">
+        <span
+          className={cn(
+            'min-w-0 flex-1 truncate font-mono text-[10px]',
+            running ? 'text-muted-foreground' : 'text-muted-foreground/60',
+          )}
+        >
+          {running
+            ? (agent.currentTool ?? agent.lastIntent ?? '…')
+            : agent.status === 'completed' ? '\u2713 完成'
+            : agent.status === 'failed' ? '\u2717 失败'
+            : '\u2013 已中止'}
+        </span>
+        <span className="shrink-0 font-mono text-[9px] tabular-nums text-muted-foreground/70">
+          {fmtTokens(agent.tokens)} tok · {fmtDuration(duration)}
+        </span>
       </div>
     </button>
   );
@@ -116,24 +113,24 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
   return (
     <>
       <div
-        className="fixed inset-0 z-40 bg-background/60 backdrop-blur-[1px]"
+        className="fixed inset-0 z-40 bg-black/25 backdrop-blur-[1px]"
         onClick={onClose}
         data-testid="subagent-drawer-mask"
       />
       <aside
-        className="fixed right-0 top-0 z-50 flex h-full w-[420px] max-w-[85vw] flex-col border-l border-border bg-card shadow-2xl"
+        className="fixed right-0 top-0 z-50 flex h-full w-[320px] max-w-[85vw] flex-col rounded-l-xl border-l border-[var(--dsw-border-l2)] bg-[var(--dsw-layer-1)] shadow-[var(--dsw-shadow-lv3)]"
         data-testid="subagent-drawer"
       >
-        <header className="flex items-center gap-2 border-b border-border px-3 py-2.5">
-          <span className={cn('h-2 w-2 rounded-full', statusDotClass(agent.status))} />
-          <span className="text-xs font-bold">{agent.agent}</span>
+        <header className="flex items-center gap-1.5 border-b border-[var(--dsw-border-l1)] px-3 py-2.5">
+          {statusDotEl(agent.status)}
+          <span className="truncate text-xs font-semibold text-foreground">{agent.agent}</span>
           <span
             className={cn(
               'rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide',
               agent.status === 'running' && 'bg-primary/15 text-primary',
               agent.status === 'completed' && 'bg-status-pass/15 text-status-pass-foreground',
-              agent.status === 'failed' && 'bg-status-fail/15 text-status-fail-foreground',
-              agent.status === 'aborted' && 'bg-secondary text-muted-foreground',
+              agent.status === 'failed' && 'bg-destructive/15 text-destructive',
+              agent.status === 'aborted' && 'bg-muted text-muted-foreground',
             )}
           >
             {statusLabel(agent.status)}
@@ -141,7 +138,7 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
           <button
             type="button"
             onClick={onClose}
-            className="ml-auto rounded p-1 text-muted-foreground/60 transition-colors hover:bg-secondary hover:text-foreground"
+            className="ml-auto rounded p-1 text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
             title="关闭 (Esc)"
           >
             <X className="h-3.5 w-3.5" />
@@ -150,7 +147,7 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
 
         {(agent.assignment ?? agent.description) && (
           <div
-            className="max-h-40 overflow-y-auto border-b border-border/60 px-3 py-2"
+            className="max-h-40 overflow-y-auto border-b border-[var(--dsw-border-l1)] px-3 py-2"
             data-testid="subagent-assignment"
           >
             <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/60">
@@ -162,7 +159,7 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
 
         <div className="flex-1 overflow-y-auto px-3 py-2">
           {agent.lastIntent && agent.status === 'running' && (
-            <div className="mb-2 text-[11px] italic text-primary/80" data-testid="subagent-intent">
+            <div className="mb-2 font-mono text-[11px] italic text-primary/80" data-testid="subagent-intent">
               {agent.lastIntent}
             </div>
           )}
@@ -179,7 +176,7 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
           </div>
         </div>
 
-        <footer className="flex items-center gap-3 border-t border-border px-3 py-2 font-mono text-[10px] text-muted-foreground/70">
+        <footer className="flex items-center gap-3 border-t border-[var(--dsw-border-l1)] px-3 py-2 font-mono text-[10px] tabular-nums text-muted-foreground/70">
           <span>{fmtDuration(duration)}</span>
           <span>{agent.toolCount} tools</span>
           <span>{agent.requests} reqs</span>
@@ -197,12 +194,10 @@ export function SubagentCard({ agents }: { agents: SubagentActivity[] }) {
   const opened = sorted.find((a) => a.id === openId) ?? null;
 
   return (
-    <div className="px-2 py-1.5" data-testid="subagent-card">
-      <div className="grid grid-cols-3 gap-1.5">
-        {sorted.map((agent) => (
-          <Tile key={agent.id} agent={agent} onClick={() => setOpenId(agent.id)} />
-        ))}
-      </div>
+    <div className="flex flex-col gap-0.5 px-1 py-1" data-testid="subagent-card">
+      {sorted.map((agent) => (
+        <AgentRow key={agent.id} agent={agent} onClick={() => setOpenId(agent.id)} />
+      ))}
       {opened && <Drawer agent={opened} onClose={() => setOpenId(null)} />}
     </div>
   );
