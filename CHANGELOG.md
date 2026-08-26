@@ -6,6 +6,74 @@
 
 ---
 
+## [0.4.2](https://github.com/hjdspace/soc-verify/compare/v0.4.1...v0.4.2) (2026-08-27)
+
+### Features
+
+* **titlebar:** 添加 AI 面板折叠按钮
+* **dashboard:** 添加里程碑动作展开菜单并引入图标库
+* **error-display:** 添加结构化错误消息展示组件
+* **ui:** 集成视觉库——ThinkingOrbs 替换 AI 加载指示器（issue 01+02）
+* **ui:** liquid-gooey NavRail 视图切换指示器 + ap-chase 弃用与全量验证（issue 04+05）
+* **visual:** border-beam 集成到 4 个焦点/审批组件
+* **editor:** 添加 CSV 文件表格编辑器
+* **simulation:** 新增 SimArtifactResolver 仿真产物解析器，正确解析仿真日志路径
+* **simulation:** 增强仿真状态检查机制与日志路径解析
+* **simulation:** 仿真记录新增 command 和 cwd 字段，活跃运行列表增强
+* **simulation:** 新增仿真调试工具（sim-debug.ts）与内联调试按钮
+* **simulation:** 新增仿真调试原型页面（浮动调试停靠栏、行操作、终端工具栏）
+* **simulation:** 新增仿真 rerun 按钮与 EDA 工具启动器
+* **regression:** 新增 RunConfigModal 回归配置弹窗与回归命令构建器
+* **regression:** RegressionView 增强运行配置与活跃回归展示
+* **regression:** 回归追踪器新增 getTerminalId 方法，SuiteCard/SuiteCardGrid 新增 actions 属性
+* **regression:** 回归选项新增 dashboard 属性并改进 getRunTerminal
+* **file-tree:** FileTree 新增 dirId 属性支持懒加载与按需展开
+* **file-tree:** 实现 isDirectoryToolResult 函数与 GrepBody 正则高亮
+* **tools:** 新增 CopyButton 组件用于文本复制，ReadBody 支持目录结果与文本复制
+* **tools:** ToolCard 增强目录处理与图标，GenericBody 改进输出展示
+* **session:** 新增 credentialSnapshot 函数与会话上下文工厂 providerId
+* **session:** 会话路由增强——holistic swap 功能与异步模型设置重构
+* **session:** 日志模块增强——LogEvent 与 registerLogSink
+* **session:** stdout 写入拦截增强以确保 JSONL 合规
+* **deps:** 添加 @firecrawl/anydoc 到外部模块
+* **ai-panel:** 创建 ai-panel.css 设计令牌样式与 AI 面板原型 UI
+* **theme:** 主题管理增强——applyTheme 设置主题色调
+* **ui:** RightPanel 新增复制图标与样式更新，HistoryTable 支持子系统展示
+
+### Bug Fixes
+
+* **error-analysis:** 修复模拟目录失效时错误分析失败
+* **simulation:** 修复仿真目录路径与状态检查
+* **build:** 修复 tsconfig.json 引用格式
+
+### Refactor
+
+* **file-tree:** 替换 lucide 图标为本地 VS Code 图标集
+* **file-tree:** 移除目录预取改为展开时按需加载
+* **nav-rail:** 移除液态指示器改用底线激活态
+* **security:** 重构目录安全检查并新增 containment 方法
+* **regression:** 重构回归终端处理与 runsim 命令生成解析
+* **regression:** 移除 OptionCard 回归测试功能与 pickRegrFile procedure，清理 SimOptionPanel
+* **regression:** 将 buildRegrCommand 迁移到共享 regression-command 模块
+* **simulation:** 重构仿真路由以改进产物处理与状态处理
+* **tools:** 重构多个工具组件——BashBody、EditBody、WriteBody、GrepBody→GlobBody、DiffLineView、MarkdownRenderer、McpBody、ClickablePathHeader、ApprovalCard、SubagentCard→AgentRow、ThinkingBlock、TodoPanel
+* **session:** 重构异步模型设置逻辑与会话核心
+* **build:** 移除 tsconfig.runner.json composite 选项
+
+### Documentation
+
+* **simulation:** 文档化仿真状态判定与日志目录指南（PASS/FAIL 判定原则、$PROJ_WORK 环境变量）
+* **context:** 增强 CONTEXT.md 回归概念
+* **regression:** 创建统一回归启动流程 PRD 与 ADR
+
+### Tests
+
+* **simulation:** 新增仿真调试工具、getSeedFromLog、SimControlToolbar Debug 按钮端到端测试
+* **file-tree:** 新增懒加载、目录展开与 dirId 验证测试
+* **regression:** 新增 RunConfigModal、回归命令 dashboard 选项、getTerminalId 未知 runId、RegressionView 测试
+* **session:** 新增 session-router 模型交换行为与 SessionManager 环境凭据测试
+* **ui:** RunListPanel 调试功能与 ToolCard data-status 属性测试增强
+
 ## [0.4.1](https://github.com/hjdspace/soc-verify/compare/v0.4.0...v0.4.1) (2026-08-25)
 
 ### Features
