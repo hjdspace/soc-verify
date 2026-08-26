@@ -78,4 +78,29 @@ describe('buildRegrCommand', () => {
     const cmd = buildRegrCommand('/path/to/my regression list.lst', {});
     expect(cmd).toBe('runsim -regr /path/to/my regression list.lst');
   });
+
+  it('adds -m (dashboard DE TAG) option', () => {
+    const cmd = buildRegrCommand('/path/to/regr.lst', { dashboard: 'DE123' });
+    expect(cmd).toBe('runsim -regr /path/to/regr.lst -m DE123');
+  });
+
+  it('ignores empty dashboard tag', () => {
+    const cmd = buildRegrCommand('/path/to/regr.lst', { dashboard: '' });
+    expect(cmd).toBe('runsim -regr /path/to/regr.lst');
+  });
+
+  it('combines all options including dashboard', () => {
+    const cmd = buildRegrCommand('/path/to/regr.lst', {
+      tags: ['smoke'],
+      nonTags: ['nightly'],
+      failMode: true,
+      coverage: true,
+      regrWork: '/work/regr',
+      merge: true,
+      dashboard: 'DE123',
+    });
+    expect(cmd).toBe(
+      'runsim -regr /path/to/regr.lst -tag smoke -nt nightly -fm -cov -regr_work /work/regr -merge -m DE123',
+    );
+  });
 });
