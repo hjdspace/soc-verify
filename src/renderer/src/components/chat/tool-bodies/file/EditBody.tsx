@@ -50,7 +50,7 @@ export function EditBody({ args, resultText }: { args: unknown; resultText: stri
   if (oldText != null && newText != null) {
     const diff = computeSimpleDiff(oldText, newText);
     return (
-      <div className="text-[11px] leading-relaxed">
+      <div className="overflow-hidden rounded-lg py-1 font-mono text-[11px] leading-relaxed">
         {filePath && <ClickablePathHeader filePath={filePath} />}
         <div className="max-h-80 overflow-auto">
           {diff.map((line, i) => <DiffLineView key={i} line={line} language={language} />)}
@@ -70,12 +70,13 @@ export function EditBody({ args, resultText }: { args: unknown; resultText: stri
       return { type: 'ctx' as const, content: content.startsWith(' ') ? content.slice(1) : content };
     });
     return (
-      <div className="text-[11px] leading-relaxed">
+      <div className="overflow-hidden rounded-lg py-1 font-mono text-[11px] leading-relaxed">
         {filePath && <ClickablePathHeader filePath={filePath} />}
         <div className="max-h-80 overflow-auto">
           {lines.map((line, i) => {
             if (line.type === 'hunk') {
-              return <div key={i} className="bg-secondary/40 px-2.5 py-0.5 text-[10px] text-muted-foreground/70">{line.content}</div>;
+              // DSH：同文件多个 hunk 之间插灰色 ⋯ 行
+              return <div key={i} className="ap-diff-hunk px-2.5 py-0.5 text-[10px] leading-[18px]">⋯</div>;
             }
             return <DiffLineView key={i} line={line} language={language} />;
           })}
