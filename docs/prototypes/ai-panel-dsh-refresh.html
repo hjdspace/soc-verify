@@ -1,0 +1,878 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI 面板 UI 优化原型 — 参考 DSH 设计规范</title>
+<style>
+/* ══════════════════════════════════════════════════════════
+   设计令牌（DSH 原版色板，字面值）
+   亮色默认；暗色 body[data-theme="dark"]
+   ══════════════════════════════════════════════════════════ */
+:root{
+  --font-ui:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei','Helvetica Neue',Helvetica,Arial,sans-serif;
+  --font-code:'SF Mono','JetBrains Mono','Fira Code',Consolas,'Liberation Mono',Menlo,Courier,'PingFang SC','Microsoft YaHei';
+
+  --bg-base:#FFFFFF; --layer-1:#FFFFFF; --layer-2:#FFFFFF; --layer-3:#F5F6F7;
+  --label-primary:rgb(15,17,21); --label-secondary:rgb(97,102,107);
+  --label-tertiary:rgb(129,133,140); --label-caption:rgb(173,178,184);
+  --label-dimmed:rgb(225,229,238);
+  --border-l1:rgba(0,0,0,.04); --border-l2:rgba(0,0,0,.10); --border-l3:rgba(0,0,0,.12);
+  --blue:rgb(65,118,230); --blue-hover:rgb(103,158,254); --blue-tertiary:rgb(228,237,253); --blue-900:rgb(14,48,116);
+  --error:rgb(236,19,19); --success:rgb(34,197,94);
+  --warn:rgb(245,158,11); --warn-label:rgb(221,134,41); --warn-secondary:rgb(247,173,49); --warn-tertiary:rgb(254,245,231);
+  --ds450:rgb(86,134,254);
+  --inline-code:rgb(235,238,242); --code-block:rgb(249,250,251); --banner:rgb(249,250,251);
+  --hover-bg:rgba(38,49,72,.06); --active-bg:rgba(38,49,72,.10); --hover-solid:rgb(241,243,245);
+  --bubble:rgb(237,243,254); --input-major:#FFFFFF; --tip:#F5F6F7; --selector:#F5F6F7;
+  --shadow-lv2:0 4px 12px 0 rgba(0,0,0,.02),0 2px 8px 0 rgba(0,0,0,.04);
+  --shadow-lv3:0 0 1px 0 rgba(0,0,0,.2),0 0 4px 0 rgba(0,0,0,.02),0 12px 32px 0 rgba(0,0,0,.08);
+  --scroll-thumb:rgba(0,0,0,.18);
+  --stage-bg:#E9EAEC; color-scheme:light;
+}
+body[data-theme="dark"]{
+  --bg-base:rgb(21,21,23); --layer-1:rgb(35,35,36); --layer-2:rgb(44,44,46); --layer-3:rgb(53,54,56);
+  --label-primary:rgb(249,250,251); --label-secondary:rgb(207,211,214);
+  --label-tertiary:rgb(173,178,184); --label-caption:rgb(129,133,140);
+  --label-dimmed:rgb(67,69,74);
+  --border-l1:rgba(255,255,255,.06); --border-l2:rgba(255,255,255,.12); --border-l3:rgba(255,255,255,.16);
+  --blue:rgb(103,158,254); --blue-hover:rgb(65,118,230); --blue-tertiary:rgb(52,65,91); --blue-900:rgb(169,199,255);
+  --error:rgb(242,90,90); --success:rgb(34,197,94);
+  --warn:rgb(245,158,11); --warn-label:rgb(221,134,41); --warn-secondary:rgb(247,173,49); --warn-tertiary:rgb(39,36,31);
+  --inline-code:rgb(44,44,46); --code-block:rgb(27,27,28); --banner:rgb(44,44,46);
+  --hover-bg:rgba(255,255,255,.08); --active-bg:rgba(255,255,255,.14); --hover-solid:rgb(53,54,56);
+  --bubble:rgb(44,44,46); --input-major:rgb(44,44,46); --tip:rgb(53,54,56); --selector:rgb(53,54,56);
+  --shadow-lv2:0 4px 12px 0 rgba(0,0,0,.28),0 2px 8px 0 rgba(0,0,0,.22);
+  --shadow-lv3:0 0 1px 0 rgba(0,0,0,.4),0 12px 32px 0 rgba(0,0,0,.5);
+  --scroll-thumb:rgba(255,255,255,.22);
+  --stage-bg:#0C0C0D; color-scheme:dark;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--stage-bg);font-family:var(--font-ui);transition:background .2s}
+
+/* ── 舞台与控制条 ─────────────────────────────── */
+.stage{height:100%;display:flex;flex-direction:column;align-items:center;padding:18px 16px 10px}
+.ctrl{display:flex;gap:8px;margin-bottom:14px;align-items:center}
+.ctrl .ttl{font-size:12px;color:var(--label-tertiary);margin-right:6px}
+.cbtn{height:26px;padding:0 12px;border-radius:999px;border:1px solid var(--border-l2);
+  background:var(--input-major);color:var(--label-primary);font-size:11px;font-family:var(--font-ui);
+  cursor:pointer;box-shadow:var(--shadow-lv2)}
+.cbtn:hover{background:var(--hover-solid)}
+
+/* ── 面板外壳：仅侧栏本体 ─────────────────────── */
+.panel-wrap{flex:1;min-height:0;display:flex;justify-content:center;width:100%}
+.panel{width:360px;height:100%;background:var(--bg-base);display:flex;flex-direction:column;
+  border-radius:12px;overflow:hidden;position:relative;
+  box-shadow:var(--shadow-lv3)}
+body[data-width="docked"] .panel{width:440px}
+
+/* 滚动条：8px / thumb r4 / 轨道透明 */
+.panel ::-webkit-scrollbar{width:8px;height:8px}
+.panel ::-webkit-scrollbar-thumb{background:var(--scroll-thumb);border-radius:4px}
+.panel ::-webkit-scrollbar-track{background:transparent}
+
+/* ══════════════════════════════════════════════
+   会话标签栏
+   ══════════════════════════════════════════════ */
+.tabsbar{display:flex;align-items:center;padding:0 6px 0 10px;height:36px;flex-shrink:0;
+  border-bottom:1px solid var(--border-l2)}
+.tabs{display:flex;gap:14px;flex:1;min-width:0;overflow-x:auto;height:100%;align-items:stretch}
+.tab{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--label-tertiary);
+  cursor:pointer;position:relative;white-space:nowrap;user-select:none}
+.tab:hover{color:var(--label-secondary)}
+.tab.active{color:var(--blue);font-weight:500}
+.tab.active::after{content:'';position:absolute;left:0;right:0;bottom:0;height:2px;
+  border-radius:2px 2px 0 0;background:var(--blue)}
+.tab .spin{width:9px;height:9px;border:1.5px solid var(--blue-tertiary);border-top-color:var(--blue);
+  border-radius:50%;animation:rot 1s linear infinite}
+@keyframes rot{to{transform:rotate(360deg)}}
+.tabs-actions{display:flex;gap:2px;flex-shrink:0}
+.iconbtn{width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;
+  border:none;background:transparent;border-radius:6px;color:var(--label-tertiary);cursor:pointer}
+.iconbtn:hover{background:var(--hover-bg);color:var(--label-secondary)}
+.iconbtn svg{width:13px;height:13px}
+
+/* ══════════════════════════════════════════════
+   消息流
+   ══════════════════════════════════════════════ */
+.stream{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;position:relative;
+  padding:14px 12px 20px;display:flex;flex-direction:column;gap:16px}
+.stream::after{content:'';position:absolute;left:0;right:0;bottom:0;height:22px;
+  background:linear-gradient(180deg,transparent,var(--bg-base));pointer-events:none}
+
+/* 用户消息：右对齐气泡 */
+.user-row{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.bubble{max-width:88%;background:var(--bubble);border-radius:16px;padding:8px 12px;
+  font-size:12px;line-height:20px;color:var(--label-primary);white-space:pre-wrap;word-break:break-word}
+.bubble .skill-chip{display:inline-flex;align-items:center;gap:3px;background:var(--blue-tertiary);
+  color:var(--blue);border-radius:5px;padding:1px 6px;font-size:10px;font-weight:500;margin-bottom:4px}
+.bubble .ref-chip{color:var(--blue);font-weight:500;display:inline-flex;align-items:center;gap:3px;margin:0 2px}
+.bubble .ref-chip svg{width:11px;height:11px}
+.user-meta{display:flex;gap:4px;opacity:0;transition:opacity .08s}
+.user-row:hover .user-meta{opacity:1}
+.meta-btn{width:20px;height:20px;border-radius:50%;border:none;background:transparent;
+  color:var(--label-caption);display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.meta-btn:hover{background:var(--hover-bg);color:var(--label-secondary)}
+.meta-btn svg{width:11px;height:11px}
+
+/* 系统通知行：居中安静 chip */
+.sys-row{display:flex;justify-content:center}
+.sys-chip{max-width:85%;display:inline-flex;align-items:center;gap:4px;background:var(--hover-solid);
+  border-radius:999px;padding:2px 8px;font-size:10px;color:var(--label-tertiary);overflow:hidden}
+.sys-chip svg{width:10px;height:10px;flex-shrink:0}
+.sys-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* 助手消息：通栏无气泡 */
+.asst{display:flex;flex-direction:column;gap:8px}
+
+/* Markdown 正文（侧栏缩放：12/20） */
+.md{font-size:12px;line-height:20px;color:var(--label-primary);overflow-wrap:anywhere}
+.md p{margin:8px 0}.md>*:first-child{margin-top:0}.md>*:last-child{margin-bottom:0}
+.md strong{font-weight:600}
+.md h1,.md h2,.md h3{margin:14px 0 8px;line-height:1.4}
+.md h1{font-size:14px;font-weight:700}.md h2{font-size:13px;font-weight:700}.md h3{font-size:12px;font-weight:600}
+.md ul,.md ol{margin:8px 0;padding-left:16px}
+.md li+li{margin-top:3px}.md li{line-height:20px}
+.md li::marker{color:var(--label-secondary)}
+.md blockquote{border-left:2px solid var(--label-caption);padding-left:10px;margin:10px 0 0;
+  color:var(--label-secondary)}
+.md hr{border:none;height:1px;background:var(--border-l2);margin:14px 0}
+.md a{color:var(--blue);text-decoration:none}
+.md a:hover{text-decoration:underline}
+.md .icode{background:var(--inline-code);border-radius:4px;padding:0 4px;font-family:var(--font-code);
+  font-size:.9em}
+.file-ref{display:inline-flex;align-items:center;border-radius:4px;background:var(--blue-tertiary);
+  color:var(--blue);padding:0 4px;font-family:var(--font-code);font-size:.9em;cursor:pointer}
+.file-ref:hover{filter:brightness(.96)}
+.tblwrap{margin:8px 0;overflow-x:auto}
+.md table{border-collapse:collapse;width:100%;font-size:11px;line-height:17px}
+.md th{border-bottom:1px solid var(--border-l3);font-weight:500;text-align:left;padding:5px 10px;color:var(--label-primary)}
+.md td{border-bottom:1px solid var(--border-l2);padding:5px 10px;color:var(--label-primary)}
+.md th:first-child,.md td:first-child{padding-left:2px}
+.md th:last-child,.md td:last-child{padding-right:2px}
+
+/* 围栏代码块（banner + 折行） */
+.codeblock{margin:8px 0;border:1px solid var(--border-l1);border-radius:10px;background:var(--code-block);overflow:hidden}
+.codeblock .cb-banner{display:flex;align-items:center;justify-content:space-between;
+  padding:4px 10px;background:var(--banner);border-bottom:1px solid var(--border-l1)}
+.cb-lang{font-family:var(--font-code);font-size:10px;color:var(--label-caption)}
+.copybtn{border:none;background:transparent;font-size:10px;color:var(--label-tertiary);cursor:pointer;
+  font-family:var(--font-ui);padding:1px 4px;border-radius:4px}
+.copybtn:hover{color:var(--label-primary);background:var(--hover-bg)}
+.codeblock pre{padding:8px 10px;font:400 11px/17px var(--font-code);color:var(--label-primary);
+  white-space:pre-wrap;word-break:break-all}
+.tk-kw{color:#d6336c}body[data-theme="dark"] .tk-kw{color:#faa2c1}
+.tk-fn{color:#6741d9}body[data-theme="dark"] .tk-fn{color:#b197fc}
+.tk-str{color:#2f9e44}body[data-theme="dark"] .tk-str{color:#69db7c}
+.tk-cm{color:#868e96}body[data-theme="dark"] .tk-cm{color:#adb5bd}
+.tk-num{color:#1c7ed6}body[data-theme="dark"] .tk-num{color:#4dabf7}
+
+/* 流式光标 */
+.cursor{display:inline-block;width:2px;height:12px;background:var(--label-primary);
+  margin-left:2px;vertical-align:-2px;animation:blink 1s step-end infinite}
+@keyframes blink{50%{opacity:0}}
+
+/* ══════════════════════════════════════════════
+   折叠行家族（Think / 工具 / 压缩 / 提问）
+   恒定 24px：[16px 图标格] gap6 [标题] · [摘要省略]
+   ══════════════════════════════════════════════ */
+details.disc{position:relative}
+details.disc>summary{list-style:none;display:flex;align-items:center;gap:6px;min-height:24px;
+  padding:0 6px;border-radius:8px;cursor:pointer;user-select:none;position:relative;overflow:hidden}
+details.disc>summary::-webkit-details-marker{display:none}
+details.disc>summary:hover{background:var(--hover-bg)}
+.d-icon{width:16px;height:16px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  color:var(--label-tertiary)}
+.d-icon svg{width:13px;height:13px}
+.d-title{font-size:11px;font-weight:500;color:var(--label-secondary);flex-shrink:0}
+.d-sep{width:2px;height:2px;border-radius:50%;background:var(--label-caption);flex-shrink:0}
+.d-sum{flex:1;min-width:0;font-size:11px;color:var(--label-tertiary);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.d-sum.err{color:var(--error)}
+.d-tail{display:flex;align-items:center;gap:6px;flex-shrink:0;font-size:10px;
+  color:var(--label-caption);font-variant-numeric:tabular-nums}
+.d-chev{width:14px;height:14px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  color:var(--label-caption);transition:transform .15s}
+.d-chev svg{width:11px;height:11px}
+details[open]>summary .d-chev{transform:rotate(180deg)}
+.d-body{margin:2px 6px 6px}
+
+/* 运行扫光（ToolRow / Think 流式）：仅作用于折叠行 */
+details.sweep>summary::after{content:'';position:absolute;top:0;bottom:0;width:300px;pointer-events:none;
+  background:linear-gradient(90deg,transparent,var(--hover-solid) 55%,transparent);
+  animation:sweepmv 2.6s ease-out infinite}
+@keyframes sweepmv{0%{left:-300px}90%{left:100%}100%{left:calc(100% + 300px)}}
+
+/* StateDot：10px 光环 + 6px 实芯 */
+.sdot{width:10px;height:10px;border-radius:50%;flex-shrink:0;position:relative;
+  display:inline-flex;align-items:center;justify-content:center}
+.sdot::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor}
+.sdot.ok{color:var(--success);box-shadow:0 0 0 2px color-mix(in srgb,var(--success) 10%,transparent)}
+.sdot.err{color:var(--error);box-shadow:0 0 0 2px color-mix(in srgb,var(--error) 10%,transparent)}
+.sdot.warn{color:var(--warn);box-shadow:0 0 0 2px color-mix(in srgb,var(--warn) 10%,transparent)}
+
+/* running 像素追逐点阵：3×3 外圈八格顺时针，opacity 台阶 1/.6/.35/.15 */
+.chase{width:10px;height:10px;position:relative;flex-shrink:0;color:var(--ds450)}
+.chase i{position:absolute;width:3px;height:3px;border-radius:1px;background:currentColor;
+  animation:chase 1s step-end infinite}
+.chase i:nth-child(1){left:0;top:0;animation-delay:0ms}
+.chase i:nth-child(2){left:3.5px;top:0;animation-delay:-125ms}
+.chase i:nth-child(3){left:7px;top:0;animation-delay:-250ms}
+.chase i:nth-child(4){left:7px;top:3.5px;animation-delay:-375ms}
+.chase i:nth-child(5){left:7px;top:7px;animation-delay:-500ms}
+.chase i:nth-child(6){left:3.5px;top:7px;animation-delay:-625ms}
+.chase i:nth-child(7){left:0;top:7px;animation-delay:-750ms}
+.chase i:nth-child(8){left:0;top:3.5px;animation-delay:-875ms}
+@keyframes chase{0%{opacity:1}25%{opacity:.6}50%{opacity:.35}75%{opacity:.15}100%{opacity:1}}
+
+/* Think 行 */
+.think-sum{font-style:normal}
+
+/* 内容卡通用几何：radius 10 + code-block 面 + banner */
+.card{border:1px solid var(--border-l1);border-radius:10px;background:var(--code-block);overflow:hidden}
+.card-banner{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:4px 10px;background:var(--banner);border-bottom:1px solid var(--border-l1)}
+.card-pre{padding:8px 10px;font:400 11px/16px var(--font-code);color:var(--label-primary);
+  white-space:pre;overflow-x:auto}
+
+/* TerminalBlock */
+.term-line{white-space:pre}
+.t-prompt{color:var(--label-tertiary)}
+.t-ok{color:var(--success)}.t-info{color:var(--blue)}
+.exit-pill{display:inline-flex;align-items:center;height:16px;padding:0 6px;border-radius:8px;
+  background:var(--layer-3);font-size:9px;color:var(--label-secondary)}
+
+/* ReadBlock：右对齐行号槽 */
+.read-line{display:flex}
+.rn{width:26px;flex-shrink:0;text-align:right;padding-right:8px;color:var(--label-caption);
+  user-select:none;font-variant-numeric:tabular-nums}
+.more-btn{display:block;width:calc(100% - 20px);margin:0 10px 8px;text-align:left;border:none;
+  background:transparent;font-size:10px;color:var(--blue);cursor:pointer;padding:2px 0;
+  font-family:var(--font-ui)}
+.more-btn:hover{text-decoration:underline}
+
+/* DiffBlock：完整红绿两侧 */
+.diff-line{white-space:pre}
+.dl-del{color:var(--error)}.dl-add{color:var(--success)}.dl-hunk{color:var(--label-caption);text-align:center}
+.diff-foot{padding:4px 10px;border-top:1px solid var(--border-l1);font:400 10px/15px var(--font-code);
+  color:var(--label-tertiary)}
+.diff-foot b{font-weight:400}.diff-foot .fa{color:var(--success)}.diff-foot .fr{color:var(--error)}
+
+/* SearchBlock：按文件分组 */
+.grp{border-top:1px solid var(--border-l1)}
+.grp:first-child{border-top:none}
+details.grp-d>summary{list-style:none;display:flex;align-items:center;gap:6px;padding:5px 10px;
+  cursor:pointer;font-size:11px}
+details.grp-d>summary::-webkit-details-marker{display:none}
+details.grp-d>summary:hover{background:var(--hover-bg)}
+.g-path{font-weight:600;color:var(--label-primary);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.g-count{flex-shrink:0;font-size:9px;color:var(--label-tertiary);background:var(--layer-3);
+  border-radius:999px;padding:1px 6px}
+.g-line{padding:1px 10px 1px 10px;font:400 10.5px/15px var(--font-code);color:var(--label-secondary);white-space:pre}
+.g-ln{color:var(--label-caption);display:inline-block;width:30px;user-select:none}
+
+/* IN/OUT 兜底卡 */
+.inout{display:grid;grid-template-columns:max-content 1fr;font:400 10.5px/15px var(--font-code)}
+.io-label{padding:8px 6px 0 10px;color:var(--label-caption);font-size:9px;letter-spacing:.5px;user-select:none}
+.io-body{padding:8px 10px;white-space:pre-wrap;word-break:break-word;max-height:120px;overflow-y:auto;
+  color:var(--label-secondary)}
+.io-body.is-err{color:var(--error)}
+
+/* 收尾动作行（turn tail） */
+.tail{display:flex;align-items:center;gap:2px;color:var(--label-caption)}
+.tail .meta-btn svg{width:12px;height:12px}
+.tail-metrics{font-size:10px;color:var(--label-caption);font-variant-numeric:tabular-nums;margin-left:8px}
+.tail-metrics em{font-style:normal;margin:0 5px;color:var(--label-dimmed)}
+body[data-theme="dark"] .tail-metrics em{color:rgb(67,69,74)}
+
+/* 进行中指示 pill：品牌渐变流光 */
+.running-pill{display:flex;align-items:center;gap:8px;min-height:22px}
+.shimmer-text{font-size:12px;font-weight:500;
+  background:linear-gradient(90deg,var(--label-secondary) 30%,var(--blue) 50%,var(--label-secondary) 70%);
+  background-size:250% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;
+  animation:shimmermv 1.8s linear infinite}
+@keyframes shimmermv{to{background-position:-250% 0}}
+.pill-timer{font-size:10px;color:var(--label-caption);font-variant-numeric:tabular-nums}
+
+/* 子代理树形行（task 展开体） */
+.subtree{display:flex;flex-direction:column;gap:2px}
+.agent-row{display:flex;flex-direction:column;gap:1px;min-height:38px;justify-content:center;
+  margin-left:8px;padding:3px 6px 3px 10px;border-left:1px solid var(--border-l2);
+  border-radius:0 8px 8px 0;cursor:pointer;background:transparent;border-top:none;border-right:none;
+  border-bottom:none;text-align:left;font-family:var(--font-ui);width:calc(100% - 8px)}
+.agent-row:hover{background:var(--hover-bg)}
+.ar-top{display:flex;align-items:center;gap:6px}
+.ar-name{font-size:11px;font-weight:500;color:var(--label-primary)}
+.ar-state{font-size:9px;color:var(--label-tertiary)}
+.ar-act{font-size:10px;color:var(--label-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:16px}
+.ar-metrics{font-size:9.5px;color:var(--label-caption);font-variant-numeric:tabular-nums;flex-shrink:0}
+.ar-dot{width:10px;height:10px;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.ar-dot.ok{color:var(--success)}.ar-dot.ok::after{content:'';width:6px;height:6px;border-radius:50%;background:currentColor}
+.ar-dot.err{color:var(--error)}.ar-dot.err::after{content:'';width:6px;height:6px;border-radius:50%;background:currentColor}
+.ar-dot .chase{width:8px;height:8px}
+.ar-dot .chase i{width:2.5px;height:2.5px}
+.ar-dot .chase i:nth-child(2){left:2.75px}.ar-dot .chase i:nth-child(3){left:5.5px}
+.ar-dot .chase i:nth-child(4){top:2.75px}.ar-dot .chase i:nth-child(5){top:5.5px}
+.ar-dot .chase i:nth-child(6){left:2.75px;top:5.5px}.ar-dot .chase i:nth-child(7){left:0;top:5.5px}
+.ar-dot .chase i:nth-child(8){top:2.75px}
+
+/* ══════════════════════════════════════════════
+   底部区：TodoPanel + 审批卡 + 输入卡
+   ══════════════════════════════════════════════ */
+.bottom-zone{flex-shrink:0;display:flex;flex-direction:column;position:relative;z-index:7}
+
+/* TodoPanel：tip 面 radius 12 border-l1 */
+.todo{margin:0 10px;background:var(--tip);border:1px solid var(--border-l1);border-radius:12px;overflow:hidden}
+.todo-head{display:flex;align-items:center;gap:7px;padding:7px 10px;cursor:pointer;user-select:none;
+  list-style:none;min-height:32px}
+.todo-head::-webkit-details-marker{display:none}
+.todo-head:hover{background:var(--hover-bg)}
+.todo-head .t-ic{color:var(--label-secondary);display:flex}
+.todo-head .t-ic svg{width:13px;height:13px}
+.t-name{font-size:11px;font-weight:500;color:var(--label-primary)}
+.t-segs{flex:1;min-width:0;font-size:10px;color:var(--label-tertiary);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.todo-list{padding:0 6px 6px;display:flex;flex-direction:column}
+.t-item{display:flex;align-items:center;gap:8px;padding:4px 4px;font-size:11px;line-height:16px;
+  color:var(--label-secondary);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.t-ring{width:14px;height:14px;flex-shrink:0;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.t-ring.done{border:1.5px solid var(--success);color:var(--success)}
+.t-ring.done svg{width:8px;height:8px}
+.t-ring.doing{border:1.5px solid transparent;border-top-color:var(--blue);border-right-color:var(--blue);
+  animation:rot 1s linear infinite}
+.t-ring.pending{border:1.5px dashed var(--label-caption)}
+.t-item.done{color:var(--label-tertiary);text-decoration:line-through;text-decoration-color:var(--label-dimmed)}
+.t-item.doing{color:var(--label-primary);font-weight:500}
+
+/* 审批卡：琥珀警示条 + 圆角卡 */
+.approval{margin:8px 10px 0;border:1px solid var(--warn-secondary);border-radius:14px;
+  background:var(--input-major);overflow:hidden;box-shadow:var(--shadow-lv2)}
+.apr-strip{display:flex;align-items:center;gap:6px;background:var(--warn-tertiary);
+  padding:5px 12px;font-size:11px;color:var(--warn-label);font-weight:500}
+.apr-strip i{width:8px;height:8px;border-radius:50%;background:var(--warn);flex-shrink:0}
+.apr-body{padding:10px 12px}
+.apr-headline{font-size:12px;font-weight:500;color:var(--label-primary);line-height:18px}
+.apr-cmd{margin-top:6px;font:400 11px/17px var(--font-code);color:var(--label-secondary);
+  background:var(--code-block);border:1px solid var(--border-l1);border-radius:8px;padding:6px 8px;
+  white-space:pre;overflow-x:auto}
+.apr-foot{display:flex;justify-content:flex-end;gap:8px;padding:0 12px 10px}
+.btn-outline{height:26px;padding:0 12px;border-radius:8px;border:1px solid var(--border-l2);
+  background:transparent;font-size:11px;color:var(--label-primary);cursor:pointer;font-family:var(--font-ui)}
+.btn-outline:hover{border-color:var(--error);color:var(--error);background:color-mix(in srgb,var(--error) 5%,transparent)}
+.btn-primary{height:26px;padding:0 12px;border-radius:8px;border:none;background:var(--blue);
+  color:#fff;font-size:11px;font-weight:500;cursor:pointer;font-family:var(--font-ui)}
+.btn-primary:hover{background:var(--blue-hover)}
+
+/* 输入卡：胶囊 shadow-lv2 */
+.composer{margin:8px 10px 10px;border:1px solid var(--border-l2);border-radius:16px;
+  background:var(--input-major);box-shadow:var(--shadow-lv2);display:flex;flex-direction:column;gap:6px;
+  padding-top:8px}
+.composer .draft{padding:0 12px;font-size:12px;line-height:20px;color:var(--label-primary);min-height:40px}
+.composer .draft .ref-chip{color:var(--blue);font-weight:500;display:inline-flex;align-items:center;gap:3px;margin-right:2px}
+.composer .draft .ref-chip svg{width:11px;height:11px}
+.composer .draft .ph{color:var(--label-caption)}
+.toolbar{display:flex;align-items:center;gap:6px;padding:2px 8px 8px}
+.add-btn{width:24px;height:24px;border-radius:50%;border:none;background:var(--selector);
+  color:var(--label-secondary);display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0}
+.add-btn:hover{background:var(--hover-solid)}
+.add-btn svg{width:12px;height:12px}
+.chipbtn{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px;border-radius:999px;
+  border:none;background:transparent;color:var(--label-secondary);font-size:10px;cursor:pointer;
+  font-family:var(--font-ui);flex-shrink:0}
+.chipbtn:hover{background:var(--hover-bg)}
+.chipbtn svg{width:11px;height:11px}
+.chipbtn.filled{background:var(--selector)}
+.tb-right{margin-left:auto;display:flex;align-items:center;gap:6px}
+.meter{position:relative;width:22px;height:22px;flex-shrink:0}
+.meter svg{width:100%;height:100%;transform:rotate(-90deg)}
+.sendbtn{width:30px;height:30px;border-radius:50%;border:none;background:var(--blue);color:#fff;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;transform:translateY(-2px);
+  flex-shrink:0;transition:background .1s}
+.sendbtn:hover{background:var(--blue-hover)}
+.sendbtn svg{width:14px;height:14px}
+
+/* 回到底部浮动钮 */
+.to-bottom{position:absolute;right:14px;bottom:10px;width:26px;height:26px;border-radius:50%;
+  border:1px solid var(--border-l2);background:var(--input-major);color:var(--label-tertiary);
+  box-shadow:var(--shadow-lv2);display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:8}
+.to-bottom:hover{background:var(--hover-solid);color:var(--label-primary)}
+.to-bottom svg{width:13px;height:13px}
+
+/* 子代理日志抽屉（面板内覆盖层） */
+.drawer-mask{position:absolute;inset:0;background:rgba(0,0,0,.25);z-index:40;border-radius:12px}
+.drawer{position:absolute;top:0;right:0;bottom:0;width:320px;max-width:92%;z-index:41;
+  background:var(--layer-1);border-left:1px solid var(--border-l2);box-shadow:var(--shadow-lv3);
+  border-radius:12px 0 0 12px;display:flex;flex-direction:column}
+.dr-head{display:flex;align-items:center;gap:6px;padding:10px 12px;border-bottom:1px solid var(--border-l1)}
+.dr-name{font-size:12px;font-weight:600;color:var(--label-primary)}
+.dr-pill{font-size:9px;font-weight:600;border-radius:5px;padding:1px 6px;letter-spacing:.3px}
+.dr-pill.running{background:var(--blue-tertiary);color:var(--blue)}
+.dr-close{margin-left:auto}
+.dr-asg{padding:8px 12px;border-bottom:1px solid var(--border-l1);font-size:11px;line-height:17px;
+  color:var(--label-secondary)}
+.dr-asg b{display:block;font-size:9px;font-weight:600;letter-spacing:.5px;color:var(--label-caption);margin-bottom:2px}
+.dr-log{flex:1;overflow-y:auto;padding:8px 12px;font:400 10.5px/16px var(--font-code);
+  color:var(--label-secondary);display:flex;flex-direction:column;gap:2px}
+.dr-intent{font-style:italic;color:var(--blue);font-family:var(--font-ui);font-size:11px;margin-bottom:4px}
+.dr-foot{display:flex;gap:10px;padding:8px 12px;border-top:1px solid var(--border-l1);
+  font:400 10px/14px var(--font-code);color:var(--label-caption)}
+.dr-foot span:last-child{margin-left:auto}
+
+.hidden{display:none!important}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
+</style>
+</head>
+<body data-theme="light">
+
+<!-- SVG 符号库 -->
+<svg width="0" height="0" style="position:absolute"><defs>
+<symbol id="i-chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+<symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+<symbol id="i-check" viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-think" viewBox="0 0 24 24"><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="19" cy="18" r="1.4" fill="currentColor"/><circle cx="5.5" cy="19" r="1" fill="currentColor"/></symbol>
+<symbol id="i-api" viewBox="0 0 24 24"><path d="M8 6l-6 6 6 6M16 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M14 2v6h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+<symbol id="i-pen" viewBox="0 0 24 24"><path d="M17 3l4 4L8 20l-5 1 1-5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+<symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4.3-4.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+<symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18 14 14 0 0 1 0-18z" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+<symbol id="i-q" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9.5 9a2.5 2.5 0 1 1 3.4 2.3c-.8.3-.9 1-.9 1.7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17" r="1.2" fill="currentColor"/></symbol>
+<symbol id="i-list" viewBox="0 0 24 24"><path d="M3 6h2m4 0h12M3 12h2m4 0h12M3 18h2m4 0h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6.5 4.5L7.5 6 9 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+<symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 2l8 3v6c0 5-3.5 9.5-8 11-4.5-1.5-8-6-8-11V5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+<symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></symbol>
+<symbol id="i-up" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14M19 12l-7 7-7-7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 3v5h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 8v4l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+<symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+<symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.9 5.6L19.5 10l-5.6 1.9L12 17.5l-1.9-5.6L4.5 10l5.6-1.4z" fill="currentColor"/></symbol>
+<symbol id="i-compress" viewBox="0 0 24 24"><path d="M4 8l8-5 8 5-8 5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M4 14l8 5 8-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+<symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="7.5" r="1.2" fill="currentColor"/></symbol>
+<symbol id="i-star4" viewBox="0 0 24 24"><path d="M12 2c.6 5.5 4.5 9.4 10 10-5.5.6-9.4 4.5-10 10-.6-5.5-4.5-9.4-10-10 5.5-.6 9.4-4.5 10-10z" fill="currentColor"/></symbol>
+</defs></svg>
+
+<div class="stage">
+  <div class="ctrl">
+    <span class="ttl">AI 面板优化原型 · 参考 DSH 设计规范（仅侧边栏）</span>
+    <button class="cbtn" id="themeBtn">切换暗色</button>
+    <button class="cbtn" id="widthBtn">宽度 440 (docked)</button>
+  </div>
+
+  <div class="panel-wrap">
+    <div class="panel">
+
+      <!-- 会话标签栏 -->
+      <div class="tabsbar">
+        <div class="tabs">
+          <div class="tab active">覆盖率缺口分析</div>
+          <div class="tab"><span class="spin"></span>回归排查</div>
+        </div>
+        <div class="tabs-actions">
+          <button class="iconbtn" title="新建会话"><svg><use href="#i-plus"/></svg></button>
+          <button class="iconbtn" title="历史会话"><svg><use href="#i-history"/></svg></button>
+        </div>
+      </div>
+
+      <!-- 消息流 -->
+      <div class="stream">
+
+        <!-- 用户消息 -->
+        <div class="user-row">
+          <div class="bubble"><span class="skill-chip"><svg style="width:9px;height:9px"><use href="#i-sparkle"/></svg>coverage-analysis</span>
+帮我分析 cpu_top 子系统的覆盖率缺口，重点看 axi_master，并给出收敛建议。<span class="ref-chip"><svg><use href="#i-file"/></svg>cov_report.md</span></div>
+          <div class="user-meta">
+            <button class="meta-btn" title="复制"><svg><use href="#i-copy"/></svg></button>
+            <button class="meta-btn" title="14:32"><svg><use href="#i-clock"/></svg></button>
+          </div>
+        </div>
+
+        <!-- 系统通知 -->
+        <div class="sys-row"><span class="sys-chip"><svg><use href="#i-info"/></svg><span>已连接 MCP 服务器 · eda-tools（7 个工具）</span></span></div>
+
+        <!-- 助手轮次 1 -->
+        <div class="asst">
+
+          <!-- Think 折叠行 -->
+          <details class="disc">
+            <summary>
+              <span class="d-icon"><svg><use href="#i-think"/></svg></span>
+              <span class="d-title">Think</span><span class="d-sep"></span>
+              <span class="d-sum think-sum">分析覆盖缺口 → 定位未覆盖 bin → 给出收敛建议</span>
+              <span class="d-chev"><svg><use href="#i-chev"/></svg></span>
+            </summary>
+            <div class="d-body">
+              <div style="padding:2px 0 2px 16px;font-size:11px;line-height:18px;color:var(--label-tertiary);white-space:pre-wrap">用户关注 axi_master。先读报告确认哪些 covergroup 未达标，
+再检查约束随机是否覆盖到 err 场景，最后给收敛建议。</div>
+            </div>
+          </details>
+
+          <!-- Markdown 正文 -->
+          <div class="md">
+            <p>已定位到缺口集中在 <strong>写通道突发场景</strong>：<code class="icode">axi_master.wr_burst</code> 组达成率仅 78%，主要因 <code class="icode">wlast</code> 时序分支未覆盖。</p>
+          </div>
+
+          <!-- Read 行（展开：ReadBlock） -->
+          <details class="disc" open>
+            <summary>
+              <span class="d-icon"><svg><use href="#i-file"/></svg></span>
+              <span class="d-title">Read</span><span class="d-sep"></span>
+              <span class="d-sum" style="text-decoration:underline;text-decoration-color:var(--label-dimmed);text-underline-offset:2px;cursor:pointer" title="点击打开文件">rtl/axi_master.sv</span><span class="d-sep"></span>
+              <span class="d-sum" style="flex:0 1 auto">128 行</span>
+              <span class="d-chev"><svg><use href="#i-chev"/></svg></span>
+            </summary>
+            <div class="d-body"><div class="card">
+              <div class="card-banner"><span class="cb-lang" style="font-family:var(--font-ui)">显示 4 / 128 行 · systemverilog</span><button class="copybtn">复制</button></div>
+              <div class="card-pre" style="padding:6px 0">
+                <div class="read-line"><span class="rn">42</span><span><span class="tk-kw">covergroup</span> <span class="tk-fn">wr_burst_cg</span> <span class="tk-kw">with function sample</span>(burst_t b);</span></div>
+                <div class="read-line"><span class="rn">43</span><span>  cp_len : <span class="tk-kw">coverpoint</span> b.len <span class="tk-kw">iff</span> (b.kind == WR);</span></div>
+                <div class="read-line"><span class="rn">44</span><span>  cp_wlast : <span class="tk-kw">coverpoint</span> b.wlast_delay;</span></div>
+                <div class="read-line"><span class="rn">45</span><span><span class="tk-kw">endgroup</span>: wr_burst_cg</span></div>
+              </div>
+              <button class="more-btn">… 其余 124 行</button>
+            </div></div>
+          </details>
+
+          <!-- Bash 行（运行中：扫光 + 追逐点，展开 TerminalBlock） -->
+          <details class="disc sweep" open>
+            <summary>
+              <span class="d-icon"><span class="chase" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></span>
+              <span class="d-title">Bash</span><span class="d-sep"></span>
+              <span class="d-sum">cd sim &amp;&amp; make compile TEST=axi_basic</span>
+              <span class="d-tail"><em style="font-style:normal">3.2s</em></span>
+              <span class="d-chev"><svg><use href="#i-chev"/></svg></span>
+            </summary>
+            <div class="d-body"><div class="card">
+              <div class="card-banner">
+                <span style="display:flex;align-items:center;gap:6px;min-width:0">
+                  <span style="width:6px;height:6px;border-radius:50%;background:var(--success);flex-shrink:0"></span>
+                  <span class="cb-lang" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">$ ~/proj/soc_verify/sim $ cd sim &amp;&amp; make compile TEST=axi_basic</span>
+                </span>
+                <span style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+                  <span class="exit-pill">退出码 0</span><button class="copybtn">复制</button>
+                </span>
+              </div>
+              <div class="card-pre" style="max-height:96px;overflow-y:auto"><span class="term-line"><span class="t-info">[INFO]</span> Compile started: axi_master.sv</span>
+<span class="term-line"><span class="t-ok">[OK]</span>    0 errors, 0 warnings (12.3s)</span>
+<span class="term-line"><span class="t-info">[INFO]</span> Generating coverage database…</span></div>
+            </div></div>
+          </details>
+
+          <!-- Edit 行（完成态，展开 DiffBlock） -->
+          <details class="disc" open>
+            <summary>
+              <span class="d-icon"><svg><use href="#i-pen"/></svg></span>
+              <span class="d-title">Edit</span><span class="d-sep"></span>
+              <span class="d-sum" style="text-decoration:underline;text-decoration-color:var(--label-dimmed);text-underline-offset:2px;cursor:pointer" title="点击打开文件">tb/tb_axi_master.sv</span>
+              <span class="d-tail"><span style="color:var(--success)">+12</span><span style="color:var(--error)">−3</span><em style="font-style:normal">0.8s</em></span>
+              <span class="d-chev"><svg><use href="#i-chev"/></svg></span>
+            </summary>
+            <div class="d-body"><div class="card">
+              <div class="card-banner"><span class="cb-lang">tb/tb_axi_master.sv</span><button class="copybtn">复制</button></div>
+              <div class="card-pre" style="padding:6px 0">
+<div class="diff-line dl-del">-  repeat (8) @(posedge clk);</div>
+<div class="diff-line dl-del">-  wvalid <= 1'b1;</div>
+<div class="diff-line dl-add">+  // 收敛 wr_burst：遍历 wlast 延迟档位</div>
+<div class="diff-line dl-add">+  foreach (delay_bins[i]) begin</div>
+<div class="diff-line dl-add">+    drive_wlast_after(delay_bins[i]);</div>
+<div class="diff-line dl-add">+    run_burst(WR, LEN_SHORT);</div>
+<div class="diff-line">   wait_done();</div>
+<div class="diff-line dl-hunk">⋯</div>
+<div class="diff-line dl-del">-  $display("burst done");</div>
+<div class="diff-line dl-add">+  check_coverage("wr_burst_cg");</div>
+              </div>
+              <div class="diff-foot">└ <b class="fa">+12</b> <b class="fr">−3</b> · 1 file</div>
+            </div></div>
+          </details>
+
+          <!-- Grep 行（完成态，折叠） -->
+          <details class="disc">
+            <summary>
+              <span class="d-icon"><svg><use href="#i-search"/></svg></span>
+              <span class="d-title">Grep</span><span class="d-sep"></span>
+              <span class="d-sum">/covergroup/ · 7 处匹配 · 2 个文件</span>
+              <span class="d-chev"><svg><use href="#i-chev"/></svg></span>
+            </summary>
+            <div class="d-body"><div class="card">
+              <div class="card-banner"><span class="cb-lang" style="font-family:var(--font-ui)">显示 5 / 共 7 · 7 处匹配 · 2 个文件</span><button class="copybtn">复制</button></div>
+              <details class="grp-d grp" open>
+                <summary><span class="g-path">rtl/axi_master.sv</span><span class="g-count">×5</span><span class="d-chev" style="margin-left:auto"><svg><use href="#i-chev"/></svg></span></summary>
+                <div class="g-line"><span class="g-ln">12:</span>covergroup axi_cg @(posedge aclk);</div>
+                <div class="g-line"><span class="g-ln">42:</span>covergroup wr_burst_cg with function sample(burst_t b);</div>
+                <div class="g-line"><span class="g-ln">58:</span>covergroup err_cg;</div>
+              </details>
+              <details class="grp-d grp">
+                <summary><span class="g-path">tb/tb_axi_master.sv</span><span class="g-count">×2</span><span class="d-chev" style="margin-left:auto"><svg><use href="#i-chev"/></svg></span></summary>
+                <div class="g-line"><span class="g-ln">31:</span>// reference: covergroup in dut</div>
+              </details>
+            </div></div>
+          </details>
+
+          <!-- MCP 工具失败行（红点 + 红色首行，展开 IN/OUT 卡） -->
+          <details class="disc" open>
+            <summary>
+              <span class="d-icon"><span class="sdot err"></span></span>
+              <span class="d-title">run_sim</span><span class="d-sep"></span>
+              <span class="d-sum err">Error: VCS license checkout failed (lmutil: −15)</span>
+              <span class="d-chev"><svg><use href="#i-chev"/></svg></span>
+            </summary>
+            <div class="d-body"><div class="card">
+              <div class="inout">
+                <span class="io-label">IN</span>
+                <span class="io-body">{"case": "axi_basic", "subsys": "cpu_top", "seed": 42}</span>
+                <span class="io-label">OUT</span>
+                <span class="io-body is-err">Error: VCS license checkout failed
+lmutil: Cannot find license server on port 27000 (−15)</span>
+              </div>
+            </div></div>
+          </details>
+
+          <!-- 收尾动作行 -->
+          <div class="tail">
+            <button class="meta-btn" title="复制"><svg><use href="#i-copy"/></svg></button>
+            <button class="meta-btn" title="今天 14:33"><svg><use href="#i-clock"/></svg></button>
+            <span class="tail-metrics">用时 45.2s<em>·</em>首 token 1.8秒<em>·</em>32 tok/s</span>
+          </div>
+        </div>
+
+        <!-- 用户消息 2 -->
+        <div class="user-row">
+          <div class="bubble">把缺口整理成表格，并派子代理生成回归清单。</div>
+          <div class="user-meta">
+            <button class="meta-btn" title="复制"><svg><use href="#i-copy"/></svg></button>
+            <button class="meta-btn" title="14:34"><svg><use href="#i-clock"/></svg></button>
+          </div>
+        </div>
+
+        <!-- 进行中指示 -->
+        <div class="running-pill">
+          <span class="shimmer-text">深度思考中…</span>
+          <span class="pill-timer">00:23</span>
+        </div>
+
+        <!-- 助手轮次 2：Markdown 家族展示 -->
+        <div class="asst">
+          <div class="md">
+            <h3>覆盖率缺口汇总</h3>
+            <div class="tblwrap"><table>
+              <thead><tr><th>覆盖组</th><th>权重</th><th>达成率</th></tr></thead>
+              <tbody>
+                <tr><td>wr_burst_cg</td><td>高</td><td><strong>78.1%</strong></td></tr>
+                <tr><td>err_cg</td><td>低</td><td>100%</td></tr>
+                <tr><td>axi_cg.cp_len</td><td>中</td><td>91.6%</td></tr>
+              </tbody>
+            </table></div>
+            <blockquote>建议优先补齐 wr_burst 的 wlast 延迟档位，权重最高且改动成本小。</blockquote>
+          </div>
+
+          <!-- 围栏代码（折行 + banner + 复制） -->
+          <div class="codeblock">
+            <div class="cb-banner"><span class="cb-lang">systemverilog</span><button class="copybtn">复制</button></div>
+            <pre><span class="tk-kw">property</span> <span class="tk-fn">wr_stable</span>;
+  @(posedge clk) <span class="tk-kw">disable iff</span> (!rst_n)
+  wr_en |=&gt; !$<span class="tk-fn">stable</span>(wdata); <span class="tk-cm">// 断言辅助收敛</span>
+<span class="tk-kw">endproperty</span></pre>
+          </div>
+
+          <div class="md">
+            <p>后续步骤：</p>
+            <ul><li>追加 err_inject 回归场景</li><li>更新 exclude 列表并复核</li><li>重新导出报告快照<span class="cursor"></span></li></ul>
+          </div>
+        </div>
+
+        <!-- Task 行：子代理树 -->
+        <details class="disc" open>
+          <summary>
+            <span class="d-icon"><svg><use href="#i-star4"/></svg></span>
+            <span class="d-title">Task</span><span class="d-sep"></span>
+            <span class="d-sum">3 个子代理 · 1 运行中</span>
+            <span class="d-tail"><em style="font-style:normal">38s</em></span>
+            <span class="d-chev"><svg><use href="#i-chev"/></svg></span>
+          </summary>
+          <div class="d-body">
+            <div class="subtree">
+              <button class="agent-row" data-agent="cov">
+                <span class="ar-top"><span class="ar-dot"><span class="chase" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></span><span class="ar-name">cov-analyzer</span><span class="ar-state">运行中</span></span>
+                <span class="ar-top"><span class="ar-act" style="flex:1;min-width:0">get_coverage(subsys="cpu_top")</span><span class="ar-metrics">12.4k tok · 38s</span></span>
+              </button>
+              <button class="agent-row" data-agent="report">
+                <span class="ar-top"><span class="ar-dot ok"></span><span class="ar-name">report-writer</span><span class="ar-state">已完成</span></span>
+                <span class="ar-top"><span class="ar-act" style="flex:1;min-width:0">✓ 报告骨架已生成</span><span class="ar-metrics">8.2k tok · 21s</span></span>
+              </button>
+              <button class="agent-row" data-agent="logparse">
+                <span class="ar-top"><span class="ar-dot err"></span><span class="ar-name">log-parser</span><span class="ar-state">失败</span></span>
+                <span class="ar-top"><span class="ar-act err" style="flex:1;min-width:0;color:var(--error)">解析 sim.log 超时</span><span class="ar-metrics">3.1k tok · 44s</span></span>
+              </button>
+            </div>
+          </div>
+        </details>
+
+        <!-- 压缩标记 -->
+        <details class="disc">
+          <summary>
+            <span class="d-icon"><svg><use href="#i-compress"/></svg></span>
+            <span class="d-title">上下文已压缩</span><span class="d-sep"></span>
+            <span class="d-sum">已压缩 42 条历史记录（约 18.2k tokens）</span>
+            <span class="d-chev"><svg><use href="#i-chev"/></svg></span>
+          </summary>
+          <div class="d-body"><div class="md" style="padding:2px 0 2px 16px;font-size:11px;color:var(--label-tertiary)"><p style="margin:4px 0">此前对话聚焦 axi_slave 的握手时序分析，结论已并入当前计划。</p></div></div>
+        </details>
+
+        <!-- Ask 行 -->
+        <details class="disc">
+          <summary>
+            <span class="d-icon"><svg><use href="#i-q"/></svg></span>
+            <span class="d-title">提问</span><span class="d-sep"></span>
+            <span class="d-sum">等待回答</span>
+            <span class="d-chev"><svg><use href="#i-chev"/></svg></span>
+          </summary>
+          <div class="d-body"><div class="inout card" style="grid-template-columns:max-content 1fr">
+            <span class="io-label">IN</span><span class="io-body">是否将 exclude 中误标的 bin 恢复统计？</span>
+          </div></div>
+        </details>
+
+      </div><!-- /stream -->
+
+      <!-- 回到底部 -->
+      <button class="to-bottom" title="回到底部"><svg><use href="#i-down"/></svg></button>
+
+      <!-- 底部区 -->
+      <div class="bottom-zone">
+
+        <!-- TodoPanel -->
+        <details class="todo" open>
+          <summary class="todo-head">
+            <span class="t-ic"><svg><use href="#i-list"/></svg></span>
+            <span class="t-name">任务</span>
+            <span class="t-segs">2 已完成 · 1 进行中 · 3 待处理</span>
+            <span class="d-chev"><svg><use href="#i-chev"/></svg></span>
+          </summary>
+          <div class="todo-list">
+            <div class="t-item done"><span class="t-ring done"><svg><use href="#i-check"/></svg></span>补充 axi_wr 随机约束</div>
+            <div class="t-item doing"><span class="t-ring doing"></span>追加 err_inject 场景回归</div>
+            <div class="t-item"><span class="t-ring pending"></span>更新覆盖率报告快照</div>
+            <div class="t-item"><span class="t-ring pending"></span>复核 exclude 列表</div>
+            <div class="t-item"><span class="t-ring pending"></span>输出收敛结论</div>
+          </div>
+        </details>
+
+        <!-- 审批卡 -->
+        <div class="approval">
+          <div class="apr-strip"><i></i>等待审批</div>
+          <div class="apr-body">
+            <div class="apr-headline">请求执行回归命令（越权执行需确认）</div>
+            <div class="apr-cmd">make regress TEST=err_inject SEED=42</div>
+          </div>
+          <div class="apr-foot">
+            <button class="btn-outline">拒绝</button>
+            <button class="btn-primary">允许一次</button>
+          </div>
+        </div>
+
+        <!-- 输入卡 -->
+        <div class="composer">
+          <div class="draft"><span class="ref-chip"><svg><use href="#i-file"/></svg>tb_axi_master.sv</span>补充说明：<span class="cursor" style="height:11px"></span><span class="ph" style="visibility:hidden">.</span></div>
+          <div class="toolbar">
+            <button class="add-btn" title="添加附件"><svg><use href="#i-plus"/></svg></button>
+            <button class="chipbtn filled" title="权限审批模式"><svg><use href="#i-shield"/></svg>自动编辑<svg style="width:9px;height:9px"><use href="#i-chev"/></svg></button>
+            <div class="tb-right">
+              <button class="chipbtn" title="切换模型">DeepSeek-V3<svg style="width:9px;height:9px"><use href="#i-chev"/></svg></button>
+              <span class="meter" title="上下文已用 65%">
+                <svg viewBox="0 0 22 22"><circle cx="11" cy="11" r="7.5" fill="none" stroke="var(--border-l3)" stroke-width="2"/>
+                <circle cx="11" cy="11" r="7.5" fill="none" stroke="var(--label-tertiary)" stroke-width="2" stroke-linecap="round" pathLength="100" stroke-dasharray="65 100"/></svg>
+              </span>
+              <button class="sendbtn" title="发送消息"><svg><use href="#i-up"/></svg></button>
+            </div>
+          </div>
+        </div>
+      </div><!-- /bottom-zone -->
+
+      <!-- 子代理抽屉 -->
+      <div class="drawer-mask hidden" id="drMask"></div>
+      <aside class="drawer hidden" id="drPanel">
+        <div class="dr-head">
+          <span class="ar-dot ok" id="drDot" style="width:10px;height:10px"></span>
+          <span class="dr-name" id="drName">cov-analyzer</span>
+          <span class="dr-pill running" id="drPill">RUNNING</span>
+          <button class="iconbtn dr-close" id="drClose" title="关闭 (Esc)"><svg><use href="#i-x"/></svg></button>
+        </div>
+        <div class="dr-asg" id="drAsg"><b>任务指令</b>扫描 cpu_top 各 covergroup 达成率，输出缺口清单（JSON）。</div>
+        <div class="dr-log" id="drLog">
+          <div class="dr-intent">正在调用 get_coverage(subsys="cpu_top")…</div>
+          <div>[omp] tool_call get_coverage {"subsys":"cpu_top"}</div>
+          <div>[host] 读取 merged.covdb … 12.8MB</div>
+          <div>[host] groups=17 elapsed=6.4s</div>
+          <div>[agent] wr_burst_cg 78.1% ← 缺口</div>
+          <div>[agent] axi_cg.cp_len 91.6%</div>
+          <div>[agent] err_cg 100%</div>
+          <div>[omp] streaming response…</div>
+        </div>
+        <div class="dr-foot"><span>38s</span><span>9 tools</span><span>3 reqs</span><span>12.4k tokens</span></div>
+      </aside>
+
+    </div><!-- /panel -->
+  </div>
+</div>
+
+<script>
+// 主题切换
+const themeBtn = document.getElementById('themeBtn');
+themeBtn.addEventListener('click', () => {
+  const dark = document.body.dataset.theme === 'dark';
+  document.body.dataset.theme = dark ? 'light' : 'dark';
+  themeBtn.textContent = dark ? '切换暗色' : '切换亮色';
+});
+// 宽度切换（drawer 360 / docked 440）
+const widthBtn = document.getElementById('widthBtn');
+widthBtn.addEventListener('click', () => {
+  const docked = document.body.dataset.width === 'docked';
+  document.body.dataset.width = docked ? 'drawer' : 'docked';
+  widthBtn.textContent = docked ? '宽度 440 (docked)' : '宽度 360 (drawer)';
+});
+// 复制反馈：复制 → 已复制（1000ms）
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.copybtn');
+  if (!btn || btn.dataset.busy) return;
+  btn.dataset.busy = '1'; e.stopPropagation();
+  const old = btn.textContent; btn.textContent = '已复制';
+  setTimeout(() => { btn.textContent = old; delete btn.dataset.busy; }, 1000);
+});
+// summary 内交互元素不触发行折叠
+document.querySelectorAll('summary .copybtn').forEach((el) => {
+  el.addEventListener('click', (e) => e.stopPropagation());
+});
+// 子代理抽屉
+const AGENTS = {
+  cov:     { name:'cov-analyzer',  state:'running', pill:'RUNNING', dot:'chase' },
+  report:  { name:'report-writer', state:'ok',      pill:'DONE',    dot:'ok' },
+  logparse:{ name:'log-parser',    state:'err',     pill:'FAILED',  dot:'err' },
+};
+const mask = document.getElementById('drMask'), panel = document.getElementById('drPanel');
+function openDrawer(key){
+  const a = AGENTS[key]; if (!a) return;
+  document.getElementById('drName').textContent = a.name;
+  document.getElementById('drPill').textContent = a.pill;
+  document.getElementById('drPill').className = 'dr-pill ' + (a.state === 'running' ? 'running' : a.state === 'ok' ? '' : '');
+  document.getElementById('drPill').style.cssText = a.state==='ok' ? 'background:color-mix(in srgb,var(--success) 12%,transparent);color:var(--success)'
+    : a.state==='err' ? 'background:color-mix(in srgb,var(--error) 12%,transparent);color:var(--error)' : '';
+  const dot = document.getElementById('drDot');
+  dot.className = 'ar-dot'; dot.innerHTML = a.dot === 'chase'
+    ? '<span class="chase" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>' : '';
+  if (a.dot !== 'chase') dot.classList.add(a.dot);
+  mask.classList.remove('hidden'); panel.classList.remove('hidden');
+}
+function closeDrawer(){ mask.classList.add('hidden'); panel.classList.add('hidden'); }
+document.querySelectorAll('.agent-row').forEach((el) =>
+  el.addEventListener('click', () => openDrawer(el.dataset.agent)));
+mask.addEventListener('click', closeDrawer);
+document.getElementById('drClose').addEventListener('click', closeDrawer);
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
+// summary 内按钮不触发折叠（agent-row 在 body 中，无需处理）
+document.querySelectorAll('.more-btn').forEach((b) => b.addEventListener('click', (e) => {
+  e.stopPropagation(); b.textContent = '（原型示意：展开完整内容）';
+}));
+</script>
+</body>
+</html>
