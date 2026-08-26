@@ -247,6 +247,7 @@ describe('env-manager', () => {
 
     it('includes all SOC environment variables', () => {
       const vars = getKnownEnvVarNames();
+      expect(vars).toContain('PROJ_DIR');
       expect(vars).toContain('PROJ_ENV');
       expect(vars).toContain('PROJ_RTL');
       expect(vars).toContain('PROJ_WORK');
@@ -288,11 +289,12 @@ describe('env-manager', () => {
       expect(catalog[4].category).toBe('system');
     });
 
-    it('soc group contains PROJ_ENV, PROJ_RTL, PROJ_WORK, SPRD_TOOL_DIR', () => {
+    it('soc group contains PROJ_DIR, PROJ_ENV, PROJ_RTL, PROJ_WORK, SPRD_TOOL_DIR', () => {
       const catalog = getEnvVarCatalog();
       const socGroup = catalog.find((g) => g.category === 'soc');
       expect(socGroup).toBeDefined();
       const names = socGroup!.vars.map((v) => v.name);
+      expect(names).toContain('PROJ_DIR');
       expect(names).toContain('PROJ_ENV');
       expect(names).toContain('PROJ_RTL');
       expect(names).toContain('PROJ_WORK');
