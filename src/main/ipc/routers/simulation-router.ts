@@ -34,6 +34,10 @@ type ListedRun = {
   startTime: number;
   endTime?: number;
   compileErrors?: SimulationRunRecord['compileErrors'];
+  /** runsim 命令（终端仿真来源有值，用于重新仿真） */
+  command?: string;
+  /** 仿真工作目录（终端仿真来源有值，用于重新仿真） */
+  cwd?: string;
 };
 
 /** 仿真产物解析的共享输入（种子号 / Debug 快捷按钮） */
@@ -160,6 +164,8 @@ export const simulationRouter = t.router({
         startTime: run.startTime,
         endTime: run.endTime,
         compileErrors: undefined,
+        command: run.command,
+        cwd: run.cwd,
       }));
       const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
       const persistedRuns: ListedRun[] = getRecentSimulationRuns(db).map((run) => ({
