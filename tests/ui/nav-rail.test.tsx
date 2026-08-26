@@ -3,11 +3,6 @@ import { render, screen, fireEvent, act } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SimulationRunRecord } from '@renderer/stores/simulation';
 
-// Mock the visual animation libraries (Liquid/Liquid.Item etc.) via the
-// shared stub module so the real liquid-gooey package is never loaded.
-import { installVisualMocks } from '../mocks/visual-stubs';
-installVisualMocks();
-
 /* ── simulation store mock（NavRail 只读 activeRuns，可变状态便于逐用例注入） ── */
 const simState = vi.hoisted(() => ({ activeRuns: [] as SimulationRunRecord[] }));
 
@@ -105,48 +100,22 @@ describe('NavRail Ctrl+1..4 快捷键', () => {
   });
 });
 
-describe('NavRail Liquid 液态指示器集成', () => {
-  it('Liquid 包裹五个视图按钮组（blur=6, contrast=18, fill=var(--primary)）', () => {
+describe('NavRail 视图激活态', () => {
+  it('视图按钮使用稳定的激活底线而不是合并式液态背景', () => {
     render(<NavRail />);
-    const group = screen.getByTestId('liquid-group');
-    expect(group).toBeInTheDocument();
-    expect(group.getAttribute('data-blur')).toBe('6');
-    expect(group.getAttribute('data-contrast')).toBe('18');
-    expect(group.getAttribute('data-fill')).toBe('var(--primary)');
-  });
-
-  it('每个视图按钮被 Liquid.Item 包裹且 effect=move', () => {
-    render(<NavRail />);
-    const items = screen.getAllByTestId('liquid-item');
-    // 五个视图按钮：总览 / 仿真 / 回归 / 覆盖率 / 工作区
-    expect(items).toHaveLength(5);
-    for (const item of items) {
-      expect(item.getAttribute('data-effect')).toBe('move');
-      // move tuning: springiness=0.5, trail=0.575
-      const move = JSON.parse(item.getAttribute('data-move') ?? '{}');
-      expect(move.springiness).toBe(0.5);
-      expect(move.trail).toBe(0.575);
-    }
-  });
-
-  it('视图切换时激活态正确传递到对应按钮（aria-current=page）', () => {
-    render(<NavRail />);
-    // 初始激活态为 dashboard（总览）
     expect(screen.getByRole('button', { name: /总览/ }).getAttribute('aria-current')).toBe('page');
     expect(screen.getByRole('button', { name: /仿真/ }).getAttribute('aria-current')).toBeNull();
+    expect(screen.getByRole('button', { name: /总览/ }).querySelector('[data-testid="nav-active-indicator"]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: /仿真/ }).querySelector('[data-testid="nav-active-indicator"]')).toBeNull();
 
-    // 点击仿真按钮 → 激活态流转到仿真
     fireEvent.click(screen.getByRole('button', { name: /仿真/ }));
     expect(useUiStore.getState().activeView).toBe('simulation');
     expect(screen.getByRole('button', { name: /仿真/ }).getAttribute('aria-current')).toBe('page');
     expect(screen.getByRole('button', { name: /总览/ }).getAttribute('aria-current')).toBeNull();
   });
 
-  it('非视图按钮（文件/AI/设置）不被 Liquid.Item 包裹', () => {
+  it('文件、版本控制、AI、设置按钮保持独立，不受视图激活态影响', () => {
     render(<NavRail />);
-    // 5 个 Liquid.Item 只对应 5 个视图按钮
-    expect(screen.getAllByTestId('liquid-item')).toHaveLength(5);
-    // 文件、版本控制、AI、设置 按钮正常存在
     expect(screen.getByRole('button', { name: '文件' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '版本控制' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'AI 助手' })).toBeInTheDocument();

@@ -379,7 +379,7 @@ export function CommandPalette() {
         data-testid="command-palette"
       >
         {/* 输入区 */}
-        <BorderBeam size="line" theme="dark" active={commandPaletteOpen}>
+        <BorderBeam size="line" theme="dark" active={commandPaletteOpen} className="block w-full">
         <div className="flex items-center gap-2.5 border-b border-border px-4 py-3">
           <Search className="size-3.5 shrink-0 text-muted-foreground/60" />
           <input

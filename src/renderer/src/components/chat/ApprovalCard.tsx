@@ -52,7 +52,7 @@ export const ApprovalCard = memo(function ApprovalCard({ request, onResolve }: A
   };
 
   return (
-    <BorderBeam size="pulse-outside" theme="dark" colorVariant="sunset" active={!resolved}>
+    <BorderBeam size="pulse-outside" theme="dark" colorVariant="sunset" active={!resolved} className="block w-full">
     <div
       className={cn(
         'overflow-hidden rounded-xl border text-xs transition-colors',

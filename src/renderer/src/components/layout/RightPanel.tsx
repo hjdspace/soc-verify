@@ -894,7 +894,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
           className="hidden"
         />
 
-        <BorderBeam size="line" theme="dark" active={isComposerFocused} colorVariant="ocean">
+        <BorderBeam size="line" theme="dark" active={isComposerFocused} colorVariant="ocean" className="block w-full">
         <div
           className={cn(
             'relative flex flex-col gap-1.5 rounded-2xl border border-[var(--dsw-border-l2)] bg-[var(--dsw-input-major)] p-2 shadow-[var(--dsw-shadow-lv2)] transition-colors',

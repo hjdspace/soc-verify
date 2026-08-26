@@ -69,7 +69,7 @@ export function SimCommandBar() {
       className="shrink-0 border-t border-border bg-background/50"
       data-testid="sim-command-bar"
     >
-      <div className="flex items-stretch">
+      <div className="flex items-center">
         {/* Command prefix */}
         <div className="flex items-center px-2.5 font-mono text-xs font-semibold text-status-pass-foreground">
           $
@@ -108,26 +108,33 @@ export function SimCommandBar() {
           </button>
         </div>
         {/* Run button */}
-        <BorderBeam size="pulse-inner" theme="dark" colorVariant="ocean" active={hasCase && !running}>
-        <button
-          onClick={handleRunSim}
-          disabled={running || !currentProjectId || !hasCase}
-          className="flex items-center gap-1.5 bg-status-pass px-4 text-xs font-bold text-white transition-all hover:brightness-110 active:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
-          title={!hasCase ? '请先指定 CASE 名称' : !currentProjectId ? '请先打开项目' : '运行仿真'}
-          data-testid="sim-option-run"
+        <BorderBeam
+          size="pulse-inner"
+          theme="dark"
+          colorVariant="ocean"
+          borderRadius={6}
+          active={hasCase && !running}
+          className="my-1 mr-1 shrink-0"
         >
-          {running ? (
-            <>
-              <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              运行中
-            </>
-          ) : (
-            <>
-              <Play className="h-3.5 w-3.5" fill="currentColor" />
-              运行仿真
-            </>
-          )}
-        </button>
+          <button
+            onClick={handleRunSim}
+            disabled={running || !currentProjectId || !hasCase}
+            className="flex h-8 min-w-[112px] items-center justify-center gap-1.5 rounded-md bg-status-pass px-4 text-xs font-bold text-white transition-all hover:brightness-110 active:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
+            title={!hasCase ? '请先指定 CASE 名称' : !currentProjectId ? '请先打开项目' : '运行仿真'}
+            data-testid="sim-option-run"
+          >
+            {running ? (
+              <>
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                运行中
+              </>
+            ) : (
+              <>
+                <Play className="h-3.5 w-3.5" fill="currentColor" />
+                运行仿真
+              </>
+            )}
+          </button>
         </BorderBeam>
       </div>
       {/* ── Missing CASE hint ─────────────────────────────────── */}
