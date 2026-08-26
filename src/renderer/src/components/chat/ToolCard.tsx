@@ -23,6 +23,7 @@ import { useSessionCoreStore } from '@renderer/stores/session-core';
 import type { ChatMessage, SubagentActivity } from '@renderer/stores/session-types';
 import { SubagentCard } from './SubagentCard';
 import { cn } from '@renderer/lib/utils';
+import { ThinkingOrb, type OrbState } from '@renderer/components/visual';
 import {
   getToolMeta,
   isMCPTool,
@@ -379,6 +380,24 @@ const TOOL_REGISTRY: Record<string, ToolEntry> = {
 // ── Constants ──────────────────────────────────────────
 
 const FILE_TOOLS = new Set(['read', 'read_file', 'write', 'write_file', 'edit', 'edit_file', 'apply_patch', 'ast_edit']);
+const SEARCH_TOOLS = new Set(['grep', 'search', 'glob', 'find', 'ast_grep', 'web_search']);
+const EXEC_TOOLS = new Set(['bash', 'eval', 'js', 'python']);
+
+/**
+ * Map a tool name to a ThinkingOrb state that semantically represents
+ * the tool's activity type.
+ *
+ * - File tools (read/write/edit) → `working` (orbiting particles)
+ * - Search tools (grep/glob)    → `searching` (scanning meridian)
+ * - Exec tools (bash/eval)       → `solving` (band scramble → resolve)
+ * - Everything else              → `working` (default orbiting particles)
+ */
+function toolToOrbState(toolName: string): OrbState {
+  if (FILE_TOOLS.has(toolName)) return 'working';
+  if (SEARCH_TOOLS.has(toolName)) return 'searching';
+  if (EXEC_TOOLS.has(toolName)) return 'solving';
+  return 'working';
+}
 
 /** Module-level empty array: non-task tools return stable reference, avoid re-renders */
 const NO_SUBAGENTS: SubagentActivity[] = [];
@@ -488,9 +507,7 @@ export function ToolCard({ message }: { message: ChatMessage }) {
         {/* 前导格 */}
         {status === 'running' && (
           <span className="flex h-4 w-4 shrink-0 items-center justify-center" data-status="running">
-            <span className="ap-chase" aria-hidden>
-              <i /><i /><i /><i /><i /><i /><i /><i />
-            </span>
+            <ThinkingOrb state={toolToOrbState(toolName)} size={20} theme="auto" />
           </span>
         )}
         {(status === 'error' || status === 'warn') && (
@@ -590,9 +607,7 @@ function ToolBody({
   if (isExecuting && name !== 'task') {
     return (
       <div className="flex items-center gap-1.5 px-2.5 py-2 font-mono text-[11px] text-muted-foreground">
-        <span className="ap-chase" aria-hidden>
-          <i /><i /><i /><i /><i /><i /><i /><i />
-        </span>
+        <ThinkingOrb state="solving" size={20} theme="auto" />
         <span>executing...</span>
       </div>
     );

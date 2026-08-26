@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 import type { SubagentActivity } from '@renderer/stores/session-types';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { ThinkingOrb } from '@renderer/components/visual';
 
 /**
  * Subagent 树形行卡片（DSH §7 形态：缩进树形行，无独立磁贴网格）。
@@ -25,14 +26,10 @@ function fmtDuration(ms: number): string {
   return `${Math.floor(s / 60)}m${s % 60}s`;
 }
 
-/** 状态点样式：running 追逐点阵 / completed 绿 / failed 红 / aborted 灰 */
+/** 状态点样式：running 语义编织动画 / completed 绿 / failed 红 / aborted 灰 */
 function statusDotEl(status: SubagentActivity['status']) {
   if (status === 'running') {
-    return (
-      <span className="ap-chase" aria-hidden>
-        <i /><i /><i /><i /><i /><i /><i /><i />
-      </span>
-    );
+    return <ThinkingOrb state="weaving" size={20} theme="auto" />;
   }
   const cls = status === 'completed' ? 'bg-status-pass-foreground'
     : status === 'failed' ? 'bg-status-fail-foreground'

@@ -1,6 +1,18 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createElement } from 'react';
 import { render, screen, within } from '@testing-library/react';
+
+// Mock thinking-orbs via the visual wrapper
+vi.mock('@renderer/components/visual', () => ({
+  ThinkingOrb: (props: { state?: string; size?: number; theme?: string }) =>
+    createElement('canvas', {
+      'data-testid': 'thinking-orb',
+      'data-state': props.state ?? 'working',
+      'data-size': String(props.size ?? 64),
+      'data-theme': props.theme ?? 'auto',
+    }),
+}));
 
 // Mock tRPC
 vi.mock('@renderer/lib/trpc', () => ({
@@ -237,6 +249,64 @@ describe('RightPanel session tabs', () => {
     expect(doneTab).not.toBeNull();
     expect(within(runningTab as HTMLElement).getByLabelText('会话运行中')).toBeInTheDocument();
     expect(within(doneTab as HTMLElement).queryByLabelText('会话运行中')).not.toBeInTheDocument();
+  });
+});
+
+describe('RunningIndicator', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useProjectStore.setState({
+      projects: [{
+        id: 'p1',
+        name: 'Project',
+        rootPath: '/tmp/project',
+        createdAt: Date.now(),
+        lastOpenedAt: Date.now(),
+      }],
+      currentProjectId: 'p1',
+      fileTree: null,
+      fileTreeLoading: false,
+      plugins: [],
+      selectedSubsys: null,
+      caseStatusFilter: 'all',
+    });
+    useSessionCoreStore.setState({
+      sessions: [{
+        id: 's1',
+        projectId: 'p1',
+        name: 'Test',
+        status: 'streaming',
+        // A user message makes messages.length > 0 (enters the else branch
+        // that renders RunningIndicator), but no assistant is streaming yet.
+        messages: [{
+          id: 'm1',
+          role: 'user',
+          content: 'Hello',
+          timestamp: Date.now(),
+        }],
+        composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
+        createdAt: Date.now(),
+      }],
+      currentSessionId: 's1',
+    });
+  });
+
+  it('renders ThinkingOrb with composing state and size 64 in the running indicator', () => {
+    // jsdom doesn't implement scrollIntoView; stub it so the auto-scroll
+    // useEffect doesn't throw when messages exist.
+    Element.prototype.scrollIntoView = vi.fn();
+
+    render(<RightPanel width={320} />);
+
+    // The RunningIndicator shows when session is streaming but no assistant
+    // message is streaming yet (user message exists, no streaming assistant)
+    const runningIndicator = screen.getByTestId('running-indicator');
+    expect(runningIndicator).toBeInTheDocument();
+
+    const orb = screen.getByTestId('thinking-orb');
+    expect(orb.getAttribute('data-state')).toBe('composing');
+    expect(orb.getAttribute('data-size')).toBe('64');
+    expect(orb.getAttribute('data-theme')).toBe('auto');
   });
 });
 

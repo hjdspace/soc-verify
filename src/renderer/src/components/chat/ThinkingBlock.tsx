@@ -1,6 +1,7 @@
 import { useState, useEffect, memo, useRef } from 'react';
 import { Brain, ChevronDown } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
+import { ThinkingOrb } from '@renderer/components/visual';
 
 interface ThinkingBlockProps {
   /** The thinking/reasoning text from the LLM. */
@@ -70,11 +71,8 @@ export const ThinkingBlock = memo(function ThinkingBlock({
       >
         <span className="flex h-4 w-4 shrink-0 items-center justify-center">
           {isThinkingActive ? (
-            /* Pulsing dot indicator while thinking is active */
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
-            </span>
+            /* Semantic breathing orb while AI is thinking */
+            <ThinkingOrb state="breathing" size={20} theme="auto" />
           ) : (
             <Brain className="h-3 w-3 shrink-0 text-muted-foreground/70" />
           )}

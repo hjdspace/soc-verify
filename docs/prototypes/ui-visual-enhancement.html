@@ -1,0 +1,740 @@
+<!doctype html>
+<html lang="zh-CN" data-shade="dark">
+  <head>
+    <meta charset="utf-8" />
+    <title>SoC Verify — UI 视觉增强原型</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      :root {
+        --dsw-bg-base: rgb(21,21,23);
+        --dsw-layer-1: rgb(35,35,36);
+        --dsw-layer-2: rgb(44,44,46);
+        --dsw-layer-3: rgb(53,54,56);
+        --dsw-label-primary: rgb(249,250,251);
+        --dsw-label-secondary: rgb(207,211,214);
+        --dsw-label-tertiary: rgb(173,178,184);
+        --dsw-label-caption: rgb(129,133,140);
+        --dsw-border-l1: rgba(255,255,255,0.06);
+        --dsw-border-l2: rgba(255,255,255,0.12);
+        --dsw-border-l3: rgba(255,255,255,0.16);
+        --dsw-blue: rgb(103,158,254);
+        --dsw-blue-hover: rgb(65,118,230);
+        --dsw-blue-tertiary: rgb(52,65,91);
+        --dsw-error: rgb(242,90,90);
+        --dsw-success: rgb(34,197,94);
+        --dsw-warn: rgb(245,158,11);
+        --dsw-warn-label: rgb(221,134,41);
+        --dsw-warn-secondary: rgb(247,173,49);
+        --dsw-warn-tertiary: rgb(39,36,31);
+        --dsw-ds450: rgb(86,134,254);
+        --dsw-inline-code: rgb(44,44,46);
+        --dsw-code-block: rgb(27,27,28);
+        --dsw-code-banner: rgb(44,44,46);
+        --dsw-hover-bg: rgba(255,255,255,0.08);
+        --dsw-hover-solid: rgb(53,54,56);
+        --dsw-input-major: rgb(44,44,46);
+        --dsw-shadow-lv2: 0 4px 12px 0 rgba(0,0,0,0.28), 0 2px 8px 0 rgba(0,0,0,0.22);
+        --dsw-shadow-lv3: 0 0 1px 0 rgba(0,0,0,0.4), 0 12px 32px 0 rgba(0,0,0,0.5);
+      }
+      body { background: var(--dsw-bg-base); color: var(--dsw-label-primary); font-family: ui-sans-serif, system-ui, sans-serif; font-size: 13px; margin: 0; }
+      .section-title { font-size: 16px; font-weight: 700; color: var(--dsw-label-primary); border-bottom: 1px solid var(--dsw-border-l1); padding-bottom: 8px; margin-bottom: 12px; }
+      .compare-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+      .compare-col { background: var(--dsw-layer-1); border-radius: 12px; padding: 16px; border: 1px solid var(--dsw-border-l1); }
+      .compare-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--dsw-label-caption); margin-bottom: 12px; }
+      .tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 9px; margin-left: 6px; }
+      .tag-before { background: rgba(129,133,140,0.15); color: var(--dsw-label-caption); }
+      .tag-after { background: rgba(103,158,254,0.15); color: var(--dsw-blue); }
+      .tool-card-header { display: flex; align-items: center; gap: 6px; min-height: 26px; padding: 4px 8px; border-radius: 10px; background: var(--dsw-code-block); border: 1px solid var(--dsw-border-l1); cursor: pointer; }
+      .dsw-input { background: var(--dsw-input-major); border: 1px solid var(--dsw-border-l2); border-radius: 16px; padding: 8px 12px; box-shadow: var(--dsw-shadow-lv2); }
+
+      /* ── 现有 CSS 动画 ── */
+      @keyframes ap-sweep { 0% { left: -300px; } 90% { left: 100%; } 100% { left: calc(100% + 300px); } }
+      .ap-sweep { position: relative; overflow: hidden; }
+      .ap-sweep::after { content: ''; position: absolute; top: 0; bottom: 0; width: 300px; pointer-events: none; background: linear-gradient(90deg, transparent, var(--dsw-hover-solid) 55%, transparent); animation: ap-sweep 2.6s ease-out infinite; }
+      @keyframes ap-chase { 0% { opacity: 1; } 25% { opacity: 0.6; } 50% { opacity: 0.35; } 75% { opacity: 0.15; } 100% { opacity: 1; } }
+      .ap-chase { width: 10px; height: 10px; position: relative; flex-shrink: 0; color: var(--dsw-ds450); }
+      .ap-chase i { position: absolute; width: 3px; height: 3px; border-radius: 1px; background: currentColor; animation: ap-chase 1s step-end infinite; }
+      .ap-chase i:nth-child(1) { left: 0; top: 0; animation-delay: 0ms; }
+      .ap-chase i:nth-child(2) { left: 3.5px; top: 0; animation-delay: -125ms; }
+      .ap-chase i:nth-child(3) { left: 7px; top: 0; animation-delay: -250ms; }
+      .ap-chase i:nth-child(4) { left: 7px; top: 3.5px; animation-delay: -375ms; }
+      .ap-chase i:nth-child(5) { left: 7px; top: 7px; animation-delay: -500ms; }
+      .ap-chase i:nth-child(6) { left: 3.5px; top: 7px; animation-delay: -625ms; }
+      .ap-chase i:nth-child(7) { left: 0; top: 7px; animation-delay: -750ms; }
+      .ap-chase i:nth-child(8) { left: 0; top: 3.5px; animation-delay: -875ms; }
+      @keyframes ap-shimmer { to { background-position: -250% 0; } }
+      .ap-shimmer { font-weight: 500; background: linear-gradient(90deg, var(--dsw-label-secondary) 30%, var(--dsw-blue) 50%, var(--dsw-label-secondary) 70%); background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: ap-shimmer 1.8s linear infinite; }
+      @keyframes ap-ping { 75%, 100% { transform: scale(2); opacity: 0; } }
+      .animate-ping { animation: ap-ping 1.5s cubic-bezier(0,0,0.2,1) infinite; }
+
+      /* ── border-beam 模拟 ── */
+      .border-beam-line { position: relative; }
+      .border-beam-line::after { content: ''; position: absolute; bottom: -1px; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent 0%, var(--dsw-blue) 30%, var(--dsw-blue-hover) 50%, var(--dsw-blue) 70%, transparent 100%); background-size: 200% 100%; animation: beam-line-travel 2s linear infinite; border-radius: 2px; pointer-events: none; opacity: 0.9; }
+      @keyframes beam-line-travel { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+      .border-beam-pulse-inner { position: relative; }
+      .border-beam-pulse-inner::after { content: ''; position: absolute; inset: -1px; border-radius: inherit; border: 1px solid var(--dsw-blue); opacity: 0.3; animation: beam-pulse 2.3s ease-in-out infinite; pointer-events: none; }
+      @keyframes beam-pulse { 0%, 100% { opacity: 0.2; box-shadow: 0 0 0 0 rgba(103,158,254,0); } 50% { opacity: 0.6; box-shadow: 0 0 8px 2px rgba(103,158,254,0.15); } }
+      .border-beam-pulse-outside { position: relative; }
+      .border-beam-pulse-outside::before { content: ''; position: absolute; inset: -8px; border-radius: 16px; background: radial-gradient(ellipse at center, rgba(245,158,11,0.08) 0%, transparent 70%); animation: beam-glow-out 2.3s ease-in-out infinite; pointer-events: none; z-index: -1; }
+      @keyframes beam-glow-out { 0%, 100% { opacity: 0.3; transform: scale(0.98); } 50% { opacity: 0.7; transform: scale(1.02); } }
+
+      /* ── NavRail liquid 指示器 ── */
+      .nav-btn { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 10px; transition: all 0.3s cubic-bezier(0.34,1.56,0.64,1); color: var(--dsw-label-tertiary); position: relative; cursor: pointer; }
+      .nav-btn.active { color: var(--dsw-blue); background: rgba(103,158,254,0.1); }
+      .nav-btn:hover:not(.active) { color: var(--dsw-label-primary); background: var(--dsw-hover-bg); }
+      .liquid-indicator { position: absolute; bottom: -4px; left: 50%; transform: translateX(-50%); width: 24px; height: 4px; border-radius: 4px; background: var(--dsw-blue); transition: all 0.4s cubic-bezier(0.34,1.56,0.64,1); filter: blur(0.5px); }
+      .liquid-bridge { position: absolute; width: 0; height: 4px; border-radius: 4px; background: var(--dsw-blue); filter: blur(1px); opacity: 0; transition: all 0.3s ease; }
+    </style>
+  </head>
+  <body>
+    <main class="max-w-5xl mx-auto px-6 py-10 space-y-10">
+
+      <header class="space-y-3">
+        <h1 class="text-2xl font-bold tracking-tight" style="color: var(--dsw-label-primary)">UI 视觉增强原型</h1>
+        <p class="text-xs" style="color: var(--dsw-label-tertiary)">thinking-orbs · border-beam · liquid-gooey 三库在 SoC Verify 组件中的 Before / After 对比</p>
+      </header>
+
+      <!-- 1. ThinkingBlock -->
+      <section>
+        <h2 class="section-title">1. ThinkingBlock — Think 推理折叠行</h2>
+        <p class="text-xs mb-4" style="color: var(--dsw-label-tertiary)">Before: CSS animate-ping 脉冲点 + ap-sweep 扫光 → After: thinking-orbs <code>breathing</code> 状态 (20px)</p>
+        <div class="compare-row">
+          <div class="compare-col">
+            <div class="compare-label">Before <span class="tag tag-before">ap-ping</span></div>
+            <div class="rounded-lg ap-sweep" style="padding: 2px 6px;">
+              <button class="flex min-h-[24px] w-full items-center gap-1.5 rounded-lg px-1.5 py-0.5 text-left">
+                <span class="flex h-4 w-4 shrink-0 items-center justify-center">
+                  <span class="relative flex h-2 w-2">
+                    <span class="absolute inline-flex h-full w-full animate-ping rounded-full" style="background: rgba(103,158,254,0.6)"></span>
+                    <span class="relative inline-flex h-2 w-2 rounded-full" style="background: var(--dsw-blue)"></span>
+                  </span>
+                </span>
+                <span class="shrink-0 text-[11px] font-medium" style="color: var(--dsw-blue)">Think</span>
+                <span class="h-0.5 w-0.5 shrink-0 rounded-full" style="background: var(--dsw-label-caption)"></span>
+                <span class="min-w-0 flex-1 truncate text-[11px]" style="color: var(--dsw-label-tertiary)">正在分析覆盖率漏洞的可能修复路径…</span>
+              </button>
+            </div>
+          </div>
+          <div class="compare-col">
+            <div class="compare-label">After <span class="tag tag-after">thinking-orbs · breathing 20px</span></div>
+            <div class="rounded-lg" style="padding: 2px 6px;">
+              <button class="flex min-h-[24px] w-full items-center gap-1.5 rounded-lg px-1.5 py-0.5 text-left">
+                <span class="flex h-4 w-4 shrink-0 items-center justify-center">
+                  <canvas class="orb" width="20" height="20" data-orb-state="breathing" data-orb-size="20" style="width:20px;height:20px"></canvas>
+                </span>
+                <span class="shrink-0 text-[11px] font-medium" style="color: var(--dsw-blue)">Think</span>
+                <span class="h-0.5 w-0.5 shrink-0 rounded-full" style="background: var(--dsw-label-caption)"></span>
+                <span class="min-w-0 flex-1 truncate text-[11px]" style="color: var(--dsw-label-tertiary)">正在分析覆盖率漏洞的可能修复路径…</span>
+              </button>
+            </div>
+            <p class="text-[10px] mt-2" style="color: var(--dsw-label-caption)">↑ canvas 绘制：呼吸式环面缓慢形变</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. ToolCard running -->
+      <section>
+        <h2 class="section-title">2. ToolCard running — 工具执行中</h2>
+        <p class="text-xs mb-4" style="color: var(--dsw-label-tertiary)">Before: CSS ap-chase 8 点追逐 → After: thinking-orbs <code>working</code> / <code>searching</code> 状态 (20px)</p>
+        <div class="compare-row">
+          <div class="compare-col">
+            <div class="compare-label">Before <span class="tag tag-before">ap-chase</span></div>
+            <div class="tool-card-header">
+              <span class="flex h-4 w-4 shrink-0 items-center justify-center"><span class="ap-chase"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></span>
+              <span class="text-[11px] font-medium" style="color: var(--dsw-label-tertiary)">Bash</span>
+              <span class="h-0.5 w-0.5 rounded-full" style="background: var(--dsw-label-caption)"></span>
+              <span class="flex-1 truncate text-[11px]" style="color: var(--dsw-label-secondary)">grep -r "assert" dv/tb/</span>
+              <span style="font-size: 10px; color: var(--dsw-label-caption)">reading...</span>
+            </div>
+            <div class="tool-card-header mt-2">
+              <span class="flex h-4 w-4 shrink-0 items-center justify-center"><span class="ap-chase"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></span>
+              <span class="text-[11px] font-medium" style="color: var(--dsw-label-tertiary)">Grep</span>
+              <span class="h-0.5 w-0.5 rounded-full" style="background: var(--dsw-label-caption)"></span>
+              <span class="flex-1 truncate text-[11px]" style="color: var(--dsw-label-secondary)">/coverage_hole/</span>
+              <span style="font-size: 10px; color: var(--dsw-label-caption)">searching...</span>
+            </div>
+          </div>
+          <div class="compare-col">
+            <div class="compare-label">After <span class="tag tag-after">thinking-orbs · working/searching 20px</span></div>
+            <div class="tool-card-header">
+              <span class="flex h-4 w-4 shrink-0 items-center justify-center"><canvas class="orb" width="20" height="20" data-orb-state="working" data-orb-size="20" style="width:20px;height:20px"></canvas></span>
+              <span class="text-[11px] font-medium" style="color: var(--dsw-label-tertiary)">Bash</span>
+              <span class="h-0.5 w-0.5 rounded-full" style="background: var(--dsw-label-caption)"></span>
+              <span class="flex-1 truncate text-[11px]" style="color: var(--dsw-label-secondary)">grep -r "assert" dv/tb/</span>
+              <span style="font-size: 10px; color: var(--dsw-label-caption)">reading...</span>
+            </div>
+            <div class="tool-card-header mt-2">
+              <span class="flex h-4 w-4 shrink-0 items-center justify-center"><canvas class="orb" width="20" height="20" data-orb-state="searching" data-orb-size="20" style="width:20px;height:20px"></canvas></span>
+              <span class="text-[11px] font-medium" style="color: var(--dsw-label-tertiary)">Grep</span>
+              <span class="h-0.5 w-0.5 rounded-full" style="background: var(--dsw-label-caption)"></span>
+              <span class="flex-1 truncate text-[11px]" style="color: var(--dsw-label-secondary)">/coverage_hole/</span>
+              <span style="font-size: 10px; color: var(--dsw-label-caption)">searching...</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. RunningIndicator -->
+      <section>
+        <h2 class="section-title">3. RunningIndicator — AI 等待响应</h2>
+        <p class="text-xs mb-4" style="color: var(--dsw-label-tertiary)">Before: ap-shimmer 文字流光 → After: thinking-orbs <code>composing</code> 状态 (64px)</p>
+        <div class="compare-row">
+          <div class="compare-col">
+            <div class="compare-label">Before <span class="tag tag-before">ap-shimmer</span></div>
+            <div class="flex min-h-[22px] items-center gap-2">
+              <span class="ap-shimmer text-xs">深度思考中…</span>
+              <span class="font-mono text-[10px]" style="color: var(--dsw-label-tertiary)">00:03</span>
+            </div>
+          </div>
+          <div class="compare-col">
+            <div class="compare-label">After <span class="tag tag-after">thinking-orbs · composing 64px</span></div>
+            <div class="flex items-center gap-3">
+              <canvas class="orb" width="64" height="64" data-orb-state="composing" data-orb-size="64" style="width:64px;height:64px"></canvas>
+              <div class="flex flex-col gap-0.5">
+                <span class="text-xs font-medium" style="color: var(--dsw-label-secondary)">深度思考中…</span>
+                <span class="font-mono text-[10px]" style="color: var(--dsw-label-tertiary)">00:03</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. SubagentCard -->
+      <section>
+        <h2 class="section-title">4. SubagentCard — 子代理运行中</h2>
+        <p class="text-xs mb-4" style="color: var(--dsw-label-tertiary)">Before: ap-chase → After: thinking-orbs <code>weaving</code> 状态 (20px)</p>
+        <div class="compare-row">
+          <div class="compare-col">
+            <div class="compare-label">Before <span class="tag tag-before">ap-chase</span></div>
+            <div class="ml-2 flex flex-col gap-px rounded-r-lg border-l px-1.5 py-1" style="border-color: var(--dsw-border-l2)">
+              <div class="flex items-center gap-1.5">
+                <span class="ap-chase"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                <span class="truncate text-[11px] font-medium" style="color: var(--dsw-label-primary)">subagent-1</span>
+                <span class="shrink-0 text-[9px]" style="color: var(--dsw-blue)">运行中</span>
+              </div>
+              <div class="flex items-center gap-2 pl-4">
+                <span class="truncate font-mono text-[10px]" style="color: var(--dsw-label-tertiary)">grep coverage_report</span>
+                <span class="font-mono text-[9px]" style="color: var(--dsw-label-caption)">1.2k tok · 3s</span>
+              </div>
+            </div>
+          </div>
+          <div class="compare-col">
+            <div class="compare-label">After <span class="tag tag-after">thinking-orbs · weaving 20px</span></div>
+            <div class="ml-2 flex flex-col gap-px rounded-r-lg border-l px-1.5 py-1" style="border-color: var(--dsw-border-l2)">
+              <div class="flex items-center gap-1.5">
+                <canvas class="orb" width="20" height="20" data-orb-state="weaving" data-orb-size="20" style="width:20px;height:20px"></canvas>
+                <span class="truncate text-[11px] font-medium" style="color: var(--dsw-label-primary)">subagent-1</span>
+                <span class="shrink-0 text-[9px]" style="color: var(--dsw-blue)">运行中</span>
+              </div>
+              <div class="flex items-center gap-2 pl-4">
+                <span class="truncate font-mono text-[10px]" style="color: var(--dsw-label-tertiary)">grep coverage_report</span>
+                <span class="font-mono text-[9px]" style="color: var(--dsw-label-caption)">1.2k tok · 3s</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 5. ComposerEditor -->
+      <section>
+        <h2 class="section-title">5. ComposerEditor — 输入框光边</h2>
+        <p class="text-xs mb-4" style="color: var(--dsw-label-tertiary)">Before: 静态边框 → After: border-beam <code>line</code> 底部旅行光</p>
+        <div class="compare-row">
+          <div class="compare-col">
+            <div class="compare-label">Before <span class="tag tag-before">static border</span></div>
+            <div class="dsw-input" style="min-height: 60px;">
+              <div class="text-xs" style="color: var(--dsw-label-caption); padding: 4px;">输入消息... ("/" 加载技能, "@" 添加上下文)</div>
+            </div>
+          </div>
+          <div class="compare-col">
+            <div class="compare-label">After <span class="tag tag-after">border-beam · line</span></div>
+            <div class="dsw-input border-beam-line" style="min-height: 60px;">
+              <div class="text-xs" style="color: var(--dsw-label-caption); padding: 4px;">输入消息... ("/" 加载技能, "@" 添加上下文)</div>
+            </div>
+            <p class="text-[10px] mt-2" style="color: var(--dsw-label-caption)">↑ 蓝色光带沿底边循环流动</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 6. CommandPalette -->
+      <section>
+        <h2 class="section-title">6. CommandPalette — 搜索框光边</h2>
+        <p class="text-xs mb-4" style="color: var(--dsw-label-tertiary)">Before: 静态边框 → After: border-beam <code>line</code></p>
+        <div class="compare-row">
+          <div class="compare-col">
+            <div class="compare-label">Before <span class="tag tag-before">static</span></div>
+            <div class="flex items-center gap-2.5 border-b px-4 py-3" style="border-color: var(--dsw-border-l2); background: var(--dsw-layer-1); border-radius: 12px 12px 0 0;">
+              <span style="color: var(--dsw-label-caption)">🔍</span>
+              <input type="text" placeholder="输入命令或搜索…" class="flex-1 bg-transparent text-sm outline-none" style="color: var(--dsw-label-primary)" />
+              <kbd class="shrink-0 rounded border px-1.5 font-mono text-[10px]" style="border-color: var(--dsw-border-l2); color: var(--dsw-label-caption)">Esc</kbd>
+            </div>
+          </div>
+          <div class="compare-col">
+            <div class="compare-label">After <span class="tag tag-after">border-beam · line</span></div>
+            <div class="flex items-center gap-2.5 border-b border-beam-line px-4 py-3" style="border-color: var(--dsw-border-l2); background: var(--dsw-layer-1); border-radius: 12px 12px 0 0;">
+              <span style="color: var(--dsw-blue)">🔍</span>
+              <input type="text" placeholder="输入命令或搜索…" class="flex-1 bg-transparent text-sm outline-none" style="color: var(--dsw-label-primary)" />
+              <kbd class="shrink-0 rounded border px-1.5 font-mono text-[10px]" style="border-color: var(--dsw-border-l2); color: var(--dsw-label-caption)">Esc</kbd>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 7. ApprovalCard -->
+      <section>
+        <h2 class="section-title">7. ApprovalCard — 审批卡呼吸光</h2>
+        <p class="text-xs mb-4" style="color: var(--dsw-label-tertiary)">Before: 静态琥珀条 → After: border-beam <code>pulse-outside</code> 向外呼吸光</p>
+        <div class="compare-row">
+          <div class="compare-col">
+            <div class="compare-label">Before <span class="tag tag-before">static</span></div>
+            <div style="border-radius: 12px; border: 1px solid var(--dsw-warn-secondary); background: var(--dsw-input-major); box-shadow: var(--dsw-shadow-lv2); overflow: hidden;">
+              <div class="flex items-center gap-1.5 px-3 py-1" style="background: var(--dsw-warn-tertiary); color: var(--dsw-warn-label)">
+                <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--dsw-warn)"></span>
+                <span style="font-size: 11px; font-weight: 500">等待审批</span>
+                <span class="ml-auto font-mono text-[9px]" style="opacity: 0.8">bash · 执行命令</span>
+              </div>
+              <div class="px-3 py-2">
+                <div class="text-[12px] font-medium" style="color: var(--dsw-label-primary)">AI 请求执行操作（执行命令）</div>
+                <div class="flex justify-end gap-2 mt-2">
+                  <button class="rounded-lg border px-3 py-1 text-[11px]" style="border-color: var(--dsw-border-l2); color: var(--dsw-label-primary)">拒绝</button>
+                  <button class="rounded-lg px-3 py-1 text-[11px] font-medium" style="background: var(--dsw-blue); color: white">允许</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="compare-col">
+            <div class="compare-label">After <span class="tag tag-after">border-beam · pulse-outside</span></div>
+            <div class="border-beam-pulse-outside" style="border-radius: 12px; border: 1px solid var(--dsw-warn-secondary); background: var(--dsw-input-major); box-shadow: var(--dsw-shadow-lv2); overflow: hidden;">
+              <div class="flex items-center gap-1.5 px-3 py-1" style="background: var(--dsw-warn-tertiary); color: var(--dsw-warn-label)">
+                <span style="width: 8px; height: 8px; border-radius: 50%; background: var(--dsw-warn)"></span>
+                <span style="font-size: 11px; font-weight: 500">等待审批</span>
+                <span class="ml-auto font-mono text-[9px]" style="opacity: 0.8">bash · 执行命令</span>
+              </div>
+              <div class="px-3 py-2">
+                <div class="text-[12px] font-medium" style="color: var(--dsw-label-primary)">AI 请求执行操作（执行命令）</div>
+                <div class="flex justify-end gap-2 mt-2">
+                  <button class="rounded-lg border px-3 py-1 text-[11px]" style="border-color: var(--dsw-border-l2); color: var(--dsw-label-primary)">拒绝</button>
+                  <button class="rounded-lg px-3 py-1 text-[11px] font-medium" style="background: var(--dsw-blue); color: white">允许</button>
+                </div>
+              </div>
+            </div>
+            <p class="text-[10px] mt-2" style="color: var(--dsw-label-caption)">↑ 琥珀色光晕向外呼吸式扩散</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 8. NavRail liquid -->
+      <section>
+        <h2 class="section-title">8. NavRail — 视图切换液态指示器</h2>
+        <p class="text-xs mb-4" style="color: var(--dsw-label-tertiary)">Before: 静态 <code>bg-primary/10</code> 激活态 → After: liquid-gooey Move 拖尾指示器（液态跟随切换）</p>
+        <div class="compare-row">
+          <div class="compare-col">
+            <div class="compare-label">Before <span class="tag tag-before">static bg</span></div>
+            <div class="flex flex-col items-center gap-1 py-3" style="width: 60px; background: var(--dsw-layer-1); border-radius: 8px;">
+              <div class="nav-btn active" onclick="this.classList.toggle('active')">📊</div>
+              <div class="nav-btn">▶</div>
+              <div class="nav-btn">🔁</div>
+              <div class="nav-btn">🎯</div>
+              <div class="nav-btn">🗂</div>
+            </div>
+          </div>
+          <div class="compare-col">
+            <div class="compare-label">After <span class="tag tag-after">liquid-gooey · move</span></div>
+            <div class="flex flex-col items-center gap-1 py-3" style="width: 60px; background: var(--dsw-layer-1); border-radius: 8px;">
+              <div class="nav-btn active" onclick="document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active')">
+                📊
+                <div class="liquid-indicator"></div>
+              </div>
+              <div class="nav-btn" onclick="document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active')">
+                ▶
+                <div class="liquid-indicator" style="opacity:0"></div>
+              </div>
+              <div class="nav-btn" onclick="document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active')">
+                🔁
+                <div class="liquid-indicator" style="opacity:0"></div>
+              </div>
+              <div class="nav-btn" onclick="document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active')">
+                🎯
+                <div class="liquid-indicator" style="opacity:0"></div>
+              </div>
+              <div class="nav-btn" onclick="document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active')">
+                🗂
+                <div class="liquid-indicator" style="opacity:0"></div>
+              </div>
+            </div>
+            <p class="text-[10px] mt-2" style="color: var(--dsw-label-caption)">↑ 点击按钮：液态指示器从旧位置流向新位置（液体拖尾效果）</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 9. SimCommandBar Run button -->
+      <section>
+        <h2 class="section-title">9. SimCommandBar — 运行按钮呼吸光</h2>
+        <p class="text-xs mb-4" style="color: var(--dsw-label-tertiary)">Before: 静态 <code>bg-status-pass</code> → After: border-beam <code>pulse-inner</code> 呼吸光</p>
+        <div class="compare-row">
+          <div class="compare-col">
+            <div class="compare-label">Before <span class="tag tag-before">static</span></div>
+            <button style="background: var(--dsw-success); color: white; padding: 6px 16px; font-size: 12px; font-weight: 700; border: none; border-radius: 4px; cursor: pointer;">
+              ▶ 运行仿真
+            </button>
+          </div>
+          <div class="compare-col">
+            <div class="compare-label">After <span class="tag tag-after">border-beam · pulse-inner</span></div>
+            <button class="border-beam-pulse-inner" style="background: var(--dsw-success); color: white; padding: 6px 16px; font-size: 12px; font-weight: 700; border: none; border-radius: 4px; cursor: pointer; position: relative;">
+              ▶ 运行仿真
+            </button>
+            <p class="text-[10px] mt-2" style="color: var(--dsw-label-caption)">↑ 绿色光圈呼吸式脉冲</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 10. ThinkingOrbs 全部 9 种状态展示 -->
+      <section>
+        <h2 class="section-title">10. ThinkingOrbs — 全部 9 种状态展示</h2>
+        <p class="text-xs mb-4" style="color: var(--dsw-label-tertiary)">所有 9 种状态在 64px 和 20px 两种尺寸下的效果</p>
+        <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; padding: 16px; background: var(--dsw-layer-1); border-radius: 12px;">
+          <div style="text-align: center;">
+            <canvas class="orb" width="64" height="64" data-orb-state="working" data-orb-size="64" style="width:64px;height:64px"></canvas>
+            <div class="orb-label" style="font-size: 9px; color: var(--dsw-label-caption); margin-top: 4px;">working</div>
+          </div>
+          <div style="text-align: center;">
+            <canvas class="orb" width="64" height="64" data-orb-state="searching" data-orb-size="64" style="width:64px;height:64px"></canvas>
+            <div class="orb-label" style="font-size: 9px; color: var(--dsw-label-caption); margin-top: 4px;">searching</div>
+          </div>
+          <div style="text-align: center;">
+            <canvas class="orb" width="64" height="64" data-orb-state="solving" data-orb-size="64" style="width:64px;height:64px"></canvas>
+            <div class="orb-label" style="font-size: 9px; color: var(--dsw-label-caption); margin-top: 4px;">solving</div>
+          </div>
+          <div style="text-align: center;">
+            <canvas class="orb" width="64" height="64" data-orb-state="listening" data-orb-size="64" style="width:64px;height:64px"></canvas>
+            <div class="orb-label" style="font-size: 9px; color: var(--dsw-label-caption); margin-top: 4px;">listening</div>
+          </div>
+          <div style="text-align: center;">
+            <canvas class="orb" width="64" height="64" data-orb-state="connecting" data-orb-size="64" style="width:64px;height:64px"></canvas>
+            <div class="orb-label" style="font-size: 9px; color: var(--dsw-label-caption); margin-top: 4px;">connecting</div>
+          </div>
+          <div style="text-align: center;">
+            <canvas class="orb" width="64" height="64" data-orb-state="weaving" data-orb-size="64" style="width:64px;height:64px"></canvas>
+            <div class="orb-label" style="font-size: 9px; color: var(--dsw-label-caption); margin-top: 4px;">weaving</div>
+          </div>
+          <div style="text-align: center;">
+            <canvas class="orb" width="64" height="64" data-orb-state="composing" data-orb-size="64" style="width:64px;height:64px"></canvas>
+            <div class="orb-label" style="font-size: 9px; color: var(--dsw-label-caption); margin-top: 4px;">composing</div>
+          </div>
+          <div style="text-align: center;">
+            <canvas class="orb" width="64" height="64" data-orb-state="breathing" data-orb-size="64" style="width:64px;height:64px"></canvas>
+            <div class="orb-label" style="font-size: 9px; color: var(--dsw-label-caption); margin-top: 4px;">breathing</div>
+          </div>
+          <div style="text-align: center;">
+            <canvas class="orb" width="64" height="64" data-orb-state="shaping" data-orb-size="64" style="width:64px;height:64px"></canvas>
+            <div class="orb-label" style="font-size: 9px; color: var(--dsw-label-caption); margin-top: 4px;">shaping</div>
+          </div>
+          <!-- 20px 行内尺寸 -->
+          <div style="text-align: center;">
+            <canvas class="orb" width="20" height="20" data-orb-state="working" data-orb-size="20" style="width:20px;height:20px"></canvas>
+            <div class="orb-label" style="font-size: 9px; color: var(--dsw-label-caption); margin-top: 4px;">working 20px</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 状态映射表 -->
+      <section>
+        <h2 class="section-title">状态映射：AI Agent 活动 → ThinkingOrbs 状态</h2>
+        <table style="width: 100%; font-size: 12px; border-collapse: collapse;">
+          <thead>
+            <tr style="border-bottom: 1px solid var(--dsw-border-l2);">
+              <th style="text-align: left; padding: 8px; color: var(--dsw-label-secondary);">组件场景</th>
+              <th style="text-align: left; padding: 8px; color: var(--dsw-label-secondary);">OrbState</th>
+              <th style="text-align: left; padding: 8px; color: var(--dsw-label-secondary);">尺寸</th>
+              <th style="text-align: left; padding: 8px; color: var(--dsw-label-secondary);">视觉描述</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr style="border-bottom: 1px solid var(--dsw-border-l1);">
+              <td style="padding: 8px; color: var(--dsw-label-primary);">ThinkingBlock（Think 推理中）</td>
+              <td style="padding: 8px; color: var(--dsw-blue);"><code>breathing</code></td>
+              <td style="padding: 8px;">20</td>
+              <td style="padding: 8px; color: var(--dsw-label-tertiary);">环面缓慢形变</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--dsw-border-l1);">
+              <td style="padding: 8px; color: var(--dsw-label-primary);">ToolCard running（读文件/搜索）</td>
+              <td style="padding: 8px; color: var(--dsw-blue);"><code>working</code> / <code>searching</code></td>
+              <td style="padding: 8px;">20</td>
+              <td style="padding: 8px; color: var(--dsw-label-tertiary);">轨道粒子 / 扫描子午线</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--dsw-border-l1);">
+              <td style="padding: 8px; color: var(--dsw-label-primary);">RunningIndicator（等待 LLM 响应）</td>
+              <td style="padding: 8px; color: var(--dsw-blue);"><code>composing</code></td>
+              <td style="padding: 8px;">64</td>
+              <td style="padding: 8px; color: var(--dsw-label-tertiary);">多频带波动丝带</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--dsw-border-l1);">
+              <td style="padding: 8px; color: var(--dsw-label-primary);">SubagentCard（子代理运行中）</td>
+              <td style="padding: 8px; color: var(--dsw-blue);"><code>weaving</code></td>
+              <td style="padding: 8px;">20</td>
+              <td style="padding: 8px; color: var(--dsw-label-tertiary);">三股辫编织</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--dsw-border-l1);">
+              <td style="padding: 8px; color: var(--dsw-label-primary);">ToolCard executing placeholder</td>
+              <td style="padding: 8px; color: var(--dsw-blue);"><code>solving</code></td>
+              <td style="padding: 8px;">20</td>
+              <td style="padding: 8px; color: var(--dsw-label-tertiary);">频带打乱→归位</td>
+            </tr>
+            <tr>
+              <td style="padding: 8px; color: var(--dsw-label-primary);">ApprovalCard（等待审批 → 连接中）</td>
+              <td style="padding: 8px; color: var(--dsw-blue);"><code>connecting</code></td>
+              <td style="padding: 8px;">20</td>
+              <td style="padding: 8px; color: var(--dsw-label-tertiary);">星座连线</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+    </main>
+
+    <!-- ── ThinkingOrbs Canvas 动画引擎（简化版模拟） ── -->
+    <script>
+    (function() {
+      // 简化版 thinking-orbs canvas 动画
+      // 每种状态有不同的粒子运动模式
+      const canvases = document.querySelectorAll('canvas.orb');
+
+      function drawOrb(ctx, state, size, t, dark) {
+        const w = size, h = size;
+        const cx = w / 2, cy = h / 2;
+        const r = Math.max(2, size * 0.35);
+        const inkColor = dark ? 'rgba(207,211,214,' : 'rgba(40,40,42,';
+        const brightColor = dark ? 'rgba(103,158,254,' : 'rgba(65,118,230,';
+
+        ctx.clearRect(0, 0, w, h);
+
+        const dotR = Math.max(0.5, size * 0.03);
+        const count = size >= 64 ? 24 : 12;
+
+        switch(state) {
+          case 'working': {
+            // 粒子在倾斜轨道上旋转
+            for (let i = 0; i < count; i++) {
+              const angle = (i / count) * Math.PI * 2 + t * 1.885;
+              const tilt = 0.4;
+              const rx = r * (1 + 0.1 * Math.sin(t * 2 + i));
+              const ry = rx * tilt;
+              const x = cx + Math.cos(angle) * rx;
+              const y = cy + Math.sin(angle) * ry + Math.sin(angle + Math.PI / 2) * r * 0.3;
+              const opacity = 0.3 + 0.7 * Math.abs(Math.sin(angle + t));
+              ctx.fillStyle = brightColor + opacity + ')';
+              ctx.beginPath();
+              ctx.arc(x, y, dotR, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            break;
+          }
+          case 'searching': {
+            // 扫描子午线扫过点阵球
+            const meridian = (t * 2.015) % (Math.PI * 2);
+            for (let i = 0; i < count; i++) {
+              const angle = (i / count) * Math.PI * 2;
+              const dist = Math.abs(Math.cos(angle - meridian));
+              const opacity = 0.15 + 0.85 * dist;
+              const x = cx + Math.cos(angle) * r;
+              const y = cy + Math.sin(angle) * r * 0.5;
+              ctx.fillStyle = inkColor + opacity + ')';
+              ctx.beginPath();
+              ctx.arc(x, y, dotR, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            // 扫描线
+            const scanX = cx + Math.cos(meridian) * r;
+            ctx.strokeStyle = brightColor + '0.3)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(scanX, cy - r * 0.5);
+            ctx.lineTo(scanX, cy + r * 0.5);
+            ctx.stroke();
+            break;
+          }
+          case 'solving': {
+            // 频带打乱→归位
+            const phase = (t * 1.82) % 4;
+            const scramble = phase < 2 ? (1 - Math.abs(phase - 1)) : 0;
+            for (let i = 0; i < count; i++) {
+              const angle = (i / count) * Math.PI * 2;
+              const offset = scramble * (Math.sin(i * 3.7 + t * 5) * r * 0.5);
+              const x = cx + Math.cos(angle) * (r + offset);
+              const y = cy + Math.sin(angle) * (r * 0.5 + offset);
+              const opacity = 0.4 + 0.6 * (1 - scramble);
+              ctx.fillStyle = inkColor + opacity + ')';
+              ctx.beginPath();
+              ctx.arc(x, y, dotR, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            break;
+          }
+          case 'listening': {
+            // 波形穿过环面
+            for (let i = 0; i < count; i++) {
+              const angle = (i / count) * Math.PI * 2;
+              const wave = Math.sin(angle * 3 + t * 4.388) * r * 0.2;
+              const x = cx + Math.cos(angle) * (r + wave);
+              const y = cy + Math.sin(angle) * (r * 0.5 + wave);
+              const opacity = 0.3 + 0.7 * Math.abs(Math.sin(angle * 2 + t * 3));
+              ctx.fillStyle = inkColor + opacity + ')';
+              ctx.beginPath();
+              ctx.arc(x, y, dotR, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            break;
+          }
+          case 'connecting': {
+            // 星座连线
+            const pts = [];
+            for (let i = 0; i < count; i++) {
+              const angle = (i / count) * Math.PI * 2 + t * 3.315;
+              const radius = r * (0.6 + 0.4 * Math.sin(i * 2.3 + t));
+              const x = cx + Math.cos(angle) * radius;
+              const y = cy + Math.sin(angle) * radius * 0.5;
+              pts.push({x, y});
+            }
+            // 连线
+            ctx.strokeStyle = inkColor + '0.2)';
+            ctx.lineWidth = 0.5;
+            for (let i = 0; i < pts.length; i++) {
+              for (let j = i + 1; j < pts.length; j++) {
+                if (Math.abs(i - j) <= 2 || Math.abs(i - j) >= count - 2) {
+                  ctx.beginPath();
+                  ctx.moveTo(pts[i].x, pts[i].y);
+                  ctx.lineTo(pts[j].x, pts[j].y);
+                  ctx.stroke();
+                }
+              }
+            }
+            // 点
+            pts.forEach(p => {
+              ctx.fillStyle = brightColor + '0.8)';
+              ctx.beginPath();
+              ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2);
+              ctx.fill();
+            });
+            break;
+          }
+          case 'weaving': {
+            // 三股辫
+            for (let strand = 0; strand < 3; strand++) {
+              for (let i = 0; i < count / 3; i++) {
+                const frac = i / (count / 3);
+                const angle = frac * Math.PI * 2 + t * 1.625 + strand * (Math.PI * 2 / 3);
+                const weave = Math.sin(frac * Math.PI * 4 + t * 2) * r * 0.2;
+                const x = cx + Math.cos(angle) * (r + weave);
+                const y = cy + Math.sin(angle) * (r * 0.5 + weave);
+                const opacity = 0.3 + 0.7 * (1 - Math.abs(strand - 1) * 0.3);
+                ctx.fillStyle = strand === 1 ? brightColor + opacity + ')' : inkColor + opacity + ')';
+                ctx.beginPath();
+                ctx.arc(x, y, dotR, 0, Math.PI * 2);
+                ctx.fill();
+              }
+            }
+            break;
+          }
+          case 'composing': {
+            // 多频带波动丝带
+            for (let band = 0; band < 4; band++) {
+              const bandY = cy - r * 0.5 + (band / 3) * r;
+              ctx.strokeStyle = band % 2 === 0 ? brightColor + '0.5)' : inkColor + '0.4)';
+              ctx.lineWidth = dotR * 1.5;
+              ctx.beginPath();
+              for (let i = 0; i <= count; i++) {
+                const x = cx - r + (i / count) * r * 2;
+                const y = bandY + Math.sin(i * 0.5 + t * 2.34 + band) * r * 0.15;
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+              }
+              ctx.stroke();
+            }
+            break;
+          }
+          case 'breathing': {
+            // 缓慢形变的环
+            const breathe = 0.5 + 0.5 * Math.sin(t * 3.24);
+            const ringR = r * (0.8 + 0.2 * breathe);
+            ctx.strokeStyle = inkColor + (0.3 + 0.4 * breathe) + ')';
+            ctx.lineWidth = dotR * 2;
+            ctx.beginPath();
+            for (let i = 0; i <= count; i++) {
+              const angle = (i / count) * Math.PI * 2;
+              const morph = 1 + 0.1 * Math.sin(angle * 3 + t * 2);
+              const x = cx + Math.cos(angle) * ringR * morph;
+              const y = cy + Math.sin(angle) * ringR * 0.5 * morph;
+              if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            break;
+          }
+          case 'shaping': {
+            // 圆→三角→方形形变
+            const phase = (t * 2.405) % 3;
+            let shape;
+            if (phase < 1) shape = 'circle';
+            else if (phase < 2) shape = 'triangle';
+            else shape = 'square';
+            ctx.strokeStyle = inkColor + '0.5)';
+            ctx.lineWidth = dotR * 1.5;
+            ctx.beginPath();
+            for (let i = 0; i <= count; i++) {
+              const angle = (i / count) * Math.PI * 2;
+              let radius = r;
+              if (shape === 'triangle') {
+                const triPhase = (angle / (Math.PI * 2)) * 3;
+                radius = r * (0.8 + 0.2 * Math.cos((triPhase % 1) * Math.PI * 2 - Math.PI));
+              } else if (shape === 'square') {
+                const sqPhase = Math.abs(Math.sin(angle * 2));
+                radius = r * (0.7 + 0.3 * sqPhase);
+              }
+              const x = cx + Math.cos(angle) * radius;
+              const y = cy + Math.sin(angle) * radius * 0.5;
+              if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            // 点
+            for (let i = 0; i < count; i++) {
+              const angle = (i / count) * Math.PI * 2;
+              let radius = r;
+              if (shape === 'triangle') {
+                const triPhase = (angle / (Math.PI * 2)) * 3;
+                radius = r * (0.8 + 0.2 * Math.cos((triPhase % 1) * Math.PI * 2 - Math.PI));
+              } else if (shape === 'square') {
+                radius = r * (0.7 + 0.3 * Math.abs(Math.sin(angle * 2)));
+              }
+              const x = cx + Math.cos(angle) * radius;
+              const y = cy + Math.sin(angle) * radius * 0.5;
+              ctx.fillStyle = inkColor + '0.7)';
+              ctx.beginPath();
+              ctx.arc(x, y, dotR, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            break;
+          }
+        }
+      }
+
+      let startTime = performance.now();
+      function animate() {
+        const t = (performance.now() - startTime) / 1000;
+        canvases.forEach(canvas => {
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return;
+          const state = canvas.dataset.orbState || 'working';
+          const size = parseInt(canvas.dataset.orbSize || '64', 10);
+          const dpr = Math.min(2, window.devicePixelRatio || 1);
+          if (canvas.width !== size * dpr) {
+            canvas.width = size * dpr;
+            canvas.height = size * dpr;
+            ctx.scale(dpr, dpr);
+          }
+          drawOrb(ctx, state, size, t, true);
+        });
+        requestAnimationFrame(animate);
+      }
+      animate();
+    })();
+    </script>
+  </body>
+</html>

@@ -22,6 +22,7 @@ import { getLatestTodoState } from '@renderer/components/chat/tool-helpers';
 import { useTodoPanelStore } from '@renderer/stores/todo-panel';
 import { ComposerEditor, type ChipData, type ComposerEditorApi } from './ComposerEditor';
 import { useUiStore } from '@renderer/stores/ui';
+import { ThinkingOrb } from '@renderer/components/visual';
 
 interface RightPanelProps {
   width: number;
@@ -1324,6 +1325,7 @@ const RunningIndicator = memo(function RunningIndicator() {
   const ss = String(elapsed % 60).padStart(2, '0');
   return (
     <div className="flex min-h-[22px] items-center gap-2" data-testid="running-indicator">
+      <ThinkingOrb state="composing" size={64} theme="auto" />
       <span className="ap-shimmer text-xs">深度思考中…</span>
       <span className="font-mono text-[10px] tabular-nums text-muted-foreground">{mm}:{ss}</span>
     </div>

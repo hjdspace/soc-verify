@@ -1,7 +1,19 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest';
+import { createElement } from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { ChatMessage, SubagentActivity } from '@renderer/stores/session-types';
+
+// Mock thinking-orbs via the visual wrapper so ToolCard's ThinkingOrb renders a testable stub
+vi.mock('@renderer/components/visual', () => ({
+  ThinkingOrb: (props: { state?: string; size?: number; theme?: string }) =>
+    createElement('canvas', {
+      'data-testid': 'thinking-orb',
+      'data-state': props.state ?? 'working',
+      'data-size': String(props.size ?? 64),
+      'data-theme': props.theme ?? 'auto',
+    }),
+}));
 
 vi.mock('@renderer/stores/diff-review', () => ({
   openReviewAwareFile: vi.fn(),
@@ -98,6 +110,55 @@ describe('ToolCard file tools', () => {
     expect(card.querySelector('[data-status="running"]')).not.toBeNull();
     expect(card.textContent).toContain('writing...');
     expect(screen.queryByText(/^\+\d+$/)).not.toBeInTheDocument();
+  });
+
+  it('renders ThinkingOrb with working state for file tools while running', () => {
+    render(<ToolCard message={pendingMessage(
+      'write',
+      { path: 'src/demo.ts' },
+    )} />);
+
+    const orb = screen.getByTestId('thinking-orb');
+    expect(orb.getAttribute('data-state')).toBe('working');
+    expect(orb.getAttribute('data-size')).toBe('20');
+    expect(orb.getAttribute('data-theme')).toBe('auto');
+  });
+
+  it('renders ThinkingOrb with searching state for grep tool while running', () => {
+    render(<ToolCard message={pendingMessage(
+      'grep',
+      { pattern: 'test' },
+    )} />);
+
+    const orb = screen.getByTestId('thinking-orb');
+    expect(orb.getAttribute('data-state')).toBe('searching');
+    expect(orb.getAttribute('data-size')).toBe('20');
+  });
+
+  it('renders ThinkingOrb with solving state for bash tool while running', () => {
+    render(<ToolCard message={pendingMessage(
+      'bash',
+      { command: 'echo test' },
+    )} />);
+
+    const orb = screen.getByTestId('thinking-orb');
+    expect(orb.getAttribute('data-state')).toBe('solving');
+    expect(orb.getAttribute('data-size')).toBe('20');
+  });
+
+  it('renders ThinkingOrb with solving state in executing placeholder when expanded', () => {
+    render(<ToolCard message={pendingMessage(
+      'list_subsys',
+      { filter: '' },
+    )} />);
+
+    fireEvent.click(screen.getByTitle('展开'));
+    const orbs = screen.getAllByTestId('thinking-orb');
+    // First orb is the header running indicator (host tool = working),
+    // second orb is the executing placeholder (solving)
+    const placeholderOrb = orbs.find((o) => o.getAttribute('data-state') === 'solving');
+    expect(placeholderOrb).toBeDefined();
+    expect(placeholderOrb?.getAttribute('data-size')).toBe('20');
   });
 
   it('renders read_file path in the summary and file content when expanded', () => {
