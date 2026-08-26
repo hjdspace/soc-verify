@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>方案 A — 仿真页悬浮 Debug Dock</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1e1e2e; color: #cdd6f4; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+
+  /* ── TitleBar（简化）── */
+  .titlebar { height: 36px; background: #181825; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #313244; padding: 0 8px; user-select: none; }
+  .logo { font-size: 12px; font-weight: 600; letter-spacing: .5px; }
+  .nav { display: flex; gap: 2px; padding: 0 12px; }
+  .nav-item { padding: 4px 10px; font-size: 12px; color: #6c7086; border-radius: 4px; cursor: pointer; }
+  .nav-item:hover { background: rgba(205,214,244,.06); color: #cdd6f4; }
+  .nav-item.active { background: rgba(137,180,250,.12); color: #89b4fa; }
+
+  /* ── 视图头 ── */
+  .view-head { padding: 12px 16px 8px; }
+  .view-title { font-size: 15px; font-weight: 600; }
+  .view-sub { font-size: 11px; color: #6c7086; margin-top: 2px; }
+  .head-actions { float: right; display: flex; gap: 8px; }
+  .btn { padding: 5px 12px; font-size: 11px; border-radius: 6px; border: 1px solid #313244; background: transparent; color: #a6adc8; cursor: pointer; }
+  .btn:hover { background: rgba(205,214,244,.06); }
+  .btn.primary { background: #89b4fa; border-color: #89b4fa; color: #1e1e2e; font-weight: 600; }
+
+  /* ── 主体三栏 ── */
+  .main { flex: 1; display: flex; gap: 10px; padding: 0 16px 16px; overflow: hidden; position: relative; }
+
+  .left { width: 220px; border: 1px solid #313244; border-radius: 10px; background: #181825; overflow-y: auto; padding: 8px; }
+  .tree-subsys { font-size: 11px; font-weight: 600; color: #89b4fa; padding: 6px 6px 3px; }
+  .tree-case { font-size: 12px; padding: 3px 6px 3px 20px; border-radius: 4px; color: #a6adc8; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tree-case:hover { background: rgba(205,214,244,.05); }
+  .tree-case.selected { background: rgba(137,180,250,.14); color: #cdd6f4; }
+
+  .center { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+
+  .opt-panel { border: 1px solid #313244; border-radius: 10px; background: #181825; padding: 10px 12px; }
+  .opt-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: #6c7086; margin-bottom: 8px; }
+  .opt-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px 12px; font-size: 11px; }
+  .opt-field label { display: block; color: #6c7086; margin-bottom: 2px; }
+  .opt-field input { width: 100%; background: #1e1e2e; border: 1px solid #45475a; border-radius: 4px; color: #cdd6f4; padding: 3px 6px; font-size: 11px; font-family: Consolas, monospace; }
+
+  .run-list { flex: 1; border: 1px solid #313244; border-radius: 10px; background: #181825; display: flex; flex-direction: column; overflow: hidden; }
+  .rl-head { display: flex; align-items: center; padding: 8px 12px; border-bottom: 1px solid #313244; gap: 8px; }
+  .rl-title { font-size: 12px; font-weight: 600; }
+  .rl-seg { display: flex; background: #11111b; border-radius: 5px; padding: 2px; margin-left: 8px; }
+  .rl-seg button { border: 0; background: transparent; color: #6c7086; font-size: 10px; padding: 2px 10px; border-radius: 4px; cursor: pointer; }
+  .rl-seg button.on { background: #313244; color: #cdd6f4; }
+  .rl-body { flex: 1; overflow-y: auto; padding: 6px 10px; }
+  .run-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; font-size: 12px; cursor: pointer; border: 1px solid transparent; }
+  .run-row:hover { background: rgba(205,214,244,.04); }
+  .run-row.selected { background: rgba(137,180,250,.08); border-color: rgba(137,180,250,.35); }
+  .st { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .st.pass { background: #a6e3a1; box-shadow: 0 0 6px rgba(166,227,161,.5); }
+  .st.fail { background: #f38ba8; box-shadow: 0 0 6px rgba(243,139,168,.5); }
+  .st.running { background: #89b4fa; box-shadow: 0 0 6px rgba(137,180,250,.6); animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .4; } }
+  .run-name { flex: 1; font-family: Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .run-meta { font-size: 10px; color: #6c7086; flex: none; }
+  .run-time { color: #a6adc8; font-size: 10px; flex: none; }
+
+  .cmd-bar { border: 1px solid #313244; border-radius: 10px; background: #11111b; padding: 8px 12px; display: flex; align-items: center; gap: 10px; }
+  .cmd-text { flex: 1; font-family: Consolas, monospace; font-size: 11px; color: #a6adc8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cmd-text b { color: #89b4fa; font-weight: 600; }
+
+  /* ═══════════════════════════════════════════════════
+     ★ 方案 A 核心：悬浮 Debug Dock
+     ═══════════════════════════════════════════════════ */
+  .debug-dock {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px;
+    background: rgba(24, 24, 37, .88);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(137, 180, 250, .25);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, .5), 0 0 0 1px rgba(0,0,0,.2);
+    z-index: 40;
+  }
+  .dock-target {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: rgba(137, 180, 250, .1);
+    border: 1px solid rgba(137, 180, 250, .25);
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 11px;
+    max-width: 200px;
+  }
+  .dock-target:hover { background: rgba(137, 180, 250, .18); }
+  .dock-target .st { width: 6px; height: 6px; }
+  .dock-target .case { font-family: Consolas, monospace; color: #cdd6f4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dock-target .sw { color: #6c7086; font-size: 9px; flex: none; }
+  .dock-sep { width: 1px; height: 22px; background: #313244; margin: 0 4px; }
+  .dock-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: #bac2de;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all .12s;
+    white-space: nowrap;
+  }
+  .dock-btn:hover { background: rgba(137, 180, 250, .12); color: #cdd6f4; border-color: rgba(137,180,250,.3); }
+  .dock-btn svg { flex: none; }
+  .dock-btn .kbd { font-size: 9px; color: #585b70; border: 1px solid #45475a; border-radius: 3px; padding: 0 3px; margin-left: 2px; }
+  /* 波形工具（Verdi/Verisium）主色调区分 */
+  .dock-btn.wave:hover { background: rgba(203, 166, 247, .14); border-color: rgba(203,166,247,.35); color: #cba6f7; }
+  .dock-btn.log:hover { background: rgba(166, 227, 161, .12); border-color: rgba(166,227,161,.3); color: #a6e3a1; }
+  .dock-btn.asm:hover { background: rgba(249, 226, 175, .12); border-color: rgba(249,226,175,.3); color: #f9e2af; }
+
+  /* 打开方式切换（gvim / 内置编辑器）*/
+  .open-mode { display: flex; align-items: center; gap: 2px; margin-left: 2px; background: #11111b; border-radius: 6px; padding: 2px; }
+  .open-mode button { border: 0; background: transparent; color: #585b70; font-size: 10px; padding: 2px 8px; border-radius: 4px; cursor: pointer; }
+  .open-mode button.on { background: #313244; color: #cdd6f4; }
+
+  /* 目标切换下拉 */
+  .target-pop {
+    position: absolute;
+    bottom: 52px;
+    left: 0;
+    min-width: 280px;
+    background: #181825;
+    border: 1px solid #45475a;
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0,0,0,.6);
+    overflow: hidden;
+    display: none;
+    z-index: 50;
+  }
+  .target-pop.open { display: block; }
+  .tp-head { padding: 6px 10px; font-size: 10px; color: #6c7086; border-bottom: 1px solid #313244; text-transform: uppercase; letter-spacing: .5px; }
+  .tp-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; cursor: pointer; }
+  .tp-row:hover { background: rgba(137, 180, 250, .08); }
+  .tp-row .case { font-family: Consolas, monospace; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tp-row .t { font-size: 10px; color: #585b70; }
+
+  .hint { position: absolute; bottom: 4px; right: 18px; font-size: 10px; color: #585b70; z-index: 41; }
+</style>
+</head>
+<body>
+
+<div class="titlebar">
+  <span class="logo">⬡ SoC Verify</span>
+  <div class="nav">
+    <div class="nav-item">总览</div>
+    <div class="nav-item active">仿真</div>
+    <div class="nav-item">覆盖率</div>
+    <div class="nav-item">回归</div>
+  </div>
+</div>
+
+<div style="flex:1; display:flex; flex-direction:column; overflow:hidden;">
+  <div class="view-head">
+    <div class="head-actions">
+      <button class="btn">停止全部</button>
+      <button class="btn primary">新建仿真</button>
+    </div>
+    <div class="view-title">仿真</div>
+    <div class="view-sub">2 运行中 · 3 已完成</div>
+  </div>
+
+  <div class="main">
+    <div class="left">
+      <div class="tree-subsys">▸ apcpu_sys</div>
+      <div class="tree-case">apcpu_hello_world</div>
+      <div class="tree-case selected">apcpu_stress_dvfs</div>
+      <div class="tree-case">apcpu_exception_test</div>
+      <div class="tree-subsys">▸ aon_sys</div>
+      <div class="tree-case">aon_wdt_reset</div>
+      <div class="tree-subsys">▸ top</div>
+      <div class="tree-case">top_smoke_test</div>
+    </div>
+
+    <div class="center">
+      <div class="opt-panel">
+        <div class="opt-title">运行参数</div>
+        <div class="opt-grid">
+          <div class="opt-field"><label>BASE</label><input value="top"></div>
+          <div class="opt-field"><label>BLOCK</label><input value="udtb/apcpu"></div>
+          <div class="opt-field"><label>CASE</label><input value="apcpu_stress_dvfs"></div>
+          <div class="opt-field"><label>SEED</label><input value="16843009"></div>
+          <div class="opt-field"><label>RUNDIR</label><input value="{case_name}"></div>
+          <div class="opt-field"><label>-fsdb</label><input value="2"></div>
+          <div class="opt-field"><label>-R</label><input value=""></div>
+          <div class="opt-field"><label>其他</label><input value=""></div>
+        </div>
+      </div>
+
+      <div class="run-list">
+        <div class="rl-head">
+          <span class="rl-title">运行列表</span>
+          <div class="rl-seg"><button>全部</button><button class="on">运行中</button><button>已完成</button></div>
+          <input placeholder="筛选…" style="margin-left:auto;background:#11111b;border:1px solid #45475a;border-radius:5px;color:#a6adc8;font-size:11px;padding:3px 8px;">
+        </div>
+        <div class="rl-body">
+          <div class="run-row selected">
+            <span class="st running"></span>
+            <span class="run-name">apcpu_stress_dvfs</span>
+            <span class="run-meta">rundir: apcpu_stress_dvfs_16843009</span>
+            <span class="run-time">12:03 · 运行中 08:32</span>
+          </div>
+          <div class="run-row">
+            <span class="st running"></span>
+            <span class="run-name">aon_wdt_reset</span>
+            <span class="run-meta">rundir: aon_wdt_reset_99001</span>
+            <span class="run-time">12:01 · 运行中 10:15</span>
+          </div>
+          <div class="run-row">
+            <span class="st fail"></span>
+            <span class="run-name">apcpu_exception_test</span>
+            <span class="run-meta">seed: 20260116</span>
+            <span class="run-time">11:47 · FAIL · 21:04</span>
+          </div>
+          <div class="run-row">
+            <span class="st pass"></span>
+            <span class="run-name">apcpu_hello_world</span>
+            <span class="run-meta">seed: 1</span>
+            <span class="run-time">11:30 · PASS · 03:12</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="cmd-bar">
+        <span class="cmd-text">runsim <b>-base</b> top <b>-block</b> udtb/apcpu <b>-case</b> apcpu_stress_dvfs <b>-seed</b> 16843009 <b>-fsdb</b> 2</span>
+        <button class="btn" style="border-color:#89b4fa;color:#89b4fa;">复制</button>
+        <button class="btn primary">运行</button>
+      </div>
+    </div>
+
+    <!-- ★ 方案 A 核心：悬浮 Debug Dock（存在仿真运行记录时出现） -->
+    <div class="debug-dock">
+      <!-- 目标用例（点击可切换） -->
+      <div class="dock-target" id="targetBtn">
+        <span class="st running"></span>
+        <span class="case">apcpu_stress_dvfs</span>
+        <span class="sw">▾</span>
+      </div>
+      <div class="target-pop" id="targetPop">
+        <div class="tp-head">选择 Debug 目标</div>
+        <div class="tp-row"><span class="st running"></span><span class="case">apcpu_stress_dvfs</span><span class="t">12:03</span></div>
+        <div class="tp-row"><span class="st running"></span><span class="case">aon_wdt_reset</span><span class="t">12:01</span></div>
+        <div class="tp-row"><span class="st fail"></span><span class="case">apcpu_exception_test</span><span class="t">11:47</span></div>
+        <div class="tp-row"><span class="st pass"></span><span class="case">apcpu_hello_world</span><span class="t">11:30</span></div>
+      </div>
+
+      <div class="dock-sep"></div>
+
+      <!-- 五个快捷按钮 -->
+      <button class="dock-btn wave" title="在用例目录启动 Verdi（自动检测 VCS/XRUN）">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
+        Verdi
+      </button>
+      <button class="dock-btn wave" title="在用例目录启动 Verisium">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12h4l3-8 4 16 3-8h4"/><path d="M6 16l2 4"/></svg>
+        Verisium
+      </button>
+      <div class="dock-sep"></div>
+      <button class="dock-btn log" title="打开编译日志（runidir/log/irun_compile.log）">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+        编译日志
+      </button>
+      <button class="dock-btn log" title="打开仿真日志（runidir/log/irun_sim.log）">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h5"/></svg>
+        仿真日志
+      </button>
+      <button class="dock-btn asm" title="打开反汇编文件（*_sw_build/**/*.asm）">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7V4h16v3"/><path d="M9 20h6"/><path d="M12 4v16"/></svg>
+        反汇编
+      </button>
+
+      <div class="dock-sep"></div>
+
+      <!-- 打开方式切换：影响日志/反汇编按钮 -->
+      <div class="open-mode">
+        <button class="on" title="使用应用内置编辑器打开">内置</button>
+        <button title="使用 gvim 打开（Linux）/ notepad（Windows）">gvim</button>
+      </div>
+    </div>
+
+    <div class="hint">★ 方案 A：Debug Dock 悬浮于仿真页底部中央 · 目标 = 运行列表当前选中项</div>
+  </div>
+</div>
+
+<script>
+  const targetBtn = document.getElementById('targetBtn');
+  const targetPop = document.getElementById('targetPop');
+  targetBtn.addEventListener('click', (e) => { e.stopPropagation(); targetPop.classList.toggle('open'); });
+  document.addEventListener('click', () => targetPop.classList.remove('open'));
+
+  // 目标切换交互
+  document.querySelectorAll('.tp-row').forEach((row) => {
+    row.addEventListener('click', () => {
+      const st = row.querySelector('.st').className.replace('st ', '');
+      const name = row.querySelector('.case').textContent;
+      document.querySelector('.dock-target .st').className = 'st ' + st;
+      document.querySelector('.dock-target .case').textContent = name;
+      document.querySelectorAll('.run-row').forEach((r) => r.classList.remove('selected'));
+    });
+  });
+  // 运行行点击同步 Dock 目标
+  document.querySelectorAll('.run-row').forEach((row) => {
+    row.addEventListener('click', () => {
+      document.querySelectorAll('.run-row').forEach((r) => r.classList.remove('selected'));
+      row.classList.add('selected');
+      const st = row.querySelector('.st').className.replace('st ', '');
+      const name = row.querySelector('.run-name').textContent;
+      document.querySelector('.dock-target .st').className = 'st ' + st;
+      document.querySelector('.dock-target .case').textContent = name;
+    });
+  });
+  // 打开方式切换
+  document.querySelectorAll('.open-mode button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.open-mode button').forEach((b) => b.classList.remove('on'));
+      btn.classList.add('on');
+    });
+  });
+</script>
+</body>
+</html>
