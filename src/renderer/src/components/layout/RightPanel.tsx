@@ -18,6 +18,7 @@ import { ApprovalCard } from '@renderer/components/chat/ApprovalCard';
 import { AskQuestionCard } from '@renderer/components/chat/AskQuestionCard';
 import { TodoPanel } from '@renderer/components/chat/TodoPanel';
 import { ChangeSummaryBar } from '@renderer/components/chat/ChangeSummaryBar';
+import { ErrorMessage } from '@renderer/components/chat/ErrorMessage';
 import { getLatestTodoState } from '@renderer/components/chat/tool-helpers';
 import { useTodoPanelStore } from '@renderer/stores/todo-panel';
 import { ComposerEditor, type ChipData, type ComposerEditorApi } from './ComposerEditor';
@@ -1329,8 +1330,10 @@ const RunningIndicator = memo(function RunningIndicator() {
   const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
   const ss = String(elapsed % 60).padStart(2, '0');
   return (
-    <div className="flex min-h-[22px] items-center gap-2" data-testid="running-indicator">
-      <ThinkingOrb state="composing" size={64} theme="auto" />
+    <div className="flex min-h-[26px] items-center gap-1.5" data-testid="running-indicator">
+      <span className="flex size-6 shrink-0 items-center justify-center">
+        <ThinkingOrb state="composing" size={20} theme="auto" />
+      </span>
       <span className="ap-shimmer text-xs">深度思考中…</span>
       <span className="font-mono text-[10px] tabular-nums text-muted-foreground">{mm}:{ss}</span>
     </div>
@@ -1452,6 +1455,8 @@ function MessageBubble({ message, session }: { message: ChatMessage; session?: S
       )}
       {canRenderTVCard ? (
         <TVAISuggestionCardRenderer content={message.content} violationId={session!.tvViolationId!} />
+      ) : message.content?.trimStart().startsWith('[错误]') ? (
+        <ErrorMessage content={message.content} />
       ) : message.content ? (
         <MarkdownRenderer content={message.content} />
       ) : (

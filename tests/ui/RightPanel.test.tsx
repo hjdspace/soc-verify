@@ -367,7 +367,7 @@ describe('RunningIndicator', () => {
     });
   });
 
-  it('renders ThinkingOrb with composing state and size 64 in the running indicator', () => {
+  it('renders a compact ThinkingOrb with composing state in the running indicator', () => {
     // jsdom doesn't implement scrollIntoView; stub it so the auto-scroll
     // useEffect doesn't throw when messages exist.
     Element.prototype.scrollIntoView = vi.fn();
@@ -381,7 +381,7 @@ describe('RunningIndicator', () => {
 
     const orb = screen.getByTestId('thinking-orb');
     expect(orb.getAttribute('data-state')).toBe('composing');
-    expect(orb.getAttribute('data-size')).toBe('64');
+    expect(orb.getAttribute('data-size')).toBe('20');
     expect(orb.getAttribute('data-theme')).toBe('auto');
   });
 });
