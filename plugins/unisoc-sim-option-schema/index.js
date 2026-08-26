@@ -10,7 +10,8 @@
  *   1. 基础参数（base / block / case / rundir / bq / seed / other_options）
  *   2. 波形配置（fsdb / vwdb / dump_level / cl / dump_sva / cov / upf / dump_mem / wdd）
  *   3. 仿真参数（simarg / cfg_def / post / sim_only / compile_only）
- *   4. 回归测试（regr_file / fm / regr_work / tag / nt / dashboard）
+ *
+ * 回归测试选项已移除：回归发起统一收敛到回归页（ADR 0029）。
  */
 
 const MANIFEST = {
@@ -27,8 +28,6 @@ const MANIFEST = {
 const GROUP_BASIC = '基础参数';
 const GROUP_WAVE = '波形配置';
 const GROUP_SIM = '仿真参数';
-
-const GROUP_REGR = '回归测试';
 
 // ─── 后仿 SDF 选项枚举 ───────────────────────────────────────
 const POST_OPTIONS = [
@@ -240,56 +239,6 @@ const SIM_OPTION_FIELDS = [
     default: false,
     group: GROUP_SIM,
     description: 'runsim -C 参数，仅执行编译不运行仿真（与 -R 互斥）',
-  },
-
-  // ── 回归测试 ──────────────────────────────────────────────
-  {
-    key: 'regr_file',
-    label: '回归列表文件 (-regr)',
-    type: 'string',
-    default: '',
-    group: GROUP_REGR,
-    description: 'runsim -regr 参数，指定回归测试列表文件路径（.list / .txt）',
-  },
-  {
-    key: 'fm',
-    label: '回归 FAIL 用例 (-fm)',
-    type: 'boolean',
-    default: false,
-    group: GROUP_REGR,
-    description: 'runsim -fm 参数，仅回归之前失败的用例',
-  },
-  {
-    key: 'regr_work',
-    label: '回归路径 (-regr_work)',
-    type: 'string',
-    default: '',
-    group: GROUP_REGR,
-    description: 'runsim -regr_work 参数，指定回归测试工作目录',
-  },
-  {
-    key: 'tag',
-    label: '回归 TAG (-tag)',
-    type: 'string',
-    default: '',
-    group: GROUP_REGR,
-    description: 'runsim -tag 参数，指定回归测试 TAG 名称（仅运行标记该 TAG 的用例）',
-  },
-  {
-    key: 'nt',
-    label: '不回归 TAG (-nt)',
-    type: 'string',
-    default: '',
-    group: GROUP_REGR,
-    description: 'runsim -nt 参数，指定不回归的 TAG 名称（跳过标记该 TAG 的用例）',
-  },
-  {
-    key: 'dashboard',
-    label: '提交 Dashboard (-m)',
-    type: 'string',
-    default: '',
-    group: GROUP_REGR,
-    description: 'runsim -m 参数，指定 DE TAG 用于提交到 Dashboard',
   },
 ];
 
