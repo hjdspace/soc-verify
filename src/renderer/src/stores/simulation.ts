@@ -367,6 +367,9 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
             startTime: r.startTime,
             endTime: r.endTime,
             compileErrors: r.compileErrors,
+            // 后端 listActiveRuns 对终端仿真来源返回 command/cwd，用于重新仿真
+            command: (r as { command?: string }).command,
+            cwd: (r as { cwd?: string }).cwd,
           };
           const existing = s.activeRuns.find((old) => old.runId === r.runId);
           return existing
@@ -376,6 +379,9 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
                 endTime: incoming.endTime,
                 compileErrors: incoming.compileErrors,
                 seed: incoming.seed ?? existing.seed,
+                // 后端返回的 command/cwd 可能比本地旧值更准确（尤其页面刷新后本地数据丢失）
+                command: incoming.command ?? existing.command,
+                cwd: incoming.cwd ?? existing.cwd,
               }
             : incoming;
         });
