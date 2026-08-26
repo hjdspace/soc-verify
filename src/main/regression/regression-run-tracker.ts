@@ -126,6 +126,11 @@ class RegressionRunTrackerImpl extends EventEmitter {
     return true;
   }
 
+  /** 查询运行中回归的终端会话 ID（渲染进程「打开终端」按需拉取）；不存在时 null。 */
+  getTerminalId(runId: string): string | null {
+    return this.runs.get(runId)?.terminalId ?? null;
+  }
+
   // ── 终端事件监听 ────────────────────────────────────────
 
   private installListeners(): void {
