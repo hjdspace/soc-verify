@@ -54,6 +54,7 @@ export type RegressionRunOptions = {
   coverage?: boolean;        // -cov
   regrWork?: string;         // -regr_work
   merge?: boolean;           // -merge (requires coverage=true)
+  dashboard?: string;        // -m (submit to dashboard with DE TAG)
 };
 
 /** A persisted regression execution record. */
