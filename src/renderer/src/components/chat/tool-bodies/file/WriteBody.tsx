@@ -12,14 +12,13 @@ export function WriteBody({ args, resultText }: { args: unknown; resultText: str
   const lines = content.split('\n');
 
   return (
-    <div className="text-[11px] leading-relaxed">
+    <div className="overflow-hidden rounded-lg font-mono text-[11px] leading-relaxed">
       {filePath && <ClickablePathHeader filePath={filePath} />}
-      <div className="max-h-80 overflow-auto bg-diff-add/20">
+      <div className="max-h-80 overflow-auto py-1">
         {lines.map((line, i) => (
-          <div key={i} className="flex">
-            <span className="w-5 shrink-0 select-none text-center text-status-pass-foreground">+</span>
-            <span className="w-8 shrink-0 select-none border-r border-status-pass-foreground/20 pr-1 text-right text-status-pass-foreground/60">{i + 1}</span>
-            <span className="flex-1 overflow-x-auto px-2 text-diff-add-foreground">
+          <div key={i} className="ap-diff-add flex whitespace-pre">
+            <span className="w-4 shrink-0 select-none">+ </span>
+            <span className="min-w-0 flex-1 overflow-x-auto pr-2">
               <CodeHighlight code={line || '\u00A0'} language={language} />
             </span>
           </div>
