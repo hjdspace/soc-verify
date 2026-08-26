@@ -2,10 +2,8 @@
  * Simulation router — background runs, terminal runs, history, comparison.
  */
 
+import { readFileSync } from 'node:fs';
 import { resolve, isAbsolute } from 'node:path';
-import { readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { t, TRPCError } from '../router-context';
 import { requireProject, ensurePluginsLoaded } from '../../services/project-service';
@@ -13,6 +11,15 @@ import { getSimulationManager } from '../../services/simulation-service';
 import { pluginLoader } from '../../plugins/loader';
 import { terminalManager, findSimShell } from '../../terminal/terminal-manager';
 import { simTerminalLinker } from '../../simulation/sim-terminal-linker';
+import {
+  resolveSimArtifacts,
+  extractSeedFromLogContent,
+  type SimArtifactInput,
+} from '../../simulation/sim-artifact-resolver';
+import {
+  launchVerdiForRun,
+  launchVerisiumForRun,
+} from '../../simulation/eda-tool-launcher';
 import { caseStatsRegistry } from '../../case/case-stats-registry';
 import { getRecentSimulationRuns } from '../../case/db/case-repository';
 import type { SimulationRunOptions } from '@shared/plugin-types';
@@ -28,6 +35,19 @@ type ListedRun = {
   endTime?: number;
   compileErrors?: SimulationRunRecord['compileErrors'];
 };
+
+/** 仿真产物解析的共享输入（种子号 / Debug 快捷按钮） */
+function parseSimArtifactInput(raw: unknown): { cwd: string; caseName?: string; command?: string } {
+  const r = raw as Record<string, unknown>;
+  if (typeof r.cwd !== 'string') {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'cwd is required' });
+  }
+  return {
+    cwd: r.cwd,
+    caseName: typeof r.caseName === 'string' ? r.caseName : undefined,
+    command: typeof r.command === 'string' ? r.command : undefined,
+  };
+}
 
 export const simulationRouter = t.router({
   run: t.procedure
@@ -518,64 +538,74 @@ export const simulationRouter = t.router({
   /**
    * 从仿真日志中提取种子号。
    *
-   * 在 cwd 下查找用例的仿真日志文件（irun_sim.log / vcs_sim.log 等），
-   * 读取内容并搜索 -seed <number> 模式，返回种子号字符串。
-   * 如果找不到日志文件或种子号，返回 null。
+   * 基准目录为仿真执行目录（$PROJ_WORK），而非 cwd（验证环境项目目录）：
+   * 命令 `cd "<dir>" &&` 前缀 → $PROJ_WORK 环境变量 → cwd。
+   * 用例目录按优先级解析（-rundir → work/<rundir> → <case> → work/<case>
+   * → work 目录模糊搜索取 mtime 最新，支持 <case>_<seed> 目录命名）。
+   * 找不到日志文件或种子号时返回 null。
    */
   getSeedFromLog: t.procedure
-    .input((raw): { cwd: string; caseName?: string } => {
-      const r = raw as Record<string, unknown>;
-      if (typeof r.cwd !== 'string') {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'cwd is required' });
-      }
-      return {
-        cwd: r.cwd,
-        caseName: typeof r.caseName === 'string' ? r.caseName : undefined,
-      };
-    })
-    .query(async ({ input }) => {
-      // 构建可能的日志文件路径
-      const { cwd, caseName } = input;
-      const possiblePaths: string[] = [];
-
-      if (caseName) {
-        possiblePaths.push(join(cwd, caseName, 'log', 'irun_sim.log'));
-        possiblePaths.push(join(cwd, caseName, 'log', 'vcs_sim.log'));
-        possiblePaths.push(join(cwd, caseName, 'log', 'simulation.log'));
-        possiblePaths.push(join(cwd, caseName, 'log', 'ncsim_sim.log'));
-        possiblePaths.push(join(cwd, caseName, 'sim.log'));
-      }
-      possiblePaths.push(join(cwd, 'log', 'irun_sim.log'));
-      possiblePaths.push(join(cwd, 'log', 'vcs_sim.log'));
-
-      // 查找第一个存在的日志文件
-      let logPath: string | null = null;
-      for (const p of possiblePaths) {
-        if (existsSync(p)) {
-          logPath = p;
-          break;
-        }
-      }
-
-      if (!logPath) {
+    .input((raw): { cwd: string; caseName?: string; command?: string } => parseSimArtifactInput(raw))
+    .query(({ input }) => {
+      const { simLogPath } = resolveSimArtifacts(input);
+      if (!simLogPath) {
         return { seed: null, logPath: null };
       }
-
       try {
-        const content = await readFile(logPath, 'utf-8');
-        // 搜索 -seed <number> 模式
-        const seedMatch = content.match(/-seed\s+(\d+)/);
-        if (seedMatch) {
-          return { seed: seedMatch[1], logPath };
-        }
-        // 也搜索 seed=<number> 模式
-        const seedEqMatch = content.match(/seed\s*=\s*(\d+)/);
-        if (seedEqMatch) {
-          return { seed: seedEqMatch[1], logPath };
-        }
-        return { seed: null, logPath };
+        const content = readFileSync(simLogPath, 'utf-8');
+        return { seed: extractSeedFromLogContent(content), logPath: simLogPath };
       } catch {
-        return { seed: null, logPath };
+        return { seed: null, logPath: simLogPath };
+      }
+    }),
+
+  /**
+   * 解析 Debug 快捷按钮所需的仿真产物（UI 方案 B 终端工具栏 + C 运行列表行内按钮共享）。
+   *
+   * 返回用例目录、仿真/编译日志路径、反汇编文件列表、Verdi 启动模式，
+   * 供前端按可用性启用/禁用各按钮。
+   */
+  resolveDebugArtifacts: t.procedure
+    .input((raw): SimArtifactInput & { cwd: string } => parseSimArtifactInput(raw))
+    .query(({ input }) => {
+      const artifacts = resolveSimArtifacts(input);
+      return {
+        caseDir: artifacts.caseDir,
+        simLogPath: artifacts.simLogPath,
+        compileLogPath: artifacts.compileLogPath,
+        asmFiles: artifacts.asmFiles,
+        verdiMode: artifacts.verdiMode,
+        matchedCaseDirs: artifacts.matchedCaseDirs,
+      };
+    }),
+
+  /**
+   * 以隐藏子进程启动 Verdi（不占终端 Tab）。
+   *
+   * VCS 产物（simv.daidir/vcdplus.vpd）→ run_verdi_vcs；否则 → run_verdi comp_load。
+   * 启动输出重定向到用例目录下 verdi_launch.log。
+   */
+  launchVerdi: t.procedure
+    .input((raw): SimArtifactInput & { cwd: string } => parseSimArtifactInput(raw))
+    .mutation(({ input }) => {
+      try {
+        return launchVerdiForRun(input);
+      } catch (err) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: String(err) });
+      }
+    }),
+
+  /**
+   * 以隐藏子进程启动 Verisium（run_vdb，不占终端 Tab）。
+   * 启动输出重定向到用例目录下 verisium_launch.log。
+   */
+  launchVerisium: t.procedure
+    .input((raw): SimArtifactInput & { cwd: string } => parseSimArtifactInput(raw))
+    .mutation(({ input }) => {
+      try {
+        return launchVerisiumForRun(input);
+      } catch (err) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: String(err) });
       }
     }),
 
