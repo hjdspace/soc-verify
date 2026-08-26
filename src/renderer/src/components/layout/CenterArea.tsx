@@ -12,6 +12,7 @@ import { DashboardPanel } from '@renderer/components/dashboard/DashboardPanel';
 import { TOChecklistPanel } from '@renderer/components/to/TOChecklistPanel';
 import { SourceControlPanel } from '@renderer/components/scm/SourceControlPanel';
 import { FileEditor } from '@renderer/components/editor/FileEditor';
+import { CsvEditor } from '@renderer/components/editor/CsvEditor';
 import { openReviewAwareFile, useDiffReviewStore, isSameFilePath } from '@renderer/stores/diff-review';
 import { RunListPanel } from '@renderer/components/simulation/RunListPanel';
 import { CompileErrorView } from '@renderer/components/simulation/views/CompileErrorView';
@@ -437,12 +438,21 @@ export function CenterArea() {
             url={activeSurface.url}
           />
         ) : destination?.type === 'file' && currentProjectId ? (
-          <FileEditor
-            key={destination.path}
-            projectId={currentProjectId}
-            filePath={destination.path}
-            fileName={destination.name}
-          />
+          destination.name.toLowerCase().endsWith('.csv') ? (
+            <CsvEditor
+              key={destination.path}
+              projectId={currentProjectId}
+              filePath={destination.path}
+              fileName={destination.name}
+            />
+          ) : (
+            <FileEditor
+              key={destination.path}
+              projectId={currentProjectId}
+              filePath={destination.path}
+              fileName={destination.name}
+            />
+          )
         ) : destination?.type === 'terminal' ? (
           (() => {
             const termTab = terminalTabs.find((t) => t.id === destination.terminalTabId);
