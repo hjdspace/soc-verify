@@ -73,6 +73,8 @@ function applyTheme(id: string) {
   const theme = THEMES.find((t) => t.id === id);
   const root = document.documentElement;
   root.dataset.theme = id;
+  // 明暗档位（light/dark）：供局部设计语言（如 AI 面板 dsw 色板）切换亮暗令牌
+  root.dataset.shade = theme?.mode ?? 'dark';
   // 设置 color-scheme 让原生控件（scrollbar 等）也跟随
   root.style.colorScheme = theme?.mode ?? 'dark';
 }
