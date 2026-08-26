@@ -95,7 +95,7 @@ export function MilestoneBar({ steps }: { steps: MilestoneStep[] }) {
               contrast={16}
               fill="var(--card)"
               shadow="0 2px 5px rgba(0,0,0,.08)"
-              className="ml-1 flex shrink-0 items-center gap-1"
+              className="ml-1 flex shrink-0 flex-col items-center gap-1"
               data-testid={`milestone-actions-${index}`}
             >
               {step.actions!.map((action) => {

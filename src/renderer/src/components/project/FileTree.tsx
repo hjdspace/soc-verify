@@ -3,31 +3,14 @@ import { createPortal } from 'react-dom';
 import {
   ChevronRight,
   ChevronDown,
-  File,
-  Folder,
-  FolderOpen,
   FolderOpen as OpenIcon,
   Copy,
   CopyPlus,
   Plus,
   Trash2,
-  Cpu,
-  CircuitBoard,
-  FileCode,
-  FileJson,
-  FileText,
-  FileType,
-  FileTerminal,
-  FileImage,
-  FileArchive,
-  Braces,
-  Binary,
-  Database,
-  Settings,
-  Terminal,
-  BookText,
-  type LucideIcon,
 } from 'lucide-react';
+import { Icon, addCollection } from '@iconify/react';
+import { icons as vscodeIcons } from '@iconify-json/vscode-icons';
 import type { FileTreeNode } from '@shared/types';
 import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
@@ -70,118 +53,56 @@ function getRelativePath(rootPath: string, fullPath: string): string {
 
 // ─── File-type icon mapping ────────────────────────────────
 //
-// Maps file extensions to appropriate lucide-react icons.
-// SoC verification files (.sv, .v, .svh, .vh) get a Cpu icon,
-// other code files get language-appropriate icons.
+// Maps file extensions to the local VS Code Icons set. The icon data is bundled
+// locally so the file tree stays useful in offline desktop sessions.
 
-type IconEntry = { icon: LucideIcon; className: string };
+type IconEntry = { icon: string };
 
-const DEFAULT_FILE_ICON: IconEntry = { icon: File, className: 'text-muted-foreground' };
+addCollection(vscodeIcons);
+
+const DEFAULT_FILE_ICON: IconEntry = { icon: 'vscode-icons:file-type-text' };
 
 const EXT_ICON_MAP: Record<string, IconEntry> = {
-  // SoC / HDL — chip icon
-  sv: { icon: Cpu, className: 'text-primary' },
-  svh: { icon: Cpu, className: 'text-primary' },
-  v: { icon: Cpu, className: 'text-primary' },
-  vh: { icon: Cpu, className: 'text-primary' },
-  systemverilog: { icon: Cpu, className: 'text-primary' },
-  verilog: { icon: Cpu, className: 'text-primary' },
-  vhd: { icon: CircuitBoard, className: 'text-primary' },
-  vhdl: { icon: CircuitBoard, className: 'text-primary' },
-  sdc: { icon: CircuitBoard, className: 'text-primary' },
-  xdc: { icon: CircuitBoard, className: 'text-primary' },
-  do: { icon: Terminal, className: 'text-primary' },
-  tcl: { icon: Terminal, className: 'text-primary' },
-  // TypeScript / JavaScript
-  ts: { icon: FileType, className: 'text-info-foreground' },
-  tsx: { icon: FileType, className: 'text-info-foreground' },
-  js: { icon: FileType, className: 'text-warning-foreground' },
-  jsx: { icon: FileType, className: 'text-warning-foreground' },
-  mjs: { icon: FileType, className: 'text-warning-foreground' },
-  cjs: { icon: FileType, className: 'text-warning-foreground' },
-  // Web
-  html: { icon: FileCode, className: 'text-primary' },
-  htm: { icon: FileCode, className: 'text-primary' },
-  vue: { icon: FileCode, className: 'text-primary' },
-  xml: { icon: FileCode, className: 'text-muted-foreground' },
-  css: { icon: FileCode, className: 'text-primary' },
-  scss: { icon: FileCode, className: 'text-primary' },
-  less: { icon: FileCode, className: 'text-primary' },
-  // Systems
-  c: { icon: FileCode, className: 'text-muted-foreground' },
-  h: { icon: FileCode, className: 'text-muted-foreground' },
-  cpp: { icon: FileCode, className: 'text-muted-foreground' },
-  cc: { icon: FileCode, className: 'text-muted-foreground' },
-  cxx: { icon: FileCode, className: 'text-muted-foreground' },
-  hpp: { icon: FileCode, className: 'text-muted-foreground' },
-  hxx: { icon: FileCode, className: 'text-muted-foreground' },
-  rs: { icon: FileCode, className: 'text-muted-foreground' },
-  rust: { icon: FileCode, className: 'text-muted-foreground' },
-  go: { icon: FileCode, className: 'text-muted-foreground' },
-  java: { icon: FileCode, className: 'text-muted-foreground' },
-  // Scripting
-  py: { icon: FileTerminal, className: 'text-info-foreground' },
-  pyw: { icon: FileTerminal, className: 'text-info-foreground' },
-  python: { icon: FileTerminal, className: 'text-info-foreground' },
-  sh: { icon: Terminal, className: 'text-muted-foreground' },
-  bash: { icon: Terminal, className: 'text-muted-foreground' },
-  zsh: { icon: Terminal, className: 'text-muted-foreground' },
-  shell: { icon: Terminal, className: 'text-muted-foreground' },
-  rb: { icon: FileCode, className: 'text-muted-foreground' },
-  ruby: { icon: FileCode, className: 'text-muted-foreground' },
-  php: { icon: FileCode, className: 'text-muted-foreground' },
-  // Data
-  json: { icon: Braces, className: 'text-warning-foreground' },
-  yaml: { icon: Braces, className: 'text-muted-foreground' },
-  yml: { icon: Braces, className: 'text-muted-foreground' },
-  toml: { icon: Settings, className: 'text-muted-foreground' },
-  ini: { icon: Settings, className: 'text-muted-foreground' },
-  cfg: { icon: Settings, className: 'text-muted-foreground' },
-  conf: { icon: Settings, className: 'text-muted-foreground' },
-  sql: { icon: Database, className: 'text-muted-foreground' },
-  // Docs
-  md: { icon: BookText, className: 'text-muted-foreground' },
-  markdown: { icon: BookText, className: 'text-muted-foreground' },
-  txt: { icon: FileText, className: 'text-muted-foreground' },
-  // Binary / misc
-  bin: { icon: Binary, className: 'text-muted-foreground' },
-  hex: { icon: Binary, className: 'text-muted-foreground' },
-  elf: { icon: Binary, className: 'text-muted-foreground' },
-  so: { icon: Binary, className: 'text-muted-foreground' },
-  dll: { icon: Binary, className: 'text-muted-foreground' },
-  o: { icon: Binary, className: 'text-muted-foreground' },
-  a: { icon: Binary, className: 'text-muted-foreground' },
-  // Archives
-  zip: { icon: FileArchive, className: 'text-muted-foreground' },
-  tar: { icon: FileArchive, className: 'text-muted-foreground' },
-  gz: { icon: FileArchive, className: 'text-muted-foreground' },
-  '7z': { icon: FileArchive, className: 'text-muted-foreground' },
-  rar: { icon: FileArchive, className: 'text-muted-foreground' },
-  // Images
-  png: { icon: FileImage, className: 'text-muted-foreground' },
-  jpg: { icon: FileImage, className: 'text-muted-foreground' },
-  jpeg: { icon: FileImage, className: 'text-muted-foreground' },
-  gif: { icon: FileImage, className: 'text-muted-foreground' },
-  svg: { icon: FileImage, className: 'text-muted-foreground' },
-  ico: { icon: FileImage, className: 'text-muted-foreground' },
-  bmp: { icon: FileImage, className: 'text-muted-foreground' },
-  // Build
-  mk: { icon: FileTerminal, className: 'text-muted-foreground' },
-  makefile: { icon: FileTerminal, className: 'text-muted-foreground' },
-  cmake: { icon: FileTerminal, className: 'text-muted-foreground' },
+  sv: { icon: 'vscode-icons:file-type-systemverilog' }, svh: { icon: 'vscode-icons:file-type-systemverilog' },
+  v: { icon: 'vscode-icons:file-type-verilog' }, vh: { icon: 'vscode-icons:file-type-verilog' },
+  systemverilog: { icon: 'vscode-icons:file-type-systemverilog' }, verilog: { icon: 'vscode-icons:file-type-verilog' },
+  vhd: { icon: 'vscode-icons:file-type-vhdl' }, vhdl: { icon: 'vscode-icons:file-type-vhdl' },
+  sdc: { icon: 'vscode-icons:file-type-config' }, xdc: { icon: 'vscode-icons:file-type-config' },
+  do: { icon: 'vscode-icons:file-type-shell' }, tcl: { icon: 'vscode-icons:file-type-tcl' },
+  ts: { icon: 'vscode-icons:file-type-typescript' }, tsx: { icon: 'vscode-icons:file-type-reactjs' },
+  js: { icon: 'vscode-icons:file-type-js' }, jsx: { icon: 'vscode-icons:file-type-reactjs' },
+  mjs: { icon: 'vscode-icons:file-type-js' }, cjs: { icon: 'vscode-icons:file-type-js' },
+  html: { icon: 'vscode-icons:file-type-html' }, htm: { icon: 'vscode-icons:file-type-html' },
+  vue: { icon: 'vscode-icons:file-type-vue' }, xml: { icon: 'vscode-icons:file-type-xml' },
+  css: { icon: 'vscode-icons:file-type-css' }, scss: { icon: 'vscode-icons:file-type-scss' }, less: { icon: 'vscode-icons:file-type-less' },
+  c: { icon: 'vscode-icons:file-type-c' }, h: { icon: 'vscode-icons:file-type-c' },
+  cpp: { icon: 'vscode-icons:file-type-cpp' }, cc: { icon: 'vscode-icons:file-type-cpp' }, cxx: { icon: 'vscode-icons:file-type-cpp' },
+  hpp: { icon: 'vscode-icons:file-type-cppheader' }, hxx: { icon: 'vscode-icons:file-type-cppheader' },
+  rs: { icon: 'vscode-icons:file-type-rust' }, rust: { icon: 'vscode-icons:file-type-rust' },
+  go: { icon: 'vscode-icons:file-type-go' }, java: { icon: 'vscode-icons:file-type-java' },
+  py: { icon: 'vscode-icons:file-type-python' }, pyw: { icon: 'vscode-icons:file-type-python' }, python: { icon: 'vscode-icons:file-type-python' },
+  sh: { icon: 'vscode-icons:file-type-shell' }, bash: { icon: 'vscode-icons:file-type-shell' }, zsh: { icon: 'vscode-icons:file-type-shell' }, shell: { icon: 'vscode-icons:file-type-shell' },
+  rb: { icon: 'vscode-icons:file-type-ruby' }, ruby: { icon: 'vscode-icons:file-type-ruby' }, php: { icon: 'vscode-icons:file-type-php' },
+  json: { icon: 'vscode-icons:file-type-json' }, yaml: { icon: 'vscode-icons:file-type-yaml' }, yml: { icon: 'vscode-icons:file-type-yaml' },
+  toml: { icon: 'vscode-icons:file-type-toml' }, ini: { icon: 'vscode-icons:file-type-config' }, cfg: { icon: 'vscode-icons:file-type-config' }, conf: { icon: 'vscode-icons:file-type-config' },
+  sql: { icon: 'vscode-icons:file-type-sql' }, md: { icon: 'vscode-icons:file-type-markdown' }, markdown: { icon: 'vscode-icons:file-type-markdown' }, txt: { icon: 'vscode-icons:file-type-text' },
+  bin: { icon: 'vscode-icons:file-type-binary' }, hex: { icon: 'vscode-icons:file-type-binary' }, elf: { icon: 'vscode-icons:file-type-binary' }, so: { icon: 'vscode-icons:file-type-binary' }, dll: { icon: 'vscode-icons:file-type-binary' }, o: { icon: 'vscode-icons:file-type-binary' }, a: { icon: 'vscode-icons:file-type-binary' },
+  zip: { icon: 'vscode-icons:file-type-zip' }, tar: { icon: 'vscode-icons:file-type-zip' }, gz: { icon: 'vscode-icons:file-type-zip' }, '7z': { icon: 'vscode-icons:file-type-zip' }, rar: { icon: 'vscode-icons:file-type-zip' },
+  png: { icon: 'vscode-icons:file-type-image' }, jpg: { icon: 'vscode-icons:file-type-image' }, jpeg: { icon: 'vscode-icons:file-type-image' }, gif: { icon: 'vscode-icons:file-type-image' }, svg: { icon: 'vscode-icons:file-type-svg' }, ico: { icon: 'vscode-icons:file-type-image' }, bmp: { icon: 'vscode-icons:file-type-image' },
+  mk: { icon: 'vscode-icons:file-type-makefile' }, makefile: { icon: 'vscode-icons:file-type-makefile' }, cmake: { icon: 'vscode-icons:file-type-cmake' },
 };
 
 // Special filenames that get specific icons
 const NAME_ICON_MAP: Record<string, IconEntry> = {
-  makefile: { icon: FileTerminal, className: 'text-muted-foreground' },
-  cmakeLists: { icon: FileTerminal, className: 'text-muted-foreground' },
-  dockerfile: { icon: FileTerminal, className: 'text-muted-foreground' },
-  '.gitignore': { icon: FileCode, className: 'text-muted-foreground' },
-  '.gitattributes': { icon: FileCode, className: 'text-muted-foreground' },
-  '.env': { icon: Settings, className: 'text-muted-foreground' },
-  'package.json': { icon: FileJson, className: 'text-warning-foreground' },
-  'tsconfig.json': { icon: FileJson, className: 'text-info-foreground' },
-  'eslint.config': { icon: Settings, className: 'text-muted-foreground' },
+  makefile: { icon: 'vscode-icons:file-type-makefile' },
+  cmakelists: { icon: 'vscode-icons:file-type-cmake' },
+  dockerfile: { icon: 'vscode-icons:file-type-docker' },
+  '.gitignore': { icon: 'vscode-icons:file-type-git' },
+  '.gitattributes': { icon: 'vscode-icons:file-type-git' },
+  '.env': { icon: 'vscode-icons:file-type-config' },
+  'package.json': { icon: 'vscode-icons:file-type-npm' },
+  'tsconfig.json': { icon: 'vscode-icons:file-type-tsconfig' },
+  'eslint.config': { icon: 'vscode-icons:file-type-eslint' },
 };
 
 /**
@@ -199,6 +120,25 @@ function getFileIcon(fileName: string): IconEntry {
   if (lastDot === -1) return DEFAULT_FILE_ICON;
   const ext = fileName.slice(lastDot + 1).toLowerCase();
   return EXT_ICON_MAP[ext] ?? DEFAULT_FILE_ICON;
+}
+
+const FOLDER_ICON_MAP: Record<string, { closed: string; opened: string }> = {
+  src: { closed: 'vscode-icons:folder-type-src', opened: 'vscode-icons:folder-type-src-opened' },
+  test: { closed: 'vscode-icons:folder-type-test', opened: 'vscode-icons:folder-type-test-opened' },
+  tests: { closed: 'vscode-icons:folder-type-test', opened: 'vscode-icons:folder-type-test-opened' },
+  '__tests__': { closed: 'vscode-icons:folder-type-test', opened: 'vscode-icons:folder-type-test-opened' },
+  components: { closed: 'vscode-icons:folder-type-component', opened: 'vscode-icons:folder-type-component-opened' },
+  coverage: { closed: 'vscode-icons:folder-type-coverage', opened: 'vscode-icons:folder-type-coverage-opened' },
+  config: { closed: 'vscode-icons:folder-type-config', opened: 'vscode-icons:folder-type-config-opened' },
+  configs: { closed: 'vscode-icons:folder-type-config', opened: 'vscode-icons:folder-type-config-opened' },
+  scripts: { closed: 'vscode-icons:folder-type-script', opened: 'vscode-icons:folder-type-script-opened' },
+  docs: { closed: 'vscode-icons:folder-type-docs', opened: 'vscode-icons:folder-type-docs-opened' },
+  dist: { closed: 'vscode-icons:folder-type-dist', opened: 'vscode-icons:folder-type-dist-opened' },
+};
+
+function getFolderIcon(folderName: string, opened: boolean): string {
+  const entry = FOLDER_ICON_MAP[folderName.toLowerCase()];
+  return entry?.[opened ? 'opened' : 'closed'] ?? `vscode-icons:default-folder${opened ? '-opened' : ''}`;
 }
 
 // ─── Git status badge helpers ──────────────────────────────
@@ -656,7 +596,7 @@ const FileTreeItem = memo(function FileTreeItem({ node, depth, onSelectFile, sel
     e.dataTransfer.effectAllowed = 'copy';
   }, [node.path, node.name]);
 
-  const { icon: FileIcon, className: iconClassName } = getFileIcon(node.name);
+  const fileIcon = getFileIcon(node.name);
 
   return (
     <button
@@ -675,7 +615,11 @@ const FileTreeItem = memo(function FileTreeItem({ node, depth, onSelectFile, sel
       )}
       style={{ paddingLeft: `${depth * 12 + 4}px` }}
     >
-      <FileIcon className={cn('h-3 w-3 shrink-0', iconClassName, node.gitIgnored && 'opacity-50')} />
+      <Icon
+        icon={fileIcon.icon}
+        aria-hidden="true"
+        className={cn('h-3.5 w-3.5 shrink-0', node.gitIgnored && 'opacity-50')}
+      />
       <span
         className={cn(
           'truncate',
@@ -800,11 +744,11 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
         ) : (
           <ChevronRight className="h-3 w-3 shrink-0 opacity-50" />
         )}
-        {expanded ? (
-          <FolderOpen className="h-3 w-3 shrink-0 text-primary/70" />
-        ) : (
-          <Folder className="h-3 w-3 shrink-0 text-primary/70" />
-        )}
+        <Icon
+          icon={getFolderIcon(node.name, expanded)}
+          aria-hidden="true"
+          className="h-3.5 w-3.5 shrink-0"
+        />
         <span
           className={cn(
             'truncate font-medium',
