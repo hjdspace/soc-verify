@@ -1,11 +1,11 @@
 /**
  * 回归历史趋势表（Issue #6 / Plan Slice 5）。
  *
- * 列对照原型 .hist-row：#id / 时间 / 通过·失败数 / 通过率 / 时长 / Δ。
- * 数据源 RegressionHistoryEntry 仅有 runId / submittedAt / status 等字段——
- * 通过·失败数、通过率、Δ 无数据源，占位「—」；时长无 endTime 数据源，
- * 运行中显示「进行中」（原型语义），终态占位「—」，均不造假。
- * 点击行打开回归详情（regression-detail，workspace Tab）。
+ * 列对照原型 .hist-row：子系统·回归文件 / 时间 / 通过·失败数 / 通过率 / 时长 / Δ。
+ * 第一列展示子系统名和回归 list/group 文件名（从 filePath 提取），
+ * 取代早期无语义的 #runId 数字。通过·失败数、通过率、Δ 无数据源，
+ * 占位「—」；时长无 endTime 数据源，运行中显示「进行中」（原型语义），
+ * 终态占位「—」，均不造假。点击行打开回归详情（regression-detail，workspace Tab）。
  */
 
 import type { RegressionHistoryEntry } from '@shared/types';
@@ -13,7 +13,7 @@ import { History } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 import { formatRunTime } from './SuiteCardGrid';
 
-const ROW_GRID = 'grid-cols-[130px_90px_1fr_90px_80px_70px]';
+const ROW_GRID = 'grid-cols-[1fr_90px_1fr_90px_80px_70px]';
 
 /** 运行状态 → 状态点语义色（与套件卡片一致） */
 function histDotClass(status: RegressionHistoryEntry['status']): string {
@@ -45,7 +45,10 @@ function HistoryRow({ entry, onOpen }: {
     >
       <span className="flex min-w-0 items-center gap-2">
         <span className={cn('size-2 shrink-0 rounded-full', histDotClass(entry.status))} />
-        <span className="truncate font-mono text-[11px] text-foreground">#{entry.runId.slice(-6)}</span>
+        <span className="shrink-0 text-[11px] font-medium text-foreground">{entry.subsys}</span>
+        <span className="truncate font-mono text-[11px] text-muted-foreground">
+          {entry.filePath.split(/[/\\]/).pop() ?? entry.filePath}
+        </span>
       </span>
       <span className="truncate text-[11px] text-muted-foreground">{formatRunTime(entry.submittedAt)}</span>
       {/* 通过·失败数：无数据源，占位不造假 */}
@@ -90,7 +93,7 @@ export function HistoryTable({ entries, loading, onOpen }: {
           'gap-2.5 border-b border-border px-3.5 py-2 text-[10.5px] uppercase tracking-wider text-muted-foreground/70',
         )}
       >
-        <span>#</span>
+        <span>子系统·回归</span>
         <span>时间</span>
         <span>通过·失败</span>
         <span className="text-right">通过率</span>
