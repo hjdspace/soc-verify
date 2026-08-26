@@ -125,6 +125,17 @@ export function extractResultText(result: unknown): string {
   }
 }
 
+/** 工具结果是否指向目录：omp read 读目录成功返回 details.isDirectory，或旧消息中的 EISDIR 错误文本 */
+export function isDirectoryToolResult(result: unknown): boolean {
+  if (/EISDIR/i.test(extractResultText(result))) return true;
+  if (result != null && typeof result === 'object') {
+    const details = (result as Record<string, unknown>).details;
+    if (details != null && typeof details === 'object'
+      && (details as Record<string, unknown>).isDirectory === true) return true;
+  }
+  return false;
+}
+
 /** Try to parse text as JSON, return null if not parseable */
 export function tryParseJSON(text: string): unknown {
   const trimmed = text.trim();
