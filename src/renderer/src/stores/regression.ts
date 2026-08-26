@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
-import { useWorkbenchStore } from './workbench';
 import { useTerminalStore } from './terminal';
+import { useWorkbenchStore } from './workbench';
 import type {
   RegressionDiscoveryResult,
   RegressionRunOptions,
@@ -38,8 +38,11 @@ interface RegressionStoreState {
   discover: (projectId: string, refresh?: boolean) => Promise<void>;
   parseList: (filePath: string) => Promise<void>;
   parseGroup: (filePath: string) => Promise<void>;
-  runRegression: (projectId: string, filePath: string, subsys: string, options: RegressionRunOptions) => Promise<void>;
+  /** 提交回归；不导航不自动开终端（ADR 0029 决策 4）。返回是否提交成功（失败保持模态/表单） */
+  runRegression: (projectId: string, filePath: string, subsys: string, options: RegressionRunOptions) => Promise<boolean>;
   abortRegression: (projectId: string, runId: string) => Promise<void>;
+  /** 按需打开运行中回归的终端（卡片「打开终端」按钮） */
+  openRunTerminal: (runId: string) => Promise<void>;
   loadHistory: (projectId: string) => Promise<void>;
   /** 拉取运行中回归 + 订阅 regression:event（TitleBar 徽章数据源） */
   initActiveRuns: () => void;
@@ -103,16 +106,27 @@ export const useRegressionStore = create<RegressionStoreState>((set, get) => ({
       const result = await trpc.regression.run.mutate({ projectId, filePath, subsys, options });
       useToastStore.getState().success('回归已提交', `运行 ID: ${result.runId}`);
 
-      // Open terminal tab to show output
-      const createTabForSession = useTerminalStore.getState().createTabForSession;
-      const tabId = createTabForSession(result.terminalId, `回归 ${result.runId.slice(-6)}`);
-      const open = useWorkbenchStore.getState().open;
-      open({ type: 'terminal', terminalTabId: tabId, title: `回归 ${result.runId.slice(-6)}` });
-
-      // Refresh history
+      // 不导航、不自动开终端：卡片就地显示进度（ADR 0029 决策 4），终端按需 openRunTerminal
       void get().loadHistory(projectId);
+      return true;
     } catch (err) {
       useToastStore.getState().error('提交回归失败', err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  },
+
+  openRunTerminal: async (runId) => {
+    try {
+      const { terminalId } = await trpc.regression.getRunTerminal.query({ runId });
+      if (!terminalId) {
+        useToastStore.getState().warning('无法打开终端', '该回归已结束或不存在');
+        return;
+      }
+      const createTabForSession = useTerminalStore.getState().createTabForSession;
+      const tabId = createTabForSession(terminalId, `回归 ${runId.slice(-6)}`);
+      useWorkbenchStore.getState().open({ type: 'terminal', terminalTabId: tabId, title: `回归 ${runId.slice(-6)}` });
+    } catch (err) {
+      useToastStore.getState().error('打开终端失败', err instanceof Error ? err.message : String(err));
     }
   },
 
