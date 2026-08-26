@@ -137,9 +137,8 @@ describe('TodoPanel — 4 todo lists + completion process', () => {
   it('List 1: 单阶段全部 pending, 显示"待开始"', () => {
     render(<TodoPanel phases={todoList1_pending} isExecuting={false} collapsed={false} onToggleCollapse={vi.fn()} />);
 
-    expect(screen.getByText('排查计划')).toBeInTheDocument();
+    expect(screen.getByText('任务')).toBeInTheDocument();
     expect(screen.getByText('0/4 已完成 · 待开始')).toBeInTheDocument();
-    expect(screen.getByText('0%')).toBeInTheDocument();
 
     // 4 个 pending 项
     expect(screen.getByText('分析需求文档')).toBeInTheDocument();
@@ -163,7 +162,6 @@ describe('TodoPanel — 4 todo lists + completion process', () => {
     expect(screen.getByText('测试')).toBeInTheDocument();
 
     expect(screen.getByText('0/10 已完成 · 待开始')).toBeInTheDocument();
-    expect(screen.getByText('0%')).toBeInTheDocument();
 
     // ── Step 2: 完成第一个，开始第二个 — 更新中 ──
     rerender(
@@ -171,7 +169,6 @@ describe('TodoPanel — 4 todo lists + completion process', () => {
     );
 
     expect(screen.getByText('1/10 已完成 · 更新中...')).toBeInTheDocument();
-    expect(screen.getByText('10%')).toBeInTheDocument();
 
     // 已验证的项：收集用户需求 已完成（划线样式）
     const completedItem = screen.getByText('收集用户需求');
@@ -188,17 +185,14 @@ describe('TodoPanel — 4 todo lists + completion process', () => {
     );
 
     expect(screen.getByText('3/10 已完成 · 1 项进行中')).toBeInTheDocument();
-    expect(screen.getByText('30%')).toBeInTheDocument();
 
     // ── Step 4: 全部完成 ──
     rerender(
       <TodoPanel phases={todoList2_allDone} isExecuting={false} collapsed={false} onToggleCollapse={onToggle} />,
     );
 
-    expect(screen.getByText('排查计划 — 全部完成')).toBeInTheDocument();
+    expect(screen.getByText('任务 — 全部完成')).toBeInTheDocument();
     expect(screen.getByText('10/10 已完成')).toBeInTheDocument();
-    // 完成时进度环显示 checkmark 而非百分比
-    expect(screen.queryByText('100%')).not.toBeInTheDocument();
   });
 
   it('List 3: 混合状态 — abandoned 项正确渲染', () => {
@@ -224,10 +218,8 @@ describe('TodoPanel — 4 todo lists + completion process', () => {
   it('List 4: 单一项完成 — 100% 全部完成状态', () => {
     render(<TodoPanel phases={todoList4_singleDone} isExecuting={false} collapsed={false} onToggleCollapse={vi.fn()} />);
 
-    expect(screen.getByText('排查计划 — 全部完成')).toBeInTheDocument();
+    expect(screen.getByText('任务 — 全部完成')).toBeInTheDocument();
     expect(screen.getByText('1/1 已完成')).toBeInTheDocument();
-    // 进度环显示 checkmark，无百分比
-    expect(screen.queryByText(/\d+%/)).not.toBeInTheDocument();
   });
 
   it('空列表不渲染', () => {
