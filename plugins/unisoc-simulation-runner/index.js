@@ -176,8 +176,11 @@ function generateRunsimCommand(opts) {
  *
  * 优先级：
  *   1. options.rundir（支持 {case_name} 替换）
- *   2. $PROJ_ENV/work/{case_name}
+ *   2. $PROJ_WORK/{case_name}（仿真工作目录，非 $PROJ_ENV/work）
  *   3. projectRoot
+ *
+ * 注意：$PROJ_ENV 是验证环境目录（dv 代码树），$PROJ_WORK 才是仿真工作目录。
+ * 不要用 $PROJ_ENV/work/{case_name} —— 它不一定等于 $PROJ_WORK/{case_name}。
  *
  * @param {import('@shared/plugin-types').SimulationRunOptions} opts
  * @returns {string}
@@ -196,10 +199,10 @@ function resolveCwd(opts) {
     return rundir;
   }
 
-  // 2. $PROJ_ENV/work/{case_name}
-  const projEnv = process.env.PROJ_ENV || '';
-  if (projEnv && caseName) {
-    return join(projEnv, 'work', caseName);
+  // 2. $PROJ_WORK/{case_name}
+  const projWork = process.env.PROJ_WORK || '';
+  if (projWork && caseName) {
+    return join(projWork, caseName);
   }
 
   // 3. projectRoot
@@ -218,13 +221,35 @@ function resolveLogDir(record) {
 // ─── 仿真状态判定 ──────────────────────────────────────────────
 
 /**
+ * 检查仿真状态（基于日志目录下的标志文件）
+ *
+ * 参考 Python runsim_r3p0/utils/log_analyze_utils.py 的 check_simulation_status()。
+ * 判定规则：
+ *   - 日志目录下存在 sprd_log_pass.log → PASS
+ *   - 日志目录下存在 sprd_log_fail.log → FAIL
+ *   - 都不存在 → On-Going（无法判定）
+ *
+ * @param {string} logDir 日志目录路径
+ * @returns {'PASS' | 'FAIL' | 'On-Going'}
+ */
+function checkSimulationStatus(logDir) {
+  if (!logDir) return 'On-Going';
+  const passLogPath = join(logDir, 'sprd_log_pass.log');
+  const failLogPath = join(logDir, 'sprd_log_fail.log');
+
+  if (existsSync(passLogPath)) return 'PASS';
+  if (existsSync(failLogPath)) return 'FAIL';
+  return 'On-Going';
+}
+
+/**
  * 从仿真日志内容判断仿真是否通过
  *
  * 参考Python runsim_r3p0/utils/log_analyze_utils.py 的 check_simulation_status_from_log_content()。
  * 判定规则：
- *   - 包含 "TEST PASS" / "Simulation PASSED" / "$finish" 且无 "TEST FAIL" → pass
  *   - 包含 "TEST FAIL" / "Simulation FAILED" / "Error:" → fail
- *   - 其他 → 根据退出码判断
+ *   - 包含 "TEST PASS" / "Simulation PASSED" / "$finish" 且无 "TEST FAIL" → pass
+ *   - 其他 → null（无法判定，需回退到 checkSimulationStatus 或退出码）
  *
  * @param {string} content 日志内容
  * @returns {'pass' | 'fail' | null}
@@ -382,30 +407,42 @@ const plugin = {
 
         if (signal === 'SIGTERM' || signal === 'SIGKILL') {
           record.status = 'aborted';
-        } else if (code === 0) {
-          // 尝试从仿真日志判断 pass/fail
-          const logStatus = checkSimStatusFromLog(record.stdout + record.stderr);
-          if (logStatus) {
-            record.status = logStatus;
+        } else {
+          // 优先使用 checkSimulationStatus 检查日志目录下的标志文件
+          // （sprd_log_pass.log / sprd_log_fail.log），这是最可靠的方式
+          const simStatus = checkSimulationStatus(record.logDir);
+          if (simStatus === 'PASS') {
+            record.status = 'pass';
+          } else if (simStatus === 'FAIL') {
+            record.status = 'fail';
           } else {
-            // 尝试读取仿真日志文件
-            const simLogPath = join(record.logDir, 'irun_sim.log');
-            if (existsSync(simLogPath)) {
-              try {
-                const logContent = readFileSync(simLogPath, 'utf-8');
-                const fileStatus = checkSimStatusFromLog(logContent);
-                record.status = fileStatus || 'pass';
-              } catch {
-                record.status = 'pass';
-              }
+            // On-Going：标志文件不存在，回退到日志内容关键词匹配
+            const logStatus = checkSimStatusFromLog(record.stdout + record.stderr);
+            if (logStatus) {
+              record.status = logStatus;
             } else {
-              record.status = 'pass';
+              // 尝试读取仿真日志文件做内容匹配
+              const simLogPath = join(record.logDir, 'irun_sim.log');
+              if (existsSync(simLogPath)) {
+                try {
+                  const logContent = readFileSync(simLogPath, 'utf-8');
+                  const fileStatus = checkSimStatusFromLog(logContent);
+                  if (fileStatus) {
+                    record.status = fileStatus;
+                  } else {
+                    // 日志内容也无法判定：退出码 0 → error（避免误判 PASS）
+                    // 退出码非 0 → fail
+                    record.status = code === 0 ? 'error' : 'fail';
+                  }
+                } catch {
+                  record.status = code === 0 ? 'error' : 'fail';
+                }
+              } else {
+                // 无日志文件：退出码 0 → error，非 0 → fail
+                record.status = code === 0 ? 'error' : 'fail';
+              }
             }
           }
-        } else {
-          // 非零退出码
-          const logStatus = checkSimStatusFromLog(record.stdout + record.stderr);
-          record.status = logStatus === 'pass' ? 'pass' : 'fail';
         }
 
         record.endTime = Date.now();
@@ -522,4 +559,5 @@ module.exports.default = plugin;
 module.exports.generateRunsimCommand = generateRunsimCommand;
 module.exports.resolveCwd = resolveCwd;
 module.exports.checkSimStatusFromLog = checkSimStatusFromLog;
+module.exports.checkSimulationStatus = checkSimulationStatus;
 module.exports.parseCompileErrors = parseCompileErrors;
