@@ -17,6 +17,23 @@
 export function installVisualMocks(): void {
   vi.mock('@renderer/components/visual', async () => {
     const { createElement: h } = await import('react');
+    const LiquidItem = ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
+      h('div', {
+        'data-testid': 'liquid-item',
+        'data-effect': props.effect ?? 'morph',
+        ...(props.move ? { 'data-move': JSON.stringify(props.move) } : {}),
+      }, children);
+    const Liquid = ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
+      h('div', {
+        'data-testid': 'liquid-group',
+        'data-blur': String(props.blur ?? 6),
+        'data-contrast': String(props.contrast ?? 18),
+        ...(props.fill ? { 'data-fill': props.fill } : {}),
+        ...(props.shadow ? { 'data-shadow': props.shadow } : {}),
+        ...(props.className ? { 'data-classname': props.className } : {}),
+      }, children);
+    // Match the real API: `Liquid` exposes `.Item` as a sub-component.
+    (Liquid as unknown as { Item: typeof LiquidItem }).Item = LiquidItem;
     return {
       ThinkingOrb: (props: Record<string, unknown>) =>
         h('canvas', {
@@ -33,10 +50,8 @@ export function installVisualMocks(): void {
           'data-colorvariant': props.colorVariant ?? 'colorful',
           'data-theme': props.theme ?? 'dark',
         }, children),
-      Liquid: ({ children }: { children?: React.ReactNode }) =>
-        h('div', { 'data-testid': 'liquid-group' }, children),
-      LiquidItem: ({ children }: { children?: React.ReactNode }) =>
-        h('div', { 'data-testid': 'liquid-item' }, children),
+      Liquid,
+      LiquidItem,
     };
   });
 }

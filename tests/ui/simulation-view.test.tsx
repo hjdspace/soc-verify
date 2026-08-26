@@ -3,6 +3,11 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SimulationRunRecord } from '@renderer/stores/simulation';
 
+// Mock the visual animation libraries (border-beam etc.) so the real
+// packages — which call window.matchMedia — are never loaded in jsdom.
+import { installVisualMocks } from '../mocks/visual-stubs';
+installVisualMocks();
+
 /**
  * 仿真视图（Issue #5 三栏布局）测试：
  *

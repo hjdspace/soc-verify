@@ -176,7 +176,7 @@ html[data-shade='dark'] .ai-panel {
   animation: ap-sweep 2.6s ease-out infinite;
 }
 
-/* running 像素追逐点阵：3×3 外圈八格顺时针，opacity 台阶 1/.6/.35/.15，逐格 −125ms */
+/* deprecated: replaced by thinking-orbs, kept for fallback */
 @keyframes ap-chase {
   0% { opacity: 1; }
   25% { opacity: 0.6; }

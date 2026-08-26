@@ -13,6 +13,7 @@ import {
 import { useUiStore, type ActiveView } from '@renderer/stores/ui';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { cn } from '@renderer/lib/utils';
+import { Liquid } from '@renderer/components/visual';
 
 type NavItem = {
   view: ActiveView;
@@ -99,29 +100,47 @@ export function NavRail() {
       aria-label="视图导航"
       className="flex w-[60px] shrink-0 flex-col items-center gap-1 border-r border-border bg-sidebar py-3"
     >
-      {VIEW_ITEMS.map(({ view, label, icon: Icon }) => (
-        <button
-          key={view}
-          type="button"
-          aria-current={activeView === view ? 'page' : undefined}
-          onClick={() => setActiveView(view)}
-          className={cn(
-            NAV_BUTTON_BASE,
-            activeView === view ? 'bg-primary/10 text-primary' : NAV_BUTTON_IDLE,
-          )}
-        >
-          <Icon className="size-[18px]" strokeWidth={1.8} />
-          {view === 'simulation' && runningCount > 0 && (
-            <span
-              data-testid="nav-simulation-badge"
-              className="absolute right-[5px] top-[5px] grid h-3.5 min-w-3.5 place-items-center rounded-full bg-status-fail px-[3px] text-[9px] font-semibold text-background"
+      {/*
+        液态拖尾指示器：切换视图时指示器以液体橡胶拖尾从旧按钮位置
+        流向新按钮位置，激活按钮保持 var(--primary) 主题色填充。
+        仅 5 个视图按钮组包裹 Liquid，文件/AI/设置等非视图按钮不包裹。
+      */}
+      <Liquid
+        blur={6}
+        contrast={18}
+        fill="var(--primary)"
+        shadow="0 2px 6px rgba(0,0,0,.08)"
+        className="flex flex-col items-center gap-1"
+      >
+        {VIEW_ITEMS.map(({ view, label, icon: Icon }) => (
+          <Liquid.Item
+            key={view}
+            effect="move"
+            move={{ springiness: 0.5, trail: 0.575 }}
+          >
+            <button
+              type="button"
+              aria-current={activeView === view ? 'page' : undefined}
+              onClick={() => setActiveView(view)}
+              className={cn(
+                NAV_BUTTON_BASE,
+                activeView === view ? 'bg-primary/10 text-primary' : NAV_BUTTON_IDLE,
+              )}
             >
-              {runningCount}
-            </span>
-          )}
-          <NavTooltip label={label} />
-        </button>
-      ))}
+              <Icon className="size-[18px]" strokeWidth={1.8} />
+              {view === 'simulation' && runningCount > 0 && (
+                <span
+                  data-testid="nav-simulation-badge"
+                  className="absolute right-[5px] top-[5px] grid h-3.5 min-w-3.5 place-items-center rounded-full bg-status-fail px-[3px] text-[9px] font-semibold text-background"
+                >
+                  {runningCount}
+                </span>
+              )}
+              <NavTooltip label={label} />
+            </button>
+          </Liquid.Item>
+        ))}
+      </Liquid>
 
       <div className="my-2 h-px w-7 bg-border" />
 
