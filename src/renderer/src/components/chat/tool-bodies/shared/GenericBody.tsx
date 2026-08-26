@@ -1,21 +1,29 @@
-/** Generic fallback body: shows args + result as JSON/text. */
+/** Generic fallback body: IN/OUT 卡（DSH §6.1 兜底几何）。 */
 export function GenericBody({ args, resultText }: { args: unknown; resultText: string }) {
   const hasArgs = args != null && typeof args === 'object' && Object.keys(args as object).length > 0;
+
+  if (!hasArgs && !resultText) {
+    return <div className="px-2.5 py-2 font-mono text-[11px] text-muted-foreground/50">no output</div>;
+  }
+
   return (
-    <div className="text-[11px] leading-relaxed">
-      {hasArgs && (
-        <div>
-          <div className="border-b border-border/30 bg-background/50 px-2.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground/60">args</div>
-          <pre className="overflow-x-auto px-2.5 py-1 text-[10px] text-muted-foreground">{JSON.stringify(args, null, 2)}</pre>
-        </div>
-      )}
-      {resultText && (
-        <div>
-          <div className="border-b border-border/30 bg-background/50 px-2.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground/60">result</div>
-          <pre className="max-h-48 overflow-auto px-2.5 py-1 text-[10px] text-muted-foreground">{resultText}</pre>
-        </div>
-      )}
-      {!hasArgs && !resultText && <div className="px-2.5 py-2 text-muted-foreground/50">no output</div>}
+    <div className="overflow-hidden rounded-lg font-mono text-[11px]">
+      <div className="ap-inout">
+        {hasArgs && (
+          <>
+            <span className="ap-io-label">IN</span>
+            <pre className="ap-io-body m-0">{JSON.stringify(args, null, 2)}</pre>
+          </>
+        )}
+        {resultText && (
+          <>
+            <span className="ap-io-label">OUT</span>
+            <pre className="ap-io-body m-0" data-err={/error/i.test(resultText.slice(0, 200)) ? 'true' : undefined}>
+              {resultText}
+            </pre>
+          </>
+        )}
+      </div>
     </div>
   );
 }
