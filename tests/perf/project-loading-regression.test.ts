@@ -156,7 +156,7 @@ describe('project loading performance regression', () => {
     expect(firstDir.lazy).toBe(true);
   }, 120000);
 
-  it('starts prefetching nested directories after returning the root level', async () => {
+  it('does not scan nested directories until the user expands one', async () => {
     const info = await projectManager.openProject(fixtureRoot, 'regression-fixture');
     const tree = await projectManager.getFileTree(info.id);
     const subsys0 = tree.children?.find((child) => child.name === 'subsys_0');
@@ -164,15 +164,13 @@ describe('project loading performance regression', () => {
     expect(subsys0).toBeDefined();
     expect(readdirPaths).toEqual([fixtureRoot]);
 
-    await vi.waitFor(() => {
-      expect(readdirPaths).toContain(subsys0!.path);
-    });
+    // A short delay must not trigger a recursive background walk. Children are
+    // loaded only by the explicit getDirChildren call made on expansion.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(readdirPaths).toEqual([fixtureRoot]);
 
-    const readsBeforeExpand = readdirPaths.filter((path) => path === subsys0!.path).length;
     await projectManager.getDirChildren(info.id, subsys0!.path);
-    const readsAfterExpand = readdirPaths.filter((path) => path === subsys0!.path).length;
-
-    expect(readsAfterExpand).toBe(readsBeforeExpand);
+    expect(readdirPaths).toContain(subsys0!.path);
   }, 120000);
 
   it('detects root-level file additions via the watcher (debounced)', async () => {

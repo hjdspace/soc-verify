@@ -94,6 +94,18 @@ describe('FileDrawer 基础渲染', () => {
     expect(drawer.getAttribute('aria-hidden')).toBe('true');
   });
 
+  it('关闭态不挂载文件树或加载额外目录', () => {
+    useUiStore.setState({ leftDrawerOpen: false });
+    projectState.extraDirs = [
+      { id: 'dir_v1', path: 'D:/proj/ip2soc', group: 'verify', isCwd: false, order: 0, createdAt: Date.now() },
+    ];
+
+    render(<FileDrawer />);
+
+    expect(screen.queryByTestId('file-tree-mock')).toBeNull();
+    expect(projectState.loadDirFileTree).not.toHaveBeenCalled();
+  });
+
   it('无项目时显示空态引导', () => {
     projectState.currentProjectId = null;
     render(<FileDrawer />);

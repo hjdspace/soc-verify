@@ -363,7 +363,7 @@ export function FileDrawer() {
                 打开项目目录
               </button>
             </div>
-          ) : (
+          ) : open ? (
             <FileTreeSection
               currentProject={currentProject}
               fileTree={fileTree}
@@ -380,7 +380,7 @@ export function FileDrawer() {
               onSetCwd={handleSetCwd}
               onRemoveDir={handleRemoveDir}
             />
-          )}
+          ) : null}
         </div>
 
         {/* ── 最近打开 ────────────────────────────────── */}

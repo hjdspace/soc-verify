@@ -29,8 +29,6 @@ const HIDDEN_DIRS = new Set(['.socverify', '.git']);
 
 const WATCH_DEBOUNCE_MS = 500;
 const DIRECTORY_CACHE_TTL_MS = 60_000;
-const PREFETCH_CONCURRENCY = 2;
-const PREFETCH_DIRECTORY_LIMIT = 500;
 
 type DirectoryChildrenCacheEntry = {
   children: FileTreeNode[];
@@ -231,7 +229,6 @@ class ProjectManagerImpl extends EventEmitter {
     // are marked via a separate non-blocking pass (getDirChildren applies it per-dir).
     // Only do the initial mark if git is available and fast.
     this.fileTreeCache.set(cacheKey, tree);
-    this.scheduleDirectoryPrefetch(projectId, ProjectManagerImpl.ROOT_DIR_ID, tree.children ?? []);
     return tree;
   }
 
@@ -254,7 +251,6 @@ class ProjectManagerImpl extends EventEmitter {
 
     const tree = await this.buildFileTreeShallow(dir.path);
     this.fileTreeCache.set(cacheKey, tree);
-    this.scheduleDirectoryPrefetch(projectId, dirId, tree.children ?? []);
 
     // Ensure the watcher is started for this directory
     this.ensureDirWatcher(projectId, entry, dirId, dir.path);
@@ -313,55 +309,6 @@ class ProjectManagerImpl extends EventEmitter {
     const normalizedDir = normalize(resolve(dirPath));
     const normalizedTarget = normalize(resolve(targetPath));
     return normalizedTarget === normalizedDir || normalizedTarget.startsWith(normalizedDir + sep);
-  }
-
-  private scheduleDirectoryPrefetch(projectId: string, dirId: string, rootChildren: FileTreeNode[]): void {
-    const scopeKey = this.fileTreeScopeKey(projectId, dirId);
-    const generation = this.fileTreeCacheGenerations.get(scopeKey) ?? 0;
-
-    setTimeout(() => {
-      if (!this.projects.has(projectId)) return;
-      void this.prefetchDirectories(projectId, dirId, rootChildren, generation);
-    }, 0);
-  }
-
-  private async prefetchDirectories(
-    projectId: string,
-    dirId: string,
-    rootChildren: FileTreeNode[],
-    generation: number,
-  ): Promise<void> {
-    const scopeKey = this.fileTreeScopeKey(projectId, dirId);
-    const queue = rootChildren.filter(
-      (child) => child.type === 'directory' && !HIDDEN_DIRS.has(child.name),
-    );
-    let nextIndex = 0;
-    let visited = 0;
-
-    const worker = async (): Promise<void> => {
-      while (
-        nextIndex < queue.length
-        && visited < PREFETCH_DIRECTORY_LIMIT
-        && this.projects.has(projectId)
-        && (this.fileTreeCacheGenerations.get(scopeKey) ?? 0) === generation
-      ) {
-        const directory = queue[nextIndex++];
-        visited++;
-
-        try {
-          const children = await this.loadDirectoryChildren(projectId, dirId, directory.path);
-          for (const child of children) {
-            if (child.type === 'directory' && !HIDDEN_DIRS.has(child.name)) {
-              queue.push(child);
-            }
-          }
-        } catch {
-          // Background prefetch is best-effort; foreground expansion reports its own result.
-        }
-      }
-    };
-
-    await Promise.all(Array.from({ length: PREFETCH_CONCURRENCY }, () => worker()));
   }
 
   private async loadDirectoryChildren(
