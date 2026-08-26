@@ -5,14 +5,16 @@ import type { SimOptionField } from '@shared/plugin-types';
 
 /**
  * SimOptionPanel（Issue #3）测试：
- * schema 加载与分组卡片渲染、字段值编辑联动、
- * 预设加载下拉与保存、解析回归指令对话框、回归列表文件浏览。
+ * schema 加载与分组卡片渲染、字段值编辑联动、预设加载下拉与保存。
+ *
+ * 回归测试卡片已删除：回归发起统一收敛到回归页（ADR 0029），
+ * 相关测试断言回归分组/解析指令/回归文件浏览不再出现。
  *
  * 命令预览 / 复制 / 运行仿真 / CASE 缺失警告 已移至 SimCommandBar
  * 组件（位于 SimulationView 中栏底部），相关测试见下方独立 describe。
  *
  * Mock 策略：
- * - trpc: project.getSimOptionsSchema / getSimOptionPresets / saveSimOptionPreset / simulation.pickRegrFile
+ * - trpc: project.getSimOptionsSchema / getSimOptionPresets / saveSimOptionPreset
  * - stores: ui / project / simulation / toast
  */
 
@@ -62,9 +64,6 @@ vi.mock('@renderer/lib/trpc', () => ({
       getSimOptionPresets: { query: vi.fn().mockResolvedValue({}) },
       saveSimOptionPreset: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
     },
-    simulation: {
-      pickRegrFile: { mutate: vi.fn().mockResolvedValue({ canceled: true, path: null }) },
-    },
   },
 }));
 
@@ -83,7 +82,6 @@ const mockSchemaFields: SimOptionField[] = [
   { key: 'waveform', label: 'Dump Waveform', type: 'boolean', default: false, group: '波形配置' },
   { key: 'simulator', label: 'Simulator', type: 'enum', enumValues: ['vcs', 'xrun', 'verilator'], default: 'vcs', group: '仿真参数' },
   { key: 'timeout', label: 'Timeout', type: 'string', default: '10000', description: 'Simulation timeout in ms', group: '仿真参数' },
-  { key: 'regr_file', label: 'Regr File', type: 'string', default: '', group: '回归测试' },
 ];
 
 const mockPresets: Record<string, Record<string, unknown>> = {
@@ -97,7 +95,6 @@ beforeEach(() => {
   mockSimOptions = {};
   vi.mocked(trpc.project.getSimOptionsSchema.query).mockResolvedValue({ fields: mockSchemaFields });
   vi.mocked(trpc.project.getSimOptionPresets.query).mockResolvedValue({});
-  vi.mocked(trpc.simulation.pickRegrFile.mutate).mockResolvedValue({ canceled: true, path: null });
 });
 
 describe('SimOptionPanel schema 加载与分组渲染', () => {
@@ -111,15 +108,24 @@ describe('SimOptionPanel schema 加载与分组渲染', () => {
     expect(screen.getByText('基础参数')).toBeInTheDocument();
     expect(screen.getByText('波形配置')).toBeInTheDocument();
     expect(screen.getByText('仿真参数')).toBeInTheDocument();
-    expect(screen.getByText('回归测试')).toBeInTheDocument();
+  });
+
+  it('回归测试分组不再渲染（ADR 0029：回归发起收敛到回归页）', async () => {
+    render(<SimOptionPanel />);
+
+    await screen.findByText('BASE');
+
+    expect(screen.queryByText('回归测试')).not.toBeInTheDocument();
+    expect(screen.queryByText('解析指令')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('浏览选择回归列表文件')).not.toBeInTheDocument();
   });
 
   it('标题显示字段数 badge', async () => {
     render(<SimOptionPanel />);
 
-    await screen.findByText('8');
+    await screen.findByText('7');
 
-    expect(screen.getByText('8')).toBeInTheDocument();
+    expect(screen.getByText('7')).toBeInTheDocument();
   });
 
   it('无 schema 时显示提示', async () => {
@@ -392,96 +398,5 @@ describe('SimOptionPanel 预设管理', () => {
 
     await screen.findByText('暂无已保存的预设');
     expect(screen.getByText('暂无已保存的预设')).toBeInTheDocument();
-  });
-});
-
-describe('SimOptionPanel 回归列表文件浏览', () => {
-  it('regr_file 字段显示浏览按钮', async () => {
-    render(<SimOptionPanel />);
-
-    await screen.findByText('Regr File');
-
-    const browseBtn = screen.getByTitle('浏览选择回归列表文件');
-    expect(browseBtn).toBeInTheDocument();
-  });
-
-  it('点击浏览按钮调用 pickRegrFile.mutate', async () => {
-    render(<SimOptionPanel />);
-
-    await screen.findByText('Regr File');
-
-    fireEvent.click(screen.getByTitle('浏览选择回归列表文件'));
-
-    await waitFor(() => {
-      expect(trpc.simulation.pickRegrFile.mutate).toHaveBeenCalledWith({ projectId: 'test-project' });
-    });
-  });
-
-  it('选择文件后调用 setSimOption 更新 regr_file', async () => {
-    vi.mocked(trpc.simulation.pickRegrFile.mutate).mockResolvedValue({ canceled: false, path: '/path/to/regression.list' });
-
-    render(<SimOptionPanel />);
-
-    await screen.findByText('Regr File');
-
-    fireEvent.click(screen.getByTitle('浏览选择回归列表文件'));
-
-    await waitFor(() => {
-      expect(mockSetSimOption).toHaveBeenCalledWith('regr_file', '/path/to/regression.list');
-    });
-  });
-});
-
-describe('SimOptionPanel 解析回归指令', () => {
-  it('回归测试卡片显示"解析指令"按钮', async () => {
-    render(<SimOptionPanel />);
-
-    await screen.findByText('解析指令');
-
-    expect(screen.getByText('解析指令')).toBeInTheDocument();
-  });
-
-  it('点击解析指令按钮打开对话框', async () => {
-    render(<SimOptionPanel />);
-
-    await screen.findByText('解析指令');
-
-    fireEvent.click(screen.getByText('解析指令'));
-
-    expect(screen.getByText('解析回归指令')).toBeInTheDocument();
-  });
-
-  it('对话框中输入指令后点击解析调用 parseRunsimCommand 并合并结果', async () => {
-    render(<SimOptionPanel />);
-
-    await screen.findByText('解析指令');
-    fireEvent.click(screen.getByText('解析指令'));
-
-    // Type the command text
-    const textarea = screen.getByPlaceholderText(/可以直接粘贴从网页复制的完整回归指令/);
-    fireEvent.change(textarea, { target: { value: 'runsim -base top -block usvp -case test_001' } });
-
-    // Click parse button
-    const parseBtn = screen.getByText('解析').closest('button')!;
-    fireEvent.click(parseBtn);
-
-    await waitFor(() => {
-      expect(mockSetSimOptions).toHaveBeenCalledWith(
-        expect.objectContaining({ base: 'top', block: 'usvp', case: 'test_001' }),
-      );
-    });
-  });
-
-  it('对话框可通过取消按钮关闭', async () => {
-    render(<SimOptionPanel />);
-
-    await screen.findByText('解析指令');
-    fireEvent.click(screen.getByText('解析指令'));
-
-    expect(screen.getByText('解析回归指令')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByText('取消'));
-
-    expect(screen.queryByText('解析回归指令')).not.toBeInTheDocument();
   });
 });
