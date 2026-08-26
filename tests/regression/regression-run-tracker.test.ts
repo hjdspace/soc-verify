@@ -124,6 +124,11 @@ describe('RegressionRunTracker 生命周期', () => {
     expect(active[0]).toMatchObject({ runId: 'run-track-1', subsys: 'alu' });
   });
 
+  it('getTerminalId 查运行中回归的终端 ID；未知 runId 返回 null（按需开终端，ADR 0029）', () => {
+    expect(regressionRunTracker.getTerminalId('run-track-1')).toBe('term-1');
+    expect(regressionRunTracker.getTerminalId('no-such-run')).toBeNull();
+  });
+
   it('terminal data 解析出进度 → progress 事件 + getActive 含 completed/total', () => {
     regressionRunTracker.track({
       runId: 'run-track-2',
