@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>仿真 Debug 快捷按钮 — 方案对比索引</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1e1e2e; color: #cdd6f4; padding: 40px 48px; }
+  h1 { font-size: 20px; margin-bottom: 6px; }
+  .sub { font-size: 12px; color: #6c7086; margin-bottom: 32px; line-height: 1.7; }
+  .sub code { background: #313244; border-radius: 4px; padding: 1px 6px; font-size: 11px; color: #89b4fa; font-family: Consolas, monospace; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card { border: 1px solid #313244; border-radius: 12px; background: #181825; overflow: hidden; display: flex; flex-direction: column; transition: border-color .15s; }
+  .card:hover { border-color: rgba(137,180,250,.5); }
+  .card.rec { border-color: rgba(166,227,161,.55); }
+  .badge { float: right; font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+  .badge.rec { background: rgba(166,227,161,.15); color: #a6e3a1; border: 1px solid rgba(166,227,161,.4); }
+  .thumb { height: 130px; border-bottom: 1px solid #313244; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #6c7086; }
+  .t-a { background: linear-gradient(180deg, rgba(137,180,250,.06), transparent); }
+  .t-b { background: linear-gradient(180deg, rgba(203,166,247,.06), transparent); }
+  .t-c { background: linear-gradient(180deg, rgba(166,227,161,.06), transparent); }
+  .body { padding: 14px 16px 16px; flex: 1; display: flex; flex-direction: column; }
+  .name { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+  .desc { font-size: 11px; color: #a6adc8; line-height: 1.65; margin-bottom: 10px; }
+  ul { list-style: none; font-size: 11px; line-height: 1.9; }
+  li::before { content: '＋ '; color: #a6e3a1; }
+  li.neg::before { content: '－ '; color: #f38ba8; }
+  .open { margin-top: auto; padding-top: 12px; }
+  .open a { display: block; text-align: center; padding: 8px; border-radius: 8px; background: rgba(137,180,250,.12); color: #89b4fa; font-size: 12px; font-weight: 600; text-decoration: none; }
+  .open a:hover { background: rgba(137,180,250,.2); }
+
+  .note { margin-top: 28px; border: 1px dashed #45475a; border-radius: 10px; padding: 14px 18px; font-size: 11px; color: #a6adc8; line-height: 1.8; }
+  .note b { color: #f9e2af; }
+</style>
+</head>
+<body>
+
+<h1>仿真 Debug 快捷按钮 — UI 方案对比</h1>
+<div class="sub">
+  移植 <code>runsim_r3p0</code> 执行日志页的五个快捷按钮：<b>打开 Verdi</b> · <b>打开 Verisium</b> · <b>编译日志</b> · <b>仿真日志</b> · <b>反汇编文件</b>。<br>
+  日志/反汇编类按钮支持「内置编辑器 / gvim」两种打开方式；Verdi 按钮自动检测 VCS（<code>run_verdi_vcs</code>）与 XRUN（<code>run_verdi comp_load</code>）。
+</div>
+
+<div class="grid">
+  <div class="card">
+    <div class="thumb t-a">仿真页底部悬浮 Dock（毛玻璃）</div>
+    <div class="body">
+      <div class="name">方案 A — 悬浮 Debug Dock <span class="badge">你的原始想法</span></div>
+      <div class="desc">仿真页存在运行记录时，底部中央悬浮工具条；目标 = 运行列表选中项（可点击切换）；内置 / gvim 打开方式全局切换。</div>
+      <ul>
+        <li>一眼可见，随时可达，不占固定空间</li>
+        <li>目标用例可切换（含已完成 run）</li>
+        <li>离开仿真页即不可见，debug 时需切回</li>
+        <li class="neg">悬浮条可能与底栏/命令栏视觉重叠</li>
+      </ul>
+      <div class="open"><a href="sim-debug-buttons-a-floating-dock.html">查看原型 →</a></div>
+    </div>
+  </div>
+
+  <div class="card rec">
+    <div class="thumb t-b">终端工具栏（Python 原版对应位置）</div>
+    <div class="body">
+      <div class="name">方案 B — 终端工具栏集成 <span class="badge rec">推荐</span></div>
+      <div class="desc">扩展 SimControlToolbar（终端仿真 tab 顶部）：debug 按钮作用于本 tab 的仿真——与 Python 版「按钮作用于当前日志 tab」语义完全一致。</div>
+      <ul>
+        <li>看仿真输出时按钮就在手边（debug 主场景）</li>
+        <li>目标语义零歧义：按钮属于哪个 run 一目了然</li>
+        <li>日志按钮分裂式设计：点击=内置，箭头=gvim</li>
+        <li class="neg">工具栏变宽，仅紧凑图标承载</li>
+      </ul>
+      <div class="open"><a href="sim-debug-buttons-b-terminal-toolbar.html">查看原型 →</a></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="thumb t-c">运行列表行 hover 图标组</div>
+    <div class="body">
+      <div class="name">方案 C — 运行行内按钮</div>
+      <div class="desc">运行列表每行 hover 时展开 debug 图标组 + ⋮ 菜单；作用于所在行，天然支持对任意历史 run 直接 debug。</div>
+      <ul>
+        <li>每个 run 都有入口，粒度最细</li>
+        <li>不增加常驻 UI，界面最克制</li>
+        <li class="neg">入口隐藏较深（需 hover 发现）</li>
+        <li class="neg">行内空间有限，需菜单承载打开方式</li>
+      </ul>
+      <div class="open"><a href="sim-debug-buttons-c-row-actions.html">查看原型 →</a></div>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  <b>建议组合：</b>方案 B（主）+ 方案 A（可选增强）。B 与 Python 版心智模型一致、上下文最明确；
+  A 满足你「仿真页一眼可见」的诉求，两者共享同一套后端（用例目录解析 + 打开动作），实现成本增量很小。
+  方案 C 的「对任意历史 run debug」能力可通过 A 的目标切换下拉覆盖。
+</div>
+
+</body>
+</html>
