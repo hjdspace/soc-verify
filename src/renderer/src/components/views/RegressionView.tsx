@@ -4,10 +4,11 @@
  * 套件卡片网格（discovery 按子系统映射，原型 repeat(4,1fr) 窄窗降级 2 列）+
  * 历史趋势表（RegressionHistoryEntry 真实字段，缺失列占位「—」）+
  * 失败聚类占位面板（数据源暂缺，见 FailureClusterPanel TODO）。
- * 数据只读复用 regression store（discover / loadHistory），不重写数据层。
+ * 卡片是回归发起唯一入口（ADR 0029）：点卡片弹运行配置模态，运行后
+ * 不导航、卡片就地显示进度。数据只读复用 regression store，不重写数据层。
  */
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import type { RegressionHistoryEntry } from '@shared/types';
 import { ViewHeader } from '@renderer/components/layout/ViewHeader';
@@ -17,6 +18,7 @@ import {
   SuiteCardGridEmpty,
   type SuiteCardData,
 } from './regression/SuiteCardGrid';
+import { RunConfigModal } from './regression/RunConfigModal';
 import { HistoryTable } from './regression/HistoryTable';
 import { FailureClusterPanel } from './regression/FailureClusterPanel';
 import { useRegressionStore } from '@renderer/stores/regression';
@@ -33,7 +35,13 @@ export function RegressionView() {
   const history = useRegressionStore((s) => s.history);
   const historyLoading = useRegressionStore((s) => s.historyLoading);
   const loadHistory = useRegressionStore((s) => s.loadHistory);
+  const activeRegressions = useRegressionStore((s) => s.activeRegressions);
+  const abortRegression = useRegressionStore((s) => s.abortRegression);
+  const openRunTerminal = useRegressionStore((s) => s.openRunTerminal);
   const open = useWorkbenchStore((s) => s.open);
+
+  /** 运行配置模态当前子系统（null = 关闭） */
+  const [runConfigSubsys, setRunConfigSubsys] = useState<string | null>(null);
 
   // 数据加载：项目切换时扫描回归目录并拉取运行历史（SimulationView 模式）
   useEffect(() => {
@@ -57,14 +65,20 @@ export function RegressionView() {
         groupCount: items.length - lists.length,
         onCount: lists.reduce((acc, list) => acc + list.onCount, 0),
         latest: latestBySubsys.get(subsys) ?? null,
+        active: activeRegressions.filter((run) => run.subsys === subsys),
       };
     });
-  }, [discovery, history]);
+  }, [discovery, history, activeRegressions]);
 
   /** 历史按提交时间降序（最近在前，对照原型 # 最新在最上） */
   const sortedHistory = useMemo(
     () => [...history].sort((a, b) => b.submittedAt - a.submittedAt),
     [history],
+  );
+
+  const runConfigItems = useMemo(
+    () => discovery.find((d) => d.subsys === runConfigSubsys)?.items ?? [],
+    [discovery, runConfigSubsys],
   );
 
   const handleRefresh = () => {
@@ -108,7 +122,14 @@ export function RegressionView() {
       ) : suites.length === 0 ? (
         <SuiteCardGridEmpty />
       ) : (
-        <SuiteCardGrid suites={suites} />
+        <SuiteCardGrid
+          suites={suites}
+          actions={{
+            onOpen: setRunConfigSubsys,
+            onAbort: (runId) => currentProjectId && void abortRegression(currentProjectId, runId),
+            onOpenTerminal: (runId) => void openRunTerminal(runId),
+          }}
+        />
       )}
 
       <div className="grid grid-cols-[1.6fr_1fr] items-start gap-3">
@@ -119,6 +140,14 @@ export function RegressionView() {
         />
         <FailureClusterPanel />
       </div>
+
+      {runConfigSubsys && (
+        <RunConfigModal
+          subsys={runConfigSubsys}
+          items={runConfigItems}
+          onClose={() => setRunConfigSubsys(null)}
+        />
+      )}
     </div>
   );
 }
