@@ -10,9 +10,10 @@ import type { EnvVarCategory, EnvVarDefinition, EnvVarGroup } from './types/env'
 /** Catalog of all known env var definitions. */
 export const ENV_VAR_CATALOG: EnvVarDefinition[] = [
   // ── SOC 项目环境 ──────────────────────────────────
+  { name: 'PROJ_DIR', category: 'soc', description: '项目根目录 (view)', isPath: true },
   { name: 'PROJ_ENV', category: 'soc', description: '验证环境目录 (dv)', isPath: true },
   { name: 'PROJ_RTL', category: 'soc', description: '设计源码目录 (de)', isPath: true },
-  { name: 'PROJ_WORK', category: 'soc', description: '仿真工作目录', isPath: true },
+  { name: 'PROJ_WORK', category: 'soc', description: '仿真工作目录 (work)', isPath: true },
   { name: 'SPRD_TOOL_DIR', category: 'soc', description: '工具目录', isPath: true },
 
   // ── Synopsys 工具 ────────────────────────────────
