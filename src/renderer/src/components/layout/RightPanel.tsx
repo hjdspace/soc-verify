@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
-import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon, Shield, ShieldAlert, ShieldCheck, ChevronDown, ChevronRight, Info, PanelLeftClose, Key } from 'lucide-react';
+import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon, Shield, ShieldAlert, ShieldCheck, ChevronDown, ChevronRight, Info, PanelLeftClose, Key, Copy } from 'lucide-react';
 import { useSessionCoreStore } from '@renderer/stores/session-core';
 import { useSessionMessagesStore } from '@renderer/stores/session-messages';
 import { useSessionApprovalStore } from '@renderer/stores/session-approval';
@@ -619,12 +619,12 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-sidebar">
+    <div className="ai-panel flex min-h-0 flex-1 flex-col bg-sidebar">
       {/* ── 会话标签栏 ──────────────────────────────── */}
-      <div className="flex items-center border-b">
-        {/* Tabs — horizontally scrollable */}
+      <div className="flex h-9 shrink-0 items-stretch border-b px-2">
+        {/* Tabs — horizontally scrollable；活动 tab = 主题蓝文字 + 底部 2px 圆角条 */}
         <div
-          className="flex items-center gap-0.5 flex-1 overflow-x-auto px-1 py-1"
+          className="flex flex-1 items-stretch gap-3.5 overflow-x-auto"
           style={{ scrollbarWidth: 'thin' }}
         >
           {projectSessions.map((sess) => {
@@ -637,10 +637,10 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                 data-session-tab
                 onClick={() => !isEditing && switchSession(sess.id)}
                 className={cn(
-                  'group flex items-center gap-1 rounded-md px-2 py-1 text-xs cursor-pointer transition-colors max-w-[160px] shrink-0',
+                  'relative flex select-none items-center gap-1 px-0.5 text-xs cursor-pointer transition-colors max-w-[160px] shrink-0',
                   isActive
-                    ? 'bg-background text-foreground ring-1 ring-border'
-                    : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+                    ? 'font-medium text-primary'
+                    : 'text-muted-foreground hover:text-foreground/80',
                 )}
               >
                 {isEditing ? (
@@ -673,7 +673,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                 ) : (
                   <>
                     {isSessionRunning && (
-                      <Loader2 aria-label="会话运行中" className="h-2.5 w-2.5 shrink-0 animate-spin" />
+                      <Loader2 aria-label="会话运行中" className="h-2.5 w-2.5 shrink-0 animate-spin text-primary" />
                     )}
                     <span
                       className="truncate"
@@ -693,6 +693,9 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                       <X className="h-2.5 w-2.5" />
                     </button>
                   </>
+                )}
+                {isActive && !isEditing && (
+                  <span className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 rounded-t-sm bg-primary" />
                 )}
               </div>
             );
@@ -726,7 +729,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
       <div
         ref={scrollContainerRef}
         onScroll={handleScroll}
-        className="relative flex-1 overflow-y-auto px-2 py-2"
+        className="relative flex-1 overflow-y-auto px-3 py-3"
       >
         {showHistory ? (
           <HistoryView
@@ -788,7 +791,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
             {isSending &&
               !currentSession.messages.some(
                 (m) => m.role === 'assistant' && m.isStreaming,
-              ) && <WaitingDots />}
+              ) && <RunningIndicator />}
             <div ref={messagesEndRef} />
           </div>
         )}
@@ -800,7 +803,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
             onClick={scrollToBottom}
             title="回到底部"
             aria-label="回到底部"
-            className="sticky bottom-2 ml-auto flex h-7 w-7 items-center justify-center rounded-full border border-border bg-background/90 text-muted-foreground shadow-md backdrop-blur transition-colors hover:text-foreground hover:shadow-lg"
+            className="sticky bottom-2 ml-auto mr-1 mb-1 flex h-7 w-7 items-center justify-center rounded-full border border-[var(--dsw-border-l2)] bg-card text-muted-foreground shadow-[var(--dsw-shadow-lv2)] backdrop-blur transition-colors hover:bg-[var(--dsw-hover-solid)] hover:text-foreground"
             style={{ marginLeft: 'auto', marginRight: '4px', marginBottom: '4px' }}
           >
             <ChevronDown className="h-4 w-4" />
@@ -891,7 +894,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
 
         <div
           className={cn(
-            'flex flex-col gap-1.5 rounded-md border border-border bg-background p-2 relative transition-colors',
+            'relative flex flex-col gap-1.5 rounded-2xl border border-[var(--dsw-border-l2)] bg-[var(--dsw-input-major)] p-2 shadow-[var(--dsw-shadow-lv2)] transition-colors',
             isDragOver && 'border-primary/50 ring-2 ring-primary/30',
           )}
           onDragOver={handleDragOver}
@@ -1017,7 +1020,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                   onClick={() => setShowAttachDropdown((v) => !v)}
                   disabled={!currentSessionId || isCurrentSessionCreating}
                   title="添加附件"
-                  className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
+                  className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--dsw-selector)] text-muted-foreground transition-colors hover:bg-[var(--dsw-hover-solid)] hover:text-foreground disabled:opacity-30"
                 >
                   <Plus className="h-3 w-3" />
                 </button>
@@ -1056,11 +1059,11 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                   onClick={() => setShowApprovalDropdown((v) => !v)}
                   disabled={!currentSessionId || isCurrentSessionCreating}
                   title="权限审批模式"
-                  className="flex items-center gap-0.5 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
+                  className="flex h-6 shrink-0 items-center gap-1 rounded-full bg-[var(--dsw-selector)] px-2 text-muted-foreground transition-colors hover:bg-[var(--dsw-hover-solid)] hover:text-foreground disabled:opacity-30"
                 >
                   {(() => {
                     const mode = currentSession?.approvalMode ?? 'yolo';
-                    if (mode === 'always-ask') return <ShieldAlert className="h-3 w-3 text-status-warn-foreground" />;
+                    if (mode === 'always-ask') return <ShieldAlert className="h-3 w-3 text-warning-foreground" />;
                     if (mode === 'write') return <Shield className="h-3 w-3 text-primary" />;
                     return <ShieldCheck className="h-3 w-3 text-status-pass-foreground" />;
                   })()}
@@ -1215,9 +1218,9 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                   onClick={abortSession}
                   title="中止"
                   aria-label="中止"
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-destructive text-destructive-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-destructive"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
                 >
-                  <Square className="h-3 w-3" />
+                  <Square className="h-3 w-3 fill-current" />
                 </button>
               ) : (
                 <button
@@ -1225,7 +1228,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                   disabled={!inputMessage.trim() || !currentSessionId || isCurrentSessionCreating}
                   title="发送"
                   aria-label="发送"
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:opacity-60"
+                  className="flex h-7 w-7 shrink-0 translate-y-[-1px] items-center justify-center rounded-full bg-primary text-primary-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <ArrowUp className="h-4 w-4" />
                 </button>
@@ -1288,39 +1291,41 @@ export function RightPanel({ width }: RightPanelProps) {
  * 让 React 复用同一个 DOM 节点，动画持续运行而不被打断。
  */
 const StreamingCursor = memo(function StreamingCursor() {
-  return (
-    <span
-      aria-hidden
-      className="ml-0.5 inline-block h-3 w-0.5 cursor-blink bg-foreground align-middle"
-    />
-  );
+  return <span aria-hidden className="ap-cursor" />;
 });
 
+/** 用户消息悬停时间戳：同日 HH:mm / 同年 M月D日 HH:mm / 更早 Y年M月D日 HH:mm */
+function formatMsgTime(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) return hm;
+  const sameYear = d.getFullYear() === now.getFullYear();
+  if (sameYear) return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+}
+
 /**
- * AI 等待响应指示器——三个跳动点 + 文字。
+ * AI 等待响应指示器——品牌渐变流光文字 + 等宽计时器。
  *
  * 当 session 处于 streaming/tool_executing 但没有正在流式输出的 assistant 消息时
  * 显示在消息列表底部，让用户知道 AI 正在工作（例如工具执行完毕后
  * 等待 LLM 生成下一段回复的间隙）。
  */
-const WaitingDots = memo(function WaitingDots() {
+const RunningIndicator = memo(function RunningIndicator() {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
+  const ss = String(elapsed % 60).padStart(2, '0');
   return (
-    <div className="flex items-center gap-1.5 py-1 text-muted-foreground">
-      <div className="flex items-center gap-0.5">
-        <span
-          className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce"
-          style={{ animationDelay: '0ms' }}
-        />
-        <span
-          className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce"
-          style={{ animationDelay: '150ms' }}
-        />
-        <span
-          className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce"
-          style={{ animationDelay: '300ms' }}
-        />
-      </div>
-      <span className="text-[10px]">AI 正在思考...</span>
+    <div className="flex min-h-[22px] items-center gap-2" data-testid="running-indicator">
+      <span className="ap-shimmer text-xs">深度思考中…</span>
+      <span className="font-mono text-[10px] tabular-nums text-muted-foreground">{mm}:{ss}</span>
     </div>
   );
 });
@@ -1355,21 +1360,21 @@ function MessageBubble({ message, session }: { message: ChatMessage; session?: S
   const imgSrc = (img: string): string =>
     img.startsWith('data:') ? img : `data:image/png;base64,${img}`;
 
-  // User messages: right-aligned bubble with optional images
+  // User messages: right-aligned DSH bubble with optional images + hover meta
   if (isUser) {
     return (
       <>
-        <div className="flex flex-col items-end gap-0.5">
-          <div className="max-w-[85%] rounded-lg bg-primary/15 px-2.5 py-1.5 text-xs">
+        <div className="group flex flex-col items-end gap-1">
+          <div className="max-w-[88%] rounded-2xl bg-[var(--dsw-bubble)] px-3 py-2 text-xs leading-5 text-foreground">
             {message.skills && message.skills.length > 0 && (
               <div className="mb-1.5 flex flex-wrap justify-end gap-1">
                 {message.skills.map((skill) => (
                   <span
                     key={`skill-${skill.name}`}
-                    className="inline-flex items-center gap-1 rounded bg-primary/25 px-1.5 py-0.5 text-[10px] text-primary"
+                    className="inline-flex items-center gap-1 rounded bg-[var(--dsw-blue-tertiary)] px-1.5 py-0.5 text-[10px] font-medium text-primary"
                   >
                     <Sparkles className="h-2.5 w-2.5" />
-                    <span className="max-w-[120px] truncate font-medium">{skill.name}</span>
+                    <span className="max-w-[120px] truncate">{skill.name}</span>
                   </span>
                 ))}
               </div>
@@ -1388,6 +1393,23 @@ function MessageBubble({ message, session }: { message: ChatMessage; session?: S
               </div>
             )}
             <div className="whitespace-pre-wrap break-words">{message.content}</div>
+          </div>
+          {/* 悬停显现：复制 + 时间戳（DSH 用户消息操作行） */}
+          <div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-100 group-hover:opacity-100 group-focus-within:opacity-100">
+            <button
+              onClick={() => void navigator.clipboard.writeText(message.content)}
+              title="复制"
+              aria-label="复制消息"
+              className="flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Copy className="h-2.5 w-2.5" />
+            </button>
+            <span
+              title={formatMsgTime(message.timestamp)}
+              className="flex h-5 w-5 items-center justify-center text-muted-foreground/70"
+            >
+              <Clock className="h-2.5 w-2.5" />
+            </span>
           </div>
         </div>
         {lightboxSrc && (
