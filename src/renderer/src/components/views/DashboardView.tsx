@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Download, Play } from 'lucide-react';
+import { Bug, Download, Play, Timer } from 'lucide-react';
 import { ViewHeader } from '@renderer/components/layout/ViewHeader';
 import { MilestoneBar, type MilestoneStep } from './dashboard/MilestoneBar';
 import { AnalyticsDropdown } from './dashboard/AnalyticsDropdown';
@@ -195,6 +195,7 @@ const openExportDialog = useCoverageExportStore((s) => s.openExportDialog);
       ? [
           {
             label: '后仿用例调试',
+            icon: Bug,
             onClick: () => {
               useProjectStore.getState().setCaseStatusFilter('postSim');
               openSubsystemCases();
@@ -202,7 +203,8 @@ const openExportDialog = useCoverageExportStore((s) => s.openExportDialog);
             testId: 'milestone-postsim-cases',
           },
           {
-            label: '时序用例分析',
+            label: '时序违例分析',
+            icon: Timer,
             onClick: () => openWorkbench({ type: 'timing-violation' }),
             testId: 'milestone-timing-analysis',
           },

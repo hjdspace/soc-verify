@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import type { ReactNode } from 'react';
 import type { SimulationRunRecord } from '@renderer/stores/simulation';
 import type { ChatMessage, SessionEntry } from '@renderer/stores/session-types';
 import type { CoverageSummary } from '@shared/types/coverage';
@@ -72,6 +73,15 @@ vi.mock('@renderer/stores/project', () => ({
 import { DashboardView } from '@renderer/components/views/DashboardView';
 import { useUiStore } from '@renderer/stores/ui';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
+
+vi.mock('@renderer/components/visual', () => {
+  const LiquidItem = ({ children }: { children?: ReactNode }) => <div>{children}</div>;
+  const Liquid = ({ children, ...props }: { children?: ReactNode } & Record<string, unknown>) => (
+    <div data-testid={props['data-testid'] as string}>{children}</div>
+  );
+  (Liquid as typeof Liquid & { Item: typeof LiquidItem }).Item = LiquidItem;
+  return { Liquid };
+});
 
 function makeCoverageSummary(): CoverageSummary {
   return {
@@ -218,7 +228,7 @@ describe('DashboardView 里程碑', () => {
     expect(useWorkbenchStore.getState().tabs.some((t) => t.destination.type === 'sysbase-env-gen')).toBe(true);
   });
 
-  it('后仿验证节点提供后仿用例调试与时序用例分析两个动作', () => {
+  it('后仿验证节点提供后仿用例调试与时序违例分析两个动作', () => {
     mocks.dash.milestones = [
       { id: 'requirement-import', label: '需求导入', done: true, hint: '' },
       { id: 'env-gen', label: '环境生成', done: true, hint: '' },
@@ -231,7 +241,10 @@ describe('DashboardView 里程碑', () => {
     ];
     render(<DashboardView />);
 
-    // 时序用例分析：点击后打开 timing-violation Tab
+    expect(screen.queryByTestId('milestone-timing-analysis')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('milestone-icon-6'));
+
+    // 时序违例分析：展开后点击图标打开 timing-violation Tab
     fireEvent.click(screen.getByTestId('milestone-timing-analysis'));
     expect(useWorkbenchStore.getState().tabs.some((t) => t.destination.type === 'timing-violation')).toBe(true);
   });
