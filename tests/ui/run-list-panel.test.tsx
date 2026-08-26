@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SimulationRunRecord } from '@renderer/stores/simulation';
 
@@ -8,9 +8,15 @@ import type { SimulationRunRecord } from '@renderer/stores/simulation';
  * 表格行渲染（状态点、seed、进度条、耗时、ETA）/ 行点击路由 /
  * 停止全部 / 骨架屏 / 空状态 / 无匹配清空。
  *
+ * 行内 Debug 按钮（UI 方案 C，移植 Python 执行日志页快捷按钮）：
+ * hover 浮现图标组（Verdi/Verisium/编译日志/仿真日志/反汇编）+ ⋮ 菜单
+ *（内置编辑器 / gvim 打开方式、打开用例目录）；产物缺失时禁用。
+ *
  * Mock 策略与 simulation-view.test.tsx 一致：
  * - simulation store: activeRuns / loadingActiveRuns / stopAllRuns
- * - workbench store: 真实 zustand（open → simulation-detail Tab）
+ * - trpc: resolveDebugArtifacts / launchVerdi / launchVerisium / openInSystem
+ * - workbench store: 真实 zustand（open → file / simulation-detail Tab）
+ * - toast store: mock（无 IPC 依赖）
  */
 
 const mocks = vi.hoisted(() => ({
@@ -18,6 +24,18 @@ const mocks = vi.hoisted(() => ({
     activeRuns: [] as SimulationRunRecord[],
     loadingActiveRuns: false,
     stopAllRuns: vi.fn().mockResolvedValue(undefined),
+  },
+  debug: {
+    resolveArtifacts: vi.fn(),
+    launchVerdi: vi.fn(),
+    launchVerisium: vi.fn(),
+    openInSystem: vi.fn().mockResolvedValue(undefined),
+  },
+  toast: {
+    info: vi.fn(),
+    warning: vi.fn(),
+    error: vi.fn(),
+    success: vi.fn(),
   },
 }));
 
@@ -27,18 +45,33 @@ vi.mock('@renderer/lib/trpc', () => ({
       getSubsystems: { query: vi.fn().mockResolvedValue([]) },
       getCases: { query: vi.fn().mockResolvedValue([]) },
       searchCases: { query: vi.fn().mockResolvedValue([]) },
+      openInSystem: { mutate: mocks.debug.openInSystem },
     },
     simulation: {
       listActiveRuns: { query: vi.fn().mockResolvedValue([]) },
       runInTerminal: { mutate: vi.fn().mockResolvedValue({ runId: 'run-1', terminalId: 'term-1', command: '', cwd: '' }) },
       abortTerminalRun: { mutate: vi.fn().mockResolvedValue(undefined) },
       abort: { mutate: vi.fn().mockResolvedValue(undefined) },
+      resolveDebugArtifacts: { query: mocks.debug.resolveArtifacts },
+      launchVerdi: { mutate: mocks.debug.launchVerdi },
+      launchVerisium: { mutate: mocks.debug.launchVerisium },
     },
   },
 }));
 
 vi.mock('@renderer/stores/simulation', () => ({
   useSimulationStore: (selector: (s: typeof mocks.sim) => unknown) => selector(mocks.sim),
+}));
+
+vi.mock('@renderer/stores/toast', () => ({
+  useToastStore: {
+    getState: () => ({
+      info: mocks.toast.info,
+      warning: mocks.toast.warning,
+      error: mocks.toast.error,
+      success: mocks.toast.success,
+    }),
+  },
 }));
 
 import { RunListPanel } from '@renderer/components/simulation/RunListPanel';
@@ -97,6 +130,29 @@ beforeEach(() => {
   mocks.sim.activeRuns = [];
   mocks.sim.loadingActiveRuns = false;
   mocks.sim.stopAllRuns.mockClear();
+  mocks.debug.resolveArtifacts.mockReset().mockResolvedValue({
+    caseDir: null,
+    simLogPath: null,
+    compileLogPath: null,
+    asmFiles: [],
+    verdiMode: null,
+    matchedCaseDirs: [],
+  });
+  mocks.debug.launchVerdi.mockReset().mockResolvedValue({
+    caseDir: '/work/alu_add',
+    command: 'run_verdi comp_load',
+    logPath: '/work/alu_add/verdi_launch.log',
+    mode: 'xrun',
+  });
+  mocks.debug.launchVerisium.mockReset().mockResolvedValue({
+    caseDir: '/work/alu_add',
+    command: 'run_vdb',
+    logPath: '/work/alu_add/verisium_launch.log',
+  });
+  mocks.debug.openInSystem.mockClear();
+  mocks.toast.info.mockClear();
+  mocks.toast.warning.mockClear();
+  mocks.toast.error.mockClear();
   useWorkbenchStore.setState({ tabs: [], activeTabId: null });
 });
 
@@ -368,5 +424,230 @@ describe('RunListPanel 虚拟滚动', () => {
     const tabs = useWorkbenchStore.getState().tabs;
     expect(tabs).toHaveLength(1);
     expect(tabs[0].destination.type).toBe('simulation-detail');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// 行内 Debug 按钮（UI 方案 C — hover 浮现图标组 + ⋮ 菜单）
+// ═══════════════════════════════════════════════════════════
+
+const DEBUG_ARTIFACTS = {
+  caseDir: '/work/alu_add',
+  simLogPath: '/work/alu_add/log/irun_sim.log',
+  compileLogPath: '/work/alu_add/log/irun_compile.log',
+  asmFiles: ['/work/alu_add/sw_build/alu.asm'],
+  verdiMode: 'xrun' as const,
+  matchedCaseDirs: ['/work/alu_add'],
+};
+
+function seedDebuggableRun(): void {
+  const now = Date.now();
+  mocks.sim.activeRuns = [
+    makeRun({
+      runId: 'r-dbg-1',
+      caseName: 'alu_add',
+      status: 'fail',
+      startTime: now - 60000,
+      endTime: now - 30000,
+      command: 'runsim -case alu_add',
+      cwd: '/env/project',
+    }),
+  ];
+}
+
+describe('RunListPanel 行内 Debug 按钮（方案 C）', () => {
+  it('行内渲染五个 Debug 图标按钮（Verdi/Verisium/编译日志/仿真日志/反汇编）', async () => {
+    mocks.debug.resolveArtifacts.mockResolvedValue(DEBUG_ARTIFACTS);
+    seedDebuggableRun();
+    render(<RunListPanel />);
+
+    expect(await screen.findByTestId('sim-rowdbg-r-dbg-1-btn-verdi')).toBeInTheDocument();
+    expect(screen.getByTestId('sim-rowdbg-r-dbg-1-btn-verisium')).toBeInTheDocument();
+    expect(screen.getByTestId('sim-rowdbg-r-dbg-1-btn-compile-log')).toBeInTheDocument();
+    expect(screen.getByTestId('sim-rowdbg-r-dbg-1-btn-sim-log')).toBeInTheDocument();
+    expect(screen.getByTestId('sim-rowdbg-r-dbg-1-btn-asm')).toBeInTheDocument();
+  });
+
+  it('按行记录解析产物（cwd / command / caseName）', async () => {
+    mocks.debug.resolveArtifacts.mockResolvedValue(DEBUG_ARTIFACTS);
+    seedDebuggableRun();
+    render(<RunListPanel />);
+
+    await screen.findByTestId('sim-rowdbg-r-dbg-1-btn-verdi');
+    expect(mocks.debug.resolveArtifacts).toHaveBeenCalledWith({
+      cwd: '/env/project',
+      caseName: 'alu_add',
+      command: 'runsim -case alu_add',
+    });
+  });
+
+  it('点击 Verdi 图标以隐藏子进程启动（携带该行的 cwd/命令）', async () => {
+    mocks.debug.resolveArtifacts.mockResolvedValue(DEBUG_ARTIFACTS);
+    seedDebuggableRun();
+    render(<RunListPanel />);
+
+    fireEvent.click(await screen.findByTestId('sim-rowdbg-r-dbg-1-btn-verdi'));
+
+    await waitFor(() => {
+      expect(mocks.debug.launchVerdi).toHaveBeenCalledWith({
+        cwd: '/env/project',
+        caseName: 'alu_add',
+        command: 'runsim -case alu_add',
+      });
+    });
+  });
+
+  it('点击编译日志/仿真日志图标以内置编辑器打开', async () => {
+    mocks.debug.resolveArtifacts.mockResolvedValue(DEBUG_ARTIFACTS);
+    seedDebuggableRun();
+    render(<RunListPanel />);
+
+    fireEvent.click(await screen.findByTestId('sim-rowdbg-r-dbg-1-btn-compile-log'));
+
+    let tabs = useWorkbenchStore.getState().tabs;
+    expect(tabs.some((t) => t.destination.type === 'file'
+      && t.destination.path === '/work/alu_add/log/irun_compile.log')).toBe(true);
+
+    fireEvent.click(screen.getByTestId('sim-rowdbg-r-dbg-1-btn-sim-log'));
+    tabs = useWorkbenchStore.getState().tabs;
+    expect(tabs.some((t) => t.destination.type === 'file'
+      && t.destination.path === '/work/alu_add/log/irun_sim.log')).toBe(true);
+  });
+
+  it('点击反汇编图标直接打开（单文件）', async () => {
+    mocks.debug.resolveArtifacts.mockResolvedValue(DEBUG_ARTIFACTS);
+    seedDebuggableRun();
+    render(<RunListPanel />);
+
+    fireEvent.click(await screen.findByTestId('sim-rowdbg-r-dbg-1-btn-asm'));
+
+    const tabs = useWorkbenchStore.getState().tabs;
+    expect(tabs.some((t) => t.destination.type === 'file'
+      && t.destination.path === '/work/alu_add/sw_build/alu.asm')).toBe(true);
+  });
+
+  it('产物缺失时图标禁用', async () => {
+    mocks.debug.resolveArtifacts.mockResolvedValue({
+      caseDir: null,
+      simLogPath: null,
+      compileLogPath: null,
+      asmFiles: [],
+      verdiMode: null,
+      matchedCaseDirs: [],
+    });
+    seedDebuggableRun();
+    render(<RunListPanel />);
+
+    const verdi = await screen.findByTestId('sim-rowdbg-r-dbg-1-btn-verdi');
+    await waitFor(() => expect(verdi).toBeDisabled());
+    expect(screen.getByTestId('sim-rowdbg-r-dbg-1-btn-compile-log')).toBeDisabled();
+    expect(screen.getByTestId('sim-rowdbg-r-dbg-1-btn-sim-log')).toBeDisabled();
+    expect(screen.getByTestId('sim-rowdbg-r-dbg-1-btn-asm')).toBeDisabled();
+  });
+
+  it('⋮ 菜单提供 gvim 打开方式与用例目录入口', async () => {
+    mocks.debug.resolveArtifacts.mockResolvedValue(DEBUG_ARTIFACTS);
+    seedDebuggableRun();
+    render(<RunListPanel />);
+
+    fireEvent.click(await screen.findByTestId('sim-rowdbg-r-dbg-1-btn-more'));
+
+    // gvim 打开编译日志
+    fireEvent.click(await screen.findByTestId('sim-rowdbg-r-dbg-1-menu-compile-log-gvim'));
+    await waitFor(() => {
+      expect(mocks.debug.openInSystem).toHaveBeenCalledWith({
+        path: '/work/alu_add/log/irun_compile.log',
+        type: 'file',
+      });
+    });
+
+    // 在文件管理器中打开用例目录
+    fireEvent.click(screen.getByTestId('sim-rowdbg-r-dbg-1-btn-more'));
+    fireEvent.click(await screen.findByTestId('sim-rowdbg-r-dbg-1-menu-open-casedir'));
+    await waitFor(() => {
+      expect(mocks.debug.openInSystem).toHaveBeenCalledWith({
+        path: '/work/alu_add',
+        type: 'directory',
+      });
+    });
+  });
+
+  it('点击 Debug 图标不触发行点击路由（详情 Tab 不打开）', async () => {
+    mocks.debug.resolveArtifacts.mockResolvedValue(DEBUG_ARTIFACTS);
+    seedDebuggableRun();
+    render(<RunListPanel />);
+
+    fireEvent.click(await screen.findByTestId('sim-rowdbg-r-dbg-1-btn-verdi'));
+
+    await waitFor(() => {
+      expect(mocks.debug.launchVerdi).toHaveBeenCalled();
+    });
+    const tabs = useWorkbenchStore.getState().tabs;
+    expect(tabs.filter((t) => t.destination.type === 'simulation-detail')).toHaveLength(0);
+  });
+
+  it('⋮ 菜单提供打开 Verdi / Verisium（对齐原型 run_verdi / run_verisium）', async () => {
+    mocks.debug.resolveArtifacts.mockResolvedValue(DEBUG_ARTIFACTS);
+    seedDebuggableRun();
+    render(<RunListPanel />);
+
+    fireEvent.click(await screen.findByTestId('sim-rowdbg-r-dbg-1-btn-more'));
+    fireEvent.click(await screen.findByTestId('sim-rowdbg-r-dbg-1-menu-verdi'));
+    await waitFor(() => {
+      expect(mocks.debug.launchVerdi).toHaveBeenCalledWith({
+        cwd: '/env/project',
+        caseName: 'alu_add',
+        command: 'runsim -case alu_add',
+      });
+    });
+
+    fireEvent.click(screen.getByTestId('sim-rowdbg-r-dbg-1-btn-more'));
+    fireEvent.click(await screen.findByTestId('sim-rowdbg-r-dbg-1-menu-verisium'));
+    await waitFor(() => {
+      expect(mocks.debug.launchVerisium).toHaveBeenCalledWith({
+        cwd: '/env/project',
+        caseName: 'alu_add',
+        command: 'runsim -case alu_add',
+      });
+    });
+  });
+
+  it('⋮ 菜单提供内置编辑器打开方式（仿真日志）', async () => {
+    mocks.debug.resolveArtifacts.mockResolvedValue(DEBUG_ARTIFACTS);
+    seedDebuggableRun();
+    render(<RunListPanel />);
+
+    fireEvent.click(await screen.findByTestId('sim-rowdbg-r-dbg-1-btn-more'));
+    fireEvent.click(await screen.findByTestId('sim-rowdbg-r-dbg-1-menu-sim-log-builtin'));
+
+    await waitFor(() => {
+      const tabs = useWorkbenchStore.getState().tabs;
+      expect(tabs.some((t) => t.destination.type === 'file'
+        && t.destination.path === '/work/alu_add/log/irun_sim.log')).toBe(true);
+    });
+    expect(mocks.debug.openInSystem).not.toHaveBeenCalled();
+  });
+
+  it('产物缺失时 ⋮ 菜单仍可展开且各项禁用（保留提示）', async () => {
+    mocks.debug.resolveArtifacts.mockResolvedValue({
+      caseDir: null,
+      simLogPath: null,
+      compileLogPath: null,
+      asmFiles: [],
+      verdiMode: null,
+      matchedCaseDirs: [],
+    });
+    seedDebuggableRun();
+    render(<RunListPanel />);
+
+    fireEvent.click(await screen.findByTestId('sim-rowdbg-r-dbg-1-btn-more'));
+
+    expect(await screen.findByTestId('sim-rowdbg-r-dbg-1-menu')).toBeInTheDocument();
+    expect(screen.getByTestId('sim-rowdbg-r-dbg-1-menu-verdi')).toBeDisabled();
+    expect(screen.getByTestId('sim-rowdbg-r-dbg-1-menu-verisium')).toBeDisabled();
+    expect(screen.getByTestId('sim-rowdbg-r-dbg-1-menu-compile-log-builtin')).toBeDisabled();
+    expect(screen.getByTestId('sim-rowdbg-r-dbg-1-menu-sim-log-gvim')).toBeDisabled();
+    expect(screen.getByTestId('sim-rowdbg-r-dbg-1-menu-asm-builtin')).toBeDisabled();
+    expect(screen.getByTestId('sim-rowdbg-r-dbg-1-menu-open-casedir')).toBeDisabled();
   });
 });
