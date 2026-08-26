@@ -48,6 +48,34 @@ npx vitest run tests/<相关目录>     # 仅运行改动相关的测试目录
 5. **electron-trpc 0.7.1 CJS 输出**（绕过 ESM 不兼容）
 6. **CSP**：`index.html` 中 `default-src 'self'`
 
+## 仿真状态判定（PASS/FAIL）
+
+仿真 PASS/FAIL 判定有两条核心原则：
+
+### 1. 退出码 ≠ 仿真状态
+
+进程退出码为 0 只代表 `runsim` 脚本正常返回，**不等于仿真 PASS**。仿真可能失败但脚本仍 return 0（如 UVM objection 未设置、assert 失败但未触发 `$fatal`）。因此判定优先级为：
+
+1. **`checkSimulationStatus()`** — 检查日志目录下 `sprd_log_pass.log` / `sprd_log_fail.log` 标志文件（最可靠）
+2. **日志内容关键词匹配** — 匹配 `TEST PASSED` / `SPRD_PASSED` / `TEST FAILED` / `SPRD_FAILED` 等
+3. **退出码** — 仅当以上都无法判定时，退出码 0 → `error`（不判 pass），非 0 → `fail`
+
+### 2. 仿真日志目录不是 `cwd/log`
+
+`cwd` 是**验证环境目录**（`$PROJ_ENV`，即 dv 代码树，如 `/proj/<ProjectName>/gitview/<用户名>/view/dv`），仿真产物实际在**仿真工作目录**（`$PROJ_WORK/<case_dir>/log/`，如 `/proj/<ProjectName>/gitview/<用户名>/view/work/<case_dir>/log/`）下。
+
+关键环境变量：
+- `$PROJ_DIR` — 项目根目录（如 `/proj/<ProjectName>/gitview/<用户名>/view`）
+- `$PROJ_ENV` — 验证环境目录（dv 代码树，`$PROJ_DIR/dv`）
+- `$PROJ_RTL` — 设计源码目录（de 代码树，`$PROJ_DIR/de`）
+- `$PROJ_WORK` — 仿真工作目录（`$PROJ_DIR/work`）
+
+解析日志路径必须用 `SimArtifactResolver`（`src/main/simulation/sim-artifact-resolver.ts`），其优先级为：命令 `cd` 前缀 → `$PROJ_WORK` → `cwd`。**不要**直接用 `join(cwd, 'log')`。
+
+> **教训**：曾经把 `sim-terminal-linker.ts` 的 `resolveLogDir` 写成 `join(cwd, 'log')`，导致终端仿真完成后找不到 `sprd_log_pass.log`/`sprd_log_fail.log`，回退到退出码 0 误判为 PASS。修复方式是调用 `resolveSimArtifacts()` 获取正确的 `simLogPath`。
+>
+> **教训**：插件 `unisoc-simulation-runner` 的 `resolveCwd` 曾用 `$PROJ_ENV/work/{case_name}` 作为仿真目录，但 `$PROJ_ENV/work` 不一定等于 `$PROJ_WORK`（两者可能指向不同路径）。修复为直接使用 `$PROJ_WORK/{case_name}`。
+
 ## 架构参考
 
 以下详情按需查阅源码或文档，不必每次加载：
