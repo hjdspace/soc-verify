@@ -16,6 +16,7 @@ import { writeFile, readFile, readdir, mkdir } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { terminalManager, findSimShell } from '../terminal/terminal-manager';
 import type { RegressionRunOptions, RegressionHistoryEntry } from '@shared/types/regression';
+import { buildRegrCommand } from '@shared/regression-command';
 import type { CaseDatabase } from '../case/db/case-database';
 import { insertSimulationRun, type SimulationRunRow } from '../case/db/case-repository';
 
@@ -23,44 +24,8 @@ const SOCVERIFY_DIR = '.socverify';
 const REGRESSION_DIR = 'regressions';
 const STDOUT_TAIL_LINES = 50;
 
-// ── Command building ──────────────────────────────────
-
-/**
- * Build a `runsim -regr` command string from file path and options.
- *
- * @param filePath   Path to the regression list/group file
- * @param options    Optional execution parameters
- * @returns          Command string, e.g. `runsim -regr /path/to/regr.lst -tag RTL0.1 -cov`
- */
-export function buildRegrCommand(filePath: string, options: RegressionRunOptions): string {
-  const args: string[] = ['runsim', '-regr', filePath];
-
-  if (options.tags && options.tags.length > 0) {
-    args.push('-tag', options.tags.join(','));
-  }
-
-  if (options.nonTags && options.nonTags.length > 0) {
-    args.push('-nt', options.nonTags.join(','));
-  }
-
-  if (options.failMode) {
-    args.push('-fm');
-  }
-
-  if (options.coverage) {
-    args.push('-cov');
-  }
-
-  if (options.regrWork) {
-    args.push('-regr_work', options.regrWork);
-  }
-
-  if (options.merge && options.coverage) {
-    args.push('-merge');
-  }
-
-  return args.join(' ');
-}
+// 命令构造为共享纯函数（预览与执行同一实现，ADR 0029），此处 re-export 保持既有导入路径
+export { buildRegrCommand };
 
 // ── Runner ────────────────────────────────────────────
 
