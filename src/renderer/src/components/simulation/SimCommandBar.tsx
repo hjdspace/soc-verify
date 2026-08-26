@@ -14,6 +14,7 @@ import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore, type SimulationCase } from '@renderer/stores/simulation';
 import { useToastStore } from '@renderer/stores/toast';
 import { cn } from '@renderer/lib/utils';
+import { BorderBeam } from '@renderer/components/visual';
 import {
   generateRunsimCommand,
   tokenizeRunsimCommand,
@@ -107,6 +108,7 @@ export function SimCommandBar() {
           </button>
         </div>
         {/* Run button */}
+        <BorderBeam size="pulse-inner" theme="dark" colorVariant="ocean" active={hasCase && !running}>
         <button
           onClick={handleRunSim}
           disabled={running || !currentProjectId || !hasCase}
@@ -126,6 +128,7 @@ export function SimCommandBar() {
             </>
           )}
         </button>
+        </BorderBeam>
       </div>
       {/* ── Missing CASE hint ─────────────────────────────────── */}
       {!hasCase && currentProjectId && (

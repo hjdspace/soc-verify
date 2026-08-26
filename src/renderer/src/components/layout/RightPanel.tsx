@@ -22,7 +22,7 @@ import { getLatestTodoState } from '@renderer/components/chat/tool-helpers';
 import { useTodoPanelStore } from '@renderer/stores/todo-panel';
 import { ComposerEditor, type ChipData, type ComposerEditorApi } from './ComposerEditor';
 import { useUiStore } from '@renderer/stores/ui';
-import { ThinkingOrb } from '@renderer/components/visual';
+import { ThinkingOrb, BorderBeam } from '@renderer/components/visual';
 
 interface RightPanelProps {
   width: number;
@@ -73,6 +73,7 @@ const compactSession = useSessionMessagesStore((s) => s.compactSession);
   const [isDragOver, setIsDragOver] = useState(false);
   const [showAttachDropdown, setShowAttachDropdown] = useState(false);
   const [showApprovalDropdown, setShowApprovalDropdown] = useState(false);
+  const [isComposerFocused, setIsComposerFocused] = useState(false);
 
   // Skill & context state
   const [availableSkills, setAvailableSkills] = useState<SelectedSkill[]>([]);
@@ -893,6 +894,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
           className="hidden"
         />
 
+        <BorderBeam size="line" theme="dark" active={isComposerFocused} colorVariant="ocean">
         <div
           className={cn(
             'relative flex flex-col gap-1.5 rounded-2xl border border-[var(--dsw-border-l2)] bg-[var(--dsw-input-major)] p-2 shadow-[var(--dsw-shadow-lv2)] transition-colors',
@@ -901,6 +903,8 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
+          onFocus={() => setIsComposerFocused(true)}
+          onBlur={() => setIsComposerFocused(false)}
         >
           {/* ── Skill dropdown ────────────────────────────── */}
           {showSkillDropdown && (
@@ -1237,6 +1241,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
             </div>
           </div>
         </div>
+        </BorderBeam>
       </div>
     </div>
   );

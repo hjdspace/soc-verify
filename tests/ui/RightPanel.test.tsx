@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createElement } from 'react';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent } from '@testing-library/react';
 
-// Mock thinking-orbs via the visual wrapper
+// Mock thinking-orbs + border-beam via the visual wrapper
 vi.mock('@renderer/components/visual', () => ({
   ThinkingOrb: (props: { state?: string; size?: number; theme?: string }) =>
     createElement('canvas', {
@@ -12,6 +12,14 @@ vi.mock('@renderer/components/visual', () => ({
       'data-size': String(props.size ?? 64),
       'data-theme': props.theme ?? 'auto',
     }),
+  BorderBeam: ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
+    createElement('div', {
+      'data-testid': 'border-beam',
+      'data-active': String(props.active ?? true),
+      'data-size': props.size ?? 'md',
+      'data-colorvariant': props.colorVariant ?? 'colorful',
+      'data-theme': props.theme ?? 'dark',
+    }, children),
 }));
 
 // Mock tRPC
@@ -249,6 +257,74 @@ describe('RightPanel session tabs', () => {
     expect(doneTab).not.toBeNull();
     expect(within(runningTab as HTMLElement).getByLabelText('会话运行中')).toBeInTheDocument();
     expect(within(doneTab as HTMLElement).queryByLabelText('会话运行中')).not.toBeInTheDocument();
+  });
+});
+
+describe('ComposerEditor BorderBeam integration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Element.prototype.scrollIntoView = vi.fn();
+    useProjectStore.setState({
+      projects: [{
+        id: 'p1',
+        name: 'Project',
+        rootPath: '/tmp/project',
+        createdAt: Date.now(),
+        lastOpenedAt: Date.now(),
+      }],
+      currentProjectId: 'p1',
+      fileTree: null,
+      fileTreeLoading: false,
+      plugins: [],
+      selectedSubsys: null,
+      caseStatusFilter: 'all',
+    });
+    useSessionCoreStore.setState({
+      sessions: [{
+        id: 's1',
+        projectId: 'p1',
+        name: 'Test',
+        status: 'idle',
+        messages: [],
+        composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
+        createdAt: Date.now(),
+      }],
+      currentSessionId: 's1',
+    });
+  });
+
+  it('renders BorderBeam with size=line, colorVariant=ocean around the composer', () => {
+    render(<RightPanel width={320} />);
+    const beam = screen.getByTestId('border-beam');
+    expect(beam.getAttribute('data-size')).toBe('line');
+    expect(beam.getAttribute('data-colorvariant')).toBe('ocean');
+    expect(beam.getAttribute('data-theme')).toBe('dark');
+  });
+
+  it('BorderBeam is inactive (active=false) when composer is not focused', () => {
+    render(<RightPanel width={320} />);
+    const beam = screen.getByTestId('border-beam');
+    expect(beam.getAttribute('data-active')).toBe('false');
+  });
+
+  it('BorderBeam becomes active (active=true) when composer container receives focus', () => {
+    render(<RightPanel width={320} />);
+    const beam = screen.getByTestId('border-beam');
+    // The composer editor is a contentEditable div; focus it to trigger the
+    // onFocus handler on the wrapping div.
+    const editor = screen.getByRole('textbox');
+    fireEvent.focus(editor);
+    expect(beam.getAttribute('data-active')).toBe('true');
+  });
+
+  it('BorderBeam returns to inactive when composer container loses focus', () => {
+    render(<RightPanel width={320} />);
+    const beam = screen.getByTestId('border-beam');
+    const editor = screen.getByRole('textbox');
+    fireEvent.focus(editor);
+    expect(beam.getAttribute('data-active')).toBe('true');
+    fireEvent.blur(editor);
+    expect(beam.getAttribute('data-active')).toBe('false');
   });
 });
 

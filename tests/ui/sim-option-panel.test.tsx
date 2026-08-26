@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createElement } from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { SimOptionField } from '@shared/plugin-types';
 
@@ -65,6 +66,18 @@ vi.mock('@renderer/lib/trpc', () => ({
       saveSimOptionPreset: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
     },
   },
+}));
+
+// Mock BorderBeam via the visual wrapper
+vi.mock('@renderer/components/visual', () => ({
+  BorderBeam: ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
+    createElement('div', {
+      'data-testid': 'border-beam',
+      'data-active': String(props.active ?? true),
+      'data-size': props.size ?? 'md',
+      'data-colorvariant': props.colorVariant ?? 'colorful',
+      'data-theme': props.theme ?? 'dark',
+    }, children),
 }));
 
 // Import after mocks
@@ -336,6 +349,31 @@ describe('SimCommandBar 运行仿真', () => {
     render(<SimCommandBar />);
 
     expect(screen.queryByTestId('sim-option-no-case-hint')).not.toBeInTheDocument();
+  });
+});
+
+describe('SimCommandBar BorderBeam 集成', () => {
+  it('BorderBeam 使用 size=pulse-inner, colorVariant=ocean, theme=dark', () => {
+    mockSimOptions = { case: 'test_001' };
+    render(<SimCommandBar />);
+    const beam = screen.getByTestId('border-beam');
+    expect(beam.getAttribute('data-size')).toBe('pulse-inner');
+    expect(beam.getAttribute('data-colorvariant')).toBe('ocean');
+    expect(beam.getAttribute('data-theme')).toBe('dark');
+  });
+
+  it('有 CASE 且未运行时 BorderBeam active=true', () => {
+    mockSimOptions = { case: 'test_001' };
+    render(<SimCommandBar />);
+    const beam = screen.getByTestId('border-beam');
+    expect(beam.getAttribute('data-active')).toBe('true');
+  });
+
+  it('无 CASE 时 BorderBeam active=false', () => {
+    mockSimOptions = {};
+    render(<SimCommandBar />);
+    const beam = screen.getByTestId('border-beam');
+    expect(beam.getAttribute('data-active')).toBe('false');
   });
 });
 

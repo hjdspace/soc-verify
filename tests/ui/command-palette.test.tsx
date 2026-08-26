@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { createElement } from 'react';
 import type { SimulationRunRecord } from '@renderer/stores/simulation';
 import type { RegressionHistoryEntry } from '@shared/types';
 
@@ -50,6 +51,18 @@ vi.mock('@renderer/stores/project', () => ({
     (sel: (s: typeof projState) => unknown) => sel(projState),
     { getState: () => projState },
   ),
+}));
+
+// Mock BorderBeam via the visual wrapper
+vi.mock('@renderer/components/visual', () => ({
+  BorderBeam: ({ children, ...props }: { children?: React.ReactNode } & Record<string, unknown>) =>
+    createElement('div', {
+      'data-testid': 'border-beam',
+      'data-active': String(props.active ?? true),
+      'data-size': props.size ?? 'md',
+      'data-colorvariant': props.colorVariant ?? 'colorful',
+      'data-theme': props.theme ?? 'dark',
+    }, children),
 }));
 
 import { CommandPalette } from '@renderer/components/layout/CommandPalette';
@@ -315,5 +328,27 @@ describe('面板组动作', () => {
     openPalette();
     fireEvent.click(screen.getByTestId('palette-item-panel-terminal'));
     expect(termState.createTerminal).toHaveBeenCalledWith('proj-1');
+  });
+});
+
+describe('命令面板 BorderBeam 集成', () => {
+  it('面板打开时 BorderBeam active=true', () => {
+    render(<CommandPalette />);
+    openPalette();
+    const beam = screen.getByTestId('border-beam');
+    expect(beam.getAttribute('data-active')).toBe('true');
+  });
+
+  it('面板未打开时不渲染 BorderBeam', () => {
+    render(<CommandPalette />);
+    expect(screen.queryByTestId('border-beam')).toBeNull();
+  });
+
+  it('BorderBeam 使用 size=line, theme=dark', () => {
+    render(<CommandPalette />);
+    openPalette();
+    const beam = screen.getByTestId('border-beam');
+    expect(beam.getAttribute('data-size')).toBe('line');
+    expect(beam.getAttribute('data-theme')).toBe('dark');
   });
 });

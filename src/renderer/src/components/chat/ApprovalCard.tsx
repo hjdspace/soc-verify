@@ -1,6 +1,7 @@
 import { memo, useState } from 'react';
 import { ShieldAlert, ShieldCheck, ShieldX, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
+import { BorderBeam } from '@renderer/components/visual';
 import type { ApprovalRequest } from '@renderer/stores/session-types';
 
 interface ApprovalCardProps {
@@ -51,6 +52,7 @@ export const ApprovalCard = memo(function ApprovalCard({ request, onResolve }: A
   };
 
   return (
+    <BorderBeam size="pulse-outside" theme="dark" colorVariant="sunset" active={!resolved}>
     <div
       className={cn(
         'overflow-hidden rounded-xl border text-xs transition-colors',
@@ -131,5 +133,6 @@ export const ApprovalCard = memo(function ApprovalCard({ request, onResolve }: A
         </div>
       )}
     </div>
+    </BorderBeam>
   );
 });

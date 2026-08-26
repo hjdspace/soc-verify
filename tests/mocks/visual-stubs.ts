@@ -30,6 +30,8 @@ export function installVisualMocks(): void {
           'data-testid': 'border-beam',
           'data-active': String(props.active ?? true),
           'data-size': props.size ?? 'md',
+          'data-colorvariant': props.colorVariant ?? 'colorful',
+          'data-theme': props.theme ?? 'dark',
         }, children),
       Liquid: ({ children }: { children?: React.ReactNode }) =>
         h('div', { 'data-testid': 'liquid-group' }, children),

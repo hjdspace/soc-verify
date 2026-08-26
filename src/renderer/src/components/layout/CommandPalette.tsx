@@ -28,6 +28,7 @@ import { useCoverageExportStore } from '@renderer/stores/coverage';
 import { useToastStore } from '@renderer/stores/toast';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
+import { BorderBeam } from '@renderer/components/visual';
 
 /** 全局搜索结果（trpc.search.global） */
 interface SearchResult {
@@ -378,6 +379,7 @@ export function CommandPalette() {
         data-testid="command-palette"
       >
         {/* 输入区 */}
+        <BorderBeam size="line" theme="dark" active={commandPaletteOpen}>
         <div className="flex items-center gap-2.5 border-b border-border px-4 py-3">
           <Search className="size-3.5 shrink-0 text-muted-foreground/60" />
           <input
@@ -395,6 +397,7 @@ export function CommandPalette() {
             Esc
           </kbd>
         </div>
+        </BorderBeam>
 
         {/* 分组列表 */}
         <div className="max-h-[380px] overflow-y-auto p-2">
