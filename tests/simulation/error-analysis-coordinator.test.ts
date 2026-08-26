@@ -2,6 +2,20 @@ import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { ErrorType, ErrorAnalysisStatus } from '@shared/types';
 
+const { createAnalysisSession } = vi.hoisted(() => ({
+  createAnalysisSession: vi.fn(async (params: {
+    projectId: string;
+    caseName: string;
+    errorType: ErrorType;
+    cwd: string;
+    onPrompt?: (message: string) => void;
+  }) => {
+    const sid = `error_session_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    params.onPrompt?.('## Error analysis prompt');
+    return sid;
+  }),
+}));
+
 // ─── Mock project-manager (used internally for resolveProjectRoot) ───
 vi.mock('../../src/main/project/project-manager', () => ({
   projectManager: {
@@ -69,17 +83,7 @@ const { ErrorAnalysisCoordinatorImpl } = await import(
 // We mock the module so createSession returns a fake session ID and calls onPrompt.
 vi.mock('../../src/main/simulation/error-analysis-session-factory', () => ({
   ErrorAnalysisSessionFactory: class {
-    async createSession(params: {
-      projectId: string;
-      caseName: string;
-      errorType: ErrorType;
-      onPrompt?: (message: string) => void;
-      onRetry?: (name: string, sid: string) => void;
-    }): Promise<string> {
-      const sid = `error_session_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-      params.onPrompt?.('## Error analysis prompt');
-      return sid;
-    }
+    createSession = createAnalysisSession;
   },
 }));
 
@@ -141,6 +145,33 @@ describe('ErrorAnalysisCoordinator — event listeners', () => {
 });
 
 describe('ErrorAnalysisCoordinator — run completion handling', () => {
+  it('starts terminal error analysis from the project root, not the simulation cwd', async () => {
+    createAnalysisSession.mockClear();
+    const { coordinator, mockSimTerminalLinker, mockLogAnalyzer } = createCoordinatorWithMocks();
+    coordinator.registerListeners();
+
+    mockSimTerminalLinker.emit('run:completed', {
+      runId: 'run_terminal_cwd',
+      projectId: 'proj_1',
+      caseName: 'terminal_case',
+      caseId: 'terminal_case',
+      subsys: 'subsys',
+      status: 'fail',
+      cwd: '/projects/proj_1/work/terminal_case',
+      command: 'runsim -case terminal_case',
+    });
+
+    await vi.waitFor(() => expect(createAnalysisSession).toHaveBeenCalledOnce());
+    expect(createAnalysisSession).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: '/projects/proj_1',
+    }));
+    expect(mockLogAnalyzer.analyzeErrors).toHaveBeenCalledWith(
+      'terminal_case',
+      '/projects/proj_1/work/terminal_case',
+      'runsim -case terminal_case',
+    );
+  });
+
   it('ignores PASS status', async () => {
     const { coordinator, mockSimRegistry, mockLogAnalyzer } = createCoordinatorWithMocks();
     coordinator.registerListeners();
@@ -280,7 +311,7 @@ describe('ErrorAnalysisCoordinator — run completion handling', () => {
 
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(mockLogAnalyzer.analyzeErrors).toHaveBeenCalledWith('cwd_case', '/custom/project/root');
+    expect(mockLogAnalyzer.analyzeErrors).toHaveBeenCalledWith('cwd_case', '/custom/project/root', undefined);
   });
 });
 
@@ -488,7 +519,7 @@ describe('ErrorAnalysisCoordinator — triggerAnalysis (manual invocation)', () 
       cwd: '/custom/cwd/path',
     });
 
-    expect(mockLogAnalyzer.analyzeErrors).toHaveBeenCalledWith('cwd_param_case', '/custom/cwd/path');
+    expect(mockLogAnalyzer.analyzeErrors).toHaveBeenCalledWith('cwd_param_case', '/custom/cwd/path', undefined);
   });
 
   it('reuses model from existing sessions', async () => {

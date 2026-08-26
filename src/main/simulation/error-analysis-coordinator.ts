@@ -162,8 +162,9 @@ export class ErrorAnalysisCoordinatorImpl extends EventEmitter {
       return;
     }
 
-    // Resolve project root for cwd
-    const projectRoot = cwd ?? this.resolveProjectRoot(projectId);
+    // The Agent must run from the stable project root. The simulation cwd may
+    // point into $PROJ_WORK/<case> and can disappear after the run completes.
+    const projectRoot = this.resolveProjectRoot(projectId) ?? cwd;
     if (!projectRoot) {
       console.error(`[error-analysis] Cannot resolve project root for projectId=${projectId}`);
       return;
@@ -177,7 +178,7 @@ export class ErrorAnalysisCoordinatorImpl extends EventEmitter {
 
     // Step 1: Determine error type
     const { errorType, errorContext, compileLogPath, simLogPath } =
-      this.deps.logAnalyzer.analyzeErrors(caseName, projectRoot);
+      this.deps.logAnalyzer.analyzeErrors(caseName, cwd ?? projectRoot, command);
 
     console.log(`[error-analysis] errorType=${errorType}, compileLog=${compileLogPath}, simLog=${simLogPath}`);
 
@@ -340,12 +341,13 @@ export class ErrorAnalysisCoordinatorImpl extends EventEmitter {
     command?: string;
     sourceRunId?: string;
   }): Promise<string | null> {
-    const projectRoot = params.cwd ?? this.resolveProjectRoot(params.projectId);
+    const projectRoot = this.resolveProjectRoot(params.projectId) ?? params.cwd;
     if (!projectRoot) return null;
 
     const { errorType, errorContext } = this.deps.logAnalyzer.analyzeErrors(
       params.caseName,
-      projectRoot,
+      params.cwd ?? projectRoot,
+      params.command,
     );
 
     // Reuse model from existing sessions (same logic as handleRunCompletion)

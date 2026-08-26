@@ -21,6 +21,7 @@ import type {
   ExtractedSimError,
   LogAnalysisResult,
 } from '@shared/types';
+import { resolveSimArtifacts } from './sim-artifact-resolver';
 
 // ─── 常量 ──────────────────────────────────────────────────
 
@@ -713,15 +714,21 @@ export const logAnalyzer = {
    * @param cwd 工作目录
    * @returns 错误类型、格式化后的错误上下文、日志路径
    */
-  analyzeErrors(caseName: string, cwd?: string): {
+  analyzeErrors(caseName: string, cwd?: string, command?: string): {
     errorType: ErrorType;
     errorContext: string;
     compileLogPath: string;
     simLogPath: string;
   } {
-    const compileLogPath = getCompileLogPath(caseName, cwd);
-    const simLogPath = getSimulationLogPath(caseName, cwd);
-    const errorType = determineErrorType(caseName, cwd);
+    const artifacts = resolveSimArtifacts({ caseName, cwd, command });
+    const compileLogPath = artifacts.compileLogPath ?? getCompileLogPath(caseName, cwd);
+    const simLogPath = artifacts.simLogPath ?? getSimulationLogPath(caseName, cwd);
+    const errorType = existsSync(compileLogPath) && processCompileLog(compileLogPath, {
+      contextLines: DEFAULT_CONTEXT_LINES,
+      maxErrors: DEFAULT_MAX_ERRORS,
+    }).totalErrors > 0
+      ? 'compile_error'
+      : 'sim_error';
 
     let errorContext = '';
 

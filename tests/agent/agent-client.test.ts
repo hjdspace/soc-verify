@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { diagnoseSpawnFailure } from '../../src/main/agent/agent-client';
+import { AgentClient, diagnoseSpawnFailure } from '../../src/main/agent/agent-client';
 
 describe('diagnoseSpawnFailure', () => {
   it('reports executable permission problems for EACCES', async () => {
@@ -19,5 +19,17 @@ describe('diagnoseSpawnFailure', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('AgentClient.start', () => {
+  it('reports a missing working directory before spawning the runner', async () => {
+    const missingCwd = join(tmpdir(), `socverify-missing-${Date.now()}`);
+    const client = new AgentClient({
+      runnerBinaryPath: join(missingCwd, 'socverify-runner'),
+      cwd: missingCwd,
+    });
+
+    await expect(client.start()).rejects.toThrow(`Agent working directory does not exist: ${missingCwd}`);
   });
 });

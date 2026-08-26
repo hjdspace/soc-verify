@@ -118,6 +118,9 @@ export class AgentClient {
 
   async start(): Promise<void> {
     if (this.process) throw new Error('Client already started');
+    if (!existsSync(this.options.cwd)) {
+      throw new Error(`Agent working directory does not exist: ${this.options.cwd}`);
+    }
 
     // Determine spawn mode: binary (direct execution) or script (bun run)
     let spawnCmd: string;

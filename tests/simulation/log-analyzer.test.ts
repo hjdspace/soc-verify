@@ -308,6 +308,23 @@ describe('LogAnalyzer', () => {
   });
 
   describe('logAnalyzer.analyzeErrors', () => {
+    it('resolves logs from the simulation command working directory', () => {
+      const caseName = 'command_case';
+      const workDir = join(tmpDir, 'work');
+      const logDir = join(workDir, caseName, 'log');
+      mkdirSync(logDir, { recursive: true });
+      writeFileSync(join(logDir, 'irun_sim.log'), 'UVM_ERROR @ 100ns: command cwd error\n');
+
+      const result = logAnalyzer.analyzeErrors(
+        caseName,
+        join(tmpDir, 'project'),
+        `cd "${workDir}" && runsim -case ${caseName}`,
+      );
+
+      expect(result.simLogPath).toBe(join(logDir, 'irun_sim.log'));
+      expect(result.errorContext).toContain('command cwd error');
+    });
+
     it('returns compile error type and context for compile failures', () => {
       const caseName = 'analyze_compile';
       const logDir = join(tmpDir, caseName, 'log');
