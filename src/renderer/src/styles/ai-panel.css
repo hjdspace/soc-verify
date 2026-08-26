@@ -1,0 +1,518 @@
+/* ════════════════════════════════════════════════════════════
+   AI 面板设计令牌（参考 docs/prototypes/ai-panel-dsh-refresh.html，
+   色板取自 deepseek-harness DESIGN.md §1，字面值）。
+
+   --dsw-* 令牌挂在 :root（亮）与 [data-shade='dark']（暗），
+   由 theme.ts 按 ThemeMode 写入 data-shade，随全局主题联动；
+   .ap-* 组件类与 .markdown-body 排版规则全局可用。
+   .ai-panel 额外把应用语义令牌（--foreground 等）映射到 DSH 值，
+   使面板内既有 Tailwind 工具类自动呈现统一设计语言。
+   ════════════════════════════════════════════════════════════ */
+
+:root {
+  --dsw-bg-base: rgb(255, 255, 255);
+  --dsw-layer-1: rgb(255, 255, 255);
+  --dsw-layer-2: rgb(255, 255, 255);
+  --dsw-layer-3: rgb(245, 246, 247);
+  --dsw-label-primary: rgb(15, 17, 21);
+  --dsw-label-secondary: rgb(97, 102, 107);
+  --dsw-label-tertiary: rgb(129, 133, 140);
+  --dsw-label-caption: rgb(173, 178, 184);
+  --dsw-border-l1: rgba(0, 0, 0, 0.04);
+  --dsw-border-l2: rgba(0, 0, 0, 0.1);
+  --dsw-border-l3: rgba(0, 0, 0, 0.12);
+  --dsw-blue: rgb(65, 118, 230);
+  --dsw-blue-hover: rgb(103, 158, 254);
+  --dsw-blue-tertiary: rgb(228, 237, 253);
+  --dsw-error: rgb(236, 19, 19);
+  --dsw-success: rgb(34, 197, 94);
+  --dsw-warn: rgb(245, 158, 11);
+  --dsw-warn-label: rgb(221, 134, 41);
+  --dsw-warn-secondary: rgb(247, 173, 49);
+  --dsw-warn-tertiary: rgb(254, 245, 231);
+  --dsw-ds450: rgb(86, 134, 254);
+  --dsw-inline-code: rgb(235, 238, 242);
+  --dsw-code-block: rgb(249, 250, 251);
+  --dsw-code-banner: rgb(249, 250, 251);
+  --dsw-hover-bg: rgba(38, 49, 72, 0.06);
+  --dsw-active-bg: rgba(38, 49, 72, 0.1);
+  --dsw-hover-solid: rgb(241, 243, 245);
+  --dsw-bubble: rgb(237, 243, 254);
+  --dsw-input-major: rgb(255, 255, 255);
+  --dsw-tip: rgb(245, 246, 247);
+  --dsw-selector: rgb(245, 246, 247);
+  --dsw-shadow-lv2: 0 4px 12px 0 rgba(0, 0, 0, 0.02), 0 2px 8px 0 rgba(0, 0, 0, 0.04);
+  --dsw-shadow-lv3: 0 0 1px 0 rgba(0, 0, 0, 0.2), 0 0 4px 0 rgba(0, 0, 0, 0.02),
+    0 12px 32px 0 rgba(0, 0, 0, 0.08);
+  --dsw-scroll-thumb: rgba(0, 0, 0, 0.18);
+
+  /* 供面板外的 .ap-* / .markdown-body 使用者获得正确的文字基色 */
+  color: var(--dsw-label-primary);
+}
+
+[data-shade='dark'] {
+  --dsw-bg-base: rgb(21, 21, 23);
+  --dsw-layer-1: rgb(35, 35, 36);
+  --dsw-layer-2: rgb(44, 44, 46);
+  --dsw-layer-3: rgb(53, 54, 56);
+  --dsw-label-primary: rgb(249, 250, 251);
+  --dsw-label-secondary: rgb(207, 211, 214);
+  --dsw-label-tertiary: rgb(173, 178, 184);
+  --dsw-label-caption: rgb(129, 133, 140);
+  --dsw-border-l1: rgba(255, 255, 255, 0.06);
+  --dsw-border-l2: rgba(255, 255, 255, 0.12);
+  --dsw-border-l3: rgba(255, 255, 255, 0.16);
+  --dsw-blue: rgb(103, 158, 254);
+  --dsw-blue-hover: rgb(65, 118, 230);
+  --dsw-blue-tertiary: rgb(52, 65, 91);
+  --dsw-error: rgb(242, 90, 90);
+  --dsw-warn-tertiary: rgb(39, 36, 31);
+  --dsw-inline-code: rgb(44, 44, 46);
+  --dsw-code-block: rgb(27, 27, 28);
+  --dsw-code-banner: rgb(44, 44, 46);
+  --dsw-hover-bg: rgba(255, 255, 255, 0.08);
+  --dsw-active-bg: rgba(255, 255, 255, 0.14);
+  --dsw-hover-solid: rgb(53, 54, 56);
+  --dsw-bubble: rgb(44, 44, 46);
+  --dsw-input-major: rgb(44, 44, 46);
+  --dsw-tip: rgb(53, 54, 56);
+  --dsw-selector: rgb(53, 54, 56);
+  --dsw-shadow-lv2: 0 4px 12px 0 rgba(0, 0, 0, 0.28), 0 2px 8px 0 rgba(0, 0, 0, 0.22);
+  --dsw-shadow-lv3: 0 0 1px 0 rgba(0, 0, 0, 0.4), 0 12px 32px 0 rgba(0, 0, 0, 0.5);
+  --dsw-scroll-thumb: rgba(255, 255, 255, 0.22);
+}
+
+/* ── 应用语义令牌 → DSH 映射（仅面板作用域）─────────────────
+   面板内大量既有组件使用全局语义工具类（text-foreground /
+   bg-secondary / hover:bg-accent 等）。在此作用域内把这些语义变量
+   重映射为 DSH 值，使整个面板无需逐类改写即呈现统一设计语言。
+   ════════════════════════════════════════════════════════════ */
+.ai-panel {
+  --background: var(--dsw-bg-base);
+  --foreground: var(--dsw-label-primary);
+  --card: var(--dsw-layer-1);
+  --card-foreground: var(--dsw-label-primary);
+  --popover: var(--dsw-layer-3);
+  --popover-foreground: var(--dsw-label-primary);
+  --primary: var(--dsw-blue);
+  --primary-foreground: rgb(255, 255, 255);
+  --secondary: var(--dsw-tip);
+  --secondary-foreground: var(--dsw-label-primary);
+  --muted: var(--dsw-inline-code);
+  --muted-foreground: var(--dsw-label-tertiary);
+  --accent: var(--dsw-hover-bg);
+  --accent-foreground: var(--dsw-label-primary);
+  --destructive: var(--dsw-error);
+  --destructive-foreground: rgb(255, 255, 255);
+  --border: var(--dsw-border-l2);
+  --input: var(--dsw-border-l2);
+  --ring: var(--dsw-blue);
+  --sidebar: var(--dsw-bg-base);
+  --sidebar-foreground: var(--dsw-label-secondary);
+  --status-pass: var(--dsw-success);
+  --status-pass-foreground: var(--dsw-success);
+  --status-fail: var(--dsw-error);
+  --status-fail-foreground: var(--dsw-error);
+  --status-running: var(--dsw-blue);
+  --status-running-foreground: var(--dsw-blue);
+  --status-aborted: var(--dsw-warn-label);
+  --status-aborted-foreground: var(--dsw-warn-label);
+  --status-pending: var(--dsw-label-tertiary);
+  --status-pending-foreground: var(--dsw-label-tertiary);
+  --diff-add: var(--dsw-success);
+  --diff-add-foreground: var(--dsw-success);
+  --diff-del: var(--dsw-error);
+  --diff-del-foreground: var(--dsw-error);
+  --warning-foreground: var(--dsw-warn-label);
+  --violet-foreground: rgb(103, 65, 217);
+  --chart-1: var(--dsw-blue);
+
+  color: var(--dsw-label-primary);
+}
+
+html[data-shade='dark'] .ai-panel {
+  --violet-foreground: rgb(177, 151, 252);
+  --chart-1: rgb(77, 171, 247);
+  --diff-del-foreground: rgb(255, 135, 135);
+}
+
+/* 面板内滚动条：8px / thumb r4 / 轨道透明 */
+.ai-panel ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.ai-panel ::-webkit-scrollbar-thumb {
+  background: var(--dsw-scroll-thumb);
+  border-radius: 4px;
+}
+.ai-panel ::-webkit-scrollbar-track {
+  background: transparent;
+}
+.ai-panel * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--dsw-scroll-thumb) transparent;
+}
+
+/* ── 动效（DSH §12） ──────────────────────────────────────── */
+
+/* 运行扫光：300px 带，left:-300px→100%，2.6s ease-out infinite（90–100% 停顿） */
+@keyframes ap-sweep {
+  0% { left: -300px; }
+  90% { left: 100%; }
+  100% { left: calc(100% + 300px); }
+}
+.ap-sweep {
+  position: relative;
+  overflow: hidden;
+}
+.ap-sweep::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 300px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--dsw-hover-solid) 55%, transparent);
+  animation: ap-sweep 2.6s ease-out infinite;
+}
+
+/* running 像素追逐点阵：3×3 外圈八格顺时针，opacity 台阶 1/.6/.35/.15，逐格 −125ms */
+@keyframes ap-chase {
+  0% { opacity: 1; }
+  25% { opacity: 0.6; }
+  50% { opacity: 0.35; }
+  75% { opacity: 0.15; }
+  100% { opacity: 1; }
+}
+.ap-chase {
+  width: 10px;
+  height: 10px;
+  position: relative;
+  flex-shrink: 0;
+  color: var(--dsw-ds450);
+}
+.ap-chase i {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 1px;
+  background: currentColor;
+  animation: ap-chase 1s step-end infinite;
+}
+.ap-chase i:nth-child(1) { left: 0; top: 0; animation-delay: 0ms; }
+.ap-chase i:nth-child(2) { left: 3.5px; top: 0; animation-delay: -125ms; }
+.ap-chase i:nth-child(3) { left: 7px; top: 0; animation-delay: -250ms; }
+.ap-chase i:nth-child(4) { left: 7px; top: 3.5px; animation-delay: -375ms; }
+.ap-chase i:nth-child(5) { left: 7px; top: 7px; animation-delay: -500ms; }
+.ap-chase i:nth-child(6) { left: 3.5px; top: 7px; animation-delay: -625ms; }
+.ap-chase i:nth-child(7) { left: 0; top: 7px; animation-delay: -750ms; }
+.ap-chase i:nth-child(8) { left: 0; top: 3.5px; animation-delay: -875ms; }
+
+/* 品牌渐变流光文字（进行中指示） */
+@keyframes ap-shimmer {
+  to { background-position: -250% 0; }
+}
+.ap-shimmer {
+  font-weight: 500;
+  background: linear-gradient(
+    90deg,
+    var(--dsw-label-secondary) 30%,
+    var(--dsw-blue) 50%,
+    var(--dsw-label-secondary) 70%
+  );
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: ap-shimmer 1.8s linear infinite;
+}
+
+/* 流式光标 */
+@keyframes ap-blink {
+  50% { opacity: 0; }
+}
+.ap-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 12px;
+  margin-left: 2px;
+  vertical-align: -2px;
+  background: var(--dsw-label-primary);
+  animation: ap-blink 1s step-end infinite;
+}
+
+/* todo 进行中环 */
+@keyframes ap-rotate {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-panel *,
+  .ai-panel *::before,
+  .ai-panel *::after,
+  .ap-sweep::after,
+  .ap-chase i,
+  .ap-shimmer,
+  .ap-cursor {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ── StateDot：10px 光环（currentColor @10%）+ 6px 实芯 ─────── */
+.ap-sdot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ap-sdot::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.ap-sdot[data-status='ok'] {
+  color: var(--dsw-success);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-success) 10%, transparent);
+}
+.ap-sdot[data-status='error'] {
+  color: var(--dsw-error);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-error) 10%, transparent);
+}
+.ap-sdot[data-status='warn'] {
+  color: var(--dsw-warn);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-warn) 10%, transparent);
+}
+
+/* ── 内容卡通用几何：radius 10 + code-block 面 + banner ────── */
+.ap-card {
+  border: 1px solid var(--dsw-border-l1);
+  border-radius: 10px;
+  background: var(--dsw-code-block);
+  overflow: hidden;
+}
+.ap-card > :first-child {
+  border-top-left-radius: 9px;
+  border-top-right-radius: 9px;
+}
+.ap-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--dsw-code-banner);
+  border-bottom: 1px solid var(--dsw-border-l1);
+  font-family: var(--app-font-family-code);
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--dsw-label-caption);
+}
+.ap-banner-min {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--dsw-border-l1);
+  background: var(--dsw-code-banner);
+  font-family: var(--app-font-family-code);
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--dsw-label-caption);
+}
+
+/* Diff 行：完整红绿两侧文本着色（无底色无行号，DSH §6.4） */
+.ap-diff-del { color: var(--dsw-error); }
+.ap-diff-add { color: var(--dsw-success); }
+.ap-diff-hunk {
+  color: var(--dsw-label-caption);
+  text-align: center;
+}
+
+/* IN/OUT 兜底卡：粘性标签分区（DSH §6.1） */
+.ap-inout {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  font-family: var(--app-font-family-code);
+  font-size: 10.5px;
+  line-height: 15px;
+}
+.ap-io-label {
+  padding: 8px 6px 0 10px;
+  color: var(--dsw-label-caption);
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  user-select: none;
+}
+.ap-io-body {
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 150px;
+  overflow-y: auto;
+  color: var(--dsw-label-secondary);
+}
+.ap-io-body[data-err='true'] {
+  color: var(--dsw-error);
+}
+
+/* Read 行号槽：右对齐、禁选中 */
+.ap-rn {
+  flex-shrink: 0;
+  text-align: right;
+  padding-right: 8px;
+  color: var(--dsw-label-caption);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Grep 结果行号 */
+.ap-gln {
+  color: var(--dsw-label-caption);
+  user-select: none;
+}
+
+/* 行内 code（DSH §8.2） */
+.markdown-body .ap-icode,
+.ap-icode {
+  background: var(--dsw-inline-code);
+  border-radius: 4px;
+  padding: 0 4px;
+  font-family: var(--app-font-family-code);
+  font-size: 0.9em;
+}
+
+/* host URI / 文件引用 chip 按钮 */
+.ap-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 4px;
+  background: var(--dsw-blue-tertiary);
+  padding: 0 4px;
+  font-size: 10px;
+  color: var(--dsw-blue);
+}
+.ap-chip:hover { filter: brightness(0.96); }
+
+/* 代码块复制按钮：复制→已复制 */
+.ap-copybtn {
+  border: none;
+  background: transparent;
+  font-size: 10px;
+  color: var(--dsw-label-tertiary);
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.ap-copybtn:hover {
+  color: var(--dsw-label-primary);
+  background: var(--dsw-hover-bg);
+}
+
+/* 表格横向滚动容器 */
+.ap-tblwrap {
+  margin: 8px 0;
+  overflow-x: auto;
+}
+
+/* ── 助手 Markdown 排版（DSH §8 缩放至侧栏：12/20 基准）────
+   全局生效：MarkdownRenderer 也用于设置页技能预览（面板外），
+   令牌经 :root/[data-shade] 取到正确的亮暗值。 */
+.markdown-body {
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--dsw-label-primary);
+  overflow-wrap: anywhere;
+}
+.markdown-body strong {
+  font-weight: 600;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  color: var(--dsw-label-primary);
+  line-height: 1.4;
+}
+.markdown-body h1 { font-size: 14px; font-weight: 700; margin: 14px 0 8px; }
+.markdown-body h2 { font-size: 13px; font-weight: 700; margin: 13px 0 7px; }
+.markdown-body h3 { font-size: 12px; font-weight: 600; margin: 12px 0 6px; }
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 { font-size: 12px; font-weight: 600; margin: 12px 0 6px; }
+.markdown-body p {
+  margin: 8px 0;
+  line-height: 20px;
+}
+.markdown-body>*:first-child { margin-top: 0; }
+.markdown-body>*:last-child { margin-bottom: 0; }
+.markdown-body ul,
+.markdown-body ol {
+  margin: 8px 0;
+  padding-left: 16px;
+}
+.markdown-body li+li { margin-top: 3px; }
+.markdown-body li::marker { color: var(--dsw-label-secondary); }
+.markdown-body blockquote {
+  border-left: 2px solid var(--dsw-label-caption);
+  padding-left: 10px;
+  margin: 10px 0 0;
+  color: var(--dsw-label-secondary);
+  background: transparent;
+}
+.markdown-body hr {
+  border: none;
+  height: 1px;
+  background: var(--dsw-border-l2);
+  margin: 14px 0;
+}
+.markdown-body a {
+  color: var(--dsw-blue);
+  text-decoration: none;
+}
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+.markdown-body table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 11px;
+  line-height: 17px;
+}
+.markdown-body th {
+  border-bottom: 1px solid var(--dsw-border-l3);
+  font-weight: 500;
+  text-align: left;
+  padding: 5px 10px;
+  background: transparent;
+  color: var(--dsw-label-primary);
+}
+.markdown-body td {
+  border-bottom: 1px solid var(--dsw-border-l2);
+  padding: 5px 10px;
+  color: var(--dsw-label-primary);
+}
+.markdown-body th:first-child,
+.markdown-body td:first-child { padding-left: 2px; }
+.markdown-body th:last-child,
+.markdown-body td:last-child { padding-right: 2px; }
+
+/* 树视图 / 无语言围栏 pre（MarkdownRenderer 的 tree-view 检测输出） */
+.markdown-body pre.ap-treeview {
+  margin: 8px 0;
+  overflow-x: auto;
+  border: 1px solid var(--dsw-border-l1);
+  border-radius: 10px;
+  background: var(--dsw-code-block);
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 16px;
+  font-family: var(--app-font-family-code);
+  color: var(--dsw-label-primary);
+}
