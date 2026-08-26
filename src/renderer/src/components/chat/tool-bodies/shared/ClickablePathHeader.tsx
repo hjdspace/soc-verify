@@ -18,7 +18,7 @@ export function ClickablePathHeader({ filePath, clickable = true }: { filePath: 
   if (!clickable) {
     return (
       <div
-        className="border-b border-border/30 bg-background/50 px-2.5 py-0.5 text-[10px] text-muted-foreground/60"
+        className="ap-banner-min truncate"
         title={filePath}
       >
         {filePath}
@@ -29,7 +29,7 @@ export function ClickablePathHeader({ filePath, clickable = true }: { filePath: 
   return (
     <div
       onClick={handleClick}
-      className="cursor-pointer border-b border-border/30 bg-background/50 px-2.5 py-0.5 text-[10px] text-muted-foreground/60 hover:underline"
+      className="ap-banner-min cursor-pointer truncate hover:text-foreground hover:underline"
       title={`点击打开文件: ${filePath}`}
     >
       {filePath}
