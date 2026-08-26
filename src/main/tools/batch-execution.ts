@@ -7,9 +7,10 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { readFileSync, existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { basename } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { resolveSimArtifacts, resolveSimBaseDir } from '../simulation/sim-artifact-resolver';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -296,15 +297,28 @@ export class BatchExecutor {
 
 // ── Log status checking ────────────────────────────────────────────
 
-/** Check simulation status from log content. */
+/**
+ * Check simulation status from log directory + log content.
+ *
+ * Priority:
+ *   1. sprd_log_pass.log / sprd_log_fail.log marker files in the log directory
+ *   2. Keyword patterns in the last 100 lines of the log file content
+ *   3. 'unknown' (caller should NOT assume pass from exit code 0)
+ */
 export function checkSimStatusFromLog(logPath: string): TaskStatus {
+  // 1. Check marker files in log directory (sprd_log_pass.log / sprd_log_fail.log)
+  const logDir = dirname(logPath);
+  const passLogPath = join(logDir, 'sprd_log_pass.log');
+  const failLogPath = join(logDir, 'sprd_log_fail.log');
+
+  if (existsSync(passLogPath)) return 'success';
+  if (existsSync(failLogPath)) return 'failed';
+
+  // 2. Check log content for pass/fail keyword patterns
   if (!existsSync(logPath)) return 'unknown';
 
   try {
-    // Use synchronous read for status check (called after process exits)
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const fs = require('node:fs');
-    const content = fs.readFileSync(logPath, 'utf-8');
+    const content = readFileSync(logPath, 'utf-8');
     const lastLines = content.split('\n').slice(-100).join('\n');
 
     const passPatterns = ['SPRD_PASSED', 'TEST PASSED', 'PASSED', 'Simulation completed', 'SUCCESS', 'FINISH'];
@@ -323,31 +337,19 @@ export function checkSimStatusFromLog(logPath: string): TaskStatus {
   }
 }
 
-/** Get the likely log path from a command and case name. */
+/**
+ * Get the likely simulation log path from a command and case name.
+ *
+ * Uses SimArtifactResolver to correctly resolve the base directory:
+ * command `cd` prefix → $PROJ_WORK → cwd (NOT cwd directly).
+ * The cwd is the verification environment directory, while simulation
+ * artifacts live under $PROJ_WORK/<case_dir>/log/.
+ */
 export function getLogPathFromCommand(command: string, caseName: string): string {
-  const parts = command.split(/\s+/);
-  let rundir: string | null = null;
+  const artifacts = resolveSimArtifacts({ command, caseName });
+  if (artifacts.simLogPath) return artifacts.simLogPath;
 
-  for (let i = 0; i < parts.length; i++) {
-    if (parts[i] === '-rundir' && i + 1 < parts.length) {
-      rundir = parts[i + 1];
-      break;
-    }
-  }
-
-  const dir = rundir ?? caseName;
-  const candidates = [
-    `${dir}/log/irun_sim.log`,
-    `${dir}/log/vcs_sim.log`,
-    `${dir}/log/sim.log`,
-    `${caseName}/log/irun_sim.log`,
-    `${caseName}/log/vcs_sim.log`,
-    `${caseName}/log/sim.log`,
-  ];
-
-  for (const p of candidates) {
-    if (existsSync(p)) return p;
-  }
-
-  return `${dir}/log/irun_sim.log`;
+  // Fallback: construct a default path using the resolved base directory
+  const base = resolveSimBaseDir({ command, caseName });
+  return join(base, caseName, 'log', 'irun_sim.log');
 }
