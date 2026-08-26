@@ -82,7 +82,6 @@ vi.mock('@renderer/lib/trpc', () => ({
       runInTerminal: { mutate: vi.fn().mockResolvedValue({ runId: 'run-1', terminalId: 'term-1', command: '', cwd: '' }) },
       abortTerminalRun: { mutate: vi.fn().mockResolvedValue(undefined) },
       abort: { mutate: vi.fn().mockResolvedValue(undefined) },
-      pickRegrFile: { mutate: vi.fn().mockResolvedValue({ canceled: true, path: null }) },
     },
   },
 }));
