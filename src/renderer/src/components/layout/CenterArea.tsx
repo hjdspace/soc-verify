@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, GitCompare, GitGraph, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine, Puzzle, FileType, Database as DatabaseIcon, Workflow, XCircle, BookOpen } from 'lucide-react';
+import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, GitCompare, GitGraph, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine, Puzzle, FileType, Database as DatabaseIcon, Workflow, XCircle, BookOpen, RotateCw } from 'lucide-react';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
@@ -51,6 +51,7 @@ export function CenterArea() {
   );
   const activeRuns = useSimulationStore((s) => s.activeRuns);
   const abortSimulation = useSimulationStore((s) => s.abortSimulation);
+  const rerunRun = useSimulationStore((s) => s.rerunRun);
 
   const terminalTabs = useTerminalStore((s) => s.tabs);
   const createTerminal = useTerminalStore((s) => s.createTerminal);
@@ -537,14 +538,26 @@ export function CenterArea() {
                         >
                           中止
                         </button>
-                      ) : run.compileErrors && run.compileErrors.length > 0 ? (
-                        <button
-                          onClick={() => openSimErrors(run.runId)}
-                          className="rounded bg-status-fail/10 px-1.5 py-0.5 text-[10px] text-status-fail-foreground hover:bg-status-fail/20"
-                        >
-                          查看错误
-                        </button>
-                      ) : null}
+                      ) : (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => void rerunRun(run)}
+                            className="flex items-center rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary transition-colors hover:bg-primary/20"
+                            title="重新仿真"
+                            data-testid={`workspace-rerun-${run.runId}`}
+                          >
+                            <RotateCw className="size-2.5" />
+                          </button>
+                          {run.compileErrors && run.compileErrors.length > 0 && (
+                            <button
+                              onClick={() => openSimErrors(run.runId)}
+                              className="rounded bg-status-fail/10 px-1.5 py-0.5 text-[10px] text-status-fail-foreground hover:bg-status-fail/20"
+                            >
+                              查看错误
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
