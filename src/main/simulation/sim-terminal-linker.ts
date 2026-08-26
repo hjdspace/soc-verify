@@ -24,6 +24,8 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { terminalManager } from '../terminal/terminal-manager';
+import { checkSimulationStatus } from './log-analyzer';
+import { resolveSimArtifacts, type SimArtifactInput } from './sim-artifact-resolver';
 import type { SimulationRunOptions } from '@shared/plugin-types';
 import type { SimulationStatus } from '@shared/types';
 
@@ -146,6 +148,33 @@ function hasSimulationOutput(output: string): boolean {
   return simKeywords.some((kw) => lowerOutput.includes(kw));
 }
 
+/**
+ * Determine simulation status using checkSimulationStatus (sprd_log_pass.log / sprd_log_fail.log).
+ *
+ * The log directory is resolved via SimArtifactResolver, which uses the
+ * correct base directory: command `cd` prefix → $PROJ_WORK → cwd.
+ * The cwd alone is NOT reliable — it is the verification environment
+ * directory, while simulation artifacts live under $PROJ_WORK/<case_dir>/.
+ *
+ * Falls back to null when status is 'On-Going' (no marker files found).
+ *
+ * @returns 'pass' | 'fail' | null
+ */
+function getSimStatusFromLogDir(run: TerminalSimRun): 'pass' | 'fail' | null {
+  const input: SimArtifactInput = {
+    command: run.command,
+    cwd: run.cwd,
+    caseName: run.caseName,
+  };
+  const artifacts = resolveSimArtifacts(input);
+  if (artifacts.simLogPath) {
+    const status = checkSimulationStatus(artifacts.simLogPath);
+    if (status === 'PASS') return 'pass';
+    if (status === 'FAIL') return 'fail';
+  }
+  return null;
+}
+
 class SimTerminalLinkerImpl extends EventEmitter {
   private runs = new Map<string, TerminalSimRun>(); // runId → run
   private terminalToRun = new Map<string, string>(); // terminalId → runId
@@ -245,8 +274,23 @@ class SimTerminalLinkerImpl extends EventEmitter {
         parseInt(value, 10);
 
       run.exitCode = exitCode;
-      run.status = exitCode === 0 ? 'pass' : 'fail';
       run.endTime = Date.now();
+
+      // 优先使用 checkSimulationStatus 检查 sprd_log_pass.log / sprd_log_fail.log
+      const simStatus = getSimStatusFromLogDir(run);
+      if (simStatus) {
+        run.status = simStatus;
+      } else {
+        // 标志文件不存在，回退到输出关键词匹配
+        const output = terminalManager.getOutputContent(terminalId);
+        const detectedStatus = detectSimStatusFromOutput(output);
+        if (detectedStatus) {
+          run.status = detectedStatus;
+        } else {
+          // 无法判定：退出码 0 → error（避免误判 PASS），非 0 → fail
+          run.status = exitCode === 0 ? 'error' : 'fail';
+        }
+      }
 
       this.emit('run:completed', run);
       this.dataBuffers.delete(terminalId);
@@ -293,32 +337,51 @@ class SimTerminalLinkerImpl extends EventEmitter {
     run.endTime = Date.now();
 
     if (run.logMode) {
-      // Log-mode: scan output for pass/fail patterns
-      const output = terminalManager.getOutputContent(terminalId);
-      const detectedStatus = detectSimStatusFromOutput(output);
-
-      if (detectedStatus === 'pass') {
+      // Log-mode: 优先使用 checkSimulationStatus 检查标志文件
+      const simStatus = getSimStatusFromLogDir(run);
+      if (simStatus === 'pass') {
         run.status = 'pass';
-      } else if (detectedStatus === 'fail') {
+      } else if (simStatus === 'fail') {
         run.status = 'fail';
       } else {
-        // No pattern found — fall back to exit code, but be conservative.
-        // If exit code is 0 but no simulation output was seen, the process
-        // likely exited before the simulation started (e.g., LSF submission).
-        // In that case, mark as 'unknown' to avoid false PASS.
-        if (exitCode === 0 && !hasSimulationOutput(output)) {
-          console.warn(
-            `[simTerminalLinker] Process exited with code 0 but no simulation output detected. ` +
-            `Marking as 'error' to avoid false PASS. Command: ${run.command.slice(0, 80)}`
-          );
-          run.status = 'error';
+        // On-Going：标志文件不存在，扫描输出内容做关键词匹配
+        const output = terminalManager.getOutputContent(terminalId);
+        const detectedStatus = detectSimStatusFromOutput(output);
+
+        if (detectedStatus === 'pass') {
+          run.status = 'pass';
+        } else if (detectedStatus === 'fail') {
+          run.status = 'fail';
         } else {
-          run.status = exitCode === 0 ? 'pass' : 'fail';
+          // 关键词也未匹配：退出码 0 但无仿真输出 → error（避免误判 PASS）
+          if (exitCode === 0 && !hasSimulationOutput(output)) {
+            console.warn(
+              `[simTerminalLinker] Process exited with code 0 but no simulation output detected. ` +
+              `Marking as 'error' to avoid false PASS. Command: ${run.command.slice(0, 80)}`
+            );
+            run.status = 'error';
+          } else {
+            // 退出码 0 但有仿真输出（无法确认 pass），标为 error 以避免误判
+            // 退出码非 0 → fail
+            run.status = exitCode === 0 ? 'error' : 'fail';
+          }
         }
       }
     } else {
-      // PTY mode: use exit code directly (marker scanning is the primary mechanism)
-      run.status = exitCode === 0 ? 'pass' : 'fail';
+      // PTY mode fallback: 优先检查标志文件，其次输出关键词，最后退出码
+      const simStatus = getSimStatusFromLogDir(run);
+      if (simStatus) {
+        run.status = simStatus;
+      } else {
+        const output = terminalManager.getOutputContent(terminalId);
+        const detectedStatus = detectSimStatusFromOutput(output);
+        if (detectedStatus) {
+          run.status = detectedStatus;
+        } else {
+          // 无法判定：退出码 0 → error，非 0 → fail
+          run.status = exitCode === 0 ? 'error' : 'fail';
+        }
+      }
     }
 
     this.emit('run:completed', run);
