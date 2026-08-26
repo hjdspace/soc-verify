@@ -66,9 +66,10 @@ export const batchExecutionRouter = t.router({
             const task = input.tasks.find((t) => t.rowIndex === rowIndex);
             const logPath = task ? getLogPathFromCommand(task.command, task.caseName) : '';
             const simStatus = logPath ? checkSimStatusFromLog(logPath) : 'unknown' as const;
+            // 退出码 0 不等于仿真 PASS，只有日志/标志文件明确判定才标 success/failed
             const status = simStatus === 'success' ? 'success' as const
               : simStatus === 'failed' ? 'failed' as const
-              : exitCode === 0 ? 'success' as const
+              : exitCode === 0 ? 'unknown' as const
               : 'failed' as const;
             results.push({
               rowIndex,
