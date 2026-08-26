@@ -1,9 +1,9 @@
 /**
- * runsim 命令生成工具（前端预览用）+ 命令解析和修改工具
+ * runsim 命令生成工具（前端预览用）+ 命令修改工具
  *
  * 此模块包含两部分：
  * 1. 命令生成（generateRunsimCommand）— 复刻插件逻辑，用于 SimOptionPanel 预览
- * 2. 命令解析和修改（parseRunsimCommand, modifyCommandOptions 等）— 用于 SimControlToolbar
+ * 2. 命令修改（modifyCommandOptions 等）— 用于 SimControlToolbar
  *
  * 第二部分参考 Python GUI 的 `utils/command_generator.py` CommandParser 类。
  */
@@ -28,32 +28,18 @@ export function generateRunsimCommand(options: Record<string, unknown>): string 
   const caseName =
     (typeof options.case === 'string' ? options.case : '').trim() || '';
 
-  if (!options.regr_file) {
-    // ── 基础参数模式 ──
-    if (options.base) cmd.push('-base', String(options.base));
-    if (options.block) cmd.push('-block', String(options.block));
-    if (caseName) cmd.push('-case', caseName);
+  // ── 基础参数 ──
+  if (options.base) cmd.push('-base', String(options.base));
+  if (options.block) cmd.push('-block', String(options.block));
+  if (caseName) cmd.push('-case', caseName);
 
-    // rundir（支持 {case_name} 占位符替换）
-    let rundir = (typeof options.rundir === 'string' ? options.rundir : '').trim();
-    if (rundir) {
-      if (rundir.includes('{case_name}') && caseName) {
-        rundir = rundir.replace(/\{case_name\}/g, caseName);
-      }
-      cmd.push('-rundir', rundir);
+  // rundir（支持 {case_name} 占位符替换）
+  let rundir = (typeof options.rundir === 'string' ? options.rundir : '').trim();
+  if (rundir) {
+    if (rundir.includes('{case_name}') && caseName) {
+      rundir = rundir.replace(/\{case_name\}/g, caseName);
     }
-  } else {
-    // ── 回归测试模式 ──
-    cmd.push('-regr', String(options.regr_file));
-    if (options.fm) cmd.push('-fm');
-    const regrWork = (typeof options.regr_work === 'string' ? options.regr_work : '').trim();
-    if (regrWork) cmd.push('-regr_work', regrWork);
-    const tag = (typeof options.tag === 'string' ? options.tag : '').trim();
-    if (tag) cmd.push('-tag', tag);
-    const nt = (typeof options.nt === 'string' ? options.nt : '').trim();
-    if (nt) cmd.push('-nt', nt);
-    const dashboard = (typeof options.dashboard === 'string' ? options.dashboard : '').trim();
-    if (dashboard) cmd.push('-m', dashboard);
+    cmd.push('-rundir', rundir);
   }
 
   // ── 波形配置 ──
@@ -126,165 +112,8 @@ export function generateRunsimCommand(options: Record<string, unknown>): string 
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Part 1b: 命令解析（从粘贴文本中提取选项）
+// Part 1b: 命令预览 token 拆分
 // ═══════════════════════════════════════════════════════════════════════
-
-/**
- * 预处理命令文本，提取 runsim 命令部分并清理 HTML 标签和特殊字符。
- */
-function preprocessCommandText(rawText: string): string {
-  if (!rawText.trim()) return '';
-
-  let text = rawText.replace(/<[^>]+>/g, ' ');
-  text = text.split(/\s+/).join(' ').trim();
-
-  const runsimIndex = text.indexOf('runsim ');
-  if (runsimIndex !== -1) {
-    text = text.slice(runsimIndex).trim();
-  } else if (text.startsWith('runsim')) {
-    return text.trim();
-  } else if (text.startsWith('-')) {
-    return `runsim ${text}`;
-  } else {
-    return '';
-  }
-
-  text = text.replace(/\s+/g, ' ');
-  text = text.replace(/[^\w\s\-=/.,:;_+*()[\]{}|&$#@!~`"'\\]/g, '');
-
-  return text.trim();
-}
-
-/** Boolean flag 集合（无参数值，出现即设为 true） */
-const BOOLEAN_FLAGS = new Set([
-  'cl', 'dump_sva', 'cov', 'upf', 'dump_mem', 'fm', 'R', 'C',
-]);
-
-/** 带参数值的 flag → option key 映射 */
-const VALUE_FLAG_TO_KEY: Record<string, string> = {
-  base: 'base',
-  block: 'block',
-  case: 'case',
-  rundir: 'rundir',
-  bq: 'bq',
-  seed: 'seed',
-  wdd: 'wdd',
-  simarg: 'simarg',
-  cfg_def: 'cfg_def',
-  post: 'post',
-  regr: 'regr_file',
-  regr_work: 'regr_work',
-  tag: 'tag',
-  nt: 'nt',
-  m: 'dashboard',
-};
-
-/** Boolean flag → option key 映射 */
-const BOOL_FLAG_TO_KEY: Record<string, string> = {
-  cl: 'cl',
-  dump_sva: 'dump_sva',
-  cov: 'cov',
-  upf: 'upf',
-  dump_mem: 'dump_mem',
-  fm: 'fm',
-  R: 'sim_only',
-  C: 'compile_only',
-  fsdb: 'fsdb',
-  vwdb: 'vwdb',
-};
-
-/**
- * 解析 runsim 命令文本，提取选项键值对。
- */
-export function parseRunsimCommand(rawText: string): Record<string, unknown> {
-  const command = preprocessCommandText(rawText);
-  if (!command) return {};
-
-  const parts: string[] = command.match(/"[^"]*"|\S+/g) ?? [];
-  if (parts.length === 0) return {};
-
-  const result: Record<string, unknown> = {};
-
-  let i = 1;
-  while (i < parts.length) {
-    const part = parts[i];
-    if (!part.startsWith('-')) {
-      i++;
-      continue;
-    }
-
-    const option = part.slice(1);
-
-    if (option === 'fsdb' || option === 'vwdb') {
-      result[option] = true;
-      if (i + 1 < parts.length && !parts[i + 1].startsWith('-')) {
-        const next = parts[i + 1];
-        if (!next.toLowerCase().endsWith('.tcl')) {
-          result.dump_level = next;
-        }
-        i += 2;
-      } else {
-        i++;
-      }
-      continue;
-    }
-
-    if (BOOLEAN_FLAGS.has(option)) {
-      const key = BOOL_FLAG_TO_KEY[option];
-      if (key) result[key] = true;
-      i++;
-      continue;
-    }
-
-    const valueKey = VALUE_FLAG_TO_KEY[option];
-    if (valueKey === undefined) {
-      i++;
-      continue;
-    }
-
-    if (i + 1 < parts.length) {
-      let value = parts[i + 1];
-
-      if (value.startsWith('"') && !value.endsWith('"')) {
-        value = value.slice(1);
-        let j = i + 2;
-        while (j < parts.length && !parts[j].endsWith('"')) {
-          value += ' ' + parts[j];
-          j++;
-        }
-        if (j < parts.length) {
-          value += ' ' + parts[j].slice(0, -1);
-          i = j + 1;
-        } else {
-          i = j;
-        }
-      } else if (value.startsWith('"') && value.endsWith('"') && value.length > 1) {
-        value = value.slice(1, -1);
-        i += 2;
-      } else {
-        i += 2;
-      }
-
-      if (option === 'cfg_def') {
-        let j = i;
-        while (j < parts.length && !parts[j].startsWith('-')) {
-          value += ' ' + parts[j];
-          j++;
-        }
-        if (j > i) {
-          value = value.trim();
-          i = j;
-        }
-      }
-
-      result[valueKey] = value;
-    } else {
-      i++;
-    }
-  }
-
-  return result;
-}
 
 /**
  * 命令预览 token 类型
