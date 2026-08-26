@@ -7,7 +7,17 @@
  */
 import { useState, useEffect, useCallback, type ReactNode, type ComponentType } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { Loader2, ChevronDown } from 'lucide-react';
+import {
+  Bot,
+  ChevronDown,
+  CircleQuestionMark,
+  Database,
+  FileText,
+  Puzzle,
+  Search,
+  Sparkle,
+  Terminal,
+} from 'lucide-react';
 import { openReviewAwareFile } from '@renderer/stores/diff-review';
 import { useSessionCoreStore } from '@renderer/stores/session-core';
 import type { ChatMessage, SubagentActivity } from '@renderer/stores/session-types';
@@ -18,6 +28,7 @@ import {
   isMCPTool,
   parseMCPToolName,
   extractResultText,
+  isDirectoryToolResult,
   argStr,
   argVal,
   shortenPath,
@@ -257,7 +268,7 @@ function mcpSummary(message: ChatMessage): ReactNode {
 // ── Body wrappers (adapt old props to unified ToolBodyProps) ──
 
 function ReadBodyWrap({ message }: ToolBodyProps) {
-  return <ReadBody args={message.toolArgs} resultText={extractResultText(message.toolResult)} />;
+  return <ReadBody args={message.toolArgs} resultText={extractResultText(message.toolResult)} toolResult={message.toolResult} />;
 }
 function WriteBodyWrap({ message }: ToolBodyProps) {
   return <WriteBody args={message.toolArgs} resultText={extractResultText(message.toolResult)} />;
@@ -372,6 +383,18 @@ const FILE_TOOLS = new Set(['read', 'read_file', 'write', 'write_file', 'edit', 
 /** Module-level empty array: non-task tools return stable reference, avoid re-renders */
 const NO_SUBAGENTS: SubagentActivity[] = [];
 
+/** 工具类别 → 折叠行前导图标（DSH §6.1：16px 槽位内 14px 变体图标） */
+const CATEGORY_ICON: Record<string, ComponentType<{ className?: string }>> = {
+  file: FileText,
+  exec: Terminal,
+  search: Search,
+  agent: Bot,
+  interactive: CircleQuestionMark,
+  host: Database,
+  mcp: Puzzle,
+  other: Sparkle,
+};
+
 // ── ToolCard ───────────────────────────────────────────
 
 export function ToolCard({ message }: { message: ChatMessage }) {
@@ -395,9 +418,9 @@ export function ToolCard({ message }: { message: ChatMessage }) {
   const toolName = message.toolName ?? '';
   const isFileTool = !isExecuting && FILE_TOOLS.has(toolName);
   const filePath = isFileTool ? extractEditFilePath(message.toolArgs, resultText) : '';
-  // 当 AI 读取的是一个目录时（EISDIR 错误），路径不应可点击——
-  // 点击会尝试在编辑器中打开目录，导致同样的 EISDIR 报错。
-  const isDirError = !isExecuting && /EISDIR/i.test(resultText);
+  // 当 AI 读取的是一个目录时，路径不应可点击——
+  // omp read 读目录成功返回目录树（details.isDirectory），点击会在编辑器中打开目录报 EISDIR。
+  const isDirError = !isExecuting && isDirectoryToolResult(message.toolResult);
   const isClickablePath = isFileTool && filePath && !isDirError;
 
   const handlePathClick = useCallback((e: React.MouseEvent) => {
@@ -436,60 +459,83 @@ export function ToolCard({ message }: { message: ChatMessage }) {
   const hasWarning = !isError && !isExecuting && hasResultWarning(resultText);
   const diffStats = !isError && !isExecuting ? getFileDiffStats(message) : null;
 
-  const statusDotClass = isExecuting
-    ? ''
+  // 状态机（DSH §6.1）：running=追逐点阵+扫光 / error=红点+红摘要 / warn=琥珀点 / ok=变体图标
+  const status: 'running' | 'error' | 'warn' | 'ok' = isExecuting
+    ? 'running'
     : isError
-      ? 'bg-status-fail-foreground'
+      ? 'error'
       : hasWarning
-        ? 'bg-warning-foreground'
-        : 'bg-status-pass-foreground';
+        ? 'warn'
+        : 'ok';
+
+  const Icon = CATEGORY_ICON[meta.category] ?? Sparkle;
 
   return (
     <div
       data-testid="tool-card"
       className={cn(
-        'overflow-hidden rounded-md border border-border/60 bg-secondary/20 font-mono',
-        expanded && 'border-border',
+        'overflow-hidden rounded-[10px] border border-[var(--dsw-border-l1)] bg-[var(--dsw-code-block)]',
+        expanded && 'border-[var(--dsw-border-l2)]',
       )}
     >
       <div
-        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left transition-colors hover:bg-secondary/40"
-      >
-        {isExecuting ? (
-          <Loader2 className="h-2.5 w-2.5 shrink-0 animate-spin text-primary" />
-        ) : (
-          <span className={cn('h-2 w-2 shrink-0 rounded-full', statusDotClass)} />
+        onClick={() => setExpanded((v) => !v)}
+        className={cn(
+          'flex min-h-[26px] w-full cursor-pointer select-none items-center gap-1.5 px-2 py-1 text-left transition-colors hover:bg-[var(--dsw-hover-bg)]',
+          isExecuting && 'ap-sweep',
         )}
-        <span className={cn('shrink-0 text-[11px] font-semibold', meta.color)}>
-          {meta.label}
-        </span>
+      >
+        {/* 前导格 */}
+        {status === 'running' && (
+          <span className="flex h-4 w-4 shrink-0 items-center justify-center" data-status="running">
+            <span className="ap-chase" aria-hidden>
+              <i /><i /><i /><i /><i /><i /><i /><i />
+            </span>
+          </span>
+        )}
+        {(status === 'error' || status === 'warn') && (
+          <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+            <span className="ap-sdot" data-status={status} />
+          </span>
+        )}
+        {status === 'ok' && (
+          <span className="flex h-4 w-4 shrink-0 items-center justify-center" data-status="ok">
+            <Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
+          </span>
+        )}
+
+        {/* 标题 · 分隔点 · 摘要 */}
+        <span className="shrink-0 text-[11px] font-medium text-muted-foreground">{meta.label}</span>
+        <span className="h-0.5 w-0.5 shrink-0 rounded-full bg-[var(--dsw-label-caption)]" />
         {isClickablePath ? (
           <span
             onClick={handlePathClick}
-            className="flex-1 min-w-0 truncate text-[11px] cursor-pointer text-status-running-foreground hover:underline"
+            className="min-w-0 flex-1 cursor-pointer truncate text-[11px] text-status-running-foreground underline decoration-[var(--dsw-border-l3)] underline-offset-2 hover:decoration-current"
             title={`点击打开文件: ${filePath}`}
           >
             {summary}
           </span>
         ) : (
-          <span className="flex-1 min-w-0 truncate text-[11px] text-muted-foreground">
+          <span className={cn('min-w-0 flex-1 truncate text-[11px]', status === 'error' && 'text-destructive')}>
             {summary}
           </span>
         )}
+
+        {/* 尾部：diff 统计 / 用时 / 展开开关 */}
         {diffStats && (
-          <span className="flex shrink-0 items-center gap-1 text-[10px] tabular-nums">
+          <span className="flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums">
             <span className="text-status-pass-foreground">+{diffStats.added}</span>
             <span className="text-destructive">-{diffStats.deleted}</span>
           </span>
         )}
         {duration != null && (
-          <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70">
+          <span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/70">
             {duration > 1000 ? `${(duration / 1000).toFixed(1)}s` : `${duration}ms`}
           </span>
         )}
         <button
           onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
-          className="flex shrink-0 items-center justify-center rounded p-0.5 transition-colors hover:bg-secondary/60"
+          className="flex shrink-0 items-center justify-center rounded p-0.5 transition-colors hover:bg-[var(--dsw-active-bg)]"
           title={expanded ? '折叠' : '展开'}
         >
           <ChevronDown
@@ -502,7 +548,7 @@ export function ToolCard({ message }: { message: ChatMessage }) {
       </div>
 
       {expanded && (
-        <div className="border-t border-border/40">
+        <div className="border-t border-[var(--dsw-border-l1)] px-1 pb-1 pt-0.5">
           <ToolBody message={message} isExecuting={isExecuting} taskAgents={taskAgents} entry={entry} isMCP={isMCP} />
         </div>
       )}
@@ -543,8 +589,10 @@ function ToolBody({
   // Executing placeholder (task with no subagent data falls through to TaskBody)
   if (isExecuting && name !== 'task') {
     return (
-      <div className="flex items-center gap-1.5 px-2.5 py-2 text-[11px] text-muted-foreground">
-        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+      <div className="flex items-center gap-1.5 px-2.5 py-2 font-mono text-[11px] text-muted-foreground">
+        <span className="ap-chase" aria-hidden>
+          <i /><i /><i /><i /><i /><i /><i /><i />
+        </span>
         <span>executing...</span>
       </div>
     );
