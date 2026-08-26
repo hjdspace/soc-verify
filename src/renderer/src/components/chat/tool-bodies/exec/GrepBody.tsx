@@ -44,14 +44,21 @@ export function GrepBody({ args, resultText }: { args: unknown; resultText: stri
   const regex = pattern ? new RegExp(`(${escapeRegex(pattern)})`, 'gi') : null;
 
   return (
-    <div className="max-h-80 overflow-auto text-[11px] leading-relaxed">
+    <div className="max-h-80 overflow-auto rounded-lg py-1 font-mono text-[11px] leading-relaxed">
       {files.map((f, fi) => (
         <div key={fi}>
-          <div className="border-b border-border/30 bg-background/50 px-2.5 py-0.5 font-semibold text-chart-1">{f.file}</div>
+          <div className="flex items-center gap-1.5 px-2.5 py-0.5">
+            <span className="truncate font-semibold text-foreground" title={f.file}>{f.file}</span>
+            <span className="shrink-0 rounded-full bg-[var(--dsw-layer-3)] px-1.5 text-[9px] leading-[14px] text-muted-foreground">
+              ×{f.matches.length}
+            </span>
+          </div>
           {f.matches.map((m, mi) => (
             <div key={mi} className="flex gap-2 px-2.5 py-0.5">
-              <span className="shrink-0 text-right text-muted-foreground/50" style={{ minWidth: '28px' }}>{m.ln}</span>
-              <span className="text-muted-foreground">{regex ? highlightMatches(m.text, regex) : m.text}</span>
+              <span className="ap-gln w-7 shrink-0 text-right">{m.ln}</span>
+              <span className="min-w-0 flex-1 whitespace-pre-wrap break-all text-muted-foreground">
+                {regex ? highlightMatches(m.text, regex) : m.text}
+              </span>
             </div>
           ))}
         </div>
