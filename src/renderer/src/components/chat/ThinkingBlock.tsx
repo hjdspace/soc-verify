@@ -12,13 +12,13 @@ interface ThinkingBlockProps {
 }
 
 /**
- * Collapsible thinking/reasoning block.
+ * Think 推理折叠行（DSH §5.2 形态）。
  *
  * Behavior:
  * - While the LLM is actively outputting thinking (streaming + has thinking + no text yet):
- *   auto-expanded with a blinking indicator.
+ *   auto-expanded with a pulsing indicator + 行内扫光.
  * - When thinking is complete (text starts appearing or streaming stops):
- *   auto-collapses.
+ *   auto-collapses to a single-line summary row.
  * - User can always manually toggle expand/collapse after auto-collapse.
  */
 export const ThinkingBlock = memo(function ThinkingBlock({
@@ -55,29 +55,41 @@ export const ThinkingBlock = memo(function ThinkingBlock({
 
   if (!thinking) return null;
 
+  // 折叠摘要：流式中跟随最新一行，完成后取首行
+  const lines = thinking.split('\n').filter((l) => l.trim());
+  const summary = isThinkingActive
+    ? (lines[lines.length - 1] ?? '')
+    : (lines[0] ?? '');
+
   return (
-    <div className="mb-1 overflow-hidden rounded-md border border-border/40 bg-secondary/20">
+    <div className={cn('rounded-lg', isThinkingActive && 'ap-sweep')}>
       {/* Header — clickable to toggle */}
       <button
         onClick={handleToggle}
-        className="flex w-full items-center gap-1.5 px-2.5 py-1 text-left transition-colors hover:bg-secondary/40"
+        className="flex min-h-[24px] w-full select-none items-center gap-1.5 rounded-lg px-1.5 py-0.5 text-left transition-colors hover:bg-[var(--dsw-hover-bg)]"
       >
-        {isThinkingActive ? (
-          /* Blinking dot indicator while thinking is active */
-          <span className="relative flex h-2 w-2 shrink-0">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
-          </span>
-        ) : (
-          <Brain className="h-2.5 w-2.5 shrink-0 text-muted-foreground/60" />
-        )}
+        <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+          {isThinkingActive ? (
+            /* Pulsing dot indicator while thinking is active */
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+            </span>
+          ) : (
+            <Brain className="h-3 w-3 shrink-0 text-muted-foreground/70" />
+          )}
+        </span>
         <span
           className={cn(
-            'text-[10px] font-medium',
+            'shrink-0 text-[11px] font-medium',
             isThinkingActive ? 'text-primary' : 'text-muted-foreground',
           )}
         >
-          {isThinkingActive ? '思考中...' : '思考过程'}
+          Think
+        </span>
+        <span className="h-0.5 w-0.5 shrink-0 rounded-full bg-[var(--dsw-label-caption)]" />
+        <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+          {summary}
         </span>
         <ChevronDown
           className={cn(
@@ -89,15 +101,15 @@ export const ThinkingBlock = memo(function ThinkingBlock({
 
       {/* Thinking content — collapsible */}
       {expanded && (
-        <div className="border-t border-border/30">
+        <div className="px-1 pt-0.5">
           <div
             ref={scrollRef}
-            className="max-h-60 overflow-y-auto px-2.5 py-1.5"
+            className="max-h-60 overflow-y-auto rounded-lg bg-[var(--dsw-code-block)] px-2.5 py-1.5"
           >
-            <div className="whitespace-pre-wrap break-words text-[10px] leading-relaxed text-muted-foreground/80">
+            <div className="whitespace-pre-wrap break-words font-mono text-[10.5px] leading-relaxed text-muted-foreground">
               {thinking}
               {isThinkingActive && (
-                <span className="ml-0.5 inline-block h-2.5 w-0.5 animate-pulse bg-primary/60 align-middle" />
+                <span className="ml-0.5 inline-block h-2.5 w-0.5 animate-pulse bg-primary align-middle" />
               )}
             </div>
           </div>
