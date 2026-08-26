@@ -13,15 +13,12 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   Save,
   FolderOpen,
-  Wand2,
-  X,
   Terminal,
 } from 'lucide-react';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useToastStore } from '@renderer/stores/toast';
 import { trpc } from '@renderer/lib/trpc';
-import { parseRunsimCommand } from '@renderer/lib/runsim-command';
 import type { SimOptionField } from '@shared/plugin-types';
 import {
   OptionCard,
@@ -41,8 +38,6 @@ export function SimOptionPanel() {
   const [showPresetMenu, setShowPresetMenu] = useState(false);
   const [savingPreset, setSavingPreset] = useState(false);
   const [presetName, setPresetName] = useState('');
-  const [showParseDialog, setShowParseDialog] = useState(false);
-  const [parseCommandText, setParseCommandText] = useState('');
 
   // Load schema when project or subsys changes
   useEffect(() => {
@@ -163,41 +158,6 @@ export function SimOptionPanel() {
     setShowPresetMenu(false);
   };
 
-  // ── 回归列表文件浏览 ──────────────────────────────────────
-  const handleBrowseRegrFile = async () => {
-    if (!currentProjectId) {
-      useToastStore.getState().error('浏览文件失败', '请先打开项目');
-      return;
-    }
-    try {
-      const result = await trpc.simulation.pickRegrFile.mutate({ projectId: currentProjectId });
-      if (result.canceled || !result.path) return;
-      setSimOption('regr_file', result.path);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      useToastStore.getState().error('浏览文件失败', msg);
-    }
-  };
-
-  // ── 解析回归指令 ──────────────────────────────────────────
-  const handleParseCommand = () => {
-    const text = parseCommandText.trim();
-    if (!text) {
-      useToastStore.getState().error('解析失败', '请输入回归指令');
-      return;
-    }
-    const parsed = parseRunsimCommand(text);
-    if (Object.keys(parsed).length === 0) {
-      useToastStore.getState().error('解析失败', '未找到有效的 runsim 命令');
-      return;
-    }
-    // 合并解析结果到当前选项（解析结果覆盖已有值）
-    setSimOptions({ ...simOptions, ...parsed });
-    setShowParseDialog(false);
-    setParseCommandText('');
-    useToastStore.getState().success('解析完成', `已提取 ${Object.keys(parsed).length} 个参数`);
-  };
-
   const hasCase = typeof simOptions.case === 'string' && simOptions.case.trim() !== '';
   const caseName = hasCase ? (simOptions.case as string).trim() : '';
 
@@ -309,105 +269,10 @@ export function SimOptionPanel() {
                 fields={fields}
                 values={simOptions}
                 onChange={(key, val) => setSimOption(key, val)}
-                onBrowseRegrFile={handleBrowseRegrFile}
-                onParseCommand={() => setShowParseDialog(true)}
-                canBrowse={!!currentProjectId}
               />
             ))}
           </div>
         )}
-      </div>
-
-      {/* ── Parse Regression Command Dialog ──────────────────── */}
-      {showParseDialog && (
-        <ParseCommandDialog
-          text={parseCommandText}
-          onChange={setParseCommandText}
-          onParse={handleParseCommand}
-          onClose={() => {
-            setShowParseDialog(false);
-            setParseCommandText('');
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-// ─── Parse Command Dialog ──────────────────────────────────────
-
-function ParseCommandDialog({
-  text,
-  onChange,
-  onParse,
-  onClose,
-}: {
-  text: string;
-  onChange: (value: string) => void;
-  onParse: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div
-        className="w-full max-w-2xl rounded-lg border border-border bg-popover p-4 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Dialog header */}
-        <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Wand2 className="h-4 w-4 text-primary" />
-            <h3 className="text-sm font-semibold text-foreground">解析回归指令</h3>
-          </div>
-          <button
-            onClick={onClose}
-            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-
-        {/* Hint */}
-        <p className="mb-2 text-xs text-muted-foreground">
-          请粘贴回归用例指令（支持从网页直接复制粘贴，系统会自动提取 runsim 命令）
-        </p>
-
-        {/* Textarea */}
-        <textarea
-          value={text}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={'可以直接粘贴从网页复制的完整回归指令，系统会自动提取 runsim 命令部分\n\n示例:\n1. 完整指令: [其他文本] runsim -base top -block udtb/usvp -case apcpu_hello_world ...\n2. 简化指令: runsim -base top -block udtb/usvp -case apcpu_hello_world ...'}
-          className="h-32 w-full resize-y rounded border border-border bg-background/60 px-2.5 py-2 font-mono text-[11px] outline-none transition-colors focus:border-primary"
-          autoFocus
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-              onParse();
-            }
-          }}
-        />
-
-        {/* Dialog footer */}
-        <div className="mt-3 flex items-center justify-between">
-          <span className="text-[10px] text-muted-foreground/60">
-            Ctrl+Enter 解析
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={onClose}
-              className="rounded border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              取消
-            </button>
-            <button
-              onClick={onParse}
-              disabled={!text.trim()}
-              className="flex items-center gap-1.5 rounded bg-primary px-4 py-1 text-xs font-semibold text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <Wand2 className="h-3 w-3" />
-              解析
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   );
