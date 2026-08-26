@@ -2,6 +2,7 @@
 import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type {
+  ActiveRegressionRun,
   RegressionDiscoveryResult,
   RegressionGroup,
   RegressionHistoryEntry,
@@ -11,9 +12,12 @@ import type {
 /**
  * 回归视图（Issue #6）测试：套件卡片（状态色 / 通过率占位 / meta）、
  * 历史趋势表（列渲染 + 缺失字段占位）、行点击路由（regression-detail →
- * workspace 视图）、失败聚类「待分类」占位、骨架屏 / 空状态、数据加载。
+ * workspace 视图）、失败聚类「待分类」占位、骨架屏 / 空状态、数据加载、
+ * 卡片点击发起回归（RunConfigModal 接线，ADR 0029）与运行态
+ * （N 运行中 / x/y 进度 / 终止 / 按需终端）。
  * 数据依赖的 store 全部 mock（selector 直读可变状态）；
- * ui / workbench 为纯 zustand，使用真实 store。
+ * ui / workbench 为纯 zustand，使用真实 store；
+ * RunConfigModal 自身行为见 regression-run-modal.test.tsx。
  */
 
 const mocks = vi.hoisted(() => ({
@@ -23,8 +27,12 @@ const mocks = vi.hoisted(() => ({
     discoveryError: null as string | null,
     history: [] as RegressionHistoryEntry[],
     historyLoading: false,
+    activeRegressions: [] as ActiveRegressionRun[],
     discover: vi.fn().mockResolvedValue(undefined),
     loadHistory: vi.fn().mockResolvedValue(undefined),
+    runRegression: vi.fn().mockResolvedValue(undefined),
+    abortRegression: vi.fn().mockResolvedValue(undefined),
+    openRunTerminal: vi.fn().mockResolvedValue(undefined),
   },
   proj: {
     currentProjectId: 'proj-1' as string | null,
@@ -37,6 +45,13 @@ vi.mock('@renderer/stores/regression', () => ({
 
 vi.mock('@renderer/stores/project', () => ({
   useProjectStore: (selector: (s: typeof mocks.proj) => unknown) => selector(mocks.proj),
+}));
+
+// RunConfigModal 自身行为在独立文件测试；此处只断言视图接线
+vi.mock('@renderer/components/views/regression/RunConfigModal', () => ({
+  RunConfigModal: (props: { subsys: string }) => (
+    <div data-testid="reg-run-modal" data-subsys={props.subsys} />
+  ),
 }));
 
 import { RegressionView } from '@renderer/components/views/RegressionView';
@@ -88,8 +103,12 @@ beforeEach(() => {
   mocks.reg.discoveryError = null;
   mocks.reg.history = [];
   mocks.reg.historyLoading = false;
+  mocks.reg.activeRegressions = [];
   mocks.reg.discover.mockClear();
   mocks.reg.loadHistory.mockClear();
+  mocks.reg.runRegression.mockClear();
+  mocks.reg.abortRegression.mockClear();
+  mocks.reg.openRunTerminal.mockClear();
   mocks.proj.currentProjectId = 'proj-1';
   useUiStore.setState({ activeView: 'regression' });
   useWorkbenchStore.setState({ tabs: [], activeTabId: null });
@@ -178,24 +197,95 @@ describe('RegressionView 套件卡片', () => {
   });
 });
 
+describe('RegressionView 卡片发起回归（ADR 0029）', () => {
+  it('点击卡片打开运行配置模态，携带该子系统', () => {
+    mocks.reg.discovery = [
+      { subsys: 'alu', items: [makeList('alu', 10)] },
+      { subsys: 'uart', items: [makeList('uart', 5)] },
+    ];
+    render(<RegressionView />);
+
+    fireEvent.click(screen.getByTestId('reg-suite-card-alu'));
+
+    expect(screen.getByTestId('reg-run-modal')).toBeInTheDocument();
+    expect(screen.getByTestId('reg-run-modal')).toHaveAttribute('data-subsys', 'alu');
+  });
+
+  it('运行中有回归时卡片显示「N 运行中」与最新 run 的 x/y 进度', () => {
+    mocks.reg.discovery = [{ subsys: 'alu', items: [makeList('alu', 10)] }];
+    mocks.reg.activeRegressions = [
+      { runId: 'regr_1', subsys: 'alu', filePath: '/env/alu/regression/a.lst', submittedAt: 1000, completed: 3, total: 10 },
+      { runId: 'regr_2', subsys: 'alu', filePath: '/env/alu/regression/b.lst', submittedAt: 2000, completed: 5, total: 20 },
+    ];
+    render(<RegressionView />);
+
+    expect(screen.getByTestId('reg-suite-state-alu')).toHaveTextContent('2 运行中');
+    expect(screen.getByTestId('reg-suite-card-alu').textContent).toContain('5/20');
+  });
+
+  it('运行中卡片显示终止按钮，点击调用 abortRegression（该子系统最新 run）', () => {
+    mocks.reg.discovery = [{ subsys: 'alu', items: [makeList('alu', 10)] }];
+    mocks.reg.activeRegressions = [
+      { runId: 'regr_1', subsys: 'alu', filePath: '/env/alu/regression/a.lst', submittedAt: 1000 },
+      { runId: 'regr_2', subsys: 'alu', filePath: '/env/alu/regression/b.lst', submittedAt: 2000 },
+    ];
+    render(<RegressionView />);
+
+    fireEvent.click(screen.getByTestId('reg-suite-abort-alu'));
+
+    expect(mocks.reg.abortRegression).toHaveBeenCalledWith('proj-1', 'regr_2');
+  });
+
+  it('运行中卡片显示终端按钮，点击调用 openRunTerminal（按需打开，不自动跳转）', () => {
+    mocks.reg.discovery = [{ subsys: 'alu', items: [makeList('alu', 10)] }];
+    mocks.reg.activeRegressions = [
+      { runId: 'regr_1', subsys: 'alu', filePath: '/env/alu/regression/a.lst', submittedAt: 1000 },
+    ];
+    render(<RegressionView />);
+
+    fireEvent.click(screen.getByTestId('reg-suite-terminal-alu'));
+
+    expect(mocks.reg.openRunTerminal).toHaveBeenCalledWith('regr_1');
+  });
+
+  it('无活动运行时不显示终止/终端按钮，状态回落到历史状态', () => {
+    mocks.reg.discovery = [{ subsys: 'alu', items: [makeList('alu', 10)] }];
+    mocks.reg.history = [makeHistory({ runId: 'run-000001', subsys: 'alu', status: 'completed' })];
+    render(<RegressionView />);
+
+    expect(screen.queryByTestId('reg-suite-abort-alu')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('reg-suite-terminal-alu')).not.toBeInTheDocument();
+    expect(screen.getByTestId('reg-suite-state-alu')).toHaveTextContent('通过');
+  });
+});
+
 describe('RegressionView 历史趋势表', () => {
-  it('列头完整：# / 时间 / 通过·失败 / 通过率 / 时长 / Δ', () => {
+  it('列头完整：子系统·回归 / 时间 / 通过·失败 / 通过率 / 时长 / Δ', () => {
     mocks.reg.history = [makeHistory({ runId: 'run-000001' })];
     render(<RegressionView />);
 
-    for (const label of ['#', '时间', '通过·失败', '通过率', '时长', 'Δ']) {
+    for (const label of ['子系统·回归', '时间', '通过·失败', '通过率', '时长', 'Δ']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
   });
 
-  it('行渲染真实字段（#id 取 runId 尾部、提交时间），缺失字段占位「—」不造假', () => {
+  it('行渲染子系统名与回归文件名（取代无语义的 #id），缺失字段占位「—」不造假', () => {
     mocks.reg.history = [
-      makeHistory({ runId: 'run-000001', submittedAt: Date.now() - 60_000, status: 'completed' }),
+      makeHistory({
+        runId: 'run-000001',
+        subsys: 'alu',
+        filePath: '/env/alu/regression/alu_mini.lst',
+        submittedAt: Date.now() - 60_000,
+        status: 'completed',
+      }),
     ];
     render(<RegressionView />);
 
     const row = screen.getByTestId('reg-hist-row-run-000001');
-    expect(row.textContent).toContain('#000001');
+    expect(row.textContent).toContain('alu');
+    expect(row.textContent).toContain('alu_mini.lst');
+    // 不应再显示无语义的 #id 数字
+    expect(row.textContent).not.toContain('#000001');
     expect(row.textContent).toContain('今天');
     // 通过·失败数 / 通过率 / 时长 / Δ 四列无数据源 → 4 个占位符
     expect(row.textContent?.match(/—/g)).toHaveLength(4);
