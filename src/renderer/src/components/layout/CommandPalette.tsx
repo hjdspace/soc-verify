@@ -369,12 +369,12 @@ export function CommandPalette() {
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-start justify-center bg-black/40 pt-[12vh]"
+      className="fixed inset-0 z-[80] flex items-start justify-center bg-scrim pt-[12vh]"
       onClick={() => setCommandPaletteOpen(false)}
       data-testid="command-palette-overlay"
     >
       <div
-        className="w-[560px] max-w-[calc(100vw-48px)] overflow-hidden rounded-xl border border-border bg-popover shadow-2xl"
+        className="w-[560px] max-w-[calc(100vw-48px)] overflow-hidden rounded-xl border border-border bg-glass shadow-2xl glass"
         onClick={(e) => e.stopPropagation()}
         data-testid="command-palette"
       >
