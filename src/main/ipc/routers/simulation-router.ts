@@ -186,6 +186,8 @@ export const simulationRouter = t.router({
         startTime: Date.parse(run.startTime),
         endTime: run.endTime ? Date.parse(run.endTime) : undefined,
         compileErrors: undefined,
+        command: run.command ?? undefined,
+        cwd: run.cwd ?? undefined,
       }));
       // The DB stores every execution, but the run list represents each case's
       // latest state. Live records are appended last so they override history.
@@ -239,6 +241,8 @@ export const simulationRouter = t.router({
           duration: terminalRun.endTime != null
             ? terminalRun.endTime - terminalRun.startTime
             : Date.now() - terminalRun.startTime,
+          command: terminalRun.command,
+          cwd: terminalRun.cwd,
         };
       }
 
@@ -247,7 +251,7 @@ export const simulationRouter = t.router({
       const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
       const row = db.prepare(`
         SELECT run_id, case_name, subsys, status, start_time, end_time,
-          duration_ms, options_json
+          duration_ms, options_json, command, cwd
         FROM simulation_runs WHERE run_id = ?
       `).get(input.runId) as {
         run_id: string | null;
@@ -258,6 +262,8 @@ export const simulationRouter = t.router({
         end_time: string | null;
         duration_ms: number | null;
         options_json: string | null;
+        command: string | null;
+        cwd: string | null;
       } | undefined;
 
       if (row) {
@@ -271,6 +277,8 @@ export const simulationRouter = t.router({
           startTime: Date.parse(row.start_time),
           endTime: row.end_time ? Date.parse(row.end_time) : 0,
           duration: row.duration_ms ?? 0,
+          command: row.command ?? undefined,
+          cwd: row.cwd ?? undefined,
         };
       }
 
