@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS simulation_runs (
     corner TEXT,
     seed TEXT,
     options_json TEXT,
+    command TEXT,
+    cwd TEXT,
     created_at TEXT DEFAULT (datetime('now', 'localtime'))
 );
 
@@ -84,4 +86,6 @@ PRAGMA mmap_size = 268435456;
 export const COLUMN_MIGRATIONS: { table: string; column: string; ddl: string }[] = [
   { table: 'cases', column: 'post_sim', ddl: 'ALTER TABLE cases ADD COLUMN post_sim INTEGER NOT NULL DEFAULT 0' },
   { table: 'simulation_runs', column: 'run_id', ddl: 'ALTER TABLE simulation_runs ADD COLUMN run_id TEXT' },
+  { table: 'simulation_runs', column: 'command', ddl: 'ALTER TABLE simulation_runs ADD COLUMN command TEXT' },
+  { table: 'simulation_runs', column: 'cwd', ddl: 'ALTER TABLE simulation_runs ADD COLUMN cwd TEXT' },
 ];
