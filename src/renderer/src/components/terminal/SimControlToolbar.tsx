@@ -46,6 +46,7 @@ import {
   modifyCommandOptions,
   updateSeedInCommand,
   parseCaseFromCommand,
+  stripCdPrefix,
 } from '@renderer/lib/runsim-command';
 import { type DebugArtifacts, baseName } from '@renderer/lib/sim-debug';
 import { cn } from '@renderer/lib/utils';
@@ -621,9 +622,11 @@ export function SimControlToolbar({
         </div>
       )}
 
-      {/* Command preview (truncated) — min-w-0 优先收缩，避免挤压按钮导致文字折行 */}
+      {/* Command preview (truncated) — min-w-0 优先收缩，避免挤压按钮导致文字折行
+          显示时去除 cd "$PROJ_WORK" && 前缀，只展示 runsim 命令部分，更加清晰。
+          title 保留完整命令供 hover 查看。 */}
       <div className="ml-auto min-w-0 max-w-[40%] shrink truncate font-mono text-[10px] text-muted-foreground" title={currentCommand}>
-        {currentCommand}
+        {stripCdPrefix(currentCommand)}
       </div>
     </div>
   );
