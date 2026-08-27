@@ -1,6 +1,5 @@
 import {
   ChevronRight,
-  ChevronDown,
   FileText,
   CircleDot,
   Play,
@@ -204,35 +203,49 @@ export function CaseTreeItem({
           className="flex w-full items-center gap-1 rounded py-0.5 text-left text-[11px] text-muted-foreground transition-colors hover:bg-accent/50"
           style={{ paddingLeft: `${paddingLeft}px` }}
         >
-          {isExpanded ? (
-            <ChevronDown className="h-2.5 w-2.5 shrink-0 opacity-50" />
-          ) : (
-            <ChevronRight className="h-2.5 w-2.5 shrink-0 opacity-50" />
-          )}
+          <ChevronRight
+            className={cn(
+              'h-2.5 w-2.5 shrink-0 opacity-50 transition-transform duration-[150ms] ease-[var(--ease-out)]',
+              isExpanded && 'rotate-90',
+            )}
+          />
           <FileText className="h-2.5 w-2.5 shrink-0 opacity-40" />
           <span className="truncate">{node.name}</span>
           <span className="ml-auto shrink-0 text-[9px] opacity-50">{node.children.length}</span>
         </button>
-        {isExpanded &&
-          node.children.map((child, idx) => (
-            <CaseTreeItem
-              key={child.caseData ? getCaseId(child.caseData) : `${child.path}::${child.name}::${idx}`}
-              node={child}
-              level={level + 1}
-              expandedFiles={expandedFiles}
-              expandedCases={expandedCases}
-              toggleFile={toggleFile}
-              toggleCase={toggleCase}
-              batchMode={batchMode}
-              selectedCases={selectedCases}
-              selectedCaseId={selectedCaseId}
-              toggleCaseSelection={toggleCaseSelection}
-              onCaseSelect={onCaseSelect}
-              onContextMenu={onContextMenu}
-              onFileContextMenu={onFileContextMenu}
-              onRunCase={onRunCase}
-            />
-          ))}
+        <div
+          className={cn(
+            'grid transition-all duration-[var(--duration-normal)] ease-[var(--ease-out)]',
+            isExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0',
+          )}
+        >
+          <div className="overflow-hidden">
+            {node.children.map((child, idx) => (
+              <div
+                key={child.caseData ? getCaseId(child.caseData) : `${child.path}::${child.name}::${idx}`}
+                className="tree-item-enter animate-[tree-item-enter_200ms_var(--ease-out)_both]"
+                style={{ animationDelay: `${Math.min(idx * 30, 200)}ms` }}
+              >
+                <CaseTreeItem
+                  node={child}
+                  level={level + 1}
+                  expandedFiles={expandedFiles}
+                  expandedCases={expandedCases}
+                  toggleFile={toggleFile}
+                  toggleCase={toggleCase}
+                  batchMode={batchMode}
+                  selectedCases={selectedCases}
+                  selectedCaseId={selectedCaseId}
+                  toggleCaseSelection={toggleCaseSelection}
+                  onCaseSelect={onCaseSelect}
+                  onContextMenu={onContextMenu}
+                  onFileContextMenu={onFileContextMenu}
+                  onRunCase={onRunCase}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     );
   }
@@ -274,11 +287,12 @@ export function CaseTreeItem({
             }}
             className="shrink-0"
           >
-            {isExpanded ? (
-              <ChevronDown className="h-2.5 w-2.5 opacity-50" />
-            ) : (
-              <ChevronRight className="h-2.5 w-2.5 opacity-50" />
-            )}
+            <ChevronRight
+              className={cn(
+                'h-2.5 w-2.5 opacity-50 transition-transform duration-[150ms] ease-[var(--ease-out)]',
+                isExpanded && 'rotate-90',
+              )}
+            />
           </button>
         ) : (
           <span className="w-2.5 shrink-0" />
@@ -326,27 +340,41 @@ export function CaseTreeItem({
           <span className="absolute left-0 top-0 bottom-0 w-0.5 rounded-l bg-primary" />
         )}
       </div>
-      {hasChildren &&
-        isExpanded &&
-        node.children.map((child, idx) => (
-          <CaseTreeItem
-            key={child.caseData ? getCaseId(child.caseData) : `${child.path}::${child.name}::${idx}`}
-            node={child}
-            level={level + 1}
-            expandedFiles={expandedFiles}
-            expandedCases={expandedCases}
-            toggleFile={toggleFile}
-            toggleCase={toggleCase}
-            batchMode={batchMode}
-            selectedCases={selectedCases}
-            selectedCaseId={selectedCaseId}
-            toggleCaseSelection={toggleCaseSelection}
-            onCaseSelect={onCaseSelect}
-            onContextMenu={onContextMenu}
-            onFileContextMenu={onFileContextMenu}
-            onRunCase={onRunCase}
-          />
-        ))}
+      {hasChildren && (
+        <div
+          className={cn(
+            'grid transition-all duration-[var(--duration-normal)] ease-[var(--ease-out)]',
+            isExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0',
+          )}
+        >
+          <div className="overflow-hidden">
+            {node.children.map((child, idx) => (
+              <div
+                key={child.caseData ? getCaseId(child.caseData) : `${child.path}::${child.name}::${idx}`}
+                className="tree-item-enter animate-[tree-item-enter_200ms_var(--ease-out)_both]"
+                style={{ animationDelay: `${Math.min(idx * 30, 200)}ms` }}
+              >
+                <CaseTreeItem
+                  node={child}
+                  level={level + 1}
+                  expandedFiles={expandedFiles}
+                  expandedCases={expandedCases}
+                  toggleFile={toggleFile}
+                  toggleCase={toggleCase}
+                  batchMode={batchMode}
+                  selectedCases={selectedCases}
+                  selectedCaseId={selectedCaseId}
+                  toggleCaseSelection={toggleCaseSelection}
+                  onCaseSelect={onCaseSelect}
+                  onContextMenu={onContextMenu}
+                  onFileContextMenu={onFileContextMenu}
+                  onRunCase={onRunCase}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
