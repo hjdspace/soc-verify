@@ -27,6 +27,22 @@ button:not(:disabled):active {
   transform: translateY(1px);
 }
 
+/* Apple 主题按压反馈：缩放替代亮度压暗（apple-design §1：
+   按压即反馈 + 3% 缩放的触觉暗示，macOS 控件行为）。 */
+[data-theme="apple-light"] button:not(:disabled):active,
+[data-theme="apple-dark"] button:not(:disabled):active {
+  filter: none;
+  transform: scale(0.97);
+}
+
+/* ── 玻璃材质 utility（Apple 主题专属，其余主题为 none 零开销） ──
+   引用 --material 令牌而非字面值，非 Apple 主题回退为 none，
+   不产生合成层，性能与现状一致。 */
+@utility glass {
+  -webkit-backdrop-filter: var(--material);
+  backdrop-filter: var(--material);
+}
+
 /* ── 字体管理 CSS 变量（由 useFontStore 动态设置） ─────────── */
 :root {
   --app-font-family-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -43,6 +59,15 @@ button:not(:disabled):active {
   --duration-fast: 150ms;   /* 按钮反馈、tooltip */
   --duration-normal: 200ms; /* 树展开、下拉菜单 */
   --duration-drawer: 260ms; /* 抽屉滑入/出 */
+
+  /* ── 材质 token（Apple 主题专属，其余主题回退） ────────────
+     --material：backdrop-filter 值（非 Apple 主题 = none，零开销）
+     --glass：浮层底色（回退 var(--card)，即现有主题浮层色不变）
+     --scrim：遮罩色（回退旧 bg-black/50 同值）
+     用法：浮层 = bg-glass + .glass；遮罩 = bg-scrim。 */
+  --material: none;
+  --glass: var(--card);
+  --scrim: rgb(0 0 0 / 0.5);
 }
 
 @theme {
@@ -94,6 +119,8 @@ button:not(:disabled):active {
   --color-warning-foreground: var(--warning-foreground);
   --color-violet: var(--violet);
   --color-violet-foreground: var(--violet-foreground);
+  --color-glass: var(--glass);
+  --color-scrim: var(--scrim);
   --radius-md: var(--radius);
   --radius-sm: calc(var(--radius) - 2px);
   --radius-lg: calc(var(--radius) + 2px);
@@ -408,6 +435,172 @@ button:not(:disabled):active {
 }
 
 /* ════════════════════════════════════════════════════════════
+   主题：Apple Light（浅·macOS 灰白）
+   #F5F5F7 灰白底 + 系统蓝 #0071E3。HIG 系统色板提深保证
+   白底文字可读；10px 圆角对齐 macOS 控件；chrome 半透明 +
+   毛玻璃材质（--material/--glass，见 :root 注释）。
+   ════════════════════════════════════════════════════════════ */
+[data-theme="apple-light"] {
+  --background: oklch(0.9728 0.0018 265);          /* #F5F5F7 */
+  --foreground: oklch(0.2447 0.0008 265);          /* #1D1D1F */
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2447 0.0008 265);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2447 0.0008 265);
+  --primary: oklch(0.6283 0.1885 260);             /* #0071E3 */
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.9472 0.0035 265);            /* #F2F2F7 */
+  --secondary-foreground: oklch(0.3499 0.0021 265);
+  --muted: oklch(0.9472 0.0035 265);
+  --muted-foreground: oklch(0.5346 0.0025 265);    /* #6E6E73 */
+  --fg-faint: oklch(0.7496 0.0027 265);            /* #AEAEB2 */
+  --accent: oklch(0.9355 0.0035 265);
+  --accent-foreground: oklch(0.2447 0.0008 265);
+  --destructive: oklch(0.5946 0.2186 25);          /* #D70015 */
+  --destructive-foreground: oklch(1 0 0);
+  --border: oklch(0.8898 0.002 265);                /* #DBDBE0 */
+  --input: oklch(0.8898 0.002 265);
+  --ring: oklch(0.6283 0.1885 260);
+  --titlebar: oklch(0.9512 0.003 265 / 0.85);      /* 半透明 chrome */
+  --titlebar-foreground: oklch(0.4199 0.0024 265);
+  --titlebar-border: oklch(0.8699 0.0022 265);
+  --sidebar: oklch(0.9472 0.0035 265 / 0.75);
+  --sidebar-foreground: oklch(0.4705 0.0024 265);
+  --radius: 0.625rem;                               /* 10px */
+
+  --status-pass: oklch(0.62 0.15 145);             /* 系统绿提深 */
+  --status-pass-foreground: oklch(0.62 0.15 145);
+  --status-fail: oklch(0.5946 0.2186 25);
+  --status-fail-foreground: oklch(0.5946 0.2186 25);
+  --status-running: oklch(0.6283 0.1885 260);
+  --status-running-foreground: oklch(0.6283 0.1885 260);
+  --status-aborted: oklch(0.68 0.15 55);            /* 系统橙提深 */
+  --status-aborted-foreground: oklch(0.68 0.15 55);
+  --status-pending: oklch(0.5346 0.0025 265);
+  --status-pending-foreground: oklch(0.5346 0.0025 265);
+
+  --diff-add: oklch(0.9478 0.0357 145);
+  --diff-add-foreground: oklch(0.4199 0.1079 145);
+  --diff-del: oklch(0.9483 0.0308 25);
+  --diff-del-foreground: oklch(0.4499 0.1543 25);
+
+  --chart-1: oklch(0.6495 0.1908 255.6);            /* #007AFF */
+  --chart-2: oklch(0.7789 0.1501 145);              /* #34C759 */
+  --chart-3: oklch(0.7673 0.1479 55);               /* #FF9500 */
+  --chart-4: oklch(0.601 0.217 308.7);             /* #AF52DE */
+
+  --info: oklch(0.9305 0.0299 256);
+  --info-foreground: oklch(0.4499 0.1429 256);
+  --warning: oklch(0.9458 0.0471 85);
+  --warning-foreground: oklch(0.4699 0.1026 70);
+  --violet: oklch(0.9353 0.0306 308.7);
+  --violet-foreground: oklch(0.4805 0.1495 308.7);
+
+  /* Vim 模式色 */
+  --vim-normal:  oklch(0.62 0.15 145);    /* 绿: NORMAL */
+  --vim-insert:  oklch(0.6283 0.1885 260); /* 蓝: INSERT */
+  --vim-visual:  oklch(0.68 0.15 55);    /* 橙: VISUAL */
+  --vim-command: oklch(0.52 0.19 308.7);  /* 紫: COMMAND */
+
+  /* 语法高亮语义色 */
+  --syn-keyword:    oklch(0.52 0.19 308.7);    /* 紫: module, input, output */
+  --syn-string:     oklch(0.55 0.13 145);      /* 绿: 字符串 */
+  --syn-number:     oklch(0.60 0.14 55);      /* 橙金: 数字 */
+  --syn-comment:    oklch(0.5346 0.0025 265); /* 灰: 注释 */
+  --syn-function:   oklch(0.5964 0.1845 256);  /* 蓝: 函数名 */
+  --syn-type:       oklch(0.55 0.19 25);      /* 红: 类型 */
+  --syn-property:   oklch(0.55 0.11 55);      /* 暖金: 属性 */
+
+  /* 材质 */
+  --material: blur(24px) saturate(180%);
+  --glass: oklch(1 0 0 / 0.72);
+  --scrim: rgb(0 0 0 / 0.30);
+}
+
+/* ════════════════════════════════════════════════════════════
+   主题：Apple Dark（深·macOS 石墨）
+   #1D1D1F 石墨底 + 亮蓝 #0A84FF。HIG 深色系统色（#30D158 /
+   #FF453A / #FF9F0A / #BF5AF2）；浮层比卡片亮一档，
+   对齐 macOS「浮层 = 更亮材质」的层级语义。
+   ════════════════════════════════════════════════════════════ */
+[data-theme="apple-dark"] {
+  --background: oklch(0.2447 0.0015 265);           /* #1D1D1F */
+  --foreground: oklch(0.9728 0.0018 265);          /* #F5F5F7 */
+  --card: oklch(0.29 0.0018 265);                  /* ≈#2C2C2E */
+  --card-foreground: oklch(0.9728 0.0018 265);
+  --popover: oklch(0.33 0.002 265);                /* ≈#3A3A3D */
+  --popover-foreground: oklch(0.9728 0.0018 265);
+  --primary: oklch(0.6903 0.1688 255.6);           /* #0A84FF */
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.29 0.0018 265);
+  --secondary-foreground: oklch(0.9728 0.0018 265);
+  --muted: oklch(0.29 0.0018 265);
+  --muted-foreground: oklch(0.6749 0.0027 265);    /* #98989D */
+  --fg-faint: oklch(0.4705 0.0024 265);
+  --accent: oklch(0.3136 0.002 265);
+  --accent-foreground: oklch(0.9728 0.0018 265);
+  --destructive: oklch(0.6655 0.2194 25);          /* #FF453A */
+  --destructive-foreground: oklch(1 0 0);
+  --border: oklch(0.3237 0.0022 265);              /* ≈#3E3E42 */
+  --input: oklch(0.3237 0.0022 265);
+  --ring: oklch(0.6903 0.1688 255.6);
+  --titlebar: oklch(0.2095 0.0015 265 / 0.9);      /* 半透明深 chrome */
+  --titlebar-foreground: oklch(0.8032 0.0023 265); /* #C7C7CC */
+  --titlebar-border: oklch(0.3237 0.0022 265);
+  --sidebar: oklch(0.195 0.0015 265 / 0.85);
+  --sidebar-foreground: oklch(0.7496 0.0027 265);  /* #AEAEB2 */
+  --radius: 0.625rem;
+
+  --status-pass: oklch(0.7891 0.1471 145);          /* #30D158 */
+  --status-pass-foreground: oklch(0.7891 0.1471 145);
+  --status-fail: oklch(0.6655 0.2194 25);
+  --status-fail-foreground: oklch(0.6655 0.2194 25);
+  --status-running: oklch(0.6903 0.1688 255.6);
+  --status-running-foreground: oklch(0.6903 0.1688 255.6);
+  --status-aborted: oklch(0.7894 0.1414 65);       /* #FF9F0A */
+  --status-aborted-foreground: oklch(0.7894 0.1414 65);
+  --status-pending: oklch(0.6749 0.0027 265);
+  --status-pending-foreground: oklch(0.6749 0.0027 265);
+
+  --diff-add: oklch(0.2745 0.0489 145);
+  --diff-add-foreground: oklch(0.8299 0.1135 145);
+  --diff-del: oklch(0.2899 0.0642 25);
+  --diff-del-foreground: oklch(0.7799 0.1283 25);
+
+  --chart-1: oklch(0.6903 0.1688 255.6);            /* #0A84FF */
+  --chart-2: oklch(0.7891 0.1471 145);              /* #30D158 */
+  --chart-3: oklch(0.7894 0.1414 65);               /* #FF9F0A */
+  --chart-4: oklch(0.6605 0.2198 308.7);           /* #BF5AF2 */
+
+  --info: oklch(0.2899 0.0518 256);
+  --info-foreground: oklch(0.7579 0.1318 256);
+  --warning: oklch(0.3099 0.0557 85);
+  --warning-foreground: oklch(0.8199 0.1249 85);
+  --violet: oklch(0.2899 0.0544 308.7);
+  --violet-foreground: oklch(0.7553 0.1498 308.7);
+
+  /* Vim 模式色 */
+  --vim-normal:  oklch(0.7891 0.1471 145);  /* 绿: NORMAL */
+  --vim-insert:  oklch(0.6903 0.1688 255.6); /* 蓝: INSERT */
+  --vim-visual:  oklch(0.7894 0.1414 65);   /* 橙: VISUAL */
+  --vim-command: oklch(0.6605 0.2198 308.7); /* 紫: COMMAND */
+
+  /* 语法高亮语义色 */
+  --syn-keyword:    oklch(0.6605 0.2198 308.7);  /* 紫: module, input, output */
+  --syn-string:     oklch(0.7891 0.1471 145);    /* 绿: 字符串 */
+  --syn-number:     oklch(0.7894 0.1414 65);     /* 橙金: 数字 */
+  --syn-comment:    oklch(0.5346 0.0025 265);    /* 灰: 注释 */
+  --syn-function:   oklch(0.6903 0.1688 255.6);  /* 蓝: 函数名 */
+  --syn-type:       oklch(0.6655 0.2194 25);    /* 红: 类型 */
+  --syn-property:   oklch(0.7605 0.1095 55);    /* 暖金: 属性 */
+
+  /* 材质 */
+  --material: blur(28px) saturate(180%);
+  --glass: oklch(0.29 0.0018 265 / 0.78);
+  --scrim: rgb(0 0 0 / 0.45);
+}
+
+/* ════════════════════════════════════════════════════════════
    全局样式
    ════════════════════════════════════════════════════════════ */
 
@@ -469,6 +662,18 @@ body {
   .theme-transition,
   .theme-transition * {
     transition: none;
+  }
+}
+
+/* ── 减弱透明：毛玻璃降级为实色 ────────────────────────
+   参见 apple-design skill §14：reduced-transparency 时材质去 blur、
+   半透明底回退实色卡片色，遮罩加深。 */
+@media (prefers-reduced-transparency: reduce) {
+  [data-theme="apple-light"],
+  [data-theme="apple-dark"] {
+    --material: none;
+    --glass: var(--card);
+    --scrim: rgb(0 0 0 / 0.5);
   }
 }
 
@@ -1101,16 +1306,15 @@ body {
   display: block;
 }
 
-/* Subtle drop-shadow for depth — light mode */
+/* Subtle drop-shadow for depth — light mode
+   （data-shade 驱动：新增浅色主题免登记，light/dark 自动命中） */
 [data-mode="light"] .mermaid-preview-svg > svg,
-:root[data-theme="drafting"] .mermaid-preview-svg > svg,
-:root[data-theme="daylight"] .mermaid-preview-svg > svg {
+:root[data-shade="light"] .mermaid-preview-svg > svg {
   filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.08));
 }
 
 /* Subtle drop-shadow for depth — dark mode */
-:root[data-theme="bench"] .mermaid-preview-svg > svg,
-:root[data-theme="slate"] .mermaid-preview-svg > svg {
+:root[data-shade="dark"] .mermaid-preview-svg > svg {
   filter: drop-shadow(0 1px 4px rgba(0, 0, 0, 0.3));
 }
 
