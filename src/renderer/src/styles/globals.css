@@ -33,6 +33,16 @@ button:not(:disabled):active {
   --app-font-family-code: "JetBrains Mono", "Cascadia Code", "Fira Code", ui-monospace, "SF Mono", Consolas, "Courier New", monospace;
   --app-font-size-ui: 13px;
   --app-font-size-code: 12px;
+
+  /* ── 动效 token ─────────────────────────────────────────────
+     参考 AUDIT.md Category 2。所有 UI 动画应引用这些 token，
+     不再内联 cubic-bezier。 */
+  --ease-out: cubic-bezier(0.25, 1, 0.5, 1);        /* 强 ease-out：入场、滑入、展开 */
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);   /* 强 ease-in-out：屏幕内移动 */
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);    /* iOS 抽屉曲线：更滑、更长减速 */
+  --duration-fast: 150ms;   /* 按钮反馈、tooltip */
+  --duration-normal: 200ms; /* 树展开、下拉菜单 */
+  --duration-drawer: 260ms; /* 抽屉滑入/出 */
 }
 
 @theme {
@@ -477,6 +487,26 @@ body {
   .cursor-blink {
     animation: none;
     opacity: 1;
+  }
+}
+
+/* ── 树节点入场 stagger ─────────────────────────────────────────── */
+@keyframes tree-item-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tree-item-enter {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
   }
 }
 
@@ -1280,4 +1310,25 @@ body {
 .kb-markdown ul ol,
 .kb-markdown ol ul {
   margin: 0.2em 0;
+}
+
+/* ── 减弱动效：抽屉滑入与树展开 ─────────────────────────────────
+   reduced-motion 不等于零动画——保留 opacity 淡入（帮助理解状态变化），
+   禁用位移和高度变化（position change 是主要触发前庭不适的因素）。
+   参见 AUDIT.md Category 6: "keep transitions that aid comprehension,
+   remove position changes." */
+
+@media (prefers-reduced-motion: reduce) {
+  /* 抽屉：去掉 transform 滑入过渡，改为瞬间出现 + opacity 淡入 */
+  [data-testid="drawer-left"],
+  [data-testid="drawer-right"] {
+    transition: opacity 150ms ease !important;
+  }
+
+  /* 树展开容器：去掉 grid-rows 高度过渡，保留 opacity 淡入 */
+  [class*="grid-rows-[0fr]"],
+  [class*="grid-rows-[1fr]"] {
+    transition: opacity 150ms ease !important;
+    grid-template-rows: 1fr !important;
+  }
 }
