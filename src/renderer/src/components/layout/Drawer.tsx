@@ -62,7 +62,7 @@ export function Drawer({ side, open, onClose, title, width = DEFAULT_WIDTH, flus
       inert={!open}
       data-testid={`drawer-${side}`}
       className={cn(
-        'fixed z-50 flex flex-col border border-border bg-card shadow-2xl',
+        'fixed z-50 flex flex-col border border-border bg-glass shadow-2xl glass',
         'transition-transform duration-[var(--duration-drawer)] ease-[var(--ease-out)] will-change-transform',
         side === 'left' ? 'rounded-r-[14px]' : 'rounded-tl-[14px]',
       )}
