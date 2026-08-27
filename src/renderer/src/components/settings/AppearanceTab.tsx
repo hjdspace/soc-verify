@@ -1,5 +1,5 @@
 import { Check, Keyboard, Palette, Type, Zap } from 'lucide-react';
-import { useThemeStore } from '@renderer/stores/theme';
+import { useThemeStore, type ThemeDefinition } from '@renderer/stores/theme';
 import { useFontStore } from '@renderer/stores/font';
 import { useEditorStore } from '@renderer/stores/editor';
 import { useUiStore } from '@renderer/stores/ui';
@@ -34,41 +34,14 @@ export function AppearanceTab() {
 
   return (
     <div className="space-y-4">
-      {/* 主题选择 */}
+      {/* 主题选择（按明暗分组） */}
       <div>
         <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase text-muted-foreground">
           <Palette className="h-3 w-3" />
           主题
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          {themes.map((theme) => (
-            <button
-              key={theme.id}
-              onClick={() => setTheme(theme.id)}
-              className={cn(
-                'flex items-center gap-3 rounded-md border p-2.5 text-left transition-colors',
-                currentTheme === theme.id
-                  ? 'border-primary bg-primary/5'
-                  : 'border-border hover:bg-accent',
-              )}
-            >
-              {/* 色板预览 */}
-              <span
-                className="h-8 w-8 shrink-0 rounded-md border border-border"
-                style={{ backgroundColor: theme.swatch }}
-              />
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-medium text-foreground">{theme.name}</div>
-                <div className="truncate text-[10px] text-muted-foreground">
-                  {theme.description}
-                </div>
-              </div>
-              {currentTheme === theme.id && (
-                <Check className="h-4 w-4 shrink-0 text-primary" />
-              )}
-            </button>
-          ))}
-        </div>
+        <ThemeGroup label="浅色" themes={themes.filter((t) => t.mode === 'light')} currentTheme={currentTheme} onSelect={setTheme} />
+        <ThemeGroup label="深色" themes={themes.filter((t) => t.mode === 'dark')} currentTheme={currentTheme} onSelect={setTheme} />
       </div>
 
       {/* 字体管理 */}
@@ -261,6 +234,57 @@ endmodule`}
             </p>
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 主题分组（浅色 / 深色）─────────────────────────────────────
+
+type ThemeGroupProps = {
+  /** 组标签（浅色 / 深色） */
+  label: string;
+  /** 该组主题列表 */
+  themes: ThemeDefinition[];
+  /** 当前生效主题 id */
+  currentTheme: string;
+  /** 选中回调 */
+  onSelect: (id: string) => void;
+};
+
+function ThemeGroup({ label, themes, currentTheme, onSelect }: ThemeGroupProps) {
+  if (themes.length === 0) return null;
+  return (
+    <div className="mt-2 first:mt-0">
+      <div className="mb-1 text-[10px] text-muted-foreground/70">{label}</div>
+      <div className="grid grid-cols-2 gap-2">
+        {themes.map((theme) => (
+          <button
+            key={theme.id}
+            onClick={() => onSelect(theme.id)}
+            className={cn(
+              'flex items-center gap-3 rounded-md border p-2.5 text-left transition-colors',
+              currentTheme === theme.id
+                ? 'border-primary bg-primary/5'
+                : 'border-border hover:bg-accent',
+            )}
+          >
+            {/* 色板预览 */}
+            <span
+              className="h-8 w-8 shrink-0 rounded-md border border-border"
+              style={{ backgroundColor: theme.swatch }}
+            />
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-medium text-foreground">{theme.name}</div>
+              <div className="truncate text-[10px] text-muted-foreground">
+                {theme.description}
+              </div>
+            </div>
+            {currentTheme === theme.id && (
+              <Check className="h-4 w-4 shrink-0 text-primary" />
+            )}
+          </button>
+        ))}
       </div>
     </div>
   );
