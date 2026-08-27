@@ -33,8 +33,8 @@ type DrawerProps = {
  * 关闭位移 ≥ left + width，保证关闭态完全离屏、不遮挡导航栏（原型 §2.1 第 1 条）。
  * z-index 50（刻度：backdrop 40 / drawer 50 / dropdown 70 / palette 80 / toast 100）。
  *
- * 动画：320ms transform 过渡（缓动曲线与原型一致 cubic-bezier(0.2,0.8,0.2,1)，
- * 时长取 300-400ms 推荐区间下沿，保证滑入/滑出感知清晰）；
+ * 动画：260ms transform 过渡，强 ease-out 曲线 cubic-bezier(0.25,1,0.5,1)，
+ * 面板快速从屏幕左边缘外滑入、丝滑减速到位；
  * 组件常驻挂载以保证关闭态也能播放离场动画。
  */
 export function Drawer({ side, open, onClose, title, width = DEFAULT_WIDTH, flush = false, children }: DrawerProps) {
@@ -63,7 +63,7 @@ export function Drawer({ side, open, onClose, title, width = DEFAULT_WIDTH, flus
       data-testid={`drawer-${side}`}
       className={cn(
         'fixed z-50 flex flex-col border border-border bg-card shadow-2xl',
-        'transition-transform duration-[320ms] ease-[cubic-bezier(0.2,0.8,0.2,1)] will-change-transform',
+        'transition-transform duration-[var(--duration-drawer)] ease-[var(--ease-out)] will-change-transform',
         side === 'left' ? 'rounded-r-[14px]' : 'rounded-tl-[14px]',
       )}
       style={{
