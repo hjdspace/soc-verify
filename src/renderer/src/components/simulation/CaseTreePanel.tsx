@@ -762,11 +762,12 @@ export function CaseTreePanel() {
                         onClick={() => toggleSearchSubsys(subsys)}
                         className="flex w-full items-center gap-1 rounded px-1 py-0.5 transition-colors hover:bg-accent/50"
                       >
-                        {subsysCollapsed ? (
-                          <ChevronRight className="h-3 w-3 shrink-0 opacity-50" />
-                        ) : (
-                          <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
-                        )}
+                        <ChevronRight
+                          className={cn(
+                            'h-3 w-3 shrink-0 opacity-50 transition-transform duration-[150ms] ease-[var(--ease-out)]',
+                            !subsysCollapsed && 'rotate-90',
+                          )}
+                        />
                         <Cpu className="h-3 w-3 shrink-0 text-primary/70" />
                         <span className="truncate font-medium text-xs">{subsys}</span>
                         <span className="shrink-0 text-[10px] text-muted-foreground">{caseCount}</span>
@@ -811,11 +812,12 @@ export function CaseTreePanel() {
                       onClick={() => toggleSubsys(subsys.name)}
                       className="flex flex-1 items-center gap-1 text-left text-xs transition-colors"
                     >
-                      {isExpanded ? (
-                        <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
-                      ) : (
-                        <ChevronRight className="h-3 w-3 shrink-0 opacity-50" />
-                      )}
+                      <ChevronRight
+                        className={cn(
+                          'h-3 w-3 shrink-0 opacity-50 transition-transform duration-[150ms] ease-[var(--ease-out)]',
+                          isExpanded && 'rotate-90',
+                        )}
+                      />
                       <Cpu className="h-3 w-3 shrink-0 text-primary/70" />
                       <span className="truncate font-medium">{subsys.name}</span>
                       {subsys.caseCount !== undefined && subsys.caseCount > 0 && (
@@ -845,8 +847,13 @@ export function CaseTreePanel() {
                     </button>
                   </div>
 
-                  {isExpanded && (
-                    <div className="pb-1">
+                  <div
+                    className={cn(
+                      'grid transition-all duration-[var(--duration-normal)] ease-[var(--ease-out)]',
+                      isExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0',
+                    )}
+                  >
+                    <div className="overflow-hidden pb-1">
                       {isLoading && !subsysCases ? (
                         <div className="px-4 py-1 text-[10px] text-muted-foreground">加载中...</div>
                       ) : subsysTree.length === 0 ? (
@@ -854,28 +861,33 @@ export function CaseTreePanel() {
                       ) : (
                         <div>
                           {subsysTree.map((node, idx) => (
-                            <CaseTreeItem
+                            <div
                               key={`${node.path}::${node.name}::${idx}`}
-                              node={node}
-                              level={0}
-                              expandedFiles={expandedFiles}
-                              expandedCases={expandedCases}
-                              toggleFile={toggleFile}
-                              toggleCase={toggleCase}
-                              batchMode={batchMode}
-                              selectedCases={selectedCases}
-                              selectedCaseId={selectedCaseId}
-                              toggleCaseSelection={toggleCaseSelection}
-                              onCaseSelect={handleCaseSelect}
-                              onContextMenu={handleCaseContextMenu}
-                              onFileContextMenu={handleFileContextMenu}
-                              onRunCase={handleRunCase}
-                            />
+                              className="tree-item-enter animate-[tree-item-enter_200ms_var(--ease-out)_both]"
+                              style={{ animationDelay: `${Math.min(idx * 30, 200)}ms` }}
+                            >
+                              <CaseTreeItem
+                                node={node}
+                                level={0}
+                                expandedFiles={expandedFiles}
+                                expandedCases={expandedCases}
+                                toggleFile={toggleFile}
+                                toggleCase={toggleCase}
+                                batchMode={batchMode}
+                                selectedCases={selectedCases}
+                                selectedCaseId={selectedCaseId}
+                                toggleCaseSelection={toggleCaseSelection}
+                                onCaseSelect={handleCaseSelect}
+                                onContextMenu={handleCaseContextMenu}
+                                onFileContextMenu={handleFileContextMenu}
+                                onRunCase={handleRunCase}
+                              />
+                            </div>
                           ))}
                         </div>
                       )}
                     </div>
-                  )}
+                  </div>
                 </div>
               );
             })}
