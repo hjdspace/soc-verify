@@ -11,7 +11,7 @@ import './styles/ai-panel.css';
 // preventing a flash of the default dark theme on startup.
 {
   const THEME_KEY = 'socverify:theme';
-  const LIGHT_THEMES = new Set(['drafting', 'daylight']);
+  const LIGHT_THEMES = new Set(['drafting', 'daylight', 'apple-light']);
   const saved = localStorage.getItem(THEME_KEY);
   const root = document.documentElement;
   if (saved) {
