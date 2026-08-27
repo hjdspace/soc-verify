@@ -2,7 +2,6 @@ import { useState, useCallback, memo, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ChevronRight,
-  ChevronDown,
   FolderOpen as OpenIcon,
   Copy,
   CopyPlus,
@@ -739,11 +738,12 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
         )}
         style={{ paddingLeft: `${depth * 12 + 4}px` }}
       >
-        {expanded ? (
-          <ChevronDown className="h-3 w-3 shrink-0 opacity-50" />
-        ) : (
-          <ChevronRight className="h-3 w-3 shrink-0 opacity-50" />
-        )}
+        <ChevronRight
+          className={cn(
+            'h-3 w-3 shrink-0 opacity-50 transition-transform duration-[150ms] ease-[var(--ease-out)]',
+            expanded && 'rotate-90',
+          )}
+        />
         <Icon
           icon={getFolderIcon(node.name, expanded)}
           aria-hidden="true"
@@ -771,24 +771,34 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
           />
         )}
       </button>
-      {expanded && displayChildren && (
-        <div>
-          {displayChildren.map((child) => (
-            <FileTreeNode
+      <div
+        className={cn(
+          'grid transition-all duration-[var(--duration-normal)] ease-[var(--ease-out)]',
+          expanded && displayChildren ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0',
+        )}
+      >
+        <div className="overflow-hidden">
+          {displayChildren?.map((child, idx) => (
+            <div
               key={child.path}
-              node={child}
-              depth={depth + 1}
-              onSelectFile={onSelectFile}
-              selectedPath={selectedPath}
-              onContextMenu={onContextMenu}
-              projectId={projectId}
-              dirId={dirId}
-              gitBadgeMap={gitBadgeMap}
-              gitDirStatusMap={gitDirStatusMap}
-            />
+              className="tree-item-enter animate-[tree-item-enter_200ms_var(--ease-out)_both]"
+              style={{ animationDelay: `${Math.min(idx * 30, 200)}ms` }}
+            >
+              <FileTreeNode
+                node={child}
+                depth={depth + 1}
+                onSelectFile={onSelectFile}
+                selectedPath={selectedPath}
+                onContextMenu={onContextMenu}
+                projectId={projectId}
+                dirId={dirId}
+                gitBadgeMap={gitBadgeMap}
+                gitDirStatusMap={gitDirStatusMap}
+              />
+            </div>
           ))}
         </div>
-      )}
+      </div>
     </div>
   );
 });
