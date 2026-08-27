@@ -41,6 +41,10 @@ export type SimulationRunRow = {
   corner?: string;
   seed?: string;
   optionsJson?: string;
+  /** runsim 命令（终端仿真来源，用于重新仿真） */
+  command?: string;
+  /** 仿真工作目录（终端仿真来源，用于重新仿真） */
+  cwd?: string;
 };
 
 export type SubsysWithCaseCount = {
@@ -319,8 +323,8 @@ export function insertSimulationRun(
 ): { inserted: number } {
   const result = db.prepare(`
     INSERT INTO simulation_runs
-    (run_id, case_name, subsys, status, start_time, end_time, duration_ms, corner, seed, options_json)
-    VALUES (@runId, @caseName, @subsys, @status, @startTime, @endTime, @durationMs, @corner, @seed, @optionsJson)
+    (run_id, case_name, subsys, status, start_time, end_time, duration_ms, corner, seed, options_json, command, cwd)
+    VALUES (@runId, @caseName, @subsys, @status, @startTime, @endTime, @durationMs, @corner, @seed, @optionsJson, @command, @cwd)
   `).run({
     runId: run.runId ?? null,
     caseName: run.caseName,
@@ -332,6 +336,8 @@ export function insertSimulationRun(
     corner: run.corner ?? null,
     seed: run.seed ?? null,
     optionsJson: run.optionsJson ?? null,
+    command: run.command ?? null,
+    cwd: run.cwd ?? null,
   });
   return { inserted: result.changes };
 }
@@ -347,6 +353,8 @@ export type RecentSimulationRunRow = {
   durationMs: number | null;
   seed: string | null;
   optionsJson: string | null;
+  command: string | null;
+  cwd: string | null;
 };
 
 /** 获取最近的仿真运行记录，供仿真页跨重启恢复运行列表。 */
@@ -356,10 +364,10 @@ export function getRecentSimulationRuns(
 ): RecentSimulationRunRow[] {
   const rows = db.prepare(`
     SELECT id, run_id, case_name, subsys, status, start_time, end_time,
-      duration_ms, seed, options_json
+      duration_ms, seed, options_json, command, cwd
     FROM (
       SELECT id, run_id, case_name, subsys, status, start_time, end_time,
-        duration_ms, seed, options_json,
+        duration_ms, seed, options_json, command, cwd,
         ROW_NUMBER() OVER (
           PARTITION BY case_name, subsys
           ORDER BY start_time DESC, id DESC
@@ -380,6 +388,8 @@ export function getRecentSimulationRuns(
     duration_ms: number | null;
     seed: string | null;
     options_json: string | null;
+    command: string | null;
+    cwd: string | null;
   }>;
 
   return rows.map((row) => ({
@@ -393,6 +403,8 @@ export function getRecentSimulationRuns(
     durationMs: row.duration_ms,
     seed: row.seed,
     optionsJson: row.options_json,
+    command: row.command,
+    cwd: row.cwd,
   }));
 }
 
