@@ -20,7 +20,7 @@ export function Backdrop({ open, onClose }: BackdropProps) {
       aria-hidden="true"
       onClick={onClose}
       className={cn(
-        'fixed right-0 z-40 bg-black/50 transition-opacity duration-200 ease-out',
+        'fixed right-0 z-40 bg-black/50 transition-opacity duration-[var(--duration-drawer)] ease-[var(--ease-out)]',
         open ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0',
       )}
       style={{ top: TITLE_BAR_HEIGHT, bottom: STATUS_BAR_HEIGHT, left: NAV_RAIL_WIDTH }}
