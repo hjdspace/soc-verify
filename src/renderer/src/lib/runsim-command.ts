@@ -287,6 +287,25 @@ export function updateSeedInCommand(command: string, seed: string): string {
 }
 
 /**
+ * Strip the `cd "<dir>" && ` prefix from a command string (display only).
+ *
+ * The backend (`runInTerminal` / `rerunWithCommand`) prepends
+ * `cd "$PROJ_WORK" && ` to ensure the simulation runs in the correct
+ * directory. For display purposes the user only wants to see the
+ * `runsim ...` portion. This function removes the cd prefix so the
+ * toolbar preview shows a cleaner command.
+ *
+ * **Display-only** — the internal `currentCommand` state still holds
+ * the full command (with cd prefix) for API calls (`rerunWithCommand`,
+ * `getSeedFromLog`, `resolveDebugArtifacts`, etc.) that rely on the
+ * cd prefix for artifact path resolution.
+ */
+export function stripCdPrefix(command: string): string {
+  if (!command) return command;
+  return command.replace(/^\s*cd\s+("[^"]*"|'[^']*'|[^\s&]+)\s*&&\s*/, '');
+}
+
+/**
  * Parse the case name from a runsim command string.
  */
 export function parseCaseFromCommand(command: string): string | null {
