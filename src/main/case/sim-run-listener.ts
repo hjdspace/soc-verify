@@ -69,6 +69,9 @@ function toTerminalRunRow(record: TerminalSimRun): SimulationRunRow {
     durationMs: record.endTime != null ? record.endTime - record.startTime : undefined,
     seed: typeof record.options.seed === 'string' ? record.options.seed : undefined,
     optionsJson: JSON.stringify(record.options),
+    // 持久化 command/cwd，使跨重启后仍可重新仿真
+    command: record.command,
+    cwd: record.cwd,
   };
 }
 
