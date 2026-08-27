@@ -45,6 +45,20 @@ export const THEMES: ThemeDefinition[] = [
     swatch: '#3b5bdb',
     description: '极浅灰白底 + 靛蓝强调。参考 Cursor / Windsurf 等流行 AI IDE 浅色主题。',
   },
+  {
+    id: 'apple-light',
+    name: 'Apple Light',
+    mode: 'light',
+    swatch: '#0071e3',
+    description: 'macOS 浅色：灰白底 + 系统蓝 + 毛玻璃浮层 + 10px 圆角。',
+  },
+  {
+    id: 'apple-dark',
+    name: 'Apple Dark',
+    mode: 'dark',
+    swatch: '#0a84ff',
+    description: 'macOS 深色：石墨底 + 亮蓝 + 毛玻璃浮层，浮层比卡片亮一档。',
+  },
 ];
 
 const STORAGE_KEY = 'socverify:theme';
