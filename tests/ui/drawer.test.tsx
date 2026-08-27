@@ -179,15 +179,15 @@ describe('Drawer', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('开合动画规格：320ms cubic-bezier(0.2,0.8,0.2,1)（缓动同原型，时长取 300-400ms 推荐区间）', () => {
+  it('开合动画规格：引用动效 token（--duration-drawer / --ease-out，AUDIT.md Category 2）', () => {
     render(
       <Drawer side="left" open onClose={() => {}} title="文件">
         <div />
       </Drawer>,
     );
     const drawer = queryDrawer('left');
-    expect(drawer.className).toContain('duration-[320ms]');
-    expect(drawer.className).toContain('ease-[cubic-bezier(0.2,0.8,0.2,1)]');
+    expect(drawer.className).toContain('duration-[var(--duration-drawer)]');
+    expect(drawer.className).toContain('ease-[var(--ease-out)]');
     expect(drawer.className).toContain('transition-transform');
   });
 });
