@@ -19,4 +19,8 @@ export interface SimulationHistoryEntry {
   endTime: number;
   duration: number;
   compileErrors?: CompileError[];
+  /** runsim 命令（终端仿真来源有值，用于重新仿真） */
+  command?: string;
+  /** 仿真工作目录（终端仿真来源有值，用于重新仿真） */
+  cwd?: string;
 }
