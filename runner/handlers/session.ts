@@ -43,6 +43,54 @@ export async function handleSteer(cmd: Command & { type: "steer" }, ctx: RunnerC
 	sendResponse(cmd.id, true, { ok: true });
 }
 
+/**
+ * Regenerate the last assistant response.
+ *
+ * Uses the SDK's session-tree branching: `getUserMessagesForBranching()`
+ * finds the latest user entry, `branch(entryId)` moves the leaf back to just
+ * before that user message — forking the engine session file (the omp
+ * session id CHANGES) — then we re-prompt with the branched user turn.
+ *
+ * The response frame is sent right after the branch (carrying the post-branch
+ * session id) so the host can re-persist it; the regenerated turn itself
+ * streams back through the normal event channel.
+ */
+export async function handleRegenerate(cmd: Command & { type: "regenerate" }, ctx: RunnerContext): Promise<void> {
+	if (!ctx.session) throw new Error("Session not initialized");
+	const session = ctx.session as {
+		getUserMessagesForBranching: () => Array<{ entryId: string; text: string }>;
+		branch: (entryId: string) => Promise<{
+			selectedText: string;
+			selectedImages: Array<{ type: "image"; data: string; mimeType: string }>;
+			cancelled: boolean;
+		}>;
+		prompt: (msg: string, opts?: { images?: Array<{ type: "image"; data: string; mimeType: string }> }) => Promise<void>;
+		sessionId: string;
+	};
+
+	const users = session.getUserMessagesForBranching();
+	const last = users[users.length - 1];
+	if (!last) throw new Error("No user message to regenerate from");
+
+	const branched = await session.branch(last.entryId);
+	if (branched.cancelled) {
+		sendResponse(cmd.id, false, undefined, "Regenerate cancelled by session hook");
+		return;
+	}
+
+	sendResponse(cmd.id, true, { ompSessionId: session.sessionId });
+
+	// Re-prompt with the branched user turn (same text and images).  The
+	// response frame is already sent — fire-and-forget; turn-level failures
+	// surface to the host via session error events.
+	const images = branched.selectedImages.length > 0 ? { images: branched.selectedImages } : undefined;
+	try {
+		await session.prompt(branched.selectedText, images);
+	} catch {
+		// Swallow — errors reach the host as session events, not as a response.
+	}
+}
+
 export async function handleSetModel(cmd: Command & { type: "setModel" }, ctx: RunnerContext): Promise<void> {
 	if (!ctx.session) throw new Error("Session not initialized");
 	// The SDK's AgentSession doesn't have a direct setModel method like the RPC mode.

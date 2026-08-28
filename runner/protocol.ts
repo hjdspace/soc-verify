@@ -121,6 +121,7 @@ export type Command =
 	| { id: string; type: "prompt"; message: string; images?: string[] }
 	| { id: string; type: "abort" }
 	| { id: string; type: "steer"; message: string }
+	| { id: string; type: "regenerate" }
 	| { id: string; type: "setModel"; provider: string; modelId: string }
 	| { id: string; type: "setApprovalMode"; approvalMode: ApprovalMode }
 	| { id: string; type: "setThinkingLevel"; level: ThinkingLevelSetting }

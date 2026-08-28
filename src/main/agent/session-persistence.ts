@@ -94,6 +94,24 @@ export async function updateSessionModel(
 }
 
 /**
+ * Update the omp engine's session id on a persisted session.
+ * Called after a regenerate branch forks the engine session file, so a
+ * future app restart resumes the regenerated branch instead of the old one.
+ */
+export async function updateSessionOmpId(
+  projectRoot: string,
+  sessionId: string,
+  ompSessionId: string,
+): Promise<void> {
+  const sessions = await loadSessions(projectRoot);
+  const idx = sessions.findIndex((s) => s.sessionId === sessionId);
+  if (idx >= 0) {
+    sessions[idx] = { ...sessions[idx], ompSessionId };
+    await saveSessions(projectRoot, sessions);
+  }
+}
+
+/**
  * Update the lastActivityAt timestamp on a persisted session.
  * Called when the user sends a message so the history list stays sorted by recency.
  */

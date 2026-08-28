@@ -7,6 +7,7 @@ import type { ChatMessage, SelectedSkill, ContextFile, HistorySession, SessionEn
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
+import { AssistantActions } from '@renderer/components/chat/AssistantActions';
 import { ToolCard } from '@renderer/components/chat/ToolCard';
 import { ThinkingBlock } from '@renderer/components/chat/ThinkingBlock';
 import { TVAISuggestionCard } from '@renderer/components/chat/TVAISuggestionCard';
@@ -1505,6 +1506,9 @@ function MessageBubble({ message, session }: { message: ChatMessage; session?: S
             <span className="text-[10px]">思考中...</span>
           </div>
         )
+      )}
+      {!isStreaming && message.content && !canRenderTVCard && !message.content.trimStart().startsWith('[错误]') && (
+        <AssistantActions message={message} session={session} />
       )}
     </div>
   );

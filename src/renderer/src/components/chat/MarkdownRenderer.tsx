@@ -312,6 +312,63 @@ function tokenizeFileRefs(text: string): TextSegment[] {
   return segments;
 }
 
+// ── 消息引用提取（回合收尾"引用来源"列表用）─────────────────────────
+
+export type MessageReference =
+  | { kind: 'file'; display: string; path: string; line?: number; endLine?: number }
+  | { kind: 'uri'; display: string; uri: string };
+
+// case:/// log:/// cov:/// host URI——遇空白/CJK 标点/右括号终止
+const HOST_URI_RE = /\b(?:case|log|cov):\/\/[^\s)\]}，。；、]+/g;
+
+/**
+ * Extract the "sources" referenced by an assistant message: host URIs
+ * (case:/// log:/// cov:///) and project file references (path/file.sv:42).
+ * Uses the same file-ref recognition as inline rendering (tokenizeFileRefs),
+ * deduplicated in order of first appearance.
+ */
+export function extractMessageReferences(content: string): MessageReference[] {
+  type Positioned = { start: number; key: string; ref: MessageReference };
+  const items: Positioned[] = [];
+
+  // 收集 host URI 及其位置
+  HOST_URI_RE.lastIndex = 0;
+  const uriSpans: Array<[number, number]> = [];
+  let match: RegExpExecArray | null;
+  while ((match = HOST_URI_RE.exec(content)) !== null) {
+    const uri = match[0];
+    uriSpans.push([match.index, match.index + uri.length]);
+    items.push({ start: match.index, key: uri, ref: { kind: 'uri', display: uri.replace(/^[a-z]+:\/\//, ''), uri } });
+  }
+
+  // 文件引用：复用与正文渲染一致的识别规则；位置通过顺序 indexOf 恢复，
+  // 落在 URI span 内的（如 case:///run/123/main.log 的 run/123/main.log）跳过
+  let cursor = 0;
+  for (const seg of tokenizeFileRefs(content)) {
+    if (seg.type !== 'fileRef') continue;
+    const at = content.indexOf(seg.display, cursor);
+    if (at === -1) continue;
+    cursor = at + seg.display.length;
+    const end = at + seg.display.length;
+    if (uriSpans.some(([s, e]) => at < e && end > s)) continue;
+    items.push({
+      start: at,
+      key: `file:${seg.path}:${seg.line ?? ''}:${seg.endLine ?? ''}`,
+      ref: { kind: 'file', display: seg.display, path: seg.path, line: seg.line, endLine: seg.endLine },
+    });
+  }
+
+  items.sort((a, b) => a.start - b.start);
+  const refs: MessageReference[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (seen.has(item.key)) continue;
+    seen.add(item.key);
+    refs.push(item.ref);
+  }
+  return refs;
+}
+
 /**
  * Renders text that may contain project-relative file paths as clickable links.
  * Clicking opens the file in the center editor panel, optionally at a specific line.

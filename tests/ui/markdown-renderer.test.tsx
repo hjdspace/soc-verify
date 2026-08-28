@@ -18,7 +18,7 @@ vi.mock('@renderer/components/chat/MermaidDiagram', () => ({
   MermaidDiagram: ({ code }: { code: string }) => <div data-testid="mermaid-stub">{code}</div>,
 }));
 
-import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
+import { MarkdownRenderer, extractMessageReferences } from '@renderer/components/chat/MarkdownRenderer';
 
 // 来自真实会话 session_1787143666156_26e85o.json 的 LLM 答复片段：
 // 无语言标记的 fenced code block 内含目录树
@@ -161,5 +161,28 @@ describe('MarkdownRenderer 流式尾缘', () => {
     rerender(<MarkdownRenderer content="流式中的回复已完成" />);
     expect(container.querySelector('.ap-cursor')).toBeNull();
     expect(container.querySelector('.ap-stream-tail')).toBeNull();
+  });
+});
+
+describe('extractMessageReferences 引用来源提取', () => {
+  it('提取文件引用（含行号）与 host URI，按首次出现去重排序', () => {
+    const content = [
+      '先看 src/main/foo.sv:42 的实现，再对比 src/main/foo.sv:42。',
+      '运行结果见 case:///run/123，日志在 log:///run/123/main.log。',
+      '涉及 tests/tb_top.v:100-105 与 case:///run/123。',
+    ].join('\n');
+
+    const refs = extractMessageReferences(content);
+
+    expect(refs).toHaveLength(4);
+
+    expect(refs[0]).toMatchObject({ kind: 'file', path: 'src/main/foo.sv', line: 42 });
+    expect(refs[1]).toMatchObject({ kind: 'uri', uri: 'case:///run/123' });
+    expect(refs[2]).toMatchObject({ kind: 'uri', uri: 'log:///run/123/main.log' });
+    expect(refs[3]).toMatchObject({ kind: 'file', path: 'tests/tb_top.v', line: 100, endLine: 105 });
+  });
+
+  it('无引用内容返回空数组', () => {
+    expect(extractMessageReferences('普通文本，没有可识别的引用。')).toEqual([]);
   });
 });

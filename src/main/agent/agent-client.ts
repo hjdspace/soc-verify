@@ -401,6 +401,21 @@ export class AgentClient {
   }
 
   /**
+   * Regenerate the last assistant response.
+   *
+   * The runner branches the engine session back to the latest user message
+   * (which forks the engine session file — the omp session id changes) and
+   * re-prompts with that message. The response frame arrives right after the
+   * branch and carries the post-branch ompSessionId so the host can
+   * re-persist it; the regenerated turn itself streams back via the normal
+   * event channel.
+   */
+  async regenerate(): Promise<{ ompSessionId: string }> {
+    const response = await this.send({ type: 'regenerate' }, 60_000);
+    return this.getData<{ ompSessionId: string }>(response);
+  }
+
+  /**
    * Abort the current agent turn.
    *
    * Sends an `abort` command to the runner as fire-and-forget (the runner

@@ -246,6 +246,74 @@ html[data-shade='dark'] .ai-panel {
   vertical-align: text-bottom;
 }
 
+/* ── 回合收尾操作栏（复制/重新生成/引用来源）─────────────────────
+   呈现模式参考 beautiful-ui StreamingText 的 done 态：流式结束后整体
+   fade-up 淡入（轻微延迟，等正文 settle），来源列表展开时再次淡入 */
+@keyframes ap-fadeup {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.ap-turnactions {
+  margin-top: 3px;
+  animation: ap-fadeup 350ms cubic-bezier(0.23, 1, 0.32, 1) 120ms both;
+}
+.ap-turnactions-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.ap-turnaction-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 5px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--dsw-label-secondary);
+  transition: background-color 100ms ease, color 100ms ease;
+}
+.ap-turnaction-btn:hover {
+  background: var(--dsw-hover-bg);
+  color: var(--dsw-label-primary);
+}
+.ap-turnactions-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 3px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--dsw-code-block);
+  animation: ap-fadeup 250ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+.ap-turnactions-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--dsw-label-secondary);
+  text-align: left;
+}
+button.ap-turnactions-source {
+  cursor: pointer;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+button.ap-turnactions-source:hover {
+  background: var(--dsw-hover-bg);
+  color: var(--dsw-label-primary);
+}
+
 /* todo 进行中环 */
 @keyframes ap-rotate {
   to { transform: rotate(360deg); }

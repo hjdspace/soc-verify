@@ -1013,6 +1013,31 @@ export class SessionManagerImpl extends EventEmitter {
     await client.abort();
   }
 
+  /**
+   * Regenerate the last assistant response for a session.
+   *
+   * Engine-side this branches the session tree back to the latest user
+   * message and re-prompts — the branch FORKS the engine session file, so
+   * the entry's ompSessionId is updated in place (the caller persists it
+   * with the project root it already has).  The regenerated turn streams
+   * back through the normal sessionEvent channel.
+   */
+  async regenerateSession(sessionId: string): Promise<{ ompSessionId: string }> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+    if (!entry.client.isRunning()) {
+      throw new Error(`Client not started: ${sessionId}`);
+    }
+    const result = await entry.client.regenerate();
+    if (result.ompSessionId && result.ompSessionId !== entry.ompSessionId) {
+      entry.ompSessionId = result.ompSessionId;
+      console.log(`[agent:session:${sessionId}] omp sessionId=${result.ompSessionId} (branched by regenerate)`);
+    }
+    return result;
+  }
+
   listSessions(): Array<{ id: string; persistedSessionId?: string; projectId: string; createdAt: number; lastActivityAt: number }> {
     return Array.from(this.sessions.values()).map((e) => ({
       id: e.id,

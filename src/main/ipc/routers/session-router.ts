@@ -25,6 +25,7 @@ import {
   updateSessionModel,
   updateSessionActivity,
   updateSessionContextUsage,
+  updateSessionOmpId,
   type PersistedSession,
 } from '../../agent/session-persistence';
 import { discoverSkills, readSkillContent } from '../../agent/skill-discovery';
@@ -351,6 +352,52 @@ export const sessionRouter = t.router({
         entry.client.stop();
       }
       return { ok: true };
+    }),
+
+  regenerate: t.procedure
+    .input((raw): { sessionId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.sessionId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'sessionId is required' });
+      }
+      return { sessionId: r.sessionId };
+    })
+    .mutation(async ({ input }) => {
+      // Wait for an in-flight holistic swap, same rationale as send().
+      let targetSessionId = input.sessionId;
+      const swap = inFlightSwaps.get(input.sessionId);
+      if (swap) {
+        try {
+          targetSessionId = (await swap).sessionId;
+        } catch {
+          // Swap failed — proceed with the original sessionId; the renderer
+          // rolls back on failure.
+        }
+      }
+      const client = requireSession(targetSessionId);
+      if (!client.isRunning()) {
+        console.warn(`[router:session.regenerate] agent process not running for ${targetSessionId} — destroying stale session`);
+        await sessionManager.destroySession(targetSessionId);
+        throw new TRPCError({ code: 'NOT_FOUND', message: `Session process not running: ${targetSessionId}` });
+      }
+      sessionManager.touchActivity(targetSessionId);
+
+      // Branch the engine session back to the latest user message and
+      // re-prompt. The branch forks the engine session file — persist the
+      // post-branch ompSessionId so a restart resumes the new branch.
+      const result = await sessionManager.regenerateSession(targetSessionId);
+      const entry = sessionManager.getSession(targetSessionId);
+      if (entry) {
+        const project = projectManager.getProject(entry.projectId);
+        if (project) {
+          await updateSessionOmpId(
+            project.rootPath,
+            entry.persistedSessionId ?? targetSessionId,
+            result.ompSessionId,
+          );
+        }
+      }
+      return { ok: true, ompSessionId: result.ompSessionId };
     }),
 
   destroy: t.procedure

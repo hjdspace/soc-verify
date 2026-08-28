@@ -419,6 +419,7 @@ export interface SessionMessagesState {
   abortSession: () => Promise<void>;
   compactSession: () => Promise<boolean>;
   steerSession: (message: string) => Promise<void>;
+  regenerateLast: () => Promise<void>;
   handleSessionEvent: (sessionId: string, event: unknown) => void;
   registerMessagesEventListeners: () => void;
 }
@@ -665,6 +666,91 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
       await trpc.session.steer.mutate({ sessionId: runtimeSessionId, message });
     } catch (err) {
       useToastStore.getState().error('引导会话失败', tRPCError(err));
+    }
+  },
+
+  /**
+   * Regenerate the last assistant response: drop everything after the latest
+   * user message in the UI transcript, then have the engine branch back to
+   * that user message and re-prompt (see session.regenerate tRPC procedure).
+   *
+   * The optimistic placeholder is filled by the regenerated turn's
+   * message_start event; on failure the removed messages are rolled back.
+   */
+  regenerateLast: async () => {
+    const coreGet = useSessionCoreStore.getState;
+    const coreSet = useSessionCoreStore.setState.bind(useSessionCoreStore);
+    const sessionId = coreGet().currentSessionId;
+    if (!sessionId) return;
+    const session = coreGet().sessions.find((s) => sessionMatchesId(s, sessionId));
+    if (!session) return;
+    // Regenerating mid-turn would branch a running session — only idle (or a
+    // previously failed turn) may regenerate.
+    if (session.status !== 'idle' && session.status !== 'error') return;
+
+    let lastUserIdx = -1;
+    for (let i = session.messages.length - 1; i >= 0; i--) {
+      if (session.messages[i].role === 'user') {
+        lastUserIdx = i;
+        break;
+      }
+    }
+    if (lastUserIdx === -1) return;
+    const trailing = session.messages.slice(lastUserIdx + 1);
+    // Nothing after the user message — there is no response to regenerate.
+    if (trailing.length === 0) return;
+
+    const kept = session.messages.slice(0, lastUserIdx + 1);
+    const placeholder: ChatMessage = {
+      id: `msg_${Date.now()}`,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+      isStreaming: true,
+    };
+
+    coreSet((s) => ({
+      sessions: s.sessions.map((sess) =>
+        sessionMatchesId(sess, sessionId)
+          ? { ...sess, status: 'streaming', messages: [...kept, placeholder] }
+          : sess,
+      ),
+    }));
+    persistSessionMessages(coreGet().sessions.find((sess) => sessionMatchesId(sess, sessionId)));
+
+    const rollback = () => {
+      coreSet((s) => ({
+        sessions: s.sessions.map((sess) =>
+          sessionMatchesId(sess, sessionId)
+            ? { ...sess, status: 'idle', messages: [...kept, ...trailing] }
+            : sess,
+        ),
+      }));
+      persistSessionMessages(coreGet().sessions.find((sess) => sessionMatchesId(sess, sessionId)));
+    };
+
+    try {
+      let runtimeSessionId = await coreGet().ensureRuntimeSession(sessionId);
+      try {
+        await trpc.session.regenerate.mutate({ sessionId: runtimeSessionId });
+      } catch (regenErr) {
+        const regenErrMsg = regenErr instanceof Error ? regenErr.message : String(regenErr);
+        // Dead runtime process — rebuild it and retry once, mirroring sendMessage.
+        if (/Session not found|Client not started|not running/i.test(regenErrMsg)) {
+          coreSet((s) => ({
+            sessions: s.sessions.map((sess) =>
+              sessionMatchesId(sess, sessionId) ? { ...sess, runtimeSessionId: undefined } : sess,
+            ),
+          }));
+          runtimeSessionId = await coreGet().ensureRuntimeSession(sessionId);
+          await trpc.session.regenerate.mutate({ sessionId: runtimeSessionId });
+        } else {
+          throw regenErr;
+        }
+      }
+    } catch (err) {
+      rollback();
+      useToastStore.getState().error('重新生成失败', tRPCError(err));
     }
   },
 

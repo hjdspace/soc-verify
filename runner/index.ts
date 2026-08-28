@@ -41,7 +41,7 @@ import type { RunnerContext } from "./types";
 
 // Handler modules
 import { handleInit } from "./handlers/init";
-import { handlePrompt, handleAbort, handleSteer, handleSetModel, handleSetThinkingLevel, handleGetMessages, handleGetState, handleCompact, handleDestroy } from "./handlers/session";
+import { handlePrompt, handleAbort, handleSteer, handleRegenerate, handleSetModel, handleSetThinkingLevel, handleGetMessages, handleGetState, handleCompact, handleDestroy } from "./handlers/session";
 import { handleGetMcpStatus, handleGetMcpServerTools, handleReloadMcp } from "./handlers/mcp";
 import { handleSetApprovalMode, handleSetToolFilter, handleListAgentTools } from "./handlers/tools";
 
@@ -143,6 +143,9 @@ async function handleCommand(cmd: Command): Promise<void> {
 				break;
 			case "steer":
 				await handleSteer(cmd, ctx);
+				break;
+			case "regenerate":
+				await handleRegenerate(cmd, ctx);
 				break;
 			case "setModel":
 				await handleSetModel(cmd, ctx);
