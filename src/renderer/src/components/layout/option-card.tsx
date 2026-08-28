@@ -1,3 +1,5 @@
+import { useState } from 'react';
+import { Plus, RotateCcw } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 import type { SimOptionField } from '@shared/plugin-types';
 
@@ -163,24 +165,107 @@ export function OptionField({
 
     case 'enum':
       return (
-        <>
-          {labelCell}
-          <select
-            value={typeof value === 'string' ? value : ''}
-            onChange={(e) => onChange(e.target.value)}
-            className={cn(inputClass, 'cursor-pointer')}
-          >
-            <option value="">--</option>
-            {field.enumValues?.map((v) => (
-              <option key={v} value={v}>
-                {v || '--'}
-              </option>
-            ))}
-          </select>
-        </>
+        <EnumField
+          field={field}
+          value={value}
+          onChange={onChange}
+          labelCell={labelCell}
+          inputClass={inputClass}
+          tooltip={tooltip}
+        />
       );
 
     default:
       return null;
   }
+}
+
+// ─── Enum field — 支持自定义值输入 ───────────────────────────
+//
+// enum 字段默认渲染为 <select>，旁边附 + 按钮切换到自由输入模式。
+// 当当前值不在 enumValues 列表中（如用户之前输入了自定义 corner），
+// 自动进入输入模式，避免值丢失。
+// 切回 select 模式时，若当前自定义值不在列表中，清空为默认值。
+
+type EnumFieldProps = {
+  field: SimOptionField;
+  value: unknown;
+  onChange: (value: unknown) => void;
+  labelCell: React.ReactNode;
+  inputClass: string;
+  tooltip: string;
+};
+
+function EnumField({
+  field,
+  value,
+  onChange,
+  labelCell,
+  inputClass,
+  tooltip,
+}: EnumFieldProps) {
+  const strValue = typeof value === 'string' ? value : '';
+  const isPreset = !strValue || (field.enumValues?.includes(strValue) ?? false);
+  // 当值不在预设列表中时，自动进入自定义模式
+  const [customMode, setCustomMode] = useState(!isPreset);
+
+  if (customMode) {
+    return (
+      <>
+        {labelCell}
+        <div className="flex items-center gap-1">
+          <input
+            type="text"
+            value={strValue}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="输入自定义值"
+            className={inputClass}
+            title={tooltip}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              setCustomMode(false);
+              // 若当前值不在预设列表中，切回 select 时清空
+              if (strValue && !(field.enumValues?.includes(strValue) ?? false)) {
+                onChange('');
+              }
+            }}
+            className="flex h-6 shrink-0 items-center justify-center rounded border border-border bg-background/60 text-muted-foreground transition-[color,background-color,transform] duration-150 ease-out hover:bg-accent hover:text-foreground active:scale-[0.97]"
+            title="切回预设列表"
+          >
+            <RotateCcw className="h-3 w-3" />
+          </button>
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      {labelCell}
+      <div className="flex items-center gap-1">
+        <select
+          value={strValue}
+          onChange={(e) => onChange(e.target.value)}
+          className={cn(inputClass, 'flex-1 cursor-pointer')}
+        >
+          <option value="">--</option>
+          {field.enumValues?.map((v) => (
+            <option key={v} value={v}>
+              {v || '--'}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={() => setCustomMode(true)}
+          className="flex h-6 w-5 shrink-0 items-center justify-center rounded border border-border bg-background/60 text-muted-foreground transition-[color,background-color,transform] duration-150 ease-out hover:bg-accent hover:text-foreground active:scale-[0.97]"
+          title="输入自定义值"
+        >
+          <Plus className="h-3 w-3" />
+        </button>
+      </div>
+    </>
+  );
 }
