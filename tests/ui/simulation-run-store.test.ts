@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   abortTerminalRun: vi.fn(),
   listActiveRuns: vi.fn(),
   getRunDetail: vi.fn(),
+  rerunWithCommand: vi.fn(),
 }));
 
 vi.mock('@renderer/lib/trpc', () => ({
@@ -17,6 +18,7 @@ vi.mock('@renderer/lib/trpc', () => ({
       abortTerminalRun: { mutate: mocks.abortTerminalRun },
       listActiveRuns: { query: mocks.listActiveRuns },
       getRunDetail: { query: mocks.getRunDetail },
+      rerunWithCommand: { mutate: mocks.rerunWithCommand },
     },
   },
 }));
@@ -265,6 +267,89 @@ describe('Terminal Simulation Run launch', () => {
 
     const runs = useSimulationStore.getState().activeRuns;
     expect(runs).toHaveLength(0);
+  });
+
+  it('rerunRun：重新仿真时移除同 caseId×subsys 的旧终态记录，避免重复显示', async () => {
+    // 场景：同一用例 test_top_ap_mini 先 FAIL（runId=old-run），
+    // 点击重新仿真后后端返回新 runId=new-run（status=running）。
+    // 前端应移除旧 fail 记录，只保留新 running 记录。
+    const now = Date.now();
+    const oldRun = {
+      runId: 'old-run',
+      projectId: 'project-1',
+      caseId: 'test_top_ap_mini',
+      caseName: 'test_top_ap_mini',
+      subsys: 'ap',
+      status: 'fail' as const,
+      startTime: now - 10_000,
+      endTime: now - 5_000,
+      terminalId: 'term-old',
+      command: 'runsim test_top_ap_mini',
+      cwd: 'D:/project/sim',
+    };
+    useSimulationStore.setState({ activeRuns: [oldRun] });
+
+    mocks.rerunWithCommand.mockResolvedValue({
+      runId: 'new-run',
+      terminalId: 'term-new',
+      command: 'runsim test_top_ap_mini',
+      cwd: 'D:/project/sim',
+    });
+
+    await useSimulationStore.getState().rerunRun(oldRun);
+
+    const runs = useSimulationStore.getState().activeRuns;
+    // 旧的 fail 记录应被移除，只保留新的 running 记录
+    expect(runs).toHaveLength(1);
+    expect(runs[0].runId).toBe('new-run');
+    expect(runs[0].status).toBe('running');
+  });
+
+  it('rerunRun：不同用例的记录不受影响', async () => {
+    // 场景：两个不同用例，rerun 其中一个，另一个应保留
+    const now = Date.now();
+    const failRun = {
+      runId: 'r-fail',
+      projectId: 'project-1',
+      caseId: 'case_fail',
+      caseName: 'case_fail',
+      subsys: 'core',
+      status: 'fail' as const,
+      startTime: now - 10_000,
+      endTime: now - 5_000,
+      command: 'runsim case_fail',
+      cwd: 'D:/project/sim',
+    };
+    const passRun = {
+      runId: 'r-pass',
+      projectId: 'project-1',
+      caseId: 'case_pass',
+      caseName: 'case_pass',
+      subsys: 'core',
+      status: 'pass' as const,
+      startTime: now - 8_000,
+      endTime: now - 3_000,
+      command: 'runsim case_pass',
+      cwd: 'D:/project/sim',
+    };
+    useSimulationStore.setState({ activeRuns: [failRun, passRun] });
+
+    mocks.rerunWithCommand.mockResolvedValue({
+      runId: 'r-new',
+      terminalId: 'term-new',
+      command: 'runsim case_fail',
+      cwd: 'D:/project/sim',
+    });
+
+    await useSimulationStore.getState().rerunRun(failRun);
+
+    const runs = useSimulationStore.getState().activeRuns;
+    // 旧 fail 记录被移除，新 running 记录添加，pass 记录保留
+    expect(runs).toHaveLength(2);
+    const runIds = runs.map((r) => r.runId);
+    expect(runIds).toContain('r-new');
+    expect(runIds).toContain('r-pass');
+    expect(runIds).not.toContain('r-fail');
   });
 
   it('stopAllRuns：终端运行走 abortTerminalRun，插件运行走 abort，跳过已结束运行（Issue #9）', async () => {
