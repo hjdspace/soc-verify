@@ -233,12 +233,39 @@ describe('SimOptionPanel 字段渲染与编辑', () => {
     expect(mockSetSimOption).toHaveBeenCalledWith('simulator', 'xrun');
   });
 
-  it('有 description 的字段显示 (?) 提示', async () => {
+  it('有 description 的字段把描述并入 label tooltip（不再常驻 (?) 提示）', async () => {
     render(<SimOptionPanel />);
 
     await screen.findByText('Timeout');
 
-    expect(screen.getByText('(?)')).toBeInTheDocument();
+    expect(screen.queryByText('(?)')).not.toBeInTheDocument();
+    const label = screen.getByTitle(/Simulation timeout in ms/);
+    expect(label.textContent).toBe('Timeout');
+  });
+
+  it('label 尾部 CLI flag 剥离进 tooltip，label 只保留语义名', async () => {
+    vi.mocked(trpc.project.getSimOptionsSchema.query).mockResolvedValue({
+      fields: [
+        { key: 'rundir', label: '工作目录 (-rundir)', type: 'string', group: '基础参数' },
+      ],
+    });
+
+    render(<SimOptionPanel />);
+
+    // flag (-rundir) 与 key 互为镜像，tooltip 去重后只剩 key
+    const label = await screen.findByTitle('rundir');
+    expect(label.textContent).toBe('工作目录');
+  });
+
+  it('boolean 字段渲染为 switch 角色，点击翻转并回调 setSimOption', async () => {
+    render(<SimOptionPanel />);
+
+    const sw = await screen.findByRole('switch', { name: 'Dump Waveform' });
+    expect(sw.getAttribute('aria-checked')).toBe('false');
+
+    fireEvent.click(sw);
+
+    expect(mockSetSimOption).toHaveBeenCalledWith('waveform', true);
   });
 });
 
@@ -411,6 +438,9 @@ describe('SimOptionPanel 预设管理', () => {
     render(<SimOptionPanel />);
 
     await screen.findByText('BASE');
+
+    // 保存行收在预设下拉菜单底部，先打开菜单
+    fireEvent.click(screen.getByText('预设'));
 
     // Type preset name
     const presetInput = screen.getByPlaceholderText('预设名称') as HTMLInputElement;
