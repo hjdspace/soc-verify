@@ -54,7 +54,7 @@ vi.mock('@renderer/stores/toast', () => ({
 
 import { useSessionCoreStore } from '@renderer/stores/session-core';
 import { useSessionMessagesStore } from '@renderer/stores/session-messages';
-import type { ChatMessage } from '@renderer/stores/session-types';
+import type { ChatMessage, SessionEntry } from '@renderer/stores/session-types';
 import { useProjectStore } from '@renderer/stores/project';
 import { RightPanel } from '@renderer/components/layout/RightPanel';
 
@@ -583,5 +583,74 @@ describe('SessionStore state machine transitions', () => {
     expect(session.messages[1].isStreaming).toBe(false);
     expect(session.messages[2].role).toBe('tool');
     expect(session.messages[2].toolResult).toEqual({ runId: 'r1', status: 'pass' });
+  });
+});
+
+describe('回合收尾操作栏渲染位置', () => {
+  // 一次多步回合的典型消息序列：文本 → 工具 → 文本
+  const turnMessages: ChatMessage[] = [
+    { id: 'u1', role: 'user', content: '你支持哪些技能', timestamp: 1 },
+    { id: 'a2', role: 'assistant', content: '我来查看当前环境中可用的技能。', timestamp: 2 },
+    { id: 't3', role: 'tool', content: '', timestamp: 3, toolName: 'bash', toolArgs: {} },
+    { id: 'a4', role: 'assistant', content: '当前环境支持以下技能……', timestamp: 4 },
+  ];
+
+  function seedTurn(status: SessionEntry['status'], streamingLast = false) {
+    useSessionCoreStore.setState({
+      sessions: [{
+        id: 's1',
+        projectId: 'p1',
+        name: 'Test',
+        status,
+        messages: turnMessages.map((m, i) =>
+          streamingLast && i === turnMessages.length - 1 ? { ...m, isStreaming: true } : { ...m },
+        ),
+        composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
+        createdAt: Date.now(),
+      }],
+      currentSessionId: 's1',
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Element.prototype.scrollIntoView = vi.fn();
+    useProjectStore.setState({
+      projects: [{
+        id: 'p1',
+        name: 'Project',
+        rootPath: '/tmp/project',
+        createdAt: Date.now(),
+        lastOpenedAt: Date.now(),
+      }],
+      currentProjectId: 'p1',
+      fileTree: null,
+      fileTreeLoading: false,
+      plugins: [],
+      selectedSubsys: null,
+      caseStatusFilter: 'all',
+    });
+  });
+
+  it('多步回合完成后只在最后一条助手消息上渲染一份操作栏', () => {
+    seedTurn('idle');
+    render(<RightPanel width={320} />);
+
+    expect(screen.getByText('我来查看当前环境中可用的技能。')).toBeInTheDocument();
+    const actions = screen.getAllByTestId('assistant-actions');
+    expect(actions).toHaveLength(1);
+    expect(within(actions[0]).getByLabelText('复制回复')).toBeInTheDocument();
+  });
+
+  it('回合进行中（工具执行间隙，无流式消息）不渲染操作栏', () => {
+    seedTurn('tool_executing');
+    render(<RightPanel width={320} />);
+    expect(screen.queryByTestId('assistant-actions')).not.toBeInTheDocument();
+  });
+
+  it('流式输出中的助手消息不渲染操作栏', () => {
+    seedTurn('streaming', true);
+    render(<RightPanel width={320} />);
+    expect(screen.queryByTestId('assistant-actions')).not.toBeInTheDocument();
   });
 });
