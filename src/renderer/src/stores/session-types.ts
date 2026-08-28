@@ -147,6 +147,8 @@ export interface SessionEntry {
   thinkingLevel?: ThinkingLevelSetting;
   /** task 工具派遣的 subagent 实时状态（key = subagent id，瞬态不持久化） */
   subagents?: Record<string, SubagentActivity>;
+  /** 建议追问（回合结束后由轻量 LLM 生成，瞬态不持久化，仅最后一条助手消息呈现） */
+  followUps?: string[];
 }
 
 export interface HistorySession {

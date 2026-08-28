@@ -402,6 +402,63 @@ function registerVisibilityListener(): void {
   });
 }
 
+// ─── 建议追问生成（回合收尾）──────────────────────────────
+
+/** 助手回复低于该长度不生成建议追问（简短确认没有可追问的内容）。 */
+const FOLLOW_UP_MIN_ASSISTANT_CHARS = 20;
+
+/**
+ * 回合结束（agent_end）后的建议追问生成：取本轮最后一条用户消息与助手回复，
+ * 经 trpc.session.generateFollowUps 做一次轻量 LLM 调用，结果挂到会话上。
+ * fire-and-forget——失败静默；写入时校验会话仍空闲且最后一轮助手消息
+ * 未变（用户已开始新回合或重新生成时结果作废）。
+ */
+async function triggerFollowUpGeneration(
+  get: () => ReturnType<typeof useSessionCoreStore.getState>,
+  sessionId: string,
+): Promise<void> {
+  const session = get().sessions.find((sess) => sessionMatchesId(sess, sessionId));
+  if (!session || session.status !== 'idle') return;
+
+  let lastUser: ChatMessage | undefined;
+  let lastAssistant: ChatMessage | undefined;
+  for (let i = session.messages.length - 1; i >= 0; i--) {
+    const msg = session.messages[i];
+    if (!lastAssistant && msg.role === 'assistant') lastAssistant = msg;
+    if (!lastUser && msg.role === 'user') lastUser = msg;
+    if (lastUser && lastAssistant) break;
+  }
+  const assistantText = (lastAssistant?.content ?? '').trim();
+  if (!lastUser || !lastAssistant || !assistantText) return;
+  if (assistantText.length < FOLLOW_UP_MIN_ASSISTANT_CHARS || assistantText.startsWith('[错误]')) return;
+
+  const expectAssistantId = lastAssistant.id;
+  try {
+    const result = await trpc.session.generateFollowUps.mutate({
+      userMessage: lastUser.content,
+      assistantMessage: assistantText,
+    });
+    const followUps = (result.followUps ?? []).filter((t) => typeof t === 'string' && t.trim());
+    if (followUps.length === 0) return;
+
+    useSessionCoreStore.setState((s) => ({
+      sessions: s.sessions.map((sess) => {
+        if (!sessionMatchesId(sess, sessionId) || sess.status !== 'idle') return sess;
+        // 过期守卫：最后一条助手消息仍是本轮那条才写入
+        for (let i = sess.messages.length - 1; i >= 0; i--) {
+          if (sess.messages[i].role === 'assistant') {
+            if (sess.messages[i].id !== expectAssistantId) return sess;
+            break;
+          }
+        }
+        return { ...sess, followUps };
+      }),
+    }));
+  } catch {
+    // 静默：建议追问生成失败不影响主对话
+  }
+}
+
 // ─── session:event 监听器 ─────────────────────────────────
 let eventListenerRegistered = false;
 
@@ -482,6 +539,8 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
             messages: [...sess.messages, userMsg, assistantMsg],
             composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
             contextCompacted: false,
+            // 新回合开始，上一轮的建议追问已过时
+            followUps: undefined,
           }
           : sess,
       ),
@@ -712,7 +771,7 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
     coreSet((s) => ({
       sessions: s.sessions.map((sess) =>
         sessionMatchesId(sess, sessionId)
-          ? { ...sess, status: 'streaming', messages: [...kept, placeholder] }
+          ? { ...sess, status: 'streaming', messages: [...kept, placeholder], followUps: undefined }
           : sess,
       ),
     }));
@@ -1120,6 +1179,10 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
     }
     if (type === 'message_end' || type === 'tool_execution_end' || type === 'agent_end') {
       flushPersist(coreGet);
+    }
+    // 回合结束后的建议追问生成（fire-and-forget，失败静默）
+    if (type === 'agent_end') {
+      void triggerFollowUpGeneration(coreGet, sessionId);
     }
   },
 }));

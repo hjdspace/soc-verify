@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createElement } from 'react';
-import { render, screen, within, fireEvent } from '@testing-library/react';
+import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 
 // Mock thinking-orbs + border-beam via the visual wrapper
 vi.mock('@renderer/components/visual', () => ({
@@ -33,6 +33,7 @@ vi.mock('@renderer/lib/trpc', () => ({
       list: { query: vi.fn().mockResolvedValue([]) },
       saveStoredMessages: { mutate: vi.fn().mockResolvedValue(undefined) },
       listSkills: { query: vi.fn().mockResolvedValue([]) },
+      generateFollowUps: { mutate: vi.fn().mockResolvedValue({ followUps: [] }) },
     },
     project: {
       searchFiles: { query: vi.fn().mockResolvedValue([]) },
@@ -201,6 +202,96 @@ describe('RightPanel input interaction', () => {
 
     await msgStore.abortSession();
     expect(useSessionCoreStore.getState().sessions[0].status).toBe('idle');
+  });
+});
+
+describe('RightPanel follow-up suggestions', () => {
+  const baseMessages: ChatMessage[] = [
+    { id: 'u1', role: 'user', content: '帮我分析这个失败用例的原因', timestamp: 1 },
+    {
+      id: 'a2',
+      role: 'assistant',
+      content: '失败原因是复位信号在时钟沿附近释放，违反了恢复时序检查，建议增加一个周期的延迟。',
+      timestamp: 2,
+    },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useSessionCoreStore.setState({
+      sessions: [{
+        id: 's1',
+        projectId: 'p1',
+        name: 'Test Session',
+        status: 'streaming',
+        messages: baseMessages.map((m) => ({ ...m })),
+        composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
+        createdAt: Date.now(),
+      }],
+      currentSessionId: 's1',
+    });
+  });
+
+  it('agent_end 后触发轻量生成并把建议挂到会话上', async () => {
+    const { trpc } = await import('@renderer/lib/trpc');
+    vi.mocked(trpc.session.generateFollowUps.mutate).mockResolvedValue({
+      followUps: ['如何修改复位释放时序？', '列出相关的 SDC 约束'],
+    });
+
+    useSessionMessagesStore.getState().handleSessionEvent('s1', { type: 'agent_end' });
+
+    await waitFor(() => {
+      expect(useSessionCoreStore.getState().sessions[0].followUps).toEqual([
+        '如何修改复位释放时序？',
+        '列出相关的 SDC 约束',
+      ]);
+    });
+    expect(trpc.session.generateFollowUps.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userMessage: '帮我分析这个失败用例的原因',
+        assistantMessage: expect.stringContaining('复位信号'),
+      }),
+    );
+  });
+
+  it('生成结果返回前用户新开回合时作废（不写入过期建议）', async () => {
+    const { trpc } = await import('@renderer/lib/trpc');
+    let resolveMutate: (value: { followUps: string[] }) => void = () => {};
+    vi.mocked(trpc.session.generateFollowUps.mutate).mockImplementation(
+      () => new Promise((resolve) => { resolveMutate = resolve; }),
+    );
+
+    useSessionMessagesStore.getState().handleSessionEvent('s1', { type: 'agent_end' });
+    // 生成尚未返回，用户新回合开始（sendMessage 置 streaming 且清空 followUps）
+    useSessionCoreStore.setState((s) => ({
+      sessions: s.sessions.map((sess) =>
+        sess.id === 's1' ? { ...sess, status: 'streaming', followUps: undefined } : sess,
+      ),
+    }));
+    resolveMutate({ followUps: ['过期建议'] });
+    await waitFor(() => {
+      expect(trpc.session.generateFollowUps.mutate).toHaveBeenCalled();
+    });
+    // 等 microtask 排空
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(useSessionCoreStore.getState().sessions[0].followUps).toBeUndefined();
+  });
+
+  it('助手回复过短时不触发生成', async () => {
+    const { trpc } = await import('@renderer/lib/trpc');
+    useSessionCoreStore.setState((s) => ({
+      sessions: s.sessions.map((sess) => ({
+        ...sess,
+        status: 'streaming',
+        messages: [{ id: 'u1', role: 'user', content: 'hi', timestamp: 1 }, { id: 'a2', role: 'assistant', content: '好的', timestamp: 2 }],
+      })),
+    }));
+
+    useSessionMessagesStore.getState().handleSessionEvent('s1', { type: 'agent_end' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(trpc.session.generateFollowUps.mutate).not.toHaveBeenCalled();
   });
 });
 

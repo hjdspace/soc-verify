@@ -30,6 +30,7 @@ import {
 } from '../../agent/session-persistence';
 import { discoverSkills, readSkillContent } from '../../agent/skill-discovery';
 import { generateSessionTitle } from '../../agent/title-generator';
+import { generateFollowUpSuggestions } from '../../agent/followup-generator';
 import { errorAnalysisCoordinator } from '../../simulation/error-analysis-coordinator';
 import type { ErrorType, ThinkingLevelSetting } from '@shared/types';
 import { normalizeThinkingLevelSetting } from '@shared/types';
@@ -1021,5 +1022,26 @@ export const sessionRouter = t.router({
     .mutation(async ({ input }) => {
       const title = await generateSessionTitle(input.userMessage);
       return { title };
+    }),
+
+  /**
+   * Generate follow-up question suggestions for the last conversation turn.
+   *
+   * Fired fire-and-forget by the renderer when agent_end arrives. Resolves
+   * credentials via the same KB LLM config chain as generateTitle; returns an
+   * empty array on any failure (suggestions are a nice-to-have, never an
+   * error surface).
+   */
+  generateFollowUps: t.procedure
+    .input((raw): { userMessage: string; assistantMessage: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.userMessage !== 'string' || typeof r.assistantMessage !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'userMessage and assistantMessage are required' });
+      }
+      return { userMessage: r.userMessage, assistantMessage: r.assistantMessage };
+    })
+    .mutation(async ({ input }) => {
+      const followUps = await generateFollowUpSuggestions(input.userMessage, input.assistantMessage);
+      return { followUps };
     }),
 });

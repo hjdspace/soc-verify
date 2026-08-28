@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from 'react';
-import { Check, ChevronDown, Copy, FileText, RefreshCw } from 'lucide-react';
+import { Check, ChevronDown, Copy, CornerDownRight, FileText, RefreshCw } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 import { openReviewAwareFile } from '@renderer/stores/diff-review';
 import { useSessionMessagesStore } from '@renderer/stores/session-messages';
@@ -20,6 +20,7 @@ export const AssistantActions = memo(function AssistantActions({ message, sessio
   const [copied, setCopied] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const regenerateLast = useSessionMessagesStore((s) => s.regenerateLast);
+  const sendMessage = useSessionMessagesStore((s) => s.sendMessage);
 
   const refs = useMemo(() => extractMessageReferences(message.content), [message.content]);
 
@@ -33,9 +34,12 @@ export const AssistantActions = memo(function AssistantActions({ message, sessio
 
   // 重新生成只在「本会话最后一条助手消息 + 会话空闲/上次发送失败」时可用——
   // 引擎侧回退分支基于最新一条用户消息，回退更早的消息会丢弃其后的所有轮次。
-  const canRegenerate = !!session
-    && message.id === lastAssistantId
+  const isLastAssistant = !!session && message.id === lastAssistantId;
+  const canRegenerate = isLastAssistant
+    && !!session
     && (session.status === 'idle' || session.status === 'error');
+  // 建议追问只挂在最后一条助手消息上（生成完成且未被新回合清除后出现）
+  const followUps = isLastAssistant ? session?.followUps : undefined;
 
   const handleCopy = () => {
     void navigator.clipboard.writeText(message.content).then(() => {
@@ -47,6 +51,10 @@ export const AssistantActions = memo(function AssistantActions({ message, sessio
 
   const handleRegenerate = () => {
     void regenerateLast();
+  };
+
+  const handleFollowUp = (text: string) => {
+    void sendMessage(text);
   };
 
   return (
@@ -107,6 +115,24 @@ export const AssistantActions = memo(function AssistantActions({ message, sessio
               </span>
             ),
           )}
+        </div>
+      )}
+
+      {followUps && followUps.length > 0 && (
+        <div className="ap-followups" data-testid="assistant-followups">
+          <p className="ap-followups-label">建议追问</p>
+          {followUps.map((text, index) => (
+            <button
+              key={`${index}:${text}`}
+              type="button"
+              className="ap-followup-item"
+              style={{ animationDelay: `${120 + index * 90}ms` }}
+              onClick={() => handleFollowUp(text)}
+            >
+              <CornerDownRight className="h-3 w-3 shrink-0 text-muted-foreground/60" />
+              <span className="truncate">{text}</span>
+            </button>
+          ))}
         </div>
       )}
     </div>

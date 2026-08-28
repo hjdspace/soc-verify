@@ -160,6 +160,42 @@ describe('AssistantActions 回合收尾操作栏', () => {
     render(<AssistantActions message={msg} />);
     expect(screen.queryByRole('button', { name: /引用/ })).not.toBeInTheDocument();
   });
+
+  it('建议追问在最后一条助手消息上渲染，点击直接发送', async () => {
+    const session = makeSession({
+      status: 'idle',
+      followUps: ['如何修改复位释放时序？', '查看相关 SDC 约束'],
+      messages: [
+        makeMsg({ id: 'u1', role: 'user', content: 'hi' }),
+        makeMsg({ id: 'a2', role: 'assistant', content: '回答内容' }),
+      ],
+    });
+    useSessionCoreStore.setState({ sessions: [session], currentSessionId: 's1' });
+
+    render(<AssistantActions message={session.messages[1]} session={session} />);
+    expect(screen.getByTestId('assistant-followups')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('如何修改复位释放时序？'));
+    await waitFor(() => {
+      expect(trpc.session.send.mutate).toHaveBeenCalledWith(
+        expect.objectContaining({ message: '如何修改复位释放时序？' }),
+      );
+    });
+  });
+
+  it('建议追问不显示在非最后一条助手消息上', () => {
+    const session = makeSession({
+      status: 'idle',
+      followUps: ['过期建议'],
+      messages: [
+        makeMsg({ id: 'a1', role: 'assistant', content: '旧回答' }),
+        makeMsg({ id: 'u2', role: 'user', content: '追问' }),
+        makeMsg({ id: 'a3', role: 'assistant', content: '新回答' }),
+      ],
+    });
+    render(<AssistantActions message={session.messages[0]} session={session} />);
+    expect(screen.queryByTestId('assistant-followups')).not.toBeInTheDocument();
+  });
 });
 
 describe('regenerateLast store action', () => {

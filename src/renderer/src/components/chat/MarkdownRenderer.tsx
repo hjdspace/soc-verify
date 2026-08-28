@@ -1,4 +1,4 @@
-import { cloneElement, isValidElement, memo, useState, useMemo, type ComponentProps, type ReactNode } from 'react';
+import { cloneElement, isValidElement, memo, useEffect, useState, useMemo, type ComponentProps, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import hljs from 'highlight.js';
@@ -645,7 +645,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
         if (lang === 'mermaid') {
           return <MermaidDiagram code={text.trim()} />;
         }
-        return <CodeBlock language={lang}>{text}</CodeBlock>;
+        return <CodeBlock language={lang} streaming={streaming}>{text}</CodeBlock>;
       },
       pre: ({ children }) => <>{children}</>,
       table: ({ children }) => (
@@ -693,14 +693,62 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
 
 // ── Code block with syntax highlighting + copy button ─────────────────────────
 
-function CodeBlock({ language, children }: { language: string; children: ReactNode }) {
+/**
+ * 流式期间代码着色的补算间隔。流式快照约 50ms 一次，若每次快照都对整个
+ * 增长中的代码块重新 highlight，累计成本 O(n²)（未知语言还会触发
+ * highlightAuto 全语言探测，实测 22ms/快照、峰值 256ms，把主线程打成卡顿，
+ * 模糊尾缘因提交变慢而长时间停留在模糊态）。流式期间文本实时渲染、着色
+ * 至多每 300ms 追赶一次；落定后一次性同步全量高亮。
+ */
+const STREAM_HIGHLIGHT_INTERVAL_MS = 300;
+
+/**
+ * 流式期间的代码高亮：文本实时、着色延迟节流。
+ *
+ * - 返回值永远对应当前 codeText：着色未追上时退化为转义纯文本，保证
+ *   流式增长的内容不被延迟显示（只是暂无颜色）
+ * - 已知语言至多每 STREAM_HIGHLIGHT_INTERVAL_MS 重高亮一次
+ * - 未知语言流式期间完全跳过（highlightAuto 极贵，目录树/日志类内容
+ *   本就几乎无着色收益）；落定后的渲染不走此 hook，仍做一次自动检测
+ */
+function useDeferredCodeHighlight(codeText: string, language: string, streaming: boolean): string {
+  const [deferred, setDeferred] = useState<{ text: string; html: string } | null>(null);
+
+  useEffect(() => {
+    if (!streaming || !resolveHljsLanguage(language)) return undefined;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (!cancelled) setDeferred({ text: codeText, html: highlightCode(codeText, language) });
+    }, STREAM_HIGHLIGHT_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [streaming, codeText, language]);
+
+  if (!streaming) return '';
+  return deferred && deferred.text === codeText ? deferred.html : escapeHtml(codeText);
+}
+
+function CodeBlock({
+  language,
+  children,
+  streaming = false,
+}: {
+  language: string;
+  children: ReactNode;
+  streaming?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
   const codeText = String(children);
 
-  const highlightedHtml = useMemo(
-    () => highlightCode(codeText, language),
-    [codeText, language],
+  // 落定态高亮：streaming 变 false 时同步执行一次（含未知语言自动检测）
+  const settledHtml = useMemo(
+    () => (streaming ? '' : highlightCode(codeText, language)),
+    [streaming, codeText, language],
   );
+  const streamHtml = useDeferredCodeHighlight(codeText, language, streaming);
+  const highlightedHtml = streaming ? streamHtml : settledHtml;
 
   const handleCopy = () => {
     void navigator.clipboard.writeText(codeText).then(() => {

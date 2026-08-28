@@ -314,6 +314,38 @@ button.ap-turnactions-source:hover {
   color: var(--dsw-label-primary);
 }
 
+/* ── 建议追问（回合结束后由轻量 LLM 生成，逐条 stagger 淡入）────── */
+.ap-followups {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+}
+.ap-followups-label {
+  margin: 0 0 1px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--dsw-label-secondary);
+}
+.ap-followup-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  text-align: left;
+  color: var(--dsw-label-primary);
+  cursor: pointer;
+  animation: ap-fadeup 350ms cubic-bezier(0.23, 1, 0.32, 1) both;
+  transition: background-color 100ms ease;
+}
+.ap-followup-item:hover {
+  background: var(--dsw-hover-bg);
+}
+
 /* todo 进行中环 */
 @keyframes ap-rotate {
   to { transform: rotate(360deg); }
