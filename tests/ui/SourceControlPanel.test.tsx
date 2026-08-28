@@ -32,6 +32,30 @@ vi.mock('@renderer/lib/trpc', () => ({
       generateCommitMessage: {
         mutate: vi.fn().mockResolvedValue({ message: 'feat: add scm panel' }),
       },
+      fileDiff: {
+        query: vi.fn().mockResolvedValue({
+          diff: {
+            path: 'src/main.ts',
+            staged: false,
+            isNewFile: false,
+            isDeleted: false,
+            isBinary: false,
+            hunks: [
+              {
+                header: '@@ -1,2 +1,3 @@',
+                lines: [
+                  { type: 'ctx', content: 'keep me', oldLine: 1, newLine: 1 },
+                  { type: 'del', content: 'old line', oldLine: 2 },
+                  { type: 'add', content: 'new line', newLine: 2 },
+                  { type: 'add', content: 'extra line', newLine: 3 },
+                ],
+              },
+            ],
+            totalAdd: 2,
+            totalDel: 1,
+          },
+        }),
+      },
       stage: {
         mutate: vi.fn().mockResolvedValue({
           isRepository: true,
@@ -114,6 +138,9 @@ describe('SourceControlPanel', () => {
       generating: false,
       committing: false,
       staging: false,
+      expandedDiffKeys: {},
+      fileDiffs: {},
+      loadingDiffKeys: {},
     });
   });
 
@@ -199,5 +226,70 @@ describe('SourceControlPanel', () => {
         message: 'feat: test commit',
       });
     });
+  });
+
+  // ── expandable diff review ─────────────────────────────────────
+
+  it('expands a file row to show its diff for review', async () => {
+    render(<SourceControlPanel />);
+
+    await screen.findByText('src/main.ts');
+    fireEvent.click(screen.getByText('src/main.ts'));
+
+    await waitFor(() => {
+      expect(vi.mocked(trpc.scm.fileDiff.query)).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        filePath: 'src/main.ts',
+        staged: false,
+      });
+    });
+
+    // Hunk header and diff lines render
+    expect(await screen.findByText('@@ -1,2 +1,3 @@')).toBeInTheDocument();
+    expect(screen.getByText('keep me')).toBeInTheDocument();
+    expect(screen.getByText('old line')).toBeInTheDocument();
+    expect(screen.getByText('new line')).toBeInTheDocument();
+    expect(screen.getByText('extra line')).toBeInTheDocument();
+  });
+
+  it('collapses the diff when the row is clicked again without refetching', async () => {
+    render(<SourceControlPanel />);
+
+    await screen.findByText('src/main.ts');
+    fireEvent.click(screen.getByText('src/main.ts'));
+    expect(await screen.findByText('@@ -1,2 +1,3 @@')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('src/main.ts'));
+    await waitFor(() => {
+      expect(screen.queryByText('@@ -1,2 +1,3 @@')).not.toBeInTheDocument();
+    });
+    expect(vi.mocked(trpc.scm.fileDiff.query)).toHaveBeenCalledTimes(1);
+  });
+
+  it('requests the staged diff for staged file rows', async () => {
+    render(<SourceControlPanel />);
+
+    await screen.findByText('src/utils.ts');
+    fireEvent.click(screen.getByText('src/utils.ts'));
+
+    await waitFor(() => {
+      expect(vi.mocked(trpc.scm.fileDiff.query)).toHaveBeenCalledWith({
+        projectId: 'project-1',
+        filePath: 'src/utils.ts',
+        staged: true,
+      });
+    });
+  });
+
+  it('does not toggle the diff when an action button is clicked', async () => {
+    render(<SourceControlPanel />);
+
+    await screen.findByText('src/main.ts');
+    fireEvent.click(screen.getByTitle('暂存'));
+
+    await waitFor(() => {
+      expect(vi.mocked(trpc.scm.stage.mutate)).toHaveBeenCalled();
+    });
+    expect(vi.mocked(trpc.scm.fileDiff.query)).not.toHaveBeenCalled();
   });
 });

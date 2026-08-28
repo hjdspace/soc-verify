@@ -1,6 +1,9 @@
 import { execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { buildDirectChatRequest, ensureV1Prefix, extractOpenAiFamilyContent } from '../agent/openai-compatible';
-import type { OpenAiApiFormat } from '@shared/types';
+import type { OpenAiApiFormat, ScmFileDiff } from '@shared/types';
+import { buildUntrackedFileDiff, parseUnifiedDiff } from './scm-diff';
 
 export type SourceControlFileStatus = {
   path: string;
@@ -292,6 +295,37 @@ export class SourceControlService {
     if (untracked.length > 0) {
       await this.runGit(projectRoot, ['clean', '-f', '--', ...untracked]);
     }
+  }
+
+  /**
+   * Get the structured diff of a single file for manual review.
+   *
+   * - staged:   HEAD vs index (`git diff --cached`)
+   * - unstaged: index vs worktree (`git diff`)
+   * - untracked files have no git diff output — the whole file is shown
+   *   as additions read from disk.
+   */
+  async getFileDiff(projectRoot: string, filePath: string, options: { staged: boolean }): Promise<ScmFileDiff> {
+    if (options.staged) {
+      const result = await this.runGit(projectRoot, ['diff', '--cached', '--unified=3', '--', filePath]);
+      return parseUnifiedDiff(result.stdout, { path: filePath, staged: true });
+    }
+
+    const status = await this.getStatus(projectRoot);
+    const file = status.files.find((f) => f.path === filePath);
+    const isUntracked = file ? file.indexStatus === '?' && file.workTreeStatus === '?' : false;
+    if (isUntracked) {
+      let content = '';
+      try {
+        content = await readFile(join(projectRoot, filePath), 'utf-8');
+      } catch {
+        // 文件读取失败（权限等）——按空文件展示
+      }
+      return buildUntrackedFileDiff(filePath, content);
+    }
+
+    const result = await this.runGit(projectRoot, ['diff', '--unified=3', '--', filePath]);
+    return parseUnifiedDiff(result.stdout, { path: filePath, staged: false });
   }
 
   /**

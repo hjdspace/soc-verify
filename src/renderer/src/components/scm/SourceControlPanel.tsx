@@ -14,7 +14,8 @@ import {
 } from 'lucide-react';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSessionCoreStore } from '@renderer/stores/session-core';
-import { useSourceControlStore } from '@renderer/stores/source-control';
+import { scmDiffKey, useSourceControlStore } from '@renderer/stores/source-control';
+import { InlineDiffView } from './InlineDiffView';
 import { cn } from '@renderer/lib/utils';
 import type { SourceControlFileStatus } from '@shared/types';
 
@@ -49,68 +50,99 @@ function statusTooltip(file: SourceControlFileStatus): string {
 
 interface FileRowProps {
   file: SourceControlFileStatus;
+  /** 该行展示哪种 diff：true=已暂存 diff（HEAD vs index），false=未暂存 diff */
+  staged: boolean;
   onStage?: (path: string) => void;
   onUnstage?: (path: string) => void;
   onDiscard?: (path: string) => void;
   disabled: boolean;
 }
 
-function FileRow({ file, onStage, onUnstage, onDiscard, disabled }: FileRowProps) {
+function FileRow({ file, staged, onStage, onUnstage, onDiscard, disabled }: FileRowProps) {
   const [hovered, setHovered] = useState(false);
+  const currentProjectId = useProjectStore((s) => s.currentProjectId);
+  const expanded = useSourceControlStore((s) => !!s.expandedDiffKeys[scmDiffKey(file.path, staged)]);
+  const diff = useSourceControlStore((s) => s.fileDiffs[scmDiffKey(file.path, staged)]);
+  const diffLoading = useSourceControlStore((s) => !!s.loadingDiffKeys[scmDiffKey(file.path, staged)]);
+  const toggleFileDiff = useSourceControlStore((s) => s.toggleFileDiff);
+
+  // 点击行展开/收起该文件的 git diff，供人工审查
+  const handleToggle = () => {
+    if (currentProjectId) void toggleFileDiff(currentProjectId, file.path, staged);
+  };
 
   return (
-    <div
-      className="group mb-0.5 flex items-center gap-1.5 rounded px-1.5 py-1 text-xs transition-colors hover:bg-accent/40"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
-      <span
-        className={cn('w-4 shrink-0 text-center text-[10px] font-bold', statusTone(file))}
-        title={statusTooltip(file)}
+    <div className="mb-0.5">
+      <div
+        className="group flex cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-xs transition-colors hover:bg-accent/40"
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onClick={handleToggle}
+        title={expanded ? '点击收起 diff' : '点击展开 diff'}
       >
-        {statusLabel(file)}
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="truncate font-mono text-foreground">{file.path}</div>
-        {file.originalPath && (
-          <div className="truncate font-mono text-[10px] text-muted-foreground">
-            ← {file.originalPath}
-          </div>
-        )}
+        <span className="shrink-0 text-muted-foreground">
+          {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        </span>
+        <span
+          className={cn('w-4 shrink-0 text-center text-[10px] font-bold', statusTone(file))}
+          title={statusTooltip(file)}
+        >
+          {statusLabel(file)}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-mono text-foreground">{file.path}</div>
+          {file.originalPath && (
+            <div className="truncate font-mono text-[10px] text-muted-foreground">
+              ← {file.originalPath}
+            </div>
+          )}
+        </div>
+        {/* Action buttons — visible on hover; 阻止冒泡避免触发行的展开/收起 */}
+        <div className={cn('flex shrink-0 items-center gap-0.5', !hovered && 'opacity-0')}>
+          {onStage && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onStage(file.path); }}
+              disabled={disabled}
+              title="暂存"
+              className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {onUnstage && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onUnstage(file.path); }}
+              disabled={disabled}
+              title="取消暂存"
+              className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
+            >
+              <Minus className="h-3.5 w-3.5" />
+            </button>
+          )}
+          {onDiscard && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onDiscard(file.path); }}
+              disabled={disabled}
+              title="放弃更改"
+              className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-destructive/20 hover:text-destructive disabled:opacity-30"
+            >
+              <Undo2 className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
       </div>
-      {/* Action buttons — visible on hover */}
-      <div className={cn('flex shrink-0 items-center gap-0.5', !hovered && 'opacity-0')}>
-        {onStage && (
-          <button
-            onClick={() => onStage(file.path)}
-            disabled={disabled}
-            title="暂存"
-            className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
-        )}
-        {onUnstage && (
-          <button
-            onClick={() => onUnstage(file.path)}
-            disabled={disabled}
-            title="取消暂存"
-            className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
-          >
-            <Minus className="h-3.5 w-3.5" />
-          </button>
-        )}
-        {onDiscard && (
-          <button
-            onClick={() => onDiscard(file.path)}
-            disabled={disabled}
-            title="放弃更改"
-            className="rounded p-0.5 text-muted-foreground transition-colors hover:bg-destructive/20 hover:text-destructive disabled:opacity-30"
-          >
-            <Undo2 className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
+      {expanded && (
+        <div className="ml-4 rounded border border-border/50 bg-background/50 py-1">
+          {diffLoading && !diff ? (
+            <div className="flex items-center gap-1.5 px-3 py-2 text-[11px] text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              加载 diff...
+            </div>
+          ) : diff ? (
+            <InlineDiffView diff={diff} className="px-1" />
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }
@@ -273,6 +305,7 @@ export function SourceControlPanel() {
                   <FileRow
                     key={`staged:${file.path}`}
                     file={file}
+                    staged
                     onUnstage={handleUnstage}
                     disabled={busy}
                   />
@@ -299,6 +332,7 @@ export function SourceControlPanel() {
                   <FileRow
                     key={`unstaged:${file.path}`}
                     file={file}
+                    staged={false}
                     onStage={handleStage}
                     onDiscard={handleDiscard}
                     disabled={busy}

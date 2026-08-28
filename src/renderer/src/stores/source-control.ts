@@ -1,7 +1,12 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
-import type { SourceControlCommitResult, SourceControlStatus } from '@shared/types';
+import type { ScmFileDiff, SourceControlCommitResult, SourceControlStatus } from '@shared/types';
+
+/** 展开行缓存 key：同一文件的已暂存 diff 与未暂存 diff 视为不同条目 */
+export function scmDiffKey(filePath: string, staged: boolean): string {
+  return `${staged ? 's' : 'w'}:${filePath}`;
+}
 
 interface SourceControlState {
   status: SourceControlStatus | null;
@@ -10,9 +15,16 @@ interface SourceControlState {
   generating: boolean;
   committing: boolean;
   staging: boolean;
+  /** 已展开的文件行（key 见 scmDiffKey） */
+  expandedDiffKeys: Record<string, boolean>;
+  /** 已加载的文件 diff 内容 */
+  fileDiffs: Record<string, ScmFileDiff | undefined>;
+  /** 正在加载 diff 的 key 集合 */
+  loadingDiffKeys: Record<string, boolean>;
   loadStatus: (projectId: string) => Promise<void>;
   setCommitMessage: (message: string) => void;
   generateCommitMessage: (projectId: string, modelId?: string, providerId?: string) => Promise<void>;
+  toggleFileDiff: (projectId: string, filePath: string, staged: boolean) => Promise<void>;
   stageFiles: (projectId: string, filePaths: string[]) => Promise<void>;
   unstageFiles: (projectId: string, filePaths: string[]) => Promise<void>;
   discardChanges: (projectId: string, filePaths: string[]) => Promise<void>;
@@ -35,12 +47,16 @@ export const useSourceControlStore = create<SourceControlState>((set, get) => ({
   generating: false,
   committing: false,
   staging: false,
+  expandedDiffKeys: {},
+  fileDiffs: {},
+  loadingDiffKeys: {},
 
   loadStatus: async (projectId) => {
     set({ loading: true });
     try {
       const status = await trpc.scm.status.query({ projectId });
-      set({ status, loading: false });
+      // 暂存区/工作区已变化，旧的展开 diff 不再可信，全部收起
+      set({ status, loading: false, expandedDiffKeys: {}, fileDiffs: {}, loadingDiffKeys: {} });
     } catch (err) {
       set({ loading: false });
       useToastStore.getState().error('加载 Git 状态失败', errorMessage(err));
@@ -61,11 +77,40 @@ export const useSourceControlStore = create<SourceControlState>((set, get) => ({
     }
   },
 
+  toggleFileDiff: async (projectId, filePath, staged) => {
+    const key = scmDiffKey(filePath, staged);
+    if (get().expandedDiffKeys[key]) {
+      // 收起（保留缓存，便于再次展开时秒开）
+      set({ expandedDiffKeys: { ...get().expandedDiffKeys, [key]: false } });
+      return;
+    }
+
+    set({ expandedDiffKeys: { ...get().expandedDiffKeys, [key]: true } });
+    if (get().fileDiffs[key]) return; // 已缓存
+
+    set({ loadingDiffKeys: { ...get().loadingDiffKeys, [key]: true } });
+    try {
+      const result = await trpc.scm.fileDiff.query({ projectId, filePath, staged });
+      set({
+        fileDiffs: { ...get().fileDiffs, [key]: result.diff },
+        loadingDiffKeys: { ...get().loadingDiffKeys, [key]: false },
+      });
+    } catch (err) {
+      // 加载失败则收起该行，避免停留在空展开态
+      const { [key]: _collapsed, ...restExpanded } = get().expandedDiffKeys;
+      set({
+        expandedDiffKeys: restExpanded,
+        loadingDiffKeys: { ...get().loadingDiffKeys, [key]: false },
+      });
+      useToastStore.getState().error('加载文件 diff 失败', errorMessage(err));
+    }
+  },
+
   stageFiles: async (projectId, filePaths) => {
     set({ staging: true });
     try {
       const status = await trpc.scm.stage.mutate({ projectId, filePaths });
-      set({ status, staging: false });
+      set({ status, staging: false, expandedDiffKeys: {}, fileDiffs: {}, loadingDiffKeys: {} });
     } catch (err) {
       set({ staging: false });
       useToastStore.getState().error('暂存失败', errorMessage(err));
@@ -76,7 +121,7 @@ export const useSourceControlStore = create<SourceControlState>((set, get) => ({
     set({ staging: true });
     try {
       const status = await trpc.scm.unstage.mutate({ projectId, filePaths });
-      set({ status, staging: false });
+      set({ status, staging: false, expandedDiffKeys: {}, fileDiffs: {}, loadingDiffKeys: {} });
     } catch (err) {
       set({ staging: false });
       useToastStore.getState().error('取消暂存失败', errorMessage(err));
@@ -87,7 +132,7 @@ export const useSourceControlStore = create<SourceControlState>((set, get) => ({
     set({ staging: true });
     try {
       const status = await trpc.scm.discard.mutate({ projectId, filePaths });
-      set({ status, staging: false });
+      set({ status, staging: false, expandedDiffKeys: {}, fileDiffs: {}, loadingDiffKeys: {} });
       useToastStore.getState().success('已放弃更改');
     } catch (err) {
       set({ staging: false });

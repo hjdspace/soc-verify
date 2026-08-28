@@ -8,7 +8,7 @@
 
 export * from './project';
 export * from './source-control';
-export * from './code-review';
+export * from './scm-diff';
 export * from './plugin-config';
 export * from './simulation';
 export * from './coverage';

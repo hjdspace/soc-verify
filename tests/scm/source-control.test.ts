@@ -647,3 +647,96 @@ describe('source control service', () => {
     }
   });
 });
+
+  // ── file diff for manual review ───────────────────────────────
+
+  it('returns the unstaged diff for a modified file', { timeout: 15000 }, async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'socverify-scm-'));
+    try {
+      await execFileAsync('git', ['init'], { cwd: repo });
+      await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+      await execFileAsync('git', ['config', 'user.name', 'Test User'], { cwd: repo });
+      await writeFile(join(repo, 'a.ts'), 'line1\nline2\nline3\n', 'utf-8');
+      await execFileAsync('git', ['add', 'a.ts'], { cwd: repo });
+      await execFileAsync('git', ['commit', '-m', 'init'], { cwd: repo });
+      await writeFile(join(repo, 'a.ts'), 'line1\nchanged\nline3\nadded\n', 'utf-8');
+
+      const service = new SourceControlService();
+      const diff = await service.getFileDiff(repo, 'a.ts', { staged: false });
+
+      expect(diff.path).toBe('a.ts');
+      expect(diff.staged).toBe(false);
+      expect(diff.totalDel).toBe(1);
+      expect(diff.totalAdd).toBe(2);
+      const contents = diff.hunks.flatMap((h) => h.lines);
+      expect(contents).toContainEqual({ type: 'del', content: 'line2', oldLine: 2 });
+      expect(contents).toContainEqual({ type: 'add', content: 'changed', newLine: 2 });
+      expect(contents).toContainEqual({ type: 'add', content: 'added', newLine: 4 });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('returns the staged diff and an empty unstaged diff after staging', { timeout: 15000 }, async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'socverify-scm-'));
+    try {
+      await execFileAsync('git', ['init'], { cwd: repo });
+      await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+      await execFileAsync('git', ['config', 'user.name', 'Test User'], { cwd: repo });
+      await writeFile(join(repo, 'a.ts'), 'original\n', 'utf-8');
+      await execFileAsync('git', ['add', 'a.ts'], { cwd: repo });
+      await execFileAsync('git', ['commit', '-m', 'init'], { cwd: repo });
+      await writeFile(join(repo, 'a.ts'), 'modified\n', 'utf-8');
+      await execFileAsync('git', ['add', 'a.ts'], { cwd: repo });
+
+      const service = new SourceControlService();
+      const stagedDiff = await service.getFileDiff(repo, 'a.ts', { staged: true });
+      expect(stagedDiff.staged).toBe(true);
+      expect(stagedDiff.totalAdd).toBe(1);
+      expect(stagedDiff.totalDel).toBe(1);
+
+      // No unstaged changes remain after staging
+      const unstagedDiff = await service.getFileDiff(repo, 'a.ts', { staged: false });
+      expect(unstagedDiff.hunks).toEqual([]);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('shows all lines as additions for an untracked file', { timeout: 15000 }, async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'socverify-scm-'));
+    try {
+      await execFileAsync('git', ['init'], { cwd: repo });
+      await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+      await execFileAsync('git', ['config', 'user.name', 'Test User'], { cwd: repo });
+      await writeFile(join(repo, 'fresh.ts'), 'alpha\nbeta\n', 'utf-8');
+
+      const service = new SourceControlService();
+      const diff = await service.getFileDiff(repo, 'fresh.ts', { staged: false });
+
+      expect(diff.isNewFile).toBe(true);
+      expect(diff.totalAdd).toBe(2);
+      expect(diff.hunks[0].lines.map((l) => l.content)).toEqual(['alpha', 'beta']);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('returns an empty diff for a clean committed file', { timeout: 15000 }, async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'socverify-scm-'));
+    try {
+      await execFileAsync('git', ['init'], { cwd: repo });
+      await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+      await execFileAsync('git', ['config', 'user.name', 'Test User'], { cwd: repo });
+      await writeFile(join(repo, 'a.ts'), 'stable\n', 'utf-8');
+      await execFileAsync('git', ['add', 'a.ts'], { cwd: repo });
+      await execFileAsync('git', ['commit', '-m', 'init'], { cwd: repo });
+
+      const service = new SourceControlService();
+      const diff = await service.getFileDiff(repo, 'a.ts', { staged: false });
+      expect(diff.hunks).toEqual([]);
+      expect(diff.isBinary).toBe(false);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });

@@ -93,6 +93,36 @@ export const scmRouter = t.router({
       }
     }),
 
+  fileDiff: t.procedure
+    .input((raw): { projectId: string; filePath: string; staged: boolean } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      if (typeof r.filePath !== 'string' || !r.filePath) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'filePath is required' });
+      }
+      if (typeof r.staged !== 'boolean') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'staged must be a boolean' });
+      }
+      return { projectId: r.projectId, filePath: r.filePath, staged: r.staged };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      try {
+        return {
+          diff: await sourceControlService.getFileDiff(project.rootPath, input.filePath, {
+            staged: input.staged,
+          }),
+        };
+      } catch (err) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }),
+
   generateCommitMessage: t.procedure
     .input((raw): { projectId: string; modelId?: string; providerId?: string } => {
       const r = raw as Record<string, unknown>;
