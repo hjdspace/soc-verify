@@ -17,6 +17,16 @@ export function getGroupColor(name: string): string {
   return GROUP_COLORS[name] ?? GROUP_COLORS[DEFAULT_GROUP];
 }
 
+// ─── label 尾部 CLI flag 剥离 ─────────────────────────────────
+// schema 的 label 形如 "工作目录 (-rundir)"；flag 属于命令行信息，
+// 命令预览栏已完整展示，卡片上只保留语义名，flag 进 label tooltip。
+const LABEL_FLAG_RE = /^(.*?)\s*\((-\S+)\)$/;
+
+export function splitLabelFlag(label: string): { name: string; flag: string | null } {
+  const m = label.match(LABEL_FLAG_RE);
+  return m ? { name: m[1], flag: m[2] } : { name: label, flag: null };
+}
+
 // ─── Option Card (Minimalist Card group) ──────────────────────
 
 export type OptionCardProps = {
@@ -34,17 +44,17 @@ export function OptionCard({
 }: OptionCardProps) {
   const color = getGroupColor(name);
   return (
-    <div className="rounded border border-border bg-card/50 transition-colors hover:border-primary/30">
+    <div className="rounded-lg border border-border bg-card/50">
       {/* Card header */}
-      <div className="flex items-center gap-1.5 px-2.5 py-1.5">
-        <span className={cn('h-1.5 w-1.5 rounded-full', color)} />
-        <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-          {name}
+      <div className="flex items-center gap-2 border-b border-border/60 px-2.5 py-1.5">
+        <span className={cn('h-2 w-2 shrink-0 rounded-full', color)} />
+        <span className="text-[11px] font-semibold text-foreground/80">{name}</span>
+        <span className="rounded bg-secondary px-1 py-px text-[10px] leading-3 text-muted-foreground">
+          {fields.length} 项
         </span>
-        <span className="text-[9px] text-muted-foreground/50">({fields.length})</span>
       </div>
-      {/* Card fields */}
-      <div className="flex flex-col gap-1 px-2.5 pb-2">
+      {/* Card fields — 共享 grid，auto 列取卡内最宽 label，输入框左边缘对齐 */}
+      <div className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1 px-2.5 py-2">
         {fields.map((field) => (
           <OptionField
             key={field.key}
@@ -58,7 +68,7 @@ export function OptionCard({
   );
 }
 
-// ─── Option field renderer (inline minimalist style) ──────────
+// ─── Option field renderer (shared-grid rows: label | control) ─
 
 export type OptionFieldProps = {
   field: SimOptionField;
@@ -71,90 +81,94 @@ export function OptionField({
   value,
   onChange,
 }: OptionFieldProps) {
-  const labelText = (
+  const { name: semanticName, flag } = splitLabelFlag(field.label);
+
+  // tooltip 聚合 key / flag / 描述；flag 与 key 互为镜像（-rundir）时不重复
+  const tooltipParts: string[] = [field.key];
+  if (flag && flag !== `-${field.key}`) tooltipParts.push(flag);
+  if (field.description) tooltipParts.push(field.description);
+  const tooltip = tooltipParts.join(' · ');
+
+  const labelCell = (
     <span
-      className="shrink-0 whitespace-nowrap text-[10px] font-medium text-muted-foreground"
-      title={field.key}
+      className="max-w-[120px] cursor-default truncate text-[11px] font-medium text-muted-foreground"
+      title={tooltip}
     >
-      {field.label}
+      {semanticName}
     </span>
   );
 
-  const hint =
-    field.description ? (
-      <span
-        className="cursor-help text-[9px] text-muted-foreground/40"
-        title={field.description}
-      >
-        (?)
-      </span>
-    ) : null;
+  const inputClass =
+    'h-6 min-w-0 rounded border border-border bg-background/60 px-1.5 font-mono text-[11px] outline-none transition-[color,background-color,border-color,box-shadow] duration-150 ease-out focus:border-primary focus:ring-1 focus:ring-primary/30';
 
   switch (field.type) {
     case 'string':
       return (
-        <div className="flex items-center gap-1.5">
-          {labelText}
-          {hint}
+        <>
+          {labelCell}
           <input
             type="text"
             value={typeof value === 'string' ? value : ''}
             onChange={(e) => onChange(e.target.value)}
             placeholder={field.default ? String(field.default) : ''}
-            className="min-w-0 flex-1 rounded border border-border bg-background/60 px-1.5 py-0.5 font-mono text-[11px] outline-none transition-colors focus:border-primary"
+            className={inputClass}
           />
-        </div>
+        </>
       );
 
     case 'number':
       return (
-        <div className="flex items-center gap-1.5">
-          {labelText}
-          {hint}
+        <>
+          {labelCell}
           <input
             type="number"
             value={typeof value === 'number' ? value : ''}
             onChange={(e) => onChange(e.target.value === '' ? undefined : Number(e.target.value))}
             placeholder={field.default !== undefined ? String(field.default) : ''}
-            className="min-w-0 flex-1 rounded border border-border bg-background/60 px-1.5 py-0.5 font-mono text-[11px] outline-none transition-colors focus:border-primary"
+            className={cn(
+              inputClass,
+              // 隐藏原生 spinner：h-6 下拥挤且不可点
+              'appearance-none [-moz-appearance:textfield]',
+              '[&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
+            )}
           />
-        </div>
+        </>
       );
 
     case 'boolean':
       return (
-        <div className="flex items-center justify-between gap-1.5 py-0.5">
-          <div className="flex items-center gap-1.5">
-            {labelText}
-            {hint}
-          </div>
+        <>
+          {labelCell}
           <button
+            type="button"
+            role="switch"
+            aria-checked={Boolean(value)}
+            aria-label={semanticName}
             onClick={() => onChange(!value)}
             className={cn(
-              'relative h-3.5 w-7 shrink-0 rounded-full transition-colors',
+              'relative h-4 w-8 shrink-0 justify-self-end rounded-full transition-colors duration-150 ease-out',
               value ? 'bg-primary' : 'bg-muted-foreground/30',
             )}
-            title={field.description}
+            title={tooltip}
           >
-            <div
+            <span
               className={cn(
-                'absolute top-0.5 h-2.5 w-2.5 rounded-full bg-background shadow-sm transition-transform',
-                value ? 'translate-x-3.5' : 'translate-x-0.5',
+                'absolute left-0.5 top-0.5 h-3 w-3 rounded-full bg-background shadow-sm transition-transform duration-150 ease-out',
+                value ? 'translate-x-4' : 'translate-x-0',
               )}
             />
           </button>
-        </div>
+        </>
       );
 
     case 'enum':
       return (
-        <div className="flex items-center gap-1.5">
-          {labelText}
-          {hint}
+        <>
+          {labelCell}
           <select
             value={typeof value === 'string' ? value : ''}
             onChange={(e) => onChange(e.target.value)}
-            className="min-w-0 flex-1 rounded border border-border bg-background/60 px-1.5 py-0.5 text-[11px] outline-none transition-colors focus:border-primary"
+            className={cn(inputClass, 'cursor-pointer')}
           >
             <option value="">--</option>
             {field.enumValues?.map((v) => (
@@ -163,7 +177,7 @@ export function OptionField({
               </option>
             ))}
           </select>
-        </div>
+        </>
       );
 
     default:
