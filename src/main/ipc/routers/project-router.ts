@@ -767,12 +767,13 @@ export const projectRouter = t.router({
       const rootPath = project.rootPath;
       const query = input.query.toLowerCase();
       const limit = input.limit ?? 50;
-      const results: Array<{ name: string; path: string; type: 'file' | 'directory' }> = [];
 
-      // Ignore patterns matching the file tree builder
+      // Ignore patterns — excludes dependency caches, build artifacts, etc.
       const ignorePatterns = [
         'node_modules', '.git', '.socverify', 'out', 'dist', 'build',
         '__pycache__', '.next', 'coverage', 'work', 'sim_build',
+        '.cache', '.bun', '.turbo', '.svelte-kit', '.nuxt',
+        '.gradle', '.idea', '.vscode',
       ];
       const ignoreExts = ['.pyc', '.log', '.tmp', '.o', '.a', '.so', '.dll', '.exe'];
 
@@ -782,30 +783,39 @@ export const projectRouter = t.router({
         return false;
       }
 
-      async function walkDir(dirPath: string, depth: number): Promise<void> {
-        if (results.length >= limit) return;
-        if (depth > 5) return;
+      type MatchEntry = { name: string; path: string; type: 'file' | 'directory'; depth: number };
+      const allMatches: MatchEntry[] = [];
+      const collectedLimit = limit * 5; // collect more then sort, trim to limit
+
+      // BFS traversal — shallower directories first so results can be
+      // sorted by depth (current dir files rank above subdirectory files).
+      const queue: Array<{ dirPath: string; depth: number }> = [{ dirPath: rootPath, depth: 0 }];
+
+      while (queue.length > 0 && allMatches.length < collectedLimit) {
+        const { dirPath, depth } = queue.shift()!;
+        if (depth > 5) continue;
 
         try {
           const entries = await readdir(dirPath, { withFileTypes: true });
           for (const entry of entries) {
-            if (results.length >= limit) return;
             if (shouldIgnore(entry.name)) continue;
 
             const fullPath = join(dirPath, entry.name);
             const relPath = relative(rootPath, fullPath);
+            const isDir = entry.isDirectory();
             const matches = entry.name.toLowerCase().includes(query) || relPath.toLowerCase().includes(query);
 
             if (matches) {
-              results.push({
+              allMatches.push({
                 name: entry.name,
                 path: fullPath,
-                type: entry.isDirectory() ? 'directory' : 'file',
+                type: isDir ? 'directory' : 'file',
+                depth,
               });
             }
 
-            if (entry.isDirectory() && depth < 5) {
-              await walkDir(fullPath, depth + 1);
+            if (isDir && depth < 5) {
+              queue.push({ dirPath: fullPath, depth: depth + 1 });
             }
           }
         } catch {
@@ -813,7 +823,17 @@ export const projectRouter = t.router({
         }
       }
 
-      await walkDir(rootPath, 0);
+      // Sort: shallowest depth first, files before directories at same depth
+      allMatches.sort((a, b) => {
+        if (a.depth !== b.depth) return a.depth - b.depth;
+        // Files rank above directories
+        const aIsFile = a.type === 'file' ? 0 : 1;
+        const bIsFile = b.type === 'file' ? 0 : 1;
+        if (aIsFile !== bIsFile) return aIsFile - bIsFile;
+        return a.name.localeCompare(b.name);
+      });
+
+      const results = allMatches.slice(0, limit).map(({ name, path, type }) => ({ name, path, type }));
       return results;
     }),
 
