@@ -233,6 +233,54 @@ describe('SimOptionPanel 字段渲染与编辑', () => {
     expect(mockSetSimOption).toHaveBeenCalledWith('simulator', 'xrun');
   });
 
+  it('enum 字段旁边有 + 按钮可切换到自定义输入模式', async () => {
+    render(<SimOptionPanel />);
+
+    await screen.findByText('Simulator');
+
+    // 点击 + 按钮切换到自定义输入模式
+    const addBtn = screen.getByTitle('输入自定义值');
+    fireEvent.click(addBtn);
+
+    // 应出现自定义输入框
+    const customInput = screen.getByPlaceholderText('输入自定义值') as HTMLInputElement;
+    expect(customInput).toBeInTheDocument();
+
+    // 输入自定义值后调用 setSimOption
+    fireEvent.change(customInput, { target: { value: 'sdf=npg_custom' } });
+    expect(mockSetSimOption).toHaveBeenCalledWith('simulator', 'sdf=npg_custom');
+  });
+
+  it('enum 自定义值不在预设列表时自动进入输入模式', async () => {
+    mockSimOptions = { simulator: 'sdf=custom_corner' };
+
+    render(<SimOptionPanel />);
+
+    await screen.findByText('Simulator');
+
+    // 值不在预设列表中 → 自动进入自定义模式
+    const customInput = screen.getByPlaceholderText('输入自定义值') as HTMLInputElement;
+    expect(customInput).toBeInTheDocument();
+    expect(customInput.value).toBe('sdf=custom_corner');
+  });
+
+  it('enum 自定义模式切回 select 模式时清空不在列表中的值', async () => {
+    mockSimOptions = { simulator: 'sdf=custom_corner' };
+
+    render(<SimOptionPanel />);
+
+    await screen.findByText('Simulator');
+
+    // 当前在自定义模式（值不在预设中），点击切回按钮
+    const revertBtn = screen.getByTitle('切回预设列表');
+    fireEvent.click(revertBtn);
+
+    // 应回到 select 模式，且值被清空
+    const select = screen.getByRole('combobox') as HTMLSelectElement;
+    expect(select.value).toBe('');
+    expect(mockSetSimOption).toHaveBeenCalledWith('simulator', '');
+  });
+
   it('有 description 的字段把描述并入 label tooltip（不再常驻 (?) 提示）', async () => {
     render(<SimOptionPanel />);
 
