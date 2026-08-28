@@ -374,6 +374,41 @@ describe('ToolCard file tools', () => {
     expect(header?.getAttribute('title')).toContain('点击打开文件');
   });
 
+  it('shows skill badge and skill name when reading skill:// path', () => {
+    render(<ToolCard message={completedMessage(
+      'read',
+      { path: 'skill://soc-tb-diagram' },
+      { content: [{ type: 'text', text: '---\nname: soc-tb-diagram\n---\n# SoC 验证环境框图' }] },
+    )} />);
+
+    // Should show the skill badge
+    expect(screen.getByTestId('skill-badge')).toBeInTheDocument();
+    // Summary should show skill name, not the raw skill:// path
+    expect(screen.getByTestId('tool-card').textContent).toContain('soc-tb-diagram');
+    expect(screen.getByTestId('tool-card').textContent).not.toContain('skill://');
+  });
+
+  it('shows skill badge while skill is still loading', () => {
+    render(<ToolCard message={pendingMessage(
+      'read',
+      { path: 'skill://drawio-skill' },
+    )} />);
+
+    expect(screen.getByTestId('skill-badge')).toBeInTheDocument();
+    expect(screen.getByTestId('tool-card').textContent).toContain('drawio-skill');
+    expect(screen.getByTestId('tool-card').textContent).toContain('loading skill');
+  });
+
+  it('does not show skill badge for regular file reads', () => {
+    render(<ToolCard message={completedMessage(
+      'read',
+      { path: 'src/demo.ts' },
+      'const value = 1;',
+    )} />);
+
+    expect(screen.queryByTestId('skill-badge')).not.toBeInTheDocument();
+  });
+
   it('disables read path click when result is a directory listing', () => {
     render(<ToolCard message={completedMessage(
       'read',
