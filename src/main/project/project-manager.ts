@@ -4,10 +4,27 @@ import { promisify } from 'node:util';
 import { readdir, stat, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync, watch as fsWatch, type FSWatcher as NodeFSWatcher } from 'node:fs';
 import { join, basename, resolve, normalize, sep } from 'node:path';
+import { homedir } from 'node:os';
 import { app } from 'electron';
 import { readFileSync } from 'node:fs';
 
 const execFileAsync = promisify(execFile);
+
+/** 检测 POSIX home 简写路径（`~` / `~/...`，兼容 `~\` 分隔符）。 */
+export function isTildePath(filePath: string): boolean {
+  return filePath === '~' || filePath.startsWith('~/') || filePath.startsWith('~\\');
+}
+
+/**
+ * 展开 `~` 前缀路径为用户主目录绝对路径。
+ *
+ * Agent 侧（omp）以用户身份运行，工具参数里的路径可能是 `~/.claude/...` 这类
+ * home 简写；Node fs 不识别 `~`，不展开会被当作字面目录名（如拼到项目根下产生
+ * `<root>/~/.claude/...`）。仅 `~` / `~/` 前缀生效，`~user` 形式不支持。
+ */
+export function expandTildePath(filePath: string): string {
+  return isTildePath(filePath) ? join(homedir(), filePath.slice(1)) : filePath;
+}
 import type {
   ProjectInfo,
   ProjectState,
@@ -855,6 +872,12 @@ class ProjectManagerImpl extends EventEmitter {
     const project = this.getProject(projectId);
     if (!project) throw new Error(`Project not found: ${projectId}`);
 
+    // `~` 前缀是 agent 侧 home 简写，展开后按主目录读取（omp 以用户身份运行，
+    // 已可访问这些文件）；项目目录沙箱只约束项目内相对/绝对路径。
+    if (isTildePath(filePath)) {
+      return readFile(expandTildePath(filePath), 'utf-8');
+    }
+
     if (!this.isPathWithinProjectDirs(project, filePath)) {
       throw new Error('File path is outside project directories');
     }
@@ -865,6 +888,11 @@ class ProjectManagerImpl extends EventEmitter {
   async writeFile(projectId: string, filePath: string, content: string): Promise<void> {
     const project = this.getProject(projectId);
     if (!project) throw new Error(`Project not found: ${projectId}`);
+
+    if (isTildePath(filePath)) {
+      await writeFile(expandTildePath(filePath), content, 'utf-8');
+      return;
+    }
 
     if (!this.isPathWithinProjectDirs(project, filePath)) {
       throw new Error('File path is outside project directories');

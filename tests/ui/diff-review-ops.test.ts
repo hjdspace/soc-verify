@@ -215,6 +215,13 @@ describe('diff-review-ops', () => {
       expect(resolveInsideProject('.', rootPath, extraDirs)).toBeNull();
       expect(resolveInsideProject('D:\\project', rootPath, extraDirs)).toBeNull();
     });
+
+    it('rejects tilde home-shorthand paths instead of joining them into the root', () => {
+      // ~/.claude/skills/... 曾被拼成 D:/project/~/.claude/...，点击后加载报 ENOENT
+      expect(resolveInsideProject('~/.claude/skills/tdd/tests.md', rootPath, extraDirs)).toBeNull();
+      expect(resolveInsideProject('~', rootPath, extraDirs)).toBeNull();
+      expect(resolveInsideProject('~\\.claude\\skills\\tdd\\tests.md', rootPath, extraDirs)).toBeNull();
+    });
   });
 
   // ── extractOmpDiffEdits ──────────────────────────────

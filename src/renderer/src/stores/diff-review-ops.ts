@@ -67,7 +67,7 @@ export function isSameFilePath(left: string, right: string): boolean {
  * 将（可能为相对）的文件路径解析为项目目录内的绝对路径。
  * - 相对路径按项目根解析；绝对路径（盘符）原样使用。
  * - 解析后不在任一有效项目目录（rootPath + extraDirs）内、是 URI scheme 路径、
- *   或无法解析时返回 null。
+ *   `~` 前缀的 home 简写、或无法解析时返回 null。
  * - 返回统一使用正斜杠的绝对路径（含盘符）。
  *
  * 路径安全策略由 Project 模块定义（ADR 0027）：rootPath + 所有已添加的
@@ -81,6 +81,9 @@ export function resolveInsideProject(
 ): string | null {
   const normalized = rawPath.replace(/\\/g, '/');
   if (FILE_URI_SCHEME_RE.test(normalized)) return null;
+  // `~` 前缀是 agent 侧 home 简写，不是项目内相对路径——拼进项目根会得到
+  // `<root>/~/.claude/...` 这类坏路径。返回 null 交给主进程按 home 目录展开。
+  if (normalized === '~' || normalized.startsWith('~/')) return null;
 
   // 第一步：解析路径（相对路径按 rootPath 解析，绝对路径原样使用）
   const root = rootPath.replace(/\\/g, '/').replace(/\/+$/, '');
