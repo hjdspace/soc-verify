@@ -153,6 +153,24 @@ describe('MarkdownRenderer 流式尾缘', () => {
     expect(container.querySelector('li')?.textContent).toContain('外层项');
   });
 
+  it('多块内容流式时仅最后一个文本块有尾缘与光标（兄弟块级不得各自应用）', () => {
+    const { container } = render(
+      <MarkdownRenderer
+        content={'开头段落文本。\n\n### 小节标题\n\n- 列表项甲\n- 列表项乙\n- 列表项丙\n\n收尾段落文本。'}
+        streaming
+      />,
+    );
+    // 全文只能有一个尾缘与一个光标：每个已完成块（标题/列表项/段落）的
+    // 末尾字符如果被各自应用尾缘，会永久停留在模糊态直到消息结束
+    expect(container.querySelectorAll('.ap-stream-tail').length).toBe(1);
+    expect(container.querySelectorAll('.ap-cursor').length).toBe(1);
+    // 尾缘位于最后一个块（收尾段落）内，且只覆盖末尾 6 个字符
+    const tail = container.querySelector('.ap-stream-tail');
+    expect(tail?.textContent).toBe('尾段落文本。');
+    const lastP = container.querySelector('p:last-of-type');
+    expect(lastP?.contains(tail ?? null)).toBe(true);
+  });
+
   it('流式结束后重渲染移除尾缘与光标', () => {
     const { rerender, container } = render(
       <MarkdownRenderer content="流式中的回复" streaming />,

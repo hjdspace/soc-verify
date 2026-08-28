@@ -517,6 +517,65 @@ const STREAM_TAIL_CHARS = 6;
 
 type TailResult = { node: ReactNode; handled: boolean };
 
+// ── 流式尾缘的块级仲裁（rehype 标记）────────────────────────────
+//
+// withTail 由各块级组件（p/li/h*/…）分别调用，hasStreamTail 守卫只能防
+// 嵌套重复，防不住兄弟块级各自应用——若不仲裁，每个块的末尾 6 个字符都会
+// 被打上尾缘且该块内容不再变化，导致整条消息出现多处永久模糊字与多个光标。
+// 因此流式解析时用 rehype 插件在 hast 树上找到**全文最后一个非空白文本
+// 节点**，并给它所在的祖先链打 dataStreamTail 标记；withTail 只在带标记
+// 的组件上应用尾缘。这样全文最多一个尾缘 + 一个光标，且始终位于正在
+// 增长的最后一个块上；已完成的块自然保持清晰。
+
+type HastNode = {
+  type: string;
+  value?: string | undefined;
+  children?: HastNode[] | undefined;
+  properties?: Record<string, unknown> | undefined;
+};
+
+const STREAM_TAIL_MARK = 'dataStreamTail';
+
+/**
+ * 返回 node 内最后一个非空白文本节点的祖先链（不含 node 自身为 root 的
+ * 情形：链从 node 的子孙元素开始）。找不到返回 null。
+ */
+function findLastTextChain(node: HastNode): HastNode[] | null {
+  if (node.type === 'text') {
+    return (node.value ?? '').trim().length > 0 ? [] : null;
+  }
+  if (node.type !== 'element' && node.type !== 'root') return null;
+  const children = node.children ?? [];
+  for (let i = children.length - 1; i >= 0; i--) {
+    const chain = findLastTextChain(children[i]);
+    if (chain) return node.type === 'root' ? chain : [node, ...chain];
+  }
+  return null;
+}
+
+/** rehype 插件：给最后一个文本节点的祖先链打 STREAM_TAIL_MARK。 */
+function rehypeMarkStreamTail() {
+  return (tree: HastNode): void => {
+    const children = tree.children ?? [];
+    for (let i = children.length - 1; i >= 0; i--) {
+      const chain = findLastTextChain(children[i]);
+      if (chain) {
+        for (const el of chain) {
+          el.properties = { ...el.properties, [STREAM_TAIL_MARK]: 'true' };
+        }
+        return;
+      }
+    }
+  };
+}
+
+const REHYPE_STREAM_TAIL = [rehypeMarkStreamTail];
+
+function isTailMarked(node: unknown): boolean {
+  const props = (node as { properties?: Record<string, unknown> } | null | undefined)?.properties;
+  return props?.[STREAM_TAIL_MARK] === 'true';
+}
+
 /**
  * 判断 children 树中是否已包含流式尾缘/光标标记。
  * 用于保证嵌套块级元素（如列表嵌套列表）重复调用 applyStreamTail 时只应用一次。
@@ -596,14 +655,15 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
   // 排版细节（字号/间距/颜色）由 ai-panel.css 的 .ai-panel .markdown-body 规则承载；
   // 此处只保留结构与交互行为（树视图检测、URI 白名单、高亮代码块、流式尾缘）。
   const components = useMemo<MarkdownComponents>(() => {
-    // hasStreamTail 守卫保证嵌套块级（li 套 li / li 套 p）只应用一次尾缘
-    const withTail = (children: ReactNode): ReactNode => {
-      if (!streaming || hasStreamTail(children)) return children;
+    // hasStreamTail 守卫保证嵌套块级（li 套 li / li 套 p）只应用一次尾缘；
+    // isTailMarked 保证只有全文最后一个文本块应用（兄弟块级不各自为政）
+    const withTail = (node: unknown, children: ReactNode): ReactNode => {
+      if (!streaming || !isTailMarked(node) || hasStreamTail(children)) return children;
       return applyStreamTail(children, true).node;
     };
     const headingWithTail = (Tag: 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6') =>
-      function HeadingWithTail({ children }: { children?: ReactNode }) {
-        return <Tag>{withTail(children)}</Tag>;
+      function HeadingWithTail({ children, node }: { children?: ReactNode; node?: unknown }) {
+        return <Tag>{withTail(node, children)}</Tag>;
       };
     return {
       a: ({ href, children }) => {
@@ -655,14 +715,14 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
       ),
       ul: ({ children }) => <ul>{children}</ul>,
       ol: ({ children }) => <ol>{children}</ol>,
-      li: ({ children }) => <li>{withTail(children)}</li>,
+      li: ({ children, node }) => <li>{withTail(node, children)}</li>,
       h1: headingWithTail('h1'),
       h2: headingWithTail('h2'),
       h3: headingWithTail('h3'),
       h4: headingWithTail('h4'),
       h5: headingWithTail('h5'),
       h6: headingWithTail('h6'),
-      p: ({ children }) => {
+      p: ({ children, node }) => {
         // Detect tree-view / ASCII-art paragraphs and render as <pre>
         // to preserve whitespace alignment.
         const rawText = extractText(children);
@@ -670,11 +730,11 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
           const treeText = reconstructTreeLines(rawText);
           return (
             <pre className="ap-treeview">
-              <code>{withTail(treeText)}</code>
+              <code>{withTail(node, treeText)}</code>
             </pre>
           );
         }
-        return <p><FileRefTextWrapper>{withTail(children)}</FileRefTextWrapper></p>;
+        return <p><FileRefTextWrapper>{withTail(node, children)}</FileRefTextWrapper></p>;
       },
     };
   }, [onUriClick, streaming]);
@@ -683,6 +743,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
     <div className="markdown-body">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        rehypePlugins={streaming ? REHYPE_STREAM_TAIL : []}
         components={components}
       >
         {content}
