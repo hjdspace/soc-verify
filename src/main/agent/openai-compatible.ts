@@ -55,6 +55,16 @@ const OMP_THINKING_EFFORT_LADDER = ['minimal', 'low', 'medium', 'high', 'xhigh',
  * （mode: "effort" → openai 兼容端点的 `reasoning_effort` wire 参数），
  * omp 引擎据此允许用户配置思考强度；false/缺省时显式声明为非推理模型，
  * 引擎不发送思考强度参数。
+ *
+ * 推理模型同时声明 deepseek 系 compat：这类端点（如 SenseNova deepseek-v4、
+ * DeepSeek 官方 API）在 thinking 模式下校验历史，要求带 tool_calls 的
+ * assistant 消息回传 `reasoning_content`，否则报 400
+ * "If thinking mode and tool_calls, `reasoning_content` must be passed back"。
+ * 引擎已把流式 reasoning_content 存为 thinking 块，声明该 compat 后
+ * openai-completions 编码器会回传真实值（无 thinking 块时回传空串）。
+ * `allowsSyntheticReasoningContentForToolCalls` 必须为 false —— DeepSeek 系
+ * 校验精确值，拒绝 "." 占位符。与 omp 内置 catalog 对 deepseek 家族的
+ * 判定一致（`isDeepseekFamily && spec.reasoning`），故仅推理模型声明。
  */
 function toOmpModelEntry(model: OpenAICompatibleModel, contextWindow: number) {
   const reasoning = model.reasoning === true;
@@ -67,7 +77,14 @@ function toOmpModelEntry(model: OpenAICompatibleModel, contextWindow: number) {
     reasoning,
     // 仅推理模型附带 thinking 声明；schema 要求 mode + 非空 efforts。
     ...(reasoning
-      ? { thinking: { mode: 'effort' as const, efforts: OMP_THINKING_EFFORT_LADDER } }
+      ? {
+          thinking: { mode: 'effort' as const, efforts: OMP_THINKING_EFFORT_LADDER },
+          compat: {
+            reasoningContentField: 'reasoning_content' as const,
+            requiresReasoningContentForToolCalls: true,
+            allowsSyntheticReasoningContentForToolCalls: false,
+          },
+        }
       : {}),
     // Default to text+image so screenshots and pasted images are sent
     // to the LLM as multimodal content. Without "image" in the input

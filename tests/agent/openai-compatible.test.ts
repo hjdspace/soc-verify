@@ -173,6 +173,32 @@ describe('reasoning / thinking capability declaration', () => {
     });
   });
 
+  it('declares reasoning_content replay compat for a reasoning model (deepseek-style thinking-mode validation)', () => {
+    const config = buildOpenAICompatibleModelsWithPerModelContext({
+      baseUrl: 'https://gateway.example/v1',
+      models: [{ id: 'deepseek-v4-flash', name: 'deepseek-v4-flash', contextWindow: 128000, reasoning: true }],
+      apiKeyEnvVar: 'SOCVERIFY_AGENT_API_KEY',
+    });
+
+    const model = config.providers['socverify-openai-compatible'].models[0];
+    expect(model.compat).toEqual({
+      reasoningContentField: 'reasoning_content',
+      requiresReasoningContentForToolCalls: true,
+      allowsSyntheticReasoningContentForToolCalls: false,
+    });
+  });
+
+  it('omits compat for a non-reasoning model (no thinking-mode replay field on the wire)', () => {
+    const config = buildOpenAICompatibleModelsWithPerModelContext({
+      baseUrl: 'https://gateway.example/v1',
+      models: [{ id: 'chat-model', name: 'chat-model', contextWindow: 128000 }],
+      apiKeyEnvVar: 'SOCVERIFY_AGENT_API_KEY',
+    });
+
+    const model = config.providers['socverify-openai-compatible'].models[0];
+    expect(model.compat).toBeUndefined();
+  });
+
   it('declares non-reasoning explicitly and omits thinking for a plain model', () => {
     const config = buildOpenAICompatibleModelsWithPerModelContext({
       baseUrl: 'https://gateway.example/v1',
