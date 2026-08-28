@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>Prototype — ToolChips 集成 AI 聊天工具卡片</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  /* ── 项目 dsw tokens（照抄 ai-panel.css，双主题） ─────────────── */
+  :root {
+    --dsw-bg-base: rgb(255, 255, 255);
+    --dsw-layer-1: rgb(255, 255, 255);
+    --dsw-layer-2: rgb(255, 255, 255);
+    --dsw-layer-3: rgb(245, 246, 247);
+    --dsw-label-primary: rgb(15, 17, 21);
+    --dsw-label-secondary: rgb(97, 102, 107);
+    --dsw-label-tertiary: rgb(129, 133, 140);
+    --dsw-label-caption: rgb(173, 178, 184);
+    --dsw-border-l1: rgba(0, 0, 0, 0.04);
+    --dsw-border-l2: rgba(0, 0, 0, 0.1);
+    --dsw-border-l3: rgba(0, 0, 0, 0.12);
+    --dsw-blue: rgb(65, 118, 230);
+    --dsw-blue-tertiary: rgb(228, 237, 253);
+    --dsw-error: rgb(236, 19, 19);
+    --dsw-success: rgb(34, 197, 94);
+    --dsw-warn: rgb(245, 158, 11);
+    --dsw-code-block: rgb(249, 250, 251);
+    --dsw-hover-bg: rgba(38, 49, 72, 0.06);
+    --dsw-hover-solid: rgb(241, 243, 245);
+    --dsw-bubble: rgb(237, 243, 254);
+    --dsw-selector: rgb(245, 246, 247);
+    --dsw-scroll-thumb: rgba(0, 0, 0, 0.18);
+  }
+  [data-shade="dark"] {
+    --dsw-bg-base: rgb(21, 21, 23);
+    --dsw-layer-1: rgb(35, 35, 36);
+    --dsw-layer-2: rgb(44, 44, 46);
+    --dsw-layer-3: rgb(53, 54, 56);
+    --dsw-label-primary: rgb(249, 250, 251);
+    --dsw-label-secondary: rgb(207, 211, 214);
+    --dsw-label-tertiary: rgb(173, 178, 184);
+    --dsw-label-caption: rgb(129, 133, 140);
+    --dsw-border-l1: rgba(255, 255, 255, 0.06);
+    --dsw-border-l2: rgba(255, 255, 255, 0.12);
+    --dsw-border-l3: rgba(255, 255, 255, 0.16);
+    --dsw-blue: rgb(103, 158, 254);
+    --dsw-blue-tertiary: rgb(52, 65, 91);
+    --dsw-error: rgb(242, 90, 90);
+    --dsw-success: rgb(74, 222, 128);
+    --dsw-code-block: rgb(27, 27, 28);
+    --dsw-hover-bg: rgba(255, 255, 255, 0.08);
+    --dsw-hover-solid: rgb(53, 54, 56);
+    --dsw-bubble: rgb(44, 44, 46);
+    --dsw-selector: rgb(53, 54, 56);
+    --dsw-scroll-thumb: rgba(255, 255, 255, 0.22);
+  }
+  html { -webkit-font-smoothing: antialiased; }
+  body { font-family: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; letter-spacing: -0.01em; }
+
+  /* ── ToolChips foundation keyframes（原样搬运，加 ap- 前缀） ── */
+  @keyframes ap-fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes ap-fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes ap-pop-in { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+  .ease-strong { transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1); }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+
+  /* diff 行着色（hover 预览 / 展开体共用） */
+  .ap-diff-add { color: var(--dsw-success); background: color-mix(in srgb, var(--dsw-success) 10%, transparent); }
+  .ap-diff-del { color: var(--dsw-error); background: color-mix(in srgb, var(--dsw-error) 10%, transparent); }
+
+  /* 模拟 ThinkingOrb 的简易 spinner */
+  .mini-spin { width: 14px; height: 14px; border-radius: 9999px; border: 2px solid var(--dsw-border-l3); border-top-color: var(--dsw-blue); animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .proto-hidden { display: none !important; }
+</style>
+</head>
+<body class="min-h-screen" style="background: var(--dsw-bg-base);">
+
+<!-- ═══════════ 说明头（原型元信息，非设计的一部分） ═══════════ -->
+<header class="max-w-3xl mx-auto pt-8 pb-4 px-6">
+  <div class="flex items-baseline gap-3">
+    <h1 class="text-lg font-bold" style="color: var(--dsw-label-primary)">ToolChips 集成原型</h1>
+    <span class="text-xs" style="color: var(--dsw-label-tertiary)">PROTOTYPE — beautiful-ui ToolChips → SoC Verify AI 面板</span>
+  </div>
+  <p class="mt-1 text-xs leading-5" style="color: var(--dsw-label-secondary)">
+    三种结构方案：底部切换栏或 <code class="font-mono">?variant=A|B|C</code>，←/→ 键可切换，右上角切换亮暗主题。
+    A = 原版 ToolChips（轻量 detail 行）；B = 混合（分组行 + 现有专项展开体 + diff chips，推荐）；
+    C = 不分组（每工具一行，保留卡片级 diff 统计）。
+  </p>
+</header>
+
+<!-- ═══════════ 模拟 AI 面板（420px 真实密度） ═══════════ -->
+<main class="pb-40 flex justify-center px-4">
+  <div class="w-full max-w-[420px] rounded-2xl overflow-hidden flex flex-col" style="background: var(--dsw-layer-1); border: 1px solid var(--dsw-border-l2); box-shadow: 0 8px 30px rgba(0,0,0,0.08);">
+
+    <!-- 面板标题栏 -->
+    <div class="flex items-center justify-between px-3.5 h-10 shrink-0" style="border-bottom: 1px solid var(--dsw-border-l1);">
+      <div class="flex items-center gap-2">
+        <span class="flex items-center gap-1.5 text-xs font-semibold" style="color: var(--dsw-label-primary)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="var(--dsw-blue)"><path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z"/></svg>
+          AI 助手
+        </span>
+        <span class="text-[10px] px-1.5 py-0.5 rounded-full" style="background: var(--dsw-selector); color: var(--dsw-label-tertiary)">demo-session</span>
+      </div>
+      <button id="theme-toggle" class="text-[10px] px-2 py-1 rounded-md transition-colors" style="background: var(--dsw-selector); color: var(--dsw-label-secondary);">切换暗色</button>
+    </div>
+
+    <!-- 消息流 -->
+    <div class="flex-1 overflow-y-auto px-3 py-3 space-y-2.5" style="max-height: 640px;">
+
+      <!-- 用户消息 -->
+      <div class="flex flex-col items-end">
+        <div class="max-w-[88%] rounded-2xl px-3 py-2 text-xs leading-5" style="background: var(--dsw-bubble); color: var(--dsw-label-primary)">
+          timer 子系统最近一次回归失败了，帮我定位一下原因，顺便看看要改哪些文件
+        </div>
+        <span class="text-[9px] mt-0.5" style="color: var(--dsw-label-caption)">14:32</span>
+      </div>
+
+      <!-- assistant 文本 -->
+      <div class="text-xs leading-5" style="color: var(--dsw-label-primary)">我先查看最近一次回归的状态和失败用例日志。</div>
+
+      <!-- ══════ 工具调用（三个变体渲染不同） ══════ -->
+      <div id="variant-host" class="space-y-2.5"></div>
+
+      <!-- assistant 结论 -->
+      <div class="text-xs leading-5 space-y-2" style="color: var(--dsw-label-primary)">
+        <p>定位到中断清除时序问题：<code class="font-mono text-[11px] px-1 rounded" style="background: var(--dsw-selector)">timer_irq_handler.sv</code> 中 IRQ status 在 clock edge 之后才清零，导致超时。已修复并重跑该 case，仿真通过。</p>
+        <p>建议后续把 <span class="font-medium">irq_clear</span> 时序检查加入回归门禁。</p>
+      </div>
+    </div>
+
+    <!-- 输入条（静态装饰） -->
+    <div class="px-3 py-2.5 shrink-0" style="border-top: 1px solid var(--dsw-border-l1);">
+      <div class="rounded-xl px-3 py-2 text-xs" style="background: var(--dsw-selector); color: var(--dsw-label-caption)">追问，或输入 / 唤起技能…</div>
+    </div>
+  </div>
+</main>
+
+<!-- ═══════════ 浮动变体切换栏 ═══════════ -->
+<div class="fixed bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full px-2 py-1.5 z-50" style="background: var(--dsw-layer-2); border: 1px solid var(--dsw-border-l3); box-shadow: 0 8px 24px rgba(0,0,0,0.18);">
+  <button id="prev" class="w-7 h-7 rounded-full flex items-center justify-center transition-colors" style="color: var(--dsw-label-secondary);">◀</button>
+  <span id="variant-label" class="text-xs font-medium tabular-nums px-2 min-w-[190px] text-center" style="color: var(--dsw-label-primary)"></span>
+  <button id="next" class="w-7 h-7 rounded-full flex items-center justify-center transition-colors" style="color: var(--dsw-label-secondary);">▶</button>
+</div>
+
+<!-- ═══════════ diff hover 预览（JS 定位） ═══════════ -->
+<div id="diff-preview" class="fixed z-[60] w-72 overflow-hidden rounded-[10px] proto-hidden" style="background: var(--dsw-layer-1); box-shadow: 0 0 0 1px var(--dsw-border-l2), 0 8px 28px rgba(0,0,0,0.25);"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════
+ * 数据：模拟一次真实工具运行（SoC 验证场景）
+ * ═══════════════════════════════════════════════════════════ */
+const TOOLS = [
+  { id: 't1', icon: 'db',    label: 'Run status',  chip: 'run_20260828_01', mono: true, duration: '0.4s', ok: true,
+    detailLines: ['status: FAIL · 3 / 42 cases failed', 'failed: case_irq_storm, case_wdt_rst, case_presc_glitch'] },
+  { id: 't2', icon: 'file',  label: 'Read 412 lines', chip: 'tb_timer_top.sv', mono: true, duration: '0.2s', ok: true,
+    detailLines: ['module tb_timer_top;', '  uvm_timer_env env;', '  // 412 lines total · 寄存器配置时序在 L188-240'] },
+  { id: 't3', icon: 'search',label: 'Grep 18 matches', chip: '/timeout_irq/', mono: true, duration: '0.1s', ok: true,
+    detailLines: ['irq_handler.sv:87    if (!timeout_irq_cleared)', 'irq_handler.sv:102    assign timeout_irq = pending & ~mask;'] },
+  { id: 't4', icon: 'edit',  label: 'Edit', chip: 'timer_irq_handler.sv', mono: true, duration: '0.3s', ok: true, diff: { add: 12, del: 3, file: 'timer_irq_handler.sv' },
+    body: 'diff',
+    detailLines: [
+      { t: '+  if (clk edges reached TIMEOUT)', tone: 'add' },
+      { t: '+    clear_irq_status();', tone: 'add' },
+      { t: '-  clear_irq_status();  // was after edge', tone: 'del' },
+    ] },
+  { id: 't5', icon: 'db',    label: 'Run simulation', chip: 'timer/case_irq_storm', mono: true, duration: '2.4s', ok: true,
+    body: 'term',
+    detailLines: [{ t: '✓ TEST PASSED · UVM_INFO (2.4s)' }] },
+];
+const DIFFS = [
+  { file: 'timer_irq_handler.sv', add: 12, del: 3 },
+  { file: 'tb_timer_top.sv', add: 2, del: 2 },
+];
+const DIFF_LINES = {
+  'timer_irq_handler.sv': [
+    { t: 'always @(posedge clk) begin', tone: 'ctx' },
+    { t: '  if (!timeout_irq_cleared)', tone: 'del' },
+    { t: '  if (clk_edges >= TIMEOUT)', tone: 'add' },
+    { t: '    clear_irq_status();', tone: 'add' },
+    { t: 'end', tone: 'ctx' },
+  ],
+  'tb_timer_top.sv': [
+    { t: 'initial begin', tone: 'ctx' },
+    { t: '  timeout = 1000;', tone: 'del' },
+    { t: '  timeout = 2000; // irq storm margin', tone: 'add' },
+    { t: 'end', tone: 'ctx' },
+  ],
+};
+
+const ICONS = {
+  db:    '<path d="M12 3c4.97 0 9 1.34 9 3s-4.03 3-9 3-9-1.34-9-3 4.03-3 9-3z"/><path d="M3 6v6c0 1.66 4.03 3 9 3s9-1.34 9-3V6"/><path d="M3 12v6c0 1.66 4.03 3 9 3s9-1.34 9-3v-6"/>',
+  file:  '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+  edit:  '<path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>',
+  term:  '<path d="M4 17l6-5-6-5M12 19h8"/>',
+};
+function icon(name, cls = '') {
+  return `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="${cls}">${ICONS[name]}</svg>`;
+}
+
+/* ═══════════════════════════════════════════════════════════
+ * 变体渲染器
+ * ═══════════════════════════════════════════════════════════ */
+const host = document.getElementById('variant-host');
+
+/* —— 公共小件 —— */
+function chevron(open) {
+  return `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" class="transition-transform duration-200 ease-strong" style="transform: rotate(${open ? 0 : -90}deg)"><path d="M6 9l6 6 6-6"/></svg>`;
+}
+function rowIcon(t) {
+  return `<span class="relative flex size-4 shrink-0 items-center justify-center" style="color: var(--dsw-label-tertiary)">${icon(t.icon)}</span>`;
+}
+function rowChip(t) {
+  return `<span class="inline-flex h-5.5 min-w-0 flex-1 items-center truncate rounded-md px-1.5 text-[11.5px] shadow-[0_0_0_1px_var(--dsw-border-l1)]" style="background: var(--dsw-selector); color: var(--dsw-label-secondary); ${t.mono ? 'font-family: ui-monospace, monospace;' : ''}">${t.chip}</span>`;
+}
+function detailBlock(t) {
+  const lines = t.detailLines.map((l) =>
+    `<span class="truncate text-[11.5px] leading-[1.7] ${typeof l === 'object' && l.tone === 'add' ? 'ap-diff-add' : typeof l === 'object' && l.tone === 'del' ? 'ap-diff-del' : ''}" style="${typeof l === 'object' ? '' : 'color: var(--dsw-label-secondary);'} ${t.detailMono !== false && typeof l === 'object' ? 'font-family: ui-monospace, monospace;' : ''}">${typeof l === 'object' ? l.t : l}</span>`
+  ).join('');
+  return `<div class="grid transition-[grid-template-rows,opacity] duration-300 ease-strong overflow-hidden" data-detail style="grid-template-rows: 0fr; opacity: 0;"><div class="min-h-0 overflow-hidden"><div class="mt-0.5 mb-1 ml-2 flex flex-col gap-0.5 border-l py-0.5 pl-3.5" style="border-color: var(--dsw-border-l3)">${lines}</div></div></div>`;
+}
+
+/* —— 变体 A：原版 ToolChips（分组 + 轻量 detail 行） —— */
+function renderA() {
+  const rows = TOOLS.map((t, i) => `
+    <div style="animation: ap-fade-up 300ms cubic-bezier(0.23,1,0.32,1) ${i * 60}ms both" data-row="${t.id}">
+      <button type="button" data-rowtoggle="${t.id}" aria-expanded="false"
+        class="group/row -mx-[3px] flex h-7 w-[calc(100%+6px)] min-w-0 items-center gap-2 rounded-lg px-[3px] text-left transition-colors duration-100 hover:bg-[var(--dsw-hover-bg)]">
+        ${rowIcon(t)}
+        <span class="shrink-0 text-[12.5px] font-medium" style="color: var(--dsw-label-primary)">${t.label}</span>
+        ${rowChip(t)}
+        <span class="shrink-0 font-mono text-[10px] tabular-nums" style="color: var(--dsw-label-caption)">${t.duration}</span>
+      </button>
+      ${detailBlock(t)}
+    </div>`).join('');
+  const chips = DIFFS.map((d, i) => `
+    <span class="relative" data-diffchip="${d.file}">
+      <button type="button" class="inline-flex h-7 max-w-full items-center gap-2 rounded-md px-2 font-mono text-[11.5px] transition-colors duration-100"
+        style="background: var(--dsw-layer-1); color: var(--dsw-label-primary); box-shadow: 0 0 0 1px var(--dsw-border-l2), 0 1px 2px rgba(0,0,0,0.06); animation: ap-pop-in 250ms cubic-bezier(0.23,1,0.32,1) ${i * 80}ms both"
+        onmouseenter="showDiff('${d.file}', this)" onmouseleave="hideDiff()">
+        <span class="min-w-0 truncate">${d.file}</span>
+        <span class="shrink-0 tabular-nums ap-diff-add" style="background: none">+${d.add}</span>
+        <span class="shrink-0 tabular-nums ap-diff-del" style="background: none">−${d.del}</span>
+      </button>
+    </span>`).join('');
+  return `
+  <div data-variant="A">
+    <button type="button" data-grouptoggle class="-mx-1.5 flex w-fit items-center gap-1.5 rounded-lg px-1.5 py-1 text-[12.5px] transition-colors duration-100 hover:bg-[var(--dsw-hover-bg)]" style="color: var(--dsw-label-secondary)" aria-expanded="true">
+      ${chevron(true)}<span class="tabular-nums">5 个工具调用 · 3.4s</span>
+    </button>
+    <div data-groupbody class="grid transition-[grid-template-rows,opacity] duration-300 ease-strong" style="grid-template-rows: 1fr; opacity: 1;">
+      <div class="-mx-1 overflow-hidden px-1.5 pb-1 min-h-0">
+        <div class="mt-1.5 flex flex-col gap-1">${rows}</div>
+        <div class="mt-2.5 flex max-w-full flex-wrap gap-1.5 border-t pt-2.5" style="border-color: var(--dsw-border-l1)">${chips}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* —— 变体 B：混合（分组行 + 专项展开体，推荐） —— */
+function bodyDiff() {
+  return `
+  <div class="rounded-[10px] mt-1 mb-1 overflow-hidden" style="background: var(--dsw-code-block); border: 1px solid var(--dsw-border-l1);">
+    <div class="flex items-center justify-between px-2.5 py-1.5 font-mono text-[10.5px]" style="color: var(--dsw-label-secondary); border-bottom: 1px solid var(--dsw-border-l1);">
+      <span class="min-w-0 truncate">timer_irq_handler.sv</span>
+      <span class="shrink-0 tabular-nums"><span class="ap-diff-add" style="background:none">+12</span> <span class="ap-diff-del" style="background:none">−3</span></span>
+    </div>
+    <div class="py-1 font-mono text-[11px] leading-[1.8]">
+      <div class="flex gap-2 px-2.5 whitespace-pre" style="color: var(--dsw-label-secondary)"><span class="w-3 shrink-0 select-none"> </span><span>always @(posedge clk) begin</span></div>
+      <div class="flex gap-2 px-2.5 whitespace-pre ap-diff-del"><span class="w-3 shrink-0 select-none">−</span><span>  if (!timeout_irq_cleared)</span></div>
+      <div class="flex gap-2 px-2.5 whitespace-pre ap-diff-add"><span class="w-3 shrink-0 select-none">+</span><span>  if (clk_edges >= TIMEOUT)</span></div>
+      <div class="flex gap-2 px-2.5 whitespace-pre ap-diff-add"><span class="w-3 shrink-0 select-none">+</span><span>    clear_irq_status();</span></div>
+      <div class="flex gap-2 px-2.5 whitespace-pre" style="color: var(--dsw-label-secondary)"><span class="w-3 shrink-0 select-none"> </span><span>end</span></div>
+    </div>
+  </div>`;
+}
+function bodyTerm() {
+  return `
+  <div class="rounded-[10px] mt-1 mb-1 overflow-hidden" style="background: var(--dsw-code-block); border: 1px solid var(--dsw-border-l1);">
+    <div class="px-2.5 py-1.5 font-mono text-[10.5px]" style="color: var(--dsw-label-secondary); border-bottom: 1px solid var(--dsw-border-l1);">runsim · timer/case_irq_storm</div>
+    <div class="px-2.5 py-1.5 font-mono text-[11px] leading-[1.8] whitespace-pre" style="color: var(--dsw-label-secondary)"><span style="color: var(--dsw-success)">✓ TEST PASSED</span>\n  UVM_INFO ... (2.4s, seed 42)</div>
+  </div>`;
+}
+function renderB() {
+  const rows = TOOLS.map((t, i) => {
+    const rich = t.body === 'diff' ? bodyDiff() : t.body === 'term' ? bodyTerm() : detailBlock(t);
+    return `
+    <div style="animation: ap-fade-up 300ms cubic-bezier(0.23,1,0.32,1) ${i * 60}ms both" data-row="${t.id}">
+      <button type="button" data-rowtoggle="${t.id}" aria-expanded="false"
+        class="group/row -mx-[3px] flex h-7 w-[calc(100%+6px)] min-w-0 items-center gap-2 rounded-lg px-[3px] text-left transition-colors duration-100 hover:bg-[var(--dsw-hover-bg)]">
+        ${rowIcon(t)}
+        <span class="shrink-0 text-[12.5px] font-medium" style="color: var(--dsw-label-primary)">${t.label}</span>
+        ${rowChip(t)}
+        <span class="shrink-0 font-mono text-[10px] tabular-nums" style="color: var(--dsw-label-caption)">${t.duration}</span>
+      </button>
+      <div class="grid transition-[grid-template-rows,opacity] duration-300 ease-strong overflow-hidden" data-detail style="grid-template-rows: 0fr; opacity: 0;">
+        <div class="min-h-0 overflow-hidden pl-2">${rich}</div>
+      </div>
+    </div>`;
+  }).join('');
+  const chips = DIFFS.map((d, i) => `
+    <span class="relative" data-diffchip="${d.file}">
+      <button type="button" class="inline-flex h-7 max-w-full items-center gap-2 rounded-md px-2 font-mono text-[11.5px] transition-colors duration-100"
+        style="background: var(--dsw-layer-1); color: var(--dsw-label-primary); box-shadow: 0 0 0 1px var(--dsw-border-l2), 0 1px 2px rgba(0,0,0,0.06); animation: ap-pop-in 250ms cubic-bezier(0.23,1,0.32,1) ${i * 80}ms both"
+        onmouseenter="showDiff('${d.file}', this)" onmouseleave="hideDiff()">
+        <span class="min-w-0 truncate">${d.file}</span>
+        <span class="shrink-0 tabular-nums ap-diff-add" style="background: none">+${d.add}</span>
+        <span class="shrink-0 tabular-nums ap-diff-del" style="background: none">−${d.del}</span>
+      </button>
+    </span>`).join('');
+  /* 正在执行的第二个组：2 行，第 2 行 running */
+  return `
+  <div class="space-y-3" data-variant="B">
+    <div>
+      <button type="button" data-grouptoggle class="-mx-1.5 flex w-fit items-center gap-1.5 rounded-lg px-1.5 py-1 text-[12.5px] transition-colors duration-100 hover:bg-[var(--dsw-hover-bg)]" style="color: var(--dsw-label-secondary)" aria-expanded="true">
+        ${chevron(true)}<span class="tabular-nums">5 个工具调用 · 3.4s</span>
+      </button>
+      <div data-groupbody class="grid transition-[grid-template-rows,opacity] duration-300 ease-strong" style="grid-template-rows: 1fr; opacity: 1;">
+        <div class="-mx-1 overflow-hidden px-1.5 pb-1 min-h-0">
+          <div class="mt-1.5 flex flex-col gap-1">${rows}</div>
+          <div class="mt-2.5 flex max-w-full flex-wrap gap-1.5 border-t pt-2.5" style="border-color: var(--dsw-border-l1)">${chips}</div>
+        </div>
+      </div>
+    </div>
+    <div style="animation: ap-fade-up 300ms cubic-bezier(0.23,1,0.32,1) both">
+      <button type="button" class="-mx-1.5 flex w-fit items-center gap-1.5 rounded-lg px-1.5 py-1 text-[12.5px] transition-colors duration-100 hover:bg-[var(--dsw-hover-bg)]" style="color: var(--dsw-label-secondary)">
+        <span class="mini-spin"></span><span class="tabular-nums">正在获取覆盖率数据…</span>
+      </button>
+      <div class="-mx-1 overflow-hidden px-1.5">
+        <div class="mt-1 flex flex-col gap-1" style="animation: ap-fade-up 300ms cubic-bezier(0.23,1,0.32,1) 150ms both">
+          <div class="flex h-7 min-w-0 items-center gap-2 rounded-lg px-[3px]">
+            <span class="mini-spin" style="width:13px;height:13px;"></span>
+            <span class="shrink-0 text-[12.5px] font-medium" style="color: var(--dsw-label-primary)">Get coverage</span>
+            <span class="inline-flex h-5.5 min-w-0 flex-1 items-center truncate rounded-md px-1.5 text-[11.5px]" style="background: var(--dsw-selector); color: var(--dsw-label-secondary)">subsys=timer · collecting…</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* —— 变体 C：不分组（每工具一行，无组头） —— */
+function renderC() {
+  const rows = TOOLS.map((t, i) => `
+    <div style="animation: ap-fade-up 300ms cubic-bezier(0.23,1,0.32,1) ${i * 60}ms both" data-row="${t.id}">
+      <button type="button" data-rowtoggle="${t.id}" aria-expanded="false"
+        class="group/row -mx-[3px] flex h-7 w-[calc(100%+6px)] min-w-0 items-center gap-2 rounded-lg px-[3px] text-left transition-colors duration-100 hover:bg-[var(--dsw-hover-bg)]">
+        ${rowIcon(t)}
+        <span class="shrink-0 text-[12.5px] font-medium" style="color: var(--dsw-label-primary)">${t.label}</span>
+        ${rowChip(t)}
+        ${t.diff ? `<span class="shrink-0 font-mono text-[10px] tabular-nums"><span class="ap-diff-add" style="background:none">+${t.diff.add}</span> <span class="ap-diff-del" style="background:none">−${t.diff.del}</span></span>` : ''}
+        <span class="shrink-0 font-mono text-[10px] tabular-nums" style="color: var(--dsw-label-caption)">${t.duration}</span>
+      </button>
+      ${detailBlock(t)}
+    </div>`).join('');
+  return `
+  <div class="flex flex-col gap-1" data-variant="C">${rows}</div>`;
+}
+
+const VARIANTS = [
+  { key: 'A', name: 'A — 原版 ToolChips（轻量 detail）', render: renderA },
+  { key: 'B', name: 'B — 混合：分组行 + 专项展开体（推荐）', render: renderB },
+  { key: 'C', name: 'C — 不分组：紧凑卡片流', render: renderC },
+];
+
+/* ═══════════════════════════════════════════════════════════
+ * 切换器（?variant= + ←/→ + 底部浮动栏）
+ * ═══════════════════════════════════════════════════════════ */
+let current = new URLSearchParams(location.search).get('variant')?.toUpperCase() || 'B';
+if (!VARIANTS.some((v) => v.key === current)) current = 'B';
+
+function mount() {
+  const v = VARIANTS.find((x) => x.key === current);
+  host.innerHTML = v.render();
+  document.getElementById('variant-label').textContent = v.name;
+  wireRows();
+}
+function cycle(dir) {
+  const idx = VARIANTS.findIndex((x) => x.key === current);
+  current = VARIANTS[(idx + dir + VARIANTS.length) % VARIANTS.length].key;
+  const url = new URL(location);
+  url.searchParams.set('variant', current);
+  history.replaceState(null, '', url);
+  mount();
+}
+document.getElementById('prev').onclick = () => cycle(-1);
+document.getElementById('next').onclick = () => cycle(1);
+document.addEventListener('keydown', (e) => {
+  if (e.target.closest('input,textarea,[contenteditable]')) return;
+  if (e.key === 'ArrowLeft') cycle(-1);
+  if (e.key === 'ArrowRight') cycle(1);
+});
+
+/* ═══════════════════════════════════════════════════════════
+ * 交互：行展开 / 组折叠 / diff 预览 / 主题
+ * ═══════════════════════════════════════════════════════════ */
+function wireRows() {
+  host.querySelectorAll('[data-rowtoggle]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const row = btn.closest('[data-row]');
+      const detail = row.querySelector('[data-detail]');
+      const open = btn.getAttribute('aria-expanded') === 'true';
+      btn.setAttribute('aria-expanded', String(!open));
+      detail.style.gridTemplateRows = open ? '0fr' : '1fr';
+      detail.style.opacity = open ? 0 : 1;
+    });
+  });
+  const gt = host.querySelector('[data-grouptoggle]');
+  if (gt) {
+    gt.addEventListener('click', () => {
+      const body = host.querySelector('[data-groupbody]');
+      const open = gt.getAttribute('aria-expanded') === 'true';
+      gt.setAttribute('aria-expanded', String(!open));
+      gt.querySelector('svg').style.transform = `rotate(${open ? -90 : 0}deg)`;
+      body.style.gridTemplateRows = open ? '0fr' : '1fr';
+      body.style.opacity = open ? 0 : 1;
+    });
+  }
+}
+
+/* diff hover 预览（原版 ToolChips 的 portal 方案简化版） */
+const previewEl = document.getElementById('diff-preview');
+function showDiff(file, btn) {
+  const rect = btn.closest('[data-diffchip]').getBoundingClientRect();
+  const lines = DIFF_LINES[file] || [];
+  const height = 38 + lines.length * 20;
+  const fitsBelow = rect.bottom + 6 + height <= window.innerHeight - 12;
+  const pos = fitsBelow ? { top: rect.bottom + 6 } : { bottom: window.innerHeight - rect.top + 6 };
+  previewEl.style.left = Math.max(12, Math.min(rect.left, window.innerWidth - 300)) + 'px';
+  previewEl.style.top = pos.top != null ? pos.top + 'px' : 'auto';
+  previewEl.style.bottom = pos.bottom != null ? pos.bottom + 'px' : 'auto';
+  previewEl.innerHTML = `
+    <div class="flex items-center justify-between px-2.5 py-1.5 font-mono text-[11px]" style="border-bottom: 1px solid var(--dsw-border-l1); color: var(--dsw-label-secondary)">
+      <span class="min-w-0 truncate">${file}</span>
+      <span class="shrink-0 tabular-nums"><span class="ap-diff-add" style="background:none">+${(DIFFS.find((d) => d.file === file) || {}).add}</span>${(DIFFS.find((d) => d.file === file) || {}).del ? ` <span class="ap-diff-del" style="background:none">−${(DIFFS.find((d) => d.file === file) || {}).del}</span>` : ''}</span>
+    </div>
+    <div class="py-1 font-mono text-[11px] leading-[1.8]">
+      ${lines.map((l) => `<div class="flex gap-2 px-2.5 whitespace-pre ${l.tone === 'add' ? 'ap-diff-add' : l.tone === 'del' ? 'ap-diff-del' : ''}" style="${l.tone === 'ctx' ? 'color: var(--dsw-label-secondary)' : ''}"><span class="w-3 shrink-0 select-none">${l.tone === 'add' ? '+' : l.tone === 'del' ? '−' : ' '}</span><span class="min-w-0 truncate">${l.t}</span></div>`).join('')}
+    </div>`;
+  previewEl.classList.remove('proto-hidden');
+  previewEl.style.animation = 'ap-pop-in 160ms cubic-bezier(0.23,1,0.32,1) both';
+  previewEl.style.transformOrigin = fitsBelow ? 'top left' : 'bottom left';
+}
+function hideDiff() { previewEl.classList.add('proto-hidden'); }
+
+/* 主题 */
+document.getElementById('theme-toggle').addEventListener('click', (e) => {
+  const root = document.documentElement;
+  const dark = root.getAttribute('data-shade') === 'dark';
+  if (dark) { root.removeAttribute('data-shade'); e.target.textContent = '切换暗色'; }
+  else { root.setAttribute('data-shade', 'dark'); e.target.textContent = '切换亮色'; }
+});
+
+mount();
+</script>
+</body>
+</html>

@@ -627,3 +627,29 @@ button.ap-turnactions-source:hover {
   font-family: var(--app-font-family-code);
   color: var(--dsw-label-primary);
 }
+
+/* ── ToolRunGroup（ToolChips 风格工具分组） ─────────────────
+   行入场 ap-fadeup / chip 入场 ap-popin；diff chip 与 hover 预览
+   的阴影需按亮暗主题切换描边色，故以 token 类而不是 arbitrary value 提供 */
+@keyframes ap-popin {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.ap-echip {
+  box-shadow: 0 0 0 1px var(--dsw-border-l2), 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
+[data-shade='dark'] .ap-echip {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+}
+.ap-echip-float {
+  box-shadow: 0 0 0 1px var(--dsw-border-l2), 0 8px 28px 0 rgba(0, 0, 0, 0.25);
+}
+[data-shade='dark'] .ap-echip-float {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15), 0 8px 28px 0 rgba(0, 0, 0, 0.34);
+}

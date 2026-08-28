@@ -9,6 +9,7 @@ import { useProjectStore } from '@renderer/stores/project';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
 import { AssistantActions } from '@renderer/components/chat/AssistantActions';
 import { ToolCard } from '@renderer/components/chat/ToolCard';
+import { ToolRunGroup, groupToolMessages } from '@renderer/components/chat/ToolRunGroup';
 import { ThinkingBlock } from '@renderer/components/chat/ThinkingBlock';
 import { TVAISuggestionCard } from '@renderer/components/chat/TVAISuggestionCard';
 import { cn } from '@renderer/lib/utils';
@@ -43,6 +44,15 @@ const currentSessionId = useSessionCoreStore((s) => s.currentSessionId);
   const selectedSkills = currentSession?.composer?.selectedSkills ?? [];
   const contextFiles = currentSession?.composer?.contextFiles ?? [];
   const isSending = currentSession?.status === 'streaming' || currentSession?.status === 'tool_executing';
+  // 回合收尾操作栏只挂在本会话最后一条助手消息上——多步回合（文本→工具→文本）
+  // 中的中间说明段不是回合终点，不渲染操作栏
+  const lastAssistantId = useMemo(() => {
+    if (!currentSession) return undefined;
+    for (let i = currentSession.messages.length - 1; i >= 0; i--) {
+      if (currentSession.messages[i].role === 'assistant') return currentSession.messages[i].id;
+    }
+    return undefined;
+  }, [currentSession]);
 const createSession = useSessionCoreStore((s) => s.createSession);
 const closeSession = useSessionCoreStore((s) => s.closeSession);
 const switchSession = useSessionCoreStore((s) => s.switchSession);
@@ -762,9 +772,13 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            {currentSession.messages.map((msg) => (
-              <MessageBubble key={msg.id} message={msg} session={currentSession} />
-            ))}
+            {groupToolMessages(currentSession.messages).map((item) =>
+              item.kind === 'run' ? (
+                <ToolRunGroup key={`run-${item.messages[0].id}`} messages={item.messages} />
+              ) : (
+                <MessageBubble key={item.message.id} message={item.message} session={currentSession} isLastAssistant={item.message.id === lastAssistantId} />
+              ),
+            )}
             {/* Approval request cards */}
             {approvalRequests
               .filter((req) => {
@@ -1380,7 +1394,7 @@ const RunningIndicator = memo(function RunningIndicator() {
   );
 });
 
-function MessageBubble({ message, session }: { message: ChatMessage; session?: SessionEntry }) {
+function MessageBubble({ message, session, isLastAssistant }: { message: ChatMessage; session?: SessionEntry; isLastAssistant?: boolean }) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   if (message.role === 'tool') {
@@ -1507,7 +1521,12 @@ function MessageBubble({ message, session }: { message: ChatMessage; session?: S
           </div>
         )
       )}
-      {!isStreaming && message.content && !canRenderTVCard && !message.content.trimStart().startsWith('[错误]') && (
+      {/* 回合收尾操作栏只在「回合结束后的最后一条助手消息」上渲染——
+          多步回合的中间文本段（工具调用前后的说明）与流式中/工具执行中的
+          消息都不显示，避免每段文本都挂一个复制按钮 */}
+      {!isStreaming && isLastAssistant
+        && (session?.status === 'idle' || session?.status === 'error')
+        && message.content && !canRenderTVCard && !message.content.trimStart().startsWith('[错误]') && (
         <AssistantActions message={message} session={session} />
       )}
     </div>
