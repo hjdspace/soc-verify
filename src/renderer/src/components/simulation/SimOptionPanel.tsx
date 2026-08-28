@@ -14,11 +14,13 @@ import {
   Save,
   FolderOpen,
   Terminal,
+  ChevronDown,
 } from 'lucide-react';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useToastStore } from '@renderer/stores/toast';
 import { trpc } from '@renderer/lib/trpc';
+import { cn } from '@renderer/lib/utils';
 import type { SimOptionField } from '@shared/plugin-types';
 import {
   OptionCard,
@@ -178,20 +180,31 @@ export function SimOptionPanel() {
         </div>
 
         <div className="flex items-center gap-1">
-          {/* Preset selector */}
+          {/* Preset selector — 预设列表与保存收进同一个下拉，header 只留一个入口 */}
           <div className="relative">
             <button
               onClick={() => setShowPresetMenu(!showPresetMenu)}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              title="加载已保存的仿真选项预设"
+              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-[color,background-color,transform] duration-150 ease-out hover:bg-accent hover:text-foreground active:scale-[0.97]"
+              title="加载已保存的仿真选项预设，或把当前选项保存为预设"
             >
               <FolderOpen className="h-3 w-3" />
               预设
+              {Object.keys(presets).length > 0 && (
+                <span className="rounded bg-secondary px-1 text-[10px] leading-3">
+                  {Object.keys(presets).length}
+                </span>
+              )}
+              <ChevronDown
+                className={cn(
+                  'h-3 w-3 transition-transform duration-150 ease-out',
+                  showPresetMenu && 'rotate-180',
+                )}
+              />
             </button>
             {showPresetMenu && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowPresetMenu(false)} />
-                <div className="absolute bottom-full right-0 z-50 mb-1 max-h-80 min-w-64 max-w-80 overflow-y-auto rounded-md border border-border bg-popover shadow-xl">
+                <div className="absolute top-full right-0 z-50 mt-1 max-h-80 min-w-64 max-w-80 overflow-y-auto rounded-md border border-border bg-popover shadow-xl">
                   {Object.keys(presets).length === 0 ? (
                     <div className="px-3 py-2 text-xs text-muted-foreground">暂无已保存的预设</div>
                   ) : (
@@ -226,34 +239,38 @@ export function SimOptionPanel() {
                       );
                     })
                   )}
+                  {/* Save row — sticky 置底，长列表下也始终可触达 */}
+                  <div className="sticky bottom-0 flex items-center gap-1 border-t border-border bg-popover p-1.5">
+                    <input
+                      value={presetName}
+                      onChange={(e) => setPresetName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void handleSavePreset();
+                      }}
+                      placeholder={currentProjectId ? '预设名称' : '请先打开项目'}
+                      title="输入名称，将当前仿真选项保存为可复用预设"
+                      className="h-6 min-w-0 flex-1 rounded border border-border bg-background px-1.5 text-[11px] outline-none focus:border-primary"
+                    />
+                    <button
+                      onClick={handleSavePreset}
+                      disabled={!presetName.trim() || savingPreset || !currentProjectId}
+                      className="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[11px] text-muted-foreground transition-[color,background-color,transform] duration-150 ease-out hover:bg-accent hover:text-foreground active:scale-[0.97] disabled:opacity-30"
+                      title="保存当前仿真选项为预设"
+                    >
+                      <Save className="h-3 w-3" />
+                      保存
+                    </button>
+                  </div>
                 </div>
               </>
             )}
-          </div>
-
-          {/* Save preset */}
-          <div className="flex items-center gap-1">
-            <input
-              value={presetName}
-              onChange={(e) => setPresetName(e.target.value)}
-              placeholder={currentProjectId ? '预设名称' : '请先打开项目'}
-              title="输入名称，将当前仿真选项保存为可复用预设"
-              className="w-20 rounded border border-border bg-background px-1.5 py-0.5 text-[11px] outline-none focus:border-primary"
-            />
-            <button
-              onClick={handleSavePreset}
-              disabled={!presetName.trim() || savingPreset || !currentProjectId}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-30"
-              title="保存当前仿真选项为预设"
-            >
-              <Save className="h-3 w-3" />
-            </button>
           </div>
         </div>
       </div>
 
       {/* ── Options panel — Minimalist Card layout ─────────── */}
-      <div className="max-h-72 overflow-y-auto px-3 pb-2">
+      {/* auto-fill 跟随中栏实际宽度换行（视口断点会无视中栏宽度强行 3 列） */}
+      <div className="max-h-80 overflow-y-auto px-3 pb-2">
         {schema.length === 0 ? (
           <div className="py-2 text-xs text-muted-foreground">
             {currentProjectId
@@ -261,7 +278,7 @@ export function SimOptionPanel() {
               : '请先打开项目'}
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] items-start gap-2">
             {groupedFields.map(([groupName, fields]) => (
               <OptionCard
                 key={groupName}
