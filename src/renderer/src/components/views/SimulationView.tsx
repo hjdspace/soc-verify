@@ -2,7 +2,7 @@
  * 仿真视图（三栏布局整合 — Issue #5）。
  *
  * 从单一运行列表表格重构为 IDE 三栏布局容器：
- *   左栏 CaseTreePanel（子系统/用例树，宽度 simLeftPanelWidth，可拖拽）
+ *   左栏 Tab 切换：CaseTreePanel（子系统/用例树） | CaseCfgPanel（自定义用例）
  *   中上 SimOptionPanel（Option 面板，max-h-280px 可滚动）
  *   中中 RunListPanel（运行列表，flex-1 可滚动）
  *   中底 SimCommandBar（命令预览 + 复制 + 运行按钮，shrink-0）
@@ -10,19 +10,25 @@
  * 切换到仿真视图时自动加载子系统列表（由 CaseTreePanel 内部 effect 驱动）
  * 和活跃运行列表。保留 ViewHeader（标题 + 副标题 + 停止全部/新建仿真）。
  * 左栏与中栏之间使用 ResizeHandle 拖拽调整宽度，持久化到 simLeftPanelWidth。
+ * 左栏顶部 Tab 切换「用例树 / 自定义用例」，两个面板共享同一个左栏空间，
+ * 选中用例都联动到右侧 Option 面板填充 base/block/case。
  */
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Play, Square } from 'lucide-react';
+import { cn } from '@renderer/lib/utils';
 import { ViewHeader } from '@renderer/components/layout/ViewHeader';
 import { ResizeHandle } from '@renderer/components/layout/ResizeHandle';
 import { CaseTreePanel } from '@renderer/components/simulation/CaseTreePanel';
+import { CaseCfgPanel } from '@renderer/components/simulation/CaseCfgPanel';
 import { SimOptionPanel } from '@renderer/components/simulation/SimOptionPanel';
 import { RunListPanel } from '@renderer/components/simulation/RunListPanel';
 import { SimCommandBar } from '@renderer/components/simulation/SimCommandBar';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useProjectStore } from '@renderer/stores/project';
 import { useUiStore } from '@renderer/stores/ui';
+
+type LeftPanelTab = 'case-tree' | 'case-cfg';
 
 export function SimulationView() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
@@ -32,6 +38,7 @@ export function SimulationView() {
   const setActiveView = useUiStore((s) => s.setActiveView);
   const simLeftPanelWidth = useUiStore((s) => s.simLeftPanelWidth);
   const setSimLeftPanelWidth = useUiStore((s) => s.setSimLeftPanelWidth);
+  const [leftPanelTab, setLeftPanelTab] = useState<LeftPanelTab>('case-tree');
 
   // 拉取插件运行（agent/回归启动）合并进 activeRuns；终端运行由 IPC 事件驱动
   useEffect(() => {
@@ -78,12 +85,46 @@ export function SimulationView() {
 
       {/* ── 三栏布局：CaseTreePanel | ResizeHandle | CenterArea ── */}
       <div className="flex flex-1 overflow-hidden px-4 pb-4">
-        {/* 左栏：用例树 */}
+        {/* 左栏：Tab 切换（用例树 / 自定义用例） */}
         <div
           className="shrink-0 overflow-hidden rounded-xl border border-border bg-card"
           style={{ width: `${simLeftPanelWidth}px` }}
         >
-          <CaseTreePanel />
+          {/* Tab 条 */}
+          <div className="flex shrink-0 border-b border-border">
+            <button
+              onClick={() => setLeftPanelTab('case-tree')}
+              className={cn(
+                'flex-1 px-2 py-1 text-[10px] font-medium transition-colors',
+                leftPanelTab === 'case-tree'
+                  ? 'border-b-2 border-primary text-primary'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+              data-testid="sim-left-tab-case-tree"
+            >
+              用例树
+            </button>
+            <button
+              onClick={() => setLeftPanelTab('case-cfg')}
+              className={cn(
+                'flex-1 px-2 py-1 text-[10px] font-medium transition-colors',
+                leftPanelTab === 'case-cfg'
+                  ? 'border-b-2 border-primary text-primary'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+              data-testid="sim-left-tab-case-cfg"
+            >
+              自定义用例
+            </button>
+          </div>
+          {/* Tab 内容 */}
+          <div className="h-[calc(100%-28px)]">
+            {leftPanelTab === 'case-tree' ? (
+              <CaseTreePanel />
+            ) : (
+              <CaseCfgPanel />
+            )}
+          </div>
         </div>
 
         {/* 拖拽分隔线 */}
