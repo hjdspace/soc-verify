@@ -48,6 +48,22 @@ export function isMCPTool(name: string | undefined): boolean {
   return !!name && name.startsWith('mcp__');
 }
 
+/** Check if a read tool call is actually a skill invocation (path starts with skill://) */
+export function isSkillRead(args: unknown): boolean {
+  const path = argStr(args, 'path', 'file_path');
+  return !!path && path.startsWith('skill://');
+}
+
+/** Extract the skill name from a skill:// path in read tool args */
+export function extractSkillName(args: unknown): string | null {
+  const path = argStr(args, 'path', 'file_path');
+  if (!path || !path.startsWith('skill://')) return null;
+  const rest = path.slice('skill://'.length);
+  // skill://<name> or skill://<name>/<relative-path>
+  const slashIdx = rest.indexOf('/');
+  return slashIdx === -1 ? rest : rest.slice(0, slashIdx);
+}
+
 /** Parse MCP tool name into server and tool components */
 export function parseMCPToolName(name: string): { serverName: string; toolName: string } | null {
   if (!name.startsWith('mcp__')) return null;
