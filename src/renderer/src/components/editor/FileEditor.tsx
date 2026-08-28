@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react';
-import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+import { ZoomIn, ZoomOut, Expand } from 'lucide-react';
 import CodeMirror from '@uiw/react-codemirror';
 import { StreamLanguage } from '@codemirror/language';
 import { EditorView, type ViewUpdate, keymap } from '@codemirror/view';
@@ -201,6 +201,9 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [previewMode, setPreviewMode] = useState(false);
   const [imgZoom, setImgZoom] = useState(1);
+  const [imgDragging, setImgDragging] = useState(false);
+  const imgScrollRef = useRef<HTMLDivElement>(null);
+  const imgDragState = useRef({ startX: 0, startY: 0, scrollLeft: 0, scrollTop: 0 });
   const [cursorPos, setCursorPos] = useState<CursorPosition>({ line: 1, col: 1 });
 
   const currentTheme = useThemeStore((s) => s.currentTheme);
@@ -434,6 +437,65 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
 
   // ── 图片预览模式 ──────────────────────────────────────
   if (isImage) {
+    // 鼠标滚轮缩放（以光标位置为中心）
+    const handleImgWheel = (e: React.WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -0.12 : 0.12;
+      const container = imgScrollRef.current;
+      if (!container) return;
+      const oldZoom = imgZoom;
+      const newZoom = Math.max(0.1, Math.min(oldZoom + delta, 10));
+      if (newZoom === oldZoom) return;
+      const rect = container.getBoundingClientRect();
+      const cursorX = e.clientX - rect.left;
+      const cursorY = e.clientY - rect.top;
+      const contentX = (container.scrollLeft + cursorX) / oldZoom;
+      const contentY = (container.scrollTop + cursorY) / oldZoom;
+      const newScrollLeft = contentX * newZoom - cursorX;
+      const newScrollTop = contentY * newZoom - cursorY;
+      setImgZoom(newZoom);
+      requestAnimationFrame(() => {
+        if (imgScrollRef.current) {
+          imgScrollRef.current.scrollLeft = newScrollLeft;
+          imgScrollRef.current.scrollTop = newScrollTop;
+        }
+      });
+    };
+    // 鼠标拖拽平移
+    const handleImgMouseDown = (e: React.MouseEvent) => {
+      if (e.button !== 0) return;
+      const container = imgScrollRef.current;
+      if (!container) return;
+      e.preventDefault();
+      imgDragState.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        scrollLeft: container.scrollLeft,
+        scrollTop: container.scrollTop,
+      };
+      setImgDragging(true);
+    };
+    const handleImgMouseMove = (e: React.MouseEvent) => {
+      if (!imgDragging) return;
+      const container = imgScrollRef.current;
+      if (!container) return;
+      e.preventDefault();
+      const dx = e.clientX - imgDragState.current.startX;
+      const dy = e.clientY - imgDragState.current.startY;
+      container.scrollLeft = imgDragState.current.scrollLeft - dx;
+      container.scrollTop = imgDragState.current.scrollTop - dy;
+    };
+    const handleImgMouseUp = () => {
+      setImgDragging(false);
+    };
+    // 重置缩放并滚动到中心
+    const handleImgReset = () => {
+      setImgZoom(1);
+      if (imgScrollRef.current) {
+        imgScrollRef.current.scrollTo({ left: 0, top: 0, behavior: 'smooth' });
+      }
+    };
+
     return (
       <div className="flex h-full flex-1 flex-col overflow-hidden">
         {/* 工具栏 */}
@@ -460,31 +522,46 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
               <ZoomIn className="h-3 w-3" />
             </button>
             <button
-              onClick={() => setImgZoom(1)}
+              onClick={handleImgReset}
               className="flex items-center gap-1 rounded px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               title="重置缩放"
             >
-              <Maximize2 className="h-3 w-3" />
+              <Expand className="h-3 w-3" />
             </button>
           </div>
         </div>
-        {/* 图片显示区域 */}
+        {/* 图片显示区域 — 可滚动 + 可拖拽 */}
         <div
-          className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-secondary/10"
-          onClick={() => {
-            // 点击图片区域时切换实际大小/适应窗口
-            if (imgZoom === 1) return;
-            setImgZoom(1);
-          }}
+          ref={imgScrollRef}
+          className="min-h-0 flex-1 overflow-auto bg-secondary/10"
+          onWheel={handleImgWheel}
+          onMouseDown={handleImgMouseDown}
+          onMouseMove={handleImgMouseMove}
+          onMouseUp={handleImgMouseUp}
+          onMouseLeave={handleImgMouseUp}
+          style={{ cursor: imgDragging ? 'grabbing' : 'grab' }}
         >
-          <img
-            src={imageUrl}
-            alt={fileName}
-            className="max-h-full max-w-full select-none object-contain"
-            style={{ transform: `scale(${imgZoom})`, transformOrigin: 'center center', cursor: imgZoom === 1 ? 'default' : 'zoom-in' }}
-            loading="lazy"
-            draggable={false}
-          />
+          {/*
+           * 内部容器：width 设为 zoom * 100% 撑开滚动区域。
+           * 不用 CSS transform（transform 不改变布局尺寸，overflow-auto
+           * 不会产生滚动条，导致放大后上方图片被遮挡且无法滚动到）。
+           * zoom=1 时 width=100% 适应容器，zoom>1 时撑开产生滚动条。
+           */}
+          <div
+            className="flex items-center justify-center p-4"
+            style={{ width: `${imgZoom * 100}%`, minHeight: '100%', margin: 'auto' }}
+          >
+            <img
+              src={imageUrl}
+              alt={fileName}
+              className="h-auto w-full max-w-full select-none object-contain"
+              style={{
+                transition: imgDragging ? 'none' : 'width 0.08s ease-out',
+              }}
+              loading="lazy"
+              draggable={false}
+            />
+          </div>
         </div>
       </div>
     );
