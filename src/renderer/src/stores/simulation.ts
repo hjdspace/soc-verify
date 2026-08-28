@@ -280,6 +280,8 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
       terminal.setActiveTab(tabId);
       const displayCommand = result.command ?? run.command;
       // upsert：IPC run:started 事件可能先于 mutate 返回到达
+      // 同时移除同 caseId×subsys 的旧终态记录（如 fail/pass/aborted），
+      // 避免重新仿真后同一用例出现两条记录（旧 fail + 新 running）。
       set((s) => {
         const existing = s.activeRuns.find((r) => r.runId === result.runId);
         if (existing) {
@@ -299,9 +301,13 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
             ),
           };
         }
+        // 移除同 caseId×subsys 的旧终态记录，只保留新 running 记录
+        const deduped = s.activeRuns.filter(
+          (r) => !(r.caseId === run.caseId && r.subsys === run.subsys && r.runId !== result.runId),
+        );
         return {
           activeRuns: [
-            ...s.activeRuns,
+            ...deduped,
             {
               runId: result.runId,
               projectId: run.projectId,
