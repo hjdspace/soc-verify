@@ -11,6 +11,7 @@ import { useUiStore } from './ui';
 import { useSettingsStore } from './settings';
 import { tRPCError } from '@renderer/lib/trpc-utils';
 import { DEFAULT_CONTEXT_WINDOW, type ContextBreakdown, type ContextUsage } from '@shared/context-management';
+import { normalizeThinkingLevelSetting, type ThinkingLevelSetting } from '@shared/types';
 import type {
   ApprovalMode,
   ChatMessage,
@@ -23,6 +24,7 @@ import type {
 // ─── 常量 ──────────────────────────────────────────────────
 const MODEL_STORAGE_KEY = 'socverify:lastModel';
 const APPROVAL_MODE_STORAGE_KEY = 'socverify:approvalMode';
+const THINKING_LEVEL_STORAGE_KEY = 'socverify:thinkingLevel';
 
 // ─── 模块级辅助 / 缓存 ────────────────────────────────────
 const historySessionLoads = new Map<string, Promise<void>>();
@@ -139,6 +141,7 @@ export interface SessionCoreState {
   renameSession: (sessionId: string, projectId: string, name: string) => Promise<void>;
   restoreSessions: (projectId: string, cwd: string, lastSessionIds?: string[]) => Promise<boolean>;
   setModel: (sessionId: string, provider: string, modelId: string, modelName?: string, providerId?: string) => Promise<void>;
+  setThinkingLevel: (level: ThinkingLevelSetting) => void;
   applyCredential: (sessionId: string, providerId: string) => Promise<void>;
   ensureRuntimeSession: (sessionId: string) => Promise<string>;
   setInputMessage: (msg: string) => void;
@@ -334,6 +337,13 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
     } catch {
       // Corrupted localStorage — ignore
     }
+    let storedThinkingLevel: ThinkingLevelSetting | undefined;
+    try {
+      const saved = localStorage.getItem(THINKING_LEVEL_STORAGE_KEY);
+      if (saved) storedThinkingLevel = normalizeThinkingLevelSetting(saved);
+    } catch {
+      // Corrupted localStorage — ignore
+    }
     const session: SessionEntry = {
       id: sessionId,
       projectId,
@@ -346,6 +356,7 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
       model: lastModel ?? undefined,
       contextUsage: emptyContextUsage(),
       approvalMode: storedApprovalMode ?? 'yolo',
+      thinkingLevel: storedThinkingLevel ?? 'default',
     };
     set((s) => ({
       sessions: [...s.sessions, session],
@@ -431,6 +442,7 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
           name: latest.name,
           providerId: latest.model?.providerId,
           approvalMode: latest.approvalMode,
+          thinkingLevel: latest.thinkingLevel,
         })
         : await trpc.session.create.mutate({
           projectId: latest.projectId,
@@ -439,6 +451,7 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
           model: latest.model?.id,
           providerId: latest.model?.providerId,
           approvalMode: latest.approvalMode,
+          thinkingLevel: latest.thinkingLevel,
         });
 
       const runtimeSessionId = result.sessionId;
@@ -479,14 +492,22 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
           const stateObj = state as Record<string, unknown> | null;
           if (!stateObj || typeof stateObj !== 'object') return;
           const usage = stateObj.contextUsage;
-          if (usage === undefined || usage === null) return;
           set((s) => ({
             sessions: s.sessions.map((sess) =>
               sess.id === latest.id
                 ? {
                   ...sess,
-                  contextUsage: readContextUsage(usage, sess.contextUsage ?? emptyContextUsage()),
-                  autoCompactionEnabled: stateObj.autoCompactionEnabled !== false,
+                  // 后端返回的是 omp 会话的 configured thinking level —— omp 文件
+                  // 原生恢复的值会覆盖 UI 侧暂存值；undefined 时保留 UI 现值。
+                  thinkingLevel: stateObj.thinkingLevel !== undefined && stateObj.thinkingLevel !== null
+                    ? normalizeThinkingLevelSetting(stateObj.thinkingLevel)
+                    : sess.thinkingLevel,
+                  ...(usage !== undefined && usage !== null
+                    ? {
+                      contextUsage: readContextUsage(usage, sess.contextUsage ?? emptyContextUsage()),
+                      autoCompactionEnabled: stateObj.autoCompactionEnabled !== false,
+                    }
+                    : {}),
                 }
                 : sess,
             ),
@@ -558,6 +579,31 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
     } catch (err) {
       useToastStore.getState().error('切换模型失败', tRPCError(err));
     }
+  },
+
+  /**
+   * 设置思考强度：更新当前会话 UI 状态 + 持久化到 localStorage（新会话继承），
+   * 并 fire-and-forget 推送到运行中的 omp 会话（runner 持久化进 omp 会话文件，
+   * 模型整体切换 / 应用重启后的原生 resume 都能保留）。
+   * 会话尚未启动时仅落 UI 状态，create 时经 InitConfig.thinkingLevel 下发。
+   */
+  setThinkingLevel: (level) => {
+    const sessionId = get().currentSessionId;
+    if (!sessionId) return;
+    try {
+      localStorage.setItem(THINKING_LEVEL_STORAGE_KEY, level);
+    } catch {
+      // localStorage might be unavailable — ignore
+    }
+    set((s) => ({
+      sessions: s.sessions.map((sess) =>
+        sess.id === sessionId ? { ...sess, thinkingLevel: level } : sess,
+      ),
+    }));
+    const session = get().sessions.find((sess) => sess.id === sessionId);
+    const runtimeSessionId = session?.runtimeSessionId;
+    if (!runtimeSessionId) return;
+    void trpc.session.setThinkingLevel.mutate({ sessionId: runtimeSessionId, level }).catch(() => {});
   },
 
   applyCredential: async (sessionId, providerId) => {

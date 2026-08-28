@@ -26,7 +26,7 @@ import { buildMultiDirSystemPrompt } from './multi-dir-prompt';
 import { projectManager } from '../project/project-manager';
 import type { CaseStatsService } from '../case/case-stats-service';
 import type { ApprovalMode, SeedHistoryMessage } from './types';
-import type { ConfiguredModel } from '@shared/types';
+import type { ConfiguredModel, ThinkingLevelSetting } from '@shared/types';
 
 /** Subset of persisted session model info used for credential/provider fallback. */
 export type PersistedModelRef = {
@@ -70,6 +70,8 @@ export type SessionContextOptions = {
   configuredModels?: ConfiguredModel[];
   /** 工具审批模式 */
   approvalMode?: ApprovalMode;
+  /** 会话初始思考强度（'default'/缺省 = 跟随 omp 引擎默认） */
+  thinkingLevel?: ThinkingLevelSetting;
 };
 
 export type SessionContext = {
@@ -184,6 +186,7 @@ export async function createSessionContext(options: SessionContextOptions): Prom
     env: credEnv,
     systemPrompt,
     approvalMode: options.approvalMode,
+    thinkingLevel: options.thinkingLevel,
     configuredModels,
     contextWindow: modelContextWindow,
   });

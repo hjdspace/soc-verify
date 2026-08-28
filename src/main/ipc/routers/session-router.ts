@@ -30,7 +30,8 @@ import {
 import { discoverSkills, readSkillContent } from '../../agent/skill-discovery';
 import { generateSessionTitle } from '../../agent/title-generator';
 import { errorAnalysisCoordinator } from '../../simulation/error-analysis-coordinator';
-import type { ErrorType } from '@shared/types';
+import type { ErrorType, ThinkingLevelSetting } from '@shared/types';
+import { normalizeThinkingLevelSetting } from '@shared/types';
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
 import type { AskAnswer } from '@shared/ask-types';
 
@@ -189,7 +190,7 @@ async function performHolisticSwap(input: {
 
 export const sessionRouter = t.router({
   create: t.procedure
-    .input((raw): { projectId: string; cwd: string; provider?: string; model?: string; providerId?: string; approvalMode?: 'always-ask' | 'write' | 'yolo' } => {
+    .input((raw): { projectId: string; cwd: string; provider?: string; model?: string; providerId?: string; approvalMode?: 'always-ask' | 'write' | 'yolo'; thinkingLevel?: ThinkingLevelSetting } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string' || typeof r.cwd !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and cwd are required' });
@@ -201,6 +202,7 @@ export const sessionRouter = t.router({
         model: typeof r.model === 'string' ? r.model : undefined,
         providerId: typeof r.providerId === 'string' ? r.providerId : undefined,
         approvalMode: typeof r.approvalMode === 'string' ? (r.approvalMode as 'always-ask' | 'write' | 'yolo') : undefined,
+        thinkingLevel: normalizeThinkingLevelSetting(r.thinkingLevel),
       };
     })
     .mutation(async ({ input }) => {
@@ -229,6 +231,7 @@ export const sessionRouter = t.router({
         includeCaseStats: true,
         ensurePlugins: false, // already loaded above
         approvalMode: input.approvalMode,
+        thinkingLevel: input.thinkingLevel,
       });
 
       const { sessionId, provider, model: resolvedModel, providerId } = ctx;
@@ -624,7 +627,7 @@ export const sessionRouter = t.router({
     }),
 
   restore: t.procedure
-    .input((raw): { projectId: string; cwd: string; sessionId: string; name?: string; providerId?: string; approvalMode?: 'always-ask' | 'write' | 'yolo' } => {
+    .input((raw): { projectId: string; cwd: string; sessionId: string; name?: string; providerId?: string; approvalMode?: 'always-ask' | 'write' | 'yolo'; thinkingLevel?: ThinkingLevelSetting } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string' || typeof r.cwd !== 'string' || typeof r.sessionId !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, cwd and sessionId are required' });
@@ -636,6 +639,7 @@ export const sessionRouter = t.router({
         name: typeof r.name === 'string' ? r.name : undefined,
         providerId: typeof r.providerId === 'string' ? r.providerId : undefined,
         approvalMode: typeof r.approvalMode === 'string' ? (r.approvalMode as 'always-ask' | 'write' | 'yolo') : undefined,
+        thinkingLevel: normalizeThinkingLevelSetting(r.thinkingLevel),
       };
     })
     .mutation(async ({ input }) => {
@@ -673,6 +677,7 @@ export const sessionRouter = t.router({
         persistedSessionId: input.sessionId,
         includeCaseStats: true,
         approvalMode: input.approvalMode,
+        thinkingLevel: input.thinkingLevel,
       });
       const { sessionId, provider, model: resolvedModelId, providerId } = ctx;
 
@@ -918,6 +923,27 @@ export const sessionRouter = t.router({
         await sessionManager.setApprovalMode(input.sessionId, input.approvalMode);
       } catch {
         // Session not running — mode will be applied on next session create/restore.
+      }
+      return { ok: true };
+    }),
+
+  setThinkingLevel: t.procedure
+    .input((raw): { sessionId: string; level: ThinkingLevelSetting } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.sessionId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'sessionId is required' });
+      }
+      return { sessionId: r.sessionId, level: normalizeThinkingLevelSetting(r.level) };
+    })
+    .mutation(async ({ input }) => {
+      // Dynamically update the thinking level on the running session (persisted
+      // into the omp session file so omp-native resume keeps it). If the
+      // session isn't running yet, the level stored in the renderer session
+      // state is applied at create time via InitConfig.thinkingLevel.
+      try {
+        await sessionManager.setThinkingLevel(input.sessionId, input.level);
+      } catch {
+        // Session not running — applied on next create/restore instead.
       }
       return { ok: true };
     }),

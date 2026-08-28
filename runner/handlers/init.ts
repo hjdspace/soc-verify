@@ -10,7 +10,7 @@
  */
 
 import { attachWriteSnapshotToStartEvent } from "../write-snapshot";
-import { type Command, send, sendResponse, sendContextUsage, sendEvent } from "../protocol";
+import { type Command, send, sendResponse, sendContextUsage, sendEvent, toEngineThinkingLevel } from "../protocol";
 import type { RunnerContext } from "../types";
 import { applyApprovalMode } from "./tools";
 
@@ -291,6 +291,15 @@ export async function handleInit(cmd: Command & { type: "init" }, ctx: RunnerCon
 	// Set system prompt if provided
 	if (config.systemPrompt) {
 		sessionOptions.systemPrompt = config.systemPrompt;
+	}
+
+	// Set initial thinking level. undefined defers to the engine's own default
+	// (provider-native behavior); any concrete value (including 'auto' and
+	// 'off') is forwarded verbatim to createAgentSession, which clamps it
+	// against the model's declared thinking efforts.
+	const engineThinkingLevel = toEngineThinkingLevel(config.thinkingLevel);
+	if (engineThinkingLevel) {
+		sessionOptions.thinkingLevel = engineThinkingLevel;
 	}
 
 	// Create the session

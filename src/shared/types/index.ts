@@ -8,6 +8,7 @@
 
 export * from './project';
 export * from './source-control';
+export * from './code-review';
 export * from './plugin-config';
 export * from './simulation';
 export * from './coverage';
@@ -17,6 +18,7 @@ export * from './to-checklist';
 export * from './background-task';
 export * from './env';
 export * from './credential';
+export * from './thinking-level';
 export * from './error-analysis';
 export * from './diff-review';
 export * from './skill';

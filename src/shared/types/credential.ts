@@ -16,6 +16,12 @@ export interface ConfiguredModel {
   name: string;
   /** Context window size in tokens for this specific model. */
   contextWindow: number;
+  /**
+   * 是否为推理模型（支持思考强度控制）。写入 models.json 的 `reasoning` +
+   * `thinking.efforts` 声明，omp 引擎据此决定是否在请求里下发
+   * `reasoning_effort`。缺省视为 false —— 引擎不会发送思考强度参数。
+   */
+  reasoning?: boolean;
 }
 
 export interface CredentialEntry {

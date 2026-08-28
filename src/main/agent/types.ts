@@ -5,6 +5,8 @@
  * 比 pi-coding-agent RPC 协议大幅简化：无 Host Tool/URI Scheme 帧，直接使用 SDK 的 customTools。
  */
 
+import type { ThinkingLevelSetting } from '@shared/types';
+
 // ─── 就绪信号 ───────────────────────────────────────────────
 
 export interface ReadyFrame {
@@ -47,6 +49,11 @@ export interface InitConfig {
   approvalMode?: ApprovalMode;
   /** 被禁用的工具名列表（host 工具 + omp 内置工具），会话创建时不暴露给 LLM */
   disabledTools?: string[];
+  /**
+   * 会话初始思考强度。'default' 或缺省时不下发，跟随 omp 引擎默认行为。
+   * 仅当值有实际语义（非 'default'）时 runner 才会写入 sessionOptions。
+   */
+  thinkingLevel?: ThinkingLevelSetting;
 }
 
 export interface CustomToolDefinition {
@@ -64,6 +71,7 @@ export type Command =
   | { id: string; type: 'steer'; message: string }
   | { id: string; type: 'setModel'; provider: string; modelId: string }
   | { id: string; type: 'setApprovalMode'; approvalMode: ApprovalMode }
+  | { id: string; type: 'setThinkingLevel'; level: ThinkingLevelSetting }
   | { id: string; type: 'setToolFilter'; disabledTools: string[] }
   | { id: string; type: 'listAgentTools' }
   | { id: string; type: 'getMessages' }

@@ -15,6 +15,8 @@ export function normalizeApiFormat(api: string | undefined): OpenAiApiFormat {
 export type OpenAICompatibleModel = {
   id: string;
   name: string;
+  /** 推理模型标记（来自凭据配置），透传到 models.json 的 reasoning/thinking 声明。 */
+  reasoning?: boolean;
 };
 
 type FetchModelsOptions = {
@@ -39,6 +41,41 @@ type ModelsConfigOptions = {
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '');
+}
+
+/**
+ * omp models.yml 模型条目共有的 thinking 声明：effort 传输模式 + 完整思考强度阶梯。
+ * 引擎按该阶梯钳制用户选择的思考强度（`clampThinkingLevelForModel`），
+ * 未声明时推理模型会被视为"无可控思考面"，任何强度设置都不会下发到请求。
+ */
+const OMP_THINKING_EFFORT_LADDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+/**
+ * 生成 models.yml 的单模型条目。`reasoning` 为 true 时附带 `thinking` 声明
+ * （mode: "effort" → openai 兼容端点的 `reasoning_effort` wire 参数），
+ * omp 引擎据此允许用户配置思考强度；false/缺省时显式声明为非推理模型，
+ * 引擎不发送思考强度参数。
+ */
+function toOmpModelEntry(model: OpenAICompatibleModel, contextWindow: number) {
+  const reasoning = model.reasoning === true;
+  return {
+    id: model.id,
+    name: model.name,
+    supportsTools: true,
+    contextWindow,
+    maxTokens: 8192,
+    reasoning,
+    // 仅推理模型附带 thinking 声明；schema 要求 mode + 非空 efforts。
+    ...(reasoning
+      ? { thinking: { mode: 'effort' as const, efforts: OMP_THINKING_EFFORT_LADDER } }
+      : {}),
+    // Default to text+image so screenshots and pasted images are sent
+    // to the LLM as multimodal content. Without "image" in the input
+    // list, omp silently replaces images with a placeholder text
+    // ("[image omitted: model does not support vision]"), causing the
+    // LLM to respond as if no image was attached.
+    input: ['text', 'image'],
+  };
 }
 
 /**
@@ -120,19 +157,7 @@ export function buildOpenAICompatibleModelsConfig({
         apiKey: apiKeyEnvVar,
         authHeader: true,
         disableStrictTools: true,
-        models: allModels.map((m) => ({
-          id: m.id,
-          name: m.name,
-          supportsTools: true,
-          contextWindow,
-          maxTokens: 8192,
-          // Default to text+image so screenshots and pasted images are sent
-          // to the LLM as multimodal content. Without "image" in the input
-          // list, omp silently replaces images with a placeholder text
-          // ("[image omitted: model does not support vision]"), causing the
-          // LLM to respond as if no image was attached.
-          input: ['text', 'image'],
-        })),
+        models: allModels.map((m) => toOmpModelEntry(m, contextWindow)),
       },
     },
   } as const;
@@ -163,14 +188,7 @@ export function buildOpenAICompatibleModelsWithPerModelContext({
         apiKey: apiKeyEnvVar,
         authHeader: true,
         disableStrictTools: true,
-        models: models.map((m) => ({
-          id: m.id,
-          name: m.name,
-          supportsTools: true,
-          contextWindow: m.contextWindow,
-          maxTokens: 8192,
-          input: ['text', 'image'],
-        })),
+        models: models.map((m) => toOmpModelEntry(m, m.contextWindow)),
       },
     },
   } as const;

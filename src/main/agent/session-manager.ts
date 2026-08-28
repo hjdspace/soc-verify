@@ -17,7 +17,7 @@ import {
   OPENAI_COMPATIBLE_PROVIDER,
   type OpenAICompatibleModel,
 } from './openai-compatible';
-import type { ConfiguredModel, OpenAiApiFormat } from '@shared/types';
+import type { ConfiguredModel, OpenAiApiFormat, ThinkingLevelSetting } from '@shared/types';
 import type { SubsysDiscovery } from '../host/discovery';
 import type { PluginBackedSimulation, PluginBackedCoverage } from '../plugin-adapters';
 import { HostToolsRegistry } from '../host/host-tools';
@@ -252,6 +252,8 @@ export interface CreateSessionOptions {
   caseStatsService?: CaseStatsService | null;
   /** 工具审批模式 */
   approvalMode?: ApprovalMode;
+  /** 会话初始思考强度（'default'/缺省 = 跟随 omp 引擎默认） */
+  thinkingLevel?: ThinkingLevelSetting;
 }
 
 export interface SessionEntry {
@@ -433,7 +435,8 @@ export class SessionManagerImpl extends EventEmitter {
 
       if (options.configuredModels && options.configuredModels.length > 0) {
         // Convert ConfiguredModel[] to OpenAICompatibleModel[] for models.json
-        allModels = options.configuredModels.map((m) => ({ id: m.id, name: m.name }));
+        // (reasoning 随模型透传，决定 models.yml 的 thinking 能力声明)
+        allModels = options.configuredModels.map((m) => ({ id: m.id, name: m.name, reasoning: m.reasoning }));
         // Use the selected model's contextWindow if available
         if (model) {
           const configured = options.configuredModels.find((m) => m.id === model);
@@ -632,6 +635,7 @@ export class SessionManagerImpl extends EventEmitter {
       customToolDefinitions,
       additionalExtensionPaths,
       approvalMode: options.approvalMode,
+      thinkingLevel: options.thinkingLevel,
     };
 
     // Helper: create an AgentClient configured for the given runtime mode
@@ -1034,6 +1038,13 @@ export class SessionManagerImpl extends EventEmitter {
   async setApprovalMode(sessionId: string, approvalMode: ApprovalMode): Promise<void> {
     const client = this.requireClient(sessionId);
     await client.setApprovalMode(approvalMode);
+    this.touchActivity(sessionId);
+  }
+
+  /** 动态设置运行中会话的思考强度（'default' = 交还引擎默认）。 */
+  async setThinkingLevel(sessionId: string, level: ThinkingLevelSetting): Promise<void> {
+    const client = this.requireClient(sessionId);
+    await client.setThinkingLevel(level);
     this.touchActivity(sessionId);
   }
 

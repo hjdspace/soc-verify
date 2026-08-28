@@ -20,6 +20,7 @@ import {
   isApprovalRequestFrame,
 } from './types';
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
+import type { ThinkingLevelSetting } from '@shared/types';
 
 export type ToolCallHandler = (
   toolName: string,
@@ -431,6 +432,14 @@ export class AgentClient {
 
   async setApprovalMode(approvalMode: import('./types').ApprovalMode): Promise<void> {
     await this.send({ type: 'setApprovalMode', approvalMode });
+  }
+
+  /**
+   * 动态设置会话思考强度。
+   * 'default' 表示交还引擎默认行为（runner 端映射为 undefined）。
+   */
+  async setThinkingLevel(level: ThinkingLevelSetting): Promise<void> {
+    await this.send({ type: 'setThinkingLevel', level });
   }
 
   /** 动态更新会话的工具开关（被禁用的工具立即从 LLM 工具集中移除/恢复）。 */

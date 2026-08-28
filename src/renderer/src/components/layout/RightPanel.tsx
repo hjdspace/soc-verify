@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
-import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon, Shield, ShieldAlert, ShieldCheck, ChevronDown, ChevronRight, Info, PanelLeftClose, Key, Copy } from 'lucide-react';
+import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon, Shield, ShieldAlert, ShieldCheck, ChevronDown, ChevronRight, Info, PanelLeftClose, Key, Copy, Brain } from 'lucide-react';
 import { useSessionCoreStore } from '@renderer/stores/session-core';
 import { useSessionMessagesStore } from '@renderer/stores/session-messages';
 import { useSessionApprovalStore } from '@renderer/stores/session-approval';
@@ -12,6 +12,7 @@ import { ThinkingBlock } from '@renderer/components/chat/ThinkingBlock';
 import { TVAISuggestionCard } from '@renderer/components/chat/TVAISuggestionCard';
 import { cn } from '@renderer/lib/utils';
 import { trpc } from '@renderer/lib/trpc';
+import { THINKING_LEVEL_OPTIONS, thinkingLevelLabel } from '@shared/types';
 import { PluginViewHost } from '@renderer/components/plugins/PluginViewHost';
 import { ContextUsageIndicator } from '@renderer/components/chat/ContextUsageIndicator';
 import { ApprovalCard } from '@renderer/components/chat/ApprovalCard';
@@ -74,6 +75,7 @@ const compactSession = useSessionMessagesStore((s) => s.compactSession);
   const [isDragOver, setIsDragOver] = useState(false);
   const [showAttachDropdown, setShowAttachDropdown] = useState(false);
   const [showApprovalDropdown, setShowApprovalDropdown] = useState(false);
+  const [showThinkingDropdown, setShowThinkingDropdown] = useState(false);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
 
   // Skill & context state
@@ -98,6 +100,7 @@ const removeContextFile = useSessionCoreStore((s) => s.removeContextFile);
 
 const steerSession = useSessionMessagesStore((s) => s.steerSession);
 const setModel = useSessionCoreStore((s) => s.setModel);
+const setThinkingLevel = useSessionCoreStore((s) => s.setThinkingLevel);
   const credentials = useSettingsStore((s) => s.credentials);
   const loadCredentials = useSettingsStore((s) => s.loadCredentials);
 const setApprovalMode = useSessionApprovalStore((s) => s.setApprovalMode);
@@ -1109,6 +1112,53 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                           </div>
                         </button>
                       ))}
+                    </div>
+                  </>
+                )}
+              </div>
+              {/* 思考强度选择器 */}
+              <div className="relative">
+                <button
+                  onClick={() => setShowThinkingDropdown((v) => !v)}
+                  disabled={!currentSessionId || isCurrentSessionCreating}
+                  title="思考强度"
+                  className="flex h-6 shrink-0 items-center gap-1 rounded-full bg-[var(--dsw-selector)] px-2 text-muted-foreground transition-colors hover:bg-[var(--dsw-hover-solid)] hover:text-foreground disabled:opacity-30"
+                >
+                  <Brain className={cn('h-3 w-3', currentSession?.thinkingLevel && currentSession.thinkingLevel !== 'default' ? 'text-primary' : 'text-muted-foreground')} />
+                  <span className="text-[10px] font-medium text-foreground/80">
+                    {thinkingLevelLabel(currentSession?.thinkingLevel ?? 'default')}
+                  </span>
+                  <ChevronDown className="h-2.5 w-2.5" />
+                </button>
+                {showThinkingDropdown && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowThinkingDropdown(false)} />
+                    <div className="absolute bottom-7 left-0 z-50 w-52 rounded-md border border-border bg-popover shadow-xl">
+                      {THINKING_LEVEL_OPTIONS.map(({ value, label, description }) => (
+                        <button
+                          key={value}
+                          onClick={() => {
+                            setThinkingLevel(value);
+                            setShowThinkingDropdown(false);
+                          }}
+                          className={cn(
+                            'flex w-full items-start gap-1.5 px-2 py-1.5 text-left text-xs hover:bg-accent',
+                            (currentSession?.thinkingLevel ?? 'default') === value && 'bg-accent/50',
+                          )}
+                        >
+                          <Brain className={cn(
+                            'mt-0.5 h-3 w-3 shrink-0',
+                            value === 'default' || value === 'off' ? 'text-muted-foreground' : 'text-primary',
+                          )} />
+                          <div className="flex flex-col gap-0.5">
+                            <span className="font-medium text-foreground">{label}</span>
+                            <span className="text-[9px] text-muted-foreground">{description}</span>
+                          </div>
+                        </button>
+                      ))}
+                      <div className="border-t border-border/50 px-2 py-1 text-[9px] text-muted-foreground/70">
+                        模型不支持思考时设置不生效
+                      </div>
                     </div>
                   </>
                 )}

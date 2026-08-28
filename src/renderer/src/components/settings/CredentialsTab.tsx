@@ -155,6 +155,14 @@ function useCredentialForm() {
     }));
   };
 
+  /** 切换模型的推理标记：决定 models.yml 是否声明 thinking 能力（思考强度下拉是否生效）。 */
+  const toggleModelReasoning = (modelId: string) => {
+    setForm((prev) => ({
+      ...prev,
+      models: prev.models.map((m) => m.id === modelId ? { ...m, reasoning: !m.reasoning } : m),
+    }));
+  };
+
   const fetchModels = useCallback(async () => {
     if (!form.providerId.trim() || (!form.apiKey.trim() && !isEditing)) return;
     setFetchingModels(true);
@@ -191,6 +199,7 @@ function useCredentialForm() {
     addModel,
     removeModel,
     updateModelContextWindow,
+    toggleModelReasoning,
     fetchModels,
     setShowModelPicker,
     setModelSearch,
@@ -219,6 +228,7 @@ export function CredentialsTab() {
     addModel,
     removeModel,
     updateModelContextWindow,
+    toggleModelReasoning,
     fetchModels,
     setShowModelPicker,
     setModelSearch,
@@ -481,6 +491,19 @@ export function CredentialsTab() {
                       <option value={m.contextWindow}>{(m.contextWindow / 1000).toFixed(0)}k</option>
                     )}
                   </select>
+                  <button
+                    onClick={() => toggleModelReasoning(m.id)}
+                    title="标记为推理模型后，可在 AI 输入框选择思考强度（off/minimal…max）"
+                    aria-pressed={m.reasoning === true}
+                    className={cn(
+                      'h-5 shrink-0 rounded border px-1 text-[9px] transition-colors',
+                      m.reasoning
+                        ? 'border-primary/60 bg-primary/15 text-primary'
+                        : 'border-border bg-background text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    推理
+                  </button>
                   <button
                     onClick={() => removeModel(m.id)}
                     title="移除模型"

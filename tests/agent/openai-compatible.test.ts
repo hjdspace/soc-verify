@@ -157,6 +157,63 @@ describe('normalizeApiFormat', () => {
   });
 });
 
+describe('reasoning / thinking capability declaration', () => {
+  it('declares thinking efforts for a reasoning model so omp honors thinking levels', () => {
+    const config = buildOpenAICompatibleModelsWithPerModelContext({
+      baseUrl: 'https://gateway.example/v1',
+      models: [{ id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 128000, reasoning: true }],
+      apiKeyEnvVar: 'SOCVERIFY_AGENT_API_KEY',
+    });
+
+    const model = config.providers['socverify-openai-compatible'].models[0];
+    expect(model.reasoning).toBe(true);
+    expect(model.thinking).toEqual({
+      mode: 'effort',
+      efforts: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    });
+  });
+
+  it('declares non-reasoning explicitly and omits thinking for a plain model', () => {
+    const config = buildOpenAICompatibleModelsWithPerModelContext({
+      baseUrl: 'https://gateway.example/v1',
+      models: [{ id: 'chat-model', name: 'chat-model', contextWindow: 128000 }],
+      apiKeyEnvVar: 'SOCVERIFY_AGENT_API_KEY',
+    });
+
+    const model = config.providers['socverify-openai-compatible'].models[0];
+    expect(model.reasoning).toBe(false);
+    expect(model.thinking).toBeUndefined();
+  });
+
+  it('treats an unmarked model as non-reasoning in the single-model variant too', () => {
+    const config = buildOpenAICompatibleModelsConfig({
+      baseUrl: 'https://gateway.example/v1',
+      modelId: 'chat-model',
+      apiKeyEnvVar: 'SOCVERIFY_AGENT_API_KEY',
+      models: [{ id: 'chat-model', name: 'chat-model' }],
+    });
+
+    const model = config.providers['socverify-openai-compatible'].models[0];
+    expect(model.reasoning).toBe(false);
+    expect(model.thinking).toBeUndefined();
+  });
+
+  it('propagates the reasoning flag per model when several models are configured', () => {
+    const config = buildOpenAICompatibleModelsWithPerModelContext({
+      baseUrl: 'https://gateway.example/v1',
+      models: [
+        { id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 128000, reasoning: true },
+        { id: 'chat-turbo', name: 'Chat Turbo', contextWindow: 128000, reasoning: false },
+      ],
+      apiKeyEnvVar: 'SOCVERIFY_AGENT_API_KEY',
+    });
+
+    const models = config.providers['socverify-openai-compatible'].models;
+    expect(models[0].reasoning).toBe(true);
+    expect(models[1].reasoning).toBe(false);
+  });
+});
+
 describe('buildDirectChatRequest', () => {
   it('builds a /chat/completions request by default with messages and max_tokens', () => {
     const request = buildDirectChatRequest({

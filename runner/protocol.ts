@@ -53,6 +53,31 @@ process.stdout.write = ((data: unknown, ...args: unknown[]) => {
 
 // ─── Types ──────────────────────────────────────────────
 
+/**
+ * 思考强度设置。值域与主仓库 src/shared/types/thinking-level.ts 对齐
+ * （runner 独立编译，不引 @shared，需手工保持同步）：
+ *  - 'default' 哨兵值：不下发设置，跟随 omp 引擎默认行为
+ *  - 其余值原样传给 AgentSession.setThinkingLevel / sessionOptions.thinkingLevel
+ */
+export type ThinkingLevelSetting =
+	| "default"
+	| "auto"
+	| "off"
+	| "minimal"
+	| "low"
+	| "medium"
+	| "high"
+	| "xhigh"
+	| "max";
+
+/**
+ * Map a host-sent thinking level setting to the omp engine's selector value:
+ * 'default'（或缺省）→ undefined（跟随引擎默认行为），其余值原样透传。
+ */
+export function toEngineThinkingLevel(level: ThinkingLevelSetting | undefined): string | undefined {
+	return level && level !== "default" ? level : undefined;
+}
+
 export type InitConfig = {
 	cwd: string;
 	apiKey?: string;
@@ -78,6 +103,8 @@ export type InitConfig = {
 	approvalMode?: ApprovalMode;
 	/** 被禁用的工具名列表（host 工具 + omp 内置工具），会话创建时不暴露给 LLM */
 	disabledTools?: string[];
+	/** 会话初始思考强度（'default'/缺省 = 跟随引擎默认） */
+	thinkingLevel?: ThinkingLevelSetting;
 	/**
 	 * UI 存储的对话历史（user/assistant 文本），用于 omp 会话文件缺失或
 	 * 只覆盖尾部时重建引擎上下文（失忆恢复种子）。
@@ -96,6 +123,7 @@ export type Command =
 	| { id: string; type: "steer"; message: string }
 	| { id: string; type: "setModel"; provider: string; modelId: string }
 	| { id: string; type: "setApprovalMode"; approvalMode: ApprovalMode }
+	| { id: string; type: "setThinkingLevel"; level: ThinkingLevelSetting }
 	| { id: string; type: "setToolFilter"; disabledTools: string[] }
 	| { id: string; type: "listAgentTools" }
 	| { id: string; type: "getMessages" }

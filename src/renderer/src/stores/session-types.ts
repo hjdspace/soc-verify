@@ -5,6 +5,7 @@
 
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
 import type { AskQuestion } from '@shared/ask-types';
+import type { ThinkingLevelSetting } from '@shared/types';
 
 export type SessionStatus = 'creating' | 'idle' | 'streaming' | 'tool_executing' | 'error';
 
@@ -142,6 +143,8 @@ export interface SessionEntry {
   tvViolationId?: number;
   /** 工具审批模式 */
   approvalMode?: ApprovalMode;
+  /** 思考强度设置（'default'/缺省 = 跟随 omp 引擎默认） */
+  thinkingLevel?: ThinkingLevelSetting;
   /** task 工具派遣的 subagent 实时状态（key = subagent id，瞬态不持久化） */
   subagents?: Record<string, SubagentActivity>;
 }
