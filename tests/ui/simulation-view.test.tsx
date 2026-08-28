@@ -235,9 +235,11 @@ describe('SimulationView 三栏布局渲染', () => {
     useUiStore.setState({ simLeftPanelWidth: 300 });
     render(<SimulationView />);
 
+    // After tab UI integration, the width container is an ancestor of case-tree-panel
+    // (case-tree-panel → tab content div → width container div)
     const treePanel = screen.getByTestId('case-tree-panel');
-    const container = treePanel.parentElement;
-    expect(container).toHaveStyle({ width: '300px' });
+    const widthContainer = treePanel.closest('[style*="width"]');
+    expect(widthContainer).toHaveStyle({ width: '300px' });
   });
 });
 
