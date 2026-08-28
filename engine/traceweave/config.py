@@ -4,9 +4,11 @@ config.py — 集中放置环境相关路径和解析行为常量
 
 from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 import re
+import sys
 
 # ═══════════════════════════════════════════════════════════════════
 # EDA 工具路径（与 ~/.bashrc 保持一致）
@@ -55,16 +57,14 @@ WORK_CONTAINER_NAMES = (
 # ═══════════════════════════════════════════════════════════════════
 
 # 相对于 TraceWeave/ 根目录
-CUSTOM_PATTERNS_FILE = os.path.join(
-    os.path.dirname(__file__), "custom_patterns.yaml"
-)
+CUSTOM_PATTERNS_FILE = os.path.join(os.path.dirname(__file__), "custom_patterns.yaml")
 
 # ═══════════════════════════════════════════════════════════════════
 # 解析行为配置
 # ═══════════════════════════════════════════════════════════════════
 
 # UVM 严重级别：哪些级别需要解析（WARNING 不处理）
-UVM_PARSE_LEVELS    = {"UVM_ERROR", "UVM_FATAL"}
+UVM_PARSE_LEVELS = {"UVM_ERROR", "UVM_FATAL"}
 
 # analyze_assertion_failures 默认波形窗口（ps）
 DEFAULT_WAVE_WINDOW_PS = 2000
@@ -134,6 +134,7 @@ MAX_LOG_FILE_SIZE_FOR_MULTILINE = 500 * 1024 * 1024  # 500 MB
 # defines parsed from the compile log, and cache the resulting KDB in a
 # project-agnostic cache directory.
 
+
 # Default on. Set TRACEWEAVE_AUTO_KDB=0 (or "false") to disable.
 def _env_flag(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
@@ -146,6 +147,16 @@ def _env_flag(name: str, default: bool) -> bool:
 
 
 AUTO_KDB_BUILD = _env_flag("TRACEWEAVE_AUTO_KDB", True)
+
+# A Verdi elaborated KDB can retain a useful partial netlist even when
+# elabcom recorded errors (for example unresolved VHDL or encrypted cells).
+# Keep that capability enabled by default; callers still require a successful
+# NPI load plus a non-empty/top-matching netlist self-check before trusting it.
+NPI_ALLOW_DEGRADED_KDB = _env_flag(
+    "TRACEWEAVE_NPI_ALLOW_DEGRADED_KDB",
+    True,
+)
+
 
 # Cache root for TraceWeave-managed artifacts (generated KDBs, build
 # scripts, build logs). Honour XDG_CACHE_HOME / TRACEWEAVE_CACHE_DIR
@@ -178,8 +189,457 @@ TELEMETRY_FILENAME = "usage.jsonl"
 def telemetry_log_path() -> Path:
     return TRACEWEAVE_CACHE_ROOT / TELEMETRY_SUBDIR / TELEMETRY_FILENAME
 
+
 # Subprocess timeout (seconds) for vericom + elabcom each.
 KDB_BUILD_TIMEOUT_SEC = int(os.environ.get("TRACEWEAVE_KDB_BUILD_TIMEOUT", "600"))
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Compile-log hierarchy and bounded Source Graph bootstrap budgets
+# ═══════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class CompileSourceIndexConfig:
+    """Transient source-sharing limits for concurrent compile consumers."""
+
+    enabled: bool = True
+    max_bytes: int = 128 * 1024 * 1024
+    max_files: int = 32_768
+    error_code: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.error_code is None
+
+
+def get_compile_source_index_config() -> CompileSourceIndexConfig:
+    enabled = _env_flag("TRACEWEAVE_COMPILE_SOURCE_INDEX", True)
+    raw_bytes = os.environ.get(
+        "TRACEWEAVE_COMPILE_SOURCE_INDEX_MAX_BYTES",
+        str(128 * 1024 * 1024),
+    ).strip()
+    raw_files = os.environ.get(
+        "TRACEWEAVE_COMPILE_SOURCE_INDEX_MAX_FILES",
+        "32768",
+    ).strip()
+    try:
+        max_bytes = int(raw_bytes)
+        max_files = int(raw_files)
+    except ValueError:
+        return CompileSourceIndexConfig(
+            enabled=False,
+            error_code="compile_source_index_config_invalid",
+        )
+    if (
+        max_bytes < 1
+        or max_bytes > (1 << 63) - 1
+        or max_files < 1
+        or max_files > 1_000_000
+    ):
+        return CompileSourceIndexConfig(
+            enabled=False,
+            error_code="compile_source_index_config_invalid",
+        )
+    return CompileSourceIndexConfig(
+        enabled=enabled,
+        max_bytes=max_bytes,
+        max_files=max_files,
+    )
+
+
+@dataclass(frozen=True)
+class HierarchyExecutionConfig:
+    """Optional internal guardrails for full hierarchy construction.
+
+    Zero keeps the corresponding limit disabled so existing installations do
+    not acquire a new implicit deadline.  Operators with a stricter outer MCP
+    watchdog can set an earlier internal timeout and receive a structured
+    blocker while the server remains responsive.
+    """
+
+    timeout_sec: float = 0.0
+    max_source_bytes: int = 0
+    error_code: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.error_code is None
+
+
+def get_hierarchy_execution_config() -> HierarchyExecutionConfig:
+    raw_timeout = os.environ.get("TRACEWEAVE_HIERARCHY_TIMEOUT", "0").strip()
+    raw_source_bytes = os.environ.get(
+        "TRACEWEAVE_HIERARCHY_MAX_SOURCE_BYTES", "0"
+    ).strip()
+    try:
+        timeout_sec = float(raw_timeout)
+        max_source_bytes = int(raw_source_bytes)
+    except ValueError:
+        return HierarchyExecutionConfig(error_code="hierarchy_config_invalid")
+    if (
+        timeout_sec < 0
+        or timeout_sec > 86_400
+        or max_source_bytes < 0
+        or max_source_bytes > (1 << 63) - 1
+    ):
+        return HierarchyExecutionConfig(error_code="hierarchy_config_invalid")
+    return HierarchyExecutionConfig(
+        timeout_sec=timeout_sec,
+        max_source_bytes=max_source_bytes,
+    )
+
+
+@dataclass(frozen=True)
+class HierarchyNpiOverlayConfig:
+    """Admission policy for optional hierarchy ``file:line`` enrichment.
+
+    ``auto`` admits only clean KDBs whose compile-derived instance set fits
+    the builder's conservative automatic budget. ``force`` is an explicit
+    diagnostic opt-in for degraded or larger designs, while the independent
+    absolute path cap remains in force. Invalid input safely disables the
+    optional overlay without blocking the compile-log hierarchy itself.
+    """
+
+    mode: str = "auto"
+    error_code: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.error_code is None
+
+
+def get_hierarchy_npi_overlay_config() -> HierarchyNpiOverlayConfig:
+    raw_mode = os.environ.get(
+        "TRACEWEAVE_HIERARCHY_NPI_SOURCE_OVERLAY",
+        "auto",
+    ).strip().lower()
+    if raw_mode in {"", "auto"}:
+        return HierarchyNpiOverlayConfig()
+    if raw_mode in {"off", "false", "0"}:
+        return HierarchyNpiOverlayConfig(mode="off")
+    if raw_mode in {"force", "on", "true", "1"}:
+        return HierarchyNpiOverlayConfig(mode="force")
+    return HierarchyNpiOverlayConfig(
+        mode="off",
+        error_code="hierarchy_npi_overlay_config_invalid",
+    )
+
+
+@dataclass(frozen=True)
+class BoundedBootstrapConfig:
+    """Hard limits for a single-endpoint hierarchy bootstrap."""
+
+    timeout_sec: float = 24.0
+    max_source_inputs: int = 128
+    max_source_bytes: int = 64 * 1024 * 1024
+    max_inventory_files: int = 16_384
+    max_inventory_bytes: int = 1024 * 1024 * 1024
+    max_include_depth: int = 64
+    max_hierarchy_depth: int = 256
+    error_code: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.error_code is None
+
+
+def get_bounded_bootstrap_config() -> BoundedBootstrapConfig:
+    defaults = BoundedBootstrapConfig()
+    raw_values = {
+        "timeout_sec": os.environ.get(
+            "TRACEWEAVE_BOOTSTRAP_TIMEOUT", str(defaults.timeout_sec)
+        ).strip(),
+        "max_source_inputs": os.environ.get(
+            "TRACEWEAVE_BOOTSTRAP_MAX_SOURCE_INPUTS",
+            str(defaults.max_source_inputs),
+        ).strip(),
+        "max_source_bytes": os.environ.get(
+            "TRACEWEAVE_BOOTSTRAP_MAX_SOURCE_BYTES",
+            str(defaults.max_source_bytes),
+        ).strip(),
+        "max_inventory_files": os.environ.get(
+            "TRACEWEAVE_BOOTSTRAP_MAX_INVENTORY_FILES",
+            str(defaults.max_inventory_files),
+        ).strip(),
+        "max_inventory_bytes": os.environ.get(
+            "TRACEWEAVE_BOOTSTRAP_MAX_INVENTORY_BYTES",
+            str(defaults.max_inventory_bytes),
+        ).strip(),
+        "max_include_depth": os.environ.get(
+            "TRACEWEAVE_BOOTSTRAP_MAX_INCLUDE_DEPTH",
+            str(defaults.max_include_depth),
+        ).strip(),
+        "max_hierarchy_depth": os.environ.get(
+            "TRACEWEAVE_BOOTSTRAP_MAX_HIERARCHY_DEPTH",
+            str(defaults.max_hierarchy_depth),
+        ).strip(),
+    }
+    try:
+        timeout_sec = float(raw_values.pop("timeout_sec"))
+        integers = {name: int(value) for name, value in raw_values.items()}
+    except ValueError:
+        return BoundedBootstrapConfig(error_code="bootstrap_config_invalid")
+    if (
+        timeout_sec < 0.001
+        or timeout_sec > 86_400
+        or any(value < 1 or value > (1 << 63) - 1 for value in integers.values())
+    ):
+        return BoundedBootstrapConfig(error_code="bootstrap_config_invalid")
+    return BoundedBootstrapConfig(timeout_sec=timeout_sec, **integers)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Source Graph on-demand execution policy
+# ═══════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class ConnectivityRouteConfig:
+    """Validated process-local route for public connectivity tools.
+
+    ``auto`` preserves trusted NPI, Source Graph, then Legacy Static.
+    ``source_graph`` explicitly skips NPI without hiding or mutating a usable
+    KDB. Invalid input safely preserves ``auto`` with a fixed error label.
+    """
+
+    mode: str = "auto"
+    error_code: str | None = None
+
+    @property
+    def valid(self) -> bool:
+        return self.error_code is None
+
+
+def get_connectivity_route_config() -> ConnectivityRouteConfig:
+    raw_mode = os.environ.get("TRACEWEAVE_CONNECTIVITY_ROUTE", "auto").strip().lower()
+    if raw_mode in {"", "auto"}:
+        return ConnectivityRouteConfig()
+    if raw_mode == "source_graph":
+        return ConnectivityRouteConfig(mode="source_graph")
+    return ConnectivityRouteConfig(error_code="connectivity_route_config_invalid")
+
+
+@dataclass(frozen=True)
+class SourceGraphExecutionConfig:
+    """Validated process-local policy for the optional Source Graph worker.
+
+    The parent process never imports the optional frontend.  ``python_bin`` is
+    passed as one argv item to the isolated worker launcher; malformed values
+    are represented by a fixed ``error_code`` so routing receipts can remain
+    privacy-safe.
+    """
+
+    enabled: bool
+    python_bin: str
+    frontend_version: str
+    timeout_sec: float
+    error_code: str | None = None
+    disk_cache_enabled: bool = False
+    disk_cache_root: Path = TRACEWEAVE_CACHE_ROOT
+    disk_cache_max_entries: int = 8
+    disk_cache_max_bytes: int = 512 * 1024 * 1024
+    frontier_max_instances: int = 128
+    frontier_max_rounds: int = 4
+    semantic_session_enabled: bool = False
+    semantic_session_idle_ttl_sec: float = 60.0
+    semantic_session_max_rss_bytes: int = 768 * 1024 * 1024
+    semantic_session_max_instances: int = 64
+    semantic_session_max_inputs: int = 256
+    runtime_plusarg_allowlist: frozenset[str] = frozenset()
+
+    @property
+    def valid(self) -> bool:
+        return self.error_code is None
+
+
+def get_source_graph_execution_config() -> SourceGraphExecutionConfig:
+    """Read the lazy, process-local Source Graph execution policy.
+
+    Source Graph is enabled by default, but absence of ``pyslang`` is an
+    expected structured dependency blocker followed by Legacy Static routing.
+    Sites with an isolated frontend install can point only this worker at it
+    with ``TRACEWEAVE_SOURCE_GRAPH_PYTHON``; the MCP server interpreter remains
+    dependency-free.
+    """
+
+    enabled = _env_flag("TRACEWEAVE_SOURCE_GRAPH", True)
+    python_bin = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_PYTHON", sys.executable
+    ).strip()
+    frontend_version = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_FRONTEND_VERSION", "11.0.0"
+    ).strip()
+    raw_timeout = os.environ.get("TRACEWEAVE_SOURCE_GRAPH_TIMEOUT", "120").strip()
+    disk_cache_enabled = _env_flag("TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE", False)
+    disk_cache_root = _default_cache_root()
+    raw_disk_entries = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_ENTRIES", "8"
+    ).strip()
+    raw_disk_bytes = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_DISK_CACHE_MAX_BYTES", str(512 * 1024 * 1024)
+    ).strip()
+    raw_frontier_instances = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_INSTANCES", "128"
+    ).strip()
+    raw_frontier_rounds = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_FRONTIER_MAX_ROUNDS", "4"
+    ).strip()
+    semantic_session_enabled = _env_flag(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION", False
+    )
+    raw_semantic_session_ttl = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_IDLE_TTL", "60"
+    ).strip()
+    raw_semantic_session_rss = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_RSS_BYTES",
+        str(768 * 1024 * 1024),
+    ).strip()
+    raw_semantic_session_instances = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_INSTANCES", "64"
+    ).strip()
+    raw_semantic_session_inputs = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_SEMANTIC_SESSION_MAX_INPUTS", "256"
+    ).strip()
+    raw_runtime_plusargs = os.environ.get(
+        "TRACEWEAVE_SOURCE_GRAPH_RUNTIME_PLUSARGS_JSON", ""
+    ).strip()
+
+    try:
+        timeout_sec = float(raw_timeout)
+    except ValueError:
+        timeout_sec = 120.0
+        error_code = "source_graph_execution_config_invalid"
+    else:
+        error_code = None
+
+    if not _valid_exec_token(python_bin):
+        error_code = "source_graph_execution_config_invalid"
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.+-]{0,63}", frontend_version):
+        error_code = "source_graph_execution_config_invalid"
+    if (
+        not math.isfinite(timeout_sec)
+        or timeout_sec < 0.001
+        or timeout_sec > 86_400
+    ):
+        error_code = "source_graph_execution_config_invalid"
+
+    try:
+        disk_cache_max_entries = int(raw_disk_entries)
+        disk_cache_max_bytes = int(raw_disk_bytes)
+    except ValueError:
+        disk_cache_max_entries = 8
+        disk_cache_max_bytes = 512 * 1024 * 1024
+        if disk_cache_enabled:
+            error_code = "source_graph_disk_cache_config_invalid"
+    disk_cache_values_invalid = (
+        disk_cache_max_entries < 1
+        or disk_cache_max_entries > 1_000_000
+        or disk_cache_max_bytes < 1
+        or disk_cache_max_bytes > (1 << 63) - 1
+        or not disk_cache_root.is_absolute()
+        or ".." in disk_cache_root.parts
+        or "\x00" in os.fspath(disk_cache_root)
+    )
+    if disk_cache_values_invalid:
+        disk_cache_max_entries = 8
+        disk_cache_max_bytes = 512 * 1024 * 1024
+        if disk_cache_enabled:
+            error_code = "source_graph_disk_cache_config_invalid"
+
+    try:
+        frontier_max_instances = int(raw_frontier_instances)
+        frontier_max_rounds = int(raw_frontier_rounds)
+    except ValueError:
+        frontier_max_instances = 128
+        frontier_max_rounds = 4
+        error_code = "source_graph_frontier_config_invalid"
+
+    try:
+        semantic_session_idle_ttl_sec = float(raw_semantic_session_ttl)
+        semantic_session_max_rss_bytes = int(raw_semantic_session_rss)
+        semantic_session_max_instances = int(raw_semantic_session_instances)
+        semantic_session_max_inputs = int(raw_semantic_session_inputs)
+    except ValueError:
+        semantic_session_idle_ttl_sec = 60.0
+        semantic_session_max_rss_bytes = 768 * 1024 * 1024
+        semantic_session_max_instances = 64
+        semantic_session_max_inputs = 256
+        if semantic_session_enabled:
+            error_code = "source_graph_semantic_session_config_invalid"
+    semantic_session_values_invalid = (
+        not math.isfinite(semantic_session_idle_ttl_sec)
+        or semantic_session_idle_ttl_sec < 0.01
+        or semantic_session_idle_ttl_sec > 3_600
+        or semantic_session_max_rss_bytes < 64 * 1024 * 1024
+        or semantic_session_max_rss_bytes > 8 * 1024 * 1024 * 1024
+        or semantic_session_max_instances < 1
+        or semantic_session_max_instances > 256
+        or semantic_session_max_inputs < 1
+        or semantic_session_max_inputs > 1024
+    )
+    if semantic_session_values_invalid:
+        semantic_session_idle_ttl_sec = 60.0
+        semantic_session_max_rss_bytes = 768 * 1024 * 1024
+        semantic_session_max_instances = 64
+        semantic_session_max_inputs = 256
+        if semantic_session_enabled:
+            error_code = "source_graph_semantic_session_config_invalid"
+    if (
+        frontier_max_instances < 1
+        or frontier_max_instances > 4096
+        or frontier_max_rounds < 1
+        or frontier_max_rounds > 16
+    ):
+        frontier_max_instances = 128
+        frontier_max_rounds = 4
+        error_code = "source_graph_frontier_config_invalid"
+
+    runtime_plusarg_allowlist: frozenset[str] = frozenset()
+    if raw_runtime_plusargs:
+        try:
+            decoded_runtime_plusargs = json.loads(raw_runtime_plusargs)
+        except (json.JSONDecodeError, TypeError):
+            decoded_runtime_plusargs = None
+        valid_runtime_plusargs = (
+            isinstance(decoded_runtime_plusargs, list)
+            and len(decoded_runtime_plusargs) <= 256
+            and all(
+                isinstance(item, str)
+                and 1 < len(item) <= 4096
+                and item.startswith("+")
+                and "\x00" not in item
+                and not any(character.isspace() for character in item)
+                and not item.lower().startswith(
+                    ("+define+", "+incdir+", "+libext+")
+                )
+                for item in decoded_runtime_plusargs
+            )
+        )
+        if valid_runtime_plusargs:
+            runtime_plusarg_allowlist = frozenset(decoded_runtime_plusargs)
+        else:
+            error_code = "source_graph_runtime_plusarg_config_invalid"
+
+    return SourceGraphExecutionConfig(
+        enabled=enabled,
+        python_bin=python_bin or sys.executable,
+        frontend_version=frontend_version or "11.0.0",
+        timeout_sec=timeout_sec,
+        error_code=error_code,
+        disk_cache_enabled=disk_cache_enabled,
+        disk_cache_root=disk_cache_root,
+        disk_cache_max_entries=disk_cache_max_entries,
+        disk_cache_max_bytes=disk_cache_max_bytes,
+        frontier_max_instances=frontier_max_instances,
+        frontier_max_rounds=frontier_max_rounds,
+        semantic_session_enabled=semantic_session_enabled,
+        semantic_session_idle_ttl_sec=semantic_session_idle_ttl_sec,
+        semantic_session_max_rss_bytes=semantic_session_max_rss_bytes,
+        semantic_session_max_instances=semantic_session_max_instances,
+        semantic_session_max_inputs=semantic_session_max_inputs,
+        runtime_plusarg_allowlist=runtime_plusarg_allowlist,
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -220,7 +680,7 @@ _NPI_LSF_ALLOWED_EXTRA_FLAGS = {
 
 @dataclass(frozen=True)
 class NpiExecutionConfig:
-    """Validated, identity-private NPI execution configuration.
+    """Validated, identity-private Verdi/NPI execution configuration.
 
     ``error_code`` is always a fixed label. It deliberately never embeds the
     queue, executable, staging path, or malformed environment value so callers
@@ -236,6 +696,9 @@ class NpiExecutionConfig:
     staging_dir: Path
     extra_args: tuple[str, ...] = ()
     error_code: str | None = None
+    # KDB generation runs two potentially long Verdi phases.  Keep its
+    # scheduler deadline separate from the short connectivity-query deadline.
+    kdb_timeout_sec: int = max(120, (2 * KDB_BUILD_TIMEOUT_SEC) + 60)
 
     @property
     def valid(self) -> bool:
@@ -247,7 +710,8 @@ def get_npi_execution_config() -> NpiExecutionConfig:
 
     Supported modes:
       - ``local`` (default): preserve the existing in-process NPI behavior.
-      - ``lsf``: submit only explicit NPI connectivity operations via ``bsub``.
+      - ``lsf``: submit licensed Verdi/NPI operations, including KDB builds,
+        via ``bsub``.
 
     The worker guard always resolves to local. The LSF worker currently invokes
     the exact local NPI core directly, but the guard is defense in depth against
@@ -302,12 +766,20 @@ def get_npi_execution_config() -> NpiExecutionConfig:
     if timeout_sec < 1 or timeout_sec > 86_400:
         return _invalid_npi_config("lsf", default_staging)
 
+    default_kdb_timeout = max(120, (2 * KDB_BUILD_TIMEOUT_SEC) + 60)
+    raw_kdb_timeout = os.environ.get(
+        "TRACEWEAVE_NPI_LSF_KDB_TIMEOUT",
+        str(default_kdb_timeout),
+    ).strip()
+    try:
+        kdb_timeout_sec = int(raw_kdb_timeout)
+    except ValueError:
+        return _invalid_npi_config("lsf", default_staging)
+    if kdb_timeout_sec < 1 or kdb_timeout_sec > 86_400:
+        return _invalid_npi_config("lsf", default_staging)
+
     raw_staging = os.environ.get("TRACEWEAVE_NPI_LSF_STAGING_DIR", "").strip()
-    staging_dir = (
-        Path(raw_staging).expanduser()
-        if raw_staging
-        else default_staging
-    )
+    staging_dir = Path(raw_staging).expanduser() if raw_staging else default_staging
     if not staging_dir.is_absolute():
         return _invalid_npi_config("lsf", default_staging)
 
@@ -324,6 +796,7 @@ def get_npi_execution_config() -> NpiExecutionConfig:
         timeout_sec=timeout_sec,
         staging_dir=staging_dir,
         extra_args=extra_args,
+        kdb_timeout_sec=kdb_timeout_sec,
     )
 
 
@@ -358,7 +831,9 @@ def _parse_npi_lsf_extra_args() -> tuple[tuple[str, ...], bool]:
         parsed = json.loads(raw)
     except (TypeError, ValueError):
         return (), True
-    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+    if not isinstance(parsed, list) or not all(
+        isinstance(item, str) for item in parsed
+    ):
         return (), True
     args = tuple(parsed)
     if any(not _valid_argv_token(item) for item in args):

@@ -6,11 +6,17 @@ from pydantic import ValidationError
 from src.schemas import (
     BackendStatus,
     ErrorContextResult,
+    ExplainDriverResult,
     GetSignalsByCycleResult,
     ParseSimLogResult,
     ProblemHints,
+    RecommendNextStepsResult,
+    ScanStructuralRisksResult,
     SearchSignalsBatchResult,
+    SignalTransitionsResult,
     SimPathsResult,
+    TraceSignalPathResult,
+    TraceXSourceResult,
     WaveformSummaryResult,
 )
 
@@ -25,7 +31,10 @@ def test_sim_paths_result_minimal():
     result = SimPathsResult.model_validate(data)
     assert result.verif_root == "/tmp/verif"
     assert result.compile_logs == []
-    assert json.loads(result.model_dump_json(exclude_none=True))["verif_root"] == "/tmp/verif"
+    assert (
+        json.loads(result.model_dump_json(exclude_none=True))["verif_root"]
+        == "/tmp/verif"
+    )
 
 
 def test_sim_paths_result_rejects_extra_fields():
@@ -155,6 +164,27 @@ def test_get_signals_by_cycle_result_roundtrip():
     assert payload["cycles"][0]["signals"]["top_tb.data"]["dec"] == 1
 
 
+def test_signal_transitions_result_keeps_predecessor_separate():
+    result = SignalTransitionsResult.model_validate(
+        {
+            "signal": "top.clk",
+            "start_ps": 10,
+            "end_ps": 20,
+            "transition_count": 1,
+            "transitions": [
+                {"time_ps": 20, "value": {"bin": "1", "dec": 1}},
+            ],
+            "predecessor": {
+                "time_ps": 5,
+                "value": {"bin": "0", "dec": 0},
+            },
+        }
+    )
+
+    assert result.predecessor["time_ps"] == 5
+    assert all(item["time_ps"] >= result.start_ps for item in result.transitions)
+
+
 def test_backend_status_accepts_optional_lsf_receipt():
     status = BackendStatus.model_validate(
         {
@@ -169,3 +199,416 @@ def test_backend_status_accepts_optional_lsf_receipt():
     )
     assert status.execution_mode == "lsf"
     assert status.scheduler_status == "failed"
+
+
+def test_backend_status_accepts_degraded_kdb_receipt():
+    status = BackendStatus.model_validate(
+        {
+            "simulator": "vcs",
+            "backend": "verdi_npi",
+            "actual_backend": "verdi_npi",
+            "kdb_validation_status": "elaboration_error",
+            "kdb_degraded": True,
+            "kdb_error_count": 8,
+            "kdb_error_log": "/case/kdb.elab++/elabcomLog/compiler.log",
+        }
+    )
+
+    assert status.kdb_degraded is True
+    assert status.kdb_error_count == 8
+
+
+def test_backend_status_keeps_legacy_payload_backward_compatible():
+    status = BackendStatus.model_validate(
+        {
+            "simulator": "vcs",
+            "backend": "static",
+            "actual_backend": "static",
+        }
+    )
+
+    assert status.backend == "static"
+    assert status.selected_backend is None
+    assert status.attempted_backend is None
+    assert status.attempted_backends == []
+    assert status.source_graph is None
+    assert status.connectivity_route == "auto"
+    assert status.connectivity_route_error is None
+
+
+def test_backend_status_validates_additive_source_graph_route_receipt():
+    status = BackendStatus.model_validate(
+        {
+            "simulator": "xcelium",
+            "backend": "source_graph",
+            "selected_backend": "source_graph",
+            "attempted_backend": "source_graph",
+            "actual_backend": "source_graph",
+            "connectivity_route": "source_graph",
+            "attempted_backends": [
+                {
+                    "backend": "verdi_npi",
+                    "status": "skipped",
+                    "reason": "npi_skipped_by_policy",
+                },
+                {
+                    "backend": "source_graph",
+                    "status": "success",
+                    "coverage_status": "partial",
+                },
+            ],
+            "source_graph": {
+                "adapter_status": "ready",
+                "prepare_status": "ready",
+                "effective_timeout_sec": 7.5,
+                "cache_disposition": "miss",
+                "flight_disposition": "builder",
+                "coverage_status": "partial",
+                "coverage_files_total": 785,
+                "coverage_files_projected": 4,
+                "coverage_diagnostic_count": 29416,
+                "coverage_blocking_diagnostic_count": 65,
+                "coverage_gap_count": 388,
+                "coverage_gap_codes": ["protected_payload"],
+                "query_status": "found",
+                "query_confidence": "partial",
+                "query_match_count": 1,
+                "visited_state_count": 4,
+                "inspected_edge_count": 257,
+                "state_limit": 4096,
+                "edge_limit": 16384,
+                "match_limit": 256,
+                "frontier_limit": 4096,
+                "match_truncated": True,
+                "query_truncated": True,
+                "claim_semantics": {
+                    "positive_fact_confidence": "exact",
+                    "target_bit_coverage": "complete",
+                    "global_coverage_status": "partial",
+                    "exhaustive_search": False,
+                    "exclusive_driver_proved": False,
+                    "negative_claim_allowed": False,
+                },
+                "build_key_sha256": "b" * 64,
+                "artifact_fingerprint_sha256": "b" * 64,
+                "selected_artifact_fingerprint_sha256": "d" * 64,
+                "query_fingerprint_sha256": "e" * 64,
+                "artifact_reuse": "dominating_hit",
+                "cache_lookup_reason": "dominating_artifact",
+                "scope_match": {
+                    "relation": "superset",
+                    "reusable": True,
+                    "complete_for_request": False,
+                    "reason": "coverage_preserved_partial",
+                },
+                "compile_fingerprint_sha256": "c" * 64,
+                "ir_fingerprint_sha256": "a" * 64,
+                "metrics": {
+                    "prepare_total_wall_ms": 5.0,
+                    "actual_build_count": 1,
+                    "ir_bytes": 123,
+                    "cache_bytes": 123,
+                    "cache_entry_count": 2,
+                    "cache_peak_entry_count": 3,
+                    "cache_peak_bytes": 456,
+                    "cache_eviction_count": 1,
+                },
+            },
+        }
+    )
+
+    assert status.actual_backend == "source_graph"
+    assert status.connectivity_route == "source_graph"
+    assert status.attempted_backends[0].status == "skipped"
+    assert status.source_graph.query_confidence == "partial"
+    assert status.source_graph.effective_timeout_sec == 7.5
+    assert status.source_graph.claim_semantics.positive_fact_confidence == "exact"
+    assert status.source_graph.claim_semantics.exhaustive_search is False
+    assert status.source_graph.visited_state_count == 4
+    assert status.source_graph.inspected_edge_count == 257
+    assert status.source_graph.match_limit == 256
+    assert status.source_graph.match_truncated is True
+    assert status.source_graph.query_truncated is True
+    assert status.source_graph.coverage_files_total == 785
+    assert status.source_graph.coverage_files_projected == 4
+    assert status.source_graph.coverage_diagnostic_count == 29416
+    assert status.source_graph.coverage_blocking_diagnostic_count == 65
+    assert status.source_graph.coverage_gap_count == 388
+    assert status.source_graph.build_key_sha256 == "b" * 64
+    assert status.source_graph.artifact_reuse == "dominating_hit"
+    assert status.source_graph.cache_lookup_reason == "dominating_artifact"
+    assert status.source_graph.scope_match.relation == "superset"
+    assert status.source_graph.metrics.cache_eviction_count == 1
+    assert status.source_graph.metrics.actual_build_count == 1
+    serialized = status.model_dump(mode="json")["source_graph"]
+    assert "cache_tier" not in serialized
+    assert "disk_validation_outcome" not in serialized
+    assert "frontend_launch_count" not in serialized["metrics"]
+    assert all(not key.startswith("disk_") for key in serialized["metrics"])
+
+    with pytest.raises(ValidationError):
+        BackendStatus.model_validate(
+            {
+                "simulator": "vcs",
+                "backend": "source_graph",
+                "source_graph": {
+                    "adapter_status": "ready",
+                    "effective_timeout_sec": float("inf"),
+                },
+            }
+        )
+
+
+def test_backend_status_validates_additive_exact_disk_cache_receipt():
+    status = BackendStatus.model_validate(
+        {
+            "simulator": "xcelium",
+            "backend": "source_graph",
+            "actual_backend": "source_graph",
+            "source_graph": {
+                "adapter_status": "ready",
+                "prepare_status": "ready",
+                "cache_disposition": "miss",
+                "cache_tier": "disk",
+                "disk_validation_outcome": "hit",
+                "artifact_reuse": "disk_exact_hit",
+                "cache_lookup_reason": "no_cached_artifact",
+                "metrics": {
+                    "actual_build_count": 0,
+                    "frontend_launch_count": 0,
+                    "disk_lookup_wall_ms": 3.25,
+                    "disk_read_wall_ms": 1.5,
+                    "disk_validate_wall_ms": 1.75,
+                    "disk_hit_count": 1,
+                    "disk_build_skip_count": 1,
+                    "disk_bytes_read": 8192,
+                    "disk_entry_count": 1,
+                    "disk_bytes": 9000,
+                },
+            },
+        }
+    )
+
+    receipt = status.source_graph
+    assert receipt.cache_disposition == "miss"
+    assert receipt.cache_tier == "disk"
+    assert receipt.disk_validation_outcome == "hit"
+    assert receipt.artifact_reuse == "disk_exact_hit"
+    assert receipt.metrics.actual_build_count == 0
+    assert receipt.metrics.frontend_launch_count == 0
+    assert receipt.metrics.disk_build_skip_count == 1
+    assert receipt.metrics.disk_bytes_read == 8192
+
+    with pytest.raises(ValidationError):
+        BackendStatus.model_validate(
+            {
+                "simulator": "xcelium",
+                "backend": "source_graph",
+                "source_graph": {
+                    "adapter_status": "ready",
+                    "cache_tier": "/private/cache",
+                },
+            }
+        )
+
+
+def test_trace_signal_path_validates_additive_source_graph_path_evidence():
+    result = TraceSignalPathResult.model_validate(
+        {
+            "from_signal": "top.u_src.out[7:0]",
+            "to_signal": "top.u_dst.in[7:0]",
+            "found": True,
+            "hops": 1,
+            "expand_assigns": True,
+            "backend": "source_graph",
+            "claim_semantics": {
+                "positive_fact_confidence": "exact",
+                "target_bit_coverage": "not_applicable",
+                "global_coverage_status": "partial",
+                "exhaustive_search": False,
+                "exclusive_driver_proved": None,
+                "negative_claim_allowed": False,
+            },
+            "path": [
+                {
+                    "index": 0,
+                    "net_path": "top.u_src.out[7:0]",
+                    "scope_inst": "top.u_src",
+                    "source_info_origin": "source_graph",
+                    "backend": "source_graph",
+                    "is_endpoint": True,
+                },
+                {
+                    "index": 1,
+                    "net_path": "top.u_dst.in[7:0]",
+                    "scope_inst": "top.u_dst",
+                    "source_file": "/rtl/top.sv",
+                    "source_line": 17,
+                    "source_info_origin": "source_graph",
+                    "backend": "source_graph",
+                    "edge_kind": "continuous_assign",
+                    "edge_id": "edge-1",
+                    "edge_source_path": "/rtl/top.sv",
+                    "exact_bit_mapping": True,
+                    "is_endpoint": True,
+                },
+            ],
+            "backend_status": {
+                "backend": "source_graph",
+                "actual_backend": "source_graph",
+                "source_graph": {
+                    "adapter_status": "ready",
+                    "query_status": "found",
+                    "query_confidence": "partial",
+                    "claim_semantics": {
+                        "positive_fact_confidence": "exact",
+                        "target_bit_coverage": "not_applicable",
+                        "global_coverage_status": "partial",
+                        "exhaustive_search": False,
+                        "exclusive_driver_proved": None,
+                        "negative_claim_allowed": False,
+                    },
+                    "path_edge_count": 1,
+                    "traversed_edge_count": 3,
+                    "visited_state_count": 4,
+                    "traversal_limit": 4096,
+                    "output_limit": 256,
+                    "endpoint_alias_equivalent": False,
+                    "expand_assigns": True,
+                },
+            },
+        }
+    )
+
+    assert result.backend == "source_graph"
+    assert result.path[1].edge_kind == "continuous_assign"
+    assert result.path[1].exact_bit_mapping is True
+    assert result.claim_semantics.positive_fact_confidence == "exact"
+    assert result.backend_status.source_graph.path_edge_count == 1
+    assert result.backend_status.source_graph.claim_semantics == result.claim_semantics
+    assert result.backend_status.source_graph.traversal_limit == 4096
+
+
+def test_explain_driver_validates_bounded_traversal_receipt():
+    result = ExplainDriverResult.model_validate(
+        {
+            "signal_path": "top.dut.q",
+            "wave_path": "wave.fsdb",
+            "resolved_rtl_name": "q",
+            "driver_status": "partial",
+            "driver_kind": "always_ff",
+            "recursive": True,
+            "confidence": "partial",
+            "traversal": {
+                "returned_fact_count": 32,
+                "output_limit": 32,
+                "output_truncated": True,
+                "visited_state_count": 4096,
+                "state_limit": 4096,
+                "state_truncated": True,
+                "callback_observed_count": 4265,
+                "callback_pruned_count": 169,
+                "search_exhaustive": False,
+                "incomplete_reasons": ["output_limit", "work_limit"],
+                "continuation_supported": False,
+            },
+            "backend": "verdi_npi",
+        }
+    )
+
+    assert result.traversal.returned_fact_count == 32
+    assert result.traversal.callback_pruned_count == 169
+    assert result.traversal.search_exhaustive is False
+
+
+def test_trace_x_source_result_carries_backend_consistency_receipt():
+    result = TraceXSourceResult.model_validate(
+        {
+            "start_signal": "top_tb.dut.out",
+            "start_time_ps": 100,
+            "trace_status": "driver_unresolved",
+            "trace_depth": 1,
+            "max_depth": 10,
+            "backend_status": {
+                "simulator": "vcs",
+                "backend": "verdi_npi",
+                "actual_backend": "static",
+                "whole_trace_restart_count": 2,
+                "whole_trace_restart_reasons": [
+                    "npi_internal_fallback",
+                    "source_graph_to_static",
+                ],
+                "single_backend_provenance": True,
+                "fallback_reason": "npi_lsf_timeout",
+                "execution_mode": "lsf",
+                "scheduler_status": "timed_out",
+                "worker_status": "not_started",
+                "source_graph": {
+                    "adapter_status": "ready",
+                    "query_count": 2,
+                    "attempted_query_count": 3,
+                    "query_fingerprints_sha256": ["a" * 64, "b" * 64],
+                    "query_statuses": ["found", "not_connected"],
+                    "coverage_statuses": ["partial", "complete"],
+                    "positive_query_count": 1,
+                    "complete_negative_query_count": 1,
+                    "artifact_attempt_count": 2,
+                    "scope_expansion_count": 1,
+                    "attempted_artifact_fingerprints_sha256": [
+                        "c" * 64,
+                        "d" * 64,
+                    ],
+                    "final_artifact_fingerprint_sha256": "d" * 64,
+                    "single_artifact_provenance": True,
+                    "final_artifact_scope_match": True,
+                    "fallback_used": True,
+                },
+            },
+            "trace_restarted": True,
+        }
+    )
+
+    assert result.backend_status.backend == "verdi_npi"
+    assert result.backend_status.actual_backend == "static"
+    assert result.backend_status.whole_trace_restart_count == 2
+    assert result.backend_status.single_backend_provenance is True
+    assert result.backend_status.source_graph.query_count == 2
+    assert result.backend_status.source_graph.artifact_attempt_count == 2
+    assert result.backend_status.source_graph.single_artifact_provenance is True
+    assert result.trace_restarted is True
+
+
+def test_structural_scan_result_carries_explicit_coverage_receipt():
+    result = ScanStructuralRisksResult.model_validate(
+        {
+            "scan_scope": "scope1",
+            "eligible_file_count": 0,
+            "files_scanned": 0,
+            "coverage_status": "zero_coverage",
+            "coverage_warnings": ["ZERO COVERAGE"],
+            "total_risks": 0,
+        }
+    )
+
+    assert result.coverage_status == "zero_coverage"
+    assert result.eligible_file_count == 0
+    assert result.coverage_warnings == ["ZERO COVERAGE"]
+
+
+def test_recommend_result_preserves_runtime_protocol_coverage_without_findings():
+    result = RecommendNextStepsResult.model_validate(
+        {
+            "suspected_failure_class": "data-path corruption",
+            "runtime_protocol_findings": [],
+            "runtime_protocol_coverage": {
+                "coverage_status": "zero_coverage",
+                "coverage_warnings": ["not a protocol pass"],
+                "discovered_count": 0,
+                "interface_count": 0,
+                "flagged_count": 0,
+            },
+        }
+    )
+
+    assert result.runtime_protocol_findings == []
+    assert result.runtime_protocol_coverage["coverage_status"] == "zero_coverage"

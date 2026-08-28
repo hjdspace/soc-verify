@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.venv/
 *.egg-info/
 dist/
 build/
@@ -15,9 +16,9 @@ novas.rc
 docs/*
 !docs/architecture.md
 !docs/debug-discipline.md
+!docs/workflow.md
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-reference/debug_session_report_20260315.md

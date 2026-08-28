@@ -37,8 +37,18 @@ extraResources:
       - "!**/__pycache__/**"
       - "!**/*.pyc"
       - "!**/.pytest_cache/**"
-      - "!third_party/**"
-      - "!libfsdb_wrapper.so"
+      - "!**/.venv/**"
+      - "!third_party/**"            # Synopsys 专有运行库不分发，运行时从用户 VERDI_HOME 加载
+      - "!tests/**"
+      - "!docs/**"
+      - "!reference/**"
+      - "!benchmarks/**"
+      - "!assets/**"
+      - "!scripts/**"
+      - "!*.md"
+      - "!pytest.ini"
+      # libfsdb_wrapper.so（构建机预编译产物）与 fsdb_wrapper.cpp/build_wrapper.sh
+      # 随包分发：前者供 FSDB 解析，后者作为用户机（有 VERDI_HOME）自行重编译的兜底
       # engine/oh-my-pi is no longer packaged as extraResources.
   # The runner is pre-compiled into a standalone binary in resources/binaries/.
   # This eliminates the need to bundle the entire engine source + node_modules.

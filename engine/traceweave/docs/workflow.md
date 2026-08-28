@@ -1,0 +1,449 @@
+# Waveform MCP — Standard Debug Workflow
+
+## Overview
+
+This document defines the recommended tool invocation order for the Waveform MCP server. It is intended to be used as the basis for `server.py` instructions, guiding the AI agent through a structured debug flow.
+
+## Workflow
+
+```
+User: "Help me debug /path/to/verif, case0"
+│
+▼
+Step 1: get_sim_paths(verif_root, case_name?, sim_log?, wave_file?, compile_log?)
+│  Discover all relevant file paths automatically.
+│  Returns: discovery_mode, case_dir, compile_logs (with phase tag),
+│           sim_logs, wave_files, simulator (auto-detected),
+│           fsdb_runtime, hints, available_cases
+│
+│  Key decisions:
+│  - For a non-standard layout, pass explicit sim_log/wave_file/compile_log:
+│    any supplied field is used as-is, omitted fields are still auto-discovered
+│    (a sim_log path anchors the case dir → finds its wave + compile/elab logs)
+│  - If discovery_mode == "unknown" → stop guessing and follow hints
+│  - If case_name omitted in root_dir mode → check available_cases, ask user to pick one
+│  - If hints contain warnings (empty log, missing wave) → inform user early
+│  - For a complete single-log flow, pick compile_log with phase="elaborate"
+│  - For split VCS source-compile/elaboration logs, use the source-compile log
+│    as primary and pass the other ordered logs to build_tb_hierarchy via
+│    supplementary_compile_logs; scan_structural_risks uses that same primary
+│  - Store simulator for all subsequent tool calls
+│  - If fsdb_runtime.enabled is false → ignore `.fsdb` when `.vcd` is available
+│  - Only proceed to step 3 when `sim_logs` is non-empty
+│
+▼
+Step 2 (parallel): build_tb_hierarchy(compile_log, simulator,
+                                      supplementary_compile_logs?)
+                   + scan_structural_risks(compile_log, simulator)
+│  Run both independently on the SAME primary compile log before analyzing
+│  failures. Do not wait for one before starting the other. In a split VCS
+│  flow only build_tb_hierarchy receives the supplementary logs.
+│
+├─ build_tb_hierarchy builds project-level understanding.
+│  Returns a SLIM payload (full data is server-cached behind `hierarchy_handle`):
+│    - project: top_module, source_root, simulator
+│    - stats: file_count, module_count, instance_count, tree_depth,
+│             class_count, interface_count, uvm_file_count
+│    - tree_skeleton: component_tree truncated to depth 2 with `child_count`
+│      and `truncated` flags on each node
+│    - interfaces: full list (small)
+│    - ambiguous_basenames: collisions like xxx_v1.v vs xxx_v2.v — when
+│      non-empty, MUST disambiguate with `lookup_tb_files(basename=...)`
+│    - hierarchy_handle: pass to every handle tool
+│    - handle_tools: name map of the six handle tools
+│
+│  What the agent does next, on demand (via handle tools):
+│  - Drill into a branch     → get_tb_subtree(handle, root="top.x.y", depth=N)
+│  - Find a specific file    → lookup_tb_files(handle, basename=...) or
+│                              path_contains=... / has_module=... / contains_uvm=...
+│  - Locate an instance      → find_tb_instance(handle, path=...) or module=...
+│  - Read a file's symbols   → get_tb_file_detail(handle, path=...)
+│  - UVM class tree          → get_tb_class_hierarchy(handle, root_class=...)
+│  - Raw section (heavy)     → dump_tb_section(handle, section=...)
+│
+│  Before reading any RTL source file, call get_tb_file_detail(path=...) or
+│  lookup_tb_files(...) first. The compile_log is the only source of truth
+│  for which file version was compiled in this session.
+│
+│  In local NPI execution mode, a detected KDB may overlay hierarchy source
+│  locations with elaborated file:line data. The initial LSF scope deliberately
+│  does not submit an implicit job from build_tb_hierarchy, so its source
+│  locations remain compile-log-derived in LSF mode.
+│
+└─ scan_structural_risks independently scans the compiled RTL/TB source set.
+   Its CPU-bound body runs in a lock-free cancellable worker, so the hierarchy
+   worker and lightweight MCP calls remain schedulable while this scan is in
+   flight.
+   Returns source-anchored structural risks (for example overlap, multi-drive,
+   incomplete control, or narrow-condition findings). Risks overlapping the
+   eventual failing signal/source path are high-priority root-cause candidates,
+   but remain facts to correlate rather than verdicts. Always inspect
+   coverage_status: only complete + total_risks=0 is a clean-scan observation;
+   zero_coverage/degraded retain uncertainty and must not be reported as clean.
+│
+▼
+Step 3: parse_sim_log(log_path, simulator)
+│  Get grouped error summary from simulation log.
+│  Returns: groups list, normalized failure_events, time normalization fields,
+│           rerun hints such as previous_log_detected / candidate_previous_logs,
+│           and log_snapshot_id for same-path rerun diffing
+│  candidate_previous_logs are conservative runtime-log candidates from bounded
+│  sibling head/tail samples; compile/elaboration/build logs are never baselines.
+│
+│  What the agent does:
+│  - Identify the earliest and most frequent error groups
+│  - Prefer `failure_events[0].time_ps` as the waveform time anchor when present
+│  - Cross-reference error signatures with step 2's hierarchy
+│    (e.g., UVM_ERROR [SCOREBOARD_MISMATCH] → find_tb_instance(module="scoreboard")
+│     or get_tb_subtree drilling from tree_skeleton)
+│  - Decide which group to investigate first (usually group_index=0)
+│  - If previous_log_detected == true, consider diff_sim_failure_results early
+│  - If the simulator overwrites the same log path on rerun, call
+│    diff_sim_failure_results with snapshot IDs or only new_log_path; the
+│    previous parsed snapshot becomes the baseline
+│
+▼
+Step 4: sweep_handshakes(wave_path, ...)
+│  Runtime-layer protocol coverage scan.
+│  Run after parse_sim_log on a failing run with a waveform, before treating a
+│  scoreboard/data mismatch as an RTL value bug.
+│  Returns: discovered_count, interface_count, flagged_count,
+│           coverage_status, coverage_warnings, suggested_next_actions,
+│           interfaces[], skipped[]
+│
+│  What the agent does:
+│  - Prefer the first sweep unscoped unless the interface scope is already known
+│  - Always examine the finding_summary before diving into individual interfaces
+│  - Interpret flagged_count only with coverage_status:
+│    * coverage_status="zero_coverage" means no protocol interfaces were checked;
+│      it is not a protocol pass. A scoped result may retry without scope or at
+│      a parent scope. An unscoped zero-interface result with no changing action
+│      is terminal for routing: retain the warning, do not replay the same call.
+│    * coverage_status="truncated" or "degraded" means partial coverage; do not
+│      call the protocol clean from flagged_count=0. This includes native FSDB
+│      transition-prefix truncation (`transition_truncated_count > 0`); narrow
+│      the time window for a complete targeted check. Follow any available
+│      suggested_next_actions only when they change scope/window/edge/cap. With
+│      no changing action, surface the dump/clock/window prerequisite instead.
+│    * coverage_status="complete" and flagged_count=0 means the discovered,
+│      supported interfaces had none of the checks' reported findings. It is not
+│      proof that every protocol behavior in the design is correct.
+│  - Global findings (flagged interfaces) are facts to correlate against the symptom,
+│    not root-cause verdicts. Findings on one channel/interface may be unrelated to
+│    a mismatch on another channel.
+│  - If the symptom is on interface A but global sweep findings are on interface B,
+│    that is a correlation fact, not a clearance. Run targeted checks on A to
+│    establish whether A's protocol is clean; global findings on B remain true.
+│
+▼
+Step 5: recommend_failure_debug_next_steps(log_path, wave_path, simulator, ...)
+│  Get a strong default failure target and role-ranked signal suggestions.
+│  Returns: primary_failure_target, recommended_signals, recommended_instances,
+│           suspected_failure_class, recommendation_strategy, failure_window_center_ps,
+│           correlated_structural_risks, runtime_protocol_findings,
+│           runtime_protocol_coverage
+│  - runtime_protocol_findings: flagged interfaces carried over from a compatible
+│    sweep_handshakes cache (the runtime-layer counterpart of
+│    correlated_structural_risks). Facts to correlate, not a verdict. If sweep
+│    has not run, or has an actionable parameter-changing retry, on a failing
+│    run with a waveform, required_next_call steers back to sweep_handshakes
+│    (degraded_reason="missing_handshake_sweep" or
+│    "incomplete_handshake_sweep"); a scoreboard/compare/mismatch symptom
+│    prioritizes sweep over the structural scan.
+│  - runtime_protocol_coverage preserves zero/degraded warnings even when there
+│    are no flagged rows. If no retry can change the result, required_next_call
+│    is null and missing_inputs names the external dump/clock/window prerequisite.
+│
+│  What the agent does:
+│  - Use the top recommended signals first instead of blind substring search
+│  - Prefer signals with useful role/reason_codes (state/counter/handshake/etc.)
+│  - If the recommendation is weak, fall back to explicit search_signals
+│
+▼
+Step 6: search_signals(wave_path, keyword)
+│  Confirm full hierarchical paths for signals relevant to the error.
+│  `keyword` also accepts a LIST of keywords — batch every stem you plan to
+│  look up into ONE call (one result entry per keyword, in order) instead of
+│  issuing consecutive single-keyword searches.
+│  Returns: matching signals with bit width, `direction`, and `var_type`.
+│    - `direction`: input/output/inout/implicit (FSDB only). VCD always null.
+│    - `var_type` : wire/reg/integer/real/parameter/memory/...
+│    Clients filter ports/nets/variables in a scope by combining a hierarchical
+│    keyword (the scope prefix) with these fields, instead of a dedicated tool.
+│  Note: `.fsdb` wave paths are usable only when fsdb_runtime.enabled is true.
+│        Port-direction filtering requires FSDB — VCD cannot encode direction.
+│
+│  How the agent picks keywords:
+│  - From step 2's tree_skeleton or get_tb_subtree: module instance names → signal names
+│  - From step 3's error message: signal names mentioned in assertions or checkers
+│  - From RTL source code: verify path via get_tb_file_detail first, then read
+│
+│  May need multiple calls with different keywords.
+│
+▼
+Step 7: analyze_failures(log_path, wave_path, signal_paths, simulator)
+│  Core analysis: combines log context + waveform snapshot for one error group.
+│  Returns: summary, focused_group, log_context, wave_context, analysis_guide
+│  Note: `.fsdb` wave paths are usable only when fsdb_runtime.enabled is true
+│
+│  The agent should:
+│  - Follow analysis_guide steps (check timing, signal values, pre-window history)
+│  - Compare expected vs actual signal behavior
+│  - Identify root cause or narrow down the investigation
+│
+▼
+Step 8: Deep dive (on demand, based on step 7 findings)
+   │
+   ├─ analyze_failure_event(log_path, wave_path, simulator, failure_event, ...)
+   │    When: Want failure-centric instance/source correlation
+   │    Output: time_anchor, likely_instances, recommended_signals, related_source_files
+   │
+   ├─ get_error_context(log_path, line)
+   │    When: Need to inspect other error groups beyond the one selected in
+   │          step 3 / analyzed in step 7
+   │    Input: first_line from a different group in step 3's results
+   │
+   ├─ explain_signal_driver(signal_path, wave_path, compile_log, top_hint?)
+   │    When: Waveform shows a suspicious signal and the agent needs the likely RTL driver
+   │    Output: driver_status, driver_kind, source_file, source_line, expression_summary,
+   │            traversal.{returned_fact_count, output_limit, output_truncated,
+   │            visited_state_count, state_limit, state_truncated,
+   │            search_exhaustive, incomplete_reasons, continuation_supported}
+   │    Notes: For deeper / cross-hierarchy traces a Verdi KDB enables the NPI
+   │           backend, which can cross instance port boundaries. If the
+   │           simulator is Xcelium and no KDB exists yet, get_diagnostic_snapshot
+   │           lists `build_kdb` in `missing_steps` — call that first.
+   │           NPI execution defaults to local. With
+   │           TRACEWEAVE_NPI_EXECUTION=lsf, the explicit driver/load/path tools
+   │           submit an exact-only worker using TRACEWEAVE_NPI_LSF_QUEUE
+   │           (set that namespaced queue directly; only map an already-existing
+   │           generic LSF_QUEUE if desired; TraceWeave does not read it).
+   │           Read
+   │           backend_status.execution_mode / scheduler_status / worker_status /
+   │           fallback_reason: a failed worker means the parent result came from
+   │           local Static fallback, not exact NPI.
+   │           Recursive NPI fan-in admits at most 4,096 native states and
+   │           returns at most 32 driver facts. A positive bounded prefix has
+   │           driver_status="partial" and remains useful, but it is not an
+   │           exclusive or complete driver-set claim. Read traversal instead
+   │           of inferring completeness from a non-empty driver_chain.
+   │           trace_x_source preserves this receipt and stops with
+   │           driver_traversal_incomplete instead of naming one bounded
+   │           candidate as an exclusive root cause.
+   │           driver_status="testbench_driven" (cross_check.conflict) means NPI
+   │           found NO RTL driver — its only candidate is also a LOAD of the net
+   │           (interface-slice alias / a register reading the net), so the real
+   │           driver is the TB (a UVM driver via virtual interface + clocking
+   │           block, invisible to RTL fan-in). Start in the TB driver/BFM, not a
+   │           DUT register. For an AHB master's HTRANS/HADDR this is the correct
+   │           answer; do NOT read a landed DUT/matrix register as a mis-wire.
+   │
+   ├─ find_signal_loads(signal_path, compile_log, kind_filter?, include_expr?)
+   │    When: Symmetric to explain_signal_driver — list the consumers (fanout)
+   │          of a signal: child instance input ports, RHS in assigns /
+   │          procedural assignments, always-block sensitivity lists.
+   │    Output: loads[].{load_path, kind, source_file, source_line, expr},
+   │            enumeration.{returned_count, output_limit, output_truncated,
+   │            search_exhaustive, incomplete_reasons, continuation_supported}
+   │    Notes: Static backend is shallow_only and cannot follow interface
+   │           positional bindings or cross-hierarchy fanout — those are
+   │           surfaced via stopped_at. NPI backend (when a Verdi KDB is
+   │           present) resolves both with direct-load indexes and bounded
+   │           output-port boundary steps; it does not expand a whole fan-out
+   │           cone for a direct-load query. All backends cap output at 256.
+   │           A positive truncated prefix is usable evidence, but only
+   │           search_exhaustive=true means it is the complete list. There is
+   │           currently no resumable pagination token.
+   │           Each load carries source_info_origin = "compile_log" or "npi".
+   │
+   ├─ trace_x_source(signal_path, wave_path, compile_log, time_ps, max_depth?)
+   │    When: A signal is X/Z at the failure time and the agent wants to
+   │          trace propagation back to the root cause net.
+   │    Output: propagation_chain[], root_cause, trace_status, analysis_guide
+   │    Notes: Combines waveform reads (per-hop value at time_ps) with
+   │           source-level driver analysis. The current implementation uses the
+   │           Static source resolver and does NOT dispatch NPI or LSF; it may
+   │           therefore stop at an instance-port boundary even when max_depth is
+   │           larger. At that stop, call explain_signal_driver(recursive=true)
+   │           on the boundary signal for a deeper NPI connectivity trace.
+   │
+   ├─ trace_signal_path(from_signal, to_signal, compile_log, expand_assigns?)
+   │    When: Need a connected chain of nets between two signals (e.g. "how does
+   │          an input port reach the failing assertion?"). NPI-only — without
+   │          a KDB this returns unsupported_reason="static_backend_no_path_api"
+   │          and you should fall back to explain_signal_driver + find_signal_loads.
+   │    Output: path[], hops, found, direction_note
+   │    Notes: This is connectivity (any direction), NOT temporal driver direction.
+   │           Use explain_signal_driver for "what drives X temporally". Set
+   │           expand_assigns=true when you want explicit assign hops surfaced
+   │           instead of collapsed.
+   │
+   ├─ build_kdb(compile_log, top_hint?, force_rebuild?)
+   │    When: Xcelium (xrun) flow and `backend_status.kdb_path` is null,
+   │          or you want to refresh a cached KDB after source changes
+   │    Output: status (rebuilt / cached / failed), kdb_path, cache_dir,
+   │            build_script_path (runnable build.sh), vericom_log, elabcom_log
+   │    Notes: Cache lives under $TRACEWEAVE_CACHE_DIR/kdb/<hash>/. After a
+   │           successful build, subsequent driver/load queries automatically
+   │           route through NPI via the cached KDB. VCS users get a cheaper
+   │           path: recompile with `-kdb=only` (suggested by kdb_hint).
+   │
+   ├─ get_signal_transitions(wave_path, signal_path, start_ps, end_ps)
+   │    When: analyze_failures' pre_window_transitions is not enough,
+   │          need full transition history of a signal
+   │    Note: `.fsdb` wave paths require fsdb_runtime.enabled == true
+   │
+   ├─ get_signals_around_time(wave_path, signal_paths, center_time_ps)
+   │    When: Need to inspect additional signals not included in step 6,
+   │          or examine a different time point
+   │    Note: `.fsdb` wave paths require fsdb_runtime.enabled == true
+   │
+   ├─ get_signal_at_time(wave_path, signal_path, time_ps)
+   │    When: Need exact value of one signal at a precise time
+   │    Note: `.fsdb` wave paths require fsdb_runtime.enabled == true
+   │
+   └─ get_waveform_summary(wave_path)
+        When: Need basic waveform metadata (simulation duration, signal count)
+        Note: `.fsdb` wave paths require fsdb_runtime.enabled == true
+        Useful for sanity checks before deep analysis
+```
+
+## Root-Cause Discipline For Protocol / Scoreboard Mismatches
+
+When a failure is a protocol or scoreboard mismatch (handshake stall/deadlock,
+data mismatch, or timing violation), do not conclude a root cause from one-sided
+evidence:
+
+- Carry at least two competing hypotheses about where the fault is — for example
+  the initiator/stimulus side versus the responder/DUT side — and keep both
+  alive until waveform evidence rejects one.
+- Before attributing the root cause to one side, check the opposite side with
+  waveform evidence.
+- A clean result on one side is not a whole-protocol verdict: "no violation found
+  on side X" does not establish "the protocol is correct." State which sides you
+  checked and which you did not.
+- A confirmed violation/anomaly is a perception fact, not a consequence verdict.
+  Before stating what it *did* (its effect on the failing observable), confirm
+  that effect against the actual values — do not infer the consequence from the
+  anomaly alone, since the same anomaly can have different downstream effects.
+  (E.g. a stall-time hold violation may have skipped a beat or corrupted one; the
+  scoreboard `got=` value disambiguates — a never-written `00` vs a wrong
+  non-zero byte.)
+
+This discipline pairs with tool coverage facts: inspection tools should report
+which checks they actually performed, and the agent uses that coverage to avoid
+treating a one-sided result as a full protocol conclusion.
+
+**Global vs. Targeted Protocol Checks:** `sweep_handshakes` performs a whole-design
+scan across every protocol interface in the waveform. `inspect_handshake`, 
+`reconstruct_transactions`, and `verify_window` are targeted checks on one interface
+or signal. A targeted clean result ("no violation on Master0's R channel") does NOT
+erase earlier global findings ("W channel has payload-hold violations"). State both
+facts: the global findings exist, and the targeted check on the symptom-correlated
+interface is clean. That combination points to the next layer (HVL/BFM) rather than
+a protocol root cause.
+
+On a scoreboard/compare-style failure, `parse_sim_log` sets a generic
+`protocol_symptom_hint` (mirrored into `get_diagnostic_snapshot`'s top-level
+output) reminding you that such a mismatch is frequently the *symptom* of a
+lower-level bus-protocol problem — run `sweep_handshakes` once to check the
+protocol health of every bus interface (AHB + AXI/valid-ready) in a single call
+before reading RTL line-by-line or scrubbing the waveform by hand; drill into a
+single interface with `suggest_protocol_bundles`/`suggest_handshakes` +
+`inspect_handshake` only if needed. The hint is a boundary-safe pointer only: it
+never asserts a protocol type or names a specific signal, and the
+two-hypothesis discipline above still applies.
+
+## Tool Dependency Graph
+
+```text
+get_sim_paths
+  ├─ provides compile_log / simulator / log_path / wave_path to downstream tools
+  ├─ build_tb_hierarchy ────────┐
+  └─ scan_structural_risks ─────┤  (parallel, same compile_log)
+                                └─ parse_sim_log
+                                     └─ sweep_handshakes
+                                          └─ recommend_failure_debug_next_steps
+                                               └─ search_signals
+                                                    └─ analyze_failures
+                                                         └─ deep dive:
+                                                              analyze_failure_event
+                                                              explain_signal_driver / find_signal_loads
+                                                              get_error_context / get_signal_*
+                                                              trace_x_source / trace_signal_path
+```
+
+## Parameter Flow
+
+| Parameter | Source | Consumed by |
+|-----------|--------|-------------|
+| `compile_log` | `get_sim_paths → compile_logs[phase="elaborate"].path` | `build_tb_hierarchy`, `scan_structural_risks`, connectivity/X-trace tools, `build_kdb` |
+| `simulator` | `get_sim_paths → simulator` | `build_tb_hierarchy`, `parse_sim_log`, `analyze_failures` |
+| `log_path` (sim) | `get_sim_paths → sim_logs[0].path` | `parse_sim_log`, `get_error_context`, `analyze_failures` |
+| `wave_path` | `get_sim_paths → chosen wave file (.vcd preferred when fsdb_runtime.enabled=false)` | `sweep_handshakes`, `search_signals`, `get_signal_*`, `analyze_failures` |
+| `failure_event` | `parse_sim_log → failure_events[]` | `analyze_failure_event` |
+| `signal_paths` | `search_signals → results[].path` | `analyze_failures`, `get_signals_around_time` |
+| `group_index` | Agent decision from `parse_sim_log → groups` | `analyze_failures` |
+| `line` | `parse_sim_log → groups[].first_line` | `get_error_context` |
+| `center_time_ps` | `parse_sim_log → failure_events[].time_ps` or `groups[].first_time_ps` | `get_signals_around_time` |
+| `signal_path` | `search_signals → results[].path` or waveform observation | `explain_signal_driver`, `find_signal_loads`, `trace_x_source` |
+| `from_signal` / `to_signal` | `search_signals → results[].path` (endpoints chosen by agent) | `trace_signal_path` |
+
+> Time parameters (`time_ps`, `center_time_ps`, `start_time_ps`, `end_time_ps`) accept a **TimeSpec**: a raw integer (ps), a cursor reference `@<name>`, or a unit literal like `12.34ns`. So a time anchor located by `diff_first_divergence` / `period` (auto-registered as a cursor) can feed downstream `get_signal_*` / `trace_x_source` calls as `@<name>` instead of a copied timestamp.
+
+## Optional Analysis Primitives
+
+Most of these are not part of the default flow above; reach for them when the symptom is timing- or divergence-shaped rather than a logged value mismatch. The exception is `sweep_handshakes`, which is now a **default-flow protocol-health step** — run it after `parse_sim_log` on a failing run that has a waveform, like `scan_structural_risks` at the runtime layer (see Repository Guidance / `AGENTS.md`).
+
+- `period(wave_path, signal, edge?)` — when a signal should be periodic (clock, strobe, fixed-rate valid) and the symptom is a cadence/throughput irregularity with no value in the log. Returns the dominant period and the first off-beat (auto-cursor).
+- `diff_first_divergence(wave_path_a, signal_a, wave_path_b, signal_b)` — when two waveform signals should match: cross-run (passing vs failing) or within-run (lockstep / shadow). Returns the first unequal instant (auto-cursor). Needs both sides dumped as waveform signals; does not compare against a software reference model.
+- `cursor_set` / `cursor_list` / `cursor_delete` — manage the named time anchors referenced above.
+- `inspect_handshake(wave_path, clock, valid, ready, payload?)` — cycle-by-cycle classification of a clocked valid/ready handshake: stalls, long-stall windows, backpressure imbalance, payload-hold violations during a stall, and **premature valid deassertion** (`check_valid_hold`, default on): a stalled beat whose valid/htrans drops the next edge before ready/HREADY arrives — the master dropping the transfer instead of waiting (the AHB master-not-waiting-for-HREADY bug). The deassertion check needs no `payload` and catches what payload-hold cannot: a 1-cycle stall (`max_stall_cycles==1`) leaves no room for payload to change, and htrans (the derived valid) is not a payload signal. For protocol-timing bugs that leave no value pattern in scoreboard logs. AHB has no literal valid — pass `valid_htrans` instead. Its `coverage` object reports only dimensions it actually checked (`stall_checked`, `backpressure_checked`, `payload_hold_checked`/partial, `valid_hold_checked`); side labels must come from discovery/caller context, not this inspection tool. On a finding it sets `violating_signal` (the valid/htrans for a premature deassertion) + a `next_actions` link to `explain_signal_driver`. For the **one-sided** violations (payload-hold, premature deassertion) it also returns a structured `attribution` block (`violating_side=valid_driver`, `exonerated_side=ready_driver`): both are breaches of the valid-driver's obligation, so the responder/ready side cannot cause them — do NOT start in the slave driver/monitor. This is protocol role, not trace-ownership: the valid-driver is the channel producer (master on AXI AW/AR/W, slave on R/B; AHB htrans is always master), and `explain_signal_driver` on `valid` lands on the actual instance — but when the producer is a UVM/TB driver (procedural drive via virtual interface + clocking block), NPI cannot see it and returns `driver_status="testbench_driven"` rather than naming a DUT register that merely reads the bus (do not read that as a mis-wire). A plain stall is genuinely two-sided, so `attribution` stays empty and the link targets `ready` — the trace holds values, not ownership; attribution = bus-fact + drive-direction, composed by you. A clean bus with a wrong result means look INSIDE the consumer (slave mis-sampling), which no interface tool can see.
+- `suggest_handshakes(wave_path, scope?)` — scan the waveform and propose ready-to-use `inspect_handshake` bundles (pairs `*valid`/`*ready`, finds the clock, groups payload). Run before `inspect_handshake` so you don't hand-assemble signal paths.
+- `suggest_protocol_bundles(wave_path, protocol=ahb|apb, scope?)` — scan AHB/APB-style protocol bundles where there is no literal valid. AHB candidates return `valid_htrans`-based `inspect_handshake` args; APB candidates return `psel`/`penable`/`pready` facts and mark the missing derived-valid step. For AHB candidates the result also carries a `next_step` field — a copy-paste-ready `inspect_handshake(...)` call per interface — because discovery only LOCATES the bundle; running that call is the analysis step. Do not stop at discovery. Treat `direction_tag=unknown` as a real coverage limitation, not as permission to infer a side.
+- `sweep_handshakes(wave_path, scope?)` — **default-flow protocol-health step** (runtime-layer counterpart of `scan_structural_risks`; `get_diagnostic_snapshot` lists it in `missing_steps` on a failing run with a waveform, and keeps listing it only while a parameter-changing retry is available). Whole-design handshake anomaly sweep: discover every valid/ready interface **and every AHB interface** (htrans-derived valid) and inspect each in one call, returning a comparative fact table (each row tagged `kind`=`valid_ready`/`ahb`). The one-call protocol-health check the scoreboard-failure hint steers toward; for opaque global symptoms (timeout/hang) or any scoreboard mismatch when you don't yet know which interface misbehaves. APB excluded (needs a derived valid). Always read `coverage_status`: `zero_coverage` checked no interfaces and is not a pass; `truncated`/`degraded` means partial coverage, so `flagged_count=0` is not a clean-protocol conclusion. No-progress terminal coverage remains visible in warnings but is not blindly replayed.
+- `verify_window(wave_path, clock, mode, predicate | antecedent+consequent | delta)` — evaluate a temporal predicate (always/never/eventually/implication/sequence) over a clock window and return a `holds` verdict plus a concrete witness/counterexample. To prove or disprove an RTL inference in one call. For `implication`, `overlap=false` (`|=>`) starts the response window the NEXT cycle — the shape for a **hold/stability** property ("B must STILL hold next cycle", e.g. `(htrans==2 && hready==0) |=> htrans==2` proves premature-deassertion). With the default `overlap=true` such a property is a **vacuous pass** (B already true on A's own cycle); the result is flagged `vacuous=true` + a `VACUOUS PASS` warning so the `holds=true` is not misread as exclusion evidence — re-run with `overlap=false`. `sequence` checks the per-accepted-beat increment of one signal (address-stride): `predicate` is the accepted-beat gate, `delta`=`{signal,value,op?,modulo?,restart_when?}` — `modulo` absorbs a legal WRAP wrap-around, `restart_when` (e.g. htrans==NONSEQ) re-seeds at burst starts, both supplied by you so the tool stays burst-decode-free. On a violation it sets `violating_signal` + a `next_actions` link to `explain_signal_driver` (master-driven signal → points at the master by elimination). Multi-slave/master: scope a property to one subset with a predicate term (per-slave `HSEL`, per-master `HMASTER`) — `inspect_handshake`'s htrans-only valid cannot qualify by select, so use the verify_window gate for per-slave/per-master checks.
+- `reconstruct_transactions(wave_path, clock, req_valid, req_ready, cmp_valid, cmp_ready, ...)` — id-correlated request/response transaction layer: per-transaction latency plus outstanding/ordering/unmatched facts. AXI read AR→R, write AW→B (+ optional W-data channel); `req_id`/`cmp_id` optional (omit both for in-order AXI-Lite/APB streams).
+
+## Iterative Debug Pattern
+
+After step 7, the agent may loop:
+
+```
+analyze_failures(group_index=0) → findings → need more signals?
+    │                                              │ yes
+    │                                              ▼
+    │                                    search_signals(new keyword)
+    │                                              │
+    │                                              ▼
+    │                                    get_signals_around_time(new signals, same time)
+    │                                              │
+    │                                              ▼
+    │                                    updated understanding
+    │
+    ├─ Root cause found → report to user
+    │
+    └─ Not enough info → analyze_failures(group_index=1) → next error group
+```
+
+## Notes
+
+### Development-only connectivity differential
+
+Do not run provider differential benchmarks as part of an ordinary failure
+debug flow. For release validation on an authorized host with a local NPI/KDB
+environment, `scripts/benchmark_connectivity_differential_soc.py` can execute a
+bounded driver/load/path corpus in separate NPI and Source Graph processes. It
+never invokes the production fallback chain and emits only identity hashes,
+counts, fixed coverage/status labels, timings, cache metrics, and RSS. A
+driver/load row also retains its numeric and fixed-label resource-bound receipt.
+A Source Graph miss is unexpected only when its own search was exhaustive;
+otherwise the result records a coverage-explained NPI-only fact. Conversely, a
+Source Graph-only fact is not automatically accepted merely because NPI is
+present. Investigate serious differences with source/elaboration evidence and,
+for a behavioral root-cause claim, the same two-hypothesis waveform discipline
+used above.
+
+This document explains the recommended debug flow and the reasoning behind it.
+It is intentionally not a second copy of the runtime `Server(instructions=...)`
+text in `server.py`.

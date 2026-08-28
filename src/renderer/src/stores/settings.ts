@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
-import type { CredentialEntry, CredentialInput, CredentialUpdateInput, SkillInfo, SkillInstallInfo, CreateSkillInput, McpServerInfo, McpToolInfo, McpConfigFile } from '@shared/types';
+import type { CredentialEntry, CredentialInput, CredentialUpdateInput, SkillInfo, SkillInstallInfo, CreateSkillInput, McpServerInfo, McpToolInfo, McpConfigFile, TraceweaveDiagnostic } from '@shared/types';
 import { DEFAULT_CONTEXT_WINDOW } from '@shared/context-management';
 
 export interface ApiModel {
@@ -26,6 +26,9 @@ interface SettingsStoreState {
   mcpToolsLoading: Record<string, boolean>;
   /** Whether an MCP reload is in progress. */
   mcpReloading: boolean;
+  /** TraceWeave built-in MCP readiness diagnostic (null = not loaded yet). */
+  traceweaveDiagnostic: TraceweaveDiagnostic | null;
+  traceweaveDiagnosticLoading: boolean;
   systemPrompt: string;
   /** AI Agent 默认系统提示词模板（只读参考，构建时嵌入）。 */
   defaultSystemPrompt: string;
@@ -56,6 +59,8 @@ interface SettingsStoreState {
   getMcpServerTools: (projectId: string, serverName: string) => Promise<void>;
   /** Reload MCP config in running sessions so new config takes effect immediately. */
   reloadMcp: (projectId: string) => Promise<void>;
+  /** Load the TraceWeave built-in MCP readiness diagnostic. */
+  loadTraceweaveDiagnostic: () => Promise<void>;
   loadSystemPrompt: (projectId: string) => Promise<void>;
   setSystemPrompt: (projectId: string, prompt: string) => Promise<void>;
   /** 加载 AI Agent 默认系统提示词模板（只读参考）。 */
@@ -76,6 +81,8 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
   mcpToolsByServer: {},
   mcpToolsLoading: {},
   mcpReloading: false,
+  traceweaveDiagnostic: null,
+  traceweaveDiagnosticLoading: false,
   systemPrompt: '',
   defaultSystemPrompt: '',
   loading: false,
@@ -277,6 +284,18 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
     } catch (err) {
       set((s) => ({ mcpToolsLoading: { ...s.mcpToolsLoading, [serverName]: false } }));
       console.error(`[settings] getMcpServerTools(${serverName}) failed:`, err);
+    }
+  },
+
+  loadTraceweaveDiagnostic: async () => {
+    if (useSettingsStore.getState().traceweaveDiagnosticLoading) return;
+    set({ traceweaveDiagnosticLoading: true });
+    try {
+      const diagnostic = await trpc.settings.traceweaveDiagnostic.query();
+      set({ traceweaveDiagnostic: diagnostic, traceweaveDiagnosticLoading: false });
+    } catch (err) {
+      set({ traceweaveDiagnosticLoading: false });
+      console.error('[settings] loadTraceweaveDiagnostic failed:', err);
     }
   },
 

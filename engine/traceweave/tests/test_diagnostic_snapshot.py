@@ -174,7 +174,10 @@ def _make_recommend_result() -> schemas.RecommendNextStepsResult:
 def _make_scan_result() -> schemas.ScanStructuralRisksResult:
     return schemas.ScanStructuralRisksResult.model_validate({
         "scan_scope": "scope1",
+        "eligible_file_count": 4,
         "files_scanned": 4,
+        "coverage_status": "complete",
+        "coverage_warnings": [],
         "total_risks": 3,
         "risks": [
             {
@@ -330,7 +333,10 @@ class TestDiagnosticSnapshot:
         assert result.structural_scan is not None
         assert result.structural_scan.available is True
         assert result.structural_scan.summary == {
+            "eligible_file_count": 4,
             "files_scanned": 4,
+            "coverage_status": "complete",
+            "coverage_warnings": [],
             "total_risks": 3,
             "high_risk_count": 2,
         }
@@ -370,7 +376,7 @@ class TestDiagnosticSnapshot:
         # everything in the default flow has run -> nothing recommended
         assert result.missing_steps is None
 
-    def test_zero_coverage_sweep_is_surfaced_but_still_recommended(self):
+    def test_scoped_zero_coverage_sweep_is_surfaced_and_retried_unscoped(self):
         _prefill_all()
         retry = {
             "tool": "sweep_handshakes",
@@ -379,6 +385,7 @@ class TestDiagnosticSnapshot:
         }
         server._result_cache["sweep_handshakes"] = schemas.HandshakeSweepResult.model_validate({
             "wave_path": "/tmp/verif/work/work_case0/top_tb.vcd",
+            "scope": "top_tb.u_dut",
             "discovered_count": 0,
             "interface_count": 0,
             "flagged_count": 0,
@@ -394,6 +401,46 @@ class TestDiagnosticSnapshot:
         assert result.protocol_health.summary["coverage_status"] == "zero_coverage"
         assert result.protocol_health.suggested_call == retry
         assert "sweep_handshakes" in [s["tool"] for s in result.missing_steps]
+
+    def test_unscoped_zero_coverage_is_not_retried_or_called_a_pass(self):
+        _prefill_all()
+        warning = "ZERO COVERAGE: no protocol interfaces checked; this is not a protocol pass."
+        server._result_cache["sweep_handshakes"] = schemas.HandshakeSweepResult.model_validate({
+            "wave_path": "/tmp/verif/work/work_case0/top_tb.vcd",
+            "discovered_count": 0,
+            "interface_count": 0,
+            "flagged_count": 0,
+            "coverage_status": "zero_coverage",
+            "coverage_warnings": [warning],
+            "suggested_next_actions": [],
+        })
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.protocol_health is not None
+        assert result.protocol_health.summary["coverage_status"] == "zero_coverage"
+        assert result.protocol_health.summary["coverage_warnings"] == [warning]
+        assert result.protocol_health.suggested_call is None
+        assert "sweep_handshakes" not in [s["tool"] for s in (result.missing_steps or [])]
+
+    def test_degraded_sweep_without_action_surfaces_warning_without_blind_retry(self):
+        _prefill_all()
+        warning = "COVERAGE DEGRADED: clock was not dumped; flagged_count=0 is not clean."
+        server._result_cache["sweep_handshakes"] = schemas.HandshakeSweepResult.model_validate({
+            "wave_path": "/tmp/verif/work/work_case0/top_tb.vcd",
+            "discovered_count": 1,
+            "interface_count": 0,
+            "flagged_count": 0,
+            "coverage_status": "degraded",
+            "coverage_warnings": [warning],
+            "suggested_next_actions": [],
+        })
+
+        result = server._handle_diagnostic_snapshot({})
+
+        assert result.protocol_health.summary["coverage_warnings"] == [warning]
+        assert result.protocol_health.suggested_call is None
+        assert "sweep_handshakes" not in [s["tool"] for s in (result.missing_steps or [])]
 
     def test_sweep_recommended_when_waveform_and_failures(self):
         _prefill_all()
@@ -471,16 +518,16 @@ class TestDiagnosticSnapshot:
 
         assert result.log_analysis.summary["auto_diff_available"] is False
 
-    def test_cascade_invalidation(self):
+    def test_path_rediscovery_invalidation_preserves_hierarchy(self):
         _prefill_all()
 
         server._invalidate_downstream("get_sim_paths")
 
         assert server._result_cache["get_sim_paths"] is not None
-        assert server._result_cache["build_tb_hierarchy"] is None
+        assert server._result_cache["build_tb_hierarchy"] is not None
         assert server._result_cache["parse_sim_log"] is None
         assert server._result_cache["recommend_failure_debug_next_steps"] is None
-        assert server._session_state["build_tb_hierarchy"] is None
+        assert server._session_state["build_tb_hierarchy"] is not None
 
     def test_cascade_from_parse_sim_log(self):
         _prefill_all()

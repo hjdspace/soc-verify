@@ -16,6 +16,83 @@ def test_snapshot_exposes_only_public_fields():
     assert operation_metrics.snapshot(metrics) == {"search_count": 3}
 
 
+def test_source_graph_metrics_accept_only_numeric_values_and_fixed_labels():
+    metrics = operation_metrics.OperationMetrics()
+    operation_metrics.set_value("source_graph_phase", "prepare", metrics)
+    operation_metrics.set_value("source_graph_build_ms", 12.25, metrics)
+    operation_metrics.set_value("source_graph_ir_bytes", 4096, metrics)
+    operation_metrics.set_value("source_graph_cache_entry_count", 2, metrics)
+    operation_metrics.set_value("source_graph_cache_eviction_count", 1, metrics)
+    operation_metrics.set_value("source_graph_cache_tier", "disk", metrics)
+    operation_metrics.set_value("source_graph_disk_validation_outcome", "hit", metrics)
+    operation_metrics.set_value("source_graph_frontend_launch_count", 0, metrics)
+    operation_metrics.set_value(
+        "source_graph_semantic_session_hit_count", 2, metrics
+    )
+    operation_metrics.set_value(
+        "source_graph_semantic_session_miss_count", 1, metrics
+    )
+    operation_metrics.set_value(
+        "source_graph_semantic_session_restart_count", 1, metrics
+    )
+    operation_metrics.set_value(
+        "source_graph_semantic_session_eviction_count", 0, metrics
+    )
+    operation_metrics.set_value("source_graph_disk_lookup_ms", 3.25, metrics)
+    operation_metrics.set_value("source_graph_disk_hit_count", 1, metrics)
+    operation_metrics.set_value("source_graph_disk_bytes_read", 8192, metrics)
+    operation_metrics.set_value("source_graph_trace_query_count", 3, metrics)
+    operation_metrics.set_value("source_graph_trace_artifact_attempt_count", 2, metrics)
+    operation_metrics.set_value("source_graph_trace_scope_expansion_count", 1, metrics)
+    operation_metrics.set_value("source_graph_trace_restart_count", 1, metrics)
+    operation_metrics.set_value("source_graph_query_ms", "top.customer.signal", metrics)
+    operation_metrics.set_value("source_graph_scope", "top.customer", metrics)
+
+    assert operation_metrics.snapshot(metrics) == {
+        "source_graph_phase": "prepare",
+        "source_graph_build_ms": 12.2,
+        "source_graph_ir_bytes": 4096,
+        "source_graph_cache_entry_count": 2,
+        "source_graph_cache_eviction_count": 1,
+        "source_graph_cache_tier": "disk",
+        "source_graph_disk_validation_outcome": "hit",
+        "source_graph_frontend_launch_count": 0,
+        "source_graph_semantic_session_hit_count": 2,
+        "source_graph_semantic_session_miss_count": 1,
+        "source_graph_semantic_session_restart_count": 1,
+        "source_graph_semantic_session_eviction_count": 0,
+        "source_graph_disk_lookup_ms": 3.2,
+        "source_graph_disk_hit_count": 1,
+        "source_graph_disk_bytes_read": 8192,
+        "source_graph_trace_query_count": 3,
+        "source_graph_trace_artifact_attempt_count": 2,
+        "source_graph_trace_scope_expansion_count": 1,
+        "source_graph_trace_restart_count": 1,
+    }
+
+    operation_metrics.set_value("source_graph_phase", "top.customer", metrics)
+    assert "source_graph_phase" not in operation_metrics.snapshot(metrics)
+    operation_metrics.set_value("source_graph_cache_tier", "top.customer", metrics)
+    operation_metrics.set_value(
+        "source_graph_disk_validation_outcome", "/private/cache/entry", metrics
+    )
+    operation_metrics.set_value(
+        "source_graph_disk_lookup_ms", "/private/cache/entry", metrics
+    )
+    snapshot = operation_metrics.snapshot(metrics)
+    assert "source_graph_cache_tier" not in snapshot
+    assert "source_graph_disk_validation_outcome" not in snapshot
+    assert "source_graph_disk_lookup_ms" not in snapshot
+
+    handoff_metrics = operation_metrics.OperationMetrics()
+    operation_metrics.set_value(
+        "source_graph_cache_tier", "handoff", handoff_metrics
+    )
+    assert operation_metrics.snapshot(handoff_metrics) == {
+        "source_graph_cache_tier": "handoff"
+    }
+
+
 def test_search_aggregate_has_count_total_and_max_only():
     metrics = operation_metrics.OperationMetrics()
     token = operation_metrics.push(metrics)
@@ -125,28 +202,37 @@ def test_native_group_metrics_are_aggregate_and_fixed_label_only(monkeypatch):
     operation_metrics.set_value("_sweep_active", True)
     monkeypatch.setattr(operation_metrics, "read_process_rss_kib", lambda: 100)
     try:
-        operation_metrics.record_sweep_native_group_begin({
-            "signal_count": 4,
-            "lookup_ns": 1_000_000,
-            "add_signal_ns": 2_000_000,
-            "load_ns": 3_000_000,
-        })
-        operation_metrics.record_sweep_native_transition({
-            "create_handle_ns": 4_000_000,
-            "seek_ns": 5_000_000,
-            "traverse_format_ns": 6_000_000,
-            "free_handle_ns": 7_000_000,
-            "transition_count": 8,
-            "output_bytes": 9,
-            "truncated": 1,
-        })
-        operation_metrics.record_sweep_native_transition({
-            "load_ns": 11_000_000,
-            "transition_count": 2,
-        }, standalone_load=True)
-        operation_metrics.record_sweep_native_group_end({
-            "unload_ns": 10_000_000,
-        })
+        operation_metrics.record_sweep_native_group_begin(
+            {
+                "signal_count": 4,
+                "lookup_ns": 1_000_000,
+                "add_signal_ns": 2_000_000,
+                "load_ns": 3_000_000,
+            }
+        )
+        operation_metrics.record_sweep_native_transition(
+            {
+                "create_handle_ns": 4_000_000,
+                "seek_ns": 5_000_000,
+                "traverse_format_ns": 6_000_000,
+                "free_handle_ns": 7_000_000,
+                "transition_count": 8,
+                "output_bytes": 9,
+                "truncated": 1,
+            }
+        )
+        operation_metrics.record_sweep_native_transition(
+            {
+                "load_ns": 11_000_000,
+                "transition_count": 2,
+            },
+            standalone_load=True,
+        )
+        operation_metrics.record_sweep_native_group_end(
+            {
+                "unload_ns": 10_000_000,
+            }
+        )
         operation_metrics.record_sweep_native_group_fallback(
             "unsupported", signal_count=5
         )

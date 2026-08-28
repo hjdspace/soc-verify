@@ -14,7 +14,9 @@ This server provides waveform-debug workflow tools, including:
 import asyncio
 from collections.abc import Callable, Sequence
 import hashlib
+import inspect
 import json
+import re
 import sys
 import os
 import threading
@@ -34,17 +36,25 @@ from config import (
     AUTO_DOWNGRADE_THRESHOLD,
     CLOCK_DETECT_SAMPLE_PS,
     DEFAULT_DETAIL_LEVEL,
-    DEFAULT_EXTRA_TRANSITIONS, DEFAULT_LOG_CONTEXT_AFTER, DEFAULT_LOG_CONTEXT_BEFORE,
+    DEFAULT_EXTRA_TRANSITIONS,
+    DEFAULT_LOG_CONTEXT_AFTER,
+    DEFAULT_LOG_CONTEXT_BEFORE,
     DEFAULT_MAX_EVENTS_PER_GROUP,
-    FIRST_GROUP_CONTEXT_AFTER, FIRST_GROUP_CONTEXT_BEFORE,
+    FIRST_GROUP_CONTEXT_AFTER,
+    FIRST_GROUP_CONTEXT_BEFORE,
     FALLBACK_WAVE_WINDOW_PS,
     MAX_CYCLES_PER_QUERY,
     MAX_WAVE_WINDOW_CYCLES,
     SIGNAL_SEARCH_MAX_KEYWORDS,
     TRANSITIONS_MAX_RETURNED,
-    DEFAULT_MAX_GROUPS, DEFAULT_WAVE_WINDOW_PS,
+    DEFAULT_MAX_GROUPS,
+    DEFAULT_WAVE_WINDOW_PS,
     DEFAULT_X_TRACE_MAX_DEPTH,
     get_fsdb_runtime_info,
+    get_bounded_bootstrap_config,
+    get_compile_source_index_config,
+    get_hierarchy_execution_config,
+    get_source_graph_execution_config,
 )
 import src.cancellation as cancellation
 import src.operation_metrics as operation_metrics
@@ -54,24 +64,70 @@ from src.vcd_parser import VCDParser
 from src.fsdb_parser import FSDBParser
 from src.fsdb_signal_index import FSDBSignalIndex
 from src.analyzer import WaveformAnalyzer
-from src.compile_log_parser import parse_compile_log
+from src.compile_log_parser import (
+    detect_simulator,
+    merge_compile_results,
+    parse_compile_log,
+)
+from src.bounded_hierarchy_bootstrap import build_bounded_connectivity_context
+from src.compile_source_runtime import (
+    CompileSourceIndexRuntime,
+    compile_source_index_key,
+)
 from src.cursor_store import CursorStore
 import src.usage_telemetry as usage_telemetry
-from src.hierarchy_handles import HandleStore, compute_handle
+from src.hierarchy_handles import (
+    HandleStore,
+    compute_handle,
+    compute_snapshot_fingerprint,
+)
+from src.source_graph_adapter import (
+    AdapterStatus,
+    build_source_graph_frontier_plan,
+    build_source_graph_initial_plan,
+    build_source_graph_path_plan,
+    build_source_graph_trace_plan,
+)
+from src.source_graph_backend import (
+    SourceGraphConnectivityBackend,
+    SourceGraphQueryBlocked,
+)
+from src.source_graph_contract import (
+    QueryOperation,
+    compute_source_graph_build_key,
+    compute_source_graph_query_key,
+)
+from src.source_graph_production import get_source_graph_runtime
+from src.source_graph_runtime import PrepareStatus
+from src.source_graph_x_trace import (
+    SourceGraphTraceConnectivityBackend,
+    SourceGraphTraceFallbackRequired,
+    SourceGraphTraceScopeExpansion,
+)
 from src.timespec import resolve_timespec
+
 # diff_value_distribution is implemented in src.verify_condition but deliberately
 # not wired up as an MCP tool until the workflow earns that extra surface area.
-from src.verify_condition import diff_first_divergence, period, inspect_handshake, _resolve_signal_path
+from src.verify_condition import (
+    diff_first_divergence,
+    period,
+    inspect_handshake,
+    _resolve_signal_path,
+)
 from src.handshake_suggest import suggest_handshakes, suggest_protocol_bundles
 from src.handshake_sweep import sweep_handshake_anomalies
 from src.window_verify import verify_window
 from src.txn_reconstruct import reconstruct_transactions
 from src.path_discovery import discover_sim_paths
 from src.problem_hints import compute_problem_hints, compute_xprop_priority_for_group
-from src.tb_hierarchy_builder import build_hierarchy, build_slim_payload
+from src.tb_hierarchy_builder import (
+    apply_npi_source_overlay,
+    build_hierarchy,
+    build_slim_payload,
+)
 from src.verdi_backend import probe_verdi_backend
 from src.structural_scanner import ALL_CATEGORIES, scan_structural_risks
-from src.x_trace import trace_x_source
+from src.x_trace import inspect_upstream_values, trace_x_source
 from src.cycle_query import (
     _compute_clock_period_ps,
     _extract_edge_times,
@@ -118,13 +174,24 @@ _log_snapshot_history: dict[tuple[str, str], list[str]] = {}
 # cache entry — see _invalidate_downstream / _clear_result_state.
 _handle_store = HandleStore()
 
+# Small process-session cache of parsed compile evidence.  It is populated
+# before the expensive source scan, so a timed-out/blocked full hierarchy can
+# still seed an explicitly requested bounded connectivity bootstrap.
+_COMPILE_CONTEXT_CACHE_MAX = 4
+_compile_context_cache: dict[str, dict] = {}
+_compile_source_index_runtime = CompileSourceIndexRuntime()
+
 # Named time anchors for the auto-debug v2 workflow (decision 5). Lifetime
 # is process-scoped — same semantics as _handle_store: no persistence,
 # server restart drops every cursor.
 _cursor_store = CursorStore()
 
 _DOWNSTREAM_DEPS: dict[str, list[str]] = {
-    "get_sim_paths": ["build_tb_hierarchy", "parse_sim_log", "sweep_handshakes", "recommend_failure_debug_next_steps"],
+    "get_sim_paths": [
+        "parse_sim_log",
+        "sweep_handshakes",
+        "recommend_failure_debug_next_steps",
+    ],
     "build_tb_hierarchy": ["recommend_failure_debug_next_steps"],
     "parse_sim_log": ["recommend_failure_debug_next_steps"],
     "scan_structural_risks": ["recommend_failure_debug_next_steps"],
@@ -156,6 +223,11 @@ _HANDLE_TOOL_NAMES = {
     "get_tb_file_detail",
     "get_tb_class_hierarchy",
     "dump_tb_section",
+}
+
+_BOUNDED_BOOTSTRAP_TOOLS = {
+    "explain_signal_driver",
+    "find_signal_loads",
 }
 
 _PREREQUISITE_REASONS: dict[str, str] = {
@@ -233,12 +305,16 @@ def _restore_build_tb_hierarchy_state_from_cache(tool_name: str, args: dict) -> 
 
     _session_state["build_tb_hierarchy"] = {
         "compile_log": provenance.get("compile_log"),
-        "simulator": provenance_simulator or hierarchy_result.project.get("simulator") or "auto",
+        "simulator": provenance_simulator
+        or hierarchy_result.project.get("simulator")
+        or "auto",
     }
     return True
 
 
-def _restore_prerequisite_state_from_cache(step: str, tool_name: str, args: dict) -> bool:
+def _restore_prerequisite_state_from_cache(
+    step: str, tool_name: str, args: dict
+) -> bool:
     if step == "get_sim_paths":
         return _restore_get_sim_paths_state_from_cache()
     if step == "build_tb_hierarchy":
@@ -252,6 +328,12 @@ def _check_prerequisites(tool_name: str, args: dict | None = None) -> dict | Non
         return None
     args = args or {}
     for step in prereqs:
+        if (
+            step == "build_tb_hierarchy"
+            and tool_name in _BOUNDED_BOOTSTRAP_TOOLS
+            and args.get("allow_bounded_bootstrap") is True
+        ):
+            continue
         if _session_state[step] is None and not _restore_prerequisite_state_from_cache(
             step, tool_name, args
         ):
@@ -324,6 +406,15 @@ def _invalidate_downstream(from_tool: str):
             _handle_store.invalidate()
 
 
+def _invalidate_hierarchy_state() -> None:
+    """Drop only the full-hierarchy lifecycle state and registered handles."""
+
+    _session_state["build_tb_hierarchy"] = None
+    _result_cache["build_tb_hierarchy"] = None
+    _result_provenance["build_tb_hierarchy"] = None
+    _handle_store.invalidate()
+
+
 def _clear_result_state():
     for key in _result_cache:
         _result_cache[key] = None
@@ -332,6 +423,7 @@ def _clear_result_state():
     _log_snapshots.clear()
     _log_snapshot_history.clear()
     _handle_store.invalidate()
+    _compile_context_cache.clear()
     _cursor_store.clear()
 
 
@@ -341,28 +433,84 @@ def _session_identity(sim_result: schemas.SimPathsResult | dict | None) -> tuple
     if isinstance(sim_result, schemas.SimPathsResult):
         verif_root = sim_result.verif_root
         case_name = sim_result.case_name
+        case_dir = sim_result.case_dir
+        simulator = sim_result.simulator
         compile_logs = [entry.model_dump() for entry in sim_result.compile_logs]
     else:
         verif_root = sim_result.get("verif_root")
         case_name = sim_result.get("case_name")
+        case_dir = sim_result.get("case_dir")
+        simulator = sim_result.get("simulator")
         compile_logs = list(sim_result.get("compile_logs", []))
 
-    compile_log = None
-    for entry in compile_logs:
-        if entry.get("phase") == "elaborate":
-            compile_log = entry
-            break
-    if compile_log is None and compile_logs:
-        compile_log = compile_logs[0]
-    if compile_log is None:
-        compile_sig = None
-    else:
-        compile_sig = (
-            os.path.realpath(compile_log.get("path", "")) if compile_log.get("path") else None,
-            compile_log.get("size"),
-            compile_log.get("mtime"),
+    compile_signatures = tuple(
+        (
+            os.path.realpath(entry.get("path", "")) if entry.get("path") else None,
+            entry.get("phase"),
+            entry.get("size"),
+            entry.get("mtime"),
         )
-    return verif_root, case_name, compile_sig
+        for entry in compile_logs
+        if isinstance(entry, dict)
+    )
+    return (
+        os.path.realpath(verif_root) if verif_root else None,
+        case_name,
+        os.path.realpath(case_dir) if case_dir else None,
+        simulator,
+        compile_signatures,
+    )
+
+
+def _hierarchy_snapshot_is_current() -> bool:
+    """Prove that the cached hierarchy still names the same ordered log set."""
+
+    for source in (
+        _session_state.get("build_tb_hierarchy"),
+        _result_provenance.get("build_tb_hierarchy"),
+    ):
+        if not isinstance(source, dict):
+            continue
+        compile_log = source.get("compile_log")
+        simulator = source.get("simulator")
+        stored_snapshot = source.get("hierarchy_snapshot_sha256")
+        supplements = source.get("supplementary_compile_logs") or ()
+        if (
+            not isinstance(compile_log, str)
+            or not compile_log
+            or not isinstance(simulator, str)
+            or not simulator
+            or not isinstance(stored_snapshot, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", stored_snapshot)
+            or not isinstance(supplements, (list, tuple))
+            or any(not isinstance(path, str) or not path for path in supplements)
+        ):
+            continue
+        current_snapshot = compute_snapshot_fingerprint(
+            compile_log,
+            simulator,
+            supplementary_compile_logs=supplements,
+        )
+        if current_snapshot != stored_snapshot:
+            continue
+        handle = source.get("hierarchy_handle")
+        if not isinstance(handle, str) or not handle:
+            handle = compute_handle(
+                compile_log,
+                simulator,
+                supplementary_compile_logs=supplements,
+            )
+        full = _handle_store.resolve(handle)
+        if full is not None:
+            full_snapshot = full.get("_hierarchy_snapshot_sha256")
+            if (
+                isinstance(full_snapshot, str)
+                and re.fullmatch(r"[0-9a-f]{64}", full_snapshot)
+                and full_snapshot != current_snapshot
+            ):
+                continue
+        return True
+    return False
 
 
 def _safe_probe_backend(compile_log: str, simulator: str) -> dict:
@@ -387,6 +535,9 @@ def _safe_probe_backend(compile_log: str, simulator: str) -> dict:
         }
 
 
+_NPI_SKIPPED_BY_POLICY = "npi_skipped_by_policy"
+
+
 def _resolve_session_simulator(args: dict) -> str:
     explicit = args.get("simulator")
     if explicit and explicit != "auto":
@@ -399,7 +550,9 @@ def _resolve_session_simulator(args: dict) -> str:
     if (
         hierarchy_provenance
         and hierarchy_provenance.get("simulator")
-        and _same_realpath(hierarchy_provenance.get("compile_log"), requested_compile_log)
+        and _same_realpath(
+            hierarchy_provenance.get("compile_log"), requested_compile_log
+        )
     ):
         return hierarchy_provenance["simulator"]
     hierarchy_result = _result_cache.get("build_tb_hierarchy")
@@ -407,10 +560,460 @@ def _resolve_session_simulator(args: dict) -> str:
         hierarchy_result is not None
         and hierarchy_result.project.get("simulator")
         and hierarchy_provenance is not None
-        and _same_realpath(hierarchy_provenance.get("compile_log"), requested_compile_log)
+        and _same_realpath(
+            hierarchy_provenance.get("compile_log"), requested_compile_log
+        )
     ):
         return hierarchy_result.project["simulator"]
     return "auto"
+
+
+def _validated_supplementary_compile_logs(args: dict) -> list[str]:
+    raw_supplements = args.get("supplementary_compile_logs") or []
+    if (
+        not isinstance(raw_supplements, list)
+        or len(raw_supplements) > 16
+        or any(
+            not isinstance(path, str) or not path.strip()
+            for path in raw_supplements
+        )
+    ):
+        raise ValueError("supplementary_compile_logs must contain 0..16 paths")
+    return [path.strip() for path in raw_supplements]
+
+
+def _parse_merged_compile_context(
+    *,
+    compile_log: str,
+    simulator: str,
+    supplementary_compile_logs: list[str],
+) -> tuple[dict, str]:
+    """Parse primary/supplementary evidence without scanning source bodies."""
+
+    primary_result = parse_compile_log(compile_log, simulator)
+    context_simulator = str(primary_result.get("simulator") or simulator or "auto")
+    if not supplementary_compile_logs:
+        return primary_result, context_simulator
+    supplementary_results = []
+    for path in supplementary_compile_logs:
+        cancellation.check_cancelled()
+        detected = detect_simulator(path)
+        parse_simulator = (
+            detected if detected in {"vcs", "xcelium"} else context_simulator
+        )
+        supplementary_results.append(parse_compile_log(path, parse_simulator))
+    return (
+        merge_compile_results(
+            primary_result,
+            supplementary_results,
+            primary_log=compile_log,
+            supplementary_logs=supplementary_compile_logs,
+        ),
+        context_simulator,
+    )
+
+
+def _cache_compile_context(
+    *,
+    compile_log: str,
+    simulator: str,
+    supplementary_compile_logs: list[str],
+    snapshot_sha256: str,
+    compile_result: dict,
+) -> None:
+    _compile_context_cache[snapshot_sha256] = {
+        "compile_log": os.path.realpath(compile_log),
+        "simulator": simulator,
+        "supplementary_compile_logs": [
+            os.path.realpath(path) for path in supplementary_compile_logs
+        ],
+        "snapshot_sha256": snapshot_sha256,
+        "compile_result": compile_result,
+    }
+    while len(_compile_context_cache) > _COMPILE_CONTEXT_CACHE_MAX:
+        _compile_context_cache.pop(next(iter(_compile_context_cache)))
+
+
+def _resolve_cached_compile_context(
+    *,
+    compile_log: str,
+    simulator: str,
+    supplementary_compile_logs: list[str],
+) -> dict | None:
+    primary = os.path.realpath(compile_log)
+    supplements = [os.path.realpath(path) for path in supplementary_compile_logs]
+    # Newest wins when the caller omits supplements after a prior full-build
+    # attempt established their exact identity.
+    for record in reversed(tuple(_compile_context_cache.values())):
+        if record.get("compile_log") != primary:
+            continue
+        record_simulator = str(record.get("simulator") or "auto")
+        if simulator != "auto" and record_simulator not in {simulator, "auto"}:
+            continue
+        if supplements and record.get("supplementary_compile_logs") != supplements:
+            continue
+        expected = compute_snapshot_fingerprint(
+            compile_log,
+            record_simulator if simulator == "auto" else simulator,
+            supplementary_compile_logs=(
+                supplementary_compile_logs
+                if supplements
+                else record.get("supplementary_compile_logs") or ()
+            ),
+        )
+        if expected != record.get("snapshot_sha256"):
+            continue
+        return record
+    return None
+
+
+def _hierarchy_source_preflight(
+    compile_result: dict,
+    *,
+    max_source_bytes: int,
+) -> tuple[dict[str, int], bool]:
+    files = compile_result.get("files")
+    user_files = files.get("user", []) if isinstance(files, dict) else []
+    requested = len(user_files) if isinstance(user_files, list) else 0
+    readable = 0
+    missing = 0
+    total_bytes = 0
+    largest_bytes = 0
+    if isinstance(user_files, list):
+        for item in user_files:
+            cancellation.check_cancelled()
+            path = item.get("path") if isinstance(item, dict) else None
+            if not isinstance(path, str) or not path:
+                missing += 1
+                continue
+            try:
+                size = os.stat(path).st_size
+            except OSError:
+                missing += 1
+                continue
+            readable += 1
+            total_bytes += size
+            largest_bytes = max(largest_bytes, size)
+            if max_source_bytes and total_bytes > max_source_bytes:
+                return (
+                    {
+                        "source_file_count_requested": requested,
+                        "source_file_count_readable": readable,
+                        "source_file_count_missing": missing,
+                        "source_bytes_planned": total_bytes,
+                        "largest_source_file_bytes": largest_bytes,
+                        "source_byte_limit": max_source_bytes,
+                    },
+                    False,
+                )
+    return (
+        {
+            "source_file_count_requested": requested,
+            "source_file_count_readable": readable,
+            "source_file_count_missing": missing,
+            "source_bytes_planned": total_bytes,
+            "largest_source_file_bytes": largest_bytes,
+            "source_byte_limit": max_source_bytes,
+        },
+        True,
+    )
+
+
+def _blocked_hierarchy_result(
+    *,
+    code: str,
+    stage: str,
+    metrics: dict | None = None,
+    project: dict | None = None,
+) -> schemas.BuildTbHierarchyResult:
+    return schemas.BuildTbHierarchyResult.model_validate(
+        {
+            "build_status": "blocked",
+            "project": project or {},
+            "build_metrics": {"status": "blocked", **(metrics or {})},
+            "blocker": {"code": code, "stage": stage},
+        }
+    )
+
+
+def _bootstrap_blocked_receipt(
+    *,
+    code: str,
+    stage: str,
+    wall_time_ms: float = 0.0,
+) -> dict:
+    return {
+        "used": True,
+        "status": "blocked",
+        "scope": "single_endpoint",
+        "ancestor_chain_proved": False,
+        "coverage_status": "inconclusive",
+        "objective_exclusions": [
+            "bootstrap_compile_inputs_scoped",
+            "bootstrap_hierarchy_scoped",
+        ],
+        "metrics": {"wall_time_ms": round(wall_time_ms, 3)},
+        "blocker": {"code": code, "stage": stage},
+    }
+
+
+async def _resolve_connectivity_hierarchy_context(
+    *,
+    args: dict,
+    simulator: str,
+) -> tuple[dict | None, str, dict | None, str | None]:
+    """Prefer a full hierarchy, then optionally prove a bounded one."""
+
+    hierarchy_result, snapshot = _resolve_hierarchy_context(
+        args["compile_log"], simulator
+    )
+    if hierarchy_result is not None or args.get("allow_bounded_bootstrap") is not True:
+        return hierarchy_result, snapshot, None, None
+
+    started = time.perf_counter()
+    config = get_bounded_bootstrap_config()
+    if not config.valid:
+        code = config.error_code or "bootstrap_config_invalid"
+        return (
+            None,
+            snapshot,
+            _bootstrap_blocked_receipt(
+                code=code,
+                stage="execution_config",
+            ),
+            code,
+        )
+    try:
+        supplementary_logs = _validated_supplementary_compile_logs(args)
+    except ValueError:
+        code = "bootstrap_supplementary_logs_invalid"
+        return (
+            None,
+            snapshot,
+            _bootstrap_blocked_receipt(code=code, stage="compile_log_parse"),
+            code,
+        )
+
+    cached = _resolve_cached_compile_context(
+        compile_log=args["compile_log"],
+        simulator=simulator,
+        supplementary_compile_logs=supplementary_logs,
+    )
+    if cached is not None:
+        compile_result = cached["compile_result"]
+        context_simulator = str(cached.get("simulator") or simulator)
+        snapshot = str(cached["snapshot_sha256"])
+    else:
+        try:
+            with anyio.fail_after(config.timeout_sec):
+                compile_result, context_simulator = await _run_in_cancellable_thread(
+                    lambda: _parse_merged_compile_context(
+                        compile_log=args["compile_log"],
+                        simulator=simulator,
+                        supplementary_compile_logs=supplementary_logs,
+                    )
+                )
+        except TimeoutError:
+            code = "bootstrap_timeout"
+            elapsed = (time.perf_counter() - started) * 1000.0
+            return (
+                None,
+                snapshot,
+                _bootstrap_blocked_receipt(
+                    code=code,
+                    stage="compile_log_parse",
+                    wall_time_ms=elapsed,
+                ),
+                code,
+            )
+        except (OSError, ValueError):
+            code = "bootstrap_compile_log_parse_failed"
+            elapsed = (time.perf_counter() - started) * 1000.0
+            return (
+                None,
+                snapshot,
+                _bootstrap_blocked_receipt(
+                    code=code,
+                    stage="compile_log_parse",
+                    wall_time_ms=elapsed,
+                ),
+                code,
+            )
+        snapshot = compute_snapshot_fingerprint(
+            args["compile_log"],
+            context_simulator,
+            supplementary_compile_logs=supplementary_logs,
+        )
+        _cache_compile_context(
+            compile_log=args["compile_log"],
+            simulator=context_simulator,
+            supplementary_compile_logs=supplementary_logs,
+            snapshot_sha256=snapshot,
+            compile_result=compile_result,
+        )
+
+    elapsed_sec = time.perf_counter() - started
+    remaining = config.timeout_sec - elapsed_sec
+    if remaining <= 0:
+        code = "bootstrap_timeout"
+        return (
+            None,
+            snapshot,
+            _bootstrap_blocked_receipt(
+                code=code,
+                stage="target_scope",
+                wall_time_ms=elapsed_sec * 1000.0,
+            ),
+            code,
+        )
+    source_index_config = get_compile_source_index_config()
+    source_index_key, source_index_paths = compile_source_index_key(
+        compile_snapshot_sha256=snapshot,
+        compile_result=compile_result,
+    )
+    source_index_lease = None
+    source_index_disposition = (
+        source_index_config.error_code
+        or ("disabled" if not source_index_config.enabled else None)
+    )
+    try:
+        with anyio.fail_after(remaining):
+            if source_index_config.valid and source_index_config.enabled:
+                source_index_lease = await _compile_source_index_runtime.acquire(
+                    key=source_index_key,
+                    paths=source_index_paths,
+                    max_bytes=source_index_config.max_bytes,
+                    max_files=source_index_config.max_files,
+                    create_if_missing=False,
+                )
+                if source_index_lease is None:
+                    source_index_disposition = "miss_no_active_session"
+            try:
+                result = await _run_in_cancellable_thread(
+                    lambda: build_bounded_connectivity_context(
+                        compile_result=compile_result,
+                        hierarchy_snapshot_sha256=snapshot,
+                        signal_path=args["signal_path"],
+                        top_hint=args.get("top_hint"),
+                        config=config,
+                        source_reader=(
+                            source_index_lease.index.read
+                            if source_index_lease is not None
+                            else None
+                        ),
+                    )
+                )
+                result.receipt["source_index"] = {
+                    **(
+                        source_index_lease.index.metrics_snapshot()
+                        if source_index_lease is not None
+                        else {}
+                    ),
+                    "compile_source_index_disposition": (
+                        source_index_lease.disposition
+                        if source_index_lease is not None
+                        else source_index_disposition
+                    ),
+                }
+            finally:
+                if source_index_lease is not None:
+                    await source_index_lease.release()
+    except TimeoutError:
+        code = "bootstrap_timeout"
+        elapsed = (time.perf_counter() - started) * 1000.0
+        return (
+            None,
+            snapshot,
+            _bootstrap_blocked_receipt(
+                code=code,
+                stage="target_scope",
+                wall_time_ms=elapsed,
+            ),
+            code,
+        )
+    if result.status != "ready" or result.hierarchy_result is None:
+        blocker = result.receipt.get("blocker") or {}
+        return (
+            None,
+            snapshot,
+            result.receipt,
+            str(blocker.get("code") or "bootstrap_context_blocked"),
+        )
+    return result.hierarchy_result, snapshot, result.receipt, None
+
+
+def _resolve_hierarchy_context(
+    compile_log: str,
+    simulator: str,
+) -> tuple[dict | None, str]:
+    """Resolve the active merged hierarchy while preserving one-log callers."""
+
+    exact_candidates: list[tuple[str, str]] = []
+    recomputed_candidates: list[tuple[str, str]] = []
+    for source in (
+        _session_state.get("build_tb_hierarchy"),
+        _result_provenance.get("build_tb_hierarchy"),
+    ):
+        if not isinstance(source, dict):
+            continue
+        if not _same_realpath(source.get("compile_log"), compile_log):
+            continue
+        source_simulator = source.get("simulator")
+        if source_simulator not in {None, "auto", simulator}:
+            continue
+        resolved_simulator = (
+            simulator
+            if source_simulator in {None, "auto"}
+            else str(source_simulator)
+        )
+        raw_supplements = source.get("supplementary_compile_logs") or ()
+        supplements = (
+            tuple(raw_supplements)
+            if isinstance(raw_supplements, (list, tuple))
+            and all(isinstance(path, str) and path for path in raw_supplements)
+            else ()
+        )
+        expected_snapshot = compute_snapshot_fingerprint(
+            compile_log,
+            resolved_simulator,
+            supplementary_compile_logs=supplements,
+        )
+        handle = source.get("hierarchy_handle")
+        if isinstance(handle, str) and handle:
+            exact_candidates.append((handle, expected_snapshot))
+        if supplements:
+            recomputed_candidates.append(
+                (
+                    compute_handle(
+                        compile_log,
+                        resolved_simulator,
+                        supplementary_compile_logs=supplements,
+                    ),
+                    expected_snapshot,
+                )
+            )
+    bare_snapshot = compute_snapshot_fingerprint(compile_log, simulator)
+    candidates = [
+        *exact_candidates,
+        *recomputed_candidates,
+        (compute_handle(compile_log, simulator), bare_snapshot),
+    ]
+
+    for handle, expected_snapshot in dict.fromkeys(candidates):
+        hierarchy_result = _handle_store.resolve(handle)
+        if hierarchy_result is None:
+            continue
+        snapshot = hierarchy_result.get("_hierarchy_snapshot_sha256")
+        if isinstance(snapshot, str) and re.fullmatch(r"[0-9a-f]{64}", snapshot):
+            if snapshot != expected_snapshot:
+                continue
+        else:
+            snapshot = expected_snapshot
+        return hierarchy_result, snapshot
+    fallback_snapshot = (
+        recomputed_candidates[0][1] if recomputed_candidates else bare_snapshot
+    )
+    return None, fallback_snapshot
 
 
 def _log_stat_info(log_path: str) -> dict:
@@ -504,7 +1107,9 @@ def _snapshot_events(snapshot_id: str, simulator: str) -> tuple[list[dict], dict
     }
 
 
-def _parse_log_events_for_diff(log_path: str, simulator: str) -> tuple[list[dict], dict]:
+def _parse_log_events_for_diff(
+    log_path: str, simulator: str
+) -> tuple[list[dict], dict]:
     stat_info = _log_stat_info(log_path)
     events = SimLogParser(log_path, simulator).parse_failure_events()
     snapshot_id = _capture_log_snapshot(log_path, simulator, events, stat_info)
@@ -515,13 +1120,19 @@ def _parse_log_events_for_diff(log_path: str, simulator: str) -> tuple[list[dict
     }
 
 
-def _resolve_base_events_for_diff(args: dict, simulator: str) -> tuple[list[dict], dict]:
+def _resolve_base_events_for_diff(
+    args: dict, simulator: str
+) -> tuple[list[dict], dict]:
     if args.get("base_snapshot_id"):
         return _snapshot_events(args["base_snapshot_id"], simulator)
 
     base_log_path = args.get("base_log_path")
     new_log_path = args.get("new_log_path")
-    if base_log_path and new_log_path and os.path.realpath(base_log_path) == os.path.realpath(new_log_path):
+    if (
+        base_log_path
+        and new_log_path
+        and os.path.realpath(base_log_path) == os.path.realpath(new_log_path)
+    ):
         previous = _find_previous_log_snapshot(new_log_path, simulator)
         if previous is not None:
             return list(previous["all_failure_events"]), {
@@ -547,7 +1158,9 @@ def _resolve_base_events_for_diff(args: dict, simulator: str) -> tuple[list[dict
             "TraceWeave can preserve the baseline even if the simulator overwrites the log."
         )
 
-    raise ValueError("diff_sim_failure_results requires base_snapshot_id or base_log_path, or a new_log_path with a previous parsed snapshot.")
+    raise ValueError(
+        "diff_sim_failure_results requires base_snapshot_id or base_log_path, or a new_log_path with a previous parsed snapshot."
+    )
 
 
 def _resolve_new_events_for_diff(args: dict, simulator: str) -> tuple[list[dict], dict]:
@@ -559,7 +1172,9 @@ def _resolve_new_events_for_diff(args: dict, simulator: str) -> tuple[list[dict]
         parse_cache = _result_provenance.get("parse_sim_log")
         if parse_cache and parse_cache.get("log_snapshot_id"):
             return _snapshot_events(parse_cache["log_snapshot_id"], simulator)
-    raise ValueError("diff_sim_failure_results requires new_snapshot_id or new_log_path.")
+    raise ValueError(
+        "diff_sim_failure_results requires new_snapshot_id or new_log_path."
+    )
 
 
 def _diff_source(base_meta: dict, new_meta: dict) -> str:
@@ -582,6 +1197,11 @@ def _update_session_state(tool_name: str, args: dict, result: dict):
             _clear_result_state()
         else:
             _invalidate_downstream(tool_name)
+            if (
+                _session_state.get("build_tb_hierarchy") is not None
+                and not _hierarchy_snapshot_is_current()
+            ):
+                _invalidate_hierarchy_state()
         compile_log = None
         for entry in result.get("compile_logs", []):
             if entry.get("phase") == "elaborate":
@@ -604,7 +1224,15 @@ def _update_session_state(tool_name: str, args: dict, result: dict):
         _invalidate_downstream(tool_name)
         _session_state["build_tb_hierarchy"] = {
             "compile_log": args.get("compile_log"),
-            "simulator": args.get("simulator") or result.get("project", {}).get("simulator", "auto"),
+            "simulator": args.get("simulator")
+            or result.get("project", {}).get("simulator", "auto"),
+            "hierarchy_handle": args.get("_hierarchy_handle"),
+            "hierarchy_snapshot_sha256": args.get(
+                "_hierarchy_snapshot_sha256"
+            ),
+            "supplementary_compile_logs": list(
+                args.get("supplementary_compile_logs") or ()
+            ),
         }
 
 
@@ -629,13 +1257,16 @@ Waveform debug workflow:
    - If discovery_mode is unknown, do not guess deeper paths; follow returned hints.
    - If case_name is unknown in root_dir mode, omit it to get available_cases first.
    - Inform the user early when hints show missing logs, empty logs, or missing waves.
-   - Prefer compile_logs entries with phase="elaborate" for build_tb_hierarchy.
+   - Prefer phase="elaborate" for a complete single-log build. For split VCS
+     source-compile/elaboration logs, use the source-compile log as primary and
+     pass the complementary logs in supplementary_compile_logs build order.
    - If fsdb_runtime.enabled is false, prefer .vcd entries in wave_files over .fsdb.
 
 2. MUST call build_tb_hierarchy AND scan_structural_risks before analyzing failures.
    Both independently parse the same compile_log — call them in parallel.
    - build_tb_hierarchy: builds testbench hierarchy for source-aware analysis.
-     Use the elaborate-phase compile_log and simulator from step 1.
+     Use the selected primary compile_log and simulator from step 1. In a split
+     VCS flow, pass complementary logs only through supplementary_compile_logs.
      Returns a slim payload (project, stats, tree_skeleton truncated to depth 2,
      interfaces, ambiguous_basenames, hierarchy_handle). The full file list,
      full component_tree, class hierarchy, and raw compile_result are NOT in
@@ -688,7 +1319,10 @@ Waveform debug workflow:
    - Always interpret flagged_count together with coverage_status:
      zero_coverage means no protocol interfaces were checked and is NOT a pass;
      truncated/degraded means partial coverage, so flagged_count=0 is not a
-     clean-protocol conclusion. Follow suggested_next_actions when present.
+     clean-protocol conclusion. Follow a suggested_next_action only when it
+     changes scope/window/edge/cap; never replay an identical sweep. An unscoped
+     zero-coverage result with no action is terminal for workflow routing, not
+     a protocol pass.
    - Inspect the returned fact table: interfaces flagged ended_in_stall /
      payload_hold_violation / premature_valid_deassertion are the first to
      investigate. On an AHB write-data failure, a master interface holding valid
@@ -710,8 +1344,10 @@ Waveform debug workflow:
 
 8. Use deep-dive tools when needed:
    - analyze_failure_event for failure-centric instance/source correlation
-   - explain_signal_driver when a suspicious waveform signal needs RTL driver lookup
-   - trace_x_source when a signal shows X/Z values; if it stops at instance port connections, inspect listed bit-ranges for gaps or overlaps
+   - explain_signal_driver when a suspicious waveform signal needs RTL driver lookup;
+     read traversal.search_exhaustive before treating returned facts as the complete
+     or exclusive driver set. A bounded partial positive is evidence, not a negative.
+   - trace_x_source when a signal shows X/Z values; if it stops at instance port connections, inspect listed bit-ranges for gaps or overlaps; driver_traversal_incomplete preserves positive candidates but is not an exclusive root-cause verdict
    - get_signals_by_cycle for clock-aligned cycle-level signal value tables; ideal for state machines, pipelines, and algorithm core round-by-round comparison
    - get_error_context for other groups
    - get_signal_transitions for longer history
@@ -727,7 +1363,9 @@ app = Server("traceweave", instructions=SERVER_INSTRUCTIONS)
 
 # Global parser cache.
 _fsdb_index_cache: dict[str, tuple[tuple[int, int], FSDBSignalIndex]] = {}
-_parser_cache: dict[str, tuple[tuple[int, int], object]] = {}          # wave_path → ((mtime_ns, size), parser)
+_parser_cache: dict[
+    str, tuple[tuple[int, int], object]
+] = {}  # wave_path → ((mtime_ns, size), parser)
 
 
 def _get_wave_signature(wave_path: str) -> tuple[int, int]:
@@ -828,9 +1466,9 @@ def _suggest_signal_paths(parser, path: str, limit: int = 5) -> list[str]:
 
 _FSDB_WAVE_LOCK = threading.Lock()
 _FSDB_ACTIVE_GUARD = threading.Lock()
-_FSDB_ACTIVE: tuple[
-    threading.Event, int, operation_metrics.OperationMetrics | None
-] | None = None
+_FSDB_ACTIVE: (
+    tuple[threading.Event, int, operation_metrics.OperationMetrics | None] | None
+) = None
 _vcd_wave_locks: dict[str, threading.Lock] = {}
 _vcd_wave_locks_guard = threading.Lock()
 _WAVE_LOCK_POLL_S = 0.2
@@ -983,9 +1621,10 @@ async def _run_in_cancellable_thread(fn: Callable):
     """Run non-wave blocking work without starving the MCP event loop.
 
     This is the lock-free counterpart to ``_run_in_wave_thread``. It is used
-    by opt-in LSF connectivity calls: cancellation arms the same cooperative
-    event consumed by ``src.npi_lsf`` while no waveform parser lock is taken.
-    Local NPI behavior remains synchronous and unchanged.
+    by source/structural scans, opt-in LSF connectivity calls, Source Graph
+    adapter/query work, and Legacy Static scans: cancellation arms the same
+    cooperative event while no waveform parser lock is taken. Local NPI
+    behavior remains synchronous and unchanged.
     """
 
     cancel_event = threading.Event()
@@ -1011,6 +1650,3061 @@ async def _call_connectivity_backend(backend, fn: Callable):
     return fn()
 
 
+_NPI_FALLBACK_REASONS = {
+    "kdb_or_top_missing",
+    "npi_degraded_kdb_disabled",
+    "npi_degraded_result_inconclusive",
+    "npi_load_failed",
+    "npi_lsf_npi_unavailable",
+    "npi_lsf_timeout",
+    "npi_lsf_worker_failed",
+}
+_SOURCE_GRAPH_PREPARE_REASONS = {
+    PrepareStatus.DEPENDENCY_BLOCKED: "source_graph_dependency_blocked",
+    PrepareStatus.BUILD_FAILED: "source_graph_build_failed",
+    PrepareStatus.WORKER_CRASH: "source_graph_worker_crash",
+    PrepareStatus.TIMED_OUT: "source_graph_timed_out",
+    PrepareStatus.INVALID_RESPONSE: "source_graph_invalid_response",
+}
+_SOURCE_GRAPH_NON_EXPANDABLE_QUERY_GAPS = frozenset(
+    {
+        "query_depth_limit",
+        "query_state_limit",
+        "query_edge_limit",
+        "query_match_limit",
+        "query_frontier_limit",
+    }
+)
+
+
+def _query_gap_blocks_scope_expansion(gap_codes: set[str]) -> bool:
+    return bool(gap_codes & _SOURCE_GRAPH_NON_EXPANDABLE_QUERY_GAPS)
+
+
+def _sanitize_npi_fallback_reason(value: object) -> str:
+    reason = str(value or "")
+    if reason in _NPI_FALLBACK_REASONS:
+        return reason
+    if reason.startswith("exception:"):
+        return "npi_query_failed"
+    return "npi_result_not_usable"
+
+
+def _strip_connectivity_internal_receipts(result: dict) -> dict:
+    clean = dict(result)
+    for key in (
+        "_connectivity_fallback_deferred",
+        "_npi_call_error",
+        "_npi_execution_status",
+        "_npi_fallback_reason",
+        "_source_graph_query_receipt",
+    ):
+        clean.pop(key, None)
+    return clean
+
+
+def _single_backend_provenance(
+    result: dict,
+    *,
+    operation: str,
+    expected: str,
+) -> bool:
+    explicit: list[object] = []
+    if operation == "driver":
+        if result.get("backend") is not None:
+            explicit.append(result.get("backend"))
+        chain = result.get("driver_chain")
+        if isinstance(chain, list):
+            explicit.extend(
+                hop.get("backend")
+                for hop in chain
+                if isinstance(hop, dict) and hop.get("backend") is not None
+            )
+    else:
+        if result.get("backend") is not None:
+            explicit.append(result.get("backend"))
+        loads = result.get("loads")
+        if isinstance(loads, list):
+            explicit.extend(
+                hop.get("backend")
+                for hop in loads
+                if isinstance(hop, dict) and hop.get("backend") is not None
+            )
+    return all(item == expected for item in explicit)
+
+
+def _npi_result_usable(
+    result: dict,
+    operation: str,
+    *,
+    kdb_status: dict | None = None,
+) -> bool:
+    if result.get("_npi_fallback_reason") or result.get("_npi_call_error"):
+        return False
+    if not _single_backend_provenance(
+        result,
+        operation=operation,
+        expected="verdi_npi",
+    ):
+        return False
+    degraded = _npi_kdb_degraded(kdb_status=kdb_status)
+    if operation == "driver":
+        positive_driver = _npi_driver_result_has_positive_fact(result)
+        if degraded:
+            return positive_driver
+        return positive_driver or result.get("driver_status") == "testbench_driven"
+    if degraded:
+        # A returned load is positive evidence.  An empty list is an exhaustive
+        # negative claim, which a partial elaboration cannot support.
+        return bool(result.get("loads")) and result.get("completeness") in {
+            "exact",
+            "approximate",
+        }
+    if result.get("loads"):
+        return result.get("completeness") in {"exact", "approximate"} and result.get(
+            "stopped_at"
+        ) in {
+            None,
+            "npi_load_output_limit",
+            "npi_load_work_limit",
+            "npi_boundary_recovery_failed",
+        }
+    return result.get("completeness") == "exact" and result.get("stopped_at") in {
+        None,
+        "no_npi_loads",
+    }
+
+
+def _npi_driver_result_has_positive_fact(result: dict) -> bool:
+    status = result.get("driver_status")
+    if status == "resolved":
+        return True
+    if status != "partial" or result.get("driver_kind") is None:
+        return False
+    traversal = result.get("traversal")
+    returned = (
+        traversal.get("returned_fact_count")
+        if isinstance(traversal, dict)
+        else None
+    )
+    return bool(
+        isinstance(returned, int)
+        and not isinstance(returned, bool)
+        and returned > 0
+    )
+
+
+def _npi_result_coverage_partial(
+    result: dict,
+    *,
+    operation: str,
+    kdb_status: dict | None,
+) -> bool:
+    if _npi_kdb_degraded(kdb_status=kdb_status):
+        return True
+    if operation == "driver":
+        traversal = result.get("traversal")
+        return bool(
+            isinstance(traversal, dict)
+            and traversal.get("search_exhaustive") is False
+        )
+    enumeration = result.get("enumeration")
+    return bool(
+        isinstance(enumeration, dict)
+        and enumeration.get("search_exhaustive") is False
+    )
+
+
+def _npi_kdb_status(
+    backend: object | None,
+) -> dict | None:
+    receipt = getattr(backend, "kdb_status", None)
+    if not isinstance(receipt, dict):
+        return None
+    quality = receipt.get("load_quality")
+    if quality not in {"clean", "degraded"}:
+        return None
+    clean: dict[str, object] = {"load_quality": quality}
+    error_count = receipt.get("error_count")
+    if isinstance(error_count, int) and error_count >= 0:
+        clean["error_count"] = error_count
+    error_log = receipt.get("error_log")
+    if isinstance(error_log, str) and error_log:
+        clean["error_log"] = error_log
+    return clean
+
+
+def _npi_kdb_degraded(
+    *,
+    kdb_status: dict | None = None,
+) -> bool:
+    return kdb_status is not None and kdb_status.get("load_quality") == "degraded"
+
+
+def _backend_attempt(
+    backend: str,
+    status: str,
+    *,
+    reason: str | None = None,
+    coverage_status: str | None = None,
+) -> dict:
+    result = {"backend": backend, "status": status}
+    if reason is not None:
+        result["reason"] = reason
+    if coverage_status is not None:
+        result["coverage_status"] = coverage_status
+    return result
+
+
+def _source_graph_metrics_dict(
+    *,
+    adapter_wall_ms: float | None = None,
+    prepare_metrics=None,
+    query_wall_ms: float | None = None,
+) -> dict:
+    result: dict[str, int | float] = {}
+    if adapter_wall_ms is not None:
+        result["adapter_wall_ms"] = max(adapter_wall_ms, 0.0)
+    if prepare_metrics is not None:
+        result.update(
+            {
+                "prepare_total_wall_ms": prepare_metrics.total_wall_ms,
+                "admission_wait_ms": prepare_metrics.admission_wait_ms,
+                "build_wall_ms": prepare_metrics.build_wall_ms,
+                "load_wall_ms": prepare_metrics.load_wall_ms,
+                "actual_build_count": prepare_metrics.actual_build_count,
+                "coalesced_waiter_count": prepare_metrics.coalesced_waiter_count,
+                "ir_bytes": prepare_metrics.ir_bytes,
+                "cache_bytes": prepare_metrics.cache_bytes,
+                "cache_entry_count": prepare_metrics.cache_entry_count,
+                "cache_peak_entry_count": prepare_metrics.cache_peak_entry_count,
+                "cache_peak_bytes": prepare_metrics.cache_peak_bytes,
+                "cache_eviction_count": prepare_metrics.cache_eviction_count,
+                "cache_oversize_bypass_count": (
+                    prepare_metrics.cache_oversize_bypass_count
+                ),
+            }
+        )
+        if prepare_metrics.disk_validation_outcome != "disabled":
+            result.update(
+                {
+                    "frontend_launch_count": prepare_metrics.frontend_launch_count,
+                    "disk_lookup_wall_ms": prepare_metrics.disk_lookup_wall_ms,
+                    "disk_read_wall_ms": prepare_metrics.disk_read_wall_ms,
+                    "disk_validate_wall_ms": prepare_metrics.disk_validate_wall_ms,
+                    "disk_publish_wall_ms": prepare_metrics.disk_publish_wall_ms,
+                    "disk_write_wall_ms": prepare_metrics.disk_write_wall_ms,
+                    "disk_eviction_wall_ms": (prepare_metrics.disk_eviction_wall_ms),
+                    "disk_hit_count": prepare_metrics.disk_hit_count,
+                    "disk_miss_count": prepare_metrics.disk_miss_count,
+                    "disk_corrupt_count": prepare_metrics.disk_corrupt_count,
+                    "disk_build_skip_count": prepare_metrics.disk_build_skip_count,
+                    "disk_bytes_read": prepare_metrics.disk_bytes_read,
+                    "disk_bytes_written": prepare_metrics.disk_bytes_written,
+                    "disk_entry_count": prepare_metrics.disk_entry_count,
+                    "disk_bytes": prepare_metrics.disk_bytes,
+                    "disk_eviction_count": prepare_metrics.disk_eviction_count,
+                }
+            )
+        if any(
+            (
+                prepare_metrics.semantic_session_hit_count,
+                prepare_metrics.semantic_session_miss_count,
+                prepare_metrics.semantic_session_restart_count,
+                prepare_metrics.semantic_session_eviction_count,
+            )
+        ):
+            result.update(
+                {
+                    "frontend_launch_count": (
+                        prepare_metrics.frontend_launch_count
+                    ),
+                    "semantic_session_hit_count": (
+                        prepare_metrics.semantic_session_hit_count
+                    ),
+                    "semantic_session_miss_count": (
+                        prepare_metrics.semantic_session_miss_count
+                    ),
+                    "semantic_session_restart_count": (
+                        prepare_metrics.semantic_session_restart_count
+                    ),
+                    "semantic_session_eviction_count": (
+                        prepare_metrics.semantic_session_eviction_count
+                    ),
+                }
+            )
+        for source_name, public_name in (
+            ("cancel_to_exit_ms", "cancel_to_exit_ms"),
+            ("worker_cpu_ms", "worker_cpu_ms"),
+            ("rss_start_kib", "rss_start_kib"),
+            ("rss_peak_kib", "rss_peak_kib"),
+            ("rss_end_kib", "rss_end_kib"),
+        ):
+            value = getattr(prepare_metrics, source_name)
+            if value is not None:
+                result[public_name] = value
+    if query_wall_ms is not None:
+        result["query_wall_ms"] = max(query_wall_ms, 0.0)
+    return result
+
+
+def _record_source_graph_prepare_metrics(outcome) -> None:
+    metrics = outcome.metrics
+    for field, value in (
+        ("source_graph_prepare_total_ms", metrics.total_wall_ms),
+        ("source_graph_admission_wait_ms", metrics.admission_wait_ms),
+        ("source_graph_build_ms", metrics.build_wall_ms),
+        ("source_graph_load_ms", metrics.load_wall_ms),
+        ("source_graph_actual_build_count", metrics.actual_build_count),
+        (
+            "source_graph_coalesced_waiter_count",
+            metrics.coalesced_waiter_count,
+        ),
+        ("source_graph_ir_bytes", metrics.ir_bytes),
+        ("source_graph_cache_bytes", metrics.cache_bytes),
+        ("source_graph_cache_entry_count", metrics.cache_entry_count),
+        ("source_graph_cache_peak_entry_count", metrics.cache_peak_entry_count),
+        ("source_graph_cache_peak_bytes", metrics.cache_peak_bytes),
+        ("source_graph_cache_eviction_count", metrics.cache_eviction_count),
+        (
+            "source_graph_cache_oversize_bypass_count",
+            metrics.cache_oversize_bypass_count,
+        ),
+        ("source_graph_cancel_to_exit_ms", metrics.cancel_to_exit_ms),
+        ("source_graph_worker_cpu_ms", metrics.worker_cpu_ms),
+        ("source_graph_rss_start_kib", metrics.rss_start_kib),
+        ("source_graph_rss_peak_kib", metrics.rss_peak_kib),
+        ("source_graph_rss_end_kib", metrics.rss_end_kib),
+    ):
+        if value is not None:
+            operation_metrics.set_value(field, value)
+    if metrics.cache_tier.value != "build":
+        operation_metrics.set_value(
+            "source_graph_cache_tier",
+            metrics.cache_tier.value,
+        )
+    if metrics.disk_validation_outcome != "disabled":
+        for field, value in (
+            ("source_graph_frontend_launch_count", metrics.frontend_launch_count),
+            ("source_graph_disk_lookup_ms", metrics.disk_lookup_wall_ms),
+            ("source_graph_disk_read_ms", metrics.disk_read_wall_ms),
+            ("source_graph_disk_validate_ms", metrics.disk_validate_wall_ms),
+            ("source_graph_disk_publish_ms", metrics.disk_publish_wall_ms),
+            ("source_graph_disk_write_ms", metrics.disk_write_wall_ms),
+            ("source_graph_disk_eviction_ms", metrics.disk_eviction_wall_ms),
+            ("source_graph_disk_hit_count", metrics.disk_hit_count),
+            ("source_graph_disk_miss_count", metrics.disk_miss_count),
+            ("source_graph_disk_corrupt_count", metrics.disk_corrupt_count),
+            ("source_graph_disk_build_skip_count", metrics.disk_build_skip_count),
+            ("source_graph_disk_bytes_read", metrics.disk_bytes_read),
+            ("source_graph_disk_bytes_written", metrics.disk_bytes_written),
+            ("source_graph_disk_entry_count", metrics.disk_entry_count),
+            ("source_graph_disk_bytes", metrics.disk_bytes),
+            ("source_graph_disk_eviction_count", metrics.disk_eviction_count),
+        ):
+            operation_metrics.set_value(field, value)
+        operation_metrics.set_value(
+            "source_graph_disk_validation_outcome",
+            metrics.disk_validation_outcome,
+        )
+    session_metrics = (
+        ("source_graph_semantic_session_hit_count", metrics.semantic_session_hit_count),
+        (
+            "source_graph_semantic_session_miss_count",
+            metrics.semantic_session_miss_count,
+        ),
+        (
+            "source_graph_semantic_session_restart_count",
+            metrics.semantic_session_restart_count,
+        ),
+        (
+            "source_graph_semantic_session_eviction_count",
+            metrics.semantic_session_eviction_count,
+        ),
+    )
+    if any(value for _, value in session_metrics):
+        operation_metrics.set_value(
+            "source_graph_frontend_launch_count",
+            metrics.frontend_launch_count,
+        )
+    for field, value in session_metrics:
+        if value:
+            operation_metrics.set_value(field, value)
+
+
+def _accumulate_source_graph_trace_metrics(
+    aggregate: dict[str, int | float],
+    *,
+    adapter_wall_ms: float | None = None,
+    prepare_metrics=None,
+    query_wall_ms: float | None = None,
+) -> None:
+    """Aggregate identity-free metrics across discarded artifact attempts."""
+
+    if adapter_wall_ms is not None:
+        aggregate["adapter_wall_ms"] = float(
+            aggregate.get("adapter_wall_ms", 0.0)
+        ) + max(adapter_wall_ms, 0.0)
+    if query_wall_ms is not None:
+        aggregate["query_wall_ms"] = float(aggregate.get("query_wall_ms", 0.0)) + max(
+            query_wall_ms, 0.0
+        )
+    if prepare_metrics is None:
+        return
+
+    for public_name, source_name in (
+        ("prepare_total_wall_ms", "total_wall_ms"),
+        ("admission_wait_ms", "admission_wait_ms"),
+        ("build_wall_ms", "build_wall_ms"),
+        ("load_wall_ms", "load_wall_ms"),
+        ("actual_build_count", "actual_build_count"),
+        ("coalesced_waiter_count", "coalesced_waiter_count"),
+        ("worker_cpu_ms", "worker_cpu_ms"),
+    ):
+        value = getattr(prepare_metrics, source_name)
+        if value is not None:
+            aggregate[public_name] = aggregate.get(public_name, 0) + value
+
+    session_fields = (
+        "semantic_session_hit_count",
+        "semantic_session_miss_count",
+        "semantic_session_restart_count",
+        "semantic_session_eviction_count",
+    )
+    session_observed = any(
+        getattr(prepare_metrics, field) for field in session_fields
+    ) or any(field in aggregate for field in session_fields)
+    if session_observed:
+        # Once any attempt uses the semantic-session route, frontend launches
+        # from every attempt remain relevant.  This includes a later bounded
+        # frontier that honestly takes the one-shot path because the retained
+        # context does not cover its inputs.
+        aggregate["frontend_launch_count"] = int(
+            aggregate.get("frontend_launch_count", 0)
+        ) + prepare_metrics.frontend_launch_count
+        for field in session_fields:
+            aggregate[field] = int(aggregate.get(field, 0)) + getattr(
+                prepare_metrics, field
+            )
+
+    if prepare_metrics.disk_validation_outcome != "disabled":
+        for public_name, source_name in (
+            ("disk_lookup_wall_ms", "disk_lookup_wall_ms"),
+            ("disk_read_wall_ms", "disk_read_wall_ms"),
+            ("disk_validate_wall_ms", "disk_validate_wall_ms"),
+            ("disk_publish_wall_ms", "disk_publish_wall_ms"),
+            ("disk_write_wall_ms", "disk_write_wall_ms"),
+            ("disk_eviction_wall_ms", "disk_eviction_wall_ms"),
+            ("disk_hit_count", "disk_hit_count"),
+            ("disk_miss_count", "disk_miss_count"),
+            ("disk_corrupt_count", "disk_corrupt_count"),
+            ("disk_build_skip_count", "disk_build_skip_count"),
+            ("disk_bytes_read", "disk_bytes_read"),
+            ("disk_bytes_written", "disk_bytes_written"),
+            ("disk_eviction_count", "disk_eviction_count"),
+        ):
+            value = getattr(prepare_metrics, source_name)
+            aggregate[public_name] = aggregate.get(public_name, 0) + value
+        if not session_observed:
+            aggregate["frontend_launch_count"] = int(
+                aggregate.get("frontend_launch_count", 0)
+            ) + prepare_metrics.frontend_launch_count
+
+    cancel_to_exit_ms = prepare_metrics.cancel_to_exit_ms
+    if cancel_to_exit_ms is not None:
+        aggregate["cancel_to_exit_ms"] = max(
+            float(aggregate.get("cancel_to_exit_ms", 0.0)),
+            cancel_to_exit_ms,
+        )
+    if prepare_metrics.rss_start_kib is not None and "rss_start_kib" not in aggregate:
+        aggregate["rss_start_kib"] = prepare_metrics.rss_start_kib
+    if prepare_metrics.rss_peak_kib is not None:
+        aggregate["rss_peak_kib"] = max(
+            int(aggregate.get("rss_peak_kib", 0)),
+            prepare_metrics.rss_peak_kib,
+        )
+    if prepare_metrics.rss_end_kib is not None:
+        aggregate["rss_end_kib"] = prepare_metrics.rss_end_kib
+
+    # These are final/peak process-cache snapshots, not per-attempt deltas.
+    for field in ("ir_bytes", "cache_bytes", "cache_entry_count"):
+        aggregate[field] = getattr(prepare_metrics, field)
+    if prepare_metrics.disk_validation_outcome != "disabled":
+        for field in ("disk_entry_count", "disk_bytes"):
+            aggregate[field] = getattr(prepare_metrics, field)
+    for field in (
+        "cache_peak_entry_count",
+        "cache_peak_bytes",
+        "cache_eviction_count",
+        "cache_oversize_bypass_count",
+    ):
+        aggregate[field] = max(
+            int(aggregate.get(field, 0)),
+            getattr(prepare_metrics, field),
+        )
+
+
+def _publish_source_graph_trace_metrics(
+    aggregate: dict[str, int | float],
+) -> None:
+    mapping = {
+        "prepare_total_wall_ms": "source_graph_prepare_total_ms",
+        "admission_wait_ms": "source_graph_admission_wait_ms",
+        "build_wall_ms": "source_graph_build_ms",
+        "load_wall_ms": "source_graph_load_ms",
+        "query_wall_ms": "source_graph_query_ms",
+        "actual_build_count": "source_graph_actual_build_count",
+        "coalesced_waiter_count": "source_graph_coalesced_waiter_count",
+        "cancel_to_exit_ms": "source_graph_cancel_to_exit_ms",
+        "worker_cpu_ms": "source_graph_worker_cpu_ms",
+        "rss_start_kib": "source_graph_rss_start_kib",
+        "rss_peak_kib": "source_graph_rss_peak_kib",
+        "rss_end_kib": "source_graph_rss_end_kib",
+        "ir_bytes": "source_graph_ir_bytes",
+        "cache_bytes": "source_graph_cache_bytes",
+        "cache_entry_count": "source_graph_cache_entry_count",
+        "cache_peak_entry_count": "source_graph_cache_peak_entry_count",
+        "cache_peak_bytes": "source_graph_cache_peak_bytes",
+        "cache_eviction_count": "source_graph_cache_eviction_count",
+        "cache_oversize_bypass_count": ("source_graph_cache_oversize_bypass_count"),
+        "frontend_launch_count": "source_graph_frontend_launch_count",
+        "semantic_session_hit_count": (
+            "source_graph_semantic_session_hit_count"
+        ),
+        "semantic_session_miss_count": (
+            "source_graph_semantic_session_miss_count"
+        ),
+        "semantic_session_restart_count": (
+            "source_graph_semantic_session_restart_count"
+        ),
+        "semantic_session_eviction_count": (
+            "source_graph_semantic_session_eviction_count"
+        ),
+        "disk_lookup_wall_ms": "source_graph_disk_lookup_ms",
+        "disk_read_wall_ms": "source_graph_disk_read_ms",
+        "disk_validate_wall_ms": "source_graph_disk_validate_ms",
+        "disk_publish_wall_ms": "source_graph_disk_publish_ms",
+        "disk_write_wall_ms": "source_graph_disk_write_ms",
+        "disk_eviction_wall_ms": "source_graph_disk_eviction_ms",
+        "disk_hit_count": "source_graph_disk_hit_count",
+        "disk_miss_count": "source_graph_disk_miss_count",
+        "disk_corrupt_count": "source_graph_disk_corrupt_count",
+        "disk_build_skip_count": "source_graph_disk_build_skip_count",
+        "disk_bytes_read": "source_graph_disk_bytes_read",
+        "disk_bytes_written": "source_graph_disk_bytes_written",
+        "disk_entry_count": "source_graph_disk_entry_count",
+        "disk_bytes": "source_graph_disk_bytes",
+        "disk_eviction_count": "source_graph_disk_eviction_count",
+    }
+    for source_name, public_name in mapping.items():
+        if source_name in aggregate:
+            operation_metrics.set_value(public_name, aggregate[source_name])
+
+
+def _blocked_source_graph_receipt(
+    adapter_status: str,
+    *,
+    code: str,
+    stage: str,
+    adapter: dict | None = None,
+    adapter_wall_ms: float | None = None,
+) -> dict:
+    return {
+        "adapter_status": adapter_status,
+        "adapter": adapter,
+        "blocker": {"code": code, "stage": stage},
+        "metrics": _source_graph_metrics_dict(adapter_wall_ms=adapter_wall_ms),
+        "fallback_used": False,
+    }
+
+
+def _source_graph_receipt_from_prepare(
+    plan,
+    outcome,
+    *,
+    adapter_wall_ms: float,
+) -> dict:
+    entry = outcome.entry
+    coverage = entry.ir.coverage if entry is not None else None
+    receipt = {
+        "adapter_status": "ready",
+        "adapter": plan.receipt.to_dict(),
+        "prepare_status": outcome.status.value,
+        "effective_timeout_sec": outcome.effective_timeout_sec,
+        "cache_disposition": outcome.metrics.cache_disposition.value,
+        "flight_disposition": outcome.metrics.flight_disposition.value,
+        "coverage_status": (entry.coverage_status.value if entry is not None else None),
+        "coverage_files_total": coverage.files_total if coverage is not None else 0,
+        "coverage_files_projected": (
+            coverage.files_projected if coverage is not None else 0
+        ),
+        "coverage_diagnostic_count": (
+            coverage.diagnostic_count if coverage is not None else 0
+        ),
+        "coverage_blocking_diagnostic_count": (
+            coverage.blocking_diagnostic_count if coverage is not None else 0
+        ),
+        "coverage_gap_count": len(coverage.gaps) if coverage is not None else 0,
+        "coverage_gap_codes": (
+            list(entry.artifact_scope_receipt.gap_codes) if entry is not None else []
+        ),
+        "objective_exclusions": list(
+            plan.request.scope.coverage_boundary.objective_exclusions
+        ),
+        "ir_fingerprint_sha256": (
+            entry.ir_fingerprint_sha256 if entry is not None else None
+        ),
+        "build_key_sha256": outcome.build_key.digest,
+        "cache_lookup_reason": outcome.cache_lookup_reason.value,
+        "artifact_fingerprint_sha256": outcome.build_key.digest,
+        "selected_artifact_fingerprint_sha256": (
+            entry.build_key.digest if entry is not None else None
+        ),
+        "query_fingerprint_sha256": compute_source_graph_query_key(
+            plan.request.query_identity
+        ).digest,
+        "compile_fingerprint_sha256": (
+            plan.request.identity.compile_inputs.fingerprint
+        ),
+        "metrics": _source_graph_metrics_dict(
+            adapter_wall_ms=adapter_wall_ms,
+            prepare_metrics=outcome.metrics,
+        ),
+        "fallback_used": False,
+    }
+    if (
+        outcome.metrics.disk_validation_outcome != "disabled"
+        or outcome.metrics.cache_tier.value != "build"
+    ):
+        receipt["cache_tier"] = outcome.metrics.cache_tier.value
+    if outcome.metrics.disk_validation_outcome != "disabled":
+        receipt.update(
+            {
+                "disk_validation_outcome": outcome.metrics.disk_validation_outcome,
+            }
+        )
+    if outcome.metrics.cache_tier.value == "handoff":
+        receipt["artifact_reuse"] = "session_handoff"
+    elif outcome.metrics.cache_tier.value == "disk":
+        receipt["artifact_reuse"] = "disk_exact_hit"
+    elif outcome.metrics.cache_disposition.value == "hit_exact":
+        receipt["artifact_reuse"] = "exact_hit"
+    elif outcome.metrics.cache_disposition.value == "hit_superset":
+        receipt["artifact_reuse"] = "dominating_hit"
+    elif outcome.metrics.flight_disposition.value == "coalesced":
+        receipt["artifact_reuse"] = "coalesced_build"
+    elif outcome.metrics.cache_disposition.value == "bypass_incomplete_key":
+        receipt["artifact_reuse"] = "bypass_incomplete"
+    elif outcome.metrics.cache_disposition.value == "bypass_capacity":
+        receipt["artifact_reuse"] = "bypass_capacity"
+    else:
+        receipt["artifact_reuse"] = "cold"
+    if outcome.scope_match is not None:
+        receipt["scope_match"] = {
+            "relation": outcome.scope_match.relation.value,
+            "reusable": outcome.scope_match.reusable,
+            "complete_for_request": outcome.scope_match.complete_for_request,
+            "reason": outcome.scope_match.reason,
+        }
+    if outcome.blocker is not None:
+        receipt["blocker"] = outcome.blocker.to_dict(include_message=False)
+    return receipt
+
+
+def _merge_source_graph_query_receipt(
+    receipt: dict,
+    query: dict,
+    *,
+    query_wall_ms: float,
+) -> None:
+    receipt["query_status"] = query.get("status")
+    receipt["query_confidence"] = query.get("confidence")
+    receipt["query_match_count"] = int(query.get("match_count", 0))
+    receipt["traversed_binding_edges"] = int(query.get("traversed_binding_edges", 0))
+    receipt["max_depth"] = query.get("max_depth")
+    for field in (
+        "queried_bit_count",
+        "resolved_bit_count",
+        "unresolved_bit_count",
+        "constant_bit_count",
+        "multi_driver_bit_count",
+    ):
+        if field in query:
+            receipt[field] = int(query[field])
+    for field in (
+        "path_edge_count",
+        "traversed_edge_count",
+        "visited_state_count",
+        "inspected_edge_count",
+        "state_limit",
+        "edge_limit",
+        "match_limit",
+        "frontier_limit",
+        "state_truncated",
+        "edge_truncated",
+        "match_truncated",
+        "frontier_truncated",
+        "query_truncated",
+        "traversal_limit",
+        "output_limit",
+        "traversal_truncated",
+        "output_truncated",
+        "endpoint_alias_equivalent",
+        "expand_assigns",
+    ):
+        if field in query:
+            receipt[field] = query[field]
+    claim_semantics = query.get("claim_semantics")
+    if isinstance(claim_semantics, dict):
+        receipt["claim_semantics"] = dict(claim_semantics)
+    receipt["coverage_status"] = query.get("coverage_status")
+    receipt["coverage_gap_codes"] = sorted(
+        {
+            *receipt.get("coverage_gap_codes", []),
+            *query.get("unresolved_boundary_codes", []),
+        }
+    )
+    receipt["metrics"]["query_wall_ms"] = max(query_wall_ms, 0.0)
+
+
+def _mark_source_graph_hierarchy_scope_gap(receipt: dict) -> None:
+    """Upgrade a deferred ancestor prefix after the IR rejects its root."""
+
+    gap_code = "hierarchy_ancestor_chain_truncated"
+    adapter = receipt.get("adapter")
+    if isinstance(adapter, dict):
+        adapter["gap_codes"] = sorted({*adapter.get("gap_codes", []), gap_code})
+        scope = adapter.get("scope")
+        if isinstance(scope, dict):
+            resolution = scope.get("hierarchy_resolution")
+            if isinstance(resolution, dict):
+                resolution["status"] = "truncated"
+                deferred = int(resolution.get("deferred_endpoint_count", 0))
+                truncated = int(resolution.get("truncated_endpoint_count", 0))
+                if deferred > 0:
+                    resolution["deferred_endpoint_count"] = deferred - 1
+                    truncated += 1
+                resolution["truncated_endpoint_count"] = max(truncated, 1)
+                resolution["query_confirmed_missing_intermediate_scope"] = True
+    receipt["coverage_status"] = "inconclusive"
+    receipt["coverage_gap_codes"] = sorted(
+        {*receipt.get("coverage_gap_codes", []), gap_code}
+    )
+    receipt["coverage_gap_count"] = len(receipt["coverage_gap_codes"])
+
+
+def _finalize_public_connectivity_status(
+    *,
+    backend_status: dict,
+    selected_backend: str,
+    actual_backend: str,
+    attempts: list[dict],
+    fallback_reason: str | None,
+    npi_backend,
+    npi_execution: dict | None,
+    source_graph_receipt: dict | None,
+    npi_kdb_status: dict | None = None,
+) -> dict:
+    if (
+        backend_status.get("connectivity_route") == "source_graph"
+        and actual_backend != "verdi_npi"
+    ):
+        legacy_skip_reasons = {
+            "npi_backend_initialization_failed",
+            "npi_kdb_unavailable",
+        }
+        attempts = [
+            (
+                _backend_attempt(
+                    "verdi_npi",
+                    "skipped",
+                    reason=_NPI_SKIPPED_BY_POLICY,
+                )
+                if attempt.get("backend") == "verdi_npi"
+                and attempt.get("reason") in legacy_skip_reasons
+                else attempt
+            )
+            for attempt in attempts
+        ]
+        if fallback_reason in legacy_skip_reasons:
+            fallback_reason = _NPI_SKIPPED_BY_POLICY
+
+    status = dict(backend_status)
+    status.pop("_npi_selection_reason", None)
+    status["backend"] = selected_backend
+    status["selected_backend"] = selected_backend
+    # The singular field names the preferred backend whose failure/blocker
+    # caused a final Static fallback.  ``attempted_backends`` retains the full
+    # ordered chain, including the final Static recomputation.
+    attempted_backend = actual_backend
+    if actual_backend == "static":
+        attempted_backend = next(
+            (
+                attempt["backend"]
+                for attempt in reversed(attempts)
+                if attempt["backend"] != "static"
+            ),
+            actual_backend,
+        )
+    status["attempted_backend"] = attempted_backend
+    status["attempted_backends"] = attempts
+    status["actual_backend"] = actual_backend
+    # Every successful public driver/load/path return reaches this helper only
+    # after its payload has passed the backend-specific provenance check.  Make
+    # that existing guarantee explicit for the non-X-trace tools too.
+    status["single_backend_provenance"] = True
+    if fallback_reason:
+        status["fallback_reason"] = fallback_reason
+    else:
+        status.pop("fallback_reason", None)
+    if source_graph_receipt is not None:
+        status["source_graph"] = source_graph_receipt
+    if isinstance(npi_execution, dict):
+        for key in ("execution_mode", "scheduler_status", "worker_status"):
+            if key in npi_execution:
+                status[key] = npi_execution[key]
+    elif (
+        npi_backend is not None
+        and getattr(npi_backend, "execution_mode", None) == "local"
+    ):
+        status["execution_mode"] = "local"
+    if npi_kdb_status is not None:
+        degraded = npi_kdb_status.get("load_quality") == "degraded"
+        status["kdb_degraded"] = degraded
+        if degraded:
+            status["kdb_validation_status"] = "elaboration_error"
+            if "error_count" in npi_kdb_status:
+                status["kdb_error_count"] = npi_kdb_status["error_count"]
+            if "error_log" in npi_kdb_status:
+                status["kdb_error_log"] = npi_kdb_status["error_log"]
+    if actual_backend == "verdi_npi" and not status.get("kdb_degraded"):
+        status["parser_match"] = "exact"
+    return status
+
+
+async def _call_public_connectivity_operation(
+    backend,
+    *,
+    operation: str,
+    args: dict,
+    simulator: str,
+) -> dict:
+    if operation == "driver":
+
+        def query():
+            return backend.find_driver(
+                signal_path=args["signal_path"],
+                wave_path=args["wave_path"],
+                compile_log=args["compile_log"],
+                top_hint=args.get("top_hint"),
+                recursive=args.get("recursive", False),
+                max_depth=args.get("max_depth", 10),
+                simulator=simulator,
+            )
+    else:
+
+        def query():
+            return backend.find_loads(
+                signal_path=args["signal_path"],
+                compile_log=args["compile_log"],
+                top_hint=args.get("top_hint"),
+                max_depth=args.get("max_depth", 1),
+                include_expr=args.get("include_expr", True),
+                kind_filter=args.get("kind_filter"),
+                simulator=simulator,
+            )
+
+    if backend.name in {"static", "source_graph"}:
+        raw = await _run_in_cancellable_thread(query)
+    else:
+        raw = await _call_connectivity_backend(backend, query)
+    if not isinstance(raw, dict):
+        raise TypeError("connectivity backend result must be a mapping")
+    return raw
+
+
+def _source_graph_backend_for_plan(entry, plan):
+    """Create a backend and attach optional query-local hierarchy evidence."""
+
+    backend = SourceGraphConnectivityBackend(entry)
+    configure = getattr(backend, "set_unprojected_instance_candidates", None)
+    if callable(configure):
+        configure(plan.unprojected_instance_candidates)
+    return backend
+
+
+async def _execute_source_graph_connectivity_plan(
+    *,
+    plan,
+    config,
+    operation: str,
+    args: dict,
+    simulator: str,
+    adapter_wall_ms: float,
+) -> dict:
+    """Prepare and query exactly one Source Graph artifact attempt."""
+
+    assert plan.request is not None
+    operation_metrics.set_value("source_graph_phase", "prepare")
+    try:
+        runtime = get_source_graph_runtime(config)
+        outcome = await runtime.prepare(
+            plan.request,
+            timeout_seconds=config.timeout_sec,
+        )
+    except OperationCancelled as exc:
+        raise asyncio.CancelledError from exc
+    except RuntimeError:
+        outcome = None
+        reason = "source_graph_runtime_config_changed"
+    except Exception:  # noqa: BLE001
+        outcome = None
+        reason = "source_graph_prepare_failed"
+    if outcome is None:
+        receipt = _blocked_source_graph_receipt(
+            "ready",
+            code=reason,
+            stage="runtime_prepare",
+            adapter=plan.receipt.to_dict(),
+            adapter_wall_ms=adapter_wall_ms,
+        )
+        receipt["prepare_status"] = "build_failed"
+        receipt["effective_timeout_sec"] = config.timeout_sec
+        receipt["build_key_sha256"] = compute_source_graph_build_key(
+            plan.request
+        ).digest
+        receipt["compile_fingerprint_sha256"] = (
+            plan.request.identity.compile_inputs.fingerprint
+        )
+        return {
+            "outcome": None,
+            "receipt": receipt,
+            "result": None,
+            "query": None,
+            "frontiers": (),
+            "reason": reason,
+        }
+
+    _record_source_graph_prepare_metrics(outcome)
+    receipt = _source_graph_receipt_from_prepare(
+        plan,
+        outcome,
+        adapter_wall_ms=adapter_wall_ms,
+    )
+    if outcome.status is PrepareStatus.CANCELLED:
+        operation_metrics.set_value("source_graph_phase", "cancelled")
+        raise asyncio.CancelledError
+    if outcome.status is not PrepareStatus.READY:
+        return {
+            "outcome": outcome,
+            "receipt": receipt,
+            "result": None,
+            "query": None,
+            "frontiers": (),
+            "reason": _SOURCE_GRAPH_PREPARE_REASONS.get(
+                outcome.status,
+                "source_graph_prepare_failed",
+            ),
+        }
+
+    assert outcome.entry is not None
+    operation_metrics.set_value("source_graph_phase", "query")
+    query_started = time.perf_counter()
+    source_backend = _source_graph_backend_for_plan(outcome.entry, plan)
+    source_result = None
+    query_receipt = None
+    frontiers: tuple[str, ...] = ()
+    try:
+        source_result = await _call_public_connectivity_operation(
+            source_backend,
+            operation=operation,
+            args=args,
+            simulator=simulator,
+        )
+        query_receipt = source_result.pop("_source_graph_query_receipt")
+        raw_frontiers = query_receipt.pop("expansion_frontiers", ())
+        if isinstance(raw_frontiers, list) and all(
+            isinstance(item, str) for item in raw_frontiers
+        ):
+            frontiers = tuple(dict.fromkeys(raw_frontiers))
+        reason = "source_graph_coverage_inconclusive"
+    except OperationCancelled as exc:
+        raise asyncio.CancelledError from exc
+    except SourceGraphQueryBlocked as exc:
+        reason = f"source_graph_{exc.code}"
+        if exc.code == "instance_not_in_projected_scope":
+            _mark_source_graph_hierarchy_scope_gap(receipt)
+    except (KeyError, ValueError):
+        reason = "source_graph_query_target_unresolved"
+    except Exception:  # noqa: BLE001
+        reason = "source_graph_query_failed"
+    query_wall_ms = (time.perf_counter() - query_started) * 1000.0
+    operation_metrics.set_value("source_graph_query_ms", query_wall_ms)
+    if query_receipt is not None:
+        _merge_source_graph_query_receipt(
+            receipt,
+            query_receipt,
+            query_wall_ms=query_wall_ms,
+        )
+    else:
+        receipt["blocker"] = {
+            "code": reason.removeprefix("source_graph_"),
+            "stage": "query",
+        }
+        receipt["metrics"]["query_wall_ms"] = query_wall_ms
+    return {
+        "outcome": outcome,
+        "receipt": receipt,
+        "result": source_result,
+        "query": query_receipt,
+        "frontiers": frontiers,
+        "reason": reason,
+    }
+
+
+def build_source_graph_plan(**kwargs):
+    """Select the first artifact behind the historical Source Graph stage.
+
+    The server-level stage name is intentionally stable for tracked route-order
+    audits. The adapter implementation now applies the bounded initial-scope
+    policy before falling back to its exact-ancestor plan.
+    """
+
+    return build_source_graph_initial_plan(**kwargs)
+
+
+async def _route_public_connectivity(
+    *,
+    operation: str,
+    args: dict,
+    simulator: str,
+) -> tuple[dict, dict]:
+    """Route one public driver/load request without mixed provenance."""
+
+    from src.connectivity_backend import (  # noqa: PLC0415
+        DeferredConnectivityFallbackBackend,
+        StaticConnectivityBackend,
+        select_backend,
+    )
+
+    backend_status = await _run_in_cancellable_thread(
+        lambda: _safe_probe_backend(args["compile_log"], simulator)
+    )
+    deferred = DeferredConnectivityFallbackBackend()
+    npi_selection_reason: str | None = None
+    try:
+        npi_backend = select_backend(backend_status, fallback=deferred)
+    except Exception:  # noqa: BLE001
+        # Backend construction must not deny Source Graph its fallback slot.
+        # Keep exception text out of both public receipts and metrics.
+        npi_backend = deferred
+        npi_selection_reason = "npi_backend_initialization_failed"
+    npi_selected = getattr(npi_backend, "name", None) == "verdi_npi"
+    selected_backend = "verdi_npi" if npi_selected else "source_graph"
+    attempts: list[dict] = []
+    npi_execution: dict | None = None
+    npi_kdb_status: dict | None = None
+    fallback_reason: str | None = None
+    probe_npi_reason = backend_status.pop("_npi_selection_reason", None)
+
+    if npi_selected:
+        try:
+            npi_result = await _call_public_connectivity_operation(
+                npi_backend,
+                operation=operation,
+                args=args,
+                simulator=simulator,
+            )
+        except OperationCancelled as exc:
+            raise asyncio.CancelledError from exc
+        except Exception:  # noqa: BLE001
+            npi_result = None
+            fallback_reason = "npi_query_failed"
+            attempts.append(
+                _backend_attempt(
+                    "verdi_npi",
+                    "failed",
+                    reason=fallback_reason,
+                )
+            )
+        if npi_result is not None:
+            npi_kdb_status = _npi_kdb_status(npi_backend)
+            execution = npi_result.get("_npi_execution_status")
+            if isinstance(execution, dict):
+                npi_execution = dict(execution)
+            if _npi_result_usable(
+                npi_result,
+                operation,
+                kdb_status=npi_kdb_status,
+            ):
+                attempts.append(
+                    _backend_attempt(
+                        "verdi_npi",
+                        "success",
+                        coverage_status=(
+                            "partial"
+                            if _npi_result_coverage_partial(
+                                npi_result,
+                                operation=operation,
+                                kdb_status=npi_kdb_status,
+                            )
+                            else None
+                        ),
+                    )
+                )
+                clean = _strip_connectivity_internal_receipts(npi_result)
+                clean["backend"] = "verdi_npi"
+                status = _finalize_public_connectivity_status(
+                    backend_status=backend_status,
+                    selected_backend=selected_backend,
+                    actual_backend="verdi_npi",
+                    attempts=attempts,
+                    fallback_reason=None,
+                    npi_backend=npi_backend,
+                    npi_execution=npi_execution,
+                    source_graph_receipt=None,
+                    npi_kdb_status=npi_kdb_status,
+                )
+                return clean, status
+            raw_reason = npi_result.get("_npi_fallback_reason")
+            fallback_reason = (
+                "npi_degraded_result_inconclusive"
+                if _npi_kdb_degraded(kdb_status=npi_kdb_status) and not raw_reason
+                else _sanitize_npi_fallback_reason(raw_reason)
+            )
+            attempts.append(
+                _backend_attempt(
+                    "verdi_npi",
+                    "failed" if raw_reason else "inconclusive",
+                    reason=fallback_reason,
+                    coverage_status=(
+                        "partial"
+                        if _npi_result_coverage_partial(
+                            npi_result,
+                            operation=operation,
+                            kdb_status=npi_kdb_status,
+                        )
+                        else None
+                    ),
+                )
+            )
+    else:
+        fallback_reason = (
+            npi_selection_reason or probe_npi_reason or "npi_kdb_unavailable"
+        )
+        attempts.append(
+            _backend_attempt(
+                "verdi_npi",
+                "failed" if npi_selection_reason else "unavailable",
+                reason=fallback_reason,
+            )
+        )
+
+    config = get_source_graph_execution_config()
+    source_graph_receipt: dict
+    source_graph_reason: str
+    bootstrap_receipt: dict | None = None
+    bootstrap_active = False
+    if args.get("allow_bounded_bootstrap") is True:
+        existing_hierarchy, _ = _resolve_hierarchy_context(
+            args["compile_log"], simulator
+        )
+        bootstrap_active = existing_hierarchy is None
+    if not config.enabled:
+        source_graph_reason = "source_graph_disabled"
+        source_graph_receipt = _blocked_source_graph_receipt(
+            "disabled",
+            code=source_graph_reason,
+            stage="execution_config",
+        )
+        if bootstrap_active:
+            bootstrap_receipt = _bootstrap_blocked_receipt(
+                code=source_graph_reason,
+                stage="execution_config",
+            )
+            source_graph_receipt["bootstrap_context"] = bootstrap_receipt
+        attempts.append(
+            _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
+        )
+    elif not config.valid:
+        source_graph_reason = config.error_code or "source_graph_config_invalid"
+        source_graph_receipt = _blocked_source_graph_receipt(
+            "invalid",
+            code=source_graph_reason,
+            stage="execution_config",
+        )
+        if bootstrap_active:
+            bootstrap_receipt = _bootstrap_blocked_receipt(
+                code=source_graph_reason,
+                stage="execution_config",
+            )
+            source_graph_receipt["bootstrap_context"] = bootstrap_receipt
+        attempts.append(
+            _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
+        )
+    else:
+        operation_metrics.set_value("source_graph_phase", "adapter")
+        adapter_started = time.perf_counter()
+        (
+            hierarchy_result,
+            hierarchy_snapshot_sha256,
+            bootstrap_receipt,
+            bootstrap_blocker_reason,
+        ) = await _resolve_connectivity_hierarchy_context(
+            args=args,
+            simulator=simulator,
+        )
+        bootstrap_active = bootstrap_receipt is not None
+        if hierarchy_result is None:
+            adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
+            operation_metrics.set_value("source_graph_adapter_ms", adapter_wall_ms)
+            source_graph_reason = (
+                f"source_graph_{bootstrap_blocker_reason}"
+                if bootstrap_blocker_reason
+                else "source_graph_hierarchy_context_unavailable"
+            )
+            source_graph_receipt = _blocked_source_graph_receipt(
+                "blocked",
+                code=source_graph_reason,
+                stage="target_scope",
+                adapter_wall_ms=adapter_wall_ms,
+            )
+            if bootstrap_receipt is not None:
+                source_graph_receipt["bootstrap_context"] = bootstrap_receipt
+            attempts.append(
+                _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
+            )
+        else:
+            compile_result = hierarchy_result.get("compile_result")
+            if not isinstance(compile_result, dict):
+                adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
+                operation_metrics.set_value("source_graph_adapter_ms", adapter_wall_ms)
+                source_graph_reason = "source_graph_compile_context_unavailable"
+                source_graph_receipt = _blocked_source_graph_receipt(
+                    "blocked",
+                    code=source_graph_reason,
+                    stage="compile_manifest",
+                    adapter_wall_ms=adapter_wall_ms,
+                )
+                if bootstrap_receipt is not None:
+                    source_graph_receipt["bootstrap_context"] = bootstrap_receipt
+                attempts.append(
+                    _backend_attempt(
+                        "source_graph", "blocked", reason=source_graph_reason
+                    )
+                )
+            else:
+                plan = await _run_in_cancellable_thread(
+                    lambda: build_source_graph_plan(
+                        compile_log=args["compile_log"],
+                        compile_result=compile_result,
+                        hierarchy_result=hierarchy_result,
+                        hierarchy_snapshot_sha256=hierarchy_snapshot_sha256,
+                        operation=(
+                            QueryOperation.DRIVER
+                            if operation == "driver"
+                            else QueryOperation.LOADS
+                        ),
+                        signal_path=args["signal_path"],
+                        top_hint=args.get("top_hint"),
+                        max_hops=args.get(
+                            "max_depth", 10 if operation == "driver" else 1
+                        ),
+                        frontend_version=config.frontend_version,
+                        runtime_plusarg_allowlist=(
+                            config.runtime_plusarg_allowlist
+                        ),
+                        recursive=(
+                            bool(args.get("recursive", False))
+                            if operation == "driver"
+                            else False
+                        ),
+                        include_expr=(
+                            bool(args.get("include_expr", True))
+                            if operation == "loads"
+                            else True
+                        ),
+                        kind_filter=(
+                            tuple(args.get("kind_filter") or ())
+                            if operation == "loads"
+                            else ()
+                        ),
+                        max_instances=config.frontier_max_instances,
+                        allow_adjacent=not bootstrap_active,
+                        enable_semantic_context=(
+                            config.semantic_session_enabled
+                        ),
+                        semantic_context_max_instances=(
+                            config.semantic_session_max_instances
+                        ),
+                        semantic_context_max_inputs=(
+                            config.semantic_session_max_inputs
+                        ),
+                    )
+                )
+                adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
+                operation_metrics.set_value("source_graph_adapter_ms", adapter_wall_ms)
+                if plan.status is AdapterStatus.BLOCKED:
+                    assert plan.receipt.blocker is not None
+                    source_graph_reason = f"source_graph_{plan.receipt.blocker.code}"
+                    source_graph_receipt = _blocked_source_graph_receipt(
+                        "blocked",
+                        code=plan.receipt.blocker.code,
+                        stage=plan.receipt.blocker.stage,
+                        adapter=plan.receipt.to_dict(),
+                        adapter_wall_ms=adapter_wall_ms,
+                    )
+                    if bootstrap_receipt is not None:
+                        source_graph_receipt["bootstrap_context"] = bootstrap_receipt
+                    attempts.append(
+                        _backend_attempt(
+                            "source_graph",
+                            "blocked",
+                            reason=source_graph_reason,
+                        )
+                    )
+                else:
+                    current_plan = plan
+                    current_adapter_ms = adapter_wall_ms
+                    accumulated_frontiers: list[str] = list(
+                        current_plan.scope_expansion_anchors
+                    )
+                    attempted_artifacts: list[str] = []
+                    artifact_attempt_count = 0
+                    attempted_query_count = 0
+                    scope_expansion_count = 0
+                    aggregate_metrics: dict[str, int | float] = {}
+                    previous_artifact: str | None = None
+                    while True:
+                        assert current_plan.request is not None
+                        artifact_fingerprint = compute_source_graph_build_key(
+                            current_plan.request
+                        ).digest
+                        attempted_artifacts.append(artifact_fingerprint)
+                        artifact_attempt_count += 1
+                        execution = await _execute_source_graph_connectivity_plan(
+                            plan=current_plan,
+                            config=config,
+                            operation=operation,
+                            args=args,
+                            simulator=simulator,
+                            adapter_wall_ms=current_adapter_ms,
+                        )
+                        outcome = execution["outcome"]
+                        source_graph_receipt = execution["receipt"]
+                        if bootstrap_receipt is not None:
+                            source_graph_receipt["bootstrap_context"] = (
+                                bootstrap_receipt
+                            )
+                        source_graph_reason = execution["reason"]
+                        source_result = execution["result"]
+                        query_receipt = execution["query"]
+                        frontiers = execution["frontiers"]
+                        query_wall_ms = source_graph_receipt.get("metrics", {}).get(
+                            "query_wall_ms"
+                        )
+                        _accumulate_source_graph_trace_metrics(
+                            aggregate_metrics,
+                            adapter_wall_ms=current_adapter_ms,
+                            prepare_metrics=(
+                                outcome.metrics if outcome is not None else None
+                            ),
+                            query_wall_ms=query_wall_ms,
+                        )
+                        if outcome is not None and outcome.entry is not None:
+                            artifact_fingerprint = outcome.entry.build_key.digest
+                            attempted_artifacts[-1] = artifact_fingerprint
+                        if query_receipt is not None:
+                            attempted_query_count += 1
+
+                        source_provenance_ok = (
+                            source_result is not None
+                            and _single_backend_provenance(
+                                source_result,
+                                operation=operation,
+                                expected="source_graph",
+                            )
+                        )
+                        if source_result is not None and not source_provenance_ok:
+                            source_graph_reason = (
+                                "source_graph_mixed_provenance_rejected"
+                            )
+                            source_graph_receipt["blocker"] = {
+                                "code": "mixed_provenance_rejected",
+                                "stage": "query",
+                            }
+
+                        gap_codes = set(
+                            query_receipt.get("unresolved_boundary_codes", ())
+                            if query_receipt is not None
+                            else ()
+                        )
+                        scope_limited = bool(
+                            gap_codes
+                            & {
+                                "hierarchy_projection_scoped",
+                                "ancestor_definition_skeleton_only",
+                            }
+                        )
+                        query_status = (
+                            query_receipt.get("status")
+                            if query_receipt is not None
+                            else None
+                        )
+                        needs_more_bits = bool(
+                            query_receipt is not None
+                            and query_status == "found"
+                            and int(query_receipt.get("unresolved_bit_count", 0)) > 0
+                        )
+                        can_expand = (
+                            not bootstrap_active
+                            and bool(frontiers)
+                            and scope_limited
+                            and source_provenance_ok
+                            and not _query_gap_blocks_scope_expansion(gap_codes)
+                            and (
+                                query_status == "inconclusive"
+                                or needs_more_bits
+                                or (
+                                    operation == "loads"
+                                    and query_receipt is not None
+                                    and query_receipt.get("coverage_status")
+                                    != "complete"
+                                )
+                            )
+                        )
+                        if can_expand:
+                            if scope_expansion_count >= config.frontier_max_rounds:
+                                source_graph_reason = (
+                                    "source_graph_frontier_round_limit"
+                                )
+                                source_graph_receipt["blocker"] = {
+                                    "code": "frontier_round_limit",
+                                    "stage": "target_scope",
+                                }
+                                break
+                            new_frontiers = [
+                                item
+                                for item in frontiers
+                                if item not in accumulated_frontiers
+                            ]
+                            if not new_frontiers:
+                                source_graph_reason = (
+                                    "source_graph_frontier_expansion_stalled"
+                                )
+                                source_graph_receipt["blocker"] = {
+                                    "code": "frontier_expansion_stalled",
+                                    "stage": "target_scope",
+                                }
+                                break
+                            accumulated_frontiers.extend(new_frontiers)
+                            attempts.append(
+                                _backend_attempt(
+                                    "source_graph",
+                                    "inconclusive",
+                                    reason="source_graph_scope_expansion",
+                                    coverage_status=(
+                                        query_receipt.get("coverage_status")
+                                        if query_receipt is not None
+                                        else None
+                                    ),
+                                )
+                            )
+                            operation_metrics.set_value("source_graph_phase", "adapter")
+                            expansion_started = time.perf_counter()
+                            semantic_context = (
+                                current_plan.request.artifact_identity.semantic_context
+                            )
+                            try:
+                                expanded = await _run_in_cancellable_thread(
+                                    lambda: build_source_graph_frontier_plan(
+                                        compile_log=args["compile_log"],
+                                        compile_result=compile_result,
+                                        hierarchy_result=hierarchy_result,
+                                        hierarchy_snapshot_sha256=(
+                                            hierarchy_snapshot_sha256
+                                        ),
+                                        operation=(
+                                            QueryOperation.DRIVER
+                                            if operation == "driver"
+                                            else QueryOperation.LOADS
+                                        ),
+                                        signal_path=args["signal_path"],
+                                        frontier_signal_paths=tuple(
+                                            accumulated_frontiers
+                                        ),
+                                        top_hint=args.get("top_hint"),
+                                        max_hops=args.get(
+                                            "max_depth",
+                                            10 if operation == "driver" else 1,
+                                        ),
+                                        frontend_version=config.frontend_version,
+                                        runtime_plusarg_allowlist=(
+                                            config.runtime_plusarg_allowlist
+                                        ),
+                                        recursive=(
+                                            bool(args.get("recursive", False))
+                                            if operation == "driver"
+                                            else False
+                                        ),
+                                        include_expr=(
+                                            bool(args.get("include_expr", True))
+                                            if operation == "loads"
+                                            else True
+                                        ),
+                                        kind_filter=(
+                                            tuple(args.get("kind_filter") or ())
+                                            if operation == "loads"
+                                            else ()
+                                        ),
+                                        max_instances=(config.frontier_max_instances),
+                                        semantic_context=semantic_context,
+                                    )
+                                )
+                            except OperationCancelled as exc:
+                                raise asyncio.CancelledError from exc
+                            except Exception:  # noqa: BLE001
+                                expanded = None
+                            current_adapter_ms = (
+                                time.perf_counter() - expansion_started
+                            ) * 1000.0
+                            operation_metrics.set_value(
+                                "source_graph_adapter_ms", current_adapter_ms
+                            )
+                            if expanded is None:
+                                source_graph_reason = (
+                                    "source_graph_frontier_adapter_failed"
+                                )
+                                source_graph_receipt["blocker"] = {
+                                    "code": "frontier_adapter_failed",
+                                    "stage": "target_scope",
+                                }
+                                break
+                            if expanded.status is AdapterStatus.BLOCKED:
+                                assert expanded.receipt.blocker is not None
+                                source_graph_reason = (
+                                    f"source_graph_{expanded.receipt.blocker.code}"
+                                )
+                                source_graph_receipt["blocker"] = {
+                                    "code": expanded.receipt.blocker.code,
+                                    "stage": expanded.receipt.blocker.stage,
+                                }
+                                break
+                            assert expanded.request is not None
+                            expanded_fingerprint = compute_source_graph_build_key(
+                                expanded.request
+                            ).digest
+                            if expanded_fingerprint in {
+                                previous_artifact,
+                                artifact_fingerprint,
+                            }:
+                                source_graph_reason = (
+                                    "source_graph_frontier_expansion_stalled"
+                                )
+                                source_graph_receipt["blocker"] = {
+                                    "code": "frontier_expansion_stalled",
+                                    "stage": "target_scope",
+                                }
+                                break
+                            previous_artifact = artifact_fingerprint
+                            current_plan = expanded
+                            scope_expansion_count += 1
+                            continue
+
+                        if (
+                            source_result is not None
+                            and query_receipt is not None
+                            and source_provenance_ok
+                            and query_status in {"found", "not_connected"}
+                            and (not bootstrap_active or query_status == "found")
+                        ):
+                            source_graph_receipt["artifact_attempt_count"] = (
+                                artifact_attempt_count
+                            )
+                            source_graph_receipt["scope_expansion_count"] = (
+                                scope_expansion_count
+                            )
+                            source_graph_receipt["attempted_query_count"] = (
+                                attempted_query_count
+                            )
+                            source_graph_receipt[
+                                "attempted_artifact_fingerprints_sha256"
+                            ] = attempted_artifacts
+                            source_graph_receipt[
+                                "final_artifact_fingerprint_sha256"
+                            ] = artifact_fingerprint
+                            source_graph_receipt["single_artifact_provenance"] = True
+                            source_graph_receipt["final_artifact_scope_match"] = True
+                            source_graph_receipt["metrics"].update(aggregate_metrics)
+                            _publish_source_graph_trace_metrics(aggregate_metrics)
+                            attempts.append(
+                                _backend_attempt(
+                                    "source_graph",
+                                    "success",
+                                    coverage_status=query_receipt.get(
+                                        "coverage_status"
+                                    ),
+                                )
+                            )
+                            clean = _strip_connectivity_internal_receipts(source_result)
+                            clean["backend"] = "source_graph"
+                            operation_metrics.set_value(
+                                "source_graph_phase", "complete"
+                            )
+                            status = _finalize_public_connectivity_status(
+                                backend_status=backend_status,
+                                selected_backend=selected_backend,
+                                actual_backend="source_graph",
+                                attempts=attempts,
+                                fallback_reason=fallback_reason,
+                                npi_backend=(npi_backend if npi_selected else None),
+                                npi_execution=npi_execution,
+                                source_graph_receipt=source_graph_receipt,
+                                npi_kdb_status=npi_kdb_status,
+                            )
+                            return clean, status
+
+                        if outcome is None:
+                            attempt_status = "failed"
+                        elif outcome.status is PrepareStatus.TIMED_OUT:
+                            attempt_status = "timed_out"
+                        elif outcome.status is not PrepareStatus.READY:
+                            attempt_status = "failed"
+                        else:
+                            attempt_status = "inconclusive"
+                        attempts.append(
+                            _backend_attempt(
+                                "source_graph",
+                                attempt_status,
+                                reason=source_graph_reason,
+                                coverage_status=(
+                                    query_receipt.get("coverage_status")
+                                    if query_receipt is not None
+                                    else (
+                                        outcome.coverage_status.value
+                                        if outcome is not None
+                                        and outcome.coverage_status is not None
+                                        else None
+                                    )
+                                ),
+                            )
+                        )
+                        break
+
+                    source_graph_receipt["artifact_attempt_count"] = (
+                        artifact_attempt_count
+                    )
+                    source_graph_receipt["scope_expansion_count"] = (
+                        scope_expansion_count
+                    )
+                    source_graph_receipt["attempted_query_count"] = (
+                        attempted_query_count
+                    )
+                    source_graph_receipt["attempted_artifact_fingerprints_sha256"] = (
+                        attempted_artifacts
+                    )
+                    source_graph_receipt["metrics"].update(aggregate_metrics)
+                    _publish_source_graph_trace_metrics(aggregate_metrics)
+
+    if bootstrap_active:
+        # Bounded bootstrap negative/inconclusive results must not trigger the
+        # same whole-source Legacy Static scan that this route is intended to
+        # avoid. Only the proved-positive return above may carry connectivity
+        # facts from an incomplete bootstrap artifact.
+        source_graph_receipt["fallback_used"] = False
+        claim_semantics = {
+            "positive_fact_confidence": None,
+            "target_bit_coverage": "none",
+            "global_coverage_status": "inconclusive",
+            "exhaustive_search": False,
+            "exclusive_driver_proved": (
+                False if operation == "driver" else None
+            ),
+            "negative_claim_allowed": False,
+        }
+        if operation == "driver":
+            clean = {
+                "signal_path": args["signal_path"],
+                "wave_path": args["wave_path"],
+                "resolved_rtl_name": args["signal_path"].rsplit(".", 1)[-1],
+                "driver_status": "unknown",
+                "confidence": "unverified",
+                "claim_semantics": claim_semantics,
+                "unsupported_reason": source_graph_reason,
+                "recursive": bool(args.get("recursive", False)),
+                "backend": "source_graph",
+            }
+        else:
+            clean = {
+                "signal_path": args["signal_path"],
+                "resolved_rtl_name": args["signal_path"].rsplit(".", 1)[-1],
+                "loads": [],
+                "completeness": "shallow_only",
+                "unsupported_reason": source_graph_reason,
+                "claim_semantics": claim_semantics,
+                "backend": "source_graph",
+            }
+        status = _finalize_public_connectivity_status(
+            backend_status=backend_status,
+            selected_backend=selected_backend,
+            actual_backend="source_graph",
+            attempts=attempts,
+            fallback_reason=source_graph_reason,
+            npi_backend=npi_backend if npi_selected else None,
+            npi_execution=npi_execution,
+            source_graph_receipt=source_graph_receipt,
+            npi_kdb_status=npi_kdb_status,
+        )
+        return clean, status
+
+    # Legacy Static is always a whole-result recomputation.  No NPI or Source
+    # Graph facts survive into the payload; their attempt receipts remain only
+    # on the envelope.
+    operation_metrics.set_value("source_graph_phase", "fallback")
+    source_graph_receipt["fallback_used"] = True
+    final_reason = source_graph_reason
+    static_backend = StaticConnectivityBackend()
+    static_result = await _call_public_connectivity_operation(
+        static_backend,
+        operation=operation,
+        args=args,
+        simulator=simulator,
+    )
+    if not _single_backend_provenance(
+        static_result,
+        operation=operation,
+        expected="static",
+    ):
+        raise RuntimeError("Legacy Static result contains mixed provenance")
+    attempts.append(_backend_attempt("static", "success"))
+    clean = _strip_connectivity_internal_receipts(static_result)
+    clean["backend"] = "static"
+    status = _finalize_public_connectivity_status(
+        backend_status=backend_status,
+        selected_backend=selected_backend,
+        actual_backend="static",
+        attempts=attempts,
+        fallback_reason=final_reason,
+        npi_backend=npi_backend if npi_selected else None,
+        npi_execution=npi_execution,
+        source_graph_receipt=source_graph_receipt,
+        npi_kdb_status=npi_kdb_status,
+    )
+    return clean, status
+
+
+def _single_path_backend_provenance(result: dict, *, expected: str) -> bool:
+    explicit: list[object] = []
+    if result.get("backend") is not None:
+        explicit.append(result.get("backend"))
+    path = result.get("path")
+    if isinstance(path, list):
+        explicit.extend(
+            hop.get("backend")
+            for hop in path
+            if isinstance(hop, dict) and hop.get("backend") is not None
+        )
+    return all(item == expected for item in explicit)
+
+
+def _npi_path_result_usable(
+    result: dict,
+    *,
+    kdb_status: dict | None = None,
+) -> bool:
+    if result.get("_npi_fallback_reason") or result.get("_npi_call_error"):
+        return False
+    if not _single_path_backend_provenance(result, expected="verdi_npi"):
+        return False
+    if result.get("found") is True:
+        return result.get("unsupported_reason") is None and bool(result.get("path"))
+    if _npi_kdb_degraded(kdb_status=kdb_status):
+        # A partial netlist can prove that a path exists, but it cannot prove
+        # that no path exists through a unit omitted by elaboration.
+        return False
+    return result.get("unsupported_reason") in {
+        "from_not_found",
+        "to_not_found",
+        "not_connected",
+    }
+
+
+async def _call_signal_path_backend(
+    backend,
+    *,
+    args: dict,
+    simulator: str,
+) -> dict:
+    def query():
+        return backend.find_path(
+            from_signal=args["from_signal"],
+            to_signal=args["to_signal"],
+            compile_log=args["compile_log"],
+            top_hint=args.get("top_hint"),
+            expand_assigns=args.get("expand_assigns", False),
+            simulator=simulator,
+        )
+
+    if backend.name in {"static", "source_graph"}:
+        raw = await _run_in_cancellable_thread(query)
+    else:
+        raw = await _call_connectivity_backend(backend, query)
+    if not isinstance(raw, dict):
+        raise TypeError("connectivity path backend result must be a mapping")
+    return raw
+
+
+def _source_graph_path_fallback_reason(query_status: str | None) -> str:
+    return {
+        "from_unresolved": "source_graph_path_from_unresolved",
+        "to_unresolved": "source_graph_path_to_unresolved",
+        "endpoints_unresolved": "source_graph_path_endpoints_unresolved",
+        "truncated": "source_graph_path_truncated",
+        "inconclusive": "source_graph_coverage_inconclusive",
+    }.get(query_status, "source_graph_query_failed")
+
+
+async def _route_public_signal_path(
+    *,
+    args: dict,
+    simulator: str,
+) -> tuple[dict, dict]:
+    """Route one path result through NPI, Source Graph, then Legacy Static."""
+
+    from src.connectivity_backend import (  # noqa: PLC0415
+        DeferredConnectivityFallbackBackend,
+        StaticConnectivityBackend,
+        select_backend,
+    )
+
+    backend_status = _safe_probe_backend(args["compile_log"], simulator)
+    deferred = DeferredConnectivityFallbackBackend()
+    npi_selection_reason: str | None = None
+    try:
+        npi_backend = select_backend(backend_status, fallback=deferred)
+    except Exception:  # noqa: BLE001
+        npi_backend = deferred
+        npi_selection_reason = "npi_backend_initialization_failed"
+    npi_selected = getattr(npi_backend, "name", None) == "verdi_npi"
+    selected_backend = "verdi_npi" if npi_selected else "source_graph"
+    attempts: list[dict] = []
+    npi_execution: dict | None = None
+    npi_kdb_status: dict | None = None
+    fallback_reason: str | None = None
+    probe_npi_reason = backend_status.pop("_npi_selection_reason", None)
+
+    if npi_selected:
+        try:
+            npi_result = await _call_signal_path_backend(
+                npi_backend,
+                args=args,
+                simulator=simulator,
+            )
+        except OperationCancelled as exc:
+            raise asyncio.CancelledError from exc
+        except Exception:  # noqa: BLE001
+            npi_result = None
+            fallback_reason = "npi_query_failed"
+            attempts.append(
+                _backend_attempt(
+                    "verdi_npi",
+                    "failed",
+                    reason=fallback_reason,
+                )
+            )
+        if npi_result is not None:
+            npi_kdb_status = _npi_kdb_status(npi_backend)
+            execution = npi_result.get("_npi_execution_status")
+            if isinstance(execution, dict):
+                npi_execution = dict(execution)
+            if _npi_path_result_usable(
+                npi_result,
+                kdb_status=npi_kdb_status,
+            ):
+                attempts.append(
+                    _backend_attempt(
+                        "verdi_npi",
+                        "success",
+                        coverage_status=(
+                            "partial"
+                            if _npi_kdb_degraded(kdb_status=npi_kdb_status)
+                            else None
+                        ),
+                    )
+                )
+                clean = _strip_connectivity_internal_receipts(npi_result)
+                clean["backend"] = "verdi_npi"
+                status = _finalize_public_connectivity_status(
+                    backend_status=backend_status,
+                    selected_backend=selected_backend,
+                    actual_backend="verdi_npi",
+                    attempts=attempts,
+                    fallback_reason=None,
+                    npi_backend=npi_backend,
+                    npi_execution=npi_execution,
+                    source_graph_receipt=None,
+                    npi_kdb_status=npi_kdb_status,
+                )
+                return clean, status
+            raw_reason = npi_result.get("_npi_fallback_reason")
+            fallback_reason = (
+                "npi_query_failed"
+                if npi_result.get("_npi_call_error")
+                else (
+                    "npi_degraded_result_inconclusive"
+                    if _npi_kdb_degraded(kdb_status=npi_kdb_status)
+                    and not raw_reason
+                    else _sanitize_npi_fallback_reason(raw_reason)
+                )
+            )
+            attempts.append(
+                _backend_attempt(
+                    "verdi_npi",
+                    "failed"
+                    if raw_reason or npi_result.get("_npi_call_error")
+                    else "inconclusive",
+                    reason=fallback_reason,
+                    coverage_status=(
+                        "partial"
+                        if _npi_kdb_degraded(kdb_status=npi_kdb_status)
+                        else None
+                    ),
+                )
+            )
+    else:
+        fallback_reason = (
+            npi_selection_reason or probe_npi_reason or "npi_kdb_unavailable"
+        )
+        attempts.append(
+            _backend_attempt(
+                "verdi_npi",
+                "failed" if npi_selection_reason else "unavailable",
+                reason=fallback_reason,
+            )
+        )
+
+    config = get_source_graph_execution_config()
+    source_graph_receipt: dict
+    source_graph_reason: str
+    if not config.enabled:
+        source_graph_reason = "source_graph_disabled"
+        source_graph_receipt = _blocked_source_graph_receipt(
+            "disabled",
+            code=source_graph_reason,
+            stage="execution_config",
+        )
+        attempts.append(
+            _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
+        )
+    elif not config.valid:
+        source_graph_reason = config.error_code or "source_graph_config_invalid"
+        source_graph_receipt = _blocked_source_graph_receipt(
+            "invalid",
+            code=source_graph_reason,
+            stage="execution_config",
+        )
+        attempts.append(
+            _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
+        )
+    else:
+        operation_metrics.set_value("source_graph_phase", "adapter")
+        adapter_started = time.perf_counter()
+        hierarchy_result, hierarchy_snapshot_sha256 = _resolve_hierarchy_context(
+            args["compile_log"], simulator
+        )
+        if hierarchy_result is None:
+            adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
+            operation_metrics.set_value("source_graph_adapter_ms", adapter_wall_ms)
+            source_graph_reason = "source_graph_hierarchy_context_unavailable"
+            source_graph_receipt = _blocked_source_graph_receipt(
+                "blocked",
+                code=source_graph_reason,
+                stage="target_scope",
+                adapter_wall_ms=adapter_wall_ms,
+            )
+            attempts.append(
+                _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
+            )
+        else:
+            compile_result = hierarchy_result.get("compile_result")
+            if not isinstance(compile_result, dict):
+                adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
+                operation_metrics.set_value("source_graph_adapter_ms", adapter_wall_ms)
+                source_graph_reason = "source_graph_compile_context_unavailable"
+                source_graph_receipt = _blocked_source_graph_receipt(
+                    "blocked",
+                    code=source_graph_reason,
+                    stage="compile_manifest",
+                    adapter_wall_ms=adapter_wall_ms,
+                )
+                attempts.append(
+                    _backend_attempt(
+                        "source_graph", "blocked", reason=source_graph_reason
+                    )
+                )
+            else:
+                try:
+                    plan = await _run_in_cancellable_thread(
+                        lambda: build_source_graph_path_plan(
+                            compile_log=args["compile_log"],
+                            compile_result=compile_result,
+                            hierarchy_result=hierarchy_result,
+                            hierarchy_snapshot_sha256=hierarchy_snapshot_sha256,
+                            from_signal=args["from_signal"],
+                            to_signal=args["to_signal"],
+                            top_hint=args.get("top_hint"),
+                            expand_assigns=args.get("expand_assigns", False),
+                            frontend_version=config.frontend_version,
+                            runtime_plusarg_allowlist=(
+                                config.runtime_plusarg_allowlist
+                            ),
+                        )
+                    )
+                except OperationCancelled as exc:
+                    raise asyncio.CancelledError from exc
+                adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
+                operation_metrics.set_value("source_graph_adapter_ms", adapter_wall_ms)
+                if plan.status is AdapterStatus.BLOCKED:
+                    assert plan.receipt.blocker is not None
+                    source_graph_reason = f"source_graph_{plan.receipt.blocker.code}"
+                    source_graph_receipt = _blocked_source_graph_receipt(
+                        "blocked",
+                        code=plan.receipt.blocker.code,
+                        stage=plan.receipt.blocker.stage,
+                        adapter=plan.receipt.to_dict(),
+                        adapter_wall_ms=adapter_wall_ms,
+                    )
+                    attempts.append(
+                        _backend_attempt(
+                            "source_graph",
+                            "blocked",
+                            reason=source_graph_reason,
+                        )
+                    )
+                else:
+                    assert plan.request is not None
+                    operation_metrics.set_value("source_graph_phase", "prepare")
+                    try:
+                        runtime = get_source_graph_runtime(config)
+                        outcome = await runtime.prepare(
+                            plan.request,
+                            timeout_seconds=config.timeout_sec,
+                        )
+                    except OperationCancelled as exc:
+                        raise asyncio.CancelledError from exc
+                    except RuntimeError:
+                        outcome = None
+                        source_graph_reason = "source_graph_runtime_config_changed"
+                    except Exception:  # noqa: BLE001
+                        outcome = None
+                        source_graph_reason = "source_graph_prepare_failed"
+                    if outcome is None:
+                        source_graph_receipt = _blocked_source_graph_receipt(
+                            "ready",
+                            code=source_graph_reason,
+                            stage="runtime_prepare",
+                            adapter=plan.receipt.to_dict(),
+                            adapter_wall_ms=adapter_wall_ms,
+                        )
+                        source_graph_receipt["prepare_status"] = "build_failed"
+                        source_graph_receipt["effective_timeout_sec"] = (
+                            config.timeout_sec
+                        )
+                        source_graph_receipt["build_key_sha256"] = (
+                            compute_source_graph_build_key(plan.request).digest
+                        )
+                        source_graph_receipt["compile_fingerprint_sha256"] = (
+                            plan.request.identity.compile_inputs.fingerprint
+                        )
+                        attempts.append(
+                            _backend_attempt(
+                                "source_graph",
+                                "failed",
+                                reason=source_graph_reason,
+                            )
+                        )
+                    else:
+                        _record_source_graph_prepare_metrics(outcome)
+                        source_graph_receipt = _source_graph_receipt_from_prepare(
+                            plan,
+                            outcome,
+                            adapter_wall_ms=adapter_wall_ms,
+                        )
+                        if outcome.status is PrepareStatus.CANCELLED:
+                            operation_metrics.set_value(
+                                "source_graph_phase", "cancelled"
+                            )
+                            raise asyncio.CancelledError
+                        if outcome.status is not PrepareStatus.READY:
+                            source_graph_reason = _SOURCE_GRAPH_PREPARE_REASONS.get(
+                                outcome.status,
+                                "source_graph_prepare_failed",
+                            )
+                            attempts.append(
+                                _backend_attempt(
+                                    "source_graph",
+                                    (
+                                        "timed_out"
+                                        if outcome.status is PrepareStatus.TIMED_OUT
+                                        else "failed"
+                                    ),
+                                    reason=source_graph_reason,
+                                    coverage_status=(
+                                        outcome.coverage_status.value
+                                        if outcome.coverage_status is not None
+                                        else None
+                                    ),
+                                )
+                            )
+                        else:
+                            assert outcome.entry is not None
+                            operation_metrics.set_value("source_graph_phase", "query")
+                            query_started = time.perf_counter()
+                            source_backend = _source_graph_backend_for_plan(
+                                outcome.entry, plan
+                            )
+                            source_result = None
+                            query_receipt = None
+                            try:
+                                source_result = await _call_signal_path_backend(
+                                    source_backend,
+                                    args=args,
+                                    simulator=simulator,
+                                )
+                                query_receipt = source_result.pop(
+                                    "_source_graph_query_receipt"
+                                )
+                                source_graph_reason = (
+                                    _source_graph_path_fallback_reason(
+                                        query_receipt.get("status")
+                                    )
+                                )
+                            except OperationCancelled as exc:
+                                raise asyncio.CancelledError from exc
+                            except SourceGraphQueryBlocked as exc:
+                                source_graph_reason = f"source_graph_{exc.code}"
+                            except (KeyError, ValueError):
+                                source_graph_reason = (
+                                    "source_graph_query_target_unresolved"
+                                )
+                            except Exception:  # noqa: BLE001
+                                source_graph_reason = "source_graph_query_failed"
+                            query_wall_ms = (
+                                time.perf_counter() - query_started
+                            ) * 1000.0
+                            operation_metrics.set_value(
+                                "source_graph_query_ms", query_wall_ms
+                            )
+                            if query_receipt is not None:
+                                _merge_source_graph_query_receipt(
+                                    source_graph_receipt,
+                                    query_receipt,
+                                    query_wall_ms=query_wall_ms,
+                                )
+                            else:
+                                source_graph_receipt["blocker"] = {
+                                    "code": source_graph_reason.removeprefix(
+                                        "source_graph_"
+                                    ),
+                                    "stage": "query",
+                                }
+                                source_graph_receipt["metrics"]["query_wall_ms"] = (
+                                    query_wall_ms
+                                )
+                            source_provenance_ok = (
+                                source_result is not None
+                                and _single_path_backend_provenance(
+                                    source_result,
+                                    expected="source_graph",
+                                )
+                            )
+                            if source_result is not None and not source_provenance_ok:
+                                source_graph_reason = (
+                                    "source_graph_mixed_provenance_rejected"
+                                )
+                                source_graph_receipt["blocker"] = {
+                                    "code": "mixed_provenance_rejected",
+                                    "stage": "query",
+                                }
+                            query_status = (
+                                query_receipt.get("status")
+                                if query_receipt is not None
+                                else None
+                            )
+                            coverage_status = (
+                                query_receipt.get("coverage_status")
+                                if query_receipt is not None
+                                else None
+                            )
+                            source_usable = query_status == "found" or (
+                                query_status == "not_connected"
+                                and coverage_status == "complete"
+                            )
+                            if (
+                                source_result is not None
+                                and query_receipt is not None
+                                and source_provenance_ok
+                                and source_usable
+                            ):
+                                attempts.append(
+                                    _backend_attempt(
+                                        "source_graph",
+                                        "success",
+                                        coverage_status=coverage_status,
+                                    )
+                                )
+                                clean = _strip_connectivity_internal_receipts(
+                                    source_result
+                                )
+                                clean["backend"] = "source_graph"
+                                operation_metrics.set_value(
+                                    "source_graph_phase", "complete"
+                                )
+                                status = _finalize_public_connectivity_status(
+                                    backend_status=backend_status,
+                                    selected_backend=selected_backend,
+                                    actual_backend="source_graph",
+                                    attempts=attempts,
+                                    fallback_reason=fallback_reason,
+                                    npi_backend=(npi_backend if npi_selected else None),
+                                    npi_execution=npi_execution,
+                                    source_graph_receipt=source_graph_receipt,
+                                    npi_kdb_status=npi_kdb_status,
+                                )
+                                return clean, status
+                            attempts.append(
+                                _backend_attempt(
+                                    "source_graph",
+                                    "inconclusive",
+                                    reason=source_graph_reason,
+                                    coverage_status=(
+                                        coverage_status
+                                        if coverage_status is not None
+                                        else outcome.coverage_status.value
+                                    ),
+                                )
+                            )
+
+    operation_metrics.set_value("source_graph_phase", "fallback")
+    source_graph_receipt["fallback_used"] = True
+    static_backend = StaticConnectivityBackend()
+    try:
+        static_result = await _call_signal_path_backend(
+            static_backend,
+            args=args,
+            simulator=simulator,
+        )
+    except OperationCancelled as exc:
+        raise asyncio.CancelledError from exc
+    if not _single_path_backend_provenance(static_result, expected="static"):
+        raise RuntimeError("Legacy Static path result contains mixed provenance")
+    attempts.append(_backend_attempt("static", "success"))
+    clean = _strip_connectivity_internal_receipts(static_result)
+    clean["backend"] = "static"
+    status = _finalize_public_connectivity_status(
+        backend_status=backend_status,
+        selected_backend=selected_backend,
+        actual_backend="static",
+        attempts=attempts,
+        fallback_reason=source_graph_reason,
+        npi_backend=npi_backend if npi_selected else None,
+        npi_execution=npi_execution,
+        source_graph_receipt=source_graph_receipt,
+        npi_kdb_status=npi_kdb_status,
+    )
+    return clean, status
+
+
+class _TraceBackendFallback(RuntimeError):
+    """Abort one X-trace attempt when NPI internally used its fallback.
+
+    Connectivity backends currently fall back per driver query. X-trace issues
+    several such queries, so consuming the returned Static result in-place
+    could produce one chain that mixes exact NPI nodes with approximate Static
+    nodes. The dispatch layer catches this marker and restarts the whole trace
+    with Static instead.
+    """
+
+    def __init__(
+        self,
+        reason: str,
+        execution_status: dict | None = None,
+        kdb_status: dict | None = None,
+    ):
+        super().__init__(reason)
+        self.reason = reason
+        self.execution_status = dict(execution_status or {})
+        self.kdb_status = dict(kdb_status or {})
+
+
+async def _run_trace_x_attempt(
+    *,
+    backend,
+    wave_path: str,
+    signal_path: str,
+    time_ps: int,
+    compile_log: str,
+    top_hint: str | None,
+    max_depth: int,
+    simulator: str,
+    abort_on_backend_fallback: bool,
+    upstream_scope_guard: Callable[[list[str]], object] | None = None,
+) -> tuple[dict, dict]:
+    """Run one backend-consistent X-trace attempt.
+
+    Wave callbacks each take the parser lock only for the actual read/resolve
+    phase. Driver lookup happens after that callback returns, so local NPI,
+    LSF waits, and Static source scans never run while the wave lock is held.
+    """
+
+    execution_status: dict = {}
+    kdb_status: dict | None = None
+
+    async def _value_lookup(path: str, at_ps: int) -> dict:
+        def _work():
+            return _get_parser(wave_path).get_value_at_time(path, at_ps)
+
+        return await _run_in_wave_thread(wave_path, _work)
+
+    async def _upstream_lookup(
+        upstream_names: list[str],
+        current_signal_path: str,
+        at_ps: int,
+    ) -> list[dict]:
+        def _work():
+            return inspect_upstream_values(
+                _get_parser(wave_path),
+                upstream_names,
+                current_signal_path,
+                at_ps,
+            )
+
+        return await _run_in_wave_thread(wave_path, _work)
+
+    async def _driver_lookup(path: str) -> dict:
+        nonlocal kdb_status
+
+        def _query_backend():
+            return backend.find_driver(
+                signal_path=path,
+                wave_path=wave_path,
+                compile_log=compile_log,
+                top_hint=top_hint,
+                # NPI must walk the elaborated fan-in cone here. A shallow
+                # query can stop on an intermediate positional-port alias
+                # (for example the top-level bridge_prdata net) even though
+                # fan_in_reg_list can reach the real sequential driver.
+                # Keep Static shallow so its legacy X-trace semantics and
+                # blind-spot baseline remain unchanged.
+                recursive=backend.name != "static",
+                max_depth=max_depth,
+                simulator=simulator,
+            )
+
+        # Before backend injection, the Static scan ran inside the X-trace
+        # wave worker. Keep its event-loop liveness without keeping the wave
+        # lock: Static is pure Python/source I/O and already ran in a worker.
+        # Local NPI intentionally retains its existing synchronous execution
+        # model; LSF uses its established cancellable worker path.
+        if backend.name in {"static", "source_graph"}:
+            raw = await _run_in_cancellable_thread(_query_backend)
+        else:
+            raw = await _call_connectivity_backend(backend, _query_backend)
+        if not isinstance(raw, dict):
+            raise TypeError("connectivity backend find_driver must return a mapping")
+
+        execution = raw.get("_npi_execution_status")
+        if isinstance(execution, dict):
+            execution_status.update(execution)
+        current_kdb_status = _npi_kdb_status(backend)
+        if current_kdb_status is not None:
+            kdb_status = current_kdb_status
+
+        fallback_reason = raw.get("_npi_fallback_reason")
+        fallback_deferred = raw.get("_connectivity_fallback_deferred") is True
+        explicit_backends = []
+        if raw.get("backend") is not None:
+            explicit_backends.append(raw.get("backend"))
+        driver_chain = raw.get("driver_chain")
+        if isinstance(driver_chain, list):
+            explicit_backends.extend(
+                hop.get("backend")
+                for hop in driver_chain
+                if isinstance(hop, dict) and hop.get("backend") is not None
+            )
+        mixed_provenance = any(item != "verdi_npi" for item in explicit_backends)
+        degraded_inconclusive = (
+            abort_on_backend_fallback
+            and _npi_kdb_degraded(kdb_status=current_kdb_status)
+            and not _npi_driver_result_has_positive_fact(raw)
+        )
+        if abort_on_backend_fallback and (
+            fallback_reason
+            or fallback_deferred
+            or mixed_provenance
+            or degraded_inconclusive
+        ):
+            raise _TraceBackendFallback(
+                str(
+                    fallback_reason
+                    or (
+                        "npi_degraded_result_inconclusive"
+                        if degraded_inconclusive
+                        else "npi_result_not_usable"
+                    )
+                ),
+                execution_status,
+                kdb_status,
+            )
+
+        # Internal routing receipts belong on the trace envelope, not on one
+        # propagation node. Keep the driver facts themselves unchanged.
+        clean = dict(raw)
+        clean.pop("_npi_execution_status", None)
+        clean.pop("_npi_fallback_reason", None)
+        clean.pop("_npi_call_error", None)
+        clean.pop("_connectivity_fallback_deferred", None)
+        return clean
+
+    attempt = trace_x_source(
+        wave_path=wave_path,
+        signal_path=signal_path,
+        time_ps=time_ps,
+        compile_log=compile_log,
+        parser=None,
+        top_hint=top_hint,
+        max_depth=max_depth,
+        simulator=simulator,
+        driver_lookup=_driver_lookup,
+        value_lookup=_value_lookup,
+        upstream_lookup=_upstream_lookup,
+        upstream_scope_guard=upstream_scope_guard,
+    )
+    result = await attempt if inspect.isawaitable(attempt) else attempt
+    if not isinstance(result, dict):
+        raise TypeError("trace_x_source must return a mapping")
+    if kdb_status is not None:
+        execution_status["_trace_npi_kdb_status"] = kdb_status
+    return result, execution_status
+
+
+async def _handle_trace_x_source(args: dict, simulator: str):
+    """Route X-trace through NPI -> one Source Graph artifact -> Static."""
+
+    from src.connectivity_backend import (  # noqa: PLC0415
+        DeferredConnectivityFallbackBackend,
+        StaticConnectivityBackend,
+        select_backend,
+    )
+
+    wave_path = args["wave_path"]
+    compile_log = args["compile_log"]
+    time_ps = _resolve_time(args["time_ps"])
+    signal_path = args["signal_path"]
+    top_hint = args.get("top_hint")
+    max_depth = args.get("max_depth", DEFAULT_X_TRACE_MAX_DEPTH)
+    backend_status = _safe_probe_backend(compile_log, simulator)
+    deferred = DeferredConnectivityFallbackBackend()
+    npi_selection_reason: str | None = None
+    try:
+        selector_parameters = inspect.signature(select_backend).parameters.values()
+        supports_injected_fallback = any(
+            parameter.name == "fallback"
+            or parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in selector_parameters
+        )
+        npi_backend = (
+            select_backend(backend_status, fallback=deferred)
+            if supports_injected_fallback
+            else select_backend(backend_status)
+        )
+    except Exception:  # noqa: BLE001
+        npi_backend = deferred
+        npi_selection_reason = "npi_backend_initialization_failed"
+    npi_selected = getattr(npi_backend, "name", None) == "verdi_npi"
+    selected_backend = "verdi_npi" if npi_selected else "source_graph"
+    attempts: list[dict] = []
+    restart_reasons: list[str] = []
+    npi_execution: dict | None = None
+    npi_kdb_status: dict | None = None
+    npi_reason: str | None = None
+    probe_npi_reason = backend_status.pop("_npi_selection_reason", None)
+
+    def _finalize_trace(
+        result: dict,
+        *,
+        actual_backend: str,
+        fallback_reason: str | None,
+        source_graph_receipt: dict | None,
+    ):
+        finalized = _finalize_public_connectivity_status(
+            backend_status=backend_status,
+            selected_backend=selected_backend,
+            actual_backend=actual_backend,
+            attempts=attempts,
+            fallback_reason=fallback_reason,
+            npi_backend=npi_backend if npi_selected else None,
+            npi_execution=npi_execution,
+            source_graph_receipt=source_graph_receipt,
+            npi_kdb_status=npi_kdb_status,
+        )
+        configured_mode = getattr(npi_backend, "execution_mode", None)
+        if finalized.get("execution_mode") is None and configured_mode in {
+            "local",
+            "lsf",
+            "invalid",
+        }:
+            # A clean/missing waveform signal may require no driver query, so
+            # no per-call scheduler receipt exists. Preserve selected policy.
+            finalized["execution_mode"] = configured_mode
+        finalized["whole_trace_restart_count"] = len(restart_reasons)
+        finalized["whole_trace_restart_reasons"] = list(restart_reasons)
+        finalized["single_backend_provenance"] = True
+        result["backend_status"] = finalized
+        result["trace_restarted"] = bool(restart_reasons)
+        return schemas.TraceXSourceResult.model_validate(result)
+
+    if npi_selected:
+        try:
+            result, execution_status = await _run_trace_x_attempt(
+                backend=npi_backend,
+                wave_path=wave_path,
+                signal_path=signal_path,
+                time_ps=time_ps,
+                compile_log=compile_log,
+                top_hint=top_hint,
+                max_depth=max_depth,
+                simulator=simulator,
+                abort_on_backend_fallback=True,
+            )
+        except OperationCancelled as exc:
+            raise asyncio.CancelledError from exc
+        except _TraceBackendFallback as exc:
+            npi_reason = _sanitize_npi_fallback_reason(exc.reason)
+            npi_execution = dict(exc.execution_status) or None
+            npi_kdb_status = dict(exc.kdb_status) or None
+            degraded = (
+                npi_kdb_status is not None
+                and npi_kdb_status.get("load_quality") == "degraded"
+            )
+            attempts.append(
+                _backend_attempt(
+                    "verdi_npi",
+                    "inconclusive" if degraded else "failed",
+                    reason=npi_reason,
+                    coverage_status="partial" if degraded else None,
+                )
+            )
+            restart_reasons.append(
+                "npi_degraded_inconclusive"
+                if degraded
+                else "npi_internal_fallback"
+            )
+        except Exception:  # noqa: BLE001
+            npi_reason = "npi_query_failed"
+            attempts.append(_backend_attempt("verdi_npi", "failed", reason=npi_reason))
+            restart_reasons.append("npi_query_failed")
+        else:
+            loaded_kdb_status = execution_status.pop(
+                "_trace_npi_kdb_status",
+                None,
+            )
+            if execution_status:
+                npi_execution = execution_status
+            npi_kdb_status = loaded_kdb_status
+            degraded = (
+                npi_kdb_status is not None
+                and npi_kdb_status.get("load_quality") == "degraded"
+            )
+            attempts.append(
+                _backend_attempt(
+                    "verdi_npi",
+                    "success",
+                    coverage_status="partial" if degraded else None,
+                )
+            )
+            return _finalize_trace(
+                result,
+                actual_backend="verdi_npi",
+                fallback_reason=None,
+                source_graph_receipt=None,
+            )
+    else:
+        npi_reason = (
+            npi_selection_reason or probe_npi_reason or "npi_kdb_unavailable"
+        )
+        attempts.append(
+            _backend_attempt(
+                "verdi_npi",
+                "failed" if npi_selection_reason else "unavailable",
+                reason=npi_reason,
+            )
+        )
+
+    config = get_source_graph_execution_config()
+    source_graph_receipt: dict
+    source_graph_reason: str
+    source_graph_attempted = False
+    artifact_attempt_count = 0
+    scope_expansion_count = 0
+    attempted_query_count = 0
+    attempted_artifact_fingerprints: list[str] = []
+    trace_metrics: dict[str, int | float] = {}
+    source_result: dict | None = None
+
+    if not config.enabled:
+        source_graph_reason = "source_graph_disabled"
+        source_graph_receipt = _blocked_source_graph_receipt(
+            "disabled",
+            code=source_graph_reason,
+            stage="execution_config",
+        )
+        attempts.append(
+            _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
+        )
+    elif not config.valid:
+        source_graph_reason = config.error_code or "source_graph_config_invalid"
+        source_graph_receipt = _blocked_source_graph_receipt(
+            "invalid",
+            code=source_graph_reason,
+            stage="execution_config",
+        )
+        attempts.append(
+            _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
+        )
+    else:
+        hierarchy_result, hierarchy_snapshot_sha256 = _resolve_hierarchy_context(
+            compile_log, simulator
+        )
+        if hierarchy_result is None:
+            source_graph_reason = "source_graph_hierarchy_context_unavailable"
+            source_graph_receipt = _blocked_source_graph_receipt(
+                "blocked",
+                code=source_graph_reason,
+                stage="target_scope",
+            )
+            attempts.append(
+                _backend_attempt("source_graph", "blocked", reason=source_graph_reason)
+            )
+        else:
+            compile_result = hierarchy_result.get("compile_result")
+            if not isinstance(compile_result, dict):
+                source_graph_reason = "source_graph_compile_context_unavailable"
+                source_graph_receipt = _blocked_source_graph_receipt(
+                    "blocked",
+                    code=source_graph_reason,
+                    stage="compile_manifest",
+                )
+                attempts.append(
+                    _backend_attempt(
+                        "source_graph", "blocked", reason=source_graph_reason
+                    )
+                )
+            else:
+                scope_targets = [signal_path]
+                while True:
+                    operation_metrics.set_value("source_graph_phase", "adapter")
+                    adapter_started = time.perf_counter()
+                    try:
+                        plan = await _run_in_cancellable_thread(
+                            lambda: build_source_graph_trace_plan(
+                                compile_log=compile_log,
+                                compile_result=compile_result,
+                                hierarchy_result=hierarchy_result,
+                                hierarchy_snapshot_sha256=(
+                                    hierarchy_snapshot_sha256
+                                ),
+                                signal_paths=tuple(scope_targets),
+                                top_hint=top_hint,
+                                max_hops=max_depth,
+                                frontend_version=config.frontend_version,
+                                runtime_plusarg_allowlist=(
+                                    config.runtime_plusarg_allowlist
+                                ),
+                            )
+                        )
+                    except OperationCancelled as exc:
+                        raise asyncio.CancelledError from exc
+                    except Exception:  # noqa: BLE001
+                        plan = None
+                    adapter_wall_ms = (time.perf_counter() - adapter_started) * 1000.0
+                    operation_metrics.set_value(
+                        "source_graph_adapter_ms", adapter_wall_ms
+                    )
+                    _accumulate_source_graph_trace_metrics(
+                        trace_metrics,
+                        adapter_wall_ms=adapter_wall_ms,
+                    )
+                    if plan is None:
+                        source_graph_reason = "source_graph_adapter_failed"
+                        source_graph_receipt = _blocked_source_graph_receipt(
+                            "blocked",
+                            code=source_graph_reason,
+                            stage="target_scope",
+                            adapter_wall_ms=adapter_wall_ms,
+                        )
+                        attempts.append(
+                            _backend_attempt(
+                                "source_graph",
+                                "failed",
+                                reason=source_graph_reason,
+                            )
+                        )
+                        break
+                    if plan.status is AdapterStatus.BLOCKED:
+                        assert plan.receipt.blocker is not None
+                        source_graph_reason = (
+                            f"source_graph_{plan.receipt.blocker.code}"
+                        )
+                        source_graph_receipt = _blocked_source_graph_receipt(
+                            "blocked",
+                            code=plan.receipt.blocker.code,
+                            stage=plan.receipt.blocker.stage,
+                            adapter=plan.receipt.to_dict(),
+                            adapter_wall_ms=adapter_wall_ms,
+                        )
+                        attempts.append(
+                            _backend_attempt(
+                                "source_graph",
+                                "blocked",
+                                reason=source_graph_reason,
+                            )
+                        )
+                        break
+
+                    assert plan.request is not None
+                    operation_metrics.set_value("source_graph_phase", "prepare")
+                    try:
+                        runtime = get_source_graph_runtime(config)
+                        outcome = await runtime.prepare(
+                            plan.request,
+                            timeout_seconds=config.timeout_sec,
+                        )
+                    except OperationCancelled as exc:
+                        raise asyncio.CancelledError from exc
+                    except RuntimeError:
+                        outcome = None
+                        source_graph_reason = "source_graph_runtime_config_changed"
+                    except Exception:  # noqa: BLE001
+                        outcome = None
+                        source_graph_reason = "source_graph_prepare_failed"
+
+                    artifact_attempt_count += 1
+                    attempted_artifact_fingerprints.append(
+                        compute_source_graph_build_key(plan.request).digest
+                    )
+                    if outcome is None:
+                        source_graph_receipt = _blocked_source_graph_receipt(
+                            "ready",
+                            code=source_graph_reason,
+                            stage="runtime_prepare",
+                            adapter=plan.receipt.to_dict(),
+                            adapter_wall_ms=adapter_wall_ms,
+                        )
+                        source_graph_receipt["prepare_status"] = "build_failed"
+                        source_graph_receipt["effective_timeout_sec"] = (
+                            config.timeout_sec
+                        )
+                        source_graph_receipt["build_key_sha256"] = (
+                            attempted_artifact_fingerprints[-1]
+                        )
+                        source_graph_receipt["compile_fingerprint_sha256"] = (
+                            plan.request.identity.compile_inputs.fingerprint
+                        )
+                        attempts.append(
+                            _backend_attempt(
+                                "source_graph",
+                                "failed",
+                                reason=source_graph_reason,
+                            )
+                        )
+                        break
+
+                    _record_source_graph_prepare_metrics(outcome)
+                    _accumulate_source_graph_trace_metrics(
+                        trace_metrics,
+                        prepare_metrics=outcome.metrics,
+                    )
+                    source_graph_receipt = _source_graph_receipt_from_prepare(
+                        plan,
+                        outcome,
+                        adapter_wall_ms=adapter_wall_ms,
+                    )
+                    if outcome.status is PrepareStatus.CANCELLED:
+                        operation_metrics.set_value("source_graph_phase", "cancelled")
+                        raise asyncio.CancelledError
+                    if outcome.status is not PrepareStatus.READY:
+                        source_graph_reason = _SOURCE_GRAPH_PREPARE_REASONS.get(
+                            outcome.status,
+                            "source_graph_prepare_failed",
+                        )
+                        attempts.append(
+                            _backend_attempt(
+                                "source_graph",
+                                (
+                                    "timed_out"
+                                    if outcome.status is PrepareStatus.TIMED_OUT
+                                    else "failed"
+                                ),
+                                reason=source_graph_reason,
+                                coverage_status=(
+                                    outcome.coverage_status.value
+                                    if outcome.coverage_status is not None
+                                    else None
+                                ),
+                            )
+                        )
+                        break
+
+                    assert outcome.entry is not None
+                    selected_artifact_fingerprint = outcome.entry.build_key.digest
+                    attempted_artifact_fingerprints[-1] = selected_artifact_fingerprint
+                    trace_backend = SourceGraphTraceConnectivityBackend(
+                        backend=_source_graph_backend_for_plan(outcome.entry, plan),
+                        artifact_scope=(outcome.entry.artifact_scope_receipt.scope),
+                        hierarchy_result=hierarchy_result,
+                        artifact_fingerprint_sha256=(selected_artifact_fingerprint),
+                    )
+                    source_graph_attempted = True
+                    operation_metrics.set_value("source_graph_phase", "query")
+                    try:
+                        source_result, _ = await _run_trace_x_attempt(
+                            backend=trace_backend,
+                            wave_path=wave_path,
+                            signal_path=signal_path,
+                            time_ps=time_ps,
+                            compile_log=compile_log,
+                            top_hint=top_hint,
+                            max_depth=max_depth,
+                            simulator=simulator,
+                            abort_on_backend_fallback=False,
+                            upstream_scope_guard=(trace_backend.require_scope),
+                        )
+                    except OperationCancelled as exc:
+                        raise asyncio.CancelledError from exc
+                    except SourceGraphTraceScopeExpansion as exc:
+                        attempted_query_count += len(
+                            trace_backend.ledger.query_fingerprints_sha256
+                        )
+                        _accumulate_source_graph_trace_metrics(
+                            trace_metrics,
+                            query_wall_ms=trace_backend.query_wall_ms,
+                        )
+                        new_targets = [
+                            path
+                            for path in exc.signal_paths
+                            if path not in scope_targets
+                        ]
+                        if not new_targets:
+                            source_graph_reason = "source_graph_scope_expansion_stalled"
+                            source_graph_receipt["blocker"] = {
+                                "code": "scope_expansion_stalled",
+                                "stage": "target_scope",
+                            }
+                            attempts.append(
+                                _backend_attempt(
+                                    "source_graph",
+                                    "blocked",
+                                    reason=source_graph_reason,
+                                )
+                            )
+                            break
+                        if (
+                            len(scope_targets) + len(new_targets)
+                            > config.frontier_max_instances
+                        ):
+                            source_graph_reason = "source_graph_frontier_instance_limit"
+                            source_graph_receipt["blocker"] = {
+                                "code": "frontier_instance_limit",
+                                "stage": "target_scope",
+                            }
+                            attempts.append(
+                                _backend_attempt(
+                                    "source_graph",
+                                    "blocked",
+                                    reason=source_graph_reason,
+                                )
+                            )
+                            break
+                        scope_targets.extend(new_targets)
+                        scope_expansion_count += 1
+                        restart_reasons.append("source_graph_scope_expansion")
+                        # The partial chain and its artifact are intentionally
+                        # discarded. Rebuild the exact union and restart root.
+                        continue
+                    except SourceGraphTraceFallbackRequired as exc:
+                        attempted_query_count += len(
+                            trace_backend.ledger.query_fingerprints_sha256
+                        )
+                        _accumulate_source_graph_trace_metrics(
+                            trace_metrics,
+                            query_wall_ms=trace_backend.query_wall_ms,
+                        )
+                        source_graph_reason = exc.code
+                        source_graph_receipt["blocker"] = {
+                            "code": exc.code,
+                            "stage": "query",
+                        }
+                        if trace_backend.ledger.last_query_receipt is not None:
+                            _merge_source_graph_query_receipt(
+                                source_graph_receipt,
+                                trace_backend.ledger.last_query_receipt,
+                                query_wall_ms=trace_backend.query_wall_ms,
+                            )
+                        source_graph_receipt.update(trace_backend.ledger.to_dict())
+                        attempts.append(
+                            _backend_attempt(
+                                "source_graph",
+                                "inconclusive",
+                                reason=source_graph_reason,
+                                coverage_status=(
+                                    source_graph_receipt.get("coverage_status")
+                                ),
+                            )
+                        )
+                        break
+                    except Exception:  # noqa: BLE001
+                        attempted_query_count += len(
+                            trace_backend.ledger.query_fingerprints_sha256
+                        )
+                        _accumulate_source_graph_trace_metrics(
+                            trace_metrics,
+                            query_wall_ms=trace_backend.query_wall_ms,
+                        )
+                        source_graph_reason = "source_graph_trace_query_failed"
+                        source_graph_receipt["blocker"] = {
+                            "code": "trace_query_failed",
+                            "stage": "query",
+                        }
+                        attempts.append(
+                            _backend_attempt(
+                                "source_graph",
+                                "failed",
+                                reason=source_graph_reason,
+                            )
+                        )
+                        break
+                    else:
+                        final_query_count = len(
+                            trace_backend.ledger.query_fingerprints_sha256
+                        )
+                        attempted_query_count += final_query_count
+                        _accumulate_source_graph_trace_metrics(
+                            trace_metrics,
+                            query_wall_ms=trace_backend.query_wall_ms,
+                        )
+                        if trace_backend.ledger.last_query_receipt is not None:
+                            _merge_source_graph_query_receipt(
+                                source_graph_receipt,
+                                trace_backend.ledger.last_query_receipt,
+                                query_wall_ms=trace_backend.query_wall_ms,
+                            )
+                        ledger_receipt = trace_backend.ledger.to_dict()
+                        source_graph_receipt.update(ledger_receipt)
+                        coverage_statuses = trace_backend.ledger.coverage_statuses
+                        if "inconclusive" in coverage_statuses:
+                            source_graph_receipt["coverage_status"] = "inconclusive"
+                        elif "partial" in coverage_statuses:
+                            source_graph_receipt["coverage_status"] = "partial"
+                        source_graph_receipt["coverage_gap_codes"] = sorted(
+                            {
+                                *source_graph_receipt.get("coverage_gap_codes", []),
+                                *ledger_receipt["query_gap_codes"],
+                            }
+                        )
+                        source_graph_receipt["artifact_attempt_count"] = (
+                            artifact_attempt_count
+                        )
+                        source_graph_receipt["scope_expansion_count"] = (
+                            scope_expansion_count
+                        )
+                        source_graph_receipt["attempted_query_count"] = (
+                            attempted_query_count
+                        )
+                        source_graph_receipt[
+                            "attempted_artifact_fingerprints_sha256"
+                        ] = list(attempted_artifact_fingerprints)
+                        source_graph_receipt["metrics"].update(trace_metrics)
+                        _publish_source_graph_trace_metrics(trace_metrics)
+                        operation_metrics.set_value(
+                            "source_graph_trace_query_count", final_query_count
+                        )
+                        operation_metrics.set_value(
+                            "source_graph_trace_artifact_attempt_count",
+                            artifact_attempt_count,
+                        )
+                        operation_metrics.set_value(
+                            "source_graph_trace_scope_expansion_count",
+                            scope_expansion_count,
+                        )
+                        attempts.append(
+                            _backend_attempt(
+                                "source_graph",
+                                "success",
+                                coverage_status=(
+                                    source_graph_receipt.get("coverage_status")
+                                ),
+                            )
+                        )
+                        operation_metrics.set_value("source_graph_phase", "complete")
+                        return _finalize_trace(
+                            source_result,
+                            actual_backend="source_graph",
+                            fallback_reason=npi_reason,
+                            source_graph_receipt=source_graph_receipt,
+                        )
+
+    # Static is a whole-trace recomputation. No NPI or Source Graph node facts
+    # survive into this payload; only identity-free attempt receipts remain.
+    operation_metrics.set_value("source_graph_phase", "fallback")
+    source_graph_receipt["fallback_used"] = True
+    source_graph_receipt["artifact_attempt_count"] = artifact_attempt_count
+    source_graph_receipt["scope_expansion_count"] = scope_expansion_count
+    source_graph_receipt["attempted_query_count"] = attempted_query_count
+    source_graph_receipt["attempted_artifact_fingerprints_sha256"] = list(
+        attempted_artifact_fingerprints
+    )
+    source_graph_receipt["metrics"].update(trace_metrics)
+    _publish_source_graph_trace_metrics(trace_metrics)
+    operation_metrics.set_value(
+        "source_graph_trace_artifact_attempt_count", artifact_attempt_count
+    )
+    operation_metrics.set_value(
+        "source_graph_trace_scope_expansion_count", scope_expansion_count
+    )
+    if source_graph_attempted or artifact_attempt_count:
+        restart_reasons.append("source_graph_to_static")
+    operation_metrics.set_value(
+        "source_graph_trace_restart_count", len(restart_reasons)
+    )
+    try:
+        static_result, _ = await _run_trace_x_attempt(
+            backend=StaticConnectivityBackend(),
+            wave_path=wave_path,
+            signal_path=signal_path,
+            time_ps=time_ps,
+            compile_log=compile_log,
+            top_hint=top_hint,
+            max_depth=max_depth,
+            simulator=simulator,
+            abort_on_backend_fallback=False,
+        )
+    except OperationCancelled as exc:
+        raise asyncio.CancelledError from exc
+    attempts.append(_backend_attempt("static", "success"))
+    final_reason = (
+        source_graph_reason
+        if source_graph_attempted or artifact_attempt_count
+        else npi_reason or source_graph_reason
+    )
+    return _finalize_trace(
+        static_result,
+        actual_backend="static",
+        fallback_reason=final_reason,
+        source_graph_receipt=source_graph_receipt,
+    )
+
+
 def _finalize_connectivity_backend_status(
     result: dict,
     backend_status: dict,
@@ -1019,6 +4713,7 @@ def _finalize_connectivity_backend_status(
     """Merge internal backend receipts into the public, validated status."""
 
     status = dict(backend_status)
+    status.pop("_npi_selection_reason", None)
     status["backend"] = backend.name
     fallback_reason = result.get("_npi_fallback_reason")
     actual_backend = "static" if fallback_reason else backend.name
@@ -1032,7 +4727,17 @@ def _finalize_connectivity_backend_status(
                 status[key] = execution[key]
     elif getattr(backend, "execution_mode", None) == "local":
         status["execution_mode"] = "local"
-    if actual_backend == "verdi_npi":
+    kdb_status = _npi_kdb_status(backend)
+    if kdb_status is not None:
+        degraded = kdb_status.get("load_quality") == "degraded"
+        status["kdb_degraded"] = degraded
+        if degraded:
+            status["kdb_validation_status"] = "elaboration_error"
+            if "error_count" in kdb_status:
+                status["kdb_error_count"] = kdb_status["error_count"]
+            if "error_log" in kdb_status:
+                status["kdb_error_log"] = kdb_status["error_log"]
+    if actual_backend == "verdi_npi" and not status.get("kdb_degraded"):
         status["parser_match"] = "exact"
     result.pop("_npi_fallback_reason", None)
     return status, actual_backend
@@ -1116,7 +4821,9 @@ def _detect_wave_clock(parser) -> tuple[str | None, int | None]:
                     candidate_paths.add(item["path"])
 
         scored: list[tuple[str, int, int]] = []
-        for candidate in sorted(candidate_paths, key=lambda path: (path.count("."), len(path))):
+        for candidate in sorted(
+            candidate_paths, key=lambda path: (path.count("."), len(path))
+        ):
             try:
                 transitions = parser.get_transitions(
                     candidate, 0, CLOCK_DETECT_SAMPLE_PS
@@ -1167,7 +4874,7 @@ def _validate_signals_around_time_args(
         requested_cycles = window_ps // clock_period_ps
         if requested_cycles > MAX_WAVE_WINDOW_CYCLES:
             raise ValueError(
-                f"window_ps={window_ps} (±{window_ps/1000:.0f} ns) "
+                f"window_ps={window_ps} (±{window_ps / 1000:.0f} ns) "
                 f"= {requested_cycles} clock cycles, exceeds the per-call cap "
                 f"MAX_WAVE_WINDOW_CYCLES={MAX_WAVE_WINDOW_CYCLES} "
                 f"(clock_period_ps={clock_period_ps}, detected from {clock_path}). "
@@ -1179,11 +4886,9 @@ def _validate_signals_around_time_args(
             )
     elif window_ps > FALLBACK_WAVE_WINDOW_PS:
         detect_reason = getattr(parser, "_cached_clock_detect_reason", None)
-        reason_suffix = (
-            f" (detection error: {detect_reason})" if detect_reason else ""
-        )
+        reason_suffix = f" (detection error: {detect_reason})" if detect_reason else ""
         raise ValueError(
-            f"window_ps={window_ps} (±{window_ps/1000:.0f} ns) exceeds the "
+            f"window_ps={window_ps} (±{window_ps / 1000:.0f} ns) exceeds the "
             f"fallback cap FALLBACK_WAVE_WINDOW_PS={FALLBACK_WAVE_WINDOW_PS} ps "
             f"(auto-detect found no 1-bit clock signal matching 'clk'/'clock' "
             f"in this waveform{reason_suffix}). For multi-cycle sampling use "
@@ -1198,10 +4903,10 @@ def _validate_signals_around_time_args(
 
     if sim_end_ps > 0 and center_ps > sim_end_ps:
         raise ValueError(
-            f"center_time_ps={center_ps} ({center_ps/1000:.0f} ns, "
-            f"{center_ps/1_000_000_000:.3f} ms) is past the recorded waveform end "
+            f"center_time_ps={center_ps} ({center_ps / 1000:.0f} ns, "
+            f"{center_ps / 1_000_000_000:.3f} ms) is past the recorded waveform end "
             f"(simulation_duration_ps={sim_end_ps}, "
-            f"{sim_end_ps/1_000_000_000:.3f} ms). "
+            f"{sim_end_ps / 1_000_000_000:.3f} ms). "
             f"Common pitfall: ns->ps conversion - if the sim log shows `Time: X ns`, "
             f"set center_time_ps = X*1000. Call get_waveform_summary to confirm "
             f"the recorded duration."
@@ -1229,11 +4934,36 @@ def _strip_signals_to_values_only(result: dict) -> None:
 # Tool definitions
 # ═══════════════════════════════════════════════════════════════════
 
+
 # Vertex function declarations use an OpenAPI subset whose ``type`` field is a
 # single enum value, so JSON-Schema-style type arrays are rejected.  Express
 # integer-or-string inputs through the supported ``anyOf`` keyword instead.
 def _integer_or_string_schema() -> dict:
     return {"anyOf": [{"type": "integer"}, {"type": "string"}]}
+
+
+def _bounded_bootstrap_input_properties() -> dict:
+    return {
+        "supplementary_compile_logs": {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 16,
+            "description": (
+                "Optional complementary compile/elaboration logs used by bounded "
+                "bootstrap when no hierarchy handle exists."
+            ),
+        },
+        "allow_bounded_bootstrap": {
+            "type": "boolean",
+            "default": False,
+            "description": (
+                "If true and full hierarchy is unavailable, prove a hard-bounded "
+                "single-endpoint Source Graph context. Only positive facts may be "
+                "returned; no-match remains inconclusive and never triggers a "
+                "whole-source Static rescan."
+            ),
+        },
+    }
 
 
 # Time inputs accept a TimeSpec: an integer (ps), a cursor reference
@@ -1244,7 +4974,6 @@ _TIMESPEC_HINT = " Accepts an integer (ps), a cursor reference like '@div_3a7c',
 @app.list_tools()
 async def list_tools():
     _tools = [
-
         Tool(
             name="get_sim_paths",
             description=(
@@ -1257,35 +4986,48 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "verif_root": {"type": "string",
-                                   "description": "Absolute path to the project's verif/ directory, for example /home/robin/Projects/i2c_lib/verif"},
-                    "case_name":  {"type": "string",
-                                   "description": "Optional case name, for example case0 (matching make SV_CASE=case0)"},
-                    "sim_log": {"type": "string",
-                                "description": "Optional explicit simulation log path (absolute, or relative to verif_root). "
-                                               "Used verbatim, and its directory anchors discovery of the waveform and compile/elab logs for the same case."},
-                    "wave_file": {"type": "string",
-                                  "description": "Optional explicit waveform path (FSDB/VCD), absolute or relative to verif_root. Used verbatim when given; otherwise discovered."},
-                    "compile_log": {"type": "string",
-                                    "description": "Optional explicit compile/elaborate log path, absolute or relative to verif_root. "
-                                                   "Used verbatim when given; otherwise discovered from the case dir, the parent top, or a sibling build/elab dir."},
+                    "verif_root": {
+                        "type": "string",
+                        "description": "Absolute path to the project's verif/ directory, for example /home/robin/Projects/i2c_lib/verif",
+                    },
+                    "case_name": {
+                        "type": "string",
+                        "description": "Optional case name, for example case0 (matching make SV_CASE=case0)",
+                    },
+                    "sim_log": {
+                        "type": "string",
+                        "description": "Optional explicit simulation log path (absolute, or relative to verif_root). "
+                        "Used verbatim, and its directory anchors discovery of the waveform and compile/elab logs for the same case.",
+                    },
+                    "wave_file": {
+                        "type": "string",
+                        "description": "Optional explicit waveform path (FSDB/VCD), absolute or relative to verif_root. Used verbatim when given; otherwise discovered.",
+                    },
+                    "compile_log": {
+                        "type": "string",
+                        "description": "Optional explicit compile/elaborate log path, absolute or relative to verif_root. "
+                        "Used verbatim when given; otherwise discovered from the case dir, the parent top, or a sibling build/elab dir.",
+                    },
                 },
                 "required": ["verif_root"],
             },
         ),
-
         Tool(
             name="parse_sim_log",
             description=(
                 "Parse a VCS or Xcelium simulation log and return grouped runtime failures by signature. "
                 "The simulator argument is required and is not auto-detected here. "
+                "candidate_previous_logs uses bounded evidence sampling and excludes compile/elaboration logs. "
                 "The first error group automatically includes about 100 lines of surrounding log context "
                 "in first_group_context; use get_error_context for other groups."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "log_path":  {"type": "string", "description": "Absolute path to the simulation log, for example irun.log"},
+                    "log_path": {
+                        "type": "string",
+                        "description": "Absolute path to the simulation log, for example irun.log",
+                    },
                     "simulator": {"type": "string", "description": "vcs / xcelium"},
                     "max_groups": {
                         "type": "integer",
@@ -1307,7 +5049,6 @@ async def list_tools():
                 "required": ["log_path", "simulator"],
             },
         ),
-
         Tool(
             name="diff_sim_failure_results",
             description=(
@@ -1321,16 +5062,30 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "base_log_path": {"type": "string", "description": "Baseline simulation log. Optional when base_snapshot_id is supplied, or when new_log_path has a previous parsed snapshot."},
-                    "new_log_path": {"type": "string", "description": "New simulation log. For same-path reruns, this may be the overwritten log path."},
-                    "base_snapshot_id": {"type": "string", "description": "Baseline log snapshot ID returned by parse_sim_log."},
-                    "new_snapshot_id": {"type": "string", "description": "New log snapshot ID returned by parse_sim_log."},
-                    "simulator": {"type": "string", "description": "vcs / xcelium / auto. Defaults to simulator discovered by get_sim_paths when omitted."},
+                    "base_log_path": {
+                        "type": "string",
+                        "description": "Baseline simulation log. Optional when base_snapshot_id is supplied, or when new_log_path has a previous parsed snapshot.",
+                    },
+                    "new_log_path": {
+                        "type": "string",
+                        "description": "New simulation log. For same-path reruns, this may be the overwritten log path.",
+                    },
+                    "base_snapshot_id": {
+                        "type": "string",
+                        "description": "Baseline log snapshot ID returned by parse_sim_log.",
+                    },
+                    "new_snapshot_id": {
+                        "type": "string",
+                        "description": "New log snapshot ID returned by parse_sim_log.",
+                    },
+                    "simulator": {
+                        "type": "string",
+                        "description": "vcs / xcelium / auto. Defaults to simulator discovered by get_sim_paths when omitted.",
+                    },
                 },
                 "required": [],
             },
         ),
-
         Tool(
             name="get_error_context",
             description=(
@@ -1340,8 +5095,14 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "log_path": {"type": "string", "description": "Absolute path to the simulation log, for example irun.log"},
-                    "line": {"type": "integer", "description": "Center error line number"},
+                    "log_path": {
+                        "type": "string",
+                        "description": "Absolute path to the simulation log, for example irun.log",
+                    },
+                    "line": {
+                        "type": "integer",
+                        "description": "Center error line number",
+                    },
                     "before": {
                         "type": "integer",
                         "description": f"Number of lines before the target line. Default: {DEFAULT_LOG_CONTEXT_BEFORE}",
@@ -1356,7 +5117,6 @@ async def list_tools():
                 "required": ["log_path", "line"],
             },
         ),
-
         Tool(
             name="search_signals",
             description=(
@@ -1377,7 +5137,10 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Absolute path to the waveform file"},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Absolute path to the waveform file",
+                    },
                     "keyword": {
                         "anyOf": [
                             {"type": "string"},
@@ -1389,57 +5152,75 @@ async def list_tools():
                             },
                         ],
                         "description": "Signal keyword (for example s_bits, clk, or data), or a list of "
-                                       f"keywords (max {SIGNAL_SEARCH_MAX_KEYWORDS}) to batch several "
-                                       "lookups in one call — prefer the list form over consecutive "
-                                       "single-keyword calls",
+                        f"keywords (max {SIGNAL_SEARCH_MAX_KEYWORDS}) to batch several "
+                        "lookups in one call — prefer the list form over consecutive "
+                        "single-keyword calls",
                     },
-                    "max_results": {"type": "integer", "description": "Maximum number of matches to return. Default: 50",
-                                    "default": 50},
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of matches to return. Default: 50",
+                        "default": 50,
+                    },
                 },
                 "required": ["wave_path", "keyword"],
             },
         ),
-
         Tool(
             name="get_signal_at_time",
             description="Query a signal value in a waveform file at a specific time in ps. FSDB support depends on fsdb_runtime.enabled.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path":   {"type": "string"},
-                    "signal_path": {"type": "string",
-                                    "description": "Full hierarchical path, for example top_tb.dut.s_bits. A bare bus name (no [msb:lsb]) is auto-completed when it resolves uniquely (resolved_from echoes the input); an unresolved name raises with a did_you_mean list."},
-                    "time_ps":     {**_integer_or_string_schema(), "description": "Query time." + _TIMESPEC_HINT},
+                    "wave_path": {"type": "string"},
+                    "signal_path": {
+                        "type": "string",
+                        "description": "Full hierarchical path, for example top_tb.dut.s_bits. A bare bus name (no [msb:lsb]) is auto-completed when it resolves uniquely (resolved_from echoes the input); an unresolved name raises with a did_you_mean list.",
+                    },
+                    "time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Query time." + _TIMESPEC_HINT,
+                    },
                 },
                 "required": ["wave_path", "signal_path", "time_ps"],
             },
         ),
-
         Tool(
             name="get_signal_transitions",
             description=(
-                "Return transitions for a signal over a time range (capped at "
+                "Return transitions for a signal over the strict closed time range "
+                "[start_time_ps, end_time_ps] (capped at "
                 f"{TRANSITIONS_MAX_RETURNED} by default; truncated=true + hint mark a clipped "
                 "result, transition_count is always the total found). FSDB support depends "
-                "on fsdb_runtime.enabled."
+                "on fsdb_runtime.enabled. The last value-change strictly before the window "
+                "is returned separately as predecessor and is never mixed into transitions."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path":     {"type": "string"},
-                    "signal_path":   {"type": "string"},
-                    "start_time_ps": {**_integer_or_string_schema(), "default": 0, "description": "Window start." + _TIMESPEC_HINT},
-                    "end_time_ps":   {**_integer_or_string_schema(), "default": -1,
-                                      "description": "-1 means through the end of simulation." + _TIMESPEC_HINT},
-                    "max_transitions": {"type": "integer", "default": TRANSITIONS_MAX_RETURNED,
-                                        "description": "Cap on returned transitions (earliest in range kept). "
-                                                       "Raise explicitly only for deliberate bulk extraction; "
-                                                       "prefer narrowing the time range."},
+                    "wave_path": {"type": "string"},
+                    "signal_path": {"type": "string"},
+                    "start_time_ps": {
+                        **_integer_or_string_schema(),
+                        "default": 0,
+                        "description": "Window start." + _TIMESPEC_HINT,
+                    },
+                    "end_time_ps": {
+                        **_integer_or_string_schema(),
+                        "default": -1,
+                        "description": "-1 means through the end of simulation."
+                        + _TIMESPEC_HINT,
+                    },
+                    "max_transitions": {
+                        "type": "integer",
+                        "default": TRANSITIONS_MAX_RETURNED,
+                        "description": "Cap on returned transitions (earliest in range kept). "
+                        "Raise explicitly only for deliberate bulk extraction; "
+                        "prefer narrowing the time range.",
+                    },
                 },
                 "required": ["wave_path", "signal_path"],
             },
         ),
-
         Tool(
             name="get_signals_around_time",
             description=(
@@ -1477,7 +5258,7 @@ async def list_tools():
                 "SETTLED value as the protocol value; do not attribute a root cause to "
                 "an edge-sampled value that is flagged transient.\n"
                 "\n"
-                "return_mode=\"values_only\" keeps the atomic multi-signal sample but "
+                'return_mode="values_only" keeps the atomic multi-signal sample but '
                 "strips the transition lists from every signal: each entry carries "
                 "value_at_center + window_transition_count (+ any transient "
                 "annotation, computed before stripping). Use it when you only need "
@@ -1488,9 +5269,12 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path":     {"type": "string"},
-                    "signal_paths":  {"type": "array", "items": {"type": "string"},
-                                      "description": "List of full hierarchical signal paths. A bare bus name (no [msb:lsb]) is auto-completed when unique (see resolved_aliases); unresolved names get did_you_mean entries in signal_suggestions."},
+                    "wave_path": {"type": "string"},
+                    "signal_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of full hierarchical signal paths. A bare bus name (no [msb:lsb]) is auto-completed when unique (see resolved_aliases); unresolved names get did_you_mean entries in signal_suggestions.",
+                    },
                     "center_time_ps": {
                         **_integer_or_string_schema(),
                         "description": (
@@ -1529,7 +5313,6 @@ async def list_tools():
                 "required": ["wave_path", "signal_paths", "center_time_ps"],
             },
         ),
-
         Tool(
             name="get_signals_by_cycle",
             description=(
@@ -1539,7 +5322,10 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Absolute path to the waveform file"},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Absolute path to the waveform file",
+                    },
                     "clock_path": {
                         "type": "string",
                         "description": "Full hierarchical clock path, for example top_tb.des_clk",
@@ -1569,11 +5355,13 @@ async def list_tools():
                     },
                     "start_time_ps": {
                         **_integer_or_string_schema(),
-                        "description": "Alternative start axis: window start; snapped to the first clock edge at/after this time. Mutually exclusive with start_cycle." + _TIMESPEC_HINT,
+                        "description": "Alternative start axis: window start; snapped to the first clock edge at/after this time. Mutually exclusive with start_cycle."
+                        + _TIMESPEC_HINT,
                     },
                     "end_time_ps": {
                         **_integer_or_string_schema(),
-                        "description": "Alternative count axis: window end; num_cycles is derived as the count of clock edges in [start, end_time_ps] (inclusive). Mutually exclusive with num_cycles." + _TIMESPEC_HINT,
+                        "description": "Alternative count axis: window end; num_cycles is derived as the count of clock edges in [start, end_time_ps] (inclusive). Mutually exclusive with num_cycles."
+                        + _TIMESPEC_HINT,
                     },
                     "sample_offset_ps": {
                         "type": "integer",
@@ -1586,7 +5374,6 @@ async def list_tools():
                 "additionalProperties": False,
             },
         ),
-
         Tool(
             name="get_waveform_summary",
             description="Return basic waveform metadata such as format, duration, and top modules. FSDB support depends on fsdb_runtime.enabled.",
@@ -1598,36 +5385,56 @@ async def list_tools():
                 "required": ["wave_path"],
             },
         ),
-
         Tool(
             name="build_tb_hierarchy",
             description=(
-                "Parse the compile/elaborate log, scan source files, and cache the full testbench hierarchy server-side. "
+                "Stream one compile/elaborate log plus optional complementary phase logs, scan source files, and cache the full testbench hierarchy server-side without retaining raw source bodies. "
+                "For split VCS flows, prefer the source-compile log as compile_log and pass VHDL/source/elaboration companions in build order; later connectivity tools continue using that primary path. "
                 "Returns a SLIM payload: project, stats, tree_skeleton (depth 2), interfaces, ambiguous_basenames, "
-                "and hierarchy_handle. Use the handle with get_tb_subtree / lookup_tb_files / find_tb_instance / "
+                "build_metrics, and hierarchy_handle. A configured timeout/source-byte guard returns build_status='blocked' plus a fixed blocker and no handle. Use a completed handle with get_tb_subtree / lookup_tb_files / find_tb_instance / "
                 "get_tb_file_detail / get_tb_class_hierarchy / dump_tb_section to access the full data on demand."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "compile_log": {"type": "string", "description": "Absolute path to a compile or elaborate log"},
-                    "simulator": {"type": "string", "description": "vcs / xcelium / auto (default: auto)",
-                                  "default": "auto"},
+                    "compile_log": {
+                        "type": "string",
+                        "description": "Absolute path to the primary compile or elaborate log",
+                    },
+                    "supplementary_compile_logs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": 16,
+                        "description": (
+                            "Optional ordered complementary compile/elaboration logs "
+                            "from the same simulator build; their order participates "
+                            "in the hierarchy and Source Graph identity"
+                        ),
+                    },
+                    "simulator": {
+                        "type": "string",
+                        "description": "vcs / xcelium / auto (default: auto)",
+                        "default": "auto",
+                    },
                 },
                 "required": ["compile_log"],
             },
         ),
-
         Tool(
             name="scan_structural_risks",
             description=(
                 "Run a Scope 1 regex-based structural risk scan on RTL/TB source files from the compile file list. "
-                "This is a heuristic detector: it reports suspicious patterns, not confirmed root causes."
+                "This is a heuristic detector: it reports suspicious patterns, not confirmed root causes. "
+                "Always read coverage_status: only complete with total_risks=0 supports a clean-scan observation; "
+                "zero_coverage scanned no supported sources, and degraded covers only part of the source set."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "compile_log": {"type": "string", "description": "Absolute path to a compile or elaborate log"},
+                    "compile_log": {
+                        "type": "string",
+                        "description": "Absolute path to a compile or elaborate log",
+                    },
                     "simulator": {
                         "type": "string",
                         "description": "vcs / xcelium / auto (default: auto)",
@@ -1647,7 +5454,6 @@ async def list_tools():
                 "required": ["compile_log"],
             },
         ),
-
         Tool(
             name="analyze_failures",
             description=(
@@ -1657,15 +5463,30 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "log_path":     {"type": "string", "description": "Simulation log path, for example irun.log"},
-                    "wave_path":    {"type": "string", "description": "Waveform file path, for example top_tb.fsdb"},
-                    "signal_paths": {"type": "array", "items": {"type": "string"},
-                                     "description": "Signal paths to inspect. Clients should confirm full paths with search_signals after inferring candidates from RTL or log output."},
-                    "window_ps":    {"type": "integer",
-                                     "description": f"Waveform window around each failure time in ps. Default: {DEFAULT_WAVE_WINDOW_PS}",
-                                     "default": DEFAULT_WAVE_WINDOW_PS},
-                    "simulator":    {"type": "string", "description": "vcs / xcelium"},
-                    "group_index":  {"type": "integer", "description": "Failure group index to analyze. Default: 0", "default": 0},
+                    "log_path": {
+                        "type": "string",
+                        "description": "Simulation log path, for example irun.log",
+                    },
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Waveform file path, for example top_tb.fsdb",
+                    },
+                    "signal_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Signal paths to inspect. Clients should confirm full paths with search_signals after inferring candidates from RTL or log output.",
+                    },
+                    "window_ps": {
+                        "type": "integer",
+                        "description": f"Waveform window around each failure time in ps. Default: {DEFAULT_WAVE_WINDOW_PS}",
+                        "default": DEFAULT_WAVE_WINDOW_PS,
+                    },
+                    "simulator": {"type": "string", "description": "vcs / xcelium"},
+                    "group_index": {
+                        "type": "integer",
+                        "description": "Failure group index to analyze. Default: 0",
+                        "default": 0,
+                    },
                     "extra_transitions": {
                         "type": "integer",
                         "description": f"Extra transitions to include before the window for each signal. Default: {DEFAULT_EXTRA_TRANSITIONS}",
@@ -1675,7 +5496,6 @@ async def list_tools():
                 "required": ["log_path", "wave_path", "signal_paths", "simulator"],
             },
         ),
-
         Tool(
             name="analyze_failure_event",
             description=(
@@ -1688,14 +5508,16 @@ async def list_tools():
                     "log_path": {"type": "string"},
                     "wave_path": {"type": "string"},
                     "simulator": {"type": "string", "description": "vcs / xcelium"},
-                    "failure_event": {"type": "object", "description": "Normalized failure_event from parse_sim_log for the same log"},
+                    "failure_event": {
+                        "type": "object",
+                        "description": "Normalized failure_event from parse_sim_log for the same log",
+                    },
                     "compile_log": {"type": "string"},
                     "top_hint": {"type": "string"},
                 },
                 "required": ["log_path", "wave_path", "simulator", "failure_event"],
             },
         ),
-
         Tool(
             name="recommend_failure_debug_next_steps",
             description=(
@@ -1715,7 +5537,6 @@ async def list_tools():
                 "required": ["log_path", "wave_path", "simulator"],
             },
         ),
-
         Tool(
             name="get_diagnostic_snapshot",
             description=(
@@ -1752,7 +5573,6 @@ async def list_tools():
                 "required": [],
             },
         ),
-
         Tool(
             name="explain_signal_driver",
             description=(
@@ -1761,8 +5581,39 @@ async def list_tools():
                 "Set recursive=true to walk multiple hops upstream across instance boundaries. "
                 "When a Verdi KDB is detected, an NPI backend transparently engages and walks "
                 "the elaborated netlist with fan_in_reg_list, crossing instance port boundaries "
-                "the static source-regex backend cannot reach; otherwise the static backend "
-                "runs. Each driver_chain hop carries source_info_origin ('compile_log' or 'npi') "
+                "the static source-regex backend cannot reach. Recursive NPI fan-in is admitted "
+                "inside the native traversal (4,096 states, 32 returned facts); Source Graph and "
+                "NPI both publish traversal counts, limits, truncation, exhaustive-search, and "
+                "fixed incomplete reasons. A partial positive prefix is usable evidence but not "
+                "a complete or exclusive driver-set claim. If NPI is unavailable or "
+                "cannot return a trustworthy result, TraceWeave next attempts a bounded, "
+                "on-demand Source Graph projection; Legacy Static remains the normal final fallback. "
+                "The explicit allow_bounded_bootstrap path is the resource-bounded exception: "
+                "without a full hierarchy it returns only proved positive Source Graph facts, "
+                "and an inconclusive/blocker result does not start a whole-source Static scan. "
+                "Source Graph preserves per-bit port-binding provenance, so mixed bindings "
+                "such as concatenations, constants, truncation, and width extension are "
+                "reported as segments instead of forcing an all-or-nothing exact-width match. "
+                "When a dynamic segment reaches a projection boundary, bounded sibling-scope "
+                "expansion re-runs the original query from a fresh artifact; constant segments "
+                "are terminal and never trigger expansion. "
+                "Signal-not-declared and bit-selection-out-of-range are distinct Source Graph "
+                "blockers. Legacy Static normalizes trailing numeric selects to the bare RTL "
+                "symbol, but stops honestly at composite port expressions that need per-bit "
+                "provenance. Parameter specializations and named generate scopes remain "
+                "instance-specific; dotted packed struct/union members are mapped from their "
+                "field-local indices onto exact root-aggregate bits. "
+                "backend_status records the selected/attempted/actual backends, fixed fallback "
+                "reason, Source Graph coverage and cache/build receipt. The legacy confidence "
+                "field remains coverage-combined and conservative. For Source Graph results, "
+                "claim_semantics separates positive_fact_confidence and target_bit_coverage "
+                "from global_coverage_status; require exclusive_driver_proved before calling a "
+                "returned driver unique, and negative_claim_allowed before claiming no driver. "
+                "Warm Source Graph traversal is work-bounded; query_truncated and the "
+                "query_*_limit coverage gap mean returned positive facts are usable but "
+                "the driver set is not exhaustive. "
+                "Each driver_chain hop carries source_info_origin "
+                "('compile_log', 'npi', or 'source_graph') "
                 "so consumers can tell which provenance produced its file:line. "
                 "driver_status='testbench_driven' (with cross_check.conflict=true) means NPI "
                 "found NO RTL driver: the only 'driver' it reported is also a LOAD of the same "
@@ -1778,6 +5629,7 @@ async def list_tools():
                     "signal_path": {"type": "string"},
                     "wave_path": {"type": "string"},
                     "compile_log": {"type": "string"},
+                    **_bounded_bootstrap_input_properties(),
                     "simulator": {
                         "type": "string",
                         "description": "vcs / xcelium / auto. Optional — if omitted, server auto-injects the value discovered by get_sim_paths.",
@@ -1797,7 +5649,6 @@ async def list_tools():
                 "required": ["signal_path", "wave_path", "compile_log"],
             },
         ),
-
         Tool(
             name="find_signal_loads",
             description=(
@@ -1805,9 +5656,25 @@ async def list_tools():
                 "RHS of assigns/procedural assignments, and always-block sensitivity lists. "
                 "When a Verdi KDB is detected, an NPI backend transparently engages and "
                 "resolves the cross-hierarchy / interface-positional / generate-block cases "
-                "that the static source-regex backend cannot reach; otherwise the static "
-                "backend runs (shallow_only) and surfaces gaps in stopped_at. Each load "
-                "carries source_info_origin ('compile_log' or 'npi') so consumers can tell "
+                "that the static source-regex backend cannot reach. If NPI is unavailable or "
+                "cannot return a trustworthy result, TraceWeave next attempts the bounded, "
+                "on-demand Source Graph; Legacy Static remains the normal final fallback "
+                "(shallow_only). When allow_bounded_bootstrap=true and no full hierarchy exists, "
+                "only proved positive Source Graph facts are returned; an inconclusive/blocker "
+                "does not trigger a whole-source Static rescan. backend_status preserves the complete attempt chain and Source "
+                "Graph coverage/build receipt. claim_semantics separates confidence in returned "
+                "positive load facts from whole-artifact coverage; exhaustive_search is required "
+                "before treating the list as all loads, and negative_claim_allowed is required "
+                "before claiming there are none. A complete Source Graph not_connected is distinct "
+                "from an inconclusive no-match, which falls through to Static only on the normal full-hierarchy route. "
+                "Every backend publishes enumeration.{returned_count, output_limit, "
+                "output_truncated, search_exhaustive, incomplete_reasons, "
+                "continuation_supported}. High-fanout output is capped at 256; capped "
+                "positive loads remain usable but are not a complete list, and no backend "
+                "currently promises a continuation token. "
+                "Each load query normalizes trailing numeric selects for Legacy Static matching, while "
+                "Source Graph validates the selected bits against the declaration. Each load "
+                "carries source_info_origin ('compile_log', 'npi', or 'source_graph') so consumers can tell "
                 "which provenance produced its file:line."
             ),
             inputSchema={
@@ -1815,6 +5682,7 @@ async def list_tools():
                 "properties": {
                     "signal_path": {"type": "string"},
                     "compile_log": {"type": "string"},
+                    **_bounded_bootstrap_input_properties(),
                     "simulator": {
                         "type": "string",
                         "description": "vcs / xcelium / auto. Optional — if omitted, server auto-injects the value discovered by get_sim_paths.",
@@ -1846,19 +5714,20 @@ async def list_tools():
                 "required": ["signal_path", "compile_log"],
             },
         ),
-
         Tool(
             name="trace_signal_path",
             description=(
-                "Find a connectivity path between two signals in the elaborated "
-                "netlist (NPI-only). Returns one connected chain of nets walking "
-                "across assigns, interface bindings, and instance boundaries. "
-                "This is connectivity, NOT temporal driver direction — use "
-                "explain_signal_driver for driver semantics. Without a Verdi KDB "
-                "this tool returns unsupported_reason='static_backend_no_path_api' "
-                "because source-regex cannot reproduce sig_to_sig_conn_list "
-                "honestly; in that case fall back to explain_signal_driver + "
-                "find_signal_loads."
+                "Find a structural connectivity path between two signals. A "
+                "trusted Verdi NPI result wins; otherwise TraceWeave tries a "
+                "bounded, dual-endpoint Source Graph before Legacy Static. "
+                "Source Graph follows only projected IR facts across bindings and "
+                "supported combinational dependencies. claim_semantics reports confidence in a "
+                "proved positive path independently from global coverage; a found path is not an "
+                "exhaustive enumeration. A no-path result is exact only when "
+                "negative_claim_allowed=true; an inconclusive result falls through "
+                "to unsupported_reason='static_backend_no_path_api'. This is "
+                "connectivity, NOT temporal driver direction — use "
+                "explain_signal_driver for driver semantics."
             ),
             inputSchema={
                 "type": "object",
@@ -1875,16 +5744,16 @@ async def list_tools():
                         "type": "boolean",
                         "default": False,
                         "description": (
-                            "When true, NPI treats `assign` as a separate cell, "
-                            "yielding longer paths with explicit assign hops. "
-                            "Useful when debugging RTL aliases."
+                            "Expose supported assignment transitions. NPI may show "
+                            "assign cells; Source Graph shows only real IR/source "
+                            "evidence and never invents an NPI cell identity. This "
+                            "changes presentation, not the connectivity verdict."
                         ),
                     },
                 },
                 "required": ["from_signal", "to_signal", "compile_log"],
             },
         ),
-
         Tool(
             name="build_kdb",
             description=(
@@ -1892,8 +5761,10 @@ async def list_tools():
                 "Use this when the simulator is Xcelium (xrun) and the NPI backend reports no KDB, "
                 "or to force-refresh a stale cached KDB. Output is cached under TRACEWEAVE_CACHE_DIR "
                 "(default ~/.cache/traceweave/kdb/<hash>/); cache hits reuse the previous KDB without "
-                "re-invoking Verdi. A runnable build.sh is written next to the KDB for inspection or "
-                "reproduction. Requires VERDI_HOME with bin/vericom and bin/elabcom."
+                "re-invoking Verdi. When TRACEWEAVE_NPI_EXECUTION=lsf, every cache-miss/rebuild runs "
+                "on the configured LSF queue and never falls back to a local licensed build. A runnable "
+                "build.sh is written next to the KDB for inspection or reproduction. Requires VERDI_HOME "
+                "with bin/vericom and bin/elabcom."
             ),
             inputSchema={
                 "type": "object",
@@ -1919,19 +5790,32 @@ async def list_tools():
                 "required": ["compile_log"],
             },
         ),
-
         Tool(
             name="trace_x_source",
             description=(
-                "When a signal shows X/Z at a target time, trace its propagation chain through upstream driver logic. "
-                "If the trace reaches instance port connections, the tool lists them and stops there."
+                "When a signal shows X/Z at a target time, trace its propagation "
+                "chain through upstream driver logic. Uses the selected connectivity "
+                "route (trusted local/LSF NPI, bounded Source Graph, then Static). "
+                "A Source Graph trace may expand to bounded direct-child frontiers "
+                "when an unresolved parent net can be driven by a child output. Any "
+                "backend or artifact change discards the partial chain and restarts "
+                "from the original signal, so one returned chain never mixes "
+                "provenance. Connectivity queries run outside waveform locks. "
+                "backend_status reports selected versus actual backend; "
+                "trace_restarted reports a whole-trace retry. Source Graph chain nodes preserve "
+                "claim_semantics, so an exact positive edge can be used without implying global "
+                "coverage or exclusive drive. NPI testbench-driven/cross-check evidence is "
+                "preserved on the node."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "wave_path": {"type": "string"},
                     "signal_path": {"type": "string"},
-                    "time_ps": {**_integer_or_string_schema(), "description": "Trace start time." + _TIMESPEC_HINT},
+                    "time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Trace start time." + _TIMESPEC_HINT,
+                    },
                     "compile_log": {"type": "string"},
                     "simulator": {
                         "type": "string",
@@ -1947,12 +5831,10 @@ async def list_tools():
                 "required": ["wave_path", "signal_path", "time_ps", "compile_log"],
             },
         ),
-
         # ── Hierarchy handle tools (phase 4) ────────────────────────────
         # All six share the same access pattern: resolve `handle` via the
         # in-process HandleStore (registered by build_tb_hierarchy), then
         # return a typed slice or a HandleErrorResult.
-
         Tool(
             name="get_tb_subtree",
             description=(
@@ -1963,18 +5845,29 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "handle": {"type": "string", "description": "hierarchy_handle from build_tb_hierarchy"},
-                    "root": {"type": "string", "default": "",
-                              "description": "dotted instance path (e.g. 'top.u_cpu'); empty = top module"},
-                    "depth": {"type": "integer", "default": 1,
-                              "description": "-1 = unbounded; otherwise number of levels to include"},
-                    "max_nodes": {"type": "integer", "default": 500,
-                                  "description": "hard cap on emitted nodes"},
+                    "handle": {
+                        "type": "string",
+                        "description": "hierarchy_handle from build_tb_hierarchy",
+                    },
+                    "root": {
+                        "type": "string",
+                        "default": "",
+                        "description": "dotted instance path (e.g. 'top.u_cpu'); empty = top module",
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "default": 1,
+                        "description": "-1 = unbounded; otherwise number of levels to include",
+                    },
+                    "max_nodes": {
+                        "type": "integer",
+                        "default": 500,
+                        "description": "hard cap on emitted nodes",
+                    },
                 },
                 "required": ["handle"],
             },
         ),
-
         Tool(
             name="lookup_tb_files",
             description=(
@@ -1986,20 +5879,29 @@ async def list_tools():
                 "type": "object",
                 "properties": {
                     "handle": {"type": "string"},
-                    "basename": {"type": "string", "description": "exact basename match"},
+                    "basename": {
+                        "type": "string",
+                        "description": "exact basename match",
+                    },
                     "name_contains": {"type": "string"},
                     "path_contains": {"type": "string"},
-                    "has_module": {"type": "string", "description": "file defines this module"},
-                    "contains_uvm": {"type": "boolean",
-                                      "description": "scan saw `import uvm_pkg::` or `extends uvm_*`"},
-                    "file_type": {"type": "string",
-                                  "description": "module | interface | package | class | program (from SV scan)"},
+                    "has_module": {
+                        "type": "string",
+                        "description": "file defines this module",
+                    },
+                    "contains_uvm": {
+                        "type": "boolean",
+                        "description": "scan saw `import uvm_pkg::` or `extends uvm_*`",
+                    },
+                    "file_type": {
+                        "type": "string",
+                        "description": "module | interface | package | class | program (from SV scan)",
+                    },
                     "limit": {"type": "integer", "default": 50},
                 },
                 "required": ["handle"],
             },
         ),
-
         Tool(
             name="find_tb_instance",
             description=(
@@ -2010,14 +5912,19 @@ async def list_tools():
                 "type": "object",
                 "properties": {
                     "handle": {"type": "string"},
-                    "path": {"type": "string", "description": "exact dotted instance path"},
-                    "module": {"type": "string", "description": "module name; returns all instances"},
+                    "path": {
+                        "type": "string",
+                        "description": "exact dotted instance path",
+                    },
+                    "module": {
+                        "type": "string",
+                        "description": "module name; returns all instances",
+                    },
                     "limit": {"type": "integer", "default": 100},
                 },
                 "required": ["handle"],
             },
         ),
-
         Tool(
             name="get_tb_file_detail",
             description=(
@@ -2033,7 +5940,6 @@ async def list_tools():
                 "required": ["handle", "path"],
             },
         ),
-
         Tool(
             name="get_tb_class_hierarchy",
             description=(
@@ -2050,7 +5956,6 @@ async def list_tools():
                 "required": ["handle"],
             },
         ),
-
         Tool(
             name="dump_tb_section",
             description=(
@@ -2064,16 +5969,19 @@ async def list_tools():
                     "section": {
                         "type": "string",
                         "enum": [
-                            "compile_result", "include_tree", "filelist_tree",
-                            "interfaces", "files_full",
-                            "component_tree_full", "class_hierarchy_full",
+                            "compile_result",
+                            "include_tree",
+                            "filelist_tree",
+                            "interfaces",
+                            "files_full",
+                            "component_tree_full",
+                            "class_hierarchy_full",
                         ],
                     },
                 },
                 "required": ["handle", "section"],
             },
         ),
-
         Tool(
             name="cursor_set",
             description=(
@@ -2086,19 +5994,23 @@ async def list_tools():
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Cursor name."},
-                    "time_ps": {"type": "integer", "description": "Anchor time in ps. Must be >= 0."},
-                    "note": {"type": "string", "description": "Optional human-readable note."},
+                    "time_ps": {
+                        "type": "integer",
+                        "description": "Anchor time in ps. Must be >= 0.",
+                    },
+                    "note": {
+                        "type": "string",
+                        "description": "Optional human-readable note.",
+                    },
                 },
                 "required": ["name", "time_ps"],
             },
         ),
-
         Tool(
             name="cursor_list",
             description="List all cursors registered in the current session, ordered by time.",
             inputSchema={"type": "object", "properties": {}, "required": []},
         ),
-
         Tool(
             name="cursor_delete",
             description="Delete a named cursor. Returns whether the cursor existed.",
@@ -2110,7 +6022,6 @@ async def list_tools():
                 "required": ["name"],
             },
         ),
-
         Tool(
             name="diff_first_divergence",
             description=(
@@ -2123,19 +6034,46 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path_a": {"type": "string", "description": "First waveform (FSDB or VCD)."},
-                    "signal_a": {"type": "string", "description": "Full hierarchical signal path in wave_path_a."},
-                    "wave_path_b": {"type": "string", "description": "Second waveform. May equal wave_path_a for within-run diff."},
-                    "signal_b": {"type": "string", "description": "Full hierarchical signal path in wave_path_b."},
-                    "start_time_ps": {**_integer_or_string_schema(), "description": "Start of comparison window. Default 0." + _TIMESPEC_HINT, "default": 0},
-                    "end_time_ps": {**_integer_or_string_schema(), "description": "End of comparison window. -1 means end of simulation." + _TIMESPEC_HINT, "default": -1},
-                    "cursor_name": {"type": "string", "description": "Optional explicit cursor name. If omitted, a deterministic name (div_<sha8>) is generated."},
-                    "cursor_note": {"type": "string", "description": "Optional note attached to the registered cursor."},
+                    "wave_path_a": {
+                        "type": "string",
+                        "description": "First waveform (FSDB or VCD).",
+                    },
+                    "signal_a": {
+                        "type": "string",
+                        "description": "Full hierarchical signal path in wave_path_a.",
+                    },
+                    "wave_path_b": {
+                        "type": "string",
+                        "description": "Second waveform. May equal wave_path_a for within-run diff.",
+                    },
+                    "signal_b": {
+                        "type": "string",
+                        "description": "Full hierarchical signal path in wave_path_b.",
+                    },
+                    "start_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Start of comparison window. Default 0."
+                        + _TIMESPEC_HINT,
+                        "default": 0,
+                    },
+                    "end_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "End of comparison window. -1 means end of simulation."
+                        + _TIMESPEC_HINT,
+                        "default": -1,
+                    },
+                    "cursor_name": {
+                        "type": "string",
+                        "description": "Optional explicit cursor name. If omitted, a deterministic name (div_<sha8>) is generated.",
+                    },
+                    "cursor_note": {
+                        "type": "string",
+                        "description": "Optional note attached to the registered cursor.",
+                    },
                 },
                 "required": ["wave_path_a", "signal_a", "wave_path_b", "signal_b"],
             },
         ),
-
         Tool(
             name="period",
             description=(
@@ -2150,28 +6088,48 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
-                    "signal": {"type": "string", "description": "Full hierarchical signal path."},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Waveform (FSDB or VCD).",
+                    },
+                    "signal": {
+                        "type": "string",
+                        "description": "Full hierarchical signal path.",
+                    },
                     "edge": {
                         "type": "string",
                         "enum": ["posedge", "negedge", "any"],
                         "description": "Edge to count. 'any' for multi-bit/strobe signals. Default posedge.",
                         "default": "posedge",
                     },
-                    "start_time_ps": {**_integer_or_string_schema(), "description": "Window start. Default 0." + _TIMESPEC_HINT, "default": 0},
-                    "end_time_ps": {**_integer_or_string_schema(), "description": "Window end. -1 means end of simulation." + _TIMESPEC_HINT, "default": -1},
+                    "start_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window start. Default 0." + _TIMESPEC_HINT,
+                        "default": 0,
+                    },
+                    "end_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window end. -1 means end of simulation."
+                        + _TIMESPEC_HINT,
+                        "default": -1,
+                    },
                     "tolerance_frac": {
                         "type": "number",
                         "description": "Fraction of the period a beat may deviate before counting as an off-beat. Default 0.05 (5%).",
                         "default": 0.05,
                     },
-                    "cursor_name": {"type": "string", "description": "Optional explicit cursor name for the first off-beat. Defaults to beat_<sha8>."},
-                    "cursor_note": {"type": "string", "description": "Optional note attached to the registered cursor."},
+                    "cursor_name": {
+                        "type": "string",
+                        "description": "Optional explicit cursor name for the first off-beat. Defaults to beat_<sha8>.",
+                    },
+                    "cursor_note": {
+                        "type": "string",
+                        "description": "Optional note attached to the registered cursor.",
+                    },
                 },
                 "required": ["wave_path", "signal"],
             },
         ),
-
         Tool(
             name="suggest_handshakes",
             description=(
@@ -2187,14 +6145,23 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
-                    "scope": {"type": "string", "description": "Optional hierarchy prefix to restrict candidates (e.g. 'tb_top.u_dut')."},
-                    "max_candidates": {"type": "integer", "description": "Max bundles to return. Default 8.", "default": 8},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Waveform (FSDB or VCD).",
+                    },
+                    "scope": {
+                        "type": "string",
+                        "description": "Optional hierarchy prefix to restrict candidates (e.g. 'tb_top.u_dut').",
+                    },
+                    "max_candidates": {
+                        "type": "integer",
+                        "description": "Max bundles to return. Default 8.",
+                        "default": 8,
+                    },
                 },
                 "required": ["wave_path"],
             },
         ),
-
         Tool(
             name="suggest_protocol_bundles",
             description=(
@@ -2215,15 +6182,28 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
-                    "protocol": {"type": "string", "enum": ["ahb", "apb"], "description": "Protocol bundle family to discover."},
-                    "scope": {"type": "string", "description": "Optional hierarchy prefix to restrict candidates (e.g. 'tb_top.u_dut')."},
-                    "max_candidates": {"type": "integer", "description": "Max bundles to return. Default 8.", "default": 8},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Waveform (FSDB or VCD).",
+                    },
+                    "protocol": {
+                        "type": "string",
+                        "enum": ["ahb", "apb"],
+                        "description": "Protocol bundle family to discover.",
+                    },
+                    "scope": {
+                        "type": "string",
+                        "description": "Optional hierarchy prefix to restrict candidates (e.g. 'tb_top.u_dut').",
+                    },
+                    "max_candidates": {
+                        "type": "integer",
+                        "description": "Max bundles to return. Default 8.",
+                        "default": 8,
+                    },
                 },
                 "required": ["wave_path", "protocol"],
             },
         ),
-
         Tool(
             name="sweep_handshakes",
             description=(
@@ -2238,6 +6218,8 @@ async def list_tools():
                 "round-trips into one. Always interpret flagged_count together with "
                 "coverage_status: zero_coverage means no protocol interfaces were "
                 "checked and is NOT a pass; truncated/degraded means partial coverage. "
+                "Workflow follow-ups relay only parameter-changing retries: an unscoped "
+                "zero-coverage result is not blindly replayed, but remains inconclusive. "
                 "FSDB native transition-buffer truncation is propagated per row and "
                 "forces degraded coverage; zero findings then cover only returned prefixes. "
                 "Returns FACTS, not a root-cause verdict; re-rank as the symptom "
@@ -2246,18 +6228,44 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
-                    "scope": {"type": "string", "description": "Optional hierarchy prefix to limit the sweep (e.g. 'tb_top.u_dut'). If the scope contains no discovered interfaces the result reports coverage_status=zero_coverage; retry unscoped or with a parent/interface scope."},
-                    "edge": {"type": "string", "enum": ["posedge", "negedge"], "description": "Clock edge to sample on. Default posedge.", "default": "posedge"},
-                    "start_time_ps": {**_integer_or_string_schema(), "description": "Window start (ps int, '@cursor', or unit literal like '12.3ns'). Default 0.", "default": 0},
-                    "end_time_ps": {**_integer_or_string_schema(), "description": "Window end. -1 = end of trace. Accepts ps int, '@cursor', or unit literal.", "default": -1},
-                    "max_wait_cycles": {"type": "integer", "description": "Stall length (cycles) above which a stall becomes a long_stall finding. Default 16.", "default": 16},
-                    "max_interfaces": {"type": "integer", "description": "Max interfaces to sweep (default 64). If discovery exceeds this the result is flagged truncated=true — raise it for full coverage.", "default": 64},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Waveform (FSDB or VCD).",
+                    },
+                    "scope": {
+                        "type": "string",
+                        "description": "Optional hierarchy prefix to limit the sweep (e.g. 'tb_top.u_dut'). If the scope contains no discovered interfaces the result reports coverage_status=zero_coverage; retry unscoped or with a parent/interface scope.",
+                    },
+                    "edge": {
+                        "type": "string",
+                        "enum": ["posedge", "negedge"],
+                        "description": "Clock edge to sample on. Default posedge.",
+                        "default": "posedge",
+                    },
+                    "start_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window start (ps int, '@cursor', or unit literal like '12.3ns'). Default 0.",
+                        "default": 0,
+                    },
+                    "end_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window end. -1 = end of trace. Accepts ps int, '@cursor', or unit literal.",
+                        "default": -1,
+                    },
+                    "max_wait_cycles": {
+                        "type": "integer",
+                        "description": "Stall length (cycles) above which a stall becomes a long_stall finding. Default 16.",
+                        "default": 16,
+                    },
+                    "max_interfaces": {
+                        "type": "integer",
+                        "description": "Max interfaces to sweep (default 64). If discovery exceeds this the result is flagged truncated=true — raise it for full coverage.",
+                        "default": 64,
+                    },
                 },
                 "required": ["wave_path"],
             },
         ),
-
         Tool(
             name="verify_window",
             description=(
@@ -2283,9 +6291,25 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
-                    "clock": {"type": "string", "description": "1-bit clock signal full path."},
-                    "mode": {"type": "string", "enum": ["always", "never", "eventually", "implication", "sequence"], "description": "Temporal template to evaluate."},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Waveform (FSDB or VCD).",
+                    },
+                    "clock": {
+                        "type": "string",
+                        "description": "1-bit clock signal full path.",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": [
+                            "always",
+                            "never",
+                            "eventually",
+                            "implication",
+                            "sequence",
+                        ],
+                        "description": "Temporal template to evaluate.",
+                    },
                     "predicate": {
                         "type": "array",
                         "description": "always/never/eventually: list of {signal, op, value} terms, AND-combined.",
@@ -2293,38 +6317,104 @@ async def list_tools():
                             "type": "object",
                             "properties": {
                                 "signal": {"type": "string"},
-                                "op": {"type": "string", "enum": ["eq", "ne", "gt", "ge", "lt", "le", "is_x", "is_known"]},
-                                "value": {**_integer_or_string_schema(), "description": "Integer (or '0x..'/'0b..'); omit for is_x/is_known."},
+                                "op": {
+                                    "type": "string",
+                                    "enum": [
+                                        "eq",
+                                        "ne",
+                                        "gt",
+                                        "ge",
+                                        "lt",
+                                        "le",
+                                        "is_x",
+                                        "is_known",
+                                    ],
+                                },
+                                "value": {
+                                    **_integer_or_string_schema(),
+                                    "description": "Integer (or '0x..'/'0b..'); omit for is_x/is_known.",
+                                },
                             },
                             "required": ["signal", "op"],
                         },
                     },
-                    "antecedent": {"type": "array", "description": "implication only: the A predicate (list of terms).", "items": {"type": "object"}},
-                    "consequent": {"type": "array", "description": "implication only: the B predicate that must follow A.", "items": {"type": "object"}},
+                    "antecedent": {
+                        "type": "array",
+                        "description": "implication only: the A predicate (list of terms).",
+                        "items": {"type": "object"},
+                    },
+                    "consequent": {
+                        "type": "array",
+                        "description": "implication only: the B predicate that must follow A.",
+                        "items": {"type": "object"},
+                    },
                     "delta": {
                         "type": "object",
                         "description": "sequence only: check the per-accepted-beat increment of one signal. predicate is the accepted-beat gate (e.g. hready==1 && htrans active). E.g. AHB byte INCR: {signal:'top.haddr', value:1}. For WRAP bursts pass modulo = burst region bytes (size*len) so the wrap-around beat is accepted via (cur-prev) mod modulo. Pass restart_when (a predicate, e.g. htrans==NONSEQ) to re-seed at each new burst so burst boundaries are not flagged.",
                         "properties": {
-                            "signal": {"type": "string", "description": "Signal whose cycle-over-cycle increment is checked (e.g. haddr)."},
-                            "value": {**_integer_or_string_schema(), "description": "Expected per-beat increment / stride (e.g. 1 byte, 4 word). Integer or '0x..'."},
-                            "op": {"type": "string", "enum": ["eq", "ne", "gt", "ge", "lt", "le"], "description": "How the actual increment is compared to value. Default eq."},
-                            "modulo": {**_integer_or_string_schema(), "description": "Optional WRAP region (size*len) in the signal's units; the increment is taken modulo this so a legal wrap-around is not a violation. Omit for INCR."},
-                            "restart_when": {"type": "array", "description": "Optional predicate (list of {signal, op, value} terms). On accepted beats where it holds the sequence re-seeds (no check) — use for burst starts (e.g. htrans==NONSEQ) so cross-burst jumps are not flagged.", "items": {"type": "object"}},
+                            "signal": {
+                                "type": "string",
+                                "description": "Signal whose cycle-over-cycle increment is checked (e.g. haddr).",
+                            },
+                            "value": {
+                                **_integer_or_string_schema(),
+                                "description": "Expected per-beat increment / stride (e.g. 1 byte, 4 word). Integer or '0x..'.",
+                            },
+                            "op": {
+                                "type": "string",
+                                "enum": ["eq", "ne", "gt", "ge", "lt", "le"],
+                                "description": "How the actual increment is compared to value. Default eq.",
+                            },
+                            "modulo": {
+                                **_integer_or_string_schema(),
+                                "description": "Optional WRAP region (size*len) in the signal's units; the increment is taken modulo this so a legal wrap-around is not a violation. Omit for INCR.",
+                            },
+                            "restart_when": {
+                                "type": "array",
+                                "description": "Optional predicate (list of {signal, op, value} terms). On accepted beats where it holds the sequence re-seeds (no check) — use for burst starts (e.g. htrans==NONSEQ) so cross-burst jumps are not flagged.",
+                                "items": {"type": "object"},
+                            },
                         },
                         "required": ["signal", "value"],
                     },
-                    "within_cycles": {"type": "integer", "description": "implication only: B must hold within this many cycles of A. The response window is [i, i+within] when overlap=true (includes A's cycle) or [i+1, i+within] when overlap=false. Default 1.", "default": 1},
-                    "overlap": {"type": "boolean", "description": "implication only. true (default, |->): the response window includes A's own cycle. false (|=>): the window starts the NEXT cycle [i+1, i+within] — use this for a stability/hold property ('B must STILL hold next cycle', e.g. HTRANS/valid held through a wait state) where A already implies B on its own cycle. With overlap=true such a property is a VACUOUS pass (flagged in result.vacuous + warnings); overlap=false requires within_cycles>=1.", "default": True},
-                    "edge": {"type": "string", "enum": ["posedge", "negedge"], "description": "Clock edge to sample on. Default posedge.", "default": "posedge"},
-                    "start_time_ps": {**_integer_or_string_schema(), "description": "Window start (ps int, '@cursor', or unit literal). Default 0.", "default": 0},
-                    "end_time_ps": {**_integer_or_string_schema(), "description": "Window end. -1 = end of trace.", "default": -1},
-                    "cursor_name": {"type": "string", "description": "Optional explicit cursor name for the witness/counterexample."},
-                    "cursor_note": {"type": "string", "description": "Optional note for the registered cursor."},
+                    "within_cycles": {
+                        "type": "integer",
+                        "description": "implication only: B must hold within this many cycles of A. The response window is [i, i+within] when overlap=true (includes A's cycle) or [i+1, i+within] when overlap=false. Default 1.",
+                        "default": 1,
+                    },
+                    "overlap": {
+                        "type": "boolean",
+                        "description": "implication only. true (default, |->): the response window includes A's own cycle. false (|=>): the window starts the NEXT cycle [i+1, i+within] — use this for a stability/hold property ('B must STILL hold next cycle', e.g. HTRANS/valid held through a wait state) where A already implies B on its own cycle. With overlap=true such a property is a VACUOUS pass (flagged in result.vacuous + warnings); overlap=false requires within_cycles>=1.",
+                        "default": True,
+                    },
+                    "edge": {
+                        "type": "string",
+                        "enum": ["posedge", "negedge"],
+                        "description": "Clock edge to sample on. Default posedge.",
+                        "default": "posedge",
+                    },
+                    "start_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window start (ps int, '@cursor', or unit literal). Default 0.",
+                        "default": 0,
+                    },
+                    "end_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window end. -1 = end of trace.",
+                        "default": -1,
+                    },
+                    "cursor_name": {
+                        "type": "string",
+                        "description": "Optional explicit cursor name for the witness/counterexample.",
+                    },
+                    "cursor_note": {
+                        "type": "string",
+                        "description": "Optional note for the registered cursor.",
+                    },
                 },
                 "required": ["wave_path", "clock", "mode"],
             },
         ),
-
         Tool(
             name="reconstruct_transactions",
             description=(
@@ -2346,38 +6436,136 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
-                    "clock": {"type": "string", "description": "Shared 1-bit clock full path (e.g. AXI aclk)."},
-                    "req_valid": {"type": "string", "description": "Request channel valid (e.g. arvalid/awvalid)."},
-                    "req_ready": {"type": "string", "description": "Request channel ready (e.g. arready/awready)."},
-                    "req_id": {"type": "string", "description": "Request id bus (e.g. arid/awid). Optional: omit both req_id and cmp_id for an unindexed in-order stream (AXI-Lite, APB) — txns pair in FIFO order and report id=null."},
-                    "req_fields": {"type": "array", "items": {"type": "string"}, "description": "Optional request payload signals to capture per txn (e.g. araddr, arlen, arsize, arburst)."},
-                    "req_len": {"type": "string", "description": "Optional AxLEN bus (arlen/awlen). Each txn's observed beat_count is compared to req_len+1; a mismatch (early/late LAST, dropped/extra beat) is a real burst-length violation, surfaced per-txn (beat_count vs expected_beats) and as beat_count_mismatch_count. x/z len → no check."},
-                    "cmp_valid": {"type": "string", "description": "Completion channel valid (e.g. rvalid/bvalid)."},
-                    "cmp_ready": {"type": "string", "description": "Completion channel ready (e.g. rready/bready)."},
-                    "cmp_id": {"type": "string", "description": "Completion id bus (e.g. rid/bid). Optional; see req_id (omit both for in-order FIFO pairing)."},
-                    "cmp_last": {"type": "string", "description": "Optional last-beat signal (e.g. rlast). With it, a multi-beat burst completes one txn on last; without it every completion beat is a txn (e.g. AXI B channel)."},
-                    "cmp_fields": {"type": "array", "items": {"type": "string"}, "description": "Optional completion payload signals to capture per txn (e.g. rresp, bresp)."},
-                    "data_valid": {"type": "string", "description": "AXI WRITE only: W-channel valid (wvalid). The W channel carries no id; beats attach in order to the oldest data-incomplete request. Needs data_ready too."},
-                    "data_ready": {"type": "string", "description": "AXI WRITE only: W-channel ready (wready)."},
-                    "data_last": {"type": "string", "description": "AXI WRITE only: W-channel last (wlast); marks the end of a write burst's data."},
-                    "data_fields": {"type": "array", "items": {"type": "string"}, "description": "AXI WRITE only: W-channel payload to capture per beat (e.g. wdata, wstrb)."},
-                    "reset": {"type": "string", "description": "Optional reset signal; while asserted, in-flight transactions are cleared so a txn straddling reset is not reported as a phantom hang."},
-                    "reset_active_low": {"type": "boolean", "description": "reset is active-low (rst_n). Default true.", "default": True},
-                    "capture_beats": {"type": "boolean", "description": "Include per-beat data (data_beats[]) on each txn. Default false (only beat_count). Enable for data-integrity debugging; can be large.", "default": False},
-                    "edge": {"type": "string", "enum": ["posedge", "negedge"], "description": "Clock edge to sample on. Default posedge.", "default": "posedge"},
-                    "start_time_ps": {**_integer_or_string_schema(), "description": "Window start (ps int, '@cursor', or unit literal). Default 0.", "default": 0},
-                    "end_time_ps": {**_integer_or_string_schema(), "description": "Window end. -1 = end of trace.", "default": -1},
-                    "active_high": {"type": "boolean", "description": "valid/ready/last polarity. Default true.", "default": True},
-                    "timeout_cycles": {"type": "integer", "description": "Optional: count completed txns with latency above this many cycles (slow_count fact)."},
-                    "max_transactions": {"type": "integer", "description": "Max txn records returned (default 256); counts/stats are over ALL. Sets transactions_truncated when exceeded.", "default": 256},
-                    "cursor_name": {"type": "string", "description": "Optional explicit cursor name."},
-                    "cursor_note": {"type": "string", "description": "Optional cursor note."},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Waveform (FSDB or VCD).",
+                    },
+                    "clock": {
+                        "type": "string",
+                        "description": "Shared 1-bit clock full path (e.g. AXI aclk).",
+                    },
+                    "req_valid": {
+                        "type": "string",
+                        "description": "Request channel valid (e.g. arvalid/awvalid).",
+                    },
+                    "req_ready": {
+                        "type": "string",
+                        "description": "Request channel ready (e.g. arready/awready).",
+                    },
+                    "req_id": {
+                        "type": "string",
+                        "description": "Request id bus (e.g. arid/awid). Optional: omit both req_id and cmp_id for an unindexed in-order stream (AXI-Lite, APB) — txns pair in FIFO order and report id=null.",
+                    },
+                    "req_fields": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional request payload signals to capture per txn (e.g. araddr, arlen, arsize, arburst).",
+                    },
+                    "req_len": {
+                        "type": "string",
+                        "description": "Optional AxLEN bus (arlen/awlen). Each txn's observed beat_count is compared to req_len+1; a mismatch (early/late LAST, dropped/extra beat) is a real burst-length violation, surfaced per-txn (beat_count vs expected_beats) and as beat_count_mismatch_count. x/z len → no check.",
+                    },
+                    "cmp_valid": {
+                        "type": "string",
+                        "description": "Completion channel valid (e.g. rvalid/bvalid).",
+                    },
+                    "cmp_ready": {
+                        "type": "string",
+                        "description": "Completion channel ready (e.g. rready/bready).",
+                    },
+                    "cmp_id": {
+                        "type": "string",
+                        "description": "Completion id bus (e.g. rid/bid). Optional; see req_id (omit both for in-order FIFO pairing).",
+                    },
+                    "cmp_last": {
+                        "type": "string",
+                        "description": "Optional last-beat signal (e.g. rlast). With it, a multi-beat burst completes one txn on last; without it every completion beat is a txn (e.g. AXI B channel).",
+                    },
+                    "cmp_fields": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional completion payload signals to capture per txn (e.g. rresp, bresp).",
+                    },
+                    "data_valid": {
+                        "type": "string",
+                        "description": "AXI WRITE only: W-channel valid (wvalid). The W channel carries no id; beats attach in order to the oldest data-incomplete request. Needs data_ready too.",
+                    },
+                    "data_ready": {
+                        "type": "string",
+                        "description": "AXI WRITE only: W-channel ready (wready).",
+                    },
+                    "data_last": {
+                        "type": "string",
+                        "description": "AXI WRITE only: W-channel last (wlast); marks the end of a write burst's data.",
+                    },
+                    "data_fields": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "AXI WRITE only: W-channel payload to capture per beat (e.g. wdata, wstrb).",
+                    },
+                    "reset": {
+                        "type": "string",
+                        "description": "Optional reset signal; while asserted, in-flight transactions are cleared so a txn straddling reset is not reported as a phantom hang.",
+                    },
+                    "reset_active_low": {
+                        "type": "boolean",
+                        "description": "reset is active-low (rst_n). Default true.",
+                        "default": True,
+                    },
+                    "capture_beats": {
+                        "type": "boolean",
+                        "description": "Include per-beat data (data_beats[]) on each txn. Default false (only beat_count). Enable for data-integrity debugging; can be large.",
+                        "default": False,
+                    },
+                    "edge": {
+                        "type": "string",
+                        "enum": ["posedge", "negedge"],
+                        "description": "Clock edge to sample on. Default posedge.",
+                        "default": "posedge",
+                    },
+                    "start_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window start (ps int, '@cursor', or unit literal). Default 0.",
+                        "default": 0,
+                    },
+                    "end_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window end. -1 = end of trace.",
+                        "default": -1,
+                    },
+                    "active_high": {
+                        "type": "boolean",
+                        "description": "valid/ready/last polarity. Default true.",
+                        "default": True,
+                    },
+                    "timeout_cycles": {
+                        "type": "integer",
+                        "description": "Optional: count completed txns with latency above this many cycles (slow_count fact).",
+                    },
+                    "max_transactions": {
+                        "type": "integer",
+                        "description": "Max txn records returned (default 256); counts/stats are over ALL. Sets transactions_truncated when exceeded.",
+                        "default": 256,
+                    },
+                    "cursor_name": {
+                        "type": "string",
+                        "description": "Optional explicit cursor name.",
+                    },
+                    "cursor_note": {
+                        "type": "string",
+                        "description": "Optional cursor note.",
+                    },
                 },
-                "required": ["wave_path", "clock", "req_valid", "req_ready", "cmp_valid", "cmp_ready"],
+                "required": [
+                    "wave_path",
+                    "clock",
+                    "req_valid",
+                    "req_ready",
+                    "cmp_valid",
+                    "cmp_ready",
+                ],
             },
         ),
-
         Tool(
             name="inspect_handshake",
             description=(
@@ -2415,32 +6603,62 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "wave_path": {"type": "string", "description": "Waveform (FSDB or VCD)."},
-                    "clock": {"type": "string", "description": "1-bit clock signal full path."},
-                    "valid": {"type": "string", "description": "Initiator valid/request signal (1-bit). Provide this OR valid_htrans."},
-                    "valid_htrans": {"type": "string", "description": "AHB only: path to the htrans signal. A derived valid is computed from it (AHB has no literal valid). Provide this OR valid, not both."},
+                    "wave_path": {
+                        "type": "string",
+                        "description": "Waveform (FSDB or VCD).",
+                    },
+                    "clock": {
+                        "type": "string",
+                        "description": "1-bit clock signal full path.",
+                    },
+                    "valid": {
+                        "type": "string",
+                        "description": "Initiator valid/request signal (1-bit). Provide this OR valid_htrans.",
+                    },
+                    "valid_htrans": {
+                        "type": "string",
+                        "description": "AHB only: path to the htrans signal. A derived valid is computed from it (AHB has no literal valid). Provide this OR valid, not both.",
+                    },
                     "htrans_rule": {
                         "type": "string",
                         "enum": ["active", "non_idle"],
                         "description": "How valid_htrans derives valid. 'active' (default) = NONSEQ/SEQ (htrans[1]==1); 'non_idle' = htrans != IDLE (counts BUSY too).",
                         "default": "active",
                     },
-                    "ready": {"type": "string", "description": "Receiver ready/grant signal (1-bit). For AHB, hready."},
+                    "ready": {
+                        "type": "string",
+                        "description": "Receiver ready/grant signal (1-bit). For AHB, hready.",
+                    },
                     "payload": {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Optional signals that MUST stay stable while stalled (e.g. AHB htrans/haddr/hwrite/hsize, AXI awaddr/awlen). A mid-stall change is a payload_hold_violation. For AHB do NOT include hwdata here — pass it as write_data (it is a data-phase signal, a different window).",
                     },
-                    "hwrite": {"type": "string", "description": "AHB only: path to HWRITE. With write_data, enables the write data-phase HWDATA-hold check."},
-                    "write_data": {"type": "string", "description": "AHB only: path to HWDATA. With hwrite, checks that write data is held stable through a data-phase wait state (HREADY low) — a write_data_hold_violation otherwise. This is the data-phase window, distinct from the address-phase payload-hold. Pass it ONLY for the producer (initiator/master) interface: on a responder/slave interface HWDATA is an interconnect-mux output that glitches at the clock edge and would false-positive."},
+                    "hwrite": {
+                        "type": "string",
+                        "description": "AHB only: path to HWRITE. With write_data, enables the write data-phase HWDATA-hold check.",
+                    },
+                    "write_data": {
+                        "type": "string",
+                        "description": "AHB only: path to HWDATA. With hwrite, checks that write data is held stable through a data-phase wait state (HREADY low) — a write_data_hold_violation otherwise. This is the data-phase window, distinct from the address-phase payload-hold. Pass it ONLY for the producer (initiator/master) interface: on a responder/slave interface HWDATA is an interconnect-mux output that glitches at the clock edge and would false-positive.",
+                    },
                     "edge": {
                         "type": "string",
                         "enum": ["posedge", "negedge"],
                         "description": "Clock edge to sample on. Default posedge.",
                         "default": "posedge",
                     },
-                    "start_time_ps": {**_integer_or_string_schema(), "description": "Window start. Default 0." + _TIMESPEC_HINT, "default": 0},
-                    "end_time_ps": {**_integer_or_string_schema(), "description": "Window end. -1 means end of simulation." + _TIMESPEC_HINT, "default": -1},
+                    "start_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window start. Default 0." + _TIMESPEC_HINT,
+                        "default": 0,
+                    },
+                    "end_time_ps": {
+                        **_integer_or_string_schema(),
+                        "description": "Window end. -1 means end of simulation."
+                        + _TIMESPEC_HINT,
+                        "default": -1,
+                    },
                     "max_wait_cycles": {
                         "type": "integer",
                         "description": "A stall longer than this many cycles becomes a long_stall finding. Default 16.",
@@ -2461,13 +6679,18 @@ async def list_tools():
                         "description": "valid/ready are active-high. Set false for active-low handshakes. Default true.",
                         "default": True,
                     },
-                    "cursor_name": {"type": "string", "description": "Optional explicit cursor name. Defaults to hs_<sha8>."},
-                    "cursor_note": {"type": "string", "description": "Optional note attached to the registered cursor."},
+                    "cursor_name": {
+                        "type": "string",
+                        "description": "Optional explicit cursor name. Defaults to hs_<sha8>.",
+                    },
+                    "cursor_note": {
+                        "type": "string",
+                        "description": "Optional note attached to the registered cursor.",
+                    },
                 },
                 "required": ["wave_path", "clock", "ready"],
             },
         ),
-
         # NOTE: diff_value_distribution is intentionally NOT registered as an
         # MCP tool. Internal pilots showed no clear benefit over baseline on the
         # common "scoreboard data-mismatch + readable RTL" flow, so it is kept
@@ -2483,8 +6706,15 @@ async def list_tools():
     # /tmp/tw_ab_hide_handshake (touch it + reconnect for Arm A, rm it +
     # reconnect for Arm B). Used only for the handshake blind A/B pilots; off by
     # default for normal operation.
-    if os.environ.get("TRACEWEAVE_AB_HIDE_HANDSHAKE") == "1" or os.path.exists("/tmp/tw_ab_hide_handshake"):
-        hidden = {"inspect_handshake", "suggest_handshakes", "suggest_protocol_bundles", "sweep_handshakes"}
+    if os.environ.get("TRACEWEAVE_AB_HIDE_HANDSHAKE") == "1" or os.path.exists(
+        "/tmp/tw_ab_hide_handshake"
+    ):
+        hidden = {
+            "inspect_handshake",
+            "suggest_handshakes",
+            "suggest_protocol_bundles",
+            "sweep_handshakes",
+        }
         return [t for t in _tools if t.name not in hidden]
     return _tools
 
@@ -2492,6 +6722,7 @@ async def list_tools():
 # ═══════════════════════════════════════════════════════════════════
 # Tool dispatch
 # ═══════════════════════════════════════════════════════════════════
+
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict):
@@ -2511,15 +6742,21 @@ async def call_tool(name: str, arguments: dict):
                 "sweep_result_serialize_ms",
                 (time.perf_counter() - serialize_started) * 1000.0,
             )
-            operation_metrics.set_value(
-                "sweep_result_bytes", len(text.encode("utf-8"))
-            )
-        ok = not isinstance(result, (schemas.ToolErrorResult, schemas.PrerequisiteBlockResult))
-        blocked = isinstance(result, schemas.PrerequisiteBlockResult)
+            operation_metrics.set_value("sweep_result_bytes", len(text.encode("utf-8")))
+        hierarchy_blocked = (
+            isinstance(result, schemas.BuildTbHierarchyResult)
+            and result.build_status == "blocked"
+        )
+        ok = not isinstance(
+            result, (schemas.ToolErrorResult, schemas.PrerequisiteBlockResult)
+        ) and not hierarchy_blocked
+        blocked = isinstance(result, schemas.PrerequisiteBlockResult) or hierarchy_blocked
         if isinstance(result, schemas.PrerequisiteBlockResult):
             error_code = result.error_code
         elif isinstance(result, schemas.ToolErrorResult):
             error_code = result.error_code or "tool_error"
+        elif hierarchy_blocked:
+            error_code = str((result.blocker or {}).get("code") or "hierarchy_blocked")
         return [TextContent(type="text", text=text)]
     except anyio.get_cancelled_exc_class():
         # Client abandoned the request; the finally block still records the
@@ -2574,7 +6811,9 @@ async def _dispatch(name: str, args: dict):
         _update_session_state(name, args, result)
         validated = schemas.SimPathsResult.model_validate(result)
         _result_cache["get_sim_paths"] = validated
-        _result_provenance["get_sim_paths"] = _build_result_provenance(name, args, validated)
+        _result_provenance["get_sim_paths"] = _build_result_provenance(
+            name, args, validated
+        )
         return validated
 
     elif name == "parse_sim_log":
@@ -2585,13 +6824,15 @@ async def _dispatch(name: str, args: dict):
         base_events, base_meta = _resolve_base_events_for_diff(args, simulator)
         new_events, new_meta = _resolve_new_events_for_diff(args, simulator)
         result = diff_failure_events(base_events, new_events)
-        result.update({
-            "base_log_file": base_meta.get("log_file"),
-            "new_log_file": new_meta.get("log_file"),
-            "base_snapshot_id": base_meta.get("snapshot_id"),
-            "new_snapshot_id": new_meta.get("snapshot_id"),
-            "diff_source": _diff_source(base_meta, new_meta),
-        })
+        result.update(
+            {
+                "base_log_file": base_meta.get("log_file"),
+                "new_log_file": new_meta.get("log_file"),
+                "base_snapshot_id": base_meta.get("snapshot_id"),
+                "new_snapshot_id": new_meta.get("snapshot_id"),
+                "diff_source": _diff_source(base_meta, new_meta),
+            }
+        )
         return schemas.DiffResult.model_validate(result)
 
     elif name == "get_error_context":
@@ -2604,9 +6845,9 @@ async def _dispatch(name: str, args: dict):
         return schemas.ErrorContextResult.model_validate(result)
 
     elif name == "search_signals":
-        wave_path  = args["wave_path"]
-        keyword    = args["keyword"]
-        max_r      = args.get("max_results", 50)
+        wave_path = args["wave_path"]
+        keyword = args["keyword"]
+        max_r = args.get("max_results", 50)
 
         def _work():
             ext = wave_path.lower().rsplit(".", 1)[-1]
@@ -2616,12 +6857,17 @@ async def _dispatch(name: str, args: dict):
                 if cached is None or cached[0] != signature:
                     if cached is not None:
                         _dispose_cached_object(cached[1])
-                    _fsdb_index_cache[wave_path] = (signature, FSDBSignalIndex(wave_path))
+                    _fsdb_index_cache[wave_path] = (
+                        signature,
+                        FSDBSignalIndex(wave_path),
+                    )
                 index = _fsdb_index_cache[wave_path][1]
+
                 def _search_one(kw: str) -> dict:
                     return index.search(kw, max_r)
             elif ext == "vcd":
                 parser = _get_parser(wave_path)
+
                 def _search_one(kw: str) -> dict:
                     return parser.search_signals(kw, max_r)
             else:
@@ -2638,27 +6884,34 @@ async def _dispatch(name: str, args: dict):
                         f"max {SIGNAL_SEARCH_MAX_KEYWORDS} per call"
                     )
                 entries = [_search_one(str(kw)) for kw in keyword]
-                return schemas.SearchSignalsBatchResult.model_validate({
-                    "batch": entries,
-                    "hint": "One entry per keyword, in input order. Use the full path "
-                            "from each result's path field as the signal_path argument "
-                            "for tools such as get_signal_at_time.",
-                })
+                return schemas.SearchSignalsBatchResult.model_validate(
+                    {
+                        "batch": entries,
+                        "hint": "One entry per keyword, in input order. Use the full path "
+                        "from each result's path field as the signal_path argument "
+                        "for tools such as get_signal_at_time.",
+                    }
+                )
             return schemas.SearchSignalsResult.model_validate(_search_one(keyword))
 
         return await _run_in_wave_thread(wave_path, _work)
 
     elif name == "get_signal_at_time":
+
         def _work():
             parser = _get_parser(args["wave_path"])
             raw_path = args["signal_path"]
             resolved_path = _resolve_signal_path(parser, raw_path)
             try:
-                result = parser.get_value_at_time(resolved_path, _resolve_time(args["time_ps"]))
+                result = parser.get_value_at_time(
+                    resolved_path, _resolve_time(args["time_ps"])
+                )
             except KeyError as exc:
                 suggestions = _suggest_signal_paths(parser, raw_path)
                 if suggestions:
-                    raise KeyError(f"{exc} did_you_mean: {', '.join(suggestions)}") from exc
+                    raise KeyError(
+                        f"{exc} did_you_mean: {', '.join(suggestions)}"
+                    ) from exc
                 raise
             if resolved_path != raw_path:
                 result["resolved_from"] = raw_path
@@ -2667,6 +6920,7 @@ async def _dispatch(name: str, args: dict):
         return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "get_signal_transitions":
+
         def _work():
             result = _get_parser(args["wave_path"]).get_transitions(
                 args["signal_path"],
@@ -2682,6 +6936,7 @@ async def _dispatch(name: str, args: dict):
         return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "get_signals_around_time":
+
         def _work():
             parser = _get_parser(args["wave_path"])
             center_ps = _resolve_time(args["center_time_ps"])
@@ -2725,15 +6980,30 @@ async def _dispatch(name: str, args: dict):
         return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "get_signals_by_cycle":
+
         def _work():
-            start_time_ps = _resolve_time(args["start_time_ps"]) if "start_time_ps" in args else None
-            end_time_ps = _resolve_time(args["end_time_ps"]) if "end_time_ps" in args else None
+            start_time_ps = (
+                _resolve_time(args["start_time_ps"])
+                if "start_time_ps" in args
+                else None
+            )
+            end_time_ps = (
+                _resolve_time(args["end_time_ps"]) if "end_time_ps" in args else None
+            )
             # Two locating axes, one input per axis (reject mixing within an axis).
             if start_time_ps is not None and "start_cycle" in args:
-                raise ValueError("start_time_ps and start_cycle are mutually exclusive; pass one")
+                raise ValueError(
+                    "start_time_ps and start_cycle are mutually exclusive; pass one"
+                )
             if end_time_ps is not None and "num_cycles" in args:
-                raise ValueError("end_time_ps and num_cycles are mutually exclusive; pass one")
-            if start_time_ps is not None and end_time_ps is not None and end_time_ps < start_time_ps:
+                raise ValueError(
+                    "end_time_ps and num_cycles are mutually exclusive; pass one"
+                )
+            if (
+                start_time_ps is not None
+                and end_time_ps is not None
+                and end_time_ps < start_time_ps
+            ):
                 raise ValueError("end_time_ps must be >= start_time_ps")
             parser = _get_parser(args["wave_path"])
             raw_paths = args["signal_paths"]
@@ -2779,6 +7049,7 @@ async def _dispatch(name: str, args: dict):
         return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "get_waveform_summary":
+
         def _work():
             result = _get_parser(args["wave_path"]).get_summary()
             return schemas.WaveformSummaryResult.model_validate(result)
@@ -2787,19 +7058,250 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "build_tb_hierarchy":
         simulator = _resolve_session_simulator(args)
-        resolved_args = {**args, "simulator": simulator}
         compile_log = args["compile_log"]
-        full_result = build_hierarchy(
-            parse_compile_log(
-                compile_log,
-                simulator,
-            ),
-            compile_log_path=compile_log,
+        supplementary_compile_logs = _validated_supplementary_compile_logs(args)
+        hierarchy_config = get_hierarchy_execution_config()
+        if not hierarchy_config.valid:
+            return _blocked_hierarchy_result(
+                code=hierarchy_config.error_code or "hierarchy_config_invalid",
+                stage="execution_config",
+            )
+        hierarchy_started = time.perf_counter()
+        timeout_sec = hierarchy_config.timeout_sec
+        try:
+            if timeout_sec:
+                with anyio.fail_after(timeout_sec):
+                    compile_result, context_simulator = (
+                        await _run_in_cancellable_thread(
+                            lambda: _parse_merged_compile_context(
+                                compile_log=compile_log,
+                                simulator=simulator,
+                                supplementary_compile_logs=(
+                                    supplementary_compile_logs
+                                ),
+                            )
+                        )
+                    )
+            else:
+                compile_result, context_simulator = (
+                    await _run_in_cancellable_thread(
+                        lambda: _parse_merged_compile_context(
+                            compile_log=compile_log,
+                            simulator=simulator,
+                            supplementary_compile_logs=(
+                                supplementary_compile_logs
+                            ),
+                        )
+                    )
+                )
+        except TimeoutError:
+            return _blocked_hierarchy_result(
+                code="hierarchy_timeout",
+                stage="compile_log_parse",
+                metrics={
+                    "timeout_ms": round(timeout_sec * 1000.0, 3),
+                    "total_wall_ms": round(
+                        (time.perf_counter() - hierarchy_started) * 1000.0, 3
+                    ),
+                },
+            )
+        except MemoryError:
+            return _blocked_hierarchy_result(
+                code="hierarchy_memory_exhausted",
+                stage="compile_log_parse",
+                metrics={
+                    "total_wall_ms": round(
+                        (time.perf_counter() - hierarchy_started) * 1000.0, 3
+                    ),
+                },
+            )
+        parse_wall_ms = (time.perf_counter() - hierarchy_started) * 1000.0
+        hierarchy_snapshot_sha256 = compute_snapshot_fingerprint(
+            compile_log,
+            context_simulator,
+            supplementary_compile_logs=supplementary_compile_logs,
         )
+        _cache_compile_context(
+            compile_log=compile_log,
+            simulator=context_simulator,
+            supplementary_compile_logs=supplementary_compile_logs,
+            snapshot_sha256=hierarchy_snapshot_sha256,
+            compile_result=compile_result,
+        )
+        handle = compute_handle(
+            compile_log,
+            context_simulator,
+            supplementary_compile_logs=supplementary_compile_logs,
+        )
+        resolved_args = {
+            **args,
+            "simulator": context_simulator,
+            "supplementary_compile_logs": supplementary_compile_logs,
+            "_hierarchy_handle": handle,
+            "_hierarchy_snapshot_sha256": hierarchy_snapshot_sha256,
+        }
+
+        source_index_config = get_compile_source_index_config()
+        source_index_key, source_index_paths = compile_source_index_key(
+            compile_snapshot_sha256=hierarchy_snapshot_sha256,
+            compile_result=compile_result,
+        )
+
+        def _build_full_hierarchy_work(source_index=None, disposition=None):
+            result = build_hierarchy(
+                compile_result,
+                compile_log_path=compile_log,
+                apply_source_overlay=False,
+                source_index=source_index,
+                source_index_disposition=disposition,
+            )
+            result.setdefault("build_metrics", {})["parse_wall_ms"] = round(
+                parse_wall_ms, 3
+            )
+            return result
+
+        async def _build_full_hierarchy_async():
+            preflight, within_limit = await _run_in_cancellable_thread(
+                lambda: _hierarchy_source_preflight(
+                    compile_result,
+                    max_source_bytes=hierarchy_config.max_source_bytes,
+                )
+            )
+            if not within_limit:
+                return None, preflight
+            lease = None
+            disposition = (
+                source_index_config.error_code
+                or ("disabled" if not source_index_config.enabled else None)
+            )
+            if source_index_config.valid and source_index_config.enabled:
+                lease = await _compile_source_index_runtime.acquire(
+                    key=source_index_key,
+                    paths=source_index_paths,
+                    max_bytes=source_index_config.max_bytes,
+                    max_files=source_index_config.max_files,
+                )
+                assert lease is not None
+            try:
+                result = await _run_in_cancellable_thread(
+                    lambda: _build_full_hierarchy_work(
+                        lease.index if lease is not None else None,
+                        lease.disposition if lease is not None else disposition,
+                    )
+                )
+                return result, preflight
+            finally:
+                if lease is not None:
+                    await lease.release()
+
+        if timeout_sec:
+            remaining_sec = timeout_sec - (time.perf_counter() - hierarchy_started)
+            if remaining_sec <= 0:
+                return _blocked_hierarchy_result(
+                    code="hierarchy_timeout",
+                    stage="compile_log_parse",
+                    metrics={
+                        "parse_wall_ms": round(parse_wall_ms, 3),
+                        "timeout_ms": round(timeout_sec * 1000.0, 3),
+                    },
+                    project={"simulator": context_simulator},
+                )
+            try:
+                with anyio.fail_after(remaining_sec):
+                    full_result, preflight = await _build_full_hierarchy_async()
+            except TimeoutError:
+                return _blocked_hierarchy_result(
+                    code="hierarchy_timeout",
+                    stage="source_scan",
+                    metrics={
+                        "parse_wall_ms": round(parse_wall_ms, 3),
+                        "timeout_ms": round(timeout_sec * 1000.0, 3),
+                        "total_wall_ms": round(
+                            (time.perf_counter() - hierarchy_started) * 1000.0,
+                            3,
+                        ),
+                    },
+                    project={"simulator": context_simulator},
+                )
+            except MemoryError:
+                return _blocked_hierarchy_result(
+                    code="hierarchy_memory_exhausted",
+                    stage="source_scan",
+                    metrics={
+                        "parse_wall_ms": round(parse_wall_ms, 3),
+                        "total_wall_ms": round(
+                            (time.perf_counter() - hierarchy_started) * 1000.0,
+                            3,
+                        ),
+                    },
+                    project={"simulator": context_simulator},
+                )
+        else:
+            try:
+                full_result, preflight = await _build_full_hierarchy_async()
+            except MemoryError:
+                return _blocked_hierarchy_result(
+                    code="hierarchy_memory_exhausted",
+                    stage="source_scan",
+                    metrics={
+                        "parse_wall_ms": round(parse_wall_ms, 3),
+                        "total_wall_ms": round(
+                            (time.perf_counter() - hierarchy_started) * 1000.0,
+                            3,
+                        ),
+                    },
+                    project={"simulator": context_simulator},
+                )
+        if full_result is None:
+            return _blocked_hierarchy_result(
+                code="hierarchy_source_byte_limit_exceeded",
+                stage="source_preflight",
+                metrics={
+                    **preflight,
+                    "parse_wall_ms": round(parse_wall_ms, 3),
+                    "total_wall_ms": round(
+                        (time.perf_counter() - hierarchy_started) * 1000.0, 3
+                    ),
+                },
+                project={"simulator": context_simulator},
+            )
+        # Preserve the existing local-NPI execution model: only the lock-free
+        # parse/source scan moved to a cancellable worker thread.
+        apply_npi_source_overlay(full_result, compile_log)
+        evidence = compile_result.get("compile_evidence")
+        evidence = evidence if isinstance(evidence, dict) else {}
+        source_logs = evidence.get("source_logs")
+        phase_roles = (
+            [
+                str(item.get("role") or "unknown")
+                for item in source_logs
+                if isinstance(item, dict)
+            ]
+            if isinstance(source_logs, list)
+            else ["single_log"]
+        )
+        merge_conflicts = evidence.get("merge_conflicts")
+        full_result["project"]["compile_context"] = {
+            "status": str(
+                evidence.get("merge_status")
+                or ("single_log" if not supplementary_compile_logs else "incomplete")
+            ),
+            "log_count": 1 + len(supplementary_compile_logs),
+            "supplementary_log_count": len(supplementary_compile_logs),
+            "phase_roles": phase_roles,
+            "conflicts": (
+                [str(item) for item in merge_conflicts]
+                if isinstance(merge_conflicts, list)
+                else []
+            ),
+        }
+        full_result["_hierarchy_snapshot_sha256"] = hierarchy_snapshot_sha256
         _update_session_state(name, resolved_args, full_result)
         scan_call = None
-        if _get_compatible_scan_cache(compile_log, simulator) is None:
-            scan_call = _build_scan_required_next_call(compile_log, simulator)
+        if _get_compatible_scan_cache(compile_log, context_simulator) is None:
+            scan_call = _build_scan_required_next_call(
+                compile_log, context_simulator
+            )
         suggested = None
         if scan_call is not None:
             suggested = {
@@ -2828,25 +7330,82 @@ async def _dispatch(name: str, args: dict):
         # Slim path. Register full result against a content-addressed
         # handle so handle tools (phase 4) can resolve later. The slim
         # payload is what crosses the wire to the LLM.
-        handle = compute_handle(compile_log, simulator)
         _handle_store.register(handle, full_result)
         slim = build_slim_payload(full_result, handle, kdb_hint=None)
         slim["required_next_call"] = scan_call
         slim["suggested_next"] = suggested
         validated = schemas.BuildTbHierarchyResult.model_validate(slim)
         _result_cache["build_tb_hierarchy"] = validated
-        _result_provenance["build_tb_hierarchy"] = _build_result_provenance(name, resolved_args, validated)
+        _result_provenance["build_tb_hierarchy"] = _build_result_provenance(
+            name, resolved_args, validated
+        )
         return validated
 
     elif name == "scan_structural_risks":
         simulator = _resolve_session_simulator(args)
         resolved_args = {**args, "simulator": simulator}
-        result = scan_structural_risks(
-            compile_log=args["compile_log"],
-            simulator=simulator,
-            scan_scope=args.get("scan_scope", "scope1"),
-            categories=args.get("categories"),
+        compile_result, context_simulator = await _run_in_cancellable_thread(
+            lambda: _parse_merged_compile_context(
+                compile_log=args["compile_log"],
+                simulator=simulator,
+                supplementary_compile_logs=[],
+            )
         )
+        compile_snapshot_sha256 = compute_snapshot_fingerprint(
+            args["compile_log"],
+            context_simulator,
+        )
+        _cache_compile_context(
+            compile_log=args["compile_log"],
+            simulator=context_simulator,
+            supplementary_compile_logs=[],
+            snapshot_sha256=compile_snapshot_sha256,
+            compile_result=compile_result,
+        )
+        source_index_config = get_compile_source_index_config()
+        source_index_key, source_index_paths = compile_source_index_key(
+            compile_snapshot_sha256=compile_snapshot_sha256,
+            compile_result=compile_result,
+        )
+        lease = None
+        source_index_disposition = (
+            source_index_config.error_code
+            or ("disabled" if not source_index_config.enabled else None)
+        )
+        if source_index_config.valid and source_index_config.enabled:
+            lease = await _compile_source_index_runtime.acquire(
+                key=source_index_key,
+                paths=source_index_paths,
+                max_bytes=source_index_config.max_bytes,
+                max_files=source_index_config.max_files,
+            )
+            assert lease is not None
+        try:
+            result = await _run_in_cancellable_thread(
+                lambda: scan_structural_risks(
+                    compile_log=args["compile_log"],
+                    simulator=simulator,
+                    scan_scope=args.get("scan_scope", "scope1"),
+                    categories=args.get("categories"),
+                    compile_result=compile_result,
+                    source_loader=(
+                        lease.index.read_text if lease is not None else None
+                    ),
+                )
+            )
+            result["scan_metrics"] = {
+                **(
+                    lease.index.metrics_snapshot() if lease is not None else {}
+                ),
+                "compile_source_index_disposition": (
+                    lease.disposition
+                    if lease is not None
+                    else source_index_disposition
+                ),
+            }
+        finally:
+            if lease is not None:
+                await lease.release()
         validated = _enforce_output_budget(
             schemas.ScanStructuralRisksResult.model_validate(result),
             [
@@ -2857,7 +7416,9 @@ async def _dispatch(name: str, args: dict):
         )
         _invalidate_downstream("scan_structural_risks")
         _result_cache["scan_structural_risks"] = validated
-        _result_provenance["scan_structural_risks"] = _build_result_provenance(name, resolved_args, validated)
+        _result_provenance["scan_structural_risks"] = _build_result_provenance(
+            name, resolved_args, validated
+        )
         return validated
 
     elif name == "analyze_failures":
@@ -2871,7 +7432,7 @@ async def _dispatch(name: str, args: dict):
             signal_paths=args["signal_paths"],
             group_index=args.get("group_index", 0),
             window_ps=args.get("window_ps", DEFAULT_WAVE_WINDOW_PS),
-            extra_transitions = args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
+            extra_transitions=args.get("extra_transitions", DEFAULT_EXTRA_TRANSITIONS),
         )
         if _get_compatible_recommend_scan_cache(request_context) is None:
             original_guide = result.get("analysis_guide", {})
@@ -2917,9 +7478,15 @@ async def _dispatch(name: str, args: dict):
             wave_path=args["wave_path"],
             compile_log=args.get("compile_log"),
             top_hint=args.get("top_hint"),
-            structural_risks=[risk.model_dump() for risk in scan_cache.risks] if scan_cache is not None else None,
-            problem_hints=parse_cache.problem_hints.model_dump() if parse_cache and parse_cache.problem_hints else None,
-            handshake_sweep=sweep_cache.model_dump() if sweep_cache is not None else None,
+            structural_risks=[risk.model_dump() for risk in scan_cache.risks]
+            if scan_cache is not None
+            else None,
+            problem_hints=parse_cache.problem_hints.model_dump()
+            if parse_cache and parse_cache.problem_hints
+            else None,
+            handshake_sweep=sweep_cache.model_dump()
+            if sweep_cache is not None
+            else None,
         )
         has_failure_context = False
         if parse_cache is not None:
@@ -2936,20 +7503,31 @@ async def _dispatch(name: str, args: dict):
         # the broader auditor that lists every missing step; this is the single
         # prioritized nudge for an agent that called recommend directly. Both
         # treat "failure context + no complete compatible sweep cache" as
-        # sweep-needed. A zero-coverage/truncated/degraded sweep is useful
-        # evidence, but it must not satisfy the default-flow protocol scan.
+        # requiring attention. Only a parameter-changing retry is actionable;
+        # terminal zero/degraded coverage remains explicitly inconclusive but
+        # must not replay the same sweep forever.
         missing_scan = scan_cache is None and has_failure_context
-        missing_sweep = _sweep_coverage_incomplete(sweep_cache) and has_failure_context
+        sweep_needs_attention = (
+            _sweep_coverage_incomplete(sweep_cache) and has_failure_context
+        )
+        sweep_call = (
+            _build_sweep_required_next_call(args["wave_path"], sweep_cache)
+            if sweep_needs_attention
+            else None
+        )
+        actionable_sweep = sweep_needs_attention and sweep_call is not None
         protocol_symptom = _recommend_has_protocol_symptom(parse_cache)
         primary_missing = _select_recommend_primary_missing_step(
-            missing_scan, missing_sweep, protocol_symptom
+            missing_scan, actionable_sweep, protocol_symptom
         )
         if primary_missing == "sweep":
             result["workflow_incomplete"] = True
             result["degraded_reason"] = (
-                "missing_handshake_sweep" if sweep_cache is None else "incomplete_handshake_sweep"
+                "missing_handshake_sweep"
+                if sweep_cache is None
+                else "incomplete_handshake_sweep"
             )
-            result["required_next_call"] = _build_sweep_required_next_call(args["wave_path"], sweep_cache)
+            result["required_next_call"] = sweep_call
             result["missing_inputs"] = []
         elif primary_missing == "scan":
             result["workflow_incomplete"] = True
@@ -2959,13 +7537,20 @@ async def _dispatch(name: str, args: dict):
                 request_context.get("simulator"),
             )
             result["missing_inputs"] = []
+        elif sweep_needs_attention:
+            result["workflow_incomplete"] = True
+            result["degraded_reason"] = "incomplete_handshake_sweep"
+            result["required_next_call"] = None
+            result["missing_inputs"] = [_describe_non_actionable_sweep(sweep_cache)]
         else:
             result["workflow_incomplete"] = False
             result["degraded_reason"] = None
             result["required_next_call"] = None
         validated = schemas.RecommendNextStepsResult.model_validate(result)
         _result_cache["recommend_failure_debug_next_steps"] = validated
-        _result_provenance["recommend_failure_debug_next_steps"] = _build_result_provenance(name, resolved_args, validated)
+        _result_provenance["recommend_failure_debug_next_steps"] = (
+            _build_result_provenance(name, resolved_args, validated)
+        )
         return validated
 
     elif name == "get_diagnostic_snapshot":
@@ -2973,92 +7558,63 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "explain_signal_driver":
         simulator = _resolve_session_simulator(args)
-        backend_status = _safe_probe_backend(args["compile_log"], simulator)
-        from src.connectivity_backend import select_backend  # noqa: PLC0415
-        backend = select_backend(backend_status)
-        result = await _call_connectivity_backend(
-            backend,
-            lambda: backend.find_driver(
-                signal_path=args["signal_path"],
-                wave_path=args["wave_path"],
-                compile_log=args["compile_log"],
-                top_hint=args.get("top_hint"),
-                recursive=args.get("recursive", False),
-                max_depth=args.get("max_depth", 10),
-                simulator=simulator,
-            ),
+        result, backend_status = await _route_public_connectivity(
+            operation="driver",
+            args=args,
+            simulator=simulator,
         )
-        backend_status, actual_backend = _finalize_connectivity_backend_status(
-            result, backend_status, backend
-        )
-        result["backend"] = actual_backend
         result["backend_status"] = backend_status
         return schemas.ExplainDriverResult.model_validate(result)
 
     elif name == "find_signal_loads":
         simulator = _resolve_session_simulator(args)
-        backend_status = _safe_probe_backend(args["compile_log"], simulator)
-        from src.connectivity_backend import select_backend  # noqa: PLC0415
-        backend = select_backend(backend_status)
-        result = await _call_connectivity_backend(
-            backend,
-            lambda: backend.find_loads(
-                signal_path=args["signal_path"],
-                compile_log=args["compile_log"],
-                top_hint=args.get("top_hint"),
-                max_depth=args.get("max_depth", 1),
-                include_expr=args.get("include_expr", True),
-                kind_filter=args.get("kind_filter"),
-                simulator=simulator,
-            ),
-        )
-        # Reflect the backend that actually produced the result. NPI
-        # backend tags every hop with backend='verdi_npi' on success,
-        # 'static' on internal fallback. The status field surfaces the
-        # active connectivity backend at the result envelope.
-        backend_status, _ = _finalize_connectivity_backend_status(
-            result, backend_status, backend
+        result, backend_status = await _route_public_connectivity(
+            operation="loads",
+            args=args,
+            simulator=simulator,
         )
         result["backend_status"] = backend_status
         return schemas.FindSignalLoadsResult.model_validate(result)
 
     elif name == "trace_signal_path":
         simulator = _resolve_session_simulator(args)
-        backend_status = _safe_probe_backend(args["compile_log"], simulator)
-        from src.connectivity_backend import select_backend  # noqa: PLC0415
-        backend = select_backend(backend_status)
-        result = await _call_connectivity_backend(
-            backend,
-            lambda: backend.find_path(
-                from_signal=args["from_signal"],
-                to_signal=args["to_signal"],
-                compile_log=args["compile_log"],
-                top_hint=args.get("top_hint"),
-                expand_assigns=args.get("expand_assigns", False),
-                simulator=simulator,
-            ),
+        result, backend_status = await _route_public_signal_path(
+            args=args,
+            simulator=simulator,
         )
-        # Static returning static_backend_no_path_api is the expected
-        # answer when NPI is unavailable, not a fallback. Only treat
-        # _npi_fallback_reason (set by VerdiNpiBackend internals) as a
-        # true fallback.
-        backend_status, _ = _finalize_connectivity_backend_status(
-            result, backend_status, backend
-        )
-        result.pop("_npi_call_error", None)
         result["backend_status"] = backend_status
         return schemas.TraceSignalPathResult.model_validate(result)
 
     elif name == "build_kdb":
         from src.kdb_builder import build_kdb as _build_kdb
+        from config import get_npi_execution_config
+
         simulator = _resolve_session_simulator(args)
         compile_log = args["compile_log"]
         cr = parse_compile_log(compile_log, simulator)
-        result = _build_kdb(
-            cr,
-            top_hint=args.get("top_hint"),
-            force_rebuild=bool(args.get("force_rebuild", False)),
-        )
+        execution = get_npi_execution_config()
+        if execution.mode == "local" and execution.valid:
+            result = _build_kdb(
+                cr,
+                top_hint=args.get("top_hint"),
+                force_rebuild=bool(args.get("force_rebuild", False)),
+            )
+            result["execution_mode"] = "local"
+            result["scheduler_status"] = "not_started"
+            result["worker_status"] = "not_started"
+        else:
+            from src.npi_lsf import build_kdb_over_lsf
+
+            result = await _run_in_cancellable_thread(
+                lambda: build_kdb_over_lsf(
+                    cr,
+                    compile_log=compile_log,
+                    simulator=simulator,
+                    top_hint=args.get("top_hint"),
+                    force_rebuild=bool(args.get("force_rebuild", False)),
+                    config=execution,
+                )
+            )
         # If the build succeeded (or cache-hit), wipe the verdi probe
         # cache so the next get_sim_paths / find_driver call picks up
         # the new KDB path.
@@ -3068,21 +7624,7 @@ async def _dispatch(name: str, args: dict):
 
     elif name == "trace_x_source":
         simulator = _resolve_session_simulator(args)
-
-        def _work():
-            result = trace_x_source(
-                wave_path=args["wave_path"],
-                signal_path=args["signal_path"],
-                time_ps=_resolve_time(args["time_ps"]),
-                compile_log=args["compile_log"],
-                parser=_get_parser(args["wave_path"]),
-                top_hint=args.get("top_hint"),
-                max_depth=args.get("max_depth", DEFAULT_X_TRACE_MAX_DEPTH),
-                simulator=simulator,
-            )
-            return schemas.TraceXSourceResult.model_validate(result)
-
-        return await _run_in_wave_thread(args["wave_path"], _work)
+        return await _handle_trace_x_source(args, simulator)
 
     elif name == "cursor_set":
         ref = _cursor_store.set(
@@ -3093,18 +7635,23 @@ async def _dispatch(name: str, args: dict):
         return schemas.CursorSetResult.model_validate({"cursor": ref.as_dict()})
 
     elif name == "cursor_list":
-        return schemas.CursorListResult.model_validate({
-            "cursors": [ref.as_dict() for ref in _cursor_store.list()],
-        })
+        return schemas.CursorListResult.model_validate(
+            {
+                "cursors": [ref.as_dict() for ref in _cursor_store.list()],
+            }
+        )
 
     elif name == "cursor_delete":
         deleted = _cursor_store.delete(args["name"])
-        return schemas.CursorDeleteResult.model_validate({
-            "name": args["name"],
-            "deleted": deleted,
-        })
+        return schemas.CursorDeleteResult.model_validate(
+            {
+                "name": args["name"],
+                "deleted": deleted,
+            }
+        )
 
     elif name == "diff_first_divergence":
+
         def _work():
             result = diff_first_divergence(
                 get_parser=_get_parser,
@@ -3125,6 +7672,7 @@ async def _dispatch(name: str, args: dict):
         )
 
     elif name == "period":
+
         def _work():
             result = period(
                 get_parser=_get_parser,
@@ -3143,6 +7691,7 @@ async def _dispatch(name: str, args: dict):
         return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "suggest_handshakes":
+
         def _work():
             result = suggest_handshakes(
                 get_parser=_get_parser,
@@ -3155,6 +7704,7 @@ async def _dispatch(name: str, args: dict):
         return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "suggest_protocol_bundles":
+
         def _work():
             result = suggest_protocol_bundles(
                 get_parser=_get_parser,
@@ -3168,6 +7718,7 @@ async def _dispatch(name: str, args: dict):
         return await _run_in_wave_thread(args["wave_path"], _work)
 
     elif name == "sweep_handshakes":
+
         def _work():
             started = time.perf_counter()
             try:
@@ -3177,7 +7728,9 @@ async def _dispatch(name: str, args: dict):
                     scope=args.get("scope"),
                     edge=args.get("edge", "posedge"),
                     start_ps=_resolve_time(args.get("start_time_ps", 0)),
-                    end_ps=_resolve_time(args.get("end_time_ps", -1), allow_sentinel=True),
+                    end_ps=_resolve_time(
+                        args.get("end_time_ps", -1), allow_sentinel=True
+                    ),
                     max_wait_cycles=args.get("max_wait_cycles", 16),
                     max_interfaces=args.get("max_interfaces", 64),
                     cursor_store=_cursor_store,
@@ -3195,10 +7748,13 @@ async def _dispatch(name: str, args: dict):
             args["wave_path"], _work, priority=_WAVE_PRIORITY_BACKGROUND
         )
         _result_cache["sweep_handshakes"] = validated
-        _result_provenance["sweep_handshakes"] = _build_result_provenance(name, args, validated)
+        _result_provenance["sweep_handshakes"] = _build_result_provenance(
+            name, args, validated
+        )
         return validated
 
     elif name == "inspect_handshake":
+
         def _work():
             return inspect_handshake(
                 get_parser=_get_parser,
@@ -3227,6 +7783,7 @@ async def _dispatch(name: str, args: dict):
         return schemas.HandshakeInspectResult.model_validate(result)
 
     elif name == "verify_window":
+
         def _work():
             return verify_window(
                 get_parser=_get_parser,
@@ -3251,6 +7808,7 @@ async def _dispatch(name: str, args: dict):
         return schemas.WindowVerifyResult.model_validate(result)
 
     elif name == "reconstruct_transactions":
+
         def _work():
             return reconstruct_transactions(
                 get_parser=_get_parser,
@@ -3288,8 +7846,12 @@ async def _dispatch(name: str, args: dict):
         return schemas.TxnReconstructResult.model_validate(result)
 
     elif name in {
-        "get_tb_subtree", "lookup_tb_files", "find_tb_instance",
-        "get_tb_file_detail", "get_tb_class_hierarchy", "dump_tb_section",
+        "get_tb_subtree",
+        "lookup_tb_files",
+        "find_tb_instance",
+        "get_tb_file_detail",
+        "get_tb_class_hierarchy",
+        "dump_tb_section",
     }:
         return _dispatch_handle_tool(name, args)
 
@@ -3303,15 +7865,18 @@ def _dispatch_handle_tool(name: str, args: dict):
     handle = args.get("handle") or ""
     full = _handle_store.resolve(handle)
     if full is None:
-        return schemas.HandleErrorResult.model_validate({
-            "error": "handle_expired",
-            "hint": "the handle is unknown to this server — re-run build_tb_hierarchy",
-            "current_handle": None,
-        })
+        return schemas.HandleErrorResult.model_validate(
+            {
+                "error": "handle_expired",
+                "hint": "the handle is unknown to this server — re-run build_tb_hierarchy",
+                "current_handle": None,
+            }
+        )
 
     if name == "get_tb_subtree":
         raw = handle_tools.get_tb_subtree(
-            full, handle,
+            full,
+            handle,
             root=args.get("root", ""),
             depth=args.get("depth", 1),
             max_nodes=args.get("max_nodes", 500),
@@ -3320,7 +7885,8 @@ def _dispatch_handle_tool(name: str, args: dict):
 
     if name == "lookup_tb_files":
         raw = handle_tools.lookup_tb_files(
-            full, handle,
+            full,
+            handle,
             basename=args.get("basename"),
             name_contains=args.get("name_contains"),
             path_contains=args.get("path_contains"),
@@ -3333,7 +7899,8 @@ def _dispatch_handle_tool(name: str, args: dict):
 
     if name == "find_tb_instance":
         raw = handle_tools.find_tb_instance(
-            full, handle,
+            full,
+            handle,
             path=args.get("path"),
             module=args.get("module"),
             limit=args.get("limit", 100),
@@ -3346,7 +7913,8 @@ def _dispatch_handle_tool(name: str, args: dict):
 
     if name == "get_tb_class_hierarchy":
         raw = handle_tools.get_tb_class_hierarchy(
-            full, handle,
+            full,
+            handle,
             root_class=args.get("root_class"),
             depth=args.get("depth", -1),
         )
@@ -3365,7 +7933,9 @@ def _wrap_handle_result(raw: dict, result_schema):
     return result_schema.model_validate(raw)
 
 
-def _truncate_failure_events_by_group(events: list[dict], max_per_group: int) -> list[dict]:
+def _truncate_failure_events_by_group(
+    events: list[dict], max_per_group: int
+) -> list[dict]:
     counts: dict[str, int] = {}
     result: list[dict] = []
     for event in events:
@@ -3401,7 +7971,11 @@ def _slim_returned_events(events: list[dict], log_file: str | None) -> list[dict
                 for key, value in sf.items()
                 if not (
                     (key == "reporter" and value == copy.get("instance_path"))
-                    or (key == "tag" and value and str(value) in (copy.get("group_signature") or ""))
+                    or (
+                        key == "tag"
+                        and value
+                        and str(value) in (copy.get("group_signature") or "")
+                    )
                 )
             }
             if trimmed:
@@ -3413,6 +7987,7 @@ def _slim_returned_events(events: list[dict], log_file: str | None) -> list[dict
 
 
 # ── Diagnostic Snapshot helpers ──────────────────────────────────
+
 
 def _extract_sim_paths_summary(result: schemas.SimPathsResult) -> dict:
     return {
@@ -3443,7 +8018,9 @@ def _extract_log_summary(result: schemas.ParseSimLogResult) -> dict:
         "log_file": result.log_file,
         "runtime_total_errors": result.runtime_total_errors,
         "group_count": len(result.groups),
-        "problem_hints": result.problem_hints.model_dump() if result.problem_hints else None,
+        "problem_hints": result.problem_hints.model_dump()
+        if result.problem_hints
+        else None,
         "first_group_signature": result.groups[0].signature if result.groups else None,
         "previous_log_detected": result.previous_log_detected,
     }
@@ -3462,7 +8039,10 @@ def _extract_log_summary(result: schemas.ParseSimLogResult) -> dict:
 
 def _extract_structural_scan_summary(result: schemas.ScanStructuralRisksResult) -> dict:
     return {
+        "eligible_file_count": result.eligible_file_count,
         "files_scanned": result.files_scanned,
+        "coverage_status": result.coverage_status,
+        "coverage_warnings": result.coverage_warnings,
         "total_risks": result.total_risks,
         "high_risk_count": sum(1 for risk in result.risks if risk.risk_level == "high"),
     }
@@ -3487,6 +8067,7 @@ def _extract_recommend_summary(result: schemas.RecommendNextStepsResult) -> dict
         "primary_failure_target": result.primary_failure_target,
         "signal_count": len(result.recommended_signals),
         "instance_count": len(result.recommended_instances),
+        "runtime_protocol_coverage": result.runtime_protocol_coverage,
     }
 
 
@@ -3497,7 +8078,9 @@ def _build_recommend_request_context(args: dict) -> dict[str, str | None]:
         "log_path": args.get("log_path"),
         "wave_path": args.get("wave_path"),
         "simulator": _resolve_session_simulator(args) or sim_state.get("simulator"),
-        "compile_log": args.get("compile_log") or hier_state.get("compile_log") or sim_state.get("compile_log"),
+        "compile_log": args.get("compile_log")
+        or hier_state.get("compile_log")
+        or sim_state.get("compile_log"),
     }
 
 
@@ -3580,12 +8163,16 @@ def _get_compatible_recommend_sweep_cache(
     provenance = _result_provenance.get("sweep_handshakes")
     if sweep_cache is None or provenance is None:
         return None
-    if not _same_realpath(provenance.get("wave_path"), request_context.get("wave_path")):
+    if not _same_realpath(
+        provenance.get("wave_path"), request_context.get("wave_path")
+    ):
         return None
     return sweep_cache
 
 
-def _sweep_coverage_incomplete(sweep_result: schemas.HandshakeSweepResult | None) -> bool:
+def _sweep_coverage_incomplete(
+    sweep_result: schemas.HandshakeSweepResult | None,
+) -> bool:
     return sweep_result is None or sweep_result.coverage_status != "complete"
 
 
@@ -3595,12 +8182,29 @@ def _build_sweep_required_next_call(
 ) -> dict | None:
     if not wave_path:
         return None
-    if sweep_result is not None:
-        for action in sweep_result.suggested_next_actions:
-            if action.get("tool") == "sweep_handshakes" and action.get("arguments"):
-                return action
-        if sweep_result.coverage_status == "truncated":
-            target = max(int(sweep_result.discovered_count or 0), int(sweep_result.interface_count or 0))
+    if sweep_result is None:
+        return {
+            "tool": "sweep_handshakes",
+            "arguments": {"wave_path": wave_path},
+            "reason": (
+                "Scoreboard/compare/mismatch failures are frequently a runtime protocol "
+                "symptom. Run the whole-design handshake sweep before reading RTL "
+                "line-by-line; it returns a per-interface stall/deadlock/payload-hold/"
+                "premature-valid-deassertion fact table in one call."
+            ),
+        }
+    if sweep_result.coverage_status == "complete":
+        return None
+
+    for action in sweep_result.suggested_next_actions:
+        if _sweep_action_makes_progress(action, wave_path, sweep_result):
+            return action
+    if sweep_result.coverage_status == "truncated":
+        target = max(
+            int(sweep_result.discovered_count or 0),
+            int(sweep_result.interface_count or 0),
+        )
+        if target > int(sweep_result.interface_count or 0):
             return {
                 "tool": "sweep_handshakes",
                 "arguments": {"wave_path": wave_path, "max_interfaces": target},
@@ -3610,26 +8214,94 @@ def _build_sweep_required_next_call(
                     "to cover every discovered interface."
                 ),
             }
-        if sweep_result.coverage_status == "degraded":
-            return {
-                "tool": "sweep_handshakes",
-                "arguments": {"wave_path": wave_path},
-                "reason": (
-                    "Previous sweep_handshakes coverage was degraded; some discovered "
-                    "interfaces could not be inspected. Re-run after checking skipped "
-                    "rows, scope choice, and clock dumping."
-                ),
-            }
-    return {
-        "tool": "sweep_handshakes",
-        "arguments": {"wave_path": wave_path},
-        "reason": (
-            "Scoreboard/compare/mismatch failures are frequently a runtime protocol "
-            "symptom. Run the whole-design handshake sweep before reading RTL "
-            "line-by-line; it returns a per-interface stall/deadlock/payload-hold/"
-            "premature-valid-deassertion fact table in one call."
-        ),
-    }
+    return None
+
+
+def _sweep_action_makes_progress(
+    action: dict,
+    wave_path: str,
+    sweep_result: schemas.HandshakeSweepResult,
+) -> bool:
+    if action.get("tool") != "sweep_handshakes":
+        return False
+    arguments = action.get("arguments")
+    if not isinstance(arguments, dict) or not arguments:
+        return False
+    action_wave = arguments.get("wave_path")
+    if not action_wave or not _same_realpath(action_wave, wave_path):
+        return False
+
+    prior_scope = sweep_result.scope or None
+    next_scope = arguments.get("scope") or None
+    if prior_scope != next_scope:
+        # Removing a scope, or moving to a strict parent, expands discovery.
+        # Adding/narrowing a scope after an unscoped sweep cannot complete the
+        # whole-design default-flow check.
+        if prior_scope and next_scope is None:
+            return True
+        if (
+            prior_scope
+            and next_scope
+            and prior_scope.startswith(next_scope.rstrip(".") + ".")
+        ):
+            return True
+        return False
+
+    if sweep_result.coverage_status == "truncated":
+        try:
+            next_max = int(arguments.get("max_interfaces"))
+        except (TypeError, ValueError):
+            next_max = 0
+        return next_max >= int(sweep_result.discovered_count or 0) and next_max > int(
+            sweep_result.interface_count or 0
+        )
+
+    if sweep_result.coverage_status != "degraded":
+        return False
+    if arguments.get("edge", sweep_result.edge) != sweep_result.edge:
+        return True
+
+    try:
+        next_start = int(arguments.get("start_time_ps", sweep_result.start_ps))
+        next_end = int(arguments.get("end_time_ps", sweep_result.end_ps))
+    except (TypeError, ValueError):
+        return False
+    if next_start < sweep_result.start_ps or (next_end >= 0 and next_end < next_start):
+        return False
+    end_is_narrower = (
+        next_end != sweep_result.end_ps
+        and next_end >= 0
+        and (sweep_result.end_ps < 0 or next_end <= sweep_result.end_ps)
+    )
+    start_is_narrower = next_start > sweep_result.start_ps
+    end_is_not_wider = sweep_result.end_ps < 0 or (
+        next_end >= 0 and next_end <= sweep_result.end_ps
+    )
+    return (start_is_narrower or end_is_narrower) and end_is_not_wider
+
+
+def _describe_non_actionable_sweep(
+    sweep_result: schemas.HandshakeSweepResult | None,
+) -> str:
+    if sweep_result is None:
+        return "A compatible sweep_handshakes result is unavailable."
+    if sweep_result.coverage_status == "zero_coverage" and not sweep_result.scope:
+        return (
+            "The unscoped sweep found no supported AHB or valid/ready interfaces. "
+            "This is not a protocol pass, and repeating the same sweep cannot add "
+            "coverage; provide a waveform with supported interface and clock signals "
+            "dumped, or use a targeted protocol check when signal paths are known."
+        )
+    if sweep_result.coverage_status == "degraded":
+        return (
+            "Protocol coverage is degraded and no parameter-changing retry was "
+            "provided. Resolve the reported skipped/dumped-signal prerequisite, or "
+            "supply a narrower failure-correlated time window before rerunning."
+        )
+    return (
+        f"Protocol coverage_status={sweep_result.coverage_status!r} remains incomplete, "
+        "but no retry action would change the previous sweep parameters."
+    )
 
 
 def _recommend_has_protocol_symptom(
@@ -3640,7 +8312,10 @@ def _recommend_has_protocol_symptom(
     if getattr(parse_cache, "protocol_symptom_hint", None):
         return True
     hints = getattr(parse_cache, "problem_hints", None)
-    if hints is not None and getattr(hints, "error_pattern", None) in {"mismatch", "xprop"}:
+    if hints is not None and getattr(hints, "error_pattern", None) in {
+        "mismatch",
+        "xprop",
+    }:
         return True
     return False
 
@@ -3662,7 +8337,9 @@ def _select_recommend_primary_missing_step(
     return None
 
 
-def _build_result_provenance(tool_name: str, args: dict, result: schemas.SchemaModel) -> dict | None:
+def _build_result_provenance(
+    tool_name: str, args: dict, result: schemas.SchemaModel
+) -> dict | None:
     if tool_name == "get_sim_paths":
         compile_log = None
         for entry in result.compile_logs:
@@ -3680,7 +8357,17 @@ def _build_result_provenance(tool_name: str, args: dict, result: schemas.SchemaM
     if tool_name == "build_tb_hierarchy":
         return {
             "compile_log": args.get("compile_log"),
-            "simulator": args.get("simulator") or result.project.get("simulator") or "auto",
+            "simulator": args.get("simulator")
+            or result.project.get("simulator")
+            or "auto",
+            "hierarchy_handle": args.get("_hierarchy_handle")
+            or result.hierarchy_handle,
+            "hierarchy_snapshot_sha256": args.get(
+                "_hierarchy_snapshot_sha256"
+            ),
+            "supplementary_compile_logs": list(
+                args.get("supplementary_compile_logs") or ()
+            ),
         }
     if tool_name == "scan_structural_risks":
         return {
@@ -3716,7 +8403,9 @@ def _build_result_provenance(tool_name: str, args: dict, result: schemas.SchemaM
 
 def _can_suggest_parse_sim_log(anchor: dict | None) -> bool:
     sim_result = _result_cache.get("get_sim_paths")
-    return bool(anchor and anchor.get("simulator") and sim_result and sim_result.sim_logs)
+    return bool(
+        anchor and anchor.get("simulator") and sim_result and sim_result.sim_logs
+    )
 
 
 def _can_suggest_recommend(anchor: dict | None) -> bool:
@@ -3736,12 +8425,16 @@ def _is_under_case_dir(path: str | None, case_dir: str | None) -> bool:
     if not path or not case_dir:
         return False
     try:
-        return os.path.commonpath([os.path.realpath(path), os.path.realpath(case_dir)]) == os.path.realpath(case_dir)
+        return os.path.commonpath(
+            [os.path.realpath(path), os.path.realpath(case_dir)]
+        ) == os.path.realpath(case_dir)
     except ValueError:
         return False
 
 
-def _path_matches_session(path: str | None, candidates: list[str], case_dir: str | None) -> bool:
+def _path_matches_session(
+    path: str | None, candidates: list[str], case_dir: str | None
+) -> bool:
     if not path:
         return False
     real_path = os.path.realpath(path)
@@ -3750,7 +8443,9 @@ def _path_matches_session(path: str | None, candidates: list[str], case_dir: str
     return _is_under_case_dir(real_path, case_dir)
 
 
-def _file_unchanged(provenance: dict, path_key: str, mtime_key: str, size_key: str) -> bool:
+def _file_unchanged(
+    provenance: dict, path_key: str, mtime_key: str, size_key: str
+) -> bool:
     """Return True when the file on disk still matches cached provenance."""
     fpath = provenance.get(path_key)
     expected_mtime = provenance.get(mtime_key)
@@ -3762,23 +8457,29 @@ def _file_unchanged(provenance: dict, path_key: str, mtime_key: str, size_key: s
     except OSError:
         return False
     return (
-        stat_result.st_mtime == expected_mtime
-        and stat_result.st_size == expected_size
+        stat_result.st_mtime == expected_mtime and stat_result.st_size == expected_size
     )
 
 
-def _matches_anchor(tool_name: str, anchor: dict | None, provenance: dict | None) -> bool:
+def _matches_anchor(
+    tool_name: str, anchor: dict | None, provenance: dict | None
+) -> bool:
     if anchor is None or provenance is None:
         return False
     sim_result = _result_cache.get("get_sim_paths")
-    sim_logs = [entry.path for entry in sim_result.sim_logs] if sim_result is not None else []
-    wave_files = [entry.path for entry in sim_result.wave_files] if sim_result is not None else []
+    sim_logs = (
+        [entry.path for entry in sim_result.sim_logs] if sim_result is not None else []
+    )
+    wave_files = (
+        [entry.path for entry in sim_result.wave_files]
+        if sim_result is not None
+        else []
+    )
     case_dir = anchor.get("case_dir")
     if tool_name == "build_tb_hierarchy":
-        return (
-            provenance.get("compile_log") == anchor.get("compile_log")
-            and provenance.get("simulator") == anchor.get("simulator")
-        )
+        return provenance.get("compile_log") == anchor.get(
+            "compile_log"
+        ) and provenance.get("simulator") == anchor.get("simulator")
     if tool_name == "parse_sim_log":
         return (
             provenance.get("simulator") == anchor.get("simulator")
@@ -3851,16 +8552,18 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             available=False,
             suggested_call=suggested,
         )
-        missing_steps.append({
-            "tool": "get_sim_paths",
-            "arguments": suggested["arguments"],
-            "reason": (
-                "Cached get_sim_paths is for a different case than the requested "
-                "target; re-run get_sim_paths for the current case."
-                if case_mismatch
-                else "Path discovery has not run yet, so simulation artifacts cannot be located."
-            ),
-        })
+        missing_steps.append(
+            {
+                "tool": "get_sim_paths",
+                "arguments": suggested["arguments"],
+                "reason": (
+                    "Cached get_sim_paths is for a different case than the requested "
+                    "target; re-run get_sim_paths for the current case."
+                    if case_mismatch
+                    else "Path discovery has not run yet, so simulation artifacts cannot be located."
+                ),
+            }
+        )
 
     # Suggest build_kdb when the active simulator is Xcelium and the
     # probe positively confirms there is no KDB. We deliberately do
@@ -3870,7 +8573,11 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         from config import AUTO_KDB_BUILD  # noqa: PLC0415
     except Exception:
         AUTO_KDB_BUILD = False
-    if AUTO_KDB_BUILD and sim_result is not None and getattr(sim_result, "simulator", None) == "xcelium":
+    if (
+        AUTO_KDB_BUILD
+        and sim_result is not None
+        and getattr(sim_result, "simulator", None) == "xcelium"
+    ):
         cl_entries = getattr(sim_result, "compile_logs", []) or []
         compile_log_path = cl_entries[0].path if cl_entries else None
         if compile_log_path:
@@ -3882,15 +8589,17 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
                 _probe_ok = False
                 _probe = {}
             if _probe_ok and not _probe.get("kdb_path"):
-                missing_steps.append({
-                    "tool": "build_kdb",
-                    "arguments": {"compile_log": compile_log_path},
-                    "reason": (
-                        "Xcelium flow has no Verdi KDB yet; running build_kdb "
-                        "produces one so the NPI backend can answer cross-hierarchy "
-                        "driver/load queries."
-                    ),
-                })
+                missing_steps.append(
+                    {
+                        "tool": "build_kdb",
+                        "arguments": {"compile_log": compile_log_path},
+                        "reason": (
+                            "Xcelium flow has no Verdi KDB yet; running build_kdb "
+                            "produces one so the NPI backend can answer cross-hierarchy "
+                            "driver/load/path queries."
+                        ),
+                    }
+                )
 
     hier_result = None if case_mismatch else _result_cache.get("build_tb_hierarchy")
     if hier_result is not None:
@@ -3909,16 +8618,20 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
     else:
         sections["hierarchy"] = schemas.DiagnosticSnapshotSection(
             available=False,
-            suggested_call=_build_suggested_call("build_tb_hierarchy") if anchor is not None else None,
+            suggested_call=_build_suggested_call("build_tb_hierarchy")
+            if anchor is not None
+            else None,
         )
     if anchor is not None and (hier_result is None or sections["hierarchy"].stale):
         suggested = _build_suggested_call("build_tb_hierarchy")
         sections["hierarchy"].suggested_call = suggested
-        missing_steps.append({
-            "tool": "build_tb_hierarchy",
-            "arguments": suggested["arguments"],
-            "reason": "Hierarchy has not been built yet, so module and instance relationships are unknown.",
-        })
+        missing_steps.append(
+            {
+                "tool": "build_tb_hierarchy",
+                "arguments": suggested["arguments"],
+                "reason": "Hierarchy has not been built yet, so module and instance relationships are unknown.",
+            }
+        )
 
     log_result = None if case_mismatch else _result_cache.get("parse_sim_log")
     compatible_log_result = None
@@ -3940,13 +8653,19 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
     else:
         sections["log_analysis"] = schemas.DiagnosticSnapshotSection(available=False)
     if anchor is not None and (log_result is None or sections["log_analysis"].stale):
-        suggested = _build_suggested_call("parse_sim_log") if _can_suggest_parse_sim_log(anchor) else None
+        suggested = (
+            _build_suggested_call("parse_sim_log")
+            if _can_suggest_parse_sim_log(anchor)
+            else None
+        )
         sections["log_analysis"].suggested_call = suggested
-        missing_steps.append({
-            "tool": "parse_sim_log",
-            "arguments": suggested["arguments"] if suggested else {},
-            "reason": "Simulation log analysis has not run yet, so failure information is unavailable.",
-        })
+        missing_steps.append(
+            {
+                "tool": "parse_sim_log",
+                "arguments": suggested["arguments"] if suggested else {},
+                "reason": "Simulation log analysis has not run yet, so failure information is unavailable.",
+            }
+        )
 
     scan_result = None if case_mismatch else _result_cache.get("scan_structural_risks")
     compatible_hierarchy = bool(
@@ -3981,15 +8700,17 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             anchor.get("compile_log"),
             anchor.get("simulator"),
         )
-        missing_steps.append({
-            "tool": "scan_structural_risks",
-            "arguments": scan_call["arguments"] if scan_call else {},
-            "reason": (
-                "Structural scan is missing, so recommendation quality will be degraded."
-                if has_failure_context
-                else "Structural scan has not been run yet."
-            ),
-        })
+        missing_steps.append(
+            {
+                "tool": "scan_structural_risks",
+                "arguments": scan_call["arguments"] if scan_call else {},
+                "reason": (
+                    "Structural scan is missing, so recommendation quality will be degraded."
+                    if has_failure_context
+                    else "Structural scan has not been run yet."
+                ),
+            }
+        )
 
     # Whole-design protocol health (sweep_handshakes) — the runtime-layer
     # counterpart of scan_structural_risks: a default-flow perception step whose
@@ -4005,44 +8726,53 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
     if sweep_wave_path is None and sweep_result is not None:
         sweep_wave_path = sweep_result.wave_path
     if sweep_result is not None:
+        sweep_call = (
+            _build_sweep_required_next_call(sweep_wave_path, sweep_result)
+            if _sweep_coverage_incomplete(sweep_result)
+            else None
+        )
         sections["protocol_health"] = schemas.DiagnosticSnapshotSection(
             available=True,
             summary=_extract_protocol_health_summary(sweep_result),
-            suggested_call=(
-                _build_sweep_required_next_call(sweep_wave_path, sweep_result)
-                if _sweep_coverage_incomplete(sweep_result)
-                else None
-            ),
+            suggested_call=sweep_call,
         )
-        if anchor is not None and has_waveform and sweep_failure_context and _sweep_coverage_incomplete(sweep_result):
-            sweep_call = _build_sweep_required_next_call(sweep_wave_path, sweep_result)
+        if (
+            anchor is not None
+            and has_waveform
+            and sweep_failure_context
+            and _sweep_coverage_incomplete(sweep_result)
+        ):
             if sweep_call is not None:
-                missing_steps.append({
-                    "tool": "sweep_handshakes",
-                    "arguments": sweep_call["arguments"],
-                    "reason": (
-                        "A compatible sweep_handshakes result exists, but its "
-                        f"coverage_status={sweep_result.coverage_status!r}; this is "
-                        "not a complete default-flow protocol scan."
-                    ),
-                })
+                missing_steps.append(
+                    {
+                        "tool": "sweep_handshakes",
+                        "arguments": sweep_call["arguments"],
+                        "reason": (
+                            "A compatible sweep_handshakes result exists, but its "
+                            f"coverage_status={sweep_result.coverage_status!r}; this is "
+                            "not a complete default-flow protocol scan."
+                        ),
+                    }
+                )
     elif anchor is not None and has_waveform and sweep_failure_context:
         sweep_call = _build_suggested_call("sweep_handshakes")
         sections["protocol_health"] = schemas.DiagnosticSnapshotSection(
             available=False,
             suggested_call=sweep_call,
         )
-        missing_steps.append({
-            "tool": "sweep_handshakes",
-            "arguments": sweep_call["arguments"],
-            "reason": (
-                "Whole-design bus protocol health has not been checked; a "
-                "scoreboard/data-compare failure is frequently the symptom of a "
-                "lower-level protocol problem. sweep_handshakes inspects every "
-                "AHB and valid/ready interface in one call and returns a "
-                "per-interface stall/deadlock/payload-hold fact table."
-            ),
-        })
+        missing_steps.append(
+            {
+                "tool": "sweep_handshakes",
+                "arguments": sweep_call["arguments"],
+                "reason": (
+                    "Whole-design bus protocol health has not been checked; a "
+                    "scoreboard/data-compare failure is frequently the symptom of a "
+                    "lower-level protocol problem. sweep_handshakes inspects every "
+                    "AHB and valid/ready interface in one call and returns a "
+                    "per-interface stall/deadlock/payload-hold fact table."
+                ),
+            }
+        )
     else:
         sections["protocol_health"] = None
 
@@ -4052,7 +8782,11 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
         and not sections["log_analysis"].stale
         and getattr(log_result, "runtime_total_errors", None) == 0
     )
-    rec_result = None if case_mismatch else _result_cache.get("recommend_failure_debug_next_steps")
+    rec_result = (
+        None
+        if case_mismatch
+        else _result_cache.get("recommend_failure_debug_next_steps")
+    )
     if rec_result is not None:
         is_stale = anchor is not None and not _matches_anchor(
             "recommend_failure_debug_next_steps",
@@ -4069,20 +8803,38 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
             quick_ref["suspected_failure_class"] = rec_result.suspected_failure_class
             quick_ref["recommended_signals"] = rec_result.recommended_signals
     elif is_clean_run:
-        sections["recommended_next"] = schemas.DiagnosticSnapshotSection(available=False)
+        sections["recommended_next"] = schemas.DiagnosticSnapshotSection(
+            available=False
+        )
     else:
-        sections["recommended_next"] = schemas.DiagnosticSnapshotSection(available=False)
-    if anchor is not None and not is_clean_run and (rec_result is None or sections["recommended_next"].stale):
-        suggested = _build_suggested_call("recommend_failure_debug_next_steps") if _can_suggest_recommend(anchor) else None
+        sections["recommended_next"] = schemas.DiagnosticSnapshotSection(
+            available=False
+        )
+    if (
+        anchor is not None
+        and not is_clean_run
+        and (rec_result is None or sections["recommended_next"].stale)
+    ):
+        suggested = (
+            _build_suggested_call("recommend_failure_debug_next_steps")
+            if _can_suggest_recommend(anchor)
+            else None
+        )
         sections["recommended_next"].suggested_call = suggested
-        missing_steps.append({
-            "tool": "recommend_failure_debug_next_steps",
-            "arguments": suggested["arguments"] if suggested else {},
-            "reason": "Recommendation analysis has not run yet, so no prioritized debug target is available.",
-        })
+        missing_steps.append(
+            {
+                "tool": "recommend_failure_debug_next_steps",
+                "arguments": suggested["arguments"] if suggested else {},
+                "reason": "Recommendation analysis has not run yet, so no prioritized debug target is available.",
+            }
+        )
 
     if missing_steps:
-        problem_hints = compatible_log_result.problem_hints if compatible_log_result is not None else None
+        problem_hints = (
+            compatible_log_result.problem_hints
+            if compatible_log_result is not None
+            else None
+        )
         prioritize_scan = bool(
             problem_hints
             and (
@@ -4127,7 +8879,9 @@ def _handle_diagnostic_snapshot(args: dict) -> schemas.DiagnosticSnapshot:
 
 def _enforce_output_budget(
     model: schemas.TruncatableResult,
-    shrink_stages: list[Callable[[schemas.TruncatableResult], schemas.TruncatableResult]],
+    shrink_stages: list[
+        Callable[[schemas.TruncatableResult], schemas.TruncatableResult]
+    ],
 ) -> schemas.TruncatableResult:
     payload = model.model_dump_json(exclude_none=True)
     model.payload_bytes = len(payload)
@@ -4145,7 +8899,9 @@ def _enforce_output_budget(
     return current
 
 
-def _shrink_parse_sim_log_stage1(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_parse_sim_log_stage1(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.ParseSimLogResult)
     groups = []
     for group in model.groups[:3]:
@@ -4159,7 +8915,7 @@ def _shrink_parse_sim_log_stage1(model: schemas.TruncatableResult) -> schemas.Tr
             "max_groups": min(model.max_groups, len(groups)),
             "detail_level": "summary",
             "detail_hint": (
-                "Call parse_sim_log with detail_level=\"full\" and max_groups=<n> "
+                'Call parse_sim_log with detail_level="full" and max_groups=<n> '
                 "for a targeted follow-up."
             ),
             "failure_events": [],
@@ -4172,7 +8928,9 @@ def _shrink_parse_sim_log_stage1(model: schemas.TruncatableResult) -> schemas.Tr
     )
 
 
-def _shrink_parse_sim_log_stage2(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_parse_sim_log_stage2(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.ParseSimLogResult)
     groups = []
     if model.groups:
@@ -4194,7 +8952,9 @@ def _shrink_parse_sim_log_stage2(model: schemas.TruncatableResult) -> schemas.Tr
     )
 
 
-def _shrink_parse_sim_log_terminal(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_parse_sim_log_terminal(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.ParseSimLogResult)
     return schemas.ParseSimLogResult.model_validate(
         {
@@ -4258,14 +9018,12 @@ def _trim_analyze_summary(summary: dict, group_limit: int, sample_limit: int) ->
     return trimmed
 
 
-def _summarize_wave_context(wave_context: dict | None, signal_limit: int, transition_limit: int) -> dict | None:
+def _summarize_wave_context(
+    wave_context: dict | None, signal_limit: int, transition_limit: int
+) -> dict | None:
     if not isinstance(wave_context, dict):
         return None
-    trimmed = {
-        key: value
-        for key, value in wave_context.items()
-        if key != "signals"
-    }
+    trimmed = {key: value for key, value in wave_context.items() if key != "signals"}
     signals = wave_context.get("signals")
     if not isinstance(signals, dict):
         return trimmed
@@ -4282,10 +9040,14 @@ def _summarize_wave_context(wave_context: dict | None, signal_limit: int, transi
     return trimmed
 
 
-def _shrink_analyze_failures_stage1(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_analyze_failures_stage1(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.AnalyzeFailuresResult)
     summary = _trim_analyze_summary(model.summary, group_limit=1, sample_limit=80)
-    wave_context = _summarize_wave_context(model.wave_context, signal_limit=1, transition_limit=4)
+    wave_context = _summarize_wave_context(
+        model.wave_context, signal_limit=1, transition_limit=4
+    )
     log_context = model.log_context
     if isinstance(log_context, dict) and isinstance(log_context.get("context"), str):
         log_context = {
@@ -4308,7 +9070,9 @@ def _shrink_analyze_failures_stage1(model: schemas.TruncatableResult) -> schemas
     )
 
 
-def _shrink_analyze_failures_stage2(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_analyze_failures_stage2(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.AnalyzeFailuresResult)
     summary = _trim_analyze_summary(model.summary, group_limit=1, sample_limit=32)
     return schemas.AnalyzeFailuresResult.model_validate(
@@ -4328,7 +9092,9 @@ def _shrink_analyze_failures_stage2(model: schemas.TruncatableResult) -> schemas
     )
 
 
-def _shrink_analyze_failures_terminal(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_analyze_failures_terminal(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.AnalyzeFailuresResult)
     summary = {
         "runtime_total_errors": model.summary.get("runtime_total_errors"),
@@ -4353,16 +9119,23 @@ def _shrink_analyze_failures_terminal(model: schemas.TruncatableResult) -> schem
     )
 
 
-def _truncate_risk_payload(risk: schemas.StructuralRisk, detail_limit: int, evidence_limit: int) -> dict:
+def _truncate_risk_payload(
+    risk: schemas.StructuralRisk, detail_limit: int, evidence_limit: int
+) -> dict:
     payload = risk.model_dump()
     payload["detail"] = payload["detail"][:detail_limit]
     payload["evidence"] = payload["evidence"][:evidence_limit]
     return payload
 
 
-def _shrink_scan_structural_risks_stage1(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_scan_structural_risks_stage1(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.ScanStructuralRisksResult)
-    risks = [_truncate_risk_payload(risk, detail_limit=120, evidence_limit=2) for risk in model.risks[:10]]
+    risks = [
+        _truncate_risk_payload(risk, detail_limit=120, evidence_limit=2)
+        for risk in model.risks[:10]
+    ]
     return schemas.ScanStructuralRisksResult.model_validate(
         {
             **model.model_dump(exclude_none=True),
@@ -4374,9 +9147,14 @@ def _shrink_scan_structural_risks_stage1(model: schemas.TruncatableResult) -> sc
     )
 
 
-def _shrink_scan_structural_risks_stage2(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_scan_structural_risks_stage2(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.ScanStructuralRisksResult)
-    risks = [_truncate_risk_payload(risk, detail_limit=64, evidence_limit=0) for risk in model.risks[:3]]
+    risks = [
+        _truncate_risk_payload(risk, detail_limit=64, evidence_limit=0)
+        for risk in model.risks[:3]
+    ]
     return schemas.ScanStructuralRisksResult.model_validate(
         {
             **model.model_dump(exclude_none=True),
@@ -4388,7 +9166,9 @@ def _shrink_scan_structural_risks_stage2(model: schemas.TruncatableResult) -> sc
     )
 
 
-def _shrink_scan_structural_risks_terminal(model: schemas.TruncatableResult) -> schemas.TruncatableResult:
+def _shrink_scan_structural_risks_terminal(
+    model: schemas.TruncatableResult,
+) -> schemas.TruncatableResult:
     assert isinstance(model, schemas.ScanStructuralRisksResult)
     return schemas.ScanStructuralRisksResult.model_validate(
         {
@@ -4411,7 +9191,9 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
     parser = SimLogParser(args["log_path"], simulator)
     summary = parser.parse(max_groups=args.get("max_groups", DEFAULT_MAX_GROUPS))
     detail_level = args.get("detail_level", DEFAULT_DETAIL_LEVEL)
-    max_events_per_group = args.get("max_events_per_group", DEFAULT_MAX_EVENTS_PER_GROUP)
+    max_events_per_group = args.get(
+        "max_events_per_group", DEFAULT_MAX_EVENTS_PER_GROUP
+    )
 
     if detail_level not in {"summary", "compact", "full"}:
         raise ValueError("detail_level must be one of: summary, compact, full")
@@ -4420,7 +9202,9 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
 
     allowed_signatures = {group["signature"] for group in summary.get("groups", [])}
     all_events = parser.parse_failure_events()
-    log_snapshot_id = _capture_log_snapshot(args["log_path"], simulator, all_events, stat_info)
+    log_snapshot_id = _capture_log_snapshot(
+        args["log_path"], simulator, all_events, stat_info
+    )
     previous_snapshot = _find_previous_log_snapshot(
         args["log_path"],
         simulator,
@@ -4436,14 +9220,17 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
         )
     else:
         scoped_events = [
-            event for event in all_events
+            event
+            for event in all_events
             if event["group_signature"] in allowed_signatures
         ]
         total = len(scoped_events)
         if detail_level == "full" and total <= AUTO_DOWNGRADE_THRESHOLD:
             returned_events = scoped_events
         else:
-            returned_events = _truncate_failure_events_by_group(scoped_events, max_events_per_group)
+            returned_events = _truncate_failure_events_by_group(
+                scoped_events, max_events_per_group
+            )
             if detail_level == "full" and total > AUTO_DOWNGRADE_THRESHOLD:
                 summary["auto_downgraded"] = True
 
@@ -4519,7 +9306,20 @@ def _handle_parse_sim_log(args: dict) -> schemas.ParseSimLogResult:
             if sim_paths and getattr(sim_paths, "wave_files", None)
             else None
         )
-        summary["protocol_symptom_next_step"] = _build_sweep_required_next_call(wave_path)
+        sweep_cache = _result_cache.get("sweep_handshakes")
+        sweep_provenance = _result_provenance.get("sweep_handshakes")
+        compatible_sweep = (
+            sweep_cache
+            if (
+                sweep_cache is not None
+                and sweep_provenance is not None
+                and _same_realpath(sweep_provenance.get("wave_path"), wave_path)
+            )
+            else None
+        )
+        summary["protocol_symptom_next_step"] = _build_sweep_required_next_call(
+            wave_path, compatible_sweep
+        )
 
     validated = _enforce_output_budget(
         schemas.ParseSimLogResult.model_validate(summary),
@@ -4553,15 +9353,17 @@ def _serialize_result(result: BaseModel | dict) -> str:
 def _format_error(exc: Exception) -> schemas.ToolErrorResult:
     message = str(exc)
     if "FSDB parsing unavailable" in message:
-        return schemas.ToolErrorResult.model_validate({
-            "error": message,
-            "error_code": "fsdb_runtime_unavailable",
-            "fsdb_runtime": get_fsdb_runtime_info(),
-            "fallback": {
-                "supported_wave_formats": ["vcd"],
-                "action": "prefer_vcd_waveforms",
-            },
-        })
+        return schemas.ToolErrorResult.model_validate(
+            {
+                "error": message,
+                "error_code": "fsdb_runtime_unavailable",
+                "fsdb_runtime": get_fsdb_runtime_info(),
+                "fallback": {
+                    "supported_wave_formats": ["vcd"],
+                    "action": "prefer_vcd_waveforms",
+                },
+            }
+        )
     return schemas.ToolErrorResult.model_validate({"error": message})
 
 
@@ -4569,10 +9371,66 @@ def _format_error(exc: Exception) -> schemas.ToolErrorResult:
 # Entry
 # ═══════════════════════════════════════════════════════════════════
 
+
+_STDIO_TRANSPORT_PREPARED = False
+
+
+def _prepare_stdio_transport():
+    """Keep MCP protocol bytes separate from native-library stdout noise.
+
+    Verdi NPI and the native FSDB reader can write banners directly to file
+    descriptor 1, bypassing Python's logging and stream redirection. A single
+    non-JSON line corrupts an MCP stdio session. Preserve a private duplicate
+    of the original stdout for the protocol writer, then route both native fd 1
+    and ordinary Python stdout to stderr before any EDA library is opened.
+    """
+
+    global _STDIO_TRANSPORT_PREPARED
+    if _STDIO_TRANSPORT_PREPARED:
+        raise RuntimeError("MCP stdio transport is already prepared")
+
+    try:
+        stdout_fd = sys.stdout.fileno()
+        stderr_fd = sys.stderr.fileno()
+    except (AttributeError, OSError) as exc:
+        raise RuntimeError("MCP stdio requires file-backed standard streams") from exc
+    if stderr_fd == 1:
+        raise RuntimeError("MCP stdio requires a stderr channel distinct from stdout")
+
+    sys.stdout.flush()
+    sys.stderr.flush()
+    protocol_fd = os.dup(stdout_fd)
+    os.set_inheritable(protocol_fd, False)
+    protocol_file = os.fdopen(
+        protocol_fd,
+        "w",
+        buffering=1,
+        encoding="utf-8",
+        errors="strict",
+        newline="\n",
+    )
+    protocol_stream = anyio.wrap_file(protocol_file)
+    try:
+        os.dup2(stderr_fd, 1, inheritable=False)
+    except Exception:
+        protocol_file.close()
+        raise
+
+    sys.stdout = sys.stderr
+    _STDIO_TRANSPORT_PREPARED = True
+    return protocol_stream
+
+
 async def main():
-    async with stdio_server() as (read_stream, write_stream):
-        await app.run(read_stream, write_stream,
-                      app.create_initialization_options())
+    protocol_stdout = _prepare_stdio_transport()
+    try:
+        async with stdio_server(stdout=protocol_stdout) as (read_stream, write_stream):
+            await app.run(
+                read_stream, write_stream, app.create_initialization_options()
+            )
+    finally:
+        await protocol_stdout.aclose()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

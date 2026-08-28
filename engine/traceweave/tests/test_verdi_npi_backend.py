@@ -1,15 +1,16 @@
 import os
 import sys
-import types
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src import schemas
+from src.cancellation import OperationCancelled
 from src.verdi_npi_backend import (
     VerdiNpiBackend,
     _classify_driver_kind,
+    _classify_fan_in_kind,
     _classify_load_kind,
     _driver_summary,
     _inst_src_info,
@@ -18,6 +19,7 @@ from src.verdi_npi_backend import (
     _scope_inst_of,
     _is_genuine_runtime_driver,
     _norm_raw,
+    _simflow_dbdir,
     driver_is_load_alias,
 )
 
@@ -25,6 +27,36 @@ from src.verdi_npi_backend import (
 # ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("kdb_path", "expected"),
+    [
+        (
+            "/tmp/run/simv.daidir/kdb.elab++",
+            "/tmp/run/simv.daidir",
+        ),
+        (
+            "/tmp/run/simv.daidir/kdb.elab++/",
+            "/tmp/run/simv.daidir",
+        ),
+        ("kdb.elab++", "."),
+    ],
+)
+def test_simflow_dbdir_uses_parent_of_elaborated_kdb(kdb_path, expected):
+    assert _simflow_dbdir(kdb_path) == expected
+
+
+@pytest.mark.parametrize(
+    "db_path",
+    [
+        "/tmp/run/simv.daidir",
+        "/tmp/run/AN.DB/work.lib++",
+        "/tmp/run/simv.daidir/",
+    ],
+)
+def test_simflow_dbdir_preserves_other_database_paths(db_path):
+    assert _simflow_dbdir(db_path) == db_path
 
 
 def test_scope_from_synthesized_strips_at_first_colon():
@@ -61,6 +93,17 @@ def test_classify_driver_kind_handles_bit_slice_suffix():
     assert _classify_driver_kind(
         "x.dut:Always0#Always0:18:31:Mux.CH_invert[3:0]"
     ) == "always_comb"
+    assert _classify_driver_kind(
+        "x.dut:Always0#Always0:18:31:Reg.ROH_state[0][1]"
+    ) == "always_ff"
+    assert _classify_driver_kind("tb_top.m_if1.ahb_intf#[3:4]") == "instance_port"
+
+
+def test_classify_fan_in_kind_treats_interface_slice_as_primary_port():
+    assert (
+        _classify_fan_in_kind("tb_top.m_if1.ahb_intf#[3:4]", "npiNlPort")
+        == "primary_input_port"
+    )
 
 
 def test_classify_load_kind_module_input_vs_rhs():
@@ -77,9 +120,20 @@ def test_classify_load_kind_module_input_vs_rhs():
 
 
 class _MockPin:
-    def __init__(self, name, t="npiNlInstPort"):
+    def __init__(
+        self,
+        name,
+        t="npiNlInstPort",
+        *,
+        direction=None,
+        peer=None,
+        connected_net=None,
+    ):
         self._name = name
         self._t = t
+        self._direction = direction
+        self._peer = peer
+        self._connected_net = connected_net
 
     def full_name(self):
         return self._name
@@ -89,6 +143,15 @@ class _MockPin:
 
     def src_info(self):
         return {}
+
+    def direction(self):
+        return self._direction
+
+    def connected_pin(self):
+        return self._peer
+
+    def connected_net(self):
+        return self._connected_net
 
 
 class _MockNet:
@@ -107,6 +170,9 @@ class _MockNet:
         self._fan_in_exc = fan_in_exc
         self._fan_out = fan_out
         self._fan_out_exc = fan_out_exc
+        self.fan_in_calls = 0
+        self.fan_out_calls = 0
+        self._callback_owner = None
 
     def load_list(self):
         return self._loads
@@ -116,26 +182,76 @@ class _MockNet:
 
     def fan_in_reg_list(self, stop_at_pin=False, report_primary_port=False,
                         top_scope_name=None):
+        self.fan_in_calls += 1
         if self._fan_in_exc is not None:
             raise self._fan_in_exc
-        return list(self._fan_in or [])
+        result = []
+        for handle in self._fan_in or []:
+            owner = self._callback_owner
+            callback = getattr(owner, "_fan_in_callback", None)
+            data = getattr(owner, "_fan_in_callback_data", None)
+            if callback is not None and callback(handle, data) is False:
+                continue
+            result.append(handle)
+        return result
 
     def fan_out_reg_list(self, stop_at_pin=False, report_primary_port=False,
                          top_scope_name=None):
+        self.fan_out_calls += 1
         if self._fan_out_exc is not None:
             raise self._fan_out_exc
         return list(self._fan_out or [])
 
 
 class _MockNetlist:
-    def __init__(self, net_map):
+    class FuncType:
+        FAN_IN = "fan_in"
+
+    def __init__(
+        self,
+        net_map,
+        *,
+        tops=None,
+        top_exc=None,
+        inst_map=None,
+    ):
         self._net_map = net_map
+        self._tops = list(tops or [])
+        self._top_exc = top_exc
+        self._inst_map = dict(inst_map or {})
+        self.get_inst_calls: list[str] = []
+        self._fan_in_callback = None
+        self._fan_in_callback_data = None
+        self.reset_calls = 0
+        for net in self._net_map.values():
+            if isinstance(net, _MockNet):
+                net._callback_owner = self
+
+    def register_cb(self, func_type, callback, data):
+        assert func_type == self.FuncType.FAN_IN
+        self._fan_in_callback = callback
+        self._fan_in_callback_data = data
+        return 1
+
+    def reset_cb(self):
+        self.reset_calls += 1
+        self._fan_in_callback = None
+        self._fan_in_callback_data = None
 
     def get_net(self, name):
         return self._net_map.get(name)
 
     def get_actual_net(self, name):
         return self._net_map.get(name)
+
+    def get_inst(self, name):
+        self.get_inst_calls.append(name)
+        return self._inst_map.get(name)
+
+    def get_top_inst_list(self):
+        if self._top_exc is not None:
+            raise self._top_exc
+        return list(self._tops)
 
 
 class _MockNpisys:
@@ -194,6 +310,77 @@ def test_backend_falls_back_when_load_design_fails(monkeypatch, tmp_path):
     assert npisys.load_calls, "load_design should have been attempted"
 
 
+def test_backend_accepts_rc_zero_when_partial_netlist_matches_top(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    kdb = tmp_path / "simv.daidir" / "kdb.elab++"
+    marker_log = kdb / "elabcomLog" / "compiler.log"
+    marker_log.parent.mkdir()
+    marker_log.write_text("Total   8 error(s), 0 warning(s)\n")
+    (kdb / ".hasElabcomError").write_text("elabcomLog/compiler.log\n")
+    npisys = _MockNpisys(load_rc=0)
+    net = _MockNet(loads=[_MockPin("top_tb.u_sink.clk")])
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        npisys=npisys,
+        netlist_obj=_MockNetlist({"top_tb.clk": net}, tops=["top_tb"]),
+    )
+
+    result = backend.find_loads(
+        signal_path="top_tb.clk",
+        compile_log=log,
+        simulator="vcs",
+    )
+
+    assert result["backend"] == "verdi_npi"
+    assert result["completeness"] == "approximate"
+    assert result["loads"]
+    assert backend.kdb_status == {
+        "load_quality": "degraded",
+        "error_count": 8,
+        "error_log": str(marker_log),
+    }
+
+
+@pytest.mark.parametrize(
+    "netlist_obj",
+    [
+        _MockNetlist({}, tops=[]),
+        _MockNetlist({}, tops=["different_top"]),
+        _MockNetlist({}, top_exc=RuntimeError("broken netlist")),
+    ],
+)
+def test_backend_rejects_rc_zero_without_requested_usable_top(
+    monkeypatch,
+    tmp_path,
+    netlist_obj,
+):
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        npisys=_MockNpisys(load_rc=0),
+        netlist_obj=netlist_obj,
+    )
+
+    assert backend._ensure_loaded("/case/simv.daidir/kdb.elab++", "top_tb") is False
+    assert backend._loaded_kdb is None
+
+
+def test_backend_degraded_escape_hatch_rejects_rc_zero(monkeypatch):
+    monkeypatch.setattr(
+        "src.verdi_npi_backend.NPI_ALLOW_DEGRADED_KDB",
+        False,
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        npisys=_MockNpisys(load_rc=0),
+        netlist_obj=_MockNetlist({}, tops=["top_tb"]),
+    )
+
+    assert backend._ensure_loaded("/case/simv.daidir/kdb.elab++", "top_tb") is False
+
+
 def test_backend_returns_exact_loads_via_npi(monkeypatch, tmp_path):
     log = _make_compile_log(tmp_path)
     net = _MockNet([
@@ -235,14 +422,32 @@ def test_backend_dedup_keeps_distinct_synthesized_loads(monkeypatch, tmp_path):
     assert len(r["loads"]) == 2
 
 
-def test_backend_loads_include_npi_fan_out(monkeypatch, tmp_path):
+def test_backend_loads_cross_output_boundary_without_full_fanout(
+    monkeypatch,
+    tmp_path,
+):
     log = _make_compile_log(tmp_path)
-    net = _MockNet(
-        loads=[],
-        fan_out=[
-            _MockPin("top_tb.parent.child:Always2#Always0:44:51:Reg.D_count[4:0]"),
+    parent_net = _MockNet(
+        loads=[
+            _MockPin("top_tb.parent.consumer.count"),
             _MockPin("top_tb.parent.count[4:0]", t="npiNlPort"),
         ],
+    )
+    peer = _MockPin(
+        "top_tb.parent.child.count",
+        t="npiNlInstPort",
+        connected_net=parent_net,
+    )
+    boundary = _MockPin(
+        "top_tb.parent.child.count",
+        t="npiNlPort",
+        direction="npiNlOutput",
+        peer=peer,
+    )
+    net = _MockNet(
+        loads=[boundary],
+        # A recursive cone result would be different; it must never be called.
+        fan_out=[_MockPin("top_tb.parent:Always2:Reg.D_count")],
     )
     netlist_obj = _MockNetlist({"top_tb.parent.child.count": net})
     backend, _, _ = _make_backend_with_mock_npi(
@@ -256,10 +461,277 @@ def test_backend_loads_include_npi_fan_out(monkeypatch, tmp_path):
     assert r["completeness"] == "exact"
     assert r["stopped_at"] is None
     assert {ld["load_path"] for ld in r["loads"]} == {
-        "top_tb.parent.child",
+        "top_tb.parent.consumer.count",
         "top_tb.parent.count[4:0]",
     }
     assert all(ld["backend"] == "verdi_npi" for ld in r["loads"])
+    assert net.fan_out_calls == 0
+
+
+def test_backend_loads_skip_recursive_fan_out_when_direct_handles_exist(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    direct = _MockPin("top_tb.parent.child.data")
+    net = _MockNet(
+        loads=[direct],
+        fan_out=[
+            _MockPin("top_tb.parent:Always2#Always0:44:51:Reg.D_data"),
+        ],
+    )
+    netlist_obj = _MockNetlist({"top_tb.parent.data": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+
+    result = backend.find_loads(
+        signal_path="top_tb.parent.data",
+        compile_log=log,
+        simulator="vcs",
+    )
+
+    assert [load["load_path"] for load in result["loads"]] == [
+        "top_tb.parent.child.data"
+    ]
+    assert net.fan_out_calls == 0
+
+
+def test_backend_kind_filter_does_not_trigger_recursive_fan_out(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    net = _MockNet(
+        loads=[_MockPin("top_tb.parent.child.data")],
+        fan_out=[
+            _MockPin("top_tb.parent:Always2#Always0:44:51:Reg.D_data"),
+        ],
+    )
+    netlist_obj = _MockNetlist({"top_tb.parent.data": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+
+    result = backend.find_loads(
+        signal_path="top_tb.parent.data",
+        compile_log=log,
+        simulator="vcs",
+        kind_filter=["rhs_expr"],
+    )
+
+    assert result["loads"] == []
+    assert result["stopped_at"] == "no_npi_loads"
+    assert net.fan_out_calls == 0
+
+
+def test_backend_direct_load_output_is_bounded_and_explicit(monkeypatch, tmp_path):
+    log = _make_compile_log(tmp_path)
+    net = _MockNet(
+        loads=[_MockPin(f"top_tb.sink_{index}.data") for index in range(300)],
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({"top_tb.data": net}),
+    )
+
+    result = backend.find_loads(
+        signal_path="top_tb.data",
+        compile_log=log,
+        simulator="vcs",
+    )
+
+    assert len(result["loads"]) == 256
+    assert result["completeness"] == "approximate"
+    assert result["stopped_at"] == "npi_load_output_limit"
+    assert result["enumeration"] == {
+        "returned_count": 256,
+        "output_limit": 256,
+        "output_truncated": True,
+        "search_exhaustive": False,
+        "incomplete_reasons": ["output_limit"],
+        "continuation_supported": False,
+    }
+    assert net.fan_out_calls == 0
+
+
+def test_backend_direct_load_handle_work_limit_is_explicit(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    monkeypatch.setattr(
+        "src.verdi_npi_backend.DEFAULT_NPI_LOAD_HANDLE_LIMIT",
+        2,
+    )
+    net = _MockNet(
+        loads=[_MockPin(f"top_tb.sink_{index}.data") for index in range(3)],
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({"top_tb.data": net}),
+    )
+
+    result = backend.find_loads(
+        signal_path="top_tb.data",
+        compile_log=log,
+        simulator="vcs",
+    )
+
+    assert len(result["loads"]) == 2
+    assert result["completeness"] == "approximate"
+    assert result["stopped_at"] == "npi_load_work_limit"
+    assert result["enumeration"]["output_truncated"] is False
+    assert result["enumeration"]["search_exhaustive"] is False
+    assert result["enumeration"]["incomplete_reasons"] == ["work_limit"]
+
+
+def test_backend_direct_load_formatting_propagates_cancellation(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    net = _MockNet(loads=[_MockPin("top_tb.sink.data")])
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({"top_tb.data": net}),
+    )
+    monkeypatch.setattr(
+        "src.verdi_npi_backend.check_cancelled",
+        lambda: (_ for _ in ()).throw(OperationCancelled("cancelled")),
+    )
+
+    with pytest.raises(OperationCancelled):
+        backend.find_loads(
+            signal_path="top_tb.data",
+            compile_log=log,
+            simulator="vcs",
+        )
+
+
+def test_backend_boundary_recovery_output_limit_is_explicit(monkeypatch, tmp_path):
+    log = _make_compile_log(tmp_path)
+    parent_net = _MockNet(
+        loads=[
+            _MockPin(f"top_tb.sink_{index}.data") for index in range(300)
+        ],
+    )
+    peer = _MockPin(
+        "top_tb.child.data",
+        t="npiNlInstPort",
+        connected_net=parent_net,
+    )
+    net = _MockNet(
+        loads=[
+            _MockPin(
+                "top_tb.child.data",
+                t="npiNlPort",
+                direction="npiNlOutput",
+                peer=peer,
+            )
+        ],
+        fan_out=[_MockPin("top_tb:Always0:Reg.D_data")],
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({"top_tb.data": net}),
+    )
+
+    result = backend.find_loads(
+        signal_path="top_tb.data",
+        compile_log=log,
+        simulator="vcs",
+    )
+
+    assert len(result["loads"]) == 256
+    assert result["completeness"] == "approximate"
+    assert result["stopped_at"] == "npi_load_output_limit"
+    assert result["enumeration"] == {
+        "returned_count": 256,
+        "output_limit": 256,
+        "output_truncated": True,
+        "search_exhaustive": False,
+        "incomplete_reasons": ["output_limit"],
+        "continuation_supported": False,
+    }
+    assert net.fan_out_calls == 0
+
+
+def test_backend_boundary_recovery_state_limit_is_explicit(monkeypatch, tmp_path):
+    log = _make_compile_log(tmp_path)
+    monkeypatch.setattr(
+        "src.verdi_npi_backend.DEFAULT_NPI_LOAD_BOUNDARY_STATE_LIMIT",
+        1,
+    )
+    parent_net = _MockNet(loads=[_MockPin("top_tb.sink.data")])
+    peer = _MockPin(
+        "top_tb.child.data",
+        t="npiNlInstPort",
+        connected_net=parent_net,
+    )
+    net = _MockNet(
+        loads=[
+            _MockPin(
+                "top_tb.child.data",
+                t="npiNlPort",
+                direction="npiNlOutput",
+                peer=peer,
+            )
+        ],
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({"top_tb.child.data": net}),
+    )
+
+    result = backend.find_loads(
+        signal_path="top_tb.child.data",
+        compile_log=log,
+        simulator="vcs",
+    )
+
+    assert result["loads"] == []
+    assert result["completeness"] == "approximate"
+    assert result["stopped_at"] == "npi_load_work_limit"
+    assert result["enumeration"]["incomplete_reasons"] == ["work_limit"]
+
+
+def test_backend_boundary_recovery_failure_is_coverage_incomplete(
+    monkeypatch,
+    tmp_path,
+):
+    class _BrokenPeer:
+        def connected_net(self):
+            raise RuntimeError("broken")
+
+    log = _make_compile_log(tmp_path)
+    net = _MockNet(
+        loads=[
+            _MockPin(
+                "top_tb.child.data",
+                t="npiNlPort",
+                direction="npiNlOutput",
+                peer=_BrokenPeer(),
+            )
+        ],
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({"top_tb.child.data": net}),
+    )
+
+    result = backend.find_loads(
+        signal_path="top_tb.child.data",
+        compile_log=log,
+        simulator="vcs",
+    )
+
+    assert result["loads"] == []
+    assert result["completeness"] == "approximate"
+    assert result["stopped_at"] == "npi_boundary_recovery_failed"
+    assert result["enumeration"]["incomplete_reasons"] == [
+        "coverage_incomplete"
+    ]
 
 
 def test_backend_caches_loaded_kdb(monkeypatch, tmp_path):
@@ -271,7 +743,70 @@ def test_backend_caches_loaded_kdb(monkeypatch, tmp_path):
     )
     backend.find_loads(signal_path="top_tb.x", compile_log=log, simulator="vcs")
     backend.find_loads(signal_path="top_tb.x", compile_log=log, simulator="vcs")
-    assert len(npisys.load_calls) == 1, "second call should hit the cache"
+    original_kdb = str(tmp_path / "simv.daidir" / "kdb.elab++")
+    assert npisys.load_calls == [
+        [
+            "traceweave_npi",
+            "-simflow",
+            "-dbdir",
+            str(tmp_path / "simv.daidir"),
+            "-top",
+            "top_tb",
+        ]
+    ], "second call should hit the original-KDB cache identity"
+    assert backend._loaded_kdb == original_kdb
+    assert backend._loaded_top == "top_tb"
+
+
+def test_backend_normalizes_new_and_restored_kdb_dbdirs(monkeypatch, tmp_path):
+    npisys = _MockNpisys()
+    backend, _, _ = _make_backend_with_mock_npi(monkeypatch, npisys=npisys)
+    old_kdb = str(tmp_path / "old" / "simv.daidir" / "kdb.elab++")
+    new_kdb = str(tmp_path / "new" / "simv.daidir" / "kdb.elab++")
+
+    assert backend._ensure_loaded(old_kdb, "old_top") is True
+
+    return_codes = iter((0, 1))
+
+    def sequenced_load_design(argv):
+        npisys.load_calls.append(list(argv))
+        return next(return_codes)
+
+    monkeypatch.setattr(npisys, "load_design", sequenced_load_design)
+    assert backend._ensure_loaded(new_kdb, "new_top") is False
+
+    assert npisys.load_calls == [
+        [
+            "traceweave_npi",
+            "-simflow",
+            "-dbdir",
+            str(tmp_path / "old" / "simv.daidir"),
+            "-top",
+            "old_top",
+        ],
+        [
+            "traceweave_npi",
+            "-simflow",
+            "-dbdir",
+            str(tmp_path / "new" / "simv.daidir"),
+            "-top",
+            "new_top",
+        ],
+        [
+            "traceweave_npi",
+            "-simflow",
+            "-dbdir",
+            str(tmp_path / "old" / "simv.daidir"),
+            "-top",
+            "old_top",
+        ],
+    ]
+    assert backend._loaded_kdb == old_kdb
+    assert backend._loaded_top == "old_top"
+
+    # The restored design remains keyed by the original artifact path.
+    assert backend._ensure_loaded(old_kdb, "old_top") is True
+    assert len(npisys.load_calls) == 3
 
 
 def test_backend_no_kdb_falls_back(monkeypatch, tmp_path):
@@ -447,6 +982,30 @@ def test_driver_summary_includes_line():
     assert "initial driver" in summary
 
 
+@pytest.mark.parametrize(
+    ("raw", "kind", "expected"),
+    [
+        (
+            "top_tb.dut:Always0#Always0:20:52:Assignment.OH_data[7:0]",
+            "assign",
+            "assign driver via Assignment.OH_data at line 20",
+        ),
+        (
+            "top_tb.dut:Always0#Always0:20:52:Reg.ROH_data[0][1]",
+            "always_ff",
+            "always_ff driver via Reg.ROH_data at line 20",
+        ),
+        (
+            "tb_top.m_if1.ahb_intf#[3:4]",
+            "instance_port",
+            "instance_port driver via tb_top.m_if1.ahb_intf#",
+        ),
+    ],
+)
+def test_driver_summary_strips_all_trailing_selectors(raw, kind, expected):
+    assert _driver_summary(raw, kind) == expected
+
+
 # ---------------------------------------------------------------------------
 # Mocked NPI driver path
 # ---------------------------------------------------------------------------
@@ -576,6 +1135,274 @@ def test_driver_recursive_multi_fan_in_branches(monkeypatch, tmp_path):
     lines = sorted(h["source_line"] for h in r["driver_chain"] if h["source_line"])
     assert lines == [10, 25]
     assert "2 boundary point" in r["chain_summary"]
+
+
+def test_driver_recursive_native_work_limit_returns_partial_facts(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    pins = [
+        _MockPin(f"top_tb.dut:Always{i}#Always0:{10 + i}:20:Reg.ROH_q")
+        for i in range(3)
+    ]
+    net = _MockNet(
+        drivers=[_MockPin("top_tb.dut.q", t="npiNlPort")],
+        fan_in=pins,
+    )
+    netlist_obj = _MockNetlist({"top_tb.dut.q": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    monkeypatch.setattr(
+        "src.verdi_npi_backend.DEFAULT_NPI_DRIVER_STATE_LIMIT", 2
+    )
+
+    result = backend.find_driver(
+        signal_path="top_tb.dut.q",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=True,
+        simulator="vcs",
+    )
+
+    assert result["driver_status"] == "partial"
+    assert result["confidence"] == "partial"
+    assert result["stopped_at"] == "npi_driver_traversal_incomplete"
+    assert len(result["driver_chain"]) == 3
+    assert result["traversal"] == {
+        "returned_fact_count": 2,
+        "output_limit": 32,
+        "output_truncated": False,
+        "visited_state_count": 2,
+        "state_limit": 2,
+        "state_truncated": True,
+        "callback_observed_count": 3,
+        "callback_pruned_count": 1,
+        "search_exhaustive": False,
+        "incomplete_reasons": ["work_limit"],
+        "continuation_supported": False,
+    }
+    assert net.fan_in_calls == 1
+    assert netlist_obj.reset_calls == 1
+    assert netlist_obj._fan_in_callback is None
+    schemas.ExplainDriverResult.model_validate(result)
+
+
+def test_driver_recursive_output_limit_returns_partial_facts(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    pins = [
+        _MockPin(f"top_tb.dut:Always{i}#Always0:{10 + i}:20:Reg.ROH_q")
+        for i in range(3)
+    ]
+    net = _MockNet(
+        drivers=[_MockPin("top_tb.dut.q", t="npiNlPort")],
+        fan_in=pins,
+    )
+    netlist_obj = _MockNetlist({"top_tb.dut.q": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    monkeypatch.setattr("src.verdi_npi_backend.DEFAULT_DRIVER_OUTPUT_LIMIT", 2)
+
+    result = backend.find_driver(
+        signal_path="top_tb.dut.q",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=True,
+        simulator="vcs",
+    )
+
+    assert result["driver_status"] == "partial"
+    assert len(result["driver_chain"]) == 3
+    assert result["traversal"]["returned_fact_count"] == 2
+    assert result["traversal"]["output_limit"] == 2
+    assert result["traversal"]["output_truncated"] is True
+    assert result["traversal"]["state_truncated"] is False
+    assert result["traversal"]["incomplete_reasons"] == ["output_limit"]
+
+
+def test_driver_callback_unavailable_never_runs_unbounded_fan_in(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    direct = _MockPin("top_tb.dut.q", t="npiNlPort")
+    net = _MockNet(
+        drivers=[direct],
+        fan_in=[_MockPin("top_tb.dut:Always0#Always0:10:20:Reg.ROH_q")],
+    )
+    netlist_obj = _MockNetlist({"top_tb.dut.q": net})
+    netlist_obj.register_cb = None
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+
+    result = backend.find_driver(
+        signal_path="top_tb.dut.q",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=True,
+        simulator="vcs",
+    )
+
+    assert net.fan_in_calls == 0
+    assert result["driver_status"] == "partial"
+    assert result["driver_kind"] == "instance_port"
+    assert result["traversal"]["returned_fact_count"] == 1
+    assert result["traversal"]["search_exhaustive"] is False
+    assert result["traversal"]["incomplete_reasons"] == ["coverage_incomplete"]
+
+
+def test_driver_callback_registration_failure_is_reset_and_does_not_traverse(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    net = _MockNet(
+        drivers=[_MockPin("top_tb.dut.q", t="npiNlPort")],
+        fan_in=[_MockPin("top_tb.dut:Always0#Always0:10:20:Reg.ROH_q")],
+    )
+    netlist_obj = _MockNetlist({"top_tb.dut.q": net})
+
+    def reject_callback(func_type, callback, data):
+        assert func_type == netlist_obj.FuncType.FAN_IN
+        netlist_obj._fan_in_callback = callback
+        netlist_obj._fan_in_callback_data = data
+        return 0
+
+    netlist_obj.register_cb = reject_callback
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+
+    result = backend.find_driver(
+        signal_path="top_tb.dut.q",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=True,
+        simulator="vcs",
+    )
+
+    assert net.fan_in_calls == 0
+    assert netlist_obj.reset_calls == 1
+    assert netlist_obj._fan_in_callback is None
+    assert result["driver_status"] == "partial"
+    assert result["traversal"]["incomplete_reasons"] == ["coverage_incomplete"]
+
+
+def test_driver_cancellation_inside_native_callback_resets_and_propagates(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    net = _MockNet(
+        drivers=[_MockPin("top_tb.dut.q", t="npiNlPort")],
+        fan_in=[_MockPin("top_tb.dut:Always0#Always0:10:20:Reg.ROH_q")],
+    )
+    netlist_obj = _MockNetlist({"top_tb.dut.q": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    calls = 0
+
+    def cancel_on_callback():
+        nonlocal calls
+        calls += 1
+        if calls >= 3:
+            raise OperationCancelled("cancelled in callback")
+
+    monkeypatch.setattr("src.verdi_npi_backend.check_cancelled", cancel_on_callback)
+
+    with pytest.raises(OperationCancelled):
+        backend.find_driver(
+            signal_path="top_tb.dut.q",
+            wave_path="x.fsdb",
+            compile_log=log,
+            recursive=True,
+            simulator="vcs",
+        )
+
+    assert net.fan_in_calls == 1
+    assert netlist_obj.reset_calls == 1
+    assert netlist_obj._fan_in_callback is None
+
+
+def test_driver_cancellation_while_waiting_for_callback_lock_propagates(
+    monkeypatch,
+    tmp_path,
+):
+    from src import verdi_npi_backend as npi_module
+
+    log = _make_compile_log(tmp_path)
+    net = _MockNet(
+        drivers=[_MockPin("top_tb.dut.q", t="npiNlPort")],
+        fan_in=[_MockPin("top_tb.dut:Always0#Always0:10:20:Reg.ROH_q")],
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({"top_tb.dut.q": net}),
+    )
+    calls = 0
+
+    def cancel_after_first_wait():
+        nonlocal calls
+        calls += 1
+        if calls >= 2:
+            raise OperationCancelled("cancelled while waiting")
+
+    monkeypatch.setattr("src.verdi_npi_backend.check_cancelled", cancel_after_first_wait)
+    npi_module._NPI_FAN_IN_CALLBACK_LOCK.acquire()
+    try:
+        with pytest.raises(OperationCancelled):
+            backend.find_driver(
+                signal_path="top_tb.dut.q",
+                wave_path="x.fsdb",
+                compile_log=log,
+                recursive=True,
+                simulator="vcs",
+            )
+    finally:
+        npi_module._NPI_FAN_IN_CALLBACK_LOCK.release()
+
+    assert net.fan_in_calls == 0
+
+
+def test_driver_direct_work_limit_cannot_make_testbench_negative_claim(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    alias = _MockPin("top_tb.m_if.ahb_intf#[3:4]")
+    genuine = _MockPin("top_tb.dut:Always0#Always0:50:55:Reg.ROH_q")
+    net = _MockNet(
+        drivers=[alias, genuine],
+        loads=[_MockPin("top_tb.m_if.ahb_intf#[3:4]")],
+        fan_in=[genuine],
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({"top_tb.m_if.q": net}),
+    )
+    monkeypatch.setattr(
+        "src.verdi_npi_backend.DEFAULT_NPI_DRIVER_STATE_LIMIT", 1
+    )
+
+    result = backend.find_driver(
+        signal_path="top_tb.m_if.q",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=True,
+        simulator="vcs",
+    )
+
+    assert result["driver_status"] == "partial"
+    assert result["driver_status"] != "testbench_driven"
+    assert result["driver_kind"] == "always_ff"
+    assert "work_limit" in result["traversal"]["incomplete_reasons"]
 
 
 def test_driver_single_hop_npi_resolves_initial_kind(monkeypatch, tmp_path):
@@ -806,6 +1633,30 @@ class _MockInst:
         return self._src_info
 
 
+class _MockHierarchyInst(_MockInst):
+    def __init__(
+        self,
+        name,
+        *,
+        children=(),
+        definition_name="mock_module",
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self._name = name
+        self._children = list(children)
+        self._definition_name = definition_name
+
+    def full_name(self):
+        return self._name
+
+    def inst_list(self):
+        return list(self._children)
+
+    def def_name(self):
+        return self._definition_name
+
+
 def test_inst_src_info_returns_none_for_none():
     assert _inst_src_info(None) == (None, None)
 
@@ -831,6 +1682,287 @@ def test_inst_src_info_falls_back_to_src_info_tuple():
 def test_inst_src_info_treats_empty_file_string_as_none():
     inst = _MockInst(file_val="", line_val=None)
     assert _inst_src_info(inst) == (None, None)
+
+
+def test_collect_instance_src_map_reports_phase_and_walk_metrics(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    child = _MockHierarchyInst(
+        "top_tb.u_dut",
+        file_val="/project/dut.sv",
+        line_val=23,
+    )
+    top = _MockHierarchyInst(
+        "top_tb",
+        children=(child,),
+        file_val="/project/top_tb.sv",
+        line_val=7,
+    )
+    backend, npisys, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({}, tops=[top]),
+    )
+
+    assert backend.collect_instance_src_map(log, "vcs") == {
+        "top_tb": ("/project/top_tb.sv", 7),
+        "top_tb.u_dut": ("/project/dut.sv", 23),
+    }
+    metrics = backend.instance_src_map_metrics
+    assert metrics is not None
+    assert metrics["status"] == "completed"
+    assert metrics["top_instance_count"] == 1
+    assert metrics["instance_visited_count"] == 2
+    assert metrics["source_entry_count"] == 2
+    assert metrics["design_load_cache_hit"] == 0
+    assert metrics["compile_context_cache_hit"] == 0
+    assert metrics["compile_parse_wall_ms"] >= 0
+    assert metrics["kdb_probe_wall_ms"] >= 0
+    assert metrics["design_load_wall_ms"] >= 0
+    assert metrics["instance_walk_wall_ms"] >= 0
+    assert metrics["total_wall_ms"] >= metrics["instance_walk_wall_ms"]
+    assert len(npisys.load_calls) == 1
+
+    backend.collect_instance_src_map(log, "vcs")
+    warm_metrics = backend.instance_src_map_metrics
+    assert warm_metrics is not None
+    assert warm_metrics["design_load_cache_hit"] == 1
+    assert warm_metrics["compile_context_cache_hit"] == 1
+    assert len(npisys.load_calls) == 1
+
+
+def test_collect_instance_src_map_queries_only_requested_instance_paths(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    dut = _MockHierarchyInst(
+        "top_tb.u_dut",
+        file_val="/project/dut.sv",
+        line_val=23,
+    )
+    leaf = _MockHierarchyInst(
+        "top_tb.u_dut.u_leaf",
+        file_val="/project/leaf.sv",
+        line_val=41,
+    )
+    netlist_obj = _MockNetlist(
+        {},
+        top_exc=AssertionError("targeted lookup must not walk top instances"),
+        inst_map={
+            "top_tb.u_dut": dut,
+            "top_tb.u_dut.u_leaf": leaf,
+        },
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=netlist_obj,
+    )
+
+    assert backend.collect_instance_src_map(
+        log,
+        "vcs",
+        instance_paths=(
+            "top_tb.u_dut",
+            "top_tb.u_dut.u_leaf",
+            "top_tb.u_dut",
+            "",
+        ),
+    ) == {
+        "top_tb.u_dut": ("/project/dut.sv", 23),
+        "top_tb.u_dut.u_leaf": ("/project/leaf.sv", 41),
+    }
+    assert netlist_obj.get_inst_calls == [
+        "top_tb.u_dut",
+        "top_tb.u_dut.u_leaf",
+    ]
+    metrics = backend.instance_src_map_metrics
+    assert metrics is not None
+    assert metrics["status"] == "completed"
+    assert metrics["lookup_mode"] == "target_paths"
+    assert metrics["requested_instance_count"] == 2
+    assert metrics["instance_visited_count"] == 2
+    assert metrics["source_entry_count"] == 2
+    assert metrics["lookup_error_count"] == 0
+    assert metrics["top_instance_count"] == 0
+    assert metrics["instance_walk_wall_ms"] == 0.0
+    assert metrics["instance_lookup_wall_ms"] >= 0
+
+
+def test_targeted_hierarchy_compile_context_cache_invalidates_on_log_change(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    top = _MockHierarchyInst("top_tb", definition_name="tb")
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({}, inst_map={"top_tb": top}),
+    )
+
+    backend.collect_instance_binding_map(
+        log, "vcs", instance_paths=("top_tb",)
+    )
+    first = backend.instance_src_map_metrics
+    backend.collect_instance_binding_map(
+        log, "vcs", instance_paths=("top_tb",)
+    )
+    warm = backend.instance_src_map_metrics
+    with open(log, "a", encoding="utf-8") as stream:
+        stream.write("\n")
+    backend.collect_instance_binding_map(
+        log, "vcs", instance_paths=("top_tb",)
+    )
+    changed = backend.instance_src_map_metrics
+
+    assert first is not None and first["compile_context_cache_hit"] == 0
+    assert warm is not None and warm["compile_context_cache_hit"] == 1
+    assert changed is not None and changed["compile_context_cache_hit"] == 0
+
+
+def test_targeted_instance_src_map_never_falls_back_to_full_walk(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+
+    class _LegacyNetlistWithoutGetInst:
+        def get_top_inst_list(self):
+            raise AssertionError("targeted request must not start a full walk")
+
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_LegacyNetlistWithoutGetInst(),
+    )
+
+    assert backend.collect_instance_src_map(
+        log,
+        "vcs",
+        instance_paths=("top_tb.u_dut",),
+    ) == {}
+    metrics = backend.instance_src_map_metrics
+    assert metrics is not None
+    assert metrics["status"] == "targeted_lookup_unavailable"
+    assert metrics["lookup_mode"] == "target_paths_unavailable"
+    assert metrics["instance_visited_count"] == 0
+    assert metrics["instance_walk_wall_ms"] == 0.0
+
+
+def test_targeted_npi_hierarchy_provider_resolves_generate_path(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    top = _MockHierarchyInst("top_tb", definition_name="tb")
+    dut = _MockHierarchyInst("top_tb.u_dut", definition_name="dut")
+    leaf = _MockHierarchyInst(
+        "top_tb.u_dut.g_lane[3].u_leaf",
+        definition_name="leaf",
+        file_val="/project/leaf.sv",
+        line_val=41,
+    )
+    netlist_obj = _MockNetlist(
+        {},
+        top_exc=AssertionError("targeted provider must not walk top instances"),
+        inst_map={
+            "top_tb": top,
+            "top_tb.u_dut": dut,
+            "top_tb.u_dut.g_lane[3].u_leaf": leaf,
+        },
+    )
+    backend, npisys, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=netlist_obj,
+    )
+
+    provider = backend.build_hierarchy_provider(
+        log,
+        "top_tb.u_dut.g_lane[3].u_leaf.value",
+        "vcs",
+        top_hint="top_tb",
+    )
+
+    assert provider is not None
+    resolution = provider.resolve_scope(
+        top="top_tb",
+        signal_path="top_tb.u_dut.g_lane[3].u_leaf.value",
+    )
+    assert resolution is not None
+    assert resolution.ancestors == (
+        "top_tb",
+        "top_tb.u_dut",
+        "top_tb.u_dut.g_lane[3].u_leaf",
+    )
+    assert resolution.bindings[-1].definition_name == "leaf"
+    assert resolution.bindings[-1].source_line == 41
+    assert netlist_obj.get_inst_calls == [
+        "top_tb",
+        "top_tb.u_dut",
+        "top_tb.u_dut.g_lane[3]",
+        "top_tb.u_dut.g_lane[3].u_leaf",
+    ]
+    assert len(npisys.load_calls) == 1
+    metrics = backend.hierarchy_provider_metrics
+    assert metrics is not None
+    assert metrics["status"] == "completed"
+    assert metrics["candidate_path_count"] == 4
+    assert metrics["binding_count"] == 3
+    assert metrics["matched_ancestor_count"] == 3
+    lookup_metrics = backend.instance_src_map_metrics
+    assert lookup_metrics is not None
+    assert lookup_metrics["binding_entry_count"] == 3
+    assert lookup_metrics["binding_lookup_miss_count"] == 1
+    assert lookup_metrics["top_instance_count"] == 0
+
+
+def test_targeted_npi_hierarchy_provider_rejects_depth_before_loading(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    netlist_obj = _MockNetlist({})
+    backend, npisys, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=netlist_obj,
+    )
+
+    provider = backend.build_hierarchy_provider(
+        log,
+        "top_tb.a.b.c.value",
+        "vcs",
+        top_hint="top_tb",
+        max_candidate_paths=2,
+    )
+
+    assert provider is None
+    assert npisys.load_calls == []
+    assert netlist_obj.get_inst_calls == []
+    metrics = backend.hierarchy_provider_metrics
+    assert metrics is not None
+    assert metrics["status"] == "candidate_limit_exceeded"
+
+
+def test_targeted_npi_hierarchy_provider_honors_non_primary_top_hint(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path, top="primary_top")
+    alternate = _MockHierarchyInst("alternate_top", definition_name="alternate")
+    backend, npisys, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({}, inst_map={"alternate_top": alternate}),
+    )
+
+    provider = backend.build_hierarchy_provider(
+        log,
+        "alternate_top.value",
+        "vcs",
+        top_hint="alternate_top",
+    )
+
+    assert provider is not None
+    assert npisys.load_calls[0][-2:] == ["-top", "alternate_top"]
 
 
 class _PinWithInst:
@@ -1081,6 +2213,72 @@ def test_driver_boundary_fan_in_load_yields_testbench_driven(monkeypatch, tmp_pa
     assert r["cross_check"]["matched_scope"] == "top_tb.dut.matrix"
     assert r["cross_check"]["matched_line"] == 135
     schemas.ExplainDriverResult.model_validate(r)
+
+
+def test_driver_truncated_load_alias_does_not_hide_unseen_genuine_driver(
+    monkeypatch,
+    tmp_path,
+):
+    log = _make_compile_log(tmp_path)
+    alias = _MockPin("top_tb.dut:Always0#Always0:10:20:Reg.ROH_alias")
+    genuine = _MockPin("top_tb.dut:Always1#Always0:30:40:Reg.ROH_real")
+    net = _MockNet(
+        drivers=[_MockPin("top_tb.dut.q", t="npiNlPort")],
+        fan_in=[alias, genuine],
+        loads=[_MockPin("top_tb.dut:Always0#Always0:10:20:Reg.ROH_alias")],
+    )
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch,
+        netlist_obj=_MockNetlist({"top_tb.dut.q": net}),
+    )
+    monkeypatch.setattr(
+        "src.verdi_npi_backend.DEFAULT_NPI_DRIVER_STATE_LIMIT", 1
+    )
+
+    result = backend.find_driver(
+        signal_path="top_tb.dut.q",
+        wave_path="x.fsdb",
+        compile_log=log,
+        recursive=True,
+        simulator="vcs",
+    )
+
+    assert result["driver_status"] == "partial"
+    assert result["driver_kind"] is None
+    assert result["driver_chain"] is None
+    assert result.get("cross_check") is None
+    assert result["traversal"]["returned_fact_count"] == 0
+    assert result["traversal"]["state_truncated"] is True
+    assert result["unsupported_reason"] == "npi_driver_load_alias_inconclusive"
+    schemas.ExplainDriverResult.model_validate(result)
+
+
+def test_driver_degraded_load_alias_is_not_returned_as_positive_fact(monkeypatch):
+    alias = _MockPin("top_tb.dut:Always0#Always0:10:20:Reg.ROH_alias")
+    net = _MockNet(
+        drivers=[_MockPin("top_tb.dut.q", t="npiNlPort")],
+        fan_in=[alias],
+        loads=[_MockPin("top_tb.dut:Always0#Always0:10:20:Reg.ROH_alias")],
+    )
+    netlist_obj = _MockNetlist({"top_tb.dut.q": net})
+    backend, _, _ = _make_backend_with_mock_npi(
+        monkeypatch, netlist_obj=netlist_obj
+    )
+    backend._npi_modules = (_MockNpisys(), netlist_obj)
+    backend._loaded_degraded = True
+
+    result = backend._npi_find_driver(
+        "top_tb.dut.q",
+        "x.fsdb",
+        "top_tb",
+        recursive=True,
+    )
+
+    assert result["driver_status"] == "partial"
+    assert result["driver_kind"] is None
+    assert result["traversal"]["returned_fact_count"] == 0
+    assert result["traversal"]["incomplete_reasons"] == ["backend_degraded"]
+    assert result["unsupported_reason"] == "npi_driver_load_alias_inconclusive"
 
 
 def test_driver_recursive_interface_alias_yields_testbench_driven(monkeypatch, tmp_path):

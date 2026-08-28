@@ -29,7 +29,11 @@ from typing import Any
 
 
 _KDB_DIRNAME = "kdb.elab++"
+_KDB_ELAB_ERROR_MARKER = ".hasElabcomError"
 _SETUP_FILENAME = "synopsys_sim.setup"
+_MAX_KDB_MARKER_BYTES = 64 * 1024
+_MAX_KDB_ERROR_LOG_BYTES = 4 * 1024 * 1024
+_ELAB_ERROR_COUNT_RE = re.compile(r"Total\s+(\d+)\s+error\(s\)", re.IGNORECASE)
 
 
 def probe_verdi_backend(
@@ -58,19 +62,66 @@ def probe_verdi_backend(
     elif simulator == "xcelium":
         kdb_path, kdb_flow = _probe_vericom_kdb(case_dir)
     else:
-        # Best-effort: still look for KDB anywhere obvious.
-        kdb_path, kdb_flow = _probe_vcs_kdb(case_dir)
-        if kdb_path is None:
-            kdb_path, kdb_flow = _probe_vericom_kdb(case_dir)
+        # Best-effort: still look for KDB anywhere obvious, preferring a clean
+        # candidate across both layouts before retaining a degraded one.
+        vcs_path, vcs_flow = _probe_vcs_kdb(case_dir)
+        vericom_path, vericom_flow = _probe_vericom_kdb(case_dir)
+        if vcs_path is not None and _elab_kdb_is_usable(vcs_path):
+            kdb_path, kdb_flow = vcs_path, vcs_flow
+        elif vericom_path is not None and _elab_kdb_is_usable(vericom_path):
+            kdb_path, kdb_flow = vericom_path, vericom_flow
+        elif vcs_path is not None:
+            kdb_path, kdb_flow = vcs_path, vcs_flow
+        else:
+            kdb_path, kdb_flow = vericom_path, vericom_flow
 
     # TraceWeave-managed cache: if the user has previously run the
     # ``build_kdb`` tool, a cached elaborated KDB lives under
     # ``$TRACEWEAVE_CACHE/kdb/<hash>/kdb.elab++``. Pick it up so NPI
     # finds it transparently on subsequent driver/load queries.
-    if kdb_path is None:
+    if kdb_path is None or _elab_kdb_has_errors(kdb_path):
         cached = _probe_traceweave_cached_kdb(compile_result, compile_log_path)
-        if cached:
+        if cached and (
+            kdb_path is None
+            or _elab_kdb_is_usable(cached)
+        ):
             kdb_path, kdb_flow = cached, "traceweave_cached"
+
+    degraded_candidate = (
+        kdb_path
+        if kdb_path is not None and _elab_kdb_has_errors(kdb_path)
+        else None
+    )
+    kdb_validation_status = (
+        "elaboration_error"
+        if degraded_candidate is not None
+        else (
+            "usable"
+            if kdb_path is not None
+            else (
+                "elaboration_error"
+                if _failed_elab_kdb_under(case_dir)
+                else "unavailable"
+            )
+        )
+    )
+    kdb_error_count: int | None = None
+    kdb_error_log: str | None = None
+    if degraded_candidate is not None:
+        kdb_error_count, kdb_error_log = read_kdb_elab_error_metadata(
+            degraded_candidate
+        )
+
+    # Preserve the artifact facts while retaining the old all-or-nothing
+    # selection policy when the escape hatch is explicitly disabled.
+    npi_selection_reason: str | None = None
+    if degraded_candidate is not None:
+        from config import NPI_ALLOW_DEGRADED_KDB  # noqa: PLC0415
+
+        if not NPI_ALLOW_DEGRADED_KDB:
+            kdb_path = None
+            kdb_flow = "none"
+            npi_selection_reason = "npi_degraded_kdb_disabled"
 
     verdi_home = os.environ.get("VERDI_HOME")
     license_env = (
@@ -78,11 +129,29 @@ def probe_verdi_backend(
         or os.environ.get("LM_LICENSE_FILE")
     )
 
-    if kdb_path is not None:
+    if kdb_path is not None and kdb_validation_status == "elaboration_error":
+        count_note = (
+            f" ({kdb_error_count} elaboration error(s))"
+            if kdb_error_count is not None
+            else ""
+        )
+        kdb_hint = (
+            f"Verdi KDB found at {kdb_path}{count_note}; NPI will attempt a "
+            "degraded partial-netlist load. Positive driver/load/path facts remain "
+            "usable, while incomplete or negative queries fall through to Source "
+            "Graph and Legacy Static."
+        )
+    elif kdb_path is not None:
         kdb_hint = (
             f"Verdi KDB found at {kdb_path}; NPI backend active — preferred for "
             f"cross-hierarchy driver/load tracing (uses fan-in on the elaborated "
             f"netlist). Static source-trace serves as fallback when NPI cannot load."
+        )
+    elif kdb_validation_status == "elaboration_error":
+        kdb_hint = (
+            "Verdi KDB has an elaboration-error marker, but degraded-KDB NPI use "
+            "is disabled by TRACEWEAVE_NPI_ALLOW_DEGRADED_KDB. TraceWeave will "
+            "use Source Graph meanwhile."
         )
     else:
         kdb_hint = _build_kdb_hint(simulator, compile_result, verdi_home, license_env)
@@ -93,7 +162,16 @@ def probe_verdi_backend(
         "parser_match": "approximate",
         "kdb_path": kdb_path,
         "kdb_flow": kdb_flow,
+        "kdb_validation_status": kdb_validation_status,
+        "kdb_degraded": False,
+        "kdb_error_count": kdb_error_count,
+        "kdb_error_log": kdb_error_log,
         "kdb_hint": kdb_hint,
+        **(
+            {"_npi_selection_reason": npi_selection_reason}
+            if npi_selection_reason is not None
+            else {}
+        ),
     }
 
 
@@ -118,7 +196,7 @@ def _probe_vcs_kdb(case_dir: str | None) -> tuple[str | None, str]:
     if case_dir is None:
         return None, "none"
     two_step = os.path.join(case_dir, "simv.daidir", _KDB_DIRNAME)
-    if os.path.isdir(two_step):
+    if os.path.isdir(two_step) and _elab_kdb_is_usable(two_step):
         return two_step, "vcs_two_step"
 
     setup_path = os.path.join(case_dir, _SETUP_FILENAME)
@@ -127,14 +205,17 @@ def _probe_vcs_kdb(case_dir: str | None) -> tuple[str | None, str]:
         candidate = _find_libpp_under(work_dir)
         if candidate:
             return candidate, "vcs_three_step"
+    if os.path.isdir(two_step):
+        return two_step, "vcs_two_step"
     return None, "none"
 
 
 def _probe_vericom_kdb(case_dir: str | None) -> tuple[str | None, str]:
     """Prefer an *elaborated* KDB (``kdb.elab++``) over source-only
-    ``*.lib++``. NPI's ``-simflow -dbdir`` needs the elaborated DB to
-    answer driver/load queries; passing a plain ``work.lib++`` loads
-    without error but every ``get_net`` resolves to None.
+    ``*.lib++``. NPI needs the elaborated DB to answer driver/load queries;
+    passing a plain ``work.lib++`` loads without error but every ``get_net``
+    resolves to None.  The probe reports the artifact path; the NPI loader
+    converts a trailing ``kdb.elab++`` to its containing simflow ``-dbdir``.
     """
     if case_dir is None:
         return None, "none"
@@ -144,6 +225,14 @@ def _probe_vericom_kdb(case_dir: str | None) -> tuple[str | None, str]:
         if not root:
             continue
         elab = _find_elab_kdb_under(root)
+        if elab:
+            return elab, "vericom_standalone"
+    # A partial elaborated netlist is more useful to NPI than a source-only
+    # lib++ database, so retain it as the second choice after a clean KDB.
+    for root in (work_dir, case_dir):
+        if not root:
+            continue
+        elab = _find_degraded_elab_kdb_under(root)
         if elab:
             return elab, "vericom_standalone"
     for root in (work_dir, case_dir):
@@ -187,6 +276,43 @@ def _probe_traceweave_cached_kdb(
     return str(candidate) if candidate.is_dir() else None
 
 
+def _elab_kdb_is_usable(path: str) -> bool:
+    return not _elab_kdb_has_errors(path)
+
+
+def _elab_kdb_has_errors(path: str) -> bool:
+    return os.path.isfile(os.path.join(path, _KDB_ELAB_ERROR_MARKER))
+
+
+def kdb_has_elaboration_errors(path: str) -> bool:
+    """Public artifact-fact helper shared by local and LSF NPI paths."""
+
+    return _elab_kdb_has_errors(path)
+
+
+def _elab_kdb_candidates(directory: str | None) -> list[str]:
+    """Return only the bounded direct/one-level elaborated-KDB candidates."""
+
+    if not directory or not os.path.isdir(directory):
+        return []
+    candidates = [os.path.join(directory, _KDB_DIRNAME)]
+    try:
+        entries = os.listdir(directory)
+    except OSError:
+        return candidates
+    candidates.extend(
+        os.path.join(directory, entry, _KDB_DIRNAME) for entry in entries
+    )
+    return candidates
+
+
+def _failed_elab_kdb_under(directory: str | None) -> bool:
+    return any(
+        os.path.isdir(candidate) and not _elab_kdb_is_usable(candidate)
+        for candidate in _elab_kdb_candidates(directory)
+    )
+
+
 def _find_elab_kdb_under(directory: str) -> str | None:
     """Locate an ``kdb.elab++`` directory under ``directory``.
 
@@ -194,20 +320,70 @@ def _find_elab_kdb_under(directory: str) -> str | None:
     that emit the elab DB next to (or inside) the case dir are both
     picked up.
     """
-    if not os.path.isdir(directory):
-        return None
-    direct = os.path.join(directory, _KDB_DIRNAME)
-    if os.path.isdir(direct):
-        return direct
-    try:
-        entries = os.listdir(directory)
-    except OSError:
-        return None
-    for entry in entries:
-        nested = os.path.join(directory, entry, _KDB_DIRNAME)
-        if os.path.isdir(nested):
-            return nested
+    for candidate in _elab_kdb_candidates(directory):
+        if os.path.isdir(candidate) and _elab_kdb_is_usable(candidate):
+            return candidate
     return None
+
+
+def _find_degraded_elab_kdb_under(directory: str) -> str | None:
+    """Locate the first bounded elaborated KDB carrying an error marker."""
+
+    for candidate in _elab_kdb_candidates(directory):
+        if os.path.isdir(candidate) and _elab_kdb_has_errors(candidate):
+            return candidate
+    return None
+
+
+def read_kdb_elab_error_metadata(
+    kdb_path: str,
+) -> tuple[int | None, str | None]:
+    """Return bounded diagnostic metadata for an error-marked KDB.
+
+    The marker/log format is owned by Verdi and has varied across releases.
+    This helper therefore never raises and never participates in KDB
+    admission: malformed, missing, or oversized diagnostics simply return
+    ``(None, None)``.
+    """
+
+    marker_path = os.path.join(kdb_path, _KDB_ELAB_ERROR_MARKER)
+    try:
+        marker_text = _read_bounded_text(marker_path, _MAX_KDB_MARKER_BYTES)
+        marker_line = next(
+            (line.strip() for line in marker_text.splitlines() if line.strip()),
+            "",
+        )
+        if not marker_line or "\x00" in marker_line:
+            return None, None
+        marker_line = marker_line.strip('"\'')
+        log_path = (
+            marker_line
+            if os.path.isabs(marker_line)
+            else os.path.normpath(os.path.join(kdb_path, marker_line))
+        )
+        log_text = _read_bounded_text(
+            log_path,
+            _MAX_KDB_ERROR_LOG_BYTES,
+            tail=True,
+        )
+        matches = list(_ELAB_ERROR_COUNT_RE.finditer(log_text))
+        count = int(matches[-1].group(1)) if matches else None
+        return count, os.path.abspath(log_path)
+    except (OSError, UnicodeError, ValueError):
+        return None, None
+
+
+def _read_bounded_text(path: str, max_bytes: int, *, tail: bool = False) -> str:
+    size = os.path.getsize(path)
+    if size < 0:
+        raise OSError("invalid file size")
+    with open(path, "rb") as stream:
+        if tail and size > max_bytes:
+            stream.seek(size - max_bytes)
+        data = stream.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        data = data[-max_bytes:] if tail else data[:max_bytes]
+    return data.decode("utf-8", errors="replace")
 
 
 def _read_synopsys_sim_setup(path: str, case_dir: str) -> str | None:

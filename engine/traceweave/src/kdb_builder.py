@@ -17,12 +17,15 @@ project-specific filenames, paths, or defines are baked in.
 
 Output layout under ``<cache_root>/kdb/<hash>/``:
 
-    kdb.elab++/        — what NPI consumes (-simflow -dbdir)
+    kdb.elab++/        — elaborated KDB artifact discovered by the probe
     work.lib++/        — vericom output
     build.sh           — runnable reproducer (regenerated every build)
     vericom.log        — captured stdout/stderr
     elabcom.log        — captured stdout/stderr
     state.json         — inputs, status, timestamps
+
+The NPI loader passes this directory's parent as ``-simflow -dbdir``; the
+artifact path itself remains the cache/probe identity.
 
 On rebuild the directory is replaced atomically (build in tmp dir, rename
 on success) so a stale cache never coexists with a partial new build.
@@ -45,6 +48,7 @@ from config import (
     KDB_CACHE_SUBDIR,
     TRACEWEAVE_CACHE_ROOT,
 )
+from .hdl_suffixes import is_frontend_hdl_path
 
 
 _KDB_ELAB_DIRNAME = "kdb.elab++"
@@ -81,6 +85,21 @@ def build_kdb(
     and log paths. Never raises for "command failed"; failures are
     surfaced in the dict so MCP callers can degrade gracefully.
     """
+    inputs = _extract_build_inputs(compile_result, top_hint=top_hint)
+    if "error" in inputs:
+        return _result_failed(cache_dir=None, reason=inputs["error"], phase="precheck")
+
+    root = Path(cache_root) if cache_root else TRACEWEAVE_CACHE_ROOT
+    cache_dir = root / KDB_CACHE_SUBDIR / inputs["hash"]
+    kdb_path = cache_dir / _KDB_ELAB_DIRNAME
+
+    if not force_rebuild and _cache_valid(cache_dir, kdb_path):
+        return _cached_result(cache_dir, kdb_path, inputs)
+
+    # A cache hit above is a pure filesystem lookup and needs neither a Verdi
+    # installation nor a license.  Only validate tool availability when an
+    # actual build is required; this also lets an LSF-configured parent reuse a
+    # shared KDB without probing login-node tool paths.
     verdi_home = verdi_home or os.environ.get("VERDI_HOME")
     if not verdi_home:
         return _result_failed(
@@ -98,27 +117,6 @@ def build_kdb(
                 phase="precheck",
             )
 
-    inputs = _extract_build_inputs(compile_result, top_hint=top_hint)
-    if "error" in inputs:
-        return _result_failed(cache_dir=None, reason=inputs["error"], phase="precheck")
-
-    root = Path(cache_root) if cache_root else TRACEWEAVE_CACHE_ROOT
-    cache_dir = root / KDB_CACHE_SUBDIR / inputs["hash"]
-    kdb_path = cache_dir / _KDB_ELAB_DIRNAME
-
-    if not force_rebuild and _cache_valid(cache_dir, kdb_path):
-        return {
-            "status": "cached",
-            "kdb_path": str(kdb_path),
-            "cache_dir": str(cache_dir),
-            "build_script_path": str(cache_dir / "build.sh"),
-            "vericom_log": str(cache_dir / "vericom.log"),
-            "elabcom_log": str(cache_dir / "elabcom.log"),
-            "top": inputs["top"],
-            "hash": inputs["hash"],
-            "rebuilt": False,
-        }
-
     # Build under a tmp dir so a failure leaves the existing cache (if
     # any) intact. Use the same parent so the final move is rename(2).
     cache_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -128,7 +126,7 @@ def build_kdb(
     tmp_dir.mkdir(parents=True, exist_ok=False)
 
     try:
-        build_script = _write_build_script(
+        _write_build_script(
             tmp_dir,
             verdi_home=verdi_home,
             inputs=inputs,
@@ -217,6 +215,31 @@ def build_kdb(
         raise
 
 
+def get_cached_kdb_result(
+    compile_result: dict[str, Any],
+    *,
+    cache_root: Path | str | None = None,
+    top_hint: str | None = None,
+) -> dict[str, Any] | None:
+    """Return an exact valid cache hit without invoking any Verdi executable.
+
+    The LSF routing layer uses this on the submission host so a no-op cache hit
+    does not consume a scheduler slot.  ``None`` means either that the build
+    inputs are incomplete or that the exact cache entry is absent/invalid; the
+    real build path remains responsible for its detailed precheck result.
+    """
+
+    inputs = _extract_build_inputs(compile_result, top_hint=top_hint)
+    if "error" in inputs:
+        return None
+    root = Path(cache_root) if cache_root else TRACEWEAVE_CACHE_ROOT
+    cache_dir = root / KDB_CACHE_SUBDIR / inputs["hash"]
+    kdb_path = cache_dir / _KDB_ELAB_DIRNAME
+    if not _cache_valid(cache_dir, kdb_path):
+        return None
+    return _cached_result(cache_dir, kdb_path, inputs)
+
+
 # ---------------------------------------------------------------------------
 # Input extraction (generic, no project hardcoding)
 # ---------------------------------------------------------------------------
@@ -295,7 +318,7 @@ def _extract_build_inputs(
 
 
 def _is_source_file(path: str) -> bool:
-    return path.lower().endswith((".v", ".sv", ".vh", ".svh"))
+    return is_frontend_hdl_path(path)
 
 
 def _pick_top(compile_result: dict[str, Any]) -> str | None:
@@ -511,6 +534,24 @@ def _cache_valid(cache_dir: Path, kdb_path: Path) -> bool:
     except (OSError, json.JSONDecodeError):
         return False
     return state.get("status") == "ok"
+
+
+def _cached_result(
+    cache_dir: Path,
+    kdb_path: Path,
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "status": "cached",
+        "kdb_path": str(kdb_path),
+        "cache_dir": str(cache_dir),
+        "build_script_path": str(cache_dir / "build.sh"),
+        "vericom_log": str(cache_dir / "vericom.log"),
+        "elabcom_log": str(cache_dir / "elabcom.log"),
+        "top": inputs["top"],
+        "hash": inputs["hash"],
+        "rebuilt": False,
+    }
 
 
 def _serialisable_inputs(inputs: dict[str, Any]) -> dict[str, Any]:

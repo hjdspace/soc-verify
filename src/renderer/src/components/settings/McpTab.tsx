@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, FileText, Globe, Loader2, Plus, Power, RefreshCw, Save, Terminal, Trash2, Wrench } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Copy, FileText, Globe, Loader2, Plus, Power, RefreshCw, Save, Terminal, Trash2, Wrench } from 'lucide-react';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { cn } from '@renderer/lib/utils';
@@ -7,6 +8,7 @@ import type { McpConfigFile, McpServerConfig, McpTransportType, McpServerInfo } 
 
 /**
  * MCP 配置 Tab — 管理 MCP 服务器列表（增删改 + 启用/禁用）+ JSON 模式 + 重载。
+ * 内置 TraceWeave 服务器附结构化诊断卡（Python/pip 依赖为用户机前置，ADR 0020）。
  */
 
 // ── Constants ─────────────────────────────────────────────
@@ -307,6 +309,10 @@ export function McpTab() {
         </button>
       </div>
 
+      {/* TraceWeave built-in diagnostic (user-level: the built-in server
+          lives in ~/.omp/mcp.json; python/pip deps are user provisions) */}
+      {mcpEditScope === 'user' && <TraceweaveDiagnosticCard />}
+
       {/* Server List */}
       <div>
         <div className="mb-1.5 flex items-center justify-between">
@@ -536,6 +542,155 @@ export function McpTab() {
 }
 
 // ── Sub-components ────────────────────────────────────────
+
+/** One labeled row in the TraceWeave diagnostic card. */
+function DiagnosticRow({
+  label,
+  ok,
+  children,
+}: {
+  label: string;
+  /** true → green dot, false → red dot, null → neutral dot */
+  ok: boolean | null;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex items-start gap-1.5">
+      <div
+        className={cn(
+          'mt-1 h-1.5 w-1.5 shrink-0 rounded-full',
+          ok === true ? 'bg-green-500' : ok === false ? 'bg-red-500' : 'bg-muted-foreground/40',
+        )}
+      />
+      <span className="w-16 shrink-0 text-[10px] text-muted-foreground">{label}</span>
+      <div className="min-w-0 flex-1 text-[10px] leading-tight">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * TraceWeave 内置 MCP 就绪诊断卡 — Python / pip 依赖 / FSDB 能力三级状态。
+ * 依赖缺失时给出一键复制的安装命令（用户机前置，ADR 0020）。
+ */
+function TraceweaveDiagnosticCard() {
+  const diagnostic = useSettingsStore((s) => s.traceweaveDiagnostic);
+  const loading = useSettingsStore((s) => s.traceweaveDiagnosticLoading);
+  const loadTraceweaveDiagnostic = useSettingsStore((s) => s.loadTraceweaveDiagnostic);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    void loadTraceweaveDiagnostic();
+  }, [loadTraceweaveDiagnostic]);
+
+  const copyInstallCommand = async () => {
+    if (!diagnostic?.installCommand) return;
+    try {
+      await navigator.clipboard.writeText(diagnostic.installCommand);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard unavailable — command is still visible for manual copy
+    }
+  };
+
+  if (loading && !diagnostic) {
+    return (
+      <div className="flex items-center gap-1.5 rounded-md border border-border/50 bg-secondary/20 px-2 py-1.5 text-[10px] text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        正在诊断内置 TraceWeave…
+      </div>
+    );
+  }
+  if (!diagnostic || !diagnostic.sourceDirFound) {
+    return null;
+  }
+
+  const d = diagnostic;
+  const depsLabel =
+    d.depsInstalled === true
+      ? 'mcp / pyyaml 已安装'
+      : d.depsInstalled === false
+        ? d.missingDeps.length > 0
+          ? `缺少依赖：${d.missingDeps.join(', ')}`
+          : '依赖导入失败（mcp / pyyaml）'
+        : '未知';
+
+  return (
+    <div className="rounded-md border border-border/50 bg-secondary/20 p-2 space-y-1.5">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] font-semibold uppercase text-muted-foreground">内置 TraceWeave</span>
+          <span
+            className={cn(
+              'rounded px-1 py-0.5 text-[9px] font-medium',
+              d.ready ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-yellow-500/10 text-yellow-600 dark:text-yellow-400',
+            )}
+          >
+            {d.ready ? '就绪' : '未就绪'}
+          </span>
+        </div>
+        <button
+          onClick={() => void loadTraceweaveDiagnostic()}
+          className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+          title="重新诊断"
+        >
+          <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
+        </button>
+      </div>
+
+      <DiagnosticRow label="Python" ok={d.pythonFound ? (d.pythonVersionOk === false ? false : true) : false}>
+        {!d.pythonFound ? (
+          <span className="text-destructive">未找到（需要 3.11+ 并加入 PATH）</span>
+        ) : d.pythonVersionOk === false ? (
+          <span className="text-destructive">版本过低：{d.pythonVersion ?? '未知'}（需要 3.11+）</span>
+        ) : (
+          <span className="truncate" title={d.pythonPath ?? undefined}>
+            {d.pythonVersion ?? '未知版本'}
+            {d.pythonPath ? ` · ${d.pythonPath}` : ''}
+          </span>
+        )}
+      </DiagnosticRow>
+
+      <DiagnosticRow label="依赖" ok={d.depsInstalled === null ? null : d.depsInstalled}>
+        <div className="space-y-1">
+          <div className={cn(d.depsInstalled === false && 'text-destructive')}>{depsLabel}</div>
+          {d.depsInstalled === false && d.installCommand && (
+            <div className="flex items-center gap-1 rounded border border-border/50 bg-background/60 px-1.5 py-1">
+              <code className="min-w-0 flex-1 truncate font-mono text-[9px]" title={d.installCommand}>
+                {d.installCommand}
+              </code>
+              <button
+                onClick={() => void copyInstallCommand()}
+                className="flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-medium text-primary hover:bg-primary/10"
+                title="复制安装命令"
+              >
+                {copied ? <Check className="h-2.5 w-2.5" /> : <Copy className="h-2.5 w-2.5" />}
+                {copied ? '已复制' : '复制'}
+              </button>
+            </div>
+          )}
+        </div>
+      </DiagnosticRow>
+
+      <DiagnosticRow label="波形" ok={d.fsdbAvailable ? true : null}>
+        {d.fsdbAvailable ? (
+          <span className="text-green-600 dark:text-green-400">FSDB / VCD 波形解析可用</span>
+        ) : (
+          <span className="flex items-start gap-0.5 text-muted-foreground">
+            <AlertTriangle className="mt-0.5 h-2.5 w-2.5 shrink-0 text-yellow-500" />
+            <span>
+              VCD 可用；{d.fsdbBlockers.join('；')}
+            </span>
+          </span>
+        )}
+      </DiagnosticRow>
+
+      <div className="text-right text-[9px] text-muted-foreground/60" title={d.upstreamCommit}>
+        TraceWeave {d.version}
+      </div>
+    </div>
+  );
+}
 
 /** A single MCP server row with expandable tool list. */
 function McpServerRow({

@@ -27,7 +27,12 @@ import type { CaseStatsService } from '../case/case-stats-service';
 import { contextSettings } from './context-settings';
 import { toolSettings } from './tool-settings';
 import { ensureBuiltinMcpServers } from '../mcp/mcp-config';
-import { ensureTraceweaveDefaultMcp } from '../mcp/traceweave-paths';
+import {
+  describeTraceweaveUnavailability,
+  diagnoseTraceweave,
+  ensureTraceweaveDefaultMcp,
+} from '../mcp/traceweave-paths';
+import { notificationManager } from '../notifications/notification-manager';
 import type { AskAnswer, AskQuestion } from '@shared/ask-types';
 
 const MAX_CONCURRENT_SESSIONS = 10;
@@ -40,6 +45,48 @@ const SILENT_EVENT_TYPES = new Set(['message_update', 'message_chunk', 'message_
 // Maximum length of content snippets printed to the terminal log. Full content
 // remains available via the 'sessionEvent' stream consumed by the renderer.
 const LOG_SNIPPET_LEN = 200;
+
+/** One-per-app-run guard for TraceWeave notification centre notices. */
+let traceweaveNoticeSent = false;
+
+/**
+ * Push a TraceWeave notice to the notification centre at most once per app
+ * run. Python/pip deps are user-machine prerequisites (ADR 0020), so a
+ * broken environment is a user-actionable condition, not a silent one.
+ */
+function pushTraceweaveNoticeOnce(title: string, detail: string): void {
+  if (traceweaveNoticeSent) return;
+  traceweaveNoticeSent = true;
+  notificationManager
+    .add({ type: 'failure', title, detail })
+    .catch((err: unknown) => console.warn(`[traceweave] notification failed: ${err instanceof Error ? err.message : String(err)}`));
+}
+
+/**
+ * Diagnose the built-in TraceWeave MCP server (fire-and-forget); on the first
+ * not-ready result of the app run, push a notification centre notice pointing
+ * at the settings MCP tab. Never blocks session creation.
+ */
+async function notifyTraceweaveNotReadyOnce(): Promise<void> {
+  if (traceweaveNoticeSent) return;
+  try {
+    const diag = await diagnoseTraceweave();
+    if (diag.ready) return;
+    const problems: string[] = [];
+    if (!diag.pythonFound) problems.push('未找到 Python（需要 3.11+ 并加入 PATH）');
+    else if (diag.pythonVersionOk === false) problems.push(`Python 版本过低（${diag.pythonVersion ?? '未知'}，需要 3.11+）`);
+    else if (diag.depsInstalled === false) {
+      problems.push(`缺少 pip 依赖${diag.missingDeps.length > 0 ? `：${diag.missingDeps.join(', ')}` : ''}`);
+    }
+    if (!diag.sourceDirFound) problems.push('内置 TraceWeave 源码缺失');
+    pushTraceweaveNoticeOnce(
+      'TraceWeave 仿真调试工具未就绪',
+      `${problems.join('；')}。可在 设置 → MCP 查看诊断并复制修复命令${diag.installCommand ? `：${diag.installCommand}` : ''}。`,
+    );
+  } catch (err) {
+    console.warn(`[traceweave] not-ready diagnostic failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
 
 /**
  * Build a single-line debug summary for an agent event, extracting the most
@@ -526,13 +573,28 @@ export class SessionManagerImpl extends EventEmitter {
     // user-level MCP config so the omp engine discovers them on init.
     // This is idempotent: if the server is already in the config, it is
     // not overridden. If TraceWeave or Python is unavailable, it is
-    // silently skipped (graceful degradation).
+    // silently skipped (graceful degradation) with a one-time notification
+    // centre notice per app run.
     try {
       const traceweave = ensureTraceweaveDefaultMcp();
       if (traceweave) {
         const modified = await ensureBuiltinMcpServers([traceweave]);
         if (modified) {
           console.log(`[agent:session:${sessionId}] registered built-in MCP server: ${traceweave.name}`);
+        }
+        // Registration can succeed while user-machine prerequisites (pip
+        // deps, python version) are broken — the server would spawn and die.
+        // Diagnose asynchronously and notify once; never blocks the session.
+        void notifyTraceweaveNotReadyOnce();
+      } else {
+        // Skipped registration: source missing (nothing to report) or no
+        // Python on the user machine (user-actionable → one-time notice).
+        const unavailability = describeTraceweaveUnavailability();
+        if (unavailability) {
+          pushTraceweaveNoticeOnce(
+            'TraceWeave 仿真调试工具未启用',
+            `${unavailability} 可在 设置 → MCP 查看诊断。`,
+          );
         }
       }
     } catch (err) {

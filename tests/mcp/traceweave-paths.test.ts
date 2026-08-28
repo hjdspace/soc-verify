@@ -6,30 +6,68 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import type { ChildProcess } from 'node:child_process';
 
 // Mock node:fs
 vi.mock('node:fs', () => ({
   existsSync: vi.fn(),
+  readFileSync: vi.fn(),
 }));
 
 // Mock node:child_process
 vi.mock('node:child_process', () => ({
   execFileSync: vi.fn(),
+  execFile: vi.fn(),
 }));
 
-import { existsSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { execFileSync, execFile } from 'node:child_process';
 import {
   resolveTraceweaveDir,
   resolvePythonBin,
   isTraceweaveAvailable,
   buildTraceweaveMcpConfig,
   ensureTraceweaveDefaultMcp,
+  diagnoseTraceweave,
+  getFsdbBlockers,
+  describeTraceweaveUnavailability,
   TRACEWEAVE_SERVER_NAME,
+  TRACEWEAVE_VERSION,
+  TRACEWEAVE_UPSTREAM_COMMIT,
 } from '../../src/main/mcp/traceweave-paths';
 
 const mockExistsSync = vi.mocked(existsSync);
+const mockReadFileSync = vi.mocked(readFileSync);
 const mockExecFileSync = vi.mocked(execFileSync);
+const mockExecFile = vi.mocked(execFile);
+
+/** Make the mocked existsSync report a TraceWeave source tree at server.py. */
+function mockSourceTreeFound(): void {
+  mockExistsSync.mockImplementation((p) => {
+    const s = String(p).replace(/\\/g, '/');
+    return s.includes('traceweave') && s.includes('server.py');
+  });
+}
+
+type ExecFileCallback = (err: Error | null, stdout: string, stderr: string) => void;
+
+/** Configure the mocked execFile to answer --version and -c import probes. */
+function mockPythonProbes(version: { stdout?: string; stderr?: string } | null, depsError: string | null): void {
+  mockExecFile.mockImplementation((_cmd, args, _opts, cb) => {
+    const callback = cb as ExecFileCallback;
+    const argv = args as string[];
+    if (argv[0] === '--version') {
+      if (version) callback(null, version.stdout ?? '', version.stderr ?? '');
+      else callback(new Error('spawn failed'), '', '');
+    } else if (argv[0] === '-c') {
+      if (depsError !== null) callback(new Error('exit 1'), '', depsError);
+      else callback(null, '', '');
+    } else {
+      callback(new Error(`unexpected args: ${argv.join(' ')}`), '', '');
+    }
+    return undefined as unknown as ChildProcess;
+  });
+}
 
 describe('traceweave-paths - resolveTraceweaveDir', () => {
   let originalResourcesPath: string | undefined;
@@ -209,9 +247,9 @@ describe('traceweave-paths - buildTraceweaveMcpConfig', () => {
     expect(config!.env).toBeDefined();
     // PATH is always included (TraceWeave needs it to find EDA tools)
     expect('PATH' in config!.env!).toBe(true);
-    // TRACEWEAVE_HOME is always set to the source directory
-    expect('TRACEWEAVE_HOME' in config!.env!).toBe(true);
-    expect(config!.env!.TRACEWEAVE_HOME).toContain('traceweave');
+    // TraceWeave v2.0 self-locates via __file__ (REPO_ROOT in config.py);
+    // no TRACEWEAVE_HOME env var is set anymore
+    expect('TRACEWEAVE_HOME' in config!.env!).toBe(false);
     expect(config!.enabled).toBe(true);
     expect(config!.type).toBe('stdio');
   });
@@ -421,5 +459,226 @@ describe('traceweave-paths - resolvePythonBin (Windows Store stub filtering)', (
       // On Unix, no stub filtering — returns the path as-is
       expect(resolvePythonBin()).not.toBeNull();
     }
+  });
+});
+
+describe('traceweave-paths - diagnoseTraceweave', () => {
+  let originalResourcesPath: string | undefined;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExistsSync.mockReturnValue(false);
+    mockReadFileSync.mockReturnValue('');
+    mockExecFileSync.mockReturnValue('/usr/bin/python3.12\n');
+    originalResourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  });
+
+  afterEach(() => {
+    (process as unknown as { resourcesPath?: string }).resourcesPath = originalResourcesPath;
+  });
+
+  it('reports ready when source, python >= 3.11 and deps are all present', async () => {
+    mockSourceTreeFound();
+    mockPythonProbes({ stdout: 'Python 3.12.4\n' }, null);
+
+    const diag = await diagnoseTraceweave();
+    expect(diag.ready).toBe(true);
+    expect(diag.sourceDirFound).toBe(true);
+    expect(diag.pythonFound).toBe(true);
+    expect(diag.pythonVersion).toBe('3.12.4');
+    expect(diag.pythonVersionOk).toBe(true);
+    expect(diag.depsInstalled).toBe(true);
+    expect(diag.missingDeps).toEqual([]);
+    expect(diag.installCommand).toContain('pip install');
+  });
+
+  it('reads the python version from stderr when stdout is empty', async () => {
+    mockSourceTreeFound();
+    mockPythonProbes({ stderr: 'Python 3.11.9\n' }, null);
+
+    const diag = await diagnoseTraceweave();
+    expect(diag.pythonVersion).toBe('3.11.9');
+    expect(diag.pythonVersionOk).toBe(true);
+  });
+
+  it('reports too-old python and does not claim readiness', async () => {
+    mockSourceTreeFound();
+    mockPythonProbes({ stdout: 'Python 3.8.10\n' }, null);
+
+    const diag = await diagnoseTraceweave();
+    expect(diag.pythonVersionOk).toBe(false);
+    expect(diag.ready).toBe(false);
+    expect(diag.installCommand).not.toBeNull();
+  });
+
+  it('reports missing deps with parsed module names and a pinned install command', async () => {
+    mockSourceTreeFound();
+    mockExecFile.mockImplementation((_cmd, args, _opts, cb) => {
+      const callback = cb as ExecFileCallback;
+      const argv = args as string[];
+      if (argv[0] === '--version') callback(null, 'Python 3.12.1\n', '');
+      else if (argv[0] === '-c') callback(new Error('exit 1'), '', "Traceback (most recent call last):\nModuleNotFoundError: No module named 'mcp'");
+      else callback(new Error('unexpected'), '', '');
+      return undefined as unknown as ChildProcess;
+    });
+    // requirements pin: existsSync matches the requirements file, readFileSync returns upstream content
+    mockExistsSync.mockImplementation((p) => {
+      const s = String(p).replace(/\\/g, '/');
+      return s.includes('traceweave') && (s.includes('server.py') || s.includes('requirements-source-graph.txt'));
+    });
+    mockReadFileSync.mockReturnValue('mcp==1.27.0\nPyYAML\n');
+
+    const diag = await diagnoseTraceweave();
+    expect(diag.ready).toBe(false);
+    expect(diag.depsInstalled).toBe(false);
+    expect(diag.missingDeps).toEqual(['mcp']);
+    expect(diag.installCommand).toContain('mcp==1.27.0');
+    expect(diag.installCommand).toContain('pyyaml');
+  });
+
+  it('falls back to an unpinned install command when requirements are unreadable', async () => {
+    mockSourceTreeFound();
+    mockPythonProbes({ stdout: 'Python 3.12.4\n' }, "ModuleNotFoundError: No module named 'yaml'");
+
+    const diag = await diagnoseTraceweave();
+    expect(diag.missingDeps).toEqual(['yaml']);
+    expect(diag.installCommand).toContain('pip install mcp pyyaml');
+  });
+
+  it('reports python missing with null-dependent fields', async () => {
+    mockSourceTreeFound();
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error('not found');
+    });
+    mockExecFile.mockImplementation((_cmd, args, _opts, cb) => {
+      (cb as ExecFileCallback)(new Error('should not be called'), '', '');
+      return undefined as unknown as ChildProcess;
+    });
+
+    const diag = await diagnoseTraceweave();
+    expect(diag.ready).toBe(false);
+    expect(diag.pythonFound).toBe(false);
+    expect(diag.pythonVersionOk).toBeNull();
+    expect(diag.depsInstalled).toBeNull();
+    expect(diag.installCommand).toBeNull();
+  });
+
+  it('always reports the vendored version and upstream commit', async () => {
+    mockSourceTreeFound();
+    mockPythonProbes({ stdout: 'Python 3.12.4\n' }, null);
+
+    const diag = await diagnoseTraceweave();
+    expect(diag.version).toBe(TRACEWEAVE_VERSION);
+    expect(diag.version).toBe('v2.0.0');
+    expect(diag.upstreamCommit).toBe(TRACEWEAVE_UPSTREAM_COMMIT);
+    expect(TRACEWEAVE_UPSTREAM_COMMIT).toMatch(/^[0-9a-f]{40}$/);
+  });
+});
+
+describe('traceweave-paths - getFsdbBlockers', () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+  const originalVerdiHome = process.env.VERDI_HOME;
+  const originalNovasHome = process.env.NOVAS_HOME;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExistsSync.mockReturnValue(false);
+    delete process.env.VERDI_HOME;
+    delete process.env.NOVAS_HOME;
+  });
+
+  afterEach(() => {
+    if (originalPlatform) Object.defineProperty(process, 'platform', originalPlatform);
+    if (originalVerdiHome === undefined) delete process.env.VERDI_HOME;
+    else process.env.VERDI_HOME = originalVerdiHome;
+    if (originalNovasHome === undefined) delete process.env.NOVAS_HOME;
+    else process.env.NOVAS_HOME = originalNovasHome;
+  });
+
+  function setPlatform(platform: NodeJS.Platform): void {
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+  }
+
+  it('reports the platform blocker on non-Linux', () => {
+    setPlatform('win32');
+    const blockers = getFsdbBlockers('/fake/traceweave');
+    expect(blockers.length).toBe(1);
+    expect(blockers[0]).toContain('Linux');
+  });
+
+  it('reports the wrapper blocker on Linux when the .so is missing', () => {
+    setPlatform('linux');
+    mockExistsSync.mockReturnValue(false);
+
+    const blockers = getFsdbBlockers('/fake/traceweave');
+    expect(blockers.length).toBe(1);
+    expect(blockers[0]).toContain('libfsdb_wrapper.so');
+  });
+
+  it('reports the VERDI_HOME blocker on Linux when wrapper exists but Verdi is absent', () => {
+    setPlatform('linux');
+    mockExistsSync.mockImplementation((p) => String(p).endsWith('libfsdb_wrapper.so'));
+
+    const blockers = getFsdbBlockers('/fake/traceweave');
+    expect(blockers.length).toBe(1);
+    expect(blockers[0]).toContain('VERDI_HOME');
+  });
+
+  it('reports no blockers on Linux with wrapper and VERDI_HOME', () => {
+    setPlatform('linux');
+    mockExistsSync.mockImplementation((p) => String(p).endsWith('libfsdb_wrapper.so'));
+    process.env.VERDI_HOME = '/opt/verdi';
+
+    expect(getFsdbBlockers('/fake/traceweave')).toEqual([]);
+  });
+
+  it('accepts NOVAS_HOME as the Verdi home alias', () => {
+    setPlatform('linux');
+    mockExistsSync.mockImplementation((p) => String(p).endsWith('libfsdb_wrapper.so'));
+    delete process.env.VERDI_HOME;
+    process.env.NOVAS_HOME = '/opt/verdi';
+
+    expect(getFsdbBlockers('/fake/traceweave')).toEqual([]);
+  });
+
+  it('reports no blockers when the source dir is null but platform is non-Linux', () => {
+    setPlatform('darwin');
+    expect(getFsdbBlockers(null).length).toBe(1);
+  });
+});
+
+describe('traceweave-paths - describeTraceweaveUnavailability', () => {
+  let originalResourcesPath: string | undefined;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExistsSync.mockReturnValue(false);
+    originalResourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath;
+  });
+
+  afterEach(() => {
+    (process as unknown as { resourcesPath?: string }).resourcesPath = originalResourcesPath;
+  });
+
+  it('returns null when the source tree is not bundled', () => {
+    expect(describeTraceweaveUnavailability()).toBeNull();
+  });
+
+  it('returns a python-missing reason when source exists but python does not', () => {
+    mockSourceTreeFound();
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error('not found');
+    });
+
+    const reason = describeTraceweaveUnavailability();
+    expect(reason).toContain('Python');
+    expect(reason).toContain('3.11');
+  });
+
+  it('returns null when source and python are both present (registration would succeed)', () => {
+    mockSourceTreeFound();
+    mockExecFileSync.mockReturnValue('/usr/bin/python3.11\n');
+
+    expect(describeTraceweaveUnavailability()).toBeNull();
   });
 });

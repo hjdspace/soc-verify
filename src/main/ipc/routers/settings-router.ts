@@ -18,6 +18,7 @@ import { fetchOpenAICompatibleModels } from '../../agent/openai-compatible';
 import { sessionManager } from '../../agent/session-manager';
 import { listMcpServers, getMcpConfig, setMcpConfig } from '../../mcp/mcp-config';
 import { probeAllServers, probeMcpServer, clearProbeCache } from '../../mcp/mcp-probe';
+import { diagnoseTraceweave } from '../../mcp/traceweave-paths';
 import { getCombinedDefaultSystemPrompt } from '../../agent/default-system-prompt';
 import { loadTvConfig, saveTvConfig } from '../../timing-violation/tv-config';
 import { evictTvDb } from '../../timing-violation/db/tv-db-cache';
@@ -340,6 +341,10 @@ export const settingsRouter = t.router({
         });
       }
     }),
+
+  // TraceWeave 内置 MCP 就绪诊断（Python/pip 依赖由用户机器提供，ADR 0020）。
+  // 无需 projectId：诊断的是应用级内置服务器，而非某个项目的配置。
+  traceweaveDiagnostic: t.procedure.query(async () => diagnoseTraceweave()),
 
   listMcpServers: t.procedure
     .input((raw): { projectId: string; scope?: 'user' | 'project' } => {

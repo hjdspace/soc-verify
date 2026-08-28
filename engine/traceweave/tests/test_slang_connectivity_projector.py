@@ -1,0 +1,564 @@
+from __future__ import annotations
+
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from src.connectivity_ir import (
+    BindingStyle,
+    BindingSourceKind,
+    ConnectivityIR,
+    CoverageStatus,
+    SignalSelection,
+)
+from src.connectivity_query import (
+    ConnectivityQueryEngine,
+    PathQueryStatus,
+    QueryStatus,
+)
+from src.slang_connectivity_projector import (
+    ProjectionDiagnostic,
+    ProjectionExclusion,
+    ProjectionOptions,
+    SlangConnectivityProjector,
+    _BindingOperand,
+    _map_concat_to_target,
+    _parameterization,
+    _selected_bits,
+    normalize_source_path,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class _FakeSVInt:
+    def __init__(self, value: int, *, width: int = 32, signed: bool = False):
+        self._value = value & ((1 << width) - 1)
+        self.bitWidth = width
+        self.isSigned = signed
+
+    def __getitem__(self, index: int) -> int:
+        return (self._value >> index) & 1
+
+
+def _constant_expression(value: int, *, width: int = 32, signed: bool = False):
+    return SimpleNamespace(
+        constant=SimpleNamespace(value=_FakeSVInt(value, width=width, signed=signed))
+    )
+
+
+def _range_expression(left: int, right: int, *, kind: str = "Simple"):
+    return SimpleNamespace(
+        kind=SimpleNamespace(name="RangeSelect"),
+        left=_constant_expression(left),
+        right=_constant_expression(right),
+        selectionKind=SimpleNamespace(name=kind),
+    )
+
+
+def test_projector_import_does_not_import_optional_pyslang():
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; import src.slang_connectivity_projector; "
+                "assert 'pyslang' not in sys.modules"
+            ),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_selected_bits_bounds_parameter_underflow_before_materializing_range():
+    base_bits = (0,)
+
+    # Mirrors an inactive ``if (Offset > 1)`` generate branch when the active
+    # specialization has unsigned Offset=1: Offset-2 becomes 32'hffff_ffff.
+    underflow = _range_expression((1 << 32) - 1, 0)
+    assert _selected_bits(underflow, base_bits) == ()
+
+    oversized_indexed = _range_expression(0, (1 << 32) - 1, kind="IndexedUp")
+    assert _selected_bits(oversized_indexed, base_bits) == ()
+
+    descending = _range_expression(6, 3)
+    assert _selected_bits(descending, tuple(range(7, -1, -1))) == (6, 5, 4, 3)
+    ascending = _range_expression(2, 4)
+    assert _selected_bits(ascending, tuple(range(8))) == (2, 3, 4)
+    indexed = _range_expression(2, 3, kind="IndexedUp")
+    assert _selected_bits(indexed, tuple(range(7, -1, -1))) == (4, 3, 2)
+
+
+def test_projection_options_validate_diagnostic_receipt_and_focused_scope():
+    blocking = ProjectionDiagnostic(
+        code="ForceHierarchicalName",
+        severity="Error",
+        message="runtime force target is unresolved",
+    )
+
+    options = ProjectionOptions(
+        diagnostics=(blocking,),
+        diagnostic_total=29_416,
+        blocking_diagnostic_total=65,
+        focus_instance_paths=("tb.dut.u_core",),
+        assignment_instance_paths=("tb.dut.u_core",),
+    )
+
+    assert options.diagnostic_total == 29_416
+    assert options.blocking_diagnostic_total == 65
+
+    with pytest.raises(ValueError, match="smaller than supplied"):
+        ProjectionOptions(diagnostics=(blocking,), diagnostic_total=0)
+    with pytest.raises(ValueError, match="require an explicit focused"):
+        ProjectionOptions(assignment_instance_paths=("tb.dut.u_core",))
+
+
+def test_projection_exclusion_rejects_complete_impact():
+    with pytest.raises(ValueError, match="cannot be complete"):
+        ProjectionExclusion(
+            code="not_a_gap",
+            message="invalid complete exclusion",
+            impact=CoverageStatus.COMPLETE,
+        )
+
+
+def test_parameterization_handles_value_and_type_parameters_without_pyslang():
+    value_parameter = SimpleNamespace(name="WIDTH", isValue=True, value=16)
+    type_parameter = SimpleNamespace(
+        name="T",
+        isValue=False,
+        targetType=SimpleNamespace(type="bit[1:0]"),
+    )
+    instance = SimpleNamespace(
+        body=SimpleNamespace(parameters=(value_parameter, type_parameter))
+    )
+
+    assert _parameterization(instance) == (("WIDTH", "16"), ("T", "bit[1:0]"))
+
+
+@pytest.mark.parametrize(
+    "symbol_kind",
+    ["EnumValue", "Genvar", "Parameter", "Specparam", "TypeParameter"],
+)
+def test_elaboration_constants_are_not_runtime_signal_dependencies(symbol_kind):
+    packed_range = SimpleNamespace(width=32, left=31, right=0)
+    symbol = SimpleNamespace(
+        kind=SimpleNamespace(name=symbol_kind),
+        hierarchicalPath="tb.u_leaf.Width",
+        type=SimpleNamespace(getBitVectorRange=lambda: packed_range),
+    )
+    expression = SimpleNamespace(
+        kind=SimpleNamespace(name="NamedValue"),
+        symbol=symbol,
+    )
+    record = SimpleNamespace(path="tb.u_leaf")
+    projector = SlangConnectivityProjector(source_manager=object())
+
+    assert projector._template_selection(expression, record, {}) is None
+
+
+def test_concat_mapping_preserves_ordered_slice_bits():
+    sources = (
+        SignalSelection("upper", (7, 6, 5, 4), "top"),
+        SignalSelection("lower", (3, 2, 1, 0), "top"),
+    )
+    target = SignalSelection("data_i", tuple(range(7, -1, -1)), "top.u_leaf")
+
+    mappings = _map_concat_to_target(sources, target)
+
+    assert mappings is not None
+    assert mappings[0].target.bits == (7, 6, 5, 4)
+    assert mappings[1].target.bits == (3, 2, 1, 0)
+    assert _map_concat_to_target(sources, SignalSelection("short", (3, 2), "x")) is None
+
+
+def test_concat_mapping_partitions_constant_signal_and_unresolved_segments():
+    target = SignalSelection("data_i", tuple(range(31, -1, -1)), "top.u_leaf")
+    payload = SignalSelection("payload", tuple(range(23, -1, -1)), "top")
+
+    mappings = _map_concat_to_target(
+        (
+            _BindingOperand.constant(("0",) * 8),
+            _BindingOperand.signal(payload),
+        ),
+        target,
+    )
+
+    assert mappings is not None
+    assert [item.source_kind for item in mappings] == [
+        BindingSourceKind.CONSTANT,
+        BindingSourceKind.SIGNAL,
+    ]
+    assert mappings[0].target.bits == tuple(range(31, 23, -1))
+    assert mappings[0].constant_bits == ("0",) * 8
+    assert mappings[1].source == payload
+    assert mappings[1].target.bits == tuple(range(23, -1, -1))
+
+
+def test_real_frontend_projects_common_segmented_port_actuals():
+    pyslang = pytest.importorskip("pyslang")
+    source = """
+module leaf32(input logic [31:0] data_i); endmodule
+module leaf8(input logic [7:0] data_i); endmodule
+module top;
+  logic [23:0] payload;
+  logic [1:0] pair;
+  leaf32 u_concat(.data_i({8'h0, payload}));
+  leaf32 u_extend(.data_i(payload));
+  leaf8  u_trunc(.data_i(payload));
+  leaf8  u_repeat(.data_i({4{pair}}));
+endmodule
+"""
+    tree = pyslang.syntax.SyntaxTree.fromText(source)
+    compilation = pyslang.ast.Compilation()
+    compilation.addSyntaxTree(tree)
+    projection = SlangConnectivityProjector(
+        source_manager=tree.sourceManager,
+    ).project(compilation.getRoot())
+    by_instance = {binding.instance_path: binding for binding in projection.ir.bindings}
+
+    concat = by_instance["top.u_concat"].mappings
+    assert [mapping.source_kind for mapping in concat] == [
+        BindingSourceKind.CONSTANT,
+        BindingSourceKind.SIGNAL,
+    ]
+    assert concat[0].target.bits == tuple(range(31, 23, -1))
+    assert concat[1].source.path(include_bits=True) == "top.payload[23:0]"
+
+    extended = by_instance["top.u_extend"].mappings
+    assert [mapping.source_kind for mapping in extended] == [
+        BindingSourceKind.CONSTANT,
+        BindingSourceKind.SIGNAL,
+    ]
+    assert extended[0].constant_bits == ("0",) * 8
+    assert extended[1].source.bits == tuple(range(23, -1, -1))
+
+    truncated = by_instance["top.u_trunc"].mappings
+    assert len(truncated) == 1
+    assert truncated[0].source.bits == tuple(range(7, -1, -1))
+
+    repeated = by_instance["top.u_repeat"].mappings
+    assert len(repeated) == 4
+    assert all(mapping.source.bits == (1, 0) for mapping in repeated)
+    assert [mapping.target.bits for mapping in repeated] == [
+        (7, 6),
+        (5, 4),
+        (3, 2),
+        (1, 0),
+    ]
+
+
+def test_real_frontend_binding_evidence_points_to_actual_expression():
+    pyslang = pytest.importorskip("pyslang")
+    source = """\
+module leaf(input logic [31:0] data_i); endmodule
+module top;
+  logic [23:0] payload;
+  leaf u_leaf (
+    .data_i(
+      {8'h0, payload}
+    )
+  );
+endmodule
+"""
+    tree = pyslang.syntax.SyntaxTree.fromText(source)
+    compilation = pyslang.ast.Compilation()
+    compilation.addSyntaxTree(tree)
+
+    projection = SlangConnectivityProjector(
+        source_manager=tree.sourceManager,
+    ).project(compilation.getRoot())
+
+    binding = projection.ir.bindings[0]
+    assert binding.instance_path == "top.u_leaf"
+    assert binding.evidence.location.line == 6
+
+
+def test_real_frontend_treats_wildcard_port_connections_as_named():
+    pyslang = pytest.importorskip("pyslang")
+    source = """\
+module leaf(input logic data_i); endmodule
+module top;
+  logic data_i;
+  leaf u_leaf(.*);
+endmodule
+"""
+    tree = pyslang.syntax.SyntaxTree.fromText(source)
+    compilation = pyslang.ast.Compilation()
+    compilation.addSyntaxTree(tree)
+
+    projection = SlangConnectivityProjector(
+        source_manager=tree.sourceManager,
+    ).project(compilation.getRoot())
+
+    binding = projection.ir.bindings[0]
+    assert binding.instance_path == "top.u_leaf"
+    assert binding.style is BindingStyle.NAMED
+    assert binding.port_position is None
+    assert binding.mappings[0].source.path() == "top.data_i"
+
+
+def test_opaque_uvm_and_dpi_calls_do_not_publish_argument_dependencies():
+    pyslang = pytest.importorskip("pyslang")
+    source = """\
+package uvm_pkg;
+  import "DPI-C" function int uvm_hdl_read(
+    input string path,
+    output logic [31:0] data
+  );
+  import "DPI-C" function int uvm_hdl_deposit(
+    input string path,
+    input logic [31:0] data
+  );
+  import "DPI-C" function int uvm_hdl_force(
+    input string path,
+    input logic [31:0] data
+  );
+  import "DPI-C" function int uvm_hdl_release(input string path);
+  import "DPI-C" function int uvm_hdl_check_path(input string path);
+  function automatic int uvm_helper(input logic [31:0] data);
+    return int'(data[0]);
+  endfunction
+endpackage
+
+module top;
+  import uvm_pkg::*;
+  import "DPI-C" function int c_transform(input logic [31:0] data);
+  string path;
+  logic [31:0] data;
+  logic direct;
+  int dpi_status;
+  int deposit_status;
+  int force_status;
+  int release_status;
+  int check_status;
+  int c_status;
+  int plusarg_status;
+  int uvm_status;
+  int local_status;
+
+  function automatic int local_helper(input logic [31:0] value);
+    return int'(value[0]);
+  endfunction
+
+  initial begin
+    dpi_status = direct | uvm_hdl_read(path, data);
+    deposit_status = direct | uvm_hdl_deposit(path, data);
+    force_status = direct | uvm_hdl_force(path, data);
+    release_status = direct | uvm_hdl_release(path);
+    check_status = direct | uvm_hdl_check_path(path);
+    c_status = direct | c_transform(data);
+    plusarg_status = direct | $value$plusargs("data=%d", data);
+    uvm_status = direct | uvm_helper(data);
+    local_status = direct | local_helper(data);
+  end
+endmodule
+"""
+    tree = pyslang.syntax.SyntaxTree.fromText(source)
+    compilation = pyslang.ast.Compilation()
+    compilation.addSyntaxTree(tree)
+
+    projection = SlangConnectivityProjector(
+        source_manager=tree.sourceManager,
+    ).project(compilation.getRoot())
+    top = next(item for item in projection.ir.definitions if item.name == "top")
+    by_target = {
+        assignment.target.symbol: assignment for assignment in top.assignments
+    }
+
+    for target in (
+        "dpi_status",
+        "deposit_status",
+        "force_status",
+        "release_status",
+        "check_status",
+        "c_status",
+        "plusarg_status",
+        "uvm_status",
+    ):
+        assert {
+            item.source.symbol for item in by_target[target].dependencies
+        } == {"direct"}
+    assert {
+        item.source.symbol for item in by_target["local_status"].dependencies
+    } == {"direct", "data"}
+    assert {item.name for item in projection.ir.definitions} == {"top"}
+    assert {item.path for item in projection.ir.instances} == {"top"}
+    gap_codes = {item.code for item in projection.ir.coverage.gaps}
+    assert "dpi_runtime_not_modeled" in gap_codes
+    assert "uvm_dynamic_call_not_modeled" in gap_codes
+    assert "runtime_system_call_not_modeled" in gap_codes
+    assert "subroutine_body_not_projected" in gap_codes
+
+
+def test_real_frontend_projects_parameterized_generate_and_packed_members():
+    pyslang = pytest.importorskip("pyslang")
+    source = """\
+typedef struct packed {
+  logic [1:0] opcode;
+  logic       flag;
+} meta_t;
+
+typedef struct packed {
+  logic [23:0] data;
+  meta_t       meta;
+  logic        valid;
+} rsp_t;
+
+module lane #(parameter int W = 24) (
+  input  rsp_t         rsp_i,
+  output logic [W-1:0] data_o
+);
+  assign data_o = rsp_i.data[W-1:0];
+endmodule
+
+module top;
+  rsp_t rsp;
+  logic [23:0] out24;
+  logic [15:0] out16;
+  generate
+    if (1) begin : g24
+      lane #(.W(24)) u_lane(.rsp_i(rsp), .data_o(out24));
+    end
+    if (1) begin : g16
+      lane #(.W(16)) u_lane(.rsp_i(rsp), .data_o(out16));
+    end
+  endgenerate
+endmodule
+"""
+    tree = pyslang.syntax.SyntaxTree.fromText(source)
+    compilation = pyslang.ast.Compilation()
+    compilation.addSyntaxTree(tree)
+
+    projection = SlangConnectivityProjector(
+        source_manager=tree.sourceManager,
+    ).project(compilation.getRoot())
+    ir = projection.ir
+
+    lane_instances = [item for item in ir.instances if item.name == "u_lane"]
+    assert {item.path for item in lane_instances} == {
+        "top.g16.u_lane",
+        "top.g24.u_lane",
+    }
+    assert {item.generate_scope for item in lane_instances} == {"g16", "g24"}
+    assert {dict(item.parameterization)["W"] for item in lane_instances} == {
+        "16",
+        "24",
+    }
+    assert len({item.definition_id for item in lane_instances}) == 2
+
+    top = next(item for item in ir.definitions if item.name == "top")
+    data = top.packed_member("rsp.data")
+    meta = top.packed_member("rsp.meta")
+    opcode = top.packed_member("rsp.meta.opcode")
+    valid = top.packed_member("rsp.valid")
+    assert data is not None and meta is not None
+    assert opcode is not None and valid is not None
+    assert data.packed_range.indices == tuple(range(23, -1, -1))
+    assert data.aggregate_bits == tuple(range(27, 3, -1))
+    assert meta.aggregate_bits == (3, 2, 1)
+    assert opcode.aggregate_bits == (3, 2)
+    assert valid.aggregate_bits == (0,)
+
+    lane16 = next(
+        item
+        for item in ir.definitions
+        if item.definition_id
+        == next(
+            instance.definition_id
+            for instance in lane_instances
+            if dict(instance.parameterization)["W"] == "16"
+        )
+    )
+    assignment = lane16.assignments[0]
+    assert assignment.target.bits == tuple(range(15, -1, -1))
+    assert assignment.dependencies[0].source.symbol == "rsp_i"
+    assert assignment.dependencies[0].source.bits == tuple(range(19, 3, -1))
+
+    restored = ConnectivityIR.from_json_bytes(ir.to_json_bytes())
+    assert restored.to_dict() == ir.to_dict()
+    engine = ConnectivityQueryEngine(restored)
+    resolved = engine.resolve_signal("top.rsp.data[15:8]")
+    assert resolved.symbol == "rsp"
+    assert resolved.bits == tuple(range(19, 11, -1))
+    nested = engine.resolve_signal("top.rsp.meta.opcode[1:0]")
+    assert nested.symbol == "rsp"
+    assert nested.bits == (3, 2)
+
+    loads = engine.query_loads("top.rsp.data[15:8]", max_depth=8)
+    assert loads.status is QueryStatus.FOUND
+    path = engine.query_path(
+        "top.rsp.data[15:8]",
+        "top.g16.u_lane.data_o[15:8]",
+        expand_assigns=True,
+    )
+    assert path.status is PathQueryStatus.FOUND
+    assert [edge.exact_bit_mapping for edge in path.path] == [True, True]
+
+
+def test_focused_projection_skips_inactive_compile_hierarchy_candidates():
+    pyslang = pytest.importorskip("pyslang")
+    source = """\
+module leaf(input logic data_i); endmodule
+module top;
+  logic data;
+  if (0) begin : g_inactive
+    leaf u_leaf(.data_i(data));
+  end
+  leaf u_live(.data_i(data));
+endmodule
+"""
+    tree = pyslang.syntax.SyntaxTree.fromText(source)
+    compilation = pyslang.ast.Compilation()
+    compilation.addSyntaxTree(tree)
+
+    projection = SlangConnectivityProjector(
+        source_manager=tree.sourceManager,
+        options=ProjectionOptions(
+            focus_instance_paths=(
+                "top",
+                "top.g_inactive.u_leaf",
+                "top.u_live",
+            ),
+            assignment_instance_paths=(
+                "top",
+                "top.g_inactive.u_leaf",
+                "top.u_live",
+            ),
+        ),
+    ).project(compilation.getRoot())
+
+    assert {item.path for item in projection.ir.instances} == {"top", "top.u_live"}
+    gap = next(
+        item
+        for item in projection.ir.coverage.gaps
+        if item.code == "focused_instance_not_elaborated"
+    )
+    assert gap.scopes == ("top.g_inactive.u_leaf",)
+    assert projection.ir.coverage.status is CoverageStatus.INCONCLUSIVE
+
+
+def test_source_paths_normalize_against_projection_root(tmp_path: Path, monkeypatch):
+    source = tmp_path / "rtl" / "core.sv"
+
+    assert normalize_source_path(str(source), tmp_path) == "rtl/core.sv"
+    assert normalize_source_path(str(source), None) == source.as_posix()
+
+    worker_root = tmp_path / "traceweave" / "worker"
+    external_source = tmp_path / "soc" / "rtl" / "core.sv"
+    worker_root.mkdir(parents=True)
+    monkeypatch.chdir(worker_root)
+    frontend_name = "../../soc/rtl/core.sv"
+
+    assert normalize_source_path(frontend_name, worker_root) == (
+        external_source.resolve().as_posix()
+    )

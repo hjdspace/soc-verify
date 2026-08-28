@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 
 
 class SchemaModel(BaseModel):
@@ -102,11 +102,14 @@ class BuildTbHierarchyResult(SchemaModel):
     """
 
     hierarchy_handle: str = ""
+    build_status: Literal["completed", "blocked"] = "completed"
+    blocker: dict[str, Any] | None = None
     project: dict[str, Any] = Field(default_factory=dict)
     compile_command: str = ""
     stats: dict[str, int] = Field(default_factory=dict)
     tree_skeleton: dict[str, Any] = Field(default_factory=dict)
     interfaces: list[dict[str, Any]] = Field(default_factory=list)
+    build_metrics: dict[str, Any] = Field(default_factory=dict)
     ambiguous_basenames: list[dict[str, Any]] = Field(default_factory=list)
     kdb_hint: dict[str, Any] | None = None
     handle_tools: dict[str, str] = Field(default_factory=dict)
@@ -125,6 +128,7 @@ class BuildTbHierarchyResultLegacy(SchemaModel):
     class_hierarchy: list[str] = Field(default_factory=list)
     interfaces: list[dict[str, Any]] = Field(default_factory=list)
     compile_result: dict[str, Any] = Field(default_factory=dict)
+    build_metrics: dict[str, Any] = Field(default_factory=dict)
     required_next_call: dict[str, Any] | None = None
     suggested_next: dict[str, Any] | None = None
 
@@ -241,11 +245,15 @@ class StructuralRisk(SchemaModel):
 
 class ScanStructuralRisksResult(TruncatableResult):
     scan_scope: str = "scope1"
+    eligible_file_count: int = 0
     files_scanned: int = 0
+    coverage_status: Literal["complete", "zero_coverage", "degraded"] = "complete"
+    coverage_warnings: list[str] = Field(default_factory=list)
     total_risks: int = 0
     risks: list[StructuralRisk] = Field(default_factory=list)
     categories_scanned: list[str] = Field(default_factory=list)
     skipped_files: list[str] = Field(default_factory=list)
+    scan_metrics: dict[str, int | str] = Field(default_factory=dict)
 
 
 class ErrorGroup(SchemaModel):
@@ -365,7 +373,9 @@ class DiffResult(SchemaModel):
     new_log_file: str | None = None
     base_snapshot_id: str | None = None
     new_snapshot_id: str | None = None
-    diff_source: Literal["paths", "snapshots", "mixed", "auto_previous_snapshot"] | None = None
+    diff_source: (
+        Literal["paths", "snapshots", "mixed", "auto_previous_snapshot"] | None
+    ) = None
     base_summary: DiffEventSummary
     new_summary: DiffEventSummary
     problem_hints_comparison: DiffProblemHintsComparison | None = None
@@ -410,6 +420,7 @@ class SearchSignalsBatchResult(SchemaModel):
     each the same shape as a single search. Exists to collapse the
     consecutive-search keyword-groping chains telemetry surfaced (334/524
     calls arrived in runs of >=4) into one round trip."""
+
     batch: list[SearchSignalsBatchEntry] = Field(default_factory=list)
     hint: str | None = None
 
@@ -438,6 +449,10 @@ class SignalTransitionsResult(SchemaModel):
     # the returned list is capped at max_transitions (earliest kept).
     transition_count: int
     transitions: list[dict[str, Any]] = Field(default_factory=list)
+    # Last value-change strictly before start_ps. Kept separate so transitions
+    # remains a strict closed-window list while clock samplers can classify the
+    # first in-window edge without rereading the waveform.
+    predecessor: dict[str, Any] | None = None
     truncated: bool = False
     transition_count_is_lower_bound: bool = False
     hint: str | None = None
@@ -539,7 +554,9 @@ class RecommendNextStepsResult(SchemaModel):
     primary_failure_target: dict[str, Any] | None = None
     recommended_signals: list[dict[str, Any]] = Field(default_factory=list)
     recommended_instances: list[dict[str, Any]] = Field(default_factory=list)
-    correlated_structural_risks: list[StructuralRiskCorrelation] = Field(default_factory=list)
+    correlated_structural_risks: list[StructuralRiskCorrelation] = Field(
+        default_factory=list
+    )
     suspected_failure_class: str
     recommendation_strategy: str | None = None
     failure_window_center_ps: int | None = None
@@ -548,12 +565,18 @@ class RecommendNextStepsResult(SchemaModel):
     # carried over from a compatible sweep_handshakes cache. Facts (already sorted
     # by sweep's mechanical key), never a verdict — the LLM judges them.
     runtime_protocol_findings: list[dict[str, Any]] = Field(default_factory=list)
+    # Coverage receipt is kept even when there are no flagged rows. In
+    # particular, zero_coverage + [] findings is not a protocol pass.
+    runtime_protocol_coverage: dict[str, Any] | None = None
     workflow_incomplete: bool = False
-    degraded_reason: Literal[
-        "missing_structural_scan",
-        "missing_handshake_sweep",
-        "incomplete_handshake_sweep",
-    ] | None = None
+    degraded_reason: (
+        Literal[
+            "missing_structural_scan",
+            "missing_handshake_sweep",
+            "incomplete_handshake_sweep",
+        ]
+        | None
+    ) = None
     required_next_call: dict[str, Any] | None = None
     missing_inputs: list[str] = Field(default_factory=list)
     next_iteration_hint: dict[str, Any] | None = None
@@ -603,14 +626,20 @@ class DriverChainHop(SchemaModel):
     driver_kind: str | None = None
     source_file: str | None = None
     source_line: int | None = None
-    source_info_origin: Literal["compile_log", "npi"] | None = None
+    source_info_origin: Literal["compile_log", "npi", "source_graph"] | None = None
     expression_summary: str | None = None
     upstream_signals: list[str] = Field(default_factory=list)
     instance_port_connections: list[dict[str, Any]] | None = None
     branch_candidates: list[str] | None = None
     stopped_at: str | None = None
-    backend: Literal["static", "verdi_npi", "verdi_tcl"] = "static"
-    backend_confidence: Literal["exact", "approximate", "unverified"] = "approximate"
+    backend: Literal["static", "verdi_npi", "verdi_tcl", "source_graph"] = "static"
+    backend_confidence: Literal[
+        "exact",
+        "conditional",
+        "partial",
+        "approximate",
+        "unverified",
+    ] = "approximate"
 
 
 class DriverLoadCrossCheck(SchemaModel):
@@ -633,6 +662,62 @@ class DriverLoadCrossCheck(SchemaModel):
     note: str | None = None
 
 
+class DriverBitProvenanceSegment(SchemaModel):
+    """Per-bit-range source provenance for a segmented driver result."""
+
+    target_path: str
+    source_kind: Literal["signal", "constant", "unresolved"]
+    source_path: str | None = None
+    terminal_path: str | None = None
+    constant_value: str | None = None
+    driver_kind: str | None = None
+    source_file: str | None = None
+    source_line: int | None = None
+    confidence: Literal["exact", "conditional", "partial"]
+    multiple_driver: bool = False
+
+
+class DriverTraversalReceipt(SchemaModel):
+    """Resource and completeness boundary for driver fact traversal."""
+
+    returned_fact_count: int = Field(ge=0)
+    output_limit: int = Field(ge=1)
+    output_truncated: bool
+    visited_state_count: int = Field(ge=0)
+    state_limit: int = Field(ge=1)
+    state_truncated: bool
+    callback_observed_count: int | None = Field(default=None, ge=0)
+    callback_pruned_count: int | None = Field(default=None, ge=0)
+    search_exhaustive: bool
+    incomplete_reasons: list[
+        Literal[
+            "output_limit",
+            "work_limit",
+            "depth_limit",
+            "coverage_incomplete",
+            "backend_degraded",
+        ]
+    ] = Field(default_factory=list)
+    continuation_supported: Literal[False] = False
+
+
+class SourceGraphClaimSemanticsReceipt(SchemaModel):
+    """Orthogonal meaning of a Source Graph query result.
+
+    The historical ``confidence`` remains the conservative combination of
+    positive source evidence and whole-artifact coverage.  These fields let a
+    caller accept a proved positive fact without mistaking it for an exhaustive
+    search, an exclusive-driver proof, or permission to make a negative claim.
+    """
+
+    positive_fact_confidence: Literal["exact", "conditional", "partial"] | None = None
+    target_bit_coverage: Literal["complete", "partial", "none", "not_applicable"]
+    global_coverage_status: Literal["complete", "partial", "inconclusive"]
+    exhaustive_search: bool
+    exclusive_driver_proved: bool | None = None
+    negative_claim_allowed: bool
+
+
 class ExplainDriverResult(SchemaModel):
     signal_path: str
     wave_path: str
@@ -643,41 +728,399 @@ class ExplainDriverResult(SchemaModel):
     driver_kind: str | None = None
     source_file: str | None = None
     source_line: int | None = None
+    source_info_origin: Literal["compile_log", "npi", "source_graph"] | None = None
     expression_summary: str | None = None
     upstream_signals: list[str] = Field(default_factory=list)
     instance_port_connections: list[dict[str, Any]] | None = None
+    bit_provenance: list[DriverBitProvenanceSegment] | None = None
+    resolved_bit_count: int | None = None
+    unresolved_bit_count: int | None = None
+    multi_driver_bit_count: int | None = None
     confidence: str | None = None
+    claim_semantics: SourceGraphClaimSemanticsReceipt | None = None
     unsupported_reason: str | None = None
     stopped_at: str | None = None
     recursive: bool = False
     driver_chain: list[DriverChainHop] | None = None
     chain_summary: str | None = None
+    traversal: DriverTraversalReceipt | None = None
     cross_check: DriverLoadCrossCheck | None = None
-    backend: Literal["static", "verdi_npi", "verdi_tcl"] = "static"
+    backend: Literal["static", "verdi_npi", "verdi_tcl", "source_graph"] = "static"
     backend_status: BackendStatus | None = None
 
 
 ExplainSignalDriverResult = ExplainDriverResult
 
 
+class BackendAttemptReceipt(SchemaModel):
+    backend: Literal["static", "verdi_npi", "verdi_tcl", "source_graph"]
+    status: Literal[
+        "success",
+        "unavailable",
+        "failed",
+        "blocked",
+        "timed_out",
+        "inconclusive",
+        "skipped",
+    ]
+    reason: str | None = None
+    coverage_status: Literal["complete", "partial", "inconclusive"] | None = None
+
+
+class SourceGraphBlockerReceipt(SchemaModel):
+    code: str
+    stage: str
+
+
+class SourceGraphMetricsReceipt(SchemaModel):
+    adapter_wall_ms: float | None = None
+    prepare_total_wall_ms: float | None = None
+    admission_wait_ms: float | None = None
+    build_wall_ms: float | None = None
+    load_wall_ms: float | None = None
+    query_wall_ms: float | None = None
+    actual_build_count: int = 0
+    coalesced_waiter_count: int = 0
+    cancel_to_exit_ms: float | None = None
+    worker_cpu_ms: float | None = None
+    rss_start_kib: int | None = None
+    rss_peak_kib: int | None = None
+    rss_end_kib: int | None = None
+    ir_bytes: int = 0
+    cache_bytes: int = 0
+    cache_entry_count: int = 0
+    cache_peak_entry_count: int = 0
+    cache_peak_bytes: int = 0
+    cache_eviction_count: int = 0
+    cache_oversize_bypass_count: int = 0
+    frontend_launch_count: int = 0
+    semantic_session_hit_count: int = 0
+    semantic_session_miss_count: int = 0
+    semantic_session_restart_count: int = 0
+    semantic_session_eviction_count: int = 0
+    disk_lookup_wall_ms: float = 0.0
+    disk_read_wall_ms: float = 0.0
+    disk_validate_wall_ms: float = 0.0
+    disk_publish_wall_ms: float = 0.0
+    disk_write_wall_ms: float = 0.0
+    disk_eviction_wall_ms: float = 0.0
+    disk_hit_count: int = 0
+    disk_miss_count: int = 0
+    disk_corrupt_count: int = 0
+    disk_build_skip_count: int = 0
+    disk_bytes_read: int = 0
+    disk_bytes_written: int = 0
+    disk_entry_count: int = 0
+    disk_bytes: int = 0
+    disk_eviction_count: int = 0
+
+    @model_serializer(mode="wrap")
+    def _omit_inactive_phase3d_fields(self, handler):
+        data = handler(self)
+        for field in (
+            "frontend_launch_count",
+            "semantic_session_hit_count",
+            "semantic_session_miss_count",
+            "semantic_session_restart_count",
+            "semantic_session_eviction_count",
+            "disk_lookup_wall_ms",
+            "disk_read_wall_ms",
+            "disk_validate_wall_ms",
+            "disk_publish_wall_ms",
+            "disk_write_wall_ms",
+            "disk_eviction_wall_ms",
+            "disk_hit_count",
+            "disk_miss_count",
+            "disk_corrupt_count",
+            "disk_build_skip_count",
+            "disk_bytes_read",
+            "disk_bytes_written",
+            "disk_entry_count",
+            "disk_bytes",
+            "disk_eviction_count",
+        ):
+            if field not in self.model_fields_set:
+                data.pop(field, None)
+        return data
+
+
+class SourceGraphScopeMatchReceipt(SchemaModel):
+    relation: Literal["exact", "superset", "subset", "disjoint", "unproven"]
+    reusable: bool
+    complete_for_request: bool
+    reason: Literal[
+        "coverage_complete",
+        "coverage_preserved_partial",
+        "coverage_preserved_inconclusive",
+        "scope_subset",
+        "scope_disjoint",
+        "scope_unproven",
+    ]
+
+
+class SourceGraphBackendReceipt(SchemaModel):
+    adapter_status: Literal["ready", "blocked", "disabled", "invalid"]
+    bootstrap_context: dict[str, Any] | None = None
+    adapter: dict[str, Any] | None = None
+    prepare_status: (
+        Literal[
+            "ready",
+            "dependency_blocked",
+            "build_failed",
+            "worker_crash",
+            "timed_out",
+            "cancelled",
+            "invalid_response",
+        ]
+        | None
+    ) = None
+    effective_timeout_sec: float | None = Field(
+        default=None,
+        ge=0.001,
+        le=86_400.0,
+    )
+    cache_disposition: (
+        Literal[
+            "hit_exact",
+            "hit_superset",
+            "miss",
+            "bypass_incomplete_key",
+            "bypass_capacity",
+        ]
+        | None
+    ) = None
+    cache_tier: Literal["memory", "disk", "build", "handoff"] | None = None
+    disk_validation_outcome: (
+        Literal[
+            "disabled",
+            "not_checked",
+            "hit",
+            "not_found",
+            "identity_not_reusable",
+            "unsafe_namespace",
+            "unsafe_entry",
+            "manifest_missing",
+            "manifest_too_large",
+            "manifest_invalid",
+            "unknown_format",
+            "incomplete_entry",
+            "artifact_key_mismatch",
+            "artifact_identity_mismatch",
+            "build_semantics_mismatch",
+            "scope_mismatch",
+            "snapshot_mismatch",
+            "version_mismatch",
+            "coverage_receipt_mismatch",
+            "ir_missing",
+            "ir_too_large",
+            "ir_size_mismatch",
+            "ir_digest_mismatch",
+            "ir_schema_mismatch",
+            "ir_identity_mismatch",
+            "io_error",
+        ]
+        | None
+    ) = None
+    flight_disposition: Literal["none", "builder", "coalesced"] | None = None
+    coverage_status: Literal["complete", "partial", "inconclusive"] | None = None
+    coverage_files_total: int = 0
+    coverage_files_projected: int = 0
+    coverage_diagnostic_count: int = 0
+    coverage_blocking_diagnostic_count: int = 0
+    coverage_gap_count: int = 0
+    coverage_gap_codes: list[str] = Field(default_factory=list)
+    objective_exclusions: list[str] = Field(default_factory=list)
+    query_status: (
+        Literal[
+            "found",
+            "not_connected",
+            "from_unresolved",
+            "to_unresolved",
+            "endpoints_unresolved",
+            "inconclusive",
+            "truncated",
+        ]
+        | None
+    ) = None
+    query_confidence: Literal["exact", "conditional", "partial"] | None = None
+    query_match_count: int = 0
+    query_count: int = 0
+    attempted_query_count: int = 0
+    query_fingerprints_sha256: list[str] = Field(default_factory=list)
+    query_statuses: list[Literal["found", "not_connected", "inconclusive"]] = Field(
+        default_factory=list
+    )
+    coverage_statuses: list[Literal["complete", "partial", "inconclusive"]] = Field(
+        default_factory=list
+    )
+    query_gap_codes: list[str] = Field(default_factory=list)
+    positive_query_count: int = 0
+    complete_negative_query_count: int = 0
+    inconclusive_negative_count: int = 0
+    traversed_binding_edges: int = 0
+    max_depth: int | None = None
+    inspected_edge_count: int = 0
+    state_limit: int | None = None
+    edge_limit: int | None = None
+    match_limit: int | None = None
+    frontier_limit: int | None = None
+    state_truncated: bool = False
+    edge_truncated: bool = False
+    match_truncated: bool = False
+    frontier_truncated: bool = False
+    query_truncated: bool = False
+    queried_bit_count: int = 0
+    resolved_bit_count: int = 0
+    unresolved_bit_count: int = 0
+    constant_bit_count: int = 0
+    multi_driver_bit_count: int = 0
+    claim_semantics: SourceGraphClaimSemanticsReceipt | None = None
+    path_edge_count: int = 0
+    traversed_edge_count: int = 0
+    visited_state_count: int = 0
+    traversal_limit: int | None = None
+    output_limit: int | None = None
+    traversal_truncated: bool = False
+    output_truncated: bool = False
+    endpoint_alias_equivalent: bool = False
+    expand_assigns: bool | None = None
+    build_key_sha256: str | None = None
+    artifact_fingerprint_sha256: str | None = None
+    selected_artifact_fingerprint_sha256: str | None = None
+    final_artifact_fingerprint_sha256: str | None = None
+    attempted_artifact_fingerprints_sha256: list[str] = Field(default_factory=list)
+    artifact_attempt_count: int = 0
+    scope_expansion_count: int = 0
+    single_artifact_provenance: bool | None = None
+    final_artifact_scope_match: bool | None = None
+    query_fingerprint_sha256: str | None = None
+    artifact_reuse: (
+        Literal[
+            "cold",
+            "exact_hit",
+            "dominating_hit",
+            "coalesced_build",
+            "session_handoff",
+            "bypass_incomplete",
+            "bypass_capacity",
+            "disk_exact_hit",
+        ]
+        | None
+    ) = None
+    cache_lookup_reason: (
+        Literal[
+            "exact_artifact",
+            "dominating_artifact",
+            "no_cached_artifact",
+            "artifact_semantics_mismatch",
+            "cached_scope_not_dominating",
+            "identity_not_reusable",
+            "same_artifact_inflight",
+            "same_artifact_session_handoff",
+            "artifact_exceeds_cache_capacity",
+            "cancelled_before_lookup",
+        ]
+        | None
+    ) = None
+    scope_match: SourceGraphScopeMatchReceipt | None = None
+    compile_fingerprint_sha256: str | None = None
+    ir_fingerprint_sha256: str | None = None
+    blocker: SourceGraphBlockerReceipt | None = None
+    metrics: SourceGraphMetricsReceipt = Field(
+        default_factory=SourceGraphMetricsReceipt
+    )
+    fallback_used: bool = False
+
+    @model_serializer(mode="wrap")
+    def _omit_inactive_phase3d_fields(self, handler):
+        data = handler(self)
+        for field in ("cache_tier", "disk_validation_outcome"):
+            if field not in self.model_fields_set:
+                data.pop(field, None)
+        return data
+
+
 class BackendStatus(SchemaModel):
     simulator: Literal["vcs", "xcelium", "unknown"] = "unknown"
-    backend: Literal["static", "verdi_npi", "verdi_tcl"] = "static"
-    actual_backend: Literal["static", "verdi_npi", "verdi_tcl"] | None = None
+    # ``backend`` retains its legacy meaning (policy-selected backend).  The
+    # additive fields make a multi-attempt NPI -> Source Graph -> Static route
+    # explicit without changing existing callers.
+    backend: Literal["static", "verdi_npi", "verdi_tcl", "source_graph"] = "static"
+    selected_backend: (
+        Literal[
+            "static",
+            "verdi_npi",
+            "verdi_tcl",
+            "source_graph",
+        ]
+        | None
+    ) = None
+    attempted_backend: (
+        Literal[
+            "static",
+            "verdi_npi",
+            "verdi_tcl",
+            "source_graph",
+        ]
+        | None
+    ) = None
+    actual_backend: (
+        Literal[
+            "static",
+            "verdi_npi",
+            "verdi_tcl",
+            "source_graph",
+        ]
+        | None
+    ) = None
+    attempted_backends: list[BackendAttemptReceipt] = Field(default_factory=list)
+    whole_trace_restart_count: int = 0
+    whole_trace_restart_reasons: list[str] = Field(default_factory=list)
+    single_backend_provenance: bool | None = None
     fallback_reason: str | None = None
+    connectivity_route: Literal["auto", "source_graph"] = "auto"
+    connectivity_route_error: Literal["connectivity_route_config_invalid"] | None = None
+    source_graph: SourceGraphBackendReceipt | None = None
     execution_mode: Literal["local", "lsf", "invalid"] | None = None
-    scheduler_status: Literal[
-        "not_started", "completed", "failed", "timed_out",
-    ] | None = None
-    worker_status: Literal[
-        "not_started", "completed", "npi_unavailable", "failed",
-    ] | None = None
+    scheduler_status: (
+        Literal[
+            "not_started",
+            "completed",
+            "failed",
+            "timed_out",
+        ]
+        | None
+    ) = None
+    worker_status: (
+        Literal[
+            "not_started",
+            "completed",
+            "npi_unavailable",
+            "failed",
+        ]
+        | None
+    ) = None
     parser_match: Literal["exact", "approximate"] = "approximate"
     kdb_path: str | None = None
     kdb_flow: Literal[
-        "vcs_two_step", "vcs_three_step", "vericom_standalone",
-        "vericom_import_from_file", "traceweave_cached", "none",
+        "vcs_two_step",
+        "vcs_three_step",
+        "vericom_standalone",
+        "vericom_import_from_file",
+        "traceweave_cached",
+        "none",
     ] = "none"
+    kdb_validation_status: Literal[
+        "usable",
+        "elaboration_error",
+        "unavailable",
+    ] = "unavailable"
+    # ``kdb_validation_status`` describes the artifact on disk.  This flag is
+    # stronger: it becomes true only after NPI actually loaded that partial
+    # netlist and passed the top-instance self-check.
+    kdb_degraded: bool = False
+    kdb_error_count: int | None = Field(default=None, ge=0)
+    kdb_error_log: str | None = None
     kdb_hint: str | None = None
 
 
@@ -687,9 +1130,37 @@ class LoadHop(SchemaModel):
     expr: str | None = None
     source_file: str | None = None
     source_line: int | None = None
-    source_info_origin: Literal["compile_log", "npi"] | None = None
-    backend: Literal["static", "verdi_npi", "verdi_tcl"] = "static"
-    confidence: Literal["exact", "approximate", "unverified"] = "approximate"
+    source_info_origin: Literal["compile_log", "npi", "source_graph"] | None = None
+    backend: Literal["static", "verdi_npi", "verdi_tcl", "source_graph"] = "static"
+    confidence: Literal[
+        "exact",
+        "conditional",
+        "partial",
+        "approximate",
+        "unverified",
+    ] = "approximate"
+
+
+class LoadEnumerationReceipt(SchemaModel):
+    """Backend-neutral bounds and claim strength for a load enumeration."""
+
+    returned_count: int = Field(ge=0)
+    output_limit: int = Field(ge=1)
+    output_truncated: bool = False
+    search_exhaustive: bool = False
+    incomplete_reasons: list[
+        Literal[
+            "output_limit",
+            "work_limit",
+            "depth_limit",
+            "coverage_incomplete",
+            "backend_degraded",
+        ]
+    ] = Field(default_factory=list)
+    # No backend currently has a continuation token that can preserve its
+    # work/coverage identity safely.  Keep the fact explicit instead of
+    # implying that a truncated prefix can be resumed.
+    continuation_supported: Literal[False] = False
 
 
 class FindSignalLoadsResult(SchemaModel):
@@ -701,6 +1172,9 @@ class FindSignalLoadsResult(SchemaModel):
     completeness: Literal["exact", "approximate", "shallow_only"] = "shallow_only"
     stopped_at: str | None = None
     unsupported_reason: str | None = None
+    claim_semantics: SourceGraphClaimSemanticsReceipt | None = None
+    enumeration: LoadEnumerationReceipt | None = None
+    backend: Literal["static", "verdi_npi", "verdi_tcl", "source_graph"] = "static"
     backend_status: BackendStatus = Field(default_factory=BackendStatus)
 
 
@@ -711,6 +1185,22 @@ class SignalPathHop(SchemaModel):
     source_file: str | None = None
     source_line: int | None = None
     is_endpoint: bool = False
+    source_info_origin: Literal["npi", "source_graph"] | None = None
+    backend: Literal["verdi_npi", "source_graph"] | None = None
+    edge_kind: (
+        Literal[
+            "port_bind_input",
+            "port_bind_output",
+            "port_bind_inout",
+            "interface_bind",
+            "continuous_assign",
+            "procedural_assign",
+        ]
+        | None
+    ) = None
+    edge_id: str | None = None
+    edge_source_path: str | None = None
+    exact_bit_mapping: bool | None = None
 
 
 _TRACE_SIGNAL_PATH_DIRECTION_NOTE = (
@@ -727,13 +1217,21 @@ class TraceSignalPathResult(SchemaModel):
     path: list[SignalPathHop] = Field(default_factory=list)
     expand_assigns: bool = False
     direction_note: str = _TRACE_SIGNAL_PATH_DIRECTION_NOTE
-    unsupported_reason: Literal[
-        "from_not_found",
-        "to_not_found",
-        "not_connected",
-        "static_backend_no_path_api",
-        "npi_call_failed",
-    ] | None = None
+    unsupported_reason: (
+        Literal[
+            "from_not_found",
+            "to_not_found",
+            "not_connected",
+            "static_backend_no_path_api",
+            "npi_call_failed",
+            "source_graph_endpoints_unresolved",
+            "source_graph_query_inconclusive",
+            "source_graph_path_truncated",
+        ]
+        | None
+    ) = None
+    claim_semantics: SourceGraphClaimSemanticsReceipt | None = None
+    backend: Literal["static", "verdi_npi", "source_graph"] = "static"
     backend_status: BackendStatus = Field(default_factory=BackendStatus)
 
 
@@ -744,8 +1242,15 @@ class TraceChainNode(SchemaModel):
     has_x: bool | None = None
     module: str | None = None
     source_file: str | None = None
+    source_line: int | None = None
+    driver_status: str | None = None
     driver_kind: str | None = None
     driver_expression: str | None = None
+    driver_confidence: str | None = None
+    claim_semantics: SourceGraphClaimSemanticsReceipt | None = None
+    traversal: DriverTraversalReceipt | None = None
+    unsupported_reason: str | None = None
+    cross_check: DriverLoadCrossCheck | None = None
     instance_port_connections: list[dict[str, Any]] | None = None
     x_upstream_signals: list[str] | None = None
     clean_upstream_signals: list[str] | None = None
@@ -759,6 +1264,7 @@ class TraceRootCause(SchemaModel):
     driver_kind: str | None = None
     stop_reason: str | None = None
     source_file: str | None = None
+    source_line: int | None = None
 
 
 class TraceXSourceResult(SchemaModel):
@@ -770,6 +1276,8 @@ class TraceXSourceResult(SchemaModel):
     propagation_chain: list[TraceChainNode] = Field(default_factory=list)
     root_cause: TraceRootCause | None = None
     analysis_guide: dict[str, str] = Field(default_factory=dict)
+    backend_status: BackendStatus = Field(default_factory=BackendStatus)
+    trace_restarted: bool = False
 
 
 class PrerequisiteBlockResult(SchemaModel):
@@ -1103,6 +1611,7 @@ class FindingSummary(SchemaModel):
     top_scopes: up to 3 DISTINCT scope paths in sort order (most likely
                 interesting first); a top-level interface renders as "(top)".
     """
+
     by_flag: dict[str, int] = Field(default_factory=dict)
     by_channel_hint: dict[str, int] = Field(default_factory=dict)
     top_scopes: list[str] = Field(default_factory=list)
@@ -1122,7 +1631,9 @@ class HandshakeSweepResult(SchemaModel):
     # Coverage facts for interpreting flagged_count. In particular,
     # zero_coverage means no protocol interfaces were checked, so flagged_count=0
     # is not evidence of a clean protocol run.
-    coverage_status: Literal["complete", "truncated", "zero_coverage", "degraded"] = "complete"
+    coverage_status: Literal["complete", "truncated", "zero_coverage", "degraded"] = (
+        "complete"
+    )
     coverage_warnings: list[str] = Field(default_factory=list)
     suggested_next_actions: list[dict[str, Any]] = Field(default_factory=list)
     finding_summary: FindingSummary | None = None

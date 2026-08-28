@@ -13,7 +13,8 @@ import pytest
 from unittest.mock import patch
 
 import server
-from config import DEFAULT_EXTRA_TRANSITIONS
+from config import CompileSourceIndexConfig, DEFAULT_EXTRA_TRANSITIONS
+from src.compile_session_snapshot import CompileSessionSnapshot
 from src.schemas import ToolErrorResult
 
 
@@ -37,6 +38,42 @@ def _prefill_get_sim_paths_state(**overrides):
     server._session_state["get_sim_paths"] = state
 
 
+def test_clean_npi_positive_truncated_load_prefix_remains_usable():
+    result = {
+        "backend": "verdi_npi",
+        "loads": [
+            {
+                "load_path": "top.sink",
+                "kind": "module_input",
+                "backend": "verdi_npi",
+            }
+        ],
+        "completeness": "approximate",
+        "stopped_at": "npi_load_output_limit",
+    }
+
+    assert server._npi_result_usable(
+        result,
+        "loads",
+        kdb_status={"load_quality": "clean"},
+    )
+
+
+def test_clean_npi_empty_truncated_load_prefix_is_not_a_negative_claim():
+    result = {
+        "backend": "verdi_npi",
+        "loads": [],
+        "completeness": "approximate",
+        "stopped_at": "npi_load_work_limit",
+    }
+
+    assert not server._npi_result_usable(
+        result,
+        "loads",
+        kdb_status={"load_quality": "clean"},
+    )
+
+
 def _prefill_build_tb_hierarchy_state(**overrides):
     """预填 build_tb_hierarchy state 以绕过门禁。"""
     state = {
@@ -51,9 +88,13 @@ def _prefill_sweep_handshakes_cache(
     wave_path: str,
     interfaces=None,
     *,
+    scope=None,
+    discovered_count=None,
     coverage_status: str = "complete",
     coverage_warnings=None,
     suggested_next_actions=None,
+    transition_truncated_count: int = 0,
+    skipped=None,
 ):
     """预填一个与 wave_path 兼容的 sweep_handshakes 缓存 + provenance。"""
     if interfaces is None and coverage_status == "complete":
@@ -70,16 +111,21 @@ def _prefill_sweep_handshakes_cache(
     server._result_cache["sweep_handshakes"] = server.schemas.HandshakeSweepResult.model_validate(
         {
             "wave_path": wave_path,
-            "discovered_count": len(interfaces or []),
+            "scope": scope,
+            "discovered_count": (
+                len(interfaces or []) if discovered_count is None else discovered_count
+            ),
             "interface_count": len(interfaces or []),
             "flagged_count": sum(1 for iface in (interfaces or []) if iface.get("flags")),
+            "transition_truncated_count": transition_truncated_count,
             "coverage_status": coverage_status,
             "coverage_warnings": coverage_warnings or [],
             "suggested_next_actions": suggested_next_actions or [],
             "interfaces": interfaces or [],
+            "skipped": skipped or [],
         }
     )
-    server._result_provenance["sweep_handshakes"] = {"wave_path": wave_path, "scope": None}
+    server._result_provenance["sweep_handshakes"] = {"wave_path": wave_path, "scope": scope}
 
 
 LOG_SAMPLE = """\
@@ -88,6 +134,35 @@ module_a ERROR unique issue a @ 1 ns
 module_b ERROR unique issue b @ 2 ns
 module_c ERROR unique issue c @ 3 ns
 """
+
+
+@pytest.mark.parametrize(
+    "gap_code",
+    (
+        "query_depth_limit",
+        "query_state_limit",
+        "query_edge_limit",
+        "query_match_limit",
+        "query_frontier_limit",
+    ),
+)
+def test_query_work_limits_block_same_query_scope_expansion(gap_code):
+    assert server._query_gap_blocks_scope_expansion({gap_code}) is True
+    assert (
+        server._query_gap_blocks_scope_expansion(
+            {"hierarchy_projection_scoped", gap_code}
+        )
+        is True
+    )
+
+
+def test_scope_gap_without_query_limit_remains_expandable():
+    assert (
+        server._query_gap_blocks_scope_expansion(
+            {"hierarchy_projection_scoped"}
+        )
+        is False
+    )
 
 
 class TestScanRequiredNextCallHelpers:
@@ -181,6 +256,28 @@ class TestVertexFunctionSchemaCompatibility:
             "maxItems": server.SIGNAL_SEARCH_MAX_KEYWORDS,
         }
 
+    async def test_parse_log_description_explains_previous_log_filtering(self):
+        tools = await server.list_tools()
+        parse_tool = next(tool for tool in tools if tool.name == "parse_sim_log")
+
+        assert "candidate_previous_logs" in parse_tool.description
+        assert "compile/elaboration" in parse_tool.description
+
+    async def test_build_hierarchy_schema_accepts_ordered_supplementary_logs(self):
+        tools = await server.list_tools()
+        hierarchy_tool = next(
+            tool for tool in tools if tool.name == "build_tb_hierarchy"
+        )
+
+        supplementary = hierarchy_tool.inputSchema["properties"][
+            "supplementary_compile_logs"
+        ]
+        assert supplementary["type"] == "array"
+        assert supplementary["items"] == {"type": "string"}
+        assert "supplementary_compile_logs" not in hierarchy_tool.inputSchema[
+            "required"
+        ]
+
 
 @pytest.mark.anyio
 class TestStructuralScannerToolContract:
@@ -190,16 +287,31 @@ class TestStructuralScannerToolContract:
 
         assert scan_tool.inputSchema["required"] == ["compile_log"]
         assert scan_tool.inputSchema["properties"]["simulator"]["default"] == "auto"
+        assert "coverage_status" in scan_tool.description
+        assert "zero_coverage" in scan_tool.description
 
     async def test_dispatch_uses_auto_simulator_default(self):
-        with patch.object(server, "scan_structural_risks", return_value={
-            "scan_scope": "scope1",
-            "files_scanned": 1,
-            "total_risks": 0,
-            "risks": [],
-            "categories_scanned": ["slice_overlap"],
-            "skipped_files": [],
-        }) as scan_mock:
+        compile_result = {"simulator": "vcs", "files": {"user": []}}
+        with (
+            patch.object(
+                server,
+                "_parse_merged_compile_context",
+                return_value=(compile_result, "vcs"),
+            ),
+            patch.object(
+                server,
+                "get_compile_source_index_config",
+                return_value=CompileSourceIndexConfig(enabled=False),
+            ),
+            patch.object(server, "scan_structural_risks", return_value={
+                "scan_scope": "scope1",
+                "files_scanned": 1,
+                "total_risks": 0,
+                "risks": [],
+                "categories_scanned": ["slice_overlap"],
+                "skipped_files": [],
+            }) as scan_mock,
+        ):
             result = await server._dispatch(
                 "scan_structural_risks",
                 {
@@ -213,6 +325,8 @@ class TestStructuralScannerToolContract:
             simulator="auto",
             scan_scope="scope1",
             categories=["slice_overlap"],
+            compile_result=compile_result,
+            source_loader=None,
         )
         assert result["scan_scope"] == "scope1"
         assert result["files_scanned"] == 1
@@ -276,6 +390,196 @@ class TestStructuralScannerToolContract:
 
             assert result["required_next_call"] is None
             assert result["suggested_next"] is None
+
+    async def test_build_tb_hierarchy_merges_split_compile_and_elaboration_logs(
+        self, tmp_path
+    ):
+        source = tmp_path / "tb.sv"
+        compile_log = tmp_path / "compile.log"
+        elaborate_log = tmp_path / "elaborate.log"
+        source.write_text("module tb; logic q; endmodule\n", encoding="utf-8")
+        compile_log.write_text(
+            "Chronologic VCS simulator\n"
+            f"Command: vlogan {source}\n"
+            f"Parsing design file '{source}'\n",
+            encoding="utf-8",
+        )
+        elaborate_log.write_text(
+            "Chronologic VCS simulator\n"
+            "Command: vcs -top tb\n"
+            "Top Level Modules:\n"
+            "       tb\n",
+            encoding="utf-8",
+        )
+
+        result = await server._dispatch(
+            "build_tb_hierarchy",
+            {
+                "compile_log": str(compile_log),
+                "supplementary_compile_logs": [str(elaborate_log)],
+                "simulator": "vcs",
+            },
+        )
+
+        expected_handle = server.compute_handle(
+            str(compile_log),
+            "vcs",
+            supplementary_compile_logs=(str(elaborate_log),),
+        )
+        assert result.hierarchy_handle == expected_handle
+        assert result.hierarchy_handle != server.compute_handle(
+            str(compile_log), "vcs"
+        )
+        assert result.project["top_module"] == "tb"
+        assert result.project["compile_context"] == {
+            "status": "complete",
+            "log_count": 2,
+            "supplementary_log_count": 1,
+            "phase_roles": ["compile", "elaborate"],
+            "conflicts": [],
+        }
+        context, snapshot = server._resolve_hierarchy_context(
+            str(compile_log), "vcs"
+        )
+        assert context is not None
+        assert context["compile_result"]["top_modules"] == ["tb"]
+        assert snapshot == server.compute_snapshot_fingerprint(
+            str(compile_log),
+            "vcs",
+            supplementary_compile_logs=(str(elaborate_log),),
+        )
+        assert context["_hierarchy_snapshot_sha256"] == snapshot
+        content_snapshot = context["_compile_session_snapshot"]
+        assert isinstance(content_snapshot, CompileSessionSnapshot)
+        assert content_snapshot.complete is True
+        assert content_snapshot.current() is True
+        assert content_snapshot.file_count == 1
+
+        # Recovery must not depend exclusively on the exact handle surviving
+        # in session/provenance. The ordered supplementary logs reproduce the
+        # same merged identity.
+        server._session_state["build_tb_hierarchy"].pop("hierarchy_handle")
+        server._result_provenance["build_tb_hierarchy"].pop("hierarchy_handle")
+        recovered, recovered_snapshot = server._resolve_hierarchy_context(
+            str(compile_log), "vcs"
+        )
+        assert recovered is context
+        assert recovered_snapshot == snapshot
+
+        # A primary-only lookup must never alias the split-log artifact when
+        # no matching supplementary provenance is available.
+        server._session_state["build_tb_hierarchy"] = {
+            "compile_log": str(compile_log),
+            "simulator": "vcs",
+        }
+        server._result_provenance["build_tb_hierarchy"] = {
+            "compile_log": str(compile_log),
+            "simulator": "vcs",
+        }
+        primary_only, _ = server._resolve_hierarchy_context(
+            str(compile_log), "vcs"
+        )
+        assert primary_only is None
+
+
+class TestSweepRetryRouting:
+    @staticmethod
+    def _result(**overrides):
+        payload = {
+            "wave_path": "/tmp/wave.vcd",
+            "discovered_count": 0,
+            "interface_count": 0,
+            "flagged_count": 0,
+            "coverage_status": "zero_coverage",
+            "coverage_warnings": ["ZERO COVERAGE: not a protocol pass"],
+            "suggested_next_actions": [],
+        }
+        payload.update(overrides)
+        return server.schemas.HandshakeSweepResult.model_validate(payload)
+
+    def test_unscoped_zero_coverage_has_no_non_progressing_retry(self):
+        result = self._result(
+            suggested_next_actions=[
+                {
+                    "tool": "sweep_handshakes",
+                    "arguments": {"wave_path": "/tmp/wave.vcd"},
+                    "reason": "Blind retry.",
+                }
+            ]
+        )
+
+        assert server._build_sweep_required_next_call("/tmp/wave.vcd", result) is None
+
+    def test_scoped_zero_coverage_retries_without_scope(self):
+        retry = {
+            "tool": "sweep_handshakes",
+            "arguments": {"wave_path": "/tmp/wave.vcd"},
+            "reason": "Retry without scope.",
+        }
+        result = self._result(scope="top_tb.u_dut", suggested_next_actions=[retry])
+
+        assert server._build_sweep_required_next_call("/tmp/wave.vcd", result) == retry
+
+    def test_truncated_coverage_synthesizes_a_larger_cap(self):
+        result = self._result(
+            coverage_status="truncated",
+            discovered_count=7,
+            interface_count=3,
+            truncated=True,
+        )
+
+        retry = server._build_sweep_required_next_call("/tmp/wave.vcd", result)
+
+        assert retry is not None
+        assert retry["arguments"]["max_interfaces"] == 7
+
+    def test_degraded_coverage_without_parameter_change_has_no_blind_retry(self):
+        result = self._result(
+            coverage_status="degraded",
+            discovered_count=1,
+            coverage_warnings=["COVERAGE DEGRADED: clock was not dumped"],
+        )
+
+        assert server._build_sweep_required_next_call("/tmp/wave.vcd", result) is None
+
+    def test_degraded_coverage_accepts_a_narrower_window_action(self):
+        retry = {
+            "tool": "sweep_handshakes",
+            "arguments": {
+                "wave_path": "/tmp/wave.vcd",
+                "start_time_ps": 100,
+                "end_time_ps": 200,
+            },
+            "reason": "Retry in a bounded window.",
+        }
+        result = self._result(
+            coverage_status="degraded",
+            discovered_count=1,
+            start_ps=0,
+            end_ps=1000,
+            suggested_next_actions=[retry],
+        )
+
+        assert server._build_sweep_required_next_call("/tmp/wave.vcd", result) == retry
+
+    def test_degraded_open_ended_window_accepts_a_later_start(self):
+        retry = {
+            "tool": "sweep_handshakes",
+            "arguments": {
+                "wave_path": "/tmp/wave.vcd",
+                "start_time_ps": 100,
+            },
+            "reason": "Retry after the failure-correlated anchor.",
+        }
+        result = self._result(
+            coverage_status="degraded",
+            discovered_count=1,
+            start_ps=0,
+            end_ps=-1,
+            suggested_next_actions=[retry],
+        )
+
+        assert server._build_sweep_required_next_call("/tmp/wave.vcd", result) == retry
 
 
 @pytest.mark.anyio
@@ -576,6 +880,63 @@ class TestParseSimLogSweepNextStep:
             )
             assert res.protocol_symptom_hint is not None  # symptom still reported
             assert res.protocol_symptom_next_step is None  # but no runnable call
+        finally:
+            server._result_cache.pop("get_sim_paths", None)
+
+    async def test_no_repeat_call_after_unscoped_zero_coverage(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        wave = tmp_path / "wave.fsdb"
+        wave.write_text("")
+        log = tmp_path / "run.log"
+        log.write_text(_SCOREBOARD_MISMATCH_LINE)
+        server._result_cache["get_sim_paths"] = types.SimpleNamespace(
+            wave_files=[types.SimpleNamespace(path=str(wave))]
+        )
+        _prefill_sweep_handshakes_cache(
+            str(wave),
+            interfaces=[],
+            coverage_status="zero_coverage",
+            coverage_warnings=["ZERO COVERAGE: not a protocol pass"],
+        )
+        try:
+            res = await server._dispatch(
+                "parse_sim_log", {"log_path": str(log), "simulator": "vcs"}
+            )
+
+            assert res.protocol_symptom_hint is not None
+            assert res.protocol_symptom_next_step is None
+        finally:
+            server._result_cache.pop("get_sim_paths", None)
+
+    async def test_scoped_zero_coverage_still_relays_unscoped_retry(self, tmp_path):
+        _prefill_get_sim_paths_state()
+        wave = tmp_path / "wave.fsdb"
+        wave.write_text("")
+        log = tmp_path / "run.log"
+        log.write_text(_SCOREBOARD_MISMATCH_LINE)
+        server._result_cache["get_sim_paths"] = types.SimpleNamespace(
+            wave_files=[types.SimpleNamespace(path=str(wave))]
+        )
+        retry = {
+            "tool": "sweep_handshakes",
+            "arguments": {"wave_path": str(wave)},
+            "reason": "Retry without scope.",
+        }
+        _prefill_sweep_handshakes_cache(
+            str(wave),
+            interfaces=[],
+            scope="top_tb.u_dut",
+            coverage_status="zero_coverage",
+            coverage_warnings=["ZERO COVERAGE: not a protocol pass"],
+            suggested_next_actions=[retry],
+        )
+        try:
+            res = await server._dispatch(
+                "parse_sim_log", {"log_path": str(log), "simulator": "vcs"}
+            )
+
+            assert res.protocol_symptom_next_step is not None
+            assert res.protocol_symptom_next_step.model_dump() == retry
         finally:
             server._result_cache.pop("get_sim_paths", None)
 
@@ -1629,7 +1990,28 @@ $enddefinitions $end
         assert result["required_next_call"]["tool"] == "sweep_handshakes"
         assert result["required_next_call"]["arguments"]["wave_path"] == str(wave_path)
 
-    async def test_recommend_treats_zero_coverage_sweep_as_incomplete(self, tmp_path):
+    @pytest.mark.parametrize(
+        ("coverage_status", "warning", "expected_missing_input"),
+        [
+            (
+                "zero_coverage",
+                "ZERO COVERAGE: no protocol interfaces checked; this is not a protocol pass.",
+                "not a protocol pass",
+            ),
+            (
+                "degraded",
+                "COVERAGE DEGRADED: clock was not dumped; flagged_count=0 is not clean.",
+                "prerequisite",
+            ),
+        ],
+    )
+    async def test_recommend_does_not_repeat_nonprogressing_incomplete_sweep(
+        self,
+        tmp_path,
+        coverage_status,
+        warning,
+        expected_missing_input,
+    ):
         _prefill_get_sim_paths_state()
         _prefill_build_tb_hierarchy_state()
         log_path = tmp_path / "run.log"
@@ -1670,15 +2052,9 @@ $enddefinitions $end
         _prefill_sweep_handshakes_cache(
             str(wave_path),
             interfaces=[],
-            coverage_status="zero_coverage",
-            coverage_warnings=["ZERO COVERAGE: no protocol interfaces checked"],
-            suggested_next_actions=[
-                {
-                    "tool": "sweep_handshakes",
-                    "arguments": {"wave_path": str(wave_path)},
-                    "reason": "Retry without scope.",
-                }
-            ],
+            coverage_status=coverage_status,
+            coverage_warnings=[warning],
+            suggested_next_actions=[],
         )
 
         result = await server._dispatch(
@@ -1693,8 +2069,10 @@ $enddefinitions $end
 
         assert result["workflow_incomplete"] is True
         assert result["degraded_reason"] == "incomplete_handshake_sweep"
-        assert result["required_next_call"]["tool"] == "sweep_handshakes"
-        assert result["required_next_call"]["arguments"]["wave_path"] == str(wave_path)
+        assert result["required_next_call"] is None
+        assert expected_missing_input in " ".join(result["missing_inputs"])
+        assert result["runtime_protocol_coverage"]["coverage_status"] == coverage_status
+        assert result["runtime_protocol_coverage"]["coverage_warnings"] == [warning]
 
     async def test_recommend_failure_debug_next_steps_ignores_incompatible_cached_inputs(self, tmp_path):
         _prefill_get_sim_paths_state()
@@ -2189,6 +2567,8 @@ x"
         assert len(result["propagation_chain"]) == 2
         assert result["propagation_chain"][0]["signal_path"] == "top_tb.u0.out_sig"
         assert result["propagation_chain"][1]["signal_path"] == "top_tb.u0.x_sig"
+        assert result["backend_status"]["actual_backend"] == "static"
+        assert result["trace_restarted"] is False
 
     async def test_trace_x_source_signal_not_in_waveform(self, tmp_path):
         _prefill_build_tb_hierarchy_state()
@@ -2241,6 +2621,236 @@ $enddefinitions $end
 
         assert result["trace_status"] == "signal_not_in_waveform"
         assert result["propagation_chain"][0]["trace_stop_reason"] == "signal_not_in_waveform"
+
+    async def test_trace_x_source_uses_selected_backend_outside_wave_lock(
+        self, monkeypatch, tmp_path
+    ):
+        import src.connectivity_backend as connectivity_backend
+
+        _prefill_build_tb_hierarchy_state()
+        compile_log = tmp_path / "compile.log"
+        wave_path = tmp_path / "wave.vcd"
+        compile_log.write_text("Chronologic VCS simulator\n")
+        wave_path.write_text(
+            """\
+$timescale 1ps $end
+$scope module top_tb $end
+$scope module u0 $end
+$var wire 1 ! out_sig $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+x!
+"""
+        )
+
+        calls: list[str] = []
+        wave_lock = server._wave_locks_for([str(wave_path)])[0]
+
+        class FakeNpiBackend:
+            name = "verdi_npi"
+            execution_mode = "local"
+            uses_external_worker = False
+
+            def find_driver(self, **kwargs):
+                assert not wave_lock.locked()
+                calls.append(kwargs["signal_path"])
+                if not kwargs["recursive"]:
+                    return {
+                        "driver_status": "resolved",
+                        "driver_kind": "unknown",
+                        "resolved_module": "top_tb",
+                        "source_file": "/tmp/top_tb.sv",
+                        "source_line": 12,
+                        "expression_summary": "shallow positional-port alias",
+                        "confidence": "exact",
+                        "upstream_signals": [],
+                    }
+                assert kwargs["max_depth"] == 7
+                return {
+                    "driver_status": "resolved",
+                    "driver_kind": "always_ff",
+                    "resolved_module": "dut",
+                    "source_file": "/tmp/dut.sv",
+                    "source_line": 20,
+                    "expression_summary": "deep NPI fan-in register",
+                    "confidence": "exact",
+                    "upstream_signals": [],
+                }
+
+        probe = {
+            "simulator": "vcs",
+            "backend": "static",
+            "parser_match": "approximate",
+            "kdb_path": "/tmp/kdb.elab++",
+            "kdb_flow": "vcs_two_step",
+        }
+        backend = FakeNpiBackend()
+        monkeypatch.setattr(server, "_safe_probe_backend", lambda *args: probe)
+        monkeypatch.setattr(
+            connectivity_backend,
+            "select_backend",
+            lambda status: backend,
+        )
+
+        result = await server._dispatch(
+            "trace_x_source",
+            {
+                "signal_path": "top_tb.u0.out_sig",
+                "wave_path": str(wave_path),
+                "compile_log": str(compile_log),
+                "time_ps": 0,
+                "top_hint": "top_tb",
+                "max_depth": 7,
+            },
+        )
+
+        assert calls == ["top_tb.u0.out_sig"]
+        assert result["trace_status"] == "traced_partial_chain"
+        assert result["propagation_chain"][0]["driver_kind"] == "always_ff"
+        assert result["propagation_chain"][0]["source_line"] == 20
+        assert result["propagation_chain"][0]["trace_stop_reason"] == "no_upstream_candidates"
+        assert result["backend_status"]["backend"] == "verdi_npi"
+        assert result["backend_status"]["actual_backend"] == "verdi_npi"
+        assert result["backend_status"]["execution_mode"] == "local"
+        assert result["trace_restarted"] is False
+
+    async def test_trace_x_source_restarts_whole_trace_after_npi_fallback(
+        self, monkeypatch, tmp_path
+    ):
+        import src.connectivity_backend as connectivity_backend
+
+        _prefill_build_tb_hierarchy_state()
+        compile_log = tmp_path / "compile.log"
+        wave_path = tmp_path / "wave.vcd"
+        compile_log.write_text("Chronologic VCS simulator\n")
+        wave_path.write_text(
+            """\
+$timescale 1ps $end
+$scope module top_tb $end
+$scope module u0 $end
+$var wire 1 ! mid_sig $end
+$var wire 1 " out_sig $end
+$upscope $end
+$upscope $end
+$enddefinitions $end
+#0
+x!
+x"
+"""
+        )
+
+        npi_calls: list[str] = []
+        static_calls: list[str] = []
+        wave_lock = server._wave_locks_for([str(wave_path)])[0]
+
+        class FakeNpiBackend:
+            name = "verdi_npi"
+            execution_mode = "lsf"
+            uses_external_worker = False
+
+            def find_driver(self, **kwargs):
+                assert not wave_lock.locked()
+                assert kwargs["recursive"] is True
+                assert kwargs["max_depth"] == 6
+                path = kwargs["signal_path"]
+                npi_calls.append(path)
+                if path.endswith(".out_sig"):
+                    return {
+                        "driver_status": "resolved",
+                        "driver_kind": "assign",
+                        "resolved_module": "dut",
+                        "source_file": "/tmp/dut.sv",
+                        "expression_summary": "npi root",
+                        "upstream_signals": ["mid_sig"],
+                    }
+                return {
+                    "driver_status": "partial",
+                    "driver_kind": "unknown",
+                    "resolved_module": "dut",
+                    "source_file": "/tmp/dut.sv",
+                    "expression_summary": "per-call Static fallback",
+                    "upstream_signals": [],
+                    "_npi_fallback_reason": "npi_lsf_timeout",
+                    "_npi_execution_status": {
+                        "execution_mode": "lsf",
+                        "scheduler_status": "timed_out",
+                        "worker_status": "not_started",
+                    },
+                }
+
+        class FakeStaticBackend:
+            name = "static"
+            uses_external_worker = False
+
+            def find_driver(self, **kwargs):
+                assert not wave_lock.locked()
+                assert kwargs["recursive"] is False
+                assert kwargs["max_depth"] == 6
+                path = kwargs["signal_path"]
+                static_calls.append(path)
+                if path.endswith(".out_sig"):
+                    return {
+                        "driver_status": "resolved",
+                        "driver_kind": "assign",
+                        "resolved_module": "dut",
+                        "source_file": "/tmp/dut.sv",
+                        "expression_summary": "static root",
+                        "upstream_signals": ["mid_sig"],
+                    }
+                return {
+                    "driver_status": "partial",
+                    "driver_kind": "unknown",
+                    "resolved_module": "dut",
+                    "source_file": "/tmp/dut.sv",
+                    "expression_summary": "static leaf",
+                    "upstream_signals": [],
+                }
+
+        probe = {
+            "simulator": "vcs",
+            "backend": "static",
+            "parser_match": "approximate",
+            "kdb_path": "/tmp/kdb.elab++",
+            "kdb_flow": "vcs_two_step",
+        }
+        npi_backend = FakeNpiBackend()
+        static_backend = FakeStaticBackend()
+        monkeypatch.setattr(server, "_safe_probe_backend", lambda *args: probe)
+        monkeypatch.setattr(
+            connectivity_backend,
+            "select_backend",
+            lambda status: npi_backend,
+        )
+        monkeypatch.setattr(
+            connectivity_backend,
+            "StaticConnectivityBackend",
+            lambda: static_backend,
+        )
+
+        result = await server._dispatch(
+            "trace_x_source",
+            {
+                "signal_path": "top_tb.u0.out_sig",
+                "wave_path": str(wave_path),
+                "compile_log": str(compile_log),
+                "time_ps": 0,
+                "top_hint": "top_tb",
+                "max_depth": 6,
+            },
+        )
+
+        assert npi_calls == ["top_tb.u0.out_sig", "top_tb.u0.mid_sig"]
+        assert static_calls == ["top_tb.u0.out_sig", "top_tb.u0.mid_sig"]
+        assert result["propagation_chain"][0]["driver_expression"] == "static root"
+        assert result["propagation_chain"][1]["driver_expression"] == "static leaf"
+        assert result["backend_status"]["backend"] == "verdi_npi"
+        assert result["backend_status"]["actual_backend"] == "static"
+        assert result["backend_status"]["fallback_reason"] == "npi_lsf_timeout"
+        assert result["backend_status"]["execution_mode"] == "lsf"
+        assert result["backend_status"]["scheduler_status"] == "timed_out"
+        assert result["trace_restarted"] is True
 
 
 @pytest.mark.anyio
@@ -2354,6 +2964,20 @@ class TestSignalTransitionsCap:
         assert result.truncated is False
         assert result.hint is None
         assert result.transition_count == len(result.transitions)
+
+    async def test_public_result_has_strict_window_and_separate_predecessor(self):
+        result = await server._dispatch(
+            "get_signal_transitions",
+            {
+                "wave_path": str(self._FIXTURE),
+                "signal_path": "top_tb.clk",
+                "start_time_ps": 1000,
+                "end_time_ps": 2000,
+            },
+        )
+
+        assert result.predecessor["time_ps"] == 500
+        assert all(1000 <= item["time_ps"] <= 2000 for item in result.transitions)
 
     async def test_explicit_cap_truncates_keeps_earliest_and_hints(self):
         full = await server._dispatch(
@@ -2554,6 +3178,128 @@ $enddefinitions $end
         )
         assert server._session_state["build_tb_hierarchy"] is None
         assert server._session_state["get_sim_paths"] is not None
+
+    def test_same_case_discovery_preserves_fresh_merged_hierarchy(self, tmp_path):
+        compile_log = tmp_path / "compile.log"
+        elaborate_log = tmp_path / "elaborate.log"
+        compile_log.write_text("compile\n", encoding="utf-8")
+        elaborate_log.write_text("elaborate\n", encoding="utf-8")
+        snapshot = server.compute_snapshot_fingerprint(
+            str(compile_log),
+            "vcs",
+            supplementary_compile_logs=(str(elaborate_log),),
+        )
+        handle = server.compute_handle(
+            str(compile_log),
+            "vcs",
+            supplementary_compile_logs=(str(elaborate_log),),
+        )
+        full = {"_hierarchy_snapshot_sha256": snapshot, "component_tree": {}}
+        server._handle_store.register(handle, full)
+        hierarchy_state = {
+            "compile_log": str(compile_log),
+            "simulator": "vcs",
+            "hierarchy_handle": handle,
+            "hierarchy_snapshot_sha256": snapshot,
+            "supplementary_compile_logs": [str(elaborate_log)],
+        }
+        hierarchy_result = server.schemas.BuildTbHierarchyResult.model_validate(
+            {
+                "hierarchy_handle": handle,
+                "project": {"simulator": "vcs"},
+            }
+        )
+        server._session_state["build_tb_hierarchy"] = dict(hierarchy_state)
+        server._result_cache["build_tb_hierarchy"] = hierarchy_result
+        server._result_provenance["build_tb_hierarchy"] = dict(hierarchy_state)
+
+        sim_payload = {
+            "verif_root": str(tmp_path),
+            "case_name": "case0",
+            "config_source": "auto",
+            "discovery_mode": "case_dir",
+            "case_dir": str(tmp_path / "work_case0"),
+            "simulator": "vcs",
+            "compile_logs": [
+                {
+                    "path": str(compile_log),
+                    "size": compile_log.stat().st_size,
+                    "mtime": "2026-08-22T00:00:00",
+                    "age_hours": 0.0,
+                    "phase": "compile",
+                }
+            ],
+        }
+        sim_result = server.schemas.SimPathsResult.model_validate(sim_payload)
+        server._result_cache["get_sim_paths"] = sim_result
+        server._session_state["get_sim_paths"] = {
+            "verif_root": str(tmp_path),
+            "case_dir": str(tmp_path / "work_case0"),
+            "simulator": "vcs",
+            "compile_log": str(compile_log),
+        }
+
+        server._update_session_state("get_sim_paths", {}, sim_payload)
+
+        assert server._session_state["build_tb_hierarchy"] == hierarchy_state
+        assert server._result_cache["build_tb_hierarchy"] is hierarchy_result
+        assert server._result_provenance["build_tb_hierarchy"] == hierarchy_state
+        assert server._handle_store.resolve(handle) is full
+
+    def test_same_case_discovery_invalidates_changed_supplement(self, tmp_path):
+        compile_log = tmp_path / "compile.log"
+        elaborate_log = tmp_path / "elaborate.log"
+        compile_log.write_text("compile\n", encoding="utf-8")
+        elaborate_log.write_text("elaborate\n", encoding="utf-8")
+        snapshot = server.compute_snapshot_fingerprint(
+            str(compile_log),
+            "vcs",
+            supplementary_compile_logs=(str(elaborate_log),),
+        )
+        handle = server.compute_handle(
+            str(compile_log),
+            "vcs",
+            supplementary_compile_logs=(str(elaborate_log),),
+        )
+        hierarchy_state = {
+            "compile_log": str(compile_log),
+            "simulator": "vcs",
+            "hierarchy_handle": handle,
+            "hierarchy_snapshot_sha256": snapshot,
+            "supplementary_compile_logs": [str(elaborate_log)],
+        }
+        server._session_state["build_tb_hierarchy"] = dict(hierarchy_state)
+        server._result_cache["build_tb_hierarchy"] = (
+            server.schemas.BuildTbHierarchyResult.model_validate(
+                {"hierarchy_handle": handle, "project": {"simulator": "vcs"}}
+            )
+        )
+        server._result_provenance["build_tb_hierarchy"] = dict(hierarchy_state)
+        server._handle_store.register(
+            handle,
+            {"_hierarchy_snapshot_sha256": snapshot, "component_tree": {}},
+        )
+
+        sim_payload = {
+            "verif_root": str(tmp_path),
+            "case_name": "case0",
+            "config_source": "auto",
+            "discovery_mode": "case_dir",
+            "case_dir": str(tmp_path / "work_case0"),
+            "simulator": "vcs",
+            "compile_logs": [],
+        }
+        server._result_cache["get_sim_paths"] = (
+            server.schemas.SimPathsResult.model_validate(sim_payload)
+        )
+        elaborate_log.write_text("elaborate changed\n", encoding="utf-8")
+
+        server._update_session_state("get_sim_paths", {}, sim_payload)
+
+        assert server._session_state["build_tb_hierarchy"] is None
+        assert server._result_cache["build_tb_hierarchy"] is None
+        assert server._result_provenance["build_tb_hierarchy"] is None
+        assert server._handle_store.resolve(handle) is None
 
     async def test_suggested_call_includes_compile_log(self):
         _prefill_get_sim_paths_state(

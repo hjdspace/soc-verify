@@ -6,7 +6,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
-from src.structural_scanner import scan_structural_risks
+from src.compile_source_index import CompileSourceIndex
+from src.structural_scanner import (
+    _index_enclosing_brace_spans,
+    scan_structural_risks,
+)
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "structural"
@@ -21,6 +25,185 @@ def _compile_result_for(*names: str) -> dict:
 
 
 class TestStructuralScanner:
+    @pytest.mark.parametrize("suffix", [".svi", ".sva", ".svl"])
+    def test_extended_systemverilog_suffixes_are_text_scanned(
+        self, tmp_path, suffix
+    ):
+        rtl = tmp_path / f"checker{suffix}"
+        rtl.write_text(
+            "module checker(input logic [3:0] mode, output logic y);\n"
+            "  always_comb if (mode == 4'h2) y = 1'b1;\n"
+            "endmodule\n",
+            encoding="utf-8",
+        )
+        compile_result = {
+            "files": {"user": [{"path": str(rtl), "type": "module"}]}
+        }
+
+        result = scan_structural_risks(
+            "/tmp/compile.log",
+            "vcs",
+            categories=["magic_condition"],
+            compile_result=compile_result,
+        )
+
+        assert result["eligible_file_count"] == 1
+        assert result["files_scanned"] == 1
+        assert result["total_risks"] == 1
+
+    def test_protected_svp_is_not_misread_as_plain_structural_source(self, tmp_path):
+        protected = tmp_path / "encrypted.svp"
+        protected.write_text(
+            "module fake; always_comb if (mode == 4'h2) y = 1'b1; endmodule\n",
+            encoding="utf-8",
+        )
+        compile_result = {
+            "files": {"user": [{"path": str(protected), "type": "module"}]}
+        }
+
+        result = scan_structural_risks(
+            "/tmp/compile.log",
+            "vcs",
+            compile_result=compile_result,
+        )
+
+        assert result["coverage_status"] == "zero_coverage"
+        assert result["files_scanned"] == 0
+        assert result["total_risks"] == 0
+        assert any(
+            "protected SystemVerilog inputs" in warning
+            for warning in result["coverage_warnings"]
+        )
+
+    def test_protected_svp_degrades_mixed_text_scan_coverage(self, tmp_path):
+        rtl = tmp_path / "top.sv"
+        protected = tmp_path / "encrypted.svp"
+        rtl.write_text("module top; endmodule\n", encoding="utf-8")
+        protected.write_text("opaque ciphertext\n", encoding="utf-8")
+        compile_result = {
+            "files": {
+                "user": [
+                    {"path": str(rtl), "type": "module"},
+                    {"path": str(protected), "type": "module"},
+                ]
+            }
+        }
+
+        result = scan_structural_risks(
+            "/tmp/compile.log",
+            "vcs",
+            compile_result=compile_result,
+        )
+
+        assert result["eligible_file_count"] == 1
+        assert result["files_scanned"] == 1
+        assert result["coverage_status"] == "degraded"
+        assert any(
+            "protected SystemVerilog inputs" in warning
+            for warning in result["coverage_warnings"]
+        )
+
+    def test_compile_source_index_serves_both_structural_passes(self, tmp_path):
+        rtl = tmp_path / "top.sv"
+        rtl.write_text(
+            "module top(input logic [3:0] mode, output logic y);\n"
+            "  always_comb if (mode == 4'h2) y = 1'b1;\n"
+            "endmodule\n"
+        )
+        compile_result = {
+            "files": {
+                "user": [
+                    {
+                        "path": str(rtl),
+                        "type": "module",
+                        "category": "rtl",
+                    }
+                ]
+            }
+        }
+        index = CompileSourceIndex(max_bytes=1024, max_files=4)
+        index.preload([str(rtl)])
+
+        result = scan_structural_risks(
+            "/tmp/compile.log",
+            "vcs",
+            compile_result=compile_result,
+            source_loader=index.read_text,
+        )
+        metrics = index.metrics_snapshot()
+
+        assert result["total_risks"] == 1
+        assert metrics["compile_source_index_physical_read_count"] == 1
+        assert metrics["compile_source_index_cache_hit_count"] == 2
+
+    def test_brace_span_index_preserves_innermost_and_balanced_semantics(self):
+        text = "prefix { outer 8'b0 { inner 4'b0 } tail 2'b0 } orphan 1'b0"
+        positions = [
+            text.index("8'b0"),
+            text.index("4'b0"),
+            text.index("2'b0"),
+            text.index("1'b0"),
+        ]
+
+        spans = _index_enclosing_brace_spans(text, positions)
+
+        assert text[slice(*spans[positions[0]])] == (
+            "{ outer 8'b0 { inner 4'b0 } tail 2'b0 }"
+        )
+        assert text[slice(*spans[positions[1]])] == "{ inner 4'b0 }"
+        assert text[slice(*spans[positions[2]])] == (
+            "{ outer 8'b0 { inner 4'b0 } tail 2'b0 }"
+        )
+        assert positions[3] not in spans
+
+    def test_brace_span_index_does_not_publish_unclosed_frames(self):
+        text = "{ outer 8'b0 { inner 4'b0 }"
+        outer = text.index("8'b0")
+        inner = text.index("4'b0")
+
+        spans = _index_enclosing_brace_spans(text, [outer, inner])
+
+        assert outer not in spans
+        assert text[slice(*spans[inner])] == "{ inner 4'b0 }"
+
+    def test_magic_candidate_scan_keeps_multiple_comparisons_on_one_line(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        rtl = tmp_path / "two_magic_compares.sv"
+        rtl.write_text(
+            "module top;\n"
+            "  always_comb if (a == 4'h2 || b != 4'h3) y = 1'b1;\n"
+            "endmodule\n"
+        )
+        monkeypatch.setattr(
+            "src.structural_scanner.parse_compile_log",
+            lambda compile_log, simulator: {
+                "files": {
+                    "user": [
+                        {
+                            "path": str(rtl),
+                            "type": "module",
+                            "category": "rtl",
+                        }
+                    ]
+                }
+            },
+        )
+
+        result = scan_structural_risks(
+            "/tmp/compile.log",
+            "vcs",
+            categories=["magic_condition"],
+        )
+
+        assert [risk["line"] for risk in result["risks"]] == [2, 2]
+        assert [risk["detail"] for risk in result["risks"]] == [
+            "Condition compares against magic literal 4'h2",
+            "Condition compares against magic literal 4'h3",
+        ]
+
     def test_detects_slice_overlap_and_gap(self, monkeypatch):
         monkeypatch.setattr(
             "src.structural_scanner.parse_compile_log",
@@ -29,7 +212,10 @@ class TestStructuralScanner:
 
         result = scan_structural_risks("/tmp/compile.log", "vcs", categories=["slice_overlap"])
 
+        assert result["eligible_file_count"] == 1
         assert result["files_scanned"] == 1
+        assert result["coverage_status"] == "complete"
+        assert result["coverage_warnings"] == []
         assert result["total_risks"] == 1
         risk = result["risks"][0]
         assert risk["type"] == "slice_overlap"
@@ -191,8 +377,63 @@ endinterface
 
         result = scan_structural_risks("/tmp/compile.log", "vcs", categories=["magic_condition"])
 
+        assert result["eligible_file_count"] == 2
         assert result["files_scanned"] == 1
         assert len(result["skipped_files"]) == 1
+        assert result["coverage_status"] == "degraded"
+        assert "DEGRADED COVERAGE" in result["coverage_warnings"][0]
+
+    def test_reports_zero_coverage_when_no_supported_sources_are_discovered(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.structural_scanner.parse_compile_log",
+            lambda compile_log, simulator: {
+                "files": {"user": []},
+                "parse_warnings": ["filelist was unavailable"],
+            },
+        )
+
+        result = scan_structural_risks("/tmp/compile.log", "vcs", categories=["magic_condition"])
+
+        assert result["eligible_file_count"] == 0
+        assert result["files_scanned"] == 0
+        assert result["total_risks"] == 0
+        assert result["coverage_status"] == "zero_coverage"
+        assert "not evidence of a clean design" in result["coverage_warnings"][0]
+        assert "1 warning" in result["coverage_warnings"][1]
+
+    def test_unsupported_sources_do_not_count_as_structural_coverage(self, monkeypatch, tmp_path):
+        vhdl = tmp_path / "dut.vhd"
+        vhdl.write_text("entity dut is end entity;\n")
+        monkeypatch.setattr(
+            "src.structural_scanner.parse_compile_log",
+            lambda compile_log, simulator: {
+                "files": {"user": [{"path": str(vhdl), "type": "module", "category": "rtl"}]}
+            },
+        )
+
+        result = scan_structural_risks("/tmp/compile.log", "vcs")
+
+        assert result["eligible_file_count"] == 0
+        assert result["files_scanned"] == 0
+        assert result["skipped_files"] == []
+        assert result["coverage_status"] == "zero_coverage"
+
+    def test_compile_parser_warning_degrades_otherwise_complete_scan(self, monkeypatch):
+        compile_result = _compile_result_for("des_clean.v")
+        compile_result["parse_warnings"] = ["nested filelist could not be read"]
+        monkeypatch.setattr(
+            "src.structural_scanner.parse_compile_log",
+            lambda compile_log, simulator: compile_result,
+        )
+
+        result = scan_structural_risks("/tmp/compile.log", "vcs", categories=["magic_condition"])
+
+        assert result["eligible_file_count"] == 1
+        assert result["files_scanned"] == 1
+        assert result["coverage_status"] == "degraded"
+        assert result["coverage_warnings"] == [
+            "Compile-log parsing reported 1 warning; structural source coverage may be incomplete."
+        ]
 
     def test_rejects_unknown_category(self):
         with pytest.raises(ValueError, match="Unknown categories"):

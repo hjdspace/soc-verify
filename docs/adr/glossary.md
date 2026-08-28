@@ -170,3 +170,26 @@ officecli 二进制不可用时：
 - `D:\AI\SpaceCode\scripts\download-officecli.mjs` —— 下载脚本
 - `D:\AI\SpaceCode\src\components\work\PreviewPanel.vue` —— 预览组件
 - `D:\AI\SpaceCode\skills-lib\{docx,pptx,xlsx,pdf}\SKILL.md` —— 技能文档
+
+## TraceWeave 内置 MCP（ADR 0020）
+
+### TraceWeave
+开源（MIT）的 Python MCP Server（vendored 副本位于 `engine/traceweave/`），提供仿真日志解析与 FSDB/VCD 波形分析能力，供 AI Agent 在仿真失败时做根因分析。经 stdio 传输由 omp 引擎按 MCP 配置 spawn，全局注入所有 AI 会话。
+
+### 内置 MCP（Built-in MCP）
+随应用源码打包、会话创建时自动注册进 `~/.omp/mcp.json` 的 MCP 服务器，用户无需手动配置。目前唯一实例是 TraceWeave。区别于用户手动添加的用户级/项目级 MCP。
+
+### 用户机前置（User-Machine Prerequisite）
+内置 TraceWeave 依赖但不随包分发的运行环境：Python 3.11+ 与 pip 依赖（`mcp`、`PyYAML`）。前置缺失不是静默降级，而是通过诊断与通知给出可操作修复指引。
+
+### TraceWeave 诊断
+三级结构化就绪检测（Python 存在与版本 ≥3.11 → pip 依赖可导入 → FSDB 能力），由 `diagnoseTraceweave()` 实现，在设置页 MCP 标签页展示为诊断卡并附一键复制的安装命令。
+
+### 能力降级阶梯
+TraceWeave 连通性分析的自动回退顺序：Verdi NPI（需 `VERDI_HOME` + KDB）→ Source Graph（需可选 `pyslang`）→ Legacy Static（无外部依赖）。任何一级可用即工作，决定 AI 能获得多深的信号追踪能力。
+
+### FSDB wrapper
+本地编译的胶水库 `libfsdb_wrapper.so`，通过 ctypes 桥接 Python 与 Verdi FsdbReader 运行库（`libnsys`/`libnffr`）。缺失时 FSDB 解析整体禁用（VCD 不受影响）。由 Linux 构建机在 `package:linux` 时预编译并随包分发；Synopsys 运行库本身不分发，运行时从用户 `VERDI_HOME` 加载。
+
+### 本地补丁（TraceWeave Local Patches）
+soc-verify 对 vendored TraceWeave 源码的小幅修改（当前为 `fcntl`/`resource` 的 POSIX-only 条件导入，保证 Windows 可启动）。补丁以 `LOCAL PATCH (soc-verify, ADR 0020)` 注释标记；上游升级整体替换后必须重打（清单见 ADR 0020）。

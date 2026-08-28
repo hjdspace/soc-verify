@@ -17,6 +17,7 @@ import anyio
 import pytest
 
 import server
+from config import CompileSourceIndexConfig
 from src import cancellation, operation_metrics
 from src.cancellation import OperationCancelled
 
@@ -66,9 +67,7 @@ class TestWaveLocks:
         holder_event = threading.Event()
         waiter_event = threading.Event()
         metrics = operation_metrics.OperationMetrics()
-        server._set_active_fsdb(
-            holder_event, server._WAVE_PRIORITY_BACKGROUND, metrics
-        )
+        server._set_active_fsdb(holder_event, server._WAVE_PRIORITY_BACKGROUND, metrics)
         try:
             server._preempt_lower_priority_fsdb(
                 waiter_event, server._WAVE_PRIORITY_INTERACTIVE
@@ -114,6 +113,61 @@ class TestCheckCancelled:
 
 @pytest.mark.anyio
 class TestEventLoopNotBlocked:
+    async def test_structural_scan_does_not_block_light_calls(self, monkeypatch):
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_scan(**_kwargs):
+            started.set()
+            release.wait(timeout=10)
+            return {
+                "scan_scope": "scope1",
+                "eligible_file_count": 1,
+                "files_scanned": 1,
+                "coverage_status": "complete",
+                "coverage_warnings": [],
+                "total_risks": 0,
+                "risks": [],
+                "categories_scanned": ["slice_overlap"],
+                "skipped_files": [],
+            }
+
+        monkeypatch.setattr(server, "scan_structural_risks", slow_scan)
+        monkeypatch.setattr(
+            server,
+            "_parse_merged_compile_context",
+            lambda **_kwargs: (
+                {"simulator": "vcs", "files": {"user": []}},
+                "vcs",
+            ),
+        )
+        monkeypatch.setattr(
+            server,
+            "get_compile_source_index_config",
+            lambda: CompileSourceIndexConfig(enabled=False),
+        )
+        light_elapsed = None
+        try:
+            async with anyio.create_task_group() as tg:
+
+                async def heavy():
+                    await server._dispatch(
+                        "scan_structural_risks",
+                        {"compile_log": "/fake/compile.log", "simulator": "vcs"},
+                    )
+
+                tg.start_soon(heavy)
+                assert await anyio.to_thread.run_sync(_wait_event, started, 5)
+                start = time.perf_counter()
+                result = await server._dispatch("cursor_list", {})
+                light_elapsed = time.perf_counter() - start
+                assert result is not None
+                release.set()
+        finally:
+            release.set()
+
+        assert light_elapsed < 0.5
+
     async def test_sweep_dispatch_uses_background_priority(self, monkeypatch):
         class DispatchReached(Exception):
             pass
@@ -127,11 +181,11 @@ class TestEventLoopNotBlocked:
         monkeypatch.setattr(server, "_run_in_wave_thread", capture_run)
 
         with pytest.raises(DispatchReached):
-            await server._dispatch(
-                "sweep_handshakes", {"wave_path": "/fake/wave.fsdb"}
-            )
+            await server._dispatch("sweep_handshakes", {"wave_path": "/fake/wave.fsdb"})
 
-    async def test_light_call_completes_while_heavy_wave_call_in_flight(self, monkeypatch):
+    async def test_light_call_completes_while_heavy_wave_call_in_flight(
+        self, monkeypatch
+    ):
         started = threading.Event()
         release = threading.Event()
 
@@ -145,6 +199,7 @@ class TestEventLoopNotBlocked:
         light_elapsed = None
         try:
             async with anyio.create_task_group() as tg:
+
                 async def heavy():
                     await server._dispatch(
                         "get_waveform_summary", {"wave_path": "/fake/heavy.vcd"}
@@ -220,6 +275,56 @@ class TestEventLoopNotBlocked:
 
 @pytest.mark.anyio
 class TestCooperativeCancellation:
+    async def test_cancelled_structural_scan_stops_at_checkpoint(
+        self,
+        monkeypatch,
+    ):
+        started = threading.Event()
+        observed_cancel = threading.Event()
+        ran_to_completion = threading.Event()
+
+        def looping_scan(**_kwargs):
+            started.set()
+            deadline = time.monotonic() + 5
+            try:
+                while time.monotonic() < deadline:
+                    cancellation.check_cancelled()
+                    time.sleep(0.01)
+            except OperationCancelled:
+                observed_cancel.set()
+                raise
+            ran_to_completion.set()
+            return {}
+
+        monkeypatch.setattr(server, "scan_structural_risks", looping_scan)
+        monkeypatch.setattr(
+            server,
+            "_parse_merged_compile_context",
+            lambda **_kwargs: (
+                {"simulator": "vcs", "files": {"user": []}},
+                "vcs",
+            ),
+        )
+        monkeypatch.setattr(
+            server,
+            "get_compile_source_index_config",
+            lambda: CompileSourceIndexConfig(enabled=False),
+        )
+        async with anyio.create_task_group() as tg:
+
+            async def call():
+                await server._dispatch(
+                    "scan_structural_risks",
+                    {"compile_log": "/fake/compile.log", "simulator": "vcs"},
+                )
+
+            tg.start_soon(call)
+            assert await anyio.to_thread.run_sync(_wait_event, started, 5)
+            tg.cancel_scope.cancel()
+
+        assert await anyio.to_thread.run_sync(_wait_event, observed_cancel, 2)
+        assert not ran_to_completion.is_set()
+
     async def test_cancelled_call_stops_at_next_checkpoint(self, monkeypatch):
         started = threading.Event()
         observed_cancel = threading.Event()
@@ -238,9 +343,12 @@ class TestCooperativeCancellation:
             ran_to_completion.set()
             return _summary_dict()
 
-        monkeypatch.setattr(server, "_get_parser", lambda p: FakeParser(looping_summary))
+        monkeypatch.setattr(
+            server, "_get_parser", lambda p: FakeParser(looping_summary)
+        )
 
         async with anyio.create_task_group() as tg:
+
             async def call():
                 await server._dispatch(
                     "get_waveform_summary", {"wave_path": "/fake/cancel.vcd"}
@@ -273,6 +381,7 @@ class TestCooperativeCancellation:
 
         try:
             async with anyio.create_task_group() as tg:
+
                 async def holder():
                     await server._dispatch(
                         "get_waveform_summary", {"wave_path": "/fake/queued.vcd"}
@@ -298,6 +407,135 @@ class TestCooperativeCancellation:
 
 @pytest.mark.anyio
 class TestExternalConnectivityWorker:
+    async def test_trace_x_source_static_scan_does_not_block_event_loop(
+        self,
+        monkeypatch,
+    ):
+        backend_started = threading.Event()
+        backend_release = threading.Event()
+        result_box: dict = {}
+
+        class TraceParser:
+            def get_value_at_time(self, signal_path, time_ps):
+                return {"value": {"raw": "x"}}
+
+        class FakeStaticBackend:
+            name = "static"
+            uses_external_worker = False
+
+            def find_driver(self, **kwargs):
+                backend_started.set()
+                backend_release.wait(timeout=10)
+                return {
+                    "driver_status": "partial",
+                    "driver_kind": "unknown",
+                    "resolved_module": "dut",
+                    "source_file": None,
+                    "expression_summary": "static leaf",
+                    "upstream_signals": [],
+                }
+
+        monkeypatch.setattr(server, "_get_parser", lambda path: TraceParser())
+
+        light_elapsed = None
+        try:
+            async with anyio.create_task_group() as tg:
+
+                async def run_trace():
+                    result_box["result"], _ = await server._run_trace_x_attempt(
+                        backend=FakeStaticBackend(),
+                        wave_path="/fake/static-trace.vcd",
+                        signal_path="top_tb.dut.out",
+                        time_ps=0,
+                        compile_log="/fake/compile.log",
+                        top_hint="top_tb",
+                        max_depth=2,
+                        simulator="vcs",
+                        abort_on_backend_fallback=False,
+                    )
+
+                tg.start_soon(run_trace)
+                assert await anyio.to_thread.run_sync(_wait_event, backend_started, 5)
+                begin = time.perf_counter()
+                await server._dispatch("cursor_list", {})
+                light_elapsed = time.perf_counter() - begin
+                backend_release.set()
+        finally:
+            backend_release.set()
+
+        assert light_elapsed < 0.5
+        assert result_box["result"]["trace_status"] == "driver_unresolved"
+
+    async def test_trace_x_source_releases_wave_lock_before_external_backend(
+        self,
+        monkeypatch,
+    ):
+        backend_started = threading.Event()
+        backend_release = threading.Event()
+        result_box: dict = {}
+        wave_path = "/fake/x-trace.fsdb"
+
+        class TraceParser:
+            def get_value_at_time(self, signal_path, time_ps):
+                return {"value": {"raw": "x"}}
+
+        class FakeBackend:
+            name = "verdi_npi"
+            execution_mode = "lsf"
+            uses_external_worker = True
+
+            def find_driver(self, **kwargs):
+                assert not server._wave_locks_for([wave_path])[0].locked()
+                backend_started.set()
+                backend_release.wait(timeout=10)
+                return {
+                    "driver_status": "partial",
+                    "driver_kind": "unknown",
+                    "resolved_module": "dut",
+                    "source_file": None,
+                    "expression_summary": "external leaf",
+                    "upstream_signals": [],
+                    "_npi_execution_status": {
+                        "execution_mode": "lsf",
+                        "scheduler_status": "completed",
+                        "worker_status": "completed",
+                    },
+                }
+
+        monkeypatch.setattr(server, "_get_parser", lambda path: TraceParser())
+
+        try:
+            async with anyio.create_task_group() as tg:
+
+                async def run_trace():
+                    result_box["result"], _ = await server._run_trace_x_attempt(
+                        backend=FakeBackend(),
+                        wave_path=wave_path,
+                        signal_path="top_tb.dut.out",
+                        time_ps=0,
+                        compile_log="/fake/compile.log",
+                        top_hint="top_tb",
+                        max_depth=2,
+                        simulator="vcs",
+                        abort_on_backend_fallback=True,
+                    )
+
+                tg.start_soon(run_trace)
+                assert await anyio.to_thread.run_sync(_wait_event, backend_started, 5)
+
+                # The trace is waiting on its backend worker, but another
+                # operation on the same waveform must be able to take the lock.
+                with anyio.fail_after(1):
+                    marker = await server._run_in_wave_thread(
+                        wave_path, lambda: "wave-lock-free"
+                    )
+                assert marker == "wave-lock-free"
+                backend_release.set()
+        finally:
+            backend_release.set()
+
+        assert result_box["result"]["trace_status"] == "driver_unresolved"
+
     async def test_external_connectivity_does_not_block_event_loop(
         self,
         monkeypatch,
@@ -342,7 +580,7 @@ class TestExternalConnectivityWorker:
         )
         monkeypatch.setattr(
             "src.connectivity_backend.select_backend",
-            lambda status: FakeBackend(),
+            lambda status, **kwargs: FakeBackend(),
         )
 
         light_elapsed = None
@@ -405,7 +643,7 @@ class TestExternalConnectivityWorker:
         )
         monkeypatch.setattr(
             "src.connectivity_backend.select_backend",
-            lambda status: FakeBackend(),
+            lambda status, **kwargs: FakeBackend(),
         )
 
         async with anyio.create_task_group() as tg:

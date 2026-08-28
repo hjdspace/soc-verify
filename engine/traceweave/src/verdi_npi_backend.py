@@ -19,16 +19,39 @@ from __future__ import annotations
 import atexit
 import contextlib
 import ctypes
+import hashlib
 import logging
 import os
 import re
 import sys
 import tempfile
+import threading
+import time
 from typing import Any
 
+from config import NPI_ALLOW_DEGRADED_KDB
+from .cancellation import OperationCancelled, check_cancelled
 from .compile_log_parser import parse_compile_log
 from .connectivity_backend import StaticConnectivityBackend
-from .verdi_backend import probe_verdi_backend
+from .connectivity_limits import (
+    DEFAULT_DRIVER_OUTPUT_LIMIT,
+    DEFAULT_LOAD_OUTPUT_LIMIT,
+    DEFAULT_NPI_DRIVER_STATE_LIMIT,
+    DEFAULT_NPI_LOAD_BOUNDARY_STATE_LIMIT,
+    DEFAULT_NPI_LOAD_HANDLE_LIMIT,
+)
+from .hierarchy_provider import (
+    HierarchyCandidateLimitExceeded,
+    NpiHierarchyProvider,
+    NpiInstanceBindingFact,
+    hierarchy_candidate_instance_paths,
+)
+from .operation_metrics import read_process_rss_kib
+from .verdi_backend import (
+    kdb_has_elaboration_errors,
+    probe_verdi_backend,
+    read_kdb_elab_error_metadata,
+)
 
 
 _LOG = logging.getLogger(__name__)
@@ -41,6 +64,28 @@ _LOG = logging.getLogger(__name__)
 # subsequent integration tests with the real native module.
 _NPI_INITIALIZED_IDS: set[int] = set()
 _BANNER_SILENCER_INSTALLED = False
+_NPI_FAN_IN_CALLBACK_LOCK = threading.Lock()
+
+
+def _simflow_dbdir(kdb_path: str) -> str:
+    """Return the database root expected by ``-simflow -dbdir``.
+
+    Probing deliberately identifies the elaborated artifact itself.  For a
+    VCS two-step database, that artifact is
+    ``<run>/simv.daidir/kdb.elab++``; NPI simflow expects the containing
+    ``simv.daidir``.  Verdi 2020 otherwise
+    searches for a nested ``kdb.elab++/kdb.elab++``.  Newer releases may
+    accept both forms, but the containing directory is compatible with both.
+
+    Other database layouts (for example ``*.lib++``) retain the path supplied
+    by the probe.  The caller also keeps ``kdb_path`` unchanged as its cache
+    identity; this helper is only for the native command-line argument.
+    """
+
+    normalized = os.path.normpath(kdb_path)
+    if os.path.basename(normalized) == "kdb.elab++":
+        return os.path.dirname(normalized) or os.curdir
+    return kdb_path
 
 
 def _install_shutdown_banner_silencer() -> None:
@@ -130,14 +175,6 @@ def _silence_native_stdio():
         os.close(saved_err)
         sink.close()
 
-# Cap how many fan-in boundary points we materialise into a chain. A
-# combinational cone of a wide bus can legitimately produce dozens of
-# upstream regs; we surface a representative subset so the result stays
-# legible without truncating silently for typical signals.
-_FAN_IN_MAX_BRANCHES = 32
-_FAN_OUT_MAX_BRANCHES = 64
-
-
 def _module_of(hdl: Any) -> str | None:
     """Best-effort lookup of the module *definition* name owning an NPI handle.
 
@@ -159,6 +196,35 @@ def _module_of(hdl: Any) -> str | None:
     except Exception:
         return None
     return name or None
+
+
+def _npi_handle_key(hdl: Any) -> tuple[str, str] | tuple[str, int]:
+    """Return a stable-in-query key without retaining another native handle."""
+
+    try:
+        kind = str(hdl.type()) if hasattr(hdl, "type") else type(hdl).__name__
+        name = hdl.full_name() if hasattr(hdl, "full_name") else None
+    except Exception:
+        return ("object", id(hdl))
+    if isinstance(name, str) and name:
+        return kind, name
+    return ("object", id(hdl))
+
+
+def _is_output_boundary_load(hdl: Any) -> bool:
+    """Whether a reported load is only the module's outward-facing port."""
+
+    if not all(hasattr(hdl, attr) for attr in ("type", "direction", "connected_pin")):
+        return False
+    try:
+        kind = str(hdl.type())
+        direction = str(hdl.direction())
+    except Exception:
+        return False
+    return kind in {"npiNlPort", "npiNlPseudoPort"} and direction in {
+        "npiNlOutput",
+        "npiNlInout",
+    }
 
 
 def _is_boundary_driver(hdl: Any) -> bool:
@@ -247,12 +313,24 @@ class VerdiNpiBackend:
     name = "verdi_npi"
     execution_mode = "local"
     uses_external_worker = False
+    supports_targeted_instance_src_map = True
+    supports_targeted_hierarchy_provider = True
 
     def __init__(self, fallback: StaticConnectivityBackend | None = None):
         self._fallback = fallback or StaticConnectivityBackend()
         self._state: str = "uninit"  # uninit | ready | failed
         self._loaded_kdb: str | None = None
         self._loaded_top: str | None = None
+        self._loaded_degraded = False
+        self._degraded_error_count: int | None = None
+        self._degraded_error_log: str | None = None
+        self._last_query_kdb_status: dict[str, Any] | None = None
+        self._last_instance_src_map_metrics: dict[str, Any] | None = None
+        self._last_instance_binding_map: dict[str, NpiInstanceBindingFact] = {}
+        self._last_hierarchy_provider_metrics: dict[str, Any] | None = None
+        self._hierarchy_context_cache: tuple[
+            tuple[Any, ...], dict[str, Any]
+        ] | None = None
         self._npi_modules: tuple[Any, Any] | None = None  # (npisys, netlist)
 
     # ── public API matching ConnectivityBackend ────────────────────────
@@ -268,6 +346,7 @@ class VerdiNpiBackend:
         max_depth: int = 10,
         simulator: str = "auto",
     ) -> dict[str, Any]:
+        self._last_query_kdb_status = None
         try:
             compile_result = parse_compile_log(compile_log, simulator)
             kdb_path = self._kdb_path_from(compile_result, compile_log)
@@ -288,9 +367,15 @@ class VerdiNpiBackend:
                 )
                 result.setdefault("_npi_fallback_reason", "npi_load_failed")
                 return result
+            self._record_query_kdb_status()
             return self._npi_find_driver(
-                signal_path, wave_path, top, recursive=recursive,
+                signal_path,
+                wave_path,
+                top,
+                recursive=recursive,
             )
+        except OperationCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("VerdiNpiBackend.find_driver failed: %s", exc)
             result = self._fallback.find_driver(
@@ -312,6 +397,7 @@ class VerdiNpiBackend:
         kind_filter: list[str] | None = None,
         simulator: str = "auto",
     ) -> dict[str, Any]:
+        self._last_query_kdb_status = None
         try:
             compile_result = parse_compile_log(compile_log, simulator)
             kdb_path = self._kdb_path_from(compile_result, compile_log)
@@ -326,10 +412,13 @@ class VerdiNpiBackend:
                     signal_path, compile_log, top_hint, max_depth,
                     include_expr, kind_filter, simulator, "npi_load_failed"
                 )
+            self._record_query_kdb_status()
             return self._npi_find_loads(
                 signal_path, compile_result, kdb_path, top,
                 include_expr, kind_filter,
             )
+        except OperationCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001 - never crash the MCP server
             _LOG.warning("VerdiNpiBackend.find_loads failed: %s", exc)
             return self._fallback_with_reason(
@@ -347,6 +436,7 @@ class VerdiNpiBackend:
         expand_assigns: bool = False,
         simulator: str = "auto",
     ) -> dict[str, Any]:
+        self._last_query_kdb_status = None
         try:
             compile_result = parse_compile_log(compile_log, simulator)
             kdb_path = self._kdb_path_from(compile_result, compile_log)
@@ -361,6 +451,7 @@ class VerdiNpiBackend:
                     from_signal, to_signal, expand_assigns,
                     reason="npi_load_failed",
                 )
+            self._record_query_kdb_status()
             return self._npi_find_path(
                 from_signal, to_signal, expand_assigns=expand_assigns,
             )
@@ -407,6 +498,7 @@ class VerdiNpiBackend:
             "path": [],
             "expand_assigns": expand_assigns,
             "unsupported_reason": None,
+            "backend": "verdi_npi",
         }
 
         from_hdl = self._resolve_net(netlist, from_signal)
@@ -482,43 +574,393 @@ class VerdiNpiBackend:
             "source_file": file_val,
             "source_line": line_val,
             "is_endpoint": is_endpoint,
+            "source_info_origin": (
+                "npi" if (file_val is not None or line_val is not None) else None
+            ),
+            "backend": "verdi_npi",
         }
 
     def collect_instance_src_map(
         self,
         compile_log: str,
         simulator: str = "auto",
+        *,
+        instance_paths: tuple[str, ...] | None = None,
+        top_hint: str | None = None,
     ) -> dict[str, tuple[str | None, int | None]]:
-        """Walk the elaborated netlist; return ``full_path -> (file, line)``.
+        """Return ``full_path -> (file, line)`` from the elaborated netlist.
 
         Used by ``build_tb_hierarchy`` to upgrade compile-log-derived
-        source info with NPI's elaborated truth. Returns an empty dict
-        on any failure path so the caller can keep going without
-        annotation. Never raises.
+        source info with NPI's elaborated truth.  When ``instance_paths`` is
+        supplied, query only those already-proved hierarchy paths through
+        ``netlist.get_inst``; the legacy recursive full walk remains available
+        to direct callers that omit it. ``top_hint`` selects an explicitly
+        requested elaborated top instead of silently reusing the compile-log
+        primary top. NPI failures return an empty dict so the caller can keep
+        going without annotation; cooperative cancellation still propagates.
         """
+        started = time.perf_counter()
+        rss_start_kib = read_process_rss_kib()
+        self._last_instance_binding_map = {}
+        metrics: dict[str, Any] = {
+            "status": "started",
+            "compile_parse_wall_ms": 0.0,
+            "compile_context_cache_hit": 0,
+            "kdb_probe_wall_ms": 0.0,
+            "design_load_wall_ms": 0.0,
+            "top_list_wall_ms": 0.0,
+            "instance_walk_wall_ms": 0.0,
+            "instance_lookup_wall_ms": 0.0,
+            "lookup_mode": (
+                "target_paths" if instance_paths is not None else "full_walk"
+            ),
+            "requested_instance_count": 0,
+            "lookup_error_count": 0,
+            "top_instance_count": 0,
+            "instance_visited_count": 0,
+            "source_entry_count": 0,
+            "binding_entry_count": 0,
+            "binding_lookup_miss_count": 0,
+            "binding_path_mismatch_count": 0,
+            "depth_limit_count": 0,
+            "full_name_error_count": 0,
+            "child_list_error_count": 0,
+            "design_load_cache_hit": 0,
+            "rss_start_kib": rss_start_kib,
+            "rss_after_load_kib": None,
+            "rss_peak_kib": rss_start_kib,
+            "rss_end_kib": None,
+        }
+        self._last_instance_src_map_metrics = metrics
+
+        def _sample_rss() -> int | None:
+            rss_kib = read_process_rss_kib()
+            if isinstance(rss_kib, int):
+                peak_kib = metrics.get("rss_peak_kib")
+                metrics["rss_peak_kib"] = max(
+                    int(peak_kib) if isinstance(peak_kib, int) else 0,
+                    rss_kib,
+                )
+            return rss_kib
+
+        def _finish(status: str) -> None:
+            metrics["status"] = status
+            metrics["total_wall_ms"] = round(
+                (time.perf_counter() - started) * 1000.0,
+                3,
+            )
+            metrics["rss_end_kib"] = _sample_rss()
+
         try:
-            compile_result = parse_compile_log(compile_log, simulator)
+            phase_started = time.perf_counter()
+            compile_result, context_cache_hit = self._hierarchy_lookup_context(
+                compile_log, simulator
+            )
+            metrics["compile_context_cache_hit"] = int(context_cache_hit)
+            metrics["compile_parse_wall_ms"] = round(
+                (time.perf_counter() - phase_started) * 1000.0,
+                3,
+            )
+            phase_started = time.perf_counter()
             kdb_path = self._kdb_path_from(compile_result, compile_log)
-            top = self._top_from(compile_result)
+            metrics["kdb_probe_wall_ms"] = round(
+                (time.perf_counter() - phase_started) * 1000.0,
+                3,
+            )
+            top = top_hint or self._top_from(compile_result)
             if not kdb_path or not top:
+                _finish("missing_kdb_or_top")
                 return {}
+            metrics["design_load_cache_hit"] = int(
+                self._state == "ready"
+                and self._loaded_kdb == kdb_path
+                and self._loaded_top == top
+            )
+            phase_started = time.perf_counter()
             if not self._ensure_loaded(kdb_path, top):
+                metrics["design_load_wall_ms"] = round(
+                    (time.perf_counter() - phase_started) * 1000.0,
+                    3,
+                )
+                metrics["rss_after_load_kib"] = _sample_rss()
+                _finish("design_load_failed")
                 return {}
+            metrics["design_load_wall_ms"] = round(
+                (time.perf_counter() - phase_started) * 1000.0,
+                3,
+            )
+            metrics["rss_after_load_kib"] = _sample_rss()
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("collect_instance_src_map setup failed: %s", exc)
+            _finish("setup_failed")
             return {}
 
         _, netlist = self._npi_modules  # type: ignore[misc]
         out: dict[str, tuple[str | None, int | None]] = {}
+        if instance_paths is not None and not hasattr(netlist, "get_inst"):
+            metrics["lookup_mode"] = "target_paths_unavailable"
+            _finish("targeted_lookup_unavailable")
+            return {}
+        if instance_paths is not None:
+            ordered_paths = tuple(
+                dict.fromkeys(
+                    path
+                    for path in instance_paths
+                    if isinstance(path, str) and path
+                )
+            )
+            metrics["requested_instance_count"] = len(ordered_paths)
+            phase_started = time.perf_counter()
+            with _silence_native_stdio():
+                for index, path in enumerate(ordered_paths):
+                    if index % 256 == 0:
+                        check_cancelled()
+                    metrics["instance_visited_count"] += 1
+                    try:
+                        inst = netlist.get_inst(path)
+                    except Exception:  # noqa: BLE001
+                        metrics["lookup_error_count"] += 1
+                        continue
+                    if inst is None:
+                        metrics["binding_lookup_miss_count"] += 1
+                        continue
+                    actual_path = _inst_full_name(inst)
+                    if actual_path != path:
+                        metrics["binding_path_mismatch_count"] += 1
+                        continue
+                    file_val, line_val = _inst_src_info(inst)
+                    definition_name = _inst_definition_name(inst)
+                    if definition_name:
+                        binding_line = (
+                            line_val
+                            if isinstance(line_val, int)
+                            and not isinstance(line_val, bool)
+                            and line_val > 0
+                            else None
+                        )
+                        self._last_instance_binding_map[path] = (
+                            NpiInstanceBindingFact(
+                                path=path,
+                                definition_name=definition_name,
+                                source_file=str(file_val) if file_val else None,
+                                source_line=binding_line,
+                            )
+                        )
+                        metrics["binding_entry_count"] += 1
+                    if file_val is None and line_val is None:
+                        continue
+                    out[path] = (file_val, line_val)
+                    metrics["source_entry_count"] += 1
+            metrics["instance_lookup_wall_ms"] = round(
+                (time.perf_counter() - phase_started) * 1000.0,
+                3,
+            )
+            _finish("completed")
+            return out
+
         try:
+            phase_started = time.perf_counter()
             with _silence_native_stdio():
                 top_list = netlist.get_top_inst_list() or []
+            metrics["top_list_wall_ms"] = round(
+                (time.perf_counter() - phase_started) * 1000.0,
+                3,
+            )
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("get_top_inst_list failed: %s", exc)
+            _finish("top_list_failed")
             return {}
+        metrics["top_instance_count"] = len(top_list)
+        walk_stats = {
+            "instance_visited_count": 0,
+            "source_entry_count": 0,
+            "depth_limit_count": 0,
+            "full_name_error_count": 0,
+            "child_list_error_count": 0,
+        }
+        phase_started = time.perf_counter()
         for inst in top_list:
-            _walk_inst_src(inst, out)
+            _walk_inst_src(inst, out, stats=walk_stats)
+        metrics["instance_walk_wall_ms"] = round(
+            (time.perf_counter() - phase_started) * 1000.0,
+            3,
+        )
+        metrics.update(walk_stats)
+        _finish("completed")
         return out
+
+    @property
+    def instance_src_map_metrics(self) -> dict[str, Any] | None:
+        """Return privacy-safe metrics from the latest hierarchy source walk."""
+
+        return (
+            dict(self._last_instance_src_map_metrics)
+            if self._last_instance_src_map_metrics is not None
+            else None
+        )
+
+    def collect_instance_binding_map(
+        self,
+        compile_log: str,
+        simulator: str = "auto",
+        *,
+        instance_paths: tuple[str, ...],
+        top_hint: str | None = None,
+    ) -> dict[str, NpiInstanceBindingFact]:
+        """Return exact target-path instance/definition facts without a walk."""
+
+        self.collect_instance_src_map(
+            compile_log,
+            simulator,
+            instance_paths=instance_paths,
+            top_hint=top_hint,
+        )
+        return dict(self._last_instance_binding_map)
+
+    def build_hierarchy_provider(
+        self,
+        compile_log: str,
+        signal_path: str,
+        simulator: str = "auto",
+        *,
+        top_hint: str | None = None,
+        max_candidate_paths: int = 256,
+    ) -> NpiHierarchyProvider | None:
+        """Build one bounded exact-prefix NPI hierarchy fragment.
+
+        This is an explicit provider operation for differential evaluation and
+        future routing. It never calls ``get_top_inst_list`` or ``inst_list``;
+        each candidate is one dotted prefix of the target signal and is queried
+        by exact ``netlist.get_inst``. Missing generate-block prefixes are safe
+        misses. The normal hierarchy build does not invoke this method.
+        """
+
+        started = time.perf_counter()
+        metrics: dict[str, Any] = {
+            "status": "started",
+            "candidate_path_limit": max_candidate_paths,
+            "candidate_path_count": 0,
+            "binding_count": 0,
+            "matched_ancestor_count": 0,
+            "total_wall_ms": 0.0,
+        }
+        self._last_hierarchy_provider_metrics = metrics
+
+        def _finish(status: str) -> None:
+            metrics["status"] = status
+            metrics["total_wall_ms"] = round(
+                (time.perf_counter() - started) * 1000.0,
+                3,
+            )
+
+        if (
+            not isinstance(max_candidate_paths, int)
+            or isinstance(max_candidate_paths, bool)
+            or not 1 <= max_candidate_paths <= 1024
+        ):
+            _finish("candidate_limit_invalid")
+            return None
+        top = top_hint
+        if not top:
+            try:
+                compile_result, _ = self._hierarchy_lookup_context(
+                    compile_log, simulator
+                )
+                top = self._top_from(compile_result)
+            except Exception:  # noqa: BLE001
+                _finish("top_unresolved")
+                return None
+        if not top:
+            _finish("top_unresolved")
+            return None
+        try:
+            candidates = hierarchy_candidate_instance_paths(
+                top=top,
+                signal_path=signal_path,
+                max_candidates=max_candidate_paths,
+            )
+        except HierarchyCandidateLimitExceeded:
+            _finish("candidate_limit_exceeded")
+            return None
+        except ValueError:
+            _finish("candidate_limit_invalid")
+            return None
+        metrics["candidate_path_count"] = len(candidates)
+        if not candidates:
+            _finish("target_scope_invalid")
+            return None
+        facts = self.collect_instance_binding_map(
+            compile_log,
+            simulator,
+            instance_paths=candidates,
+            top_hint=top,
+        )
+        metrics["binding_count"] = len(facts)
+        if top not in facts:
+            _finish("top_binding_unavailable")
+            return None
+        identity = hashlib.sha256(
+            "\0".join((self._loaded_kdb or "unloaded_kdb", top)).encode()
+        ).hexdigest()
+        try:
+            provider = NpiHierarchyProvider(
+                tuple(facts.values()),
+                top=top,
+                design_identity=identity,
+            )
+        except ValueError:
+            _finish("binding_fragment_invalid")
+            return None
+        resolution = provider.resolve_scope(top=top, signal_path=signal_path)
+        if resolution is None:
+            _finish("target_scope_unresolved")
+            return None
+        metrics["matched_ancestor_count"] = len(resolution.ancestors)
+        _finish(
+            "completed"
+            if resolution.status == "resolved"
+            else "completed_deferred"
+        )
+        return provider
+
+    @property
+    def hierarchy_provider_metrics(self) -> dict[str, Any] | None:
+        return (
+            dict(self._last_hierarchy_provider_metrics)
+            if self._last_hierarchy_provider_metrics is not None
+            else None
+        )
+
+    def _hierarchy_lookup_context(
+        self, compile_log: str, simulator: str
+    ) -> tuple[dict[str, Any], bool]:
+        """Reuse one stat-anchored compile parse for targeted hierarchy reads."""
+
+        check_cancelled()
+        try:
+            path = os.path.realpath(compile_log)
+            stat_result = os.stat(path)
+            key: tuple[Any, ...] | None = (
+                path,
+                simulator,
+                stat_result.st_dev,
+                stat_result.st_ino,
+                stat_result.st_size,
+                stat_result.st_mtime_ns,
+                stat_result.st_ctime_ns,
+            )
+        except OSError:
+            key = None
+        if (
+            key is not None
+            and self._hierarchy_context_cache is not None
+            and self._hierarchy_context_cache[0] == key
+        ):
+            return self._hierarchy_context_cache[1], True
+        compile_result = parse_compile_log(compile_log, simulator)
+        if key is not None:
+            self._hierarchy_context_cache = (key, compile_result)
+        return compile_result, False
 
     # ── lifecycle ─────────────────────────────────────────────────────
 
@@ -534,7 +976,8 @@ class VerdiNpiBackend:
                 return False
             self._npi_modules = modules
 
-        npisys, _ = self._npi_modules
+        npisys, netlist = self._npi_modules
+        dbdir = _simflow_dbdir(kdb_path)
         try:
             npisys_id = id(npisys)
             with _silence_native_stdio():
@@ -550,30 +993,130 @@ class VerdiNpiBackend:
                     # fd-redirect runs before Verdi's banner write.
                     _install_shutdown_banner_silencer()
 
+                old_state = self._state
                 old_kdb, old_top = self._loaded_kdb, self._loaded_top
+                old_degraded = self._loaded_degraded
+                old_error_count = self._degraded_error_count
+                old_error_log = self._degraded_error_log
                 rc = npisys.load_design([
                     "traceweave_npi",
-                    "-simflow", "-dbdir", kdb_path,
+                    "-simflow", "-dbdir", dbdir,
                     "-top", top,
                 ])
-                if rc != 1:
+                degraded = (
+                    rc == 0
+                    and NPI_ALLOW_DEGRADED_KDB
+                    and kdb_has_elaboration_errors(kdb_path)
+                    and self._netlist_usable(netlist, top)
+                )
+                if rc != 1 and not degraded:
                     # Failed load wipes the previously loaded case in NPI.
                     # Best-effort restore so subsequent calls can still hit cache.
                     if old_kdb and old_top:
-                        npisys.load_design([
+                        restore_rc = npisys.load_design([
                             "traceweave_npi",
-                            "-simflow", "-dbdir", old_kdb,
+                            "-simflow", "-dbdir", _simflow_dbdir(old_kdb),
                             "-top", old_top,
                         ])
+                        restored = restore_rc == 1 or (
+                            restore_rc == 0
+                            and old_degraded
+                            and self._netlist_usable(netlist, old_top)
+                        )
+                        if restored:
+                            self._state = old_state
+                            self._loaded_kdb = old_kdb
+                            self._loaded_top = old_top
+                            self._loaded_degraded = old_degraded
+                            self._degraded_error_count = old_error_count
+                            self._degraded_error_log = old_error_log
+                        else:
+                            self._clear_loaded_state(failed=True)
                     return False
             self._state = "ready"
             self._loaded_kdb = kdb_path
             self._loaded_top = top
+            self._loaded_degraded = degraded
+            if degraded:
+                (
+                    self._degraded_error_count,
+                    self._degraded_error_log,
+                ) = read_kdb_elab_error_metadata(kdb_path)
+            else:
+                self._degraded_error_count = None
+                self._degraded_error_log = None
             return True
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("npisys.load_design crashed: %s", exc)
-            self._state = "failed"
+            self._clear_loaded_state(failed=True)
             return False
+
+    def _netlist_usable(self, netlist: Any, top: str) -> bool:
+        """Require a non-empty netlist and the requested top when inspectable."""
+
+        if not hasattr(netlist, "get_top_inst_list"):
+            return False
+        try:
+            with _silence_native_stdio():
+                top_list = netlist.get_top_inst_list() or []
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("degraded KDB top-instance self-check failed: %s", exc)
+            return False
+        if not top_list:
+            return False
+
+        names: set[str] = set()
+        for inst in top_list:
+            if isinstance(inst, str):
+                names.add(inst)
+                continue
+            for accessor in ("full_name", "name", "def_name"):
+                member = getattr(inst, accessor, None)
+                if member is None:
+                    continue
+                try:
+                    value = member() if callable(member) else member
+                except Exception:  # noqa: BLE001
+                    continue
+                if isinstance(value, str) and value:
+                    names.add(value)
+        if not names:
+            return True
+        normalized_top = top.split("(@", 1)[0]
+        return any(
+            name.split("(@", 1)[0] == normalized_top
+            or name.endswith(f".{normalized_top}")
+            or name.endswith(f"/{normalized_top}")
+            for name in names
+        )
+
+    def _clear_loaded_state(self, *, failed: bool) -> None:
+        self._state = "failed" if failed else "uninit"
+        self._loaded_kdb = None
+        self._loaded_top = None
+        self._loaded_degraded = False
+        self._degraded_error_count = None
+        self._degraded_error_log = None
+        self._last_query_kdb_status = None
+
+    @property
+    def kdb_load_quality(self) -> str:
+        return "degraded" if self._loaded_degraded else "clean"
+
+    @property
+    def kdb_status(self) -> dict[str, Any] | None:
+        return (
+            dict(self._last_query_kdb_status)
+            if self._last_query_kdb_status is not None
+            else None
+        )
+
+    def _record_query_kdb_status(self) -> None:
+        self._last_query_kdb_status = {
+            "load_quality": self.kdb_load_quality,
+            "error_count": self._degraded_error_count,
+            "error_log": self._degraded_error_log,
+        }
 
     # ── querying ──────────────────────────────────────────────────────
 
@@ -596,9 +1139,12 @@ class VerdiNpiBackend:
             "resolved_module": top,
             "resolved_instance_path": instance_path,
             "loads": [],
-            "completeness": "exact",
+            "completeness": (
+                "approximate" if self._loaded_degraded else "exact"
+            ),
             "stopped_at": None,
             "unsupported_reason": None,
+            "backend": "verdi_npi",
         }
         if net is None:
             result["stopped_at"] = "signal_path_unresolved_in_npi"
@@ -613,68 +1159,161 @@ class VerdiNpiBackend:
             return result
 
         keep = set(kind_filter) if kind_filter else None
-        loads: list[dict[str, Any]] = []
-        for hdl in raw_loads:
+        (
+            direct_handles,
+            boundary_work_truncated,
+            recovery_failed,
+        ) = self._bounded_direct_load_handles(
+            net,
+            raw_loads,
+            handle_limit=DEFAULT_NPI_LOAD_HANDLE_LIMIT,
+            state_limit=DEFAULT_NPI_LOAD_BOUNDARY_STATE_LIMIT,
+        )
+        loads, output_truncated, format_work_truncated, _ = (
+            self._bounded_format_load_handles(
+                direct_handles,
+                include_expr=include_expr,
+                keep=keep,
+                output_limit=DEFAULT_LOAD_OUTPUT_LIMIT,
+                handle_limit=DEFAULT_NPI_LOAD_HANDLE_LIMIT,
+            )
+        )
+        output_limit = DEFAULT_LOAD_OUTPUT_LIMIT
+        work_truncated = boundary_work_truncated or format_work_truncated
+
+        incomplete_reasons: list[str] = []
+        if output_truncated:
+            incomplete_reasons.append("output_limit")
+        if work_truncated:
+            incomplete_reasons.append("work_limit")
+        if recovery_failed:
+            incomplete_reasons.append("coverage_incomplete")
+        if self._loaded_degraded:
+            incomplete_reasons.append("backend_degraded")
+        exhaustive = not incomplete_reasons
+        result["loads"] = loads
+        result["enumeration"] = {
+            "returned_count": len(loads),
+            "output_limit": output_limit,
+            "output_truncated": output_truncated,
+            "search_exhaustive": exhaustive,
+            "incomplete_reasons": incomplete_reasons,
+            "continuation_supported": False,
+        }
+        if not exhaustive:
+            result["completeness"] = "approximate"
+        if recovery_failed:
+            result["stopped_at"] = "npi_boundary_recovery_failed"
+        elif output_truncated:
+            result["stopped_at"] = "npi_load_output_limit"
+        elif work_truncated:
+            result["stopped_at"] = "npi_load_work_limit"
+        if not result["loads"]:
+            result["stopped_at"] = result["stopped_at"] or "no_npi_loads"
+        return result
+
+    def _bounded_direct_load_handles(
+        self,
+        initial_net: Any,
+        initial_handles: list[Any],
+        *,
+        handle_limit: int,
+        state_limit: int,
+    ) -> tuple[list[Any], bool, bool]:
+        """Collect direct consumers while transparently crossing output ports.
+
+        NPI models a child output as a load on the child's local net.  That
+        port is a hierarchy boundary, not the design-level consumer.  Follow
+        only its paired parent net and call ``load_list`` again; never invoke
+        ``fan_out_reg_list``, whose native implementation materialises an
+        unbounded combinational cone before Python can apply a result slice.
+        """
+
+        queue: list[tuple[Any, list[Any] | None]] = [(initial_net, initial_handles)]
+        visited: set[tuple[str, str] | tuple[str, int]] = set()
+        consumers: list[Any] = []
+        inspected = 0
+        work_truncated = False
+        recovery_failed = False
+
+        while queue:
+            check_cancelled()
+            current, supplied_handles = queue.pop(0)
+            state_key = _npi_handle_key(current)
+            if state_key in visited:
+                continue
+            if len(visited) >= state_limit:
+                work_truncated = True
+                break
+            visited.add(state_key)
+            if supplied_handles is None:
+                try:
+                    with _silence_native_stdio():
+                        handles = current.load_list() or []
+                except Exception as exc:  # noqa: BLE001
+                    _LOG.warning("NPI boundary load_list failed: %s", exc)
+                    recovery_failed = True
+                    continue
+            else:
+                handles = supplied_handles
+
+            remaining = handle_limit - inspected
+            if remaining <= 0:
+                work_truncated = True
+                break
+            if len(handles) > remaining:
+                work_truncated = True
+            bounded_handles = handles[:remaining]
+            inspected += len(bounded_handles)
+
+            for hdl in bounded_handles:
+                check_cancelled()
+                if not _is_output_boundary_load(hdl):
+                    consumers.append(hdl)
+                    continue
+                try:
+                    with _silence_native_stdio():
+                        peer = hdl.connected_pin()
+                        parent_net = peer.connected_net() if peer is not None else None
+                except Exception as exc:  # noqa: BLE001
+                    _LOG.warning("NPI output-boundary recovery failed: %s", exc)
+                    recovery_failed = True
+                    continue
+                if parent_net is not None and _npi_handle_key(parent_net) not in visited:
+                    queue.append((parent_net, None))
+
+        return consumers, work_truncated, recovery_failed
+
+    def _bounded_format_load_handles(
+        self,
+        handles: list[Any],
+        *,
+        include_expr: bool,
+        keep: set[str] | None,
+        output_limit: int,
+        handle_limit: int,
+    ) -> tuple[list[dict[str, Any]], bool, bool, int]:
+        """Format a bounded handle prefix and publish every lost-coverage fact."""
+
+        inspected = min(len(handles), handle_limit)
+        formatted: list[dict[str, Any]] = []
+        for hdl in handles[:handle_limit]:
+            check_cancelled()
             entry = self._format_load(hdl, include_expr=include_expr)
             if entry is None:
                 continue
             if keep is not None and entry["kind"] not in keep:
                 continue
-            loads.append(entry)
-
-        fan_out_loads = self._fan_out_loads(
-            net,
-            signal_path,
-            top,
-            include_expr=include_expr,
-            max_branches=_FAN_OUT_MAX_BRANCHES,
+            formatted.append(entry)
+        deduped = _dedup(formatted)
+        output_truncated = len(deduped) > output_limit
+        work_truncated = len(handles) > handle_limit
+        return (
+            deduped[:output_limit],
+            output_truncated,
+            work_truncated,
+            inspected,
         )
-        if fan_out_loads is not None:
-            for entry in fan_out_loads:
-                if keep is not None and entry["kind"] not in keep:
-                    continue
-                loads.append(entry)
-
-        result["loads"] = _dedup(loads)
-        if not result["loads"]:
-            result["stopped_at"] = "no_npi_loads"
-        return result
-
-    def _fan_out_loads(
-        self,
-        net: Any,
-        signal_path: str,
-        top: str,
-        *,
-        include_expr: bool,
-        max_branches: int,
-    ) -> list[dict[str, Any]] | None:
-        """Walk fan-out cone with NPI and format boundary/register loads.
-
-        ``load_list`` reports direct loads only. For module output ports,
-        the useful consumers often live across the parent boundary; Verdi's
-        ``fan_out_reg_list`` is the matching cone traversal API.
-        """
-        if not hasattr(net, "fan_out_reg_list"):
-            return None
-        bound = signal_path.split(".", 1)[0] if "." in signal_path else top
-        try:
-            with _silence_native_stdio():
-                pins = net.fan_out_reg_list(
-                    stop_at_pin=True,
-                    report_primary_port=True,
-                    top_scope_name=bound,
-                ) or []
-        except Exception as exc:  # noqa: BLE001
-            _LOG.warning("net.fan_out_reg_list failed for %s: %s", signal_path, exc)
-            return None
-
-        loads: list[dict[str, Any]] = []
-        for pin in pins[:max_branches]:
-            entry = self._format_load(pin, include_expr=include_expr)
-            if entry is not None:
-                loads.append(entry)
-        return loads
 
     def _npi_find_driver(
         self,
@@ -711,6 +1350,7 @@ class VerdiNpiBackend:
             "recursive": recursive,
             "driver_chain": None,
             "chain_summary": None,
+            "traversal": None,
             "backend": "verdi_npi",
         }
 
@@ -735,6 +1375,9 @@ class VerdiNpiBackend:
             base["unsupported_reason"] = "no_npi_drivers"
             base["stopped_at"] = "no_npi_drivers"
             return base
+
+        direct_work_truncated = len(drivers) > DEFAULT_NPI_DRIVER_STATE_LIMIT
+        drivers = drivers[:DEFAULT_NPI_DRIVER_STATE_LIMIT]
 
         # The net's own loads, used to detect the misattribution where NPI
         # reports a LOAD (or an interface-slice alias of a load) as the driver:
@@ -761,7 +1404,7 @@ class VerdiNpiBackend:
         ]
         if driver_pairs:
             pre = self._loadcheck_head([f for _, f in driver_pairs], load_raws)
-            if pre == "testbench":
+            if pre == "testbench" and not direct_work_truncated:
                 return self._apply_testbench_driven(
                     base, _testbench_verdict(driver_pairs[0][1]),
                 )
@@ -779,15 +1422,34 @@ class VerdiNpiBackend:
         # strictly more useful than reporting the port-as-self.
         boundary_only = all(_is_boundary_driver(d) for d in drivers)
         if recursive or boundary_only:
-            chain = self._fan_in_chain(
-                net, signal_path, top, max_branches=_FAN_IN_MAX_BRANCHES,
+            chain, traversal = self._bounded_fan_in_chain(
+                net,
+                signal_path,
+                top,
+                state_limit=DEFAULT_NPI_DRIVER_STATE_LIMIT,
+                output_limit=DEFAULT_DRIVER_OUTPUT_LIMIT,
+                initial_work_truncated=direct_work_truncated,
             )
+            base["traversal"] = traversal
             if chain is not None:
                 decision = self._loadcheck_head(chain, load_raws)
                 if decision == "testbench":
-                    return self._apply_testbench_driven(
-                        base, _testbench_verdict(chain[0]),
-                    )
+                    if traversal["search_exhaustive"]:
+                        return self._apply_testbench_driven(
+                            base, _testbench_verdict(chain[0]),
+                        )
+                    # The observed head is definitely a LOAD alias, but a
+                    # bounded/degraded traversal cannot prove that no genuine
+                    # driver exists beyond its coverage. Never return the
+                    # contradicted load as a positive driver fact.
+                    traversal["returned_fact_count"] = 0
+                    base.update({
+                        "driver_status": "partial",
+                        "confidence": "partial",
+                        "unsupported_reason": "npi_driver_load_alias_inconclusive",
+                        "stopped_at": "npi_driver_traversal_incomplete",
+                    })
+                    return base
                 if isinstance(decision, int):
                     chain = [chain[decision]] + chain[:decision] + chain[decision + 1:]
                 return self._apply_chain(base, chain, signal_path, recursive)
@@ -805,16 +1467,65 @@ class VerdiNpiBackend:
         # ``formatted`` here just re-formats the same, possibly-reordered drivers,
         # so its head is already the promoted genuine driver. Only drop the
         # cross-check scratch field before the hops enter the result schema.
-        formatted = [_strip_npi_raw(d) for d in formatted]
+        direct_output_truncated = len(formatted) > DEFAULT_DRIVER_OUTPUT_LIMIT
+        formatted = [
+            _strip_npi_raw(d) for d in formatted[:DEFAULT_DRIVER_OUTPUT_LIMIT]
+        ]
+        if base["traversal"] is None:
+            base["traversal"] = self._driver_traversal_receipt(
+                returned_fact_count=len(formatted),
+                output_truncated=direct_output_truncated,
+                visited_state_count=min(
+                    len(drivers), DEFAULT_NPI_DRIVER_STATE_LIMIT
+                ),
+                state_truncated=direct_work_truncated,
+            )
+        else:
+            # The bounded native fan-in path was unavailable or failed, so the
+            # surfaced facts come from the already materialized direct-driver
+            # list. Keep the fan-in diagnostics but make the public count and
+            # truncation fields describe the facts actually returned.
+            traversal = dict(base["traversal"])
+            traversal["returned_fact_count"] = len(formatted)
+            traversal["output_truncated"] = bool(
+                traversal.get("output_truncated") or direct_output_truncated
+            )
+            traversal["visited_state_count"] = max(
+                int(traversal.get("visited_state_count", 0)),
+                min(len(drivers), DEFAULT_NPI_DRIVER_STATE_LIMIT),
+            )
+            traversal["state_truncated"] = bool(
+                traversal.get("state_truncated") or direct_work_truncated
+            )
+            reasons = list(traversal.get("incomplete_reasons") or [])
+            if direct_output_truncated and "output_limit" not in reasons:
+                reasons.insert(0, "output_limit")
+            if direct_work_truncated and "work_limit" not in reasons:
+                insert_at = 1 if reasons[:1] == ["output_limit"] else 0
+                reasons.insert(insert_at, "work_limit")
+            traversal["incomplete_reasons"] = reasons
+            traversal["search_exhaustive"] = False
+            base["traversal"] = traversal
 
         head = formatted[0]
         base.update({
-            "driver_status": "resolved",
+            "driver_status": (
+                "resolved"
+                if base["traversal"]["search_exhaustive"]
+                else "partial"
+            ),
             "driver_kind": head["driver_kind"],
             "source_file": head["source_file"],
             "source_line": head["source_line"],
             "expression_summary": head["expression_summary"],
+            "confidence": (
+                "exact"
+                if base["traversal"]["search_exhaustive"]
+                else "partial"
+            ),
         })
+        if not base["traversal"]["search_exhaustive"]:
+            base["stopped_at"] = "npi_driver_traversal_incomplete"
         if len(formatted) > 1:
             # Multi-driven net (rare but real): expose all candidates as
             # depth-0 chain entries so the caller can see the conflict.
@@ -843,43 +1554,197 @@ class VerdiNpiBackend:
             )
         return base
 
-    def _fan_in_chain(
+    def _driver_traversal_receipt(
+        self,
+        *,
+        returned_fact_count: int,
+        output_truncated: bool,
+        visited_state_count: int,
+        state_truncated: bool,
+        callback_observed_count: int | None = None,
+        callback_pruned_count: int | None = None,
+        coverage_incomplete: bool = False,
+    ) -> dict[str, Any]:
+        reasons: list[str] = []
+        if output_truncated:
+            reasons.append("output_limit")
+        if state_truncated:
+            reasons.append("work_limit")
+        if coverage_incomplete:
+            reasons.append("coverage_incomplete")
+        if self._loaded_degraded:
+            reasons.append("backend_degraded")
+        result: dict[str, Any] = {
+            "returned_fact_count": returned_fact_count,
+            "output_limit": DEFAULT_DRIVER_OUTPUT_LIMIT,
+            "output_truncated": output_truncated,
+            "visited_state_count": visited_state_count,
+            "state_limit": DEFAULT_NPI_DRIVER_STATE_LIMIT,
+            "state_truncated": state_truncated,
+            "search_exhaustive": not reasons,
+            "incomplete_reasons": reasons,
+            "continuation_supported": False,
+        }
+        if callback_observed_count is not None:
+            result["callback_observed_count"] = callback_observed_count
+        if callback_pruned_count is not None:
+            result["callback_pruned_count"] = callback_pruned_count
+        return result
+
+    def _bounded_fan_in_chain(
         self,
         net: Any,
         signal_path: str,
         top: str,
         *,
-        max_branches: int,
-    ) -> list[dict[str, Any]] | None:
-        """Walk fan-in cone with NPI; return a list of formatted hops.
+        state_limit: int,
+        output_limit: int,
+        initial_work_truncated: bool,
+    ) -> tuple[list[dict[str, Any]] | None, dict[str, Any]]:
+        """Run native fan-in with callback admission before materialization.
 
-        Returns None if fan_in_reg_list isn't available on this net or
-        raised — caller can then fall back to single-hop formatting.
-        Returns [] if fan_in succeeded but reported no boundary points.
+        ``fan_in_reg_list`` normally traverses the entire combinational cone
+        before Python can slice its returned list. Official pynpi FAN_IN
+        callbacks run during that traversal; returning ``False`` prunes the
+        current branch. Admit a bounded prefix and reject every later state,
+        preserving NPI's endpoint semantics without unbounded native work.
+
+        Older wrappers without callback registration never invoke the unsafe
+        whole-cone call. They return a coverage-incomplete receipt and let the
+        caller expose only its already available direct driver facts.
         """
-        if not hasattr(net, "fan_in_reg_list"):
-            return None
+        _, netlist = self._npi_modules  # type: ignore[misc]
+        callback_api_ready = bool(
+            callable(getattr(net, "fan_in_reg_list", None))
+            and callable(getattr(netlist, "register_cb", None))
+            and callable(getattr(netlist, "reset_cb", None))
+            and hasattr(netlist, "FuncType")
+            and hasattr(netlist.FuncType, "FAN_IN")
+        )
+        if not callback_api_ready:
+            return None, self._driver_traversal_receipt(
+                returned_fact_count=0,
+                output_truncated=False,
+                visited_state_count=0,
+                state_truncated=initial_work_truncated,
+                coverage_incomplete=True,
+            )
+
         # Bound the traversal at the signal's own top-level scope so
         # fan-in does not wander into unrelated design hierarchies.
         # Falling back to the loaded ``top`` keeps behaviour sensible
         # for single-segment signal paths.
         bound = signal_path.split(".", 1)[0] if "." in signal_path else top
+        callback_state = {
+            "admitted": 0,
+            "observed": 0,
+            "pruned": 0,
+            "cancelled": False,
+        }
+
+        def _admit_fan_in_state(unused_hdl: Any, state: dict[str, Any]) -> bool:
+            del unused_hdl
+            state["observed"] += 1
+            if state["cancelled"] or state["admitted"] >= state_limit:
+                state["pruned"] += 1
+                return False
+            try:
+                check_cancelled()
+            except OperationCancelled:
+                state["cancelled"] = True
+                state["pruned"] += 1
+                return False
+            state["admitted"] += 1
+            return True
+
+        registered = False
+        registration_attempted = False
+        reset_failed = False
+        lock_acquired = False
         try:
-            with _silence_native_stdio():
-                pins = net.fan_in_reg_list(
-                    stop_at_pin=True,
-                    report_primary_port=True,
-                    top_scope_name=bound,
-                ) or []
+            while not lock_acquired:
+                check_cancelled()
+                lock_acquired = _NPI_FAN_IN_CALLBACK_LOCK.acquire(timeout=0.05)
+            try:
+                check_cancelled()
+                registration_attempted = True
+                with _silence_native_stdio():
+                    registered = bool(
+                        netlist.register_cb(
+                            netlist.FuncType.FAN_IN,
+                            _admit_fan_in_state,
+                            callback_state,
+                        )
+                    )
+                if registered:
+                    with _silence_native_stdio():
+                        pins = net.fan_in_reg_list(
+                            stop_at_pin=True,
+                            report_primary_port=True,
+                            top_scope_name=bound,
+                        ) or []
+                else:
+                    pins = []
+            finally:
+                if registration_attempted:
+                    try:
+                        with _silence_native_stdio():
+                            netlist.reset_cb()
+                    except Exception as exc:  # noqa: BLE001
+                        reset_failed = True
+                        _LOG.warning("NPI fan-in callback reset failed: %s", exc)
+        except OperationCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001
             _LOG.warning("net.fan_in_reg_list failed for %s: %s", signal_path, exc)
-            return None
+            return None, self._driver_traversal_receipt(
+                returned_fact_count=0,
+                output_truncated=False,
+                visited_state_count=int(callback_state["admitted"]),
+                state_truncated=bool(
+                    initial_work_truncated or callback_state["pruned"]
+                ),
+                callback_observed_count=int(callback_state["observed"]),
+                callback_pruned_count=int(callback_state["pruned"]),
+                coverage_incomplete=True,
+            )
+        finally:
+            if lock_acquired:
+                _NPI_FAN_IN_CALLBACK_LOCK.release()
+        if not registered:
+            return None, self._driver_traversal_receipt(
+                returned_fact_count=0,
+                output_truncated=False,
+                visited_state_count=0,
+                state_truncated=initial_work_truncated,
+                coverage_incomplete=True,
+            )
+        if callback_state["cancelled"]:
+            raise OperationCancelled("NPI fan-in traversal cancelled")
+
+        output_truncated = len(pins) > output_limit
         hops: list[dict[str, Any]] = []
-        for pin in pins[:max_branches]:
+        formatting_incomplete = False
+        for pin in pins[:output_limit]:
+            check_cancelled()
             entry = self._format_fan_in_pin(pin)
-            if entry is not None:
-                hops.append(entry)
-        return hops
+            if entry is None:
+                formatting_incomplete = True
+                continue
+            hops.append(entry)
+        state_truncated = bool(
+            initial_work_truncated or callback_state["pruned"]
+        )
+        receipt = self._driver_traversal_receipt(
+            returned_fact_count=len(hops),
+            output_truncated=output_truncated,
+            visited_state_count=int(callback_state["admitted"]),
+            state_truncated=state_truncated,
+            callback_observed_count=int(callback_state["observed"]),
+            callback_pruned_count=int(callback_state["pruned"]),
+            coverage_incomplete=bool(formatting_incomplete or reset_failed),
+        )
+        return hops, receipt
 
     def _net_load_raws(self, net: Any) -> list[str] | None:
         """Raw NPI full-names of every load of ``net`` (for the driver-vs-load
@@ -972,12 +1837,21 @@ class VerdiNpiBackend:
         # (the schema forbids extra fields).
         hops = [_strip_npi_raw(hop) for hop in hops]
         head = hops[0]
+        traversal = base.get("traversal")
+        exhaustive = bool(
+            isinstance(traversal, dict)
+            and traversal.get("search_exhaustive") is True
+        )
         base.update({
-            "driver_status": "resolved",
+            "driver_status": "resolved" if exhaustive else "partial",
             "driver_kind": head["driver_kind"],
             "source_file": head["source_file"],
             "source_line": head["source_line"],
             "expression_summary": head["expression_summary"],
+            "confidence": "exact" if exhaustive else "partial",
+            "stopped_at": (
+                None if exhaustive else "npi_driver_traversal_incomplete"
+            ),
         })
         if recursive:
             # depth-0 entry represents the queried net itself; fan-in
@@ -1207,6 +2081,31 @@ def _first_colon_outside_brackets(text: str) -> int | None:
     return None
 
 
+def _strip_trailing_npi_selectors(npi_path: str) -> str:
+    """Remove every trailing NPI bit/range selector from a display copy.
+
+    NPI appends packed and unpacked selections to both synthesized pins and
+    interface aliases (for example ``foo[7:0]`` and ``foo[0][1]``).  Colons
+    inside those selectors are not synthesized-path separators.  Keep the raw
+    name untouched everywhere else; driver/load identity checks deliberately
+    operate on their own raw normalization path.
+    """
+    end = len(npi_path)
+    while end > 0 and npi_path[end - 1] == "]":
+        depth = 1
+        idx = end - 2
+        while idx >= 0 and depth:
+            if npi_path[idx] == "]":
+                depth += 1
+            elif npi_path[idx] == "[":
+                depth -= 1
+            idx -= 1
+        if depth:
+            break
+        end = idx + 1
+    return npi_path[:end]
+
+
 def _classify_driver_kind(npi_path: str) -> str:
     """Map a synthesized driver PinHdl to one of the existing driver_kind
     enum values used by Static.
@@ -1219,14 +2118,11 @@ def _classify_driver_kind(npi_path: str) -> str:
       Assignment → continuous ``assign`` → driver_kind=assign
     Falls back to ``unknown`` for cell types we have not seen.
     """
-    if ":" not in npi_path:
+    display_path = _strip_trailing_npi_selectors(npi_path)
+    if _first_colon_outside_brackets(display_path) is None:
         # Non-synthesized: top-level decl-net or instance port
         return "instance_port"
-    # Bit-range suffixes like ``[4:0]`` contain a ':' that would steal
-    # the rsplit and leave us with garbage ("0]"). Strip the trailing
-    # range/index before extracting the cell name.
-    stripped = re.sub(r"\[[^\]]*\]$", "", npi_path)
-    last_segment = stripped.rsplit(":", 1)[-1]
+    last_segment = display_path.rsplit(":", 1)[-1]
     cell = last_segment.split(".", 1)[0]
     cell_lower = cell.lower()
     if cell_lower == "init":
@@ -1247,7 +2143,12 @@ def _driver_summary(raw: str, kind: str) -> str:
     line_part = f" at line {line}" if line is not None else ""
     if kind == "unknown":
         return f"NPI driver {raw}{line_part}"
-    return f"{kind} driver via {raw.rsplit(':', 1)[-1]}{line_part}"
+    display_path = _strip_trailing_npi_selectors(raw)
+    if _first_colon_outside_brackets(display_path) is None:
+        driver_segment = display_path
+    else:
+        driver_segment = display_path.rsplit(":", 1)[-1]
+    return f"{kind} driver via {driver_segment}{line_part}"
 
 
 def _classify_fan_in_kind(npi_path: str, hdl_type: str | None) -> str:
@@ -1259,7 +2160,8 @@ def _classify_fan_in_kind(npi_path: str, hdl_type: str | None) -> str:
       - a top-level port handle (``npiNlPort``) when the fan-in walked
         out to a primary input boundary
     """
-    if ":" not in npi_path:
+    display_path = _strip_trailing_npi_selectors(npi_path)
+    if _first_colon_outside_brackets(display_path) is None:
         # No synthesized tag → fan-in terminated at a primary port.
         if hdl_type == "npiNlPort":
             return "primary_input_port"
@@ -1373,6 +2275,8 @@ def _walk_inst_src(
     inst: Any,
     accumulator: dict[str, tuple[str | None, int | None]],
     _depth: int = 0,
+    *,
+    stats: dict[str, int] | None = None,
 ) -> None:
     """Recursively populate ``full_name() -> (file, line)`` for an instance tree.
 
@@ -1381,24 +2285,34 @@ def _walk_inst_src(
     """
     if inst is None:
         return
+    if stats is not None:
+        stats["instance_visited_count"] += 1
     # Guard runaway hierarchies (synthesized loops should not happen but
     # libNPI has surprised us before).
     if _depth > 256:
+        if stats is not None:
+            stats["depth_limit_count"] += 1
         return
     try:
         path = inst.full_name() if hasattr(inst, "full_name") else None
     except Exception:  # noqa: BLE001
         path = None
+        if stats is not None:
+            stats["full_name_error_count"] += 1
     if path:
         file_val, line_val = _inst_src_info(inst)
         if file_val is not None or line_val is not None:
             accumulator[path] = (file_val, line_val)
+            if stats is not None:
+                stats["source_entry_count"] += 1
     try:
         children = inst.inst_list() if hasattr(inst, "inst_list") else []
     except Exception:  # noqa: BLE001
         children = []
+        if stats is not None:
+            stats["child_list_error_count"] += 1
     for child in children or []:
-        _walk_inst_src(child, accumulator, _depth + 1)
+        _walk_inst_src(child, accumulator, _depth + 1, stats=stats)
 
 
 def _scope_inst_of(hdl: Any) -> Any:
@@ -1409,6 +2323,28 @@ def _scope_inst_of(hdl: Any) -> Any:
         return hdl.scope_inst()
     except Exception:  # noqa: BLE001
         return None
+
+
+def _inst_full_name(inst_hdl: Any) -> str | None:
+    if inst_hdl is None or not hasattr(inst_hdl, "full_name"):
+        return None
+    try:
+        value = inst_hdl.full_name()
+    except Exception:  # noqa: BLE001
+        return None
+    return str(value) if value else None
+
+
+def _inst_definition_name(inst_hdl: Any) -> str | None:
+    """Read an instance's elaborated definition name without guessing."""
+
+    if inst_hdl is None or not hasattr(inst_hdl, "def_name"):
+        return None
+    try:
+        value = inst_hdl.def_name()
+    except Exception:  # noqa: BLE001
+        return None
+    return str(value) if value else None
 
 
 def _inst_src_info(inst_hdl: Any) -> tuple[str | None, int | None]:

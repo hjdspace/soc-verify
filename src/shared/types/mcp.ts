@@ -74,3 +74,38 @@ export type McpToolInfo = {
     [key: string]: unknown;
   };
 };
+
+/**
+ * Structured readiness report for the built-in TraceWeave MCP server
+ * (returned by `settings.traceweaveDiagnostic`).
+ *
+ * TraceWeave's runtime prerequisites (Python 3.11+, pip deps) are
+ * user-machine provisions rather than bundled payloads (ADR 0020); this
+ * report turns "server disconnected" into actionable per-prerequisite status.
+ */
+export type TraceweaveDiagnostic = {
+  /** Vendored TraceWeave release version. */
+  version: string;
+  /** Upstream commit the vendored tree was taken from. */
+  upstreamCommit: string;
+  /** TraceWeave source tree (packaged or dev) found. */
+  sourceDirFound: boolean;
+  pythonFound: boolean;
+  pythonPath: string | null;
+  /** e.g. "3.12.4"; null when python not found or probe failed. */
+  pythonVersion: string | null;
+  /** true when >= 3.11; null when unknown. */
+  pythonVersionOk: boolean | null;
+  /** pip deps (mcp, pyyaml) importable; null when python missing. */
+  depsInstalled: boolean | null;
+  /** Top-level module names reported missing by the import probe. */
+  missingDeps: string[];
+  /** FSDB waveform parsing usable (wrapper + VERDI_HOME, Linux only). */
+  fsdbAvailable: boolean;
+  /** Human-readable reasons FSDB is unavailable (empty when available). */
+  fsdbBlockers: string[];
+  /** Copy-pasteable fix command; null when python is missing. */
+  installCommand: string | null;
+  /** MCP server can start (source + python + deps all present). */
+  ready: boolean;
+};
