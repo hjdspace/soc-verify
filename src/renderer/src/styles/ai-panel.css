@@ -227,18 +227,23 @@ html[data-shade='dark'] .ai-panel {
   animation: ap-shimmer 1.8s linear infinite;
 }
 
-/* 流式光标 */
-@keyframes ap-blink {
-  50% { opacity: 0; }
+/* 流式尾缘 + 光标（效果参考 beautiful-ui StreamText）：
+   末尾几个字符以 blur + 渐变 mask 呈现，随流式快照更新逐渐凝聚成形；
+   光标写入期间实心不闪烁（每次快照前移本身已有动感），消息 settle 后
+   随 MarkdownRenderer/ThinkingBlock 的重渲染一并移除 */
+.ap-stream-tail {
+  filter: blur(1.6px);
+  -webkit-mask-image: linear-gradient(to right, #000 20%, rgb(0 0 0 / 0.2));
+  mask-image: linear-gradient(to right, #000 20%, rgb(0 0 0 / 0.2));
 }
 .ap-cursor {
   display: inline-block;
   width: 2px;
-  height: 12px;
+  height: 1.05em;
   margin-left: 2px;
-  vertical-align: -2px;
+  border-radius: 1px;
   background: var(--dsw-label-primary);
-  animation: ap-blink 1s step-end infinite;
+  vertical-align: text-bottom;
 }
 
 /* todo 进行中环 */
@@ -256,6 +261,12 @@ html[data-shade='dark'] .ai-panel {
   .ap-cursor {
     animation: none !important;
     transition: none !important;
+  }
+  /* 尾缘模糊虽非动画，但同样属于动态干扰，一并对齐参考实现的处理 */
+  .ap-stream-tail {
+    filter: none;
+    -webkit-mask-image: none;
+    mask-image: none;
   }
 }
 

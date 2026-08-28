@@ -96,3 +96,70 @@ describe('MarkdownRenderer 代码块换行', () => {
     expect(container.querySelector('button')).toBeNull();
   });
 });
+
+describe('MarkdownRenderer 流式尾缘', () => {
+  it('streaming 时末尾文本出现模糊尾缘，行内光标渲染在最后一个段落内部', () => {
+    const { container } = render(
+      <MarkdownRenderer content="这是一段正在流式生成的回复文本" streaming />,
+    );
+    const tail = container.querySelector('.ap-stream-tail');
+    expect(tail).not.toBeNull();
+    // 尾缘只覆盖末尾 6 个字符，前面正文保持清晰
+    expect(tail?.textContent).toBe('成的回复文本');
+
+    // 光标行内渲染：位于段落元素内部（而非独立成行的兄弟节点）
+    const cursors = container.querySelectorAll('.ap-cursor');
+    expect(cursors.length).toBe(1);
+    const lastP = container.querySelector('p');
+    expect(lastP?.contains(cursors[0])).toBe(true);
+    // 正文完整保留
+    expect(container.querySelector('p')?.textContent).toBe('这是一段正在流式生成的回复文本');
+  });
+
+  it('非 streaming 渲染不产生尾缘与光标', () => {
+    const { container } = render(
+      <MarkdownRenderer content="这是一段已完成的回复文本" />,
+    );
+    expect(container.querySelector('.ap-stream-tail')).toBeNull();
+    expect(container.querySelector('.ap-cursor')).toBeNull();
+  });
+
+  it('流式中 settled 部分的文件引用仍被 chip 化', () => {
+    const { container } = render(
+      <MarkdownRenderer content="查看 src/main/foo.sv:42 的实现说明" streaming />,
+    );
+    // settled 末尾是 "src/main/foo.sv:"，应被识别为文件引用 chip
+    const chip = container.querySelector('button.ap-chip');
+    expect(chip).not.toBeNull();
+    expect(chip?.textContent).toContain('src/main/foo.sv');
+  });
+
+  it('以代码块结尾时无光标但不崩溃，代码内容完整', () => {
+    const { container } = render(
+      <MarkdownRenderer content={'```python\nprint(1)\n```'} streaming />,
+    );
+    expect(container.querySelector('.ap-cursor')).toBeNull();
+    const pre = container.querySelector('pre');
+    expect(pre?.textContent).toContain('print(1)');
+  });
+
+  it('嵌套列表只应用一次尾缘（无重复光标）', () => {
+    const { container } = render(
+      <MarkdownRenderer content={'- 外层项\n  - 内层项文本'} streaming />,
+    );
+    expect(container.querySelectorAll('.ap-cursor').length).toBe(1);
+    expect(container.querySelectorAll('.ap-stream-tail').length).toBe(1);
+    // 列表文本完整
+    expect(container.querySelector('li')?.textContent).toContain('外层项');
+  });
+
+  it('流式结束后重渲染移除尾缘与光标', () => {
+    const { rerender, container } = render(
+      <MarkdownRenderer content="流式中的回复" streaming />,
+    );
+    expect(container.querySelector('.ap-cursor')).not.toBeNull();
+    rerender(<MarkdownRenderer content="流式中的回复已完成" />);
+    expect(container.querySelector('.ap-cursor')).toBeNull();
+    expect(container.querySelector('.ap-stream-tail')).toBeNull();
+  });
+});

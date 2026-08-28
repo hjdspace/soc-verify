@@ -1340,17 +1340,6 @@ export function RightPanel({ width }: RightPanelProps) {
 
 // ── 消息渲染组件 ───────────────────────────────────────
 
-/**
- * 流式输出光标。
- * 单独抽出并 memo 化：父组件 MessageBubble 在流式期间每次 content 更新都会重渲染，
- * 但 StreamingCursor 的 DOM 节点和 CSS 动画不应被重建——否则频繁重渲染会让
- * `animate-pulse` 不断从 0% 重启，看起来像「不闪烁」。memo + 稳定 className
- * 让 React 复用同一个 DOM 节点，动画持续运行而不被打断。
- */
-const StreamingCursor = memo(function StreamingCursor() {
-  return <span aria-hidden className="ap-cursor" />;
-});
-
 /** 用户消息悬停时间戳：同日 HH:mm / 同年 M月D日 HH:mm / 更早 Y年M月D日 HH:mm */
 function formatMsgTime(ts: number): string {
   const d = new Date(ts);
@@ -1508,7 +1497,7 @@ function MessageBubble({ message, session }: { message: ChatMessage; session?: S
       ) : message.content?.trimStart().startsWith('[错误]') ? (
         <ErrorMessage content={message.content} />
       ) : message.content ? (
-        <MarkdownRenderer content={message.content} />
+        <MarkdownRenderer content={message.content} streaming={isStreaming} />
       ) : (
         isStreaming && !message.thinking && (
           <div className="flex items-center gap-1 text-muted-foreground">
@@ -1517,7 +1506,6 @@ function MessageBubble({ message, session }: { message: ChatMessage; session?: S
           </div>
         )
       )}
-      {isStreaming && message.content && <StreamingCursor />}
     </div>
   );
 }

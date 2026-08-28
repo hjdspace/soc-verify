@@ -62,6 +62,11 @@ export const ThinkingBlock = memo(function ThinkingBlock({
     ? (lines[lines.length - 1] ?? '')
     : (lines[0] ?? '');
 
+  // 流式尾缘：与 MarkdownRenderer 相同的 blur+mask 效果（纯文本场景），
+  // 末尾几个字符从模糊中凝聚成形，光标为统一的实心 .ap-cursor
+  const TAIL_CHARS = 6;
+  const cut = isThinkingActive ? Math.max(0, thinking.length - TAIL_CHARS) : thinking.length;
+
   return (
     <div className={cn('rounded-lg', isThinkingActive && 'ap-sweep')}>
       {/* Header — clickable to toggle */}
@@ -105,9 +110,12 @@ export const ThinkingBlock = memo(function ThinkingBlock({
             className="max-h-60 overflow-y-auto rounded-lg bg-[var(--dsw-code-block)] px-2.5 py-1.5"
           >
             <div className="whitespace-pre-wrap break-words font-mono text-[10.5px] leading-relaxed text-muted-foreground">
-              {thinking}
+              {thinking.slice(0, cut)}
               {isThinkingActive && (
-                <span className="ml-0.5 inline-block h-2.5 w-0.5 animate-pulse bg-primary align-middle" />
+                <>
+                  <span className="ap-stream-tail">{thinking.slice(cut)}</span>
+                  <span aria-hidden className="ap-cursor" />
+                </>
               )}
             </div>
           </div>
