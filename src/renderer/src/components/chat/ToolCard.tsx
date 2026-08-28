@@ -27,6 +27,8 @@ import { ThinkingOrb, type OrbState } from '@renderer/components/visual';
 import {
   getToolMeta,
   isMCPTool,
+  isSkillRead,
+  extractSkillName,
   parseMCPToolName,
   extractResultText,
   isDirectoryToolResult,
@@ -84,6 +86,11 @@ function readSummary(message: ChatMessage): ReactNode {
   const isExecuting = !message.toolResult;
   const path = argStr(args, 'path', 'file_path') ?? '';
   const lineCount = resultText ? resultText.split('\n').length : 0;
+  // Skill read: show skill name instead of raw skill:// path
+  if (isSkillRead(args)) {
+    const skillName = extractSkillName(args) ?? 'skill';
+    return <><span className="text-foreground">{skillName}</span> {' \u00b7 '} {isExecuting ? 'loading skill...' : `${lineCount} lines`}</>;
+  }
   return <><span className="text-foreground">{shortenPath(path)}</span> {' \u00b7 '} {isExecuting ? 'reading...' : `${lineCount} lines`}</>;
 }
 
@@ -463,6 +470,9 @@ export function ToolCard({ message }: { message: ChatMessage }) {
       ? Date.now() - message.toolStartTime
       : null;
 
+  // Detect skill read: read tool with skill:// path
+  const isSkill = toolName === 'read' && isSkillRead(message.toolArgs);
+
   // Lookup summary + body from registry, with MCP/fallback
   const isMCP = isMCPTool(toolName);
   const entry = isMCP ? undefined : TOOL_REGISTRY[toolName];
@@ -523,6 +533,15 @@ export function ToolCard({ message }: { message: ChatMessage }) {
 
         {/* 标题 · 分隔点 · 摘要 */}
         <span className="shrink-0 text-[11px] font-medium text-muted-foreground">{meta.label}</span>
+        {isSkill && (
+          <span
+            className="flex shrink-0 items-center gap-0.5 rounded px-1 py-px text-[9px] font-medium text-primary-foreground bg-primary/15"
+            data-testid="skill-badge"
+          >
+            <Sparkle className="h-2 w-2" />
+            技能
+          </span>
+        )}
         <span className="h-0.5 w-0.5 shrink-0 rounded-full bg-[var(--dsw-label-caption)]" />
         {isClickablePath ? (
           <span
