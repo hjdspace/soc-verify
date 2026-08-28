@@ -6,6 +6,38 @@
 
 ---
 
+## [0.4.3](https://github.com/hjdspace/soc-verify/compare/v0.4.2...v0.4.3) (2026-08-29)
+
+### Features
+
+* **project:** 支持 `~` 波浪号路径展开，agent 工具参数 home 简写不再被拼入项目根
+* **chat:** 工具卡片集成 ToolChips 分组式渲染——折叠头 + 行式条目 + diff chips 悬停预览
+* **chat:** AI 聊天流式体验优化——模糊尾缘光标与回合收尾操作栏，回合后自动生成建议追问
+* **chat:** 修复 regenerate 命令失效
+* **scm:** 源代码管理支持点击文件展开 diff 审查
+* **ai:** 新增 thinking level 配置（模型配置、runner RPC、AI composer）
+* **ai:** 每个 credential 可选择 OpenAI API 格式（chat/completions vs responses）
+* **ai:** TraceWeave 升级到 v2.0 并新增内置 MCP 就绪诊断
+* **tools:** ToolCard 实现技能读取检测与 skill 徽标
+* **simulation:** 仿真运行 command/cwd 持久化到数据库（新增表列、记录保存与类型增强）
+* **simulation:** 仿真视图左侧面板新增 tab 切换与 CaseCfgPanel 用例配置管理
+* **simulation:** 目录搜索功能增强，命令预览增强并剥离 `cd` 前缀
+* **simulation:** 预设选择器与保存功能增强
+* **simulation:** ScreenshotsPreview 支持图片缩放与拖拽
+* **theme:** 新增 Apple Light / Apple Dark 主题，主题选择替换为 ThemeGroup 组件
+
+### Bug Fixes
+
+* **chat:** 流式尾缘仅应用于最后一个文本块，消除兄弟块级重复模糊
+* **agent:** 推理模型声明 reasoning_content 回传 compat，修复 deepseek 系 thinking 模式 tool_calls 400
+* **simulation:** 仿真 store 活跃运行列表去重
+
+### Refactor
+
+* **ui:** 枚举渲染统一为 EnumField 组件，OptionCard/OptionField 组件重构
+* **ui:** 背景类统一调整（bg-glass/bg-scrim），动画令牌与 reduced motion 增强
+* **file-tree:** 图标处理简化，用例树渲染与动画优化
+
 ## [0.4.2](https://github.com/hjdspace/soc-verify/compare/v0.4.1...v0.4.2) (2026-08-27)
 
 ### Features
