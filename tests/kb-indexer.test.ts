@@ -151,6 +151,50 @@ describe('classifyWithLlm', () => {
     expect(headers['Content-Type']).toBe('application/json');
   });
 
+  it('apiFormat=openai-responses 时请求 /responses 端点并解析 output_text', async () => {
+    const mockResponse = {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        output: [
+          { type: 'reasoning', summary: [] },
+          {
+            type: 'message',
+            content: [{
+              type: 'output_text',
+              text: '{"category": "协议手册", "title": "DDR5", "summary": "DDR5协议", "keywords": ["DDR5"]}',
+            }],
+          },
+        ],
+      }),
+    } as unknown as Response;
+
+    const fetchMock = vi.fn().mockResolvedValue(mockResponse);
+    const result = await classifyWithLlm('骨架', [], {
+      ...config,
+      apiFormat: 'openai-responses',
+      fetchFn: fetchMock as unknown as typeof fetch,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.result.category).toBe('协议手册');
+      expect(result.result.title).toBe('DDR5');
+    }
+
+    // 验证请求 URL 和 Responses 请求体形状
+    const callArgs = fetchMock.mock.calls[0];
+    expect(callArgs[0]).toBe('http://localhost:8557/responses');
+    const init = callArgs[1] as RequestInit;
+    const body = JSON.parse(init.body as string) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      model: 'test-model',
+      max_output_tokens: expect.any(Number),
+    });
+    expect(body).not.toHaveProperty('messages');
+    expect(body).not.toHaveProperty('max_tokens');
+  });
+
   it('anthropic 凭证走 /messages 端点 + x-api-key 头', async () => {
     const mockResponse = {
       ok: true,

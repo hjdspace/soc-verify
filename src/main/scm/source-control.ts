@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { buildDirectChatRequest, ensureV1Prefix, extractOpenAiFamilyContent } from '../agent/openai-compatible';
+import type { OpenAiApiFormat } from '@shared/types';
 
 export type SourceControlFileStatus = {
   path: string;
@@ -26,6 +28,8 @@ export type AiCredential = {
   providerId: string;
   apiKey: string;
   baseUrl?: string;
+  /** OpenAI 兼容端点的 API wire 格式，缺省 openai-completions。 */
+  api?: OpenAiApiFormat;
 };
 
 type ExecFileFn = (
@@ -382,8 +386,6 @@ export class SourceControlService {
       this.buildFileSummary(status, useStagedOnly),
     ]);
 
-    const url = this.chatCompletionsUrl(credential.baseUrl);
-
     const systemPrompt = [
       '资深发布工程师，擅长编写精准、规范的 Git 提交信息。',
       '',
@@ -457,15 +459,18 @@ export class SourceControlService {
       ...userSections,
     ].join('\n');
 
-    const requestBody = JSON.stringify({
+    // 按凭证的 apiFormat 分派 /chat/completions 或 /responses；
+    // ensureV1Prefix 保证请求落到 /v1/<endpoint>（用户 baseUrl 可能缺 /v1）。
+    const request = buildDirectChatRequest({
+      baseUrl: ensureV1Prefix(this.normalizeBaseUrl(credential.baseUrl)),
+      apiFormat: credential.api,
       model,
+      system: systemPrompt,
+      user: userPrompt,
+      maxTokens: 800,
       temperature: 0.2,
-      max_tokens: 800,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
     });
+    const url = request.url;
 
     const response = await this.fetchFn(url, {
       method: 'POST',
@@ -473,7 +478,7 @@ export class SourceControlService {
         Authorization: `Bearer ${credential.apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: requestBody,
+      body: JSON.stringify(request.body),
     });
 
     if (!response.ok) {
@@ -509,44 +514,38 @@ export class SourceControlService {
       diffContext.slice(0, MAX_DIFF_CHARS),
     );
 
-    const retryBody = JSON.stringify({
+    const retryRequest = buildDirectChatRequest({
+      baseUrl: ensureV1Prefix(this.normalizeBaseUrl(credential.baseUrl)),
+      apiFormat: credential.api,
       model,
+      system: [
+        '只输出 Git 提交信息，不要包含任何其他文字。',
+        '格式：<type>(<scope>): <简述>，空行后必须有至少 1 条以 - 开头的 body；不得只输出标题。',
+        '禁用词：全面的、各种、若干、改进的、增强的、本次提交、本次变更',
+        '最终结果必须包在 <commit-message> 和 </commit-message> 中，标签外不要输出任何文字。',
+      ].join('\n'),
+      user: [
+        '根据以下变更生成包含标题和至少 1 条 body 的中文提交信息，不得只输出标题。',
+        '',
+        '示例：',
+        'feat(auth): 添加令牌过期自动刷新',
+        '',
+        '- 新增 TokenRefreshGuard 防止并发刷新',
+        '- 集成 429 重试中间件',
+        '',
+        ...retryUserSections,
+      ].join('\n'),
+      maxTokens: 800,
       temperature: 0.15,
-      max_tokens: 800,
-      messages: [
-        {
-          role: 'system',
-          content: [
-            '只输出 Git 提交信息，不要包含任何其他文字。',
-            '格式：<type>(<scope>): <简述>，空行后必须有至少 1 条以 - 开头的 body；不得只输出标题。',
-            '禁用词：全面的、各种、若干、改进的、增强的、本次提交、本次变更',
-            '最终结果必须包在 <commit-message> 和 </commit-message> 中，标签外不要输出任何文字。',
-          ].join('\n'),
-        },
-        {
-          role: 'user',
-          content: [
-            '根据以下变更生成包含标题和至少 1 条 body 的中文提交信息，不得只输出标题。',
-            '',
-            '示例：',
-            'feat(auth): 添加令牌过期自动刷新',
-            '',
-            '- 新增 TokenRefreshGuard 防止并发刷新',
-            '- 集成 429 重试中间件',
-            '',
-            ...retryUserSections,
-          ].join('\n'),
-        },
-      ],
     });
 
-    const retryResponse = await this.fetchFn(url, {
+    const retryResponse = await this.fetchFn(retryRequest.url, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${credential.apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: retryBody,
+      body: JSON.stringify(retryRequest.body),
     });
 
     if (retryResponse.ok) {
@@ -802,17 +801,13 @@ export class SourceControlService {
       return topText;
     }
 
-    return null;
+    // ── Responses API shapes (output_text / output[].message) ─────────
+    return extractOpenAiFamilyContent(payload);
   }
 
   private modelsUrl(baseUrl?: string): string {
     const base = this.normalizeBaseUrl(baseUrl);
     return base.endsWith('/v1') ? `${base}/models` : `${base}/v1/models`;
-  }
-
-  private chatCompletionsUrl(baseUrl?: string): string {
-    const base = this.normalizeBaseUrl(baseUrl);
-    return base.endsWith('/v1') ? `${base}/chat/completions` : `${base}/v1/chat/completions`;
   }
 
   private normalizeBaseUrl(baseUrl?: string): string {

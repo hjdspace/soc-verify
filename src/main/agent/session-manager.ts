@@ -17,7 +17,7 @@ import {
   OPENAI_COMPATIBLE_PROVIDER,
   type OpenAICompatibleModel,
 } from './openai-compatible';
-import type { ConfiguredModel } from '@shared/types';
+import type { ConfiguredModel, OpenAiApiFormat } from '@shared/types';
 import type { SubsysDiscovery } from '../host/discovery';
 import type { PluginBackedSimulation, PluginBackedCoverage } from '../plugin-adapters';
 import { HostToolsRegistry } from '../host/host-tools';
@@ -215,8 +215,9 @@ export function credentialSnapshot(
   providerId: string | undefined,
   apiKey: string | undefined,
   baseUrl: string | undefined,
+  apiFormat?: OpenAiApiFormat,
 ): string {
-  return `${providerId ?? ''}|${apiKey ?? ''}|${baseUrl ?? ''}`;
+  return `${providerId ?? ''}|${apiKey ?? ''}|${baseUrl ?? ''}|${apiFormat ?? ''}`;
 }
 
 export interface CreateSessionOptions {
@@ -226,6 +227,8 @@ export interface CreateSessionOptions {
   model?: string;
   apiKey?: string;
   baseUrl?: string;
+  /** OpenAI 兼容端点的 API wire 格式（来自凭据的 api 字段），写入 models.json provider 级 `api`。 */
+  apiFormat?: OpenAiApiFormat;
   sessionDir?: string;
   resumeSessionId?: string;
   /** UI 存储对话历史，用于 omp 会话文件缺失/部分覆盖时的上下文种子 */
@@ -470,6 +473,7 @@ export class SessionManagerImpl extends EventEmitter {
             baseUrl: baseUrlValue,
             models: options.configuredModels,
             apiKeyEnvVar: OPENAI_COMPATIBLE_API_KEY_ENV,
+            api: options.apiFormat,
           })
         : buildOpenAICompatibleModelsConfig({
             baseUrl: baseUrlValue,
@@ -477,6 +481,7 @@ export class SessionManagerImpl extends EventEmitter {
             models: allModels,
             apiKeyEnvVar: OPENAI_COMPATIBLE_API_KEY_ENV,
             contextWindow: modelContextWindow,
+            api: options.apiFormat,
           });
       const modelsJson = JSON.stringify(modelsConfig);
       // Write both models.json (legacy) and models.yml (preferred by ConfigFile).
@@ -816,7 +821,7 @@ export class SessionManagerImpl extends EventEmitter {
       runtimeDir,
       model,
       providerId: options.providerId,
-      credentialSnapshot: credentialSnapshot(options.providerId, options.apiKey, options.baseUrl),
+      credentialSnapshot: credentialSnapshot(options.providerId, options.apiKey, options.baseUrl, options.apiFormat),
       isActive: false,
     };
 

@@ -16,7 +16,7 @@
 import { credentialManager } from '../credentials/credential-manager';
 import { kbSettingsManager } from './kb-settings';
 import { ensureV1Prefix, fetchOpenAICompatibleModels } from '../agent/openai-compatible';
-import type { ConfiguredModel } from '@shared/types';
+import type { ConfiguredModel, OpenAiApiFormat } from '@shared/types';
 import { loadSessions } from '../agent/session-persistence';
 import { projectManager } from '../project/project-manager';
 
@@ -29,6 +29,8 @@ export type LlmConfig = {
   model: string;
   /** 凭证 providerId — 决定调用协议（anthropic / gemini 走原生协议，其余走 openai-compatible） */
   providerId?: string;
+  /** openai 协议下的 API wire 格式（chat/completions 或 responses），来自凭证 api 字段 */
+  apiFormat?: OpenAiApiFormat;
   fetchFn?: typeof fetch;
 };
 
@@ -37,6 +39,7 @@ type ActiveCredential = {
   providerId: string;
   apiKey: string;
   baseUrl?: string;
+  api?: OpenAiApiFormat;
   model?: string;
   models?: ConfiguredModel[];
 };
@@ -177,7 +180,7 @@ export async function resolveKbLlmConfig(): Promise<LlmConfig | null> {
       const model = kbSettings.llm.model?.trim()
         || cred.models?.[0]?.id.trim()
         || await firstAvailableModel(cred, baseUrl);
-      return { baseUrl, apiKey: cred.apiKey, model, providerId: cred.providerId };
+      return { baseUrl, apiKey: cred.apiKey, model, providerId: cred.providerId, apiFormat: cred.api };
     }
     // 凭证已被删除 — 落回自动推导链
   }
@@ -198,5 +201,6 @@ export async function resolveKbLlmConfig(): Promise<LlmConfig | null> {
     apiKey: cred.apiKey,
     model,
     providerId: cred.providerId,
+    apiFormat: cred.api,
   };
 }

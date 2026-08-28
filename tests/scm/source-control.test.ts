@@ -253,6 +253,78 @@ describe('source control service', () => {
     expect(message).toBe('feat: array content support');
   });
 
+  it('uses the /responses endpoint and Responses request shape when credential api is openai-responses', async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const fakeExec = vi.fn((file: string, args: string[], _options: unknown, callback: (e: Error | null, stdout: string, stderr: string) => void) => {
+      const gitArgs = args.slice(2);
+      if (gitArgs[0] === 'status') {
+        callback(null, '## main\0M  src/a.ts\0', '');
+        return;
+      }
+      if (gitArgs[0] === 'log') {
+        callback(null, 'feat: previous commit\n', '');
+        return;
+      }
+      callback(null, 'M\tsrc/a.ts\n', '');
+    });
+    const fetchFn = vi.fn((async (url: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({
+        url: String(url),
+        body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
+      });
+      return new Response(JSON.stringify({
+        output: [
+          { type: 'reasoning', summary: [] },
+          { type: 'message', content: [{ type: 'output_text', text: 'feat: responses api support\n\n- use /responses endpoint' }] },
+        ],
+      }), { status: 200 });
+    }) as typeof fetch);
+    const service = new SourceControlService({ execFileFn: fakeExec, fetchFn });
+    const message = await service.generateCommitMessage(
+      'D:\\repo',
+      { providerId: 'gateway', apiKey: 'test-key', baseUrl: 'https://example.test/v1', api: 'openai-responses' },
+      'test-model',
+    );
+    expect(message).toContain('feat: responses api support');
+    // Both the initial call and the retry path are only hit when the first
+    // response lacks a usable message — one call is enough here.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe('https://example.test/v1/responses');
+    expect(calls[0].body).toMatchObject({ model: 'test-model', max_output_tokens: 800 });
+    expect(calls[0].body).not.toHaveProperty('messages');
+    expect(calls[0].body).not.toHaveProperty('max_tokens');
+  });
+
+  it('appends /v1 before the responses endpoint when the credential baseUrl lacks it', async () => {
+    const fakeExec = vi.fn((file: string, args: string[], _options: unknown, callback: (e: Error | null, stdout: string, stderr: string) => void) => {
+      const gitArgs = args.slice(2);
+      if (gitArgs[0] === 'status') {
+        callback(null, '## main\0M  src/a.ts\0', '');
+        return;
+      }
+      if (gitArgs[0] === 'log') {
+        callback(null, '', '');
+        return;
+      }
+      callback(null, 'M\tsrc/a.ts\n', '');
+    });
+    const urls: string[] = [];
+    const fetchFn = vi.fn((async (url: RequestInfo | URL) => {
+      urls.push(String(url));
+      return new Response(JSON.stringify({
+        output_text: 'feat: v1 prefix enforced\n\n- keep /v1 before /responses',
+      }), { status: 200 });
+    }) as typeof fetch);
+    const service = new SourceControlService({ execFileFn: fakeExec, fetchFn });
+    const message = await service.generateCommitMessage(
+      'D:\\repo',
+      { providerId: 'gateway', apiKey: 'test-key', baseUrl: 'https://example.test', api: 'openai-responses' },
+      'test-model',
+    );
+    expect(message).toContain('feat: v1 prefix enforced');
+    expect(urls[0]).toBe('https://example.test/v1/responses');
+  });
+
   it('falls back to reasoning_content when content is null', async () => {
     const fetchFn = vi.fn((async () => {
       return new Response(JSON.stringify({

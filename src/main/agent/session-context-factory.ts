@@ -171,6 +171,7 @@ export async function createSessionContext(options: SessionContextOptions): Prom
     model: options.model,
     apiKey,
     baseUrl,
+    apiFormat: cred?.api,
     discovery,
     simulationAdapter: simulation,
     coverageAdapter: coverage,

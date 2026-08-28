@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { Check, Key, Loader2, Pencil, Plus, RefreshCw, Save, Search, Trash2, X } from 'lucide-react';
 import { useSettingsStore, type ApiModel } from '@renderer/stores/settings';
 import { cn } from '@renderer/lib/utils';
-import type { CredentialEntry, ConfiguredModel } from '@shared/types';
+import type { CredentialEntry, ConfiguredModel, OpenAiApiFormat } from '@shared/types';
 import { DEFAULT_CONTEXT_WINDOW } from '@shared/context-management';
 
 /**
@@ -10,6 +10,7 @@ import { DEFAULT_CONTEXT_WINDOW } from '@shared/context-management';
  *
  * 每个模型有独立的 contextWindow，不再使用全局上下文窗口。
  * 添加模型时可以从 API 获取模型列表供用户选择。
+ * 每个凭据可选择 API 格式：Chat Completions 或 Responses。
  */
 
 // ── Context window preset options ──────────────────────
@@ -23,6 +24,18 @@ const CONTEXT_WINDOW_OPTIONS = [
   { value: 1_000_000, label: '1M' },
 ];
 
+// ── OpenAI API wire format options ─────────────────────
+const API_FORMAT_OPTIONS: Array<{ value: OpenAiApiFormat; label: string; hint: string }> = [
+  { value: 'openai-completions', label: 'Chat Completions (/chat/completions)', hint: '兼容绝大多数 OpenAI 兼容网关' },
+  { value: 'openai-responses', label: 'Responses (/responses)', hint: '仅当后端实现了 Responses API 时选择' },
+];
+
+const DEFAULT_API_FORMAT: OpenAiApiFormat = 'openai-completions';
+
+function apiFormatLabel(api: OpenAiApiFormat | undefined): string {
+  return API_FORMAT_OPTIONS.find((o) => o.value === (api ?? DEFAULT_API_FORMAT))?.label ?? api!;
+}
+
 // ── useCredentialForm hook ────────────────────────────────
 
 type CredentialFormState = {
@@ -30,6 +43,7 @@ type CredentialFormState = {
   label: string;
   apiKey: string;
   baseUrl: string;
+  api: OpenAiApiFormat;
   models: ConfiguredModel[];
 };
 
@@ -38,6 +52,7 @@ const EMPTY_FORM: CredentialFormState = {
   label: '',
   apiKey: '',
   baseUrl: '',
+  api: DEFAULT_API_FORMAT,
   models: [],
 };
 
@@ -84,6 +99,7 @@ function useCredentialForm() {
         label: form.label.trim(),
         apiKey: form.apiKey.trim() || undefined,
         baseUrl: form.baseUrl.trim() || undefined,
+        api: form.api,
         models: form.models,
       });
     } else {
@@ -92,6 +108,7 @@ function useCredentialForm() {
         label: form.label.trim() || form.providerId.trim(),
         apiKey: form.apiKey.trim(),
         baseUrl: form.baseUrl.trim() || undefined,
+        api: form.api,
         models: form.models,
       });
     }
@@ -105,6 +122,7 @@ function useCredentialForm() {
       label: c.label,
       apiKey: '',
       baseUrl: c.baseUrl ?? '',
+      api: c.api ?? DEFAULT_API_FORMAT,
       models: c.models ?? [],
     });
   };
@@ -234,6 +252,17 @@ export function CredentialsTab() {
                   {c.baseUrl && (
                     <span className="ml-2 text-[10px] text-muted-foreground/70 truncate">{c.baseUrl}</span>
                   )}
+                  <span
+                    className={cn(
+                      'ml-2 rounded px-1 py-px text-[9px]',
+                      (c.api ?? 'openai-completions') === 'openai-responses'
+                        ? 'bg-primary/10 text-primary'
+                        : 'bg-muted text-muted-foreground',
+                    )}
+                    title={apiFormatLabel(c.api)}
+                  >
+                    {(c.api ?? 'openai-completions') === 'openai-responses' ? 'Responses' : 'Chat Completions'}
+                  </span>
                   {c.models.length > 0 && (
                     <span className="ml-2 text-[10px] text-primary/70">{c.models.length} 个模型</span>
                   )}
@@ -328,6 +357,21 @@ export function CredentialsTab() {
             placeholder="Base URL（可选）"
             className="rounded border border-border bg-background px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-primary"
           />
+          <div className="col-span-2 flex items-center gap-1.5">
+            <select
+              aria-label="API 格式"
+              value={form.api}
+              onChange={(e) => update({ api: e.target.value as OpenAiApiFormat })}
+              className="h-6 min-w-0 flex-1 rounded border border-input bg-background px-1.5 text-[10px] text-foreground outline-none focus:ring-1 focus:ring-primary"
+            >
+              {API_FORMAT_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <span className="shrink-0 text-[9px] text-muted-foreground/70">
+              {API_FORMAT_OPTIONS.find((o) => o.value === form.api)?.hint}
+            </span>
+          </div>
         </div>
 
         {/* Model list configuration */}

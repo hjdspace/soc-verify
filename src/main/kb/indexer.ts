@@ -33,6 +33,7 @@ import { basename, dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { IndexEntry, ClassificationResult } from './types';
 import { type LlmConfig, protocolForProvider } from './llm-config';
+import { buildDirectChatRequest, extractOpenAiFamilyContent } from '../agent/openai-compatible';
 
 // Re-export for backward compatibility — consumers that imported
 // LlmConfig / protocolForProvider from indexer still work.
@@ -152,14 +153,6 @@ const LLM_MAX_TOKENS = 2000;
 
 const CLASSIFY_SYSTEM_PROMPT = '你是一个文档分类助手。只返回 JSON。';
 
-/** 从 openai-compatible 响应提取 message.content */
-function extractOpenAiContent(payload: Record<string, unknown>): string | null {
-  const choices = payload.choices as Array<Record<string, unknown>> | undefined;
-  const message = choices?.[0]?.message as Record<string, unknown> | undefined;
-  const content = message?.content;
-  return typeof content === 'string' ? content : null;
-}
-
 /** 从 anthropic /v1/messages 响应提取 content[].text */
 function extractAnthropicContent(payload: Record<string, unknown>): string | null {
   const blocks = payload.content as Array<Record<string, unknown>> | undefined;
@@ -232,20 +225,22 @@ export async function classifyWithLlm(
       generationConfig: { temperature: 0.3, maxOutputTokens: LLM_MAX_TOKENS },
     };
   } else {
-    url = `${base}/chat/completions`;
+    // openai 兼容协议 — 按凭证的 apiFormat 分派 /chat/completions 或 /responses
+    const request = buildDirectChatRequest({
+      baseUrl: base,
+      apiFormat: config.apiFormat,
+      model: config.model,
+      system: CLASSIFY_SYSTEM_PROMPT,
+      user: prompt,
+      maxTokens: LLM_MAX_TOKENS,
+      temperature: 0.3,
+    });
+    url = request.url;
     headers = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${config.apiKey}`,
     };
-    body = {
-      model: config.model,
-      messages: [
-        { role: 'system', content: CLASSIFY_SYSTEM_PROMPT },
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.3,
-      max_tokens: LLM_MAX_TOKENS,
-    };
+    body = request.body;
   }
 
   const controller = new AbortController();
@@ -269,7 +264,7 @@ export async function classifyWithLlm(
       ? extractAnthropicContent(payload)
       : protocol === 'gemini'
         ? extractGeminiContent(payload)
-        : extractOpenAiContent(payload);
+        : extractOpenAiFamilyContent(payload);
 
     if (content === null) {
       return { ok: false, error: `LLM 返回格式异常：无法从 ${protocol} 响应中提取文本` };

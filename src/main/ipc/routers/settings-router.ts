@@ -28,7 +28,7 @@ import { HOST_TOOL_NAMES, HOST_TOOL_GROUPS } from '../../host/tool-catalog';
 import { BUILTIN_TOOL_CATALOG, getBuiltinLabel, getBuiltinDescription } from '../../host/builtin-tool-catalog';
 import { themeSettings } from '../../agent/theme-settings';
 import type { TvConfig } from '../../timing-violation/types';
-import type { CredentialInput, CredentialUpdateInput, ConfiguredModel, CreateSkillInput, McpConfigFile, McpToolInfo } from '@shared/types';
+import type { CredentialInput, CredentialUpdateInput, ConfiguredModel, CreateSkillInput, McpConfigFile, McpToolInfo, OpenAiApiFormat } from '@shared/types';
 import { MAX_CONTEXT_WINDOW, MIN_CONTEXT_WINDOW } from '@shared/context-management';
 
 /** Type guard: validate a ConfiguredModel object from raw input. */
@@ -41,6 +41,16 @@ function isValidConfiguredModel(value: unknown): value is ConfiguredModel {
     typeof m.contextWindow === 'number' && Number.isInteger(m.contextWindow) &&
     m.contextWindow >= MIN_CONTEXT_WINDOW && m.contextWindow <= MAX_CONTEXT_WINDOW
   );
+}
+
+/** Validate the optional OpenAI API wire format field; undefined passes through. */
+function normalizeApiFormatInput(value: unknown): OpenAiApiFormat | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'openai-completions' || value === 'openai-responses') return value;
+  throw new TRPCError({
+    code: 'BAD_REQUEST',
+    message: "api must be 'openai-completions' or 'openai-responses'",
+  });
 }
 
 export const settingsRouter = t.router({
@@ -147,6 +157,7 @@ export const settingsRouter = t.router({
         label: typeof inp.label === 'string' ? inp.label : '',
         apiKey: inp.apiKey,
         baseUrl: typeof inp.baseUrl === 'string' ? inp.baseUrl : undefined,
+        api: normalizeApiFormatInput(inp.api),
         models: Array.isArray(inp.models) ? inp.models.filter(isValidConfiguredModel) : undefined,
       };
       return { input: result };
@@ -167,6 +178,7 @@ export const settingsRouter = t.router({
         label: typeof inp.label === 'string' ? inp.label : undefined,
         apiKey: typeof inp.apiKey === 'string' && inp.apiKey !== '' ? inp.apiKey : undefined,
         baseUrl: typeof inp.baseUrl === 'string' ? inp.baseUrl : undefined,
+        api: normalizeApiFormatInput(inp.api),
         models: Array.isArray(inp.models) ? inp.models.filter(isValidConfiguredModel) : undefined,
       };
       return { input: result };

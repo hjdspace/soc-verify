@@ -143,6 +143,34 @@ describe('resolveKbLlmConfig', () => {
     expect(config!.apiKey).toBe('sk-kb');
     expect(config!.model).toBe('kb-model');
     expect(config!.providerId).toBe('kb-cred');
+
+  });
+
+  it('凭证的 api 字段透传为 apiFormat（openai-responses）', async () => {
+    await writeKbSettings({ llm: { providerId: 'kb-cred', model: 'kb-model' } });
+    mockGetCredential.mockResolvedValue({
+      providerId: 'kb-cred',
+      apiKey: 'sk-kb',
+      baseUrl: 'http://kb.example:3000',
+      api: 'openai-responses',
+    });
+
+    const config = await resolveKbLlmConfig();
+
+    expect(config!.apiFormat).toBe('openai-responses');
+  });
+
+  it('凭证无 api 字段时 apiFormat 为 undefined（默认 chat/completions）', async () => {
+    await writeKbSettings({ llm: { providerId: 'kb-cred', model: 'kb-model' } });
+    mockGetCredential.mockResolvedValue({
+      providerId: 'kb-cred',
+      apiKey: 'sk-kb',
+      baseUrl: 'http://kb.example:3000',
+    });
+
+    const config = await resolveKbLlmConfig();
+
+    expect(config!.apiFormat).toBeUndefined();
   });
 
   // ─── 2. KB 设置有 providerId 但 model 空 → 回退凭证 model ─────

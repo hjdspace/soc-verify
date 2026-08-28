@@ -94,7 +94,7 @@ async function performHolisticSwap(input: {
   const currentModel = existing.model;
   if (
     existing.providerId === input.providerId &&
-    existing.credentialSnapshot === credentialSnapshot(input.providerId, cred.apiKey, cred.baseUrl) &&
+    existing.credentialSnapshot === credentialSnapshot(input.providerId, cred.apiKey, cred.baseUrl, cred.api) &&
     (!input.modelId || input.modelId === currentModel)
   ) {
     console.log(`[router:session.setModel] no-op: session ${input.sessionId} already runs ${input.providerId}/${currentModel ?? '(auto)'}`);

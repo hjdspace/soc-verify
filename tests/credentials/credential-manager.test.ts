@@ -153,6 +153,46 @@ describe('CredentialManager — CRUD operations', () => {
     expect(raw?.apiKey).toBe('sk-preserve-me');
   });
 
+  it('persists the api wire format through save and masked reads', async () => {
+    const entry = await credentialManager.save({
+      providerId: 'gateway',
+      label: 'Gateway',
+      apiKey: 'sk-gw',
+      api: 'openai-responses',
+    });
+
+    expect(entry.api).toBe('openai-responses');
+
+    const raw = await credentialManager.get('gateway');
+    expect(raw?.api).toBe('openai-responses');
+  });
+
+  it('treats api as optional and defaults to undefined (openai-completions)', async () => {
+    await credentialManager.save({
+      providerId: 'legacy',
+      label: 'Legacy',
+      apiKey: 'sk-legacy',
+    });
+
+    const raw = await credentialManager.get('legacy');
+    expect(raw?.api).toBeUndefined();
+  });
+
+  it('update changes api only when provided, preserving it otherwise', async () => {
+    await credentialManager.save({
+      providerId: 'gw',
+      label: 'GW',
+      apiKey: 'sk-gw',
+      api: 'openai-completions',
+    });
+
+    await credentialManager.update({ providerId: 'gw', label: 'GW2', api: 'openai-responses' });
+    expect((await credentialManager.get('gw'))?.api).toBe('openai-responses');
+
+    await credentialManager.update({ providerId: 'gw', label: 'GW3' });
+    expect((await credentialManager.get('gw'))?.api).toBe('openai-responses');
+  });
+
   it('throws when updating a non-existent credential', async () => {
     await expect(
       credentialManager.update({ providerId: 'ghost', label: 'Ghost' }),

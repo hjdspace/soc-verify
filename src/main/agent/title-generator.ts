@@ -24,6 +24,7 @@
  */
 
 import { resolveKbLlmConfig, protocolForProvider, type LlmConfig } from '../kb/llm-config';
+import { buildDirectChatRequest, extractOpenAiFamilyContent } from './openai-compatible';
 
 // ── 常量 ──────────────────────────────────────────────────────
 
@@ -145,14 +146,6 @@ export function isShortTitleInput(message: string): boolean {
 
 // ── 响应提取（按协议分派）──────────────────────────────────────
 
-/** 从 openai-compatible 响应提取 message.content */
-function extractOpenAiContent(payload: Record<string, unknown>): string | null {
-  const choices = payload.choices as Array<Record<string, unknown>> | undefined;
-  const message = choices?.[0]?.message as Record<string, unknown> | undefined;
-  const content = message?.content;
-  return typeof content === 'string' ? content : null;
-}
-
 /** 从 anthropic /v1/messages 响应提取 content[].text */
 function extractAnthropicContent(payload: Record<string, unknown>): string | null {
   const blocks = payload.content as Array<Record<string, unknown>> | undefined;
@@ -235,21 +228,22 @@ async function callLlmForTitle(config: LlmConfig, userMessage: string): Promise<
       generationConfig: { temperature: 0.3, maxOutputTokens: TITLE_MAX_TOKENS },
     };
   } else {
-    url = `${base}/chat/completions`;
+    // openai 兼容协议 — 按凭证的 apiFormat 分派 /chat/completions 或 /responses
+    const request = buildDirectChatRequest({
+      baseUrl: base,
+      apiFormat: config.apiFormat,
+      model: config.model,
+      system: TITLE_SYSTEM_PROMPT,
+      user: prompt,
+      maxTokens: TITLE_MAX_TOKENS,
+      temperature: 0.3,
+    });
+    url = request.url;
     headers = {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.apiKey}`,
     };
-    body = {
-      model: config.model,
-      messages: [
-        { role: 'system', content: TITLE_SYSTEM_PROMPT },
-        { role: 'user', content: prompt },
-      ],
-      max_tokens: TITLE_MAX_TOKENS,
-      temperature: 0.3,
-      stream: false,
-    };
+    body = request.body;
   }
 
   const controller = new AbortController();
@@ -275,7 +269,7 @@ async function callLlmForTitle(config: LlmConfig, userMessage: string): Promise<
       ? extractAnthropicContent(payload)
       : protocol === 'gemini'
         ? extractGeminiContent(payload)
-        : extractOpenAiContent(payload);
+        : extractOpenAiFamilyContent(payload);
 
     if (!content) {
       console.warn('[title-generator] no content extracted from response');

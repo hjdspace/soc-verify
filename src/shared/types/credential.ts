@@ -1,4 +1,11 @@
 /**
+ * OpenAI 兼容端点的 API wire 格式：
+ *  - openai-completions → POST {baseUrl}/chat/completions（默认，兼容大多数网关）
+ *  - openai-responses   → POST {baseUrl}/responses（仅当后端实现了 Responses API）
+ */
+export type OpenAiApiFormat = 'openai-completions' | 'openai-responses';
+
+/**
  * A model configured under a credential/provider. Each model has its own
  * context window size — there is no global context window anymore.
  */
@@ -16,6 +23,8 @@ export interface CredentialEntry {
   label: string;
   apiKeyMasked: string;
   baseUrl?: string;
+  /** API wire 格式（openai 兼容协议专用），缺省为 openai-completions。 */
+  api?: OpenAiApiFormat;
   /** Models configured for this provider. Each has its own contextWindow. */
   models: ConfiguredModel[];
   createdAt: number;
@@ -26,6 +35,7 @@ export interface CredentialInput {
   label: string;
   apiKey: string;
   baseUrl?: string;
+  api?: OpenAiApiFormat;
   models?: ConfiguredModel[];
 }
 
@@ -39,5 +49,6 @@ export interface CredentialUpdateInput {
   label?: string;
   apiKey?: string;
   baseUrl?: string;
+  api?: OpenAiApiFormat;
   models?: ConfiguredModel[];
 }

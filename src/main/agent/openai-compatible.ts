@@ -1,8 +1,16 @@
 import { DEFAULT_CONTEXT_WINDOW } from '@shared/context-management';
-import type { ConfiguredModel } from '@shared/types';
+import type { ConfiguredModel, OpenAiApiFormat } from '@shared/types';
 
 export const OPENAI_COMPATIBLE_PROVIDER = 'socverify-openai-compatible';
 export const OPENAI_COMPATIBLE_API_KEY_ENV = 'SOCVERIFY_AGENT_API_KEY';
+
+/** 凭据未显式选择 API 格式时的缺省值。 */
+export const DEFAULT_OPENAI_API_FORMAT: OpenAiApiFormat = 'openai-completions';
+
+/** 归一化 API 格式：非法/缺省值回落到 openai-completions。 */
+export function normalizeApiFormat(api: string | undefined): OpenAiApiFormat {
+  return api === 'openai-responses' ? 'openai-responses' : DEFAULT_OPENAI_API_FORMAT;
+}
 
 export type OpenAICompatibleModel = {
   id: string;
@@ -25,6 +33,8 @@ type ModelsConfigOptions = {
   models?: OpenAICompatibleModel[];
   apiKeyEnvVar: string;
   contextWindow?: number;
+  /** OpenAI 兼容端点的 API wire 格式，写入 provider 级 `api` 字段。 */
+  api?: OpenAiApiFormat;
 };
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -93,6 +103,7 @@ export function buildOpenAICompatibleModelsConfig({
   models,
   apiKeyEnvVar,
   contextWindow = DEFAULT_CONTEXT_WINDOW,
+  api,
 }: ModelsConfigOptions) {
   // Use the full model list when provided; otherwise fall back to a single-model
   // config. Writing all models is essential for runtime model switching via the
@@ -105,7 +116,7 @@ export function buildOpenAICompatibleModelsConfig({
     providers: {
       [OPENAI_COMPATIBLE_PROVIDER]: {
         baseUrl: ensureV1Prefix(baseUrl),
-        api: 'openai-completions',
+        api: api ?? DEFAULT_OPENAI_API_FORMAT,
         apiKey: apiKeyEnvVar,
         authHeader: true,
         disableStrictTools: true,
@@ -136,16 +147,19 @@ export function buildOpenAICompatibleModelsWithPerModelContext({
   baseUrl,
   models,
   apiKeyEnvVar,
+  api,
 }: {
   baseUrl: string;
   models: ConfiguredModel[];
   apiKeyEnvVar: string;
+  /** OpenAI 兼容端点的 API wire 格式，写入 provider 级 `api` 字段。 */
+  api?: OpenAiApiFormat;
 }) {
   return {
     providers: {
       [OPENAI_COMPATIBLE_PROVIDER]: {
         baseUrl: ensureV1Prefix(baseUrl),
-        api: 'openai-completions',
+        api: api ?? DEFAULT_OPENAI_API_FORMAT,
         apiKey: apiKeyEnvVar,
         authHeader: true,
         disableStrictTools: true,
@@ -193,4 +207,117 @@ export function buildModelInputOverrideConfig({
       },
     },
   } as const;
+}
+
+// ── 直连 LLM 调用 helper（不经 omp 引擎的调用方复用：标题生成 / KB / SCM）──
+
+export type DirectChatRequest = {
+  url: string;
+  body: Record<string, unknown>;
+};
+
+/**
+ * 构建非流式对话请求，按 apiFormat 分派端点与请求体：
+ *  - openai-completions → POST {base}/chat/completions（messages + max_tokens）
+ *  - openai-responses   → POST {base}/responses（input 角色消息 + max_output_tokens）
+ *
+ * `baseUrl` 需已含 `/v1` 前缀（可先过 ensureV1Prefix）。
+ */
+export function buildDirectChatRequest(options: {
+  baseUrl: string;
+  apiFormat?: OpenAiApiFormat;
+  model: string;
+  system: string;
+  user: string;
+  maxTokens: number;
+  temperature?: number;
+}): DirectChatRequest {
+  const base = options.baseUrl.replace(/\/+$/, '');
+  const temperature = options.temperature !== undefined
+    ? { temperature: options.temperature }
+    : {};
+
+  if (normalizeApiFormat(options.apiFormat) === 'openai-responses') {
+    return {
+      url: `${base}/responses`,
+      body: {
+        model: options.model,
+        input: [
+          { role: 'system', content: options.system },
+          { role: 'user', content: options.user },
+        ],
+        max_output_tokens: options.maxTokens,
+        ...temperature,
+        stream: false,
+      },
+    };
+  }
+
+  return {
+    url: `${base}/chat/completions`,
+    body: {
+      model: options.model,
+      messages: [
+        { role: 'system', content: options.system },
+        { role: 'user', content: options.user },
+      ],
+      max_tokens: options.maxTokens,
+      ...temperature,
+      stream: false,
+    },
+  };
+}
+
+/**
+ * 从 openai 兼容响应（chat/completions 或 responses 两种格式）提取助手指令文本。
+ *  - chat/completions：choices[0].message.content（字符串或 content parts 数组）
+ *  - responses：顶层 output_text 或 output[] 中 message 项的 output_text part
+ * 形状不冲突，可安全地按顺序尝试。
+ */
+export function extractOpenAiFamilyContent(payload: Record<string, unknown>): string | null {
+  // ── chat/completions 形状 ──
+  const choices = payload.choices as Array<Record<string, unknown>> | undefined;
+  const message = choices?.[0]?.message as Record<string, unknown> | undefined;
+  if (message) {
+    if (typeof message.content === 'string' && message.content.trim()) {
+      return message.content;
+    }
+    if (Array.isArray(message.content)) {
+      const texts: string[] = [];
+      for (const part of message.content) {
+        if (typeof part === 'object' && part !== null) {
+          const text = (part as Record<string, unknown>).text;
+          if (typeof text === 'string') texts.push(text);
+        }
+      }
+      const joined = texts.join('').trim();
+      if (joined) return joined;
+    }
+  }
+
+  // ── responses 形状：顶层 output_text（官方 SDK 的便捷字段） ──
+  if (typeof payload.output_text === 'string' && payload.output_text.trim()) {
+    return payload.output_text;
+  }
+
+  // ── responses 形状：output[] 中的 message 项 ──
+  const output = payload.output;
+  if (Array.isArray(output)) {
+    const texts: string[] = [];
+    for (const item of output) {
+      if (typeof item !== 'object' || item === null) continue;
+      const record = item as Record<string, unknown>;
+      if (record.type !== 'message' || !Array.isArray(record.content)) continue;
+      for (const part of record.content) {
+        if (typeof part === 'object' && part !== null) {
+          const p = part as Record<string, unknown>;
+          if (p.type === 'output_text' && typeof p.text === 'string') texts.push(p.text);
+        }
+      }
+    }
+    const joined = texts.join('').trim();
+    if (joined) return joined;
+  }
+
+  return null;
 }

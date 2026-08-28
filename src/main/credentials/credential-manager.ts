@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { app } from 'electron';
-import type { CredentialEntry, CredentialInput, CredentialUpdateInput, ConfiguredModel } from '@shared/types';
+import type { CredentialEntry, CredentialInput, CredentialUpdateInput, ConfiguredModel, OpenAiApiFormat } from '@shared/types';
 
 const CREDENTIALS_FILE = 'credentials.json';
 
@@ -11,6 +11,8 @@ interface StoredCredential {
   label: string;
   apiKey: string;
   baseUrl?: string;
+  /** OpenAI 兼容端点的 API wire 格式，缺省 openai-completions。 */
+  api?: OpenAiApiFormat;
   models: ConfiguredModel[];
   createdAt: number;
 }
@@ -52,6 +54,7 @@ class CredentialManagerImpl {
       label: input.label || input.providerId,
       apiKey: input.apiKey,
       baseUrl: input.baseUrl,
+      api: input.api,
       models: input.models ?? [],
       createdAt: idx >= 0 ? all[idx].createdAt : Date.now(),
     };
@@ -87,6 +90,7 @@ class CredentialManagerImpl {
       label: input.label !== undefined ? (input.label || existing.providerId) : existing.label,
       apiKey: input.apiKey !== undefined && input.apiKey !== '' ? input.apiKey : existing.apiKey,
       baseUrl: input.baseUrl !== undefined ? (input.baseUrl || undefined) : existing.baseUrl,
+      api: input.api !== undefined ? input.api : existing.api,
       models: input.models !== undefined ? input.models : existing.models,
       createdAt: existing.createdAt,
     };
@@ -181,6 +185,7 @@ class CredentialManagerImpl {
       label: c.label,
       apiKeyMasked: c.apiKey.slice(0, 4) + '***',
       baseUrl: c.baseUrl,
+      api: c.api,
       models: c.models,
       createdAt: c.createdAt,
     };
