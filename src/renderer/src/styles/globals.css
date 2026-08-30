@@ -1773,6 +1773,133 @@ a.ap-ctx-chip,
   cursor: default;
 }
 
+/* ── 通用建议卡 RecommendationCard（issues #4）──
+   置信度信号条（3 根竖条 Meter）+ 备选方案抽屉（grid-rows 0fr→1fr）+ CTA success 态。
+   视觉/交互参考 beautiful-ui:
+   D:\AI\beautiful-ui\components\primitives\RecommendationCard.tsx
+   共享 UI 件：TV 违例建议卡与聊天追问建议同形态复用。
+   颜色一律取全局语义变量，使组件在 .ai-panel 作用域内/外取值均正确。 */
+.ap-rec-card {
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+}
+.ap-rec-pad {
+  padding: 10px 12px;
+}
+.ap-rec-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground);
+}
+.ap-rec-body {
+  margin: 6px 0 0;
+  min-height: 2.5rem;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+/* 备选抽屉外壳：展开曲线取映射层 --ease-out-strong（参考实现同款 300ms） */
+.ap-rec-drawer {
+  display: grid;
+  transition:
+    grid-template-rows 300ms var(--ease-out-strong),
+    opacity 300ms var(--ease-out-strong);
+}
+.ap-rec-drawer-clip {
+  overflow: hidden;
+  min-height: 0;
+}
+.ap-rec-others {
+  padding: 4px 8px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--card);
+}
+.ap-rec-others-label {
+  margin: 0;
+  padding: 2px 6px 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg-faint);
+}
+.ap-rec-other-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 100ms ease;
+}
+.ap-rec-other-row:hover:not(:disabled) {
+  background: var(--accent);
+}
+.ap-rec-other-row:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.ap-rec-other-short {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+  color: var(--foreground);
+}
+.ap-rec-other-label {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+.ap-rec-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--card);
+}
+.ap-rec-footer-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ap-rec-meter {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.ap-rec-meter i {
+  display: block;
+  width: 4px;
+  height: 10px;
+  border-radius: 999px;
+  transition: background-color 300ms ease;
+}
+.ap-rec-active-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.ap-rec-actions {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
 /* ── 减弱动效：抽屉滑入与树展开 ─────────────────────────────────
    reduced-motion 不等于零动画——保留 opacity 淡入（帮助理解状态变化），
    禁用位移和高度变化（position change 是主要触发前庭不适的因素）。
@@ -1801,5 +1928,10 @@ a.ap-ctx-chip,
   }
   .ap-ctx-chip {
     transition-delay: 0ms !important;
+  }
+
+  /* 建议卡抽屉：去掉 grid-rows 高度过渡，保留 opacity 淡入 */
+  .ap-rec-drawer {
+    transition: opacity 150ms ease !important;
   }
 }

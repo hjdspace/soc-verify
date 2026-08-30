@@ -356,36 +356,10 @@ html[data-shade='dark'] .ai-panel {
 .ap-src-icon--rose { background: rgb(225, 29, 72); }
 .ap-src-icon--amber { background: rgb(217, 119, 6); }
 
-/* ── 建议追问（回合结束后由轻量 LLM 生成，逐条 stagger 淡入）────── */
+/* ── 建议追问（回合结束后由轻量 LLM 生成，issues #4 起接入通用建议卡
+      RecommendationCard 形态，旧胶囊列表样式已删） ── */
 .ap-followups {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
   margin-top: 6px;
-}
-.ap-followups-label {
-  margin: 0 0 1px;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--dsw-label-secondary);
-}
-.ap-followup-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  max-width: 100%;
-  padding: 4px 6px;
-  border-radius: 6px;
-  font-size: 11.5px;
-  text-align: left;
-  color: var(--dsw-label-primary);
-  cursor: pointer;
-  animation: fade-up 350ms var(--ease-out-strong) both;
-  transition: background-color 100ms ease;
-}
-.ap-followup-item:hover {
-  background: var(--dsw-hover-bg);
 }
 
 /* todo 进行中环：keyframes 用 globals.css 映射层的 canonical spin */

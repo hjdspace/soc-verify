@@ -173,7 +173,7 @@ describe('AssistantActions 回合收尾操作栏', () => {
     expect(screen.queryByRole('button', { name: /引用/ })).not.toBeInTheDocument();
   });
 
-  it('建议追问在最后一条助手消息上渲染，点击直接发送', async () => {
+  it('建议追问接入建议卡形态：CTA 发送当前建议，切换备选后发送备选项', async () => {
     const session = makeSession({
       status: 'idle',
       followUps: ['如何修改复位释放时序？', '查看相关 SDC 约束'],
@@ -187,10 +187,25 @@ describe('AssistantActions 回合收尾操作栏', () => {
     render(<AssistantActions message={session.messages[1]} session={session} />);
     expect(screen.getByTestId('assistant-followups')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByText('如何修改复位释放时序？'));
+    // 首条追问为当前建议正文，CTA 发送它
+    expect(screen.getByText('如何修改复位释放时序？')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '发送追问' }));
     await waitFor(() => {
       expect(trpc.session.send.mutate).toHaveBeenCalledWith(
         expect.objectContaining({ message: '如何修改复位释放时序？' }),
+      );
+    });
+
+    // 展开备选抽屉切换到第二条追问，CTA 重置为未接受态后发送备选项
+    fireEvent.click(screen.getByRole('button', { name: '备选方案' }));
+    fireEvent.click(screen.getByTestId('recommendation-alternative'));
+    expect(screen.getByText('查看相关 SDC 约束')).toBeInTheDocument();
+    const cta = screen.getByRole('button', { name: '发送追问' });
+    expect(cta).not.toBeDisabled();
+    fireEvent.click(cta);
+    await waitFor(() => {
+      expect(trpc.session.send.mutate).toHaveBeenCalledWith(
+        expect.objectContaining({ message: '查看相关 SDC 约束' }),
       );
     });
   });

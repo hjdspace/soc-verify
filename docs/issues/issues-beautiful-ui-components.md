@@ -113,7 +113,7 @@ CommandPalette 补齐：匹配片段高亮、非空清除按钮（fade-in 150ms�
 
 ## Issue #4: RecommendationCard — 通用建议卡 + TVAISuggestionCard 通用化
 
-**Labels**: `ready-for-agent` `p0`
+**Labels**: `ready-for-agent` `p0` → **已完成**（2026-08-30）
 **Blocked by**: #1
 
 ### What to build
@@ -126,12 +126,20 @@ CommandPalette 补齐：匹配片段高亮、非空清除按钮（fade-in 150ms�
 
 ### Acceptance criteria
 
-- [ ] 通用建议卡组件 props 化（Option 契约），无业务字段硬编码
-- [ ] Alternatives 抽屉展开/收起动画正确，切换备选后 CTA 重置为未接受态
-- [ ] TV 违例场景行为回归：确认/拒绝/重新分析仍写 confirmation store，现有相关测试全绿
-- [ ] followUps 场景接入建议卡形态
-- [ ] 新增组件测试（信号条格数、切换备选、accepted 态）
-- [ ] typecheck + lint + 相关测试通过
+- [x] 通用建议卡组件 props 化（Option 契约），无业务字段硬编码
+- [x] Alternatives 抽屉展开/收起动画正确，切换备选后 CTA 重置为未接受态
+- [x] TV 违例场景行为回归：确认/拒绝/重新分析仍写 confirmation store，现有相关测试全绿
+- [x] followUps 场景接入建议卡形态
+- [x] 新增组件测试（信号条格数、切换备选、accepted 态）
+- [x] typecheck + lint + 相关测试通过
+
+### 落地记录（2026-08-30）
+
+- **组件**（`components/ui/RecommendationCard.tsx`）：props 化 `RecommendationCard`（options/title/preface/footerLeft/onAccept/accepted/acceptedLabel/alternativesLabel/othersLabel/disabled）+ `SignalMeter` 导出（3 根竖条，前 signal 根取 tone 色、其余取 `--input`——映射 `--line-strong`）。备选抽屉 grid-rows 0fr→1fr + opacity 300ms（曲线取映射层 `--ease-out-strong`，替代参考实现的内联 `cubic-bezier(0.16,1,0.3,1)`）；正文 `key={active.key}` 重挂载 `fade-in 180ms` 交叉淡入；切换备选 `setSelected(i) + setSelfAccepted(false)`（抽屉保持展开便于对比，同参考实现）；CTA 确认后 success 变体 + busy 时 Loader2 spinner + 禁用防重复。相比参考契约，`signal/tone/label` 改为**可选**——追问建议等无置信度语义的场景不渲染信号条与标签。单选项自动不渲染备选开关；`accepted` 支持外部受控（违例已确认态）；`disabled` 一键禁用全部交互（拒绝/加载中场景）。选中项在 options 缩短时夹紧防越界。
+- **样式**（globals.css，`.ap-ctx-*` 块之后）：`.ap-rec-*` 落 globals.css 共享件（卡 `--shadow-card`、正文 `--muted-foreground`、抽屉行 hover 取 `--accent`，颜色一律全局语义变量，AI 面板内/外取值均正确）；reduced-motion 下抽屉去 grid-rows 高度过渡、保留 opacity 淡入。
+- **TV 场景**（`TVAISuggestionCard` 重构）：`AISuggestion` → 单选项 `RecommendationOption` 映射——body=确认人/确认结果（pass/issue 徽章）/分析理由/详细分析字段行，short=reason 兜底；confidence→signal（≥0.7→3 格 pass 绿、≥0.4→2 格 aborted 橙、>0→1 格 fail 红）+ 标签「高置信度/需复核/低置信度 NN%」（confidence=0 不渲染信号条，对齐原卡）；违例上下文块落 `preface` 槽；「确认并应用」走 `applyAISuggestion`（数据源 violation-router 不变，仍写 confirmation store），「重新分析/拒绝」落 `footerLeft` 槽（语义不变），rejected 时 `disabled` + CTA 文案切「已拒绝」；`accepted={applied || isConfirmed}` 外部受控（手工确认对话框路径也覆盖）。
+- **followUps 场景**（`AssistantActions`）：`.ap-followups` 胶囊列表升级为 `RecommendationCard`（第二场景）——首条为当前建议正文，其余进备选抽屉，CTA「发送追问」`sendMessage`（session-router.generateFollowUps 数据链路不变），无 signal/label；`data-testid="assistant-followups"` 保留。旧 `.ap-followups-label/.ap-followup-item` 样式已删（无引用点），`.ap-followups` 简化为外边距壳。
+- **测试**：`tests/ui/recommendation-card.test.tsx`（11 例：SignalMeter 格数/零格、正文与页脚渲染、抽屉 0fr→1fr 与 aria-expanded、切换备选重置 accepted + 信号条随动、busy/accepted 态、外部受控 accepted、单选项无抽屉、无 signal 场景、disabled 全禁、空 options 渲染 null）+ `tests/ui/tv-ai-suggestion-card.test.tsx`（7 例：字段行与 3 格信号条、确认写 store + success 态、拒绝禁用全部、重新分析走 startAISuggestion、违例已确认受控态、confidence=0 无信号条、非 TV JSON 渲染 null）+ `tests/ui/assistant-actions.test.tsx` 追问用例更新为建议卡交互断言（CTA 发送当前建议 + 切换备选后发送备选项）。全量 `tests/ui` 1029 例中 1027 过；2 例失败为 CaseTreePanel 折叠用例，干净基线复跑同样失败（issue #3 已备案），与本次无关。
 
 ---
 

@@ -1,11 +1,12 @@
 import { memo, useMemo, useState } from 'react';
-import { Check, Copy, CornerDownRight, RefreshCw } from 'lucide-react';
+import { Check, Copy, RefreshCw } from 'lucide-react';
 import { openReviewAwareFile } from '@renderer/stores/diff-review';
 import { useSessionMessagesStore } from '@renderer/stores/session-messages';
 import type { ChatMessage, SessionEntry } from '@renderer/stores/session-types';
 import { extractMessageReferences, type MessageReference } from './MarkdownRenderer';
 import { refIdentity, SourceIcon, type SourceHue } from './SourceIcon';
 import { ContextCardList, deriveBadge, type ContextChunk, type ContextTone } from '@renderer/components/ui/ContextCard';
+import { RecommendationCard, type RecommendationOption } from '@renderer/components/ui/RecommendationCard';
 
 // SourceHue→chunk 卡 badge 语义色（blue/violet 收敛为 accent，teal 收敛为 green）
 const HUE_TONE: Record<SourceHue, ContextTone> = {
@@ -105,6 +106,20 @@ export const AssistantActions = memo(function AssistantActions({ message, sessio
     void sendMessage(text);
   };
 
+  // 追问建议接入通用建议卡（RecommendationCard 第二场景）：首条为当前建议，
+  // 其余进备选抽屉；无置信度语义，不渲染信号条（signal/tone/label 缺省）。
+  const followUpOptions = useMemo<RecommendationOption[]>(
+    () =>
+      (followUps ?? []).map((text, i) => ({
+        key: `${i}:${text}`,
+        body: text,
+        short: text,
+        cta: '发送追问',
+        ctaVariant: 'primary' as const,
+      })),
+    [followUps],
+  );
+
   return (
     <div className="ap-turnactions" data-testid="assistant-actions">
       <div className="ap-turnactions-row">
@@ -162,21 +177,14 @@ export const AssistantActions = memo(function AssistantActions({ message, sessio
         </div>
       )}
 
-      {followUps && followUps.length > 0 && (
+      {followUpOptions.length > 0 && (
         <div className="ap-followups" data-testid="assistant-followups">
-          <p className="ap-followups-label">建议追问</p>
-          {followUps.map((text, index) => (
-            <button
-              key={`${index}:${text}`}
-              type="button"
-              className="ap-followup-item"
-              style={{ animationDelay: `${120 + index * 90}ms` }}
-              onClick={() => handleFollowUp(text)}
-            >
-              <CornerDownRight className="h-3 w-3 shrink-0 text-muted-foreground/60" />
-              <span className="truncate">{text}</span>
-            </button>
-          ))}
+          <RecommendationCard
+            options={followUpOptions}
+            title="建议追问"
+            acceptedLabel="已发送"
+            onAccept={(o) => handleFollowUp(o.short)}
+          />
         </div>
       )}
     </div>
