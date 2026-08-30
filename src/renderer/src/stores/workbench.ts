@@ -24,7 +24,7 @@ export type OfficeDocumentDestination = {
 };
 
 export type WorkbenchDestination =
-  | { type: 'file'; path: string; name: string }
+  | { type: 'file'; path: string; name: string; line?: number; endLine?: number; revealSeq?: number }
   | { type: 'browser'; surfaceId: string; url: string; title?: string }
   | { type: 'terminal'; terminalTabId: string; title: string }
   | { type: 'simulation-errors'; runId: string }
@@ -144,6 +144,52 @@ const DB_EXTENSIONS = new Set(['db', 'sqlite', 'sqlite3', 'db3']);
 /** draw.io 框图文件扩展名（小写、无前导点；.drawio.xml 为双扩展名特判） */
 const DRAWIO_EXTENSIONS = new Set(['drawio', 'dio']);
 
+/** 文件路径行号定位信息（打开后滚动并选中指定行区间） */
+export type FileLineRange = { line: number; endLine?: number };
+
+/** 匹配路径末尾的 `:line` / `:line-end` / `:line:col` 后缀（AI 工具常见的行号引用写法） */
+const LINE_RANGE_SUFFIX = /:([0-9]+)(?:-([0-9]+))?(?::([0-9]+))?$/;
+
+/**
+ * 剥离文件路径末尾的行号引用后缀（`:line`、`:line-end`、`:line:col`）。
+ * 例如 `settings-schema.ts:4889-4940` → `{ path: 'settings-schema.ts', line: 4889, endLine: 4940 }`。
+ * Windows 盘符（`C:\foo`）冒号后跟的是非数字结尾，不会被误判。
+ */
+export function parsePathLineRange(path: string): { path: string; line?: number; endLine?: number } {
+  const match = path.match(LINE_RANGE_SUFFIX);
+  if (!match || match.index === undefined) return { path };
+  const line = Number(match[1]);
+  // 行号从 1 开始，`:0` 视为普通路径而非行号后缀
+  if (line < 1) return { path };
+  return {
+    path: path.slice(0, match.index),
+    line,
+    endLine: match[2] !== undefined ? Number(match[2]) : undefined,
+  };
+}
+
+// revealSeq：每次携带行号打开文件时递增，驱动 FileEditor 对同一行区间重复定位
+let fileRevealSeq = 0;
+
+/**
+ * 打开普通文件 Tab 的统一入口：解析 `:line[-end]` 行号后缀并携带定位信息。
+ * `lineRange` 显式传入时优先生效（调用方已提前剥离后缀做路径解析的场景）。
+ */
+export function openFileTab(
+  open: (destination: WorkbenchDestination) => void,
+  path: string,
+  name: string,
+  lineRange?: FileLineRange,
+): void {
+  const parsed = parsePathLineRange(path);
+  const range = lineRange ?? (parsed.line !== undefined ? { line: parsed.line, endLine: parsed.endLine } : undefined);
+  if (!range) {
+    open({ type: 'file', path: parsed.path, name });
+    return;
+  }
+  open({ type: 'file', path: parsed.path, name, line: range.line, endLine: range.endLine, revealSeq: ++fileRevealSeq });
+}
+
 /**
  * 根据文件扩展名推断合适的 destination：
  *   - .xlsx → office-document，mode='edit'（编辑能力在 Issue #5 实现，本期占位）
@@ -157,6 +203,7 @@ export function openFileDestination(
   open: (destination: WorkbenchDestination) => void,
   path: string,
   name: string,
+  lineRange?: FileLineRange,
 ): void {
   const dot = path.lastIndexOf('.');
   const ext = dot === -1 ? '' : path.slice(dot + 1).toLowerCase();
@@ -177,7 +224,7 @@ export function openFileDestination(
     open({ type: 'drawio-diagram', filePath: path });
     return;
   }
-  open({ type: 'file', path, name });
+  openFileTab(open, path, name, lineRange);
 }
 
 /** DashboardTab → 中文标签（用于 Tab 标题） */

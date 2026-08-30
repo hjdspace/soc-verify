@@ -21,7 +21,7 @@ import { create } from 'zustand';
 import { useMemo } from 'react';
 import { trpc } from '@renderer/lib/trpc';
 import { useSessionCoreStore } from './session-core';
-import { useWorkbenchStore, openFileDestination } from './workbench';
+import { useWorkbenchStore, openFileDestination, parsePathLineRange, type FileLineRange } from './workbench';
 import { useProjectStore } from './project';
 import type { FileDiffResult } from '@shared/types';
 import {
@@ -92,8 +92,8 @@ interface DiffReviewStoreState {
 
   // Actions
   refreshQueue: () => void;
-  /** 在普通编辑器中打开文件；未审阅时同时加载 diff */
-  openFile: (filePath: string) => void;
+  /** 在普通编辑器中打开文件；未审阅时同时加载 diff。lineRange 携带行号定位信息 */
+  openFile: (filePath: string, lineRange?: FileLineRange) => void;
   /** 加载/刷新文件 diff（tool call 前沿变化时自动失效重载） */
   ensureDiffLoaded: (filePath: string) => Promise<void>;
   setHunkState: (filePath: string, hunkId: number, state: HunkState) => void;
@@ -181,13 +181,13 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
     });
   },
 
-  openFile: (filePath) => {
+  openFile: (filePath, lineRange) => {
     const entry = get().queue.find((e) => isSameFilePath(e.filePath, filePath));
     const targetPath = entry?.filePath ?? filePath;
     const fileName = entry?.fileName ?? targetPath.replace(/\\/g, '/').split('/').pop() ?? targetPath;
 
     if (!entry || entry.reviewed) {
-      openFileDestination(useWorkbenchStore.getState().open, targetPath, fileName);
+      openFileDestination(useWorkbenchStore.getState().open, targetPath, fileName, lineRange);
       return;
     }
 
@@ -200,7 +200,7 @@ export const useDiffReviewStore = create<DiffReviewStoreState>((set, get) => ({
     });
 
     // 始终在普通编辑器中打开；未审阅的文件同时加载 diff 供内联审阅展示
-    openFileDestination(useWorkbenchStore.getState().open, targetPath, fileName);
+    openFileDestination(useWorkbenchStore.getState().open, targetPath, fileName, lineRange);
     void get().ensureDiffLoaded(entry.filePath);
   },
 
@@ -450,6 +450,11 @@ function setRejectedStates(key: string, hunkIds: number[], state: HunkState = 'r
 // ─── Helpers ────────────────────────────────────────────────
 
 export function openReviewAwareFile(filePath: string, _fileName: string): void {
+  // 路径可能携带 `:line[-end]` 行号后缀（AI 工具的行号引用写法，如 foo.ts:4889-4940），
+  // 先剥离再做项目内路径解析，行号信息透传给编辑器用于打开后定位选中。
+  const { path: barePath, line, endLine } = parsePathLineRange(filePath);
+  const lineRange: FileLineRange | undefined = line === undefined ? undefined : { line, endLine };
+
   // 工具卡片中的路径可能是相对路径（如 README.md、src-tauri/tauri.conf.json），
   // 先解析为项目根内的绝对路径，避免以相对路径打开文件导致后端校验失败。
   const currentProjectId = useProjectStore.getState().currentProjectId;
@@ -458,11 +463,11 @@ export function openReviewAwareFile(filePath: string, _fileName: string): void {
     : undefined;
   const rootPath = currentProject?.rootPath ?? null;
   const extraDirPaths = useProjectStore.getState().extraDirs.map((d) => d.path);
-  const resolvedPath = rootPath ? resolveInsideProject(filePath, rootPath, extraDirPaths) ?? filePath : filePath;
+  const resolvedPath = rootPath ? resolveInsideProject(barePath, rootPath, extraDirPaths) ?? barePath : barePath;
 
   // 未审阅的文件由 openFile 打开编辑器并加载 diff；其余情况也统一走 openFile
   // （openFile 内部对已审阅/不在队列的路径回退为普通文件打开）。
-  useDiffReviewStore.getState().openFile(resolvedPath);
+  useDiffReviewStore.getState().openFile(resolvedPath, lineRange);
 }
 
 /**

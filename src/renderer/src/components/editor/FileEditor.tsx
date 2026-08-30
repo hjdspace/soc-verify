@@ -3,7 +3,7 @@ import { ZoomIn, ZoomOut, Expand } from 'lucide-react';
 import CodeMirror from '@uiw/react-codemirror';
 import { StreamLanguage } from '@codemirror/language';
 import { EditorView, type ViewUpdate, keymap } from '@codemirror/view';
-import type { Extension } from '@codemirror/state';
+import { EditorSelection, type Extension } from '@codemirror/state';
 import { javascript } from '@codemirror/lang-javascript';
 import { python } from '@codemirror/lang-python';
 import { cpp } from '@codemirror/lang-cpp';
@@ -21,7 +21,7 @@ import rehypeRaw from 'rehype-raw';
 import { Save, Eye, Pencil, Loader2, AlertCircle, ExternalLink, Check, X, ArrowRight, GitCompare } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { useThemeStore } from '@renderer/stores/theme';
-import { useWorkbenchStore } from '@renderer/stores/workbench';
+import { useWorkbenchStore, openFileTab } from '@renderer/stores/workbench';
 import { useToastStore } from '@renderer/stores/toast';
 import { useEditorStore } from '@renderer/stores/editor';
 import { useDiffReviewStore, useReviewSnapshot, type ReviewEntry } from '@renderer/stores/diff-review';
@@ -191,9 +191,15 @@ interface FileEditorProps {
   projectId: string;
   filePath: string;
   fileName: string;
+  /** 打开后定位到的起始行（1-based），来自路径 `:line[-end]` 后缀 */
+  line?: number;
+  /** 定位区间的结束行（含）；缺省与 line 相同 */
+  endLine?: number;
+  /** 每次携带行号打开时递增，驱动同一区间重复定位（重复点击同一路径） */
+  revealSeq?: number;
 }
 
-export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
+export function FileEditor({ projectId, filePath, fileName, line, endLine, revealSeq }: FileEditorProps) {
   const [content, setContent] = useState('');
   const [originalContent, setOriginalContent] = useState('');
   const [loading, setLoading] = useState(true);
@@ -350,6 +356,30 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
       });
     return () => { cancelled = true; };
   }, [contentVersion, projectId, filePath]);
+
+  // 行号定位：路径带 `:line[-end]` 后缀打开时（工具卡片/Markdown 链接），
+  // 内容加载完成后滚动到指定行并选中区间；revealSeq 变化时（重复点击同一路径）重新定位
+  const appliedRevealSeqRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (revealSeq === undefined || line === undefined) return;
+    if (appliedRevealSeqRef.current === revealSeq) return;
+    if (loading) return; // 等内容加载完成后由 loading 变化再次触发本 effect
+    appliedRevealSeqRef.current = revealSeq;
+    const view = editorViewRef.current;
+    // 预览模式下 CodeMirror 已卸载，ref 指向已销毁的视图，跳过定位
+    if (!view || !view.dom.isConnected) return;
+    const total = view.state.doc.lines;
+    const startLine = Math.max(1, Math.min(line, total));
+    const stopLine = Math.max(startLine, Math.min(endLine ?? line, total));
+    const anchor = view.state.doc.line(startLine).from;
+    const head = view.state.doc.line(stopLine).to;
+    const range = EditorSelection.range(anchor, head);
+    view.dispatch({
+      selection: range,
+      effects: EditorView.scrollIntoView(range, { y: 'center' }),
+    });
+    view.focus();
+  }, [revealSeq, line, endLine, loading]);
 
   // 内联审阅 extension：diff 数据或 hunk 状态变化时重建（@uiw 会触发 reconfigure）
   const inlineReviewExtensions = useMemo<Extension[]>(() => {
@@ -665,7 +695,7 @@ export function FileEditor({ projectId, filePath, fileName }: FileEditorProps) {
                           href={href}
                           onClick={(e) => {
                             e.preventDefault();
-                            openDestination({ type: 'file', path: resolvedPath, name });
+                            openFileTab(openDestination, resolvedPath, name);
                           }}
                           className="cursor-pointer"
                         >

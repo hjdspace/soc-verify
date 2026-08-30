@@ -518,6 +518,51 @@ describe('Diff Review flow', () => {
     });
   });
 
+  it('opens a path with a :line-end suffix as the bare file carrying the line range', () => {
+    useProjectStore.setState({
+      currentProjectId: 'project-1',
+      projects: [{ id: 'project-1', name: 'Project', rootPath: 'D:\\project', createdAt: 1, lastOpenedAt: 1 }],
+    });
+
+    openReviewAwareFile('src/config/settings-schema.ts:4889-4940', 'settings-schema.ts');
+
+    expect(useWorkbenchStore.getState().tabs[0]?.destination).toEqual({
+      type: 'file',
+      path: 'D:/project/src/config/settings-schema.ts',
+      name: 'settings-schema.ts',
+      line: 4889,
+      endLine: 4940,
+      revealSeq: expect.any(Number),
+    });
+  });
+
+  it('opens an absolute path with a :line suffix with reveal info against the queue', async () => {
+    const filePath = 'D:\\project\\rtl\\core.sv';
+    vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue(emptyDiff(filePath));
+    useSessionCoreStore.setState({
+      sessions: [{
+        id: 'session-1',
+        projectId: 'project-1',
+        name: 'Agent conversation',
+        status: 'idle',
+        messages: [completedEdit(filePath)],
+        composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
+        createdAt: 1,
+      }],
+    });
+
+    openReviewAwareFile(`${filePath}:10-20`, 'core.sv');
+    await vi.waitFor(() => expect(useDiffReviewStore.getState().loadingFiles[normalizeReviewKey(filePath)]).toBeFalsy());
+
+    const destination = useWorkbenchStore.getState().tabs[0]?.destination;
+    expect(destination).toEqual(expect.objectContaining({
+      type: 'file',
+      path: filePath,
+      line: 10,
+      endLine: 20,
+    }));
+  });
+
   it('matches a relative clicked path against an absolute queue entry', async () => {
     vi.mocked(trpc.project.getFileDiff.query).mockResolvedValue({
       filePath: 'D:/project/rtl/core.sv', isNewFile: false, lines: [], hunks: [], totalAdd: 0, totalDel: 0,

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 // ── Mocks ──────────────────────────────────────────────────────
 
@@ -24,28 +24,33 @@ const { trpc } = vi.hoisted(() => ({
 
 // Capture extensions passed to CodeMirror
 let capturedExtensions: unknown[] = [];
-const { mockCodeMirror } = vi.hoisted(() => ({
-  mockCodeMirror: vi.fn(({ extensions, onCreateEditor, value, onChange }) => {
-    capturedExtensions = extensions ?? [];
-    // Simulate onCreateEditor being called with a mock view
-    if (onCreateEditor) {
-      onCreateEditor(
-        { state: {} },
-        {},
+const { mockCodeMirror, viewRef: mockViewRef } = vi.hoisted(() => {
+  // 可替换的 EditorView stub，供行号定位（:line 后缀）测试注入 doc/dispatch 行为
+  const viewRef: { current: Record<string, unknown> | null } = { current: null };
+  return {
+    viewRef,
+    mockCodeMirror: vi.fn(({ extensions, onCreateEditor, value, onChange }) => {
+      capturedExtensions = extensions ?? [];
+      // Simulate onCreateEditor being called with a mock view
+      if (onCreateEditor) {
+        onCreateEditor(
+          viewRef.current ?? { state: {} },
+          {},
+        );
+      }
+      return (
+        <div data-testid="codemirror-mock" data-value={value}>
+          <button
+            onClick={() => onChange?.('edited content')}
+            data-testid="codemirror-change-trigger"
+          >
+            change
+          </button>
+        </div>
       );
-    }
-    return (
-      <div data-testid="codemirror-mock" data-value={value}>
-        <button
-          onClick={() => onChange?.('edited content')}
-          data-testid="codemirror-change-trigger"
-        >
-          change
-        </button>
-      </div>
-    );
-  }),
-}));
+    }),
+  };
+});
 
 vi.mock('@renderer/lib/trpc', () => ({ trpc }));
 vi.mock('@uiw/react-codemirror', () => ({
@@ -120,6 +125,7 @@ vi.mock('@renderer/stores/workbench', () => ({
     selector({ open: vi.fn() }),
   ),
   openFileDestination: vi.fn(),
+  openFileTab: vi.fn(),
 }));
 
 vi.mock('@renderer/stores/project', () => ({
@@ -974,5 +980,117 @@ describe('FileEditor — Markdown preview mermaid support', () => {
     await waitFor(() => {
       expect(screen.queryByTestId('mermaid-diagram-stub')).toBeNull();
     });
+  });
+});
+
+// ── `:line[-end]` 行号定位 ──────────────────────────────────────
+
+describe('FileEditor — line reveal', () => {
+  // 模拟 5 行文档，每行占 3 个偏移：line n → from (n-1)*3, to (n-1)*3+2
+  const makeView = () => ({
+    dom: { isConnected: true },
+    state: {
+      doc: {
+        lines: 5,
+        line: (n: number) => ({ from: (n - 1) * 3, to: (n - 1) * 3 + 2 }),
+      },
+    },
+    dispatch: vi.fn(),
+    focus: vi.fn(),
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedExtensions = [];
+    mockVimEnabled = false;
+    mockMinimapEnabled = false;
+    mockViewRef.current = null;
+    trpc.project.readFile.query.mockResolvedValue('l1\nl2\nl3\nl4\nl5');
+  });
+
+  afterEach(() => {
+    mockViewRef.current = null;
+  });
+
+  const lastDispatch = (view: ReturnType<typeof makeView>) =>
+    (view.dispatch.mock.calls.at(-1)?.[0] ?? {}) as { selection: { from: number; to: number } };
+
+  it('scrolls to and selects the requested line range after content loads', async () => {
+    const view = makeView();
+    mockViewRef.current = view;
+
+    render(
+      <FileEditor projectId="proj-1" filePath="/src/core.sv" fileName="core.sv" line={2} endLine={3} revealSeq={1} />,
+    );
+
+    await waitFor(() => expect(view.dispatch).toHaveBeenCalledTimes(1));
+    expect(lastDispatch(view).selection.from).toBe(3); // line 2 from
+    expect(lastDispatch(view).selection.to).toBe(8); // line 3 to
+    expect(view.focus).toHaveBeenCalled();
+  });
+
+  it('defaults the range end to the start line for a single :line suffix', async () => {
+    const view = makeView();
+    mockViewRef.current = view;
+
+    render(
+      <FileEditor projectId="proj-1" filePath="/src/core.sv" fileName="core.sv" line={4} revealSeq={1} />,
+    );
+
+    await waitFor(() => expect(view.dispatch).toHaveBeenCalledTimes(1));
+    expect(lastDispatch(view).selection.from).toBe(9); // line 4 from
+    expect(lastDispatch(view).selection.to).toBe(11); // line 4 to
+  });
+
+  it('clamps the range to the last line when the suffix exceeds the document', async () => {
+    const view = makeView();
+    mockViewRef.current = view;
+
+    render(
+      <FileEditor projectId="proj-1" filePath="/src/core.sv" fileName="core.sv" line={99} endLine={200} revealSeq={1} />,
+    );
+
+    await waitFor(() => expect(view.dispatch).toHaveBeenCalledTimes(1));
+    expect(lastDispatch(view).selection.from).toBe(12); // line 5 from
+    expect(lastDispatch(view).selection.to).toBe(14); // line 5 to
+  });
+
+  it('re-applies the reveal when the same range is opened again with a new revealSeq', async () => {
+    const view = makeView();
+    mockViewRef.current = view;
+
+    const rendered = render(
+      <FileEditor projectId="proj-1" filePath="/src/core.sv" fileName="core.sv" line={2} revealSeq={1} />,
+    );
+    await waitFor(() => expect(view.dispatch).toHaveBeenCalledTimes(1));
+
+    rendered.rerender(
+      <FileEditor projectId="proj-1" filePath="/src/core.sv" fileName="core.sv" line={2} revealSeq={2} />,
+    );
+    await waitFor(() => expect(view.dispatch).toHaveBeenCalledTimes(2));
+    expect(lastDispatch(view).selection.from).toBe(3);
+  });
+
+  it('does not dispatch a reveal for opens without line info', async () => {
+    const view = makeView();
+    mockViewRef.current = view;
+
+    render(<FileEditor projectId="proj-1" filePath="/src/core.sv" fileName="core.sv" />);
+
+    await waitFor(() => expect(screen.getByTestId('codemirror-mock')).toBeTruthy());
+    expect(view.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('skips the reveal while the CodeMirror dom is detached (preview mode)', async () => {
+    const view = { ...makeView(), dom: { isConnected: false } };
+    mockViewRef.current = view;
+
+    render(
+      <FileEditor projectId="proj-1" filePath="/src/core.sv" fileName="core.sv" line={2} revealSeq={1} />,
+    );
+
+    await waitFor(() => expect(screen.getByTestId('codemirror-mock')).toBeTruthy());
+    // 等待可能的 reveal effect 执行后，确认未触发 dispatch
+    expect(view.dispatch).not.toHaveBeenCalled();
   });
 });

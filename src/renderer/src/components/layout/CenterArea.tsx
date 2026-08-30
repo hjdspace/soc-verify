@@ -451,6 +451,9 @@ export function CenterArea() {
               projectId={currentProjectId}
               filePath={destination.path}
               fileName={destination.name}
+              line={destination.line}
+              endLine={destination.endLine}
+              revealSeq={destination.revealSeq}
             />
           )
         ) : destination?.type === 'terminal' ? (
