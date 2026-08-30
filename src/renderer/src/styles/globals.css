@@ -2304,6 +2304,100 @@ a.ap-ctx-chip,
   color: var(--muted-foreground);
 }
 
+/* ── 状态 chips 筛选 FilterTable（issues #7）──
+   带彩色圆点与计数徽标的状态 chips + 未匹配行 grid-rows 1fr→0fr +
+   opacity 300ms 平滑折叠（行保持挂载）。视觉/交互参考 beautiful-ui:
+   D:\AI\beautiful-ui\components\primitives\FilterTable.tsx
+   参考实现 filter-status-* 用 oklch --tag-base 派生，此处改项目语义变量
+  （--status-* 在使用点 color-mix 混 --card），明档浅 tint、暗档饱和底；
+   chips/pill 的中性面取主题语义变量，明暗自动正确。
+   共享 UI 件：HistoryTable 状态筛选、RunListPanel 分段 chips 视觉对齐。 */
+.ap-ft-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  padding: 4px;
+  scrollbar-width: none;
+}
+.ap-ft-chip {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition:
+    background-color 200ms var(--ease-out-strong),
+    box-shadow 200ms var(--ease-out-strong),
+    color 200ms var(--ease-out-strong);
+}
+.ap-ft-chip:hover {
+  background: var(--accent);
+}
+.ap-ft-chip[aria-pressed='true'] {
+  background: var(--secondary);
+  color: var(--foreground);
+  box-shadow: var(--shadow-btn);
+}
+.ap-ft-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 999px;
+}
+.ap-ft-badge {
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-faint);
+  transition:
+    background-color 200ms var(--ease-out-strong),
+    color 200ms var(--ease-out-strong);
+}
+.ap-ft-chip[aria-pressed='true'] .ap-ft-badge {
+  background: var(--card);
+  color: var(--muted-foreground);
+}
+/* 折叠壳：外层 grid 行承载 1fr/0fr 切换，内层 overflow-hidden 收拢内容；
+   行边框必须留在内容层（随内容收拢），壳上不加边框避免 0fr 残线。 */
+.ap-ft-row {
+  display: grid;
+  transition:
+    grid-template-rows 300ms var(--ease-out-strong),
+    opacity 300ms var(--ease-out-strong);
+}
+.ap-ft-row-clip {
+  overflow: hidden;
+}
+/* 状态 pill：--ft-pill-base 由 FilterStatusPill inline 注入语义状态变量，
+   color-mix 派生比例对齐参考实现 filter-status-*（亮 92/20/34，暗 86/34/34）。 */
+.ap-ft-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--ft-pill-base) 92%, var(--foreground));
+  background: color-mix(in srgb, var(--ft-pill-base) 20%, var(--card));
+  border-color: color-mix(in srgb, var(--ft-pill-base) 34%, var(--card));
+}
+[data-shade='dark'] .ap-ft-pill {
+  color: color-mix(in srgb, var(--ft-pill-base) 86%, white);
+  background: color-mix(in srgb, var(--ft-pill-base) 34%, var(--card));
+  border-color: color-mix(in srgb, var(--ft-pill-base) 34%, var(--card));
+}
+
 /* ── 减弱动效：抽屉滑入与树展开 ─────────────────────────────────
    reduced-motion 不等于零动画——保留 opacity 淡入（帮助理解状态变化），
    禁用位移和高度变化（position change 是主要触发前庭不适的因素）。
@@ -2361,5 +2455,10 @@ a.ap-ctx-chip,
   }
   .ap-sel-pill {
     animation: none !important;
+  }
+
+  /* 筛选折叠行：去掉 grid-rows 高度过渡（保留 opacity 淡入） */
+  .ap-ft-row {
+    transition: opacity 150ms ease !important;
   }
 }

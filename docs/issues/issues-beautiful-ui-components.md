@@ -220,7 +220,7 @@ CommandPalette 补齐：匹配片段高亮、非空清除按钮（fade-in 150ms�
 
 ## Issue #7: FilterTable — 状态 chips 筛选（行折叠动画）
 
-**Labels**: `ready-for-agent` `p1`
+**Labels**: `ready-for-agent` `p1` → **已完成**（2026-08-30）
 **Blocked by**: #1
 
 ### What to build
@@ -234,12 +234,20 @@ chips 筛选组件：带彩色圆点与计数徽标的状态 chips（计数从�
 
 ### Acceptance criteria
 
-- [ ] 计数徽标由数据派生，非硬编码
-- [ ] 切换 chips 后不匹配行平滑折叠（挂载不卸载），再切回平滑展开
-- [ ] HistoryTable 接入排序保留、筛选生效
-- [ ] 亮/暗主题 pill 色正确
-- [ ] 组件测试：过滤结果集、计数徽标
-- [ ] typecheck + lint + 相关测试通过
+- [x] 计数徽标由数据派生，非硬编码
+- [x] 切换 chips 后不匹配行平滑折叠（挂载不卸载），再切回平滑展开
+- [x] HistoryTable 接入排序保留、筛选生效
+- [x] 亮/暗主题 pill 色正确
+- [x] 组件测试：过滤结果集、计数徽标
+- [x] typecheck + lint + 相关测试通过
+
+### 落地记录（2026-08-30）
+
+- **组件**（`components/ui/FilterTable.tsx`）：拆为两个可复用件 + 一个 pill 小件，参考实现 127 行单文件 demo 不整体搬（表格列布局归属宿主）。`StatusFilterChips`（受控 props 化：filters/items/statusOf/value/onChange）——计数徽标由 items 经 statusOf 单遍 Map 派生（'all' = 总数，其余 key = 命中数），**修正参考实现写死 FILTERS.count 的缺陷**；items 变化实时重算；彩色圆点 dot 为任意 CSS 颜色（宿主传语义变量）。`FilterCollapseRow`（shown/className/testId）——grid-rows 1fr→0fr + opacity 300ms 平滑折叠，行保持挂载不卸载（切回平滑展开），折叠行加 `inert` 移出 tab 序与可访问性树；className 落外层 grid 行（宿主承载 border），行内边框留在 children 内随内容收拢（壳上无边框避免 0fr 残线）。`FilterStatusPill`（tone: pass/fail/running/aborted/muted）——状态 pill，`--ft-pill-base` 由 inline 注入语义状态变量。
+- **样式**（globals.css，`.ap-sel-*` 之后）：`.ap-ft-*` 落 globals.css 共享件——chip 26px 胶囊（hover 取 `--accent`、激活取 `--secondary` + `--shadow-btn` 环）、badge 圆角 4px tabular-nums（激活态反白 `--card` 底）；pill 的 color-mix 派生比例对齐参考实现 filter-status-*（亮档 92/20/34 混 `--card`，暗档 `[data-shade='dark']` 86/34/34 混白加深）；折叠壳 transition 取映射层 `--ease-out-strong`；reduced-motion 下折叠去 grid-rows 高度过渡（保留 opacity 淡入）。chips/pill 中性面全部取主题语义变量，亮暗自动正确，无 oklch/hex 字面量。
+- **HistoryTable 接入**：标题行下方加 `StatusFilterChips`（全部/运行中/已完成/失败/已停止，圆点取 `--status-*`，计数由 entries 派生），行包进 `FilterCollapseRow` 按状态折叠——**排序保留**：entries 顺序原样渲染、只控可见性（RegressionView 的 submittedAt 降序不受筛选影响）；末行分隔线由 `last:border-b-0` 改为按序号传入（折叠壳内 `:last-child` 语义失效）；当前状态 0 命中时显示无匹配提示（数据诚实）。数据链路不变（regression store 现有 history）。
+- **RunListPanel 视觉对齐**（不重构逻辑）：分段 chips 换 `.ap-ft-chip` 形态（SEGMENTS 增加 `dot` 字段 + `.ap-ft-badge` 计数，testid/aria-pressed/计数派生逻辑不变）；ETA 列终态文案（通过/失败/已停止）由纯文字色升级为 `FilterStatusPill`（摘取 filter-status-* 明暗双份的真实落地场景），运行中/队列占位「—」不成 pill。
+- **测试**：`tests/ui/filter-table.test.tsx` 11 例——计数徽标数据派生（all/各状态/0 命中）、items 变化重算、aria-pressed 受控切换、dot 注入语义变量、折叠壳 shown 双态 inline style + inert + 挂载不卸载 + className 透传、pill tone/base 变量、HistoryTable 接入（chips 计数、筛选后行序保留仅可见性变化、切回全部恢复、0 命中无匹配提示）。全量 `tests/ui` 1091 例中 1089 过；2 例失败为 CaseTreePanel 折叠用例（预存，#3 已备案），与本次无关。
 
 ---
 

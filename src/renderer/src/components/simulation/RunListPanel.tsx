@@ -43,18 +43,19 @@ import { type DebugArtifacts, baseName } from '@renderer/lib/sim-debug';
 import { useSimulationStore, type SimulationRunRecord } from '@renderer/stores/simulation';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useToastStore } from '@renderer/stores/toast';
+import { FilterStatusPill, type FilterStatusPillTone } from '@renderer/components/ui/FilterTable';
 import { cn } from '@renderer/lib/utils';
 
-/** 分段筛选器：fail 段聚合 fail 与 error */
+/** 分段筛选器：fail 段聚合 fail 与 error；dot 为 chip 彩色圆点（语义状态变量） */
 type SegKey = 'all' | 'running' | 'fail' | 'pass' | 'queued' | 'stopped';
 
-const SEGMENTS: ReadonlyArray<{ key: SegKey; label: string; match: (r: SimulationRunRecord) => boolean }> = [
+const SEGMENTS: ReadonlyArray<{ key: SegKey; label: string; dot?: string; match: (r: SimulationRunRecord) => boolean }> = [
   { key: 'all', label: '全部', match: () => true },
-  { key: 'running', label: '运行中', match: (r) => r.status === 'running' },
-  { key: 'fail', label: '失败', match: (r) => r.status === 'fail' || r.status === 'error' },
-  { key: 'pass', label: '通过', match: (r) => r.status === 'pass' },
-  { key: 'queued', label: '队列', match: (r) => r.status === 'pending' },
-  { key: 'stopped', label: '已停止', match: (r) => r.status === 'aborted' },
+  { key: 'running', label: '运行中', dot: 'var(--status-running)', match: (r) => r.status === 'running' },
+  { key: 'fail', label: '失败', dot: 'var(--status-fail)', match: (r) => r.status === 'fail' || r.status === 'error' },
+  { key: 'pass', label: '通过', dot: 'var(--status-pass)', match: (r) => r.status === 'pass' },
+  { key: 'queued', label: '队列', dot: 'var(--muted-foreground)', match: (r) => r.status === 'pending' },
+  { key: 'stopped', label: '已停止', dot: 'var(--status-aborted)', match: (r) => r.status === 'aborted' },
 ];
 
 /** 状态点颜色（与总览视图 RunningSimStream 一致） */
@@ -69,14 +70,15 @@ function dotClass(status: SimulationRunRecord['status']): string {
   }
 }
 
-/** 终态 ETA 列文案：显示状态而非伪造 ETA；运行中/队列无数据源显示占位 */
-function etaCell(status: SimulationRunRecord['status']): { label: string; className: string } {
+/** 终态 ETA 列文案：显示状态而非伪造 ETA（FilterStatusPill 承载）；
+ * 运行中/队列无数据源显示占位（不成 pill，避免空 pill） */
+function etaCell(status: SimulationRunRecord['status']): { label: string; tone: FilterStatusPillTone | null } {
   switch (status) {
-    case 'pass': return { label: '通过', className: 'text-status-pass-foreground' };
+    case 'pass': return { label: '通过', tone: 'pass' };
     case 'fail':
-    case 'error': return { label: '失败', className: 'text-status-fail-foreground' };
-    case 'aborted': return { label: '已停止', className: 'text-status-aborted-foreground' };
-    default: return { label: '—', className: 'text-muted-foreground/50' };
+    case 'error': return { label: '失败', tone: 'fail' };
+    case 'aborted': return { label: '已停止', tone: 'aborted' };
+    default: return { label: '—', tone: null };
   }
 }
 
@@ -287,7 +289,13 @@ const RunRow = memo(function RunRow({ run, now, onOpen }: {
       <span className="text-right font-mono text-[10px] text-muted-foreground">
         {formatDuration(duration)}
       </span>
-      <span className={cn('text-right font-mono text-[10px]', eta.className)}>{eta.label}</span>
+      <span className="flex justify-end">
+        {eta.tone ? (
+          <FilterStatusPill tone={eta.tone}>{eta.label}</FilterStatusPill>
+        ) : (
+          <span className="font-mono text-[10px] text-muted-foreground/50">{eta.label}</span>
+        )}
+      </span>
 
       {/* ── 行内 Debug 按钮组（方案 C：hover 浮现，产物缺失禁用但保留提示）── */}
       <div
@@ -614,29 +622,19 @@ export function RunListPanel({ projectId }: { projectId?: string } = {}) {
         <div className="flex items-center gap-2">
           <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">运行列表</h3>
         </div>
-        <div className="flex items-center gap-0.5" data-testid="sim-seg">
+        <div className="flex items-center gap-1" data-testid="sim-seg">
           {SEGMENTS.map((s) => (
             <button
               key={s.key}
+              type="button"
               data-testid={`sim-seg-${s.key}`}
               aria-pressed={seg === s.key}
-              className={cn(
-                'cursor-pointer rounded px-2 py-1 text-[11px] transition-colors',
-                seg === s.key
-                  ? 'bg-accent font-medium text-foreground'
-                  : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-              )}
+              className="ap-ft-chip"
               onClick={() => setSeg(s.key)}
             >
+              {s.dot && <span className="ap-ft-dot" style={{ background: s.dot }} />}
               {s.label}
-              <span
-                className={cn(
-                  'ml-1 font-mono text-[10px]',
-                  seg === s.key ? 'text-primary' : 'text-muted-foreground/60',
-                )}
-              >
-                {counts[s.key]}
-              </span>
+              <span className="ap-ft-badge">{counts[s.key]}</span>
             </button>
           ))}
         </div>
