@@ -6,6 +6,7 @@ import {
   chartIndexFromPointer,
   smooth,
   SMOOTH_PER_SEGMENT,
+  type InsightCompareCard,
   type InsightPage,
 } from '@renderer/components/ui/InsightCards';
 import { useThemeStore } from '@renderer/stores/theme';
@@ -74,7 +75,8 @@ describe('chartIndexFromPointer（pointer x → 数据 index）', () => {
 
 // ─── 组件 fixtures（演示数据只存在于测试） ────────────────────────
 
-const comparePage: InsightPage = {
+// card 收窄为 compare 变体——稠密化数据断言直接读 .series（InsightCardData 联合类型无此字段）
+const comparePage: InsightPage & { card: InsightCompareCard } = {
   key: 'compare',
   prose: <>对比页叙述</>,
   pill: '对比页追问',
