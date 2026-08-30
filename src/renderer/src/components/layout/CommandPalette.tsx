@@ -29,6 +29,8 @@ import { useToastStore } from '@renderer/stores/toast';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import { BorderBeam } from '@renderer/components/visual';
+import { GlideMenu } from '@renderer/components/ui/GlideMenu';
+import { SearchClearButton, SearchEmptyState, SearchMatch } from '@renderer/components/ui/SearchList';
 
 /** 全局搜索结果（trpc.search.global） */
 interface SearchResult {
@@ -386,12 +388,25 @@ export function CommandPalette() {
             ref={inputRef}
             type="text"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setSelectedIndex(0);
+            }}
             onKeyDown={handleKeyDown}
             placeholder="输入命令或搜索…"
             className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground/60"
             data-testid="command-palette-input"
           />
+          {query && (
+            <SearchClearButton
+              testId="command-palette-clear"
+              onClear={() => {
+                setQuery('');
+                setSelectedIndex(0);
+                inputRef.current?.focus();
+              }}
+            />
+          )}
           {searching && <span className="text-[10px] text-muted-foreground">搜索中…</span>}
           <kbd className="shrink-0 rounded border border-border px-1.5 py-px font-mono text-[10px] text-muted-foreground/70">
             Esc
@@ -399,49 +414,59 @@ export function CommandPalette() {
         </div>
         </BorderBeam>
 
-        {/* 分组列表 */}
+        {/* 分组列表：行间滑动高亮由 GlideMenu 承担（220ms 平滑滑动） */}
         <div className="max-h-[380px] overflow-y-auto p-2">
           {flatItems.length === 0 ? (
-            <div className="py-6 text-center text-xs text-muted-foreground/70" data-testid="command-palette-empty">
-              没有匹配的命令
-            </div>
+            <SearchEmptyState
+              testId="command-palette-empty"
+              title="没有匹配的命令"
+              hint="调整关键词再试一次"
+            />
           ) : (
-            filteredGroups.map((group) => (
-              <div key={group.id}>
-                <div className="px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-                  {group.label}
-                </div>
-                {group.items.map((item) => {
-                  flatIndex += 1;
-                  const selected = flatIndex === selectedIndex;
-                  return (
-                    <button
-                      key={item.key}
-                      onClick={item.action}
-                      onMouseEnter={() => setSelectedIndex(flatIndex)}
-                      className={cn(
-                        'flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
-                        selected
-                          ? 'bg-accent text-foreground'
-                          : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
-                      )}
-                      data-testid={`palette-item-${item.key}`}
-                    >
-                      <item.icon
-                        className={cn('size-3.5 shrink-0', selected ? 'text-primary' : 'opacity-60')}
-                        strokeWidth={1.8}
-                      />
-                      <span className="flex-1 truncate">{item.label}</span>
-                      {item.hint && (
-                        <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60">
-                          {item.hint}
+            <GlideMenu
+              className="flex flex-col"
+              highlightClassName="palette-row-highlight"
+              activeIndex={selectedIndex}
+              scrollActiveIntoView
+            >
+              {filteredGroups.map((group) => (
+                <div key={group.id}>
+                  <div className="px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+                    {group.label}
+                  </div>
+                  {group.items.map((item) => {
+                    flatIndex += 1;
+                    const selected = flatIndex === selectedIndex;
+                    return (
+                      <button
+                        key={item.key}
+                        onClick={item.action}
+                        onMouseEnter={() => setSelectedIndex(flatIndex)}
+                        data-menu-row
+                        className={cn(
+                          'search-row-in relative z-10 flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[13px] transition-colors',
+                          selected ? 'text-foreground' : 'text-muted-foreground',
+                        )}
+                        data-testid={`palette-item-${item.key}`}
+                      >
+                        <item.icon
+                          className={cn('size-3.5 shrink-0', selected ? 'text-primary' : 'opacity-60')}
+                          strokeWidth={1.8}
+                        />
+                        <span className="flex-1 truncate">
+                          <SearchMatch label={item.label} query={query} />
                         </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            ))
+                        {item.hint && (
+                          <span className="shrink-0 font-mono text-[10px] text-muted-foreground/60">
+                            {item.hint}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+            </GlideMenu>
           )}
         </div>
 

@@ -68,6 +68,9 @@ vi.mock('@renderer/components/visual', () => ({
 import { CommandPalette } from '@renderer/components/layout/CommandPalette';
 import { useUiStore } from '@renderer/stores/ui';
 
+// GlideMenu scrollActiveIntoView 依赖 scrollIntoView，jsdom 未实现
+Element.prototype.scrollIntoView = vi.fn();
+
 function makeRun(overrides: Partial<SimulationRunRecord>): SimulationRunRecord {
   return {
     runId: 'run-1',
@@ -198,6 +201,59 @@ describe('命令面板键盘导航', () => {
     fireEvent.keyDown(input, { key: 'ArrowUp' });
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(useUiStore.getState().activeView).toBe('dashboard');
+  });
+});
+
+describe('搜索体验（SearchList 模式）', () => {
+  it('输入非空出现清除按钮，点击清空并回焦输入框', () => {
+    render(<CommandPalette />);
+    openPalette();
+    const input = screen.getByTestId('command-palette-input');
+    expect(screen.queryByTestId('command-palette-clear')).toBeNull();
+    fireEvent.change(input, { target: { value: '覆盖率' } });
+    const clear = screen.getByTestId('command-palette-clear');
+    expect(clear.className).toContain('search-clear-in');
+    input.blur();
+    fireEvent.click(clear);
+    expect((input as HTMLInputElement).value).toBe('');
+    expect(document.activeElement).toBe(input);
+  });
+
+  it('无匹配时显示空状态卡片（图标座 + 主/副文案）', () => {
+    render(<CommandPalette />);
+    openPalette();
+    fireEvent.change(screen.getByTestId('command-palette-input'), {
+      target: { value: 'zzz-无匹配' },
+    });
+    const empty = screen.getByTestId('command-palette-empty');
+    expect(empty.textContent).toContain('没有匹配的命令');
+    expect(empty.textContent).toContain('调整关键词再试一次');
+    expect(empty.querySelector('.search-empty-seat svg')).toBeInTheDocument();
+  });
+
+  it('匹配片段高亮：label 中命中 query 的子串渲染为 mark', () => {
+    render(<CommandPalette />);
+    openPalette();
+    fireEvent.change(screen.getByTestId('command-palette-input'), {
+      target: { value: '覆盖' },
+    });
+    const mark = screen.getByTestId('palette-item-nav-coverage').querySelector('mark');
+    expect(mark).not.toBeNull();
+    expect(mark?.textContent).toBe('覆盖');
+    // 同一 query 命中另一条目
+    expect(screen.getByTestId('palette-item-action-cov-report').querySelector('mark')).not.toBeNull();
+  });
+
+  it('query 为空时 label 不做片段高亮', () => {
+    render(<CommandPalette />);
+    openPalette();
+    expect(screen.getByTestId('palette-item-nav-coverage').querySelector('mark')).toBeNull();
+  });
+
+  it('结果行挂载 data-menu-row 供 GlideMenu 测量滑动高亮', () => {
+    render(<CommandPalette />);
+    openPalette();
+    expect(screen.getByTestId('palette-item-nav-dashboard')).toHaveAttribute('data-menu-row');
   });
 });
 

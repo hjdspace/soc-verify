@@ -81,7 +81,7 @@
 
 ## Issue #3: SearchList — CommandPalette 搜索强化 + HistoryView 复用
 
-**Labels**: `ready-for-agent` `p0`
+**Labels**: `ready-for-agent` `p0` → **已完成**（2026-08-30）
 **Blocked by**: #1
 
 ### What to build
@@ -95,11 +95,19 @@ CommandPalette 补齐：匹配片段高亮、非空清除按钮（fade-in 150ms�
 
 ### Acceptance criteria
 
-- [ ] 输入非空出现清除按钮，点击清空并聚焦输入框
-- [ ] 无匹配时显示空状态卡片（现有纯文本文案替换）
-- [ ] 鼠标移动/键盘 ↑↓ 时高亮块平滑滑动（220ms），当前项执行仍走 Enter
-- [ ] 现有 `tests/ui/command-palette.test.tsx` 全绿 + 新增空状态/清除按钮断言
-- [ ] typecheck + lint + 相关测试通过
+- [x] 输入非空出现清除按钮，点击清空并聚焦输入框
+- [x] 无匹配时显示空状态卡片（现有纯文本文案替换）
+- [x] 鼠标移动/键盘 ↑↓ 时高亮块平滑滑动（220ms），当前项执行仍走 Enter
+- [x] 现有 `tests/ui/command-palette.test.tsx` 全绿 + 新增空状态/清除按钮断言
+- [x] typecheck + lint + 相关测试通过
+
+### 落地记录（2026-08-30）
+
+- **共享件**（`components/ui/SearchList.tsx`）：SearchList primitive 不整体搬（宿主输入行/列表布局各异），拆为三个可复用切片——`SearchClearButton`（X 清除按钮，150ms 淡入，清空+回焦由宿主 onClear 处理，支持 absolute 定位类注入）、`SearchEmptyState`（图标座 + 主/副文案卡，250ms 淡入）、`SearchMatch`（label 首个命中片段渲染 `<mark>`，大小写不敏感 indexOf，无命中原样渲染）。结果行与滑动高亮由宿主各自布局承担。
+- **CommandPalette**：输入行非空出现清除按钮（点击清空 query、重置选中并回焦输入框；onChange 即重置 selectedIndex）；空状态由纯文本升级为 SearchEmptyState（主文案"没有匹配的命令"保留，副文案"调整关键词再试一次"，testid `command-palette-empty` 不变）；结果行 label 经 SearchMatch 做匹配片段高亮（`mark` text-primary，trpc 搜索结果同享）；行列表包进 GlideMenu 受控模式——hover `onMouseEnter` 与键盘 ↑↓ 同一 `selectedIndex` 索引驱动，高亮层 `.palette-row-highlight` 220ms `--ease-out-strong` 滑动，`scrollActiveIntoView` 承接键盘导航滚动；行自身 bg 移除（原 `bg-accent`/`hover:bg-accent/50` 由滑动高亮层承担），行入场 200ms 淡入。`trpc.search.global` 数据链路与 Enter 执行不变。
+- **HistoryView**（RightPanel）：搜索框同模式反哺——非空清除按钮（absolute 右缘，`pr-2`/`pr-8` 让位切换，点击清空并回焦输入框）、会话名 SearchMatch 高亮、"未找到匹配的会话"升级为空状态卡（"暂无历史会话"真空态保持原形态）。
+- **样式**（globals.css，keyframes 块之后）：`.search-clear-in/.search-empty-in/.search-row-in`（150/250/200ms fade-in）、`.search-empty-seat`（映射层 hairline 环）、`.palette-row-highlight`（220ms 滑动，底色取应用 accent 与面板选中态同源，圆角对齐行 rounded-lg）；reduced-motion 下入场动画与滑动过渡全关。
+- **测试**：`tests/ui/command-palette.test.tsx` 新增 5 例（清除按钮出现/清空回焦、空状态卡结构、mark 高亮、空 query 无 mark、`data-menu-row` 挂载），文件顶部 stub `scrollIntoView`（jsdom 未实现，GlideMenu `scrollActiveIntoView` 依赖）。全量 `tests/ui` 1010 例中 1008 过；2 例失败为 CaseTreePanel 折叠用例，干净基线复跑同样失败，属预存问题与本次无关。
 
 ---
 

@@ -209,6 +209,52 @@ button:not(:disabled):active {
   }
 }
 
+/* ── SearchList 搜索体验小件（issues #3）──
+   CommandPalette 与 HistoryView 搜索框共用：清除按钮/空状态卡/结果行的入场
+   淡入，以及面板行间滑动高亮层（GlideMenu highlightClassName）。
+   视觉/交互参考 beautiful-ui: D:\AI\beautiful-ui\components\primitives\SearchList.tsx
+   滑动高亮容器参考 beautiful-ui: D:\AI\beautiful-ui\components\primitives\GlideMenu.tsx */
+.search-clear-in {
+  animation: fade-in 150ms var(--ease-out-strong) both;
+}
+
+.search-empty-in {
+  animation: fade-in 250ms var(--ease-out-strong) both;
+}
+
+.search-row-in {
+  animation: fade-in 200ms var(--ease-out-strong) both;
+}
+
+/* 空状态图标座：hairline 环（映射层 --shadow-hairline） */
+.search-empty-seat {
+  box-shadow: var(--shadow-hairline);
+}
+
+/* 面板行滑动高亮：与 .ap-menu-highlight 同款 220ms 曲线，底色取应用
+   accent（面板选中态同源），圆角对齐结果行 rounded-lg（随主题 --radius） */
+.palette-row-highlight {
+  border-radius: var(--radius-lg);
+  background: var(--accent);
+  transition:
+    top 220ms var(--ease-out-strong),
+    height 220ms var(--ease-out-strong),
+    opacity 150ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search-clear-in,
+  .search-empty-in,
+  .search-row-in {
+    animation: none;
+    opacity: 1;
+  }
+
+  .palette-row-highlight {
+    transition: none;
+  }
+}
+
 /* ════════════════════════════════════════════════════════════
    主题：Drafting（浅·紫梅）
    暖纸白底 + 深紫梅强调。荧光灯实验室、白板、纸质文档场景。

@@ -22,6 +22,7 @@ import { AskQuestionCard } from '@renderer/components/chat/AskQuestionCard';
 import { TodoPanel } from '@renderer/components/chat/TodoPanel';
 import { ChangeSummaryBar } from '@renderer/components/chat/ChangeSummaryBar';
 import { ErrorMessage } from '@renderer/components/chat/ErrorMessage';
+import { SearchClearButton, SearchEmptyState, SearchMatch } from '@renderer/components/ui/SearchList';
 import { getLatestTodoState } from '@renderer/components/chat/tool-helpers';
 import { useTodoPanelStore } from '@renderer/stores/todo-panel';
 import { ComposerEditor, type ChipData, type ComposerEditorApi } from './ComposerEditor';
@@ -1607,6 +1608,7 @@ function HistoryView({
   onClose,
 }: HistoryViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const filteredSessions = useMemo(() => {
     if (!searchQuery.trim()) return sessions;
@@ -1634,17 +1636,30 @@ function HistoryView({
         </span>
       </div>
 
-      {/* Search */}
+      {/* Search（SearchList 模式：非空清除按钮 + 名称匹配片段高亮） */}
       {sessions.length > 0 && (
         <div className="relative mb-2">
           <Search className="absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
           <input
+            ref={searchInputRef}
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索会话..."
-            className="w-full rounded-md border border-border bg-background py-1.5 pl-7 pr-2 text-xs text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-primary"
+            className={cn(
+              'w-full rounded-md border border-border bg-background py-1.5 pl-7 text-xs text-foreground outline-none placeholder:text-muted-foreground focus:ring-1 focus:ring-primary',
+              searchQuery ? 'pr-8' : 'pr-2',
+            )}
           />
+          {searchQuery && (
+            <SearchClearButton
+              className="absolute right-1 top-1/2 -translate-y-1/2"
+              onClear={() => {
+                setSearchQuery('');
+                searchInputRef.current?.focus();
+              }}
+            />
+          )}
         </div>
       )}
 
@@ -1656,12 +1671,14 @@ function HistoryView({
             <p className="text-xs text-muted-foreground">加载中...</p>
           </div>
         ) : filteredSessions.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
-            <History className="h-6 w-6 text-muted-foreground/50" />
-            <p className="text-xs text-muted-foreground">
-              {sessions.length === 0 ? '暂无历史会话' : '未找到匹配的会话'}
-            </p>
-          </div>
+          sessions.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
+              <History className="h-6 w-6 text-muted-foreground/50" />
+              <p className="text-xs text-muted-foreground">暂无历史会话</p>
+            </div>
+          ) : (
+            <SearchEmptyState title="未找到匹配的会话" hint="调整关键词再试一次" />
+          )
         ) : (
           <div className="flex flex-col gap-1">
             {filteredSessions.map((session) => {
@@ -1682,7 +1699,7 @@ function HistoryView({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1">
                         <span className="truncate text-xs font-medium text-foreground">
-                          {session.name}
+                          <SearchMatch label={session.name} query={searchQuery} />
                         </span>
                         {isActive && (
                           <span className="shrink-0 rounded-full bg-status-pass/15 px-1.5 py-0.5 text-[9px] font-medium text-status-pass-foreground">
