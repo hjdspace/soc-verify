@@ -254,7 +254,7 @@ chips 筛选组件：带彩色圆点与计数徽标的状态 chips（计数从�
 
 ## Issue #8: FineTuneCard — ScrubField 数值微调控件
 
-**Labels**: `ready-for-agent` `p1`
+**Labels**: `ready-for-agent` `p1` → **已完成**（2026-08-30）
 **Blocked by**: #1
 
 ### What to build
@@ -267,11 +267,21 @@ chips 筛选组件：带彩色圆点与计数徽标的状态 chips（计数从�
 
 ### Acceptance criteria
 
-- [ ] ScrubField 独立组件，键盘/拖拽/输入三路均可改值且 clamp 生效
-- [ ] 偏离默认值时高亮，恢复默认后高亮消失
-- [ ] 至少一处真实场景接入（cfg 参数或覆盖率阈值）
-- [ ] 组件测试：键盘步进、Shift ×10、clamp 边界
-- [ ] typecheck + lint + 相关测试通过
+- [x] ScrubField 独立组件，键盘/拖拽/输入三路均可改值且 clamp 生效
+- [x] 偏离默认值时高亮，恢复默认后高亮消失
+- [x] 至少一处真实场景接入（cfg 参数或覆盖率阈值）
+- [x] 组件测试：键盘步进、Shift ×10、clamp 边界
+- [x] typecheck + lint + 相关测试通过
+
+### 落地记录（2026-08-30）
+
+- **组件**（`components/ui/ScrubField.tsx`）：props 化 `ScrubField`（label/value/onChange/min/max/step/suffix/defaultValue/active/handle/testId）。三路改值——拖拽（`setPointerCapture` 水平 `(Δx/2)*step` 连续调值，pointerup/cancel 复位；jsdom 无该 API 经可选调用防御）、键盘（↑↓/←→ ±step，Shift ×10）、输入（`inputMode="numeric"`，剥离非法字符后 Number 解析）。全部经 clamp 收敛；取整精度由 step 小数位派生（step=1 取整同参考实现，step=0.5 保留 1 位小数——**契约偏差说明**：参考实现恒用 `Math.round`，直填小数会被吞）。偏离默认值高亮：`defaultValue` 内部派生（value ≠ defaultValue）或 `active` 外部受控（同传时优先），`data-edited` 属性驱动 `.ap-scrub-field[data-edited='true']` 的 accent-tint（primary 14% 混卡面）+ accent 环。`handle` 槽允许宿主替换手柄内容（aria-label 仍用 label）。**输入适配**：聚焦期间保留草稿文本（避免「9.」被即时归一成 9 后小数点丢失，blur/Enter 落回受控值）；无可解析内容（清空/杂字符/仅负号）忽略不跳 0——参考实现 `Number('')` = 0 会把清空砸成 0，敲负号时先跳 0。
+- **组件**（`components/ui/SegmentedControl.tsx`）：参考实现内嵌分段控件泛化为 props 化共享件——灰轨（`--muted`）白 thumb（`--card` + `--shadow-btn`），宽度按 `(100% - 4px)/N` 均分（4px 为轨道左右各 2px 内边距），`translateX(index*100%)` 300ms `--ease-out-strong` 滑动；段 key 驱动受控值（宿主免维护索引回环），aria-pressed 标注每段选中态，value 失配时隐藏 thumb 不猜测首段。
+- **样式**（globals.css，`.ap-ft-*` 之后）：`.ap-scrub-*` / `.ap-seg-*` 落 globals.css 共享件——颜色一律取映射语义变量（`--muted`/`--card`/`--fg-faint`/`--primary`，accent-tint 在使用点 `color-mix` 14% 混卡面），手柄 `cursor: ew-resize` + `touch-action: none` + focus-visible accent 环；reduced-motion 下 thumb 去位移过渡（颜色过渡保留）。
+- **场景接入① 覆盖率阈值**（`components/coverage/TargetsSection.tsx`，自 CoveragePanel 原地抽出独立文件，8 metric 行布局不变）：8 个目标数值输入升级为 ScrubField——手柄渲染 ↔ 图标（metric 名已在左列，label 作 aria）、min 0 / max 100 / suffix %、defaultValue = 行业默认（偏离高亮，调回默认即恢复）。语义收敛：**调回行业默认（assertion 为 0）即从 draft 移除 = 未设置**，保存 payload 不含该项（沿用旧 UI「清空 = 无目标」的语义，改由调值路径触达）；assertion 无默认目标回显 0（0 = 未设置，不会持久化）。保存链路不变（coverage-gaps store setTargets → trpc.coverage.setTarget）。METRIC_LABELS 随迁并导出（CoveragePanel 其余 6 处引用改从新文件导入）。
+- **场景接入② RunConfigModal 类型筛选**：全部/列表/组三分段按钮升级为 SegmentedControl（互斥单选的自然形态，顺带给移植控件真实落点），`reg-run-filter-*` testid 与受控行为不变，既有 `tests/ui/regression-run-modal.test.tsx` 全绿。issue 列名「RunOptionsDialog 选项」指该弹窗的选项区；CaseCfgPanel 实为用例文件加载面板、无 cfg 数值属性（issue 列举场景与代码库现状有出入），故接入以上两处。
+- **测试**：`tests/ui/scrub-field.test.tsx` 16 例——slider 全套 aria、四向键 ±step、Shift ×10、自定义 step、max/min 边界夹紧、拖拽 (Δx/2)*step 与 pointerup/cancel 停止、输入数字/负值夹紧/NaN 忽略、step=0.5 小数精度、defaultValue 高亮与回默认消隐、active 外部受控、SegmentedControl aria-pressed/thumb 位移/失配隐藏。`tests/ui/coverage-targets.test.tsx` 5 例——8 行 slider 渲染与已存目标回显（assertion 取 0）、偏离默认高亮、键盘改值进 draft 且保存 payload 正确、调回默认移除 draft 项、无 session 禁用保存。全量 `tests/ui` 1113 例中 1110 过；2 例失败为 CaseTreePanel 折叠用例（预存，#3 已备案），另 1 例 regression-view「今天」断言为午夜时间地雷（fixture 用 `Date.now() - 60_000`，跨零点后相对时间渲染为日期式「08-30 23:59」，白天时段通过），均与本次无关。
+- **code-review 修订（2026-08-30，双轴评审后）**：① SegmentedControl 由索引驱动改为 key 驱动（消除宿主 findIndex/`!` 回环；value 失配隐藏 thumb）。② TargetsSection 三处 `def ?? 0` 收敛为单点 `baseline` 局部量。评审确认保留的取舍：provenance 参考路径头注释为 PRD D3 规范要求每文件标注；aria-pressed 互斥组对齐参考实现（radiogroup 为备选方案）；TargetsSection 清空输入由「删除覆盖」改为「blur 回显受控值」（未设置路径改由调回默认触达，提示文案已注明）。
 
 ---
 

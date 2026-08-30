@@ -26,10 +26,11 @@ import type {
   TriageCause, TriageConfidence,
   UncoveredItem,
 } from '@shared/types';
-import { COVERAGE_METRICS, DEFAULT_COVERAGE_TARGETS } from '@shared/types';
+import { COVERAGE_METRICS } from '@shared/types';
 import { CoverageTreeTable } from './CoverageTreeTable';
 import { CoverageDashboard } from './CoverageDashboard';
 import { ClosureDetailPage } from './ClosureDetailPage';
+import { TargetsSection, METRIC_LABELS } from './TargetsSection';
 
 const EDA_TOOL_OPTIONS: Array<{ value: EdaTool; label: string }> = [
   { value: 'imc', label: 'Cadence IMC' },
@@ -37,17 +38,6 @@ const EDA_TOOL_OPTIONS: Array<{ value: EdaTool; label: string }> = [
   { value: 'vcover', label: 'Mentor Questa vcover' },
   { value: 'unknown', label: '未知/其他' },
 ];
-
-const METRIC_LABELS: Record<CoverageMetric, string> = {
-  line: 'Line',
-  branch: 'Branch',
-  toggle: 'Toggle',
-  condition: 'Condition',
-  fsm_state: 'FSM State',
-  fsm_transition: 'FSM Trans',
-  functional: 'Functional',
-  assertion: 'Assertion',
-};
 
 const TRIAGE_CAUSES: Array<{ value: TriageCause; label: string }> = [
   { value: 'missing_scenario', label: '缺失场景' },
@@ -687,98 +677,7 @@ export function CoveragePanel() {
   );
 }
 
-// ─── 目标 Tab：7 metric 默认目标 + 项目级覆盖 ───────────────────
-
-function TargetsSection({
-  currentProjectId,
-  currentSessionId,
-}: {
-  currentProjectId: string | null;
-  currentSessionId: string | null;
-}) {
-const targets = useCoverageGapsStore((s) => s.targets);
-const loadTargets = useCoverageGapsStore((s) => s.loadTargets);
-const setTargets = useCoverageGapsStore((s) => s.setTargets);
-  const [draft, setDraft] = useState<Partial<Record<CoverageMetric, number>>>({});
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (currentProjectId) loadTargets(currentProjectId, currentSessionId ?? undefined);
-  }, [currentProjectId, currentSessionId, loadTargets]);
-
-  useEffect(() => {
-    setDraft({ ...targets });
-  }, [targets]);
-
-  const handleSave = async () => {
-    if (!currentProjectId || !currentSessionId) return;
-    setSaving(true);
-    await setTargets(currentProjectId, currentSessionId, draft);
-    setSaving(false);
-  };
-
-  return (
-    <div className="space-y-3">
-      <div className="text-[10px] text-muted-foreground">
-        7 种 metric 有行业默认目标；assertion 无默认目标（行业惯例）。项目级设置会覆盖默认值。
-        {currentSessionId && <span className="ml-2">当前 session: <span className="font-mono">{currentSessionId}</span></span>}
-      </div>
-      <div className="rounded border border-border bg-card p-3">
-        <table className="w-full text-xs">
-          <thead className="text-[10px] uppercase text-muted-foreground">
-            <tr>
-              <th className="px-2 py-1 text-left">Metric</th>
-              <th className="px-2 py-1 text-right">行业默认</th>
-              <th className="px-2 py-1 text-right">本项目目标</th>
-            </tr>
-          </thead>
-          <tbody>
-            {COVERAGE_METRICS.map((m) => {
-              const def = DEFAULT_COVERAGE_TARGETS[m];
-              const cur = draft[m];
-              return (
-                <tr key={m} className="border-t border-border">
-                  <td className="px-2 py-1">{METRIC_LABELS[m]}</td>
-                  <td className="px-2 py-1 text-right font-mono text-muted-foreground">
-                    {def === undefined ? '—' : `${def}%`}
-                  </td>
-                  <td className="px-2 py-1 text-right">
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={cur ?? ''}
-                      placeholder={def === undefined ? '无目标' : String(def)}
-                      onChange={(e) => {
-                        const val = e.target.value === '' ? undefined : Number(e.target.value);
-                        setDraft((d) => {
-                          const next = { ...d };
-                          if (val === undefined || !Number.isFinite(val)) delete next[m];
-                          else next[m] = val;
-                          return next;
-                        });
-                      }}
-                      className="w-20 rounded border border-border bg-background px-1 py-0.5 text-right font-mono text-xs"
-                    />
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      <div className="flex justify-end">
-        <button
-          onClick={handleSave}
-          disabled={!currentSessionId || saving}
-          className="rounded bg-primary px-3 py-1 text-xs text-primary-foreground disabled:opacity-50"
-        >
-          {saving ? '保存中...' : '保存目标'}
-        </button>
-      </div>
-    </div>
-  );
-}
+// ─── 目标 Tab：7 metric 默认目标 + 项目级覆盖（TargetsSection.tsx，issues #8） ──
 
 // ─── 缺口 Tab：自动检测 Gap + 手动 Triage 标注 ──────────────────
 

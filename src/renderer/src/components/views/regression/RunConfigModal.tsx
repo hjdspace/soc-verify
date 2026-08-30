@@ -13,9 +13,17 @@ import { useRegressionStore } from '@renderer/stores/regression';
 import { useProjectStore } from '@renderer/stores/project';
 import { buildRegrCommand } from '@shared/regression-command';
 import type { RegressionItem, RegressionList, RegressionRunOptions } from '@shared/types';
+import { SegmentedControl } from '@renderer/components/ui/SegmentedControl';
 import { cn } from '@renderer/lib/utils';
 
 type TypeFilter = 'all' | 'list' | 'group';
+
+/** 类型分段选项（SegmentedControl 段序即此序） */
+const TYPE_FILTERS = [
+  { value: 'all', label: '全部' },
+  { value: 'list', label: '列表' },
+  { value: 'group', label: '组' },
+] as const satisfies ReadonlyArray<{ value: TypeFilter; label: string }>;
 
 /** 文件路径 → 文件名（item 行 / 摘要共用） */
 function baseName(filePath: string): string {
@@ -201,29 +209,16 @@ export function RunConfigModal({
                 className="w-full rounded border border-border bg-background/60 px-2 py-1 text-xs outline-none transition-colors focus:border-primary"
                 data-testid="reg-run-search"
               />
-              <div className="flex gap-1">
-                {(
-                  [
-                    ['all', '全部'],
-                    ['list', '列表'],
-                    ['group', '组'],
-                  ] as const
-                ).map(([value, label]) => (
-                  <button
-                    key={value}
-                    onClick={() => setTypeFilter(value)}
-                    className={cn(
-                      'rounded px-2 py-0.5 text-[10px] transition-colors',
-                      typeFilter === value
-                        ? 'bg-primary/20 text-primary'
-                        : 'bg-secondary text-muted-foreground hover:bg-accent',
-                    )}
-                    data-testid={`reg-run-filter-${value}`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
+              <SegmentedControl
+                className="w-full"
+                options={TYPE_FILTERS.map((t) => ({
+                  key: t.value,
+                  label: t.label,
+                  testId: `reg-run-filter-${t.value}`,
+                }))}
+                value={typeFilter}
+                onChange={setTypeFilter}
+              />
               {filterTags.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {filterTags.map((tag) => (

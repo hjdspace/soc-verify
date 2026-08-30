@@ -2398,6 +2398,114 @@ a.ap-ctx-chip,
   border-color: color-mix(in srgb, var(--ft-pill-base) 34%, var(--card));
 }
 
+/* ── 数值微调控件 ScrubField + 分段控件 SegmentedControl（issues #8）──
+   ScrubField：label 即 slider 手柄，三路改值（拖拽/键盘/输入），偏离默认值
+   accent-tint 高亮。SegmentedControl：灰轨白 thumb translateX 滑动。
+   视觉/交互参考 beautiful-ui:
+   D:\AI\beautiful-ui\components\primitives\FineTuneCard.tsx
+   参考实现 --field/--surface/--accent-tint/--ink-3 此处取映射语义变量
+  （--muted/--card/--primary 14% 混卡面/--fg-faint），明暗主题自动取值。 */
+.ap-scrub-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  min-width: 0;
+  padding: 2px 5px 2px 3px;
+  border-radius: 8px;
+  background: var(--muted);
+  cursor: text;
+  transition:
+    background-color 200ms var(--ease-out-strong),
+    box-shadow 200ms var(--ease-out-strong);
+}
+/* 偏离默认值：accent-tint（14% 混卡面）+ accent 描边环（参考实现同款双份） */
+.ap-scrub-field[data-edited='true'] {
+  background: color-mix(in srgb, var(--primary) 14%, var(--card));
+  box-shadow: 0 0 0 1px var(--primary);
+}
+.ap-scrub-handle {
+  display: flex;
+  height: 100%;
+  flex-shrink: 0;
+  align-items: center;
+  border-radius: 4px;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--fg-faint);
+  cursor: ew-resize;
+  touch-action: none;
+  user-select: none;
+  transition: color 150ms var(--ease-out-strong);
+}
+.ap-scrub-handle:hover {
+  color: var(--muted-foreground);
+}
+.ap-scrub-handle:focus-visible {
+  outline: none;
+  color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary);
+}
+.ap-scrub-input {
+  min-width: 0;
+  flex: 1;
+  border: none;
+  padding: 0;
+  background: transparent;
+  font-size: 12px;
+  color: var(--foreground);
+  font-variant-numeric: tabular-nums;
+  outline: none;
+}
+.ap-scrub-suffix {
+  flex-shrink: 0;
+  padding-right: 2px;
+  font-size: 11.5px;
+  color: var(--fg-faint);
+}
+/* 分段控件：灰轨（--muted）内 2px 白 thumb（--card + btn 阴影），段数任意均分 */
+.ap-seg {
+  position: relative;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--muted);
+}
+.ap-seg-thumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 6px;
+  background: var(--card);
+  box-shadow: var(--shadow-btn);
+  transition: transform 300ms var(--ease-out-strong);
+}
+.ap-seg-btn {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border: none;
+  background: transparent;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--fg-faint);
+  cursor: pointer;
+  transition: color 200ms var(--ease-out-strong);
+}
+.ap-seg-btn:hover {
+  color: var(--muted-foreground);
+}
+.ap-seg-btn[aria-pressed='true'] {
+  color: var(--primary);
+}
+
 /* ── 减弱动效：抽屉滑入与树展开 ─────────────────────────────────
    reduced-motion 不等于零动画——保留 opacity 淡入（帮助理解状态变化），
    禁用位移和高度变化（position change 是主要触发前庭不适的因素）。
@@ -2460,5 +2568,10 @@ a.ap-ctx-chip,
   /* 筛选折叠行：去掉 grid-rows 高度过渡（保留 opacity 淡入） */
   .ap-ft-row {
     transition: opacity 150ms ease !important;
+  }
+
+  /* 分段控件 thumb：去掉 translateX 滑动（位置变化） */
+  .ap-seg-thumb {
+    transition: none !important;
   }
 }
