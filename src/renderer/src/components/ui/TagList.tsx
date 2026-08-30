@@ -87,6 +87,15 @@ export function TagList({ items, className, label }: TagListProps) {
 
   const joined = label ?? items.map((item) => item.label).join('、');
   const hiddenCount = items.length - visibleCount;
+  const renderTag = (item: TagItem) => (
+    <span
+      key={item.key}
+      className="ap-tag"
+      style={item.color ? ({ '--tag-base': item.color } as React.CSSProperties) : undefined}
+    >
+      {item.label}
+    </span>
+  );
 
   return (
     <div ref={containerRef} className={cn('ap-tags', className)} title={joined} aria-label={joined}>
@@ -94,24 +103,14 @@ export function TagList({ items, className, label }: TagListProps) {
       <div ref={measureRef} className="ap-tags-measure" aria-hidden>
         {items.map((item) => (
           <span key={item.key} data-tag-measure>
-            <span className="ap-tag" style={item.color ? ({ '--tag-base': item.color } as React.CSSProperties) : undefined}>
-              {item.label}
-            </span>
+            {renderTag(item)}
           </span>
         ))}
         <span data-more-measure className="ap-tags-more">
           +{items.length}
         </span>
       </div>
-      {items.slice(0, visibleCount).map((item) => (
-        <span
-          key={item.key}
-          className="ap-tag"
-          style={item.color ? ({ '--tag-base': item.color } as React.CSSProperties) : undefined}
-        >
-          {item.label}
-        </span>
-      ))}
+      {items.slice(0, visibleCount).map(renderTag)}
       {hiddenCount > 0 && <span className="ap-tags-more">+{hiddenCount}</span>}
     </div>
   );
