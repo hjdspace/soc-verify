@@ -140,7 +140,7 @@ describe('AssistantActions 回合收尾操作栏', () => {
     });
   });
 
-  it('引用来源可展开，文件项点击打开文件', () => {
+  it('引用来源可展开为 chunk 卡，文件来源 chip 点击打开文件', () => {
     const msg = makeMsg({
       id: 'a1',
       role: 'assistant',
@@ -153,11 +153,16 @@ describe('AssistantActions 回合收尾操作栏', () => {
     fireEvent.click(screen.getByRole('button', { name: /引用 2 项/ }));
 
     expect(screen.getByTestId('assistant-sources')).toBeInTheDocument();
-    // 文件行：文件名居左，「目录:行号」元信息居右
-    fireEvent.click(screen.getByText('foo.sv'));
+    // 两枚 chunk 卡
+    expect(screen.getAllByTestId('context-card')).toHaveLength(2);
+    // 文件卡：标题=文件名、正文=全路径、meta=行号区间
+    expect(screen.getByText('foo.sv')).toBeInTheDocument();
+    expect(screen.getByText('src/main/foo.sv')).toBeInTheDocument();
+    expect(screen.getByText('L42')).toBeInTheDocument();
+    // 点击文件来源 chip 打开文件（第一枚 chip = 文件项，button）
+    fireEvent.click(screen.getAllByTestId('context-chip')[0]);
     expect(openReviewAwareFile).toHaveBeenCalledWith('src/main/foo.sv', 'foo.sv');
-    expect(screen.getByText('src/main:42')).toBeInTheDocument();
-    // host URI 行：展示去掉协议后的路径，右侧标注协议
+    // host URI 卡：标题=显示路径、来源 chip=scheme 前缀
     expect(screen.getByText('/run/1')).toBeInTheDocument();
     expect(screen.getByText('case://')).toBeInTheDocument();
   });

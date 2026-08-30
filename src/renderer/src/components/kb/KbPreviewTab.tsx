@@ -17,6 +17,7 @@ import { FileText, Image as ImageIcon, Clock, Folder, ArrowRightCircle, Bot, Loa
 import { useKbStore } from '@renderer/stores/kb';
 import { parseIndexMd } from '@renderer/lib/kb-index-parser';
 import { cn } from '@renderer/lib/utils';
+import { ContextCard, deriveBadge, deriveExt, type ContextTone } from '@renderer/components/ui/ContextCard';
 
 // ── 文件大小格式化 ──────────────────────────────────────────
 
@@ -33,6 +34,30 @@ function formatTime(ms: number | undefined): string {
   if (!ms) return '-';
   const d = new Date(ms);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+// ── KB 摘要 chunk 卡：来源文件名/badge/tone 派生 ──────────────
+
+function basename(p: string | undefined): string {
+  if (!p) return '';
+  return p.split(/[/\\]/).pop() ?? p;
+}
+
+// 源文件类型→badge 语义色（pdf→red、表格→green、文档→orange，余 neutral）
+const DOC_TONE: Record<string, ContextTone> = {
+  pdf: 'red',
+  csv: 'green',
+  xlsx: 'green',
+  xls: 'green',
+  tsv: 'green',
+  docx: 'orange',
+  doc: 'orange',
+  pptx: 'orange',
+  ppt: 'orange',
+};
+
+function sourceTone(p: string | undefined): ContextTone {
+  return DOC_TONE[deriveExt(p)] ?? 'neutral';
 }
 
 export function KbPreviewTab() {
@@ -162,29 +187,39 @@ export function KbPreviewTab() {
           <span className="text-right">{formatTime(doc?.convertedAt)}</span>
         </div>
 
-        {/* AI 摘要卡 */}
+        {/* AI 摘要卡——chunk 卡形态（标题/字符数/摘要/来源 chip） */}
         {indexEntry && indexEntry.summary ? (
-          <div className="mt-2 rounded-lg bg-info p-2.5 text-[11px] leading-relaxed text-info-foreground">
-            <div className="mb-1 flex items-center gap-1.5 font-semibold">
-              <Bot className="h-3 w-3" />
-              AI 摘要
-              <button
-                onClick={() => void handleReclassify()}
-                disabled={reclassifying}
-                title="AI 重新分类并重新生成摘要"
-                className="ml-auto rounded p-0.5 transition-colors hover:bg-info-foreground/10 disabled:opacity-50"
-              >
-                <Sparkles className={cn('h-3 w-3', reclassifying && 'animate-pulse')} />
-              </button>
-            </div>
-            {indexEntry.summary}
-          </div>
+          <ContextCard
+            className="mt-2"
+            chunk={{
+              key: previewDocName ?? 'kb-summary',
+              icon: <FileText className="h-3 w-3 text-muted-foreground" />,
+              title: indexEntry.title || previewDocName || 'AI 摘要',
+              meta: `${indexEntry.summary.length} 字符`,
+              body: indexEntry.summary,
+              source: basename(doc?.sourcePath) || previewDocName || '',
+              badge: deriveBadge(doc?.sourcePath),
+              tone: sourceTone(doc?.sourcePath),
+              action: (
+                <button
+                  type="button"
+                  onClick={() => void handleReclassify()}
+                  disabled={reclassifying}
+                  title="AI 重新分类并重新生成摘要"
+                  className="ap-ctx-regen"
+                >
+                  <Sparkles className={cn('h-3 w-3', reclassifying && 'animate-pulse')} />
+                </button>
+              ),
+            }}
+          />
         ) : (
           <div className="mt-2 rounded-lg border border-dashed border-border p-2.5 text-[11px] text-muted-foreground">
             <div className="mb-1 flex items-center gap-1.5">
               <Bot className="h-3 w-3" />
               AI 摘要
               <button
+                type="button"
                 onClick={() => void handleReclassify()}
                 disabled={reclassifying}
                 title="AI 重新分类并生成摘要"

@@ -49,7 +49,7 @@
 
 ## Issue #2: ContextCards — 聊天引用展开 chunk 卡 + KB 预览升级
 
-**Labels**: `ready-for-agent` `p0`
+**Labels**: `ready-for-agent` `p0` → **已完成**（2026-08-30）
 **Blocked by**: #1
 
 ### What to build
@@ -63,11 +63,19 @@
 
 ### Acceptance criteria
 
-- [ ] 引用来源展开后显示 chunk 卡（标题/字符数/摘要/来源 chip），chip 700ms 后 `i*80ms` 错峰淡入
-- [ ] 无引用时不渲染展开区
-- [ ] KB 预览页摘要卡升级为 chunk 形态，数据来自 kb-router 现有接口
-- [ ] 新增 `tests/ui/<context-cards>.test.tsx`：渲染、展开、chip 数量断言
-- [ ] typecheck + lint + 相关测试通过
+- [x] 引用来源展开后显示 chunk 卡（标题/字符数/摘要/来源 chip），chip 700ms 后 `i*80ms` 错峰淡入
+- [x] 无引用时不渲染展开区
+- [x] KB 预览页摘要卡升级为 chunk 形态，数据来自 kb-router 现有接口
+- [x] 新增 `tests/ui/<context-cards>.test.tsx`：渲染、展开、chip 数量断言
+- [x] typecheck + lint + 相关测试通过
+
+### 落地记录（2026-08-30）
+
+- **组件**（`components/ui/ContextCard.tsx`）：props 化 `ContextCard`（单卡）+ `ContextCardList`（列表层管理 chip 错峰）。数据契约 `ContextChunk = { key, icon, title, meta, body, source, badge?, tone?, action?, onClick?, href? }`，演示 CHUNKS 不进正式代码。参考实现 700ms 定时 + `i*80ms` `transitionDelay` 错峰原样保留；卡片入场 `fade-up` `i*100ms` 错峰；`tone` 由 Tailwind 类名（`bg-red`）改为 `BADGE_TONES` 语义色映射（red→`--status-fail`、green→`--status-pass`、orange→`--status-aborted`、accent→`--primary`、neutral→`--muted-foreground`），随主题自动取值。
+- **错峰缝**：chip 淡入的 `transition` 拆三段——opacity/transform 走 `i*80ms` 错峰延迟，background-color（hover）零延迟即时响应（inline `transitionProperty/Duration/TimingFunction/Delay` 列表分别指定），避免 hover 被错峰延迟拖慢。
+- **聊天引用落点**（`AssistantActions`）：`extractMessageReferences` 返回的 `MessageReference[]` 经 `refToChunk` 映射为 chunk 卡——文件项：标题=文件名、meta=行号区间（`L42`/`L42–50`）、body=全路径、source chip=目录+ext badge（可点击打开，渲染外链图标）；host URI 项：标题=显示路径、body=全 URI、source chip=`scheme://`（不可点击，渲染为 span）。保留 `.ap-sources-collapse` grid-rows 0fr→1fr 折叠外壳与 `.ap-sources-stack` 胶囊堆叠；旧的 `.ap-turnactions-sources/.ap-turnactions-source/.ap-source-name/.ap-source-meta` 扁平行样式已删（无引用点）。`SourceIcon` 导出 `refIdentity`+`SourceHue`，hue→ContextTone 收敛映射（blue/violet→accent、teal→green、rose→red、amber→orange）。
+- **KB 预览落点**（`KbPreviewTab`）：AI 摘要卡升级为单卡 `ContextCard`，数据来自 kb-router `index` 接口经 `parseIndexMd` 解析的 `indexEntry`（title/summary）+ `doc.sourcePath`。meta=摘要字符数、body=摘要、source chip=源文件名+ext badge（pdf→red、csv/xlsx→green、docx→orange，对齐参考实现的 bg-red/bg-green 语义）；"AI 重新分类"按钮落在标题栏 `action` 槽（`.ap-ctx-regen`）；无摘要时保留虚线兜底卡。
+- **样式**：`.ap-ctx-*` 落 globals.css（共享件，AI 面板内/外均可用——颜色一律取全局语义变量 `--card/--foreground/--muted/--border/--fg-faint/--accent`，阴影取映射层 `--shadow-card/--shadow-btn`）；reduced-motion 下入场改 `fade-in`（去位移）、chip 错峰延迟归零。测试 `tests/ui/context-cards.test.tsx`（7 例：渲染/chip 计数/700ms 错峰/收起不淡入/空列表/onClick/button-vs-span/tone 映射）+ `tests/ui/assistant-actions.test.tsx` 更新为 chunk 卡 DOM 断言。
 
 ---
 

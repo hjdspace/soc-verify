@@ -325,52 +325,7 @@ html[data-shade='dark'] .ai-panel {
 .ap-sources-collapse-clip {
   overflow: hidden;
 }
-.ap-turnactions-sources {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin-top: 6px;
-  padding: 4px;
-  border-radius: 10px;
-  background: var(--dsw-code-block);
-  box-shadow: inset 0 0 0 1px var(--dsw-border-l1);
-}
-.ap-turnactions-source {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  max-width: 100%;
-  padding: 4px 6px;
-  border-radius: 6px;
-  font-size: 11.5px;
-  color: var(--dsw-label-secondary);
-  text-align: left;
-}
-button.ap-turnactions-source {
-  cursor: pointer;
-  transition: background-color 100ms ease, color 100ms ease;
-}
-button.ap-turnactions-source:hover {
-  background: var(--dsw-hover-bg);
-  color: var(--dsw-label-primary);
-}
-.ap-source-name {
-  flex: 0 1 auto;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.ap-source-meta {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  text-align: right;
-  font-size: 10.5px;
-  color: var(--dsw-label-caption);
-}
+/* 展开区内的 chunk 卡由 ContextCardList 渲染（.ap-ctx-* 见 globals.css） */
 
 /* 来源身份图标：彩色圆角底 + 白色字形（装饰用固定色板，不随语义令牌） */
 .ap-src-icon {

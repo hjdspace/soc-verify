@@ -2,7 +2,7 @@ import { BarChart3, Database, FileCode2, FileText, FlaskConical, ScrollText } fr
 import { cn } from '@renderer/lib/utils';
 import type { MessageReference } from './MarkdownRenderer';
 
-type SourceHue = 'blue' | 'green' | 'orange' | 'violet' | 'teal' | 'rose' | 'amber';
+export type SourceHue = 'blue' | 'green' | 'orange' | 'violet' | 'teal' | 'rose' | 'amber';
 
 // 未知扩展名时按 key 哈希取色，保证同一来源每次渲染颜色稳定
 const FALLBACK_HUES: SourceHue[] = ['blue', 'teal', 'violet', 'rose', 'amber', 'green'];
@@ -32,7 +32,7 @@ function hashHue(key: string): SourceHue {
   return FALLBACK_HUES[Math.abs(h) % FALLBACK_HUES.length];
 }
 
-function refIdentity(source: MessageReference): { hue: SourceHue; Icon: typeof FileText } {
+export function refIdentity(source: MessageReference): { hue: SourceHue; Icon: typeof FileText } {
   if (source.kind === 'uri') {
     const scheme = source.uri.slice(0, source.uri.indexOf('://'));
     if (scheme === 'case') return { hue: 'violet', Icon: FlaskConical };

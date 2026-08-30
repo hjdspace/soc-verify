@@ -3,8 +3,55 @@ import { Check, Copy, CornerDownRight, RefreshCw } from 'lucide-react';
 import { openReviewAwareFile } from '@renderer/stores/diff-review';
 import { useSessionMessagesStore } from '@renderer/stores/session-messages';
 import type { ChatMessage, SessionEntry } from '@renderer/stores/session-types';
-import { extractMessageReferences } from './MarkdownRenderer';
-import { SourceIcon } from './SourceIcon';
+import { extractMessageReferences, type MessageReference } from './MarkdownRenderer';
+import { refIdentity, SourceIcon, type SourceHue } from './SourceIcon';
+import { ContextCardList, deriveBadge, type ContextChunk, type ContextTone } from '@renderer/components/ui/ContextCard';
+
+// SourceHue→chunk 卡 badge 语义色（blue/violet 收敛为 accent，teal 收敛为 green）
+const HUE_TONE: Record<SourceHue, ContextTone> = {
+  blue: 'accent',
+  green: 'green',
+  orange: 'orange',
+  violet: 'accent',
+  teal: 'green',
+  rose: 'red',
+  amber: 'orange',
+};
+
+/**
+ * 把消息引用来源映射为 chunk 卡数据：标题=文件名/URI 显示，meta=行号区间，
+ * body=全路径/全 URI（来源定位），底部 chip=目录/scheme 前缀，文件项可点击打开。
+ */
+function refToChunk(ref: MessageReference): ContextChunk {
+  if (ref.kind === 'file') {
+    const name = ref.path.split('/').pop() ?? ref.path;
+    const dir = ref.path.includes('/') ? ref.path.slice(0, ref.path.lastIndexOf('/')) : '';
+    const lineMeta = ref.line
+      ? ref.endLine
+        ? `L${ref.line}–${ref.endLine}`
+        : `L${ref.line}`
+      : undefined;
+    return {
+      key: `file:${ref.path}:${ref.line ?? ''}`,
+      icon: <SourceIcon source={ref} variant="row" />,
+      title: name,
+      meta: lineMeta,
+      body: ref.path,
+      source: dir || ref.path,
+      badge: deriveBadge(ref.path),
+      tone: HUE_TONE[refIdentity(ref).hue],
+      onClick: () => openReviewAwareFile(ref.path, name),
+    };
+  }
+  const scheme = ref.uri.slice(0, ref.uri.indexOf('://'));
+  return {
+    key: ref.uri,
+    icon: <SourceIcon source={ref} variant="row" />,
+    title: ref.display,
+    body: ref.uri,
+    source: `${scheme}://`,
+  };
+}
 
 interface AssistantActionsProps {
   message: ChatMessage;
@@ -23,6 +70,7 @@ export const AssistantActions = memo(function AssistantActions({ message, sessio
   const sendMessage = useSessionMessagesStore((s) => s.sendMessage);
 
   const refs = useMemo(() => extractMessageReferences(message.content), [message.content]);
+  const chunks = useMemo(() => refs.map(refToChunk), [refs]);
 
   const lastAssistantId = useMemo(() => {
     if (!session) return undefined;
@@ -107,36 +155,8 @@ export const AssistantActions = memo(function AssistantActions({ message, sessio
       {refs.length > 0 && (
         <div className="ap-sources-collapse" data-open={sourcesOpen}>
           <div className="ap-sources-collapse-clip">
-            <div className="ap-turnactions-sources" data-testid="assistant-sources">
-              {refs.map((ref) => {
-                if (ref.kind === 'file') {
-                  const name = ref.path.split('/').pop() ?? ref.path;
-                  const dir = ref.path.includes('/') ? ref.path.slice(0, ref.path.lastIndexOf('/')) : '';
-                  const location =
-                    `${dir}${ref.line ? `:${ref.line}${ref.endLine ? `-${ref.endLine}` : ''}` : ''}`;
-                  return (
-                    <button
-                      key={`file:${ref.path}:${ref.line ?? ''}`}
-                      type="button"
-                      className="ap-turnactions-source"
-                      title={`点击打开: ${ref.path}${ref.line ? `:${ref.line}` : ''}`}
-                      onClick={() => openReviewAwareFile(ref.path, name)}
-                    >
-                      <SourceIcon source={ref} variant="row" />
-                      <span className="ap-source-name">{name}</span>
-                      {location && <span className="ap-source-meta font-mono">{location}</span>}
-                    </button>
-                  );
-                }
-                const scheme = ref.uri.slice(0, ref.uri.indexOf('://'));
-                return (
-                  <span key={ref.uri} className="ap-turnactions-source" title={ref.uri}>
-                    <SourceIcon source={ref} variant="row" />
-                    <span className="ap-source-name">{ref.display}</span>
-                    <span className="ap-source-meta font-mono">{scheme}://</span>
-                  </span>
-                );
-              })}
+            <div data-testid="assistant-sources">
+              <ContextCardList chunks={chunks} active={sourcesOpen} />
             </div>
           </div>
         </div>
