@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Check, Loader2 } from 'lucide-react';
 import { cn } from '@renderer/lib/utils';
 import { PillButton } from './PillButton';
@@ -101,31 +101,31 @@ export function DiffTable({
   stageDelays = DEFAULT_STAGE_DELAYS,
   className,
 }: DiffTableProps) {
-  const stage = useStage(stageDelays);
+  // 按值 memo 化 stage 延迟：调用方内联 stageDelays 字面量时，宿主重渲染
+  // 不会重建数组身份、重置 setTimeout 链导致 stage 推进停滞（参考实现用
+  // 模块常量规避同一问题）
+  const [removalDelay, settledDelay] = stageDelays;
+  const delays = useMemo(() => [removalDelay, settledDelay], [removalDelay, settledDelay]);
+  const stage = useStage(delays);
   // 0 原始 · 1 删除行着色 · 2 settled（新增行展开 + 页脚 + 行交互）
   const tinted = stage >= 1;
   const settled = stage >= 2;
   const [accepted, setAccepted] = useState(false);
   const [busy, setBusy] = useState(false);
-  // 逐行采纳状态；缺省全部采纳（?? true 兼容 rows 后续新增的 key）
+  // 逐行采纳状态；缺省全部采纳（缺 key 视为采纳，兼容 rows 后续追加）
   const [edits, setEdits] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(rows.map((r) => [r.key, true])),
   );
 
-  const removalRows = useMemo(() => rows.filter((r) => r.kind === 'removal'), [rows]);
-  const additionRows = useMemo(() => rows.filter((r) => r.kind === 'addition'), [rows]);
-  const includedRemovals = useMemo(
-    () => removalRows.filter((r) => edits[r.key] ?? true).map((r) => r.key),
-    [removalRows, edits],
-  );
-  const includedAdditions = useMemo(
-    () => additionRows.filter((r) => edits[r.key] ?? true).map((r) => r.key),
-    [additionRows, edits],
-  );
-  const total = includedRemovals.length + includedAdditions.length;
-
+  const isIncluded = (key: string): boolean => edits[key] ?? true;
   const toggleEdit = (key: string) =>
     setEdits((current) => ({ ...current, [key]: !(current[key] ?? true) }));
+
+  const removalRows = useMemo(() => rows.filter((r) => r.kind === 'removal'), [rows]);
+  const additionRows = useMemo(() => rows.filter((r) => r.kind === 'addition'), [rows]);
+  const includedRemovals = removalRows.filter((r) => isIncluded(r.key)).map((r) => r.key);
+  const includedAdditions = additionRows.filter((r) => isIncluded(r.key)).map((r) => r.key);
+  const total = includedRemovals.length + includedAdditions.length;
 
   if (rows.length === 0) return null;
 
@@ -151,6 +151,32 @@ export function DiffTable({
     return typeof first === 'string' || typeof first === 'number' ? String(first) : undefined;
   };
 
+  /* 变更行共用的交互 props（removal/addition 两处渲染共享） */
+  const interactiveRowProps = (row: DiffRow): {
+    tabIndex: 0 | -1;
+    role: 'checkbox';
+    'aria-checked': boolean;
+    'aria-label': string | undefined;
+    onClick?: () => void;
+    onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
+  } => ({
+    role: 'checkbox',
+    'aria-checked': isIncluded(row.key),
+    'aria-label': rowAriaLabel(row),
+    tabIndex: interactive ? 0 : -1,
+    ...(interactive
+      ? {
+          onClick: () => toggleEdit(row.key),
+          onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              toggleEdit(row.key);
+            }
+          },
+        }
+      : {}),
+  });
+
   const renderCells = (row: DiffRow) => (
     <>
       {row.cells.map((cell, i) => (
@@ -163,7 +189,7 @@ export function DiffTable({
       ))}
       <span className="ap-diff-markslot">
         <IncludedMark
-          included={edits[row.key] ?? true}
+          included={isIncluded(row.key)}
           tone={row.kind === 'removal' ? 'red' : 'green'}
         />
       </span>
@@ -189,35 +215,20 @@ export function DiffTable({
         </div>
 
         <div role="rowgroup">
-          {/* 删除行：stage 1 起采纳中的行红 tint 着色 */}
+          {/* 删除行：stage 1 起采纳中的行红 tint 着色（主列红字、次列删除线） */}
           {removalRows.map((row) => {
-            const included = edits[row.key] ?? true;
-            const out = tinted && included;
+            const struck = tinted && isIncluded(row.key);
             return (
               <div
                 key={row.key}
-                role="checkbox"
-                aria-checked={included}
-                aria-label={rowAriaLabel(row)}
-                tabIndex={interactive ? 0 : undefined}
                 data-testid={`diff-row-${row.key}`}
-                onClick={interactive ? () => toggleEdit(row.key) : undefined}
-                onKeyDown={
-                  interactive
-                    ? (event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
-                          toggleEdit(row.key);
-                        }
-                      }
-                    : undefined
-                }
                 className={cn(
                   'ap-diff-grid ap-diff-row',
-                  out && 'ap-diff-row-out',
+                  struck && 'ap-diff-row-out',
                   interactive && 'ap-diff-row-interactive',
                 )}
                 style={{ gridTemplateColumns: gridCols }}
+                {...interactiveRowProps(row)}
               >
                 {renderCells(row)}
               </div>
@@ -232,37 +243,20 @@ export function DiffTable({
               data-testid="diff-additions"
             >
               <div className="ap-diff-add-clip">
-                {additionRows.map((row) => {
-                  const included = edits[row.key] ?? true;
-                  return (
-                    <div
-                      key={row.key}
-                      role="checkbox"
-                      aria-checked={included}
-                      aria-label={rowAriaLabel(row)}
-                      tabIndex={interactive ? 0 : -1}
-                      data-testid={`diff-row-${row.key}`}
-                      onClick={interactive ? () => toggleEdit(row.key) : undefined}
-                      onKeyDown={
-                        interactive
-                          ? (event) => {
-                              if (event.key === 'Enter' || event.key === ' ') {
-                                event.preventDefault();
-                                toggleEdit(row.key);
-                              }
-                            }
-                          : undefined
-                      }
-                      className={cn(
-                        'ap-diff-grid ap-diff-row ap-diff-row-add',
-                        included && 'ap-diff-row-add-in',
-                      )}
-                      style={{ gridTemplateColumns: gridCols }}
-                    >
-                      {renderCells(row)}
-                    </div>
-                  );
-                })}
+                {additionRows.map((row) => (
+                  <div
+                    key={row.key}
+                    data-testid={`diff-row-${row.key}`}
+                    className={cn(
+                      'ap-diff-grid ap-diff-row ap-diff-row-add',
+                      isIncluded(row.key) && 'ap-diff-row-add-in',
+                    )}
+                    style={{ gridTemplateColumns: gridCols }}
+                    {...interactiveRowProps(row)}
+                  >
+                    {renderCells(row)}
+                  </div>
+                ))}
               </div>
             </div>
           )}

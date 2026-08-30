@@ -200,10 +200,21 @@ CommandPalette 补齐：匹配片段高亮、非空清除按钮（fade-in 150ms�
 
 ### 落地记录（2026-08-30）
 
-- **组件**（`components/ui/DiffTable.tsx`）：props 化 `DiffTable`（title/columns/colWidths/rows/onApply/applyLabel/hint/stageDelays）+ 导出 `DiffRow`/`DiffApplyResult` 契约与 `DiffBadge`（圆点语义 pill，调用方按需放入 cells 承载分组/标签元信息，参考实现的 dept DOT 映射不进正式代码）。数据契约 `DiffRow = { key, kind: 'removal'|'addition', cells, label? }`——cells 顺序与 columns 对齐（首列为主标识）。`useStage` setTimeout 链驱动 stage 递增（0 原始 → 1 删除行红 tint → 2 settled：新增行 grid-rows 0fr→1fr 展开 + 页脚 fade-up + 行交互开启），`STAGE_DELAYS=[180,260]` 保留为默认值并经 `stageDelays` prop 注入（UI 测试传 [0,0] 配合 waitFor 推进）。edits 缺省全部采纳（读取 `?? true` 兼容 rows 后续追加的 key）；勾选块 IncludedMark 采纳时 tone 底白勾、取消缩放 0.92 褪为 muted+hairline 环；页脚统计实时派生「N 项删除 · M 项新增」，0 项 Apply 禁用；Apply 支持异步 `onApply`（busy 禁用防重复，失败 catch 保持可交互、错误上报归调用方），成功后行交互冻结 + pop-in 绿色确认 pill「N 项变更已应用」。键盘 Enter/Space 切换（变更行 `role="checkbox"` + aria-checked/aria-label）。表格用 grid 行布局（表头/删除行/新增行共享 gridTemplateColumns，`colWidths` 缺省均分），替代参考实现 table+colSpan 混排——新增行展开壳无需跨列穿孔。
+- **组件**（`components/ui/DiffTable.tsx`）：props 化 `DiffTable`（title/columns/colWidths/rows/onApply/applyLabel/hint/stageDelays）+ 导出 `DiffRow`/`DiffApplyResult` 契约与 `DiffBadge`（圆点语义 pill，调用方按需放入 cells 承载分组/标签元信息，参考实现的 dept DOT 映射不进正式代码）。**契约偏差说明**：issue 文本的 `{ rows, additions, removals }` 输入合并为单一 `rows` 数组 + `kind: 'removal'|'addition'` 判别字段——删除/新增行共用同一渲染管线与勾选/统计派生，功能等价。`DiffRow = { key, kind, cells, label? }`——cells 顺序与 columns 对齐（首列为主标识）。`useStage` setTimeout 链驱动 stage 递增（0 原始 → 1 删除行红 tint → 2 settled：新增行 grid-rows 0fr→1fr 展开 + 页脚 fade-up + 行交互开启），`STAGE_DELAYS=[180,260]` 保留为默认值并经 `stageDelays` prop 注入（UI 测试传 [0,0] 配合 waitFor 推进）；delays 数组按值 memo 化，内联字面量在宿主重渲染时不重置计时链。edits 缺省全部采纳（读取 `?? true` 兼容 rows 后续追加的 key，`isIncluded` 单点收敛）；勾选块 IncludedMark 采纳时 tone 底白勾、取消缩放 0.92 褪为 muted+hairline 环；页脚统计实时派生「N 项删除 · M 项新增」，0 项 Apply 禁用；Apply 支持异步 `onApply`（busy 禁用防重复，失败 catch 保持可交互、错误上报归调用方），成功后行交互冻结 + pop-in 绿色确认 pill「N 项变更已应用」。键盘 Enter/Space 切换（变更行 `role="checkbox"` + aria-checked/aria-label，removal/addition 共用 interactiveRowProps）。表格用 grid 行布局（表头/删除行/新增行共享 gridTemplateColumns，`colWidths` 缺省均分），替代参考实现 table+colSpan 混排——新增行展开壳无需跨列穿孔。
 - **样式**（globals.css，`.ap-rec-*` 与 `.ap-sel-*` 块之间）：`.ap-diff-*` 落 globals.css 共享件——卡 `--shadow-card`、删除/新增采纳行 tint 在使用点 `color-mix` 14% 混卡面（红 `--status-fail`/绿 `--status-pass`，随亮暗主题自动取值）、删除行着色态主列红字 + 次列删除线（50% 透明红描线）、新增行未采纳褪为 `--fg-faint`、mark/badge/确认 pill 颜色一律语义变量（勾/圆内图形取 `--background`，同 PillButton success 的暗主题对比处理）；reduced-motion 下新增行去 grid-rows 高度过渡（保留 opacity 淡入）、页脚 fade-up 改纯 fade-in（去位移）、确认 pill pop-in 关闭。
 - **测试**：`tests/ui/diff-table.test.tsx` 9 例——stage 0/1/2 DOM 形态断言（未着色/无页脚 → 删除行着色 → 新增行展开+页脚+提示）、默认延迟真实推进（~440ms 内分两段到达 settled）、stageDelays 注入、逐行勾选统计联动与重新勾选恢复、键盘 Enter/Space 切换、0 项 Apply 禁用且不回调、Apply 冻结（确认 pill 出现/CTA 与提示消失/行点击失效）、onApply pending 期间 busy 冻结与 reject 后回退可交互不进 accepted、空 rows 渲染 null + DiffBadge 圆点着色。全量 `tests/ui` 1080 例中 1078 过；2 例失败为 CaseTreePanel 折叠用例（预存，#3 已备案），与本次无关。
-- **场景接入说明**：本期 ACs 仅覆盖组件本体。issue 列出的首个落地场景（CaseCfgPanel 的 AI 建议入口）在当前代码库尚无 AI→cfg 提议数据链路（case-cfg-router 仅管 cfg 文件加载/解析，host tools 无 cfg 批量提议/写回工具），需先立「AI 批量修改提议」链路（host tool 或结构化输出 + 应用写回后端）再以本组件承接，另立 issue 跟进（沿 #10「组件先行落地 + 业务接入另立 issue」先例）。
+- **场景接入说明**：本期 ACs 仅覆盖组件本体（原型 HTML 沿 #2–#5 先例省略，ACs 未列）。issue 列出的首个落地场景（CaseCfgPanel 的 AI 建议入口）在当前代码库尚无 AI→cfg 提议数据链路（case-cfg-router 仅管 cfg 文件加载/解析，host tools 无 cfg 批量提议/写回工具），需先立「AI 批量修改提议」链路（host tool 或结构化输出 + 应用写回后端）再以本组件承接——已登记为下方待立 issue（沿 #10「组件先行落地 + 业务接入另立 issue」先例）。
+
+---
+
+## 待立 issue: AI 批量修改提议链路（DiffTable 首个落地场景前置）
+
+**Labels**: `backlog`（待功能场景确认后转 `ready-for-agent`）
+**Blocked by**: 无（DiffTable 组件已就绪，见 #6）
+
+### What to build
+
+让 AI 会话能对结构化行级变更（key/kind/cells）发起批量提议，用户在 DiffTable 中逐行采纳后 Apply 写回。候选场景（PRD D8）：AI 批量修改 case cfg 参数（CaseCfgPanel 的 AI 建议入口）、回归 list 开关批量提议、覆盖率 exclusion 建议批量采纳。需补齐：① 提议来源——omp host tool 或会话结构化输出（沿 TVAISuggestionCard 的 JSON 解析先例）；② 应用写回——各场景的持久化后端（cfg 文件改写/开关落库/exclusion 提交）；③ UI 入口——CaseCfgPanel 等宿主面板的「AI 建议」入口与聊天卡片渲染位。
 
 ---
 
