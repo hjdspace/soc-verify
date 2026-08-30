@@ -1,10 +1,10 @@
 import { memo, useMemo, useState } from 'react';
-import { Check, ChevronDown, Copy, CornerDownRight, FileText, RefreshCw } from 'lucide-react';
-import { cn } from '@renderer/lib/utils';
+import { Check, Copy, CornerDownRight, RefreshCw } from 'lucide-react';
 import { openReviewAwareFile } from '@renderer/stores/diff-review';
 import { useSessionMessagesStore } from '@renderer/stores/session-messages';
 import type { ChatMessage, SessionEntry } from '@renderer/stores/session-types';
 import { extractMessageReferences } from './MarkdownRenderer';
+import { SourceIcon } from './SourceIcon';
 
 interface AssistantActionsProps {
   message: ChatMessage;
@@ -87,34 +87,58 @@ export const AssistantActions = memo(function AssistantActions({ message, sessio
             onClick={() => setSourcesOpen((v) => !v)}
             aria-expanded={sourcesOpen}
             title="引用来源"
-            className="ap-turnaction-btn ap-turnaction-sources-toggle"
+            data-testid="assistant-sources-toggle"
+            className="ap-turnaction-btn ap-sources-pill"
           >
+            <span className="ap-sources-stack">
+              {refs.slice(0, 3).map((ref) => (
+                <SourceIcon
+                  key={ref.kind === 'file' ? `file:${ref.path}:${ref.line ?? ''}` : ref.uri}
+                  source={ref}
+                  variant="stack"
+                />
+              ))}
+            </span>
             <span>引用 {refs.length} 项</span>
-            <ChevronDown className={cn('h-3 w-3 transition-transform', sourcesOpen && 'rotate-180')} />
           </button>
         )}
       </div>
 
-      {sourcesOpen && (
-        <div className="ap-turnactions-sources" data-testid="assistant-sources">
-          {refs.map((ref) =>
-            ref.kind === 'file' ? (
-              <button
-                key={`file:${ref.path}:${ref.line ?? ''}`}
-                type="button"
-                className="ap-turnactions-source"
-                title={`点击打开: ${ref.path}${ref.line ? `:${ref.line}` : ''}`}
-                onClick={() => openReviewAwareFile(ref.path, ref.path.split('/').pop() ?? ref.path)}
-              >
-                <FileText className="h-3 w-3 shrink-0 text-muted-foreground/70" />
-                <span className="truncate font-mono">{ref.display}</span>
-              </button>
-            ) : (
-              <span key={ref.uri} className="ap-turnactions-source" title={ref.uri}>
-                <span className="truncate font-mono">{ref.uri}</span>
-              </span>
-            ),
-          )}
+      {refs.length > 0 && (
+        <div className="ap-sources-collapse" data-open={sourcesOpen}>
+          <div className="ap-sources-collapse-clip">
+            <div className="ap-turnactions-sources" data-testid="assistant-sources">
+              {refs.map((ref) => {
+                if (ref.kind === 'file') {
+                  const name = ref.path.split('/').pop() ?? ref.path;
+                  const dir = ref.path.includes('/') ? ref.path.slice(0, ref.path.lastIndexOf('/')) : '';
+                  const location =
+                    `${dir}${ref.line ? `:${ref.line}${ref.endLine ? `-${ref.endLine}` : ''}` : ''}`;
+                  return (
+                    <button
+                      key={`file:${ref.path}:${ref.line ?? ''}`}
+                      type="button"
+                      className="ap-turnactions-source"
+                      title={`点击打开: ${ref.path}${ref.line ? `:${ref.line}` : ''}`}
+                      onClick={() => openReviewAwareFile(ref.path, name)}
+                    >
+                      <SourceIcon source={ref} variant="row" />
+                      <span className="ap-source-name">{name}</span>
+                      {location && <span className="ap-source-meta font-mono">{location}</span>}
+                    </button>
+                  );
+                }
+                const scheme = ref.uri.slice(0, ref.uri.indexOf('://'));
+                return (
+                  <span key={ref.uri} className="ap-turnactions-source" title={ref.uri}>
+                    <SourceIcon source={ref} variant="row" />
+                    <span className="ap-source-name">{ref.display}</span>
+                    <span className="ap-source-meta font-mono">{scheme}://</span>
+                  </span>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
 

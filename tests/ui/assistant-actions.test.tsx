@@ -148,11 +148,18 @@ describe('AssistantActions 回合收尾操作栏', () => {
     });
     render(<AssistantActions message={msg} />);
 
+    // 胶囊开关：重叠图标堆叠（每项一枚）+ 计数文本
+    expect(document.querySelectorAll('.ap-sources-stack .ap-src-icon')).toHaveLength(2);
     fireEvent.click(screen.getByRole('button', { name: /引用 2 项/ }));
 
     expect(screen.getByTestId('assistant-sources')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('src/main/foo.sv:42'));
+    // 文件行：文件名居左，「目录:行号」元信息居右
+    fireEvent.click(screen.getByText('foo.sv'));
     expect(openReviewAwareFile).toHaveBeenCalledWith('src/main/foo.sv', 'foo.sv');
+    expect(screen.getByText('src/main:42')).toBeInTheDocument();
+    // host URI 行：展示去掉协议后的路径，右侧标注协议
+    expect(screen.getByText('/run/1')).toBeInTheDocument();
+    expect(screen.getByText('case://')).toBeInTheDocument();
   });
 
   it('无引用内容不显示引用来源入口', () => {

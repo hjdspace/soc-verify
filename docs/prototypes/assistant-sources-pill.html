@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>AssistantActions 引用来源 — 重叠图标胶囊 + 展开卡片（对齐 beautiful-ui）</title>
+<style>
+  /* ── DSH 令牌（摘自 src/renderer/src/styles/ai-panel.css）──────── */
+  .pane {
+    --dsw-bg-base: rgb(255, 255, 255);
+    --dsw-code-block: rgb(249, 250, 251);
+    --dsw-label-primary: rgb(15, 17, 21);
+    --dsw-label-secondary: rgb(97, 102, 107);
+    --dsw-label-caption: rgb(173, 178, 184);
+    --dsw-border-l1: rgba(0, 0, 0, 0.04);
+    --dsw-hover-bg: rgba(38, 49, 72, 0.06);
+  }
+  .pane[data-shade='dark'] {
+    --dsw-bg-base: rgb(21, 21, 23);
+    --dsw-code-block: rgb(27, 27, 28);
+    --dsw-label-primary: rgb(249, 250, 251);
+    --dsw-label-secondary: rgb(207, 211, 214);
+    --dsw-label-caption: rgb(129, 133, 140);
+    --dsw-border-l1: rgba(255, 255, 255, 0.06);
+    --dsw-hover-bg: rgba(255, 255, 255, 0.08);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", system-ui, sans-serif; }
+  .wrap { display: grid; grid-template-columns: 1fr 1fr; height: 100vh; }
+  .pane { padding: 36px 44px; background: var(--dsw-bg-base); color: var(--dsw-label-primary); }
+  .pane h2 { margin: 0 0 20px; font-size: 12px; font-weight: 500; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--dsw-label-caption); }
+  .msg { font-size: 13px; line-height: 1.65; margin: 0 0 4px; }
+  .mono { font-family: Consolas, "JetBrains Mono", monospace; }
+  .icon { display: inline-flex; }
+  .icon svg { width: 12px; height: 12px; }
+
+  /* ── ap-* 来源样式（与 ai-panel.css 同步）──────────────────────── */
+  @keyframes ap-fadeup { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  .ap-turnactions { margin-top: 3px; animation: ap-fadeup 350ms cubic-bezier(0.23, 1, 0.32, 1) 120ms both; }
+  .ap-turnactions-row { display: flex; align-items: center; gap: 2px; }
+  .ap-turnaction-btn {
+    display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 5px;
+    border: 0; background: transparent; border-radius: 6px; font-size: 11px;
+    color: var(--dsw-label-secondary); cursor: pointer;
+    transition: background-color 100ms ease, color 100ms ease;
+  }
+  .ap-turnaction-btn:hover { background: var(--dsw-hover-bg); color: var(--dsw-label-primary); }
+
+  .ap-sources-pill { gap: 6px; padding: 0 7px 0 5px; }
+  .ap-sources-stack { display: flex; }
+  .ap-sources-stack .ap-src-icon + .ap-src-icon { margin-left: -5px; }
+  .ap-sources-collapse {
+    display: grid; grid-template-rows: 0fr; visibility: hidden; opacity: 0;
+    transition: grid-template-rows 300ms cubic-bezier(0.23, 1, 0.32, 1),
+      opacity 300ms cubic-bezier(0.23, 1, 0.32, 1), visibility 300ms;
+  }
+  .ap-sources-collapse[data-open='true'] { grid-template-rows: 1fr; visibility: visible; opacity: 1; }
+  .ap-sources-collapse-clip { overflow: hidden; }
+  .ap-turnactions-sources {
+    display: flex; flex-direction: column; gap: 1px; margin-top: 6px; padding: 4px;
+    border-radius: 10px; background: var(--dsw-code-block);
+    box-shadow: inset 0 0 0 1px var(--dsw-border-l1);
+  }
+  .ap-turnactions-source {
+    display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%;
+    padding: 4px 6px; border-radius: 6px; font-size: 11.5px; text-align: left;
+    color: var(--dsw-label-secondary);
+  }
+  button.ap-turnactions-source { border: 0; background: transparent; cursor: pointer; width: 100%;
+    transition: background-color 100ms ease, color 100ms ease; }
+  button.ap-turnactions-source:hover { background: var(--dsw-hover-bg); color: var(--dsw-label-primary); }
+  .ap-source-name { flex: 0 1 auto; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .ap-source-meta { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap;
+    text-overflow: ellipsis; text-align: right; font-size: 10.5px; color: var(--dsw-label-caption); }
+
+  .ap-src-icon { display: inline-flex; align-items: center; justify-content: center;
+    flex-shrink: 0; color: rgb(255, 255, 255); }
+  .ap-src-icon svg { width: 10px; height: 10px; }
+  .ap-src-icon--row svg { width: 12px; height: 12px; }
+  .ap-src-icon--row { width: 16px; height: 16px; border-radius: 5px;
+    box-shadow: 0 0 0 1px var(--dsw-border-l1); }
+  .ap-src-icon--stack { width: 14px; height: 14px; border-radius: 999px;
+    box-shadow: 0 0 0 1.5px var(--dsw-bg-base); }
+  .ap-src-icon--blue { background: rgb(47, 111, 236); }
+  .ap-src-icon--green { background: rgb(27, 122, 95); }
+  .ap-src-icon--orange { background: rgb(229, 109, 36); }
+  .ap-src-icon--violet { background: rgb(124, 58, 237); }
+  .ap-src-icon--rose { background: rgb(225, 29, 72); }
+  .ap-src-icon--amber { background: rgb(217, 119, 6); }
+
+  /* 建议追问（上下文完整性，非本次改动） */
+  .ap-followups { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+  .ap-followups-label { margin: 0 0 1px; font-size: 11px; font-weight: 500; color: var(--dsw-label-secondary); }
+  .ap-followup-item { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border: 0;
+    background: transparent; border-radius: 6px; font-size: 11.5px; text-align: left; cursor: pointer;
+    color: var(--dsw-label-primary); animation: ap-fadeup 350ms cubic-bezier(0.23, 1, 0.32, 1) both; }
+  .ap-followup-item:hover { background: var(--dsw-hover-bg); }
+  .ap-followup-item svg { width: 12px; height: 12px; color: var(--dsw-label-secondary); opacity: 0.7; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section class="pane" data-shade="light">
+    <h2>Light — 默认展开</h2>
+    <p class="msg">仿真回归已完成，用例 uart_loopback 用时 12.3s，通过率 98%。详细日志见 sim.log，
+      覆盖率数据已归档，需要我深入看某个模块（比如插件系统、AI Agent、覆盖率闭合流程）吗？</p>
+    <div class="ap-turnactions" id="ta-light">
+      <div class="ap-turnactions-row">
+        <button class="ap-turnaction-btn" title="复制" data-icon="copy"></button>
+        <button class="ap-turnaction-btn" title="重新生成" data-icon="refresh"></button>
+        <button class="ap-turnaction-btn ap-sources-pill" data-toggle="collapse-light" aria-expanded="true">
+          <span class="ap-sources-stack" data-stack="sv-blue|case-violet|log-green"></span>
+          <span>引用 4 项</span>
+        </button>
+      </div>
+      <div class="ap-sources-collapse" id="collapse-light" data-open="true">
+        <div class="ap-sources-collapse-clip">
+          <div class="ap-turnactions-sources">
+            <button class="ap-turnactions-source" data-row="sv-blue|soc_top.sv|src/rtl/top:128"></button>
+            <button class="ap-turnactions-source" data-row="tcl-amber|sim_regression.tcl|scripts/regress"></button>
+            <button class="ap-turnactions-source" data-row="log-green|uart_loopback.log|work/uart_loopback:1"></button>
+            <span class="ap-turnactions-source" data-row="case-violet|/run/20260830_001|case://"></span>
+            <span class="ap-turnactions-source" data-row="cov-orange|/uart/block|cov://"></span>
+          </div>
+        </div>
+      </div>
+      <div class="ap-followups">
+        <p class="ap-followups-label">建议追问</p>
+        <button class="ap-followup-item"><span data-icon="corner"></span><span>分析 uart_loopback 的失败原因</span></button>
+        <button class="ap-followup-item"><span data-icon="corner"></span><span>生成覆盖率闭合报告</span></button>
+      </div>
+    </div>
+  </section>
+
+  <section class="pane" data-shade="dark">
+    <h2>Dark — 默认收起（点击胶囊展开）</h2>
+    <p class="msg">仿真回归已完成，用例 uart_loopback 用时 12.3s，通过率 98%。详细日志见 sim.log，
+      覆盖率数据已归档，需要我深入看某个模块（比如插件系统、AI Agent、覆盖率闭合流程）吗？</p>
+    <div class="ap-turnactions" id="ta-dark">
+      <div class="ap-turnactions-row">
+        <button class="ap-turnaction-btn" title="复制" data-icon="copy"></button>
+        <button class="ap-turnaction-btn" title="重新生成" data-icon="refresh"></button>
+        <button class="ap-turnaction-btn ap-sources-pill" data-toggle="collapse-dark" aria-expanded="false">
+          <span class="ap-sources-stack" data-stack="db-rose|log-green"></span>
+          <span>引用 2 项</span>
+        </button>
+      </div>
+      <div class="ap-sources-collapse" id="collapse-dark" data-open="false">
+        <div class="ap-sources-collapse-clip">
+          <div class="ap-turnactions-sources">
+            <button class="ap-turnactions-source" data-row="db-rose|cases.db|.socverify"></button>
+            <button class="ap-turnactions-source" data-row="log-green|regress_rpt.log|work/regress"></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  // lucide 图标（stroke 2.25，与组件 strokeWidth 一致）
+  const PATHS = {
+    copy: ['M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2', 'M2 20h10c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2'],
+    refresh: ['M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8', 'M21 3v5h-5', 'M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16', 'M8 16H3v5'],
+    corner: ['m9 10-5 5 5 5', 'M20 4v7a4 4 0 0 1-4 4H4'],
+    'file-code': ['M4 12.15V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-3.35', 'M14 2v5a1 1 0 0 0 1 1h5', 'm5 16-3 3 3 3', 'm9 22 3-3-3-3'],
+    'file-text': ['M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z', 'M14 2v5a1 1 0 0 0 1 1h5', 'M10 9H8', 'M16 13H8', 'M16 17H8'],
+    flask: ['M14 2v6a2 2 0 0 0 .245.96l5.51 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.755-2.96l5.51-10.08A2 2 0 0 0 10 8V2', 'M6.453 15h11.094', 'M8.5 2h7'],
+    scroll: ['M15 12h-5', 'M15 8h-5', 'M19 17V5a2 2 0 0 0-2-2H4', 'M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3'],
+    chart: ['M3 3v16a2 2 0 0 0 2 2h16', 'M18 17V9', 'M13 17V5', 'M8 17v-3'],
+  };
+  const ICON_OF = { 'sv-blue': 'file-code', 'tcl-amber': 'file-code', 'log-green': 'file-text', 'db-rose': 'file-text', 'case-violet': 'flask', 'cov-orange': 'chart' };
+  const HUE_OF = { 'sv-blue': 'blue', 'tcl-amber': 'amber', 'log-green': 'green', 'db-rose': 'rose', 'case-violet': 'violet', 'cov-orange': 'orange' };
+
+  function svg(name, stroke) {
+    const d = PATHS[name].map((p) => `<path d="${p}"/>`).join('');
+    return `<svg viewBox="0 0 24 24" fill="none" stroke="${stroke || 'currentColor'}" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  }
+
+  function srcIcon(key, variant) {
+    return `<span class="ap-src-icon ap-src-icon--${variant} ap-src-icon--${HUE_OF[key]}">${svg(ICON_OF[key], '#fff')}</span>`;
+  }
+
+  // 填充动作行图标 / 堆叠 / 列表行
+  document.querySelectorAll('[data-icon]').forEach((el) => { el.innerHTML = svg(el.dataset.icon); el.classList.add('icon'); });
+  document.querySelectorAll('[data-stack]').forEach((el) => {
+    el.innerHTML = el.dataset.stack.split('|').map((k) => srcIcon(k, 'stack')).join('');
+  });
+  document.querySelectorAll('[data-row]').forEach((el) => {
+    const [key, name, meta] = el.dataset.row.split('|');
+    el.innerHTML = `${srcIcon(key, 'row')}<span class="ap-source-name">${name}</span><span class="ap-source-meta mono">${meta}</span>`;
+  });
+
+  // 胶囊点击 → grid-rows 0fr→1fr 展开动画
+  document.querySelectorAll('[data-toggle]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const target = document.getElementById(btn.dataset.toggle);
+      const open = target.dataset.open !== 'true';
+      target.dataset.open = String(open);
+      btn.setAttribute('aria-expanded', String(open));
+    });
+  });
+</script>
+</body>
+</html>
