@@ -2909,6 +2909,147 @@ button.ap-ins-pill:hover {
   background: var(--accent);
 }
 
+
+/* ── RecordsTable 拆解吸收（issues #10）：TagList 折叠 / 列宽拖拽 / AI 列逐行计算 ──
+   三个独立可复用件（1053 行 RecordsTable 不整体引入，demo 数据不移植）。
+   视觉/交互参考 beautiful-ui:
+   D:\AI\beautiful-ui\components\primitives\RecordsTable.tsx
+  （TagList L222–269 / startColumnResize 约 L565 / calc effect 约 L502；对应 CSS
+   D:\AI\beautiful-ui\app\globals.css 约 L509–1400 records-* 专属块按需摘取）
+   参考实现 --surface/--ink/--ink-3/--line-strong/--inset/--accent 取映射语义变量
+  （--card/--foreground/--fg-faint/--input/--muted/--primary）；tag 三色由
+   --tag-base color-mix 就地派生（宿主逐项传语义变量），暗档混白沿
+   FilterStatusPill 先例（white 关键字，参考实现刻意复刻非 hex 字面量）。 */
+/* 溢出折叠标签列表：容器裁切，隐藏测量层同款渲染全部标签量宽 */
+.ap-tags {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+}
+.ap-tags-measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  width: max-content;
+  gap: 4px;
+  pointer-events: none;
+  visibility: hidden;
+}
+.ap-tags-measure > span {
+  display: inline-flex;
+}
+/* 单个标签：三色自 --tag-base 派生（明档浅 tint / 暗档饱和底无描边） */
+.ap-tag {
+  display: inline-flex;
+  height: 23px;
+  max-width: 115px;
+  flex-shrink: 0;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--tag-base) 32%, var(--card));
+  border-radius: 8px;
+  padding: 0 7px;
+  color: color-mix(in srgb, var(--tag-base) 92%, var(--foreground));
+  background: color-mix(in srgb, var(--tag-base) 18%, var(--card));
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+[data-shade='dark'] .ap-tag {
+  border-color: color-mix(in srgb, var(--tag-base) 34%, var(--card));
+  color: color-mix(in srgb, var(--tag-base) 86%, white);
+  background: color-mix(in srgb, var(--tag-base) 34%, var(--card));
+}
+/* 「+N」溢出徽标 */
+.ap-tags-more {
+  display: inline-flex;
+  height: 23px;
+  flex-shrink: 0;
+  align-items: center;
+  border: 1px solid var(--input);
+  border-radius: 6px;
+  padding: 0 7px;
+  color: var(--fg-faint);
+  background: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+/* 列宽拖拽手柄：绝对定位于表头单元格右缘（宿主 th 需 position:relative），hover/拖拽显 accent 竖线 */
+.ap-colresize-handle {
+  position: absolute;
+  z-index: 12;
+  top: 0;
+  right: -6px;
+  width: 12px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+.ap-colresize-handle::after {
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  left: 5px;
+  width: 2px;
+  border-radius: 99px;
+  background: var(--primary);
+  content: '';
+  opacity: 0;
+  transform: scaleY(0.65);
+  transition:
+    opacity 120ms ease-out,
+    transform 150ms var(--ease-out-strong);
+}
+.ap-colresize-handle:hover::after,
+.ap-colresize-handle.is-resizing::after {
+  opacity: 1;
+  transform: scaleY(1);
+}
+/* sticky 首列单元格：左锚 + 右缘淡投影（横向滚动时首列悬浮于上方） */
+.ap-tbl-sticky {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--card);
+  box-shadow: 5px 0 8px -10px rgb(0 0 0 / 0.4);
+}
+/* AI 列计算中单元格：灰字 + 右缘脉动圆点 */
+.ap-calc {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ap-calc-label {
+  color: var(--fg-faint);
+}
+.ap-calc-pulse {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: ap-calc-pulse 1.1s ease-in-out infinite;
+}
+@keyframes ap-calc-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+
 /* ── 减弱动效：抽屉滑入与树展开 ─────────────────────────────────
    reduced-motion 不等于零动画——保留 opacity 淡入（帮助理解状态变化），
    禁用位移和高度变化（position change 是主要触发前庭不适的因素）。

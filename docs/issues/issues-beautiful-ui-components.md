@@ -322,7 +322,7 @@ chips 筛选组件：带彩色圆点与计数徽标的状态 chips（计数从�
 
 ## Issue #10: RecordsTable 拆解吸收 — TagList 折叠 / 列宽拖拽 / AI 列逐行计算
 
-**Labels**: `ready-for-agent` `p3`
+**Labels**: `ready-for-agent` `p3` → **已完成**（2026-08-31，三个模式组件本体；失败用例表业务接入另立 issue，见落地记录末条）
 **Blocked by**: #1
 
 ### What to build
@@ -341,11 +341,32 @@ chips 筛选组件：带彩色圆点与计数徽标的状态 chips（计数从�
 
 ### Acceptance criteria
 
-- [ ] 三个模式各自为独立组件/hook，无冰淇淋 demo 数据残留
-- [ ] TagList 在窄列正确折叠 +N，列宽拖拽时实时重算
-- [ ] AI 列逐行计算在失败用例表真实落地（或以 mock 数据先落地组件 + 测试，业务接入另立 issue）
-- [ ] 组件测试覆盖三个模式的外部行为
-- [ ] typecheck + lint + 相关测试通过
+- [x] 三个模式各自为独立组件/hook，无冰淇淋 demo 数据残留
+- [x] TagList 在窄列正确折叠 +N，列宽拖拽时实时重算
+- [x] AI 列逐行计算在失败用例表真实落地（或以 mock 数据先落地组件 + 测试，业务接入另立 issue）→ 组件 + 测试已落地，业务接入另立 issue
+- [x] 组件测试覆盖三个模式的外部行为
+- [x] typecheck + lint + 相关测试通过
+
+### 落地记录（2026-08-31）
+
+- **TagList**（`components/ui/TagList.tsx`）：props 化 `TagList`（items/className/label）+ 导出 `TagItem` 契约与 `fitVisibleCount` 纯函数（贪心装箱单测缝，同 #9 `chartIndexFromPointer` 先例）。隐藏测量层（`visibility: hidden` + `width: max-content`）同款渲染全部标签与「+N」徽标量宽；贪心循环 4px 间隙计入，且存在剩余标签时必须容纳「+N」徽标宽度才允许当前标签入列（溢出徽标本身不溢出）；`useLayoutEffect` 首帧量宽（绘制前完成，无闪烁）+ ResizeObserver 随容器尺寸实时重算（items 引用变化即重算）。契约偏差说明：参考实现 TAG_COLORS 以 oklch 色板按 tag 名硬映射，此处 `color` 由宿主逐项传语义变量（`var(--status-*)` 等），未传取 `--fg-faint` 中性档；title/aria-label 由全部 label 拼出（折叠语义下隐藏项保持可达）。
+- **列宽拖拽**（`components/ui/ColumnResize.tsx`）：`useColumnResize` hook（tableRef/widths/locked/resizingKey/startResize）+ `ColumnResizeHandle` 组件（`role="separator"` + `aria-orientation="vertical"` + 「调整 X 列宽」aria-label）。首帧 `useLayoutEffect` 测量 `thead th` 锁定显式列宽（锁定前宿主自适应铺满，锁定后每列显式化、拖拽只改目标列与表格总宽）；拖拽 window 级 pointermove（`minWidth` 夹紧，缺省 120）+ pointerup/cancel 结束，期间 body 换 `col-resize` 光标并禁文本选择、结束恢复，卸载兜底清理监听与 body 样式。sticky 首列与 fixed 布局为宿主职责（`.ap-tbl-sticky` 左锚 + 投影、`table-fixed`），参考实现「重置列宽」菜单项归宿主状态管理不进 hook。
+- **AI 列逐行计算**（`components/ui/StaggeredCalc.tsx`）：`useStaggeredRows` hook（resolved/running/done/start）+ `CalcCell` 组件（「计算中…」+ 右缘脉动圆点）。参考实现 `calc = {col, resolved}` 单状态承载多列，此处泛化为每列一个 hook 实例（col 字段由宿主实例天然区分）；110ms `setTimeout` 链逐行推进原样保留，rowCount 为 0 或缩减至 resolved 以下立即落定 done（不悬挂定时器），done 后 `start()` 重置重跑；「Go calculate」触发按钮归宿主。
+- **样式**（globals.css，`.ap-ins-*` 块之后）：`.ap-tags*/.ap-tag`、`.ap-colresize-handle`、`.ap-tbl-sticky`、`.ap-calc*` 落共享件——tag 三色自 `--tag-base` color-mix 就地派生（明档浅 tint，暗档 `[data-shade='dark']` 34% 饱和底混白字，沿 FilterStatusPill 的 white 关键字先例），徽标/脉动点/手柄竖线颜色一律语义变量（`--muted/--input/--fg-faint/--primary`）；reduced-motion 不另立档——脉动圆点为 opacity 型状态指示（同 `animate-pulse` 先例保留），其余件无入场/位移动画。
+- **业务接入说明**：issue 列出的首个落地场景（失败用例表「AI 根因」列）需先立「AI 根因批量分析」链路——现有 error-analysis 链路为单用例日志解析/逐用例 omp 会话，无逐行批量数据源，为失败用例表逐行生成 RCA 需批量编排（触发 N 路分析、结果落 store、成本与并发控制）。组件侧（`useStaggeredRows`+`CalcCell`+页脚统计）已就绪，已登记为下方待立 issue（沿 #6「组件先行落地 + 业务接入另立 issue」先例）。组合用例（拖拽列宽 → TagList 经 ResizeObserver 重算折叠）已入测试。
+- **测试**：`tests/ui/tag-list.test.tsx` 12 例——fitVisibleCount 全放下/贪心截断（间隙计入）/徽标宽度预留/空数组/自定义 gap、宽敞全可见无徽标、窄列折叠 +N、title/aria 全标签可达、RO 变宽重算与变窄折叠、items 变化重算、color 注入 `--tag-base` 与缺省无 style、空列表、组合用例（useColumnResize 拖拽改 colgroup 宽 → RO 触发 → TagList 重折叠；jsdom 无布局，以 prototype getter mock 注入宽高、透传 RO stub 手动触发回调——拖拽→RO→重算即真实浏览器链路）；`tests/ui/column-resize.test.tsx` 7 例——首帧测量锁定、拖拽 Δx 累加与结束后失效、minWidth 夹紧（显式/缺省）、body 光标与文本选择切换恢复、is-resizing 态、手柄可访问性、拖拽中途卸载兜底清理；`tests/ui/staggered-calc.test.tsx` 8 例——110ms 推进链与 done 落定无悬挂定时器（fake timers）、stepMs 自定义、rowCount=0 立即落定、推进中 rowCount 缩减立即落定、done 后 start 重置重跑、CalcCell 渲染与 label/className、宿主组合（占位 → 逐行 CalcCell → 完成页脚统计；推进中全部未解析行均为 CalcCell——参考实现 isCalc = index >= resolved）。全量 `tests/ui` 1176 例中 1174 过；2 例失败为 CaseTreePanel 折叠用例（预存，#3 已备案），与本次无关。
+- **附带**：`tests/ui/insight-cards.test.tsx` 的 `comparePage` 类型收窄为 `InsightPage & { card: InsightCompareCard }`——#9 提交（be7cca0）遗留 typecheck 失败（联合类型 `InsightCardData` 上读 `.series`），阻塞本次增量验证，随附单行修复。
+
+---
+
+## 待立 issue: AI 根因批量分析链路（失败用例表「AI 根因」列前置）
+
+**Labels**: `backlog`（待功能场景确认后转 `ready-for-agent`）
+**Blocked by**: 无（StaggeredCalc/CalcCell 组件已就绪，见 #10）
+
+### What to build
+
+让失败用例表（FailuresTab / FailureFocusPanel）能逐行展示 AI 根因（RCA）：为失败用例批量发起错误分析（omp 会话编排——触发 N 路 [仿真分析]、结果落 store、成本与并发控制），表内以 `useStaggeredRows` + `CalcCell` 逐行呈现分析进度（未解析行「计算中…」+ 脉动点），完成页脚统计「N 项已解析」。需补齐：① 批量触发入口与并发编排（现有 error-analysis 为单用例链路）；② RCA 结果的持久化与按 caseName 检索的 store；③ 表格宿主的「AI 根因」列渲染与手动重跑入口。
 
 ---
 
