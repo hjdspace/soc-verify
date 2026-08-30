@@ -230,6 +230,8 @@ function parseFileRef(text: string): ParsedFileRef | null {
     // Not a recognized extension — only accept if it has a directory separator
     // and the extension looks like a code file (at least 2 chars)
     if (!hasDirSeparator || ext.length < 2) return null;
+    // 所有段都以大写字母开头的是名称罗列（如 Tavily/Exa/Firecrawl/Z.AI），不是项目内路径
+    if (normalizedPath.split('/').every((seg) => /^[A-Z]/.test(seg))) return null;
   }
 
   // If it's just a bare filename without directory separator,

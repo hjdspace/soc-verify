@@ -203,4 +203,15 @@ describe('extractMessageReferences 引用来源提取', () => {
   it('无引用内容返回空数组', () => {
     expect(extractMessageReferences('普通文本，没有可识别的引用。')).toEqual([]);
   });
+
+  it('名称罗列（所有段大写开头，如 Tavily/Exa/Firecrawl/Z.AI）不判为文件引用', () => {
+    const content = '免密钥方案只剩 Tavily/Exa/Firecrawl/Z.AI 可选，任选一家配置即可。';
+    expect(extractMessageReferences(content)).toEqual([]);
+  });
+
+  it('未识别扩展名但含小写段的项目路径仍识别为文件引用', () => {
+    const refs = extractMessageReferences('脚本见 tools/gen_regs.pl 生成寄存器。');
+    expect(refs).toHaveLength(1);
+    expect(refs[0]).toMatchObject({ kind: 'file', path: 'tools/gen_regs.pl' });
+  });
 });

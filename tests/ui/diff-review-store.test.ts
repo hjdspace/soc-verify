@@ -5,6 +5,7 @@ vi.mock('@renderer/lib/trpc', () => ({
     project: {
       getFileDiff: { query: vi.fn() },
       applyDiffRejections: { mutate: vi.fn() },
+      fileExists: { query: vi.fn() },
     },
   },
 }));
@@ -13,6 +14,7 @@ import { useSessionCoreStore } from '@renderer/stores/session-core';
 import type { ChatMessage } from '@renderer/stores/session-types';
 import { openReviewAwareFile, useDiffReviewStore, normalizeReviewKey } from '@renderer/stores/diff-review';
 import { useProjectStore } from '@renderer/stores/project';
+import { useToastStore } from '@renderer/stores/toast';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { trpc } from '@renderer/lib/trpc';
 import type { FileDiffResult } from '@shared/types';
@@ -177,6 +179,8 @@ describe('Diff Review flow', () => {
     useWorkbenchStore.setState({ tabs: [], activeTabId: null, open: defaultWorkbenchOpen });
     vi.mocked(trpc.project.getFileDiff.query).mockReset();
     vi.mocked(trpc.project.applyDiffRejections.mutate).mockReset();
+    // openReviewAwareFile 打开前会做存在性校验，默认所有路径存在；负向用例单独覆盖
+    vi.mocked(trpc.project.fileExists.query).mockResolvedValue(true);
   });
 
   it('automatically projects completed editing tool events into the global Review Queue', () => {
@@ -503,7 +507,7 @@ describe('Diff Review flow', () => {
     expect(useWorkbenchStore.getState().tabs[0]?.destination.type).toBe('file');
   });
 
-  it('resolves a relative path against the project root before opening a file tab', () => {
+  it('resolves a relative path against the project root before opening a file tab', async () => {
     useProjectStore.setState({
       currentProjectId: 'project-1',
       projects: [{ id: 'project-1', name: 'Project', rootPath: 'D:\\project', createdAt: 1, lastOpenedAt: 1 }],
@@ -511,6 +515,7 @@ describe('Diff Review flow', () => {
 
     openReviewAwareFile('README.md', 'README.md');
 
+    await vi.waitFor(() => expect(useWorkbenchStore.getState().tabs[0]?.destination).toBeDefined());
     expect(useWorkbenchStore.getState().tabs[0]?.destination).toEqual({
       type: 'file',
       path: 'D:/project/README.md',
@@ -518,7 +523,7 @@ describe('Diff Review flow', () => {
     });
   });
 
-  it('opens a path with a :line-end suffix as the bare file carrying the line range', () => {
+  it('opens a path with a :line-end suffix as the bare file carrying the line range', async () => {
     useProjectStore.setState({
       currentProjectId: 'project-1',
       projects: [{ id: 'project-1', name: 'Project', rootPath: 'D:\\project', createdAt: 1, lastOpenedAt: 1 }],
@@ -526,6 +531,7 @@ describe('Diff Review flow', () => {
 
     openReviewAwareFile('src/config/settings-schema.ts:4889-4940', 'settings-schema.ts');
 
+    await vi.waitFor(() => expect(useWorkbenchStore.getState().tabs[0]?.destination).toBeDefined());
     expect(useWorkbenchStore.getState().tabs[0]?.destination).toEqual({
       type: 'file',
       path: 'D:/project/src/config/settings-schema.ts',
@@ -533,6 +539,25 @@ describe('Diff Review flow', () => {
       line: 4889,
       endLine: 4940,
       revealSeq: expect.any(Number),
+    });
+  });
+
+  it('skips opening and raises a toast when the existence check reports the file missing', async () => {
+    useProjectStore.setState({
+      currentProjectId: 'project-1',
+      projects: [{ id: 'project-1', name: 'Project', rootPath: 'D:\\project', createdAt: 1, lastOpenedAt: 1 }],
+    });
+    vi.mocked(trpc.project.fileExists.query).mockResolvedValue(false);
+
+    openReviewAwareFile('Tavily/Exa/Firecrawl/Z.AI', 'Z.AI');
+
+    await vi.waitFor(() =>
+      expect(useToastStore.getState().toasts.some((t) => t.message === '文件不存在，已取消打开')).toBe(true),
+    );
+    expect(useWorkbenchStore.getState().tabs).toHaveLength(0);
+    expect(trpc.project.fileExists.query).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      filePath: 'D:/project/Tavily/Exa/Firecrawl/Z.AI',
     });
   });
 

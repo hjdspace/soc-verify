@@ -885,6 +885,24 @@ class ProjectManagerImpl extends EventEmitter {
     return readFile(filePath, 'utf-8');
   }
 
+  /**
+   * 文件是否存在且为常规文件。路径沙箱规则与 readFile 一致：
+   * `~` 前缀展开后判断；其余路径必须在项目目录内。供引用点击前的存在性校验。
+   */
+  async fileExists(projectId: string, filePath: string): Promise<boolean> {
+    const project = this.getProject(projectId);
+    if (!project) return false;
+
+    if (isTildePath(filePath)) return existsSync(expandTildePath(filePath));
+
+    if (!this.isPathWithinProjectDirs(project, filePath)) return false;
+    try {
+      return (await stat(filePath)).isFile();
+    } catch {
+      return false;
+    }
+  }
+
   async writeFile(projectId: string, filePath: string, content: string): Promise<void> {
     const project = this.getProject(projectId);
     if (!project) throw new Error(`Project not found: ${projectId}`);

@@ -287,6 +287,19 @@ export const projectRouter = t.router({
       return projectManager.readFile(input.projectId, input.filePath);
     }),
 
+  /** Whether a path exists as a regular file (same sandbox rules as readFile). */
+  fileExists: t.procedure
+    .input((raw): { projectId: string; filePath: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.filePath !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and filePath are required' });
+      }
+      return { projectId: r.projectId, filePath: r.filePath };
+    })
+    .query(async ({ input }) => {
+      return projectManager.fileExists(input.projectId, input.filePath);
+    }),
+
   writeFile: t.procedure
     .input((raw): { projectId: string; filePath: string; content: string } => {
       const r = raw as Record<string, unknown>;

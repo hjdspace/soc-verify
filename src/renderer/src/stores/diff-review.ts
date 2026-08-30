@@ -23,6 +23,7 @@ import { trpc } from '@renderer/lib/trpc';
 import { useSessionCoreStore } from './session-core';
 import { useWorkbenchStore, openFileDestination, parsePathLineRange, type FileLineRange } from './workbench';
 import { useProjectStore } from './project';
+import { useToastStore } from './toast';
 import type { FileDiffResult } from '@shared/types';
 import {
   type HunkState,
@@ -465,9 +466,24 @@ export function openReviewAwareFile(filePath: string, _fileName: string): void {
   const extraDirPaths = useProjectStore.getState().extraDirs.map((d) => d.path);
   const resolvedPath = rootPath ? resolveInsideProject(barePath, rootPath, extraDirPaths) ?? barePath : barePath;
 
-  // 未审阅的文件由 openFile 打开编辑器并加载 diff；其余情况也统一走 openFile
-  // （openFile 内部对已审阅/不在队列的路径回退为普通文件打开）。
-  useDiffReviewStore.getState().openFile(resolvedPath, lineRange);
+  // 引用路径可能来自 AI 文本的误识别（如名称罗列 Tavily/Exa/Firecrawl/Z.AI）或已删除的文件，
+  // 打开前先确认存在，避免中间编辑器被"加载失败"错误内容占据。
+  const projectId = useProjectStore.getState().currentProjectId;
+  const open = () => useDiffReviewStore.getState().openFile(resolvedPath, lineRange);
+  if (!projectId) {
+    open();
+    return;
+  }
+  void trpc.project.fileExists
+    .query({ projectId, filePath: resolvedPath })
+    .then((exists) => {
+      if (exists) {
+        open();
+        return;
+      }
+      useToastStore.getState().error('文件不存在，已取消打开', resolvedPath);
+    })
+    .catch(open);
 }
 
 /**
