@@ -145,7 +145,7 @@ CommandPalette 补齐：匹配片段高亮、非空清除按钮（fade-in 150ms�
 
 ## Issue #5: SelectionActions — 划选交给 AI 操作条
 
-**Labels**: `ready-for-agent` `p0`
+**Labels**: `ready-for-agent` `p0` → **已完成**（2026-08-30）
 **Blocked by**: #1
 
 ### What to build
@@ -158,12 +158,21 @@ CommandPalette 补齐：匹配片段高亮、非空清除按钮（fade-in 150ms�
 
 ### Acceptance criteria
 
-- [ ] 划选 hook 独立成文件，可脱离 DOM Selection 单测
-- [ ] 气泡内划选出现浮条，定位在选区最后一行下方居中，窗口 resize 后重算
-- [ ] 状态机完整：thinking → streaming → result，Discard 恢复原文，Retry 重跑当前动作
-- [ ] 提交动作走现有 session 发送链路（作为一条带引用上下文的消息）
-- [ ] 组件测试：状态机流转（mock hook）、Keep/Discard/Retry 行为
-- [ ] typecheck + lint + 相关测试通过
+- [x] 划选 hook 独立成文件，可脱离 DOM Selection 单测
+- [x] 气泡内划选出现浮条，定位在选区最后一行下方居中，窗口 resize 后重算
+- [x] 状态机完整：thinking → streaming → result，Discard 恢复原文，Retry 重跑当前动作
+- [x] 提交动作走现有 session 发送链路（作为一条带引用上下文的消息）
+- [x] 组件测试：状态机流转（mock hook）、Keep/Discard/Retry 行为
+- [x] typecheck + lint + 相关测试通过
+
+### 落地记录（2026-08-30）
+
+- **划选 hook**（`src/renderer/src/hooks/use-selection-anchor.ts`）：`selectionchange`/window resize/ResizeObserver（host）三路触发统一经 `place()` rAF 批处理重算（同帧合并）；锚点 x=选区包围盒水平中心（`(left+right)/2`）、y=`getClientRects()` 最后一行 bottom + gap（默认 8）。DOM Selection 读取抽成可注入 `readSelection` 纯函数（默认 `readDomSelection`：折叠/空选区/越出 host → null）——UI 测试注入假 reader 即可脱离真实划选（issue 指定的唯一测试缝）。`enabled=false` 移除监听但保留已得锚点（回合进行中浮条不消失、不跳位）。
+- **状态机 hook**（`src/renderer/src/hooks/use-selection-run.ts`）：phase 由 session 状态**渲染期派生**而非逐事件推进——run 时快照在场 assistant 消息 id，本回合回复 = 自尾扫描首个不在场 id 的 assistant 消息；无首字 → thinking、有内容/思考 → streaming、status idle/error + 无 pending tool + 占位收尾 → result；result 用 latch 锁存（回合落定后用户手动发新回合不会把浮条拖回 busy）。keep/discard/retry/dismiss 四出口，discard/retry 前都经 `onCancel`（宿主恢复原文）；retry 先 onCancel 再原请求重跑（消息 id 快照使删后重发的新回合仍可被识别）。执行（onSubmit）与恢复（onCancel）全归宿主回调，测试直接构造假 session 对象驱动、零 store mock。
+- **组件**（`components/ui/SelectionActions.tsx`）：全受控 props（anchor/visible/phase/request/streamText），36px 胶囊包 28px 控件同心圆角；iconoir 10 个图标全换 lucide（解释/改进/精简/展开/翻译 + Check/X/RotateCcw/ChevronDown/ArrowUp）；前二动作常驻、后三收进 chevron 展开区（`aria-expanded`）；自定义 prompt 输入——输入时动作区 max-width 塌缩、发送槽位展开（首字符锁定当前条宽防跳变），Esc 清空恢复；busy = spinner + Shimmer 标签（thinking）/实时回复预览（streaming，尾 6 字符复用 ai-panel.css `.ap-stream-tail` 模糊尾缘，与 MarkdownRenderer STREAM_TAIL_CHARS 对齐）；result = 保留（primary）/放弃/重试；条宽切换走 WAAPI `animate()` 320ms `cubic-bezier(0.23,1,0.32,1)`（无 Element.animate 的环境直接落终态宽度，jsdom 可测）；条上 `mousedown` preventDefault（输入框除外）保住文档选区，点击动作时引用文本仍高亮。偏差说明：busy 末尾追加减动关闭按钮——真实会话回合无法在条内取消，必须给用户脱离浮条的出口（回合照常进行）。
+- **会话链路**（`components/chat/SelectionActionsHost.tsx` + RightPanel MessageBubble）：Host 包裹 MarkdownRenderer（TV 卡/错误消息分支不接），划选出浮条定位于选区最后一行下方居中（`translate3d` + `translateX(-50%)`，选区折叠后停在最后锚点隐藏）。快捷动作/自定义 prompt 组装为「指令文案 + `> 引用自你的回复：` blockquote（2000 字截断）」经 `sendMessage` 走现有 session 发送链路；Discard/Retry 经新增 `session-messages.removeMessagesFrom`（截断 fromIndex 起消息 + `persistSessionMessages` 全量覆盖持久化，基线 = 提交前 `messages.length`）恢复提交前会话状态——注意 omp 运行时上下文无法回写，仅本地记录与持久化存储回退。流式/回合执行中停止划选监听（enabled 门控），已开始回合（request 非空）继续驱动浮条。
+- **样式**（globals.css，`.ap-rec-*` 块之后）：`.ap-sel-*` 落 globals.css 共享件——layer（translate3d 承载锚点位移 + opacity 过渡）、pill（`--shadow-overlay`）、slot（max-width+opacity+translateX 三段过渡承担 prompt/动作区互斥折叠）、control/primary/iconbtn/send（语义变量 `--card/--foreground/--background/--muted-foreground/--fg-faint/--border/--accent`，active 按压缩放）；reduced-motion 下锚点位移与 slot 折叠去过渡（保留 opacity）、入场 pop-in 关闭。
+- **测试**：`tests/ui/selection-anchor.test.tsx`（9 例：锚点换算/gap/清空/selectionchange/resize/引用稳定/enabled 开关 + readDomSelection 契约）、`tests/ui/selection-run.test.tsx`（10 例：状态机流转/result 锁存/pending tool 不落定/keep/discard/retry/dismiss/自定义 prompt）、`tests/ui/selection-actions.test.tsx`（14 例：动作渲染与展开/prompt 发送与槽位塌缩/空 prompt/锚点 translate3d 定位与隐藏/mousedown 拦截/thinking/streaming 预览尾缘/result 三按钮/splitStreamPreview）、`tests/ui/selection-host.test.tsx`（6 例：mock 划选 hook + store——引用消息组装断言/Discard 基线/Retry 二次发送/Keep 不删消息）、`tests/session/session-store.test.ts` 新增 removeMessagesFrom 2 例（截断回 idle 全量持久化/fromIndex 0 清空）。全量 `tests/ui` 1069 例中 1067 过；2 例失败为 CaseTreePanel 折叠用例（预存，#3 已备案）。另 `tests/session/session-store.test.ts` 有 1 例预存失败（sendMessage 期望缺 `thinkingLevel: "default"`，干净基线复跑同样失败，与本次无关）。
 
 ---
 

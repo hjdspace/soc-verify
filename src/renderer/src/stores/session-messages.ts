@@ -477,6 +477,7 @@ export interface SessionMessagesState {
   compactSession: () => Promise<boolean>;
   steerSession: (message: string) => Promise<void>;
   regenerateLast: () => Promise<void>;
+  removeMessagesFrom: (sessionId: string, fromIndex: number) => void;
   handleSessionEvent: (sessionId: string, event: unknown) => void;
   registerMessagesEventListeners: () => void;
 }
@@ -811,6 +812,26 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
       rollback();
       useToastStore.getState().error('重新生成失败', tRPCError(err));
     }
+  },
+
+  // 截断 fromIndex 起的全部消息并持久化（全量覆盖写，删除同步到存储）。
+  // 划选操作条的 Discard/Retry 用它移除本回合新增消息、恢复提交前的
+  // 会话状态；omp 运行时上下文无法回写，仅本地记录与持久化存储回退
+  removeMessagesFrom: (sessionId, fromIndex) => {
+    const coreGet = useSessionCoreStore.getState;
+    const coreSet = useSessionCoreStore.setState.bind(useSessionCoreStore);
+    coreSet((s) => ({
+      sessions: s.sessions.map((sess) =>
+        sessionMatchesId(sess, sessionId)
+          ? {
+            ...sess,
+            status: sess.status === 'creating' ? sess.status : 'idle',
+            messages: sess.messages.slice(0, Math.max(0, fromIndex)),
+          }
+          : sess,
+      ),
+    }));
+    persistSessionMessages(coreGet().sessions.find((sess) => sessionMatchesId(sess, sessionId)));
   },
 
   registerMessagesEventListeners: () => {

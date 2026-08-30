@@ -22,6 +22,7 @@ import { AskQuestionCard } from '@renderer/components/chat/AskQuestionCard';
 import { TodoPanel } from '@renderer/components/chat/TodoPanel';
 import { ChangeSummaryBar } from '@renderer/components/chat/ChangeSummaryBar';
 import { ErrorMessage } from '@renderer/components/chat/ErrorMessage';
+import { SelectionActionsHost } from '@renderer/components/chat/SelectionActionsHost';
 import { SearchClearButton, SearchEmptyState, SearchMatch } from '@renderer/components/ui/SearchList';
 import { getLatestTodoState } from '@renderer/components/chat/tool-helpers';
 import { useTodoPanelStore } from '@renderer/stores/todo-panel';
@@ -1489,7 +1490,9 @@ function MessageBubble({ message, session, isLastAssistant, turnSettled = true }
       ) : message.content?.trimStart().startsWith('[错误]') ? (
         <ErrorMessage content={message.content} />
       ) : message.content ? (
-        <MarkdownRenderer content={message.content} streaming={isStreaming} />
+        <SelectionActionsHost session={session} enabled={!isStreaming && turnSettled && !!session}>
+          <MarkdownRenderer content={message.content} streaming={isStreaming} />
+        </SelectionActionsHost>
       ) : (
         isStreaming && !message.thinking && (
           <div className="flex items-center gap-1 text-muted-foreground">

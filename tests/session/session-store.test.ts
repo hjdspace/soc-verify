@@ -1222,3 +1222,43 @@ describe('SessionStore — MCP mount notice suppression', () => {
     expect(assistantMsg?.content).toBe('');
   });
 });
+
+describe('SessionStore — removeMessagesFrom（划选操作条 Discard 恢复原文）', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    useSessionStore.setState({ sessions: [], currentSessionId: null });
+    mockCreate.mockResolvedValue({ sessionId: 'session_test_1' });
+    mockGetMessages.mockResolvedValue([]);
+    mockGetPersistedSessions.mockResolvedValue([]);
+    mockGetStoredMessages.mockResolvedValue([]);
+    mockSaveStoredMessages.mockResolvedValue(undefined);
+    await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
+  });
+
+  it('截断 fromIndex 起的消息、回 idle 并全量持久化', async () => {
+    await useSessionMessagesStore.getState().sendMessage('第一问');
+    await useSessionMessagesStore.getState().sendMessage('第二问');
+
+    const before = useSessionStore.getState().sessions[0];
+    expect(before.messages.length).toBe(4); // user+assistant ×2
+
+    useSessionMessagesStore.getState().removeMessagesFrom(before.id, 2);
+
+    const after = useSessionStore.getState().sessions[0];
+    expect(after.messages).toHaveLength(2);
+    expect(after.messages[0].content).toBe('第一问');
+    expect(after.messages[1].role).toBe('assistant');
+    expect(after.status).toBe('idle');
+    // 全量覆盖持久化——删除同步到存储
+    expect(mockSaveStoredMessages).toHaveBeenCalled();
+  });
+
+  it('fromIndex 0 清空全部消息', async () => {
+    await useSessionMessagesStore.getState().sendMessage('唯一一问');
+    const session = useSessionStore.getState().sessions[0];
+
+    useSessionMessagesStore.getState().removeMessagesFrom(session.id, 0);
+
+    expect(useSessionStore.getState().sessions[0].messages).toHaveLength(0);
+  });
+});
