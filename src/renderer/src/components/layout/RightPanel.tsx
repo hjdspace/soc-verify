@@ -53,6 +53,13 @@ const currentSessionId = useSessionCoreStore((s) => s.currentSessionId);
     }
     return undefined;
   }, [currentSession]);
+  // 回合是否已收尾：只要还有未落地（执行中/待执行）的工具调用，回合就仍在进行——
+  // 兜底 status 短暂回闲（message_end 与 tool_execution_start 的间隙、事件迟到/丢失）
+  // 时操作栏闪现在中间文本段下的场景
+  const turnSettled = useMemo(
+    () => !currentSession?.messages.some((m) => m.role === 'tool' && !m.toolResult),
+    [currentSession],
+  );
 const createSession = useSessionCoreStore((s) => s.createSession);
 const closeSession = useSessionCoreStore((s) => s.closeSession);
 const switchSession = useSessionCoreStore((s) => s.switchSession);
@@ -776,7 +783,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
               item.kind === 'run' ? (
                 <ToolRunGroup key={`run-${item.messages[0].id}`} messages={item.messages} />
               ) : (
-                <MessageBubble key={item.message.id} message={item.message} session={currentSession} isLastAssistant={item.message.id === lastAssistantId} />
+                <MessageBubble key={item.message.id} message={item.message} session={currentSession} isLastAssistant={item.message.id === lastAssistantId} turnSettled={turnSettled} />
               ),
             )}
             {/* Approval request cards */}
@@ -1394,7 +1401,7 @@ const RunningIndicator = memo(function RunningIndicator() {
   );
 });
 
-function MessageBubble({ message, session, isLastAssistant }: { message: ChatMessage; session?: SessionEntry; isLastAssistant?: boolean }) {
+function MessageBubble({ message, session, isLastAssistant, turnSettled = true }: { message: ChatMessage; session?: SessionEntry; isLastAssistant?: boolean; turnSettled?: boolean }) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   if (message.role === 'tool') {
@@ -1523,8 +1530,9 @@ function MessageBubble({ message, session, isLastAssistant }: { message: ChatMes
       )}
       {/* 回合收尾操作栏只在「回合结束后的最后一条助手消息」上渲染——
           多步回合的中间文本段（工具调用前后的说明）与流式中/工具执行中的
-          消息都不显示，避免每段文本都挂一个复制按钮 */}
-      {!isStreaming && isLastAssistant
+          消息都不显示，避免每段文本都挂一个复制按钮；
+          turnSettled 兜底：还有工具在跑（未落地）时即使 status 短暂回闲也不渲染 */}
+      {!isStreaming && isLastAssistant && turnSettled
         && (session?.status === 'idle' || session?.status === 'error')
         && message.content && !canRenderTVCard && !message.content.trimStart().startsWith('[错误]') && (
         <AssistantActions message={message} session={session} />

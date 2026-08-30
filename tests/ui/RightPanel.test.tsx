@@ -594,16 +594,20 @@ describe('回合收尾操作栏渲染位置', () => {
     { id: 't3', role: 'tool', content: '', timestamp: 3, toolName: 'bash', toolArgs: {} },
     { id: 'a4', role: 'assistant', content: '当前环境支持以下技能……', timestamp: 4 },
   ];
+  // 工具已落地（有结果）的完成态序列
+  const settledTurnMessages: ChatMessage[] = turnMessages.map((m) =>
+    m.role === 'tool' ? { ...m, toolResult: { ok: true } } : m,
+  );
 
-  function seedTurn(status: SessionEntry['status'], streamingLast = false) {
+  function seedTurn(status: SessionEntry['status'], streamingLast = false, messages = settledTurnMessages) {
     useSessionCoreStore.setState({
       sessions: [{
         id: 's1',
         projectId: 'p1',
         name: 'Test',
         status,
-        messages: turnMessages.map((m, i) =>
-          streamingLast && i === turnMessages.length - 1 ? { ...m, isStreaming: true } : { ...m },
+        messages: messages.map((m, i) =>
+          streamingLast && i === messages.length - 1 ? { ...m, isStreaming: true } : { ...m },
         ),
         composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
         createdAt: Date.now(),
@@ -643,7 +647,15 @@ describe('回合收尾操作栏渲染位置', () => {
   });
 
   it('回合进行中（工具执行间隙，无流式消息）不渲染操作栏', () => {
-    seedTurn('tool_executing');
+    seedTurn('tool_executing', false, turnMessages);
+    render(<RightPanel width={320} />);
+    expect(screen.queryByTestId('assistant-actions')).not.toBeInTheDocument();
+  });
+
+  it('工具执行中（未落地）即使会话状态空闲也不渲染操作栏', () => {
+    // 兜底场景：status 因事件间隙/迟到短暂回闲，但工具还没有结果——
+    // 回合并未收尾，中间文本段下不得闪现复制/重新生成
+    seedTurn('idle', false, turnMessages);
     render(<RightPanel width={320} />);
     expect(screen.queryByTestId('assistant-actions')).not.toBeInTheDocument();
   });
