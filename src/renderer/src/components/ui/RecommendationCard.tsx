@@ -26,7 +26,7 @@ export type RecommendationOption = {
   tone?: string;
   /** 置信度/状态标签（页脚与备选行右侧小字） */
   label?: string;
-  /** 主 CTA 文案 */
+  /** 主 CTA 文案；空串表示该建议不可确认（不渲染 CTA，如 TV 建议字段不全） */
   cta: string;
   ctaVariant?: PillButtonVariant;
 };
@@ -62,7 +62,8 @@ type RecommendationCardProps = {
   onAccept?: (option: RecommendationOption) => void | Promise<void>;
   /** accepted 态 CTA 文案（默认「已接受」） */
   acceptedLabel?: string;
-  /** 外部受控已接受态（如违例已被确认）；缺省由组件内部管理 */
+  /** 外部受控已接受态（如违例已被确认的 TV 单选项场景）；缺省由组件内部
+      管理（切换备选时重置）。受控态不随备选切换重置——调用方自行负责 */
   accepted?: boolean;
   /** 备选抽屉开关文案（默认「备选方案」） */
   alternativesLabel?: string;
@@ -183,15 +184,17 @@ export function RecommendationCard({
               {alternativesLabel}
             </PillButton>
           )}
-          <PillButton
-            variant={isAccepted ? 'success' : (active.ctaVariant ?? 'accent')}
-            size="sm"
-            disabled={disabled || busy || isAccepted}
-            onClick={() => void handleAccept()}
-          >
-            {busy && <Loader2 className="size-3 animate-spin" />}
-            {isAccepted ? acceptedLabel : active.cta}
-          </PillButton>
+          {active.cta !== '' && (
+            <PillButton
+              variant={isAccepted ? 'success' : (active.ctaVariant ?? 'accent')}
+              size="sm"
+              disabled={disabled || busy || isAccepted}
+              onClick={() => void handleAccept()}
+            >
+              {busy && <Loader2 className="size-3 animate-spin" />}
+              {isAccepted ? acceptedLabel : active.cta}
+            </PillButton>
+          )}
         </span>
       </div>
     </div>

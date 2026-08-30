@@ -141,6 +141,19 @@ describe('TVAISuggestionCard（RecommendationCard TV 场景）', () => {
     expect(screen.getByText('✗ Issue')).toBeInTheDocument();
   });
 
+  it('confirmer/result 不全时不渲染确认 CTA（防止不写 store 的假 success 态）', () => {
+    render(
+      <TVAISuggestionCard
+        content={JSON.stringify({ confirmer: 'bob', reason: '仅确认人，缺结果', confidence: 0.5 })}
+        violationId={1}
+      />,
+    );
+    expect(screen.getByTestId('recommendation-card')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /确认并应用/ })).not.toBeInTheDocument();
+    // 重新分析/拒绝仍可用
+    expect(screen.getByRole('button', { name: /重新分析/ })).not.toBeDisabled();
+  });
+
   it('非 TV 建议 JSON 不渲染卡片（由调用方回退 Markdown 渲染）', () => {
     const { container } = render(<TVAISuggestionCard content="普通回复文本" violationId={1} />);
     expect(container).toBeEmptyDOMElement();

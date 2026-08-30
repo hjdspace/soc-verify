@@ -77,27 +77,32 @@ function normalizeSuggestion(parsed: unknown): AISuggestion | null {
   };
 }
 
-/** confidence(0–1) → 信号条格数 1–3（>0 才显示信号条） */
-function confidenceToSignal(confidence: number): number {
-  if (confidence >= 0.7) return 3;
-  if (confidence >= 0.4) return 2;
-  return 1;
-}
-
-/** 信号条语义色：1 格 fail / 2 格 aborted / 3 格 pass（索引 0 不触达） */
-const SIGNAL_TONES = [
-  'var(--status-fail)',
-  'var(--status-fail)',
-  'var(--status-aborted)',
-  'var(--status-pass)',
-];
-
-function confidenceLabel(confidence: number): string {
+/** confidence(0–1) 分层：信号条格数与文案标签同源派生（阈值单点维护） */
+function confidenceTier(confidence: number): { signal: 1 | 2 | 3; label: string } {
   const pct = Math.round(confidence * 100);
-  if (confidence >= 0.7) return `高置信度 ${pct}%`;
-  if (confidence >= 0.4) return `需复核 ${pct}%`;
-  return `低置信度 ${pct}%`;
+  if (confidence >= 0.7) return { signal: 3, label: `高置信度 ${pct}%` };
+  if (confidence >= 0.4) return { signal: 2, label: `需复核 ${pct}%` };
+  return { signal: 1, label: `低置信度 ${pct}%` };
 }
+
+/** 信号条语义色：1 格 fail / 2 格 aborted / 3 格 pass */
+const SIGNAL_TONES: Record<1 | 2 | 3, string> = {
+  1: 'var(--status-fail)',
+  2: 'var(--status-aborted)',
+  3: 'var(--status-pass)',
+};
+
+/** 确认结果徽章：语义色 14% tint 底 + 同色文字（ValuePill 同款派生，随主题取值） */
+const RESULT_BADGE_STYLE = {
+  pass: {
+    color: 'var(--status-pass)',
+    backgroundColor: 'color-mix(in srgb, var(--status-pass) 14%, transparent)',
+  },
+  issue: {
+    color: 'var(--status-fail)',
+    backgroundColor: 'color-mix(in srgb, var(--status-fail) 14%, transparent)',
+  },
+} as const;
 
 /** 建议字段行（确认人/确认结果/分析理由/详细分析共用） */
 function SuggestionRow({ label, children }: { label: string; children: ReactNode }) {
@@ -143,9 +148,12 @@ export function TVAISuggestionCard({ content, violationId }: TVAISuggestionCardP
   if (!suggestion) return null;
 
   const hasConfidence = suggestion.confidence > 0;
-  const signal = hasConfidence ? confidenceToSignal(suggestion.confidence) : 0;
+  const tier = hasConfidence ? confidenceTier(suggestion.confidence) : null;
 
   // AISuggestion → 通用建议卡 Option 契约（单选项，无备选抽屉）
+  // confirmer/result 不全时建议不可确认：cta 置空串隐藏 CTA（对齐旧卡行为，
+  // 防止点击后早退不写 store 却显示「已应用」的假 success 态）
+  const confirmable = Boolean(suggestion.confirmer && suggestion.result);
   const option: RecommendationOption = {
     key: `${suggestion.confirmer ?? ''}|${suggestion.result ?? ''}|${suggestion.reason ?? ''}|${suggestion.confidence}`,
     body: (
@@ -154,12 +162,8 @@ export function TVAISuggestionCard({ content, violationId }: TVAISuggestionCardP
         {suggestion.result && (
           <SuggestionRow label="确认结果">
             <span
-              className={cn(
-                'inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium',
-                suggestion.result === 'pass'
-                  ? 'bg-green-500/15 text-green-600 dark:text-green-400'
-                  : 'bg-red-500/15 text-red-600 dark:text-red-400',
-              )}
+              className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium"
+              style={RESULT_BADGE_STYLE[suggestion.result === 'pass' ? 'pass' : 'issue']}
             >
               {suggestion.result === 'pass' ? '✓ Pass' : '✗ Issue'}
             </span>
@@ -174,10 +178,10 @@ export function TVAISuggestionCard({ content, violationId }: TVAISuggestionCardP
       || suggestion.analysis?.trim()
       || [suggestion.confirmer, suggestion.result].filter(Boolean).join(' · ')
       || 'TV AI 建议',
-    ...(hasConfidence
-      ? { signal, tone: SIGNAL_TONES[signal], label: confidenceLabel(suggestion.confidence) }
+    ...(tier
+      ? { signal: tier.signal, tone: SIGNAL_TONES[tier.signal], label: tier.label }
       : {}),
-    cta: rejected ? '已拒绝' : '确认并应用',
+    cta: confirmable ? (rejected ? '已拒绝' : '确认并应用') : '',
     ctaVariant: 'accent',
   };
 
