@@ -37,6 +37,7 @@ import { Breadcrumb } from './Breadcrumb';
 import { EditorStatusBar, type CursorPosition } from './EditorStatusBar';
 import { Minimap } from './Minimap';
 import { MermaidDiagram } from '@renderer/components/chat/MermaidDiagram';
+import { SelectionActionsHost } from '@renderer/components/chat/SelectionActionsHost';
 
 // ── Markdown 预览辅助 ──────────────────────────────────────────
 
@@ -663,7 +664,12 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
       <div className="min-h-0 flex-1 overflow-hidden">
         {isMd && previewMode && !reviewEntry ? (
           <div className="markdown-preview h-full overflow-auto">
-            <div className="mx-auto max-w-4xl px-8 py-6">
+            {/* 划选 AI 操作条宿主接管原内容容器（锚点随内容滚动平移）；
+                引用标注带文件路径，会话落当前 AI 会话 */}
+            <SelectionActionsHost
+              source={{ kind: 'file', path: filePath }}
+              className="mx-auto max-w-4xl px-8 py-6"
+            >
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeRaw]}
@@ -737,7 +743,7 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
               >
                 {content}
               </ReactMarkdown>
-            </div>
+            </SelectionActionsHost>
           </div>
         ) : isHtml && previewMode && !reviewEntry ? (
           <iframe
@@ -747,35 +753,39 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
             sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
           />
         ) : (
-          <div className="flex h-full w-full overflow-hidden">
-            <CodeMirror
-              value={content}
-              onChange={setContent}
-              extensions={editorExtensions}
-              readOnly={reviewActive}
-              theme={themeMode === 'dark' ? 'dark' : 'light'}
-              height="100%"
-              width="100%"
-              className="h-full min-w-0 flex-1 overflow-hidden"
-              onCreateEditor={(view) => {
-                editorViewRef.current = view;
-              }}
-              basicSetup={{
-                lineNumbers: true,
-                highlightActiveLine: true,
-                highlightActiveLineGutter: true,
-                foldGutter: true,
-                bracketMatching: true,
-                closeBrackets: true,
-                autocompletion: true,
-                indentOnInput: true,
-                tabSize: 2,
-              }}
-            />
-            {minimapEnabled && (
-              <Minimap getView={() => editorViewRef.current} />
-            )}
-          </div>
+          /* CodeMirror 编辑区（代码/文本，含 AI 改动内联审阅的只读态）：
+             host 包住内部滚动区，锚点靠 scroll 捕获重算跟随选区 */
+          <SelectionActionsHost source={{ kind: 'file', path: filePath }} className="h-full w-full">
+            <div className="flex h-full w-full overflow-hidden">
+              <CodeMirror
+                value={content}
+                onChange={setContent}
+                extensions={editorExtensions}
+                readOnly={reviewActive}
+                theme={themeMode === 'dark' ? 'dark' : 'light'}
+                height="100%"
+                width="100%"
+                className="h-full min-w-0 flex-1 overflow-hidden"
+                onCreateEditor={(view) => {
+                  editorViewRef.current = view;
+                }}
+                basicSetup={{
+                  lineNumbers: true,
+                  highlightActiveLine: true,
+                  highlightActiveLineGutter: true,
+                  foldGutter: true,
+                  bracketMatching: true,
+                  closeBrackets: true,
+                  autocompletion: true,
+                  indentOnInput: true,
+                  tabSize: 2,
+                }}
+              />
+              {minimapEnabled && (
+                <Minimap getView={() => editorViewRef.current} />
+              )}
+            </div>
+          </SelectionActionsHost>
         )}
       </div>
       {/* Vim 状态栏（仅 Vim 模式开启时显示） */}

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { SelectionActionsHost } from '@renderer/components/chat/SelectionActionsHost';
 import { useSessionCoreStore } from '@renderer/stores/session-core';
 import type { ChatMessage, SessionEntry } from '@renderer/stores/session-types';
@@ -15,13 +15,16 @@ import type { ChatMessage, SessionEntry } from '@renderer/stores/session-types';
  */
 
 vi.mock('@renderer/hooks/use-selection-anchor', () => ({
-  useSelectionAnchor: () => ({
-    selection: {
-      text: '被选中的片段',
-      bounds: { left: 0, top: 0, right: 100, bottom: 16 },
-      lastLine: { left: 0, top: 8, right: 100, bottom: 16 },
-    },
-    anchor: { x: 40, y: 24 },
+  // 尊重 enabled 门控：无会话时宿主禁用监听 → selection/anchor 均为 null
+  useSelectionAnchor: (options: { enabled?: boolean }) => ({
+    selection: options?.enabled
+      ? {
+          text: '被选中的片段',
+          bounds: { left: 0, top: 0, right: 100, bottom: 16 },
+          lastLine: { left: 0, top: 8, right: 100, bottom: 16 },
+        }
+      : null,
+    anchor: options?.enabled ? { x: 40, y: 24 } : null,
     place: vi.fn(),
   }),
 }));
@@ -277,5 +280,83 @@ describe('SelectionActionsHost — 气泡接入', () => {
     expect(storeMessageIds()).toHaveLength(3);
     // 回 idle：动作区再次可用（mock 选区仍在）
     expect(screen.getByTestId('selection-action-explain')).toBeTruthy();
+  });
+});
+
+describe('SelectionActionsHost — 文件/产物表面接入（source 来源 + session 回退）', () => {
+  it('不传 session 时回退当前会话，引用标注为「引用自文件 <path>」', async () => {
+    setCoreSession([assistantMsg('a1', '回复')]);
+    render(
+      <SelectionActionsHost source={{ kind: 'file', path: '/proj/view/dv/tb_top.sv' }}>
+        <p>文件内容</p>
+      </SelectionActionsHost>,
+    );
+
+    // 浮条可见（当前会话存在 → 划选监听开启）
+    expect(screen.getByTestId('selection-bar').style.opacity).toBe('1');
+    fireEvent.click(screen.getByTestId('selection-action-explain'));
+    await waitFor(() => {
+      expect(trpc.session.send.mutate).toHaveBeenCalledWith({
+        sessionId: 'sess_rt_1',
+        message: '请解释下面引用的这段内容\n\n> 引用自文件 /proj/view/dv/tb_top.sv：\n> 被选中的片段',
+        images: undefined,
+      });
+    });
+  });
+
+  it('自定义 prompt 同样携带文件来源标注', async () => {
+    setCoreSession([assistantMsg('a1', '回复')]);
+    render(
+      <SelectionActionsHost source={{ kind: 'file', path: '/docs/report.md' }}>
+        <p>文件内容</p>
+      </SelectionActionsHost>,
+    );
+    fireEvent.change(screen.getByTestId('selection-prompt'), { target: { value: '总结要点' } });
+    fireEvent.click(screen.getByTestId('selection-send'));
+    await waitFor(() => {
+      expect(trpc.session.send.mutate).toHaveBeenCalledWith({
+        sessionId: 'sess_rt_1',
+        message: '总结要点\n\n> 引用自文件 /docs/report.md：\n> 被选中的片段',
+        images: undefined,
+      });
+    });
+  });
+
+  it('文件来源回合的 Discard 按当前会话基线恢复原文', async () => {
+    setCoreSession([assistantMsg('a1', '回复')]);
+    render(
+      <SelectionActionsHost source={{ kind: 'file', path: '/rtl/top.sv' }}>
+        <p>文件内容</p>
+      </SelectionActionsHost>,
+    );
+    fireEvent.click(screen.getByTestId('selection-action-improve'));
+    await waitFor(() => {
+      expect(storeMessageIds()).toHaveLength(3);
+    });
+    // 回合回复落定（真实 sendMessage 追加的流式占位转为静止、状态回闲）→ result
+    const live = useSessionCoreStore.getState().sessions[0];
+    act(() => {
+      useSessionCoreStore.setState({
+        sessions: [{
+          ...live,
+          status: 'idle',
+          messages: live.messages.map((m) => ({ ...m, isStreaming: false })),
+        }],
+      });
+    });
+    expect(screen.getByTestId('selection-keep')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('selection-discard'));
+    // 基线 = 提交前的 1 条，截断恢复原文
+    expect(storeMessageIds()).toEqual(['a1']);
+  });
+
+  it('无任何会话时禁用划选监听（浮条不可见，动作无发送目标）', () => {
+    useSessionCoreStore.setState({ sessions: [], currentSessionId: null });
+    render(
+      <SelectionActionsHost source={{ kind: 'file', path: '/rtl/top.sv' }}>
+        <p>文件内容</p>
+      </SelectionActionsHost>,
+    );
+    expect(screen.getByTestId('selection-bar').style.opacity).toBe('0');
   });
 });

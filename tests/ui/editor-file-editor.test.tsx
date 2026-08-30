@@ -1094,3 +1094,42 @@ describe('FileEditor — line reveal', () => {
     expect(view.dispatch).not.toHaveBeenCalled();
   });
 });
+
+// ── 划选 AI 操作条宿主接入（文件/产物表面）──────────────────────
+
+describe('FileEditor — SelectionActions host', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedExtensions = [];
+    mockVimEnabled = false;
+    mockMinimapEnabled = false;
+    trpc.project.readFile.query.mockResolvedValue('// sample code\nmodule alu_add;');
+  });
+
+  it('CodeMirror 编辑区挂载划选宿主（selection-bar 在编辑模式渲染）', async () => {
+    render(
+      <FileEditor projectId="proj-1" filePath="/rtl/alu_add.sv" fileName="alu_add.sv" />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('codemirror-mock')).toBeTruthy();
+    });
+    // jsdom 无真实选区 → 浮条隐藏态（opacity 0），但宿主已挂载
+    expect(screen.getByTestId('selection-bar')).toBeTruthy();
+  });
+
+  it('Markdown 预览挂载划选宿主（selection-bar 在预览模式渲染）', async () => {
+    trpc.project.readFile.query.mockResolvedValue('# Title\n\nBody text');
+    render(
+      <FileEditor projectId="proj-1" filePath="/docs/readme.md" fileName="readme.md" />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('codemirror-mock')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTitle('切换到预览模式'));
+    await waitFor(() => {
+      expect(screen.getByTestId('selection-bar')).toBeTruthy();
+    });
+  });
+});

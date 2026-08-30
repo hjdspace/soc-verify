@@ -10,7 +10,10 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
  * 浮条锚点——x 取选区包围盒水平中心，y 取 `getClientRects()` 最后一行
  * bottom + gap（浮条贴在选区最后一行下方居中）。重算入口 `place()` 用
  * rAF 批处理（同一帧内的多次触发合并，避免流式重排下的中间态闪烁）；
- * host 尺寸变化（ResizeObserver）与窗口 resize 均触发重算。
+ * host 尺寸变化（ResizeObserver）、窗口 resize 与滚动均触发重算——
+ * 滚动监听走 document 捕获（scroll 不冒泡），覆盖两类宿主：host 在
+ * 滚动容器内（重算无害，锚点本就随内容平移）与 host 包住内部滚动区
+ * （如 CodeMirror 的 .cm-scroller，重算是锚点跟随选区的唯一途径）。
  *
  * 可测试性：DOM Selection 读取抽成可注入的 `readSelection` 纯函数，
  * UI 测试直接传假 reader 驱动 hook，不模拟真实划选。
@@ -119,11 +122,14 @@ export function useSelectionAnchor(options: {
     if (!enabled) return undefined;
     document.addEventListener('selectionchange', place);
     window.addEventListener('resize', place);
+    // scroll 不冒泡，捕获监听才能收到任意子树滚动容器（CodeMirror 等）的事件
+    document.addEventListener('scroll', place, true);
     const observer = new ResizeObserver(place);
     if (hostRef.current) observer.observe(hostRef.current);
     return () => {
       document.removeEventListener('selectionchange', place);
       window.removeEventListener('resize', place);
+      document.removeEventListener('scroll', place, true);
       observer.disconnect();
       if (frameRef.current !== null) {
         cancelAnimationFrame(frameRef.current);

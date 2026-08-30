@@ -136,6 +136,33 @@ describe('useSelectionAnchor', () => {
     expect(result.current.anchor).toBe(first);
   });
 
+  it('子树滚动容器 scroll 事件触发重算（捕获监听，CodeMirror 内滚场景）', async () => {
+    // 几何可变快照：滚动前后选区位置不同，验证重算真的换了锚点
+    let shifted = false;
+    const movingSnapshot = (): SelectionSnapshot =>
+      shifted
+        ? { ...BASE_SNAPSHOT, bounds: { ...BASE_SNAPSHOT.bounds, left: 200, right: 400 }, lastLine: { ...BASE_SNAPSHOT.lastLine, bottom: 120 } }
+        : BASE_SNAPSHOT;
+    const { result } = renderAnchor({ readSelection: movingSnapshot });
+    await act(async () => {
+      result.current.place();
+    });
+    await waitFor(() => {
+      expect(result.current.anchor).toEqual({ x: 200, y: 78 });
+    });
+
+    // scroll 不冒泡：事件派发在 host 后代的滚动元素上，document 捕获监听仍应收到
+    shifted = true;
+    const scroller = document.createElement('div');
+    document.querySelector('[data-testid="host"]')!.appendChild(scroller);
+    await act(async () => {
+      scroller.dispatchEvent(new Event('scroll'));
+    });
+    await waitFor(() => {
+      expect(result.current.anchor).toEqual({ x: 300, y: 128 });
+    });
+  });
+
   it('enabled=false 不监听 selectionchange（已得锚点保留）', async () => {
     const { result, rerender } = renderAnchor({ readSelection: () => BASE_SNAPSHOT });
     act(() => {
