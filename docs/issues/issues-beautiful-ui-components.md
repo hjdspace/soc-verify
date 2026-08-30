@@ -372,7 +372,7 @@ chips 筛选组件：带彩色圆点与计数徽标的状态 chips（计数从�
 
 ## Issue #11: TaskRows 视觉吸收 — TodoPanel 换肤
 
-**Labels**: `ready-for-agent` `p3`
+**Labels**: `ready-for-agent` `p3` → **已完成**（2026-08-31）
 **Blocked by**: None（独立于 #1，可随时做）
 
 ### What to build
@@ -385,9 +385,16 @@ chips 筛选组件：带彩色圆点与计数徽标的状态 chips（计数从�
 
 ### Acceptance criteria
 
-- [ ] TodoPanel 现有功能与数据链路不变，现有 `tests/ui/todo-panel.test.tsx` 全绿
-- [ ] 四态视觉升级（徽章 pop-in、重试图标旋转、错峰入场），`prefers-reduced-motion` 降级
-- [ ] typecheck + lint + `npx vitest run tests/ui/todo-panel.test.tsx` 通过
+- [x] TodoPanel 现有功能与数据链路不变，现有 `tests/ui/todo-panel.test.tsx` 全绿
+- [x] 四态视觉升级（徽章 pop-in、重试图标旋转、错峰入场），`prefers-reduced-motion` 降级
+- [x] typecheck + lint + `npx vitest run tests/ui/todo-panel.test.tsx` 通过
+
+### 落地记录（2026-08-31）
+
+- **视觉吸收（`components/chat/TodoPanel.tsx` 换肤，不新建组件）**：任务行卡片化——透明 hover 行升级为独立卡片（`--dsw-input-major` 面 + `--dsw-border-l1` 环 + `--dsw-shadow-lv2` 阴影 + rounded-lg，宿主面仍为 `--dsw-tip`，对应参考实现 Capsules variant 的 surface+shadow-card 层级语法）；错峰 fade-up 入场 `fade-up 450ms var(--ease-out-strong) both`，延迟 `i*80ms` 行内联注入且**索引跨阶段全局递增**（阶段偏移 = 之前所有阶段行数之和，纯派生无渲染期外变量）；四态徽章升级 TaskRows 语法——终态实徽 `pop-in 300ms`（completed=绿实徽白勾、abandoned=红实徽 X，`--status-pass/--status-fail` 实底 + 图形取 `--background`，同 DiffTable IncludedMark 暗主题对比处理），in_progress/pending 保持蓝环旋转/虚线环（即参考实现 SpinnerRing 的既有等价物）；放弃态追加红 tint 重试 pill「已放弃 + 旋转重试图标」（color-mix 14% 混行卡面 + `spin 1.2s`，TaskRows Failed pill 同款）。
+- **契约偏差说明**：① 「详情 grid-rows 0fr→1fr 展开过渡」落点为**面板展开体**（summary 头的详情区）——todo 项无详情步骤数据（`TodoItemData = { text, status }`），且现有测试契约「收起后内容不在文档」要求折叠即卸载、transition 无法承担挂载过渡，故展开方向以 `@keyframes ap-todo-open`（0fr→1fr + opacity 300ms）挂载动画承担，折叠方向维持卸载；② 参考实现 Failed + 旋转重试图标语义为「将自动重试」，按 issue 文本「失败/放弃态红色徽章 + 旋转重试图标」原样保留视觉（issue 为规范）——其中「失败态」在四态数据模型无对应档（`normalizeTodoStatus` 无 failed 映射，dropped/skipped 均收敛 abandoned），由 abandoned 独自承担，重试语义差异在此备案；③ 参考实现每行是带 chevron 的 button（点击展开详情），todo 项无详情数据不引入假交互，行去 hover 底色（原 hover 无动作属死交互）；④ 完成态不追加「已完成」pill——参考实现 Completed pill 配套其数字环 badge 语法，本项目徽章即状态，满屏重复 pill 徒增噪音；⑤ useTick 脚本化演示状态机按 issue 要求不移植；⑥ AC「徽章 pop-in」落在终态实徽（TaskRows 语法中 pop-in 仅属于 Badge，SpinnerRing 不播）——in_progress/pending 保持蓝环旋转/虚线环，非终态无「状态出现」事件可高亮；卡片化配套微调随之入账：徽章规格 14px→16px（实徽与 10px 图形比例）、行 gap-1 与滚动容器内边距、阶段头 padding 对齐新卡面网格；放弃 pill 的 `fade-in 200ms` 在状态变更路径生效（初次挂载错峰期被行级 fade-up 遮蔽，无时序冲突）。
+- **样式**（globals.css，`.ap-calc-*` 之后）：`.ap-todo-*` 落共享件——row `fade-up 450ms`、badge `pop-in 300ms`、body `ap-todo-open 300ms`（keyframes `grid-template-rows 0fr→1fr` + opacity）、retry pill 红 tint `color-mix` 就地派生 + `fade-in 200ms`、retry 图标 `spin 1.2s`；颜色取 DSW 令牌（`--dsw-input-major/--dsw-border-l1/--dsw-shadow-lv2`）+ 语义状态变量（`.ai-panel` 作用域内自动映射 DSW success/error）；reduced-motion 降级——行入场改纯 fade-in（200ms、延迟归零，沿 `.ap-ctx-card` 先例），badge/pill/旋转图标/展开体动画全关（pop-in 关闭沿 `.ap-diff-applied` 先例，opacity 语义由行 fade-in 承担）。
+- **测试**：`tests/ui/TodoPanel.test.tsx`（即 issue 所写 todo-panel.test.tsx，实际文件名 PascalCase）新增 5 例——行卡片化卡面 + 错峰 i*80ms、错峰索引跨阶段全局递增、终态徽章 pop-in 双徽 + 进行中旋转环非徽章、放弃态重试 pill 唯一性 + 旋转图标、展开体壳挂载/折叠卸载；既有 8 例（进度分段文案/四态文本样式/收起展开/阶段名显隐/空清单）零改动全绿。TodoPanel + RightPanel + ai-drawer 相关 43 例全过，typecheck + lint 通过。
 
 ---
 

@@ -3050,6 +3050,52 @@ button.ap-ins-pill:hover {
 }
 
 
+/* ── TodoPanel 任务卡换肤（issues #11）──
+   TaskRows 视觉吸收：行卡片化（input-major 面 + lv2 阴影，宿主面为
+   --dsw-tip）、错峰 fade-up 入场（i*80ms，延迟由行内联 animationDelay
+   注入）、终态徽章 pop-in（绿实徽勾 / 红实徽 X）、放弃态红 tint 重试
+   pill（图标旋转）、展开体 grid-rows 0fr→1fr 入场（折叠方向为卸载，
+   过渡由 keyframes 挂载动画承担）。
+   视觉/交互参考 beautiful-ui: D:\AI\beautiful-ui\components\primitives\TaskRows.tsx
+   （useTick 脚本化演示状态机不移植）。颜色取 DSW 令牌 +
+   语义状态变量（--status-pass/--status-fail，.ai-panel 作用域内自动
+   映射 DSW success/error），tint 在使用点 color-mix 就地派生。 */
+.ap-todo-row {
+  animation: fade-up 450ms var(--ease-out-strong) both;
+}
+
+.ap-todo-badge {
+  animation: pop-in 300ms var(--ease-out-strong) both;
+}
+
+/* 展开体入场：0fr→1fr + opacity（transition 需常驻挂载，与「收起即卸载」契约冲突） */
+.ap-todo-body {
+  display: grid;
+  animation: ap-todo-open 300ms var(--ease-out-strong) both;
+}
+
+@keyframes ap-todo-open {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+}
+
+/* 放弃态重试 pill：红 tint 就地派生（混行卡面），fade-in 入场 */
+.ap-todo-retry {
+  background: color-mix(in srgb, var(--status-fail) 14%, var(--dsw-input-major));
+  color: var(--status-fail-foreground);
+  animation: fade-in 200ms var(--ease-out-strong) both;
+}
+
+.ap-todo-retry-icon {
+  animation: spin 1.2s linear infinite;
+}
+
 /* ── 减弱动效：抽屉滑入与树展开 ─────────────────────────────────
    reduced-motion 不等于零动画——保留 opacity 淡入（帮助理解状态变化），
    禁用位移和高度变化（position change 是主要触发前庭不适的因素）。
@@ -3122,5 +3168,19 @@ button.ap-ins-pill:hover {
   /* 洞察分段条：选中 sheen 去 width 过渡（保留 opacity 淡入） */
   .ap-ins-seg-sheen {
     transition: opacity 150ms ease !important;
+  }
+
+  /* 任务卡（TodoPanel）：错峰入场改纯 fade-in（去位移）+ 延迟归零；
+     徽章 pop-in、放弃 pill 淡入、重试图标旋转、展开体 grid-rows 动画全关 */
+  .ap-todo-row {
+    animation-name: fade-in !important;
+    animation-duration: 200ms !important;
+    animation-delay: 0ms !important;
+  }
+  .ap-todo-badge,
+  .ap-todo-retry,
+  .ap-todo-retry-icon,
+  .ap-todo-body {
+    animation: none !important;
   }
 }

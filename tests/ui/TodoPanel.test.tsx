@@ -272,3 +272,76 @@ describe('TodoPanel — 4 todo lists + completion process', () => {
     expect(screen.getByText('测试')).toBeInTheDocument();
   });
 });
+
+// ── TaskRows 视觉吸收（issues #11）──────────────────────
+
+describe('TodoPanel — TaskRows 视觉吸收（issues #11）', () => {
+  it('行卡片化：任务行独立卡面 + 错峰 fade-up 延迟（i*80ms）', () => {
+    const { container } = render(
+      <TodoPanel phases={todoList3_mixed} isExecuting={false} collapsed={false} onToggleCollapse={vi.fn()} />,
+    );
+
+    const rows = container.querySelectorAll<HTMLElement>('.ap-todo-row');
+    expect(rows).toHaveLength(4);
+    expect(rows[0].style.animationDelay).toBe('0ms');
+    expect(rows[1].style.animationDelay).toBe('80ms');
+    expect(rows[2].style.animationDelay).toBe('160ms');
+    expect(rows[3].style.animationDelay).toBe('240ms');
+    // 卡面：input-major 面 + lv2 阴影
+    expect(rows[0].className).toContain('bg-[var(--dsw-input-major)]');
+    expect(rows[0].className).toContain('shadow-[var(--dsw-shadow-lv2)]');
+    expect(rows[0].className).toContain('rounded-lg');
+  });
+
+  it('错峰索引跨阶段全局递增', () => {
+    render(<TodoPanel phases={todoList2_phase1} isExecuting={false} collapsed={false} onToggleCollapse={vi.fn()} />);
+
+    // 「系统架构设计」是第 3 项（设计阶段首项）→ 全局 index 2 → 160ms
+    const row = screen.getByText('系统架构设计').closest<HTMLElement>('.ap-todo-row');
+    expect(row?.style.animationDelay).toBe('160ms');
+  });
+
+  it('终态徽章 pop-in：完成绿实徽勾、放弃红实徽 X，进行中保持旋转环', () => {
+    const { container } = render(
+      <TodoPanel phases={todoList3_mixed} isExecuting={false} collapsed={false} onToggleCollapse={vi.fn()} />,
+    );
+
+    // 完成 + 放弃 = 2 个 pop-in 徽章（含 svg 图形）
+    const badges = container.querySelectorAll('.ap-todo-badge');
+    expect(badges).toHaveLength(2);
+    expect(badges[0].className).toContain('bg-status-pass');
+    expect(badges[0].querySelector('svg')).not.toBeNull();
+    // 放弃徽章红底
+    const abandonedRow = screen.getByText('老旧功能重构').closest('.ap-todo-row');
+    expect(abandonedRow?.querySelector('.ap-todo-badge')?.className).toContain('bg-status-fail');
+    // 进行中：旋转环，非徽章
+    const inProgressRow = screen.getByText('团队会议').closest('.ap-todo-row');
+    const ring = inProgressRow?.firstElementChild;
+    expect(ring?.className).toContain('spin_1s_linear_infinite');
+    expect(ring?.className).not.toContain('ap-todo-badge');
+  });
+
+  it('放弃态红 tint 重试 pill：文案 + 旋转重试图标，其余状态不渲染', () => {
+    const { container } = render(
+      <TodoPanel phases={todoList3_mixed} isExecuting={false} collapsed={false} onToggleCollapse={vi.fn()} />,
+    );
+
+    expect(screen.getByText('已放弃')).toBeInTheDocument();
+    const pills = container.querySelectorAll('.ap-todo-retry');
+    expect(pills).toHaveLength(1);
+    expect(pills[0].querySelector('.ap-todo-retry-icon')).not.toBeNull();
+  });
+
+  it('展开体 grid-rows 0fr→1fr 入场壳：展开挂载、折叠卸载', () => {
+    const { container, rerender } = render(
+      <TodoPanel phases={todoList1_pending} isExecuting={false} collapsed={false} onToggleCollapse={vi.fn()} />,
+    );
+
+    expect(container.querySelector('.ap-todo-body')).not.toBeNull();
+
+    rerender(
+      <TodoPanel phases={todoList1_pending} isExecuting={false} collapsed={true} onToggleCollapse={vi.fn()} />,
+    );
+    expect(container.querySelector('.ap-todo-body')).toBeNull();
+  });
+});
