@@ -6,6 +6,37 @@
 
 ---
 
+## [0.4.4](https://github.com/hjdspace/soc-verify/compare/v0.4.3...v0.4.4) (2026-08-31)
+
+### Features
+
+* **ui:** beautiful-ui 设计语言公共映射层——语义阴影/缓动/keyframes 收敛，GlideMenu 行间滑动高亮共享化
+* **ui:** 划选 AI 操作条 SelectionActions——划选浮条 + Discard/Retry 恢复原文，扩展到主页面文件/产物表面（FileEditor md 预览、CodeMirror 编辑区挂载宿主）
+* **ui:** 洞察轮播 InsightCards——recharts 双系列对比折线/异常检测柱状/占比分段条，InsightPanel 宿主映射三查询 + 追问 pill 开 AI 面板
+* **ui:** 洞察带全宽布局——InsightPanel 去 max-w-md，InsightCards 页内左右分栏，窄容器降级单列
+* **ui:** TaskRows 视觉吸收 TodoPanel 换肤——任务行卡片化、错峰 fade-up 入场、终态实徽 pop-in、放弃态红 tint 重试 pill
+* **ui:** RecordsTable 拆解吸收三模式——TagList 溢出折叠、列宽拖拽手柄、AI 根因列逐行计算
+* **ui:** 批量编辑采纳表 DiffTable——stage 状态机分阶段着色（删除红 tint → 新增行展开 + 页脚 fade-up），逐行勾选统计与 busy 确认
+* **ui:** 通用建议卡 RecommendationCard——置信度信号条 + 备选方案抽屉 + CTA success 态，TVAISuggestionCard 重构接入
+* **ui:** 状态 chips 筛选 FilterTable——计数徽标实时派生 + FilterCollapseRow grid-rows 折叠，HistoryTable 接入状态筛选
+* **ui:** ScrubField 数值微调控件——label 即 slider 手柄三路改值，覆盖率阈值 TargetsSection 与 RunConfigModal 类型筛选接入
+* **ui:** CommandPalette 搜索体验强化——SearchList 小件共享化（清除按钮/空状态卡/匹配片段高亮），HistoryView 搜索框同模式复用
+* **ui:** 引用来源展开升级 ContextCards chunk 卡——chip 错峰淡入，KB 预览摘要卡同形态接入
+* **chat:** 引用来源对齐 beautiful-ui——重叠图标堆叠胶囊 + 展开卡片列表
+* **chat:** 模型菜单瘦身（仅名称 + 上下文大小）、输入框弹窗对齐 beautiful-ui Prompt Bar
+
+### Bug Fixes
+
+* **chat:** 引用来源不再把名称罗列误判为文件路径——全大写段拒绝 + 打开前存在性校验兜底
+* **editor:** 工具卡片路径行号后缀剥离——打开文件并自动选中指定行区间
+* **chat:** 回合收尾操作栏增加未落地工具兜底门槛
+* **ui:** 划选操作条 review 修复——Retry 后 Discard 基线改取 live store，pending tool 扫描限定本回合
+* **ui:** 状态 chips 筛选分隔线改跟随可见末行；建议卡字段不全时隐藏确认 CTA 消除假 success 态
+
+### Refactor
+
+* **ui:** RecordsTable/批量采纳表 review 修订——renderTag 渲染层收敛单点，removal/addition 行共用 interactiveRowProps
+
 ## [0.4.3](https://github.com/hjdspace/soc-verify/compare/v0.4.2...v0.4.3) (2026-08-29)
 
 ### Features
