@@ -2518,6 +2518,8 @@ a.ap-ctx-chip,
    SVG 属性不能用 var()，系列色由组件读 :root 计算值注入（theme store 驱动重渲染）。 */
 .ap-ins {
   width: 100%;
+  /* 容器查询锚点：洞察带宽度随宿主（含 AI 面板 docked 挤压）变化，窄容器降级单列 */
+  container-type: inline-size;
 }
 .ap-ins-pager {
   display: flex;
@@ -2563,19 +2565,40 @@ a.ap-ctx-chip,
 .ap-ins-pager-btn:active {
   transform: scale(0.96);
 }
-/* 页切换交叉淡入：fade-in 纯 opacity（reduced-motion 保留策略内，无位移） */
+/* 页切换交叉淡入：fade-in 纯 opacity（reduced-motion 保留策略内，无位移）。
+ * 全宽洞察带页内分栏：左叙述列 + 右图卡（区别于参考实现窄栏竖排） */
 .ap-ins-page {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  gap: 16px;
+  margin-top: 10px;
   animation: fade-in 180ms var(--ease-out-strong) both;
 }
+@container (max-width: 660px) {
+  .ap-ins-page {
+    grid-template-columns: 1fr;
+  }
+}
+.ap-ins-narrative {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+  /* 与右栏图卡 12px 内边距光学对齐 */
+  padding-top: 10px;
+}
+.ap-ins-narrative .ap-ins-pill {
+  /* 叙述列拉伸至图卡等高时 pill 落底；单列降级时 auto 归零、由 gap 提供间距 */
+  margin-top: auto;
+}
 .ap-ins-prose {
-  margin: 6px 0 0;
-  font-size: 12.5px;
-  line-height: 1.55;
-  color: var(--muted-foreground);
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--foreground);
 }
 .ap-ins-card {
   min-height: 278px;
-  margin-top: 8px;
   padding: 12px;
   border-radius: 12px;
   background: var(--card);
@@ -2608,14 +2631,14 @@ a.ap-ctx-chip,
   color: var(--status-fail);
 }
 
-/* 对比卡 legend */
+/* 对比卡 legend：宽幅带下紧凑靠左（均分会在全宽时把两系列摊到两端） */
 .ap-ins-legend {
   display: flex;
   align-items: flex-start;
-  gap: 16px;
+  gap: 24px;
 }
 .ap-ins-legend-item {
-  flex: 1 1 0;
+  flex: 0 1 auto;
   min-width: 0;
 }
 .ap-ins-legend-name {

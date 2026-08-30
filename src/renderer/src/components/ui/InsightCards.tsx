@@ -33,6 +33,8 @@ import { cn } from '@renderer/lib/utils';
  *   后重读；HTML 元素（圆点/分段条）仍用 var() 内联，随主题自动取值。
  * - 参考实现的三张卡写死冰淇淋演示数据，此处全部 props 化（pages 契约），
  *   演示数据不进正式代码；宿主见 views/dashboard/InsightPanel。
+ * - 布局为全宽洞察带（区别于参考实现的窄栏竖排）：页内左右分栏，左栏叙述 +
+ *   追问 pill，右栏图卡吃满剩余宽度；容器 <660px 时降级单列（@container）。
  * 样式类 .ap-ins-* 落 globals.css；测试断言 external DOM（testid/aria/inline
  * style），recharts 在 jsdom 量不到尺寸，测试以透传 stub 替换（见 insight-cards.test）。
  */
@@ -378,7 +380,8 @@ function AnomalyCardView({ data, shade }: { data: InsightAnomalyCard; shade: The
             <BarChart data={barData} margin={{ top: 42, right: 6, bottom: 6, left: 6 }}>
               <XAxis dataKey="i" hide />
               <YAxis hide domain={[0, yMax]} />
-              <Bar dataKey="value" isAnimationActive={false} radius={[3, 3, 0, 0]}>
+              {/* maxBarSize 防宽幅 stage 下柱子摊满类目带宽（窄布局继承不受影响） */}
+              <Bar dataKey="value" maxBarSize={48} isAnimationActive={false} radius={[3, 3, 0, 0]}>
                 {barData.map((_, i) => (
                   <Cell
                     key={i}
@@ -548,26 +551,28 @@ export function InsightCards({ pages, title = '洞察', onAskPill, testId, class
           </button>
         </span>
       </div>
-      {/* key 重挂载承载页切换交叉淡入（fade-in 纯 opacity，符合 reduced-motion 保留策略） */}
+      {/* 全宽洞察带：左栏叙述 + 追问 pill（mt-auto 落底），右栏图卡吃满剩余宽度 */}
       <div className="ap-ins-page" key={page.key}>
-        <p className="ap-ins-prose">{page.prose}</p>
+        <div className="ap-ins-narrative">
+          <p className="ap-ins-prose">{page.prose}</p>
+          {onAskPill ? (
+            <button
+              type="button"
+              className="ap-ins-pill"
+              data-testid="ins-pill"
+              onClick={() => onAskPill(page.pill)}
+            >
+              {page.pill}
+            </button>
+          ) : (
+            <span className="ap-ins-pill" data-testid="ins-pill" data-static="true">
+              {page.pill}
+            </span>
+          )}
+        </div>
         <div className="ap-ins-card" data-testid={`ins-card-${page.card.kind}`}>
           <InsightCardView card={page.card} shade={shade} />
         </div>
-        {onAskPill ? (
-          <button
-            type="button"
-            className="ap-ins-pill"
-            data-testid="ins-pill"
-            onClick={() => onAskPill(page.pill)}
-          >
-            {page.pill}
-          </button>
-        ) : (
-          <span className="ap-ins-pill" data-testid="ins-pill" data-static="true">
-            {page.pill}
-          </span>
-        )}
       </div>
     </div>
   );

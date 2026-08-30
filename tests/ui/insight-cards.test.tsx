@@ -213,6 +213,21 @@ describe('InsightCards 分页', () => {
   });
 });
 
+// ─── 页内布局（全宽洞察带） ───────────────────────────────────────
+
+describe('InsightCards 页内布局', () => {
+  it('叙述与追问 pill 同在左栏，图卡为右栏兄弟节点（宿主全宽呈现）', () => {
+    render(<InsightCards pages={[comparePage]} testId="insight" />);
+    const page = document.querySelector('.ap-ins-page');
+    const narrative = page?.querySelector('.ap-ins-narrative');
+    expect(narrative).not.toBeNull();
+    expect(narrative).toContainElement(screen.getByTestId('ins-pill'));
+    expect(narrative?.textContent).toContain('对比页叙述');
+    expect(narrative).not.toContainElement(screen.getByTestId('ins-card-compare'));
+    expect(page).toContainElement(screen.getByTestId('ins-card-compare'));
+  });
+});
+
 // ─── 异常卡 metric 切换 ─────────────────────────────────────────
 
 describe('InsightCards 异常卡 metric 切换', () => {

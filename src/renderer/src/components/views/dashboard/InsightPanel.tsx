@@ -283,7 +283,7 @@ export function InsightPanel() {
   if (pages.length === 0) return null;
 
   return (
-    <section className="mb-3 max-w-md">
+    <section className="mb-3">
       <InsightCards
         pages={pages}
         title="验证洞察"
