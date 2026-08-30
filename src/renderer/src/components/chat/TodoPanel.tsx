@@ -21,7 +21,7 @@ function TodoItemView({ item }: { item: TodoItemData }) {
         className={cn(
           'flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full',
           item.status === 'completed' && 'border-[1.5px] border-status-pass-foreground text-status-pass-foreground',
-          item.status === 'in_progress' && 'border-[1.5px] border-l-primary border-t-primary [animation:ap-rotate_1s_linear_infinite]',
+          item.status === 'in_progress' && 'border-[1.5px] border-l-primary border-t-primary [animation:spin_1s_linear_infinite]',
           item.status === 'pending' && 'border-[1.5px] border-dashed border-muted-foreground/50',
           item.status === 'abandoned' && 'border-[1.5px] border-dashed border-muted-foreground/30',
         )}

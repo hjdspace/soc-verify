@@ -100,6 +100,7 @@
   --secondary-foreground: var(--dsw-label-primary);
   --muted: var(--dsw-inline-code);
   --muted-foreground: var(--dsw-label-tertiary);
+  --fg-faint: var(--dsw-label-caption);
   --accent: var(--dsw-hover-bg);
   --accent-foreground: var(--dsw-label-primary);
   --destructive: var(--dsw-error);
@@ -134,6 +135,28 @@ html[data-shade='dark'] .ai-panel {
   --violet-foreground: rgb(177, 151, 252);
   --chart-1: rgb(77, 171, 247);
   --diff-del-foreground: rgb(255, 135, 135);
+}
+
+/* ── beautiful-ui 映射层阴影的面板作用域重声明 ──────────────
+   globals.css 的 --shadow-* 在 :root 以主题变量求值；面板内语义变量已
+   重映射为 DSH，故阴影在此按面板设计语言重算（同 .ap-echip 先例：
+   暗档环转低透明白，融入投影成连续描边）。 */
+.ai-panel {
+  --shadow-hairline: 0 0 0 1px var(--dsw-border-l1);
+  --shadow-btn: 0 0 0 1px var(--dsw-border-l2), 0 1px 2px rgb(0 0 0 / 0.05);
+  --shadow-card:
+    0 0 0 1px var(--dsw-border-l2), 0 1px 2px rgb(0 0 0 / 0.04),
+    0 2px 6px rgb(0 0 0 / 0.04);
+  --shadow-raised: 0 0 0 1px var(--dsw-border-l2), 0 2px 10px rgb(0 0 0 / 0.08);
+  --shadow-overlay: 0 0 0 1px var(--dsw-border-l2), 0 8px 28px rgb(0 0 0 / 0.12);
+}
+html[data-shade='dark'] .ai-panel {
+  --shadow-btn: 0 0 0 1px rgb(255 255 255 / 0.1), 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-card:
+    0 0 0 1px rgb(255 255 255 / 0.11), 0 1px 2px rgb(0 0 0 / 0.2),
+    0 2px 6px rgb(0 0 0 / 0.2);
+  --shadow-raised: 0 0 0 1px rgb(255 255 255 / 0.13), 0 2px 10px rgb(0 0 0 / 0.22);
+  --shadow-overlay: 0 0 0 1px rgb(255 255 255 / 0.15), 0 8px 28px rgb(0 0 0 / 0.34);
 }
 
 /* 面板内滚动条：8px / thumb r4 / 轨道透明 */
@@ -248,20 +271,11 @@ html[data-shade='dark'] .ai-panel {
 
 /* ── 回合收尾操作栏（复制/重新生成/引用来源）─────────────────────
    呈现模式参考 beautiful-ui StreamingText 的 done 态：流式结束后整体
-   fade-up 淡入（轻微延迟，等正文 settle），来源列表展开时再次淡入 */
-@keyframes ap-fadeup {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
+   fade-up 淡入（轻微延迟，等正文 settle），来源列表展开时再次淡入
+   （keyframes 用 globals.css 映射层的 canonical fade-up） */
 .ap-turnactions {
   margin-top: 3px;
-  animation: ap-fadeup 350ms cubic-bezier(0.23, 1, 0.32, 1) 120ms both;
+  animation: fade-up 350ms var(--ease-out-strong) 120ms both;
 }
 .ap-turnactions-row {
   display: flex;
@@ -300,8 +314,8 @@ html[data-shade='dark'] .ai-panel {
   grid-template-rows: 0fr;
   visibility: hidden;
   opacity: 0;
-  transition: grid-template-rows 300ms cubic-bezier(0.23, 1, 0.32, 1),
-    opacity 300ms cubic-bezier(0.23, 1, 0.32, 1), visibility 300ms;
+  transition: grid-template-rows 300ms var(--ease-out-strong),
+    opacity 300ms var(--ease-out-strong), visibility 300ms;
 }
 .ap-sources-collapse[data-open='true'] {
   grid-template-rows: 1fr;
@@ -412,17 +426,14 @@ button.ap-turnactions-source:hover {
   text-align: left;
   color: var(--dsw-label-primary);
   cursor: pointer;
-  animation: ap-fadeup 350ms cubic-bezier(0.23, 1, 0.32, 1) both;
+  animation: fade-up 350ms var(--ease-out-strong) both;
   transition: background-color 100ms ease;
 }
 .ap-followup-item:hover {
   background: var(--dsw-hover-bg);
 }
 
-/* todo 进行中环 */
-@keyframes ap-rotate {
-  to { transform: rotate(360deg); }
-}
+/* todo 进行中环：keyframes 用 globals.css 映射层的 canonical spin */
 
 @media (prefers-reduced-motion: reduce) {
   .ai-panel *,
@@ -702,18 +713,9 @@ button.ap-turnactions-source:hover {
 }
 
 /* ── ToolRunGroup（ToolChips 风格工具分组） ─────────────────
-   行入场 ap-fadeup / chip 入场 ap-popin；diff chip 与 hover 预览
-   的阴影需按亮暗主题切换描边色，故以 token 类而不是 arbitrary value 提供 */
-@keyframes ap-popin {
-  from {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
+   行入场 fade-up / chip 入场 pop-in（canonical keyframes，globals.css
+   映射层）；diff chip 与 hover 预览的阴影需按亮暗主题切换描边色，
+   故以 token 类而不是 arbitrary value 提供 */
 .ap-echip {
   box-shadow: 0 0 0 1px var(--dsw-border-l2), 0 1px 2px 0 rgba(0, 0, 0, 0.05);
 }
@@ -751,7 +753,7 @@ button.ap-turnactions-source:hover {
   box-shadow: var(--dsw-shadow-lv3);
   padding: 4px;
   transform-origin: bottom center;
-  animation: ap-popin 180ms cubic-bezier(0.23, 1, 0.32, 1) both;
+  animation: pop-in 180ms var(--ease-out-strong) both;
 }
 
 .ap-menu-list {
@@ -760,7 +762,9 @@ button.ap-turnactions-source:hover {
   overscroll-behavior: contain;
 }
 
-/* 单一滑动高亮：随 hover/键盘选中行平滑移动，隐藏时透明 */
+/* 单一滑动高亮：随 hover/键盘选中行平滑移动，隐藏时透明。
+   样式由共享组件 GlideMenu（components/ui/GlideMenu.tsx）作为默认
+   高亮层复用，过渡时长对齐参考实现的 220ms */
 .ap-menu-highlight {
   position: absolute;
   left: 0;
@@ -770,8 +774,8 @@ button.ap-turnactions-source:hover {
   opacity: 0;
   pointer-events: none;
   transition:
-    top 200ms cubic-bezier(0.23, 1, 0.32, 1),
-    height 200ms cubic-bezier(0.23, 1, 0.32, 1),
+    top 220ms var(--ease-out-strong),
+    height 220ms var(--ease-out-strong),
     opacity 150ms ease;
 }
 

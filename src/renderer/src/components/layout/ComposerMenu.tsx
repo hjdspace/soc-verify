@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { cn } from '@renderer/lib/utils';
+import { GlideMenu } from '@renderer/components/ui/GlideMenu';
 
 type ComposerMenuProps = {
   /** 定位与宽度类（如 `left-0 right-0` 全宽、`left-0 w-56` 锚定按钮） */
@@ -24,8 +25,8 @@ type ComposerMenuProps = {
 /**
  * Composer 弹层容器 —— 对齐 beautiful-ui PromptBar 的浮层卡片：
  * 白底 10px 圆角 + hairline 描边 + 浮起阴影，自底部 pop-in；
- * 行 hover/键盘选中由单一滑动色块（.ap-menu-highlight）呈现，
- * 色块测量目标行 offsetTop 后以 transition 滑过去，行本身保持透明。
+ * 行 hover/键盘选中由单一滑动色块呈现（滑动高亮已泛化为共享组件
+ * GlideMenu，见 components/ui/GlideMenu.tsx），行本身保持透明。
  */
 export function ComposerMenu({
   className,
@@ -39,8 +40,6 @@ export function ComposerMenu({
   children,
 }: ComposerMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
-  const [rowBox, setRowBox] = useState<{ top: number; height: number } | null>(null);
   // 夹紧后的水平偏移（相对锚定按钮的左缘），undefined 表示不夹紧
   const [clampLeft, setClampLeft] = useState<number | undefined>(undefined);
 
@@ -58,38 +57,14 @@ export function ComposerMenu({
     setClampLeft((prev) => (prev === next ? prev : next));
   }, [clampTo]);
 
-  useLayoutEffect(() => {
-    const list = listRef.current;
-    if (!list) return;
-    const row = activeIndex == null ? undefined : list.querySelectorAll<HTMLElement>('[data-menu-row]')[activeIndex];
-    if (row) {
-      const top = row.offsetTop;
-      const height = row.offsetHeight;
-      // 值未变化时保持原引用，避免父级流式重渲染触发的无效更新
-      setRowBox((prev) => (prev?.top === top && prev?.height === height ? prev : { top, height }));
-      row.scrollIntoView({ block: 'nearest' });
-    } else {
-      setRowBox(null);
-    }
-  }, [activeIndex, children]);
-
   const style: CSSProperties = { transformOrigin: origin === 'left' ? 'bottom left' : 'bottom center' };
   if (clampLeft !== undefined) style.left = clampLeft;
 
   return (
     <div ref={menuRef} className={cn('ap-menu', plain && 'ap-menu-plain', className)} style={style} onMouseLeave={onMouseLeave}>
-      <div ref={listRef} className="ap-menu-list" style={{ maxHeight }}>
-        <span
-          aria-hidden
-          className="ap-menu-highlight"
-          style={{
-            top: rowBox?.top ?? 0,
-            height: rowBox?.height ?? 0,
-            opacity: rowBox && activeIndex != null ? 1 : 0,
-          }}
-        />
+      <GlideMenu className="ap-menu-list" style={{ maxHeight }} activeIndex={activeIndex} scrollActiveIntoView>
         {children}
-      </div>
+      </GlideMenu>
       {footer != null && <div className="ap-menu-note">{footer}</div>}
     </div>
   );

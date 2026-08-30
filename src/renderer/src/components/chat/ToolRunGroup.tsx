@@ -136,7 +136,7 @@ function ToolRunRow({
   return (
     <div
       data-testid="tool-run-row"
-      style={{ animation: `ap-fadeup 300ms cubic-bezier(0.23, 1, 0.32, 1) ${animationDelay}ms both` }}
+      style={{ animation: `fade-up 300ms var(--ease-out-strong) ${animationDelay}ms both` }}
     >
       <button
         type="button"
@@ -209,7 +209,7 @@ function ToolRunRow({
         style={{
           gridTemplateRows: open ? '1fr' : '0fr',
           opacity: open ? 1 : 0,
-          transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)',
+          transitionTimingFunction: 'var(--ease-out-strong)',
         }}
       >
         <div className="min-h-0 overflow-hidden">
@@ -242,7 +242,7 @@ function DiffPreviewCard({ preview }: { preview: PreviewState }) {
         left: preview.x,
         top: preview.top,
         bottom: preview.bottom,
-        animation: 'ap-popin 160ms cubic-bezier(0.23, 1, 0.32, 1) both',
+        animation: 'pop-in 160ms var(--ease-out-strong) both',
         transformOrigin: preview.top === undefined ? 'bottom left' : 'top left',
       }}
     >
@@ -386,7 +386,7 @@ export function ToolRunGroup({ messages }: { messages: ChatMessage[] }) {
         style={{
           gridTemplateRows: open || isSingle ? '1fr' : '0fr',
           opacity: open || isSingle ? 1 : 0,
-          transitionTimingFunction: 'cubic-bezier(0.23, 1, 0.32, 1)',
+          transitionTimingFunction: 'var(--ease-out-strong)',
         }}
       >
         <div className="min-h-0 overflow-hidden">
@@ -419,7 +419,7 @@ export function ToolRunGroup({ messages }: { messages: ChatMessage[] }) {
                     onClick={() => openFile(file.path)}
                     title={`点击打开文件: ${file.path}`}
                     className="ap-echip inline-flex h-7 max-w-full items-center gap-2 rounded-md bg-[var(--dsw-layer-1)] px-2 font-mono text-[11.5px] text-foreground transition-colors duration-100 hover:bg-[var(--dsw-hover-solid)]"
-                    style={{ animation: `ap-popin 250ms cubic-bezier(0.23, 1, 0.32, 1) ${i * 80}ms both` }}
+                    style={{ animation: `pop-in 250ms var(--ease-out-strong) ${i * 80}ms both` }}
                   >
                     <span className="min-w-0 truncate">{file.path.split(/[\\/]/).pop()}</span>
                     <span className="shrink-0 tabular-nums text-[var(--dsw-success)]">+{file.added}</span>
