@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react';
-import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon, Shield, ShieldAlert, ShieldCheck, ChevronDown, ChevronRight, Info, PanelLeftClose, Key, Copy, Brain } from 'lucide-react';
+import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Search, FileText, Folder, Sparkles, History, ArrowLeft, Image as ImageIcon, Shield, ShieldAlert, ShieldCheck, ChevronDown, ChevronRight, Info, PanelLeftClose, Copy, Brain } from 'lucide-react';
 import { useSessionCoreStore } from '@renderer/stores/session-core';
 import { useSessionMessagesStore } from '@renderer/stores/session-messages';
 import { useSessionApprovalStore } from '@renderer/stores/session-approval';
@@ -25,6 +25,7 @@ import { ErrorMessage } from '@renderer/components/chat/ErrorMessage';
 import { getLatestTodoState } from '@renderer/components/chat/tool-helpers';
 import { useTodoPanelStore } from '@renderer/stores/todo-panel';
 import { ComposerEditor, type ChipData, type ComposerEditorApi } from './ComposerEditor';
+import { ComposerMenu, ComposerMenuRow, ComposerMenuCheck } from './ComposerMenu';
 import { useUiStore } from '@renderer/stores/ui';
 import { ThinkingOrb, BorderBeam } from '@renderer/components/visual';
 
@@ -77,8 +78,6 @@ const compactSession = useSessionMessagesStore((s) => s.compactSession);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const skillListRef = useRef<HTMLDivElement>(null);
-  const fileListRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isPinnedToBottomRef = useRef(true);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
@@ -102,12 +101,20 @@ const compactSession = useSessionMessagesStore((s) => s.compactSession);
   const [skillSearch, setSkillSearch] = useState('');
   const [showSkillDropdown, setShowSkillDropdown] = useState(false);
   const [skillHighlightIdx, setSkillHighlightIdx] = useState(0);
+  // 滑动高亮只在用户真正交互（hover / 方向键）后出现，刚弹出时保持素净
+  const [skillEngaged, setSkillEngaged] = useState(false);
 
   const [fileSearchResults, setFileSearchResults] = useState<ContextFile[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
   const [fileSearch, setFileSearch] = useState('');
   const [showFileDropdown, setShowFileDropdown] = useState(false);
   const [fileHighlightIdx, setFileHighlightIdx] = useState(0);
+  const [fileEngaged, setFileEngaged] = useState(false);
+
+  // 无键盘导航的弹层只跟随鼠标高亮
+  const [attachHovered, setAttachHovered] = useState<number | null>(null);
+  const [approvalHovered, setApprovalHovered] = useState<number | null>(null);
+  const [thinkingHovered, setThinkingHovered] = useState<number | null>(null);
 
 const addSkill = useSessionCoreStore((s) => s.addSkill);
 const removeSkill = useSessionCoreStore((s) => s.removeSkill);
@@ -115,6 +122,8 @@ const addContextFile = useSessionCoreStore((s) => s.addContextFile);
 const removeContextFile = useSessionCoreStore((s) => s.removeContextFile);
 
   const editorApiRef = useRef<ComposerEditorApi | null>(null);
+  // composer 容器：按钮锚定弹层的水平夹紧边界，防止窄面板下右溢出窗口
+  const composerBoxRef = useRef<HTMLDivElement>(null);
 
 const steerSession = useSessionMessagesStore((s) => s.steerSession);
 const setModel = useSessionCoreStore((s) => s.setModel);
@@ -237,20 +246,6 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
     setShowScrollToBottom(false);
   }, []);
 
-  // Scroll highlighted skill into view
-  useEffect(() => {
-    if (!showSkillDropdown || !skillListRef.current) return;
-    const item = skillListRef.current.children[skillHighlightIdx] as HTMLElement | undefined;
-    item?.scrollIntoView({ block: 'nearest' });
-  }, [skillHighlightIdx, showSkillDropdown]);
-
-  // Scroll highlighted file into view
-  useEffect(() => {
-    if (!showFileDropdown || !fileListRef.current) return;
-    const item = fileListRef.current.children[fileHighlightIdx] as HTMLElement | undefined;
-    item?.scrollIntoView({ block: 'nearest' });
-  }, [fileHighlightIdx, showFileDropdown]);
-
   const handleCreateSession = async () => {
     if (!currentProjectId || !currentProject) return;
     void createSession(currentProjectId, currentProject.rootPath);
@@ -274,11 +269,13 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
     if (showSkillDropdown && filteredSkills.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
+        setSkillEngaged(true);
         setSkillHighlightIdx((prev) => Math.min(prev + 1, filteredSkills.length - 1));
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
+        setSkillEngaged(true);
         setSkillHighlightIdx((prev) => Math.max(prev - 1, 0));
         return;
       }
@@ -298,11 +295,13 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
     if (showFileDropdown && fileSearchResults.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
+        setFileEngaged(true);
         setFileHighlightIdx((prev) => Math.min(prev + 1, fileSearchResults.length - 1));
         return;
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
+        setFileEngaged(true);
         setFileHighlightIdx((prev) => Math.max(prev - 1, 0));
         return;
       }
@@ -581,6 +580,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
       setShowSkillDropdown(true);
       setShowFileDropdown(false);
       setSkillHighlightIdx(0);
+      setSkillEngaged(false);
       return;
     }
 
@@ -591,6 +591,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
       setShowFileDropdown(true);
       setShowSkillDropdown(false);
       setFileHighlightIdx(0);
+      setFileEngaged(false);
       return;
     }
 
@@ -922,6 +923,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
 
         <BorderBeam size="line" theme="dark" active={isComposerFocused} colorVariant="ocean" className="block w-full" style={{ overflow: 'visible' }}>
         <div
+          ref={composerBoxRef}
           className={cn(
             'relative flex flex-col gap-1.5 rounded-2xl border border-[var(--dsw-border-l2)] bg-[var(--dsw-input-major)] p-2 shadow-[var(--dsw-shadow-lv2)] transition-colors',
             isDragOver && 'border-primary/50 ring-2 ring-primary/30',
@@ -932,102 +934,66 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
           onFocus={() => setIsComposerFocused(true)}
           onBlur={() => setIsComposerFocused(false)}
         >
-          {/* ── Skill dropdown ────────────────────────────── */}
+          {/* ── Skill dropdown（/ 触发，样式对齐 beautiful-ui slash 菜单）── */}
           {showSkillDropdown && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setShowSkillDropdown(false)} />
-              <div className="absolute bottom-full left-0 right-0 z-50 max-h-56 overflow-hidden rounded-md border border-border bg-popover shadow-xl">
-                <div className="flex items-center gap-1.5 border-b border-border/50 px-2 py-1.5">
-                  <Search className="h-3 w-3 text-muted-foreground" />
-                  <input
-                    type="text"
-                    value={skillSearch}
-                    onChange={(e) => { setSkillSearch(e.target.value); setSkillHighlightIdx(0); }}
-                    onKeyDown={handleKeyDown}
-                    placeholder="搜索技能..."
-                    tabIndex={-1}
-                    className="flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
-                  />
-                  {skillsLoading && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
-                </div>
-                <div ref={skillListRef} className="max-h-40 overflow-y-auto p-1">
-                  {filteredSkills.length === 0 ? (
-                    <div className="px-2 py-3 text-center text-[10px] text-muted-foreground">
-                      {skillsLoading ? '加载中...' : '未找到技能'}
-                    </div>
-                  ) : (
-                    filteredSkills.map((skill, idx) => (
-                      <button
-                        key={skill.name}
-                        onClick={() => handleSelectSkill(skill)}
-                        className={cn(
-                          'flex w-full flex-col items-start gap-0.5 px-2 py-1.5 text-left text-xs hover:bg-accent',
-                          idx === skillHighlightIdx && 'bg-accent/50',
-                        )}
-                      >
-                        <div className="flex items-center gap-1">
-                          <Sparkles className="h-2.5 w-2.5 text-primary" />
-                          <span className="font-medium text-foreground">{skill.name}</span>
-                          <span className="text-[9px] text-muted-foreground/70">{skill.source}</span>
-                        </div>
-                        {skill.description && (
-                          <span className="text-[9px] text-muted-foreground line-clamp-2">{skill.description}</span>
-                        )}
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
+              <ComposerMenu
+                className="left-0 right-0"
+                activeIndex={skillEngaged ? skillHighlightIdx : null}
+                onMouseLeave={() => setSkillEngaged(false)}
+                footer="输入以搜索技能"
+              >
+                {filteredSkills.length === 0 ? (
+                  <div className="ap-menu-empty">
+                    {skillsLoading ? '正在加载技能...' : skillSearch ? `未找到“${skillSearch}”` : '暂无可用技能'}
+                  </div>
+                ) : (
+                  filteredSkills.map((skill, idx) => (
+                    <ComposerMenuRow
+                      key={skill.name}
+                      icon={<Sparkles className="h-3.5 w-3.5" />}
+                      title={skill.name}
+                      desc={skill.description}
+                      tag={skill.source}
+                      active={skillEngaged && idx === skillHighlightIdx}
+                      onHover={() => { setSkillHighlightIdx(idx); setSkillEngaged(true); }}
+                      onSelect={() => handleSelectSkill(skill)}
+                    />
+                  ))
+                )}
+              </ComposerMenu>
             </>
           )}
 
-          {/* ── File dropdown ─────────────────────────────── */}
+          {/* ── File dropdown（@ 触发，样式对齐 beautiful-ui sources 菜单）── */}
           {showFileDropdown && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setShowFileDropdown(false)} />
-              <div className="absolute bottom-full left-0 right-0 z-50 max-h-56 overflow-hidden rounded-md border border-border bg-popover shadow-xl">
-                <div className="flex items-center gap-1.5 border-b border-border/50 px-2 py-1.5">
-                  <Search className="h-3 w-3 text-muted-foreground" />
-                  <input
-                    type="text"
-                    value={fileSearch}
-                    onChange={(e) => { setFileSearch(e.target.value); setFileHighlightIdx(0); }}
-                    onKeyDown={handleKeyDown}
-                    placeholder="搜索文件或文件夹..."
-                    tabIndex={-1}
-                    className="flex-1 bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
-                  />
-                  {filesLoading && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
-                </div>
-                <div ref={fileListRef} className="max-h-40 overflow-y-auto p-1">
-                  {fileSearchResults.length === 0 ? (
-                    <div className="px-2 py-3 text-center text-[10px] text-muted-foreground">
-                      {filesLoading ? '搜索中...' : !fileSearch.trim() ? '输入关键词搜索文件' : '未找到文件'}
-                    </div>
-                  ) : (
-                    fileSearchResults.map((file, idx) => (
-                      <button
-                        key={file.path}
-                        onClick={() => handleSelectFile(file)}
-                        className={cn(
-                          'flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-xs hover:bg-accent',
-                          idx === fileHighlightIdx && 'bg-accent/50',
-                        )}
-                      >
-                        {file.type === 'directory' ? (
-                          <Folder className="h-3 w-3 shrink-0 text-muted-foreground" />
-                        ) : (
-                          <FileText className="h-3 w-3 shrink-0 text-muted-foreground" />
-                        )}
-                        <span className="truncate font-medium text-foreground">{file.name}</span>
-                        <span className="ml-auto shrink-0 text-[9px] text-muted-foreground/70 truncate max-w-[120px]">
-                          {file.path.replace(currentProject?.rootPath ?? '', '.')}
-                        </span>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
+              <ComposerMenu
+                className="left-0 right-0"
+                activeIndex={fileEngaged ? fileHighlightIdx : null}
+                onMouseLeave={() => setFileEngaged(false)}
+                footer="输入以搜索文件"
+              >
+                {fileSearchResults.length === 0 ? (
+                  <div className="ap-menu-empty">
+                    {filesLoading ? '搜索中...' : !fileSearch.trim() ? '输入关键词搜索项目文件' : `未找到“${fileSearch}”`}
+                  </div>
+                ) : (
+                  fileSearchResults.map((file, idx) => (
+                    <ComposerMenuRow
+                      key={file.path}
+                      icon={file.type === 'directory' ? <Folder className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />}
+                      title={file.name}
+                      desc={file.path.replace(currentProject?.rootPath ?? '', '.')}
+                      active={fileEngaged && idx === fileHighlightIdx}
+                      onHover={() => { setFileHighlightIdx(idx); setFileEngaged(true); }}
+                      onSelect={() => handleSelectFile(file)}
+                    />
+                  ))
+                )}
+              </ComposerMenu>
             </>
           )}
 
@@ -1058,29 +1024,38 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                 {showAttachDropdown && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowAttachDropdown(false)} />
-                    <div className="absolute bottom-7 left-0 z-50 w-44 rounded-md border border-border bg-popover shadow-xl">
-                      <button
-                        onClick={handleImageSelect}
-                        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground hover:bg-accent"
-                      >
-                        <ImageIcon className="h-3 w-3 text-muted-foreground" />
-                        <span>添加图片</span>
-                      </button>
-                      <button
-                        onClick={handleFileAttach}
-                        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground hover:bg-accent"
-                      >
-                        <FileText className="h-3 w-3 text-muted-foreground" />
-                        <span>附加文件</span>
-                      </button>
-                      <button
-                        onClick={handleFolderAttach}
-                        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground hover:bg-accent"
-                      >
-                        <Folder className="h-3 w-3 text-muted-foreground" />
-                        <span>添加文件夹到上下文</span>
-                      </button>
-                    </div>
+                    <ComposerMenu
+                      className="left-0 w-56"
+                      origin="left"
+                      clampTo={composerBoxRef}
+                      activeIndex={attachHovered}
+                      onMouseLeave={() => setAttachHovered(null)}
+                    >
+                      <ComposerMenuRow
+                        icon={<ImageIcon className="h-3.5 w-3.5" />}
+                        title="添加图片"
+                        desc="从本地选择图片"
+                        active={attachHovered === 0}
+                        onHover={() => setAttachHovered(0)}
+                        onSelect={handleImageSelect}
+                      />
+                      <ComposerMenuRow
+                        icon={<FileText className="h-3.5 w-3.5" />}
+                        title="附加文件"
+                        desc="选择项目内文件"
+                        active={attachHovered === 1}
+                        onHover={() => setAttachHovered(1)}
+                        onSelect={() => void handleFileAttach()}
+                      />
+                      <ComposerMenuRow
+                        icon={<Folder className="h-3.5 w-3.5" />}
+                        title="添加文件夹"
+                        desc="作为上下文引用"
+                        active={attachHovered === 2}
+                        onHover={() => setAttachHovered(2)}
+                        onSelect={() => void handleFolderAttach()}
+                      />
+                    </ComposerMenu>
                   </>
                 )}
               </div>
@@ -1110,31 +1085,33 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                 {showApprovalDropdown && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowApprovalDropdown(false)} />
-                    <div className="absolute bottom-7 left-0 z-50 w-44 rounded-md border border-border bg-popover shadow-xl">
+                    <ComposerMenu
+                      className="left-0 w-64"
+                      origin="left"
+                      clampTo={composerBoxRef}
+                      activeIndex={approvalHovered}
+                      onMouseLeave={() => setApprovalHovered(null)}
+                    >
                       {([
                         { mode: 'always-ask' as const, label: '总询问', desc: '写入和执行均需确认', icon: ShieldAlert },
                         { mode: 'write' as const, label: '自动编辑', desc: '仅执行命令需确认', icon: Shield },
                         { mode: 'yolo' as const, label: '完全信任', desc: '自动批准所有操作', icon: ShieldCheck },
-                      ]).map(({ mode, label, desc, icon: Icon }) => (
-                        <button
+                      ]).map(({ mode, label, desc, icon: Icon }, idx) => (
+                        <ComposerMenuRow
                           key={mode}
-                          onClick={() => {
+                          icon={<Icon className="h-3.5 w-3.5" />}
+                          title={label}
+                          desc={desc}
+                          trailing={<ComposerMenuCheck visible={(currentSession?.approvalMode ?? 'yolo') === mode} />}
+                          active={approvalHovered === idx}
+                          onHover={() => setApprovalHovered(idx)}
+                          onSelect={() => {
                             setApprovalMode(mode);
                             setShowApprovalDropdown(false);
                           }}
-                          className={cn(
-                            'flex w-full items-start gap-1.5 px-2 py-1.5 text-left text-xs hover:bg-accent',
-                            (currentSession?.approvalMode ?? 'yolo') === mode && 'bg-accent/50',
-                          )}
-                        >
-                          <Icon className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
-                          <div className="flex flex-col gap-0.5">
-                            <span className="font-medium text-foreground">{label}</span>
-                            <span className="text-[9px] text-muted-foreground">{desc}</span>
-                          </div>
-                        </button>
+                        />
                       ))}
-                    </div>
+                    </ComposerMenu>
                   </>
                 )}
               </div>
@@ -1155,33 +1132,37 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                 {showThinkingDropdown && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowThinkingDropdown(false)} />
-                    <div className="absolute bottom-7 left-0 z-50 w-52 rounded-md border border-border bg-popover shadow-xl">
-                      {THINKING_LEVEL_OPTIONS.map(({ value, label, description }) => (
-                        <button
+                    <ComposerMenu
+                      className="left-0 w-64"
+                      origin="left"
+                      clampTo={composerBoxRef}
+                      activeIndex={thinkingHovered}
+                      onMouseLeave={() => setThinkingHovered(null)}
+                      footer="模型不支持思考时设置不生效"
+                    >
+                      {THINKING_LEVEL_OPTIONS.map(({ value, label, description }, idx) => (
+                        <ComposerMenuRow
                           key={value}
-                          onClick={() => {
+                          icon={
+                            <Brain
+                              className={cn(
+                                'h-3.5 w-3.5',
+                                value === 'default' || value === 'off' ? '' : 'text-primary',
+                              )}
+                            />
+                          }
+                          title={label}
+                          desc={description}
+                          trailing={<ComposerMenuCheck visible={(currentSession?.thinkingLevel ?? 'default') === value} />}
+                          active={thinkingHovered === idx}
+                          onHover={() => setThinkingHovered(idx)}
+                          onSelect={() => {
                             setThinkingLevel(value);
                             setShowThinkingDropdown(false);
                           }}
-                          className={cn(
-                            'flex w-full items-start gap-1.5 px-2 py-1.5 text-left text-xs hover:bg-accent',
-                            (currentSession?.thinkingLevel ?? 'default') === value && 'bg-accent/50',
-                          )}
-                        >
-                          <Brain className={cn(
-                            'mt-0.5 h-3 w-3 shrink-0',
-                            value === 'default' || value === 'off' ? 'text-muted-foreground' : 'text-primary',
-                          )} />
-                          <div className="flex flex-col gap-0.5">
-                            <span className="font-medium text-foreground">{label}</span>
-                            <span className="text-[9px] text-muted-foreground">{description}</span>
-                          </div>
-                        </button>
+                        />
                       ))}
-                      <div className="border-t border-border/50 px-2 py-1 text-[9px] text-muted-foreground/70">
-                        模型不支持思考时设置不生效
-                      </div>
-                    </div>
+                    </ComposerMenu>
                   </>
                 )}
               </div>
@@ -1200,79 +1181,60 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                 {showModelDropdown && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowModelDropdown(false)} />
-                    <div className="absolute bottom-7 left-0 z-50 max-h-64 w-64 overflow-y-auto rounded-md border border-border bg-popover shadow-xl">
+                    <ComposerMenu className="left-0 w-72" origin="left" plain maxHeight={288} clampTo={composerBoxRef}>
                       {credentials.length === 0 ? (
-                        <div className="px-2 py-3 text-center text-[10px] text-muted-foreground">
-                          暂无已配置凭据<br />
-                          请在设置中添加 Provider 和模型
-                        </div>
+                        <div className="ap-menu-empty">暂无已配置凭据，请在设置中添加 Provider 和模型</div>
                       ) : (
                         credentials.map((cred) => {
                           const isExpanded = expandedProviders.has(cred.providerId);
                           const isCurrentProvider = currentSession?.model?.providerId === cred.providerId;
                           return (
                             <div key={cred.providerId}>
-                              <button
-                                onClick={() => toggleProvider(cred.providerId)}
-                                className={cn(
-                                  'flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-xs hover:bg-accent',
-                                  isCurrentProvider && 'bg-accent/30',
-                                )}
-                              >
-                                {isExpanded ? (
-                                  <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                ) : (
-                                  <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                )}
-                                <Key className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                <span className="flex-1 truncate font-medium text-foreground">{cred.label}</span>
-                                {cred.models.length > 0 && (
-                                  <span className="text-[9px] text-muted-foreground">{cred.models.length}</span>
-                                )}
-                              </button>
-                              {isExpanded && (
-                                <div className="border-l border-border/30 ml-3">
-                                  {cred.models.length === 0 ? (
-                                    <div className="px-2 py-1 text-[9px] text-muted-foreground/70">
-                                      未配置模型
-                                    </div>
+                              <ComposerMenuRow
+                                icon={
+                                  isExpanded ? (
+                                    <ChevronDown className="h-3 w-3" />
                                   ) : (
-                                    cred.models.map((m) => {
-                                      const isCurrentModel = isCurrentProvider &&
-                                        currentSession?.model?.id === m.id;
-                                      return (
-                                        <button
-                                          key={`${cred.providerId}:${m.id}`}
-                                          onClick={() => handleSetModel(
-                                            cred.providerId,
-                                            m.id,
-                                            m.name,
-                                            cred.providerId,
-                                          )}
-                                          className={cn(
-                                            'flex w-full flex-col items-start gap-0.5 px-2 py-1.5 text-left text-xs hover:bg-accent',
-                                            isCurrentModel && 'bg-accent/50',
-                                          )}
-                                        >
-                                          <div className="flex items-center gap-1">
-                                            {isCurrentModel && <Check className="h-2.5 w-2.5 text-primary" />}
-                                            <span className="font-medium text-foreground">{m.name}</span>
-                                          </div>
-                                          <span className="text-[9px] text-muted-foreground">{m.id}</span>
-                                          <span className="text-[9px] text-muted-foreground/70">
-                                            上下文 {(m.contextWindow / 1000).toFixed(0)}k
-                                          </span>
-                                        </button>
-                                      );
-                                    })
-                                  )}
-                                </div>
+                                    <ChevronRight className="h-3 w-3" />
+                                  )
+                                }
+                                title={cred.label}
+                                tag={cred.models.length > 0 ? String(cred.models.length) : undefined}
+                                onSelect={() => toggleProvider(cred.providerId)}
+                              />
+                              {isExpanded && (
+                                cred.models.length === 0 ? (
+                                  <div className="ap-menu-empty" style={{ paddingLeft: 30 }}>
+                                    未配置模型
+                                  </div>
+                                ) : (
+                                  cred.models.map((m) => {
+                                    const isCurrentModel = isCurrentProvider &&
+                                      currentSession?.model?.id === m.id;
+                                    return (
+                                      <ComposerMenuRow
+                                        key={`${cred.providerId}:${m.id}`}
+                                        indent
+                                        title={m.name}
+                                        desc={m.id}
+                                        tag={`${(m.contextWindow / 1000).toFixed(0)}k`}
+                                        trailing={<ComposerMenuCheck visible={isCurrentModel} />}
+                                        onSelect={() => void handleSetModel(
+                                          cred.providerId,
+                                          m.id,
+                                          m.name,
+                                          cred.providerId,
+                                        )}
+                                      />
+                                    );
+                                  })
+                                )
                               )}
                             </div>
                           );
                         })
                       )}
-                    </div>
+                    </ComposerMenu>
                   </>
                 )}
               </div>

@@ -726,3 +726,118 @@ button.ap-turnactions-source:hover {
 [data-shade='dark'] .ap-echip-float {
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15), 0 8px 28px 0 rgba(0, 0, 0, 0.34);
 }
+
+/* ── Composer 弹层（@ 文件 / / 技能 / + 附件 / 权限 / 思考 / 模型）──
+   对齐 beautiful-ui PromptBar 的浮层：白底 10px 圆角卡片 + hairline
+   描边 + 浮起阴影，自底部 pop-in；行 hover/键盘选中由单一滑动色块
+   （.ap-menu-highlight）承担，行本身保持透明。
+   亮色浮层取 layer-1（白），暗色按抬升方向取更亮的 layer-3。 */
+:root {
+  --ap-menu-bg: var(--dsw-layer-1);
+  --ap-menu-highlight: var(--dsw-hover-solid);
+}
+[data-shade='dark'] {
+  --ap-menu-bg: var(--dsw-layer-3);
+  --ap-menu-highlight: var(--dsw-hover-bg);
+}
+
+.ap-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  z-index: 50;
+  background: var(--ap-menu-bg);
+  border: 1px solid var(--dsw-border-l2);
+  border-radius: 10px;
+  box-shadow: var(--dsw-shadow-lv3);
+  padding: 4px;
+  transform-origin: bottom center;
+  animation: ap-popin 180ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+.ap-menu-list {
+  position: relative;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* 单一滑动高亮：随 hover/键盘选中行平滑移动，隐藏时透明 */
+.ap-menu-highlight {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-radius: 6px;
+  background: var(--ap-menu-highlight);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    top 200ms cubic-bezier(0.23, 1, 0.32, 1),
+    height 200ms cubic-bezier(0.23, 1, 0.32, 1),
+    opacity 150ms ease;
+}
+
+.ap-menu-row {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  width: 100%;
+  height: 36px;
+  align-items: center;
+  gap: 10px;
+  border-radius: 6px;
+  padding: 0 8px;
+  text-align: left;
+}
+/* 无滑动高亮的弹层（如模型树）退回行级 hover；
+   滑动高亮弹层的行保持透明，避免盖住滑块过渡 */
+.ap-menu-plain .ap-menu-row:hover {
+  background: var(--ap-menu-highlight);
+}
+.ap-menu-row-icon {
+  display: flex;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  color: var(--dsw-label-secondary);
+}
+.ap-menu-row-title {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--dsw-label-primary);
+}
+.ap-menu-row-desc {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-label-tertiary);
+}
+.ap-menu-row-tag {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--dsw-label-tertiary);
+}
+
+/* 底部提示行（分隔线 + 灰字），如 “输入以搜索文件” */
+.ap-menu-note {
+  margin-top: 4px;
+  border-top: 1px solid var(--dsw-border-l1);
+  padding: 6px 8px 4px;
+  font-size: 11px;
+  color: var(--dsw-label-tertiary);
+}
+
+.ap-menu-empty {
+  display: flex;
+  height: 36px;
+  align-items: center;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--dsw-label-tertiary);
+}
