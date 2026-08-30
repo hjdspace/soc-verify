@@ -1181,7 +1181,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                 {showModelDropdown && (
                   <>
                     <div className="fixed inset-0 z-40" onClick={() => setShowModelDropdown(false)} />
-                    <ComposerMenu className="left-0 w-72" origin="left" plain maxHeight={288} clampTo={composerBoxRef}>
+                    <ComposerMenu className="left-0 w-64" origin="left" plain maxHeight={288} clampTo={composerBoxRef}>
                       {credentials.length === 0 ? (
                         <div className="ap-menu-empty">暂无已配置凭据，请在设置中添加 Provider 和模型</div>
                       ) : (
@@ -1199,6 +1199,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                                   )
                                 }
                                 title={cred.label}
+                                titleMaxWidth={160}
                                 tag={cred.models.length > 0 ? String(cred.models.length) : undefined}
                                 onSelect={() => toggleProvider(cred.providerId)}
                               />
@@ -1216,8 +1217,8 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
                                         key={`${cred.providerId}:${m.id}`}
                                         indent
                                         title={m.name}
-                                        desc={m.id}
-                                        tag={`${(m.contextWindow / 1000).toFixed(0)}k`}
+                                        titleMaxWidth={160}
+                                        tag={formatContextWindow(m.contextWindow)}
                                         trailing={<ComposerMenuCheck visible={isCurrentModel} />}
                                         onSelect={() => void handleSetModel(
                                           cred.providerId,
@@ -1335,6 +1336,12 @@ function formatMsgTime(ts: number): string {
   const sameYear = d.getFullYear() === now.getFullYear();
   if (sameYear) return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
   return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+}
+
+/** 模型菜单上下文大小：≥1M 显示 "1M"，否则 "512k" */
+function formatContextWindow(contextWindow: number): string {
+  if (contextWindow >= 1_000_000) return `${Math.round(contextWindow / 1_000_000)}M`;
+  return `${Math.round(contextWindow / 1000)}k`;
 }
 
 /**

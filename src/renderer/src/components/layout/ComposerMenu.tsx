@@ -105,6 +105,8 @@ type ComposerMenuRowProps = {
   tag?: ReactNode;
   /** 右侧自定义元素（当前项的 Check 等），不受 flex-1 挤压 */
   trailing?: ReactNode;
+  /** 标题最大宽度（px），超长省略——无 desc 的行（模型名等）防撑破窄菜单 */
+  titleMaxWidth?: number;
   /** 缩进到 22px 图标槽之后（模型树子行用） */
   indent?: boolean;
   active?: boolean;
@@ -121,6 +123,7 @@ export function ComposerMenuRow({
   desc,
   tag,
   trailing,
+  titleMaxWidth,
   indent = false,
   active = false,
   onSelect,
@@ -140,7 +143,12 @@ export function ComposerMenuRow({
       style={indent ? { paddingLeft: 30 } : undefined}
     >
       {icon != null && <span className="ap-menu-row-icon">{icon}</span>}
-      <span className="ap-menu-row-title">{title}</span>
+      <span
+        className="ap-menu-row-title"
+        style={titleMaxWidth != null ? { maxWidth: titleMaxWidth, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } : undefined}
+      >
+        {title}
+      </span>
       {desc != null && <span className="ap-menu-row-desc">{desc}</span>}
       {tag != null && <span className="ap-menu-row-tag">{tag}</span>}
       {trailing}
