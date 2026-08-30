@@ -154,6 +154,27 @@ describe('useSelectionRun 状态机', () => {
     expect(result.current.phase).toBe('streaming');
   });
 
+  it('历史回合 abort 遗留的 pending tool 不卡死新回合落定（扫描只看本回合）', () => {
+    const onSubmit = vi.fn();
+    // 更早的回合被 abort：tool 消息永远没有 toolResult（agent_end 不回填）
+    const pendingTool: ChatMessage = { id: 't_old', role: 'tool', content: '', timestamp: 3, toolName: 'read' };
+    const { result, rerender } = renderHook(
+      ({ session }) => useSelectionRun({ session, onSubmit }),
+      { initialProps: { session: makeSession([userMsg('第一问'), pendingTool, OLD_REPLY]) } },
+    );
+    act(() => result.current.run(REQ));
+    rerender({
+      session: makeSession([
+        userMsg('第一问'),
+        pendingTool,
+        OLD_REPLY,
+        userMsg('引用'),
+        assistantMsg({ id: 'a_new', content: '新回答' }),
+      ]),
+    });
+    expect(result.current.phase).toBe('result');
+  });
+
   it('keep 回 idle，不触发 onCancel', () => {
     const onSubmit = vi.fn();
     const onCancel = vi.fn();

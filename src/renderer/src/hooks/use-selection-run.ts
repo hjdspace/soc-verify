@@ -35,6 +35,14 @@ function findTurnReply(messages: ChatMessage[], knownIds: ReadonlySet<string>): 
   return undefined;
 }
 
+/** 本回合起点：run 后新增的首条消息下标（其后全部属于本回合） */
+function findTurnStart(messages: ChatMessage[], knownIds: ReadonlySet<string>): number {
+  for (let i = 0; i < messages.length; i++) {
+    if (!knownIds.has(messages[i].id)) return i;
+  }
+  return messages.length;
+}
+
 export function useSelectionRun(options: {
   /** 当前会话（phase 派生数据源）；undefined 时停在 thinking，浮条可 dismiss 兜底 */
   session?: SessionEntry;
@@ -61,7 +69,7 @@ export function useSelectionRun(options: {
 
   const [request, setRequest] = useState<SelectionRunRequest | null>(null);
   const [resultLatch, setResultLatch] = useState(false);
-  // run 时在场的 assistant 消息 id——本回合回复 = 首个不在场内的 assistant 消息。
+  // run 时在场全部消息的 id——本回合 = run 后新增的消息（起点见 findTurnStart）。
   // 用 id 而非下标：discard/retry 删过消息后重试，新回合拿到的也是全新 id
   const knownIdsRef = useRef<ReadonlySet<string>>(new Set());
   // 回调经 ref 间接调用，保证 run/retry 闭包永远拿到宿主最新实现
@@ -77,11 +85,7 @@ export function useSelectionRun(options: {
   }, []);
 
   const run = useCallback((next: SelectionRunRequest) => {
-    knownIdsRef.current = new Set(
-      (session?.messages ?? [])
-        .filter((m) => m.role === 'assistant')
-        .map((m) => m.id),
-    );
+    knownIdsRef.current = new Set((session?.messages ?? []).map((m) => m.id));
     setResultLatch(false);
     setRequest(next);
     onSubmitRef.current(next);
@@ -112,7 +116,10 @@ export function useSelectionRun(options: {
   // ── phase 派生（渲染期计算，无 effect 时序问题）──────────────
   const messages = session?.messages;
   const reply = request ? findTurnReply(messages ?? [], knownIdsRef.current) : undefined;
-  const toolsPending = (messages ?? []).some((m) => m.role === 'tool' && !m.toolResult);
+  // pending tool 只看本回合（run 后新增的消息）：历史回合里 abort 遗留的
+  // 无 toolResult 工具消息不会把新回合的落定判定永久卡死
+  const turnMessages = request ? (messages ?? []).slice(findTurnStart(messages ?? [], knownIdsRef.current)) : [];
+  const toolsPending = turnMessages.some((m) => m.role === 'tool' && !m.toolResult);
   const settled =
     !!reply &&
     !reply.isStreaming &&

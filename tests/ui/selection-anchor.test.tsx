@@ -96,13 +96,27 @@ describe('useSelectionAnchor', () => {
     });
   });
 
-  it('window resize 事件触发重算（窗口 resize 后重算锚点）', async () => {
-    const { result } = renderAnchor({ readSelection: () => BASE_SNAPSHOT });
+  it('window resize 事件触发重算：几何变化后锚点随之更新', async () => {
+    // 几何可变快照：resize 前后选区位置不同，验证重算真的换了锚点
+    let shifted = false;
+    const movingSnapshot = (): SelectionSnapshot =>
+      shifted
+        ? { ...BASE_SNAPSHOT, bounds: { ...BASE_SNAPSHOT.bounds, left: 200, right: 400 }, lastLine: { ...BASE_SNAPSHOT.lastLine, bottom: 120 } }
+        : BASE_SNAPSHOT;
+    const { result } = renderAnchor({ readSelection: movingSnapshot });
     await act(async () => {
       window.dispatchEvent(new Event('resize'));
     });
     await waitFor(() => {
       expect(result.current.anchor).toEqual({ x: 200, y: 78 });
+    });
+
+    shifted = true;
+    await act(async () => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    await waitFor(() => {
+      expect(result.current.anchor).toEqual({ x: 300, y: 128 });
     });
   });
 

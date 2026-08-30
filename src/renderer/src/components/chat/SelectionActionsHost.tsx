@@ -2,6 +2,7 @@ import { useRef, type ReactNode } from 'react';
 import { SelectionActions, SELECTION_ACTIONS } from '@renderer/components/ui/SelectionActions';
 import { useSelectionAnchor, type SelectionAnchor, type SelectionSnapshot } from '@renderer/hooks/use-selection-anchor';
 import { useSelectionRun, type SelectionRunRequest } from '@renderer/hooks/use-selection-run';
+import { useSessionCoreStore } from '@renderer/stores/session-core';
 import { useSessionMessagesStore } from '@renderer/stores/session-messages';
 import type { SessionEntry } from '@renderer/stores/session-types';
 
@@ -66,7 +67,13 @@ export function SelectionActionsHost({
     session,
     onSubmit: (request) => {
       if (!session) return;
-      baselineRef.current = session.messages.length;
+      // 基线取 live store 而非渲染闭包里的 session prop：Retry 在同一事件
+      // 内先 onCancel（截断）再重提，prop 尚未重渲染，用 prop 会拿到截断
+      // 前的消息数，后续 Discard 将截不到任何消息
+      const live = useSessionCoreStore
+        .getState()
+        .sessions.find((s) => s.id === session.id);
+      baselineRef.current = (live ?? session).messages.length;
       const quote = selectionRef.current?.text ?? '';
       void sendMessageRef.current(buildQuotedMessage(request, quote));
     },
