@@ -248,6 +248,7 @@ chips 筛选组件：带彩色圆点与计数徽标的状态 chips（计数从�
 - **HistoryTable 接入**：标题行下方加 `StatusFilterChips`（全部/运行中/已完成/失败/已停止，圆点取 `--status-*`，计数由 entries 派生），行包进 `FilterCollapseRow` 按状态折叠——**排序保留**：entries 顺序原样渲染、只控可见性（RegressionView 的 submittedAt 降序不受筛选影响）；末行分隔线由 `last:border-b-0` 改为按序号传入（折叠壳内 `:last-child` 语义失效）；当前状态 0 命中时显示无匹配提示（数据诚实）。数据链路不变（regression store 现有 history）。
 - **RunListPanel 视觉对齐**（不重构逻辑）：分段 chips 换 `.ap-ft-chip` 形态（SEGMENTS 增加 `dot` 字段 + `.ap-ft-badge` 计数，testid/aria-pressed/计数派生逻辑不变）；ETA 列终态文案（通过/失败/已停止）由纯文字色升级为 `FilterStatusPill`（摘取 filter-status-* 明暗双份的真实落地场景），运行中/队列占位「—」不成 pill。
 - **测试**：`tests/ui/filter-table.test.tsx` 11 例——计数徽标数据派生（all/各状态/0 命中）、items 变化重算、aria-pressed 受控切换、dot 注入语义变量、折叠壳 shown 双态 inline style + inert + 挂载不卸载 + className 透传、pill tone/base 变量、HistoryTable 接入（chips 计数、筛选后行序保留仅可见性变化、切回全部恢复、0 命中无匹配提示）。全量 `tests/ui` 1091 例中 1089 过；2 例失败为 CaseTreePanel 折叠用例（预存，#3 已备案），与本次无关。
+- **review 修订（2026-08-30，双轴评审后）**：① `hideBorder` 原按全量 entries 末位判定，筛选后若末条被折叠，最后**可见**行仍带分隔线与容器描边成双线——改为单遍派生 `lastVisibleIndex`（与 visibleCount 同一循环），分隔线跟随可见末行，补筛选态边框回归用例。② `FilterStatusPillTone` 删除无调用方的 `'muted'` 档（推测泛化）。评审确认保留的取舍：暗档 pill 混白用 `white` 关键字（参考实现刻意复刻，非 hex/oklch 字面量，同 `--shadow-*` 用字面黑先例）；RunListPanel chips JSX 与 StatusFilterChips 的标记双份（fail 段聚合 fail‖error，现 `statusOf` 契约表达不了，留待后续收敛）；`FilterTable.tsx` 文件名沿袭 issue/参考实现名而实际导出三个件（头注释已点名）。
 
 ---
 

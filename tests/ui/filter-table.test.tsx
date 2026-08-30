@@ -235,4 +235,17 @@ describe('HistoryTable 状态筛选接入', () => {
     fireEvent.click(chip('running'));
     expect(screen.queryByTestId('reg-hist-no-match')).not.toBeInTheDocument();
   });
+
+  it('分隔线跟随可见末行：末条被折叠时可见末行无边框，避免与容器描边成双线', () => {
+    render(<HistoryTable entries={ENTRIES} loading={false} onOpen={() => {}} />);
+    const rowCls = (e: RegressionHistoryEntry) =>
+      screen.getByTestId(`reg-hist-row-${e.runId}`).className;
+    // 全量态：末行（aborted）无边框，其余有
+    expect(rowCls(ENTRIES[3]!)).not.toContain('border-b');
+    expect(rowCls(ENTRIES[0]!)).toContain('border-b');
+    // 筛选 failed：末条 aborted 被折叠，可见末行变为 failed——无边框
+    fireEvent.click(chip('failed'));
+    expect(rowCls(ENTRIES[1]!)).not.toContain('border-b');
+    expect(rowCls(ENTRIES[0]!)).toContain('border-b');
+  });
 });

@@ -115,14 +115,13 @@ export function FilterCollapseRow({
   );
 }
 
-export type FilterStatusPillTone = 'pass' | 'fail' | 'running' | 'aborted' | 'muted';
+export type FilterStatusPillTone = 'pass' | 'fail' | 'running' | 'aborted';
 
 const PILL_TONE_VARS: Record<FilterStatusPillTone, string> = {
   pass: 'var(--status-pass)',
   fail: 'var(--status-fail)',
   running: 'var(--status-running)',
   aborted: 'var(--status-aborted)',
-  muted: 'var(--muted-foreground)',
 };
 
 /**

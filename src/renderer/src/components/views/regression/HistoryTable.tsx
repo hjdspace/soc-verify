@@ -49,7 +49,7 @@ function histDotClass(status: RegressionHistoryEntry['status']): string {
 
 function HistoryRow({ entry, hideBorder, onOpen }: {
   entry: RegressionHistoryEntry;
-  /** 列表末行去掉分隔线（容器自带描边）；折叠壳内 :last-child 失效，改由宿主按序号传入 */
+  /** 末个可见行去掉分隔线（容器自带描边）；折叠壳内 :last-child 失效，改由宿主按序号传入 */
   hideBorder?: boolean;
   onOpen: () => void;
 }) {
@@ -103,11 +103,18 @@ export function HistoryTable({ entries, loading, onOpen }: {
 }) {
   const [filter, setFilter] = useState<FilterStatusKey<HistStatus>>('all');
 
-  /** 当前筛选下的可见行数（全部时即 entries.length） */
-  const visibleCount = useMemo(
-    () => (filter === 'all' ? entries.length : entries.filter((e) => e.status === filter).length),
-    [entries, filter],
-  );
+  /** 单遍派生：可见行数（0 命中提示用）+ 末个可见行序号（分隔线跟随可见末行，避免与容器描边成双线） */
+  const { visibleCount, lastVisibleIndex } = useMemo(() => {
+    let count = 0;
+    let last = -1;
+    entries.forEach((e, i) => {
+      if (filter === 'all' || e.status === filter) {
+        count += 1;
+        last = i;
+      }
+    });
+    return { visibleCount: count, lastVisibleIndex: last };
+  }, [entries, filter]);
 
   return (
     <div className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card">
@@ -170,7 +177,7 @@ export function HistoryTable({ entries, loading, onOpen }: {
             >
               <HistoryRow
                 entry={entry}
-                hideBorder={i === entries.length - 1}
+                hideBorder={i === lastVisibleIndex}
                 onOpen={onOpen}
               />
             </FilterCollapseRow>
