@@ -13,6 +13,7 @@ import { ViewHeader } from '@renderer/components/layout/ViewHeader';
 import { MilestoneBar, type MilestoneStep } from './dashboard/MilestoneBar';
 import { AnalyticsDropdown } from './dashboard/AnalyticsDropdown';
 import { KpiRow, type KpiCardData } from './dashboard/KpiRow';
+import { InsightPanel } from './dashboard/InsightPanel';
 import { RunningSimStream } from './dashboard/RunningSimStream';
 import { CoverageRingPanel } from './dashboard/CoverageRingPanel';
 import { AgentActivityPanel } from './dashboard/AgentActivityPanel';
@@ -126,12 +127,15 @@ const openExportDialog = useCoverageExportStore((s) => s.openExportDialog);
     const unsubscribe = window.eventBridge.onSimulationEvent(({ type }) => {
       if (type === 'completed' || type === 'aborted') {
         void loadMilestones(currentProjectId);
-        // 强制刷新汇总与失败列表（重置 loaded 标记后重新拉取）
+        // 强制刷新汇总与失败列表（重置 loaded 标记后重新拉取；
+        // 洞察面板消费的 trend/unstable 一并刷新）
         useDashboardStore.setState((s) => ({
-          tabLoaded: { ...s.tabLoaded, overview: false, failures: false },
+          tabLoaded: { ...s.tabLoaded, overview: false, failures: false, trend: false, unstable: false },
         }));
         void loadTabData('overview', currentProjectId);
         void loadTabData('failures', currentProjectId);
+        void loadTabData('trend', currentProjectId);
+        void loadTabData('unstable', currentProjectId);
       }
     });
     return unsubscribe;
@@ -238,6 +242,8 @@ const openExportDialog = useCoverageExportStore((s) => s.openExportDialog);
       <MilestoneBar steps={finalMilestones} />
 
       <KpiRow cards={kpiCards} />
+
+      <InsightPanel />
 
       <div className="mb-3 grid grid-cols-[1.6fr_1fr] gap-3">
         <RunningSimStream />

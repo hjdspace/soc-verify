@@ -287,7 +287,7 @@ chips 筛选组件：带彩色圆点与计数徽标的状态 chips（计数从�
 
 ## Issue #9: InsightCards — 洞察轮播（recharts 替换 liveline）
 
-**Labels**: `ready-for-agent` `p2`
+**Labels**: `ready-for-agent` `p2` → **已完成**（2026-08-30）
 **Blocked by**: #1
 
 ### What to build
@@ -301,11 +301,22 @@ chips 筛选组件：带彩色圆点与计数徽标的状态 chips（计数从�
 
 ### Acceptance criteria
 
-- [ ] 无 liveline 依赖，recharts 渲染折线；游标/tooltip 交互保留
-- [ ] 分页循环正确（末页 → 首页），每页含建议追问 pill
-- [ ] 暗色主题下图表配色正确
-- [ ] 组件测试：分页、metric 切换、segment 点选
-- [ ] typecheck + lint + 相关测试通过
+- [x] 无 liveline 依赖，recharts 渲染折线；游标/tooltip 交互保留
+- [x] 分页循环正确（末页 → 首页），每页含建议追问 pill
+- [x] 暗色主题下图表配色正确
+- [x] 组件测试：分页、metric 切换、segment 点选
+- [x] typecheck + lint + 相关测试通过
+
+### 落地记录（2026-08-30）
+
+- **组件**（`components/ui/InsightCards.tsx`）：props 化轮播 `InsightCards`（pages/title/onAskPill/testId）+ 三卡形态 discriminated union（`InsightCardData` = compare/anomaly/allocation）。分页 state 按 **key 记忆**（数据刷新页序变化/页数增减不跳页，key 消失回落首页；比参考实现的 index state 更稳），`move = (index ± 1 + len) % len` 取模循环（末页→首页、首页反向→末页）；页切换 `key` 重挂载 fade-in 180ms 交叉淡入。**scrub 自建实现直接搬**：`chartIndexFromPointer()`（getBoundingClientRect 拆参便于脱离 DOM 单测，补零宽/单点防 NaN 守卫）+ Catmull-Rom `smooth()`（每段 9 点，`SMOOTH_PER_SEGMENT` 导出）逐行移植；compare 双系列经 smooth 稠密化交给 recharts `<Line type="linear">` 直线连接（视觉即平滑曲线，参考实现由 liveline 完成同一效果），游标 `left %` 定位 + tooltip 锚点 28–72% 钳制与参考实现同款；anomaly 柱状卡同用 pointer→index scrub（游标 + tooltip + Cell fillOpacity 高亮）。头部 caption 悬停时切换为当前数据点标签（compare 切日期、anomaly 切「类目 · 值」）。参考实现「数据点以调用时 Date.now() 锚定」的坑不适用——时间轴语义由宿主数据（getTrend 日期）承担，组件不生成时间点。
+- **契约偏差说明**：① `tone` 参考实现存 Tailwind 类名（`bg-orange`），此处改为语义变量名 `colorVar`（如 `'--status-pass'`）——SVG 属性不接受 `var()`，系列色由组件按变量名读 `:root` 计算值注入 stroke/fill，HTML 圆点/分段条仍用 `var()` 内联随主题自动取值；② anomaly 卡补阈值 **ReferenceLine 虚线**（`--status-aborted`，可缺省不画线）——参考实现自身注释即「bars with threshold」而正文只画线图，此处让「阈值头」有真实视觉锚点；③ 占比/页首叙述/页脚等文案全部宿主以字符串/ReactNode 传入，参考实现写死的冰淇淋演示数据零残留。
+- **暗色检测**：`useShade()` 读 theme store（`currentTheme` → `THEMES[].mode`），替代参考实现的 MutationObserver；shade 进入 `useMemo` deps 作重算触发器（`applyTheme` 先于 store 更新，重渲染时读到的已是新主题计算值），根节点落 `data-shade` 供测试断言。
+- **宿主**（`views/dashboard/InsightPanel.tsx`）：`buildInsightPages()` 纯函数把 dashboard store 现有查询映射为三页——getTrend → 通过/失败双系列对比折线（近 14 点、通过率/较前日 delta、**daily/weekly 粒度决定叙述单位「天/周」与悬停标签格式**）；getUnstableCases Top 6 → 异常检测柱状（失败率/失败次数 metric 切换、失败率 ≥50% 阈值线）；getRecentFailures 按子系统聚合 → 占比分段条（Top 3 + 「其他」吸收剩余百分比，点选驱动大数字）。缺数的页自动省略、全空整块隐藏（数据诚实）；trend/unstable 挂载时按需拉取（tabLoaded 防重复），仿真完成时 DashboardView 刷新钩子把 trend/unstable 一并重置重拉。追问 pill → `askFollowUp`：开 AI 面板（drawer 开抽屉 / docked 展开右栏），无活跃会话先 `createSession` 再 `sendMessage`——全走现有会话链路。
+- **DashboardView 接入**：`<InsightPanel />` 落 KPI 行之后（`max-w-md` 独立行），页面其余布局不动。
+- **样式**（globals.css，`.ap-seg-*` 之后）：`.ap-ins-*` 落共享件——卡 `--shadow-card`、面板 `--muted` + `--shadow-hairline`、tooltip 取 `--popover/--popover-foreground` + `--shadow-overlay`、游标 `--foreground` 26% 透明、metric 切换组深轨 `--background` + 卡面 thumb `--shadow-btn`；分段条选中态内环/sheen 用白系高亮（参考实现刻意复刻，同 `--shadow-*` 字面黑先例）；reduced-motion 下分段 sheen 去 width 过渡（保留 opacity），页切换 fade-in 本就纯 opacity 符合保留策略。
+- **测试**：`tests/ui/insight-cards.test.tsx` 25 例（smooth/chartIndexFromPointer 纯函数单测、分页双向取模循环、单页/空 pages、pill 回调与非交互降级、metric 切换数据/参考线/头部联动、柱状 scrub 游标+tooltip、占比分段点选与宽度注入、折线 scrub 游标/tooltip/锚点钳制/离开清除、data-shade 随 theme store 切换、**明暗两档 stroke 计算值对照**（mock getComputedStyle 按 data-theme 返回可区分值，验证重读链路）、稠密化双系列数据缝断言）+ `tests/ui/insight-panel.test.tsx` 11 例（buildInsightPages 映射/缺数省略/周粒度/「其他」桶、挂载拉取、tabLoaded 防重复、pill 发送/建会话/docked 模式）。**测试缝**：recharts 在 jsdom 下 ResponsiveContainer 量不到尺寸（setup 的 ResizeObserver 为 noop），SVG 不渲染——两测试文件共用透传 stub（`tests/ui/recharts-stub.tsx`）把 props/data 落成 data-* 属性在 DOM 边界断言；真实 SVG 渲染由真实应用承担。
+- **review 修订（2026-08-30，双轴评审后）**：① anomaly 卡补竖线游标（参考实现 AnomalyCard 同款，AC「游标交互保留」）；② 周粒度下「最近 N 天」表述错误 → 叙述单位/标签随 `trendGranularity` 切换；③ `onAskPill` 删掉无调用方的 `page` 参数；④ 两份 recharts stub 合并为共享工厂 `tests/ui/recharts-stub.tsx`；⑤ tooltip 色值收敛 `colors.barVar` 单点、`Em` 拆为 `Num`（数值）/`Name`（用例名）。确认保留的取舍：pill 接通发送链路（issue 只写「含建议追问 pill」，但死 pill 违背面板本意，沿 followUps 先例）、阈值 ReferenceLine、DashboardView 刷新扩展（数据新鲜度支撑）。全量 `tests/ui` 1149 例中 1147 过；2 例失败为 CaseTreePanel 折叠用例（预存，#3 已备案），与本次无关。
 
 ---
 

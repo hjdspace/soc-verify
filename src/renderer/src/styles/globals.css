@@ -2506,6 +2506,409 @@ a.ap-ctx-chip,
   color: var(--primary);
 }
 
+/* ── 洞察轮播 InsightCards（issues #9）──
+   分页洞察卡（state 取模循环 + 前后按钮），三卡形态：双系列对比折线（自建 scrub：
+   竖线游标 + tooltip 锚点）、异常检测柱状（metric 切换 + 阈值参考线）、占比分段条
+  （点选驱动大数字）。折线/柱状用项目已有 recharts 重绘（liveline 不引入）。
+   视觉/交互参考 beautiful-ui:
+   D:\AI\beautiful-ui\components\primitives\InsightCards.tsx
+  （对应 CSS: D:\AI\beautiful-ui\app\globals.css 约 L1350–1400 .insight-chart-cursor/tooltip-*）
+   参考实现 --surface/--inset/--field/--ink*/--line-strong/--tooltip-* 取映射语义变量
+  （--card/--muted/--background/--muted-foreground/--fg-faint/--input/--popover），
+   SVG 属性不能用 var()，系列色由组件读 :root 计算值注入（theme store 驱动重渲染）。 */
+.ap-ins {
+  width: 100%;
+}
+.ap-ins-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.ap-ins-pager-title {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.ap-ins-pager-count {
+  font-size: 13px;
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+.ap-ins-pager-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.ap-ins-pager-btn {
+  display: flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--fg-faint);
+  cursor: pointer;
+  transition:
+    background-color 100ms ease,
+    color 100ms ease,
+    transform 100ms ease;
+}
+.ap-ins-pager-btn:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.ap-ins-pager-btn:active {
+  transform: scale(0.96);
+}
+/* 页切换交叉淡入：fade-in 纯 opacity（reduced-motion 保留策略内，无位移） */
+.ap-ins-page {
+  animation: fade-in 180ms var(--ease-out-strong) both;
+}
+.ap-ins-prose {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+}
+.ap-ins-card {
+  min-height: 278px;
+  margin-top: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+}
+.ap-ins-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--foreground);
+}
+.ap-ins-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 999px;
+}
+.ap-ins-mono {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.ap-ins-mono[data-tone='pass'] {
+  color: var(--status-pass);
+}
+.ap-ins-mono[data-tone='fail'] {
+  color: var(--status-fail);
+}
+
+/* 对比卡 legend */
+.ap-ins-legend {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+.ap-ins-legend-item {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.ap-ins-legend-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--muted-foreground);
+}
+.ap-ins-legend-value {
+  display: block;
+  margin-top: 1px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+  font-variant-numeric: tabular-nums;
+}
+.ap-ins-legend-value[data-tone='pass'] {
+  color: var(--status-pass);
+}
+.ap-ins-legend-value[data-tone='fail'] {
+  color: var(--status-fail);
+}
+
+/* 图表面板（两卡共用）：凹陷容器 + 头行 */
+.ap-ins-panel {
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--muted);
+  box-shadow: var(--shadow-hairline);
+}
+.ap-ins-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.ap-ins-panel-caption {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: var(--fg-faint);
+  font-variant-numeric: tabular-nums;
+}
+.ap-ins-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--card);
+  box-shadow: var(--shadow-btn);
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+/* metric 切换组：深轨 + 卡面 thumb（参考实现 field 轨 / surface thumb 的映射） */
+.ap-ins-metric-group {
+  display: inline-flex;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--background);
+}
+.ap-ins-metric-btn {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--fg-faint);
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+}
+.ap-ins-metric-btn:hover {
+  color: var(--muted-foreground);
+}
+.ap-ins-metric-btn:active {
+  transform: scale(0.96);
+}
+.ap-ins-metric-btn[aria-pressed='true'] {
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: var(--shadow-btn);
+}
+
+/* scrub 舞台 + 游标/tooltip（.insight-chart-* 的语义变量移植） */
+.ap-ins-stage {
+  position: relative;
+  height: 166px;
+  overflow: hidden;
+}
+.ap-ins-cursor {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--foreground);
+  opacity: 0.26;
+  pointer-events: none;
+}
+.ap-ins-tooltip-anchor {
+  position: absolute;
+  z-index: 5;
+  top: 8px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.ap-ins-tooltip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 9px;
+  border: 1px solid var(--input);
+  border-radius: 8px;
+  color: var(--popover-foreground);
+  background: var(--popover);
+  box-shadow: var(--shadow-overlay);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ap-ins-tooltip-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ap-ins-tooltip-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+}
+
+/* 异常卡页脚大数字 */
+.ap-ins-footer {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 6px;
+}
+.ap-ins-footer-value {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+  font-variant-numeric: tabular-nums;
+}
+.ap-ins-footer-note {
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+/* 占比分段条：深轨内彩色分段按钮，点选提升不透明度 + 内环高亮 */
+.ap-ins-hero {
+  display: block;
+  margin-top: 4px;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+  font-variant-numeric: tabular-nums;
+}
+.ap-ins-segbar {
+  display: flex;
+  gap: 2px;
+  height: 36px;
+  margin-top: 12px;
+  padding: 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--background);
+}
+.ap-ins-seg {
+  position: relative;
+  height: 100%;
+  min-width: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    opacity 300ms var(--ease-out-strong),
+    transform 300ms var(--ease-out-strong),
+    box-shadow 300ms var(--ease-out-strong);
+}
+.ap-ins-seg:active {
+  transform: scale(0.98);
+}
+/* 选中分段内环（参考实现刻意用白系高亮，非语义色，同 --shadow-* 字面黑先例） */
+.ap-ins-seg[data-selected='true'] {
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.22);
+}
+.ap-ins-seg-sheen {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: 0%;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.2);
+  opacity: 0;
+  transition:
+    width 500ms var(--ease-out-strong),
+    opacity 300ms var(--ease-out-strong);
+}
+.ap-ins-seg[data-selected='true'] .ap-ins-seg-sheen {
+  width: calc(100% - 8px);
+  opacity: 1;
+}
+.ap-ins-seglegend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.ap-ins-legend-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
+}
+.ap-ins-legend-btn:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+.ap-ins-legend-btn[aria-pressed='true'] {
+  background: var(--muted);
+  color: var(--foreground);
+}
+.ap-ins-legend-pct {
+  font-variant-numeric: tabular-nums;
+}
+.ap-ins-detail {
+  min-height: 64px;
+  margin-top: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--muted);
+  box-shadow: var(--shadow-hairline);
+}
+.ap-ins-detail-label {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+.ap-ins-detail-text {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--fg-faint);
+}
+/* 建议追问 pill：无回调时为非交互文本（data-static 去手型与 hover） */
+.ap-ins-pill {
+  display: inline-block;
+  max-width: 100%;
+  margin-top: 8px;
+  padding: 6px 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--card);
+  box-shadow: var(--shadow-btn);
+  font-size: 12px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+button.ap-ins-pill {
+  cursor: pointer;
+  transition: background-color 100ms ease;
+}
+button.ap-ins-pill:hover {
+  background: var(--accent);
+}
+
 /* ── 减弱动效：抽屉滑入与树展开 ─────────────────────────────────
    reduced-motion 不等于零动画——保留 opacity 淡入（帮助理解状态变化），
    禁用位移和高度变化（position change 是主要触发前庭不适的因素）。
@@ -2573,5 +2976,10 @@ a.ap-ctx-chip,
   /* 分段控件 thumb：去掉 translateX 滑动（位置变化） */
   .ap-seg-thumb {
     transition: none !important;
+  }
+
+  /* 洞察分段条：选中 sheen 去 width 过渡（保留 opacity 淡入） */
+  .ap-ins-seg-sheen {
+    transition: opacity 150ms ease !important;
   }
 }
