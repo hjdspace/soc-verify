@@ -1900,6 +1900,213 @@ a.ap-ctx-chip,
   gap: 8px;
 }
 
+/* ── 批量编辑采纳表 DiffTable（issues #6）──
+   提议 → 分阶段着色 → 逐行采纳 → Apply：stage 1 删除行红 tint、
+   stage 2 新增行 grid-rows 0fr→1fr 展开 + 页脚 fade-up，Apply 后
+   冻结并 pop-in 确认 pill。视觉/交互参考 beautiful-ui:
+   D:\AI\beautiful-ui\components\primitives\DiffTable.tsx
+   共享 UI 件：AI 批量修改（cfg 参数/开关批量提议等）同形态复用。
+   颜色一律取全局语义变量，tint 在使用点 color-mix 就地计算。 */
+.ap-diff-card {
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--shadow-card);
+}
+.ap-diff-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.ap-diff-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--foreground);
+}
+.ap-diff-hint {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+.ap-diff-grid {
+  display: grid;
+  align-items: center;
+}
+.ap-diff-head {
+  border-bottom: 1px solid var(--border);
+}
+.ap-diff-th {
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-faint);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ap-diff-row {
+  border-bottom: 1px solid var(--border);
+  transition:
+    background-color 150ms ease,
+    filter 150ms ease,
+    opacity 150ms ease;
+}
+.ap-diff-row:last-child {
+  border-bottom: 0;
+}
+.ap-diff-row-interactive {
+  cursor: pointer;
+}
+.ap-diff-row-interactive:hover {
+  filter: brightness(0.985);
+}
+.ap-diff-row-interactive:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+.ap-diff-cell {
+  min-width: 0;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: var(--muted-foreground);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  transition: color 200ms ease;
+}
+.ap-diff-cell-main {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--foreground);
+}
+/* 采纳中的删除行：红 tint 底 + 主列红字、次列红字删除线（tint 就地派生） */
+.ap-diff-row-out {
+  background: color-mix(in srgb, var(--status-fail) 14%, var(--card));
+}
+.ap-diff-row-out .ap-diff-cell {
+  color: var(--status-fail);
+}
+.ap-diff-row-out .ap-diff-cell:not(.ap-diff-cell-main) {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--status-fail) 50%, transparent);
+}
+/* 新增行：grid-rows 0fr→1fr 自底部展开（曲线取映射层 --ease-out-strong） */
+.ap-diff-add {
+  display: grid;
+  transition:
+    grid-template-rows 200ms var(--ease-out-strong),
+    opacity 200ms var(--ease-out-strong);
+}
+.ap-diff-add-clip {
+  overflow: hidden;
+  min-height: 0;
+}
+.ap-diff-row-add {
+  border-top: 1px solid var(--border);
+}
+/* 采纳中的新增行：绿 tint 底 + 绿字；未采纳行褪为 faint（同参考实现） */
+.ap-diff-row-add-in {
+  background: color-mix(in srgb, var(--status-pass) 14%, var(--card));
+}
+.ap-diff-row-add-in .ap-diff-cell {
+  color: var(--status-pass);
+}
+.ap-diff-row-add:not(.ap-diff-row-add-in) .ap-diff-cell {
+  color: var(--fg-faint);
+}
+.ap-diff-markslot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 12px;
+}
+/* 勾选块：采纳 tone 底白勾，取消灰底 hairline 环缩放 0.92 */
+.ap-diff-mark {
+  display: flex;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  color: var(--background);
+  background: var(--muted);
+  box-shadow: var(--shadow-hairline);
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    transform 150ms ease;
+}
+.ap-diff-mark-red {
+  background: var(--status-fail);
+}
+.ap-diff-mark-green {
+  background: var(--status-pass);
+}
+/* 行级语义 pill（DiffBadge）：分组/标签元信息 */
+.ap-diff-badge {
+  display: inline-flex;
+  height: 22px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--muted);
+  box-shadow: var(--shadow-hairline);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  transition: opacity 200ms ease;
+}
+.ap-diff-row-out .ap-diff-badge {
+  opacity: 0.55;
+}
+.ap-diff-badge i {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+}
+.ap-diff-footer {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}
+.ap-diff-stats {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-faint);
+}
+/* 确认 pill：绿 tint 底 + 绿圆勾（暗主题绿字明度高，勾色取 --background 同 PillButton success） */
+.ap-diff-applied {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--status-pass) 14%, var(--card));
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--status-pass);
+}
+.ap-diff-applied-dot {
+  display: flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--status-pass);
+  color: var(--background);
+}
+
 /* ── 划选 AI 操作条 SelectionActions（issues #5）──
    划选文本后附着的浮条：快捷动作 + 自定义 prompt + 回合状态机。
    视觉/交互参考 beautiful-ui:
@@ -2130,6 +2337,18 @@ a.ap-ctx-chip,
   /* 建议卡抽屉：去掉 grid-rows 高度过渡，保留 opacity 淡入 */
   .ap-rec-drawer {
     transition: opacity 150ms ease !important;
+  }
+
+  /* 采纳表新增行：去掉 grid-rows 高度过渡，保留 opacity 淡入；
+     页脚入场改纯 fade-in（去位移），确认 pill pop-in 关闭 */
+  .ap-diff-add {
+    transition: opacity 150ms ease !important;
+  }
+  .ap-diff-footer {
+    animation-name: fade-in !important;
+  }
+  .ap-diff-applied {
+    animation: none !important;
   }
 
   /* 划选操作条：锚点位移与 slot 折叠去过渡（opacity 保留），入场去 pop-in */
