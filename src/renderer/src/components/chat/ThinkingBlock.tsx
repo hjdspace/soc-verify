@@ -63,8 +63,9 @@ export const ThinkingBlock = memo(function ThinkingBlock({
     : (lines[0] ?? '');
 
   // 流式尾缘：与 MarkdownRenderer 相同的 blur+mask 效果（纯文本场景），
-  // 末尾几个字符从模糊中凝聚成形，光标为统一的实心 .ap-cursor
-  const TAIL_CHARS = 6;
+  // 末尾几个字符从模糊中凝聚成形，光标为统一的实心 .ap-cursor。
+  // 0 = 禁用尾缘（慢 API 下末尾字符会长时间冻结在模糊态），仅保留光标
+  const TAIL_CHARS = 0;
   const cut = isThinkingActive ? Math.max(0, thinking.length - TAIL_CHARS) : thinking.length;
 
   return (
