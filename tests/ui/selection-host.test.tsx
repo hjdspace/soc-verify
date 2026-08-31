@@ -93,15 +93,16 @@ describe('SelectionActionsHost — 气泡接入', () => {
     expect(screen.getByTestId('selection-action-explain')).toBeTruthy();
   });
 
-  it('快捷动作发送带引用上下文的消息（指令 + blockquote 引用）', async () => {
+  it('查阅型动作（explain）在临时会话发送，不写入当前会话', async () => {
     const session = setCoreSession([assistantMsg('a1', '回复')]);
-    const { rerender } = render(
+    render(
       <SelectionActionsHost session={session} enabled>
         <p>回复正文</p>
       </SelectionActionsHost>,
     );
 
     fireEvent.click(screen.getByTestId('selection-action-explain'));
+    // 查阅型动作创建临时会话 → sendMessage 在临时会话上发送
     await waitFor(() => {
       expect(trpc.session.send.mutate).toHaveBeenCalledWith({
         sessionId: 'sess_rt_1',
@@ -109,26 +110,18 @@ describe('SelectionActionsHost — 气泡接入', () => {
         images: undefined,
       });
     });
-    // 真实 sendMessage 同步 append：user 引用消息 + 空流式 assistant 占位
-    expect(storeMessageIds()).toHaveLength(3);
-
-    // 引擎事件落定（模拟 message_end 后状态）→ result
-    rerender(
-      <SelectionActionsHost
-        session={setCoreSession([
-          assistantMsg('a1', '回复'),
-          { id: 'u_1', role: 'user', content: '引用', timestamp: 2 },
-          assistantMsg('a_2', '新回答'),
-        ])}
-        enabled
-      >
-        <p>回复正文</p>
-      </SelectionActionsHost>,
-    );
-    expect(screen.getByTestId('selection-keep')).toBeTruthy();
+    // 当前会话消息不变——查阅型动作不打断当前会话
+    expect(storeMessageIds()).toEqual(['a1']);
+    // 临时会话出现在 sessions 列表中，标记为 transient
+    const allSessions = useSessionCoreStore.getState().sessions;
+    expect(allSessions).toHaveLength(2);
+    const transient = allSessions.find((s) => s.id !== SESSION_ID);
+    expect(transient?.transient).toBe(true);
+    // 临时会话有 user + assistant 消息（sendMessage 同步 append）
+    expect(transient?.messages).toHaveLength(2);
   });
 
-  it('自定义 prompt 作为指令原文发送', async () => {
+  it('自定义 prompt 在临时会话发送（查阅型），不写入当前会话', async () => {
     const session = setCoreSession([assistantMsg('a1', '回复')]);
     render(
       <SelectionActionsHost session={session} enabled>
@@ -144,6 +137,8 @@ describe('SelectionActionsHost — 气泡接入', () => {
         images: undefined,
       });
     });
+    // 当前会话不变——自定义 prompt 也是查阅型，不打断当前会话
+    expect(storeMessageIds()).toEqual(['a1']);
   });
 
   it('Discard 按提交前消息数移除本回合消息（恢复原文）', async () => {
@@ -174,14 +169,14 @@ describe('SelectionActionsHost — 气泡接入', () => {
     expect(storeMessageIds()).toEqual(['a1']);
   });
 
-  it('Retry 先恢复原文再重新发送同一动作', async () => {
+  it('Retry 先恢复原文再重新发送同一动作（改写型 improve）', async () => {
     const session = setCoreSession([assistantMsg('a1', '回复')]);
     const { rerender } = render(
       <SelectionActionsHost session={session} enabled>
         <p>回复正文</p>
       </SelectionActionsHost>,
     );
-    fireEvent.click(screen.getByTestId('selection-action-explain'));
+    fireEvent.click(screen.getByTestId('selection-action-improve'));
     await waitFor(() => {
       expect(storeMessageIds()).toHaveLength(3);
     });
@@ -206,15 +201,15 @@ describe('SelectionActionsHost — 气泡接入', () => {
     expect(screen.getByTestId('selection-busy')).toBeTruthy();
   });
 
-  it('Retry 后再次 Discard 仍按重提时的基线恢复（live 基线，非渲染闭包）', async () => {
+  it('Retry 后再次 Discard 仍按重提时的基线恢复（改写型 improve，live 基线，非渲染闭包）', async () => {
     const session = setCoreSession([assistantMsg('a1', '回复')]);
     const { rerender } = render(
       <SelectionActionsHost session={session} enabled>
         <p>回复正文</p>
       </SelectionActionsHost>,
     );
-    // 第一回合
-    fireEvent.click(screen.getByTestId('selection-action-explain'));
+    // 第一回合（improve 是改写型，落定后显示 Keep/Discard/Retry）
+    fireEvent.click(screen.getByTestId('selection-action-improve'));
     await waitFor(() => {
       expect(storeMessageIds()).toHaveLength(3);
     });
@@ -253,14 +248,14 @@ describe('SelectionActionsHost — 气泡接入', () => {
     expect(storeMessageIds()).toEqual(['a1']);
   });
 
-  it('Keep 保留会话仅关闭状态机，不删消息', async () => {
+  it('Keep 保留会话仅关闭状态机，不删消息（改写型 improve）', async () => {
     const session = setCoreSession([assistantMsg('a1', '回复')]);
     const { rerender } = render(
       <SelectionActionsHost session={session} enabled>
         <p>回复正文</p>
       </SelectionActionsHost>,
     );
-    fireEvent.click(screen.getByTestId('selection-action-explain'));
+    fireEvent.click(screen.getByTestId('selection-action-improve'));
     await waitFor(() => {
       expect(storeMessageIds()).toHaveLength(3);
     });
@@ -284,7 +279,7 @@ describe('SelectionActionsHost — 气泡接入', () => {
 });
 
 describe('SelectionActionsHost — 文件/产物表面接入（source 来源 + session 回退）', () => {
-  it('不传 session 时回退当前会话，引用标注为「引用自文件 <path>」', async () => {
+  it('查阅型动作（explain）在临时会话发送，引用标注为「引用自文件 <path>」', async () => {
     setCoreSession([assistantMsg('a1', '回复')]);
     render(
       <SelectionActionsHost source={{ kind: 'file', path: '/proj/view/dv/tb_top.sv' }}>
@@ -302,9 +297,11 @@ describe('SelectionActionsHost — 文件/产物表面接入（source 来源 + s
         images: undefined,
       });
     });
+    // 当前会话不变——查阅型动作不打断当前会话
+    expect(storeMessageIds()).toEqual(['a1']);
   });
 
-  it('自定义 prompt 同样携带文件来源标注', async () => {
+  it('自定义 prompt 在临时会话发送，同样携带文件来源标注', async () => {
     setCoreSession([assistantMsg('a1', '回复')]);
     render(
       <SelectionActionsHost source={{ kind: 'file', path: '/docs/report.md' }}>
@@ -320,6 +317,8 @@ describe('SelectionActionsHost — 文件/产物表面接入（source 来源 + s
         images: undefined,
       });
     });
+    // 当前会话不变
+    expect(storeMessageIds()).toEqual(['a1']);
   });
 
   it('文件来源回合的 Discard 按当前会话基线恢复原文', async () => {
