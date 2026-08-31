@@ -24,6 +24,9 @@ import {
   X,
   Search,
   Loader2,
+  Play,
+  Zap,
+  Copy,
 } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
@@ -62,6 +65,7 @@ interface ContextMenuState {
   visible: boolean;
   x: number;
   y: number;
+  caseData: CaseData | null;
   fileNode: CaseTreeNode | null;
 }
 
@@ -85,7 +89,23 @@ interface UdtbDialogState {
 export function CaseCfgPanel() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const selectCase = useSimulationStore((s) => s.selectCase);
-  const projEnv = useEnvStore((s) => s.config?.envVars.PROJ_ENV);
+  const configProjEnv = useEnvStore((s) => s.config?.envVars.PROJ_ENV);
+  const systemEnvVars = useEnvStore((s) => s.systemEnvVars);
+  const loadSystemEnv = useEnvStore((s) => s.loadSystemEnv);
+  const loadConfig = useEnvStore((s) => s.loadConfig);
+
+  // Merge: config env vars (user-saved) take priority, fall back to system-detected.
+  // This ensures the "解析环境" button is enabled as soon as $PROJ_ENV is
+  // detected from the login shell — without requiring the user to open the
+  // Env Manager dialog.
+  const projEnv = configProjEnv ?? systemEnvVars['PROJ_ENV'] ?? undefined;
+
+  // Auto-load system env vars on mount (and when project changes) so the
+  // button state is correct without requiring Env Manager to be opened.
+  useEffect(() => {
+    void loadSystemEnv();
+    if (currentProjectId) void loadConfig(currentProjectId);
+  }, [loadSystemEnv, loadConfig, currentProjectId]);
 
   const [loadedFiles, setLoadedFiles] = useState<CaseFileData[]>([]);
   const [loading, setLoading] = useState(false);
@@ -96,6 +116,7 @@ export function CaseCfgPanel() {
     visible: false,
     x: 0,
     y: 0,
+    caseData: null,
     fileNode: null,
   });
   const [searchQuery, setSearchQuery] = useState('');
@@ -239,15 +260,51 @@ export function CaseCfgPanel() {
     selectCase(caseData);
   };
 
-  const handleRunCase = (caseData: CaseData) => {
-    // Delegate to simulation store via selectCase then user clicks run
+  const handleRunCase = async (caseData: CaseData) => {
+    if (!currentProjectId) return;
     selectCase(caseData);
+    const { startCaseRun } = useSimulationStore.getState();
+    await startCaseRun(currentProjectId, caseData);
+  };
+
+  const handleCaseContextMenu = (e: React.MouseEvent, caseData: CaseData) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ visible: true, x: e.clientX, y: e.clientY, caseData, fileNode: null });
+  };
+
+  const handleTogglePostSim = async (caseData: CaseData) => {
+    if (!currentProjectId) return;
+    setContextMenu((s) => ({ ...s, visible: false }));
+    try {
+      await trpc.project.setCasePostSim.mutate({
+        projectId: currentProjectId,
+        caseName: caseData.name,
+        subsys: caseData.subsys,
+        postSim: !caseData.postSim,
+      });
+      // Refresh loaded files to get updated postSim state
+      await loadFiles();
+      useToastStore.getState().success(caseData.postSim ? '已取消后仿标记' : '已标记需要后仿');
+    } catch (err) {
+      useToastStore.getState().error('后仿标记更新失败', err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleCopyCasePath = async (caseData: CaseData) => {
+    setContextMenu((s) => ({ ...s, visible: false }));
+    try {
+      await navigator.clipboard.writeText(caseData.filePath ?? caseData.path);
+      useToastStore.getState().success('已复制路径');
+    } catch {
+      useToastStore.getState().error('复制失败', '无法访问剪贴板');
+    }
   };
 
   const handleFileContextMenu = (e: React.MouseEvent, fileNode: CaseTreeNode) => {
     e.preventDefault();
     e.stopPropagation();
-    setContextMenu({ visible: true, x: e.clientX, y: e.clientY, fileNode });
+    setContextMenu({ visible: true, x: e.clientX, y: e.clientY, caseData: null, fileNode });
   };
 
   const handleParseEnv = async () => {
@@ -611,7 +668,7 @@ export function CaseCfgPanel() {
                 selectedCaseId={selectedCaseId}
                 toggleCaseSelection={() => {}}
                 onCaseSelect={handleCaseSelect}
-                onContextMenu={() => {}}
+                onContextMenu={handleCaseContextMenu}
                 onFileContextMenu={handleFileContextMenu}
                 onRunCase={handleRunCase}
               />
@@ -633,7 +690,7 @@ export function CaseCfgPanel() {
                 selectedCaseId={selectedCaseId}
                 toggleCaseSelection={() => {}}
                 onCaseSelect={handleCaseSelect}
-                onContextMenu={() => {}}
+                onContextMenu={handleCaseContextMenu}
                 onFileContextMenu={handleFileContextMenu}
                 onRunCase={handleRunCase}
               />
@@ -809,6 +866,45 @@ export function CaseCfgPanel() {
         </div>,
         document.body,
       )}
+
+      {/* Context menu — case node */}
+      {contextMenu.visible &&
+        contextMenu.caseData &&
+        createPortal(
+          <div
+            className="fixed z-[9999] min-w-40 overflow-hidden rounded-md border border-border bg-popover shadow-xl"
+            style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => {
+                void handleRunCase(contextMenu.caseData!);
+                setContextMenu((s) => ({ ...s, visible: false }));
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-accent"
+            >
+              <Play className="h-3 w-3 text-primary" />
+              运行仿真
+            </button>
+            <div className="border-t border-border/50" />
+            <button
+              onClick={() => void handleTogglePostSim(contextMenu.caseData!)}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-xs transition-colors hover:bg-accent"
+            >
+              <Zap className="h-3 w-3 text-amber-500" />
+              {contextMenu.caseData.postSim ? '取消后仿标记' : '标记需要后仿'}
+            </button>
+            <div className="border-t border-border/50" />
+            <button
+              onClick={() => void handleCopyCasePath(contextMenu.caseData!)}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent"
+            >
+              <Copy className="h-3 w-3 text-muted-foreground" />
+              <span>复制路径</span>
+            </button>
+          </div>,
+          document.body,
+        )}
 
       {/* Context menu — file node */}
       {contextMenu.visible &&
