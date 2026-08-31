@@ -18,6 +18,7 @@ import { readFile, writeFile, readdir, rename, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { ensureV1Prefix } from '../agent/openai-compatible';
 import { kbLayout } from './layout';
+import { extractSkeleton } from './indexer';
 import { sessionManager } from '../agent/session-manager';
 import { credentialManager } from '../credentials/credential-manager';
 import { pluginLoader } from '../plugins/loader';
@@ -122,28 +123,9 @@ ${existingIndex || '（空——首次重建）'}
 ${docListStr}
 ---
 
-请直接输出完整的 index.md 内容，不要加 markdown 代码块标记。`;
-}
-
-// ── 骨架截取（复用 indexer 的逻辑） ────────────────────────────
-
-/**
- * 从 Markdown 提取骨架：标题 + 前若干行。
- */
-function extractSkeleton(markdown: string, maxLines = 60): string {
-  const lines = markdown.split('\n');
-  const result: string[] = [];
-
-  for (const line of lines) {
-    if (/^#{1,6}\s/.test(line)) {
-      result.push(line);
-    } else if (line.trim() && result.length < maxLines) {
-      result.push(line);
-    }
-    if (result.length >= maxLines) break;
-  }
-
-  return result.join('\n');
+产出方式（必须严格遵守）：
+使用 write_file 工具，把完整的 index.md 内容写入知识库根目录下的 \`.index.md.new\` 文件（宿主会校验该文件后原子替换正式 index.md）。
+不要直接修改或覆盖 index.md 本身；也不要把索引内容作为对话消息输出。`;
 }
 
 // ── 收集文档列表 ────────────────────────────────────────────────
@@ -169,7 +151,7 @@ async function collectDocuments(kbPath: string): Promise<Array<{ path: string; s
       } else if (entry.isFile() && entry.name.endsWith('.md')) {
         const relPath = fullPath.replace(/\\/g, '/').replace(docsDirNormalized + '/', '');
         const content = await readFile(fullPath, 'utf-8');
-        const skeleton = extractSkeleton(content);
+        const skeleton = extractSkeleton(content, 60);
         documents.push({ path: relPath, skeleton });
       }
     }
@@ -277,69 +259,45 @@ export async function deepReindex(params: DeepReindexParams): Promise<DeepReinde
     return { ok: false, error: { code: 'sessionFailed', message: `会话创建失败: ${msg}` } };
   }
 
-  // 6. 发送 prompt
+  // 6. 发送 prompt 并等待 Agent 完成本轮
   try {
     notify({ phase: 'processing', current: 0, total, message: `Agent 正在深度阅读 ${total} 篇文档...` });
 
-    // Fire-and-forget: Agent 产出通过事件流 / write_file 工具完成。
-    // 下面会检查文件系统产出，不需要等待 agent_end。
-    await sessionManager.promptFireAndForget(sessionId, prompt);
+    // sendPromptAndWait 阻塞到 agent_end / error / 超时（默认 10 分钟）。
+    // 必须等待：Agent 通过 write_file 工具产出 .index.md.new，
+    // 不等待会导致第 7 步在 Agent 尚未写完时检查文件 → 误报 noOutput。
+    await sessionManager.sendPromptAndWait(sessionId, prompt, undefined);
 
     notify({ phase: 'processing', current: total, total, message: 'Agent 完成，正在写入新索引...' });
 
-    // 7. 读取 Agent 产出
-    // 由于 omp 的 prompt 是 fire-and-forget，Agent 的最终消息通过事件流返回
-    // 在这里我们读取最新的会话内容
-    // 对于深度重建，我们让 Agent 直接在 prompt 响应中输出完整的 index.md
-    // 由于 prompt() 是 async 且在 agent_end 后返回，我们可以从最后一条消息获取内容
-    // 但实际上 prompt 的返回值是 void（fire-and-forget）
-    // 所以我们需要用另一种方式获取 Agent 的输出
-
-    // 策略：Agent 产出会写入 docs/ 下临时文件，或通过事件流返回
-    // 更实际的方案：让 Agent 直接修改 index.md（通过 write_file 工具）
-    // 但为了原子性，我们让 Agent 通过事件流返回内容
-
-    // 简化方案：Agent 产出后，读取会话的最后一条 assistant 消息
-    // 但 AgentClient 没有直接暴露这个接口
-    // 替代方案：让 Agent 写入临时文件，然后我们 rename
-
-    // 最实际方案：Agent 在 cwd 中工作，可以通过 write_file 工具直接写 index.md
-    // 但我们需要原子性。所以让 Agent 写入 .index.md.new，然后我们 rename
-
-    // 在 prompt 中已要求 Agent 直接输出 index.md 内容
-    // omp 的 prompt 会在 agent_end 后返回，响应内容是最后一条消息
-    // 但 AgentClient.prompt() 是 fire-and-forget，不返回内容
-
-    // 替代方案：监听 message_end 事件获取最后的 assistant 消息
-    // 这里用一个更简单的方案：Agent 通过 write_file 工具直接写入 .index.md.new
-    // 然后我们读取并原子替换
-
-    // 检查 Agent 是否产出了 .index.md.new
+    // 7. 读取 Agent 产出（prompt 要求写入 .index.md.new，宿主校验后原子替换 index.md）
     const newIndexPath = join(kbPath, '.index.md.new');
     if (existsSync(newIndexPath)) {
-      // Agent 直接写了文件，原子替换
-      const newContent = await readFile(newIndexPath, 'utf-8');
+      const newContent = (await readFile(newIndexPath, 'utf-8')).trim();
+      if (newContent.length === 0) {
+        notify({ phase: 'failed', message: 'Agent 产出的索引内容为空', error: 'noOutput' });
+        return { ok: false, error: { code: 'noOutput', message: 'Agent 产出的索引内容为空' } };
+      }
+
+      // 原子替换（写 .index.md.tmp → rename），失败时原 index.md 完好
       await atomicWriteIndexMd(kbPath, newContent);
 
-      // 清理 .index.md.new
+      // 清理 Agent 产出的临时文件
       await rm(newIndexPath, { force: true });
 
       notify({ phase: 'completed', message: `深度重建完成，已重写 ${total} 篇文档的索引` });
       return { ok: true, sessionId, documentCount: total };
     }
 
-    // 如果 Agent 没有写文件，尝试从会话事件中提取最后一条 assistant 消息
-    // 这种情况发生在 Agent 在对话中直接输出了索引内容
-    // 由于 AgentClient 的限制，我们无法直接获取最后一条消息
-    // 所以我们让 Agent 通过 prompt 中的指令写文件
-
-    // 如果到这里还没有 .index.md.new，说明 Agent 可能直接修改了 index.md
-    // 检查 index.md 是否被修改
+    // 兜底：Agent 未写 .index.md.new。
+    // 若它无视指令直接覆写了 index.md，旧索引已被破坏且不可信任——
+    // 用 prompt 前的快照恢复原索引（覆写内容不静默生效），并按未产出处理。
     const currentContent = await readFile(layout.indexMdPath, 'utf-8');
     if (currentContent !== existingIndex) {
-      // index.md 已被 Agent 直接修改，不需要再替换
-      notify({ phase: 'completed', message: `深度重建完成，已重写 ${total} 篇文档的索引` });
-      return { ok: true, sessionId, documentCount: total };
+      await atomicWriteIndexMd(kbPath, existingIndex);
+      const msg = 'Agent 未按指令写入 .index.md.new（直接修改了 index.md），已恢复原索引';
+      notify({ phase: 'failed', message: msg, error: 'noOutput' });
+      return { ok: false, error: { code: 'noOutput', message: msg } };
     }
 
     // Agent 没有产出任何文件变更
@@ -357,7 +315,7 @@ export async function deepReindex(params: DeepReindexParams): Promise<DeepReinde
     }
 
     return { ok: false, error: { code: 'reindexFailed', message: `重建失败: ${msg}` } };
-    } finally {
+  } finally {
     // 8. 销毁临时会话（无论成功还是失败）
     try {
       await sessionManager.destroySession(sessionId);
