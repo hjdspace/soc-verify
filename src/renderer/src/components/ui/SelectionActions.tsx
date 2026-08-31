@@ -19,7 +19,8 @@ import type { SelectionPhase, SelectionRunRequest } from '@renderer/hooks/use-se
  *
  * 与参考实现的偏差：
  * - 标签/占位符中文化，快捷动作面向「引用 AI 回复再问」场景
- * - streaming 阶段在条内预览实时回复文本（尾 6 字符 .ap-stream-tail），
+ * - streaming 阶段在条内预览实时回复文本（尾缘字符数 PREVIEW_TAIL_CHARS，
+ *   当前 0 = 禁用尾缘），
  *   而非参考 demo 的选区文本原地替换——本项目回复走会话消息流
  * - busy 态末尾追加可动的关闭按钮：真实会话回合无法在条内取消，
  *   必须给用户脱离浮条的出口（回合照常进行）
@@ -50,8 +51,8 @@ export const SELECTION_ACTIONS: SelectionActionDef[] = [
   { key: 'translate', label: '翻译', busyLabel: '翻译中', icon: <Languages {...iconProps} /> },
 ];
 
-/** 流式预览的模糊尾缘字符数（与 MarkdownRenderer STREAM_TAIL_CHARS 对齐） */
-const PREVIEW_TAIL_CHARS = 6;
+/** 流式预览的模糊尾缘字符数（与 MarkdownRenderer STREAM_TAIL_CHARS 对齐）；0 = 禁用尾缘 */
+const PREVIEW_TAIL_CHARS = 0;
 
 // 折叠/展开区的 max-width 常量：内容固定（5 个动作、中文双字标签），
 // 与参考实现一致采用定值；调整动作集合或标签时需同步校对
@@ -60,10 +61,15 @@ const ACTIONS_W = 196;
 const ACTIONS_EXPANDED_W = 408;
 const SEND_W = 30;
 
-/** 流式预览文本切分：settled 正文 + 尾缘模糊段（复用 .ap-stream-tail） */
+/** 流式预览文本切分：settled 正文 + 尾缘模糊段（复用 .ap-stream-tail）。
+ *  tail 切点必须用 text.length - N 计算：slice(-N) 在 N 为 0 时退化为
+ *  slice(0) 返回整串文本，会把整条预览打上 blur */
 export function splitStreamPreview(text: string): { settled: string; tail: string } {
   if (text.length <= PREVIEW_TAIL_CHARS) return { settled: '', tail: text };
-  return { settled: text.slice(0, text.length - PREVIEW_TAIL_CHARS), tail: text.slice(-PREVIEW_TAIL_CHARS) };
+  return {
+    settled: text.slice(0, text.length - PREVIEW_TAIL_CHARS),
+    tail: text.slice(text.length - PREVIEW_TAIL_CHARS),
+  };
 }
 
 export function SelectionActions({
