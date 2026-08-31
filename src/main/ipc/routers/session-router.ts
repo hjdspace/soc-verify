@@ -671,7 +671,8 @@ export const sessionRouter = t.router({
     })
     .query(async ({ input }) => {
       const project = requireProject(input.projectId);
-      return filterEmptyPlaceholderSessions(project.rootPath, await loadSessions(project.rootPath));
+      const persisted = (await loadSessions(project.rootPath)).filter((s) => s.projectId === input.projectId);
+      return filterEmptyPlaceholderSessions(project.rootPath, persisted);
     }),
 
   restore: t.procedure
@@ -695,7 +696,12 @@ export const sessionRouter = t.router({
 
       // Load persisted session to restore model info and omp sessionId
       const persistedSessions = await loadSessions(project.rootPath);
-      const persisted = persistedSessions.find((s) => s.sessionId === input.sessionId);
+      const persisted = persistedSessions.find(
+        (s) => s.sessionId === input.sessionId && s.projectId === input.projectId,
+      );
+      if (!persisted) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: `Session not found in project: ${input.sessionId}` });
+      }
 
       // Build a seed transcript from the stored UI messages. The runner uses
       // it to rebuild engine context when the omp JSONL is missing or only
@@ -720,7 +726,7 @@ export const sessionRouter = t.router({
         model: persisted?.model?.id,
         persistedModel: persisted?.model,
         // Use the omp sessionId for resume — this is what the runner matches against
-        resumeSessionId: persisted?.ompSessionId ?? input.sessionId,
+        resumeSessionId: persisted.ompSessionId ?? input.sessionId,
         seedHistory,
         persistedSessionId: input.sessionId,
         includeCaseStats: true,
@@ -789,7 +795,8 @@ export const sessionRouter = t.router({
     })
     .query(async ({ input }) => {
       const project = requireProject(input.projectId);
-      const persisted = await filterEmptyPlaceholderSessions(project.rootPath, await loadSessions(project.rootPath));
+      const projectSessions = (await loadSessions(project.rootPath)).filter((s) => s.projectId === input.projectId);
+      const persisted = await filterEmptyPlaceholderSessions(project.rootPath, projectSessions);
       const activeSessionIds = new Set<string>();
       for (const session of sessionManager.listSessions()) {
         activeSessionIds.add(session.id);

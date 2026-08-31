@@ -180,6 +180,36 @@ describe('SessionStore — event handling and state machine', () => {
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
+  it('keeps the active session within the same project when closing a tab', async () => {
+    const projectASession = await useSessionStore.getState().createSession('proj_a', '/tmp/proj-a');
+    const projectBSession = await useSessionStore.getState().createSession('proj_b', '/tmp/proj-b');
+    const projectBSecondSession = await useSessionStore.getState().createSession('proj_b', '/tmp/proj-b');
+
+    useSessionStore.getState().switchSession(projectBSession!);
+    useSessionStore.getState().closeSession(projectBSession!);
+
+    expect(useSessionStore.getState().currentSessionId).toBe(projectBSecondSession);
+    expect(useSessionStore.getState().currentSessionId).not.toBe(projectASession);
+  });
+
+  it('does not load a history entry into a different project', async () => {
+    await useSessionStore.getState().loadHistorySession(
+      {
+        sessionId: 'history-a',
+        name: 'Project A session',
+        projectId: 'proj_a',
+        createdAt: 1,
+        lastActivityAt: 1,
+        isActive: false,
+      },
+      'proj_b',
+      '/tmp/proj-b',
+    );
+
+    expect(useSessionStore.getState().sessions).toHaveLength(0);
+    expect(mockGetStoredMessages).not.toHaveBeenCalled();
+  });
+
   it('sends a message and transitions to streaming state', async () => {
     await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
 
@@ -1035,6 +1065,33 @@ describe('SessionStore — event handling and state machine', () => {
       persistedSessionId: 'session_old',
       name: 'Old session',
     });
+  });
+
+  it('ignores persisted sessions owned by another project', async () => {
+    mockGetPersistedSessions.mockResolvedValue([
+      {
+        sessionId: 'session_a',
+        name: 'Project A session',
+        projectId: 'proj_a',
+        createdAt: 10,
+        lastActivityAt: 100,
+      },
+      {
+        sessionId: 'session_b',
+        name: 'Project B session',
+        projectId: 'proj_b',
+        createdAt: 20,
+        lastActivityAt: 200,
+      },
+    ]);
+
+    const restored = await useSessionStore.getState().restoreSessions('proj_b', '/tmp/proj-b');
+
+    expect(restored).toBe(true);
+    expect(useSessionStore.getState().sessions).toEqual([
+      expect.objectContaining({ id: 'session_b', projectId: 'proj_b' }),
+    ]);
+    expect(useSessionStore.getState().currentSessionId).toBe('session_b');
   });
 
   it('skips already-open sessions when restoring and keeps the latest as current', async () => {

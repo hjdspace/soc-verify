@@ -28,6 +28,7 @@ const THINKING_LEVEL_STORAGE_KEY = 'socverify:thinkingLevel';
 
 // ─── 模块级辅助 / 缓存 ────────────────────────────────────
 const historySessionLoads = new Map<string, Promise<void>>();
+let historyFetchToken = 0;
 const runtimeSessionStarts = new Map<string, Promise<string>>();
 const pendingSessionEvents = new Map<string, unknown[]>();
 
@@ -384,12 +385,14 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
   },
 
   closeSession: (sessionId) => {
-    set((s) => ({
-      sessions: s.sessions.filter((sess) => !sessionMatchesId(sess, sessionId)),
-      currentSessionId: s.currentSessionId === sessionId
-        ? (s.sessions.find((sess) => !sessionMatchesId(sess, sessionId))?.id ?? null)
-        : s.currentSessionId,
-    }));
+    set((s) => {
+      const closing = s.sessions.find((sess) => sessionMatchesId(sess, sessionId));
+      const sessions = s.sessions.filter((sess) => !sessionMatchesId(sess, sessionId));
+      const currentSessionId = s.currentSessionId === sessionId
+        ? (sessions.find((sess) => !closing || sess.projectId === closing.projectId)?.id ?? null)
+        : s.currentSessionId;
+      return { sessions, currentSessionId };
+    });
   },
 
   switchSession: (sessionId) => {
@@ -692,9 +695,10 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
       const openIdSet = lastSessionIds && lastSessionIds.length > 0
         ? new Set(lastSessionIds)
         : null;
+      const projectPersisted = persisted.filter((p) => p.projectId === projectId);
       const filtered = openIdSet
-        ? persisted.filter((p) => openIdSet.has(p.sessionId))
-        : persisted;
+        ? projectPersisted.filter((p) => openIdSet.has(p.sessionId))
+        : projectPersisted;
       if (filtered.length === 0) return false;
 
       const sorted = [...filtered].sort((a, b) => b.lastActivityAt - a.lastActivityAt);
@@ -761,17 +765,21 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
   },
 
   fetchHistorySessions: async (projectId) => {
+    const fetchToken = ++historyFetchToken;
     set({ historyLoading: true });
     try {
       const result = await trpc.session.listHistory.query({ projectId });
+      if (fetchToken !== historyFetchToken) return;
       set({ historySessions: result as HistorySession[], historyLoading: false });
     } catch (err) {
+      if (fetchToken !== historyFetchToken) return;
       set({ historyLoading: false });
       useToastStore.getState().error('加载历史会话失败', tRPCError(err));
     }
   },
 
   loadHistorySession: async (historySession, projectId, cwd) => {
+    if (historySession.projectId !== projectId) return;
     const existing = get().sessions.find(
       (s) => sessionMatchesId(s, historySession.sessionId),
     );
