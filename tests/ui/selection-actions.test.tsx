@@ -15,6 +15,7 @@ import type { SelectionRunRequest } from '@renderer/hooks/use-selection-run';
  */
 
 const REQ_EXPLAIN: SelectionRunRequest = { action: 'explain', label: '解释', prompt: null };
+const REQ_IMPROVE: SelectionRunRequest = { action: 'improve', label: '改进', prompt: null };
 
 function renderBar(overrides: Partial<Parameters<typeof SelectionActions>[0]> = {}) {
   const props: Parameters<typeof SelectionActions>[0] = {
@@ -105,17 +106,19 @@ describe('SelectionActions — idle 态', () => {
     expect(layer.style.pointerEvents).toBe('none');
   });
 
-  it('mousedown 拦截在输入框之外（保住文档选区）', () => {
+  it('mousedown 拦截所有元素（含 input，保住文档选区）', () => {
     const { container } = renderBar();
     const layer = container.querySelector('[data-testid="selection-bar"]') as HTMLElement;
-    const input = screen.getByTestId('selection-prompt');
+    const input = screen.getByTestId('selection-prompt') as HTMLInputElement;
     const mouseEvent = (target: Element) => {
       const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
       Object.defineProperty(event, 'target', { value: target });
       layer.dispatchEvent(event);
       return event;
     };
-    expect(mouseEvent(input).defaultPrevented).toBe(false);
+    // 修复后：所有元素（含 input）都 preventDefault，防止选区折叠；
+    // input 点击后手动 focus（preventDefault 不影响 focus() 调用）
+    expect(mouseEvent(input).defaultPrevented).toBe(true);
     expect(mouseEvent(screen.getByTestId('selection-action-explain')).defaultPrevented).toBe(true);
   });
 });
@@ -130,16 +133,25 @@ describe('SelectionActions — busy 态（thinking/streaming）', () => {
     expect(screen.getByTestId('selection-dismiss')).toBeTruthy();
   });
 
-  it('streaming：实时回复预览，尾 6 字符复用 ap-stream-tail 模糊尾缘', () => {
-    renderBar({ phase: 'streaming', request: REQ_EXPLAIN, streamText: '这是流式增长的回答正文' });
+  it('streaming：改写型动作实时回复预览，尾 6 字符复用 ap-stream-tail 模糊尾缘', () => {
+    renderBar({ phase: 'streaming', request: REQ_IMPROVE, streamText: '这是流式增长的回答正文' });
     const preview = screen.getByTestId('selection-preview');
     expect(preview.textContent).toContain('这是流式增长的回答正文');
     expect(preview.querySelector('.ap-stream-tail')?.textContent).toBe('长的回答正文');
   });
 
+  it('streaming：查阅型动作不在条内显示预览（由结果浮窗展示完整回复）', () => {
+    renderBar({ phase: 'streaming', request: REQ_EXPLAIN, streamText: '这是流式增长的回答正文' });
+    // 查阅型动作的回复在结果浮窗展示，条内不显示预览
+    expect(screen.queryByTestId('selection-preview')).toBeNull();
+    // 但结果浮窗已展开，展示完整流式文本
+    expect(screen.getByTestId('selection-result-popover')).toBeTruthy();
+    expect(screen.getByTestId('selection-popover-body').textContent).toContain('这是流式增长的回答正文');
+  });
+
   it('streaming 无预览文本时回落 busy 标签', () => {
-    renderBar({ phase: 'streaming', request: REQ_EXPLAIN, streamText: '' });
-    expect(screen.getByTestId('selection-busy').textContent).toContain('解释中…');
+    renderBar({ phase: 'streaming', request: REQ_IMPROVE, streamText: '' });
+    expect(screen.getByTestId('selection-busy').textContent).toContain('改进中…');
     expect(screen.queryByTestId('selection-preview')).toBeNull();
   });
 
@@ -154,12 +166,12 @@ describe('SelectionActions — busy 态（thinking/streaming）', () => {
   });
 });
 
-describe('SelectionActions — result 态（Keep/Discard/Retry）', () => {
+describe('SelectionActions — result 态（改写型 Keep/Discard/Retry）', () => {
   it('保留/放弃/重试按钮渲染并各自回调', () => {
-    const { props } = renderBar({ phase: 'result', request: REQ_EXPLAIN });
+    const { props } = renderBar({ phase: 'result', request: REQ_IMPROVE });
     expect(screen.getByTestId('selection-keep').textContent).toContain('保留');
     expect(screen.getByTestId('selection-discard').textContent).toContain('放弃');
-    expect(screen.getByTestId('selection-retry').getAttribute('aria-label')).toBe('重试解释');
+    expect(screen.getByTestId('selection-retry').getAttribute('aria-label')).toBe('重试改进');
 
     fireEvent.click(screen.getByTestId('selection-keep'));
     expect(props.onKeep).toHaveBeenCalledTimes(1);
@@ -170,10 +182,38 @@ describe('SelectionActions — result 态（Keep/Discard/Retry）', () => {
   });
 
   it('result 态不渲染 idle 动作区与 busy 指示', () => {
-    renderBar({ phase: 'result', request: REQ_EXPLAIN });
+    renderBar({ phase: 'result', request: REQ_IMPROVE });
     expect(screen.queryByTestId('selection-busy')).toBeNull();
     expect(screen.queryByTestId('selection-prompt')).toBeNull();
     expect(screen.queryByTestId('selection-action-explain')).toBeNull();
+  });
+});
+
+describe('SelectionActions — 查阅型结果浮窗（Popover）', () => {
+  it('查阅型 streaming 阶段展开结果浮窗，展示完整流式文本', () => {
+    renderBar({ phase: 'streaming', request: REQ_EXPLAIN, streamText: '这是完整回复内容' });
+    expect(screen.getByTestId('selection-result-popover')).toBeTruthy();
+    expect(screen.getByTestId('selection-popover-body').textContent).toBe('这是完整回复内容');
+    // streaming 阶段显示「回复中」状态
+    expect(screen.getByText('回复中')).toBeTruthy();
+  });
+
+  it('查阅型 result 阶段浮窗展示完整结果，关闭按钮触发 onDismiss', () => {
+    const { props } = renderBar({ phase: 'result', request: REQ_EXPLAIN, streamText: '解释结果内容' });
+    // 查阅型动作不显示 Keep/Discard/Retry
+    expect(screen.queryByTestId('selection-keep')).toBeNull();
+    expect(screen.queryByTestId('selection-discard')).toBeNull();
+    expect(screen.queryByTestId('selection-retry')).toBeNull();
+    // 浮窗展示完整结果
+    expect(screen.getByTestId('selection-popover-body').textContent).toBe('解释结果内容');
+    // 关闭按钮触发 dismiss
+    fireEvent.click(screen.getByTestId('selection-popover-close'));
+    expect(props.onDismiss).toHaveBeenCalled();
+  });
+
+  it('改写型动作不弹结果浮窗（走 Keep/Discard 回合）', () => {
+    renderBar({ phase: 'result', request: REQ_IMPROVE, streamText: '改进后的内容' });
+    expect(screen.queryByTestId('selection-result-popover')).toBeNull();
   });
 });
 
