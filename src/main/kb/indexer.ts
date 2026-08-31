@@ -57,8 +57,11 @@ const KEYWORDS_PREFIX = '- **关键词**: ';
 /**
  * 从 Markdown 内容提取骨架：标题层级 + 前若干行。
  * 非全文传递，控制 LLM token 消耗。
+ *
+ * @param markdown Markdown 全文
+ * @param maxLines 骨架最大行数（默认 SKELETON_MAX_LINES；deep-reindexer 等复用方可自定义）
  */
-export function extractSkeleton(markdown: string): string {
+export function extractSkeleton(markdown: string, maxLines: number = SKELETON_MAX_LINES): string {
   const lines = markdown.split('\n');
   const result: string[] = [];
 
@@ -68,10 +71,10 @@ export function extractSkeleton(markdown: string): string {
       result.push(line);
     }
     // 保留非空非标题行（正文前几行）
-    else if (line.trim() && result.length < SKELETON_MAX_LINES) {
+    else if (line.trim() && result.length < maxLines) {
       result.push(line);
     }
-    if (result.length >= SKELETON_MAX_LINES) break;
+    if (result.length >= maxLines) break;
   }
 
   return result.join('\n');
@@ -530,8 +533,8 @@ export function removeEntry(indexContent: string, markdownRelPath: string): stri
 
 // ── 完整索引流程 ─────────────────────────────────────────────────
 
-/** 判断 index 条目是否指向指定文档（按路径末段匹配文档名） */
-function entryBelongsToDoc(entry: IndexEntry, docName: string): boolean {
+/** 判断 index 条目是否指向指定文档（按路径末段精确匹配，避免 `My_DDR5.md` 被误判为 `DDR5.md` 的条目） */
+export function entryBelongsToDoc(entry: IndexEntry, docName: string): boolean {
   return entry.path === `${docName}.md` || entry.path.endsWith(`/${docName}.md`);
 }
 
