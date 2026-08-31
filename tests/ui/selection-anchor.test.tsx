@@ -97,11 +97,13 @@ describe('useSelectionAnchor', () => {
   });
 
   it('window resize 事件触发重算：几何变化后锚点随之更新', async () => {
-    // 几何可变快照：resize 前后选区位置不同，验证重算真的换了锚点
+    // 几何可变快照：resize 前后选区位置不同，验证重算真的换了锚点。
+    // 浮条 x 取 lastLine 水平中心（非整体 bounds）——多行选区时 bounds
+    // 的 left/right 横跨多行，中心点偏移；lastLine 只覆盖末行。
     let shifted = false;
     const movingSnapshot = (): SelectionSnapshot =>
       shifted
-        ? { ...BASE_SNAPSHOT, bounds: { ...BASE_SNAPSHOT.bounds, left: 200, right: 400 }, lastLine: { ...BASE_SNAPSHOT.lastLine, bottom: 120 } }
+        ? { ...BASE_SNAPSHOT, lastLine: { left: 200, top: 60, right: 400, bottom: 120 } }
         : BASE_SNAPSHOT;
     const { result } = renderAnchor({ readSelection: movingSnapshot });
     await act(async () => {
@@ -137,11 +139,12 @@ describe('useSelectionAnchor', () => {
   });
 
   it('子树滚动容器 scroll 事件触发重算（捕获监听，CodeMirror 内滚场景）', async () => {
-    // 几何可变快照：滚动前后选区位置不同，验证重算真的换了锚点
+    // 几何可变快照：滚动前后选区位置不同，验证重算真的换了锚点。
+    // x 取 lastLine 中心——shifted 时 lastLine 左右移到 200/400。
     let shifted = false;
     const movingSnapshot = (): SelectionSnapshot =>
       shifted
-        ? { ...BASE_SNAPSHOT, bounds: { ...BASE_SNAPSHOT.bounds, left: 200, right: 400 }, lastLine: { ...BASE_SNAPSHOT.lastLine, bottom: 120 } }
+        ? { ...BASE_SNAPSHOT, lastLine: { left: 200, top: 60, right: 400, bottom: 120 } }
         : BASE_SNAPSHOT;
     const { result } = renderAnchor({ readSelection: movingSnapshot });
     await act(async () => {
