@@ -76,7 +76,7 @@ const compactSession = useSessionMessagesStore((s) => s.compactSession);
     s.projects.find((p) => p.id === s.currentProjectId),
   );
   // 只在 tab 栏中显示当前项目的会话，避免切换项目后旧项目的聊天记录残留
-  const projectSessions = sessions.filter((s) => !currentProjectId || s.projectId === currentProjectId);
+  const projectSessions = sessions.filter((s) => (!currentProjectId || s.projectId === currentProjectId) && !s.transient);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
