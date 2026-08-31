@@ -4,7 +4,14 @@
  * 在会话创建时读取挂载库的 index.md，注入 Agent 系统上下文
  * （与项目信息注入同层，复用现有 session-context 机制）。
  *
- * 索引超长时截断并附加提示"索引已截断，完整检索请使用 kb_search 工具"。
+ * 索引超长时不做硬截断（硬截断会让排在后面的分类对 Agent 完全不可见，
+ * Agent 不知道它们存在，自然也不会去 kb_search），而是结构化降级为
+ * 压缩视图，逐级保留可发现性：
+ *   1. 原文注入（不超限时）
+ *   2. 全条目压缩：每条目一行「标题（路径）」，省略摘要/关键词
+ *   3. 标题行压缩：每分类一行，保留全部文档标题
+ *   4. 仅分类名：每分类一行「分类名（N 篇）」
+ * 压缩时附加"索引已截断，完整检索请使用 kb_search 工具"提示。
  * 未挂载库时不注入。
  *
  * @see ADR 0021 — anydoc 文档知识库
@@ -14,15 +21,17 @@ import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { kbRegistry } from '../kb/registry';
 import { kbLayout } from '../kb/layout';
+import { parseIndexMd } from '../kb/indexer';
+import type { IndexEntry } from '../kb/types';
 
 // ── 常量 ────────────────────────────────────────────────────────
 
-/** 索引注入的最大字符数（超出截断） */
+/** 索引注入的最大字符数（超出时结构化降级为压缩视图） */
 const MAX_INDEX_CHARS = 8000;
 
 /** 截断提示语 */
 const TRUNCATION_NOTICE =
-  '\n\n<!-- 索引已截断，完整检索请使用 kb_search 工具 -->\n';
+  '\n\n<!-- 索引已截断：以上为压缩视图（保留全部分类）。完整检索请使用 kb_search 工具 -->\n';
 
 // ── 类型 ────────────────────────────────────────────────────────
 
@@ -41,24 +50,68 @@ export type KbContextResult = {
 // ── 辅助函数 ────────────────────────────────────────────────────
 
 /**
- * 截断索引内容，超出限制时附加提示。
+ * 索引超长时的结构化降级。
+ *
+ * 硬截断会把 index.md 后半部分的分类整体丢掉——Agent 不知道它们存在，
+ * 自然也不会去 kb_search。这里改为逐级压缩，保证所有分类始终可见：
+ *   阶段 1：全条目压缩（标题 + 路径，去摘要/关键词）
+ *   阶段 2：每分类单行（全部文档标题）
+ *   阶段 3：仅分类名 + 文档数
  */
-function truncateIndex(content: string, maxChars: number): { text: string; truncated: boolean } {
+function compactIndex(content: string, maxChars: number): { text: string; truncated: boolean } {
   if (content.length <= maxChars) {
     return { text: content, truncated: false };
   }
 
-  // 截断到最大长度，尽量在完整行处截断
-  let cutPoint = maxChars;
-  const lastNewline = content.lastIndexOf('\n', maxChars);
-  if (lastNewline > maxChars * 0.8) {
-    cutPoint = lastNewline;
+  const { entries, categoryOrder } = parseIndexMd(content);
+  if (entries.length === 0) {
+    // 解析失败（可能是手工编辑的非标准格式）→ 退回行边界硬截断
+    let cutPoint = maxChars;
+    const lastNewline = content.lastIndexOf('\n', maxChars);
+    if (lastNewline > maxChars * 0.8) {
+      cutPoint = lastNewline;
+    }
+    return { text: content.slice(0, cutPoint) + TRUNCATION_NOTICE, truncated: true };
   }
 
-  return {
-    text: content.slice(0, cutPoint) + TRUNCATION_NOTICE,
-    truncated: true,
-  };
+  const byCategory = new Map<string, IndexEntry[]>();
+  for (const e of entries) {
+    const list = byCategory.get(e.category) ?? [];
+    list.push(e);
+    byCategory.set(e.category, list);
+  }
+  const categories = categoryOrder.filter((c) => byCategory.has(c));
+  for (const c of byCategory.keys()) {
+    if (!categories.includes(c)) categories.push(c);
+  }
+
+  // 阶段 1：全条目压缩
+  const stage1 = categories
+    .map((c) => {
+      const list = byCategory.get(c) ?? [];
+      return [`## ${c}（${list.length} 篇）`, ...list.map((e) => `- ${e.title}（${e.path}）`)].join('\n');
+    })
+    .join('\n\n');
+  if (stage1.length <= maxChars) {
+    return { text: stage1 + TRUNCATION_NOTICE, truncated: true };
+  }
+
+  // 阶段 2：每分类单行（全部标题）
+  const stage2 = categories
+    .map((c) => {
+      const list = byCategory.get(c) ?? [];
+      return `## ${c}（${list.length} 篇）: ${list.map((e) => e.title).join('；')}`;
+    })
+    .join('\n');
+  if (stage2.length <= maxChars) {
+    return { text: stage2 + TRUNCATION_NOTICE, truncated: true };
+  }
+
+  // 阶段 3：仅分类名
+  const stage3 = categories
+    .map((c) => `## ${c}（${(byCategory.get(c) ?? []).length} 篇）`)
+    .join('\n');
+  return { text: stage3 + TRUNCATION_NOTICE, truncated: true };
 }
 
 // ── 主函数 ────────────────────────────────────────────────────────
@@ -100,7 +153,7 @@ export async function buildKbContext(projectRoot: string): Promise<KbContextResu
     return { contextText: '', kbName, kbPath, truncated: false };
   }
 
-  const { text, truncated } = truncateIndex(indexContent, MAX_INDEX_CHARS);
+  const { text, truncated } = compactIndex(indexContent, MAX_INDEX_CHARS);
 
   const contextText = `<kb-index kb-name="${kbName}">\n${text}\n</kb-index>`;
 
