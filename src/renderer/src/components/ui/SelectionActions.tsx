@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
-import { ArrowUp, Check, ChevronDown, Expand, Languages, MessageCircleQuestion, RotateCcw, Scissors, Sparkles, X } from 'lucide-react';
+import { ArrowUp, Check, ChevronDown, Copy, Expand, Languages, MessageCircleQuestion, RotateCcw, Scissors, Sparkles, X } from 'lucide-react';
 import { Shimmer } from '@renderer/components/ui/Shimmer';
+import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
 import type { SelectionAnchor } from '@renderer/hooks/use-selection-anchor';
 import type { SelectionPhase, SelectionRunRequest } from '@renderer/hooks/use-selection-run';
 
@@ -36,6 +37,9 @@ export type SelectionActionDef = {
 };
 
 const iconProps = { size: 14, strokeWidth: 1.8, 'aria-hidden': true } as const;
+
+/** 查阅型动作 key 集合：这类动作在浮窗下展示结果，不走 Keep/Discard 回合 */
+export const POPUP_ACTIONS = new Set(['explain', 'translate', 'prompt']);
 
 /** 默认快捷动作：前两项常驻，后三项收进展开区（chevron 切换） */
 export const SELECTION_ACTIONS: SelectionActionDef[] = [
@@ -92,25 +96,39 @@ export function SelectionActions({
   onRetry: () => void;
   onDismiss: () => void;
 }) {
+  // 查阅型动作（explain/translate/prompt）在浮窗下展示结果 Popover，
+  // 不走 Keep/Discard 回合管理。busy 阶段在条内显示精简预览（同改写型），
+  // streaming/result 阶段在浮条下方展开结果浮窗展示完整回复。
+  const isPopupAction = request ? POPUP_ACTIONS.has(request.action) : false;
+  const showResultPopover = visible && isPopupAction && (phase === 'streaming' || phase === 'result') && streamText.length > 0;
   const [prompt, setPrompt] = useState('');
   const [typingWidth, setTypingWidth] = useState<number | null>(null);
   const [expanded, setExpanded] = useState(false);
 
   const barRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const layerRef = useRef<HTMLDivElement>(null);
   const previousPhaseRef = useRef<SelectionPhase>('idle');
   const lastWidthRef = useRef(0);
   const widthAnimationRef = useRef<Animation | null>(null);
+  // 浮条边界 clamp 偏移：当选区靠近容器边缘时，浮条不超出宿主范围。
+  // translateX(-50%) 居中后，左/右越界时追加偏移修正。jsdom 中宽度为 0
+  // 不触发偏移，不影响测试断言。
+  const [clampOffset, setClampOffset] = useState(0);
 
   const hasPrompt = prompt.trim().length > 0;
   const busy = phase === 'thinking' || phase === 'streaming';
   // busyLabel 按动作 key 从动作表取（自定义 prompt 无对应项，回落「处理中」）
   const busyLabel = actions.find((action) => action.key === request?.action)?.busyLabel ?? '处理中';
 
-  // mousedown 默认行为会折叠文档选区——在条上拦截（输入框除外），
-  // 保证点击动作按钮时引用文本仍处于选中态
+  // mousedown 默认行为会折叠文档选区——在条上拦截所有元素（含 input），
+  // 保证点击浮条任何位置时引用文本仍处于选中态；input 点击后手动 focus
+  // （preventDefault 阻止选区折叠，不影响 focus() 调用）
   const handleMouseDown = (event: ReactMouseEvent<HTMLDivElement>) => {
-    if ((event.target as HTMLElement).tagName !== 'INPUT') event.preventDefault();
+    event.preventDefault();
+    if (event.target instanceof HTMLInputElement) {
+      event.target.focus();
+    }
   };
 
   const handlePromptInput = (next: string) => {
@@ -171,6 +189,27 @@ export function SelectionActions({
     previousPhaseRef.current = phase;
   }, [phase]);
 
+  // 浮条宽度或锚点变化后重算 clamp 偏移（防止左右越界宿主容器）
+  useLayoutEffect(() => {
+    const bar = barRef.current;
+    const layer = layerRef.current;
+    if (!bar || !layer) return;
+    const barWidth = bar.getBoundingClientRect().width;
+    if (barWidth === 0) return;
+    const host = layer.parentElement;
+    if (!host) return;
+    const hostWidth = host.getBoundingClientRect().width;
+    if (hostWidth === 0) return;
+    const ax = anchor?.x ?? 0;
+    const halfWidth = barWidth / 2;
+    const leftEdge = ax - halfWidth;
+    const rightEdge = ax + halfWidth;
+    let offset = 0;
+    if (leftEdge < 0) offset = -leftEdge;
+    else if (rightEdge > hostWidth) offset = hostWidth - rightEdge;
+    setClampOffset((prev) => (Math.abs(prev - offset) < 0.5 ? prev : offset));
+  }, [phase, streamText, anchor?.x, visible, expanded, prompt]);
+
   // 动画未运行期间的宽度漂移（如流式预览增长）同步进 lastWidth
   useEffect(() => {
     const content = contentRef.current;
@@ -189,12 +228,23 @@ export function SelectionActions({
   const preview = splitStreamPreview(streamText);
   const widthLocked = phase === 'idle' && hasPrompt && typingWidth ? typingWidth : undefined;
 
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    const text = streamText;
+    if (!text) return;
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
   return (
     <div
+      ref={layerRef}
       data-testid="selection-bar"
       className="ap-sel-layer"
       style={{
-        transform: `translate3d(${anchor?.x ?? 0}px, ${anchor?.y ?? 0}px, 0) translateX(-50%)`,
+        transform: `translate3d(${anchor?.x ?? 0}px, ${anchor?.y ?? 0}px, 0) translateX(${clampOffset === 0 ? '-50%' : `calc(-50% + ${clampOffset}px)`})`,
         opacity: visible ? 1 : 0,
         pointerEvents: visible ? 'auto' : 'none',
       }}
@@ -215,7 +265,7 @@ export function SelectionActions({
               <span className="ap-sel-spinner" aria-hidden />
               {phase === 'thinking' ? (
                 <Shimmer className="text-[12.5px]">{busyLabel}…</Shimmer>
-              ) : streamText ? (
+              ) : streamText && !isPopupAction ? (
                 <span className="ap-sel-preview" data-testid="selection-preview">
                   <span>{preview.settled}</span>
                   {preview.tail && <span className="ap-stream-tail">{preview.tail}</span>}
@@ -236,7 +286,7 @@ export function SelectionActions({
             </span>
           )}
 
-          {phase === 'result' && (
+          {phase === 'result' && !isPopupAction && (
             <>
               <button type="button" data-testid="selection-keep" onClick={onKeep} className="ap-sel-primary">
                 <Check {...iconProps} />
@@ -258,6 +308,23 @@ export function SelectionActions({
                 <RotateCcw {...iconProps} />
               </button>
             </>
+          )}
+
+          {phase === 'result' && isPopupAction && (
+            <span className="ap-sel-busy" data-testid="selection-busy">
+              <Check {...iconProps} />
+              {request?.label ?? '完成'}
+              <button
+                type="button"
+                aria-label="关闭浮条"
+                title="关闭浮条"
+                data-testid="selection-dismiss"
+                onClick={onDismiss}
+                className="ap-sel-iconbtn"
+              >
+                <X {...iconProps} />
+              </button>
+            </span>
           )}
 
           {phase === 'idle' && (
@@ -353,6 +420,50 @@ export function SelectionActions({
           )}
         </div>
       </div>
+      {showResultPopover && (
+        <div
+          data-testid="selection-result-popover"
+          className="ap-sel-popover"
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          <div className="ap-sel-popover-header">
+            <span className="ap-sel-popover-title">
+              {actions.find((a) => a.key === request?.action)?.icon}
+              {request?.label ?? '结果'}
+            </span>
+            <button
+              type="button"
+              aria-label="关闭"
+              data-testid="selection-popover-close"
+              onClick={onDismiss}
+              className="ap-sel-iconbtn"
+            >
+              <X {...iconProps} />
+            </button>
+          </div>
+          <div className="ap-sel-popover-body" data-testid="selection-popover-body">
+            <MarkdownRenderer content={streamText} streaming={phase === 'streaming'} />
+          </div>
+          <div className="ap-sel-popover-footer">
+            {phase === 'streaming' && (
+              <span className="ap-sel-popover-status">
+                <span className="ap-sel-spinner" aria-hidden />
+                回复中
+              </span>
+            )}
+            <button
+              type="button"
+              aria-label="复制结果"
+              data-testid="selection-popover-copy"
+              onClick={handleCopy}
+              className="ap-sel-control"
+            >
+              {copied ? <Check {...iconProps} /> : <Copy {...iconProps} />}
+              {copied ? '已复制' : '复制'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
