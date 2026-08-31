@@ -133,11 +133,12 @@ describe('SelectionActions — busy 态（thinking/streaming）', () => {
     expect(screen.getByTestId('selection-dismiss')).toBeTruthy();
   });
 
-  it('streaming：改写型动作实时回复预览，尾 6 字符复用 ap-stream-tail 模糊尾缘', () => {
+  it('streaming：改写型动作实时回复预览，尾缘字符数 0（禁用态）不渲染模糊尾缘', () => {
     renderBar({ phase: 'streaming', request: REQ_IMPROVE, streamText: '这是流式增长的回答正文' });
     const preview = screen.getByTestId('selection-preview');
     expect(preview.textContent).toContain('这是流式增长的回答正文');
-    expect(preview.querySelector('.ap-stream-tail')?.textContent).toBe('长的回答正文');
+    // tail 为空串时条件渲染跳过，无 .ap-stream-tail span
+    expect(preview.querySelector('.ap-stream-tail')).toBeNull();
   });
 
   it('streaming：查阅型动作不在条内显示预览（由结果浮窗展示完整回复）', () => {
@@ -218,9 +219,9 @@ describe('SelectionActions — 查阅型结果浮窗（Popover）', () => {
 });
 
 describe('splitStreamPreview', () => {
-  it('按尾 6 字符切分；不足 6 字符全部进尾缘', () => {
-    expect(splitStreamPreview('abcdefghij')).toEqual({ settled: 'abcd', tail: 'efghij' });
-    expect(splitStreamPreview('短文本')).toEqual({ settled: '', tail: '短文本' });
+  it('尾缘字符数为 0（禁用态）：settled 为整串文本，tail 恒为空串', () => {
+    expect(splitStreamPreview('abcdefghij')).toEqual({ settled: 'abcdefghij', tail: '' });
+    expect(splitStreamPreview('短文本')).toEqual({ settled: '短文本', tail: '' });
     expect(splitStreamPreview('')).toEqual({ settled: '', tail: '' });
   });
 });
