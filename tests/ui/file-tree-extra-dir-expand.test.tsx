@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { FileTreeNode } from '@shared/types';
 
 // ─── Store / trpc mocks ───────────────────────────────────
@@ -16,9 +16,42 @@ const { trpc } = vi.hoisted(() => ({
 }));
 
 vi.mock('@renderer/lib/trpc', () => ({ trpc }));
+
+// 使用真实的 Zustand store 来 mock project store，
+// 这样 toggleDirExpanded 修改状态后能正常触发组件重新渲染。
+const { useMockProjectStore } = vi.hoisted(() => {
+  const { create } = require('zustand') as typeof import('zustand');
+  const useMockProjectStore = create<{
+    currentProjectId: string | null;
+    expandedDirs: Set<string>;
+    toggleDirExpanded: (path: string) => void;
+    setDirExpanded: (path: string, expanded: boolean) => void;
+  }>((set) => ({
+    currentProjectId: 'project-1',
+    expandedDirs: new Set<string>(),
+    toggleDirExpanded: (path: string) =>
+      set((s) => {
+        const next = new Set(s.expandedDirs);
+        if (next.has(path)) {
+          next.delete(path);
+        } else {
+          next.add(path);
+        }
+        return { expandedDirs: next };
+      }),
+    setDirExpanded: (path: string, expanded: boolean) =>
+      set((s) => {
+        const next = new Set(s.expandedDirs);
+        if (expanded) next.add(path);
+        else next.delete(path);
+        return { expandedDirs: next };
+      }),
+  }));
+  return { useMockProjectStore };
+});
+
 vi.mock('@renderer/stores/project', () => ({
-  useProjectStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
-    selector({ currentProjectId: 'project-1' })),
+  useProjectStore: useMockProjectStore,
 }));
 vi.mock('@renderer/stores/session-core', () => ({
   useSessionCoreStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
@@ -35,6 +68,11 @@ vi.mock('@renderer/stores/source-control', () => ({
 }));
 
 import { FileTree } from '@renderer/components/project/FileTree';
+
+// 每个测试前重置 mock store 的展开状态
+function resetExpandedDirs() {
+  useMockProjectStore.setState({ expandedDirs: new Set<string>() });
+}
 
 // ─── Fixtures ─────────────────────────────────────────────
 
@@ -53,6 +91,9 @@ const tree: FileTreeNode = {
 };
 
 describe('FileTree lazy expansion for out-of-root extra dirs (verify/design groups)', () => {
+  beforeEach(() => {
+    resetExpandedDirs();
+  });
   it('sends the owning dirId when expanding a lazy directory', async () => {
     const children: FileTreeNode[] = [
       { name: 'a.sv', path: `${EXTRA_ROOT}\\sub\\a.sv`, type: 'file' },
@@ -130,6 +171,10 @@ describe('FileTree lazy expansion for out-of-root extra dirs (verify/design grou
 
     // 折叠后再次展开可重试，成功后内容渲染
     fireEvent.click(screen.getByRole('button', { name: 'sub' }));
+    await vi.waitFor(() => {
+      // 等待折叠生效（expandedDirs 已移除路径）
+      expect(useMockProjectStore.getState().expandedDirs.has(`${EXTRA_ROOT}\\sub`)).toBe(false);
+    });
     fireEvent.click(screen.getByRole('button', { name: 'sub' }));
     expect(await screen.findByRole('button', { name: /b\.sv/ })).toBeTruthy();
 

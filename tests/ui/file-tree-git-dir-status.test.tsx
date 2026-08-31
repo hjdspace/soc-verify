@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { FileTreeNode, SourceControlStatus } from '@shared/types';
 
 // ─── Store / trpc mocks ───────────────────────────────────
@@ -18,9 +18,42 @@ const { trpc } = vi.hoisted(() => ({
 const { scmFiles } = vi.hoisted(() => ({ scmFiles: [] as SourceControlStatus['files'] }));
 
 vi.mock('@renderer/lib/trpc', () => ({ trpc }));
+
+// 使用真实的 Zustand store 来 mock project store，
+// 这样 toggleDirExpanded 修改状态后能正常触发组件重新渲染。
+const { useMockProjectStore } = vi.hoisted(() => {
+  const { create } = require('zustand') as typeof import('zustand');
+  const useMockProjectStore = create<{
+    currentProjectId: string | null;
+    expandedDirs: Set<string>;
+    toggleDirExpanded: (path: string) => void;
+    setDirExpanded: (path: string, expanded: boolean) => void;
+  }>((set) => ({
+    currentProjectId: 'project-1',
+    expandedDirs: new Set<string>(),
+    toggleDirExpanded: (path: string) =>
+      set((s) => {
+        const next = new Set(s.expandedDirs);
+        if (next.has(path)) {
+          next.delete(path);
+        } else {
+          next.add(path);
+        }
+        return { expandedDirs: next };
+      }),
+    setDirExpanded: (path: string, expanded: boolean) =>
+      set((s) => {
+        const next = new Set(s.expandedDirs);
+        if (expanded) next.add(path);
+        else next.delete(path);
+        return { expandedDirs: next };
+      }),
+  }));
+  return { useMockProjectStore };
+});
+
 vi.mock('@renderer/stores/project', () => ({
-  useProjectStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
-    selector({ currentProjectId: 'project-1' })),
+  useProjectStore: useMockProjectStore,
 }));
 vi.mock('@renderer/stores/session-core', () => ({
   useSessionCoreStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
@@ -87,6 +120,9 @@ function renderTree() {
 // ─── Tests ────────────────────────────────────────────────
 
 describe('FileTree git directory status markers', () => {
+  beforeEach(() => {
+    useMockProjectStore.setState({ expandedDirs: new Set<string>() });
+  });
   it('marks folders containing modified files yellow with a yellow dot', () => {
     scmFiles.length = 0;
     scmFiles.push(status('src/core.sv', 'M', ' '));

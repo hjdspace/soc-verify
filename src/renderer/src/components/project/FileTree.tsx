@@ -673,39 +673,43 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
   gitBadgeMap,
   gitDirStatusMap,
 }: FileTreeDirectoryProps) {
-  // Root-level directories (depth 0) are expanded by default.
-  // All other directories start collapsed.
-  const [expanded, setExpanded] = useState(depth < 1);
+  // ── 展开状态提升到 store ──────────────────────────────
+  // 原先用 useState 管理展开状态，但当 docked 模式折叠/展开或切换视图时
+  // 组件卸载重建会丢失状态。提升到 store 后，展开状态按 node.path 持久化。
+  const expanded = useProjectStore((s) => s.expandedDirs.has(node.path)) || depth < 1;
+  const toggleDirExpanded = useProjectStore((s) => s.toggleDirExpanded);
 
   // Lazy children state: when node.lazy is true, children are fetched on first expand.
   // The loaded children replace the empty array from the server.
   const [lazyChildren, setLazyChildren] = useState<FileTreeNode[] | null>(null);
   const [loadingChildren, setLoadingChildren] = useState(false);
 
+  // 当展开状态为 true 且 lazyChildren 尚未加载时，自动触发懒加载。
+  // 这解决了组件重建后（如 docked 面板折叠再展开），展开状态从 store 恢复
+  // 但 lazyChildren 为 null 导致子节点不显示的问题。
+  useEffect(() => {
+    if (expanded && node.lazy && !lazyChildren && projectId && !loadingChildren) {
+      setLoadingChildren(true);
+      trpc.project.getDirChildren
+        .query({ projectId, dirPath: node.path, dirId })
+        .then((children: FileTreeNode[]) => {
+          setLazyChildren(children);
+        })
+        .catch((err: unknown) => {
+          // 加载失败不能静默吞掉——否则目录会永远显示为空且无法重试。
+          // 重置 lazyChildren 以便下次展开时重新请求。
+          console.warn(`[FileTree] failed to load children of ${node.path}:`, err);
+          setLazyChildren(null);
+        })
+        .finally(() => {
+          setLoadingChildren(false);
+        });
+    }
+  }, [expanded, node.lazy, node.path, lazyChildren, projectId, dirId, loadingChildren]);
+
   const toggle = useCallback(() => {
-    setExpanded((e) => {
-      const next = !e;
-      // If expanding a lazy node that hasn't been loaded yet, fetch children.
-      if (next && node.lazy && !lazyChildren && projectId && !loadingChildren) {
-        setLoadingChildren(true);
-        trpc.project.getDirChildren
-          .query({ projectId, dirPath: node.path, dirId })
-          .then((children: FileTreeNode[]) => {
-            setLazyChildren(children);
-          })
-          .catch((err: unknown) => {
-            // 加载失败不能静默吞掉——否则目录会永远显示为空且无法重试。
-            // 重置 lazyChildren 以便下次展开时重新请求。
-            console.warn(`[FileTree] failed to load children of ${node.path}:`, err);
-            setLazyChildren(null);
-          })
-          .finally(() => {
-            setLoadingChildren(false);
-          });
-      }
-      return next;
-    });
-  }, [node.lazy, node.path, lazyChildren, projectId, dirId, loadingChildren]);
+    toggleDirExpanded(node.path);
+  }, [node.path, toggleDirExpanded]);
 
   const handleDragStart = useCallback((e: React.DragEvent) => {
     e.dataTransfer.setData('application/json', JSON.stringify({

@@ -31,6 +31,9 @@ const projectState = vi.hoisted(() => ({
   addDir: vi.fn(),
   removeDir: vi.fn(),
   pushRecentFile: vi.fn(),
+  expandedDirs: new Set<string>(),
+  toggleDirExpanded: vi.fn(),
+  setDirExpanded: vi.fn(),
 }));
 
 vi.mock('@renderer/stores/project', () => ({

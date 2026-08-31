@@ -41,6 +41,12 @@ interface ProjectState {
   uiStateReady: boolean;
   /** 最近打开的文件（新→旧，去重，上限 RECENT_FILES_MAX） */
   recentFiles: RecentFileEntry[];
+  /**
+   * 文件树展开目录路径集合（按 node.path 归档）。
+   * 提升到 store 以保证组件卸载/重建后展开状态不丢失
+   * （docked 模式折叠 → 展开会卸载 FilePanel，drawer 模式切换视图会关闭抽屉）。
+   */
+  expandedDirs: Set<string>;
   // ── 动作 ──────────────────────────────────────────────
   openProject: (rootPath: string, name?: string) => Promise<void>;
   openProjectDialog: () => Promise<void>;
@@ -62,6 +68,10 @@ interface ProjectState {
   setCaseStatusFilter: (filter: string) => void;
   /** 记录最近打开的文件：去重后置顶，超出上限截断 */
   pushRecentFile: (entry: { path: string; name: string }) => void;
+  /** 切换目录展开/折叠状态（按 node.path 归档） */
+  toggleDirExpanded: (path: string) => void;
+  /** 直接设置目录展开状态 */
+  setDirExpanded: (path: string, expanded: boolean) => void;
   saveState: () => Promise<void>;
   restoreState: () => Promise<void>;
 }
@@ -133,6 +143,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   caseStatusFilter: 'all',
   uiStateReady: false,
   recentFiles: [],
+  expandedDirs: new Set<string>(),
 
   openProject: async (rootPath, name) => {
     const operationToken = ++projectOperationToken;
@@ -429,6 +440,26 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       ...s.recentFiles.filter((f) => f.path !== entry.path),
     ].slice(0, RECENT_FILES_MAX),
   })),
+
+  toggleDirExpanded: (path) => set((s) => {
+    const next = new Set(s.expandedDirs);
+    if (next.has(path)) {
+      next.delete(path);
+    } else {
+      next.add(path);
+    }
+    return { expandedDirs: next };
+  }),
+
+  setDirExpanded: (path, expanded) => set((s) => {
+    const next = new Set(s.expandedDirs);
+    if (expanded) {
+      next.add(path);
+    } else {
+      next.delete(path);
+    }
+    return { expandedDirs: next };
+  }),
 
   saveState: async () => {
     const { currentProjectId } = get();
