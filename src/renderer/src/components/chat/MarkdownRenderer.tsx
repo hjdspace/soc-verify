@@ -514,8 +514,10 @@ function extractText(children: ReactNode): string {
 /**
  * 流式尾缘覆盖的字符数：末尾 N 个字符以 blur + 渐变 mask 呈现，
  * 随下一次快照更新逐渐「凝聚成形」，模拟真实 token 流的 leading-edge 视觉。
+ * 0 = 禁用尾缘：token 输出慢的 API 快照间隔长，末尾字符会长时间冻结在
+ * 模糊态、观感如渲染发虚；此时 settled 为整串文本，仅保留行内光标。
  */
-const STREAM_TAIL_CHARS = 6;
+const STREAM_TAIL_CHARS = 0;
 
 type TailResult = { node: ReactNode; handled: boolean };
 
