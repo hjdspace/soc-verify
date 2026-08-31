@@ -28,6 +28,9 @@ const mocks = vi.hoisted(() => ({
         PROJ_ENV: '/proj/dv',
       },
     } as unknown,
+    systemEnvVars: {} as Record<string, string>,
+    loadSystemEnv: vi.fn().mockResolvedValue(undefined),
+    loadConfig: vi.fn().mockResolvedValue(undefined),
   },
   selectCase: vi.fn(),
 }));
@@ -43,6 +46,11 @@ vi.mock('@renderer/lib/trpc', () => ({
       refresh: { mutate: vi.fn().mockResolvedValue({ files: [] }) },
       getLoadedFiles: { query: vi.fn().mockResolvedValue({ files: [] }) },
     },
+    project: {
+      setCasePostSim: { mutate: vi.fn().mockResolvedValue({}) },
+      pickFiles: { mutate: vi.fn().mockResolvedValue({ canceled: true }) },
+      openInSystem: { mutate: vi.fn().mockResolvedValue({}) },
+    },
   },
 }));
 
@@ -53,10 +61,17 @@ vi.mock('@renderer/stores/project', () => ({
 }));
 
 vi.mock('@renderer/stores/simulation', () => ({
-  useSimulationStore: vi.fn((selector: (state: unknown) => unknown) =>
-    selector({
-      selectCase: mocks.selectCase,
-    }),
+  useSimulationStore: Object.assign(
+    vi.fn((selector: (state: unknown) => unknown) =>
+      selector({
+        selectCase: mocks.selectCase,
+      }),
+    ),
+    {
+      getState: () => ({
+        startCaseRun: vi.fn().mockResolvedValue(null),
+      }),
+    },
   ),
 }));
 
