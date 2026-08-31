@@ -5,7 +5,8 @@
  *  - doc_to_markdown(path)：按需转换任意支持格式文档，返回 Markdown 内容字符串，
  *    不入库、不落盘产物。
  *  - kb_search(query)：跨挂载知识库检索，先匹配 index.md 条目（标题/摘要/关键词），
- *    再对 docs/ Markdown 全文匹配，返回匹配文档路径 + 摘要列表。
+ *    再对 docs/ Markdown 全文匹配，返回文档路径（相对 + 绝对）、摘要与命中片段，
+ *    支持按分类过滤。中文按 bigram 匹配（单字低权重兜底）。
  *
  * 工具描述写清适用场景与参数格式，Agent 能自主决策何时调用。
  *
@@ -42,6 +43,11 @@ async function getMountedKbPath(projectRoot: string): Promise<string | null> {
 function resolvePath(inputPath: string, cwd: string): string {
   return isAbsolute(inputPath) ? inputPath : resolve(cwd, inputPath);
 }
+
+// ── 常量 ─────────────────────────────────────────────────────────
+
+/** doc_to_markdown 返回内容的最大字符数（超出截断，防止撑爆 Agent 上下文） */
+const MAX_MARKDOWN_CHARS = 50_000;
 
 // ── 工具创建 ─────────────────────────────────────────────────────
 
@@ -91,8 +97,22 @@ export function createKbTools(ctx: ToolContext): HostToolEntry[] {
           }));
         }
 
+        // 超大文档截断：几百页 PDF 转出的 Markdown 可达数 MB，
+        // 原样返回会撑爆 Agent 上下文，截断并明确告知。
+        const totalChars = result.markdown.length;
+        if (totalChars > MAX_MARKDOWN_CHARS) {
+          return TEXT(JSON.stringify({
+            path: absPath,
+            truncated: true,
+            totalChars,
+            markdown: result.markdown.slice(0, MAX_MARKDOWN_CHARS) + '\n\n<!-- truncated -->',
+            note: `Content truncated: showing the first ${MAX_MARKDOWN_CHARS} of ${totalChars} characters. If this document is in the knowledge base, use kb_search to locate relevant sections instead.`,
+          }));
+        }
+
         return TEXT(JSON.stringify({
           path: absPath,
+          truncated: false,
           markdown: result.markdown,
         }));
       },
@@ -102,13 +122,17 @@ export function createKbTools(ctx: ToolContext): HostToolEntry[] {
 
     defineTool(
       'kb_search',
-      'Search the mounted knowledge base for documents matching a query. Searches document titles, summaries, keywords (from the index), and full-text content of all Markdown files. Returns a ranked list of matching documents with paths and summaries. Use this to find relevant documents in the knowledge base before reading them. If no knowledge base is mounted, returns an error. Results are limited to 20 entries by default.',
+      'Search the mounted knowledge base for documents matching a query. Searches document titles, summaries, keywords (from the index), and full-text content of all Markdown files. Returns a ranked list with relative paths, absolute paths, and a content snippet for full-text matches so you can judge relevance before reading. Use this to find relevant documents in the knowledge base before reading them. If no knowledge base is mounted, returns an error. Results are limited to 20 entries by default.',
       {
         type: 'object',
         properties: {
           query: {
             type: 'string',
-            description: 'Search query. Supports multi-word queries (space-separated). Chinese text is tokenized by character. Matches document titles, summaries, keywords, and full-text content.',
+            description: 'Search query. Supports multi-word queries (space-separated). Chinese queries are matched by adjacent character bigrams with low-weight single characters. Matches document titles, summaries, keywords, and full-text content.',
+          },
+          category: {
+            type: 'string',
+            description: 'Restrict the search to one category (exact category name, e.g. "协议手册"). Omit to search all categories.',
           },
           limit: {
             type: 'number',
@@ -125,22 +149,26 @@ export function createKbTools(ctx: ToolContext): HostToolEntry[] {
         }
 
         const limit = typeof args.limit === 'number' && args.limit > 0 ? args.limit : undefined;
+        const category = typeof args.category === 'string' && args.category.trim() ? args.category.trim() : undefined;
 
         const kbPath = await getMountedKbPath(ctx.cwd);
         if (!kbPath) {
           return TEXT(JSON.stringify({ error: 'No knowledge base mounted. Mount a knowledge base first.' }));
         }
 
-        const results = await searchKb(kbPath, query, { limit });
+        const results = await searchKb(kbPath, query, { limit, category });
 
         return TEXT(JSON.stringify({
           query,
+          category: category ?? null,
           total: results.length,
           results: results.map((r) => ({
             title: r.title,
             path: r.path,
+            absolutePath: r.absolutePath,
             category: r.category,
             summary: r.summary,
+            snippet: r.snippet ?? null,
             keywords: r.keywords,
             score: r.score,
             matchedBy: r.matchedBy,
