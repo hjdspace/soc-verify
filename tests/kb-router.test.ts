@@ -740,6 +740,47 @@ describe('kb-router', () => {
       expect(existsSync(join(kbDir, 'sources', '待删除.docx'))).toBe(false);
     });
 
+    it('删除 DDR5 不误删 My_DDR5：索引条目按路径末段精确匹配（不用子串匹配）', async () => {
+      const kbDir = makeEmptyKbDir('delete-suffix-kb');
+      const regResult = await caller.register({ name: '后缀安全库', path: kbDir });
+      await caller.mount({ kbId: regId(regResult) });
+
+      // 手工构造两个名字互为后缀的文档（子串匹配会把 My_DDR5 误判为 DDR5 的条目）
+      mkdirSync(join(kbDir, 'docs', '协议手册'), { recursive: true });
+      writeFileSync(join(kbDir, 'docs', '协议手册', 'DDR5.md'), '# DDR5\n');
+      writeFileSync(join(kbDir, 'docs', '协议手册', 'My_DDR5.md'), '# My DDR5\n');
+      writeFileSync(
+        join(kbDir, 'index.md'),
+        [
+          '# 知识库索引',
+          '',
+          '## 协议手册',
+          '',
+          '### DDR5',
+          '- **路径**: `协议手册/DDR5.md`',
+          '- **摘要**: DDR5',
+          '',
+          '### My DDR5',
+          '- **路径**: `协议手册/My_DDR5.md`',
+          '- **摘要**: My DDR5',
+          '',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const result = await caller.delete({ name: 'DDR5' });
+      expect(result.ok).toBe(true);
+
+      // DDR5.md 与其索引条目被删除
+      expect(existsSync(join(kbDir, 'docs', '协议手册', 'DDR5.md'))).toBe(false);
+      const indexAfter = readFileSync(join(kbDir, 'index.md'), 'utf-8');
+      expect(indexAfter).not.toContain('`协议手册/DDR5.md`');
+
+      // My_DDR5.md 及其索引条目完好
+      expect(existsSync(join(kbDir, 'docs', '协议手册', 'My_DDR5.md'))).toBe(true);
+      expect(indexAfter).toContain('`协议手册/My_DDR5.md`');
+    });
+
     it('缺少 name 参数抛出 BAD_REQUEST', async () => {
       await expect(
         caller.delete({} as { name: string }),
