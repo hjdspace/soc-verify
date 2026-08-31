@@ -149,6 +149,8 @@ export interface SessionEntry {
   subagents?: Record<string, SubagentActivity>;
   /** 建议追问（回合结束后由轻量 LLM 生成，瞬态不持久化，仅最后一条助手消息呈现） */
   followUps?: string[];
+  /** 瞬态会话标记：划选查阅型动作（翻译/解释）创建的后台会话，不在 tab 列表中显示，回合结束后自动清理 */
+  transient?: boolean;
 }
 
 export interface HistorySession {
