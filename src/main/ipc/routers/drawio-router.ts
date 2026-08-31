@@ -1,28 +1,20 @@
 /**
- * Drawio router — .drawio 框图预览读取与 CLI 导出。
+ * Drawio router — .drawio 框图预览读取与导出。
  *
  * Procedure 列表：
- *  - drawio.checkInstalled：检查 draw.io desktop CLI 可用性（返回路径供展示）
  *  - drawio.readDiagram：读取 .drawio 文件 XML 内容（渲染端 viewer 用）
- *  - drawio.export：CLI 导出 PNG / SVG / PDF / JPG
+ *  - drawio.export：导出 PNG / SVG / PDF / JPG（内置 viewer 渲染，不依赖 draw.io Desktop）
  *  - drawio.pickExportPath：原生保存对话框选择导出路径
  *
- * 导出不依赖 draw.io CLI 的路径读取（预览离线可用）；
- * CLI 缺失时 export 返回明确的 `draw.io CLI not available` 错误。
+ * 预览与导出共用包内 viewer-static.min.js 渲染内核，离线可用、无需外部 CLI。
  */
 
 import { readFile } from 'node:fs/promises';
 import { basename, dirname, join, parse } from 'node:path';
 import { dialog } from 'electron';
 import { t, TRPCError } from '../router-context';
-import { isDrawioInstalled, resolveDrawioPath, DRAWIO_DOWNLOAD_URL } from '../../drawio/binary';
-import {
-  exportDiagram,
-  formatExtension,
-  DrawioExportError,
-  DrawioNotAvailableError,
-  type DrawioExportFormat,
-} from '../../drawio/exporter';
+import { DrawioExportError } from '../../drawio/export-types';
+import { exportDiagram, formatExtension, type DrawioExportFormat } from '../../drawio/viewer-exporter';
 
 const EXPORT_FORMATS = new Set<DrawioExportFormat>(['png', 'svg', 'pdf', 'jpg']);
 
@@ -61,17 +53,6 @@ function parseExportInput(raw: unknown): {
 }
 
 export const drawioRouter = t.router({
-  /** 检查 draw.io CLI 是否可用。 */
-  checkInstalled: t.procedure.query(() => {
-    return {
-      installed: isDrawioInstalled(),
-      path: resolveDrawioPath(),
-      downloadUrl: DRAWIO_DOWNLOAD_URL,
-      /** 内置二进制仅在 Linux 打包（Windows/macOS 需本机安装） */
-      bundledPlatform: 'linux' as const,
-    };
-  }),
-
   /** 读取 .drawio 文件 XML 内容。 */
   readDiagram: t.procedure
     .input((raw): { filePath: string } => {
@@ -93,7 +74,7 @@ export const drawioRouter = t.router({
       }
     }),
 
-  /** CLI 导出。outputPath 省略时默认与输入同目录、同名换扩展名。 */
+  /** 导出（内置 viewer 渲染）。outputPath 省略时默认与输入同目录、同名换扩展名。 */
   export: t.procedure
     .input(parseExportInput)
     .mutation(async ({ input }) => {
@@ -101,13 +82,10 @@ export const drawioRouter = t.router({
         const result = await exportDiagram(input);
         return result;
       } catch (err) {
-        if (err instanceof DrawioNotAvailableError) {
-          throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: 'draw.io CLI not available', cause: err });
-        }
         if (err instanceof DrawioExportError) {
           throw new TRPCError({
             code: 'INTERNAL_SERVER_ERROR',
-            message: `drawio export failed: ${err.message}${err.stderr ? ` (${err.stderr.trim().slice(0, 500)})` : ''}`,
+            message: `drawio export failed: ${err.message}`,
             cause: err,
           });
         }

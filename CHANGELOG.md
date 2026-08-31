@@ -24,6 +24,7 @@
 * **ui:** 引用来源展开升级 ContextCards chunk 卡——chip 错峰淡入，KB 预览摘要卡同形态接入
 * **chat:** 引用来源对齐 beautiful-ui——重叠图标堆叠胶囊 + 展开卡片列表
 * **chat:** 模型菜单瘦身（仅名称 + 上下文大小）、输入框弹窗对齐 beautiful-ui Prompt Bar
+* **drawio:** .drawio 导出去 draw.io Desktop 依赖——包内 viewer-static 隐藏窗口渲染：SVG=DOM 序列化（foreignObject 文本保留）、PNG/JPG=capturePage 确定性像素（与显示器 DPI 无关，支持 2x）、PDF=printToPDF 矢量页；移除 Linux 内置 CLI 与 checkInstalled 引导条，安装包体积减小 100MB+
 
 ### Bug Fixes
 

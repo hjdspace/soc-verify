@@ -51,9 +51,6 @@ runner 启动时，omp 引擎的 loader（`loader-state.js`）在以下路径搜
 `electron-builder.yml` 已配置 `extraResources` 将本目录（排除 README.md）内嵌到安装包 `resources/binaries`，
 并 `asarUnpack` 以便子进程直接执行和加载。`engine/oh-my-pi` 不随桌面安装包打包。
 
-## draw.io desktop CLI（仅 Linux）
-
-`npm run download:drawio`（`scripts/download-drawio.mjs`）下载官方 AppImage 并自解压到
-`drawio-linux-<arch>/`，供 .drawio 框图导出（PNG/SVG/PDF/JPG）离线使用（内网 Linux）。
-版本固定在 `package.json` 的 `drawioDesktopVersion`。Windows/macOS 不内置：应用内检测不到
-CLI 时引导用户从 drawio-desktop releases 安装。路径解析见 `src/main/drawio/binary.ts`。
+> 历史说明：早期版本曾内置 draw.io desktop CLI（`drawio-linux-<arch>/`）用于 .drawio 导出，
+> 现已移除——导出改由包内 `viewer-static.min.js` 隐藏窗口渲染实现（`src/main/drawio/viewer-exporter.ts`），
+> 不依赖 draw.io Desktop，安装包体积显著减小。

@@ -1,0 +1,147 @@
+<!doctype html>
+<!--
+  drawio 离线导出页 — 主进程 viewer-exporter.ts 在隐藏 BrowserWindow 中加载。
+
+  渲染内核复用预览同款 viewer-static.min.js（与 draw.io 桌面版同源的 mxGraph），
+  不依赖 draw.io Desktop CLI。主进程通过 executeJavaScript 调用 __drawioExport：
+
+    payload: { xml: string; format: 'png'|'jpg'|'pdf'|'svg'; scale?: number; transparent?: boolean }
+    返回：
+      - format=svg   → { svg: string; bounds: Rect }（完整 SVG 文本，含 foreignObject 文本标签）
+      - 其他格式     → { x, y, width, height }（容器坐标系捕获区域，已含 scale）
+
+  注意：本页面无网络请求（CSP default-src 'self'），viewer 脚本与本页同目录加载
+  （src/renderer/public/drawio/ → 构建后 out/renderer/drawio/）。
+-->
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:" />
+  <title>drawio-export</title>
+  <style>
+    html, body { margin: 0; padding: 0; background: #ffffff; }
+    #container { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; }
+  </style>
+</head>
+<body>
+  <div id="container"></div>
+  <script src="./viewer-static.min.js"></script>
+  <script>
+    'use strict';
+
+    /** 渲染稳定等待（ms）：覆盖 viewer 异步初始化与内嵌资源绘制 */
+    var RENDER_WAIT_MS = 600;
+    /** 内容四边留白（css px），避免图形贴边被裁 */
+    var CONTENT_PAD_PX = 2;
+
+    function roundBounds(b) {
+      return {
+        x: Math.floor(b.x) - CONTENT_PAD_PX,
+        y: Math.floor(b.y) - CONTENT_PAD_PX,
+        width: Math.ceil(b.width) + CONTENT_PAD_PX * 2,
+        height: Math.ceil(b.height) + CONTENT_PAD_PX * 2,
+      };
+    }
+
+    /**
+     * 导出入口（主进程经 executeJavaScript 调用）。
+     * resolve 前保证 graph.getGraphBounds() 稳定；非法 XML 时 viewer 回调可能
+     * 不触发，由主进程超时兜底。
+     */
+    window.__drawioExport = function (payload) {
+      return new Promise(function (resolve, reject) {
+        try {
+          var container = document.getElementById('container');
+          container.replaceChildren();
+          container.dataset.mxgraph = JSON.stringify({
+            nav: false,
+            resize: false,
+            'auto-fit': false,
+            move: false,
+            lightbox: false,
+            toolbar: '',
+            xml: payload.xml,
+          });
+          GraphViewer.createViewerForElement(container, function (v) {
+            try {
+              var graph = v.graph;
+              if (!graph) {
+                reject('viewer created without graph');
+                return;
+              }
+              // 字体就绪后再量取 bounds，避免首次测量偏小
+              var fontsReady = document.fonts && document.fonts.ready
+                ? document.fonts.ready
+                : Promise.resolve();
+              fontsReady.then(function () {
+                setTimeout(function () {
+                  try {
+                    var scale = payload.scale && payload.scale > 0 ? payload.scale : 1;
+                    if (payload.format !== 'svg' && scale !== 1) {
+                      graph.zoomTo(scale, false);
+                    }
+                    setTimeout(function () {
+                      try {
+                        var b = graph.getGraphBounds();
+                        if (!b || b.width <= 0 || b.height <= 0) {
+                          reject('empty diagram bounds');
+                          return;
+                        }
+                        var bounds = roundBounds(b);
+
+                        if (payload.format === 'svg') {
+                          var svgEl = container.querySelector('svg');
+                          if (!svgEl) {
+                            reject('rendered svg element not found');
+                            return;
+                          }
+                          var clone = svgEl.cloneNode(true);
+                          clone.removeAttribute('style');
+                          clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+                          clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+                          clone.setAttribute('width', String(bounds.width));
+                          clone.setAttribute('height', String(bounds.height));
+                          clone.setAttribute(
+                            'viewBox',
+                            bounds.x + ' ' + bounds.y + ' ' + bounds.width + ' ' + bounds.height,
+                          );
+                          clone.style.cssText =
+                            'left:0;top:0;width:' + bounds.width + 'px;height:' + bounds.height + 'px;display:block';
+                          var svgStr = new XMLSerializer().serializeToString(clone);
+                          resolve({
+                            svg: '<?xml version="1.0" encoding="UTF-8"?>\n' + svgStr,
+                            bounds: bounds,
+                          });
+                          return;
+                        }
+
+                        // 栅格 / PDF：报告捕获区域，主进程先扩窗口再 capturePage / printToPDF
+                        document.body.style.background =
+                          payload.transparent === true && payload.format === 'png' ? 'transparent' : '#ffffff';
+                        resolve({
+                          x: bounds.x,
+                          y: bounds.y,
+                          width: bounds.width,
+                          height: bounds.height,
+                        });
+                      } catch (e) {
+                        reject(String(e));
+                      }
+                    }, 60);
+                  } catch (e) {
+                    reject(String(e));
+                  }
+                }, RENDER_WAIT_MS);
+              });
+            } catch (e) {
+              reject(String(e));
+            }
+          });
+        } catch (e) {
+          reject(String(e));
+        }
+      });
+    };
+  </script>
+</body>
+</html>

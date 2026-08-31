@@ -6,7 +6,6 @@
   "main": "./out/main/index.cjs",
   "type": "module",
   "officecliVersion": "v1.0.143",
-  "drawioDesktopVersion": "v31.1.8",
   "traceweaveVersion": "v2.0.0",
   "traceweaveUpstreamCommit": "ca32e38f97d886c289b013709f8234b1cb3fdf34",
   "repository": {
@@ -30,13 +29,12 @@
     "build:runner": "node scripts/build-runner.mjs && node scripts/download-natives.mjs",
     "download:natives": "node scripts/download-natives.mjs",
     "download:officecli": "node scripts/download-officecli.mjs",
-    "download:drawio": "node scripts/download-drawio.mjs",
     "prebuild:officecli": "node scripts/download-officecli.mjs",
     "build:linux-pty": "node scripts/build-linux-pty.mjs",
     "build:linux-sqlite": "node scripts/build-linux-sqlite.mjs",
     "package": "node scripts/download-officecli.mjs && node scripts/setup-agent.mjs --require-binary && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/download-natives.mjs && node scripts/run-electron-builder.mjs",
     "package:win": "node scripts/download-officecli.mjs && node scripts/setup-agent.mjs --require-binary && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/download-natives.mjs && node scripts/run-electron-builder.mjs --win",
-    "package:linux": "node scripts/download-officecli.mjs && node scripts/download-drawio.mjs && node scripts/setup-agent.mjs --require-binary && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/build-linux-pty.mjs && node scripts/build-linux-sqlite.mjs && node scripts/download-natives.mjs && node scripts/build-traceweave-wrapper.mjs && node scripts/run-electron-builder.mjs --linux"
+    "package:linux": "node scripts/download-officecli.mjs && node scripts/setup-agent.mjs --require-binary && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/build-linux-pty.mjs && node scripts/build-linux-sqlite.mjs && node scripts/download-natives.mjs && node scripts/build-traceweave-wrapper.mjs && node scripts/run-electron-builder.mjs --linux"
   },
   "dependencies": {
     "@firecrawl/anydoc": "^0.1.9",
