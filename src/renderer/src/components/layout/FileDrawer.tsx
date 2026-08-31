@@ -13,6 +13,7 @@ import {
   Check,
   X,
   History,
+  PanelLeft,
 } from 'lucide-react';
 import { useProjectStore, type RecentFileEntry } from '@renderer/stores/project';
 import { useUiStore } from '@renderer/stores/ui';
@@ -39,10 +40,49 @@ function formatTime(ts: number): string {
  * 左侧文件抽屉（Issue #7）：文件树 / 子系统双 Tab + 底部「最近打开」。
  * 内容复用原 LeftRail 的项目切换、多目录文件树与子系统列表，功能无降级；
  * overview 已由总览视图吸收，plugins 走 workspace Tab 打开方式。
+ *
+ * 仅在 filePanelMode === 'drawer' 时挂载；底部提供切换到固定侧栏（docked）模式的入口。
  */
 export function FileDrawer() {
   const open = useUiStore((s) => s.leftDrawerOpen);
   const closeDrawers = useUiStore((s) => s.closeDrawers);
+  const setFilePanelMode = useUiStore((s) => s.setFilePanelMode);
+
+  /** 切换到固定侧栏模式：docked 面板全局可见，无需 toggle 抽屉。 */
+  const handleSwitchToDocked = () => {
+    setFilePanelMode('docked');
+  };
+
+  return (
+    <Drawer
+      side="left"
+      open={open}
+      onClose={closeDrawers}
+      title="文件"
+      width={FILE_DRAWER_WIDTH}
+      flush
+    >
+      <div className="flex min-h-0 flex-1 flex-col">
+        <FileDrawerContent />
+        <button
+          type="button"
+          onClick={handleSwitchToDocked}
+          data-testid="file-drawer-dock-switch"
+          className="flex shrink-0 items-center justify-center gap-1.5 border-t border-border/50 px-3 py-2 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <PanelLeft className="size-3" />
+          切换为固定侧栏模式
+        </button>
+      </div>
+    </Drawer>
+  );
+}
+
+/**
+ * 文件面板内容（项目切换 + 文件树 + 最近打开）。
+ * 外壳无关：drawer 模式由 FileDrawer 包抽屉，docked 模式由 FilePanel 包固定左栏。
+ */
+export function FileDrawerContent() {
   const [showProjectList, setShowProjectList] = useState(false);
 
   const projects = useProjectStore((s) => s.projects);
@@ -203,10 +243,9 @@ export function FileDrawer() {
   };
 
   return (
-    <Drawer side="left" open={open} onClose={closeDrawers} title="文件" width={FILE_DRAWER_WIDTH} flush>
-      <div className="flex min-h-0 flex-1 flex-col">
-        {/* ── 项目切换栏 ──────────────────────────────── */}
-        <div className="flex items-center justify-between border-b border-border/50 px-2 py-1.5">
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* ── 项目切换栏 ──────────────────────────────── */}
+      <div className="flex items-center justify-between border-b border-border/50 px-2 py-1.5">
           {/* 自定义项目下拉 */}
           <div className="relative flex-1">
             {renamingId === currentProjectId && currentProject ? (
@@ -363,7 +402,7 @@ export function FileDrawer() {
                 打开项目目录
               </button>
             </div>
-          ) : open ? (
+          ) : currentProject ? (
             <FileTreeSection
               currentProject={currentProject}
               fileTree={fileTree}
@@ -397,8 +436,7 @@ export function FileDrawer() {
             </button>
           </div>
         )}
-      </div>
-    </Drawer>
+    </div>
   );
 }
 

@@ -48,6 +48,12 @@ export interface ProjectState {
     activeView?: string;
     /** AI 面板呈现模式（drawer | docked）；旧持久化状态可能缺失 */
     aiPanelMode?: string;
+    /** 文件面板呈现模式（drawer | docked）；旧持久化状态可能缺失 */
+    filePanelMode?: string;
+    /** 文件面板（docked 模式）折叠状态；旧持久化状态可能缺失 */
+    filePanelCollapsed?: boolean;
+    /** 文件面板（docked 模式）宽度；旧持久化状态可能缺失 */
+    filePanelWidth?: number;
     /** 仿真视图左栏宽度（可拖拽调整）；旧持久化状态可能缺失 */
     simLeftPanelWidth?: number;
   };

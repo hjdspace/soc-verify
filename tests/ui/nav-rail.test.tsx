@@ -26,7 +26,7 @@ function makeRun(status: SimulationRunRecord['status'], runId: string): Simulati
 }
 
 beforeEach(() => {
-  useUiStore.setState({ activeView: 'dashboard', sourceControlOpen: false, settingsOpen: false });
+  useUiStore.setState({ activeView: 'dashboard', sourceControlOpen: false, settingsOpen: false, filePanelMode: 'drawer', filePanelCollapsed: false });
   simState.activeRuns = [];
 });
 
@@ -133,7 +133,7 @@ describe('NavRail 其他按钮', () => {
   });
 
   it('文件 / AI 按钮 toggle 左右抽屉（Issue #7）', () => {
-    useUiStore.setState({ leftDrawerOpen: false, rightDrawerOpen: false, aiPanelMode: 'drawer' });
+    useUiStore.setState({ leftDrawerOpen: false, rightDrawerOpen: false, aiPanelMode: 'drawer', filePanelMode: 'drawer' });
     render(<NavRail />);
 
     fireEvent.click(screen.getByRole('button', { name: '文件' }));
@@ -153,5 +153,18 @@ describe('NavRail 其他按钮', () => {
     fireEvent.click(screen.getByRole('button', { name: 'AI 助手' }));
     expect(useUiStore.getState().rightPanelCollapsed).toBe(false);
     expect(useUiStore.getState().activeView).toBe('workspace');
+  });
+
+  it('文件按钮在 docked 模式下 toggle 固定左栏折叠状态', () => {
+    useUiStore.setState({ filePanelMode: 'docked', filePanelCollapsed: false });
+    render(<NavRail />);
+
+    fireEvent.click(screen.getByRole('button', { name: '文件' }));
+    expect(useUiStore.getState().filePanelCollapsed).toBe(true);
+    expect(screen.getByRole('button', { name: '文件' }).getAttribute('aria-pressed')).toBe('false');
+
+    fireEvent.click(screen.getByRole('button', { name: '文件' }));
+    expect(useUiStore.getState().filePanelCollapsed).toBe(false);
+    expect(screen.getByRole('button', { name: '文件' }).getAttribute('aria-pressed')).toBe('true');
   });
 });

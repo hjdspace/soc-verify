@@ -58,6 +58,9 @@ export function NavRail() {
   const setSettingsOpen = useUiStore((s) => s.setSettingsOpen);
   const leftDrawerOpen = useUiStore((s) => s.leftDrawerOpen);
   const toggleLeftDrawer = useUiStore((s) => s.toggleLeftDrawer);
+  const filePanelMode = useUiStore((s) => s.filePanelMode);
+  const filePanelCollapsed = useUiStore((s) => s.filePanelCollapsed);
+  const toggleFilePanel = useUiStore((s) => s.toggleFilePanel);
   const rightDrawerOpen = useUiStore((s) => s.rightDrawerOpen);
   const toggleRightDrawer = useUiStore((s) => s.toggleRightDrawer);
   const aiPanelMode = useUiStore((s) => s.aiPanelMode);
@@ -65,6 +68,20 @@ export function NavRail() {
   const toggleRightPanel = useUiStore((s) => s.toggleRightPanel);
   const activeRuns = useSimulationStore((s) => s.activeRuns);
   const runningCount = activeRuns.filter((r) => r.status === 'running' || r.status === 'pending').length;
+
+  /** 文件按钮：drawer 模式 toggle 左抽屉；docked 模式 toggle 折叠状态。 */
+  const handleFileClick = () => {
+    if (filePanelMode === 'drawer') {
+      toggleLeftDrawer();
+      return;
+    }
+    toggleFilePanel();
+  };
+
+  const fileButtonActive =
+    filePanelMode === 'drawer'
+      ? leftDrawerOpen
+      : !filePanelCollapsed;
 
   /** AI 按钮：drawer 模式 toggle 右抽屉；docked 模式恢复旧固定右栏行为（切换 + 跳工作区）。 */
   const handleAiClick = () => {
@@ -132,15 +149,15 @@ export function NavRail() {
 
       <div className="my-2 h-px w-7 bg-border" />
 
-      {/* 文件抽屉：toggle 左抽屉（文件树 / 子系统 / 最近打开） */}
+      {/* 文件抽屉：drawer 模式 toggle 左抽屉；docked 模式 toggle 折叠 */}
       <button
         type="button"
         aria-label="文件"
-        aria-pressed={leftDrawerOpen}
-        onClick={toggleLeftDrawer}
+        aria-pressed={fileButtonActive}
+        onClick={handleFileClick}
         className={cn(
           NAV_BUTTON_BASE,
-          leftDrawerOpen ? 'bg-primary/10 text-primary' : NAV_BUTTON_IDLE,
+          fileButtonActive ? 'bg-primary/10 text-primary' : NAV_BUTTON_IDLE,
         )}
       >
         <Folder className="size-[18px]" strokeWidth={1.8} />

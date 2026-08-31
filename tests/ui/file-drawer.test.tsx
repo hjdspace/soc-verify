@@ -65,6 +65,7 @@ vi.mock('@renderer/components/project/FileTree', () => ({
 }));
 
 import { FileDrawer } from '@renderer/components/layout/FileDrawer';
+import { FilePanel } from '@renderer/components/layout/FilePanel';
 import { useUiStore } from '@renderer/stores/ui';
 
 beforeEach(() => {
@@ -72,6 +73,7 @@ beforeEach(() => {
   useUiStore.setState({
     leftDrawerOpen: true,
     rightDrawerOpen: false,
+    filePanelMode: 'drawer',
   });
   projectState.recentFiles = [];
   projectState.extraDirs = [];
@@ -94,7 +96,7 @@ describe('FileDrawer 基础渲染', () => {
     expect(drawer.getAttribute('aria-hidden')).toBe('true');
   });
 
-  it('关闭态不挂载文件树或加载额外目录', () => {
+  it('关闭态抽屉 aria-hidden，文件树内容不参与交互', () => {
     useUiStore.setState({ leftDrawerOpen: false });
     projectState.extraDirs = [
       { id: 'dir_v1', path: 'D:/proj/ip2soc', group: 'verify', isCwd: false, order: 0, createdAt: Date.now() },
@@ -102,8 +104,9 @@ describe('FileDrawer 基础渲染', () => {
 
     render(<FileDrawer />);
 
-    expect(screen.queryByTestId('file-tree-mock')).toBeNull();
-    expect(projectState.loadDirFileTree).not.toHaveBeenCalled();
+    /* FileDrawerContent 常驻挂载，抽屉关闭时通过 aria-hidden 隔离交互 */
+    const drawer = screen.getByTestId('drawer-left');
+    expect(drawer.getAttribute('aria-hidden')).toBe('true');
   });
 
   it('无项目时显示空态引导', () => {
@@ -297,5 +300,101 @@ describe('FileDrawer 多目录分组渲染', () => {
     expect(screen.getByTestId('dir-tree-dir_d1').querySelector('[data-dir-id="dir_d1"]')).toBeTruthy();
 
     restore();
+  });
+});
+
+describe('FileDrawer 模式切换', () => {
+  it('抽屉模式底部显示「切换为固定侧栏模式」按钮', () => {
+    useUiStore.setState({ filePanelMode: 'drawer', leftDrawerOpen: true });
+    render(<FileDrawer />);
+    expect(screen.getByTestId('file-drawer-dock-switch')).toBeInTheDocument();
+    expect(screen.getByText('切换为固定侧栏模式')).toBeInTheDocument();
+  });
+
+  it('点击切换按钮 → docked 模式，左抽屉关闭', () => {
+    useUiStore.setState({ filePanelMode: 'drawer', leftDrawerOpen: true });
+    render(<FileDrawer />);
+
+    fireEvent.click(screen.getByTestId('file-drawer-dock-switch'));
+    expect(useUiStore.getState().filePanelMode).toBe('docked');
+    expect(useUiStore.getState().leftDrawerOpen).toBe(false);
+  });
+});
+
+describe('FilePanel docked 模式', () => {
+  it('渲染固定左栏面板与解除固定按钮', () => {
+    useUiStore.setState({ filePanelMode: 'docked', filePanelCollapsed: false, filePanelWidth: 330 });
+    render(<FilePanel width={330} />);
+
+    expect(screen.getByTestId('file-docked-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('file-docked-unpin')).toBeInTheDocument();
+    /* 内容复用 FileDrawerContent */
+    expect(screen.getByTestId('file-tree-mock')).toBeInTheDocument();
+  });
+
+  it('点击解除固定 → 切回 drawer 模式', () => {
+    useUiStore.setState({ filePanelMode: 'docked', filePanelCollapsed: false, leftDrawerOpen: false });
+    render(<FilePanel width={330} />);
+
+    fireEvent.click(screen.getByTestId('file-docked-unpin'));
+    expect(useUiStore.getState().filePanelMode).toBe('drawer');
+    /* setFilePanelMode('drawer') 会重置 leftDrawerOpen=false；requestAnimationFrame 中的 toggleLeftDrawer 使其变 true */
+    /* jsdom 中 requestAnimationFrame 回调在下一 tick 执行，验证 mode 切换即可 */
+  });
+});
+
+describe('FilePanel 持久化', () => {
+  it('hydrateLayout 恢复 filePanelMode docked 状态', () => {
+    useUiStore.getState().hydrateLayout({ filePanelMode: 'docked' });
+    expect(useUiStore.getState().filePanelMode).toBe('docked');
+  });
+
+  it('hydrateLayout 恢复 filePanelCollapsed 状态', () => {
+    useUiStore.getState().hydrateLayout({ filePanelCollapsed: true });
+    expect(useUiStore.getState().filePanelCollapsed).toBe(true);
+  });
+
+  it('hydrateLayout 恢复 filePanelWidth 状态', () => {
+    useUiStore.getState().hydrateLayout({ filePanelWidth: 400 });
+    expect(useUiStore.getState().filePanelWidth).toBe(400);
+  });
+
+  it('hydrateLayout 对缺失字段使用默认值', () => {
+    useUiStore.setState({ filePanelMode: 'docked', filePanelCollapsed: true, filePanelWidth: 400 });
+    useUiStore.getState().hydrateLayout({});
+    /* 缺失字段保持当前状态 */
+    expect(useUiStore.getState().filePanelMode).toBe('docked');
+    expect(useUiStore.getState().filePanelCollapsed).toBe(true);
+    expect(useUiStore.getState().filePanelWidth).toBe(400);
+  });
+
+  it('hydrateLayout 对非法 filePanelMode 值保持当前状态', () => {
+    useUiStore.setState({ filePanelMode: 'docked' });
+    useUiStore.getState().hydrateLayout({ filePanelMode: 'invalid' });
+    expect(useUiStore.getState().filePanelMode).toBe('docked');
+  });
+
+  it('setFilePanelMode 切到 docked 时关闭左抽屉', () => {
+    useUiStore.setState({ filePanelMode: 'drawer', leftDrawerOpen: true });
+    useUiStore.getState().setFilePanelMode('docked');
+    expect(useUiStore.getState().filePanelMode).toBe('docked');
+    expect(useUiStore.getState().leftDrawerOpen).toBe(false);
+  });
+
+  it('toggleFilePanel 切换折叠状态', () => {
+    useUiStore.setState({ filePanelCollapsed: false });
+    useUiStore.getState().toggleFilePanel();
+    expect(useUiStore.getState().filePanelCollapsed).toBe(true);
+    useUiStore.getState().toggleFilePanel();
+    expect(useUiStore.getState().filePanelCollapsed).toBe(false);
+  });
+
+  it('setFilePanelWidth 限制在 240–500 范围内', () => {
+    useUiStore.getState().setFilePanelWidth(100);
+    expect(useUiStore.getState().filePanelWidth).toBe(240);
+    useUiStore.getState().setFilePanelWidth(600);
+    expect(useUiStore.getState().filePanelWidth).toBe(500);
+    useUiStore.getState().setFilePanelWidth(350);
+    expect(useUiStore.getState().filePanelWidth).toBe(350);
   });
 });

@@ -272,7 +272,12 @@ export function CommandPalette() {
           label: '打开文件树',
           icon: Folder,
           action: () => {
-            useUiStore.setState({ leftDrawerOpen: true });
+            const { filePanelMode, filePanelCollapsed } = useUiStore.getState();
+            if (filePanelMode === 'docked' && filePanelCollapsed) {
+              useUiStore.setState({ filePanelCollapsed: false });
+            } else {
+              useUiStore.setState({ leftDrawerOpen: true });
+            }
             close();
           },
         },

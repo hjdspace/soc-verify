@@ -10,6 +10,9 @@ export type ActiveView = 'dashboard' | 'simulation' | 'coverage' | 'regression' 
 /** AI 面板呈现模式：抽屉（默认）或固定右栏（旧布局回退），随布局持久化 */
 export type AiPanelMode = 'drawer' | 'docked';
 
+/** 文件面板呈现模式：抽屉（默认，悬浮）或固定左栏（docked），随布局持久化 */
+export type FilePanelMode = 'drawer' | 'docked';
+
 const ACTIVE_VIEWS: readonly ActiveView[] = ['dashboard', 'simulation', 'coverage', 'regression', 'workspace'];
 
 function isActiveView(value: string | undefined): value is ActiveView {
@@ -17,6 +20,10 @@ function isActiveView(value: string | undefined): value is ActiveView {
 }
 
 function isAiPanelMode(value: string | undefined): value is AiPanelMode {
+  return value === 'drawer' || value === 'docked';
+}
+
+function isFilePanelMode(value: string | undefined): value is FilePanelMode {
   return value === 'drawer' || value === 'docked';
 }
 
@@ -34,6 +41,11 @@ interface UiState {
   /** 右侧 AI 抽屉（仅 aiPanelMode === 'drawer' 时有效） */
   rightDrawerOpen: boolean;
   aiPanelMode: AiPanelMode;
+  filePanelMode: FilePanelMode;
+  /** 固定左栏折叠状态（仅 filePanelMode === 'docked' 时有效） */
+  filePanelCollapsed: boolean;
+  /** 固定左栏宽度（可拖拽调整，持久化到布局状态） */
+  filePanelWidth: number;
   rightPanelCollapsed: boolean;
   settingsOpen: boolean;
   commandPaletteOpen: boolean;
@@ -52,6 +64,9 @@ interface UiState {
   toggleRightDrawer: () => void;
   closeDrawers: () => void;
   setAiPanelMode: (mode: AiPanelMode) => void;
+  setFilePanelMode: (mode: FilePanelMode) => void;
+  toggleFilePanel: () => void;
+  setFilePanelWidth: (width: number) => void;
   toggleRightPanel: () => void;
   toggleBottomPanel: () => void;
   setSettingsOpen: (open: boolean) => void;
@@ -70,6 +85,9 @@ interface UiState {
     rightPanelCollapsed?: boolean;
     pluginViews?: Partial<PluginViewLayouts>;
     aiPanelMode?: string;
+    filePanelMode?: string;
+    filePanelCollapsed?: boolean;
+    filePanelWidth?: number;
     simLeftPanelWidth?: number;
   }) => void;
 }
@@ -80,12 +98,18 @@ const BOTTOM_MIN = 120;
 const BOTTOM_MAX = 600;
 const SIM_LEFT_MIN = 200;
 const SIM_LEFT_MAX = 400;
+const FILE_PANEL_MIN = 240;
+const FILE_PANEL_MAX = 500;
+const FILE_PANEL_DEFAULT_WIDTH = 330;
 
 export const useUiStore = create<UiState>((set) => ({
   activeView: 'dashboard',
   leftDrawerOpen: false,
   rightDrawerOpen: false,
   aiPanelMode: 'drawer',
+  filePanelMode: 'drawer',
+  filePanelCollapsed: false,
+  filePanelWidth: FILE_PANEL_DEFAULT_WIDTH,
   rightPanelCollapsed: false,
   settingsOpen: false,
   commandPaletteOpen: false,
@@ -105,6 +129,10 @@ export const useUiStore = create<UiState>((set) => ({
   closeDrawers: () => set({ leftDrawerOpen: false, rightDrawerOpen: false }),
   // 切回固定侧栏模式时收起抽屉，避免再次切回抽屉模式时意外弹开
   setAiPanelMode: (mode) => set({ aiPanelMode: mode, rightDrawerOpen: false }),
+  // 文件面板：切到 docked 时关闭左抽屉；切回 drawer 时保持折叠态重置
+  setFilePanelMode: (mode) => set({ filePanelMode: mode, leftDrawerOpen: false }),
+  toggleFilePanel: () => set((s) => ({ filePanelCollapsed: !s.filePanelCollapsed })),
+  setFilePanelWidth: (width) => set({ filePanelWidth: Math.max(FILE_PANEL_MIN, Math.min(FILE_PANEL_MAX, width)) }),
   toggleRightPanel: () => set((s) => ({ rightPanelCollapsed: !s.rightPanelCollapsed })),
   toggleBottomPanel: () => set((s) => ({ bottomPanelCollapsed: !s.bottomPanelCollapsed })),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
@@ -138,6 +166,12 @@ export const useUiStore = create<UiState>((set) => ({
     activeView: isActiveView(layout?.activeView) ? layout.activeView : state.activeView,
     rightPanelCollapsed: layout?.rightPanelCollapsed ?? state.rightPanelCollapsed,
     aiPanelMode: isAiPanelMode(layout?.aiPanelMode) ? layout.aiPanelMode : state.aiPanelMode,
+    filePanelMode: isFilePanelMode(layout?.filePanelMode) ? layout.filePanelMode : state.filePanelMode,
+    filePanelCollapsed: layout?.filePanelCollapsed ?? state.filePanelCollapsed,
+    filePanelWidth:
+      typeof layout?.filePanelWidth === 'number'
+        ? Math.max(FILE_PANEL_MIN, Math.min(FILE_PANEL_MAX, layout.filePanelWidth))
+        : state.filePanelWidth,
     simLeftPanelWidth:
       typeof layout?.simLeftPanelWidth === 'number'
         ? Math.max(SIM_LEFT_MIN, Math.min(SIM_LEFT_MAX, layout.simLeftPanelWidth))

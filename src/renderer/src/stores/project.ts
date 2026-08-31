@@ -442,6 +442,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             pluginViews: useUiStore.getState().pluginViewLayouts,
             activeView: useUiStore.getState().activeView,
             aiPanelMode: useUiStore.getState().aiPanelMode,
+            filePanelMode: useUiStore.getState().filePanelMode,
+            filePanelCollapsed: useUiStore.getState().filePanelCollapsed,
+            filePanelWidth: useUiStore.getState().filePanelWidth,
             simLeftPanelWidth: useUiStore.getState().simLeftPanelWidth,
           },
           lastSessionIds: useSessionCoreStore.getState().sessions

@@ -8,6 +8,7 @@ import { TaskPanel } from './TaskPanel';
 import { CommandPalette } from './CommandPalette';
 import { Backdrop } from './Backdrop';
 import { FileDrawer } from './FileDrawer';
+import { FilePanel } from './FilePanel';
 import { AiDrawer } from './AiDrawer';
 import { RightPanel } from './RightPanel';
 import { ResizeHandle } from './ResizeHandle';
@@ -25,6 +26,10 @@ export function AppShell() {
   // 布局持久化触发器（抽屉为瞬态不持久化；RightPanel 几何随 workspace 视图在 ViewContainer）
   const activeView = useUiStore((s) => s.activeView);
   const aiPanelMode = useUiStore((s) => s.aiPanelMode);
+  const filePanelMode = useUiStore((s) => s.filePanelMode);
+  const filePanelCollapsed = useUiStore((s) => s.filePanelCollapsed);
+  const filePanelWidth = useUiStore((s) => s.filePanelWidth);
+  const setFilePanelWidth = useUiStore((s) => s.setFilePanelWidth);
   const leftDrawerOpen = useUiStore((s) => s.leftDrawerOpen);
   const rightDrawerOpen = useUiStore((s) => s.rightDrawerOpen);
   const closeDrawers = useUiStore((s) => s.closeDrawers);
@@ -62,7 +67,7 @@ export function AppShell() {
       void saveProjectState();
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [currentProjectId, uiStateReady, activeView, aiPanelMode, rightCollapsed, rightPanelWidth, simLeftPanelWidth, pluginViewLayouts, sessionIds, saveProjectState]);
+  }, [currentProjectId, uiStateReady, activeView, aiPanelMode, filePanelMode, filePanelCollapsed, filePanelWidth, rightCollapsed, rightPanelWidth, simLeftPanelWidth, pluginViewLayouts, sessionIds, saveProjectState]);
 
   // Save state before the window unloads so lastSessionIds is up-to-date.
   useEffect(() => {
@@ -82,6 +87,13 @@ export function AppShell() {
       <div className="relative flex flex-1 overflow-hidden">
         <NavRail />
         <div className="flex flex-1 overflow-hidden">
+          {/* ── 固定左栏文件面板（docked 模式，所有视图全局可见） ── */}
+          {filePanelMode === 'docked' && !filePanelCollapsed && (
+            <>
+              <FilePanel width={filePanelWidth} />
+              <ResizeHandle side="left" width={filePanelWidth} onResize={setFilePanelWidth} />
+            </>
+          )}
           <div className="flex flex-1 flex-col overflow-hidden">
             <ViewContainer />
             <BottomPanel />
@@ -101,7 +113,7 @@ export function AppShell() {
 
         {/* ── 内容区遮罩 + 文件 / AI 抽屉（Issue #7） ───────── */}
         <Backdrop open={leftDrawerOpen || rightDrawerOpen} onClose={closeDrawers} />
-        <FileDrawer />
+        {filePanelMode === 'drawer' && <FileDrawer />}
         {aiPanelMode === 'drawer' && <AiDrawer />}
       </div>
 
