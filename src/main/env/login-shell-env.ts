@@ -167,12 +167,17 @@ export async function getLoginShellEnv(shellOverride?: string): Promise<Record<s
   try {
     // Build the command to capture the login shell environment.
     // - For bash/zsh: `bash -l -c 'env'` (login + command)
-    // - For csh/tcsh: `csh -l -c 'env'` (login shell sources .cshrc + .login)
+    // - For csh/tcsh: `csh -i -c 'env'` (interactive → sources .cshrc/.login)
+    //
+    // NOTE: tcsh does NOT support `-l` (login shell flag).  The `-l` option
+    // is bash/zsh specific.  For csh/tcsh we use `-i` (interactive mode)
+    // which causes the shell to source `.cshrc` (and `.login` if it's a
+    // login session), replicating the environment a user gets in a terminal.
     //
     // We use execFile (not exec) to avoid an extra shell layer that could
     // interfere with quoting.
     const isCsh = isCshShell(shell);
-    const args = isCsh ? ['-l', '-c', 'env'] : ['-l', '-c', 'env'];
+    const args = isCsh ? ['-i', '-c', 'env'] : ['-l', '-c', 'env'];
 
     const { stdout } = await execFileAsync(shell, args, {
       timeout: 10000,
@@ -205,8 +210,10 @@ export async function getLoginShellEnv(shellOverride?: string): Promise<Record<s
     const errMsg = err instanceof Error ? err.message : String(err);
     console.warn(`[login-shell-env] failed to capture env from ${shell}: ${errMsg}`);
 
-    if (!isCshShell(shell) && shell !== 'bash') {
-      // Already tried a non-bash shell; try bash as last resort
+    // If the preferred shell fails (e.g. tcsh/csh capture error), try bash
+    // as a fallback.  This is especially important for EDA environments where
+    // tcsh is the preferred shell but may not work correctly with `-i -c env`.
+    if (shell !== 'bash') {
       try {
         const { stdout } = await execFileAsync('bash', ['-l', '-c', 'env'], {
           timeout: 10000,
