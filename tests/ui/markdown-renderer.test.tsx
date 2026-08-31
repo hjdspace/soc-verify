@@ -98,14 +98,14 @@ describe('MarkdownRenderer 代码块换行', () => {
 });
 
 describe('MarkdownRenderer 流式尾缘', () => {
-  it('streaming 时末尾文本出现模糊尾缘，行内光标渲染在最后一个段落内部', () => {
+  it('streaming 时末尾渲染尾缘容器（字符数 0 = 禁用态）与行内光标于最后一个段落内部', () => {
     const { container } = render(
       <MarkdownRenderer content="这是一段正在流式生成的回复文本" streaming />,
     );
     const tail = container.querySelector('.ap-stream-tail');
     expect(tail).not.toBeNull();
-    // 尾缘只覆盖末尾 6 个字符，前面正文保持清晰
-    expect(tail?.textContent).toBe('成的回复文本');
+    // 尾缘字符数为 0：span 保留但不含字符，全文保持清晰，流式信号由光标承载
+    expect(tail?.textContent).toBe('');
 
     // 光标行内渲染：位于段落元素内部（而非独立成行的兄弟节点）
     const cursors = container.querySelectorAll('.ap-cursor');
@@ -128,7 +128,7 @@ describe('MarkdownRenderer 流式尾缘', () => {
     const { container } = render(
       <MarkdownRenderer content="查看 src/main/foo.sv:42 的实现说明" streaming />,
     );
-    // settled 末尾是 "src/main/foo.sv:"，应被识别为文件引用 chip
+    // 流式期间 settled 文本（尾缘 0 字符时为整串）中的文件引用被 chip 化
     const chip = container.querySelector('button.ap-chip');
     expect(chip).not.toBeNull();
     expect(chip?.textContent).toContain('src/main/foo.sv');
@@ -164,9 +164,10 @@ describe('MarkdownRenderer 流式尾缘', () => {
     // 末尾字符如果被各自应用尾缘，会永久停留在模糊态直到消息结束
     expect(container.querySelectorAll('.ap-stream-tail').length).toBe(1);
     expect(container.querySelectorAll('.ap-cursor').length).toBe(1);
-    // 尾缘位于最后一个块（收尾段落）内，且只覆盖末尾 6 个字符
+    // 尾缘位于最后一个块（收尾段落）内，当前字符数 0（禁用态）为空 span；
+    // 仲裁逻辑仍决定光标唯一落点，防止兄弟块级各自追加光标
     const tail = container.querySelector('.ap-stream-tail');
-    expect(tail?.textContent).toBe('尾段落文本。');
+    expect(tail?.textContent).toBe('');
     const lastP = container.querySelector('p:last-of-type');
     expect(lastP?.contains(tail ?? null)).toBe(true);
   });
