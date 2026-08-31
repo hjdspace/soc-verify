@@ -142,20 +142,14 @@ export async function discoverCaseCfgFiles(
 // ── discoverUdtbDirs ────────────────────────────────────────────────
 
 /**
- * 扫描 udtb/{subsys} 目录下所有包含 bin/ 的子目录。
+ * 扫描 udtb/{subsys} 目录下所有包含 bin/ 的直接子目录。
  *
  * 这些子目录对应不同的 ip2soc/block 配置环境，
  * 用户在二级弹窗中选择后，从选中目录的 bin/ 下发现 .cfg 文件。
  *
- * 参考Python `show_udtb_selection_dialog`：
- *   udtb_path = os.path.join(proj_env, 'udtb', subsys)
- *   if not os.path.exists(udtb_path):
- *       return []
- *   for root, dirs, _ in os.walk(udtb_path):
- *       if 'bin' in dirs:
- *           rel_path = os.path.relpath(root, udtb_path)
- *           if rel_path != '.':  # 排除当前目录
- *               items.append(rel_path)
+ * 标准目录结构为 `udtb/{subsys}/{block}/bin/`，因此只需扫描一级子目录
+ * （即 `udtb/{subsys}/` 下的直接子目录），无需递归深层遍历。
+ * 这将扫描时间从 O(n^depth) 降低到 O(n)，在大规模 UDTB 目录下显著加速。
  *
  * 如果 udtb/{subsys} 目录不存在，返回空数组（前端跳过二级弹窗）。
  */
@@ -168,51 +162,34 @@ export async function discoverUdtbDirs(
 
   const dirs: UdtbDirInfo[] = [];
 
-  /**
-   * 递归遍历目录树，收集包含 bin/ 子目录的节点。
-   * 相当于 Python 的 os.walk。
-   */
-  async function walk(dir: string): Promise<void> {
-    let entries: string[];
+  let entries: string[];
+  try {
+    entries = await readdir(udtbRoot);
+  } catch {
+    return [];
+  }
+
+  // 只扫描一级子目录，检查是否包含 bin/ 子目录
+  for (const entry of entries) {
+    const entryPath = join(udtbRoot, entry);
+    let isDirectory = false;
     try {
-      entries = await readdir(dir);
+      const stats = await stat(entryPath);
+      isDirectory = stats.isDirectory();
     } catch {
-      return;
+      continue;
     }
 
-    // 检查当前目录是否包含 bin/ 子目录
-    let hasBin = false;
-    const subDirs: string[] = [];
+    if (!isDirectory) continue;
 
-    for (const entry of entries) {
-      const entryPath = join(dir, entry);
-      try {
-        const stats = await stat(entryPath);
-        if (stats.isDirectory()) {
-          if (entry === 'bin') {
-            hasBin = true;
-          } else {
-            subDirs.push(entryPath);
-          }
-        }
-      } catch {
-        continue;
-      }
-    }
-
-    // Exclude the root directory (rel === '' means dir === udtbRoot)
-    const rel = relative(udtbRoot, dir);
-    if (hasBin && rel !== '') {
-      dirs.push({ relPath: rel, fullPath: dir });
-    }
-
-    // 递归子目录
-    for (const subDir of subDirs) {
-      await walk(subDir);
+    // 检查该子目录是否包含 bin/ 子目录
+    const binDir = join(entryPath, 'bin');
+    if (existsSync(binDir)) {
+      const rel = relative(udtbRoot, entryPath);
+      dirs.push({ relPath: rel, fullPath: entryPath });
     }
   }
 
-  await walk(udtbRoot);
   return dirs;
 }
 
