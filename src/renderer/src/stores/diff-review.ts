@@ -456,6 +456,13 @@ export function openReviewAwareFile(filePath: string, _fileName: string): void {
   const { path: barePath, line, endLine } = parsePathLineRange(filePath);
   const lineRange: FileLineRange | undefined = line === undefined ? undefined : { line, endLine };
 
+  // omp 内部 URI（skill://<name>[/<rel>]）不是磁盘路径，直接打开必然失败。
+  // 先经主进程解析为真实文件路径（SKILL.md 或技能目录内文件）再打开。
+  if (barePath.startsWith('skill://')) {
+    openSkillUri(barePath, lineRange);
+    return;
+  }
+
   // 工具卡片中的路径可能是相对路径（如 README.md、src-tauri/tauri.conf.json），
   // 先解析为项目根内的绝对路径，避免以相对路径打开文件导致后端校验失败。
   const currentProjectId = useProjectStore.getState().currentProjectId;
@@ -484,6 +491,30 @@ export function openReviewAwareFile(filePath: string, _fileName: string): void {
       useToastStore.getState().error('文件不存在，已取消打开', resolvedPath);
     })
     .catch(open);
+}
+
+/**
+ * 将 skill:// 内部 URI 解析为真实文件路径后打开。
+ * 解析失败（技能不存在 / 相对路径越界 / 文件不存在）时提示并取消，不进入编辑器。
+ */
+function openSkillUri(uri: string, lineRange?: FileLineRange): void {
+  const projectId = useProjectStore.getState().currentProjectId;
+  if (!projectId) {
+    useToastStore.getState().error('无法解析技能路径：未打开项目', uri);
+    return;
+  }
+  void trpc.session.resolveSkillUri
+    .query({ projectId, uri })
+    .then((resolved) => {
+      if (resolved) {
+        useDiffReviewStore.getState().openFile(resolved, lineRange);
+        return;
+      }
+      useToastStore.getState().error('技能文件不存在，已取消打开', uri);
+    })
+    .catch(() => {
+      useToastStore.getState().error('技能路径解析失败，已取消打开', uri);
+    });
 }
 
 /**

@@ -466,8 +466,8 @@ describe('get_coverage Host Tool (ADR 0009 摘要优先)', () => {
       expect(hostTools.hasTool('get_coverage_uncovered')).toBe(true);
       expect(hostTools.hasTool('get_coverage_grade')).toBe(true);
       expect(hostTools.hasTool('get_coverage_csv')).toBe(true);
-      // 共 21 个工具（17 默认 + 4 覆盖率分析）
-      expect(hostTools.getToolNames()).toHaveLength(21);
+      // 共 24 个工具（20 默认 + 4 覆盖率分析）
+      expect(hostTools.getToolNames()).toHaveLength(24);
     } finally {
       cleanup();
     }

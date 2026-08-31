@@ -12,7 +12,10 @@
  *  - doc_to_markdown 六种错误码透传
  *  - doc_to_markdown 参数校验（缺少 path）
  *  - doc_to_markdown 文件不存在
- *  - doc_to_markdown 超长内容截断（防撑爆 Agent 上下文）
+ *  - doc_to_markdown 小文档内联返回 / 大文档落盘缓存返回句柄（零截断）
+ *  - kb_doc_read 按分块回读 / count 连读 / 越界与未知 doc_id 错误
+ *  - kb_doc_grep 正则与字面量匹配、命中总数与分块映射
+ *  - kb_doc_outline 标题大纲与分块映射
  *  - kb_search 索引匹配 + 全文匹配、评分排序、限量返回
  *  - kb_search 分类过滤（category）、中文 bigram 命中、snippet 与 absolutePath
  *  - kb_search 未挂载库时返回错误
@@ -167,11 +170,10 @@ describe('doc_to_markdown', () => {
     formatFromPathMock.mockReturnValue('docx');
   });
 
-  it('成功转换文档并返回 Markdown 内容', async () => {
+  it('小文档直接内联返回全文', async () => {
     const markdownContent = '# 验证计划\n\n这是 SoC 验证计划文档。';
     toMarkdownBytesMock.mockResolvedValue(markdownContent);
 
-    // 创建临时文件
     const docPath = join(tmpDir, 'test-doc.docx');
     writeFileSync(docPath, Buffer.from('fake docx content'));
 
@@ -186,15 +188,16 @@ describe('doc_to_markdown', () => {
 
     const parsed = parseResult(result);
     expect(parsed.path).toBe(docPath);
+    expect(parsed.cached).toBe(false);
     expect(parsed.markdown).toBe(markdownContent);
 
     // 验证不产生库内文件（没有在 docs/ 目录写入）
     expect(toMarkdownBytesMock).toHaveBeenCalled();
   });
 
-  it('超长内容截断：超过 MAX_MARKDOWN_CHARS 时返回截断标记', async () => {
-    // 生成超过 50_000 字符的内容（几百页 PDF 的转换产物可达数 MB，原样返回会撑爆上下文）
-    const longMarkdown = '# 超长文档\n\n' + '很长的正文内容。'.repeat(8000);
+  it('大文档落盘缓存并返回句柄（不截断，零丢失）', async () => {
+    // 生成超过 50_000 字符的内容（几百页 PDF 的转换产物可达数 MB）
+    const longMarkdown = '# 超长文档\n\n## 第一章 概述\n\n' + '很长的正文内容。'.repeat(8000) + '\n\n## 第二章 结尾\n\n完。';
     toMarkdownBytesMock.mockResolvedValue(longMarkdown);
 
     const docPath = join(tmpDir, 'huge-doc.docx');
@@ -210,13 +213,53 @@ describe('doc_to_markdown', () => {
     });
 
     const parsed = parseResult(result);
-    expect(parsed.truncated).toBe(true);
+    expect(parsed.cached).toBe(true);
     expect(parsed.totalChars).toBe(longMarkdown.length);
-    const md = String(parsed.markdown);
-    expect(md.length).toBeLessThan(longMarkdown.length);
-    expect(md.startsWith('# 超长文档')).toBe(true);
-    expect(md).toContain('truncated');
-    expect(String(parsed.note)).toContain('truncated');
+
+    // 句柄关键字段：doc_id / 分块数 / 预览 / 大纲
+    expect(typeof parsed.docId).toBe('string');
+    expect(String(parsed.docId)).toMatch(/^[a-f0-9]{12}$/);
+    expect((parsed.totalChunks as number)).toBeGreaterThan(1);
+    expect(String(parsed.preview)).toContain('# 超长文档');
+    const outline = parsed.outline as Array<{ level: number; text: string; chunk: number }>;
+    expect(outline.length).toBeGreaterThanOrEqual(2);
+    expect(outline[0].text).toBe('超长文档');
+    expect(outline[1].text).toBe('第一章 概述');
+    expect(String(parsed.note)).toContain('kb_doc_read');
+    expect(String(parsed.note)).toContain('nothing is truncated');
+
+    // 全文已在缓存中可回读（末尾内容也能取到，验证零丢失）
+    const tail = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc2',
+      toolName: 'kb_doc_read',
+      arguments: { doc_id: parsed.docId, chunk: parsed.totalChunks },
+    });
+    const tailParsed = parseResult(tail);
+    expect(String(tailParsed.markdown)).toContain('第二章 结尾');
+  });
+
+  it('同一内容重复转换命中同一缓存（内容哈希寻址）', async () => {
+    const longMarkdown = '# 缓存命中测试\n\n' + '重复内容。'.repeat(9000);
+    toMarkdownBytesMock.mockResolvedValue(longMarkdown);
+
+    const docPath1 = join(tmpDir, 'cache-hit-1.docx');
+    const docPath2 = join(tmpDir, 'cache-hit-2.docx');
+    writeFileSync(docPath1, Buffer.from('fake'));
+    writeFileSync(docPath2, Buffer.from('fake'));
+
+    const registry = new HostToolsRegistry(undefined, tmpDir);
+    const r1 = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: '1', toolCallId: 'tc1',
+      toolName: 'doc_to_markdown', arguments: { path: docPath1 },
+    }));
+    const r2 = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: '1', toolCallId: 'tc2',
+      toolName: 'doc_to_markdown', arguments: { path: docPath2 },
+    }));
+
+    expect(r1.docId).toBe(r2.docId);
   });
 
   it('使用相对路径时基于 cwd 解析', async () => {
@@ -421,6 +464,151 @@ describe('doc_to_markdown', () => {
 
     const parsed = parseResult(result);
     expect(parsed.code).toBe('unsupported');
+  });
+});
+
+// ─── kb_doc_read / kb_doc_grep / kb_doc_outline ──────────────
+
+describe('kb_doc_read / kb_doc_grep / kb_doc_outline', () => {
+  const cachedDocId = 'a'.repeat(12);
+  const cachedMarkdown = [
+    '# 测试大纲文档',
+    '',
+    '## 第一章 概述',
+    '',
+    '本章节介绍带宽配置要求。'.repeat(700),
+    '',
+    '## 第二章 时序约束',
+    '',
+    '时序约束包括 setup 与 hold 检查。',
+    '',
+    '## 第三章 结尾',
+    '',
+    '文档结束。',
+  ].join('\n');
+
+  let registry: HostToolsRegistry;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    registry = new HostToolsRegistry(undefined, tmpDir);
+    // 直接写入缓存，绕过 doc_to_markdown（缓存内容固定，便于断言）
+    const { cacheDocMarkdown } = await import('../src/main/kb/doc-cache');
+    const meta = await cacheDocMarkdown(cachedMarkdown, join(tmpDir, 'cached-source.docx'));
+    // 用真实 docId（内容哈希）而非固定值
+    (registry as unknown as { __docId: string }).__docId = meta.docId;
+  });
+
+  function docId(): string {
+    return (registry as unknown as { __docId: string }).__docId;
+  }
+
+  it('kb_doc_read：默认读第 1 块，返回行号区间与块号', async () => {
+    const parsed = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: '1', toolCallId: 'tc1',
+      toolName: 'kb_doc_read', arguments: { doc_id: docId() },
+    }));
+    expect(parsed.docId).toBe(docId());
+    expect(parsed.chunkStart).toBe(1);
+    expect(parsed.totalChunks).toBeGreaterThan(1);
+    expect(String(parsed.markdown)).toContain('# 测试大纲文档');
+  });
+
+  it('kb_doc_read：count 连续读取多块，块内容拼接', async () => {
+    const parsed = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: '1', toolCallId: 'tc1',
+      toolName: 'kb_doc_read', arguments: { doc_id: docId(), chunk: 1, count: 99 },
+    }));
+    expect(parsed.chunkStart).toBe(1);
+    expect(parsed.chunkEnd).toBe(parsed.totalChunks);
+    expect(String(parsed.markdown)).toContain('文档结束。');
+  });
+
+  it('kb_doc_read：chunk 越界返回结构化错误', async () => {
+    const parsed = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: '1', toolCallId: 'tc1',
+      toolName: 'kb_doc_read', arguments: { doc_id: docId(), chunk: 9999 },
+    }));
+    expect(String(parsed.error)).toContain('out of range');
+  });
+
+  it('kb_doc_read：未知 doc_id 返回可操作错误（引导重新转换）', async () => {
+    const parsed = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: '1', toolCallId: 'tc1',
+      toolName: 'kb_doc_read', arguments: { doc_id: 'b'.repeat(12) },
+    }));
+    expect(String(parsed.error)).toContain('Unknown or expired doc_id');
+    expect(String(parsed.error)).toContain('doc_to_markdown');
+  });
+
+  it('kb_doc_grep：正则命中并标注分块号', async () => {
+    const parsed = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: '1', toolCallId: 'tc1',
+      toolName: 'kb_doc_grep', arguments: { doc_id: docId(), pattern: '时序约束包括' },
+    }));
+    expect(parsed.mode).toBe('regex');
+    expect(parsed.totalMatches).toBe(1);
+    const match = (parsed.matches as Array<{ line: number; chunk: number; text: string }>)[0];
+    expect(match.text).toContain('时序约束包括');
+    expect(match.chunk).toBeGreaterThan(0);
+  });
+
+  it('kb_doc_grep：非法正则退化为字面量匹配', async () => {
+    const parsed = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: '1', toolCallId: 'tc1',
+      toolName: 'kb_doc_grep', arguments: { doc_id: docId(), pattern: '带宽配置(未闭合' },
+    }));
+    expect(parsed.mode).toBe('literal');
+    expect(parsed.totalMatches).toBe(0);
+  });
+
+  it('kb_doc_grep：无命中时返回空列表与提示', async () => {
+    const parsed = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: '1', toolCallId: 'tc1',
+      toolName: 'kb_doc_grep', arguments: { doc_id: docId(), pattern: '不存在的词' },
+    }));
+    expect(parsed.totalMatches).toBe(0);
+    expect(parsed.matches).toEqual([]);
+  });
+
+  it('kb_doc_grep：缺少 pattern 参数返回错误', async () => {
+    const parsed = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: '1', toolCallId: 'tc1',
+      toolName: 'kb_doc_grep', arguments: { doc_id: docId() },
+    }));
+    expect(String(parsed.error)).toContain('pattern is required');
+  });
+
+  it('kb_doc_outline：返回标题大纲并映射分块', async () => {
+    const parsed = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: '1', toolCallId: 'tc1',
+      toolName: 'kb_doc_outline', arguments: { doc_id: docId() },
+    }));
+    expect(parsed.outlineCount).toBe(4); // # + 3 个 ##
+    const outline = parsed.outline as Array<{ level: number; text: string; chunk: number; line: number }>;
+    expect(outline[0]).toMatchObject({ level: 1, text: '测试大纲文档', line: 1, chunk: 0 });
+    expect(outline[1].text).toBe('第一章 概述');
+    expect(outline[3].text).toBe('第三章 结尾');
+  });
+
+  it('kb_doc_outline：未知 doc_id 返回错误', async () => {
+    const parsed = parseResult(await registry.handleToolCall({
+      type: 'host_tool_call', id: '1', toolCallId: 'tc1',
+      toolName: 'kb_doc_outline', arguments: { doc_id: 'c'.repeat(12) },
+    }));
+    expect(String(parsed.error)).toContain('Unknown or expired doc_id');
+  });
+
+  it('新工具均已注册且参数 schema 正确', () => {
+    const defs = registry.getDefinitions();
+    const readDef = defs.find((d) => d.name === 'kb_doc_read');
+    const grepDef = defs.find((d) => d.name === 'kb_doc_grep');
+    const outlineDef = defs.find((d) => d.name === 'kb_doc_outline');
+    expect(readDef).toBeDefined();
+    expect((readDef!.parameters as { required: string[] }).required).toContain('doc_id');
+    expect(grepDef).toBeDefined();
+    expect((grepDef!.parameters as { required: string[] }).required).toEqual(expect.arrayContaining(['doc_id', 'pattern']));
+    expect(outlineDef).toBeDefined();
   });
 });
 

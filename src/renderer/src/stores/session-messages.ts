@@ -500,7 +500,20 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
     let fullMessage = message;
 
     if (skills.length > 0) {
-      const skillPrefix = skills.map((s) => `skill://${s.name}`).join('\n');
+      // 对齐 omp 引擎原生技能调用（user-invocation.md 模板）：除 skill:// URI 外
+      // 还必须告知技能目录（baseDir）与技能内文件的正确读取形式。
+      // 只发裸 skill://<name> 时，模型读完 SKILL.md 后面对 references/xxx.md 等
+      // 相对引用有概率构造出错误的 skill:// 形式（如 skill://references/xxx.md），
+      // 引擎会报 "Unknown skill: <name>"。
+      const skillPrefix = skills.map((s) => {
+        // SelectedSkill.filePath 指向 <baseDir>/SKILL.md，baseDir 即去掉末段
+        const baseDir = s.filePath.replace(/[\\/]SKILL\.md$/i, '');
+        return [
+          `skill://${s.name}`,
+          `[Skill directory: ${baseDir}]`,
+          `[To read files inside this skill directory (e.g. references/foo.md, scripts/foo.py), use skill://${s.name}/<relative-path>, e.g. skill://${s.name}/references/foo.md. Never put the relative path in place of the skill name.]`,
+        ].join('\n');
+      }).join('\n');
       fullMessage = `${skillPrefix}\n\n${fullMessage}`;
     }
 

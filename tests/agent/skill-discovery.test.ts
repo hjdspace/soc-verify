@@ -26,6 +26,7 @@ import {
   deleteUserSkill,
   getSkillInstallInfo,
   getSkillDirectoryInfo,
+  resolveSkillUriPath,
 } from '../../src/main/agent/skill-discovery';
 
 describe('skill-discovery', () => {
@@ -232,6 +233,58 @@ describe('skill-discovery', () => {
 
       const codexDir = dirs.find((d) => d.label === 'Codex 用户级');
       expect(codexDir!.exists).toBe(false);
+    });
+  });
+
+  describe('resolveSkillUriPath', () => {
+    let tempProject: string;
+
+    beforeEach(async () => {
+      tempProject = await fs.mkdtemp(path.join(os.tmpdir(), 'skill-uri-proj-'));
+      const skillDir = path.join(tempProject, '.omp/skills', 'drawio-skill', 'references');
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(tempProject, '.omp/skills/drawio-skill/SKILL.md'),
+        '---\nname: drawio-skill\ndescription: drawio diagrams\n---\n\n# Drawio\n',
+      );
+      await fs.writeFile(path.join(skillDir, 'xml-authoring.md'), '# XML authoring\n');
+    });
+
+    afterEach(async () => {
+      await fs.rm(tempProject, { recursive: true, force: true });
+    });
+
+    it('returns null for non-skill:// input', async () => {
+      expect(await resolveSkillUriPath(tempProject, 'D:/some/file.md')).toBeNull();
+      expect(await resolveSkillUriPath(tempProject, '')).toBeNull();
+    });
+
+    it('resolves skill://<name> to the SKILL.md path', async () => {
+      const resolved = await resolveSkillUriPath(tempProject, 'skill://drawio-skill');
+      expect(resolved).toBe(path.join(tempProject, '.omp/skills/drawio-skill/SKILL.md'));
+    });
+
+    it('resolves skill://<name>/<rel> to a file inside the skill baseDir', async () => {
+      const resolved = await resolveSkillUriPath(tempProject, 'skill://drawio-skill/references/xml-authoring.md');
+      expect(resolved).toBe(path.join(tempProject, '.omp/skills/drawio-skill/references/xml-authoring.md'));
+    });
+
+    it('decodes percent-encoded relative paths', async () => {
+      const resolved = await resolveSkillUriPath(tempProject, 'skill://drawio-skill/references%2Fxml-authoring.md');
+      expect(resolved).toBe(path.join(tempProject, '.omp/skills/drawio-skill/references/xml-authoring.md'));
+    });
+
+    it('returns null for unknown skill names', async () => {
+      expect(await resolveSkillUriPath(tempProject, 'skill://references/xml-authoring.md')).toBeNull();
+      expect(await resolveSkillUriPath(tempProject, 'skill://nope')).toBeNull();
+    });
+
+    it('returns null when the relative file does not exist', async () => {
+      expect(await resolveSkillUriPath(tempProject, 'skill://drawio-skill/references/missing.md')).toBeNull();
+    });
+
+    it('rejects path traversal', async () => {
+      expect(await resolveSkillUriPath(tempProject, 'skill://drawio-skill/../../etc/passwd')).toBeNull();
     });
   });
 });

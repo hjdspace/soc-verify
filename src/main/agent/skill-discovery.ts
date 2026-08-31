@@ -16,7 +16,7 @@
 
 import { readdir, readFile, writeFile, mkdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join, dirname, basename } from 'node:path';
+import { join, dirname, basename, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { execSync } from 'node:child_process';
 import { resolveBuiltInExtensionDir } from './paths';
@@ -240,6 +240,48 @@ export async function discoverAllSkills(): Promise<SkillInfo[]> {
  */
 export async function readSkillContent(filePath: string): Promise<string> {
   return readFile(filePath, 'utf-8');
+}
+
+/**
+ * Resolve a `skill://` internal URI to the real file path on disk.
+ *
+ * omp 引擎在会话内用 `skill://<name>` 读写技能（见 engine 的
+ * internal-urls/skill-protocol.ts），但 UI 层（工具卡片路径点击等）拿到的是
+ * 原始 URI 字符串——直接当文件路径打开必然失败（"文件不存在"）。
+ * 此函数将其解析为磁盘上的绝对路径：
+ *   skill://<name>            → 该技能的 SKILL.md
+ *   skill://<name>/<rel-path> → 技能 baseDir 下的相对文件（如 references/foo.md）
+ *
+ * 与引擎的 SkillProtocolHandler 保持一致的约束：拒绝绝对路径与 `..` 穿越；
+ * 目标必须存在。解析不到（技能不存在 / 文件不存在）返回 null。
+ */
+export async function resolveSkillUriPath(projectRoot: string, uri: string): Promise<string | null> {
+  if (!uri.startsWith('skill://')) return null;
+
+  const rest = uri.slice('skill://'.length);
+  const slashIdx = rest.indexOf('/');
+  const name = slashIdx === -1 ? rest : rest.slice(0, slashIdx);
+  const rel = slashIdx === -1 ? '' : rest.slice(slashIdx + 1);
+  if (!name) return null;
+
+  const skills = await discoverSkills(projectRoot);
+  const skill = skills.find((s) => s.name === name);
+  if (!skill) return null;
+
+  if (!rel) return skill.filePath;
+
+  // 引擎侧会做 decodeURIComponent，这里保持一致；解码失败按原文处理
+  let decoded = rel;
+  try {
+    decoded = decodeURIComponent(rel);
+  } catch {
+    // keep raw
+  }
+  // 与引擎 validateRelativePath 一致：拒绝绝对路径与 .. 穿越
+  if (isAbsolute(decoded) || decoded.split(/[\\/]/).includes('..')) return null;
+
+  const target = join(skill.baseDir, decoded);
+  return existsSync(target) ? target : null;
 }
 
 /**

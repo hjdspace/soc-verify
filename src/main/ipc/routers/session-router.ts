@@ -28,7 +28,7 @@ import {
   updateSessionOmpId,
   type PersistedSession,
 } from '../../agent/session-persistence';
-import { discoverSkills, readSkillContent } from '../../agent/skill-discovery';
+import { discoverSkills, readSkillContent, resolveSkillUriPath } from '../../agent/skill-discovery';
 import { generateSessionTitle } from '../../agent/title-generator';
 import { generateFollowUpSuggestions } from '../../agent/followup-generator';
 import { errorAnalysisCoordinator } from '../../simulation/error-analysis-coordinator';
@@ -854,6 +854,24 @@ export const sessionRouter = t.router({
     })
     .query(async ({ input }) => {
       return readSkillContent(input.filePath);
+    }),
+
+  // 将 omp 内部 URI（skill://<name>[/<rel>]）解析为磁盘上的真实文件路径。
+  // 渲染层工具卡片点击技能路径时调用，避免把 URI 当文件路径打开报"文件不存在"。
+  resolveSkillUri: t.procedure
+    .input((raw): { projectId: string; uri: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      if (typeof r.uri !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'uri is required' });
+      }
+      return { projectId: r.projectId, uri: r.uri };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      return resolveSkillUriPath(project.rootPath, input.uri);
     }),
 
   // ── 错误分析会话创建 ──────────────────────────────────
