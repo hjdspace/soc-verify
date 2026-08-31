@@ -9,6 +9,7 @@ export interface ApiModel {
   name: string;
   provider: string;
   description?: string;
+  input?: ('text' | 'image')[];
 }
 
 interface SettingsStoreState {

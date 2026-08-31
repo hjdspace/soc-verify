@@ -28,6 +28,27 @@ describe('OpenAI-compatible Agent configuration', () => {
     expect(models).toEqual([{ id: 'chat-model', name: 'chat-model' }]);
   });
 
+  it('defaults models without advertised image capability to text-only input', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: [{ id: 'text-model', owned_by: 'gateway' }],
+    }), { status: 200 }));
+
+    const models = await fetchOpenAICompatibleModels({
+      baseUrl: 'https://gateway.example/v1',
+      apiKey: 'test-secret',
+      fetchFn,
+    });
+
+    const config = buildOpenAICompatibleModelsConfig({
+      baseUrl: 'https://gateway.example/v1',
+      modelId: models[0]!.id,
+      models,
+      apiKeyEnvVar: 'SOCVERIFY_AGENT_API_KEY',
+    });
+
+    expect(config.providers['socverify-openai-compatible'].models[0].input).toEqual(['text']);
+  });
+
   it('builds a chat/completions provider without persisting the API key', () => {
     const config = buildOpenAICompatibleModelsConfig({
       baseUrl: 'https://gateway.example/v1',
@@ -87,7 +108,7 @@ describe('OpenAI-compatible Agent configuration', () => {
     );
   });
 
-  it('configures the model with text+image input so screenshots are not silently dropped', () => {
+  it('configures an unknown model with text-only input to protect text-only endpoints', () => {
     const config = buildOpenAICompatibleModelsConfig({
       baseUrl: 'https://gateway.example/v1',
       modelId: 'vision-model',
@@ -95,7 +116,7 @@ describe('OpenAI-compatible Agent configuration', () => {
     });
 
     const model = config.providers['socverify-openai-compatible'].models[0];
-    expect(model.input).toEqual(['text', 'image']);
+    expect(model.input).toEqual(['text']);
     expect(model.contextWindow).toBe(200000);
   });
 

@@ -17,6 +17,8 @@ export type OpenAICompatibleModel = {
   name: string;
   /** 推理模型标记（来自凭据配置），透传到 models.json 的 reasoning/thinking 声明。 */
   reasoning?: boolean;
+  /** Input modalities advertised by the provider. Unknown models are text-only. */
+  input?: ('text' | 'image')[];
 };
 
 type FetchModelsOptions = {
@@ -86,13 +88,33 @@ function toOmpModelEntry(model: OpenAICompatibleModel, contextWindow: number) {
           },
         }
       : {}),
-    // Default to text+image so screenshots and pasted images are sent
-    // to the LLM as multimodal content. Without "image" in the input
-    // list, omp silently replaces images with a placeholder text
-    // ("[image omitted: model does not support vision]"), causing the
-    // LLM to respond as if no image was attached.
-    input: ['text', 'image'],
+    // Unknown models are text-only. This also lets omp remove historical
+    // snapcompact image frames before sending them to text-only models.
+    input: model.input ?? ['text'],
   };
+}
+
+function parseModelInput(value: unknown): ('text' | 'image')[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const values = value.filter((item): item is 'text' | 'image' => item === 'text' || item === 'image');
+  return values.includes('image') ? ['text', 'image'] : ['text'];
+}
+
+function advertisedModelInput(model: Record<string, unknown>): ('text' | 'image')[] | undefined {
+  const direct = parseModelInput(model.input)
+    ?? parseModelInput(model.modalities)
+    ?? parseModelInput(model.input_modalities);
+  if (direct) return direct;
+
+  const capabilities = model.capabilities;
+  if (typeof capabilities === 'object' && capabilities !== null) {
+    const caps = capabilities as Record<string, unknown>;
+    if (caps.vision === true || caps.image === true || caps.image_input === true) return ['text', 'image'];
+  }
+  if (model.vision === true || model.supports_vision === true || model.image_input === true) {
+    return ['text', 'image'];
+  }
+  return undefined;
 }
 
 /**
@@ -142,9 +164,11 @@ export async function fetchOpenAICompatibleModels({
     if (typeof item !== 'object' || item === null) continue;
     const model = item as Record<string, unknown>;
     if (typeof model.id !== 'string' || !model.id) continue;
+    const input = advertisedModelInput(model);
     models.push({
       id: model.id,
       name: typeof model.name === 'string' && model.name ? model.name : model.id,
+      ...(input ? { input } : {}),
     });
   }
 

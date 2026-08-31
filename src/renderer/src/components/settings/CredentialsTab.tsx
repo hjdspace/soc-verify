@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Check, Key, Loader2, Pencil, Plus, RefreshCw, Save, Search, Trash2, X } from 'lucide-react';
+import { Check, Image, Key, Loader2, Pencil, Plus, RefreshCw, Save, Search, Trash2, X } from 'lucide-react';
 import { useSettingsStore, type ApiModel } from '@renderer/stores/settings';
 import { cn } from '@renderer/lib/utils';
 import type { CredentialEntry, ConfiguredModel, OpenAiApiFormat } from '@shared/types';
@@ -163,6 +163,16 @@ function useCredentialForm() {
     }));
   };
 
+  /** Toggle whether this model accepts image input. */
+  const toggleModelImageInput = (modelId: string) => {
+    setForm((prev) => ({
+      ...prev,
+      models: prev.models.map((m) => m.id === modelId
+        ? { ...m, input: m.input?.includes('image') ? ['text'] : ['text', 'image'] }
+        : m),
+    }));
+  };
+
   const fetchModels = useCallback(async () => {
     if (!form.providerId.trim() || (!form.apiKey.trim() && !isEditing)) return;
     setFetchingModels(true);
@@ -200,6 +210,7 @@ function useCredentialForm() {
     removeModel,
     updateModelContextWindow,
     toggleModelReasoning,
+    toggleModelImageInput,
     fetchModels,
     setShowModelPicker,
     setModelSearch,
@@ -229,6 +240,7 @@ export function CredentialsTab() {
     removeModel,
     updateModelContextWindow,
     toggleModelReasoning,
+    toggleModelImageInput,
     fetchModels,
     setShowModelPicker,
     setModelSearch,
@@ -438,6 +450,7 @@ export function CredentialsTab() {
                             id: m.id,
                             name: m.name,
                             contextWindow: DEFAULT_CONTEXT_WINDOW,
+                            input: m.input,
                           });
                         }
                       }}
@@ -503,6 +516,21 @@ export function CredentialsTab() {
                     )}
                   >
                     推理
+                  </button>
+                  <button
+                    onClick={() => toggleModelImageInput(m.id)}
+                    title="开启后允许向此模型发送图片；仅在模型支持视觉输入时开启"
+                    aria-label={`${m.name} 图片输入`}
+                    aria-pressed={m.input?.includes('image') === true}
+                    className={cn(
+                      'flex h-5 shrink-0 items-center gap-0.5 rounded border px-1 text-[9px] transition-colors',
+                      m.input?.includes('image')
+                        ? 'border-primary/60 bg-primary/15 text-primary'
+                        : 'border-border bg-background text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    <Image className="h-2.5 w-2.5" />
+                    图片
                   </button>
                   <button
                     onClick={() => removeModel(m.id)}

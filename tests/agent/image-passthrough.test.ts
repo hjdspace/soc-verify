@@ -112,7 +112,7 @@ describe('Image passthrough to LLM (OpenAI-compatible)', () => {
 
         if (request.method === 'GET' && path === '/v1/models') {
           response.writeHead(200, { 'Content-Type': 'application/json' });
-          response.end(JSON.stringify({ data: [{ id: 'vision-model' }] }));
+          response.end(JSON.stringify({ data: [{ id: 'vision-model', modalities: ['text', 'image'] }] }));
           return;
         }
 
@@ -221,7 +221,7 @@ describe('Image passthrough to LLM (OpenAI-compatible)', () => {
 
         if (request.method === 'GET' && path === '/v1/models') {
           response.writeHead(200, { 'Content-Type': 'application/json' });
-          response.end(JSON.stringify({ data: [{ id: 'vision-model' }] }));
+          response.end(JSON.stringify({ data: [{ id: 'vision-model', modalities: ['text', 'image'] }] }));
           return;
         }
 

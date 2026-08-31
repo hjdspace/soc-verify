@@ -39,7 +39,8 @@ function isValidConfiguredModel(value: unknown): value is ConfiguredModel {
     typeof m.id === 'string' && m.id.length > 0 &&
     typeof m.name === 'string' &&
     typeof m.contextWindow === 'number' && Number.isInteger(m.contextWindow) &&
-    m.contextWindow >= MIN_CONTEXT_WINDOW && m.contextWindow <= MAX_CONTEXT_WINDOW
+    m.contextWindow >= MIN_CONTEXT_WINDOW && m.contextWindow <= MAX_CONTEXT_WINDOW &&
+    (m.input === undefined || (Array.isArray(m.input) && m.input.every((item) => item === 'text' || item === 'image')))
   );
 }
 
@@ -259,6 +260,7 @@ export const settingsRouter = t.router({
           name: m.name,
           provider: input.providerId ?? 'openai',
           description: undefined,
+          ...(m.input ? { input: m.input } : {}),
         }));
       } catch (err) {
         if (err instanceof TRPCError) throw err;

@@ -436,7 +436,12 @@ export class SessionManagerImpl extends EventEmitter {
       if (options.configuredModels && options.configuredModels.length > 0) {
         // Convert ConfiguredModel[] to OpenAICompatibleModel[] for models.json
         // (reasoning 随模型透传，决定 models.yml 的 thinking 能力声明)
-        allModels = options.configuredModels.map((m) => ({ id: m.id, name: m.name, reasoning: m.reasoning }));
+        allModels = options.configuredModels.map((m) => ({
+          id: m.id,
+          name: m.name,
+          reasoning: m.reasoning,
+          input: m.input,
+        }));
         // Use the selected model's contextWindow if available
         if (model) {
           const configured = options.configuredModels.find((m) => m.id === model);

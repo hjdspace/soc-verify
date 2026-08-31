@@ -22,6 +22,8 @@ export interface ConfiguredModel {
    * `reasoning_effort`。缺省视为 false —— 引擎不会发送思考强度参数。
    */
   reasoning?: boolean;
+  /** Input modalities advertised by the provider. Unknown models are text-only. */
+  input?: ('text' | 'image')[];
 }
 
 export interface CredentialEntry {
