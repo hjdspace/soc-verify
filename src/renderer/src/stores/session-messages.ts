@@ -472,7 +472,7 @@ export function registerSessionEventListener(): void {
 
 // ─── Store State 接口 ─────────────────────────────────────
 export interface SessionMessagesState {
-  sendMessage: (message: string, images?: string[]) => Promise<void>;
+  sendMessage: (message: string, images?: string[], targetSessionId?: string) => Promise<void>;
   abortSession: () => Promise<void>;
   compactSession: () => Promise<boolean>;
   steerSession: (message: string) => Promise<void>;
@@ -484,10 +484,10 @@ export interface SessionMessagesState {
 
 // ─── Store ─────────────────────────────────────────────────
 export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
-  sendMessage: async (message, images) => {
+  sendMessage: async (message, images, targetSessionId) => {
     const coreGet = useSessionCoreStore.getState;
     const coreSet = useSessionCoreStore.setState.bind(useSessionCoreStore);
-    const sessionId = coreGet().currentSessionId;
+    const sessionId = targetSessionId ?? coreGet().currentSessionId;
     if (!sessionId || !message.trim()) return;
 
     const sessionBeforeSend = coreGet().sessions.find((s) => s.id === sessionId);
