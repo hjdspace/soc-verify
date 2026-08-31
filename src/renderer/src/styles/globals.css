@@ -2304,6 +2304,86 @@ a.ap-ctx-chip,
   color: var(--muted-foreground);
 }
 
+/* ── 查阅型结果浮窗（翻译/解释/prompt 回复在浮条下方展开）── */
+.ap-sel-popover {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 8px;
+  width: 360px;
+  max-width: calc(100vw - 48px);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: var(--shadow-overlay);
+  overflow: hidden;
+  animation: pop-in 220ms var(--ease-out-strong) both;
+  z-index: 31;
+}
+.ap-sel-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 6px 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.ap-sel-popover-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.ap-sel-popover-body {
+  padding: 12px 14px;
+  max-height: 280px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--foreground);
+}
+/* 浮窗内 markdown 渲染排版微调 */
+.ap-sel-popover-body .markdown-body {
+  font-size: 13px;
+  line-height: 1.7;
+}
+.ap-sel-popover-body .markdown-body p {
+  margin: 0 0 8px;
+}
+.ap-sel-popover-body .markdown-body p:last-child {
+  margin-bottom: 0;
+}
+.ap-sel-popover-body .markdown-body ul,
+.ap-sel-popover-body .markdown-body ol {
+  margin: 4px 0 8px;
+  padding-left: 20px;
+}
+.ap-sel-popover-body .markdown-body code {
+  font-size: 12px;
+}
+.ap-sel-popover-body .markdown-body pre {
+  margin: 8px 0;
+  font-size: 11.5px;
+}
+.ap-sel-popover-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+}
+.ap-sel-popover-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  padding-left: 6px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
 /* ── 状态 chips 筛选 FilterTable（issues #7）──
    带彩色圆点与计数徽标的状态 chips + 未匹配行 grid-rows 1fr→0fr +
    opacity 300ms 平滑折叠（行保持挂载）。视觉/交互参考 beautiful-ui:
@@ -2513,7 +2593,7 @@ a.ap-ctx-chip,
    视觉/交互参考 beautiful-ui:
    D:\AI\beautiful-ui\components\primitives\InsightCards.tsx
   （对应 CSS: D:\AI\beautiful-ui\app\globals.css 约 L1350–1400 .insight-chart-cursor/tooltip-*）
-   参考实现 --surface/--inset/--field/--ink*/--line-strong/--tooltip-* 取映射语义变量
+   参考实现 --surface/--inset/--field/--ink/--line-strong/--tooltip-* 取映射语义变量
   （--card/--muted/--background/--muted-foreground/--fg-faint/--input/--popover），
    SVG 属性不能用 var()，系列色由组件读 :root 计算值注入（theme store 驱动重渲染）。 */
 .ap-ins {
