@@ -27,6 +27,7 @@ import {
   parseIndexMd,
   serializeIndexMd,
   listCategoriesFromIndex,
+  entryBelongsToDoc,
   type LlmConfig,
 } from './indexer';
 import { kbLayout, docNameFromFileName } from './layout';
@@ -290,12 +291,13 @@ export async function deleteDocument(
   await layout.cleanupDocArtifacts(docName);
 
   // 从 index.md 移除条目
+  // 用路径末段精确匹配（entryBelongsToDoc），不能用子串匹配：
+  // 子串匹配会把 `My_DDR5.md` 误判为 `DDR5.md` 的条目，导致误删无关文档的索引。
   if (existsSync(layout.indexMdPath)) {
     const content = await readFile(layout.indexMdPath, 'utf-8');
-    // 查找所有可能匹配的路径
     const { entries } = parseIndexMd(content);
     for (const entry of entries) {
-      if (entry.path.includes(`${docName}.md`)) {
+      if (entryBelongsToDoc(entry, docName)) {
         await removeFromIndex(layout.indexMdPath, entry.path);
       }
     }
@@ -630,9 +632,9 @@ export async function reclassifyDocument(
     await mkdir(targetDir, { recursive: true });
     const targetMdPath = layout.categoryMdPath(classification.category, docName);
     if (currentMdPath !== targetMdPath) {
-      const content = await readFile(currentMdPath, 'utf-8');
-      await writeFile(targetMdPath, content, 'utf-8');
-      await rm(currentMdPath, { force: true });
+      // 同一库目录内移动用 rename：原子操作，避免大文件 read+write+rm 的开销与
+      // 中途失败导致文件丢失的风险（与 uploadDocument 的 rename 行为一致）
+      await rename(currentMdPath, targetMdPath);
       finalMdPath = targetMdPath;
       moved = true;
     }
