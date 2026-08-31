@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef, useMemo } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
   Search,
   Terminal as TerminalIcon,
@@ -370,21 +371,29 @@ export function CommandPalette() {
     }
   };
 
-  if (!commandPaletteOpen) return null;
-
   let flatIndex = -1;
 
   return (
-    <div
-      className="fixed inset-0 z-[80] flex items-start justify-center bg-scrim pt-[12vh]"
-      onClick={() => setCommandPaletteOpen(false)}
-      data-testid="command-palette-overlay"
-    >
-      <div
-        className="w-[560px] max-w-[calc(100vw-48px)] overflow-hidden rounded-xl border border-border bg-glass shadow-2xl glass"
-        onClick={(e) => e.stopPropagation()}
-        data-testid="command-palette"
-      >
+    <AnimatePresence>
+      {commandPaletteOpen && (
+        <motion.div
+          className="fixed inset-0 z-[80] flex items-start justify-center bg-scrim pt-[12vh]"
+          onClick={() => setCommandPaletteOpen(false)}
+          data-testid="command-palette-overlay"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
+        >
+        <motion.div
+          className="w-[560px] max-w-[calc(100vw-48px)] overflow-hidden rounded-xl border border-border bg-glass shadow-2xl glass"
+          onClick={(e) => e.stopPropagation()}
+          data-testid="command-palette"
+          initial={{ opacity: 0, scale: 0.98, y: -10 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.98, y: -10 }}
+          transition={{ type: 'spring', stiffness: 480, damping: 34 }}
+        >
         {/* 输入区 */}
         <BorderBeam size="line" theme="dark" active={commandPaletteOpen} className="block w-full">
         <div className="flex items-center gap-2.5 border-b border-border px-4 py-3">
@@ -479,7 +488,9 @@ export function CommandPalette() {
         <div className="border-t border-border px-4 py-1.5 text-[10px] text-muted-foreground">
           ↑↓ 导航 · Enter 选择 · Esc 关闭
         </div>
-      </div>
-    </div>
+        </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }

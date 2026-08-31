@@ -33,13 +33,14 @@ import { ThinkingOrb, BorderBeam } from '@renderer/components/visual';
 
 interface RightPanelProps {
   width: number;
+  collapsed?: boolean;
 }
 
 /**
  * AI 会话面板内容（消息流 + 会话标签 + composer + 审批卡等）。
  * 外壳无关：docked 模式由 RightPanel 包固定侧栏，drawer 模式由 AiDrawer 包右抽屉。
  */
-export function RightPanelContent() {
+export const RightPanelContent = memo(function RightPanelContent() {
 const sessions = useSessionCoreStore((s) => s.sessions);
 const currentSessionId = useSessionCoreStore((s) => s.currentSessionId);
   const currentSession = sessions.find((session) => session.id === currentSessionId);
@@ -150,6 +151,13 @@ const resolveAsk = useSessionApprovalStore((s) => s.resolveAsk);
     currentSessionId ? (s.collapsed[currentSessionId] ?? false) : false,
   );
   const toggleTodoCollapse = useTodoPanelStore((s) => s.toggleCollapse);
+
+  // Keep the rendered item structure stable when session metadata changes
+  // without changing the message array (for example context usage updates).
+  const messageItems = useMemo(
+    () => (currentMessages ? groupToolMessages(currentMessages) : []),
+    [currentMessages],
+  );
 
 const renameSession = useSessionCoreStore((s) => s.renameSession);
 const historySessions = useSessionCoreStore((s) => s.historySessions);
@@ -782,7 +790,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
           </div>
         ) : (
           <div className="flex flex-col gap-3">
-            {groupToolMessages(currentSession.messages).map((item) =>
+            {messageItems.map((item) =>
               item.kind === 'run' ? (
                 <ToolRunGroup key={`run-${item.messages[0].id}`} messages={item.messages} />
               ) : (
@@ -1283,14 +1291,14 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
       </div>
     </div>
   );
-}
+});
 
 /**
  * AI 会话固定右栏（docked 模式外壳）：宽度可调，渲染在 workspace 视图右侧。
  * 内容复用 RightPanelContent。
  * 顶部提供「解除固定」按钮，切换回抽屉浮窗模式。
  */
-export function RightPanel({ width }: RightPanelProps) {
+export function RightPanel({ width, collapsed = false }: RightPanelProps) {
   const setAiPanelMode = useUiStore((s) => s.setAiPanelMode);
   const toggleRightDrawer = useUiStore((s) => s.toggleRightDrawer);
 
@@ -1303,8 +1311,15 @@ export function RightPanel({ width }: RightPanelProps) {
 
   return (
     <aside
-      className="flex shrink-0 flex-col border-l bg-sidebar"
-      style={{ width: `${width}px` }}
+      aria-hidden={collapsed}
+      className={cn(
+        'flex shrink-0 flex-col overflow-hidden border-l bg-sidebar transition-[width,opacity,transform] duration-[var(--duration-normal)] ease-[var(--ease-out)]',
+        collapsed && 'pointer-events-none border-l-0 opacity-0',
+      )}
+      style={{
+        width: collapsed ? 0 : `${width}px`,
+        transform: collapsed ? 'translateX(12px)' : 'translateX(0)',
+      }}
     >
       {/* 解除固定栏 */}
       <div className="flex items-center justify-between border-b border-border/50 px-3 py-1.5">

@@ -349,6 +349,16 @@ describe('RightPanel session tabs', () => {
     expect(within(runningTab as HTMLElement).getByLabelText('会话运行中')).toBeInTheDocument();
     expect(within(doneTab as HTMLElement).queryByLabelText('会话运行中')).not.toBeInTheDocument();
   });
+
+  it('keeps the AI content mounted while the docked panel is collapsed', () => {
+    const { rerender } = render(<RightPanel width={320} collapsed={false} />);
+    const content = document.querySelector('.ai-panel');
+    expect(content).toBeInTheDocument();
+
+    rerender(<RightPanel width={320} collapsed />);
+    expect(document.querySelector('.ai-panel')).toBe(content);
+    expect(screen.getByRole('complementary', { hidden: true })).toHaveAttribute('aria-hidden', 'true');
+  });
 });
 
 describe('ComposerEditor BorderBeam integration', () => {

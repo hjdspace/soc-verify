@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import { Terminal as TerminalIcon, Plus, X, ChevronDown, ArrowUpToLine } from 'lucide-react';
 import { useTerminalStore } from '@renderer/stores/terminal';
 import { useUiStore } from '@renderer/stores/ui';
@@ -36,6 +37,8 @@ export function BottomPanel() {
 
   const [showNewMenu, setShowNewMenu] = useState(false);
   const [dropHover, setDropHover] = useState(false);
+  /** 拖拽调高中禁用高度过渡，保证跟手（否则弹簧滞后） */
+  const [dragging, setDragging] = useState(false);
 
   const bottomTabs = tabs.filter((t) => t.location === 'bottom');
   const hasBottomPluginViews = plugins.some((plugin) => plugin.contributes?.views?.some((view) => view.location === 'bottom'));
@@ -57,6 +60,7 @@ export function BottomPanel() {
     (e: React.MouseEvent) => {
       e.preventDefault();
       draggingRef.current = true;
+      setDragging(true);
       startYRef.current = e.clientY;
       startHeightRef.current = height;
       document.body.style.cursor = 'ns-resize';
@@ -76,6 +80,7 @@ export function BottomPanel() {
     const handleMouseUp = () => {
       if (!draggingRef.current) return;
       draggingRef.current = false;
+      setDragging(false);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
@@ -118,25 +123,36 @@ export function BottomPanel() {
     setShowNewMenu(false);
   }, [createTerminal, currentProjectId]);
 
-  if (collapsed || bottomTabs.length === 0) {
-    return hasBottomPluginViews ? (
-      <div className="flex max-h-72 min-h-8 shrink-0 flex-col border-t border-border bg-background">
-        <PluginViewHost location="bottom" />
-      </div>
-    ) : null;
-  }
+  /** 展开态：折叠关闭或无终端时收起（AnimatePresence 保留退出动画所需的挂载） */
+  const expanded = !collapsed && bottomTabs.length > 0;
 
   return (
-    <div
-      className={cn(
-        'flex shrink-0 flex-col border-t border-border bg-background',
-        dropHover && 'ring-1 ring-inset ring-primary/40',
+    <>
+      {!expanded && hasBottomPluginViews && (
+        <div className="flex max-h-72 min-h-8 shrink-0 flex-col border-t border-border bg-background">
+          <PluginViewHost location="bottom" />
+        </div>
       )}
-      style={{ height: `${height}px` }}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-    >
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            key="bottom-terminal-panel"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height, opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={
+              dragging
+                ? { duration: 0 }
+                : { type: 'spring', stiffness: 480, damping: 42, opacity: { duration: 0.15 } }
+            }
+            className={cn(
+              'relative flex shrink-0 flex-col overflow-hidden border-t border-border bg-background',
+              dropHover && 'ring-1 ring-inset ring-primary/40',
+            )}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
       <PluginViewHost location="bottom" />
 
       {/* ── Resize handle (top edge) ──────────────────────── */}
@@ -241,6 +257,9 @@ export function BottomPanel() {
           </div>
         )}
       </div>
-    </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
   );
 }

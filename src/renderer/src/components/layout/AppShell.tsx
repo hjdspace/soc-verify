@@ -86,7 +86,8 @@ export function AppShell() {
       {/* ── 主区域：NavRail | (ViewContainer + BottomPanel) ── */}
       <div className="relative flex flex-1 overflow-hidden">
         <NavRail />
-        <div className="flex flex-1 overflow-hidden">
+        {/* relative：为 popLayout 退场元素（视图切换）提供定位上下文 */}
+        <div className="relative flex flex-1 overflow-hidden">
           {/* ── 固定左栏文件面板（docked 模式，所有视图全局可见） ── */}
           {filePanelMode === 'docked' && !filePanelCollapsed && (
             <>
@@ -99,11 +100,13 @@ export function AppShell() {
             <BottomPanel />
           </div>
 
-          {/* ── 固定侧栏 AI 面板（docked 模式，所有视图全局可见） ── */}
-          {aiPanelMode === 'docked' && !rightCollapsed && (
+          {/* ── 固定侧栏 AI 面板（docked 模式，折叠时保留挂载状态） ── */}
+          {aiPanelMode === 'docked' && (
             <>
-              <ResizeHandle side="right" width={rightPanelWidth} onResize={setRightPanelWidth} />
-              <RightPanel width={rightPanelWidth} />
+              {!rightCollapsed && (
+                <ResizeHandle side="right" width={rightPanelWidth} onResize={setRightPanelWidth} />
+              )}
+              <RightPanel width={rightPanelWidth} collapsed={rightCollapsed} />
             </>
           )}
         </div>

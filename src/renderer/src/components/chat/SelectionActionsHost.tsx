@@ -93,9 +93,15 @@ export function SelectionActionsHost({
 
   // 文件宿主不传 session：回退当前会话（find 返回 store 内的对象引用，
   // 消息流更新才会触发重渲染）。sendMessage 本就发往 currentSessionId
-  const currentSession = useSessionCoreStore((s) =>
-    s.currentSessionId ? s.sessions.find((entry) => entry.id === s.currentSessionId) : undefined,
-  );
+  // Message bubbles pass their owning session explicitly. Avoid subscribing
+  // those hosts to every session update; file hosts still resolve the current
+  // session through the store when no session prop is provided.
+  const currentSession = useSessionCoreStore((s) => {
+    if (session) return undefined;
+    return s.currentSessionId
+      ? s.sessions.find((entry) => entry.id === s.currentSessionId)
+      : undefined;
+  });
   const activeSession = session ?? currentSession;
 
   // ── 查阅型动作的临时会话 ───────────────────────────────────

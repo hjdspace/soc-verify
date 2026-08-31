@@ -1,4 +1,5 @@
-import { useUiStore } from '@renderer/stores/ui';
+import { AnimatePresence, motion } from 'motion/react';
+import { useUiStore, type ActiveView } from '@renderer/stores/ui';
 import { CenterArea } from './CenterArea';
 import { DashboardView } from '@renderer/components/views/DashboardView';
 import { SimulationView } from '@renderer/components/views/SimulationView';
@@ -18,19 +19,9 @@ function WorkspaceView() {
   );
 }
 
-/**
- * 视图路由容器：按 ui.activeView 渲染五个视图。
- * 总览视图为 Mission Control 仪表盘（Issue #3）；
- * 仿真视图为运行管理工作台（Issue #4）；
- * 覆盖率视图为覆盖率分析工作台（Issue #5）；
- * 回归视图为回归测试管理工作台（Issue #6）；
- * 深度分析经 coverage-detail / regression-detail 目的地开 workspace Tab（CenterArea）。
- * docked 模式的 AI 右栏由 AppShell 全局渲染，所有视图共享。
- */
-export function ViewContainer() {
-  const activeView = useUiStore((s) => s.activeView);
-
-  switch (activeView) {
+/** 视图路由渲染（保持原 switch 语义） */
+function renderActiveView(view: ActiveView) {
+  switch (view) {
     case 'dashboard':
       return <DashboardView />;
     case 'simulation':
@@ -42,4 +33,35 @@ export function ViewContainer() {
     case 'workspace':
       return <WorkspaceView />;
   }
+}
+
+/**
+ * 视图路由容器：按 ui.activeView 渲染五个视图。
+ * 总览视图为 Mission Control 仪表盘（Issue #3）；
+ * 仿真视图为运行管理工作台（Issue #4）；
+ * 覆盖率视图为覆盖率分析工作台（Issue #5）；
+ * 回归视图为回归测试管理工作台（Issue #6）；
+ * 深度分析经 coverage-detail / regression-detail 目的地开 workspace Tab（CenterArea）。
+ * docked 模式的 AI 右栏由 AppShell 全局渲染，所有视图共享。
+ *
+ * 视图切换过渡：popLayout 让旧视图退出时脱离文档流（绝对定位原位淡出），
+ * 新视图同时入场，160ms 交叉淡入避免硬切。
+ */
+export function ViewContainer() {
+  const activeView = useUiStore((s) => s.activeView);
+
+  return (
+    <AnimatePresence mode="popLayout" initial={false}>
+      <motion.div
+        key={activeView}
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -6 }}
+        transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
+        className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      >
+        {renderActiveView(activeView)}
+      </motion.div>
+    </AnimatePresence>
+  );
 }
