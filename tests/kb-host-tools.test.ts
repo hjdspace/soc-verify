@@ -12,7 +12,9 @@
  *  - doc_to_markdown 六种错误码透传
  *  - doc_to_markdown 参数校验（缺少 path）
  *  - doc_to_markdown 文件不存在
+ *  - doc_to_markdown 超长内容截断（防撑爆 Agent 上下文）
  *  - kb_search 索引匹配 + 全文匹配、评分排序、限量返回
+ *  - kb_search 分类过滤（category）、中文 bigram 命中、snippet 与 absolutePath
  *  - kb_search 未挂载库时返回错误
  *  - kb_search 参数校验（缺少 query）
  *  - KB 索引上下文注入（context-injector）
@@ -188,6 +190,33 @@ describe('doc_to_markdown', () => {
 
     // 验证不产生库内文件（没有在 docs/ 目录写入）
     expect(toMarkdownBytesMock).toHaveBeenCalled();
+  });
+
+  it('超长内容截断：超过 MAX_MARKDOWN_CHARS 时返回截断标记', async () => {
+    // 生成超过 50_000 字符的内容（几百页 PDF 的转换产物可达数 MB，原样返回会撑爆上下文）
+    const longMarkdown = '# 超长文档\n\n' + '很长的正文内容。'.repeat(8000);
+    toMarkdownBytesMock.mockResolvedValue(longMarkdown);
+
+    const docPath = join(tmpDir, 'huge-doc.docx');
+    writeFileSync(docPath, Buffer.from('fake'));
+
+    const registry = new HostToolsRegistry(undefined, tmpDir);
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'doc_to_markdown',
+      arguments: { path: docPath },
+    });
+
+    const parsed = parseResult(result);
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.totalChars).toBe(longMarkdown.length);
+    const md = String(parsed.markdown);
+    expect(md.length).toBeLessThan(longMarkdown.length);
+    expect(md.startsWith('# 超长文档')).toBe(true);
+    expect(md).toContain('truncated');
+    expect(String(parsed.note)).toContain('truncated');
   });
 
   it('使用相对路径时基于 cwd 解析', async () => {
@@ -603,6 +632,82 @@ describe('kb_search', () => {
     expect(parsed.total).toBe(0);
     expect(parsed.results).toEqual([]);
   });
+
+  it('分类过滤：限定 category 时其他分类不返回', async () => {
+    const registry = new HostToolsRegistry(undefined, tmpDir);
+
+    // "覆盖率" 只出现在 验证计划 分类（CPU 验证计划），限定 协议手册 时应为空
+    const filtered = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'kb_search',
+      arguments: { query: '覆盖率', category: '协议手册' },
+    });
+    expect(parseResult(filtered).total).toBe(0);
+
+    // 限定 验证计划 时正常命中，且结果都属于该分类
+    const matched = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc2',
+      toolName: 'kb_search',
+      arguments: { query: '覆盖率', category: '验证计划' },
+    });
+    const parsed = parseResult(matched);
+    expect(parsed.total).toBeGreaterThanOrEqual(1);
+    for (const r of parsed.results as Array<{ category: string }>) {
+      expect(r.category).toBe('验证计划');
+    }
+  });
+
+  it('中文 bigram 匹配：bigram 命中得分高于单字噪音', async () => {
+    // 噪音文档只含单字"时""序"，不含"时序"bigram
+    writeFileSync(
+      join(kbPath, 'docs', '验证计划', '噪音文档.md'),
+      '本序列说明各阶段安排次序，涉及时钟与频率配置。',
+      'utf-8',
+    );
+
+    const registry = new HostToolsRegistry(undefined, tmpDir);
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'kb_search',
+      arguments: { query: '时序' },
+    });
+
+    const parsed = parseResult(result);
+    const results = parsed.results as Array<{ path: string; score: number }>;
+    const ddr5 = results.find((r) => r.path.includes('DDR5'));
+    expect(ddr5).toBeDefined();
+    if (!ddr5) return;
+
+    const noise = results.find((r) => r.path.includes('噪音文档'));
+    if (noise) {
+      // 单字命中（0.2/字）得分应低于 bigram 命中（1/次）
+      expect(noise.score).toBeLessThan(ddr5.score);
+    }
+  });
+
+  it('全文命中返回 snippet 与 absolutePath', async () => {
+    const registry = new HostToolsRegistry(undefined, tmpDir);
+    const result = await registry.handleToolCall({
+      type: 'host_tool_call',
+      id: '1',
+      toolCallId: 'tc1',
+      toolName: 'kb_search',
+      arguments: { query: '覆盖率目标' },
+    });
+
+    const parsed = parseResult(result);
+    const first = (parsed.results as Array<Record<string, unknown>>)[0];
+    expect(String(first.path)).toContain('CPU验证');
+    expect(typeof first.absolutePath).toBe('string');
+    expect(String(first.absolutePath).length).toBeGreaterThan(0);
+    expect(String(first.snippet)).toContain('覆盖率目标');
+  });
 });
 
 // ─── searcher 纯函数测试 ─────────────────────────────────────
@@ -708,9 +813,9 @@ describe('context-injector', () => {
     expect(result.contextText).toBe('');
   });
 
-  it('索引超长时截断并附加提示', async () => {
-    // 生成超长索引
-    const longContent = '# 知识库索引\n\n' + '## 分类\n\n'.repeat(500) +
+  it('索引超长时降级为压缩视图并保留全部分类', async () => {
+    // 生成超长索引（单分类 + 超长摘要触发压缩，不做中间硬截断丢分类）
+    const longContent = '# 知识库索引\n\n' + '## 分类\n\n' +
       '### 文档\n- **路径**: `doc.md`\n- **摘要**: ' + '很长的摘要'.repeat(2000) + '\n';
     writeFileSync(join(kbPath, 'index.md'), longContent, 'utf-8');
 
@@ -718,6 +823,9 @@ describe('context-injector', () => {
     expect(result.truncated).toBe(true);
     expect(result.contextText).toContain('索引已截断');
     expect(result.contextText).toContain('kb_search');
+    // 压缩视图保留分类与条目路径（而非从中间切掉）
+    expect(result.contextText).toContain('分类（1 篇）');
+    expect(result.contextText).toContain('文档（doc.md）');
   });
 
   it('injectKbContext 追加到已有 systemPrompt', async () => {
