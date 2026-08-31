@@ -253,7 +253,10 @@ html[data-shade='dark'] .ai-panel {
 /* 流式尾缘 + 光标（效果参考 beautiful-ui StreamText）：
    末尾几个字符以 blur + 渐变 mask 呈现，随流式快照更新逐渐凝聚成形；
    光标写入期间实心不闪烁（每次快照前移本身已有动感），消息 settle 后
-   随 MarkdownRenderer/ThinkingBlock 的重渲染一并移除 */
+   随 MarkdownRenderer/ThinkingBlock 的重渲染一并移除。
+   当前尾缘字符数为 0（禁用态，见各消费端 STREAM_TAIL_CHARS / TAIL_CHARS /
+   PREVIEW_TAIL_CHARS 常量），blur 作用于空/缺失 span 不可见；恢复效果只需
+   将常量调回正数。 */
 .ap-stream-tail {
   filter: blur(1.6px);
   -webkit-mask-image: linear-gradient(to right, #000 20%, rgb(0 0 0 / 0.2));
