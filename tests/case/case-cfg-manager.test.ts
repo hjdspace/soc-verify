@@ -157,8 +157,10 @@ describe('discoverUdtbDirs', () => {
     expect(result).toEqual([]);
   });
 
-  it('walks nested directories recursively', async () => {
+  it('does not discover nested bin/ dirs (only scans one level deep)', async () => {
     // udtb/apcpu_sys/group_a/sub_env/bin/x.cfg
+    // With the optimized single-level scan, nested directories are NOT
+    // discovered — only direct children of udtb/{subsys} are checked.
     await mkdir(join(tempDir, 'udtb', 'apcpu_sys', 'group_a', 'sub_env', 'bin'), { recursive: true });
     await writeFile(
       join(tempDir, 'udtb', 'apcpu_sys', 'group_a', 'sub_env', 'bin', 'x.cfg'),
@@ -167,8 +169,9 @@ describe('discoverUdtbDirs', () => {
 
     const result = await discoverUdtbDirs(tempDir, 'apcpu_sys');
 
-    expect(result).toHaveLength(1);
-    expect(result[0].relPath).toBe(join('group_a', 'sub_env'));
+    // group_a does NOT have bin/ directly, so it's not discovered.
+    // The nested sub_env/bin is two levels deep and is intentionally skipped.
+    expect(result).toEqual([]);
   });
 });
 
