@@ -6,6 +6,22 @@
 
 ---
 
+## [0.4.5](https://github.com/hjdspace/soc-verify/compare/v0.4.4...v0.4.5) (2026-09-01)
+
+### Features
+
+* **ui:** 面板与视图切换添加动效，优化会话订阅
+* **file-tree:** 目录展开状态提升至全局 store 持久化
+* **file-tree:** 文件面板支持固定侧边栏模式（dock/undock + 持久化）
+* **kb:** 支持大文档缓存与按需读取工具
+* **drawio:** 导出去 draw.io Desktop 依赖，viewer 内置渲染导出
+
+### Bug Fixes
+
+* **test:** 修复 4 个失败测试用例（credentialSnapshot 格式、thinkingLevel 字段、CaseTreePanel 折叠状态断言、未用变量 lint）
+* **settings:** 配置模型图像输入能力
+* **session:** 会话按项目 scope 隔离，防止过期状态恢复
+
 ## [0.4.4](https://github.com/hjdspace/soc-verify/compare/v0.4.3...v0.4.4) (2026-08-31)
 
 ### Features
