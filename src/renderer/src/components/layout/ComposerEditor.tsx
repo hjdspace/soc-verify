@@ -51,6 +51,8 @@ export type ComposerEditorApi = {
 
 type Props = {
   sessionId: string;
+  /** 外部动作注入的纯文本；与 contentEditable 当前文本相同则不重建 DOM。 */
+  externalText?: string;
   placeholder: string;
   disabled?: boolean;
   className?: string;
@@ -246,6 +248,7 @@ function placeCaret(where: CaretPoint): void {
 
 export function ComposerEditor({
   sessionId,
+  externalText,
   placeholder,
   disabled = false,
   className,
@@ -387,6 +390,23 @@ export function ComposerEditor({
     if (!apiRef) return;
     apiRef.current = { insertChip, clear, focus, restore };
   }, [apiRef, insertChip, clear, focus, restore]);
+
+  // Selection actions 等外部动作会先写入 composer store。编辑器本身是
+  // 非受控 contentEditable，因此只在 store 文本与 DOM 不一致时同步，
+  // 避免普通键入时重建 DOM 导致光标跳动。
+  useEffect(() => {
+    if (externalText === undefined) return;
+    const root = rootRef.current;
+    if (!root || collectEditorText(root).text === externalText) return;
+    root.innerHTML = '';
+    externalText.split('\n').forEach((line, index) => {
+      if (index > 0) root.appendChild(document.createElement('br'));
+      if (line) root.appendChild(document.createTextNode(line));
+    });
+    lastChipsRef.current = '';
+    const sid = propsRef.current.sessionId;
+    if (sid) editorSnapshots.set(sid, root.innerHTML);
+  }, [externalText]);
 
   // ── 事件处理 ──────────────────────────────────────────────
 

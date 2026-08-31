@@ -426,6 +426,22 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
     }
   }, [projectId, filePath, content, isDirty, saving]);
 
+  const handleSelectionAccept = useCallback((replacement: string, selectedText: string) => {
+    const view = editorViewRef.current;
+    if (view?.dom.isConnected) {
+      const { from, to } = view.state.selection.main;
+      if (from !== to) {
+        view.dispatch({ changes: { from, to, insert: replacement } });
+        view.focus();
+        return;
+      }
+    }
+
+    const start = content.indexOf(selectedText);
+    if (start < 0) return;
+    setContent(`${content.slice(0, start)}${replacement}${content.slice(start + selectedText.length)}`);
+  }, [content]);
+
   // 在外部浏览器中打开 HTML 文件
   const handleOpenInBrowser = useCallback(async () => {
     // 如果有未保存的修改，先保存
@@ -668,6 +684,7 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
                 引用标注带文件路径，会话落当前 AI 会话 */}
             <SelectionActionsHost
               source={{ kind: 'file', path: filePath }}
+              onAcceptSelection={handleSelectionAccept}
               className="mx-auto max-w-4xl px-8 py-6"
             >
               <ReactMarkdown
@@ -755,7 +772,11 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
         ) : (
           /* CodeMirror 编辑区（代码/文本，含 AI 改动内联审阅的只读态）：
              host 包住内部滚动区，锚点靠 scroll 捕获重算跟随选区 */
-          <SelectionActionsHost source={{ kind: 'file', path: filePath }} className="h-full w-full">
+          <SelectionActionsHost
+            source={{ kind: 'file', path: filePath }}
+            onAcceptSelection={handleSelectionAccept}
+            className="h-full w-full"
+          >
             <div className="flex h-full w-full overflow-hidden">
               <CodeMirror
                 value={content}

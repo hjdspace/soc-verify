@@ -1010,6 +1010,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
           {/* ── 行内 chip 编辑器：技能/上下文 chip 嵌入文本流中光标位置 ── */}
           <ComposerEditor
             sessionId={currentSessionId ?? ''}
+            externalText={inputMessage}
             disabled={!currentSessionId || isCurrentSessionCreating}
             placeholder={currentSessionId ? '输入消息... ("/" 加载技能, "@" 添加上下文)' : '请先创建会话'}
             className="composer-editor min-h-[60px] max-h-[140px] overflow-y-auto whitespace-pre-wrap break-words px-0.5 py-1 text-xs leading-4 text-foreground outline-none"
@@ -1505,7 +1506,7 @@ function MessageBubble({ message, session, isLastAssistant, turnSettled = true }
       ) : message.content?.trimStart().startsWith('[错误]') ? (
         <ErrorMessage content={message.content} />
       ) : message.content ? (
-        <SelectionActionsHost session={session} enabled={!isStreaming && turnSettled && !!session}>
+        <SelectionActionsHost session={session} enabled={!!session}>
           <MarkdownRenderer content={message.content} streaming={isStreaming} />
         </SelectionActionsHost>
       ) : (

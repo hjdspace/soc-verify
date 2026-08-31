@@ -145,7 +145,7 @@ export interface SessionCoreState {
   setThinkingLevel: (level: ThinkingLevelSetting) => void;
   applyCredential: (sessionId: string, providerId: string) => Promise<void>;
   ensureRuntimeSession: (sessionId: string) => Promise<string>;
-  setInputMessage: (msg: string) => void;
+  setInputMessage: (msg: string, sessionId?: string) => void;
   addSkill: (skill: import('./session-types').SelectedSkill) => void;
   removeSkill: (name: string) => void;
   addContextFile: (file: import('./session-types').ContextFile) => void;
@@ -647,8 +647,8 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
     }
   },
 
-  setInputMessage: (msg) => set((state) => ({
-    sessions: state.sessions.map((session) => session.id === state.currentSessionId
+  setInputMessage: (msg, targetSessionId) => set((state) => ({
+    sessions: state.sessions.map((session) => session.id === (targetSessionId ?? state.currentSessionId)
       ? { ...session, composer: { ...sessionComposer(session), inputMessage: msg } }
       : session),
   })),

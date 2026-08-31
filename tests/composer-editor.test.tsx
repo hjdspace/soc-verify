@@ -162,6 +162,18 @@ describe('ComposerEditor 组件', () => {
     expect(onInput).toHaveBeenCalledWith('hello', expect.any(String));
   });
 
+  it('外部注入文本时同步到非受控编辑器', () => {
+    const { root, rerender } = setupEditor({ externalText: '' });
+    rerender(
+      createElement(ComposerEditor, {
+        sessionId: 's-test',
+        placeholder: '输入消息...',
+        externalText: '请精简下面引用的内容',
+      }),
+    );
+    expect(collectEditorText(root).text).toBe('请精简下面引用的内容');
+  });
+
   it('insertChip 删除触发文本并在原位置插入行内 chip', () => {
     const { apiRef, root, onInput, onChipsChange } = setupEditor();
     root.textContent = '帮我 @src';

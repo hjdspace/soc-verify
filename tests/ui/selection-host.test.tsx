@@ -248,10 +248,11 @@ describe('SelectionActionsHost — 气泡接入', () => {
     expect(storeMessageIds()).toEqual(['a1']);
   });
 
-  it('Keep 保留会话仅关闭状态机，不删消息（改写型 improve）', async () => {
+  it('Keep 保留会话消息并将改写结果交给宿主（改写型 improve）', async () => {
     const session = setCoreSession([assistantMsg('a1', '回复')]);
+    const onAcceptSelection = vi.fn();
     const { rerender } = render(
-      <SelectionActionsHost session={session} enabled>
+      <SelectionActionsHost session={session} enabled onAcceptSelection={onAcceptSelection}>
         <p>回复正文</p>
       </SelectionActionsHost>,
     );
@@ -267,14 +268,39 @@ describe('SelectionActionsHost — 气泡接入', () => {
           assistantMsg('a_2', '新回答'),
         ])}
         enabled
+        onAcceptSelection={onAcceptSelection}
       >
         <p>回复正文</p>
       </SelectionActionsHost>,
     );
     fireEvent.click(screen.getByTestId('selection-keep'));
+    // 消息不删——保留在会话中
     expect(storeMessageIds()).toHaveLength(3);
+    expect(onAcceptSelection).toHaveBeenCalledWith('新回答', '被选中的片段');
     // 回 idle：动作区再次可用（mock 选区仍在）
     expect(screen.getByTestId('selection-action-explain')).toBeTruthy();
+  });
+
+  it('任务运行中改写型动作填入当前会话输入框', () => {
+    // 会话处于 streaming 状态（任务正在运行）
+    const session = setCoreSession(
+      [assistantMsg('a1', '回复', true)],
+      'streaming',
+    );
+    render(
+      <SelectionActionsHost session={session} enabled>
+        <p>回复正文</p>
+      </SelectionActionsHost>,
+    );
+
+    fireEvent.click(screen.getByTestId('selection-action-improve'));
+
+    expect(trpc.session.send.mutate).not.toHaveBeenCalled();
+    // 不追加本地回合消息，但消息应写入当前会话 composer
+    expect(storeMessageIds()).toEqual(['a1']);
+    const live = useSessionCoreStore.getState().sessions[0];
+    expect(live.composer.inputMessage).toBe('请改进下面引用的这段内容的表达，使其更清晰专业\n\n> 引用自你的回复：\n> 被选中的片段');
+    expect(screen.queryByTestId('selection-busy')).toBeNull();
   });
 });
 

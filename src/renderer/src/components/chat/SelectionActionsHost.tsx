@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { SelectionActions, SELECTION_ACTIONS } from '@renderer/components/ui/SelectionActions';
 import { useSelectionAnchor, type SelectionAnchor, type SelectionSnapshot } from '@renderer/hooks/use-selection-anchor';
 import { useSelectionRun, type SelectionRunRequest } from '@renderer/hooks/use-selection-run';
@@ -20,7 +20,8 @@ import type { SessionEntry } from '@renderer/stores/session-types';
  *   供后续查看。
  * - 改写型（improve/shorten/expand）：写入当前会话，保持 Keep/Discard/Retry
  *   回合管理。Discard/Retry 经 removeMessagesFrom 移除本回合新增消息、
- *   恢复提交前的会话状态。
+ *   恢复提交前的会话状态。若当前会话任务正在运行（streaming/tool_executing），
+ *   改写型动作将消息填入当前会话输入框，不打断正在运行的 AI 任务。
  *
  * 会话解析：显式 `session` prop（气泡宿主，会话即消息所属会话）优先；
  * 否则回退到 session-core 的当前会话（文件宿主与 AI 无绑定会话，落
@@ -28,8 +29,10 @@ import type { SessionEntry } from '@renderer/stores/session-types';
  * 多宿主并存（气泡 × N + 文件 × 1）靠 useSelectionAnchor 的 host
  * containment 过滤天然互斥：只有包含选区的宿主弹出浮条。
  *
- * enabled 关闭（回合进行中/流式中）时停止划选监听，但已开始的回合
+ * enabled 关闭（宿主门控）时停止划选监听，但已开始的回合
  * （request 非空）仍继续驱动浮条直到 Keep/Discard/dismiss。
+ * 气泡宿主在会话执行中也保持 enabled=true——改写型动作在任务运行中
+ * 自动转为填入输入框，不打断正在执行的 AI 任务。
  */
 
 /** 划选来源：决定引用块标注（「引用自你的回复」/「引用自文件 <path>」） */
@@ -73,6 +76,7 @@ export function SelectionActionsHost({
   session,
   source = { kind: 'reply' },
   enabled = true,
+  onAcceptSelection,
   className,
   children,
 }: {
@@ -80,14 +84,17 @@ export function SelectionActionsHost({
   session?: SessionEntry;
   /** 划选来源（引用块标注），默认「你的回复」 */
   source?: SelectionQuoteSource;
-  /** 划选监听开关（气泡流式中/回合执行中关闭） */
+  /** 划选监听开关（无会话时关闭；气泡宿主始终开启） */
   enabled?: boolean;
+  /** 改写型动作点击“保留”时，用 AI 结果替换宿主中的原选区。 */
+  onAcceptSelection?: (replacement: string, selectedText: string) => void;
   /** 宿主容器附加类（文件宿主需要接管原容器的 h-full/max-w 等布局类） */
   className?: string;
   children: ReactNode;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const selectionRef = useRef<SelectionSnapshot | null>(null);
+  const acceptedSelectionRef = useRef<SelectionSnapshot | null>(null);
   // 提交前的消息数——Discard/Retry 删除本回合消息（恢复原文）的截断点
   const baselineRef = useRef<number | null>(null);
 
@@ -168,6 +175,15 @@ export function SelectionActionsHost({
     },
   });
 
+  // 改写型动作回复落定后，交给宿主替换原选区（文件编辑器），
+  // 气泡宿主未提供回调时仅保留会话中的 AI 回复。
+  const handleKeep = useCallback(() => {
+    const replyText = run.streamText.trim();
+    const selectedText = acceptedSelectionRef.current?.text ?? selectionRef.current?.text ?? '';
+    if (replyText && selectedText) onAcceptSelection?.(replyText, selectedText);
+    run.keep();
+  }, [onAcceptSelection, run]);
+
   // transientSession 出现后，如果有 pending run 请求，执行它
   //（查阅型动作需要先创建临时会话，等 store 更新后才能 run）
   useEffect(() => {
@@ -225,9 +241,11 @@ export function SelectionActionsHost({
 
   // ── 动作分流入口 ───────────────────────────────────────────
   // 查阅型动作：创建临时会话（不切换 tab）→ 等 store 更新后 run
-  // 改写型动作：直接 run（写入当前会话）
+  // 改写型动作：若当前会话任务正在运行，填入当前会话输入框；
+  //             若任务已结束，直接 run（写入当前会话）
   const handleAction = (key: string, label: string, prompt: string | null) => {
     const request: SelectionRunRequest = { action: key, label, prompt };
+    acceptedSelectionRef.current = selectionRef.current;
     if (TRANSIENT_ACTIONS.has(key) && activeSession) {
       // 查阅型：创建临时会话（不切换 currentSessionId）
       const sessionId = `local_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -253,9 +271,15 @@ export function SelectionActionsHost({
       transientSessionIdRef.current = sessionId;
       setTransientTick((v) => v + 1);
       pendingRunRef.current = request;
-    } else {
-      // 改写型：直接 run
+    } else if (activeSession && (activeSession.status === 'idle' || activeSession.status === 'error')) {
+      // 改写型 + 任务已结束：直接 run
       run.run(request);
+    } else if (activeSession && (activeSession.status === 'streaming' || activeSession.status === 'tool_executing')) {
+      // 改写型 + 任务正在运行：填入当前会话输入框，不打断现有回合
+      const quote = selectionRef.current?.text ?? '';
+      const message = buildQuotedMessage(request, quote, source);
+      useSessionCoreStore.getState().setInputMessage(message, activeSession.id);
+      run.dismiss();
     }
   };
 
@@ -288,7 +312,7 @@ export function SelectionActionsHost({
         streamText={run.streamText}
         onSelectAction={(key) => handleAction(key, actionLabel(key), null)}
         onSubmitPrompt={(prompt) => handleAction('prompt', prompt, prompt)}
-        onKeep={run.keep}
+        onKeep={handleKeep}
         onDiscard={run.discard}
         onRetry={run.retry}
         onDismiss={run.dismiss}
