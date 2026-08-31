@@ -749,7 +749,7 @@ describe('SessionManager — credential tracking for holistic-swap no-op detecti
 
     const entry = manager.getSession(id)!;
     expect(entry.providerId).toBe('unisoc');
-    expect(entry.credentialSnapshot).toBe('unisoc|sk-unisoc|http://maas.unisoc.com/v1');
+    expect(entry.credentialSnapshot).toBe('unisoc|sk-unisoc|http://maas.unisoc.com/v1|');
   });
 
   it('credentialSnapshot changes when the credential is edited (same providerId)', async () => {

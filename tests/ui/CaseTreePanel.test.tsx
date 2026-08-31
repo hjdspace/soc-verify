@@ -230,9 +230,12 @@ describe('CaseTreePanel case tree rendering', () => {
     // Collapse all
     fireEvent.click(screen.getByRole('button', { name: '折叠全部' }));
 
-    // All case names should be hidden again
-    expect(screen.queryByText('case_alpha')).not.toBeInTheDocument();
-    expect(screen.queryByText('case_beta')).not.toBeInTheDocument();
+    // All case names should be collapsed (file node container has grid-rows-[0fr])
+    // In jsdom, CSS grid animation does not hide elements from the DOM,
+    // so we verify the collapse by checking the file node's container class.
+    const caseAlpha = screen.getByText('case_alpha');
+    const fileNodeContainer = caseAlpha.closest('.grid');
+    expect(fileNodeContainer).toHaveClass('grid-rows-[0fr]');
   });
 
   it('expand all and collapse all buttons toggle all file nodes', async () => {
@@ -244,11 +247,21 @@ describe('CaseTreePanel case tree rendering', () => {
 
     // Collapse all first
     fireEvent.click(screen.getByRole('button', { name: '折叠全部' }));
-    expect(screen.queryByText('case_alpha')).not.toBeInTheDocument();
+    // File node container should be collapsed (grid-rows-[0fr])
+    {
+      const caseAlpha = screen.getByText('case_alpha');
+      const fileNodeContainer = caseAlpha.closest('.grid');
+      expect(fileNodeContainer).toHaveClass('grid-rows-[0fr]');
+    }
 
     // Expand all
     fireEvent.click(screen.getByRole('button', { name: '展开全部' }));
-    await screen.findByText('case_alpha');
+    // File node container should be expanded (grid-rows-[1fr])
+    {
+      const caseAlpha = await screen.findByText('case_alpha');
+      const fileNodeContainer = caseAlpha.closest('.grid');
+      expect(fileNodeContainer).toHaveClass('grid-rows-[1fr]');
+    }
     await screen.findByText('case_beta');
   });
 

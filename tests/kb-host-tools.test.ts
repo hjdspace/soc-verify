@@ -470,7 +470,6 @@ describe('doc_to_markdown', () => {
 // ─── kb_doc_read / kb_doc_grep / kb_doc_outline ──────────────
 
 describe('kb_doc_read / kb_doc_grep / kb_doc_outline', () => {
-  const cachedDocId = 'a'.repeat(12);
   const cachedMarkdown = [
     '# 测试大纲文档',
     '',

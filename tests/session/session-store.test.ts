@@ -223,6 +223,7 @@ describe('SessionStore — event handling and state machine', () => {
       model: undefined,
       providerId: undefined,
       approvalMode: 'yolo',
+      thinkingLevel: 'default',
     });
     expect(mockSend).toHaveBeenCalledWith({ sessionId: 'session_test_1', message: 'Hello AI' });
     const session = state.sessions[0];
