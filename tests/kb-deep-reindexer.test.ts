@@ -2,14 +2,16 @@
  * Deep Reindexer 测试 — TDD red phase。
  *
  * 测试缝：deepReindex() 函数。
- * mock：SessionManager（createSession / destroySession / getSession / getClient）、
+ * mock：SessionManager（createSession / destroySession / getSession / getClient / sendPromptAndWait）、
  *       AgentClient（prompt / onEvent）、pipeline（readIndexMd / listDocuments / writeIndexMd）。
  *
  * 覆盖场景：
- *  - 触发：创建临时 omp 会话，发送 prompt
+ *  - 触发：创建临时 omp 会话，发送 prompt 并等待 agent_end（sendPromptAndWait）
+ *  - prompt 指令一致性：要求 Agent 将完整索引写入 <kbPath>/.index.md.new（不直接改 index.md）
  *  - 进度事件：逐文档推送 N/total
- *  - 成功：原子替换 index.md（写临时文件 → rename）
- *  - 失败保护：会话失败时原 index.md 完好
+ *  - 成功：读取 Agent 写入的 .index.md.new → 原子替换 index.md（写临时文件 → rename）
+ *  - 失败保护：会话失败 / Agent 未写产物时原 index.md 完好
+ *  - 恢复：Agent 直接覆写 index.md 时，恢复 prompt 前的原文（覆写不生效）
  *  - 会话销毁：完成后或失败后销毁
  *  - LLM 配置异常返回明确错误
  */
@@ -89,12 +91,12 @@ vi.mock('../src/main/agent/session-persistence', () => ({
 }));
 
 // Mock session manager
-const { mockCreateSession, mockDestroySession, mockGetSession, mockGetClient, mockPromptFireAndForget } = vi.hoisted(() => ({
+const { mockCreateSession, mockDestroySession, mockGetSession, mockGetClient, mockSendPromptAndWait } = vi.hoisted(() => ({
   mockCreateSession: vi.fn() as ReturnType<typeof vi.fn>,
   mockDestroySession: vi.fn() as ReturnType<typeof vi.fn>,
   mockGetSession: vi.fn() as ReturnType<typeof vi.fn>,
   mockGetClient: vi.fn() as ReturnType<typeof vi.fn>,
-  mockPromptFireAndForget: vi.fn() as ReturnType<typeof vi.fn>,
+  mockSendPromptAndWait: vi.fn() as ReturnType<typeof vi.fn>,
 }));
 
 vi.mock('../src/main/agent/session-manager', () => ({
@@ -103,7 +105,7 @@ vi.mock('../src/main/agent/session-manager', () => ({
     destroySession: mockDestroySession,
     getSession: mockGetSession,
     getClient: mockGetClient,
-    promptFireAndForget: mockPromptFireAndForget,
+    sendPromptAndWait: mockSendPromptAndWait,
   },
   SessionManagerImpl: vi.fn(),
 }));
@@ -188,7 +190,7 @@ describe('deepReindex', () => {
     mockDestroySession.mockReset();
     mockGetSession.mockReset();
     mockGetClient.mockReset();
-    mockPromptFireAndForget.mockReset();
+    mockSendPromptAndWait.mockReset();
   });
 
   afterEach(() => {
@@ -204,8 +206,8 @@ describe('deepReindex', () => {
   it('创建临时 omp 会话并发送 prompt', async () => {
     const kbDir = makeKbDir('trigger-kb');
     mockCreateSession.mockResolvedValue('temp-session-1');
-    // Agent prompt mock: 模拟 Agent 写入 .index.md.new
-    mockPromptFireAndForget.mockImplementation(async () => {
+    // Agent prompt mock: 模拟 Agent 等待期间写入 .index.md.new
+    mockSendPromptAndWait.mockImplementation(async () => {
       const newIndexPath = join(kbDir, '.index.md.new');
       writeFileSync(newIndexPath, '# 知识库索引\n\n## 协议手册\n\n### DDR5\n- **路径**: `协议手册/DDR5.md`\n- **摘要**: DDR5 协议规范\n\n### AXI\n- **路径**: `协议手册/AXI.md`\n- **摘要**: AXI 总线协议\n', 'utf-8');
     });
@@ -227,6 +229,39 @@ describe('deepReindex', () => {
     expect(mockDestroySession).toHaveBeenCalledWith('temp-session-1');
   });
 
+  // ─── prompt 指令一致性 ─────────────────────────────────
+
+  it('prompt 要求 Agent 将索引写入 .index.md.new（而非直接修改 index.md）', async () => {
+    const kbDir = makeKbDir('prompt-consistency-kb');
+
+    mockCreateSession.mockResolvedValue('temp-session-prompt');
+    mockSendPromptAndWait.mockImplementation(async () => {
+      writeFileSync(join(kbDir, '.index.md.new'), '# 新索引\n', 'utf-8');
+    });
+    mockGetSession.mockReturnValue({
+      client: { prompt: vi.fn(), onEvent: vi.fn() },
+      hostTools: { registerCustom: vi.fn() },
+    });
+    mockGetClient.mockReturnValue({ prompt: vi.fn(), onEvent: vi.fn() });
+
+    await deepReindex({
+      kbPath: kbDir,
+      projectId: 'test-project-id',
+      cwd: projectDir,
+      notify: vi.fn(),
+    });
+
+    // prompt 通过 sendPromptAndWait 发送（等待 agent_end，而非 fire-and-forget）
+    expect(mockSendPromptAndWait).toHaveBeenCalledOnce();
+    const [, prompt] = mockSendPromptAndWait.mock.calls[0] as [string, string];
+
+    // 指令要求写入 .index.md.new（与产物检查逻辑一致）
+    expect(prompt).toContain('.index.md.new');
+    expect(prompt).toContain('完整');
+    // 明确禁止直接修改 index.md（否则原子替换保护失效）
+    expect(prompt).toContain('不要直接');
+  });
+
   // ─── 成功：原子替换 index.md ───────────────────────────
 
   it('成功时原子替换 index.md（临时文件 → rename）', async () => {
@@ -235,7 +270,7 @@ describe('deepReindex', () => {
 
     mockCreateSession.mockResolvedValue('temp-session-2');
     // Agent prompt mock: 写入 .index.md.new
-    mockPromptFireAndForget.mockImplementation(async () => {
+    mockSendPromptAndWait.mockImplementation(async () => {
       const newIndexPath = join(kbDir, '.index.md.new');
       writeFileSync(newIndexPath, '# 知识库索引\n\n## 协议手册\n\n### DDR5\n- **路径**: `协议手册/DDR5.md`\n- **摘要**: 深度重建的 DDR5 摘要\n\n### AXI\n- **路径**: `协议手册/AXI.md`\n- **摘要**: 深度重建的 AXI 摘要\n', 'utf-8');
     });
@@ -300,7 +335,7 @@ describe('deepReindex', () => {
     const originalContent = readFileSync(join(kbDir, 'index.md'), 'utf-8');
 
     mockCreateSession.mockResolvedValue('temp-session-3');
-    mockPromptFireAndForget.mockRejectedValue(new Error('prompt timeout'));
+    mockSendPromptAndWait.mockRejectedValue(new Error('prompt timeout'));
     mockGetSession.mockReturnValue({
       client: { prompt: vi.fn().mockRejectedValue(new Error('prompt timeout')), onEvent: vi.fn() },
       hostTools: { registerCustom: vi.fn() },
@@ -328,7 +363,7 @@ describe('deepReindex', () => {
     const events: Array<{ phase: string; current?: number; total?: number }> = [];
 
     mockCreateSession.mockResolvedValue('temp-session-4');
-    mockPromptFireAndForget.mockImplementation(async () => {
+    mockSendPromptAndWait.mockImplementation(async () => {
       writeFileSync(join(kbDir, '.index.md.new'), '# 新索引\n', 'utf-8');
     });
     mockGetSession.mockReturnValue({
@@ -356,7 +391,7 @@ describe('deepReindex', () => {
   it('完成后会话被正确销毁', async () => {
     const kbDir = makeKbDir('cleanup-kb');
     mockCreateSession.mockResolvedValue('temp-session-5');
-    mockPromptFireAndForget.mockImplementation(async () => {
+    mockSendPromptAndWait.mockImplementation(async () => {
       writeFileSync(join(kbDir, '.index.md.new'), '# 新索引\n', 'utf-8');
     });
     mockGetSession.mockReturnValue({
@@ -380,7 +415,7 @@ describe('deepReindex', () => {
   it('失败后会话也被销毁', async () => {
     const kbDir = makeKbDir('fail-cleanup-kb');
     mockCreateSession.mockResolvedValue('temp-session-6');
-    mockPromptFireAndForget.mockRejectedValue(new Error('network error'));
+    mockSendPromptAndWait.mockRejectedValue(new Error('network error'));
     mockGetSession.mockReturnValue({
       client: { prompt: vi.fn().mockRejectedValue(new Error('network error')), onEvent: vi.fn() },
       hostTools: { registerCustom: vi.fn() },
@@ -415,5 +450,76 @@ describe('deepReindex', () => {
     expect(result.ok).toBe(true);
     // 空库不应创建会话
     expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  // ─── 失败保护：Agent 未写 .index.md.new ─────────────────
+
+  it('Agent 未写 .index.md.new 时不替换 index.md', async () => {
+    const kbDir = makeKbDir('no-artifact-kb');
+    const originalContent = readFileSync(join(kbDir, 'index.md'), 'utf-8');
+
+    mockCreateSession.mockResolvedValue('temp-session-no-artifact');
+    // Agent 正常结束但没有写任何产物
+    mockSendPromptAndWait.mockResolvedValue('done');
+    mockGetSession.mockReturnValue({
+      client: { prompt: vi.fn(), onEvent: vi.fn() },
+      hostTools: { registerCustom: vi.fn() },
+    });
+    mockGetClient.mockReturnValue({ prompt: vi.fn(), onEvent: vi.fn() });
+
+    const result = await deepReindex({
+      kbPath: kbDir,
+      projectId: 'test-project-id',
+      cwd: projectDir,
+      notify: vi.fn(),
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('noOutput');
+    }
+
+    // 原 index.md 完好
+    expect(readFileSync(join(kbDir, 'index.md'), 'utf-8')).toBe(originalContent);
+    expect(mockDestroySession).toHaveBeenCalledWith('temp-session-no-artifact');
+  });
+
+  // ─── 失败保护：Agent 直接覆写了 index.md ────────────────
+
+  it('Agent 直接覆盖 index.md 时恢复 prompt 前的原文（覆写不生效）', async () => {
+    const kbDir = makeKbDir('restore-kb');
+    const originalContent = readFileSync(join(kbDir, 'index.md'), 'utf-8');
+
+    mockCreateSession.mockResolvedValue('temp-session-restore');
+    mockSendPromptAndWait.mockImplementation(async () => {
+      // Agent 无视指令，直接覆写了 index.md（没有写 .index.md.new）
+      writeFileSync(join(kbDir, 'index.md'), '# 被 Agent 写坏的内容\n', 'utf-8');
+    });
+    mockGetSession.mockReturnValue({
+      client: { prompt: vi.fn(), onEvent: vi.fn() },
+      hostTools: { registerCustom: vi.fn() },
+    });
+    mockGetClient.mockReturnValue({ prompt: vi.fn(), onEvent: vi.fn() });
+
+    const result = await deepReindex({
+      kbPath: kbDir,
+      projectId: 'test-project-id',
+      cwd: projectDir,
+      notify: vi.fn(),
+    });
+
+    // 覆写不被接受：按未产出处理，UI 能感知失败
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('noOutput');
+      expect(result.error.message).toContain('恢复');
+    }
+
+    // index.md 恢复为 prompt 前的原文
+    expect(readFileSync(join(kbDir, 'index.md'), 'utf-8')).toBe(originalContent);
+
+    // 原子替换过程无临时文件残留
+    const entries = require('node:fs').readdirSync(kbDir) as string[];
+    expect(entries.filter((f) => f === '.index.md.new' || f.includes('.index.md.tmp'))).toHaveLength(0);
   });
 });
