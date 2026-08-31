@@ -98,8 +98,10 @@ export function useSelectionAnchor(options: {
       return;
     }
     const hostBounds = host.getBoundingClientRect();
-    // 浮条水平居中于选区包围盒（Rect 模型用 left/right 求中点）
-    const centerX = (snapshot.bounds.left + snapshot.bounds.right) / 2;
+    // 浮条水平居中于选区最后一行（而非整体包围盒）——多行选区时
+    // bounds 的 left/right 横跨多行宽度，中心点偏移到内容区中央甚至
+    // 飞出视口；lastLine 只覆盖末行文本，居中点贴在末行下方更自然
+    const centerX = (snapshot.lastLine.left + snapshot.lastLine.right) / 2;
     const next = {
       x: Math.round(centerX - hostBounds.left),
       y: Math.round(snapshot.lastLine.bottom - hostBounds.top + gap),
