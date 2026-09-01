@@ -23,6 +23,7 @@ import { getCombinedDefaultSystemPrompt } from '../../agent/default-system-promp
 import { loadTvConfig, saveTvConfig } from '../../timing-violation/tv-config';
 import { evictTvDb } from '../../timing-violation/db/tv-db-cache';
 import { contextSettings } from '../../agent/context-settings';
+import { simulationSettings } from '../../simulation/simulation-settings';
 import { toolSettings } from '../../agent/tool-settings';
 import { HOST_TOOL_NAMES, HOST_TOOL_GROUPS } from '../../host/tool-catalog';
 import { BUILTIN_TOOL_CATALOG, getBuiltinLabel, getBuiltinDescription } from '../../host/builtin-tool-catalog';
@@ -56,6 +57,25 @@ function normalizeApiFormatInput(value: unknown): OpenAiApiFormat | undefined {
 
 export const settingsRouter = t.router({
   getContextWindow: t.procedure.query(() => contextSettings.getContextWindow()),
+
+  /** 获取仿真执行设置：是否默认以 log-mode 执行仿真。 */
+  getPreferLogMode: t.procedure.query(() => {
+    return simulationSettings.getPreferLogMode();
+  }),
+
+  /** 设置仿真执行偏好：启用后仿真直接以 log-mode（只读日志模式）执行。 */
+  setPreferLogMode: t.procedure
+    .input((raw): { preferLogMode: boolean } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.preferLogMode !== 'boolean') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'preferLogMode must be a boolean' });
+      }
+      return { preferLogMode: r.preferLogMode };
+    })
+    .mutation(async ({ input }) => {
+      await simulationSettings.setPreferLogMode(input.preferLogMode);
+      return { ok: true as const };
+    }),
 
   setContextWindow: t.procedure
     .input((raw): { contextWindow: number } => {
