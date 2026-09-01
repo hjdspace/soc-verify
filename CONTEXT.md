@@ -457,3 +457,33 @@ _Avoid_: font loading, font install
 **Starship Binary**:
 跨 shell 的 Prompt 美化引擎（Rust 编写），打包为单二进制文件存于 `resources/binaries/`。通过 `STARSHIP_CONFIG` 环境变量指定配置文件路径。支持 zsh、bash、PowerShell、tcsh 等多种 shell，但不支持 csh。
 _Avoid_: prompt engine, starship binary
+
+### Token 监控域
+
+**Token Usage Record**:
+一次 LLM API 交互的 token 用量记录，是 Token Monitor 的最小数据单元。包含引擎标识、会话 ID、模型、输入/输出/缓存读/缓存写/推理 token 计数、总 token 数、成本和时间戳。来源于 `message_end` 事件的 `usage` 字段（实时）或 JSONL 日志解析（外部扫描）。以 `(engine, session_id, message_id)` 组合去重。
+_Avoid_: token entry, usage row
+
+**Token Monitor DB**:
+项目级 SQLite 数据库（`.socverify/token-monitor.db`），存储 Token Usage Record 的单一数据源。使用 better-sqlite3（与 Case Database 和 Timing Violation DB 一致），per-request 粒度存储，通过 SQL 聚合查询支持热力图、趋势图和引擎/模型分解。独立于 Case Database，关注点分离。
+_Avoid_: token store, usage database
+
+**Token Usage Recorder**:
+主进程模块，在 SessionManager 的事件转发路径中旁路拦截 `message_end` 事件，提取 assistant message 的 `usage` 字段写入 Token Monitor DB。不阻塞事件转发，写入失败仅记日志不影响 AI 会话。
+_Avoid_: token collector, usage tracker
+
+**Log Scanner**:
+主进程模块，定时轮询（5 分钟间隔）外部 AI 工具的本地 JSONL 日志文件，解析 token 用量写入 Token Monitor DB。支持 claude-code（`~/.claude/projects/**/*.jsonl`，可通过 `$CLAUDE_CONFIG_DIR` 覆盖）和 codex CLI（`~/.codex/sessions/**/*.jsonl`，可通过 `$CODEX_HOME` 覆盖）。通过文件 mtime + byte offset 实现增量解析，避免全量重复扫描。
+_Avoid_: log poller, file scanner
+
+**Engine Tag**:
+Token Monitor 的引擎标识，取值为 `'omp'`（SoC Verify 驱动的 oh-my-pi）、`'claude-code'`（外部 Claude Code CLI）、`'codex'`（SoC Verify 驱动或外部 Codex CLI 的统一标识）。与 AI 引擎域的 Engine Tag（`_engine` 字段）概念不同——后者区分事件来源引擎用于路由，前者用于 token 统计聚合。SoC Verify 驱动的 codex 和外部 codex CLI 的 token 记录都标记为 `'codex'`，通过 session_id 区分。
+_Avoid_: tool name, client name
+
+**Token Heatmap**:
+Token Monitor 视图中的 365 天活动热力图（GitHub 风格），色深表示当日 token 消耗量。数据来自 `SELECT date(timestamp/1000, 'unixepoch') as day, SUM(total_tokens) FROM token_usage GROUP BY day`。
+_Avoid_: activity grid, contribution graph
+
+**ContextUsageIndicator vs Token Monitor**:
+ContextUsageIndicator 显示当前会话上下文窗口的实时占用（还能发多少消息），数据来自 `context_usage` 事件。Token Monitor 显示历史 token 消耗统计和趋势（用了多少 token），数据来自 `message_end` 事件的 `usage` 字段。两者职责分离，不互相替代。多轮 prompt cache 会使累计 token 很大而当前上下文仍只占一个窗口。
+_Avoid_: context tracker
