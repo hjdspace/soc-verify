@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { X, Key, Cpu, BookOpen, FileText, Wrench, Puzzle, Package, Server, Palette, Keyboard, Clock } from 'lucide-react';
+import { X, Key, Cpu, BookOpen, FileText, Wrench, Puzzle, Package, Server, Palette, Keyboard, Clock, FlaskConical } from 'lucide-react';
 import { useUiStore } from '@renderer/stores/ui';
 import { useSessionCoreStore } from '@renderer/stores/session-core';
 import { cn } from '@renderer/lib/utils';
@@ -9,12 +9,13 @@ import { AgentToolsTab } from './AgentToolsTab';
 import { ShortcutsTab } from './ShortcutsTab';
 import { PromptTab } from './PromptTab';
 import { TimingViolationConfigTab } from './TimingViolationConfigTab';
+import { SimulationSettingsTab } from './SimulationSettingsTab';
 import { AppearanceTab } from './AppearanceTab';
 import { SkillsTab } from './SkillsTab';
 import { CredentialsTab } from './CredentialsTab';
 import { McpTab } from './McpTab';
 
-type SettingsTab = 'credentials' | 'kb' | 'plugins' | 'skills' | 'mcp' | 'prompt' | 'agent-tools' | 'appearance' | 'shortcuts' | 'timing-violation';
+type SettingsTab = 'credentials' | 'kb' | 'plugins' | 'skills' | 'mcp' | 'prompt' | 'agent-tools' | 'appearance' | 'shortcuts' | 'timing-violation' | 'simulation';
 
 export function SettingsPanel() {
   const settingsOpen = useUiStore((s) => s.settingsOpen);
@@ -51,6 +52,7 @@ const currentSessionId = useSessionCoreStore((s) => s.currentSessionId);
         { id: 'appearance', label: '外观', icon: Palette },
         { id: 'shortcuts', label: '快捷键', icon: Keyboard },
         { id: 'timing-violation', label: '时序违例', icon: Clock },
+        { id: 'simulation', label: '仿真', icon: FlaskConical },
       ],
     },
   ];
@@ -123,6 +125,7 @@ const currentSessionId = useSessionCoreStore((s) => s.currentSessionId);
             {tab === 'prompt' && <PromptTab />}
             {tab === 'agent-tools' && <AgentToolsTab />}
             {tab === 'timing-violation' && <TimingViolationConfigTab />}
+            {tab === 'simulation' && <SimulationSettingsTab />}
           </div>
         </div>
       </div>
