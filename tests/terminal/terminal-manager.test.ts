@@ -166,6 +166,52 @@ describe('TerminalManager', () => {
     expect(manager.getOutputBuffer(session.id).join('')).toContain('retained-output');
   });
 
+  // POSIX-only: process groups and process.kill(-pid) do not exist on Windows.
+  it.skipIf(process.platform === 'win32')(
+    'log-mode abort kills the whole simulation process tree (grandchild dies with the group)',
+    { timeout: 15000 },
+    async () => {
+      const { mkdtempSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const { readFile } = await import('node:fs/promises');
+
+      manager = new TerminalManager();
+
+      const dir = mkdtempSync(join(tmpdir(), 'socverify-tree-'));
+      const childPidFile = join(dir, 'grandchild.pid');
+      // The grandchild records its pid and sleeps — simulating runsim/xrun
+      // running as a descendant of the log-mode shell.
+      const command = `sh -c 'echo $$ > ${childPidFile}; sleep 30' & wait`;
+
+      const session = await manager.runCommand({
+        command,
+        cwd: process.cwd(),
+        shell: '/bin/sh',
+      });
+
+      // Wait for the grandchild to record its pid.
+      let grandchildPid = 0;
+      for (let i = 0; i < 50 && grandchildPid === 0; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        try {
+          grandchildPid = Number(await readFile(childPidFile, 'utf-8'));
+        } catch {
+          // not written yet
+        }
+      }
+      expect(grandchildPid).toBeGreaterThan(0);
+
+      // Abort: destroy() must SIGTERM the whole process group, killing the
+      // grandchild too — not just the shell.
+      manager.destroy(session.id);
+
+      // Give the signal a moment to take effect, then verify the grandchild is gone.
+      await new Promise((r) => setTimeout(r, 500));
+      expect(() => process.kill(grandchildPid, 0)).toThrow();
+    },
+  );
+
   it('destroys a terminal session', async () => {
     manager = new TerminalManager();
 
