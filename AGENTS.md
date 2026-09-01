@@ -81,12 +81,13 @@ npx vitest run tests/<相关目录>     # 仅运行改动相关的测试目录
 以下详情按需查阅源码或文档，不必每次加载：
 
 - **officecli 集成**：[ADR 0015](./docs/adr/0015-officecli-integration.md) — Office 文档预览/创建/编辑，职责分层、二进制路径解析（三级回退）、xlsx flush 机制、错误降级
-- **App Shell（Mission Control 布局）**：`src/renderer/src/components/layout/AppShell.tsx` — TitleBar + (NavRail | (ViewContainer + BottomPanel)) + StatusBar；五视图路由（总览/仿真/覆盖率/回归/workspace，`ui.activeView`，刷新持久化）；文件树/AI 会话为可呼出抽屉（FileDrawer/AiDrawer，切换视图自动关闭）；命令面板 Ctrl+K/Ctrl+P（分组：导航/动作/面板）；通知中心走 `webContents.send` + `eventBridge`。LeftRail 已退役，文件树/子系统在左抽屉，插件视图在 workspace
+- **App Shell（Mission Control 布局）**：`src/renderer/src/components/layout/AppShell.tsx` — TitleBar + (NavRail | (ViewContainer + BottomPanel)) + StatusBar；六视图路由（总览/仿真/覆盖率/回归/token/workspace，`ui.activeView`，刷新持久化）；文件树/AI 会话为可呼出抽屉（FileDrawer/AiDrawer，切换视图自动关闭）；命令面板 Ctrl+K/Ctrl+P（分组：导航/动作/面板）；通知中心走 `webContents.send` + `eventBridge`。LeftRail 已退役，文件树/子系统在左抽屉，插件视图在 workspace
 - **omp Host Tools**：`src/main/omp/host-tools.ts` — 7 默认验证工具 + 条件注册（coverage/case-stats）+ 7 文档工具
 - **omp URI scheme**：`src/main/omp/host-uris.ts` — `case:///` / `log:///` / `cov:///`
 - **插件系统**：`src/shared/plugin-types.ts` — 5 种 `PluginKind` 接口契约
 - **主题系统**：`src/renderer/src/styles/globals.css` + `src/renderer/src/stores/theme.ts`
 - **officecli 下载**：`npm run download:officecli`，版本固定在 `package.json` 的 `officecliVersion`；下载失败不阻断构建，运行时降级
+- **Token Monitor**：[ADR 0031](./docs/adr/0031-token-monitor-design.md) — 内嵌视图架构，混合数据源（实时事件 + 日志扫描），独立 SQLite `.socverify/token-monitor.db`，SessionManager 旁路拦截 `message_end` 写入，定时轮询扫描外部 claude-code/codex 日志，不引入 tokscale Rust 依赖
 
 ## 常见任务
 
