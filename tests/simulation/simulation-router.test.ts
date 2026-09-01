@@ -8,21 +8,43 @@
  * 先例：tests/dashboard-router.test.ts
  */
 
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, beforeAll, vi } from 'vitest';
 import type Database from 'better-sqlite3';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // ─── Hoisted mock state ─────────────────────────────────────
 
-const { mockSimTerminalLinker, mockSimulationManager } = vi.hoisted(() => ({
+const {
+  mockSimTerminalLinker,
+  mockSimulationManager,
+  mockSimulationSettings,
+  mockTerminalManager,
+  pluginFileRef,
+} = vi.hoisted(() => ({
   mockSimTerminalLinker: {
     getRun: vi.fn(),
     getActiveRuns: vi.fn(() => []),
+    register: vi.fn(),
   },
   mockSimulationManager: {
     getRunDetail: vi.fn(),
     getActiveRuns: vi.fn(() => []),
     hasRunner: vi.fn(() => true),
   },
+  mockSimulationSettings: {
+    getPreferLogMode: vi.fn(async () => false),
+  },
+  mockTerminalManager: {
+    ensurePtyAvailable: vi.fn(async () => false),
+    create: vi.fn(),
+    runCommand: vi.fn(),
+    write: vi.fn(),
+    getOutputContent: vi.fn(() => ''),
+    on: vi.fn(),
+  },
+  pluginFileRef: { current: null as string | null },
 }));
 
 const dbRef: { current: Database.Database | null } = { current: null };
@@ -59,21 +81,22 @@ vi.mock('../../src/main/case/case-stats-registry', () => ({
 
 vi.mock('../../src/main/plugins/loader', () => ({
   pluginLoader: {
-    getRegistry: vi.fn(() => ({ simulationRunners: [] })),
-    getLoadResults: vi.fn(() => []),
+    getRegistry: vi.fn(() => ({ simulationRunners: [{ name: 'mock-sim-runner' }] })),
+    getLoadResults: vi.fn(() =>
+      pluginFileRef.current
+        ? [{ manifest: { kind: 'simulation-runner' }, path: pluginFileRef.current, source: 'local', error: null }]
+        : [],
+    ),
   },
 }));
 
 vi.mock('../../src/main/terminal/terminal-manager', () => ({
-  terminalManager: {
-    ensurePtyAvailable: vi.fn(async () => false),
-    create: vi.fn(),
-    runCommand: vi.fn(),
-    write: vi.fn(),
-    getOutputContent: vi.fn(() => ''),
-    on: vi.fn(),
-  },
+  terminalManager: mockTerminalManager,
   findSimShell: vi.fn(() => '/bin/bash'),
+}));
+
+vi.mock('../../src/main/simulation/simulation-settings', () => ({
+  simulationSettings: mockSimulationSettings,
 }));
 
 // ─── Imports (after mocks) ──────────────────────────────────
@@ -206,5 +229,160 @@ describe('simulation-router getRunDetail', () => {
         runId: 'nonexistent-run-id',
       }),
     ).rejects.toThrow('Run not found: nonexistent-run-id');
+  });
+});
+
+// ─── runInTerminal：PTY / log-mode 后端选择 ─────────────────
+
+const pluginDir = mkdtempSync(join(tmpdir(), 'sim-router-plugin-'));
+const pluginPath = join(pluginDir, 'mock-sim-runner.cjs');
+const pluginWorkDir = mkdtempSync(join(tmpdir(), 'sim-router-work-'));
+
+beforeAll(() => {
+  // 仿真 runner 插件 mock：导出 generateRunsimCommand / resolveCwd
+  writeFileSync(
+    pluginPath,
+    [
+      'module.exports.generateRunsimCommand = () => "runsim -case mock_case";',
+      `module.exports.resolveCwd = () => ${JSON.stringify(pluginWorkDir)};`,
+      '',
+    ].join('\n'),
+    'utf-8',
+  );
+  pluginFileRef.current = pluginPath;
+});
+
+afterAll(() => {
+  rmSync(pluginDir, { recursive: true, force: true });
+});
+
+describe('simulation-router runInTerminal 后端选择', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // 默认值：未启用 log-mode 偏好；node-pty 不可用（回退路径）
+    mockSimulationSettings.getPreferLogMode.mockResolvedValue(false);
+    mockTerminalManager.ensurePtyAvailable.mockResolvedValue(false);
+    mockSimTerminalLinker.register.mockReturnValue({ runId: 'new-run-1' });
+    mockTerminalManager.create.mockResolvedValue({ id: 'term-pty', backend: 'node-pty', warning: null });
+    mockTerminalManager.runCommand.mockResolvedValue({
+      id: 'term-log',
+      backend: 'log-mode',
+      warning: 'Running in log mode (node-pty unavailable). Output is read-only.',
+    });
+  });
+
+  const runOptions = {
+    caseId: 'case_x',
+    caseName: 'case_x',
+    subsys: 'ap',
+    options: {},
+  };
+
+  it('未启用偏好且 node-pty 不可用时回退 log-mode（logMode=true 注册）', async () => {
+    const result = await caller.runInTerminal({ projectId: 'test-project-id', options: runOptions });
+
+    expect(mockTerminalManager.ensurePtyAvailable).toHaveBeenCalled();
+    expect(mockTerminalManager.create).not.toHaveBeenCalled();
+    expect(mockTerminalManager.runCommand).toHaveBeenCalledTimes(1);
+    expect(mockTerminalManager.runCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: expect.stringContaining('runsim -case mock_case'),
+        cwd: pluginWorkDir,
+        shell: '/bin/bash',
+      }),
+    );
+    // 回退场景：不覆盖 warning（保持"node-pty 不可用"文案）
+    expect(mockTerminalManager.runCommand.mock.calls[0][0].warning).toBeUndefined();
+    expect(result.backend).toBe('log-mode');
+    // log-mode 会话 → linker 以 logMode=true 注册
+    expect(mockSimTerminalLinker.register).toHaveBeenCalledWith(
+      'test-project-id',
+      'term-log',
+      expect.any(String),
+      pluginWorkDir,
+      runOptions,
+      true,
+    );
+  });
+
+  it('未启用偏好且 node-pty 可用时走交互式 PTY（写入 __SIM_DONE__ 标记）', async () => {
+    mockTerminalManager.ensurePtyAvailable.mockResolvedValue(true);
+
+    const result = await caller.runInTerminal({ projectId: 'test-project-id', options: runOptions });
+
+    expect(mockTerminalManager.runCommand).not.toHaveBeenCalled();
+    expect(mockTerminalManager.create).toHaveBeenCalledWith({ cwd: pluginWorkDir, shell: '/bin/bash' });
+    expect(mockTerminalManager.write).toHaveBeenCalledWith(
+      'term-pty',
+      expect.stringContaining('__SIM_DONE__'),
+    );
+    expect(result.backend).toBe('node-pty');
+    // PTY 会话 → linker 以 logMode=false 注册
+    expect(mockSimTerminalLinker.register).toHaveBeenCalledWith(
+      'test-project-id',
+      'term-pty',
+      expect.any(String),
+      pluginWorkDir,
+      runOptions,
+      false,
+    );
+  });
+
+  it('设置启用 preferLogMode 时直接 log-mode，不探测 node-pty', async () => {
+    mockSimulationSettings.getPreferLogMode.mockResolvedValue(true);
+    mockTerminalManager.ensurePtyAvailable.mockResolvedValue(true);
+    mockTerminalManager.runCommand.mockResolvedValue({
+      id: 'term-log-2',
+      backend: 'log-mode',
+      warning: 'Running in log mode (enabled in settings). Output is read-only.',
+    });
+
+    const result = await caller.runInTerminal({ projectId: 'test-project-id', options: runOptions });
+
+    // 即使 node-pty 可用也不应走 PTY
+    expect(mockTerminalManager.ensurePtyAvailable).not.toHaveBeenCalled();
+    expect(mockTerminalManager.create).not.toHaveBeenCalled();
+    expect(mockTerminalManager.runCommand).toHaveBeenCalledTimes(1);
+    // 用户主动启用的场景：覆盖 warning 文案
+    expect(mockTerminalManager.runCommand.mock.calls[0][0].warning).toBe(
+      'Running in log mode (enabled in settings). Output is read-only.',
+    );
+    expect(result.backend).toBe('log-mode');
+    expect(mockSimTerminalLinker.register).toHaveBeenCalledWith(
+      'test-project-id',
+      'term-log-2',
+      expect.any(String),
+      pluginWorkDir,
+      runOptions,
+      true,
+    );
+  });
+
+  it('rerunWithCommand 同样遵循 preferLogMode 偏好', async () => {
+    mockSimulationSettings.getPreferLogMode.mockResolvedValue(true);
+
+    const result = await caller.rerunWithCommand({
+      projectId: 'test-project-id',
+      command: 'runsim -case rerun_case',
+      cwd: pluginWorkDir,
+      caseId: 'rerun_case',
+      caseName: 'rerun_case',
+      subsys: 'ap',
+    });
+
+    expect(mockTerminalManager.ensurePtyAvailable).not.toHaveBeenCalled();
+    expect(mockTerminalManager.create).not.toHaveBeenCalled();
+    expect(mockTerminalManager.runCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ command: expect.stringContaining('runsim -case rerun_case') }),
+    );
+    expect(result.backend).toBe('log-mode');
+    expect(mockSimTerminalLinker.register).toHaveBeenCalledWith(
+      'test-project-id',
+      'term-log',
+      expect.any(String),
+      pluginWorkDir,
+      expect.objectContaining({ caseId: 'rerun_case' }),
+      true,
+    );
   });
 });
