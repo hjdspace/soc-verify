@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { trpc } from '@renderer/lib/trpc';
 import { useToastStore } from './toast';
 import { useTerminalStore } from './terminal';
+import { useSettingsStore } from './settings';
 import { tRPCError } from '@renderer/lib/trpc-utils';
 import type { SimulationHistoryEntry, SimulationStatus } from '@shared/types';
 import type { SimulationRunStatus as PluginRunStatus } from '@shared/plugin-types';
@@ -175,16 +176,26 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
       // the simulation command and output (especially in log-mode where
       // the command echo and stdout/stderr are the only visibility).
 
-      // Show a toast warning if running in log-mode (node-pty unavailable)
+      // Show a toast depending on how log-mode was entered:
+      //  - 用户在设置中启用了"日志模式执行仿真" → info 提示（预期行为）
+      //  - node-pty 不可用导致的被动回退 → warning 提示（附原因与修复建议）
       if ((result as { backend?: string }).backend === 'log-mode') {
-        const isLinux = navigator.userAgent.includes('Linux');
-        const reason = isLinux
-          ? '可能由于 AppImage 环境缺少 native 模块'
-          : 'node-pty 原生模块未能加载，请尝试重新安装依赖 (npm install) 或重新构建原生模块 (npx @electron/rebuild -f -w node-pty)';
-        useToastStore.getState().warning(
-          '终端运行在日志模式',
-          `node-pty 不可用（${reason}）。仿真将以只读日志模式运行，输出可正常查看但无法交互输入。`,
-        );
+        const preferLogMode = await useSettingsStore.getState().loadPreferLogMode();
+        if (preferLogMode) {
+          useToastStore.getState().info(
+            '仿真以日志模式运行',
+            '已在设置中启用"日志模式执行仿真"，仿真以只读日志模式执行。可在 设置 → 仿真 中关闭。',
+          );
+        } else {
+          const isLinux = navigator.userAgent.includes('Linux');
+          const reason = isLinux
+            ? '可能由于 AppImage 环境缺少 native 模块'
+            : 'node-pty 原生模块未能加载，请尝试重新安装依赖 (npm install) 或重新构建原生模块 (npx @electron/rebuild -f -w node-pty)';
+          useToastStore.getState().warning(
+            '终端运行在日志模式',
+            `node-pty 不可用（${reason}）。仿真将以只读日志模式运行，输出可正常查看但无法交互输入。`,
+          );
+        }
       }
 
       // Register IPC event listener once
