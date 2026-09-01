@@ -11,6 +11,7 @@ import { getSimulationManager } from '../../services/simulation-service';
 import { pluginLoader } from '../../plugins/loader';
 import { terminalManager, findSimShell } from '../../terminal/terminal-manager';
 import { simTerminalLinker } from '../../simulation/sim-terminal-linker';
+import { simulationSettings } from '../../simulation/simulation-settings';
 import {
   resolveSimArtifacts,
   extractSeedFromLogContent,
@@ -367,12 +368,18 @@ export const simulationRouter = t.router({
       const cdPrefix = projWork ? `cd "${projWork}" && ` : '';
       const displayCommand = `${cdPrefix}${command}`;
 
-      // ── 检查 node-pty 是否可用 ──────────────────────────────
+      // ── 选择执行后端（PTY / log-mode）──────────────────────
       //
-      // 当 node-pty 不可用时（如 AppImage 中 native 模块未 rebuild），
-      // 使用 log-mode 直接通过 `shell -c "command"` 执行仿真命令，
-      // 而非创建交互式 shell 并写入命令。这避免了 `spawn bash ENOENT`
-      // 错误，并将仿真输出以只读日志形式展示在终端视图中。
+      // 后端选择优先级：
+      //   1. 用户在设置中启用了"日志模式执行仿真"（preferLogMode）→
+      //      直接使用 log-mode，不探测 node-pty
+      //   2. node-pty 可用 → 交互式 PTY 终端
+      //   3. node-pty 不可用（如 AppImage 中 native 模块未 rebuild）→
+      //      自动回退到 log-mode
+      //
+      // log-mode 通过 `shell -c "command"` 直接执行仿真命令，输出以
+      // 只读日志形式流式展示在终端视图中。这避免了 `spawn bash ENOENT`
+      // 错误，也避免了创建交互式 shell 并写入命令的开销。
       //
       // 在 Linux 上，仿真命令（runsim）需要使用 csh 而非 bash，
       // 因为 EDA 环境的初始化脚本使用 csh 语法。findSimShell() 会
@@ -383,8 +390,9 @@ export const simulationRouter = t.router({
       //   - 不等待 shell 初始化（直接执行命令）
       //   - 终端为只读（无交互输入）
       const simShell = findSimShell();
+      const preferLogMode = await simulationSettings.getPreferLogMode();
       let session;
-      if (await terminalManager.ensurePtyAvailable()) {
+      if (!preferLogMode && (await terminalManager.ensurePtyAvailable())) {
         // PTY 模式：创建交互式终端会话（使用 csh on Linux）
         session = await terminalManager.create({ cwd, shell: simShell });
 
@@ -401,11 +409,15 @@ export const simulationRouter = t.router({
       } else {
         // Log 模式：直接执行命令，stdout/stderr 流式输出到终端视图
         // runCommand() 默认使用 findSimShell()（csh on Linux）
-        console.log(`[simulation] node-pty unavailable — using log-mode execution (shell: ${simShell}).`);
+        const reason = preferLogMode ? 'log-mode enabled in settings' : 'node-pty unavailable';
+        console.log(`[simulation] using log-mode execution (${reason}; shell: ${simShell}).`);
         session = await terminalManager.runCommand({
           command: displayCommand,
           cwd,
           shell: simShell,
+          warning: preferLogMode
+            ? 'Running in log mode (enabled in settings). Output is read-only.'
+            : undefined,
         });
       }
 
@@ -505,8 +517,9 @@ export const simulationRouter = t.router({
       console.log(`[simulation.rerunWithCommand] command="${input.command}" → displayCommand="${displayCommand}"`);
 
       const simShell = findSimShell();
+      const preferLogMode = await simulationSettings.getPreferLogMode();
       let session;
-      if (await terminalManager.ensurePtyAvailable()) {
+      if (!preferLogMode && (await terminalManager.ensurePtyAvailable())) {
         // PTY 模式
         session = await terminalManager.create({ cwd: input.cwd, shell: simShell });
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -516,11 +529,15 @@ export const simulationRouter = t.router({
         terminalManager.write(session.id, `${execCommand}\r`);
       } else {
         // Log 模式
-        console.log(`[simulation] node-pty unavailable — using log-mode for rerun (shell: ${simShell}).`);
+        const reason = preferLogMode ? 'log-mode enabled in settings' : 'node-pty unavailable';
+        console.log(`[simulation] using log-mode for rerun (${reason}; shell: ${simShell}).`);
         session = await terminalManager.runCommand({
           command: displayCommand,
           cwd: input.cwd,
           shell: simShell,
+          warning: preferLogMode
+            ? 'Running in log mode (enabled in settings). Output is read-only.'
+            : undefined,
         });
       }
 
