@@ -41,6 +41,12 @@ export interface TerminalRunCommandOptions {
   env?: Record<string, string>;
   /** Override the shell binary path (e.g. '/bin/csh' for EDA environments). */
   shell?: string;
+  /**
+   * Override the session warning message. Callers should set this when
+   * log-mode was chosen deliberately (user setting) rather than as a
+   * node-pty fallback, so the UI shows the actual reason.
+   */
+  warning?: string;
 }
 
 export interface PtyLoadResult {
@@ -408,6 +414,12 @@ const BATCH_FLUSH_MS = 16;
  * Max number of output buffer chunks retained for session restore.
  */
 const OUTPUT_BUFFER_MAX = 5000;
+/**
+ * Grace period between the initial SIGTERM and the SIGKILL escalation when
+ * destroying a log-mode process group (mirrors the Python reference GUI's
+ * `terminate()` → `kill()` fallback).
+ */
+const LOG_MODE_KILL_GRACE_MS = 1500;
 
 interface SessionEntry {
   pty: NodePty.IPty | ChildProcess | null;
@@ -423,6 +435,12 @@ interface SessionEntry {
   exitCode: number | null;
   /** Whether the child process 'exit' event has fired. */
   exited: boolean;
+  /**
+   * Whether the child was spawned `detached` (own process group on POSIX).
+   * Log-mode sessions spawn detached so abort/destroy can signal the whole
+   * simulation process tree (`runsim` → `xrun`/`irun`), not just the shell.
+   */
+  detached: boolean;
 }
 
 interface CompletedSession {
@@ -501,6 +519,7 @@ export class TerminalManager extends EventEmitter {
       flushTimer: null,
       exitCode: null,
       exited: false,
+      detached: false,
     };
 
     const ptyResult = await loadNodePty();
@@ -721,6 +740,45 @@ export class TerminalManager extends EventEmitter {
   }
 
   /**
+   * Terminate a log-mode child process together with its whole process tree.
+   *
+   * Log-mode children are spawned `detached` (own process group on POSIX), so
+   * the `runsim` → `xrun`/`irun` descendants can be signaled as a group —
+   * mirroring the Python reference GUI, which sends SIGTERM first and
+   * escalates to SIGKILL when the process is still running afterwards.
+   */
+  private killChildProcessTree(child: ChildProcess, entry: SessionEntry): void {
+    if (!entry.detached || process.platform === 'win32' || !child.pid) {
+      child.kill();
+      return;
+    }
+
+    const pid = child.pid;
+    // Graceful: SIGTERM the whole process group (like Python's terminate()).
+    try {
+      process.kill(-pid, 'SIGTERM');
+    } catch {
+      // Process group already gone.
+    }
+    child.kill('SIGTERM');
+
+    // Escalate: SIGKILL the group if it is still alive after the grace period.
+    const timer = setTimeout(() => {
+      try {
+        process.kill(-pid, 0); // Throws ESRCH when the group no longer exists.
+        try {
+          process.kill(-pid, 'SIGKILL');
+        } catch {
+          // Already gone between the liveness check and the kill.
+        }
+      } catch {
+        // Group already gone — nothing to escalate.
+      }
+    }, LOG_MODE_KILL_GRACE_MS);
+    timer.unref();
+  }
+
+  /**
    * Destroy a terminal session.
    */
   destroy(id: string): void {
@@ -734,11 +792,13 @@ export class TerminalManager extends EventEmitter {
     this.flushPending(id);
 
     if (entry.pty) {
-      // node-pty IPty has kill(), child_process also has kill()
-      if (typeof (entry.pty as NodePty.IPty).kill === 'function') {
-        (entry.pty as NodePty.IPty).kill();
+      if (entry.pty instanceof ChildProcess) {
+        // child_process session (log-mode or fallback): kill the process tree
+        // when the child owns a process group, otherwise just the shell.
+        this.killChildProcessTree(entry.pty, entry);
       } else {
-        (entry.pty as ChildProcess).kill();
+        // node-pty IPty
+        (entry.pty as NodePty.IPty).kill();
       }
     }
 
@@ -866,10 +926,16 @@ export class TerminalManager extends EventEmitter {
       rows: 24,
       createdAt: Date.now(),
       backend: 'log-mode',
-      warning: 'Running in log mode (node-pty unavailable). Output is read-only.',
+      warning: opts.warning ?? 'Running in log mode (node-pty unavailable). Output is read-only.',
     };
 
     const outputBuffer: string[] = [];
+    // Log-mode children run `shell -l -c "runsim ..."`; runsim/xrun/irun are
+    // descendants of that shell. Spawning detached (POSIX) puts the shell and
+    // all its descendants into their own process group so destroy()/abort can
+    // signal the whole tree — the same mechanism the Python reference GUI
+    // relies on (os.killpg with SIGTERM → SIGKILL escalation).
+    const detached = process.platform !== 'win32';
     const entry: SessionEntry = {
       pty: null,
       session,
@@ -879,6 +945,7 @@ export class TerminalManager extends EventEmitter {
       flushTimer: null,
       exitCode: null,
       exited: false,
+      detached,
     };
 
     // Helper: enqueue data for batched flush (same as create())
@@ -927,6 +994,10 @@ export class TerminalManager extends EventEmitter {
         cwd,
         env,
         stdio: ['pipe', 'pipe', 'pipe'],
+        // POSIX only: put the shell in its own process group so abort/destroy
+        // can kill the entire simulation tree. On Windows, detached would
+        // fully detach the child from the parent lifecycle, so it is skipped.
+        detached,
       });
     } catch (spawnErr) {
       const errMsg = spawnErr instanceof Error ? spawnErr.message : String(spawnErr);
