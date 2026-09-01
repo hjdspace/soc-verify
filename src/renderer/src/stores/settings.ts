@@ -33,6 +33,8 @@ interface SettingsStoreState {
   systemPrompt: string;
   /** AI Agent 默认系统提示词模板（只读参考，构建时嵌入）。 */
   defaultSystemPrompt: string;
+  /** 仿真执行偏好：启用后仿真直接以 log-mode（只读日志模式）执行。 */
+  preferLogMode: boolean;
   loading: boolean;
   models: ApiModel[];
   modelsLoading: boolean;
@@ -66,12 +68,16 @@ interface SettingsStoreState {
   setSystemPrompt: (projectId: string, prompt: string) => Promise<void>;
   /** 加载 AI Agent 默认系统提示词模板（只读参考）。 */
   loadDefaultSystemPrompt: () => Promise<void>;
+  /** 加载仿真执行偏好（是否默认 log-mode）。返回当前值便于调用方即时使用。 */
+  loadPreferLogMode: () => Promise<boolean>;
+  /** 设置仿真执行偏好（是否默认 log-mode）。 */
+  setPreferLogMode: (preferLogMode: boolean) => Promise<void>;
   fetchModels: (providerId?: string, apiKey?: string, baseUrl?: string) => Promise<ApiModel[]>;
   /** Fetch models for a specific stored credential and cache the result. */
   fetchModelsForProvider: (providerId: string) => Promise<ApiModel[]>;
 }
 
-export const useSettingsStore = create<SettingsStoreState>((set) => ({
+export const useSettingsStore = create<SettingsStoreState>((set, get) => ({
   contextWindow: DEFAULT_CONTEXT_WINDOW,
   credentials: [],
   skills: [],
@@ -86,6 +92,7 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
   traceweaveDiagnosticLoading: false,
   systemPrompt: '',
   defaultSystemPrompt: '',
+  preferLogMode: false,
   loading: false,
   models: [],
   modelsLoading: false,
@@ -340,6 +347,27 @@ export const useSettingsStore = create<SettingsStoreState>((set) => ({
       set({ defaultSystemPrompt: prompt ?? '' });
     } catch {
       // Best-effort
+    }
+  },
+
+  loadPreferLogMode: async (): Promise<boolean> => {
+    try {
+      const preferLogMode = await trpc.settings.getPreferLogMode.query();
+      set({ preferLogMode });
+      return preferLogMode;
+    } catch {
+      // 主进程同样回退到默认值 false
+      return get().preferLogMode;
+    }
+  },
+
+  setPreferLogMode: async (preferLogMode) => {
+    try {
+      await trpc.settings.setPreferLogMode.mutate({ preferLogMode });
+      set({ preferLogMode });
+      useToastStore.getState().success(preferLogMode ? '已启用日志模式执行仿真' : '已恢复交互式终端执行仿真');
+    } catch (err) {
+      useToastStore.getState().error('保存仿真设置失败', err instanceof Error ? err.message : String(err));
     }
   },
 
