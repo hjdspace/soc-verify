@@ -427,3 +427,33 @@ _Avoid_: codex custom tools, dynamic tool registration
 **Engine Tag（引擎标识）**:
 事件 payload 中的 `_engine` 字段（值为 `'omp'` 或 `'codex'`），用于渲染进程区分事件来源引擎。CodexAgentClient 转发事件时添加此字段；omp 事件不添加（默认视为 omp）。渲染进程的 `handleSessionEvent` 据此路由到对应引擎的事件处理分支。
 _Avoid_: engine flag, source tag
+
+### 终端增强域
+
+**Terminal Theme Mode**:
+终端主题的运行模式，取值为 `follow-ui`（跟随 UI 主题）或 `independent`（独立终端主题）。`follow-ui` 模式下从 CSS 变量读取 16 色 ANSI 调色盘，随 UI 主题切换自动联动；`independent` 模式下从内置或用户自定义的终端主题 JSON 读取调色盘，与 UI 主题解耦。
+_Avoid_: terminal color mode, theme sync mode
+
+**Terminal ANSI Palette**:
+xterm.js `ITheme` 接口定义的 16 色 ANSI 调色盘（8 基础色 + 8 亮色），加上 background、foreground、cursor、selectionBackground 四个语义色。`follow-ui` 模式下由 UI 主题的 16 个 CSS 变量（`--term-black` 到 `--term-bright-white`）提供；`independent` 模式下由主题 JSON 的 hex 色值提供。
+_Avoid_: terminal color scheme, xterm colors
+
+**Enhanced Terminal**:
+启用了 Prompt 美化和命令预测的交互式终端会话。通过 `TerminalCreateOptions.enhanced: true` 标记，主进程在 spawn shell 时注入 `ZDOTDIR`、`STARSHIP_CONFIG` 等环境变量。仅用于交互式终端；仿真终端（`sim:` 前缀）不启用 enhanced 模式。
+_Avoid_: fancy terminal, decorated terminal
+
+**Shell Integration**:
+通过 OSC 133 转义序列标记命令边界的前端增强机制。shell 端在命令开始、输出前、命令完成时发送 OSC 133 序列，前端 xterm.js 解析后在命令行渲染装饰器（退出码图标、执行时间、复制按钮、命令折叠）。仅交互式终端启用；仿真终端的命令信息由 SimTerminalLinker 和 SimControlToolbar 提供。
+_Avoid_: terminal integration, command markers
+
+**Command Decorator**:
+Shell Integration 的前端渲染产物，附着在命令行上方或下方的 UI 组件。包含退出码图标（绿勾/红叉）、执行时间、复制按钮和命令折叠（长输出可收起）。使用 xterm.js Decoration API 渲染，不写入 xterm.js buffer。
+_Avoid_: command badge, terminal widget
+
+**Nerd Font Registration**:
+将打包的 Nerd Font 字体文件通过 Electron `app.registerFont()` 在系统级注册的过程，使所有 Electron 窗口中的文本（包括 xterm.js 渲染的终端）均可使用 Nerd Font 图标和 Powerline 符号。字体文件打包在 `resources/fonts/`。
+_Avoid_: font loading, font install
+
+**Starship Binary**:
+跨 shell 的 Prompt 美化引擎（Rust 编写），打包为单二进制文件存于 `resources/binaries/`。通过 `STARSHIP_CONFIG` 环境变量指定配置文件路径。支持 zsh、bash、PowerShell、tcsh 等多种 shell，但不支持 csh。
+_Avoid_: prompt engine, starship binary
