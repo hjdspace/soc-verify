@@ -1,5 +1,10 @@
-import { Check, Keyboard, Palette, Type, Zap } from 'lucide-react';
+import { Check, Keyboard, Monitor, Palette, Type, Zap } from 'lucide-react';
 import { useThemeStore, type ThemeDefinition } from '@renderer/stores/theme';
+import {
+  useTerminalThemeStore,
+  type BuiltinTerminalTheme,
+} from '@renderer/stores/terminal-theme';
+import type { TerminalThemeMode } from '@shared/terminal-theme-types';
 import { useFontStore } from '@renderer/stores/font';
 import { useEditorStore } from '@renderer/stores/editor';
 import { useUiStore } from '@renderer/stores/ui';
@@ -32,6 +37,13 @@ export function AppearanceTab() {
   const aiPanelMode = useUiStore((s) => s.aiPanelMode);
   const setAiPanelMode = useUiStore((s) => s.setAiPanelMode);
 
+  // 终端主题（Issue #3）
+  const terminalThemeMode = useTerminalThemeStore((s) => s.themeMode);
+  const terminalThemeId = useTerminalThemeStore((s) => s.themeId);
+  const builtinTerminalThemes = useTerminalThemeStore((s) => s.builtinThemes);
+  const setTerminalThemeMode = useTerminalThemeStore((s) => s.setThemeMode);
+  const setTerminalTheme = useTerminalThemeStore((s) => s.setTheme);
+
   return (
     <div className="space-y-4">
       {/* 主题选择（按明暗分组） */}
@@ -42,6 +54,60 @@ export function AppearanceTab() {
         </div>
         <ThemeGroup label="浅色" themes={themes.filter((t) => t.mode === 'light')} currentTheme={currentTheme} onSelect={setTheme} />
         <ThemeGroup label="深色" themes={themes.filter((t) => t.mode === 'dark')} currentTheme={currentTheme} onSelect={setTheme} />
+      </div>
+
+      {/* 终端主题（Issue #3）：跟随 UI 或独立内置主题 */}
+      <div className="space-y-3 border-t border-border/50 pt-3">
+        <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase text-muted-foreground">
+          <Monitor className="h-3 w-3" />
+          终端主题
+        </div>
+
+        {/* 模式切换开关 */}
+        <div className="grid grid-cols-2 gap-2">
+          {(
+            [
+              {
+                mode: 'follow-ui' as TerminalThemeMode,
+                name: '跟随 UI',
+                desc: '终端配色随上方 UI 主题自动联动',
+              },
+              {
+                mode: 'independent' as TerminalThemeMode,
+                name: '独立主题',
+                desc: '选择独立于 UI 主题的终端配色',
+              },
+            ]
+          ).map(({ mode, name, desc }) => (
+            <button
+              key={mode}
+              onClick={() => setTerminalThemeMode(mode)}
+              className={cn(
+                'rounded-md border p-2.5 text-left transition-colors',
+                terminalThemeMode === mode
+                  ? 'border-primary bg-primary/5'
+                  : 'border-border hover:bg-accent',
+              )}
+            >
+              <div className="text-xs font-medium text-foreground">{name}</div>
+              <p className="mt-0.5 text-[10px] leading-relaxed text-muted-foreground">{desc}</p>
+            </button>
+          ))}
+        </div>
+
+        {/* 独立模式：内置主题卡片（色板预览 + 名称 + 描述） */}
+        {terminalThemeMode === 'independent' && (
+          <div className="grid grid-cols-2 gap-2">
+            {builtinTerminalThemes.map((theme) => (
+              <TerminalThemeCard
+                key={theme.id}
+                theme={theme}
+                selected={terminalThemeId === theme.id}
+                onSelect={() => setTerminalTheme(theme.id)}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* 字体管理 */}
@@ -236,6 +302,46 @@ endmodule`}
         </div>
       </div>
     </div>
+  );
+}
+
+// ── 终端主题卡片（色板预览 + 名称 + 描述）─────────────────────
+
+type TerminalThemeCardProps = {
+  theme: BuiltinTerminalTheme;
+  selected: boolean;
+  onSelect: () => void;
+};
+
+function TerminalThemeCard({ theme, selected, onSelect }: TerminalThemeCardProps) {
+  // 色板预览：背景 + 4 个代表色条
+  const previewColors = [
+    theme.theme.background,
+    theme.theme.red,
+    theme.theme.green,
+    theme.theme.blue,
+    theme.theme.brightWhite,
+  ];
+  return (
+    <button
+      onClick={onSelect}
+      className={cn(
+        'flex items-center gap-3 rounded-md border p-2.5 text-left transition-colors',
+        selected ? 'border-primary bg-primary/5' : 'border-border hover:bg-accent',
+      )}
+    >
+      {/* 色板预览 */}
+      <span className="flex h-8 w-12 shrink-0 overflow-hidden rounded-md border border-border">
+        {previewColors.map((color, i) => (
+          <span key={i} className="h-full flex-1" style={{ backgroundColor: color }} />
+        ))}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="text-xs font-medium text-foreground">{theme.name}</div>
+        <div className="truncate text-[10px] text-muted-foreground">{theme.description}</div>
+      </div>
+      {selected && <Check className="h-4 w-4 shrink-0 text-primary" />}
+    </button>
   );
 }
 
