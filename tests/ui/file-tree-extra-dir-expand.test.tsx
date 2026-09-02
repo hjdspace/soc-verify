@@ -24,11 +24,14 @@ const { useMockProjectStore } = vi.hoisted(() => {
   const useMockProjectStore = create<{
     currentProjectId: string | null;
     expandedDirs: Set<string>;
+    expandedRootsSeeded: Set<string>;
     toggleDirExpanded: (path: string) => void;
     setDirExpanded: (path: string, expanded: boolean) => void;
+    seedRootExpanded: (path: string) => void;
   }>((set) => ({
     currentProjectId: 'project-1',
     expandedDirs: new Set<string>(),
+    expandedRootsSeeded: new Set<string>(),
     toggleDirExpanded: (path: string) =>
       set((s) => {
         const next = new Set(s.expandedDirs);
@@ -45,6 +48,15 @@ const { useMockProjectStore } = vi.hoisted(() => {
         if (expanded) next.add(path);
         else next.delete(path);
         return { expandedDirs: next };
+      }),
+    seedRootExpanded: (path: string) =>
+      set((s) => {
+        if (s.expandedRootsSeeded.has(path)) return {};
+        const nextSeeded = new Set(s.expandedRootsSeeded);
+        nextSeeded.add(path);
+        const nextExpanded = new Set(s.expandedDirs);
+        nextExpanded.add(path);
+        return { expandedRootsSeeded: nextSeeded, expandedDirs: nextExpanded };
       }),
   }));
   return { useMockProjectStore };
@@ -71,7 +83,10 @@ import { FileTree } from '@renderer/components/project/FileTree';
 
 // 每个测试前重置 mock store 的展开状态
 function resetExpandedDirs() {
-  useMockProjectStore.setState({ expandedDirs: new Set<string>() });
+  useMockProjectStore.setState({
+    expandedDirs: new Set<string>(),
+    expandedRootsSeeded: new Set<string>(),
+  });
 }
 
 // ─── Fixtures ─────────────────────────────────────────────
