@@ -1,0 +1,51 @@
+# ── SoC Verify Starship 配置 ──────────────────────────────────────
+#
+# 通过 STARSHIP_CONFIG 环境变量指定路径。
+# 参考：https://starship.rs/config/
+
+# 整体格式：先显示路径（含 git 信息），再换行显示输入提示
+format = """
+$directory\
+$git_branch\
+$git_status\
+$cmd_duration\
+$line_break\
+$character"""
+
+# 超时（ms）：超过此时间的命令会显示执行时间
+command_timeout = 3000
+
+[directory]
+# 路径截断：深度超过 3 层时用 … 省略
+truncation_length = 3
+truncate_to_repo = false
+style = "bold blue"
+
+[git_branch]
+symbol = " "
+style = "bold purple"
+
+[git_status]
+# 简洁的 git 状态显示
+style = "bold yellow"
+conflicted = "="
+ahead = "⇡"
+behind = "⇣"
+diverged = "⇕"
+untracked = "?"
+stashed = "$"
+modified = "!"
+staged = "+"
+renamed = "»"
+deleted = "✘"
+
+[cmd_duration]
+# 命令执行时间超过 2 秒才显示
+min_time = 2000
+format = "[$duration]($style) "
+style = "bold yellow"
+
+[character]
+# 成功时绿色 →，失败时红色 ✗
+success_symbol = "[→](bold green)"
+error_symbol = "[✗](bold red)"
