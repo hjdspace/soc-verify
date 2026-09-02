@@ -119,22 +119,47 @@ function formatCost(usd: number): string {
 
 // ─── 热力图 ─────────────────────────────────────────────────
 
-/** 热力图色阶透明度（5 级，0 = 无数据，4 = 最高）— 参考 token-monitor 的 intensity 分档 */
-const HEATMAP_OPACITY = [0.35, 0.25, 0.45, 0.65, 0.9] as const;
+/** 热力图布局常量 — 参考 token-monitor dashboard.js 的 cell/gap 自适应策略 */
+const HEAT_GAP = 4;
+const HEAT_CELL_MIN = 9;
+const HEAT_CELL_MAX = 22;
+const HEAT_LEFT_PAD = 26;
+const HEAT_BOTTOM_PAD = 20;
 
-/** 计算热力图色阶 */
+/** 计算热力图色阶 0-4（阈值对齐 token-monitor 的 heatmapIntensity：0.25/0.5/0.75 分档） */
 function getHeatmapLevel(tokens: number, maxTokens: number): number {
   if (tokens <= 0 || maxTokens <= 0) return 0;
   const ratio = tokens / maxTokens;
-  if (ratio < 0.25) return 1;
-  if (ratio < 0.5) return 2;
-  if (ratio < 0.75) return 3;
-  return 4;
+  return ratio >= 0.75 ? 4 : ratio >= 0.5 ? 3 : ratio >= 0.25 ? 2 : 1;
+}
+
+/**
+ * 离散色阶填充 — 对齐 token-monitor styles.css 的 .heat.lvl-N：
+ * 0 为近不可见底色，1-4 为主色递进。用 color-mix 保持主题感知，不引入固定 hex。
+ */
+function heatmapFill(level: number): string {
+  switch (level) {
+    case 1:
+      return 'color-mix(in srgb, var(--primary) 20%, transparent)';
+    case 2:
+      return 'color-mix(in srgb, var(--primary) 48%, transparent)';
+    case 3:
+      return 'color-mix(in srgb, var(--primary) 78%, transparent)';
+    case 4:
+      return 'var(--primary)';
+    default:
+      return 'color-mix(in srgb, var(--muted) 45%, transparent)';
+  }
+}
+
+/** 本地日期 key（YYYY-MM-DD） */
+function localDateStr(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 type HeatmapCell = { date: string; entry: HeatmapEntry | null };
 
-/** 365 天 GitHub 风格热力图（SVG 实现，参考 token-monitor usageCharts.heatmapSvg） */
+/** 365 天 GitHub 风格热力图（SVG 实现，布局对齐 token-monitor 的 contribHeatmap/heatmapSvg） */
 function TokenHeatmap({ entries }: { entries: HeatmapEntry[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
@@ -171,55 +196,49 @@ function TokenHeatmap({ entries }: { entries: HeatmapEntry[] }) {
     return map;
   }, [entries]);
 
-  // 生成 365 天的周列网格：每列一周（7 行，行索引 = 星期几，0 = 周日顶部，GitHub 风格），
-  // 起点对齐到 364 天前所在周的周日
-  const weeks = useMemo(() => {
-    const DAY = 24 * 60 * 60 * 1000;
+  // 滚动年模型（参考 token-monitor rollingYearHeatmap）：从 11 个月前的月初开始
+  // （月份对齐，月份标签才能整齐落在各月首列），再回退到所在周的周日（周日起始列，GitHub 风格）。
+  // 用本地时间逐天迭代，避免跨时区/夏令时偏移。
+  const days = useMemo(() => {
     const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-    const gridStartMs = todayStart.getTime() - 364 * DAY - todayStart.getDay() * DAY;
-    const result: HeatmapCell[][] = [];
-    let week: HeatmapCell[] = [];
-    for (let ms = gridStartMs; ms <= todayStart.getTime(); ms += DAY) {
-      const d = new Date(ms);
-      const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      if (d.getDay() === 0 && week.length > 0) {
-        result.push(week);
-        week = [];
-      }
-      week.push({ date: dateStr, entry: entryMap.get(dateStr) ?? null });
+    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const start = new Date(end.getFullYear(), end.getMonth() - 11, 1);
+    const gridStart = new Date(start.getFullYear(), start.getMonth(), 1 - start.getDay());
+    const result: HeatmapCell[] = [];
+    const cursor = new Date(gridStart);
+    while (cursor.getTime() <= end.getTime()) {
+      const dateStr = localDateStr(cursor);
+      result.push({ date: dateStr, entry: entryMap.get(dateStr) ?? null });
+      cursor.setDate(cursor.getDate() + 1);
     }
-    if (week.length > 0) result.push(week);
     return result;
   }, [entryMap]);
 
-  // 布局参数：pitch = cell + gap，cell 随容器宽度自适应（参考 token-monitor 的 pitch 计算）
-  const LEFT_PAD = 26;
-  const BOTTOM_PAD = 18;
-  const GAP = 3;
-  const cols = Math.max(weeks.length, 1);
-  const innerWidth = width > 0 ? width - LEFT_PAD : 0;
-  const pitch = innerWidth > 0 ? Math.max(8, innerWidth / cols) : 13;
-  const cell = Math.max(5, Math.min(13, pitch - GAP));
-  const gridHeight = 7 * pitch;
-  const svgWidth = width > 0 ? width : LEFT_PAD + cols * pitch;
-  const svgHeight = gridHeight + BOTTOM_PAD;
+  const weeks = Math.max(1, Math.ceil(days.length / 7));
 
-  // 月份标签：锚定在每月第一天所在列的下方（参考 token-monitor 的 monthLabels）
+  // cell 随容器宽度自适应（参考 token-monitor dashboard.js：分数像素正好填满容器，
+  // 并设上下限，避免窄窗口挤压成一团 / 宽窗口无限拉伸）
+  const avail = Math.max(0, width - HEAT_LEFT_PAD);
+  const cell =
+    avail > 0
+      ? Math.max(HEAT_CELL_MIN, Math.min(HEAT_CELL_MAX, (avail - weeks * HEAT_GAP) / weeks))
+      : 14;
+  const pitch = cell + HEAT_GAP;
+  const gridWidth = weeks * pitch - HEAT_GAP;
+  const gridHeight = 7 * pitch - HEAT_GAP;
+  const svgWidth = HEAT_LEFT_PAD + gridWidth;
+  const svgHeight = gridHeight + HEAT_BOTTOM_PAD;
+
+  // 月份标签：锚定在每月 1 号所在列的正下方（参考 token-monitor 的 monthLabels）
   const monthLabels = useMemo(() => {
-    const labels: Array<{ x: number; label: string }> = [];
-    let lastMonth = -1;
-    weeks.forEach((week, wi) => {
-      const first = week[0];
-      if (!first) return;
-      const month = Number(first.date.slice(5, 7));
-      if (month !== lastMonth) {
-        lastMonth = month;
-        labels.push({ x: LEFT_PAD + wi * pitch, label: `${month}月` });
+    const labels: Array<{ col: number; label: string }> = [];
+    days.forEach((day, i) => {
+      if (day.date.endsWith('-01')) {
+        labels.push({ col: Math.floor(i / 7), label: `${Number(day.date.slice(5, 7))}月` });
       }
     });
     return labels;
-  }, [weeks, pitch]);
+  }, [days]);
 
   if (entries.length === 0) {
     return (
@@ -231,23 +250,14 @@ function TokenHeatmap({ entries }: { entries: HeatmapEntry[] }) {
       </div>
     );
   }
-
   return (
     <div className="rounded-xl border border-border bg-card p-4" data-testid="token-heatmap">
       <div className="mb-2 flex items-center justify-between">
         <span className="text-xs font-semibold text-muted-foreground">365 天用量热力图</span>
         <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
           <span>少</span>
-          {HEATMAP_OPACITY.map((op, i) => (
-            <span
-              key={i}
-              className="size-2.5 rounded-sm"
-              style={
-                i === 0
-                  ? { background: 'var(--muted)', opacity: op }
-                  : { background: 'var(--primary)', opacity: op }
-              }
-            />
+          {[0, 1, 2, 3, 4].map((lvl) => (
+            <span key={lvl} className="size-2.5 rounded-sm" style={{ background: heatmapFill(lvl) }} />
           ))}
           <span>多</span>
         </div>
@@ -265,7 +275,7 @@ function TokenHeatmap({ entries }: { entries: HeatmapEntry[] }) {
           {[1, 3, 5].map((dow) => (
             <text
               key={dow}
-              x={LEFT_PAD - 6}
+              x={HEAT_LEFT_PAD - 6}
               y={dow * pitch + pitch / 2}
               textAnchor="end"
               dominantBaseline="middle"
@@ -275,12 +285,12 @@ function TokenHeatmap({ entries }: { entries: HeatmapEntry[] }) {
               {['日', '一', '二', '三', '四', '五', '六'][dow]}
             </text>
           ))}
-          {/* 月份标签（网格下方，锚定月份起始列） */}
+          {/* 月份标签（网格下方，锚定每月 1 号所在列） */}
           {monthLabels.map((m) => (
             <text
-              key={`${m.label}-${m.x}`}
-              x={m.x}
-              y={gridHeight + 13}
+              key={`${m.label}-${m.col}`}
+              x={HEAT_LEFT_PAD + m.col * pitch}
+              y={gridHeight + 14}
               textAnchor="start"
               className="fill-muted-foreground"
               style={{ fontSize: 9 }}
@@ -288,36 +298,30 @@ function TokenHeatmap({ entries }: { entries: HeatmapEntry[] }) {
               {m.label}
             </text>
           ))}
-          {/* 日期格子 */}
-          {weeks.map((week, wi) =>
-            week.map(({ date, entry }, di) => {
-              const tokens = entry?.totalTokens ?? 0;
-              const level = getHeatmapLevel(tokens, maxTokens);
-              const x = LEFT_PAD + wi * pitch + (pitch - cell) / 2;
-              const y = di * pitch + (pitch - cell) / 2;
-              const hovered = tip?.date === date;
-              return (
-                <rect
-                  key={date}
-                  {...(entry ? { 'data-testid': `token-heatmap-cell-${date}` } : {})}
-                  x={x}
-                  y={y}
-                  width={cell}
-                  height={cell}
-                  rx={Math.max(1, cell * 0.22)}
-                  style={
-                    level === 0
-                      ? { fill: 'var(--muted)', opacity: HEATMAP_OPACITY[0] }
-                      : { fill: 'var(--primary)', opacity: HEATMAP_OPACITY[level] }
-                  }
-                  stroke={hovered ? 'var(--foreground)' : 'none'}
-                  strokeWidth={hovered ? 1 : 0}
-                  onMouseEnter={(ev) => setTip({ x: ev.clientX, y: ev.clientY, date, entry: entry ?? null })}
-                  onMouseLeave={() => setTip(null)}
-                />
-              );
-            }),
-          )}
+          {/* 日期格子：固定圆角 rx=3 + 离散色阶（对齐 token-monitor 的 .heat.lvl-N） */}
+          {days.map((day, i) => {
+            const col = Math.floor(i / 7);
+            const row = i % 7;
+            const tokens = day.entry?.totalTokens ?? 0;
+            const level = getHeatmapLevel(tokens, maxTokens);
+            const hovered = tip?.date === day.date;
+            return (
+              <rect
+                key={day.date}
+                {...(day.entry ? { 'data-testid': `token-heatmap-cell-${day.date}` } : {})}
+                x={HEAT_LEFT_PAD + col * pitch}
+                y={row * pitch}
+                width={cell}
+                height={cell}
+                rx={3}
+                style={{ fill: heatmapFill(level) }}
+                stroke={hovered ? 'var(--foreground)' : 'none'}
+                strokeWidth={hovered ? 1 : 0}
+                onMouseEnter={(ev) => setTip({ x: ev.clientX, y: ev.clientY, date: day.date, entry: day.entry })}
+                onMouseLeave={() => setTip(null)}
+              />
+            );
+          })}
         </svg>
       </div>
       {/* 自定义悬停提示（参考 token-monitor 的 dash-tooltip：fixed 定位 + 贴边翻转） */}
