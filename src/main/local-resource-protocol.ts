@@ -1,17 +1,19 @@
 /**
- * 自定义协议 `local-resource://` —— 让渲染进程安全加载本地文件（图片、SVG 等）。
+ * 自定义协议 `local-resource://` —— 让渲染进程安全加载本地文件（图片、SVG、字体等）。
  *
  * 渲染进程中 `<img src="local-resource://<encoded-path>">` 会触发此 handler，
  * 主进程读取对应本地文件并返回 Response。路径用 encodeURIComponent 编码，
  * 避免反斜杠/空格/中文等字符破坏 URL 解析。
  *
- * 安全性：handler 只读取已注册的项目目录内的文件，拒绝越界访问。
+ * 安全性：handler 只读取已注册的项目目录或应用内置字体目录（resources/fonts，
+ * 见 fonts/nerd-font-paths.ts）内的文件，拒绝越界访问。
  */
 
 import { protocol } from 'electron';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { projectManager } from './project/project-manager';
+import { resolveNerdFontsDir } from './fonts/nerd-font-paths';
 
 /** 协议 scheme，需与 CSP img-src 中的条目一致 */
 export const LOCAL_RESOURCE_SCHEME = 'local-resource';
@@ -32,6 +34,11 @@ const MIME_MAP: Record<string, string> = {
   avif: 'image/avif',
   tiff: 'image/tiff',
   tif: 'image/tiff',
+  // 字体（Issue #1：Nerd Font 通过本协议加载）
+  ttf: 'font/ttf',
+  otf: 'font/otf',
+  woff: 'font/woff',
+  woff2: 'font/woff2',
 };
 
 /**
@@ -60,6 +67,19 @@ function isPathWithinAnyProject(filePath: string): boolean {
     }
   }
   return false;
+}
+
+/**
+ * 安全检查：确保文件路径在应用内置 Nerd Font 目录内
+ * （dev：项目根 resources/fonts；打包：process.resourcesPath/fonts）。
+ */
+function isPathWithinNerdFontsDir(filePath: string): boolean {
+  const fontsDir = resolveNerdFontsDir();
+  if (!fontsDir) return false;
+  const normalizedFile = filePath.replace(/\\/g, '/').toLowerCase();
+  const normalizedDir = fontsDir.replace(/\\/g, '/').toLowerCase();
+  // 路径完全等于目录（无意义，但保持一致性）或在目录下
+  return normalizedFile === normalizedDir || normalizedFile.startsWith(normalizedDir + '/');
 }
 
 /**
@@ -144,8 +164,8 @@ export function registerLocalResourceProtocol(): void {
       return new Response('Bad request: invalid path', { status: 400 });
     }
 
-    // 安全检查：确保文件在某个已打开项目的根目录内
-    if (!isPathWithinAnyProject(filePath)) {
+    // 安全检查：确保文件在某个已打开项目的根目录或应用字体目录内
+    if (!isPathWithinAnyProject(filePath) && !isPathWithinNerdFontsDir(filePath)) {
       console.error('[local-resource] Forbidden: path outside project root:', filePath);
       return new Response('Forbidden: path outside project root', { status: 403 });
     }
