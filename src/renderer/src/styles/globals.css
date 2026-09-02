@@ -338,6 +338,28 @@ button:not(:disabled):active {
   --syn-function:   oklch(0.50 0.11 230);   /* 青: 函数名 */
   --syn-type:       oklch(0.50 0.12 25);    /* 红: 类型 */
   --syn-property:   oklch(0.45 0.10 55);    /* 暖金: 属性 */
+
+  /* 终端 16 色调色盘 + 语义色（xterm.js，hex 直出，见 terminal-theme.ts）*/
+  --term-background: #f7f3ea;
+  --term-foreground: #332e26;
+  --term-cursor: #6b3fa0;
+  --term-selection: #6b3fa033;
+  --term-black: #3a352c;
+  --term-red: #c04a3a;
+  --term-green: #4a7c3f;
+  --term-yellow: #a8790f;
+  --term-blue: #3f6bb5;
+  --term-magenta: #8a4a9e;
+  --term-cyan: #3a8a8a;
+  --term-white: #d8d2c4;
+  --term-bright-black: #857e70;
+  --term-bright-red: #d95a4a;
+  --term-bright-green: #5f9e52;
+  --term-bright-yellow: #c99a2e;
+  --term-bright-blue: #5a8ad4;
+  --term-bright-magenta: #a86bc0;
+  --term-bright-cyan: #4fa8a8;
+  --term-bright-white: #f2ede2;
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -420,6 +442,28 @@ button:not(:disabled):active {
   --syn-function:   oklch(0.78 0.13 195);   /* 青: 函数名 */
   --syn-type:       oklch(0.72 0.12 25);    /* 红: 类型 */
   --syn-property:   oklch(0.75 0.10 55);    /* 暖金: 属性 */
+
+  /* 终端 16 色调色盘 + 语义色（xterm.js，hex 直出，见 terminal-theme.ts）*/
+  --term-background: #292520;
+  --term-foreground: #e8e1d4;
+  --term-cursor: #55d977;
+  --term-selection: #55d9773d;
+  --term-black: #35302a;
+  --term-red: #d9705f;
+  --term-green: #55d977;
+  --term-yellow: #d9b45f;
+  --term-blue: #6fa8d9;
+  --term-magenta: #c98ad9;
+  --term-cyan: #5fd0c8;
+  --term-white: #d6cfbf;
+  --term-bright-black: #6e675c;
+  --term-bright-red: #f08a76;
+  --term-bright-green: #86e89c;
+  --term-bright-yellow: #ecd07f;
+  --term-bright-blue: #93c4ef;
+  --term-bright-magenta: #e0a8ef;
+  --term-bright-cyan: #8ae8e0;
+  --term-bright-white: #f5f0e4;
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -497,6 +541,28 @@ button:not(:disabled):active {
   --syn-function:   oklch(0.72 0.13 250);   /* 蓝: 函数名 */
   --syn-type:       oklch(0.72 0.12 25);    /* 暖红: 类型 */
   --syn-property:   oklch(0.68 0.10 55);    /* 暖金: 属性 */
+
+  /* 终端 16 色调色盘 + 语义色（xterm.js，hex 直出，见 terminal-theme.ts）*/
+  --term-background: #2a2f36;
+  --term-foreground: #e4e9ed;
+  --term-cursor: #d08a4e;
+  --term-selection: #d08a4e3d;
+  --term-black: #363c44;
+  --term-red: #d96a5a;
+  --term-green: #7ab87a;
+  --term-yellow: #d0a44e;
+  --term-blue: #6a9ad0;
+  --term-magenta: #b58ad0;
+  --term-cyan: #5ab8b8;
+  --term-white: #c8cfd6;
+  --term-bright-black: #6a737d;
+  --term-bright-red: #ef8a7a;
+  --term-bright-green: #96d496;
+  --term-bright-yellow: #e8be6e;
+  --term-bright-blue: #8ab8e8;
+  --term-bright-magenta: #cfa8e8;
+  --term-bright-cyan: #7ad4d4;
+  --term-bright-white: #eef2f6;
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -579,6 +645,28 @@ button:not(:disabled):active {
   --syn-function:   oklch(0.50 0.15 264);   /* 靛蓝: 函数名 */
   --syn-type:       oklch(0.54 0.20 25);    /* 红: 类型 */
   --syn-property:   oklch(0.48 0.10 55);    /* 暖金: 属性 */
+
+  /* 终端 16 色调色盘 + 语义色（xterm.js，hex 直出，见 terminal-theme.ts）*/
+  --term-background: #fbfbfd;
+  --term-foreground: #26282e;
+  --term-cursor: #3b5bdb;
+  --term-selection: #3b5bdb2e;
+  --term-black: #33363e;
+  --term-red: #c93a3a;
+  --term-green: #2f8a3f;
+  --term-yellow: #b07d10;
+  --term-blue: #3b5bdb;
+  --term-magenta: #9a3fa8;
+  --term-cyan: #1f8a9a;
+  --term-white: #d4d7de;
+  --term-bright-black: #7d828c;
+  --term-bright-red: #e05252;
+  --term-bright-green: #43a654;
+  --term-bright-yellow: #cc9925;
+  --term-bright-blue: #5272e8;
+  --term-bright-magenta: #b559c4;
+  --term-bright-cyan: #35a5b5;
+  --term-bright-white: #f4f5f8;
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -667,6 +755,29 @@ button:not(:disabled):active {
   --material: blur(24px) saturate(180%);
   --glass: oklch(1 0 0 / 0.72);
   --scrim: rgb(0 0 0 / 0.30);
+
+  /* 终端 16 色调色盘 + 语义色（xterm.js，hex 直出，见 terminal-theme.ts）
+     HIG 系统色板在白底上提深保证可读性 */
+  --term-background: #f5f5f7;
+  --term-foreground: #1d1d1f;
+  --term-cursor: #0071e3;
+  --term-selection: #0071e32e;
+  --term-black: #2b2b2e;
+  --term-red: #d70015;
+  --term-green: #1f7a2e;
+  --term-yellow: #9a6a00;
+  --term-blue: #0071e3;
+  --term-magenta: #a63e9e;
+  --term-cyan: #00717e;
+  --term-white: #d5d5da;
+  --term-bright-black: #6e6e73;
+  --term-bright-red: #e93a4a;
+  --term-bright-green: #30d158;
+  --term-bright-yellow: #c78f00;
+  --term-bright-blue: #0a84ff;
+  --term-bright-magenta: #bf5af2;
+  --term-bright-cyan: #4db8c4;
+  --term-bright-white: #f7f7fa;
 }
 
 /* ════════════════════════════════════════════════════════════
@@ -755,6 +866,29 @@ button:not(:disabled):active {
   --material: blur(28px) saturate(180%);
   --glass: oklch(0.29 0.0018 265 / 0.78);
   --scrim: rgb(0 0 0 / 0.45);
+
+  /* 终端 16 色调色盘 + 语义色（xterm.js，hex 直出，见 terminal-theme.ts）
+     直接使用 HIG 深色系统色板 */
+  --term-background: #1d1d1f;
+  --term-foreground: #f5f5f7;
+  --term-cursor: #0a84ff;
+  --term-selection: #0a84ff47;
+  --term-black: #333338;
+  --term-red: #ff453a;
+  --term-green: #30d158;
+  --term-yellow: #ff9f0a;
+  --term-blue: #0a84ff;
+  --term-magenta: #bf5af2;
+  --term-cyan: #64d2ff;
+  --term-white: #d5d5da;
+  --term-bright-black: #6e6e73;
+  --term-bright-red: #ff6961;
+  --term-bright-green: #5ee07f;
+  --term-bright-yellow: #ffb340;
+  --term-bright-blue: #409cff;
+  --term-bright-magenta: #d57dfa;
+  --term-bright-cyan: #8ce3ff;
+  --term-bright-white: #ffffff;
 }
 
 /* ════════════════════════════════════════════════════════════
