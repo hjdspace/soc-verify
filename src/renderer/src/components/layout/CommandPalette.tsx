@@ -17,6 +17,7 @@ import {
   Folder,
   Sparkles,
   Workflow,
+  Coins,
   type LucideIcon,
 } from 'lucide-react';
 import { useUiStore, type ActiveView } from '@renderer/stores/ui';
@@ -61,6 +62,7 @@ const NAV_VIEWS: ReadonlyArray<{ view: ActiveView; label: string; hint?: string;
   { view: 'simulation', label: '前往 仿真', hint: 'Ctrl 2', icon: Play },
   { view: 'regression', label: '前往 回归', hint: 'Ctrl 3', icon: GitBranch },
   { view: 'coverage', label: '前往 覆盖率', hint: 'Ctrl 4', icon: BarChart3 },
+  { view: 'token', label: '前往 Token', icon: Coins },
   { view: 'workspace', label: '前往 工作区', icon: Layers },
 ];
 
