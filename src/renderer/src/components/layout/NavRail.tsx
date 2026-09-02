@@ -9,6 +9,7 @@ import {
   GitFork,
   Sparkles,
   Settings,
+  Coins,
 } from 'lucide-react';
 import { useUiStore, type ActiveView } from '@renderer/stores/ui';
 import { useSimulationStore } from '@renderer/stores/simulation';
@@ -188,6 +189,28 @@ export function NavRail() {
       >
         <Sparkles className="size-[18px]" strokeWidth={1.8} />
         <NavTooltip label="AI 助手" />
+      </button>
+
+      {/* Token 用量：独立工具按钮（非仿真相关），点击切换到 Token 视图 */}
+      <button
+        type="button"
+        aria-label="Token 用量"
+        aria-current={activeView === 'token' ? 'page' : undefined}
+        onClick={() => setActiveView('token')}
+        className={cn(
+          NAV_BUTTON_BASE,
+          activeView === 'token' ? 'bg-primary/10 text-primary' : NAV_BUTTON_IDLE,
+        )}
+      >
+        <Coins className="size-[18px]" strokeWidth={1.8} />
+        {activeView === 'token' && (
+          <span
+            aria-hidden="true"
+            data-testid="nav-active-indicator"
+            className="absolute bottom-1 h-0.5 w-4 rounded-full bg-primary"
+          />
+        )}
+        <NavTooltip label="Token 用量" />
       </button>
 
       <div className="mt-auto">
