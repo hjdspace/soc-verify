@@ -9,13 +9,14 @@ import { buildEnvFromConfig, loadEnvConfig } from '../../env/env-manager';
 
 export const terminalRouter = t.router({
   create: t.procedure
-    .input((raw): { projectId?: string; cwd?: string; cols?: number; rows?: number } => {
+    .input((raw): { projectId?: string; cwd?: string; cols?: number; rows?: number; enhanced?: boolean } => {
       const r = raw as Record<string, unknown>;
       return {
         projectId: typeof r.projectId === 'string' ? r.projectId : undefined,
         cwd: typeof r.cwd === 'string' ? r.cwd : undefined,
         cols: typeof r.cols === 'number' ? r.cols : undefined,
         rows: typeof r.rows === 'number' ? r.rows : undefined,
+        enhanced: typeof r.enhanced === 'boolean' ? r.enhanced : undefined,
       };
     })
     .mutation(async ({ input }) => {
@@ -42,6 +43,7 @@ export const terminalRouter = t.router({
         cols: input.cols,
         rows: input.rows,
         env,
+        enhanced: input.enhanced,
       });
       return session;
     }),
