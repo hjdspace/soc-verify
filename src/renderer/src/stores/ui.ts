@@ -4,8 +4,8 @@ import type { PluginViewLocation } from '@shared/plugin-types';
 
 type PluginViewLayouts = Record<PluginViewLocation, PluginViewLayoutState>;
 
-/** App Shell 视图路由：四大主视图 + 工作区（多 Tab 工作台） */
-export type ActiveView = 'dashboard' | 'simulation' | 'coverage' | 'regression' | 'workspace';
+/** App Shell 视图路由：四大主视图 + Token + 工作区（多 Tab 工作台） */
+export type ActiveView = 'dashboard' | 'simulation' | 'coverage' | 'regression' | 'token' | 'workspace';
 
 /** AI 面板呈现模式：抽屉（默认）或固定右栏（旧布局回退），随布局持久化 */
 export type AiPanelMode = 'drawer' | 'docked';
@@ -13,7 +13,7 @@ export type AiPanelMode = 'drawer' | 'docked';
 /** 文件面板呈现模式：抽屉（默认，悬浮）或固定左栏（docked），随布局持久化 */
 export type FilePanelMode = 'drawer' | 'docked';
 
-const ACTIVE_VIEWS: readonly ActiveView[] = ['dashboard', 'simulation', 'coverage', 'regression', 'workspace'];
+const ACTIVE_VIEWS: readonly ActiveView[] = ['dashboard', 'simulation', 'coverage', 'regression', 'token', 'workspace'];
 
 function isActiveView(value: string | undefined): value is ActiveView {
   return value !== undefined && (ACTIVE_VIEWS as readonly string[]).includes(value);
