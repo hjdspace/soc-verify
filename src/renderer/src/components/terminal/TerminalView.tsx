@@ -1,26 +1,16 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { useTerminalStore } from '@renderer/stores/terminal';
 import { useThemeStore } from '@renderer/stores/theme';
+import { readTerminalThemeFromCss } from './terminal-theme';
 import { trpc } from '@renderer/lib/trpc';
 import { Copy, Check } from 'lucide-react';
 
 interface TerminalViewProps {
   terminalId: string;
-}
-
-/** 从当前主题 CSS 变量读取 xterm.js 主题对象，让终端配色随主题切换。 */
-function readTerminalThemeFromCss(): Record<string, string> {
-  const root = getComputedStyle(document.documentElement);
-  const get = (name: string) => root.getPropertyValue(name).trim();
-  return {
-    background: get('--background') || '#1e1e2e',
-    foreground: get('--foreground') || '#cdd6f4',
-    cursor: get('--primary') || '#f5e0dc',
-    selectionBackground: get('--accent') || '#585b70',
-  };
 }
 
 export function TerminalView({ terminalId }: TerminalViewProps) {
@@ -61,7 +51,10 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 13,
-      fontFamily: 'Consolas, "Courier New", monospace',
+      // Nerd Font 优先级链（Issue #1 打包注册；未下载时 CSS font-family
+      // 自然回退到 Consolas / monospace，不崩溃）
+      fontFamily:
+        "'JetBrainsMono Nerd Font', 'MesloLGS NF', 'Consolas', 'Courier New', monospace",
       scrollback: 100000,
       allowProposedApi: true,
       theme: readTerminalThemeFromCss(),
@@ -70,6 +63,21 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(containerRef.current);
+
+    // ── WebGL GPU 加速渲染（Issue #2）────────────────────────
+    // 应对百万行仿真日志滚动场景。加载顺序：open() → webgl → fit()。
+    // 无 GPU / 上下文创建失败时 try-catch 降级为默认 Canvas 渲染。
+    try {
+      const webglAddon = new WebglAddon();
+      // WebGL 上下文丢失（如 GPU 驱动重置）时释放 addon，xterm 回退 Canvas
+      webglAddon.onContextLoss(() => {
+        webglAddon.dispose();
+      });
+      term.loadAddon(webglAddon);
+    } catch (err) {
+      console.warn('[TerminalView] WebGL renderer unavailable, falling back to canvas:', err);
+    }
+
     fitAddon.fit();
 
     termRef.current = term;
