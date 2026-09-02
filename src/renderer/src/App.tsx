@@ -11,6 +11,7 @@ import { useSessionApprovalStore } from './stores/session-approval';
 import { useSettingsStore } from './stores/settings';
 import { useProjectStore } from './stores/project';
 import { trpc } from './lib/trpc';
+import { injectNerdFonts } from './styles/nerd-fonts';
 import { ToolApp } from './tools/ToolApp';
 import { useBrowserTabPersistence } from './hooks/use-browser-tab-persistence';
 import { useBrowserEvents } from './hooks/use-browser-events';
@@ -41,6 +42,8 @@ export default function App() {
     initTheme();
     initFont();
     initEditor();
+    // Nerd Font @font-face 注入（字体未下载时主进程返回空列表，自然降级）
+    void injectNerdFonts();
     if (!toolMode) {
       void loadContextWindow();
       initLastModel();
