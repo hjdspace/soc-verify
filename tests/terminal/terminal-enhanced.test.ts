@@ -146,6 +146,8 @@ describe('Enhanced Terminal — getEnhancedShellArgs', () => {
     mockExistsSync.mockReturnValue(true);
     const args = getEnhancedShellArgs('powershell.exe', 'win32');
     expect(args).toContain('-NoProfile');
+    // -NoExit keeps the session alive after the -File script finishes
+    expect(args).toContain('-NoExit');
     expect(args).toContain('-ExecutionPolicy');
     expect(args).toContain('Bypass');
     expect(args).toContain('-File');

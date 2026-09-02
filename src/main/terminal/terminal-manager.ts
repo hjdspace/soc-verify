@@ -206,14 +206,16 @@ export function findEnhancedShell(): string {
  * Build shell args for Enhanced Terminal.
  *
  * On Linux/macOS with zsh: use ['-l', '-i'] so zsh sources .zshrc from ZDOTDIR.
- * On Windows with PowerShell: use ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', <osc133.ps1>].
+ * On Windows with PowerShell: use ['-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', <osc133.ps1>].
  * Falls back to getInteractiveShellArgs() for other shells.
  */
 export function getEnhancedShellArgs(shell: string, platform: NodeJS.Platform = process.platform): string[] {
   if (platform === 'win32') {
     const osc133Path = resolveOsc133Ps1Path();
     if (existsSync(osc133Path)) {
-      return ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', osc133Path];
+      // -NoExit is required: without it, PowerShell exits as soon as the
+      // -File script finishes, killing the interactive session instantly.
+      return ['-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', osc133Path];
     }
     // Fallback: no osc133 script, just start PowerShell
     return ['-NoProfile'];

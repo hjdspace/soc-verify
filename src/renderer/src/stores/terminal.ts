@@ -266,7 +266,9 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       }),
     }));
     const tab = get().tabs.find((candidate) => candidate.terminalId === id);
-    if (tab) {
+    // Only mirror center tabs into the workbench — a bottom terminal exiting
+    // must not spawn a ghost terminal tab in the center area.
+    if (tab && tab.location === 'center') {
       useWorkbenchStore.getState().open({ type: 'terminal', terminalTabId: tab.id, title: tab.title });
     }
   },
