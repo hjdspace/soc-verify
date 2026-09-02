@@ -33,7 +33,7 @@ beforeEach(() => {
 describe('NavRail 视图切换', () => {
   it('渲染五个视图按钮与全部 tooltip（视图按钮含 Ctrl+N 快捷键提示）', () => {
     render(<NavRail />);
-    for (const label of [/总览/, /仿真/, /覆盖率/, /回归/, /工作区/, '文件', '版本控制', 'AI 助手', '设置']) {
+    for (const label of [/总览/, /仿真/, /覆盖率/, /回归/, /工作区/, '文件', '版本控制', 'AI 助手', 'Token 用量', '设置']) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
   });
