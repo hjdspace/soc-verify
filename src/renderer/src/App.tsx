@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { AppShell } from './components/layout/AppShell';
 import { ToastContainer } from './components/ToastContainer';
 import { useThemeStore } from './stores/theme';
+import { useTerminalThemeStore } from './stores/terminal-theme';
 import { useFontStore } from './stores/font';
 import { useEditorStore } from './stores/editor';
 import { useToastStore } from './stores/toast';
@@ -24,6 +25,7 @@ function isToolWindow(): boolean {
 
 export default function App() {
   const initTheme = useThemeStore((s) => s.initTheme);
+  const initTerminalTheme = useTerminalThemeStore((s) => s.initTerminalTheme);
   const initFont = useFontStore((s) => s.initFont);
   const initEditor = useEditorStore((s) => s.initEditor);
   const initLastModel = useSessionCoreStore((s) => s.initLastModel);
@@ -40,6 +42,8 @@ export default function App() {
 
   useEffect(() => {
     initTheme();
+    // 终端主题模式 / 独立主题恢复（Issue #3，跟随 UI 为默认值）
+    initTerminalTheme();
     initFont();
     initEditor();
     // Nerd Font @font-face 注入（字体未下载时主进程返回空列表，自然降级）
@@ -51,7 +55,7 @@ export default function App() {
       registerMessagesEventListeners();
       registerApprovalEventListeners();
     }
-  }, [initTheme, initFont, initEditor, initLastModel, loadContextWindow, registerCoreEventListeners, registerMessagesEventListeners, registerApprovalEventListeners, toolMode]);
+  }, [initTheme, initTerminalTheme, initFont, initEditor, initLastModel, loadContextWindow, registerCoreEventListeners, registerMessagesEventListeners, registerApprovalEventListeners, toolMode]);
 
   // Restore the most recently opened project on startup (non-tool windows only).
   // This was previously in LeftRail, but LeftRail is conditionally mounted/unmounted
