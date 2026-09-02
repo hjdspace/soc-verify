@@ -348,6 +348,429 @@ describe('token-router — engineBreakdown procedure', () => {
   });
 });
 
+describe('token-router — modelBreakdown procedure', () => {
+  beforeEach(() => {
+    memDb.exec('DELETE FROM token_usage');
+  });
+
+  it('空数据库返回空数组', async () => {
+    const result = await caller.modelBreakdown({ projectId: 'test-project-id' });
+    expect(result).toEqual([]);
+  });
+
+  it('按模型聚合 token/cost/cache 数据', async () => {
+    const now = Date.now();
+    // Model A — two records
+    recordUsage(memDb, makeRecord({
+      model: 'claude-sonnet-4-20250514', sessionId: 's1', messageId: 'm1',
+      totalTokens: 1000, costUsd: 0.05,
+      inputTokens: 800, outputTokens: 200, cacheReadTokens: 100, cacheWriteTokens: 50,
+      timestamp: now,
+    }));
+    recordUsage(memDb, makeRecord({
+      model: 'claude-sonnet-4-20250514', sessionId: 's2', messageId: 'm2',
+      totalTokens: 500, costUsd: 0.02,
+      inputTokens: 400, outputTokens: 100, cacheReadTokens: 50, cacheWriteTokens: 0,
+      timestamp: now,
+    }));
+    // Model B — one record
+    recordUsage(memDb, makeRecord({
+      model: 'gpt-4o', sessionId: 's3', messageId: 'm3',
+      totalTokens: 2000, costUsd: 0.10,
+      inputTokens: 1500, outputTokens: 500, cacheReadTokens: 200, cacheWriteTokens: 100,
+      timestamp: now,
+    }));
+
+    const result = await caller.modelBreakdown({ projectId: 'test-project-id' });
+    expect(result).toHaveLength(2);
+
+    const modelA = result.find((e) => e.model === 'claude-sonnet-4-20250514')!;
+    expect(modelA.totalTokens).toBe(1500);
+    expect(modelA.costUsd).toBeCloseTo(0.07, 5);
+    expect(modelA.inputTokens).toBe(1200);
+    expect(modelA.outputTokens).toBe(300);
+    expect(modelA.cacheReadTokens).toBe(150);
+    expect(modelA.cacheWriteTokens).toBe(50);
+
+    const modelB = result.find((e) => e.model === 'gpt-4o')!;
+    expect(modelB.totalTokens).toBe(2000);
+    expect(modelB.costUsd).toBeCloseTo(0.10, 5);
+  });
+
+  it('支持时间范围过滤（7d）', async () => {
+    const now = Date.now();
+    // 3 days ago — within 7d
+    recordUsage(memDb, makeRecord({
+      model: 'gpt-4o', sessionId: 's1', messageId: 'm1',
+      totalTokens: 1000, timestamp: now - 3 * 24 * 60 * 60 * 1000,
+    }));
+    // 10 days ago — outside 7d
+    recordUsage(memDb, makeRecord({
+      model: 'gpt-4o', sessionId: 's2', messageId: 'm2',
+      totalTokens: 2000, timestamp: now - 10 * 24 * 60 * 60 * 1000,
+    }));
+
+    const result7d = await caller.modelBreakdown({ projectId: 'test-project-id', timeRange: '7d' });
+    expect(result7d).toHaveLength(1);
+    expect(result7d[0].totalTokens).toBe(1000);
+
+    const resultAll = await caller.modelBreakdown({ projectId: 'test-project-id', timeRange: 'all' });
+    expect(resultAll).toHaveLength(1);
+    expect(resultAll[0].totalTokens).toBe(3000);
+  });
+});
+
+// ─── Sessions + SessionDetail Tests (Issue #4) ────────────
+
+describe('token-router — sessions procedure', () => {
+  beforeEach(() => {
+    memDb.exec('DELETE FROM token_USAGE');
+  });
+
+  it('空数据库返回空数组和零总数', async () => {
+    const result = await caller.sessions({ projectId: 'test-project-id' });
+    expect(result.sessions).toEqual([]);
+    expect(result.total).toBe(0);
+  });
+
+  it('按会话聚合返回正确的 token/cost 汇总', async () => {
+    const now = Date.now();
+    const ts = now - 60 * 1000; // 1 minute ago
+
+    // Session 1 — 2 messages
+    recordUsage(memDb, makeRecord({
+      engine: 'omp', sessionId: 'sess-1', messageId: 'm1',
+      model: 'claude-sonnet-4-20250514',
+      totalTokens: 1000, costUsd: 0.05, timestamp: ts,
+    }));
+    recordUsage(memDb, makeRecord({
+      engine: 'omp', sessionId: 'sess-1', messageId: 'm2',
+      totalTokens: 500, costUsd: 0.02, timestamp: ts + 1000,
+    }));
+
+    // Session 2 — 1 message
+    recordUsage(memDb, makeRecord({
+      engine: 'claude-code', sessionId: 'sess-2', messageId: 'm3',
+      model: 'gpt-4o',
+      totalTokens: 2000, costUsd: 0.10, timestamp: ts + 2000,
+    }));
+
+    const result = await caller.sessions({ projectId: 'test-project-id' });
+    expect(result.total).toBe(2);
+    expect(result.sessions).toHaveLength(2);
+
+    const s1 = result.sessions.find((s) => s.sessionId === 'sess-1')!;
+    expect(s1.engine).toBe('omp');
+    expect(s1.model).toBe('claude-sonnet-4-20250514');
+    expect(s1.totalTokens).toBe(1500);
+    expect(s1.totalCost).toBeCloseTo(0.07, 5);
+    expect(s1.messageCount).toBe(2);
+
+    const s2 = result.sessions.find((s) => s.sessionId === 'sess-2')!;
+    expect(s2.engine).toBe('claude-code');
+    expect(s2.totalTokens).toBe(2000);
+    expect(s2.messageCount).toBe(1);
+  });
+
+  it('支持按引擎筛选', async () => {
+    const now = Date.now();
+    recordUsage(memDb, makeRecord({
+      engine: 'omp', sessionId: 's1', messageId: 'm1',
+      totalTokens: 1000, timestamp: now,
+    }));
+    recordUsage(memDb, makeRecord({
+      engine: 'claude-code', sessionId: 's2', messageId: 'm2',
+      totalTokens: 500, timestamp: now,
+    }));
+    recordUsage(memDb, makeRecord({
+      engine: 'codex', sessionId: 's3', messageId: 'm3',
+      totalTokens: 200, timestamp: now,
+    }));
+
+    const resultAll = await caller.sessions({ projectId: 'test-project-id' });
+    expect(resultAll.total).toBe(3);
+
+    const resultOmp = await caller.sessions({ projectId: 'test-project-id', engine: 'omp' });
+    expect(resultOmp.total).toBe(1);
+    expect(resultOmp.sessions[0].engine).toBe('omp');
+
+    const resultClaude = await caller.sessions({ projectId: 'test-project-id', engine: 'claude-code' });
+    expect(resultClaude.total).toBe(1);
+    expect(resultClaude.sessions[0].engine).toBe('claude-code');
+  });
+
+  it('支持按时间降序排序（默认）', async () => {
+    const now = Date.now();
+    recordUsage(memDb, makeRecord({
+      sessionId: 's1', messageId: 'm1', totalTokens: 100,
+      timestamp: now - 2 * 60 * 1000,
+    }));
+    recordUsage(memDb, makeRecord({
+      sessionId: 's2', messageId: 'm2', totalTokens: 200,
+      timestamp: now - 1 * 60 * 1000,
+    }));
+    recordUsage(memDb, makeRecord({
+      sessionId: 's3', messageId: 'm3', totalTokens: 300,
+      timestamp: now,
+    }));
+
+    const result = await caller.sessions({ projectId: 'test-project-id' });
+    expect(result.sessions[0].sessionId).toBe('s3'); // newest first
+    expect(result.sessions[1].sessionId).toBe('s2');
+    expect(result.sessions[2].sessionId).toBe('s1');
+  });
+
+  it('支持按 token 升序排序', async () => {
+    const now = Date.now();
+    recordUsage(memDb, makeRecord({
+      sessionId: 's1', messageId: 'm1', totalTokens: 300, timestamp: now,
+    }));
+    recordUsage(memDb, makeRecord({
+      sessionId: 's2', messageId: 'm2', totalTokens: 100, timestamp: now,
+    }));
+    recordUsage(memDb, makeRecord({
+      sessionId: 's3', messageId: 'm3', totalTokens: 200, timestamp: now,
+    }));
+
+    const result = await caller.sessions({
+      projectId: 'test-project-id',
+      sortBy: 'tokens',
+      sortDir: 'asc',
+    });
+    expect(result.sessions[0].sessionId).toBe('s2'); // 100 tokens
+    expect(result.sessions[1].sessionId).toBe('s3'); // 200 tokens
+    expect(result.sessions[2].sessionId).toBe('s1'); // 300 tokens
+  });
+
+  it('支持按 cost 降序排序', async () => {
+    const now = Date.now();
+    recordUsage(memDb, makeRecord({
+      sessionId: 's1', messageId: 'm1', totalTokens: 100, costUsd: 0.05, timestamp: now,
+    }));
+    recordUsage(memDb, makeRecord({
+      sessionId: 's2', messageId: 'm2', totalTokens: 100, costUsd: 0.20, timestamp: now,
+    }));
+    recordUsage(memDb, makeRecord({
+      sessionId: 's3', messageId: 'm3', totalTokens: 100, costUsd: 0.10, timestamp: now,
+    }));
+
+    const result = await caller.sessions({
+      projectId: 'test-project-id',
+      sortBy: 'cost',
+      sortDir: 'desc',
+    });
+    expect(result.sessions[0].sessionId).toBe('s2'); // 0.20
+    expect(result.sessions[1].sessionId).toBe('s3'); // 0.10
+    expect(result.sessions[2].sessionId).toBe('s1'); // 0.05
+  });
+
+  it('支持分页（每页 50 条）', async () => {
+    const now = Date.now();
+    // Create 60 sessions
+    for (let i = 0; i < 60; i++) {
+      recordUsage(memDb, makeRecord({
+        sessionId: `sess-${String(i).padStart(3, '0')}`,
+        messageId: 'm1',
+        totalTokens: 100,
+        timestamp: now - i * 1000,
+      }));
+    }
+
+    const page1 = await caller.sessions({ projectId: 'test-project-id', page: 1, pageSize: 50 });
+    expect(page1.total).toBe(60);
+    expect(page1.sessions).toHaveLength(50);
+
+    const page2 = await caller.sessions({ projectId: 'test-project-id', page: 2, pageSize: 50 });
+    expect(page2.sessions).toHaveLength(10);
+  });
+
+  it('计算会话持续时间', async () => {
+    const now = Date.now();
+    recordUsage(memDb, makeRecord({
+      sessionId: 's1', messageId: 'm1', totalTokens: 100,
+      timestamp: now - 5 * 60 * 1000,
+    }));
+    recordUsage(memDb, makeRecord({
+      sessionId: 's1', messageId: 'm2', totalTokens: 100,
+      timestamp: now,
+    }));
+
+    const result = await caller.sessions({ projectId: 'test-project-id' });
+    expect(result.sessions[0].durationMs).toBeCloseTo(5 * 60 * 1000, -2);
+  });
+});
+
+describe('token-router — sessionDetail procedure', () => {
+  beforeEach(() => {
+    memDb.exec('DELETE FROM token_usage');
+  });
+
+  it('空 session_id 返回空数组', async () => {
+    const result = await caller.sessionDetail({ projectId: 'test-project-id', sessionId: 'nonexistent' });
+    expect(result).toEqual([]);
+  });
+
+  it('返回单会话所有 per-request 记录', async () => {
+    const now = Date.now();
+    recordUsage(memDb, makeRecord({
+      engine: 'omp', sessionId: 'sess-1', messageId: 'm1',
+      model: 'claude-sonnet-4-20250514',
+      inputTokens: 800, outputTokens: 200,
+      cacheReadTokens: 100, cacheWriteTokens: 50,
+      totalTokens: 1000, costUsd: 0.05,
+      timestamp: now,
+    }));
+    recordUsage(memDb, makeRecord({
+      engine: 'omp', sessionId: 'sess-1', messageId: 'm2',
+      model: 'claude-sonnet-4-20250514',
+      inputTokens: 400, outputTokens: 100,
+      cacheReadTokens: 50, cacheWriteTokens: 0,
+      totalTokens: 500, costUsd: 0.02,
+      timestamp: now + 1000,
+    }));
+    // Another session
+    recordUsage(memDb, makeRecord({
+      engine: 'omp', sessionId: 'sess-2', messageId: 'm3',
+      totalTokens: 999, timestamp: now + 2000,
+    }));
+
+    const result = await caller.sessionDetail({ projectId: 'test-project-id', sessionId: 'sess-1' });
+    expect(result).toHaveLength(2);
+
+    const m1 = result.find((r) => r.messageId === 'm1')!;
+    expect(m1.model).toBe('claude-sonnet-4-20250514');
+    expect(m1.inputTokens).toBe(800);
+    expect(m1.outputTokens).toBe(200);
+    expect(m1.cacheReadTokens).toBe(100);
+    expect(m1.cacheWriteTokens).toBe(50);
+    expect(m1.totalTokens).toBe(1000);
+    expect(m1.costUsd).toBeCloseTo(0.05, 5);
+
+    const m2 = result.find((r) => r.messageId === 'm2')!;
+    expect(m2.totalTokens).toBe(500);
+    expect(m2.costUsd).toBeCloseTo(0.02, 5);
+  });
+
+  it('per-request 记录按时间升序排列', async () => {
+    const now = Date.now();
+    recordUsage(memDb, makeRecord({
+      sessionId: 's1', messageId: 'm1', totalTokens: 100, timestamp: now + 2000,
+    }));
+    recordUsage(memDb, makeRecord({
+      sessionId: 's1', messageId: 'm2', totalTokens: 200, timestamp: now,
+    }));
+    recordUsage(memDb, makeRecord({
+      sessionId: 's1', messageId: 'm3', totalTokens: 300, timestamp: now + 1000,
+    }));
+
+    const result = await caller.sessionDetail({ projectId: 'test-project-id', sessionId: 's1' });
+    expect(result.map((r) => r.messageId)).toEqual(['m2', 'm3', 'm1']);
+  });
+});
+
+// ─── Heatmap + Streaks Tests (Issue #6) ────────────────────
+
+describe('token-router — heatmap procedure', () => {
+  beforeEach(() => {
+    memDb.exec('DELETE FROM token_usage');
+  });
+
+  it('空数据库返回空数组', async () => {
+    const result = await caller.heatmap({ projectId: 'test-project-id' });
+    expect(result).toEqual([]);
+  });
+
+  it('返回 365 天按日聚合数据', async () => {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    const todayTs = todayStart.getTime() + 3600000;
+
+    recordUsage(memDb, makeRecord({
+      sessionId: 's1', messageId: 'm1',
+      totalTokens: 1000, costUsd: 0.05,
+      timestamp: todayTs,
+    }));
+    recordUsage(memDb, makeRecord({
+      sessionId: 's2', messageId: 'm2',
+      totalTokens: 500, costUsd: 0.02,
+      timestamp: todayTs,
+    }));
+
+    const result = await caller.heatmap({ projectId: 'test-project-id' });
+    expect(result.length).toBeGreaterThanOrEqual(1);
+
+    const todayDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const todayEntry = result.find((e) => e.date === todayDate);
+    expect(todayEntry).toBeDefined();
+    expect(todayEntry!.totalTokens).toBe(1500);
+    expect(todayEntry!.costUsd).toBeCloseTo(0.07, 5);
+  });
+
+  it('同一天多条记录聚合为一天', async () => {
+    const now = Date.now();
+    recordUsage(memDb, makeRecord({ sessionId: 's1', messageId: 'm1', totalTokens: 100, timestamp: now }));
+    recordUsage(memDb, makeRecord({ sessionId: 's2', messageId: 'm2', totalTokens: 200, timestamp: now + 5000 }));
+    recordUsage(memDb, makeRecord({ sessionId: 's3', messageId: 'm3', totalTokens: 300, timestamp: now + 10000 }));
+
+    const result = await caller.heatmap({ projectId: 'test-project-id' });
+    expect(result).toHaveLength(1);
+    expect(result[0].totalTokens).toBe(600);
+  });
+});
+
+describe('token-router — summary 扩展 streak 数据', () => {
+  beforeEach(() => {
+    memDb.exec('DELETE FROM token_usage');
+  });
+
+  it('空数据库 streak 全零', async () => {
+    const summary = await caller.summary({ projectId: 'test-project-id' });
+    expect(summary.currentStreak).toBe(0);
+    expect(summary.longestStreak).toBe(0);
+  });
+
+  it('今天有记录返回 currentStreak >= 1', async () => {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    recordUsage(memDb, makeRecord({
+      sessionId: 's1', messageId: 'm1',
+      totalTokens: 100, timestamp: todayStart.getTime() + 3600000,
+    }));
+
+    const summary = await caller.summary({ projectId: 'test-project-id' });
+    expect(summary.currentStreak).toBe(1);
+    expect(summary.longestStreak).toBe(1);
+  });
+
+  it('连续 3 天返回 currentStreak = 3', async () => {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    for (let i = 0; i < 3; i++) {
+      recordUsage(memDb, makeRecord({
+        sessionId: `s${i}`, messageId: `m${i}`,
+        totalTokens: 100, timestamp: todayStart.getTime() - i * 24 * 60 * 60 * 1000 + 3600000,
+      }));
+    }
+
+    const summary = await caller.summary({ projectId: 'test-project-id' });
+    expect(summary.currentStreak).toBe(3);
+    expect(summary.longestStreak).toBe(3);
+  });
+
+  it('今天无记录返回 currentStreak = 0', async () => {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    recordUsage(memDb, makeRecord({
+      sessionId: 's1', messageId: 'm1',
+      totalTokens: 100, timestamp: todayStart.getTime() - 24 * 60 * 60 * 1000 + 3600000,
+    }));
+
+    const summary = await caller.summary({ projectId: 'test-project-id' });
+    expect(summary.currentStreak).toBe(0);
+    expect(summary.longestStreak).toBe(1);
+  });
+});
+
 afterAll(() => {
   closeDatabase(memDb);
 });
