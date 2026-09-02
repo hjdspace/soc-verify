@@ -1,7 +1,7 @@
 # 终端增强：主题系统、Prompt 美化与 Shell Integration
 
 > **Parent ADR**: [ADR-0030](../adr/0030-terminal-enhancement-design.md)
->
+> **Parent PRD**: [docs/prd/prd-terminal-enhancement.md](../prd/prd-terminal-enhancement.md)
 > **背景**: 现有终端基于 `TerminalManager`（三种后端：node-pty / fallback / log-mode）+ `TerminalView`（xterm.js + FitAddon），仅满足基本仿真输出展示。本组 issue 在现有 Electron 架构上增强终端，保留 tRPC/IPC + 三种后端，分三期实施。
 
 ---
