@@ -395,6 +395,9 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
     containerRef.current.addEventListener('keydown', handleKeyDown);
 
     const container = containerRef.current;
+    // Capture decorations ref for cleanup — decorationsRef.current may
+    // have changed by the time cleanup runs.
+    const decorations = decorationsRef.current;
 
     return () => {
       oscDisposable.dispose();
@@ -405,10 +408,10 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
       container?.removeEventListener('contextmenu', handleContextMenu);
       container?.removeEventListener('keydown', handleKeyDown);
       // 清理装饰器 DOM 元素
-      for (const entry of decorationsRef.current.values()) {
+      for (const entry of decorations.values()) {
         entry.container.remove();
       }
-      decorationsRef.current.clear();
+      decorations.clear();
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
