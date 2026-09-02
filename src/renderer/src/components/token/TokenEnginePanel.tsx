@@ -64,7 +64,19 @@ function buildPieOption(
   }
 
   return {
-    ...theme.toDefaults(),
+    // 注意：不能整体展开 theme.toDefaults()——其中带 xAxis/yAxis 样式默认值，
+    // 会让 ECharts 在饼图上渲染出默认坐标轴（轴线穿过圆环）。只取饼图需要的字段。
+    backgroundColor: 'transparent',
+    textStyle: { color: theme.cardForegroundColor },
+    color: theme.colors,
+    legend: {
+      ...theme.toDefaults().legend,
+      // legend 放到底部，避免与饼图重叠
+      orient: 'horizontal',
+      bottom: 0,
+      top: 'auto',
+      left: 'center',
+    },
     tooltip: {
       trigger: 'item',
       formatter: (params: unknown) => {
@@ -104,52 +116,72 @@ function EngineCard({
   const cacheTotal = entry.cacheReadTokens + entry.inputTokens;
   const cacheHitRate = cacheTotal > 0 ? (entry.cacheReadTokens / cacheTotal) * 100 : 0;
 
-  // 单引擎占比饼图
-  const pieOption = useMemo<EChartsOption>(() => {
-    const data =
-      entry.totalTokens > 0
-        ? [
-            { name: engineLabel(entry.engine), value: entry.totalTokens, itemStyle: { color } },
-          ]
-        : [{ name: '无数据', value: 1, itemStyle: { color: theme.borderColor } }];
-    return {
-      ...theme.toDefaults(),
-      series: [
-        {
-          type: 'pie',
-          radius: ['50%', '75%'],
-          avoidLabelOverlap: false,
-          label: { show: false },
-          labelLine: { show: false },
-          data,
-        },
-      ],
-    };
-  }, [entry, color, theme]);
+  // 占比进度环 — 纯 SVG：弧长 = 该引擎占全部引擎用量的百分比，
+  // 0% 时只显示淡色轨道（不用 ECharts 饼图：单系列饼图会带 legend 色块，
+  // 且 0% 时也会渲染完整圆环，没有信息量）
+  const RING_SIZE = 120;
+  const RING_STROKE = 10;
+  const ringRadius = (RING_SIZE - RING_STROKE) / 2;
+  const ringCircumference = 2 * Math.PI * ringRadius;
+  const ringRatio = Math.min(1, Math.max(0, percentage / 100));
 
   return (
     <div
       data-testid={`token-engine-card-${entry.engine}`}
-      className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4"
+      className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
     >
-      {/* 引擎标题色条 */}
-      <div className="flex items-center gap-2">
-        <span className="size-3 rounded-full" style={{ backgroundColor: color }} />
-        <span className="text-sm font-semibold text-foreground">{engineLabel(entry.engine)}</span>
+      {/* 引擎标题（色名以文字色区分，不用色条方块） */}
+      <div className="flex items-center justify-center">
+        <span className="text-sm font-semibold" style={{ color }}>
+          {engineLabel(entry.engine)}
+        </span>
       </div>
 
-      {/* 占比饼图 */}
-      <div className="flex justify-center">
-        <ReactECharts
-          option={pieOption}
-          style={{ height: '120px', width: '120px' }}
-          opts={{ renderer: 'canvas' }}
-        />
-      </div>
-
-      {/* 占比百分比 */}
-      <div className="text-center text-xs text-muted-foreground">
-        占比 {percentage.toFixed(1)}%
+      {/* 占比进度环（中心显示百分比） */}
+      <div className="flex flex-col items-center gap-1">
+        <svg
+          width={RING_SIZE}
+          height={RING_SIZE}
+          viewBox={`0 0 ${RING_SIZE} ${RING_SIZE}`}
+          role="img"
+          aria-label={`${engineLabel(entry.engine)} 占比 ${percentage.toFixed(1)}%`}
+        >
+          {/* 轨道 */}
+          <circle
+            cx={RING_SIZE / 2}
+            cy={RING_SIZE / 2}
+            r={ringRadius}
+            fill="none"
+            stroke="var(--muted)"
+            strokeWidth={RING_STROKE}
+          />
+          {/* 进度弧（有占比才绘制） */}
+          {ringRatio > 0 && (
+            <circle
+              cx={RING_SIZE / 2}
+              cy={RING_SIZE / 2}
+              r={ringRadius}
+              fill="none"
+              stroke={color}
+              strokeWidth={RING_STROKE}
+              strokeLinecap="round"
+              strokeDasharray={`${ringRatio * ringCircumference} ${ringCircumference}`}
+              transform={`rotate(-90 ${RING_SIZE / 2} ${RING_SIZE / 2})`}
+            />
+          )}
+          {/* 中心百分比 */}
+          <text
+            x={RING_SIZE / 2}
+            y={RING_SIZE / 2}
+            textAnchor="middle"
+            dominantBaseline="central"
+            className="fill-foreground"
+            style={{ fontSize: 16, fontWeight: 700 }}
+          >
+            {percentage.toFixed(1)}%
+          </text>
+        </svg>
+        <div className="text-xs text-muted-foreground">占比</div>
       </div>
 
       {/* Token 数据行 */}
