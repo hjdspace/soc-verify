@@ -28,6 +28,8 @@ import { toolSettings } from '../../agent/tool-settings';
 import { HOST_TOOL_NAMES, HOST_TOOL_GROUPS } from '../../host/tool-catalog';
 import { BUILTIN_TOOL_CATALOG, getBuiltinLabel, getBuiltinDescription } from '../../host/builtin-tool-catalog';
 import { themeSettings } from '../../agent/theme-settings';
+import { terminalThemeSettings } from '../../terminal/terminal-theme-settings';
+import { isValidTerminalThemeMode, type TerminalThemeMode } from '@shared/terminal-theme-types';
 import type { TvConfig } from '../../timing-violation/types';
 import type { CredentialInput, CredentialUpdateInput, ConfiguredModel, CreateSkillInput, McpConfigFile, McpToolInfo, OpenAiApiFormat } from '@shared/types';
 import { MAX_CONTEXT_WINDOW, MIN_CONTEXT_WINDOW } from '@shared/context-management';
@@ -109,6 +111,43 @@ export const settingsRouter = t.router({
     .mutation(async ({ input }) => {
       await themeSettings.setTheme(input.theme);
       return { ok: true };
+    }),
+
+  // ── 终端主题持久化（Issue #3，ADR-0030）─────────────────────
+  // follow-ui / independent 模式与独立主题 ID，持久化到
+  // <userData>/socverify-data/terminal-theme.json，重启后恢复。
+
+  getTerminalThemeMode: t.procedure.query(() => terminalThemeSettings.getMode()),
+
+  setTerminalThemeMode: t.procedure
+    .input((raw): { mode: TerminalThemeMode } => {
+      const r = raw as Record<string, unknown>;
+      if (!isValidTerminalThemeMode(r.mode)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: "mode must be 'follow-ui' or 'independent'",
+        });
+      }
+      return { mode: r.mode };
+    })
+    .mutation(async ({ input }) => {
+      await terminalThemeSettings.setMode(input.mode);
+      return { ok: true as const };
+    }),
+
+  getTerminalThemeId: t.procedure.query(() => terminalThemeSettings.getThemeId()),
+
+  setTerminalThemeId: t.procedure
+    .input((raw): { themeId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.themeId !== 'string' || r.themeId.length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'themeId must be a non-empty string' });
+      }
+      return { themeId: r.themeId };
+    })
+    .mutation(async ({ input }) => {
+      await terminalThemeSettings.setThemeId(input.themeId);
+      return { ok: true as const };
     }),
 
   // ── Agent 工具开关（每个工具是否暴露给 LLM）───────────────
