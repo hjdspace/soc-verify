@@ -5,6 +5,7 @@ import { DashboardView } from '@renderer/components/views/DashboardView';
 import { SimulationView } from '@renderer/components/views/SimulationView';
 import { CoverageView } from '@renderer/components/views/CoverageView';
 import { RegressionView } from '@renderer/components/views/RegressionView';
+import { TokenView } from '@renderer/components/views/TokenView';
 
 /**
  * 工作区视图：多 Tab 工作台原样完整嵌入。
@@ -30,6 +31,8 @@ function renderActiveView(view: ActiveView) {
       return <CoverageView />;
     case 'regression':
       return <RegressionView />;
+    case 'token':
+      return <TokenView />;
     case 'workspace':
       return <WorkspaceView />;
   }
