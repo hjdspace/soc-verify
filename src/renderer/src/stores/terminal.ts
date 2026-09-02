@@ -83,6 +83,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       const session = await trpc.terminal.create.mutate({
         projectId,
         cwd,
+        enhanced: true,
       });
 
       set((s) => ({
