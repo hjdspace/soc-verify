@@ -5,7 +5,10 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { useTerminalStore } from '@renderer/stores/terminal';
 import { useThemeStore } from '@renderer/stores/theme';
-import { readTerminalThemeFromCss } from './terminal-theme';
+import {
+  useTerminalThemeStore,
+  resolveTerminalITheme,
+} from '@renderer/stores/terminal-theme';
 import { trpc } from '@renderer/lib/trpc';
 import { Copy, Check } from 'lucide-react';
 
@@ -22,6 +25,9 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
   const writeToTerminalRef = useTerminalStore((s) => s.writeToTerminal);
   const resizeTerminalRef = useTerminalStore((s) => s.resizeTerminal);
   const currentTheme = useThemeStore((s) => s.currentTheme);
+  // 终端主题模式（Issue #3）：follow-ui 跟随 UI 主题，independent 用内置主题
+  const terminalThemeMode = useTerminalThemeStore((s) => s.themeMode);
+  const terminalThemeId = useTerminalThemeStore((s) => s.themeId);
 
   // Copy button feedback state
   const [copied, setCopied] = useState(false);
@@ -57,7 +63,8 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
         "'JetBrainsMono Nerd Font', 'MesloLGS NF', 'Consolas', 'Courier New', monospace",
       scrollback: 100000,
       allowProposedApi: true,
-      theme: readTerminalThemeFromCss(),
+      // 双模式取色：independent → 内置主题定义；follow-ui → CSS 变量
+      theme: resolveTerminalITheme(useTerminalThemeStore.getState()),
     });
 
     const fitAddon = new FitAddon();
@@ -220,12 +227,15 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
     };
   }, [terminalId, writeToTerminalRef, resizeTerminalRef]);
 
-  // 主题切换时同步终端配色
+  // 主题切换时同步终端配色（Issue #3）：
+  // - follow-ui 模式：UI 主题切换（currentTheme 变化）后 CSS 变量联动
+  // - independent 模式：选择内置主题 / 切换模式后立即应用新调色盘
+  //   themeId 未命中内置主题时回退 CSS 变量（resolveTerminalITheme 内处理）
   useEffect(() => {
     if (termRef.current) {
-      termRef.current.options.theme = readTerminalThemeFromCss();
+      termRef.current.options.theme = resolveTerminalITheme(useTerminalThemeStore.getState());
     }
-  }, [currentTheme]);
+  }, [currentTheme, terminalThemeMode, terminalThemeId]);
 
   // Cleanup copied feedback timer on unmount
   useEffect(() => {
