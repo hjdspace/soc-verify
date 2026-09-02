@@ -256,12 +256,26 @@ const currentSessionId = useSessionCoreStore((s) => s.currentSessionId);
   // updates the store.
   const scmStatus = useSourceControlStore((s) => s.status);
   const loadScmStatus = useSourceControlStore((s) => s.loadStatus);
+  const refreshScmStatus = useSourceControlStore((s) => s.refreshStatus);
 
   useEffect(() => {
     if (projectId) {
       void loadScmStatus(projectId);
     }
   }, [projectId, loadScmStatus]);
+
+  // 文件系统变化（watcher → filetree:update）后刷新 git 徽标：
+  // 否则新建/删除/修改文件只会更新树内容，徽标（绿色 U / 黄色 M / 红色 D）
+  // 要等重开项目才会出现。防抖与并发去重在 store 的 refreshStatus 内完成。
+  useEffect(() => {
+    if (!projectId || !window.eventBridge) return;
+    const unlisten = window.eventBridge.onFileTreeUpdate((update) => {
+      if (update.projectId === projectId) {
+        void refreshScmStatus(projectId);
+      }
+    });
+    return unlisten;
+  }, [projectId, refreshScmStatus]);
 
   // Build a map of normalized file path → git badge.
   // SCM status paths are relative to the project root; FileTreeNode paths
@@ -676,8 +690,22 @@ const FileTreeDirectory = memo(function FileTreeDirectory({
   // ── 展开状态提升到 store ──────────────────────────────
   // 原先用 useState 管理展开状态，但当 docked 模式折叠/展开或切换视图时
   // 组件卸载重建会丢失状态。提升到 store 后，展开状态按 node.path 持久化。
-  const expanded = useProjectStore((s) => s.expandedDirs.has(node.path)) || depth < 1;
+  // 根目录（depth 0）：未 seed 前视为展开（默认展开、无首帧闪烁），seed 后
+  // 完全由 expandedDirs 决定 —— 修复了 `|| depth < 1` 导致根目录永远无法折叠。
+  const expanded = useProjectStore((s) =>
+    s.expandedDirs.has(node.path)
+    || (depth === 0 && !s.expandedRootsSeeded.has(node.path)),
+  );
   const toggleDirExpanded = useProjectStore((s) => s.toggleDirExpanded);
+  const seedRootExpanded = useProjectStore((s) => s.seedRootExpanded);
+
+  // 根目录首次挂载时 seed 一次默认展开；seed 过的根不再干预，
+  // 用户折叠后（含面板重挂载/视图切换/watcher 刷新）保持折叠。
+  useEffect(() => {
+    if (depth === 0) {
+      seedRootExpanded(node.path);
+    }
+  }, [depth, node.path, seedRootExpanded]);
 
   // Lazy children state: when node.lazy is true, children are fetched on first expand.
   // The loaded children replace the empty array from the server.
