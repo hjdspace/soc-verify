@@ -74,22 +74,47 @@ export function TokenTrendsPanel() {
     const isEngine = trendGroupBy === 'engine';
     const dates = trends.map((d) => d.date);
 
-    // Collect all unique groups across all days
-    const groupSet = new Set<string>();
+    // Collect all unique groups across all days (with totals for ranking)
+    const totals = new Map<string, number>();
     for (const day of trends) {
       for (const g of day.groups) {
-        groupSet.add(g.group);
+        totals.set(g.group, (totals.get(g.group) ?? 0) + g.totalTokens);
       }
     }
-    const groups = Array.from(groupSet).sort();
 
-    // Build series data for each group
-    const series = groups.map((grp) => {
-      const data = trends.map((day) => {
+    // 模型数量可能很多（legend 挤压），Top-N 之外的聚合为「其他」（灰色）
+    const MAX_SERIES = 8;
+    const ranked = Array.from(totals.keys()).sort(
+      (a, b) => (totals.get(b) ?? 0) - (totals.get(a) ?? 0),
+    );
+    const showTop = !isEngine && ranked.length > MAX_SERIES;
+    const topGroups = showTop ? ranked.slice(0, MAX_SERIES) : ranked;
+    const restGroups = showTop ? ranked.slice(MAX_SERIES) : [];
+    const othersName = `其他 (${restGroups.length})`;
+    // 显示顺序 = 用量降序，「其他」排最后
+    const groups = [...topGroups, ...(restGroups.length > 0 ? [othersName] : [])];
+
+    const seriesData = (grp: string): number[] =>
+      trends.map((day) => {
+        if (grp === othersName) {
+          return day.groups
+            .filter((g) => restGroups.includes(g.group))
+            .reduce((sum, g) => sum + g.totalTokens, 0);
+        }
         const entry = day.groups.find((g) => g.group === grp);
         return entry ? entry.totalTokens : 0;
       });
-      const color = isEngine ? getEngineColor(grp, theme) : undefined;
+
+    const series = groups.map((grp, idx) => {
+      const data = seriesData(grp);
+      let color: string | undefined;
+      if (isEngine) {
+        color = getEngineColor(grp, theme);
+      } else if (grp === othersName) {
+        color = theme.mutedColor;
+      } else {
+        color = theme.colors[idx % theme.colors.length];
+      }
       return {
         name: grp,
         type: 'bar' as const,
@@ -108,8 +133,12 @@ export function TokenTrendsPanel() {
       },
       legend: {
         data: groups,
+        type: 'scroll',
         bottom: 0,
         textStyle: { color: theme.mutedColor },
+        pageIconColor: theme.mutedColor,
+        pageIconInactiveColor: theme.borderColor,
+        pageTextStyle: { color: theme.mutedColor },
       },
       grid: {
         left: '3%',
