@@ -6,6 +6,26 @@
 
 ---
 
+## [0.4.6](https://github.com/hjdspace/soc-verify/compare/v0.4.5...v0.4.6) (2026-09-02)
+
+### Features
+
+* **token-monitor:** 全新 Token 用量监控内嵌视图（ADR 0031）——SQLite 记录 AI 会话 token 消耗，定时扫描外部 claude-code/codex JSONL 日志，提供总览/趋势/模型/会话多维度面板、热力图与连续天数统计
+* **terminal:** Enhanced Terminal 模式（zsh + Starship），OSC 133 命令边界追踪与命令装饰渲染
+* **terminal:** 终端主题系统——内置多套配色 + 自定义主题管理，设置页选择并持久化
+* **terminal:** Nerd Fonts 自动下载注入与 WebGL 渲染加速（含 CSP font-src 放行）
+* **simulation:** 仿真结果 log-mode 偏好——设置项持久化、设置面板开关与 toast 通知
+* **selection-actions:** 改写型动作在 AI 任务运行中转为填入输入框，并支持替换文件选区
+* **file-tree:** SCM 状态刷新（refreshStatus）与目录展开状态持久化增强
+
+### Bug Fixes
+
+* **terminal:** 修复 PowerShell OSC 133 集成与终端面板显示问题
+
+### Chore
+
+* **engine:** oh-my-pi 子模块升级 v17.3.8 → v18.1.3
+
 ## [0.4.5](https://github.com/hjdspace/soc-verify/compare/v0.4.4...v0.4.5) (2026-09-01)
 
 ### Features
