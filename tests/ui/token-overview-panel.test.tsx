@@ -4,12 +4,16 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 /* ── trpc mock ── */
 const mockSummaryQuery = vi.fn();
+const mockHeatmapQuery = vi.fn();
 
 vi.mock('@renderer/lib/trpc', () => ({
   trpc: {
     token: {
       summary: {
         query: (...args: unknown[]) => mockSummaryQuery(...args),
+      },
+      heatmap: {
+        query: (...args: unknown[]) => mockHeatmapQuery(...args),
       },
     },
   },
@@ -38,6 +42,7 @@ beforeEach(() => {
     summary: null,
     trends: [],
     engineBreakdown: [],
+    heatmap: [],
     loading: false,
     error: null,
     timeRange: 'all',
@@ -50,7 +55,10 @@ beforeEach(() => {
     monthTokens: 150000,
     totalTokens: 500000,
     todayCostUsd: 0.038,
+    currentStreak: 3,
+    longestStreak: 5,
   });
+  mockHeatmapQuery.mockResolvedValue([]);
 });
 
 describe('TokenOverviewPanel — 渲染', () => {
@@ -71,6 +79,15 @@ describe('TokenOverviewPanel — 渲染', () => {
     expect(screen.getByTestId('token-kpi-month').textContent).toContain('150,000');
     expect(screen.getByTestId('token-kpi-total').textContent).toContain('500,000');
     expect(screen.getByTestId('token-kpi-cost').textContent).toContain('$0.038');
+  });
+
+  it('加载后显示 streak 统计（连续 + 最长）', async () => {
+    render(<TokenOverviewPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId('token-streak-current')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('token-streak-current').textContent).toContain('3');
+    expect(screen.getByTestId('token-streak-longest').textContent).toContain('5');
   });
 
   it('加载中显示加载文本', async () => {
@@ -136,5 +153,76 @@ describe('TokenOverviewPanel — 时间范围选择', () => {
 
     expect(sevenBtn.className).toContain('text-primary');
     expect(allBtn.className).not.toContain('text-primary');
+  });
+});
+
+describe('TokenOverviewPanel — 热力图', () => {
+  it('加载并渲染热力图容器', async () => {
+    render(<TokenOverviewPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId('token-heatmap')).toBeInTheDocument();
+    });
+  });
+
+  it('空热力图数据显示空状态文案', async () => {
+    render(<TokenOverviewPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId('token-heatmap')).toBeInTheDocument();
+    });
+    expect(screen.getByText('暂无热力图数据')).toBeInTheDocument();
+  });
+
+  it('有数据时渲染热力图格子', async () => {
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+    const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+
+    useTokenStore.setState({
+      heatmap: [
+        { date: todayStr, totalTokens: 1000, costUsd: 0.05 },
+        { date: yesterdayStr, totalTokens: 2000, costUsd: 0.10 },
+      ],
+      loadedForProject: 'proj-1',
+    });
+
+    render(<TokenOverviewPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId('token-heatmap')).toBeInTheDocument();
+    });
+    // Heatmap cells should have data attributes
+    const cells = screen.getAllByTestId(/^token-heatmap-cell-/);
+    expect(cells.length).toBe(2);
+  });
+});
+
+describe('TokenOverviewPanel — 7 天趋势 sparkline', () => {
+  it('加载后渲染 sparkline 容器', async () => {
+    render(<TokenOverviewPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId('token-sparkline')).toBeInTheDocument();
+    });
+  });
+
+  it('有数据时渲染 sparkline SVG', async () => {
+    const today = new Date();
+    const days: Array<{ date: string; totalTokens: number; costUsd: number }> = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today.getTime() - i * 24 * 60 * 60 * 1000);
+      days.push({
+        date: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
+        totalTokens: (i + 1) * 100,
+        costUsd: 0,
+      });
+    }
+    useTokenStore.setState({ heatmap: days, loadedForProject: 'proj-1' });
+
+    render(<TokenOverviewPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId('token-sparkline')).toBeInTheDocument();
+    });
+    // SVG path should be rendered
+    const svg = screen.getByTestId('token-sparkline').querySelector('svg');
+    expect(svg).toBeInTheDocument();
   });
 });
