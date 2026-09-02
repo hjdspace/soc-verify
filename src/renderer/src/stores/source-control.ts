@@ -22,6 +22,12 @@ interface SourceControlState {
   /** 正在加载 diff 的 key 集合 */
   loadingDiffKeys: Record<string, boolean>;
   loadStatus: (projectId: string) => Promise<void>;
+  /**
+   * 文件系统变化后的轻量 git 状态刷新（文件树 watcher 事件触发）。
+   * 防抖 + inflight 去重；只更新 status，不动 expandedDiffKeys/fileDiffs
+   * （避免用户正在查看的 diff 被折叠）；失败静默（后台刷新不值得打扰用户）。
+   */
+  refreshStatus: (projectId: string) => Promise<void>;
   setCommitMessage: (message: string) => void;
   generateCommitMessage: (projectId: string, modelId?: string, providerId?: string) => Promise<void>;
   toggleFileDiff: (projectId: string, filePath: string, staged: boolean) => Promise<void>;
@@ -39,6 +45,13 @@ function errorMessage(err: unknown): string {
   }
   return String(err);
 }
+
+// ── 文件变化后的轻量 git 状态刷新（refreshStatus 共享状态）────────
+// watcher 突发多条事件、或多个 FileTree 实例（root + 额外目录）同时订阅时，
+// 只允许发一次 git status 请求：模块级防抖 timer + inflight Promise 去重。
+const SCM_REFRESH_DEBOUNCE_MS = 500;
+let scmRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let scmRefreshInflight: Promise<void> | null = null;
 
 export const useSourceControlStore = create<SourceControlState>((set, get) => ({
   status: null,
@@ -61,6 +74,30 @@ export const useSourceControlStore = create<SourceControlState>((set, get) => ({
       set({ loading: false });
       useToastStore.getState().error('加载 Git 状态失败', errorMessage(err));
     }
+  },
+
+  refreshStatus: (projectId) => {
+    if (scmRefreshTimer) clearTimeout(scmRefreshTimer);
+    return new Promise<void>((resolve) => {
+      scmRefreshTimer = setTimeout(() => {
+        scmRefreshTimer = null;
+        if (!scmRefreshInflight) {
+          scmRefreshInflight = trpc.scm.status
+            .query({ projectId })
+            .then((status) => {
+              // 只更新 status —— 保留 SCM 面板正在查看的展开 diff
+              set({ status });
+            })
+            .catch(() => {
+              // 静默：文件事件触发的后台刷新失败不打扰用户
+            })
+            .finally(() => {
+              scmRefreshInflight = null;
+            });
+        }
+        void scmRefreshInflight.then(resolve);
+      }, SCM_REFRESH_DEBOUNCE_MS);
+    });
   },
 
   setCommitMessage: (message) => set({ commitMessage: message }),
