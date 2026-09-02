@@ -113,6 +113,9 @@ button:not(:disabled):active {
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
+  --color-chart-omp: var(--chart-omp);
+  --color-chart-claude: var(--chart-claude);
+  --color-chart-codex: var(--chart-codex);
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
   --color-warning: var(--warning);
@@ -309,6 +312,11 @@ button:not(:disabled):active {
   --chart-3: oklch(0.55 0.16 285);
   --chart-4: oklch(0.65 0.15 55);
 
+  /* Token Monitor 引擎语义色 */
+  --chart-omp: var(--chart-3);       /* 紫 */
+  --chart-claude: oklch(0.65 0.15 55); /* 橙 */
+  --chart-codex: oklch(0.55 0.11 230);  /* 青 */
+
   --info: oklch(0.88 0.04 250);
   --info-foreground: oklch(0.32 0.10 250);
   --warning: oklch(0.88 0.06 75);
@@ -385,6 +393,11 @@ button:not(:disabled):active {
   --chart-2: oklch(0.78 0.15 145);
   --chart-3: oklch(0.72 0.15 285);
   --chart-4: oklch(0.78 0.13 55);
+
+  /* Token Monitor 引擎语义色 */
+  --chart-omp: var(--chart-3);       /* 紫 */
+  --chart-claude: oklch(0.78 0.13 55); /* 橙 */
+  --chart-codex: oklch(0.68 0.11 230);  /* 青 */
 
   --info: oklch(0.28 0.05 250);
   --info-foreground: oklch(0.78 0.13 250);
@@ -540,6 +553,11 @@ button:not(:disabled):active {
   --chart-3: oklch(0.55 0.16 285);
   --chart-4: oklch(0.65 0.15 55);
 
+  /* Token Monitor 引擎语义色 */
+  --chart-omp: var(--chart-3);       /* 紫 */
+  --chart-claude: oklch(0.65 0.15 55); /* 橙 */
+  --chart-codex: oklch(0.55 0.11 230);  /* 青 */
+
   --info: oklch(0.92 0.03 264);
   --info-foreground: oklch(0.32 0.10 264);
   --warning: oklch(0.92 0.05 75);
@@ -617,6 +635,11 @@ button:not(:disabled):active {
   --chart-2: oklch(0.7789 0.1501 145);              /* #34C759 */
   --chart-3: oklch(0.7673 0.1479 55);               /* #FF9500 */
   --chart-4: oklch(0.601 0.217 308.7);             /* #AF52DE */
+
+  /* Token Monitor 引擎语义色 */
+  --chart-omp: oklch(0.6495 0.1908 255.6);  /* #007AFF */
+  --chart-claude: oklch(0.7673 0.1479 55);   /* #FF9500 */
+  --chart-codex: oklch(0.7789 0.1501 145);   /* #34C759 */
 
   --info: oklch(0.9305 0.0299 256);
   --info-foreground: oklch(0.4499 0.1429 256);
@@ -700,6 +723,11 @@ button:not(:disabled):active {
   --chart-2: oklch(0.7891 0.1471 145);              /* #30D158 */
   --chart-3: oklch(0.7894 0.1414 65);               /* #FF9F0A */
   --chart-4: oklch(0.6605 0.2198 308.7);           /* #BF5AF2 */
+
+  /* Token Monitor 引擎语义色 */
+  --chart-omp: oklch(0.6903 0.1688 255.6);  /* #0A84FF */
+  --chart-claude: oklch(0.7894 0.1414 65);   /* #FF9F0A */
+  --chart-codex: oklch(0.7891 0.1471 145);   /* #30D158 */
 
   --info: oklch(0.2899 0.0518 256);
   --info-foreground: oklch(0.7579 0.1318 256);
