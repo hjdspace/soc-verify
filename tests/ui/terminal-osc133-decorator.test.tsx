@@ -20,60 +20,68 @@ import { render, waitFor } from '@testing-library/react';
 
 // ── Mock xterm.js Terminal ──────────────────────────────────
 // 捕获 parser.registerOscHandler 回调，让测试可以注入 OSC 序列
-const oscHandlers = new Map<number, (data: string) => boolean | Promise<boolean>>();
-const decorationCallbacks: Array<{ marker: unknown; anchor: string; x: number }> = [];
-const onRenderCallbacks: Array<(element: HTMLElement) => void> = [];
+// Use vi.hoisted so the class is available in vi.mock factory (hoisted)
+const { MockTerminal, MockFitAddon, MockWebglAddon, oscHandlers, decorationCallbacks, onRenderCallbacks } = vi.hoisted(() => {
+  const oscHandlers = new Map<number, (data: string) => boolean | Promise<boolean>>();
+  const decorationCallbacks: Array<{ marker: unknown; anchor: string; x: number }> = [];
+  const onRenderCallbacks: Array<(element: HTMLElement) => void> = [];
 
-const mockTerm = {
-  cols: 80,
-  rows: 24,
-  parser: {
-    registerOscHandler: vi.fn((ident: number, cb: (data: string) => boolean | Promise<boolean>) => {
-      oscHandlers.set(ident, cb);
-      return { dispose: vi.fn() };
-    }),
-  },
-  registerMarker: vi.fn(() => ({ line: 0 })),
-  registerDecoration: vi.fn((opts: { marker: unknown; anchor: string; x: number }) => {
-    decorationCallbacks.push(opts);
-    return {
-      marker: opts.marker,
-      onRender: (cb: (element: HTMLElement) => void) => onRenderCallbacks.push(cb),
-      dispose: vi.fn(),
+  class MockTerminal {
+    cols = 80;
+    rows = 24;
+    options = { theme: {} };
+    parser = {
+      registerOscHandler(ident: number, cb: (data: string) => boolean | Promise<boolean>) {
+        oscHandlers.set(ident, cb);
+        return { dispose: () => {} };
+      },
     };
-  }),
-  buffer: {
-    active: {
-      baseY: 0,
-      cursorY: 0,
-      getLine: vi.fn(() => ({
-        translateToString: () => 'echo hello',
-      })),
-    },
-  },
-  onData: vi.fn(() => ({ dispose: vi.fn() })),
-  onResize: vi.fn(() => ({ dispose: vi.fn() })),
-  write: vi.fn(),
-  getSelection: vi.fn(() => ''),
-  dispose: vi.fn(),
-  loadAddon: vi.fn(),
-  open: vi.fn(),
-};
+    buffer = {
+      active: {
+        baseY: 0,
+        cursorY: 0,
+        getLine: () => ({
+          translateToString: () => 'echo hello',
+        }),
+      },
+    };
 
-vi.mock('@xterm/xterm', () => ({
-  Terminal: vi.fn(() => ({ ...mockTerm })),
-}));
+    registerMarker() { return { line: 0 }; }
+    registerDecoration(opts: { marker: unknown; anchor: string; x: number }) {
+      decorationCallbacks.push(opts);
+      return {
+        marker: opts.marker,
+        onRender: (cb: (element: HTMLElement) => void) => { onRenderCallbacks.push(cb); },
+        dispose: () => {},
+      };
+    }
+    onData() { return { dispose: () => {} }; }
+    onResize() { return { dispose: () => {} }; }
+    write() {}
+    getSelection() { return ''; }
+    dispose() {}
+    loadAddon() {}
+    open() {}
+  }
 
-vi.mock('@xterm/addon-fit', () => ({
-  FitAddon: vi.fn(() => ({ fit: vi.fn(), loadAddon: vi.fn() })),
-}));
+  class MockFitAddon {
+    fit() {}
+    loadAddon() {}
+  }
 
-vi.mock('@xterm/addon-webgl', () => ({
-  WebglAddon: vi.fn(() => ({
-    onContextLoss: vi.fn(),
-    dispose: vi.fn(),
-  })),
-}));
+  class MockWebglAddon {
+    onContextLoss() {}
+    dispose() {}
+  }
+
+  return { MockTerminal, MockFitAddon, MockWebglAddon, oscHandlers, decorationCallbacks, onRenderCallbacks };
+});
+
+vi.mock('@xterm/xterm', () => ({ Terminal: MockTerminal }));
+
+vi.mock('@xterm/addon-fit', () => ({ FitAddon: MockFitAddon }));
+
+vi.mock('@xterm/addon-webgl', () => ({ WebglAddon: MockWebglAddon }));
 
 vi.mock('@xterm/xterm/css/xterm.css', () => ({}));
 
@@ -101,7 +109,9 @@ vi.mock('@renderer/stores/terminal-theme', () => ({
 }));
 
 // ── Mock trpc ───────────────────────────────────────────────
-const mockGetOutputBuffer = vi.fn<() => Promise<string[]>>();
+const { mockGetOutputBuffer } = vi.hoisted(() => ({
+  mockGetOutputBuffer: vi.fn<() => Promise<string[]>>(),
+}));
 
 vi.mock('@renderer/lib/trpc', () => ({
   trpc: {
@@ -157,14 +167,13 @@ describe('TerminalView OSC 133 命令装饰器（Issue #7）', () => {
     render(<TerminalView terminalId="term-1" />);
 
     await waitFor(() => {
-      expect(mockTerm.parser.registerOscHandler).toHaveBeenCalledWith(133, expect.any(Function));
+      expect(oscHandlers.has(133)).toBe(true);
     });
   });
 
   it('解析 A → C → D;0 序列后创建装饰器', async () => {
     render(<TerminalView terminalId="term-1" />);
 
-    // Wait for handler registration
     await waitFor(() => {
       expect(oscHandlers.has(133)).toBe(true);
     });
@@ -179,12 +188,8 @@ describe('TerminalView OSC 133 命令装饰器（Issue #7）', () => {
     handler('133;D;0');
 
     // Should have created a decoration
-    expect(mockTerm.registerDecoration).toHaveBeenCalledWith(
-      expect.objectContaining({
-        anchor: 'right',
-        marker: expect.anything(),
-      }),
-    );
+    expect(decorationCallbacks.length).toBeGreaterThan(0);
+    expect(decorationCallbacks[0].anchor).toBe('right');
   });
 
   it('命令完成 exitCode=0 时装饰器显示 ✓', async () => {
@@ -205,7 +210,7 @@ describe('TerminalView OSC 133 命令装饰器（Issue #7）', () => {
     }
 
     // The decorator should have been created with a pass icon
-    expect(mockTerm.registerDecoration).toHaveBeenCalled();
+    expect(decorationCallbacks.length).toBeGreaterThan(0);
     const decoratorHost = fakeElement.querySelector('.cmd-decorator-host');
     expect(decoratorHost).toBeTruthy();
     const passIcon = fakeElement.querySelector('.cmd-pass');
@@ -285,7 +290,7 @@ describe('TerminalView OSC 133 命令装饰器（Issue #7）', () => {
     });
 
     // No OSC 133 sequences sent — no decorations
-    expect(mockTerm.registerDecoration).not.toHaveBeenCalled();
+    expect(decorationCallbacks.length).toBe(0);
   });
 
   it('OutputBuffer restore 前 reset() 清空状态，不产生重复装饰器', async () => {
@@ -296,7 +301,7 @@ describe('TerminalView OSC 133 命令装饰器（Issue #7）', () => {
 
     // Wait for output buffer restore to complete
     await waitFor(() => {
-      expect(mockTerm.write).toHaveBeenCalled();
+      expect(mockGetOutputBuffer).toHaveBeenCalled();
     });
 
     // The OSC 133 sequences in the buffer should have been re-parsed
@@ -309,7 +314,7 @@ describe('TerminalView OSC 133 命令装饰器（Issue #7）', () => {
 
     // Should have at most 2 decorations (1 from restore + 1 from new)
     // The key point is no duplicates
-    expect(mockTerm.registerDecoration.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(decorationCallbacks.length).toBeLessThanOrEqual(2);
 
     unmount();
   });
