@@ -13,6 +13,7 @@ import { cleanupOfficeCli } from './officecli/service';
 import { closeAllToolWindows } from './tools/tool-window-manager';
 import { destroyAllSurfaceManagers, registerSurfaceIpcHandlers } from './surface/surface-ipc';
 import { createEventRelay, type EventRelay } from './ipc/event-relay';
+import { closeAllDbs as closeTokenMonitorDbs } from './token-monitor/token-monitor-registry';
 import { setupLinuxPlatform } from './platform-setup';
 import { createTray } from './tray-manager';
 import { createWindow, registerWindowControls } from './window-factory';
@@ -150,4 +151,6 @@ app.on('before-quit', async () => {
   // 关闭所有工具窗口
   closeAllToolWindows();
   destroyAllSurfaceManagers();
+  // 关闭 Token Monitor DB 连接 + 停止 ScanScheduler 定时扫描
+  closeTokenMonitorDbs();
 });
