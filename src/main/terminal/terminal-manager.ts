@@ -1,10 +1,11 @@
 import { EventEmitter } from 'node:events';
 import { spawn, ChildProcess, execSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { createRequire } from 'node:module';
 import { userInfo } from 'node:os';
 import type * as NodePty from 'node-pty';
+import { resolveStarshipPath } from './starship-binary';
 
 /** Which PTY backend a terminal session is using. */
 export type TerminalBackend = 'node-pty' | 'fallback' | 'log-mode';
@@ -29,6 +30,14 @@ export interface TerminalCreateOptions {
   env?: Record<string, string>;
   /** Override the shell binary path (e.g. '/bin/csh' for EDA environments). */
   shell?: string;
+  /**
+   * Enable Enhanced Terminal mode: zsh + Starship + zsh-autosuggestions
+   * + Shell Integration (OSC 133 sequences) on Linux/macOS,
+   * or PowerShell + Starship + OSC 133 on Windows.
+   *
+   * Simulation terminals should NOT set this (keep csh, no beautification).
+   */
+  enhanced?: boolean;
 }
 
 /** Options for {@link TerminalManager.runCommand} — log-mode execution. */
@@ -136,6 +145,120 @@ function resolveBashRcPath(): string {
     : '';
   if (packagedPath && existsSync(packagedPath)) return packagedPath;
   return join(process.cwd(), 'resources', 'terminal', 'bashrc');
+}
+
+/**
+ * Resolve the ZDOTDIR path for Enhanced Terminal (zsh config directory).
+ *
+ * In packaged mode: process.resourcesPath/terminal/zsh/
+ * In dev mode: <project>/resources/terminal/zsh/
+ */
+export function resolveZdotdirPath(): string {
+  const packagedPath = process.resourcesPath
+    ? join(process.resourcesPath, 'terminal', 'zsh')
+    : '';
+  if (packagedPath && existsSync(packagedPath)) return packagedPath;
+  return join(process.cwd(), 'resources', 'terminal', 'zsh');
+}
+
+/**
+ * Resolve the Starship config path for Enhanced Terminal.
+ *
+ * Points to the packaged starship.toml inside the zsh config directory.
+ */
+export function resolveStarshipConfigPath(): string {
+  return join(resolveZdotdirPath(), 'starship.toml');
+}
+
+/**
+ * Resolve the OSC 133 PowerShell script path for Enhanced Terminal (Windows).
+ *
+ * Points to osc133.ps1 inside the zsh config directory.
+ */
+export function resolveOsc133Ps1Path(): string {
+  return join(resolveZdotdirPath(), 'osc133.ps1');
+}
+
+/**
+ * Shell preferences for Enhanced Terminal on different platforms.
+ *
+ * On Linux/macOS: prefer zsh → bash (NOT csh, which is for simulation).
+ * On Windows: PowerShell.
+ */
+const ENHANCED_SHELL_PREFERENCES: string[] =
+  process.platform === 'win32'
+    ? []
+    : ['/bin/zsh', '/usr/bin/zsh', '/usr/local/bin/zsh'];
+
+/**
+ * Find a shell suitable for Enhanced Terminal.
+ *
+ * On Linux/macOS: prefers zsh → bash (unlike findSimShell which prefers csh).
+ * On Windows: PowerShell.
+ *
+ * Reuses findShell() with zsh-first preferred list.
+ */
+export function findEnhancedShell(): string {
+  return findShell(ENHANCED_SHELL_PREFERENCES);
+}
+
+/**
+ * Build shell args for Enhanced Terminal.
+ *
+ * On Linux/macOS with zsh: use ['-l', '-i'] so zsh sources .zshrc from ZDOTDIR.
+ * On Windows with PowerShell: use ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', <osc133.ps1>].
+ * Falls back to getInteractiveShellArgs() for other shells.
+ */
+export function getEnhancedShellArgs(shell: string, platform: NodeJS.Platform = process.platform): string[] {
+  if (platform === 'win32') {
+    const osc133Path = resolveOsc133Ps1Path();
+    if (existsSync(osc133Path)) {
+      return ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', osc133Path];
+    }
+    // Fallback: no osc133 script, just start PowerShell
+    return ['-NoProfile'];
+  }
+
+  const isZsh = shell === 'zsh' || shell.endsWith('/zsh');
+  if (isZsh) return ['-l', '-i'];
+
+  // Fallback for bash or other shells
+  return getInteractiveShellArgs(shell, platform);
+}
+
+/**
+ * Build the environment for Enhanced Terminal.
+ *
+ * Sets ZDOTDIR (zsh config directory), STARSHIP_CONFIG (starship.toml path),
+ * and merges any caller-provided env overrides.
+ *
+ * If Starship binary is not found, the env vars are still set (harmless),
+ * and the .zshrc/osc133.ps1 will skip starship init gracefully.
+ */
+export function buildEnhancedEnv(
+  base: Record<string, string>,
+  overrides?: Record<string, string>,
+): Record<string, string> {
+  const zdotdir = resolveZdotdirPath();
+  const starshipConfig = resolveStarshipConfigPath();
+  const starshipPath = resolveStarshipPath();
+
+  const enhanced: Record<string, string> = {
+    ZDOTDIR: zdotdir,
+    STARSHIP_CONFIG: starshipConfig,
+  };
+
+  // Add Starship to PATH if found (ensures `starship` command is available)
+  if (starshipPath) {
+    const starshipDir = dirname(starshipPath);
+    const pathSeparator = process.platform === 'win32' ? ';' : ':';
+    enhanced.PATH = `${starshipDir}${pathSeparator}${base.PATH ?? ''}`;
+  }
+
+  return mergeTerminalEnvs(
+    mergeTerminalEnvs(base, enhanced),
+    overrides,
+  );
 }
 
 export function getInteractiveShellArgs(
@@ -494,9 +617,18 @@ export class TerminalManager extends EventEmitter {
     // would carry LOADEDMODULES/MODULEPATH into the second .cshrc, causing
     // module conflicts and falling back to system tools such as /bin/python.
     // Project values are supplied by opts.env; shell startup owns PATH setup.
-    const shell = opts.shell ?? findShell();
-    const env = mergeTerminalEnvs(process.env as Record<string, string>, opts.env);
-    const shellArgs = getInteractiveShellArgs(shell);
+    const isEnhanced = opts.enhanced === true;
+    // Enhanced mode: prefer zsh → bash (NOT csh); build ZDOTDIR + STARSHIP_CONFIG env.
+    // Non-enhanced mode: use caller-specified shell or default shell discovery.
+    const shell = opts.shell ?? (isEnhanced ? findEnhancedShell() : findShell());
+    const env = isEnhanced
+      ? buildEnhancedEnv(process.env as Record<string, string>, opts.env)
+      : mergeTerminalEnvs(process.env as Record<string, string>, opts.env);
+    // Enhanced mode: use enhanced shell args (zsh -l -i / PowerShell -File osc133.ps1).
+    // Non-enhanced mode: use standard interactive shell args.
+    const shellArgs = isEnhanced
+      ? getEnhancedShellArgs(shell)
+      : getInteractiveShellArgs(shell);
 
     const session: TerminalSession = {
       id,
