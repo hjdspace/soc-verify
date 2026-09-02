@@ -33,6 +33,7 @@ import { databaseRouter } from './routers/database-router';
 import { kbRouter } from './routers/kb-router';
 import { drawioRouter } from './routers/drawio-router';
 import { caseCfgRouter } from './routers/case-cfg-router';
+import { tokenRouter } from './routers/token-router';
 
 export const router = t.router({
   ping: pingProcedure,
@@ -64,6 +65,7 @@ export const router = t.router({
   kb: kbRouter,
   drawio: drawioRouter,
   caseCfg: caseCfgRouter,
+  token: tokenRouter,
 });
 
 export type AppRouter = typeof router;
