@@ -1,9 +1,10 @@
-import { Check, Keyboard, Monitor, Palette, Type, Zap } from 'lucide-react';
+import { Check, Keyboard, Monitor, Palette, Trash2, Type, Upload, Zap } from 'lucide-react';
+import { useRef, type ChangeEvent } from 'react';
 import { useThemeStore, type ThemeDefinition } from '@renderer/stores/theme';
 import {
   useTerminalThemeStore,
-  type BuiltinTerminalTheme,
 } from '@renderer/stores/terminal-theme';
+import { useToastStore } from '@renderer/stores/toast';
 import type { TerminalThemeMode } from '@shared/terminal-theme-types';
 import { useFontStore } from '@renderer/stores/font';
 import { useEditorStore } from '@renderer/stores/editor';
@@ -37,12 +38,46 @@ export function AppearanceTab() {
   const aiPanelMode = useUiStore((s) => s.aiPanelMode);
   const setAiPanelMode = useUiStore((s) => s.setAiPanelMode);
 
-  // 终端主题（Issue #3）
+  // 终端主题（Issue #3/#4）
   const terminalThemeMode = useTerminalThemeStore((s) => s.themeMode);
   const terminalThemeId = useTerminalThemeStore((s) => s.themeId);
   const builtinTerminalThemes = useTerminalThemeStore((s) => s.builtinThemes);
+  const customTerminalThemes = useTerminalThemeStore((s) => s.customThemes);
   const setTerminalThemeMode = useTerminalThemeStore((s) => s.setThemeMode);
   const setTerminalTheme = useTerminalThemeStore((s) => s.setTheme);
+  const importTerminalTheme = useTerminalThemeStore((s) => s.importTheme);
+  const deleteTerminalCustomTheme = useTerminalThemeStore((s) => s.deleteCustomTheme);
+  const importFileRef = useRef<HTMLInputElement>(null);
+
+  // 自定义主题导入（Issue #4）：选择 JSON 文件 → 主进程校验并持久化 → 即时预览
+  const handleImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // 重置 input.value，允许连续导入同一文件
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const json: unknown = JSON.parse(await file.text());
+      await importTerminalTheme(json, file.name.replace(/\.json$/i, ''));
+      useToastStore.getState().success('主题导入成功', file.name);
+    } catch (err) {
+      useToastStore.getState().error(
+        '主题导入失败',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  };
+
+  const handleDeleteCustomTheme = async (themeId: string, name: string) => {
+    try {
+      await deleteTerminalCustomTheme(themeId);
+      useToastStore.getState().success('主题已删除', name);
+    } catch (err) {
+      useToastStore.getState().error(
+        '删除失败',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -101,13 +136,57 @@ export function AppearanceTab() {
             {builtinTerminalThemes.map((theme) => (
               <TerminalThemeCard
                 key={theme.id}
-                theme={theme}
+                name={theme.name}
+                description={theme.description}
+                previewColors={[
+                  theme.theme.background ?? '#1e1e1e',
+                  theme.theme.red ?? '#cd5c5c',
+                  theme.theme.green ?? '#7ab87a',
+                  theme.theme.blue ?? '#6a9ad0',
+                  theme.theme.brightWhite ?? '#eeeeee',
+                ]}
                 selected={terminalThemeId === theme.id}
                 onSelect={() => setTerminalTheme(theme.id)}
               />
             ))}
+            {/* 自定义主题（Issue #4）：在 8 款内置主题之后并列展示 */}
+            {customTerminalThemes.map((theme) => (
+              <TerminalThemeCard
+                key={theme.id}
+                name={theme.name}
+                description="自定义主题"
+                previewColors={[
+                  theme.theme.background ?? '#1e1e1e',
+                  theme.theme.red ?? '#cd3131',
+                  theme.theme.green ?? '#0dbc79',
+                  theme.theme.blue ?? '#2472c8',
+                  theme.theme.brightWhite ?? '#e5e5e5',
+                ]}
+                selected={terminalThemeId === theme.id}
+                onSelect={() => setTerminalTheme(theme.id)}
+                onDelete={() => void handleDeleteCustomTheme(theme.id, theme.name)}
+              />
+            ))}
           </div>
         )}
+
+        {/* 导入主题（Issue #4）：JSON 文件 → 主进程校验 → 即时预览 */}
+        <button
+          onClick={() => importFileRef.current?.click()}
+          className={cn(
+            'flex items-center justify-center gap-1.5 rounded-md border border-dashed border-border p-2 text-[11px] text-muted-foreground transition-colors hover:border-primary hover:text-foreground',
+          )}
+        >
+          <Upload className="h-3 w-3" />
+          导入主题（JSON）
+        </button>
+        <input
+          ref={importFileRef}
+          type="file"
+          accept=".json,application/json"
+          className="hidden"
+          onChange={(e) => void handleImportFile(e)}
+        />
       </div>
 
       {/* 字体管理 */}
@@ -305,28 +384,25 @@ endmodule`}
   );
 }
 
-// ── 终端主题卡片（色板预览 + 名称 + 描述）─────────────────────
+// ── 终端主题卡片（色板预览 + 名称 + 描述，可选删除按钮）────────
 
 type TerminalThemeCardProps = {
-  theme: BuiltinTerminalTheme;
+  name: string;
+  description: string;
+  /** 色板预览色条（背景 + 4 个代表色） */
+  previewColors: string[];
   selected: boolean;
   onSelect: () => void;
+  /** 提供时在卡片右上角渲染删除按钮（自定义主题） */
+  onDelete?: () => void;
 };
 
-function TerminalThemeCard({ theme, selected, onSelect }: TerminalThemeCardProps) {
-  // 色板预览：背景 + 4 个代表色条
-  const previewColors = [
-    theme.theme.background,
-    theme.theme.red,
-    theme.theme.green,
-    theme.theme.blue,
-    theme.theme.brightWhite,
-  ];
-  return (
+function TerminalThemeCard({ name, description, previewColors, selected, onSelect, onDelete }: TerminalThemeCardProps) {
+  const card = (
     <button
       onClick={onSelect}
       className={cn(
-        'flex items-center gap-3 rounded-md border p-2.5 text-left transition-colors',
+        'flex w-full items-center gap-3 rounded-md border p-2.5 text-left transition-colors',
         selected ? 'border-primary bg-primary/5' : 'border-border hover:bg-accent',
       )}
     >
@@ -337,11 +413,29 @@ function TerminalThemeCard({ theme, selected, onSelect }: TerminalThemeCardProps
         ))}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="text-xs font-medium text-foreground">{theme.name}</div>
-        <div className="truncate text-[10px] text-muted-foreground">{theme.description}</div>
+        <div className="text-xs font-medium text-foreground">{name}</div>
+        <div className="truncate text-[10px] text-muted-foreground">{description}</div>
       </div>
       {selected && <Check className="h-4 w-4 shrink-0 text-primary" />}
     </button>
+  );
+  if (!onDelete) return card;
+  return (
+    <div className="relative">
+      {card}
+      <button
+        type="button"
+        aria-label={`删除主题 ${name}`}
+        title={`删除主题 ${name}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+        className="absolute right-1.5 top-1.5 rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-destructive"
+      >
+        <Trash2 className="h-3 w-3" />
+      </button>
+    </div>
   );
 }
 
