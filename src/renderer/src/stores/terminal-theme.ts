@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { ITheme } from '@xterm/xterm';
 import { trpc } from '@renderer/lib/trpc';
 import { readTerminalThemeFromCss } from '@renderer/components/terminal/terminal-theme';
-import type { TerminalThemeMode } from '@shared/terminal-theme-types';
+import type { CustomTerminalTheme, TerminalThemeMode } from '@shared/terminal-theme-types';
 
 // ── 内置终端主题（Issue #3）────────────────────────────────────
 // 每款主题是完整的 xterm.js ITheme（16 ANSI 色 + 4 语义色），
@@ -256,6 +256,7 @@ export function getBuiltinTerminalTheme(id: string): BuiltinTerminalTheme | unde
 
 /**
  * 解析当前应生效的终端 ITheme：
+ * - independent 模式且 themeId 命中自定义主题 → 自定义主题调色盘（Issue #4）
  * - independent 模式且 themeId 命中内置主题 → 内置主题调色盘
  * - 其他情况（follow-ui / themeId 未知）→ 回退 follow-ui 的 CSS 变量调色盘
  *
@@ -265,8 +266,11 @@ export function getBuiltinTerminalTheme(id: string): BuiltinTerminalTheme | unde
 export function resolveTerminalITheme(state: {
   themeMode: TerminalThemeMode;
   themeId: string;
+  customThemes?: readonly CustomTerminalTheme[];
 }): ITheme {
   if (state.themeMode === 'independent') {
+    const custom = state.customThemes?.find((t) => t.id === state.themeId);
+    if (custom) return custom.theme;
     const builtin = getBuiltinTerminalTheme(state.themeId);
     if (builtin) return builtin.theme;
   }
@@ -278,22 +282,29 @@ export function resolveTerminalITheme(state: {
 type TerminalThemeState = {
   /** 终端配色模式：跟随 UI 主题（默认）或独立主题 */
   themeMode: TerminalThemeMode;
-  /** independent 模式下选中的主题 ID（内置或将来自定义主题） */
+  /** independent 模式下选中的主题 ID（内置或自定义主题） */
   themeId: string;
   /** 内置主题列表（只读引用） */
   builtinThemes: readonly BuiltinTerminalTheme[];
+  /** 用户自定义主题列表（Issue #4，从主进程 appData 恢复） */
+  customThemes: readonly CustomTerminalTheme[];
   setThemeMode: (mode: TerminalThemeMode) => void;
   setTheme: (themeId: string) => void;
-  /** 应用启动时从主进程恢复上次的模式和主题（Issue #3 持久化） */
+  /** 导入自定义主题 JSON（Issue #4）：主进程校验并持久化，成功后切换为 independent 并选中 */
+  importTheme: (json: unknown, name?: string) => Promise<void>;
+  /** 删除自定义主题（Issue #4）：删除当前选中主题时回退 follow-ui */
+  deleteCustomTheme: (themeId: string) => Promise<void>;
+  /** 应用启动时从主进程恢复上次的模式和主题（Issue #3/#4 持久化） */
   initTerminalTheme: () => void;
 }
 
 const DEFAULT_TERMINAL_THEME_ID = 'dracula';
 
-export const useTerminalThemeStore = create<TerminalThemeState>((set) => ({
+export const useTerminalThemeStore = create<TerminalThemeState>((set, get) => ({
   themeMode: 'follow-ui',
   themeId: DEFAULT_TERMINAL_THEME_ID,
   builtinThemes: BUILTIN_TERMINAL_THEMES,
+  customThemes: [],
 
   setThemeMode: (mode: TerminalThemeMode) => {
     set({ themeMode: mode });
@@ -302,28 +313,61 @@ export const useTerminalThemeStore = create<TerminalThemeState>((set) => ({
   },
 
   setTheme: (themeId: string) => {
-    // 仅接受已知内置主题（将来 Issue #4 扩展自定义主题时在此放宽）
-    if (!getBuiltinTerminalTheme(themeId)) return;
+    // 接受内置主题与已导入的自定义主题（Issue #4）
+    const known =
+      getBuiltinTerminalTheme(themeId) !== undefined ||
+      get().customThemes.some((t) => t.id === themeId);
+    if (!known) return;
     set({ themeId });
     void trpc.settings.setTerminalThemeId.mutate({ themeId }).catch(() => {});
   },
 
+  importTheme: async (json: unknown, name?: string) => {
+    const theme = await trpc.settings.importTerminalTheme.mutate({ json, name });
+    // 覆盖同 ID 旧条目（重复导入同名主题 = 更新调色盘）
+    set((s) => ({ customThemes: [...s.customThemes.filter((t) => t.id !== theme.id), theme] }));
+    // 导入后立即预览：切到 independent 并选中新主题
+    get().setThemeMode('independent');
+    get().setTheme(theme.id);
+  },
+
+  deleteCustomTheme: async (themeId: string) => {
+    await trpc.settings.deleteCustomTheme.mutate({ themeId });
+    set((s) => ({ customThemes: s.customThemes.filter((t) => t.id !== themeId) }));
+    // 删除的是当前选中主题 → 回退 follow-ui（持久化）
+    if (get().themeMode === 'independent' && get().themeId === themeId) {
+      get().setThemeMode('follow-ui');
+    }
+  },
+
   initTerminalTheme: () => {
-    void trpc.settings.getTerminalThemeMode
-      .query()
-      .then(async (mode) => {
+    void (async () => {
+      // 先恢复自定义主题列表（independent + 自定义 themeId 的判定依赖它）
+      let custom: CustomTerminalTheme[] = [];
+      try {
+        custom = await trpc.settings.listCustomTerminalThemes.query();
+      } catch {
+        // tRPC 不可用时视为无自定义主题
+      }
+      set({ customThemes: custom });
+      try {
+        const mode = await trpc.settings.getTerminalThemeMode.query();
         if (mode === 'independent') {
           const themeId = await trpc.settings.getTerminalThemeId.query();
-          // 持久化的 themeId 已不存在（如内置主题变更）时保持 follow-ui 语义
-          if (themeId && getBuiltinTerminalTheme(themeId)) {
+          // 持久化的 themeId 已不存在（如主题被删除）时保持 follow-ui 语义
+          const known =
+            themeId !== null &&
+            (getBuiltinTerminalTheme(themeId) !== undefined ||
+              custom.some((t) => t.id === themeId));
+          if (themeId && known) {
             set({ themeMode: 'independent', themeId });
           }
         } else if (mode === 'follow-ui') {
           set({ themeMode: 'follow-ui' });
         }
-      })
-      .catch(() => {
+      } catch {
         // tRPC 不可用时保持默认 follow-ui
-      });
+      }
+    })();
   },
 }));
