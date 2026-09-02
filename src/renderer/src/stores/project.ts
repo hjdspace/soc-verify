@@ -47,6 +47,12 @@ interface ProjectState {
    * （docked 模式折叠 → 展开会卸载 FilePanel，drawer 模式切换视图会关闭抽屉）。
    */
   expandedDirs: Set<string>;
+  /**
+   * 已默认展开过的树根路径（仅内存态）。树根（depth 0）首次挂载时 seed 进
+   * expandedDirs 实现默认展开；seed 过之后不再干预——否则 watcher 刷新或
+   * 面板重挂载会把用户手动折叠的根目录再次弹开。
+   */
+  expandedRootsSeeded: Set<string>;
   // ── 动作 ──────────────────────────────────────────────
   openProject: (rootPath: string, name?: string) => Promise<void>;
   openProjectDialog: () => Promise<void>;
@@ -72,6 +78,8 @@ interface ProjectState {
   toggleDirExpanded: (path: string) => void;
   /** 直接设置目录展开状态 */
   setDirExpanded: (path: string, expanded: boolean) => void;
+  /** 树根默认展开：每个根路径仅 seed 一次，之后用户可自由折叠且保持折叠 */
+  seedRootExpanded: (path: string) => void;
   saveState: () => Promise<void>;
   restoreState: () => Promise<void>;
 }
@@ -144,6 +152,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   uiStateReady: false,
   recentFiles: [],
   expandedDirs: new Set<string>(),
+  expandedRootsSeeded: new Set<string>(),
 
   openProject: async (rootPath, name) => {
     const operationToken = ++projectOperationToken;
@@ -459,6 +468,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       next.delete(path);
     }
     return { expandedDirs: next };
+  }),
+
+  seedRootExpanded: (path) => set((s) => {
+    // 已 seed 过的根不再干预（保留用户的折叠选择）
+    if (s.expandedRootsSeeded.has(path)) return {};
+    const nextSeeded = new Set(s.expandedRootsSeeded);
+    nextSeeded.add(path);
+    const nextExpanded = new Set(s.expandedDirs);
+    nextExpanded.add(path);
+    return { expandedRootsSeeded: nextSeeded, expandedDirs: nextExpanded };
   }),
 
   saveState: async () => {
