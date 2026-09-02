@@ -34,6 +34,8 @@ import {
 } from '../mcp/traceweave-paths';
 import { notificationManager } from '../notifications/notification-manager';
 import type { AskAnswer, AskQuestion } from '@shared/ask-types';
+import { recordUsageFromEvent } from '../token-monitor/token-usage-recorder';
+import { tokenMonitorRegistry } from '../token-monitor/token-monitor-registry';
 
 const MAX_CONCURRENT_SESSIONS = 10;
 const DEFAULT_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -707,6 +709,19 @@ export class SessionManagerImpl extends EventEmitter {
             if (!hasText && !msg.errorMessage) {
               console.warn(`[agent:session:${sessionId}] WARNING: empty assistant response (no text, no error). Possible causes: TLS/SSL certificate issues, network errors, or API key problems. Check [agent:stderr] lines above for omp engine errors.`);
             }
+          }
+          // Token Monitor bypass: extract usage and write to Token Monitor DB.
+          // Does not block event forwarding; write failure only logs a warning.
+          try {
+            const tokenDb = tokenMonitorRegistry.getOrCreateDb(options.cwd);
+            recordUsageFromEvent(tokenDb, event, {
+              sessionId,
+              engine: 'omp',
+              projectId: options.projectId,
+              cwd: options.cwd,
+            });
+          } catch (err) {
+            console.warn(`[agent:session:${sessionId}] token monitor bypass failed:`, err);
           }
         }
         // Diagnostic: log subagent frames to trace data flow
