@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Terminal } from '@xterm/xterm';
+import type { IDecoration } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
@@ -11,10 +12,24 @@ import {
 } from '@renderer/stores/terminal-theme';
 import { trpc } from '@renderer/lib/trpc';
 import { Copy, Check } from 'lucide-react';
+import { Osc133Parser, type CommandBoundary } from './osc133-parser';
+import { formatDuration } from './osc133-parser';
 
 interface TerminalViewProps {
   terminalId: string;
 }
+
+/** 装饰器实例 + 关联的命令边界 */
+type DecorationEntry = {
+  decoration: IDecoration;
+  command: CommandBoundary;
+  /** 命令行文本缓存（onRender 后从 buffer 读取一次） */
+  commandText: string;
+  /** 装饰器容器 div */
+  container: HTMLDivElement;
+  /** 折叠状态 */
+  collapsed: boolean;
+};
 
 export function TerminalView({ terminalId }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -33,6 +48,172 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // ── OSC 133 命令装饰器状态（Issue #7）──────────────────────
+  const oscParserRef = useRef<Osc133Parser>(new Osc133Parser());
+  const decorationsRef = useRef<Map<number, DecorationEntry>>(new Map());
+  // decoratorVersion 仅用于触发 re-render（装饰器状态变化时更新计数）
+  const [, setDecoratorVersion] = useState(0);
+
+  /** 从 xterm.js buffer 读取指定行的文本 */
+  const readLineText = useCallback((term: Terminal, line: number): string => {
+    const buffer = term.buffer.active;
+    const lineData = buffer.getLine(line);
+    if (!lineData) return '';
+    return lineData.translateToString(true);
+  }, []);
+
+  /**
+   * 用原生 DOM 渲染装饰器内容到给定元素。
+   *
+   * xterm.js Decoration 的 onRender 回调提供 HTMLElement，我们在此元素上
+   * 渲染退出码图标、执行时间、复制按钮、折叠按钮。
+   * 装饰器不写入 xterm.js buffer，不干扰终端正常输入/输出。
+   * 配色用 CSS 变量语义色（--status-pass / --status-fail）。
+   */
+  const renderDecoratorContent = useCallback((
+    el: HTMLElement,
+    command: CommandBoundary,
+    commandText: string,
+    collapsed: boolean,
+    onToggleCollapse: (collapsed: boolean) => void,
+  ) => {
+    const isPass = command.exitCode === 0;
+    const hasEndTime = command.endTime !== null;
+    const duration = hasEndTime
+      ? formatDuration(command.startTime, command.endTime!)
+      : '';
+
+    el.className = 'cmd-decorator-inner';
+    el.innerHTML = '';
+
+    // ── 退出码图标 ──────────────────────────────────
+    const exitIcon = document.createElement('span');
+    exitIcon.className = `cmd-exit-code ${isPass ? 'cmd-pass' : 'cmd-fail'}`;
+    exitIcon.title = isPass ? '命令成功 (exit 0)' : `命令失败 (exit ${command.exitCode})`;
+    exitIcon.textContent = isPass ? '✓' : '✗';
+    if (!isPass && command.exitCode !== null && command.exitCode >= 0) {
+      const exitNum = document.createElement('span');
+      exitNum.className = 'cmd-exit-num';
+      exitNum.textContent = String(command.exitCode);
+      exitIcon.appendChild(exitNum);
+    }
+    el.appendChild(exitIcon);
+
+    // ── 执行时间 ────────────────────────────────────
+    if (duration) {
+      const durationEl = document.createElement('span');
+      durationEl.className = 'cmd-duration';
+      durationEl.title = '执行时间';
+      durationEl.textContent = duration;
+      el.appendChild(durationEl);
+    }
+
+    // ── 复制按钮 ────────────────────────────────────
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'cmd-copy-btn';
+    copyBtn.title = '复制命令';
+    copyBtn.setAttribute('data-testid', 'command-copy-btn');
+    copyBtn.textContent = '⎘';
+    copyBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      void navigator.clipboard.writeText(commandText).then(() => {
+        copyBtn.textContent = '✓';
+        copyBtn.classList.add('cmd-copied');
+        setTimeout(() => {
+          copyBtn.textContent = '⎘';
+          copyBtn.classList.remove('cmd-copied');
+        }, 1500);
+      }).catch(() => {});
+    });
+    el.appendChild(copyBtn);
+
+    // ── 折叠/展开按钮 ───────────────────────────────
+    const collapseBtn = document.createElement('button');
+    collapseBtn.className = 'cmd-collapse-btn';
+    collapseBtn.title = collapsed ? '展开输出' : '折叠输出';
+    collapseBtn.setAttribute('data-testid', 'command-collapse-btn');
+    collapseBtn.textContent = collapsed ? '▸' : '▾';
+    collapseBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      onToggleCollapse(!collapsed);
+    });
+    el.appendChild(collapseBtn);
+  }, []);
+
+  /** 为命令创建 xterm.js Decoration 并渲染装饰器内容 */
+  const createDecoration = useCallback((
+    term: Terminal,
+    command: CommandBoundary,
+  ): DecorationEntry | null => {
+    // 使用 marker 方式（而非固定行号），确保终端 scroll 后装饰器位置自动跟随
+    const marker = term.registerMarker(command.startLine - term.buffer.active.baseY);
+    if (!marker) return null;
+
+    const decoration = term.registerDecoration({
+      marker,
+      anchor: 'right',
+      x: 0,
+    });
+
+    if (!decoration) return null;
+
+    // 创建容器 div 用于挂载到 xterm.js Decoration DOM 元素
+    const container = document.createElement('div');
+    container.className = 'cmd-decorator-host';
+    container.style.position = 'absolute';
+    container.style.zIndex = '10';
+    container.style.pointerEvents = 'auto';
+
+    let commandText = '';
+    let collapsed = false;
+
+    decoration.onRender((element: HTMLElement) => {
+      // 将装饰器容器挂载到 xterm.js 提供的 DOM 元素
+      if (!element.contains(container)) {
+        element.style.position = 'relative';
+        element.appendChild(container);
+      }
+
+      // 首次渲染时读取命令行文本
+      if (!commandText) {
+        commandText = readLineText(term, command.startLine);
+      }
+
+      // 渲染装饰器内容
+      const innerEl = container.querySelector('.cmd-decorator-inner') as HTMLElement | null;
+      const targetEl = innerEl ?? document.createElement('div');
+      if (!innerEl) {
+        container.appendChild(targetEl);
+      }
+
+      renderDecoratorContent(targetEl, command, commandText, collapsed, (next) => {
+        collapsed = next;
+        if (collapsed) {
+          container.classList.add('cmd-decorator-collapsed');
+        } else {
+          container.classList.remove('cmd-decorator-collapsed');
+        }
+        // 重新渲染以更新折叠按钮图标
+        renderDecoratorContent(targetEl, command, commandText, collapsed, (n) => {
+          collapsed = n;
+          if (collapsed) {
+            container.classList.add('cmd-decorator-collapsed');
+          } else {
+            container.classList.remove('cmd-decorator-collapsed');
+          }
+        });
+      });
+    });
+
+    return {
+      decoration,
+      command,
+      commandText,
+      container,
+      collapsed: false,
+    };
+  }, [readLineText, renderDecoratorContent]);
+
   /** Copy the current terminal selection to clipboard. Returns true if text was copied. */
   const copySelection = useCallback(async (): Promise<boolean> => {
     const term = termRef.current;
@@ -41,7 +222,6 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
     if (!selection) return false;
     try {
       await navigator.clipboard.writeText(selection);
-      // Show "已复制" feedback
       setCopied(true);
       if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
       copiedTimerRef.current = setTimeout(() => setCopied(false), 1500);
@@ -54,16 +234,21 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
   useEffect(() => {
     if (!containerRef.current) return;
 
+    // ── OSC 133 状态重置（OutputBuffer restore 前清空）──────────
+    // TerminalManager 的 outputBuffer 包含所有 PTY 输出（含 OSC 133 转义序列）。
+    // remount 时 restore 的文本会重新写入 xterm.js，OSC 133 序列会被二次解析。
+    // 在 effect 开头（restore 前）清空命令装饰器状态，让重新解析重建装饰器。
+    oscParserRef.current.reset();
+    decorationsRef.current.clear();
+    setDecoratorVersion(0);
+
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 13,
-      // Nerd Font 优先级链（Issue #1 打包注册；未下载时 CSS font-family
-      // 自然回退到 Consolas / monospace，不崩溃）
       fontFamily:
         "'JetBrainsMono Nerd Font', 'MesloLGS NF', 'Consolas', 'Courier New', monospace",
       scrollback: 100000,
       allowProposedApi: true,
-      // 双模式取色：independent → 内置主题定义；follow-ui → CSS 变量
       theme: resolveTerminalITheme(useTerminalThemeStore.getState()),
     });
 
@@ -72,11 +257,8 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
     term.open(containerRef.current);
 
     // ── WebGL GPU 加速渲染（Issue #2）────────────────────────
-    // 应对百万行仿真日志滚动场景。加载顺序：open() → webgl → fit()。
-    // 无 GPU / 上下文创建失败时 try-catch 降级为默认 Canvas 渲染。
     try {
       const webglAddon = new WebglAddon();
-      // WebGL 上下文丢失（如 GPU 驱动重置）时释放 addon，xterm 回退 Canvas
       webglAddon.onContextLoss(() => {
         webglAddon.dispose();
       });
@@ -90,51 +272,63 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
     termRef.current = term;
     fitRef.current = fitAddon;
 
+    // ── OSC 133 handler 注册（Issue #7）──────────────────────
+    // 解析 Shell Integration 脚本发送的 A/C/D 序列，维护命令边界状态。
+    // 命令完成后创建 xterm.js Decoration 渲染装饰器。
+    // 仅 Enhanced Terminal 会发送 OSC 133 序列；仿真终端不发送，不会创建装饰器。
+    const oscDisposable = term.parser.registerOscHandler(133, (data: string): boolean => {
+      const cursorLine = term.buffer.active.baseY + term.buffer.active.cursorY;
+      const handled = oscParserRef.current.handle(data, cursorLine);
+
+      if (handled) {
+        // 检查是否有新完成的命令需要创建装饰器
+        const commands = oscParserRef.current.commands;
+        const existingCount = decorationsRef.current.size;
+
+        for (let i = existingCount; i < commands.length; i++) {
+          const cmd = commands[i];
+          if (cmd.exitCode === null) continue;
+          const entry = createDecoration(term, cmd);
+          if (entry) {
+            decorationsRef.current.set(i, entry);
+          }
+        }
+
+        if (commands.length > existingCount) {
+          setDecoratorVersion((v) => v + 1);
+        }
+      }
+
+      return handled;
+    });
+
     // ── Output buffer restoration ──────────────────────────
-    // When the TerminalView is remounted (e.g., user switched to another tab
-    // and came back), the xterm.js instance is recreated and starts empty.
-    // Fetch the terminal's output buffer from the main process and write it
-    // to restore the previous output.
-    //
-    // To avoid duplicates: buffer incoming IPC data until the output buffer
-    // is restored, then flush the buffered data.
+    // 注意：outputBuffer 包含 OSC 133 转义序列，restore 时会被二次解析。
+    // oscParserRef 已在 effect 开头 reset()，重新解析将重建命令边界和装饰器。
     let outputRestored = false;
     const pendingData: string[] = [];
 
-    // Handle user input → send to main process
     const inputDisposable = term.onData((data) => {
-      // Intercept Ctrl+Shift+C for copy
-      // xterm.js sends \x1b[97;2;9u or similar for Ctrl+Shift+C with modifyOtherKeys
-      // Simpler: check for the raw Ctrl+Shift+C sequence
       void writeToTerminalRef(terminalId, data);
     });
 
-    // Handle resize → send new size to main process
     const resizeDisposable = term.onResize(({ cols, rows }) => {
       void resizeTerminalRef(terminalId, cols, rows);
     });
 
-    // Listen for terminal data from main process
     let cleanup: (() => void) | undefined;
     if (window.eventBridge) {
       cleanup = window.eventBridge.onTerminalData(({ id, data }) => {
         if (id === terminalId && termRef.current) {
           if (outputRestored) {
-            // Output buffer already restored — write directly
             termRef.current.write(data);
           } else {
-            // Buffer incoming data until output buffer is restored
             pendingData.push(data);
           }
         }
       });
     }
 
-    // Restore output buffer from main process.
-    // When the TerminalView is remounted (e.g., user switched to another tab
-    // and came back), the xterm.js instance is recreated and starts empty.
-    // Fetch the terminal's output buffer from the main process and write it
-    // to restore the previous output.
     trpc.terminal.getOutputBuffer
       .query({ terminalId })
       .then((chunks) => {
@@ -145,7 +339,6 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
         if (chunks.length > 0) {
           termRef.current.write(chunks.join(''));
         }
-        // Flush any data that arrived while fetching the output buffer
         if (pendingData.length > 0) {
           for (const data of pendingData) {
             termRef.current.write(data);
@@ -154,12 +347,10 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
         outputRestored = true;
       })
       .catch((err) => {
-        // Terminal session might not exist (e.g., already destroyed)
         console.warn(`[TerminalView] Failed to restore output buffer for ${terminalId}:`, err);
         outputRestored = true;
       });
 
-    // Handle container resize
     const resizeObserver = new ResizeObserver(() => {
       if (fitRef.current && termRef.current) {
         try {
@@ -171,12 +362,9 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
     });
     resizeObserver.observe(containerRef.current);
 
-    // Initial resize notification
     void resizeTerminalRef(terminalId, term.cols, term.rows);
 
-    // ── Right-click copy: intercept contextmenu on the terminal container ──
-    // When the user right-clicks with a selection, copy it to clipboard.
-    // This matches the behaviour of Windows Terminal, PuTTY, etc.
+    // ── Right-click copy ──
     const handleContextMenu = (e: MouseEvent): void => {
       const selection = term.getSelection();
       if (selection) {
@@ -185,16 +373,13 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
           setCopied(true);
           if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
           copiedTimerRef.current = setTimeout(() => setCopied(false), 1500);
-        }).catch(() => {
-          // clipboard write failed — let default context menu show
-        });
+        }).catch(() => {});
       }
     };
     containerRef.current.addEventListener('contextmenu', handleContextMenu);
 
-    // ── Ctrl+Shift+C / Ctrl+Insert keyboard copy shortcut ──
+    // ── Ctrl+Shift+C / Ctrl+Insert keyboard copy ──
     const handleKeyDown = (e: KeyboardEvent): void => {
-      // Ctrl+Shift+C (standard terminal copy) or Ctrl+Insert (Windows copy)
       if ((e.ctrlKey && e.shiftKey && e.key === 'C') || (e.ctrlKey && e.key === 'Insert')) {
         const selection = term.getSelection();
         if (selection) {
@@ -207,30 +392,30 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
         }
       }
     };
-    // Attach to the container so it captures keyboard events from the terminal
     containerRef.current.addEventListener('keydown', handleKeyDown);
 
-    // Capture the container element for the cleanup function — containerRef.current
-    // may have changed by the time the cleanup runs.
     const container = containerRef.current;
 
     return () => {
+      oscDisposable.dispose();
       inputDisposable.dispose();
       resizeDisposable.dispose();
       cleanup?.();
       resizeObserver.disconnect();
       container?.removeEventListener('contextmenu', handleContextMenu);
       container?.removeEventListener('keydown', handleKeyDown);
+      // 清理装饰器 DOM 元素
+      for (const entry of decorationsRef.current.values()) {
+        entry.container.remove();
+      }
+      decorationsRef.current.clear();
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [terminalId, writeToTerminalRef, resizeTerminalRef]);
+  }, [terminalId, writeToTerminalRef, resizeTerminalRef, createDecoration]);
 
-  // 主题切换时同步终端配色（Issue #3）：
-  // - follow-ui 模式：UI 主题切换（currentTheme 变化）后 CSS 变量联动
-  // - independent 模式：选择内置主题 / 切换模式后立即应用新调色盘
-  //   themeId 未命中内置主题时回退 CSS 变量（resolveTerminalITheme 内处理）
+  // 主题切换时同步终端配色（Issue #3）
   useEffect(() => {
     if (termRef.current) {
       termRef.current.options.theme = resolveTerminalITheme(useTerminalThemeStore.getState());
