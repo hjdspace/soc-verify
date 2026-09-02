@@ -29,6 +29,12 @@ import { HOST_TOOL_NAMES, HOST_TOOL_GROUPS } from '../../host/tool-catalog';
 import { BUILTIN_TOOL_CATALOG, getBuiltinLabel, getBuiltinDescription } from '../../host/builtin-tool-catalog';
 import { themeSettings } from '../../agent/theme-settings';
 import { terminalThemeSettings } from '../../terminal/terminal-theme-settings';
+import {
+  deleteCustomTheme,
+  importCustomTheme,
+  listCustomThemes,
+  TerminalThemeImportError,
+} from '../../terminal/terminal-custom-themes';
 import { isValidTerminalThemeMode, type TerminalThemeMode } from '@shared/terminal-theme-types';
 import type { TvConfig } from '../../timing-violation/types';
 import type { CredentialInput, CredentialUpdateInput, ConfiguredModel, CreateSkillInput, McpConfigFile, McpToolInfo, OpenAiApiFormat } from '@shared/types';
@@ -148,6 +154,50 @@ export const settingsRouter = t.router({
     .mutation(async ({ input }) => {
       await terminalThemeSettings.setThemeId(input.themeId);
       return { ok: true as const };
+    }),
+
+  // ── 自定义终端主题（Issue #4，ADR-0030）─────────────────────
+  // 存取 <userData>/terminal-themes/<id>.json。CSP 合规：前端不接触
+  // 文件路径，只经 tRPC 收发主题数据对象。
+
+  importTerminalTheme: t.procedure
+    .input((raw): { json: unknown; name?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.json !== 'object' || r.json === null || Array.isArray(r.json)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'json must be an xterm.js ITheme-compatible object',
+        });
+      }
+      if (r.name !== undefined && (typeof r.name !== 'string' || r.name.trim().length === 0)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'name must be a non-empty string' });
+      }
+      return { json: r.json, name: r.name as string | undefined };
+    })
+    .mutation(async ({ input }) => {
+      try {
+        return await importCustomTheme(input.json, input.name);
+      } catch (err) {
+        if (err instanceof TerminalThemeImportError) {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
+        }
+        throw err;
+      }
+    }),
+
+  listCustomTerminalThemes: t.procedure.query(() => listCustomThemes()),
+
+  deleteCustomTheme: t.procedure
+    .input((raw): { themeId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.themeId !== 'string' || r.themeId.length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'themeId must be a non-empty string' });
+      }
+      return { themeId: r.themeId };
+    })
+    .mutation(async ({ input }) => {
+      const deleted = await deleteCustomTheme(input.themeId);
+      return { ok: deleted as boolean };
     }),
 
   // ── Agent 工具开关（每个工具是否暴露给 LLM）───────────────
