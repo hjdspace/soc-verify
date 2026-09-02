@@ -122,7 +122,7 @@ vi.mock('@renderer/lib/trpc', () => ({
 }));
 
 // ── Mock eventBridge ────────────────────────────────────────
-let dataCallback: ((data: { id: string; data: string }) => void) | null = null;
+let _dataCallback: ((data: { id: string; data: string }) => void) | null = null;
 
 vi.mock('@renderer/stores/workbench', () => ({
   useWorkbenchStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -143,15 +143,15 @@ describe('TerminalView OSC 133 命令装饰器（Issue #7）', () => {
     decorationCallbacks.length = 0;
     onRenderCallbacks.length = 0;
     mockGetOutputBuffer.mockResolvedValue([]);
-    dataCallback = null;
+    _dataCallback = null;
 
     // Setup eventBridge
     Object.defineProperty(window, 'eventBridge', {
       configurable: true,
       value: {
         onTerminalData: (cb: (data: { id: string; data: string }) => void) => {
-          dataCallback = cb;
-          return () => { dataCallback = null; };
+          _dataCallback = cb;
+          return () => { _dataCallback = null; };
         },
         onTerminalExit: vi.fn(() => () => {}),
       },
