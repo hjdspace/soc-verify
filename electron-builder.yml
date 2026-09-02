@@ -27,6 +27,10 @@ extraResources:
     to: binaries
     # 排除 officecli 自更新中断残留的 .update.partial 临时文件（非有效载荷）
     filter: ["**/*", "!README.md", "!**/*.update.partial"]
+  - from: resources/fonts
+    to: fonts
+    # Nerd Font 字体文件（download:nerd-fonts 下载），README 仅为目录占位说明
+    filter: ["**/*", "!README.md"]
   - from: resources/built-in-extension
     to: built-in-extension
     filter: ["**/*"]
