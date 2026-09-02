@@ -34,6 +34,9 @@ const VARS = {
   chart2: '--chart-2',
   chart3: '--chart-3',
   chart4: '--chart-4',
+  chartOmp: '--chart-omp',
+  chartClaude: '--chart-claude',
+  chartCodex: '--chart-codex',
 } as const;
 
 /** ECharts theme 对象（可注入 option 的默认值） */
@@ -49,6 +52,10 @@ export type DashboardEChartsTheme = {
   statusFail: string;
   statusError: string;
   statusRunning: string;
+  /** Token Monitor 引擎语义色 */
+  chartOmp: string;
+  chartClaude: string;
+  chartCodex: string;
   /** 生成 ECharts option 的默认值（merge 到用户 option 中） */
   toDefaults: () => Partial<EChartsOption>;
 };
@@ -71,6 +78,9 @@ export function buildEChartsTheme(): DashboardEChartsTheme {
   const statusFail = cssVar(VARS.statusFail) || '#ee6666';
   const statusError = cssVar(VARS.statusError) || '#ee6666';
   const statusRunning = cssVar(VARS.statusRunning) || '#73c0de';
+  const chartOmp = cssVar(VARS.chartOmp) || chartColors[2] || '#fac858';
+  const chartClaude = cssVar(VARS.chartClaude) || chartColors[3] || '#ee6666';
+  const chartCodex = cssVar(VARS.chartCodex) || chartColors[1] || '#91cc75';
 
   return {
     backgroundColor: 'transparent',
@@ -84,6 +94,9 @@ export function buildEChartsTheme(): DashboardEChartsTheme {
     statusFail,
     statusError,
     statusRunning,
+    chartOmp,
+    chartClaude,
+    chartCodex,
     toDefaults: () => ({
       backgroundColor: 'transparent',
       textStyle: { color: foreground },
