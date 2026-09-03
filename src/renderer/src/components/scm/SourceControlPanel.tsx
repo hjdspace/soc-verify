@@ -240,9 +240,17 @@ export function SourceControlPanel() {
 
   if (status && !status.isRepository) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 text-xs text-muted-foreground">
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-xs text-muted-foreground">
         <GitBranch className="h-8 w-8 opacity-50" />
         <div>{currentProject.name} 不是 Git 仓库</div>
+        {status.notice && (
+          <div
+            className="max-h-32 max-w-full overflow-auto break-all rounded border border-border/60 bg-secondary/30 px-2 py-1 text-left text-[10px] leading-relaxed"
+            title="git status 失败原因（用于诊断）"
+          >
+            {status.notice}
+          </div>
+        )}
       </div>
     );
   }
