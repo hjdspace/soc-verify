@@ -19,6 +19,8 @@
  */
 
 import { readFileSync, statSync } from 'node:fs';
+import { createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
 import type { TokenUsageRecord } from './token-monitor-db';
 
 // ─── Types ─────────────────────────────────────────────────
@@ -201,4 +203,74 @@ export function parseClaudeJsonlFile(
   } catch {
     return []; // 文件不存在或读取失败 → 静默降级
   }
+}
+
+// ─── Streaming parse ───────────────────────────────────────
+
+/**
+ * 流式解析 JSONL 文件的 fallback 信息（从文件路径推导）。
+ */
+type JsonlFallbacks = {
+  fallbackCwd: string;
+  fallbackSessionId: string;
+};
+
+/**
+ * 从文件路径推导备用 cwd（文件所在目录）和 sessionId（文件名去后缀）。
+ */
+export function jsonlPathFallbacks(filePath: string): JsonlFallbacks {
+  const fileName = filePath.split(/[/\\]/).pop() || 'unknown';
+  const fallbackSessionId = fileName.replace(/\.jsonl$/, '');
+  const lastSlash = filePath.lastIndexOf('/');
+  const lastBackslash = filePath.lastIndexOf('\\');
+  const lastSep = Math.max(lastSlash, lastBackslash);
+  const fallbackCwd = lastSep >= 0 ? filePath.slice(0, lastSep) : '';
+  return { fallbackCwd, fallbackSessionId };
+}
+
+/**
+ * 流式解析 claude-code JSONL 文件（异步，不阻塞事件循环）。
+ *
+ * 与 parseClaudeJsonlFile 的差异：
+ * - readline + createReadStream({ start }) 只从 byteOffset 读新字节（真增量），
+ *   不再全量读入内存后 slice
+ * - 每行独立解析，行间 await 让出事件循环（Electron 主进程保持 IPC 响应）
+ * - 尾部不完整行（无换行符结尾）不解析 —— 只到已落盘的完整行为止，
+ *   未写完的行留给下次增量扫描
+ *
+ * @param filePath JSONL 文件路径
+ * @param byteOffset 起始字节偏移（0 = 从头）
+ * @param yieldEveryLines 每解析 N 行让出一次事件循环
+ * @returns 所有有效 TokenUsageRecord
+ */
+export async function parseClaudeJsonlFileStream(
+  filePath: string,
+  byteOffset: number = 0,
+  yieldEveryLines: number = 500,
+): Promise<TokenUsageRecord[]> {
+  const records: TokenUsageRecord[] = [];
+  const { fallbackCwd, fallbackSessionId } = jsonlPathFallbacks(filePath);
+
+  const stream = createReadStream(filePath, { start: byteOffset, encoding: 'utf8' });
+  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+
+  let linesSinceYield = 0;
+  try {
+    for await (const line of rl) {
+      if (line.trim().length === 0) continue;
+      const record = parseClaudeJsonlLine(line, fallbackCwd, fallbackSessionId);
+      if (record) records.push(record);
+      if (++linesSinceYield >= yieldEveryLines) {
+        linesSinceYield = 0;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    }
+  } catch {
+    // 文件读取中途失败 → 返回已解析部分（静默降级）
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+
+  return records;
 }
