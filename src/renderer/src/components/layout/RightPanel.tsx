@@ -3,7 +3,7 @@ import { Plus, ArrowUp, Square, Trash2, Loader2, Clock, X, Check, Compass, Searc
 import { useSessionCoreStore } from '@renderer/stores/session-core';
 import { useSessionMessagesStore } from '@renderer/stores/session-messages';
 import { useSessionApprovalStore } from '@renderer/stores/session-approval';
-import type { ChatMessage, SelectedSkill, ContextFile, HistorySession, SessionEntry } from '@renderer/stores/session-types';
+import type { ChatMessage, SelectedSkill, ContextFile, HistorySession, SessionStatus } from '@renderer/stores/session-types';
 import { useSettingsStore } from '@renderer/stores/settings';
 import { useProjectStore } from '@renderer/stores/project';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
@@ -267,7 +267,7 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
     // waiting for the async sendMessage to resolve.
     const images = attachedImages.length > 0 ? attachedImages : undefined;
     setAttachedImages([]);
-    const text = inputMessage;
+    const text = inputMessage.trim();
     editorApiRef.current?.clear();
     await sendMessage(text, images);
   };
@@ -794,7 +794,15 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
               item.kind === 'run' ? (
                 <ToolRunGroup key={`run-${item.messages[0].id}`} messages={item.messages} />
               ) : (
-                <MessageBubble key={item.message.id} message={item.message} session={currentSession} isLastAssistant={item.message.id === lastAssistantId} turnSettled={turnSettled} />
+                <MessageBubble
+                  key={item.message.id}
+                  message={item.message}
+                  sessionId={currentSession.id}
+                  tvViolationId={currentSession.tvViolationId}
+                  sessionStatus={currentSession.status}
+                  isLastAssistant={item.message.id === lastAssistantId}
+                  turnSettled={turnSettled}
+                />
               ),
             )}
             {/* Approval request cards */}
@@ -1388,8 +1396,23 @@ const RunningIndicator = memo(function RunningIndicator() {
   );
 });
 
-function MessageBubble({ message, session, isLastAssistant, turnSettled = true }: { message: ChatMessage; session?: SessionEntry; isLastAssistant?: boolean; turnSettled?: boolean }) {
+// MessageBubble props：session 以「窄字段」传入（sessionId / tvViolationId / status），
+// 而非整个 SessionEntry——store 每次更新都产生新的 session 对象引用，整对象做
+// props 会让 memo 失效：流式期间每帧无关重渲染整列气泡（Markdown 重新 parse）。
+// SelectionActionsHost / AssistantActions 需要完整会话对象，在 memo 边界内经
+// store 解析（session 对象仅在所属会话自身更新时变化）。
+const MessageBubble = memo(function MessageBubble({ message, sessionId, tvViolationId, sessionStatus, isLastAssistant, turnSettled = true }: {
+  message: ChatMessage;
+  sessionId?: string;
+  tvViolationId?: number;
+  sessionStatus?: SessionStatus;
+  isLastAssistant?: boolean;
+  turnSettled?: boolean;
+}) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
+  const session = useSessionCoreStore((s) =>
+    sessionId ? s.sessions.find((sess) => sess.id === sessionId) : undefined,
+  );
 
   if (message.role === 'tool') {
     return <ToolCard message={message} />;
@@ -1424,19 +1447,6 @@ function MessageBubble({ message, session, isLastAssistant, turnSettled = true }
       <>
         <div className="group flex flex-col items-end gap-1">
           <div className="max-w-[88%] rounded-2xl bg-[var(--dsw-bubble)] px-3 py-2 text-xs leading-5 text-foreground">
-            {message.skills && message.skills.length > 0 && (
-              <div className="mb-1.5 flex flex-wrap justify-end gap-1">
-                {message.skills.map((skill) => (
-                  <span
-                    key={`skill-${skill.name}`}
-                    className="inline-flex items-center gap-1 rounded bg-[var(--dsw-blue-tertiary)] px-1.5 py-0.5 text-[10px] font-medium text-primary"
-                  >
-                    <Sparkles className="h-2.5 w-2.5" />
-                    <span className="max-w-[120px] truncate">{skill.name}</span>
-                  </span>
-                ))}
-              </div>
-            )}
             {message.images && message.images.length > 0 && (
               <div className="mb-1.5 flex flex-wrap gap-1">
                 {message.images.map((img, idx) => (
@@ -1450,7 +1460,19 @@ function MessageBubble({ message, session, isLastAssistant, turnSettled = true }
                 ))}
               </div>
             )}
-            <div className="whitespace-pre-wrap break-words">{message.content}</div>
+            {/* skill chips 与消息文本同行渲染（行内原子元素，对齐输入框 chip 布局） */}
+            <div className="whitespace-pre-wrap break-words">
+              {message.skills?.map((skill) => (
+                <span
+                  key={`skill-${skill.name}`}
+                  className="mx-px mr-0.5 inline-flex h-4 max-w-[140px] items-center gap-0.5 rounded-sm bg-[var(--dsw-blue-tertiary)] px-1 align-middle text-[10px] font-medium leading-none text-primary"
+                >
+                  <Sparkles className="h-2.5 w-2.5 shrink-0" />
+                  <span className="truncate">{skill.name}</span>
+                </span>
+              ))}
+              {message.content}
+            </div>
           </div>
           {/* 悬停显现：复制 + 时间戳（DSH 用户消息操作行） */}
           <div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-100 group-hover:opacity-100 group-focus-within:opacity-100">
@@ -1488,7 +1510,7 @@ function MessageBubble({ message, session, isLastAssistant, turnSettled = true }
 
   // Assistant messages: render thinking block + content
   // TV AI sessions: detect JSON suggestion and render visual card
-  const isTVSession = session?.tvViolationId !== undefined;
+  const isTVSession = tvViolationId !== undefined;
   const isStreaming = !!message.isStreaming;
   const canRenderTVCard = isTVSession && !isStreaming && message.role === 'assistant' && message.content.trim().length > 0;
 
@@ -1502,11 +1524,11 @@ function MessageBubble({ message, session, isLastAssistant, turnSettled = true }
         />
       )}
       {canRenderTVCard ? (
-        <TVAISuggestionCardRenderer content={message.content} violationId={session!.tvViolationId!} />
+        <TVAISuggestionCardRenderer content={message.content} violationId={tvViolationId!} />
       ) : message.content?.trimStart().startsWith('[错误]') ? (
         <ErrorMessage content={message.content} />
       ) : message.content ? (
-        <SelectionActionsHost session={session} enabled={!!session}>
+        <SelectionActionsHost session={session} enabled={!!sessionId}>
           <MarkdownRenderer content={message.content} streaming={isStreaming} />
         </SelectionActionsHost>
       ) : (
@@ -1522,13 +1544,13 @@ function MessageBubble({ message, session, isLastAssistant, turnSettled = true }
           消息都不显示，避免每段文本都挂一个复制按钮；
           turnSettled 兜底：还有工具在跑（未落地）时即使 status 短暂回闲也不渲染 */}
       {!isStreaming && isLastAssistant && turnSettled
-        && (session?.status === 'idle' || session?.status === 'error')
+        && (sessionStatus === 'idle' || sessionStatus === 'error')
         && message.content && !canRenderTVCard && !message.content.trimStart().startsWith('[错误]') && (
         <AssistantActions message={message} session={session} />
       )}
     </div>
   );
-}
+});
 
 // ToolCard is now imported from '@renderer/components/chat/ToolCard'
 
