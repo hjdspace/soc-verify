@@ -187,11 +187,12 @@ export function ToolCard({ message }: { message: ChatMessage }) {
         </button>
       </div>
 
-      {expanded && (
+      {/* 折叠时跳过展开体渲染（挂载即执行逐行高亮是切换会话卡顿的主因之一） */}
+      {expanded ? (
         <div className="border-t border-[var(--dsw-border-l1)] px-1 pb-1 pt-0.5">
           <ToolBodyView message={message} taskAgents={taskAgents} />
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
