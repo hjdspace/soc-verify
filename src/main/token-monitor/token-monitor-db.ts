@@ -177,6 +177,29 @@ export function recordUsage(db: TokenMonitorDb, record: TokenUsageRecord): void 
   db.prepare(INSERT_SQL).run(record);
 }
 
+/**
+ * 在单个事务中批量写入 Token Usage Records。
+ *
+ * 与逐条 recordUsage 的差异：
+ * - 一次事务提交替代 N 次自动提交（WAL 下每次自动提交都触发 fsync，
+ *   大批量扫描时是数量级的性能差距）
+ * - 通过 INSERT OR IGNORE 的 res.changes 统计实际插入数，
+ *   不需要前后两次 SELECT COUNT(*) 全表扫描
+ *
+ * @returns 实际插入的记录数（被唯一键去重忽略的不计）
+ */
+export function recordUsageBatch(db: TokenMonitorDb, records: TokenUsageRecord[]): number {
+  if (records.length === 0) return 0;
+  const stmt = db.prepare(INSERT_SQL);
+  let inserted = 0;
+  db.transaction(() => {
+    for (const record of records) {
+      inserted += stmt.run(record).changes;
+    }
+  })();
+  return inserted;
+}
+
 // ─── Read: Summary ─────────────────────────────────────────
 
 /**
