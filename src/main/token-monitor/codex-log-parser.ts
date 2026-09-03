@@ -21,8 +21,10 @@
  * 3. cost 在 message 内部
  */
 
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync, createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
 import type { TokenUsageRecord } from './token-monitor-db';
+import { jsonlPathFallbacks } from './claude-log-parser';
 
 // ─── Types ─────────────────────────────────────────────────
 
@@ -200,4 +202,44 @@ export function parseCodexJsonlFile(
   const fallbackCwd = lastSep >= 0 ? filePath.slice(0, lastSep) : '';
 
   return parseCodexJsonlLines(lines, fallbackCwd, fallbackSessionId);
+}
+
+// ─── Streaming parse ───────────────────────────────────────
+
+/**
+ * 流式解析 codex JSONL 文件（异步，不阻塞事件循环）。
+ *
+ * 与 parseCodexJsonlFile 的差异同 claude-log-parser 的流式版本：
+ * 只从 byteOffset 读新字节、行间让出事件循环、跳过尾部不完整行。
+ */
+export async function parseCodexJsonlFileStream(
+  filePath: string,
+  byteOffset: number = 0,
+  yieldEveryLines: number = 500,
+): Promise<TokenUsageRecord[]> {
+  const records: TokenUsageRecord[] = [];
+  const { fallbackCwd, fallbackSessionId } = jsonlPathFallbacks(filePath);
+
+  const stream = createReadStream(filePath, { start: byteOffset, encoding: 'utf8' });
+  const rl = createInterface({ input: stream, crlfDelay: Infinity });
+
+  let linesSinceYield = 0;
+  try {
+    for await (const line of rl) {
+      if (line.trim().length === 0) continue;
+      const record = parseCodexJsonlLine(line, fallbackCwd, fallbackSessionId);
+      if (record) records.push(record);
+      if (++linesSinceYield >= yieldEveryLines) {
+        linesSinceYield = 0;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+    }
+  } catch {
+    // 文件读取中途失败 → 返回已解析部分（静默降级）
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+
+  return records;
 }
