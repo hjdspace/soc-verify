@@ -20,6 +20,11 @@ export type SourceControlStatus = {
   ahead: number;
   behind: number;
   files: SourceControlFileStatus[];
+  /**
+   * 状态获取失败/降级原因（如 dubious ownership、git 不可用、stdout 超限）。
+   * 仅在 isRepository 为 false 时由 getStatus 填充，供 UI 展示诊断信息。
+   */
+  notice?: string;
 };
 
 export type SourceControlCommitResult = {
@@ -35,11 +40,13 @@ export type AiCredential = {
   api?: OpenAiApiFormat;
 };
 
-type ExecFileFn = (
+type ExecFileError = Error & { code?: string | number };
+
+export type ExecFileFn = (
   file: string,
   args: string[],
-  options: { cwd?: string },
-  callback: (error: Error | null, stdout: string, stderr: string) => void,
+  options: { cwd?: string; maxBuffer?: number },
+  callback: (error: ExecFileError | null, stdout: string, stderr: string) => void,
 ) => void;
 
 type SourceControlServiceOptions = {
@@ -61,6 +68,14 @@ const COMMIT_TITLE_RE = new RegExp(
 );
 const PROJECT_SOURCE_PATHSPEC = ['--', '.', ':(exclude).socverify'];
 const IGNORED_PREFIX = '.socverify';
+/**
+ * execFile 默认 maxBuffer 仅 1MB。Linux 端 EDA 工程树常含海量未跟踪文件
+ * （仿真产物等），`git status --untracked-files=all` 会逐个列出导致输出超限，
+ * 整个 status 命令因此失败。提升到 64MB 以容纳超大仓库的状态输出。
+ */
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+/** Linux 桌面环境（如 .desktop 启动器）PATH 可能被精简，找不到 git 时的回退路径。 */
+const LINUX_FALLBACK_GIT = ['/usr/bin/git', '/usr/local/bin/git'];
 
 /**
  * Filter out files that live under an ignored directory (e.g. `.socverify`).
@@ -214,18 +229,148 @@ function hasCommitMessageBody(message: string): boolean {
 export class SourceControlService {
   private execFileFn: ExecFileFn;
   private fetchFn: typeof fetch;
+  /** 非 PATH 解析出的 git 二进制回退路径缓存（Linux PATH 精简时命中）。 */
+  private gitBinary: string | null = null;
 
   constructor(options: SourceControlServiceOptions = {}) {
     this.execFileFn = options.execFileFn ?? execFile;
     this.fetchFn = options.fetchFn ?? fetch;
   }
 
-  async getStatus(projectRoot: string): Promise<SourceControlStatus> {
+  /**
+   * 获取 git 状态。
+   *
+   * @param options.maxAgeMs 允许复用的缓存最大时长（毫秒）。默认 0 = 总是实时执行。
+   *   git status 在 Linux 端大工程树上可能耗时数秒~十几秒，挂载类调用
+   *   （文件树/面板重复挂载）应传入 maxAgeMs 复用近期结果；
+   *   watcher 触发的刷新与 stage/commit 后的刷新必须保持默认 0（实时）。
+   */
+  async getStatus(projectRoot: string, options: { maxAgeMs?: number } = {}): Promise<SourceControlStatus> {
+    const maxAgeMs = options.maxAgeMs ?? 0;
+    if (maxAgeMs > 0) {
+      const cached = this.statusCache.get(projectRoot);
+      if (cached && Date.now() - cached.cachedAt <= maxAgeMs) {
+        return cached.status;
+      }
+    }
+    const status = await this.computeStatus(projectRoot);
+    if (maxAgeMs > 0) {
+      this.statusCache.set(projectRoot, { status, cachedAt: Date.now() });
+    }
+    return status;
+  }
+
+  private async computeStatus(projectRoot: string): Promise<SourceControlStatus> {
     try {
-      const result = await this.runGit(projectRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--branch', ...PROJECT_SOURCE_PATHSPEC]);
+      const result = await this.runGitStatus(projectRoot, true);
       return parseGitStatus(result.stdout);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[scm] git status failed for "${projectRoot}": ${message}`);
+      return this.recoverFromStatusFailure(projectRoot, message);
+    }
+  }
+
+  /** 状态缓存：key = 项目根路径。仅 maxAgeMs > 0 的调用读写。 */
+  private statusCache = new Map<string, { status: SourceControlStatus; cachedAt: number }>();
+
+  /**
+   * git status 失败后的恢复策略，按 Linux 端已知失败模式逐一尝试：
+   * 1. 老版本 git（<1.9，如 CentOS 7 自带 1.8.3.1）不支持 `:(exclude)`
+   *    pathspec magic —— 去掉 exclude 重试（.socverify 已由 .gitignore 兜底）。
+   * 2. git ≥2.35.2 的 "dubious ownership"（共享服务器/代理 view 下仓库属主
+   *    与运行用户不同）—— 幂等地将仓库目录加入全局 safe.directory 后重试。
+   * 全部失败则返回 isRepository:false + notice（供 UI 展示原因）。
+   */
+  private async recoverFromStatusFailure(projectRoot: string, message: string): Promise<SourceControlStatus> {
+    const emptyStatus = (notice?: string): SourceControlStatus => ({
+      isRepository: false,
+      branch: null,
+      ahead: 0,
+      behind: 0,
+      files: [],
+      ...(notice ? { notice } : {}),
+    });
+
+    if (/pathspec magic/i.test(message)) {
+      try {
+        const result = await this.execGit(
+          ['-C', projectRoot, 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--branch', '--', '.'],
+          { cwd: projectRoot },
+        );
+        console.warn('[scm] git status recovered without :(exclude) pathspec (legacy git)');
+        return parseGitStatus(result.stdout);
+      } catch (retryErr) {
+        console.warn('[scm] git status retry without :(exclude) pathspec failed:', retryErr);
+      }
+    }
+
+    const ownershipMatch = message.match(/dubious ownership in repository at '(.+?)'/);
+    if (ownershipMatch) {
+      const repoPath = ownershipMatch[1];
+      const added = await this.ensureSafeDirectory(repoPath);
+      if (added) {
+        try {
+          const result = await this.runGitStatus(projectRoot, true);
+          console.warn(`[scm] added "${repoPath}" to git global safe.directory; status retry succeeded`);
+          return parseGitStatus(result.stdout);
+        } catch (retryErr) {
+          console.warn('[scm] git status retry after safe.directory fix failed:', retryErr);
+        }
+      }
+      return emptyStatus(message);
+    }
+
+    return emptyStatus(message);
+  }
+
+  /**
+   * 幂等地确保仓库目录在全局 safe.directory 白名单中（dubious ownership 修复）。
+   * 返回 true 表示路径已在白名单或添加成功（值得重试 status）；仅添加失败返回 false。
+   * 仅影响本桌面应用的运行用户全局 git 配置，属低风险白名单标记。
+   */
+  private async ensureSafeDirectory(repoPath: string): Promise<boolean> {
+    try {
+      const existing = await this.execGit(['config', '--global', '--get-all', 'safe.directory'], {});
+      if (existing.stdout.split('\n').some((line) => line.trim() === repoPath)) return true;
     } catch {
-      return { isRepository: false, branch: null, ahead: 0, behind: 0, files: [] };
+      // safe.directory key 尚不存在（get-all 非零退出）——继续添加
+    }
+    try {
+      await this.execGit(['config', '--global', '--add', 'safe.directory', repoPath], {});
+      return true;
+    } catch (err) {
+      console.warn(`[scm] failed to add safe.directory for "${repoPath}":`, err);
+      return false;
+    }
+  }
+
+  private runGitStatus(projectRoot: string, withExclude: boolean): Promise<GitResult> {
+    const pathspec = withExclude ? PROJECT_SOURCE_PATHSPEC : ['--', '.'];
+    return this.execGit(
+      // --no-optional-locks：status 不写 index（untracked cache 等），
+      // 避免与用户终端里的 git 争抢 index.lock 导致互相阻塞（VS Code 同款做法）。
+      ['-C', projectRoot, '--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--branch', ...pathspec],
+      { cwd: projectRoot },
+    );
+  }
+
+  /**
+   * 单文件范围化的状态查询：仅对 filePath 执行 status（不做全树扫描）。
+   * 全树 status 在大工程树上可能耗时数秒~十几秒，而展开文件 diff 只需要
+   * 判断该文件是否 untracked——范围化查询耗时与之无关。
+   */
+  private async isUntrackedFile(projectRoot: string, filePath: string): Promise<boolean> {
+    try {
+      const result = await this.execGit(
+        ['-C', projectRoot, '--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', filePath],
+        { cwd: projectRoot },
+      );
+      const record = result.stdout.split('\0').find((r) => r.length > 3 && r.slice(3) === filePath);
+      return record?.startsWith('??') ?? false;
+    } catch (err) {
+      console.warn(`[scm] scoped git status failed for "${filePath}":`, err);
+      return false;
     }
   }
 
@@ -307,13 +452,11 @@ export class SourceControlService {
    */
   async getFileDiff(projectRoot: string, filePath: string, options: { staged: boolean }): Promise<ScmFileDiff> {
     if (options.staged) {
-      const result = await this.runGit(projectRoot, ['diff', '--cached', '--unified=3', '--', filePath]);
+      const result = await this.runGit(projectRoot, ['diff', '--cached', '--unified=3', '--no-ext-diff', '--', filePath]);
       return parseUnifiedDiff(result.stdout, { path: filePath, staged: true });
     }
 
-    const status = await this.getStatus(projectRoot);
-    const file = status.files.find((f) => f.path === filePath);
-    const isUntracked = file ? file.indexStatus === '?' && file.workTreeStatus === '?' : false;
+    const isUntracked = await this.isUntrackedFile(projectRoot, filePath);
     if (isUntracked) {
       let content = '';
       try {
@@ -324,7 +467,7 @@ export class SourceControlService {
       return buildUntrackedFileDiff(filePath, content);
     }
 
-    const result = await this.runGit(projectRoot, ['diff', '--unified=3', '--', filePath]);
+    const result = await this.runGit(projectRoot, ['diff', '--unified=3', '--no-ext-diff', '--', filePath]);
     return parseUnifiedDiff(result.stdout, { path: filePath, staged: false });
   }
 
@@ -848,11 +991,41 @@ export class SourceControlService {
     return (baseUrl?.trim() || 'https://api.openai.com').replace(/\/+$/, '');
   }
 
+  /**
+   * 执行 git 命令（业务入口）。始终携带放大的 maxBuffer；
+   * Linux 端 PATH 精简找不到 git 时自动回退常见安装路径并缓存。
+   */
   private runGit(cwd: string, args: string[]): Promise<GitResult> {
+    return this.execGit(['-C', cwd, ...args], { cwd });
+  }
+
+  private async execGit(args: string[], options: { cwd?: string }): Promise<GitResult> {
+    const binaries = this.gitBinary
+      ? [this.gitBinary]
+      : process.platform === 'linux'
+        ? ['git', ...LINUX_FALLBACK_GIT]
+        : ['git'];
+    let lastError: unknown;
+    for (const bin of binaries) {
+      try {
+        const result = await this.invokeExecFile(bin, args, options);
+        if (bin !== 'git') this.gitBinary = bin;
+        return result;
+      } catch (err) {
+        lastError = err;
+        if ((err as ExecFileError)?.code !== 'ENOENT') throw err;
+      }
+    }
+    throw lastError;
+  }
+
+  private invokeExecFile(bin: string, args: string[], options: { cwd?: string }): Promise<GitResult> {
     return new Promise((resolve, reject) => {
-      this.execFileFn('git', ['-C', cwd, ...args], { cwd }, (error, stdout, stderr) => {
+      this.execFileFn(bin, args, { ...options, maxBuffer: GIT_MAX_BUFFER }, (error, stdout, stderr) => {
         if (error) {
-          reject(new Error(stderr.trim() || error.message));
+          const wrapped = new Error(stderr.trim() || error.message) as ExecFileError;
+          wrapped.code = error.code;
+          reject(wrapped);
           return;
         }
         resolve({ stdout, stderr });
