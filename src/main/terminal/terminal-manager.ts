@@ -286,6 +286,27 @@ export function getInteractiveShellArgs(
 }
 
 /**
+ * Build shell args for log-mode command execution (`shell <args>`).
+ *
+ * Mirrors the Python reference GUI (`process_manager.py`), which runs
+ * simulations via `QProcess.start('/bin/csh', ['-c', command])`:
+ * - csh/tcsh: `-c` only. csh's `-l` must be the ONLY option (combining it
+ *   with `-c` fails with `Unknown option -l`), and `.cshrc` — where EDA
+ *   environments initialize — is sourced automatically without it.
+ * - bash/zsh: `-l -c` so login startup files are sourced.
+ * - Windows (PowerShell): `-NoProfile -Command`.
+ */
+export function getLogModeShellArgs(
+  shell: string,
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  if (platform === 'win32') return ['-NoProfile', '-Command', command];
+  const isCsh = shell === 'csh' || shell.endsWith('/csh') || shell === 'tcsh' || shell.endsWith('/tcsh');
+  return isCsh ? ['-c', command] : ['-l', '-c', command];
+}
+
+/**
  * Shell preferences for simulation commands on different platforms.
  *
  * On Linux, EDA tools (runsim, xrun, vcs, etc.) typically require csh/tcsh
@@ -1118,9 +1139,11 @@ export class TerminalManager extends EventEmitter {
     entry.pendingSize += cmdEcho.length;
 
     // Use caller-specified shell, or find one suitable for simulation (csh on Linux)
-    const isWin = process.platform === 'win32';
-    // On Windows, use `powershell -Command "..."`; on Unix, `shell -c "..."`
-    const shellArgs = isWin ? ['-NoProfile', '-Command', opts.command] : ['-l', '-c', opts.command];
+    // On Windows, use `powershell -NoProfile -Command "..."`; on Unix the args
+    // depend on the shell family (see getLogModeShellArgs): csh/tcsh reject
+    // `csh -l -c` with `Unknown option -l`, so they run plain `csh -c` — the
+    // same invocation the Python reference GUI uses for log-mode runs.
+    const shellArgs = getLogModeShellArgs(shell, opts.command);
 
     let child: ChildProcess;
     try {
