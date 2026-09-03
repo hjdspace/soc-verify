@@ -250,6 +250,15 @@ export function buildEnhancedEnv(
     STARSHIP_CONFIG: starshipConfig,
   };
 
+  // Linux/macOS: Electron 从桌面启动（AppImage/.desktop）时 GUI 进程没有 TERM，
+  // PTY 内 zsh 的 zle_highlight（zsh-autosuggestions 通过 region_highlight 的
+  // fg=N 上色）依赖 terminfo——TERM 缺失时颜色序列全部失效，命令预测文本会
+  // 以默认前景色渲染，与用户输入同色。仅在缺失/为空/为 dumb 时注入，
+  // 不覆盖用户已有 TERM（tmux/screen 等场景），调用方 opts.env 的覆盖仍最高优先。
+  if (process.platform !== 'win32' && (!base.TERM || base.TERM === 'dumb')) {
+    enhanced.TERM = 'xterm-256color';
+  }
+
   // Add Starship to PATH if found (ensures `starship` command is available)
   if (starshipPath) {
     const starshipDir = dirname(starshipPath);
