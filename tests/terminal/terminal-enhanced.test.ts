@@ -217,4 +217,66 @@ describe('Enhanced Terminal — buildEnhancedEnv', () => {
     // Enhanced terminal should never set csh-related variables
     expect(env.PROJ_ENV).toBeUndefined();
   });
+
+  // TERM 注入（命令预测灰色的前提）：
+  // zsh 的 zle_highlight 依赖 terminfo，TERM 缺失时 zsh-autosuggestions 的
+  // fg=N 上色完全失效，预测文本与用户输入同色。桌面启动的 GUI 进程没有 TERM。
+  describe('TERM injection', () => {
+    const realPlatform = process.platform;
+
+    function withPlatform(platform: NodeJS.Platform, fn: () => void): void {
+      Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+      try {
+        fn();
+      } finally {
+        Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+      }
+    }
+
+    afterEach(() => {
+      Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+    });
+
+    it('injects TERM=xterm-256color on Linux when base env has no TERM', () => {
+      withPlatform('linux', () => {
+        const env = buildEnhancedEnv({ PATH: '/usr/bin' });
+        expect(env.TERM).toBe('xterm-256color');
+      });
+    });
+
+    it('injects TERM=xterm-256color on Linux when TERM is dumb', () => {
+      withPlatform('linux', () => {
+        const env = buildEnhancedEnv({ PATH: '/usr/bin', TERM: 'dumb' });
+        expect(env.TERM).toBe('xterm-256color');
+      });
+    });
+
+    it('preserves an existing meaningful TERM on Linux', () => {
+      withPlatform('linux', () => {
+        const env = buildEnhancedEnv({ PATH: '/usr/bin', TERM: 'screen-256color' });
+        expect(env.TERM).toBe('screen-256color');
+      });
+    });
+
+    it('injects TERM on macOS too', () => {
+      withPlatform('darwin', () => {
+        const env = buildEnhancedEnv({ PATH: '/usr/bin' });
+        expect(env.TERM).toBe('xterm-256color');
+      });
+    });
+
+    it('does NOT inject TERM on Windows', () => {
+      withPlatform('win32', () => {
+        const env = buildEnhancedEnv({ PATH: 'C:\\Windows' });
+        expect(env.TERM).toBeUndefined();
+      });
+    });
+
+    it('caller-provided overrides win over injected TERM', () => {
+      withPlatform('linux', () => {
+        const env = buildEnhancedEnv({ PATH: '/usr/bin' }, { TERM: 'xterm-kitty' });
+        expect(env.TERM).toBe('xterm-kitty');
+      });
+    });
+  });
 });
