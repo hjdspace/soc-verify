@@ -114,6 +114,15 @@ describe.skipIf(!heavyMessages)('会话 tab 切换性能（真实 649KB 会话�
     rerender(createElement(RightPanelContent));
     const switchToHeavyMs = performance.now() - t1;
 
+    // 用户真实操作是「来回切换」：第二次访问同一会话时已落定 Markdown
+    // 命中内容级元素缓存，切换成本应显著低于首次（冷缓存 parse 全量）
+    const t1b = performance.now();
+    useSessionCoreStore.getState().switchSession(LIGHT_ID);
+    rerender(createElement(RightPanelContent));
+    useSessionCoreStore.getState().switchSession(HEAVY_ID);
+    rerender(createElement(RightPanelContent));
+    const switchBackToHeavyMs = performance.now() - t1b;
+
     // 无关状态变化（另一会话的 composer 更新）不应重渲染重会话气泡列
     const t2 = performance.now();
     useSessionCoreStore.setState((s) => ({
@@ -127,13 +136,16 @@ describe.skipIf(!heavyMessages)('会话 tab 切换性能（真实 649KB 会话�
     const irrelevantRerenderMs = performance.now() - t2;
 
     console.log(
-      `[PERF] 切到重会话=${switchToHeavyMs.toFixed(0)}ms 无关重渲染=${irrelevantRerenderMs.toFixed(0)}ms`,
+      `[PERF] 切到重会话=${switchToHeavyMs.toFixed(0)}ms 切回重会话=${switchBackToHeavyMs.toFixed(0)}ms 无关重渲染=${irrelevantRerenderMs.toFixed(0)}ms`,
     );
 
     unmount();
 
     // 修复前：切到重会话 7782ms。阈值 3s：CI/开发机波动余量，只拦秒级回归。
     expect(switchToHeavyMs).toBeLessThan(3000);
+    // 缓存生效：来回切（轻→重）不重复 parse 已落定 Markdown，暖切换应
+    // 明显低于冷切换；阈值 0.8× 冷切换，机器波动余量下仍能拦住缓存失效
+    expect(switchBackToHeavyMs).toBeLessThan(switchToHeavyMs * 0.8);
     // memo 生效：无关更新远低于整体切换成本
     expect(irrelevantRerenderMs).toBeLessThan(500);
   }, 30000);
