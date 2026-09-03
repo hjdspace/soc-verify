@@ -16,6 +16,13 @@ type GraphViewerGraph = {
    * viewer-static.min.js 中 zoomIn/zoomOut 即调用此方法。
    */
   zoom?: (factor: number) => void;
+  /**
+   * mxGraph.prototype.resizeContainer。
+   * true 时 sizeDidChange → doResizeContainer 会把容器 inline width/height
+   * 设为内容大小，覆盖 CSS。viewer 配置 resize:true 会开启此行为。
+   * 需在初始化后设为 false 以保持容器固定大小、启用滚动平移。
+   */
+  resizeContainer?: boolean;
 };
 
 type GraphViewerLightbox = {
