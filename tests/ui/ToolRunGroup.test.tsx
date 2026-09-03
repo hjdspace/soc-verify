@@ -140,6 +140,9 @@ describe('ToolRunGroup rendering', () => {
     ];
     render(<ToolRunGroup messages={messages} />);
     expect(screen.getByTestId('tool-run-header')).toHaveTextContent('2 个工具调用');
+    // 折叠态不挂载行集（懒挂载）：行只在组展开后渲染
+    expect(screen.queryAllByTestId('tool-run-row')).toHaveLength(0);
+    fireEvent.click(screen.getByTestId('tool-run-header'));
     expect(screen.getAllByTestId('tool-run-row')).toHaveLength(2);
   });
 
@@ -164,8 +167,9 @@ describe('ToolRunGroup rendering', () => {
     const messages = [completedMessage('custom_tool_x', { q: 1 }, 'BODY_MARKER_12345')];
     render(<ToolRunGroup messages={messages} />);
     const rowButton = screen.getAllByTestId('tool-run-row')[0].querySelector('button')!;
-    // 分组体以 grid 0fr 折叠（内容挂载但不可见），展开行为以 aria-expanded 断言
+    // 行级懒挂载：折叠时展开体不在 DOM（aria-expanded 断言展开行为）
     expect(rowButton).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('BODY_MARKER_12345')).not.toBeInTheDocument();
     fireEvent.click(rowButton);
     expect(rowButton).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByText('BODY_MARKER_12345')).toBeInTheDocument();
