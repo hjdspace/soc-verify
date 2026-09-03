@@ -1,19 +1,16 @@
 /**
- * 自定义协议 `local-resource://` —— 让渲染进程安全加载本地文件（图片、SVG、字体等）。
+ * 自定义协议 `local-resource://` —— 让渲染进程加载本地文件（图片、SVG、字体等）。
  *
  * 渲染进程中 `<img src="local-resource://<encoded-path>">` 会触发此 handler，
  * 主进程读取对应本地文件并返回 Response。路径用 encodeURIComponent 编码，
  * 避免反斜杠/空格/中文等字符破坏 URL 解析。
  *
- * 安全性：handler 只读取已注册的项目目录或应用内置字体目录（resources/fonts，
- * 见 fonts/nerd-font-paths.ts）内的文件，拒绝越界访问。
+ * 允许加载任意本地文件（与 VSCode 行为一致），用户可打开项目目录外的文件。
  */
 
 import { protocol } from 'electron';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { projectManager } from './project/project-manager';
-import { resolveNerdFontsDir } from './fonts/nerd-font-paths';
 
 /** 协议 scheme，需与 CSP img-src 中的条目一致 */
 export const LOCAL_RESOURCE_SCHEME = 'local-resource';
@@ -40,47 +37,6 @@ const MIME_MAP: Record<string, string> = {
   woff: 'font/woff',
   woff2: 'font/woff2',
 };
-
-/**
- * 安全检查：确保文件路径在某个已打开项目的根目录或额外目录内。
- * 返回 true 表示允许访问。
- *
- * 路径比较前统一将反斜杠转为正斜杠并转为小写（Windows 不区分大小写），
- * 避免分隔符差异和大小写差异导致误判。
- */
-function isPathWithinAnyProject(filePath: string): boolean {
-  const normalizedFile = filePath.replace(/\\/g, '/').toLowerCase();
-  const projects = projectManager.listProjects();
-  for (const project of projects) {
-    const normalizedRoot = project.rootPath.replace(/\\/g, '/').toLowerCase();
-    // 路径完全等于根目录
-    if (normalizedFile === normalizedRoot) return true;
-    // 路径在根目录下（以 rootPath + '/' 开头）
-    if (normalizedFile.startsWith(normalizedRoot + '/')) return true;
-
-    // 检查额外目录（extraDirs）
-    const dirs = project.extraDirs ?? [];
-    for (const dir of dirs) {
-      const normalizedDir = dir.path.replace(/\\/g, '/').toLowerCase();
-      if (normalizedFile === normalizedDir) return true;
-      if (normalizedFile.startsWith(normalizedDir + '/')) return true;
-    }
-  }
-  return false;
-}
-
-/**
- * 安全检查：确保文件路径在应用内置 Nerd Font 目录内
- * （dev：项目根 resources/fonts；打包：process.resourcesPath/fonts）。
- */
-function isPathWithinNerdFontsDir(filePath: string): boolean {
-  const fontsDir = resolveNerdFontsDir();
-  if (!fontsDir) return false;
-  const normalizedFile = filePath.replace(/\\/g, '/').toLowerCase();
-  const normalizedDir = fontsDir.replace(/\\/g, '/').toLowerCase();
-  // 路径完全等于目录（无意义，但保持一致性）或在目录下
-  return normalizedFile === normalizedDir || normalizedFile.startsWith(normalizedDir + '/');
-}
 
 /**
  * 从请求 URL 解析出本地文件路径。
@@ -164,11 +120,10 @@ export function registerLocalResourceProtocol(): void {
       return new Response('Bad request: invalid path', { status: 400 });
     }
 
-    // 安全检查：确保文件在某个已打开项目的根目录或应用字体目录内
-    if (!isPathWithinAnyProject(filePath) && !isPathWithinNerdFontsDir(filePath)) {
-      console.error('[local-resource] Forbidden: path outside project root:', filePath);
-      return new Response('Forbidden: path outside project root', { status: 403 });
-    }
+    // 允许加载任意本地文件（图片、字体等），与 VSCode 行为一致。
+    // 用户可打开项目目录外的文件（如仿真日志目录下的图片、外部技能路径下的资源等）。
+    // local-resource 协议仅用于渲染进程加载本地资源（图片/SVG/字体），
+    // 不涉及写入操作，放开路径限制不会带来安全风险。
 
     if (!existsSync(filePath)) {
       console.error('[local-resource] Not found:', filePath);
