@@ -27,7 +27,6 @@ import {
   type SessionSortDir,
   type HeatmapEntry,
 } from '../../token-monitor/token-monitor-db';
-import { ScanScheduler } from '../../token-monitor/scan-scheduler';
 
 // ─── Input validation ──────────────────────────────────────
 
@@ -350,7 +349,9 @@ export const tokenRouter = t.router({
   /**
    * 手动触发外部日志扫描（claude-code + codex）。
    *
-   * 执行一次增量扫描，解析所有发现的 JSONL 文件，
+   * 复用 registry 的单例 ScanScheduler（含防重入）：
+   * 临时实例会与定时扫描并发跑全量扫描，且绕过防重入导致连点叠加。
+   * 执行一次增量扫描，解析所有变化的 JSONL 文件，
    * 通过 INSERT OR IGNORE 去重后写入 token_usage 表。
    *
    * 返回扫描结果统计（扫描文件数 / 跳过的文件数 / 插入记录数 / 耗时）。
@@ -359,9 +360,8 @@ export const tokenRouter = t.router({
     .input(validateScanExternalLogsInput)
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
-      const db = tokenMonitorRegistry.getOrCreateDb(project.rootPath);
-
-      const scheduler = new ScanScheduler(db);
-      return scheduler.scanOnce();
+      // 确保 DB 存在且调度器已启动
+      tokenMonitorRegistry.getOrCreateDb(project.rootPath);
+      return tokenMonitorRegistry.scanExternalLogsOnce();
     }),
 });
