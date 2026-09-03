@@ -287,7 +287,7 @@ export const projectRouter = t.router({
       return projectManager.readFile(input.projectId, input.filePath);
     }),
 
-  /** Whether a path exists as a regular file (same sandbox rules as readFile). */
+  /** Whether a path exists as a regular file (no path restrictions, same as readFile). */
   fileExists: t.procedure
     .input((raw): { projectId: string; filePath: string } => {
       const r = raw as Record<string, unknown>;
