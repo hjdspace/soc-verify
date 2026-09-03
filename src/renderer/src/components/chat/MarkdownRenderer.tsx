@@ -1,4 +1,4 @@
-import { cloneElement, isValidElement, memo, useEffect, useState, useMemo, type ComponentProps, type ReactNode } from 'react';
+import { cloneElement, isValidElement, memo, useEffect, useState, useMemo, type ComponentProps, type ReactElement, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import hljs from 'highlight.js';
@@ -643,6 +643,61 @@ function applyStreamTail(children: ReactNode, caret: boolean): TailResult {
   return { node: children, handled: false };
 }
 
+// ── 已落定 Markdown 的内容级元素缓存 ─────────────────────────────
+//
+// 切换会话 tab 时消息列整列卸载重挂，react-markdown 对已落定内容每次
+// 重新 parse（remark-gfm + remark-rehype + hast→JSX，实测单条 5.5KB
+// 消息 ~430ms，是 tab 切换 400–700ms 处理时长的主要成分）。同步版
+// Markdown 是无 hooks 的纯函数，可直接函数调用拿到计算后的元素树——
+// 对「已落定（非 streaming）且无 onUriClick」的输入按内容缓存，重挂载
+// 复用 parse 结果，只保留 React 挂载组件实例的成本。
+//
+// 缓存树内引用的是首次渲染时的 components 闭包；缓存条件下
+// （onUriClick=undefined、streaming=false）工厂行为确定，旧闭包与
+// 新闭包等价，跨挂载点共享同一棵元素树是安全的（元素是不可变描述，
+// React 会为每个挂载位置分别创建组件实例）。
+
+const SETTLED_CACHE_MIN_BYTES = 256;
+const SETTLED_CACHE_LIMIT = 100;
+const settledCache = new Map<string, ReactElement>();
+let settledCacheHits = 0;
+let settledCacheMisses = 0;
+
+function renderSettledMarkdown(content: string, components: MarkdownComponents): ReactElement {
+  const cached = settledCache.get(content);
+  if (cached) {
+    // Map 迭代顺序 = 插入顺序：命中后重插实现 LRU 触碰
+    settledCache.delete(content);
+    settledCache.set(content, cached);
+    settledCacheHits++;
+    return cached;
+  }
+  settledCacheMisses++;
+  const tree = ReactMarkdown({
+    children: content,
+    remarkPlugins: [remarkGfm],
+    components,
+  });
+  if (settledCache.size >= SETTLED_CACHE_LIMIT) {
+    const oldest = settledCache.keys().next().value;
+    if (oldest !== undefined) settledCache.delete(oldest);
+  }
+  settledCache.set(content, tree);
+  return tree;
+}
+
+/** 仅供测试/诊断：已落定 Markdown 元素缓存的状态。 */
+export function getSettledMarkdownCacheStats(): { size: number; hits: number; misses: number } {
+  return { size: settledCache.size, hits: settledCacheHits, misses: settledCacheMisses };
+}
+
+/** 清空已落定 Markdown 元素缓存（测试隔离用）。 */
+export function clearSettledMarkdownCache(): void {
+  settledCache.clear();
+  settledCacheHits = 0;
+  settledCacheMisses = 0;
+}
+
 // ── MarkdownRenderer ─────────────────────────────────────────────────
 
 /**
@@ -745,13 +800,21 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
 
   return (
     <div className="markdown-body">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={streaming ? REHYPE_STREAM_TAIL : []}
-        components={components}
-      >
-        {content}
-      </ReactMarkdown>
+      {streaming || onUriClick ? (
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={streaming ? REHYPE_STREAM_TAIL : []}
+          components={components}
+        >
+          {content}
+        </ReactMarkdown>
+      ) : content.length >= SETTLED_CACHE_MIN_BYTES ? (
+        renderSettledMarkdown(content, components)
+      ) : (
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+          {content}
+        </ReactMarkdown>
+      )}
     </div>
   );
 });
