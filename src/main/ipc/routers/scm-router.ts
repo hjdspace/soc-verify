@@ -9,16 +9,22 @@ import { credentialManager } from '../../credentials/credential-manager';
 
 export const scmRouter = t.router({
   status: t.procedure
-    .input((raw): { projectId: string } => {
+    .input((raw): { projectId: string; maxAgeMs?: number } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
       }
-      return { projectId: r.projectId };
+      // maxAgeMs：允许复用主进程近期 status 结果的最大时长（毫秒）。
+      // git status 在 Linux 大工程树上可能耗时数秒~十几秒，挂载类调用传入
+      // 正值以复用缓存；watcher 刷新不传（默认 0 = 实时执行）。
+      const maxAgeMs = typeof r.maxAgeMs === 'number' && Number.isFinite(r.maxAgeMs)
+        ? Math.min(Math.max(Math.floor(r.maxAgeMs), 0), 60000)
+        : 0;
+      return { projectId: r.projectId, maxAgeMs };
     })
     .query(async ({ input }) => {
       const project = requireProject(input.projectId);
-      return sourceControlService.getStatus(project.rootPath);
+      return sourceControlService.getStatus(project.rootPath, { maxAgeMs: input.maxAgeMs });
     }),
 
   stage: t.procedure
