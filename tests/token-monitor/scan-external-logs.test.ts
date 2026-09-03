@@ -6,7 +6,6 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type Database from 'better-sqlite3';
 
 // ─── Hoisted tmp dir ───────────────────────────────────────
 
@@ -20,7 +19,16 @@ const { tmpDir } = vi.hoisted(() => {
 
 // ─── Shared DB ref ─────────────────────────────────────────
 
-const dbRef: { current: Database.Database | null } = { current: null };
+const { dbRef, mockScanOnce } = vi.hoisted(() => {
+  const dbRef: { current: import('better-sqlite3').Database | null } = { current: null };
+  const mockScanOnce = vi.fn(async () => ({
+    filesScanned: 2,
+    filesSkipped: 1,
+    recordsInserted: 5,
+    durationMs: 120,
+  }));
+  return { dbRef, mockScanOnce };
+});
 
 // ─── Mocks ─────────────────────────────────────────────────
 
@@ -35,17 +43,13 @@ vi.mock('../../src/main/services/project-service', () => ({
 vi.mock('../../src/main/token-monitor/token-monitor-registry', () => ({
   tokenMonitorRegistry: {
     getOrCreateDb: vi.fn(() => dbRef.current),
+    // router 必须复用 registry 单例调度器（防重入 + 不与定时扫描并发），
+    // 不再 new 临时 ScanScheduler —— mock 单一职责即可断言
+    scanExternalLogsOnce: mockScanOnce,
   },
 }));
 
-// Mock ScanScheduler
-const mockScanOnce = vi.fn(async () => ({
-  filesScanned: 2,
-  filesSkipped: 1,
-  recordsInserted: 5,
-  durationMs: 120,
-}));
-
+// Mock ScanScheduler（保留：防止 router 意外绕过 registry 直接 new）
 vi.mock('../../src/main/token-monitor/scan-scheduler', () => {
   return {
     ScanScheduler: class {
