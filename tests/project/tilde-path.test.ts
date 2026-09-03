@@ -89,9 +89,8 @@ describe('projectManager readFile/writeFile with tilde paths', () => {
     await expect(projectManager.readFile(project.id, tildeMarker)).resolves.toBe('updated by tilde test');
   });
 
-  it('still rejects non-tilde paths outside project directories', async () => {
-    await expect(projectManager.readFile(project.id, homeMarker)).rejects.toThrow(
-      'File path is outside project directories',
-    );
+  it('allows reading non-tilde paths outside project directories', async () => {
+    // readFile 不再限制路径，允许读取项目目录外的文件（与 VSCode 行为一致）
+    await expect(projectManager.readFile(project.id, homeMarker)).resolves.toBe('tilde content');
   });
 });
