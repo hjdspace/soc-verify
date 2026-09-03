@@ -363,7 +363,7 @@ describe('multi-directory: readFile/writeFile security check', () => {
     expect(content).toBe('world');
   });
 
-  it('readFile rejects files outside all project directories', async () => {
+  it('readFile allows reading files outside project directories', async () => {
     const info = await projectManager.openProject(projectRoot, 'test-sec-outside');
 
     const outside = await mkdtemp(join(tmpdir(), 'socverify-outside-'));
@@ -371,9 +371,9 @@ describe('multi-directory: readFile/writeFile security check', () => {
       const testFile = join(outside, 'secret.txt');
       await writeFile(testFile, 'no', 'utf-8');
 
-      await expect(projectManager.readFile(info.id, testFile)).rejects.toThrow(
-        /outside/i,
-      );
+      // readFile 不再限制路径，允许读取项目目录外的文件（与 VSCode 行为一致）
+      const content = await projectManager.readFile(info.id, testFile);
+      expect(content).toBe('no');
     } finally {
       await rm(outside, { recursive: true, force: true });
     }
