@@ -9,7 +9,7 @@
 
 import { TRPCError } from '@trpc/server';
 import { join } from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { sessionManager } from '../agent/session-manager';
 import type { AgentClient } from '../agent/agent-client';
 import type { PersistedSession } from '../agent/session-persistence';
@@ -57,19 +57,27 @@ export function isPlaceholderSessionName(name: string): boolean {
 /**
  * Filter out placeholder sessions that have no stored messages
  * (i.e. sessions that were created but never used).
+ *
+ * Perf: history list 只需要判断"消息文件是否有内容"，用 stat 的文件大小
+ * 判断（>2 字节排除空 `[]`/`null` 序列化）并并行探测，避免串行读取 +
+ * 完整 JSON.parse 数百 KB 的工具结果文件（这是历史页卡顿的主因）。
+ * saveStoredMessages 以 `[]` 起步、内容递增，小文件必然对应空会话；
+ * 畸形文件（<3 字节）按空会话处理，与 loadStoredMessages 的容错一致。
  */
 export async function filterEmptyPlaceholderSessions(
   projectRoot: string,
   sessions: PersistedSession[],
 ): Promise<PersistedSession[]> {
-  const visible: PersistedSession[] = [];
-  for (const session of sessions) {
-    if (!isPlaceholderSessionName(session.name)) {
-      visible.push(session);
-      continue;
-    }
-    const messages = await loadStoredMessages(projectRoot, session.sessionId);
-    if (messages.length > 0) visible.push(session);
-  }
-  return visible;
+  const visible = await Promise.all(
+    sessions.map(async (session) => {
+      if (!isPlaceholderSessionName(session.name)) return session;
+      try {
+        const st = await stat(storedMessagesPath(projectRoot, session.sessionId));
+        return st.size > 2 ? session : null;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return visible.filter((s): s is PersistedSession => s !== null);
 }
