@@ -9,7 +9,7 @@ const { loadDrawioViewerMock, createViewerForElementMock, viewerMock, toolbar, g
     loadDrawioViewerMock: vi.fn(),
     createViewerForElementMock: vi.fn(),
     viewerMock: {
-      graph: { container: graphContainer, setPanning: vi.fn(), zoom: vi.fn() },
+      graph: { container: graphContainer, setPanning: vi.fn(), zoom: vi.fn(), resizeContainer: true },
       destroy: vi.fn(),
       showLocalLightbox: vi.fn(() => ({ chromelessToolbar: toolbar })),
     },
@@ -68,6 +68,23 @@ describe('DrawioViewer interaction layout', () => {
 
     expect(toolbar).toHaveClass('drawio-lightbox-toolbar');
     expect(viewerMock.showLocalLightbox).toHaveBeenCalledOnce();
+  });
+
+  describe('panning scroll setup', () => {
+    it('disables resizeContainer and clears inline height for vertical panning', async () => {
+      // viewer 初始化时可能已设置了 inline height（doResizeContainer）
+      graphContainer.style.height = '800px';
+      render(<DrawioViewer xml="<mxfile />" onError={vi.fn()} />);
+
+      await waitFor(() => expect(createViewerForElementMock).toHaveBeenCalled());
+
+      // resizeContainer 被禁用，防止后续 sizeDidChange 撑开容器
+      expect(viewerMock.graph.resizeContainer).toBe(false);
+      // inline height 被清除，让 CSS height:100% 生效
+      expect(graphContainer.style.height).toBe('');
+      // overflow 设为 auto，使 panning 通过 scrollLeft/scrollTop 实现
+      expect(graphContainer.style.overflow).toBe('auto');
+    });
   });
 
   describe('middle-button drag zoom', () => {
