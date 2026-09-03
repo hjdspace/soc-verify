@@ -29,6 +29,42 @@ import {
 vi.mock('../../src/main/token-monitor/log-scanner-paths', () => ({
   getAllScanDirs: vi.fn(() => []),
   discoverJsonlFiles: vi.fn(() => []),
+  // doScan 走异步流式枚举 + 行边界偏移 —— mock 保持真实行为
+  discoverJsonlFilesAsync: vi.fn(async (dirPath: string) => {
+    const { readdirSync } = require('node:fs') as typeof import('node:fs');
+    const { join } = require('node:path') as typeof import('node:path');
+    const files: string[] = [];
+    const walk = (d: string): void => {
+      try {
+        for (const e of readdirSync(d, { withFileTypes: true })) {
+          const full = join(d, e.name);
+          if (e.isDirectory()) walk(full);
+          else if (e.isFile() && e.name.endsWith('.jsonl')) files.push(full);
+        }
+      } catch {
+        /* 静默降级 */
+      }
+    };
+    walk(dirPath);
+    return files;
+  }),
+  lastCompleteLineOffset: vi.fn(async (filePath: string) => {
+    const { statSync, openSync, readSync, closeSync } = require('node:fs') as typeof import('node:fs');
+    try {
+      const size = statSync(filePath).size;
+      const fd = openSync(filePath, 'r');
+      try {
+        const buf = Buffer.alloc(size);
+        readSync(fd, buf, 0, size, 0);
+        const idx = buf.lastIndexOf(0x0a);
+        return idx >= 0 ? idx + 1 : 0;
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      return 0;
+    }
+  }),
   getFileStat: vi.fn(() => null),
   resolveClaudeLogDir: vi.fn(() => '/mock/claude'),
   resolveCodexLogDir: vi.fn(() => '/mock/codex'),
@@ -53,7 +89,9 @@ const testDir = join(tmpdir(), `sv-scan-sched-${Date.now()}`);
 
 function writeJsonlFile(filePath: string, lines: string[]): void {
   mkdirSync(join(filePath, '..'), { recursive: true });
-  writeFileSync(filePath, lines.join('\n'));
+  // 真实 claude-code / codex 日志每行以 \n 结尾；
+  // 扫描器偏移停在行边界，无尾换行 = writer 未写完的半行，不推进偏移
+  writeFileSync(filePath, lines.join('\n') + '\n');
 }
 
 function makeAssistantJsonl(messageId: string, tokens: number = 1000): string {
