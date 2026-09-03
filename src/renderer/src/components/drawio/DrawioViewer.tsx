@@ -14,6 +14,9 @@
  *   - move: true 启用单元格拖拽（panning），允许左键拖拽调整图表位置。
  *     viewer 初始化后还需手动调用 graph.setPanning(true)，
  *     因为 viewer-static.min.js 中 setPanning(false) 被硬编码调用。
+ *   - viewer 初始化后禁用 graph.resizeContainer 并清除 inline height，
+ *     否则 doResizeContainer 会把容器高度撑开到内容大小，
+ *     导致垂直方向 scrollHeight == clientHeight，无法上下拖拽平移。
  *   - 右键上下文菜单提供"打开放大图"入口，调用 showLocalLightbox()。
  *   - 中键拖拽缩放：按下中键后上下移动鼠标即可缩放，
  *     上移放大、下移缩小（参考 3D 软件 / Figma 中键缩放手感）。
@@ -150,6 +153,19 @@ export function DrawioViewer({ xml, onError }: DrawioViewerProps) {
             // 需要手动启用 panning 以支持左键拖拽平移。
             // panningHandler 在 init 中已配置好 useLeftButtonForPanning 等。
             v.graph?.setPanning?.(true);
+            // 禁用 resizeContainer：config resize:true 会让 viewer 开启
+            // graph.resizeContainer，在 sizeDidChange 中通过 doResizeContainer
+            // 把容器 inline height 设为内容高度（覆盖 CSS height:100%），
+            // 导致垂直方向无滚动空间（scrollHeight==clientHeight），
+            // 左键拖拽平移只能左右、不能上下。
+            // 禁用后容器保持 CSS 高度，内容超出则 overflow:auto 滚动。
+            if (v.graph) {
+              v.graph.resizeContainer = false;
+              // 清除 viewer 初始化时已设置的 inline height
+              v.graph.container?.style.removeProperty('height');
+              // 确保 overflow 为 auto（panning 通过 scrollLeft/scrollTop 实现）
+              v.graph.container?.style.setProperty('overflow', 'auto');
+            }
             v.graph?.container?.style.setProperty('cursor', 'grab', 'important');
           });
         } catch (err) {
