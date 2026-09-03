@@ -275,7 +275,7 @@ describe('SimControlToolbar Debug 按钮组 — 日志分裂按钮', () => {
 
     fireEvent.click(await screen.findByTestId('sim-debug-compile-log-menu'));
 
-    const gvimItem = await screen.findByTestId('sim-debug-menu-gvim');
+    const gvimItem = await screen.findByTestId('sim-debug-menu-gvim-compile-log');
     fireEvent.click(gvimItem);
 
     await waitFor(() => {
@@ -292,7 +292,7 @@ describe('SimControlToolbar Debug 按钮组 — 日志分裂按钮', () => {
 
     fireEvent.click(await screen.findByTestId('sim-debug-sim-log-menu'));
 
-    fireEvent.click(await screen.findByTestId('sim-debug-menu-builtin'));
+    fireEvent.click(await screen.findByTestId('sim-debug-menu-builtin-sim-log'));
 
     await waitFor(() => {
       expect(mocks.openFile).toHaveBeenCalledWith({
