@@ -1068,6 +1068,66 @@ describe('SessionStore — event handling and state machine', () => {
     });
   });
 
+  it('restoreSessions only loads the current tab — background tabs load lazily on switch', async () => {
+    // 两个持久化会话：latest 为当前 tab，old 为后台 tab。
+    // 消息文件模拟真实场景（数百 KB 工具结果）——后台 tab 的文件不应被拉取。
+    mockGetPersistedSessions.mockResolvedValue([
+      {
+        sessionId: 'session_old',
+        name: 'Old session',
+        projectId: 'proj_1',
+        createdAt: 10,
+        lastActivityAt: 100,
+      },
+      {
+        sessionId: 'session_latest',
+        name: 'Latest session',
+        projectId: 'proj_1',
+        createdAt: 20,
+        lastActivityAt: 200,
+      },
+    ]);
+    mockGetStoredMessages.mockResolvedValue([
+      { id: 'm1', role: 'user', content: 'hello', timestamp: 1 },
+    ]);
+
+    const restored = await useSessionStore.getState().restoreSessions('proj_1', '/tmp/proj');
+
+    expect(restored).toBe(true);
+    const state = useSessionStore.getState();
+    expect(state.currentSessionId).toBe('session_latest');
+    // 只为当前 tab 拉取一次消息；后台 tab 未拉取
+    expect(mockGetStoredMessages).toHaveBeenCalledTimes(1);
+    expect(mockGetStoredMessages).toHaveBeenCalledWith({ projectId: 'proj_1', sessionId: 'session_latest' });
+    const latest = state.sessions.find((s) => s.id === 'session_latest');
+    const old = state.sessions.find((s) => s.id === 'session_old');
+    // 当前 tab 消息已加载、标记清除；后台 tab 空消息 + 未加载标记
+    expect(latest?.messages).toHaveLength(1);
+    expect(latest?.messagesUnloaded).toBe(false);
+    expect(old?.messages).toHaveLength(0);
+    expect(old?.messagesUnloaded).toBe(true);
+
+    // 切换到后台 tab → 惰性拉取其消息并清除标记
+    mockGetStoredMessages.mockClear();
+    mockGetStoredMessages.mockResolvedValue([
+      { id: 'm2', role: 'assistant', content: 'old answer', timestamp: 2 },
+    ]);
+    useSessionStore.getState().switchSession('session_old');
+    await vi.waitFor(() => {
+      const switched = useSessionStore.getState().sessions.find((s) => s.id === 'session_old');
+      expect(switched?.messagesUnloaded).toBe(false);
+    });
+    expect(mockGetStoredMessages).toHaveBeenCalledWith({ projectId: 'proj_1', sessionId: 'session_old' });
+    const switched = useSessionStore.getState().sessions.find((s) => s.id === 'session_old');
+    expect(switched?.messages.map((m) => m.content)).toEqual(['old answer']);
+
+    // 再次切走再切回 → 不重复拉取（标记已清除）
+    mockGetStoredMessages.mockClear();
+    useSessionStore.getState().switchSession('session_latest');
+    useSessionStore.getState().switchSession('session_old');
+    expect(mockGetStoredMessages).not.toHaveBeenCalled();
+  });
+
   it('ignores persisted sessions owned by another project', async () => {
     mockGetPersistedSessions.mockResolvedValue([
       {
