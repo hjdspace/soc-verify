@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   getInteractiveShellArgs,
+  getLogModeShellArgs,
   mergeTerminalEnvs,
   resolveInteractiveShell,
   TerminalManager,
@@ -60,6 +61,34 @@ describe('getInteractiveShellArgs', () => {
 
   it('does not change Windows terminals', () => {
     expect(getInteractiveShellArgs('powershell.exe', 'win32', 'unused')).toEqual([]);
+  });
+});
+
+describe('getLogModeShellArgs', () => {
+  // csh/tcsh reject `csh -l -c` with `Unknown option -l`; the Python reference
+  // GUI runs log-mode simulations as plain `csh -c <command>`.
+  it('runs csh/tcsh commands without the -l login flag', () => {
+    expect(getLogModeShellArgs('/bin/csh', 'runsim -case foo', 'linux')).toEqual([
+      '-c',
+      'runsim -case foo',
+    ]);
+    expect(getLogModeShellArgs('/bin/tcsh', 'runsim -case foo', 'linux')).toEqual([
+      '-c',
+      'runsim -case foo',
+    ]);
+  });
+
+  it('keeps the login flag for bash/zsh so startup files are sourced', () => {
+    expect(getLogModeShellArgs('/bin/bash', 'echo hi', 'linux')).toEqual(['-l', '-c', 'echo hi']);
+    expect(getLogModeShellArgs('/bin/zsh', 'echo hi', 'linux')).toEqual(['-l', '-c', 'echo hi']);
+  });
+
+  it('uses NoProfile PowerShell on Windows', () => {
+    expect(getLogModeShellArgs('powershell.exe', 'echo hi', 'win32')).toEqual([
+      '-NoProfile',
+      '-Command',
+      'echo hi',
+    ]);
   });
 });
 
