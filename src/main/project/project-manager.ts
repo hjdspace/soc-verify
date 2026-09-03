@@ -873,21 +873,20 @@ class ProjectManagerImpl extends EventEmitter {
     if (!project) throw new Error(`Project not found: ${projectId}`);
 
     // `~` 前缀是 agent 侧 home 简写，展开后按主目录读取（omp 以用户身份运行，
-    // 已可访问这些文件）；项目目录沙箱只约束项目内相对/绝对路径。
+    // 已可访问这些文件）。
     if (isTildePath(filePath)) {
       return readFile(expandTildePath(filePath), 'utf-8');
     }
 
-    if (!this.isPathWithinProjectDirs(project, filePath)) {
-      throw new Error('File path is outside project directories');
-    }
-
+    // 允许读取任意路径的文件（与 VSCode 行为一致，用户可打开项目目录外的文件）。
+    // writeFile 仍保持沙箱限制，仅写入操作受项目目录约束。
     return readFile(filePath, 'utf-8');
   }
 
   /**
-   * 文件是否存在且为常规文件。路径沙箱规则与 readFile 一致：
-   * `~` 前缀展开后判断；其余路径必须在项目目录内。供引用点击前的存在性校验。
+   * 文件是否存在且为常规文件。
+   * `~` 前缀展开后判断；允许检查任意路径（与 readFile 一致，不受项目目录约束）。
+   * 供引用点击前的存在性校验。
    */
   async fileExists(projectId: string, filePath: string): Promise<boolean> {
     const project = this.getProject(projectId);
@@ -895,7 +894,6 @@ class ProjectManagerImpl extends EventEmitter {
 
     if (isTildePath(filePath)) return existsSync(expandTildePath(filePath));
 
-    if (!this.isPathWithinProjectDirs(project, filePath)) return false;
     try {
       return (await stat(filePath)).isFile();
     } catch {
