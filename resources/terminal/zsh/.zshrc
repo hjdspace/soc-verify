@@ -24,8 +24,12 @@ fi
 # 插件通过 download:zsh-plugins 脚本下载到 plugins/zsh-autosuggestions/
 if [ -r "${ZDOTDIR}/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh" ]; then
   source "${ZDOTDIR}/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh"
-  # 建议颜色：灰色
-  ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=8'
+  # 建议颜色：显式灰度 245（#8a8a8a）。
+  # 不用 fg=8（主题 brightBlack）——部分深色主题（如 Solarized Dark）的
+  # brightBlack 与背景同色会导致建议不可见；灰度 245 在所有深色终端主题
+  # （终端独立主题均为深色，无浅色主题）上都呈灰色。前置条件：TERM 已由
+  # 主进程注入（buildEnhancedEnv），否则 zsh 查不到 terminfo，任何 fg=N 都不生效。
+  ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=245'
 fi
 
 # ── 4. Starship Prompt 美化 ───────────────────────────────────────
