@@ -53,6 +53,14 @@ const SCM_REFRESH_DEBOUNCE_MS = 500;
 let scmRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let scmRefreshInflight: Promise<void> | null = null;
 
+// ── loadStatus 并发去重 ────────────────────────────────────────────
+// 文件树、SCM 面板等同时挂载都会触发 loadStatus；git status 在 Linux 大工程
+// 树上可能耗时数秒~十几秒，并发去重保证同一时刻只跑一次全树 status。
+let loadStatusInflight: Promise<void> | null = null;
+
+/** 挂载类 loadStatus 允许复用主进程缓存的时长（毫秒）。 */
+const SCM_STATUS_MAX_AGE_MS = 15000;
+
 export const useSourceControlStore = create<SourceControlState>((set, get) => ({
   status: null,
   commitMessage: '',
@@ -65,15 +73,23 @@ export const useSourceControlStore = create<SourceControlState>((set, get) => ({
   loadingDiffKeys: {},
 
   loadStatus: async (projectId) => {
-    set({ loading: true });
-    try {
-      const status = await trpc.scm.status.query({ projectId });
-      // 暂存区/工作区已变化，旧的展开 diff 不再可信，全部收起
-      set({ status, loading: false, expandedDiffKeys: {}, fileDiffs: {}, loadingDiffKeys: {} });
-    } catch (err) {
-      set({ loading: false });
-      useToastStore.getState().error('加载 Git 状态失败', errorMessage(err));
-    }
+    // 并发去重：同时挂载的多个组件共享同一次请求
+    if (loadStatusInflight) return loadStatusInflight;
+    const run = (async () => {
+      set({ loading: true });
+      try {
+        const status = await trpc.scm.status.query({ projectId, maxAgeMs: SCM_STATUS_MAX_AGE_MS });
+        // 暂存区/工作区已变化，旧的展开 diff 不再可信，全部收起
+        set({ status, loading: false, expandedDiffKeys: {}, fileDiffs: {}, loadingDiffKeys: {} });
+      } catch (err) {
+        set({ loading: false });
+        useToastStore.getState().error('加载 Git 状态失败', errorMessage(err));
+      } finally {
+        loadStatusInflight = null;
+      }
+    })();
+    loadStatusInflight = run;
+    return run;
   },
 
   refreshStatus: (projectId) => {
