@@ -11,7 +11,7 @@
  * Usage:  bun scripts/compile-runner.ts [--outfile <path>]
  */
 
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 
 // Bun provides `import.meta.dir` — the absolute directory of the current module.
@@ -39,10 +39,38 @@ const REPO_ROOT = join(ROOT, "engine", "oh-my-pi");
 // External deps that should not be bundled (same as engine's compile-binary.ts)
 const COMPILED_EXTERNAL_DEPENDENCIES = ["fastembed", "onnxruntime-node"];
 
+/**
+ * Remove stale nested @opentelemetry/core copies that Bun's bundler may
+ * resolve instead of the hoisted top-level version.
+ *
+ * The engine's lockfile occasionally allows `sdk-metrics@2.10.0` to nest an
+ * older `@opentelemetry/core@2.7.1` which lacks the `hrTimeToSeconds` export
+ * that `sdk-metrics` imports — causing a "No matching export" build failure.
+ * Deleting the nested copy forces resolution to the correct top-level version.
+ */
+function dedupeOtelCore(): void {
+	const nestedCore = join(
+		REPO_ROOT,
+		"node_modules",
+		"@opentelemetry",
+		"sdk-metrics",
+		"node_modules",
+		"@opentelemetry",
+		"core",
+	);
+	if (existsSync(nestedCore)) {
+		console.log("[compile-runner] Removing nested @opentelemetry/core (stale 2.7.x duplicate)");
+		rmSync(nestedCore, { recursive: true, force: true });
+	}
+}
+
 async function main(): Promise<void> {
 	console.log(`[compile-runner] Entrypoint: ${entrypoint}`);
 	console.log(`[compile-runner] Outfile: ${outfile}`);
 	console.log(`[compile-runner] CWD: ${ENGINE_CODING_AGENT}`);
+
+	// Deduplicate stale nested @opentelemetry/core that breaks the build.
+	dedupeOtelCore();
 
 	// Dynamically import the engine's virtual module plugin.
 	// This resolves the `omp-legacy-pi-modules` specifier at compile time.
