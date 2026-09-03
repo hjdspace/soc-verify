@@ -203,21 +203,25 @@ function ToolRunRow({
         )}
       </button>
 
-      {/* 展开体：专项视图（与 ToolCard 共用 ToolBodyView 分发） */}
-      <div
-        className="grid overflow-hidden transition-[grid-template-rows,opacity] duration-300"
-        style={{
-          gridTemplateRows: open ? '1fr' : '0fr',
-          opacity: open ? 1 : 0,
-          transitionTimingFunction: 'var(--ease-out-strong)',
-        }}
-      >
-        <div className="min-h-0 overflow-hidden">
-          <div className="mb-1 ml-2 mr-0.5 mt-0.5 rounded-[10px] border border-[var(--dsw-border-l1)] bg-[var(--dsw-code-block)] px-1 pb-1 pt-0.5">
-            <ToolBodyView message={message} taskAgents={taskAgents} />
+      {/* 展开体：专项视图（与 ToolCard 共用 ToolBodyView 分发）。
+          折叠时跳过渲染（而非 0fr 收起）——展开体含逐行高亮与大量 DOM，
+          挂载即执行是切换会话卡秒级的主因之一；grid 动画只在展开后生效 */}
+      {open ? (
+        <div
+          className="grid overflow-hidden transition-[grid-template-rows,opacity] duration-300"
+          style={{
+            gridTemplateRows: '1fr',
+            opacity: 1,
+            transitionTimingFunction: 'var(--ease-out-strong)',
+          }}
+        >
+          <div className="min-h-0 overflow-hidden">
+            <div className="mb-1 ml-2 mr-0.5 mt-0.5 rounded-[10px] border border-[var(--dsw-border-l1)] bg-[var(--dsw-code-block)] px-1 pb-1 pt-0.5">
+              <ToolBodyView message={message} taskAgents={taskAgents} />
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }
@@ -381,56 +385,59 @@ export function ToolRunGroup({ messages }: { messages: ChatMessage[] }) {
         </button>
       )}
 
-      <div
-        className={cn('grid overflow-hidden transition-[grid-template-rows,opacity] duration-300', isSingle && 'min-h-0')}
-        style={{
-          gridTemplateRows: open || isSingle ? '1fr' : '0fr',
-          opacity: open || isSingle ? 1 : 0,
-          transitionTimingFunction: 'var(--ease-out-strong)',
-        }}
-      >
-        <div className="min-h-0 overflow-hidden">
-          <div className={cn('flex flex-col gap-1', !isSingle && 'mt-1.5 pb-1')}>
-            {messages.map((message, index) => (
-              <ToolRunRow
-                key={message.id}
-                message={message}
-                open={openRows.has(message.id)}
-                onToggle={toggleRow}
-                animationDelay={Math.min(index, 4) * 60}
-              />
-            ))}
-          </div>
-
-          {/* 文件 diff chips */}
-          {diffFiles.length > 0 && (
-            <div className={cn('flex max-w-full flex-wrap gap-1.5 border-t border-[var(--dsw-border-l1)] pt-2.5', !isSingle && 'mt-2.5')}>
-              {diffFiles.map(({ file }, i) => (
-                <span key={file.path} data-diffchip className="relative">
-                  <button
-                    type="button"
-                    data-testid="tool-diff-chip"
-                    aria-expanded={preview?.file.path === file.path}
-                    aria-label={`查看 ${file.path} 的 diff`}
-                    onMouseEnter={openPreview(file)}
-                    onMouseLeave={closePreview(file.path)}
-                    onFocus={openPreview(file)}
-                    onBlur={closePreview(file.path)}
-                    onClick={() => openFile(file.path)}
-                    title={`点击打开文件: ${file.path}`}
-                    className="ap-echip inline-flex h-7 max-w-full items-center gap-2 rounded-md bg-[var(--dsw-layer-1)] px-2 font-mono text-[11.5px] text-foreground transition-colors duration-100 hover:bg-[var(--dsw-hover-solid)]"
-                    style={{ animation: `pop-in 250ms var(--ease-out-strong) ${i * 80}ms both` }}
-                  >
-                    <span className="min-w-0 truncate">{file.path.split(/[\\/]/).pop()}</span>
-                    <span className="shrink-0 tabular-nums text-[var(--dsw-success)]">+{file.added}</span>
-                    {file.deleted > 0 && <span className="shrink-0 tabular-nums text-[var(--dsw-error)]">−{file.deleted}</span>}
-                  </button>
-                </span>
+      {/* 组体：折叠时不挂载行集（展开体逐行高亮成本高，挂载即卡顿）。 */}
+      {(open || isSingle) && (
+        <div
+          className={cn('grid overflow-hidden transition-[grid-template-rows,opacity] duration-300', isSingle && 'min-h-0')}
+          style={{
+            gridTemplateRows: '1fr',
+            opacity: 1,
+            transitionTimingFunction: 'var(--ease-out-strong)',
+          }}
+        >
+          <div className="min-h-0 overflow-hidden">
+            <div className={cn('flex flex-col gap-1', !isSingle && 'mt-1.5 pb-1')}>
+              {messages.map((message, index) => (
+                <ToolRunRow
+                  key={message.id}
+                  message={message}
+                  open={openRows.has(message.id)}
+                  onToggle={toggleRow}
+                  animationDelay={Math.min(index, 4) * 60}
+                />
               ))}
             </div>
-          )}
+
+            {/* 文件 diff chips */}
+            {diffFiles.length > 0 && (
+              <div className={cn('flex max-w-full flex-wrap gap-1.5 border-t border-[var(--dsw-border-l1)] pt-2.5', !isSingle && 'mt-2.5')}>
+                {diffFiles.map(({ file }, i) => (
+                  <span key={file.path} data-diffchip className="relative">
+                    <button
+                      type="button"
+                      data-testid="tool-diff-chip"
+                      aria-expanded={preview?.file.path === file.path}
+                      aria-label={`查看 ${file.path} 的 diff`}
+                      onMouseEnter={openPreview(file)}
+                      onMouseLeave={closePreview(file.path)}
+                      onFocus={openPreview(file)}
+                      onBlur={closePreview(file.path)}
+                      onClick={() => openFile(file.path)}
+                      title={`点击打开文件: ${file.path}`}
+                      className="ap-echip inline-flex h-7 max-w-full items-center gap-2 rounded-md bg-[var(--dsw-layer-1)] px-2 font-mono text-[11.5px] text-foreground transition-colors duration-100 hover:bg-[var(--dsw-hover-solid)]"
+                      style={{ animation: `pop-in 250ms var(--ease-out-strong) ${i * 80}ms both` }}
+                    >
+                      <span className="min-w-0 truncate">{file.path.split(/[\\/]/).pop()}</span>
+                      <span className="shrink-0 tabular-nums text-[var(--dsw-success)]">+{file.added}</span>
+                      {file.deleted > 0 && <span className="shrink-0 tabular-nums text-[var(--dsw-error)]">−{file.deleted}</span>}
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {preview && <DiffPreviewCard preview={preview} />}
     </div>
