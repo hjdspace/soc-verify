@@ -489,6 +489,9 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
     const coreSet = useSessionCoreStore.setState.bind(useSessionCoreStore);
     const sessionId = targetSessionId ?? coreGet().currentSessionId;
     if (!sessionId || !message.trim()) return;
+    // 去除前导/尾部换行：用户在输入框选斜杠命令后可能残留前导换行，
+    // 导致消息气泡中 skill 标签与消息内容之间出现空行。
+    message = message.trim();
 
     const sessionBeforeSend = coreGet().sessions.find((s) => s.id === sessionId);
     const isFirstMessage = sessionBeforeSend && sessionBeforeSend.messages.length === 0;
