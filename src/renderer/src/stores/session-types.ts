@@ -131,6 +131,12 @@ export interface SessionEntry {
   name: string;
   status: SessionStatus;
   messages: ChatMessage[];
+  /**
+   * 消息未加载标记：restoreSessions 只为当前 tab 加载消息，其余恢复的
+   * tab 消息为空数组、此标记为 true；切换到该 tab 时惰性拉取存储消息。
+   * 用于避免项目打开时为所有 tab 全量拉取数百 KB 的消息文件（GUI 卡顿）。
+   */
+  messagesUnloaded?: boolean;
   composer: SessionComposer;
   createdAt: number;
   model?: SessionModel;
