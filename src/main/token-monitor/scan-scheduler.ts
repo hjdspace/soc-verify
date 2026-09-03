@@ -7,21 +7,31 @@
  * - 文件截断检测：文件大小 < byte_offset 时重置
  * - 去重：解析的记录通过 recordUsage INSERT OR IGNORE
  * - 手动触发：scanOnce() 立即执行一次扫描
+ *
+ * 性能约束（GUI 卡顿修复）：
+ * 扫描全程不允许长时间霸占事件循环 —— Electron 主进程同时承担所有
+ * tRPC 查询 / IPC / 窗口管理，被同步扫描阻塞十几秒就是 Token 视图
+ * 首开卡顿的根因。因此：
+ * 1. 文件用 readline 流式读取（createReadStream({ start: offset }) 只读新字节）
+ * 2. 每解析若干行 setImmediate 让出事件循环
+ * 3. 每文件解析结果在单个事务中批量写入（见 recordUsageBatch）
+ * 参考 ADR 0013（violation 解析的流式方案）。
  */
 
 import type { TokenMonitorDb } from './token-monitor-db';
 import {
-  recordUsage,
+  recordUsageBatch,
   getScanState,
   upsertScanState,
 } from './token-monitor-db';
 import {
   getAllScanDirs,
-  discoverJsonlFiles,
+  discoverJsonlFilesAsync,
   getFileStat,
+  lastCompleteLineOffset,
 } from './log-scanner-paths';
-import { parseClaudeJsonlFile } from './claude-log-parser';
-import { parseCodexJsonlFile } from './codex-log-parser';
+import { parseClaudeJsonlFileStream } from './claude-log-parser';
+import { parseCodexJsonlFileStream } from './codex-log-parser';
 
 // ─── Types ─────────────────────────────────────────────────
 
@@ -48,6 +58,11 @@ export type ScanResult = {
 /** 默认扫描间隔：5 分钟 */
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 
+/** setImmediate 的 Promise 包装 */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
+
 /**
  * 扫描调度器。
  *
@@ -63,8 +78,10 @@ const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 export class ScanScheduler {
   private readonly db: TokenMonitorDb;
   private readonly intervalMs: number;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
   private lastScanAt: number | null = null;
+  /** 进行中的扫描 Promise（防重入：并发触发时复用同一次扫描） */
+  private inflight: Promise<ScanResult> | null = null;
 
   constructor(db: TokenMonitorDb, options: ScanSchedulerOptions = {}) {
     this.db = db;
@@ -118,9 +135,24 @@ export class ScanScheduler {
   /**
    * 执行一次完整扫描（所有目录、所有文件）。
    *
+   * 异步流式实现：readline 逐行读取 + 事务批量写入 + 周期性让出事件循环，
+   * 扫描期间主进程保持响应（tRPC/IPC 不冻结）。文件多、I/O 慢时总时长
+   * 不变，但 GUI 不再卡顿。
+   *
+   * 防重入：扫描进行中再次调用返回同一个 Promise（手动刷新连点、
+   * 定时扫描与视图打开自动扫描并发时，不会叠加多个全量扫描）。
+   *
    * 内部 catch 保证不抛出异常（静默降级）。
    */
-  async scanOnce(): Promise<ScanResult> {
+  scanOnce(): Promise<ScanResult> {
+    if (this.inflight) return this.inflight;
+    this.inflight = this.doScan().finally(() => {
+      this.inflight = null;
+    });
+    return this.inflight;
+  }
+
+  private async doScan(): Promise<ScanResult> {
     const startTime = Date.now();
     let filesScanned = 0;
     let filesSkipped = 0;
@@ -130,7 +162,8 @@ export class ScanScheduler {
       const scanDirs = getAllScanDirs();
 
       for (const { engine, dir } of scanDirs) {
-        const files = discoverJsonlFiles(dir);
+        const files = await discoverJsonlFilesAsync(dir);
+        await yieldToEventLoop();
 
         for (const filePath of files) {
           try {
@@ -155,27 +188,24 @@ export class ScanScheduler {
                 ? prevState.byteOffset
                 : 0;
 
-            // 解析文件
+            // 流式解析（只读 byteOffset 之后的新字节，行间让出事件循环）
             const records =
               engine === 'claude-code'
-                ? parseClaudeJsonlFile(filePath, byteOffset)
-                : parseCodexJsonlFile(filePath, byteOffset);
+                ? await parseClaudeJsonlFileStream(filePath, byteOffset)
+                : await parseCodexJsonlFileStream(filePath, byteOffset);
 
-            // 写入数据库（INSERT OR IGNORE 去重）
-            let inserted = 0;
-            for (const record of records) {
-              const before = this.getTotalCount();
-              recordUsage(this.db, record);
-              const after = this.getTotalCount();
-              if (after > before) inserted++;
-            }
-            recordsInserted += inserted;
+            // 单事务批量写入（INSERT OR IGNORE 去重，.changes 统计插入数）
+            recordsInserted += recordUsageBatch(this.db, records);
 
-            // 更新 scan_state
+            // 更新 scan_state —— 偏移推进到最后一个完整行边界（而非文件末尾）：
+            // writer 追加写日志时，尾部无换行符的半行尚未写完，
+            // 推进到末尾会让写完后的剩余字节永远落在偏移之前（记录丢失）
+            const safeOffset = await lastCompleteLineOffset(filePath);
+
             upsertScanState(this.db, {
               filePath,
               lastMtime: stat.mtimeMs,
-              byteOffset: stat.size,
+              byteOffset: safeOffset,
               scannedAt: Date.now(),
             });
 
@@ -205,15 +235,5 @@ export class ScanScheduler {
       await this.scanOnce();
       this.scheduleNext(); // 递归调度下一次
     }, this.intervalMs);
-  }
-
-  /**
-   * 获取当前 token_usage 表的记录总数（用于判断实际插入数量）。
-   */
-  private getTotalCount(): number {
-    const row = this.db
-      .prepare('SELECT COUNT(*) as cnt FROM token_usage')
-      .get() as { cnt: number };
-    return row.cnt;
   }
 }
