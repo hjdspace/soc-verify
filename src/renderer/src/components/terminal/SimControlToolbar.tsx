@@ -487,7 +487,7 @@ export function SimControlToolbar({
       </button>
 
       {/* 编译日志：分裂按钮（主点击=内置编辑器，箭头=gvim；hover 绿色调对齐原型） */}
-      <div className="flex shrink-0 items-stretch">
+      <div className="relative flex shrink-0 items-stretch">
         <button
           onClick={() => artifacts?.compileLogPath && openLogFile(artifacts.compileLogPath, false)}
           disabled={!hasCompileLog}
@@ -517,10 +517,33 @@ export function SimControlToolbar({
         >
           <ChevronDown className="h-2.5 w-2.5" />
         </button>
+        {debugMenu === 'compile-log' && (
+          <div
+            className="absolute top-full left-0 z-50 mt-1 min-w-52 overflow-hidden rounded-md border border-border bg-background py-1 shadow-lg"
+            data-testid="sim-debug-menu-compile-log"
+          >
+            <button
+              className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent"
+              onClick={() => artifacts?.compileLogPath && openLogFile(artifacts.compileLogPath, false)}
+              data-testid="sim-debug-menu-builtin-compile-log"
+            >
+              <FileText className="h-3 w-3" />
+              内置编辑器打开
+            </button>
+            <button
+              className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent"
+              onClick={() => artifacts?.compileLogPath && openLogFile(artifacts.compileLogPath, true)}
+              data-testid="sim-debug-menu-gvim-compile-log"
+            >
+              <FileCode className="h-3 w-3" />
+              用 gvim 打开
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 仿真日志：分裂按钮 */}
-      <div className="flex shrink-0 items-stretch">
+      <div className="relative flex shrink-0 items-stretch">
         <button
           onClick={() => artifacts?.simLogPath && openLogFile(artifacts.simLogPath, false)}
           disabled={!hasSimLog}
@@ -550,65 +573,58 @@ export function SimControlToolbar({
         >
           <ChevronDown className="h-2.5 w-2.5" />
         </button>
+        {debugMenu === 'sim-log' && (
+          <div
+            className="absolute top-full left-0 z-50 mt-1 min-w-52 overflow-hidden rounded-md border border-border bg-background py-1 shadow-lg"
+            data-testid="sim-debug-menu-sim-log"
+          >
+            <button
+              className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent"
+              onClick={() => artifacts?.simLogPath && openLogFile(artifacts.simLogPath, false)}
+              data-testid="sim-debug-menu-builtin-sim-log"
+            >
+              <FileText className="h-3 w-3" />
+              内置编辑器打开
+            </button>
+            <button
+              className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent"
+              onClick={() => artifacts?.simLogPath && openLogFile(artifacts.simLogPath, true)}
+              data-testid="sim-debug-menu-gvim-sim-log"
+            >
+              <FileCode className="h-3 w-3" />
+              用 gvim 打开
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 反汇编：单文件直接打开；多文件下拉选择（hover 琥珀调对齐原型） */}
-      <button
-        onClick={handleAsmClick}
-        disabled={asmCount === 0}
-        className={cn(
-          'flex shrink-0 items-center gap-1 whitespace-nowrap rounded px-2 py-0.5 font-medium transition-colors',
-          asmCount > 0
-            ? 'text-foreground hover:bg-status-running/15 hover:text-status-running-foreground'
-            : 'cursor-not-allowed text-muted-foreground opacity-40',
-        )}
-        title={
-          asmCount > 0
-            ? `打开反汇编文件（*_sw_build 下的 .asm，共 ${asmCount} 个）`
-            : missingHint
-        }
-        data-testid="sim-debug-asm"
-      >
-        <Binary className="h-3 w-3 shrink-0" />
-        <span className="hidden xl:inline">反汇编{asmCount > 1 ? ` (${asmCount})` : ''}</span>
-      </button>
-
-      {/* Debug 下拉菜单（分裂按钮打开方式 / 反汇编文件列表） */}
-      {debugMenu && (
-        <div
-          className="absolute top-full right-2 z-50 mt-1 min-w-52 overflow-hidden rounded-md border border-border bg-background py-1 shadow-lg"
-          data-testid="sim-debug-menu"
-        >
-          {(debugMenu === 'compile-log' || debugMenu === 'sim-log') && (
-            <>
-              <button
-                className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent"
-                onClick={() =>
-                  debugMenu === 'compile-log'
-                    ? artifacts?.compileLogPath && openLogFile(artifacts.compileLogPath, false)
-                    : artifacts?.simLogPath && openLogFile(artifacts.simLogPath, false)
-                }
-                data-testid="sim-debug-menu-builtin"
-              >
-                <FileText className="h-3 w-3" />
-                内置编辑器打开
-              </button>
-              <button
-                className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent"
-                onClick={() =>
-                  debugMenu === 'compile-log'
-                    ? artifacts?.compileLogPath && openLogFile(artifacts.compileLogPath, true)
-                    : artifacts?.simLogPath && openLogFile(artifacts.simLogPath, true)
-                }
-                data-testid="sim-debug-menu-gvim"
-              >
-                <FileCode className="h-3 w-3" />
-                用 gvim 打开
-              </button>
-            </>
+      <div className="relative flex shrink-0 items-stretch">
+        <button
+          onClick={handleAsmClick}
+          disabled={asmCount === 0}
+          className={cn(
+            'flex shrink-0 items-center gap-1 whitespace-nowrap rounded px-2 py-0.5 font-medium transition-colors',
+            asmCount > 0
+              ? 'text-foreground hover:bg-status-running/15 hover:text-status-running-foreground'
+              : 'cursor-not-allowed text-muted-foreground opacity-40',
           )}
-          {debugMenu === 'asm' &&
-            artifacts?.asmFiles.map((asmFile, index) => (
+          title={
+            asmCount > 0
+              ? `打开反汇编文件（*_sw_build 下的 .asm，共 ${asmCount} 个）`
+              : missingHint
+          }
+          data-testid="sim-debug-asm"
+        >
+          <Binary className="h-3 w-3 shrink-0" />
+          <span className="hidden xl:inline">反汇编{asmCount > 1 ? ` (${asmCount})` : ''}</span>
+        </button>
+        {debugMenu === 'asm' && (
+          <div
+            className="absolute top-full left-0 z-50 mt-1 min-w-52 overflow-hidden rounded-md border border-border bg-background py-1 shadow-lg"
+            data-testid="sim-debug-menu-asm"
+          >
+            {artifacts?.asmFiles.map((asmFile, index) => (
               <button
                 key={asmFile}
                 className="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left font-mono text-xs text-foreground transition-colors hover:bg-accent"
@@ -619,8 +635,9 @@ export function SimControlToolbar({
                 <span className="truncate">{baseName(asmFile)}</span>
               </button>
             ))}
-        </div>
-      )}
+          </div>
+        )}
+      </div>
 
       {/* Command preview (truncated) — min-w-0 优先收缩，避免挤压按钮导致文字折行
           显示时去除 cd "$PROJ_WORK" && 前缀，只展示 runsim 命令部分，更加清晰。
