@@ -72,13 +72,14 @@ describe('projectManager.fileExists', () => {
     await expect(projectManager.fileExists(projectId, dirPath)).resolves.toBe(false);
   });
 
-  it('returns false for a path outside the project directories', async () => {
+  it('returns true for an existing file outside the project directories', async () => {
     const outside = await mkdtemp(join(tmpdir(), 'socverify-outside-'));
     try {
-      const filePath = join(outside, 'secret.txt');
-      await writeFile(filePath, 'leak', 'utf-8');
+      const filePath = join(outside, 'external.txt');
+      await writeFile(filePath, 'external', 'utf-8');
 
-      await expect(projectManager.fileExists(projectId, filePath)).resolves.toBe(false);
+      // fileExists 不再限制路径，允许检查项目目录外的文件
+      await expect(projectManager.fileExists(projectId, filePath)).resolves.toBe(true);
     } finally {
       await rm(outside, { recursive: true, force: true });
     }
