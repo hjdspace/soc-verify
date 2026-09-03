@@ -31,6 +31,38 @@ const historySessionLoads = new Map<string, Promise<void>>();
 let historyFetchToken = 0;
 const runtimeSessionStarts = new Map<string, Promise<string>>();
 const pendingSessionEvents = new Map<string, unknown[]>();
+// 惰性消息加载去重：同一会话并发的多次切换只触发一次 IPC 拉取
+const messageLoadInflight = new Map<string, Promise<void>>();
+
+/**
+ * 为恢复的会话 tab 惰性加载持久化消息。
+ * messagesUnloaded 标记的会话在首次可见时调用；带去重防并发重复拉取。
+ * 加载完成后清标记（无论文件是否存在——空文件表示该会话本就无消息）。
+ */
+function loadMessagesIntoSession(sessionId: string, projectId: string): Promise<void> {
+  const inflight = messageLoadInflight.get(sessionId);
+  if (inflight) return inflight;
+  const load = (async () => {
+    try {
+      const chatMessages = await loadStoredSessionMessages(projectId, sessionId);
+      useSessionCoreStore.setState((s) => ({
+        sessions: s.sessions.map((sess) =>
+          sess.id === sessionId
+            ? { ...sess, messages: chatMessages, messagesUnloaded: false }
+            : sess,
+        ),
+      }));
+    } catch {
+      useSessionCoreStore.setState((s) => ({
+        sessions: s.sessions.map((sess) =>
+          sess.id === sessionId ? { ...sess, messagesUnloaded: false } : sess,
+        ),
+      }));
+    }
+  })();
+  messageLoadInflight.set(sessionId, load);
+  return load.finally(() => messageLoadInflight.delete(sessionId));
+}
 
 // ─── 工具函数 ──────────────────────────────────────────────
 export function sessionMatchesId(session: SessionEntry, sessionId: string): boolean {
@@ -397,6 +429,11 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
 
   switchSession: (sessionId) => {
     set({ currentSessionId: sessionId });
+    // 惰性加载：切到未加载消息的恢复 tab 时才拉取其消息文件
+    const session = get().sessions.find((s) => s.id === sessionId);
+    if (session?.messagesUnloaded) {
+      void loadMessagesIntoSession(sessionId, session.projectId);
+    }
   },
 
   renameSession: async (sessionId, projectId, name) => {
@@ -725,6 +762,9 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
         name: p.name,
         status: 'idle',
         messages: [],
+        // Perf: 只为当前 tab 拉取消息文件（可达数百 KB），其余 tab 标记
+        // 未加载、切换时惰性拉取——避免项目打开时全量 IPC + 渲染卡顿。
+        messagesUnloaded: true,
         composer: emptyComposer(),
         createdAt: p.createdAt,
         model: p.model,
@@ -745,19 +785,11 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
         currentSessionId: nextCurrentId,
       }));
 
-      await Promise.all(
-        newEntries.map(async (entry) => {
-          const chatMessages = await loadStoredSessionMessages(projectId, entry.id);
-          if (chatMessages.length === 0) return;
-          set((s) => ({
-            sessions: s.sessions.map((sess) =>
-              sess.id === entry.id
-                ? { ...sess, messages: chatMessages }
-                : sess,
-            ),
-          }));
-        }),
-      );
+      // 只加载当前 tab 的消息；后台 tab 首次切换时按需加载
+      const currentEntry = newEntries.find((e) => e.id === nextCurrentId);
+      if (currentEntry) {
+        await loadMessagesIntoSession(currentEntry.id, projectId);
+      }
       return true;
     } catch {
       return false;
