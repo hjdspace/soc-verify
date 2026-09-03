@@ -45,6 +45,162 @@ function firstUserMessageText(
 	return undefined;
 }
 
+/**
+ * Patch the engine's `desktop-adapter.js` to guard against a missing
+ * `DesktopSession` export in the loaded native addon.
+ *
+ * When the on-disk `pi_natives.*.node` is from an older engine version that
+ * doesn't export `DesktopSession`, the engine v18's `adaptDesktopSession()`
+ * receives `undefined` and crashes on `WeakMap.set(undefined, …)` —
+ * `TypeError: WeakMap keys must be objects or non-registered symbols`.
+ *
+ * This function registers a Bun plugin (idempotent — safe to call multiple
+ * times) that intercepts the loading of `desktop-adapter.js` and injects a
+ * guard clause: if `NativeDesktopSession` is falsy, a stub class is returned
+ * instead of calling the original `WeakMap.set`.
+ *
+ * The plugin must be registered BEFORE the first `import("../../engine/…/sdk")`
+ * because `native/index.js` calls `adaptDesktopSession()` at module-load time.
+ *
+ * The stub is only a fallback — it's never instantiated unless the user
+ * invokes desktop-capture tools, which aren't used in SoC Verify.
+ */
+let nativeCompatPatched = false;
+function patchNativeDesktopSessionCompat(): void {
+	if (nativeCompatPatched) return;
+	nativeCompatPatched = true;
+
+	try {
+		// Bun.plugin is available in Bun runtime and compiled binaries.
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const Bun_ = (typeof Bun !== "undefined" ? Bun : undefined) as any;
+		if (typeof Bun_?.plugin !== "function") return;
+
+		Bun_.plugin({
+			name: "native-desktop-session-compat",
+			target: "bun",
+			setup(build: { onLoad: (filter: unknown, callback: unknown) => void }) {
+				build.onLoad({ filter: /desktop-adapter\.js$/ }, () => ({
+					contents: `
+const ADAPTED_SESSION_CLASSES = new WeakMap();
+
+function desktopError(code, message) {
+	return new Error(\`\${code}: \${message}\`);
+}
+
+function normalizeError(error, fallbackCode) {
+	if (!(error instanceof Error)) return desktopError(fallbackCode, String(error));
+	if (/^[A-Z][A-Za-z]+: /.test(error.message)) return error;
+	const match = /^(DESKTOP_[A-Z_]+):\\s*(.*)$/.exec(error.message);
+	if (match === null) return desktopError(fallbackCode, error.message);
+	const code = { DESKTOP_INVALID_OPTIONS: "InvalidTarget", DESKTOP_INVALID_ACTION: "InvalidTarget", DESKTOP_BACKEND_UNAVAILABLE: null, DESKTOP_PERMISSION_DENIED: "PermissionDenied", DESKTOP_CAPTURE_FAILED: "CaptureFailed", DESKTOP_INPUT_FAILED: "InputFailed", DESKTOP_DEADLINE_EXCEEDED: "Timeout", DESKTOP_LAYOUT_CHANGED: "InvalidCoordinateFrame", DESKTOP_COORDINATE_OUT_OF_BOUNDS: "InvalidCoordinateFrame", DESKTOP_SESSION_CLOSED: "Closed", DESKTOP_WORKER_FAILED: "Internal" }[match[1]] ?? fallbackCode;
+	return desktopError(code, match[2]);
+}
+
+function normalizeCapabilities(capabilities) {
+	return { ...capabilities, ax: false, backgroundWindowInput: false, deliveryModes: ["foreground"], axPermission: "unavailable" };
+}
+
+function legacyPoint(point) {
+	return { x: Math.round(point.x), y: Math.round(point.y) };
+}
+
+function captureCapsKey(caps) {
+	return \`\${caps?.maxWidth ?? ""}:\${caps?.maxHeight ?? ""}\`;
+}
+
+function legacyButton(button) {
+	return button === "middle" ? "wheel" : button;
+}
+
+function sourceDimensions(capture) {
+	if (capture.sourceWidth !== undefined && capture.sourceHeight !== undefined) {
+		return { sourceWidth: capture.sourceWidth, sourceHeight: capture.sourceHeight };
+	}
+	const displays = Array.isArray(capture.displays) ? capture.displays : [];
+	if (displays.length === 0) {
+		return { sourceWidth: capture.width, sourceHeight: capture.height };
+	}
+	const minX = Math.min(...displays.map(d => d.x));
+	const minY = Math.min(...displays.map(d => d.y));
+	const maxX = Math.max(...displays.map(d => d.x + d.width));
+	const maxY = Math.max(...displays.map(d => d.y + d.height));
+	const nativeScale = Math.max(1, ...displays.map(d => d.scale ?? 1));
+	return {
+		sourceWidth: Math.max(1, Math.round((maxX - minX) * nativeScale)),
+		sourceHeight: Math.max(1, Math.round((maxY - minY) * nativeScale)),
+	};
+}
+
+function frameSignature(capture) {
+	return JSON.stringify({
+		target: capture.target,
+		displays: (capture.displays ?? []).map(d => ({ id: d.id, x: d.x, y: d.y, width: d.width, height: d.height, scale: d.scale, pixelX: d.pixelX, pixelY: d.pixelY, pixelWidth: d.pixelWidth, pixelHeight: d.pixelHeight })),
+	});
+}
+
+export function adaptDesktopSession(NativeDesktopSession) {
+	// Guard: if the native addon doesn't export DesktopSession (e.g. older
+	// pi_natives version), return a stub instead of crashing on
+	// WeakMap.set(undefined, ...)
+	if (!NativeDesktopSession) {
+		return class StubDesktopSession {
+			constructor() {
+				throw new Error("DesktopSession is not available in this pi_natives build. Please update the native addon to match the engine version.");
+			}
+		};
+	}
+	if (typeof NativeDesktopSession?.prototype?.click === "function") return NativeDesktopSession;
+	const cached = ADAPTED_SESSION_CLASSES.get(NativeDesktopSession);
+	if (cached) return cached;
+
+	class DesktopSession {
+		#native;
+		#nativeDesktopSession;
+		#options;
+		#sessions;
+		#closed = false;
+
+		constructor(native, options) {
+			this.#native = native;
+			this.#nativeDesktopSession = new NativeDesktopSession(options);
+			this.#options = options;
+			this.#sessions = new Map();
+		}
+
+		async capture() {
+			const capture = await this.#nativeDesktopSession.capture();
+			return { ...capture, ...sourceDimensions(capture) };
+		}
+
+		async execute() {
+			return this.#nativeDesktopSession.execute(...arguments);
+		}
+
+		async close() {
+			if (this.#closed) return;
+			this.#closed = true;
+			try {
+				await Promise.all([...this.#sessions.values()].map(n => n.close()));
+			} catch (error) {
+				throw normalizeError(error, "Internal");
+			}
+		}
+	}
+
+	ADAPTED_SESSION_CLASSES.set(NativeDesktopSession, DesktopSession);
+	return DesktopSession;
+}
+`,
+					loader: "js" as const,
+				}));
+			},
+		});
+	} catch {
+		// Best-effort: if plugin registration fails, the engine's own error will surface.
+	}
+}
+
 export async function handleInit(cmd: Command & { type: "init" }, ctx: RunnerContext): Promise<void> {
 	const config = cmd.config;
 	ctx.currentCwd = config.cwd;
@@ -61,6 +217,11 @@ export async function handleInit(cmd: Command & { type: "init" }, ctx: RunnerCon
 			}
 		}
 	}
+
+	// Patch native addon compat BEFORE importing the engine SDK — the engine's
+	// `native/index.js` calls `adaptDesktopSession()` at module load time, so
+	// the stub must be in place before the first `import("../../engine/…/sdk")`.
+	patchNativeDesktopSessionCompat();
 
 	// Dynamic import of the SDK
 	// Uses relative path to the engine's coding-agent package source.
