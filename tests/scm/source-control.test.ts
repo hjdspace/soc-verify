@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
-import { parseGitStatus, sanitizeCommitMessage, SourceControlService } from '../../src/main/scm/source-control';
+import {
+  parseGitStatus,
+  sanitizeCommitMessage,
+  SourceControlService,
+  type ExecFileFn,
+} from '../../src/main/scm/source-control';
 
 const execFileAsync = promisify(execFile);
 
@@ -129,7 +134,7 @@ describe('source control service', () => {
   it('generates commit messages through an OpenAI-compatible endpoint', async () => {
     let requestBody = '';
     const execFileFn = vi.fn((file, args, _options, callback) => {
-      const gitArgs = args.slice(2);
+      const gitArgs = args.filter((a: string, idx: number) => a !== '--no-optional-locks' && a !== '-C' && args[idx - 1] !== '-C');
       if (file !== 'git') {
         callback(new Error('unexpected binary'), '', '');
         return;
@@ -173,7 +178,7 @@ describe('source control service', () => {
   it('generates commit messages using staged diff when files are staged', async () => {
     let requestBody = '';
     const execFileFn = vi.fn((file, args, _options, callback) => {
-      const gitArgs = args.slice(2);
+      const gitArgs = args.filter((a: string, idx: number) => a !== '--no-optional-locks' && a !== '-C' && args[idx - 1] !== '-C');
       if (file !== 'git') {
         callback(new Error('unexpected binary'), '', '');
         return;
@@ -222,7 +227,7 @@ describe('source control service', () => {
 
   // ── Helper: create a fake execFile that always returns staged src/a.ts ─
   const fakeExecFileFn = vi.fn((file, args, _options, callback) => {
-    const gitArgs = args.slice(2);
+    const gitArgs = args.filter((a: string, idx: number) => a !== '--no-optional-locks' && a !== '-C' && args[idx - 1] !== '-C');
     if (file !== 'git') {
       callback(new Error('unexpected binary'), '', '');
       return;
@@ -256,7 +261,7 @@ describe('source control service', () => {
   it('uses the /responses endpoint and Responses request shape when credential api is openai-responses', async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
     const fakeExec = vi.fn((file: string, args: string[], _options: unknown, callback: (e: Error | null, stdout: string, stderr: string) => void) => {
-      const gitArgs = args.slice(2);
+      const gitArgs = args.filter((a: string, idx: number) => a !== '--no-optional-locks' && a !== '-C' && args[idx - 1] !== '-C');
       if (gitArgs[0] === 'status') {
         callback(null, '## main\0M  src/a.ts\0', '');
         return;
@@ -297,7 +302,7 @@ describe('source control service', () => {
 
   it('appends /v1 before the responses endpoint when the credential baseUrl lacks it', async () => {
     const fakeExec = vi.fn((file: string, args: string[], _options: unknown, callback: (e: Error | null, stdout: string, stderr: string) => void) => {
-      const gitArgs = args.slice(2);
+      const gitArgs = args.filter((a: string, idx: number) => a !== '--no-optional-locks' && a !== '-C' && args[idx - 1] !== '-C');
       if (gitArgs[0] === 'status') {
         callback(null, '## main\0M  src/a.ts\0', '');
         return;
@@ -480,7 +485,7 @@ describe('source control service', () => {
   it('handles new repo with no commit history', async () => {
     // git log fails on a new repo — should not block generation
     const execFileFn = vi.fn((file, args, _options, callback) => {
-      const gitArgs = args.slice(2);
+      const gitArgs = args.filter((a: string, idx: number) => a !== '--no-optional-locks' && a !== '-C' && args[idx - 1] !== '-C');
       if (file !== 'git') {
         callback(new Error('unexpected binary'), '', '');
         return;
@@ -740,3 +745,206 @@ describe('source control service', () => {
       await rm(repo, { recursive: true, force: true });
     }
   });
+
+// ═══ Linux 端 git status 失败模式的恢复策略与性能加固（追加于顶层）═══
+//
+// EDA 验证工程在 Linux 上常见的四类失败（此前全部被静默吞掉，导致文件树
+// 无 M/U 徽标、版本控制面板无差异）：stdout 超 maxBuffer、老 git 不支持
+// :(exclude) pathspec、dubious ownership、git 不在 PATH。
+// 另：git status 在大工程树上可能耗时数秒~十几秒，补充缓存与范围化查询测试。
+
+type MockResult = { stdout?: string; error?: Error & { code?: string | number } };
+type RecordedCall = { file: string; args: string[]; options: { cwd?: string; maxBuffer?: number } };
+
+function createMockExec(handlers: Array<(call: { file: string; args: string[] }) => MockResult>) {
+  const calls: RecordedCall[] = [];
+  const execFn: ExecFileFn = (file, args, options, callback) => {
+    calls.push({ file, args, options });
+    const handler = handlers[Math.min(calls.length - 1, handlers.length - 1)];
+    const result = handler({ file, args });
+    if (result.error) {
+      callback(result.error, '', '');
+      return;
+    }
+    callback(null, result.stdout ?? '', '');
+  };
+  return { execFn, calls };
+}
+
+const PORCELAIN_OUTPUT = '## main\0 M src/a.ts\0?? src/new.ts\0';
+
+describe('git status failure recovery (linux)', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it('passes an enlarged maxBuffer so huge untracked file lists are not truncated', async () => {
+    const { execFn, calls } = createMockExec([() => ({ stdout: PORCELAIN_OUTPUT })]);
+    const service = new SourceControlService({ execFileFn: execFn });
+
+    const status = await service.getStatus('/repo');
+
+    expect(status.isRepository).toBe(true);
+    expect(calls[0].options.maxBuffer).toBeGreaterThanOrEqual(64 * 1024 * 1024);
+  });
+
+  it('retries without :(exclude) pathspec on legacy git versions', async () => {
+    const { execFn, calls } = createMockExec([
+      () => ({ error: Object.assign(new Error("fatal: Invalid pathspec magic 'exclude' in ':(exclude).socverify'"), { code: 128 }) }),
+      () => ({ stdout: PORCELAIN_OUTPUT }),
+    ]);
+    const service = new SourceControlService({ execFileFn: execFn });
+
+    const status = await service.getStatus('/repo');
+
+    expect(status.isRepository).toBe(true);
+    expect(status.files.map((f) => f.path)).toEqual(['src/a.ts', 'src/new.ts']);
+    expect(calls[1].args).not.toContain(':(exclude).socverify');
+  });
+
+  it('adds safe.directory and retries when git reports dubious ownership', async () => {
+    const dubious = () => ({
+      error: Object.assign(new Error("fatal: detected dubious ownership in repository at '/repo'"), { code: 128 }),
+    });
+    const { execFn, calls } = createMockExec([
+      dubious, // status → 失败
+      () => ({ stdout: '' }), // safe.directory get-all → 无记录
+      () => ({ stdout: '' }), // safe.directory add
+      () => ({ stdout: PORCELAIN_OUTPUT }), // status 重试 → 成功
+    ]);
+    const service = new SourceControlService({ execFileFn: execFn });
+
+    const status = await service.getStatus('/repo');
+
+    expect(status.isRepository).toBe(true);
+    expect(status.files).toHaveLength(2);
+    const addCall = calls.find((c) => c.args[0] === 'config' && c.args[2] === '--add');
+    expect(addCall?.args).toEqual(['config', '--global', '--add', 'safe.directory', '/repo']);
+  });
+
+  it('skips the add when the repo path is already whitelisted but still retries', async () => {
+    const dubious = () => ({
+      error: Object.assign(new Error("fatal: detected dubious ownership in repository at '/repo'"), { code: 128 }),
+    });
+    const { execFn, calls } = createMockExec([
+      dubious, // status → 失败
+      () => ({ stdout: '/repo\n' }), // safe.directory get-all → 已存在
+      () => ({ stdout: PORCELAIN_OUTPUT }), // status 重试 → 成功
+    ]);
+    const service = new SourceControlService({ execFileFn: execFn });
+
+    const status = await service.getStatus('/repo');
+
+    expect(status.isRepository).toBe(true);
+    expect(calls.filter((c) => c.args[0] === 'config' && c.args[2] === '--add')).toHaveLength(0);
+  });
+
+  it('reports a notice when git is entirely unavailable', async () => {
+    const { execFn } = createMockExec([
+      () => ({ error: Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' }) }),
+    ]);
+    const service = new SourceControlService({ execFileFn: execFn });
+
+    const status = await service.getStatus('/repo');
+
+    expect(status.isRepository).toBe(false);
+    expect(status.notice).toContain('ENOENT');
+  });
+
+  it('does not report a notice when status succeeds', async () => {
+    const { execFn } = createMockExec([() => ({ stdout: PORCELAIN_OUTPUT })]);
+    const service = new SourceControlService({ execFileFn: execFn });
+
+    const status = await service.getStatus('/repo');
+
+    expect(status.isRepository).toBe(true);
+    expect(status.notice).toBeUndefined();
+  });
+});
+
+describe('status caching and scoped queries (slow git status on linux)', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it('reuses the cached status within maxAgeMs and re-runs afterwards', async () => {
+    const { execFn, calls } = createMockExec([() => ({ stdout: PORCELAIN_OUTPUT })]);
+    const service = new SourceControlService({ execFileFn: execFn });
+
+    await service.getStatus('/repo', { maxAgeMs: 5000 });
+    await service.getStatus('/repo', { maxAgeMs: 5000 });
+    expect(calls).toHaveLength(1); // TTL 内复用缓存
+
+    await service.getStatus('/repo'); // 默认 0 = 总是实时
+    expect(calls).toHaveLength(2);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await service.getStatus('/repo', { maxAgeMs: 1 }); // 超过 TTL 后重新执行
+    expect(calls).toHaveLength(3);
+  });
+
+  it('checks untracked via a path-scoped status instead of a full-tree scan in getFileDiff', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'socverify-scm-'));
+    try {
+      await writeFile(join(repo, 'fresh.ts'), 'alpha\n', 'utf-8');
+      const { execFn, calls } = createMockExec([
+        () => ({ stdout: '?? fresh.ts\0' }), // 范围化 status → untracked
+      ]);
+      const service = new SourceControlService({ execFileFn: execFn });
+
+      const diff = await service.getFileDiff(repo, 'fresh.ts', { staged: false });
+
+      expect(diff.isNewFile).toBe(true);
+      expect(calls).toHaveLength(1); // untracked 直接读盘，无需再跑 diff
+      const statusArgs = calls[0].args;
+      expect(statusArgs).toContain('--no-optional-locks');
+      expect(statusArgs).not.toContain('--branch'); // 范围化查询不带全树参数
+      expect(statusArgs.slice(statusArgs.indexOf('--') + 1)).toEqual(['fresh.ts']);
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to git diff when the scoped status reports no untracked entry', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'socverify-scm-'));
+    try {
+      await writeFile(join(repo, 'a.ts'), 'new\n', 'utf-8');
+      const { execFn, calls } = createMockExec([
+        () => ({ stdout: '' }), // 范围化 status → 无记录（已跟踪的修改）
+        () => ({
+          stdout: '--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n',
+        }),
+      ]);
+      const service = new SourceControlService({ execFileFn: execFn });
+
+      const diff = await service.getFileDiff(repo, 'a.ts', { staged: false });
+
+      expect(diff.isNewFile).toBe(false);
+      expect(diff.totalAdd).toBe(1);
+      expect(calls[1].args[2]).toBe('diff'); // args[0..1] = -C <path>
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('runs status with --no-optional-locks to avoid index.lock contention', async () => {
+    const { execFn, calls } = createMockExec([() => ({ stdout: PORCELAIN_OUTPUT })]);
+    const service = new SourceControlService({ execFileFn: execFn });
+
+    await service.getStatus('/repo');
+
+    expect(calls[0].args).toContain('--no-optional-locks');
+  });
+});
