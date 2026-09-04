@@ -64,6 +64,7 @@ vi.mock('@renderer/lib/trpc', () => ({
       getSimOptionsSchema: { query: vi.fn().mockResolvedValue({ fields: [] }) },
       getSimOptionPresets: { query: vi.fn().mockResolvedValue({}) },
       saveSimOptionPreset: { mutate: vi.fn().mockResolvedValue({ ok: true }) },
+      getCaseSubsys: { query: vi.fn().mockResolvedValue({ subsys: null }) },
     },
   },
 }));
@@ -108,6 +109,7 @@ beforeEach(() => {
   mockSimOptions = {};
   vi.mocked(trpc.project.getSimOptionsSchema.query).mockResolvedValue({ fields: mockSchemaFields });
   vi.mocked(trpc.project.getSimOptionPresets.query).mockResolvedValue({});
+  vi.mocked(trpc.project.getCaseSubsys.query).mockResolvedValue({ subsys: null });
 });
 
 describe('SimOptionPanel schema 加载与分组渲染', () => {
@@ -256,7 +258,9 @@ describe('SimOptionPanel 字段渲染与编辑', () => {
 
     render(<SimOptionPanel />);
 
-    await screen.findByText('Simulator');
+    await screen.findByText('BASE');
+    // 仿真参数组默认收起，先展开（值不在预设列表的 Simulator 在该组内）
+    fireEvent.click(screen.getByRole('button', { name: /仿真参数/ }));
 
     // 值不在预设列表中 → 自动进入自定义模式
     const customInput = screen.getByPlaceholderText('输入自定义值') as HTMLInputElement;
@@ -269,7 +273,8 @@ describe('SimOptionPanel 字段渲染与编辑', () => {
 
     render(<SimOptionPanel />);
 
-    await screen.findByText('Simulator');
+    await screen.findByText('BASE');
+    fireEvent.click(screen.getByRole('button', { name: /仿真参数/ }));
 
     // 当前在自定义模式（值不在预设中），点击切回按钮
     const revertBtn = screen.getByTitle('切回预设列表');
@@ -281,17 +286,20 @@ describe('SimOptionPanel 字段渲染与编辑', () => {
     expect(mockSetSimOption).toHaveBeenCalledWith('simulator', '');
   });
 
-  it('有 description 的字段把描述并入 label tooltip（不再常驻 (?) 提示）', async () => {
+  it('description 不常驻，收进 label/控件悬停 tooltip（省行高）', async () => {
     render(<SimOptionPanel />);
 
     await screen.findByText('Timeout');
 
+    // 描述不再作为常驻文本渲染
+    expect(screen.queryByText('Simulation timeout in ms')).not.toBeInTheDocument();
+    // 全量描述进 tooltip：label 与控件悬停均可看
+    expect(screen.getAllByTitle(/Simulation timeout in ms/).length).toBeGreaterThan(0);
+    // 旧版 (?) 常驻提示也不出现
     expect(screen.queryByText('(?)')).not.toBeInTheDocument();
-    const label = screen.getByTitle(/Simulation timeout in ms/);
-    expect(label.textContent).toBe('Timeout');
   });
 
-  it('label 尾部 CLI flag 剥离进 tooltip，label 只保留语义名', async () => {
+  it('label 尾部 CLI flag 剥离为独立 chip，label 只保留语义名', async () => {
     vi.mocked(trpc.project.getSimOptionsSchema.query).mockResolvedValue({
       fields: [
         { key: 'rundir', label: '工作目录 (-rundir)', type: 'string', group: '基础参数' },
@@ -300,14 +308,18 @@ describe('SimOptionPanel 字段渲染与编辑', () => {
 
     render(<SimOptionPanel />);
 
-    // flag (-rundir) 与 key 互为镜像，tooltip 去重后只剩 key
-    const label = await screen.findByTitle('rundir');
-    expect(label.textContent).toBe('工作目录');
+    // label 只渲染语义名；flag (-rundir) 以独立元素跟随其后
+    expect((await screen.findByText('工作目录')).textContent).toBe('工作目录');
+    expect(screen.getByText('-rundir')).toBeInTheDocument();
+    // flag 与 key 互为镜像，tooltip 去重后只剩 key（label 与控件各自携带）
+    expect(screen.getAllByTitle('rundir').length).toBeGreaterThan(0);
   });
 
   it('boolean 字段渲染为 switch 角色，点击翻转并回调 setSimOption', async () => {
     render(<SimOptionPanel />);
 
+    // 波形配置组默认收起，先展开
+    fireEvent.click(await screen.findByRole('button', { name: /波形配置/ }));
     const sw = await screen.findByRole('switch', { name: 'Dump Waveform' });
     expect(sw.getAttribute('aria-checked')).toBe('false');
 
@@ -425,6 +437,46 @@ describe('SimCommandBar 运行仿真', () => {
 
     expect(screen.queryByTestId('sim-option-no-case-hint')).not.toBeInTheDocument();
   });
+
+  it('启动前按用例名解析真实子系统，不误用全局选中的子系统', async () => {
+    // 场景：树上最后点击的子系统是 ai_sys（全局 selectedSubsys），但
+    // CASE 字段填的是 top 子系统的用例 —— 应以 cases 表解析结果为准
+    mockSimOptions = { case: 'test_top_ap_mini' };
+    vi.mocked(trpc.project.getCaseSubsys.query).mockResolvedValue({ subsys: 'top' });
+
+    render(<SimCommandBar />);
+
+    fireEvent.click(screen.getByTestId('sim-option-run'));
+
+    await waitFor(() => {
+      expect(mockStartCaseRun).toHaveBeenCalledTimes(1);
+    });
+    expect(trpc.project.getCaseSubsys.query).toHaveBeenCalledWith({
+      projectId: 'test-project',
+      caseName: 'test_top_ap_mini',
+    });
+    expect(mockStartCaseRun).toHaveBeenCalledWith(
+      'test-project',
+      expect.objectContaining({ name: 'test_top_ap_mini', subsys: 'top' }),
+    );
+  });
+
+  it('cases 表查不到用例时回退到全局选中的子系统', async () => {
+    mockSimOptions = { case: 'unscanned_case' };
+    vi.mocked(trpc.project.getCaseSubsys.query).mockResolvedValue({ subsys: null });
+
+    render(<SimCommandBar />);
+
+    fireEvent.click(screen.getByTestId('sim-option-run'));
+
+    await waitFor(() => {
+      expect(mockStartCaseRun).toHaveBeenCalledTimes(1);
+    });
+    expect(mockStartCaseRun).toHaveBeenCalledWith(
+      'test-project',
+      expect.objectContaining({ name: 'unscanned_case', subsys: '' }),
+    );
+  });
 });
 
 describe('SimCommandBar BorderBeam 集成', () => {
@@ -449,6 +501,72 @@ describe('SimCommandBar BorderBeam 集成', () => {
     render(<SimCommandBar />);
     const beam = screen.getByTestId('border-beam');
     expect(beam.getAttribute('data-active')).toBe('false');
+  });
+});
+
+describe('SimOptionPanel 可折叠卡片（方案 5）', () => {
+  it('默认仅第一组展开，其余收起（aria-expanded）', async () => {
+    render(<SimOptionPanel />);
+
+    await screen.findByText('BASE');
+
+    const headers = screen.getAllByRole('button', { name: /项/ });
+    const expanded = headers.map((h) => h.getAttribute('aria-expanded'));
+    // 第一组（基础参数）展开，其余收起
+    expect(expanded[0]).toBe('true');
+    expect(expanded.slice(1).every((v) => v === 'false')).toBe(true);
+  });
+
+  it('点击收起的卡头展开该组（aria-expanded 翻转，收起区 inert 解除）', async () => {
+    render(<SimOptionPanel />);
+
+    await screen.findByText('BASE');
+
+    const header = screen.getByRole('button', { name: /波形配置/ });
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(header);
+    expect(header.getAttribute('aria-expanded')).toBe('true');
+
+    // 收起时字段区 inert（挡键盘焦点）；展开后可交互
+    const sw = screen.getByRole('switch', { name: 'Dump Waveform' });
+    expect(sw.closest('[inert]')).toBeNull();
+  });
+
+  it('收起卡片头部显示已配置项摘要 chips', async () => {
+    mockSimOptions = { simulator: 'vcs', timeout: '10000' };
+
+    render(<SimOptionPanel />);
+
+    await screen.findByText('BASE');
+
+    // 仿真参数组收起，摘要 chips 显示组内非空值（Simulator: vcs）
+    const header = screen.getByRole('button', { name: /仿真参数/ });
+    expect(header.textContent).toContain('vcs');
+  });
+
+  it('boolean true 在摘要中显示 ✓，空值不出现', async () => {
+    mockSimOptions = { waveform: true };
+
+    render(<SimOptionPanel />);
+
+    await screen.findByText('BASE');
+
+    // 波形配置组收起：Dump Waveform → ✓；未启用的项不进摘要
+    const header = screen.getByRole('button', { name: /波形配置/ });
+    expect(header.textContent).toContain('✓');
+  });
+
+  it('展开的卡片不显示摘要 chips', async () => {
+    mockSimOptions = { base: 'top' };
+
+    render(<SimOptionPanel />);
+
+    await screen.findByText('BASE');
+
+    // 基础参数展开：字段区直接可见，卡头不出现摘要 chip
+    const header = screen.getByRole('button', { name: /基础参数/ });
+    expect(header.textContent).not.toContain('top');
   });
 });
 
