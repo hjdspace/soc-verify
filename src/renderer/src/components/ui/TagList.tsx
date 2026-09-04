@@ -69,20 +69,33 @@ export function TagList({ items, className, label }: TagListProps) {
     const measure = measureRef.current;
     if (!container || !measure) return;
 
+    // rAF 合并：窗口 resize 时 ResizeObserver 逐帧回调，同步量宽会
+    // 触发布局抖动（TagList 在表格里成行出现，一帧内全表重排）
+    let frame: number | null = null;
     const update = () => {
-      const available = container.clientWidth;
-      const tagWidths = Array.from(
-        measure.querySelectorAll<HTMLElement>('[data-tag-measure]'),
-        (tag) => tag.offsetWidth,
-      );
-      const moreWidth = measure.querySelector<HTMLElement>('[data-more-measure]')?.offsetWidth ?? 0;
-      setVisibleCount(fitVisibleCount(tagWidths, available, moreWidth));
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        const available = container.clientWidth;
+        const tagWidths = Array.from(
+          measure.querySelectorAll<HTMLElement>('[data-tag-measure]'),
+          (tag) => tag.offsetWidth,
+        );
+        const moreWidth = measure.querySelector<HTMLElement>('[data-more-measure]')?.offsetWidth ?? 0;
+        setVisibleCount((prev) => {
+          const next = fitVisibleCount(tagWidths, available, moreWidth);
+          return next === prev ? prev : next;
+        });
+      });
     };
 
     update();
     const observer = new ResizeObserver(update);
     observer.observe(container);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
   }, [items]);
 
   const joined = label ?? items.map((item) => item.label).join('、');
