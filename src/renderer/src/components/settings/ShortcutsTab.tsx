@@ -50,7 +50,7 @@ export function ShortcutsTab() {
       </div>
       {SHORTCUT_GROUPS.map((group) => (
         <div key={group.label}>
-          <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+          <div className="mb-2 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/70">
             <Keyboard className="h-3 w-3" />
             {group.label}
           </div>
