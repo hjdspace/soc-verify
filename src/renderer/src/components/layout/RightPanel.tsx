@@ -1332,7 +1332,7 @@ export function RightPanel({ width, collapsed = false }: RightPanelProps) {
     >
       {/* 解除固定栏 */}
       <div className="flex items-center justify-between border-b border-border/50 px-3 py-1.5">
-        <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">AI 验证助手</span>
+        <span className="text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground">AI 验证助手</span>
         <button
           type="button"
           onClick={handleUnpin}
