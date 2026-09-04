@@ -163,7 +163,7 @@ interface SectionProps {
 function Section({ title, count, collapsed, onToggle, actionLabel, onAction, actionDisabled, children }: SectionProps) {
   return (
     <div className={cn('flex flex-col', collapsed && 'shrink-0')}>
-      <div className="flex shrink-0 items-center gap-1 px-1.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="flex shrink-0 items-center gap-1 px-1.5 py-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
         <button
           onClick={onToggle}
           className="flex items-center gap-1 transition-colors hover:text-foreground"
