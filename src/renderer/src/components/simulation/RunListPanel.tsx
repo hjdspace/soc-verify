@@ -620,7 +620,7 @@ export function RunListPanel({ projectId }: { projectId?: string } = {}) {
       {/* ── Filter bar: segments + keyword + stop-all ─────────── */}
       <div className="flex flex-wrap items-center gap-2 px-3 py-2">
         <div className="flex items-center gap-2">
-          <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">运行列表</h3>
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">运行列表</h3>
         </div>
         <div className="flex items-center gap-1" data-testid="sim-seg">
           {SEGMENTS.map((s) => (
@@ -665,7 +665,7 @@ export function RunListPanel({ projectId }: { projectId?: string } = {}) {
 
       {/* ── Table header (sticky, not scrollable) ────────────── */}
       <div
-        className={cn(ROW_GRID, 'gap-2 border-b border-border px-3 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground/60')}
+        className={cn(ROW_GRID, 'gap-2 border-b border-border px-3 py-1.5 text-[10px] uppercase tracking-[0.06em] text-muted-foreground/60')}
       >
         <span />
         <span>用例</span>
