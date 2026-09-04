@@ -168,7 +168,7 @@ export function TVViolationTable({
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* 表头 */}
-      <div className="flex shrink-0 items-center border-b bg-secondary/30 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="flex shrink-0 items-center border-b bg-secondary/30 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
         {/* Checkbox 列 */}
         <div className="w-8 flex items-center justify-center">
           <input
