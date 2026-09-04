@@ -529,7 +529,7 @@ export function CenterArea() {
             {/* Active simulations — capped height with internal scroll */}
             {activeRuns.length > 0 && (
               <div className="w-full max-w-md">
-                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                   仿真运行列表
                 </div>
                 <div className="max-h-[240px] overflow-y-auto" data-testid="workspace-active-runs-list">
