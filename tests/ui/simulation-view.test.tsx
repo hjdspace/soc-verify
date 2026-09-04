@@ -127,7 +127,8 @@ vi.mock('@renderer/stores/overview', () => ({
 
 vi.mock('@renderer/stores/env', () => ({
   useEnvStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({ config: null }),
+    // CaseCfgPanel 常驻挂载后也读取 env store（systemEnvVars / loadSystemEnv / loadConfig）
+    selector({ config: null, systemEnvVars: {}, loadSystemEnv: vi.fn().mockResolvedValue(undefined), loadConfig: vi.fn().mockResolvedValue(undefined) }),
 }));
 
 vi.mock('@renderer/stores/dashboard', () => ({
