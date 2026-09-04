@@ -18,7 +18,7 @@ export function JobBody({ resultText }: { resultText: string }) {
             </div>
           )}
           <span className={cn(
-            'shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide',
+            'shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]',
             item.status === 'done' && 'bg-status-pass/15 text-status-pass-foreground',
             item.status === 'running' && 'bg-primary/15 text-primary',
             item.status === 'failed' && 'bg-status-fail/15 text-status-fail-foreground',
