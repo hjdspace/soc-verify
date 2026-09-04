@@ -4,36 +4,45 @@
  * (yosys, slang-server, verible) into resources/binaries/.
  *
  * Usage:
- *   node scripts/download-rtl-tools.mjs                       # 用 package.json 锁定的版本
- *   node scripts/download-rtl-tools.mjs --force               # 强制重新下载 + 重新提取
+ *   node scripts/download-rtl-tools.mjs                       # 按当前平台 + package.json 锁定版本
+ *   node scripts/download-rtl-tools.mjs --force               # 强制重新提取（缓存归档复用）
  *   node scripts/download-rtl-tools.mjs --only yosys          # 只处理某个工具（yosys|slang|verible）
  *   node scripts/download-rtl-tools.mjs --mirror <base>       # 给所有 GitHub URL 加代理前缀（ghproxy 风格）
  *   node scripts/download-rtl-tools.mjs --yosys-url <url>     # 单独覆盖某个来源的下载 URL
  *   node scripts/download-rtl-tools.mjs --slang-url <url>
  *   node scripts/download-rtl-tools.mjs --verible-url <url>
  *
- * 三个来源（版本锁定见 package.json）：
- *   - yosys:        OSS CAD Suite Windows tgz（~568MB），选择性提取 yosys.exe + share/yosys + 8 个依赖 DLL
- *                   （非全量解压，实际占用 ~70MB）。OSS CAD Suite 以 release 日期锁定。
- *   - slang-server: hudson-trading/slang-server GitHub Release（slang-server-windows-x64.zip）
- *   - verible:      chipsalliance/verible GitHub Release（verible-*-win64.zip）
+ * 三个来源 × 两个平台（版本锁定见 package.json；按 process.platform 选资产）：
+ *   - yosys:        OSS CAD Suite tgz（~568MB），选择性提取（非全量解压）
+ *                   Windows: oss-cad-suite-windows-x64-<date>.tgz → yosys.exe + share/yosys + 8 DLL（≈70MB）
+ *                   Linux:   oss-cad-suite-linux-x64-<date>.tgz  → bin/yosys + share/yosys（ELF 链接系统库，无 DLL 集）
+ *   - slang-server: hudson-trading/slang-server Releases
+ *                   Windows: slang-server-windows-x64.zip / Linux: slang-server-linux-x64.tar.gz（单 ELF）
+ *   - verible:      chipsalliance/verible Releases
+ *                   Windows: verible-<tag>-win64.zip / Linux: verible-<tag>-linux-static-x86_64.tar.gz（静态链接零依赖）
  *
- * 产物布局（参与 electron-builder extraResources 打包）：
- *   resources/binaries/yosys/{yosys.exe, *.dll, share/yosys/**}   ← DLL 必须与 exe 同目录（S0 实测：PATH 不生效）
- *   resources/binaries/slang-server/slang-server.exe
- *   resources/binaries/verible/{verible-verilog-lint.exe, verible-verilog-format.exe}
+ * 产物布局（参与 electron-builder extraResources 打包；两平台同布局，仅文件名/附加物不同）：
+ *   resources/binaries/yosys/{yosys[.exe], share/yosys/**, (win) *.dll}
+ *     ← Windows: 8 个 DLL 必须与 yosys.exe 同目录（S0 实测：PATH 不生效）
+ *     ← Linux:   yosys 链接系统库（需 libtinfo/libffi/libz，OSS CAD Suite 官方要求），无同目录布局问题
+ *   resources/binaries/slang-server/slang-server[.exe]
+ *   resources/binaries/verible/verible-verilog-{lint,format}[.exe]
+ *
+ * macOS 不在分发范围（桌面应用目标为 Windows 工作站 + Linux 服务器/桌面），脚本在非 win/linux 平台跳过。
  *
  * 幂等：目标产物已存在则跳过下载（除非 --force）。
- * 离线放置：把归档（tgz / zip）预先放到 .cache/rtl-tools/ 下，脚本会跳过下载直接提取。
+ * 离线放置：把归档（tgz / tar.gz / zip）预先放到 .cache/rtl-tools/ 下（文件名与 GitHub 资产名一致），
+ *           脚本会跳过下载直接提取。
  * 下载失败：不阻断构建，仅打印警告（运行时由 src/main/rtl/binary.ts 降级处理）。
  *
  * 版本升级验证点（改 package.json 三个版本字段后必查）：
- *   1. read_slang 帮助中 `--keep-hierarchy` 仍存在（yosys ≥0.67 硬性要求）
- *   2. yosys.exe 的 DLL 依赖集不变（当前 8 个，见 YOSYS_DLLS）
+ *   1. read_slang 帮助中 `--keep-hierarchy` 仍存在（yosys ≥0.67 硬性要求）：yosys -p "help read_slang"
+ *   2. Windows: yosys.exe 的 DLL 依赖集不变（当前 8 个，见 YOSYS_DLLS）
+ *   3. Linux:   yosys 可执行（`ldd` 无 not found）+ slang-server/verible 资产名不变
  */
 
-import { existsSync, mkdirSync, createWriteStream, renameSync, statSync, readFileSync, rmSync, copyFileSync, cpSync, writeFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { existsSync, mkdirSync, createWriteStream, renameSync, statSync, readFileSync, rmSync, copyFileSync, cpSync, writeFileSync, readdirSync, chmodSync } from 'node:fs';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { Readable } from 'node:stream';
@@ -43,7 +52,7 @@ import './tls-self-heal.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, '..');
-const BINARIES_DIR = join(REPO_ROOT, 'resources', 'binaries');
+let BINARIES_DIR = join(REPO_ROOT, 'resources', 'binaries');
 // 归档缓存目录（.gitignore 已忽略 .cache/），离线放置与避免重复下载 568MB 都走这里
 const CACHE_DIR = join(REPO_ROOT, '.cache', 'rtl-tools');
 const USER_AGENT = 'SoCVerify-RTLTools-Downloader';
@@ -66,11 +75,12 @@ function readVersions() {
 
 // ===== 平台 =====
 
-function isWindows() {
-  return process.platform === 'win32';
-}
+const IS_WINDOWS = process.platform === 'win32';
+const IS_LINUX = process.platform === 'linux';
+/** 可执行文件扩展名（Linux 为空） */
+const EXE = IS_WINDOWS ? '.exe' : '';
 
-// ===== yosys 依赖 DLL 集（S0 实测，Windows 必须与 exe 同目录）=====
+// ===== yosys 依赖 DLL 集（Windows S0 实测，必须与 exe 同目录；Linux 无此问题）=====
 
 const YOSYS_DLLS = [
   'libstdc++-6.dll',
@@ -144,13 +154,25 @@ function verifyVersion(exePath, args, label) {
   }
 }
 
+function makeExecutable(p) {
+  if (!IS_WINDOWS) {
+    try {
+      chmodSync(p, 0o755);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 // ===== yosys：从 OSS CAD Suite tgz 选择性提取 =====
 
 /** 目标 yosys 目录是否已完整就位（幂等跳过判定） */
 function yosysComplete(yosysDir) {
-  const exe = join(yosysDir, 'yosys.exe');
+  const exe = join(yosysDir, `yosys${EXE}`);
   if (!existsSync(exe)) return false;
   if (!existsSync(join(yosysDir, 'share', 'yosys'))) return false;
+  // DLL 集仅 Windows 需要（Linux yosys 链接系统库）
+  if (!IS_WINDOWS) return true;
   return YOSYS_DLLS.every((d) => existsSync(join(yosysDir, d)));
 }
 
@@ -159,11 +181,11 @@ async function extractYosys(archivePath, yosysDir) {
   const staging = join(CACHE_DIR, `_yosys_staging_${Date.now()}`);
   mkdirSync(staging, { recursive: true });
   try {
-    // 只提取需要的成员，避免解压整个 568MB 包。tgz 成员前缀为 oss-cad-suite/
+    // 只提取需要的成员，避免解压整个 568MB 包。tgz 成员前缀为 oss-cad-suite/（两平台一致）
     const wantedDlls = new Set(YOSYS_DLLS.map((d) => `oss-cad-suite/lib/${d}`));
     const filter = (path) =>
-      path === 'oss-cad-suite/bin/yosys.exe' ||
-      wantedDlls.has(path) ||
+      path === `oss-cad-suite/bin/yosys${EXE}` ||
+      (IS_WINDOWS && wantedDlls.has(path)) ||
       path.startsWith('oss-cad-suite/share/yosys/');
 
     console.log(`  extracting yosys subset from tgz...`);
@@ -173,17 +195,23 @@ async function extractYosys(archivePath, yosysDir) {
     mkdirSync(yosysDir, { recursive: true });
 
     // exe
-    copyFileSync(join(suite, 'bin', 'yosys.exe'), join(yosysDir, 'yosys.exe'));
-    // 8 个 DLL → 与 exe 同目录
-    for (const dll of YOSYS_DLLS) {
-      const src = join(suite, 'lib', dll);
-      if (existsSync(src)) {
-        copyFileSync(src, join(yosysDir, dll));
-      } else {
-        console.warn(`  [yosys] expected DLL missing in tgz: ${dll}`);
+    const exeDest = join(yosysDir, `yosys${EXE}`);
+    copyFileSync(join(suite, 'bin', `yosys${EXE}`), exeDest);
+    makeExecutable(exeDest);
+
+    // Windows: 8 个 DLL → 与 exe 同目录（S0 实测 PATH 不生效）；Linux: 无 DLL 集
+    if (IS_WINDOWS) {
+      for (const dll of YOSYS_DLLS) {
+        const src = join(suite, 'lib', dll);
+        if (existsSync(src)) {
+          copyFileSync(src, join(yosysDir, dll));
+        } else {
+          console.warn(`  [yosys] expected DLL missing in tgz: ${dll}`);
+        }
       }
     }
-    // share/yosys 树
+
+    // share/yosys 树（含 plugins/，两平台都需要）
     const shareSrc = join(suite, 'share', 'yosys');
     if (existsSync(shareSrc)) {
       cpSync(shareSrc, join(yosysDir, 'share', 'yosys'), { recursive: true });
@@ -195,7 +223,7 @@ async function extractYosys(archivePath, yosysDir) {
   }
 }
 
-// ===== zip 提取（slang-server / verible）=====
+// ===== zip 提取（Windows：slang-server / verible）=====
 
 async function extractZipEntries(archivePath, wanted, destDir) {
   const { default: JSZip } = await import('jszip');
@@ -212,13 +240,46 @@ async function extractZipEntries(archivePath, wanted, destDir) {
     const outPath = join(destDir, outName);
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, data);
-    if (!isWindows()) {
-      try {
-        spawnSync('chmod', ['+x', outPath]);
-      } catch {
-        /* ignore */
-      }
+    makeExecutable(outPath);
+  }
+}
+
+// ===== tar.gz 提取（Linux：slang-server / verible）=====
+
+/** 递归找第一个路径以 suffix 结尾的文件（归档成员带目录前缀，用 basename 定位） */
+function walkFind(root, suffix) {
+  for (const e of readdirSync(root, { withFileTypes: true })) {
+    const p = join(root, e.name);
+    if (e.isDirectory()) {
+      const found = walkFind(p, suffix);
+      if (found) return found;
+    } else if (p.replace(/\\/g, '/').endsWith(suffix)) {
+      return p;
     }
+  }
+  return null;
+}
+
+async function extractTarEntries(archivePath, wanted, destDir) {
+  const { x: tarExtract } = await import('tar');
+  const staging = join(CACHE_DIR, `_staging_${Date.now()}`);
+  mkdirSync(staging, { recursive: true });
+  try {
+    const matches = wanted.map((w) => w.match);
+    await tarExtract({ file: archivePath, cwd: staging, filter: (path) => matches.some((m) => path.endsWith(m)) });
+    mkdirSync(destDir, { recursive: true });
+    for (const { match, outName } of wanted) {
+      const src = walkFind(staging, match);
+      if (!src) {
+        console.warn(`  tar entry not found for: ${match}`);
+        continue;
+      }
+      const outPath = join(destDir, outName);
+      copyFileSync(src, outPath);
+      makeExecutable(outPath);
+    }
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
   }
 }
 
@@ -226,9 +287,10 @@ async function extractZipEntries(archivePath, wanted, destDir) {
 
 async function handleYosys(opts) {
   const yosysDir = join(BINARIES_DIR, 'yosys');
+  const yosysExe = join(yosysDir, `yosys${EXE}`);
   if (!opts.force && yosysComplete(yosysDir)) {
     console.log(`[yosys] already in place: ${yosysDir} (use --force to re-extract)`);
-    verifyVersion(join(yosysDir, 'yosys.exe'), ['-V'], 'yosys');
+    verifyVersion(yosysExe, ['-V'], 'yosys');
     return;
   }
   const tag = opts.versions.ossCadSuite;
@@ -238,18 +300,19 @@ async function handleYosys(opts) {
   }
   // release 日期 2026-09-02 → 归档文件名日期 20260902
   const dateCompact = tag.replace(/-/g, '');
-  const assetName = `oss-cad-suite-windows-x64-${dateCompact}.tgz`;
+  const platformSlug = IS_WINDOWS ? 'windows' : 'linux';
+  const assetName = `oss-cad-suite-${platformSlug}-x64-${dateCompact}.tgz`;
   const ghUrl = `https://github.com/YosysHQ/oss-cad-suite-build/releases/download/${tag}/${assetName}`;
   const url = opts.yosysUrl || applyMirror(ghUrl, opts.mirror);
-  console.log(`[yosys] OSS CAD Suite ${tag}`);
+  console.log(`[yosys] OSS CAD Suite ${tag} (${platformSlug}-x64)`);
   const archive = await ensureArchive(assetName, url);
   await extractYosys(archive, yosysDir);
-  verifyVersion(join(yosysDir, 'yosys.exe'), ['-V'], 'yosys');
+  verifyVersion(yosysExe, ['-V'], 'yosys');
 }
 
 async function handleSlang(opts) {
   const dir = join(BINARIES_DIR, 'slang-server');
-  const exe = join(dir, 'slang-server.exe');
+  const exe = join(dir, `slang-server${EXE}`);
   if (!opts.force && existsSync(exe) && statSync(exe).size > 0) {
     console.log(`[slang-server] already in place: ${exe} (use --force to re-extract)`);
     verifyVersion(exe, ['--version'], 'slang-server');
@@ -260,19 +323,25 @@ async function handleSlang(opts) {
     console.warn(`[slang-server] slangServerVersion not set in package.json; skipping`);
     return;
   }
-  const assetName = 'slang-server-windows-x64.zip';
+  const assetName = IS_WINDOWS ? 'slang-server-windows-x64.zip' : 'slang-server-linux-x64.tar.gz';
   const ghUrl = `https://github.com/hudson-trading/slang-server/releases/download/${tag}/${assetName}`;
   const url = opts.slangUrl || applyMirror(ghUrl, opts.mirror);
   console.log(`[slang-server] ${tag}`);
   const archive = await ensureArchive(assetName, url);
-  await extractZipEntries(archive, [{ match: 'slang-server.exe', outName: 'slang-server.exe' }], dir);
+  const wanted = [{ match: `slang-server${EXE}`, outName: `slang-server${EXE}` }];
+  if (IS_WINDOWS) {
+    await extractZipEntries(archive, wanted, dir);
+  } else {
+    // Linux tar.gz 成员为扁平 ./slang-server
+    await extractTarEntries(archive, [{ match: 'slang-server', outName: 'slang-server' }], dir);
+  }
   verifyVersion(exe, ['--version'], 'slang-server');
 }
 
 async function handleVerible(opts) {
   const dir = join(BINARIES_DIR, 'verible');
-  const lint = join(dir, 'verible-verilog-lint.exe');
-  const format = join(dir, 'verible-verilog-format.exe');
+  const lint = join(dir, `verible-verilog-lint${EXE}`);
+  const format = join(dir, `verible-verilog-format${EXE}`);
   if (!opts.force && existsSync(lint) && existsSync(format)) {
     console.log(`[verible] already in place: ${dir} (use --force to re-extract)`);
     verifyVersion(lint, ['--version'], 'verible-lint');
@@ -283,19 +352,29 @@ async function handleVerible(opts) {
     console.warn(`[verible] veribleVersion not set in package.json; skipping`);
     return;
   }
-  const assetName = `verible-${tag}-win64.zip`;
+  const assetName = IS_WINDOWS ? `verible-${tag}-win64.zip` : `verible-${tag}-linux-static-x86_64.tar.gz`;
   const ghUrl = `https://github.com/chipsalliance/verible/releases/download/${tag}/${assetName}`;
   const url = opts.veribleUrl || applyMirror(ghUrl, opts.mirror);
   console.log(`[verible] ${tag}`);
   const archive = await ensureArchive(assetName, url);
-  await extractZipEntries(
-    archive,
-    [
-      { match: 'verible-verilog-lint.exe', outName: 'verible-verilog-lint.exe' },
-      { match: 'verible-verilog-format.exe', outName: 'verible-verilog-format.exe' },
-    ],
-    dir,
-  );
+  const wanted = [
+    { match: 'verible-verilog-lint', outName: `verible-verilog-lint${EXE}` },
+    { match: 'verible-verilog-format', outName: `verible-verilog-format${EXE}` },
+  ];
+  if (IS_WINDOWS) {
+    await extractZipEntries(
+      archive,
+      wanted.map((w) => ({ ...w, match: `${w.match}${EXE}` })),
+      dir,
+    );
+  } else {
+    // Linux tar.gz 成员带目录前缀 verible-<tag>/bin/xxx（静态链接，零依赖）
+    await extractTarEntries(
+      archive,
+      wanted.map((w) => ({ ...w, match: `bin/${w.match}` })),
+      dir,
+    );
+  }
   verifyVersion(lint, ['--version'], 'verible-lint');
   verifyVersion(format, ['--version'], 'verible-format');
 }
@@ -311,6 +390,7 @@ function parseArgs(argv) {
   return {
     force: args.includes('--force'),
     only: get('--only'),
+    binariesDir: get('--binaries-dir'),
     mirror: get('--mirror') || process.env.RTL_TOOLS_MIRROR || '',
     yosysUrl: get('--yosys-url') || process.env.RTL_TOOLS_YOSYS_URL || '',
     slangUrl: get('--slang-url') || process.env.RTL_TOOLS_SLANG_URL || '',
@@ -321,14 +401,16 @@ function parseArgs(argv) {
 async function main() {
   const opts = parseArgs(process.argv);
   opts.versions = readVersions();
+  if (opts.binariesDir) {
+    BINARIES_DIR = resolve(opts.binariesDir);
+  }
 
   mkdirSync(BINARIES_DIR, { recursive: true });
   mkdirSync(CACHE_DIR, { recursive: true });
 
-  if (!isWindows()) {
-    // 分发目标为 Windows 桌面应用（OSS CAD Suite Windows 包 + DLL 同目录布局）。
-    // 非 Windows 开发机跳过下载，运行时由 src/main/rtl/binary.ts 降级处理。
-    console.log(`[rtl-tools] Windows-only distribution; skipping on ${process.platform}.`);
+  if (!IS_WINDOWS && !IS_LINUX) {
+    // 分发目标为 Windows 与 Linux（SoC 验证主战场是 Linux）；macOS 不在范围。
+    console.log(`[rtl-tools] distribution targets Windows and Linux; skipping on ${process.platform}.`);
     return;
   }
 
@@ -348,7 +430,7 @@ async function main() {
       anyFailed = true;
       console.error(`[${task.key}] FAILED: ${err.message}`);
       console.warn(`[${task.key}] build continues without it; runtime will degrade (see src/main/rtl/binary.ts).`);
-      console.warn(`[${task.key}] offline: place the archive in ${CACHE_DIR} and re-run, or pass a mirror/--${task.key === 'slang' ? 'slang' : task.key}-url.`);
+      console.warn(`[${task.key}] offline: place the archive in ${CACHE_DIR} and re-run, or pass a mirror/--${task.key}-url.`);
     }
   }
 

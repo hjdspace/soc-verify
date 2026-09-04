@@ -1,14 +1,16 @@
 /**
- * RTL 三工具（yosys / slang-server / verible）二进制路径解析。
+ * RTL 三工具（yosys / slang-server / verible）二进制路径解析（Windows + Linux）。
  *
  * 对齐 officecli 模式（ADR 0015 主题 1 / ADR 0032 主题 6）：
  *   1. 内置二进制（packaged resources/binaries → dev resources/binaries）
  *   2. 系统 PATH（仅开发模式）
  *
- * 产物布局由 scripts/download-rtl-tools.mjs 生成：
- *   binaries/yosys/{yosys.exe + 8 DLL + share/yosys/}   ← DLL 必须与 exe 同目录（S0 实测）
- *   binaries/slang-server/slang-server.exe
- *   binaries/verible/{verible-verilog-lint.exe, verible-verilog-format.exe}
+ * 产物布局由 scripts/download-rtl-tools.mjs 按当前平台生成（两平台同布局，仅文件名/附加物不同）：
+ *   binaries/yosys/{yosys[.exe] + share/yosys/ + (win) 8 DLL}
+ *     ← Windows: DLL 必须与 exe 同目录（S0 实测 PATH 不生效）
+ *     ← Linux:   yosys 为 ELF，链接系统库（libtinfo/libffi/libz），无同目录布局问题
+ *   binaries/slang-server/slang-server[.exe]
+ *   binaries/verible/{verible-verilog-lint, verible-verilog-format}[.exe]
  */
 
 import { existsSync } from 'node:fs';
@@ -79,7 +81,8 @@ export function resolveYosysPath(): string | null {
 }
 
 /**
- * 检查 yosys 目录布局完整性：8 个依赖 DLL 必须与 exe 同目录（S0 实测）。
+ * 检查 yosys 目录布局完整性（仅 Windows）：8 个依赖 DLL 必须与 exe 同目录（S0 实测）。
+ * Linux 的 yosys 是 ELF、链接系统库，无 DLL 集概念，恒返回空数组。
  * PATH 回退的 yosys 不做 DLL 检查（用户自担布局）。
  * @returns 缺失的 DLL 文件名列表；exe 不存在时返回 null（无法判定）
  */
@@ -90,6 +93,8 @@ export function yosysMissingDlls(): string[] | null {
 /** 对已解析的 exe 路径做 DLL 完整性检查（null → 无法判定） */
 function missingDllsFor(exe: string | null): string[] | null {
   if (!exe) return null;
+  // Linux/macOS：ELF 链接系统库，无同目录 DLL 布局要求
+  if (process.platform !== 'win32') return [];
   const dir = dirname(exe);
   // 非内置布局（PATH 回退）不检查 DLL
   if (!/binaries[\\/]+yosys$/i.test(dir)) return [];

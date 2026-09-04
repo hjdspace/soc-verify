@@ -158,7 +158,7 @@ describe('rtl/binary - yosysMissingDlls', () => {
     expect(yosysMissingDlls()).toEqual([]);
   });
 
-  it('缺失 DLL 时返回缺失清单（S0：DLL 必须与 exe 同目录）', () => {
+  it('缺失 DLL 时返回缺失清单（S0：Windows DLL 必须与 exe 同目录）', () => {
     const missing = ['libstdc++-6.dll', 'zlib1.dll'];
     makeDirExist('yosys', ['yosys.exe', ...YOSYS_DLLS.filter((d) => !missing.includes(d))]);
     expect(yosysMissingDlls()).toEqual(missing);
@@ -171,6 +171,17 @@ describe('rtl/binary - yosysMissingDlls', () => {
   it('PATH 回退的 yosys 不做 DLL 检查', () => {
     mockExecFileSync.mockReturnValue('C:\\tools\\yosys.exe\n');
     expect(yosysMissingDlls()).toEqual([]);
+  });
+
+  it('非 Windows 平台恒不检查 DLL（Linux yosys 为 ELF 链接系统库）', () => {
+    const spy = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    try {
+      // 缺失 DLL 的布局在 Linux 下也应返回空（无 DLL 集概念）
+      makeDirExist('yosys', ['yosys']);
+      expect(yosysMissingDlls()).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -198,7 +209,7 @@ describe('rtl/binary - getRtlToolsStatus', () => {
     expect(status.verible).toEqual({ available: false, lintPath: null, formatPath: null });
   });
 
-  it('yosys DLL 缺失时按不可用处理并报告清单', () => {
+  it('yosys DLL 缺失时按不可用处理并报告清单', { skip: process.platform !== 'win32' }, () => {
     makeDirExist('yosys', ['yosys.exe', ...YOSYS_DLLS.slice(1)]);
     const status = getRtlToolsStatus();
     expect(status.yosys.available).toBe(false);
