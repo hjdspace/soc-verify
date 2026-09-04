@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   projectState: {
     currentProjectId: 'test-project' as string | null,
   },
+  startCaseRuns: vi.fn().mockResolvedValue([]),
   envState: {
     config: {
       envVars: {
@@ -65,6 +66,7 @@ vi.mock('@renderer/stores/simulation', () => ({
     vi.fn((selector: (state: unknown) => unknown) =>
       selector({
         selectCase: mocks.selectCase,
+        startCaseRuns: mocks.startCaseRuns,
       }),
     ),
     {
@@ -370,5 +372,124 @@ describe('CaseCfgPanel', () => {
         subsys: 'apcpu_sys',
       }),
     );
+  });
+
+  /** 已加载文件时的公共 fixture：一个文件 + 根用例 + 子用例 */
+  function mockLoadedFixture() {
+    vi.mocked(trpc.caseCfg.getLoadedFiles.query).mockResolvedValue({
+      files: [
+        {
+          name: 'test.cfg',
+          fullPath: '/proj/dv/apcpu_sys/bin/case_cfg/test.cfg',
+          nodes: ['case_root', 'case_plain'],
+          childCases: [{ case: 'case_child', base: 'case_root' }],
+          base: '',
+          block: 'apcpu_sys',
+        },
+      ],
+    });
+  }
+
+  describe('展开/折叠全部与顶部刷新', () => {
+    it('展开全部与折叠全部按钮切换所有文件节点', async () => {
+      mockLoadedFixture();
+      render(<CaseCfgPanel />);
+
+      // 文件默认展开（case 可见）
+      await screen.findByText('case_root');
+
+      // 折叠全部
+      fireEvent.click(screen.getByRole('button', { name: '折叠全部' }));
+      {
+        const el = screen.getByText('case_root');
+        expect(el.closest('.grid')).toHaveClass('grid-rows-[0fr]');
+      }
+
+      // 展开全部（含根用例层级）
+      fireEvent.click(screen.getByRole('button', { name: '展开全部' }));
+      {
+        const el = screen.getByText('case_root');
+        expect(el.closest('.grid')).toHaveClass('grid-rows-[1fr]');
+      }
+    });
+
+    it('顶部刷新按钮触发 refresh mutation', async () => {
+      mockLoadedFixture();
+      vi.mocked(trpc.caseCfg.refresh.mutate).mockResolvedValue({
+        files: [
+          {
+            name: 'test.cfg',
+            fullPath: '/proj/dv/apcpu_sys/bin/case_cfg/test.cfg',
+            nodes: ['case_root'],
+            childCases: [],
+            base: '',
+            block: 'apcpu_sys',
+          },
+        ],
+      });
+
+      render(<CaseCfgPanel />);
+      await screen.findByText('case_root');
+
+      // 顶部刷新按钮（title=刷新全部自定义用例）
+      fireEvent.click(screen.getByTitle('刷新全部自定义用例'));
+
+      await waitFor(() => {
+        expect(trpc.caseCfg.refresh.mutate).toHaveBeenCalledWith({
+          projectId: 'test-project',
+        });
+      });
+    });
+  });
+
+  describe('批量模式', () => {
+    it('勾选用例后批量运行调用 startCaseRuns 并退出批量模式', async () => {
+      mockLoadedFixture();
+      render(<CaseCfgPanel />);
+
+      await screen.findByText('case_root');
+
+      // 进入批量模式
+      fireEvent.click(screen.getByRole('button', { name: '批量' }));
+
+      // 批量模式下点击用例行即勾选（行 onClick → toggleCaseSelection）
+      fireEvent.click(screen.getByText('case_root'));
+      fireEvent.click(screen.getByText('case_plain'));
+
+      // 批量栏显示已选 2 个
+      expect(screen.getByText('已选 2 个')).toBeInTheDocument();
+
+      // 点击运行
+      fireEvent.click(screen.getByText('运行'));
+
+      await waitFor(() => {
+        expect(mocks.startCaseRuns).toHaveBeenCalledWith(
+          'test-project',
+          expect.arrayContaining([
+            expect.objectContaining({ name: 'case_root' }),
+            expect.objectContaining({ name: 'case_plain' }),
+          ]),
+        );
+      });
+      // 运行后退出批量模式并清空
+      await waitFor(() => {
+        expect(screen.queryByText('已选 2 个')).not.toBeInTheDocument();
+      });
+    });
+
+    it('批量模式退出时清空已选', async () => {
+      mockLoadedFixture();
+      render(<CaseCfgPanel />);
+
+      await screen.findByText('case_root');
+      fireEvent.click(screen.getByRole('button', { name: '批量' }));
+
+      fireEvent.click(screen.getByText('case_root'));
+      expect(screen.getByText('已选 1 个')).toBeInTheDocument();
+
+      // 再次点击批量 → 退出并清空
+      fireEvent.click(screen.getByRole('button', { name: '批量' }));
+      expect(screen.queryByText('已选 1 个')).not.toBeInTheDocument();
+    });
   });
 });
