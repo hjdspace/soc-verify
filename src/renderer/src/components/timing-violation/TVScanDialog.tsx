@@ -200,7 +200,7 @@ export function TVScanDialog({ open, onClose }: ScanDialogProps) {
                       {expanded && (
                         <div className="border-t border-border/20">
                           {/* 列标题栏 */}
-                          <div className="flex items-center gap-2 px-6 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70 border-b border-border/10">
+                          <div className="flex items-center gap-2 px-6 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/70 border-b border-border/10">
                             <span className="w-3.5 shrink-0" />
                             <span className="flex-1 min-w-0">用例名</span>
                             <span className="w-24 shrink-0">Corner</span>
