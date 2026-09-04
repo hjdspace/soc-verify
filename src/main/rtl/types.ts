@@ -45,6 +45,8 @@ export type ExtractedDef = {
   src: string | null;
   paramDefaults: Record<string, unknown>;
   ports: ExtractedPort[];
+  /** bundle 打标（refresh 管线 analyzePorts 产出入库；extractor 不产出，可缺省） */
+  bundles?: PortAnalysis;
 };
 
 /** Module Instance — 树节点（path 为从顶层起的完整实例路径，如 `spike_top.u_subsys0.gen_ip[0].u_ip`） */
@@ -89,6 +91,63 @@ export type ExtractedDesign = {
   edges: ExtractedEdge[];
 };
 
+// ─── Protocol Bundle（规则引擎，ADR 0032 主题 3 / spec 决策 11-15） ────────
+
+/** 按关键信号方向推断角色：signal 为 input → 本模块是 input 角色（如 slave） */
+export type BundleRoleDetection = {
+  signal: string;
+  input: string;
+  output: string;
+};
+
+/** Bundle 规则（spec「规则形态」：前缀聚类 + requires 判别 + minSignals + singleton 正则） */
+export type BundleRule = {
+  id: string;
+  /** 展示协议名（如 AXI4-Lite / clock） */
+  protocol: string;
+  description?: string;
+  /** 信号名清单（端口名 = prefix + sig）；singleton 规则无此项 */
+  signals?: string[];
+  /** 满足其一即协议成立（AXI4 的 awid/arid/awlen/wlast） */
+  requiresAnyOf?: string[];
+  /** 全须满足（AXI4-Lite 的 awaddr/awvalid/wvalid/bresp） */
+  requiresAllOf?: string[];
+  /** 入束信号下限 */
+  minSignals?: number;
+  roleDetection?: BundleRoleDetection;
+  /** singleton 规则：每个匹配端口独立成束（clk/rst） */
+  singleton?: boolean;
+  /** singleton 正则（rst 匹配 rst_n/rst_ni/aresetn/por_n 等变体） */
+  pattern?: string;
+};
+
+export type BundleRuleDoc = {
+  /** 规则匹配顺序（priority 优先），单端口只入一个 bundle */
+  priority: string[];
+  rules: BundleRule[];
+};
+
+/** bundle 成员信号：name = RTL 端口名（含前缀），sig = 剥离前缀后的信号名 */
+export type BundleSignal = { name: string; sig: string };
+
+/** 打标结果：一个 Protocol Bundle（同 protocol 不同前缀各自成束） */
+export type BundleGroup = {
+  protocol: string;
+  /** 聚类前缀（如 s_axil_）；裸名为 ''，singleton 为端口名 */
+  prefix: string;
+  singleton: boolean;
+  /** roleDetection 推断结果（master/slave），无法推断为 null */
+  role: string | null;
+  signals: BundleSignal[];
+};
+
+/** per-Module Definition 的端口打标结果（入库，供框图粗边/接口分组/树徽标消费） */
+export type PortAnalysis = {
+  bundles: BundleGroup[];
+  /** 未入束端口名（自定义信号单列） */
+  leftovers: string[];
+};
+
 // ─── DB 行类型（tRPC 返回给渲染端的结构；纯类型，渲染端可安全 import type） ──
 
 export type DesignInstRow = {
@@ -108,6 +167,8 @@ export type DesignDefRow = {
   src: string | null;
   paramDefaults: Record<string, unknown>;
   ports: { name: string; direction: string; width: number }[];
+  /** bundle 打标（refresh 管线入库；接口分组/框图粗边/树徽标的公共消费索引） */
+  bundles: PortAnalysis;
 };
 
 export type DesignEdgeRow = {
@@ -117,6 +178,26 @@ export type DesignEdgeRow = {
   width: number;
   cells: { inst: string; port: string }[];
   topPorts: string[];
+};
+
+// ─── 框图子图（issue 05：getSubgraph 的返回结构） ────────────────
+
+export type SubgraphPortRow = { name: string; direction: string; width: number };
+
+/** 框图 box = 直接子实例（带其 def 端口表与打标，供端口 hover 与粗边两端聚合） */
+export type SubgraphNodeRow = DesignInstRow & {
+  ports: SubgraphPortRow[];
+  bundles: PortAnalysis;
+};
+
+export type DesignSubgraphRow = {
+  /** 图根实例（带 def 端口表，top2i 边的图根侧端口 hover） */
+  root: (DesignInstRow & { ports: SubgraphPortRow[] }) | null;
+  nodes: SubgraphNodeRow[];
+  /** 图根 def 的连线表（cells.inst 已转完整实例路径） */
+  edges: DesignEdgeRow[];
+  /** 图根 def 的 bundle 打标（粗边聚类 + 图根端口分组） */
+  bundles: PortAnalysis;
 };
 
 /** rtl-router.getStatus 的返回结构（Design View 数据源） */

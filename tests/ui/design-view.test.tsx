@@ -16,6 +16,8 @@ const { trpcMocks, projectState } = vi.hoisted(() => ({
     getConfig: { query: vi.fn() },
     getStatus: { query: vi.fn() },
     getRoot: { query: vi.fn() },
+    getChildren: { query: vi.fn() },
+    getDef: { query: vi.fn() },
     getDetectedTops: { query: vi.fn() },
     setConfig: { mutate: vi.fn() },
     detectTops: { mutate: vi.fn() },
@@ -33,8 +35,45 @@ vi.mock('@renderer/stores/project', () => ({
 }));
 
 vi.mock('@renderer/components/design/DesignTree', () => ({
-  DesignTree: ({ node }: { node: DesignInstRow }) => (
-    <div data-testid="design-tree-stub">{node.path}</div>
+  DesignTree: ({
+    node,
+    onSelect,
+  }: {
+    node: DesignInstRow;
+    onSelect?: (inst: DesignInstRow) => void;
+  }) => (
+    <div data-testid="design-tree-stub">
+      {node.path}
+      <button
+        type="button"
+        data-testid="design-tree-stub-select"
+        onClick={() => {
+          const child: DesignInstRow = {
+            path: 'spike_top.u_subsys0',
+            name: 'u_subsys0',
+            module: 'soc_subsys',
+            parent: 'spike_top',
+            depth: 1,
+            src: null,
+            params: { N_IP: 2 },
+            instCount: 3,
+          };
+          onSelect?.(child);
+        }}
+      />
+    </div>
+  ),
+}));
+
+vi.mock('@renderer/components/design/ModuleInterfaceView', () => ({
+  ModuleInterfaceView: ({ inst }: { inst: DesignInstRow }) => (
+    <div data-testid="module-interface-stub">{inst.path}:{inst.module}</div>
+  ),
+}));
+
+vi.mock('@renderer/components/design/BlockDiagram', () => ({
+  BlockDiagram: ({ path }: { projectId: string; path: string }) => (
+    <div data-testid="block-diagram-stub">diagram:{path}</div>
   ),
 }));
 
@@ -144,6 +183,48 @@ describe('DesignView 顶层选择器（issue 03）', () => {
     const select = await screen.findByTestId('design-top-select');
     expect(optionValues(select)).toEqual(['soc_top', 'spike_top']);
     expect(select).toHaveValue('spike_top');
+  });
+});
+
+// ─── 选中节点 → 详情视图（issue 04 接口 / issue 05 框图） ───
+
+describe('DesignView 选中节点显示接口视图（issue 04）', () => {
+  it('树节点 onSelect → 切到接口页渲染 ModuleInterfaceView（实例+模块名）', async () => {
+    render(<DesignView />);
+    await screen.findByTestId('design-view-header');
+    // 默认右侧是框图（issue 05）
+    expect(screen.getByTestId('block-diagram-stub')).toHaveTextContent('diagram:spike_top');
+
+    fireEvent.click(screen.getByTestId('design-tree-stub-select'));
+    fireEvent.click(screen.getByTestId('design-detail-interface'));
+    await waitFor(() => expect(screen.getByTestId('module-interface-stub')).toBeTruthy());
+    expect(screen.getByTestId('module-interface-stub')).toHaveTextContent('spike_top.u_subsys0:soc_subsys');
+  });
+});
+
+describe('DesignView 框图集成（issue 05）', () => {
+  it('默认右侧为框图（顶层为图根）；选中实例后以实例为图根；面包屑双击下钻在框图内部进行', async () => {
+    render(<DesignView />);
+    await screen.findByTestId('design-view-header');
+    expect(screen.getByTestId('block-diagram-stub')).toHaveTextContent('diagram:spike_top');
+
+    // 选择 u_subsys0 → 框图以它为图根
+    fireEvent.click(screen.getByTestId('design-tree-stub-select'));
+    expect(screen.getByTestId('block-diagram-stub')).toHaveTextContent('diagram:spike_top.u_subsys0');
+
+    // 切到接口再切回框图：保持实例图根
+    fireEvent.click(screen.getByTestId('design-detail-interface'));
+    expect(screen.queryByTestId('block-diagram-stub')).toBeNull();
+    fireEvent.click(screen.getByTestId('design-detail-diagram'));
+    expect(screen.getByTestId('block-diagram-stub')).toHaveTextContent('diagram:spike_top.u_subsys0');
+  });
+
+  it('接口页未选中实例时显示引导提示', async () => {
+    render(<DesignView />);
+    await screen.findByTestId('design-view-header');
+    fireEvent.click(screen.getByTestId('design-detail-interface'));
+    expect(screen.queryByTestId('module-interface-stub')).toBeNull();
+    expect(screen.getByText('在左侧层级树选择实例查看接口')).toBeTruthy();
   });
 });
 

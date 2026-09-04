@@ -327,3 +327,143 @@ describe('顶层选择记忆（issue 03 story 17）', () => {
     expect(tops).toEqual([]);
   });
 });
+
+// ─── Protocol Bundle 打标入库（issue 04：框图粗边/接口分组公共消费索引） ──
+
+describe('bundle 打标（refresh 管线 → getDef 消费）', () => {
+  it('refresh 后 getDef 返回 bundles：spike_ip AXI4-Lite [slave] 17 信号 + APB + leftovers', async () => {
+    await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: 'spike_top' });
+    await caller.refresh({ projectId: 'proj-1' });
+
+    const def = await caller.getDef({ projectId: 'proj-1', name: 'spike_ip' });
+    const axil = def?.bundles.bundles.find((b) => b.protocol === 'AXI4-Lite');
+    expect(axil).toMatchObject({ prefix: 's_axil_', role: 'slave' });
+    expect(axil?.signals).toHaveLength(17);
+    expect(def?.bundles.bundles.find((b) => b.protocol === 'APB')).toMatchObject({ prefix: 'p_', role: 'slave' });
+    expect(def?.bundles.leftovers).toEqual(['irq_o']);
+  });
+
+  it('spike_top：AXI4 27 信号（awid/arid/awlen/wlast 全通道特征）入库', async () => {
+    await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: 'spike_top' });
+    await caller.refresh({ projectId: 'proj-1' });
+
+    const def = await caller.getDef({ projectId: 'proj-1', name: 'spike_top' });
+    const axi = def?.bundles.bundles.find((b) => b.protocol === 'AXI4');
+    expect(axi?.signals).toHaveLength(27);
+    for (const feature of ['awid', 'arid', 'awlen', 'wlast']) {
+      expect(axi?.signals.some((s) => s.sig === feature)).toBe(true);
+    }
+  });
+
+  it('.socverify/design/bundle-rules.json 自定义规则覆盖内置（h_ 前缀协议改名）', async () => {
+    const rulesDir = join(holder.projectDir, '.socverify/design');
+    mkdirSync(rulesDir, { recursive: true });
+    writeFileSync(
+      join(rulesDir, 'bundle-rules.json'),
+      JSON.stringify({
+        priority: ['myahb'],
+        rules: [
+          {
+            id: 'myahb',
+            protocol: 'MyAHB',
+            signals: ['htrans', 'haddr', 'hwrite', 'hsel'],
+            requiresAllOf: ['htrans', 'haddr'],
+            minSignals: 2,
+          },
+        ],
+      }),
+      'utf-8',
+    );
+    await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: 'spike_top' });
+    await caller.refresh({ projectId: 'proj-1' });
+
+    // 自定义规则优先于内置 AHB：soc_subsys 的 h_ 束改名 MyAHB
+    const def = await caller.getDef({ projectId: 'proj-1', name: 'soc_subsys' });
+    expect(def?.bundles.bundles.some((b) => b.protocol === 'AHB')).toBe(false);
+    const my = def?.bundles.bundles.find((b) => b.protocol === 'MyAHB');
+    expect(my?.signals.map((s) => s.name).sort()).toEqual(['h_haddr', 'h_hsel', 'h_htrans', 'h_hwrite']);
+  });
+
+  it('规则文件损坏时回退内置规则（refresh 不失败）', async () => {
+    const rulesDir = join(holder.projectDir, '.socverify/design');
+    mkdirSync(rulesDir, { recursive: true });
+    writeFileSync(join(rulesDir, 'bundle-rules.json'), '{ broken json !!', 'utf-8');
+    await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: 'spike_top' });
+
+    const result = await caller.refresh({ projectId: 'proj-1' });
+    expect(result.ok).toBe(true);
+
+    const def = await caller.getDef({ projectId: 'proj-1', name: 'soc_subsys' });
+    expect(def?.bundles.bundles.find((b) => b.protocol === 'AHB')).toBeDefined();
+  });
+});
+
+// ─── 框图子图查询（issue 05：任意模块为图根的可下钻框图数据） ──
+
+describe('rtl.getSubgraph（issue 05 框图数据）', () => {
+  it('spike_top 子图：nodes 带端口表与打标；edges cells 转完整实例路径；图根打标随行', async () => {
+    await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: 'spike_top' });
+    await caller.refresh({ projectId: 'proj-1' });
+
+    const sg = await caller.getSubgraph({ projectId: 'proj-1', path: 'spike_top' });
+    expect(sg.root?.path).toBe('spike_top');
+    expect(sg.root?.module).toBe('spike_top');
+    expect(sg.root?.ports.some((p) => p.name === 'apb0_paddr' && p.direction === 'input')).toBe(true);
+
+    expect(sg.nodes.map((n) => n.name)).toEqual(['u_subsys0', 'u_subsys1']);
+    const s0 = sg.nodes.find((n) => n.name === 'u_subsys0')!;
+    expect(s0.module).toBe('soc_subsys');
+    // box 端口 hover 数据（信号名/方向/位宽）随行
+    expect(s0.ports.some((p) => p.name === 'h_haddr' && p.direction === 'input' && p.width === 12)).toBe(true);
+    // node def 打标（边两端聚合消费）
+    expect(s0.bundles.bundles.some((b) => b.protocol === 'AHB')).toBe(true);
+    // 图根打标（APB 粗边聚类）
+    expect(sg.bundles.bundles.some((b) => b.protocol === 'APB')).toBe(true);
+
+    // top2i 边：cells 为完整实例路径（spike_top.apb0_paddr → u_subsys0.h_haddr）
+    const apbAddr = sg.edges.find((e) => e.topPorts.includes('apb0_paddr'));
+    expect(apbAddr?.kind).toBe('top2i');
+    expect(apbAddr?.cells).toEqual([{ inst: 'spike_top.u_subsys0', port: 'h_haddr' }]);
+    // link_irq 细边（issue 验收：u_subsys0:irq_o → u_subsys1:fab_irq_en）
+    const link = sg.edges.find((e) => e.net === 'link_irq');
+    expect(link?.kind).toBe('i2i');
+    expect(link?.cells).toEqual([
+      { inst: 'spike_top.u_subsys0', port: 'irq_o' },
+      { inst: 'spike_top.u_subsys1', port: 'fab_irq_en' },
+    ]);
+  });
+
+  it('下钻 u_subsys0：nodes = gen_ip[0..1].u_ip，edges 来自 soc_subsys def（cells 完整路径）', async () => {
+    await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: 'spike_top' });
+    await caller.refresh({ projectId: 'proj-1' });
+
+    const sg = await caller.getSubgraph({ projectId: 'proj-1', path: 'spike_top.u_subsys0' });
+    expect(sg.root?.module).toBe('soc_subsys');
+    expect(sg.nodes.map((n) => n.name)).toEqual(['gen_ip[0].u_ip', 'gen_ip[1].u_ip']);
+    expect(sg.nodes.every((n) => n.module === 'spike_ip')).toBe(true);
+
+    const hh = sg.edges.find((e) => e.net === 'h_haddr');
+    expect(hh?.cells.some((c) => c.inst === 'spike_top.u_subsys0.gen_ip[0].u_ip' && c.port === 'p_paddr')).toBe(true);
+  });
+
+  it('不存在的 path：root 为 null，nodes/edges 为空', async () => {
+    await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: 'spike_top' });
+    await caller.refresh({ projectId: 'proj-1' });
+
+    const sg = await caller.getSubgraph({ projectId: 'proj-1', path: 'no.such.path' });
+    expect(sg.root).toBeNull();
+    expect(sg.nodes).toEqual([]);
+    expect(sg.edges).toEqual([]);
+  });
+
+  it('leaf 实例子图：nodes/edges 为空但 root 带端口表（框图空态）', async () => {
+    await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: 'spike_top' });
+    await caller.refresh({ projectId: 'proj-1' });
+
+    const sg = await caller.getSubgraph({ projectId: 'proj-1', path: 'spike_top.u_subsys0.gen_ip[0].u_ip' });
+    expect(sg.root?.module).toBe('spike_ip');
+    expect(sg.root?.ports.length).toBeGreaterThan(0);
+    expect(sg.nodes).toEqual([]);
+    expect(sg.edges).toEqual([]);
+  });
+});

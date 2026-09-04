@@ -24,19 +24,25 @@ import {
   listDefs,
   replaceAll,
   setLastError,
+  EMPTY_ANALYSIS,
   type DesignDatabase,
 } from './design-db';
 import { RtlElaborationError, elaborate } from './elaborator';
 import { flattenFilelists, renderFlatFilelist } from './filelist';
 import { extractDesign, type WriteJsonDoc } from './extractor';
+import { analyzePorts, BUILTIN_AMBA_RULES } from './bundle-rules';
 import type {
+  BundleRule,
+  BundleRuleDoc,
   DesignDefRow,
   DesignEdgeRow,
   DesignInstRow,
   DesignRefreshResult,
   DesignSourceConfig,
   DesignStatus,
+  DesignSubgraphRow,
   ElaborationError,
+  SubgraphNodeRow,
 } from './types';
 
 // ─── 配置持久化 ────────────────────────────────────────────
@@ -88,6 +94,50 @@ export function saveDesignConfig(projectRoot: string, config: DesignSourceConfig
   const path = getDesignConfigPath(projectRoot);
   mkdirSync(join(projectRoot, DESIGN_DIR), { recursive: true });
   writeFileSync(path, JSON.stringify(config, null, 2), 'utf-8');
+}
+
+// ─── Protocol Bundle 规则（issue 04：自定义规则文件覆盖/扩展内置） ─────────
+
+/** 自定义规则文件路径（项目级扩展点：覆盖内置规则 + 新增私有协议） */
+export function getBundleRulesPath(projectRoot: string): string {
+  return join(projectRoot, DESIGN_DIR, 'bundle-rules.json');
+}
+
+/**
+ * 加载生效规则文档：`.socverify/design/bundle-rules.json` 存在时与内置合并
+ * （同 id 覆盖、新 id 扩展；custom priority 在前），文件缺失/损坏回退纯内置。
+ */
+export function loadBundleRuleDoc(projectRoot: string): BundleRuleDoc {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(getBundleRulesPath(projectRoot), 'utf-8'));
+  } catch {
+    return BUILTIN_AMBA_RULES;
+  }
+  const doc = raw as BundleRuleDoc;
+  if (!Array.isArray(doc.rules) || !Array.isArray(doc.priority)) return BUILTIN_AMBA_RULES;
+  return mergeRuleDocs(doc);
+}
+
+function mergeRuleDocs(custom: BundleRuleDoc): BundleRuleDoc {
+  const rulesById = new Map<string, BundleRule>(BUILTIN_AMBA_RULES.rules.map((r) => [r.id, r]));
+  for (const rule of custom.rules) {
+    if (typeof rule?.id === 'string') rulesById.set(rule.id, rule);
+  }
+  const seen = new Set<string>();
+  const priority: string[] = [];
+  const push = (id: string): void => {
+    if (rulesById.has(id) && !seen.has(id)) {
+      priority.push(id);
+      seen.add(id);
+    }
+  };
+  for (const id of custom.priority) {
+    if (typeof id === 'string') push(id);
+  }
+  for (const rule of BUILTIN_AMBA_RULES.rules) push(rule.id);
+  for (const rule of custom.rules) push(rule.id);
+  return { priority, rules: [...rulesById.values()] };
 }
 
 export function isConfigured(config: DesignSourceConfig): boolean {
@@ -250,6 +300,41 @@ export function queryEdges(projectId: string, projectRoot: string, moduleName: s
   return getDefEdges(getDesignDb(projectId, projectRoot), moduleName);
 }
 
+// ─── 框图子图查询（issue 05：任意模块为图根） ─────────────────
+
+/**
+ * 以 path 实例为图根的框图数据：直接子实例（box，带 def 端口表与打标）+
+ * 图根 def 连线表（cells.inst 转完整实例路径）+ 图根打标。
+ */
+export function querySubgraph(projectId: string, projectRoot: string, path: string): DesignSubgraphRow {
+  const db = getDesignDb(projectId, projectRoot);
+  const inst = getInstance(db, path);
+  if (!inst) {
+    return { root: null, nodes: [], edges: [], bundles: EMPTY_ANALYSIS };
+  }
+  const def = getDef(db, inst.module);
+  const children = getChildrenInstances(db, path);
+  const nodes: SubgraphNodeRow[] = children.map((c) => {
+    const cdef = getDef(db, c.module);
+    return {
+      ...c,
+      ports: cdef?.ports ?? [],
+      bundles: cdef?.bundles ?? EMPTY_ANALYSIS,
+    };
+  });
+  // cells.inst 是 def 内 cell 名（如 u_subsys0 / gen_ip[0].u_ip）→ 图根 path + cell
+  const edges: DesignEdgeRow[] = getDefEdges(db, inst.module).map((e) => ({
+    ...e,
+    cells: e.cells.map((c) => ({ inst: `${path}.${c.inst}`, port: c.port })),
+  }));
+  return {
+    root: { ...inst, ports: def?.ports ?? [] },
+    nodes,
+    edges,
+    bundles: def?.bundles ?? EMPTY_ANALYSIS,
+  };
+}
+
 // ─── 核心管线：elaborate → extract → 入库 ────────────────────
 
 /**
@@ -326,6 +411,12 @@ export function refresh(projectId: string, projectRoot: string): Promise<DesignR
       } catch {
         // 忽略临时文件删除失败
       }
+    }
+
+    // bundle 打标（提炼阶段语义层：自定义规则文件随每次刷新重新读取生效）
+    const ruleDoc = loadBundleRuleDoc(projectRoot);
+    for (const def of design.defs) {
+      def.bundles = analyzePorts(def.ports, ruleDoc);
     }
 
     const sourceFiles = [...new Set(parsed.files)];

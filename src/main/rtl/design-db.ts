@@ -15,6 +15,7 @@ import type {
   DesignInstRow,
   ExtractedDesign,
   ExtractedEdge,
+  PortAnalysis,
   SlangDiagnostic,
   ElaborationError,
 } from './types';
@@ -26,9 +27,13 @@ export const DESIGN_DB_FILE = 'design.db';
 
 /**
  * schema 版本（PRAGMA user_version）。DB 是可再生缓存：版本低于当前值时
- * 直接重建（issue 03 为 insts 增加 inst_count 列 → version 2）。
+ * 直接重建（issue 03 为 insts 增加 inst_count 列 → version 2；
+ * issue 04 为 defs 增加 bundles 列 → version 3）。
  */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
+
+/** 空 bundle 分析（打标失败/无端口的兜底值，design-service 复用） */
+export const EMPTY_ANALYSIS: PortAnalysis = { bundles: [], leftovers: [] };
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
@@ -39,7 +44,8 @@ CREATE TABLE IF NOT EXISTS defs (
   name TEXT PRIMARY KEY,
   src TEXT,
   param_defaults TEXT NOT NULL DEFAULT '{}',
-  ports TEXT NOT NULL DEFAULT '[]'
+  ports TEXT NOT NULL DEFAULT '[]',
+  bundles TEXT NOT NULL DEFAULT '{"bundles":[],"leftovers":[]}'
 );
 CREATE TABLE IF NOT EXISTS insts (
   path TEXT PRIMARY KEY,
@@ -155,7 +161,7 @@ export function getLastError(db: DesignDatabase): ElaborationError | null {
 /** 全量替换提炼数据 + 元数据（事务原子写，对齐 case-scanner 的 transaction 模式） */
 export function replaceAll(db: DesignDatabase, design: ExtractedDesign, meta: Record<string, string>): void {
   const insertDef = db.prepare(
-    'INSERT OR REPLACE INTO defs (name, src, param_defaults, ports) VALUES (?, ?, ?, ?)',
+    'INSERT OR REPLACE INTO defs (name, src, param_defaults, ports, bundles) VALUES (?, ?, ?, ?, ?)',
   );
   const insertInst = db.prepare(
     'INSERT OR REPLACE INTO insts (path, name, module, parent, depth, src, params, inst_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
@@ -171,7 +177,7 @@ export function replaceAll(db: DesignDatabase, design: ExtractedDesign, meta: Re
     db.exec('DELETE FROM meta');
 
     for (const def of design.defs) {
-      insertDef.run(def.name, def.src, JSON.stringify(def.paramDefaults), JSON.stringify(def.ports));
+      insertDef.run(def.name, def.src, JSON.stringify(def.paramDefaults), JSON.stringify(def.ports), JSON.stringify(def.bundles ?? EMPTY_ANALYSIS));
     }
     for (const inst of design.insts) {
       insertInst.run(inst.path, inst.name, inst.module, inst.parent, inst.depth, inst.src, JSON.stringify(inst.params), inst.instCount);
@@ -235,6 +241,7 @@ function toDefRow(r: Record<string, unknown>): DesignDefRow {
     src: (r.src as string | null) ?? null,
     paramDefaults: JSON.parse((r.param_defaults as string) ?? '{}') as Record<string, unknown>,
     ports: JSON.parse((r.ports as string) ?? '[]') as DesignDefRow['ports'],
+    bundles: JSON.parse((r.bundles as string) ?? JSON.stringify(EMPTY_ANALYSIS)) as PortAnalysis,
   };
 }
 

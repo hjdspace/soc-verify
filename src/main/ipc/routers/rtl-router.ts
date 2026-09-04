@@ -19,6 +19,7 @@ import {
   queryChildren,
   queryDef,
   queryRoot,
+  querySubgraph,
   refresh,
   saveDesignConfig,
 } from '../../rtl/design-service';
@@ -151,6 +152,23 @@ export const rtlRouter = t.router({
     .query(({ input }) => {
       const project = requireProject(input.projectId);
       return queryDef(input.projectId, project.rootPath, input.name);
+    }),
+
+  /** 框图子图（issue 05）：以任意实例为图根的直接子实例 + 连线表 + bundle 打标 */
+  getSubgraph: t.procedure
+    .input((raw): { projectId: string; path: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      if (typeof r.path !== 'string' || r.path.length === 0) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'path is required' });
+      }
+      return { projectId: r.projectId, path: r.path };
+    })
+    .query(({ input }) => {
+      const project = requireProject(input.projectId);
+      return querySubgraph(input.projectId, project.rootPath, input.path);
     }),
 });
 

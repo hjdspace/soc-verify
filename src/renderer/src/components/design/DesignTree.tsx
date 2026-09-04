@@ -25,9 +25,13 @@ const ROW_HEIGHT = 24;
 interface DesignTreeProps {
   projectId: string;
   node: DesignInstRow;
+  /** 点击节点选中（issue 04：选中查看模块接口视图；与展开/收起同一交互） */
+  onSelect?: (inst: DesignInstRow) => void;
+  /** 当前选中实例 path（高亮行） */
+  selectedPath?: string | null;
 }
 
-export function DesignTree({ projectId, node }: DesignTreeProps) {
+export function DesignTree({ projectId, node, onSelect, selectedPath }: DesignTreeProps) {
   const [childrenMap, setChildrenMap] = useState<Map<string, DesignInstRow[]>>(() => new Map());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const inflight = useRef<Set<string>>(new Set());
@@ -124,7 +128,9 @@ export function DesignTree({ projectId, node }: DesignTreeProps) {
                   node={row.node}
                   level={row.level}
                   expanded={expanded.has(row.node.path)}
+                  selected={selectedPath === row.node.path}
                   onToggle={() => toggle(row.node)}
+                  onSelect={() => onSelect?.(row.node)}
                   onJump={() => jumpToSource(row.node)}
                 />
               ) : (
@@ -142,13 +148,17 @@ function NodeRow({
   node,
   level,
   expanded,
+  selected,
   onToggle,
+  onSelect,
   onJump,
 }: {
   node: DesignInstRow;
   level: number;
   expanded: boolean;
+  selected: boolean;
   onToggle: () => void;
+  onSelect: () => void;
   onJump: () => void;
 }) {
   // instCount === 1 → leaf（黑盒/无用户模块子实例），无可展开子级
@@ -157,19 +167,25 @@ function NodeRow({
     <div
       role="treeitem"
       aria-expanded={leaf ? undefined : expanded}
+      aria-selected={selected}
       tabIndex={0}
       data-testid="design-tree-node"
       data-path={node.path}
-      onClick={onToggle}
+      onClick={() => {
+        onToggle();
+        onSelect();
+      }}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           onToggle();
+          onSelect();
         }
       }}
       className={cn(
         'flex h-full cursor-pointer items-center gap-1.5 rounded px-2 text-xs transition-colors',
         'hover:bg-accent focus-visible:outline focus-visible:outline-primary/60',
+        selected && 'bg-accent ring-1 ring-primary/40',
       )}
       style={{ paddingLeft: 8 + level * 16 }}
     >

@@ -7,12 +7,17 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, FolderOpen, ListTree, Plus, RefreshCw, Trash2, Wand2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, FolderOpen, ListTree, Network, Plus, RefreshCw, Table2, Trash2, Wand2 } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import { useProjectStore } from '@renderer/stores/project';
 import { DesignTree } from '@renderer/components/design/DesignTree';
+import { ModuleInterfaceView } from '@renderer/components/design/ModuleInterfaceView';
+import { BlockDiagram } from '@renderer/components/design/BlockDiagram';
 import type { DesignInstRow, DesignStatus } from '@main/rtl/types';
+
+/** 右侧详情视图：框图（默认，issue 05）/ 接口表（issue 04） */
+type DetailView = 'diagram' | 'interface';
 
 export function DesignView() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
@@ -22,6 +27,8 @@ export function DesignView() {
   const [root, setRoot] = useState<DesignInstRow | null>(null);
   const [showConfig, setShowConfig] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedInst, setSelectedInst] = useState<DesignInstRow | null>(null);
+  const [detailView, setDetailView] = useState<DetailView>('diagram');
 
   const reload = useCallback(async (projectId: string) => {
     const [cfg, st, rt] = await Promise.all([
@@ -115,7 +122,7 @@ export function DesignView() {
       ) : !status.yosysAvailable ? (
         <DegradeBanner missingDlls={status.missingDlls} />
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {showConfig && currentProjectId && config && (
             <ConfigPanel
               projectId={currentProjectId}
@@ -141,9 +148,60 @@ export function DesignView() {
             <EmptyHint text="尚未 elaboration：配置 Design Source 后点击「刷新」" />
           )}
 
-          {root && (
-            <div className="min-h-0 flex-1 p-2">
-              <DesignTree projectId={currentProjectId} node={root} />
+          {root && currentProjectId && (
+            <div className="flex min-h-0 flex-1 gap-0 p-2">
+              <div className="flex min-h-0 w-2/5 shrink-0 flex-col border-r border-border pr-2">
+                <DesignTree
+                  projectId={currentProjectId}
+                  node={root}
+                  onSelect={setSelectedInst}
+                  selectedPath={selectedInst?.path ?? null}
+                />
+              </div>
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col pl-2">
+                {/* ── 详情视图切换：框图（默认）/ 接口表 ── */}
+                <div className="mb-1 flex shrink-0 items-center gap-1" data-testid="design-detail-toggle">
+                  <button
+                    type="button"
+                    data-testid="design-detail-diagram"
+                    aria-pressed={detailView === 'diagram'}
+                    onClick={() => setDetailView('diagram')}
+                    className={cn(
+                      'flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-colors',
+                      detailView === 'diagram'
+                        ? 'bg-primary/15 text-primary'
+                        : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                    )}
+                  >
+                    <Network className="size-3.5" />
+                    框图
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="design-detail-interface"
+                    aria-pressed={detailView === 'interface'}
+                    onClick={() => setDetailView('interface')}
+                    className={cn(
+                      'flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-colors',
+                      detailView === 'interface'
+                        ? 'bg-primary/15 text-primary'
+                        : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                    )}
+                  >
+                    <Table2 className="size-3.5" />
+                    接口
+                  </button>
+                </div>
+                <div className="flex min-h-0 min-w-0 flex-1">
+                  {detailView === 'diagram' ? (
+                    <BlockDiagram projectId={currentProjectId} path={selectedInst?.path ?? root.path} />
+                  ) : selectedInst ? (
+                    <ModuleInterfaceView projectId={currentProjectId} inst={selectedInst} />
+                  ) : (
+                    <EmptyHint text="在左侧层级树选择实例查看接口" />
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </div>
