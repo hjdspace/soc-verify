@@ -357,7 +357,10 @@ export type RecentSimulationRunRow = {
   cwd: string | null;
 };
 
-/** 获取最近的仿真运行记录，供仿真页跨重启恢复运行列表。 */
+/** 获取最近的仿真运行记录，供仿真页跨重启恢复运行列表。
+ *  按用例合并（PARTITION BY case_name）：同一用例的历史记录可能因启动
+ *  入口不同带上不同 subsys（历史 bug），按 (case_name, subsys) 分区会把
+ *  同一用例拆成多行；运行列表每个用例只展示最新一条。 */
 export function getRecentSimulationRuns(
   db: Database.Database,
   limit = 200,
@@ -369,7 +372,7 @@ export function getRecentSimulationRuns(
       SELECT id, run_id, case_name, subsys, status, start_time, end_time,
         duration_ms, seed, options_json, command, cwd,
         ROW_NUMBER() OVER (
-          PARTITION BY case_name, subsys
+          PARTITION BY case_name
           ORDER BY start_time DESC, id DESC
         ) AS row_num
       FROM simulation_runs
