@@ -37,7 +37,7 @@ export function PluginViewHost({ location }: PluginViewHostProps) {
   return (
     <section className="flex min-h-0 flex-1 flex-col border-b border-border/50 bg-sidebar/40">
       <div className="flex min-h-8 shrink-0 items-center border-b border-border/50">
-        <div className="flex items-center gap-1.5 px-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="flex items-center gap-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
           <Puzzle className="h-3 w-3" />
           <span>插件</span>
         </div>
