@@ -65,7 +65,7 @@ export function ComparisonView() {
         {/* Differences table */}
         {differences.length > 0 && (
           <div>
-            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">差异</div>
+            <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">差异</div>
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b text-left text-[11px] uppercase text-muted-foreground">
