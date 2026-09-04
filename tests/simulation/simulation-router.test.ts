@@ -25,12 +25,12 @@ const {
 } = vi.hoisted(() => ({
   mockSimTerminalLinker: {
     getRun: vi.fn(),
-    getActiveRuns: vi.fn(() => []),
+    getActiveRuns: vi.fn((): unknown[] => []),
     register: vi.fn(),
   },
   mockSimulationManager: {
     getRunDetail: vi.fn(),
-    getActiveRuns: vi.fn(() => []),
+    getActiveRuns: vi.fn((): unknown[] => []),
     hasRunner: vi.fn(() => true),
   },
   mockSimulationSettings: {
@@ -102,7 +102,7 @@ vi.mock('../../src/main/simulation/simulation-settings', () => ({
 // ─── Imports (after mocks) ──────────────────────────────────
 
 import { createMemoryDatabase, closeDatabase } from '../../src/main/case/db/case-database';
-import { insertSimulationRun } from '../../src/main/case/db/case-repository';
+import { insertSimulationRun, insertSubsystems, insertCases } from '../../src/main/case/db/case-repository';
 import { simulationRouter } from '../../src/main/ipc/routers/simulation-router';
 
 // Create in-memory DB and wire it into the mock
@@ -229,6 +229,105 @@ describe('simulation-router getRunDetail', () => {
         runId: 'nonexistent-run-id',
       }),
     ).rejects.toThrow('Run not found: nonexistent-run-id');
+  });
+});
+
+// ─── listActiveRuns：同一用例合并 + 子系统校正 ─────────────
+
+// 独立 DB：getRunDetail 套件中有一个用例会 closeDatabase(memDb)，
+// 此处不能用已关闭的连接
+let listRunsDb: Database.Database;
+
+describe('simulation-router listActiveRuns', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSimulationManager.getRunDetail.mockReturnValue(null);
+    mockSimTerminalLinker.getRun.mockReturnValue(undefined);
+    mockSimulationManager.getActiveRuns.mockReturnValue([]);
+    mockSimTerminalLinker.getActiveRuns.mockReturnValue([]);
+    listRunsDb = createMemoryDatabase();
+    dbRef.current = listRunsDb;
+  });
+
+  afterEach(() => {
+    closeDatabase(listRunsDb);
+    dbRef.current = listRunsDb;
+  });
+
+  it('同一用例多次仿真（不同 subsys 历史记录）只返回最新一条', async () => {
+    // 模拟用户报告的场景：同一用例先在错误子系统（ai_sys）下 FAIL，
+    // 再仿真后带正确子系统（top）记录 —— 运行列表应合并为一行
+    insertSimulationRun(listRunsDb, {
+      runId: 'run-fail',
+      caseName: 'test_top_ap_mini',
+      subsys: 'ai_sys',
+      status: 'fail',
+      startTime: '2024-01-01T10:00:00.000Z',
+    });
+    insertSimulationRun(listRunsDb, {
+      runId: 'run-pass',
+      caseName: 'test_top_ap_mini',
+      subsys: 'top',
+      status: 'pass',
+      startTime: '2024-01-02T10:00:00.000Z',
+    });
+
+    const runs = await caller.listActiveRuns({ projectId: 'test-project-id' });
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0].runId).toBe('run-pass');
+    expect(runs[0].status.status).toBe('pass');
+  });
+
+  it('subsys 与 cases 表不一致时以 cases 表为准校正', async () => {
+    // cases 表：test_top_ap_mini 属于 top；DB 历史记录误写为 ai_sys
+    insertSubsystems(listRunsDb, [{ name: 'top' }]);
+    insertCases(listRunsDb, [{ name: 'test_top_ap_mini', subsys: 'top', path: '/p/test_top_ap_mini' }]);
+    insertSimulationRun(listRunsDb, {
+      runId: 'run-bad-subsys',
+      caseName: 'test_top_ap_mini',
+      subsys: 'ai_sys',
+      status: 'fail',
+      startTime: '2024-01-01T10:00:00.000Z',
+    });
+
+    const runs = await caller.listActiveRuns({ projectId: 'test-project-id' });
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0].options.subsys).toBe('top');
+  });
+
+  it('活跃终端仿真覆盖同用例的 DB 历史记录（重跑场景）', async () => {
+    insertSimulationRun(listRunsDb, {
+      runId: 'run-old',
+      caseName: 'case_x',
+      subsys: 'core',
+      status: 'fail',
+      startTime: '2024-01-01T10:00:00.000Z',
+    });
+    // 活跃终端仿真（重新仿真中）
+    mockSimTerminalLinker.getActiveRuns.mockReturnValue([
+      {
+        runId: 'run-live',
+        projectId: 'test-project-id',
+        terminalId: 'term-1',
+        command: 'runsim case_x',
+        cwd: '/tmp/work',
+        caseId: 'case_x',
+        caseName: 'case_x',
+        subsys: 'core',
+        options: {},
+        status: 'running',
+        startTime: Date.now(),
+        logMode: false,
+      },
+    ]);
+
+    const runs = await caller.listActiveRuns({ projectId: 'test-project-id' });
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0].runId).toBe('run-live');
+    expect(runs[0].status.status).toBe('running');
   });
 });
 
