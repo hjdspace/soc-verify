@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { createMemoryDatabase, closeDatabase, type CaseDatabase } from '../../src/main/case/db/case-database';
 import { SimulationRunListener } from '../../src/main/case/sim-run-listener';
 import { TerminalSimulationRunListener } from '../../src/main/case/sim-run-listener';
+import { insertSubsystems, insertCases } from '../../src/main/case/db/case-repository';
 import type { TerminalSimRun } from '../../src/main/simulation/sim-terminal-linker';
 import type { SimulationRunRecord } from '../../src/main/simulation/simulation-manager';
 
@@ -217,6 +218,45 @@ describe('SimulationRunListener', () => {
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
   });
+
+  it('以 cases 表为准校正 subsys（启动入口传入的选中子系统不正确时）', () => {
+    // 场景：命令栏在全局选中子系统 ai_sys 下启动了 top 的用例 ——
+    // 持久化时应写用例真实所属子系统 top，而非 ai_sys
+    insertSubsystems(db, [{ name: 'top' }]);
+    insertCases(db, [{ name: 'test_basic', subsys: 'top', path: '/p/test_basic' }]);
+
+    const listener = new SimulationRunListener(simManager, db);
+    listener.start();
+
+    simManager.emit('run:completed', makeRunRecord({
+      options: {
+        caseId: 'case-1',
+        caseName: 'test_basic',
+        subsys: 'ai_sys',
+        options: {},
+      },
+    }));
+
+    const rows = queryAllRuns(db);
+    expect(rows[0]['subsys']).toBe('top');
+  });
+
+  it('cases 表查不到用例时保留原 subsys（未扫描的新用例）', () => {
+    const listener = new SimulationRunListener(simManager, db);
+    listener.start();
+
+    simManager.emit('run:completed', makeRunRecord({
+      options: {
+        caseId: 'case-1',
+        caseName: 'unscanned_case',
+        subsys: 'cpu',
+        options: {},
+      },
+    }));
+
+    const rows = queryAllRuns(db);
+    expect(rows[0]['subsys']).toBe('cpu');
+  });
 });
 
 describe('TerminalSimulationRunListener', () => {
@@ -259,6 +299,34 @@ describe('TerminalSimulationRunListener', () => {
     expect(row.status).toBe('pass');
     expect(row.seed).toBe('7');
     expect(row.duration_ms).toBe(5000);
+  });
+
+  it('persists with the case\'s real subsys from the cases table', () => {
+    // 终端仿真入口传入错误 subsys（全局选中的子系统）时，
+    // 持久化以 cases 表为准校正
+    insertSubsystems(db, [{ name: 'top' }]);
+    insertCases(db, [{ name: 'smoke', subsys: 'top', path: '/p/smoke' }]);
+
+    const listener = new TerminalSimulationRunListener(linker, db, 'proj-1');
+    listener.start();
+    linker.emit('run:completed', {
+      runId: 'terminal-run-2',
+      projectId: 'proj-1',
+      terminalId: 'term-2',
+      command: 'runsim smoke',
+      cwd: 'D:/project',
+      caseId: 'smoke',
+      caseName: 'smoke',
+      subsys: 'ai_sys',
+      options: {},
+      status: 'fail',
+      startTime: 1700000000000,
+      endTime: 1700000005000,
+      logMode: true,
+    } satisfies TerminalSimRun);
+
+    const row = db.prepare('SELECT subsys FROM simulation_runs').get() as Record<string, unknown>;
+    expect(row.subsys).toBe('top');
   });
 
   it('ignores terminal events from another project', () => {
