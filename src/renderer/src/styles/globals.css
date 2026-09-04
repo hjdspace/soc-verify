@@ -968,6 +968,25 @@ body {
   }
 }
 
+/* ── 提高对比：近实色底 + 明确描边（apple-design §14）────────
+   高对比需求下毛玻璃/半透明 chrome 上的文字可读性不足：
+   材质去 blur、浮层与 chrome 底色升为近实色、边框加深一档，
+   保持层级可辨（明暗主题分别用背景/卡片色提对比）。 */
+@media (prefers-contrast: more) {
+  [data-theme="apple-light"],
+  [data-theme="apple-dark"] {
+    --material: none;
+    --titlebar: var(--card);
+    --titlebar-border: var(--border);
+  }
+  [data-theme="apple-light"] {
+    --glass: oklch(1 0 0 / 0.97);
+  }
+  [data-theme="apple-dark"] {
+    --glass: oklch(0.29 0.0018 265 / 0.98);
+  }
+}
+
 /* ── 流式输出光标 ─────────────────────────────────────────────── */
 /* 硬开关式闪烁（1s 周期，前半亮、后半灭），比 animate-pulse 的渐变更像真实光标 */
 @keyframes cursor-blink {
