@@ -5,6 +5,11 @@
  * 不包含全局浮窗 toggle 机制，Option 卡片始终可见。
  * 面板标题动态显示当前选中用例名（`仿真 Option · {caseName}`）。
  *
+ * 卡片网格（原型 option-layout-05-collapsible-cards 验证）：
+ * - auto-fit 网格——最大化时卡片摊满变宽（旧 auto-fill 空轨道浪费宽度，
+ *   窗口越大卡越窄导致文字截断）
+ * - 卡片可折叠，默认仅展开第一组；收起卡头显示已配置项摘要 chips
+ *
  * 命令预览栏 + 运行按钮已提取到 SimCommandBar 组件，放置在
  * SimulationView 中栏底部，避免用户滚动 Option 面板才能触达。
  */
@@ -268,8 +273,10 @@ export function SimOptionPanel() {
         </div>
       </div>
 
-      {/* ── Options panel — Minimalist Card layout ─────────── */}
-      {/* auto-fill 跟随中栏实际宽度换行（视口断点会无视中栏宽度强行 3 列） */}
+      {/* ── Options panel — 可折叠卡片网格 ──────────────────── */}
+      {/* auto-fit（非 auto-fill）：空轨道折叠归零，最大化时卡片摊满变宽；
+          auto-fill 会把宽度浪费在空轨道上，窗口越大卡越窄（旧版问题）。
+          默认仅展开第一组（最高频的基础参数），其余收起只占一行 + 摘要 chips */}
       <div className="max-h-80 overflow-y-auto px-3 pb-2">
         {schema.length === 0 ? (
           <div className="py-2 text-xs text-muted-foreground">
@@ -278,14 +285,15 @@ export function SimOptionPanel() {
               : '请先打开项目'}
           </div>
         ) : (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] items-start gap-2">
-            {groupedFields.map(([groupName, fields]) => (
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] items-start gap-2">
+            {groupedFields.map(([groupName, fields], i) => (
               <OptionCard
                 key={groupName}
                 name={groupName}
                 fields={fields}
                 values={simOptions}
                 onChange={(key, val) => setSimOption(key, val)}
+                defaultOpen={i === 0}
               />
             ))}
           </div>
