@@ -56,6 +56,10 @@ interface UiState {
   bottomPanelHeight: number;
   /** 仿真视图左栏宽度（可拖拽调整，持久化到布局状态） */
   simLeftPanelWidth: number;
+  /** 仿真视图 keep-alive：首次进入仿真视图后置位，ViewContainer 依据此标记常驻保留
+   * 仿真视图 DOM（切走隐藏而非卸载），避免万级用例树反复重建导致切换卡顿 */
+  simulationViewMounted: boolean;
+  setSimulationViewMounted: (mounted: boolean) => void;
   pluginViewLayouts: PluginViewLayouts;
   setActiveView: (view: ActiveView) => void;
   toggleLeftDrawer: () => void;
@@ -119,6 +123,8 @@ export const useUiStore = create<UiState>((set) => ({
   bottomPanelCollapsed: true,
   bottomPanelHeight: 240,
   simLeftPanelWidth: 260,
+  simulationViewMounted: false,
+  setSimulationViewMounted: (mounted) => set({ simulationViewMounted: mounted }),
   pluginViewLayouts: DEFAULT_PLUGIN_VIEW_LAYOUTS,
   // 切换视图时自动关闭所有抽屉（原型 §2.1-3：mission-control 行为闭环）
   setActiveView: (view) =>
