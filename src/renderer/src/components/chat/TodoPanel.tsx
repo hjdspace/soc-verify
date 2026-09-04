@@ -140,7 +140,7 @@ function TodoPanelImpl({ phases, isExecuting, collapsed, onToggleCollapse }: Tod
                 return (
                   <div key={pi}>
                     {phases.length > 1 && (
-                      <div className="px-1 pb-1 pt-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/60">
+                      <div className="px-1 pb-1 pt-1 text-[9px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/60">
                         {phase.name}
                       </div>
                     )}
