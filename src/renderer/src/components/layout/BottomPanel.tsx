@@ -52,17 +52,24 @@ export function BottomPanel() {
   }, [bottomTabs.length, collapsed, setCollapsed]);
 
   // ── Resize handle (top edge) ──────────────────────────
+  // Pointer Events + setPointerCapture（apple-design §2）：指针移出边界后拖拽仍继续，
+  // 触控笔/触摸同样工作（旧 mousemove/mouseup 只支持鼠标）。
   const startYRef = useRef(0);
   const startHeightRef = useRef(0);
   const draggingRef = useRef(false);
 
   const handleResizeStart = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent<HTMLElement>) => {
       e.preventDefault();
       draggingRef.current = true;
       setDragging(true);
       startYRef.current = e.clientY;
       startHeightRef.current = height;
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* jsdom 无该实现 */
+      }
       document.body.style.cursor = 'ns-resize';
       document.body.style.userSelect = 'none';
     },
@@ -70,25 +77,31 @@ export function BottomPanel() {
   );
 
   useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
+    const handlePointerMove = (e: PointerEvent) => {
       if (!draggingRef.current) return;
       const delta = e.clientY - startYRef.current;
       // Dragging up increases height
       const newHeight = startHeightRef.current - delta;
       setHeight(newHeight);
     };
-    const handleMouseUp = () => {
+    const handlePointerUp = (e: PointerEvent) => {
       if (!draggingRef.current) return;
       draggingRef.current = false;
       setDragging(false);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
+      const target = e.currentTarget as HTMLElement | null;
+      if (target?.hasPointerCapture?.(e.pointerId)) {
+        target.releasePointerCapture(e.pointerId);
+      }
     };
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
     return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
     };
   }, [setHeight]);
 
@@ -147,6 +160,7 @@ export function BottomPanel() {
             }
             className={cn(
               'relative flex shrink-0 flex-col overflow-hidden border-t border-border bg-background',
+              'will-change-[height]',
               dropHover && 'ring-1 ring-inset ring-primary/40',
             )}
             onDragOver={handleDragOver}
@@ -157,7 +171,7 @@ export function BottomPanel() {
 
       {/* ── Resize handle (top edge) ──────────────────────── */}
       <div
-        onMouseDown={handleResizeStart}
+        onPointerDown={handleResizeStart}
         className="group absolute -top-0.5 left-0 right-0 z-20 h-1.5 cursor-ns-resize hover:bg-primary/30 transition-colors"
       >
         <div className="absolute inset-x-0 -top-1 -bottom-1" />
