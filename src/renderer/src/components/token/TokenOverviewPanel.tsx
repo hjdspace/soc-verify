@@ -107,8 +107,16 @@ function StreakCard({
   );
 }
 
-/** 格式化 token 数量（千分位） */
+/** 格式化 token 数量（千分位精确值 — tooltip 括号内补充显示） */
 function formatTokens(n: number): string {
+  return n.toLocaleString('en-US');
+}
+
+/** 格式化 token 数量为中文紧凑单位：≥1万亿 → x.x万亿，≥1亿 → x.x亿，≥1万 → x.x万，其余千分位（KPI 卡片与热力图 tooltip 主值） */
+function formatTokensCompact(n: number): string {
+  if (n >= 1e12) return `${Number((n / 1e12).toFixed(2))}万亿`;
+  if (n >= 1e8) return `${Number((n / 1e8).toFixed(2))}亿`;
+  if (n >= 1e4) return `${Number((n / 1e4).toFixed(2))}万`;
   return n.toLocaleString('en-US');
 }
 
@@ -123,7 +131,6 @@ function formatCost(usd: number): string {
 const HEAT_GAP = 4;
 const HEAT_CELL_MIN = 9;
 const HEAT_CELL_MAX = 22;
-const HEAT_LEFT_PAD = 26;
 const HEAT_BOTTOM_PAD = 20;
 
 /** 计算热力图色阶 0-4（阈值对齐 token-monitor 的 heatmapIntensity：0.25/0.5/0.75 分档） */
@@ -218,15 +225,14 @@ function TokenHeatmap({ entries }: { entries: HeatmapEntry[] }) {
 
   // cell 随容器宽度自适应（参考 token-monitor dashboard.js：分数像素正好填满容器，
   // 并设上下限，避免窄窗口挤压成一团 / 宽窗口无限拉伸）
-  const avail = Math.max(0, width - HEAT_LEFT_PAD);
   const cell =
-    avail > 0
-      ? Math.max(HEAT_CELL_MIN, Math.min(HEAT_CELL_MAX, (avail - weeks * HEAT_GAP) / weeks))
+    width > 0
+      ? Math.max(HEAT_CELL_MIN, Math.min(HEAT_CELL_MAX, (width - weeks * HEAT_GAP) / weeks))
       : 14;
   const pitch = cell + HEAT_GAP;
   const gridWidth = weeks * pitch - HEAT_GAP;
   const gridHeight = 7 * pitch - HEAT_GAP;
-  const svgWidth = HEAT_LEFT_PAD + gridWidth;
+  const svgWidth = gridWidth;
   const svgHeight = gridHeight + HEAT_BOTTOM_PAD;
 
   // 月份标签：锚定在每月 1 号所在列的正下方（参考 token-monitor 的 monthLabels）
@@ -271,25 +277,11 @@ function TokenHeatmap({ entries }: { entries: HeatmapEntry[] }) {
           className="block"
           data-testid="token-heatmap-svg"
         >
-          {/* 星期标签（一 / 三 / 五） */}
-          {[1, 3, 5].map((dow) => (
-            <text
-              key={dow}
-              x={HEAT_LEFT_PAD - 6}
-              y={dow * pitch + pitch / 2}
-              textAnchor="end"
-              dominantBaseline="middle"
-              className="fill-muted-foreground"
-              style={{ fontSize: 9 }}
-            >
-              {['日', '一', '二', '三', '四', '五', '六'][dow]}
-            </text>
-          ))}
           {/* 月份标签（网格下方，锚定每月 1 号所在列） */}
           {monthLabels.map((m) => (
             <text
               key={`${m.label}-${m.col}`}
-              x={HEAT_LEFT_PAD + m.col * pitch}
+              x={m.col * pitch}
               y={gridHeight + 14}
               textAnchor="start"
               className="fill-muted-foreground"
@@ -309,7 +301,7 @@ function TokenHeatmap({ entries }: { entries: HeatmapEntry[] }) {
               <rect
                 key={day.date}
                 {...(day.entry ? { 'data-testid': `token-heatmap-cell-${day.date}` } : {})}
-                x={HEAT_LEFT_PAD + col * pitch}
+                x={col * pitch}
                 y={row * pitch}
                 width={cell}
                 height={cell}
@@ -335,7 +327,7 @@ function TokenHeatmap({ entries }: { entries: HeatmapEntry[] }) {
 /** 热力图悬停提示 — 日期标题 + Token / Cost 行（样式对齐 token-monitor 的 tt-head/tt-row） */
 function HeatTooltip({ x, y, date, entry }: { x: number; y: number; date: string; entry: HeatmapEntry | null }) {
   // 贴边自动翻转（参考 token-monitor positionTooltip）
-  const TIP_W = 190;
+  const TIP_W = 240;
   const TIP_H = 76;
   const PAD = 14;
   let left = x + PAD;
@@ -364,7 +356,10 @@ function HeatTooltip({ x, y, date, entry }: { x: number; y: number; date: string
       </div>
       <div className="flex items-center justify-between gap-6 py-0.5">
         <span className="opacity-80">Token</span>
-        <span className="tabular-nums">{formatTokens(tokens)}</span>
+        <span className="tabular-nums">
+          {formatTokensCompact(tokens)}
+          {tokens >= 1e4 && <span className="ml-1 opacity-50">({formatTokens(tokens)})</span>}
+        </span>
       </div>
       {cost > 0 && (
         <div className="flex items-center justify-between gap-6 py-0.5">
@@ -481,19 +476,19 @@ export function TokenOverviewPanel() {
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <KpiCard
               label="今日 Token"
-              value={formatTokens(summary.todayTokens)}
+              value={formatTokensCompact(summary.todayTokens)}
               icon={Coins}
               testId="token-kpi-today"
             />
             <KpiCard
               label="本月 Token"
-              value={formatTokens(summary.monthTokens)}
+              value={formatTokensCompact(summary.monthTokens)}
               icon={CalendarDays}
               testId="token-kpi-month"
             />
             <KpiCard
               label="总 Token"
-              value={formatTokens(summary.totalTokens)}
+              value={formatTokensCompact(summary.totalTokens)}
               icon={TrendingUp}
               testId="token-kpi-total"
             />
