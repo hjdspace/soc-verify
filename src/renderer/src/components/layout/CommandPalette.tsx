@@ -379,7 +379,7 @@ export function CommandPalette() {
     <AnimatePresence>
       {commandPaletteOpen && (
         <motion.div
-          className="fixed inset-0 z-[80] flex items-start justify-center bg-scrim pt-[12vh]"
+          className="fixed inset-0 z-[80] flex items-start justify-center bg-scrim pt-[12vh] will-change-[opacity]"
           onClick={() => setCommandPaletteOpen(false)}
           data-testid="command-palette-overlay"
           initial={{ opacity: 0 }}
@@ -388,7 +388,7 @@ export function CommandPalette() {
           transition={{ duration: 0.15 }}
         >
         <motion.div
-          className="w-[560px] max-w-[calc(100vw-48px)] overflow-hidden rounded-xl border border-border bg-glass shadow-2xl glass"
+          className="w-[560px] max-w-[calc(100vw-48px)] overflow-hidden rounded-xl border border-border bg-glass shadow-2xl glass will-change-[opacity,transform]"
           onClick={(e) => e.stopPropagation()}
           data-testid="command-palette"
           initial={{ opacity: 0, scale: 0.98, y: -10 }}
@@ -447,7 +447,7 @@ export function CommandPalette() {
             >
               {filteredGroups.map((group) => (
                 <div key={group.id}>
-                  <div className="px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
+                  <div className="px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/60">
                     {group.label}
                   </div>
                   {group.items.map((item) => {
