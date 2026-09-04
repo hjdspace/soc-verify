@@ -79,7 +79,7 @@ const currentSessionId = useSessionCoreStore((s) => s.currentSessionId);
           <nav className="flex w-52 shrink-0 flex-col gap-0.5 overflow-y-auto border-r bg-accent/30 p-2">
             {navGroups.map((group) => (
               <div key={group.label}>
-                <div className="px-2.5 pb-1 pt-2.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                <div className="px-2.5 pb-1 pt-2.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/70">
                   {group.label}
                 </div>
                 {group.items.map((t) => (
