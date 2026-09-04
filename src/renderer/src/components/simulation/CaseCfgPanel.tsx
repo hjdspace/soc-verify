@@ -27,6 +27,8 @@ import {
   Play,
   Zap,
   Copy,
+  ChevronsDownUp,
+  ChevronsUpDown,
 } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
@@ -89,6 +91,7 @@ interface UdtbDialogState {
 export function CaseCfgPanel() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const selectCase = useSimulationStore((s) => s.selectCase);
+  const startCaseRuns = useSimulationStore((s) => s.startCaseRuns);
   const configProjEnv = useEnvStore((s) => s.config?.envVars.PROJ_ENV);
   const systemEnvVars = useEnvStore((s) => s.systemEnvVars);
   const loadSystemEnv = useEnvStore((s) => s.loadSystemEnv);
@@ -127,6 +130,8 @@ export function CaseCfgPanel() {
   const [subsystems, setSubsystems] = useState<SubsysInfo[]>([]);
   const [selectedSubsystems, setSelectedSubsystems] = useState<Set<string>>(new Set());
   const [refreshing, setRefreshing] = useState(false);
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedCases, setSelectedCases] = useState<Set<string>>(new Set());
   const [udtbDialog, setUdtbDialog] = useState<UdtbDialogState>({
     visible: false,
     currentSubsys: '',
@@ -253,6 +258,48 @@ export function CaseCfgPanel() {
       return next;
     });
   }, []);
+
+  const toggleCaseSelection = useCallback((id: string) => {
+    setSelectedCases((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  /** 展开全部：所有文件节点 + 所有含子用例的根用例 */
+  const expandAllNodes = useCallback(() => {
+    const files = new Set<string>();
+    const cases = new Set<string>();
+    const walk = (nodes: CaseTreeNode[]) => {
+      for (const node of nodes) {
+        if (node.type === 'file') files.add(node.path);
+        if (node.type === 'case' && node.children.length > 0) {
+          cases.add(node.caseData ? getCaseId(node.caseData) : node.name);
+        }
+        walk(node.children);
+      }
+    };
+    walk(caseTree);
+    setExpandedFiles(files);
+    setExpandedCases(cases);
+  }, [caseTree]);
+
+  /** 折叠全部：清空文件与用例的展开集合（保留根用例折叠为文件行） */
+  const collapseAllNodes = useCallback(() => {
+    setExpandedFiles(new Set());
+    setExpandedCases(new Set());
+  }, []);
+
+  /** 批量运行选中用例（与 CaseTreePanel.handleBatchRun 同语义） */
+  const handleBatchRun = useCallback(async () => {
+    if (!currentProjectId || selectedCases.size === 0) return;
+    const selected = allCases.filter((c) => selectedCases.has(getCaseId(c)));
+    await startCaseRuns(currentProjectId, selected);
+    setSelectedCases(new Set());
+    setBatchMode(false);
+  }, [currentProjectId, selectedCases, allCases, startCaseRuns]);
 
   const handleCaseSelect = (caseData: CaseData) => {
     const caseId = getCaseId(caseData);
@@ -574,6 +621,56 @@ export function CaseCfgPanel() {
       <div className="flex items-center justify-between gap-1 px-2 py-1.5 border-b border-border">
         <span className="text-xs font-medium text-foreground">自定义用例</span>
         <div className="flex items-center gap-0.5">
+          {loadedFiles.length > 0 && (
+            <>
+              <button
+                onClick={expandAllNodes}
+                title="展开全部"
+                disabled={batchMode}
+                className={cn(
+                  'rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
+                  batchMode && 'cursor-not-allowed opacity-50',
+                )}
+              >
+                <ChevronsUpDown className="h-3 w-3" />
+              </button>
+              <button
+                onClick={collapseAllNodes}
+                title="折叠全部"
+                disabled={batchMode}
+                className={cn(
+                  'rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
+                  batchMode && 'cursor-not-allowed opacity-50',
+                )}
+              >
+                <ChevronsDownUp className="h-3 w-3" />
+              </button>
+              <button
+                onClick={() => void handleRefresh()}
+                disabled={refreshing || loading}
+                className={cn(
+                  'rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
+                  (refreshing || loading) && 'cursor-not-allowed opacity-50',
+                )}
+                title="刷新全部自定义用例"
+              >
+                <RefreshCw className={cn('h-3 w-3', refreshing && 'animate-spin')} />
+              </button>
+            </>
+          )}
+          <button
+            onClick={() => {
+              setBatchMode(!batchMode);
+              setSelectedCases(new Set());
+            }}
+            className={cn(
+              'rounded px-1.5 py-0.5 text-[10px] transition-colors',
+              batchMode ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:bg-accent',
+            )}
+            title="批量选择模式"
+          >
+            批量
+          </button>
           <button
             onClick={() => void handleParseEnv()}
             disabled={scanning || !projEnv}
@@ -635,6 +732,26 @@ export function CaseCfgPanel() {
         </div>
       </div>
 
+      {/* ── Batch action bar ─────────────────────────── */}
+      {batchMode && selectedCases.size > 0 && (
+        <div className="mx-2 mb-1 flex items-center gap-1 rounded border border-border/50 bg-secondary/30 px-2 py-1">
+          <span className="text-[10px] text-muted-foreground">已选 {selectedCases.size} 个</span>
+          <button
+            onClick={() => void handleBatchRun()}
+            className="flex items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary hover:bg-primary/20"
+          >
+            <Play className="h-2.5 w-2.5" />
+            运行
+          </button>
+          <button
+            onClick={() => setSelectedCases(new Set())}
+            className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+          >
+            <X className="h-2.5 w-2.5" />
+          </button>
+        </div>
+      )}
+
       {/* ── Scrollable content area ───────────────────── */}
       <div className="flex-1 overflow-y-auto px-1 pb-2">
         {loading ? (
@@ -663,10 +780,10 @@ export function CaseCfgPanel() {
                 expandedCases={expandedCases}
                 toggleFile={toggleFile}
                 toggleCase={toggleCase}
-                batchMode={false}
-                selectedCases={new Set()}
+                batchMode={batchMode}
+                selectedCases={selectedCases}
                 selectedCaseId={selectedCaseId}
-                toggleCaseSelection={() => {}}
+                toggleCaseSelection={toggleCaseSelection}
                 onCaseSelect={handleCaseSelect}
                 onContextMenu={handleCaseContextMenu}
                 onFileContextMenu={handleFileContextMenu}
@@ -685,10 +802,10 @@ export function CaseCfgPanel() {
                 expandedCases={expandedCases}
                 toggleFile={toggleFile}
                 toggleCase={toggleCase}
-                batchMode={false}
-                selectedCases={new Set()}
+                batchMode={batchMode}
+                selectedCases={selectedCases}
                 selectedCaseId={selectedCaseId}
-                toggleCaseSelection={() => {}}
+                toggleCaseSelection={toggleCaseSelection}
                 onCaseSelect={handleCaseSelect}
                 onContextMenu={handleCaseContextMenu}
                 onFileContextMenu={handleFileContextMenu}
@@ -915,6 +1032,51 @@ export function CaseCfgPanel() {
             style={{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }}
             onClick={(e) => e.stopPropagation()}
           >
+            <button
+              onClick={() => {
+                const fp = contextMenu.fileNode!.path;
+                setExpandedFiles((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(fp)) next.delete(fp);
+                  else next.add(fp);
+                  return next;
+                });
+                setContextMenu((s) => ({ ...s, visible: false }));
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent"
+            >
+              {contextMenu.fileNode && expandedFiles.has(contextMenu.fileNode.path) ? (
+                <ChevronsDownUp className="h-3 w-3 text-muted-foreground" />
+              ) : (
+                <ChevronsUpDown className="h-3 w-3 text-muted-foreground" />
+              )}
+              <span>
+                {contextMenu.fileNode && expandedFiles.has(contextMenu.fileNode.path)
+                  ? '折叠'
+                  : '展开'}
+              </span>
+            </button>
+            <button
+              onClick={() => {
+                expandAllNodes();
+                setContextMenu((s) => ({ ...s, visible: false }));
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent"
+            >
+              <ChevronsUpDown className="h-3 w-3 text-muted-foreground" />
+              <span>展开全部</span>
+            </button>
+            <button
+              onClick={() => {
+                collapseAllNodes();
+                setContextMenu((s) => ({ ...s, visible: false }));
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent"
+            >
+              <ChevronsDownUp className="h-3 w-3 text-muted-foreground" />
+              <span>折叠全部</span>
+            </button>
+            <div className="border-t border-border/50" />
             <button
               onClick={handleRefresh}
               className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-accent"
