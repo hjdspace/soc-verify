@@ -681,7 +681,7 @@ function UncoveredItemRow({ item }: { item: UncoveredItem }) {
         </span>
       )}
       <span className="ml-auto text-muted-foreground">{item.description}</span>
-      <span className="rounded bg-destructive/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-destructive">
+      <span className="rounded bg-destructive/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em] text-destructive">
         GAP
       </span>
     </div>
