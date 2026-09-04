@@ -46,6 +46,26 @@ runner 启动时，omp 引擎的 loader（`loader-state.js`）在以下路径搜
 - **版本追踪**：`.natives-version` 文件记录提取的版本，子模块更新后自动重新提取
 - **baseline 变体**：x64 平台只要求 baseline 变体，兼容所有 CPU 并避免重复下载
 
+## RTL 三工具（download:rtl-tools）
+
+`npm run download:rtl-tools` 下载 Design View 依赖的三个 RTL 工具（版本锁定在 package.json）：
+
+| 工具 | 来源 | 版本字段 | 产物 |
+|------|------|----------|------|
+| yosys | OSS CAD Suite Windows tgz（选择性提取 ~70MB，非全量 568MB） | `ossCadSuiteVersion`（release 日期） | `yosys/yosys.exe` + `yosys/share/yosys/` + 8 DLL |
+| slang-server | hudson-trading/slang-server Releases | `slangServerVersion` | `slang-server/slang-server.exe` |
+| verible | chipsalliance/verible Releases | `veribleVersion` | `verible/verible-verilog-{lint,format}.exe` |
+
+- **yosys 的 8 个依赖 DLL（libstdc++-6 / libgcc_s_seh-1 / libwinpthread-1 / libffi-8 / libreadline8 / libtermcap-0 / tcl86 / zlib1）必须与 yosys.exe 同目录**——S0 实测 PATH 方式不生效。
+- 归档缓存在 `.cache/rtl-tools/`；离线网络可将 tgz/zip 手动放入该目录后重跑（已放置则跳过下载）。
+- 镜像：`--mirror <base>`（ghproxy 风格前缀）或 `--yosys-url/--slang-url/--verible-url` 单独覆盖。
+- 下载失败不阻断构建；运行时 `src/main/rtl/binary.ts` 解析路径并给出可用性状态（`trpc.rtl.toolsStatus`）。
+
+**版本升级验证点**（改 package.json 三个版本字段后必查）：
+
+1. `yosys.exe -p "help read_slang"` 帮助中 `--keep-hierarchy` 仍存在（elaboration 硬性要求，S0 实测不加会 flatten 整个设计）；
+2. yosys.exe 的 DLL 依赖集不变（当前 8 个，用 `pe-imports` 类工具核对；变化则同步更新 download-rtl-tools.mjs 的 `YOSYS_DLLS` 与 binary.ts）。
+
 ## 打包行为
 
 `electron-builder.yml` 已配置 `extraResources` 将本目录（排除 README.md）内嵌到安装包 `resources/binaries`，
