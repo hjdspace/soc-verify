@@ -86,7 +86,7 @@ export function RunDetailView() {
 
         {/* Options */}
         <div className="mb-4">
-          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">仿真选项</div>
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">仿真选项</div>
           <div className="rounded border border-border/50 bg-secondary/20 p-2">
             {Object.keys(detailRun.options).length === 0 ? (
               <span className="text-[11px] text-muted-foreground">无选项</span>
@@ -107,7 +107,7 @@ export function RunDetailView() {
         {detailRun.compileErrors && detailRun.compileErrors.length > 0 && (
           <div className="mb-4">
             <div className="mb-1 flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                 编译错误 ({detailRun.compileErrors.length})
               </span>
               <button
