@@ -455,6 +455,23 @@ describe('Case Database Repository', () => {
         expect.objectContaining({ runId: 'run-pass', status: 'pass' }),
       ]);
     });
+
+    it('merges runs of the same case even when subsys differs (historical bad rows)', () => {
+      // 同一用例因启动入口不同曾写下不同 subsys（历史 bug），运行列表
+      // 每个用例只展示最新一条，不应拆成两行
+      insertSimulationRun(db, {
+        runId: 'run-bad', caseName: 'same_case', subsys: 'ai_sys', status: 'fail',
+        startTime: '2024-01-02T10:00:00.000Z',
+      });
+      insertSimulationRun(db, {
+        runId: 'run-good', caseName: 'same_case', subsys: 'top', status: 'pass',
+        startTime: '2024-01-03T10:00:00.000Z',
+      });
+
+      expect(getRecentSimulationRuns(db)).toEqual([
+        expect.objectContaining({ runId: 'run-good', subsys: 'top', status: 'pass' }),
+      ]);
+    });
   });
 
   describe('getLatestRunStatus', () => {
