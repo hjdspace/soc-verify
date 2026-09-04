@@ -540,7 +540,7 @@ function ModuleSortTable({ tree, loading, onOpen }: {
       <div
         className={cn(
           MODULE_GRID,
-          'gap-2 border-b border-border px-3.5 py-2 text-[10.5px] uppercase tracking-wider text-muted-foreground/70',
+          'gap-2 border-b border-border px-3.5 py-2 text-[10.5px] uppercase tracking-[0.08em] text-muted-foreground/70',
         )}
       >
         {SORTABLE_COLS.map(({ key, label }) => (
