@@ -22,7 +22,7 @@ import {
   launchVerisiumForRun,
 } from '../../simulation/eda-tool-launcher';
 import { caseStatsRegistry } from '../../case/case-stats-registry';
-import { getRecentSimulationRuns } from '../../case/db/case-repository';
+import { getRecentSimulationRuns, getCaseNameToSubsysMap } from '../../case/db/case-repository';
 import type { SimulationRunOptions } from '@shared/plugin-types';
 import type { SimulationRunRecord } from '../../simulation/simulation-manager';
 import type { SimulationStatus } from '@shared/types';
@@ -169,6 +169,16 @@ export const simulationRouter = t.router({
         cwd: run.cwd,
       }));
       const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
+      // 用例真实子系统以 cases 表为准：启动入口（命令栏/重跑/插件）传入的
+      // subsys 可能是全局选中的子系统而非用例实际所属子系统（历史数据也可能
+      // 已写错），这里统一校正，避免运行列表显示错误子系统。
+      const subsysByCaseName = getCaseNameToSubsysMap(db);
+      const normalizeSubsys = (run: ListedRun): ListedRun => {
+        const canonical = subsysByCaseName.get(run.options.caseName ?? run.options.caseId);
+        return canonical && canonical !== run.options.subsys
+          ? { ...run, options: { ...run.options, subsys: canonical } }
+          : run;
+      };
       const persistedRuns: ListedRun[] = getRecentSimulationRuns(db).map((run) => ({
         runId: run.runId ?? `persisted-${run.id}`,
         projectId: input.projectId,
@@ -192,9 +202,13 @@ export const simulationRouter = t.router({
       }));
       // The DB stores every execution, but the run list represents each case's
       // latest state. Live records are appended last so they override history.
+      // 合并键只用 caseId：subsys 来自启动入口，同一用例可能因入口不同（命令栏
+      // 用全局选中子系统 vs 用例树用真实子系统）带上不同 subsys，若参与键组成
+      // 会导致同一用例在列表中出现两行。
       const byCase = new Map<string, ListedRun>();
       for (const run of [...persistedRuns, ...activeRuns, ...terminalRuns]) {
-        byCase.set(`${run.options.caseId}\u0000${run.options.subsys}`, run);
+        const normalized = normalizeSubsys(run);
+        byCase.set(normalized.options.caseId, normalized);
       }
       return Array.from(byCase.values()).sort((a, b) => b.startTime - a.startTime);
     }),
