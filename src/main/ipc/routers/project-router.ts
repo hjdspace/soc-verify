@@ -17,7 +17,7 @@ import { getFileDiff, applyRejections } from '../../diff/diff-engine';
 import { caseStatsRegistry } from '../../case/case-stats-registry';
 import { simulationRegistry } from '../../simulation/simulation-registry';
 import type { CaseStatsService } from '../../case/case-stats-service';
-import { getScanMetadata, getSubsysWithCaseCount } from '../../case/db/case-repository';
+import { getScanMetadata, getSubsysWithCaseCount, getCaseNameToSubsysMap } from '../../case/db/case-repository';
 import type {
   PluginConfig,
   PluginConfigEntry,
@@ -387,6 +387,23 @@ export const projectRouter = t.router({
     .mutation(async ({ input }) => {
       const statsService = await getCaseStatsService(input.projectId);
       return statsService.setCasePostSim(input.caseName, input.subsys, input.postSim);
+    }),
+
+  /** 按用例名查其真实所属子系统（cases 表为准）。
+   *  命令栏等入口只有用例名（CASE 字段为用户手填），启动仿真前用此接口
+   *  解析子系统，避免误用全局选中的子系统。查不到返回 null。 */
+  getCaseSubsys: t.procedure
+    .input((raw): { projectId: string; caseName: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.caseName !== 'string' || !r.caseName) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and caseName are required' });
+      }
+      return { projectId: r.projectId, caseName: r.caseName };
+    })
+    .query(({ input }) => {
+      const project = requireProject(input.projectId);
+      const db = caseStatsRegistry.getOrCreateDb(project.rootPath);
+      return { subsys: getCaseNameToSubsysMap(db).get(input.caseName) ?? null };
     }),
 
   searchCases: t.procedure
