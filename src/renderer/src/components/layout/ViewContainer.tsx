@@ -54,7 +54,9 @@ const KEEP_ALIVE_VIEWS: ReadonlySet<ActiveView> = new Set(['simulation']);
  * docked 模式的 AI 右栏由 AppShell 全局渲染，所有视图共享。
  *
  * 视图切换过渡：popLayout 让旧视图退出时脱离文档流（绝对定位原位淡出），
- * 新视图同时入场，160ms 交叉淡入避免硬切。
+ * 新视图同时入场，交叉淡入避免硬切。过渡用临界欠阻尼弹簧
+ * （damping 0.8 / response 0.3，apple-design §4：弹簧无固定时长、
+ * 目标切换时从当前展示值继续，比固定时长 ease 更自然）。
  *
  * 性能（keep-alive）：KEEP_ALIVE_VIEWS 中的视图首次激活后常驻 DOM，
  * 切走时 display:none 而非卸载（卸载会丢弃已加载的子系统/用例树状态，
@@ -96,8 +98,8 @@ export function ViewContainer() {
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
-            className="flex min-h-0 flex-1 flex-col overflow-hidden"
+            transition={{ type: 'spring', stiffness: 439, damping: 33 }}
+            className="flex min-h-0 flex-1 flex-col overflow-hidden will-change-[opacity,transform]"
           >
             {renderActiveView(activeView)}
           </motion.div>
