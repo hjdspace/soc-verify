@@ -107,16 +107,17 @@ export default function App() {
   useBrowserShortcuts();
 
   // Tool window: render ToolApp instead of AppShell
+  // （根 div 不再挂 .theme-transition —— 主题过渡由 startViewTransition 驱动）
   if (toolMode) {
     return (
-      <div className="theme-transition h-screen w-screen">
+      <div className="h-screen w-screen">
         <ToolApp />
       </div>
     );
   }
 
   return (
-    <div className="theme-transition h-screen w-screen">
+    <div className="h-screen w-screen">
       <AppShell />
       <ToastContainer />
     </div>
