@@ -10,6 +10,7 @@
 
 import { useState, useMemo } from 'react';
 import { Play, Copy, AlertCircle } from 'lucide-react';
+import { trpc } from '@renderer/lib/trpc';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore, type SimulationCase } from '@renderer/stores/simulation';
 import { useToastStore } from '@renderer/stores/toast';
@@ -42,9 +43,22 @@ export function SimCommandBar() {
       return;
     }
     setRunning(true);
+    // CASE 名常为用户手填，全局选中的子系统（selectedSubsys）只是树上最后
+    // 点击的节点，不一定是该用例真实所属子系统。以 cases 表为准解析；
+    // 查不到（未扫描的新用例）再回退到选中子系统。
+    let subsys = selectedSubsys ?? '';
+    try {
+      const result = await trpc.project.getCaseSubsys.query({
+        projectId: currentProjectId,
+        caseName,
+      });
+      if (result.subsys) subsys = result.subsys;
+    } catch {
+      // best-effort：解析失败回退到选中子系统
+    }
     const simCase: SimulationCase = {
       name: caseName,
-      subsys: selectedSubsys ?? '',
+      subsys,
       base: typeof simOptions.base === 'string' ? simOptions.base : undefined,
       block: typeof simOptions.block === 'string' ? simOptions.block : undefined,
     };
