@@ -449,7 +449,7 @@ function RecentFilesSection() {
 
   return (
     <div className="border-t border-border/50 px-2 py-1.5" data-testid="recent-files">
-      <div className="mb-1 flex items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="mb-1 flex items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
         <History className="h-2.5 w-2.5" />
         最近打开
       </div>
@@ -565,7 +565,7 @@ function FileTreeSection({
     <div className="flex flex-col gap-1">
       {/* 全局刷新按钮 */}
       <div className="mb-0.5 flex items-center justify-between">
-        <span className="px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="px-1 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
           文件树
         </span>
         <button
@@ -587,7 +587,7 @@ function FileTreeSection({
         >
           {/* 分组标题行 + 「+」按钮 */}
           <div className="flex items-center justify-between border-b border-border/30 pb-0.5">
-            <span className="px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+            <span className="px-1 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/80">
               {GROUP_LABELS[group]}
             </span>
             <button
