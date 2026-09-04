@@ -82,7 +82,7 @@ export function KbCategoryTree() {
 
   return (
     <aside className="flex w-52 shrink-0 flex-col overflow-y-auto border-r border-border bg-card p-2">
-      <div className="mb-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="mb-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
         分类（AI 自动归类）
       </div>
 
