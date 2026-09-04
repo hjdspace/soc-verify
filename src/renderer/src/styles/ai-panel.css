@@ -548,12 +548,17 @@ html[data-shade='dark'] .ai-panel {
 
 /* ── 助手 Markdown 排版（DSH §8 缩放至侧栏：12/20 基准）────
    全局生效：MarkdownRenderer 也用于设置页技能预览（面板外），
-   令牌经 :root/[data-shade] 取到正确的亮暗值。 */
+   令牌经 :root/[data-shade] 取到正确的亮暗值。
+   apple-design §15：tracking 随字号联动——大字号负 tracking、小字号微正；
+   optical sizing 开启变量字重随字号自动调形。 */
 .markdown-body {
   font-size: 12px;
   line-height: 20px;
   color: var(--dsw-label-primary);
   overflow-wrap: anywhere;
+  /* 12px 小字号微正 tracking 提高可读性（§15） */
+  letter-spacing: 0.01em;
+  font-optical-sizing: auto;
 }
 .markdown-body strong {
   font-weight: 600;
@@ -566,13 +571,15 @@ html[data-shade='dark'] .ai-panel {
 .markdown-body h6 {
   color: var(--dsw-label-primary);
   line-height: 1.4;
+  /* 标题随字号递增收紧 tracking（§15：large display text wants negative tracking） */
+  letter-spacing: -0.01em;
 }
-.markdown-body h1 { font-size: 14px; font-weight: 700; margin: 14px 0 8px; }
-.markdown-body h2 { font-size: 13px; font-weight: 700; margin: 13px 0 7px; }
-.markdown-body h3 { font-size: 12px; font-weight: 600; margin: 12px 0 6px; }
+.markdown-body h1 { font-size: 14px; font-weight: 700; margin: 14px 0 8px; letter-spacing: -0.015em; }
+.markdown-body h2 { font-size: 13px; font-weight: 700; margin: 13px 0 7px; letter-spacing: -0.01em; }
+.markdown-body h3 { font-size: 12px; font-weight: 600; margin: 12px 0 6px; letter-spacing: -0.005em; }
 .markdown-body h4,
 .markdown-body h5,
-.markdown-body h6 { font-size: 12px; font-weight: 600; margin: 12px 0 6px; }
+.markdown-body h6 { font-size: 12px; font-weight: 600; margin: 12px 0 6px; letter-spacing: -0.005em; }
 .markdown-body p {
   margin: 8px 0;
   line-height: 20px;
