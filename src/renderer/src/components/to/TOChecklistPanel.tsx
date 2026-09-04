@@ -100,7 +100,7 @@ export function TOChecklistPanel() {
       <div className="space-y-3">
         {Object.entries(grouped).map(([category, catItems]) => (
           <div key={category}>
-            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
               {CATEGORY_LABELS[category] ?? category}
             </div>
             <div className="space-y-1">
