@@ -149,7 +149,7 @@ export function KbPreviewTab() {
 
       {/* 右侧元信息侧栏 */}
       <aside className="flex w-60 shrink-0 flex-col gap-3 overflow-y-auto border-l border-border bg-card p-4">
-        <h3 className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <h3 className="text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
           文档信息
         </h3>
 
