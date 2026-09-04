@@ -1,4 +1,6 @@
+import { useEffect } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
+import { cn } from '@renderer/lib/utils';
 import { useUiStore, type ActiveView } from '@renderer/stores/ui';
 import { CenterArea } from './CenterArea';
 import { DashboardView } from '@renderer/components/views/DashboardView';
@@ -38,6 +40,10 @@ function renderActiveView(view: ActiveView) {
   }
 }
 
+/** 需要 keep-alive 的视图：切走时保留 DOM（隐藏），切回零挂载成本。
+ * 仿真视图含万级用例树 + 运行列表，全量重建是切换卡顿的主因。 */
+const KEEP_ALIVE_VIEWS: ReadonlySet<ActiveView> = new Set(['simulation']);
+
 /**
  * 视图路由容器：按 ui.activeView 渲染五个视图。
  * 总览视图为 Mission Control 仪表盘（Issue #3）；
@@ -49,22 +55,54 @@ function renderActiveView(view: ActiveView) {
  *
  * 视图切换过渡：popLayout 让旧视图退出时脱离文档流（绝对定位原位淡出），
  * 新视图同时入场，160ms 交叉淡入避免硬切。
+ *
+ * 性能（keep-alive）：KEEP_ALIVE_VIEWS 中的视图首次激活后常驻 DOM，
+ * 切走时 display:none 而非卸载（卸载会丢弃已加载的子系统/用例树状态，
+ * 切回需重建上万 CaseTreeItem 导致明显卡顿）。AnimatePresence 只负责
+ * 非 keep-alive 视图的交叉淡入；keep-alive 视图由 KeepAliveLayer 承载，
+ * 避免同一视图双实例竞争 tRPC 事件与 store 订阅。
  */
 export function ViewContainer() {
   const activeView = useUiStore((s) => s.activeView);
+  const simulationViewMounted = useUiStore((s) => s.simulationViewMounted);
+  const setSimulationViewMounted = useUiStore((s) => s.setSimulationViewMounted);
+
+  // keep-alive 视图首次激活时置位（effect 内 set，渲染期无副作用）
+  useEffect(() => {
+    if (activeView === 'simulation' && !simulationViewMounted) {
+      setSimulationViewMounted(true);
+    }
+  }, [activeView, simulationViewMounted, setSimulationViewMounted]);
 
   return (
-    <AnimatePresence mode="popLayout" initial={false}>
-      <motion.div
-        key={activeView}
-        initial={{ opacity: 0, y: 6 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: -6 }}
-        transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
-        className="flex min-h-0 flex-1 flex-col overflow-hidden"
-      >
-        {renderActiveView(activeView)}
-      </motion.div>
-    </AnimatePresence>
+    <>
+      {/* keep-alive 层：仿真视图挂载后常驻，仅激活时可见 */}
+      {simulationViewMounted && (
+        <div
+          className={cn(
+            'min-h-0 flex-1 flex-col overflow-hidden',
+            activeView === 'simulation' ? 'flex' : 'hidden',
+          )}
+          aria-hidden={activeView !== 'simulation'}
+        >
+          <SimulationView />
+        </div>
+      )}
+      <AnimatePresence mode="popLayout" initial={false}>
+        {/* keep-alive 视图激活时由上方常驻层渲染，此层跳过 */}
+        {!KEEP_ALIVE_VIEWS.has(activeView) && (
+          <motion.div
+            key={activeView}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.16, ease: [0.23, 1, 0.32, 1] }}
+            className="flex min-h-0 flex-1 flex-col overflow-hidden"
+          >
+            {renderActiveView(activeView)}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
   );
 }
