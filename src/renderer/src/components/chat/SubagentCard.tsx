@@ -123,7 +123,7 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
           <span className="truncate text-xs font-semibold text-foreground">{agent.agent}</span>
           <span
             className={cn(
-              'rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide',
+              'rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]',
               agent.status === 'running' && 'bg-primary/15 text-primary',
               agent.status === 'completed' && 'bg-status-pass/15 text-status-pass-foreground',
               agent.status === 'failed' && 'bg-destructive/15 text-destructive',
@@ -147,7 +147,7 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
             className="max-h-40 overflow-y-auto border-b border-[var(--dsw-border-l1)] px-3 py-2"
             data-testid="subagent-assignment"
           >
-            <div className="mb-1 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/60">
+            <div className="mb-1 text-[9px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/60">
               任务指令
             </div>
             <MarkdownRenderer content={agent.assignment ?? agent.description ?? ''} />
