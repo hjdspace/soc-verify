@@ -83,14 +83,32 @@ interface ThemeState {
   initTheme: () => void;
 }
 
+/**
+ * 主题切换跨帧淡入（View Transitions）。
+ *
+ * 为什么不用 `.theme-transition *`（全局 transition）：那会在切换瞬间给
+ * 数千个 DOM 元素同时启动 color/border 过渡，主线程要持续 200ms 逐帧
+ * 计算样式 + 重绘，列表/树重的视图直接掉帧。View Transition 由合成器
+ * 承担新旧两帧的交叉淡化，DOM 只需一次变量翻转，主线程零逐帧成本。
+ * 不支持时（旧内核 / jsdom）退化为立即切换——主题本身是离散值，
+ * 无动画不影响正确性。
+ */
 function applyTheme(id: string) {
   const theme = THEMES.find((t) => t.id === id);
   const root = document.documentElement;
-  root.dataset.theme = id;
-  // 明暗档位（light/dark）：供局部设计语言（如 AI 面板 dsw 色板）切换亮暗令牌
-  root.dataset.shade = theme?.mode ?? 'dark';
-  // 设置 color-scheme 让原生控件（scrollbar 等）也跟随
-  root.style.colorScheme = theme?.mode ?? 'dark';
+  const doApply = () => {
+    root.dataset.theme = id;
+    // 明暗档位（light/dark）：供局部设计语言（如 AI 面板 dsw 色板）切换亮暗令牌
+    root.dataset.shade = theme?.mode ?? 'dark';
+    // 设置 color-scheme 让原生控件（scrollbar 等）也跟随
+    root.style.colorScheme = theme?.mode ?? 'dark';
+  };
+  const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+  if (prefersReducedMotion || !document.startViewTransition) {
+    doApply();
+  } else {
+    document.startViewTransition(doApply);
+  }
 }
 
 function resolveThemeId(saved: string | null): string {
