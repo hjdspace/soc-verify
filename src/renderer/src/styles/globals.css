@@ -942,17 +942,35 @@ body {
   background: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
 }
 
-/* ── 主题切换过渡动画 ─────────────────────────────────────────── */
-.theme-transition,
-.theme-transition * {
-  transition: background-color 200ms ease, border-color 200ms ease,
-    color 200ms ease;
+/* ── 主题切换过渡动画 ───────────────────────────────────────────
+   由 theme.ts applyTheme() 的 document.startViewTransition() 驱动：
+   合成器对新旧两帧做交叉淡化，DOM 只翻转一次 CSS 变量（主线程零逐帧
+   成本）。旧方案 `.theme-transition *` 会同时启动数千个元素的
+   color/border 过渡，重列表视图切换主题时明显掉帧，已废弃。
+   ::view-transition-* 由 root 元素（html）默认命名承载，无需
+   view-transition-name 声明。 */
+::view-transition-old(root),
+::view-transition-new(root) {
+  /* 只淡化、不位移：新旧画面内容一致（仅颜色不同），默认滑动反而闪跳 */
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-old(root) {
+  /* 新画面在上层淡入，旧画面静止在下层兜底（防一帧白屏） */
+  z-index: 1;
+}
+
+::view-transition-new(root) {
+  animation-duration: 200ms;
+  animation-timing-function: ease;
+  z-index: 2;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .theme-transition,
-  .theme-transition * {
-    transition: none;
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
   }
 }
 
