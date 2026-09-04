@@ -179,7 +179,7 @@ export function DatabaseViewer({ filePath }: DatabaseViewerProps) {
       {/* ── 左侧：表列表 ───────────────────────────── */}
       <div className="flex w-48 shrink-0 flex-col border-r bg-secondary/20">
         <div className="flex items-center justify-between border-b px-2 py-1.5">
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
             <DatabaseIcon className="h-3 w-3" />
             数据库表
           </div>
@@ -319,7 +319,7 @@ function SchemaTabContent({ filePath, table }: { filePath: string; table: string
     <div className="flex-1 overflow-auto p-3">
       {/* 建表 SQL */}
       <div className="mb-4">
-        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
           建表语句
         </div>
         <pre className="overflow-auto rounded-md border border-border/50 bg-secondary/20 p-3 text-xs">
@@ -329,7 +329,7 @@ function SchemaTabContent({ filePath, table }: { filePath: string; table: string
 
       {/* 列定义 */}
       <div>
-        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="mb-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
           列定义 ({schema.columns.length})
         </div>
         <table className="w-full text-xs">
