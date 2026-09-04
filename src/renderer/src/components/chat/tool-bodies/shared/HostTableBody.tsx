@@ -11,7 +11,7 @@ export function StatusBadge({ status }: { status: string }) {
       : s === 'running' || s === 'active'
         ? 'bg-primary/15 text-primary'
         : 'bg-secondary text-muted-foreground';
-  return <span className={cn('rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide', cls)}>{status || 'unknown'}</span>;
+  return <span className={cn('rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]', cls)}>{status || 'unknown'}</span>;
 }
 
 /** Host table body: renders JSON array as a table with configurable columns. */
@@ -35,7 +35,7 @@ export function HostTableBody({ resultText, columns, emptyMessage }: { resultTex
         <thead>
           <tr className="border-b border-border/40 bg-background/50">
             {columns.map((col) => (
-              <th key={col.key} className="px-2.5 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/60">{col.label}</th>
+              <th key={col.key} className="px-2.5 py-1 text-left text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/60">{col.label}</th>
             ))}
           </tr>
         </thead>
