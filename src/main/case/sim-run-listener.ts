@@ -17,7 +17,7 @@ import type Database from 'better-sqlite3';
 import type { CaseDatabase } from './db/case-database';
 import type { SimulationRunRecord } from '../simulation/simulation-manager';
 import type { SimulationRunRow } from './db/case-repository';
-import { insertSimulationRun } from './db/case-repository';
+import { insertSimulationRun, getCaseNameToSubsysMap } from './db/case-repository';
 import type { TerminalSimRun } from '../simulation/sim-terminal-linker';
 
 /**
@@ -76,6 +76,21 @@ function toTerminalRunRow(record: TerminalSimRun): SimulationRunRow {
 }
 
 /**
+ * 以 cases 表为准解析用例的真实子系统。
+ *
+ * 启动入口传入的 subsys 可能是全局选中的子系统而非用例实际所属子系统
+ * （如命令栏从 Option 面板运行时），直接持久化会导致概览/回归按错误的
+ * 子系统统计。cases 表查不到（未扫描到的新用例）时保留原值。
+ */
+function resolveSubsys(db: Database.Database, caseName: string, fallback: string): string {
+  try {
+    return getCaseNameToSubsysMap(db).get(caseName) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/**
  * 监听 SimulationManager 的 run:completed 事件，
  * 将仿真运行记录持久化到 simulation_runs 表。
  */
@@ -131,6 +146,7 @@ export class SimulationRunListener {
   private handleRunCompleted(record: SimulationRunRecord): void {
     try {
       const row = toRunRow(record);
+      row.subsys = resolveSubsys(this.db, row.caseName, row.subsys);
       insertSimulationRun(this.db, row);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -173,7 +189,9 @@ export class TerminalSimulationRunListener {
   private persist(record: TerminalSimRun): void {
     if (record.projectId !== this.projectId) return;
     try {
-      insertSimulationRun(this.db, toTerminalRunRow(record));
+      const row = toTerminalRunRow(record);
+      row.subsys = resolveSubsys(this.db, row.caseName, row.subsys);
+      insertSimulationRun(this.db, row);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`[sim-run-listener] Failed to persist terminal simulation run to DB: ${msg}`);
