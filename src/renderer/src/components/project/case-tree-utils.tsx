@@ -4,6 +4,7 @@ import {
   CircleDot,
   Play,
 } from 'lucide-react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { cn } from '@renderer/lib/utils';
 
 // ─── Types ──────────────────────────────────────────────
@@ -156,6 +157,86 @@ export function buildCaseTree(cases: CaseData[]): CaseTreeNode[] {
   return tree;
 }
 
+// ─── 大列表虚拟化 ────────────────────────────────────────
+
+/** 树行高（py-0.5 + text-xs ≈ 24px），虚拟切片的滚动量纲 */
+const TREE_ROW_HEIGHT = 24;
+/** 可见区上下额外渲染的行数，滚动时不露白 */
+const TREE_OVERSCAN = 10;
+/** 超过该阈值才启用虚拟切片；小列表全量渲染避免测量开销 */
+const VIRTUALIZE_THRESHOLD = 100;
+
+type VirtualChildrenProps = {
+  /** 该文件节点下的直接子项（CaseTreeItem 列表） */
+  children: React.ReactNode[];
+  /** 展开状态变化时父级滚动容器可能重排，用 key 变化触发重新测量 */
+};
+
+/**
+ * 文件节点的直接子项虚拟列表。
+ *
+ * 万级用例场景下一个 cfg 文件可含数千子项，全量挂载 DOM 会导致
+ * 首帧构建与样式计算阻塞（切换视图卡顿主因）。这里按滚动容器
+ * 可视高度切片渲染：仅渲染可见区 ± overscan 的行，其余以等高
+ * spacer 占位，保证滚动条与实际内容高度一致。
+ *
+ * 用 ResizeObserver 而非固定视口高度，适配左栏拖拽变宽/窗口缩放。
+ */
+function VirtualChildren({ children }: VirtualChildrenProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(600);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    // 向上找到可滚动的父容器（面板内容区）测量视口并监听滚动
+    const scroller = findScrollParent(el);
+    if (!scroller) return;
+
+    const updateViewport = () => setViewportHeight(scroller.clientHeight);
+    const onScroll = () => setScrollTop(scroller.scrollTop);
+
+    updateViewport();
+    scroller.addEventListener('scroll', onScroll, { passive: true });
+    const observer = new ResizeObserver(updateViewport);
+    observer.observe(scroller);
+
+    return () => {
+      scroller.removeEventListener('scroll', onScroll);
+      observer.disconnect();
+    };
+  }, []);
+
+  const total = children.length;
+  const startIndex = Math.max(0, Math.floor(scrollTop / TREE_ROW_HEIGHT) - TREE_OVERSCAN);
+  const endIndex = Math.min(total, Math.ceil((scrollTop + viewportHeight) / TREE_ROW_HEIGHT) + TREE_OVERSCAN);
+  const visible = children.slice(startIndex, endIndex);
+
+  return (
+    <div ref={containerRef} className="relative">
+      {startIndex > 0 && (
+        <div style={{ height: startIndex * TREE_ROW_HEIGHT }} aria-hidden />
+      )}
+      {visible}
+      {endIndex < total && (
+        <div style={{ height: (total - endIndex) * TREE_ROW_HEIGHT }} aria-hidden />
+      )}
+    </div>
+  );
+}
+
+/** 沿 DOM 向上找最近的可滚动祖先（overflow-y auto/scroll） */
+function findScrollParent(el: HTMLElement): HTMLElement | null {
+  let node: HTMLElement | null = el.parentElement;
+  while (node) {
+    const overflowY = window.getComputedStyle(node).overflowY;
+    if (overflowY === 'auto' || overflowY === 'scroll') return node;
+    node = node.parentElement;
+  }
+  return null;
+}
+
 // ─── CaseTreeItem ───────────────────────────────────────
 
 export type CaseTreeItemProps = {
@@ -175,7 +256,7 @@ export type CaseTreeItemProps = {
   onRunCase: (caseData: CaseData) => void;
 };
 
-export function CaseTreeItem({
+export const CaseTreeItem = memo(function CaseTreeItem({
   node,
   level,
   expandedFiles,
@@ -195,6 +276,30 @@ export function CaseTreeItem({
 
   if (node.type === 'file') {
     const isExpanded = expandedFiles.has(node.path);
+    const childItems = node.children.map((child, idx) => (
+      <div
+        key={child.caseData ? getCaseId(child.caseData) : `${child.path}::${child.name}::${idx}`}
+        className="tree-item-enter animate-[tree-item-enter_200ms_var(--ease-out)_both]"
+        style={{ animationDelay: `${Math.min(idx * 30, 200)}ms` }}
+      >
+        <CaseTreeItem
+          node={child}
+          level={level + 1}
+          expandedFiles={expandedFiles}
+          expandedCases={expandedCases}
+          toggleFile={toggleFile}
+          toggleCase={toggleCase}
+          batchMode={batchMode}
+          selectedCases={selectedCases}
+          selectedCaseId={selectedCaseId}
+          toggleCaseSelection={toggleCaseSelection}
+          onCaseSelect={onCaseSelect}
+          onContextMenu={onContextMenu}
+          onFileContextMenu={onFileContextMenu}
+          onRunCase={onRunCase}
+        />
+      </div>
+    ));
     return (
       <div>
         <button
@@ -220,30 +325,11 @@ export function CaseTreeItem({
           )}
         >
           <div className="overflow-hidden">
-            {node.children.map((child, idx) => (
-              <div
-                key={child.caseData ? getCaseId(child.caseData) : `${child.path}::${child.name}::${idx}`}
-                className="tree-item-enter animate-[tree-item-enter_200ms_var(--ease-out)_both]"
-                style={{ animationDelay: `${Math.min(idx * 30, 200)}ms` }}
-              >
-                <CaseTreeItem
-                  node={child}
-                  level={level + 1}
-                  expandedFiles={expandedFiles}
-                  expandedCases={expandedCases}
-                  toggleFile={toggleFile}
-                  toggleCase={toggleCase}
-                  batchMode={batchMode}
-                  selectedCases={selectedCases}
-                  selectedCaseId={selectedCaseId}
-                  toggleCaseSelection={toggleCaseSelection}
-                  onCaseSelect={onCaseSelect}
-                  onContextMenu={onContextMenu}
-                  onFileContextMenu={onFileContextMenu}
-                  onRunCase={onRunCase}
-                />
-              </div>
-            ))}
+            {node.children.length > VIRTUALIZE_THRESHOLD ? (
+              isExpanded && <VirtualChildren>{childItems}</VirtualChildren>
+            ) : (
+              childItems
+            )}
           </div>
         </div>
       </div>
@@ -377,4 +463,4 @@ export function CaseTreeItem({
       )}
     </div>
   );
-}
+});
