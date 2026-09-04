@@ -75,10 +75,29 @@ describe('TokenOverviewPanel — 渲染', () => {
     await waitFor(() => {
       expect(screen.getByTestId('token-kpi-today')).toBeInTheDocument();
     });
-    expect(screen.getByTestId('token-kpi-today').textContent).toContain('12,000');
-    expect(screen.getByTestId('token-kpi-month').textContent).toContain('150,000');
-    expect(screen.getByTestId('token-kpi-total').textContent).toContain('500,000');
+    expect(screen.getByTestId('token-kpi-today').textContent).toContain('1.2万');
+    expect(screen.getByTestId('token-kpi-month').textContent).toContain('15万');
+    expect(screen.getByTestId('token-kpi-total').textContent).toContain('50万');
     expect(screen.getByTestId('token-kpi-cost').textContent).toContain('$0.038');
+  });
+
+  it('KPI 数值按万 / 亿 / 万亿档位显示中文单位', async () => {
+    mockSummaryQuery.mockResolvedValue({
+      todayTokens: 9500,
+      monthTokens: 1.2e8,
+      totalTokens: 2.5e12,
+      todayCostUsd: 0.038,
+      currentStreak: 3,
+      longestStreak: 5,
+    });
+    render(<TokenOverviewPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId('token-kpi-today')).toBeInTheDocument();
+    });
+    // 不足 1 万时保留千分位
+    expect(screen.getByTestId('token-kpi-today').textContent).toContain('9,500');
+    expect(screen.getByTestId('token-kpi-month').textContent).toContain('1.2亿');
+    expect(screen.getByTestId('token-kpi-total').textContent).toContain('2.5万亿');
   });
 
   it('加载后显示 streak 统计（连续 + 最长）', async () => {
@@ -162,6 +181,25 @@ describe('TokenOverviewPanel — 热力图', () => {
     await waitFor(() => {
       expect(screen.getByTestId('token-heatmap')).toBeInTheDocument();
     });
+  });
+
+  it('悬停格子显示紧凑单位 Token 与精确值', async () => {
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    useTokenStore.setState({
+      heatmap: [{ date: todayStr, totalTokens: 123456, costUsd: 0.5 }],
+      loadedForProject: 'proj-1',
+    });
+
+    render(<TokenOverviewPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId(`token-heatmap-cell-${todayStr}`)).toBeInTheDocument();
+    });
+
+    fireEvent.mouseEnter(screen.getByTestId(`token-heatmap-cell-${todayStr}`));
+    const tooltip = await screen.findByTestId('token-heatmap-tooltip');
+    expect(tooltip.textContent).toContain('12.35万');
+    expect(tooltip.textContent).toContain('123,456');
   });
 
   it('空热力图数据显示空状态文案', async () => {
