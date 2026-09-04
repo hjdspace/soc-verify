@@ -100,7 +100,7 @@ export function ToolsDropdown() {
 
       {open && (
         <div className="absolute right-0 top-full z-50 mt-1 max-h-[70vh] w-64 overflow-auto rounded-md border border-border bg-popover shadow-lg">
-          <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
             工作区工具
           </div>
           <button
@@ -122,7 +122,7 @@ export function ToolsDropdown() {
             if (!tools || tools.length === 0) return null;
             return (
               <div key={cat}>
-                <div className="sticky top-0 bg-popover px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <div className="sticky top-0 bg-popover px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
                   {TOOL_CATEGORY_LABELS[cat]}
                 </div>
                 {tools.map((tool) => (
