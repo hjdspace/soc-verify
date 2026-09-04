@@ -351,15 +351,28 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
         outputRestored = true;
       });
 
-    const resizeObserver = new ResizeObserver(() => {
-      if (fitRef.current && termRef.current) {
-        try {
-          fitRef.current.fit();
-        } catch {
-          // ignore fit errors during teardown
+    // ── 窗口 resize 期间的 fit 防抖 ─────────────────────────────
+    // fit() 每次调用都全量重算网格并整屏重绘。拖拽窗口边框 / 最大化时
+    // ResizeObserver 每帧回调，同步 fit 会让 10 万行 scrollback 的
+    // 整屏重绘挤占主线程（掉帧直到 resize 结束）。聚到一帧只在尺寸
+    // 停稳后做一次。
+    let fitPending = false;
+    const scheduleFit = () => {
+      if (fitPending) return;
+      fitPending = true;
+      window.requestAnimationFrame(() => {
+        fitPending = false;
+        if (fitRef.current && termRef.current) {
+          try {
+            fitRef.current.fit();
+          } catch {
+            // ignore fit errors during teardown
+          }
         }
-      }
-    });
+      });
+    };
+
+    const resizeObserver = new ResizeObserver(scheduleFit);
     resizeObserver.observe(containerRef.current);
 
     void resizeTerminalRef(terminalId, term.cols, term.rows);
