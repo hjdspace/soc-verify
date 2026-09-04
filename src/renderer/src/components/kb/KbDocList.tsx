@@ -234,7 +234,7 @@ export function KbDocList() {
         <table className="table-fixed w-full overflow-hidden rounded-lg border border-border bg-card text-xs shadow-sm">
           {/* table-fixed：列宽严格按表头分配，长文件名在单元格内截断，不撑宽表格 */}
           <thead>
-            <tr className="border-b border-border bg-secondary/50 text-left text-[10px] uppercase tracking-wide text-muted-foreground">
+            <tr className="border-b border-border bg-secondary/50 text-left text-[10px] uppercase tracking-[0.06em] text-muted-foreground">
               <th className="px-3 py-2">文档</th>
               <th className="w-[14%] px-3 py-2">分类</th>
               <th className="w-[9%] px-3 py-2">大小</th>
