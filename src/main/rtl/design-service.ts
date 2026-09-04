@@ -47,6 +47,25 @@ export function getDesignConfigPath(projectRoot: string): string {
   return join(projectRoot, DESIGN_DIR, 'config.json');
 }
 
+/** 检测到的 elaborated top units 缓存（顶层选择器记忆列表，story 17） */
+export function getDesignTopsPath(projectRoot: string): string {
+  return join(projectRoot, DESIGN_DIR, 'tops.json');
+}
+
+export function loadDetectedTops(projectRoot: string): string[] {
+  try {
+    const parsed = JSON.parse(readFileSync(getDesignTopsPath(projectRoot), 'utf-8')) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveDetectedTops(projectRoot: string, tops: string[]): void {
+  mkdirSync(join(projectRoot, DESIGN_DIR), { recursive: true });
+  writeFileSync(getDesignTopsPath(projectRoot), JSON.stringify(tops, null, 2), 'utf-8');
+}
+
 export function getDesignWorkDir(projectRoot: string): string {
   return join(projectRoot, DESIGN_DIR, 'work');
 }
@@ -166,34 +185,43 @@ function getMetaSafe(db: DesignDatabase, key: string): string | null {
   }
 }
 
-/** 源文件 mtime 相对上次 elaboration 是否变化（缺文件视为过期） */
+/** 源文件 mtime 快照：path → mtimeMs；文件缺失记为 -1（增删文件同样触发过期） */
+type SourceMtimes = Record<string, number>;
+
+function collectMtimes(files: string[]): SourceMtimes {
+  const out: SourceMtimes = {};
+  for (const f of files) {
+    try {
+      out[f] = statSync(f).mtimeMs;
+    } catch {
+      out[f] = -1;
+    }
+  }
+  return out;
+}
+
+/**
+ * 源文件 mtime 相对上次 elaboration 是否变化（issue 03：提示过期，不自动重跑）。
+ * 任一文件 mtime 与快照不一致（含文件出现/消失）即视为过期。
+ */
 function computeStale(db: DesignDatabase): boolean {
   const raw = getMetaSafe(db, 'sourceFiles');
-  if (!raw) return false;
+  const storedRaw = getMetaSafe(db, 'sourceMtimes');
+  if (!raw || !storedRaw) return false;
   let files: string[];
+  let stored: SourceMtimes;
   try {
     files = JSON.parse(raw) as string[];
+    stored = JSON.parse(storedRaw) as SourceMtimes;
   } catch {
     return false;
   }
-  const storedRaw = getMetaSafe(db, 'sourceMaxMtime');
-  if (!storedRaw) return false;
-  const stored = Number(storedRaw);
-  if (!Number.isFinite(stored)) return false;
-  return Math.abs(maxMtimeOf(files) - stored) > 1;
-}
-
-function maxMtimeOf(files: string[]): number {
-  let max = 0;
-  for (const f of files) {
-    try {
-      max = Math.max(max, statSync(f).mtimeMs);
-    } catch {
-      // 文件消失 → 时间不可判定，返回远大于任何存储值触发过期
-      return Number.MAX_SAFE_INTEGER;
-    }
+  const current = collectMtimes(files);
+  const keys = new Set([...Object.keys(stored), ...Object.keys(current)]);
+  for (const k of keys) {
+    if (Math.abs((current[k] ?? -1) - (stored[k] ?? -1)) > 1) return true;
   }
-  return max;
+  return false;
 }
 
 // ─── 数据查询（tRPC 子树查询的底层） ─────────────────────────
@@ -307,7 +335,7 @@ export function refresh(projectId: string, projectRoot: string): Promise<DesignR
       lastElaboratedAt: new Date().toISOString(),
       elapsedMs: String(Date.now() - started),
       sourceFiles: JSON.stringify(sourceFiles),
-      sourceMaxMtime: String(maxMtimeOf(sourceFiles)),
+      sourceMtimes: JSON.stringify(collectMtimes(sourceFiles)),
     });
     setLastError(db, null);
 
@@ -362,6 +390,8 @@ export function detectTops(projectId: string, projectRoot: string): Promise<stri
     try {
       const doc = JSON.parse(readFileSync(result.jsonPath, 'utf-8')) as WriteJsonDoc;
       const tops = Object.keys(doc.modules ?? {}).filter((name) => !name.startsWith('$')).sort();
+      // 持久化检测结果：顶层选择器下次进入直接恢复候选列表（无需重新 elaboration）
+      saveDetectedTops(projectRoot, tops);
       return tops;
     } finally {
       try {

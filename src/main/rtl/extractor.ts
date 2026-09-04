@@ -107,6 +107,8 @@ function buildTree(
     // 参数覆盖值在父模块 cell.parameters 上（write_json 已知缺口：uniquified 模块的
     // parameter_default_values 为空，spec 遗留问题的展示方案在后续切片解决）
     params: cellParams,
+    // extractDesign 末尾 assignInstCounts 统一填写
+    instCount: 0,
   });
   if (!m) return; // 黑盒：无可遍历 body
   for (const [cname, cell] of Object.entries(m.cells ?? {})) {
@@ -126,12 +128,30 @@ export function extractDesign(doc: WriteJsonDoc, topName: string): ExtractedDesi
   }
   const insts: ExtractedInst[] = [];
   buildTree(doc, topName, topName, null, 0, {}, insts);
+  assignInstCounts(insts);
   return {
     top: topName,
     defs: extractDefs(doc),
     insts,
     edges: extractEdges(doc),
   };
+}
+
+/**
+ * 子树实例数（含自身）：buildTree 为 DFS 先序，倒序遍历时每个实例的全部后代
+ * 已先处理完 —— 把累加值上抛给父节点即可，O(n) 无需重建树。
+ */
+function assignInstCounts(insts: ExtractedInst[]): void {
+  const size = new Map<string, number>();
+  for (let i = insts.length - 1; i >= 0; i--) {
+    const inst = insts[i]!;
+    const total = (size.get(inst.path) ?? 0) + 1;
+    size.set(inst.path, total);
+    inst.instCount = total;
+    if (inst.parent !== null) {
+      size.set(inst.parent, (size.get(inst.parent) ?? 0) + total);
+    }
+  }
 }
 
 // ─── 连线表（spec 决策 9：bit id → endpoints 聚合 → i2i / top2i 边） ──────

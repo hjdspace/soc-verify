@@ -24,6 +24,12 @@ export type DesignDatabase = Database.Database;
 const DEFAULT_DATA_DIR = '.socverify';
 export const DESIGN_DB_FILE = 'design.db';
 
+/**
+ * schema 版本（PRAGMA user_version）。DB 是可再生缓存：版本低于当前值时
+ * 直接重建（issue 03 为 insts 增加 inst_count 列 → version 2）。
+ */
+const SCHEMA_VERSION = 2;
+
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS meta (
   key TEXT PRIMARY KEY,
@@ -42,7 +48,8 @@ CREATE TABLE IF NOT EXISTS insts (
   parent TEXT,
   depth INTEGER NOT NULL,
   src TEXT,
-  params TEXT NOT NULL DEFAULT '{}'
+  params TEXT NOT NULL DEFAULT '{}',
+  inst_count INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_insts_parent ON insts(parent, name);
 CREATE TABLE IF NOT EXISTS edges (
@@ -74,13 +81,30 @@ export function initDesignDatabase(dbFullPath: string): DesignDatabase {
     PRAGMA synchronous = NORMAL;
     PRAGMA foreign_keys = ON;
   `);
+  migrateIfNeeded(db);
   db.exec(SCHEMA_SQL);
   return db;
+}
+
+/** 旧版本 schema 直接重建（DB 为可再生缓存，无数据迁移价值） */
+function migrateIfNeeded(db: DesignDatabase): void {
+  const row = db.prepare('PRAGMA user_version').get() as { user_version: number };
+  if (row.user_version >= SCHEMA_VERSION) return;
+  db.exec(`
+    DROP INDEX IF EXISTS idx_insts_parent;
+    DROP INDEX IF EXISTS idx_edges_module;
+    DROP TABLE IF EXISTS edges;
+    DROP TABLE IF EXISTS insts;
+    DROP TABLE IF EXISTS defs;
+    DROP TABLE IF EXISTS meta;
+  `);
+  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 }
 
 export function createMemoryDesignDatabase(): DesignDatabase {
   const db = new Database(':memory:');
   db.exec(SCHEMA_SQL);
+  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   return db;
 }
 
@@ -134,7 +158,7 @@ export function replaceAll(db: DesignDatabase, design: ExtractedDesign, meta: Re
     'INSERT OR REPLACE INTO defs (name, src, param_defaults, ports) VALUES (?, ?, ?, ?)',
   );
   const insertInst = db.prepare(
-    'INSERT OR REPLACE INTO insts (path, name, module, parent, depth, src, params) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    'INSERT OR REPLACE INTO insts (path, name, module, parent, depth, src, params, inst_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
   );
   const insertEdge = db.prepare(
     'INSERT OR REPLACE INTO edges (module, net, kind, width, cells, top_ports) VALUES (?, ?, ?, ?, ?, ?)',
@@ -150,7 +174,7 @@ export function replaceAll(db: DesignDatabase, design: ExtractedDesign, meta: Re
       insertDef.run(def.name, def.src, JSON.stringify(def.paramDefaults), JSON.stringify(def.ports));
     }
     for (const inst of design.insts) {
-      insertInst.run(inst.path, inst.name, inst.module, inst.parent, inst.depth, inst.src, JSON.stringify(inst.params));
+      insertInst.run(inst.path, inst.name, inst.module, inst.parent, inst.depth, inst.src, JSON.stringify(inst.params), inst.instCount);
     }
     for (const edge of design.edges) {
       insertEdge.run(edge.module, edge.net, edge.kind, edge.width, JSON.stringify(edge.cells), JSON.stringify(edge.topPorts));
@@ -180,6 +204,7 @@ function toInstRow(r: Record<string, unknown>): DesignInstRow {
     depth: r.depth as number,
     src: (r.src as string | null) ?? null,
     params: JSON.parse((r.params as string) ?? '{}') as Record<string, unknown>,
+    instCount: (r.inst_count as number) ?? 0,
   };
 }
 

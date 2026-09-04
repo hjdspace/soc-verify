@@ -32,7 +32,8 @@ export function DesignView() {
     setConfig(cfg);
     setStatus(st);
     setRoot(rt);
-    setShowConfig((prev) => prev || (cfg.filelists.length === 0 && st.top === null));
+    // 配置不完整（未配 .f 或未选顶层）→ 自动展开配置面板引导补全
+    setShowConfig((prev) => prev || !st.configured);
   }, []);
 
   useEffect(() => {
@@ -66,7 +67,11 @@ export function DesignView() {
         <ListTree className="size-4 text-primary" />
         <span className="text-sm font-semibold">设计</span>
         {status?.hasData && status.stale && (
-          <span className="flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400">
+          <span
+            className="flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] text-amber-600 dark:text-amber-400"
+            data-testid="design-stale-badge"
+            title="点击「刷新」重新 elaboration"
+          >
             <AlertTriangle className="size-3" />
             源文件已变化，数据过期
           </span>
@@ -168,6 +173,16 @@ function ConfigPanel({
   const [detectError, setDetectError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // 恢复上次检测的 top units 列表（story 17：选择器记忆，无需重新 elaboration）
+  useEffect(() => {
+    void trpc.rtl.getDetectedTops
+      .query({ projectId })
+      .then(({ tops }) => {
+        if (tops.length > 0) setDetectedTops(tops);
+      })
+      .catch(() => undefined);
+  }, [projectId]);
+
   const detectTops = async () => {
     // 先保存 filelists 再检测（检测需要读 .f）
     setSaving(true);
@@ -234,13 +249,31 @@ function ConfigPanel({
       </div>
 
       <div className="mb-3 flex items-center gap-1.5">
-        <input
-          value={topInput}
-          onChange={(e) => setTopInput(e.target.value)}
-          placeholder="顶层模块名"
-          data-testid="design-top-input"
-          className="w-56 rounded border border-border bg-background px-2 py-1 font-mono text-xs outline-none focus:ring-1 focus:ring-primary/50"
-        />
+        {detectedTops !== null && detectedTops.length > 0 ? (
+          <select
+            value={topInput}
+            onChange={(e) => setTopInput(e.target.value)}
+            data-testid="design-top-select"
+            aria-label="选择顶层模块"
+            className="w-56 rounded border border-border bg-background px-2 py-1 font-mono text-xs outline-none focus:ring-1 focus:ring-primary/50"
+          >
+            {(topInput && !detectedTops.includes(topInput) ? [topInput, ...detectedTops] : detectedTops).map(
+              (t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ),
+            )}
+          </select>
+        ) : (
+          <input
+            value={topInput}
+            onChange={(e) => setTopInput(e.target.value)}
+            placeholder="顶层模块名"
+            data-testid="design-top-input"
+            className="w-56 rounded border border-border bg-background px-2 py-1 font-mono text-xs outline-none focus:ring-1 focus:ring-primary/50"
+          />
+        )}
         <button
           type="button"
           data-testid="design-detect-tops"
@@ -251,11 +284,9 @@ function ConfigPanel({
           <Wand2 className={cn('size-3.5', saving && 'animate-pulse')} />
           检测顶层
         </button>
-        {detectedTops !== null && (
+        {detectedTops !== null && detectedTops.length === 0 && (
           <span className="text-[11px] text-muted-foreground" data-testid="design-tops-result">
-            {detectedTops.length === 0
-              ? '未检测到顶层'
-              : `可选顶层：${detectedTops.join('、')}`}
+            未检测到顶层
           </span>
         )}
         {detectError && <span className="text-[11px] text-status-fail">{detectError}</span>}

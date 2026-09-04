@@ -60,6 +60,8 @@ export type ExtractedInst = {
   src: string | null;
   /** 实例参数覆盖（write_json cell.parameters） */
   params: Record<string, unknown>;
+  /** 子树实例数（含自身；spec story 5：树节点模块统计，快速判断子系统规模） */
+  instCount: number;
 };
 
 /** 连线端点：定义内部某个子实例的端口 */
@@ -97,6 +99,8 @@ export type DesignInstRow = {
   depth: number;
   src: string | null;
   params: Record<string, unknown>;
+  /** 子树实例数（含自身） */
+  instCount: number;
 };
 
 export type DesignDefRow = {

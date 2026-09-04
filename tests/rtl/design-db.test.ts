@@ -6,6 +6,10 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import Database from 'better-sqlite3';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   createMemoryDesignDatabase,
   getAllMeta,
@@ -15,6 +19,9 @@ import {
   getLastError,
   getRootInstance,
   hasDesignData,
+  initDesignDatabase,
+  getDesignDbPath,
+  getInstance,
   replaceAll,
   setLastError,
   setMeta,
@@ -40,9 +47,9 @@ const SAMPLE: ExtractedDesign = {
     { name: 'spike_ip', src: null, paramDefaults: { N: 2 }, ports: [{ name: 'irq_o', direction: 'output', width: 4 }] },
   ],
   insts: [
-    { path: 'spike_top', name: 'spike_top', module: 'spike_top', parent: null, depth: 0, src: 'rtl/spike_top.sv:3.8', params: {} },
-    { path: 'spike_top.u0', name: 'u0', module: 'spike_ip', parent: 'spike_top', depth: 1, src: null, params: { N: 4 } },
-    { path: 'spike_top.u1', name: 'u1', module: 'spike_ip', parent: 'spike_top', depth: 1, src: null, params: {} },
+    { path: 'spike_top', name: 'spike_top', module: 'spike_top', parent: null, depth: 0, src: 'rtl/spike_top.sv:3.8', params: {}, instCount: 3 },
+    { path: 'spike_top.u0', name: 'u0', module: 'spike_ip', parent: 'spike_top', depth: 1, src: null, params: { N: 4 }, instCount: 1 },
+    { path: 'spike_top.u1', name: 'u1', module: 'spike_ip', parent: 'spike_top', depth: 1, src: null, params: {}, instCount: 1 },
   ],
   edges: [
     {
@@ -106,6 +113,49 @@ describe('实例树查询', () => {
     const children = getChildrenInstances(db, 'spike_top');
     expect(children.map((c) => c.path)).toEqual(['spike_top.u0', 'spike_top.u1']);
     expect(children[0].params).toEqual({ N: 4 });
+  });
+
+  it('getChildrenInstances / getRootInstance 返回持久化的 instCount（issue 03 树节点实例数统计）', () => {
+    const children = getChildrenInstances(db, 'spike_top');
+    expect(children.map((c) => c.instCount)).toEqual([1, 1]);
+    expect(getRootInstance(db)?.instCount).toBe(3);
+    expect(getInstance(db, 'spike_top')?.instCount).toBe(3);
+  });
+});
+
+describe('旧 schema 迁移（issue 03 inst_count 列新增）', () => {
+  it('issue 02 时代的旧库（无 inst_count 列）打开时重建，不查询报错', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sv-design-db-mig-'));
+    try {
+      const dbPath = getDesignDbPath(dir);
+      mkdirSync(join(dir, '.socverify'), { recursive: true });
+      // 手工构造旧 schema（issue 02：insts 无 inst_count，user_version=0）
+      const old = new Database(dbPath);
+      old.exec(`
+        CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS insts (
+          path TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          module TEXT NOT NULL,
+          parent TEXT,
+          depth INTEGER NOT NULL,
+          src TEXT,
+          params TEXT NOT NULL DEFAULT '{}'
+        );
+      `);
+      old.prepare(
+        "INSERT INTO insts (path, name, module, parent, depth, src, params) VALUES ('old', 'old', 'm', NULL, 0, NULL, '{}')",
+      ).run();
+      old.close();
+
+      const reopened = initDesignDatabase(dbPath);
+      expect(hasDesignData(reopened)).toBe(false); // 旧数据为可再生缓存，重建后清空
+      replaceAll(reopened, SAMPLE, { top: 'spike_top' });
+      expect(getChildrenInstances(reopened, 'spike_top')[0].instCount).toBe(1);
+      reopened.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

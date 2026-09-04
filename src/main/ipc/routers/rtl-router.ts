@@ -15,6 +15,7 @@ import {
   detectTops,
   getStatus,
   loadDesignConfig,
+  loadDetectedTops,
   queryChildren,
   queryDef,
   queryRoot,
@@ -83,6 +84,14 @@ export const rtlRouter = t.router({
       } catch (err) {
         throw toTRPCError(err);
       }
+    }),
+
+  /** 上次检测的 top units 列表（持久化于 .socverify/design/tops.json，选择器直接恢复） */
+  getDetectedTops: t.procedure
+    .input(projectIdInput)
+    .query(({ input }) => {
+      const project = requireProject(input.projectId);
+      return { tops: loadDetectedTops(project.rootPath) };
     }),
 
   // ── 状态与数据（秒开：DB 有数据直接查，不触发 elaboration）──

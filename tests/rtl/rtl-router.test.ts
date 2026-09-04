@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -86,6 +86,7 @@ function makeFakeChild(opts: FakeOpts): EventEmitter & { stdout: EventEmitter; s
 beforeEach(() => {
   holder.projectDir = mkdtempSync(join(tmpdir(), 'sv-rtl-router-'));
   mkdirSync(join(holder.projectDir, 'rtl'), { recursive: true });
+  writeFileSync(join(holder.projectDir, 'rtl/top.sv'), 'module spike_top; endmodule\n', 'utf-8');
   writeFileSync(join(holder.projectDir, 'spike.f'), '+incdir+rtl/ip\n+define+SPIKE_MACRO\nrtl/top.sv\n', 'utf-8');
   capturedScripts.length = 0;
   mockSpawn.mockReset();
@@ -175,6 +176,22 @@ describe('rtl.refresh 成功路径（golden fixture）', () => {
     expect(ips.every((c) => c.module === 'spike_ip')).toBe(true);
   });
 
+  it('instCount 子树实例数随行返回（issue 03：树节点实例数统计）', async () => {
+    await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: 'spike_top' });
+    await caller.refresh({ projectId: 'proj-1' });
+
+    const root = await caller.getRoot({ projectId: 'proj-1' });
+    expect(root?.instCount).toBe(9); // 全设计 9 实例
+
+    const subsys = await caller.getChildren({ projectId: 'proj-1', path: 'spike_top' });
+    const byName = new Map(subsys.map((c) => [c.name, c.instCount]));
+    expect(byName.get('u_subsys0')).toBe(3); // 自身 + 2 ip
+    expect(byName.get('u_subsys1')).toBe(5); // 自身 + 4 ip
+
+    const leaf = await caller.getChildren({ projectId: 'proj-1', path: 'spike_top.u_subsys0' });
+    expect(leaf.every((c) => c.instCount === 1)).toBe(true);
+  });
+
   it('getDef 端口全表（渲染端零解析）', async () => {
     await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: 'spike_top' });
     await caller.refresh({ projectId: 'proj-1' });
@@ -262,5 +279,51 @@ describe('缓存秒开（对齐 Case Scan 模式）', () => {
     expect(root).not.toBeNull();
     expect(children).toHaveLength(2);
     expect(status.hasData).toBe(true);
+  });
+});
+
+describe('mtime 过期检测（issue 03：提示过期但不自动重跑）', () => {
+  it('刷新后 stale 为 false；touch 源文件后 stale 为 true 且无任何 spawn', async () => {
+    await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: 'spike_top' });
+    await caller.refresh({ projectId: 'proj-1' });
+
+    expect((await caller.getStatus({ projectId: 'proj-1' })).stale).toBe(false);
+
+    // 源文件 mtime 变化（+1 分钟避开 1s 容差）
+    const src = join(holder.projectDir, 'rtl/top.sv');
+    const future = new Date(Date.now() + 60_000);
+    utimesSync(src, future, future);
+
+    mockSpawn.mockClear();
+    const status = await caller.getStatus({ projectId: 'proj-1' });
+    expect(status.stale).toBe(true);
+    expect(mockSpawn).not.toHaveBeenCalled(); // 不自动重跑，仅提示
+  });
+
+  it('源文件消失视为过期', async () => {
+    await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: 'spike_top' });
+    await caller.refresh({ projectId: 'proj-1' });
+    rmSync(join(holder.projectDir, 'rtl/top.sv'));
+    expect((await caller.getStatus({ projectId: 'proj-1' })).stale).toBe(true);
+  });
+});
+
+describe('顶层选择记忆（issue 03 story 17）', () => {
+  it('detectTops 持久化 top units 列表；getDetectedTops 无 spawn 直接读回', async () => {
+    await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: null });
+
+    const { tops } = await caller.detectTops({ projectId: 'proj-1' });
+    expect(tops).toContain('spike_top');
+    expect(existsSync(join(holder.projectDir, '.socverify/design/tops.json'))).toBe(true);
+
+    mockSpawn.mockClear();
+    const again = await caller.getDetectedTops({ projectId: 'proj-1' });
+    expect(again.tops).toEqual(tops);
+    expect(mockSpawn).not.toHaveBeenCalled(); // 记忆列表恢复不触发 elaboration
+  });
+
+  it('未检测过时 getDetectedTops 返回空列表', async () => {
+    const { tops } = await caller.getDetectedTops({ projectId: 'proj-1' });
+    expect(tops).toEqual([]);
   });
 });

@@ -4,6 +4,7 @@
  * fixture：tests/rtl/fixtures/spike_netlist_keep.json（read_slang --keep-hierarchy，
  * uniquified 命名 / generate 展开 / 实例互连齐全的合成 SoC spike 设计）。
  * 断言基线：9 实例、3 定义、soc_subsys 内 IP 互连 i2i、spike_top top2i 边。
+ * issue 03：instCount 子树实例数统计（spec story 5 树节点模块统计）。
  */
 
 import { describe, it, expect } from 'vitest';
@@ -53,6 +54,17 @@ describe('extractDesign（golden fixture）', () => {
     const subsys0 = design.insts.filter((i) => i.parent === 'spike_top.u_subsys0');
     expect(subsys1).toHaveLength(4);
     expect(subsys0).toHaveLength(2);
+  });
+
+  it('instCount 子树实例数（含自身）：leaf=1、subsys=自身+IP、root=全设计 9（issue 03）', () => {
+    const root = design.insts.find((i) => i.path === 'spike_top');
+    const subsys0 = design.insts.find((i) => i.path === 'spike_top.u_subsys0');
+    const subsys1 = design.insts.find((i) => i.path === 'spike_top.u_subsys1');
+    const ip = design.insts.find((i) => i.path === 'spike_top.u_subsys1.gen_ip[3].u_ip');
+    expect(root?.instCount).toBe(9);
+    expect(subsys0?.instCount).toBe(3);
+    expect(subsys1?.instCount).toBe(5);
+    expect(ip?.instCount).toBe(1);
   });
 
   it('定义表：3 个 def（spike_top/soc_subsys/spike_ip），端口含方向与位宽', () => {
@@ -123,5 +135,23 @@ describe('extractDesign 边界', () => {
 
   it('extractEdges 空设计安全', () => {
     expect(extractEdges({ modules: {} })).toEqual([]);
+  });
+
+  it('instCount：黑盒 cell instCount=1，黑盒子树不上抛计数（issue 03）', () => {
+    const mini: WriteJsonDoc = {
+      modules: {
+        top: {
+          cells: {
+            u_bb: { type: 'unknown_bb' },
+            u_inner: { type: 'inner$top.u_inner' },
+          },
+        },
+        'inner$top.u_inner': { cells: {} },
+      },
+    };
+    const design = extractDesign(mini, 'top');
+    expect(design.insts.find((i) => i.path === 'top.u_bb')?.instCount).toBe(1);
+    expect(design.insts.find((i) => i.path === 'top.u_inner')?.instCount).toBe(1);
+    expect(design.insts.find((i) => i.path === 'top')?.instCount).toBe(3);
   });
 });
