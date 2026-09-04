@@ -83,7 +83,7 @@ export function NewTabPage({ onNavigate }: NewTabPageProps) {
 
       {/* 常用书签 */}
       <div className="mt-10 w-full max-w-2xl">
-        <div className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">
           <Star className="h-3.5 w-3.5" />
           <span>常用书签</span>
         </div>
@@ -112,7 +112,7 @@ export function NewTabPage({ onNavigate }: NewTabPageProps) {
 
       {/* 书签分组 */}
       <div className="mt-8 w-full max-w-2xl">
-        <div className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">
           <Folder className="h-3.5 w-3.5" />
           <span>书签分组</span>
         </div>
@@ -147,7 +147,7 @@ export function NewTabPage({ onNavigate }: NewTabPageProps) {
       {/* 未分组书签 */}
       {bookmarks.filter((b) => b.groupId === null && !b.frequent).length > 0 && (
         <div className="mt-6 w-full max-w-2xl">
-          <div className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          <div className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">
             <Bookmark className="h-3.5 w-3.5" />
             <span>其他书签</span>
           </div>
