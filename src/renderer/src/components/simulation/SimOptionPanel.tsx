@@ -167,7 +167,7 @@ export function SimOptionPanel() {
     <div className="border-b border-border bg-secondary/30" data-testid="sim-option-panel">
       {/* ── Header bar ─────────────────────────────────────── */}
       <div className="flex items-center justify-between px-3 py-1.5">
-        <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.06em] text-muted-foreground">
           <Terminal className="h-3 w-3" />
           <span data-testid="sim-option-title">
             仿真 Option{caseName ? ` · ${caseName}` : ''}
