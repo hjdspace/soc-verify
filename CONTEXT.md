@@ -487,3 +487,33 @@ _Avoid_: activity grid, contribution graph
 **ContextUsageIndicator vs Token Monitor**:
 ContextUsageIndicator 显示当前会话上下文窗口的实时占用（还能发多少消息），数据来自 `context_usage` 事件。Token Monitor 显示历史 token 消耗统计和趋势（用了多少 token），数据来自 `message_end` 事件的 `usage` 字段。两者职责分离，不互相替代。多轮 prompt cache 会使累计 token 很大而当前上下文仍只占一个窗口。
 _Avoid_: context tracker
+
+### RTL 解析域
+
+**Design Source（设计源配置）**:
+项目级配置，指定 RTL elaboration 的输入：一个或多个 VCS 风格 .f 文件，加上从 elaboration 产出的 top units 中选定的顶层模块。层级解析与编辑器语言服务共享的单一数据源。
+_Avoid_: filelist config, RTL config
+
+**RTL Hierarchy（RTL 层级）**:
+DE 树 RTL 静态 elaboration 产生的模块实例树，含 generate 展开与参数实例化后的结构。不含 UVM/TB 运行时层级（明确非目标——静态 elaborator 原理上拿不到 class 实例树）。
+_Avoid_: design tree, module tree
+
+**Module Instance（模块实例）**:
+RTL Hierarchy 的节点，对应 elaboration 后的一个实例。同一 Module Definition 的多次实例化产生多个节点，各自有独立的层级路径。
+_Avoid_: cell, instance node
+
+**Module Definition（模块定义）**:
+源码中一个 module 声明的提炼产物：端口表（名称/方向/位宽）、参数、源文件位置。多个 Module Instance 共享一个 Definition。
+_Avoid_: module signature, module template
+
+**Protocol Bundle（协议束）**:
+按命名规则聚合到同一协议实例的一组端口/信号（如一个 AXI4 端口的全部通道信号）。框图边收拢、模块接口分组、树节点徽标的公共消费单元。
+_Avoid_: bus group, signal bundle
+
+**Bundle Rule（束规则）**:
+端口命名模式到协议类型（AXI4/AXI4-Lite/AHB/APB 等）的映射规则。内置 AMBA 规则包提供默认值，项目可在 `.socverify/` 下覆盖扩展。
+_Avoid_: bundle pattern, protocol rule
+
+**Design View（设计视图）**:
+第七个顶层视图（与总览/仿真/覆盖率/回归/token/workspace 平级），承载 RTL 层级浏览器：层级树与框图联动，模块源码跳转走 Workbench 文件 tab。
+_Avoid_: RTL view, hierarchy view

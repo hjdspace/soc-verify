@@ -10,6 +10,7 @@ import {
   Sparkles,
   Settings,
   Coins,
+  Network,
 } from 'lucide-react';
 import { useUiStore, type ActiveView } from '@renderer/stores/ui';
 import { useSimulationStore } from '@renderer/stores/simulation';
@@ -21,12 +22,13 @@ type NavItem = {
   icon: typeof Play;
 };
 
-/** 五个视图按钮：总览 / 仿真 / 回归 / 覆盖率 / 工作区（tooltip 含 Ctrl+N 快捷键） */
+/** 六个视图按钮：总览 / 仿真 / 回归 / 覆盖率 / 设计 / 工作区（tooltip 含 Ctrl+N 快捷键） */
 const VIEW_ITEMS: NavItem[] = [
   { view: 'dashboard', label: '总览 · Ctrl 1', icon: LayoutDashboard },
   { view: 'simulation', label: '仿真 · Ctrl 2', icon: Play },
   { view: 'regression', label: '回归 · Ctrl 3', icon: Repeat },
   { view: 'coverage', label: '覆盖率 · Ctrl 4', icon: Target },
+  { view: 'design', label: '设计', icon: Network },
   { view: 'workspace', label: '工作区', icon: Layers },
 ];
 
@@ -49,7 +51,7 @@ function NavTooltip({ label }: { label: string }) {
 
 /**
  * 60px 窄图标导航栏（mission-control 布局）：
- * 上部五个视图按钮（仿真带运行数 badge），分隔线后文件/版本控制/AI，
+ * 上部六个视图按钮（仿真带运行数 badge），分隔线后文件/版本控制/AI，
  * 底部设置。每个按钮 hover 显示纯 CSS tooltip。
  */
 export function NavRail() {

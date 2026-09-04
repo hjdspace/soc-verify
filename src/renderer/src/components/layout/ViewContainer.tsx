@@ -8,6 +8,7 @@ import { SimulationView } from '@renderer/components/views/SimulationView';
 import { CoverageView } from '@renderer/components/views/CoverageView';
 import { RegressionView } from '@renderer/components/views/RegressionView';
 import { TokenView } from '@renderer/components/views/TokenView';
+import { DesignView } from '@renderer/components/views/DesignView';
 
 /**
  * 工作区视图：多 Tab 工作台原样完整嵌入。
@@ -35,6 +36,8 @@ function renderActiveView(view: ActiveView) {
       return <RegressionView />;
     case 'token':
       return <TokenView />;
+    case 'design':
+      return <DesignView />;
     case 'workspace':
       return <WorkspaceView />;
   }
@@ -44,8 +47,7 @@ function renderActiveView(view: ActiveView) {
  * 仿真视图含万级用例树 + 运行列表，全量重建是切换卡顿的主因。 */
 const KEEP_ALIVE_VIEWS: ReadonlySet<ActiveView> = new Set(['simulation']);
 
-/**
- * 视图路由容器：按 ui.activeView 渲染五个视图。
+/** 视图路由容器：按 ui.activeView 渲染七个视图。
  * 总览视图为 Mission Control 仪表盘（Issue #3）；
  * 仿真视图为运行管理工作台（Issue #4）；
  * 覆盖率视图为覆盖率分析工作台（Issue #5）；

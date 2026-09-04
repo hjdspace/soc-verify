@@ -14,6 +14,7 @@ import {
   RotateCcw,
   Download,
   Layers,
+  Network,
   Folder,
   Sparkles,
   Workflow,
@@ -56,12 +57,13 @@ interface PaletteGroup {
   items: PaletteItem[];
 }
 
-/** 导航组：五视图切换（hint = NavRail Ctrl+1..4 快捷键） */
+/** 导航组：视图切换（hint = NavRail Ctrl+1..4 快捷键） */
 const NAV_VIEWS: ReadonlyArray<{ view: ActiveView; label: string; hint?: string; icon: LucideIcon }> = [
   { view: 'dashboard', label: '前往 总览', hint: 'Ctrl 1', icon: LayoutDashboard },
   { view: 'simulation', label: '前往 仿真', hint: 'Ctrl 2', icon: Play },
   { view: 'regression', label: '前往 回归', hint: 'Ctrl 3', icon: GitBranch },
   { view: 'coverage', label: '前往 覆盖率', hint: 'Ctrl 4', icon: BarChart3 },
+  { view: 'design', label: '前往 设计', icon: Network },
   { view: 'token', label: '前往 Token', icon: Coins },
   { view: 'workspace', label: '前往 工作区', icon: Layers },
 ];

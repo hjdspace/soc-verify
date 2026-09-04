@@ -80,9 +80,9 @@ describe('workbench.open Tab 型目的地分流', () => {
 });
 
 describe('activeView 状态与持久化水合', () => {
-  it('setActiveView 直接切换五视图', () => {
+  it('setActiveView 直接切换全部视图（含设计视图）', () => {
     const { setActiveView } = useUiStore.getState();
-    for (const view of ['simulation', 'coverage', 'regression', 'workspace', 'dashboard'] as const) {
+    for (const view of ['simulation', 'coverage', 'regression', 'design', 'workspace', 'dashboard'] as const) {
       setActiveView(view);
       expect(useUiStore.getState().activeView).toBe(view);
     }
