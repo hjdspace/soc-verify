@@ -141,7 +141,7 @@ export function HistoryTable({ entries, loading, onOpen }: {
       <div
         className={cn(
           ROW_GRID,
-          'gap-2.5 border-b border-border px-3.5 py-2 text-[10.5px] uppercase tracking-wider text-muted-foreground/70',
+          'gap-2.5 border-b border-border px-3.5 py-2 text-[10.5px] uppercase tracking-[0.08em] text-muted-foreground/70',
         )}
       >
         <span>子系统·回归</span>
