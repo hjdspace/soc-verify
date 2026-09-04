@@ -72,7 +72,7 @@ export function TVStatsCards({ statistics, loading }: StatsCardsProps) {
           >
             <Icon className={cn('h-5 w-5 shrink-0', card.iconClass)} />
             <div className="min-w-0">
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              <div className="text-[11px] uppercase tracking-[0.06em] text-muted-foreground">
                 {card.label}
               </div>
               <div className={cn('text-xl font-bold tabular-nums', loading && 'animate-pulse', card.valueClass)}>
