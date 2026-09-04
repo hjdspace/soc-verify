@@ -89,6 +89,7 @@ export function TitleBar() {
       className={cn(
         'titlebar-drag',
         'flex h-9 shrink-0 items-center gap-2 border-b border-titlebar-border bg-titlebar pl-3 pr-1 text-titlebar-foreground select-none',
+        'glass',
       )}
     >
       {/* ── Logo ─────────────────────────────────────────────────── */}
