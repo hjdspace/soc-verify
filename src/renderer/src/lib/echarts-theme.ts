@@ -211,6 +211,9 @@ let currentTheme: DashboardEChartsTheme | null = null;
 let observer: MutationObserver | null = null;
 const listeners = new Set<ThemeListener>();
 
+/** rAF 批处理句柄：监听器通知合帧，避免每个图表独立重绘各自占一帧 */
+let notifyFrame: number | null = null;
+
 /** 获取当前缓存的 theme（首次调用时构建）。 */
 export function getEChartsTheme(): DashboardEChartsTheme {
   if (!currentTheme) {
@@ -225,11 +228,29 @@ export function onThemeChange(listener: ThemeListener): () => void {
   return () => listeners.delete(listener);
 }
 
-/** 手动触发主题重建（测试或外部触发时使用）。 */
+/**
+ * 手动触发主题重建（测试或外部触发时使用）。
+ *
+ * 通知合帧：所有图表监听器在同一个 rAF 里收到回调，各自 setOption
+ * 后浏览器只需一次绘制。同步遍历时每个 setOption 独立占帧，多图场景
+ * 主题切换会连掉数帧（Notification、Tooltip 等也逐帧闪变）。
+ */
 export function rebuildTheme(): DashboardEChartsTheme {
   currentTheme = buildEChartsTheme();
-  for (const listener of listeners) {
-    listener(currentTheme);
+  if (typeof window === 'undefined') {
+    // jsdom / SSR：无 rAF，同步通知（测试直接断言 rebuild 后的回调）
+    for (const listener of listeners) {
+      listener(currentTheme);
+    }
+    return currentTheme;
+  }
+  if (notifyFrame === null) {
+    notifyFrame = window.requestAnimationFrame(() => {
+      notifyFrame = null;
+      for (const listener of listeners) {
+        listener(currentTheme as DashboardEChartsTheme);
+      }
+    });
   }
   return currentTheme;
 }
@@ -264,6 +285,10 @@ export function stopThemeObserver(): void {
 /** 重置所有状态（测试用）。 */
 export function resetThemeState(): void {
   stopThemeObserver();
+  if (notifyFrame !== null && typeof window !== 'undefined') {
+    window.cancelAnimationFrame(notifyFrame);
+  }
+  notifyFrame = null;
   currentTheme = null;
   listeners.clear();
 }
