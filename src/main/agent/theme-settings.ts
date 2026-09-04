@@ -3,7 +3,13 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const SETTINGS_FILE = 'theme.json';
-const VALID_THEME_IDS = new Set(['drafting', 'bench', 'slate', 'daylight']);
+
+/**
+ * 主进程侧有效主题 ID 列表。必须与渲染端 `stores/theme.ts` 的 `THEMES` 保持同步。
+ * 添加新主题时务必在此处补全，否则 `setTheme()` 会静默丢弃未识别的主题，
+ * 导致文件级持久化失效、重启后回退到默认主题。
+ */
+const VALID_THEME_IDS = new Set(['drafting', 'bench', 'slate', 'daylight', 'apple-light', 'apple-dark']);
 
 class ThemeSettingsImpl {
   private cachedTheme: string | null = null;
