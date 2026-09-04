@@ -117,13 +117,16 @@ export function SimulationView() {
               自定义用例
             </button>
           </div>
-          {/* Tab 内容 */}
+          {/* Tab 内容：两面板常驻挂载（display 切换）。
+              条件卸载会让 CaseCfgPanel 每次切 Tab 重新拉取并解析全部 cfg，
+              万级用例下切 Tab 明显卡顿，且给人以「未持久化」的错觉 */}
           <div className="h-[calc(100%-28px)]">
-            {leftPanelTab === 'case-tree' ? (
+            <div className={cn('h-full', leftPanelTab === 'case-tree' ? 'block' : 'hidden')}>
               <CaseTreePanel />
-            ) : (
+            </div>
+            <div className={cn('h-full', leftPanelTab === 'case-cfg' ? 'block' : 'hidden')}>
               <CaseCfgPanel />
-            )}
+            </div>
           </div>
         </div>
 
