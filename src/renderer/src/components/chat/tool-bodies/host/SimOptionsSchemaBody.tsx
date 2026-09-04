@@ -29,10 +29,10 @@ export function SimOptionsSchemaBody({ resultText }: { resultText: string }) {
       <table className="w-full border-collapse">
         <thead>
           <tr className="border-b border-border/40 bg-background/50">
-            <th className="px-2.5 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/60">Option</th>
-            <th className="px-2.5 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/60">Type</th>
-            <th className="px-2.5 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/60">Default</th>
-            <th className="px-2.5 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/60">Description</th>
+            <th className="px-2.5 py-1 text-left text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/60">Option</th>
+            <th className="px-2.5 py-1 text-left text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/60">Type</th>
+            <th className="px-2.5 py-1 text-left text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/60">Default</th>
+            <th className="px-2.5 py-1 text-left text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/60">Description</th>
           </tr>
         </thead>
         <tbody>
