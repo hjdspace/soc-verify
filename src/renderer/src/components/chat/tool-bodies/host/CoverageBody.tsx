@@ -22,7 +22,7 @@ export function CoverageBody({ resultText }: { resultText: string }) {
         const cls = pct == null ? 'text-muted-foreground' : pct >= 85 ? 'text-status-pass-foreground' : pct >= 70 ? 'text-warning-foreground' : 'text-status-fail-foreground';
         return (
           <div key={m.label} className="bg-secondary/20 px-2 py-2 text-center">
-            <div className="text-[9px] uppercase tracking-wide text-muted-foreground/60">{m.label}</div>
+            <div className="text-[9px] uppercase tracking-[0.06em] text-muted-foreground/60">{m.label}</div>
             <div className={cn('mt-0.5 text-base font-bold tabular-nums', cls)}>{pct != null ? `${pct.toFixed(1)}%` : '--'}</div>
           </div>
         );
