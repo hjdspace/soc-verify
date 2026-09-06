@@ -86,20 +86,19 @@ export function NavRail() {
       ? leftDrawerOpen
       : !filePanelCollapsed;
 
-  /** AI 按钮：drawer 模式 toggle 右抽屉；docked 模式恢复旧固定右栏行为（切换 + 跳工作区）。 */
+  /** AI 按钮：drawer 模式 toggle 右抽屉；docked 模式 toggle 固定右栏折叠状态（不切换视图）。 */
   const handleAiClick = () => {
     if (aiPanelMode === 'drawer') {
       toggleRightDrawer();
       return;
     }
     toggleRightPanel();
-    setActiveView('workspace');
   };
 
   const aiButtonActive =
     aiPanelMode === 'drawer'
       ? rightDrawerOpen
-      : activeView === 'workspace' && !rightPanelCollapsed;
+      : !rightPanelCollapsed;
 
   // Ctrl+1..4 切换四大视图；仅 ctrl/meta 按下时拦截，普通数字键（含输入框）不受影响
   useEffect(() => {

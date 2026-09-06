@@ -147,12 +147,17 @@ describe('NavRail 其他按钮', () => {
     expect(useUiStore.getState().leftDrawerOpen).toBe(true);
   });
 
-  it('AI 助手按钮在 docked 模式下切换固定右栏并跳工作区', () => {
-    useUiStore.setState({ aiPanelMode: 'docked', rightPanelCollapsed: true, activeView: 'dashboard' });
+  it('AI 助手按钮在 docked 模式下 toggle 固定右栏折叠状态（不切换视图）', () => {
+    useUiStore.setState({ aiPanelMode: 'docked', rightPanelCollapsed: true, activeView: 'design' });
     render(<NavRail />);
     fireEvent.click(screen.getByRole('button', { name: 'AI 助手' }));
     expect(useUiStore.getState().rightPanelCollapsed).toBe(false);
-    expect(useUiStore.getState().activeView).toBe('workspace');
+    /* 不切换视图，当前视图保持不变 */
+    expect(useUiStore.getState().activeView).toBe('design');
+
+    fireEvent.click(screen.getByRole('button', { name: 'AI 助手' }));
+    expect(useUiStore.getState().rightPanelCollapsed).toBe(true);
+    expect(useUiStore.getState().activeView).toBe('design');
   });
 
   it('文件按钮在 docked 模式下 toggle 固定左栏折叠状态', () => {
