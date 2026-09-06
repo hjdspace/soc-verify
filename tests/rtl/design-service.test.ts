@@ -203,4 +203,57 @@ describe('loadDesignConfig / saveDesignConfig', () => {
     const loaded = loadDesignConfig(projectDir);
     expect(loaded.filelists).toEqual(['a.f', 'b.f']);
   });
+
+  it('旧配置目录扫描排除规则自动补齐新增的默认排除项', () => {
+    const configDir = join(projectDir, '.socverify/design');
+    mkdirSync(configDir, { recursive: true });
+    // 模拟 v0.4.6 之前的旧配置：只有 4 条基础排除规则
+    writeFileSync(
+      getDesignConfigPath(projectDir),
+      JSON.stringify({
+        source: 'directory',
+        filelists: [],
+        directory: {
+          root: 'hw',
+          excludes: ['**/dv/**', '**/test/**', '**/tests/**', '**/vendor/**'],
+          incdirs: [],
+          defines: [],
+        },
+        top: 'top',
+      }),
+      'utf-8',
+    );
+    const loaded = loadDesignConfig(projectDir);
+    expect(loaded.directory?.excludes).toContain('**/generic_dv/**');
+    expect(loaded.directory?.excludes).toContain('**/autogen/**');
+    expect(loaded.directory?.excludes).toContain('**/dv_sv/**');
+    expect(loaded.directory?.excludes).toContain('**/tb/**');
+    expect(loaded.directory?.excludes).toContain('**/verilator/**');
+    // 用户原有的排除规则保留
+    expect(loaded.directory?.excludes).toContain('**/dv/**');
+    expect(loaded.directory?.excludes).toContain('**/vendor/**');
+  });
+
+  it('用户自定义排除规则不被覆盖', () => {
+    const configDir = join(projectDir, '.socverify/design');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      getDesignConfigPath(projectDir),
+      JSON.stringify({
+        source: 'directory',
+        filelists: [],
+        directory: {
+          root: 'hw',
+          excludes: ['**/my_custom/**', '**/dv/**'],
+          incdirs: [],
+          defines: [],
+        },
+        top: 'top',
+      }),
+      'utf-8',
+    );
+    const loaded = loadDesignConfig(projectDir);
+    expect(loaded.directory?.excludes).toContain('**/my_custom/**');
+    expect(loaded.directory?.excludes).toContain('**/generic_dv/**');
+  });
 });

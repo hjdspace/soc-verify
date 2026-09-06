@@ -10,16 +10,21 @@ import type { DesignSourceConfig } from './types';
 
 export const DEFAULT_DIRECTORY_EXCLUDES = [
   '**/dv/**',
+  '**/dv_sv/**',
+  '**/generic_dv/**',
   '**/test/**',
   '**/tests/**',
+  '**/tb/**',
   '**/vendor/**',
   '**/verilator/**',
+  '**/autogen/**',
   '**/.git/**',
   '**/.socverify/**',
   '**/node_modules/**',
 ];
 
 const HDL_EXTENSIONS = new Set(['.v', '.sv']);
+const HDL_INCLUDE_EXTENSIONS = new Set(['.svh', '.vh']);
 const MAX_DISCOVERY_FILES = 100_000;
 
 function absolutePath(path: string, projectRoot: string): string {
@@ -86,6 +91,8 @@ export function scanHdlDirectory(
   const excludeMatchers = excludes.map(globRegex);
   const sources: string[] = [];
   const directories: string[] = [];
+  /** 包含 .svh/.vh 文件的目录，自动加入 incdir 使 `include 可被 slang 解析 */
+  const autoIncdirs = new Set<string>();
   const visit = (directory: string): void => {
     directories.push(directory);
     const entries = readdirSync(directory, { withFileTypes: true });
@@ -96,10 +103,17 @@ export function scanHdlDirectory(
       if (excludeMatchers.some((matcher) => matcher.test(matchPath))) continue;
       if (entry.isDirectory()) {
         if (!entry.isSymbolicLink()) visit(path);
-      } else if (entry.isFile() && HDL_EXTENSIONS.has(sourceExtension(entry.name))) {
-        sources.push(resolve(path));
-        if (sources.length > MAX_DISCOVERY_FILES) {
-          throw new Error(`RTL 扫描文件超过 ${MAX_DISCOVERY_FILES} 个，请缩小扫描范围`);
+      } else if (entry.isFile()) {
+        const ext = sourceExtension(entry.name);
+        if (HDL_EXTENSIONS.has(ext)) {
+          sources.push(resolve(path));
+          if (sources.length > MAX_DISCOVERY_FILES) {
+            throw new Error(`RTL 扫描文件超过 ${MAX_DISCOVERY_FILES} 个，请缩小扫描范围`);
+          }
+        } else if (HDL_INCLUDE_EXTENSIONS.has(ext)) {
+          // .svh/.vh 文件不作为独立编译单元（只通过 `include 引入），
+          // 但其所在目录自动加入 incdir，使 slang 能解析 `include "xxx.svh"
+          autoIncdirs.add(resolve(directory));
         }
       }
     }
@@ -107,13 +121,15 @@ export function scanHdlDirectory(
   visit(scanRoot);
   sources.sort((a, b) => sourcePriority(a) - sourcePriority(b) || a.localeCompare(b));
 
-  const normalizedIncdirs = incdirs.map((dir) => resolve(dir));
+  const userIncdirs = incdirs.map((dir) => resolve(dir));
+  // 合并用户显式 incdirs + 自动推断的 .svh 目录（去重，用户优先）
+  const allIncdirs = [...userIncdirs, ...[...autoIncdirs].filter((d) => !userIncdirs.includes(d))];
   return {
     sources,
-    incdirs: normalizedIncdirs,
+    incdirs: allIncdirs,
     defines: [...defines],
     passthrough: [],
-    files: [...directories, ...normalizedIncdirs, ...sources],
+    files: [...directories, ...allIncdirs, ...sources],
   };
 }
 

@@ -29,7 +29,7 @@ import {
 } from './design-db';
 import { RtlElaborationError, elaborate } from './elaborator';
 import { renderFlatFilelist } from './filelist';
-import { resolveDesignSource } from './design-source';
+import { resolveDesignSource, DEFAULT_DIRECTORY_EXCLUDES } from './design-source';
 import { extractDesign, extractTopUnits, normalizeSrc, type WriteJsonDoc } from './extractor';
 import { analyzePorts, BUILTIN_AMBA_RULES } from './bundle-rules';
 import type {
@@ -91,9 +91,11 @@ export function loadDesignConfig(projectRoot: string): DesignSourceConfig {
         source === 'directory' && rawDirectory && typeof rawDirectory.root === 'string'
           ? {
               root: rawDirectory.root,
-              excludes: Array.isArray(rawDirectory.excludes)
-                ? rawDirectory.excludes.filter((item): item is string => typeof item === 'string')
-                : [],
+              excludes: mergeDefaultExcludes(
+                Array.isArray(rawDirectory.excludes)
+                  ? rawDirectory.excludes.filter((item): item is string => typeof item === 'string')
+                  : [],
+              ),
               incdirs: Array.isArray(rawDirectory.incdirs)
                 ? rawDirectory.incdirs.filter((item): item is string => typeof item === 'string')
                 : [],
@@ -107,6 +109,18 @@ export function loadDesignConfig(projectRoot: string): DesignSourceConfig {
   } catch {
     return { source: 'filelist', filelists: [], directory: undefined, top: null };
   }
+}
+
+/**
+ * 将 DEFAULT_DIRECTORY_EXCLUDES 中用户配置缺少的排除规则自动补齐。
+ * 旧配置（v0.4.6 之前）只有 4 条基础排除规则，缺少 generic_dv / autogen /
+ * dv_sv / tb / verilator 等 — 这些对 OpenTitan 等大型项目至关重要。
+ * 补齐策略：仅追加缺失项，不删除用户自定义的排除规则。
+ */
+function mergeDefaultExcludes(userExcludes: string[]): string[] {
+  const existing = new Set(userExcludes.map((e) => e.replace(/\\/g, '/')));
+  const additions = DEFAULT_DIRECTORY_EXCLUDES.filter((e) => !existing.has(e));
+  return additions.length > 0 ? [...userExcludes, ...additions] : userExcludes;
 }
 
 export function saveDesignConfig(projectRoot: string, config: DesignSourceConfig): void {
