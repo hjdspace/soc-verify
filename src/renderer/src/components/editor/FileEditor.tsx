@@ -32,6 +32,7 @@ import { VimStatusBar } from './VimStatusBar';
 import { createSyntaxHighlightExtension } from './syntax-highlight';
 import { createIndentGuidesExtension } from './indent-guides';
 import { createInlineReviewExtension } from './inline-review';
+import { linterExtension, pushDiagnostics, type EditorDiagnostic } from './linter-extension';
 import { search, searchKeymap, openSearchPanel } from '@codemirror/search';
 import { Breadcrumb } from './Breadcrumb';
 import { EditorStatusBar, type CursorPosition } from './EditorStatusBar';
@@ -96,6 +97,22 @@ function getLanguageExtension(filename: string) {
 function isMarkdownFile(filename: string): boolean {
   const ext = filename.split('.').pop()?.toLowerCase() ?? '';
   return ext === 'md' || ext === 'markdown';
+}
+
+/** SystemVerilog / Verilog 文件检测（LSP + verible lint 触发条件） */
+function isSystemVerilogFile(filename: string): boolean {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  return ext === 'sv' || ext === 'svh' || ext === 'v' || ext === 'vh';
+}
+
+/** 将本地文件路径转为 file:// URI（LSP textDocument URI 格式） */
+function filePathToUri(filePath: string): string {
+  // Windows: D:\path\to\file.sv → file:///D:/path/to/file.sv
+  // Linux: /path/to/file.sv → file:///path/to/file.sv
+  const normalized = filePath.replace(/\\/g, '/');
+  // 不编码路径分隔符，只编码空格等特殊字符
+  const encoded = normalized.replace(/ /g, '%20');
+  return normalized.startsWith('/') ? `file://${encoded}` : `file:///${encoded}`;
 }
 
 function isHtmlFile(filename: string): boolean {
@@ -233,6 +250,15 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
   const isMd = isMarkdownFile(fileName);
   const isHtml = isHtmlFile(fileName);
   const isImage = isImageFile(fileName);
+  const isSv = isSystemVerilogFile(fileName);
+  const fileUri = useMemo(() => filePathToUri(filePath), [filePath]);
+
+  // ── LSP + verible lint 诊断合并 ──────────────────────────────
+  // 两个来源的 diagnostic 按 source 区分（slang / verible），
+  // 合并后一起 push 到 CodeMirror（spec 决策 28：互补不冗余）
+  const lspDiagnosticsRef = useRef<EditorDiagnostic[]>([]);
+  const veribleDiagnosticsRef = useRef<EditorDiagnostic[]>([]);
+  const docVersionRef = useRef(0);
   const imageUrl = useMemo(() => (isImage ? toLocalResourceUrl(filePath) : ''), [isImage, filePath]);
   const languageExtension = useMemo(() => {
     const ext = getLanguageExtension(fileName);
@@ -330,6 +356,101 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
     return () => { cancelled = true; };
   }, [projectId, filePath, isImage]);
 
+  // ── slang-server LSP 桥接 + verible lint ──────────────────────
+  // SV 文件打开时：启动 LSP → didOpen → 订阅诊断推送 → 合并 verible lint → 波浪线
+  // 内容变更时：didChange（全量文本替换，slang-server 不支持增量 range）
+  const lspStartedRef = useRef(false);
+
+  /** 合并 LSP + verible 诊断并推送到 CodeMirror */
+  const flushDiagnostics = useCallback(() => {
+    const view = editorViewRef.current;
+    if (!view || !view.dom.isConnected) return;
+    const merged = [...lspDiagnosticsRef.current, ...veribleDiagnosticsRef.current];
+    pushDiagnostics(view, merged);
+  }, []);
+
+  // LSP 启动 + didOpen + 诊断订阅
+  useEffect(() => {
+    if (!isSv || isImage) return;
+    let unsub: (() => void) | undefined;
+    let cancelled = false;
+
+    // 启动 LSP 进程
+    trpc.rtl.lspStart.mutate({ projectId }).then((status) => {
+      if (cancelled || !status) return;
+      if (!status.running && !status.initialized) return;
+      lspStartedRef.current = true;
+
+      // didOpen
+      docVersionRef.current += 1;
+      trpc.rtl.lspOpen.mutate({
+        projectId,
+        uri: fileUri,
+        text: content,
+        version: docVersionRef.current,
+      });
+
+      // 订阅 LSP 诊断推送
+      if (window.eventBridge) {
+        unsub = window.eventBridge.onLspDiagnostics((data) => {
+          if (data.projectId !== projectId || data.uri !== fileUri) return;
+          lspDiagnosticsRef.current = data.diagnostics.map((d) => ({
+            line: d.range.start.line,
+            character: d.range.start.character,
+            endLine: d.range.end.line,
+            endCharacter: d.range.end.character,
+            severity: d.severity,
+            message: d.message,
+            source: d.source,
+            code: d.code,
+          }));
+          flushDiagnostics();
+        });
+      }
+    }).catch(() => {
+      // LSP 不可用时静默降级（verible lint 仍可用）
+    });
+
+    return () => {
+      cancelled = true;
+      unsub?.();
+      lspStartedRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- content 初始加载后 didOpen 不重发
+  }, [projectId, filePath, isSv, isImage, fileUri]);
+
+  // 内容变更 → didChange（防抖 500ms，避免每次击键都发）
+  useEffect(() => {
+    if (!isSv || !lspStartedRef.current || !content) return;
+    const timer = setTimeout(() => {
+      docVersionRef.current += 1;
+      trpc.rtl.lspChange.mutate({
+        projectId,
+        uri: fileUri,
+        text: content,
+        version: docVersionRef.current,
+      }).catch(() => { /* LSP 不可用时静默 */ });
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [content, isSv, projectId, fileUri]);
+
+  // verible lint：打开/保存时后台自动跑（spec 决策 21/25）
+  useEffect(() => {
+    if (!isSv || !content) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      trpc.rtl.lintFile.query({ projectId, filePath, content }).then((result) => {
+        if (cancelled) return;
+        veribleDiagnosticsRef.current = result.diagnostics;
+        flushDiagnostics();
+      }).catch(() => {
+        // verible 不可用时静默降级
+      });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [content, isSv, projectId, filePath, flushDiagnostics]);
+
   // 文件在审阅队列中时确保 diff 已加载（覆盖目录树直开等不经 openFile 的入口）
   useEffect(() => {
     if (reviewEntry) {
@@ -397,16 +518,20 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
     })];
   }, [reviewEntry, reviewDiff, reviewStates]);
 
+  // linter extension（lint gutter 显示错误/警告标记）
+  const linterExt = useMemo(() => linterExtension(), []);
+
   // 合并所有 extension（memoize 避免每次渲染触发 CodeMirror reconfigure）
   const editorExtensions = useMemo<Extension[]>(() => [
     ...languageExtension,
     syntaxHighlightExtension,
     cursorListenerExtension,
     indentGuidesExtension,
+    linterExt,
     ...searchExtension,
     ...vimExtensions,
     ...inlineReviewExtensions,
-  ], [languageExtension, syntaxHighlightExtension, cursorListenerExtension, indentGuidesExtension, searchExtension, vimExtensions, inlineReviewExtensions]);
+  ], [languageExtension, syntaxHighlightExtension, cursorListenerExtension, indentGuidesExtension, linterExt, searchExtension, vimExtensions, inlineReviewExtensions]);
 
   const isDirty = content !== originalContent;
 

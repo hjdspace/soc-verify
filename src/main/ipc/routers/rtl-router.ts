@@ -35,6 +35,7 @@ import {
   startLsp,
   stopLsp,
 } from '../../rtl/lsp-manager';
+import { runVeribleLint, type VeribleLintDiagnostic } from '../../rtl/verible-lint';
 
 /** inline validator：projectId 必填 */
 const projectIdInput = (raw: unknown): { projectId: string } => {
@@ -277,6 +278,28 @@ export const rtlRouter = t.router({
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
       return restartLsp(input.projectId, project.rootPath);
+    }),
+
+  // ── verible lint（issue 08：风格检查，打开/保存时后台自动）────────
+
+  /**
+   * 对单个 .sv/.v 文件执行 verible lint，返回风格诊断。
+   *
+   * verible 不可用时返回空诊断（不抛出，渲染端静默降级）。
+   * content 可选：提供时写入临时文件（编辑器未保存的修改也能实时 lint）。
+   */
+  lintFile: t.procedure
+    .input((raw): { projectId: string; filePath: string; content?: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      if (typeof r.filePath !== 'string' || r.filePath.length === 0) throw new TRPCError({ code: 'BAD_REQUEST', message: 'filePath is required' });
+      if (r.content !== undefined && typeof r.content !== 'string') throw new TRPCError({ code: 'BAD_REQUEST', message: 'content must be a string' });
+      return { projectId: r.projectId, filePath: r.filePath, content: r.content as string | undefined };
+    })
+    .query(async ({ input }) => {
+      requireProject(input.projectId);
+      const result = await runVeribleLint({ filePath: input.filePath, content: input.content });
+      return { diagnostics: result.diagnostics satisfies VeribleLintDiagnostic[] };
     }),
 });
 

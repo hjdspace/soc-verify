@@ -192,6 +192,20 @@ export interface EventBridgeAPI {
       timestamp: string;
     }) => void,
   ) => () => void;
+  // slang-server LSP 诊断推送（issue 06 / S7：publishDiagnostics → 编辑器波浪线）
+  onLspDiagnostics: (
+    callback: (data: {
+      projectId: string;
+      uri: string;
+      diagnostics: Array<{
+        range: { start: { line: number; character: number }; end: { line: number; character: number } };
+        severity: 'error' | 'warning' | 'info' | 'hint';
+        message: string;
+        source?: string;
+        code?: number | string;
+      }>;
+    }) => void,
+  ) => () => void;
 }
 
 declare global {
