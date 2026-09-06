@@ -44,7 +44,10 @@ vi.mock('@xyflow/react', () => {
   const Panel = ({ children }: { children?: ReactNode }) => <>{children}</>;
   const EdgeLabelRenderer = ({ children }: { children?: ReactNode }) => <>{children}</>;
   const getBezierPath = () => ['', 160, 96];
-  // React Flow 桩：按 nodeTypes/edgeTypes 渲染自定义组件；双击转发给 onNodeDoubleClick
+  const applyNodeChanges = (_changes: unknown[], nodes: unknown[]) => nodes;
+  // React Flow 桩：按 nodeTypes/edgeTypes 渲染自定义组件；双击转发给 onNodeDoubleClick；
+  // 边组件按节点位置传锚点坐标（近似：源右缘出线 / 目标左缘入线，行偏移 92），
+  // 驱动 edgeGeometry 的绕行逻辑（真实绕行场景：root→u_subsys1 穿过 u_subsys0）
   const ReactFlow = ({
     nodes,
     edges,
@@ -56,10 +59,10 @@ vi.mock('@xyflow/react', () => {
     proOptions,
     children,
   }: {
-    nodes: { id: string; type?: string; data: Record<string, unknown> }[];
-    edges: { id: string; type?: string; data?: Record<string, unknown> }[];
+    nodes: { id: string; type?: string; position?: { x: number; y: number }; data: Record<string, unknown> }[];
+    edges: { id: string; source?: string; target?: string; type?: string; data?: Record<string, unknown> }[];
     nodeTypes?: Record<string, (props: { id: string; data: Record<string, unknown> }) => ReactElement>;
-    edgeTypes?: Record<string, (props: { id: string; data: Record<string, unknown> }) => ReactElement>;
+    edgeTypes?: Record<string, (props: Record<string, unknown>) => ReactElement>;
     onNodeDoubleClick?: (event: unknown, node: { id: string }) => void;
     onInit?: (instance: unknown) => void;
     onNodesChange?: (changes: unknown[]) => void;
@@ -80,16 +83,27 @@ vi.mock('@xyflow/react', () => {
       })}
       {edges?.map((e) => {
         const Cmp = e.type ? edgeTypes?.[e.type] : undefined;
+        const src = nodes?.find((n) => n.id === e.source);
+        const tgt = nodes?.find((n) => n.id === e.target);
         return (
           <div key={e.id} data-edge-id={e.id} data-highlighted={String(e.data?.highlighted ?? false)}>
-            {Cmp ? <Cmp id={e.id} data={e.data ?? {}} /> : null}
+            {Cmp ? (
+              <Cmp
+                id={e.id}
+                data={e.data ?? {}}
+                sourceX={src ? src.position!.x + 286 : 0}
+                sourceY={src ? src.position!.y + 92 : 0}
+                targetX={tgt ? tgt.position!.x : 0}
+                targetY={tgt ? tgt.position!.y + 92 : 0}
+              />
+            ) : null}
           </div>
         );
       })}
       {children}
     </div>
   );
-  return { ReactFlow, Handle, Position, BaseEdge, EdgeLabelRenderer, getBezierPath, Background, Controls, MiniMap, Panel };
+  return { ReactFlow, Handle, Position, BaseEdge, EdgeLabelRenderer, getBezierPath, applyNodeChanges, Background, Controls, MiniMap, Panel };
 });
 
 import { BlockDiagram } from '@renderer/components/design/BlockDiagram';
@@ -296,10 +310,18 @@ describe('BlockDiagram 渲染（issue 05）', () => {
     expect(bundleLabels.some((t) => t.includes('rst_n_i'))).toBe(true);
     expect(bundleLabels.some((t) => t.includes('clock'))).toBe(false);
     expect(canvas).toHaveAttribute('data-hide-attribution', 'true');
-    for (const label of canvas.querySelectorAll<HTMLElement>('[data-testid$="-label"]')) {
-      expect(label.style.position).toBe('absolute');
-      expect(label.style.transform).toContain('translate(160px, 96px)');
-    }
+    const labelTransforms = [...canvas.querySelectorAll<HTMLElement>('[data-testid$="-label"]')].map(
+      (n) => n.style.transform,
+    );
+    for (const transform of labelTransforms) expect(transform).toContain('translate(-50%, -50%)');
+    // 直连边标签 = 贝塞尔中点（mock getBezierPath 返回固定 160,96）
+    expect(labelTransforms.filter((t) => t.includes('translate(160px, 96px)'))).toHaveLength(5);
+    // root→u_subsys1 的 clock/reset 边穿过 u_subsys0 → 绕行通道标签：
+    // 不在贝塞尔中点，且位于节点上缘（y < 40）之外的空白通道
+    const detoured = labelTransforms.filter((t) => !t.includes('translate(160px, 96px)'));
+    expect(detoured).toHaveLength(2);
+    const labelY = (t: string) => Number(/translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(t)?.[2]);
+    for (const t of detoured) expect(labelY(t)).toBeLessThan(40);
   });
 });
 

@@ -30,6 +30,8 @@ export type DiagramNode = {
   portsIn: SubgraphPortRow[];
   /** output 端口列（box 右缘） */
   portsOut: SubgraphPortRow[];
+  bundles: BundleGroup[];
+  leftovers: string[];
 };
 
 /** 粗边展开后的信号明细（一对端口连接） */
@@ -82,6 +84,7 @@ type Conn = {
 function toNode(
   row: { path: string; name: string; module: string; ports: SubgraphPortRow[] },
   isRoot: boolean,
+  analysis: PortAnalysis,
 ): DiagramNode {
   return {
     id: row.path,
@@ -90,6 +93,8 @@ function toNode(
     isRoot,
     portsIn: row.ports.filter((p) => p.direction === 'input'),
     portsOut: row.ports.filter((p) => p.direction === 'output'),
+    bundles: analysis.bundles,
+    leftovers: analysis.leftovers,
   };
 }
 
@@ -113,13 +118,13 @@ export function buildDiagramViewModel(sg: DesignSubgraphRow): DiagramViewModel {
   if (!sg.root) return { nodes: [], edges: [] };
 
   const rootCtx: NodeCtx = {
-    node: toNode(sg.root, true),
+    node: toNode(sg.root, true, sg.bundles),
     ports: portIndex(sg.root.ports),
     bundles: bundleIndex(sg.bundles),
     isRoot: true,
   };
   const childCtxs: NodeCtx[] = sg.nodes.map((n) => ({
-    node: toNode(n, false),
+    node: toNode(n, false, n.bundles),
     ports: portIndex(n.ports),
     bundles: bundleIndex(n.bundles),
     isRoot: false,
