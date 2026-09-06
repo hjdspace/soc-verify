@@ -11,6 +11,8 @@ import { AlertTriangle, CheckCircle2, FolderOpen, ListTree, Network, Plus, Refre
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import { useProjectStore } from '@renderer/stores/project';
+import { useUiStore } from '@renderer/stores/ui';
+import { ResizeHandle } from '@renderer/components/layout/ResizeHandle';
 import { DesignTree } from '@renderer/components/design/DesignTree';
 import { ModuleInterfaceView } from '@renderer/components/design/ModuleInterfaceView';
 import { BlockDiagram } from '@renderer/components/design/BlockDiagram';
@@ -21,6 +23,8 @@ type DetailView = 'diagram' | 'interface';
 
 export function DesignView() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
+  const designTreeWidth = useUiStore((s) => s.designTreeWidth);
+  const setDesignTreeWidth = useUiStore((s) => s.setDesignTreeWidth);
 
   const [status, setStatus] = useState<DesignStatus | null>(null);
   const [config, setConfig] = useState<{ filelists: string[]; top: string | null } | null>(null);
@@ -62,6 +66,9 @@ export function DesignView() {
       if (result.ok) {
         setShowConfig(false);
       }
+      // ok:false 时 lastError 已由主进程持久化，reload 后 ErrorPanel 呈现失败原因
+    } catch (err) {
+      console.error('[DesignView] refresh 失败:', err);
     } finally {
       setRefreshing(false);
     }
@@ -134,6 +141,9 @@ export function DesignView() {
                 await handleRefreshed();
               }}
               onCancel={() => setShowConfig(false)}
+              onDetectFinished={async () => {
+                if (currentProjectId) await reload(currentProjectId);
+              }}
             />
           )}
 
@@ -150,7 +160,11 @@ export function DesignView() {
 
           {root && currentProjectId && (
             <div className="flex min-h-0 flex-1 gap-0 p-2">
-              <div className="flex min-h-0 w-2/5 shrink-0 flex-col border-r border-border pr-2">
+              <div
+                className="flex min-h-0 shrink-0 flex-col"
+                style={{ width: `${designTreeWidth}px` }}
+                data-testid="design-tree-panel"
+              >
                 <DesignTree
                   projectId={currentProjectId}
                   node={root}
@@ -158,6 +172,7 @@ export function DesignView() {
                   selectedPath={selectedInst?.path ?? null}
                 />
               </div>
+              <ResizeHandle side="left" width={designTreeWidth} onResize={setDesignTreeWidth} />
               <div className="flex min-h-0 min-w-0 flex-1 flex-col pl-2">
                 {/* ── 详情视图切换：框图（默认）/ 接口表 ── */}
                 <div className="mb-1 flex shrink-0 items-center gap-1" data-testid="design-detail-toggle">
@@ -218,17 +233,21 @@ function ConfigPanel({
   top,
   onSaved,
   onCancel,
+  onDetectFinished,
 }: {
   projectId: string;
   initial: { filelists: string[]; top: string | null };
   top: string | null;
   onSaved: (config: { filelists: string[]; top: string | null }) => void | Promise<void>;
   onCancel: () => void;
+  /** 检测顶层结束后回调：父级重载 status，同步 lastError 面板（成功清除残留旧错误 / 失败呈现新错误） */
+  onDetectFinished: () => void | Promise<void>;
 }) {
   const [filelists, setFilelists] = useState<string[]>(() => [...initial.filelists]);
   const [topInput, setTopInput] = useState<string>(top ?? '');
   const [detectedTops, setDetectedTops] = useState<string[] | null>(null);
   const [detectError, setDetectError] = useState<string | null>(null);
+  const [detectErrorDetail, setDetectErrorDetail] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   // 恢复上次检测的 top units 列表（story 17：选择器记忆，无需重新 elaboration）
@@ -241,6 +260,28 @@ function ConfigPanel({
       .catch(() => undefined);
   }, [projectId]);
 
+  /** 浏览选择 .f 文件：第一个填入当前行，多选的追加为新行 */
+  const browseFilelist = async (index: number) => {
+    try {
+      const result = await trpc.tools.selectFiles.mutate({
+        title: '选择 filelist 文件',
+        filters: [
+          { name: 'Filelist (.f)', extensions: ['f'] },
+          { name: '所有文件', extensions: ['*'] },
+        ],
+      });
+      if (result.paths.length === 0) return;
+      setFilelists((prev) => {
+        const next = [...prev];
+        const [first, ...rest] = result.paths;
+        next[index] = first;
+        return [...next, ...rest];
+      });
+    } catch {
+      // best-effort：对话框失败不影响手动输入
+    }
+  };
+
   const detectTops = async () => {
     // 先保存 filelists 再检测（检测需要读 .f）
     setSaving(true);
@@ -249,15 +290,22 @@ function ConfigPanel({
       const { tops } = await trpc.rtl.detectTops.mutate({ projectId });
       setDetectedTops(tops);
       setDetectError(null);
+      setDetectErrorDetail(null);
       if (tops.length > 0 && !topInput) {
         setTopInput(tops[0]);
       }
     } catch (err) {
       setDetectedTops([]);
-      setDetectError(err instanceof Error ? err.message : String(err));
+      // tRPC BAD_REQUEST 的 cause 是 ElaborationError（含 logTail/diagnostics）
+      const msg = err instanceof Error ? err.message : String(err);
+      const cause = (err as { cause?: { logTail?: string; diagnostics?: unknown[] } }).cause;
+      setDetectError(msg);
+      setDetectErrorDetail(cause?.logTail ?? null);
     } finally {
       setSaving(false);
     }
+    // 检测结束后同步主面板 status：成功时清除残留的旧 lastError 面板，失败时呈现新持久化错误
+    await onDetectFinished();
   };
 
   const save = async () => {
@@ -283,9 +331,18 @@ function ConfigPanel({
             <input
               value={f}
               onChange={(e) => setFilelists((prev) => prev.map((p, j) => (j === i ? e.target.value : p)))}
-              placeholder="design/filelist.f"
+              placeholder="design/filelist.f 或绝对路径"
               className="flex-1 rounded border border-border bg-background px-2 py-1 font-mono text-xs outline-none focus:ring-1 focus:ring-primary/50"
             />
+            <button
+              type="button"
+              aria-label={`浏览第 ${i + 1} 个 filelist`}
+              data-testid={`design-filelist-browse-${i}`}
+              onClick={() => void browseFilelist(i)}
+              className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <FolderOpen className="size-3.5" />
+            </button>
             <button
               type="button"
               aria-label={`删除第 ${i + 1} 个 filelist`}
@@ -347,7 +404,17 @@ function ConfigPanel({
             未检测到顶层
           </span>
         )}
-        {detectError && <span className="text-[11px] text-status-fail">{detectError}</span>}
+        {detectError && (
+          <div className="flex flex-col gap-0.5" data-testid="design-detect-error">
+            <span className="text-[11px] text-status-fail">{detectError}</span>
+            {detectErrorDetail && (
+              <details className="mt-0.5">
+                <summary className="cursor-pointer text-[10px] text-muted-foreground">yosys 输出详情</summary>
+                <pre className="mt-1 max-h-32 overflow-auto rounded bg-background/60 p-1.5 font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all">{detectErrorDetail}</pre>
+              </details>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex gap-2">

@@ -162,7 +162,8 @@ function BundleEdgeView(props: EdgeProps) {
               {d.expanded ? '−' : '+'}
             </button>
             <span className="font-semibold text-foreground">
-              {d.label} ×{d.signalCount}
+              {d.label}
+              {d.signalCount > 1 ? ` ×${d.signalCount}` : ''}
             </span>
           </div>
           {d.expanded && (

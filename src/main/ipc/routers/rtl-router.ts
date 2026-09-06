@@ -24,6 +24,7 @@ import {
   saveDesignConfig,
 } from '../../rtl/design-service';
 import { RtlElaborationError } from '../../rtl/elaborator';
+import { stripPathQuotes } from '../../rtl/filelist';
 import {
   getLspStatus,
   lspDefinition,
@@ -78,8 +79,9 @@ export const rtlRouter = t.router({
     .mutation(({ input }) => {
       const project = requireProject(input.projectId);
       const top = input.top !== null && input.top.trim().length > 0 ? input.top.trim() : null;
+      // stripPathQuotes：去除「复制文件地址」粘贴带来的首尾引号（含 trim）
       saveDesignConfig(project.rootPath, {
-        filelists: input.filelists.map((f) => f.trim()).filter((f) => f.length > 0),
+        filelists: input.filelists.map((f) => stripPathQuotes(f)).filter((f) => f.length > 0),
         top,
       });
       return { ok: true as const };

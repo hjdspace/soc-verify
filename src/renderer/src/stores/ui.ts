@@ -56,6 +56,8 @@ interface UiState {
   bottomPanelHeight: number;
   /** 仿真视图左栏宽度（可拖拽调整，持久化到布局状态） */
   simLeftPanelWidth: number;
+  /** 设计视图层级树宽度（可拖拽调整，持久化到布局状态） */
+  designTreeWidth: number;
   /** 仿真视图 keep-alive：首次进入仿真视图后置位，ViewContainer 依据此标记常驻保留
    * 仿真视图 DOM（切走隐藏而非卸载），避免万级用例树反复重建导致切换卡顿 */
   simulationViewMounted: boolean;
@@ -81,6 +83,7 @@ interface UiState {
   setBottomPanelCollapsed: (collapsed: boolean) => void;
   setBottomPanelHeight: (height: number) => void;
   setSimLeftPanelWidth: (width: number) => void;
+  setDesignTreeWidth: (width: number) => void;
   setPluginViewActive: (location: PluginViewLocation, viewId: string) => void;
   setPluginViewCollapsed: (location: PluginViewLocation, collapsed: boolean) => void;
   hydratePluginViewLayouts: (layouts?: Partial<PluginViewLayouts>) => void;
@@ -93,6 +96,7 @@ interface UiState {
     filePanelCollapsed?: boolean;
     filePanelWidth?: number;
     simLeftPanelWidth?: number;
+    designTreeWidth?: number;
   }) => void;
 }
 
@@ -102,6 +106,9 @@ const BOTTOM_MIN = 120;
 const BOTTOM_MAX = 600;
 const SIM_LEFT_MIN = 200;
 const SIM_LEFT_MAX = 400;
+const DESIGN_TREE_MIN = 200;
+const DESIGN_TREE_MAX = 600;
+const DESIGN_TREE_DEFAULT_WIDTH = 380;
 const FILE_PANEL_MIN = 240;
 const FILE_PANEL_MAX = 500;
 const FILE_PANEL_DEFAULT_WIDTH = 330;
@@ -123,6 +130,7 @@ export const useUiStore = create<UiState>((set) => ({
   bottomPanelCollapsed: true,
   bottomPanelHeight: 240,
   simLeftPanelWidth: 260,
+  designTreeWidth: DESIGN_TREE_DEFAULT_WIDTH,
   simulationViewMounted: false,
   setSimulationViewMounted: (mounted) => set({ simulationViewMounted: mounted }),
   pluginViewLayouts: DEFAULT_PLUGIN_VIEW_LAYOUTS,
@@ -149,6 +157,7 @@ export const useUiStore = create<UiState>((set) => ({
   setBottomPanelCollapsed: (collapsed) => set({ bottomPanelCollapsed: collapsed }),
   setBottomPanelHeight: (height) => set({ bottomPanelHeight: Math.max(BOTTOM_MIN, Math.min(BOTTOM_MAX, height)) }),
   setSimLeftPanelWidth: (width) => set({ simLeftPanelWidth: Math.max(SIM_LEFT_MIN, Math.min(SIM_LEFT_MAX, width)) }),
+  setDesignTreeWidth: (width) => set({ designTreeWidth: Math.max(DESIGN_TREE_MIN, Math.min(DESIGN_TREE_MAX, width)) }),
   setPluginViewActive: (location, viewId) => set((state) => ({
     pluginViewLayouts: {
       ...state.pluginViewLayouts,
@@ -182,6 +191,10 @@ export const useUiStore = create<UiState>((set) => ({
       typeof layout?.simLeftPanelWidth === 'number'
         ? Math.max(SIM_LEFT_MIN, Math.min(SIM_LEFT_MAX, layout.simLeftPanelWidth))
         : state.simLeftPanelWidth,
+    designTreeWidth:
+      typeof layout?.designTreeWidth === 'number'
+        ? Math.max(DESIGN_TREE_MIN, Math.min(DESIGN_TREE_MAX, layout.designTreeWidth))
+        : state.designTreeWidth,
     pluginViewLayouts: {
       ...DEFAULT_PLUGIN_VIEW_LAYOUTS,
       ...(layout?.pluginViews ?? {}),

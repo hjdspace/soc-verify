@@ -29,7 +29,7 @@ import {
 } from './design-db';
 import { RtlElaborationError, elaborate } from './elaborator';
 import { flattenFilelists, renderFlatFilelist } from './filelist';
-import { extractDesign, type WriteJsonDoc } from './extractor';
+import { extractDesign, extractTopUnits, type WriteJsonDoc } from './extractor';
 import { analyzePorts, BUILTIN_AMBA_RULES } from './bundle-rules';
 import type {
   BundleRule,
@@ -180,9 +180,15 @@ function serialize<T>(projectId: string, fn: () => Promise<T>): Promise<T> {
   const prev = inflight.get(projectId) ?? Promise.resolve();
   const next = prev.catch(() => undefined).then(fn);
   inflight.set(projectId, next);
-  void next.finally(() => {
-    if (inflight.get(projectId) === next) inflight.delete(projectId);
-  });
+  // .finally() 返回的衍生 Promise 会继承 next 的 rejection；
+  // 若 next 被拒绝（如 detectTops yosys 失败），该衍生 Promise 无人捕获
+  // → 触发 unhandledRejection → 全局错误横幅误弹。
+  // .catch(() => undefined) 吞掉衍生 rejection（cleanup 回调本身不抛异常）。
+  next
+    .finally(() => {
+      if (inflight.get(projectId) === next) inflight.delete(projectId);
+    })
+    .catch(() => undefined);
   return next;
 }
 
@@ -345,19 +351,19 @@ export function refresh(projectId: string, projectRoot: string): Promise<DesignR
   return serialize(projectId, async (): Promise<DesignRefreshResult> => {
     const config = loadDesignConfig(projectRoot);
     if (config.filelists.length === 0) {
-      return fail('未配置 Design Source：请先在「设计」视图配置 .f 文件列表');
+      return fail(projectId, projectRoot, '未配置 Design Source：请先在「设计」视图配置 .f 文件列表');
     }
     if (!config.top) {
-      return fail('未选择顶层模块：请先检测并选择顶层');
+      return fail(projectId, projectRoot, '未选择顶层模块：请先检测并选择顶层');
     }
 
     const yosysPath = resolveYosysPath();
     if (!yosysPath) {
-      return fail('yosys 不可用：请运行 npm run download:rtl-tools 安装 RTL 工具链');
+      return fail(projectId, projectRoot, 'yosys 不可用：请运行 npm run download:rtl-tools 安装 RTL 工具链');
     }
     const missingDlls = yosysMissingDlls() ?? [];
     if (missingDlls.length > 0) {
-      return fail(`yosys 依赖 DLL 缺失: ${missingDlls.join(', ')}（必须与 exe 同目录，重新运行 npm run download:rtl-tools）`);
+      return fail(projectId, projectRoot, `yosys 依赖 DLL 缺失: ${missingDlls.join(', ')}（必须与 exe 同目录，重新运行 npm run download:rtl-tools）`);
     }
 
     // 展开多 .f → 扁平清单（绝对路径）
@@ -366,10 +372,10 @@ export function refresh(projectId: string, projectRoot: string): Promise<DesignR
     try {
       parsed = flattenFilelists(absFilelists, projectRoot);
     } catch (err) {
-      return fail(err instanceof Error ? err.message : String(err));
+      return fail(projectId, projectRoot, err instanceof Error ? err.message : String(err));
     }
     if (parsed.sources.length === 0) {
-      return fail('Design Source 未解析到任何源文件（检查 .f 配置）');
+      return fail(projectId, projectRoot, 'Design Source 未解析到任何源文件（检查 .f 配置）');
     }
 
     const started = Date.now();
@@ -397,7 +403,7 @@ export function refresh(projectId: string, projectRoot: string): Promise<DesignR
     let design;
     try {
       const doc = JSON.parse(readFileSync(result.jsonPath, 'utf-8')) as WriteJsonDoc;
-      design = extractDesign(doc, config.top);
+      design = extractDesign(doc, config.top, workDir);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       persistError(projectId, projectRoot, { message: `write_json 提炼失败: ${message}`, diagnostics: [], logTail: '' });
@@ -439,8 +445,14 @@ export function refresh(projectId: string, projectRoot: string): Promise<DesignR
   });
 }
 
-function fail(message: string): DesignRefreshResult {
-  return { ok: false, error: { message, diagnostics: [], logTail: '' } };
+/**
+ * 失败即持久化 lastError（含配置缺失/工具不可用/filelist 展开失败等前置失败）。
+ * 否则 UI 刷新失败后会静默回退到「尚未 elaboration」空页面，用户无从得知原因。
+ */
+function fail(projectId: string, projectRoot: string, message: string): DesignRefreshResult {
+  const error: ElaborationError = { message, diagnostics: [], logTail: '' };
+  persistError(projectId, projectRoot, error);
+  return { ok: false, error };
 }
 
 function persistError(projectId: string, projectRoot: string, error: ElaborationError): void {
@@ -453,23 +465,39 @@ function persistError(projectId: string, projectRoot: string, error: Elaboration
 
 /**
  * 检测顶层模块（story 17：从 elaborated top units 列表选择）。
- * 不写 DB —— read_slang 无 --top 时自动判定顶层，plain 命名模块即 top 单元。
+ *
+ * 与 refresh 不同，检测阶段不写设计数据 DB（top 未定，提炼结果无意义），
+ * 但失败时仍持久化 lastError —— 否则 UI 仅拿到 err.message（如「yosys 退出码 1」）
+ * 而 logTail（实际 yosys 输出）和 diagnostics 全部丢失，用户无从诊断。
  */
 export function detectTops(projectId: string, projectRoot: string): Promise<string[]> {
   return serialize(projectId, async (): Promise<string[]> => {
     const config = loadDesignConfig(projectRoot);
     if (config.filelists.length === 0) {
-      throw new RtlElaborationError('未配置 Design Source：请先配置 .f 文件列表', [], '');
+      const err = new RtlElaborationError('未配置 Design Source：请先配置 .f 文件列表', [], '');
+      persistError(projectId, projectRoot, err.toElaborationError());
+      throw err;
     }
     const yosysPath = resolveYosysPath();
     if (!yosysPath) {
-      throw new RtlElaborationError('yosys 不可用：请运行 npm run download:rtl-tools 安装 RTL 工具链', [], '');
+      const err = new RtlElaborationError('yosys 不可用：请运行 npm run download:rtl-tools 安装 RTL 工具链', [], '');
+      persistError(projectId, projectRoot, err.toElaborationError());
+      throw err;
     }
 
     const absFilelists = config.filelists.map((f) => (isAbsolute(f) ? f : join(projectRoot, f)));
-    const parsed = flattenFilelists(absFilelists, projectRoot);
+    let parsed;
+    try {
+      parsed = flattenFilelists(absFilelists, projectRoot);
+    } catch (err) {
+      const elabErr = new RtlElaborationError(err instanceof Error ? err.message : String(err), [], '');
+      persistError(projectId, projectRoot, elabErr.toElaborationError());
+      throw elabErr;
+    }
     if (parsed.sources.length === 0) {
-      throw new RtlElaborationError('Design Source 未解析到任何源文件（检查 .f 配置）', [], '');
+      const err = new RtlElaborationError('Design Source 未解析到任何源文件（检查 .f 配置）', [], '');
+      persistError(projectId, projectRoot, err.toElaborationError());
+      throw err;
     }
 
     const workDir = getDesignWorkDir(projectRoot);
@@ -477,12 +505,27 @@ export function detectTops(projectId: string, projectRoot: string): Promise<stri
     const flatPath = join(workDir, 'design_flat.f');
     writeFileSync(flatPath, renderFlatFilelist(parsed), 'utf-8');
 
-    const result = await elaborate({ yosysPath, workDir, flatFilelistPath: flatPath, top: null });
+    let result;
+    try {
+      result = await elaborate({ yosysPath, workDir, flatFilelistPath: flatPath, top: null });
+    } catch (err) {
+      const elabErr = err instanceof RtlElaborationError ? err : new RtlElaborationError(String(err), [], '');
+      persistError(projectId, projectRoot, elabErr.toElaborationError());
+      throw elabErr;
+    }
     try {
       const doc = JSON.parse(readFileSync(result.jsonPath, 'utf-8')) as WriteJsonDoc;
-      const tops = Object.keys(doc.modules ?? {}).filter((name) => !name.startsWith('$')).sort();
+      // extractTopUnits：过滤 uniquified 实例模块（--keep-hierarchy 产物），
+      // 只留真实 elaborated top units（未被任何模块实例化的用户模块）
+      const tops = extractTopUnits(doc);
       // 持久化检测结果：顶层选择器下次进入直接恢复候选列表（无需重新 elaboration）
       saveDetectedTops(projectRoot, tops);
+      // 检测成功后清除上次失败残留的 lastError
+      try {
+        setLastError(getDesignDb(projectId, projectRoot), null);
+      } catch {
+        // DB 打开失败时忽略
+      }
       return tops;
     } finally {
       try {

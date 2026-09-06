@@ -132,7 +132,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       const ge = this.state.globalError;
       return (
         <>
-          <div className="fixed top-0 left-0 right-0 z-[9999] flex items-start gap-3 border-b border-destructive/30 bg-destructive/10 p-3">
+          {/* top-9 = TitleBar 高度（36px），避免与窗口控制按钮重叠 */}
+          <div className="fixed top-9 left-0 right-0 z-[9999] flex items-start gap-3 border-b border-destructive/30 bg-destructive/15 p-3 backdrop-blur-sm">
             <div className="flex-1">
               <div className="text-sm font-medium text-destructive">
                 {ge.type === 'uncaughtException' ? '主进程异常' : '未处理的 Promise 拒绝'}
@@ -150,9 +151,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             <button
               type="button"
               onClick={this.handleDismissGlobalError}
-              className="text-sm text-muted-foreground hover:text-foreground"
+              className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+              aria-label="关闭错误提示"
             >
-              ✕
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
             </button>
           </div>
           {this.props.children}

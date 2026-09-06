@@ -496,6 +496,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
             filePanelCollapsed: useUiStore.getState().filePanelCollapsed,
             filePanelWidth: useUiStore.getState().filePanelWidth,
             simLeftPanelWidth: useUiStore.getState().simLeftPanelWidth,
+            designTreeWidth: useUiStore.getState().designTreeWidth,
           },
           lastSessionIds: useSessionCoreStore.getState().sessions
             .filter((s) => s.projectId === currentProjectId)

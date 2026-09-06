@@ -37,6 +37,7 @@ export function AppShell() {
   const rightPanelWidth = useUiStore((s) => s.rightPanelWidth);
   const setRightPanelWidth = useUiStore((s) => s.setRightPanelWidth);
   const simLeftPanelWidth = useUiStore((s) => s.simLeftPanelWidth);
+  const designTreeWidth = useUiStore((s) => s.designTreeWidth);
   const pluginViewLayouts = useUiStore((s) => s.pluginViewLayouts);
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
   const uiStateReady = useProjectStore((s) => s.uiStateReady);
@@ -67,7 +68,7 @@ export function AppShell() {
       void saveProjectState();
     }, 250);
     return () => window.clearTimeout(timer);
-  }, [currentProjectId, uiStateReady, activeView, aiPanelMode, filePanelMode, filePanelCollapsed, filePanelWidth, rightCollapsed, rightPanelWidth, simLeftPanelWidth, pluginViewLayouts, sessionIds, saveProjectState]);
+  }, [currentProjectId, uiStateReady, activeView, aiPanelMode, filePanelMode, filePanelCollapsed, filePanelWidth, rightCollapsed, rightPanelWidth, simLeftPanelWidth, designTreeWidth, pluginViewLayouts, sessionIds, saveProjectState]);
 
   // Save state before the window unloads so lastSessionIds is up-to-date.
   useEffect(() => {

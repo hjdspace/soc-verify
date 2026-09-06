@@ -155,18 +155,20 @@ describe('buildDiagramViewModel 边（issue 05）', () => {
     expect(bridge[0]!.targetPort).toBe('h_haddr');
   });
 
-  it('clk 广播边聚合为 clock 粗边（图根 → 两个子实例，各一条）', () => {
-    const clkEdges = vm.edges.filter((e) => e.label === 'clock');
+  it('clk 广播边聚合为粗边，标签 = net 名 clk_i（图根 → 两个子实例，各一条）', () => {
+    const clkEdges = vm.edges.filter((e) => e.label === 'clk_i');
     expect(clkEdges).toHaveLength(2);
     expect(clkEdges.every((e) => e.kind === 'bundle' && e.source === 'spike_top')).toBe(true);
     expect(new Set(clkEdges.map((e) => e.target))).toEqual(
       new Set(['spike_top.u_subsys0', 'spike_top.u_subsys1']),
     );
     expect(clkEdges.every((e) => e.signalCount === 1)).toBe(true);
+    // singleton 束不再用协议名做标签（"clock ×1" 曾被误读为模块）
+    expect(vm.edges.some((e) => e.label === 'clock')).toBe(false);
   });
 
-  it('rst 广播边聚合为 reset 粗边', () => {
-    expect(vm.edges.filter((e) => e.label === 'reset')).toHaveLength(2);
+  it('rst 广播边聚合为粗边，标签 = net 名 rst_n_i', () => {
+    expect(vm.edges.filter((e) => e.label === 'rst_n_i')).toHaveLength(2);
   });
 
   it('link_irq 细边：两端均未入束 → signal 边（u_subsys0 → u_subsys1）', () => {

@@ -60,7 +60,7 @@ describe('applyTheme — View Transition 路径', () => {
     setMatchMediaMatches(false);
     const startViewTransition = vi.fn((cb: () => void) => {
       cb();
-      return { finished: Promise.resolve() };
+      return { ready: Promise.resolve(), finished: Promise.resolve() };
     });
     setStartViewTransition(startViewTransition);
 
@@ -70,6 +70,24 @@ describe('applyTheme — View Transition 路径', () => {
     // DOM 更新发生在 View Transition 回调内（而非渐进 transition 风暴）
     expect(document.documentElement.dataset.theme).toBe('daylight');
     expect(document.documentElement.dataset.shade).toBe('light');
+  });
+
+  it('过渡被跳过（ready/finished 以 AbortError 拒绝）时不产生 unhandled rejection', async () => {
+    setMatchMediaMatches(false);
+    // 模拟：启动时 initTheme 双读回填 → 第二个 transition 跳过第一个
+    const abort = Object.assign(new Error('Transition was skipped'), { name: 'AbortError' });
+    const rejected = Promise.reject(abort);
+    setStartViewTransition(
+      vi.fn((cb: () => void) => {
+        cb();
+        return { ready: rejected, finished: rejected };
+      }),
+    );
+
+    useThemeStore.getState().setTheme('daylight');
+    // 冲刷微任务队列：若 ready/finished 未被捕获，vitest 将以 unhandled rejection 失败
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(document.documentElement.dataset.theme).toBe('daylight');
   });
 
   it('不支持时降级为立即切换（旧内核 / jsdom）', () => {

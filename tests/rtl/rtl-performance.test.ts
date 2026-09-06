@@ -63,7 +63,7 @@ describe('SoC 级提炼→入库性能', () => {
     const start = performance.now();
 
     // 1. 提炼
-    design = extractDesign(doc as WriteJsonDoc, 'spike_top');
+    design = extractDesign(doc as WriteJsonDoc, 'spike_top', '/work/dir');
 
     // 2. bundle 打标（per-def analyzePorts）
     for (const def of design.defs) {
@@ -101,7 +101,7 @@ describe('子树分页查询延迟（SoC 级 SQLite 索引性能）', () => {
   let db: DesignDatabase;
 
   beforeAll(() => {
-    const design = extractDesign(doc as WriteJsonDoc, 'spike_top');
+    const design = extractDesign(doc as WriteJsonDoc, 'spike_top', '/work/dir');
     for (const def of design.defs) {
       def.bundles = analyzePorts(def.ports, BUILTIN_AMBA_RULES);
     }
@@ -170,7 +170,7 @@ describe('内存边界：raw write_json 不进渲染进程', () => {
   it('rtl-router 返回的查询结果不包含 raw write_json（只有提炼后的行级数据）', () => {
     // 提炼后 design 中的 insts/defs/edges 均为提炼模型，
     // 不含 raw write_json 的 modules/ports/cells/netnames 原始结构
-    const design = extractDesign(doc as WriteJsonDoc, 'spike_top');
+    const design = extractDesign(doc as WriteJsonDoc, 'spike_top', '/work/dir');
 
     // insts 是行级数据（path/name/module/parent/depth/src/params/instCount）
     expect(design.insts[0]).not.toHaveProperty('connections');
@@ -189,7 +189,7 @@ describe('内存边界：raw write_json 不进渲染进程', () => {
   });
 
   it('DB 查询返回的行不含 raw write_json 字段', () => {
-    const design = extractDesign(doc as WriteJsonDoc, 'spike_top');
+    const design = extractDesign(doc as WriteJsonDoc, 'spike_top', '/work/dir');
     for (const def of design.defs) {
       def.bundles = analyzePorts(def.ports, BUILTIN_AMBA_RULES);
     }

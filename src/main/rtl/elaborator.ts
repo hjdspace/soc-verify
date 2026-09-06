@@ -82,6 +82,20 @@ export function renderYosysScript(flatFilelistPath: string, top: string | null, 
   return `read_slang -f ${flatFilelistPath}${topArg} --keep-hierarchy\nwrite_json ${jsonPath}\n`;
 }
 
+/**
+ * 提取日志中首个错误行（slang `error: ...` / yosys `ERROR: ...`）。
+ * 无 file:line:col 诊断时的报错兜底 —— 否则只剩「yosys 退出码 1」无从诊断
+ * （典型：`error: 'D:proja.sv': No such file or directory` 这类命令行级错误
+ * 不带位置信息，parseDiagnostics 匹配不上）。
+ */
+export function firstErrorLine(log: string): string | null {
+  for (const line of log.split(/\r?\n/)) {
+    const t = line.trim();
+    if (t.length > 0 && /(?:^|\s)error\s*:/i.test(t)) return t;
+  }
+  return null;
+}
+
 export async function elaborate(opts: ElaborationOptions): Promise<ElaborationResult> {
   const { yosysPath, workDir, flatFilelistPath, top, timeoutMs = ELABORATION_TIMEOUT_MS, onLog } = opts;
 
@@ -164,11 +178,15 @@ function runYosys(
       } else {
         const diags = parseDiagnostics(log);
         const firstError = diags.find((d) => d.severity === 'error' || d.severity === 'fatal');
+        const fallback = firstErrorLine(log);
+        const brief = fallback && fallback.length > 200 ? `${fallback.slice(0, 200)}…` : fallback;
         rejectPromise(
           new RtlElaborationError(
             firstError
               ? `elaboration 失败：${firstError.file}:${firstError.line} ${firstError.message}`
-              : `yosys 退出码 ${code ?? 'signal'}`,
+              : brief
+                ? `yosys 退出码 ${code ?? 'signal'}：${brief}`
+                : `yosys 退出码 ${code ?? 'signal'}`,
             diags,
             tail(log),
           ),

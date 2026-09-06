@@ -186,7 +186,11 @@ function bundleKey(b: BundleGroup): string {
   return `${b.protocol}@${b.prefix}`;
 }
 
-function bundleLabel(src: BundleGroup, tgt: BundleGroup): string {
+/** 束标签：singleton（clk/rst）用 net 名（协议名 "clock ×1" 易被误读为模块）；协议束用协议名 */
+function bundleLabel(src: BundleGroup, tgt: BundleGroup, first: Conn | undefined): string {
+  if (src.singleton && tgt.singleton && first) {
+    return first.net ?? first.from.port.name;
+  }
   return src.protocol === tgt.protocol ? src.protocol : `${src.protocol} → ${tgt.protocol}`;
 }
 
@@ -287,7 +291,7 @@ function bundleEdge(
     kind: 'bundle',
     source: dir.fromId,
     target: dir.toId,
-    label: bundleLabel(src, tgt),
+    label: bundleLabel(src, tgt, first),
     // 锚定首信号端口（box 上具体位置）；信号明细见 signals
     sourcePort: first ? first.from.port.name : null,
     targetPort: first ? first.to.port.name : null,

@@ -107,7 +107,12 @@ function applyTheme(id: string) {
   if (prefersReducedMotion || !document.startViewTransition) {
     doApply();
   } else {
-    document.startViewTransition(doApply);
+    const transition = document.startViewTransition(doApply);
+    // 快速连续切换（如 initTheme 的 localStorage 同步应用 + 主进程异步回填）
+    // 会跳过前一个过渡：ready/finished 以 AbortError 拒绝，属预期行为。
+    // 显式吞掉，避免控制台 unhandled rejection 噪音。
+    transition.ready.catch(() => undefined);
+    transition.finished.catch(() => undefined);
   }
 }
 

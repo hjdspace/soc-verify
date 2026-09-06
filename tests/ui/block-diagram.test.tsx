@@ -271,11 +271,17 @@ describe('BlockDiagram 渲染（issue 05）', () => {
     expect(u0).toHaveTextContent('u_subsys0');
     expect(u0).toHaveTextContent('soc_subsys');
 
-    // 7 条边：APB 桥 + AHB→APB 读通道 + clock×2 + reset×2 + link_irq 细边
+    // 7 条边：APB 桥 + AHB→APB 读通道 + clk_i×2 + rst_n_i×2 + link_irq 细边
     expect(canvas.querySelectorAll('[data-edge-id]')).toHaveLength(7);
     expect(canvas.textContent).toContain('APB → AHB');
-    expect(canvas.textContent).toContain('clock');
     expect(canvas.textContent).toContain('link_irq');
+    // clock/reset singleton 束标签 = net 名（无 ×1、无协议名，消除 "clockx1 框图" 误读）
+    const bundleLabels = [...canvas.querySelectorAll('[data-testid="diagram-bundle-label"]')].map(
+      (n) => n.textContent ?? '',
+    );
+    expect(bundleLabels.some((t) => t.includes('clk_i'))).toBe(true);
+    expect(bundleLabels.some((t) => t.includes('rst_n_i'))).toBe(true);
+    expect(bundleLabels.some((t) => t.includes('clock'))).toBe(false);
   });
 });
 

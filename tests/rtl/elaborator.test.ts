@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { parseDiagnostics, renderYosysScript, RtlElaborationError } from '../../src/main/rtl/elaborator';
+import { parseDiagnostics, renderYosysScript, firstErrorLine, RtlElaborationError } from '../../src/main/rtl/elaborator';
 
 // ─── parseDiagnostics ────────────────────────────────────────
 
@@ -117,6 +117,30 @@ describe('renderYosysScript', () => {
   it('脚本以换行结尾（yosys 逐行解析）', () => {
     const script = renderYosysScript('/path.f', 'top', '/out.json');
     expect(script.endsWith('\n')).toBe(true);
+  });
+});
+
+// ─── firstErrorLine ──────────────────────────────────────────
+
+describe('firstErrorLine', () => {
+  it('提取 slang 无位置错误行（error: ... 开头）', () => {
+    const log = ['warning: include directory not found', "error: 'D:proja.sv': No such file or directory"].join('\n');
+    expect(firstErrorLine(log)).toBe("error: 'D:proja.sv': No such file or directory");
+  });
+
+  it('提取 yosys 大写 ERROR: 行', () => {
+    const log = ['1. Executing SLANG frontend.', 'ERROR: read_slang failed in design.ys'].join('\n');
+    expect(firstErrorLine(log)).toBe('ERROR: read_slang failed in design.ys');
+  });
+
+  it('warning 行不匹配（只认 error）', () => {
+    const log = 'warning: include directory was not found';
+    expect(firstErrorLine(log)).toBeNull();
+  });
+
+  it('空日志 / 无错误行返回 null', () => {
+    expect(firstErrorLine('')).toBeNull();
+    expect(firstErrorLine('End of script.\nAll good.')).toBeNull();
   });
 });
 

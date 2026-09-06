@@ -32,6 +32,19 @@ export type ParsedFilelist = {
 
 const MAX_NESTING_DEPTH = 20;
 
+/**
+ * 去除路径首尾引号与空白。
+ * Windows「复制文件地址」粘贴的路径自带双引号（如 `"D:\proj\a.f"`），
+ * 不去除时 isAbsolute 判定失败，会被当相对路径拼到项目根下。
+ */
+export function stripPathQuotes(p: string): string {
+  const t = p.trim();
+  if (t.length >= 2 && ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'")))) {
+    return t.slice(1, -1);
+  }
+  return t;
+}
+
 /** 路径解析：优先相对当前 .f 所在目录，文件系统上不存在时回退 baseDir */
 function resolveRelative(p: string, ownDir: string, baseDir: string): string {
   if (isAbsolute(p)) return resolve(p);
@@ -67,7 +80,10 @@ function parseInto(
   out.files.push(normPath);
 
   const ownDir = dirname(normPath);
-  const content = existsSync(normPath) ? readLines(normPath) : '';
+  if (!existsSync(normPath)) {
+    throw new Error(`filelist 文件不存在: ${normPath}`);
+  }
+  const content = readLines(normPath);
   const rawLines = content.split(/\r?\n/);
 
   for (let i = 0; i < rawLines.length; i++) {
@@ -132,21 +148,31 @@ function readLines(path: string): string {
 export function flattenFilelists(filelists: string[], baseDir: string): ParsedFilelist {
   const out: ParsedFilelist = { sources: [], incdirs: [], defines: [], passthrough: [], files: [] };
   const visited = new Set<string>();
-  for (const f of filelists) {
+  for (const raw of filelists) {
+    const f = stripPathQuotes(raw);
     parseInto(isAbsolute(f) ? f : join(baseDir, f), baseDir, out, visited, 0);
   }
   return out;
 }
 
 /**
+ * 路径分隔符正斜杠化。slang 的 `-f` 响应文件解析器把 `\` 当转义符吞掉
+ * （S0 实测：`D:\proj\a.sv` → `D:proja.sv` 报 No such file or directory），
+ * Windows 路径写入 flat .f 前必须转换；正斜杠在两平台均被接受。
+ */
+export function toSlashPath(p: string): string {
+  return p.replace(/\\/g, '/');
+}
+
+/**
  * 生成扁平 .f 内容（写入 work 目录供 read_slang -f 消费）。
- * 全部绝对路径，与 yosys cwd 无关。
+ * 全部绝对路径（正斜杠形式），与 yosys cwd 无关。
  */
 export function renderFlatFilelist(parsed: ParsedFilelist): string {
   const lines: string[] = [];
-  for (const dir of parsed.incdirs) lines.push(`+incdir+${dir}`);
+  for (const dir of parsed.incdirs) lines.push(`+incdir+${toSlashPath(dir)}`);
   for (const def of parsed.defines) lines.push(`+define+${def}`);
   for (const flag of parsed.passthrough) lines.push(flag);
-  for (const src of parsed.sources) lines.push(src);
+  for (const src of parsed.sources) lines.push(toSlashPath(src));
   return lines.join('\n') + (lines.length > 0 ? '\n' : '');
 }

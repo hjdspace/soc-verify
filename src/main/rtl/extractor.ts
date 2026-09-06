@@ -12,6 +12,7 @@
  * 本实现保证 raw doc 只在主进程内存中出现、不持久化（渲染端零解析）。
  */
 
+import { isAbsolute, resolve } from 'node:path';
 import type {
   ExtractedDef,
   ExtractedDesign,
@@ -52,13 +53,31 @@ export function splitUniquified(name: string): [string, string | null] {
   return i === -1 ? [name, null] : [name.slice(0, i), name.slice(i + 1)];
 }
 
-function srcOf(m: WJModule): string | null {
+/**
+ * write_json `src` 属性归一化为绝对路径（保留 `:行.列` 后缀）。
+ *
+ * yosys 把 src 记录为相对其进程 cwd（elaboration work 目录）的路径
+ * （如 `..\..\rtl-spike\rtl\a.sv:3.8`），渲染端按项目根拼接会在路径深度
+ * 不足时越过盘符根被钳位，得到错误绝对路径。相对路径必须按 yosys cwd
+ * （= workDir）解析；绝对路径原样返回。
+ */
+export function normalizeSrc(src: string | null, yosysCwd: string): string | null {
+  if (src === null) return null;
+  // 惰性匹配兼容 Windows 盘符冒号；后缀形态 `:行.列[-行.列]`
+  const m = /^(.*?)(:\d+(?:\.\d+)?(?:-\d+(?:\.\d+)?)?)$/.exec(src);
+  const pathPart = m?.[1] ?? src;
+  const suffix = m?.[2] ?? '';
+  if (isAbsolute(pathPart)) return src;
+  return `${resolve(yosysCwd, pathPart)}${suffix}`;
+}
+
+function srcOf(m: WJModule, yosysCwd: string): string | null {
   const src = m.attributes?.['src'];
-  return typeof src === 'string' ? src : null;
+  return typeof src === 'string' ? normalizeSrc(src, yosysCwd) : null;
 }
 
 /** 提炼 Module Definitions（按 defName 聚合；yosys 内部 `$` 模块跳过；顶层同名模块亦为 def） */
-export function extractDefs(doc: WriteJsonDoc): ExtractedDef[] {
+export function extractDefs(doc: WriteJsonDoc, yosysCwd: string): ExtractedDef[] {
   const defs = new Map<string, ExtractedDef>();
   for (const [name, m] of Object.entries(doc.modules ?? {})) {
     if (name.startsWith('$')) continue; // yosys 内部模块
@@ -71,7 +90,7 @@ export function extractDefs(doc: WriteJsonDoc): ExtractedDef[] {
     }));
     defs.set(defName, {
       name: defName,
-      src: srcOf(m),
+      src: srcOf(m, yosysCwd),
       paramDefaults: (m.parameter_default_values ?? {}) as Record<string, unknown>,
       ports,
     });
@@ -92,6 +111,7 @@ function buildTree(
   parentPath: string | null,
   depth: number,
   cellParams: Record<string, unknown>,
+  yosysCwd: string,
   out: ExtractedInst[],
 ): void {
   const m = doc.modules[uniquifiedName];
@@ -103,7 +123,7 @@ function buildTree(
     module: defName,
     parent: parentPath,
     depth,
-    src: m ? srcOf(m) : null,
+    src: m ? srcOf(m, yosysCwd) : null,
     // 参数覆盖值在父模块 cell.parameters 上（write_json 已知缺口：uniquified 模块的
     // parameter_default_values 为空，spec 遗留问题的展示方案在后续切片解决）
     params: cellParams,
@@ -113,25 +133,47 @@ function buildTree(
   if (!m) return; // 黑盒：无可遍历 body
   for (const [cname, cell] of Object.entries(m.cells ?? {})) {
     if (!isModuleInstance(doc, cell.type)) continue;
-    buildTree(doc, cell.type, cname, path, depth + 1, (cell.parameters ?? {}) as Record<string, unknown>, out);
+    buildTree(doc, cell.type, cname, path, depth + 1, (cell.parameters ?? {}) as Record<string, unknown>, yosysCwd, out);
   }
+}
+
+/**
+ * elaborated top units：未被任何模块实例化的非 yosys 内部模块。
+ *
+ * `--keep-hierarchy` 下 write_json 同时产出 uniquified 实例模块
+ * （`soc_subsys$spike_top.u_subsys0` 等）——它们是其他模块的 cell type，
+ * 不是顶层候选；「被实例化」的模块集合可通过全模块 cells 扫描重建。
+ * detectTops 模式（无 --top，slang 编译全部 root units）据此得到真实顶层列表。
+ */
+export function extractTopUnits(doc: WriteJsonDoc): string[] {
+  const instantiated = new Set<string>();
+  for (const m of Object.values(doc.modules ?? {})) {
+    for (const cell of Object.values(m.cells ?? {})) {
+      instantiated.add(cell.type);
+    }
+  }
+  return Object.keys(doc.modules ?? {})
+    .filter((name) => !name.startsWith('$') && !instantiated.has(name))
+    .sort();
 }
 
 /**
  * 提炼全设计。top 必须在文档中（elaborated top units 之一），否则抛错。
  * 注意 cell.parameters 在父模块的 cells 上 —— buildTree 需要读取它。
+ * yosysCwd = yosys 进程 cwd（work 目录）：write_json src 是相对它的路径，
+ * 必须在此归一化为绝对路径（见 normalizeSrc）。
  */
-export function extractDesign(doc: WriteJsonDoc, topName: string): ExtractedDesign {
+export function extractDesign(doc: WriteJsonDoc, topName: string, yosysCwd: string): ExtractedDesign {
   const topModule = doc.modules?.[topName];
   if (!topModule) {
     throw new Error(`顶层模块 ${topName} 不在 elaborated 设计中（write_json 无此模块）`);
   }
   const insts: ExtractedInst[] = [];
-  buildTree(doc, topName, topName, null, 0, {}, insts);
+  buildTree(doc, topName, topName, null, 0, {}, yosysCwd, insts);
   assignInstCounts(insts);
   return {
     top: topName,
-    defs: extractDefs(doc),
+    defs: extractDefs(doc, yosysCwd),
     insts,
     edges: extractEdges(doc),
   };

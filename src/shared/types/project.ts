@@ -56,6 +56,8 @@ export interface ProjectState {
     filePanelWidth?: number;
     /** 仿真视图左栏宽度（可拖拽调整）；旧持久化状态可能缺失 */
     simLeftPanelWidth?: number;
+    /** 设计视图层级树侧边栏宽度（可拖拽调整）；旧持久化状态可能缺失 */
+    designTreeWidth?: number;
   };
   lastSessionIds: string[];
 }

@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { flattenFilelists, renderFlatFilelist } from '../../src/main/rtl/filelist';
+import { flattenFilelists, renderFlatFilelist, toSlashPath, type ParsedFilelist } from '../../src/main/rtl/filelist';
 
 let dir: string;
 
@@ -105,10 +105,27 @@ describe('renderFlatFilelist', () => {
     const flat = renderFlatFilelist(parsed);
     const lines = flat.trim().split('\n');
     expect(lines).toEqual([
-      `+incdir+${join(dir, 'rtl/ip')}`,
+      `+incdir+${toSlashPath(join(dir, 'rtl/ip'))}`,
       '+define+FOO',
       '-y libs',
-      join(dir, 'rtl/top.sv'),
+      toSlashPath(join(dir, 'rtl/top.sv')),
     ]);
+  });
+
+  it('Windows 反斜杠路径转正斜杠（slang -f 解析器吞反斜杠转义，回归）', () => {
+    // 回归场景：Windows 下 join 产出反斜杠绝对路径，直接写入 flat .f 时
+    // slang 把 \ 当转义符吞掉（D:\proj\a.sv → D:proja.sv → No such file or directory
+    // → yosys 退出码 1 → detectTops 报「未检测到顶层」）
+    const parsed: ParsedFilelist = {
+      sources: ['D:\\proj\\rtl\\top.sv'],
+      incdirs: ['D:\\proj\\rtl\\ip'],
+      defines: [],
+      passthrough: [],
+      files: [],
+    };
+    const flat = renderFlatFilelist(parsed);
+    expect(flat).toContain('+incdir+D:/proj/rtl/ip');
+    expect(flat).toContain('D:/proj/rtl/top.sv');
+    expect(flat).not.toContain('\\');
   });
 });

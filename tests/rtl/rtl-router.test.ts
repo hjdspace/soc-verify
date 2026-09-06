@@ -128,6 +128,21 @@ describe('rtl.getConfig / setConfig', () => {
     expect(cfg.filelists).toEqual([]);
     expect(cfg.top).toBeNull();
   });
+
+  it('filelist 路径去除首尾引号与空白（Windows「复制文件地址」粘贴场景）', async () => {
+    writeFileSync(join(holder.projectDir, 'other.f'), 'rtl/top.sv\n', 'utf-8');
+    await caller.setConfig({
+      projectId: 'proj-1',
+      filelists: [`"${join(holder.projectDir, 'spike.f')}"`, "  'other.f'  "],
+      top: 'spike_top',
+    });
+    const cfg = await caller.getConfig({ projectId: 'proj-1' });
+    expect(cfg.filelists).toEqual([join(holder.projectDir, 'spike.f'), 'other.f']);
+
+    // 带引号的绝对路径可直接 elaboration（不再被当相对路径拼到项目根下）
+    const result = await caller.refresh({ projectId: 'proj-1' });
+    expect(result.ok).toBe(true);
+  });
 });
 
 // ─── 刷新管线（成功） ───────────────────────────────────────
@@ -222,6 +237,18 @@ describe('rtl.refresh 失败路径', () => {
     if (!result.ok) expect(result.error.message).toContain('未配置');
   });
 
+  it('filelist 缺失等前置失败也持久化 lastError（UI 不再静默回退空页面）', async () => {
+    await caller.setConfig({ projectId: 'proj-1', filelists: ['missing.f'], top: 'spike_top' });
+
+    const result = await caller.refresh({ projectId: 'proj-1' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toContain('filelist 文件不存在');
+
+    const status = await caller.getStatus({ projectId: 'proj-1' });
+    expect(status.hasData).toBe(false);
+    expect(status.lastError?.message).toContain('filelist 文件不存在');
+  });
+
   it('elaboration 失败返回 slang 诊断（文件+行号），lastError 持久化', async () => {
     await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: 'spike_top' });
     mockSpawn.mockImplementation(() =>
@@ -313,7 +340,8 @@ describe('顶层选择记忆（issue 03 story 17）', () => {
     await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: null });
 
     const { tops } = await caller.detectTops({ projectId: 'proj-1' });
-    expect(tops).toContain('spike_top');
+    // uniquified 实例模块（soc_subsys$... / spike_ip$...）不是顶层候选
+    expect(tops).toEqual(['spike_top']);
     expect(existsSync(join(holder.projectDir, '.socverify/design/tops.json'))).toBe(true);
 
     mockSpawn.mockClear();
@@ -325,6 +353,46 @@ describe('顶层选择记忆（issue 03 story 17）', () => {
   it('未检测过时 getDetectedTops 返回空列表', async () => {
     const { tops } = await caller.getDetectedTops({ projectId: 'proj-1' });
     expect(tops).toEqual([]);
+  });
+
+  it('detectTops 失败时持久化 lastError（UI ErrorPanel 可呈现 logTail + diagnostics）', async () => {
+    await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: null });
+    mockSpawn.mockImplementation(() =>
+      makeFakeChild({
+        exitCode: 1,
+        writeFixture: false,
+        stderr: 'ERROR: read_slang failed in design.ys\n',
+      }),
+    );
+
+    await expect(caller.detectTops({ projectId: 'proj-1' })).rejects.toThrow('yosys 退出码 1');
+
+    // lastError 持久化到 DB（reload 后 getStatus 可读回 → ErrorPanel 呈现）
+    const status = await caller.getStatus({ projectId: 'proj-1' });
+    expect(status.lastError).not.toBeNull();
+    // 报错消息带上日志首个 error 行（不再只有「yosys 退出码 1」）
+    expect(status.lastError?.message).toContain('yosys 退出码');
+    expect(status.lastError?.message).toContain('ERROR: read_slang failed');
+    expect(status.lastError?.logTail).toContain('read_slang failed');
+  });
+
+  it('detectTops 成功后清除上次失败的 lastError', async () => {
+    await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: null });
+
+    // 第一次：失败 → lastError 持久化
+    mockSpawn.mockImplementationOnce(() =>
+      makeFakeChild({ exitCode: 1, writeFixture: false, stderr: 'ERROR: fail\n' }),
+    );
+    await expect(caller.detectTops({ projectId: 'proj-1' })).rejects.toThrow();
+    expect((await caller.getStatus({ projectId: 'proj-1' })).lastError).not.toBeNull();
+
+    // 第二次：成功 → lastError 清除
+    mockSpawn.mockImplementationOnce(() =>
+      makeFakeChild({ exitCode: 0, writeFixture: true, stdout: 'ok\n' }),
+    );
+    const { tops } = await caller.detectTops({ projectId: 'proj-1' });
+    expect(tops).toContain('spike_top');
+    expect((await caller.getStatus({ projectId: 'proj-1' })).lastError).toBeNull();
   });
 });
 
