@@ -7,8 +7,21 @@
 
 /** Design Source 配置（持久化于 <projectRoot>/.socverify/design/config.json） */
 export type DesignSourceConfig = {
+  /** 输入来源；旧配置缺失该字段时按 filelist 迁移 */
+  source?: 'filelist' | 'directory';
   /** VCS 风格 .f 文件列表（相对项目根或绝对路径，支持 +incdir+/+define+/-f 嵌套） */
   filelists: string[];
+  /** 无 filelist 项目的目录扫描配置 */
+  directory?: {
+    /** 扫描根目录（相对项目根或绝对路径） */
+    root: string;
+    /** 相对扫描根目录的 glob 排除规则 */
+    excludes: string[];
+    /** include 搜索目录（相对项目根或绝对路径） */
+    incdirs: string[];
+    /** 宏定义（NAME 或 NAME=value） */
+    defines: string[];
+  };
   /** 顶层模块名；null = 未选择（先经 detectTops 从 elaborated top units 中检测） */
   top: string | null;
 };

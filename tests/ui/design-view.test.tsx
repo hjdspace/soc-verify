@@ -27,7 +27,7 @@ const { trpcMocks, projectState } = vi.hoisted(() => ({
     setConfig: { mutate: vi.fn() },
     detectTops: { mutate: vi.fn() },
     refresh: { mutate: vi.fn() },
-    tools: { selectFiles: { mutate: vi.fn() } },
+    tools: { selectFiles: { mutate: vi.fn() }, selectDirectory: { mutate: vi.fn() } },
   },
   projectState: { currentProjectId: 'proj-1' as string | null },
 }));
@@ -288,6 +288,7 @@ beforeEach(() => {
   trpcMocks.detectTops.mutate.mockResolvedValue({ tops: ['soc_top', 'spike_top'] });
   trpcMocks.refresh.mutate.mockResolvedValue({ ok: true, top: 'spike_top', defCount: 3, instCount: 9 });
   trpcMocks.tools.selectFiles.mutate.mockResolvedValue({ paths: [] });
+  trpcMocks.tools.selectDirectory.mutate.mockResolvedValue({ path: null });
   // ModuleInterfaceView 用 getDef
   trpcMocks.getDef.query.mockResolvedValue(SOCSUBSYS_DEF);
   // BlockDiagram 用 getSubgraph
@@ -466,6 +467,76 @@ describe('DesignView filelist 浏览按钮', () => {
     expect(
       screen.getAllByPlaceholderText('design/filelist.f 或绝对路径'),
     ).toHaveLength(1);
+  });
+});
+
+describe('DesignView 目录扫描来源', () => {
+  it('从 Filelist 切换后显示目录配置和输入预览', async () => {
+    trpcMocks.getConfig.query.mockResolvedValue({ source: 'filelist', filelists: ['design/spike.f'], top: null });
+    trpcMocks.getStatus.query.mockResolvedValue({ ...baseStatus, configured: false, hasData: false, top: null });
+    trpcMocks.getRoot.query.mockResolvedValue(null);
+
+    render(<DesignView />);
+    await screen.findByTestId('design-filelist-source-panel');
+    expect(screen.queryByTestId('design-directory-source-panel')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('design-source-directory'));
+
+    expect(screen.queryByTestId('design-filelist-source-panel')).toBeNull();
+    expect(screen.getByTestId('design-directory-source-panel')).toBeVisible();
+    expect(screen.getByTestId('design-source-directory')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('design-source-filelist')).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByTestId('design-source-preview')).toHaveTextContent('DIRECTORY SCAN');
+  });
+
+  it('浏览目录后回填扫描根目录，并在对话框打开期间显示状态', async () => {
+    trpcMocks.getConfig.query.mockResolvedValue({ source: 'directory', filelists: [], directory: { root: '', excludes: [], incdirs: [], defines: [] }, top: null });
+    trpcMocks.getStatus.query.mockResolvedValue({ ...baseStatus, configured: false, hasData: false, top: null });
+    trpcMocks.getRoot.query.mockResolvedValue(null);
+    let resolveDirectory: ((value: { path: string | null }) => void) | undefined;
+    trpcMocks.tools.selectDirectory.mutate.mockImplementation(
+      () => new Promise((resolve) => { resolveDirectory = resolve; }),
+    );
+
+    render(<DesignView />);
+    await screen.findByTestId('design-config-panel');
+    fireEvent.click(screen.getByTestId('design-source-directory'));
+    fireEvent.click(screen.getByTestId('design-scan-browse'));
+
+    expect(screen.getByTestId('design-scan-browse')).toHaveTextContent('打开中');
+    resolveDirectory?.({ path: 'D:\\doc\\opentitan\\hw' });
+    await waitFor(() => expect(screen.getByTestId('design-scan-root')).toHaveValue('D:\\doc\\opentitan\\hw'));
+    expect(screen.getByTestId('design-scan-browse')).toHaveTextContent('浏览');
+  });
+
+  it('保存目录扫描配置时提交 root、排除项和 define', async () => {
+    trpcMocks.getConfig.query.mockResolvedValue({ source: 'directory', filelists: [], directory: { root: '', excludes: [], incdirs: [], defines: [] }, top: null });
+    trpcMocks.getStatus.query.mockResolvedValue({ ...baseStatus, configured: false, hasData: false, top: null });
+    trpcMocks.getRoot.query.mockResolvedValue(null);
+
+    render(<DesignView />);
+    await screen.findByTestId('design-config-panel');
+    fireEvent.click(screen.getByTestId('design-source-directory'));
+    fireEvent.change(screen.getByTestId('design-scan-root'), { target: { value: 'D:\\doc\\opentitan\\hw' } });
+    fireEvent.change(screen.getByTestId('design-scan-excludes'), { target: { value: '**/dv/**\n**/vendor/**' } });
+    fireEvent.change(screen.getByTestId('design-scan-defines'), { target: { value: 'SYNTHESIS=1' } });
+    fireEvent.change(screen.getByTestId('design-top-input'), { target: { value: 'top_earlgrey' } });
+    fireEvent.click(screen.getByTestId('design-config-save'));
+
+    await waitFor(() => {
+      expect(trpcMocks.setConfig.mutate).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          projectId: 'proj-1',
+          source: 'directory',
+          directory: expect.objectContaining({
+            root: 'D:\\doc\\opentitan\\hw',
+            excludes: ['**/dv/**', '**/vendor/**'],
+            defines: ['SYNTHESIS=1'],
+          }),
+          top: 'top_earlgrey',
+        }),
+      );
+    });
   });
 });
 

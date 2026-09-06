@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SoC Verify - Design Source Discovery</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+      --bg: oklch(0.975 0.004 250);
+      --surface: oklch(0.997 0.002 250);
+      --surface-2: oklch(0.955 0.008 250);
+      --surface-3: oklch(0.925 0.012 250);
+      --ink: oklch(0.25 0.018 250);
+      --ink-2: oklch(0.47 0.018 250);
+      --ink-3: oklch(0.62 0.016 250);
+      --line: oklch(0.885 0.012 250);
+      --line-2: oklch(0.78 0.018 250);
+      --primary: oklch(0.53 0.17 254);
+      --primary-soft: oklch(0.94 0.03 254);
+      --success: oklch(0.5 0.13 152);
+      --success-soft: oklch(0.95 0.03 152);
+      --warning: oklch(0.59 0.14 72);
+      --warning-soft: oklch(0.95 0.04 72);
+      --danger: oklch(0.56 0.17 28);
+      --danger-soft: oklch(0.95 0.03 28);
+      --shadow: 0 8px 30px oklch(0.22 0.02 250 / .1), 0 1px 3px oklch(0.22 0.02 250 / .08);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; }
+    body { overflow: hidden; background: var(--bg); color: var(--ink); font: 13px/1.45 var(--font); }
+    button, input, select { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid color-mix(in oklch, var(--primary) 65%, transparent); outline-offset: 2px; }
+    [hidden] { display: none !important; }
+
+    .app { display: grid; grid-template-rows: 34px 48px minmax(0, 1fr) 24px; height: 100%; min-width: 980px; }
+    .titlebar { display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--surface-2); color: var(--ink-2); }
+    .brand { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; background: var(--ink); color: var(--surface); font: 700 10px/1 var(--mono); }
+    .titlebar strong { font-size: 12px; }
+    .project-path { color: var(--ink-3); font: 11px var(--mono); }
+    .window-actions { display: flex; margin-left: auto; gap: 12px; color: var(--ink-3); }
+
+    .toolbar { display: flex; align-items: center; gap: 10px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--surface); }
+    .toolbar h1 { margin: 0; font-size: 14px; font-weight: 680; letter-spacing: 0; }
+    .crumb { color: var(--ink-3); font-size: 11px; }
+    .toolbar-actions { display: flex; gap: 6px; margin-left: auto; }
+
+    .button, .icon-button { display: inline-flex; align-items: center; justify-content: center; height: 29px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); cursor: pointer; transition: background 150ms ease, border-color 150ms ease, color 150ms ease; }
+    .button { gap: 6px; padding: 0 10px; font-size: 11px; }
+    .icon-button { width: 29px; padding: 0; }
+    .button:hover, .icon-button:hover { border-color: var(--line-2); background: var(--surface-2); }
+    .button.primary { border-color: var(--primary); background: var(--primary); color: oklch(0.98 0.006 254); font-weight: 620; }
+    .button.primary:hover { background: color-mix(in oklch, var(--primary) 90%, var(--ink)); }
+    .button:disabled { cursor: not-allowed; opacity: .48; }
+    .button svg, .icon-button svg { width: 14px; height: 14px; stroke-width: 1.8; }
+
+    .workspace { display: grid; grid-template-columns: 62px minmax(0, 1fr); min-height: 0; }
+    .rail { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 8px 0; border-right: 1px solid var(--line); background: color-mix(in oklch, var(--surface-2) 65%, var(--surface)); }
+    .rail button { display: grid; place-items: center; width: 38px; height: 36px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-3); cursor: pointer; }
+    .rail button:hover { background: var(--surface-3); color: var(--ink); }
+    .rail button.active { background: var(--primary-soft); color: var(--primary); }
+    .rail svg { width: 17px; height: 17px; stroke-width: 1.8; }
+    .rail .bottom { margin-top: auto; }
+
+    .content { display: grid; grid-template-columns: minmax(560px, 1fr) 338px; min-height: 0; overflow: hidden; }
+    .form-pane { min-width: 0; overflow: auto; background: var(--surface); }
+    .form-inner { max-width: 920px; margin: 0 auto; padding: 24px 28px 48px; }
+    .intro { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
+    .intro h2 { margin: 0 0 5px; font-size: 19px; font-weight: 680; letter-spacing: 0; }
+    .intro p { max-width: 68ch; margin: 0; color: var(--ink-2); font-size: 12px; }
+    .step { color: var(--ink-3); font: 11px var(--mono); white-space: nowrap; }
+
+    .section { padding: 20px 0; border-top: 1px solid var(--line); }
+    .section:first-of-type { padding-top: 0; border-top: 0; }
+    .section-head { display: grid; grid-template-columns: 24px 168px minmax(0, 1fr); align-items: start; gap: 8px; margin-bottom: 13px; }
+    .section-number { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--surface-3); color: var(--ink-2); font: 600 10px var(--mono); }
+    .section-head h3 { margin: 1px 0 0; font-size: 12px; font-weight: 680; }
+    .section-head p { margin: 0; color: var(--ink-3); font-size: 11px; }
+
+    .source-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; }
+    .source-tab { position: relative; min-height: 82px; padding: 12px 13px; border: 0; border-right: 1px solid var(--line); background: var(--surface); text-align: left; cursor: pointer; }
+    .source-tab:last-child { border-right: 0; }
+    .source-tab:hover { background: var(--surface-2); }
+    .source-tab.active { background: var(--primary-soft); box-shadow: inset 0 -2px var(--primary); }
+    .source-tab strong { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; font-size: 12px; }
+    .source-tab svg { width: 15px; height: 15px; color: var(--ink-3); }
+    .source-tab.active svg { color: var(--primary); }
+    .source-tab span { display: block; color: var(--ink-3); font-size: 10px; line-height: 1.4; }
+    .recommended { position: absolute; top: 8px; right: 9px; color: var(--success) !important; font-size: 9px !important; font-weight: 650; }
+
+    .discovery { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 12px; border: 1px solid color-mix(in oklch, var(--success) 22%, var(--line)); border-radius: 6px; background: var(--success-soft); }
+    .discovery svg { width: 17px; height: 17px; flex: 0 0 auto; color: var(--success); }
+    .discovery strong { display: block; margin-bottom: 1px; font-size: 11px; }
+    .discovery span { color: var(--ink-2); font-size: 10px; }
+    .discovery .button { margin-left: auto; background: transparent; }
+
+    .fields { display: grid; gap: 12px; }
+    .field { display: grid; grid-template-columns: 200px minmax(0, 1fr); align-items: center; gap: 12px; }
+    .field.top { align-items: start; }
+    .field-label label { display: block; margin-bottom: 2px; font-size: 11px; font-weight: 650; }
+    .field-label span { display: block; color: var(--ink-3); font-size: 10px; line-height: 1.35; }
+    .control-row { display: flex; min-width: 0; gap: 6px; }
+    input, select { width: 100%; min-width: 0; height: 31px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); padding: 0 9px; outline: 0; font-size: 11px; }
+    input.mono, select.mono { font-family: var(--mono); }
+    input:hover, select:hover { border-color: var(--line-2); }
+    .tag-input { display: flex; flex-wrap: wrap; align-items: center; min-height: 33px; gap: 4px; padding: 4px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
+    .tag { display: inline-flex; align-items: center; gap: 4px; height: 23px; padding: 0 6px; border-radius: 4px; background: var(--surface-2); color: var(--ink-2); font: 10px var(--mono); }
+    .tag button { border: 0; background: transparent; color: var(--ink-3); cursor: pointer; padding: 0; }
+    .tag-input input { flex: 1; min-width: 120px; height: 23px; border: 0; padding: 0 4px; background: transparent; }
+    .check-row { display: flex; align-items: center; gap: 7px; min-height: 28px; color: var(--ink-2); font-size: 11px; }
+    .check-row input { width: 14px; height: 14px; accent-color: var(--primary); }
+
+    .scan-summary { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+    .metric { padding: 10px 11px; border-right: 1px solid var(--line); background: var(--surface); }
+    .metric:last-child { border-right: 0; }
+    .metric b { display: block; font: 650 17px/1.2 var(--mono); }
+    .metric span { color: var(--ink-3); font-size: 9px; }
+    .metric.warning b { color: var(--warning); }
+
+    .result-table { margin-top: 10px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+    .table-head, .table-row { display: grid; grid-template-columns: minmax(0, 1fr) 78px 72px; align-items: center; min-height: 31px; padding: 0 10px; gap: 8px; }
+    .table-head { background: var(--surface-2); color: var(--ink-3); font-size: 9px; text-transform: uppercase; }
+    .table-row { border-top: 1px solid var(--line); font-size: 10px; }
+    .table-row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+    .status { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-2); }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+    .dot.warning { background: var(--warning); }
+
+    .action-bar { position: sticky; bottom: -48px; display: flex; align-items: center; gap: 8px; margin: 24px -28px -48px; padding: 12px 28px; border-top: 1px solid var(--line); background: color-mix(in oklch, var(--surface) 96%, transparent); }
+    .action-bar p { margin: 0 auto 0 0; color: var(--ink-3); font-size: 10px; }
+
+    .preview { display: flex; min-height: 0; flex-direction: column; border-left: 1px solid var(--line); background: color-mix(in oklch, var(--surface-2) 55%, var(--surface)); }
+    .preview-head { display: flex; align-items: center; min-height: 44px; padding: 0 14px; border-bottom: 1px solid var(--line); }
+    .preview-head strong { font-size: 11px; }
+    .preview-head span { margin-left: auto; color: var(--ink-3); font: 10px var(--mono); }
+    .preview-body { overflow: auto; padding: 14px; }
+    .preview-section { margin-bottom: 20px; }
+    .preview-section h4 { display: flex; align-items: center; gap: 6px; margin: 0 0 9px; color: var(--ink-2); font-size: 10px; font-weight: 680; text-transform: uppercase; }
+    .preview-section h4 svg { width: 13px; height: 13px; }
+    .tree-row { display: flex; align-items: center; min-height: 25px; gap: 5px; padding: 0 5px; border-radius: 4px; color: var(--ink-2); font: 10px var(--mono); }
+    .tree-row:hover { background: var(--surface-3); }
+    .tree-row svg { width: 12px; height: 12px; color: var(--ink-3); }
+    .indent-1 { padding-left: 20px; }
+    .indent-2 { padding-left: 35px; }
+    .count { margin-left: auto; color: var(--ink-3); }
+    .candidate { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; min-height: 35px; gap: 5px; padding: 0 6px; border-top: 1px solid var(--line); }
+    .candidate:first-of-type { border-top: 0; }
+    .candidate input { width: 13px; height: 13px; accent-color: var(--primary); }
+    .candidate strong { display: block; overflow: hidden; text-overflow: ellipsis; font: 10px var(--mono); white-space: nowrap; }
+    .candidate span { color: var(--ink-3); font-size: 9px; }
+    .badge { padding: 2px 5px; border-radius: 4px; background: var(--success-soft); color: var(--success) !important; font-size: 9px !important; }
+    .notice { display: flex; align-items: flex-start; gap: 7px; padding: 9px; border-radius: 6px; background: var(--warning-soft); color: var(--ink-2); font-size: 10px; }
+    .notice svg { width: 14px; height: 14px; flex: 0 0 auto; color: var(--warning); }
+    .command { overflow-wrap: anywhere; padding: 9px; border-radius: 6px; background: oklch(0.29 0.018 250); color: oklch(0.88 0.02 152); font: 10px/1.55 var(--mono); }
+
+    .statusbar { display: flex; align-items: center; gap: 12px; padding: 0 10px; border-top: 1px solid var(--line); background: var(--surface-2); color: var(--ink-3); font-size: 9px; }
+    .statusbar .ready { color: var(--success); }
+    .statusbar .right { margin-left: auto; font-family: var(--mono); }
+    .toast { position: fixed; right: 18px; bottom: 36px; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid color-mix(in oklch, var(--success) 28%, var(--line)); border-radius: 7px; background: var(--surface); box-shadow: var(--shadow); opacity: 0; transform: translateY(8px); pointer-events: none; transition: opacity 170ms ease, transform 180ms cubic-bezier(.2,.8,.2,1); }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    .toast svg { width: 15px; height: 15px; color: var(--success); }
+    .toast strong { font-size: 11px; }
+
+    @media (max-width: 1120px) {
+      .content { grid-template-columns: minmax(560px, 1fr) 292px; }
+      .field { grid-template-columns: 168px minmax(0, 1fr); }
+      .form-inner { padding-inline: 20px; }
+      .action-bar { margin-inline: -20px; padding-inline: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="titlebar">
+      <span class="brand">SV</span><strong>SoC Verify</strong><span>/</span><span class="project-path">opentitan</span>
+      <div class="window-actions"><span>_</span><span>□</span><span>×</span></div>
+    </header>
+
+    <div class="toolbar">
+      <h1>设计</h1><span class="crumb">/ Design Source</span>
+      <div class="toolbar-actions">
+        <button class="button"><i data-lucide="history"></i>上次构建</button>
+        <button class="icon-button" title="更多操作" aria-label="更多操作"><i data-lucide="ellipsis"></i></button>
+      </div>
+    </div>
+
+    <main class="workspace">
+      <nav class="rail" aria-label="主导航">
+        <button title="总览"><i data-lucide="layout-dashboard"></i></button>
+        <button title="仿真"><i data-lucide="play"></i></button>
+        <button title="覆盖率"><i data-lucide="chart-no-axes-column-increasing"></i></button>
+        <button class="active" title="设计"><i data-lucide="blocks"></i></button>
+        <button title="回归"><i data-lucide="list-checks"></i></button>
+        <button title="工作区"><i data-lucide="panel-left"></i></button>
+        <button class="bottom" title="设置"><i data-lucide="settings"></i></button>
+      </nav>
+
+      <div class="content">
+        <section class="form-pane">
+          <div class="form-inner">
+            <div class="intro">
+              <div><h2>配置 RTL 设计源</h2><p>选择能表达真实编译上下文的来源。系统将其规范化为 elaboration 输入，再生成实例层级、模块接口与框图。</p></div>
+              <span class="step">CONFIGURE · 1 / 1</span>
+            </div>
+
+            <section class="section">
+              <div class="section-head"><span class="section-number">1</span><h3>选择来源</h3><p>优先使用项目已有清单。目录扫描适合没有任何构建描述的简单 RTL 工程。</p></div>
+              <div class="source-tabs" role="tablist">
+                <button class="source-tab active" data-source="manifest" role="tab" aria-selected="true"><strong><i data-lucide="package-search"></i>项目清单</strong><span>FuseSoC .core / Edalize<br>解析依赖、顺序、define</span><span class="recommended">已发现 · 推荐</span></button>
+                <button class="source-tab" data-source="filelist" role="tab" aria-selected="false"><strong><i data-lucide="list-tree"></i>Filelist</strong><span>VCS 风格 .f / .flist<br>兼容当前配置方式</span></button>
+                <button class="source-tab" data-source="scan" role="tab" aria-selected="false"><strong><i data-lucide="folder-search-2"></i>目录扫描</strong><span>递归发现 .v / .sv<br>需要补充编译上下文</span></button>
+              </div>
+              <div class="discovery" id="discovery"><i data-lucide="circle-check"></i><div><strong>识别为 FuseSoC 项目</strong><span>D:\doc\opentitan 中发现 401 个 .core 文件，已定位 3 个 SoC top。</span></div><button class="button" id="useDetected">使用推荐配置</button></div>
+            </section>
+
+            <section class="section source-panel" id="manifestPanel">
+              <div class="section-head"><span class="section-number">2</span><h3>选择构建目标</h3><p>使用 core 的依赖图比扫描目录更接近真实综合输入。</p></div>
+              <div class="fields">
+                <div class="field"><div class="field-label"><label for="core">Core</label><span>VLNV 或 .core 文件</span></div><div class="control-row"><select id="core" class="mono"><option>lowrisc:systems:top_earlgrey:0.1</option><option>lowrisc:systems:top_englishbreakfast:0.1</option><option>lowrisc:systems:top_darjeeling:0.1</option></select><button class="icon-button" title="浏览 core 文件"><i data-lucide="folder-open"></i></button></div></div>
+                <div class="field"><div class="field-label"><label for="target">Target</label><span>选择 RTL / 综合目标</span></div><select id="target" class="mono"><option>default</option><option>syn</option><option>lint</option><option>sim</option></select></div>
+                <div class="field"><div class="field-label"><label>Target 参数</label><span>来自 core parameters</span></div><label class="check-row"><input type="checkbox" checked> SYNTHESIS=true</label></div>
+              </div>
+            </section>
+
+            <section class="section source-panel" id="filelistPanel" hidden>
+              <div class="section-head"><span class="section-number">2</span><h3>添加 Filelist</h3><p>支持 +incdir+、+define+、-f 嵌套和相对路径。</p></div>
+              <div class="fields">
+                <div class="field"><div class="field-label"><label>Filelist</label><span>一个或多个 .f 文件</span></div><div class="control-row"><input class="mono" value="design/filelist.f"><button class="icon-button" title="浏览 filelist"><i data-lucide="folder-open"></i></button></div></div>
+                <div class="field"><div class="field-label"></div><button class="button" style="justify-self:start"><i data-lucide="plus"></i>添加 .f 文件</button></div>
+              </div>
+            </section>
+
+            <section class="section source-panel" id="scanPanel" hidden>
+              <div class="section-head"><span class="section-number">2</span><h3>限定扫描范围</h3><p>只扫描设计 RTL。测试平台、仿真包装和工具产物默认排除。</p></div>
+              <div class="fields">
+                <div class="field"><div class="field-label"><label for="root">扫描目录</label><span>递归发现 .v / .sv</span></div><div class="control-row"><input id="root" class="mono" value="D:\doc\opentitan\hw"><button class="icon-button" title="选择目录"><i data-lucide="folder-open"></i></button></div></div>
+                <div class="field top"><div class="field-label"><label>排除目录</label><span>glob，相对扫描目录</span></div><div class="tag-input"><span class="tag">**/dv/** <button aria-label="删除">×</button></span><span class="tag">**/test/** <button aria-label="删除">×</button></span><span class="tag">**/vendor/** <button aria-label="删除">×</button></span><span class="tag">**/verilator/** <button aria-label="删除">×</button></span><input placeholder="添加 glob，按 Enter"></div></div>
+                <div class="field top"><div class="field-label"><label>Include 目录</label><span>.svh 搜索路径，顺序有效</span></div><div class="tag-input"><span class="tag">hw/ip/prim/rtl</span><span class="tag">hw/top_earlgrey/rtl</span><input placeholder="添加目录"></div></div>
+                <div class="field top"><div class="field-label"><label>宏定义</label><span>决定 `ifdef 分支</span></div><div class="tag-input"><span class="tag">SYNTHESIS=1</span><input placeholder="NAME 或 NAME=VALUE"></div></div>
+                <div class="field"><div class="field-label"><label>文件顺序</label><span>包和接口需先于使用者</span></div><select><option>自动排序：package → interface → module</option><option>按路径排序</option></select></div>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-head"><span class="section-number">3</span><h3>预检与顶层</h3><p>先解析来源并检查冲突，再选择最终 elaboration 顶层。</p></div>
+              <div class="scan-summary">
+                <div class="metric"><b id="sourceCount">401</b><span id="sourceLabel">CORE 清单</span></div>
+                <div class="metric"><b id="rtlCount">684</b><span>RTL 源文件</span></div>
+                <div class="metric"><b>37</b><span>INCLUDE 目录</span></div>
+                <div class="metric warning"><b id="warningCount">2</b><span>待确认项</span></div>
+              </div>
+              <div class="result-table">
+                <div class="table-head"><span>检查项</span><span>结果</span><span>状态</span></div>
+                <div class="table-row"><code>依赖与编译顺序</code><span>已解析</span><span class="status"><i class="dot"></i>通过</span></div>
+                <div class="table-row"><code>重复 module definition</code><span>0</span><span class="status"><i class="dot"></i>通过</span></div>
+                <div class="table-row"><code>条件编译分支</code><span>2 处</span><span class="status"><i class="dot warning"></i>确认</span></div>
+              </div>
+            </section>
+
+            <div class="action-bar"><p>配置保存于 <code>.socverify/design/config.json</code>，构建由用户手动触发。</p><button class="button" id="previewButton"><i data-lucide="scan-search"></i>重新预检</button><button class="button primary" id="buildButton"><i data-lucide="git-fork"></i>保存并构建层级</button></div>
+          </div>
+        </section>
+
+        <aside class="preview">
+          <div class="preview-head"><strong>输入预览</strong><span id="previewMode">FUSESOC · DEFAULT</span></div>
+          <div class="preview-body">
+            <div class="preview-section"><h4><i data-lucide="folders"></i>解析范围</h4>
+              <div class="tree-row"><i data-lucide="folder-open"></i>hw <span class="count">684</span></div>
+              <div class="tree-row indent-1"><i data-lucide="folder"></i>ip <span class="count">497</span></div>
+              <div class="tree-row indent-1"><i data-lucide="folder-open"></i>top_earlgrey <span class="count">187</span></div>
+              <div class="tree-row indent-2"><i data-lucide="folder"></i>rtl <span class="count">143</span></div>
+              <div class="tree-row indent-2"><i data-lucide="folder"></i>ip <span class="count">44</span></div>
+            </div>
+
+            <div class="preview-section"><h4><i data-lucide="milestone"></i>顶层候选</h4>
+              <label class="candidate"><input type="radio" name="top" checked><span><strong>top_earlgrey</strong><span>来自 selected target</span></span><span class="badge">推荐</span></label>
+              <label class="candidate"><input type="radio" name="top"><span><strong>prim_generic_clock_gating</strong><span>无父级引用</span></span><span>1 inst</span></label>
+              <label class="candidate"><input type="radio" name="top"><span><strong>prim_generic_ram_1p</strong><span>无父级引用</span></span><span>1 inst</span></label>
+            </div>
+
+            <div class="preview-section"><h4><i data-lucide="triangle-alert"></i>注意</h4><div class="notice"><i data-lucide="info"></i><span id="noticeText">本机未检测到 FuseSoC。实现时可调用 Edalize/FuseSoC 导出 EDA API 文件集；工具不可用时再退回目录扫描。</span></div></div>
+
+            <div class="preview-section"><h4><i data-lucide="terminal-square"></i>规范化输入</h4><div class="command" id="commandPreview">read_slang -f .socverify/design/resolved.f<br>--top top_earlgrey --keep-hierarchy<br>--define SYNTHESIS=1</div></div>
+          </div>
+        </aside>
+      </div>
+    </main>
+
+    <footer class="statusbar"><span class="ready">● RTL 工具可用</span><span>Yosys 0.68</span><span>slang-server 0.2.10</span><span class="right">D:\doc\opentitan</span></footer>
+  </div>
+
+  <div class="toast" id="toast"><i data-lucide="circle-check"></i><strong>预检完成，输入已更新</strong></div>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script>
+    const panels = { manifest: 'manifestPanel', filelist: 'filelistPanel', scan: 'scanPanel' };
+    const modeData = {
+      manifest: { mode: 'FUSESOC · DEFAULT', source: '401', label: 'CORE 清单', rtl: '684', warn: '2', notice: '本机未检测到 FuseSoC。实现时可调用 Edalize/FuseSoC 导出 EDA API 文件集；工具不可用时再退回目录扫描。', command: 'read_slang -f .socverify/design/resolved.f<br>--top top_earlgrey --keep-hierarchy<br>--define SYNTHESIS=1' },
+      filelist: { mode: 'FILELIST', source: '1', label: 'FILELIST', rtl: '684', warn: '0', notice: 'Filelist 中的 include、define 和嵌套顺序会原样保留。', command: 'read_slang -f design/filelist.f<br>--top top_earlgrey --keep-hierarchy' },
+      scan: { mode: 'DIRECTORY SCAN', source: '1', label: '扫描根目录', rtl: '1,138', warn: '26', notice: '扫描无法可靠推断所有宏定义和第三方依赖。请检查排除项与预检诊断；OpenTitan 更适合使用 FuseSoC 清单。', command: 'read_slang -f .socverify/design/scanned.f<br>--top top_earlgrey --keep-hierarchy<br>--define SYNTHESIS=1' }
+    };
+
+    function selectSource(source) {
+      document.querySelectorAll('.source-tab').forEach((tab) => {
+        const active = tab.dataset.source === source;
+        tab.classList.toggle('active', active);
+        tab.setAttribute('aria-selected', String(active));
+      });
+      Object.entries(panels).forEach(([key, id]) => document.getElementById(id).hidden = key !== source);
+      document.getElementById('discovery').hidden = source !== 'manifest';
+      const data = modeData[source];
+      document.getElementById('previewMode').textContent = data.mode;
+      document.getElementById('sourceCount').textContent = data.source;
+      document.getElementById('sourceLabel').textContent = data.label;
+      document.getElementById('rtlCount').textContent = data.rtl;
+      document.getElementById('warningCount').textContent = data.warn;
+      document.getElementById('noticeText').textContent = data.notice;
+      document.getElementById('commandPreview').innerHTML = data.command;
+    }
+
+    document.querySelectorAll('.source-tab').forEach((tab) => tab.addEventListener('click', () => selectSource(tab.dataset.source)));
+    document.getElementById('useDetected').addEventListener('click', () => selectSource('manifest'));
+    document.querySelectorAll('.tag button').forEach((button) => button.addEventListener('click', () => button.closest('.tag').remove()));
+    document.querySelectorAll('.tag-input input').forEach((input) => input.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' || !input.value.trim()) return;
+      event.preventDefault();
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = input.value.trim();
+      input.before(tag);
+      input.value = '';
+    }));
+    function toast(message) {
+      const el = document.getElementById('toast');
+      el.querySelector('strong').textContent = message;
+      el.classList.add('show');
+      window.setTimeout(() => el.classList.remove('show'), 1800);
+    }
+    document.getElementById('previewButton').addEventListener('click', () => toast('预检完成，输入已更新'));
+    document.getElementById('buildButton').addEventListener('click', () => toast('配置已保存，正在构建 RTL 层级'));
+    window.lucide?.createIcons();
+  </script>
+</body>
+</html>

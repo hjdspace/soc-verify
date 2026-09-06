@@ -431,26 +431,8 @@ npm run package:linux  # Linux AppImage（含 drawio 内置二进制）
 └──────────────────────────────────────────────────────┘
 ```
 
-## 里程碑
-
-| 里程碑 | 状态 | 内容 |
-|--------|------|------|
-| M0 | ✅ 完成 | 项目脚手架（Electron 43 + React 19 + TS 6 + Tailwind v4 + shadcn/ui） |
-| M1 | ✅ 完成 | omp RPC 核心（JSONL 客户端、会话管理、Host Tools/URI） |
-| M2 | ✅ 完成 | 项目管理 / 插件系统 / 子系统发现 / AI Chat UI |
-| M3 | ✅ 完成 | 仿真执行 / 仿真选项 UI / 终端集成 |
-| M4 | ✅ 完成 | AI 多会话 / 流式消息 / 高级功能 / 任务管理 |
-| M5 | ✅ 完成 | 环境配置向导 / 覆盖率分析 / 覆盖率可视化 |
-| M6 | ✅ 完成 | 仪表盘 / TO 检查清单 / 回归测试 |
-| M7 | ✅ 完成 | 技能发现 / 会话持久化 / 凭据管理 / 源码控制 / 打磨 |
-| M8 | ✅ 完成 | Diff Review 系统 / 自动错误分析 / 终端仿真执行 / Unisoc 插件集 |
-| M9 | ✅ 完成 | 时序违例管理（解析/确认/Pattern/AI Advisor）/ Case Database / 仪表盘重构 |
-| M10 | ✅ 完成 | 18 内建工具 / In-app 浏览器 / Document 预览 / Surface View Manager / MCP 配置 / Draw.io 集成 |
-| M11 | ✅ 完成 | 知识库（anydoc + markitdown 双引擎）/ AI 覆盖率闭合 / Sysbase Gen 环境生成器 / Draw.io 集成 / 文件树懒加载 |
-
 ## 文档
 
-- [PRD (M2-M10)](./docs/prd/prd-m2-m7.md) — 产品需求文档
 - [PRD (Case Database)](./docs/prd/prd-case-database.md) — 用例数据库产品需求文档
 - [PRD (Coverage Analysis)](./docs/prd/prd-coverage-analysis.md) — 覆盖率分析产品需求文档
 - [PRD (Dashboard)](./docs/prd/prd-dashboard.md) — 仪表盘产品需求文档

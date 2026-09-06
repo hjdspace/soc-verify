@@ -149,6 +149,39 @@ describe('rtl.getConfig / setConfig', () => {
     const result = await caller.refresh({ projectId: 'proj-1' });
     expect(result.ok).toBe(true);
   });
+
+  it('目录扫描配置持久化，并复用 elaboration 主链路', async () => {
+    await caller.setConfig({
+      projectId: 'proj-1',
+      source: 'directory',
+      filelists: [],
+      directory: {
+        root: 'rtl',
+        excludes: ['**/ip/**'],
+        incdirs: ['rtl/ip'],
+        defines: ['SYNTHESIS=1'],
+      },
+      top: 'spike_top',
+    });
+
+    const cfg = await caller.getConfig({ projectId: 'proj-1' });
+    expect(cfg).toMatchObject({
+      source: 'directory',
+      directory: {
+        root: 'rtl',
+        excludes: ['**/ip/**'],
+        incdirs: ['rtl/ip'],
+        defines: ['SYNTHESIS=1'],
+      },
+    });
+
+    const result = await caller.refresh({ projectId: 'proj-1' });
+    expect(result.ok).toBe(true);
+    const flat = readFileSync(join(holder.projectDir, '.socverify/design/work/design_flat.f'), 'utf-8');
+    expect(flat).toContain('/rtl/spike_top.sv');
+    expect(flat).not.toContain('/rtl/ip/spike_ip.sv');
+    expect(flat).toContain('+define+SYNTHESIS=1');
+  });
 });
 
 // ─── 刷新管线（成功） ───────────────────────────────────────

@@ -12,6 +12,8 @@
  *
  * - JetBrainsMono Nerd Font：从 ryanoasis/nerd-fonts GitHub Release 下载
  *   JetBrainsMono.zip，提取 4 个常规变体（Regular/Bold/Italic/BoldItalic）
+ *   TTF 文件已入库（共 ~10MB），已存在则跳过下载，避免每次下载 123MB zip
+ *   --force 时：优先从本地 zip 提取（若存在），避免重新下载
  * - MesloLGS NF：从 romkatv/powerlevel10k-media 仓库下载官方 'MesloLGS NF'
  *   family 字体（ryanoasis 的 Meslo 变体 family 名为 "MesloLGS Nerd Font"，
  *   与 p10k/Starship 生态约定的 'MesloLGS NF' 不同，故采用 romkatv 分发版）
@@ -144,12 +146,29 @@ async function downloadJetBrainsMono(tag, force) {
     return;
   }
 
+  const zipPath = join(TARGET_DIR, JETBRAINS_ZIP_ASSET);
+
+  // 优先从本地 zip 提取（避免重新下载 123MB）
+  if (existsSync(zipPath) && statSync(zipPath).size > 0) {
+    console.log('[NerdFonts] Found local JetBrainsMono.zip, extracting from it...');
+    try {
+      const extracted = await extractTtfsFromZip(zipPath, JETBRAINS_TTF_FILES, TARGET_DIR);
+      if (extracted.length > 0) {
+        console.log('[NerdFonts] Extracted from local zip, no download needed.');
+        return;
+      }
+      console.warn('[NerdFonts] Local zip did not contain expected ttf files, falling back to download.');
+    } catch (err) {
+      console.warn(`[NerdFonts] Failed to extract from local zip: ${err.message}, falling back to download.`);
+    }
+  }
+
+  // 本地 zip 不存在或提取失败，从远程下载
   const url =
     tag === 'latest'
       ? `https://github.com/ryanoasis/nerd-fonts/releases/latest/download/${JETBRAINS_ZIP_ASSET}`
       : `https://github.com/ryanoasis/nerd-fonts/releases/download/${tag}/${JETBRAINS_ZIP_ASSET}`;
 
-  const zipPath = join(TARGET_DIR, JETBRAINS_ZIP_ASSET);
   try {
     await downloadFile(url, zipPath);
     const extracted = await extractTtfsFromZip(zipPath, JETBRAINS_TTF_FILES, TARGET_DIR);

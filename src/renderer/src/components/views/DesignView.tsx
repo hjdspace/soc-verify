@@ -16,10 +16,15 @@ import { ResizeHandle } from '@renderer/components/layout/ResizeHandle';
 import { DesignTree } from '@renderer/components/design/DesignTree';
 import { ModuleInterfaceView } from '@renderer/components/design/ModuleInterfaceView';
 import { BlockDiagram } from '@renderer/components/design/BlockDiagram';
-import type { DesignInstRow, DesignStatus } from '@main/rtl/types';
+import type { DesignInstRow, DesignSourceConfig, DesignStatus } from '@main/rtl/types';
 
 /** 右侧详情视图：框图（默认，issue 05）/ 接口表（issue 04） */
 type DetailView = 'diagram' | 'interface';
+
+function hasDesignSourceInput(config: Pick<DesignSourceConfig, 'source' | 'filelists' | 'directory'>): boolean {
+  if (config.source === 'directory') return Boolean(config.directory?.root.trim());
+  return config.filelists.some((filelist) => filelist.trim().length > 0);
+}
 
 export function DesignView() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
@@ -27,7 +32,7 @@ export function DesignView() {
   const setDesignTreeWidth = useUiStore((s) => s.setDesignTreeWidth);
 
   const [status, setStatus] = useState<DesignStatus | null>(null);
-  const [config, setConfig] = useState<{ filelists: string[]; top: string | null } | null>(null);
+  const [config, setConfig] = useState<DesignSourceConfig | null>(null);
   const [root, setRoot] = useState<DesignInstRow | null>(null);
   const [showConfig, setShowConfig] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -113,7 +118,7 @@ export function DesignView() {
           <button
             type="button"
             data-testid="design-refresh"
-            disabled={refreshing || !config || config.filelists.length === 0 || config.top === null}
+            disabled={refreshing || !config || !hasDesignSourceInput(config) || config.top === null}
             onClick={() => void handleRefreshed()}
             className="flex items-center gap-1 rounded bg-primary/15 px-2 py-1 text-xs text-primary transition-colors hover:bg-primary/25 disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -236,21 +241,28 @@ function ConfigPanel({
   onDetectFinished,
 }: {
   projectId: string;
-  initial: { filelists: string[]; top: string | null };
+  initial: DesignSourceConfig;
   top: string | null;
-  onSaved: (config: { filelists: string[]; top: string | null }) => void | Promise<void>;
+  onSaved: (config: DesignSourceConfig) => void | Promise<void>;
   onCancel: () => void;
   /** 检测顶层结束后回调：父级重载 status，同步 lastError 面板（成功清除残留旧错误 / 失败呈现新错误） */
   onDetectFinished: () => void | Promise<void>;
 }) {
+  const [source, setSource] = useState<'filelist' | 'directory'>(initial.source === 'directory' ? 'directory' : 'filelist');
   const [filelists, setFilelists] = useState<string[]>(() => [...initial.filelists]);
+  const [directory, setDirectory] = useState(() => ({
+    root: initial.directory?.root ?? '',
+    excludes: initial.directory?.excludes ?? ['**/dv/**', '**/test/**', '**/tests/**', '**/vendor/**'],
+    incdirs: initial.directory?.incdirs ?? [],
+    defines: initial.directory?.defines ?? [],
+  }));
   const [topInput, setTopInput] = useState<string>(top ?? '');
   const [detectedTops, setDetectedTops] = useState<string[] | null>(null);
   const [detectError, setDetectError] = useState<string | null>(null);
   const [detectErrorDetail, setDetectErrorDetail] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [browsingDirectory, setBrowsingDirectory] = useState(false);
 
-  // 恢复上次检测的 top units 列表（story 17：选择器记忆，无需重新 elaboration）
   useEffect(() => {
     void trpc.rtl.getDetectedTops
       .query({ projectId })
@@ -260,7 +272,15 @@ function ConfigPanel({
       .catch(() => undefined);
   }, [projectId]);
 
-  /** 浏览选择 .f 文件：第一个填入当前行，多选的追加为新行 */
+  const buildConfig = (): DesignSourceConfig => ({
+    source,
+    filelists,
+    directory: source === 'directory' ? directory : undefined,
+    top: topInput.trim().length > 0 ? topInput.trim() : null,
+  });
+
+  const hasSourceInput = source === 'directory' ? directory.root.trim().length > 0 : filelists.some((filelist) => filelist.trim().length > 0);
+
   const browseFilelist = async (index: number) => {
     try {
       const result = await trpc.tools.selectFiles.mutate({
@@ -282,159 +302,193 @@ function ConfigPanel({
     }
   };
 
+  const browseDirectory = async () => {
+    setBrowsingDirectory(true);
+    try {
+      const result = await trpc.tools.selectDirectory.mutate({
+        title: '选择 RTL 扫描目录',
+        defaultPath: directory.root || undefined,
+      });
+      if (result.path) setDirectory((prev) => ({ ...prev, root: result.path ?? prev.root }));
+    } catch {
+      // best-effort：对话框失败不影响手动输入
+    } finally {
+      setBrowsingDirectory(false);
+    }
+  };
+
+  const updateDirectoryList = (key: 'excludes' | 'incdirs' | 'defines', value: string) => {
+    setDirectory((prev) => ({
+      ...prev,
+      [key]: value.split(/\r?\n/).map((item) => item.trim()).filter((item) => item.length > 0),
+    }));
+  };
+
   const detectTops = async () => {
-    // 先保存 filelists 再检测（检测需要读 .f）
     setSaving(true);
     try {
-      await trpc.rtl.setConfig.mutate({ projectId, filelists, top: topInput || null });
+      await trpc.rtl.setConfig.mutate({ projectId, ...buildConfig() });
       const { tops } = await trpc.rtl.detectTops.mutate({ projectId });
       setDetectedTops(tops);
       setDetectError(null);
       setDetectErrorDetail(null);
-      if (tops.length > 0 && !topInput) {
-        setTopInput(tops[0]);
-      }
+      if (tops.length > 0 && !topInput) setTopInput(tops[0]);
     } catch (err) {
       setDetectedTops([]);
-      // tRPC BAD_REQUEST 的 cause 是 ElaborationError（含 logTail/diagnostics）
       const msg = err instanceof Error ? err.message : String(err);
-      const cause = (err as { cause?: { logTail?: string; diagnostics?: unknown[] } }).cause;
+      const cause = (err as { cause?: { logTail?: string } }).cause;
       setDetectError(msg);
       setDetectErrorDetail(cause?.logTail ?? null);
     } finally {
       setSaving(false);
     }
-    // 检测结束后同步主面板 status：成功时清除残留的旧 lastError 面板，失败时呈现新持久化错误
     await onDetectFinished();
   };
 
   const save = async () => {
     setSaving(true);
+    const nextConfig = buildConfig();
     try {
-      await trpc.rtl.setConfig.mutate({ projectId, filelists, top: topInput || null });
-      await onSaved({ filelists, top: topInput || null });
+      await trpc.rtl.setConfig.mutate({ projectId, ...nextConfig });
+      await onSaved(nextConfig);
     } finally {
       setSaving(false);
     }
   };
 
+  const previewMode = source === 'directory' ? 'DIRECTORY SCAN' : 'FILELIST';
+  const previewSource = source === 'directory' ? (directory.root.trim() || '未选择目录') : `${filelists.filter((filelist) => filelist.trim()).length} 个 filelist`;
+  const previewFiles = source === 'directory' ? '递归发现 .v / .sv' : '按 filelist 顺序解析';
+  const previewNotice = source === 'directory'
+    ? '目录扫描无法可靠推断所有宏定义、生成 RTL 和第三方库依赖。请检查排除项与预检诊断。'
+    : 'Filelist 中的 include、define 和嵌套顺序会原样保留。';
+
   return (
-    <div className="border-b border-border p-4" data-testid="design-config-panel">
-      <div className="mb-1 text-xs font-semibold text-foreground">Design Source</div>
-      <p className="mb-3 text-[11px] leading-relaxed text-muted-foreground">
-        配置一个或多个 VCS 风格 .f 文件（支持 +incdir+ / +define+ / -f 嵌套），检测并选择顶层模块后手动刷新。
-      </p>
+    <div className="grid min-h-0 max-h-[min(720px,75vh)] grid-cols-[minmax(0,1fr)_19rem] border-b border-border bg-background" data-testid="design-config-panel">
+      <div className="min-h-0 overflow-y-auto p-5">
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <div className="mb-1 text-sm font-semibold text-foreground">配置 RTL 设计源</div>
+            <p className="max-w-2xl text-[11px] leading-relaxed text-muted-foreground">
+              选择能表达真实编译上下文的来源。系统会先规范化输入，再生成实例层级、模块接口与框图。
+            </p>
+          </div>
+          <span className="shrink-0 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">Configure · 1 / 1</span>
+        </div>
 
-      <div className="mb-3 space-y-1.5">
-        {filelists.map((f, i) => (
-          <div key={i} className="flex items-center gap-1.5">
-            <input
-              value={f}
-              onChange={(e) => setFilelists((prev) => prev.map((p, j) => (j === i ? e.target.value : p)))}
-              placeholder="design/filelist.f 或绝对路径"
-              className="flex-1 rounded border border-border bg-background px-2 py-1 font-mono text-xs outline-none focus:ring-1 focus:ring-primary/50"
-            />
+        <section className="mb-5">
+          <div className="mb-2 flex items-baseline gap-2">
+            <span className="flex size-5 items-center justify-center rounded-full bg-primary/15 text-[10px] font-semibold text-primary">1</span>
+            <div>
+              <h3 className="text-xs font-semibold text-foreground">选择来源</h3>
+              <p className="text-[10px] text-muted-foreground">没有项目清单时，目录扫描适合受控的 RTL 工程。</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 overflow-hidden rounded border border-border" role="tablist" aria-label="设计源类型">
             <button
               type="button"
-              aria-label={`浏览第 ${i + 1} 个 filelist`}
-              data-testid={`design-filelist-browse-${i}`}
-              onClick={() => void browseFilelist(i)}
-              className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              role="tab"
+              aria-selected={source === 'filelist'}
+              data-testid="design-source-filelist"
+              onClick={() => setSource('filelist')}
+              className={cn(
+                'flex min-h-16 items-start gap-2 border-r border-border px-3 py-2.5 text-left transition-colors',
+                source === 'filelist' ? 'bg-primary/10 text-foreground shadow-[inset_0_-2px_var(--primary)]' : 'bg-card text-muted-foreground hover:bg-accent hover:text-foreground',
+              )}
             >
-              <FolderOpen className="size-3.5" />
+              <ListTree className={cn('mt-0.5 size-4 shrink-0', source === 'filelist' ? 'text-primary' : 'text-muted-foreground')} />
+              <span><strong className="block text-xs font-semibold">Filelist</strong><span className="mt-0.5 block text-[10px] leading-relaxed">VCS 风格 .f / .flist，兼容现有配置</span></span>
             </button>
             <button
               type="button"
-              aria-label={`删除第 ${i + 1} 个 filelist`}
-              onClick={() => setFilelists((prev) => prev.filter((_, j) => j !== i))}
-              className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              role="tab"
+              aria-selected={source === 'directory'}
+              data-testid="design-source-directory"
+              onClick={() => setSource('directory')}
+              className={cn(
+                'flex min-h-16 items-start gap-2 px-3 py-2.5 text-left transition-colors',
+                source === 'directory' ? 'bg-primary/10 text-foreground shadow-[inset_0_-2px_var(--primary)]' : 'bg-card text-muted-foreground hover:bg-accent hover:text-foreground',
+              )}
             >
-              <Trash2 className="size-3.5" />
+              <FolderOpen className={cn('mt-0.5 size-4 shrink-0', source === 'directory' ? 'text-primary' : 'text-muted-foreground')} />
+              <span><strong className="block text-xs font-semibold">目录扫描</strong><span className="mt-0.5 block text-[10px] leading-relaxed">递归发现 .v / .sv，需要补充编译上下文</span></span>
             </button>
           </div>
-        ))}
-        <button
-          type="button"
-          onClick={() => setFilelists((prev) => [...prev, ''])}
-          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          <Plus className="size-3" />
-          添加 .f 文件
-        </button>
-      </div>
+        </section>
 
-      <div className="mb-3 flex items-center gap-1.5">
-        {detectedTops !== null && detectedTops.length > 0 ? (
-          <select
-            value={topInput}
-            onChange={(e) => setTopInput(e.target.value)}
-            data-testid="design-top-select"
-            aria-label="选择顶层模块"
-            className="w-56 rounded border border-border bg-background px-2 py-1 font-mono text-xs outline-none focus:ring-1 focus:ring-primary/50"
-          >
-            {(topInput && !detectedTops.includes(topInput) ? [topInput, ...detectedTops] : detectedTops).map(
-              (t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ),
-            )}
-          </select>
-        ) : (
-          <input
-            value={topInput}
-            onChange={(e) => setTopInput(e.target.value)}
-            placeholder="顶层模块名"
-            data-testid="design-top-input"
-            className="w-56 rounded border border-border bg-background px-2 py-1 font-mono text-xs outline-none focus:ring-1 focus:ring-primary/50"
-          />
-        )}
-        <button
-          type="button"
-          data-testid="design-detect-tops"
-          disabled={saving || filelists.filter((f) => f.trim()).length === 0}
-          onClick={() => void detectTops()}
-          className="flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
-        >
-          <Wand2 className={cn('size-3.5', saving && 'animate-pulse')} />
-          检测顶层
-        </button>
-        {detectedTops !== null && detectedTops.length === 0 && (
-          <span className="text-[11px] text-muted-foreground" data-testid="design-tops-result">
-            未检测到顶层
-          </span>
-        )}
-        {detectError && (
-          <div className="flex flex-col gap-0.5" data-testid="design-detect-error">
-            <span className="text-[11px] text-status-fail">{detectError}</span>
-            {detectErrorDetail && (
-              <details className="mt-0.5">
-                <summary className="cursor-pointer text-[10px] text-muted-foreground">yosys 输出详情</summary>
-                <pre className="mt-1 max-h-32 overflow-auto rounded bg-background/60 p-1.5 font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all">{detectErrorDetail}</pre>
-              </details>
-            )}
+        <section className="mb-5">
+          <div className="mb-2 flex items-baseline gap-2">
+            <span className="flex size-5 items-center justify-center rounded-full bg-primary/15 text-[10px] font-semibold text-primary">2</span>
+            <div>
+              <h3 className="text-xs font-semibold text-foreground">{source === 'directory' ? '限定扫描范围' : '添加 Filelist'}</h3>
+              <p className="text-[10px] text-muted-foreground">{source === 'directory' ? '只扫描设计 RTL，测试平台和工具产物默认排除。' : '支持多个 .f 文件、include、define 和嵌套路径。'}</p>
+            </div>
           </div>
-        )}
+
+          {source === 'filelist' ? (
+            <div className="space-y-1.5" data-testid="design-filelist-source-panel">
+              {filelists.map((f, i) => (
+                <div key={i} className="flex items-center gap-1.5">
+                  <input value={f} onChange={(e) => setFilelists((prev) => prev.map((p, j) => (j === i ? e.target.value : p)))} placeholder="design/filelist.f 或绝对路径" className="min-w-0 flex-1 rounded border border-border bg-card px-2.5 py-1.5 font-mono text-xs outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary/30" />
+                  <button type="button" aria-label={`浏览第 ${i + 1} 个 filelist`} data-testid={`design-filelist-browse-${i}`} onClick={() => void browseFilelist(i)} className="rounded border border-border p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"><FolderOpen className="size-3.5" /></button>
+                  <button type="button" aria-label={`删除第 ${i + 1} 个 filelist`} onClick={() => setFilelists((prev) => prev.filter((_, j) => j !== i))} className="rounded border border-border p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"><Trash2 className="size-3.5" /></button>
+                </div>
+              ))}
+              <button type="button" onClick={() => setFilelists((prev) => [...prev, ''])} className="flex items-center gap-1 rounded px-1 py-1 text-[11px] text-muted-foreground hover:bg-accent hover:text-foreground"><Plus className="size-3" />添加 .f 文件</button>
+            </div>
+          ) : (
+            <div className="space-y-3" data-testid="design-directory-source-panel">
+              <div className="flex items-center gap-1.5">
+                <input value={directory.root} onChange={(e) => setDirectory((prev) => ({ ...prev, root: e.target.value }))} placeholder="RTL 根目录，例如 D:\\doc\\opentitan\\hw" data-testid="design-scan-root" className="min-w-0 flex-1 rounded border border-border bg-card px-2.5 py-1.5 font-mono text-xs outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary/30" />
+                <button type="button" aria-label="选择 RTL 扫描目录" data-testid="design-scan-browse" disabled={browsingDirectory} onClick={() => void browseDirectory()} className="flex items-center gap-1 rounded border border-border px-2 py-1.5 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-wait disabled:opacity-60">
+                  <FolderOpen className={cn('size-3.5', browsingDirectory && 'animate-pulse')} />{browsingDirectory ? '打开中' : '浏览'}
+                </button>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <label className="flex flex-col gap-1 text-[10px] text-muted-foreground">排除目录 <span className="text-[9px] text-muted-foreground/70">每行一个 glob</span><textarea value={directory.excludes.join('\n')} onChange={(e) => updateDirectoryList('excludes', e.target.value)} rows={3} data-testid="design-scan-excludes" className="resize-y rounded border border-border bg-card px-2 py-1.5 font-mono text-[10px] leading-relaxed text-foreground outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary/30" /></label>
+                <label className="flex flex-col gap-1 text-[10px] text-muted-foreground">Include 目录 <span className="text-[9px] text-muted-foreground/70">.svh 搜索路径</span><textarea value={directory.incdirs.join('\n')} onChange={(e) => updateDirectoryList('incdirs', e.target.value)} rows={3} data-testid="design-scan-incdirs" placeholder="hw/ip/prim/rtl" className="resize-y rounded border border-border bg-card px-2 py-1.5 font-mono text-[10px] leading-relaxed text-foreground outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary/30" /></label>
+                <label className="flex flex-col gap-1 text-[10px] text-muted-foreground">宏定义 <span className="text-[9px] text-muted-foreground/70">决定 `ifdef 分支</span><textarea value={directory.defines.join('\n')} onChange={(e) => updateDirectoryList('defines', e.target.value)} rows={3} data-testid="design-scan-defines" placeholder="SYNTHESIS=1" className="resize-y rounded border border-border bg-card px-2 py-1.5 font-mono text-[10px] leading-relaxed text-foreground outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary/30" /></label>
+              </div>
+              <p className="flex items-start gap-1.5 rounded bg-amber-500/10 px-2.5 py-2 text-[10px] leading-relaxed text-amber-700 dark:text-amber-300"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" />目录扫描不能自动还原所有条件编译、生成 RTL 或第三方库依赖。</p>
+            </div>
+          )}
+        </section>
+
+        <section>
+          <div className="mb-2 flex items-baseline gap-2">
+            <span className="flex size-5 items-center justify-center rounded-full bg-primary/15 text-[10px] font-semibold text-primary">3</span>
+            <div><h3 className="text-xs font-semibold text-foreground">预检与顶层</h3><p className="text-[10px] text-muted-foreground">先检查输入，再选择最终 elaboration 顶层。</p></div>
+          </div>
+          <div className="flex flex-wrap items-start gap-1.5">
+            {detectedTops !== null && detectedTops.length > 0 ? (
+              <select value={topInput} onChange={(e) => setTopInput(e.target.value)} data-testid="design-top-select" aria-label="选择顶层模块" className="min-w-56 rounded border border-border bg-card px-2.5 py-1.5 font-mono text-xs outline-none focus:border-primary focus:ring-1 focus:ring-primary/30">
+                {(topInput && !detectedTops.includes(topInput) ? [topInput, ...detectedTops] : detectedTops).map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            ) : (
+              <input value={topInput} onChange={(e) => setTopInput(e.target.value)} placeholder="顶层模块名" data-testid="design-top-input" className="min-w-56 rounded border border-border bg-card px-2.5 py-1.5 font-mono text-xs outline-none focus:border-primary focus:ring-1 focus:ring-primary/30" />
+            )}
+            <button type="button" data-testid="design-detect-tops" disabled={saving || !hasSourceInput} onClick={() => void detectTops()} className="flex items-center gap-1 rounded border border-border px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"><Wand2 className={cn('size-3.5', saving && 'animate-pulse')} />{saving ? '处理中…' : '检测顶层'}</button>
+            {detectedTops !== null && detectedTops.length === 0 && <span className="pt-1.5 text-[11px] text-muted-foreground" data-testid="design-tops-result">未检测到顶层</span>}
+            {detectError && <div className="flex w-full flex-col gap-0.5" data-testid="design-detect-error"><span className="text-[11px] text-status-fail">{detectError}</span>{detectErrorDetail && <details className="mt-0.5"><summary className="cursor-pointer text-[10px] text-muted-foreground">yosys 输出详情</summary><pre className="mt-1 max-h-32 overflow-auto rounded bg-card p-1.5 font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all">{detectErrorDetail}</pre></details>}</div>}
+          </div>
+        </section>
+
+        <div className="mt-6 flex items-center gap-2 border-t border-border pt-3">
+          <p className="mr-auto text-[10px] text-muted-foreground">配置保存于 <code className="font-mono">.socverify/design/config.json</code></p>
+          <button type="button" data-testid="design-config-save" disabled={saving || !hasSourceInput || topInput.trim().length === 0} onClick={() => void save()} className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40">{saving ? '保存中…' : '保存并刷新'}</button>
+          <button type="button" onClick={onCancel} className="rounded border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground">取消</button>
+        </div>
       </div>
 
-      <div className="flex gap-2">
-        <button
-          type="button"
-          data-testid="design-config-save"
-          disabled={saving || filelists.filter((f) => f.trim()).length === 0 || topInput.trim().length === 0}
-          onClick={() => void save()}
-          className="rounded bg-primary px-3 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          保存并刷新
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          取消
-        </button>
-      </div>
+      <aside className="min-h-0 overflow-y-auto border-l border-border bg-muted/20" data-testid="design-source-preview">
+        <div className="flex min-h-11 items-center border-b border-border px-3.5"><strong className="text-[11px]">输入预览</strong><span className="ml-auto font-mono text-[9px] text-muted-foreground">{previewMode}</span></div>
+        <div className="space-y-5 p-3.5">
+          <div><h4 className="mb-2 text-[10px] font-semibold uppercase text-muted-foreground">解析范围</h4><div className="rounded border border-border bg-card p-2.5"><div className="flex items-center gap-1.5 font-mono text-[10px] text-foreground"><FolderOpen className="size-3.5 text-muted-foreground" /><span className="truncate" title={previewSource}>{previewSource}</span></div><div className="mt-1.5 text-[10px] text-muted-foreground">{previewFiles}</div><div className="mt-2 grid grid-cols-3 gap-1 border-t border-border pt-2 text-center"><span><b className="block text-sm font-semibold text-foreground">{source === 'directory' ? directory.excludes.length : filelists.filter((filelist) => filelist.trim()).length}</b><em className="not-italic text-[9px] text-muted-foreground">输入</em></span><span><b className="block text-sm font-semibold text-foreground">{directory.incdirs.length}</b><em className="not-italic text-[9px] text-muted-foreground">include</em></span><span><b className="block text-sm font-semibold text-foreground">{directory.defines.length}</b><em className="not-italic text-[9px] text-muted-foreground">define</em></span></div></div></div>
+          <div><h4 className="mb-2 text-[10px] font-semibold uppercase text-muted-foreground">顶层候选</h4><div className="rounded border border-border bg-card p-2.5"><div className="flex items-center gap-2"><span className="size-2 rounded-full bg-primary" /><span className="truncate font-mono text-[10px] text-foreground">{topInput.trim() || '尚未选择顶层'}</span></div>{detectedTops && detectedTops.length > 0 && <p className="mt-1.5 text-[9px] text-muted-foreground">已检测到 {detectedTops.length} 个候选</p>}</div></div>
+          <div><h4 className="mb-2 text-[10px] font-semibold uppercase text-muted-foreground">注意</h4><p className="rounded bg-amber-500/10 p-2.5 text-[10px] leading-relaxed text-muted-foreground"><AlertTriangle className="mr-1 inline size-3 text-amber-500" />{previewNotice}</p></div>
+          <div><h4 className="mb-2 text-[10px] font-semibold uppercase text-muted-foreground">规范化输入</h4><pre className="overflow-x-auto rounded bg-foreground p-2.5 font-mono text-[9px] leading-relaxed text-background">read_slang -f {source === 'directory' ? '.socverify/design/scanned.f' : (filelists.find((filelist) => filelist.trim()) || 'design/filelist.f')}\n--top {topInput.trim() || '<top>'} --keep-hierarchy{directory.defines.length > 0 ? `\n--define ${directory.defines[0]}` : ''}</pre></div>
+        </div>
+      </aside>
     </div>
   );
 }

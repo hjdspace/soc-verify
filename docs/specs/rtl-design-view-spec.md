@@ -79,7 +79,7 @@
 
 1. **Phase 1 全量交付**层级树、模块接口、框图（含连线）、AMBA bundle、slang-server LSP、verible lint/format；按垂直切片（S1-S9）推进，每片可运行。
 2. **层级四件套只看 DE 树**（design 组目录，多目录机制）；UVM/TB 运行时层级为明确非目标。lint/format 是文件级能力，不与层级范围绑定。
-3. **Design Source = 用户配置 `.f` + 选 top**，不做目录自动扫描（无 defines 时 `ifdef 分支瞎猜）、不做 runsim 环境推导（项目插件化，后续）。
+3. **Design Source = 用户配置 `.f` 或受控 RTL 目录扫描 + 选 top**。目录扫描只生成规范化临时 filelist，必须显式配置扫描根目录、排除 glob、include 目录和 defines；不做 runsim 环境推导（项目插件化，后续）。FuseSoC/Edalize `.core` 依赖图解析仍作为后续来源适配器。
 
 ### 引擎与数据流（ADR 0032 主题 2 + S0 实测）
 
@@ -145,7 +145,7 @@
 - CM6 补全 / references / rename / inlay hints（第二波，slang-server 已支持但桥接成本独立）
 - 框图手动拖拽编辑（只读浏览）
 - 跨层级信号 trace（Verdi 核心玩法，工作量独立成期）
-- filelist 自动扫描 / runsim 环境推导（项目插件化）
+- FuseSoC/Edalize `.core` 依赖图自动解析 / runsim 环境推导（项目插件化）
 - SV interface/modport 的 bundle 支持（本 DE 树无 interface，用户确认）
 - 多用户协作 / Web 端（单用户桌面应用，硬约束 2）
 

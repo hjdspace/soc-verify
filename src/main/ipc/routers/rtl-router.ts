@@ -36,6 +36,7 @@ import {
   stopLsp,
 } from '../../rtl/lsp-manager';
 import { runVeribleLint, type VeribleLintDiagnostic } from '../../rtl/verible-lint';
+import type { DesignSourceConfig } from '../../rtl/types';
 
 /** inline validator：projectId 必填 */
 const projectIdInput = (raw: unknown): { projectId: string } => {
@@ -60,7 +61,7 @@ export const rtlRouter = t.router({
     }),
 
   setConfig: t.procedure
-    .input((raw): { projectId: string; filelists: string[]; top: string | null } => {
+    .input((raw): { projectId: string; source?: 'filelist' | 'directory'; filelists: string[]; directory?: DesignSourceConfig['directory']; top: string | null } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.projectId !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
@@ -68,12 +69,36 @@ export const rtlRouter = t.router({
       if (!Array.isArray(r.filelists) || r.filelists.some((f) => typeof f !== 'string')) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'filelists must be a string array' });
       }
+      if (r.source !== undefined && r.source !== 'filelist' && r.source !== 'directory') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'source must be filelist or directory' });
+      }
+      const source = r.source === 'directory' ? 'directory' : 'filelist';
+      let directory: DesignSourceConfig['directory'];
+      if (r.directory !== undefined) {
+        const d = r.directory as Record<string, unknown>;
+        if (typeof d.root !== 'string') {
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'directory.root must be a string' });
+        }
+        for (const key of ['excludes', 'incdirs', 'defines']) {
+          if (d[key] !== undefined && (!Array.isArray(d[key]) || (d[key] as unknown[]).some((item) => typeof item !== 'string'))) {
+            throw new TRPCError({ code: 'BAD_REQUEST', message: `directory.${key} must be a string array` });
+          }
+        }
+        directory = {
+          root: d.root,
+          excludes: Array.isArray(d.excludes) ? d.excludes as string[] : [],
+          incdirs: Array.isArray(d.incdirs) ? d.incdirs as string[] : [],
+          defines: Array.isArray(d.defines) ? d.defines as string[] : [],
+        };
+      }
       if (r.top !== null && typeof r.top !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'top must be a string or null' });
       }
       return {
         projectId: r.projectId,
+        source,
         filelists: r.filelists as string[],
+        directory,
         top: (r.top as string | null) ?? null,
       };
     })
@@ -82,7 +107,16 @@ export const rtlRouter = t.router({
       const top = input.top !== null && input.top.trim().length > 0 ? input.top.trim() : null;
       // stripPathQuotes：去除「复制文件地址」粘贴带来的首尾引号（含 trim）
       saveDesignConfig(project.rootPath, {
+        source: input.source,
         filelists: input.filelists.map((f) => stripPathQuotes(f)).filter((f) => f.length > 0),
+        directory: input.directory
+          ? {
+              root: stripPathQuotes(input.directory.root),
+              excludes: input.directory.excludes.map((item) => stripPathQuotes(item)).filter((item) => item.length > 0),
+              incdirs: input.directory.incdirs.map((item) => stripPathQuotes(item)).filter((item) => item.length > 0),
+              defines: input.directory.defines.map((item) => item.trim()).filter((item) => item.length > 0),
+            }
+          : undefined,
         top,
       });
       return { ok: true as const };

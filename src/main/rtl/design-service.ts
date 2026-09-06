@@ -9,7 +9,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 import { resolveYosysPath, yosysMissingDlls } from './binary';
 import {
   getChildrenInstances,
@@ -28,7 +28,8 @@ import {
   type DesignDatabase,
 } from './design-db';
 import { RtlElaborationError, elaborate } from './elaborator';
-import { flattenFilelists, renderFlatFilelist } from './filelist';
+import { renderFlatFilelist } from './filelist';
+import { resolveDesignSource } from './design-source';
 import { extractDesign, extractTopUnits, normalizeSrc, type WriteJsonDoc } from './extractor';
 import { analyzePorts, BUILTIN_AMBA_RULES } from './bundle-rules';
 import type {
@@ -78,15 +79,33 @@ export function getDesignWorkDir(projectRoot: string): string {
 
 export function loadDesignConfig(projectRoot: string): DesignSourceConfig {
   const path = getDesignConfigPath(projectRoot);
-  if (!existsSync(path)) return { filelists: [], top: null };
+  if (!existsSync(path)) return { source: 'filelist', filelists: [], directory: undefined, top: null };
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    const source = parsed.source === 'directory' ? 'directory' : 'filelist';
+    const rawDirectory = parsed.directory as Record<string, unknown> | undefined;
     return {
+      source,
       filelists: Array.isArray(parsed.filelists) ? parsed.filelists.filter((f): f is string => typeof f === 'string') : [],
+      directory:
+        source === 'directory' && rawDirectory && typeof rawDirectory.root === 'string'
+          ? {
+              root: rawDirectory.root,
+              excludes: Array.isArray(rawDirectory.excludes)
+                ? rawDirectory.excludes.filter((item): item is string => typeof item === 'string')
+                : [],
+              incdirs: Array.isArray(rawDirectory.incdirs)
+                ? rawDirectory.incdirs.filter((item): item is string => typeof item === 'string')
+                : [],
+              defines: Array.isArray(rawDirectory.defines)
+                ? rawDirectory.defines.filter((item): item is string => typeof item === 'string')
+                : [],
+            }
+          : undefined,
       top: typeof parsed.top === 'string' && parsed.top.length > 0 ? parsed.top : null,
     };
   } catch {
-    return { filelists: [], top: null };
+    return { source: 'filelist', filelists: [], directory: undefined, top: null };
   }
 }
 
@@ -141,7 +160,8 @@ function mergeRuleDocs(custom: BundleRuleDoc): BundleRuleDoc {
 }
 
 export function isConfigured(config: DesignSourceConfig): boolean {
-  return config.filelists.length > 0 && config.top !== null;
+  const hasSource = config.source === 'directory' ? Boolean(config.directory?.root.trim()) : config.filelists.length > 0;
+  return hasSource && config.top !== null;
 }
 
 // ─── DB 缓存与操作串行化 ────────────────────────────────────
@@ -391,8 +411,11 @@ export function querySubgraph(projectId: string, projectRoot: string, path: stri
 export function refresh(projectId: string, projectRoot: string): Promise<DesignRefreshResult> {
   return serialize(projectId, async (): Promise<DesignRefreshResult> => {
     const config = loadDesignConfig(projectRoot);
-    if (config.filelists.length === 0) {
-      return fail(projectId, projectRoot, '未配置 Design Source：请先在「设计」视图配置 .f 文件列表');
+    if (config.source !== 'directory' && config.filelists.length === 0) {
+      return fail(projectId, projectRoot, '未配置 Design Source：请先选择 filelist 或目录扫描');
+    }
+    if (config.source === 'directory' && !config.directory?.root.trim()) {
+      return fail(projectId, projectRoot, '未配置 RTL 扫描目录：请先选择扫描根目录');
     }
     if (!config.top) {
       return fail(projectId, projectRoot, '未选择顶层模块：请先检测并选择顶层');
@@ -408,10 +431,9 @@ export function refresh(projectId: string, projectRoot: string): Promise<DesignR
     }
 
     // 展开多 .f → 扁平清单（绝对路径）
-    const absFilelists = config.filelists.map((f) => (isAbsolute(f) ? f : join(projectRoot, f)));
     let parsed;
     try {
-      parsed = flattenFilelists(absFilelists, projectRoot);
+      parsed = resolveDesignSource(config, projectRoot);
     } catch (err) {
       return fail(projectId, projectRoot, err instanceof Error ? err.message : String(err));
     }
@@ -515,8 +537,13 @@ function persistError(projectId: string, projectRoot: string, error: Elaboration
 export function detectTops(projectId: string, projectRoot: string): Promise<string[]> {
   return serialize(projectId, async (): Promise<string[]> => {
     const config = loadDesignConfig(projectRoot);
-    if (config.filelists.length === 0) {
-      const err = new RtlElaborationError('未配置 Design Source：请先配置 .f 文件列表', [], '');
+    if (config.source !== 'directory' && config.filelists.length === 0) {
+      const err = new RtlElaborationError('未配置 Design Source：请先选择 filelist 或目录扫描', [], '');
+      persistError(projectId, projectRoot, err.toElaborationError());
+      throw err;
+    }
+    if (config.source === 'directory' && !config.directory?.root.trim()) {
+      const err = new RtlElaborationError('未配置 RTL 扫描目录：请先选择扫描根目录', [], '');
       persistError(projectId, projectRoot, err.toElaborationError());
       throw err;
     }
@@ -527,10 +554,9 @@ export function detectTops(projectId: string, projectRoot: string): Promise<stri
       throw err;
     }
 
-    const absFilelists = config.filelists.map((f) => (isAbsolute(f) ? f : join(projectRoot, f)));
     let parsed;
     try {
-      parsed = flattenFilelists(absFilelists, projectRoot);
+      parsed = resolveDesignSource(config, projectRoot);
     } catch (err) {
       const elabErr = new RtlElaborationError(err instanceof Error ? err.message : String(err), [], '');
       persistError(projectId, projectRoot, elabErr.toElaborationError());
