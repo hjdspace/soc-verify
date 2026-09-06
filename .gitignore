@@ -10,10 +10,11 @@ dist/
 *.tsbuildinfo
 resources/binaries/*
 !resources/binaries/README.md
-# Nerd Font TTF 文体文件入库（共 ~10MB），避免每次打包下载 123MB zip
+# JetBrainsMono Nerd Font TTF 入库（4 文件 ~10MB），避免每次打包下载 123MB zip
 resources/fonts/*
 !resources/fonts/README.md
-!resources/fonts/*.ttf
+!resources/fonts/JetBrainsMonoNerdFont-*.ttf
+# MesloLGS NF（~2.5MB/个）不入库，由下载脚本按需获取
 # JetBrainsMono.zip 是下载的临时文件（123MB），不入库
 resources/fonts/*.zip
 
