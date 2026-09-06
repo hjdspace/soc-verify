@@ -24,6 +24,16 @@ import {
   saveDesignConfig,
 } from '../../rtl/design-service';
 import { RtlElaborationError } from '../../rtl/elaborator';
+import {
+  getLspStatus,
+  lspDefinition,
+  lspDidChange,
+  lspDidOpen,
+  lspHover,
+  restartLsp,
+  startLsp,
+  stopLsp,
+} from '../../rtl/lsp-manager';
 
 /** inline validator：projectId 必填 */
 const projectIdInput = (raw: unknown): { projectId: string } => {
@@ -169,6 +179,102 @@ export const rtlRouter = t.router({
     .query(({ input }) => {
       const project = requireProject(input.projectId);
       return querySubgraph(input.projectId, project.rootPath, input.path);
+    }),
+
+  // ── slang-server LSP 桥（issue 06：诊断 + hover + 跳转）──
+
+  /** 启动 LSP 进程（slang-server 不可用时返回 null） */
+  lspStart: t.procedure
+    .input(projectIdInput)
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      return startLsp(input.projectId, project.rootPath);
+    }),
+
+  /** LSP 状态查询 */
+  lspStatus: t.procedure
+    .input(projectIdInput)
+    .query(({ input }) => {
+      const project = requireProject(input.projectId);
+      return getLspStatus(input.projectId, project.rootPath);
+    }),
+
+  /** textDocument/didOpen — 打开 .sv 文件 */
+  lspOpen: t.procedure
+    .input((raw): { projectId: string; uri: string; text: string; version: number } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      if (typeof r.uri !== 'string' || r.uri.length === 0) throw new TRPCError({ code: 'BAD_REQUEST', message: 'uri is required' });
+      if (typeof r.text !== 'string') throw new TRPCError({ code: 'BAD_REQUEST', message: 'text is required' });
+      if (typeof r.version !== 'number') throw new TRPCError({ code: 'BAD_REQUEST', message: 'version is required' });
+      return { projectId: r.projectId, uri: r.uri, text: r.text, version: r.version };
+    })
+    .mutation(({ input }) => {
+      const project = requireProject(input.projectId);
+      lspDidOpen(input.projectId, project.rootPath, { uri: input.uri, text: input.text, version: input.version });
+      return { ok: true as const };
+    }),
+
+  /** textDocument/didChange — 全量文本替换 */
+  lspChange: t.procedure
+    .input((raw): { projectId: string; uri: string; text: string; version: number } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      if (typeof r.uri !== 'string' || r.uri.length === 0) throw new TRPCError({ code: 'BAD_REQUEST', message: 'uri is required' });
+      if (typeof r.text !== 'string') throw new TRPCError({ code: 'BAD_REQUEST', message: 'text is required' });
+      if (typeof r.version !== 'number') throw new TRPCError({ code: 'BAD_REQUEST', message: 'version is required' });
+      return { projectId: r.projectId, uri: r.uri, text: r.text, version: r.version };
+    })
+    .mutation(({ input }) => {
+      const project = requireProject(input.projectId);
+      lspDidChange(input.projectId, project.rootPath, { uri: input.uri, text: input.text, version: input.version });
+      return { ok: true as const };
+    }),
+
+  /** textDocument/hover — 悬停符号信息 */
+  lspHover: t.procedure
+    .input((raw): { projectId: string; uri: string; line: number; character: number } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      if (typeof r.uri !== 'string' || r.uri.length === 0) throw new TRPCError({ code: 'BAD_REQUEST', message: 'uri is required' });
+      if (typeof r.line !== 'number') throw new TRPCError({ code: 'BAD_REQUEST', message: 'line is required' });
+      if (typeof r.character !== 'number') throw new TRPCError({ code: 'BAD_REQUEST', message: 'character is required' });
+      return { projectId: r.projectId, uri: r.uri, line: r.line, character: r.character };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      return lspHover(input.projectId, project.rootPath, { uri: input.uri, position: { line: input.line, character: input.character } });
+    }),
+
+  /** textDocument/definition — 跳转定义（跨文件） */
+  lspDefinition: t.procedure
+    .input((raw): { projectId: string; uri: string; line: number; character: number } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      if (typeof r.uri !== 'string' || r.uri.length === 0) throw new TRPCError({ code: 'BAD_REQUEST', message: 'uri is required' });
+      if (typeof r.line !== 'number') throw new TRPCError({ code: 'BAD_REQUEST', message: 'line is required' });
+      if (typeof r.character !== 'number') throw new TRPCError({ code: 'BAD_REQUEST', message: 'character is required' });
+      return { projectId: r.projectId, uri: r.uri, line: r.line, character: r.character };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      return lspDefinition(input.projectId, project.rootPath, { uri: input.uri, position: { line: input.line, character: input.character } });
+    }),
+
+  /** 关闭 LSP 进程（闲置/关闭视图时调用，不泄漏） */
+  lspStop: t.procedure
+    .input(projectIdInput)
+    .mutation(async ({ input }) => {
+      await stopLsp(input.projectId);
+      return { ok: true as const };
+    }),
+
+  /** 重启 LSP 进程（Design Source 变更后调用，编译选项共享不瞎报） */
+  lspRestart: t.procedure
+    .input(projectIdInput)
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      return restartLsp(input.projectId, project.rootPath);
     }),
 });
 

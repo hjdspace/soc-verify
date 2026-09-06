@@ -475,5 +475,38 @@ process.once('loaded', async () => {
       ipcRenderer.on(GLOBAL_ERROR_CHANNEL, handler);
       return () => ipcRenderer.removeListener(GLOBAL_ERROR_CHANNEL, handler);
     },
+
+    // ── slang-server LSP 诊断推送（issue 06）──────────────────
+    // lsp:diagnostics —— 主进程推送 publishDiagnostics 到渲染端
+    onLspDiagnostics: (
+      callback: (data: {
+        projectId: string;
+        uri: string;
+        diagnostics: Array<{
+          range: { start: { line: number; character: number }; end: { line: number; character: number } };
+          severity: 'error' | 'warning' | 'info' | 'hint';
+          message: string;
+          source?: string;
+          code?: number | string;
+        }>;
+      }) => void,
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        data: {
+          projectId: string;
+          uri: string;
+          diagnostics: Array<{
+            range: { start: { line: number; character: number }; end: { line: number; character: number } };
+            severity: 'error' | 'warning' | 'info' | 'hint';
+            message: string;
+            source?: string;
+            code?: number | string;
+          }>;
+        },
+      ) => callback(data);
+      ipcRenderer.on('lsp:diagnostics', handler);
+      return () => ipcRenderer.removeListener('lsp:diagnostics', handler);
+    },
   });
 });
