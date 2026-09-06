@@ -6,6 +6,38 @@
 
 ---
 
+## [0.4.7](https://github.com/hjdspace/soc-verify/compare/v0.4.6...v0.4.7) (2026-09-07)
+
+### Features
+
+* **rtl-design-view:** 全新 RTL 设计视图（ADR 0032）——设计源码层级树侧边栏、Protocol Bundle 引擎与可下钻框图渲染、框图连线自动绕行与锚定优化
+* **rtl-design-view:** 接通 slang-server LSP bridge（diagnostics + hover + definition）与 verible lint 到编辑器
+* **rtl-design-view:** 目录扫描式设计源支持，Windows 退化 git symlink 解析与默认排除规则（pre_dv/fpv）
+* **rtl-tools:** `download:rtl-tools` 二进制分发支持 Windows + Linux，新增工具状态查询
+* **rtl-fonts:** MesloLGS 字体入库，优化字体资源管理
+* **simulation:** CaseCfgPanel 支持批量模式与节点控制，仿真视图 keep-alive 与性能优化
+* **simulation:** `getCaseSubsys` 子系统查询接入，仿真运行监听器解析子系统并归一化名称
+* **terminal:** 为 Electron GUI 进程注入默认 TERM，跨平台行为一致
+* **desktop:** 原生桌面会话兼容性补丁，支持 local-resource 协议加载本地文件
+* **session:** 会话消息懒加载（messagesUnloaded），会话切换性能优化
+* **scm:** loadStatus 并发去重，SourceControlStatus 新增 notice 字段，非 Git 仓库提示优化
+* **theme:** 新增多套主题 ID 与高对比度无障碍样式
+
+### Bug Fixes
+
+* **rtl,ui:** 修复 Windows 路径解析问题并优化 UI 交互
+* **navrail:** 修复 dock 模式下 AI 按钮行为
+
+### Performance
+
+* **theme:** 主题切换 View Transitions 重构，requestAnimationFrame 批量重建优化
+* **token-monitor:** Claude/codex JSONL 日志流式解析，扫描器异步文件操作，批量 usage 记录写入
+* **ui:** Markdown 渲染缓存、CodeHighlight 单行性能守卫、Drawer 拖拽动量与 Pointer Events 重构、Resize/防抖优化
+
+### Tests
+
+* 补齐仿真运行监听器、会话切换性能回归、MarkdownRenderer 缓存、RTL issue 08 与 SoC 级性能验证等大量测试
+
 ## [0.4.6](https://github.com/hjdspace/soc-verify/compare/v0.4.5...v0.4.6) (2026-09-02)
 
 ### Features
