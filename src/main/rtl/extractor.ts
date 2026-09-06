@@ -12,7 +12,7 @@
  * 本实现保证 raw doc 只在主进程内存中出现、不持久化（渲染端零解析）。
  */
 
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
 import type {
   ExtractedDef,
   ExtractedDesign,
@@ -56,28 +56,56 @@ export function splitUniquified(name: string): [string, string | null] {
 /**
  * write_json `src` 属性归一化为绝对路径（保留 `:行.列` 后缀）。
  *
- * yosys 把 src 记录为相对其进程 cwd（elaboration work 目录）的路径
- * （如 `..\..\rtl-spike\rtl\a.sv:3.8`），渲染端按项目根拼接会在路径深度
- * 不足时越过盘符根被钳位，得到错误绝对路径。相对路径必须按 yosys cwd
- * （= workDir）解析；绝对路径原样返回。
+ * yosys 把 src 记录为相对其进程 cwd 的路径。由于 Design Source 允许引用
+ * 项目目录外的绝对文件，单纯按 workDir resolve 可能把 `..` 上溯到盘符根，
+ * 得到不存在的路径。优先用本次 filelist 已解析的绝对源文件反查，未匹配时
+ * 才回退到 cwd resolve；绝对路径也会按同一源文件集合修复历史缓存中的坏路径。
  */
-export function normalizeSrc(src: string | null, yosysCwd: string): string | null {
+export function normalizeSrc(src: string | null, yosysCwd: string, sourceFiles: readonly string[] = []): string | null {
   if (src === null) return null;
   // 惰性匹配兼容 Windows 盘符冒号；后缀形态 `:行.列[-行.列]`
   const m = /^(.*?)(:\d+(?:\.\d+)?(?:-\d+(?:\.\d+)?)?)$/.exec(src);
   const pathPart = m?.[1] ?? src;
   const suffix = m?.[2] ?? '';
+  const source = findSourceFile(pathPart, yosysCwd, sourceFiles);
+  if (source) return `${source}${suffix}`;
   if (isAbsolute(pathPart)) return src;
   return `${resolve(yosysCwd, pathPart)}${suffix}`;
 }
 
-function srcOf(m: WJModule, yosysCwd: string): string | null {
+function findSourceFile(pathPart: string, yosysCwd: string, sourceFiles: readonly string[]): string | null {
+  if (sourceFiles.length === 0) return null;
+  const normalizedPath = normalizePath(pathPart);
+  const relativeMatches = sourceFiles.filter((sourceFile) => {
+    const fromCwd = relative(yosysCwd, sourceFile);
+    return normalizePath(fromCwd) === normalizedPath;
+  });
+  if (relativeMatches.length === 1) return relativeMatches[0]!;
+
+  // Yosys versions differ in how many leading `..` segments they emit. Strip
+  // those segments and use the remaining path as a unique suffix.
+  const suffix = normalizedPath
+    .replace(/^[a-z]:\//, '')
+    .replace(/^\/+/, '')
+    .replace(/^(?:\.\.\/|\.\/)+/, '');
+  const suffixMatches = sourceFiles.filter((sourceFile) => {
+    const normalizedSource = normalizePath(sourceFile);
+    return normalizedSource === suffix || normalizedSource.endsWith(`/${suffix}`);
+  });
+  return suffixMatches.length === 1 ? suffixMatches[0]! : null;
+}
+
+function normalizePath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/\/+/g, '/').toLowerCase();
+}
+
+function srcOf(m: WJModule, yosysCwd: string, sourceFiles: readonly string[]): string | null {
   const src = m.attributes?.['src'];
-  return typeof src === 'string' ? normalizeSrc(src, yosysCwd) : null;
+  return typeof src === 'string' ? normalizeSrc(src, yosysCwd, sourceFiles) : null;
 }
 
 /** 提炼 Module Definitions（按 defName 聚合；yosys 内部 `$` 模块跳过；顶层同名模块亦为 def） */
-export function extractDefs(doc: WriteJsonDoc, yosysCwd: string): ExtractedDef[] {
+export function extractDefs(doc: WriteJsonDoc, yosysCwd: string, sourceFiles: readonly string[] = []): ExtractedDef[] {
   const defs = new Map<string, ExtractedDef>();
   for (const [name, m] of Object.entries(doc.modules ?? {})) {
     if (name.startsWith('$')) continue; // yosys 内部模块
@@ -90,7 +118,7 @@ export function extractDefs(doc: WriteJsonDoc, yosysCwd: string): ExtractedDef[]
     }));
     defs.set(defName, {
       name: defName,
-      src: srcOf(m, yosysCwd),
+      src: srcOf(m, yosysCwd, sourceFiles),
       paramDefaults: (m.parameter_default_values ?? {}) as Record<string, unknown>,
       ports,
     });
@@ -112,6 +140,7 @@ function buildTree(
   depth: number,
   cellParams: Record<string, unknown>,
   yosysCwd: string,
+  sourceFiles: readonly string[],
   out: ExtractedInst[],
 ): void {
   const m = doc.modules[uniquifiedName];
@@ -123,7 +152,7 @@ function buildTree(
     module: defName,
     parent: parentPath,
     depth,
-    src: m ? srcOf(m, yosysCwd) : null,
+    src: m ? srcOf(m, yosysCwd, sourceFiles) : null,
     // 参数覆盖值在父模块 cell.parameters 上（write_json 已知缺口：uniquified 模块的
     // parameter_default_values 为空，spec 遗留问题的展示方案在后续切片解决）
     params: cellParams,
@@ -133,7 +162,7 @@ function buildTree(
   if (!m) return; // 黑盒：无可遍历 body
   for (const [cname, cell] of Object.entries(m.cells ?? {})) {
     if (!isModuleInstance(doc, cell.type)) continue;
-    buildTree(doc, cell.type, cname, path, depth + 1, (cell.parameters ?? {}) as Record<string, unknown>, yosysCwd, out);
+    buildTree(doc, cell.type, cname, path, depth + 1, (cell.parameters ?? {}) as Record<string, unknown>, yosysCwd, sourceFiles, out);
   }
 }
 
@@ -160,20 +189,25 @@ export function extractTopUnits(doc: WriteJsonDoc): string[] {
 /**
  * 提炼全设计。top 必须在文档中（elaborated top units 之一），否则抛错。
  * 注意 cell.parameters 在父模块的 cells 上 —— buildTree 需要读取它。
- * yosysCwd = yosys 进程 cwd（work 目录）：write_json src 是相对它的路径，
- * 必须在此归一化为绝对路径（见 normalizeSrc）。
+ * yosysCwd = yosys 进程 cwd（work 目录）；sourceFiles 是本次 Design Source
+ * 展开的绝对源文件列表，用于抵抗不同 yosys 版本的 src 相对路径表示差异。
  */
-export function extractDesign(doc: WriteJsonDoc, topName: string, yosysCwd: string): ExtractedDesign {
+export function extractDesign(
+  doc: WriteJsonDoc,
+  topName: string,
+  yosysCwd: string,
+  sourceFiles: readonly string[] = [],
+): ExtractedDesign {
   const topModule = doc.modules?.[topName];
   if (!topModule) {
     throw new Error(`顶层模块 ${topName} 不在 elaborated 设计中（write_json 无此模块）`);
   }
   const insts: ExtractedInst[] = [];
-  buildTree(doc, topName, topName, null, 0, {}, yosysCwd, insts);
+  buildTree(doc, topName, topName, null, 0, {}, yosysCwd, sourceFiles, insts);
   assignInstCounts(insts);
   return {
     top: topName,
-    defs: extractDefs(doc, yosysCwd),
+    defs: extractDefs(doc, yosysCwd, sourceFiles),
     insts,
     edges: extractEdges(doc),
   };

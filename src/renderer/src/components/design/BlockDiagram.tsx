@@ -4,7 +4,7 @@
  * - box = 图根 + 直接子实例（端口按方向分列 box 两缘，Handle 按
  *   端口名锚定细边）；粗边 = Protocol Bundle（收拢为协议标签 +
  *   ×计数，可展开信号明细）；细边 = 未入束 net（RTL 原名）
- * - elkjs 自动分层布局（block-diagram-layout），无手动拖拽编辑
+ * - elkjs 自动分层布局（block-diagram-layout），节点可在画布中拖拽整理
  * - 双击实例下钻以它为图根 + 面包屑回退；hover 端口看信号名/方向/位宽；
  *   点击信号高亮同名连线（edgesForSignal）
  */
@@ -17,8 +17,14 @@ import {
   BaseEdge,
   EdgeLabelRenderer,
   getBezierPath,
+  Background,
+  Controls,
+  MiniMap,
+  Panel,
   type EdgeProps,
+  type NodeChange,
   type NodeProps,
+  type ReactFlowInstance,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { ChevronRight, X } from 'lucide-react';
@@ -60,7 +66,7 @@ function ModuleBoxView({ data, selected }: NodeProps) {
   return (
     <div
       className={cn(
-        'overflow-hidden rounded-md border bg-card shadow-sm',
+        'overflow-hidden rounded-md border bg-card shadow-sm transition-shadow',
         d.isRoot ? 'border-primary/60' : 'border-border',
         selected && 'ring-2 ring-primary/50',
       )}
@@ -99,7 +105,7 @@ function PortRow({ port, d, side }: { port: SubgraphPortRow; d: ModuleBoxData; s
       onMouseLeave={() => d.onPortHover(null)}
       onClick={() => d.onPortClick(port.name)}
       className={cn(
-        'relative flex w-[100px] cursor-pointer items-center rounded px-1 font-mono text-[10px] leading-4 text-foreground/90 hover:bg-accent',
+        'nodrag relative flex w-[100px] cursor-pointer items-center rounded px-1 font-mono text-[10px] leading-4 text-foreground/90 hover:bg-accent',
         matched && 'bg-primary/20 text-primary',
       )}
     >
@@ -126,7 +132,7 @@ type EdgeViewData = {
 
 function BundleEdgeView(props: EdgeProps) {
   const d = (props.data ?? {}) as EdgeViewData;
-  const [path] = getBezierPath({
+  const [path, labelX, labelY] = getBezierPath({
     sourceX: props.sourceX,
     sourceY: props.sourceY,
     targetX: props.targetX,
@@ -146,8 +152,13 @@ function BundleEdgeView(props: EdgeProps) {
         <div
           data-testid="diagram-bundle-label"
           data-highlighted={String(d.highlighted)}
+          style={{
+            position: 'absolute',
+            transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+            pointerEvents: 'all',
+          }}
           className={cn(
-            'nodrag nopan flex flex-col items-start gap-0.5 rounded border border-border bg-card/95 px-1.5 py-1 text-[10px] shadow-sm',
+            'nodrag nopan relative z-20 flex flex-col items-start gap-0.5 rounded-md border border-border bg-card/95 px-1.5 py-1 text-[10px] shadow-md',
             d.highlighted && 'border-primary/60',
           )}
         >
@@ -184,7 +195,7 @@ function BundleEdgeView(props: EdgeProps) {
 
 function SignalEdgeView(props: EdgeProps) {
   const d = (props.data ?? {}) as EdgeViewData;
-  const [path] = getBezierPath({
+  const [path, labelX, labelY] = getBezierPath({
     sourceX: props.sourceX,
     sourceY: props.sourceY,
     targetX: props.targetX,
@@ -203,8 +214,13 @@ function SignalEdgeView(props: EdgeProps) {
       <EdgeLabelRenderer>
         <div
           data-testid="diagram-signal-label"
+          style={{
+            position: 'absolute',
+            transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+            pointerEvents: 'none',
+          }}
           className={cn(
-            'nodrag nopan rounded px-1 font-mono text-[9px] text-muted-foreground',
+            'nodrag nopan relative z-20 rounded px-1 font-mono text-[9px] text-muted-foreground',
             d.highlighted && 'font-semibold text-primary',
           )}
         >
@@ -223,6 +239,7 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
   const [sg, setSg] = useState<DesignSubgraphRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [positions, setPositions] = useState<Map<string, { x: number; y: number }> | null>(null);
+  const [flow, setFlow] = useState<ReactFlowInstance | null>(null);
   const [hoveredPort, setHoveredPort] = useState<SubgraphPortRow | null>(null);
   const [highlightSignal, setHighlightSignal] = useState<string | null>(null);
   const [expandedEdges, setExpandedEdges] = useState<ReadonlySet<string>>(new Set());
@@ -295,6 +312,31 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
     [rootPath],
   );
 
+  const handleNodesChange = useCallback((changes: NodeChange[]) => {
+    setPositions((current) => {
+      if (!current) return current;
+      const next = new Map(current);
+      let changed = false;
+      for (const change of changes) {
+        if (change.type !== 'position' || !change.position) continue;
+        next.set(change.id, change.position);
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, []);
+
+  const resetLayout = useCallback(() => {
+    if (!vm) return;
+    void layoutDiagram(
+      vm.nodes.map((n) => ({ id: n.id, ...nodeSize(n) })),
+      vm.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+    ).then((next) => {
+      setPositions(next);
+      requestAnimationFrame(() => flow?.fitView({ padding: 0.18, duration: 180 }));
+    });
+  }, [flow, vm]);
+
   const nodeTypes = useMemo(() => ({ moduleBox: ModuleBoxView }), []);
   const edgeTypes = useMemo(() => ({ bundleEdge: BundleEdgeView, signalEdge: SignalEdgeView }), []);
 
@@ -304,7 +346,7 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
       id: n.id,
       type: 'moduleBox',
       position: positions.get(n.id) ?? { x: 0, y: 0 },
-      draggable: false,
+      draggable: true,
       data: {
         name: n.name,
         module: n.module,
@@ -396,8 +438,8 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
         )}
       </div>
 
-      {/* ─── 画布（只读浏览：无拖拽/连线编辑） ───────────── */}
-      <div className="relative min-h-0 flex-1">
+      {/* ─── 无限画布（节点可拖拽，拓扑仍为只读） ───────── */}
+      <div className="relative min-h-0 flex-1 overflow-hidden rounded-md border border-border bg-background">
         {vm.nodes.length <= 1 && (
           <div
             data-testid="diagram-empty"
@@ -411,8 +453,10 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
           edges={rfEdges}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
+          onInit={setFlow}
+          onNodesChange={handleNodesChange}
           onNodeDoubleClick={handleNodeDoubleClick}
-          nodesDraggable={false}
+          nodesDraggable
           nodesConnectable={false}
           elementsSelectable={false}
           edgesFocusable={false}
@@ -421,7 +465,44 @@ export function BlockDiagram({ projectId, path }: { projectId: string; path: str
           minZoom={0.1}
           maxZoom={2}
           proOptions={{ hideAttribution: true }}
+          className="bg-background"
         >
+          <Background gap={22} size={1} color="var(--border)" className="opacity-60" />
+          <Controls
+            showInteractive={false}
+            position="bottom-left"
+            className="!m-2 !border-border !bg-card !shadow-sm [&>button]:!border-border [&>button]:!bg-card [&>button]:!text-muted-foreground"
+          />
+          <MiniMap
+            nodeColor="var(--primary)"
+            maskColor="color-mix(in oklch, var(--background) 72%, transparent)"
+            position="bottom-right"
+            className="!m-2 !border-border !bg-card/90 !shadow-sm"
+          />
+          <Panel position="top-right" className="!m-2">
+            <div className="flex items-center gap-1 rounded-md border border-border bg-card/95 p-1 shadow-sm">
+              <button
+                type="button"
+                data-testid="diagram-fit-view"
+                title="适应视图"
+                aria-label="适应视图"
+                onClick={() => flow?.fitView({ padding: 0.18, duration: 180 })}
+                className="rounded px-2 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                适应视图
+              </button>
+              <button
+                type="button"
+                data-testid="diagram-auto-layout"
+                title="自动布局"
+                aria-label="自动布局"
+                onClick={resetLayout}
+                className="rounded px-2 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                自动布局
+              </button>
+            </div>
+          </Panel>
           {hoveredPort && (
             <div
               data-testid="diagram-port-tooltip"

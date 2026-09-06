@@ -38,8 +38,12 @@ vi.mock('@xyflow/react', () => {
     <span data-handle-id={props.id ?? ''} data-handle-type={props.type ?? ''} />
   );
   const BaseEdge = () => null;
+  const Background = () => null;
+  const Controls = () => null;
+  const MiniMap = () => null;
+  const Panel = ({ children }: { children?: ReactNode }) => <>{children}</>;
   const EdgeLabelRenderer = ({ children }: { children?: ReactNode }) => <>{children}</>;
-  const getBezierPath = () => '';
+  const getBezierPath = () => ['', 160, 96];
   // React Flow 桩：按 nodeTypes/edgeTypes 渲染自定义组件；双击转发给 onNodeDoubleClick
   const ReactFlow = ({
     nodes,
@@ -47,6 +51,9 @@ vi.mock('@xyflow/react', () => {
     nodeTypes,
     edgeTypes,
     onNodeDoubleClick,
+    onInit: _onInit,
+    onNodesChange: _onNodesChange,
+    proOptions,
     children,
   }: {
     nodes: { id: string; type?: string; data: Record<string, unknown> }[];
@@ -54,9 +61,15 @@ vi.mock('@xyflow/react', () => {
     nodeTypes?: Record<string, (props: { id: string; data: Record<string, unknown> }) => ReactElement>;
     edgeTypes?: Record<string, (props: { id: string; data: Record<string, unknown> }) => ReactElement>;
     onNodeDoubleClick?: (event: unknown, node: { id: string }) => void;
+    onInit?: (instance: unknown) => void;
+    onNodesChange?: (changes: unknown[]) => void;
+    proOptions?: { hideAttribution?: boolean };
     children?: ReactNode;
   }) => (
-    <div data-testid="block-diagram-canvas">
+    <div
+      data-testid="block-diagram-canvas"
+      data-hide-attribution={String(proOptions?.hideAttribution ?? false)}
+    >
       {nodes?.map((n) => {
         const Cmp = n.type ? nodeTypes?.[n.type] : undefined;
         return (
@@ -76,7 +89,7 @@ vi.mock('@xyflow/react', () => {
       {children}
     </div>
   );
-  return { ReactFlow, Handle, Position, BaseEdge, EdgeLabelRenderer, getBezierPath };
+  return { ReactFlow, Handle, Position, BaseEdge, EdgeLabelRenderer, getBezierPath, Background, Controls, MiniMap, Panel };
 });
 
 import { BlockDiagram } from '@renderer/components/design/BlockDiagram';
@@ -282,6 +295,11 @@ describe('BlockDiagram 渲染（issue 05）', () => {
     expect(bundleLabels.some((t) => t.includes('clk_i'))).toBe(true);
     expect(bundleLabels.some((t) => t.includes('rst_n_i'))).toBe(true);
     expect(bundleLabels.some((t) => t.includes('clock'))).toBe(false);
+    expect(canvas).toHaveAttribute('data-hide-attribution', 'true');
+    for (const label of canvas.querySelectorAll<HTMLElement>('[data-testid$="-label"]')) {
+      expect(label.style.position).toBe('absolute');
+      expect(label.style.transform).toContain('translate(160px, 96px)');
+    }
   });
 });
 

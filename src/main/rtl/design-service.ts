@@ -29,7 +29,7 @@ import {
 } from './design-db';
 import { RtlElaborationError, elaborate } from './elaborator';
 import { flattenFilelists, renderFlatFilelist } from './filelist';
-import { extractDesign, extractTopUnits, type WriteJsonDoc } from './extractor';
+import { extractDesign, extractTopUnits, normalizeSrc, type WriteJsonDoc } from './extractor';
 import { analyzePorts, BUILTIN_AMBA_RULES } from './bundle-rules';
 import type {
   BundleRule,
@@ -282,24 +282,64 @@ function computeStale(db: DesignDatabase): boolean {
 
 // ─── 数据查询（tRPC 子树查询的底层） ─────────────────────────
 
+function knownSourceFiles(db: DesignDatabase): string[] {
+  const raw = getMetaSafe(db, 'sourceUnits') ?? getMetaSafe(db, 'sourceFiles');
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((path): path is string => typeof path === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function repairSource(src: string | null, db: DesignDatabase, projectRoot: string): string | null {
+  return normalizeSrc(src, getDesignWorkDir(projectRoot), knownSourceFiles(db));
+}
+
+function repairInstSource(
+  row: DesignInstRow | null,
+  db: DesignDatabase,
+  projectRoot: string,
+): DesignInstRow | null {
+  if (!row) return null;
+  const src = repairSource(row.src, db, projectRoot);
+  return src === row.src ? row : { ...row, src };
+}
+
+function repairDefSource(
+  row: DesignDefRow | null,
+  db: DesignDatabase,
+  projectRoot: string,
+): DesignDefRow | null {
+  if (!row) return null;
+  const src = repairSource(row.src, db, projectRoot);
+  return src === row.src ? row : { ...row, src };
+}
+
 export function queryRoot(projectId: string, projectRoot: string): DesignInstRow | null {
-  return getRootInstance(getDesignDb(projectId, projectRoot));
+  const db = getDesignDb(projectId, projectRoot);
+  return repairInstSource(getRootInstance(db), db, projectRoot);
 }
 
 export function queryChildren(projectId: string, projectRoot: string, path: string): DesignInstRow[] {
-  return getChildrenInstances(getDesignDb(projectId, projectRoot), path);
+  const db = getDesignDb(projectId, projectRoot);
+  return getChildrenInstances(db, path).map((row) => repairInstSource(row, db, projectRoot)!);
 }
 
 export function queryInstance(projectId: string, projectRoot: string, path: string): DesignInstRow | null {
-  return getInstance(getDesignDb(projectId, projectRoot), path);
+  const db = getDesignDb(projectId, projectRoot);
+  return repairInstSource(getInstance(db, path), db, projectRoot);
 }
 
 export function queryDef(projectId: string, projectRoot: string, name: string): DesignDefRow | null {
-  return getDef(getDesignDb(projectId, projectRoot), name);
+  const db = getDesignDb(projectId, projectRoot);
+  return repairDefSource(getDef(db, name), db, projectRoot);
 }
 
 export function queryDefs(projectId: string, projectRoot: string): DesignDefRow[] {
-  return listDefs(getDesignDb(projectId, projectRoot));
+  const db = getDesignDb(projectId, projectRoot);
+  return listDefs(db).map((row) => repairDefSource(row, db, projectRoot)!);
 }
 
 export function queryEdges(projectId: string, projectRoot: string, moduleName: string): DesignEdgeRow[] {
@@ -320,10 +360,11 @@ export function querySubgraph(projectId: string, projectRoot: string, path: stri
   }
   const def = getDef(db, inst.module);
   const children = getChildrenInstances(db, path);
+  const repairedInst = repairInstSource(inst, db, projectRoot)!;
   const nodes: SubgraphNodeRow[] = children.map((c) => {
     const cdef = getDef(db, c.module);
     return {
-      ...c,
+      ...repairInstSource(c, db, projectRoot)!,
       ports: cdef?.ports ?? [],
       bundles: cdef?.bundles ?? EMPTY_ANALYSIS,
     };
@@ -334,7 +375,7 @@ export function querySubgraph(projectId: string, projectRoot: string, path: stri
     cells: e.cells.map((c) => ({ inst: `${path}.${c.inst}`, port: c.port })),
   }));
   return {
-    root: { ...inst, ports: def?.ports ?? [] },
+    root: { ...repairedInst, ports: def?.ports ?? [] },
     nodes,
     edges,
     bundles: def?.bundles ?? EMPTY_ANALYSIS,
@@ -403,7 +444,7 @@ export function refresh(projectId: string, projectRoot: string): Promise<DesignR
     let design;
     try {
       const doc = JSON.parse(readFileSync(result.jsonPath, 'utf-8')) as WriteJsonDoc;
-      design = extractDesign(doc, config.top, workDir);
+      design = extractDesign(doc, config.top, workDir, parsed.sources);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       persistError(projectId, projectRoot, { message: `write_json 提炼失败: ${message}`, diagnostics: [], logTail: '' });
@@ -431,6 +472,7 @@ export function refresh(projectId: string, projectRoot: string): Promise<DesignR
       top: design.top,
       lastElaboratedAt: new Date().toISOString(),
       elapsedMs: String(Date.now() - started),
+      sourceUnits: JSON.stringify([...new Set(parsed.sources)]),
       sourceFiles: JSON.stringify(sourceFiles),
       sourceMtimes: JSON.stringify(collectMtimes(sourceFiles)),
     });

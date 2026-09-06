@@ -84,6 +84,10 @@ vi.mock('@xyflow/react', () => {
     <span data-handle-id={props.id ?? ''} data-handle-type={props.type ?? ''} />
   );
   const BaseEdge = () => null;
+  const Background = () => null;
+  const Controls = () => null;
+  const MiniMap = () => null;
+  const Panel = ({ children }: { children?: ReactNode }) => <>{children}</>;
   const EdgeLabelRenderer = ({ children }: { children?: ReactNode }) => <>{children}</>;
   const getBezierPath = () => '';
   const ReactFlow = ({
@@ -92,6 +96,8 @@ vi.mock('@xyflow/react', () => {
     nodeTypes,
     edgeTypes,
     onNodeDoubleClick,
+    onInit: _onInit,
+    onNodesChange: _onNodesChange,
     children,
   }: {
     nodes: { id: string; type?: string; data: Record<string, unknown> }[];
@@ -99,6 +105,8 @@ vi.mock('@xyflow/react', () => {
     nodeTypes?: Record<string, (props: { id: string; data: Record<string, unknown> }) => ReactElement>;
     edgeTypes?: Record<string, (props: { id: string; data: Record<string, unknown> }) => ReactElement>;
     onNodeDoubleClick?: (event: unknown, node: { id: string }) => void;
+    onInit?: (instance: unknown) => void;
+    onNodesChange?: (changes: unknown[]) => void;
     children?: ReactNode;
   }) => (
     <div data-testid="block-diagram-canvas">
@@ -121,7 +129,7 @@ vi.mock('@xyflow/react', () => {
       {children}
     </div>
   );
-  return { ReactFlow, Handle, Position, BaseEdge, EdgeLabelRenderer, getBezierPath };
+  return { ReactFlow, Handle, Position, BaseEdge, EdgeLabelRenderer, getBezierPath, Background, Controls, MiniMap, Panel };
 });
 
 vi.mock('@renderer/components/design/block-diagram-layout', () => ({

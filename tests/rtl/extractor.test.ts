@@ -31,6 +31,15 @@ describe('splitUniquified', () => {
 });
 
 describe('normalizeSrc（write_json src 按 yosys cwd 归一化）', () => {
+  it('优先匹配 filelist 中的真实源文件，修复被错误上溯到盘符根的 Windows 路径', () => {
+    const cwd = 'D:\\AI\\rtl-spike\\.socverify\\design\\work';
+    const source = 'D:\\AI\\rtl-spike\\rtl\\spike_top.sv';
+    expect(normalizeSrc('..\\..\\..\\..\\rtl-spike\\rtl\\spike_top.sv:3.8', cwd, [source])).toBe(
+      `${source}:3.8`,
+    );
+    expect(normalizeSrc('D:\\rtl-spike\\rtl\\spike_top.sv:3.8', cwd, [source])).toBe(`${source}:3.8`);
+  });
+
   it('相对路径（含 .. 上溯与行列后缀）按 yosys cwd 解析为绝对路径，后缀保留', () => {
     // 用户实测场景：yosys cwd = work 目录，src 上溯 4 级越过项目根
     const cwd = 'D:\\proj\\.socverify\\design\\work';

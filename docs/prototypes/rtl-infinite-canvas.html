@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SoC Verify · RTL 无限画布框图</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --font-mono: "JetBrains Mono", "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+      --bg: oklch(0.985 0.003 250);
+      --surface: oklch(0.998 0.002 250);
+      --surface-2: oklch(0.966 0.006 250);
+      --surface-3: oklch(0.94 0.008 250);
+      --ink: oklch(0.25 0.018 255);
+      --ink-2: oklch(0.47 0.018 255);
+      --ink-3: oklch(0.63 0.014 255);
+      --line: oklch(0.895 0.01 250);
+      --line-strong: oklch(0.79 0.016 250);
+      --primary: oklch(0.52 0.17 255);
+      --primary-soft: oklch(0.94 0.028 255);
+      --green: oklch(0.52 0.12 155);
+      --green-soft: oklch(0.95 0.025 155);
+      --amber: oklch(0.61 0.13 72);
+      --amber-soft: oklch(0.955 0.035 72);
+      --red: oklch(0.58 0.17 28);
+      --red-soft: oklch(0.95 0.028 28);
+      --violet: oklch(0.56 0.12 300);
+      --violet-soft: oklch(0.95 0.025 300);
+      --shadow-sm: 0 1px 2px oklch(0.24 0.02 255 / 0.06), 0 4px 14px oklch(0.24 0.02 255 / 0.05);
+      --shadow-float: 0 8px 28px oklch(0.24 0.02 255 / 0.12), 0 1px 3px oklch(0.24 0.02 255 / 0.08);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body { font: 13px/1.45 var(--font-ui); color: var(--ink); background: var(--bg); }
+    button { font: inherit; color: inherit; }
+    button:focus-visible { outline: 2px solid color-mix(in oklch, var(--primary) 68%, transparent); outline-offset: 2px; }
+    svg { display: block; }
+
+    .app {
+      display: grid;
+      grid-template-rows: 34px 48px minmax(0, 1fr) 24px;
+      width: 100%;
+      height: 100%;
+      min-width: 840px;
+      background: var(--bg);
+    }
+
+    .titlebar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in oklch, var(--surface-2) 75%, var(--bg));
+      color: var(--ink-2);
+      user-select: none;
+    }
+
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 18px;
+      height: 18px;
+      border-radius: 4px;
+      background: var(--ink);
+      color: var(--surface);
+      font: 700 10px/1 var(--font-mono);
+    }
+
+    .titlebar strong { color: var(--ink); font-size: 12px; font-weight: 650; }
+    .titlebar .project { font: 11px var(--font-mono); color: var(--ink-3); }
+    .titlebar-actions { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .page-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .page-title svg { width: 16px; height: 16px; color: var(--primary); }
+    .page-title h1 { margin: 0; font-size: 14px; line-height: 1; font-weight: 680; letter-spacing: 0; }
+
+    .source-state {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      color: var(--ink-2);
+      font-size: 11px;
+    }
+    .source-state .ok { color: var(--green); }
+    .source-state code {
+      max-width: 260px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font: 11px var(--font-mono);
+      color: var(--ink-2);
+    }
+    .source-state .divider { width: 1px; height: 12px; background: var(--line); }
+
+    .header-actions { margin-left: auto; display: flex; gap: 5px; }
+    .button, .icon-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--ink-2);
+      cursor: pointer;
+      transition: background 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease;
+    }
+    .button { gap: 6px; padding: 0 9px; font-size: 11px; }
+    .icon-button { width: 28px; padding: 0; }
+    .button:hover, .icon-button:hover { background: var(--surface-2); border-color: var(--line-strong); color: var(--ink); }
+    .button svg, .icon-button svg { width: 14px; height: 14px; }
+    .button.primary { border-color: color-mix(in oklch, var(--primary) 22%, var(--line)); background: var(--primary-soft); color: var(--primary); }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 238px minmax(0, 1fr);
+      min-height: 0;
+    }
+
+    .hierarchy {
+      display: flex;
+      min-height: 0;
+      flex-direction: column;
+      border-right: 1px solid var(--line);
+      background: color-mix(in oklch, var(--surface-2) 45%, var(--surface));
+    }
+    .panel-heading { display: flex; align-items: center; height: 38px; padding: 0 10px; border-bottom: 1px solid var(--line); }
+    .panel-heading strong { font-size: 11px; font-weight: 650; text-transform: uppercase; color: var(--ink-2); }
+    .panel-heading span { margin-left: auto; font: 10px var(--font-mono); color: var(--ink-3); }
+    .tree { padding: 7px 6px; overflow: auto; }
+    .tree-row {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      height: 26px;
+      gap: 5px;
+      padding: 0 7px;
+      border: 0;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--ink-2);
+      text-align: left;
+      cursor: pointer;
+    }
+    .tree-row:hover { background: var(--surface-3); color: var(--ink); }
+    .tree-row.active { background: var(--primary-soft); color: var(--primary); }
+    .tree-row svg { width: 13px; height: 13px; flex: 0 0 auto; }
+    .tree-row .module-icon { color: var(--ink-3); }
+    .tree-row.active .module-icon { color: var(--primary); }
+    .tree-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px var(--font-mono); }
+    .tree-count { margin-left: auto; color: var(--ink-3); font: 10px var(--font-mono); }
+    .tree-indent-1 { padding-left: 22px; }
+    .tree-indent-2 { padding-left: 38px; }
+    .tree-indent-3 { padding-left: 54px; }
+
+    .detail { display: grid; grid-template-rows: 38px minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--surface); }
+    .detail-bar { display: flex; align-items: center; gap: 8px; padding: 0 10px; border-bottom: 1px solid var(--line); }
+    .segmented { display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: 6px; background: var(--surface-2); }
+    .segment { display: inline-flex; align-items: center; gap: 5px; height: 25px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-2); font-size: 11px; cursor: pointer; }
+    .segment svg { width: 13px; height: 13px; }
+    .segment.active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px oklch(0.24 0.02 255 / 0.08); }
+    .breadcrumb { display: flex; min-width: 0; align-items: center; gap: 3px; margin-left: 4px; }
+    .breadcrumb button, .breadcrumb span { border: 0; background: transparent; padding: 2px; font: 11px var(--font-mono); color: var(--ink-3); }
+    .breadcrumb button { cursor: pointer; }
+    .breadcrumb button:hover { color: var(--primary); }
+    .breadcrumb .current { color: var(--ink); font-weight: 600; }
+    .breadcrumb svg { width: 12px; height: 12px; color: var(--ink-3); }
+    .canvas-metrics { margin-left: auto; display: flex; align-items: center; gap: 10px; color: var(--ink-3); font: 10px var(--font-mono); }
+
+    .canvas-shell { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+    .canvas {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      touch-action: none;
+      cursor: grab;
+      background-color: var(--bg);
+      background-image: radial-gradient(circle, color-mix(in oklch, var(--line-strong) 65%, transparent) 1px, transparent 1.2px);
+      background-size: var(--grid-size, 22px) var(--grid-size, 22px);
+      background-position: var(--grid-x, 0) var(--grid-y, 0);
+    }
+    .canvas.panning { cursor: grabbing; }
+    .canvas::after { content: ""; position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 1px 0 oklch(0.2 0.01 250 / 0.03); }
+
+    .world {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 2400px;
+      height: 1600px;
+      transform-origin: 0 0;
+      will-change: transform;
+    }
+    .edges { position: absolute; inset: 0; width: 2400px; height: 1600px; overflow: visible; pointer-events: none; z-index: 1; }
+    .edge-hit { fill: none; stroke: transparent; stroke-width: 18; pointer-events: stroke; cursor: pointer; }
+    .edge-path { fill: none; stroke: var(--line-strong); stroke-width: 2; vector-effect: non-scaling-stroke; }
+    .edge-path.bundle { stroke-width: 4; }
+    .edge-path.selected { stroke: var(--primary); }
+    .edge-path.signal { stroke: color-mix(in oklch, var(--violet) 62%, var(--line-strong)); stroke-width: 1.5; stroke-dasharray: 5 4; }
+
+    .edge-label-layer { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+    .edge-label {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 28px;
+      padding: 0 8px 0 6px;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+      color: var(--ink);
+      font-size: 11px;
+      font-weight: 650;
+      white-space: nowrap;
+      pointer-events: auto;
+      cursor: pointer;
+    }
+    .edge-label:hover, .edge-label.open { border-color: color-mix(in oklch, var(--primary) 42%, var(--line)); box-shadow: var(--shadow-float); }
+    .edge-label .protocol-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+    .edge-label.clock .protocol-dot { background: var(--ink-3); }
+    .edge-label.reset .protocol-dot { background: var(--red); }
+    .edge-label.signal .protocol-dot { background: var(--violet); }
+    .edge-label .count { color: var(--ink-3); font: 10px var(--font-mono); }
+    .edge-label svg { width: 12px; height: 12px; color: var(--ink-3); transition: transform 180ms cubic-bezier(.2,.8,.2,1); }
+    .edge-label.open svg { transform: rotate(180deg); }
+
+    .edge-detail {
+      position: absolute;
+      z-index: 8;
+      width: 286px;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--surface);
+      box-shadow: var(--shadow-float);
+      opacity: 0;
+      transform: translate(-50%, 4px) scale(.98);
+      transform-origin: top center;
+      pointer-events: none;
+      transition: opacity 150ms ease, transform 180ms cubic-bezier(.2,.8,.2,1);
+    }
+    .edge-detail.open { opacity: 1; transform: translate(-50%, 0) scale(1); pointer-events: auto; }
+    .edge-detail-head { display: flex; align-items: center; height: 28px; padding: 0 6px; border-bottom: 1px solid var(--line); }
+    .edge-detail-head strong { font-size: 11px; }
+    .edge-detail-head span { margin-left: auto; color: var(--ink-3); font: 10px var(--font-mono); }
+    .signal-row { display: grid; grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr) auto; align-items: center; min-height: 27px; gap: 5px; padding: 0 6px; border-radius: 4px; font: 10px var(--font-mono); color: var(--ink-2); }
+    .signal-row:hover { background: var(--surface-2); color: var(--ink); }
+    .signal-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .signal-row svg { width: 11px; height: 11px; color: var(--ink-3); }
+    .signal-row em { color: var(--ink-3); font-style: normal; }
+
+    .node {
+      position: absolute;
+      z-index: 3;
+      width: 286px;
+      border: 1px solid var(--line-strong);
+      border-radius: 7px;
+      background: var(--surface);
+      box-shadow: var(--shadow-sm);
+      overflow: hidden;
+      user-select: none;
+      transition: border-color 150ms ease, box-shadow 150ms ease;
+    }
+    .node:hover { border-color: color-mix(in oklch, var(--primary) 34%, var(--line-strong)); }
+    .node.selected { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft), var(--shadow-float); }
+    .node.dragging { z-index: 7; box-shadow: var(--shadow-float); transition: none; }
+
+    .node-header {
+      display: flex;
+      align-items: center;
+      height: 42px;
+      gap: 8px;
+      padding: 0 10px;
+      border-bottom: 1px solid var(--line);
+      cursor: grab;
+      touch-action: none;
+    }
+    .node.dragging .node-header { cursor: grabbing; }
+    .node-kind { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; background: var(--primary-soft); color: var(--primary); }
+    .node-kind svg { width: 14px; height: 14px; }
+    .node-name { min-width: 0; }
+    .node-name strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 650 11px var(--font-mono); color: var(--ink); }
+    .node-name span { display: block; margin-top: 1px; font: 9px var(--font-mono); color: var(--ink-3); }
+    .root-badge { margin-left: auto; padding: 2px 5px; border-radius: 4px; background: var(--amber-soft); color: var(--amber); font-size: 9px; font-weight: 700; text-transform: uppercase; }
+    .open-module { margin-left: auto; width: 24px; height: 24px; border: 0; border-radius: 4px; background: transparent; color: var(--ink-3); cursor: pointer; display: grid; place-items: center; }
+    .open-module:hover { background: var(--surface-2); color: var(--ink); }
+    .open-module svg { width: 13px; height: 13px; }
+
+    .interface-list { padding: 5px; }
+    .interface-row {
+      position: relative;
+      display: grid;
+      grid-template-columns: 14px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 6px;
+      height: 30px;
+      padding: 0 7px;
+      border-radius: 4px;
+      color: var(--ink-2);
+      cursor: default;
+    }
+    .interface-row:hover { background: var(--surface-2); color: var(--ink); }
+    .interface-row svg { width: 12px; height: 12px; color: var(--ink-3); }
+    .interface-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10px var(--font-mono); }
+    .interface-meta { color: var(--ink-3); font-size: 9px; }
+    .port-anchor { position: absolute; top: 50%; width: 8px; height: 8px; margin-top: -4px; border: 2px solid var(--surface); border-radius: 50%; background: var(--line-strong); }
+    .port-anchor.left { left: -10px; }
+    .port-anchor.right { right: -10px; }
+    .interface-row.bus .port-anchor { background: var(--green); }
+    .interface-row.clock .port-anchor { background: var(--ink-3); }
+    .interface-row.reset .port-anchor { background: var(--red); }
+    .interface-row.signal .port-anchor { background: var(--violet); }
+    .interface-divider { height: 1px; margin: 3px 7px; background: var(--line); }
+    .node-footer { display: flex; align-items: center; height: 28px; padding: 0 10px; border-top: 1px solid var(--line); background: color-mix(in oklch, var(--surface-2) 56%, var(--surface)); color: var(--ink-3); font-size: 9px; }
+    .node-footer span:last-child { margin-left: auto; font: 9px var(--font-mono); }
+
+    .canvas-toolbar {
+      position: absolute;
+      left: 12px;
+      bottom: 12px;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: color-mix(in oklch, var(--surface) 95%, transparent);
+      box-shadow: var(--shadow-sm);
+    }
+    .canvas-toolbar .icon-button { border: 0; width: 27px; height: 27px; border-radius: 4px; }
+    .zoom-value { min-width: 42px; padding: 0 5px; color: var(--ink-2); text-align: center; font: 10px var(--font-mono); }
+    .toolbar-separator { width: 1px; height: 17px; margin: 0 2px; background: var(--line); }
+
+    .minimap {
+      position: absolute;
+      right: 12px;
+      bottom: 12px;
+      z-index: 18;
+      width: 154px;
+      height: 94px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: color-mix(in oklch, var(--surface) 96%, transparent);
+      box-shadow: var(--shadow-sm);
+      overflow: hidden;
+    }
+    .minimap-node { position: absolute; border-radius: 2px; background: color-mix(in oklch, var(--ink-3) 45%, var(--surface-3)); }
+    .minimap-node.root { background: color-mix(in oklch, var(--primary) 55%, var(--surface-3)); }
+    .minimap-viewport { position: absolute; border: 1px solid var(--primary); border-radius: 2px; background: color-mix(in oklch, var(--primary) 8%, transparent); }
+
+    .statusbar { display: flex; align-items: center; gap: 13px; padding: 0 10px; border-top: 1px solid var(--line); background: var(--surface-2); color: var(--ink-3); font-size: 10px; }
+    .statusbar .ready { display: flex; align-items: center; gap: 5px; color: var(--green); }
+    .statusbar .ready::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+    .statusbar code { font: 10px var(--font-mono); color: var(--ink-2); }
+    .statusbar .right { margin-left: auto; }
+
+    .toast {
+      position: absolute;
+      top: 12px;
+      left: 50%;
+      z-index: 30;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 32px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      box-shadow: var(--shadow-float);
+      color: var(--ink-2);
+      font-size: 11px;
+      opacity: 0;
+      transform: translate(-50%, -8px);
+      pointer-events: none;
+      transition: opacity 160ms ease, transform 180ms cubic-bezier(.2,.8,.2,1);
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .toast svg { width: 14px; height: 14px; color: var(--green); }
+
+    @media (max-width: 1040px) {
+      .workspace { grid-template-columns: 190px minmax(0, 1fr); }
+      .source-state code { max-width: 120px; }
+      .canvas-metrics span:nth-child(2) { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-maximize" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>
+      <symbol id="i-layout" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><path d="M6.5 10v4a3 3 0 0 0 3 3H14"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 6v5h-5M4 18v-5h5"/><path d="M18.5 9a7 7 0 0 0-11.8-2.6L4 11M20 13l-2.7 4.6A7 7 0 0 1 5.5 15"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4H9l2 2h7.5A2.5 2.5 0 0 1 21 8.5v8A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"/></symbol>
+      <symbol id="i-network" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-2h12v2"/></symbol>
+      <symbol id="i-table" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16"/></symbol>
+      <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+      <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+      <symbol id="i-box" viewBox="0 0 24 24"><path d="m21 8-9-5-9 5 9 5z"/><path d="m3 8 9 5 9-5M3 8v8l9 5 9-5V8M12 13v8"/></symbol>
+      <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/></symbol>
+      <symbol id="i-chip" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3"/></symbol>
+      <symbol id="i-arrow-in" viewBox="0 0 24 24"><path d="M4 12h14M13 7l5 5-5 5"/></symbol>
+      <symbol id="i-arrow-out" viewBox="0 0 24 24"><path d="M20 12H6M11 7l-5 5 5 5"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+      <symbol id="i-reset" viewBox="0 0 24 24"><path d="M20 7v5h-5"/><path d="M18.2 16a8 8 0 1 1 .8-8.8L20 12"/></symbol>
+      <symbol id="i-signal" viewBox="0 0 24 24"><path d="M3 12h4l2-7 4 14 2-7h6"/></symbol>
+      <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+      <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    </defs>
+  </svg>
+
+  <div class="app">
+    <div class="titlebar">
+      <div class="brand-mark">SV</div>
+      <strong>SoC Verify</strong>
+      <span class="project">spike-demo / design</span>
+      <div class="titlebar-actions">
+        <button class="icon-button" aria-label="最小化" title="最小化"><svg><use href="#i-minus"/></svg></button>
+        <button class="icon-button" aria-label="最大化" title="最大化"><svg><use href="#i-maximize"/></svg></button>
+      </div>
+    </div>
+
+    <header class="header">
+      <div class="page-title"><svg><use href="#i-network"/></svg><h1>设计</h1></div>
+      <div class="source-state">
+        <svg class="ok" width="13" height="13"><use href="#i-check"/></svg>
+        <code>design/spike.f</code>
+        <span class="divider"></span>
+        <span>top: <code>spike_top</code></span>
+        <span class="divider"></span>
+        <span>12:42:08</span>
+      </div>
+      <div class="header-actions">
+        <button class="button"><svg><use href="#i-folder"/></svg>Design Source</button>
+        <button class="button primary" id="refreshButton"><svg><use href="#i-refresh"/></svg>刷新</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="hierarchy">
+        <div class="panel-heading"><strong>RTL Hierarchy</strong><span>9 inst</span></div>
+        <div class="tree">
+          <button class="tree-row"><svg><use href="#i-chevron-down"/></svg><svg class="module-icon"><use href="#i-chip"/></svg><span class="tree-label">spike_top</span><span class="tree-count">9</span></button>
+          <button class="tree-row tree-indent-1 active"><svg><use href="#i-chevron-down"/></svg><svg class="module-icon"><use href="#i-chip"/></svg><span class="tree-label">u_subsys0</span><span class="tree-count">3</span></button>
+          <button class="tree-row tree-indent-2"><svg><use href="#i-chevron-right"/></svg><svg class="module-icon"><use href="#i-chip"/></svg><span class="tree-label">gen_ip[0].u_ip</span><span class="tree-count">1</span></button>
+          <button class="tree-row tree-indent-2"><svg><use href="#i-chevron-right"/></svg><svg class="module-icon"><use href="#i-chip"/></svg><span class="tree-label">gen_ip[1].u_ip</span><span class="tree-count">1</span></button>
+          <button class="tree-row tree-indent-2"><svg><use href="#i-chevron-right"/></svg><svg class="module-icon"><use href="#i-chip"/></svg><span class="tree-label">u_apb_bridge</span><span class="tree-count">1</span></button>
+          <button class="tree-row tree-indent-1"><svg><use href="#i-chevron-right"/></svg><svg class="module-icon"><use href="#i-chip"/></svg><span class="tree-label">u_subsys1</span><span class="tree-count">3</span></button>
+          <button class="tree-row tree-indent-1"><svg><use href="#i-chevron-right"/></svg><svg class="module-icon"><use href="#i-chip"/></svg><span class="tree-label">u_intc</span><span class="tree-count">1</span></button>
+          <button class="tree-row tree-indent-1"><svg><use href="#i-chevron-right"/></svg><svg class="module-icon"><use href="#i-chip"/></svg><span class="tree-label">u_clock_ctrl</span><span class="tree-count">1</span></button>
+          <button class="tree-row tree-indent-1"><svg><use href="#i-chevron-right"/></svg><svg class="module-icon"><use href="#i-chip"/></svg><span class="tree-label">u_reset_ctrl</span><span class="tree-count">1</span></button>
+        </div>
+      </aside>
+
+      <section class="detail">
+        <div class="detail-bar">
+          <div class="segmented" role="tablist" aria-label="设计详情">
+            <button class="segment active" role="tab" aria-selected="true"><svg><use href="#i-network"/></svg>框图</button>
+            <button class="segment" role="tab" aria-selected="false"><svg><use href="#i-table"/></svg>接口</button>
+          </div>
+          <nav class="breadcrumb" aria-label="框图层级">
+            <button>spike_top</button><svg><use href="#i-chevron-right"/></svg><span class="current">u_subsys0</span>
+          </nav>
+          <div class="canvas-metrics"><span>3 modules</span><span>21 nets</span><span>4 bundles</span></div>
+        </div>
+
+        <div class="canvas-shell">
+          <div class="canvas" id="canvas">
+            <div class="world" id="world">
+              <svg class="edges" id="edges" aria-hidden="true"></svg>
+              <div class="edge-label-layer" id="edgeLabels"></div>
+
+              <article class="node selected" data-node-id="root" style="left:180px;top:430px">
+                <div class="node-header">
+                  <span class="node-kind"><svg><use href="#i-box"/></svg></span>
+                  <div class="node-name"><strong>u_subsys0</strong><span>soc_subsys</span></div>
+                  <span class="root-badge">root</span>
+                </div>
+                <div class="interface-list">
+                  <div class="interface-row clock" data-anchor="root-clk"><span class="port-anchor right"></span><svg><use href="#i-clock"/></svg><span class="interface-name">clk_i</span><span class="interface-meta">clock</span></div>
+                  <div class="interface-row reset" data-anchor="root-rst"><span class="port-anchor right"></span><svg><use href="#i-reset"/></svg><span class="interface-name">rst_n_i</span><span class="interface-meta">reset</span></div>
+                  <div class="interface-divider"></div>
+                  <div class="interface-row bus" data-anchor="root-ahb"><span class="port-anchor right"></span><svg><use href="#i-arrow-in"/></svg><span class="interface-name">h_* · AHB slave</span><span class="interface-meta">9 signals</span></div>
+                  <div class="interface-row signal" data-anchor="root-irq"><span class="port-anchor right"></span><svg><use href="#i-signal"/></svg><span class="interface-name">irq_o</span><span class="interface-meta">[7:0]</span></div>
+                </div>
+                <div class="node-footer"><span>13 ports</span><span>3 bundles</span></div>
+              </article>
+
+              <article class="node" data-node-id="ip0" style="left:760px;top:160px">
+                <div class="node-header">
+                  <span class="node-kind"><svg><use href="#i-box"/></svg></span>
+                  <div class="node-name"><strong>gen_ip[0].u_ip</strong><span>spike_ip</span></div>
+                  <button class="open-module" aria-label="打开模块" title="打开模块"><svg><use href="#i-external"/></svg></button>
+                </div>
+                <div class="interface-list">
+                  <div class="interface-row clock" data-anchor="ip0-clk"><span class="port-anchor left"></span><svg><use href="#i-clock"/></svg><span class="interface-name">clk_i</span><span class="interface-meta">clock</span></div>
+                  <div class="interface-row reset" data-anchor="ip0-rst"><span class="port-anchor left"></span><svg><use href="#i-reset"/></svg><span class="interface-name">rst_n_i</span><span class="interface-meta">reset</span></div>
+                  <div class="interface-divider"></div>
+                  <div class="interface-row bus" data-anchor="ip0-apb"><span class="port-anchor left"></span><svg><use href="#i-arrow-in"/></svg><span class="interface-name">p_* · APB slave</span><span class="interface-meta">7 signals</span></div>
+                  <div class="interface-row signal" data-anchor="ip0-irq"><span class="port-anchor left"></span><svg><use href="#i-signal"/></svg><span class="interface-name">irq_o</span><span class="interface-meta">[3:0]</span></div>
+                </div>
+                <div class="node-footer"><span>9 ports</span><span>3 bundles</span></div>
+              </article>
+
+              <article class="node" data-node-id="ip1" style="left:760px;top:720px">
+                <div class="node-header">
+                  <span class="node-kind"><svg><use href="#i-box"/></svg></span>
+                  <div class="node-name"><strong>gen_ip[1].u_ip</strong><span>spike_ip</span></div>
+                  <button class="open-module" aria-label="打开模块" title="打开模块"><svg><use href="#i-external"/></svg></button>
+                </div>
+                <div class="interface-list">
+                  <div class="interface-row clock" data-anchor="ip1-clk"><span class="port-anchor left"></span><svg><use href="#i-clock"/></svg><span class="interface-name">clk_i</span><span class="interface-meta">clock</span></div>
+                  <div class="interface-row reset" data-anchor="ip1-rst"><span class="port-anchor left"></span><svg><use href="#i-reset"/></svg><span class="interface-name">rst_n_i</span><span class="interface-meta">reset</span></div>
+                  <div class="interface-divider"></div>
+                  <div class="interface-row bus" data-anchor="ip1-apb"><span class="port-anchor left"></span><svg><use href="#i-arrow-in"/></svg><span class="interface-name">p_* · APB slave</span><span class="interface-meta">7 signals</span></div>
+                  <div class="interface-row signal" data-anchor="ip1-irq"><span class="port-anchor left"></span><svg><use href="#i-signal"/></svg><span class="interface-name">irq_o</span><span class="interface-meta">[3:0]</span></div>
+                </div>
+                <div class="node-footer"><span>9 ports</span><span>3 bundles</span></div>
+              </article>
+            </div>
+
+            <div class="canvas-toolbar" aria-label="画布控制">
+              <button class="icon-button" id="zoomOut" aria-label="缩小" title="缩小"><svg><use href="#i-minus"/></svg></button>
+              <span class="zoom-value" id="zoomValue">100%</span>
+              <button class="icon-button" id="zoomIn" aria-label="放大" title="放大"><svg><use href="#i-plus"/></svg></button>
+              <span class="toolbar-separator"></span>
+              <button class="icon-button" id="fitView" aria-label="适应视图" title="适应视图"><svg><use href="#i-maximize"/></svg></button>
+              <button class="icon-button" id="autoLayout" aria-label="自动布局" title="自动布局"><svg><use href="#i-layout"/></svg></button>
+            </div>
+
+            <div class="minimap" id="minimap" aria-hidden="true">
+              <div class="minimap-node root" data-mini="root"></div>
+              <div class="minimap-node" data-mini="ip0"></div>
+              <div class="minimap-node" data-mini="ip1"></div>
+              <div class="minimap-viewport" id="minimapViewport"></div>
+            </div>
+            <div class="toast" id="toast"><svg><use href="#i-check"/></svg><span>布局已恢复</span></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="statusbar">
+      <span class="ready">Elaboration ready</span>
+      <span><code>yosys 0.68</code></span>
+      <span>96% bundle coverage</span>
+      <span class="right">spike_top.u_subsys0</span>
+    </footer>
+  </div>
+
+  <script>
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    const canvas = document.getElementById('canvas');
+    const world = document.getElementById('world');
+    const edgesSvg = document.getElementById('edges');
+    const edgeLabels = document.getElementById('edgeLabels');
+    const zoomValue = document.getElementById('zoomValue');
+    const minimapViewport = document.getElementById('minimapViewport');
+    const toast = document.getElementById('toast');
+    const nodes = [...document.querySelectorAll('.node')];
+
+    const initialPositions = {
+      root: { x: 180, y: 430 },
+      ip0: { x: 760, y: 160 },
+      ip1: { x: 760, y: 720 },
+    };
+
+    const state = { x: 40, y: 10, scale: 0.9 };
+    let gesture = null;
+    let toastTimer = 0;
+
+    const edgeData = [
+      { id: 'clock-0', from: 'root-clk', to: 'ip0-clk', label: 'clk_i', type: 'clock', count: 1, lane: -42 },
+      { id: 'reset-0', from: 'root-rst', to: 'ip0-rst', label: 'rst_n_i', type: 'reset', count: 1, lane: -12 },
+      { id: 'bus-0', from: 'root-ahb', to: 'ip0-apb', label: 'AHB → APB', type: 'bundle', count: 4, lane: 26 },
+      { id: 'clock-1', from: 'root-clk', to: 'ip1-clk', label: 'clk_i', type: 'clock', count: 1, lane: -36 },
+      { id: 'reset-1', from: 'root-rst', to: 'ip1-rst', label: 'rst_n_i', type: 'reset', count: 1, lane: -6 },
+      { id: 'bus-1', from: 'root-ahb', to: 'ip1-apb', label: 'AHB → APB', type: 'bundle', count: 4, lane: 30 },
+      { id: 'irq', from: 'ip0-irq', to: 'ip1-irq', label: 'link_irq', type: 'signal', count: 1, lane: 54 },
+    ];
+
+    function iconUse(id) {
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><use href="#${id}"/></svg>`;
+    }
+
+    function nodePosition(node) {
+      return { x: parseFloat(node.style.left), y: parseFloat(node.style.top) };
+    }
+
+    function setNodePosition(node, x, y) {
+      node.style.left = `${x}px`;
+      node.style.top = `${y}px`;
+    }
+
+    function anchorPoint(name) {
+      const anchor = document.querySelector(`[data-anchor="${name}"] .port-anchor`);
+      const node = anchor.closest('.node');
+      const row = anchor.parentElement;
+      const pos = nodePosition(node);
+      const isLeft = anchor.classList.contains('left');
+      return {
+        x: pos.x + (isLeft ? 0 : node.offsetWidth),
+        y: pos.y + row.offsetTop + row.offsetHeight / 2,
+      };
+    }
+
+    function route(from, to, lane) {
+      const direction = to.x >= from.x ? 1 : -1;
+      const reach = Math.max(72, Math.min(180, Math.abs(to.x - from.x) * 0.34));
+      const c1x = from.x + reach * direction;
+      const c2x = to.x - reach * direction;
+      const offset = lane;
+      return {
+        d: `M ${from.x} ${from.y} C ${c1x} ${from.y + offset}, ${c2x} ${to.y - offset}, ${to.x} ${to.y}`,
+        label: {
+          x: (from.x + to.x) / 2,
+          y: (from.y + to.y) / 2 + offset * 0.38,
+        },
+      };
+    }
+
+    function edgeDetailMarkup(edge) {
+      if (edge.type !== 'bundle') return '';
+      const rows = [
+        ['h_haddr', 'p_paddr', '[11:0]'],
+        ['h_hsel', 'p_psel', ''],
+        ['h_hwrite', 'p_pwrite', ''],
+        ['h_hwdata', 'p_pwdata', '[31:0]'],
+      ];
+      return `<div class="edge-detail" data-detail="${edge.id}"><div class="edge-detail-head"><strong>AHB → APB</strong><span>4 signals</span></div>${rows.map(([a,b,w]) => `<div class="signal-row"><span>${a}</span>${iconUse('i-arrow-right')}<span>${b}</span><em>${w}</em></div>`).join('')}</div>`;
+    }
+
+    function renderEdges() {
+      edgesSvg.replaceChildren();
+      edgeLabels.innerHTML = '';
+
+      edgeData.forEach((edge) => {
+        const from = anchorPoint(edge.from);
+        const to = anchorPoint(edge.to);
+        const routed = route(from, to, edge.lane);
+        const group = document.createElementNS(SVG_NS, 'g');
+        const path = document.createElementNS(SVG_NS, 'path');
+        path.setAttribute('d', routed.d);
+        path.setAttribute('class', `edge-path ${edge.type === 'bundle' ? 'bundle' : edge.type === 'signal' ? 'signal' : ''}`);
+        path.dataset.edgePath = edge.id;
+        const hit = document.createElementNS(SVG_NS, 'path');
+        hit.setAttribute('d', routed.d);
+        hit.setAttribute('class', 'edge-hit');
+        group.append(path, hit);
+        edgesSvg.appendChild(group);
+
+        const label = document.createElement('button');
+        label.type = 'button';
+        label.className = `edge-label ${edge.type}`;
+        label.dataset.edge = edge.id;
+        label.style.left = `${routed.label.x}px`;
+        label.style.top = `${routed.label.y}px`;
+        label.setAttribute('aria-expanded', 'false');
+        label.innerHTML = `<span class="protocol-dot"></span><span>${edge.label}</span>${edge.count > 1 ? `<span class="count">×${edge.count}</span>` : ''}${edge.type === 'bundle' ? iconUse('i-chevron-down') : ''}`;
+        edgeLabels.appendChild(label);
+
+        if (edge.type === 'bundle') {
+          const holder = document.createElement('div');
+          holder.innerHTML = edgeDetailMarkup(edge);
+          const detail = holder.firstElementChild;
+          detail.style.left = `${routed.label.x}px`;
+          detail.style.top = `${routed.label.y + 20}px`;
+          edgeLabels.appendChild(detail);
+        }
+      });
+
+      edgeLabels.querySelectorAll('.edge-label.bundle').forEach((label) => {
+        label.addEventListener('click', (event) => {
+          event.stopPropagation();
+          const open = !label.classList.contains('open');
+          closeDetails();
+          if (open) {
+            label.classList.add('open');
+            label.setAttribute('aria-expanded', 'true');
+            edgeLabels.querySelector(`[data-detail="${label.dataset.edge}"]`).classList.add('open');
+            edgesSvg.querySelector(`[data-edge-path="${label.dataset.edge}"]`).classList.add('selected');
+          }
+        });
+      });
+      updateMinimap();
+    }
+
+    function closeDetails() {
+      edgeLabels.querySelectorAll('.edge-label.open').forEach((label) => {
+        label.classList.remove('open');
+        label.setAttribute('aria-expanded', 'false');
+      });
+      edgeLabels.querySelectorAll('.edge-detail.open').forEach((detail) => detail.classList.remove('open'));
+      edgesSvg.querySelectorAll('.edge-path.selected').forEach((path) => path.classList.remove('selected'));
+    }
+
+    function applyTransform() {
+      world.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
+      canvas.style.setProperty('--grid-size', `${22 * state.scale}px`);
+      canvas.style.setProperty('--grid-x', `${state.x}px`);
+      canvas.style.setProperty('--grid-y', `${state.y}px`);
+      zoomValue.textContent = `${Math.round(state.scale * 100)}%`;
+      updateMinimap();
+    }
+
+    function setZoom(nextScale, clientX, clientY) {
+      const oldScale = state.scale;
+      const next = Math.min(1.65, Math.max(0.35, nextScale));
+      const rect = canvas.getBoundingClientRect();
+      const px = (clientX ?? rect.left + rect.width / 2) - rect.left;
+      const py = (clientY ?? rect.top + rect.height / 2) - rect.top;
+      const worldX = (px - state.x) / oldScale;
+      const worldY = (py - state.y) / oldScale;
+      state.scale = next;
+      state.x = px - worldX * next;
+      state.y = py - worldY * next;
+      applyTransform();
+    }
+
+    function fitView() {
+      const bounds = nodes.reduce((box, node) => {
+        const pos = nodePosition(node);
+        return {
+          left: Math.min(box.left, pos.x),
+          top: Math.min(box.top, pos.y),
+          right: Math.max(box.right, pos.x + node.offsetWidth),
+          bottom: Math.max(box.bottom, pos.y + node.offsetHeight),
+        };
+      }, { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity });
+      const rect = canvas.getBoundingClientRect();
+      const padding = 92;
+      state.scale = Math.min(1.15, Math.max(0.35, Math.min((rect.width - padding * 2) / (bounds.right - bounds.left), (rect.height - padding * 2) / (bounds.bottom - bounds.top))));
+      state.x = (rect.width - (bounds.right - bounds.left) * state.scale) / 2 - bounds.left * state.scale;
+      state.y = (rect.height - (bounds.bottom - bounds.top) * state.scale) / 2 - bounds.top * state.scale;
+      applyTransform();
+    }
+
+    function updateMinimap() {
+      if (!minimapViewport) return;
+      const mapW = 154;
+      const mapH = 94;
+      const worldW = 1400;
+      const worldH = 1150;
+      const sx = mapW / worldW;
+      const sy = mapH / worldH;
+      nodes.forEach((node) => {
+        const p = nodePosition(node);
+        const mini = document.querySelector(`[data-mini="${node.dataset.nodeId}"]`);
+        mini.style.left = `${p.x * sx}px`;
+        mini.style.top = `${p.y * sy}px`;
+        mini.style.width = `${node.offsetWidth * sx}px`;
+        mini.style.height = `${node.offsetHeight * sy}px`;
+      });
+      const rect = canvas.getBoundingClientRect();
+      const viewX = -state.x / state.scale;
+      const viewY = -state.y / state.scale;
+      minimapViewport.style.left = `${Math.max(0, viewX * sx)}px`;
+      minimapViewport.style.top = `${Math.max(0, viewY * sy)}px`;
+      minimapViewport.style.width = `${Math.min(mapW, rect.width / state.scale * sx)}px`;
+      minimapViewport.style.height = `${Math.min(mapH, rect.height / state.scale * sy)}px`;
+    }
+
+    canvas.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || event.target.closest('.node, .edge-label, .edge-detail, .canvas-toolbar')) return;
+      closeDetails();
+      gesture = { type: 'pan', id: event.pointerId, startX: event.clientX, startY: event.clientY, baseX: state.x, baseY: state.y };
+      canvas.setPointerCapture(event.pointerId);
+      canvas.classList.add('panning');
+    });
+
+    canvas.addEventListener('pointermove', (event) => {
+      if (!gesture || gesture.type !== 'pan' || gesture.id !== event.pointerId) return;
+      state.x = gesture.baseX + event.clientX - gesture.startX;
+      state.y = gesture.baseY + event.clientY - gesture.startY;
+      applyTransform();
+    });
+
+    canvas.addEventListener('pointerup', (event) => {
+      if (!gesture || gesture.id !== event.pointerId) return;
+      gesture = null;
+      canvas.classList.remove('panning');
+    });
+
+    canvas.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      setZoom(state.scale * Math.exp(-event.deltaY * 0.0012), event.clientX, event.clientY);
+    }, { passive: false });
+
+    nodes.forEach((node) => {
+      const header = node.querySelector('.node-header');
+      header.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0 || event.target.closest('button')) return;
+        event.stopPropagation();
+        closeDetails();
+        const pos = nodePosition(node);
+        gesture = { type: 'node', id: event.pointerId, node, startX: event.clientX, startY: event.clientY, baseX: pos.x, baseY: pos.y };
+        header.setPointerCapture(event.pointerId);
+        node.classList.add('dragging', 'selected');
+        nodes.filter((item) => item !== node).forEach((item) => item.classList.remove('selected'));
+      });
+      header.addEventListener('pointermove', (event) => {
+        if (!gesture || gesture.type !== 'node' || gesture.id !== event.pointerId || gesture.node !== node) return;
+        setNodePosition(node, gesture.baseX + (event.clientX - gesture.startX) / state.scale, gesture.baseY + (event.clientY - gesture.startY) / state.scale);
+        renderEdges();
+      });
+      header.addEventListener('pointerup', (event) => {
+        if (!gesture || gesture.type !== 'node' || gesture.id !== event.pointerId) return;
+        node.classList.remove('dragging');
+        gesture = null;
+      });
+    });
+
+    document.getElementById('zoomIn').addEventListener('click', () => setZoom(state.scale * 1.15));
+    document.getElementById('zoomOut').addEventListener('click', () => setZoom(state.scale / 1.15));
+    document.getElementById('fitView').addEventListener('click', fitView);
+    document.getElementById('autoLayout').addEventListener('click', () => {
+      nodes.forEach((node) => {
+        const p = initialPositions[node.dataset.nodeId];
+        setNodePosition(node, p.x, p.y);
+      });
+      renderEdges();
+      fitView();
+      clearTimeout(toastTimer);
+      toast.classList.add('show');
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 1400);
+    });
+    document.getElementById('refreshButton').addEventListener('click', (event) => {
+      const icon = event.currentTarget.querySelector('svg');
+      icon.animate([{ transform: 'rotate(0deg)' }, { transform: 'rotate(360deg)' }], { duration: 520, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    });
+    window.addEventListener('resize', fitView);
+
+    renderEdges();
+    requestAnimationFrame(fitView);
+  </script>
+</body>
+</html>

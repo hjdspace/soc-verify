@@ -85,9 +85,15 @@ function makeFakeChild(opts: FakeOpts): EventEmitter & { stdout: EventEmitter; s
 
 beforeEach(() => {
   holder.projectDir = mkdtempSync(join(tmpdir(), 'sv-rtl-router-'));
-  mkdirSync(join(holder.projectDir, 'rtl'), { recursive: true });
-  writeFileSync(join(holder.projectDir, 'rtl/top.sv'), 'module spike_top; endmodule\n', 'utf-8');
-  writeFileSync(join(holder.projectDir, 'spike.f'), '+incdir+rtl/ip\n+define+SPIKE_MACRO\nrtl/top.sv\n', 'utf-8');
+  mkdirSync(join(holder.projectDir, 'rtl/ip'), { recursive: true });
+  writeFileSync(join(holder.projectDir, 'rtl/spike_top.sv'), 'module spike_top; endmodule\n', 'utf-8');
+  writeFileSync(join(holder.projectDir, 'rtl/soc_subsys.sv'), 'module soc_subsys; endmodule\n', 'utf-8');
+  writeFileSync(join(holder.projectDir, 'rtl/ip/spike_ip.sv'), 'module spike_ip; endmodule\n', 'utf-8');
+  writeFileSync(
+    join(holder.projectDir, 'spike.f'),
+    '+incdir+rtl/ip\n+define+SPIKE_MACRO\nrtl/spike_top.sv\nrtl/soc_subsys.sv\nrtl/ip/spike_ip.sv\n',
+    'utf-8',
+  );
   capturedScripts.length = 0;
   mockSpawn.mockReset();
   mockSpawn.mockImplementation(() => {
@@ -177,6 +183,7 @@ describe('rtl.refresh 成功路径（golden fixture）', () => {
     const root = await caller.getRoot({ projectId: 'proj-1' });
     expect(root?.path).toBe('spike_top');
     expect(root?.module).toBe('spike_top');
+    expect(root?.src).toBe(`${join(holder.projectDir, 'rtl/spike_top.sv')}:3.8`);
 
     const subsys = await caller.getChildren({ projectId: 'proj-1', path: 'spike_top' });
     expect(subsys.map((c) => c.name)).toEqual(['u_subsys0', 'u_subsys1']);
@@ -317,7 +324,7 @@ describe('mtime 过期检测（issue 03：提示过期但不自动重跑）', ()
     expect((await caller.getStatus({ projectId: 'proj-1' })).stale).toBe(false);
 
     // 源文件 mtime 变化（+1 分钟避开 1s 容差）
-    const src = join(holder.projectDir, 'rtl/top.sv');
+    const src = join(holder.projectDir, 'rtl/spike_top.sv');
     const future = new Date(Date.now() + 60_000);
     utimesSync(src, future, future);
 
@@ -330,7 +337,7 @@ describe('mtime 过期检测（issue 03：提示过期但不自动重跑）', ()
   it('源文件消失视为过期', async () => {
     await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: 'spike_top' });
     await caller.refresh({ projectId: 'proj-1' });
-    rmSync(join(holder.projectDir, 'rtl/top.sv'));
+    rmSync(join(holder.projectDir, 'rtl/spike_top.sv'));
     expect((await caller.getStatus({ projectId: 'proj-1' })).stale).toBe(true);
   });
 });
