@@ -16,6 +16,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { inspectSourceFile } from './win-symlink';
 
 export type ParsedFilelist = {
   /** 源文件（绝对路径，按出现顺序） */
@@ -130,8 +131,13 @@ function parseInto(
     // 源文件路径（空白分隔可多个）
     for (const src of cur.split(/\s+/).filter(Boolean)) {
       const abs = resolveRelative(src, ownDir, baseDir);
-      out.sources.push(abs);
-      out.files.push(abs);
+      // Windows 伪 symlink（git symlink 退化文本）：重定向到真实目标，
+      // 目标缺失时跳过（内容为路径文本，交给 slang 必报首行语法错误）
+      const inspected = inspectSourceFile(abs);
+      if (inspected.kind === 'broken') continue;
+      const target = inspected.kind === 'redirect' ? inspected.target : abs;
+      out.sources.push(target);
+      out.files.push(target);
     }
   }
 }
@@ -152,6 +158,10 @@ export function flattenFilelists(filelists: string[], baseDir: string): ParsedFi
     const f = stripPathQuotes(raw);
     parseInto(isAbsolute(f) ? f : join(baseDir, f), baseDir, out, visited, 0);
   }
+  // 去重：伪 symlink 重定向后可能与显式列出的真实目标重复
+  // （重复源会导致 slang 重复定义 module/package 报错）
+  out.sources = [...new Set(out.sources)];
+  out.files = [...new Set(out.files)];
   return out;
 }
 

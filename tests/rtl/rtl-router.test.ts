@@ -17,6 +17,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readFileSync
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DEFAULT_DIRECTORY_EXCLUDES } from '../../src/main/rtl/design-source';
 
 // ─── Hoisted mocks ──────────────────────────────────────────
 
@@ -169,7 +170,8 @@ describe('rtl.getConfig / setConfig', () => {
       source: 'directory',
       directory: {
         root: 'rtl',
-        excludes: ['**/ip/**'],
+        // setConfig 持久化时 mergeDefaultExcludes 自动补齐默认排除规则
+        excludes: ['**/ip/**', ...DEFAULT_DIRECTORY_EXCLUDES],
         incdirs: ['rtl/ip'],
         defines: ['SYNTHESIS=1'],
       },

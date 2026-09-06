@@ -55,6 +55,28 @@ describe('flattenFilelists 基础形态', () => {
     expect(parsed.sources).toEqual([join(dir, 'sub', 'local.sv'), join(dir, 'shared.sv')]);
   });
 
+  it('Windows 伪 symlink 源重定向到真实目标并去重', () => {
+    // OpenTitan 形态：top_b/rtl/top_pkg.sv 为指向 top_a 的伪 symlink 文本，
+    // .f 同时列出两者 —— 重定向后只保留一份真实目标
+    mkdirSync(join(dir, 'top_a/rtl'), { recursive: true });
+    mkdirSync(join(dir, 'top_b/rtl'), { recursive: true });
+    writeFileSync(join(dir, 'top_a/rtl/top_pkg.sv'), 'package top_pkg; endpackage\n');
+    writeFileSync(join(dir, 'top_b/rtl/top_pkg.sv'), '../../top_a/rtl/top_pkg.sv');
+    const f = join(dir, 'a.f');
+    writeFileSync(f, 'top_b/rtl/top_pkg.sv\ntop_a/rtl/top_pkg.sv\n');
+    const parsed = flattenFilelists([f], dir);
+    expect(parsed.sources).toEqual([join(dir, 'top_a/rtl/top_pkg.sv')]);
+  });
+
+  it('伪 symlink 目标缺失时跳过该源', () => {
+    mkdirSync(join(dir, 'top_c'), { recursive: true });
+    writeFileSync(join(dir, 'top_c/gone.sv'), '../missing/gone.sv');
+    const f = join(dir, 'a.f');
+    writeFileSync(f, 'top_c/gone.sv\n');
+    const parsed = flattenFilelists([f], dir);
+    expect(parsed.sources).toEqual([]);
+  });
+
   it('其他 - / + 旗标原样透传', () => {
     const f = join(dir, 'a.f');
     writeFileSync(f, '-y libs\n+libext+.sv+.v\nrtl/top.sv\n');

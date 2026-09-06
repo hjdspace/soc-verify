@@ -25,6 +25,11 @@ beforeEach(() => {
   // generic_dv 目录 — 应被默认排除规则排除
   mkdirSync(join(projectDir, 'hw/generic_dv/env'), { recursive: true });
   writeFileSync(join(projectDir, 'hw/generic_dv/env/uvm_pkg.sv'), 'package uvm_pkg; endpackage\n');
+  // pre_dv / fpv 目录 — 应被默认排除规则排除（OpenTitan TB 目录）
+  mkdirSync(join(projectDir, 'hw/pre_dv'), { recursive: true });
+  writeFileSync(join(projectDir, 'hw/pre_dv/ip_tb.sv'), 'module ip_tb; endmodule\n');
+  mkdirSync(join(projectDir, 'hw/fpv'), { recursive: true });
+  writeFileSync(join(projectDir, 'hw/fpv/ip_tb.sv'), 'module ip_fpv_tb; endmodule\n');
   writeFileSync(join(projectDir, 'top.core'), 'CAPI=2:\nname: vendor:lib:top:1\n');
 });
 
@@ -34,7 +39,7 @@ describe('scanHdlDirectory', () => {
   it('扫描 .v/.sv，应用 glob 排除，并将 package/interface 排在 module 前', () => {
     const parsed = scanHdlDirectory(
       join(projectDir, 'hw'),
-      ['**/dv/**', '**/vendor/**', '**/autogen/**', '**/generic_dv/**'],
+      ['**/dv/**', '**/vendor/**', '**/autogen/**', '**/generic_dv/**', '**/pre_dv/**', '**/fpv/**'],
       [join(projectDir, 'hw/rtl')],
       ['SYNTHESIS=1'],
     );
@@ -77,6 +82,55 @@ describe('scanHdlDirectory', () => {
     expect(parsed.sources.some((s) => s.endsWith('uvm_pkg.sv'))).toBe(false);
   });
 
+  it('默认排除规则包含 pre_dv 和 fpv（OpenTitan TB 目录）', () => {
+    const parsed = scanHdlDirectory(join(projectDir, 'hw'), DEFAULT_DIRECTORY_EXCLUDES, [], []);
+
+    expect(parsed.sources.some((s) => s.endsWith('ip_tb.sv'))).toBe(false);
+    expect(parsed.sources.some((s) => s.endsWith('ip_fpv_tb.sv'))).toBe(false);
+  });
+
+  describe('Windows 伪 symlink（git symlink 退化文本）', () => {
+    beforeEach(() => {
+      // top_b/top_pkg.sv 内容为指向 top_a/top_pkg.sv 的相对路径 —— Windows
+      // 上 git clone（未启用 core.symlinks）产生的伪 symlink 形态
+      mkdirSync(join(projectDir, 'hw/top_a/rtl'), { recursive: true });
+      mkdirSync(join(projectDir, 'hw/top_b/rtl'), { recursive: true });
+      writeFileSync(join(projectDir, 'hw/top_a/rtl/top_pkg.sv'), 'package top_pkg; endpackage\n');
+      writeFileSync(join(projectDir, 'hw/top_b/rtl/top_pkg.sv'), '../../top_a/rtl/top_pkg.sv');
+    });
+
+    it('伪 symlink 重定向到真实目标且不产生重复源', () => {
+      const parsed = scanHdlDirectory(join(projectDir, 'hw'), [], [], []);
+      const targets = parsed.sources.filter((s) => s.endsWith('top_pkg.sv'));
+      expect(targets).toHaveLength(1);
+      expect(targets[0]).toBe(join(projectDir, 'hw/top_a/rtl/top_pkg.sv'));
+    });
+
+    it('伪 symlink 目标缺失时跳过该文件', () => {
+      mkdirSync(join(projectDir, 'hw/top_c/rtl'), { recursive: true });
+      writeFileSync(join(projectDir, 'hw/top_c/rtl/gone.sv'), '../../top_missing/rtl/gone.sv');
+      const parsed = scanHdlDirectory(join(projectDir, 'hw'), [], [], []);
+      expect(parsed.sources.some((s) => s.endsWith('gone.sv'))).toBe(false);
+    });
+
+    it('正常源文件不受伪 symlink 检测影响', () => {
+      // 单行正常 SV 内容（含分号/空格）不应被误判为伪 symlink
+      const parsed = scanHdlDirectory(join(projectDir, 'hw'), [], [], []);
+      expect(parsed.sources).toContain(join(projectDir, 'hw/rtl/top.sv'));
+    });
+
+    it('伪 symlink .svh 的目标目录加入 incdir', () => {
+      mkdirSync(join(projectDir, 'hw/inc_a'), { recursive: true });
+      mkdirSync(join(projectDir, 'hw/top_b/inc'), { recursive: true });
+      writeFileSync(join(projectDir, 'hw/inc_a/common.svh'), '`define COMMON 1\n');
+      writeFileSync(join(projectDir, 'hw/top_b/inc/common.svh'), '../../inc_a/common.svh');
+      const parsed = scanHdlDirectory(join(projectDir, 'hw'), [], [], []);
+      // 伪 .svh 所在目录（top_b/inc）不进 incdir；目标目录 inc_a 在 incdir 中
+      expect(parsed.sources.some((s) => s.endsWith('.svh'))).toBe(false);
+      expect(parsed.incdirs).toContain(join(projectDir, 'hw/inc_a'));
+    });
+  });
+
   it('目录不存在时给出明确错误', () => {
     expect(() => scanHdlDirectory(join(projectDir, 'missing'), [], [], [])).toThrow('RTL 扫描目录不存在');
   });
@@ -88,7 +142,7 @@ describe('resolveDesignSource / previewDesignSource', () => {
     filelists: [],
     directory: {
       root: 'hw',
-      excludes: ['**/dv/**', '**/vendor/**', '**/autogen/**', '**/generic_dv/**'],
+      excludes: ['**/dv/**', '**/vendor/**', '**/autogen/**', '**/generic_dv/**', '**/pre_dv/**', '**/fpv/**'],
       incdirs: ['hw/rtl'],
       defines: ['SYNTHESIS=1'],
     },

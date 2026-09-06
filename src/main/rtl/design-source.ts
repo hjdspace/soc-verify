@@ -4,14 +4,17 @@
  */
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { basename, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { flattenFilelists, type ParsedFilelist } from './filelist';
+import { inspectSourceFile } from './win-symlink';
 import type { DesignSourceConfig } from './types';
 
 export const DEFAULT_DIRECTORY_EXCLUDES = [
   '**/dv/**',
   '**/dv_sv/**',
   '**/generic_dv/**',
+  '**/pre_dv/**',
+  '**/fpv/**',
   '**/test/**',
   '**/tests/**',
   '**/tb/**',
@@ -76,6 +79,15 @@ function sourceExtension(path: string): string {
   return match?.[0]?.toLowerCase() ?? '';
 }
 
+/** 真 symlink 文件（dirent.isFile() 对 DT_LNK 返回 false，需 stat 跟随判断） */
+function isFileSymlink(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
 export function scanHdlDirectory(
   root: string,
   excludes: string[],
@@ -90,9 +102,13 @@ export function scanHdlDirectory(
 
   const excludeMatchers = excludes.map(globRegex);
   const sources: string[] = [];
+  const seenSources = new Set<string>();
   const directories: string[] = [];
   /** 包含 .svh/.vh 文件的目录，自动加入 incdir 使 `include 可被 slang 解析 */
   const autoIncdirs = new Set<string>();
+  /** 伪 symlink（Windows git symlink 退化文本）.svh/.vh 的真实目标所在目录。
+   *  排在普通 autoIncdirs 之前 —— 否则 include 按目录顺序命中伪文件本身（内容是路径文本）。 */
+  const symlinkIncdirs = new Set<string>();
   const visit = (directory: string): void => {
     directories.push(directory);
     const entries = readdirSync(directory, { withFileTypes: true });
@@ -103,17 +119,29 @@ export function scanHdlDirectory(
       if (excludeMatchers.some((matcher) => matcher.test(matchPath))) continue;
       if (entry.isDirectory()) {
         if (!entry.isSymbolicLink()) visit(path);
-      } else if (entry.isFile()) {
-        const ext = sourceExtension(entry.name);
+      } else if (entry.isFile() || isFileSymlink(path)) {
+        // 伪 symlink（Windows git checkout 退化文本）解析到真实目标：
+        // 内容为相对路径的文本文件会让 slang 报 file.sv:1:1 expected member
+        const inspected = inspectSourceFile(path);
+        if (inspected.kind === 'broken') continue; // 伪 symlink 目标缺失 —— 内容为垃圾文本，跳过
+        const effPath = inspected.kind === 'redirect' ? inspected.target : path;
+        const ext = sourceExtension(effPath);
         if (HDL_EXTENSIONS.has(ext)) {
-          sources.push(resolve(path));
-          if (sources.length > MAX_DISCOVERY_FILES) {
-            throw new Error(`RTL 扫描文件超过 ${MAX_DISCOVERY_FILES} 个，请缩小扫描范围`);
+          const src = resolve(effPath);
+          if (!seenSources.has(src)) {
+            seenSources.add(src);
+            sources.push(src);
+            if (sources.length > MAX_DISCOVERY_FILES) {
+              throw new Error(`RTL 扫描文件超过 ${MAX_DISCOVERY_FILES} 个，请缩小扫描范围`);
+            }
           }
         } else if (HDL_INCLUDE_EXTENSIONS.has(ext)) {
           // .svh/.vh 文件不作为独立编译单元（只通过 `include 引入），
           // 但其所在目录自动加入 incdir，使 slang 能解析 `include "xxx.svh"
-          autoIncdirs.add(resolve(directory));
+          // （伪 symlink .svh 记录真实目标所在目录）
+          const dir = resolve(dirname(effPath));
+          autoIncdirs.add(dir);
+          if (inspected.kind === 'redirect') symlinkIncdirs.add(dir);
         }
       }
     }
@@ -122,8 +150,15 @@ export function scanHdlDirectory(
   sources.sort((a, b) => sourcePriority(a) - sourcePriority(b) || a.localeCompare(b));
 
   const userIncdirs = incdirs.map((dir) => resolve(dir));
-  // 合并用户显式 incdirs + 自动推断的 .svh 目录（去重，用户优先）
-  const allIncdirs = [...userIncdirs, ...[...autoIncdirs].filter((d) => !userIncdirs.includes(d))];
+  // 合并用户显式 incdirs + 伪 symlink 目标目录 + 自动推断的 .svh 目录（去重，用户优先）
+  const seenIncdirs = new Set<string>(userIncdirs);
+  const allIncdirs = [...userIncdirs];
+  for (const dir of [...symlinkIncdirs, ...autoIncdirs]) {
+    if (!seenIncdirs.has(dir)) {
+      seenIncdirs.add(dir);
+      allIncdirs.push(dir);
+    }
+  }
   return {
     sources,
     incdirs: allIncdirs,
