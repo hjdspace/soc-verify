@@ -1,5 +1,6 @@
 import { type Extension } from '@codemirror/state';
-import { foldGutter } from '@codemirror/language';
+import { foldGutter, foldKeymap } from '@codemirror/language';
+import { keymap } from '@codemirror/view';
 
 /**
  * 折叠标记 DOM（导出用于测试）：
@@ -17,9 +18,15 @@ export function foldMarkerDOM(open: boolean): HTMLElement {
 
 /**
  * 创建折叠列扩展（替代 basicSetup 默认 foldGutter）。
- * 点击折叠/展开由 foldGutter 的 gutter 级 click handler 处理，与 marker DOM 无关。
- * 视觉行为（隐藏/悬停显示/间距）由 globals.css 的 .cm-foldGutter 系列规则控制。
+ * - 点击折叠/展开由 foldGutter 的 gutter 级 click handler 处理，与 marker DOM 无关
+ * - 视觉行为（隐藏/悬停显示/间距）由 globals.css 的 .cm-foldGutter 系列规则控制a
+ * - 附带 foldKeymap（Ctrl+Shift+[ / ] 折叠/展开当前行，与 VSCode 一致；
+ *   basicSetup 的 foldKeymap 开关独立于 foldGutter，需在此显式补上）
  */
-export function createFoldGutterExtension(): Extension {
-  return foldGutter({ markerDOM: foldMarkerDOM });
+export function createFoldGutterExtension(): Extension[] {
+  // foldKeymap 是 readonly KeyBinding[]（不是 Extension），需经 keymap.of() 注册
+  return [
+    foldGutter({ markerDOM: foldMarkerDOM }),
+    keymap.of(foldKeymap),
+  ];
 }
