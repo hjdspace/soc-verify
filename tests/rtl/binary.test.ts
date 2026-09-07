@@ -2,8 +2,8 @@
  * rtl/binary 路径解析与降级逻辑测试（对齐 tests/officecli/binary.test.ts 的 mock 模式）。
  *
  * mock node:fs existsSync + node:child_process execFileSync，
- * 验证：内置 packaged → dev 回退 → PATH 回退；yosys DLL 完整性检查；
- * getRtlToolsStatus 三工具可用性汇总。
+ * 验证：内置 packaged → dev 回退 → PATH 回退；yosys 依赖完整性检查
+ * （Windows DLL 集 / Linux libexec+lib 布局）；getRtlToolsStatus 三工具可用性汇总。
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -25,6 +25,7 @@ import {
   yosysMissingDlls,
   getRtlToolsStatus,
   YOSYS_DLLS,
+  YOSYS_LINUX_LIBS,
 } from '../../src/main/rtl/binary';
 
 const mockExistsSync = vi.mocked(existsSync);
@@ -49,6 +50,16 @@ function makeDirExist(dirSuffix: string, files: string[]): void {
       return s === `${dir}/${base}` || s === `${dir}/${base}.exe`;
     });
   });
+}
+
+/** 临时伪装 process.platform（还原由 finally 保证） */
+function withPlatform<T>(platform: NodeJS.Platform, fn: () => T): T {
+  const spy = vi.spyOn(process, 'platform', 'get').mockReturnValue(platform);
+  try {
+    return fn();
+  } finally {
+    spy.mockRestore();
+  }
 }
 
 describe('rtl/binary - resolveYosysPath', () => {
@@ -173,15 +184,36 @@ describe('rtl/binary - yosysMissingDlls', () => {
     expect(yosysMissingDlls()).toEqual([]);
   });
 
-  it('非 Windows 平台恒不检查 DLL（Linux yosys 为 ELF 链接系统库）', () => {
-    const spy = vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
-    try {
-      // 缺失 DLL 的布局在 Linux 下也应返回空（无 DLL 集概念）
-      makeDirExist('yosys', ['yosys']);
+  it('Linux 布局完整（wrapper + libexec/yosys + lib 闭包）时返回空数组', () => {
+    withPlatform('linux', () => {
+      makeDirExist('yosys', [
+        'yosys',
+        'libexec/yosys',
+        ...YOSYS_LINUX_LIBS.map((l) => `lib/${l}`),
+      ]);
       expect(yosysMissingDlls()).toEqual([]);
-    } finally {
-      spy.mockRestore();
-    }
+    });
+  });
+
+  it('Linux 缺 libexec 与 lib 时报告缺失清单（bin/yosys 是 wrapper，单独存在不可执行）', () => {
+    withPlatform('linux', () => {
+      makeDirExist('yosys', ['yosys']);
+      const missing = yosysMissingDlls();
+      expect(missing).toContain('libexec/yosys');
+      expect(missing).toContain(`lib/${YOSYS_LINUX_LIBS[0]}`);
+      expect(missing).toHaveLength(1 + YOSYS_LINUX_LIBS.length);
+    });
+  });
+
+  it('Linux 仅缺部分 lib 时精确报告（对应 AppImage 内 ld-linux 缺失的 127 场景）', () => {
+    withPlatform('linux', () => {
+      makeDirExist('yosys', [
+        'yosys',
+        'libexec/yosys',
+        ...YOSYS_LINUX_LIBS.filter((l) => l !== 'ld-linux-x86-64.so.2').map((l) => `lib/${l}`),
+      ]);
+      expect(yosysMissingDlls()).toEqual(['lib/ld-linux-x86-64.so.2']);
+    });
   });
 });
 
@@ -214,6 +246,15 @@ describe('rtl/binary - getRtlToolsStatus', () => {
     const status = getRtlToolsStatus();
     expect(status.yosys.available).toBe(false);
     expect(status.yosys.missingDlls).toEqual([YOSYS_DLLS[0]]);
+  });
+
+  it('Linux 下 yosys 布局不完整时按不可用处理', () => {
+    withPlatform('linux', () => {
+      makeDirExist('yosys', ['yosys']);
+      const status = getRtlToolsStatus();
+      expect(status.yosys.available).toBe(false);
+      expect(status.yosys.missingDlls).toContain('libexec/yosys');
+    });
   });
 
   it('三工具齐备时全部可用', () => {
