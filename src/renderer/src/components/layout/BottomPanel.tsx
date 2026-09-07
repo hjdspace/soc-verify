@@ -4,7 +4,7 @@ import { Terminal as TerminalIcon, Plus, X, ChevronDown, ArrowUpToLine } from 'l
 import { useTerminalStore } from '@renderer/stores/terminal';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
-import { TerminalPanel } from '@renderer/components/terminal/TerminalPanel';
+import { TerminalKeepAliveLayer } from '@renderer/components/terminal/TerminalKeepAliveLayer';
 import { cn } from '@renderer/lib/utils';
 import { PluginViewHost } from '@renderer/components/plugins/PluginViewHost';
 
@@ -136,7 +136,12 @@ export function BottomPanel() {
     setShowNewMenu(false);
   }, [createTerminal, currentProjectId]);
 
-  /** 展开态：折叠关闭或无终端时收起（AnimatePresence 保留退出动画所需的挂载） */
+  /** 展开态：折叠关闭或无终端时收起。
+   *  expanded=false 时 AnimatePresence 播放 height→0 退出动画后卸载容器，
+   *  内部 keep-alive 终端随之卸载——这是有意的：底部面板收起意味着
+   *  用户不再关注终端，内存让位；再次展开走 outputBuffer 尾部恢复
+   *  （有占位层提示，不再是裸空白）。若要“折叠也常驻”，把此条件与
+   *  下方渲染解耦即可，但那会让隐藏终端持续占用 WebGL 上下文。 */
   const expanded = !collapsed && bottomTabs.length > 0;
 
   return (
@@ -262,9 +267,13 @@ export function BottomPanel() {
       </div>
 
       {/* ── Terminal content ──────────────────────────────── */}
-      <div className="flex flex-1 overflow-hidden">
+      {/* keep-alive：最近 KEEP_ALIVE_MAX 个底部终端常驻（含活动终端），
+          tab 切换零重挂载。折叠（expanded=false）时 AnimatePresence 播放
+          height→0 退出动画后卸载容器与终端，展开走 outputBuffer 尾部
+          恢复（带占位层提示） */}
+      <div className="relative flex flex-1 overflow-hidden">
         {activeTab && activeTab.terminalId ? (
-          <TerminalPanel key={activeTab.terminalId} terminalId={activeTab.terminalId} tabTitle={activeTab.title} />
+          <TerminalKeepAliveLayer activeTerminalTabId={activeTab.id} />
         ) : (
           <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
             {activeTab?.creating ? '正在创建终端...' : '无活动终端'}
