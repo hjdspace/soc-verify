@@ -28,6 +28,7 @@ import { useDiffReviewStore, useReviewSnapshot, type ReviewEntry } from '@render
 import type { FileDiffResult } from '@shared/types';
 import { cn } from '@renderer/lib/utils';
 import { createVimExtensions, resetVimMode } from './vim-extension';
+import { createFoldGutterExtension } from './fold-gutter';
 import { VimStatusBar } from './VimStatusBar';
 import { createSyntaxHighlightExtension } from './syntax-highlight';
 import { createIndentGuidesExtension } from './indent-guides';
@@ -521,17 +522,21 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
   // linter extension（lint gutter 显示错误/警告标记）
   const linterExt = useMemo(() => linterExtension(), []);
 
+  // 折叠列（替代 basicSetup 默认 foldGutter：SVG chevron + 悬停显示，见 fold-gutter.ts）
+  const foldGutterExt = useMemo(() => createFoldGutterExtension(), []);
+
   // 合并所有 extension（memoize 避免每次渲染触发 CodeMirror reconfigure）
   const editorExtensions = useMemo<Extension[]>(() => [
     ...languageExtension,
     syntaxHighlightExtension,
     cursorListenerExtension,
     indentGuidesExtension,
+    foldGutterExt,
     linterExt,
     ...searchExtension,
     ...vimExtensions,
     ...inlineReviewExtensions,
-  ], [languageExtension, syntaxHighlightExtension, cursorListenerExtension, indentGuidesExtension, linterExt, searchExtension, vimExtensions, inlineReviewExtensions]);
+  ], [languageExtension, syntaxHighlightExtension, cursorListenerExtension, indentGuidesExtension, foldGutterExt, linterExt, searchExtension, vimExtensions, inlineReviewExtensions]);
 
   const isDirty = content !== originalContent;
 
@@ -919,7 +924,8 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
                   lineNumbers: true,
                   highlightActiveLine: true,
                   highlightActiveLineGutter: true,
-                  foldGutter: true,
+                  // 折叠列使用自定义 fold-gutter 扩展（SVG chevron + 悬停显示）
+                  foldGutter: false,
                   bracketMatching: true,
                   closeBrackets: true,
                   autocompletion: true,
