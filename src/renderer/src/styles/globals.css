@@ -1091,10 +1091,64 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* VSCode lineNumbersMinChars = 5：行号右对齐并预留足够数字-代码间距 */
+/* VSCode：行号右对齐，右侧仅留小间距紧贴折叠列（间距由折叠列宽度补足） */
 .cm-editor .cm-lineNumbers .cm-gutterElement {
-  padding: 0 20px 0 5px;
+  padding: 0 4px 0 5px;
   min-width: 24px;
+}
+
+/* ── 折叠列（VSCode 行为：默认隐藏，悬停折叠列显示，已折叠行常显） ── */
+
+.cm-editor .cm-foldGutter .cm-gutterElement {
+  padding: 0;
+  width: 14px;
+  min-width: 0;
+  text-align: center;
+}
+
+.cm-editor .cm-fold-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  vertical-align: middle;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+/* 悬停折叠列时显示全部可折叠标记；已折叠行常显（否则折叠后无法再展开） */
+.cm-editor .cm-foldGutter:hover .cm-fold-marker,
+.cm-editor .cm-fold-marker--folded {
+  opacity: 1;
+}
+
+.cm-editor .cm-fold-marker:hover {
+  color: var(--foreground);
+}
+
+/* 诊断标记列：lint 主题通过 baseTheme 动态注入 width:1.4em + padding:.2em
+   （无诊断时也占位约 18px，且注入晚于本文件、同优先级时胜出），
+   必须用更高优先级选择器覆盖，收窄为窄条，贴近 VS Code glyph margin */
+.cm-editor .cm-gutters .cm-gutter.cm-gutter-lint {
+  width: 12px;
+}
+
+.cm-editor .cm-gutters .cm-gutter.cm-gutter-lint .cm-gutterElement {
+  padding: 0 1px;
+}
+
+.cm-editor .cm-gutter-lint .cm-lint-marker {
+  width: 10px;
+  height: 10px;
+}
+
+/* CodeMirror 默认 .cm-line 左内边距 6px，使代码与 gutter 之间偏宽，收窄至 2px
+   （baseTheme 注入规则为 (0,2,0)，此处 (0,3,0) 保证胜出） */
+.cm-editor .cm-content .cm-line {
+  padding: 0 2px;
 }
 
 /* VSCode：当前行内容无背景高亮 */
@@ -1152,13 +1206,26 @@ body {
 
 .cm-editor .cm-indent-guide {
   display: inline-block;
-  width: 1px;
+  /* 零宽：指南线只做标记，绝不占据布局空间（否则会把行内容向右推开，
+     tab 缩进的日志行会表现为“一个 tab 显示成多个 tab 的缩进”） */
+  width: 0;
+  position: relative;
   /* 与编辑器行高一致（VSCode GOLDEN_LINE_HEIGHT_RATIO = 1.35），否则参考线跨行 */
   height: 1.35em;
-  background-color: var(--border);
-  opacity: 0.5;
   vertical-align: top;
   pointer-events: none;
+}
+
+/* 指南线本体：按 --guide-col 指定的列绝对定位绘制 */
+.cm-editor .cm-indent-guide::before {
+  content: '';
+  position: absolute;
+  left: var(--guide-col, 0ch);
+  top: 0;
+  width: 1px;
+  height: 100%;
+  background-color: var(--border);
+  opacity: 0.5;
 }
 
 /* ── 搜索替换面板主题适配 ───────────────────────────────────────── */
