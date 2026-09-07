@@ -544,7 +544,7 @@ function DegradeBanner({ missingDlls }: { missingDlls: string[] }) {
       <p className="text-sm font-medium">yosys 不可用，RTL 设计浏览已降级</p>
       <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
         {missingDlls.length > 0
-          ? `缺少依赖 DLL：${missingDlls.join(', ')}（必须与 yosys.exe 同目录）。`
+          ? `yosys 依赖文件缺失：${missingDlls.join(', ')}。`
           : '未找到 yosys 二进制。'}
         请运行 <code className="rounded bg-accent px-1 py-0.5 font-mono">npm run download:rtl-tools</code> 安装 RTL 工具链，
         或参考 resources/binaries/README.md 手动放置。
