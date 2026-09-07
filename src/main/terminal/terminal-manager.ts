@@ -1079,6 +1079,69 @@ export class TerminalManager extends EventEmitter {
   }
 
   /**
+   * Create an inactive session entry holding the given output chunks.
+   *
+   * Test-only helper: exercises buffer-retention logic (getOutputBuffer /
+   * getOutputBufferTail) without spawning a real shell process.
+   */
+  createSessionForTest(chunks: string[]): TerminalSession {
+    const id = `term_${++this.idCounter}_test`;
+    const session: TerminalSession = {
+      id,
+      pid: 0,
+      cwd: process.cwd(),
+      cols: 80,
+      rows: 24,
+      createdAt: Date.now(),
+      backend: 'log-mode',
+      warning: null,
+    };
+    this.sessions.set(id, {
+      pty: null,
+      session,
+      outputBuffer: [...chunks],
+      pendingChunks: [],
+      pendingSize: 0,
+      flushTimer: null,
+      exitCode: null,
+      exited: false,
+      detached: false,
+    });
+    return session;
+  }
+
+  /**
+   * Get the tail of the buffered output, bounded by a character budget.
+   *
+   * Remounted xterm.js instances re-parse everything written to them, and
+   * their scrollback silently discards lines beyond `scrollback` — so
+   * shipping the whole outputBuffer over IPC for a large log-mode session
+   * (up to OUTPUT_BUFFER_MAX chunks ≈ tens of MB) is pure waste: the renderer
+   * pays transport + join + parse costs for content the terminal will throw
+   * away. Callers pass a maxChars budget sized to what the terminal can
+   * actually display; this walks chunks newest-first until the budget is
+   * spent and returns a still-ordered slice.
+   */
+  getOutputBufferTail(id: string, maxChars: number): string[] {
+    if (maxChars <= 0) return [];
+    const chunks = this.getOutputBuffer(id);
+    if (chunks.length === 0) return [];
+
+    const tail: string[] = [];
+    let remaining = maxChars;
+    for (let i = chunks.length - 1; i >= 0; i--) {
+      const chunk = chunks[i];
+      if (chunk.length >= remaining) {
+        if (remaining > 0) tail.push(chunk.slice(-remaining));
+        break;
+      }
+      tail.push(chunk);
+      remaining -= chunk.length;
+    }
+    return tail.reverse();
+  }
+
+  /**
    * Get the full output content as a single string.
    *
    * Used by simTerminalLinker to scan for simulation pass/fail markers
