@@ -1,9 +1,11 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
+  createLogModeChunkNormalizer,
   getInteractiveShellArgs,
   getLogModeShellArgs,
   mergeTerminalEnvs,
   resolveInteractiveShell,
+  sanitizeModuleEnvForChild,
   TerminalManager,
 } from '../../src/main/terminal/terminal-manager';
 
@@ -17,6 +19,99 @@ describe('mergeTerminalEnvs', () => {
 
     expect(env.PROJ_RTL).toBe('/config/rtl');
     expect(env.PATH).toBe(['/config/tools', '/proj/python/bin', '/usr/bin'].join(separator));
+  });
+});
+
+describe('createLogModeChunkNormalizer', () => {
+  it('rewrites bare LF to CRLF so xterm.js renders each line left-aligned', () => {
+    const normalize = createLogModeChunkNormalizer();
+    expect(normalize(Buffer.from('ai_config\nall_sys_cov_cmd\n'))).toBe(
+      'ai_config\r\nall_sys_cov_cmd\r\n',
+    );
+  });
+
+  it('keeps existing CRLF pairs unchanged', () => {
+    const normalize = createLogModeChunkNormalizer();
+    expect(normalize(Buffer.from('first\r\nsecond\r\n'))).toBe('first\r\nsecond\r\n');
+  });
+
+  it('preserves lone CR (progress-bar overwrites)', () => {
+    const normalize = createLogModeChunkNormalizer();
+    expect(normalize(Buffer.from('10%\r50%\r100%\n'))).toBe('10%\r50%\r100%\r\n');
+  });
+
+  it('does not double the CR when a CRLF pair splits across chunks', () => {
+    const normalize = createLogModeChunkNormalizer();
+    const first = normalize(Buffer.from('line\r'));
+    const second = normalize(Buffer.from('\nnext\n'));
+    expect(first + second).toBe('line\r\nnext\r\n');
+  });
+
+  it('prepends CR for a bare LF arriving right after a chunk boundary', () => {
+    const normalize = createLogModeChunkNormalizer();
+    const first = normalize(Buffer.from('no newline at end'));
+    const second = normalize(Buffer.from('\nnext line\n'));
+    expect(first + second).toBe('no newline at end\r\nnext line\r\n');
+  });
+
+  it('decodes multi-byte UTF-8 sequences split across chunks', () => {
+    const normalize = createLogModeChunkNormalizer();
+    const text = '设置\n';
+    const bytes = Buffer.from(text, 'utf8');
+    // Split mid-way through the 3-byte sequence of 设 (E8 AE BE).
+    const first = normalize(bytes.subarray(0, 5));
+    const second = normalize(bytes.subarray(5));
+    expect(first + second).toBe('设置\r\n');
+  });
+
+  it('returns empty string for empty chunks without corrupting state', () => {
+    const normalize = createLogModeChunkNormalizer();
+    expect(normalize(Buffer.alloc(0))).toBe('');
+    expect(normalize(Buffer.from('a\n'))).toBe('a\r\n');
+  });
+});
+
+describe('sanitizeModuleEnvForChild', () => {
+  it('strips inherited Environment Modules runtime state', () => {
+    const env = sanitizeModuleEnvForChild({
+      LOADEDMODULES: 'tool/python/3.11.10:synopsys/verdi/U-2023.03-SP2-4',
+      _LMFILES_: '/pub/modulefiles/tool/python/3.11.10',
+      MODULE_VERSION: '4.5.3',
+      MODULE_VERSION_STACK: '4.5.3',
+      PATH: '/usr/bin:/bin',
+      PROJ_DIR: '/proj/KunlunN02/gitview/user/view',
+    });
+
+    expect(env.LOADEDMODULES).toBeUndefined();
+    expect(env._LMFILES_).toBeUndefined();
+    expect(env.MODULE_VERSION).toBeUndefined();
+    expect(env.MODULE_VERSION_STACK).toBeUndefined();
+    expect(env.PATH).toBe('/usr/bin:/bin');
+    expect(env.PROJ_DIR).toBe('/proj/KunlunN02/gitview/user/view');
+  });
+
+  it('strips chunked _ModuleTable state variables by prefix', () => {
+    const env = sanitizeModuleEnvForChild({
+      _ModuleTable00_: 'MTVUUkVWSVNX',
+      _ModuleTable001_: 'more-chunks',
+      PATH: '/usr/bin',
+    });
+
+    expect(env._ModuleTable00_).toBeUndefined();
+    expect(env._ModuleTable001_).toBeUndefined();
+    expect(env.PATH).toBe('/usr/bin');
+  });
+
+  it('keeps MODULEPATH and MODULESHOME so modulecmd still works', () => {
+    const env = sanitizeModuleEnvForChild({
+      MODULEPATH: '/pub/modulefiles',
+      MODULESHOME: '/usr/share/Modules',
+      LOADEDMODULES: 'tool/python/3.9.7',
+    });
+
+    expect(env.MODULEPATH).toBe('/pub/modulefiles');
+    expect(env.MODULESHOME).toBe('/usr/share/Modules');
+    expect(env.LOADEDMODULES).toBeUndefined();
   });
 });
 
