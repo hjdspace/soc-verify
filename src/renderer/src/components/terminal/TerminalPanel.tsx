@@ -17,9 +17,11 @@ interface TerminalPanelProps {
   terminalId: string;
   /** Tab title — used to determine if this is a simulation terminal. */
   tabTitle: string;
+  /** 容器隐藏（keep-alive 常驻但 display:none）时透传给 TerminalView */
+  hidden?: boolean;
 }
 
-export function TerminalPanel({ terminalId, tabTitle }: TerminalPanelProps) {
+export function TerminalPanel({ terminalId, tabTitle, hidden = false }: TerminalPanelProps) {
   const activeRuns = useSimulationStore((s) => s.activeRuns);
   const setActiveTab = useTerminalStore((s) => s.setActiveTab);
 
@@ -55,7 +57,7 @@ export function TerminalPanel({ terminalId, tabTitle }: TerminalPanelProps) {
         />
       )}
       <div className="min-h-0 flex-1">
-        <TerminalView key={terminalId} terminalId={terminalId} />
+        <TerminalView key={terminalId} terminalId={terminalId} hidden={hidden} />
       </div>
     </div>
   );
