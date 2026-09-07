@@ -23,18 +23,34 @@ set -euo pipefail
 
 PYTHON_MODULE="${SOCVERIFY_PYTHON_MODULE:-tool/python/3.11.10}"
 
+# module load 会按 modulefile 的设定修改 LD_LIBRARY_PATH（站点 modulefile
+# 通常会前置 /tools/opensources/openssl/openssl-1.1.1a/lib 之类的公共库
+# 目录）。这些旧版共享库会遮蔽系统库，导致 AppImage 启动时报
+#   libcrypto.so.1.1: version `OPENSSL_1_1_1b' not found
+#     (required by /lib64/libk5crypto.so.3)
+# ——直接执行 AppImage 正常、经脚本启动就报错的原因即在此（动态链接器
+# 对 LD_LIBRARY_PATH 的搜索优先于系统默认路径）。
+# 本脚本只需要 module 提供的 PATH（python3），故先快照 LD_LIBRARY_PATH，
+# 启动 AppImage 前恢复为登录 shell 的原始值。
+LD_LIBRARY_PATH_SAVED="${LD_LIBRARY_PATH:-}"
+
 # ── 1. 清理遗留的 Environment Modules 运行时状态 ──────────────────────────
 # 父 shell 已加载的 module 状态会让子 csh 重新 source .cshrc 时产生冲突。
 # 全部清空后再重新加载，行为与 fresh login shell 一致。
-unset LOADEDMODULES _LMFILES_ MODULE_VERSION MODULE_VERSION_STACK 2>/dev/null || true
+# 注意：modulecmd 会为主变量维护配套的 *_modshare 记账变量（记录每个路径
+# 元素由哪个 shell 导出）。若只 unset 主变量而留下 modshare 变量，执行
+# module load 时会报 "WARNING: LOADEDMODULES_modshare exists ... but
+# LOADEDMODULES doesn't. Environment is corrupted."，因此必须成对清理。
+unset LOADEDMODULES LOADEDMODULES_modshare _LMFILES_ _LMFILES__modshare \
+     MODULE_VERSION MODULE_VERSION_STACK 2>/dev/null || true
 unset _ModuleTable* 2>/dev/null || true
 
 # ── 2. 加载 python3 module，把 python3 前置到 PATH ────────────────────────
-# 与 runsim_gui.sh 的 `module unload tool/python/3.9.7` +
+# 与 runsim_gui.sh 的 `module unload tool/python/3.9.23` +
 # `module load tool/python/3.11.10` 对齐。
 if type module >/dev/null 2>&1; then
     # 卸载旧版本 python module（可能不存在，静默忽略失败）
-    module unload tool/python/3.9.7 2>/dev/null || true
+    module unload tool/python/3.9.23 2>/dev/null || true
     if module load "${PYTHON_MODULE}" 2>/dev/null; then
         echo "[launch] 已加载 module: ${PYTHON_MODULE}"
     else
@@ -81,4 +97,12 @@ if [ -z "${APPIMAGE}" ] || [ ! -f "${APPIMAGE}" ]; then
 fi
 
 echo "[launch] 启动: ${APPIMAGE}"
+
+# ── 5. 恢复 LD_LIBRARY_PATH，避免 module 注入的旧版共享库遮蔽系统库 ──────
+if [ -n "${LD_LIBRARY_PATH_SAVED}" ]; then
+    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH_SAVED}"
+else
+    unset LD_LIBRARY_PATH 2>/dev/null || true
+fi
+
 exec "${APPIMAGE}" "${@:2}"
