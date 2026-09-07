@@ -104,16 +104,26 @@ export const terminalRouter = t.router({
    * Get the buffered output for a terminal session.
    * Used by TerminalView to restore output when the component is remounted
    * (e.g., switching tabs and switching back).
+   *
+   * `maxChars` caps the tail returned: remounted xterm.js instances can only
+   * display the last `scrollback` lines, so the restore path requests a
+   * tail budget instead of hauling the entire outputBuffer across IPC.
    */
   getOutputBuffer: t.procedure
-    .input((raw): { terminalId: string } => {
+    .input((raw): { terminalId: string; maxChars?: number } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.terminalId !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'terminalId is required' });
       }
-      return { terminalId: r.terminalId };
+      return {
+        terminalId: r.terminalId,
+        maxChars: typeof r.maxChars === 'number' && r.maxChars > 0 ? r.maxChars : undefined,
+      };
     })
     .query(({ input }) => {
+      if (input.maxChars !== undefined) {
+        return terminalManager.getOutputBufferTail(input.terminalId, input.maxChars);
+      }
       return terminalManager.getOutputBuffer(input.terminalId);
     }),
 });
