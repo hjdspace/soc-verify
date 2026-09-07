@@ -15,16 +15,24 @@
  * 三个来源 × 两个平台（版本锁定见 package.json；按 process.platform 选资产）：
  *   - yosys:        OSS CAD Suite tgz（~568MB），选择性提取（非全量解压）
  *                   Windows: oss-cad-suite-windows-x64-<date>.tgz → yosys.exe + share/yosys + 8 DLL（≈70MB）
- *                   Linux:   oss-cad-suite-linux-x64-<date>.tgz  → bin/yosys + share/yosys（ELF 链接系统库，无 DLL 集）
+ *                   Linux:   oss-cad-suite-linux-x64-<date>.tgz  → bin/yosys（wrapper 脚本）+ lib/
+ *                            （自带 glibc loader + 运行库闭包）+ libexec/yosys（真身 ELF）+ share/yosys
+ *
+ * Linux yosys 布局说明（与 OSS CAD Suite 原生结构一致，wrapper 相对路径 ../lib 天然成立）：
+ *   bin/yosys     ← bash wrapper（第 9 行 exec ../lib/ld-linux-x86-64.so.2 --library-path ../lib ../libexec/yosys）
+ *   lib/          ← ld-linux-x86-64.so.2 + libexec/yosys 的 DT_NEEDED 闭包（见 YOSYS_LINUX_LIBS，~8.6MB）
+ *   libexec/yosys ← 实际 ELF（NTS：引用 read_slang 直接内建，无需提取 slang.so 插件）
+ *   自带 loader 与 lib/ 使 yosys 与宿主 glibc 版本解耦（Rocky 8 等老系统可运行新套件）。
  *   - slang-server: hudson-trading/slang-server Releases
  *                   Windows: slang-server-windows-x64.zip / Linux: slang-server-linux-x64.tar.gz（单 ELF）
  *   - verible:      chipsalliance/verible Releases
  *                   Windows: verible-<tag>-win64.zip / Linux: verible-<tag>-linux-static-x86_64.tar.gz（静态链接零依赖）
  *
  * 产物布局（参与 electron-builder extraResources 打包；两平台同布局，仅文件名/附加物不同）：
- *   resources/binaries/yosys/{yosys[.exe], share/yosys/**, (win) *.dll}
- *     ← Windows: 8 个 DLL 必须与 yosys.exe 同目录（S0 实测：PATH 不生效）
- *     ← Linux:   yosys 链接系统库（需 libtinfo/libffi/libz，OSS CAD Suite 官方要求），无同目录布局问题
+ *   resources/binaries/yosys/{yosys[.exe], share/yosys/**, (win) *.dll | (linux) lib/**, libexec/yosys}
+ *     ← Windows: 8 个 DLL 必须与 exe 同目录（S0 实测：PATH 不生效）
+ *     ← Linux:   保留 OSS CAD Suite 的 wrapper + lib/ + libexec/ 结构（wrapper 用 ../lib 相对路径定位
+ *                自带 loader 与运行库），整棵 yosys 目录必须原样拷入 AppImage
  *   resources/binaries/slang-server/slang-server[.exe]
  *   resources/binaries/verible/verible-verilog-{lint,format}[.exe]
  *
@@ -38,7 +46,9 @@
  * 版本升级验证点（改 package.json 三个版本字段后必查）：
  *   1. read_slang 帮助中 `--keep-hierarchy` 仍存在（yosys ≥0.67 硬性要求）：yosys -p "help read_slang"
  *   2. Windows: yosys.exe 的 DLL 依赖集不变（当前 8 个，见 YOSYS_DLLS）
- *   3. Linux:   yosys 可执行（`ldd` 无 not found）+ slang-server/verible 资产名不变
+ *   3. Linux:   libexec/yosys 可执行（在 Linux 上 `bin/yosys -V` 成功，即 wrapper→loader→libexec 链路通）
+ *               + libexec/yosys 的 DT_NEEDED 闭包仍被 YOSYS_LINUX_LIBS 覆盖（readelf -d libexec/yosys）
+ *               + slang-server/verible 资产名不变
  */
 
 import { existsSync, mkdirSync, createWriteStream, renameSync, statSync, readFileSync, rmSync, copyFileSync, cpSync, writeFileSync, readdirSync, chmodSync } from 'node:fs';
@@ -80,7 +90,7 @@ const IS_LINUX = process.platform === 'linux';
 /** 可执行文件扩展名（Linux 为空） */
 const EXE = IS_WINDOWS ? '.exe' : '';
 
-// ===== yosys 依赖 DLL 集（Windows S0 实测，必须与 exe 同目录；Linux 无此问题）=====
+// ===== yosys 依赖 DLL 集（Windows S0 实测，必须与 exe 同目录）=====
 
 const YOSYS_DLLS = [
   'libstdc++-6.dll',
@@ -92,6 +102,29 @@ const YOSYS_DLLS = [
   'tcl86.dll',
   'zlib1.dll',
 ];
+
+// ===== yosys Linux 运行库闭包（2026-09-02 套件，readelf -d libexec/yosys 递归闭包实测）=====
+// libexec/yosys 直接依赖 libffi/libz/libtcl/libreadline/libstdc++/libm/libgcc_s/libc/ld-linux；
+// libreadline.so.8 又引入 libtinfo.so.6。注意：bin/yosys 是 bash wrapper（非 ELF），真身在
+// libexec/yosys，由 ../lib/ld-linux-x86-64.so.2（套件自带 glibc loader）启动并仅从 ../lib 解析。
+// 升级 ossCadSuiteVersion 后必须重验此清单（见头部「版本升级验证点」第 3 条）。
+
+const YOSYS_LINUX_LIBS = [
+  'ld-linux-x86-64.so.2',
+  'libc.so.6',
+  'libm.so.6',
+  'libgcc_s.so.1',
+  'libstdc++.so.6',
+  'libffi.so.8',
+  'libz.so.1',
+  'libtcl8.6.so',
+  'libreadline.so.8',
+  'libtinfo.so.6',
+];
+
+// wrapper 还 export TCL_LIBRARY=../lib/tcl8.6（Tcl 初始化脚本，无 .so 对应，缺了会
+// 在 -p 脚本模式外交互启动时报 can't find init.tcl）。整个子目录提取（~1MB）。
+const YOSYS_LINUX_LIB_DIRS = ['tcl8.6'];
 
 // ===== 下载 URL 构造（支持镜像 / 单独覆盖）=====
 
@@ -171,9 +204,11 @@ function yosysComplete(yosysDir) {
   const exe = join(yosysDir, `yosys${EXE}`);
   if (!existsSync(exe)) return false;
   if (!existsSync(join(yosysDir, 'share', 'yosys'))) return false;
-  // DLL 集仅 Windows 需要（Linux yosys 链接系统库）
-  if (!IS_WINDOWS) return true;
-  return YOSYS_DLLS.every((d) => existsSync(join(yosysDir, d)));
+  if (IS_WINDOWS) return YOSYS_DLLS.every((d) => existsSync(join(yosysDir, d)));
+  // Linux：wrapper(bin/yosys) + libexec/yosys + lib 运行库闭包缺一不可
+  if (!existsSync(join(yosysDir, 'libexec', 'yosys'))) return false;
+  if (!YOSYS_LINUX_LIBS.every((l) => existsSync(join(yosysDir, 'lib', l)))) return false;
+  return YOSYS_LINUX_LIB_DIRS.every((d) => existsSync(join(yosysDir, 'lib', d)));
 }
 
 async function extractYosys(archivePath, yosysDir) {
@@ -183,9 +218,16 @@ async function extractYosys(archivePath, yosysDir) {
   try {
     // 只提取需要的成员，避免解压整个 568MB 包。tgz 成员前缀为 oss-cad-suite/（两平台一致）
     const wantedDlls = new Set(YOSYS_DLLS.map((d) => `oss-cad-suite/lib/${d}`));
+    const wantedLinuxLibs = new Set(YOSYS_LINUX_LIBS.map((l) => `oss-cad-suite/lib/${l}`));
+    const linuxLibDirPrefixes = YOSYS_LINUX_LIB_DIRS.map((d) => `oss-cad-suite/lib/${d}/`);
     const filter = (path) =>
       path === `oss-cad-suite/bin/yosys${EXE}` ||
       (IS_WINDOWS && wantedDlls.has(path)) ||
+      // Linux wrapper 第 9 行 exec ../lib/ld-linux-x86-64.so.2 ... ../libexec/yosys
+      (!IS_WINDOWS &&
+        (wantedLinuxLibs.has(path) ||
+          path === 'oss-cad-suite/libexec/yosys' ||
+          linuxLibDirPrefixes.some((p) => path.startsWith(p)))) ||
       path.startsWith('oss-cad-suite/share/yosys/');
 
     console.log(`  extracting yosys subset from tgz...`);
@@ -194,12 +236,12 @@ async function extractYosys(archivePath, yosysDir) {
     const suite = join(staging, 'oss-cad-suite');
     mkdirSync(yosysDir, { recursive: true });
 
-    // exe
+    // wrapper（Linux）/ exe（Windows）→ yosys 根目录
     const exeDest = join(yosysDir, `yosys${EXE}`);
     copyFileSync(join(suite, 'bin', `yosys${EXE}`), exeDest);
     makeExecutable(exeDest);
 
-    // Windows: 8 个 DLL → 与 exe 同目录（S0 实测 PATH 不生效）；Linux: 无 DLL 集
+    // Windows: 8 个 DLL → 与 exe 同目录（S0 实测 PATH 不生效）
     if (IS_WINDOWS) {
       for (const dll of YOSYS_DLLS) {
         const src = join(suite, 'lib', dll);
@@ -207,6 +249,36 @@ async function extractYosys(archivePath, yosysDir) {
           copyFileSync(src, join(yosysDir, dll));
         } else {
           console.warn(`  [yosys] expected DLL missing in tgz: ${dll}`);
+        }
+      }
+    } else {
+      // Linux：整棵按 OSS CAD Suite 原生结构摆放（bin→根目录除外），wrapper 的
+      // `release_bindir/..` 定位逻辑即解析到本 yosysDir，lib/libexec 相对路径原样成立
+      const libexecSrc = join(suite, 'libexec', 'yosys');
+      if (existsSync(libexecSrc)) {
+        mkdirSync(join(yosysDir, 'libexec'), { recursive: true });
+        copyFileSync(libexecSrc, join(yosysDir, 'libexec', 'yosys'));
+        makeExecutable(join(yosysDir, 'libexec', 'yosys'));
+      } else {
+        console.warn(`  [yosys] libexec/yosys not found in tgz (layout changed upstream?)`);
+      }
+      mkdirSync(join(yosysDir, 'lib'), { recursive: true });
+      for (const lib of YOSYS_LINUX_LIBS) {
+        const src = join(suite, 'lib', lib);
+        if (existsSync(src)) {
+          copyFileSync(src, join(yosysDir, 'lib', lib));
+        } else {
+          console.warn(`  [yosys] expected Linux lib missing in tgz: ${lib}`);
+        }
+      }
+      makeExecutable(join(yosysDir, 'lib', 'ld-linux-x86-64.so.2'));
+      // TCL_LIBRARY 数据目录（wrapper export TCL_LIBRARY=../lib/tcl8.6）
+      for (const dir of YOSYS_LINUX_LIB_DIRS) {
+        const src = join(suite, 'lib', dir);
+        if (existsSync(src)) {
+          cpSync(src, join(yosysDir, 'lib', dir), { recursive: true });
+        } else {
+          console.warn(`  [yosys] expected Linux lib dir missing in tgz: ${dir}`);
         }
       }
     }
