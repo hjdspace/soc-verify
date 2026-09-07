@@ -43,9 +43,14 @@ function renderActiveView(view: ActiveView) {
   }
 }
 
-/** 需要 keep-alive 的视图：切走时保留 DOM（隐藏），切回零挂载成本。
- * 仿真视图含万级用例树 + 运行列表，全量重建是切换卡顿的主因。 */
-const KEEP_ALIVE_VIEWS: ReadonlySet<ActiveView> = new Set(['simulation']);
+/**
+ * 需要 keep-alive 的视图：切走时保留 DOM（隐藏），切回零挂载成本。
+ * - simulation：仿真视图含万级用例树 + 运行列表，全量重建是切换卡顿的主因。
+ * - workspace：多 Tab 工作台内的终端依赖 TerminalKeepAliveLayer 常驻
+ *   xterm 实例（含 10 万行 scrollback），视图卸载会连带销毁终端缓冲，
+ *   切回时需跨 IPC 全量恢复输出（大日志下表现为空白数秒）。
+ */
+const KEEP_ALIVE_VIEWS: ReadonlySet<ActiveView> = new Set(['simulation', 'workspace']);
 
 /** 视图路由容器：按 ui.activeView 渲染七个视图。
  * 总览视图为 Mission Control 仪表盘（Issue #3）；
@@ -70,6 +75,8 @@ export function ViewContainer() {
   const activeView = useUiStore((s) => s.activeView);
   const simulationViewMounted = useUiStore((s) => s.simulationViewMounted);
   const setSimulationViewMounted = useUiStore((s) => s.setSimulationViewMounted);
+  const workspaceViewMounted = useUiStore((s) => s.workspaceViewMounted);
+  const setWorkspaceViewMounted = useUiStore((s) => s.setWorkspaceViewMounted);
 
   // keep-alive 视图首次激活时置位（effect 内 set，渲染期无副作用）
   useEffect(() => {
@@ -77,6 +84,12 @@ export function ViewContainer() {
       setSimulationViewMounted(true);
     }
   }, [activeView, simulationViewMounted, setSimulationViewMounted]);
+
+  useEffect(() => {
+    if (activeView === 'workspace' && !workspaceViewMounted) {
+      setWorkspaceViewMounted(true);
+    }
+  }, [activeView, workspaceViewMounted, setWorkspaceViewMounted]);
 
   return (
     <>
@@ -90,6 +103,18 @@ export function ViewContainer() {
           aria-hidden={activeView !== 'simulation'}
         >
           <SimulationView />
+        </div>
+      )}
+      {/* keep-alive 层：workspace（多 Tab 工作台）挂载后常驻，仅激活时可见 */}
+      {workspaceViewMounted && (
+        <div
+          className={cn(
+            'min-h-0 flex-1 flex-col overflow-hidden',
+            activeView === 'workspace' ? 'flex' : 'hidden',
+          )}
+          aria-hidden={activeView !== 'workspace'}
+        >
+          <WorkspaceView />
         </div>
       )}
       <AnimatePresence mode="popLayout" initial={false}>
