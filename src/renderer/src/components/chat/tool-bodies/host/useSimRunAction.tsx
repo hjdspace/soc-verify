@@ -3,6 +3,7 @@ import { Terminal } from 'lucide-react';
 import { useProjectStore } from '@renderer/stores/project';
 import { useTerminalStore } from '@renderer/stores/terminal';
 import { useToastStore } from '@renderer/stores/toast';
+import { ensureSimulationEventListener } from '@renderer/stores/simulation';
 import { trpc } from '@renderer/lib/trpc';
 
 /** Encapsulates the "open in terminal" side-effect for SimRunBody. */
@@ -13,6 +14,9 @@ export function useSimRunAction(caseId: string, subsys: string, optionsVal: unkn
       useToastStore.getState().warning('未打开项目', '需要先打开项目才能在终端中运行仿真。');
       return;
     }
+    // 此入口绕过 simulation store 的 startCaseRun，必须自行确保
+    // simulation:event 监听已注册，否则运行列表状态不会实时更新
+    ensureSimulationEventListener();
     trpc.simulation.runInTerminal.mutate({
       projectId,
       options: {
