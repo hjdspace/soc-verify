@@ -5,7 +5,7 @@ import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useTerminalStore } from '@renderer/stores/terminal';
-import { TerminalPanel } from '@renderer/components/terminal/TerminalPanel';
+import { TerminalKeepAliveLayer } from '@renderer/components/terminal/TerminalKeepAliveLayer';
 import { CoveragePanel } from '@renderer/components/coverage/CoveragePanel';
 import { RegressionPanel } from '@renderer/components/regression/RegressionPanel';
 import { DashboardPanel } from '@renderer/components/dashboard/DashboardPanel';
@@ -466,7 +466,11 @@ export function CenterArea() {
                 </div>
               );
             }
-            return <TerminalPanel key={termTab.terminalId} terminalId={termTab.terminalId} tabTitle={termTab.title} />;
+            // keep-alive 常驻层渲染最近 KEEP_ALIVE_MAX 个终端（含当前
+            // 可见的），切 tab / 切视图回来零挂载成本
+            return (
+              <TerminalKeepAliveLayer activeTerminalTabId={termTab.id} />
+            );
           })()
         ) : destination?.type === 'simulation-errors' ? (
           <CompileErrorView errors={simErrors} runId={simErrorsRunId} />
