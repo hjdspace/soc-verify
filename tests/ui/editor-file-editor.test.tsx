@@ -19,6 +19,13 @@ const { trpc } = vi.hoisted(() => ({
     system: {
       openExternal: { mutate: vi.fn().mockResolvedValue(undefined) },
     },
+    // SV 文件的 LSP 桥接 + verible lint（FileEditor 对 .sv 文件的既有副作用）
+    rtl: {
+      lspStart: { mutate: vi.fn().mockResolvedValue({ running: false, initialized: false }) },
+      lspOpen: { mutate: vi.fn().mockResolvedValue(undefined) },
+      lspChange: { mutate: vi.fn().mockResolvedValue(undefined) },
+      lintFile: { query: vi.fn().mockResolvedValue({ diagnostics: [] }) },
+    },
   },
 }));
 
