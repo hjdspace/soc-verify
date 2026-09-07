@@ -21,6 +21,7 @@ import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSessionCoreStore } from '@renderer/stores/session-core';
 import { useEnvStore } from '@renderer/stores/env';
+import { ensureSimulationEventListener } from '@renderer/stores/simulation';
 
 export function AppShell() {
   // 布局持久化触发器（抽屉为瞬态不持久化；RightPanel 几何随 workspace 视图在 ViewContainer）
@@ -77,6 +78,13 @@ export function AppShell() {
     };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
+  }, []);
+
+  // 应用挂载即注册 simulation:event 监听（幂等）——仿真启动入口不止
+  // startCaseRun 一个（AI 工具卡 / 终端工具栏重跑等直接调 tRPC），
+  // 不注册会导致运行列表仿真状态不实时更新（卡在「进行中」直到重挂载）
+  useEffect(() => {
+    ensureSimulationEventListener();
   }, []);
 
   return (
