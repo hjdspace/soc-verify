@@ -29,6 +29,7 @@ import type { FileDiffResult } from '@shared/types';
 import { cn } from '@renderer/lib/utils';
 import { createVimExtensions, resetVimMode } from './vim-extension';
 import { createFoldGutterExtension } from './fold-gutter';
+import { createFoldStrategiesExtension } from './fold-strategies';
 import { VimStatusBar } from './VimStatusBar';
 import { createSyntaxHighlightExtension } from './syntax-highlight';
 import { createIndentGuidesExtension } from './indent-guides';
@@ -59,6 +60,41 @@ function extractText(children: ReactNode): string {
 }
 
 // ── 语言扩展映射 ──────────────────────────────────────────────
+
+/** 语言 id（供折叠策略选择；与 getLanguageExtension 的扩展映射一一对应） */
+function getLanguageId(filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  switch (ext) {
+    case 'js': case 'jsx': case 'mjs': case 'cjs':
+      return 'javascript';
+    case 'ts': case 'tsx':
+      return 'typescript';
+    case 'py': case 'pyw':
+      return 'python';
+    case 'c': case 'h':
+    case 'cpp': case 'cc': case 'cxx': case 'hpp': case 'hxx':
+      return 'cpp';
+    case 'json':
+      return 'json';
+    case 'md': case 'markdown':
+      return 'markdown';
+    case 'yaml': case 'yml':
+      return 'yaml';
+    case 'html': case 'htm':
+    case 'vue':
+      return 'html';
+    case 'css': case 'scss': case 'less':
+      return 'css';
+    case 'sv': case 'svh': case 'v': case 'vh':
+      return 'verilog';
+    case 'sh': case 'bash': case 'zsh':
+      return 'shell';
+    case 'tcl':
+      return 'tcl';
+    default:
+      return 'plaintext';
+  }
+}
 
 function getLanguageExtension(filename: string) {
   const ext = filename.split('.').pop()?.toLowerCase() ?? '';
@@ -525,6 +561,11 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
   // 折叠列（替代 basicSetup 默认 foldGutter：SVG chevron + 悬停显示，见 fold-gutter.ts）
   const foldGutterExt = useMemo(() => createFoldGutterExtension(), []);
 
+  // 折叠策略（VSCode 风格：块注释、连续 import 组、#region、SV 关键字对、
+  // 缩进回退——见 fold-strategies.ts；随文件语言变化重建）
+  const languageId = useMemo(() => getLanguageId(fileName), [fileName]);
+  const foldStrategiesExt = useMemo(() => createFoldStrategiesExtension(languageId), [languageId]);
+
   // 合并所有 extension（memoize 避免每次渲染触发 CodeMirror reconfigure）
   const editorExtensions = useMemo<Extension[]>(() => [
     ...languageExtension,
@@ -532,11 +573,12 @@ export function FileEditor({ projectId, filePath, fileName, line, endLine, revea
     cursorListenerExtension,
     indentGuidesExtension,
     foldGutterExt,
+    foldStrategiesExt,
     linterExt,
     ...searchExtension,
     ...vimExtensions,
     ...inlineReviewExtensions,
-  ], [languageExtension, syntaxHighlightExtension, cursorListenerExtension, indentGuidesExtension, foldGutterExt, linterExt, searchExtension, vimExtensions, inlineReviewExtensions]);
+  ], [languageExtension, syntaxHighlightExtension, cursorListenerExtension, indentGuidesExtension, foldGutterExt, foldStrategiesExt, linterExt, searchExtension, vimExtensions, inlineReviewExtensions]);
 
   const isDirty = content !== originalContent;
 
