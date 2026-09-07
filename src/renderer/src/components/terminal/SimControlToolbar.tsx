@@ -35,7 +35,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
-import { useSimulationStore } from '@renderer/stores/simulation';
+import { useSimulationStore, ensureSimulationEventListener } from '@renderer/stores/simulation';
 import { useTerminalStore } from '@renderer/stores/terminal';
 import { useToastStore } from '@renderer/stores/toast';
 import { useProjectStore } from '@renderer/stores/project';
@@ -222,6 +222,9 @@ export function SimControlToolbar({
   const handleRerun = useCallback(async () => {
     if (!projectId) return;
     console.log(`[SimControlToolbar] handleRerun called — currentCommand="${currentCommand}"`);
+    // 此入口绕过 simulation store 的 startCaseRun，必须自行确保
+    // simulation:event 监听已注册，否则运行列表状态不会实时更新
+    ensureSimulationEventListener();
     setIsRerunning(true);
     try {
       const result = await trpc.simulation.rerunWithCommand.mutate({
