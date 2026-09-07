@@ -6,9 +6,11 @@
  *   2. 系统 PATH（仅开发模式）
  *
  * 产物布局由 scripts/download-rtl-tools.mjs 按当前平台生成（两平台同布局，仅文件名/附加物不同）：
- *   binaries/yosys/{yosys[.exe] + share/yosys/ + (win) 8 DLL}
+ *   binaries/yosys/{yosys[.exe] + share/yosys/ + (win) 8 DLL | (linux) libexec/yosys + lib/**}
  *     ← Windows: DLL 必须与 exe 同目录（S0 实测 PATH 不生效）
- *     ← Linux:   yosys 为 ELF，链接系统库（libtinfo/libffi/libz），无同目录布局问题
+ *     ← Linux:   yosys 是 OSS CAD Suite 的 bash wrapper（非 ELF），第 9 行 exec
+ *                ../lib/ld-linux-x86-64.so.2（套件自带 glibc loader）+ --library-path ../lib
+ *                加载 ../libexec/yosys 真身。lib/ 运行库闭包由下载脚本一并提取。
  *   binaries/slang-server/slang-server[.exe]
  *   binaries/verible/{verible-verilog-lint, verible-verilog-format}[.exe]
  */
@@ -32,6 +34,23 @@ export const YOSYS_DLLS = [
   'libtermcap-0.dll',
   'tcl86.dll',
   'zlib1.dll',
+] as const;
+
+/**
+ * yosys Linux 运行库闭包（2026-09-02 套件 readelf -d libexec/yosys 递归解析实测）。
+ * wrapper 通过自带 loader + --library-path ../lib 独占解析这些库，与宿主 glibc 解耦。
+ */
+export const YOSYS_LINUX_LIBS = [
+  'ld-linux-x86-64.so.2',
+  'libc.so.6',
+  'libm.so.6',
+  'libgcc_s.so.1',
+  'libstdc++.so.6',
+  'libffi.so.8',
+  'libz.so.1',
+  'libtcl8.6.so',
+  'libreadline.so.8',
+  'libtinfo.so.6',
 ] as const;
 
 /** 打包模式下 binaries 目录（process.resourcesPath/binaries） */
@@ -81,24 +100,31 @@ export function resolveYosysPath(): string | null {
 }
 
 /**
- * 检查 yosys 目录布局完整性（仅 Windows）：8 个依赖 DLL 必须与 exe 同目录（S0 实测）。
- * Linux 的 yosys 是 ELF、链接系统库，无 DLL 集概念，恒返回空数组。
- * PATH 回退的 yosys 不做 DLL 检查（用户自担布局）。
- * @returns 缺失的 DLL 文件名列表；exe 不存在时返回 null（无法判定）
+ * 检查 yosys 目录布局完整性：Windows 查 8 个依赖 DLL；Linux 查 libexec/yosys 真身
+ * 与 lib/ 运行库闭包（bin/yosys 是 wrapper 脚本，单独存在不代表可执行）。
+ * PATH 回退的 yosys 不做检查（用户自担布局）。
+ * @returns 缺失的依赖文件名列表；exe 不存在时返回 null（无法判定）
  */
 export function yosysMissingDlls(): string[] | null {
   return missingDllsFor(resolveYosysPath());
 }
 
-/** 对已解析的 exe 路径做 DLL 完整性检查（null → 无法判定） */
+/** 对已解析的 exe 路径做依赖完整性检查（null → 无法判定） */
 function missingDllsFor(exe: string | null): string[] | null {
   if (!exe) return null;
-  // Linux/macOS：ELF 链接系统库，无同目录 DLL 布局要求
-  if (process.platform !== 'win32') return [];
   const dir = dirname(exe);
-  // 非内置布局（PATH 回退）不检查 DLL
+  // 非内置布局（PATH 回退）不检查依赖
   if (!/binaries[\\/]+yosys$/i.test(dir)) return [];
-  return YOSYS_DLLS.filter((dll) => !existsSync(join(dir, dll)));
+  if (process.platform === 'win32') {
+    return YOSYS_DLLS.filter((dll) => !existsSync(join(dir, dll)));
+  }
+  // Linux：wrapper 缺 libexec/yosys → 退出码 127；缺 lib/ 闭包 → loader 找不到库
+  const missing: string[] = [];
+  if (!existsSync(join(dir, 'libexec', 'yosys'))) missing.push('libexec/yosys');
+  for (const lib of YOSYS_LINUX_LIBS) {
+    if (!existsSync(join(dir, 'lib', lib))) missing.push(`lib/${lib}`);
+  }
+  return missing;
 }
 
 /** 解析 slang-server.exe 路径（内置 → 开发模式 PATH 回退）。 */
@@ -133,8 +159,8 @@ export type RtlToolsStatus = {
 };
 
 /**
- * 汇总三工具可用性状态。yosys available 要求 exe 存在且 DLL 集完整
- * （DLL 缺失时 exe 可解析但不可执行，按不可用处理并报告缺失清单）。
+ * 汇总三工具可用性状态。yosys available 要求 exe 存在且依赖布局完整
+ * （依赖缺失时 exe 可解析但不可执行，按不可用处理并报告缺失清单）。
  */
 export function getRtlToolsStatus(): RtlToolsStatus {
   const yosysPath = resolveYosysPath();
