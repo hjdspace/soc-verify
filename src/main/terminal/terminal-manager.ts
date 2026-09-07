@@ -1,3 +1,4 @@
+import { StringDecoder } from 'node:string_decoder';
 import { EventEmitter } from 'node:events';
 import { spawn, ChildProcess, execSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
@@ -313,6 +314,91 @@ export function getLogModeShellArgs(
   if (platform === 'win32') return ['-NoProfile', '-Command', command];
   const isCsh = shell === 'csh' || shell.endsWith('/csh') || shell === 'tcsh' || shell.endsWith('/tcsh');
   return isCsh ? ['-c', command] : ['-l', '-c', command];
+}
+
+/**
+ * Create a chunk normalizer for log-mode (pipe) output.
+ *
+ * Programs writing to a pipe emit bare `\n` line endings. xterm.js treats a
+ * bare LF as "move down one row, keep the column", which renders log-mode
+ * output as a diagonal staircase — unlike a PTY, whose kernel line discipline
+ * (ONLCR) rewrites LF to CRLF before xterm.js ever sees it. The Python
+ * reference GUI never hits this because its Qt log widget treats `\n` as a
+ * full line break (column reset) and QProcess MergedChannels keeps
+ * stdout/stderr write order.
+ *
+ * The returned function rewrites every bare `\n` to `\r\n` (existing `\r\n`
+ * pairs and lone `\r` are preserved) so the renderer's xterm.js instance
+ * displays log-mode output left-aligned, mirroring PTY rendering.
+ *
+ * Chunk boundaries are handled safely:
+ * - multi-byte UTF-8 sequences split across chunks are buffered via
+ *   StringDecoder instead of the lossy `data.toString()`;
+ * - a `\r\n` pair split across two chunks is not doubled (tracks the last
+ *   character of the previous chunk).
+ */
+export function createLogModeChunkNormalizer(): (chunk: Buffer) => string {
+  const decoder = new StringDecoder('utf8');
+  let lastChar = '\n';
+  return (chunk: Buffer): string => {
+    const text = decoder.write(chunk);
+    if (text.length === 0) return '';
+    let out: string;
+    if (text.charCodeAt(0) === 10 /* \n */) {
+      // Leading LF: resolve it against the previous chunk's last character
+      // first (previous \r completes a CRLF pair; otherwise this bare LF
+      // becomes one), then process the remainder with the plain regex.
+      const head = lastChar === '\r' ? '\n' : '\r\n';
+      out = head + text.slice(1).replace(/\r?\n/g, '\r\n');
+    } else {
+      out = text.replace(/\r?\n/g, '\r\n');
+    }
+    lastChar = text[text.length - 1];
+    return out;
+  };
+}
+
+/**
+ * Environment variables carrying Environment Modules runtime state.
+ *
+ * When the Electron app itself is launched from a shell with EDA modules
+ * loaded, these leak into a log-mode `csh -c` child. Re-sourcing `.cshrc`
+ * then hits module conflicts ("cannot be loaded due to a conflict", "list
+ * element in quotes followed by ':' instead of space"), module init aborts
+ * partway, and tools that `.cshrc` puts on PATH fall back to system
+ * binaries — notably /usr/bin/python (Python 2), which crashes runsim with
+ * `TypeError: 'encoding' is an invalid keyword argument for this function`.
+ * The Python reference GUI avoids this because runsim_gui.sh pre-loads its
+ * own python3 module into the env that QProcess passes down.
+ */
+const MODULE_STATE_ENV_KEYS: readonly string[] = [
+  'LOADEDMODULES',
+  '_LMFILES_',
+  'MODULE_VERSION',
+  'MODULE_VERSION_STACK',
+];
+
+/**
+ * Strip inherited Environment Modules runtime state from an environment.
+ *
+ * A log-mode `csh -c` re-sources `.cshrc`, which (re)loads the EDA module
+ * environment. Preset module state from the app's parent shell breaks that
+ * initialization, so the child shell must start from a clean module slate —
+ * exactly like a fresh login shell. MODULEPATH/MODULESHOME are deliberately
+ * kept: system startup files (/etc/csh.cshrc) own their setup and modulecmd
+ * needs them to function at all.
+ */
+export function sanitizeModuleEnvForChild(
+  env: Record<string, string>,
+): Record<string, string> {
+  const cleaned: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (MODULE_STATE_ENV_KEYS.includes(key)) continue;
+    // `_ModuleTable<NN>_...` — chunked serialized module state variables.
+    if (key.startsWith('_ModuleTable')) continue;
+    cleaned[key] = value;
+  }
+  return cleaned;
 }
 
 /**
@@ -1080,7 +1166,14 @@ export class TerminalManager extends EventEmitter {
     // that would initialize modules once during capture and again when this
     // command shell sources .cshrc. Let the login shell initialize once.
     const shell = opts.shell ?? findSimShell();
-    const env = mergeTerminalEnvs(process.env as Record<string, string>, opts.env);
+    // Strip inherited Environment Modules state (LOADEDMODULES, _ModuleTable*,
+    // ...) before spawning `csh -c`. A polluted parent env breaks .cshrc module
+    // init (conflict warnings + csh eval errors), which leaves the child PATH
+    // without python3 — runsim then executes under system python2 and dies
+    // with `TypeError: 'encoding' is an invalid keyword argument`.
+    const env = sanitizeModuleEnvForChild(
+      mergeTerminalEnvs(process.env as Record<string, string>, opts.env),
+    );
 
     const session: TerminalSession = {
       id,
@@ -1127,6 +1220,10 @@ export class TerminalManager extends EventEmitter {
         entry.flushTimer.unref();
       }
     };
+
+    // Log-mode output arrives via pipes (no PTY line discipline), so bare `\n`
+    // must be rewritten to `\r\n` for xterm.js to left-align each line.
+    const normalizeChunk = createLogModeChunkNormalizer();
 
     // Write a banner so the user knows they're in log mode
     const banner =
@@ -1180,13 +1277,15 @@ export class TerminalManager extends EventEmitter {
     session.pid = child.pid ?? 0;
     entry.pty = child;
 
-    // Stream stdout and stderr to the renderer
+    // Stream stdout and stderr to the renderer. Both pipes share one
+    // normalizer so UTF-8 decoding and `\r\n` boundary tracking stay
+    // consistent across interleaved chunks.
     child.stdout?.on('data', (data: Buffer) => {
-      enqueueData(data.toString());
+      enqueueData(normalizeChunk(data));
     });
 
     child.stderr?.on('data', (data: Buffer) => {
-      enqueueData(data.toString());
+      enqueueData(normalizeChunk(data));
     });
 
     child.on('error', (err: Error) => {
