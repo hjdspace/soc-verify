@@ -20,6 +20,8 @@ export interface TerminalTab {
   warning: string | null;
   /** Where this terminal is currently displayed. */
   location: TerminalLocation;
+  /** 单调递增的激活序号 — 越大越近期查看，keep-alive 淘汰时选最小的。 */
+  lastActivatedAt: number;
 }
 
 interface TerminalStoreState {
@@ -47,6 +49,10 @@ interface TerminalStoreState {
 
 let eventListenerRegistered = false;
 let tabIdCounter = 0;
+let activationCounter = 0;
+
+/** 下一次激活的时间戳（同一帧内多次激活保持严格递增，LRU 排序才稳定） */
+const nextActivation = (): number => ++activationCounter;
 
 export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
   tabs: [],
@@ -68,6 +74,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         fallback: false,
         warning: null,
         location,
+        lastActivatedAt: nextActivation(),
       }],
       activeTabId: location === 'center' ? tabId : s.activeTabId,
       bottomActiveTabId: location === 'bottom' ? tabId : s.bottomActiveTabId,
@@ -155,14 +162,20 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
   setActiveTab: (tabId) => {
     const tab = get().tabs.find((candidate) => candidate.id === tabId);
     if (!tab) return;
-    set({ activeTabId: tabId });
+    set((s) => ({
+      activeTabId: tabId,
+      tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, lastActivatedAt: nextActivation() } : t)),
+    }));
     useWorkbenchStore.getState().open({ type: 'terminal', terminalTabId: tab.id, title: tab.title });
   },
 
   setBottomActiveTab: (tabId) => {
     const tab = get().tabs.find((candidate) => candidate.id === tabId);
     if (!tab) return;
-    set({ bottomActiveTabId: tabId });
+    set((s) => ({
+      bottomActiveTabId: tabId,
+      tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, lastActivatedAt: nextActivation() } : t)),
+    }));
   },
 
   moveTerminalLocation: (tabId, location) => {
@@ -203,6 +216,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         fallback,
         warning,
         location: 'center' as TerminalLocation,
+        lastActivatedAt: nextActivation(),
       }],
       activeTabId: tabId,
     }));
