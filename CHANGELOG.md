@@ -6,6 +6,34 @@
 
 ---
 
+## [0.4.8](https://github.com/hjdspace/soc-verify/compare/v0.4.7...v0.4.8) (2026-09-07)
+
+### Features
+
+* **terminal:** TerminalKeepAliveLayer 组件——终端视图 keep-alive 与 workspace 支持，切换视图时保持终端会话活跃
+* **editor:** VSCode 风格代码折叠——折叠策略、折叠标记 DOM、折叠槽扩展与快捷键映射集成到 FileEditor
+* **terminal:** terminal-manager 新增 createSessionForTest 方法与 getOutputBuffer maxChars 参数
+* **simulation:** log-mode 分块规范化与环境变量净化（sanitizeModuleEnvForChild）
+* **desktop:** 新增 SoC Verify 应用启动脚本
+* **editor:** IndentGuideWidget 与缩进级别计算增强
+
+### Bug Fixes
+
+* **simulation:** 幂等注册 simulation:event IPC 监听器，确保应用启动时事件监听器正确注册
+* **simulation:** 增强 rerun 事件监听处理
+* **rtl-tools:** 更新 yosys 依赖缺失错误提示信息
+
+### Refactor
+
+* **editor:** CodeMirror 样式重构，优化对齐与可见性
+* **editor:** 重构 IndentGuideWidget 与 getIndentLevel 函数
+* **rtl-tools:** 重构 Yosys 依赖检查逻辑与 Linux yosys 结构
+* **build:** 重构 Linux 二进制 chmod 逻辑
+
+### Tests
+
+* 补齐终端 keep-alive、仿真事件监听、代码折叠策略、LSP bridge、设计服务等测试
+
 ## [0.4.7](https://github.com/hjdspace/soc-verify/compare/v0.4.6...v0.4.7) (2026-09-07)
 
 ### Features
