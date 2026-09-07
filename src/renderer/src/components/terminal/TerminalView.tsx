@@ -17,6 +17,13 @@ import { formatDuration } from './osc133-parser';
 
 interface TerminalViewProps {
   terminalId: string;
+  /**
+   * 容器是否处于隐藏状态（keep-alive 常驻但 display:none）。
+   * 隐藏期间跳过 fit（对零尺寸容器 fit 会抛错/全量重算），restore 的
+   * 输出暂不写入 xterm，等重新可见时再重放，避免不可见终端白白占用
+   * 渲染帧。再次可见后由 ResizeObserver 触发一次 fit。
+   */
+  hidden?: boolean;
 }
 
 /** 装饰器实例 + 关联的命令边界 */
@@ -31,7 +38,17 @@ type DecorationEntry = {
   collapsed: boolean;
 };
 
-export function TerminalView({ terminalId }: TerminalViewProps) {
+/** Scrollback lines configured on the xterm.js instance (must stay in sync with `new Terminal({ scrollback })`). */
+const SCROLLBACK_LINES = 100000;
+/**
+ * Restore budget in characters: covers the scrollback above, bounded by
+ * worst-case line length. 6M chars ≈ 60% of the full 10万行 scrollback at
+ * an average 60-char log line — the tail beyond what a remounted terminal
+ * can display is discarded server-side instead of crossing IPC.
+ */
+const RESTORE_MAX_CHARS = 6 * 1024 * 1024;
+
+export function TerminalView({ terminalId, hidden = false }: TerminalViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -47,6 +64,16 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
   // Copy button feedback state
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 恢复中状态：从 outputBuffer 重放到完成之间，覆盖占位层（避免用户看到长时间空白）
+  const [restoring, setRestoring] = useState(true);
+
+  // 主 effect 注册的 deferred 重放句柄（见主 effect 内 flushDeferred）
+  const flushDeferredRef = useRef<(() => void) | null>(null);
+  // hidden prop 的 ref 镜像：effect 闭包（data 回调、restore 回调）读取
+  // 的是最新值，避免闭包过期；hidden 变化本身由 visibility effect 响应。
+  const hiddenRef = useRef(hidden);
+  hiddenRef.current = hidden;
 
   // ── OSC 133 命令装饰器状态（Issue #7）──────────────────────
   const oscParserRef = useRef<Osc133Parser>(new Osc133Parser());
@@ -247,7 +274,7 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
       fontSize: 13,
       fontFamily:
         "'JetBrainsMono Nerd Font', 'MesloLGS NF', 'Consolas', 'Courier New', monospace",
-      scrollback: 100000,
+      scrollback: SCROLLBACK_LINES,
       allowProposedApi: true,
       theme: resolveTerminalITheme(useTerminalThemeStore.getState()),
     });
@@ -271,6 +298,16 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
 
     termRef.current = term;
     fitRef.current = fitAddon;
+
+    // 隐藏挂载（keep-alive）：容器 display:none 时 fit 会因零尺寸报错，
+    // 跳过初始 fit，等重新可见时由 ResizeObserver / 可见性 effect 补一次。
+    if (!hidden) {
+      try {
+        fitRef.current.fit();
+      } catch {
+        // ignore fit errors during teardown
+      }
+    }
 
     // ── OSC 133 handler 注册（Issue #7）──────────────────────
     // 解析 Shell Integration 脚本发送的 A/C/D 序列，维护命令边界状态。
@@ -307,6 +344,26 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
     // oscParserRef 已在 effect 开头 reset()，重新解析将重建命令边界和装饰器。
     let outputRestored = false;
     const pendingData: string[] = [];
+    /**
+     * Restore 期间已到达但尚未写入的数据（含 restore 输出自身 + 实时
+     * IPC 数据）。hidden 挂载时 restore 结果也暂存在这里，不写入
+     * xterm，直到组件变为可见再重放。
+     */
+    const deferredWrites: string[] = [];
+    /**
+     * 主 effect 向可见性 effect 暴露的重放句柄：把 deferredWrites
+     * 里暂存的 restore 输出 + 隐藏期实时数据一次性写入 xterm。
+     * 两 effect 无法共享局部数组，通过 ref 传递闭包。
+     */
+    const flushDeferred = (): void => {
+      const term = termRef.current;
+      if (!term) return;
+      while (deferredWrites.length > 0) {
+        const batch = deferredWrites.splice(0, 50);
+        for (const data of batch) term.write(data);
+      }
+    };
+    flushDeferredRef.current = flushDeferred;
 
     const inputDisposable = term.onData((data) => {
       void writeToTerminalRef(terminalId, data);
@@ -321,7 +378,13 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
       cleanup = window.eventBridge.onTerminalData(({ id, data }) => {
         if (id === terminalId && termRef.current) {
           if (outputRestored) {
-            termRef.current.write(data);
+            // hidden 挂载的终端暂存数据（不可见终端写入只占渲染帧），
+            // 变为可见时在 visibility effect 中统一重放
+            if (hiddenRef.current) {
+              deferredWrites.push(data);
+            } else {
+              termRef.current.write(data);
+            }
           } else {
             pendingData.push(data);
           }
@@ -330,35 +393,39 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
     }
 
     trpc.terminal.getOutputBuffer
-      .query({ terminalId })
+      .query({ terminalId, maxChars: RESTORE_MAX_CHARS })
       .then((chunks) => {
         if (!termRef.current) {
           outputRestored = true;
           return;
         }
-        if (chunks.length > 0) {
-          termRef.current.write(chunks.join(''));
-        }
-        if (pendingData.length > 0) {
-          for (const data of pendingData) {
-            termRef.current.write(data);
-          }
+        // 分块顺序 write，不再 join 成一份完整大字符串拷贝。
+        // 隐藏挂载时 restore 结果也进 deferredWrites，等可见时重放。
+        if (hiddenRef.current) {
+          for (const chunk of chunks) deferredWrites.push(chunk);
+          for (const data of pendingData) deferredWrites.push(data);
+        } else {
+          for (const chunk of chunks) termRef.current.write(chunk);
+          for (const data of pendingData) termRef.current.write(data);
         }
         outputRestored = true;
+        if (!hiddenRef.current) setRestoring(false);
       })
       .catch((err) => {
         console.warn(`[TerminalView] Failed to restore output buffer for ${terminalId}:`, err);
         outputRestored = true;
+        if (!hiddenRef.current) setRestoring(false);
       });
 
     // ── 窗口 resize 期间的 fit 防抖 ─────────────────────────────
     // fit() 每次调用都全量重算网格并整屏重绘。拖拽窗口边框 / 最大化时
     // ResizeObserver 每帧回调，同步 fit 会让 10 万行 scrollback 的
     // 整屏重绘挤占主线程（掉帧直到 resize 结束）。聚到一帧只在尺寸
-    // 停稳后做一次。
+    // 停稳后做一次。隐藏（keep-alive display:none）时容器尺寸为 0，
+    // fit 既无意义又会抛错，直接跳过。
     let fitPending = false;
     const scheduleFit = () => {
-      if (fitPending) return;
+      if (fitPending || hiddenRef.current) return;
       fitPending = true;
       window.requestAnimationFrame(() => {
         fitPending = false;
@@ -428,8 +495,28 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
       term.dispose();
       termRef.current = null;
       fitRef.current = null;
+      flushDeferredRef.current = null;
     };
+    // hidden 有意不进依赖：hidden 变化只应触发可见性 effect（重放 +
+    // fit），重建 xterm 实例会销毁 10 万行 scrollback，恰恰是要避免的。
+    // 当前隐藏状态经 hiddenRef 读取。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminalId, writeToTerminalRef, resizeTerminalRef, createDecoration]);
+
+  // ── 可见性切换：keep-alive 隐藏 → 可见 ───────────────────────
+  // hidden 挂载期间 restore 输出与实时数据都暂存在主 effect 的
+  // deferredWrites；变为可见时经 flushDeferredRef 统一写入 xterm、
+  // 补一次 fit（隐藏期跳过了初始 fit），并揭掉恢复占位层。
+  useEffect(() => {
+    if (hidden) return;
+    flushDeferredRef.current?.();
+    try {
+      fitRef.current?.fit();
+    } catch {
+      // ignore fit errors during teardown
+    }
+    setRestoring(false);
+  }, [hidden, terminalId]);
 
   // 主题切换时同步终端配色（Issue #3）
   useEffect(() => {
@@ -451,6 +538,16 @@ export function TerminalView({ terminalId }: TerminalViewProps) {
         ref={containerRef}
         className="h-full w-full"
       />
+      {/* 恢复期占位层：remount 后从 outputBuffer 重放期间覆盖终端，
+          避免用户盯着空白等几秒；restore 完成后淡出 */}
+      {restoring && (
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-background">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground" />
+            <span>正在恢复终端输出…</span>
+          </div>
+        </div>
+      )}
       {/* Copy button — always visible in the top-right corner */}
       <button
         onClick={() => void copySelection()}
