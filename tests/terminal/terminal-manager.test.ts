@@ -290,6 +290,37 @@ describe('TerminalManager', () => {
     expect(manager.getOutputBuffer(session.id).join('')).toContain('retained-output');
   });
 
+  describe('getOutputBufferTail', () => {
+    it('returns the newest chunks in original order when under the budget', () => {
+      manager = new TerminalManager();
+      const session = manager.createSessionForTest(['a', 'b', 'c']);
+      expect(manager.getOutputBufferTail(session.id, 100)).toEqual(['a', 'b', 'c']);
+    });
+
+    it('keeps only the tail of the last chunk when the budget is smaller than it', () => {
+      manager = new TerminalManager();
+      const session = manager.createSessionForTest(['0123456789', 'abcdefghij']);
+      expect(manager.getOutputBufferTail(session.id, 4)).toEqual(['ghij']);
+    });
+
+    it('drops oldest chunks first once the budget is exhausted', () => {
+      manager = new TerminalManager();
+      const session = manager.createSessionForTest(['aaa', 'bbb', 'ccc']);
+      expect(manager.getOutputBufferTail(session.id, 6)).toEqual(['bbb', 'ccc']);
+    });
+
+    it('returns an empty array for a zero budget', () => {
+      manager = new TerminalManager();
+      const session = manager.createSessionForTest(['aaa', 'bbb']);
+      expect(manager.getOutputBufferTail(session.id, 0)).toEqual([]);
+    });
+
+    it('returns an empty array for a session with no output', () => {
+      manager = new TerminalManager();
+      expect(manager.getOutputBufferTail('nonexistent', 100)).toEqual([]);
+    });
+  });
+
   // POSIX-only: process groups and process.kill(-pid) do not exist on Windows.
   it.skipIf(process.platform === 'win32')(
     'log-mode abort kills the whole simulation process tree (grandchild dies with the group)',
