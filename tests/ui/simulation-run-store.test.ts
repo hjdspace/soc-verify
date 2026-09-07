@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   listActiveRuns: vi.fn(),
   getRunDetail: vi.fn(),
   rerunWithCommand: vi.fn(),
+  getHistory: vi.fn(),
 }));
 
 vi.mock('@renderer/lib/trpc', () => ({
@@ -19,6 +20,7 @@ vi.mock('@renderer/lib/trpc', () => ({
       listActiveRuns: { query: mocks.listActiveRuns },
       getRunDetail: { query: mocks.getRunDetail },
       rerunWithCommand: { mutate: mocks.rerunWithCommand },
+      getHistory: { query: mocks.getHistory },
     },
   },
 }));
@@ -373,5 +375,126 @@ describe('Terminal Simulation Run launch', () => {
     expect(mocks.abortTerminalRun).toHaveBeenCalledWith({ terminalId: 'term-3' });
     expect(mocks.abort).toHaveBeenCalledTimes(1);
     expect(mocks.abort).toHaveBeenCalledWith({ projectId: 'project-1', runId: 'r-plugin' });
+  });
+});
+
+describe('simulation:event → 运行列表实时状态更新（修复状态卡在「进行中」）', () => {
+  const eventCallbacks: Array<(data: { type: string; record: unknown }) => void> = [];
+
+  /** 模拟主进程通过 IPC simulation:event 推送事件 */
+  const fireSimulationEvent = (type: string, record: unknown) => {
+    for (const cb of eventCallbacks) cb({ type, record });
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // 不清空 eventCallbacks：eventListenerRegistered 为模块级标志，
+    // 首个注册类测试触发注册后，后续测试依赖同一回调实例
+    // mock window.eventBridge（preload 注入的 IPC 事件桥）
+    (window as unknown as { eventBridge: unknown }).eventBridge = {
+      onSimulationEvent: (cb: (data: { type: string; record: unknown }) => void) => {
+        eventCallbacks.push(cb);
+        return () => {
+          const i = eventCallbacks.indexOf(cb);
+          if (i >= 0) eventCallbacks.splice(i, 1);
+        };
+      },
+    };
+    useSimulationStore.setState({ activeRuns: [], simOptions: {} });
+    mocks.runInTerminal.mockResolvedValue({
+      runId: 'run-1',
+      terminalId: 'terminal-1',
+      command: 'runsim case_a',
+      cwd: 'D:/project/sim',
+    });
+    mocks.listActiveRuns.mockResolvedValue([]);
+  });
+
+  it('loadActiveRuns 挂载即注册监听（幂等）：覆盖 AI 工具卡/终端工具栏等绕过 store 的启动入口', async () => {
+    // 本测试位于 describe 首位：此前用例未设置 window.eventBridge，
+    // 模块级监听尚未注册，loadActiveRuns 应触发首次注册
+    expect(eventCallbacks.length).toBe(0);
+    await useSimulationStore.getState().loadActiveRuns('project-1');
+    expect(eventCallbacks.length).toBe(1);
+  });
+
+  it('startCaseRun 注册 simulation:event 监听，completed 事件实时将运行状态更新为 pass', async () => {
+    await useSimulationStore.getState().startCaseRun('project-1', { name: 'case_a', subsys: 'core' });
+    // 启动即有监听（修复点：监听原本只在 startCaseRun 内条件注册）
+    expect(eventCallbacks.length).toBeGreaterThanOrEqual(1);
+
+    const endTime = Date.now();
+    fireSimulationEvent('completed', {
+      runId: 'run-1',
+      projectId: 'project-1',
+      caseId: 'case_a',
+      status: 'pass',
+      startTime: endTime - 5000,
+      endTime,
+    });
+
+    const run = useSimulationStore.getState().activeRuns.find((r) => r.runId === 'run-1');
+    expect(run).toBeDefined();
+    expect(run?.status).toBe('pass');
+    expect(run?.endTime).toBe(endTime);
+  });
+
+  it('completed 事件触发 loadActiveRuns 自愈刷新：本地记录缺失/runId 不匹配时也能从后端拉到终态', async () => {
+    // 后端 listActiveRuns 已合并 linker/DB 终态，返回 pass 记录
+    const now = Date.now();
+    mocks.listActiveRuns.mockResolvedValue([
+      {
+        runId: 'run-remote',
+        projectId: 'project-1',
+        options: { caseId: 'case_a', caseName: 'case_a', subsys: 'core', options: {} },
+        status: { runId: 'run-remote', status: 'pass', startTime: now - 5000, endTime: now },
+        startTime: now - 5000,
+        endTime: now,
+      },
+    ]);
+    // 本地只有一条 running 记录（如 AI 工具卡启动、started 事件未被处理时的残留）
+    useSimulationStore.setState({
+      activeRuns: [
+        { runId: 'run-local', projectId: 'project-1', caseId: 'case_a', caseName: 'case_a', subsys: 'core', status: 'running', startTime: now },
+      ],
+    });
+
+    // 完成事件携带的 runId 与本地记录不一致（本地为 run-local）
+    useSimulationStore.getState().handleSimulationEvent('completed', {
+      runId: 'run-remote',
+      projectId: 'project-1',
+      caseId: 'case_a',
+      status: 'pass',
+      startTime: now - 5000,
+      endTime: now,
+    });
+
+    // 应触发 loadActiveRuns 从后端拉取最新运行列表
+    await vi.waitFor(() => {
+      expect(mocks.listActiveRuns).toHaveBeenCalledWith({ projectId: 'project-1' });
+    });
+    const runs = useSimulationStore.getState().activeRuns;
+    expect(runs.some((r) => r.runId === 'run-remote' && r.status === 'pass')).toBe(true);
+  });
+
+  it('completed 事件同时触发 loadHistory 刷新历史', async () => {
+    useSimulationStore.setState({
+      activeRuns: [
+        { runId: 'run-1', projectId: 'project-1', caseId: 'case_a', subsys: 'core', status: 'running', startTime: Date.now() },
+      ],
+    });
+
+    useSimulationStore.getState().handleSimulationEvent('completed', {
+      runId: 'run-1',
+      projectId: 'project-1',
+      caseId: 'case_a',
+      status: 'pass',
+      startTime: Date.now(),
+      endTime: Date.now(),
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.getHistory).toHaveBeenCalledWith({ projectId: 'project-1' });
+    });
   });
 });
