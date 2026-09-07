@@ -441,7 +441,7 @@ export function refresh(projectId: string, projectRoot: string): Promise<DesignR
     }
     const missingDlls = yosysMissingDlls() ?? [];
     if (missingDlls.length > 0) {
-      return fail(projectId, projectRoot, `yosys 依赖 DLL 缺失: ${missingDlls.join(', ')}（必须与 exe 同目录，重新运行 npm run download:rtl-tools）`);
+      return fail(projectId, projectRoot, `yosys 依赖缺失: ${missingDlls.join(', ')}（重新运行 npm run download:rtl-tools 修复布局）`);
     }
 
     // 展开多 .f → 扁平清单（绝对路径）
