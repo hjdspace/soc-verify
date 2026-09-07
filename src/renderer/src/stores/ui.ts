@@ -62,6 +62,12 @@ interface UiState {
    * 仿真视图 DOM（切走隐藏而非卸载），避免万级用例树反复重建导致切换卡顿 */
   simulationViewMounted: boolean;
   setSimulationViewMounted: (mounted: boolean) => void;
+  /** workspace 视图 keep-alive：首次进入 workspace 后置位，常驻保留
+   * 多 Tab 工作台 DOM（切走隐藏而非卸载）。工作台里的终端 tab 依赖
+   * TerminalKeepAliveLayer 常驻 xterm 实例，视图卸载会连带销毁终端
+   * 缓冲（切回空白几秒的根因），因此 workspace 也必须常驻。 */
+  workspaceViewMounted: boolean;
+  setWorkspaceViewMounted: (mounted: boolean) => void;
   pluginViewLayouts: PluginViewLayouts;
   setActiveView: (view: ActiveView) => void;
   toggleLeftDrawer: () => void;
@@ -133,6 +139,8 @@ export const useUiStore = create<UiState>((set) => ({
   designTreeWidth: DESIGN_TREE_DEFAULT_WIDTH,
   simulationViewMounted: false,
   setSimulationViewMounted: (mounted) => set({ simulationViewMounted: mounted }),
+  workspaceViewMounted: false,
+  setWorkspaceViewMounted: (mounted) => set({ workspaceViewMounted: mounted }),
   pluginViewLayouts: DEFAULT_PLUGIN_VIEW_LAYOUTS,
   // 切换视图时自动关闭所有抽屉（原型 §2.1-3：mission-control 行为闭环）
   setActiveView: (view) =>
