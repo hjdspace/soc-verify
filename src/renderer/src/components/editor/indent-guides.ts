@@ -7,7 +7,8 @@ import { EditorView, ViewPlugin, type ViewUpdate, Decoration, type DecorationSet
 // 渲染一条淡色竖线。仅渲染视口可见行，大文件不卡顿。
 // 缩进指南线颜色使用 CSS 变量 --border，随主题变化。
 
-class IndentGuideWidget extends WidgetType {
+/** 缩进指南线 widget（导出用于测试）：零宽标记，画线位置由 --guide-col 控制 */
+export class IndentGuideWidget extends WidgetType {
   constructor(readonly level: number) {
     super();
   }
@@ -15,24 +16,28 @@ class IndentGuideWidget extends WidgetType {
   toDOM(): HTMLElement {
     const el = document.createElement('span');
     el.className = 'cm-indent-guide';
-    el.style.marginLeft = `${(this.level - 1) * 2}ch`;
+    // 画线位置通过 CSS 变量交给 ::before 绝对定位完成。
+    // widget 本身必须零宽（不设 margin、不占布局空间）——
+    // 否则多级缩进时会把行内容（尤其是 tab 缩进的日志）整体向右推开。
+    el.style.setProperty('--guide-col', `${(this.level - 1) * 2}ch`);
     return el;
   }
 
-  ignore(): boolean {
+  ignoreEvent(_event: Event): boolean {
     return true;
   }
 }
 
-/** 计算一行的缩进级别（每 2 空格 = 1 级，tab = 8 空格） */
-function getIndentLevel(text: string): number {
-  let count = 0;
+/** 计算一行的缩进级别（每 2 列 = 1 级；tab 按 tabSize=2 对齐 tab stop 折算，与编辑器渲染一致） */
+export function getIndentLevel(text: string): number {
+  let col = 0;
   for (let i = 0; i < text.length; i++) {
-    if (text[i] === ' ') count++;
-    else if (text[i] === '\t') count += 8;
+    const ch = text[i];
+    if (ch === ' ') col++;
+    else if (ch === '\t') col += 2 - (col % 2); // tab 前进到下一个 2 列的倍数
     else break;
   }
-  return Math.floor(count / 2);
+  return Math.floor(col / 2);
 }
 
 function buildIndentGuides(view: EditorView): DecorationSet {
