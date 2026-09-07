@@ -85,6 +85,24 @@ interface SimulationStoreState {
 let eventListenerRegistered = false;
 
 /**
+ * 幂等注册 simulation:event IPC 监听（模块级仅一次）。
+ *
+ * 必须在所有可能启动/刷新仿真的入口调用（startCaseRun / rerunRun /
+ * loadActiveRuns / AppShell 挂载），因为仿真启动入口不止 startCaseRun 一个：
+ * AI 工具卡（useSimRunAction）、终端工具栏重跑（SimControlToolbar）等
+ * 直接调用 tRPC，若未注册监听，渲染端收不到 run:completed 事件，
+ * 运行列表状态会卡在「进行中」，直到视图重新挂载触发 loadActiveRuns 才刷新。
+ */
+export function ensureSimulationEventListener(): void {
+  if (eventListenerRegistered) return;
+  if (typeof window === 'undefined' || !window.eventBridge) return;
+  eventListenerRegistered = true;
+  window.eventBridge.onSimulationEvent(({ type, record }) => {
+    useSimulationStore.getState().handleSimulationEvent(type, record);
+  });
+}
+
+/**
  * 从运行 options 提取 seed。两种来源结构不同：
  * - 终端运行（simTerminalLinker）：options 即 simOptions 本体，seed 在顶层；
  * - 插件运行（SimulationManager）：options 为 SimulationRunOptions，seed 在内层 options。
@@ -199,12 +217,7 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
       }
 
       // Register IPC event listener once
-      if (!eventListenerRegistered && window.eventBridge) {
-        eventListenerRegistered = true;
-        window.eventBridge.onSimulationEvent(({ type, record }) => {
-          get().handleSimulationEvent(type, record);
-        });
-      }
+      ensureSimulationEventListener();
 
       useToastStore.getState().info(`仿真已启动 (终端): ${simulationCase.name}`);
       return result.runId;
@@ -271,6 +284,9 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
       useToastStore.getState().error('无法重跑', '该运行没有可重放的命令');
       return null;
     }
+    // rerunRun 是独立于 startCaseRun 的启动入口（运行详情「重新仿真」、
+    // 命令面板重跑失败用例），同样需要确保事件监听已注册
+    ensureSimulationEventListener();
     try {
       const result = await trpc.simulation.rerunWithCommand.mutate({
         projectId: run.projectId,
@@ -346,6 +362,7 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
   },
 
   loadHistory: async (projectId) => {
+    ensureSimulationEventListener();
     set({ loadingHistory: true });
     try {
       const history = await trpc.simulation.getHistory.query({ projectId });
@@ -357,6 +374,9 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
   },
 
   loadActiveRuns: async (projectId) => {
+    // 仿真视图/运行列表面板/总览挂载即注册事件监听（幂等）——
+    // 覆盖通过 AI 工具卡、终端工具栏等绕过 store 启动的仿真
+    ensureSimulationEventListener();
     set({ loadingActiveRuns: true });
     try {
       const runs = await trpc.simulation.listActiveRuns.query({ projectId });
@@ -521,7 +541,13 @@ export const useSimulationStore = create<SimulationStoreState>((set, get) => ({
         // Auto-refresh history
         {
           const projectId = ipcRecord.projectId;
-          if (projectId) void get().loadHistory(projectId);
+          if (projectId) {
+            void get().loadHistory(projectId);
+            // 自愈刷新：无论本地记录是否存在/runId 是否匹配，都从后端
+            // 拉取一次最新运行列表（后端已合并 linker/DB 终态），确保
+            // 运行列表实时反映终态，不会卡在「进行中」
+            void get().loadActiveRuns(projectId);
+          }
         }
         // Trigger automatic error analysis on FAIL
         if (statusStr === 'fail' || statusStr === 'error') {
