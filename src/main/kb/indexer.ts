@@ -30,7 +30,6 @@
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
-import { existsSync } from 'node:fs';
 import type { IndexEntry, ClassificationResult } from './types';
 import { type LlmConfig, protocolForProvider } from './llm-config';
 import { buildDirectChatRequest, extractOpenAiFamilyContent } from '../agent/openai-compatible';
@@ -667,8 +666,10 @@ export async function upsertIndexEntry(
   entry: IndexEntry,
 ): Promise<void> {
   let indexContent = '';
-  if (existsSync(indexMdPath)) {
+  try {
     indexContent = await readFile(indexMdPath, 'utf-8');
+  } catch {
+    // 文件不存在 → 从空索引起步
   }
 
   const { entries, categoryOrder } = parseIndexMd(indexContent);
@@ -692,8 +693,10 @@ export async function removeFromIndex(
   markdownRelPath: string,
 ): Promise<void> {
   let content = '';
-  if (existsSync(indexMdPath)) {
+  try {
     content = await readFile(indexMdPath, 'utf-8');
+  } catch {
+    // 文件不存在 → 无条目可移除，直接写空索引
   }
   const updated = removeEntry(content, markdownRelPath);
   await writeFile(indexMdPath, updated, 'utf-8');
