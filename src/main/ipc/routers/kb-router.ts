@@ -199,16 +199,14 @@ export const kbRouter = t.router({
         return { ok: false, error: result.error };
       }
 
-      // 挂载成功后自动扫描库目录下的文档
+      // 挂载成功后自动扫描库目录下的文档。
+      // status 只做挂载表 + 注册表查询（无目录扫描），此前用 kbRegistry.list()
+      // 取路径会顺带对所有注册库做全量文档统计——挂载时拖慢主进程。
       try {
-        const entries = await kbRegistry.list(rootPath);
-        const mounted = entries.find((e) => e.id === input.kbId);
-        if (mounted) {
-          const scanResult = await autoScanDocuments(mounted.path, notifyKbStatus);
-          if (scanResult.scanned > 0) {
-            // 异步触发上传，不阻塞 mount 响应
-            void scanResult;
-          }
+        const status = await kbRegistry.status(rootPath);
+        const mountedPath = status.mounted?.path;
+        if (mountedPath) {
+          const scanResult = await autoScanDocuments(mountedPath, notifyKbStatus);
           return { ok: true, data: result.data, autoScanned: scanResult.scanned };
         }
       } catch {
