@@ -17,6 +17,12 @@ type GraphViewerGraph = {
    */
   zoom?: (factor: number) => void;
   /**
+   * mxGraph.prototype.centerZoom。true 时 zoom() 以视口中心为锚点；
+   * viewer-static.min.js 初始化时硬编码为 false，需改回 true，
+   * 否则缩放往返后视口中心漂移（见 DrawioViewer 文件头注释）。
+   */
+  centerZoom?: boolean;
+  /**
    * mxGraph.prototype.resizeContainer。
    * true 时 sizeDidChange → doResizeContainer 会把容器 inline width/height
    * 设为内容大小，覆盖 CSS。viewer 配置 resize:true 会开启此行为。
