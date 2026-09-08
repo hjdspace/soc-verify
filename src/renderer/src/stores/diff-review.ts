@@ -488,7 +488,26 @@ export function openReviewAwareFile(filePath: string, _fileName: string): void {
         open();
         return;
       }
-      useToastStore.getState().error('文件不存在，已取消打开', resolvedPath);
+      // `~` 前缀是 home 简写，不在项目树内——回退的项目内模糊查找注定无意义，直接提示
+      if (barePath === '~' || barePath.startsWith('~/') || barePath.startsWith('~\\')) {
+        useToastStore.getState().error('文件不存在，已取消打开', resolvedPath);
+        return;
+      }
+      // 直接解析失败的回退：AI 文本中的引用可能只写裸文件名（如 globals.css）、
+      // 以子目录为基准的相对路径（../rtl/core.sv）或错误的相对目录，按文件名/
+      // 路径后缀在项目内模糊查找，命中则打开最浅匹配。
+      void trpc.project.findFileByName
+        .query({ projectId, refPath: barePath })
+        .then((matches) => {
+          if (matches.length > 0) {
+            useDiffReviewStore.getState().openFile(matches[0], lineRange);
+            return;
+          }
+          useToastStore.getState().error('文件不存在，已取消打开', resolvedPath);
+        })
+        .catch(() => {
+          useToastStore.getState().error('文件不存在，已取消打开', resolvedPath);
+        });
     })
     .catch(open);
 }
