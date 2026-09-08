@@ -157,6 +157,54 @@ describe('kbLayout.findMarkdown', () => {
   });
 });
 
+// ── listMarkdownFiles ─────────────────────────────────────────────
+
+describe('kbLayout.listMarkdownFiles', () => {
+  let kbPath: string;
+
+  beforeEach(async () => {
+    kbPath = await makeFullKb();
+  });
+
+  afterEach(async () => {
+    await rm(kbPath, { recursive: true, force: true });
+  });
+
+  it('一次扫描返回根目录 + 各分类子目录的 .md（键为文档名）', async () => {
+    const layout = kbLayout(kbPath);
+    await writeFile(layout.rootMdPath('文档A'), '# 文档A');
+    await mkdir(layout.categoryDir('协议手册'), { recursive: true });
+    await writeFile(layout.categoryMdPath('协议手册', 'DDR5'), '# DDR5');
+    await mkdir(layout.categoryDir('验证计划'), { recursive: true });
+    await writeFile(layout.categoryMdPath('验证计划', 'plan'), '# plan');
+
+    const files = await layout.listMarkdownFiles();
+    expect(files.size).toBe(3);
+    expect(files.get('文档A')).toBe(layout.rootMdPath('文档A'));
+    expect(files.get('DDR5')).toBe(layout.categoryMdPath('协议手册', 'DDR5'));
+    expect(files.get('plan')).toBe(layout.categoryMdPath('验证计划', 'plan'));
+  });
+
+  it('跳过 assets 目录且不含非 .md 文件', async () => {
+    const layout = kbLayout(kbPath);
+    await writeFile(layout.rootMdPath('文档A'), '# 文档A');
+    await mkdir(layout.assetsDir('文档A'), { recursive: true });
+    await writeFile(join(layout.assetsDir('文档A'), '图片.md'), '# not here');
+    await writeFile(join(layout.docsDir, 'notes.txt'), 'not md');
+
+    const files = await layout.listMarkdownFiles();
+    expect(files.size).toBe(1);
+    expect(files.has('图片')).toBe(false);
+    expect(files.has('文档A')).toBe(true);
+  });
+
+  it('docs/ 不存在时返回空 Map', async () => {
+    const layout = kbLayout(join(kbPath, 'not-exist'));
+    const files = await layout.listMarkdownFiles();
+    expect(files.size).toBe(0);
+  });
+});
+
 // ── findSource / listSourceFiles ─────────────────────────────────
 
 describe('kbLayout.findSource / listSourceFiles', () => {
@@ -322,8 +370,8 @@ describe('checkKbHealth', () => {
     await rm(kbPath, { recursive: true, force: true });
   });
 
-  it('空目录全部 false', () => {
-    const health = checkKbHealth(kbPath);
+  it('空目录全部 false', async () => {
+    const health = await checkKbHealth(kbPath);
     expect(health.hasSources).toBe(false);
     expect(health.hasDocs).toBe(false);
     expect(health.hasIndex).toBe(false);
@@ -331,7 +379,7 @@ describe('checkKbHealth', () => {
 
   it('初始化后全部 true', async () => {
     await initKbLayout(kbPath);
-    const health = checkKbHealth(kbPath);
+    const health = await checkKbHealth(kbPath);
     expect(health.hasSources).toBe(true);
     expect(health.hasDocs).toBe(true);
     expect(health.hasIndex).toBe(true);
@@ -342,7 +390,7 @@ describe('checkKbHealth', () => {
     await mkdir(layout.sourcesDir, { recursive: true });
     // docs/ 不存在，index.md 不存在
 
-    const health = checkKbHealth(kbPath);
+    const health = await checkKbHealth(kbPath);
     expect(health.hasSources).toBe(true);
     expect(health.hasDocs).toBe(false);
     expect(health.hasIndex).toBe(false);
