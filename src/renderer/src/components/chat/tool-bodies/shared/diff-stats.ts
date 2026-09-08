@@ -25,18 +25,35 @@ function resultDetails(result: unknown): Record<string, unknown> | null {
     : null;
 }
 
-/** 解析 omp edit 返回的 details.diff（`+N|line` / `-N|line` 行格式） */
-function parseResultDiffLines(diff: string): DiffLineData[] {
+/**
+ * 解析 omp edit 返回的 details.diff。兼容两种格式：
+ * - 编号 diff（generateDiffString）：`+N|line` / `-N|line` / ` N|line`，gap 行为空行或 `…`
+ * - unified diff（generateUnifiedDiffString，patch 模式）：`@@` hunk + `+`/`-`/` ` 行
+ */
+export function parseResultDiffLines(diff: string): DiffLineData[] {
   const lines: DiffLineData[] = [];
   for (const line of diff.split('\n')) {
-    const addMatch = /^\+\s*\d+\|(.*)$/.exec(line);
-    if (addMatch) {
-      lines.push({ type: 'add', content: addMatch[1] });
+    // unified diff 文件头行不计入变更
+    if (line.startsWith('+++') || line.startsWith('---')) continue;
+    const numbered = /^([+\- ])(\d+)\|(.*)$/.exec(line);
+    if (numbered) {
+      const [, prefix, num, content] = numbered;
+      if (prefix === '+') lines.push({ type: 'add', content, newLine: Number(num) });
+      else if (prefix === '-') lines.push({ type: 'del', content, oldLine: Number(num) });
+      else lines.push({ type: 'ctx', content, oldLine: Number(num) });
       continue;
     }
-    const delMatch = /^-\s*\d+\|(.*)$/.exec(line);
-    if (delMatch) {
-      lines.push({ type: 'del', content: delMatch[1] });
+    // gap 行（空行 / 省略号）：分隔不连续区域
+    if (line === '' || line === '…' || line === '...') {
+      if (lines.length > 0) lines.push({ type: 'ctx', content: '…' });
+      continue;
+    }
+    if (line.startsWith('+')) {
+      lines.push({ type: 'add', content: line.slice(1) });
+      continue;
+    }
+    if (line.startsWith('-')) {
+      lines.push({ type: 'del', content: line.slice(1) });
       continue;
     }
     lines.push({ type: 'ctx', content: line });
@@ -61,6 +78,26 @@ function countLines(lines: DiffLineData[]): FileDiffStats {
     added: lines.filter((l) => l.type === 'add').length,
     deleted: lines.filter((l) => l.type === 'del').length,
   };
+}
+
+/**
+ * 从 omp edit 工具结果的 details 中提取行级 diff（EditBody 展开体复用）。
+ * 数据源优先级：details.diff（编号/unified 均可）→ details.oldText + details.newText。
+ * omp 全部 edit 模式（hashline / replace / patch / sloppy）成功时都会填充这两个字段，
+ * 因此这是展开体渲染 diff 的最可靠数据源。
+ */
+export function getEditDetailDiff(toolResult: unknown): DiffLineData[] | null {
+  const details = resultDetails(toolResult);
+  if (!details) return null;
+  if (typeof details.diff === 'string') {
+    const lines = parseResultDiffLines(details.diff);
+    if (lines.some((l) => l.type !== 'ctx')) return lines;
+  }
+  if (typeof details.oldText === 'string' && typeof details.newText === 'string'
+    && details.oldText !== details.newText) {
+    return computeSimpleDiff(details.oldText, details.newText);
+  }
+  return null;
 }
 
 /** 编辑类工具的行级 diff 数据（不含路径），统计数字由此派生 */
