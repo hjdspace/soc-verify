@@ -337,7 +337,7 @@ export function KbDocList() {
                         <RotateCcw className="h-3.5 w-3.5" />
                       </button>
                     )}
-                    {doc.status !== 'converting' && doc.status !== 'classifying' && doc.status !== 'queued' && (
+                    {doc.status !== 'converting' && doc.status !== 'classifying' && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
