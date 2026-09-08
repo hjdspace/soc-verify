@@ -6,6 +6,7 @@ vi.mock('@renderer/lib/trpc', () => ({
       getFileDiff: { query: vi.fn() },
       applyDiffRejections: { mutate: vi.fn() },
       fileExists: { query: vi.fn() },
+      findFileByName: { query: vi.fn() },
     },
   },
 }));
@@ -181,6 +182,8 @@ describe('Diff Review flow', () => {
     vi.mocked(trpc.project.applyDiffRejections.mutate).mockReset();
     // openReviewAwareFile 打开前会做存在性校验，默认所有路径存在；负向用例单独覆盖
     vi.mocked(trpc.project.fileExists.query).mockResolvedValue(true);
+    // 存在性校验失败时的按名回退查找，默认无匹配；命中用例单独覆盖
+    vi.mocked(trpc.project.findFileByName.query).mockResolvedValue([]);
   });
 
   it('automatically projects completed editing tool events into the global Review Queue', () => {
@@ -559,6 +562,35 @@ describe('Diff Review flow', () => {
       projectId: 'project-1',
       filePath: 'D:/project/Tavily/Exa/Firecrawl/Z.AI',
     });
+  });
+
+  it('falls back to findFileByName and opens the shallowest match when direct resolution fails', async () => {
+    useProjectStore.setState({
+      currentProjectId: 'project-1',
+      projects: [{ id: 'project-1', name: 'Project', rootPath: 'D:\\project', createdAt: 1, lastOpenedAt: 1 }],
+    });
+    // 清掉前序用例残留的 toast，让"未产生新错误"断言只反映本用例行为
+    useToastStore.setState({ toasts: [] });
+    // 直接拼接项目根不存在（真实文件在子目录中），回退按文件名查找命中
+    vi.mocked(trpc.project.fileExists.query).mockResolvedValue(false);
+    vi.mocked(trpc.project.findFileByName.query).mockResolvedValue([
+      'D:/project/src/renderer/src/styles/globals.css',
+      'D:/project/src/other/globals.css',
+    ]);
+
+    openReviewAwareFile('globals.css', 'globals.css');
+
+    await vi.waitFor(() => expect(useWorkbenchStore.getState().tabs[0]?.destination).toBeDefined());
+    expect(trpc.project.findFileByName.query).toHaveBeenCalledWith({
+      projectId: 'project-1',
+      refPath: 'globals.css',
+    });
+    expect(useWorkbenchStore.getState().tabs[0]?.destination).toEqual({
+      type: 'file',
+      path: 'D:/project/src/renderer/src/styles/globals.css',
+      name: 'globals.css',
+    });
+    expect(useToastStore.getState().toasts.some((t) => t.message === '文件不存在，已取消打开')).toBe(false);
   });
 
   it('opens an absolute path with a :line suffix with reveal info against the queue', async () => {
