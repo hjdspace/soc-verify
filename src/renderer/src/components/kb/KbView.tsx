@@ -34,6 +34,9 @@ export function KbView() {
   const setActiveTab = useKbStore((s) => s.setActiveTab);
   const loadIndex = useKbStore((s) => s.loadIndex);
 
+  // 挂载库标识（只在真正换库时重新加载，status 轮询刷新不重复触发）
+  const mountedKbId = kbStatus?.mounted?.kbId ?? null;
+
   // ─── Mount: 加载初始数据 ──────────────────────────────────
   useEffect(() => {
     void loadKbList();
@@ -42,18 +45,18 @@ export function KbView() {
 
   // ─── 挂载库变化时加载分类与文档 ────────────────────────────
   useEffect(() => {
-    if (kbStatus?.mounted) {
+    if (mountedKbId) {
       void loadCategories();
       void loadDocuments();
     }
-  }, [kbStatus?.mounted, loadCategories, loadDocuments]);
+  }, [mountedKbId, loadCategories, loadDocuments]);
 
   // ─── 索引 Tab 激活时加载索引内容 ────────────────────────────
   useEffect(() => {
-    if (kbStatus?.mounted && activeTab === 'index') {
+    if (mountedKbId && activeTab === 'index') {
       void loadIndex();
     }
-  }, [kbStatus?.mounted, activeTab, loadIndex]);
+  }, [mountedKbId, activeTab, loadIndex]);
 
   // ─── 订阅 kb:docStatus 事件 ───────────────────────────────
   useEffect(() => {
