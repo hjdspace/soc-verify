@@ -334,7 +334,7 @@ export function createKbTools(ctx: ToolContext): HostToolEntry[] {
 
     defineTool(
       'kb_search',
-      'Search the mounted knowledge base for documents matching a query. Searches document titles, summaries, keywords (from the index), and full-text content of all Markdown files. Returns a ranked list with relative paths, absolute paths, and a content snippet for full-text matches so you can judge relevance before reading. Use this to find relevant documents in the knowledge base before reading them. If no knowledge base is mounted, returns an error. Results are limited to 20 entries by default.',
+      'Search the mounted knowledge base for documents matching a query. Searches document titles, summaries, keywords (from the index), and full-text content of all Markdown files. Returns a ranked list; the path field of each result is the absolute file path of the document — use it directly with your read tool (relative paths will not resolve because the knowledge base directory usually differs from your working directory). A content snippet is included for full-text matches so you can judge relevance before reading. Use this to find relevant documents in the knowledge base before reading them. If no knowledge base is mounted, returns an error. Results are limited to 20 entries by default.',
       {
         type: 'object',
         properties: {
@@ -376,8 +376,9 @@ export function createKbTools(ctx: ToolContext): HostToolEntry[] {
           total: results.length,
           results: results.map((r) => ({
             title: r.title,
-            path: r.path,
-            absolutePath: r.absolutePath,
+            // 绝对路径 — Agent 的 read 工具按会话 cwd 解析相对路径，
+            // 库目录与 cwd 往往不同，相对路径会读到 "Path not found"。
+            path: r.absolutePath,
             category: r.category,
             summary: r.summary,
             snippet: r.snippet ?? null,
