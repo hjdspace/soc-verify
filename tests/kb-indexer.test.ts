@@ -57,6 +57,32 @@ describe('extractSkeleton', () => {
     const skeleton = extractSkeleton(md);
     expect(skeleton).toBe('# 标题\n正文行');
   });
+
+  it('超长行（PDF 表格/内联内容）截断到单行上限，防止 prompt 体积失控', () => {
+    // 60 行 × 每行 5000 字符 = 30 万字符 —— 未修复时直接拖垮 LLM 生成耗时
+    const md = Array.from({ length: 60 }, (_, i) => `第${i}行 ${'x'.repeat(5000)}`).join('\n');
+    const skeleton = extractSkeleton(md);
+
+    for (const line of skeleton.split('\n')) {
+      expect(line.length).toBeLessThanOrEqual(201); // 200 + 截断省略号
+    }
+    expect(skeleton.length).toBeLessThanOrEqual(60 * 201);
+  });
+
+  it('骨架总体积不超过字符上限（超长行场景的真实保险丝）', () => {
+    const md = Array.from({ length: 60 }, (_, i) => `第${i}行 ${'x'.repeat(300)}`).join('\n');
+    const skeleton = extractSkeleton(md);
+
+    // 60 行 × 300+ 字符 ≈ 1.8 万字符，超过 4000 上限后停止收集
+    expect(skeleton.length).toBeLessThanOrEqual(4_000 + 60);
+    expect(skeleton.split('\n').length).toBeLessThan(60);
+  });
+
+  it('标题行同样受单行截断约束', () => {
+    const md = `# ${'超长标题'.repeat(200)}`;
+    const skeleton = extractSkeleton(md);
+    expect(skeleton.length).toBeLessThanOrEqual(201);
+  });
 });
 
 // ── buildClassificationPrompt ────────────────────────────────────
@@ -120,18 +146,22 @@ describe('classifyWithLlm', () => {
     model: 'test-model',
   };
 
+  /** openai chat/completions 成功响应 mock（json + text 双形状） */
+  const okResponse = (payload: unknown): Response => ({
+    ok: true,
+    status: 200,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  } as unknown as Response);
+
   it('成功调用 LLM 并返回分类结果', async () => {
-    const mockResponse = {
-      ok: true,
-      status: 200,
-      json: async () => ({
-        choices: [{
-          message: {
-            content: '{"category": "协议手册", "title": "DDR5", "summary": "DDR5协议", "keywords": ["DDR5"]}',
-          },
-        }],
-      }),
-    } as unknown as Response;
+    const mockResponse = okResponse({
+      choices: [{
+        message: {
+          content: '{"category": "协议手册", "title": "DDR5", "summary": "DDR5协议", "keywords": ["DDR5"]}',
+        },
+      }],
+    });
 
     const fetchMock = vi.fn().mockResolvedValue(mockResponse);
     const result = await classifyWithLlm('骨架', [], { ...config, fetchFn: fetchMock as unknown as typeof fetch });
@@ -152,22 +182,18 @@ describe('classifyWithLlm', () => {
   });
 
   it('apiFormat=openai-responses 时请求 /responses 端点并解析 output_text', async () => {
-    const mockResponse = {
-      ok: true,
-      status: 200,
-      json: async () => ({
-        output: [
-          { type: 'reasoning', summary: [] },
-          {
-            type: 'message',
-            content: [{
-              type: 'output_text',
-              text: '{"category": "协议手册", "title": "DDR5", "summary": "DDR5协议", "keywords": ["DDR5"]}',
-            }],
-          },
-        ],
-      }),
-    } as unknown as Response;
+    const mockResponse = okResponse({
+      output: [
+        { type: 'reasoning', summary: [] },
+        {
+          type: 'message',
+          content: [{
+            type: 'output_text',
+            text: '{"category": "协议手册", "title": "DDR5", "summary": "DDR5协议", "keywords": ["DDR5"]}',
+          }],
+        },
+      ],
+    });
 
     const fetchMock = vi.fn().mockResolvedValue(mockResponse);
     const result = await classifyWithLlm('骨架', [], {
@@ -196,15 +222,11 @@ describe('classifyWithLlm', () => {
   });
 
   it('anthropic 凭证走 /messages 端点 + x-api-key 头', async () => {
-    const mockResponse = {
-      ok: true,
-      status: 200,
-      json: async () => ({
-        content: [
-          { type: 'text', text: '{"category": "验证计划", "title": "PLAN", "summary": "验证计划文档", "keywords": ["UVM"]}' },
-        ],
-      }),
-    } as unknown as Response;
+    const mockResponse = okResponse({
+      content: [
+        { type: 'text', text: '{"category": "验证计划", "title": "PLAN", "summary": "验证计划文档", "keywords": ["UVM"]}' },
+      ],
+    });
 
     const fetchMock = vi.fn().mockResolvedValue(mockResponse);
     const result = await classifyWithLlm('骨架', [], {
@@ -228,15 +250,11 @@ describe('classifyWithLlm', () => {
   });
 
   it('gemini 凭证走 generateContent 端点（key 查询参数）', async () => {
-    const mockResponse = {
-      ok: true,
-      status: 200,
-      json: async () => ({
-        candidates: [{
-          content: { parts: [{ text: '{"category": "协议手册", "title": "AXI", "summary": "AXI协议", "keywords": ["AXI"]}' }] },
-        }],
-      }),
-    } as unknown as Response;
+    const mockResponse = okResponse({
+      candidates: [{
+        content: { parts: [{ text: '{"category": "协议手册", "title": "AXI", "summary": "AXI协议", "keywords": ["AXI"]}' }] },
+      }],
+    });
 
     const fetchMock = vi.fn().mockResolvedValue(mockResponse);
     const result = await classifyWithLlm('骨架', [], {
@@ -271,11 +289,7 @@ describe('classifyWithLlm', () => {
   });
 
   it('LLM 返回格式异常时返回错误', async () => {
-    const mockResponse = {
-      ok: true,
-      status: 200,
-      json: async () => ({ choices: [{ message: {} }] }),
-    } as unknown as Response;
+    const mockResponse = okResponse({ choices: [{ message: {} }] });
 
     const fetchMock = vi.fn().mockResolvedValue(mockResponse);
     const result = await classifyWithLlm('骨架', [], { ...config, fetchFn: fetchMock as unknown as typeof fetch });
@@ -290,6 +304,125 @@ describe('classifyWithLlm', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain('network error');
+    }
+  });
+
+  // ── 超时富化 + 自动重试（修复：This operation was aborted 裸报错）──
+
+  /** 构造 AbortController 触发后 fetch 的拒绝形态（Node 下只有裸 message，靠 name 识别） */
+  const abortRejection = (): Promise<never> => {
+    const err = new Error('This operation was aborted');
+    err.name = 'AbortError';
+    return Promise.reject(err);
+  };
+
+  it('请求超时时返回富化的超时错误（含模型/端点/时限），不再是裸 aborted', async () => {
+    // mock fetch 立即以 AbortError 拒绝（等价于 AbortController 120s 触发后的状态，
+    // 不等待真实计时器，避免测试超时）
+    const fetchMock = vi.fn().mockImplementation(() => abortRejection());
+
+    const result = await classifyWithLlm('骨架', [], { ...config, fetchFn: fetchMock as unknown as typeof fetch });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('超时');
+      expect(result.error).toContain('test-model');
+      expect(result.error).toContain('localhost:8557');
+      expect(result.error).not.toContain('This operation was aborted');
+      expect(result.error).not.toContain('sk-test'); // 绝不泄漏 key
+    }
+  });
+
+  it('超时后自动重试，第二次成功则返回成功结果', async () => {
+    const ok = okResponse({
+      choices: [{ message: { content: '{"category": "验证方法", "title": "T", "summary": "s", "keywords": []}' } }],
+    });
+    let call = 0;
+    const fetchMock = vi.fn().mockImplementation(() => {
+      call++;
+      if (call === 1) return abortRejection(); // 首次超时
+      return Promise.resolve(ok); // 重试成功
+    });
+
+    const result = await classifyWithLlm('骨架', [], { ...config, fetchFn: fetchMock as unknown as typeof fetch });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.result.category).toBe('验证方法');
+    }
+  });
+
+  it('4xx 客户端错误不重试（凭证/请求问题重试无意义）', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => 'Unauthorized',
+    } as unknown as Response);
+
+    const result = await classifyWithLlm('骨架', [], { ...config, fetchFn: fetchMock as unknown as typeof fetch });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(false);
+  });
+
+  it('429/5xx 服务端错误自动重试，重试耗尽后错误注明重试次数', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      text: async () => 'Bad Gateway',
+    } as unknown as Response);
+
+    const result = await classifyWithLlm('骨架', [], { ...config, fetchFn: fetchMock as unknown as typeof fetch });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('502');
+      expect(result.error).toContain('重试');
+    }
+  });
+
+  it('200 但返回非 JSON（网关 HTML 错误页）时给出可读错误', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => '<html><body>502 Bad Gateway (nginx)</body></html>',
+    } as unknown as Response);
+
+    const result = await classifyWithLlm('骨架', [], { ...config, fetchFn: fetchMock as unknown as typeof fetch });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('网关异常');
+    }
+  });
+
+  it('网络错误信息附带 cause 与模型/端点', async () => {
+    const err = new Error('fetch failed');
+    (err as Error & { cause?: unknown }).cause = new Error('getaddrinfo ENOTFOUND relay.example');
+    const fetchMock = vi.fn().mockRejectedValue(err);
+
+    const result = await classifyWithLlm('骨架', [], { ...config, fetchFn: fetchMock as unknown as typeof fetch });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('网络错误');
+      expect(result.error).toContain('ENOTFOUND');
+      expect(result.error).toContain('test-model');
+    }
+  });
+
+  it('AI 返回非 JSON content 时给出可读解析错误', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      okResponse({ choices: [{ message: { content: '分类：协议手册（不是 JSON）' } }] }),
+    );
+
+    const result = await classifyWithLlm('骨架', [], { ...config, fetchFn: fetchMock as unknown as typeof fetch });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('JSON 无法解析');
     }
   });
 });
@@ -472,6 +605,13 @@ describe('classifyMarkdownFile', () => {
       ok: true,
       status: 200,
       json: async () => ({
+        choices: [{
+          message: {
+            content: '{"category": "协议手册", "title": "DDR5", "summary": "DDR5协议", "keywords": ["DDR5", "内存"]}',
+          },
+        }],
+      }),
+      text: async () => JSON.stringify({
         choices: [{
           message: {
             content: '{"category": "协议手册", "title": "DDR5", "summary": "DDR5协议", "keywords": ["DDR5", "内存"]}',
