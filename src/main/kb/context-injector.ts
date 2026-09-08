@@ -14,14 +14,20 @@
  * 压缩时附加"索引已截断，完整检索请使用 kb_search 工具"提示。
  * 未挂载库时不注入。
  *
+ * 注入前把条目路径改写为绝对路径：index.md 中的路径相对 docs/，
+ * 而 Agent 的 read 工具以会话 cwd（项目根目录）解析相对路径，
+ * 两者往往不是同一目录，相对路径会让 Agent 读到 "Path not found"。
+ * 原文注入（阶段 0）同样按行替换路径为绝对路径。
+ *
  * @see ADR 0021 — anydoc 文档知识库
  */
 
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import { kbRegistry } from '../kb/registry';
 import { kbLayout } from '../kb/layout';
-import { parseIndexMd } from '../kb/indexer';
+import { parseIndexMd, PATH_PREFIX } from '../kb/indexer';
 import type { IndexEntry } from '../kb/types';
 
 // ── 常量 ────────────────────────────────────────────────────────
@@ -50,6 +56,31 @@ export type KbContextResult = {
 // ── 辅助函数 ────────────────────────────────────────────────────
 
 /**
+ * 把 index.md 中相对 docs/ 的条目路径改写为绝对路径。
+ *
+ * index.md 路径行格式：`- **路径**: `docs/ 相对路径``。
+ * 已是绝对路径的（手工编辑过）保持原样。
+ */
+function absolutizeIndexPaths(content: string, docsDir: string): string {
+  return content
+    .split('\n')
+    .map((line) => {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith(PATH_PREFIX)) return line;
+
+      const relPath = trimmed
+        .slice(PATH_PREFIX.length)
+        .replace(/^`+/, '')
+        .replace(/`+$/, '');
+      if (!relPath || isAbsolute(relPath)) return line;
+
+      const absPath = join(docsDir, relPath);
+      return `${PATH_PREFIX}\`${absPath}\``;
+    })
+    .join('\n');
+}
+
+/**
  * 索引超长时的结构化降级。
  *
  * 硬截断会把 index.md 后半部分的分类整体丢掉——Agent 不知道它们存在，
@@ -57,10 +88,12 @@ export type KbContextResult = {
  *   阶段 1：全条目压缩（标题 + 路径，去摘要/关键词）
  *   阶段 2：每分类单行（全部文档标题）
  *   阶段 3：仅分类名 + 文档数
+ *
+ * 各阶段条目路径均改写为绝对路径（相对 docs/ 的路径 Agent 读不到）。
  */
-function compactIndex(content: string, maxChars: number): { text: string; truncated: boolean } {
+function compactIndex(content: string, maxChars: number, docsDir: string): { text: string; truncated: boolean } {
   if (content.length <= maxChars) {
-    return { text: content, truncated: false };
+    return { text: absolutizeIndexPaths(content, docsDir), truncated: false };
   }
 
   const { entries, categoryOrder } = parseIndexMd(content);
@@ -71,7 +104,7 @@ function compactIndex(content: string, maxChars: number): { text: string; trunca
     if (lastNewline > maxChars * 0.8) {
       cutPoint = lastNewline;
     }
-    return { text: content.slice(0, cutPoint) + TRUNCATION_NOTICE, truncated: true };
+    return { text: absolutizeIndexPaths(content.slice(0, cutPoint), docsDir) + TRUNCATION_NOTICE, truncated: true };
   }
 
   const byCategory = new Map<string, IndexEntry[]>();
@@ -85,11 +118,14 @@ function compactIndex(content: string, maxChars: number): { text: string; trunca
     if (!categories.includes(c)) categories.push(c);
   }
 
+  // 相对 docs/ → 绝对路径（Agent read 工具按 cwd 解析相对路径，读不到库内文档）
+  const absOf = (p: string): string => (isAbsolute(p) ? p : join(docsDir, p));
+
   // 阶段 1：全条目压缩
   const stage1 = categories
     .map((c) => {
       const list = byCategory.get(c) ?? [];
-      return [`## ${c}（${list.length} 篇）`, ...list.map((e) => `- ${e.title}（${e.path}）`)].join('\n');
+      return [`## ${c}（${list.length} 篇）`, ...list.map((e) => `- ${e.title}（${absOf(e.path)}）`)].join('\n');
     })
     .join('\n\n');
   if (stage1.length <= maxChars) {
@@ -153,9 +189,14 @@ export async function buildKbContext(projectRoot: string): Promise<KbContextResu
     return { contextText: '', kbName, kbPath, truncated: false };
   }
 
-  const { text, truncated } = compactIndex(indexContent, MAX_INDEX_CHARS);
+  const { text, truncated } = compactIndex(indexContent, MAX_INDEX_CHARS, layout.docsDir);
 
-  const contextText = `<kb-index kb-name="${kbName}">\n${text}\n</kb-index>`;
+  // 头部说明：库根目录与路径语义（条目路径均为绝对路径，可直接用 read 工具读取）
+  const header =
+    `知识库「${kbName}」已挂载，根目录：${kbPath}\n` +
+    '以下为文档索引，每条目「路径」为文档 Markdown 绝对路径，可直接读取：';
+
+  const contextText = `<kb-index kb-name="${kbName}" kb-path="${kbPath}">\n${header}\n\n${text}\n</kb-index>`;
 
   return { contextText, kbName, kbPath, truncated };
 }
