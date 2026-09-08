@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readdir, stat, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { existsSync, watch as fsWatch, type FSWatcher as NodeFSWatcher } from 'node:fs';
+import { existsSync, watch as fsWatch, type Dirent, type FSWatcher as NodeFSWatcher } from 'node:fs';
 import { join, basename, resolve, normalize, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { app } from 'electron';
@@ -46,6 +46,35 @@ const HIDDEN_DIRS = new Set(['.socverify', '.git']);
 
 const WATCH_DEBOUNCE_MS = 500;
 const DIRECTORY_CACHE_TTL_MS = 60_000;
+
+// ── findFilesByName（引用回退模糊查找）参数 ──────────────────
+// 遍历时跳过的重/无关目录：依赖、产物、版本控制、应用内部目录。
+// 查找目标是"用户在 AI 回复里提到的源文件"，这些目录不可能命中。
+const SEARCH_SKIP_DIRS = new Set([
+  '.git',
+  '.socverify',
+  'node_modules',
+  'dist',
+  'out',
+  'build',
+  'target',
+  'coverage',
+  '.venv',
+  'venv',
+  '__pycache__',
+]);
+/** 单次查找时间预算：超时立即返回已收集的匹配，避免大项目全树扫描卡住点击响应。 */
+const FILE_SEARCH_TIME_BUDGET_MS = 4_000;
+/** 收集匹配数上限：足够渲染端挑选，且约束遍历工作量。 */
+const FILE_SEARCH_MAX_RESULTS = 20;
+
+/** 按（目录深度, 路径长度）升序排列匹配结果，最浅/最短的排最前。 */
+function sortFileMatches(matches: string[]): string[] {
+  return matches.sort((a, b) => {
+    const depthDiff = a.split(/[\\/]/).length - b.split(/[\\/]/).length;
+    return depthDiff !== 0 ? depthDiff : a.length - b.length;
+  });
+}
 
 type DirectoryChildrenCacheEntry = {
   children: FileTreeNode[];
@@ -899,6 +928,68 @@ class ProjectManagerImpl extends EventEmitter {
     } catch {
       return false;
     }
+  }
+  /**
+   * 引用点击回退解析：按文件名或相对路径后缀在项目根与额外目录内模糊查找。
+   *
+   * AI 回复文本中的文件引用可能只写裸文件名（如 `globals.css`）、以子目录为
+   * 基准的相对路径（`../rtl/core.sv`）或错误的相对目录，直接拼接项目根必然
+   * 失败；此处遍历项目树找出 basename/后缀匹配的常规文件，供渲染端打开最浅
+   * 匹配。绝对路径引用（盘符 / `/` 开头）按裸文件名退化匹配。返回按目录
+   * 深度、路径长度升序的绝对路径列表（Set 去重——extraDir 可嵌套在项目根内，
+   * 同一文件会被多根重复扫到）。
+   */
+  async findFilesByName(projectId: string, refPath: string): Promise<string[]> {
+    const project = this.getProject(projectId);
+    if (!project) return [];
+
+    // 规范为 `/` 分隔的后缀形式（Windows 不区分大小写，统一小写比较）；
+    // 剥离基准目录段（`./`、`../`）——真实路径不含这些段，保留必然匹配失败
+    const normalized = refPath.replace(/\\/g, '/');
+    let suffix = normalized.replace(/^(?:\.\.?(?:\/|$))+/, '').replace(/^\.?\//, '');
+    if (!suffix || suffix.endsWith('/')) return [];
+
+    // 绝对路径引用：全路径后缀永远匹配不到项目内真实路径（真实路径不含
+    // 盘符段 / 根前缀），退化为按裸文件名匹配
+    if (/^(?:[A-Za-z]:\/|\/)/.test(normalized)) {
+      suffix = suffix.slice(suffix.lastIndexOf('/') + 1);
+      if (!suffix) return [];
+    }
+
+    const needle = `/${suffix.toLowerCase()}`;
+    const roots = [project.rootPath, ...(project.extraDirs ?? []).map((d) => d.path)];
+    const matches = new Set<string>();
+    const deadline = Date.now() + FILE_SEARCH_TIME_BUDGET_MS;
+
+    for (const root of roots) {
+      // BFS：目录先浅后深，天然偏向最浅匹配（下标推进代替 shift，避免大队列 O(n²) 搬移）
+      const queue: string[] = [root];
+      for (let i = 0; i < queue.length; i++) {
+        if (matches.size >= FILE_SEARCH_MAX_RESULTS || Date.now() > deadline) {
+          return sortFileMatches([...matches]);
+        }
+        const dir = queue[i];
+        let entries: Dirent[];
+        try {
+          entries = await readdir(dir, { withFileTypes: true });
+        } catch {
+          continue; // 无权限 / 已删除 / 非目录：跳过
+        }
+        for (const entry of entries) {
+          const full = join(dir, entry.name);
+          if (entry.isDirectory()) {
+            // 跳过应用内部与重依赖目录，避免全树扫描拖垮查找
+            if (!SEARCH_SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) queue.push(full);
+            continue;
+          }
+          if (!entry.isFile()) continue;
+          if (full.replace(/\\/g, '/').toLowerCase().endsWith(needle)) {
+            matches.add(full);
+          }
+        }
+      }
+    }
+    return sortFileMatches([...matches]);
   }
 
   async writeFile(projectId: string, filePath: string, content: string): Promise<void> {
