@@ -211,6 +211,17 @@ function makeSourceFile(name: string): string {
   return filePath;
 }
 
+/** openai chat/completions 成功响应 mock（classifyWithLlm 走 text + JSON.parse，需双形状） */
+function okChatResponse(content: string): Response {
+  const payload = { choices: [{ message: { content } }] };
+  return {
+    ok: true,
+    status: 200,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  } as unknown as Response;
+}
+
 /** 设置 converter mock 为成功（返回无图片的 doc） */
 function setupConverterSuccess(): void {
   formatFromPathMock.mockReturnValue('docx');
@@ -1088,17 +1099,9 @@ describe('kb-router', () => {
       });
 
       // mock 全局 fetch 返回 openai 格式分类结果
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          choices: [{
-            message: {
-              content: '{"category": "验证方法", "title": "UVM Harness", "summary": "UVM 验证方法学", "keywords": ["UVM", "验证"]}',
-            },
-          }],
-        }),
-      } as unknown as Response);
+      const fetchMock = vi.fn().mockResolvedValue(
+        okChatResponse('{"category": "验证方法", "title": "UVM Harness", "summary": "UVM 验证方法学", "keywords": ["UVM", "验证"]}'),
+      );
       vi.stubGlobal('fetch', fetchMock);
 
       try {
@@ -1150,17 +1153,9 @@ describe('kb-router', () => {
         baseUrl: 'http://relay.example:3000',
       });
 
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          choices: [{
-            message: {
-              content: '{"category": "验证方法", "title": "doc", "summary": "摘要", "keywords": ["a"]}',
-            },
-          }],
-        }),
-      } as unknown as Response);
+      const fetchMock = vi.fn().mockResolvedValue(
+        okChatResponse('{"category": "验证方法", "title": "doc", "summary": "摘要", "keywords": ["a"]}'),
+      );
       vi.stubGlobal('fetch', fetchMock);
 
       try {
@@ -1203,17 +1198,7 @@ describe('kb-router', () => {
             json: async () => ({ data: [{ id: 'relay-first-model' }, { id: 'relay-second' }] }),
           } as unknown as Response;
         }
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            choices: [{
-              message: {
-                content: '{"category": "验证方法", "title": "doc", "summary": "摘要", "keywords": ["a"]}',
-              },
-            }],
-          }),
-        } as unknown as Response;
+        return okChatResponse('{"category": "验证方法", "title": "doc", "summary": "摘要", "keywords": ["a"]}');
       });
       vi.stubGlobal('fetch', fetchMock);
 
@@ -1256,17 +1241,7 @@ describe('kb-router', () => {
             json: async () => ({ data: [{ id: 'fetched-model' }] }),
           } as unknown as Response;
         }
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            choices: [{
-              message: {
-                content: '{"category": "验证方法", "title": "doc", "summary": "摘要", "keywords": ["a"]}',
-              },
-            }],
-          }),
-        } as unknown as Response;
+        return okChatResponse('{"category": "验证方法", "title": "doc", "summary": "摘要", "keywords": ["a"]}');
       });
       vi.stubGlobal('fetch', fetchMock);
 
@@ -1461,17 +1436,9 @@ describe('kb-router', () => {
         baseUrl: 'http://kb-relay.example:3000',
       });
 
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          choices: [{
-            message: {
-              content: '{"category": "验证方法", "title": "doc", "summary": "摘要", "keywords": ["a"]}',
-            },
-          }],
-        }),
-      } as unknown as Response);
+      const fetchMock = vi.fn().mockResolvedValue(
+        okChatResponse('{"category": "验证方法", "title": "doc", "summary": "摘要", "keywords": ["a"]}'),
+      );
       vi.stubGlobal('fetch', fetchMock);
 
       try {
@@ -1514,17 +1481,9 @@ describe('kb-router', () => {
         model: 'fallback-model',
       });
 
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          choices: [{
-            message: {
-              content: '{"category": "验证方法", "title": "doc", "summary": "摘要", "keywords": ["a"]}',
-            },
-          }],
-        }),
-      } as unknown as Response);
+      const fetchMock = vi.fn().mockResolvedValue(
+        okChatResponse('{"category": "验证方法", "title": "doc", "summary": "摘要", "keywords": ["a"]}'),
+      );
       vi.stubGlobal('fetch', fetchMock);
 
       try {
