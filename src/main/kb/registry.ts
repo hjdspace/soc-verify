@@ -146,7 +146,7 @@ async function register(name: string, kbPath: string): Promise<KbResult<KbRegist
   }
 
   // 检查目录结构是否兼容
-  const health = checkKbHealth(kbPath);
+  const health = await checkKbHealth(kbPath);
   if (!health.hasSources || !health.hasDocs) {
     // 空目录 → 初始化标准结构
     await initKbLayout(kbPath);
@@ -225,20 +225,19 @@ async function list(projectRoot: string): Promise<KbListEntry[]> {
   const mounts = await loadMounts(projectRoot);
   const mountedIds = new Set(mounts.map((m) => m.kbId));
 
-  const result: KbListEntry[] = [];
-  for (const entry of entries) {
-    const { documentCount, categoryCount } = await countKbDocs(entry.path);
-    result.push({
-      id: entry.id,
-      name: entry.name,
-      path: entry.path,
-      registeredAt: entry.registeredAt,
-      documentCount,
-      categoryCount,
-      isMounted: mountedIds.has(entry.id),
-    });
-  }
-  return result;
+  // 各库统计并行：kb.list 处于「打开库选择对话框」的交互热路径，
+  // 串行扫盘（每库 countKbDocs 多次 readdir）会在库多时冻结 UI 数秒
+  const counts = await Promise.all(entries.map((entry) => countKbDocs(entry.path)));
+
+  return entries.map((entry, i) => ({
+    id: entry.id,
+    name: entry.name,
+    path: entry.path,
+    registeredAt: entry.registeredAt,
+    documentCount: counts[i].documentCount,
+    categoryCount: counts[i].categoryCount,
+    isMounted: mountedIds.has(entry.id),
+  }));
 }
 
 /** 挂载知识库到项目 */
@@ -310,7 +309,7 @@ async function status(projectRoot: string): Promise<KbStatus> {
     };
   }
 
-  const health = checkKbHealth(entry.path);
+  const health = await checkKbHealth(entry.path);
 
   return {
     mounted: {
