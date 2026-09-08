@@ -15,8 +15,7 @@
  */
 
 import { join, extname } from 'node:path';
-import { readdir, rm, mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { readdir, rm, mkdir, stat, readFile } from 'node:fs/promises';
 
 // ── 类型 ────────────────────────────────────────────────────────
 
@@ -52,6 +51,13 @@ export type KbLayout = {
   sourcePath: (fileName: string) => string;
 
   // ── 文档发现 ──
+
+  /**
+   * 单次扫描 docs/ 下所有 Markdown 文件（根目录 + 分类子目录，跳过 assets/）。
+   * Map 键为文档名（不含扩展名），值为绝对路径。
+   * 批量场景（listDocuments / scanner）用此方法取代逐文档 findMarkdown。
+   */
+  listMarkdownFiles: () => Promise<Map<string, string>>;
 
   /**
    * 在 docs/ 根目录与子目录中查找文档的 Markdown 文件。
@@ -131,24 +137,83 @@ export function kbLayout(kbPath: string): KbLayout {
   // ── 文档发现 ──
 
   /**
+   * 单次扫描 docs/ 下所有 Markdown：根目录 + 各分类子目录（跳过 assets/）。
+   * @returns Map<文档名（不含扩展名）, 绝对路径>；docs/ 不存在时返回空 Map。
+   *
+   * 性能：批量场景（listDocuments / scanner）用一次 readdir 完成
+   * 根目录 + 全部分类子目录的发现，取代逐文档 findMarkdown 的
+   * O(N × C) 次 readdir + existsSync。
+   */
+  async function listMarkdownFiles(): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+    try {
+      const entries = await readdir(docsDir, { withFileTypes: true });
+      const subDirs: string[] = [];
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name.endsWith('.md')) {
+          result.set(docNameFromFileName(entry.name), join(docsDir, entry.name));
+        } else if (entry.isDirectory() && entry.name !== 'assets') {
+          subDirs.push(entry.name);
+        }
+      }
+      const subResults = await Promise.all(
+        subDirs.map(async (dirName) => {
+          const files: Array<[string, string]> = [];
+          try {
+            const subEntries = await readdir(join(docsDir, dirName), { withFileTypes: true });
+            for (const se of subEntries) {
+              if (se.isFile() && se.name.endsWith('.md')) {
+                files.push([
+                  docNameFromFileName(se.name),
+                  join(docsDir, dirName, se.name),
+                ]);
+              }
+            }
+          } catch {
+            // 子目录读取失败，跳过
+          }
+          return files;
+        }),
+      );
+      for (const files of subResults) {
+        for (const [name, path] of files) result.set(name, path);
+      }
+    } catch {
+      // docs/ 不存在或读取失败
+    }
+    return result;
+  }
+
+  /**
    * 在 docs/ 根目录与子目录中查找文档的 Markdown 文件。
    * 跳过 assets/ 目录。
+   *
+   * 性能：批量场景改用 listMarkdownFiles 一次扫描全库；
+   * 本方法仅适合单个文档的低频定位（预览 / 移动分类）。
    */
   async function findMarkdown(docName: string): Promise<string | null> {
-    const rootMd = rootMdPath(docName);
-    if (existsSync(rootMd)) return rootMd;
-
-    if (existsSync(docsDir)) {
-      try {
-        const entries = await readdir(docsDir, { withFileTypes: true });
-        for (const entry of entries) {
-          if (!entry.isDirectory() || entry.name === 'assets') continue;
-          const subMd = join(docsDir, entry.name, `${docName}.md`);
-          if (existsSync(subMd)) return subMd;
+    try {
+      const entries = await readdir(docsDir, { withFileTypes: true });
+      const subDirs: string[] = [];
+      for (const entry of entries) {
+        if (entry.isFile() && entry.name === `${docName}.md`) {
+          return join(docsDir, entry.name);
         }
-      } catch {
-        // 忽略
+        if (entry.isDirectory() && entry.name !== 'assets') {
+          subDirs.push(entry.name);
+        }
       }
+      for (const dirName of subDirs) {
+        const subMd = join(docsDir, dirName, `${docName}.md`);
+        try {
+          const s = await stat(subMd);
+          if (s.isFile()) return subMd;
+        } catch {
+          // 不存在，继续
+        }
+      }
+    } catch {
+      // docs/ 不存在，忽略
     }
     return null;
   }
@@ -157,7 +222,6 @@ export function kbLayout(kbPath: string): KbLayout {
    * 在 sources/ 中按文档名（不含扩展名）查找源文件。
    */
   async function findSource(docName: string): Promise<string | null> {
-    if (!existsSync(sourcesDir)) return null;
     try {
       const files = await readdir(sourcesDir);
       for (const file of files) {
@@ -165,16 +229,16 @@ export function kbLayout(kbPath: string): KbLayout {
         if (name === docName) return sourcePath(file);
       }
     } catch {
-      // 忽略
+      // 忽略（sources/ 不存在等）
     }
     return null;
   }
 
   /**
    * 列出 sources/ 中的所有文件名（不含目录）。
+   * sources/ 不存在时返回空数组。
    */
   async function listSourceFiles(): Promise<string[]> {
-    if (!existsSync(sourcesDir)) return [];
     try {
       const entries = await readdir(sourcesDir, { withFileTypes: true });
       return entries.filter((e) => e.isFile()).map((e) => e.name);
@@ -190,8 +254,6 @@ export function kbLayout(kbPath: string): KbLayout {
    * 用于同名覆盖场景——重转前清理旧产物。
    */
   async function cleanupDocArtifacts(docName: string): Promise<void> {
-    if (!existsSync(docsDir)) return;
-
     // 清理 docs/ 根下的同名 .md
     await rm(rootMdPath(docName), { force: true });
 
@@ -226,6 +288,7 @@ export function kbLayout(kbPath: string): KbLayout {
     rootMdPath,
     assetsDir,
     sourcePath,
+    listMarkdownFiles,
     findMarkdown,
     findSource,
     listSourceFiles,
@@ -248,68 +311,89 @@ export async function initKbLayout(kbPath: string): Promise<void> {
   const layout = kbLayout(kbPath);
   await mkdir(layout.sourcesDir, { recursive: true });
   await mkdir(layout.docsDir, { recursive: true });
-  if (!existsSync(layout.indexMdPath)) {
-    const { writeFile } = await import('node:fs/promises');
-    await writeFile(layout.indexMdPath, INDEX_MD_SKELETON, 'utf-8');
+  const { writeFile } = await import('node:fs/promises');
+  // 幂等骨架写入：已存在内容时不覆盖（手动编辑过的索引优先）
+  try {
+    const existing = await readFile(layout.indexMdPath, 'utf-8');
+    if (existing.length > 0) return;
+  } catch {
+    // 不存在 → 写入骨架
   }
+  await writeFile(layout.indexMdPath, INDEX_MD_SKELETON, 'utf-8');
 }
 
 /**
  * 检查目录结构是否兼容知识库（存在 sources/ 与 docs/ 即认可）。
+ * 异步 stat —— 调用方处于 IPC 查询路径上，同步 existsSync 会阻塞
+ * 主进程事件循环（N 个库 × 3 次 stat 的累计停顿）。
  */
-export function checkKbHealth(kbPath: string): {
+export async function checkKbHealth(kbPath: string): Promise<{
   hasSources: boolean;
   hasDocs: boolean;
   hasIndex: boolean;
-} {
+}> {
   const layout = kbLayout(kbPath);
-  return {
-    hasSources: existsSync(layout.sourcesDir),
-    hasDocs: existsSync(layout.docsDir),
-    hasIndex: existsSync(layout.indexMdPath),
+  const check = async (p: string): Promise<boolean> => {
+    try {
+      const s = await stat(p);
+      return s.isDirectory() || s.isFile();
+    } catch {
+      return false;
+    }
   };
+  const [hasSources, hasDocs, hasIndex] = await Promise.all([
+    check(layout.sourcesDir),
+    check(layout.docsDir),
+    check(layout.indexMdPath),
+  ]);
+  return { hasSources, hasDocs, hasIndex };
 }
 
 // ── 统计 ────────────────────────────────────────────────────────
 
 /**
  * 统计 docs/ 下的文档数（.md 文件）和分类数（一级子目录，不含 assets/）。
+ * 复用 listMarkdownFiles 的单次批量扫描（分类子目录 readdir 并行发起）。
  */
 export async function countKbDocs(kbPath: string): Promise<{
   documentCount: number;
   categoryCount: number;
 }> {
   const layout = kbLayout(kbPath);
-  let documentCount = 0;
-  let categoryCount = 0;
-
-  if (!existsSync(layout.docsDir)) return { documentCount: 0, categoryCount: 0 };
 
   try {
     const entries = await readdir(layout.docsDir, { withFileTypes: true });
+    let categoryCount = 0;
+    const subDirs: string[] = [];
+    let rootCount = 0;
     for (const entry of entries) {
       if (entry.isDirectory()) {
         if (entry.name === 'assets') continue;
         categoryCount++;
-        try {
-          const subEntries = await readdir(join(layout.docsDir, entry.name), { withFileTypes: true });
-          for (const subEntry of subEntries) {
-            if (subEntry.isFile() && subEntry.name.endsWith('.md')) {
-              documentCount++;
-            }
-          }
-        } catch {
-          // 子目录读取失败，跳过
-        }
+        subDirs.push(entry.name);
       } else if (entry.isFile() && entry.name.endsWith('.md')) {
-        documentCount++;
+        rootCount++;
       }
     }
+    // 各分类子目录 readdir 并行，避免串行 await 在库多/文档多时拖慢 kb.list
+    const subCounts = await Promise.all(
+      subDirs.map(async (dirName) => {
+        try {
+          const subEntries = await readdir(join(layout.docsDir, dirName), {
+            withFileTypes: true,
+          });
+          return subEntries.filter((se) => se.isFile() && se.name.endsWith('.md')).length;
+        } catch {
+          return 0;
+        }
+      }),
+    );
+    const documentCount = rootCount + subCounts.reduce((sum, n) => sum + n, 0);
+    return { documentCount, categoryCount };
   } catch {
     // docs/ 不存在或读取失败
+    return { documentCount: 0, categoryCount: 0 };
   }
-
-  return { documentCount, categoryCount };
 }
 
 // ── 重新导出以方便调用方 ────────────────────────────────────────
