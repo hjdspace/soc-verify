@@ -9,7 +9,13 @@ const { loadDrawioViewerMock, createViewerForElementMock, viewerMock, toolbar, g
     loadDrawioViewerMock: vi.fn(),
     createViewerForElementMock: vi.fn(),
     viewerMock: {
-      graph: { container: graphContainer, setPanning: vi.fn(), zoom: vi.fn(), resizeContainer: true },
+      graph: {
+        container: graphContainer,
+        setPanning: vi.fn(),
+        zoom: vi.fn(),
+        resizeContainer: true,
+        centerZoom: false,
+      },
       destroy: vi.fn(),
       showLocalLightbox: vi.fn(() => ({ chromelessToolbar: toolbar })),
     },
@@ -30,6 +36,10 @@ describe('DrawioViewer interaction layout', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     toolbar.className = '';
+    // reset mutable graph flags between tests
+    viewerMock.graph.resizeContainer = true;
+    viewerMock.graph.centerZoom = false;
+    graphContainer.style.overflow = '';
     loadDrawioViewerMock.mockResolvedValue({
       createViewerForElement: createViewerForElementMock,
     });
@@ -84,6 +94,34 @@ describe('DrawioViewer interaction layout', () => {
       expect(graphContainer.style.height).toBe('');
       // overflow 设为 auto，使 panning 通过 scrollLeft/scrollTop 实现
       expect(graphContainer.style.overflow).toBe('auto');
+    });
+
+    it('anchors zoom at the viewport center (centerZoom)', async () => {
+      render(<DrawioViewer xml="<mxfile />" onError={vi.fn()} />);
+      await waitFor(() => expect(createViewerForElementMock).toHaveBeenCalled());
+
+      // viewer-static.min.js 初始化时硬编码 centerZoom=false，需改回 true
+      // 否则缩放锚定画布原点，缩放往返后中心漂移
+      expect(viewerMock.graph.centerZoom).toBe(true);
+    });
+
+    it('restores overflow=auto when the viewer size handler resets it to hidden', async () => {
+      const { unmount } = render(<DrawioViewer xml="<mxfile />" onError={vi.fn()} />);
+      await waitFor(() => expect(createViewerForElementMock).toHaveBeenCalled());
+
+      // 模拟 viewer size handler：内容尺寸变化时把 overflow 重置为 hidden
+      //（MutationObserver 守卫应将其钳回 auto）
+      graphContainer.style.overflow = 'hidden';
+      await waitFor(() => expect(graphContainer.style.overflow).toBe('auto'));
+
+      // 普通的 overflow 写入不会被钳（守卫只在偏离 auto 时纠正）
+      graphContainer.style.overflow = 'auto';
+      await expect(waitFor(() => expect(graphContainer.style.overflow).toBe('auto'))).resolves.toBeDefined();
+
+      unmount();
+      // 卸载后守卫应停止工作：size handler 再次写入 hidden 不再被纠正
+      graphContainer.style.overflow = 'hidden';
+      expect(graphContainer.style.overflow).toBe('hidden');
     });
   });
 
