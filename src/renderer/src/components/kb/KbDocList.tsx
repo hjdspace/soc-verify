@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useState } from 'react';
-import { Upload, RotateCcw, Trash2, FileText, AlertCircle, Sparkles } from 'lucide-react';
+import { Upload, RotateCcw, Trash2, FileText, AlertCircle, Sparkles, Loader2 } from 'lucide-react';
 import { useKbStore, type KbDocument } from '@renderer/stores/kb';
 import { cn } from '@renderer/lib/utils';
 
@@ -304,15 +304,25 @@ export function KbDocList() {
                           void handleReclassify(doc.name);
                         }}
                         disabled={reclassifying === doc.name}
-                        title={doc.aiDegraded ? 'AI 重新分类并生成摘要（当前未分类，建议重试）' : 'AI 重新分类并重新生成摘要'}
+                        title={
+                          reclassifying === doc.name
+                            ? 'AI 分析中...'
+                            : doc.aiDegraded
+                              ? 'AI 重新分类并生成摘要（当前未分类，建议重试）'
+                              : 'AI 重新分类并重新生成摘要'
+                        }
                         className={cn(
-                          'rounded p-1 transition-colors hover:bg-accent',
+                          'rounded p-1 transition-colors hover:bg-accent disabled:opacity-50',
                           doc.aiDegraded
                             ? 'text-warning-foreground hover:text-warning-foreground'
                             : 'text-muted-foreground hover:text-foreground',
                         )}
                       >
-                        <Sparkles className={cn('h-3.5 w-3.5', reclassifying === doc.name && 'animate-pulse')} />
+                        {reclassifying === doc.name ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Sparkles className="h-3.5 w-3.5" />
+                        )}
                       </button>
                     )}
                     {doc.status === 'failed' && (
