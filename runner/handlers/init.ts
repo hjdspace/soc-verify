@@ -10,7 +10,7 @@
  */
 
 import { attachWriteSnapshotToStartEvent } from "../write-snapshot";
-import { type Command, send, sendResponse, sendContextUsage, sendEvent, toEngineThinkingLevel } from "../protocol";
+import { type Command, send, sendResponse, sendContextUsage, shouldSendContextUsage, sendEvent, toEngineThinkingLevel } from "../protocol";
 import type { RunnerContext } from "../types";
 import { applyApprovalMode } from "./tools";
 
@@ -509,7 +509,7 @@ export async function handleInit(cmd: Command & { type: "init" }, ctx: RunnerCon
 			? String((event as { type: unknown }).type)
 			: "";
 		sendEvent(attachWriteSnapshotToStartEvent(event, ctx.currentCwd));
-		if (eventType === "agent_end" || eventType === "compaction_end" || eventType === "auto_compaction_end") {
+		if (shouldSendContextUsage(eventType)) {
 			sendContextUsage(session);
 		}
 	});
