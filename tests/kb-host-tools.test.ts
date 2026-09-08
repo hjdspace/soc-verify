@@ -26,7 +26,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { join, resolve } from 'node:path';
+import { join, resolve, isAbsolute } from 'node:path';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 
 // ─── Hoisted tmp dirs ──────────────────────────────────────
@@ -878,7 +878,7 @@ describe('kb_search', () => {
     }
   });
 
-  it('全文命中返回 snippet 与 absolutePath', async () => {
+  it('全文命中返回 snippet，path 为绝对路径（Agent read 工具可直接用）', async () => {
     const registry = new HostToolsRegistry(undefined, tmpDir);
     const result = await registry.handleToolCall({
       type: 'host_tool_call',
@@ -890,9 +890,10 @@ describe('kb_search', () => {
 
     const parsed = parseResult(result);
     const first = (parsed.results as Array<Record<string, unknown>>)[0];
-    expect(String(first.path)).toContain('CPU验证');
-    expect(typeof first.absolutePath).toBe('string');
-    expect(String(first.absolutePath).length).toBeGreaterThan(0);
+    // path 为绝对文件路径：Agent 的 read 工具按会话 cwd 解析相对路径，
+    // 库目录与 cwd 往往不同，相对路径会读到 "Path not found"
+    expect(isAbsolute(String(first.path))).toBe(true);
+    expect(String(first.path)).toContain('CPU验证.md');
     expect(String(first.snippet)).toContain('覆盖率目标');
   });
 });
@@ -1010,9 +1011,16 @@ describe('context-injector', () => {
     expect(result.truncated).toBe(true);
     expect(result.contextText).toContain('索引已截断');
     expect(result.contextText).toContain('kb_search');
-    // 压缩视图保留分类与条目路径（而非从中间切掉）
+    // 压缩视图保留分类与条目路径（而非从中间切掉）。
+    // 路径为绝对路径：Agent 的 read 工具按会话 cwd 解析相对路径，读不到库内文档。
     expect(result.contextText).toContain('分类（1 篇）');
-    expect(result.contextText).toContain('文档（doc.md）');
+    const compactLine = result.contextText
+      .split('\n')
+      .find((l) => l.startsWith('- 文档（'));
+    expect(compactLine).toBeDefined();
+    expect(compactLine).toContain('doc.md');
+    const innerPath = compactLine?.slice('- 文档（'.length, -1) ?? '';
+    expect(isAbsolute(innerPath)).toBe(true);
   });
 
   it('injectKbContext 追加到已有 systemPrompt', async () => {
