@@ -205,10 +205,10 @@ export function KbPreviewTab() {
                   type="button"
                   onClick={() => void handleReclassify()}
                   disabled={reclassifying}
-                  title="AI 重新分类并重新生成摘要"
+                  title={reclassifying ? 'AI 分析中...' : 'AI 重新分类并重新生成摘要'}
                   className="ap-ctx-regen"
                 >
-                  <Sparkles className={cn('h-3 w-3', reclassifying && 'animate-pulse')} />
+                  {reclassifying ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
                 </button>
               ),
             }}
@@ -222,10 +222,10 @@ export function KbPreviewTab() {
                 type="button"
                 onClick={() => void handleReclassify()}
                 disabled={reclassifying}
-                title="AI 重新分类并生成摘要"
+                title={reclassifying ? 'AI 分析中...' : 'AI 重新分类并生成摘要'}
                 className="ml-auto rounded p-0.5 transition-colors hover:bg-accent disabled:opacity-50"
               >
-                <Sparkles className={cn('h-3 w-3', reclassifying && 'animate-pulse')} />
+                {reclassifying ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
               </button>
             </div>
             暂无摘要。请确保已在设置中配置 LLM 凭证（与 AI Agent 面板共用），点击右上角按钮让 AI 重新分类并生成摘要。
