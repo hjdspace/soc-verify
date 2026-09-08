@@ -332,6 +332,48 @@ describe('ToolCard file tools', () => {
     expect(card.textContent).not.toContain('"input"');
   });
 
+  it('renders sloppy-mode edit (SM:EDIT input, no #tag header) as a diff when expanded', () => {
+    render(<ToolCard message={completedMessage(
+      'edit',
+      {
+        input: '<SM:EDIT path="/proj/view/work/demo.py">\n<SM:FIND>\nif closest_sdf_file:\n    print(msg)\n</SM:FIND>\n<SM:PUT>\nif closest_sdf_file:\n    print(f"found {closest_sdf_file}")\n</SM:PUT>\n</SM:EDIT>',
+      },
+      // sloppy 模式结果头为 `[绝对路径]`（无 #tag），无 details（旧会话消息）
+      { content: [{ type: 'text', text: '[/proj/view/work/demo.py]\n1:if closest_sdf_file:\n2:    print(f"found {closest_sdf_file}")\n' }], details: {} },
+    )} />);
+
+    // 折叠摘要应显示文件路径（从无 tag 的结果头提取）
+    expect(screen.getByTestId('tool-card').textContent).toContain('demo.py');
+
+    fireEvent.click(screen.getByTitle('展开'));
+
+    const card = screen.getByTestId('tool-card');
+    // 应渲染为 diff（FIND/PUT 行级对比），而不是 IN/OUT 兜底
+    expect(card.textContent).toContain('print(f"found {closest_sdf_file}")');
+    expect(card.textContent).not.toContain('"input"');
+    expect(card.textContent).not.toContain('<SM:FIND>');
+  });
+
+  it('renders edit detail diff from result details when expanded', () => {
+    render(<ToolCard message={completedMessage(
+      'edit',
+      { input: '[src/demo.ts#TAG]\nSET 2: updated' },
+      {
+        content: [{ type: 'text', text: '[src/demo.ts]\n1:unchanged\n2:new\n' }],
+        details: { path: 'src/demo.ts', diff: ' 1|unchanged\n-2|old\n+2|new\n' },
+      },
+    )} />);
+
+    fireEvent.click(screen.getByTitle('展开'));
+
+    const card = screen.getByTestId('tool-card');
+    expect(card.textContent).toContain('unchanged');
+    expect(card.textContent).toContain('new');
+    // diff 行不应把编号前缀（` 1|`）当作内容渲染
+    expect(card.textContent).not.toContain('1|unchanged');
+    expect(card.textContent).not.toContain('"input"');
+  });
+
   it('shows edit file path as clickable link even when not in review queue', () => {
     render(<ToolCard message={completedMessage(
       'edit',
