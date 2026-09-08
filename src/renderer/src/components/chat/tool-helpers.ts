@@ -203,13 +203,39 @@ export function extractOmpEditPathFromInput(args: unknown): string {
 
 /**
  * Extract file path from omp edit tool's result text.
- * Result format starts with `[absolute_path#tag]` on the first line.
+ * Result header is the first `[path]` / `[path#tag]` line — hashline-mode
+ * edits carry the `#tag` suffix, replace/patch/sloppy modes emit a bare
+ * `[absolute_path]` header (engine `edit/result.ts` default header).
  */
 export function extractOmpEditPathFromResult(resultText: string): string {
   if (!resultText) return '';
-  const match = resultText.match(/^\[([^\]]+)#[A-Za-z0-9_]+\]/m);
+  const match = resultText.match(/^\[([^\]]+?)(?:#[A-Za-z0-9_]+)?\]/m);
   if (match) return match[1];
   return '';
+}
+
+export type SloppyEditPair = { find: string; put: string };
+
+/**
+ * 解析 sloppy 模式 edit 输入（omp PI_EDIT_VARIANT=sloppy）：
+ * `<SM:EDIT path="...">` + `<SM:FIND>当前文本</SM:FIND><SM:PUT>最终文本</SM:PUT>` 对。
+ * 该模式输入没有 +/-/@@ 行，无法走 unified patch 解析，需单独提取 find/put 对。
+ */
+export function extractSloppyEditInput(args: unknown): { path: string | undefined; pairs: SloppyEditPair[] } | null {
+  const input = argStr(args, 'input');
+  if (!input || !/<SM:EDIT\b/i.test(input)) return null;
+  const pathMatch = input.match(/<SM:EDIT\b[^>]*?\bpath="([^"]*)"/i);
+  const pairs: SloppyEditPair[] = [];
+  const pairRe = /<SM:FIND>([\s\S]*?)<\/SM:FIND>\s*<SM:PUT>([\s\S]*?)<\/SM:PUT>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pairRe.exec(input)) !== null) {
+    // 标签独占一行：剥掉标签后紧跟的一个换行（引擎将其视为分隔符而非内容）
+    const find = match[1].replace(/^\r?\n/, '').replace(/\r?\n$/, '');
+    const put = match[2].replace(/^\r?\n/, '').replace(/\r?\n$/, '');
+    pairs.push({ find, put });
+  }
+  if (pairs.length === 0) return null;
+  return { path: pathMatch?.[1], pairs };
 }
 
 /**
@@ -224,6 +250,9 @@ export function extractEditFilePath(args: unknown, resultText: string): string {
   if (fromResult) return fromResult;
   const fromInput = extractOmpEditPathFromInput(args);
   if (fromInput) return fromInput;
+  // sloppy 模式：<SM:EDIT path="...">
+  const sloppy = extractSloppyEditInput(args);
+  if (sloppy?.path) return sloppy.path;
   // Try apply_patch format
   const patch = argStr(args, 'input', 'patch', 'diff');
   if (patch) {
