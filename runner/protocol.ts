@@ -168,6 +168,11 @@ export function sendEvent(event: unknown): void {
 	send({ type: "event", event });
 }
 
+/**
+ * Send a context_usage event frame with the session's current live numbers.
+ * Callers are expected to filter by `shouldSendContextUsage` to avoid
+ * redundant frames on events where the context cannot have changed.
+ */
 export function sendContextUsage(session: unknown): void {
 	if (!session) return;
 	const s = session as {
@@ -183,6 +188,30 @@ export function sendContextUsage(session: unknown): void {
 		isCompacting: s.isCompacting === true,
 		autoCompactionEnabled: s.autoCompactionEnabled !== false,
 	});
+}
+
+/**
+ * Whether a session event should trigger a context_usage push.
+ *
+ * The context estimate grows or shifts on every LLM round and on compaction
+ * cutoffs — push on those boundaries so the UI gauge updates in real time
+ * DURING a task, not only after the final agent_end. Pure no-growth events
+ * (streaming deltas, tool start/end, notices) are excluded: toolResult
+ * content isn't in the provider context until the next LLM round.
+ *
+ * `message_end` fires once per assistant LLM response (including each
+ * tool-call round inside one agent turn), so a multi-round tool-use task
+ * pushes once per round — the moment the context actually grew.
+ */
+export function shouldSendContextUsage(eventType: string): boolean {
+	return (
+		eventType === "message_end" ||
+		eventType === "agent_end" ||
+		eventType === "compaction_start" ||
+		eventType === "compaction_end" ||
+		eventType === "auto_compaction_start" ||
+		eventType === "auto_compaction_end"
+	);
 }
 
 export function sendToolCall(id: string, toolName: string, args: unknown): void {
