@@ -275,7 +275,7 @@ function WriteBodyWrap({ message }: ToolBodyProps) {
   return <WriteBody args={message.toolArgs} resultText={extractResultText(message.toolResult)} />;
 }
 function EditBodyWrap({ message }: ToolBodyProps) {
-  return <EditBody args={message.toolArgs} resultText={extractResultText(message.toolResult)} />;
+  return <EditBody args={message.toolArgs} resultText={extractResultText(message.toolResult)} toolResult={message.toolResult} />;
 }
 function BashBodyWrap({ message }: ToolBodyProps) {
   return <BashBody args={message.toolArgs} resultText={extractResultText(message.toolResult)} />;
