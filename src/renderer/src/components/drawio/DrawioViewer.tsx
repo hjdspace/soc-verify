@@ -17,6 +17,17 @@
  *   - viewer 初始化后禁用 graph.resizeContainer 并清除 inline height，
  *     否则 doResizeContainer 会把容器高度撑开到内容大小，
  *     导致垂直方向 scrollHeight == clientHeight，无法上下拖拽平移。
+ *   - 平移与缩放的不变量（见 docs/prototypes/drawio-viewer-pan-zoom.html 验证）：
+ *     1) 容器 overflow 必须保持 auto。viewer 的 size handler 会在内容尺寸
+ *        变化时把它重置为 hidden，此时 mxUtils.hasScrollbars() 为 false，
+ *        panning 从"滚动 scrollLeft/scrollTop"退化为"改写 view.translate"，
+ *        translate 被污染后缩放中心漂移（放大后无法拖动、缩小后位置跑偏，
+ *        只有 Fit 按钮能恢复）。用 MutationObserver 守卫把 overflow 钳回 auto。
+ *        （注意 setProperty('important') 无效：CSSOM 直接赋值 style.overflow
+ *        会连 important 优先级一起替换，原型实验已证伪。）
+ *     2) graph.centerZoom 必须为 true（viewer 初始化时硬编码为 false）。
+ *        否则 zoom() 在 hasScrollbars=false 时走 scaleAndTranslate 分支，
+ *        缩放锚定画布原点而非视口中心，缩放往返后视口中心漂移。
  *   - 右键上下文菜单提供"打开放大图"入口，调用 showLocalLightbox()。
  *   - 中键拖拽缩放：按下中键后上下移动鼠标即可缩放，
  *     上移放大、下移缩小（参考 3D 软件 / Figma 中键缩放手感）。
@@ -49,6 +60,8 @@ const ZOOM_FACTOR = 1.1;
 export function DrawioViewer({ xml, onError }: DrawioViewerProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const viewerRef = useRef<GraphViewerInstance | null>(null);
+  /** overflow 守卫：把 viewer size handler 写入的 overflow: hidden 钳回 auto */
+  const overflowGuardRef = useRef<MutationObserver | null>(null);
   const [dragging, setDragging] = useState(false);
   /** 中键拖拽缩放进行中 */
   const [zoomDragging, setZoomDragging] = useState(false);
@@ -165,8 +178,29 @@ export function DrawioViewer({ xml, onError }: DrawioViewerProps) {
               v.graph.container?.style.removeProperty('height');
               // 确保 overflow 为 auto（panning 通过 scrollLeft/scrollTop 实现）
               v.graph.container?.style.setProperty('overflow', 'auto');
+              // 缩放锚定视口中心（viewer 初始化时硬编码 centerZoom=false，
+              // 见文件头注释）。中键缩放与工具栏放大/缩小都走 graph.zoom()。
+              v.graph.centerZoom = true;
             }
             v.graph?.container?.style.setProperty('cursor', 'grab', 'important');
+
+            // ── overflow 守卫 ────────────────────────────────
+            // viewer 的 size handler 在内容尺寸变化（如缩小后图小于容器）时
+            // 异步把容器 overflow 重置为 hidden。hidden 下 panning 失效并污染
+            // view.translate（放大后无法拖动、缩小后中心漂移）。MutationObserver
+            // 在其写入后同步钳回 auto。不能用 setProperty('important')：
+            // CSSOM 直接赋值会连同 important 优先级一起替换（原型已证伪）。
+            const graphContainer = v.graph?.container;
+            if (graphContainer) {
+              overflowGuardRef.current?.disconnect();
+              const guard = new MutationObserver(() => {
+                if (graphContainer.style.overflow !== 'auto') {
+                  graphContainer.style.overflow = 'auto';
+                }
+              });
+              guard.observe(graphContainer, { attributes: true, attributeFilter: ['style'] });
+              overflowGuardRef.current = guard;
+            }
           });
         } catch (err) {
           onError(err instanceof Error ? err.message : String(err));
@@ -180,6 +214,8 @@ export function DrawioViewer({ xml, onError }: DrawioViewerProps) {
 
     return () => {
       cancelled = true;
+      overflowGuardRef.current?.disconnect();
+      overflowGuardRef.current = null;
       viewerRef.current?.destroy?.();
       viewerRef.current = null;
     };
