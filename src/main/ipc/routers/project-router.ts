@@ -300,6 +300,19 @@ export const projectRouter = t.router({
       return projectManager.fileExists(input.projectId, input.filePath);
     }),
 
+  /** 引用点击回退解析：按文件名/相对路径后缀在项目根与额外目录内模糊查找。 */
+  findFileByName: t.procedure
+    .input((raw): { projectId: string; refPath: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.refPath !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and refPath are required' });
+      }
+      return { projectId: r.projectId, refPath: r.refPath };
+    })
+    .query(async ({ input }) => {
+      return projectManager.findFilesByName(input.projectId, input.refPath);
+    }),
+
   writeFile: t.procedure
     .input((raw): { projectId: string; filePath: string; content: string } => {
       const r = raw as Record<string, unknown>;
