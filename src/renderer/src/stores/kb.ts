@@ -45,6 +45,25 @@ export type {
   KbStatus,
 };
 
+// ── done/failed 事件刷新防抖 ─────────────────────────────────
+//
+// 批量上传/挂载自动扫描时每篇文档完成都广播 done 事件，每个事件直接
+// 触发 refreshAll（3 次 IPC 查询 × 全库目录扫描）。N 篇文档 ≈ N×5 次
+// 主进程文件系统扫描排队，会拖垮 IPC 响应（表现为 GUI 数秒冻结）。
+// 防抖把突发事件合并为一次尾部刷新。
+const REFRESH_DEBOUNCE_MS = 300;
+let refreshDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleDebouncedRefresh(): void {
+  if (refreshDebounceTimer !== null) {
+    clearTimeout(refreshDebounceTimer);
+  }
+  refreshDebounceTimer = setTimeout(() => {
+    refreshDebounceTimer = null;
+    void useKbStore.getState().refreshAll();
+  }, REFRESH_DEBOUNCE_MS);
+}
+
 // ── Store 接口 ──────────────────────────────────────────────
 
 interface KbStoreState {
@@ -492,9 +511,10 @@ export const useKbStore = create<KbStoreState>((set, get) => ({
       );
     }
 
-    // done 状态时刷新分类树和文档列表（获取完整数据）
+    // done/failed 状态时刷新分类树和文档列表（获取完整数据）。
+    // 防抖合并：批量上传的连续 done 事件只触发一次 refreshAll
     if (event.status === 'done' || event.status === 'failed') {
-      void get().refreshAll();
+      scheduleDebouncedRefresh();
     }
   },
 
