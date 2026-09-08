@@ -18,7 +18,6 @@
 
 import { join, basename, extname, dirname } from 'node:path';
 import { readFile, writeFile, mkdir, rm, readdir, stat, rename } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { convertDocument } from './converter';
 import {
   classifyMarkdownFile,
@@ -187,7 +186,9 @@ export async function uploadDocument(
  *  - index.md 中的条目（确定摘要和关键词）
  *
  * 状态推断：
- *  - sources/ 有文件但 docs/ 无对应 .md → failed（转换失败）
+ *  - sources/ 有文件但 docs/ 无对应 .md → queued（已入库未转换，等待处理；
+ *    挂载时 autoScanDocuments 会自动重走上传流水线，不判 failed——转换失败
+ *    的 errorCode/errorMessage 未持久化，重启后无法与"未处理"区分）
  *  - docs/ 有 .md 但 index.md 无条目 → done（已转换但分类未持久化）
  *  - 完整路径 → done
  */
@@ -195,39 +196,76 @@ export async function listDocuments(kbPath: string): Promise<KbDocument[]> {
   const layout = kbLayout(kbPath);
   const documents: KbDocument[] = [];
 
-  // 读取 index.md 条目
-  let indexEntries: Array<{ title: string; path: string; category: string; summary: string; keywords: string[] }> = [];
-  if (existsSync(layout.indexMdPath)) {
-    const content = await readFile(layout.indexMdPath, 'utf-8');
-    const parsed = parseIndexMd(content);
-    indexEntries = parsed.entries;
-  }
+  // 三路数据并行拉取：index.md 条目 / sources/ 源文件 / docs/ Markdown 全量清单
+  // （listMarkdownFiles 一次 readdir 扫根目录 + 并行扫分类子目录，
+  //  取代逐文档 findMarkdown 的 O(N×C) 目录扫描——kb.documents 处于
+  //  IPC 查询热路径，每次 docStatus 事件都会触发）
+  const [indexEntries, sourceFiles, markdownMap] = await Promise.all([
+    (async () => {
+      try {
+        const content = await readFile(layout.indexMdPath, 'utf-8');
+        return parseIndexMd(content).entries;
+      } catch {
+        return [] as Array<{ title: string; path: string; category: string; summary: string; keywords: string[] }>;
+      }
+    })(),
+    layout.listSourceFiles(),
+    layout.listMarkdownFiles(),
+  ]);
 
-  // 扫描 sources/
-  const sourceFiles = await layout.listSourceFiles();
   if (sourceFiles.length === 0) return [];
+
+  // 文档级 stat 并行（源文件 + Markdown），避免串行 await
+  const sourceStatMap = new Map<string, { size: number }>();
+  await Promise.all(
+    sourceFiles.map(async (fileName) => {
+      try {
+        const s = await stat(layout.sourcePath(fileName));
+        sourceStatMap.set(fileName, { size: s.size });
+      } catch {
+        // 源文件读取失败（挂载中断等极端场景）→ 跳过该文档
+      }
+    }),
+  );
+
+  const mdStatMap = new Map<string, { size: number; mtimeMs: number }>();
+  await Promise.all(
+    Array.from(markdownMap.entries()).map(async ([docName, mdPath]) => {
+      try {
+        const s = await stat(mdPath);
+        mdStatMap.set(docName, { size: s.size, mtimeMs: s.mtimeMs });
+      } catch {
+        // 已在扫描与 stat 之间被删除 → 视为未转换
+      }
+    }),
+  );
 
   for (const fileName of sourceFiles) {
     const ext = extname(fileName);
     const docName = ext ? fileName.slice(0, -ext.length) : fileName;
     const srcPath = layout.sourcePath(fileName);
-    const sourceSize = (await stat(srcPath)).size;
+    const sourceStat = sourceStatMap.get(fileName);
+    if (!sourceStat) continue;
+    const sourceSize = sourceStat.size;
 
     // 查找 docs/ 中的对应 Markdown
     let markdownPath = '';
     let category = '';
     let markdownSize = 0;
-    let status: KbDocStatus = 'failed';
+    // 未找到 Markdown：文档已入库但尚未转换（等待 autoScan/上传流水线处理），
+    // 不能判 failed —— 失败详情未持久化，重启后与"未处理"不可区分
+    let status: KbDocStatus = 'queued';
     let convertedAt: number | undefined;
     let classifiedAt: number | undefined;
     let aiDegraded: boolean | undefined;
 
-    const foundMd = await layout.findMarkdown(docName);
-    if (foundMd) {
+    const foundMd = markdownMap.get(docName);
+    const mdStat = foundMd ? mdStatMap.get(docName) : undefined;
+    if (foundMd && mdStat) {
       markdownPath = foundMd;
-      markdownSize = (await stat(foundMd)).size;
+      markdownSize = mdStat.size;
       status = 'done';
-      convertedAt = (await stat(foundMd)).mtimeMs;
+      convertedAt = mdStat.mtimeMs;
       if (foundMd !== layout.rootMdPath(docName)) {
         category = basename(dirname(foundMd));
         classifiedAt = convertedAt;
@@ -293,7 +331,7 @@ export async function deleteDocument(
   // 从 index.md 移除条目
   // 用路径末段精确匹配（entryBelongsToDoc），不能用子串匹配：
   // 子串匹配会把 `My_DDR5.md` 误判为 `DDR5.md` 的条目，导致误删无关文档的索引。
-  if (existsSync(layout.indexMdPath)) {
+  try {
     const content = await readFile(layout.indexMdPath, 'utf-8');
     const { entries } = parseIndexMd(content);
     for (const entry of entries) {
@@ -301,6 +339,8 @@ export async function deleteDocument(
         await removeFromIndex(layout.indexMdPath, entry.path);
       }
     }
+  } catch {
+    // index.md 不存在 → 无条目可删
   }
 }
 
@@ -343,31 +383,29 @@ export async function listCategories(kbPath: string): Promise<KbCategory[]> {
   const layout = kbLayout(kbPath);
   const categoryMap = new Map<string, number>();
 
-  // 从 docs/ 子目录统计
-  if (existsSync(layout.docsDir)) {
-    try {
-      const entries = await readdir(layout.docsDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory() || entry.name === 'assets') continue;
-        const subPath = layout.categoryDir(entry.name);
+  // 从 docs/ 子目录统计（子目录 readdir 并行 —— kb.categories 处于 IPC 热路径）
+  try {
+    const entries = await readdir(layout.docsDir, { withFileTypes: true });
+    const dirEntries = entries.filter((e) => e.isDirectory() && e.name !== 'assets');
+    const counts = await Promise.all(
+      dirEntries.map(async (entry) => {
         try {
-          const subEntries = await readdir(subPath, { withFileTypes: true });
-          let count = 0;
-          for (const se of subEntries) {
-            if (se.isFile() && se.name.endsWith('.md')) count++;
-          }
-          categoryMap.set(entry.name, count);
+          const subEntries = await readdir(layout.categoryDir(entry.name), { withFileTypes: true });
+          return [entry.name, subEntries.filter((se) => se.isFile() && se.name.endsWith('.md')).length] as const;
         } catch {
-          categoryMap.set(entry.name, 0);
+          return [entry.name, 0] as const;
         }
-      }
-    } catch {
-      // 忽略
+      }),
+    );
+    for (const [name, count] of counts) {
+      categoryMap.set(name, count);
     }
+  } catch {
+    // docs/ 不存在或读取失败
   }
 
   // 从 index.md 补充分类
-  if (existsSync(layout.indexMdPath)) {
+  try {
     const content = await readFile(layout.indexMdPath, 'utf-8');
     const categories = listCategoriesFromIndex(content);
     for (const cat of categories) {
@@ -375,6 +413,8 @@ export async function listCategories(kbPath: string): Promise<KbCategory[]> {
         categoryMap.set(cat, 0);
       }
     }
+  } catch {
+    // index.md 不存在
   }
 
   return Array.from(categoryMap.entries()).map(([name, count]) => ({ name, count }));
@@ -388,8 +428,11 @@ export async function listCategories(kbPath: string): Promise<KbCategory[]> {
  */
 export async function readIndexMd(kbPath: string): Promise<string> {
   const layout = kbLayout(kbPath);
-  if (!existsSync(layout.indexMdPath)) return '';
-  return readFile(layout.indexMdPath, 'utf-8');
+  try {
+    return await readFile(layout.indexMdPath, 'utf-8');
+  } catch {
+    return '';
+  }
 }
 
 // ── 写入 index.md ──────────────────────────────────────────────
@@ -460,7 +503,7 @@ export async function moveDocumentCategory(
   await rm(currentMdPath, { force: true });
 
   // 更新 index.md 中该条目的分类和路径
-  if (existsSync(layout.indexMdPath)) {
+  try {
     const indexContent = await readFile(layout.indexMdPath, 'utf-8');
     const { entries, categoryOrder } = parseIndexMd(indexContent);
 
@@ -485,6 +528,8 @@ export async function moveDocumentCategory(
     // 使用 indexer 的 serializeIndexMd —— index.md 格式单一拥有者
     const updatedContent = serializeIndexMd(entries, categoryOrder);
     await writeFile(layout.indexMdPath, updatedContent, 'utf-8');
+  } catch {
+    // index.md 不存在 → 无条目需要更新
   }
 
   return targetMdPath;
@@ -510,14 +555,20 @@ export async function renameCategory(
   const oldDir = layout.categoryDir(oldCategory);
   const newDir = layout.categoryDir(newCategory);
 
-  if (!existsSync(oldDir)) return false;
-
   // 如果新旧名称相同，无需操作
   if (oldCategory === newCategory) return true;
 
+  try {
+    const s = await stat(oldDir);
+    if (!s.isDirectory()) return false;
+  } catch {
+    return false;
+  }
+
   // 重命名目录
   // 如果目标目录已存在，合并：将旧目录中的文件移动到新目录
-  if (existsSync(newDir)) {
+  const newDirExists = await stat(newDir).then((s) => s.isDirectory()).catch(() => false);
+  if (newDirExists) {
     // 合并：移动旧目录下的所有文件到新目录
     const entries = await readdir(oldDir, { withFileTypes: true });
     for (const entry of entries) {
@@ -531,7 +582,7 @@ export async function renameCategory(
   }
 
   // 更新 index.md
-  if (existsSync(layout.indexMdPath)) {
+  try {
     const indexContent = await readFile(layout.indexMdPath, 'utf-8');
     const { entries, categoryOrder } = parseIndexMd(indexContent);
 
@@ -570,6 +621,8 @@ export async function renameCategory(
     // 使用 indexer 的 serializeIndexMd —— index.md 格式单一拥有者
     const updatedContent = serializeIndexMd(entries, categoryOrder);
     await writeFile(layout.indexMdPath, updatedContent, 'utf-8');
+  } catch {
+    // index.md 不存在 → 无条目需要更新
   }
 
   return true;
@@ -657,7 +710,10 @@ export async function reclassifyDocument(
 
 /** 读取 index.md 中的现有分类列表（文件不存在返回空） */
 async function readExistingCategories(indexMdPath: string): Promise<string[]> {
-  if (!existsSync(indexMdPath)) return [];
-  const indexContent = await readFile(indexMdPath, 'utf-8');
-  return listCategoriesFromIndex(indexContent);
+  try {
+    const indexContent = await readFile(indexMdPath, 'utf-8');
+    return listCategoriesFromIndex(indexContent);
+  } catch {
+    return [];
+  }
 }
