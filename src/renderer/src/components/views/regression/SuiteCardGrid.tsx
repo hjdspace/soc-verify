@@ -129,9 +129,9 @@ function SuiteCard({
       data-testid={`reg-suite-card-${suite.subsys}`}
     >
       <div className="mb-2 flex items-center gap-2">
-        <span className="truncate font-mono text-[12.5px] font-semibold text-foreground">{suite.subsys}</span>
+        <span className="truncate font-mono text-[13px] font-semibold text-foreground">{suite.subsys}</span>
         <span
-          className={cn('ml-auto flex shrink-0 items-center gap-1 text-[10px] font-medium', stateText)}
+          className={cn('ml-auto flex shrink-0 items-center gap-1 text-[10.5px] font-medium', stateText)}
           data-testid={`reg-suite-state-${suite.subsys}`}
         >
           <span className={cn('size-1.5 rounded-full', stateDot)} />
@@ -145,7 +145,8 @@ function SuiteCard({
       >
         —
       </div>
-      <div className="text-[10.5px] leading-relaxed text-muted-foreground">
+      {/* 字号下限 11px：中文（最近运行/尚未运行）在 10.5px 以下笔画粘连发糊 */}
+      <div className="text-[11px] leading-relaxed text-muted-foreground">
         <span className="block">{metaParts.join(' · ')}</span>
         <span className="block">
           {hasActive && latestActive
@@ -164,7 +165,7 @@ function SuiteCard({
               e.stopPropagation();
               if (latestActive) actions.onOpenTerminal(latestActive.runId);
             }}
-            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
             title="打开回归终端"
             data-testid={`reg-suite-terminal-${suite.subsys}`}
           >
@@ -176,7 +177,7 @@ function SuiteCard({
               e.stopPropagation();
               if (latestActive) actions.onAbort(latestActive.runId);
             }}
-            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-status-fail-foreground"
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-status-fail-foreground"
             title="终止最新提交的回归"
             data-testid={`reg-suite-abort-${suite.subsys}`}
           >
@@ -242,7 +243,7 @@ export function SuiteCardGridEmpty() {
     >
       <Layers className="size-6 opacity-30" />
       <span className="text-xs">未发现回归列表</span>
-      <span className="text-[11px] opacity-60">配置 PROJ_ENV 后扫描回归目录，或点击右上角刷新重试</span>
+      <span className="text-[11.5px] text-muted-foreground/80">配置 PROJ_ENV 后扫描回归目录，或点击右上角刷新重试</span>
     </div>
   );
 }
