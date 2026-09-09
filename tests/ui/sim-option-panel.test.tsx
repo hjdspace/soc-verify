@@ -8,8 +8,9 @@ import type { SimOptionField } from '@shared/plugin-types';
  * SimOptionPanel（Issue #3）测试：
  * schema 加载与分组卡片渲染、字段值编辑联动、预设加载下拉与保存。
  *
- * 回归测试卡片已删除：回归发起统一收敛到回归页（ADR 0029），
- * 相关测试断言回归分组/解析指令/回归文件浏览不再出现。
+ * 回归测试分组已删除（ADR 0029：回归发起收敛到回归页）；
+ * 但「解析回归指令」按钮已恢复——粘贴 runsim 指令自动提取参数填入
+ * Option 字段（含回归参数，存入 simOptions），见独立 describe。
  *
  * 命令预览 / 复制 / 运行仿真 / CASE 缺失警告 已移至 SimCommandBar
  * 组件（位于 SimulationView 中栏底部），相关测试见下方独立 describe。
@@ -131,7 +132,6 @@ describe('SimOptionPanel schema 加载与分组渲染', () => {
     await screen.findByText('BASE');
 
     expect(screen.queryByText('回归测试')).not.toBeInTheDocument();
-    expect(screen.queryByText('解析指令')).not.toBeInTheDocument();
     expect(screen.queryByTitle('浏览选择回归列表文件')).not.toBeInTheDocument();
   });
 
@@ -171,6 +171,76 @@ describe('SimOptionPanel 标题动态显示用例名', () => {
     await screen.findByText('BASE');
 
     expect(screen.getByTestId('sim-option-title').textContent).toBe('仿真 Option · my_test_case');
+  });
+});
+
+describe('SimOptionPanel 解析回归指令', () => {
+  it('点击按钮打开解析对话框', async () => {
+    render(<SimOptionPanel />);
+
+    fireEvent.click(await screen.findByTestId('sim-option-parse-btn'));
+
+    expect(screen.getByTestId('sim-parse-dialog')).toBeInTheDocument();
+  });
+
+  it('无输入文本时解析按钮 disabled', async () => {
+    render(<SimOptionPanel />);
+
+    fireEvent.click(await screen.findByTestId('sim-option-parse-btn'));
+
+    const parseBtn = screen.getByRole('button', { name: '解析' }) as HTMLButtonElement;
+    expect(parseBtn.disabled).toBe(true);
+  });
+
+  it('粘贴完整回归指令解析后合并参数到 simOptions 并关闭对话框', async () => {
+    mockSimOptions = { base: 'old_base', cl: false };
+
+    render(<SimOptionPanel />);
+
+    fireEvent.click(await screen.findByTestId('sim-option-parse-btn'));
+
+    const textarea = screen.getByPlaceholderText(/可以直接粘贴从网页复制的完整回归指令/);
+    fireEvent.change(textarea, {
+      target: {
+        value:
+          '_regression_platform noise_ runsim -base top -block udtb/usvp -case apcpu_hello_world -seed 123 -fsdb -cl',
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '解析' }));
+
+    // 解析值覆盖同名字段（base/cl），其余参数全部提取
+    expect(mockSetSimOptions).toHaveBeenCalledWith({
+      base: 'top',
+      cl: true,
+      block: 'udtb/usvp',
+      case: 'apcpu_hello_world',
+      seed: '123',
+      fsdb: true,
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId('sim-parse-dialog')).not.toBeInTheDocument();
+    });
+  });
+
+  it('关闭对话框时清空输入文本', async () => {
+    render(<SimOptionPanel />);
+
+    fireEvent.click(await screen.findByTestId('sim-option-parse-btn'));
+
+    const textarea = screen.getByPlaceholderText(/可以直接粘贴从网页复制的完整回归指令/);
+    fireEvent.change(textarea, { target: { value: 'runsim -base top' } });
+
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+
+    expect(screen.queryByTestId('sim-parse-dialog')).not.toBeInTheDocument();
+
+    // 再次打开时文本已清空
+    fireEvent.click(screen.getByTestId('sim-option-parse-btn'));
+    const reopened = screen.getByPlaceholderText(
+      /可以直接粘贴从网页复制的完整回归指令/,
+    ) as HTMLTextAreaElement;
+    expect(reopened.value).toBe('');
   });
 });
 
