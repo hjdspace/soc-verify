@@ -359,49 +359,6 @@ export function createLogModeChunkNormalizer(): (chunk: Buffer) => string {
 }
 
 /**
- * Environment variables carrying Environment Modules runtime state.
- *
- * When the Electron app itself is launched from a shell with EDA modules
- * loaded, these leak into a log-mode `csh -c` child. Re-sourcing `.cshrc`
- * then hits module conflicts ("cannot be loaded due to a conflict", "list
- * element in quotes followed by ':' instead of space"), module init aborts
- * partway, and tools that `.cshrc` puts on PATH fall back to system
- * binaries — notably /usr/bin/python (Python 2), which crashes runsim with
- * `TypeError: 'encoding' is an invalid keyword argument for this function`.
- * The Python reference GUI avoids this because runsim_gui.sh pre-loads its
- * own python3 module into the env that QProcess passes down.
- */
-const MODULE_STATE_ENV_KEYS: readonly string[] = [
-  'LOADEDMODULES',
-  '_LMFILES_',
-  'MODULE_VERSION',
-  'MODULE_VERSION_STACK',
-];
-
-/**
- * Strip inherited Environment Modules runtime state from an environment.
- *
- * A log-mode `csh -c` re-sources `.cshrc`, which (re)loads the EDA module
- * environment. Preset module state from the app's parent shell breaks that
- * initialization, so the child shell must start from a clean module slate —
- * exactly like a fresh login shell. MODULEPATH/MODULESHOME are deliberately
- * kept: system startup files (/etc/csh.cshrc) own their setup and modulecmd
- * needs them to function at all.
- */
-export function sanitizeModuleEnvForChild(
-  env: Record<string, string>,
-): Record<string, string> {
-  const cleaned: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) {
-    if (MODULE_STATE_ENV_KEYS.includes(key)) continue;
-    // `_ModuleTable<NN>_...` — chunked serialized module state variables.
-    if (key.startsWith('_ModuleTable')) continue;
-    cleaned[key] = value;
-  }
-  return cleaned;
-}
-
-/**
  * Shell preferences for simulation commands on different platforms.
  *
  * On Linux, EDA tools (runsim, xrun, vcs, etc.) typically require csh/tcsh
@@ -1229,14 +1186,7 @@ export class TerminalManager extends EventEmitter {
     // that would initialize modules once during capture and again when this
     // command shell sources .cshrc. Let the login shell initialize once.
     const shell = opts.shell ?? findSimShell();
-    // Strip inherited Environment Modules state (LOADEDMODULES, _ModuleTable*,
-    // ...) before spawning `csh -c`. A polluted parent env breaks .cshrc module
-    // init (conflict warnings + csh eval errors), which leaves the child PATH
-    // without python3 — runsim then executes under system python2 and dies
-    // with `TypeError: 'encoding' is an invalid keyword argument`.
-    const env = sanitizeModuleEnvForChild(
-      mergeTerminalEnvs(process.env as Record<string, string>, opts.env),
-    );
+    const env = mergeTerminalEnvs(process.env as Record<string, string>, opts.env);
 
     const session: TerminalSession = {
       id,
