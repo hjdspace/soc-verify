@@ -107,9 +107,9 @@ export function RegressionView() {
           data-testid="reg-discovery-error"
         >
           <div className="font-medium text-destructive">扫描失败</div>
-          <div className="mt-0.5 break-words text-[10px] text-muted-foreground">{discoveryError}</div>
+          <div className="mt-0.5 break-words text-[11px] text-muted-foreground">{discoveryError}</div>
           <button
-            className="mt-2 flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-[10px] text-primary transition-colors hover:bg-accent"
+            className="mt-2 flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-[11px] text-primary transition-colors hover:bg-accent"
             onClick={() => currentProjectId && discover(currentProjectId, true)}
             data-testid="reg-retry-btn"
           >
