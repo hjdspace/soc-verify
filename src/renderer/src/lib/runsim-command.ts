@@ -1,11 +1,14 @@
 /**
  * runsim 命令生成工具（前端预览用）+ 命令修改工具
  *
- * 此模块包含两部分：
+ * 此模块包含三部分：
  * 1. 命令生成（generateRunsimCommand）— 复刻插件逻辑，用于 SimOptionPanel 预览
+ * 1b. 命令预览 token 拆分（tokenizeRunsimCommand）— 命令预览语法高亮
+ * 1c. 命令解析（parseRunsimCommand）— 「解析回归指令」从粘贴文本提取参数
  * 2. 命令修改（modifyCommandOptions 等）— 用于 SimControlToolbar
  *
- * 第二部分参考 Python GUI 的 `utils/command_generator.py` CommandParser 类。
+ * 第二部分参考 Python GUI 的 `utils/command_generator.py` CommandParser 类；
+ * 命令解析复刻 `controllers/config_controller.py` 的解析回归指令流程。
  */
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -145,6 +148,187 @@ export function tokenizeRunsimCommand(command: string): CmdToken[] {
   }
 
   return tokens;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Part 1c: 命令解析（从粘贴文本中提取选项）
+// 复刻 Python GUI（runsim_r3p0）ConfigController 的解析回归指令流程：
+// _preprocess_command_text / _clean_command_text / _parse_command_params
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * 预处理命令文本，提取 runsim 命令部分并清理 HTML 标签和特殊字符。
+ *
+ * 复刻 Python GUI 的 `_preprocess_command_text()` + `_clean_command_text()`：
+ * - 多行文本合并为单行（网页复制常带换行/多余空白）
+ * - 剥离 HTML 标签
+ * - 定位 `runsim ` 关键字，只保留命令部分
+ * - 无 runsim 前缀但以 `-` 开头时，视为不完整命令自动补前缀
+ */
+function preprocessCommandText(rawText: string): string {
+  if (!rawText.trim()) return '';
+
+  let text = rawText.replace(/<[^>]+>/g, ' ');
+  text = text.split(/\s+/).join(' ').trim();
+
+  const runsimIndex = text.indexOf('runsim ');
+  if (runsimIndex !== -1) {
+    text = text.slice(runsimIndex).trim();
+  } else if (text.startsWith('runsim')) {
+    return text.trim();
+  } else if (text.startsWith('-')) {
+    return `runsim ${text}`;
+  } else {
+    return '';
+  }
+
+  text = text.replace(/\s+/g, ' ');
+  text = text.replace(/[^\w\s\-=/.,:;_+*()[\]{}|&$#@!~`"'\\]/g, '');
+
+  return text.trim();
+}
+
+/** Boolean flag 集合（无参数值，出现即为 true） */
+const BOOLEAN_FLAGS = new Set([
+  'cl', 'dump_sva', 'cov', 'upf', 'dump_mem', 'fm', 'R', 'C',
+]);
+
+/** 带参数值的 flag → option key 映射 */
+const VALUE_FLAG_TO_KEY: Record<string, string> = {
+  base: 'base',
+  block: 'block',
+  case: 'case',
+  rundir: 'rundir',
+  bq: 'bq',
+  seed: 'seed',
+  wdd: 'wdd',
+  simarg: 'simarg',
+  cfg_def: 'cfg_def',
+  post: 'post',
+  regr: 'regr_file',
+  regr_work: 'regr_work',
+  tag: 'tag',
+  nt: 'nt',
+  m: 'dashboard',
+};
+
+/** Boolean flag → option key 映射 */
+const BOOL_FLAG_TO_KEY: Record<string, string> = {
+  cl: 'cl',
+  dump_sva: 'dump_sva',
+  cov: 'cov',
+  upf: 'upf',
+  dump_mem: 'dump_mem',
+  fm: 'fm',
+  R: 'sim_only',
+  C: 'compile_only',
+  fsdb: 'fsdb',
+  vwdb: 'vwdb',
+};
+
+/**
+ * 解析 runsim 命令文本，提取选项键值对。
+ *
+ * 用于「解析回归指令」：用户粘贴从网页复制的完整回归指令（可能含
+ * 前后噪音文本/HTML 标签/换行），自动提取 runsim 参数填入 Option 面板。
+ *
+ * 解析结果覆盖已有同名字段；无法识别的 flag 跳过。
+ *
+ * @param rawText - 用户粘贴的原始文本
+ * @returns 提取的选项键值对；未找到有效 runsim 命令时返回空对象
+ */
+export function parseRunsimCommand(rawText: string): Record<string, unknown> {
+  const command = preprocessCommandText(rawText);
+  if (!command) return {};
+
+  const parts: string[] = command.match(/"[^"]*"|\S+/g) ?? [];
+  if (parts.length === 0) return {};
+
+  const result: Record<string, unknown> = {};
+
+  let i = 1;
+  while (i < parts.length) {
+    const part = parts[i];
+    if (!part.startsWith('-')) {
+      i++;
+      continue;
+    }
+
+    const option = part.slice(1);
+
+    // -fsdb / -vwdb 后可跟 dump level（或 .tcl 文件，不算 dump level）
+    if (option === 'fsdb' || option === 'vwdb') {
+      result[option] = true;
+      if (i + 1 < parts.length && !parts[i + 1].startsWith('-')) {
+        const next = parts[i + 1];
+        if (!next.toLowerCase().endsWith('.tcl')) {
+          result.dump_level = next;
+        }
+        i += 2;
+      } else {
+        i++;
+      }
+      continue;
+    }
+
+    if (BOOLEAN_FLAGS.has(option)) {
+      const key = BOOL_FLAG_TO_KEY[option];
+      if (key) result[key] = true;
+      i++;
+      continue;
+    }
+
+    const valueKey = VALUE_FLAG_TO_KEY[option];
+    if (valueKey === undefined) {
+      i++;
+      continue;
+    }
+
+    if (i + 1 < parts.length) {
+      let value = parts[i + 1];
+
+      // 带引号的参数（如 -simarg "...")：值可能被空格拆成多个 token，
+      // 聚合到结束引号为止
+      if (value.startsWith('"') && !value.endsWith('"')) {
+        value = value.slice(1);
+        let j = i + 2;
+        while (j < parts.length && !parts[j].endsWith('"')) {
+          value += ' ' + parts[j];
+          j++;
+        }
+        if (j < parts.length) {
+          value += ' ' + parts[j].slice(0, -1);
+          i = j + 1;
+        } else {
+          i = j;
+        }
+      } else if (value.startsWith('"') && value.endsWith('"') && value.length > 1) {
+        value = value.slice(1, -1);
+        i += 2;
+      } else {
+        i += 2;
+      }
+
+      // -cfg_def 后可跟多个非选项参数（如 -cfg_def A B C），全部聚合
+      if (option === 'cfg_def') {
+        let j = i;
+        while (j < parts.length && !parts[j].startsWith('-')) {
+          value += ' ' + parts[j];
+          j++;
+        }
+        if (j > i) {
+          value = value.trim();
+          i = j;
+        }
+      }
+
+      result[valueKey] = value;
+    } else {
+      i++;
+    }
+  }
+
+  return result;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
