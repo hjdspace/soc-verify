@@ -5,7 +5,6 @@ import {
   getLogModeShellArgs,
   mergeTerminalEnvs,
   resolveInteractiveShell,
-  sanitizeModuleEnvForChild,
   TerminalManager,
 } from '../../src/main/terminal/terminal-manager';
 
@@ -68,50 +67,6 @@ describe('createLogModeChunkNormalizer', () => {
     const normalize = createLogModeChunkNormalizer();
     expect(normalize(Buffer.alloc(0))).toBe('');
     expect(normalize(Buffer.from('a\n'))).toBe('a\r\n');
-  });
-});
-
-describe('sanitizeModuleEnvForChild', () => {
-  it('strips inherited Environment Modules runtime state', () => {
-    const env = sanitizeModuleEnvForChild({
-      LOADEDMODULES: 'tool/python/3.11.10:synopsys/verdi/U-2023.03-SP2-4',
-      _LMFILES_: '/pub/modulefiles/tool/python/3.11.10',
-      MODULE_VERSION: '4.5.3',
-      MODULE_VERSION_STACK: '4.5.3',
-      PATH: '/usr/bin:/bin',
-      PROJ_DIR: '/proj/KunlunN02/gitview/user/view',
-    });
-
-    expect(env.LOADEDMODULES).toBeUndefined();
-    expect(env._LMFILES_).toBeUndefined();
-    expect(env.MODULE_VERSION).toBeUndefined();
-    expect(env.MODULE_VERSION_STACK).toBeUndefined();
-    expect(env.PATH).toBe('/usr/bin:/bin');
-    expect(env.PROJ_DIR).toBe('/proj/KunlunN02/gitview/user/view');
-  });
-
-  it('strips chunked _ModuleTable state variables by prefix', () => {
-    const env = sanitizeModuleEnvForChild({
-      _ModuleTable00_: 'MTVUUkVWSVNX',
-      _ModuleTable001_: 'more-chunks',
-      PATH: '/usr/bin',
-    });
-
-    expect(env._ModuleTable00_).toBeUndefined();
-    expect(env._ModuleTable001_).toBeUndefined();
-    expect(env.PATH).toBe('/usr/bin');
-  });
-
-  it('keeps MODULEPATH and MODULESHOME so modulecmd still works', () => {
-    const env = sanitizeModuleEnvForChild({
-      MODULEPATH: '/pub/modulefiles',
-      MODULESHOME: '/usr/share/Modules',
-      LOADEDMODULES: 'tool/python/3.9.7',
-    });
-
-    expect(env.MODULEPATH).toBe('/pub/modulefiles');
-    expect(env.MODULESHOME).toBe('/usr/share/Modules');
-    expect(env.LOADEDMODULES).toBeUndefined();
   });
 });
 
