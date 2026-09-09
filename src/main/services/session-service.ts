@@ -11,13 +11,15 @@ import { TRPCError } from '@trpc/server';
 import { join } from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
 import { sessionManager } from '../agent/session-manager';
-import type { AgentClient } from '../agent/agent-client';
+import type { IAgentClient } from '../agent/agent-contract';
 import type { PersistedSession } from '../agent/session-persistence';
 
 /**
  * Look up a session's agent client by ID or throw a NOT_FOUND tRPC error.
+ * Returns the engine-neutral contract — callers must not depend on a
+ * specific engine implementation.
  */
-export function requireSession(sessionId: string): AgentClient {
+export function requireSession(sessionId: string): IAgentClient {
   const client = sessionManager.getClient(sessionId);
   if (!client) {
     throw new TRPCError({ code: 'NOT_FOUND', message: `Session not found: ${sessionId}` });

@@ -19,22 +19,21 @@ import {
   isToolCallFrame,
   isApprovalRequestFrame,
 } from './types';
+import type {
+  AgentInitResult,
+  AgentRegenerateResult,
+  ApprovalHandler,
+  EventListener,
+  IAgentClient,
+  ToolCallHandler,
+} from './agent-contract';
+import type { AgentEngine } from '@shared/agent-events';
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
 import type { ThinkingLevelSetting } from '@shared/types';
 
-export type ToolCallHandler = (
-  toolName: string,
-  args: unknown,
-) => Promise<unknown>;
-
-export type EventListener = (event: unknown) => void;
-
-/** 审批请求处理器——返回 true 表示用户同意，false 表示拒绝 */
-export type ApprovalHandler = (
-  requestId: string,
-  toolName: string,
-  args: unknown,
-) => Promise<boolean>;
+// Re-exported for backward compatibility — these types now live on the
+// engine-neutral contract (agent-contract.ts).
+export type { ToolCallHandler, EventListener, ApprovalHandler } from './agent-contract';
 
 /**
  * Diagnose why a binary spawn failed. Returns a diagnostic string to append
@@ -95,7 +94,10 @@ export function diagnoseSpawnFailure(binaryPath: string, err: Error): string {
   return parts.join('\n');
 }
 
-export class AgentClient {
+export class AgentClient implements IAgentClient {
+  /** Engine identity — this client drives the oh-my-pi coding agent. */
+  readonly engine: AgentEngine = 'omp';
+
   private process: ChildProcess | null = null;
   /** The PID captured at spawn time, used for process-tree kill on Windows. */
   private processPid: number | null = null;
@@ -378,9 +380,11 @@ export class AgentClient {
 
   // ─── 命令方法 ─────────────────────────────────────────
 
-  async init(config: import('./types').InitConfig): Promise<{ sessionId: string }> {
+  async init(config: import('./types').InitConfig): Promise<AgentInitResult> {
     const response = await this.send({ type: 'init', config });
-    return this.getData<{ sessionId: string }>(response);
+    const data = this.getData<{ sessionId: string }>(response);
+    // Map the runner's omp-native `sessionId` onto the engine-neutral name.
+    return { engineSessionId: data.sessionId };
   }
 
   async prompt(message: string, images?: string[]): Promise<void> {
@@ -410,9 +414,11 @@ export class AgentClient {
    * re-persist it; the regenerated turn itself streams back via the normal
    * event channel.
    */
-  async regenerate(): Promise<{ ompSessionId: string }> {
+  async regenerate(): Promise<AgentRegenerateResult> {
     const response = await this.send({ type: 'regenerate' }, 60_000);
-    return this.getData<{ ompSessionId: string }>(response);
+    const data = this.getData<{ ompSessionId: string }>(response);
+    // Map the runner's omp-native `ompSessionId` onto the engine-neutral name.
+    return { engineSessionId: data.ompSessionId };
   }
 
   /**

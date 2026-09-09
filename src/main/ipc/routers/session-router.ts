@@ -25,7 +25,7 @@ import {
   updateSessionModel,
   updateSessionActivity,
   updateSessionContextUsage,
-  updateSessionOmpId,
+  updateSessionEngineId,
   type PersistedSession,
 } from '../../agent/session-persistence';
 import { discoverSkills, readSkillContent, resolveSkillUriPath } from '../../agent/skill-discovery';
@@ -135,11 +135,11 @@ async function performHolisticSwap(input: {
     }
   }
 
-  // Capture the omp session ID for resume, then destroy the runtime session
-  const ompSessionId = sessionManager.getOmpSessionId(input.sessionId);
+  // Capture the engine session ID for resume, then destroy the runtime session
+  const engineSessionId = sessionManager.getEngineSessionId(input.sessionId);
   const persistedSessionId = existing.persistedSessionId ?? input.sessionId;
 
-  console.log(`[router:session.setModel] destroying session ${input.sessionId} (ompSessionId=${ompSessionId ?? 'none'})`);
+  console.log(`[router:session.setModel] destroying session ${input.sessionId} (engineSessionId=${engineSessionId ?? 'none'})`);
   await sessionManager.destroySession(input.sessionId);
 
   // Recreate with the new credential's config, resuming the conversation.
@@ -151,21 +151,24 @@ async function performHolisticSwap(input: {
     cwd: project.rootPath,
     providerId: input.providerId,
     model: input.modelId,
-    resumeSessionId: ompSessionId,
+    resumeSessionId: engineSessionId,
     persistedSessionId,
     includeCaseStats: true,
   });
 
   const { sessionId: newSessionId, provider, model: resolvedModel } = ctx;
 
-  // Persist model info (with providerId) + updated ompSessionId
-  const newOmpSessionId = sessionManager.getOmpSessionId(newSessionId);
+  // Persist model info (with providerId) + updated engineSessionId
+  const newEngineSessionId = sessionManager.getEngineSessionId(newSessionId);
+  const newEngine = sessionManager.getEngine(newSessionId);
   const sessions = await loadSessions(project.rootPath);
   const idx = sessions.findIndex((s) => s.sessionId === persistedSessionId);
   if (idx >= 0) {
     sessions[idx] = {
       ...sessions[idx],
-      ompSessionId: newOmpSessionId,
+      engine: newEngine,
+      engineSessionId: newEngineSessionId,
+      cwd: project.rootPath,
       lastActivityAt: Date.now(),
       model: {
         provider: provider ?? '',
@@ -241,10 +244,13 @@ export const sessionRouter = t.router({
       console.log(`[router:session.create] provider=${provider ?? '(default)'}, model=${input.model ?? '(default)'}, hasApiKey=${!!ctx.apiKey}, hasBaseUrl=${!!ctx.baseUrl}`);
 
       // Persist session metadata
-      const ompSessionId = sessionManager.getOmpSessionId(sessionId);
+      const engineSessionId = sessionManager.getEngineSessionId(sessionId);
+      const engine = sessionManager.getEngine(sessionId);
       const persisted: PersistedSession = {
         sessionId,
-        ompSessionId,
+        engine,
+        engineSessionId,
+        cwd: input.cwd,
         name: '新会话',
         projectId: input.projectId,
         createdAt: Date.now(),
@@ -385,20 +391,21 @@ export const sessionRouter = t.router({
 
       // Branch the engine session back to the latest user message and
       // re-prompt. The branch forks the engine session file — persist the
-      // post-branch ompSessionId so a restart resumes the new branch.
+      // post-branch engineSessionId so a restart resumes the new branch.
       const result = await sessionManager.regenerateSession(targetSessionId);
       const entry = sessionManager.getSession(targetSessionId);
       if (entry) {
         const project = projectManager.getProject(entry.projectId);
         if (project) {
-          await updateSessionOmpId(
+          await updateSessionEngineId(
             project.rootPath,
             entry.persistedSessionId ?? targetSessionId,
-            result.ompSessionId,
+            entry.engine,
+            result.engineSessionId,
           );
         }
       }
-      return { ok: true, ompSessionId: result.ompSessionId };
+      return { ok: true, engineSessionId: result.engineSessionId };
     }),
 
   destroy: t.procedure
@@ -736,7 +743,8 @@ export const sessionRouter = t.router({
       const { sessionId, provider, model: resolvedModelId, providerId } = ctx;
 
       // Persist the latest runtime resume handle and activity timestamp.
-      const ompSessionId = sessionManager.getOmpSessionId(sessionId);
+      const engineSessionId = sessionManager.getEngineSessionId(sessionId);
+      const engine = sessionManager.getEngine(sessionId);
       const resolvedModel = provider && resolvedModelId
         ? {
             provider,
@@ -750,7 +758,9 @@ export const sessionRouter = t.router({
       if (idx >= 0) {
         sessions[idx] = {
           ...sessions[idx],
-          ompSessionId,
+          engine,
+          engineSessionId,
+          cwd: input.cwd,
           lastActivityAt: Date.now(),
           model: resolvedModel,
         };
@@ -924,13 +934,16 @@ export const sessionRouter = t.router({
 
       // Persist session metadata
       const project = requireProject(input.projectId);
-      const ompSessionId = sessionManager.getOmpSessionId(sessionId);
+      const engineSessionId = sessionManager.getEngineSessionId(sessionId);
+      const engine = sessionManager.getEngine(sessionId);
       const sessionName = input.errorType === 'compile_error'
         ? `[编译修复] ${input.caseName}`
         : `[仿真分析] ${input.caseName}`;
       const persisted: PersistedSession = {
         sessionId,
-        ompSessionId,
+        engine,
+        engineSessionId,
+        cwd: input.cwd ?? project.rootPath,
         name: sessionName,
         projectId: input.projectId,
         createdAt: Date.now(),

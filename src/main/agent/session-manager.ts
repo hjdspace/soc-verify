@@ -4,6 +4,11 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { AgentClient, type ToolCallHandler } from './agent-client';
+import type {
+  AgentClientFactory,
+  AgentClientFactoryOptions,
+  IAgentClient,
+} from './agent-contract';
 import { resolveAgentRuntime, resolveBuiltInExtensionDir, resolveRunnerBinary, resolveRunnerScript, resolveBunPath, checkBunVersion } from './paths';
 import { ensureOfficecliOnPath } from './officecli-paths';
 import type { CustomToolDefinition, InitConfig, ApprovalMode, SeedHistoryMessage } from './types';
@@ -34,6 +39,7 @@ import {
 } from '../mcp/traceweave-paths';
 import { notificationManager } from '../notifications/notification-manager';
 import type { AskAnswer, AskQuestion } from '@shared/ask-types';
+import type { AgentEngine } from '@shared/agent-events';
 import { recordUsageFromEvent } from '../token-monitor/token-usage-recorder';
 import { tokenMonitorRegistry } from '../token-monitor/token-monitor-registry';
 
@@ -262,10 +268,12 @@ export interface SessionEntry {
   id: string;
   /** The SoC Verify session ID stored in .socverify/sessions.json, if this is a restored runtime session. */
   persistedSessionId?: string;
-  /** The omp engine's session ID — needed to resume conversations */
-  ompSessionId?: string;
+  /** Which engine backs this session (e.g. 'omp', 'pi'). */
+  engine: AgentEngine;
+  /** The engine's session ID — needed to resume conversations (engine-neutral). */
+  engineSessionId?: string;
   projectId: string;
-  client: AgentClient;
+  client: IAgentClient;
   hostTools: HostToolsRegistry;
   hostUris: HostUriRouter;
   createdAt: number;
@@ -294,18 +302,37 @@ export interface SessionEventData {
   event: unknown;
 }
 
+/**
+ * Default client factory — builds the omp-backed `AgentClient` from the
+ * resolved runtime mode. Tests and future engines inject their own factory.
+ */
+export const defaultAgentClientFactory: AgentClientFactory = (options) =>
+  new AgentClient(
+    options.mode === 'binary'
+      ? { runnerBinaryPath: options.runnerPath, cwd: options.cwd, env: options.env }
+      : {
+          bunPath: options.bunPath!,
+          runnerPath: options.runnerPath,
+          cwd: options.cwd,
+          env: options.env,
+        },
+  );
+
 export class SessionManagerImpl extends EventEmitter {
   private sessions = new Map<string, SessionEntry>();
   private projectSessions = new Map<string, Set<string>>();
   private idleTimeoutMs: number;
+  /** Factory seam: creates engine clients so the manager stays engine-neutral. */
+  private clientFactory: AgentClientFactory;
   /** Pending approval requests: requestId → { resolve, sessionId } */
   private pendingApprovals = new Map<string, { resolve: (approved: boolean) => void; sessionId: string }>();
   /** Pending ask requests: requestId → { resolve, sessionId } */
   private pendingAsks = new Map<string, { resolve: (answers: AskAnswer[]) => void; sessionId: string }>();
 
-  constructor(idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS) {
+  constructor(idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS, clientFactory: AgentClientFactory = defaultAgentClientFactory) {
     super();
     this.idleTimeoutMs = idleTimeoutMs;
+    this.clientFactory = clientFactory;
   }
 
   async createSession(options: CreateSessionOptions): Promise<string> {
@@ -646,21 +673,15 @@ export class SessionManagerImpl extends EventEmitter {
     };
 
     // Helper: create an AgentClient configured for the given runtime mode
-    const createClientForRuntime = (rt: { mode: 'binary' | 'script'; runnerPath: string; bunPath?: string }) => {
-      const c = new AgentClient(
-        rt.mode === 'binary'
-          ? {
-              runnerBinaryPath: rt.runnerPath,
-              cwd: options.cwd,
-              env,
-            }
-          : {
-              bunPath: rt.bunPath!,
-              runnerPath: rt.runnerPath,
-              cwd: options.cwd,
-              env,
-            },
-      );
+    const createClientForRuntime = (rt: { mode: 'binary' | 'script'; runnerPath: string; bunPath?: string }): IAgentClient => {
+      const factoryOptions: AgentClientFactoryOptions = {
+        mode: rt.mode,
+        runnerPath: rt.runnerPath,
+        bunPath: rt.bunPath,
+        cwd: options.cwd,
+        env,
+      };
+      const c = this.clientFactory(factoryOptions);
       c.setToolCallHandler(toolCallHandler);
       c.setApprovalHandler(async (requestId, toolName, args) => {
         const { promise, resolve } = Promise.withResolvers<boolean>();
@@ -673,7 +694,7 @@ export class SessionManagerImpl extends EventEmitter {
 
     // Helper: attach event forwarding to a client
     const debugAllEvents = !!process.env.SOCVERIFY_DEBUG_EVENTS;
-    const attachEventForwarding = (c: AgentClient) => {
+    const attachEventForwarding = (c: IAgentClient) => {
       c.onEvent((event) => {
         const evtType = (event as Record<string, unknown>)?.type as string | undefined;
         if (debugAllEvents || !SILENT_EVENT_TYPES.has(evtType ?? '')) {
@@ -716,7 +737,7 @@ export class SessionManagerImpl extends EventEmitter {
             const tokenDb = tokenMonitorRegistry.getOrCreateDb(options.cwd);
             recordUsageFromEvent(tokenDb, event, {
               sessionId,
-              engine: 'omp',
+              engine: c.engine,
               projectId: options.projectId,
               cwd: options.cwd,
             });
@@ -749,14 +770,14 @@ export class SessionManagerImpl extends EventEmitter {
     }
     console.log(`[agent:session:${sessionId}] provider=${provider ?? '(default)'}, model=${model ?? '(default)'}`);
 
-    let ompSessionId: string | undefined;
+    let engineSessionId: string | undefined;
 
     try {
       await client.start();
       console.log(`[agent:session:${sessionId}] agent process started successfully`);
       const initResult = await client.init(initConfig);
-      ompSessionId = initResult.sessionId;
-      console.log(`[agent:session:${sessionId}] omp sessionId=${ompSessionId}`);
+      engineSessionId = initResult.engineSessionId;
+      console.log(`[agent:session:${sessionId}] engine (${client.engine}) sessionId=${engineSessionId}`);
     } catch (err) {
       client.stop();
 
@@ -783,8 +804,8 @@ export class SessionManagerImpl extends EventEmitter {
               await client.start();
               console.log(`[agent:session:${sessionId}] agent process started successfully (script mode)`);
               const initResult = await client.init(initConfig);
-              ompSessionId = initResult.sessionId;
-              console.log(`[agent:session:${sessionId}] omp sessionId=${ompSessionId} (script mode)`);
+              engineSessionId = initResult.engineSessionId;
+              console.log(`[agent:session:${sessionId}] engine (${client.engine}) sessionId=${engineSessionId} (script mode)`);
             } catch (scriptErr) {
               client.stop();
               if (runtimeDir) {
@@ -834,7 +855,8 @@ export class SessionManagerImpl extends EventEmitter {
     const entry: SessionEntry = {
       id: sessionId,
       persistedSessionId: options.persistedSessionId,
-      ompSessionId,
+      engine: client.engine,
+      engineSessionId,
       projectId: options.projectId,
       client,
       hostTools,
@@ -875,9 +897,24 @@ export class SessionManagerImpl extends EventEmitter {
     return this.sessions.get(sessionId) ?? null;
   }
 
-  /** Get the omp engine's session ID for a given SoC Verify session. */
+  /** Get which engine backs a given SoC Verify session. */
+  getEngine(sessionId: string): AgentEngine | undefined {
+    return this.sessions.get(sessionId)?.engine;
+  }
+
+  /** Get the engine's session ID for a given SoC Verify session (engine-neutral). */
+  getEngineSessionId(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.engineSessionId;
+  }
+
+  /**
+   * Get the omp engine's session ID for a given SoC Verify session.
+   *
+   * @deprecated Use `getEngineSessionId` — kept as a deprecated alias while
+   * callers migrate to the engine-neutral naming.
+   */
   getOmpSessionId(sessionId: string): string | undefined {
-    return this.sessions.get(sessionId)?.ompSessionId;
+    return this.getEngineSessionId(sessionId);
   }
 
   /** Get the model ID that the runtime session was actually initialized with. */
@@ -885,7 +922,7 @@ export class SessionManagerImpl extends EventEmitter {
     return this.sessions.get(sessionId)?.model;
   }
 
-  getClient(sessionId: string): AgentClient | null {
+  getClient(sessionId: string): IAgentClient | null {
     return this.sessions.get(sessionId)?.client ?? null;
   }
 
@@ -1038,11 +1075,11 @@ export class SessionManagerImpl extends EventEmitter {
    *
    * Engine-side this branches the session tree back to the latest user
    * message and re-prompts — the branch FORKS the engine session file, so
-   * the entry's ompSessionId is updated in place (the caller persists it
+   * the entry's engineSessionId is updated in place (the caller persists it
    * with the project root it already has).  The regenerated turn streams
    * back through the normal sessionEvent channel.
    */
-  async regenerateSession(sessionId: string): Promise<{ ompSessionId: string }> {
+  async regenerateSession(sessionId: string): Promise<{ engineSessionId: string }> {
     const entry = this.sessions.get(sessionId);
     if (!entry) {
       throw new Error(`Session not found: ${sessionId}`);
@@ -1051,9 +1088,9 @@ export class SessionManagerImpl extends EventEmitter {
       throw new Error(`Client not started: ${sessionId}`);
     }
     const result = await entry.client.regenerate();
-    if (result.ompSessionId && result.ompSessionId !== entry.ompSessionId) {
-      entry.ompSessionId = result.ompSessionId;
-      console.log(`[agent:session:${sessionId}] omp sessionId=${result.ompSessionId} (branched by regenerate)`);
+    if (result.engineSessionId && result.engineSessionId !== entry.engineSessionId) {
+      entry.engineSessionId = result.engineSessionId;
+      console.log(`[agent:session:${sessionId}] engine sessionId=${result.engineSessionId} (branched by regenerate)`);
     }
     return result;
   }
@@ -1176,7 +1213,7 @@ export class SessionManagerImpl extends EventEmitter {
     }
   }
 
-  private requireClient(sessionId: string): AgentClient {
+  private requireClient(sessionId: string): IAgentClient {
     const client = this.sessions.get(sessionId)?.client;
     if (!client) {
       throw new Error(`Session not found: ${sessionId}`);

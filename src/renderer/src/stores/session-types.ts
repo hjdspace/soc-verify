@@ -175,7 +175,7 @@ export interface SessionEntry {
 
 export interface HistorySession {
   sessionId: string;
-  ompSessionId?: string;
+  engineSessionId?: string;
   name: string;
   projectId: string;
   createdAt: number;

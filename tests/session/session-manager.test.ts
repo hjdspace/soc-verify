@@ -45,7 +45,7 @@ const { MockAgentClient } = vi.hoisted(() => {
     started = false;
     stopped = false;
     destroyed = false;
-    initResult = { sessionId: 'omp-session-test' };
+    initResult = { engineSessionId: 'omp-session-test' };
     eventListeners: Array<(event: unknown) => void> = [];
     toolCallHandler: unknown = null;
     approvalHandler: unknown = null;
@@ -408,7 +408,7 @@ describe('SessionManager — ask tool routing', () => {
     manager.on('askRequest', (data) => askEvents.push(data));
 
     // Invoke the tool call handler for 'ask'
-    const handler = entry.client['toolCallHandler'] as (toolName: string, args: unknown) => Promise<unknown>;
+    const handler = (entry.client as unknown as Record<string, unknown>)['toolCallHandler'] as (toolName: string, args: unknown) => Promise<unknown>;
 
     // The handler is set on the client — we need to access it through the client
     // Since MockAgentClient stores it, we can invoke it directly
@@ -458,7 +458,7 @@ describe('SessionManager — ask tool routing', () => {
     const id = await createTestSession(manager);
     const entry = manager.getSession(id)!;
 
-    const handler = entry.client['toolCallHandler'] as (toolName: string, args: unknown) => Promise<unknown>;
+    const handler = (entry.client as unknown as Record<string, unknown>)['toolCallHandler'] as (toolName: string, args: unknown) => Promise<unknown>;
 
     const result = await handler('ask', { questions: [] });
 
@@ -471,7 +471,7 @@ describe('SessionManager — ask tool routing', () => {
     const id = await createTestSession(manager);
     const entry = manager.getSession(id)!;
 
-    const handler = entry.client['toolCallHandler'] as (toolName: string, args: unknown) => Promise<unknown>;
+    const handler = (entry.client as unknown as Record<string, unknown>)['toolCallHandler'] as (toolName: string, args: unknown) => Promise<unknown>;
 
     const result = await handler('ask', { questions: 'not an array' });
 
@@ -487,7 +487,7 @@ describe('SessionManager — ask tool routing', () => {
     const askEvents: unknown[] = [];
     manager.on('askRequest', (data) => askEvents.push(data));
 
-    const handler = entry.client['toolCallHandler'] as (toolName: string, args: unknown) => Promise<unknown>;
+    const handler = (entry.client as unknown as Record<string, unknown>)['toolCallHandler'] as (toolName: string, args: unknown) => Promise<unknown>;
 
     const askPromise = handler('ask', {
       questions: [{
@@ -536,7 +536,7 @@ describe('SessionManager — approval routing', () => {
     manager.on('approvalRequest', (data) => approvalEvents.push(data));
 
     // Invoke the approval handler (set on MockAgentClient)
-    const approvalHandler = entry.client['approvalHandler'] as (
+    const approvalHandler = (entry.client as unknown as Record<string, unknown>)['approvalHandler'] as (
       requestId: string,
       toolName: string,
       args: unknown,
@@ -587,7 +587,7 @@ describe('SessionManager — session events', () => {
     manager.on('sessionEvent', (data) => events.push(data));
 
     // Simulate the agent emitting an event
-    const eventListener = entry.client['eventListeners'] as Array<(event: unknown) => void>;
+    const eventListener = (entry.client as unknown as Record<string, unknown>)['eventListeners'] as Array<(event: unknown) => void>;
     eventListener[0]({ type: 'message_start', message: { role: 'assistant' } });
 
     expect(events).toHaveLength(1);
@@ -604,7 +604,7 @@ describe('SessionManager — session events', () => {
     // Before agent_start, session is not active
     expect(manager.getSession(id)?.isActive).toBe(false);
 
-    const eventListener = entry.client['eventListeners'] as Array<(event: unknown) => void>;
+    const eventListener = (entry.client as unknown as Record<string, unknown>)['eventListeners'] as Array<(event: unknown) => void>;
     eventListener[0]({ type: 'agent_start' });
 
     expect(manager.getSession(id)?.isActive).toBe(true);
@@ -617,7 +617,7 @@ describe('SessionManager — session events', () => {
     // Set active first
     manager['setActive'](id, true);
 
-    const eventListener = entry.client['eventListeners'] as Array<(event: unknown) => void>;
+    const eventListener = (entry.client as unknown as Record<string, unknown>)['eventListeners'] as Array<(event: unknown) => void>;
     eventListener[0]({ type: 'agent_end' });
 
     expect(manager.getSession(id)?.isActive).toBe(false);
