@@ -257,13 +257,13 @@ export function RunConfigModal({
               />
               {filterTags.length > 0 && (
                 <div className="flex flex-col gap-0.5">
-                  <div className="flex items-center text-[9.5px] text-muted-foreground/70">
+                  <div className="flex items-center text-[10.5px] text-muted-foreground/80">
                     过滤标签
                     <span className="ml-1 font-mono">{filterTags.length}</span>
                     {filterTags.length > 12 && (
                       <button
                         onClick={() => setTagFilterExpanded((v) => !v)}
-                        className="ml-auto rounded px-1 text-[9.5px] text-primary transition-colors hover:bg-accent"
+                        className="ml-auto rounded px-1 text-[10.5px] text-primary transition-colors hover:bg-accent"
                         data-testid="reg-run-tagfilter-toggle"
                       >
                         {tagFilterExpanded ? '收起' : '全部展开'}
@@ -282,7 +282,7 @@ export function RunConfigModal({
                         key={tag}
                         onClick={() => setTagFilter(tagFilter === tag ? null : tag)}
                         className={cn(
-                          'rounded px-1.5 py-0.5 font-mono text-[10px] transition-colors',
+                          'rounded px-1.5 py-0.5 font-mono text-[10.5px] transition-colors',
                           tagFilter === tag
                             ? 'bg-primary/20 text-primary'
                             : 'bg-secondary text-muted-foreground hover:bg-accent',
@@ -321,7 +321,7 @@ export function RunConfigModal({
                       )}
                       <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground">{name}</span>
                       {item.type === 'list' && (
-                        <span className="shrink-0 text-[9px] text-muted-foreground">
+                        <span className="shrink-0 text-[10.5px] text-muted-foreground">
                           {item.onCount} ON · {item.entries.length} 行
                         </span>
                       )}
@@ -338,14 +338,14 @@ export function RunConfigModal({
               <div className="flex h-full flex-col items-center justify-center gap-1.5 text-muted-foreground">
                 <Play className="size-5 opacity-30" />
                 <span className="text-xs">选择一个回归列表或组</span>
-                <span className="text-[10px] opacity-60">单次运行一个文件；多列表打包请使用组（.grp）</span>
+                <span className="text-[10.5px] text-muted-foreground/80">单次运行一个文件；多列表打包请使用组（.grp）</span>
               </div>
             ) : (
               <div className="flex flex-col gap-3">
                 {/* Item 摘要 */}
                 <div className="rounded-md border border-border/50 bg-secondary/20 px-3 py-2">
                   <div className="truncate font-mono text-xs text-foreground">{baseName(selected.filePath)}</div>
-                  <div className="mt-0.5 text-[10px] text-muted-foreground">
+                  <div className="mt-0.5 text-[10.5px] text-muted-foreground">
                     {selectedList
                       ? `${selectedList.onCount} ON / ${selectedList.offCount} OFF / ${selectedList.entries.length} 行`
                       : `${(selected as { refPaths: string[] }).refPaths.length} 个引用（嵌套递归解析）`}
@@ -365,7 +365,7 @@ export function RunConfigModal({
                     </button>
                     {entryPreviewOpen && (
                       <table
-                        className="mt-1 w-full rounded border border-border/50 text-left font-mono text-[10px]"
+                        className="mt-1 w-full rounded border border-border/50 text-left font-mono text-[10.5px]"
                         data-testid="reg-run-entry-table"
                       >
                         <thead>
@@ -381,7 +381,7 @@ export function RunConfigModal({
                           {selectedList.entries.map((e, i) => (
                             <tr key={`${e.caseName}-${i}`} className="border-b border-border/30 last:border-b-0">
                               <td className="px-2 py-0.5">
-                                <span className={e.enabled ? 'text-status-pass-foreground' : 'text-muted-foreground/50'}>
+                                <span className={e.enabled ? 'text-status-pass-foreground' : 'text-muted-foreground/70'}>
                                   {e.enabled ? 'ON' : 'OFF'}
                                 </span>
                               </td>
@@ -400,7 +400,7 @@ export function RunConfigModal({
                 {/* Group 引用清单（解析后） */}
                 {selected?.type === 'group' && groupResolved && (
                   <div className="rounded-md border border-border/50 px-3 py-2">
-                    <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">引用文件</div>
+                    <div className="mb-1 text-[10.5px] font-semibold uppercase text-muted-foreground">引用文件</div>
                     {groupResolved.map((ref) => (
                       <div key={ref.path} className="flex items-center gap-1.5">
                         {ref.type === 'unreadable' && (
@@ -409,7 +409,7 @@ export function RunConfigModal({
                         <span
                           key={ref.path}
                           className={cn(
-                            'truncate font-mono text-[10px]',
+                            'truncate font-mono text-[10.5px]',
                             ref.type === 'unreadable' ? 'text-status-fail-foreground/80' : 'text-muted-foreground',
                           )}
                           title={ref.type === 'unreadable' ? '无法读取（环境变量未配置或文件缺失）' : undefined}
@@ -426,14 +426,14 @@ export function RunConfigModal({
                   {candidateTags.length > 0 && (
                     <div>
                       <div className="mb-1 flex items-baseline">
-                        <span className="text-[10px] font-semibold uppercase text-muted-foreground">标签筛选</span>
-                        <span className="ml-1.5 text-[9.5px] text-muted-foreground/70">
+                        <span className="text-[10.5px] font-semibold uppercase text-muted-foreground">标签筛选</span>
+                        <span className="ml-1.5 text-[10.5px] text-muted-foreground/80">
                           点选 = 只跑（-tag）· × = 排除（-nt）· 未动 = 忽略
                         </span>
                         {(selectedTags.length > 0 || selectedNonTags.length > 0) && (
                           <button
                             onClick={clearTags}
-                            className="ml-auto rounded px-1 text-[9.5px] text-primary transition-colors hover:bg-accent"
+                            className="ml-auto rounded px-1 text-[10.5px] text-primary transition-colors hover:bg-accent"
                             data-testid="reg-run-tag-clear"
                           >
                             重置
@@ -452,7 +452,7 @@ export function RunConfigModal({
                               key={tag}
                               onClick={() => cycleTag(tag)}
                               className={cn(
-                                'rounded px-1.5 py-0.5 font-mono text-[10px] transition-colors',
+                                'rounded px-1.5 py-0.5 font-mono text-[10.5px] transition-colors',
                                 state === 'sel' && 'bg-primary/20 text-primary',
                                 state === 'exc' &&
                                   'bg-status-fail/15 text-status-fail-foreground line-through decoration-status-fail-foreground/60',
@@ -468,13 +468,13 @@ export function RunConfigModal({
                               data-testid={`reg-run-tag-${tag}`}
                             >
                               {tag}
-                              {state === 'exc' && <span className="ml-1 text-[9px]">×</span>}
+                              {state === 'exc' && <span className="ml-1 text-[10.5px]">×</span>}
                             </button>
                           );
                         })}
                       </div>
                       {(selectedTags.length > 0 || selectedNonTags.length > 0) && (
-                        <div className="mt-0.5 font-mono text-[9.5px] text-muted-foreground/70">
+                        <div className="mt-0.5 font-mono text-[10.5px] text-muted-foreground/80">
                           {selectedTags.length > 0 && `-tag ${selectedTags.join(',')}`}
                           {selectedTags.length > 0 && selectedNonTags.length > 0 && ' '}
                           {selectedNonTags.length > 0 && `-nt ${selectedNonTags.join(',')}`}
@@ -510,7 +510,7 @@ export function RunConfigModal({
 
                   <div className="flex gap-3">
                     <label className="flex flex-1 items-center gap-1.5">
-                      <span className="shrink-0 text-[10px] font-medium text-muted-foreground">回归工作目录（-regr_work）</span>
+                      <span className="shrink-0 text-[10.5px] font-medium text-muted-foreground">回归工作目录（-regr_work）</span>
                       <input
                         value={regrWork}
                         onChange={(e) => setRegrWork(e.target.value)}
@@ -520,7 +520,7 @@ export function RunConfigModal({
                       />
                     </label>
                     <label className="flex flex-1 items-center gap-1.5">
-                      <span className="shrink-0 text-[10px] font-medium text-muted-foreground">Dashboard DE TAG（-m）</span>
+                      <span className="shrink-0 text-[10.5px] font-medium text-muted-foreground">Dashboard DE TAG（-m）</span>
                       <input
                         value={dashboard}
                         onChange={(e) => setDashboard(e.target.value)}
@@ -535,10 +535,10 @@ export function RunConfigModal({
                 {/* 命令预览（只读，与执行同一构造实现） */}
                 <div className="rounded-md border border-border bg-background/60 px-3 py-2">
                   <div className="mb-1 flex items-center justify-between">
-                    <span className="text-[10px] font-semibold uppercase text-muted-foreground">命令预览</span>
+                    <span className="text-[10.5px] font-semibold uppercase text-muted-foreground">命令预览</span>
                     <button
                       onClick={handleCopy}
-                      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                       title="复制命令"
                       data-testid="reg-run-copy"
                     >
@@ -559,7 +559,7 @@ export function RunConfigModal({
         <div className="flex items-center gap-2 border-t border-border px-4 py-2.5">
           {unreadableRefs.length > 0 && (
             <span
-              className="flex items-center gap-1 text-[10px] text-status-fail-foreground/80"
+              className="flex items-center gap-1 text-[10.5px] text-status-fail-foreground"
               title={unreadableRefs.map((r) => r.path).join('\n')}
               data-testid="reg-run-unreadable-count"
             >
