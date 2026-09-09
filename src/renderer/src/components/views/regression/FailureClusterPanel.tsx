@@ -14,7 +14,7 @@ export function FailureClusterPanel() {
       <div className="flex items-center gap-2 border-b border-border px-3.5 py-2.5 text-xs font-semibold text-foreground">
         失败聚类
         <span
-          className="rounded-full bg-secondary px-[7px] text-[10px] font-normal text-muted-foreground"
+          className="rounded-full bg-secondary px-[7px] text-[10.5px] font-normal text-muted-foreground"
           data-testid="reg-cluster-badge"
         >
           待分类
@@ -26,7 +26,7 @@ export function FailureClusterPanel() {
       >
         <Shapes className="size-6 opacity-30" />
         <span className="text-xs">聚类数据源待接入</span>
-        <span className="max-w-[220px] text-center text-[11px] leading-relaxed opacity-60">
+        <span className="max-w-[220px] text-center text-[11px] leading-relaxed text-muted-foreground/80">
           失败用例的波形 / 日志聚类分析暂未接入，就绪后按「聚类 · 相似度 · 计数」展示
         </span>
       </div>
