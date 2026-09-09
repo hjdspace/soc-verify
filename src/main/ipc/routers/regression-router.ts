@@ -14,9 +14,10 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { t, TRPCError } from '../router-context';
 import { requireProject } from '../../services/project-service';
-import { resolveProjEnv } from '../../env/env-manager';
+import { resolveProjEnv, resolveProjectEnvVar } from '../../env/env-manager';
 import {
   discoverRegressions,
   parseRegressionList,
@@ -95,23 +96,31 @@ export const regressionRouter = t.router({
   /**
    * Parse a regression group file (`.grp`) into referenced file paths.
    * Recursively resolves nested groups (max depth 10, cycle detection).
+   * `$VAR`-prefixed references are expanded via project env resolution
+   * (process env → login shell → .socverify/env.json); unreadable refs are
+   * returned as type 'unreadable' rather than guessed as list.
    */
   parseGroup: t.procedure
-    .input((raw): { filePath: string } => {
+    .input((raw): { filePath: string; projectRoot?: string } => {
       const r = raw as Record<string, unknown>;
       if (typeof r.filePath !== 'string') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'filePath is required' });
       }
-      return { filePath: r.filePath };
+      return {
+        filePath: r.filePath,
+        projectRoot: typeof r.projectRoot === 'string' ? r.projectRoot : undefined,
+      };
     })
     .query(async ({ input }) => {
       try {
         const content = await readFile(input.filePath, 'utf-8');
         const refPaths = parseRegressionGroup(content);
-        // Resolve nested groups
+        // Resolve nested groups；$VAR 展开用项目级 env 解析（projectRoot 未传时仅 process.env）
+        const projectRoot = input.projectRoot ?? dirname(input.filePath);
         const resolved = await resolveGroupRefs(
           input.filePath,
           async (path: string) => readFile(path, 'utf-8'),
+          (name: string) => resolveProjectEnvVar(name, projectRoot),
         );
         return { refPaths, resolved };
       } catch {
