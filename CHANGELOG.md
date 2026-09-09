@@ -6,6 +6,29 @@
 
 ---
 
+## [0.4.9](https://github.com/hjdspace/soc-verify/compare/v0.4.8...v0.4.9) (2026-09-09)
+
+### Features
+
+* **ai-chat:** 会话消息引用（Quote）功能——选中会话内容一键引用到 Composer，新增 ComposerQuoteChips 组件管理引用条目
+* **ai-chat:** 上下文用量（context usage）事件处理与会话内展示；编辑消息 diff 渲染增强，支持 SloppyEdit 与 toolResult 展示
+* **regression:** 回归命令解析功能——新增 ParseCommandDialog，解析 runsim 命令自动生成运行配置；RunConfigModal 标签处理增强，套件状态新增 barClass 指示
+* **kb:** 知识库视图增强——挂载库自动扫描、文档列表性能优化与加载状态、Drawio 查看器缩放居中（centerZoom）与溢出保护、LLM 配置与骨架提取增强
+* **project:** 项目路由新增 findFileByName 文件搜索 API，支持 Dirent 类型识别
+
+### Bug Fixes
+
+* **rtl:** 修复 Linux 平台 yosys 的路径布局问题
+* **project:** 增强文件打开的错误处理与搜索逻辑
+
+### Refactor
+
+* **rtl:** 调整错误处理与 Yosys 参数，优化 elaboration 流程
+* **terminal:** 重构 terminal-manager 环境变量处理
+* **regression:** 重构组引用（group ref）解析与归一化逻辑，parseGroup 支持 projectRoot 参数
+* **kb:** 重构文档列表与 Markdown 文件处理，file 读取改为 try-catch 提升健壮性
+* **ui:** 回归视图各组件字号与样式优化（RegressionView、SuiteCardGrid、RunConfigModal、HistoryTable、FailureClusterPanel）
+
 ## [0.4.8](https://github.com/hjdspace/soc-verify/compare/v0.4.7...v0.4.8) (2026-09-07)
 
 ### Features
