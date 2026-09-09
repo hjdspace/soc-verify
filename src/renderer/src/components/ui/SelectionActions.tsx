@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
-import { ArrowUp, Check, ChevronDown, Copy, Expand, Languages, MessageCircleQuestion, RotateCcw, Scissors, Sparkles, X } from 'lucide-react';
+import { ArrowUp, Check, ChevronDown, Copy, Expand, Languages, MessageCircleQuestion, Quote, RotateCcw, Scissors, Sparkles, X } from 'lucide-react';
 import { Shimmer } from '@renderer/components/ui/Shimmer';
 import { MarkdownRenderer } from '@renderer/components/chat/MarkdownRenderer';
 import type { SelectionAnchor } from '@renderer/hooks/use-selection-anchor';
@@ -42,13 +42,20 @@ const iconProps = { size: 14, strokeWidth: 1.8, 'aria-hidden': true } as const;
 /** 查阅型动作 key 集合：这类动作在浮窗下展示结果，不走 Keep/Discard 回合 */
 export const POPUP_ACTIONS = new Set(['explain', 'translate', 'prompt']);
 
-/** 默认快捷动作：前两项常驻，后三项收进展开区（chevron 切换） */
+/** 默认快捷动作（编辑器宿主）：前两项常驻，后三项收进展开区（chevron 切换） */
 export const SELECTION_ACTIONS: SelectionActionDef[] = [
   { key: 'explain', label: '解释', busyLabel: '解释中', icon: <MessageCircleQuestion {...iconProps} /> },
   { key: 'improve', label: '改进', busyLabel: '改进中', icon: <Sparkles {...iconProps} /> },
   { key: 'shorten', label: '精简', busyLabel: '精简中', icon: <Scissors {...iconProps} /> },
   { key: 'expand', label: '展开', busyLabel: '展开中', icon: <Expand {...iconProps} /> },
   { key: 'translate', label: '翻译', busyLabel: '翻译中', icon: <Languages {...iconProps} /> },
+];
+
+/** AI 气泡宿主动作集：仅保留查阅型动作（解释/翻译）——
+ *  改进/精简/展开面向「改写原文」，对 LLM 回复无意义（issue：AI Agent 侧浮窗精简） */
+export const AI_SELECTION_ACTIONS: SelectionActionDef[] = [
+  SELECTION_ACTIONS[0],
+  SELECTION_ACTIONS[4],
 ];
 
 /** 流式预览的模糊尾缘字符数（与 MarkdownRenderer STREAM_TAIL_CHARS 对齐）；0 = 禁用尾缘 */
@@ -60,6 +67,8 @@ const IDLE_PROMPT_W = 150;
 const ACTIONS_W = 196;
 const ACTIONS_EXPANDED_W = 408;
 const SEND_W = 30;
+/** 「添加到当前任务」按钮槽位宽（图标 + 7 字标签 + 内边距） */
+const QUOTE_W = 124;
 
 /** 流式预览文本切分：settled 正文 + 尾缘模糊段（复用 .ap-stream-tail）。
  *  tail 切点必须用 text.length - N 计算：slice(-N) 在 N 为 0 时退化为
@@ -79,12 +88,14 @@ export function SelectionActions({
   phase,
   request,
   streamText = '',
+  showPromptInput = true,
   onSelectAction,
   onSubmitPrompt,
   onKeep,
   onDiscard,
   onRetry,
   onDismiss,
+  onAddQuote,
 }: {
   actions: SelectionActionDef[];
   /** 浮条锚点（相对宿主容器，px）；null 时保持在最后位置仅隐藏 */
@@ -101,6 +112,11 @@ export function SelectionActions({
   onDiscard: () => void;
   onRetry: () => void;
   onDismiss: () => void;
+  /** 自定义 prompt 输入框开关（缺省开启；AI 气泡宿主关闭——窄侧栏下
+   *  输入框会把「添加到当前任务」挤出可视范围） */
+  showPromptInput?: boolean;
+  /** 「添加到当前任务」回调（提供时在 idle 阶段渲染按钮；缺省不渲染） */
+  onAddQuote?: () => void;
 }) {
   // 查阅型动作（explain/translate/prompt）在浮窗下展示结果 Popover，
   // 不走 Keep/Discard 回合管理。busy 阶段在条内显示精简预览（同改写型），
@@ -335,30 +351,34 @@ export function SelectionActions({
 
           {phase === 'idle' && (
             <>
-              <div
-                className="ap-sel-slot"
-                style={{
-                  maxWidth: expanded ? 0 : hasPrompt && typingWidth ? typingWidth - 40 : IDLE_PROMPT_W,
-                  opacity: expanded ? 0 : 1,
-                  transform: expanded ? 'translateX(-8px)' : 'translateX(0)',
-                }}
-              >
-                <form
-                  className="ap-sel-form"
-                  style={{ width: hasPrompt && typingWidth ? typingWidth - 40 : IDLE_PROMPT_W }}
-                  onSubmit={submitPrompt}
+              {/* 自定义 prompt 输入框：AI 气泡宿主（showPromptInput=false）不渲染，
+                  浮条只保留快捷动作 + 添加到当前任务 */}
+              {showPromptInput && (
+                <div
+                  className="ap-sel-slot"
+                  style={{
+                    maxWidth: expanded ? 0 : hasPrompt && typingWidth ? typingWidth - 40 : IDLE_PROMPT_W,
+                    opacity: expanded ? 0 : 1,
+                    transform: expanded ? 'translateX(-8px)' : 'translateX(0)',
+                  }}
                 >
-                  <input
-                    value={prompt}
-                    onChange={(event) => handlePromptInput(event.target.value)}
-                    onKeyDown={handleInputKeyDown}
-                    aria-label="描述你要的操作"
-                    placeholder="描述你要的操作…"
-                    data-testid="selection-prompt"
-                    className="ap-sel-input"
-                  />
-                </form>
-              </div>
+                  <form
+                    className="ap-sel-form"
+                    style={{ width: hasPrompt && typingWidth ? typingWidth - 40 : IDLE_PROMPT_W }}
+                    onSubmit={submitPrompt}
+                  >
+                    <input
+                      value={prompt}
+                      onChange={(event) => handlePromptInput(event.target.value)}
+                      onKeyDown={handleInputKeyDown}
+                      aria-label="描述你要的操作"
+                      placeholder="描述你要的操作…"
+                      data-testid="selection-prompt"
+                      className="ap-sel-input"
+                    />
+                  </form>
+                </div>
+              )}
 
               <div
                 className="ap-sel-slot"
@@ -385,43 +405,76 @@ export function SelectionActions({
                     </button>
                   );
                 })}
-                <span className="ap-sel-divider" aria-hidden />
-                <button
-                  type="button"
-                  aria-label={expanded ? '收起更多动作' : '展开更多动作'}
-                  aria-expanded={expanded}
-                  title={expanded ? '收起更多动作' : '展开更多动作'}
-                  data-testid="selection-expand"
-                  onClick={() => setExpanded((value) => !value)}
-                  className="ap-sel-iconbtn"
-                >
-                  <span
-                    className="flex transition-transform duration-300"
-                    style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
-                  >
-                    <ChevronDown {...iconProps} />
-                  </span>
-                </button>
+                {/* chevron 展开区：仅在存在被折叠动作（> 2 个）时渲染——
+                    AI 气泡宿主只有解释/翻译两个常驻动作，无需展开按钮 */}
+                {actions.length > 2 && (
+                  <>
+                    <span className="ap-sel-divider" aria-hidden />
+                    <button
+                      type="button"
+                      aria-label={expanded ? '收起更多动作' : '展开更多动作'}
+                      aria-expanded={expanded}
+                      title={expanded ? '收起更多动作' : '展开更多动作'}
+                      data-testid="selection-expand"
+                      onClick={() => setExpanded((value) => !value)}
+                      className="ap-sel-iconbtn"
+                    >
+                      <span
+                        className="flex transition-transform duration-300"
+                        style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                      >
+                        <ChevronDown {...iconProps} />
+                      </span>
+                    </button>
+                  </>
+                )}
               </div>
 
-              <div
-                className="ap-sel-slot ap-sel-slot--send"
-                style={{
-                  maxWidth: hasPrompt ? SEND_W : 0,
-                  opacity: hasPrompt ? 1 : 0,
-                  transform: hasPrompt ? 'scale(1)' : 'scale(0.88)',
-                }}
-              >
-                <button
-                  type="button"
-                  aria-label="发送操作"
-                  data-testid="selection-send"
-                  onClick={() => submitPrompt()}
-                  className="ap-sel-send"
+              {/* 「添加到当前任务」：把选区挂为当前会话输入框的对话引用（本地动作，
+                  不走回合状态机）。提供 onAddQuote 的宿主才渲染 */}
+              {onAddQuote && (
+                <div
+                  className="ap-sel-slot"
+                  style={{
+                    maxWidth: hasPrompt ? 0 : QUOTE_W,
+                    opacity: hasPrompt ? 0 : 1,
+                    transform: hasPrompt ? 'translateX(-8px)' : 'translateX(0)',
+                  }}
                 >
-                  <ArrowUp size={16} strokeWidth={2.4} aria-hidden />
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    aria-label="添加到当前任务"
+                    title="添加到当前任务（作为输入框的对话引用）"
+                    data-testid="selection-action-quote"
+                    onClick={onAddQuote}
+                    className="ap-sel-control"
+                  >
+                    <Quote {...iconProps} />
+                    添加到当前任务
+                  </button>
+                </div>
+              )}
+
+              {showPromptInput && (
+                <div
+                  className="ap-sel-slot ap-sel-slot--send"
+                  style={{
+                    maxWidth: hasPrompt ? SEND_W : 0,
+                    opacity: hasPrompt ? 1 : 0,
+                    transform: hasPrompt ? 'scale(1)' : 'scale(0.88)',
+                  }}
+                >
+                  <button
+                    type="button"
+                    aria-label="发送操作"
+                    data-testid="selection-send"
+                    onClick={() => submitPrompt()}
+                    className="ap-sel-send"
+                  >
+                    <ArrowUp size={16} strokeWidth={2.4} aria-hidden />
+                  </button>
+                </div>
+              )}
             </>
           )}
         </div>
