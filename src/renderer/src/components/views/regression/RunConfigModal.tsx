@@ -1,14 +1,20 @@
 /**
- * 回归运行配置模态（ADR 0029 决策 2/3/6/7）。
+ * 回归运行配置模态（ADR 0029 决策 2/3/6/7；原型方案 1「折叠分层」）。
  *
  * 点回归卡片弹出：左栏 Regression Item 搜索/过滤列表，右栏 entry 只读预览 +
  * 选项表单 + 只读命令预览（与执行共用 buildRegrCommand）+ 运行按钮。
  * 选择单位为单个 Item（list 或 group）；group 选中时递归解析引用并聚合 tagSet。
  * 运行后由调用方关闭模态，不发生页面导航（终端按需打开）。
+ *
+ * 标签收纳（原型方案 1，解决「标签墙挤压列表」）：
+ * - 左栏过滤标签默认折叠（复用 TagList 贪心折叠，+N 徽标），点 +N 展开；
+ *   item 列表因此保有稳定可视高度。
+ * - 右栏 Tag / Non-tag 两堵 chip 墙合并为一组三态 chip：
+ *   点选 = 只跑（-tag）、× = 排除（-nt）、未动 = 忽略。
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { Play, X, Copy, Check, ChevronDown, ChevronRight, List as ListIcon, FolderClosed } from 'lucide-react';
+import { Play, X, Copy, Check, ChevronDown, ChevronRight, List as ListIcon, FolderClosed, FileWarning } from 'lucide-react';
 import { useRegressionStore } from '@renderer/stores/regression';
 import { useProjectStore } from '@renderer/stores/project';
 import { buildRegrCommand } from '@shared/regression-command';
@@ -30,6 +36,9 @@ function baseName(filePath: string): string {
   return filePath.split(/[/\\]/).pop() ?? filePath;
 }
 
+/** 三态标签语义：sel = 只跑（-tag）/ exc = 排除（-nt）/ 无 = 忽略 */
+type TagTriState = 'sel' | 'exc';
+
 export function RunConfigModal({
   subsys,
   items,
@@ -40,6 +49,7 @@ export function RunConfigModal({
   onClose: () => void;
 }) {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
+  const projects = useProjectStore((s) => s.projects);
   const runRegression = useRegressionStore((s) => s.runRegression);
   const parseList = useRegressionStore((s) => s.parseList);
   const parseGroup = useRegressionStore((s) => s.parseGroup);
@@ -49,14 +59,14 @@ export function RunConfigModal({
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [tagFilterExpanded, setTagFilterExpanded] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [entryPreviewOpen, setEntryPreviewOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [running, setRunning] = useState(false);
 
   // ── 选项表单 ──
-  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
-  const [selectedNonTags, setSelectedNonTags] = useState<Set<string>>(new Set());
+  const [tagStates, setTagStates] = useState<Record<string, TagTriState>>({});
   const [failMode, setFailMode] = useState(false);
   const [coverage, setCoverage] = useState(false);
   const [regrWork, setRegrWork] = useState('');
@@ -64,6 +74,12 @@ export function RunConfigModal({
   const [dashboard, setDashboard] = useState('');
 
   const selected = items.find((it) => it.filePath === selectedPath) ?? null;
+
+  /** 当前项目根目录（parseGroup 展开 $VAR 引用时主进程读 .socverify/env.json 用） */
+  const projectRoot = useMemo(
+    () => projects.find((p) => p.id === currentProjectId)?.rootPath,
+    [projects, currentProjectId],
+  );
 
   /** tag 过滤候选：子系统内全部 list 的 tagSet 并集 */
   const filterTags = useMemo(() => {
@@ -101,12 +117,13 @@ export function RunConfigModal({
     selected?.type === 'group' ? parsedGroups.get(selected.filePath)?.resolved ?? null : null;
 
   useEffect(() => {
-    if (selected?.type === 'group') void parseGroup(selected.filePath);
-  }, [selected, parseGroup]);
+    if (selected?.type === 'group') void parseGroup(selected.filePath, projectRoot);
+  }, [selected, parseGroup, projectRoot]);
 
   useEffect(() => {
     if (!groupResolved) return;
     for (const ref of groupResolved) {
+      // 只解析成功识别为 list 的引用；unreadable 引用不再触发注定失败的 parseList
       if (ref.type === 'list') void parseList(ref.path);
     }
   }, [groupResolved, parseList]);
@@ -124,9 +141,23 @@ export function RunConfigModal({
     return [...tags];
   }, [selected, groupResolved, parsedLists]);
 
+  const unreadableRefs = useMemo(
+    () => groupResolved?.filter((ref) => ref.type === 'unreadable') ?? [],
+    [groupResolved],
+  );
+
+  const selectedTags = useMemo(
+    () => Object.keys(tagStates).filter((t) => tagStates[t] === 'sel'),
+    [tagStates],
+  );
+  const selectedNonTags = useMemo(
+    () => Object.keys(tagStates).filter((t) => tagStates[t] === 'exc'),
+    [tagStates],
+  );
+
   const buildOptions = (): RegressionRunOptions => ({
-    tags: selectedTags.size > 0 ? [...selectedTags] : undefined,
-    nonTags: selectedNonTags.size > 0 ? [...selectedNonTags] : undefined,
+    tags: selectedTags.length > 0 ? selectedTags : undefined,
+    nonTags: selectedNonTags.length > 0 ? selectedNonTags : undefined,
     failMode: failMode || undefined,
     coverage: coverage || undefined,
     regrWork: regrWork.trim() || undefined,
@@ -137,15 +168,20 @@ export function RunConfigModal({
   const command = useMemo(
     () => (selected ? buildRegrCommand(selected.filePath, buildOptions()) : ''),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- buildOptions 闭包读取表单 state，依赖与下方列出一致
-    [selected, selectedTags, selectedNonTags, failMode, coverage, regrWork, merge, dashboard],
+    [selected, tagStates, failMode, coverage, regrWork, merge, dashboard],
   );
 
-  const toggleSet = (value: string, set: Set<string>, setter: (s: Set<string>) => void) => {
-    const next = new Set(set);
-    if (next.has(value)) next.delete(value);
-    else next.add(value);
-    setter(next);
+  const cycleTag = (tag: string) => {
+    setTagStates((prev) => {
+      const next = { ...prev };
+      if (next[tag] === 'sel') next[tag] = 'exc';
+      else if (next[tag] === 'exc') delete next[tag];
+      else next[tag] = 'sel';
+      return next;
+    });
   };
+
+  const clearTags = () => setTagStates({});
 
   const handleCopy = async () => {
     try {
@@ -220,23 +256,44 @@ export function RunConfigModal({
                 onChange={setTypeFilter}
               />
               {filterTags.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {filterTags.map((tag) => (
-                    <button
-                      key={tag}
-                      onClick={() => setTagFilter(tagFilter === tag ? null : tag)}
-                      className={cn(
-                        'rounded px-1.5 py-0.5 font-mono text-[10px] transition-colors',
-                        tagFilter === tag
-                          ? 'bg-primary/20 text-primary'
-                          : 'bg-secondary text-muted-foreground hover:bg-accent',
-                      )}
-                      title="按标签过滤列表"
-                      data-testid={`reg-run-tagfilter-${tag}`}
-                    >
-                      {tag}
-                    </button>
-                  ))}
+                <div className="flex flex-col gap-0.5">
+                  <div className="flex items-center text-[9.5px] text-muted-foreground/70">
+                    过滤标签
+                    <span className="ml-1 font-mono">{filterTags.length}</span>
+                    {filterTags.length > 12 && (
+                      <button
+                        onClick={() => setTagFilterExpanded((v) => !v)}
+                        className="ml-auto rounded px-1 text-[9.5px] text-primary transition-colors hover:bg-accent"
+                        data-testid="reg-run-tagfilter-toggle"
+                      >
+                        {tagFilterExpanded ? '收起' : '全部展开'}
+                      </button>
+                    )}
+                  </div>
+                  {/* 折叠态只出前 12 个（一行半视觉高度），展开态全量 —— 列表高度不被标签墙挤压 */}
+                  <div
+                    className={cn(
+                      'flex flex-wrap gap-1 overflow-y-auto',
+                      tagFilterExpanded ? 'max-h-44' : 'max-h-10',
+                    )}
+                  >
+                    {(tagFilterExpanded ? filterTags : filterTags.slice(0, 12)).map((tag) => (
+                      <button
+                        key={tag}
+                        onClick={() => setTagFilter(tagFilter === tag ? null : tag)}
+                        className={cn(
+                          'rounded px-1.5 py-0.5 font-mono text-[10px] transition-colors',
+                          tagFilter === tag
+                            ? 'bg-primary/20 text-primary'
+                            : 'bg-secondary text-muted-foreground hover:bg-accent',
+                        )}
+                        title="按标签过滤列表"
+                        data-testid={`reg-run-tagfilter-${tag}`}
+                      >
+                        {tag}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -345,8 +402,20 @@ export function RunConfigModal({
                   <div className="rounded-md border border-border/50 px-3 py-2">
                     <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">引用文件</div>
                     {groupResolved.map((ref) => (
-                      <div key={ref.path} className="truncate font-mono text-[10px] text-muted-foreground">
-                        [{ref.type}] {ref.path}
+                      <div key={ref.path} className="flex items-center gap-1.5">
+                        {ref.type === 'unreadable' && (
+                          <FileWarning className="h-2.5 w-2.5 shrink-0 text-status-fail-foreground" />
+                        )}
+                        <span
+                          key={ref.path}
+                          className={cn(
+                            'truncate font-mono text-[10px]',
+                            ref.type === 'unreadable' ? 'text-status-fail-foreground/80' : 'text-muted-foreground',
+                          )}
+                          title={ref.type === 'unreadable' ? '无法读取（环境变量未配置或文件缺失）' : undefined}
+                        >
+                          [{ref.type}] {ref.path}
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -355,22 +424,63 @@ export function RunConfigModal({
                 {/* 选项表单 */}
                 <div className="flex flex-col gap-2.5">
                   {candidateTags.length > 0 && (
-                    <ChipRow
-                      label="Tag（只跑选中的标签）"
-                      tags={candidateTags}
-                      selected={selectedTags}
-                      onToggle={(t) => toggleSet(t, selectedTags, setSelectedTags)}
-                      testidPrefix="reg-run-tag"
-                    />
-                  )}
-                  {candidateTags.length > 0 && (
-                    <ChipRow
-                      label="Non-tag（排除标签）"
-                      tags={candidateTags}
-                      selected={selectedNonTags}
-                      onToggle={(t) => toggleSet(t, selectedNonTags, setSelectedNonTags)}
-                      testidPrefix="reg-run-nt"
-                    />
+                    <div>
+                      <div className="mb-1 flex items-baseline">
+                        <span className="text-[10px] font-semibold uppercase text-muted-foreground">标签筛选</span>
+                        <span className="ml-1.5 text-[9.5px] text-muted-foreground/70">
+                          点选 = 只跑（-tag）· × = 排除（-nt）· 未动 = 忽略
+                        </span>
+                        {(selectedTags.length > 0 || selectedNonTags.length > 0) && (
+                          <button
+                            onClick={clearTags}
+                            className="ml-auto rounded px-1 text-[9.5px] text-primary transition-colors hover:bg-accent"
+                            data-testid="reg-run-tag-clear"
+                          >
+                            重置
+                          </button>
+                        )}
+                      </div>
+                      {/* 单组三态 chip + 溢出内滚（max-h），取代旧 Tag / Non-tag 两堵重复的墙 */}
+                      <div
+                        className="flex max-h-24 flex-wrap gap-1 overflow-y-auto rounded border border-border/60 bg-background/40 p-1.5"
+                        data-testid="reg-run-tag-selector"
+                      >
+                        {candidateTags.map((tag) => {
+                          const state = tagStates[tag];
+                          return (
+                            <button
+                              key={tag}
+                              onClick={() => cycleTag(tag)}
+                              className={cn(
+                                'rounded px-1.5 py-0.5 font-mono text-[10px] transition-colors',
+                                state === 'sel' && 'bg-primary/20 text-primary',
+                                state === 'exc' &&
+                                  'bg-status-fail/15 text-status-fail-foreground line-through decoration-status-fail-foreground/60',
+                                !state && 'bg-secondary text-muted-foreground hover:bg-accent',
+                              )}
+                              title={
+                                state === 'sel'
+                                  ? '只跑此标签（-tag），点击改为排除'
+                                  : state === 'exc'
+                                    ? '排除此标签（-nt），点击取消'
+                                    : '只跑此标签（-tag）'
+                              }
+                              data-testid={`reg-run-tag-${tag}`}
+                            >
+                              {tag}
+                              {state === 'exc' && <span className="ml-1 text-[9px]">×</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {(selectedTags.length > 0 || selectedNonTags.length > 0) && (
+                        <div className="mt-0.5 font-mono text-[9.5px] text-muted-foreground/70">
+                          {selectedTags.length > 0 && `-tag ${selectedTags.join(',')}`}
+                          {selectedTags.length > 0 && selectedNonTags.length > 0 && ' '}
+                          {selectedNonTags.length > 0 && `-nt ${selectedNonTags.join(',')}`}
+                        </div>
+                      )}
+                    </div>
                   )}
 
                   <div className="flex flex-wrap gap-x-5 gap-y-1.5">
@@ -446,10 +556,20 @@ export function RunConfigModal({
         </div>
 
         {/* ── Footer ── */}
-        <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-2.5">
+        <div className="flex items-center gap-2 border-t border-border px-4 py-2.5">
+          {unreadableRefs.length > 0 && (
+            <span
+              className="flex items-center gap-1 text-[10px] text-status-fail-foreground/80"
+              title={unreadableRefs.map((r) => r.path).join('\n')}
+              data-testid="reg-run-unreadable-count"
+            >
+              <FileWarning className="h-3 w-3" />
+              {unreadableRefs.length} 个引用无法读取
+            </span>
+          )}
           <button
             onClick={onClose}
-            className="rounded border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            className="ml-auto rounded border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           >
             取消
           </button>
@@ -469,41 +589,6 @@ export function RunConfigModal({
 }
 
 // ── 小部件 ─────────────────────────────────────────────
-
-function ChipRow({
-  label,
-  tags,
-  selected,
-  onToggle,
-  testidPrefix,
-}: {
-  label: string;
-  tags: string[];
-  selected: Set<string>;
-  onToggle: (tag: string) => void;
-  testidPrefix: string;
-}) {
-  return (
-    <div>
-      <div className="mb-1 text-[10px] font-semibold uppercase text-muted-foreground">{label}</div>
-      <div className="flex flex-wrap gap-1">
-        {tags.map((tag) => (
-          <button
-            key={tag}
-            onClick={() => onToggle(tag)}
-            className={cn(
-              'rounded px-2 py-0.5 font-mono text-[10px] transition-colors',
-              selected.has(tag) ? 'bg-primary/20 text-primary' : 'bg-secondary text-muted-foreground hover:bg-accent',
-            )}
-            data-testid={`${testidPrefix}-${tag}`}
-          >
-            {tag}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 function ToggleRow({
   label,
