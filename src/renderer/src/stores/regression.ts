@@ -23,7 +23,10 @@ interface RegressionStoreState {
   parsingListPath: string | null;
 
   // ── Parsed group refs (lazy loaded) ──
-  parsedGroups: Map<string, { refPaths: string[]; resolved: Array<{ path: string; type: 'list' | 'group' }> }>;
+  parsedGroups: Map<
+    string,
+    { refPaths: string[]; resolved: Array<{ path: string; type: 'list' | 'group' | 'unreadable' }> }
+  >;
 
   // ── History ──
   history: RegressionHistoryEntry[];
@@ -37,7 +40,8 @@ interface RegressionStoreState {
   // ── Actions ──
   discover: (projectId: string, refresh?: boolean) => Promise<void>;
   parseList: (filePath: string) => Promise<void>;
-  parseGroup: (filePath: string) => Promise<void>;
+  /** projectRoot 用于主进程展开 $VAR 引用（.socverify/env.json 兜底） */
+  parseGroup: (filePath: string, projectRoot?: string) => Promise<void>;
   /** 提交回归；不导航不自动开终端（ADR 0029 决策 4）。返回是否提交成功（失败保持模态/表单） */
   runRegression: (projectId: string, filePath: string, subsys: string, options: RegressionRunOptions) => Promise<boolean>;
   abortRegression: (projectId: string, runId: string) => Promise<void>;
@@ -87,10 +91,10 @@ export const useRegressionStore = create<RegressionStoreState>((set, get) => ({
     }
   },
 
-  parseGroup: async (filePath) => {
+  parseGroup: async (filePath, projectRoot) => {
     if (get().parsedGroups.has(filePath)) return;
     try {
-      const result = await trpc.regression.parseGroup.query({ filePath });
+      const result = await trpc.regression.parseGroup.query({ filePath, projectRoot });
       set((s) => {
         const next = new Map(s.parsedGroups);
         next.set(filePath, result);
