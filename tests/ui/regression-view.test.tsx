@@ -223,6 +223,25 @@ describe('RegressionView 卡片发起回归（ADR 0029）', () => {
     expect(screen.getByTestId('reg-suite-card-alu').textContent).toContain('5/20');
   });
 
+  it('底部状态条渲染：运行中按最新进度填充宽度，其余状态整条状态色', () => {
+    mocks.reg.discovery = [{ subsys: 's-run', items: [makeList('s-run', 1)] }, { subsys: 's-pass', items: [makeList('s-pass', 1)] }];
+    mocks.reg.activeRegressions = [
+      { runId: 'regr_1', subsys: 's-run', filePath: '/env/s-run/a.lst', submittedAt: 1000, completed: 2, total: 10 },
+    ];
+    mocks.reg.history = [makeHistory({ runId: 'run-000001', subsys: 's-pass', status: 'completed' })];
+    render(<RegressionView />);
+
+    // 运行中：内条按 completed/total 比例填充（2/10 = 20%）
+    const runningBar = screen.getByTestId('reg-suite-bar-s-run').firstElementChild as HTMLElement;
+    expect(runningBar).toHaveClass('bg-status-running');
+    expect(runningBar.style.width).toBe('20%');
+
+    // 通过：整条状态色（无内联宽度）
+    const passBar = screen.getByTestId('reg-suite-bar-s-pass').firstElementChild as HTMLElement;
+    expect(passBar).toHaveClass('bg-status-pass');
+    expect(passBar.style.width).toBe('');
+  });
+
   it('运行中卡片显示终止按钮，点击调用 abortRegression（该子系统最新 run）', () => {
     mocks.reg.discovery = [{ subsys: 'alu', items: [makeList('alu', 10)] }];
     mocks.reg.activeRegressions = [
