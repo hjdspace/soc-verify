@@ -47,7 +47,8 @@ function makeDirExist(dirSuffix: string, files: string[]): void {
     if (s === dir) return true;
     return files.some((f) => {
       const base = f.replace(/\.exe$/, '');
-      return s === `${dir}/${base}` || s === `${dir}/${base}.exe`;
+      const filePath = `${dir}/${base}`;
+      return s === filePath || s === `${dir}/${base}.exe` || filePath.startsWith(`${s}/`);
     });
   });
 }
@@ -80,7 +81,7 @@ describe('rtl/binary - resolveYosysPath', () => {
   });
 
   it('优先返回 packaged 内置 yosys', () => {
-    makeDirExist('yosys', ['yosys.exe']);
+    makeDirExist('yosys', process.platform === 'win32' ? ['yosys.exe'] : ['bin/yosys']);
     const result = resolveYosysPath();
     expect(result).toBeTruthy();
     expect(norm(result)).toContain(FAKE_RESOURCES);
@@ -97,6 +98,15 @@ describe('rtl/binary - resolveYosysPath', () => {
     expect(result).toBeTruthy();
     expect(norm(result)).not.toContain(FAKE_RESOURCES);
     expect(norm(result)).toContain('yosys/yosys');
+  });
+
+  it('Linux 内置 wrapper 保持在 yosys/bin 以维持 ../lib 相对布局', () => {
+    withPlatform('linux', () => {
+      makeDirExist('yosys', ['bin/yosys']);
+      const result = resolveYosysPath();
+      expect(result).toBeTruthy();
+      expect(norm(result)).toContain('yosys/bin/yosys');
+    });
   });
 
   it('内置不存在时回退到系统 PATH（开发模式）', () => {
@@ -187,7 +197,7 @@ describe('rtl/binary - yosysMissingDlls', () => {
   it('Linux 布局完整（wrapper + libexec/yosys + lib 闭包）时返回空数组', () => {
     withPlatform('linux', () => {
       makeDirExist('yosys', [
-        'yosys',
+        'bin/yosys',
         'libexec/yosys',
         ...YOSYS_LINUX_LIBS.map((l) => `lib/${l}`),
       ]);
@@ -197,7 +207,7 @@ describe('rtl/binary - yosysMissingDlls', () => {
 
   it('Linux 缺 libexec 与 lib 时报告缺失清单（bin/yosys 是 wrapper，单独存在不可执行）', () => {
     withPlatform('linux', () => {
-      makeDirExist('yosys', ['yosys']);
+      makeDirExist('yosys', ['bin/yosys']);
       const missing = yosysMissingDlls();
       expect(missing).toContain('libexec/yosys');
       expect(missing).toContain(`lib/${YOSYS_LINUX_LIBS[0]}`);
@@ -208,7 +218,7 @@ describe('rtl/binary - yosysMissingDlls', () => {
   it('Linux 仅缺部分 lib 时精确报告（对应 AppImage 内 ld-linux 缺失的 127 场景）', () => {
     withPlatform('linux', () => {
       makeDirExist('yosys', [
-        'yosys',
+        'bin/yosys',
         'libexec/yosys',
         ...YOSYS_LINUX_LIBS.filter((l) => l !== 'ld-linux-x86-64.so.2').map((l) => `lib/${l}`),
       ]);
@@ -250,7 +260,7 @@ describe('rtl/binary - getRtlToolsStatus', () => {
 
   it('Linux 下 yosys 布局不完整时按不可用处理', () => {
     withPlatform('linux', () => {
-      makeDirExist('yosys', ['yosys']);
+      makeDirExist('yosys', ['bin/yosys']);
       const status = getRtlToolsStatus();
       expect(status.yosys.available).toBe(false);
       expect(status.yosys.missingDlls).toContain('libexec/yosys');

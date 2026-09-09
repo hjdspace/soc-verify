@@ -6,7 +6,7 @@
  *   2. 系统 PATH（仅开发模式）
  *
  * 产物布局由 scripts/download-rtl-tools.mjs 按当前平台生成（两平台同布局，仅文件名/附加物不同）：
- *   binaries/yosys/{yosys[.exe] + share/yosys/ + (win) 8 DLL | (linux) libexec/yosys + lib/**}
+ *   binaries/yosys/{bin/yosys + share/yosys/ + (win) 8 DLL | (linux) libexec/yosys + lib/**}
  *     ← Windows: DLL 必须与 exe 同目录（S0 实测 PATH 不生效）
  *     ← Linux:   yosys 是 OSS CAD Suite 的 bash wrapper（非 ELF），第 9 行 exec
  *                ../lib/ld-linux-x86-64.so.2（套件自带 glibc loader）+ --library-path ../lib
@@ -93,7 +93,11 @@ function findBundled(subDir: string, base: string): string | null {
  * @returns exe 路径，找不到返回 null
  */
 export function resolveYosysPath(): string | null {
-  const bundled = findBundled('yosys', 'yosys');
+  // Linux 的 OSS CAD Suite wrapper 必须留在 bin/，否则其 ../lib 相对路径会
+  // 解析到 binaries/lib 而不是 binaries/yosys/lib（见 download-rtl-tools）。
+  const bundled = process.platform === 'win32'
+    ? findBundled('yosys', 'yosys')
+    : findBundled('yosys/bin', 'yosys');
   if (bundled) return bundled;
   if (isDevMode()) return findInPath('yosys');
   return null;
@@ -113,16 +117,20 @@ export function yosysMissingDlls(): string[] | null {
 function missingDllsFor(exe: string | null): string[] | null {
   if (!exe) return null;
   const dir = dirname(exe);
-  // 非内置布局（PATH 回退）不检查依赖
-  if (!/binaries[\\/]+yosys$/i.test(dir)) return [];
+  // 非内置布局（PATH 回退）不检查依赖。Linux wrapper 在 yosys/bin，
+  // Windows 可执行文件仍在 yosys 根目录。
+  const bundledRoot = /binaries[\\/]+yosys(?:[\\/]+bin)?$/i.test(dir)
+    ? (/[\\/]bin$/i.test(dir) ? dirname(dir) : dir)
+    : null;
+  if (!bundledRoot) return [];
   if (process.platform === 'win32') {
-    return YOSYS_DLLS.filter((dll) => !existsSync(join(dir, dll)));
+    return YOSYS_DLLS.filter((dll) => !existsSync(join(bundledRoot, dll)));
   }
   // Linux：wrapper 缺 libexec/yosys → 退出码 127；缺 lib/ 闭包 → loader 找不到库
   const missing: string[] = [];
-  if (!existsSync(join(dir, 'libexec', 'yosys'))) missing.push('libexec/yosys');
+  if (!existsSync(join(bundledRoot, 'libexec', 'yosys'))) missing.push('libexec/yosys');
   for (const lib of YOSYS_LINUX_LIBS) {
-    if (!existsSync(join(dir, 'lib', lib))) missing.push(`lib/${lib}`);
+    if (!existsSync(join(bundledRoot, 'lib', lib))) missing.push(`lib/${lib}`);
   }
   return missing;
 }

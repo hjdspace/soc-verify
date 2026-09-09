@@ -54,7 +54,7 @@ macOS 不在范围（脚本在非 win/linux 平台跳过）。
 
 | 工具 | 来源 | 版本字段 | Windows 产物 | Linux 产物 |
 |------|------|----------|--------------|------------|
-| yosys | OSS CAD Suite tgz（选择性提取，非全量 568MB） | `ossCadSuiteVersion`（release 日期） | `yosys/yosys.exe` + `share/yosys/` + 8 DLL（≈70MB） | `yosys/yosys` + `share/yosys/`（ELF，链接系统库） |
+| yosys | OSS CAD Suite tgz（选择性提取，非全量 568MB） | `ossCadSuiteVersion`（release 日期） | `yosys/yosys.exe` + `share/yosys/` + 8 DLL（≈70MB） | `yosys/bin/yosys` + `yosys/lib/` + `yosys/libexec/yosys` + `share/yosys/` |
 | slang-server | hudson-trading/slang-server Releases | `slangServerVersion` | `slang-server/slang-server.exe`（windows-x64.zip） | `slang-server/slang-server`（linux-x64.tar.gz） |
 | verible | chipsalliance/verible Releases | `veribleVersion` | `verible/verible-verilog-{lint,format}.exe`（win64.zip） | `verible/verible-verilog-{lint,format}`（linux-static-x86_64.tar.gz，静态链接零依赖） |
 
@@ -63,8 +63,7 @@ macOS 不在范围（脚本在非 win/linux 平台跳过）。
 - **Windows**：yosys.exe 的 8 个依赖 DLL（libstdc++-6 / libgcc_s_seh-1 / libwinpthread-1 / libffi-8 /
   libreadline8 / libtermcap-0 / tcl86 / zlib1）**必须与 yosys.exe 同目录**——S0 实测 PATH 方式不生效。
   `binary.ts` 的 `yosysMissingDlls()` 校验此布局。
-- **Linux**：yosys 是 ELF，链接系统库，**无同目录 DLL 布局要求**（`yosysMissingDlls()` 在非 win32 恒返回空）。
-  运行依赖 OSS CAD Suite 官方要求的系统库：`libtinfo`、`libffi`、`libz`（主流发行版一般自带，缺失时 yosys 启动报错）。
+- **Linux**：`yosys/bin/yosys` 是 OSS CAD Suite wrapper，必须与 `yosys/lib/`、`yosys/libexec/yosys` 保持原生相对布局；应用会校验自带 loader 和运行库闭包。
   verible Linux 版为静态链接，无运行时依赖。slang-server Linux 版为单 ELF。
 
 **通用**：

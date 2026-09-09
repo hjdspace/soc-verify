@@ -29,7 +29,7 @@
  *                   Windows: verible-<tag>-win64.zip / Linux: verible-<tag>-linux-static-x86_64.tar.gz（静态链接零依赖）
  *
  * 产物布局（参与 electron-builder extraResources 打包；两平台同布局，仅文件名/附加物不同）：
- *   resources/binaries/yosys/{yosys[.exe], share/yosys/**, (win) *.dll | (linux) lib/**, libexec/yosys}
+ *   resources/binaries/yosys/{bin/yosys, share/yosys/**, (win) *.dll | (linux) lib/**, libexec/yosys}
  *     ← Windows: 8 个 DLL 必须与 exe 同目录（S0 实测：PATH 不生效）
  *     ← Linux:   保留 OSS CAD Suite 的 wrapper + lib/ + libexec/ 结构（wrapper 用 ../lib 相对路径定位
  *                自带 loader 与运行库），整棵 yosys 目录必须原样拷入 AppImage
@@ -201,7 +201,7 @@ function makeExecutable(p) {
 
 /** 目标 yosys 目录是否已完整就位（幂等跳过判定） */
 function yosysComplete(yosysDir) {
-  const exe = join(yosysDir, `yosys${EXE}`);
+  const exe = IS_WINDOWS ? join(yosysDir, `yosys${EXE}`) : join(yosysDir, 'bin', `yosys${EXE}`);
   if (!existsSync(exe)) return false;
   if (!existsSync(join(yosysDir, 'share', 'yosys'))) return false;
   if (IS_WINDOWS) return YOSYS_DLLS.every((d) => existsSync(join(yosysDir, d)));
@@ -236,8 +236,12 @@ async function extractYosys(archivePath, yosysDir) {
     const suite = join(staging, 'oss-cad-suite');
     mkdirSync(yosysDir, { recursive: true });
 
-    // wrapper（Linux）/ exe（Windows）→ yosys 根目录
-    const exeDest = join(yosysDir, `yosys${EXE}`);
+    // 保留 OSS CAD Suite 原生 bin/ + lib/ + libexec/ 相对布局。Linux wrapper
+    // 第 9 行通过 dirname(wrapper)/../lib 定位自带 loader，不能把 wrapper 平移到根目录。
+    const exeDest = IS_WINDOWS
+      ? join(yosysDir, `yosys${EXE}`)
+      : join(yosysDir, 'bin', `yosys${EXE}`);
+    mkdirSync(dirname(exeDest), { recursive: true });
     copyFileSync(join(suite, 'bin', `yosys${EXE}`), exeDest);
     makeExecutable(exeDest);
 
@@ -359,7 +363,7 @@ async function extractTarEntries(archivePath, wanted, destDir) {
 
 async function handleYosys(opts) {
   const yosysDir = join(BINARIES_DIR, 'yosys');
-  const yosysExe = join(yosysDir, `yosys${EXE}`);
+  const yosysExe = IS_WINDOWS ? join(yosysDir, `yosys${EXE}`) : join(yosysDir, 'bin', `yosys${EXE}`);
   if (!opts.force && yosysComplete(yosysDir)) {
     console.log(`[yosys] already in place: ${yosysDir} (use --force to re-extract)`);
     verifyVersion(yosysExe, ['-V'], 'yosys');
