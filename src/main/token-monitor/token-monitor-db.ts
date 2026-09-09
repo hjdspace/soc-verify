@@ -13,7 +13,7 @@ import { dirname } from 'node:path';
 // ─── Types ─────────────────────────────────────────────────
 
 /** Token Monitor 引擎标识 */
-export type TokenEngine = 'omp' | 'claude-code' | 'codex';
+export type TokenEngine = 'omp' | 'pi' | 'claude-code' | 'codex';
 
 /** Token Usage Record — 一次 LLM API 交互的 token 用量记录 */
 export type TokenUsageRecord = {

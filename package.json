@@ -27,7 +27,8 @@
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck:runner": "tsc --noEmit -p tsconfig.runner.json --composite false",
-    "typecheck": "npm run typecheck:node && npm run typecheck:web && npm run typecheck:runner",
+    "typecheck:runner-pi": "tsc --noEmit -p tsconfig.runner-pi.json --composite false",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web && npm run typecheck:runner && npm run typecheck:runner-pi",
     "postinstall": "node scripts/setup-agent.mjs && node scripts/patch-native-modules.mjs",
     "setup:agent": "node scripts/setup-agent.mjs",
     "patch:native": "node scripts/patch-native-modules.mjs",
@@ -47,6 +48,7 @@
     "package:linux": "node scripts/download-officecli.mjs && node scripts/download-rtl-tools.mjs && node scripts/download-nerd-fonts.mjs && node scripts/download-starship.mjs && node scripts/download-zsh-plugins.mjs && node scripts/setup-agent.mjs --require-binary && node scripts/build.mjs && node scripts/patch-native-modules.mjs && node scripts/build-linux-pty.mjs && node scripts/build-linux-sqlite.mjs && node scripts/download-natives.mjs && node scripts/build-traceweave-wrapper.mjs && node scripts/run-electron-builder.mjs --linux"
   },
   "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
     "@firecrawl/anydoc": "^0.1.9",
     "@iconify-json/vscode-icons": "^1.2.75",
     "@iconify/react": "^6.0.2",
@@ -90,6 +92,7 @@
     "@trpc/client": "^11.18.0",
     "@trpc/react-query": "^11.18.0",
     "@types/better-sqlite3": "^9.6.0",
+    "@types/bun": "^1.4.2",
     "@types/node": "^26.1.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

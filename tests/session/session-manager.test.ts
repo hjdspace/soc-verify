@@ -12,6 +12,7 @@ vi.mock('../../src/main/agent/paths', () => ({
     runnerPath: '/fake/runner',
     bunVersionOk: true,
   })),
+  resolvePiRunnerScript: vi.fn(() => '/fake/pi-runner/index.ts'),
   resolveRunnerBinary: vi.fn(() => '/fake/runner'),
   resolveRunnerScript: vi.fn(() => null),
   resolveBunPath: vi.fn(() => null),

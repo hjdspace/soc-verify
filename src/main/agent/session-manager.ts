@@ -4,12 +4,13 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { AgentClient, type ToolCallHandler } from './agent-client';
+import { PiAgentClient } from './pi-agent-client';
 import type {
   AgentClientFactory,
   AgentClientFactoryOptions,
   IAgentClient,
 } from './agent-contract';
-import { resolveAgentRuntime, resolveBuiltInExtensionDir, resolveRunnerBinary, resolveRunnerScript, resolveBunPath, checkBunVersion } from './paths';
+import { resolveAgentRuntime, resolveBuiltInExtensionDir, resolvePiRunnerScript, resolveRunnerBinary, resolveRunnerScript, resolveBunPath, checkBunVersion, type AgentRuntime } from './paths';
 import { ensureOfficecliOnPath } from './officecli-paths';
 import type { CustomToolDefinition, InitConfig, ApprovalMode, SeedHistoryMessage } from './types';
 import {
@@ -262,6 +263,9 @@ export interface CreateSessionOptions {
   approvalMode?: ApprovalMode;
   /** 会话初始思考强度（'default'/缺省 = 跟随 omp 引擎默认） */
   thinkingLevel?: ThinkingLevelSetting;
+  /** 会话绑定的引擎（'omp' | 'pi'）。缺省 'omp'。'pi' 走 runner-pi 脚本（Node 运行），
+   *  不做 omp 的 Bun/engine 运行时解析与版本检查。 */
+  engine?: AgentEngine;
 }
 
 export interface SessionEntry {
@@ -303,11 +307,20 @@ export interface SessionEventData {
 }
 
 /**
- * Default client factory — builds the omp-backed `AgentClient` from the
- * resolved runtime mode. Tests and future engines inject their own factory.
+ * Default client factory — routes on `options.engine`:
+ * 'pi' builds the `PiAgentClient` (plain Node script runner), 'omp' builds
+ * the omp-backed `AgentClient` from the resolved runtime mode. Tests and
+ * other engines inject their own factory.
  */
-export const defaultAgentClientFactory: AgentClientFactory = (options) =>
-  new AgentClient(
+export const defaultAgentClientFactory: AgentClientFactory = (options) => {
+  if (options.engine === 'pi') {
+    return new PiAgentClient({
+      runnerPath: options.runnerPath,
+      cwd: options.cwd,
+      env: options.env,
+    });
+  }
+  return new AgentClient(
     options.mode === 'binary'
       ? { runnerBinaryPath: options.runnerPath, cwd: options.cwd, env: options.env }
       : {
@@ -317,6 +330,7 @@ export const defaultAgentClientFactory: AgentClientFactory = (options) =>
           env: options.env,
         },
   );
+};
 
 export class SessionManagerImpl extends EventEmitter {
   private sessions = new Map<string, SessionEntry>();
@@ -342,19 +356,35 @@ export class SessionManagerImpl extends EventEmitter {
 
     const contextWindow = options.contextWindow ?? await contextSettings.getContextWindow();
 
-    const runtime = resolveAgentRuntime();
-    if (!runtime) {
-      throw new Error(
-        'Agent runtime not found. Please run `npm run setup:agent` to download the agent binary, ' +
-        'or ensure Bun and the engine submodule are available.',
-      );
-    }
-    // Version check only applies to script mode (binary mode has Bun embedded)
-    if (runtime.mode === 'script' && !runtime.bunVersionOk) {
-      throw new Error(
-        `Bun runtime must be >= 1.3.14 (found v${runtime.bunVersion}). ` +
-        'Please upgrade: bun upgrade',
-      );
+    // 引擎路由：'pi' 走 runner-pi 脚本（Node 运行，无需 Bun/engine）；
+    // 'omp'（缺省）走 resolveAgentRuntime（预编译二进制 → Bun + 脚本）。
+    const engine: AgentEngine = options.engine ?? 'omp';
+    let runtime: AgentRuntime;
+    if (engine === 'pi') {
+      const piScript = resolvePiRunnerScript();
+      if (!piScript) {
+        throw new Error(
+          'pi runner not found. Expected runner-pi/index.ts in the packaged resources or repository root.',
+        );
+      }
+      runtime = { mode: 'script', runnerPath: piScript };
+      console.log(`[agent:session] engine=pi, pi runner script: ${piScript}`);
+    } else {
+      const ompRuntime = resolveAgentRuntime();
+      if (!ompRuntime) {
+        throw new Error(
+          'Agent runtime not found. Please run `npm run setup:agent` to download the agent binary, ' +
+          'or ensure Bun and the engine submodule are available.',
+        );
+      }
+      // Version check only applies to script mode (binary mode has Bun embedded)
+      if (ompRuntime.mode === 'script' && !ompRuntime.bunVersionOk) {
+        throw new Error(
+          `Bun runtime must be >= 1.3.14 (found v${ompRuntime.bunVersion}). ` +
+          'Please upgrade: bun upgrade',
+        );
+      }
+      runtime = ompRuntime;
     }
 
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -675,6 +705,7 @@ export class SessionManagerImpl extends EventEmitter {
     // Helper: create an AgentClient configured for the given runtime mode
     const createClientForRuntime = (rt: { mode: 'binary' | 'script'; runnerPath: string; bunPath?: string }): IAgentClient => {
       const factoryOptions: AgentClientFactoryOptions = {
+        engine,
         mode: rt.mode,
         runnerPath: rt.runnerPath,
         bunPath: rt.bunPath,

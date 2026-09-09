@@ -28,5 +28,11 @@
     "vitest.config.ts",
     "eslint.config.js",
     "tests/**/*"
+  ],
+  "exclude": [
+    // pi runner 有独立 tsconfig.runner-pi.json（allowImportingTsExtensions）；
+    // 其测试由 vitest 运行，但源码 .ts 后缀导入与 node tsconfig 不兼容。
+    "runner-pi",
+    "tests/runner-pi"
   ]
 }

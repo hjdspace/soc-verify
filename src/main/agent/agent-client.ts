@@ -114,9 +114,31 @@ export class AgentClient implements IAgentClient {
   private readyTimeoutMs: number;
   /** Guards against double-kill: once stop() runs, subsequent calls are no-ops. */
   private stopping = false;
+  /** Set when the child emits 'exit' — makes isRunning() truthful after a crash. */
+  private exited = false;
 
-  constructor(private options: AgentClientOptions) {
+  constructor(protected readonly options: AgentClientOptions) {
     this.readyTimeoutMs = options.readyTimeoutMs ?? 30000;
+  }
+
+  /**
+   * Resolve the runner spawn command.
+   *
+   * Template-method seam: subclasses override this to change the launch mode
+   * (e.g. PiAgentClient runs the runner-pi script with Node instead of Bun).
+   */
+  protected resolveSpawn(): { cmd: string; args: string[] } {
+    if (this.options.runnerBinaryPath) {
+      // Binary mode: directly execute the pre-compiled runner
+      return { cmd: this.options.runnerBinaryPath, args: [] };
+    }
+    if (this.options.bunPath && this.options.runnerPath) {
+      // Script mode: use Bun to run the runner script
+      return { cmd: this.options.bunPath, args: ['run', this.options.runnerPath] };
+    }
+    throw new Error(
+      'Agent client requires either runnerBinaryPath (binary mode) or bunPath + runnerPath (script mode)',
+    );
   }
 
   async start(): Promise<void> {
@@ -125,23 +147,7 @@ export class AgentClient implements IAgentClient {
       throw new Error(`Agent working directory does not exist: ${this.options.cwd}`);
     }
 
-    // Determine spawn mode: binary (direct execution) or script (bun run)
-    let spawnCmd: string;
-    let spawnArgs: string[];
-
-    if (this.options.runnerBinaryPath) {
-      // Binary mode: directly execute the pre-compiled runner
-      spawnCmd = this.options.runnerBinaryPath;
-      spawnArgs = [];
-    } else if (this.options.bunPath && this.options.runnerPath) {
-      // Script mode: use Bun to run the runner script
-      spawnCmd = this.options.bunPath;
-      spawnArgs = ['run', this.options.runnerPath];
-    } else {
-      throw new Error(
-        'Agent client requires either runnerBinaryPath (binary mode) or bunPath + runnerPath (script mode)',
-      );
-    }
+    const { cmd: spawnCmd, args: spawnArgs } = this.resolveSpawn();
 
     const child = spawn(spawnCmd, spawnArgs, {
       cwd: this.options.cwd,
@@ -219,6 +225,8 @@ export class AgentClient implements IAgentClient {
     });
 
     child.on('exit', (code, signal) => {
+      this.exited = true;
+
       for (const [, pending] of this.pendingRequests) {
         clearTimeout(pending.timeoutId);
         pending.reject(new Error(`Process exited (code=${code}, signal=${signal})`));
@@ -344,7 +352,7 @@ export class AgentClient implements IAgentClient {
   }
 
   isRunning(): boolean {
-    return this.process !== null && !this.stopping && !this.process.killed;
+    return this.process !== null && !this.stopping && !this.exited && !this.process.killed;
   }
 
   // ─── 事件订阅 ─────────────────────────────────────────

@@ -7,6 +7,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /** Runner 脚本相对路径（主仓库源码，dev 模式用 Bun 运行） */
 const RUNNER_SCRIPT_REL = 'runner/index.ts';
+/** pi runner 脚本相对路径（普通 Node 脚本，ELECTRON_RUN_AS_NODE=1 运行） */
+const PI_RUNNER_REL = 'runner-pi/index.ts';
 /** 旧版 runner 路径（engine submodule 内，兼容回退） */
 const RUNNER_LEGACY_REL = 'engine/oh-my-pi/packages/coding-agent/src/socverify-runner.ts';
 /** 预编译 runner 二进制名称 */
@@ -42,6 +44,11 @@ function packagedBuiltInExtensionDir(): string {
 /** 开发模式下 runner 脚本路径 */
 function devRunnerScriptPath(): string {
   return resolve(__dirname, '../../', RUNNER_SCRIPT_REL);
+}
+
+/** 开发模式下 pi runner 脚本路径 */
+function devPiRunnerScriptPath(): string {
+  return resolve(__dirname, '../../', PI_RUNNER_REL);
 }
 
 /** 旧版 runner 脚本路径（engine submodule 内） */
@@ -120,6 +127,23 @@ export function resolveRunnerScript(): string | null {
   // 兼容回退：engine 内旧版 runner
   const legacyPath = legacyRunnerPath();
   if (existsSync(legacyPath)) return legacyPath;
+
+  return null;
+}
+
+/**
+ * 解析 pi runner 脚本路径（普通 Node 脚本，由 PiAgentClient 以
+ * ELECTRON_RUN_AS_NODE=1 复用 Electron 内置 Node 运行，不依赖 Bun）。
+ * 优先级：packaged resources → 仓库内 runner-pi/。
+ */
+export function resolvePiRunnerScript(): string | null {
+  // 生产模式：packaged resources/runner-pi/index.ts（extraResources 分发）
+  const packaged = join(packagedResourcesDir(), PI_RUNNER_REL);
+  if (existsSync(packaged)) return packaged;
+
+  // 开发模式：仓库内 runner-pi/index.ts
+  const dev = devPiRunnerScriptPath();
+  if (existsSync(dev)) return dev;
 
   return null;
 }

@@ -117,6 +117,8 @@ export interface IAgentClient {
  * launch options its engine client needs.
  */
 export type AgentClientFactoryOptions = {
+  /** Which engine this client should drive ('omp' | 'pi'). */
+  engine: AgentEngine;
   mode: 'binary' | 'script';
   /** Runner binary path (binary mode) or runner script path (script mode). */
   runnerPath: string;

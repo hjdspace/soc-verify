@@ -45,7 +45,7 @@ _Avoid_: error snippet, error block
 _Avoid_: error handler, failure processor
 
 **Error Analysis Session**:
-为单个失败用例创建的独立 AI Agent 会话，拥有专属的 omp 进程和 Host Tools。支持多个 case 并行分析。
+为单个失败用例创建的独立 AI Agent 会话，拥有专属的 Agent Runner 进程和 Host Tools。支持多个 case 并行分析。
 _Avoid_: fix session, debug session
 
 ### 日志解析域
@@ -357,7 +357,7 @@ _Avoid_: auto categorization
 _Avoid_: quick index
 
 **Deep Reindex**:
-走完整 omp Agent 会话的索引重建模式，agent 可逐文档深入阅读后重写摘要，质量上限高、耗时更长。用户手动触发。
+走完整 pi Agent 会话的索引重建模式，agent 可逐文档深入阅读后重写摘要，质量上限高、耗时更长。用户手动触发。
 _Avoid_: full reindex
 
 **doc_to_markdown**:
@@ -379,7 +379,7 @@ _Avoid_: linked dir, mounted dir, external dir
 _Avoid_: dir category, dir type, folder group
 
 **Working Directory（工作目录 / cwd）**:
-AI Agent session 的 `--cwd`，即 omp 子进程启动时的工作目录。可由用户在已添加目录中切换（默认为 rootPath）。切换工作目录会重建当前活跃 AI session（omp 的 cwd 在进程启动时固定）。非 cwd 目录的文件通过绝对路径访问，AI 由 system prompt 告知所有目录路径。
+AI Agent session 的 `--cwd`，即 Agent Runner 子进程启动时的工作目录。可由用户在已添加目录中切换（默认为 rootPath）。切换工作目录会重建当前活跃 AI session（runner 的 cwd 在进程启动时固定）。非 cwd 目录的文件通过绝对路径访问，AI 由 system prompt 告知所有目录路径。
 _Avoid_: active dir, primary dir, main dir
 
 **ExtraDirEntry**:
@@ -389,16 +389,112 @@ _Avoid_: dir entry, dir record
 ### AI 引擎域
 
 **AI Engine（AI 引擎）**:
-驱动 AI Agent 会话的底层引擎。当前支持两种：omp（oh-my-pi）和 Codex。通过全局设置切换，所有新创建的会话使用选定引擎。已存在的会话保持原引擎。
+驱动 AI Agent 会话的底层引擎。运行时支持两种：pi（上游 `@earendil-works/pi-coding-agent`）和 Codex。本次迁移只将旧的 omp 实现替换为 pi，切换完成后不保留 omp/pi 双轨；Codex 作为独立引擎继续共存。新会话使用所选引擎，旧 omp 会话按 pi 的历史数据兼容规则重建，Codex 会话保持原引擎。引擎替换决策见 ADR 0033。
 _Avoid_: agent backend, model provider
 
+**Agent Runner**:
+宿主与 AI Engine 之间的独立子进程边界，以统一协议承载命令、事件、工具和审批。
+_Avoid_: engine process, omp runner
+
+**Agent Event Contract（Agent 事件契约）**:
+宿主与渲染进程之间统一的事件语义和 payload 约束，由 Agent Runner 将各引擎事件归一化后输出。覆盖消息、工具、审批、上下文、压缩、subagent 和错误生命周期；引擎替换不改变此契约。
+_Avoid_: engine event, raw pi event
+
+**Subagent Lifecycle（子代理生命周期）**:
+subagent 以异步父子会话关系运行，向统一事件契约报告启动、进度、完成或失败；继承父会话的取消和工具审批边界，并将用量归属到可追踪的父子会话。
+_Avoid_: fire-and-forget task, detached task
+
+**Effective System Prompt（有效系统提示）**:
+会话实际发送给 AI Engine 的最终系统提示，由引擎基础提示和 SoC Verify 应用规则组合而成。
+_Avoid_: default prompt, append-only prompt
+
+**Skill Source Compatibility（技能来源兼容）**:
+应用发现 canonical pi skill 与受支持的其他生态 skill 来源时所使用的兼容边界。
+_Avoid_: legacy skill write, permanent omp skills
+
+**Managed Skill（托管技能）**:
+由 Agent 学习机制生成或维护的可复用 `SKILL.md`，与用户编写的 authored skill 分离。
+_Avoid_: implicit memory, authored skill
+
+**Durable Lesson（持久经验）**:
+通过学习工具保存的结构化经验记录，其可见范围由 Learning Scope 决定。
+_Avoid_: managed skill, cross-project memory
+
+**Learning Scope（经验作用域）**:
+Durable Lesson 或 Managed Skill 的可见范围，分为项目级和用户级；用户级内容可跨项目发现。
+_Avoid_: implicit global learning, unscoped memory
+
+**Skill URI Contract（技能 URI 契约）**:
+Agent 与应用引用 skill 及其内部文件的稳定 URI 形式为 `skill://<name>` 或 `skill://<name>/<relative-path>`；解析拒绝绝对路径和 `..` 穿越，底层 skill 来源目录对调用方透明。
+_Avoid_: raw skill path, unrestricted skill URI
+
+**Skill Resolution Priority（技能解析优先级）**:
+同名 skill 按 `project > builtin > user` 解析，canonical pi 来源优先于同一作用域内的兼容目录；最终只暴露一个确定性结果。
+_Avoid_: ambiguous skill, duplicate skill loading
+
 **IAgentClient**:
-引擎抽象接口，定义了 AI 引擎客户端的统一契约（`init` / `prompt` / `abort` / `steer` / `setModel` / `compact` / `destroy` / `onEvent` / `setToolCallHandler` / `setApprovalHandler`）。`OmpAgentClient` 和 `CodexAgentClient` 分别实现此接口。SessionManager 依赖此接口而非具体实现。
+引擎抽象接口，定义了 AI 引擎客户端的统一契约（`init` / `prompt` / `abort` / `steer` / `setModel` / `compact` / `destroy` / `onEvent` / `setToolCallHandler` / `setApprovalHandler`）。`PiAgentClient` 和 `CodexAgentClient` 分别实现此接口。SessionManager 依赖此接口而非具体实现。
 _Avoid_: engine adapter, agent bridge
 
-**OmpAgentClient**:
-omp 引擎的 IAgentClient 实现。通过自定义 JSONL 协议与 `socverify-runner` 子进程通信（stdin 命令 / stdout 响应+事件+工具调用）。当前 AgentClient 的重命名。
-_Avoid_: AgentClient, omp client
+**Engine Session ID（引擎会话 ID）**:
+跨引擎持久化的会话标识，统一使用 `engineSessionId` 命名，与具体 AI 引擎解耦。历史数据中的 `ompSessionId` 只读兼容一次，迁移后不再写入。
+_Avoid_: ompSessionId, piSessionId
+
+**Native Session Recovery Precedence（原生会话恢复优先级）**:
+同一引擎恢复会话时用于决定原生 session 与 UI Transcript 哪个是权威来源的规则。
+_Avoid_: transcript as source of truth, silent session rebuild
+
+**Persisted Session Cwd（持久化会话工作目录）**:
+应用会话创建时绑定并保存的工作目录，用于定位该会话的引擎原生存储。
+_Avoid_: restore with active cwd, cwd-less native lookup
+
+**Unavailable Session Cwd（不可用的会话工作目录）**:
+Persisted Session Cwd 不存在或不可访问时的会话状态；该状态不允许 Agent 在其他目录隐式执行工具。
+_Avoid_: silent cwd rebind, tool execution in wrong directory
+
+**External Pi Session（外部 Pi 会话）**:
+存在于当前工作目录对应的 pi 原生存储中、但尚未登记到 SoC Verify 会话索引的 session。
+_Avoid_: imported session, application session
+
+**Persisted Engine Kind（持久化引擎类型）**:
+应用会话索引中标识其原生 session 所属 AI Engine 的字段。
+_Avoid_: inferred engine, implicit engine routing
+
+**Legacy Engine Session（旧引擎会话）**:
+由已退役 AI Engine 创建、尚未在当前引擎中重建的应用会话。
+_Avoid_: migrated session, converted session
+
+**Regenerate Branch（重新生成分支）**:
+从最后一条 user message 之前创建的新会话分支，用于重新生成回答；旧分支保留，新分支获得新的 `engineSessionId` 并承载后续事件。
+_Avoid_: in-place regenerate, answer replacement
+
+**PiAgentClient**:
+实现 IAgentClient、通过 Agent Runner 驱动 pi 会话的客户端。
+_Avoid_: AgentClient, OmpAgentClient, omp client
+
+**Project Extension Trust（项目扩展信任）**:
+项目本地 extension 在首次加载前需要用户确认并记录信任状态；应用内置和 lockfile 锁定的依赖可自动加载。该信任决定 extension 能否执行代码，不等同于单次工具调用审批。
+_Avoid_: extension auto-load, tool approval
+
+**MCP Server Trust（MCP 服务信任）**:
+MCP server 首次启动前按 server 建立信任；应用内置或明确批准的 server 可自动启动，其他 server 需要用户确认。该信任控制本地进程和环境变量暴露，不等同于工具调用审批。
+_Avoid_: MCP auto-start, tool approval
+
+**MCP Runtime Degradation（MCP 运行时降级）**:
+MCP extension 缺少应用要求的 headless 运行时接口时，对外暴露的受限能力状态。
+_Avoid_: silent MCP failure, automatic turn replay
+
+**Yolo Mode（全自动工具模式）**:
+只跳过单次工具调用审批的运行模式，不授予项目 extension 加载或 MCP server 进程启动信任；后两类信任仍需独立建立。
+_Avoid_: unrestricted mode, trust bypass
+
+**Tool Approval Mode（工具审批模式）**:
+统一适用于 pi、Codex、MCP 和 extension tools 的调用权限策略，取值为 `always-ask`、`write`、`yolo`，并按 read/write/exec 能力分级；write 工具调用保留前置快照和 Diff Review。
+_Avoid_: engine-specific approval, allow-all mode
+
+**Interactive Ask（交互式询问）**:
+Agent 在一次工作过程中向用户请求补充信息或确认的应用自有工具，通过 Agent Event Contract 和 IPC/JSONL 连接 renderer，不依赖 TTY 或 pi-tui。
+_Avoid_: TTY prompt, terminal question
 
 **CodexAgentClient**:
 Codex 引擎的 IAgentClient 实现。通过 JSON-RPC 2.0 over stdio 与 Codex App Server 子进程通信。将 `initialize` / `thread/start` / `turn/start` / `turn/interrupt` 等 JSON-RPC 方法映射到 IAgentClient 接口。转发 Codex 的 Thread/Turn/Item 事件到渲染进程（携带 `_engine: 'codex'` 标识）。
@@ -409,11 +505,11 @@ OpenAI 开源（Apache-2.0）的有状态长生命周期进程，通过 JSON-RPC
 _Avoid_: codex harness, codex core
 
 **Thread（Codex 线程）**:
-Codex 的持久会话容器，对应一次完整的 Agent 对话。可创建、恢复、分叉、归档。历史持久化到 `~/.codex/sessions/`。在 SoC Verify 中，Codex 的 threadId 映射到 PersistedSession 的 `ompSessionId` 字段。
+Codex 的持久会话容器，对应一次完整的 Agent 对话。可创建、恢复、分叉、归档。历史持久化到 `~/.codex/sessions/`。在 SoC Verify 中，Codex 的 threadId 映射到 `Engine Session ID`。
 _Avoid_: codex session, conversation
 
 **Turn（Codex 轮次）**:
-Codex 的单次工作单元，由用户输入触发。包含多个 Item（步骤）。生命周期：`turn/started` → 多个 Item 事件 → `turn/completed`。对应 omp 的 `agent_start` → 工作过程 → `agent_end`。
+Codex 的单次工作单元，由用户输入触发。包含多个 Item（步骤）。生命周期：`turn/started` → 多个 Item 事件 → `turn/completed`。在统一 Agent 事件模型中对应一次 agent 工作生命周期。
 _Avoid_: codex prompt, codex turn
 
 **Item（Codex 项）**:
@@ -421,11 +517,11 @@ Codex 的原子输入/输出单元。类型包括 `userMessage`、`agentMessage`
 _Avoid_: codex event, codex step
 
 **dynamicTools**:
-Codex App Server 的实验性功能（需 `capabilities.experimentalApi = true`），允许在 `thread/start` 时动态注册自定义工具。SoC Verify 使用此机制将 Host Tools 暴露给 Codex Agent。与 omp 的 `customToolDefinitions` 概念对齐。
+Codex App Server 的实验性功能（需 `capabilities.experimentalApi = true`），允许在 `thread/start` 时动态注册自定义工具。SoC Verify 使用此机制将 Host Tools 暴露给 Codex Agent，与 Agent Runner 的 custom tool 定义概念对齐。
 _Avoid_: codex custom tools, dynamic tool registration
 
 **Engine Tag（引擎标识）**:
-事件 payload 中的 `_engine` 字段（值为 `'omp'` 或 `'codex'`），用于渲染进程区分事件来源引擎。CodexAgentClient 转发事件时添加此字段；omp 事件不添加（默认视为 omp）。渲染进程的 `handleSessionEvent` 据此路由到对应引擎的事件处理分支。
+事件 payload 中的 `_engine` 字段（值为 `'pi'` 或 `'codex'`，历史数据中的 `'omp'` 视为 `'pi'` 的旧值），用于渲染进程区分事件来源引擎。CodexAgentClient 转发事件时添加此字段；pi（Agent Runner）事件不添加（默认视为 pi）。渲染进程的 `handleSessionEvent` 据此路由到对应引擎的事件处理分支。
 _Avoid_: engine flag, source tag
 
 ### 终端增强域
@@ -477,7 +573,7 @@ _Avoid_: token collector, usage tracker
 _Avoid_: log poller, file scanner
 
 **Engine Tag**:
-Token Monitor 的引擎标识，取值为 `'omp'`（SoC Verify 驱动的 oh-my-pi）、`'claude-code'`（外部 Claude Code CLI）、`'codex'`（SoC Verify 驱动或外部 Codex CLI 的统一标识）。与 AI 引擎域的 Engine Tag（`_engine` 字段）概念不同——后者区分事件来源引擎用于路由，前者用于 token 统计聚合。SoC Verify 驱动的 codex 和外部 codex CLI 的 token 记录都标记为 `'codex'`，通过 session_id 区分。
+Token Monitor 的引擎标识，取值为 `'pi'`（SoC Verify 驱动的 pi 引擎，历史值 `'omp'` 归一化为 `'pi'`）、`'claude-code'`（外部 Claude Code CLI）、`'codex'`（SoC Verify 驱动或外部 Codex CLI 的统一标识）。与 AI 引擎域的 Engine Tag（`_engine` 字段）概念不同——后者区分事件来源引擎用于路由，前者用于 token 统计聚合。SoC Verify 驱动的 codex 和外部 codex CLI 的 token 记录都标记为 `'codex'`，通过 session_id 区分。
 _Avoid_: tool name, client name
 
 **Token Heatmap**:
@@ -485,7 +581,7 @@ Token Monitor 视图中的 365 天活动热力图（GitHub 风格），色深表
 _Avoid_: activity grid, contribution graph
 
 **ContextUsageIndicator vs Token Monitor**:
-ContextUsageIndicator 显示当前会话上下文窗口的实时占用（还能发多少消息），数据来自 `context_usage` 事件。Token Monitor 显示历史 token 消耗统计和趋势（用了多少 token），数据来自 `message_end` 事件的 `usage` 字段。两者职责分离，不互相替代。多轮 prompt cache 会使累计 token 很大而当前上下文仍只占一个窗口。
+ContextUsageIndicator 显示当前会话上下文窗口的实时占用（还能发多少消息），数据来自 Agent Event Contract 的 `context_usage` 事件；优先采用 pi 原生值，缺失时由 Agent Runner 计算并标记为近似。Token Monitor 显示历史 token 消耗统计和趋势（用了多少 token），数据来自 `message_end` 事件的 `usage` 字段。两者职责分离，不互相替代。多轮 prompt cache 会使累计 token 很大而当前上下文仍只占一个窗口。
 _Avoid_: context tracker
 
 ### RTL 解析域

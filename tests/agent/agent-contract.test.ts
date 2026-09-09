@@ -175,6 +175,7 @@ describe('IAgentClient type contract', () => {
 
   it('a factory maps client options to IAgentClient', () => {
     expectTypeOf<AgentClientFactory>().toBeCallableWith({
+      engine: 'omp',
       mode: 'binary',
       runnerPath: '/fake/runner',
       cwd: '/tmp',

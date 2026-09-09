@@ -164,6 +164,12 @@ export interface AgentClientOptions {
   bunPath?: string;
   /** runner 脚本路径（script 模式必需） */
   runnerPath?: string;
+  /**
+   * Node 可执行文件路径（pi runner 脚本模式）。
+   * 缺省使用 process.execPath（Electron 主进程下即 Electron 二进制，
+   * 由 PiAgentClient 注入 ELECTRON_RUN_AS_NODE=1 复用其内置 Node）。
+   */
+  nodePath?: string;
   /** 工作目录 */
   cwd: string;
   /** 环境变量 */
