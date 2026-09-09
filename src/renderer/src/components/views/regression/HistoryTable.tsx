@@ -76,21 +76,21 @@ function HistoryRow({ entry, hideBorder, onOpen }: {
         </span>
       </span>
       <span className="truncate text-[11px] text-muted-foreground">{formatRunTime(entry.submittedAt)}</span>
-      {/* 通过·失败数：无数据源，占位不造假 */}
-      <span className="truncate font-mono text-[11px] text-muted-foreground/50">—</span>
+      {/* 通过·失败数：无数据源，占位不造假（对比度下限 /70） */}
+      <span className="truncate font-mono text-[11px] text-muted-foreground/70">—</span>
       {/* 通过率：无数据源，占位不造假 */}
-      <span className="truncate text-right font-mono text-[11.5px] text-muted-foreground/50">—</span>
+      <span className="truncate text-right font-mono text-[11px] text-muted-foreground/70">—</span>
       {/* 时长：无 endTime 数据源；运行中显示进行中，终态占位 */}
       <span
         className={cn(
           'truncate text-right font-mono text-[11px]',
-          entry.status === 'running' ? 'text-status-running-foreground' : 'text-muted-foreground/50',
+          entry.status === 'running' ? 'text-status-running-foreground' : 'text-muted-foreground/70',
         )}
       >
         {entry.status === 'running' ? '进行中' : '—'}
       </span>
       {/* Δ：无通过率序列，占位不造假 */}
-      <span className="truncate text-right text-[10.5px] text-muted-foreground/50">—</span>
+      <span className="truncate text-right text-[11px] text-muted-foreground/70">—</span>
     </div>
   );
 }
@@ -121,7 +121,7 @@ export function HistoryTable({ entries, loading, onOpen }: {
       <div className="flex items-center gap-2 border-b border-border px-3.5 py-2.5 text-xs font-semibold text-foreground">
         历史趋势
         {entries.length > 0 && (
-          <span className="rounded-full bg-secondary px-[7px] font-mono text-[10px] font-normal text-muted-foreground">
+          <span className="rounded-full bg-secondary px-[7px] font-mono text-[10.5px] font-normal text-muted-foreground">
             {entries.length} 次
           </span>
         )}
@@ -138,10 +138,11 @@ export function HistoryTable({ entries, loading, onOpen }: {
         />
       )}
 
+      {/* 列头中文 ≥11px（10.5px 以下笔画粘连），透明度下限 /80 */}
       <div
         className={cn(
           ROW_GRID,
-          'gap-2.5 border-b border-border px-3.5 py-2 text-[10.5px] uppercase tracking-[0.08em] text-muted-foreground/70',
+          'gap-2.5 border-b border-border px-3.5 py-2 text-[11px] uppercase tracking-[0.08em] text-muted-foreground/80',
         )}
       >
         <span>子系统·回归</span>
@@ -165,7 +166,7 @@ export function HistoryTable({ entries, loading, onOpen }: {
         >
           <History className="size-6 opacity-30" />
           <span className="text-xs">暂无回归运行记录</span>
-          <span className="text-[11px] opacity-60">从套件运行回归后此处展示历史趋势</span>
+          <span className="text-[11.5px] text-muted-foreground/80">从套件运行回归后此处展示历史趋势</span>
         </div>
       ) : (
         <>
