@@ -46,6 +46,8 @@ export interface ChatMessage {
   thinking?: string;
   /** Skills attached to a user message — used to render skill chips in the message bubble. */
   skills?: SelectedSkill[];
+  /** 划选「添加到当前任务」附带的对话引用——气泡内渲染只读引用 chip */
+  quotes?: SessionQuote[];
 }
 
 /**
@@ -113,10 +115,22 @@ export interface ContextFile {
   type: 'file' | 'directory';
 }
 
+/** 划选「添加到当前任务」产生的对话引用（瞬态，不持久化） */
+export type SessionQuote = {
+  id: string;
+  /** 引用的原文（trim 后非空） */
+  text: string;
+  /** 来源标注，如「引用自你的回复」/「引用自文件 <path>」 */
+  source: string;
+  createdAt: number;
+};
+
 export type SessionComposer = {
   inputMessage: string;
   selectedSkills: SelectedSkill[];
   contextFiles: ContextFile[];
+  /** 待发送的对话引用（发送后随 composer 一起清空） */
+  quotes?: SessionQuote[];
 };
 
 export interface SessionEntry {
