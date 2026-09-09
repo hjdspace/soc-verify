@@ -6,6 +6,7 @@ import {
   resolveGroupRefs,
   loadUsvpMap,
   discoverRegressions,
+  normalizeGroupRef,
 } from '../../src/main/regression/regression-discovery';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -171,6 +172,73 @@ $PROJ_DIR/dv/regr.lst
 // ── Group resolution ──────────────────────────────────
 
 describe('resolveGroupRefs', () => {
+  it('expands $VAR references via the provided resolver (group 引用无法原样打开的修复)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'regr-var-'));
+    try {
+      const listPath = join(dir, 'regr.lst');
+      writeFileSync(listPath, 'ON, b, c, rand, 1, [tag], H, default, default, default\n');
+      const grpPath = join(dir, 'ap.grp');
+      // 引用写成 $PROJ_ENV 形式（真实 .grp 常态），resolver 把 $PROJ_ENV 映射到临时目录
+      writeFileSync(grpPath, '$PROJ_ENV/regr.lst\n');
+
+      const reader = async (path: string) => {
+        const { readFile } = await import('node:fs/promises');
+        return readFile(path, 'utf-8');
+      };
+      const resolveVar = async (name: string) => (name === 'PROJ_ENV' ? dir : null);
+
+      const resolved = await resolveGroupRefs(grpPath, reader, resolveVar);
+      expect(resolved).toHaveLength(1);
+      expect(resolved[0]).toEqual({ path: listPath, type: 'list' });
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  it('anchors relative references against the group file directory', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'regr-rel-'));
+    try {
+      const listPath = join(dir, 'regr.lst');
+      writeFileSync(listPath, 'ON, b, c, rand, 1, [tag], H, default, default, default\n');
+      const grpPath = join(dir, 'ap.grp');
+      // 相对引用含子目录段（isPathLike 语义：含 / 才视为路径引用）
+      writeFileSync(grpPath, './regr.lst\n');
+
+      const reader = async (path: string) => {
+        const { readFile } = await import('node:fs/promises');
+        return readFile(path, 'utf-8');
+      };
+
+      const resolved = await resolveGroupRefs(grpPath, reader);
+      expect(resolved).toHaveLength(1);
+      expect(resolved[0]).toEqual({ path: listPath, type: 'list' });
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  it('returns unreadable refs as type "unreadable" instead of guessing list', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'regr-missing-'));
+    try {
+      const grpPath = join(dir, 'ap.grp');
+      // 引用 $VAR 无法解析（resolver 返回 null）且相对路径不存在
+      writeFileSync(grpPath, '$PROJ_DIR/dv/nonexistent.lst\n./missing.lst\n');
+
+      const reader = async (path: string) => {
+        const { readFile } = await import('node:fs/promises');
+        return readFile(path, 'utf-8');
+      };
+
+      const resolved = await resolveGroupRefs(grpPath, reader);
+      expect(resolved).toHaveLength(2);
+      for (const ref of resolved) {
+        expect(ref.type).toBe('unreadable');
+      }
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });;
+
   it('resolves nested groups with cycle detection', async () => {
     // Create temp files
     const dir = mkdtempSync(join(tmpdir(), 'regr-test-'));
@@ -462,5 +530,39 @@ describe('discoverRegressions', () => {
       rmSync(projEnv, { recursive: true });
       rmSync(projectRoot, { recursive: true });
     }
+  });
+});
+
+// ── normalizeGroupRef ─────────────────────────────────
+
+describe('normalizeGroupRef', () => {
+  const nullResolver = async () => null;
+
+  it('keeps absolute and unexpanded-$VAR-rooted paths absolute (分隔符按平台归一)', async () => {
+    // POSIX 绝对路径原样；Windows 下 node:path.normalize 把 / 归一为 \
+    const expected = (p: string) => (process.platform === 'win32' ? p.replace(/\//g, '\\') : p);
+    expect(await normalizeGroupRef('/abs/path/regr.lst', '/grp/dir', nullResolver)).toBe(
+      expected('/abs/path/regr.lst'),
+    );
+    if (process.platform === 'win32') {
+      expect(await normalizeGroupRef('C:\\abs\\regr.lst', '/grp/dir', nullResolver)).toBe('C:\\abs\\regr.lst');
+    }
+    // 未提供 resolver 时 $VAR 保持原样（绝对语义，不锚定 group 目录；分隔符按平台归一）
+    expect(await normalizeGroupRef('$UNKNOWN_VAR/dv/regr.lst', '/grp/dir', nullResolver)).toBe(
+      expected('$UNKNOWN_VAR/dv/regr.lst'),
+    );
+  });
+
+  it('anchors bare relative paths against the group directory', async () => {
+    expect(await normalizeGroupRef('regr.lst', '/grp/dir', nullResolver)).toBe(join('/grp/dir', 'regr.lst'));
+  });
+
+  it('expands $VAR and ${VAR} through the resolver', async () => {
+    const resolver = async (name: string) =>
+      name === 'PROJ_DIR' ? '/proj/x' : name === 'PROJ_ENV' ? '/proj/x/dv' : null;
+    // POSIX 环境原样；Windows 下 node:path.normalize 会把 / 换成 \
+    const expected = (p: string) => (process.platform === 'win32' ? p.replace(/\//g, '\\') : p);
+    expect(await normalizeGroupRef('$PROJ_DIR/dv/regr.lst', '/grp', resolver)).toBe(expected('/proj/x/dv/regr.lst'));
+    expect(await normalizeGroupRef('${PROJ_ENV}/regr.lst', '/grp', resolver)).toBe(expected('/proj/x/dv/regr.lst'));
   });
 });
