@@ -279,7 +279,7 @@ describe('rtl.refresh 失败路径', () => {
     if (!result.ok) expect(result.error.message).toContain('未配置');
   });
 
-  it('filelist 缺失等前置失败也持久化 lastError（UI 不再静默回退空页面）', async () => {
+  it('filelist 缺失等前置失败只返回当前请求错误，不写入 lastError', async () => {
     await caller.setConfig({ projectId: 'proj-1', filelists: ['missing.f'], top: 'spike_top' });
 
     const result = await caller.refresh({ projectId: 'proj-1' });
@@ -288,10 +288,10 @@ describe('rtl.refresh 失败路径', () => {
 
     const status = await caller.getStatus({ projectId: 'proj-1' });
     expect(status.hasData).toBe(false);
-    expect(status.lastError?.message).toContain('filelist 文件不存在');
+    expect(status.lastError).toBeNull();
   });
 
-  it('elaboration 失败返回 slang 诊断（文件+行号），lastError 持久化', async () => {
+  it('elaboration 失败返回 slang 诊断（文件+行号），不写入 lastError', async () => {
     await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: 'spike_top' });
     mockSpawn.mockImplementation(() =>
       makeFakeChild({
@@ -318,8 +318,7 @@ describe('rtl.refresh 失败路径', () => {
 
     const status = await caller.getStatus({ projectId: 'proj-1' });
     expect(status.hasData).toBe(false);
-    expect(status.lastError?.diagnostics[0].file).toBe('rtl/ip/spike_ip.sv');
-    expect(status.lastError?.diagnostics[0].line).toBe(99);
+    expect(status.lastError).toBeNull();
   });
 
   it('yosys 不可用时降级报错（引导 download:rtl-tools）', async () => {
@@ -397,7 +396,7 @@ describe('顶层选择记忆（issue 03 story 17）', () => {
     expect(tops).toEqual([]);
   });
 
-  it('detectTops 失败时持久化 lastError（UI ErrorPanel 可呈现 logTail + diagnostics）', async () => {
+  it('detectTops 失败返回结构化错误，但不写入 lastError', async () => {
     await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: null });
     mockSpawn.mockImplementation(() =>
       makeFakeChild({
@@ -409,24 +408,20 @@ describe('顶层选择记忆（issue 03 story 17）', () => {
 
     await expect(caller.detectTops({ projectId: 'proj-1' })).rejects.toThrow('yosys 退出码 1');
 
-    // lastError 持久化到 DB（reload 后 getStatus 可读回 → ErrorPanel 呈现）
+    // 失败详情只属于本次 mutation，重新查询状态不得恢复历史错误
     const status = await caller.getStatus({ projectId: 'proj-1' });
-    expect(status.lastError).not.toBeNull();
-    // 报错消息带上日志首个 error 行（不再只有「yosys 退出码 1」）
-    expect(status.lastError?.message).toContain('yosys 退出码');
-    expect(status.lastError?.message).toContain('ERROR: read_slang failed');
-    expect(status.lastError?.logTail).toContain('read_slang failed');
+    expect(status.lastError).toBeNull();
   });
 
-  it('detectTops 成功后清除上次失败的 lastError', async () => {
+  it('detectTops 成功后状态仍无历史 lastError', async () => {
     await caller.setConfig({ projectId: 'proj-1', filelists: ['spike.f'], top: null });
 
-    // 第一次：失败 → lastError 持久化
+    // 第一次失败不写入 lastError
     mockSpawn.mockImplementationOnce(() =>
       makeFakeChild({ exitCode: 1, writeFixture: false, stderr: 'ERROR: fail\n' }),
     );
     await expect(caller.detectTops({ projectId: 'proj-1' })).rejects.toThrow();
-    expect((await caller.getStatus({ projectId: 'proj-1' })).lastError).not.toBeNull();
+    expect((await caller.getStatus({ projectId: 'proj-1' })).lastError).toBeNull();
 
     // 第二次：成功 → lastError 清除
     mockSpawn.mockImplementationOnce(() =>

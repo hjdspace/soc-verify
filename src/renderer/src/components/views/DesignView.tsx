@@ -7,7 +7,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle2, FolderOpen, ListTree, Network, Plus, RefreshCw, Table2, Trash2, Wand2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, FolderOpen, ListTree, Network, Plus, RefreshCw, Table2, Trash2, Wand2, X } from 'lucide-react';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
 import { useProjectStore } from '@renderer/stores/project';
@@ -36,6 +36,7 @@ export function DesignView() {
   const [root, setRoot] = useState<DesignInstRow | null>(null);
   const [showConfig, setShowConfig] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [sessionError, setSessionError] = useState<DesignStatus['lastError']>(null);
   const [selectedInst, setSelectedInst] = useState<DesignInstRow | null>(null);
   const [detailView, setDetailView] = useState<DetailView>('diagram');
 
@@ -54,6 +55,7 @@ export function DesignView() {
 
   useEffect(() => {
     if (currentProjectId) {
+      setSessionError(null);
       void reload(currentProjectId);
     }
   }, [currentProjectId, reload]);
@@ -67,11 +69,11 @@ export function DesignView() {
     setRefreshing(true);
     try {
       const result = await trpc.rtl.refresh.mutate({ projectId: currentProjectId });
+      setSessionError(result.ok ? null : result.error);
       await reload(currentProjectId);
       if (result.ok) {
         setShowConfig(false);
       }
-      // ok:false 时 lastError 已由主进程持久化，reload 后 ErrorPanel 呈现失败原因
     } catch (err) {
       console.error('[DesignView] refresh 失败:', err);
     } finally {
@@ -152,14 +154,15 @@ export function DesignView() {
             />
           )}
 
-          {status.lastError && (
+          {sessionError && (
             <ErrorPanel
-              error={status.lastError}
+              error={sessionError}
               onRetry={() => void handleRefreshed()}
+              onClose={() => setSessionError(null)}
             />
           )}
 
-          {!status.hasData && !status.lastError && !showConfig && (
+          {!status.hasData && !sessionError && !showConfig && (
             <EmptyHint text="尚未 elaboration：配置 Design Source 后点击「刷新」" />
           )}
 
@@ -495,7 +498,7 @@ function ConfigPanel({
 
 // ─── 错误呈现（slang 诊断：文件+行号） ────────────────────────
 
-function ErrorPanel({ error, onRetry }: { error: { message: string; diagnostics: { file: string; line: number; column: number | null; severity: string; message: string }[]; logTail: string }; onRetry: () => void }) {
+function ErrorPanel({ error, onRetry, onClose }: { error: { message: string; diagnostics: { file: string; line: number; column: number | null; severity: string; message: string }[]; logTail: string }; onRetry: () => void; onClose: () => void }) {
   const errors = error.diagnostics.filter((d) => d.severity === 'error' || d.severity === 'fatal');
   const others = error.diagnostics.filter((d) => d.severity !== 'error' && d.severity !== 'fatal');
   return (
@@ -503,6 +506,16 @@ function ErrorPanel({ error, onRetry }: { error: { message: string; diagnostics:
       <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-status-fail">
         <AlertTriangle className="size-3.5" />
         Elaboration 失败
+        <button
+          type="button"
+          aria-label="关闭错误"
+          title="关闭错误"
+          data-testid="design-error-close"
+          onClick={onClose}
+          className="ml-auto rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <X className="size-3.5" />
+        </button>
       </div>
       <p className="mb-2 font-mono text-[11px] text-foreground">{error.message}</p>
       {(errors.length > 0 || others.length > 0) && (

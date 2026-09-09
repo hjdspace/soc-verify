@@ -16,14 +16,12 @@ import {
   getDef,
   getDefEdges,
   getInstance,
-  getLastError,
   getRootInstance,
   getDesignDbPath,
   hasDesignData,
   initDesignDatabase,
   listDefs,
   replaceAll,
-  setLastError,
   EMPTY_ANALYSIS,
   type DesignDatabase,
 } from './design-db';
@@ -243,7 +241,8 @@ export function getStatus(projectId: string, projectRoot: string): DesignStatus 
     elapsedMs: getElapsedMs(db),
     stale: computeStale(db),
     elaborating: inflight.has(projectId),
-    lastError: getLastError(db),
+    // Elaboration errors are transient UI state; do not restore failures from the project DB.
+    lastError: null,
     yosysAvailable: yosysPath !== null && missingDlls.length === 0,
     yosysPath,
     missingDlls,
@@ -472,7 +471,6 @@ export function refresh(projectId: string, projectRoot: string): Promise<DesignR
       result = await elaborate({ yosysPath, workDir, flatFilelistPath: flatPath, top: config.top });
     } catch (err) {
       const elabErr = err instanceof RtlElaborationError ? err : new RtlElaborationError(String(err), [], '');
-      persistError(projectId, projectRoot, elabErr.toElaborationError());
       return { ok: false, error: elabErr.toElaborationError() };
     }
 
@@ -483,7 +481,6 @@ export function refresh(projectId: string, projectRoot: string): Promise<DesignR
       design = extractDesign(doc, config.top, workDir, parsed.sources);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      persistError(projectId, projectRoot, { message: `write_json 提炼失败: ${message}`, diagnostics: [], logTail: '' });
       return {
         ok: false,
         error: { message: `write_json 提炼失败: ${message}`, diagnostics: [], logTail: '' },
@@ -512,8 +509,6 @@ export function refresh(projectId: string, projectRoot: string): Promise<DesignR
       sourceFiles: JSON.stringify(sourceFiles),
       sourceMtimes: JSON.stringify(collectMtimes(sourceFiles)),
     });
-    setLastError(db, null);
-
     return {
       ok: true,
       top: design.top,
@@ -524,47 +519,33 @@ export function refresh(projectId: string, projectRoot: string): Promise<DesignR
 }
 
 /**
- * 失败即持久化 lastError（含配置缺失/工具不可用/filelist 展开失败等前置失败）。
- * 否则 UI 刷新失败后会静默回退到「尚未 elaboration」空页面，用户无从得知原因。
+ * 构造一次刷新失败结果。错误只通过 mutation 返回给当前 GUI 会话，不写入项目 DB。
  */
 function fail(projectId: string, projectRoot: string, message: string): DesignRefreshResult {
   const error: ElaborationError = { message, diagnostics: [], logTail: '' };
-  persistError(projectId, projectRoot, error);
   return { ok: false, error };
-}
-
-function persistError(projectId: string, projectRoot: string, error: ElaborationError): void {
-  try {
-    setLastError(getDesignDb(projectId, projectRoot), error);
-  } catch {
-    // DB 打开失败时错误仅返回给调用方
-  }
 }
 
 /**
  * 检测顶层模块（story 17：从 elaborated top units 列表选择）。
  *
  * 与 refresh 不同，检测阶段不写设计数据 DB（top 未定，提炼结果无意义），
- * 但失败时仍持久化 lastError —— 否则 UI 仅拿到 err.message（如「yosys 退出码 1」）
- * 而 logTail（实际 yosys 输出）和 diagnostics 全部丢失，用户无从诊断。
+ * 失败时通过 rejected mutation 返回结构化错误；不写入项目 DB。
  */
 export function detectTops(projectId: string, projectRoot: string): Promise<string[]> {
   return serialize(projectId, async (): Promise<string[]> => {
     const config = loadDesignConfig(projectRoot);
     if (config.source !== 'directory' && config.filelists.length === 0) {
       const err = new RtlElaborationError('未配置 Design Source：请先选择 filelist 或目录扫描', [], '');
-      persistError(projectId, projectRoot, err.toElaborationError());
       throw err;
     }
     if (config.source === 'directory' && !config.directory?.root.trim()) {
       const err = new RtlElaborationError('未配置 RTL 扫描目录：请先选择扫描根目录', [], '');
-      persistError(projectId, projectRoot, err.toElaborationError());
       throw err;
     }
     const yosysPath = resolveYosysPath();
     if (!yosysPath) {
       const err = new RtlElaborationError('yosys 不可用：请运行 npm run download:rtl-tools 安装 RTL 工具链', [], '');
-      persistError(projectId, projectRoot, err.toElaborationError());
       throw err;
     }
 
@@ -573,12 +554,10 @@ export function detectTops(projectId: string, projectRoot: string): Promise<stri
       parsed = resolveDesignSource(config, projectRoot);
     } catch (err) {
       const elabErr = new RtlElaborationError(err instanceof Error ? err.message : String(err), [], '');
-      persistError(projectId, projectRoot, elabErr.toElaborationError());
       throw elabErr;
     }
     if (parsed.sources.length === 0) {
       const err = new RtlElaborationError('Design Source 未解析到任何源文件（检查 .f 配置）', [], '');
-      persistError(projectId, projectRoot, err.toElaborationError());
       throw err;
     }
 
@@ -592,7 +571,6 @@ export function detectTops(projectId: string, projectRoot: string): Promise<stri
       result = await elaborate({ yosysPath, workDir, flatFilelistPath: flatPath, top: null });
     } catch (err) {
       const elabErr = err instanceof RtlElaborationError ? err : new RtlElaborationError(String(err), [], '');
-      persistError(projectId, projectRoot, elabErr.toElaborationError());
       throw elabErr;
     }
     try {
@@ -602,12 +580,6 @@ export function detectTops(projectId: string, projectRoot: string): Promise<stri
       const tops = extractTopUnits(doc);
       // 持久化检测结果：顶层选择器下次进入直接恢复候选列表（无需重新 elaboration）
       saveDetectedTops(projectRoot, tops);
-      // 检测成功后清除上次失败残留的 lastError
-      try {
-        setLastError(getDesignDb(projectId, projectRoot), null);
-      } catch {
-        // DB 打开失败时忽略
-      }
       return tops;
     } finally {
       try {

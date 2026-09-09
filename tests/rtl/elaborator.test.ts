@@ -107,6 +107,11 @@ describe('renderYosysScript', () => {
     expect(script).toContain('write_json /work/design.json');
   });
 
+  it('固化 --ignore-timing（忽略 intra-assignment 延迟，如 wujian100 dmac.v 的 `<= #1`）', () => {
+    const script = renderYosysScript('/path/to/design_flat.f', 'spike_top', '/work/design.json');
+    expect(script).toContain('--keep-hierarchy --ignore-timing');
+  });
+
   it('top 为 null 时不带 --top（detectTops 模式）', () => {
     const script = renderYosysScript('/path/to/design_flat.f', null, '/work/design.json');
     expect(script).toContain('read_slang -f /path/to/design_flat.f --keep-hierarchy');

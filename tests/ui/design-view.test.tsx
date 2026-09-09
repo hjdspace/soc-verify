@@ -344,18 +344,18 @@ describe('DesignView 顶层选择器（issue 03）', () => {
     });
   });
 
-  it('检测顶层成功后同步主面板 status：残留的旧 lastError 面板立即清除', async () => {
+  it('重新打开设计页不恢复上次会话的错误面板', async () => {
     trpcMocks.getConfig.query.mockResolvedValue({ filelists: ['design/spike.f'], top: null });
     trpcMocks.getRoot.query.mockResolvedValue(null);
-    // 打开时 DB 残留上次失败的 lastError（如旧版反斜杠 bug 存的「yosys 退出码 1」）
+    // 主进程状态不再携带历史 lastError；错误只在当前会话内由 refresh mutation 设置
     trpcMocks.getStatus.query.mockResolvedValueOnce({
       ...baseStatus,
       configured: false,
       hasData: false,
       top: null,
-      lastError: { message: 'yosys 退出码 1', diagnostics: [], logTail: 'ERROR: Bad command' },
+      lastError: null,
     });
-    // 检测成功后主进程已清除 lastError（reload 应拉到干净 status）
+    // 检测成功后主进程状态仍无历史错误
     trpcMocks.getStatus.query.mockResolvedValue({
       ...baseStatus,
       configured: true,
@@ -365,15 +365,33 @@ describe('DesignView 顶层选择器（issue 03）', () => {
     });
 
     render(<DesignView />);
-    expect(await screen.findByTestId('design-error-panel')).toBeInTheDocument();
+    await screen.findByTestId('design-config-panel');
+    expect(screen.queryByTestId('design-error-panel')).toBeNull();
 
     fireEvent.click(screen.getByTestId('design-detect-tops'));
 
-    // 检测完成触发 status 重载，残留错误面板消失
+    // 检测完成触发 status 重载，错误面板保持关闭
     await waitFor(() => {
       expect(screen.queryByTestId('design-error-panel')).toBeNull();
     });
     expect(trpcMocks.getStatus.query).toHaveBeenCalledTimes(2);
+  });
+
+  it('刷新失败后可关闭错误面板', async () => {
+    trpcMocks.getConfig.query.mockResolvedValue({ filelists: ['design/spike.f'], top: 'spike_top' });
+    trpcMocks.getRoot.query.mockResolvedValue(null);
+    trpcMocks.getStatus.query.mockResolvedValue({ ...baseStatus, configured: true, hasData: false, top: 'spike_top', lastError: null });
+    trpcMocks.refresh.mutate.mockResolvedValue({
+      ok: false,
+      error: { message: 'elaboration 失败', diagnostics: [], logTail: '' },
+    });
+
+    render(<DesignView />);
+    await screen.findByTestId('design-view-header');
+    fireEvent.click(screen.getByTestId('design-refresh'));
+    expect(await screen.findByTestId('design-error-panel')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('design-error-close'));
+    expect(screen.queryByTestId('design-error-panel')).toBeNull();
   });
 
   it('已保存 top 的项目再次进入直接恢复：输入回填、刷新可用、树直接渲染', async () => {

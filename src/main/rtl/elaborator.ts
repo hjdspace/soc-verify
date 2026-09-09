@@ -76,10 +76,17 @@ export function parseDiagnostics(log: string): SlangDiagnostic[] {
   return out;
 }
 
-/** 生成 yosys 脚本（固化 --keep-hierarchy，见 run_yosys.ys 的 S0 结论） */
+/**
+ * 生成 yosys 脚本（固化 --keep-hierarchy，见 run_yosys.ys 的 S0 结论）。
+ *
+ * `--ignore-timing` 忽略 intra-assignment 延迟（如 `a <= #1 b`）：这类写法综合时
+ * 延迟本就被丢弃，但 slang 默认严格模式会报 unsynthesizable timing control 中止
+ * elaboration（真实案例：wujian100_open 的 dmac.v 大量使用 `<= #1`）。
+ * 对「层级结构提取/顶层检测」用途，忽略延迟语义无损。
+ */
 export function renderYosysScript(flatFilelistPath: string, top: string | null, jsonPath: string): string {
   const topArg = top ? ` --top ${top}` : '';
-  return `read_slang -f ${flatFilelistPath}${topArg} --keep-hierarchy\nwrite_json ${jsonPath}\n`;
+  return `read_slang -f ${flatFilelistPath}${topArg} --keep-hierarchy --ignore-timing\nwrite_json ${jsonPath}\n`;
 }
 
 /**
