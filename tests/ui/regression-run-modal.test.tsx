@@ -47,8 +47,8 @@ vi.mock('@renderer/stores/toast', () => ({
 }));
 
 vi.mock('@renderer/stores/project', () => ({
-  useProjectStore: (selector: (s: { currentProjectId: string | null }) => unknown) =>
-    selector({ currentProjectId: 'proj-1' }),
+  useProjectStore: (selector: (s: { currentProjectId: string | null; projects: unknown[] }) => unknown) =>
+    selector({ currentProjectId: 'proj-1', projects: [] }),
 }));
 
 import { useRegressionStore } from '@renderer/stores/regression';
@@ -237,15 +237,54 @@ describe('RunConfigModal 选中与 entry 预览', () => {
     fireEvent.click(screen.getByTestId('reg-run-item-alu_all.grp'));
 
     await waitFor(() => {
-      expect(parseGroupQuery).toHaveBeenCalledWith({ filePath: groupG.filePath });
+      expect(parseGroupQuery).toHaveBeenCalledWith({ filePath: groupG.filePath, projectRoot: undefined });
     });
     await waitFor(() => {
       expect(parseListQuery).toHaveBeenCalledWith({ filePath: '/env/alu/regression/alu_mini.lst' });
     });
-    // 聚合 tagSet 出现在 tag 候选区
+    // 聚合 tagSet 出现在三态标签选择器
     await waitFor(() => {
       expect(screen.getByTestId('reg-run-tag-grp_tag')).toBeInTheDocument();
     });
+  });
+
+  it('unreadable 引用不再触发注定失败的 parseList（修复「无法读取文件」误报）', async () => {
+    parseGroupQuery.mockResolvedValue({
+      refPaths: ['$PROJ_DIR/dv/missing.lst'],
+      resolved: [{ path: '/proj/x/dv/missing.lst', type: 'unreadable' }],
+    });
+
+    renderModal([groupG]);
+    fireEvent.click(screen.getByTestId('reg-run-item-alu_all.grp'));
+
+    await waitFor(() => {
+      expect(parseGroupQuery).toHaveBeenCalled();
+    });
+    // 只有 type=list 的引用才下发 parseList；unreadable 静默跳过
+    expect(parseListQuery).not.toHaveBeenCalled();
+    // 引用清单中 unreadable 以失败色 + 计数提示呈现
+    await waitFor(() => {
+      expect(screen.getByTestId('reg-run-unreadable-count')).toHaveTextContent('1 个引用无法读取');
+    });
+  });
+
+  it('左栏过滤标签默认折叠（仅前 12 个），展开按钮显示全部', () => {
+    // 零填充保证字典序 = 生成序（tag_02 > tag_29 之类不会乱序）
+    const manyTags = Array.from({ length: 30 }, (_, i) => `tag_${String(i).padStart(2, '0')}`);
+    const bigList = makeList({ filePath: '/env/alu/regression/big.lst', tagSet: manyTags, onCount: 30 });
+
+    renderModal([bigList]);
+
+    // 折叠态：前 12 个可见，tag_12+ 不可见
+    expect(screen.getByTestId('reg-run-tagfilter-tag_00')).toBeInTheDocument();
+    expect(screen.getByTestId('reg-run-tagfilter-tag_11')).toBeInTheDocument();
+    expect(screen.queryByTestId('reg-run-tagfilter-tag_12')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('reg-run-tagfilter-toggle'));
+
+    // 展开态：全部可见
+    expect(screen.getByTestId('reg-run-tagfilter-tag_12')).toBeInTheDocument();
+    expect(screen.getByTestId('reg-run-tagfilter-tag_29')).toBeInTheDocument();
   });
 });
 
@@ -259,13 +298,47 @@ describe('RunConfigModal 选项与命令预览', () => {
     );
   });
 
-  it('点选 tag 候选后预览含 -tag', () => {
+  it('三态标签 chip：点选 → 只跑（-tag），再点 → 排除（-nt），三 点 → 复原', () => {
+    renderModal([listA]);
+    fireEvent.click(screen.getByTestId('reg-run-item-alu_mini.lst'));
+
+    const tag = screen.getByTestId('reg-run-tag-smoke');
+
+    // 第一态：只跑
+    fireEvent.click(tag);
+    expect(screen.getByTestId('reg-run-cmd-preview').textContent).toContain('-tag smoke');
+
+    // 第二态：排除
+    fireEvent.click(tag);
+    expect(screen.getByTestId('reg-run-cmd-preview').textContent).toContain('-nt smoke');
+    expect(screen.getByTestId('reg-run-cmd-preview').textContent).not.toContain('-tag smoke');
+
+    // 第三态：复原
+    fireEvent.click(tag);
+    expect(screen.getByTestId('reg-run-cmd-preview').textContent).not.toContain('-tag smoke');
+    expect(screen.getByTestId('reg-run-cmd-preview').textContent).not.toContain('-nt smoke');
+  });
+
+  it('不同标签可分别处于只跑 / 排除两态（-tag 与 -nt 同时出现）', () => {
+    renderModal([listA]);
+    fireEvent.click(screen.getByTestId('reg-run-item-alu_mini.lst'));
+
+    fireEvent.click(screen.getByTestId('reg-run-tag-smoke')); // sel
+    fireEvent.click(screen.getByTestId('reg-run-tag-smoke')); // exc
+
+    expect(screen.getByTestId('reg-run-cmd-preview').textContent).toContain('-nt smoke');
+  });
+
+  it('重置按钮清空全部标签状态', () => {
     renderModal([listA]);
     fireEvent.click(screen.getByTestId('reg-run-item-alu_mini.lst'));
 
     fireEvent.click(screen.getByTestId('reg-run-tag-smoke'));
+    fireEvent.click(screen.getByTestId('reg-run-tag-clear'));
 
-    expect(screen.getByTestId('reg-run-cmd-preview').textContent).toContain('-tag smoke');
+    expect(screen.getByTestId('reg-run-cmd-preview').textContent).toBe(
+      'runsim -regr /env/alu/regression/alu_mini.lst',
+    );
   });
 
   it('-m DE TAG 输入联动预览', () => {
@@ -307,7 +380,7 @@ describe('RunConfigModal 选项与命令预览', () => {
 });
 
 describe('RunConfigModal 运行', () => {
-  it('点击运行调用 runRegression（含选项）并关闭模态', async () => {
+  it('点击运行调用 runRegression（含三态标签选项）并关闭模态', async () => {
     const onClose = vi.fn();
     const runSpy = vi.spyOn(useRegressionStore.getState(), 'runRegression').mockResolvedValue(true);
     render(<RunConfigModal subsys="alu" items={[listA]} onClose={onClose} />);
