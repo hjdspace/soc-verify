@@ -10,7 +10,7 @@
  */
 
 import { readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join, normalize } from 'node:path';
 import type {
   RegressionEntry,
   RegressionList,
@@ -209,13 +209,72 @@ export function parseRegressionGroup(content: string): string[] {
   return refs;
 }
 
+/** Resolved group reference: type is 'unreadable' when the file exists in the
+ *  .grp but could not be opened — surfaced as such instead of being guessed
+ *  as a list (a guessed list used to trigger bogus parseList errors downstream). */
+export type ResolvedGroupRef = { path: string; type: 'list' | 'group' | 'unreadable' };
+
+/**
+ * Expand `$VAR` / `${VAR}` prefixes in a group reference and anchor relative
+ * paths against the group file's directory.
+ *
+ * Group files conventionally reference lists via env-var-prefixed paths
+ * (`$PROJ_DIR/dv/...`); `readFile` cannot open those literally. Resolution
+ * priority per known project env var ($PROJ_DIR/$PROJ_ENV/$PROJ_RTL/$PROJ_WORK):
+ * process env → login shell env → .socverify/env.json (via resolveProjectEnvVar).
+ * Unresolvable vars and bare relative paths fall back to anchoring against
+ * the group file's own directory.
+ */
+export function normalizeGroupRef(
+  ref: string,
+  groupDir: string,
+  resolveVar: (name: string) => Promise<string | null>,
+): Promise<string> {
+  return (async () => {
+    const expanded = await expandEnvVars(ref, resolveVar);
+    if (isAbsoluteLike(expanded)) return normalize(expanded);
+    return normalize(join(groupDir, expanded));
+  })();
+}
+
+/** Path starts with `/`, `\`, drive letter, or an unexpanded `$VAR` root */
+function isAbsoluteLike(p: string): boolean {
+  return /^([/\\]|[A-Za-z]:[\\/])/.test(p) || /^\$\{?[A-Za-z_]/.test(p);
+}
+
+/** Replace every `$VAR` / `${VAR}` occurrence with the resolved value (unknown vars kept literal) */
+async function expandEnvVars(
+  raw: string,
+  resolveVar: (name: string) => Promise<string | null>,
+): Promise<string> {
+  const varPattern = /\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g;
+  const names = new Set<string>();
+  for (const m of raw.matchAll(varPattern)) names.add(m[1]);
+
+  let result = raw;
+  for (const name of names) {
+    const value = await resolveVar(name);
+    if (!value) continue; // unresolvable: keep literal, caller falls back to groupDir anchor
+    const pattern = new RegExp(`\\$\\{?${name}\\}?`, 'g');
+    result = result.replace(pattern, value);
+  }
+  return result;
+}
+
 // ── Recursive group resolution ────────────────────────
 
 /**
  * Recursively resolve a group file's references, detecting cycles.
  *
+ * References are normalized before reading: `$VAR` prefixes expanded via
+ * `resolveVar` (project env), relative paths anchored to the group file's
+ * directory. Unreadable references are returned as `{ type: 'unreadable' }`
+ * so the UI can show them instead of guessing a type that would mislead
+ * downstream parsing.
+ *
  * @param filePath     Absolute path to the group file
  * @param fileReader   Function to read file content (injectable for testing)
+ * @param resolveVar   Optional env-var resolver for `$VAR` expansion
  * @param depth        Current recursion depth (max MAX_GRP_DEPTH)
  * @param visited      Set of already-visited file paths (cycle detection)
  * @returns            Array of { path, type } for all resolved references
@@ -223,35 +282,43 @@ export function parseRegressionGroup(content: string): string[] {
 export async function resolveGroupRefs(
   filePath: string,
   fileReader: (path: string) => Promise<string>,
+  resolveVar: (name: string) => Promise<string | null> = async () => null,
   depth = 0,
   visited = new Set<string>(),
-): Promise<Array<{ path: string; type: 'list' | 'group' }>> {
+): Promise<ResolvedGroupRef[]> {
   if (depth >= MAX_GRP_DEPTH) return [];
   if (visited.has(filePath)) return []; // cycle detected
   visited.add(filePath);
 
   const content = await fileReader(filePath);
   const refs = parseRegressionGroup(content);
-  const result: Array<{ path: string; type: 'list' | 'group' }> = [];
+  const groupDir = dirname(filePath);
+  const result: ResolvedGroupRef[] = [];
 
   for (const ref of refs) {
     // Skip already-visited files (cycle detection)
     if (visited.has(ref)) continue;
 
+    const resolvedPath = await normalizeGroupRef(ref, groupDir, resolveVar);
+    if (visited.has(resolvedPath)) continue;
+
     // Try to read the referenced file to determine its type
     try {
-      const refContent = await fileReader(ref);
+      const refContent = await fileReader(resolvedPath);
       const type = detectFileType(refContent);
       if (type === 'list') {
-        result.push({ path: ref, type: 'list' });
+        result.push({ path: resolvedPath, type: 'list' });
       } else if (type === 'group') {
-        result.push({ path: ref, type: 'group' });
-        const nested = await resolveGroupRefs(ref, fileReader, depth + 1, visited);
+        result.push({ path: resolvedPath, type: 'group' });
+        const nested = await resolveGroupRefs(resolvedPath, fileReader, resolveVar, depth + 1, visited);
         result.push(...nested);
+      } else {
+        // Readable but neither list nor group — surface as unreadable
+        result.push({ path: resolvedPath, type: 'unreadable' });
       }
     } catch {
-      // File not readable — skip but include as unknown
-      result.push({ path: ref, type: 'list' }); // assume list
+      // File not readable — surface honestly instead of guessing 'list'
+      result.push({ path: resolvedPath, type: 'unreadable' });
     }
   }
 
