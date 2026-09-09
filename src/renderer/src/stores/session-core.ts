@@ -19,6 +19,7 @@ import type {
   SessionEntry,
   SessionModel,
   SessionComposer,
+  SessionQuote,
 } from './session-types';
 
 // ─── 常量 ──────────────────────────────────────────────────
@@ -74,7 +75,7 @@ export function sessionMatchesId(session: SessionEntry, sessionId: string): bool
 }
 
 export function emptyComposer(): SessionComposer {
-  return { inputMessage: '', selectedSkills: [], contextFiles: [] };
+  return { inputMessage: '', selectedSkills: [], contextFiles: [], quotes: [] };
 }
 
 export function sessionComposer(session: SessionEntry | undefined): SessionComposer {
@@ -182,6 +183,9 @@ export interface SessionCoreState {
   removeSkill: (name: string) => void;
   addContextFile: (file: import('./session-types').ContextFile) => void;
   removeContextFile: (path: string) => void;
+  /** 划选「添加到当前任务」：向当前会话 composer 追加一条对话引用 */
+  addSelectionQuote: (quote: { text: string; source: string }) => void;
+  removeSelectionQuote: (id: string) => void;
   fetchHistorySessions: (projectId: string) => Promise<void>;
   loadHistorySession: (historySession: HistorySession, projectId: string, cwd: string) => Promise<void>;
   deleteHistorySession: (sessionId: string, projectId: string) => Promise<void>;
@@ -721,6 +725,28 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
       if (session.id !== state.currentSessionId) return session;
       const composer = sessionComposer(session);
       return { ...session, composer: { ...composer, contextFiles: composer.contextFiles.filter((file) => file.path !== path) } };
+    }),
+  })),
+
+  addSelectionQuote: (quote) => set((state) => ({
+    sessions: state.sessions.map((session) => {
+      if (session.id !== state.currentSessionId) return session;
+      const composer = sessionComposer(session);
+      const entry: SessionQuote = {
+        id: `quote_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        text: quote.text,
+        source: quote.source,
+        createdAt: Date.now(),
+      };
+      return { ...session, composer: { ...composer, quotes: [...(composer.quotes ?? []), entry] } };
+    }),
+  })),
+
+  removeSelectionQuote: (id) => set((state) => ({
+    sessions: state.sessions.map((session) => {
+      if (session.id !== state.currentSessionId) return session;
+      const composer = sessionComposer(session);
+      return { ...session, composer: { ...composer, quotes: (composer.quotes ?? []).filter((quote) => quote.id !== id) } };
     }),
   })),
 
