@@ -150,7 +150,7 @@ describe('SessionStore — event handling and state machine', () => {
 
     const secondId = await useSessionStore.getState().createSession('proj_1', '/tmp/proj');
     const second = useSessionStore.getState().sessions.find((session) => session.id === secondId);
-    expect(second?.composer).toEqual({ inputMessage: '', selectedSkills: [], contextFiles: [] });
+    expect(second?.composer).toEqual({ inputMessage: '', selectedSkills: [], contextFiles: [], quotes: [] });
 
     useSessionStore.getState().setInputMessage('draft for second');
     useSessionStore.getState().switchSession(firstId!);
@@ -160,6 +160,7 @@ describe('SessionStore — event handling and state machine', () => {
       inputMessage: 'draft for first',
       selectedSkills: [expect.objectContaining({ name: 'debug' })],
       contextFiles: [expect.objectContaining({ path: '/tmp/proj/rtl/core.sv' })],
+      quotes: [],
     });
     expect(useSessionStore.getState().sessions.find((session) => session.id === secondId)?.composer.inputMessage)
       .toBe('draft for second');
