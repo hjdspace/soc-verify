@@ -13,6 +13,7 @@ import { tRPCError } from '@renderer/lib/trpc-utils';
 import type {
   ChatMessage,
   SessionEntry,
+  SessionQuote,
   SubagentActivity,
 } from './session-types';
 import {
@@ -483,12 +484,32 @@ export interface SessionMessagesState {
 }
 
 // ─── Store ─────────────────────────────────────────────────
+
+/** 对话引用携带的最大字符数（与划选引用 QUOTE_MAX_CHARS 对齐，防长选区撑爆消息） */
+const QUOTE_BLOCK_MAX_CHARS = 2000;
+
+/** 把对话引用列表组装为发送给 LLM 的 blockquote 块（多条间空行分隔） */
+function buildQuoteBlock(quotes: SessionQuote[]): string {
+  return quotes
+    .map((quote, index) => {
+      const clipped = quote.text.length > QUOTE_BLOCK_MAX_CHARS
+        ? `${quote.text.slice(0, QUOTE_BLOCK_MAX_CHARS)}…`
+        : quote.text;
+      const quoted = clipped
+        .split('\n')
+        .map((line) => `> ${line}`)
+        .join('\n');
+      return `> 对话引用 #${index + 1}（${quote.source}）：\n${quoted}`;
+    })
+    .join('\n\n');
+}
+
 export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
   sendMessage: async (message, images, targetSessionId) => {
     const coreGet = useSessionCoreStore.getState;
     const coreSet = useSessionCoreStore.setState.bind(useSessionCoreStore);
     const sessionId = targetSessionId ?? coreGet().currentSessionId;
-    if (!sessionId || !message.trim()) return;
+    if (!sessionId) return;
     // 去除前导/尾部换行：用户在输入框选斜杠命令后可能残留前导换行，
     // 导致消息气泡中 skill 标签与消息内容之间出现空行。
     message = message.trim();
@@ -500,6 +521,9 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
     const composer = sessionComposer(sessionBeforeSend);
     const skills = composer.selectedSkills;
     const contextFiles = composer.contextFiles;
+    const quotes = composer.quotes ?? [];
+    // 仅引用、无正文也允许发送（引用内容即消息主体）
+    if (!message.trim() && quotes.length === 0) return;
     let fullMessage = message;
 
     if (skills.length > 0) {
@@ -530,6 +554,10 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
       fullMessage = `${contextPrefix}\n\n${fullMessage}`;
     }
 
+    if (quotes.length > 0) {
+      fullMessage = `${fullMessage}\n\n${buildQuoteBlock(quotes)}`;
+    }
+
     const userMsg: ChatMessage = {
       id: `msg_${Date.now()}`,
       role: 'user',
@@ -537,6 +565,7 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
       timestamp: Date.now(),
       images,
       skills: skills.length > 0 ? skills : undefined,
+      quotes: quotes.length > 0 ? quotes : undefined,
     };
 
     const assistantMsg: ChatMessage = {
@@ -554,7 +583,7 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
             ...sess,
             status: 'streaming',
             messages: [...sess.messages, userMsg, assistantMsg],
-            composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
+            composer: { inputMessage: '', selectedSkills: [], contextFiles: [], quotes: [] },
             contextCompacted: false,
             // 新回合开始，上一轮的建议追问已过时
             followUps: undefined,
