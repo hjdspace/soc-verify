@@ -38,14 +38,20 @@ export type SuiteCardActions = {
   onOpenTerminal: (runId: string) => void;
 };
 
-/** 最近一次运行状态 → 卡片状态文字 / 状态点色（与 RegressionPanel HistoryRow 同映射） */
+/** 最近一次运行状态 → 卡片状态文字 / 状态点色 / 状态条色（与 RegressionPanel HistoryRow 同映射） */
 function suiteState(latest: RegressionHistoryEntry | null): {
   label: string;
   textClass: string;
   dotClass: string;
+  barClass: string;
 } {
   if (!latest) {
-    return { label: '未运行', textClass: 'text-muted-foreground/70', dotClass: 'bg-muted-foreground/40' };
+    return {
+      label: '未运行',
+      textClass: 'text-muted-foreground/70',
+      dotClass: 'bg-muted-foreground/40',
+      barClass: 'bg-border',
+    };
   }
   switch (latest.status) {
     case 'running':
@@ -53,13 +59,29 @@ function suiteState(latest: RegressionHistoryEntry | null): {
         label: '运行中',
         textClass: 'text-status-running-foreground',
         dotClass: 'bg-status-running animate-pulse',
+        barClass: 'bg-status-running animate-pulse',
       };
     case 'completed':
-      return { label: '通过', textClass: 'text-status-pass-foreground', dotClass: 'bg-status-pass' };
+      return {
+        label: '通过',
+        textClass: 'text-status-pass-foreground',
+        dotClass: 'bg-status-pass',
+        barClass: 'bg-status-pass',
+      };
     case 'failed':
-      return { label: '失败', textClass: 'text-status-fail-foreground', dotClass: 'bg-status-fail' };
+      return {
+        label: '失败',
+        textClass: 'text-status-fail-foreground',
+        dotClass: 'bg-status-fail',
+        barClass: 'bg-status-fail',
+      };
     case 'aborted':
-      return { label: '已停止', textClass: 'text-status-aborted-foreground', dotClass: 'bg-status-aborted' };
+      return {
+        label: '已停止',
+        textClass: 'text-status-aborted-foreground',
+        dotClass: 'bg-status-aborted',
+        barClass: 'bg-status-aborted',
+      };
   }
 }
 
@@ -88,15 +110,21 @@ function SuiteCard({
   const stateLabel = hasActive ? `${activeCount} 运行中` : state.label;
   const stateDot = hasActive ? 'bg-status-running animate-pulse' : state.dotClass;
   const stateText = hasActive ? 'text-status-running-foreground' : state.textClass;
+  const stateBar = hasActive ? 'bg-status-running animate-pulse' : state.barClass;
   const metaParts = [
     `${suite.listCount} list`,
     ...(suite.groupCount > 0 ? [`${suite.groupCount} grp`] : []),
     `${suite.onCount} ON 用例`,
   ];
+  // 运行中有 x/y 进度时状态条按比例填充，否则整条状态色
+  const progressPct =
+    latestActive?.completed !== undefined && latestActive.total
+      ? Math.min(100, Math.round((latestActive.completed / latestActive.total) * 100))
+      : null;
 
   return (
     <div
-      className="cursor-pointer rounded-xl border border-border bg-card px-4 py-3 transition-[border-color,transform] duration-150 hover:-translate-y-px hover:border-primary/40"
+      className="relative cursor-pointer overflow-hidden rounded-xl border border-border bg-card px-4 pt-3 transition-[border-color,transform] duration-150 hover:-translate-y-px hover:border-primary/40"
       onClick={() => actions.onOpen(suite.subsys)}
       data-testid={`reg-suite-card-${suite.subsys}`}
     >
@@ -130,7 +158,7 @@ function SuiteCard({
         </span>
       </div>
       {hasActive && (
-        <div className="mt-1.5 flex items-center gap-1 border-t border-border/50 pt-1.5">
+        <div className="mt-1.5 flex items-center gap-1 border-t border-border/50 pb-3 pt-1.5">
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -157,6 +185,17 @@ function SuiteCard({
           </button>
         </div>
       )}
+      {!hasActive && <div className="pb-3" />}
+      {/* 底部状态条：一眼分类（状态色），运行中按 x/y 进度填充（原型方案 1 .suite-bar） */}
+      <div
+        className="absolute inset-x-0 bottom-0 h-[3px] bg-border/40"
+        data-testid={`reg-suite-bar-${suite.subsys}`}
+      >
+        <div
+          className={cn('h-full transition-[width] duration-300', stateBar)}
+          style={progressPct !== null ? { width: `${progressPct}%` } : undefined}
+        />
+      </div>
     </div>
   );
 }
