@@ -10,7 +10,8 @@
  * 先例：DashboardView 的 KpiRow + 时间范围选择器模式。
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Coins, CalendarDays, TrendingUp, DollarSign, Flame, Trophy } from 'lucide-react';
 import { ViewHeader } from '@renderer/components/layout/ViewHeader';
 import { useTokenStore, type TokenTimeRange, type HeatmapEntry } from '@renderer/stores/token';
@@ -130,7 +131,6 @@ function formatCost(usd: number): string {
 /** 热力图布局常量 — 参考 token-monitor dashboard.js 的 cell/gap 自适应策略 */
 const HEAT_GAP = 4;
 const HEAT_CELL_MIN = 9;
-const HEAT_CELL_MAX = 22;
 const HEAT_BOTTOM_PAD = 20;
 
 /** 计算热力图色阶 0-4（阈值对齐 token-monitor 的 heatmapIntensity：0.25/0.5/0.75 分档） */
@@ -168,17 +168,20 @@ type HeatmapCell = { date: string; entry: HeatmapEntry | null };
 
 /** 365 天 GitHub 风格热力图（SVG 实现，布局对齐 token-monitor 的 contribHeatmap/heatmapSvg） */
 function TokenHeatmap({ entries }: { entries: HeatmapEntry[] }) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  // 节点用 state 持有（callback ref）：entries 为空时走早退分支、网格容器未挂载，
+  // 若用「挂载时跑一次」的 effect + useRef，容器后续才挂载时 observer 永远不会建立，
+  // width 恒为 0 → cell 恒为兜底 14px → 宽容器右侧留白。callback ref 在节点挂载/
+  // 卸载时触发 effect 重跑，保证 AI 面板开合/数据异步到达后都能正确测量。
+  const [gridNode, setGridNode] = useState<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
   // 自定义 tooltip 状态（参考 token-monitor 的 dash-tooltip：fixed 定位跟随鼠标，贴边翻转）
   const [tip, setTip] = useState<{ x: number; y: number; date: string; entry: HeatmapEntry | null } | null>(null);
 
   // 容器宽度自适应（ResizeObserver 不可用时退化为一次性测量）
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
+    if (!gridNode) return;
     if (typeof ResizeObserver === 'undefined') {
-      setWidth(el.clientWidth);
+      setWidth(gridNode.clientWidth);
       return;
     }
     const ro = new ResizeObserver((resizeEntries) => {
@@ -186,9 +189,9 @@ function TokenHeatmap({ entries }: { entries: HeatmapEntry[] }) {
         setWidth(r.contentRect.width);
       }
     });
-    ro.observe(el);
+    ro.observe(gridNode);
     return () => ro.disconnect();
-  }, []);
+  }, [gridNode]);
 
   const maxTokens = useMemo(
     () => entries.reduce((max, e) => Math.max(max, e.totalTokens), 0),
@@ -223,12 +226,10 @@ function TokenHeatmap({ entries }: { entries: HeatmapEntry[] }) {
 
   const weeks = Math.max(1, Math.ceil(days.length / 7));
 
-  // cell 随容器宽度自适应（参考 token-monitor dashboard.js：分数像素正好填满容器，
-  // 并设上下限，避免窄窗口挤压成一团 / 宽窗口无限拉伸）
+  // cell 随容器宽度自适应填满（参考 token-monitor dashboard.js：分数像素正好填满容器，
+  // 设下限避免窄窗口挤压成一团；不设上限 — 否则宽窗口（如 AI 面板折叠后）网格右侧留大片空白）
   const cell =
-    width > 0
-      ? Math.max(HEAT_CELL_MIN, Math.min(HEAT_CELL_MAX, (width - weeks * HEAT_GAP) / weeks))
-      : 14;
+    width > 0 ? Math.max(HEAT_CELL_MIN, (width - weeks * HEAT_GAP) / weeks) : 14;
   const pitch = cell + HEAT_GAP;
   const gridWidth = weeks * pitch - HEAT_GAP;
   const gridHeight = 7 * pitch - HEAT_GAP;
@@ -269,7 +270,7 @@ function TokenHeatmap({ entries }: { entries: HeatmapEntry[] }) {
         </div>
       </div>
       {/* SVG 网格 — 7 行（每周 7 天）× N 列周，宽度自适应 + 横向滚动兜底 */}
-      <div ref={containerRef} className="overflow-x-auto">
+      <div ref={setGridNode} className="overflow-x-auto">
         <svg
           width={svgWidth}
           height={svgHeight}
@@ -344,9 +345,12 @@ function HeatTooltip({ x, y, date, entry }: { x: number; y: number; date: string
   const tokens = entry?.totalTokens ?? 0;
   const cost = entry?.costUsd ?? 0;
 
-  return (
+  // portal 到 document.body：ViewContainer 的 motion.div 带 will-change-[opacity,transform]，
+  // 会成为 fixed 后代的包含块与独立层叠上下文 — 不 portal 会导致 tooltip 偏移
+  // （相对视图容器而非视口定位）且被 z-50 的 AI 抽屉遮挡（portal 后 DOM 顺序 + z-[60] 均在其上）
+  return createPortal(
     <div
-      className="pointer-events-none fixed z-50 min-w-[130px] rounded-lg border border-border px-3 py-2 text-xs shadow-xl"
+      className="pointer-events-none fixed z-[60] min-w-[130px] rounded-lg border border-border px-3 py-2 text-xs shadow-xl"
       style={{ left, top, background: 'color-mix(in srgb, var(--card) 96%, transparent)' }}
       data-testid="token-heatmap-tooltip"
     >
@@ -367,7 +371,8 @@ function HeatTooltip({ x, y, date, entry }: { x: number; y: number; date: string
           <span className="tabular-nums">{formatCost(cost)}</span>
         </div>
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
 
