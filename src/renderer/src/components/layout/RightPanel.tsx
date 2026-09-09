@@ -23,6 +23,8 @@ import { TodoPanel } from '@renderer/components/chat/TodoPanel';
 import { ChangeSummaryBar } from '@renderer/components/chat/ChangeSummaryBar';
 import { ErrorMessage } from '@renderer/components/chat/ErrorMessage';
 import { SelectionActionsHost } from '@renderer/components/chat/SelectionActionsHost';
+import { ComposerQuoteChips } from '@renderer/components/chat/ComposerQuoteChips';
+import { AI_SELECTION_ACTIONS } from '@renderer/components/ui/SelectionActions';
 import { SearchClearButton, SearchEmptyState, SearchMatch } from '@renderer/components/ui/SearchList';
 import { getLatestTodoState } from '@renderer/components/chat/tool-helpers';
 import { useTodoPanelStore } from '@renderer/stores/todo-panel';
@@ -123,6 +125,8 @@ const addSkill = useSessionCoreStore((s) => s.addSkill);
 const removeSkill = useSessionCoreStore((s) => s.removeSkill);
 const addContextFile = useSessionCoreStore((s) => s.addContextFile);
 const removeContextFile = useSessionCoreStore((s) => s.removeContextFile);
+const removeSelectionQuote = useSessionCoreStore((s) => s.removeSelectionQuote);
+const composerQuotes = currentSession?.composer?.quotes ?? [];
 
   const editorApiRef = useRef<ComposerEditorApi | null>(null);
   // composer 容器：按钮锚定弹层的水平夹紧边界，防止窄面板下右溢出窗口
@@ -262,7 +266,8 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
   };
 
   const handleSend = async () => {
-    if (!inputMessage.trim()) return;
+    // 仅引用、无正文也允许发送（引用内容即消息主体）
+    if (!inputMessage.trim() && composerQuotes.length === 0) return;
     // Capture and clear images immediately so the preview disappears without
     // waiting for the async sendMessage to resolve.
     const images = attachedImages.length > 0 ? attachedImages : undefined;
@@ -1015,6 +1020,9 @@ const deleteHistorySession = useSessionCoreStore((s) => s.deleteHistorySession);
             </>
           )}
 
+          {/* ── 对话引用 chips：划选「添加到当前任务」挂入，hover 预览原文 ── */}
+          <ComposerQuoteChips quotes={composerQuotes} onRemove={removeSelectionQuote} />
+
           {/* ── 行内 chip 编辑器：技能/上下文 chip 嵌入文本流中光标位置 ── */}
           <ComposerEditor
             sessionId={currentSessionId ?? ''}
@@ -1473,6 +1481,10 @@ const MessageBubble = memo(function MessageBubble({ message, sessionId, tvViolat
               ))}
               {message.content}
             </div>
+            {/* 划选「添加到当前任务」附带的对话引用回显（只读 chip，hover 预览原文） */}
+            {(message.quotes?.length ?? 0) > 0 && (
+              <ComposerQuoteChips quotes={message.quotes ?? []} className="mt-1.5" />
+            )}
           </div>
           {/* 悬停显现：复制 + 时间戳（DSH 用户消息操作行） */}
           <div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-100 group-hover:opacity-100 group-focus-within:opacity-100">
@@ -1528,7 +1540,12 @@ const MessageBubble = memo(function MessageBubble({ message, sessionId, tvViolat
       ) : message.content?.trimStart().startsWith('[错误]') ? (
         <ErrorMessage content={message.content} />
       ) : message.content ? (
-        <SelectionActionsHost session={session} enabled={!!sessionId}>
+        <SelectionActionsHost
+          session={session}
+          enabled={!!sessionId}
+          actions={AI_SELECTION_ACTIONS}
+          promptInput={false}
+        >
           <MarkdownRenderer content={message.content} streaming={isStreaming} />
         </SelectionActionsHost>
       ) : (
