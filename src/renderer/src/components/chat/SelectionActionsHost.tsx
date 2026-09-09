@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { SelectionActions, SELECTION_ACTIONS } from '@renderer/components/ui/SelectionActions';
+import { SelectionActions, SELECTION_ACTIONS, type SelectionActionDef } from '@renderer/components/ui/SelectionActions';
 import { useSelectionAnchor, type SelectionAnchor, type SelectionSnapshot } from '@renderer/hooks/use-selection-anchor';
 import { useSelectionRun, type SelectionRunRequest } from '@renderer/hooks/use-selection-run';
 import { useSessionCoreStore } from '@renderer/stores/session-core';
@@ -77,6 +77,8 @@ export function SelectionActionsHost({
   source = { kind: 'reply' },
   enabled = true,
   onAcceptSelection,
+  actions,
+  promptInput = true,
   className,
   children,
 }: {
@@ -88,6 +90,12 @@ export function SelectionActionsHost({
   enabled?: boolean;
   /** 改写型动作点击“保留”时，用 AI 结果替换宿主中的原选区。 */
   onAcceptSelection?: (replacement: string, selectedText: string) => void;
+  /** 浮条快捷动作集：缺省 SELECTION_ACTIONS（编辑器宿主全量）；
+   *  AI 气泡宿主传 AI_SELECTION_ACTIONS（仅解释/翻译） */
+  actions?: SelectionActionDef[];
+  /** 浮条自定义 prompt 输入框开关（缺省开启；AI 气泡宿主关闭，
+   *  避免窄侧栏下输入框把「添加到当前任务」挤出可视范围） */
+  promptInput?: boolean;
   /** 宿主容器附加类（文件宿主需要接管原容器的 h-full/max-w 等布局类） */
   className?: string;
   children: ReactNode;
@@ -256,7 +264,7 @@ export function SelectionActionsHost({
         name: transientSessionName(label),
         status: 'idle',
         messages: [],
-        composer: { inputMessage: '', selectedSkills: [], contextFiles: [] },
+        composer: { inputMessage: '', selectedSkills: [], contextFiles: [], quotes: [] },
         createdAt: Date.now(),
         model: activeSession.model,
         approvalMode: activeSession.approvalMode,
@@ -286,6 +294,18 @@ export function SelectionActionsHost({
   // 查阅型动作回复落定后在结果浮窗展示（不自动 dismiss），
   // 用户看完后手动关闭浮窗 → dismiss → 清理临时会话引用
 
+  // ── 添加到当前任务 ─────────────────────────────────────────
+  // 把选区原文挂为当前会话 composer 的对话引用（输入框上方 chip 展示，
+  // 发送时组装为 blockquote）。本地动作：不走回合状态机，写入后清除
+  // 文档选区（浮条随 selection 置空自动隐藏）并 dismiss 兜底。
+  const handleAddQuote = useCallback(() => {
+    const quote = selectionRef.current?.text.trim();
+    if (!quote || !activeSession) return;
+    useSessionCoreStore.getState().addSelectionQuote({ text: quote, source: quoteSourceLabel(source) });
+    window.getSelection()?.removeAllRanges();
+    run.dismiss();
+  }, [activeSession, source, run]);
+
   // run.request 变 null（dismiss/keep/discard 后）时清理临时会话引用 +
   // 从 sessions 列表中移除瞬态会话（不留 tab）
   useEffect(() => {
@@ -304,18 +324,20 @@ export function SelectionActionsHost({
     <div ref={hostRef} className={className ? `relative ${className}` : 'relative'}>
       {children}
       <SelectionActions
-        actions={SELECTION_ACTIONS}
+        actions={actions ?? SELECTION_ACTIONS}
         anchor={barAnchor}
         visible={visible}
         phase={run.phase}
         request={run.request}
         streamText={run.streamText}
+        showPromptInput={promptInput}
         onSelectAction={(key) => handleAction(key, actionLabel(key), null)}
         onSubmitPrompt={(prompt) => handleAction('prompt', prompt, prompt)}
         onKeep={handleKeep}
         onDiscard={run.discard}
         onRetry={run.retry}
         onDismiss={run.dismiss}
+        onAddQuote={activeSession ? handleAddQuote : undefined}
       />
     </div>
   );
