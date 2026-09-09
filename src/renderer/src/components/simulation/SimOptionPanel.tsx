@@ -12,6 +12,10 @@
  *
  * 命令预览栏 + 运行按钮已提取到 SimCommandBar 组件，放置在
  * SimulationView 中栏底部，避免用户滚动 Option 面板才能触达。
+ *
+ * 头部栏含「解析回归指令」按钮（复刻 Python GUI runsim_r3p0）：粘贴
+ * 从网页复制的完整回归指令，parseRunsimCommand 提取 runsim 参数后
+ * 合并填入 Option 字段。对话框见 ParseCommandDialog 组件。
  */
 
 import { useEffect, useState, useMemo, useCallback } from 'react';
@@ -20,12 +24,15 @@ import {
   FolderOpen,
   Terminal,
   ChevronDown,
+  Wand2,
 } from 'lucide-react';
 import { useProjectStore } from '@renderer/stores/project';
 import { useSimulationStore } from '@renderer/stores/simulation';
 import { useToastStore } from '@renderer/stores/toast';
 import { trpc } from '@renderer/lib/trpc';
 import { cn } from '@renderer/lib/utils';
+import { parseRunsimCommand } from '@renderer/lib/runsim-command';
+import { ParseCommandDialog } from '@renderer/components/simulation/ParseCommandDialog';
 import type { SimOptionField } from '@shared/plugin-types';
 import {
   OptionCard,
@@ -45,6 +52,8 @@ export function SimOptionPanel() {
   const [showPresetMenu, setShowPresetMenu] = useState(false);
   const [savingPreset, setSavingPreset] = useState(false);
   const [presetName, setPresetName] = useState('');
+  const [showParseDialog, setShowParseDialog] = useState(false);
+  const [parseCommandText, setParseCommandText] = useState('');
 
   // Load schema when project or subsys changes
   useEffect(() => {
@@ -165,6 +174,27 @@ export function SimOptionPanel() {
     setShowPresetMenu(false);
   };
 
+  // ── 解析回归指令（复刻 Python GUI do_parse_command）─────────────
+  // 解析结果与当前 simOptions 合并（解析值覆盖同名字段），未提及的字段保留
+  const handleParseCommand = () => {
+    const text = parseCommandText.trim();
+    if (!text) {
+      useToastStore.getState().error('解析失败', '请输入回归指令');
+      return;
+    }
+    const parsed = parseRunsimCommand(text);
+    if (Object.keys(parsed).length === 0) {
+      useToastStore.getState().error('解析失败', '未找到有效的 runsim 命令');
+      return;
+    }
+    setSimOptions({ ...simOptions, ...parsed });
+    setShowParseDialog(false);
+    setParseCommandText('');
+    useToastStore
+      .getState()
+      .success('解析完成', `已提取 ${Object.keys(parsed).length} 个参数`);
+  };
+
   const hasCase = typeof simOptions.case === 'string' && simOptions.case.trim() !== '';
   const caseName = hasCase ? (simOptions.case as string).trim() : '';
 
@@ -185,6 +215,16 @@ export function SimOptionPanel() {
         </div>
 
         <div className="flex items-center gap-1">
+          {/* 解析回归指令 — 粘贴 runsim 指令自动填充 Option 字段 */}
+          <button
+            onClick={() => setShowParseDialog(true)}
+            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition-[color,background-color,transform] duration-150 ease-out hover:bg-accent hover:text-foreground active:scale-[0.97]"
+            title="粘贴回归指令，自动提取 runsim 命令参数填入 Option"
+            data-testid="sim-option-parse-btn"
+          >
+            <Wand2 className="h-3 w-3" />
+            解析回归指令
+          </button>
           {/* Preset selector — 预设列表与保存收进同一个下拉，header 只留一个入口 */}
           <div className="relative">
             <button
@@ -299,6 +339,19 @@ export function SimOptionPanel() {
           </div>
         )}
       </div>
+
+      {/* ── 解析回归指令对话框 ──────────────────────────────────── */}
+      {showParseDialog && (
+        <ParseCommandDialog
+          text={parseCommandText}
+          onChange={setParseCommandText}
+          onParse={handleParseCommand}
+          onClose={() => {
+            setShowParseDialog(false);
+            setParseCommandText('');
+          }}
+        />
+      )}
     </div>
   );
 }
