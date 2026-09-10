@@ -169,6 +169,16 @@ export function CenterArea() {
   const simErrorsRun = activeRuns.find((r) => r.runId === simErrorsRunId);
   const simErrors = simErrorsRun?.compileErrors ?? [];
 
+  // ── 中栏终端层（keep-alive 常驻）──────────────────────────
+  // 终端 tab 激活时该层可见；切到文件 tab（如 irun_sim.log）等其它目的
+  // 地时仅隐藏不卸载（见内容区末尾的常驻层渲染），切回零挂载成本。
+  const activeTerminalTabId = destination?.type === 'terminal' ? destination.terminalTabId : null;
+  const activeTermTab = activeTerminalTabId
+    ? terminalTabs.find((t) => t.id === activeTerminalTabId)
+    : undefined;
+  // 会话尚未建立（creating）时层内不含该 tab，用占位提示
+  const terminalCreating = activeTerminalTabId !== null && !activeTermTab?.terminalId;
+
   // 更多菜单项
   const moreItems = [
     { type: 'regression' as const, label: '回归套件', icon: GitBranch },
@@ -457,21 +467,13 @@ export function CenterArea() {
             />
           )
         ) : destination?.type === 'terminal' ? (
-          (() => {
-            const termTab = terminalTabs.find((t) => t.id === destination.terminalTabId);
-            if (!termTab || !termTab.terminalId) {
-              return (
-                <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
-                  正在创建终端...
-                </div>
-              );
-            }
-            // keep-alive 常驻层渲染最近 KEEP_ALIVE_MAX 个终端（含当前
-            // 可见的），切 tab / 切视图回来零挂载成本
-            return (
-              <TerminalKeepAliveLayer activeTerminalTabId={termTab.id} />
-            );
-          })()
+          // 终端内容由内容区末尾的常驻 keep-alive 层渲染（绝对定位覆盖）；
+          // 此分支只处理会话建立中的占位提示
+          terminalCreating ? (
+            <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
+              正在创建终端...
+            </div>
+          ) : null
         ) : destination?.type === 'simulation-errors' ? (
           <CompileErrorView errors={simErrors} runId={simErrorsRunId} />
         ) : destination?.type === 'simulation-history' ? (
@@ -603,6 +605,14 @@ export function CenterArea() {
           </div>
         )}
         
+        {/* ── 中栏终端 keep-alive 常驻层 ────────────────────────
+            * 与上面的目的地三元链平级（绝对定位铺满内容区），仅当激活
+            * tab 是终端时可见。打开文件 tab（如 irun_sim.log）只隐藏本层，
+            * 关闭/切回时终端瞬时恢复——不再卸载重挂载 xterm（销毁 10 万行
+            * scrollback 后需跨 IPC 重放 outputBuffer，大日志下空白数秒）。
+            * 层内只承载 location='center' 的终端，与底部面板层互斥。 */}
+        <TerminalKeepAliveLayer activeTerminalTabId={activeTerminalTabId} location="center" />
+
         {/* ── Floating 'Review next file' button ─────────── */}
         {pendingReviewCount > 0 && !isViewingNextReview && nextReviewFile && (
           <button
