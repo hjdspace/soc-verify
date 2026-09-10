@@ -251,7 +251,7 @@ describe('RunConfigModal 选中与 entry 预览', () => {
   it('unreadable 引用不再触发注定失败的 parseList（修复「无法读取文件」误报）', async () => {
     parseGroupQuery.mockResolvedValue({
       refPaths: ['$PROJ_DIR/dv/missing.lst'],
-      resolved: [{ path: '/proj/x/dv/missing.lst', type: 'unreadable' }],
+      resolved: [{ path: '/proj/x/dv/top/regression/top_regr_lst/missing.lst', type: 'unreadable', reason: '文件不存在 (ENOENT)' }],
     });
 
     renderModal([groupG]);
@@ -266,6 +266,10 @@ describe('RunConfigModal 选中与 entry 预览', () => {
     await waitFor(() => {
       expect(screen.getByTestId('reg-run-unreadable-count')).toHaveTextContent('1 个引用无法读取');
     });
+    // unreadable 行完整显示路径（不截断）+ 失败原因，并提供复制按钮
+    expect(screen.getByText(/\/proj\/x\/dv\/top\/regression\/top_regr_lst\/missing\.lst/)).toBeInTheDocument();
+    expect(screen.getByText(/文件不存在 \(ENOENT\)/)).toBeInTheDocument();
+    expect(screen.getByTestId('reg-run-unreadable-copy')).toBeInTheDocument();
   });
 
   it('左栏过滤标签默认折叠（仅前 12 个），展开按钮显示全部', () => {
