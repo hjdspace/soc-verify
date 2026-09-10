@@ -267,13 +267,13 @@ export function BottomPanel() {
       </div>
 
       {/* ── Terminal content ──────────────────────────────── */}
-      {/* keep-alive：最近 KEEP_ALIVE_MAX 个底部终端常驻（含活动终端），
-          tab 切换零重挂载。折叠（expanded=false）时 AnimatePresence 播放
-          height→0 退出动画后卸载容器与终端，展开走 outputBuffer 尾部
-          恢复（带占位层提示） */}
+      {/* keep-alive：本层只承载 location='bottom' 的终端（最近 KEEP_ALIVE_MAX
+          个常驻，含活动终端），tab 切换零重挂载。折叠（expanded=false）时
+          AnimatePresence 播放 height→0 退出动画后卸载容器与终端，展开走
+          outputBuffer 尾部恢复（带占位层提示） */}
       <div className="relative flex flex-1 overflow-hidden">
         {activeTab && activeTab.terminalId ? (
-          <TerminalKeepAliveLayer activeTerminalTabId={activeTab.id} />
+          <TerminalKeepAliveLayer activeTerminalTabId={activeTab.id} location="bottom" />
         ) : (
           <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
             {activeTab?.creating ? '正在创建终端...' : '无活动终端'}
