@@ -27,7 +27,7 @@ vi.mock('../../runner-pi/protocol', async () => ({
 
 // ─── pi SDK 受控 fake ─────────────────────────────────────
 
-const sessionManagerList = vi.fn(async () => [] as unknown[]);
+const sessionManagerList = vi.fn(async (..._args: unknown[]) => [] as unknown[]);
 const sessionManagerOpen = vi.fn();
 const sessionManagerCreate = vi.fn();
 const modelRuntimeCreate = vi.fn();
