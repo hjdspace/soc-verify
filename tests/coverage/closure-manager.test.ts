@@ -95,9 +95,9 @@ function makeNode(
  */
 function buildSampleTree(): CoverageNode {
   return makeNode('top', 'top', { line: 98 }, [
-    makeNode('cpu_core', 'top/cpu_core', { line: 80, branch: 70, toggle: 90 }),
-    makeNode('memory_ctrl', 'top/memory_ctrl', { toggle: 75 }),
-    makeNode('clean_mod', 'top/clean_mod', { line: 99, toggle: 90 }),
+    makeNode('cpu_core', 'cpu_core', { line: 80, branch: 70, toggle: 90 }),
+    makeNode('memory_ctrl', 'memory_ctrl', { toggle: 75 }),
+    makeNode('clean_mod', 'clean_mod', { line: 99, toggle: 90 }),
   ]);
 }
 
@@ -150,7 +150,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test_1',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
 
         expect(session.id).toMatch(/^closure_\d{8}_\d{6}_/);
@@ -163,11 +163,11 @@ describe('ClosureManager', () => {
         expect(session.targets).toHaveLength(1);
         const target = session.targets[0];
         expect(target.id).toMatch(/^target_/);
-        expect(target.module).toEqual({ path: 'top/cpu_core', name: 'cpu_core' });
+        expect(target.module).toEqual({ path: 'cpu_core', name: 'cpu_core' });
         expect(target.gaps).toHaveLength(2);
         expect(target.gaps.map((g) => g.metric)).toEqual(['line', 'branch']);
         expect(target.gaps[0]).toMatchObject({
-          nodePath: 'top/cpu_core',
+          nodePath: 'cpu_core',
           nodeName: 'cpu_core',
           target: 95,
           actual: 80,
@@ -185,14 +185,14 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test_2',
-          modules: ['top/cpu_core', 'top/memory_ctrl', 'top/clean_mod'],
+          modules: ['cpu_core', 'memory_ctrl', 'clean_mod'],
         });
 
         // clean_mod 无 gap → 跳过，不产生 target
         expect(session.targets).toHaveLength(2);
         expect(session.targets.map((t) => t.module.path)).toEqual([
-          'top/cpu_core',
-          'top/memory_ctrl',
+          'cpu_core',
+          'memory_ctrl',
         ]);
         expect(session.targets[1].gaps.map((g) => g.metric)).toEqual(['toggle']);
       } finally {
@@ -204,7 +204,7 @@ describe('ClosureManager', () => {
       const { mgr, cleanup } = setupClosureManager();
       try {
         await expect(
-          mgr.startClosure({ sessionId: 'merge_test_3', modules: ['top/clean_mod'] }),
+          mgr.startClosure({ sessionId: 'merge_test_3', modules: ['clean_mod'] }),
         ).rejects.toThrow(/无未达标/);
       } finally {
         cleanup();
@@ -220,8 +220,8 @@ describe('ClosureManager', () => {
         // top 自身达标、clean_mod 达标 → 只有 cpu_core / memory_ctrl 两个 target
         expect(session.targets).toHaveLength(2);
         expect(session.targets.map((t) => t.module.path)).toEqual([
-          'top/cpu_core',
-          'top/memory_ctrl',
+          'cpu_core',
+          'memory_ctrl',
         ]);
       } finally {
         cleanup();
@@ -233,7 +233,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test_5',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
           maxRounds: 3,
           escalationThreshold: 4,
         });
@@ -249,7 +249,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test_6',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         expect(session.workspaceDir).toBe(
           join(tmpDir, '.socverify', 'coverage', 'closure', session.id),
@@ -270,7 +270,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core', 'top/memory_ctrl'],
+          modules: ['cpu_core', 'memory_ctrl'],
         });
         const found = await mgr.getClosure(session.id);
         expect(found).not.toBeNull();
@@ -294,8 +294,8 @@ describe('ClosureManager', () => {
     it('listClosures 返回所有 session', async () => {
       const { mgr, cleanup } = setupClosureManager();
       try {
-        await mgr.startClosure({ sessionId: 'merge_1', modules: ['top/cpu_core'] });
-        await mgr.startClosure({ sessionId: 'merge_2', modules: ['top/memory_ctrl'] });
+        await mgr.startClosure({ sessionId: 'merge_1', modules: ['cpu_core'] });
+        await mgr.startClosure({ sessionId: 'merge_2', modules: ['memory_ctrl'] });
         const list = await mgr.listClosures();
         expect(list).toHaveLength(2);
       } finally {
@@ -310,7 +310,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const targetId = session.targets[0].id;
         expect(session.targets[0].status).toBe('pending');
@@ -331,7 +331,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         await mgr.startIteration(session.id, session.targets[0].id);
         await mgr.closeTarget(session.id, session.targets[0].id);
@@ -349,7 +349,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         await mgr.startIteration(session.id, session.targets[0].id);
         await mgr.escalateTarget(session.id, session.targets[0].id, 'manual review needed');
@@ -368,7 +368,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         await mgr.startIteration(session.id, session.targets[0].id);
         await mgr.failTarget(session.id, session.targets[0].id, 'session creation failed');
@@ -387,7 +387,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core', 'top/memory_ctrl'],
+          modules: ['cpu_core', 'memory_ctrl'],
         });
         await mgr.startIteration(session.id, session.targets[0].id);
         // 第二个 target 仍 pending
@@ -411,7 +411,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const targetId = session.targets[0].id;
         await mgr.startIteration(session.id, targetId);
@@ -431,9 +431,9 @@ describe('ClosureManager', () => {
     /** 构造单模块 target（gaps 由 metrics 快照推导，仅用于纯函数测试）。 */
     const makeTarget = (gaps: Array<{ metric: CoverageMetric; target: number }>): ClosureTarget => ({
       id: 't1',
-      module: { path: 'top/cpu_core', name: 'cpu_core' },
+      module: { path: 'cpu_core', name: 'cpu_core' },
       gaps: gaps.map((g) => ({
-        nodePath: 'top/cpu_core',
+        nodePath: 'cpu_core',
         nodeName: 'cpu_core',
         metric: g.metric,
         target: g.target,
@@ -494,7 +494,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const targetId = session.targets[0].id;
 
@@ -524,7 +524,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const targetId = session.targets[0].id;
 
@@ -553,7 +553,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const targetId = session.targets[0].id;
 
@@ -592,7 +592,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const targetId = session.targets[0].id;
 
@@ -632,7 +632,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const targetId = session.targets[0].id;
 
@@ -669,7 +669,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const targetId = session.targets[0].id;
 
@@ -700,7 +700,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
           escalationThreshold: 3,
         });
         const targetId = session.targets[0].id;
@@ -731,7 +731,7 @@ describe('ClosureManager', () => {
       try {
         const base: ClosureTarget = {
           id: 't1',
-          module: { path: 'top/cpu_core', name: 'cpu_core' },
+          module: { path: 'cpu_core', name: 'cpu_core' },
           gaps: [],
           iterations: [
             {
@@ -779,7 +779,7 @@ describe('ClosureManager', () => {
           {
             id: 'gap_old_1',
             gap: {
-              nodePath: 'top/cpu_core',
+              nodePath: 'cpu_core',
               nodeName: 'cpu_core',
               metric: 'line',
               target: 95,
@@ -801,7 +801,7 @@ describe('ClosureManager', () => {
           {
             id: 'gap_old_2',
             gap: {
-              nodePath: 'top/cpu_core',
+              nodePath: 'cpu_core',
               nodeName: 'cpu_core',
               metric: 'branch',
               target: 90,
@@ -835,7 +835,7 @@ describe('ClosureManager', () => {
 
         const [t1, t2] = session.targets;
         expect(t1.id).toBe('gap_old_1'); // id 保留 → <targetId>/round_N 目录继续有效
-        expect(t1.module).toEqual({ path: 'top/cpu_core', name: 'cpu_core' });
+        expect(t1.module).toEqual({ path: 'cpu_core', name: 'cpu_core' });
         expect(t1.gaps).toHaveLength(1);
         expect(t1.gaps[0].metric).toBe('line');
         expect(t1.iterations).toHaveLength(1);
@@ -877,7 +877,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core', 'top/memory_ctrl'],
+          modules: ['cpu_core', 'memory_ctrl'],
         });
         const targetId = session.targets[0].id;
         await mgr.startIteration(session.id, targetId);
@@ -924,7 +924,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const targetId = session.targets[0].id;
 
@@ -949,7 +949,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const wsDir = mgr.getWorkspaceDir(session.id);
         expect(wsDir).toBe(join(tmpDir, '.socverify', 'coverage', 'closure', session.id));
@@ -977,7 +977,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         await expect(
           mgr.startIteration(session.id, 'target_unknown'),
@@ -992,7 +992,7 @@ describe('ClosureManager', () => {
       try {
         const session = await mgr.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const targetId = session.targets[0].id;
         await expect(
