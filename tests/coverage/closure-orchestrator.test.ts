@@ -93,12 +93,12 @@ function _makeDeltas(delta: number): CoverageDelta[] {
 }
 
 const SAMPLE_GAPS: CoverageGap[] = [
-  makeGap('top/cpu_core', 'line', 80, 95),
+  makeGap('cpu_core', 'line', 80, 95),
 ];
 
 const MULTI_GAPS: CoverageGap[] = [
-  makeGap('top/cpu_core', 'line', 80, 95),
-  makeGap('top/memory_ctrl', 'toggle', 75, 85),
+  makeGap('cpu_core', 'line', 80, 95),
+  makeGap('memory_ctrl', 'toggle', 75, 85),
 ];
 
 // ─── Mock SessionManager ────────────────────────────────────────
@@ -240,8 +240,8 @@ function createMockCoverageManager(moduleMetrics?: {
     depth: 0,
     metrics: mkMetrics({}),
     children: [
-      { name: 'cpu_core', path: 'top/cpu_core', depth: 1, metrics: mkMetrics(moduleMetrics?.cpu_core ?? { line: 80 }), children: [] },
-      { name: 'memory_ctrl', path: 'top/memory_ctrl', depth: 1, metrics: mkMetrics(moduleMetrics?.memory_ctrl ?? { toggle: 75 }), children: [] },
+      { name: 'cpu_core', path: 'cpu_core', depth: 1, metrics: mkMetrics(moduleMetrics?.cpu_core ?? { line: 80 }), children: [] },
+      { name: 'memory_ctrl', path: 'memory_ctrl', depth: 1, metrics: mkMetrics(moduleMetrics?.memory_ctrl ?? { toggle: 75 }), children: [] },
     ],
   };
   return {
@@ -583,8 +583,8 @@ function setupOrchestrator(
       depth: 0,
       metrics: recoveryMetrics,
       children: [
-        { name: 'cpu_core', path: 'top/cpu_core', depth: 1, metrics: recoveryMetrics, children: [] },
-        { name: 'memory_ctrl', path: 'top/memory_ctrl', depth: 1, metrics: recoveryMetrics, children: [] },
+        { name: 'cpu_core', path: 'cpu_core', depth: 1, metrics: recoveryMetrics, children: [] },
+        { name: 'memory_ctrl', path: 'memory_ctrl', depth: 1, metrics: recoveryMetrics, children: [] },
       ],
     },
     targets: { ...DEFAULT_COVERAGE_TARGETS },
@@ -1498,7 +1498,7 @@ describe('ClosureOrchestrator', () => {
       JSON.stringify(
         [
           {
-            module: 'top/cpu_core',
+            module: 'cpu_core',
             metric: 'line',
             file: 'rtl/cpu_core.sv',
             line: 142,
@@ -1506,7 +1506,7 @@ describe('ClosureOrchestrator', () => {
             confidence: 0.86,
           },
           {
-            module: 'top/cpu_core',
+            module: 'cpu_core',
             metric: 'functional',
             bin: 'err_inject.bin_backdoor',
             reason: 'backdoor 注入路径仅验证平台自检使用，前门访问永不触发',
@@ -1550,7 +1550,7 @@ describe('ClosureOrchestrator', () => {
         const byTarget = await setup.closureManager.listExclusionSuggestions(session.id);
         const list = byTarget[session.targets[0].id];
         expect(list).toHaveLength(2);
-        expect(list[0].module).toBe('top/cpu_core');
+        expect(list[0].module).toBe('cpu_core');
         expect(list[0].file).toBe('rtl/cpu_core.sv');
         expect(list[0].line).toBe(142);
         expect(list[1].bin).toBe('err_inject.bin_backdoor');
