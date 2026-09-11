@@ -26,6 +26,20 @@ export interface AskRequest {
   timestamp: number;
 }
 
+/**
+ * 信任请求（issue 04）——独立于审批模式的权限边界：
+ * 项目 extension 首次加载（project-extension）与 MCP server 首次启动
+ * （mcp-server）必须经用户确认。
+ */
+export interface TrustRequest {
+  requestId: string;
+  sessionId: string;
+  kind: 'project-extension' | 'mcp-server';
+  name: string;
+  path?: string;
+  timestamp: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'tool' | 'system';

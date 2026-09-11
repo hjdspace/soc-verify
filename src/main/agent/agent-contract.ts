@@ -17,7 +17,7 @@
 import type { AgentEngine } from '@shared/agent-events';
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
 import type { ThinkingLevelSetting } from '@shared/types';
-import type { ApprovalMode, InitConfig } from './types';
+import type { ApprovalMode, InitConfig, TrustKind } from './types';
 
 // ─── Callback types ─────────────────────────────────────────────
 // Owned here (previously on agent-client.ts) so both the contract and the
@@ -31,6 +31,18 @@ export type EventListener = (event: unknown) => void;
 
 /** 审批请求处理器——返回 true 表示用户同意，false 表示拒绝 */
 export type ApprovalHandler = (requestId: string, toolName: string, args: unknown) => Promise<boolean>;
+
+/**
+ * 信任请求处理器（issue 04）——独立于审批模式的权限边界：
+ * 项目 extension 首次加载（project-extension）与 MCP server 首次启动
+ * （mcp-server）必须经用户确认；返回 true 表示用户信任。
+ */
+export type TrustHandler = (
+  requestId: string,
+  kind: TrustKind,
+  name: string,
+  path?: string,
+) => Promise<boolean>;
 
 // ─── Contract ───────────────────────────────────────────────────
 
@@ -107,6 +119,10 @@ export interface IAgentClient {
   setApprovalHandler(handler: ApprovalHandler): void;
   /** Send the user's approval decision for a pending request. */
   sendApprovalResponse(requestId: string, approved: boolean): void;
+  /** Register the trust request handler（extension/MCP 信任确认）. */
+  setTrustHandler(handler: TrustHandler): void;
+  /** Send the user's trust decision for a pending request. */
+  sendTrustResponse(requestId: string, approved: boolean): void;
 }
 
 // ─── Factory seam ───────────────────────────────────────────────

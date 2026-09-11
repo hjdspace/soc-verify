@@ -49,6 +49,10 @@ export interface InitConfig {
   approvalMode?: ApprovalMode;
   /** 被禁用的工具名列表（host 工具 + omp 内置工具），会话创建时不暴露给 LLM */
   disabledTools?: string[];
+  /** host 信任存储中已确认信任的 MCP server 名（首次启动确认的持久化结果，pi 引擎消费） */
+  trustedMcpServers?: string[];
+  /** host 信任存储中已确认信任的项目目录（extension 首次加载确认的持久化结果，pi 引擎消费） */
+  trustedProjectDirs?: string[];
   /**
    * 会话初始思考强度。'default' 或缺省时不下发，跟随 omp 引擎默认行为。
    * 仅当值有实际语义（非 'default'）时 runner 才会写入 sessionOptions。
@@ -152,6 +156,29 @@ export interface ApprovalResponseCommand {
   approved: boolean;
 }
 
+// ─── 信任请求/响应帧（issue 04）────────────────────────────
+
+/** 信任确认类型：项目 extension 首次加载 / MCP server 首次启动 */
+export type TrustKind = 'project-extension' | 'mcp-server';
+
+/** Runner → Host：请求用户信任确认（独立于审批模式，yolo 不跳过） */
+export interface TrustRequestFrame {
+  type: 'trust_request';
+  id: string;
+  kind: TrustKind;
+  /** 项目目录（project-extension）或 server 名（mcp-server） */
+  name: string;
+  /** mcp-server 时可携带的配置来源路径（展示用） */
+  path?: string;
+}
+
+/** Host → Runner：用户信任结果 */
+export interface TrustResponseCommand {
+  type: 'trust_response';
+  id: string;
+  approved: boolean;
+}
+
 // ─── Agent Client 配置 ─────────────────────────────────────
 
 export interface AgentClientOptions {
@@ -216,6 +243,16 @@ export function isApprovalRequestFrame(value: unknown): value is ApprovalRequest
     value.type === 'approval_request' &&
     typeof value.id === 'string' &&
     typeof value.toolName === 'string'
+  );
+}
+
+export function isTrustRequestFrame(value: unknown): value is TrustRequestFrame {
+  return (
+    isRecord(value) &&
+    value.type === 'trust_request' &&
+    typeof value.id === 'string' &&
+    (value.kind === 'project-extension' || value.kind === 'mcp-server') &&
+    typeof value.name === 'string'
   );
 }
 

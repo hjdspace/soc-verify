@@ -23,6 +23,14 @@ const sessionManagerCreate = vi.fn((..._args: unknown[]) => ({ __fakeSessionMana
 vi.mock('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: (...args: unknown[]) => createAgentSession(...args),
   SessionManager: { create: (...args: unknown[]) => sessionManagerCreate(...args) },
+  // resource loader 装配与项目信任（issue 04）：测试中无需真实加载扩展
+  DefaultResourceLoader: class {
+    constructor(_opts: unknown) {}
+    async reload(_opts: unknown) {}
+  },
+  getAgentDir: () => '/fake/agent-dir',
+  hasTrustRequiringProjectResources: () => false,
+  SettingsManager: { create: () => ({ __fakeSettingsManager: true }) },
 }));
 
 const {

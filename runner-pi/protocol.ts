@@ -8,8 +8,13 @@
  *
  * 与 omp runner 的 protocol.ts 不同，本模块在导入时**无副作用**：
  * stdout JSONL guard 改为显式的 installStdoutJsonlGuard()，由 runner-pi/index.ts
- * 在进程启动时调用。这样协议层可以独立测试，也避免了测试进程被改写 stdout。
+ * 在产生任何协议输出之前调用。这样协议层可以独立测试，也避免了测试进程被改写 stdout。
  */
+
+import type { ApprovalMode } from "./approval-logic";
+
+/** 信任确认类型：项目 extension 首次加载 / MCP server 首次启动 */
+export type TrustKind = "project-extension" | "mcp-server";
 
 // ─── stdout JSONL guard ─────────────────────────────────
 // pi SDK 及其依赖可能通过 console.log 向 stdout 写日志，这会破坏
@@ -65,7 +70,6 @@ export type HostToolDefinition = {
  * 与 omp 的差异：
  *   - sessionDir 不使用 —— pi 使用其原生用户级 session 根目录 + cwd bucket
  *   - resumeSessionId / seedHistory 属于 issue 07（会话恢复）
- *   - approvalMode / disabledTools 属于 issue 04（审批）
  *   - contextWindow 属于 issue 06（模型与上下文 parity）
  */
 export type InitConfig = {
@@ -76,6 +80,16 @@ export type InitConfig = {
 	model?: string;
 	env?: Record<string, string>;
 	customToolDefinitions?: HostToolDefinition[];
+	/** 工具审批模式：always-ask（总询问）、write（自动编辑）、yolo（完全信任，仅单次审批） */
+	approvalMode?: ApprovalMode;
+	/** 被禁用的工具名列表（host 工具 + pi 内置工具），会话创建时不暴露给 LLM */
+	disabledTools?: string[];
+	/** 是否为会话启用 MCP（缺省 true） */
+	enableMCP?: boolean;
+	/** host 信任存储中已确认信任的 MCP server 名（首次启动确认的持久化结果） */
+	trustedMcpServers?: string[];
+	/** host 信任存储中已确认信任的项目目录（extension 首次加载确认的持久化结果） */
+	trustedProjectDirs?: string[];
 };
 
 export type Command =
@@ -84,6 +98,10 @@ export type Command =
 	| { id: string; type: "abort" }
 	| { id: string; type: "steer"; message: string }
 	| { id: string; type: "setModel"; provider: string; modelId: string }
+	| { id: string; type: "setApprovalMode"; approvalMode: ApprovalMode }
+	| { id: string; type: "getMcpStatus" }
+	| { id: string; type: "getMcpServerTools"; serverName: string }
+	| { id: string; type: "reloadMcp" }
 	| { id: string; type: "compact" }
 	| { id: string; type: "destroy" };
 
@@ -95,8 +113,16 @@ export interface PiRunnerContext {
 	unsubscribe: (() => void) | null;
 	/** 当前工作目录（init 时设置） */
 	currentCwd: string;
+	/** 当前审批模式（init 设置，setApprovalMode 动态更新） */
+	currentApprovalMode: ApprovalMode;
 	/** 把工具调用转发给 Electron host 并等待结果（ask 等） */
 	callHostTool: (toolName: string, args: unknown) => Promise<unknown>;
+	/** 请求用户审批一次工具调用（审批模式判定后的出口） */
+	requestApproval: (toolName: string, args: unknown) => Promise<boolean>;
+	/** 请求用户信任确认（extension 首次加载 / MCP server 首次启动） */
+	requestTrust: (kind: TrustKind, name: string, path?: string) => Promise<boolean>;
+	/** MCP 运行时状态（init 时装配；未启用 MCP 时为 null） */
+	mcpRuntime: import("./mcp-runtime").McpRuntimeState | null;
 }
 
 // ─── 入站帧（host → runner stdin）──────────────────────
@@ -107,6 +133,20 @@ export interface ToolResultMessage {
 	id: string;
 	result: unknown;
 	isError?: boolean;
+}
+
+/** host 对 approval_request 的应答 */
+export interface ApprovalResponseMessage {
+	type: "approval_response";
+	id: string;
+	approved: boolean;
+}
+
+/** host 对 trust_request 的应答 */
+export interface TrustResponseMessage {
+	type: "trust_response";
+	id: string;
+	approved: boolean;
 }
 
 // ─── JSONL Helpers ──────────────────────────────────────

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { AgentEngine } from '../../src/shared/agent-events';
 import type { ThinkingLevelSetting } from '../../src/shared/types';
-import type { ApprovalMode, InitConfig } from '../../src/main/agent/types';
+import type { ApprovalMode, InitConfig, TrustKind } from '../../src/main/agent/types';
 import type {
   IAgentClient,
   AgentClientFactory,
@@ -143,6 +143,10 @@ class MockEngineClient implements IAgentClient {
   setToolCallHandler(_handler: (toolName: string, args: unknown) => Promise<unknown>): void {}
   setApprovalHandler(_handler: (requestId: string, toolName: string, args: unknown) => Promise<boolean>): void {}
   sendApprovalResponse(_requestId: string, _approved: boolean): void {}
+  setTrustHandler(
+    _handler: (requestId: string, kind: TrustKind, name: string, path?: string) => Promise<boolean>,
+  ): void {}
+  sendTrustResponse(_requestId: string, _approved: boolean): void {}
 }
 
 function createManagerWithFactory(client: IAgentClient): {

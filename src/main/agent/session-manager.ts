@@ -12,7 +12,8 @@ import type {
 } from './agent-contract';
 import { resolveAgentRuntime, resolveBuiltInExtensionDir, resolvePiRunnerScript, resolveRunnerBinary, resolveRunnerScript, resolveBunPath, checkBunVersion, type AgentRuntime } from './paths';
 import { ensureOfficecliOnPath } from './officecli-paths';
-import type { CustomToolDefinition, InitConfig, ApprovalMode, SeedHistoryMessage } from './types';
+import type { CustomToolDefinition, InitConfig, ApprovalMode, SeedHistoryMessage, TrustKind } from './types';
+import { TrustStore } from './trust-store';
 import {
   buildModelInputOverrideConfig,
   buildOpenAICompatibleModelsConfig,
@@ -342,6 +343,13 @@ export class SessionManagerImpl extends EventEmitter {
   private pendingApprovals = new Map<string, { resolve: (approved: boolean) => void; sessionId: string }>();
   /** Pending ask requests: requestId → { resolve, sessionId } */
   private pendingAsks = new Map<string, { resolve: (answers: AskAnswer[]) => void; sessionId: string }>();
+  /** Pending trust requests（issue 04）：requestId → 决策上下文（用于持久化） */
+  private pendingTrusts = new Map<
+    string,
+    { resolve: (approved: boolean) => void; sessionId: string; cwd: string; kind: TrustKind; name: string }
+  >();
+  /** host 信任存储（userData/socverify-data/trust.json）；null = 不可用（不持久化） */
+  private trustStore: TrustStore | null | undefined;
 
   constructor(idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS, clientFactory: AgentClientFactory = defaultAgentClientFactory) {
     super();
@@ -683,6 +691,10 @@ export class SessionManagerImpl extends EventEmitter {
       console.warn(`[agent:session:${sessionId}] built-in extension dir not found — built-in skills/agents will not be loaded`);
     }
 
+    // Load host trust store once per manager — provides already-trusted
+    // project dirs / MCP server names to the pi runner (issue 04).
+    const trustStore = await this.getTrustStore();
+
     const initConfig: InitConfig = {
       cwd: options.cwd,
       apiKey: options.apiKey,
@@ -700,6 +712,8 @@ export class SessionManagerImpl extends EventEmitter {
       additionalExtensionPaths,
       approvalMode: options.approvalMode,
       thinkingLevel: options.thinkingLevel,
+      trustedMcpServers: trustStore?.getTrustedMcpServers(options.cwd),
+      trustedProjectDirs: trustStore?.getTrustedProjectDirs(options.cwd),
     };
 
     // Helper: create an AgentClient configured for the given runtime mode
@@ -718,6 +732,14 @@ export class SessionManagerImpl extends EventEmitter {
         const { promise, resolve } = Promise.withResolvers<boolean>();
         this.pendingApprovals.set(requestId, { resolve, sessionId });
         this.emit('approvalRequest', { sessionId, requestId, toolName, args });
+        return promise;
+      });
+      // Trust handler（issue 04）：extension/MCP 信任确认经 renderer 询问用户，
+      // 批准结果由 resolveTrust 持久化到 host 信任存储（yolo 不跳过此流程）。
+      c.setTrustHandler(async (requestId, kind, name, path) => {
+        const { promise, resolve } = Promise.withResolvers<boolean>();
+        this.pendingTrusts.set(requestId, { resolve, sessionId, cwd: options.cwd, kind, name });
+        this.emit('trustRequest', { sessionId, requestId, kind, name, path });
         return promise;
       });
       return c;
@@ -1428,6 +1450,52 @@ export class SessionManagerImpl extends EventEmitter {
     this.pendingApprovals.delete(requestId);
     pending.resolve(approved);
     return true;
+  }
+
+  /**
+   * Resolve a pending trust request from the user（issue 04）。
+   * 批准时把决策持久化到 host 信任存储（best-effort），使后续会话的
+   * init 直接携带该信任（不再询问）。拒绝则不记录 —— 下次仍会询问。
+   */
+  resolveTrust(requestId: string, approved: boolean): boolean {
+    const pending = this.pendingTrusts.get(requestId);
+    if (!pending) return false;
+    this.pendingTrusts.delete(requestId);
+    pending.resolve(approved);
+    if (approved) {
+      void this.persistTrustDecision(pending.cwd, pending.kind, pending.name);
+    }
+    return true;
+  }
+
+  /** 惰性创建信任存储（app.getPath 在应用 ready 后才可用；测试环境降级为 null）。 */
+  private async getTrustStore(): Promise<TrustStore | null> {
+    if (this.trustStore !== undefined) return this.trustStore;
+    try {
+      const { app } = await import('electron');
+      const trustStore = new TrustStore(join(app.getPath('userData'), 'socverify-data'));
+      await trustStore.load();
+      this.trustStore = trustStore;
+    } catch (err) {
+      console.warn(`[agent:session-manager] trust store unavailable (${err instanceof Error ? err.message : String(err)}) — trust decisions will not persist`);
+      this.trustStore = null;
+    }
+    return this.trustStore;
+  }
+
+  private async persistTrustDecision(cwd: string, kind: TrustKind, name: string): Promise<void> {
+    try {
+      const trustStore = await this.getTrustStore();
+      if (!trustStore) return;
+      if (kind === 'project-extension') {
+        await trustStore.addTrustedProjectDir(cwd, name);
+      } else {
+        await trustStore.addTrustedMcpServer(cwd, name);
+      }
+      console.log(`[agent:session-manager] persisted trust decision: ${kind} "${name}" for ${cwd}`);
+    } catch (err) {
+      console.warn(`[agent:session-manager] failed to persist trust decision: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }
 

@@ -10,6 +10,8 @@ import type {
   ToolResultCommand,
   ApprovalRequestFrame,
   ApprovalResponseCommand,
+  TrustRequestFrame,
+  TrustResponseCommand,
 } from './types';
 import {
   isEventFrame,
@@ -18,6 +20,7 @@ import {
   isSubagentFrame,
   isToolCallFrame,
   isApprovalRequestFrame,
+  isTrustRequestFrame,
 } from './types';
 import type {
   AgentInitResult,
@@ -26,6 +29,7 @@ import type {
   EventListener,
   IAgentClient,
   ToolCallHandler,
+  TrustHandler,
 } from './agent-contract';
 import type { AgentEngine } from '@shared/agent-events';
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
@@ -109,6 +113,7 @@ export class AgentClient implements IAgentClient {
   private pendingToolCalls = new Map<string, AbortController>();
   private toolCallHandler: ToolCallHandler | null = null;
   private approvalHandler: ApprovalHandler | null = null;
+  private trustHandler: TrustHandler | null = null;
   private eventListeners: EventListener[] = [];
   private stderrBuffer = '';
   private readyTimeoutMs: number;
@@ -386,6 +391,21 @@ export class AgentClient implements IAgentClient {
     } satisfies ApprovalResponseCommand);
   }
 
+  // ─── 信任 Handler 注册（issue 04）──────────────────────
+
+  setTrustHandler(handler: TrustHandler): void {
+    this.trustHandler = handler;
+  }
+
+  /** 发送信任响应到 runner */
+  sendTrustResponse(requestId: string, approved: boolean): void {
+    this.writeFrame({
+      type: 'trust_response',
+      id: requestId,
+      approved,
+    } satisfies TrustResponseCommand);
+  }
+
   // ─── 命令方法 ─────────────────────────────────────────
 
   async init(config: import('./types').InitConfig): Promise<AgentInitResult> {
@@ -634,6 +654,11 @@ export class AgentClient implements IAgentClient {
       return;
     }
 
+    if (isTrustRequestFrame(data)) {
+      void this.handleTrustRequest(data);
+      return;
+    }
+
     if (isEventFrame(data)) {
       for (const listener of this.eventListeners) listener(data.event);
       return;
@@ -705,6 +730,21 @@ export class AgentClient implements IAgentClient {
       this.sendApprovalResponse(frame.id, approved);
     } catch {
       this.sendApprovalResponse(frame.id, false);
+    }
+  }
+
+  private async handleTrustRequest(frame: TrustRequestFrame): Promise<void> {
+    if (!this.trustHandler) {
+      // 无 handler 时 fail closed：信任确认绝不自动放行（安全边界，
+      // 与审批的 fail open 语义相反 —— 误拒无害，误信有风险）。
+      this.sendTrustResponse(frame.id, false);
+      return;
+    }
+    try {
+      const approved = await this.trustHandler(frame.id, frame.kind, frame.name, frame.path);
+      this.sendTrustResponse(frame.id, approved);
+    } catch {
+      this.sendTrustResponse(frame.id, false);
     }
   }
 

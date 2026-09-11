@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { expectTypeOf } from 'vitest';
-import type { ApprovalMode, InitConfig } from '../../src/main/agent/types';
+import type { ApprovalMode, InitConfig, TrustKind } from '../../src/main/agent/types';
 import type { ThinkingLevelSetting } from '../../src/shared/types';
 import type { AgentEngine } from '../../src/shared/agent-events';
 import type { IAgentClient, AgentClientFactory } from '../../src/main/agent/agent-contract';
@@ -68,6 +68,9 @@ class MockEngineClient implements IAgentClient {
   lastPrompt: string | undefined;
   toolCallHandler: ((toolName: string, args: unknown) => Promise<unknown>) | null = null;
   approvalHandler: ((requestId: string, toolName: string, args: unknown) => Promise<boolean>) | null = null;
+  trustHandler:
+    | ((requestId: string, kind: TrustKind, name: string, path?: string) => Promise<boolean>)
+    | null = null;
   eventListeners: Array<(event: unknown) => void> = [];
 
   constructor(engine: AgentEngine, private engineSessionId: string) {
@@ -160,6 +163,12 @@ class MockEngineClient implements IAgentClient {
     this.approvalHandler = handler;
   }
   sendApprovalResponse(_requestId: string, _approved: boolean): void {}
+  setTrustHandler(
+    handler: (requestId: string, kind: TrustKind, name: string, path?: string) => Promise<boolean>,
+  ): void {
+    this.trustHandler = handler;
+  }
+  sendTrustResponse(_requestId: string, _approved: boolean): void {}
 }
 
 // ─── Type-level contract checks ──────────────────────────────────────

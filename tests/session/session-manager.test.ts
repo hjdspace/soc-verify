@@ -62,6 +62,10 @@ const { MockAgentClient } = vi.hoisted(() => {
 
     setToolCallHandler(handler: unknown) { this.toolCallHandler = handler; }
     setApprovalHandler(handler: unknown) { this.approvalHandler = handler; }
+    trustHandler: unknown = null;
+    lastTrustResponse: { requestId: string; approved: boolean } | null = null;
+    setTrustHandler(handler: unknown) { this.trustHandler = handler; }
+    sendTrustResponse(requestId: string, approved: boolean) { this.lastTrustResponse = { requestId, approved }; }
     onEvent(listener: (event: unknown) => void) { this.eventListeners.push(listener); }
 
     async start() { this.started = true; }

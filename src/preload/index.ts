@@ -75,6 +75,11 @@ process.once('loaded', async () => {
       ipcRenderer.on('session:approval-request', handler);
       return () => ipcRenderer.removeListener('session:approval-request', handler);
     },
+    onTrustRequest: (callback: (data: { sessionId: string; requestId: string; kind: 'project-extension' | 'mcp-server'; name: string; path?: string }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, data: { sessionId: string; requestId: string; kind: 'project-extension' | 'mcp-server'; name: string; path?: string }) => callback(data);
+      ipcRenderer.on('session:trust-request', handler);
+      return () => ipcRenderer.removeListener('session:trust-request', handler);
+    },
     onAskRequest: (callback: (data: { sessionId: string; requestId: string; questions: unknown[] }) => void) => {
       const handler = (_event: Electron.IpcRendererEvent, data: { sessionId: string; requestId: string; questions: unknown[] }) => callback(data);
       ipcRenderer.on('session:ask-request', handler);

@@ -972,6 +972,43 @@ export const sessionRouter = t.router({
       return { ok: true };
     }),
 
+  resolveTrust: t.procedure
+    .input((raw): {
+      requestId: string;
+      approved: boolean;
+      kind: 'project-extension' | 'mcp-server';
+      name?: string;
+      path?: string;
+    } => {
+      const r = raw as Record<string, unknown>;
+      const validKinds = ['project-extension', 'mcp-server'];
+      if (
+        typeof r.requestId !== 'string' ||
+        typeof r.approved !== 'boolean' ||
+        typeof r.kind !== 'string' ||
+        !validKinds.includes(r.kind)
+      ) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `requestId (string), approved (boolean) and kind (one of: ${validKinds.join(', ')}) are required`,
+        });
+      }
+      return {
+        requestId: r.requestId,
+        approved: r.approved,
+        kind: r.kind as 'project-extension' | 'mcp-server',
+        ...(typeof r.name === 'string' ? { name: r.name } : {}),
+        ...(typeof r.path === 'string' ? { path: r.path } : {}),
+      };
+    })
+    .mutation(async ({ input }) => {
+      const resolved = sessionManager.resolveTrust(input.requestId, input.approved);
+      if (!resolved) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Trust request not found or already resolved' });
+      }
+      return { ok: true };
+    }),
+
   resolveAsk: t.procedure
     .input((raw): { requestId: string; answers: AskAnswer[] } => {
       const r = raw as Record<string, unknown>;
