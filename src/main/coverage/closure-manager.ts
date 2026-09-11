@@ -89,7 +89,7 @@ export type ClosureTargetStatus = 'pending' | 'in_progress' | 'closed' | 'escala
 
 /** 目标模块标识 */
 export type TargetModule = {
-  /** 模块在 Coverage Tree 中的路径（如 top/cpu_core） */
+  /** 模块在 Coverage Tree 中的路径（如 tb_top.chip_top） */
   path: string;
   /** 模块名（如 cpu_core） */
   name: string;
