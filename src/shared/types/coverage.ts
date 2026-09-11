@@ -212,6 +212,53 @@ export const DEFAULT_EDA_COMMANDS: Readonly<Record<Exclude<EdaTool, 'unknown'>, 
   },
 };
 
+// ─── Coverage Detail（IMC detail.txt instance 级解析） ──────────
+
+/** detail.txt 单个 metric 的覆盖计数与百分比（covered/total*100） */
+export type DetailMetricCount = {
+  covered: number;
+  total: number;
+  percentage: number | null;
+};
+
+/**
+ * detail.txt（Covered+Uncovered+Excluded+UNR Block Detail Report, Instance Based）
+ * 解析出的单个 instance 覆盖率记录。全量明细持久化到
+ * `.socverify/coverage/<sessionId>-detail.json`，是自动生成 waive 文件的基础数据。
+ */
+export type DetailInstanceReport = {
+  /** 层级实例路径（如 tb_top.chip_top.dut.u_analog_bb_line_usb） */
+  instance: string;
+  /** 模块名（Type name） */
+  type: string;
+  /** RTL 文件路径（File name） */
+  file: string;
+  blocks: DetailMetricCount;
+  branches: DetailMetricCount;
+  statements: DetailMetricCount;
+};
+
+/** detail.txt 解析结果（插件 parseDetailReport 返回） */
+export type DetailReportResult = {
+  instances: DetailInstanceReport[];
+  instanceCount: number;
+  parseMs: number;
+};
+
+/** `.socverify/coverage/<sessionId>-detail.json` 的持久化结构 */
+export type CoverageDetailData = {
+  sessionId: string;
+  parsedAt: number;
+  instanceCount: number;
+  instances: DetailInstanceReport[];
+};
+
+/** CoverageData 上的 detail 摘要标记（全量明细在 -detail.json，避免树缓存膨胀） */
+export type CoverageDetailSummary = {
+  instanceCount: number;
+  parsedAt: number;
+};
+
 // ─── CoverageData（插件返回 + 平台缓存） ───────────────────────
 
 /**
@@ -241,6 +288,8 @@ export type CoverageData = {
    * 用户可通过 UI 触发按需详细解析来补充这些数据。
    */
   summaryOnly?: boolean;
+  /** detail.txt 解析摘要（全量 instance 明细在 <sessionId>-detail.json）。 */
+  detail?: CoverageDetailSummary;
 };
 
 // ─── Coverage Merge Session（ADR 0008） ─────────────────────────
