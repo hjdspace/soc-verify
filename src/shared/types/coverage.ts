@@ -123,6 +123,7 @@ export type EdaTool = 'imc' | 'vcs-urg' | 'vcover' | 'unknown';
 export type EdaToolConfig = {
   tool: EdaTool;
   covMergeDir: string;
+  /** 已废弃（imc 不再生成 summary.txt，无信息量）。字段保留用于 vcs-urg / vcover。 */
   summaryCommand?: string;
   detailCommand?: string;
   metricsCommand?: string;
@@ -157,6 +158,11 @@ export type EdaToolConfig = {
  *
  * Cadence IMC 工具说明：
  *   - IMC 通过 TCL `report` 子命令生成文本报告，用 `-execcmd` 直接执行单条命令
+ *   - **分层解析优化（SoC 只看代码覆盖率）**：summary 报告（report -summary）冗余信息
+ *     多且无层级结构，已取消默认 summaryCommand；导入时只执行 metricsCommand
+ *     （report -metrics overall 生成 metrics.txt），解析 Overall Covered 列得到
+ *     层级树 + 代码覆盖率（covered/total 点数比）。detail（block/branch/stmts）
+ *     推迟到用户按需触发（parseDetails）。
  *   - `report -grading` 生成按测试用例的覆盖率贡献分析（等效 urg -grade testfile）
  *   - `report -detail -metrics functional` 生成 covergroup bin 级覆盖详情
  *   - IMC 不支持 CSV 格式输出，csvCommand 为 undefined
@@ -165,8 +171,8 @@ export const DEFAULT_EDA_COMMANDS: Readonly<Record<Exclude<EdaTool, 'unknown'>, 
   imc: {
     tool: 'imc',
     covMergeDir: 'cov_merge',
-    summaryCommand:
-      'imc -load {covMergeDir} -execcmd "report -summary -out {reportDir}/summary.txt"',
+    // 已取消 summary 默认命令：metrics.txt 覆盖快速导入层所需全部信息
+    summaryCommand: undefined,
     detailCommand:
       'imc -load {covMergeDir} -execcmd "report -detail -all -out {reportDir}/detail.txt"',
     metricsCommand:
@@ -271,12 +277,16 @@ export type CoverageSummary = {
 
 /**
  * 从 CoverageNode（通常是 root）派生扁平 CoverageSummary。
- * N/A metric 按 0 处理。
+ * overall = 非 N/A metric 的算术平均（N/A 不参与分母）；
+ * 全部 N/A 时为 0。逐 metric 值仍按 0 处理（向后兼容仪表盘等简单消费方）。
  */
 export function summarizeCoverage(node: CoverageNode): CoverageSummary {
   const pct = (m: CoverageMetric): number => node.metrics[m].percentage ?? 0;
-  const values = COVERAGE_METRICS.map(pct);
-  const overall = values.reduce((sum, v) => sum + v, 0) / values.length;
+  const present = COVERAGE_METRICS.filter((m) => node.metrics[m].percentage !== null);
+  const overall =
+    present.length === 0
+      ? 0
+      : present.reduce((sum, m) => sum + (node.metrics[m].percentage ?? 0), 0) / present.length;
   return {
     overall,
     line: pct('line'),
