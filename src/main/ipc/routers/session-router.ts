@@ -448,6 +448,19 @@ export const sessionRouter = t.router({
       return client.getState();
     }),
 
+  getSystemPrompt: t.procedure
+    .input((raw): { sessionId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.sessionId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'sessionId is required' });
+      }
+      return { sessionId: r.sessionId };
+    })
+    .query(async ({ input }) => {
+      // 引擎不支持（omp）时返回 null，UI 无差别展示
+      return sessionManager.getSystemPrompt(input.sessionId);
+    }),
+
   compact: t.procedure
     .input((raw): { sessionId: string } => {
       const r = raw as Record<string, unknown>;

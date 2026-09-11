@@ -97,7 +97,13 @@ export function readContextUsage(value: unknown, fallback: ContextUsage): Contex
   const percent = typeof usage.percent === 'number'
     ? usage.percent
     : usage.contextWindow > 0 ? (usage.tokens / usage.contextWindow) * 100 : 0;
-  return { tokens: usage.tokens, contextWindow: usage.contextWindow, percent };
+  // approximate：runner 估算值（pi 原生用量未知时）标记，UI 据此展示「近似」
+  return {
+    tokens: usage.tokens,
+    contextWindow: usage.contextWindow,
+    percent,
+    ...(usage.approximate === true ? { approximate: true } : {}),
+  };
 }
 
 export function readContextBreakdown(value: unknown, fallback?: ContextBreakdown): ContextBreakdown | undefined {

@@ -513,6 +513,19 @@ export class AgentClient implements IAgentClient {
     return this.getData<{ state: unknown }>(response).state;
   }
 
+  /**
+   * 当前生效的系统提示词（issue 06）。旧 runner（omp）不认识该命令会返回
+   * 失败响应 —— 这里优雅降级为 null，调用方（设置/会话 UI）无需感知引擎差异。
+   */
+  async getSystemPrompt(): Promise<string | null> {
+    try {
+      const response = await this.send({ type: 'getSystemPrompt' });
+      return this.getData<{ systemPrompt: string }>(response).systemPrompt;
+    } catch {
+      return null;
+    }
+  }
+
   async compact(): Promise<{
     result: unknown;
     contextUsage?: ContextUsage;

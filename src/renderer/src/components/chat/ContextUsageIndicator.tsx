@@ -88,7 +88,9 @@ export function ContextUsageIndicator({ session, onCompact }: ContextUsageIndica
       {/* ── Hover tooltip: simple percent only ─────────────── */}
       {hovered && !detailOpen && (
         <div className="absolute bottom-7 right-0 z-50 rounded-md border border-border bg-popover px-2.5 py-1 text-popover-foreground shadow-xl">
-          <span className="whitespace-nowrap font-mono text-[11px] font-medium">上下文已使用 {Math.round(percent)}%</span>
+          <span className="whitespace-nowrap font-mono text-[11px] font-medium">
+            上下文已使用 {Math.round(percent)}%{usage.approximate ? '（近似）' : ''}
+          </span>
         </div>
       )}
 
@@ -102,7 +104,12 @@ export function ContextUsageIndicator({ session, onCompact }: ContextUsageIndica
         )}
       >
         <div className="flex items-baseline justify-between">
-          <span className="text-xs font-semibold">上下文用量</span>
+          <span className="text-xs font-semibold">
+            上下文用量
+            {usage.approximate && (
+              <span className="ml-1 text-[9px] font-normal text-muted-foreground">近似</span>
+            )}
+          </span>
           <span className="font-mono text-[11px] font-medium text-foreground">{Math.round(percent)}%</span>
         </div>
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">

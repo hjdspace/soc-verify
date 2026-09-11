@@ -12,6 +12,7 @@
  */
 
 import type { ApprovalMode } from "./approval-logic";
+import type { ThinkingLevelSetting } from "./thinking-level";
 
 /** 信任确认类型：项目 extension 首次加载 / MCP server 首次启动 */
 export type TrustKind = "project-extension" | "mcp-server";
@@ -63,14 +64,24 @@ export type HostToolDefinition = {
 	approval?: string;
 };
 
+/** host 下发的 UI transcript 消息（user/assistant 文本对），原生 session 不可用时的重建种子。 */
+export type SeedHistoryMessage = {
+	role: "user" | "assistant";
+	content: string;
+	timestamp: number;
+};
+
+/** init 恢复模式：native = 原生 session 复用；rebuilt = transcript 重建；new = 全新会话 */
+export type SessionRecoveryMode = "native" | "rebuilt" | "new";
+
 /**
  * pi runner 的 init 配置。字段与 host 侧 src/main/agent/types.ts 的 InitConfig
  * 对齐，但只声明 runner 实际消费的字段（多余字段自然忽略）。
  *
  * 与 omp 的差异：
  *   - sessionDir 不使用 —— pi 使用其原生用户级 session 根目录 + cwd bucket
- *   - resumeSessionId / seedHistory 属于 issue 07（会话恢复）
- *   - contextWindow 属于 issue 06（模型与上下文 parity）
+ *   - modelsPath：host 侧为 pi 引擎解耦 agentDir 后传入的独立 models.json
+ *     路径（issue 07：session 归用户级目录，模型配置归临时目录，不混用）
  */
 export type InitConfig = {
 	cwd: string;
@@ -92,6 +103,22 @@ export type InitConfig = {
 	trustedMcpServers?: string[];
 	/** host 信任存储中已确认信任的项目目录（extension 首次加载确认的持久化结果） */
 	trustedProjectDirs?: string[];
+	/** 用户自定义系统提示词（与 pi 默认 prompt、SoC Verify 应用规则组合，issue 06） */
+	systemPrompt?: string;
+	/** host 配置的上下文窗口（token 数），与模型声明窗口取 min（issue 06） */
+	contextWindow?: number;
+	/** 会话初始思考强度（'default'/'auto' = 跟随引擎默认，issue 06） */
+	thinkingLevel?: ThinkingLevelSetting;
+	/**
+	 * 待恢复的 pi 原生 session id（issue 07）。提供时在 cwd bucket 中查找：
+	 * 命中且首条 user message 与 seedHistory 一致（或无 seedHistory）→ 原生恢复；
+	 * 缺失、损坏或不匹配 → SessionManager.create(cwd) 重建。
+	 */
+	resumeSessionId?: string;
+	/** UI 存储对话历史（重建种子 + 首条 user message 校验基准，issue 07） */
+	seedHistory?: SeedHistoryMessage[];
+	/** 独立 models.json 路径（pi 引擎解耦 agentDir 后由 host 传入，issue 07） */
+	modelsPath?: string;
 };
 
 export type Command =
@@ -100,6 +127,12 @@ export type Command =
 	| { id: string; type: "abort" }
 	| { id: string; type: "steer"; message: string }
 	| { id: string; type: "setModel"; provider: string; modelId: string }
+	| { id: string; type: "setThinkingLevel"; level: ThinkingLevelSetting }
+	| { id: string; type: "setToolFilter"; disabledTools: string[] }
+	| { id: string; type: "listAgentTools" }
+	| { id: string; type: "getMessages" }
+	| { id: string; type: "getState" }
+	| { id: string; type: "getSystemPrompt" }
 	| { id: string; type: "setApprovalMode"; approvalMode: ApprovalMode }
 	| { id: string; type: "getMcpStatus" }
 	| { id: string; type: "getMcpServerTools"; serverName: string }
@@ -135,6 +168,10 @@ export interface PiRunnerContext {
 	mcpRuntime: import("./mcp-runtime").McpRuntimeState | null;
 	/** subagent 运行时状态（init 时装配；显式停用/加载失败时 enabled=false） */
 	subagentRuntime: import("./subagents").SubagentRuntime | null;
+	/** host 配置的上下文窗口（token 数，init 时记录；运行时 setModel 覆盖用，issue 06） */
+	configuredContextWindow?: number;
+	/** init 时的 provider id（未选模型时 getState 查询认证状态用，issue 06） */
+	currentProvider?: string;
 }
 
 // ─── 入站帧（host → runner stdin）──────────────────────

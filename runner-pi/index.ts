@@ -34,12 +34,18 @@ import {
 	handleDestroy,
 	handleGetMcpServerTools,
 	handleGetMcpStatus,
+	handleGetMessages,
+	handleGetState,
+	handleGetSystemPrompt,
 	handleInit,
+	handleListAgentTools,
 	handlePrompt,
 	handleReloadMcp,
 	handleCancelSubagent,
 	handleSetApprovalMode,
 	handleSetModel,
+	handleSetThinkingLevel,
+	handleSetToolFilter,
 	handleSteer,
 } from "./session.ts";
 
@@ -183,6 +189,24 @@ async function handleCommand(cmd: Command): Promise<void> {
 				break;
 			case "setModel":
 				await handleSetModel(cmd, ctx);
+				break;
+			case "setThinkingLevel":
+				handleSetThinkingLevel(cmd, ctx);
+				break;
+			case "setToolFilter":
+				handleSetToolFilter(cmd, ctx);
+				break;
+			case "listAgentTools":
+				handleListAgentTools(cmd, ctx);
+				break;
+			case "getMessages":
+				handleGetMessages(cmd, ctx);
+				break;
+			case "getState":
+				handleGetState(cmd, ctx);
+				break;
+			case "getSystemPrompt":
+				handleGetSystemPrompt(cmd, ctx);
 				break;
 			case "setApprovalMode":
 				handleSetApprovalMode(cmd, ctx);

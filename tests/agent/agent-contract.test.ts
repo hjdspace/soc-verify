@@ -128,6 +128,9 @@ class MockEngineClient implements IAgentClient {
   getState(): Promise<unknown> {
     return Promise.resolve({});
   }
+  getSystemPrompt(): Promise<string | null> {
+    return Promise.resolve(null);
+  }
   compact(): Promise<{ result: unknown }> {
     return Promise.resolve({ result: null });
   }

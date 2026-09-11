@@ -97,6 +97,12 @@ export interface IAgentClient {
   listAgentTools(): Promise<Array<{ name: string; description: string }>>;
   getMessages(): Promise<unknown[]>;
   getState(): Promise<unknown>;
+  /**
+   * 当前生效的系统提示词（引擎基础提示词 + 应用规则组合后的最终值，
+   * 即 Effective System Prompt）。引擎不支持时返回 null（而非抛错），
+   * UI 可无差别调用。
+   */
+  getSystemPrompt(): Promise<string | null>;
   compact(): Promise<{
     result: unknown;
     contextUsage?: ContextUsage;

@@ -81,6 +81,7 @@ export type Command =
   | { id: string; type: 'listAgentTools' }
   | { id: string; type: 'getMessages' }
   | { id: string; type: 'getState' }
+  | { id: string; type: 'getSystemPrompt' }
   | { id: string; type: 'compact' }
   | { id: string; type: 'getMcpStatus' }
   | { id: string; type: 'getMcpServerTools'; serverName: string }

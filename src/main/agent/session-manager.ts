@@ -1199,6 +1199,14 @@ export class SessionManagerImpl extends EventEmitter {
   }
 
   /**
+   * 当前生效的系统提示词（issue 06）。引擎不支持时返回 null。
+   */
+  async getSystemPrompt(sessionId: string): Promise<string | null> {
+    const client = this.requireClient(sessionId);
+    return await client.getSystemPrompt();
+  }
+
+  /**
    * 将工具开关设置推送到所有活跃会话（设置页切换开关时调用）。
    * 新会话在 createSession 时通过 InitConfig.disabledTools 获取同样设置。
    */

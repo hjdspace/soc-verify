@@ -34,10 +34,13 @@
     // pi runner 中与 pi SDK 接线的入口（index/session）使用 .ts 后缀导入，
     // 有独立 tsconfig.runner-pi.json（allowImportingTsExtensions），与 node
     // tsconfig 不兼容。纯逻辑模块（approval-logic/protocol/event-normalizer/
-    // mcp-config/extensions/mcp-runtime）无 .ts 后缀导入，纳入本工程，
-    // 供 tests/agent 下的 pi-* 测试正常引用（否则触发 TS6307）。
+    // mcp-config/extensions/mcp-runtime/thinking-level/system-prompt）无 .ts
+    // 后缀导入，纳入本工程，供 tests/agent 下的 pi-* 测试正常引用（否则触发
+    // TS6307）。context-usage.ts 因运行时（Node ESM）需要 .ts 后缀导入
+    // protocol，同样排除在 node 工程外。
     "runner-pi/index.ts",
     "runner-pi/session.ts",
+    "runner-pi/context-usage.ts",
     "tests/runner-pi"
   ]
 }

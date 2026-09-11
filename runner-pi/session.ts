@@ -21,12 +21,14 @@ import {
 	DefaultResourceLoader,
 	getAgentDir,
 	hasTrustRequiringProjectResources,
+	ModelRuntime,
 	SessionManager,
 	SettingsManager,
 	type AgentSession,
 	type InlineExtension,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { join } from "node:path";
 import { createJiti } from "jiti";
 import type { ApprovalMode } from "./approval-logic";
 import {
@@ -34,10 +36,15 @@ import {
 	type HostToolDefinition,
 	type InitConfig,
 	type PiRunnerContext,
+	type SeedHistoryMessage,
+	type SessionRecoveryMode,
 	sendEvent,
 	sendResponse,
 } from "./protocol.ts";
 import { normalizePiEvent } from "./event-normalizer.ts";
+import { mapPiContextUsage, sendContextUsage, shouldSendContextUsage } from "./context-usage.ts";
+import { toPiThinkingLevel } from "./thinking-level.ts";
+import { buildAppendSystemPrompt } from "./system-prompt.ts";
 import { resolveMcpConfigSource } from "./mcp-config.ts";
 import {
 	createMcpRuntimeState,
@@ -386,6 +393,123 @@ async function registerApprovalInheritance(runtime: SubagentRuntime | null, sess
 	}
 }
 
+// ─── 原生 session 恢复与 transcript 重建（issue 07）──────
+
+/**
+ * 提取 session entry 树中首条 user message 的纯文本。用于检测原生文件是否
+ * 与 UI transcript 对齐：不匹配说明该文件只覆盖对话尾部（半覆盖），恢复它会
+ * 静默丢失更早的 turn —— 必须改走 transcript 全量重建。
+ */
+function firstUserMessageText(manager: { getEntries(): unknown[] }): string | undefined {
+	for (const entry of manager.getEntries()) {
+		const e = entry as { type?: string; message?: { role?: string; content?: unknown } };
+		if (e.type !== "message") continue;
+		const msg = e.message;
+		if (msg?.role !== "user") continue;
+		const content = msg.content;
+		if (typeof content === "string") return content.trim();
+		if (Array.isArray(content)) {
+			return content
+				.filter(
+					(b): b is { type: "text"; text: string } =>
+						typeof b === "object" && b !== null && (b as { type?: string }).type === "text",
+				)
+				.map((b) => b.text)
+				.join("\n")
+				.trim();
+		}
+		return undefined;
+	}
+	return undefined;
+}
+
+/**
+ * 原生恢复：在持久化 cwd 的 canonical bucket 中查找 resumeSessionId 对应的
+ * pi 原生 session 并打开。不传 sessionDir —— pi 默认用户级根目录 + cwd bucket
+ * （不新增项目级副本）。首条 user message 与 seedHistory 不一致时不恢复。
+ * 任何失败（缺失 / 损坏 / 不匹配）返回 null，由调用方降级重建。
+ */
+async function openNativeSession(config: InitConfig): Promise<SessionManager | null> {
+	if (!config.resumeSessionId) return null;
+	try {
+		const sessions: Array<{ id: string; path: string }> = await SessionManager.list(config.cwd);
+		const target = sessions.find((s) => s.id === config.resumeSessionId);
+		if (!target) {
+			console.error(
+				`[socverify-runner] native pi session ${config.resumeSessionId} not found in cwd bucket — rebuilding from transcript`,
+			);
+			return null;
+		}
+		const candidate = SessionManager.open(target.path);
+		const seedFirstUser = config.seedHistory?.find((m) => m.role === "user")?.content.trim();
+		if (seedFirstUser === undefined) return candidate;
+		const nativeFirstUser = firstUserMessageText(candidate);
+		if (nativeFirstUser === seedFirstUser) return candidate;
+		console.error(
+			`[socverify-runner] native pi session ${config.resumeSessionId} covers only a partial transcript (first user message mismatch) — rebuilding from stored UI history`,
+		);
+		return null;
+	} catch (err) {
+		console.error(
+			`[socverify-runner] native pi session ${config.resumeSessionId} unavailable (${err instanceof Error ? err.message : String(err)}) — rebuilding from stored UI history`,
+		);
+		return null;
+	}
+}
+
+/**
+ * 把 UI transcript 写入新 session（重建路径）。种子消息使用零 usage 的占位
+ * AssistantMessage（context builder 只读 content blocks，bookkeeping 字段不参与）。
+ */
+function seedTranscript(manager: SessionManager, seedHistory: SeedHistoryMessage[], config: InitConfig): void {
+	const seededProvider = config.provider ?? "socverify-openai-compatible";
+	const seededModel = config.model ?? "unknown";
+	for (const msg of seedHistory) {
+		if (msg.role === "user") {
+			manager.appendMessage({
+				role: "user",
+				content: msg.content,
+				timestamp: msg.timestamp,
+			});
+		} else {
+			manager.appendMessage({
+				role: "assistant",
+				content: [{ type: "text", text: msg.content }],
+				api: "openai-completions",
+				provider: seededProvider,
+				model: seededModel,
+				stopReason: "stop",
+				timestamp: msg.timestamp,
+				usage: {
+					input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+			});
+		}
+	}
+	console.error(`[socverify-runner] seeded ${seedHistory.length} messages from stored UI history into new pi session`);
+}
+
+/**
+ * 解析 init 使用的 SessionManager 与恢复模式（issue 07）：
+ *   native  —— 原生 session 命中且校验通过（权威历史，含工具结果/分支/compaction）
+ *   rebuilt —— 原生不可用，create(cwd) 重建并写入 transcript（新 bucket、新 sessionId）
+ *   new     —— 全新会话（无可恢复历史）
+ */
+async function resolveSessionManager(
+	config: InitConfig,
+): Promise<{ manager: SessionManager; recovery: SessionRecoveryMode }> {
+	const resumed = await openNativeSession(config);
+	if (resumed) return { manager: resumed, recovery: "native" };
+
+	const manager = SessionManager.create(config.cwd);
+	if (config.seedHistory && config.seedHistory.length > 0) {
+		seedTranscript(manager, config.seedHistory, config);
+		return { manager, recovery: "rebuilt" };
+	}
+	return { manager, recovery: "new" };
+}
+
 // ─── init ───────────────────────────────────────────────
 
 export async function handleInit(
@@ -418,6 +542,8 @@ export async function handleInit(
 	}
 
 	// 资源装载器：内联扩展（审批门 + MCP + subagent）+ host 信任存储驱动的项目信任决策
+	// appendSystemPrompt：Effective System Prompt = pi 基础提示词（base prompt）→ 用户自定义
+	// 提示词 → SoC Verify 应用规则（issue 06，不做整体替换）。
 	const mcp = await assembleMcp(config, ctx);
 	const subagents = await assembleSubagents(config, ctx);
 	const agentDir = getAgentDir();
@@ -426,6 +552,7 @@ export async function handleInit(
 		agentDir,
 		settingsManager: SettingsManager.create(config.cwd, agentDir),
 		extensionFactories: [buildApprovalExtension(ctx), ...mcp.factories, ...subagents.factories],
+		appendSystemPrompt: buildAppendSystemPrompt(config.systemPrompt),
 	});
 	await loader.reload({
 		// 项目信任：host 信任存储（trustedProjectDirs）命中直接放行；否则请求
@@ -439,16 +566,34 @@ export async function handleInit(
 			),
 	});
 
+	// 初始思考强度：'default'/'auto' 不下发（跟随引擎默认，pi 会按模型能力 clamp）
+	const initialThinkingLevel = toPiThinkingLevel(config.thinkingLevel);
+
+	// 原生 session 恢复优先，缺失/损坏/不匹配时 transcript 重建（issue 07）。
+	// SessionManager.list/open 不传 sessionDir —— pi 原生用户级根目录 + cwd bucket。
+	const { manager, recovery } = await resolveSessionManager(config);
+
+	// modelsPath 解耦（issue 07）：host 为 pi 引擎提供独立 models.json（临时目录），
+	// agentDir 保持用户级 —— session 与模型配置不共用目录，原生 session 不随
+	// 临时 runtimeDir 销毁而丢失。
+	const modelRuntime = config.modelsPath
+		? await ModelRuntime.create({
+				authPath: join(getAgentDir(), "auth.json"),
+				modelsPath: config.modelsPath,
+			})
+		: undefined;
+
 	const result = await createAgentSession({
 		cwd: config.cwd,
-		// pi 原生用户级 session 根目录 + cwd bucket（spec：不新增项目级副本）
-		sessionManager: SessionManager.create(config.cwd),
+		sessionManager: manager,
+		...(modelRuntime ? { modelRuntime } : {}),
 		resourceLoader: loader,
 		customTools: buildCustomTools(
 			config.customToolDefinitions ?? [],
 			ctx,
 		) as unknown as ToolDefinition[],
 		excludeTools: config.disabledTools,
+		...(initialThinkingLevel ? { thinkingLevel: initialThinkingLevel } : {}),
 	});
 	const session = result.session;
 	ctx.session = session;
@@ -458,21 +603,34 @@ export async function handleInit(
 		await session.modelRuntime.setRuntimeApiKey(config.provider, config.apiKey);
 	}
 
-	// 初始模型选择：注册表命中时切换；未命中保持引擎默认模型
+	// 初始模型选择：注册表命中时切换；未命中保持引擎默认模型。
+	// contextWindow 覆盖（issue 06）：host 配置窗口与模型声明窗口取 min
+	// （与 omp runner 语义一致），以浅拷贝应用、不改写注册表对象。
 	if (config.provider && config.model) {
 		const model = session.modelRuntime.getModel(config.provider, config.model);
 		if (model) {
-			await session.setModel(model);
+			await session.setModel(applyContextWindowOverride(model, config.contextWindow));
 		}
 	}
 
 	// 订阅 pi 原生事件 → 归一化为 Agent Event Contract → 转发 host。
 	// pi 原生事件名不越出 runner 进程（issue 03 验收标准）。
+	// 上下文增长边界（message_end / agent_end / compaction）额外推送
+	// context_usage（pi 原生值优先，issue 06）。
 	ctx.unsubscribe = session.subscribe((event) => {
 		for (const normalized of normalizePiEvent(event)) {
 			sendEvent(normalized);
 		}
+		if (
+			typeof event === "object" &&
+			event !== null &&
+			typeof (event as { type?: unknown }).type === "string" &&
+			shouldSendContextUsage((event as { type: string }).type)
+		) {
+			sendContextUsage(session);
+		}
 	});
+	sendContextUsage(session);
 
 	// 审批继承：按父会话 sessionId 注册 subagent capability ceiling（yolo 不收紧）
 	await registerApprovalInheritance(ctx.subagentRuntime, session.sessionId, ctx.currentApprovalMode);
@@ -485,7 +643,13 @@ export async function handleInit(
 		sendEvent({ type: "notice", text: subagentStatus.blockedReason, message: subagentStatus.blockedReason });
 	}
 
-	sendResponse(cmd.id, true, { sessionId: session.sessionId, subagent: subagentStatus });
+	// recovered 标记（issue 07）：host 据此在重建后更新 engineSessionId
+	// （重建 = 新 pi session id；原生恢复时 id 与持久化记录一致）。
+	sendResponse(cmd.id, true, {
+		sessionId: session.sessionId,
+		recovered: recovery,
+		subagent: subagentStatus,
+	});
 }
 
 // ─── 图片解析 ───────────────────────────────────────────
@@ -535,6 +699,28 @@ export async function handleAbort(
 
 // ─── setModel ───────────────────────────────────────────
 
+/**
+ * contextWindow 覆盖（issue 06）：host 配置窗口与模型声明窗口取 min，
+ * 以浅拷贝应用（不改写注册表对象）。init 与运行时 setModel 共用，
+ * 保证运行时切换模型不丢 host 配置窗口。
+ */
+function applyContextWindowOverride<T extends { contextWindow?: number }>(
+	model: T,
+	configuredWindow: number | undefined,
+): T {
+	const advertisedWindow = model.contextWindow ?? 0;
+	const configWindow = configuredWindow ?? 0;
+	const effectiveWindow =
+		advertisedWindow > 0
+			? configWindow > 0
+				? Math.min(configWindow, advertisedWindow)
+				: advertisedWindow
+			: configWindow;
+	return effectiveWindow > 0 && effectiveWindow !== advertisedWindow
+		? { ...model, contextWindow: effectiveWindow }
+		: model;
+}
+
 export async function handleSetModel(
 	cmd: Command & { type: "setModel" },
 	ctx: PiRunnerContext,
@@ -545,8 +731,120 @@ export async function handleSetModel(
 	if (!model) {
 		throw new Error(`Model not found: ${cmd.provider}/${cmd.modelId}`);
 	}
-	await session.setModel(model);
+	await session.setModel(applyContextWindowOverride(model, ctx.configuredContextWindow));
 	sendResponse(cmd.id, true, { ok: true });
+}
+
+// ─── setThinkingLevel（issue 06）────────────────────────
+
+/**
+ * 动态设置会话思考强度。
+ * 'default'/'auto'：交还引擎默认 —— 按 pi SDK 的默认解析顺序重置
+ * （模型级覆盖 → 全局默认值 → 兜底 'medium'），而不是保持上次设置的值。
+ * 具体强度原样透传，pi 会按模型能力 clamp；变更写入 session transcript。
+ */
+export function handleSetThinkingLevel(
+	cmd: Command & { type: "setThinkingLevel" },
+	ctx: PiRunnerContext,
+): void {
+	if (!ctx.session) throw new Error("Session not initialized");
+	const session = ctx.session as AgentSession;
+	if (cmd.level === "default" || cmd.level === "auto") {
+		const settings = (session as { settingsManager?: { getModelThinkingLevel?(p: string, m: string): unknown; getDefaultThinkingLevel?(): unknown } }).settingsManager;
+		const model = session.model;
+		const perModel =
+			model && settings?.getModelThinkingLevel
+				? (settings.getModelThinkingLevel(model.provider, model.id) as string | undefined)
+				: undefined;
+		const globalDefault = settings?.getDefaultThinkingLevel
+			? (settings.getDefaultThinkingLevel() as string | undefined)
+			: undefined;
+		const resolved = (perModel ?? globalDefault ?? "medium") as Parameters<
+			typeof session.setThinkingLevel
+		>[0];
+		session.setThinkingLevel(resolved);
+	} else {
+		session.setThinkingLevel(cmd.level);
+	}
+	sendResponse(cmd.id, true, { ok: true });
+}
+
+// ─── setToolFilter / listAgentTools（issue 06）──────────
+
+/** 动态更新禁用工具列表：从当前活动工具集中移除（`ask` 强制保留）。 */
+export function handleSetToolFilter(
+	cmd: Command & { type: "setToolFilter" },
+	ctx: PiRunnerContext,
+): void {
+	if (!ctx.session) throw new Error("Session not initialized");
+	const session = ctx.session as AgentSession;
+	const disabled = new Set(cmd.disabledTools ?? []);
+	// `ask` 是 host 问答通道，禁用会阻断 Agent 向用户提问 —— 强制保留。
+	disabled.delete("ask");
+	const enabled = session.getActiveToolNames().filter((name) => !disabled.has(name));
+	if (!enabled.includes("ask")) enabled.push("ask");
+	session.setActiveToolsByName(enabled);
+	sendResponse(cmd.id, true, { ok: true, disabledCount: disabled.size });
+}
+
+/** 枚举会话当前注册的全部工具（设置页工具面板展示用）。 */
+export function handleListAgentTools(cmd: Command & { type: "listAgentTools" }, ctx: PiRunnerContext): void {
+	if (!ctx.session) throw new Error("Session not initialized");
+	const tools = (ctx.session as AgentSession)
+		.getAllTools()
+		.map((t) => ({
+			name: t.name,
+			description: typeof t.description === "string" ? t.description : "",
+		}));
+	sendResponse(cmd.id, true, { tools });
+}
+
+// ─── getState / getMessages / getSystemPrompt（issue 06）─
+
+export function handleGetMessages(cmd: Command & { type: "getMessages" }, ctx: PiRunnerContext): void {
+	if (!ctx.session) throw new Error("Session not initialized");
+	const messages = (ctx.session as AgentSession).messages;
+	sendResponse(cmd.id, true, { messages });
+}
+
+/**
+ * 返回会话状态快照：模型、思考强度、context_usage（pi 原生值优先，
+ * 未知时近似估算并带 approximate 标记）、压缩状态与当前 provider 认证状态。
+ */
+export function handleGetState(cmd: Command & { type: "getState" }, ctx: PiRunnerContext): void {
+	if (!ctx.session) throw new Error("Session not initialized");
+	const session = ctx.session as AgentSession & {
+		autoCompactionEnabled: boolean;
+		modelRuntime: { getProviderAuthStatus(providerId: string): unknown };
+	};
+	const model = session.model
+		? { provider: session.model.provider, id: session.model.id }
+		: undefined;
+	const nativeUsage = session.getContextUsage?.();
+	// 认证状态查询 provider：优先当前模型，未选模型时回退 init 的 provider
+	const authProvider = model?.provider ?? ctx.currentProvider;
+	const state = {
+		model,
+		thinkingLevel: session.thinkingLevel,
+		contextUsage: mapPiContextUsage(nativeUsage, { messages: session.messages }),
+		isCompacting: session.isCompacting === true,
+		autoCompactionEnabled: session.autoCompactionEnabled !== false,
+		authStatus:
+			authProvider != null
+				? session.modelRuntime.getProviderAuthStatus(authProvider)
+				: undefined,
+	};
+	sendResponse(cmd.id, true, { state });
+}
+
+/**
+ * 返回会话当前生效的系统提示词（AgentSession.systemPrompt getter =
+ * pi 基础提示词 + 附加内容经扩展修改后的最终值），供设置/会话 UI 查看。
+ */
+export function handleGetSystemPrompt(cmd: Command & { type: "getSystemPrompt" }, ctx: PiRunnerContext): void {
+	if (!ctx.session) throw new Error("Session not initialized");
+	const systemPrompt = (ctx.session as AgentSession).systemPrompt;
+	sendResponse(cmd.id, true, { systemPrompt });
 }
 
 // ─── setApprovalMode ────────────────────────────────────
