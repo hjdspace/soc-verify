@@ -322,6 +322,79 @@ export const coverageRouter = t.router({
       };
     }),
 
+  // ─── detail.txt 解析（分层解析第三步：instance 级 blocks/branches/statements） ──
+  //
+  // 用户在覆盖率页面通过独立按钮触发 parseDetailMetrics：
+  //   1. 运行 imc report -detail -all 生成 detail.txt
+  //   2. Worker Thread 解析（300 万行秒级）
+  //   3. 全量 instance 明细持久化到 <sessionId>-detail.json（waive 自动生成基础）
+  //   4. statements/branches 合并进 metrics 树缓存
+  // getDetailMetrics 分页查询持久化数据（供表格/过滤消费）。
+
+  parseDetailMetrics: t.procedure
+    .input((raw): { projectId: string; sessionId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and sessionId are required' });
+      }
+      return { projectId: r.projectId, sessionId: r.sessionId };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      let edaConfig = await loadEdaConfig(project.rootPath);
+      if (!edaConfig) {
+        edaConfig = normalizeConfig({ tool: 'imc', covMergeDir: '' });
+      }
+      const result = await mgr.parseDetailMetrics(
+        input.sessionId,
+        edaConfig,
+        emitCoverageDetailProgress,
+      );
+      const summary = summarizeCoverage(result.root);
+      return {
+        sessionId: result.sessionId,
+        summary,
+        instanceCount: result.detail?.instanceCount ?? 0,
+      };
+    }),
+
+  getDetailMetrics: t.procedure
+    .input((raw): {
+      projectId: string;
+      sessionId: string;
+      offset?: number;
+      limit?: number;
+      sortBy?: 'instance' | 'type' | 'blocks' | 'branches' | 'statements';
+      sortOrder?: 'asc' | 'desc';
+    } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and sessionId are required' });
+      }
+      const sortBys = ['instance', 'type', 'blocks', 'branches', 'statements'] as const;
+      const sortBy = sortBys.find((k) => r.sortBy === k);
+      return {
+        projectId: r.projectId,
+        sessionId: r.sessionId,
+        offset: typeof r.offset === 'number' ? r.offset : undefined,
+        limit: typeof r.limit === 'number' ? r.limit : undefined,
+        sortBy,
+        sortOrder: r.sortOrder === 'desc' ? ('desc' as const) : r.sortOrder === 'asc' ? ('asc' as const) : undefined,
+      };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const mgr = buildManager(project.rootPath);
+      const result = await mgr.getDetailInstances(input.sessionId, {
+        offset: input.offset,
+        limit: input.limit,
+        sortBy: input.sortBy,
+        sortOrder: input.sortOrder,
+      });
+      return { detail: result, parsed: result !== null };
+    }),
+
   // ─── Session 生命周期（ADR 0008） ─────────────────────────────
 
   listSessions: t.procedure
