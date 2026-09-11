@@ -18,7 +18,7 @@ export const EXCLUSION_REQUESTED_BY = 'ai-triage' as const;
 
 /** AI Exclusion 建议（语义 selector + 必填 reason + 置信度，状态固定 pending）。 */
 export type ExclusionSuggestion = {
-  /** 目标模块路径（Coverage Tree 中的 nodePath，如 top/cpu_core） */
+  /** 目标模块路径（Coverage Tree 中的 nodePath，如 tb_top.chip_top） */
   module: string;
   metric: CoverageMetric;
   /** file/line 形态：源文件路径 */
@@ -110,7 +110,7 @@ export function buildExclusionPromptSection(): string {
 根因为其他类型（缺测试、约束问题、复位缺失等）时**不要**输出该块。
 
 代码块内容为 JSON 数组，每条建议字段：
-- module: 模块在 Coverage Tree 中的路径（如 "top/cpu_core"）
+- module: 模块在 Coverage Tree 中的路径（如 "tb_top.chip_top"）
 - metric: 覆盖率指标（line | branch | toggle | condition | fsm_state | fsm_transition | functional | assertion）
 - file / line: 源码定位形态——文件路径与行号（适用于 code metric 的行/分支排除）
 - bin: covergroup bin 名形态（适用于 functional covergroup bin 排除）
@@ -121,7 +121,7 @@ export function buildExclusionPromptSection(): string {
 \`\`\`exclusion-suggestions
 [
   {
-    "module": "top/cpu_core",
+    "module": "tb_top.chip_top",
     "metric": "line",
     "file": "rtl/cpu_core.sv",
     "line": 142,
@@ -129,7 +129,7 @@ export function buildExclusionPromptSection(): string {
     "confidence": 0.86
   },
   {
-    "module": "top/memory_ctrl",
+    "module": "tb_top.memory_ctrl",
     "metric": "functional",
     "bin": "err_inject.bin_backdoor",
     "reason": "backdoor 注入路径仅验证平台自检使用，前门访问永不触发",
