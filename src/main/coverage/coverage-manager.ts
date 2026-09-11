@@ -102,11 +102,33 @@ export class CoverageManager {
   // ─── 导入流程（ADR 0006 两步流水线） ─────────────────────────
 
   /**
-   * 导入覆盖率数据：创建 session → 运行 EDA summary 命令（step 1）→ 插件解析 summary（step 2）→ 缓存。
+   * 构建快速导入层的 EDA 命令配置（只保留一个快速命令）。
    *
-   * **分层解析优化**（ADR 0006 扩展）：
-   * - 导入时只运行 summary EDA 命令，只解析 summary.txt
-   * - detail/metrics/grade/bins/csv 命令和解析推迟到用户按需触发（parseDetails）
+   * 分层解析（SoC 只看代码覆盖率）：
+   *   - imc / vcover：metricsCommand（生成 metrics.txt，层级树 + Overall Covered）
+   *   - vcs-urg：summaryCommand（session.xml 即快速层数据源，ADR 0024）
+   * detail/grade/bins/csv 全部推迟到 parseDetails 按需触发。
+   */
+  private static quickImportConfig(edaConfig: EdaToolConfig): EdaToolConfig {
+    const quickCommand =
+      edaConfig.tool === 'vcs-urg' ? edaConfig.summaryCommand : edaConfig.metricsCommand;
+    return {
+      ...edaConfig,
+      summaryCommand: edaConfig.tool === 'vcs-urg' ? quickCommand : undefined,
+      detailCommand: undefined,
+      metricsCommand: edaConfig.tool === 'vcs-urg' ? undefined : quickCommand,
+      csvCommand: undefined,
+      gradeCommand: undefined,
+      binsCommand: undefined,
+    };
+  }
+
+  /**
+   * 导入覆盖率数据：创建 session → 运行快速层 EDA 命令（step 1）→ 插件解析（step 2）→ 缓存。
+   *
+   * **分层解析优化**（ADR 0006 扩展 + SoC 代码覆盖率重构）：
+   * - 导入时只运行一个快速命令（imc/vcover=metrics，vcs-urg=summary/session.xml）
+   * - detail/grade/bins/csv 命令和解析推迟到用户按需触发（parseDetails）
    * - 避免大数据量（2万+行 detail.txt）一次性解析导致 GUI 卡顿
    *
    * **其他性能优化**：
@@ -159,29 +181,22 @@ export class CoverageManager {
     );
     logStep('session_init', step0Start);
 
-    // Step 1: 平台运行 EDA summary 命令生成文本报告（分层解析：仅 summary）
+    // Step 1: 平台运行快速层 EDA 命令生成文本报告（分层解析：仅 metrics / session.xml）
     let edaAllFailed = false;
     let generatedFiles: string[] = [];
 
     if (this.reportGenerator) {
       onProgress?.({
         step: 'eda_commands',
-        message: '正在执行 EDA 命令生成 summary 报告...',
+        message: '正在执行 EDA 命令生成覆盖率报告...',
         percent: 5,
       });
       const step1Start = Date.now();
-      // 分层解析：导入时只运行 summary 命令，detail/grade/bins/csv 推迟到按需解析
-      const summaryOnlyConfig: EdaToolConfig = {
-        ...edaConfig,
-        detailCommand: undefined,
-        metricsCommand: undefined,
-        csvCommand: undefined,
-        gradeCommand: undefined,
-        binsCommand: undefined,
-      };
+      // 分层解析：导入时只运行快速命令，detail/grade/bins/csv 推迟到按需解析
+      const quickOnlyConfig = CoverageManager.quickImportConfig(edaConfig);
       try {
         const reports: GeneratedReports = await this.reportGenerator.generate(
-          summaryOnlyConfig, covMergeDir, sessionId,
+          quickOnlyConfig, covMergeDir, sessionId,
           (event) => {
             // 将 EDA 命令进度映射到 5%-60% 区间
             const pct = event.percent ?? 0;
@@ -217,12 +232,12 @@ export class CoverageManager {
       logStep('eda_commands (skipped — no generator)', step0Start);
     }
 
-    // Step 2: 插件解析 summary 文本报告为层级 Coverage Tree（分层解析：仅 summary）
+    // Step 2: 插件解析快速层文本报告为层级 Coverage Tree（分层解析：仅 metrics / session.xml）
     // 注意：adapter.parse() 现在在 Worker Thread 中执行，不阻塞主进程
     // Worker Thread 同时完成 enrichment + JSON.stringify，避免主进程同步阻塞
     onProgress?.({
       step: 'parsing',
-      message: '正在解析 summary 报告为覆盖率树...',
+      message: '正在解析覆盖率报告为层级树...',
       percent: 65,
     });
     const step2Start = Date.now();
@@ -605,7 +620,7 @@ export class CoverageManager {
   /**
    * 返回指定模块及其直接子模块的覆盖率（ADR 0009 按需下钻）。
    * 供 AI Host Tool get_coverage_detail 消费。
-   * modulePath 格式如 "top/cpu_core" 或 "top/cpu_core/u_reg"。
+   * modulePath 格式如 "tb_top.chip_top.dut" 或 "tb_top.chip_top.u_reg"（点号层级）。
    */
   async getCoverageDetail(
     modulePath: string,
