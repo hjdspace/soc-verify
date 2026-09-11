@@ -131,8 +131,8 @@ function setup(gaps: CoverageGap[] = []) {
 }
 
 const SAMPLE_GAPS: CoverageGap[] = [
-  makeGap('top/cpu_core', 'line', 80, 95),
-  makeGap('top/memory_ctrl', 'toggle', 75, 85),
+  makeGap('cpu_core', 'line', 80, 95),
+  makeGap('memory_ctrl', 'toggle', 75, 85),
 ];
 
 /**
@@ -158,7 +158,7 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core', 'top/memory_ctrl'],
+          modules: ['cpu_core', 'memory_ctrl'],
         });
         const target0 = session.targets[0];
         const target1 = session.targets[1];
@@ -212,7 +212,7 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const target0 = session.targets[0];
 
@@ -239,7 +239,7 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core', 'top/memory_ctrl'],
+          modules: ['cpu_core', 'memory_ctrl'],
         });
         // 未执行任何迭代
         const queue = await promoter.getPromotionQueue(session.id);
@@ -265,7 +265,7 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const target0 = session.targets[0];
 
@@ -315,7 +315,7 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const target0 = session.targets[0];
 
@@ -345,7 +345,7 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const target0 = session.targets[0];
 
@@ -383,7 +383,7 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const target0 = session.targets[0];
 
@@ -413,7 +413,7 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         const target0 = session.targets[0];
 
@@ -441,7 +441,7 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core'],
+          modules: ['cpu_core'],
         });
         // 先清理一次
         await promoter.cleanupClosure(session.id);
@@ -460,7 +460,7 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core', 'top/memory_ctrl'],
+          modules: ['cpu_core', 'memory_ctrl'],
         });
         const target0 = session.targets[0];
         const target1 = session.targets[1];
@@ -520,7 +520,7 @@ describe('TestPromoter', () => {
       try {
         const session = await closureManager.startClosure({
           sessionId: 'merge_test',
-          modules: ['top/cpu_core', 'top/memory_ctrl'],
+          modules: ['cpu_core', 'memory_ctrl'],
         });
         // 不执行任何迭代
         await closureManager.closeTarget(session.id, session.targets[0].id);
