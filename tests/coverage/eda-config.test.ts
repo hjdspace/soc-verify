@@ -250,6 +250,38 @@ describe('loadEdaConfig 旧配置迁移', () => {
     rmSync(tmpDir, { recursive: true });
   });
 
+  // ─── imc 旧默认 summaryCommand 迁移（SoC 代码覆盖率重构） ─────
+
+  it('imc 旧默认 summaryCommand 迁移为 undefined（不再执行无信息量命令）', async () => {
+    const tmpDir = makeTmpProject();
+    writeStoredConfig(tmpDir, {
+      tool: 'imc',
+      covMergeDir: 'cov_merge',
+      summaryCommand:
+        'imc -load {covMergeDir} -execcmd "report -summary -out {reportDir}/summary.txt"',
+      metricsCommand:
+        'imc -load {covMergeDir} -execcmd "report -metrics overall -out {reportDir}/metrics.txt"',
+    });
+
+    const loaded = await loadEdaConfig(tmpDir);
+    expect(loaded!.summaryCommand).toBeUndefined();
+    expect(loaded!.metricsCommand).toContain('report -metrics overall');
+    rmSync(tmpDir, { recursive: true });
+  });
+
+  it('imc 用户自定义过的 summaryCommand 不被迁移清空', async () => {
+    const tmpDir = makeTmpProject();
+    writeStoredConfig(tmpDir, {
+      tool: 'imc',
+      covMergeDir: 'cov_merge',
+      summaryCommand: 'imc -load {covMergeDir} -execcmd "custom -out {reportDir}/summary.txt"',
+    });
+
+    const loaded = await loadEdaConfig(tmpDir);
+    expect(loaded!.summaryCommand).toContain('custom');
+    rmSync(tmpDir, { recursive: true });
+  });
+
   it('配置文件不存在时返回 null', async () => {
     const tmpDir = makeTmpProject();
     expect(await loadEdaConfig(tmpDir)).toBeNull();
