@@ -129,11 +129,11 @@ describe('builtin coverage parser: urg session.xml 优先解析', () => {
     // 层级树：tb_top(0) → u_core(1) → u_alu/u_decoder(2)，兄弟 u_mem(1)
     expect(tree.name).toBe('tb_top');
     expect(tree.depth).toBe(0);
-    expect(tree.path).toBe('top/tb_top');
+    expect(tree.path).toBe('tb_top');
     const uCore = tree.children.find((c) => c.name === 'u_core');
     const uMem = tree.children.find((c) => c.name === 'u_mem');
     expect(uCore?.depth).toBe(1);
-    expect(uCore?.path).toBe('top/tb_top/u_core');
+    expect(uCore?.path).toBe('tb_top.u_core');
     expect(uCore?.children.map((c) => c.name)).toEqual(['u_alu', 'u_decoder']);
     expect(uCore?.children[0].depth).toBe(2);
     expect(uMem).toBeDefined();
