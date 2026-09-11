@@ -66,6 +66,9 @@ const { MockAgentClient } = vi.hoisted(() => {
 
     setToolCallHandler(handler: unknown) { this.toolCallHandler = handler; }
     setApprovalHandler(handler: unknown) { this.approvalHandler = handler; }
+    // issue 04：信任确认 handler（本测试不触发信任流，仅需可装配）
+    setTrustHandler(handler: unknown) { this.trustHandler = handler; }
+    trustHandler: unknown = null;
     onEvent(listener: (event: unknown) => void) { this.eventListeners.push(listener); }
 
     async start() { this.started = true; }

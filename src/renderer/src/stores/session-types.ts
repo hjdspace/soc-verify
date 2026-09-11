@@ -6,6 +6,7 @@
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
 import type { AskQuestion } from '@shared/ask-types';
 import type { ThinkingLevelSetting } from '@shared/types';
+import type { SubagentUsageSummary } from '@shared/agent-events';
 
 export type SessionStatus = 'creating' | 'idle' | 'streaming' | 'tool_executing' | 'error';
 
@@ -98,6 +99,14 @@ export interface SubagentActivity {
   tokenHistory: number[];
   startedAt: number;
   endedAt?: number;
+  /** 父引擎会话 id（pi 父子归属，issue 05） */
+  parentSessionId?: string;
+  /** subagent run 生命周期目录（status/events 等 run 产物） */
+  runDir?: string;
+  /** 能力不足/失败的显式阻断原因 */
+  blockedReason?: string;
+  /** 终态 Token 用量汇总（父子归属） */
+  usage?: SubagentUsageSummary;
 }
 
 export interface AvailableModel {

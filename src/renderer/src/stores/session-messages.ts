@@ -953,6 +953,18 @@ export const useSessionMessagesStore = create<SessionMessagesState>(() => ({
               tokenHistory: prev?.tokenHistory ?? [],
               startedAt: prev?.startedAt ?? Date.now(),
               endedAt: status !== 'running' ? Date.now() : undefined,
+              // issue 05：父子归属 / run 产物目录 / 阻断原因 / Token 用量（终态帧携带）
+              parentSessionId:
+                typeof p.parentSessionId === 'string' ? p.parentSessionId : prev?.parentSessionId,
+              runDir: typeof p.runDir === 'string' ? p.runDir : prev?.runDir,
+              blockedReason:
+                status !== 'running' && typeof p.blockedReason === 'string'
+                  ? p.blockedReason
+                  : prev?.blockedReason,
+              usage:
+                status !== 'running' && p.usage && typeof p.usage === 'object'
+                  ? (p.usage as SubagentActivity['usage'])
+                  : prev?.usage,
             };
             return { ...sess, subagents: { ...sess.subagents, [id]: next } };
           }

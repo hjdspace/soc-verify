@@ -28,6 +28,7 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { createJiti } from "jiti";
+import type { ApprovalMode } from "./approval-logic";
 import {
 	type Command,
 	type HostToolDefinition,
@@ -51,6 +52,19 @@ import {
 	resolveProjectTrustDecision,
 	resolveToolCallGate,
 } from "./extensions.ts";
+import {
+	buildRpcStopRequest,
+	normalizeSubagentFrame,
+	resolveSubagentCeiling,
+	RPC_REQUEST_CHANNEL,
+	SUBAGENT_CHANNELS,
+	SUBAGENT_ASYNC_COMPLETE_CHANNEL,
+	SUBAGENT_CHILD_STATUS_CHANNEL,
+	SUBAGENT_DELEGATION_RESPONSE_CHANNEL,
+	trackSubagentRun,
+	type SubagentEventBus,
+	type SubagentRuntime,
+} from "./subagents.ts";
 
 // ─── 自定义工具注册（ask 等 host 转发工具） ─────────────
 
@@ -129,6 +143,41 @@ function loadMcpAdapter(): Promise<McpAdapterModule> {
 			return adapter;
 		});
 	return mcpAdapterModulePromise;
+}
+
+// ─── pi-subagents 加载（jiti，TS 源码入口）──────────────
+
+interface SubagentsModule {
+	default: (pi: unknown) => void;
+}
+
+interface CapabilityCeilingModule {
+	registerSubagentCapabilityCeiling(options: {
+		sessionId: string;
+		source: string;
+		ceiling: { denyExtensions: true };
+	}): { update(ceiling: { denyExtensions: true }): void; dispose(): void };
+}
+
+/**
+ * pi-subagents 的 package.json "." 出口是 TypeScript 源码（index.ts），
+ * 与 pi-mcp-adapter 同理由 jiti 加载（模块缓存随进程复用）。
+ */
+function loadSubagentsModule(): Promise<SubagentsModule> {
+	return createJiti(import.meta.url)
+		.import("pi-subagents")
+		.then((mod) => {
+			const resolved = mod as { default?: unknown };
+			const factory = resolved.default;
+			if (typeof factory !== "function") {
+				throw new Error("pi-subagents loaded but default extension factory missing");
+			}
+			return { default: factory as (pi: unknown) => void };
+		});
+}
+
+function loadCapabilityCeilingModule(): Promise<CapabilityCeilingModule> {
+	return createJiti(import.meta.url).import("pi-subagents/capability-ceiling") as Promise<CapabilityCeilingModule>;
 }
 
 // ─── 内联扩展装配（审批 / trust / MCP） ─────────────────
@@ -223,6 +272,120 @@ async function assembleMcp(config: InitConfig, ctx: PiRunnerContext): Promise<Mc
 	};
 }
 
+// ─── subagent 装配（issue 05）───────────────────────────
+
+/**
+ * subagent 事件桥：订阅 pi-subagents 在 pi.events 发布的通道，归一化为
+ * host SubagentFrame 契约后转发；同时跟踪活动 run（取消传播/清理用）并
+ * 注入 pi.events 引用供 cancelSubagent 命令使用。
+ */
+function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRuntime): InlineExtension {
+	return {
+		name: "socverify-subagent-bridge",
+		hidden: true,
+		factory: (pi) => {
+			const events = (pi as { events?: SubagentEventBus }).events ?? null;
+			runtime.events = events;
+			if (!events) return;
+
+			for (const channel of SUBAGENT_CHANNELS) {
+				events.on(channel, (payload: unknown) => {
+					// 活动 run 登记（async-started）：destroy 时据此下发 stop
+					trackSubagentRun.onStart(runtime.registry, { channel, payload });
+					for (const frame of normalizeSubagentFrame(channel, payload, {
+						parentSessionId:
+							ctx.session != null
+								? ((ctx.session as { sessionId?: string }).sessionId ?? null)
+								: null,
+					})) {
+						if (
+							frame.type === "subagent_lifecycle" &&
+							(channel === SUBAGENT_DELEGATION_RESPONSE_CHANNEL ||
+								channel === SUBAGENT_ASYNC_COMPLETE_CHANNEL ||
+								channel === SUBAGENT_CHILD_STATUS_CHANNEL)
+						) {
+							trackSubagentRun.onTerminal(runtime.registry, String(frame.payload.id));
+						}
+						sendEvent(frame);
+					}
+				});
+			}
+		},
+	};
+}
+
+type SubagentsAssembly = {
+	factories: InlineExtension[];
+};
+
+/**
+ * subagent 装配：加载 pi-subagents 扩展 + 事件桥。
+ *
+ * 能力不足不静默降级：加载失败时 runtime.enabled=false 且携带显式
+ * blockedReason（init response 透出 + notice 事件），host/UI 必须展示。
+ */
+async function assembleSubagents(config: InitConfig, ctx: PiRunnerContext): Promise<SubagentsAssembly> {
+	const runtime: SubagentRuntime = {
+		enabled: false,
+		blockedReason: null,
+		registry: trackSubagentRun.create(),
+		events: null,
+		ceilingHandle: null,
+	};
+	ctx.subagentRuntime = runtime;
+
+	if (config.enableSubagents === false) {
+		return { factories: [] };
+	}
+
+	let extensionFactory: (pi: unknown) => void;
+	try {
+		const mod = await loadSubagentsModule();
+		extensionFactory = (pi: unknown) => {
+			mod.default(pi);
+		};
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		runtime.blockedReason = `Subagent extension unavailable: ${reason}`;
+		return { factories: [] };
+	}
+
+	runtime.enabled = true;
+	return {
+		factories: [
+			buildSubagentBridgeExtension(ctx, runtime),
+			{
+				name: "socverify-subagents",
+				hidden: true,
+				factory: (pi) => {
+					extensionFactory(pi);
+				},
+			},
+		],
+	};
+}
+
+/**
+ * 注册审批继承 ceiling（session 创建后调用，需要 sessionId）。
+ * yolo 不注册（单次审批放宽；extension/MCP 信任边界独立于审批模式）。
+ */
+async function registerApprovalInheritance(runtime: SubagentRuntime | null, sessionId: string, mode: ApprovalMode): Promise<void> {
+	if (!runtime?.enabled) return;
+	const ceiling = resolveSubagentCeiling(mode);
+	if (!ceiling) return;
+	try {
+		const mod = await loadCapabilityCeilingModule();
+		runtime.ceilingHandle = mod.registerSubagentCapabilityCeiling({
+			sessionId,
+			source: "socverify-approval-inheritance",
+			ceiling,
+		});
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		runtime.blockedReason = `Subagent approval inheritance unavailable: ${reason}`;
+	}
+}
+
 // ─── init ───────────────────────────────────────────────
 
 export async function handleInit(
@@ -254,14 +417,15 @@ export async function handleInit(
 		}
 	}
 
-	// 资源装载器：内联扩展（审批门 + MCP）+ host 信任存储驱动的项目信任决策
+	// 资源装载器：内联扩展（审批门 + MCP + subagent）+ host 信任存储驱动的项目信任决策
 	const mcp = await assembleMcp(config, ctx);
+	const subagents = await assembleSubagents(config, ctx);
 	const agentDir = getAgentDir();
 	const loader = new DefaultResourceLoader({
 		cwd: config.cwd,
 		agentDir,
 		settingsManager: SettingsManager.create(config.cwd, agentDir),
-		extensionFactories: [buildApprovalExtension(ctx), ...mcp.factories],
+		extensionFactories: [buildApprovalExtension(ctx), ...mcp.factories, ...subagents.factories],
 	});
 	await loader.reload({
 		// 项目信任：host 信任存储（trustedProjectDirs）命中直接放行；否则请求
@@ -310,7 +474,18 @@ export async function handleInit(
 		}
 	});
 
-	sendResponse(cmd.id, true, { sessionId: session.sessionId });
+	// 审批继承：按父会话 sessionId 注册 subagent capability ceiling（yolo 不收紧）
+	await registerApprovalInheritance(ctx.subagentRuntime, session.sessionId, ctx.currentApprovalMode);
+
+	// subagent 能力状态透出（能力不足时 host 显式展示阻断原因，不静默降级）
+	const subagentStatus = ctx.subagentRuntime
+		? { enabled: ctx.subagentRuntime.enabled, blockedReason: ctx.subagentRuntime.blockedReason }
+		: { enabled: false, blockedReason: "Subagent runtime not assembled" };
+	if (subagentStatus.blockedReason) {
+		sendEvent({ type: "notice", text: subagentStatus.blockedReason, message: subagentStatus.blockedReason });
+	}
+
+	sendResponse(cmd.id, true, { sessionId: session.sessionId, subagent: subagentStatus });
 }
 
 // ─── 图片解析 ───────────────────────────────────────────
@@ -376,13 +551,69 @@ export async function handleSetModel(
 
 // ─── setApprovalMode ────────────────────────────────────
 
-/** 动态切换审批模式；对进行中的下一次工具调用立即生效。 */
+/** 动态切换审批模式；对进行中的下一次工具调用立即生效，并同步 subagent 审批继承 ceiling。 */
 export function handleSetApprovalMode(
 	cmd: Command & { type: "setApprovalMode" },
 	ctx: PiRunnerContext,
 ): void {
 	ctx.currentApprovalMode = cmd.approvalMode;
+	const handle = ctx.subagentRuntime?.ceilingHandle ?? null;
+	if (handle) {
+		const ceiling = resolveSubagentCeiling(cmd.approvalMode);
+		if (ceiling) {
+			handle.update(ceiling);
+		} else {
+			handle.dispose();
+			ctx.subagentRuntime!.ceilingHandle = null;
+		}
+	}
 	sendResponse(cmd.id, true, { approvalMode: ctx.currentApprovalMode });
+}
+
+// ─── cancelSubagent（取消传播 host 出口，issue 05）──────
+
+/**
+ * 显式取消一个 subagent run（async runs 不随父会话 turn 中止而取消，
+ * 这是异步委派的语义；host 侧用户显式取消经此命令下发）。
+ *
+ * 通过 pi-subagents RPC 桥（subagents:rpc:v1:request → stop）下发，
+ * 回复经 subagents:rpc:v1:reply:<requestId> 通道返回。
+ */
+export async function handleCancelSubagent(
+	cmd: Command & { type: "cancelSubagent" },
+	ctx: PiRunnerContext,
+): Promise<void> {
+	const runtime = ctx.subagentRuntime;
+	if (!runtime?.enabled || !runtime.events) {
+		throw new Error(`Subagent runtime not available${runtime?.blockedReason ? `: ${runtime.blockedReason}` : ""}`);
+	}
+
+	const requestId = `socverify-stop-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+	const { envelope, replyChannel } = buildRpcStopRequest(requestId, cmd.target);
+
+	const reply = await new Promise<Record<string, unknown>>((resolve, reject) => {
+		const timeout = setTimeout(() => {
+			unsubscribe();
+			reject(new Error(`Subagent stop request timed out (${requestId})`));
+		}, 15_000);
+		timeout.unref?.();
+		const unsubscribe = runtime.events!.on(replyChannel, (data: unknown) => {
+			clearTimeout(timeout);
+			unsubscribe();
+			if (typeof data === "object" && data !== null) {
+				resolve(data as Record<string, unknown>);
+			} else {
+				reject(new Error("Malformed subagent stop reply"));
+			}
+		});
+		runtime.events!.emit(RPC_REQUEST_CHANNEL, envelope);
+	});
+
+	if (reply.success === false) {
+		const error = reply.error as { message?: string } | undefined;
+		throw new Error(error?.message ?? "Subagent stop request failed");
+	}
+	sendResponse(cmd.id, true, reply.data ?? { stopped: true });
 }
 
 // ─── MCP 查询命令 ───────────────────────────────────────
@@ -440,6 +671,18 @@ export async function handleDestroy(
 	cmd: Command & { type: "destroy" },
 	ctx: PiRunnerContext,
 ): Promise<void> {
+	// 活动 async runs 随会话销毁显式取消（fire-and-forget；销毁路径不等待）
+	const runtime = ctx.subagentRuntime;
+	if (runtime?.enabled && runtime.events) {
+		for (const runId of trackSubagentRun.activeRunIds(runtime.registry)) {
+			const { envelope } = buildRpcStopRequest(`socverify-destroy-${runId}`, { runId });
+			try {
+				runtime.events.emit(RPC_REQUEST_CHANNEL, envelope);
+			} catch (err) {
+				console.error(`[socverify-runner] subagent stop on destroy failed: ${String(err)}`);
+			}
+		}
+	}
 	if (ctx.unsubscribe) {
 		ctx.unsubscribe();
 		ctx.unsubscribe = null;

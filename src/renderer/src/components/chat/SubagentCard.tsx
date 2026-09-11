@@ -81,6 +81,7 @@ function AgentRow({ agent, onClick }: { agent: SubagentActivity; onClick: () => 
         >
           {running
             ? (agent.currentTool ?? agent.lastIntent ?? '…')
+            : agent.blockedReason ? `\u26a0 ${agent.blockedReason}`
             : agent.status === 'completed' ? '\u2713 完成'
             : agent.status === 'failed' ? '\u2717 失败'
             : '\u2013 已中止'}
@@ -151,6 +152,29 @@ function Drawer({ agent, onClose }: { agent: SubagentActivity; onClose: () => vo
               任务指令
             </div>
             <MarkdownRenderer content={agent.assignment ?? agent.description ?? ''} />
+          </div>
+        )}
+
+        {/* 终态 Token 用量（父子归属，issue 05）/ 阻断原因显式展示 */}
+        {agent.usage && (
+          <div
+            className="grid grid-cols-3 gap-x-3 gap-y-1 border-b border-[var(--dsw-border-l1)] px-3 py-2 font-mono text-[10px] tabular-nums text-muted-foreground"
+            data-testid="subagent-usage"
+          >
+            <span>in {fmtTokens(agent.usage.input)}</span>
+            <span>out {fmtTokens(agent.usage.output)}</span>
+            <span>cache {fmtTokens(agent.usage.cacheRead)}</span>
+            <span>{agent.usage.turns} turns</span>
+            <span>{agent.usage.toolCalls} tools</span>
+            <span>${agent.usage.costUsd.toFixed(4)}</span>
+          </div>
+        )}
+        {agent.blockedReason && (
+          <div
+            className="border-b border-[var(--dsw-border-l1)] px-3 py-2 text-[10.5px] leading-relaxed text-destructive"
+            data-testid="subagent-blocked-reason"
+          >
+            {agent.blockedReason}
           </div>
         )}
 

@@ -1305,6 +1305,54 @@ describe('SessionStore — subagent activity (subagent_* frames)', () => {
 
     expect(getSubagent('sa-1')?.recentOutput).toEqual(['A', 'B', 'X', 'Y']);
   });
+
+  it('merges terminal usage / runDir / parentSessionId from lifecycle frames (issue 05)', () => {
+    const store = useSessionMessagesStore.getState();
+    store.handleSessionEvent(sessionId, progressFrame('sa-2', ['C', 'B', 'A']));
+    store.handleSessionEvent(sessionId, {
+      type: 'subagent_lifecycle',
+      payload: {
+        id: 'sa-2',
+        status: 'completed',
+        agent: 'analyzer',
+        parentSessionId: 'pi-session-0001',
+        runDir: '/tmp/pi/async/run-abc',
+        usage: {
+          input: 100,
+          output: 50,
+          cacheRead: 10,
+          cacheWrite: 5,
+          costUsd: 0.01,
+          turns: 3,
+          toolCalls: 7,
+          durationMs: 1200,
+        },
+      },
+    });
+
+    const sub = getSubagent('sa-2');
+    expect(sub?.status).toBe('completed');
+    expect(sub?.parentSessionId).toBe('pi-session-0001');
+    expect(sub?.runDir).toBe('/tmp/pi/async/run-abc');
+    expect(sub?.usage?.input).toBe(100);
+    expect(sub?.usage?.costUsd).toBeCloseTo(0.01);
+  });
+
+  it('merges blockedReason on failed lifecycle frames（能力不足显式可见）', () => {
+    const store = useSessionMessagesStore.getState();
+    store.handleSessionEvent(sessionId, progressFrame('sa-3', ['A']));
+    store.handleSessionEvent(sessionId, {
+      type: 'subagent_lifecycle',
+      payload: {
+        id: 'sa-3',
+        status: 'failed',
+        blockedReason: 'Subagent extension unavailable: pi-subagents not installed',
+      },
+    });
+
+    expect(getSubagent('sa-3')?.status).toBe('failed');
+    expect(getSubagent('sa-3')?.blockedReason).toContain('pi-subagents not installed');
+  });
 });
 
 describe('SessionStore — MCP mount notice suppression', () => {

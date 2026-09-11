@@ -86,6 +86,8 @@ export type InitConfig = {
 	disabledTools?: string[];
 	/** 是否为会话启用 MCP（缺省 true） */
 	enableMCP?: boolean;
+	/** 是否为会话启用 subagent 扩展（pi-subagents，缺省 true；停用不做阻断） */
+	enableSubagents?: boolean;
 	/** host 信任存储中已确认信任的 MCP server 名（首次启动确认的持久化结果） */
 	trustedMcpServers?: string[];
 	/** host 信任存储中已确认信任的项目目录（extension 首次加载确认的持久化结果） */
@@ -102,8 +104,16 @@ export type Command =
 	| { id: string; type: "getMcpStatus" }
 	| { id: string; type: "getMcpServerTools"; serverName: string }
 	| { id: string; type: "reloadMcp" }
+	| { id: string; type: "cancelSubagent"; target: SubagentStopTarget }
 	| { id: string; type: "compact" }
 	| { id: string; type: "destroy" };
+
+/** cancelSubagent 的目标（runId / runId 前缀 / async 目录，与 pi-subagents stop 语义一致） */
+export type SubagentStopTarget = {
+	runId?: string;
+	id?: string;
+	dir?: string;
+}
 
 /** runner 内部共享的可变状态，传给各命令处理器。 */
 export interface PiRunnerContext {
@@ -123,6 +133,8 @@ export interface PiRunnerContext {
 	requestTrust: (kind: TrustKind, name: string, path?: string) => Promise<boolean>;
 	/** MCP 运行时状态（init 时装配；未启用 MCP 时为 null） */
 	mcpRuntime: import("./mcp-runtime").McpRuntimeState | null;
+	/** subagent 运行时状态（init 时装配；显式停用/加载失败时 enabled=false） */
+	subagentRuntime: import("./subagents").SubagentRuntime | null;
 }
 
 // ─── 入站帧（host → runner stdin）──────────────────────

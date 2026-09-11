@@ -33,6 +33,22 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   SettingsManager: { create: () => ({ __fakeSettingsManager: true }) },
 }));
 
+// issue 05：subagent 扩展经 jiti 加载，测试中替换为受控 fake
+const fakeSubagentExtensionFactory = vi.fn();
+const fakeRegisterCeiling = vi.fn(() => ({ update: vi.fn(), dispose: vi.fn() }));
+
+vi.mock('jiti', () => ({
+  createJiti: () => ({
+    import: async (id: string) => {
+      if (id === 'pi-subagents') return { default: fakeSubagentExtensionFactory };
+      if (id === 'pi-subagents/capability-ceiling') {
+        return { registerSubagentCapabilityCeiling: fakeRegisterCeiling };
+      }
+      throw new Error(`unexpected jiti import: ${id}`);
+    },
+  }),
+}));
+
 const {
   handleInit,
   handlePrompt,
@@ -70,7 +86,12 @@ function makeCtx(session: unknown = null): PiRunnerContext {
     session,
     unsubscribe: null,
     currentCwd: '',
+    currentApprovalMode: 'always-ask',
     callHostTool: vi.fn(async () => ({ content: [{ type: 'text', text: 'tool result' }] })),
+    requestApproval: vi.fn(async () => true),
+    requestTrust: vi.fn(async () => true),
+    mcpRuntime: null,
+    subagentRuntime: null,
   };
 }
 
@@ -79,6 +100,8 @@ const ENV_KEYS = ['SOCV_TEST_VAR', 'OPENAI_API_KEY', 'OPENAI_BASE_URL'] as const
 beforeEach(() => {
   sendResponse.mockClear();
   sendEvent.mockClear();
+  fakeSubagentExtensionFactory.mockClear();
+  fakeRegisterCeiling.mockClear();
   createAgentSession.mockReset();
   createAgentSession.mockImplementation(async () => ({ session: makeSession() }));
   sessionManagerCreate.mockClear();
@@ -106,7 +129,11 @@ describe('handleInit', () => {
         sessionManager: { __fakeSessionManager: true },
       }),
     );
-    expect(sendResponse).toHaveBeenCalledWith('req_1', true, { sessionId: 'pi-session-0001' });
+    expect(sendResponse).toHaveBeenCalledWith(
+      'req_1',
+      true,
+      expect.objectContaining({ sessionId: 'pi-session-0001' }),
+    );
   });
 
   it('应用 env 环境变量到进程', async () => {

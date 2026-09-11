@@ -144,3 +144,109 @@ export function recordUsageFromEvent(
     console.warn('[token-monitor] record usage failed:', err);
   }
 }
+
+// ─── Subagent 父子 Token 归属（issue 05）───────────────────
+
+/**
+ * 从 subagent_lifecycle 终态事件中提取 TokenUsageRecord。
+ *
+ * 事件 payload（runner 归一化后的引擎中立形状，见 runner-pi/subagents.ts）：
+ * {
+ *   type: 'subagent_lifecycle',
+ *   payload: {
+ *     id: 'run-abc',                    // subagent run id
+ *     status: 'completed'|'failed'|'aborted',
+ *     agent: 'coverage-analyzer',
+ *     parentSessionId: 'pi-session-…',  // 父 pi 引擎会话 id
+ *     usage: { input, output, cacheRead, cacheWrite, costUsd, turns, toolCalls, durationMs }
+ *   }
+ * }
+ *
+ * 父子归属策略（不丢失引擎、会话和父子关联）：
+ *   - engine / sessionId / projectId / cwd 沿用父会话的 RecorderContext；
+ *   - messageId = `subagent:<runId>`（INSERT OR IGNORE 天然去重 + 父子关联可追溯）；
+ *   - model = `subagent:<agent>`（来源标识，与普通模型名不冲突）。
+ *
+ * @returns TokenUsageRecord 或 null（非终态 / 无 usage / 非目标事件）
+ */
+export function extractSubagentUsageFromEvent(
+  event: unknown,
+  ctx: RecorderContext,
+): TokenUsageRecord | null {
+  const evt = event as Record<string, unknown> | null;
+  if (!evt || evt.type !== 'subagent_lifecycle') return null;
+
+  const payload = evt.payload as Record<string, unknown> | undefined;
+  if (!payload) return null;
+
+  const status = payload.status;
+  if (status !== 'completed' && status !== 'failed' && status !== 'aborted') return null;
+
+  const usage = payload.usage as Record<string, unknown> | undefined;
+  if (!usage || typeof usage !== 'object') return null;
+
+  const num = (v: unknown): number => (typeof v === 'number' && !isNaN(v) ? v : 0);
+  const runId = typeof payload.id === 'string' && payload.id.length > 0 ? payload.id : null;
+  if (!runId) return null;
+
+  const agent = typeof payload.agent === 'string' ? payload.agent : '';
+  const input = num(usage.input);
+  const output = num(usage.output);
+
+  return {
+    engine: ctx.engine,
+    sessionId: ctx.sessionId,
+    messageId: `subagent:${runId}`,
+    model: `subagent:${agent}`,
+    provider: '',
+    inputTokens: input,
+    outputTokens: output,
+    cacheReadTokens: num(usage.cacheRead),
+    cacheWriteTokens: num(usage.cacheWrite),
+    reasoningTokens: 0,
+    totalTokens: input + output,
+    costUsd: num(usage.costUsd),
+    timestamp: Date.now(),
+    projectId: ctx.projectId,
+    cwd: ctx.cwd,
+  };
+}
+
+/**
+ * 旁路写入 subagent 终态 usage（fire-and-forget，失败仅记日志）。
+ * 在 SessionManager 的事件转发路径中对 subagent_lifecycle 事件调用。
+ */
+export function recordSubagentUsageFromEvent(
+  db: TokenMonitorDb | null,
+  event: unknown,
+  ctx: RecorderContext,
+): void {
+  if (!db) return;
+
+  let record: TokenUsageRecord | null;
+  try {
+    record = extractSubagentUsageFromEvent(event, ctx);
+  } catch (err) {
+    console.warn('[token-monitor] extract subagent usage failed:', err);
+    return;
+  }
+
+  if (!record) return;
+
+  try {
+    const stmt = db.prepare(`
+      INSERT OR IGNORE INTO token_usage (
+        engine, session_id, message_id, model, provider,
+        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+        reasoning_tokens, total_tokens, cost_usd, timestamp, project_id, cwd
+      ) VALUES (
+        @engine, @sessionId, @messageId, @model, @provider,
+        @inputTokens, @outputTokens, @cacheReadTokens, @cacheWriteTokens,
+        @reasoningTokens, @totalTokens, @costUsd, @timestamp, @projectId, @cwd
+      )
+    `);
+    stmt.run(record);
+  } catch (err) {
+    console.warn('[token-monitor] record subagent usage failed:', err);
+  }
+}

@@ -42,7 +42,7 @@ import {
 import { notificationManager } from '../notifications/notification-manager';
 import type { AskAnswer, AskQuestion } from '@shared/ask-types';
 import type { AgentEngine } from '@shared/agent-events';
-import { recordUsageFromEvent } from '../token-monitor/token-usage-recorder';
+import { recordSubagentUsageFromEvent, recordUsageFromEvent } from '../token-monitor/token-usage-recorder';
 import { tokenMonitorRegistry } from '../token-monitor/token-monitor-registry';
 
 const MAX_CONCURRENT_SESSIONS = 10;
@@ -800,6 +800,21 @@ export class SessionManagerImpl extends EventEmitter {
         }
         // Diagnostic: log subagent frames to trace data flow
         if (evtType === 'subagent_lifecycle' || evtType === 'subagent_progress') {
+          // Subagent 父子 Token 归属：终态事件带 usage 时旁路写入 Token Monitor
+          //（messageId=subagent:<runId>，引擎/会话/父子关联均保留）。
+          if (evtType === 'subagent_lifecycle') {
+            try {
+              const tokenDb = tokenMonitorRegistry.getOrCreateDb(options.cwd);
+              recordSubagentUsageFromEvent(tokenDb, event, {
+                sessionId,
+                engine: c.engine,
+                projectId: options.projectId,
+                cwd: options.cwd,
+              });
+            } catch (err) {
+              console.warn(`[agent:session:${sessionId}] subagent token bypass failed:`, err);
+            }
+          }
           const payload = (event as Record<string, unknown>)?.payload as Record<string, unknown> | undefined;
           const subId = payload?.id ?? (payload?.progress as Record<string, unknown> | undefined)?.id ?? '??';
           console.log(`[agent:session:${sessionId}] SUBAGENT ${evtType} id=${subId} — forwarding to renderer`);

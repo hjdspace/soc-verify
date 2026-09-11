@@ -45,6 +45,70 @@ export type AgentMessage = {
   usage?: unknown;
 };
 
+// ─── Subagent payload（引擎中立；omp 与 pi runner 共用形状）──
+
+/** subagent 活动状态（终态：completed / failed / aborted） */
+export type SubagentActivityStatus = 'running' | 'completed' | 'failed' | 'aborted';
+
+/** subagent 单次运行的 Token 用量汇总（父子归属用，终态事件携带） */
+export type SubagentUsageSummary = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  costUsd: number;
+  turns: number;
+  toolCalls: number;
+  durationMs: number;
+}
+
+/**
+ * subagent_lifecycle 帧负载：启动（running）与终态。
+ * pi runner 从 pi-subagents 事件归一化而来（issue 05）；omp runner 原生形状
+ * 兼容。blockedReason 携带能力不足的显式阻断原因（不允许静默降级）。
+ */
+export type SubagentLifecyclePayload = {
+  /** subagent run id */
+  id: string;
+  status: SubagentActivityStatus;
+  index?: number;
+  /** 角色（agent 定义名） */
+  agent?: string;
+  description?: string;
+  /** 关联的 task/subagent 工具调用 id — 用于挂载到对应 tool card */
+  parentToolCallId?: string;
+  /** 父引擎会话 id（pi 父子归属） */
+  parentSessionId?: string;
+  /** artifacts 目录（归属父会话 bucket，随会话生命周期处理） */
+  artifactsDir?: string;
+  /** 父 run id（工作流父子链路） */
+  ownerRunId?: string;
+  /** 能力不足/失败时的显式阻断原因 */
+  blockedReason?: string;
+  /** 终态 Token 用量（父子归属） */
+  usage?: SubagentUsageSummary;
+}
+
+/** subagent_progress 帧负载：实时进度。 */
+export type SubagentProgressPayload = {
+  id: string;
+  index?: number;
+  agent?: string;
+  assignment?: string;
+  parentToolCallId?: string;
+  parentSessionId?: string;
+  progress: {
+    id?: string;
+    tokens?: number;
+    currentTool?: string;
+    currentToolArgs?: string;
+    lastIntent?: string;
+    recentOutput?: string[];
+    toolCount?: number;
+    requests?: number;
+  };
+}
+
 // ─── Agent Event union ───────────────────────────────────────
 
 /** Events emitted by an agent engine session, keyed by a `type` discriminant. */
@@ -100,8 +164,8 @@ export type AgentEvent =
       skipped?: boolean;
     }
   // ── Subagent lifecycle / progress ──
-  | { type: 'subagent_lifecycle'; payload: unknown }
-  | { type: 'subagent_progress'; payload: unknown }
+  | { type: 'subagent_lifecycle'; payload: SubagentLifecyclePayload }
+  | { type: 'subagent_progress'; payload: SubagentProgressPayload }
   // ── Notice / error ──
   | { type: 'notice'; text?: string; message?: string }
   | { type: 'error'; error?: string; message?: string };

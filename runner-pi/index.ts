@@ -37,6 +37,7 @@ import {
 	handleInit,
 	handlePrompt,
 	handleReloadMcp,
+	handleCancelSubagent,
 	handleSetApprovalMode,
 	handleSetModel,
 	handleSteer,
@@ -160,6 +161,7 @@ const ctx: PiRunnerContext = {
 	requestApproval,
 	requestTrust,
 	mcpRuntime: null,
+	subagentRuntime: null,
 };
 
 // ─── Command Router ─────────────────────────────────────
@@ -193,6 +195,9 @@ async function handleCommand(cmd: Command): Promise<void> {
 				break;
 			case "reloadMcp":
 				handleReloadMcp(cmd, ctx);
+				break;
+			case "cancelSubagent":
+				await handleCancelSubagent(cmd, ctx);
 				break;
 			case "compact":
 				await handleCompact(cmd, ctx);
