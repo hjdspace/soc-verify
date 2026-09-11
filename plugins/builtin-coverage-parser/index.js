@@ -8,13 +8,15 @@
  *
  * 解析策略（按优先级）：
  *   1. 读取 reportDir/meta.json 获取 covMergeDir 和 edaTool
- *   2. 尝试读取并解析 reportDir 下的文本报告（summary.txt / detail.txt / metrics.txt）
+ *   2. 尝试读取并解析 reportDir 下的文本报告（metrics.txt / summary.txt / detail.txt）
  *   3. 如果文本报告为空或不存在，尝试直接从 cov_merge 目录扫描覆盖率数据文件
  *   4. 如果都失败，返回一个包含基本结构的占位 CoverageData
  *
  * 分层解析模式（options.summaryOnly）：
- *   - summaryOnly=true：只解析 summary.txt，快速返回层级树 + 覆盖率摘要
- *   - summaryOnly=false（默认）：解析全部报告（summary + detail + metrics + grade + bins + csv）
+ *   - summaryOnly=true（快速导入层，SoC 代码覆盖率重构）：
+ *     imc/vcover 解析 metrics.txt（name 层级 + Overall Covered 代码覆盖率点数比），
+ *     vcs-urg 解析 session.xml / dashboard+hierarchy；只快速返回层级树 + 摘要
+ *   - summaryOnly=false（默认）：解析全部报告（metrics + summary + detail + grade + bins + csv）
  *   分层解析避免大数据量时一次性解析所有报告导致 GUI 卡顿
  *
  * 支持的报告格式：
@@ -375,7 +377,7 @@ function urgXmlScopeToNode(el, parentPath, depth, log) {
     throw new Error('session.xml 解析错误：scope 元素缺少 name 属性（depth=' + depth + '）');
   }
   name = name.trim();
-  var path = parentPath ? parentPath + '/' + name : 'top/' + name;
+  var path = parentPath ? parentPath + '.' + name : name;
   var metrics = emptyMetrics();
   var children = [];
 
@@ -941,6 +943,112 @@ function parseImcHierarchySummary(text, log) {
   return { tree: tree, metrics: nodes[0].metrics };
 }
 
+// ─── IMC metrics 报告解析（SoC 代码覆盖率快速导入层） ──────────
+
+/**
+ * 解析 imc `report -metrics overall` 生成的 metrics.txt。
+ *
+ * 格式（name 列带树形前缀，Overall Covered 列为代码覆盖率）：
+ *   name                           Overall Average       Overall Covered
+ *   tb_top                         n/a                   n/a
+ *   |--chip_top                    n/a                   n/a
+ *   |  |--dut                      94.13%                94.13% (353/375)
+ *   |     |--u_analog_bb_line_usb  87.50%                86.67% (13/15)
+ *
+ * 层级推导（前缀长度栈映射，非竖线计数）：
+ *   IMC 用 "| " 填充祖先竖线、"--" 表节点，不同层级的前缀长度不恒等
+ *   （如 "|     |       |"=17 与 "|     |           |"=21 同为 depth-6 祖先链
+ *   但竖线数不同）。按「前缀字符总长」维护严格递增栈：入栈则 depth+1，
+ *   弹出所有 >= 当前长度的祖先后挂到栈顶。
+ *
+ * 只解析 name（层级信息）+ Overall Covered（代码覆盖率百分比 + covered/total
+ * 点数比）两列；Overall Average 与 Code/Fsm/Functional 聚合列不解析。
+ * 代码覆盖率写入 metrics.line（triplet 含 covered/total 供点数比展示），
+ * 其余 metric 保持 N/A（block/branch/statements 由 detail.txt 按需补充）。
+ * 返回 { tree, metrics } 或 null（非该格式）。
+ */
+function parseImcMetricsReport(text, log) {
+  if (!text) return null;
+  var lines = text.split('\n');
+
+  // 定位表头行：以 name 开头 + Overall Average + Overall Covered
+  var headerIndex = -1;
+  for (var i = 0; i < lines.length; i++) {
+    if (/^\s*name\s/i.test(lines[i]) && /overall\s+average/i.test(lines[i]) &&
+        /overall\s+covered/i.test(lines[i])) {
+      headerIndex = i;
+      break;
+    }
+  }
+  if (headerIndex < 0) {
+    log('[parseImcMetricsReport] header (name/Overall Average/Overall Covered) not found');
+    return null;
+  }
+
+  // 名称前缀：树形装饰字符（竖线/横线/空格/反引号），即 name 列之前的所有非字母字符
+  var PREFIX_RE = /^[|+\-`\s']*/;
+  // 值 token：n/a 或 "94.13%" 或 "94.13% (353/375)"
+  var VALUE_RE = /n\/a|\d+(?:\.\d+)?%\s*(?:\(\s*\d+\s*\/\s*\d+\s*\))?/gi;
+
+  var nodes = [];
+  var prefixStack = []; // 严格递增的前缀长度栈（栈长 = depth）
+
+  for (i = headerIndex + 1; i < lines.length; i++) {
+    var line = lines[i];
+    if (!line.trim() || /^\s*[-=+_#|~`\s]+$/.test(line)) continue;
+
+    VALUE_RE.lastIndex = 0;
+    var valueMatch = VALUE_RE.exec(line);
+    if (!valueMatch) continue;
+    var rawName = line.substring(0, valueMatch.index).trim();
+    if (!rawName || /^name$/i.test(rawName)) continue;
+
+    // 收集该行的值 token（前两个 = Overall Average / Overall Covered）
+    var values = [valueMatch[0]];
+    while ((valueMatch = VALUE_RE.exec(line)) !== null) values.push(valueMatch[0]);
+    if (values.length < 2) continue;
+
+    // 解析 Overall Covered → 代码覆盖率 triplet
+    var coveredText = values[1];
+    var pctMatch = coveredText.match(/(\d+(?:\.\d+)?)%/);
+    var countMatch = coveredText.match(/\(\s*(\d+)\s*\/\s*(\d+)\s*\)/);
+    var metrics = emptyMetrics();
+    if (pctMatch || countMatch) {
+      metrics.line = {
+        percentage: pctMatch ? parseFloat(pctMatch[1]) : null,
+        covered: countMatch ? parseInt(countMatch[1], 10) : null,
+        total: countMatch ? parseInt(countMatch[2], 10) : null,
+      };
+    } // 两列均 n/a（如 tb_top/chip_top 层）→ 保持全 N/A triplet
+
+    // 层级：前缀长度弹栈 + 入栈（见函数头注释）
+    var prefixMatch = PREFIX_RE.exec(line);
+    var prefixLen = prefixMatch ? prefixMatch[0].length : 0;
+    var name = rawName.substring(prefixMatch && prefixMatch[0].length <= rawName.length ? prefixMatch[0].length : 0).trim();
+    if (!name) continue;
+    while (prefixStack.length > 0 && prefixStack[prefixStack.length - 1] >= prefixLen) {
+      prefixStack.pop();
+    }
+    nodes.push({
+      name: name,
+      depth: prefixStack.length,
+      prefixLen: prefixLen,
+      metrics: metrics,
+      children: [],
+    });
+    prefixStack.push(prefixLen);
+  }
+
+  if (nodes.length === 0) {
+    log('[parseImcMetricsReport] no data rows parsed');
+    return null;
+  }
+  var tree = buildHierarchyTree(nodes, log);
+  if (!tree) return null;
+  log('[parseImcMetricsReport] Parsed ' + nodes.length + ' nodes, root=' + tree.name);
+  return { tree: tree, metrics: nodes[0].metrics };
+}
+
 /**
  * 从一行文本中尝试提取 metric 名称和覆盖率值。
  * 返回 { key: metricKey, triplet: {percentage, covered, total} } 或 null。
@@ -1229,8 +1337,10 @@ function parseImcDetail(text, log) {
 }
 
 /**
- * 将扁平的实例节点列表（带缩进信息）构建为层级树。
- * 使用栈算法：根据缩进级别确定父子关系。
+ * 将扁平的实例节点列表（带缩进/深度信息）构建为层级树。
+ * 使用栈算法：根据深度确定父子关系，深度无上限（SoC 层级可远超 6 层）。
+ * path 用点号（.）拼接、无 top 前缀：根节点 path = 自身名（如 tb_top），
+ * 子节点 = 父.path + '.' + name（如 tb_top.chip_top.dut）。
  */
 function buildHierarchyTree(nodes, _log) {
   if (!nodes || nodes.length === 0) return null;
@@ -1257,30 +1367,24 @@ function buildHierarchyTree(nodes, _log) {
       // 顶层节点
       if (root === null) {
         root = coverageNode;
-        coverageNode.path = 'top/' + node.name;
+        coverageNode.path = node.name;
         coverageNode.depth = 0;
       } else {
-        // 如果已经有 root，将此节点作为 root 的兄弟（或子节点）
+        // 如果已经有 root，将此节点作为 root 的子节点
         // 实际上 IMC 报告通常只有一个顶层实例（如 tb_top）
         root.children.push(coverageNode);
-        coverageNode.path = root.path + '/' + node.name;
+        coverageNode.path = root.path + '.' + node.name;
         coverageNode.depth = root.depth + 1;
       }
     } else {
       // 作为栈顶节点的子节点
       var parent = stack[stack.length - 1].node;
       parent.children.push(coverageNode);
-      coverageNode.path = parent.path + '/' + node.name;
+      coverageNode.path = parent.path + '.' + node.name;
       coverageNode.depth = parent.depth + 1;
     }
 
     stack.push({ node: coverageNode, depth: coverageNode.depth });
-  }
-
-  // 如果只有一个顶层节点，将其作为 root
-  // 如果有多个顶层节点，创建一个虚拟 root
-  if (root && root.children.length > 0 && stack.length === 0) {
-    // root 已设置
   }
 
   return root;
@@ -1432,7 +1536,7 @@ function scanCovMergeDir(covMergeDir, log) {
           }
         }
         if (hasAny) {
-          var root = makeNode('top', 'top', 0, metrics, []);
+          var root = makeNode(covMergeDir ? 'cov_merge' : 'top', 'cov_merge', 0, metrics, []);
           return {
             sessionId: '',
             source: { covMergeDir: covMergeDir, edaTool: 'unknown', reportGeneratedAt: 0 },
@@ -1715,6 +1819,8 @@ async function parse(projectRoot, sessionId, reportDir, options) {
   }
 
   // 2. 尝试读取文本报告
+  //    分层解析（SoC 代码覆盖率重构）：快速导入层 imc/vcover 只生成 metrics.txt，
+  //    vcs-urg 只生成 session.xml；summary.txt/detail.txt 由 parseDetails 按需生成。
   var summaryText = '';
   var detailText = '';
 
@@ -1722,23 +1828,31 @@ async function parse(projectRoot, sessionId, reportDir, options) {
   var detailPath = join(reportDir, 'detail.txt');
   var metricsPath = join(reportDir, 'metrics.txt');
 
+  // 分层解析：快速导入层跳过 detail/grade/bins/csv（仅快速层报告）
+  if (summaryOnly) {
+    log('[parse] summaryOnly mode — skipping detail/grade/bins/csv');
+  }
+
   // 使用 safeReadTextFile 安全读取，处理 IMC 可能生成目录而非文件的情况
   summaryText = safeReadTextFile(summaryPath, log, 'summary.txt');
   if (summaryText) {
     log('summary.txt first 500 chars:\n' + summaryText.substring(0, 500));
   }
 
-  // 分层解析：summaryOnly 模式跳过 detail/metrics/grade/bins/csv
+  // metrics.txt：imc/vcover 快速导入层的首选数据源（层级树 + 代码覆盖率点数比）
+  var metricsText = '';
+  if (edaTool === 'imc' || edaTool === 'vcover') {
+    metricsText = safeReadTextFile(metricsPath, log, 'metrics.txt');
+    if (metricsText) {
+      log('metrics.txt first 500 chars:\n' + metricsText.substring(0, 500));
+    }
+  }
+
   if (!summaryOnly) {
     detailText = safeReadTextFile(detailPath, log, 'detail.txt');
     if (detailText) {
       log('detail.txt first 500 chars:\n' + detailText.substring(0, 500));
     }
-
-    // metrics.txt 读取（仅用于 debug 日志，IMC report_metrics 可能生成目录）
-    safeReadTextFile(metricsPath, log, 'metrics.txt');
-  } else {
-    log('[parse] summaryOnly mode — skipping detail/metrics/grade/bins/csv');
   }
 
   // 3. 解析文本报告
@@ -1784,21 +1898,33 @@ async function parse(projectRoot, sessionId, reportDir, options) {
         );
       }
     }
-  } else if (summaryText) {
-    if (edaTool === 'imc') {
-      log('[parse] Using IMC summary parser');
-      summaryHierarchy = parseImcHierarchySummary(summaryText, log);
-      summaryMetrics = summaryHierarchy ? summaryHierarchy.metrics : parseImcSummary(summaryText, log);
-    } else {
-      log('[parse] Unknown EDA tool, trying all parsers');
-      summaryMetrics = parseImcSummary(summaryText, log);
-      if (!summaryMetrics) {
-        var urgResult2 = parseUrgReport(summaryText, log);
-        summaryMetrics = urgResult2.summary;
+  } else if (edaTool === 'imc' || edaTool === 'vcover') {
+    // 快速导入层首选 metrics.txt（层级树 + Overall Covered 代码覆盖率点数比）；
+    // 降级 summary.txt（旧 session 目录 / 用户自定义命令生成的层级 summary 表）
+    if (metricsText) {
+      log('[parse] Using IMC metrics.txt parser (quick import layer)');
+      var metricsResult = parseImcMetricsReport(metricsText, log);
+      if (metricsResult) {
+        summaryHierarchy = { tree: metricsResult.tree };
+        summaryMetrics = metricsResult.metrics;
+      } else {
+        log('[parse] metrics.txt parse failed, falling back to summary.txt');
       }
     }
+    if (!summaryHierarchy && summaryText) {
+      log('[parse] Using IMC summary parser (fallback)');
+      summaryHierarchy = parseImcHierarchySummary(summaryText, log);
+      summaryMetrics = summaryHierarchy ? summaryHierarchy.metrics : parseImcSummary(summaryText, log);
+    }
+  } else if (summaryText) {
+    log('[parse] Unknown EDA tool, trying all parsers');
+    summaryMetrics = parseImcSummary(summaryText, log);
+    if (!summaryMetrics) {
+      var urgResult2 = parseUrgReport(summaryText, log);
+      summaryMetrics = urgResult2.summary;
+    }
   } else {
-    log('[parse] No summary text to parse');
+    log('[parse] No quick-layer report to parse');
   }
 
   if (detailText) {
@@ -1878,14 +2004,14 @@ async function parse(projectRoot, sessionId, reportDir, options) {
     if (detailResult.nodes && detailResult.nodes.length > 0) {
       for (var i = 0; i < detailResult.nodes.length; i++) {
         var node = detailResult.nodes[i];
-        children.push(makeNode(node.name, 'top/' + node.name, 1, node.metrics, []));
+        children.push(makeNode(node.name, node.name, 1, node.metrics, []));
       }
       log('[parse] Using flat nodes as children, count=' + children.length);
     } else {
       log('[parse] No module nodes, returning root only with summary metrics');
     }
 
-    root = makeNode('top', 'top', 0, rootMetrics, children);
+    root = makeNode('dut', 'dut', 0, rootMetrics, children);
   }
 
   log('=== Parse End ===');
@@ -1931,6 +2057,7 @@ module.exports = {
   manifest: MANIFEST,
   parse: parse,
   // 导出内部函数供按需调用
+  parseImcMetricsReport: parseImcMetricsReport,
   parseImcHierarchySummary: parseImcHierarchySummary,
   parseImcSummary: parseImcSummary,
   parseImcDetail: parseImcDetail,
