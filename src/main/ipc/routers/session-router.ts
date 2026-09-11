@@ -26,6 +26,7 @@ import {
   updateSessionActivity,
   updateSessionContextUsage,
   updateSessionEngineId,
+  isCwdAccessible,
   type PersistedSession,
 } from '../../agent/session-persistence';
 import { discoverSkills, readSkillContent, resolveSkillUriPath } from '../../agent/skill-discovery';
@@ -36,6 +37,7 @@ import type { ErrorType, ThinkingLevelSetting } from '@shared/types';
 import { normalizeThinkingLevelSetting } from '@shared/types';
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
 import type { AskAnswer } from '@shared/ask-types';
+import type { SeedHistoryMessage } from '../../agent/types';
 
 /**
  * In-flight holistic model swaps keyed by the ORIGINAL runtime session ID.
@@ -145,10 +147,14 @@ async function performHolisticSwap(input: {
   // Recreate with the new credential's config, resuming the conversation.
   // If modelId is not supplied, createSession will auto-fetch the
   // credential's model list and pick the first one.
-  console.log(`[router:session.setModel] recreating session with providerId=${input.providerId}, model=${input.modelId ?? '(auto)'}`);
+  //
+  // issue 07: 重建使用持久化 cwd（引擎据此定位原生 session 的 cwd bucket），
+  // 不可访问时回退项目根；持久化 cwd 绝不被覆写为项目根（不自动重绑定）。
+  const swapCwd = await resolveRestoreCwd(project.rootPath, persistedSessionId);
+  console.log(`[router:session.setModel] recreating session with providerId=${input.providerId}, model=${input.modelId ?? '(auto)'}, cwd=${swapCwd}`);
   const ctx = await createSessionContext({
     projectId: existing.projectId,
-    cwd: project.rootPath,
+    cwd: swapCwd,
     providerId: input.providerId,
     model: input.modelId,
     resumeSessionId: engineSessionId,
@@ -168,7 +174,7 @@ async function performHolisticSwap(input: {
       ...sessions[idx],
       engine: newEngine,
       engineSessionId: newEngineSessionId,
-      cwd: project.rootPath,
+      cwd: swapCwd,
       lastActivityAt: Date.now(),
       model: {
         provider: provider ?? '',
@@ -191,6 +197,42 @@ async function performHolisticSwap(input: {
       providerId: input.providerId,
     },
   };
+}
+
+/**
+ * Seed transcript for a persisted session, built from the stored UI messages.
+ * The runner uses it to rebuild engine context when the native session file is
+ * missing, corrupt, or only covers a tail of the conversation (issue 07), and
+ * to validate the first user message before resuming natively.
+ */
+async function buildSeedHistory(projectRoot: string, sessionId: string): Promise<SeedHistoryMessage[]> {
+  const storedMessages = await loadStoredMessages(projectRoot, sessionId);
+  return storedMessages
+    .filter((m): m is { role: 'user' | 'assistant'; content: string; timestamp: number } => {
+      const r = m as Record<string, unknown>;
+      return (
+        (r.role === 'user' || r.role === 'assistant') &&
+        typeof r.content === 'string' &&
+        r.content.trim().length > 0 &&
+        typeof r.timestamp === 'number'
+      );
+    })
+    .map((m) => ({ role: m.role, content: m.content, timestamp: m.timestamp }));
+}
+
+/**
+ * Resolve the working directory a persisted session must run in (issue 07):
+ * recovery uses the persisted creation-time cwd so the engine locates its
+ * native session in the right cwd bucket. Falls back to the project root when
+ * the record has no cwd or the persisted cwd is no longer accessible.
+ */
+async function resolveRestoreCwd(projectRoot: string, persistedSessionId: string): Promise<string> {
+  const sessions = await loadSessions(projectRoot);
+  const record = sessions.find((s) => s.sessionId === persistedSessionId);
+  if (record?.cwd && isCwdAccessible(record.cwd)) {
+    return record.cwd;
+  }
+  return projectRoot;
 }
 
 export const sessionRouter = t.router({
@@ -714,7 +756,7 @@ export const sessionRouter = t.router({
     .mutation(async ({ input }) => {
       const project = requireProject(input.projectId);
 
-      // Load persisted session to restore model info and omp sessionId
+      // Load persisted session to restore model info, engine and engineSessionId
       const persistedSessions = await loadSessions(project.rootPath);
       const persisted = persistedSessions.find(
         (s) => s.sessionId === input.sessionId && s.projectId === input.projectId,
@@ -723,30 +765,34 @@ export const sessionRouter = t.router({
         throw new TRPCError({ code: 'NOT_FOUND', message: `Session not found in project: ${input.sessionId}` });
       }
 
-      // Build a seed transcript from the stored UI messages. The runner uses
-      // it to rebuild engine context when the omp JSONL is missing or only
-      // covers a tail of the conversation (amnesia recovery).
-      const storedMessages = await loadStoredMessages(project.rootPath, input.sessionId);
-      const seedHistory = storedMessages
-        .filter((m): m is { role: 'user' | 'assistant'; content: string; timestamp: number } => {
-          const r = m as Record<string, unknown>;
-          return (
-            (r.role === 'user' || r.role === 'assistant') &&
-            typeof r.content === 'string' &&
-            r.content.trim().length > 0 &&
-            typeof r.timestamp === 'number'
-          );
-        })
-        .map((m) => ({ role: m.role, content: m.content, timestamp: m.timestamp }));
+      // issue 07: 恢复使用持久化 cwd（创建时目录，引擎据此进入正确的原生
+      // session cwd bucket）。目录不存在或不可访问时只能查看 transcript ——
+      // 不创建运行时会话；用户在 UI 明确选择新 cwd（rebindCwd）后才能重建。
+      const persistedCwd = persisted.cwd ?? project.rootPath;
+      if (!isCwdAccessible(persistedCwd)) {
+        console.warn(
+          `[router:session.restore] persisted cwd not accessible: ${persistedCwd} — degrading to transcript-only view`,
+        );
+        return {
+          sessionId: null,
+          degraded: { reason: 'cwd-unavailable' as const, cwd: persistedCwd },
+          name: input.name ?? persisted.name,
+          model: persisted.model,
+        };
+      }
+
+      const seedHistory = await buildSeedHistory(project.rootPath, input.sessionId);
 
       const ctx = await createSessionContext({
         projectId: input.projectId,
-        cwd: input.cwd,
+        cwd: persistedCwd,
         providerId: input.providerId,
         model: persisted?.model?.id,
         persistedModel: persisted?.model,
-        // Use the omp sessionId for resume — this is what the runner matches against
-        resumeSessionId: persisted.ompSessionId ?? input.sessionId,
+        // Resume by the persisted engine session id — the runner locates the
+        // native session file in the persisted cwd bucket (issue 07). Legacy
+        // records without one fall back to the runtime session id (rebuild path).
+        resumeSessionId: persisted.engineSessionId ?? input.sessionId,
         seedHistory,
         persistedSessionId: input.sessionId,
         includeCaseStats: true,
@@ -773,7 +819,8 @@ export const sessionRouter = t.router({
           ...sessions[idx],
           engine,
           engineSessionId,
-          cwd: input.cwd,
+          // 重建后 engineSessionId 已更新；cwd 始终保持持久化值（不覆写为项目根）
+          cwd: persistedCwd,
           lastActivityAt: Date.now(),
           model: resolvedModel,
         };
@@ -786,6 +833,88 @@ export const sessionRouter = t.router({
         sessionId,
         name: input.name ?? `Session ${input.sessionId.slice(-6)}`,
         model: resolvedModel,
+      };
+    }),
+
+  /**
+   * Rebind a session to a user-selected working directory (issue 07).
+   *
+   * The explicit user choice required before a session whose persisted cwd is
+   * inaccessible can be rebuilt and execute tools again. The old native
+   * session file is NOT rebound: the new cwd bucket cannot contain it, so the
+   * runner rebuilds from the UI transcript — a fresh engine session in a new
+   * bucket (project move / rename semantics, no silent re-parenting).
+   */
+  rebindCwd: t.procedure
+    .input((raw): { projectId: string; sessionId: string; newCwd: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.sessionId !== 'string' || typeof r.newCwd !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId, sessionId and newCwd are required' });
+      }
+      return { projectId: r.projectId, sessionId: r.sessionId, newCwd: r.newCwd };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+
+      if (!isCwdAccessible(input.newCwd)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `New working directory is not accessible: ${input.newCwd}`,
+        });
+      }
+
+      const persistedSessions = await loadSessions(project.rootPath);
+      const persisted = persistedSessions.find(
+        (s) => s.sessionId === input.sessionId && s.projectId === input.projectId,
+      );
+      if (!persisted) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: `Session not found in project: ${input.sessionId}` });
+      }
+
+      const seedHistory = await buildSeedHistory(project.rootPath, input.sessionId);
+
+      const ctx = await createSessionContext({
+        projectId: input.projectId,
+        cwd: input.newCwd,
+        providerId: persisted.model?.providerId,
+        model: persisted.model?.id,
+        persistedModel: persisted.model,
+        // 旧原生 session 在旧 bucket 中 —— 新 bucket 找不到即由 runner 重建
+        resumeSessionId: persisted.engineSessionId ?? input.sessionId,
+        seedHistory,
+        persistedSessionId: input.sessionId,
+        includeCaseStats: true,
+      });
+      const { sessionId, provider, model: resolvedModelId, providerId } = ctx;
+
+      const engineSessionId = sessionManager.getEngineSessionId(sessionId);
+      const engine = sessionManager.getEngine(sessionId);
+      const resolvedModel = provider && resolvedModelId
+        ? { provider, id: resolvedModelId, name: persisted.model?.name ?? resolvedModelId, providerId }
+        : persisted.model;
+
+      const idx = persistedSessions.findIndex((s) => s.sessionId === input.sessionId);
+      if (idx >= 0) {
+        persistedSessions[idx] = {
+          ...persistedSessions[idx],
+          engine,
+          engineSessionId,
+          cwd: input.newCwd,
+          lastActivityAt: Date.now(),
+          model: resolvedModel,
+        };
+        await saveSessions(project.rootPath, persistedSessions);
+      }
+
+      console.log(
+        `[router:session.rebindCwd] session ${input.sessionId} rebound to ${input.newCwd} (engineSessionId=${engineSessionId ?? 'none'})`,
+      );
+
+      return {
+        sessionId,
+        name: persisted.name,
+        model: resolvedModel,
+        rebound: true,
       };
     }),
 

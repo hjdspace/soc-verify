@@ -195,6 +195,11 @@ export interface SessionCoreState {
   fetchHistorySessions: (projectId: string) => Promise<void>;
   loadHistorySession: (historySession: HistorySession, projectId: string, cwd: string) => Promise<void>;
   deleteHistorySession: (sessionId: string, projectId: string) => Promise<void>;
+  /**
+   * issue 07：为 transcript-only 会话显式重绑工作目录并重建运行时会话。
+   * 成功后清除 transcriptOnlyCwd 并返回新的 runtime session id。
+   */
+  rebindSessionCwd: (sessionId: string, newCwd: string) => Promise<string>;
 }
 
 // ─── cwd changed 监听器 ───────────────────────────────────
@@ -503,6 +508,21 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
           approvalMode: latest.approvalMode,
           thinkingLevel: latest.thinkingLevel,
         });
+
+      // issue 07：持久化 cwd 不可访问 —— 后端拒绝创建运行时会话，只能查看
+      // transcript。标记会话并在发送时给出明确指引（用户 rebind 后恢复）。
+      if (result.sessionId === null) {
+        const degradedCwd = (result as { degraded?: { cwd?: string } }).degraded?.cwd ?? cwd;
+        set((s) => ({
+          sessions: s.sessions.map((sess) =>
+            sess.id === latest.id ? { ...sess, transcriptOnlyCwd: degradedCwd } : sess,
+          ),
+        }));
+        throw new Error(
+          `会话原工作目录（${degradedCwd}）已不可访问，当前仅可查看历史记录。` +
+          '请选择新的工作目录（重新绑定）后才能继续对话。',
+        );
+      }
 
       const runtimeSessionId = result.sessionId;
       const persistedSessionId = latest.persistedSessionId ?? runtimeSessionId;
@@ -917,6 +937,51 @@ export const useSessionCoreStore = create<SessionCoreState>((set, get) => ({
       useToastStore.getState().success('历史会话已删除');
     } catch (err) {
       useToastStore.getState().error('删除历史会话失败', tRPCError(err));
+    }
+  },
+
+  // ─── issue 07：显式重绑工作目录（transcript-only 会话恢复入口） ──
+
+  rebindSessionCwd: async (sessionId, newCwd) => {
+    const session = get().sessions.find((s) => sessionMatchesId(s, sessionId));
+    if (!session?.persistedSessionId) {
+      throw new Error(`Session not found or has no persisted record: ${sessionId}`);
+    }
+    // 后端 rebindCwd 会销毁旧运行时会话归属并重建；本地运行时句柄先失效
+    const runtimeSessionId = session.runtimeSessionId;
+    if (runtimeSessionId) {
+      void trpc.session.destroy.mutate({ sessionId: runtimeSessionId }).catch(() => {});
+    }
+    set((s) => ({
+      sessions: s.sessions.map((sess) =>
+        sessionMatchesId(sess, sessionId) ? { ...sess, runtimeSessionId: undefined } : sess,
+      ),
+    }));
+
+    try {
+      const result = await trpc.session.rebindCwd.mutate({
+        projectId: session.projectId,
+        sessionId: session.persistedSessionId,
+        newCwd,
+      });
+      set((s) => ({
+        sessions: s.sessions.map((sess) =>
+          sessionMatchesId(sess, sessionId)
+            ? {
+              ...sess,
+              runtimeSessionId: result.sessionId,
+              cwd: newCwd,
+              transcriptOnlyCwd: undefined,
+              model: result.model ?? sess.model,
+            }
+            : sess,
+        ),
+      }));
+      useToastStore.getState().success('工作目录已重新绑定，可以继续对话');
+      return result.sessionId;
+    } catch (err) {
+      useToastStore.getState().error('重新绑定工作目录失败', tRPCError(err));
+      throw err;
     }
   },
 }));

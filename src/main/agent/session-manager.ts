@@ -566,8 +566,13 @@ export class SessionManagerImpl extends EventEmitter {
       await writeFile(join(runtimeDir, 'models.yml'), modelsJson, 'utf-8');
       console.log(`[agent:session:${sessionId}] models config: ${modelsJson.slice(0, 500)}`);
       console.log(`[agent:session:${sessionId}] runtimeDir: ${runtimeDir}`);
-      env.PI_CODING_AGENT_DIR = runtimeDir;
-      env.XDG_STATE_HOME = join(runtimeDir, 'state');
+      // issue 07: pi 引擎不劫持 PI_CODING_AGENT_DIR —— 原生 session 必须落在
+      // 用户级 canonical cwd bucket（临时 runtimeDir 会在会话销毁时删除）。
+      // pi 的模型配置经 InitConfig.modelsPath 显式注入；omp 保持原行为。
+      if (engine !== 'pi') {
+        env.PI_CODING_AGENT_DIR = runtimeDir;
+        env.XDG_STATE_HOME = join(runtimeDir, 'state');
+      }
       env[OPENAI_COMPATIBLE_API_KEY_ENV] = apiKeyValue;
       // Also set OPENAI_API_KEY / OPENAI_BASE_URL so the omp engine's
       // openai-completions provider can resolve the key via $env fallback
@@ -596,8 +601,10 @@ export class SessionManagerImpl extends EventEmitter {
       await writeFile(join(runtimeDir, 'models.json'), modelsJson, 'utf-8');
       await writeFile(join(runtimeDir, 'models.yml'), modelsJson, 'utf-8');
       console.log(`[agent:session:${sessionId}] models.yml (override): ${modelsJson.slice(0, 500)}`);
-      env.PI_CODING_AGENT_DIR = runtimeDir;
-      env.XDG_STATE_HOME = join(runtimeDir, 'state');
+      if (engine !== 'pi') {
+        env.PI_CODING_AGENT_DIR = runtimeDir;
+        env.XDG_STATE_HOME = join(runtimeDir, 'state');
+      }
     }
 
     // Ensure ~/.omp/natives/ exists so the omp engine's native-addon search
@@ -712,6 +719,11 @@ export class SessionManagerImpl extends EventEmitter {
       additionalExtensionPaths,
       approvalMode: options.approvalMode,
       thinkingLevel: options.thinkingLevel,
+      // pi 引擎：独立 models.json（issue 07）—— session 归用户级目录，
+      // 模型配置归临时 runtimeDir，二者经 modelsPath 解耦。
+      ...(engine === 'pi' && runtimeDir
+        ? { modelsPath: join(runtimeDir, 'models.json') }
+        : {}),
       trustedMcpServers: trustStore?.getTrustedMcpServers(options.cwd),
       trustedProjectDirs: trustStore?.getTrustedProjectDirs(options.cwd),
     };

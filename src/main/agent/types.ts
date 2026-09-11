@@ -58,6 +58,12 @@ export interface InitConfig {
    * 仅当值有实际语义（非 'default'）时 runner 才会写入 sessionOptions。
    */
   thinkingLevel?: ThinkingLevelSetting;
+  /**
+   * 独立 models.json 路径（仅 pi 引擎消费，issue 07）。pi 引擎不劫持
+   * PI_CODING_AGENT_DIR（原生 session 必须落在用户级 canonical cwd bucket），
+   * 模型配置改由 runner 以 ModelRuntime.create({ modelsPath }) 显式注入。
+   */
+  modelsPath?: string;
 }
 
 export interface CustomToolDefinition {

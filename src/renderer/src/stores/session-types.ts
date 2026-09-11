@@ -162,6 +162,11 @@ export interface SessionEntry {
   runtimeSessionId?: string;
   /** The original persisted sessionId — used to match against history entries */
   persistedSessionId?: string;
+  /**
+   * 持久化 cwd 不可访问（issue 07）：会话只能查看 transcript，Agent 不可用。
+   * 恢复时由后端 degraded 结果置位；用户经 rebindSessionCwd 选择新 cwd 后清除。
+   */
+  transcriptOnlyCwd?: string;
   projectId: string;
   /** Project root used when a lazy UI session needs to start/restore its agent. */
   cwd?: string;

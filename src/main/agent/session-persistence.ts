@@ -1,5 +1,5 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { accessSync, existsSync, constants as accessConstants, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ContextBreakdown, ContextUsage } from '@shared/context-management';
 import type { AgentEngine } from '@shared/agent-events';
@@ -62,6 +62,31 @@ function stripLegacyFields(session: PersistedSession): PersistedSession {
   return rest;
 }
 
+/** True when the raw record still carries legacy-only fields or missing engine-neutral ones. */
+function isLegacyRecord(raw: LegacyPersistedSession): boolean {
+  return (
+    raw.ompSessionId !== undefined ||
+    raw.engine === undefined ||
+    raw.cwd === undefined
+  );
+}
+
+/**
+ * Whether a directory is usable as a session working directory (issue 07).
+ * Exists + is a directory + readable. Used to gate session restore: a
+ * persisted cwd that no longer exists must degrade to transcript-only viewing
+ * instead of silently running the agent in a broken directory.
+ */
+export function isCwdAccessible(cwd: string): boolean {
+  try {
+    if (!statSync(cwd).isDirectory()) return false;
+    accessSync(cwd, accessConstants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Manages persistence of AI session metadata to .socverify/sessions.json.
  * This allows sessions to be restored when a project is reopened.
@@ -87,7 +112,18 @@ export async function loadSessions(
     const content = await readFile(filePath, 'utf-8');
     const parsed = JSON.parse(content);
     if (Array.isArray(parsed)) {
-      return (parsed as LegacyPersistedSession[]).map((raw) => normalizePersistedSession(raw, projectRoot));
+      const rawRecords = parsed as LegacyPersistedSession[];
+      const normalized = rawRecords.map((raw) => normalizePersistedSession(raw, projectRoot));
+
+      // issue 07: 历史 omp 字段只读兼容一次 —— 首次 load 发现 legacy 字段
+      // （ompSessionId / 缺 engine / 缺 cwd）即写回 engine-neutral 形状，
+      // 后续加载不再依赖 legacy 语义。写回失败不影响本次读取结果。
+      if (rawRecords.some(isLegacyRecord)) {
+        saveSessions(projectRoot, normalized).catch((err: unknown) => {
+          console.warn(`[session-persistence] legacy migration write-back failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+      return normalized;
     }
     return [];
   } catch {

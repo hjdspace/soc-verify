@@ -69,7 +69,9 @@ const { MockAgentClient } = vi.hoisted(() => {
     onEvent(listener: (event: unknown) => void) { this.eventListeners.push(listener); }
 
     async start() { this.started = true; }
-    async init(_config: unknown) { return this.initResult; }
+    async init(config: unknown) { this.lastInitConfig = config; return this.initResult; }
+    /** Captures the init config so tests can assert on runner instructions. */
+    lastInitConfig: unknown = undefined;
     async prompt(message: string, images?: unknown) { this.lastPrompt = message; this.lastImages = images; }
     async abort() { this.stop(); }
     async steer(_message: string) {}
@@ -766,5 +768,66 @@ describe('SessionManager — credential tracking for holistic-swap no-op detecti
     // Same providerId but a rotated API key must produce a different
     // fingerprint so setModel still performs a real destroy/recreate.
     expect(before).not.toBe(after);
+  });
+});
+
+// ─── issue 07：pi 引擎 agentDir 解耦（原生 session 归用户级目录） ───
+
+describe('SessionManager — pi engine agentDir decoupling (issue 07)', () => {
+  let manager: InstanceType<typeof SessionManagerImpl>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    manager = new SessionManagerImpl(60_000);
+  });
+
+  afterEach(async () => {
+    await manager.destroyAll();
+  });
+
+  async function createPiSession(): Promise<{ id: string; client: InstanceType<typeof MockAgentClient> }> {
+    const id = await manager.createSession({
+      projectId: 'proj_pi',
+      cwd: '/tmp/proj-dv',
+      provider: 'socverify-openai-compatible',
+      model: 'glm-5',
+      apiKey: 'sk-pi',
+      baseUrl: 'http://llm.local/v1',
+      enableMCP: false,
+      engine: 'pi',
+    });
+    const client = manager.getClient(id) as unknown as InstanceType<typeof MockAgentClient>;
+    return { id, client };
+  }
+
+  it('pi 会话不设置 PI_CODING_AGENT_DIR（原生 session 落在用户级 canonical bucket）', async () => {
+    const { client } = await createPiSession();
+
+    expect(client.capturedEnv?.PI_CODING_AGENT_DIR).toBeUndefined();
+  });
+
+  it('pi 会话通过 initConfig.modelsPath 获得独立 models.json（模型配置隔离保留）', async () => {
+    const { client } = await createPiSession();
+
+    const initConfig = client.lastInitConfig as { modelsPath?: string };
+    expect(initConfig.modelsPath).toBeDefined();
+    expect(initConfig.modelsPath).toContain('models.json');
+  });
+
+  it('omp 会话保持 PI_CODING_AGENT_DIR = runtimeDir（行为不变）', async () => {
+    const id = await manager.createSession({
+      projectId: 'proj_omp',
+      cwd: '/tmp/test-omp',
+      provider: 'test-provider',
+      model: 'test-model',
+      apiKey: 'test-key',
+      baseUrl: 'http://localhost:1234/v1',
+      enableMCP: false,
+    });
+    const client = manager.getClient(id) as unknown as InstanceType<typeof MockAgentClient>;
+
+    expect(client.capturedEnv?.PI_CODING_AGENT_DIR).toBeDefined();
+    const initConfig = client.lastInitConfig as { modelsPath?: string };
+    expect(initConfig.modelsPath).toBeUndefined();
   });
 });
