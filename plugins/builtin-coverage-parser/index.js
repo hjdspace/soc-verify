@@ -1574,6 +1574,124 @@ function scanCovMergeDir(covMergeDir, log) {
   }
 }
 
+// ─── IMC detail.txt instance 级解析（block/branch/statement 覆盖率）──────
+
+/**
+ * 解析 imc `report -detail -all` 生成的 detail.txt（Covered+Uncovered+Excluded+UNR
+ * Block Detail Report, Instance Based），提取每个 instance 的模块覆盖率关键信息：
+ *
+ *   - Instance name（层级路径）、Type name（模块名）、File name（RTL 文件路径）
+ *   - blocks / branches / statements 的 covered/total 与百分比
+ *
+ * 格式（每个 instance 一个段，段头字段行后跟块明细表）：
+ *   Instance name: tb_top.chip_top.dut.u_analog_bb_line_usb
+ *   Type name: analog_bb_line_usb
+ *   File name: /tech_phys/.../analog_bb_line_usb.v
+ *   Number of covered blocks: 3 of 3
+ *   ...
+ *   Number of covered branches: 2 of 2
+ *   ...
+ *   Number of covered statements: 2 of 2
+ *   ...
+ *   Count   Block #Stmt Line Kind ... Source Code
+ *   1       1     0     24 ternary ...（块明细行，不提取）
+ *
+ * 性能设计（SoC 项目 detail.txt 可达 300 万+ 行）：
+ *   - readFileSync 整体读入 Buffer（不逐行 split，避免千万级字符串数组）
+ *   - buf.indexOf('Instance name:') 顺序扫描定位段头，段内只截取头部约 2KB
+ *     切片做字段提取——块明细行（占文件 99%+）整体跳过，零正则扫描
+ *   - 字段行匹配用单遍 indexOf + startsWith，"N of M" 用一个轻量数字提取
+ *   - 整体 O(文件字节数) 单遍扫描
+ *
+ * 返回 { instances, instanceCount, parseMs }；文件不存在抛 Error（fail-closed）。
+ */
+function parseDetailReport(detailPath) {
+  var start = Date.now();
+  if (!existsSync(detailPath)) {
+    throw new Error('detail.txt not found: ' + detailPath);
+  }
+  var buf = readFileSync(detailPath); // Buffer：二进制安全，不对整文件做字符串解码
+
+  var SEGMENT_HEAD = 'Instance name:';
+  var instances = [];
+  var pos = 0;
+  // 段头字段最多延伸到 "Number of unreachable statements" 行（22 个字段行 + Include Files），
+  // 实际截取 4KB 足够覆盖；块明细行全部位于切片之外。
+  var SEGMENT_SLICE = 4096;
+
+  while (true) {
+    var segStart = buf.indexOf(SEGMENT_HEAD, pos);
+    if (segStart < 0) break;
+    // 段尾 = 下一个段头（或文件尾）；字段区取段头起 4KB 与段尾的较小值
+    var segEnd = buf.indexOf(SEGMENT_HEAD, segStart + SEGMENT_HEAD.length);
+    if (segEnd < 0) segEnd = buf.length;
+    var fieldLimit = Math.min(segStart + SEGMENT_SLICE, segEnd);
+    var head = buf.toString('utf-8', segStart, fieldLimit);
+
+    var inst = parseDetailSegmentHead(head);
+    if (inst) instances.push(inst);
+    pos = segEnd;
+  }
+
+  return {
+    instances: instances,
+    instanceCount: instances.length,
+    parseMs: Date.now() - start,
+  };
+}
+
+/** detail.txt 段头字段值（trim 后非空才返回） */
+function detailField(text, key) {
+  var idx = text.indexOf(key);
+  if (idx < 0) return '';
+  var valStart = idx + key.length;
+  var valEnd = text.indexOf('\n', valStart);
+  if (valEnd < 0) valEnd = text.length;
+  return text.substring(valStart, valEnd).trim();
+}
+
+/**
+ * "Number of covered blocks: 3 of 3" → { covered: 3, total: 3 }。
+ * "N of M" 中 M 与 covered 行的 total 一致；缺失（异常格式）返回 null，
+ * 该 metric 在结果中标记为 covered=0/total=0（fail-closed 不猜测）。
+ */
+function parseOfCount(text, key) {
+  var idx = text.indexOf(key);
+  if (idx < 0) return null;
+  var lineEnd = text.indexOf('\n', idx);
+  if (lineEnd < 0) lineEnd = text.length;
+  var m = text.substring(idx, lineEnd).match(/:\s*(\d+)\s+of\s+(\d+)/);
+  if (!m) return null;
+  return { covered: parseInt(m[1], 10), total: parseInt(m[2], 10) };
+}
+
+function pct(covered, total) {
+  return total > 0 ? (covered / total) * 100 : 100;
+}
+
+/** 解析单个段头切片：返回 instance 记录或 null（缺 Instance name 行） */
+function parseDetailSegmentHead(head) {
+  var instance = detailField(head, 'Instance name:');
+  if (!instance) return null;
+  var blocks = parseOfCount(head, 'Number of covered blocks:');
+  var branches = parseOfCount(head, 'Number of covered branches:');
+  var statements = parseOfCount(head, 'Number of covered statements:');
+  return {
+    instance: instance,
+    type: detailField(head, 'Type name:'),
+    file: detailField(head, 'File name:'),
+    blocks: blocks
+      ? { covered: blocks.covered, total: blocks.total, percentage: pct(blocks.covered, blocks.total) }
+      : { covered: 0, total: 0, percentage: null },
+    branches: branches
+      ? { covered: branches.covered, total: branches.total, percentage: pct(branches.covered, branches.total) }
+      : { covered: 0, total: 0, percentage: null },
+    statements: statements
+      ? { covered: statements.covered, total: statements.total, percentage: pct(statements.covered, statements.total) }
+      : { covered: 0, total: 0, percentage: null },
+  };
+}
+
 // ─── 测试用例贡献度报告解析 ──────────────────────────────────
 
 /**
@@ -2061,6 +2179,7 @@ module.exports = {
   parseImcHierarchySummary: parseImcHierarchySummary,
   parseImcSummary: parseImcSummary,
   parseImcDetail: parseImcDetail,
+  parseDetailReport: parseDetailReport,
   parseGradeReport: parseGradeReport,
   parseBinsReport: parseBinsReport,
   readCsvData: readCsvData,
