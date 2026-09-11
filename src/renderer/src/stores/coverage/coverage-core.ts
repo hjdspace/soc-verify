@@ -95,6 +95,10 @@ type CoverageCoreState = {
   detailProgressListenerRegistered: boolean;
   /** 当前 session 是否已解析详细报告（summaryOnly=false） */
   detailParsed: boolean;
+  /** 当前 session 是否已解析 detail.txt（instance 级 blocks/branches/statements） */
+  detailMetricsParsed: boolean;
+  /** 是否正在解析 detail.txt */
+  detailMetricsParsing: boolean;
 
   // ─── 覆盖率深度分析（urg-grade / imc functional detail / CSV） ─
   /** 测试用例贡献度排名 */
@@ -135,6 +139,9 @@ type CoverageCoreState = {
   handleDetailProgress: (event: DetailProgressEvent) => void;
   clearDetailParseProgress: () => void;
 
+  // ─── detail.txt 解析动作（instance 级 blocks/branches/statements） ──
+  parseDetailMetrics: (projectId: string, sessionId: string) => Promise<boolean>;
+
   // ─── 覆盖率深度分析动作 ────────────────────────────────────
   loadTestContributions: (projectId: string, sessionId?: string) => Promise<void>;
   loadUncovered: (projectId: string, sessionId?: string, metric?: CoverageMetric) => Promise<void>;
@@ -172,6 +179,8 @@ export const useCoverageCoreStore = create<CoverageCoreState>((set, get) => ({
   showDetailParseProgress: false,
   detailProgressListenerRegistered: false,
   detailParsed: false,
+  detailMetricsParsed: false,
+  detailMetricsParsing: false,
 
   // ─── 覆盖率深度分析初始状态 ────────────────────────────────
   testContributions: [],
@@ -211,6 +220,8 @@ export const useCoverageCoreStore = create<CoverageCoreState>((set, get) => ({
         loading: false,
         // 根据 summaryOnly 标记判断是否已解析详细报告
         detailParsed: result.tree.summaryOnly === false,
+        // detail.txt 摘要标记（解析过 detail.txt 才存在）
+        detailMetricsParsed: result.tree.detail !== undefined,
       });
       // 跨 store：targets 属于 coverage-gaps store
       useCoverageGapsStore.getState().setTargetsState(result.targets);
@@ -445,6 +456,27 @@ export const useCoverageCoreStore = create<CoverageCoreState>((set, get) => ({
     detailParseStepLog: [],
     showDetailParseProgress: false,
   }),
+
+  // ─── detail.txt 解析实现（instance 级 blocks/branches/statements） ──
+
+  parseDetailMetrics: async (projectId, sessionId) => {
+    set({ detailMetricsParsing: true });
+    try {
+      const result = await trpc.coverage.parseDetailMetrics.mutate({ projectId, sessionId });
+      set({ detailMetricsParsing: false, detailMetricsParsed: true });
+      // detail 数据已合并进树缓存（statements→line / branches→branch），刷新树
+      await get().loadTree(projectId, sessionId);
+      useToastStore.getState().success(
+        'detail 覆盖率解析完成',
+        `${result.instanceCount} 个 instance（blocks/branches/statements 已合并进树）`,
+      );
+      return true;
+    } catch (err) {
+      set({ detailMetricsParsing: false });
+      useToastStore.getState().error('detail 覆盖率解析失败', err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  },
 
   // ─── 覆盖率深度分析动作实现 ────────────────────────────────
   loadTestContributions: async (projectId, sessionId) => {
