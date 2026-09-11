@@ -119,6 +119,13 @@ export type InitConfig = {
 	seedHistory?: SeedHistoryMessage[];
 	/** 独立 models.json 路径（pi 引擎解耦 agentDir 后由 host 传入，issue 07） */
 	modelsPath?: string;
+	/**
+	 * host 下发的有序 skill 目录（issue 09，顺序即解析优先级，见
+	 * host 侧 getSkillRootDirs）。非空时 runner 以 noSkills +
+	 * additionalSkillPaths 装载（host 列表 = 实际加载集）；缺省/为空时
+	 * 保持 pi 默认发现行为（等价安全网，见 skills.ts 注释）。
+	 */
+	skillPaths?: string[];
 };
 
 export type Command =

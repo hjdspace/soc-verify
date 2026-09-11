@@ -64,6 +64,12 @@ export interface InitConfig {
    * 模型配置改由 runner 以 ModelRuntime.create({ modelsPath }) 显式注入。
    */
   modelsPath?: string;
+  /**
+   * host 下发的有序 skill 目录（仅 pi 引擎消费，issue 09）。顺序即解析
+   * 优先级（canonical 优先于 legacy，见 skill-discovery.getSkillRootDirs），
+   * 与 UI 技能列表同源，保证列表所见即会话所载。
+   */
+  skillPaths?: string[];
 }
 
 export interface CustomToolDefinition {

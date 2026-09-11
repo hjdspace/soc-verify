@@ -60,6 +60,7 @@ import {
 	resolveProjectTrustDecision,
 	resolveToolCallGate,
 } from "./extensions.ts";
+import { buildSkillLoaderOptions } from "./skills.ts";
 import {
 	buildRpcStopRequest,
 	normalizeSubagentFrame,
@@ -554,6 +555,10 @@ export async function handleInit(
 		settingsManager: SettingsManager.create(config.cwd, agentDir),
 		extensionFactories: [buildApprovalExtension(ctx), ...mcp.factories, ...subagents.factories],
 		appendSystemPrompt: buildAppendSystemPrompt(config.systemPrompt),
+		// skill 装载（issue 09）：host 下发有序 skillPaths（与 UI 发现同源），
+		// runner 不自行发现 —— noSkills 关闭 pi 默认来源，additionalSkillPaths
+		// 按顺序 first-wins（project > builtin > user，canonical 优先于 legacy）。
+		...buildSkillLoaderOptions(config),
 	});
 	await loader.reload({
 		// 项目信任：host 信任存储（trustedProjectDirs）命中直接放行；否则请求

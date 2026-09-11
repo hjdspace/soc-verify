@@ -34,6 +34,22 @@ describe('TrustStore — host 侧持久化信任存储（issue 04）', () => {
     expect(store.getTrustedMcpServers('/other/ws')).toEqual([]);
   });
 
+  it('两类信任分开记录（issue 09）：互不写入对方集合', async () => {
+    const store = new TrustStore(dir);
+    await store.load();
+    await store.addTrustedMcpServer('/ws/dv', 'srv-a');
+    await store.addTrustedProjectDir('/ws/dv', '/proj/dv');
+
+    // MCP server 信任不进入 projectDirs，项目信任不进入 mcpServers
+    expect(store.getTrustedMcpServers('/ws/dv')).toEqual(['srv-a']);
+    expect(store.getTrustedProjectDirs('/ws/dv')).toEqual(['/proj/dv']);
+
+    // 同名值（server 名恰好等于目录路径）也不会串集合
+    await store.addTrustedMcpServer('/ws/dv', '/proj/dv');
+    expect(store.getTrustedProjectDirs('/ws/dv')).toEqual(['/proj/dv']);
+    expect(store.getTrustedMcpServers('/ws/dv')).toEqual(['srv-a', '/proj/dv']);
+  });
+
   it('trust 决策持久化到磁盘，新实例 load 后可见', async () => {
     const store = new TrustStore(dir);
     await store.load();

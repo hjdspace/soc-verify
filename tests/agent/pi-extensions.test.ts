@@ -168,3 +168,52 @@ describe('buildTrustedMcpServers', () => {
     expect(requestTrust).not.toHaveBeenCalled();
   });
 });
+
+// ─── 信任治理三分（issue 09 验收项 5）────────────────────────────────────
+//
+// extension 加载信任、MCP server 信任、单次工具审批是三条独立链路：
+//   记录 — TrustStore 按 projectDirs / mcpServers 分开持久化（trust-store.test.ts）
+//   展示 — trustRequest 事件携带 kind 透传 renderer（session-router-trust.test.ts）
+//   执行 — 本文件：三条链路互不干涉，审批放宽（yolo）不越过信任边界
+
+describe('信任治理三分 — yolo 不绕过信任（issue 09）', () => {
+  it('yolo 放行单次工具审批，但不跳过项目 extension 信任确认', async () => {
+    // 单次审批：yolo 放行 exec 级工具
+    const gate = await resolveToolCallGate('bash', {}, () => 'yolo', vi.fn(async () => false));
+    expect(gate).toBeUndefined();
+
+    // 项目信任：与审批模式无关 —— 未信任项目仍需确认，拒绝则 extension 不加载
+    const requestTrust = vi.fn(async (_kind: TrustKind, _name: string) => false);
+    const trusted = await resolveProjectTrustDecision('/proj/untrusted', [], true, requestTrust);
+    expect(trusted).toBe(false);
+    expect(requestTrust).toHaveBeenCalledOnce();
+    expect(requestTrust.mock.calls[0]?.[0]).toBe('project-extension');
+  });
+
+  it('yolo 不跳过 MCP server 信任确认（首次启动仍逐个询问）', async () => {
+    const requestTrust = vi.fn(async (_kind: TrustKind, _name: string) => false);
+    const plan = await buildTrustedMcpServers(
+      { selected: { path: '/proj/.pi/mcp.json', servers: { alpha: { command: 'a' } } }, ignored: [] },
+      { enableMCP: true, trustedMcpServers: [], requestTrust },
+    );
+    // 未信任 server 被排除（不启动），且确以 mcp-server 类型询问过
+    expect(plan.mcpServers).toEqual({});
+    expect(requestTrust).toHaveBeenCalledOnce();
+    expect(requestTrust.mock.calls[0]?.[0]).toBe('mcp-server');
+  });
+
+  it('三类决策互不干涉：审批拒绝不撤销已记录的信任，信任通过不放宽单次审批', async () => {
+    // 单次审批照常拦截（用户拒绝 bash）
+    const gate = await resolveToolCallGate('bash', {}, () => 'always-ask', vi.fn(async () => false));
+    expect(gate?.block).toBe(true);
+
+    // 已记录信任的 MCP server 直接并入，无需再确认 —— 与审批结果无关
+    const requestTrust = vi.fn();
+    const plan = await buildTrustedMcpServers(
+      { selected: { path: '/proj/.pi/mcp.json', servers: { known: { command: 'a' } } }, ignored: [] },
+      { enableMCP: true, trustedMcpServers: ['known'], requestTrust },
+    );
+    expect(plan.mcpServers).toHaveProperty('known');
+    expect(requestTrust).not.toHaveBeenCalled();
+  });
+});

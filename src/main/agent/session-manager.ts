@@ -14,6 +14,7 @@ import { resolveAgentRuntime, resolveBuiltInExtensionDir, resolvePiRunnerScript,
 import { ensureOfficecliOnPath } from './officecli-paths';
 import type { CustomToolDefinition, InitConfig, ApprovalMode, SeedHistoryMessage, TrustKind } from './types';
 import { TrustStore } from './trust-store';
+import { resolveSkillLoadPaths } from './skill-discovery';
 import {
   buildModelInputOverrideConfig,
   buildOpenAICompatibleModelsConfig,
@@ -724,6 +725,9 @@ export class SessionManagerImpl extends EventEmitter {
       ...(engine === 'pi' && runtimeDir
         ? { modelsPath: join(runtimeDir, 'models.json') }
         : {}),
+      // pi 引擎：有序 skill 装载列表（issue 09）—— 与 UI 发现同源
+      // （resolveSkillLoadPaths），canonical 优先于 legacy，runner 不自行发现。
+      ...(engine === 'pi' ? { skillPaths: await resolveSkillLoadPaths(options.cwd) } : {}),
       trustedMcpServers: trustStore?.getTrustedMcpServers(options.cwd),
       trustedProjectDirs: trustStore?.getTrustedProjectDirs(options.cwd),
     };

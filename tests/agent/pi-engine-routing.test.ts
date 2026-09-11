@@ -40,6 +40,10 @@ vi.mock('../../src/main/agent/context-settings', () => ({
   },
 }));
 
+vi.mock('../../src/main/agent/skill-discovery', () => ({
+  resolveSkillLoadPaths: vi.fn(async () => []),
+}));
+
 vi.mock('../../src/main/host/host-tools', () => ({
   HostToolsRegistry: class {
     setSimulationAdapter() {}
@@ -58,6 +62,7 @@ vi.mock('../../src/main/host/host-uris', () => ({
 }));
 
 import { resolveAgentRuntime, resolvePiRunnerScript } from '../../src/main/agent/paths';
+import { resolveSkillLoadPaths } from '../../src/main/agent/skill-discovery';
 import { defaultAgentClientFactory, SessionManagerImpl } from '../../src/main/agent/session-manager';
 import { AgentClient } from '../../src/main/agent/agent-client';
 import { PiAgentClient } from '../../src/main/agent/pi-agent-client';
@@ -68,6 +73,8 @@ class MockEngineClient implements IAgentClient {
   readonly engine: AgentEngine;
   started = false;
   stopped = false;
+  /** 最近一次 init 收到的配置（skillPaths 下发断言用，issue 09） */
+  lastInitConfig: InitConfig | null = null;
   constructor(engine: AgentEngine, private engineSessionId: string) {
     this.engine = engine;
   }
@@ -85,6 +92,7 @@ class MockEngineClient implements IAgentClient {
     return '';
   }
   init(_config: InitConfig): Promise<{ engineSessionId: string }> {
+    this.lastInitConfig = _config;
     return Promise.resolve({ engineSessionId: this.engineSessionId });
   }
   prompt(_message: string, _images?: string[]): Promise<void> {
@@ -252,5 +260,55 @@ describe('SessionManagerImpl.createSession engine routing', () => {
     const opts = factory.mock.calls[0][0] as AgentClientFactoryOptions;
     expect(opts.engine).toBe('omp');
     expect(manager.getEngine(id)).toBe('omp');
+  });
+});
+
+// ─── SessionManagerImpl.createSession skillPaths 下发（issue 09）─────
+
+describe('SessionManagerImpl.createSession skillPaths 下发（issue 09）', () => {
+  it("engine 'pi'：以 cwd 解析有序 skillPaths 并写入 init config", async () => {
+    vi.mocked(resolveAgentRuntime).mockReturnValue(null);
+    vi.mocked(resolvePiRunnerScript).mockReturnValue('/fake/pi-runner/index.ts');
+    vi.mocked(resolveSkillLoadPaths).mockResolvedValue([
+      '/proj/.pi/skills',
+      '/proj/.omp/skills',
+      '/app/resources/built-in-extension/skills',
+      '/home/.pi/agent/skills',
+      '/home/.omp/agent/skills',
+    ]);
+    const client = new MockEngineClient('pi', 'pi-skill-1');
+    const { manager } = createManagerWithFactory(client);
+
+    await manager.createSession({
+      projectId: 'proj_pi',
+      cwd: '/tmp/pi',
+      enableMCP: false,
+      engine: 'pi',
+    });
+
+    expect(resolveSkillLoadPaths).toHaveBeenCalledWith('/tmp/pi');
+    expect(client.lastInitConfig?.skillPaths).toEqual([
+      '/proj/.pi/skills',
+      '/proj/.omp/skills',
+      '/app/resources/built-in-extension/skills',
+      '/home/.pi/agent/skills',
+      '/home/.omp/agent/skills',
+    ]);
+  });
+
+  it('omp 引擎不下发 skillPaths（旧引擎自有发现逻辑）', async () => {
+    vi.mocked(resolveAgentRuntime).mockReturnValue({ mode: 'binary', runnerPath: '/fake/runner' });
+    vi.mocked(resolveSkillLoadPaths).mockClear();
+    const client = new MockEngineClient('omp', 'omp-skill-1');
+    const { manager } = createManagerWithFactory(client);
+
+    await manager.createSession({
+      projectId: 'proj_omp',
+      cwd: '/tmp/omp',
+      enableMCP: false,
+    });
+
+    expect(resolveSkillLoadPaths).not.toHaveBeenCalled();
+    expect(client.lastInitConfig?.skillPaths).toBeUndefined();
   });
 });
