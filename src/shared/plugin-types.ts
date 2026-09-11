@@ -1,5 +1,7 @@
 // 插件系统类型定义（M0 占位骨架，M2+ 细化）
-import type { CoverageData } from './types/coverage';
+import type { CoverageData, DetailReportResult } from './types/coverage';
+
+export type { DetailReportResult };
 
 export type PluginKind =
   | 'case-parser'
