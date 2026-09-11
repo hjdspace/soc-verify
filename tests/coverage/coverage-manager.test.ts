@@ -50,7 +50,7 @@ function makeMockData(sessionId: string): CoverageData {
     children: [
       {
         name: 'cpu_core',
-        path: 'top/cpu_core',
+        path: 'cpu_core',
         depth: 1,
         metrics: makeMetrics({
           line: [920, 1000],
@@ -66,7 +66,7 @@ function makeMockData(sessionId: string): CoverageData {
       },
       {
         name: 'memory_ctrl',
-        path: 'top/memory_ctrl',
+        path: 'memory_ctrl',
         depth: 1,
         metrics: makeMetrics({
           line: [880, 1000],
@@ -138,6 +138,20 @@ function createMockReportGenerator(projectRoot: string): CoverageReportGenerator
   });
 }
 
+/** 创建记录执行命令的 mock CommandRunner（用于断言快速导入层命令白名单）。 */
+function createRecordingReportGenerator(
+  projectRoot: string,
+  executed: string[],
+): CoverageReportGenerator {
+  return new CoverageReportGenerator({
+    projectRoot,
+    runner: async (command) => {
+      executed.push(command);
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+  });
+}
+
 const MOCK_EDA_CONFIG: EdaToolConfig = {
   tool: 'imc',
   covMergeDir: '/mock/cov_merge',
@@ -182,6 +196,45 @@ describe('CoverageManager', () => {
       await expect(mgr.importCoverage('/mock', MOCK_EDA_CONFIG)).rejects.toThrow(
         'No coverage-parser plugin loaded',
       );
+      rmSync(tmpDir, { recursive: true });
+    });
+
+    it('quick import layer runs only the metrics command for imc (no summary/detail)', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'cov-quick-'));
+      const adapter = createMockAdapter(makeMockData('quick'));
+      const executed: string[] = [];
+      const mgr = new CoverageManager({
+        projectRoot: tmpDir,
+        coverageAdapter: adapter as never,
+        reportGenerator: createRecordingReportGenerator(tmpDir, executed),
+      });
+
+      await mgr.importCoverage('/mock/cov_merge', MOCK_EDA_CONFIG);
+
+      // SoC 代码覆盖率重构：导入只执行 metrics 命令；summary（已废弃）/detail 不执行
+      expect(executed).toEqual(['echo metrics']);
+      rmSync(tmpDir, { recursive: true });
+    });
+
+    it('quick import layer keeps summary command for vcs-urg (session.xml source)', async () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'cov-quick-urg-'));
+      const adapter = createMockAdapter(makeMockData('urg'));
+      const executed: string[] = [];
+      const mgr = new CoverageManager({
+        projectRoot: tmpDir,
+        coverageAdapter: adapter as never,
+        reportGenerator: createRecordingReportGenerator(tmpDir, executed),
+      });
+
+      await mgr.importCoverage('/mock/cov_merge', {
+        ...MOCK_EDA_CONFIG,
+        tool: 'vcs-urg',
+        summaryCommand: 'echo urg-summary',
+        metricsCommand: undefined,
+      });
+
+      // vcs-urg 的快速层数据源是 summary 命令产出的 session.xml
+      expect(executed).toEqual(['echo urg-summary']);
       rmSync(tmpDir, { recursive: true });
     });
 
@@ -579,10 +632,10 @@ describe('CoverageManager', () => {
 
       const entry = await mgr.addTriage({
         sessionId,
-        nodePath: 'top/cpu_core',
+        nodePath: 'cpu_core',
         metric: 'line',
         gap: {
-          nodePath: 'top/cpu_core',
+          nodePath: 'cpu_core',
           nodeName: 'cpu_core',
           metric: 'line',
           target: 95,
@@ -671,7 +724,7 @@ describe('CoverageManager', () => {
 
       const entry = await mgr.requestExclusion({
         sessionId,
-        nodePath: 'top/memory_ctrl',
+        nodePath: 'memory_ctrl',
         metric: 'toggle',
         reason: 'dead code — module deprecated',
         requestedBy: 'engineer1',
@@ -886,7 +939,7 @@ describe('CoverageManager', () => {
       fullData.summaryOnly = false;
       fullData.uncovered = {
         functional: [
-          { module: 'top/cpu_core', description: 'uncovered bin[0]' },
+          { module: 'cpu_core', description: 'uncovered bin[0]' },
         ],
       };
 

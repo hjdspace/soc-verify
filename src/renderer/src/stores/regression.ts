@@ -25,7 +25,7 @@ interface RegressionStoreState {
   // ── Parsed group refs (lazy loaded) ──
   parsedGroups: Map<
     string,
-    { refPaths: string[]; resolved: Array<{ path: string; type: 'list' | 'group' | 'unreadable' }> }
+    { refPaths: string[]; resolved: Array<{ path: string; type: 'list' | 'group' | 'unreadable'; reason?: string }> }
   >;
 
   // ── History ──

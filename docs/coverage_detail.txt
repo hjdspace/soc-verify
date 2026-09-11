@@ -1,0 +1,52 @@
+
+
+Covered+Uncovered+Excluded+UNR Block Detail Report, Instance Based
+================================================================================
+Instance name: tb_top.chip_top.dut.u_analog_bb_line_usb
+Type name: analog_bb_line_usb
+File name: /tech_phys/chips/KunlunN02/D_die/analog/v0p9/analog_bb_line_usb_20260618-14:42/verilog/analog_bb_line_usb.v
+Include Files:
+    /pub/tech_phys/chips/KunlunN02/D_die/analog/v0p9/analog_bb_line_usb_20260618-14:42/verilog/analog_bb_line_usb_powerpin_sim.v
+Number of covered blocks: 3 of 3
+Number of uncovered blocks: 0 of 3
+Number of excluded blocks: 0
+Number of unreachable blocks: 0
+Number of covered branches: 2 of 2
+Number of uncovered branches: 0 of 2
+Number of excluded branches: 0
+Number of unreachable branches: 0
+Number of covered statements: 2 of 2
+Number of uncovered statements: 0 of 2
+Number of excluded statements: 0
+Number of unreachable statements: 0
+
+Count   Block #Stmt Line Kind                  Origin Source Code
+--------------------------------------------------------------------------------
+1       1     0     24 ternary 1 true *        24     assign CLK_OUT_TO_USB = cell_on ? CLK_IN : 1'b0 ;
+1       2     0     24 ternary 1 false *       24     assign CLK_OUT_TO_USB = cell_on ? CLK_IN : 1'b0 ;
+1       3     2     1 (analog_bb_line_usb_powerpin_sim.v) code block       1 (analog_bb_line_usb_powerpin_sim.v) initial begin
+(*) indicates a branch
+
+Instance name: tb_top.chip_top.dut.u_analog_bb_line_pciepll  
+Type name: analog_bb_line_pciepll  
+File name: /tech_phys/chips/KunlunN02/D_die/analog/v0p9/analog_bb_line_pciepll_20260618-14:42/verilog/analog_bb_line_pciepll.v  
+Include Files:  
+    /pub/tech_phys/chips/KunlunN02/D_die/analog/v0p9/analog_bb_line_pciepll_20260618-14:42/verilog/analog_bb_line_pciepll_powerpin_sim.v  
+Number of covered blocks: 3 of 3  
+Number of uncovered blocks: 0 of 3  
+Number of excluded blocks: 0  
+Number of unreachable blocks: 0  
+Number of covered branches: 2 of 2  
+Number of uncovered branches: 0 of 2  
+Number of excluded branches: 0  
+Number of unreachable branches: 0  
+Number of covered statements: 2 of 2  
+Number of uncovered statements: 0 of 2  
+Number of excluded statements: 0  
+Number of unreachable statements: 0  
+Count Block #Stmt Line Kind Origin Source Code  
+------ ----- ---- ---- ---- ------------------  
+1      1     0    24   ternary 1 true * 24 assign CLK_OUT_TO_PCIEPLL = cell_on ? CLK_IN : 1'b0 ;  
+1      2     0    24   ternary 1 false * 24 assign CLK_OUT_TO_PCIEPLL = cell_on ? CLK_IN : 1'b0 ;  
+1      3     2    1    (analog_bb_line_pciepll_powerpin_sim.v) code block 1 (analog_bb_line_pciepll_powerpin_sim.v) initial begin  
+(*) indicates a branch

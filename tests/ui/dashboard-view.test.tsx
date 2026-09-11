@@ -141,7 +141,7 @@ beforeEach(() => {
 });
 
 describe('DashboardView KPI 行', () => {
-  it('渲染 4 张 KPI 卡数值、delta 与 sparkline', () => {
+  it('渲染 3 张 KPI 卡（代码覆盖率/通过率/失败），数值、delta 与 sparkline', () => {
     mocks.dash.summary = {
       subsysCount: 5,
       caseCount: 480,
@@ -155,7 +155,8 @@ describe('DashboardView KPI 行', () => {
     mocks.cov.overview = makeCoverageSummary();
     render(<DashboardView />);
 
-    expect(screen.getByTestId('kpi-functional-coverage').textContent).toContain('87.3');
+    // SoC 代码覆盖率重构：功能覆盖率卡退役，只保留代码覆盖率卡
+    expect(screen.queryByTestId('kpi-functional-coverage')).toBeNull();
     expect(screen.getByTestId('kpi-code-coverage').textContent).toContain('92.1');
     expect(screen.getByTestId('kpi-pass-rate').textContent).toContain('89.6');
     expect(screen.getByTestId('kpi-active-failures').textContent).toContain('12');
@@ -167,8 +168,16 @@ describe('DashboardView KPI 行', () => {
     // 通过率/失败卡有 sparkline，覆盖率卡降级隐藏且不渲染空 svg
     expect(document.querySelector('[data-testid="kpi-pass-rate"] svg polyline')).not.toBeNull();
     expect(document.querySelector('[data-testid="kpi-active-failures"] svg polyline')).not.toBeNull();
-    expect(document.querySelector('[data-testid="kpi-functional-coverage"] svg')).toBeNull();
-    expect(screen.getByTestId('kpi-functional-coverage').textContent).toContain('暂无趋势数据');
+    expect(document.querySelector('[data-testid="kpi-code-coverage"] svg')).toBeNull();
+    expect(screen.getByTestId('kpi-code-coverage').textContent).toContain('暂无趋势数据');
+  });
+
+  it('代码覆盖率卡可点击，跳转覆盖率视图', () => {
+    mocks.cov.overview = makeCoverageSummary();
+    render(<DashboardView />);
+
+    fireEvent.click(screen.getByTestId('kpi-code-coverage'));
+    expect(useUiStore.getState().activeView).toBe('coverage');
   });
 
   it('无 7 日序列时 delta/sparkline 全部降级隐藏（不留破图）', () => {
@@ -183,7 +192,7 @@ describe('DashboardView KPI 行', () => {
   it('无数据时 KPI 值显示 —', () => {
     render(<DashboardView />);
     expect(screen.getByTestId('kpi-pass-rate').textContent).toContain('—');
-    expect(screen.getByTestId('kpi-functional-coverage').textContent).toContain('—');
+    expect(screen.getByTestId('kpi-code-coverage').textContent).toContain('—');
   });
 });
 
@@ -249,8 +258,8 @@ describe('DashboardView 里程碑', () => {
     expect(useWorkbenchStore.getState().tabs.some((t) => t.destination.type === 'timing-violation')).toBe(true);
   });
 
-  it('覆盖率收敛用实时功能覆盖率覆盖完成态', () => {
-    mocks.cov.overview = makeCoverageSummary(); // functional = 87.3（未达标）
+  it('覆盖率收敛用实时代码覆盖率覆盖完成态', () => {
+    mocks.cov.overview = makeCoverageSummary(); // line = 92.1（未达标）
     mocks.dash.milestones = [
       { id: 'requirement-import', label: '需求导入', done: true, hint: '' },
       { id: 'env-gen', label: '环境生成', done: true, hint: '' },
@@ -263,8 +272,8 @@ describe('DashboardView 里程碑', () => {
     ];
     render(<DashboardView />);
 
-    // 未达标 → 覆盖率收敛成为 current（第一个未完成节点），hint 显示真实覆盖率
-    expect(screen.getByText('功能覆盖 87.3% · 目标 ≥ 90%')).toBeInTheDocument();
+    // 未达标 → 覆盖率收敛成为 current（第一个未完成节点），hint 显示真实代码覆盖率
+    expect(screen.getByText('代码覆盖 92.1% · 目标 ≥ 90%')).toBeInTheDocument();
   });
 });
 
@@ -311,15 +320,17 @@ describe('DashboardView 运行中仿真流', () => {
 });
 
 describe('DashboardView 覆盖率环', () => {
-  it('渲染总环数值与四类图例', () => {
+  it('渲染总环数值（代码覆盖率）与 detail 提示', () => {
     mocks.cov.overview = makeCoverageSummary();
     render(<DashboardView />);
 
-    expect(screen.getByTestId('cov-legend-functional').textContent).toContain('87.3');
-    expect(screen.getByTestId('cov-legend-line').textContent).toContain('92.1');
-    expect(screen.getByTestId('cov-legend-branch').textContent).toContain('84.6');
-    expect(screen.getByTestId('cov-legend-assertion').textContent).toContain('78.9');
+    // SoC 重构：主环 = 代码覆盖率（line），四类图例退役
     expect(screen.getByTestId('cov-ring-arc')).toBeInTheDocument();
+    // 「代码覆盖率」出现在 KPI 卡标签与环内标签两处
+    expect(screen.getAllByText('代码覆盖率').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByTestId('cov-ring-hint')).toBeInTheDocument();
+    expect(screen.queryByTestId('cov-legend-functional')).toBeNull();
+    expect(screen.queryByTestId('cov-legend-line')).toBeNull();
   });
 
   it('加载中显示骨架屏，无数据显示空状态', () => {

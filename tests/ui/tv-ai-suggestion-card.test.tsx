@@ -43,7 +43,7 @@ function makeViolation(overrides: Partial<ViolationWithConfirmation> = {}): Viol
     seed: null,
     subsys: null,
     num: 7,
-    hier: 'top/u_core',
+    hier: 'u_core',
     timeFs: 1234.5,
     timeDisplay: '1.23us',
     checkInfo: '',

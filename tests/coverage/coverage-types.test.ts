@@ -107,9 +107,26 @@ describe('summarizeCoverage', () => {
     expect(summary.fsm_transition).toBe(90);
     expect(summary.functional).toBe(100);
     expect(summary.assertion).toBe(0);
-    // overall = 平均值
+    // overall = 非 N/A 项平均
     const expected = (90 + 80 + 70 + 60 + 100 + 90 + 100 + 0) / 8;
     expect(summary.overall).toBeCloseTo(expected, 1);
+  });
+
+  it('overall 只对非 N/A metric 求均值（metrics-only 数据不失真）', () => {
+    // SoC 代码覆盖率重构：metrics.txt 快速导入只填充 line，其余 N/A。
+    // 旧算法（N/A 记 0 后除以 8）会把 94.13% 错算成 11.8%。
+    const node = makeNode('root', 'root', 0, {
+      line: triplet(353, 375), // 94.13%
+    });
+    const summary = summarizeCoverage(node);
+    expect(summary.line).toBeCloseTo(94.13, 1);
+    expect(summary.overall).toBeCloseTo(94.13, 1);
+  });
+
+  it('全部 N/A 时 overall 为 0', () => {
+    const node = makeNode('root', 'root', 0);
+    const summary = summarizeCoverage(node);
+    expect(summary.overall).toBe(0);
   });
 });
 

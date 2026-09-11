@@ -13,7 +13,7 @@ export function createCoverageAnalysisTools(ctx: ToolContext): HostToolEntry[] {
       {
         type: 'object',
         properties: {
-          module: { type: 'string', description: 'Module path (e.g. "top/cpu_core")' },
+          module: { type: 'string', description: 'Module path (e.g. "tb_top.chip_top")' },
           sessionId: {
             type: 'string',
             description: 'Coverage Merge Session ID. If omitted, the most recent session is used.',

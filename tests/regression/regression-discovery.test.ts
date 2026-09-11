@@ -233,6 +233,8 @@ describe('resolveGroupRefs', () => {
       expect(resolved).toHaveLength(2);
       for (const ref of resolved) {
         expect(ref.type).toBe('unreadable');
+        // 失败原因透出（ENOENT），UI 可据此 debug
+        expect(ref.reason).toContain('ENOENT');
       }
     } finally {
       rmSync(dir, { recursive: true });

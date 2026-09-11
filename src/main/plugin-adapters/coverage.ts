@@ -15,8 +15,9 @@ import type {
   CoverageParserPlugin,
   PluginRegistry,
   CoverageData,
+  DetailReportResult,
 } from '@shared/plugin-types';
-import { parseCoverageInWorker, type CoverageWorkerResult, type WorkerEnrichment } from '../coverage/coverage-worker';
+import { parseCoverageInWorker, parseDetailReportInWorker, type CoverageWorkerResult, type WorkerEnrichment } from '../coverage/coverage-worker';
 import { DEFAULT_COVERAGE_TARGETS } from '@shared/types';
 
 export class PluginBackedCoverage {
@@ -73,5 +74,25 @@ export class PluginBackedCoverage {
       targets: enrichment.targets ?? { ...DEFAULT_COVERAGE_TARGETS },
     };
     return { data: enriched, jsonStr: JSON.stringify(enriched) };
+  }
+
+  /**
+   * 调用插件的 parseDetailReport(detailPath) 解析 detail.txt（instance 级
+   * blocks/branches/statements）。300 万行级 CPU 密集解析放入 Worker Thread，
+   * 不阻塞主进程；pluginPath 不可用时回退主进程直接调用。
+   */
+  async parseDetailReport(detailPath: string): Promise<DetailReportResult> {
+    if (!this.hasParser()) throw new Error('No coverage-parser plugin loaded');
+    if (this.pluginPath) {
+      return parseDetailReportInWorker(this.pluginPath, detailPath);
+    }
+    // 回退：直接调用插件（可能阻塞主进程，仅作为兜底）
+    const mod = (this.registry.coverageParsers[0] as unknown as {
+      parseDetailReport?: (detailPath: string) => DetailReportResult;
+    });
+    if (typeof mod?.parseDetailReport !== 'function') {
+      throw new Error('Coverage parser plugin does not support parseDetailReport');
+    }
+    return mod.parseDetailReport(detailPath);
   }
 }

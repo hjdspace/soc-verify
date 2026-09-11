@@ -211,8 +211,23 @@ export function parseRegressionGroup(content: string): string[] {
 
 /** Resolved group reference: type is 'unreadable' when the file exists in the
  *  .grp but could not be opened — surfaced as such instead of being guessed
- *  as a list (a guessed list used to trigger bogus parseList errors downstream). */
-export type ResolvedGroupRef = { path: string; type: 'list' | 'group' | 'unreadable' };
+ *  as a list (a guessed list used to trigger bogus parseList errors downstream).
+ *  `reason` (unreadable only) carries the concrete failure cause (errno code /
+ *  classification) so the UI can show it for debugging. */
+export type ResolvedGroupRef = { path: string; type: 'list' | 'group' | 'unreadable'; reason?: string };
+
+/** Human-readable cause for a failed reference read (errno first, message fallback) */
+function describeReadError(err: unknown): string {
+  if (typeof err === 'object' && err !== null && 'code' in err) {
+    const code = String((err as { code: unknown }).code);
+    if (code === 'ENOENT') return '文件不存在 (ENOENT)';
+    if (code === 'EACCES' || code === 'EPERM') return '无读取权限 (EACCES/EPERM)';
+    if (code === 'EISDIR') return '是目录而非文件 (EISDIR)';
+    return `读取失败 (${code})`;
+  }
+  if (err instanceof Error && err.message) return `读取失败 (${err.message})`;
+  return '读取失败（未知错误）';
+}
 
 /**
  * Expand `$VAR` / `${VAR}` prefixes in a group reference and anchor relative
@@ -314,11 +329,11 @@ export async function resolveGroupRefs(
         result.push(...nested);
       } else {
         // Readable but neither list nor group — surface as unreadable
-        result.push({ path: resolvedPath, type: 'unreadable' });
+        result.push({ path: resolvedPath, type: 'unreadable', reason: '可读但既非 list 也非 group' });
       }
-    } catch {
-      // File not readable — surface honestly instead of guessing 'list'
-      result.push({ path: resolvedPath, type: 'unreadable' });
+    } catch (err) {
+      // File not readable — surface honestly (with the cause) instead of guessing 'list'
+      result.push({ path: resolvedPath, type: 'unreadable', reason: describeReadError(err) });
     }
   }
 

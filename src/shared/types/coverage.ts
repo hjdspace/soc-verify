@@ -123,6 +123,7 @@ export type EdaTool = 'imc' | 'vcs-urg' | 'vcover' | 'unknown';
 export type EdaToolConfig = {
   tool: EdaTool;
   covMergeDir: string;
+  /** 已废弃（imc 不再生成 summary.txt，无信息量）。字段保留用于 vcs-urg / vcover。 */
   summaryCommand?: string;
   detailCommand?: string;
   metricsCommand?: string;
@@ -157,6 +158,11 @@ export type EdaToolConfig = {
  *
  * Cadence IMC 工具说明：
  *   - IMC 通过 TCL `report` 子命令生成文本报告，用 `-execcmd` 直接执行单条命令
+ *   - **分层解析优化（SoC 只看代码覆盖率）**：summary 报告（report -summary）冗余信息
+ *     多且无层级结构，已取消默认 summaryCommand；导入时只执行 metricsCommand
+ *     （report -metrics overall 生成 metrics.txt），解析 Overall Covered 列得到
+ *     层级树 + 代码覆盖率（covered/total 点数比）。detail（block/branch/stmts）
+ *     推迟到用户按需触发（parseDetails）。
  *   - `report -grading` 生成按测试用例的覆盖率贡献分析（等效 urg -grade testfile）
  *   - `report -detail -metrics functional` 生成 covergroup bin 级覆盖详情
  *   - IMC 不支持 CSV 格式输出，csvCommand 为 undefined
@@ -165,8 +171,8 @@ export const DEFAULT_EDA_COMMANDS: Readonly<Record<Exclude<EdaTool, 'unknown'>, 
   imc: {
     tool: 'imc',
     covMergeDir: 'cov_merge',
-    summaryCommand:
-      'imc -load {covMergeDir} -execcmd "report -summary -out {reportDir}/summary.txt"',
+    // 已取消 summary 默认命令：metrics.txt 覆盖快速导入层所需全部信息
+    summaryCommand: undefined,
     detailCommand:
       'imc -load {covMergeDir} -execcmd "report -detail -all -out {reportDir}/detail.txt"',
     metricsCommand:
@@ -206,6 +212,53 @@ export const DEFAULT_EDA_COMMANDS: Readonly<Record<Exclude<EdaTool, 'unknown'>, 
   },
 };
 
+// ─── Coverage Detail（IMC detail.txt instance 级解析） ──────────
+
+/** detail.txt 单个 metric 的覆盖计数与百分比（covered/total*100） */
+export type DetailMetricCount = {
+  covered: number;
+  total: number;
+  percentage: number | null;
+};
+
+/**
+ * detail.txt（Covered+Uncovered+Excluded+UNR Block Detail Report, Instance Based）
+ * 解析出的单个 instance 覆盖率记录。全量明细持久化到
+ * `.socverify/coverage/<sessionId>-detail.json`，是自动生成 waive 文件的基础数据。
+ */
+export type DetailInstanceReport = {
+  /** 层级实例路径（如 tb_top.chip_top.dut.u_analog_bb_line_usb） */
+  instance: string;
+  /** 模块名（Type name） */
+  type: string;
+  /** RTL 文件路径（File name） */
+  file: string;
+  blocks: DetailMetricCount;
+  branches: DetailMetricCount;
+  statements: DetailMetricCount;
+};
+
+/** detail.txt 解析结果（插件 parseDetailReport 返回） */
+export type DetailReportResult = {
+  instances: DetailInstanceReport[];
+  instanceCount: number;
+  parseMs: number;
+};
+
+/** `.socverify/coverage/<sessionId>-detail.json` 的持久化结构 */
+export type CoverageDetailData = {
+  sessionId: string;
+  parsedAt: number;
+  instanceCount: number;
+  instances: DetailInstanceReport[];
+};
+
+/** CoverageData 上的 detail 摘要标记（全量明细在 -detail.json，避免树缓存膨胀） */
+export type CoverageDetailSummary = {
+  instanceCount: number;
+  parsedAt: number;
+};
+
 // ─── CoverageData（插件返回 + 平台缓存） ───────────────────────
 
 /**
@@ -235,6 +288,8 @@ export type CoverageData = {
    * 用户可通过 UI 触发按需详细解析来补充这些数据。
    */
   summaryOnly?: boolean;
+  /** detail.txt 解析摘要（全量 instance 明细在 <sessionId>-detail.json）。 */
+  detail?: CoverageDetailSummary;
 };
 
 // ─── Coverage Merge Session（ADR 0008） ─────────────────────────
@@ -271,12 +326,16 @@ export type CoverageSummary = {
 
 /**
  * 从 CoverageNode（通常是 root）派生扁平 CoverageSummary。
- * N/A metric 按 0 处理。
+ * overall = 非 N/A metric 的算术平均（N/A 不参与分母）；
+ * 全部 N/A 时为 0。逐 metric 值仍按 0 处理（向后兼容仪表盘等简单消费方）。
  */
 export function summarizeCoverage(node: CoverageNode): CoverageSummary {
   const pct = (m: CoverageMetric): number => node.metrics[m].percentage ?? 0;
-  const values = COVERAGE_METRICS.map(pct);
-  const overall = values.reduce((sum, v) => sum + v, 0) / values.length;
+  const present = COVERAGE_METRICS.filter((m) => node.metrics[m].percentage !== null);
+  const overall =
+    present.length === 0
+      ? 0
+      : present.reduce((sum, m) => sum + (node.metrics[m].percentage ?? 0), 0) / present.length;
   return {
     overall,
     line: pct('line'),

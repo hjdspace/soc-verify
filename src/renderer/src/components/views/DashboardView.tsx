@@ -145,16 +145,12 @@ const openExportDialog = useCoverageExportStore((s) => s.openExportDialog);
 
   const kpiCards: KpiCardData[] = [
     {
-      id: 'functional-coverage',
-      label: '功能覆盖率',
-      value: coverageOverview ? coverageOverview.functional : null,
-      unit: '%',
-    },
-    {
       id: 'code-coverage',
       label: '代码覆盖率',
       value: coverageOverview ? coverageOverview.line : null,
       unit: '%',
+      // 卡片点击 → 覆盖率详情视图（SoC 只看代码覆盖率，卡片即入口）
+      onClick: () => setActiveView('coverage'),
     },
     {
       id: 'pass-rate',
@@ -177,13 +173,13 @@ const openExportDialog = useCoverageExportStore((s) => s.openExportDialog);
   // ─── 里程碑：服务端真实数据 + 覆盖率实时覆盖 + 动作绑定 ───
   const finalMilestones: MilestoneStep[] = computeMilestoneStatuses(
     (milestoneNodes ?? []).map((node: MilestoneNode) => {
-      // 覆盖率收敛节点：用 coverage store 已加载的实时 overview 覆盖 done / hint
+      // 覆盖率收敛节点：用 coverage store 已加载的实时代码覆盖率覆盖 done / hint
       if (node.id === 'coverage' && coverageOverview) {
-        const functional = coverageOverview.functional;
+        const codeCov = coverageOverview.line;
         return {
           ...node,
-          done: functional >= 90,
-          hint: `功能覆盖 ${functional.toFixed(1)}% · 目标 ≥ 90%`,
+          done: codeCov >= 90,
+          hint: `代码覆盖 ${codeCov.toFixed(1)}% · 目标 ≥ 90%`,
         };
       }
       return node;

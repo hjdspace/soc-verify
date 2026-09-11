@@ -17,6 +17,8 @@ export type KpiCardData = {
   deltaGoodWhenUp?: boolean;
   /** 7 日序列；null/空 = 降级隐藏 sparkline */
   spark?: number[] | null;
+  /** 卡片点击回调；设置时卡片可交互（光标手型 + hover 高亮） */
+  onClick?: () => void;
 };
 
 /** SVG sparkline：序列归一化到 64×20 视口，颜色随好坏方向 */
@@ -61,7 +63,19 @@ export function KpiCard({ card }: { card: KpiCardData }) {
   const spark = card.spark && card.spark.length >= 2 ? card.spark : null;
 
   return (
-    <div className="rounded-xl border border-border bg-card px-4 py-3.5 transition-colors hover:border-border/80" data-testid={`kpi-${card.id}`}>
+    <div
+      className={cn(
+        'rounded-xl border border-border bg-card px-4 py-3.5 transition-colors',
+        card.onClick ? 'cursor-pointer hover:border-primary/40' : 'hover:border-border/80',
+      )}
+      data-testid={`kpi-${card.id}`}
+      role={card.onClick ? 'button' : undefined}
+      tabIndex={card.onClick ? 0 : undefined}
+      onClick={card.onClick}
+      onKeyDown={(e) => {
+        if (card.onClick && (e.key === 'Enter' || e.key === ' ')) card.onClick();
+      }}
+    >
       <div className="mb-2 text-[11px] text-muted-foreground">{card.label}</div>
       <div className="mb-2 font-mono text-[26px] font-semibold leading-none text-foreground">
         {card.value === null ? '—' : Number(card.value.toFixed(1))}
@@ -91,7 +105,7 @@ export function KpiCard({ card }: { card: KpiCardData }) {
 
 export function KpiRow({ cards }: { cards: KpiCardData[] }) {
   return (
-    <div className="mb-3 grid grid-cols-4 gap-3" data-testid="kpi-row">
+    <div className="mb-3 grid grid-cols-3 gap-3" data-testid="kpi-row">
       {cards.map((card) => (
         <KpiCard key={card.id} card={card} />
       ))}

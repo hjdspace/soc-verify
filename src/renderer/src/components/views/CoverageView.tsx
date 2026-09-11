@@ -1,15 +1,17 @@
 /**
  * 覆盖率视图（Mission Control）— 覆盖率分析的工作视图。
  *
- * 双 Tab（模块排序 / Bin 明细；Bin 首次进入显示骨架屏——真实实现为
- * loadUncovered 查询 loading 态）+ 7 日趋势图（SVG 双折线 + 90% 目标
- * 虚线；无按日历史查询，降级为最近 N 次 merge session，不造假数据）+
- * 汇总面板（四类覆盖率条 + 距目标差值 + 收敛预测）+ 模块排序表（列头
- * 排序 / 低覆盖着色 <75% 黄、<70% 红 / 行点击下钻现有覆盖率明细）。
+ * SoC 代码覆盖率重构：只关注代码覆盖率（line），功能/断言覆盖率退役。
+ * 模块排序表（列头排序 / 低覆盖着色 <75% 黄、<70% 红 / 行点击下钻现有
+ * 覆盖率明细；代码覆盖率 = 百分比 + 覆盖点数比合并展示；branch 列来自
+ * summary 数据，blocks/statements 列预留 detail.txt 按需解析后填充）
+ * + 7 日趋势图（SVG 单折线 + 90% 目标虚线；无按日历史查询，降级为最近
+ * N 次 merge session，不造假数据）+ 汇总面板（代码覆盖率条 + 覆盖点数比
+ * + 距目标差值 + 收敛预测）。
  * 数据只读复用 coverage store，不重写数据层。
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { FileDown, PieChart, Upload } from 'lucide-react';
 import { ViewHeader } from '@renderer/components/layout/ViewHeader';
 import { CoverageImportDialog } from '@renderer/components/coverage/CoverageImportDialog';
@@ -22,23 +24,12 @@ import type {
   CoverageMetric,
   CoverageNode,
   CoverageSummary,
-  UncoveredItem,
 } from '@shared/types';
 import { DEFAULT_COVERAGE_TARGETS } from '@shared/types';
 
-// ─── 常量 ────────────────────────────────────────────────────────
-
-/** 汇总面板 / 模块排序表展示的四类 metric（对照原型四条覆盖率条） */
-type SummaryMetric = 'functional' | 'line' | 'branch' | 'assertion';
+// ─── 常量 ────────────────────────────────────────────────────
 
 type TrendPoint = { sessionId: string; createdAt: number; summary: CoverageSummary };
-
-const SUMMARY_METRICS: ReadonlyArray<{ key: SummaryMetric; name: string; bar: string }> = [
-  { key: 'functional', name: '功能', bar: 'bg-primary' },
-  { key: 'line', name: '语句', bar: 'bg-status-running' },
-  { key: 'branch', name: '分支', bar: 'bg-violet' },
-  { key: 'assertion', name: '断言', bar: 'bg-warning' },
-];
 
 /** 趋势图取最近 7 个 merge session（7 日趋势的降级数据源） */
 const TREND_LIMIT = 7;
@@ -85,7 +76,7 @@ function shortSessionId(sid: string): string {
   return last.length > 8 ? last.slice(0, 8) : last;
 }
 
-// ─── 收敛预测（基于最近 N 个 merge session 的功能覆盖率增速） ────
+// ─── 收敛预测（基于最近 N 个 merge session 的代码覆盖率增速） ──
 
 type Convergence =
   | { kind: 'reached'; diff: number }
@@ -106,7 +97,7 @@ function predictConvergence(
   const spanMs = recent[recent.length - 1].createdAt - recent[0].createdAt;
   if (spanMs <= 0) return { kind: 'no-trend', diff };
   const rate =
-    (recent[recent.length - 1].summary.functional - recent[0].summary.functional) /
+    (recent[recent.length - 1].summary.line - recent[0].summary.line) /
     (spanMs / 86_400_000);
   if (rate <= 0) return { kind: 'stalled', diff };
   return { kind: 'predict', diff, days: Math.ceil(diff / rate) };
@@ -116,7 +107,7 @@ function convergenceText(conv: Convergence | null, target: number | undefined): 
   if (!target || !conv) return '暂无覆盖率数据';
   switch (conv.kind) {
     case 'reached':
-      return `功能覆盖率已达 ${target}% 目标`;
+      return `代码覆盖率已达 ${target}% 目标`;
     case 'predict':
       return `距 ${target}% 目标还差 ${conv.diff.toFixed(1)}pp；按近期收敛速度，预计 ${conv.days} 天内达成`;
     case 'no-trend':
@@ -126,7 +117,7 @@ function convergenceText(conv: Convergence | null, target: number | undefined): 
   }
 }
 
-// ─── 7 日趋势图（SVG 双折线 + 90% 目标虚线） ─────────────────────
+// ─── 7 日趋势图（SVG 单折线 + 90% 目标虚线） ─────────────────────
 
 function TrendChart({ trend }: { trend: TrendPoint[] }) {
   const recent = useMemo(() => trend.slice(-TREND_LIMIT), [trend]);
@@ -159,18 +150,13 @@ function TrendChart({ trend }: { trend: TrendPoint[] }) {
   const plotH = height - padTop - padBottom;
 
   // y 轴范围自适应：覆盖所有值与目标线，下探到 5 的倍数
-  const values = recent.flatMap((t) => [t.summary.functional, t.summary.line]);
+  const values = recent.map((t) => t.summary.line);
   const minVal = Math.min(TARGET_LINE, ...values);
   const yMin = Math.max(0, Math.floor((minVal - 5) / 5) * 5);
   const yMax = 100;
   const yOf = (v: number): number => padTop + plotH * (1 - (v - yMin) / (yMax - yMin));
   const xOf = (i: number): number =>
     recent.length === 1 ? padX + plotW / 2 : padX + (plotW * i) / (recent.length - 1);
-
-  const lines = [
-    { key: 'functional' as const, label: '功能', stroke: 'stroke-primary', bar: 'bg-primary', dot: 'fill-primary', testId: 'cov-trend-line-functional' },
-    { key: 'line' as const, label: '代码', stroke: 'stroke-status-running', bar: 'bg-status-running', dot: 'fill-status-running', testId: 'cov-trend-line-code' },
-  ];
 
   return (
     <div
@@ -180,12 +166,10 @@ function TrendChart({ trend }: { trend: TrendPoint[] }) {
       <div className="flex items-center gap-3 border-b border-border px-3.5 py-2.5 text-xs font-semibold text-foreground">
         7 日趋势
         <span className="ml-auto flex gap-3 text-[10px] font-normal text-muted-foreground">
-          {lines.map((l) => (
-            <span key={l.key} className="flex items-center gap-1">
-              <span className={cn('inline-block h-0.5 w-3 rounded', l.bar)} />
-              {l.label}
-            </span>
-          ))}
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-0.5 w-3 rounded bg-status-running" />
+            代码
+          </span>
         </span>
       </div>
       <svg
@@ -256,26 +240,28 @@ function TrendChart({ trend }: { trend: TrendPoint[] }) {
             {fmtDate(t.createdAt)}
           </text>
         ))}
-        {/* 双折线 + 末端数据点 */}
-        {lines.map((l) => {
-          const pts = recent.map((t, i) => ({ x: xOf(i), y: yOf(t.summary[l.key]) }));
-          const lastPt = pts[pts.length - 1];
-          return (
-            <g key={l.key}>
-              {pts.length > 1 && (
-                <polyline
-                  points={pts.map((p) => `${p.x},${p.y}`).join(' ')}
-                  fill="none"
-                  strokeWidth={1.8}
-                  strokeLinecap="round"
-                  className={l.stroke}
-                  data-testid={l.testId}
-                />
-              )}
-              <circle cx={lastPt.x} cy={lastPt.y} r={3} className={l.dot} />
-            </g>
-          );
-        })}
+        {/* 单折线（代码覆盖率） + 末端数据点 */}
+        <g>
+          {(() => {
+            const pts = recent.map((t, i) => ({ x: xOf(i), y: yOf(t.summary.line) }));
+            const lastPt = pts[pts.length - 1];
+            return (
+              <>
+                {pts.length > 1 && (
+                  <polyline
+                    points={pts.map((p) => `${p.x},${p.y}`).join(' ')}
+                    fill="none"
+                    strokeWidth={1.8}
+                    strokeLinecap="round"
+                    className="stroke-status-running"
+                    data-testid="cov-trend-line-code"
+                  />
+                )}
+                <circle cx={lastPt.x} cy={lastPt.y} r={3} className="fill-status-running" />
+              </>
+            );
+          })()}
+        </g>
       </svg>
       <div className="px-3.5 pb-2 text-[10px] text-muted-foreground/70">
         最近 {recent.length} 次 merge session（按日历史查询待接入，降级展示）
@@ -284,10 +270,11 @@ function TrendChart({ trend }: { trend: TrendPoint[] }) {
   );
 }
 
-// ─── 汇总面板（四类覆盖率条 + 距目标差值 + 收敛预测） ────────────
+// ─── 汇总面板（代码覆盖率条 + 点数比 + 距目标差值 + 收敛预测） ───
 
-function SummaryPanel({ overview, targets, trend, loading }: {
+function SummaryPanel({ overview, tree, targets, trend, loading }: {
   overview: CoverageSummary | null;
+  tree: CoverageData | null;
   targets: Partial<Record<CoverageMetric, number>>;
   trend: TrendPoint[];
   loading: boolean;
@@ -299,10 +286,19 @@ function SummaryPanel({ overview, targets, trend, loading }: {
   // 与上一 session 的差值（trend 已按 createdAt 升序）
   const last = trend[trend.length - 1];
   const prev = trend[trend.length - 2];
-  const deltaOf = (key: SummaryMetric): number | null =>
-    last && prev ? last.summary[key] - prev.summary[key] : null;
-  const conv = predictConvergence(trend, effective.functional, overview?.functional ?? null);
+  const deltaOf = last && prev ? last.summary.line - prev.summary.line : null;
+  const conv = predictConvergence(trend, effective.line, overview?.line ?? null);
 
+  // 覆盖点数比（root line triplet 的 covered/total）
+  const lineTriplet = tree?.root.metrics.line ?? null;
+  const pointsText =
+    lineTriplet && lineTriplet.total !== null
+      ? `${lineTriplet.covered ?? 0} / ${lineTriplet.total} 覆盖点`
+      : null;
+
+  const value = overview?.line ?? null;
+  const target = effective.line;
+  const diff = target !== undefined && value !== null ? target - value : null;
   return (
     <div
       className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-card"
@@ -313,7 +309,7 @@ function SummaryPanel({ overview, targets, trend, loading }: {
       </div>
       {loading && !overview ? (
         <div className="flex flex-col gap-3 p-4" data-testid="cov-sum-skeleton">
-          {Array.from({ length: 4 }, (_, i) => (
+          {Array.from({ length: 2 }, (_, i) => (
             <div key={i} className="h-5 w-full animate-pulse rounded bg-muted" />
           ))}
         </div>
@@ -326,49 +322,52 @@ function SummaryPanel({ overview, targets, trend, loading }: {
         </div>
       ) : (
         <div className="flex flex-1 flex-col gap-3 p-4">
-          {SUMMARY_METRICS.map(({ key, name, bar }) => {
-            const value = overview[key];
-            const target = effective[key];
-            const diff = target !== undefined ? target - value : null;
-            const delta = deltaOf(key);
-            return (
-              <div key={key} className="flex items-center gap-2.5" data-testid={`cov-sum-row-${key}`}>
-                <span className="w-8 shrink-0 text-xs text-muted-foreground">{name}</span>
-                <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-sm bg-background">
-                  <div className={cn('h-full rounded-sm', bar)} style={{ width: `${value}%` }} />
-                </div>
-                <span className="w-12 shrink-0 text-right font-mono text-xs text-foreground">
-                  {value.toFixed(1)}%
-                </span>
-                <span
-                  className="w-16 shrink-0 text-right text-[10px] text-muted-foreground"
-                  data-testid={`cov-sum-diff-${key}`}
-                >
-                  {diff === null ? '无目标' : diff > 0 ? `差 ${diff.toFixed(1)}pp` : '已达标'}
-                </span>
-                <span
-                  className={cn(
-                    'w-11 shrink-0 text-right font-mono text-[10px]',
-                    delta === null
-                      ? 'text-muted-foreground/40'
-                      : delta > 0
-                        ? 'text-primary'
-                        : delta < 0
-                          ? 'text-status-fail-foreground'
-                          : 'text-muted-foreground',
-                  )}
-                  data-testid={`cov-sum-delta-${key}`}
-                >
-                  {delta === null ? '—' : `${delta > 0 ? '+' : ''}${delta.toFixed(1)}`}
-                </span>
-              </div>
-            );
-          })}
+          <div className="flex items-center gap-2.5" data-testid="cov-sum-row-line">
+            <span className="w-8 shrink-0 text-xs text-muted-foreground">代码</span>
+            <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-sm bg-background">
+              <div
+                className={cn('h-full rounded-sm', lowBarClass(overview.line))}
+                style={{ width: `${overview.line}%` }}
+              />
+            </div>
+            <span className="w-12 shrink-0 text-right font-mono text-xs text-foreground">
+              {overview.line.toFixed(1)}%
+            </span>
+            <span
+              className="w-16 shrink-0 text-right text-[10px] text-muted-foreground"
+              data-testid="cov-sum-diff-line"
+            >
+              {diff === null ? '无目标' : diff > 0 ? `差 ${diff.toFixed(1)}pp` : '已达标'}
+            </span>
+            <span
+              className={cn(
+                'w-11 shrink-0 text-right font-mono text-[10px]',
+                deltaOf === null
+                  ? 'text-muted-foreground/40'
+                  : deltaOf > 0
+                    ? 'text-primary'
+                    : deltaOf < 0
+                      ? 'text-status-fail-foreground'
+                      : 'text-muted-foreground',
+              )}
+              data-testid="cov-sum-delta-line"
+            >
+              {deltaOf === null ? '—' : `${deltaOf > 0 ? '+' : ''}${deltaOf.toFixed(1)}`}
+            </span>
+          </div>
+          {pointsText && (
+            <div
+              className="text-[11px] font-mono text-muted-foreground"
+              data-testid="cov-sum-points"
+            >
+              覆盖点数比 {pointsText}
+            </div>
+          )}
           <div
             className="pt-1 text-[11px] leading-relaxed text-muted-foreground"
             data-testid="cov-convergence"
           >
-            {convergenceText(conv, effective.functional)}
+            {convergenceText(conv, effective.line)}
           </div>
         </div>
       )}
@@ -378,61 +377,59 @@ function SummaryPanel({ overview, targets, trend, loading }: {
 
 // ─── 模块排序表（列头排序 / 低覆盖着色 / 行点击下钻） ────────────
 
-type SortKey = 'module' | 'overall' | 'functional' | 'line' | 'branch' | 'assertion';
+type SortKey = 'module' | 'path' | 'line' | 'branch' | 'statement' | 'block';
 
 type ModuleRow = {
   node: CoverageNode;
-  parent: string;
-  /** 主覆盖率 = 四类 metric（功能/语句/分支/断言）非 N/A 值的均值 */
-  overall: number | null;
-  functional: number | null;
+  /** 代码覆盖率（line） */
   line: number | null;
+  /** branch 覆盖率（detail.txt 解析后填充，暂 N/A） */
   branch: number | null;
-  assertion: number | null;
+  /** statement 覆盖率（detail.txt 解析后填充，暂 N/A；映射 line metric） */
+  statement: number | null;
+  /** block 覆盖率（detail.txt 解析后填充，暂 N/A；映射 line metric） */
+  block: number | null;
 };
 
-const MODULE_GRID = 'grid-cols-[minmax(0,1.3fr)_110px_64px_64px_64px_64px_64px]';
+const MODULE_GRID = 'grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)_90px_130px_64px_64px_64px]';
 
+/** 表头列定义。'module' 与 'path' 为文本列（左对齐），其余为数值列（右对齐）。 */
 const SORTABLE_COLS: ReadonlyArray<{ key: SortKey; label: string }> = [
   { key: 'module', label: '模块' },
-  { key: 'overall', label: '覆盖率' },
-  { key: 'functional', label: '功能' },
-  { key: 'line', label: '语句' },
-  { key: 'branch', label: '分支' },
-  { key: 'assertion', label: '断言' },
+  { key: 'path', label: '层级' },
+  { key: 'line', label: '代码覆盖率' },
+  { key: 'branch', label: 'Branch' },
+  { key: 'statement', label: 'Stmts' },
+  { key: 'block', label: 'Blocks' },
 ];
 
-function toModuleRow(node: CoverageNode, parent: string): ModuleRow {
-  const four: Array<number | null> = [
-    node.metrics.functional.percentage,
-    node.metrics.line.percentage,
-    node.metrics.branch.percentage,
-    node.metrics.assertion.percentage,
-  ];
-  const valid = four.filter((v): v is number => v !== null);
-  const overall = valid.length === 0 ? null : valid.reduce((s, v) => s + v, 0) / valid.length;
+function toModuleRow(node: CoverageNode): ModuleRow {
   return {
     node,
-    parent,
-    overall,
-    functional: node.metrics.functional.percentage,
     line: node.metrics.line.percentage,
     branch: node.metrics.branch.percentage,
-    assertion: node.metrics.assertion.percentage,
+    // statement/block 待 detail.txt 按需解析后填充（暂 N/A）
+    statement: null,
+    block: null,
   };
 }
 
-function collectRows(node: CoverageNode, parentName: string, out: ModuleRow[]): void {
+function collectRows(node: CoverageNode, out: ModuleRow[]): void {
   for (const child of node.children) {
-    out.push(toModuleRow(child, parentName));
-    collectRows(child, child.name, out);
+    out.push(toModuleRow(child));
+    collectRows(child, out);
   }
 }
 
 function compareRows(a: ModuleRow, b: ModuleRow, key: SortKey, dir: 'asc' | 'desc'): number {
+  // 文本列：模块名 / 完整层级 path（点号字典序天然保持树形分组）
   if (key === 'module') {
     const byName = a.node.name.localeCompare(b.node.name);
     return dir === 'asc' ? byName : -byName;
+  }
+  if (key === 'path') {
+    const byPath = a.node.path.localeCompare(b.node.path);
+    return dir === 'asc' ? byPath : -byPath;
   }
   const av = a[key];
   const bv = b[key];
@@ -443,7 +440,22 @@ function compareRows(a: ModuleRow, b: ModuleRow, key: SortKey, dir: 'asc' | 'des
   return dir === 'asc' ? av - bv : bv - av;
 }
 
-function NumCell({ path, metric, pct }: { path: string; metric: SummaryMetric; pct: number | null }) {
+/** 代码覆盖率单元：百分比 + 覆盖点数比合并展示（如 94.13% (353/375)） */
+function CoverageCell({ path, node, pct }: { path: string; node: CoverageNode; pct: number | null }) {
+  const t = node.metrics.line;
+  const counts = pct !== null && t.covered !== null && t.total !== null ? ` (${t.covered}/${t.total})` : '';
+  return (
+    <span
+      data-testid={`cov-cell-${path}-line`}
+      className={cn('text-right font-mono text-[11px] tabular-nums', lowTextClass(pct))}
+    >
+      {pct === null ? 'N/A' : `${pct.toFixed(1)}%${counts}`}
+    </span>
+  );
+}
+
+/** 预留列（blocks/branches/statements）：detail.txt 按需解析后填充，暂 N/A */
+function PlaceholderCell({ path, metric, pct }: { path: string; metric: string; pct: number | null }) {
   return (
     <span
       data-testid={`cov-cell-${path}-${metric}`}
@@ -470,30 +482,33 @@ function ModuleRowView({ row, onOpen }: { row: ModuleRow; onOpen: () => void }) 
       }}
     >
       <div className="min-w-0 overflow-hidden">
-        <span className="block truncate font-mono text-xs text-foreground">{row.node.name}</span>
-        <span className="block truncate text-[10px] text-muted-foreground/70">{row.parent}</span>
+        <span className="block truncate font-mono text-xs text-foreground" title={row.node.name}>
+          {row.node.name}
+        </span>
+      </div>
+      {/* 完整层级 path（点号拼接，与树一致）：同名模块（如各级 U_SYNC_UPDT）靠它区分 */}
+      <div className="min-w-0 overflow-hidden" title={row.node.path}>
+        <span
+          className="block truncate font-mono text-[10px] text-muted-foreground/80"
+          data-testid={`cov-path-${row.node.path}`}
+        >
+          {row.node.path}
+        </span>
       </div>
       <div
         className="h-1 overflow-hidden rounded-sm bg-background"
-        title={row.overall === null ? 'N/A' : `${row.overall.toFixed(1)}%`}
+        title={row.line === null ? 'N/A' : `${row.line.toFixed(1)}%`}
       >
         <div
-          className={cn('h-full rounded-sm', lowBarClass(row.overall))}
-          style={{ width: `${row.overall ?? 0}%` }}
+          className={cn('h-full rounded-sm', lowBarClass(row.line))}
+          style={{ width: `${row.line ?? 0}%` }}
           data-testid={`cov-bar-${row.node.path}`}
         />
       </div>
-      <NumCell path={row.node.path} metric="functional" pct={row.functional} />
-      <NumCell path={row.node.path} metric="line" pct={row.line} />
-      <NumCell path={row.node.path} metric="branch" pct={row.branch} />
-      <NumCell path={row.node.path} metric="assertion" pct={row.assertion} />
-      {/* 24hΔ 无每模块历史数据源，降级占位不造假 */}
-      <span
-        className="text-right font-mono text-[11px] text-muted-foreground/50"
-        data-testid={`cov-delta-${row.node.path}`}
-      >
-        —
-      </span>
+      <CoverageCell path={row.node.path} node={row.node} pct={row.line} />
+      <PlaceholderCell path={row.node.path} metric="branch" pct={row.branch} />
+      <PlaceholderCell path={row.node.path} metric="statement" pct={row.statement} />
+      <PlaceholderCell path={row.node.path} metric="block" pct={row.block} />
     </div>
   );
 }
@@ -503,14 +518,14 @@ function ModuleSortTable({ tree, loading, onOpen }: {
   loading: boolean;
   onOpen: () => void;
 }) {
-  const [sortKey, setSortKey] = useState<SortKey>('overall');
-  // 默认主覆盖率升序：低覆盖模块置顶，便于聚焦收敛
+  const [sortKey, setSortKey] = useState<SortKey>('line');
+  // 默认代码覆盖率升序：低覆盖模块置顶，便于聚焦收敛
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   const rows = useMemo<ModuleRow[]>(() => {
     if (!tree) return [];
     const out: ModuleRow[] = [];
-    collectRows(tree.root, tree.root.name, out);
+    collectRows(tree.root, out);
     return out;
   }, [tree]);
 
@@ -524,7 +539,8 @@ function ModuleSortTable({ tree, loading, onOpen }: {
       setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     } else {
       setSortKey(key);
-      setSortDir(key === 'module' ? 'asc' : 'desc');
+      // 文本列（模块/层级）默认升序，数值列默认降序
+      setSortDir(key === 'module' || key === 'path' ? 'asc' : 'desc');
     }
   };
 
@@ -543,24 +559,26 @@ function ModuleSortTable({ tree, loading, onOpen }: {
           'gap-2 border-b border-border px-3.5 py-2 text-[10.5px] uppercase tracking-[0.08em] text-muted-foreground/70',
         )}
       >
-        {SORTABLE_COLS.map(({ key, label }) => (
-          <button
-            key={key}
-            data-testid={`cov-sort-${key}`}
-            onClick={() => handleSort(key)}
-            className={cn(
-              'flex cursor-pointer items-center gap-1 transition-colors hover:text-foreground',
-              key !== 'module' && key !== 'overall' && 'justify-end',
-              sortKey === key && 'text-primary',
-            )}
-          >
-            {label}
-            {sortKey === key && (
-              <span className="text-[9px]">{sortDir === 'asc' ? '↑' : '↓'}</span>
-            )}
-          </button>
+        {SORTABLE_COLS.map(({ key, label }, i) => (
+          <Fragment key={key}>
+            {/* 文本列（模块/层级）之后插入覆盖率条的空表头占位，使数值列与数据行严格对齐 */}
+            {i === 1 && <span aria-hidden />}
+            <button
+              data-testid={`cov-sort-${key}`}
+              onClick={() => handleSort(key)}
+              className={cn(
+                'flex cursor-pointer items-center gap-1 transition-colors hover:text-foreground',
+                key !== 'module' && key !== 'path' && 'justify-end',
+                sortKey === key && 'text-primary',
+              )}
+            >
+              {label}
+              {sortKey === key && (
+                <span className="text-[9px]">{sortDir === 'asc' ? '↑' : '↓'}</span>
+              )}
+            </button>
+          </Fragment>
         ))}
-        <span className="text-right">24h Δ</span>
       </div>
       {loading && !tree ? (
         <div className="flex flex-col gap-2 p-4" data-testid="cov-mod-skeleton">
@@ -595,91 +613,25 @@ function ModuleSortTable({ tree, loading, onOpen }: {
   );
 }
 
-// ─── Bin 明细（未命中 functional covergroup bins） ───────────────
-
-function BinPanel({ state, items }: { state: 'idle' | 'loading' | 'loaded'; items: UncoveredItem[] }) {
-  return (
-    <div
-      className="overflow-hidden rounded-xl border border-border bg-card"
-      data-testid="cov-bin-panel"
-    >
-      <div className="flex items-center gap-2 border-b border-border px-3.5 py-2.5 text-xs font-semibold text-foreground">
-        未命中 Bin · functional
-        <span className="rounded bg-status-fail/15 px-1.5 py-0.5 text-[10px] font-normal text-status-fail-foreground">
-          {items.length}
-        </span>
-      </div>
-      {state !== 'loaded' ? (
-        <div className="flex flex-col gap-2 p-4" data-testid="cov-bin-skeleton">
-          <div className="h-5 w-1/3 animate-pulse rounded bg-muted" />
-          {Array.from({ length: 4 }, (_, i) => (
-            <div key={i} className="h-8 w-full animate-pulse rounded bg-muted" />
-          ))}
-        </div>
-      ) : items.length === 0 ? (
-        <div
-          className="px-3.5 py-10 text-center text-xs text-muted-foreground/70"
-          data-testid="cov-bin-empty"
-        >
-          暂无未命中 Bin 数据 — 需解析 detail 报告（functional covergroup bins）
-        </div>
-      ) : (
-        <div className="flex max-h-[420px] flex-col overflow-y-auto">
-          {items.map((item, i) => (
-            <div
-              key={`${item.module}-${i}`}
-              data-testid={`cov-bin-row-${i}`}
-              className="flex flex-wrap items-center gap-2 border-b border-border px-3.5 py-2 text-[11px] last:border-b-0"
-            >
-              <span className="font-mono text-xs text-foreground">{item.module}</span>
-              <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                {item.description}
-              </span>
-              {item.signal && (
-                <span className="font-mono text-[10px] text-muted-foreground/80">
-                  {item.signal}
-                </span>
-              )}
-              {item.file && (
-                <span className="font-mono text-[10px] text-muted-foreground/80">
-                  {item.file}
-                  {item.line !== undefined ? `:${item.line}` : ''}
-                </span>
-              )}
-              <span className="rounded bg-status-fail/15 px-1.5 py-0.5 text-[9px] font-semibold text-status-fail-foreground">
-                未命中
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── 主组件 ──────────────────────────────────────────────────────
 
 export function CoverageView() {
   const currentProjectId = useProjectStore((s) => s.currentProjectId);
-const sessions = useCoverageCoreStore((s) => s.sessions);
-const currentSessionId = useCoverageCoreStore((s) => s.currentSessionId);
-const tree = useCoverageCoreStore((s) => s.tree);
-const overview = useCoverageCoreStore((s) => s.overview);
-const loading = useCoverageCoreStore((s) => s.loading);
-const loadSessions = useCoverageCoreStore((s) => s.loadSessions);
-const loadTree = useCoverageCoreStore((s) => s.loadTree);
-const loadUncovered = useCoverageCoreStore((s) => s.loadUncovered);
-const openExportDialog = useCoverageExportStore((s) => s.openExportDialog);
+  const sessions = useCoverageCoreStore((s) => s.sessions);
+  const currentSessionId = useCoverageCoreStore((s) => s.currentSessionId);
+  const tree = useCoverageCoreStore((s) => s.tree);
+  const overview = useCoverageCoreStore((s) => s.overview);
+  const loading = useCoverageCoreStore((s) => s.loading);
+  const loadSessions = useCoverageCoreStore((s) => s.loadSessions);
+  const loadTree = useCoverageCoreStore((s) => s.loadTree);
+  const openExportDialog = useCoverageExportStore((s) => s.openExportDialog);
 
   // gaps store
-const targets = useCoverageGapsStore((s) => s.targets);
-const trend = useCoverageGapsStore((s) => s.trend);
-const loadTrend = useCoverageGapsStore((s) => s.loadTrend);
-const uncoveredItems = useCoverageCoreStore((s) => s.uncoveredItems);
+  const targets = useCoverageGapsStore((s) => s.targets);
+  const trend = useCoverageGapsStore((s) => s.trend);
+  const loadTrend = useCoverageGapsStore((s) => s.loadTrend);
   const open = useWorkbenchStore((s) => s.open);
 
-  const [tab, setTab] = useState<'module' | 'bin'>('module');
-  const [binState, setBinState] = useState<'idle' | 'loading' | 'loaded'>('idle');
   const [importDialogOpen, setImportDialogOpen] = useState(false);
 
   // 数据加载：无树数据时 session → tree 链式拉取；趋势独立加载（DashboardView 模式）
@@ -692,14 +644,6 @@ const uncoveredItems = useCoverageCoreStore((s) => s.uncoveredItems);
       void loadTrend(currentProjectId, TREND_LIMIT);
     }
   }, [currentProjectId, tree, trend.length, loadSessions, loadTree, loadTrend]);
-
-  // Bin 明细首次进入：骨架屏 = loadUncovered 查询 loading 态（Issue #5）
-  useEffect(() => {
-    if (tab !== 'bin' || binState !== 'idle' || !currentProjectId) return;
-    setBinState('loading');
-    void loadUncovered(currentProjectId, currentSessionId ?? undefined, 'functional')
-      .finally(() => setBinState('loaded'));
-  }, [tab, binState, currentProjectId, currentSessionId, loadUncovered]);
 
   const sortedTrend = useMemo(
     () => [...trend].sort((a, b) => a.createdAt - b.createdAt),
@@ -714,27 +658,6 @@ const uncoveredItems = useCoverageCoreStore((s) => s.uncoveredItems);
   return (
     <div className="flex-1 overflow-y-auto p-5" data-testid="coverage-view">
       <ViewHeader title="覆盖率" subtitle={subtitle}>
-        <div
-          className="flex rounded-lg border border-border bg-background p-0.5"
-          data-testid="cov-tabs"
-        >
-          {([['module', '模块排序'], ['bin', 'Bin 明细']] as const).map(([key, label]) => (
-            <button
-              key={key}
-              data-testid={`cov-tab-${key}`}
-              aria-pressed={tab === key}
-              className={cn(
-                'cursor-pointer rounded-md px-3 py-1 text-xs transition-colors',
-                tab === key
-                  ? 'bg-accent font-medium text-foreground'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
-              onClick={() => setTab(key)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
         <button
           className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:opacity-90"
           onClick={() => setImportDialogOpen(true)}
@@ -755,18 +678,20 @@ const uncoveredItems = useCoverageCoreStore((s) => s.uncoveredItems);
 
       <div className="mb-3 grid grid-cols-[1.6fr_1fr] items-stretch gap-3">
         <TrendChart trend={sortedTrend} />
-        <SummaryPanel overview={overview} targets={targets} trend={sortedTrend} loading={loading} />
+        <SummaryPanel
+          overview={overview}
+          tree={tree}
+          targets={targets}
+          trend={sortedTrend}
+          loading={loading}
+        />
       </div>
 
-      {tab === 'module' ? (
-        <ModuleSortTable
-          tree={tree}
-          loading={loading}
-          onOpen={() => open({ type: 'coverage-detail' })}
-        />
-      ) : (
-        <BinPanel state={binState} items={uncoveredItems.functional ?? []} />
-      )}
+      <ModuleSortTable
+        tree={tree}
+        loading={loading}
+        onOpen={() => open({ type: 'coverage-detail' })}
+      />
 
       <CoverageImportDialog
         open={importDialogOpen}

@@ -62,7 +62,7 @@ function makeMockData(sessionId: string, withUncovered = false): CoverageData {
     children: [
       {
         name: 'cpu_core',
-        path: 'top/cpu_core',
+        path: 'cpu_core',
         depth: 1,
         metrics: makeMetrics({
           line: [920, 1000],
@@ -78,7 +78,7 @@ function makeMockData(sessionId: string, withUncovered = false): CoverageData {
       },
       {
         name: 'memory_ctrl',
-        path: 'top/memory_ctrl',
+        path: 'memory_ctrl',
         depth: 1,
         metrics: makeMetrics({
           line: [880, 1000],
@@ -193,7 +193,7 @@ describe('generateHtmlReport', () => {
   it('HTML 转义模块名中的特殊字符，防止结构破坏', () => {
     const data = makeMockData('s1');
     data.root.children[0].name = '<script>x</script>';
-    data.root.children[0].path = 'top/<script>';
+    data.root.children[0].path = '<script>';
     const html = generateHtmlReport(data);
     expect(html).not.toContain('<script>x</script></td>');
     expect(html).toContain('&lt;script&gt;');

@@ -63,6 +63,7 @@ export function RunConfigModal({
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [entryPreviewOpen, setEntryPreviewOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copiedUnreadable, setCopiedUnreadable] = useState(false);
   const [running, setRunning] = useState(false);
 
   // ── 选项表单 ──
@@ -190,6 +191,17 @@ export function RunConfigModal({
       setTimeout(() => setCopied(false), 1500);
     } catch {
       // 剪贴板不可用时静默（预览文本仍可手动选中复制）
+    }
+  };
+
+  /** 复制全部 unreadable 引用的完整路径（每行一条），便于用户在终端/编辑器里排查 */
+  const handleCopyUnreadable = async () => {
+    try {
+      await navigator.clipboard.writeText(unreadableRefs.map((r) => r.path).join('\n'));
+      setCopiedUnreadable(true);
+      setTimeout(() => setCopiedUnreadable(false), 1500);
+    } catch {
+      // 剪贴板不可用时静默
     }
   };
 
@@ -400,21 +412,41 @@ export function RunConfigModal({
                 {/* Group 引用清单（解析后） */}
                 {selected?.type === 'group' && groupResolved && (
                   <div className="rounded-md border border-border/50 px-3 py-2">
-                    <div className="mb-1 text-[10.5px] font-semibold uppercase text-muted-foreground">引用文件</div>
+                    <div className="mb-1 flex items-center justify-between">
+                      <span className="text-[10.5px] font-semibold uppercase text-muted-foreground">引用文件</span>
+                      {unreadableRefs.length > 0 && (
+                        <button
+                          onClick={handleCopyUnreadable}
+                          className="rounded px-1.5 py-0.5 text-[10.5px] text-status-fail-foreground transition-colors hover:bg-accent"
+                          title="复制无法读取引用的完整路径（每行一条），便于排查"
+                          data-testid="reg-run-unreadable-copy"
+                        >
+                          {copiedUnreadable ? '已复制' : '复制失败路径'}
+                        </button>
+                      )}
+                    </div>
                     {groupResolved.map((ref) => (
-                      <div key={ref.path} className="flex items-center gap-1.5">
+                      <div key={ref.path} className="flex items-start gap-1.5">
                         {ref.type === 'unreadable' && (
-                          <FileWarning className="h-2.5 w-2.5 shrink-0 text-status-fail-foreground" />
+                          <FileWarning className="mt-[3px] h-2.5 w-2.5 shrink-0 text-status-fail-foreground" />
                         )}
                         <span
-                          key={ref.path}
                           className={cn(
-                            'truncate font-mono text-[10.5px]',
-                            ref.type === 'unreadable' ? 'text-status-fail-foreground/80' : 'text-muted-foreground',
+                            'font-mono text-[10.5px]',
+                            ref.type === 'unreadable'
+                              ? 'break-all whitespace-pre-wrap text-status-fail-foreground/80'
+                              : 'truncate text-muted-foreground',
                           )}
-                          title={ref.type === 'unreadable' ? '无法读取（环境变量未配置或文件缺失）' : undefined}
+                          title={
+                            ref.type === 'unreadable'
+                              ? `${ref.path}${ref.reason ? `（${ref.reason}）` : ''}`
+                              : ref.path
+                          }
                         >
                           [{ref.type}] {ref.path}
+                          {ref.type === 'unreadable' && ref.reason && (
+                            <span className="text-muted-foreground/80">（{ref.reason}）</span>
+                          )}
                         </span>
                       </div>
                     ))}
@@ -560,7 +592,7 @@ export function RunConfigModal({
           {unreadableRefs.length > 0 && (
             <span
               className="flex items-center gap-1 text-[10.5px] text-status-fail-foreground"
-              title={unreadableRefs.map((r) => r.path).join('\n')}
+              title={unreadableRefs.map((r) => `${r.path}${r.reason ? `（${r.reason}）` : ''}`).join('\n')}
               data-testid="reg-run-unreadable-count"
             >
               <FileWarning className="h-3 w-3" />

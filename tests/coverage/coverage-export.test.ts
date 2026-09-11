@@ -74,7 +74,7 @@ function makeMockData(sessionId: string, linePct: [number, number] = [902, 1000]
     children: [
       {
         name: 'cpu_core',
-        path: 'top/cpu_core',
+        path: 'cpu_core',
         depth: 1,
         metrics: makeMetrics({
           line: [920, 1000],

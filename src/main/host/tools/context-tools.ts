@@ -51,7 +51,7 @@ export function createContextTools(ctx: ToolContext): HostToolEntry[] {
       {
         type: 'object',
         properties: {
-          module: { type: 'string', description: 'Module name or path (e.g. "top/cpu_core")' },
+          module: { type: 'string', description: 'Module name or path (e.g. "tb_top.chip_top")' },
           maxLines: { type: 'number', description: 'Max lines to return (default 500)' },
         },
         required: ['module'],

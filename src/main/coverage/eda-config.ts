@@ -53,6 +53,22 @@ const LEGACY_VCS_URG_VALUES: Readonly<
 /** vcs-urg 旧默认 covMergeDir（ADR 0024 修正前，urg 输出目录名，语义颠倒）。 */
 const LEGACY_VCS_URG_COV_MERGE_DIR = 'urgReport';
 
+/** imc 旧默认 summary 命令（分层解析优化前）。存量配置命中该值 → 清空，不再执行无信息量的 summary 报告。 */
+const LEGACY_IMC_SUMMARY_COMMAND =
+  'imc -load {covMergeDir} -execcmd "report -summary -out {reportDir}/summary.txt"';
+
+/**
+ * imc 旧配置迁移（分层解析优化）：
+ * 存储的 summaryCommand 命中旧默认 → 置为 undefined（新默认）。
+ * 用户自定义过的值（不等于旧默认）保留不动。
+ */
+function migrateLegacyImc(config: EdaToolConfig): EdaToolConfig {
+  if (config.tool !== 'imc' || config.summaryCommand !== LEGACY_IMC_SUMMARY_COMMAND) {
+    return config;
+  }
+  return { ...config, summaryCommand: undefined };
+}
+
 /**
  * vcs-urg 旧配置迁移（ADR 0024）：
  *   - 存储的 covMergeDir 等于旧默认 'urgReport' → 改为新默认 'cov_merge'
@@ -94,8 +110,9 @@ export async function loadEdaConfig(projectRoot: string): Promise<EdaToolConfig 
     }
     const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
     const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : undefined);
-    // 先迁移旧默认值，再用 normalizeConfig 填充缺失字段（防御性：存储的配置可能缺失字段）
-    return normalizeConfig(migrateLegacyVcsUrg({
+    // 先迁移旧默认值（vcs-urg 两代旧默认 / imc 旧 summary 默认），再用 normalizeConfig 填充缺失字段
+    // （防御性：存储的配置可能缺失字段）
+    return normalizeConfig(migrateLegacyImc(migrateLegacyVcsUrg({
       tool: parsed.tool as EdaTool,
       covMergeDir: parsed.covMergeDir,
       summaryCommand: str(parsed.summaryCommand),
@@ -109,7 +126,7 @@ export async function loadEdaConfig(projectRoot: string): Promise<EdaToolConfig 
       lsfResource: str(parsed.lsfResource),
       startupTimeoutSec: num(parsed.startupTimeoutSec),
       runTimeoutSec: num(parsed.runTimeoutSec),
-    }));
+    })));
   } catch {
     return null;
   }

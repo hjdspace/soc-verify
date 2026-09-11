@@ -30,7 +30,7 @@ function makeExclusion(
 ): CoverageExclusion {
   return {
     sessionId: 'merge_test',
-    nodePath: 'top/cpu_core',
+    nodePath: 'cpu_core',
     metric: 'line',
     reason: 'dead code — power-down gated',
     requestedBy: 'ai-triage',
@@ -100,14 +100,14 @@ describe('generateElFile', () => {
         id: 'excl_2',
         status: 'approved',
         metric: 'functional',
-        nodePath: 'top/memory_ctrl',
+        nodePath: 'memory_ctrl',
         bin: 'err_inject.bin_backdoor',
         approvedBy: 'user',
       }),
     ];
     const path = expectPath(await generateElFile(tmpDir, 'merge_test', exclusions));
     const content = readFileSync(path, 'utf-8');
-    expect(content).toContain('instance: top/memory_ctrl bin: err_inject.bin_backdoor');
+    expect(content).toContain('instance: memory_ctrl bin: err_inject.bin_backdoor');
   });
 
   it('只含 approved 条目：pending / rejected 不写入指令', async () => {
@@ -156,7 +156,7 @@ describe('generateElFile', () => {
     expect(commentLine).toBeDefined();
     expect(commentLine).toContain('approved-by=lead1');
     expect(commentLine).toContain('reason=dead code — power-down gated');
-    expect(commentLine).toContain('module=top/cpu_core');
+    expect(commentLine).toContain('module=cpu_core');
   });
 
   it('无 approved 条目时删除既有 EL 文件并返回 null', async () => {

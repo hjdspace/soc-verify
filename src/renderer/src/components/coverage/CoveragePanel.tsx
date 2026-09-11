@@ -11,7 +11,7 @@ import {
   Loader2, BarChart3, Upload, ChevronRight,
   Target as TargetIcon, AlertTriangle, ShieldBan, GitCompare, Trash2, Plus,
   Activity, Square, Download, FolderOpen, Bug, X,
-  Trophy, EyeOff, CheckCircle2, Clock, Zap,
+  Trophy, EyeOff, CheckCircle2, Clock, Zap, Layers,
 } from 'lucide-react';
 import {
   useCoverageCoreStore,
@@ -115,6 +115,9 @@ export function CoveragePanel() {
   const detailParseStepLog = useCoverageCoreStore((s) => s.detailParseStepLog);
   const showDetailParseProgress = useCoverageCoreStore((s) => s.showDetailParseProgress);
   const detailParsed = useCoverageCoreStore((s) => s.detailParsed);
+  const detailMetricsParsed = useCoverageCoreStore((s) => s.detailMetricsParsed);
+  const detailMetricsParsing = useCoverageCoreStore((s) => s.detailMetricsParsing);
+  const parseDetailMetrics = useCoverageCoreStore((s) => s.parseDetailMetrics);
   const parseDetails = useCoverageCoreStore((s) => s.parseDetails);
   const registerDetailProgressListener = useCoverageCoreStore((s) => s.registerDetailProgressListener);
   const clearDetailParseProgress = useCoverageCoreStore((s) => s.clearDetailParseProgress);
@@ -202,6 +205,11 @@ export function CoveragePanel() {
   const handleParseDetails = async () => {
     if (!currentProjectId || !currentSessionId) return;
     await parseDetails(currentProjectId, currentSessionId);
+  };
+
+  const handleParseDetailMetrics = async () => {
+    if (!currentProjectId || !currentSessionId) return;
+    await parseDetailMetrics(currentProjectId, currentSessionId);
   };
 
   if (loading && !tree) {
@@ -459,6 +467,28 @@ export function CoveragePanel() {
             <Zap className="h-3 w-3" />
             解析详细报告
           </button>
+        )}
+        {currentSessionId && tree && !detailMetricsParsed && (
+          <button
+            onClick={handleParseDetailMetrics}
+            disabled={detailMetricsParsing}
+            className="flex items-center gap-1 rounded border border-primary/50 bg-primary/10 px-2 py-1 text-xs text-primary hover:bg-primary/20 disabled:opacity-50"
+            data-testid="coverage-parse-detail-metrics-button"
+            title="运行 imc report -detail -all 生成并解析 detail.txt（instance 级 blocks/branches/statements，持久化供 waive 文件生成）"
+          >
+            {detailMetricsParsing ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Layers className="h-3 w-3" />
+            )}
+            {detailMetricsParsing ? '解析 detail 中...' : '解析 detail 覆盖率'}
+          </button>
+        )}
+        {currentSessionId && detailMetricsParsed && (
+          <span className="flex items-center gap-1 text-[10px] text-primary" data-testid="coverage-detail-metrics-parsed">
+            <CheckCircle2 className="h-3 w-3" />
+            detail 已解析
+          </span>
         )}
         {currentSessionId && detailParsed && (
           <span className="flex items-center gap-1 text-[10px] text-primary">

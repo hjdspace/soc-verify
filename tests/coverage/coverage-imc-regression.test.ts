@@ -88,6 +88,176 @@ describe('Cadence IMC coverage regressions', () => {
     expect(DEFAULT_EDA_COMMANDS.imc.binsCommand).not.toContain('report -bins');
   });
 
+  // ─── metrics.txt 快速导入层（SoC 代码覆盖率重构） ────────────────
+
+  /** 用户提供的真实 metrics.txt 数据（imc report -metrics overall 产物） */
+  const REAL_METRICS_TXT = [
+    'name                           Overall Average       Overall Covered',
+    'tb_top                         n/a                   n/a',
+    '|--chip_top                    n/a                   n/a',
+    '|  |--dut                      94.13%                94.13% (353/375)',
+    '|     |--u_analog_bb_line_usb  87.50%                86.67% (13/15)',
+    '|     |--u_analog_bb_line_pciepll 87.50%            86.67% (13/15)',
+    '|     |--u_block_wrap_0        90.71%                90.71% (488/538)',
+    '|     |   |--u_analog_mipi_mphy_2t2r 71.03%         71.03% (586/825)',
+    '|     |   |--u_g3_side_glue_wrap 70.37%             70.37% (1235/1755)',
+    '|     |       |--analog_mipi_mphy_2t2r_glue 100.00% 100.00% (239/239)',
+    '|     |       |--analog_mipi_mphy_2t2r_0_collar 90.36% 71.46% (1172/1640)',
+    '|     |       |--analog_mipi_phy_g3_rf 83.53%       82.07% (1620/1974)',
+    '|     |           |--u_reg_dec 98.76%               98.76% (159/161)',
+    '|     |--u_analog_mipi_mphy_2t2r_glue_logic 92.90%  89.50% (810/905)',
+    '|     |--u_cgm_mux2_mphy_cb_cfgclk 100.00%          100.00% (5/5)',
+    '|     |--u_clk_gate_reg_read    100.00%              100.00% (4/4)',
+    '|     |--u_cgm_mux2_mphy_symbolclk_for_aux 100.00%  100.00% (5/5)',
+    '|     |--u_cgm_divn_mphy_symbolclk_div4 53.85%      53.85% (7/13)',
+    '|     |--u_cgm_mux6_mphy_linkclk_for_aux 100.00%    100.00% (11/11)',
+    '|     |--u_cgm_divn_mphy_linkclk_div4 53.85%        53.85% (7/13)',
+    '|     |--u_rst_dvfs_top_n       100.00%              100.00% (5/5)',
+    '|     |--u_apb2rmmi_0           94.03%              85.59% (95/111)',
+    '|     |   |--U_SYNC_UPDT        50.00%              50.00% (2/4)',
+    '|     |   |--U_SYNC_INLN        100.00%             100.00% (4/4)',
+    '|     |   |--U_SYNC_START       100.00%             100.00% (4/4)',
+    '|     |--u_apb2rmmi_1           95.69%              90.99% (101/111)',
+    '|     |   |--U_SYNC_UPDT        75.00%              75.00% (3/4)',
+    '|     |   |--U_SYNC_INLN        100.00%             100.00% (4/4)',
+    '|     |   |--U_SYNC_START       100.00%             100.00% (4/4)',
+    '|     |--u_apb2rmmi_2           91.25%              76.58% (85/111)',
+    '|     |   |--U_SYNC_UPDT        50.00%              50.00% (2/4)',
+    '|     |   |--U_SYNC_INLN        100.00%             100.00% (4/4)',
+    '|     |   |--U_SYNC_START       100.00%             100.00% (4/4)',
+  ].join('\n');
+
+  /** 从树中按 path 定位节点（root path 以 top/ 开头，由 buildHierarchyTree 生成） */
+  function findNode(root: CoverageData['root'], name: string): CoverageData['root'] | null {
+    if (root.name === name) return root;
+    for (const child of root.children) {
+      const found = findNode(child, name);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  it('parses real metrics.txt: hierarchy tree + Overall Covered code coverage', async () => {
+    const projectRoot = await makeTempDir();
+    const reportDir = join(projectRoot, 'reports');
+    await mkdir(reportDir);
+    await writeFile(
+      join(reportDir, 'meta.json'),
+      JSON.stringify({ covMergeDir: join(projectRoot, 'cov_merge'), edaTool: 'imc' }),
+      'utf-8',
+    );
+    await writeFile(join(reportDir, 'metrics.txt'), REAL_METRICS_TXT, 'utf-8');
+
+    const result = await parser.parse(projectRoot, 'merge_test', reportDir, { summaryOnly: true });
+
+    // 层级树根：tb_top → chip_top → dut
+    expect(result.root.name).toBe('tb_top');
+    const chipTop = result.root.children[0];
+    expect(chipTop?.name).toBe('chip_top');
+    const dut = chipTop?.children[0];
+    expect(dut?.name).toBe('dut');
+
+    // dut 代码覆盖率：Overall Covered 94.13% (353/375)（非 Overall Average）
+    expect(dut?.metrics.line).toEqual({ percentage: 94.13, covered: 353, total: 375 });
+
+    // 深层节点：u_reg_dec（depth 6 链，前缀长度栈推导，深度无上限）
+    const regDec = findNode(result.root, 'u_reg_dec');
+    expect(regDec).not.toBeNull();
+    expect(regDec?.depth).toBe(6);
+    expect(regDec?.path).toBe('tb_top.chip_top.dut.u_block_wrap_0.u_g3_side_glue_wrap.analog_mipi_phy_g3_rf.u_reg_dec');
+    expect(regDec?.metrics.line).toEqual({ percentage: 98.76, covered: 159, total: 161 });
+
+    // Average ≠ Covered 的节点：取 Covered（u_apb2rmmi_0：Average 94.03 / Covered 85.59）
+    const apb0 = findNode(result.root, 'u_apb2rmmi_0');
+    expect(apb0?.metrics.line).toEqual({ percentage: 85.59, covered: 95, total: 111 });
+
+    // 兄弟分支回退：u_analog_mipi_mphy_2t2r_glue_logic 回到 dut 下（与 u_block_wrap_0 同级）
+    expect(apb0?.path).toBe('tb_top.chip_top.dut.u_apb2rmmi_0');
+    const glueLogic = findNode(result.root, 'u_analog_mipi_mphy_2t2r_glue_logic');
+    expect(glueLogic?.depth).toBe(3);
+    expect(glueLogic?.metrics.line).toEqual({ percentage: 89.5, covered: 810, total: 905 });
+
+    // N/A 行（tb_top/chip_top）：全 N/A triplet
+    expect(result.root.metrics.line).toEqual({ percentage: null, covered: null, total: null });
+
+    // 其他 metric 不参与（detail.txt 未解析）
+    expect(dut?.metrics.branch.percentage).toBeNull();
+    expect(dut?.metrics.functional.percentage).toBeNull();
+  });
+
+  it('parses metrics.txt deeper than 6 levels (no depth cap, dot-separated path)', async () => {
+    const projectRoot = await makeTempDir();
+    const reportDir = join(projectRoot, 'reports');
+    await mkdir(reportDir);
+    await writeFile(
+      join(reportDir, 'meta.json'),
+      JSON.stringify({ covMergeDir: join(projectRoot, 'cov_merge'), edaTool: 'imc' }),
+      'utf-8',
+    );
+    // 9 层真实 IMC 格式（前缀竖线+空格逐层延伸）
+    await writeFile(
+      join(reportDir, 'metrics.txt'),
+      [
+        'name                           Overall Average       Overall Covered',
+        'l0                             90.00%                90.00% (90/100)',
+        '|--l1                          90.00%                90.00% (90/100)',
+        '|  |--l2                       90.00%                90.00% (90/100)',
+        '|  |  |--l3                    90.00%                90.00% (90/100)',
+        '|  |  |  |--l4                 90.00%                90.00% (90/100)',
+        '|  |  |  |  |--l5              90.00%                90.00% (90/100)',
+        '|  |  |  |  |  |--l6           90.00%                90.00% (90/100)',
+        '|  |  |  |  |  |  |--l7        90.00%                90.00% (90/100)',
+        '|  |  |  |  |  |  |  |--l8     90.00%                90.00% (90/100)',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const result = await parser.parse(projectRoot, 'merge_test', reportDir, { summaryOnly: true });
+
+    // 根：l0，path 无 top 前缀，直接以模块名为第一级
+    expect(result.root.name).toBe('l0');
+    expect(result.root.path).toBe('l0');
+    // 逐层下钻到 depth 8，path 点号拼接
+    let node = result.root;
+    for (let depth = 1; depth <= 8; depth++) {
+      node = node.children[0];
+      expect(node?.name).toBe(`l${depth}`);
+      expect(node?.depth).toBe(depth);
+      expect(node?.path).toBe(Array.from({ length: depth + 1 }, (_, i) => `l${i}`).join('.'));
+    }
+  });
+
+  it('falls back to summary.txt hierarchy when metrics.txt is absent', async () => {
+    const projectRoot = await makeTempDir();
+    const reportDir = join(projectRoot, 'reports');
+    await mkdir(reportDir);
+    await writeFile(
+      join(reportDir, 'meta.json'),
+      JSON.stringify({ covMergeDir: join(projectRoot, 'cov_merge'), edaTool: 'imc' }),
+      'utf-8',
+    );
+    await writeFile(
+      join(reportDir, 'summary.txt'),
+      [
+        'name                  Overall Average  Overall Covered  Code Average  Code Covered       Fsm Average  Fsm Covered  Functional Average  Functional Covered',
+        '-----------------------------------------------------------------------------------------------------------------------------------------------------------',
+        'tb_top                n/a              n/a              n/a           n/a                n/a          n/a          n/a                 n/a',
+        '|--dut                94.13%           94.13% (353/375) 94.13%        94.13% (353/375)   n/a          n/a          n/a                 n/a',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const result = await parser.parse(projectRoot, 'merge_test', reportDir);
+    const dut = result.root.children[0];
+    expect(dut?.name).toBe('dut');
+    expect(dut?.metrics.line).toEqual({ percentage: 94.13, covered: 353, total: 375 });
+  });
+
+  it('imc default commands: summary disabled, metrics is the quick-import command', () => {
+    expect(DEFAULT_EDA_COMMANDS.imc.summaryCommand).toBeUndefined();
+    expect(DEFAULT_EDA_COMMANDS.imc.metricsCommand).toContain('-execcmd "report -metrics overall');
+  });
+
   it('keeps the main event loop responsive while parsing', async () => {
     const projectRoot = await makeTempDir();
     const reportDir = join(projectRoot, 'reports');
