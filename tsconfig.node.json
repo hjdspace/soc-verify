@@ -24,6 +24,7 @@
     "src/preload/**/*",
     "src/shared/**/*",
     "src/renderer/src/**/*",
+    "runner-pi/**/*",
     "electron.vite.config.ts",
     "vitest.config.ts",
     "eslint.config.js",
