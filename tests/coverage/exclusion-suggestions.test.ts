@@ -22,7 +22,7 @@ triage 结论：连续两轮 delta 低于阈值，根因为 dead_code。
 \`\`\`exclusion-suggestions
 [
   {
-    "module": "top/cpu_core",
+    "module": "cpu_core",
     "metric": "line",
     "file": "rtl/cpu_core.sv",
     "line": 142,
@@ -30,7 +30,7 @@ triage 结论：连续两轮 delta 低于阈值，根因为 dead_code。
     "confidence": 0.86
   },
   {
-    "module": "top/memory_ctrl",
+    "module": "memory_ctrl",
     "metric": "functional",
     "bin": "err_inject.bin_backdoor",
     "reason": "backdoor 注入路径仅验证平台自检使用",
@@ -47,14 +47,14 @@ describe('parseExclusionSuggestions', () => {
     const result = parseExclusionSuggestions(VALID_BLOCK);
     expect(result).toHaveLength(2);
 
-    expect(result[0].module).toBe('top/cpu_core');
+    expect(result[0].module).toBe('cpu_core');
     expect(result[0].metric).toBe('line');
     expect(result[0].file).toBe('rtl/cpu_core.sv');
     expect(result[0].line).toBe(142);
     expect(result[0].reason).toContain('不可达');
     expect(result[0].confidence).toBeCloseTo(0.86);
 
-    expect(result[1].module).toBe('top/memory_ctrl');
+    expect(result[1].module).toBe('memory_ctrl');
     expect(result[1].metric).toBe('functional');
     expect(result[1].bin).toBe('err_inject.bin_backdoor');
     expect(result[1].file).toBeUndefined();
@@ -74,21 +74,21 @@ describe('parseExclusionSuggestions', () => {
     const text = `
 \`\`\`exclusion-suggestions
 [
-  { "module": "top/a", "metric": "line", "file": "a.sv", "line": 10, "confidence": 0.9 },
-  { "module": "top/b", "metric": "branch", "file": "b.sv", "line": 20, "reason": "dead code", "confidence": 0.8 }
+  { "module": "a", "metric": "line", "file": "a.sv", "line": 10, "confidence": 0.9 },
+  { "module": "b", "metric": "branch", "file": "b.sv", "line": 20, "reason": "dead code", "confidence": 0.8 }
 ]
 \`\`\`
 `;
     const result = parseExclusionSuggestions(text);
     expect(result).toHaveLength(1);
-    expect(result[0].module).toBe('top/b');
+    expect(result[0].module).toBe('b');
   });
 
   it('reason 为空白字符串同样跳过', () => {
     const text = `
 \`\`\`exclusion-suggestions
 [
-  { "module": "top/a", "metric": "line", "file": "a.sv", "line": 1, "reason": "   ", "confidence": 0.9 }
+  { "module": "a", "metric": "line", "file": "a.sv", "line": 1, "reason": "   ", "confidence": 0.9 }
 ]
 \`\`\`
 `;
@@ -105,7 +105,7 @@ describe('parseExclusionSuggestions', () => {
   it('块内畸形 JSON 容错返回空数组（不抛错）', () => {
     const text = `
 \`\`\`exclusion-suggestions
-[{ "module": "top/a", "metric":
+[{ "module": "a", "metric":
 \`\`\`
 `;
     expect(parseExclusionSuggestions(text)).toEqual([]);
@@ -114,7 +114,7 @@ describe('parseExclusionSuggestions', () => {
   it('JSON 非数组（对象）容错返回空数组', () => {
     const text = `
 \`\`\`exclusion-suggestions
-{ "module": "top/a" }
+{ "module": "a" }
 \`\`\`
 `;
     expect(parseExclusionSuggestions(text)).toEqual([]);
@@ -124,16 +124,16 @@ describe('parseExclusionSuggestions', () => {
     const text = `
 \`\`\`exclusion-suggestions
 [
-  { "module": "top/a", "metric": "line", "file": "a.sv", "line": 1, "reason": "r", "confidence": 1.5 },
-  { "module": "top/b", "metric": "line", "file": "b.sv", "line": 2, "reason": "r", "confidence": -0.1 },
-  { "module": "top/c", "metric": "line", "file": "c.sv", "line": 3, "reason": "r", "confidence": "high" },
-  { "module": "top/ok", "metric": "line", "file": "ok.sv", "line": 4, "reason": "r", "confidence": 1 }
+  { "module": "a", "metric": "line", "file": "a.sv", "line": 1, "reason": "r", "confidence": 1.5 },
+  { "module": "b", "metric": "line", "file": "b.sv", "line": 2, "reason": "r", "confidence": -0.1 },
+  { "module": "c", "metric": "line", "file": "c.sv", "line": 3, "reason": "r", "confidence": "high" },
+  { "module": "ok", "metric": "line", "file": "ok.sv", "line": 4, "reason": "r", "confidence": 1 }
 ]
 \`\`\`
 `;
     const result = parseExclusionSuggestions(text);
     expect(result).toHaveLength(1);
-    expect(result[0].module).toBe('top/ok');
+    expect(result[0].module).toBe('ok');
     expect(result[0].confidence).toBe(1);
   });
 
@@ -141,16 +141,16 @@ describe('parseExclusionSuggestions', () => {
     const text = `
 \`\`\`exclusion-suggestions
 [
-  { "module": "top/a", "metric": "coverage", "file": "a.sv", "line": 1, "reason": "r", "confidence": 0.5 },
-  { "module": "top/b", "metric": "line", "reason": "r", "confidence": 0.5 },
-  { "module": "top/c", "metric": "line", "file": "c.sv", "reason": "r", "confidence": 0.5 },
-  { "module": "top/ok", "metric": "toggle", "bin": "b1", "reason": "r", "confidence": 0.5 }
+  { "module": "a", "metric": "coverage", "file": "a.sv", "line": 1, "reason": "r", "confidence": 0.5 },
+  { "module": "b", "metric": "line", "reason": "r", "confidence": 0.5 },
+  { "module": "c", "metric": "line", "file": "c.sv", "reason": "r", "confidence": 0.5 },
+  { "module": "ok", "metric": "toggle", "bin": "b1", "reason": "r", "confidence": 0.5 }
 ]
 \`\`\`
 `;
     const result = parseExclusionSuggestions(text);
     expect(result).toHaveLength(1);
-    expect(result[0].module).toBe('top/ok');
+    expect(result[0].module).toBe('ok');
   });
 });
 
