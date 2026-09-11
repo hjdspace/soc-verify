@@ -128,7 +128,7 @@ function makeMockData(sessionId: string): CoverageData {
     children: [
       {
         name: 'cpu_core',
-        path: 'top/cpu_core',
+        path: 'cpu_core',
         depth: 1,
         metrics: makeMetrics({
           line: [800, 1000],       // 80% < 95 → deficit 15
@@ -143,7 +143,7 @@ function makeMockData(sessionId: string): CoverageData {
         children: [
           {
             name: 'u_alu',
-            path: 'top/cpu_core/u_alu',
+            path: 'cpu_core.u_alu',
             depth: 2,
             metrics: makeMetrics({
               line: [700, 1000],   // 70% < 95 → deficit 25（最差）
@@ -157,7 +157,7 @@ function makeMockData(sessionId: string): CoverageData {
           },
           {
             name: 'u_reg',
-            path: 'top/cpu_core/u_reg',
+            path: 'cpu_core.u_reg',
             depth: 2,
             metrics: makeMetrics({
               line: [850, 1000],   // 85% < 95 → deficit 10
@@ -173,7 +173,7 @@ function makeMockData(sessionId: string): CoverageData {
       },
       {
         name: 'memory_ctrl',
-        path: 'top/memory_ctrl',
+        path: 'memory_ctrl',
         depth: 1,
         metrics: makeMetrics({
           line: [920, 1000],
@@ -190,11 +190,11 @@ function makeMockData(sessionId: string): CoverageData {
 
   const uncovered: Partial<Record<string, UncoveredItem[]>> = {
     line: [
-      { module: 'top/cpu_core/u_alu', file: 'alu.sv', line: 42, description: 'uncovered line in ALU' },
-      { module: 'top/cpu_core/u_reg', file: 'reg.sv', line: 10, description: 'uncovered line in regfile' },
+      { module: 'cpu_core.u_alu', file: 'alu.sv', line: 42, description: 'uncovered line in ALU' },
+      { module: 'cpu_core.u_reg', file: 'reg.sv', line: 10, description: 'uncovered line in regfile' },
     ],
     branch: [
-      { module: 'top/cpu_core/u_reg', file: 'reg.sv', line: 55, description: 'uncovered branch in regfile' },
+      { module: 'cpu_core.u_reg', file: 'reg.sv', line: 55, description: 'uncovered branch in regfile' },
     ],
   };
 
@@ -332,12 +332,12 @@ describe('CoverageManager.getCoverageDetail (ADR 0009 按需下钻)', () => {
   it('返回指定模块及其直接子节点', async () => {
     const { mgr, sessionId, cleanup } = await setupManager();
     try {
-      const result = await mgr.getCoverageDetail('top/cpu_core', sessionId);
+      const result = await mgr.getCoverageDetail('cpu_core', sessionId);
 
       expect(result.sessionId).toBe(sessionId);
       expect(result.module).not.toBeNull();
       expect(result.module!.name).toBe('cpu_core');
-      expect(result.module!.path).toBe('top/cpu_core');
+      expect(result.module!.path).toBe('cpu_core');
       // 直接子节点：u_alu + u_reg
       expect(result.children).toHaveLength(2);
       expect(result.children.map((c) => c.name).sort()).toEqual(['u_alu', 'u_reg']);
@@ -351,7 +351,7 @@ describe('CoverageManager.getCoverageDetail (ADR 0009 按需下钻)', () => {
   it('返回叶子模块（无子节点）', async () => {
     const { mgr, sessionId, cleanup } = await setupManager();
     try {
-      const result = await mgr.getCoverageDetail('top/cpu_core/u_alu', sessionId);
+      const result = await mgr.getCoverageDetail('cpu_core.u_alu', sessionId);
       expect(result.module).not.toBeNull();
       expect(result.module!.name).toBe('u_alu');
       expect(result.children).toHaveLength(0);
@@ -363,7 +363,7 @@ describe('CoverageManager.getCoverageDetail (ADR 0009 按需下钻)', () => {
   it('不存在的 module path 返回 null module', async () => {
     const { mgr, sessionId, cleanup } = await setupManager();
     try {
-      const result = await mgr.getCoverageDetail('top/nonexistent', sessionId);
+      const result = await mgr.getCoverageDetail('nonexistent', sessionId);
       expect(result.module).toBeNull();
       expect(result.children).toHaveLength(0);
     } finally {
@@ -486,7 +486,7 @@ describe('get_coverage_detail Host Tool (ADR 0009 按需下钻)', () => {
         id: '1',
         toolCallId: 'tc1',
         toolName: 'get_coverage_detail',
-        arguments: { module: 'top/cpu_core' },
+        arguments: { module: 'cpu_core' },
       });
 
       const text = (result as { content: Array<{ text: string }> }).content[0].text;
@@ -513,7 +513,7 @@ describe('get_coverage_detail Host Tool (ADR 0009 按需下钻)', () => {
         id: '1',
         toolCallId: 'tc1',
         toolName: 'get_coverage_detail',
-        arguments: { module: 'top/nonexistent' },
+        arguments: { module: 'nonexistent' },
       });
 
       const text = (result as { content: Array<{ text: string }> }).content[0].text;
@@ -542,7 +542,7 @@ describe('get_coverage_detail Host Tool (ADR 0009 按需下钻)', () => {
         id: '1',
         toolCallId: 'tc1',
         toolName: 'get_coverage_detail',
-        arguments: { module: 'top/cpu_core' },
+        arguments: { module: 'cpu_core' },
       });
 
       const text = (result as { content: Array<{ text: string }> }).content[0].text;
@@ -590,7 +590,7 @@ describe('cov:// URI scheme (ADR 0009 分层 URI)', () => {
         type: 'host_uri_request',
         id: '1',
         operation: 'read',
-        url: `cov://${sessionId}/top/cpu_core`,
+        url: `cov://${sessionId}/cpu_core`,
       });
 
       expect(result.isError).toBeFalsy();
@@ -615,14 +615,14 @@ describe('cov:// URI scheme (ADR 0009 分层 URI)', () => {
         type: 'host_uri_request',
         id: '1',
         operation: 'read',
-        url: `cov://${sessionId}/top/cpu_core/u_alu/uncovered`,
+        url: `cov://${sessionId}/cpu_core.u_alu/uncovered`,
       });
 
       expect(result.isError).toBeFalsy();
       expect(result.contentType).toBe('application/json');
       const parsed = JSON.parse(result.content!);
       expect(parsed.sessionId).toBe(sessionId);
-      expect(parsed.module).toBe('top/cpu_core/u_alu');
+      expect(parsed.module).toBe('cpu_core.u_alu');
       expect(parsed.uncovered).toBeDefined();
       expect(Array.isArray(parsed.uncovered)).toBe(true);
       // mock 数据中 u_alu 有一条 line 未覆盖项
@@ -645,7 +645,7 @@ describe('cov:// URI scheme (ADR 0009 分层 URI)', () => {
         type: 'host_uri_request',
         id: '1',
         operation: 'read',
-        url: `cov://${sessionId}/top/cpu_core/u_reg/uncovered`,
+        url: `cov://${sessionId}/cpu_core.u_reg/uncovered`,
       });
 
       expect(result.isError).toBeFalsy();
@@ -693,7 +693,7 @@ describe('cov:// URI scheme (ADR 0009 分层 URI)', () => {
     expect(result.content).toBe('{}');
   });
 
-  it('深层模块路径 cov://<sessionId>/top/cpu_core/u_alu 返回叶子模块', async () => {
+  it('深层模块路径 cov://<sessionId>/cpu_core.u_alu 返回叶子模块', async () => {
     const { mgr, sessionId, cleanup } = await setupManager();
     try {
       const router = new HostUriRouter();
@@ -703,7 +703,7 @@ describe('cov:// URI scheme (ADR 0009 分层 URI)', () => {
         type: 'host_uri_request',
         id: '1',
         operation: 'read',
-        url: `cov://${sessionId}/top/cpu_core/u_alu`,
+        url: `cov://${sessionId}/cpu_core.u_alu`,
       });
 
       expect(result.isError).toBeFalsy();
