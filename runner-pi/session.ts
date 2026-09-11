@@ -1,5 +1,5 @@
 /**
- * pi 会话命令处理器 —— init / prompt / steer / abort / setModel /
+ * pi 会话命令处理器 —— init / prompt / regenerate / steer / abort / setModel /
  * setApprovalMode / getMcpStatus / getMcpServerTools / reloadMcp / compact / destroy。
  *
  * init 通过 pi SDK 创建 AgentSession（原生用户级 session 根 + cwd bucket）：
@@ -28,6 +28,7 @@ import {
 	type InlineExtension,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { classifyContentBlock } from "./message-blocks.ts";
 import { join } from "node:path";
 import { createJiti } from "jiti";
 import type { ApprovalMode } from "./approval-logic";
@@ -695,6 +696,109 @@ export async function handleAbort(
 	if (!ctx.session) throw new Error("Session not initialized");
 	await (ctx.session as AgentSession).abort();
 	sendResponse(cmd.id, true, { ok: true });
+}
+
+// ─── regenerate（issue 08：真实分支 + 新 engineSessionId）─
+
+/**
+ * 提取 user message 内容中的纯文本与图片块。文本块以换行拼接；
+ * 图片块原样透传给 prompt（PromptOptions.images）。
+ */
+function extractUserContent(content: unknown): {
+	text: string;
+	images: Array<{ type: "image"; data: string; mimeType: string }> | undefined;
+} {
+	if (typeof content === "string") {
+		return { text: content, images: undefined };
+	}
+	if (!Array.isArray(content)) {
+		return { text: "", images: undefined };
+	}
+	const textParts: string[] = [];
+	const images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+	for (const block of content) {
+		const b = classifyContentBlock(block);
+		if (!b) continue;
+		if (b.kind === "text") {
+			textParts.push(b.text);
+		} else {
+			images.push({ type: "image", data: b.data, mimeType: b.mimeType });
+		}
+	}
+	return { text: textParts.join("\n"), images: images.length > 0 ? images : undefined };
+}
+
+/**
+ * Regenerate 最后一个回合（issue 08）：创建真实新分支并产生新的
+ * engineSessionId，旧分支的文件不被修改或删除（parentSession 链保留回看入口）。
+ *
+ * 分支点 = 最后一条 user message 的 parent（Regenerate Branch 语义：新分支在
+ * user message 之前分叉，re-prompt 以同一文本重新追加 user turn）。
+ *   - 持久化 manager：createBranchedSession(parentId) 在同一 bucket 创建新
+ *     文件并原地切换（新 sessionId，header 记录 parentSession 链）；最后一条
+ *     user message 是根（parentId null）时用 newSession() 开新文件。
+ *   - 非持久化 manager（in-memory）：退化为同文件 branch()/resetLeaf()，
+ *     sessionId 不变。
+ * 分支后按 SDK navigateTree 的模式重置 agent 内存状态，再以原文本
+ * fire-and-forget re-prompt —— response 先行（host 拿到新 engineSessionId
+ * 持久化），turn 结果经正常事件通道流回。
+ */
+export async function handleRegenerate(
+	cmd: Command & { type: "regenerate" },
+	ctx: PiRunnerContext,
+): Promise<void> {
+	if (!ctx.session) {
+		sendResponse(cmd.id, false, undefined, "Session not initialized");
+		return;
+	}
+	const session = ctx.session as AgentSession;
+	if (session.isStreaming) {
+		sendResponse(cmd.id, false, undefined, "Session is streaming — wait until idle before regenerating");
+		return;
+	}
+
+	const manager = session.sessionManager;
+	let lastUser: { parentId: string | null; content: unknown } | null = null;
+	for (const entry of manager.getBranch()) {
+		const e = entry as {
+			parentId: string | null;
+			type?: string;
+			message?: { role?: string; content?: unknown };
+		};
+		if (e.type === "message" && e.message?.role === "user") {
+			lastUser = { parentId: e.parentId, content: e.message.content };
+		}
+	}
+	if (!lastUser) {
+		sendResponse(cmd.id, false, undefined, "No user message to regenerate");
+		return;
+	}
+
+	const { text, images } = extractUserContent(lastUser.content);
+
+	if (lastUser.parentId === null) {
+		// 分支点在根之前：开全新 session 文件（同样产生新 id）
+		if (manager.newSession() === undefined) {
+			manager.resetLeaf();
+		}
+	} else if (manager.createBranchedSession(lastUser.parentId) === undefined) {
+		// 非持久化 manager：退化为同文件分支（不产生新 id）
+		manager.branch(lastUser.parentId);
+	}
+
+	// 分支后重置 agent 内存状态（与 SDK navigateTree 相同的模式），
+	// 丢弃被重新生成的旧回合。
+	session.agent.state.messages = manager.buildSessionContext().messages;
+
+	sendResponse(cmd.id, true, { engineSessionId: manager.getSessionId() });
+
+	// fire-and-forget：response 已发出，turn 结果经事件通道流回；
+	// re-prompt 失败不影响已发出的 response。
+	void session.prompt(text, images ? { images } : undefined).catch((err: unknown) => {
+		const reason = err instanceof Error ? err.message : String(err);
+		console.error(`[socverify-runner] regenerate re-prompt failed: ${reason}`);
+		sendEvent({ type: "error", error: reason, message: reason });
+	});
 }
 
 // ─── setModel ───────────────────────────────────────────

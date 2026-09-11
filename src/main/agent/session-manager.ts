@@ -777,6 +777,10 @@ export class SessionManagerImpl extends EventEmitter {
           this.setActive(sessionId, true);
         } else if (evtType === 'agent_end') {
           this.setActive(sessionId, false);
+        } else if (evtType === 'error') {
+          // issue 08: runner 崩溃进入 error —— 会话立即退出活动状态（idle
+          // 计时恢复）；等待用户显式重启，不自动重放可能产生副作用的 turn。
+          this.setActive(sessionId, false);
         } else if (evtType && !SILENT_EVENT_TYPES.has(evtType)) {
           // Secondary safety net: refresh idle timer on other activity events.
           // Normally the timer is cancelled by agent_start, but if agent_start

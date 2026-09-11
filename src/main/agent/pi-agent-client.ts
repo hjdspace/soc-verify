@@ -14,6 +14,7 @@
 
 import type { AgentClientOptions } from './types';
 import { AgentClient } from './agent-client';
+import type { AgentRegenerateResult } from './agent-contract';
 import type { AgentEngine } from '@shared/agent-events';
 
 export class PiAgentClient extends AgentClient {
@@ -35,5 +36,19 @@ export class PiAgentClient extends AgentClient {
       throw new Error('PiAgentClient requires runnerPath pointing at runner-pi/index.ts');
     }
     return { cmd: this.options.nodePath ?? process.execPath, args: [this.options.runnerPath] };
+  }
+
+  /**
+   * Regenerate the last assistant response（issue 08）。
+   *
+   * runner-pi 分支到最后一条 user message 之前：持久化 session 用
+   * createBranchedSession/newSession 产生新的 engineSessionId（旧文件保留
+   * 可回看），非持久化退化为同文件 branch（id 不变）。response 在 re-prompt
+   * 之前发出，携带分支后的 engineSessionId 供 host 更新持久化记录。
+   */
+  override async regenerate(): Promise<AgentRegenerateResult> {
+    const response = await this.send({ type: 'regenerate' }, 60_000);
+    const data = this.getData<{ engineSessionId: string }>(response);
+    return { engineSessionId: data.engineSessionId };
   }
 }

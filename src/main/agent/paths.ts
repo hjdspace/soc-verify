@@ -9,6 +9,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const RUNNER_SCRIPT_REL = 'runner/index.ts';
 /** pi runner 脚本相对路径（普通 Node 脚本，ELECTRON_RUN_AS_NODE=1 运行） */
 const PI_RUNNER_REL = 'runner-pi/index.ts';
+/** pi 外部 session 扫描脚本相对路径（issue 08，一次性 CLI） */
+const PI_SESSION_SCAN_REL = 'runner-pi/session-scan.ts';
 /** 旧版 runner 路径（engine submodule 内，兼容回退） */
 const RUNNER_LEGACY_REL = 'engine/oh-my-pi/packages/coding-agent/src/socverify-runner.ts';
 /** 预编译 runner 二进制名称 */
@@ -143,6 +145,20 @@ export function resolvePiRunnerScript(): string | null {
 
   // 开发模式：仓库内 runner-pi/index.ts
   const dev = devPiRunnerScriptPath();
+  if (existsSync(dev)) return dev;
+
+  return null;
+}
+
+/**
+ * 解析 pi 外部 session 扫描脚本路径（issue 08，一次性 CLI，与 runner-pi
+ * 同目录分发）。优先级与 resolvePiRunnerScript 一致。
+ */
+export function resolvePiSessionScanScript(): string | null {
+  const packaged = join(packagedResourcesDir(), PI_SESSION_SCAN_REL);
+  if (existsSync(packaged)) return packaged;
+
+  const dev = resolve(__dirname, '../../', PI_SESSION_SCAN_REL);
   if (existsSync(dev)) return dev;
 
   return null;

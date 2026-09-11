@@ -40,6 +40,7 @@ import {
 	handleInit,
 	handleListAgentTools,
 	handlePrompt,
+	handleRegenerate,
 	handleReloadMcp,
 	handleCancelSubagent,
 	handleSetApprovalMode,
@@ -180,6 +181,9 @@ async function handleCommand(cmd: Command): Promise<void> {
 				break;
 			case "prompt":
 				await handlePrompt(cmd, ctx);
+				break;
+			case "regenerate":
+				await handleRegenerate(cmd, ctx);
 				break;
 			case "abort":
 				await handleAbort(cmd, ctx);

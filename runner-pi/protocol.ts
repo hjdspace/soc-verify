@@ -124,6 +124,7 @@ export type InitConfig = {
 export type Command =
 	| { id: string; type: "init"; config: InitConfig }
 	| { id: string; type: "prompt"; message: string; images?: string[] }
+	| { id: string; type: "regenerate" }
 	| { id: string; type: "abort" }
 	| { id: string; type: "steer"; message: string }
 	| { id: string; type: "setModel"; provider: string; modelId: string }

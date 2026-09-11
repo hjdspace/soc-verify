@@ -30,6 +30,9 @@ import {
   type PersistedSession,
 } from '../../agent/session-persistence';
 import { discoverSkills, readSkillContent, resolveSkillUriPath } from '../../agent/skill-discovery';
+import { adoptExternalPiSession, listExternalPiSessions } from '../../agent/external-pi-sessions';
+import { deleteOwnedSession } from '../../agent/session-deletion';
+import { cleanupLegacyOmpSessions } from '../../agent/omp-legacy-cleanup';
 import { generateSessionTitle } from '../../agent/title-generator';
 import { generateFollowUpSuggestions } from '../../agent/followup-generator';
 import { errorAnalysisCoordinator } from '../../simulation/error-analysis-coordinator';
@@ -978,9 +981,91 @@ export const sessionRouter = t.router({
       for (const activeSessionId of activeSessionIds) {
         await sessionManager.destroySession(activeSessionId);
       }
-      await removeSession(project.rootPath, input.sessionId);
-      await rm(storedMessagesPath(project.rootPath, input.sessionId), { force: true });
-      return { ok: true };
+      // issue 08: 统一清理（应用索引 / UI transcript / 原生 JSONL / artifacts），
+      // 部分失败在 report.residual 中报告残留状态，不静默吞错。
+      const sessions = await loadSessions(project.rootPath);
+      const target = sessions.find((s) => s.sessionId === input.sessionId);
+      const report = await deleteOwnedSession(
+        project.rootPath,
+        target ?? { sessionId: input.sessionId },
+      );
+      return { ok: true, report };
+    }),
+
+  // ─── 外部 pi session 扫描与接管（issue 08）──────────────
+
+  /**
+   * 只读扫描 cwd bucket 中不属于应用的外部 pi session（已排除应用索引中
+   * 的 engineSessionId 及其 parentSessionPath 祖先链）。不写入任何状态。
+   * 确认提示（首次打开外部 session 需用户确认接管）由 UI 层在调用
+   * adoptExternalPiSession 之前完成。
+   */
+  listExternalPiSessions: t.procedure
+    .input((raw): { projectId: string; cwd: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string' || typeof r.cwd !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId and cwd are required' });
+      }
+      return { projectId: r.projectId, cwd: r.cwd };
+    })
+    .query(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      return listExternalPiSessions(project.rootPath, input.cwd);
+    }),
+
+  /**
+   * 显式接管一个外部 pi session：注册应用会话（engine='pi'，恢复走原生
+   * 路径获得应用的 extension/MCP/工具信任边界）+ 种子 UI transcript。
+   * 幂等：重复接管返回已有索引项。
+   */
+  adoptExternalPiSession: t.procedure
+    .input(
+      (raw): { projectId: string; cwd: string; nativeSessionId: string; sessionFilePath: string; name?: string } => {
+        const r = raw as Record<string, unknown>;
+        if (
+          typeof r.projectId !== 'string' ||
+          typeof r.cwd !== 'string' ||
+          typeof r.nativeSessionId !== 'string' ||
+          typeof r.sessionFilePath !== 'string'
+        ) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'projectId, cwd, nativeSessionId and sessionFilePath are required',
+          });
+        }
+        return {
+          projectId: r.projectId,
+          cwd: r.cwd,
+          nativeSessionId: r.nativeSessionId,
+          sessionFilePath: r.sessionFilePath,
+          name: typeof r.name === 'string' && r.name.length > 0 ? r.name : undefined,
+        };
+      },
+    )
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const { session, transcriptCount } = await adoptExternalPiSession(project.rootPath, input);
+      return { ok: true, session, transcriptCount };
+    }),
+
+  /**
+   * 清理 SoC Verify 明确拥有的旧 omp 原生 session 与 artifacts（迁移完成
+   * 后调用，issue 08）：只删除 header id 精确匹配本项目已索引 omp
+   * engineSessionId 的文件；保留 UI transcript 与应用索引；绝不递归删除
+   * 用户全局 ~/.omp。触发时机由迁移流程（issue 11）编排。
+   */
+  cleanupLegacyOmpSessions: t.procedure
+    .input((raw): { projectId: string } => {
+      const r = raw as Record<string, unknown>;
+      if (typeof r.projectId !== 'string') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'projectId is required' });
+      }
+      return { projectId: r.projectId };
+    })
+    .mutation(async ({ input }) => {
+      const project = requireProject(input.projectId);
+      const report = await cleanupLegacyOmpSessions(project.rootPath);
+      return { ok: true, report };
     }),
 
   listSkills: t.procedure

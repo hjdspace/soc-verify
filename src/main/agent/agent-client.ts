@@ -121,6 +121,8 @@ export class AgentClient implements IAgentClient {
   private stopping = false;
   /** Set when the child emits 'exit' — makes isRunning() truthful after a crash. */
   private exited = false;
+  /** Set when the ready handshake completed — crash detection needs it (issue 08). */
+  private readyAchieved = false;
 
   constructor(protected readonly options: AgentClientOptions) {
     this.readyTimeoutMs = options.readyTimeoutMs ?? 30000;
@@ -210,6 +212,7 @@ export class AgentClient implements IAgentClient {
 
       if (!readySettled && isReadyFrame(parsed)) {
         readySettled = true;
+        this.readyAchieved = true;
         readyResolve();
         return;
       }
@@ -242,6 +245,18 @@ export class AgentClient implements IAgentClient {
         controller.abort();
       }
       this.pendingToolCalls.clear();
+
+      // issue 08: runner 崩溃（ready 已达成且非主动 stop）→ 合成 error 事件
+      // 分发给监听者。渲染层据 error 事件把会话置为 error 状态，等待用户
+      // 显式重启 —— 绝不自动重放可能产生副作用的 turn。主动 stop（destroy/
+      // abort/模型热切换）与 ready 前退出（start() 拒绝路径）都不算崩溃。
+      if (this.readyAchieved && !this.stopping) {
+        const reason = `Agent process crashed (code=${code}, signal=${signal})`;
+        console.error(`[agent:client] ${reason}`);
+        for (const listener of this.eventListeners) {
+          listener({ type: 'error', error: reason, message: reason });
+        }
+      }
 
       if (!readySettled) {
         readySettled = true;
@@ -606,7 +621,9 @@ export class AgentClient implements IAgentClient {
     this.writeFrame(fullCommand);
   }
 
-  private send<T extends Omit<Command, 'id'>>(command: T, timeoutMs = 120000): Promise<ResponseFrame> {
+  // protected：引擎子类（PiAgentClient）覆写 regenerate 等命令时复用
+  // 请求/响应关联与响应解包机制。
+  protected send<T extends Omit<Command, 'id'>>(command: T, timeoutMs = 120000): Promise<ResponseFrame> {
     if (!this.process?.stdin) throw new Error('Client not started');
 
     const id = `req_${++this.requestId}`;
@@ -761,7 +778,7 @@ export class AgentClient implements IAgentClient {
     }
   }
 
-  private getData<T>(response: ResponseFrame): T {
+  protected getData<T>(response: ResponseFrame): T {
     if (!response.success) {
       throw new Error(response.error ?? 'Unknown error');
     }

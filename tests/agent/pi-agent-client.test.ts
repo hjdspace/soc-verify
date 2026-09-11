@@ -202,6 +202,27 @@ describe('PiAgentClient 会话命令', () => {
     client.stop();
   });
 
+  it('regenerate 发送 regenerate 命令并透传 runner 的 engineSessionId（issue 08）', async () => {
+    const client = await startClient();
+    const regenPromise = client.regenerate();
+    await waitForFrames(1);
+    expect(framesToRunner[0]).toMatchObject({ type: 'regenerate', id: 'req_1' });
+
+    fromRunner({ id: 'req_1', type: 'response', success: true, data: { engineSessionId: 'pi-branch-9' } });
+    await expect(regenPromise).resolves.toEqual({ engineSessionId: 'pi-branch-9' });
+    client.stop();
+  });
+
+  it('regenerate 失败响应 → 拒绝并携带 runner 错误信息', async () => {
+    const client = await startClient();
+    const regenPromise = client.regenerate();
+    await waitForFrames(1);
+    fromRunner({ id: 'req_1', type: 'response', success: false, error: 'Session is streaming — wait until idle' });
+
+    await expect(regenPromise).rejects.toThrow('wait until idle');
+    client.stop();
+  });
+
   it('prompt / steer 是 fire-and-forget（不等待响应帧）', async () => {
     const client = await startClient();
     await client.prompt('跑一下仿真', ['data:image/png;base64,AAA']);
@@ -344,5 +365,40 @@ describe('PiAgentClient 回调与事件', () => {
 
     await expect(compactPromise).rejects.toThrow(/Process exited/);
     expect(client.isRunning()).toBe(false);
+  });
+
+  it('ready 后进程崩溃（非主动 stop）→ 合成 error 事件分发给监听者（issue 08）', async () => {
+    const client = await startClient();
+    const received: Array<{ type?: string; error?: string }> = [];
+    client.onEvent((event) => received.push(event as { type?: string; error?: string }));
+
+    currentChild.emit('exit', 1, null);
+    await vi.waitFor(() => expect(received).toHaveLength(1));
+
+    expect(received[0].type).toBe('error');
+    expect(received[0].error).toContain('code=1');
+  });
+
+  it('主动 stop 后的退出不合成 error 事件（用户发起的销毁不是崩溃）', async () => {
+    const client = await startClient();
+    const received: unknown[] = [];
+    client.onEvent((event) => received.push(event));
+
+    client.stop();
+    currentChild.emit('exit', 0, null);
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(received).toHaveLength(0);
+  });
+
+  it('ready 前退出不合成 error 事件（start() 拒绝路径已处理）', async () => {
+    const client = new PiAgentClient(makeOptions());
+    const received: unknown[] = [];
+    client.onEvent((event) => received.push(event));
+    const startPromise = client.start();
+    currentChild.emit('exit', 1, null);
+    await expect(startPromise).rejects.toThrow(/exited before ready/);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(received).toHaveLength(0);
   });
 });
