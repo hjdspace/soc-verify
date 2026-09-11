@@ -31,6 +31,9 @@ import type {
   ExclusionStatus,
   UncoveredItem,
   TestContribution,
+  DetailReportResult,
+  DetailInstanceReport,
+  CoverageDetailData,
 } from '@shared/types';
 import {
   summarizeCoverage,
@@ -500,6 +503,218 @@ export class CoverageManager {
     return count;
   }
 
+  // ─── detail.txt 解析与持久化（分层解析第三步，waive 数据基础） ──
+
+  /**
+   * 按需解析 detail.txt（Covered+Uncovered+Excluded+UNR Block Detail Report）。
+   *
+   * 用户通过 UI 按钮触发，过程：
+   *   1. 运行 EDA detailCommand 生成 detail.txt（imc report -detail -all -out）
+   *   2. Worker Thread 中执行插件 parseDetailReport（300 万行秒级，不阻塞主进程）
+   *   3. 全量 instance 明细持久化到 <sessionId>-detail.json（waive 自动生成的基础）
+   *   4. statements/branches 汇总合并进 CoverageData 树缓存（快速层 metrics.txt
+   *      数据 + detail 数据结合）：detail 的 instance path 命中树节点时，
+   *      statements → metrics.line、branches → metrics.branch
+   *   5. detail 摘要（instanceCount/parsedAt）写入 <sessionId>.json
+   *
+   * 树缓存合并语义：detail 的 triplet 覆盖该节点既有值（detail 是逐 instance 的
+   * 精确数据；未命中的树节点保留 metrics 快速层数据不动）。
+   */
+  async parseDetailMetrics(
+    sessionId: string,
+    edaConfig: EdaToolConfig,
+    onProgress?: ProgressCallback,
+  ): Promise<CoverageData> {
+    // 加载已有的 summary CoverageData（fail-closed：必须先导入）
+    const existing = await this.loadCached(sessionId);
+    if (!existing) {
+      throw new Error(`Session ${sessionId} not found. Import coverage data first.`);
+    }
+    const sessions = await this.listSessions();
+    const session = sessions.find((s) => s.sessionId === sessionId);
+    if (!session) {
+      throw new Error(`Session metadata for ${sessionId} not found.`);
+    }
+    const reportDir = session.reportDir;
+
+    // Step 1: 运行 detailCommand 生成 detail.txt（只跑 detail 命令）
+    if (this.reportGenerator && edaConfig.detailCommand) {
+      onProgress?.({
+        step: 'eda_detail_metrics',
+        message: '正在执行 EDA 命令生成 detail 报告...',
+        percent: 5,
+      });
+      const detailOnlyConfig: EdaToolConfig = {
+        ...edaConfig,
+        summaryCommand: undefined,
+        metricsCommand: undefined,
+        csvCommand: undefined,
+        gradeCommand: undefined,
+        binsCommand: undefined,
+      };
+      try {
+        await this.reportGenerator.generate(
+          detailOnlyConfig, session.covMergeDir, sessionId,
+          (event) => {
+            const pct = event.percent ?? 0;
+            onProgress?.({ ...event, percent: 5 + Math.round((pct / 100) * 40) });
+          },
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        onProgress?.({
+          step: 'eda_detail_metrics_error',
+          message: `EDA detail 报告生成异常：${msg}`,
+          percent: 45,
+        });
+      }
+    }
+
+    // Step 2: Worker Thread 中解析 detail.txt（插件 parseDetailReport）
+    onProgress?.({
+      step: 'parsing_detail_metrics',
+      message: '正在解析 detail 报告（instance 级 blocks/branches/statements）...',
+      percent: 50,
+    });
+    const detailPath = join(reportDir, 'detail.txt');
+    const adapter = this.adapter as (PluginBackedCoverage & {
+      parseDetailReport?: (detailPath: string) => Promise<DetailReportResult>;
+    }) | null;
+    if (!adapter?.parseDetailReport) {
+      throw new Error('Coverage parser plugin does not support parseDetailReport');
+    }
+    const detailResult = await adapter.parseDetailReport(detailPath);
+    await yieldToEventLoop();
+
+    // Step 3: 全量明细持久化到 <sessionId>-detail.json
+    onProgress?.({
+      step: 'caching_detail_metrics',
+      message: `正在持久化 ${detailResult.instanceCount} 个 instance 的 detail 数据...`,
+      percent: 75,
+    });
+    const parsedAt = Date.now();
+    const detailData: CoverageDetailData = {
+      sessionId,
+      parsedAt,
+      instanceCount: detailResult.instanceCount,
+      instances: detailResult.instances,
+    };
+    await this.saveDetailData(sessionId, detailData);
+
+    // Step 4: 合并 statements→line / branches→branch 进树缓存
+    const merged = this.mergeDetailIntoTree(existing, detailResult.instances, {
+      instanceCount: detailResult.instanceCount,
+      parsedAt,
+    });
+
+    // Step 5: 更新 <sessionId>.json 缓存
+    await this.cache(merged);
+    await yieldToEventLoop();
+
+    onProgress?.({
+      step: 'done',
+      message: `detail 解析完成（${detailResult.instanceCount} 个 instance，解析耗时 ${detailResult.parseMs}ms）`,
+      percent: 100,
+      durationMs: detailResult.parseMs,
+      details: { instanceCount: detailResult.instanceCount },
+    });
+    return merged;
+  }
+
+  /**
+   * 将 detail instance 数据合并进 CoverageData 树（就地修改副本）。
+   * statements → metrics.line、branches → metrics.branch；detail 的 triplet
+   * 覆盖节点既有值（逐 instance 精确数据优先于快速层聚合值）。
+   */
+  private mergeDetailIntoTree(
+    data: CoverageData,
+    instances: DetailInstanceReport[],
+    detailSummary: { instanceCount: number; parsedAt: number },
+  ): CoverageData {
+    // path → node 索引（iterative 遍历）
+    const byPath = new Map<string, CoverageNode>();
+    const stack: CoverageNode[] = [data.root];
+    while (stack.length > 0) {
+      const node = stack.pop()!;
+      byPath.set(node.path, node);
+      for (const child of node.children) stack.push(child);
+    }
+    for (const inst of instances) {
+      const node = byPath.get(inst.instance);
+      if (!node) continue; // detail 实例与树粒度不一一对应时跳过（树保留快速层数据）
+      node.metrics = {
+        ...node.metrics,
+        line: {
+          percentage: inst.statements.percentage,
+          covered: inst.statements.covered,
+          total: inst.statements.total,
+        },
+        branch: {
+          percentage: inst.branches.percentage,
+          covered: inst.branches.covered,
+          total: inst.branches.total,
+        },
+      };
+    }
+    return { ...data, detail: detailSummary };
+  }
+
+  /**
+   * 查询持久化的 detail instance 数据（分页 + 排序）。
+   * 未解析（-detail.json 不存在）返回 null。
+   */
+  async getDetailInstances(
+    sessionId: string,
+    opts?: {
+      offset?: number;
+      limit?: number;
+      sortBy?: 'instance' | 'type' | 'blocks' | 'branches' | 'statements';
+      sortOrder?: 'asc' | 'desc';
+    },
+  ): Promise<CoverageDetailData | null> {
+    const detail = await this.loadDetailData(sessionId);
+    if (!detail) return null;
+    if (!opts) return detail;
+    let instances = detail.instances.slice();
+    if (opts.sortBy) {
+      const key = opts.sortBy;
+      const dir = opts.sortOrder === 'desc' ? -1 : 1;
+      instances.sort((a, b) => {
+        const va = key === 'instance' || key === 'type' ? a[key] : a[key].percentage ?? 0;
+        const vb = key === 'instance' || key === 'type' ? b[key] : b[key].percentage ?? 0;
+        if (typeof va === 'string' || typeof vb === 'string') {
+          return String(va).localeCompare(String(vb)) * dir;
+        }
+        return ((va as number) - (vb as number)) * dir;
+      });
+    }
+    const offset = opts.offset && opts.offset > 0 ? opts.offset : 0;
+    const limit = opts.limit && opts.limit > 0 ? opts.limit : instances.length;
+    instances = instances.slice(offset, offset + limit);
+    return { ...detail, instances };
+  }
+
+  private detailDataPath(sessionId: string): string {
+    return join(this.projectRoot, SOCVERIFY_DIR, COVERAGE_DIR, `${sessionId}-detail.json`);
+  }
+
+  private async saveDetailData(sessionId: string, detail: CoverageDetailData): Promise<void> {
+    const dir = join(this.projectRoot, SOCVERIFY_DIR, COVERAGE_DIR);
+    await mkdir(dir, { recursive: true });
+    // 紧凑 JSON：20 万 instance 明细约 30MB，无缩进序列化更快
+    await writeFile(this.detailDataPath(sessionId), JSON.stringify(detail), 'utf-8');
+  }
+
+  private async loadDetailData(sessionId: string): Promise<CoverageDetailData | null> {
+    try {
+      const raw = await readFile(this.detailDataPath(sessionId), 'utf-8');
+      const parsed = JSON.parse(raw) as CoverageDetailData;
+      return parsed && typeof parsed === 'object' && Array.isArray(parsed.instances) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
   // ─── Session 生命周期（ADR 0008） ─────────────────────────────
 
   async listSessions(): Promise<CoverageMergeSession[]> {
@@ -705,10 +920,11 @@ export class CoverageManager {
     const sessions = await this.listSessions();
     const next = sessions.filter((s) => s.sessionId !== sessionId);
     await this.writeSessions(next);
-    // 清理缓存文件与 triage/exclusion 元数据（best-effort，不阻塞删除）
+    // 清理缓存文件与 triage/exclusion/detail 元数据（best-effort，不阻塞删除）
     await this.safeDelete(this.cachePath(sessionId));
     await this.safeDelete(this.triagePath(sessionId));
     await this.safeDelete(this.exclusionPath(sessionId));
+    await this.safeDelete(this.detailDataPath(sessionId));
   }
 
   // ─── Target 管理（PRD US-11） ─────────────────────────────────
