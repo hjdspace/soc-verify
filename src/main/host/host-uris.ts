@@ -50,7 +50,7 @@ export class HostUriRouter {
       // 向后兼容：CoverageManager 未注入时返回空 JSON
       if (!this.coverageManager) return ok('{}', 'application/json');
 
-      // 解析 URI: cov://<sessionId>[/<module>[/uncovered]]
+      // 解析 URI: cov://<sessionId>[/<module>[/uncovered]]（module 为点号层级路径，如 cov://sid/tb_top.chip_top）
       const rest = req.url.slice('cov://'.length);
       const parts = rest.split('/').filter(Boolean);
 
@@ -70,7 +70,8 @@ export class HostUriRouter {
         // 判断是否为 uncovered 请求
         const isUncovered = parts[parts.length - 1] === 'uncovered';
         const moduleParts = isUncovered ? parts.slice(1, -1) : parts.slice(1);
-        const modulePath = moduleParts.join('/');
+        // 模块层级路径：点号拼接（与 CoverageTree 内部 path 格式一致，如 tb_top.chip_top.dut）
+        const modulePath = moduleParts.join('.');
 
         if (isUncovered) {
           // 未覆盖项：从 CoverageData.uncovered 中提取指定模块的未覆盖项
