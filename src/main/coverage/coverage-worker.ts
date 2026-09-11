@@ -16,7 +16,7 @@
  */
 
 import { Worker } from 'node:worker_threads';
-import type { CoverageData, EdaTool } from '@shared/types';
+import type { CoverageData, DetailReportResult, EdaTool } from '@shared/types';
 import { DEFAULT_COVERAGE_TARGETS } from '@shared/types';
 
 /** Worker 执行的超时时间（10 分钟，覆盖率数据可能很大） */
@@ -216,4 +216,109 @@ async function fallbackSyncParse(
     targets: enrichment.targets ?? { ...DEFAULT_COVERAGE_TARGETS },
   };
   return { data: enriched, jsonStr: JSON.stringify(enriched) };
+}
+
+/**
+ * 在 Worker Thread 中执行插件的 parseDetailReport(detailPath)。
+ * detail.txt 可达 300 万行 / 数百 MB，解析虽为秒级仍是 CPU 密集操作，
+ * 与 parse() 同理放入独立线程，避免阻塞 Electron 主进程事件循环。
+ * Worker 创建失败时回退主进程同步调用。
+ */
+export async function parseDetailReportInWorker(
+  pluginPath: string,
+  detailPath: string,
+): Promise<DetailReportResult> {
+  return new Promise<DetailReportResult>((resolve, reject) => {
+    const workerCode = `
+      'use strict';
+      var { parentPort, workerData } = require('worker_threads');
+      try {
+        var mod = require(workerData.pluginPath);
+        var fn = mod && mod.parseDetailReport;
+        if (typeof fn !== 'function') {
+          throw new Error('Plugin does not export parseDetailReport: ' + workerData.pluginPath);
+        }
+        var result = fn(workerData.detailPath);
+        parentPort.postMessage({ success: true, result: result });
+      } catch (err) {
+        parentPort.postMessage({
+          success: false,
+          error: err && err.message ? err.message : String(err)
+        });
+      }
+    `;
+
+    let worker: Worker | null = null;
+    let settled = false;
+
+    const cleanup = (): void => {
+      if (worker && !settled) {
+        worker.terminate().catch(() => {});
+      }
+    };
+
+    try {
+      worker = new Worker(workerCode, {
+        eval: true,
+        workerData: { pluginPath, detailPath },
+      });
+    } catch (err) {
+      console.warn('[coverage-worker] Failed to create worker for parseDetailReport, falling back to sync:', err);
+      fallbackSyncDetailReport(pluginPath, detailPath)
+        .then(resolve)
+        .catch(reject);
+      return;
+    }
+
+    const timeoutHandle = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        cleanup();
+        reject(new Error(`detail.txt parsing timed out after ${WORKER_TIMEOUT_MS / 1000}s`));
+      }
+    }, WORKER_TIMEOUT_MS);
+
+    worker.on('message', (msg: { success: boolean; result?: DetailReportResult; error?: string }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutHandle);
+      cleanup();
+      if (msg.success && msg.result) {
+        resolve(msg.result);
+      } else {
+        reject(new Error(msg.error ?? 'Unknown detail parsing error'));
+      }
+    });
+
+    worker.on('error', (err: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutHandle);
+      reject(err);
+    });
+
+    worker.on('exit', (code: number) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutHandle);
+      if (code !== 0) {
+        reject(new Error(`detail parsing worker exited with code ${code}`));
+      }
+    });
+  });
+}
+
+/** 回退方案：主进程同步执行 parseDetailReport（Worker Thread 不可用时）。 */
+async function fallbackSyncDetailReport(
+  pluginPath: string,
+  detailPath: string,
+): Promise<DetailReportResult> {
+  const { createRequire } = await import('node:module');
+  const require = createRequire(import.meta.url);
+  const mod = require(pluginPath);
+  const fn = mod?.parseDetailReport;
+  if (typeof fn !== 'function') {
+    throw new Error(`Plugin does not export parseDetailReport: ${pluginPath}`);
+  }
+  return fn(detailPath);
 }
