@@ -142,8 +142,8 @@ function writeTestFile(
 }
 
 const SAMPLE_GAPS: CoverageGap[] = [
-  makeGap('top/cpu_core', 'line', 80, 95),
-  makeGap('top/memory_ctrl', 'toggle', 75, 85),
+  makeGap('cpu_core', 'line', 80, 95),
+  makeGap('memory_ctrl', 'toggle', 75, 85),
 ];
 
 // ─── 端到端集成测试 ─────────────────────────────────────────────
@@ -155,7 +155,7 @@ describe('Test Promotion 端到端集成', () => {
       // ── 步骤 1：启动 Closure，两个模块级 Target ───────────────
       const session = await closureManager.startClosure({
         sessionId: 'merge_e2e',
-        modules: ['top/cpu_core', 'top/memory_ctrl'],
+        modules: ['cpu_core', 'memory_ctrl'],
       });
       const target0 = session.targets[0]; // cpu_core
       const target1 = session.targets[1]; // memory_ctrl
@@ -317,7 +317,7 @@ describe('Test Promotion 端到端集成', () => {
     try {
       const session = await closureManager.startClosure({
         sessionId: 'merge_empty',
-        modules: ['top/cpu_core', 'top/memory_ctrl'],
+        modules: ['cpu_core', 'memory_ctrl'],
       });
 
       // 直接关闭所有 target，不进行任何迭代
@@ -360,7 +360,7 @@ describe('Test Promotion 端到端集成', () => {
     try {
       const session = await closureManager.startClosure({
         sessionId: 'merge_aborted',
-        modules: ['top/cpu_core', 'top/memory_ctrl'],
+        modules: ['cpu_core', 'memory_ctrl'],
       });
       const target0 = session.targets[0];
 
