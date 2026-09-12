@@ -294,6 +294,8 @@ export interface SessionEntry {
   /** Fingerprint of apiKey+baseUrl at creation time — detects edits to a
    *  credential that require an actual destroy/recreate to take effect. */
   credentialSnapshot?: string;
+  /** 审批模式（创建时下发 runner 的值）—— setModel 整体 swap 重建时沿用 */
+  approvalMode?: ApprovalMode;
   /** Whether the agent is currently processing (between agent_start and agent_end).
    *  When true, the idle retirement timer is NOT scheduled — the session
    *  is actively working and must not be destroyed regardless of elapsed time. */
@@ -827,6 +829,7 @@ export class SessionManagerImpl extends EventEmitter {
       model,
       providerId: options.providerId,
       credentialSnapshot: credentialSnapshot(options.providerId, options.apiKey, options.baseUrl, options.apiFormat),
+      approvalMode: options.approvalMode,
       isActive: false,
     };
 
@@ -1079,6 +1082,9 @@ export class SessionManagerImpl extends EventEmitter {
   async setApprovalMode(sessionId: string, approvalMode: ApprovalMode): Promise<void> {
     const client = this.requireClient(sessionId);
     await client.setApprovalMode(approvalMode);
+    // 同步运行时 entry —— setModel 整体 swap 重建时沿用新值
+    const entry = this.sessions.get(sessionId);
+    if (entry) entry.approvalMode = approvalMode;
     this.touchActivity(sessionId);
   }
 

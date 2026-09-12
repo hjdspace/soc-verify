@@ -24,6 +24,7 @@ import {
   saveSessions,
   updateSessionModel,
   updateSessionActivity,
+  updateSessionApprovalMode,
   updateSessionContextUsage,
   updateSessionEngineId,
   isCwdAccessible,
@@ -163,6 +164,8 @@ async function performHolisticSwap(input: {
     resumeSessionId: engineSessionId,
     persistedSessionId,
     includeCaseStats: true,
+    // 整体 swap 重建沿用当前审批模式（否则 runner 回退 always-ask，静默收紧权限）
+    approvalMode: existing.approvalMode,
   });
 
   const { sessionId: newSessionId, provider, model: resolvedModel } = ctx;
@@ -303,6 +306,7 @@ export const sessionRouter = t.router({
         model: provider && input.model
           ? { provider, id: input.model, name: input.model, providerId }
           : undefined,
+        approvalMode: input.approvalMode,
       };
       await addSession(project.rootPath, persisted);
 
@@ -799,7 +803,11 @@ export const sessionRouter = t.router({
         seedHistory,
         persistedSessionId: input.sessionId,
         includeCaseStats: true,
-        approvalMode: input.approvalMode,
+        // 审批模式：UI 入参优先（用户刚切换过），否则沿用 sessions.json 持久化值。
+        // 修复：恢复会话此前只依赖 UI 入参，而恢复 entry 未携带 approvalMode
+        // （undefined）→ runner 回退 always-ask，与 UI 显示的 yolo 不一致，
+        // 导致 host 工具（如 get_project_overview）在"完全信任"下仍弹审批。
+        approvalMode: input.approvalMode ?? persisted.approvalMode,
         thinkingLevel: input.thinkingLevel,
       });
       const { sessionId, provider, model: resolvedModelId, providerId } = ctx;
@@ -887,6 +895,7 @@ export const sessionRouter = t.router({
         seedHistory,
         persistedSessionId: input.sessionId,
         includeCaseStats: true,
+        approvalMode: persisted.approvalMode,
       });
       const { sessionId, provider, model: resolvedModelId, providerId } = ctx;
 
@@ -1271,6 +1280,14 @@ export const sessionRouter = t.router({
       // applied when the session is created via ensureRuntimeSession.
       try {
         await sessionManager.setApprovalMode(input.sessionId, input.approvalMode);
+        // 持久化到 sessions.json —— 运行时 entry 携带 persistedSessionId +
+        // projectId，据此定位 sessions 记录；重启恢复/换模型 swap 时沿用。
+        const entry = sessionManager.getSession(input.sessionId);
+        const persistedId = entry?.persistedSessionId ?? input.sessionId;
+        const project = entry ? projectManager.getProject(entry.projectId) : undefined;
+        if (project) {
+          await updateSessionApprovalMode(project.rootPath, persistedId, input.approvalMode);
+        }
       } catch {
         // Session not running — mode will be applied on next session create/restore.
       }

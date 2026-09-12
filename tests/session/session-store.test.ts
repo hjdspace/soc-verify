@@ -1073,6 +1073,8 @@ describe('SessionStore — event handling and state machine', () => {
       cwd: '/tmp/proj',
       sessionId: 'session_persisted_1',
       name: 'Debug reset failure',
+      // 历史 entry 无持久化 approvalMode → localStorage 偏好兜底 → 'yolo'
+      approvalMode: 'yolo',
     });
     expect(mockSend).toHaveBeenCalledWith({
       sessionId: 'session_runtime_1',

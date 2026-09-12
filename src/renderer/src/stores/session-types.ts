@@ -216,6 +216,8 @@ export interface HistorySession {
   lastActivityAt: number;
   model?: { provider: string; id: string; name: string };
   isActive: boolean;
+  /** 会话持久化的审批模式（sessions.json），恢复时沿用 */
+  approvalMode?: ApprovalMode;
   contextUsage?: ContextUsage;
   contextBreakdown?: ContextBreakdown;
 }

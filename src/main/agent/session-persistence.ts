@@ -30,6 +30,8 @@ export interface PersistedSession {
   lastActivityAt: number;
   /** Persisted model info so the model survives app restart */
   model?: { provider: string; id: string; name: string; providerId?: string };
+  /** 工具审批模式 —— 随会话持久化，恢复/换模型 swap 时沿用（缺省由 create/restore 入参兜底） */
+  approvalMode?: 'always-ask' | 'write' | 'yolo';
   /** Last known context usage — restored on app reopen so the indicator
    *  shows the correct value before the runtime session is started. */
   contextUsage?: ContextUsage;
@@ -168,6 +170,24 @@ export async function updateSessionModel(
   const idx = sessions.findIndex((s) => s.sessionId === sessionId);
   if (idx >= 0) {
     sessions[idx] = { ...sessions[idx], model };
+    await saveSessions(projectRoot, sessions);
+  }
+}
+
+/**
+ * Update the approval mode on a persisted session.
+ * Called when the user switches the permission mode so the choice survives
+ * app restarts (restore / model-swap recreate reuse it).
+ */
+export async function updateSessionApprovalMode(
+  projectRoot: string,
+  sessionId: string,
+  approvalMode: 'always-ask' | 'write' | 'yolo',
+): Promise<void> {
+  const sessions = await loadSessions(projectRoot);
+  const idx = sessions.findIndex((s) => s.sessionId === sessionId);
+  if (idx >= 0) {
+    sessions[idx] = { ...sessions[idx], approvalMode };
     await saveSessions(projectRoot, sessions);
   }
 }
