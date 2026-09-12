@@ -46,50 +46,56 @@ function normalizeBaseUrl(baseUrl: string): string {
 }
 
 /**
- * omp models.yml 模型条目共有的 thinking 声明：effort 传输模式 + 完整思考强度阶梯。
- * 引擎按该阶梯钳制用户选择的思考强度（`clampThinkingLevelForModel`），
- * 未声明时推理模型会被视为"无可控思考面"，任何强度设置都不会下发到请求。
- */
-const OMP_THINKING_EFFORT_LADDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
-
-/**
- * 生成 models.yml 的单模型条目。`reasoning` 为 true 时附带 `thinking` 声明
- * （mode: "effort" → openai 兼容端点的 `reasoning_effort` wire 参数），
- * omp 引擎据此允许用户配置思考强度；false/缺省时显式声明为非推理模型，
- * 引擎不发送思考强度参数。
+ * pi models.json 单模型条目（omp → pi 迁移后，models.yml 的消费方是 pi-ai，
+ * 其模型 schema 与 omp 不同：omp 的 `thinking {mode, efforts}` 与
+ * `compat.reasoningContentField` 等字段 pi 不识别（静默忽略），必须改写为
+ * pi 的 `compat`（OpenAICompletionsCompat）字段。
  *
- * 推理模型同时声明 deepseek 系 compat：这类端点（如 SenseNova deepseek-v4、
- * DeepSeek 官方 API）在 thinking 模式下校验历史，要求带 tool_calls 的
- * assistant 消息回传 `reasoning_content`，否则报 400
- * "If thinking mode and tool_calls, `reasoning_content` must be passed back"。
- * 引擎已把流式 reasoning_content 存为 thinking 块，声明该 compat 后
- * openai-completions 编码器会回传真实值（无 thinking 块时回传空串）。
- * `allowsSyntheticReasoningContentForToolCalls` 必须为 false —— DeepSeek 系
- * 校验精确值，拒绝 "." 占位符。与 omp 内置 catalog 对 deepseek 家族的
- * 判定一致（`isDeepseekFamily && spec.reasoning`），故仅推理模型声明。
+ * 所有模型统一声明保守 compat —— 这些内部 OpenAI 兼容端点只认经典
+ * chat/completions 参数，而 pi 对未识别端点的自动探测会按 OpenAI 新版行为
+ * 发请求，逐项对应：
+ *  - maxTokensField: 'max_tokens' —— pi 默认发 `max_completion_tokens`，
+ *    端点不认该字段 → 400 "inference request is invalid"
+ *  - supportsStore: false —— 不发送 `store` 字段
+ *  - supportsDeveloperRole: false —— 系统提示词保持 `system` 角色
+ *    （pi 对推理模型默认改用 OpenAI 的 `developer` 角色，端点不认）
+ *  - supportsStrictMode: false —— 工具定义不携带 `strict` 字段
+ *
+ * 推理模型额外声明 requiresReasoningContentOnAssistantMessages：deepseek 系
+ * 端点（如 SenseNova deepseek-v4、DeepSeek 官方 API）在 thinking 模式下校验
+ * 历史，要求带 tool_calls 的 assistant 消息回传 `reasoning_content`，否则
+ * 第二轮请求报 400。pi 已把流式 reasoning_content 存为 thinking 块，声明该
+ * compat 后 openai-completions 编码器会回传真实值（无 thinking 块时回传空串）。
+ * 思考强度经默认 thinkingFormat "openai" 下发为 `reasoning_effort`
+ * （与 omp models.yml 的 thinking mode "effort" 等价），无需额外声明。
  */
+const PI_OPENAI_COMPAT_BASE = {
+  maxTokensField: 'max_tokens' as const,
+  supportsStore: false,
+  supportsDeveloperRole: false,
+  supportsStrictMode: false,
+};
+
 function toOmpModelEntry(model: OpenAICompatibleModel, contextWindow: number) {
   const reasoning = model.reasoning === true;
   return {
     id: model.id,
     name: model.name,
-    supportsTools: true,
     contextWindow,
     maxTokens: 8192,
     reasoning,
-    // 仅推理模型附带 thinking 声明；schema 要求 mode + 非空 efforts。
     ...(reasoning
       ? {
-          thinking: { mode: 'effort' as const, efforts: OMP_THINKING_EFFORT_LADDER },
           compat: {
-            reasoningContentField: 'reasoning_content' as const,
-            requiresReasoningContentForToolCalls: true,
-            allowsSyntheticReasoningContentForToolCalls: false,
+            ...PI_OPENAI_COMPAT_BASE,
+            requiresReasoningContentOnAssistantMessages: true,
           },
         }
-      : {}),
-    // Unknown models are text-only. This also lets omp remove historical
-    // snapcompact image frames before sending them to text-only models.
+      : {
+          compat: { ...PI_OPENAI_COMPAT_BASE },
+        }),
+    // Unknown models are text-only. This also lets the engine remove historical
+    // image frames before sending them to text-only models.
     input: model.input ?? ['text'],
   };
 }
