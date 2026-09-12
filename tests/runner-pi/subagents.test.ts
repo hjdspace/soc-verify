@@ -10,6 +10,7 @@ import {
   buildRpcStopRequest,
   extractSubagentUsage,
   mapTerminalStatus,
+  normalizeForegroundProgressFrames,
   normalizeSubagentFrame,
   RPC_REPLY_CHANNEL_PREFIX,
   RPC_REQUEST_CHANNEL,
@@ -362,5 +363,88 @@ describe('trackSubagentRun', () => {
       payload: { id: 'run-x' },
     });
     expect(trackSubagentRun.activeRunIds(registry)).toEqual([]);
+  });
+});
+
+// ─── 前台工具进度归一化（tool_execution_update 路径）─────
+
+describe('normalizeForegroundProgressFrames', () => {
+  it('单代理：帧 id 与派遣占位（toolCallId）严格一致，携带流式进度字段', () => {
+    const frames = normalizeForegroundProgressFrames(
+      'tc_sub_1',
+      [
+        {
+          index: 0,
+          agent: 'scout',
+          tokens: 1250,
+          currentTool: 'read',
+          currentToolArgs: '{"path":"src/a.ts"}',
+          recentOutput: ['reading src/a.ts', '  ', 'found 3 symbols'],
+          toolCount: 3,
+          turnCount: 2,
+        },
+      ],
+      { parentSessionId: 'pi-session-1', parentToolCallId: 'tc_sub_1' },
+    );
+
+    expect(frames).toHaveLength(1);
+    expect(frames[0]?.type).toBe('subagent_progress');
+    const payload = (frames[0] as { payload: Record<string, unknown> }).payload;
+    // id 必须等于 toolCallId：renderer 派遣占位以此作 id，store 直接流式更新
+    expect(payload).toMatchObject({
+      id: 'tc_sub_1',
+      parentToolCallId: 'tc_sub_1',
+      parentSessionId: 'pi-session-1',
+      index: 0,
+      agent: 'scout',
+      progress: {
+        tokens: 1250,
+        currentTool: 'read',
+        currentToolArgs: '{"path":"src/a.ts"}',
+        recentOutput: ['reading src/a.ts', 'found 3 symbols'],
+        toolCount: 3,
+        requests: 2,
+      },
+    });
+  });
+
+  it('多代理：按 index 派生子 id（toolCallId:index）', () => {
+    const frames = normalizeForegroundProgressFrames(
+      'tc_sub_2',
+      [
+        { index: 0, agent: 'scout', tokens: 10 },
+        { index: 1, agent: 'reviewer', tokens: 20 },
+      ],
+      { parentSessionId: 'p', parentToolCallId: 'tc_sub_2' },
+    );
+
+    expect(frames).toHaveLength(2);
+    const ids = frames.map((f) => (f.payload as Record<string, unknown>).id);
+    expect(ids).toEqual(['tc_sub_2:0', 'tc_sub_2:1']);
+  });
+
+  it('progress.task 已被 redact，不透传为任务概要；空 progressList 返回空', () => {
+    const frames = normalizeForegroundProgressFrames(
+      'tc_sub_3',
+      [{ index: 0, agent: 'scout', task: '[redacted]', tokens: 5 }],
+      { parentSessionId: 'p' },
+    );
+    const payload = (frames[0] as { payload: Record<string, unknown> }).payload;
+    expect(payload.assignment).toBeUndefined();
+    expect(payload.description).toBeUndefined();
+    expect('task' in payload).toBe(false);
+
+    expect(normalizeForegroundProgressFrames('tc', [], { parentSessionId: 'p' })).toEqual([]);
+  });
+
+  it('非对象条目跳过；缺 turnCount 时 requests 兜底 0', () => {
+    const frames = normalizeForegroundProgressFrames(
+      'tc_sub_4',
+      ['not-an-object', null, { tokens: 7 }],
+      { parentSessionId: 'p' },
+    );
+    expect(frames).toHaveLength(1);
+    const payload = (frames[0] as { payload: Record<string, unknown> }).payload;
+    expect(payload.progress).toMatchObject({ tokens: 7, requests: 0 });
   });
 });

@@ -66,6 +66,7 @@ import { buildSkillLoaderOptions } from "./skills.ts";
 import {
 	buildRpcStopRequest,
 	normalizeSubagentFrame,
+	normalizeForegroundProgressFrames,
 	resolveSubagentCeiling,
 	RPC_REQUEST_CHANNEL,
 	SUBAGENT_CHANNELS,
@@ -626,6 +627,8 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 			if (!events) return;
 			const activeToolCalls = new Map<string, string | undefined>();
 			const runParents = new Map<string, string>();
+			// 前台流式进度变化检测签名（id → sig），tool_execution_end 时清理
+			const progressKeys = new Map<string, string>();
 
 			pi.on("tool_execution_start", (event) => {
 				if (event.toolName !== "subagent") return;
@@ -648,6 +651,45 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 					: {};
 				if (typeof details.asyncId === "string") runParents.set(details.asyncId, event.toolCallId);
 				activeToolCalls.delete(event.toolCallId);
+				for (const key of [event.toolCallId, ...[...progressKeys.keys()].filter((k) => k.startsWith(`${event.toolCallId}:`))]) {
+					progressKeys.delete(key);
+				}
+			});
+
+			// 前台 subagent 流式进度：pi 工具 onUpdate 快照（partialResult.details.progress，
+			// AgentProgress 形状）→ subagent_progress 帧（归一化见 subagents.ts 的
+			// normalizeForegroundProgressFrames）。delegation/async 原生通道只覆盖 slash
+			// 委派与异步 run；主代理直接调用的前台子代理进度仅经 tool_execution_update 透出。
+			pi.on("tool_execution_update", (event) => {
+				if (event.toolName !== "subagent") return;
+				if (!activeToolCalls.has(event.toolCallId)) return;
+				const partial = typeof event.partialResult === "object" && event.partialResult !== null
+					? event.partialResult as Record<string, unknown>
+					: undefined;
+				const details = typeof partial?.details === "object" && partial.details !== null
+					? partial.details as Record<string, unknown>
+					: undefined;
+				const list = Array.isArray(details?.progress) ? details.progress : [];
+				if (list.length === 0) return;
+				for (const frame of normalizeForegroundProgressFrames(event.toolCallId, list, {
+					parentSessionId:
+						ctx.session != null
+							? ((ctx.session as { sessionId?: string }).sessionId ?? null)
+							: null,
+					parentToolCallId: event.toolCallId,
+				})) {
+					// 变化检测：fireUpdate 由子会话事件驱动、频率高，内容未变不重复发帧
+					const prog = frame.payload.progress as Record<string, unknown>;
+					const outputs = Array.isArray(prog.recentOutput) ? prog.recentOutput : [];
+					const sig = [
+						prog.tokens, prog.toolCount, prog.requests,
+						prog.currentTool ?? "", prog.currentToolArgs ?? "", outputs.length,
+					].join("|");
+					const id = String(frame.payload.id);
+					if (progressKeys.get(id) === sig) continue;
+					progressKeys.set(id, sig);
+					sendEvent(frame);
+				}
 			});
 
 			for (const channel of SUBAGENT_CHANNELS) {

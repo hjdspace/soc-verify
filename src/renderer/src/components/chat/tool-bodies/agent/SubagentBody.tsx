@@ -154,7 +154,17 @@ export function resolvePiSubagentActivities(
     presentation.activities.length === 1
     && presentation.activities[0]?.id === liveSubagents[0]?.parentToolCallId
   ) {
-    return liveSubagents;
+    // 单代理直替换分支：live 全量覆盖运行态，但任务概要只存在于派遣参数快照
+    // （args.task，progress/lifecycle 帧的 task 字段被 pi-subagents redact），
+    // 必须回填，否则行卡片任务概要随首帧到达后清空
+    const snapshot = presentation.activities[0];
+    return liveSubagents.map((live) => ({
+      ...live,
+      // 帧活动的 startedAt 是首帧到达时刻，回填派遣时刻保证时长从 0 计
+      startedAt: snapshot.startedAt,
+      assignment: live.assignment ?? snapshot.assignment,
+      description: live.description ?? snapshot.description,
+    }));
   }
 
   const snapshots = new Map(presentation.activities.map((activity) => [activity.id, activity]));

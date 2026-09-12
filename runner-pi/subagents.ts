@@ -242,6 +242,56 @@ export function normalizeSubagentFrame(
 	}
 }
 
+// ─── 前台工具进度归一化（tool_execution_update 路径）─────
+
+/**
+ * pi `subagent` 工具 onUpdate 快照中的 progress 条目（AgentProgress 形状，
+ * 见 pi-subagents src/shared/types.ts）归一化为 host subagent_progress 帧。
+ *
+ * delegation/async 原生通道只覆盖 slash 委派与异步 run；主代理直接调用的
+ * 前台子代理进度仅经 pi 的 tool_execution_update 事件透出（tokens /
+ * currentTool / recentOutput / toolCount / turnCount）。单代理帧 id 与
+ * renderer 派遣占位 id（toolCallId）严格一致，store 可直接流式更新；
+ * 多代理按 index 派生子 id，终态帧由 renderer 经 index+agent 匹配合并。
+ * AgentProgress.task 在流式快照中已被 pi-subagents redact，不作为任务概要
+ * 来源（概要来自 renderer 侧派遣参数快照）。
+ */
+export function normalizeForegroundProgressFrames(
+	toolCallId: string,
+	progressList: unknown[],
+	ctx: SubagentNormalizeContext,
+): SubagentFrame[] {
+	if (!toolCallId) return [];
+	const frames: SubagentFrame[] = [];
+	for (let i = 0; i < progressList.length; i++) {
+		const raw = progressList[i];
+		if (typeof raw !== "object" || raw === null) continue;
+		const p = raw as Record<string, unknown>;
+		const index = typeof p.index === "number" && Number.isFinite(p.index) ? p.index : i;
+		const id = progressList.length === 1 ? toolCallId : `${toolCallId}:${index}`;
+		const agent = str(p.agent);
+		const payload: Record<string, unknown> = {
+			id,
+			parentSessionId: ctx.parentSessionId,
+			parentToolCallId: ctx.parentToolCallId ?? toolCallId,
+			index,
+			progress: {
+				tokens: num(p.tokens),
+				currentTool: str(p.currentTool),
+				currentToolArgs: str(p.currentToolArgs),
+				recentOutput: Array.isArray(p.recentOutput)
+					? p.recentOutput.filter((l): l is string => typeof l === "string" && l.trim().length > 0)
+					: [],
+				toolCount: num(p.toolCount),
+				requests: num(p.turnCount),
+			},
+		};
+		if (agent) payload.agent = agent;
+		frames.push({ type: "subagent_progress", payload });
+	}
+	return frames;
+}
+
 // ─── 审批继承 → capability ceiling ──────────────────────
 
 /**
