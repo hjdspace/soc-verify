@@ -547,6 +547,29 @@ describe('ToolCard task tool — subagent tiles', () => {
     expect(screen.getByTestId('subagent-tile-sa-1').textContent).toContain('Read cov:///uart');
   });
 
+  it('renders the existing SubagentCard for the pi-subagents tool name', () => {
+    setStoreSubagents({
+      'pi-sa-1': agent({
+        id: 'pi-sa-1',
+        parentToolCallId: 'tc_pi_subagent_1',
+        agent: 'reviewer',
+        currentTool: 'read',
+      }),
+    });
+
+    render(<ToolCard message={{
+      ...taskMessage(),
+      id: 'tool-pi-subagent-1',
+      toolName: 'subagent',
+      toolCallId: 'tc_pi_subagent_1',
+      toolArgs: { agent: 'reviewer', task: 'Review the project' },
+    }} />);
+    fireEvent.click(screen.getByTitle('展开'));
+
+    expect(screen.getByTestId('subagent-card')).toBeInTheDocument();
+    expect(screen.getByTestId('subagent-tile-pi-sa-1')).toHaveTextContent('reviewer');
+  });
+
   it('falls back to TaskBody when no live subagent data (history restore)', () => {
     setStoreSubagents({});
 

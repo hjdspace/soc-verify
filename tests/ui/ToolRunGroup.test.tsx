@@ -152,6 +152,35 @@ describe('ToolRunGroup rendering', () => {
     expect(screen.getAllByTestId('tool-run-row')).toHaveLength(1);
   });
 
+  it('renders SubagentCard for a running pi-subagents tool call', () => {
+    const message = pendingMessage('subagent', { agent: 'reviewer', task: 'Review the project' });
+    message.toolCallId = 'call_pi_subagent_1';
+    mockSessionState.sessions = [{
+      subagents: {
+        'run-pi-1': {
+          id: 'run-pi-1',
+          index: 0,
+          agent: 'reviewer',
+          status: 'running',
+          parentToolCallId: 'call_pi_subagent_1',
+          recentOutput: [],
+          toolCount: 0,
+          tokens: 0,
+          requests: 0,
+          tokenHistory: [],
+          startedAt: Date.now(),
+        },
+      },
+    }];
+
+    render(<ToolRunGroup messages={[message]} />);
+    fireEvent.click(screen.getByTestId('tool-run-row').querySelector('button')!);
+
+    expect(screen.getByTestId('subagent-card')).toBeInTheDocument();
+    expect(screen.getByTestId('subagent-tile-run-pi-1')).toHaveTextContent('reviewer');
+    mockSessionState.sessions = [];
+  });
+
   it('marks an executing run and expands it by default', () => {
     const messages = [
       completedMessage('read', { path: 'a.sv' }, 'content'),

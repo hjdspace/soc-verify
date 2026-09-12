@@ -17,7 +17,7 @@ import { useSessionCoreStore } from '@renderer/stores/session-core';
 import type { ChatMessage, SubagentActivity } from '@renderer/stores/session-types';
 import { cn } from '@renderer/lib/utils';
 import { ThinkingOrb } from '@renderer/components/visual';
-import { getToolMeta, isSkillRead, extractResultText, hasResultWarning } from './tool-helpers';
+import { getToolMeta, isSkillRead, extractResultText, hasResultWarning, SUBAGENT_TOOLS } from './tool-helpers';
 import {
   getToolSummary,
   ToolBodyView,
@@ -98,9 +98,9 @@ function ToolRunRow({
   const toolName = message.toolName ?? '';
   const resultText = extractResultText(message.toolResult);
 
-  // task 工具：读取该 tool call 关联的 subagent 实时状态
+  // task/subagent 工具：读取该 tool call 关联的 subagent 实时状态
   const taskAgents = useSessionCoreStore(useShallow((s) => {
-    if (message.toolName !== 'task' || !message.toolCallId) return NO_SUBAGENTS;
+    if (!SUBAGENT_TOOLS.has(message.toolName ?? '') || !message.toolCallId) return NO_SUBAGENTS;
     const list: SubagentActivity[] = [];
     for (const sess of s.sessions) {
       for (const a of Object.values(sess.subagents ?? {})) {

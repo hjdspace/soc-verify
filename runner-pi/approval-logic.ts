@@ -25,6 +25,9 @@ const READ_TOOLS = new Set([
   "todo",
   "todo_write",
   "web_search",
+  "fetch_content",
+  "get_search_content",
+  "source_check",
   "ask",
   "inspect_image",
 ]);

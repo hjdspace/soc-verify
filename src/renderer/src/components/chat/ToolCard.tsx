@@ -20,6 +20,7 @@ import {
   extractResultText,
   hasResultWarning,
   isDirectoryToolResult,
+  SUBAGENT_TOOLS,
 } from './tool-helpers';
 import {
   getToolSummary,
@@ -41,7 +42,7 @@ export function ToolCard({ message }: { message: ChatMessage }) {
 
   // task 工具：读取该 tool call 关联的 subagent 实时状态
   const taskAgents = useSessionCoreStore(useShallow((s) => {
-    if (message.toolName !== 'task' || !message.toolCallId) return NO_SUBAGENTS;
+    if (!SUBAGENT_TOOLS.has(message.toolName ?? '') || !message.toolCallId) return NO_SUBAGENTS;
     const list: SubagentActivity[] = [];
     for (const sess of s.sessions) {
       for (const a of Object.values(sess.subagents ?? {})) {

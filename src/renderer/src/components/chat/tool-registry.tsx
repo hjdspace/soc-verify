@@ -41,6 +41,8 @@ import {
   isSkillRead,
   extractSkillName,
   parseMCPToolName,
+  getToolDetails,
+  SUBAGENT_TOOLS,
 } from './tool-helpers';
 import { GenericBody } from './tool-bodies/shared/GenericBody';
 import { McpBody } from './tool-bodies/shared/McpBody';
@@ -53,6 +55,8 @@ import { EvalBody } from './tool-bodies/exec/EvalBody';
 import { GrepBody } from './tool-bodies/exec/GrepBody';
 import { GlobBody } from './tool-bodies/exec/GlobBody';
 import { WebSearchBody } from './tool-bodies/exec/WebSearchBody';
+import { WebFetchBody, GetSearchContentBody } from './tool-bodies/exec/WebFetchBody';
+import { SourceCheckBody } from './tool-bodies/exec/SourceCheckBody';
 import { TaskBody } from './tool-bodies/agent/TaskBody';
 import { JobBody } from './tool-bodies/agent/JobBody';
 import { TodoBody } from './tool-bodies/agent/TodoBody';
@@ -176,7 +180,60 @@ function webSearchSummary(message: ChatMessage): ReactNode {
   const isExecuting = !message.toolResult;
   const resultText = extractResultText(message.toolResult);
   const query = argStr(message.toolArgs, 'query', 'q') ?? '';
+  // pi-web-access：details 携带结构化统计（queryCount/totalResults）
+  const details = getToolDetails(message.toolResult);
+  if (!isExecuting && details) {
+    const queryCount = Number(details.queryCount ?? 0);
+    const successful = Number(details.successfulQueries ?? queryCount);
+    const totalResults = Number(details.totalResults ?? 0);
+    if (queryCount > 0) {
+      const label = queryCount > 1 ? `${successful}/${queryCount} queries` : query;
+      return <><span className="text-foreground">&quot;{label}&quot;</span> {' \u00b7 '} {totalResults} results</>;
+    }
+  }
   return <>"{query}" {' \u00b7 '} {isExecuting ? 'searching...' : `${countLines(resultText)} results`}</>;
+}
+
+function fetchContentSummary(message: ChatMessage): ReactNode {
+  const isExecuting = !message.toolResult;
+  const urlsArg = argVal(message.toolArgs, 'urls');
+  const urls = Array.isArray(urlsArg) && urlsArg.length > 0
+    ? urlsArg.map((u) => String(u))
+    : [argStr(message.toolArgs, 'url') ?? ''].filter(Boolean);
+  const detail = urls.length > 1 ? `${urls.length} URLs` : (urls[0] ?? '');
+  const details = getToolDetails(message.toolResult);
+  const successful = Number(details?.successful ?? 0);
+  const urlCount = Number(details?.urlCount ?? urls.length);
+  const statusText = isExecuting || urlCount === 0 ? 'fetching...' : `${successful}/${urlCount} fetched`;
+  return <><span className="text-foreground">{detail}</span>{detail ? ' \u00b7 ' : ''}{statusText}</>;
+}
+
+function getSearchContentSummary(message: ChatMessage): ReactNode {
+  const isExecuting = !message.toolResult;
+  const resultText = extractResultText(message.toolResult);
+  const responseId = argStr(message.toolArgs, 'responseId') ?? '';
+  return <><span className="text-foreground">{responseId || 'search content'}</span> {' \u00b7 '} {isExecuting ? 'retrieving...' : `${countLines(resultText)} lines`}</>;
+}
+
+function sourceCheckSummary(message: ChatMessage): ReactNode {
+  const isExecuting = !message.toolResult;
+  const claim = argStr(message.toolArgs, 'claim') ?? '';
+  const details = getToolDetails(message.toolResult);
+  const assessments = details?.artifact && typeof details.artifact === 'object'
+    ? (details.artifact as { claims?: Array<{ status?: unknown }> }).claims
+    : undefined;
+  const status = Array.isArray(assessments) && typeof assessments[0]?.status === 'string'
+    ? (assessments[0].status as string)
+    : '';
+  const label = status === 'supported' ? '已证实' : status === 'contradicted' ? '已证伪' : status ? '证据不足' : '';
+  const sourceCount = Number(details?.sourceCount ?? 0);
+  return (
+    <>
+      <span className="text-foreground">&quot;{claim.slice(0, 40)}{claim.length > 40 ? '...' : ''}&quot;</span>
+      {' \u00b7 '}
+      {isExecuting ? 'checking...' : label || `${sourceCount} sources`}
+    </>
+  );
 }
 
 function askSummary(message: ChatMessage): ReactNode {
@@ -292,7 +349,16 @@ function GlobBodyWrap({ message }: ToolBodyProps) {
   return <GlobBody args={message.toolArgs} resultText={extractResultText(message.toolResult)} />;
 }
 function WebSearchBodyWrap({ message }: ToolBodyProps) {
-  return <WebSearchBody args={message.toolArgs} resultText={extractResultText(message.toolResult)} />;
+  return <WebSearchBody args={message.toolArgs} result={message.toolResult} resultText={extractResultText(message.toolResult)} />;
+}
+function WebFetchBodyWrap({ message }: ToolBodyProps) {
+  return <WebFetchBody args={message.toolArgs} result={message.toolResult} resultText={extractResultText(message.toolResult)} />;
+}
+function GetSearchContentBodyWrap({ message }: ToolBodyProps) {
+  return <GetSearchContentBody args={message.toolArgs} result={message.toolResult} resultText={extractResultText(message.toolResult)} />;
+}
+function SourceCheckBodyWrap({ message }: ToolBodyProps) {
+  return <SourceCheckBody args={message.toolArgs} result={message.toolResult} resultText={extractResultText(message.toolResult)} />;
 }
 function TaskBodyWrap({ message }: ToolBodyProps) {
   return <TaskBody result={message.toolResult} resultText={extractResultText(message.toolResult)} />;
@@ -366,7 +432,11 @@ export const TOOL_REGISTRY: Record<string, ToolEntry> = {
   glob:                    { summary: globSummary, Body: GlobBodyWrap },
   find:                    { summary: globSummary, Body: GlobBodyWrap },
   web_search:              { summary: webSearchSummary, Body: WebSearchBodyWrap },
+  fetch_content:           { summary: fetchContentSummary, Body: WebFetchBodyWrap },
+  get_search_content:      { summary: getSearchContentSummary, Body: GetSearchContentBodyWrap },
+  source_check:            { summary: sourceCheckSummary, Body: SourceCheckBodyWrap },
   task:                    { summary: taskSummary, Body: TaskBodyWrap },
+  subagent:                { summary: taskSummary, Body: TaskBodyWrap },
   job:                     { summary: jobSummary, Body: JobBodyWrap },
   todo:                    { summary: todoSummary, Body: TodoBodyWrap },
   ask:                     { summary: askSummary, Body: AskBodyWrap },
@@ -382,7 +452,7 @@ export const TOOL_REGISTRY: Record<string, ToolEntry> = {
 // ── Constants ──────────────────────────────────────────
 
 export const FILE_TOOLS = new Set(['read', 'read_file', 'write', 'write_file', 'edit', 'edit_file', 'apply_patch', 'ast_edit']);
-export const SEARCH_TOOLS = new Set(['grep', 'search', 'glob', 'find', 'ast_grep', 'web_search']);
+export const SEARCH_TOOLS = new Set(['grep', 'search', 'glob', 'find', 'ast_grep', 'web_search', 'fetch_content', 'get_search_content', 'source_check']);
 export const EXEC_TOOLS = new Set(['bash', 'eval', 'js', 'python']);
 
 /**
@@ -453,12 +523,12 @@ export function ToolBodyView({
   const isExecuting = !message.toolResult;
 
   // task 工具：有 subagent 实时数据时用磁贴卡片
-  if (name === 'task' && taskAgents.length > 0) {
+  if (SUBAGENT_TOOLS.has(name) && taskAgents.length > 0) {
     return <SubagentCard agents={taskAgents} />;
   }
 
   // task 工具：无实时数据但 toolResult.details.progress 存在时，从静态快照构建磁贴卡片
-  if (name === 'task' && !isExecuting && message.toolResult) {
+  if (SUBAGENT_TOOLS.has(name) && !isExecuting && message.toolResult) {
     const staticAgents = buildSubagentsFromResult(message.toolResult, message.toolCallId);
     if (staticAgents.length > 0) {
       return <SubagentCard agents={staticAgents as SubagentActivity[]} />;
@@ -466,7 +536,7 @@ export function ToolBodyView({
   }
 
   // Executing placeholder (task with no subagent data falls through to TaskBody)
-  if (isExecuting && name !== 'task') {
+  if (isExecuting && !SUBAGENT_TOOLS.has(name)) {
     return (
       <div className="flex items-center gap-1.5 px-2.5 py-2 font-mono text-[11px] text-muted-foreground">
         <ThinkingOrb state="solving" size={20} theme="auto" />

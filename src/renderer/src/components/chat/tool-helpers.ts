@@ -30,7 +30,11 @@ export const TOOL_META: Record<string, ToolMeta> = {
   find:         { label: 'glob',         category: 'search',      color: 'text-chart-1' },
   ast_grep:     { label: 'ast_grep',     category: 'search',      color: 'text-chart-1' },
   web_search:   { label: 'web_search',   category: 'search',      color: 'text-status-fail-foreground' },
+  fetch_content:      { label: 'fetch_content',      category: 'search', color: 'text-status-fail-foreground' },
+  get_search_content: { label: 'get_search_content', category: 'search', color: 'text-status-fail-foreground' },
+  source_check:       { label: 'source_check',       category: 'search', color: 'text-status-fail-foreground' },
   task:         { label: 'task',         category: 'agent',       color: 'text-chart-4' },
+  subagent:     { label: 'subagent',     category: 'agent',       color: 'text-chart-4' },
   job:          { label: 'job',          category: 'agent',       color: 'text-chart-2' },
   todo:         { label: 'todo',         category: 'agent',       color: 'text-violet-foreground' },
   ask:          { label: 'ask',          category: 'interactive', color: 'text-chart-2' },
@@ -42,6 +46,9 @@ export const TOOL_META: Record<string, ToolMeta> = {
   get_coverage:           { label: 'get_coverage',           category: 'host', color: 'text-status-pass-foreground' },
   get_sim_options_schema: { label: 'get_sim_options_schema', category: 'host', color: 'text-status-pass-foreground' },
 };
+
+/** OMP and pi-subagents expose the same capability under different tool names. */
+export const SUBAGENT_TOOLS = new Set(['task', 'subagent']);
 
 /** Check if a tool name is an MCP tool (mcp__<server>_<tool>) */
 export function isMCPTool(name: string | undefined): boolean {
@@ -606,6 +613,21 @@ function normalizeTodoStatus(raw: string): TodoItemStatus {
  * 返回 null 表示结果不是 rpiv 格式（无 details.tasks）；items 为空数组表示
  * 是 rpiv 格式但清单已清空（clear / 全部 tombstone）。
  */
+/**
+ * 提取工具结果的结构化 details（AgentToolResult.details，runner 侧透传）。
+ * pi-web-access 等扩展把 queries/totalResults/artifact 等结构化摘要放在
+ * details 而非 content 文本里，UI 卡片优先读它构建富展示。
+ */
+export function getToolDetails(result: unknown): Record<string, unknown> | null {
+  if (typeof result === 'object' && result !== null && !Array.isArray(result)) {
+    const details = (result as Record<string, unknown>).details;
+    if (typeof details === 'object' && details !== null && !Array.isArray(details)) {
+      return details as Record<string, unknown>;
+    }
+  }
+  return null;
+}
+
 export function extractRpivTodoTasks(result: unknown): TodoItemData[] | null {
   if (typeof result !== 'object' || result === null) return null;
   const details = (result as Record<string, unknown>).details;

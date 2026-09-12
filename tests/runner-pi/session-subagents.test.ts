@@ -345,6 +345,53 @@ describe('handleInit 子会话模型继承装配', () => {
   });
 });
 
+describe('handleInit pi-subagents UI 事件关联', () => {
+  it('把 async run 关联到触发它的 subagent 工具调用', async () => {
+    const ctx = makeCtx();
+    await handleInit({ id: 'req_ui', type: 'init', config: { cwd: '/p' } }, ctx);
+
+    const bridge = (lastLoader().extensionFactories as Array<{
+      name: string;
+      factory: (pi: unknown) => void;
+    }>).find((factory) => factory.name === 'socverify-subagent-bridge');
+    const busHandlers = new Map<string, (payload: unknown) => void>();
+    const piHandlers = new Map<string, (event: Record<string, unknown>) => void>();
+    bridge?.factory({
+      events: {
+        emit: vi.fn(),
+        on: (channel: string, handler: (payload: unknown) => void) => {
+          busHandlers.set(channel, handler);
+          return () => busHandlers.delete(channel);
+        },
+      },
+      on: (event: string, handler: (payload: Record<string, unknown>) => void) => {
+        piHandlers.set(event, handler);
+      },
+    });
+
+    piHandlers.get('tool_execution_start')?.({
+      type: 'tool_execution_start',
+      toolCallId: 'call_pi_subagent_1',
+      toolName: 'subagent',
+      args: { agent: 'reviewer', task: 'Review the project' },
+    });
+    busHandlers.get('subagent:async-started')?.({
+      id: 'run-pi-1',
+      agent: 'reviewer',
+      mode: 'single',
+      asyncDir: '/tmp/run-pi-1',
+    });
+
+    expect(sendEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'subagent_lifecycle',
+      payload: expect.objectContaining({
+        id: 'run-pi-1',
+        parentToolCallId: 'call_pi_subagent_1',
+      }),
+    }));
+  });
+});
+
 // ─── 审批模式动态更新 ───────────────────────────────────
 
 describe('handleSetApprovalMode ceiling 同步', () => {

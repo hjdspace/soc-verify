@@ -62,6 +62,11 @@ function verifyInstalled() {
 
 const PRUNED_DIRS = new Set(['recheck-jar', 'docs', 'examples']);
 const LICENSE_FILE = /^(licen[sc]e|notice|unlicense|authors|contributors)/i;
+// 发布载荷里的 demo 媒体文件（pi-web-access 的宣传 banner + 演示视频，
+// 约 6.4MB，运行时无用）——按包目录圈定，避免误伤其他包的同名资源。
+const PRUNED_FILES_BY_PACKAGE = {
+  'pi-web-access': new Set(['banner.png', 'pi-web-fetch-demo.mp4']),
+};
 
 function treeSize(dir) {
   let total = 0;
@@ -115,34 +120,43 @@ function prunePayload() {
     rmSync(fp, { force: true });
   };
 
-  const walk = (dir) => {
-    let entries;
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      const fp = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (PRUNED_DIRS.has(entry.name)) {
-          removeDir(fp);
-          continue;
-        }
-        walk(fp);
+const walk = (dir, pkgName) => {
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const fp = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (PRUNED_DIRS.has(entry.name)) {
+        removeDir(fp);
         continue;
       }
-      if (entry.name.endsWith('.map')) {
-        removeFile(fp);
-        continue;
-      }
-      if (entry.name.endsWith('.md') && !LICENSE_FILE.test(entry.name)) {
-        removeFile(fp);
-      }
+      // scoped 包目录：node_modules/<scope>/<pkg> 跳过 scope 层取包名
+      const isScopeLayer = !pkgName && entry.name.startsWith('@');
+      walk(fp, isScopeLayer ? undefined : (pkgName ?? entry.name));
+      continue;
     }
-  };
+    if (
+      pkgName &&
+      PRUNED_FILES_BY_PACKAGE[pkgName]?.has(entry.name)
+    ) {
+      removeFile(fp);
+      continue;
+    }
+    if (entry.name.endsWith('.map')) {
+      removeFile(fp);
+      continue;
+    }
+    if (entry.name.endsWith('.md') && !LICENSE_FILE.test(entry.name)) {
+      removeFile(fp);
+    }
+  }
+};
 
-  walk(nmRoot);
+walk(nmRoot);
   return { files, bytes };
 }
 

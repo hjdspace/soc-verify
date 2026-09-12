@@ -72,6 +72,7 @@ import {
 	SUBAGENT_ASYNC_COMPLETE_CHANNEL,
 	SUBAGENT_CHILD_STATUS_CHANNEL,
 	SUBAGENT_DELEGATION_RESPONSE_CHANNEL,
+	SUBAGENT_FOREGROUND_COMPLETE_CHANNEL,
 	trackSubagentRun,
 	type SubagentEventBus,
 	type SubagentRuntime,
@@ -623,9 +624,51 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 			const events = (pi as { events?: SubagentEventBus }).events ?? null;
 			runtime.events = events;
 			if (!events) return;
+			const activeToolCalls = new Map<string, string | undefined>();
+			const runParents = new Map<string, string>();
+
+			pi.on("tool_execution_start", (event) => {
+				if (event.toolName !== "subagent") return;
+				const args = typeof event.args === "object" && event.args !== null
+					? event.args as Record<string, unknown>
+					: {};
+				activeToolCalls.set(event.toolCallId, typeof args.agent === "string" ? args.agent : undefined);
+			});
+			pi.on("tool_execution_end", (event) => {
+				if (event.toolName !== "subagent") return;
+				const result = typeof event.result === "object" && event.result !== null
+					? event.result as Record<string, unknown>
+					: {};
+				const details = typeof result.details === "object" && result.details !== null
+					? result.details as Record<string, unknown>
+					: {};
+				if (typeof details.runId === "string") runParents.set(details.runId, event.toolCallId);
+				activeToolCalls.delete(event.toolCallId);
+			});
 
 			for (const channel of SUBAGENT_CHANNELS) {
 				events.on(channel, (payload: unknown) => {
+					const native = typeof payload === "object" && payload !== null
+						? payload as Record<string, unknown>
+						: {};
+					const runId = [native.runId, native.requestId, native.id, native.childId]
+						.find((value): value is string => typeof value === "string" && value.length > 0);
+					let parentToolCallId = typeof native.parentToolCallId === "string"
+						? native.parentToolCallId
+						: typeof native.toolCallId === "string"
+							? native.toolCallId
+							: runId
+								? runParents.get(runId)
+								: undefined;
+					if (!parentToolCallId) {
+						const agent = typeof native.agent === "string" ? native.agent : undefined;
+						const matches = [...activeToolCalls].filter(([, activeAgent]) =>
+							agent !== undefined && activeAgent === agent,
+						);
+						if (matches.length === 1) parentToolCallId = matches[0]?.[0];
+						else if (activeToolCalls.size === 1) parentToolCallId = activeToolCalls.keys().next().value;
+					}
+					if (runId && parentToolCallId) runParents.set(runId, parentToolCallId);
 					// 活动 run 登记（async-started）：destroy 时据此下发 stop
 					trackSubagentRun.onStart(runtime.registry, { channel, payload });
 					for (const frame of normalizeSubagentFrame(channel, payload, {
@@ -633,14 +676,17 @@ function buildSubagentBridgeExtension(ctx: PiRunnerContext, runtime: SubagentRun
 							ctx.session != null
 								? ((ctx.session as { sessionId?: string }).sessionId ?? null)
 								: null,
+						parentToolCallId,
 					})) {
 						if (
 							frame.type === "subagent_lifecycle" &&
 							(channel === SUBAGENT_DELEGATION_RESPONSE_CHANNEL ||
 								channel === SUBAGENT_ASYNC_COMPLETE_CHANNEL ||
+								channel === SUBAGENT_FOREGROUND_COMPLETE_CHANNEL ||
 								channel === SUBAGENT_CHILD_STATUS_CHANNEL)
 						) {
 							trackSubagentRun.onTerminal(runtime.registry, String(frame.payload.id));
+							runParents.delete(String(frame.payload.id));
 						}
 						sendEvent(frame);
 					}
@@ -779,6 +825,70 @@ async function assembleTodo(): Promise<TodoAssembly> {
 			factories: [
 				{
 					name: "socverify-todo",
+					hidden: true,
+					factory: (pi) => {
+						mod.default(pi);
+					},
+				},
+			],
+			blockedReason: null,
+		};
+	} catch (err) {
+		const reason = err instanceof Error ? err.message : String(err);
+		return { factories: [], blockedReason: reason };
+	}
+}
+
+// ─── pi-web-access 加载（jiti，TS 源码入口）─────────────
+
+interface WebAccessExtensionModule {
+	default: (pi: unknown) => void;
+}
+
+/**
+ * pi-web-access 的 package.json "." 出口是 TypeScript 源码（index.ts），
+ * 与 pi-mcp-adapter / pi-subagents / rpiv-todo 同理由 jiti 加载（模块缓存随
+ * 进程复用）。扩展注册 web_search / fetch_content / get_search_content /
+ * source_check 四个网络工具与 /websearch /curator 等命令。
+ */
+let webAccessModulePromise: Promise<WebAccessExtensionModule> | null = null;
+
+function loadWebAccessExtension(): Promise<WebAccessExtensionModule> {
+	webAccessModulePromise ??= createJiti(import.meta.url)
+		.import("pi-web-access")
+		.then((mod) => {
+			const resolved = mod as { default?: unknown };
+			const factory = resolved.default;
+			if (typeof factory !== "function") {
+				throw new Error("pi-web-access loaded but default extension factory missing");
+			}
+			return { default: factory as (pi: unknown) => void };
+		});
+	return webAccessModulePromise;
+}
+
+// ─── web access 装配（pi-web-access 内置扩展）────────────
+
+type WebAccessAssembly = {
+	factories: InlineExtension[];
+	/** 加载失败原因（host/UI 显式展示，不静默降级） */
+	blockedReason: string | null;
+};
+
+/**
+ * web access 装配：加载 pi-web-access 扩展（网络搜索 + URL 抓取 + 来源核查）。
+ * 失败不中断 init：blockedReason 由 handleInit 以 notice 事件透出。
+ * runner 为 headless（ctx.hasUI=false），浏览器 curator 工作流按扩展自身
+ * 语义自动降级为 "none"（不弹浏览器、不启动 curator server），搜索直接
+ * 返回带引用的综合答案。
+ */
+async function assembleWebAccess(): Promise<WebAccessAssembly> {
+	try {
+		const mod = await loadWebAccessExtension();
+		return {
+			factories: [
+				{
+					name: "socverify-web-access",
 					hidden: true,
 					factory: (pi) => {
 						mod.default(pi);
@@ -991,6 +1101,7 @@ export async function handleInit(
 	const mcp = await assembleMcp(config, ctx);
 	const subagents = await assembleSubagents(config, ctx);
 	const todo = await assembleTodo();
+	const webAccess = await assembleWebAccess();
 	const agentDir = getAgentDir();
 	// 单一 SettingsManager 实例同时供 loader 与 createAgentSession 使用
 	// （createAgentSession 不传 settingsManager 时会自建新实例，override 会丢失）。
@@ -1006,6 +1117,7 @@ export async function handleInit(
 			...mcp.factories,
 			...subagents.factories,
 			...todo.factories,
+			...webAccess.factories,
 		],
 		appendSystemPrompt: buildAppendSystemPrompt(config.systemPrompt),
 		// skill 装载（issue 09）：host 下发有序 skillPaths（与 UI 发现同源），
@@ -1112,6 +1224,13 @@ export async function handleInit(
 	// 模型无法创建任务清单，UI 必须知道原因）
 	if (todo.blockedReason) {
 		const text = `Todo extension unavailable: ${todo.blockedReason}`;
+		sendEvent({ type: "notice", text, message: text });
+	}
+
+	// web access 扩展状态透出（加载失败显式展示，不静默降级 —— `web_search`
+	// 等网络工具不可用时模型无法联网，UI 必须知道原因）
+	if (webAccess.blockedReason) {
+		const text = `Web access extension unavailable: ${webAccess.blockedReason}`;
 		sendEvent({ type: "notice", text, message: text });
 	}
 

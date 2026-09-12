@@ -24,6 +24,8 @@ import type { ApprovalMode } from "./approval-logic";
 export const SUBAGENT_ASYNC_STARTED_CHANNEL = "subagent:async-started";
 /** 异步 subagent 终态 */
 export const SUBAGENT_ASYNC_COMPLETE_CHANNEL = "subagent:async-complete";
+/** 前台 subagent 终态 */
+export const SUBAGENT_FOREGROUND_COMPLETE_CHANNEL = "subagent:foreground-complete";
 /** 子会话状态（stopping/stopped — 取消传播观测点） */
 export const SUBAGENT_CHILD_STATUS_CHANNEL = "subagent:child-status";
 /** 结构化委派协议（extension-to-extension，src/api/delegation.ts） */
@@ -34,6 +36,7 @@ export const SUBAGENT_DELEGATION_RESPONSE_CHANNEL = "prompt-template:subagent:re
 export const SUBAGENT_CHANNELS: readonly string[] = [
   SUBAGENT_ASYNC_STARTED_CHANNEL,
   SUBAGENT_ASYNC_COMPLETE_CHANNEL,
+  SUBAGENT_FOREGROUND_COMPLETE_CHANNEL,
   SUBAGENT_CHILD_STATUS_CHANNEL,
   SUBAGENT_DELEGATION_UPDATE_CHANNEL,
   SUBAGENT_DELEGATION_RESPONSE_CHANNEL,
@@ -93,6 +96,8 @@ export type SubagentFrame = {
 export type SubagentNormalizeContext = {
 	/** 父 pi 会话 id（父子归属关键字段） */
 	parentSessionId: string | null;
+	/** 发起本次运行的 task/subagent 工具调用 id（UI 卡片关联） */
+	parentToolCallId?: string;
 }
 
 function num(value: unknown): number {
@@ -139,6 +144,7 @@ function lifecycleFrame(
 			id,
 			status,
 			parentSessionId: ctx.parentSessionId,
+			parentToolCallId: ctx.parentToolCallId,
 			...extra,
 		},
 	};
@@ -184,6 +190,7 @@ export function normalizeSubagentFrame(
 					payload: {
 						id,
 						parentSessionId: ctx.parentSessionId,
+						parentToolCallId: ctx.parentToolCallId,
 						progress: {
 							tokens: num(p.tokens),
 							currentTool: str(p.currentTool),
@@ -199,10 +206,17 @@ export function normalizeSubagentFrame(
 		}
 
 		case SUBAGENT_DELEGATION_RESPONSE_CHANNEL:
-		case SUBAGENT_ASYNC_COMPLETE_CHANNEL: {
+		case SUBAGENT_ASYNC_COMPLETE_CHANNEL:
+		case SUBAGENT_FOREGROUND_COMPLETE_CHANNEL: {
 			const id = str(p.runId) ?? str(p.requestId) ?? str(p.id);
 			if (!id) return [];
-			const status = mapTerminalStatus(p.status);
+			const status = channel === SUBAGENT_DELEGATION_RESPONSE_CHANNEL
+				? mapTerminalStatus(p.status)
+				: p.success === true || p.state === "complete" || p.status === "completed"
+					? "completed"
+					: p.stopped === true || p.interrupted === true || p.state === "stopped" || p.status === "cancelled"
+						? "aborted"
+						: "failed";
 			return [
 				lifecycleFrame(id, status, ctx, {
 					agent: str(p.agent),

@@ -141,6 +141,29 @@ describe('normalizeSubagentFrame', () => {
     });
   });
 
+  it('async-complete 使用 pi-subagents 的 success/state 字段判定完成状态', () => {
+    const frames = normalizeSubagentFrame(
+      'subagent:async-complete',
+      {
+        id: 'run-async-1',
+        runId: 'run-async-1',
+        agent: 'reviewer',
+        success: true,
+        state: 'complete',
+      },
+      { parentSessionId: 'p', parentToolCallId: 'call-1' },
+    );
+
+    expect(frames[0]).toMatchObject({
+      type: 'subagent_lifecycle',
+      payload: {
+        id: 'run-async-1',
+        status: 'completed',
+        parentToolCallId: 'call-1',
+      },
+    });
+  });
+
   it('delegation response 失败/超时归一为 failed，显式携带阻断原因', () => {
     for (const status of ['failed', 'timed_out', 'tool_budget_exhausted'] as const) {
       const frames = normalizeSubagentFrame(
