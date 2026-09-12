@@ -19,6 +19,7 @@ vi.mock('../../runner-pi/protocol', async () => ({
 
 const createAgentSession = vi.fn();
 const sessionManagerCreate = vi.fn((..._args: unknown[]) => ({ __fakeSessionManager: true }));
+const settingsApplyOverrides = vi.fn();
 
 vi.mock('@earendil-works/pi-coding-agent', () => ({
   createAgentSession: (...args: unknown[]) => createAgentSession(...args),
@@ -30,7 +31,7 @@ vi.mock('@earendil-works/pi-coding-agent', () => ({
   },
   getAgentDir: () => '/fake/agent-dir',
   hasTrustRequiringProjectResources: () => false,
-  SettingsManager: { create: () => ({ __fakeSettingsManager: true, applyOverrides: () => {} }) },
+  SettingsManager: { create: () => ({ __fakeSettingsManager: true, applyOverrides: settingsApplyOverrides }) },
 }));
 
 // issue 05：subagent 扩展经 jiti 加载，测试中替换为受控 fake
@@ -57,6 +58,8 @@ const {
   handleSetModel,
   handleCompact,
   handleDestroy,
+  reclassifyTransientRateLimitError,
+  buildRetryReclassifyExtension,
 } = await import('../../runner-pi/session');
 
 // ─── 测试脚手架 ─────────────────────────────────────────
@@ -105,6 +108,7 @@ beforeEach(() => {
   createAgentSession.mockReset();
   createAgentSession.mockImplementation(async () => ({ session: makeSession() }));
   sessionManagerCreate.mockClear();
+  settingsApplyOverrides.mockClear();
   for (const key of ENV_KEYS) delete process.env[key];
 });
 
@@ -445,5 +449,86 @@ describe('handleDestroy', () => {
   it('无会话时也安全回传 ok（幂等）', async () => {
     await handleDestroy({ id: 'req_2', type: 'destroy' }, makeCtx(null));
     expect(sendResponse).toHaveBeenCalledWith('req_2', true, { ok: true });
+  });
+});
+
+// ─── retry 治理（预算注入 + 瞬时限流误标改写） ──────────
+
+describe('retry 治理', () => {
+  it('init 注入会话层 + HTTP 层 retry 预算（内存覆盖，不落盘）', async () => {
+    await handleInit({ id: 'req_r1', type: 'init', config: { cwd: '/p' } }, makeCtx());
+    expect(settingsApplyOverrides).toHaveBeenCalledTimes(1);
+    expect(settingsApplyOverrides).toHaveBeenCalledWith({
+      retry: { maxRetries: 5, baseDelayMs: 4000, provider: { maxRetries: 3 } },
+    });
+  });
+
+  it('网关误标（rate_limit_error + insufficient_quota）改写为可重试文本', () => {
+    const text =
+      '429: {"message":"inference exceeds tpm/rpm limit","type":"rate_limit_error","code":"insufficient_quota"}';
+    const rewritten = reclassifyTransientRateLimitError(text);
+    expect(rewritten).not.toBeNull();
+    expect(rewritten).not.toMatch(/insufficient_quota/i);
+    expect(rewritten).toMatch(/rate_limit_error/);
+    expect(rewritten).toMatch(/^429: /);
+  });
+
+  it('真实配额耗尽（type=insufficient_quota、无 tpm/rpm 字样）不改写，仍 fail fast', () => {
+    const text =
+      '429: {"message":"You exceeded your current quota, please check your plan and billing details","type":"insufficient_quota","code":"insufficient_quota"}';
+    expect(reclassifyTransientRateLimitError(text)).toBeNull();
+  });
+
+  it('无配额标记的普通限流不改写（pi 本就判为可重试）', () => {
+    expect(reclassifyTransientRateLimitError('429: {"message":"Rate limit reached","type":"rate_limit_error"}')).toBeNull();
+  });
+
+  it('空文本/未定义返回 null', () => {
+    expect(reclassifyTransientRateLimitError(undefined)).toBeNull();
+    expect(reclassifyTransientRateLimitError('')).toBeNull();
+  });
+
+  it('message_end 扩展对误标错误返回替换消息（同 role，errorMessage 已改写）', () => {
+    const handlers: Array<(event: unknown) => unknown> = [];
+    const fakePi = {
+      on: (_event: string, handler: (event: unknown) => unknown) => {
+        handlers.push(handler);
+      },
+    };
+    const extension = buildRetryReclassifyExtension();
+    expect(extension).toMatchObject({ name: 'socverify-retry-reclassify', hidden: true });
+    (extension as { factory: (pi: unknown) => void }).factory(fakePi);
+    expect(handlers).toHaveLength(1);
+
+    const message = {
+      role: 'assistant',
+      content: [{ type: 'text', text: '' }],
+      stopReason: 'error',
+      errorMessage:
+        '429: {"message":"inference exceeds tpm/rpm limit","type":"rate_limit_error","code":"insufficient_quota"}',
+    };
+    const result = handlers[0]({ type: 'message_end', message }) as
+      | { message: { role: string; errorMessage: string } }
+      | undefined;
+    expect(result?.message.role).toBe('assistant');
+    expect(result?.message.errorMessage).not.toMatch(/insufficient_quota/);
+  });
+
+  it('message_end 扩展对非 assistant / 非错误消息不介入', () => {
+    const handlers: Array<(event: unknown) => unknown> = [];
+    const fakePi = {
+      on: (_event: string, handler: (event: unknown) => unknown) => {
+        handlers.push(handler);
+      },
+    };
+    (buildRetryReclassifyExtension() as { factory: (pi: unknown) => void }).factory(fakePi);
+
+    expect(handlers[0]({ type: 'message_end', message: { role: 'user', content: 'hi' } })).toBeUndefined();
+    expect(
+      handlers[0]({
+        type: 'message_end',
+        message: { role: 'assistant', content: [], stopReason: 'stop' },
+      }),
+    ).toBeUndefined();
   });
 });

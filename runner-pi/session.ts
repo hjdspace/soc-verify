@@ -512,29 +512,86 @@ async function resolveSessionManager(
 	return { manager, recovery: "new" };
 }
 
-// ─── provider 层 HTTP 重试（瞬时限流/网络错误的兜底） ───
+// ─── retry 治理（HTTP 层预算 + 会话层预算 + 误标错误改写） ───
 
 /**
- * pi 有两层重试，此处显式开启 HTTP 层：
- *  - 会话级 auto retry（默认开启，3 次 × 2s 指数退避）按 errorMessage 文本
- *    分类，pi-ai 把 `insufficient_quota` 归为"配额/计费耗尽"类永久错误、
- *    fail fast 不重试 —— 而内部 OpenAI 兼容网关把 TPM/RPM 限流误用该 code
- *    上报，导致瞬时限流直接把错误抛给用户。
+ * pi 有两层重试：
  *  - HTTP 层 provider retry（pi 默认关闭：settings `retry.provider.maxRetries`
  *    未配置时为 0）按 HTTP 状态码判定（408/409/429/5xx），不受响应体里误导性
  *    code 的影响，并遵循 retry-after / retry-after-ms 头（超过 maxRetryDelayMs
- *    的服务端延迟仍立即失败，避免长时间卡死）。
+ *    的服务端延迟仍立即失败，避免长时间卡死）。maxRetries=3：退避序列约
+ *    0.5s/1s/2s。
+ *  - 会话级 auto retry（默认开启 3 次 × 2s 指数退避，约 14s）按 errorMessage
+ *    文本分类。pi-ai 把 `insufficient_quota` 归为"配额/计费耗尽"类永久错误、
+ *    fail fast 不重试 —— 而内部 OpenAI 兼容网关把瞬时 TPM/RPM 限流误用该 code
+ *    上报（`type:"rate_limit_error"` + `code:"insufficient_quota"`），导致可恢复
+ *    限流被当成永久错误直接终止会话。
  *
- * 经 SettingsManager.applyOverrides 内存覆盖开启，不落盘、不改用户级
- * settings.json。maxRetries=3：退避序列约 0.5s/1s/2s（有 retry-after 头时
- * 按服务端指示等待），覆盖大多数 TPM/RPM 窗口。
+ * 两项治理：
+ *  1. 预算：会话层 5 次 × 4s 指数退避（4+8+16+32+64 = 124s 窗口，末次尝试约在
+ *     60s 后启动，覆盖每分钟 RPM/TPM 窗口）；HTTP 层 3 次（每次会话层尝试内部
+ *     自带）。经 SettingsManager.applyOverrides 内存覆盖，不落盘、不改用户级
+ *     settings.json。
+ *  2. 误标改写：buildRetryReclassifyExtension 在 message_end 把"明确声明
+ *     rate_limit_error / tpm / rpm 的瞬时错误"中的误导性配额标记改写掉，
+ *     让 pi 内建会话级 retry 分类放行（真实配额耗尽不含这些瞬时信号，仍 fail fast）。
  */
 const PROVIDER_HTTP_MAX_RETRIES = 3;
+const SESSION_RETRY_MAX_RETRIES = 5;
+const SESSION_RETRY_BASE_DELAY_MS = 4000;
 
-function applyProviderRetryOverride(settingsManager: SettingsManager): void {
+function applyRetryOverrides(settingsManager: SettingsManager): void {
 	settingsManager.applyOverrides({
-		retry: { provider: { maxRetries: PROVIDER_HTTP_MAX_RETRIES } },
+		retry: {
+			maxRetries: SESSION_RETRY_MAX_RETRIES,
+			baseDelayMs: SESSION_RETRY_BASE_DELAY_MS,
+			provider: { maxRetries: PROVIDER_HTTP_MAX_RETRIES },
+		},
 	});
+}
+
+/** 瞬时限流强信号：type=rate_limit_error 或 tpm/rpm 字样。不含裸 429 —— 真实配额耗尽也是 429。 */
+const TRANSIENT_RATE_LIMIT_SIGNAL = /"type"\s*:\s*"rate_limit_error"|tpm\b|rpm\b/i;
+/** pi-ai 归为永久错误的配额/计费标记（NON_RETRYABLE 优先判定）。 */
+const PERMANENT_QUOTA_MARKER = /insufficient_quota|quota exceeded|out of budget|billing/i;
+
+/**
+ * 改写网关误标的限流错误文本：仅当文本同时携带瞬时限流强信号与误导性配额标记时，
+ * 把配额标记替换为限流措辞（保持 JSON 文本形态）。其余情况返回 null（不改写）。
+ */
+export function reclassifyTransientRateLimitError(text: string | undefined): string | null {
+	if (!text || !PERMANENT_QUOTA_MARKER.test(text) || !TRANSIENT_RATE_LIMIT_SIGNAL.test(text)) {
+		return null;
+	}
+	return text
+		.replace(/insufficient_quota/gi, "rate_limit_error")
+		.replace(/quota exceeded/gi, "rate limited")
+		.replace(/out of budget/gi, "rate limited")
+		.replace(/\bbilling\b/gi, "rate limited");
+}
+
+/**
+ * message_end 误标改写扩展：pi 官方缝隙 —— message_end handler 返回替换消息时
+ * AgentSession 以 _replaceMessageInPlace 原位替换，且发生在持久化与
+ * _handlePostAgentRun 的 retry 分类之前。替换后的 errorMessage 经
+ * isRetryableAssistantError 判为可重试 → 内建会话级 auto retry 接管
+ * （auto_retry_start/end 事件 → event-normalizer → UI notice）。
+ */
+export function buildRetryReclassifyExtension(): InlineExtension {
+	return {
+		name: "socverify-retry-reclassify",
+		hidden: true,
+		factory: (pi) => {
+			pi.on("message_end", (event) => {
+				const message = event.message;
+				if (message.role !== "assistant" || message.stopReason !== "error") return;
+				if (typeof message.errorMessage !== "string") return;
+				const rewritten = reclassifyTransientRateLimitError(message.errorMessage);
+				if (!rewritten) return;
+				return { message: { ...message, errorMessage: rewritten } };
+			});
+		},
+	};
 }
 
 // ─── init ───────────────────────────────────────────────
@@ -577,12 +634,18 @@ export async function handleInit(
 	// 单一 SettingsManager 实例同时供 loader 与 createAgentSession 使用
 	// （createAgentSession 不传 settingsManager 时会自建新实例，override 会丢失）。
 	const settingsManager = SettingsManager.create(config.cwd, agentDir);
-	applyProviderRetryOverride(settingsManager);
+	applyRetryOverrides(settingsManager);
 	const loader = new DefaultResourceLoader({
 		cwd: config.cwd,
 		agentDir,
 		settingsManager,
-		extensionFactories: [buildApprovalExtension(ctx), ...mcp.factories, ...subagents.factories],
+		extensionFactories: [
+			buildApprovalExtension(ctx),
+			// retry 误标改写需在 message_end 抢在持久化与 retry 分类之前（pi 官方替换缝隙）
+			buildRetryReclassifyExtension(),
+			...mcp.factories,
+			...subagents.factories,
+		],
 		appendSystemPrompt: buildAppendSystemPrompt(config.systemPrompt),
 		// skill 装载（issue 09）：host 下发有序 skillPaths（与 UI 发现同源），
 		// runner 不自行发现 —— noSkills 关闭 pi 默认来源，additionalSkillPaths

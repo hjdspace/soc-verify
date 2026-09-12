@@ -109,9 +109,61 @@ describe('skill-discovery（issue 09 — pi canonical 来源与信任治理）',
       expect(dirs.some((d) => d.path.includes('managed-skills'))).toBe(false);
     });
 
-    it('omp 时代的镜像目录（.claude/.agents/.github/.codex）不再扫描', async () => {
+    it('发现 pi agents 标准目录（~/.agents/skills 与 <root>/.agents/skills）', async () => {
+      // .agents/skills 是 pi 原生 canonical 来源（pi-tui 默认发现），必须扫描
+      await writeSkill(path.join(tempHome, '.agents/skills'), 'agents-user-skill', 'pi agents user');
+      const userSkills = await discoverAllSkills();
+      const userSkill = userSkills.find((s) => s.name === 'agents-user-skill');
+      expect(userSkill).toBeDefined();
+      expect(userSkill?.source).toBe('user');
+      expect(userSkill?.filePath).toContain(path.join('.agents', 'skills', 'agents-user-skill', 'SKILL.md'));
+
+      const project = await fs.mkdtemp(path.join(os.tmpdir(), 'skill-proj-'));
+      try {
+        await writeSkill(path.join(project, '.agents/skills'), 'agents-project-skill', 'pi agents project');
+        const skills = await discoverSkills(project);
+        const skill = skills.find((s) => s.name === 'agents-project-skill');
+        expect(skill).toBeDefined();
+        expect(skill?.source).toBe('project');
+      } finally {
+        await fs.rm(project, { recursive: true, force: true });
+      }
+    });
+
+    it('发现 symlink 形式的技能目录（~/.agents/skills 常见 mklink/ln -s 布局）', async () => {
+      // Windows 上 symlink Dirent.isDirectory() 恒为 false，扫描必须放行
+      // 链接条目；junction 创建无需特权，跨平台统一用 fs.symlink
+      const realDir = path.join(tempHome, 'real-store', 'linked-skill');
+      await fs.mkdir(realDir, { recursive: true });
+      await fs.writeFile(
+        path.join(realDir, 'SKILL.md'),
+        '---\nname: linked-skill\ndescription: symlinked skill\n---\n\n# linked\n',
+      );
+
+      const linkPath = path.join(tempHome, '.agents/skills', 'linked-skill');
+      await fs.mkdir(path.dirname(linkPath), { recursive: true });
+      await fs.symlink(realDir, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+
+      const skills = await discoverAllSkills();
+      const found = skills.find((s) => s.name === 'linked-skill');
+      expect(found).toBeDefined();
+      expect(found?.description).toBe('symlinked skill');
+    });
+
+    it('断链 symlink 不崩溃也不误报', async () => {
+      const linkPath = path.join(tempHome, '.agents/skills', 'broken-link');
+      await fs.mkdir(path.dirname(linkPath), { recursive: true });
+      await fs.symlink(
+        path.join(tempHome, 'no-such-target-dir'),
+        linkPath,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+      const skills = await discoverAllSkills();
+      expect(skills.some((s) => s.name === 'broken-link')).toBe(false);
+    });
+
+    it('omp 时代的真正镜像目录（.claude/.github/.codex）不再扫描', async () => {
       await writeSkill(path.join(tempHome, '.claude/skills'), 'claude-mirror', 'mirror');
-      await writeSkill(path.join(tempHome, '.agents/skills'), 'agents-mirror', 'mirror');
       await writeSkill(path.join(tempHome, '.codex/skills'), 'codex-mirror', 'mirror');
       const project = await fs.mkdtemp(path.join(os.tmpdir(), 'skill-proj-'));
       try {
@@ -120,7 +172,6 @@ describe('skill-discovery（issue 09 — pi canonical 来源与信任治理）',
         const skills = await discoverSkills(project);
         const names = skills.map((s) => s.name);
         expect(names).not.toContain('claude-mirror');
-        expect(names).not.toContain('agents-mirror');
         expect(names).not.toContain('codex-mirror');
         expect(names).not.toContain('proj-claude-mirror');
         expect(names).not.toContain('proj-github-mirror');
@@ -195,6 +246,30 @@ describe('skill-discovery（issue 09 — pi canonical 来源与信任治理）',
       expect(shared[0]!.description).toBe('user canonical');
     });
 
+    it('同名解析顺序：.pi canonical > .agents > .omp（项目与用户作用域内均如此）', async () => {
+      const project = await fs.mkdtemp(path.join(os.tmpdir(), 'skill-proj-'));
+      try {
+        await writeSkill(path.join(project, '.pi/skills'), 'shared-proj', 'project .pi');
+        await writeSkill(path.join(project, '.agents/skills'), 'shared-proj', 'project .agents');
+        await writeSkill(path.join(project, '.omp/skills'), 'shared-proj', 'project .omp');
+        const skills = await discoverSkills(project);
+        const shared = skills.filter((s) => s.name === 'shared-proj');
+        expect(shared).toHaveLength(1);
+        expect(shared[0]!.description).toBe('project .pi');
+        expect(shared[0]!.filePath).toContain(path.join('.pi', 'skills'));
+      } finally {
+        await fs.rm(project, { recursive: true, force: true });
+      }
+
+      await writeSkill(path.join(tempHome, '.pi/agent/skills'), 'shared-user', 'user .pi');
+      await writeSkill(path.join(tempHome, '.agents/skills'), 'shared-user', 'user .agents');
+      await writeSkill(path.join(tempHome, '.omp/agent/skills'), 'shared-user', 'user .omp');
+      const userSkills = await discoverAllSkills();
+      const sharedUser = userSkills.filter((s) => s.name === 'shared-user');
+      expect(sharedUser).toHaveLength(1);
+      expect(sharedUser[0]!.description).toBe('user .pi');
+    });
+
     it('frontmatter 缺失 name 时回退到目录名', async () => {
       const skillDir = path.join(tempHome, '.pi/agent/skills', 'no-name-skill');
       await fs.mkdir(skillDir, { recursive: true });
@@ -209,24 +284,28 @@ describe('skill-discovery（issue 09 — pi canonical 来源与信任治理）',
   });
 
   describe('resolveSkillLoadPaths — runner 装载列表（与 UI 发现一致）', () => {
-    it('按 project canonical > project legacy > builtin > user canonical > user legacy 排序，且只含存在的目录', async () => {
+    it('按 project .pi > project .agents > project .omp > builtin > user .pi > user .agents > user .omp 排序，且只含存在的目录', async () => {
       mockBuiltInDir = tempBuiltIn;
       const project = await fs.mkdtemp(path.join(os.tmpdir(), 'skill-proj-'));
       try {
         await writeSkill(path.join(project, '.pi/skills'), 'a', 'x');
+        await writeSkill(path.join(project, '.agents/skills'), 'a2', 'x');
         await writeSkill(path.join(project, '.omp/skills'), 'b', 'x');
         await writeSkill(path.join(tempBuiltIn, 'skills'), 'c', 'x');
         await writeSkill(path.join(tempHome, '.pi/agent/skills'), 'd', 'x');
+        await writeSkill(path.join(tempHome, '.agents/skills'), 'd2', 'x');
         await writeSkill(path.join(tempHome, '.omp/agent/skills'), 'e', 'x');
 
         const paths = await resolveSkillLoadPaths(project);
         const rel = (p: string) => p.slice(project.length + 1);
         const rels = paths.map(rel);
         expect(rels[0]).toBe(path.join('.pi', 'skills'));
-        expect(rels[1]).toBe(path.join('.omp', 'skills'));
-        expect(paths[2]).toBe(path.join(tempBuiltIn, 'skills'));
-        expect(paths[3]).toBe(path.join(tempHome, '.pi', 'agent', 'skills'));
-        expect(paths[4]).toBe(path.join(tempHome, '.omp', 'agent', 'skills'));
+        expect(rels[1]).toBe(path.join('.agents', 'skills'));
+        expect(rels[2]).toBe(path.join('.omp', 'skills'));
+        expect(paths[3]).toBe(path.join(tempBuiltIn, 'skills'));
+        expect(paths[4]).toBe(path.join(tempHome, '.pi', 'agent', 'skills'));
+        expect(paths[5]).toBe(path.join(tempHome, '.agents', 'skills'));
+        expect(paths[6]).toBe(path.join(tempHome, '.omp', 'agent', 'skills'));
       } finally {
         await fs.rm(project, { recursive: true, force: true });
       }

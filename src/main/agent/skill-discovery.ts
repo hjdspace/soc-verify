@@ -13,12 +13,20 @@
  *   用户级 legacy:     ~/.omp/agent/skills
  *
  * managed-skills（omp 自动学习产物）不迁移：不再发现，应用任何代码路径
- * 都不写入该目录。omp 时代的镜像目录（.claude/.agents/.github/.codex）
- * 是旧引擎的发现规则，pi 不加载，随之停止扫描。
+ * 都不写入该目录。omp 时代的镜像目录（.claude/.github/.codex）是旧引擎的
+ * 发现规则，pi 不加载，随之停止扫描。
+ *
+ * 注意：.agents/skills（项目级 <root>/.agents/skills 与用户级
+ * ~/.agents/skills）**不是** omp 镜像，而是 pi 原生 canonical 来源之一
+ * （pi DefaultResourceLoader 默认发现，见 pi SDK package-manager 的
+ * collectAncestorAgentsSkillDirs / userAgentsSkillsDir），必须扫描以保持
+ * 与 pi-tui 斜杠命令技能发现一致。
  *
  * 同名 skill 解析优先级（first-wins，只暴露一个确定结果）：
- *   project canonical > project legacy > builtin > user canonical > user legacy
- * （作用域优先 project > builtin > user；同作用域内 canonical 优先于 legacy）
+ *   project .pi > project .agents > project .omp > builtin >
+ *   user .pi > user .agents > user .omp
+ * （作用域优先 project > builtin > user；同作用域内 .pi canonical 优先，
+ *   .agents 次之，omp legacy 最后）
  *
  * 每个技能是 <skills-dir>/<skill-name>/SKILL.md，frontmatter：
  *   ---
@@ -57,8 +65,12 @@ const BUILTIN_SKILLS_SUBDIR = 'skills';
 
 /**
  * 组装项目级 + 用户级 + 内置的有序技能根目录列表。
- * 顺序即同名解析优先级：project canonical > project legacy > builtin >
- * user canonical > user legacy。
+ * 顺序即同名解析优先级：project .pi > project .agents > project .omp >
+ * builtin > user .pi > user .agents > user .omp。
+ *
+ * 与 pi DefaultResourceLoader 默认发现的差异说明：pi 还会沿 cwd 向上遍历
+ * 至 git 根收集各级 .agents/skills（需 project trusted）；host 侧只扫
+ * projectRoot 一层（桌面单项目场景 cwd 即项目根），不做祖先遍历。
  */
 export function getSkillRootDirs(projectRoot: string | null): SkillRootDir[] {
   const home = homedir();
@@ -67,6 +79,8 @@ export function getSkillRootDirs(projectRoot: string | null): SkillRootDir[] {
   if (projectRoot) {
     dirs.push(
       { path: join(projectRoot, '.pi', 'skills'), source: 'project', canonical: true, manageable: false },
+      // pi agents 标准目录（pi 默认项目来源之一，"agents" 模式）
+      { path: join(projectRoot, '.agents', 'skills'), source: 'project', canonical: true, manageable: false },
       { path: join(projectRoot, '.omp', 'skills'), source: 'project', canonical: false, manageable: false },
     );
   }
@@ -83,6 +97,8 @@ export function getSkillRootDirs(projectRoot: string | null): SkillRootDir[] {
 
   dirs.push(
     { path: join(home, '.pi', 'agent', 'skills'), source: 'user', canonical: true, manageable: true },
+    // pi agents 标准用户目录（pi 默认用户来源之一）；应用不在此创建，仅发现
+    { path: join(home, '.agents', 'skills'), source: 'user', canonical: true, manageable: false },
     // 只读兼容一个版本周期（移除期限：v0.6.0，见 spec「Further Notes」——
     // 历史兼容读取点应有明确注释和移除期限）：仅发现，不创建/修改/删除
     { path: join(home, '.omp', 'agent', 'skills'), source: 'user', canonical: false, manageable: false },
@@ -163,7 +179,11 @@ async function scanSkillDir(
     // Scan subdirectories
     const entries = await readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      // 目录或指向目录的 symlink：Windows 上 symlink 的 Dirent.isDirectory()
+      // 恒为 false（~/.agents/skills 下常见 mklink/ln -s 镜像布局），需与
+      // pi SDK（skills.js collectSkillEntries）一致地放行链接条目。
+      // existsSync 跟随 symlink，断链或指向文件的链接自然返回 false 跳过。
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
       const skillPath = join(dir, entry.name, 'SKILL.md');
       if (existsSync(skillPath)) {
         const skill = await tryParseSkill(skillPath, source);
@@ -297,6 +317,9 @@ export async function resolveSkillUriPath(projectRoot: string, uri: string): Pro
 export async function getSkillDirectoryInfo(): Promise<SkillDirectoryInfo[]> {
   const dirLabel = (dir: SkillRootDir): string => {
     if (dir.source === 'builtin') return '内置技能（随应用打包）';
+    if (dir.path.includes(join(homedir(), '.agents', 'skills'))) {
+      return '用户级（pi agents 标准，只读）';
+    }
     return dir.canonical ? '用户级（pi canonical）' : '旧版 OMP 用户级（只读兼容）';
   };
 
@@ -320,6 +343,8 @@ export async function getSkillInstallInfo(): Promise<SkillInstallInfo> {
     '1. 内置技能：随应用打包，不可修改。',
     '2. 用户级技能（pi canonical）：~/.pi/agent/skills/，可在此页面创建和管理。',
     '3. 项目级技能（pi canonical）：项目根目录 .pi/skills/，随项目分发。',
+    '4. pi agents 标准目录：~/.agents/skills/ 与项目根 .agents/skills/，',
+    '   与 pi-tui 斜杠命令共享的技能位置（只发现，不在此页面管理）。',
     '',
     '旧版兼容（只读，移除期限 v0.6.0）：',
     '  - 项目根目录 .omp/skills/ 与用户目录 ~/.omp/agent/skills/ 中的旧技能',
