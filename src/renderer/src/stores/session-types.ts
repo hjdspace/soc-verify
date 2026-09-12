@@ -61,6 +61,12 @@ export interface ChatMessage {
   thinking?: string;
   /** Skills attached to a user message — used to render skill chips in the message bubble. */
   skills?: SelectedSkill[];
+  /**
+   * 挂起中的 LLM 错误文本（message_end 捕获、agent_end 定稿）。
+   * 会话级自动重试仍有时不渲染错误卡片；重试预算耗尽后的最终 agent_end
+   * 才把它定稿为 `[错误] ...` 内容展示。
+   */
+  pendingError?: string;
   /** 划选「添加到当前任务」附带的对话引用——气泡内渲染只读引用 chip */
   quotes?: SessionQuote[];
 }

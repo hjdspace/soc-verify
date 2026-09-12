@@ -97,13 +97,13 @@ export function normalizePiEvent(event: unknown): Array<Record<string, unknown>>
 		}
 
 		case "auto_retry_end": {
-			return event.success === true
-				? [autoRetryNotice("LLM 请求自动重试成功")]
-				: [
-						autoRetryNotice(
-							`LLM 请求自动重试失败：${toText(event.finalError) || toText(event.errorMessage)}`,
-						),
-					];
+			// 重试成功不打扰用户（错误从未展示过，无需报喜）；失败仍输出 notice
+			if (event.success === true) return [];
+			return [
+				autoRetryNotice(
+					`LLM 请求自动重试失败：${toText(event.finalError) || toText(event.errorMessage)}`,
+				),
+			];
 		}
 
 		case "summarization_retry_scheduled": {

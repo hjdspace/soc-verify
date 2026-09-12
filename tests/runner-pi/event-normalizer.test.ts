@@ -146,10 +146,9 @@ describe('normalizePiEvent — 重试事件映射为 notice', () => {
     expect(JSON.stringify(out[0])).toContain('1');
   });
 
-  it('auto_retry_end 成功 → notice', () => {
+  it('auto_retry_end 成功 → 丢弃（错误从未展示，无需报喜）', () => {
     const out = normalizePiEvent({ type: 'auto_retry_end', success: true, attempt: 2 });
-    expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({ type: 'notice' });
+    expect(out).toEqual([]);
   });
 
   it('auto_retry_end 失败 → notice（携带 finalError）', () => {
