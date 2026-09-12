@@ -39,13 +39,13 @@ describe('Workbench timing-violation destination', () => {
   it('closes timing-violation tab correctly', () => {
     useWorkbenchStore.getState().open({ type: 'timing-violation' });
     // dashboard 等视图型目的地已分流到视图路由（Issue #2），此处用 Tab 型目的地
-    useWorkbenchStore.getState().open({ type: 'kb' });
+    useWorkbenchStore.getState().open({ type: 'sysbase-env-gen' });
 
     useWorkbenchStore.getState().close('timing-violation');
 
     const state = useWorkbenchStore.getState();
     expect(state.tabs).toHaveLength(1);
-    expect(state.tabs[0].destination.type).toBe('kb');
-    expect(state.activeTabId).toBe('kb');
+    expect(state.tabs[0].destination.type).toBe('sysbase-env-gen');
+    expect(state.activeTabId).toBe('sysbase-env-gen');
   });
 });

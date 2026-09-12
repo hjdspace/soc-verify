@@ -9,6 +9,7 @@ import { CoverageView } from '@renderer/components/views/CoverageView';
 import { RegressionView } from '@renderer/components/views/RegressionView';
 import { TokenView } from '@renderer/components/views/TokenView';
 import { DesignView } from '@renderer/components/views/DesignView';
+import { KbView } from '@renderer/components/kb/KbView';
 
 /**
  * 工作区视图：多 Tab 工作台原样完整嵌入。
@@ -38,6 +39,8 @@ function renderActiveView(view: ActiveView) {
       return <TokenView />;
     case 'design':
       return <DesignView />;
+    case 'kb':
+      return <KbView />;
     case 'workspace':
       return <WorkspaceView />;
   }
@@ -52,7 +55,7 @@ function renderActiveView(view: ActiveView) {
  */
 const KEEP_ALIVE_VIEWS: ReadonlySet<ActiveView> = new Set(['simulation', 'workspace']);
 
-/** 视图路由容器：按 ui.activeView 渲染七个视图。
+/** 视图路由容器：按 ui.activeView 渲染八个视图。
  * 总览视图为 Mission Control 仪表盘（Issue #3）；
  * 仿真视图为运行管理工作台（Issue #4）；
  * 覆盖率视图为覆盖率分析工作台（Issue #5）；

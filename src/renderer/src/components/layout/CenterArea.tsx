@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, GitCompare, GitGraph, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine, Puzzle, FileType, Database as DatabaseIcon, Workflow, XCircle, BookOpen, RotateCw } from 'lucide-react';
+import { FileText, Terminal as TerminalIcon, Sparkles, X, AlertCircle, History, CircleDot, GitCompare, GitGraph, BarChart3, GitBranch, LayoutDashboard, ListChecks, GitCommitHorizontal, MoreHorizontal, Plus, ArrowDownToLine, Puzzle, FileType, Database as DatabaseIcon, Workflow, XCircle, RotateCw } from 'lucide-react';
 import { useWorkbenchStore } from '@renderer/stores/workbench';
 import { useUiStore } from '@renderer/stores/ui';
 import { useProjectStore } from '@renderer/stores/project';
@@ -32,7 +32,6 @@ import { DrawioPreview } from '@renderer/components/drawio/DrawioPreview';
 import { Timer } from 'lucide-react';
 import { BrowserView } from '@renderer/components/browser/BrowserView';
 import { SysbaseEnvGen } from '@renderer/tools/sysbase-env-gen/SysbaseEnvGen';
-import { KbView } from '@renderer/components/kb/KbView';
 
 export function CenterArea() {
   const tabs = useWorkbenchStore((s) => s.tabs);
@@ -244,7 +243,6 @@ export function CenterArea() {
                 {tab.destination.type === 'office-document' && <FileType className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'database' && <DatabaseIcon className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'drawio-diagram' && <GitGraph className="h-3 w-3 opacity-50" />}
-                {tab.destination.type === 'kb' && <BookOpen className="h-3 w-3 opacity-50" />}
                 {tab.destination.type === 'sysbase-env-gen' && <Workflow className="h-3 w-3 opacity-50" />}
                 <span className="max-w-32 truncate">{tab.title}</span>
                 {tab.closable && (
@@ -344,12 +342,6 @@ export function CenterArea() {
             onClick={() => openDestination({ type: 'sysbase-env-gen' })}
             icon={<Workflow className="h-3.5 w-3.5" />}
             label="环境生成"
-          />
-          {/* 知识库 */}
-          <TabActionButton
-            onClick={() => openDestination({ type: 'kb' })}
-            icon={<BookOpen className="h-3.5 w-3.5" />}
-            label="知识库"
           />
           {/* 仪表盘 */}
           <TabActionButton
@@ -528,8 +520,6 @@ export function CenterArea() {
           <DatabaseViewer key={destination.filePath} filePath={destination.filePath} />
         ) : destination?.type === 'drawio-diagram' ? (
           <DrawioPreview key={destination.filePath} filePath={destination.filePath} />
-        ) : destination?.type === 'kb' ? (
-          <KbView />
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 overflow-hidden text-sm text-muted-foreground">
             {/* Active simulations — capped height with internal scroll */}
