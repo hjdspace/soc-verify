@@ -306,9 +306,9 @@ describe('Drawer + Backdrop 组合', () => {
 });
 
 describe('StatusBar', () => {
-  it('渲染静态段：omp 连接状态与引擎版本', () => {
+  it('渲染静态段：引擎连接状态与引擎版本', () => {
     render(<StatusBar />);
-    expect(screen.getByText('omp 已连接')).toBeInTheDocument();
+    expect(screen.getByText('引擎已连接')).toBeInTheDocument();
     expect(screen.getByText('引擎 v4.1.2')).toBeInTheDocument();
   });
 

@@ -47,7 +47,7 @@ export function StatusBar() {
     <footer className="flex h-6 shrink-0 items-center gap-3.5 border-t border-titlebar-border bg-titlebar px-3 text-[10.5px] text-muted-foreground glass">
       <span className="flex items-center gap-1.5 text-status-pass">
         <Check className="size-2.5" strokeWidth={3} />
-        omp 已连接
+        引擎已连接
       </span>
       <span className="flex items-center gap-1.5">引擎 {ENGINE_VERSION}</span>
       <button

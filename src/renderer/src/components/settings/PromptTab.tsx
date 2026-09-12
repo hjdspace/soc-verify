@@ -42,7 +42,7 @@ function EffectiveSystemPromptSection() {
     }
     setLoading(true);
     try {
-      // 引擎不支持（omp）时返回 null
+      // 引擎不支持时返回 null
       setEffectivePrompt(await trpc.session.getSystemPrompt.query({ sessionId: runtimeSessionId }));
     } catch {
       setEffectivePrompt(null);
@@ -176,7 +176,7 @@ export function PromptTab() {
         {showDefault && (
           <div className="border-t border-border/60 px-2.5 py-2">
             <p className="mb-1.5 text-[10px] leading-relaxed text-muted-foreground">
-              AI Agent 的内置系统提示词模板，由 omp 引擎提供。包含角色定义、工程原则、工具策略、执行工作流和交付契约。
+              AI Agent 的内置系统提示词模板，由 pi 引擎提供。包含角色定义、工程原则、工具策略、执行工作流和交付契约。
               模板中的 <code className="rounded bg-muted px-0.5 py-0 text-[9px]">{'{{#if}}'}</code> / <code className="rounded bg-muted px-0.5 py-0 text-[9px]">{'{{toolRefs.xxx}}'}</code> 等为 Handlebars 动态片段，实际内容会随启用的工具、技能和规则变化。
             </p>
             {defaultSystemPrompt ? (

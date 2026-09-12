@@ -1,6 +1,6 @@
 # AGENTS.md — SoC Verify 项目指南
 
-**SoC Verify** — AI Agent 驱动的 SoC 验证一站式管理平台（Electron 桌面应用）。核心 AI 能力由 [oh-my-pi (omp)](./engine/oh-my-pi/) 提供（git submodule，不修改其源码）。
+**SoC Verify** — AI Agent 驱动的 SoC 验证一站式管理平台（Electron 桌面应用）。核心 AI 能力由 [pi coding agent SDK](https://github.com/badlogic/pi-mono)（`@earendil-works/pi-coding-agent`，精确版本 + lockfile）驱动：runner 为 `runner-pi/` 下的普通 Node 脚本（`ELECTRON_RUN_AS_NODE=1` 运行），生产依赖经 `resources/runner-deps`（npm ci 精确安装）以 extraResources 分发。pi 系列依赖的版本与 lockfile 由 `resources/runner-deps/package.json` + `scripts/prepare-runner-deps.mjs` 治理（issue 10；omp submodule 与 Bun 构建链已移除）。
 
 ## 三进程模型
 
@@ -8,7 +8,7 @@
 
 | 进程 | 源码 | 输出 | 职责 |
 |------|------|------|------|
-| 主进程 | `src/main/` | CJS | 窗口管理、omp 子进程、tRPC router、原生 IPC |
+| 主进程 | `src/main/` | CJS | 窗口管理、pi runner 子进程、tRPC router、原生 IPC |
 | Preload | `src/preload/` | CJS | `contextBridge` 暴露 `electron-trpc` + `windowControls` + `eventBridge` |
 | 渲染进程 | `src/renderer/` | ESM | React SPA，tRPC proxy 调用主进程 API |
 
@@ -41,7 +41,7 @@ npx vitest run tests/<相关目录>     # 仅运行改动相关的测试目录
 
 ## 硬约束
 
-1. **不修改 omp 引擎源码**（`engine/oh-my-pi/` 是 git submodule，只用 RPC API）
+1. **pi 依赖治理**：pi SDK 精确版本与 lockfile 在 `resources/runner-deps/`；升级依赖必须按 spec 重新检查 changelog、许可证、协议契约、会话恢复、信任边界、体积与性能
 2. **单用户桌面应用**（无 Web/移动端/多用户协作）
 3. **EDA 工具集成由插件实现**（平台只提供接口和框架）
 4. **Electron 主进程 ESM**（`"type": "module"`，`lib: ["ES2024"]`）
@@ -82,8 +82,8 @@ npx vitest run tests/<相关目录>     # 仅运行改动相关的测试目录
 
 - **officecli 集成**：[ADR 0015](./docs/adr/0015-officecli-integration.md) — Office 文档预览/创建/编辑，职责分层、二进制路径解析（三级回退）、xlsx flush 机制、错误降级
 - **App Shell（Mission Control 布局）**：`src/renderer/src/components/layout/AppShell.tsx` — TitleBar + (NavRail | (ViewContainer + BottomPanel)) + StatusBar；六视图路由（总览/仿真/覆盖率/回归/token/workspace，`ui.activeView`，刷新持久化）；文件树/AI 会话为可呼出抽屉（FileDrawer/AiDrawer，切换视图自动关闭）；命令面板 Ctrl+K/Ctrl+P（分组：导航/动作/面板）；通知中心走 `webContents.send` + `eventBridge`。LeftRail 已退役，文件树/子系统在左抽屉，插件视图在 workspace
-- **omp Host Tools**：`src/main/omp/host-tools.ts` — 7 默认验证工具 + 条件注册（coverage/case-stats）+ 7 文档工具
-- **omp URI scheme**：`src/main/omp/host-uris.ts` — `case:///` / `log:///` / `cov:///`
+- **Agent Host Tools**：`src/main/omp/host-tools.ts`（目录名为历史命名）— 7 默认验证工具 + 条件注册（coverage/case-stats）+ 7 文档工具
+- **Agent URI scheme**：`src/main/omp/host-uris.ts` — `case:///` / `log:///` / `cov:///`
 - **插件系统**：`src/shared/plugin-types.ts` — 5 种 `PluginKind` 接口契约
 - **主题系统**：`src/renderer/src/styles/globals.css` + `src/renderer/src/stores/theme.ts`
 - **officecli 下载**：`npm run download:officecli`，版本固定在 `package.json` 的 `officecliVersion`；下载失败不阻断构建，运行时降级

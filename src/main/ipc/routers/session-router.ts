@@ -45,7 +45,7 @@ import type { SeedHistoryMessage } from '../../agent/types';
 /**
  * In-flight holistic model swaps keyed by the ORIGINAL runtime session ID.
  *
- * setModel's holistic swap destroys the old omp process and recreates it —
+ * setModel's holistic swap destroys the old process and recreates it —
  * a send() that lands in between would be delivered to the doomed process
  * and silently lost (symptom: "message sent, no LLM response ever arrives").
  * send() consults this map, waits for the swap to settle, and retargets the
@@ -61,8 +61,8 @@ const inFlightSwaps = new Map<string, Promise<HolisticSwapResult>>();
 
 /**
  * Holistic config/model switch: destroy the runtime session and recreate it
- * with the target credential's config (the omp engine cannot update
- * apiKey/baseUrl on a live process). The conversation resumes via the omp
+ * with the target credential's config (the engine cannot update
+ * apiKey/baseUrl on a live process). The conversation resumes via the engine
  * session ID so messages are preserved.
  */
 async function performHolisticSwap(input: {
@@ -502,7 +502,7 @@ export const sessionRouter = t.router({
       return { sessionId: r.sessionId };
     })
     .query(async ({ input }) => {
-      // 引擎不支持（omp）时返回 null，UI 无差别展示
+      // 引擎不支持时返回 null，UI 无差别展示
       return sessionManager.getSystemPrompt(input.sessionId);
     }),
 
@@ -611,7 +611,7 @@ export const sessionRouter = t.router({
       // When switching by providerId (holistic config switch), modelId is
       // optional — the backend will auto-pick the first model from the
       // credential's API. When providerId is absent (legacy same-provider
-      // model swap via omp RPC), provider + modelId are required.
+      // model swap via engine RPC), provider + modelId are required.
       if (!providerId) {
         if (typeof r.provider !== 'string' || typeof r.modelId !== 'string') {
           throw new TRPCError({ code: 'BAD_REQUEST', message: 'provider and modelId are required when providerId is not supplied' });
@@ -628,10 +628,10 @@ export const sessionRouter = t.router({
     .mutation(async ({ input }) => {
       // If providerId is supplied, the user wants a holistic config switch:
       // the entire model config (provider + apiKey + baseUrl + model) must change.
-      // Since the omp engine's set_model RPC only switches the model ID (it
+      // Since the engine's set_model RPC only switches the model ID (it
       // cannot update apiKey/baseUrl at runtime), we destroy the current runtime
       // session and recreate it with the new credential's config, resuming the
-      // conversation via the omp session ID so messages are preserved.
+      // conversation via the engine session ID so messages are preserved.
       if (input.providerId) {
         const existingSwap = inFlightSwaps.get(input.sessionId);
         if (existingSwap) {
@@ -1093,7 +1093,7 @@ export const sessionRouter = t.router({
       return readSkillContent(input.filePath);
     }),
 
-  // 将 omp 内部 URI（skill://<name>[/<rel>]）解析为磁盘上的真实文件路径。
+  // 将引擎内部 URI（skill://<name>[/<rel>]）解析为磁盘上的真实文件路径。
   // 渲染层工具卡片点击技能路径时调用，避免把 URI 当文件路径打开报"文件不存在"。
   resolveSkillUri: t.procedure
     .input((raw): { projectId: string; uri: string } => {
@@ -1117,7 +1117,7 @@ export const sessionRouter = t.router({
    * 为仿真失败用例创建独立的 AI Agent 会话。
    *
    * 内部流程：
-   * 1. 复用 sessionManager.createSession() 创建 omp 进程
+   * 1. 复用 sessionManager.createSession() 创建引擎子进程
    * 2. 注入错误类型相关的 system prompt
    * 3. 自动发送错误上下文作为首条消息
    * 4. 持久化会话元数据
@@ -1287,7 +1287,7 @@ export const sessionRouter = t.router({
     })
     .mutation(async ({ input }) => {
       // Dynamically update the thinking level on the running session (persisted
-      // into the omp session file so omp-native resume keeps it). If the
+      // into the engine session file so native resume keeps it). If the
       // session isn't running yet, the level stored in the renderer session
       // state is applied at create time via InitConfig.thinkingLevel.
       try {

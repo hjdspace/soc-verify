@@ -20,6 +20,17 @@ extraResources:
   - from: plugins
     to: plugins
     filter: ["**/*"]
+  # pi runner 脚本（普通 Node 脚本，ELECTRON_RUN_AS_NODE=1 运行）——
+  # issue 10：以源码 .ts 形式分发，运行时由 Node 原生 type-stripping 加载
+  - from: runner-pi
+    to: runner-pi
+    filter: ["**/*.ts", "!**/*.test.ts"]
+  # pi runner 生产依赖（prepare-runner-deps 以 npm ci --omit=dev --ignore-scripts
+  # 安装的精确 lockfile 载荷）。放在 runner-pi/ 下，Node 从脚本所在目录
+  # 向上解析 node_modules 时直接命中。
+  - from: resources/runner-deps/node_modules
+    to: runner-pi/node_modules
+    filter: ["**/*"]
   - from: resources/terminal
     to: terminal
     filter: ["**/*"]

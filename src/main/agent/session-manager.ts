@@ -546,7 +546,7 @@ export class SessionManagerImpl extends EventEmitter {
       // FORCE overwrite: buildEnvForAgent() may have set these from the FIRST
       // credential in the list, but this session uses a SPECIFIC credential
       // (e.g. the user switched providers via setModel). If we don't overwrite,
-      // the omp engine may resolve a stale key/baseUrl from a different provider,
+      // the engine may resolve a stale key/baseUrl from a different provider,
       // causing silent failures (requests go to the wrong endpoint with the
       // wrong API key).
       env.OPENAI_API_KEY = apiKeyValue;
@@ -554,7 +554,7 @@ export class SessionManagerImpl extends EventEmitter {
       provider = OPENAI_COMPATIBLE_PROVIDER;
     } else if (provider && model) {
       // Built-in provider path (e.g. user supplied only an API key, no baseUrl).
-      // Write a models.json with modelOverrides so omp's vision-guard does not
+      // Write a models.json with modelOverrides so the engine's vision-guard does not
       // silently drop images when the internal catalog marks the model as
       // text-only.  Only the `input` field is patched; all other catalog
       // properties (api, cost, contextWindow, ...) remain intact.
@@ -734,7 +734,7 @@ export class SessionManagerImpl extends EventEmitter {
                 typeof (b as Record<string, unknown>).text === 'string' &&
                 ((b as Record<string, unknown>).text as string).length > 0);
             if (!hasText && !msg.errorMessage) {
-              console.warn(`[agent:session:${sessionId}] WARNING: empty assistant response (no text, no error). Possible causes: TLS/SSL certificate issues, network errors, or API key problems. Check [agent:stderr] lines above for omp engine errors.`);
+              console.warn(`[agent:session:${sessionId}] WARNING: empty assistant response (no text, no error). Possible causes: TLS/SSL certificate issues, network errors, or API key problems. Check [agent:stderr] lines above for engine errors.`);
             }
           }
           // Token Monitor bypass: extract usage and write to Token Monitor DB.
@@ -867,7 +867,7 @@ export class SessionManagerImpl extends EventEmitter {
   }
 
   /**
-   * Get the omp engine's session ID for a given SoC Verify session.
+   * Get the engine's session ID for a given SoC Verify session.
    *
    * @deprecated Use `getEngineSessionId` — kept as a deprecated alias while
    * callers migrate to the engine-neutral naming.
@@ -895,7 +895,7 @@ export class SessionManagerImpl extends EventEmitter {
    * This method encapsulates the complete agent turn lifecycle that was
    * previously leaked across four domains (TV AI Advisor, Coverage Closure,
    * Deep Reindexer, Error Analysis):
-   *   - Fire-and-forget prompt dispatch (omp's prompt() is async-but-completes-on-agent_end)
+   *   - Fire-and-forget prompt dispatch (the engine's prompt() is async-but-completes-on-agent_end)
    *   - Completion detection via `agent_end` event
    *   - Final assistant text extraction from `message_end` events
    *   - Error detection via `error` events
@@ -1133,7 +1133,7 @@ export class SessionManagerImpl extends EventEmitter {
   }
 
   /**
-   * Query the omp engine's MCPManager for all known MCP servers and their
+   * Query the engine's MCP manager for all known MCP servers and their
    * runtime connection status. Returns a map of server name → { status, toolCount },
    * or undefined if the session doesn't exist.
    */
